@@ -131,19 +131,20 @@ pub fn handlePoster(stream: std.Io.net.Stream, tmdb_path: []const u8) void {
 pub fn handleJfPoster(stream: std.Io.net.Stream, item_id: []const u8) void {
     const jp = @import("jellyfin_pure.zig");
     if (!jp.validItemId(item_id)) return send404(stream);
-    if (!state.app.jf.connected) return send404(stream);
+    const connection = @import("jellyfin.zig").connectionSnapshot();
+    if (!connection.connected) return send404(stream);
 
     // Snapshot server + token into locals (avoid a torn read if the UI edits
     // them, and to bound them).
     var server_buf: [256]u8 = undefined;
-    const server_len = @min(state.app.jf.server_url_len, server_buf.len);
-    @memcpy(server_buf[0..server_len], state.app.jf.server_url[0..server_len]);
+    const server_len = @min(connection.server_len, server_buf.len);
+    @memcpy(server_buf[0..server_len], connection.server[0..server_len]);
     const server = server_buf[0..server_len];
     if (server.len == 0) return send404(stream);
 
     var token_buf: [256]u8 = undefined;
-    const token_len = @min(state.app.jf.token_len, token_buf.len);
-    @memcpy(token_buf[0..token_len], state.app.jf.token[0..token_len]);
+    const token_len = @min(connection.token_len, token_buf.len);
+    @memcpy(token_buf[0..token_len], connection.token[0..token_len]);
     const token = token_buf[0..token_len];
 
     // Cache key omits the api_key so a token rotation can't orphan cached
@@ -180,13 +181,10 @@ pub fn handleComicPage(stream: std.Io.net.Stream, idx: usize) void {
 /// index (not an arbitrary URL param) so the proxy can only ever fetch an
 /// artwork URL the desktop already parsed — no SSRF surface.
 pub fn handlePodcastPoster(stream: std.Io.net.Stream, idx: usize) void {
-    if (idx >= state.app.podcasts.result_count) return send404(stream);
-    const r = &state.app.podcasts.results[idx];
     // Snapshot the URL — a concurrent re-search may rewrite results[idx].
     var art_buf: [300]u8 = undefined;
-    const alen = @min(r.artwork_len, art_buf.len);
+    const alen = @import("podcasts.zig").copyArtwork(idx, &art_buf);
     if (alen == 0) return send404(stream);
-    @memcpy(art_buf[0..alen], r.artwork[0..alen]);
     const url = art_buf[0..alen];
     if (!std.mem.startsWith(u8, url, "https://") and !std.mem.startsWith(u8, url, "http://"))
         return send404(stream);

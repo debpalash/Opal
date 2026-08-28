@@ -72,3 +72,31 @@ def test_owned_worker_supervisor():
     if missing:
         return "fail", "worker ownership regression(s): " + ", ".join(missing)
     return "pass", "bounded owned supervisor covers startup and five critical verticals"
+
+
+@test("Podcast and Jellyfin readers use immutable feature snapshots", "Architecture")
+def test_feature_store_snapshots():
+    podcasts = _src("src/services/podcasts.zig")
+    jellyfin = _src("src/services/jellyfin.zig")
+    remote = _src("src/services/remote.zig")
+    stream = _src("src/services/remote_stream.zig")
+    checks = {
+        "podcast generation": "publication_gen" in podcasts and "pub const Snapshot" in podcasts,
+        "podcast desktop snapshot": "const view = snapshot();" in podcasts
+            and "renderResults(&view)" in podcasts and "renderEpisodes(&view)" in podcasts,
+        "podcast remote snapshot": "podcasts_svc.snapshot()" in remote
+            and 'podcasts.zig").copyArtwork' in stream,
+        "Jellyfin projection excludes pointers": "pub const RemoteItem" in jellyfin
+            and "poster_pixels" not in _between(jellyfin, "pub const RemoteItem", "pub const RemoteSnapshot"),
+        "Jellyfin remote snapshot": "jf.remoteSnapshot()" in remote
+            and 'jellyfin.zig").connectionSnapshot' in stream,
+        "commands own credential mutation": "pub fn configureLogin(" in jellyfin
+            and "jf.configureLogin(" in remote,
+        "socket writes after snapshots": remote.find("podcasts_svc.snapshot()") < remote.find(
+            "sendJson(stream, json_buf[0..w.end])", remote.find("podcasts_svc.snapshot()")
+        ),
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "feature snapshot regression(s): " + ", ".join(missing)
+    return "pass", "generation-tagged Podcast/Jellyfin projections isolate UI and HTTP readers"

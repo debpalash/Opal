@@ -6,6 +6,86 @@ const workers = @import("../core/workers.zig");
 
 const alloc = @import("../core/alloc.zig").allocator;
 
+var store_mutex: @import("../core/sync.zig").Mutex = .{};
+var publication_gen: u64 = 0;
+
+pub const RemoteItem = struct {
+    id: [64]u8,
+    id_len: usize,
+    name: [256]u8,
+    name_len: usize,
+    media_type: [32]u8,
+    media_type_len: usize,
+    year: u16,
+    is_folder: bool,
+    has_image: bool,
+    runtime_ticks: i64,
+};
+
+pub const RemoteSnapshot = struct {
+    generation: u64,
+    connected: bool,
+    loading: bool,
+    error_text: [128]u8,
+    error_len: usize,
+    libraries: [16]state.JfLibrary,
+    library_count: usize,
+    items: [320]RemoteItem,
+    item_count: usize,
+};
+
+/// Copy a presentation-safe snapshot. GPU handles and pixel slices never cross
+/// this boundary, so HTTP readers cannot retain worker-mutated pointers.
+pub fn remoteSnapshot() RemoteSnapshot {
+    store_mutex.lock();
+    defer store_mutex.unlock();
+    var out: RemoteSnapshot = undefined;
+    out.generation = publication_gen;
+    out.connected = state.app.jf.connected;
+    out.loading = state.app.jf.is_loading.load(.acquire);
+    out.error_text = state.app.jf.login_error;
+    out.error_len = @min(state.app.jf.login_error_len, out.error_text.len);
+    out.libraries = state.app.jf.libraries;
+    out.library_count = @min(state.app.jf.library_count, out.libraries.len);
+    out.item_count = @min(state.app.jf.item_count, out.items.len);
+    for (0..out.item_count) |i| {
+        const item = state.app.jf.items[i];
+        out.items[i] = .{
+            .id = item.id,
+            .id_len = item.id_len,
+            .name = item.name,
+            .name_len = item.name_len,
+            .media_type = item.media_type,
+            .media_type_len = item.media_type_len,
+            .year = item.year,
+            .is_folder = item.is_folder,
+            .has_image = item.has_image,
+            .runtime_ticks = item.runtime_ticks,
+        };
+    }
+    return out;
+}
+
+pub const ConnectionSnapshot = struct {
+    connected: bool,
+    server: [256]u8,
+    server_len: usize,
+    token: [256]u8,
+    token_len: usize,
+};
+
+pub fn connectionSnapshot() ConnectionSnapshot {
+    store_mutex.lock();
+    defer store_mutex.unlock();
+    return .{
+        .connected = state.app.jf.connected,
+        .server = state.app.jf.server_url,
+        .server_len = @min(state.app.jf.server_url_len, state.app.jf.server_url.len),
+        .token = state.app.jf.token,
+        .token_len = @min(state.app.jf.token_len, state.app.jf.token.len),
+    };
+}
+
 // On refetch/disconnect the old JfItems own a GPU poster_tex + heap
 // poster_pixels that resetting item_count alone would leak. dvui.textureDestroyLater
 // is UI-thread only, so workers (parseItemsResponse) and the possibly-off-UI-thread
@@ -83,6 +163,20 @@ fn escapeJsonStr(input: []const u8, out: *[256]u8) []const u8 {
 // Authentication
 // ══════════════════════════════════════════════════════════
 
+pub fn configureLogin(server: []const u8, username: []const u8, password: []const u8) void {
+    store_mutex.lock();
+    defer store_mutex.unlock();
+    const slen = @min(server.len, state.app.jf.server_url.len);
+    @memcpy(state.app.jf.server_url[0..slen], server[0..slen]);
+    state.app.jf.server_url_len = slen;
+    @memset(&state.app.jf.login_user_buf, 0);
+    const ulen = @min(username.len, state.app.jf.login_user_buf.len - 1);
+    @memcpy(state.app.jf.login_user_buf[0..ulen], username[0..ulen]);
+    @memset(&state.app.jf.login_pass_buf, 0);
+    const plen = @min(password.len, state.app.jf.login_pass_buf.len - 1);
+    @memcpy(state.app.jf.login_pass_buf[0..plen], password[0..plen]);
+}
+
 pub fn authenticate() void {
     if (state.app.jf.is_loading.load(.acquire)) return;
     state.app.jf.is_loading.store(true, .release);
@@ -102,14 +196,15 @@ pub fn authenticate() void {
             // HTTP call is a torn read; copy the bytes up-front and use only the
             // local copies for the rest of the request.
             var server_buf: [256]u8 = undefined;
+            store_mutex.lock();
             const server_len = @min(state.app.jf.server_url_len, server_buf.len);
             @memcpy(server_buf[0..server_len], state.app.jf.server_url[0..server_len]);
-            const server = server_buf[0..server_len];
-
             var user_buf_local: [128]u8 = undefined;
             @memcpy(&user_buf_local, &state.app.jf.login_user_buf);
             var pass_buf_local: [128]u8 = undefined;
             @memcpy(&pass_buf_local, &state.app.jf.login_pass_buf);
+            store_mutex.unlock();
+            const server = server_buf[0..server_len];
 
             if (server.len == 0) {
                 setLoginError("Server URL is empty");
@@ -186,6 +281,7 @@ pub fn authenticate() void {
             };
 
             // Store credentials
+            store_mutex.lock();
             const tlen = @min(token.len, state.app.jf.token.len);
             @memcpy(state.app.jf.token[0..tlen], token[0..tlen]);
             state.app.jf.token_len = tlen;
@@ -195,6 +291,8 @@ pub fn authenticate() void {
             state.app.jf.user_id_len = ulen;
 
             state.app.jf.connected = true;
+            publication_gen +%= 1;
+            store_mutex.unlock();
             state.markConfigDirty();
 
             // Immediately fetch libraries
@@ -236,6 +334,8 @@ fn fetchLibrariesSync() void {
     defer alloc.free(body);
 
     // Parse Items array
+    store_mutex.lock();
+    defer store_mutex.unlock();
     state.app.jf.library_count = 0;
     var pos: usize = 0;
     while (pos < body.len and state.app.jf.library_count < 16) {
@@ -268,6 +368,7 @@ fn fetchLibrariesSync() void {
         state.app.jf.library_count += 1;
         pos = abs_start + 10;
     }
+    publication_gen +%= 1;
 }
 
 pub fn fetchItems(parent_id: []const u8) void {
@@ -395,6 +496,8 @@ fn fetchItemsSync(parent_id: []const u8, recursive: bool, my_gen: u32, append: b
 /// window: the caller compares it against the request Limit to decide
 /// whether `more_available` should clear.
 fn parseItemsResponse(body: []const u8, append: bool) usize {
+    store_mutex.lock();
+    defer store_mutex.unlock();
     const cap = state.app.jf.items.len;
     var count: usize = 0;
     if (append) {
@@ -487,6 +590,7 @@ fn parseItemsResponse(body: []const u8, append: bool) usize {
         pos = obj_end;
     }
     state.app.jf.item_count = count;
+    publication_gen +%= 1;
     return count - base;
 }
 
@@ -535,6 +639,7 @@ pub fn playAudioItem(item_id: []const u8) void {
 
 /// Disconnect from Jellyfin
 pub fn disconnect() void {
+    store_mutex.lock();
     // Free poster textures/pixels before clearing — item_count=0 alone leaks them.
     for (state.app.jf.items[0..state.app.jf.item_count]) |*old| freeItemPoster(old);
     state.app.jf.connected = false;
@@ -550,6 +655,8 @@ pub fn disconnect() void {
     current_query_len = 0;
     more_available = false;
     _ = paging_gen.fetchAdd(1, .acq_rel); // drop any append still in flight
+    publication_gen +%= 1;
+    store_mutex.unlock();
     state.markConfigDirty();
 }
 
@@ -932,7 +1039,10 @@ pub fn loadMore() void {
 }
 
 fn setLoginError(msg: []const u8) void {
+    store_mutex.lock();
+    defer store_mutex.unlock();
     const len = @min(msg.len, state.app.jf.login_error.len);
     @memcpy(state.app.jf.login_error[0..len], msg[0..len]);
     state.app.jf.login_error_len = len;
+    publication_gen +%= 1;
 }

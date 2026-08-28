@@ -62,11 +62,68 @@ const agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/2010010
 // (read by UI + remote threads, written by workers).
 var parse_mutex: @import("../core/sync.zig").Mutex = .{};
 var search_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+var publication_gen: u64 = 0;
 
-// Query snapshot handed to the detached search worker (never read the mutable
-// UI search_buf from the thread).
-var query_buf: [256]u8 = undefined;
-var query_len: usize = 0;
+/// Immutable reader view shared by desktop and remote presentations. Provider
+/// records contain only fixed buffers, so copying under the feature lock severs
+/// every pointer/slice relationship with worker-owned publication arrays.
+pub const Snapshot = struct {
+    generation: u64,
+    results: [50]pure.Podcast,
+    result_count: usize,
+    episodes: [200]pure.Episode,
+    episode_count: usize,
+    selected_idx: ?usize,
+    selected_name: [160]u8,
+    selected_name_len: usize,
+    fetch_error: bool,
+    showing_popular: bool,
+    loading: bool,
+    episodes_loading: bool,
+};
+
+pub fn snapshot() Snapshot {
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    return .{
+        .generation = publication_gen,
+        .results = state.app.podcasts.results,
+        .result_count = @min(state.app.podcasts.result_count, state.app.podcasts.results.len),
+        .episodes = state.app.podcasts.episodes,
+        .episode_count = @min(state.app.podcasts.episode_count, state.app.podcasts.episodes.len),
+        .selected_idx = state.app.podcasts.selected_idx,
+        .selected_name = state.app.podcasts.selected_name,
+        .selected_name_len = @min(state.app.podcasts.selected_name_len, state.app.podcasts.selected_name.len),
+        .fetch_error = state.app.podcasts.fetch_error,
+        .showing_popular = state.app.podcasts.showing_popular,
+        .loading = state.app.podcasts.is_loading.load(.acquire),
+        .episodes_loading = state.app.podcasts.episodes_loading.load(.acquire),
+    };
+}
+
+pub fn copyArtwork(idx: usize, out: []u8) usize {
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (idx >= state.app.podcasts.result_count) return 0;
+    const row = state.app.podcasts.results[idx];
+    const n = @min(row.artwork_len, out.len);
+    @memcpy(out[0..n], row.artwork[0..n]);
+    return n;
+}
+
+fn closeEpisodes() void {
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    state.app.podcasts.selected_idx = null;
+    state.app.podcasts.episode_count = 0;
+    publication_gen +%= 1;
+}
+
+const SearchJob = struct {
+    generation: u32,
+    query: [256]u8,
+    query_len: usize,
+};
 
 // ══════════════════════════════════════════════════════════
 // Encrypted on-disk content cache — Popular-chart stale-while-revalidate.
@@ -146,6 +203,7 @@ fn seedPopularFromCache() void {
     }
     state.app.podcasts.result_count = i;
     if (i > 0) state.app.podcasts.showing_popular = true;
+    publication_gen +%= 1;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -239,6 +297,7 @@ fn popularWorker(my_gen: u32) void {
 
     const count = pure.parseItunes(body, &state.app.podcasts.results);
     state.app.podcasts.result_count = count;
+    publication_gen +%= 1;
     if (count == 0) {
         state.app.podcasts.fetch_error = true;
         logs.pushLog("info", "podcasts", "Top shows returned no rows", false);
@@ -263,31 +322,23 @@ pub fn searchPodcasts(query: []const u8) void {
     // A search satisfies the "page opens with content" job — never let the
     // one-shot chart fetch land on top of the user's results afterwards.
     popular_fetched.store(true, .release);
-    state.app.podcasts.selected_idx = null;
-    state.app.podcasts.episode_count = 0;
+    closeEpisodes();
 
     const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
+    var job: SearchJob = .{ .generation = my_gen, .query = undefined, .query_len = @min(query.len, 256) };
+    @memcpy(job.query[0..job.query_len], query[0..job.query_len]);
 
-    const n = @min(query.len, query_buf.len);
-    @memcpy(query_buf[0..n], query[0..n]);
-    query_len = n;
-
-    workers.spawn(searchWorker, .{my_gen}) catch {
+    workers.spawn(searchWorker, .{job}) catch {
         state.app.podcasts.is_loading.store(false, .release);
     };
 }
 
-fn searchWorker(my_gen: u32) void {
+fn searchWorker(job: SearchJob) void {
     defer state.app.podcasts.is_loading.store(false, .release);
-
-    // Snapshot the query — a newer search may overwrite query_buf mid-flight.
-    var local: [256]u8 = undefined;
-    const qlen = @min(query_len, local.len);
-    @memcpy(local[0..qlen], query_buf[0..qlen]);
 
     // Percent-encode the term (space, &, =, #, ?, %, + at minimum).
     var enc: [768]u8 = undefined;
-    const encoded = percentEncode(local[0..qlen], &enc);
+    const encoded = percentEncode(job.query[0..job.query_len], &enc);
 
     // No infinite scroll here: the classic iTunes Search API takes a `limit`
     // (max 200) but has no offset/page cursor — it always returns the same
@@ -306,14 +357,15 @@ fn searchWorker(my_gen: u32) void {
     defer alloc.free(body);
 
     // Bail if superseded while curl was in flight.
-    if (search_gen.load(.acquire) != my_gen) return;
+    if (search_gen.load(.acquire) != job.generation) return;
 
     parse_mutex.lock();
     defer parse_mutex.unlock();
-    if (search_gen.load(.acquire) != my_gen) return; // re-check under lock
+    if (search_gen.load(.acquire) != job.generation) return; // re-check under lock
 
     const count = pure.parseItunes(body, &state.app.podcasts.results);
     state.app.podcasts.result_count = count;
+    publication_gen +%= 1;
     if (count == 0) logs.pushLog("info", "podcasts", "Search returned no shows", false) else logs.pushLog("info", "podcasts", "Podcast search done (iTunes)", false);
 }
 
@@ -322,9 +374,13 @@ fn searchWorker(my_gen: u32) void {
 // ══════════════════════════════════════════════════════════
 
 pub fn loadEpisodes(idx: usize) void {
-    if (idx >= state.app.podcasts.result_count) return;
     if (state.app.podcasts.episodes_loading.load(.acquire)) return;
 
+    parse_mutex.lock();
+    if (idx >= state.app.podcasts.result_count) {
+        parse_mutex.unlock();
+        return;
+    }
     state.app.podcasts.selected_idx = idx;
     state.app.podcasts.episode_count = 0;
     state.app.podcasts.fetch_error = false;
@@ -356,12 +412,15 @@ pub fn loadEpisodes(idx: usize) void {
             defer parse_mutex.unlock();
             const n = pure.parseRssEpisodes(body, &state.app.podcasts.episodes);
             state.app.podcasts.episode_count = n;
+            publication_gen +%= 1;
             logs.pushLog("info", "podcasts", "Episodes loaded (RSS)", false);
         }
     };
     const flen = @min(p.feed_url_len, S.feed.len);
     @memcpy(S.feed[0..flen], p.feed_url[0..flen]);
     S.feed_len = flen;
+    publication_gen +%= 1;
+    parse_mutex.unlock();
 
     workers.spawn(S.worker, .{}) catch {
         state.app.podcasts.episodes_loading.store(false, .release);
@@ -376,8 +435,9 @@ pub fn loadEpisodes(idx: usize) void {
 /// direct audio stream, so loadContentDirect (no content-type routing) is used
 /// — creating a player if none exists and revealing the player page.
 pub fn playEpisode(idx: usize) void {
-    if (idx >= state.app.podcasts.episode_count) return;
-    const e = &state.app.podcasts.episodes[idx];
+    const view = snapshot();
+    if (idx >= view.episode_count) return;
+    const e = &view.episodes[idx];
     if (e.audio_url_len == 0) return;
 
     // Snapshot every field into locals BEFORE the play call — a concurrent
@@ -394,14 +454,14 @@ pub fn playEpisode(idx: usize) void {
     @memcpy(title_buf[0..tlen], e.title[0..tlen]);
 
     var name_buf: [160]u8 = undefined;
-    const nlen = @min(state.app.podcasts.selected_name_len, name_buf.len);
-    @memcpy(name_buf[0..nlen], state.app.podcasts.selected_name[0..nlen]);
+    const nlen = @min(view.selected_name_len, name_buf.len);
+    @memcpy(name_buf[0..nlen], view.selected_name[0..nlen]);
 
     var art_buf: [300]u8 = undefined;
     var alen: usize = 0;
-    if (state.app.podcasts.selected_idx) |si| {
-        if (si < state.app.podcasts.result_count) {
-            const show = &state.app.podcasts.results[si];
+    if (view.selected_idx) |si| {
+        if (si < view.result_count) {
+            const show = &view.results[si];
             alen = @min(show.artwork_len, art_buf.len);
             @memcpy(art_buf[0..alen], show.artwork[0..alen]);
         }
@@ -601,18 +661,19 @@ pub fn renderContent() void {
     loadPopularOnce();
 
     renderSearchBar();
+    const view = snapshot();
 
-    if (state.app.podcasts.fetch_error) {
+    if (view.fetch_error) {
         _ = dvui.label(@src(), "Failed to fetch — check your connection", .{}, .{
             .color_text = theme.colors.danger,
             .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 },
         });
     }
 
-    if (state.app.podcasts.selected_idx == null) {
-        renderResults();
+    if (view.selected_idx == null) {
+        renderResults(&view);
     } else {
-        renderEpisodes();
+        renderEpisodes(&view);
     }
 }
 
@@ -716,8 +777,7 @@ fn renderCover(i: usize, p: *const pure.Podcast) void {
 }
 
 /// One show card: square cover (clickable) + title + publisher subtitle.
-fn renderCard(i: usize, card_w: f32) void {
-    const p = &state.app.podcasts.results[i];
+fn renderCard(i: usize, card_w: f32, p: *const pure.Podcast) void {
 
     // Validate STABLE COPIES: a fetch worker can rewrite results[i] mid-frame
     // and dvui panics on invalid UTF-8 it reads after we validated.
@@ -777,10 +837,10 @@ fn renderCard(i: usize, card_w: f32) void {
     }
 }
 
-fn renderResults() void {
-    const count = @min(state.app.podcasts.result_count, state.app.podcasts.results.len);
+fn renderResults(view: *const Snapshot) void {
+    const count = view.result_count;
     if (count == 0) {
-        if (!state.app.podcasts.is_loading.load(.acquire)) {
+        if (!view.loading) {
             _ = dvui.label(@src(), "Search for a show to get started", .{}, .{
                 .color_text = theme.colors.text_secondary,
                 .padding = .{ .x = 12, .y = 20, .w = 0, .h = 0 },
@@ -802,7 +862,7 @@ fn renderResults() void {
     defer scroll.deinit();
 
     _ = dvui.label(@src(), "{s}", .{
-        if (state.app.podcasts.showing_popular) "Popular now" else "Results",
+        if (view.showing_popular) "Popular now" else "Results",
     }, .{
         .color_text = theme.colors.text_secondary,
         .padding = .{ .x = 8, .y = 8, .w = 8, .h = 2 },
@@ -826,11 +886,14 @@ fn renderResults() void {
         defer row.deinit();
 
         var c: usize = 0;
-        while (c < cols and r * cols + c < count) : (c += 1) renderCard(r * cols + c, card_w);
+        while (c < cols and r * cols + c < count) : (c += 1) {
+            const i = r * cols + c;
+            renderCard(i, card_w, &view.results[i]);
+        }
     }
 }
 
-fn renderEpisodes() void {
+fn renderEpisodes(view: *const Snapshot) void {
     // Header: back button + show title.
     {
         var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -848,14 +911,13 @@ fn renderEpisodes() void {
             .gravity_y = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
         })) {
-            state.app.podcasts.selected_idx = null;
-            state.app.podcasts.episode_count = 0;
+            closeEpisodes();
             return;
         }
 
         var title_buf: [160]u8 = undefined;
         const title = safeUtf8Buf(
-            state.app.podcasts.selected_name[0..state.app.podcasts.selected_name_len],
+            view.selected_name[0..view.selected_name_len],
             &title_buf,
         );
         _ = dvui.label(@src(), "{s}", .{title}, .{
@@ -864,13 +926,13 @@ fn renderEpisodes() void {
             .gravity_y = 0.5,
         });
 
-        if (state.app.podcasts.episodes_loading.load(.acquire)) {
+        if (view.episodes_loading) {
             _ = dvui.label(@src(), "Loading…", .{}, .{ .color_text = theme.colors.warning, .gravity_y = 0.5 });
         }
     }
 
-    if (state.app.podcasts.episode_count == 0) {
-        if (!state.app.podcasts.episodes_loading.load(.acquire)) {
+    if (view.episode_count == 0) {
+        if (!view.episodes_loading) {
             _ = dvui.label(@src(), "No episodes found", .{}, .{
                 .color_text = theme.colors.text_secondary,
                 .padding = .{ .x = 12, .y = 20, .w = 0, .h = 0 },
@@ -886,8 +948,8 @@ fn renderEpisodes() void {
     });
     defer scroll.deinit();
 
-    for (0..state.app.podcasts.episode_count) |i| {
-        const e = &state.app.podcasts.episodes[i];
+    for (0..view.episode_count) |i| {
+        const e = &view.episodes[i];
         var title_buf: [200]u8 = undefined;
         const title = safeUtf8Buf(e.title[0..e.title_len], &title_buf);
 

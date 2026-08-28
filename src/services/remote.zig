@@ -3462,11 +3462,12 @@ fn apiPodcasts(stream: std.Io.net.Stream, api_path: []const u8, query: []const u
         return;
     }
     // GET /podcasts → results + episodes for the current show.
+    const view = podcasts_svc.snapshot();
     var json_buf: [32768]u8 = undefined;
     var w = std.Io.Writer.fixed(&json_buf);
     w.writeAll("{\"results\":[") catch return;
-    for (0..state.app.podcasts.result_count) |ri| {
-        const r = state.app.podcasts.results[ri];
+    for (0..view.result_count) |ri| {
+        const r = view.results[ri];
         if (r.name_len == 0) continue;
         if (ri > 0) w.writeAll(",") catch return;
         w.writeAll("{\"name\":\"") catch return;
@@ -3478,8 +3479,8 @@ fn apiPodcasts(stream: std.Io.net.Stream, api_path: []const u8, query: []const u
         w.writeAll("}") catch return;
     }
     w.writeAll("],\"episodes\":[") catch return;
-    for (0..state.app.podcasts.episode_count) |ei| {
-        const e = state.app.podcasts.episodes[ei];
+    for (0..view.episode_count) |ei| {
+        const e = view.episodes[ei];
         if (e.title_len == 0) continue;
         if (ei > 0) w.writeAll(",") catch return;
         w.writeAll("{\"title\":\"") catch return;
@@ -3491,15 +3492,15 @@ fn apiPodcasts(stream: std.Io.net.Stream, api_path: []const u8, query: []const u
         w.writeAll("\"}") catch return;
     }
     w.writeAll("],\"selected\":") catch return;
-    if (state.app.podcasts.selected_idx) |si| {
+    if (view.selected_idx) |si| {
         w.print("{d}", .{si}) catch return;
     } else {
         w.writeAll("null") catch return;
     }
     w.writeAll(",\"loading\":") catch return;
-    w.writeAll(if (state.app.podcasts.is_loading.load(.acquire)) "true" else "false") catch return;
+    w.writeAll(if (view.loading) "true" else "false") catch return;
     w.writeAll(",\"episodes_loading\":") catch return;
-    w.writeAll(if (state.app.podcasts.episodes_loading.load(.acquire)) "true" else "false") catch return;
+    w.writeAll(if (view.episodes_loading) "true" else "false") catch return;
     w.writeAll("}") catch return;
     sendJson(stream, json_buf[0..w.end]);
 }
@@ -4287,28 +4288,16 @@ fn apiJellyfin(stream: std.Io.net.Stream, api_path: []const u8, query: []const u
     const jf = @import("jellyfin.zig");
 
     if (std.mem.eql(u8, api_path, "/jellyfin/login")) {
-        // Set server URL, username, password then authenticate
-        if (getQueryParam(query, "server")) |s| {
-            var decoded: [256]u8 = undefined;
-            const sv = @import("../core/text.zig").safeUtf8(urlDecode(s, &decoded) orelse s);
-            const slen = @min(sv.len, 255);
-            @memcpy(state.app.jf.server_url[0..slen], sv[0..slen]);
-            state.app.jf.server_url_len = slen;
-        }
-        if (getQueryParam(query, "user")) |u| {
-            var decoded: [128]u8 = undefined;
-            const uv = @import("../core/text.zig").safeUtf8(urlDecode(u, &decoded) orelse u);
-            const ulen = @min(uv.len, 127);
-            @memcpy(state.app.jf.login_user_buf[0..ulen], uv[0..ulen]);
-            state.app.jf.login_user_buf[ulen] = 0;
-        }
-        if (getQueryParam(query, "pass")) |p| {
-            var decoded: [128]u8 = undefined;
-            const pv = urlDecode(p, &decoded) orelse p;
-            const plen = @min(pv.len, 127);
-            @memcpy(state.app.jf.login_pass_buf[0..plen], pv[0..plen]);
-            state.app.jf.login_pass_buf[plen] = 0;
-        }
+        var server_buf: [256]u8 = undefined;
+        var user_buf: [128]u8 = undefined;
+        var pass_buf: [128]u8 = undefined;
+        const server_raw = getQueryParam(query, "server") orelse "";
+        const user_raw = getQueryParam(query, "user") orelse "";
+        const pass_raw = getQueryParam(query, "pass") orelse "";
+        const server = @import("../core/text.zig").safeUtf8(urlDecode(server_raw, &server_buf) orelse server_raw);
+        const username = @import("../core/text.zig").safeUtf8(urlDecode(user_raw, &user_buf) orelse user_raw);
+        const password = urlDecode(pass_raw, &pass_buf) orelse pass_raw;
+        jf.configureLogin(server, username, password);
         jf.authenticate();
         sendJson(stream, "{\"ok\":true,\"action\":\"login\"}");
         return;
@@ -4365,24 +4354,25 @@ fn apiJellyfin(stream: std.Io.net.Stream, api_path: []const u8, query: []const u
     }
 
     // Default: return full status
+    const view = jf.remoteSnapshot();
     var json_buf: [32768]u8 = undefined;
     var w = std.Io.Writer.fixed(&json_buf);
     w.writeAll("{\"connected\":") catch return;
-    w.writeAll(if (state.app.jf.connected) "true" else "false") catch return;
+    w.writeAll(if (view.connected) "true" else "false") catch return;
     w.writeAll(",\"loading\":") catch return;
-    w.writeAll(if (state.app.jf.is_loading.load(.acquire)) "true" else "false") catch return;
+    w.writeAll(if (view.loading) "true" else "false") catch return;
 
     // Login error
-    if (state.app.jf.login_error_len > 0) {
+    if (view.error_len > 0) {
         w.writeAll(",\"error\":\"") catch return;
-        escJsonWrite(&w, state.app.jf.login_error[0..state.app.jf.login_error_len]);
+        escJsonWrite(&w, view.error_text[0..view.error_len]);
         w.writeAll("\"") catch return;
     }
 
     // Libraries
     w.writeAll(",\"libraries\":[") catch return;
-    for (0..state.app.jf.library_count) |li| {
-        const lib = state.app.jf.libraries[li];
+    for (0..view.library_count) |li| {
+        const lib = view.libraries[li];
         if (li > 0) w.writeAll(",") catch return;
         w.writeAll("{\"id\":\"") catch return;
         escJsonWrite(&w, lib.id[0..lib.id_len]);
@@ -4395,8 +4385,8 @@ fn apiJellyfin(stream: std.Io.net.Stream, api_path: []const u8, query: []const u
 
     // Items
     w.writeAll("],\"items\":[") catch return;
-    for (0..state.app.jf.item_count) |ii| {
-        const item = state.app.jf.items[ii];
+    for (0..view.item_count) |ii| {
+        const item = view.items[ii];
         if (ii > 0) w.writeAll(",") catch return;
         const runtime_sec = @divTrunc(item.runtime_ticks, 10_000_000);
         w.writeAll("{\"id\":\"") catch return;
@@ -4557,11 +4547,12 @@ fn apiUnifiedSearch(stream: std.Io.net.Stream, query: []const u8) void {
     }
 
     // ── Jellyfin results ──
-    if (state.app.jf.connected) {
-        for (0..state.app.jf.item_count) |ji| {
+    const jf_view = @import("jellyfin.zig").remoteSnapshot();
+    if (jf_view.connected) {
+        for (0..jf_view.item_count) |ji| {
             if (total >= 80) break;
             if (w.end + 2048 > json_buf.len) break;
-            const jf_item = state.app.jf.items[ji];
+            const jf_item = jf_view.items[ji];
             if (jf_item.name_len == 0) continue;
             if (total > 0) w.writeAll(",") catch return;
             const act: []const u8 = if (jf_item.is_folder) "jf_browse" else "jf_play";
