@@ -429,7 +429,7 @@ pub fn renderTabContent(tab: state.DrawerTab) void {
         .Web => @import("../services/browser.zig").renderContent(),
         .Anime => anime.renderContent(),
         .Drama => @import("../services/drama.zig").renderContent(),
-        .Podcasts => @import("../services/podcasts.zig").renderContent(),
+        .Podcasts => @import("podcasts_ui.zig").renderContent(),
         .Radio => @import("../services/radio.zig").renderContent(),
         .Iptv => @import("../services/iptv.zig").renderContent(),
         .Music => @import("../services/music_subsonic.zig").renderContent(),

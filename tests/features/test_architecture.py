@@ -77,13 +77,19 @@ def test_owned_worker_supervisor():
 @test("Podcast and Jellyfin readers use immutable feature snapshots", "Architecture")
 def test_feature_store_snapshots():
     podcasts = _src("src/services/podcasts.zig")
+    podcasts_ui = _src("src/ui/podcasts_ui.zig")
     jellyfin = _src("src/services/jellyfin.zig")
     remote = _src("src/services/remote.zig")
     stream = _src("src/services/remote_stream.zig")
     checks = {
         "podcast generation": "publication_gen" in podcasts and "pub const Snapshot" in podcasts,
-        "podcast desktop snapshot": "const view = snapshot();" in podcasts
-            and "renderResults(&view)" in podcasts and "renderEpisodes(&view)" in podcasts,
+        "podcast desktop snapshot": "const view = podcasts.snapshot();" in podcasts_ui
+            and "renderResults(&view)" in podcasts_ui and "renderEpisodes(&view)" in podcasts_ui,
+        "podcast service is UI-free": '@import("dvui")' not in podcasts
+            and 'ui/' not in "\n".join(
+                line for line in podcasts.splitlines() if line.lstrip().startswith("const ")
+            )
+            and '@import("podcasts_ui.zig").renderContent()' in _src("src/ui/drawer.zig"),
         "podcast remote snapshot": "podcasts_svc.snapshot()" in remote
             and 'podcasts.zig").copyArtwork' in stream,
         "Jellyfin projection excludes pointers": "pub const RemoteItem" in jellyfin

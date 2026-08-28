@@ -141,6 +141,7 @@ def test_podcasts_wired():
     drawer = _src("src/ui/drawer.zig")
     shell = _src("src/ui/shell.zig")
     svc = _src("src/services/podcasts.zig")
+    ui = _src("src/ui/podcasts_ui.zig")
     pure = _src("src/services/podcasts_pure.zig")
     rem = _remote_api()
     web = _web_app()
@@ -156,7 +157,7 @@ def test_podcasts_wired():
         # episodes[] holds 200, but a 1 MB cap only ever reached the newest 61.
         "episode cap fills the array": "4 * 1024 * 1024" in svc,
         "enum variant": "Podcasts," in st and "podcasts: struct" in st,
-        "drawer route": ".Podcasts =>" in drawer and "podcasts.zig" in drawer,
+        "drawer route": '.Podcasts => @import("podcasts_ui.zig").renderContent()' in drawer,
         "shell label+icon": '.Podcasts => "Podcasts"' in shell and "lucide.podcast" in shell,
         "service search→episodes→play": all(
             f"pub fn {fn}" in svc for fn in ("searchPodcasts", "loadEpisodes", "playEpisode")
@@ -210,6 +211,7 @@ def test_podcasts_radio_default_content():
     # URL builders/parsers exist and the service routes through them, the fetch
     # is latched + backgrounded, and cards reuse the shared poster daemon.
     pod = _src("src/services/podcasts.zig")
+    pod_ui = _src("src/ui/podcasts_ui.zig")
     pod_pure = _src("src/services/podcasts_pure.zig")
     rad = _src("src/services/radio.zig")
     rad_pure = _src("src/services/radio_pure.zig")
@@ -248,13 +250,14 @@ def test_podcasts_radio_default_content():
             for s in (pod, rad)
         ),
         # ── Cards: artwork via the shared poster daemon, existing click path ──
-        "podcast cards click loadEpisodes": "if (clicked) loadEpisodes(i)" in pod,
+        "podcast cards click loadEpisodes": "if (clicked) loadEpisodes(i)" in pod_ui,
         "radio cards click playStation": "if (clicked) playStation(i)" in rad,
-        "poster daemon reused": all(
-            "poster.fetchAsync(" in s and "poster.uploadIfReady(" in s for s in (pod, rad)
+        "poster daemon reused": (
+            "poster.fetchAsync(" in pod_ui and "poster.uploadIfReady(" in pod_ui
+            and "poster.fetchAsync(" in rad and "poster.uploadIfReady(" in rad
         ),
         # Pages kick the fetch from their own render root, not a shared shell.
-        "kicked from renderContent": all("loadPopularOnce();" in s for s in (pod, rad)),
+        "kicked from renderContent": "loadPopularOnce();" in pod_ui and "loadPopularOnce();" in rad,
         # Both podcasts + radio declare the popular-chart flag (>= 2 — other
         # catalog tabs, e.g. VNDB, legitimately declare their own sibling flag).
         "state flag": st.count("showing_popular: bool") >= 2,
