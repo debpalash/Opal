@@ -94,10 +94,14 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: browser-actions/setup-chrome@v2
+      - name: Install pinned Chrome for Testing
         id: setup-chrome
-        with:
-          chrome-version: 151.0.7922.174
+        run: |
+          curl --fail --location --retry 3 \
+            https://storage.googleapis.com/chrome-for-testing-public/151.0.7922.173/linux64/chrome-linux64.zip \
+            --output "$RUNNER_TEMP/chrome.zip"
+          unzip -q "$RUNNER_TEMP/chrome.zip" -d "$RUNNER_TEMP/chrome"
+          echo "chrome-path=$RUNNER_TEMP/chrome/chrome-linux64/chrome" >> "$GITHUB_OUTPUT"
       - name: Exercise hostile provider markup in a real browser
         run: python3 tests/test_web_dom_live.py --chromium "${{ steps.setup-chrome.outputs.chrome-path }}"
 
