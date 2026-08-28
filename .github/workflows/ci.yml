@@ -97,7 +97,7 @@ jobs:
       - uses: browser-actions/setup-chrome@v2
         id: setup-chrome
         with:
-          chrome-version: 151.0.7922.173
+          chrome-version: 151.0.7922.174
       - name: Exercise hostile provider markup in a real browser
         run: python3 tests/test_web_dom_live.py --chromium "${{ steps.setup-chrome.outputs.chrome-path }}"
 
