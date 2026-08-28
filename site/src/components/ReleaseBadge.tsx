@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { getReleases, newest } from "../lib/releases";
 
 /**
- * "v0.6.5 · free & open source".
+ * "v0.6.6 · free & open source".
  *
  * Renders the licence line on the server and only adds the version once the API
  * answers — so the pill is never empty, never shifts layout by more than a few

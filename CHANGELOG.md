@@ -10,6 +10,36 @@ Add a section BEFORE tagging; a missing one ships a release that says so.
 Headings are `## vX.Y.Z — YYYY-MM-DD`, newest first. The version token must
 match the tag exactly.
 
+## v0.6.6 — 2026-08-28
+
+- **Movies and TV now work without a catalog API key.** The built-in Cinemeta
+  feed supplies trending, popular, top-rated, genre-filtered and searched
+  cards, while TMDB remains an optional metadata upgrade rather than a setup
+  requirement.
+- **TV cards open a real season and episode browser in keyless mode.** Series
+  metadata, episode names, summaries, dates and thumbnails flow into the same
+  desktop and web drill-down used by TMDB-backed shows.
+- **Poster loading is reliable again.** Absolute Metahub artwork is accepted by
+  the guarded proxy, and WebP-only poster responses are requested through a
+  decoder-compatible JPEG endpoint instead of becoming permanent placeholders.
+- **Browse behaves properly from phones to ultrawide desktops.** Navigation no
+  longer disappears during resize, Movies & TV gains compact filters and live
+  search, cards adapt to available space, and the source menu follows the
+  active theme instead of opening a bright white popup.
+- **The Web UI is safer under hostile and concurrent input.** Text and HTML
+  attributes use separate encoders, session and API response boundaries are
+  hardened, and a real Chromium test proves provider markup cannot reach the
+  live DOM.
+- **Background work has clearer ownership.** Critical workers are supervised
+  through shutdown, remote writes release player state first, and Podcast and
+  Jellyfin readers publish immutable snapshots instead of racing live state.
+- **Linux setup and display defaults are friendlier.** The installer is
+  rootless by default, HiDPI scaling respects the whole panel, and font metrics
+  no longer clip titles on Linux.
+- **Release and project pages are easier to trust and navigate.** Download and
+  playback paths received additional validation, and the website now exposes
+  crawlable changelog, comparison and SEO pages.
+
 ## v0.6.5 — 2026-08-11
 
 - **Torrent search works from the desktop app again.** Python's process pool

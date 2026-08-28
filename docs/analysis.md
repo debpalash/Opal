@@ -1,6 +1,6 @@
 # Opal engineering snapshot
 
-Updated: 2026-08-28. Canonical release version: 0.6.5 (`build.zig.zon`).
+Updated: 2026-08-28. Canonical release version: 0.6.6 (`build.zig.zon`).
 
 Opal is a modular-monolith media application with one active playback surface,
 a DVUI desktop presentation, and an optional authenticated Web UI/headless
