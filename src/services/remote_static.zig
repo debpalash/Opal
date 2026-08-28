@@ -76,10 +76,10 @@ fn serveFile(stream: std.Io.net.Stream, path: []const u8, asset: Asset) void {
         .immutable => "Cache-Control: public, max-age=31536000, immutable\r\n",
     };
     const privacy_header: []const u8 = if (std.mem.eql(u8, asset.content_type, "text/html"))
-        "Referrer-Policy: no-referrer\r\n"
+        "Referrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; media-src 'self' blob:; connect-src 'self'\r\n"
     else
         "";
-    var header: [512]u8 = undefined;
+    var header: [1024]u8 = undefined;
     const h = std.fmt.bufPrint(&header, "HTTP/1.1 200 OK\r\nContent-Type: {s}\r\nX-Content-Type-Options: nosniff\r\n{s}{s}Content-Length: {d}\r\n\r\n", .{ asset.content_type, cache_header, privacy_header, body.len }) catch return;
     io_g.streamWriteAll(stream, h) catch return;
     io_g.streamWriteAll(stream, body) catch {};

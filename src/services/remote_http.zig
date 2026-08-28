@@ -7,18 +7,59 @@
 const std = @import("std");
 const io_g = @import("../core/io_global.zig");
 
+const RESPONSE_WRITE_TIMEOUT_S: i64 = 5;
+
+fn writeResponse(stream: std.Io.net.Stream, data: []const u8) !void {
+    try io_g.streamWriteAll(stream, data);
+}
+
+const WriteEvent = union(enum) {
+    write: anyerror!void,
+    deadline: std.Io.Cancelable!void,
+};
+
+/// Bound ordinary API writes so one authenticated client that stops reading
+/// cannot pin a connection worker indefinitely. No application-state lock is
+/// held while this function runs.
+fn writeTimed(stream: std.Io.net.Stream, data: []const u8) bool {
+    var events: [2]WriteEvent = undefined;
+    var select = std.Io.Select(WriteEvent).init(io_g.io(), &events);
+    defer select.cancelDiscard();
+    select.concurrent(.write, writeResponse, .{ stream, data }) catch return false;
+    select.concurrent(.deadline, waitResponseDeadline, .{}) catch return false;
+    return switch (select.await() catch return false) {
+        .write => |result| if (result) true else |_| false,
+        .deadline => |result| blk: {
+            _ = result catch {};
+            @import("../core/logs.zig").pushLog("warn", "remote", "API response write timed out", false);
+            break :blk false;
+        },
+    };
+}
+
+fn waitResponseDeadline() std.Io.Cancelable!void {
+    return std.Io.Timeout.sleep(.{ .duration = .{
+        .clock = .awake,
+        .raw = .fromSeconds(RESPONSE_WRITE_TIMEOUT_S),
+    } }, io_g.io());
+}
+
 pub fn sendJson(stream: std.Io.net.Stream, json: []const u8) void {
-    var header: [256]u8 = undefined;
-    const h = std.fmt.bufPrint(&header, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nContent-Length: {d}\r\n\r\n", .{json.len}) catch return;
-    io_g.streamWriteAll(stream, h) catch return;
-    io_g.streamWriteAll(stream, json) catch {};
+    sendJsonExtra(stream, "200 OK", json, "");
+}
+
+/// JSON response with caller-supplied, compile-time/trusted response headers.
+/// Used for browser session cookies; provider/request data must never enter
+/// `extra_headers`.
+pub fn sendJsonExtra(stream: std.Io.net.Stream, status: []const u8, json: []const u8, extra_headers: []const u8) void {
+    var header: [768]u8 = undefined;
+    const h = std.fmt.bufPrint(&header, "HTTP/1.1 {s}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nCache-Control: no-store\r\n{s}Content-Length: {d}\r\n\r\n", .{ status, extra_headers, json.len }) catch return;
+    if (!writeTimed(stream, h)) return;
+    _ = writeTimed(stream, json);
 }
 
 pub fn sendJsonStatus(stream: std.Io.net.Stream, status: []const u8, json: []const u8) void {
-    var header: [256]u8 = undefined;
-    const h = std.fmt.bufPrint(&header, "HTTP/1.1 {s}\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {d}\r\n\r\n", .{ status, json.len }) catch return;
-    io_g.streamWriteAll(stream, h) catch return;
-    io_g.streamWriteAll(stream, json) catch {};
+    sendJsonExtra(stream, status, json, "");
 }
 
 /// Standards-compliant throttling response. `Retry-After` is expressed as
@@ -31,8 +72,8 @@ pub fn sendRateLimited(stream: std.Io.net.Stream, retry_after_raw: i64, json: []
         "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nRetry-After: {d}\r\nCache-Control: no-store\r\nContent-Length: {d}\r\n\r\n",
         .{ retry_after, json.len },
     ) catch return;
-    io_g.streamWriteAll(stream, h) catch return;
-    io_g.streamWriteAll(stream, json) catch {};
+    if (!writeTimed(stream, h)) return;
+    _ = writeTimed(stream, json);
 }
 
 pub fn asciiEqualIgnoreCase(a: []const u8, b: []const u8) bool {

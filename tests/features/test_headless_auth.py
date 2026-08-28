@@ -167,7 +167,7 @@ def test_auth_web_ui():
         ),
         "logout revokes session": "/api/auth/logout" in ui and "function unpair(" in ui,
         "sign-out button": 'id="signout"' in ui and "$('signout').onclick" in ui,
-        "boot shows auth": "if (TOKEN) paired(); else showAuth();" in ui,
+        "boot checks cookie session": "d.authed ? paired() : showAuth()" in ui,
         # The 6-digit pairing code is gone from the web UI.
         "no pairing code": "/pair?code=" not in ui and 'id="pair-code"' not in ui,
     }

@@ -53,6 +53,15 @@ class Response:
     def json(self) -> object:
         return json.loads(self.body.decode("utf-8"))
 
+    def header_values(self, name: str) -> list[str]:
+        return [value for key, value in self.headers if key.lower() == name.lower()]
+
+    def session_cookie(self) -> str:
+        values = self.header_values("set-cookie")
+        if len(values) != 1:
+            raise AssertionError(f"expected one Set-Cookie header, got {values!r}")
+        return values[0].split(";", 1)[0]
+
 
 def request(
     method: str,
@@ -332,10 +341,23 @@ class SetupTokenLiveTest(unittest.TestCase):
 
         claimed = register("first-admin", host=authority, setup_token=setup_token)
         self.assertEqual(claimed.status, 200, claimed.body)
-        session = claimed.json()["token"]  # type: ignore[index]
-        self.assertIsInstance(session, str)
-        self.assertNotEqual(session, setup_token)
-        self.assertGreaterEqual(len(session), 32)
+        self.assertEqual(claimed.json(), {"ok": True})
+        cookie_headers = claimed.header_values("set-cookie")
+        self.assertEqual(len(cookie_headers), 1)
+        cookie = cookie_headers[0]
+        self.assertIn("opal_session=", cookie)
+        self.assertIn("HttpOnly", cookie)
+        self.assertIn("SameSite=Strict", cookie)
+        self.assertIn("Path=/", cookie)
+        self.assertNotIn(setup_token, cookie)
+        session_cookie = claimed.session_cookie()
+        authenticated_status = request(
+            "GET",
+            "/api/auth/status",
+            host=authority,
+            extra_headers=(("Cookie", session_cookie),),
+        )
+        self.assertTrue(authenticated_status.json()["authed"])  # type: ignore[index]
         self.assertFalse(self.opal.setup_path.exists(), "token file survived successful claim")
 
         replay = register("replay", host=authority, setup_token=setup_token)
@@ -371,7 +393,8 @@ class SetupTokenLiveTest(unittest.TestCase):
         self.assertEqual(sorted(response.status for response in responses), [200, 403])
         winners = [response for response in responses if response.status == 200]
         self.assertEqual(len(winners), 1)
-        self.assertIn("token", winners[0].json())  # type: ignore[operator]
+        self.assertEqual(winners[0].json(), {"ok": True})
+        self.assertTrue(winners[0].session_cookie().startswith("opal_session="))
         self.assertFalse(self.opal.setup_path.exists(), "winning claim did not consume token")
 
     def test_browser_extension_origin_can_present_capability(self) -> None:
@@ -383,7 +406,8 @@ class SetupTokenLiveTest(unittest.TestCase):
             setup_token=setup_token,
         )
         self.assertEqual(claimed.status, 200, claimed.body)
-        self.assertIn("token", claimed.json())  # type: ignore[operator]
+        self.assertEqual(claimed.json(), {"ok": True})
+        self.assertTrue(claimed.session_cookie().startswith("opal_session="))
         self.assertFalse(self.opal.setup_path.exists(), "extension claim did not consume token")
 
     def test_unclaimed_token_survives_restart(self) -> None:

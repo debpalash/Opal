@@ -392,6 +392,7 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
+    test_nova2_spawn.use_llvm = true;
     test_nova2_spawn.root_module.addImport("io_global", b.createModule(.{
         .root_source_file = b.path("src/core/io_global.zig"),
         .target = target,
@@ -426,6 +427,7 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
+    test_paths.use_llvm = true;
     test_step.dependOn(&b.addRunArtifact(test_paths).step);
 
     const test_text = b.addTest(.{
@@ -465,6 +467,7 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
+    test_bounded_process.use_llvm = true;
     test_step.dependOn(&b.addRunArtifact(test_bounded_process).step);
 
     // Native/unsafe plugin approval hashes the deterministic complete tree and
@@ -604,6 +607,7 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
+    test_secure_temp.use_llvm = true;
     test_step.dependOn(&b.addRunArtifact(test_secure_temp).step);
 
     // Authenticated curl calls feed config headers over a closed stdin pipe so
@@ -616,6 +620,7 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
+    test_curl_secret.use_llvm = true;
     test_step.dependOn(&b.addRunArtifact(test_curl_secret).step);
 
     const test_deps = b.addTest(.{
@@ -645,6 +650,7 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
+    test_workers.use_llvm = true;
     test_step.dependOn(&b.addRunArtifact(test_workers).step);
 
     const test_chrome = b.addTest(.{
@@ -1186,6 +1192,7 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
+    test_display_info.use_llvm = true;
     test_step.dependOn(&b.addRunArtifact(test_display_info).step);
 
     // Media file classification: playable vs executable/archive (torrent
@@ -1250,6 +1257,15 @@ pub fn build(b: *std.Build) void {
     });
     test_remote_host.root_module.addImport("build_options", build_options_module);
     test_step.dependOn(&b.addRunArtifact(test_remote_host).step);
+
+    const test_remote_auth = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/remote_auth_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_remote_auth).step);
 
     // TV calendar: air-date math, countdown labels, TMDB next-episode parse,
     // EZTV availability extraction.
@@ -1783,6 +1799,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    test_music_discovery_pure.root_module.addImport("build_options", build_options_module);
     test_step.dependOn(&b.addRunArtifact(test_music_discovery_pure).step);
 
     const test_iptv_playlist_pure = b.addTest(.{

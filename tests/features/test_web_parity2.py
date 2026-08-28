@@ -113,7 +113,8 @@ def test_reader_tabs():
     ui = _web_app()
     checks = {
         # Page <img> must carry the token in the query — it can't set a header.
-        "reader uses token-in-query": "/api/comics/page?i=${i}&t=${encodeURIComponent(TOKEN)}" in ui,
+        "reader uses cookie-authenticated URL": "/api/comics/page?i=${i}" in ui
+            and "encodeURIComponent(TOKEN)" not in ui,
         # Pages land out of order across 8 download workers, so only the
         # contiguous downloaded prefix is safe to render.
         "renders downloaded prefix": "length: d.downloaded" in ui,

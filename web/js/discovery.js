@@ -209,7 +209,7 @@ function renderPodResults(rs){
   const html = rs.map((r, i) => `
     <div class="result pod">
       ${r.art
-        ? `<img class="thumb" loading="lazy" src="${BASE}/api/podcasts/poster?idx=${i}&t=${TOKEN}">`
+        ? `<img class="thumb" loading="lazy" src="${BASE}/api/podcasts/poster?idx=${i}">`
         : '<div class="thumb"></div>'}
       <div class="body">
         <div class="t">${esc(r.name)}</div>
@@ -289,7 +289,7 @@ function renderJfItems(items){
     ? '<div class="grid">' + items.map(it => {
         const meta = [it.type, it.year || '', it.runtime ? fmt(it.runtime) : ''].filter(Boolean).join(' · ');
         return `<div class="card" data-id="${esc(it.id)}" data-folder="${it.folder}" data-type="${esc(it.type || '')}">
-          ${it.image ? `<img loading="lazy" src="${BASE}/api/jellyfin/poster?id=${encodeURIComponent(it.id)}&t=${TOKEN}">` : '<img>'}
+          ${it.image ? `<img loading="lazy" src="${BASE}/api/jellyfin/poster?id=${encodeURIComponent(it.id)}">` : '<img>'}
           <div class="cap">${esc(it.name)}<br><span class="rt">${esc(meta)}</span></div>
         </div>`;
       }).join('') + '</div>'

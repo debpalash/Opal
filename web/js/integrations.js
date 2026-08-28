@@ -101,8 +101,8 @@ $('plug-save').onclick = async () => {
   const put = async (k, v) => {
     const response = await networkFetch(BASE + '/api/plugins', {
     method: 'POST',
-    headers: { Authorization: 'Bearer ' + TOKEN,
-               'Content-Type': 'application/x-www-form-urlencoded' },
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: 'key=' + encodeURIComponent(k) + '&value=' + encodeURIComponent(v),
     });
     const data = await response.json().catch(() => ({}));
@@ -147,8 +147,8 @@ async function loadTrakt() {
 $('trakt-save').onclick = async () => {
   const put = (k, v) => fetch(BASE + '/api/trakt', {
     method: 'POST',
-    headers: { Authorization: 'Bearer ' + TOKEN,
-               'Content-Type': 'application/x-www-form-urlencoded' },
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: 'key=' + encodeURIComponent(k) + '&value=' + encodeURIComponent(v),
   });
   // Empty means "leave alone", same rule as the integrations block above.
@@ -160,12 +160,12 @@ $('trakt-save').onclick = async () => {
 };
 $('trakt-connect').onclick = async () => {
   await fetch(BASE + '/api/trakt?action=connect',
-    { method:'POST', headers:{ Authorization:'Bearer ' + TOKEN } });
+    { method:'POST', credentials:'same-origin' });
   loadTrakt();
 };
 $('trakt-disconnect').onclick = async () => {
   await fetch(BASE + '/api/trakt?action=disconnect',
-    { method:'POST', headers:{ Authorization:'Bearer ' + TOKEN } });
+    { method:'POST', credentials:'same-origin' });
   loadTrakt();
 };
 
@@ -177,13 +177,13 @@ async function loadSuwayomi() {
 }
 $('suwa-start').onclick = async () => {
   await fetch(BASE + '/api/suwayomi?action=start',
-    { method:'POST', headers:{ Authorization:'Bearer ' + TOKEN } });
+    { method:'POST', credentials:'same-origin' });
   // The server takes a few seconds to come up; re-read rather than guess.
   setTimeout(loadSuwayomi, 1500);
 };
 $('suwa-stop').onclick = async () => {
   await fetch(BASE + '/api/suwayomi?action=stop',
-    { method:'POST', headers:{ Authorization:'Bearer ' + TOKEN } });
+    { method:'POST', credentials:'same-origin' });
   setTimeout(loadSuwayomi, 500);
 };
 
@@ -332,7 +332,7 @@ async function loadParty(){
 }
 const partyPost = async (path) => {
   const r = await fetch(BASE + '/api' + path,
-    { method:'POST', headers:{ Authorization:'Bearer ' + TOKEN } });
+    { method:'POST', credentials:'same-origin' });
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(d.error || 'Watch party action failed');
   return d;
@@ -493,7 +493,7 @@ function wireSettings(){
     const val = el.dataset.kind === 'boolean' ? (el.checked ? '1' : '0') : el.value.trim();
     const r = await fetch(BASE + '/api/settings?key=' + encodeURIComponent(key) +
       '&value=' + encodeURIComponent(val),
-      { method:'POST', headers:{ Authorization:'Bearer ' + TOKEN } });
+      { method:'POST', credentials:'same-origin' });
     const d = await r.json().catch(() => ({}));
     // The server validates and REJECTS rather than clamping, so re-read to put
     // the stored value back on screen — then report. Reporting first would let
@@ -516,7 +516,8 @@ function wireSettings(){
 // recovery path when the web password is forgotten.
 const apiPost = (path, body) => fetch(BASE + '/api/access' + path, {
   method: 'POST',
-  headers: { Authorization: 'Bearer ' + TOKEN, 'Content-Type': 'application/x-www-form-urlencoded' },
+  credentials: 'same-origin',
+  headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
   body: body || '',
 }).then(async r => { const d = await r.json().catch(() => ({})); return { ok: r.ok, d }; });
 

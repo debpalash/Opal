@@ -42,7 +42,7 @@ function syncNowPlayingArt(active, status){
   if (art.dataset.key === key) return;
   art.dataset.key = key;
   art.hidden = false;
-  art.src = `${BASE}/now-playing/art?k=${encodeURIComponent(key)}&t=${encodeURIComponent(TOKEN)}`;
+  art.src = `${BASE}/now-playing/art?k=${encodeURIComponent(key)}`;
 }
 
 $('np-art').onload = () => { $('np-art').hidden = false; };
@@ -97,13 +97,12 @@ function applyStatus(d){
   $('vol').disabled = !active;
   for (const id of ['b-toggle', 'b-back', 'b-fwd', 'b-mute']) $(id).disabled = !active;
 }
-// Server-pushed status via SSE (EventSource can't set headers → token in ?t=),
-// with a 1s polling fallback if the stream errors.
+// EventSource sends the same-origin HttpOnly session cookie automatically.
 let es = null, pollTimer = null;
 function startStatus(){
   if (es) { es.close(); es = null; }
   try {
-    es = new EventSource(BASE + '/events?t=' + encodeURIComponent(TOKEN));
+    es = new EventSource(BASE + '/events');
     es.onmessage = e => { try { applyStatus(JSON.parse(e.data)); } catch {} };
     es.onerror = () => { es.close(); es = null; $('conn-dot').classList.remove('on'); poll(); };
   } catch { poll(); }

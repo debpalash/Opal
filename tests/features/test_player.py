@@ -297,7 +297,8 @@ def test_web_companion():
         "build bundles web": "Resources/web" in sh,
         # The web UI authenticates via accounts, not a pairing code.
         "client uses accounts": "/api/auth/status" in web and "/api/auth/" in web
-            and "submitAuth" in web and "localStorage" in web and 'id="pair-code"' not in web,
+            and "submitAuth" in web and "HttpOnly" in rm
+            and "localStorage.setItem('opal_token'" not in web and 'id="pair-code"' not in web,
     }
     missing = [k for k, v in checks.items() if not v]
     if not missing:

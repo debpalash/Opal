@@ -1,6 +1,16 @@
 'use strict';
 const BASE = location.origin.startsWith('http') ? location.origin : 'http://' + location.hostname + ':41595';
-let TOKEN = localStorage.getItem('opal_token') || '';
+let AUTHENTICATED = false;
+// Browser bearer tokens from older releases are deliberately invalidated.
+// Authentication now lives in an HttpOnly SameSite cookie that JavaScript
+// cannot read or leak into markup, logs, history, or media URLs.
+const LEGACY_TOKEN = localStorage.getItem('opal_token') || '';
+localStorage.removeItem('opal_token');
+if (/^[0-9a-f]{48}$/.test(LEGACY_TOKEN)) {
+  fetch(BASE + '/api/auth/logout', {
+    method:'POST', headers:{ Authorization:'Bearer ' + LEGACY_TOKEN },
+  }).catch(()=>{});
+}
 
 // The desktop opens first-run setup with the one-time capability in a URL
 // fragment. Fragments never reach the HTTP server or access logs. Capture it,
@@ -15,6 +25,60 @@ if (location.hash.startsWith('#setup=')) {
 }
 
 const $ = id => document.getElementById(id);
+
+// Provider metadata is never assigned to the live DOM through the browser's
+// raw HTML parser. Legacy renderers still produce compact template strings, so
+// intercept both HTML insertion APIs, parse into a detached template, remove
+// executable elements/attributes and unsafe URLs, then publish with DOM
+// replace/insert operations. This is synchronous: hostile image/event markup
+// never gets one live frame in which to execute.
+const nativeInnerHTML = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');
+const nativeInsertAdjacentHTML = Element.prototype.insertAdjacentHTML;
+const blockedElements = new Set(['SCRIPT','IFRAME','OBJECT','EMBED','BASE','META','LINK','FORM']);
+const urlAttributes = new Set(['href','src','action','formaction','xlink:href']);
+function safeDomFragment(markup){
+  const template = document.createElement('template');
+  nativeInnerHTML.set.call(template, String(markup ?? ''));
+  template.content.querySelectorAll('*').forEach(node => {
+    if (blockedElements.has(node.tagName)) { node.remove(); return; }
+    [...node.attributes].forEach(attribute => {
+      const name = attribute.name.toLowerCase(), value = attribute.value.trim();
+      if (name.startsWith('on') || name === 'srcdoc' || name === 'nonce') {
+        node.removeAttribute(attribute.name); return;
+      }
+      if (name === 'style' && /(?:url\s*\(|expression\s*\(|@import)/i.test(value)) {
+        node.removeAttribute(attribute.name); return;
+      }
+      if (urlAttributes.has(name)) {
+        try {
+          const parsed = new URL(value, location.origin);
+          const allowed = parsed.origin === location.origin ||
+            ((parsed.protocol === 'http:' || parsed.protocol === 'https:') && name === 'src') ||
+            (parsed.protocol === 'data:' && name === 'src' && /^data:image\//i.test(value)) ||
+            (parsed.protocol === 'blob:' && (name === 'src' || name === 'href'));
+          if (!allowed) node.removeAttribute(attribute.name);
+        } catch { node.removeAttribute(attribute.name); }
+      }
+    });
+    if (node.getAttribute('target') === '_blank') node.setAttribute('rel', 'noopener noreferrer');
+  });
+  return template.content;
+}
+Object.defineProperty(Element.prototype, 'innerHTML', {
+  configurable: true,
+  enumerable: nativeInnerHTML.enumerable,
+  get(){ return nativeInnerHTML.get.call(this); },
+  set(markup){ this.replaceChildren(safeDomFragment(markup)); },
+});
+Element.prototype.insertAdjacentHTML = function(position, markup){
+  const fragment = safeDomFragment(markup);
+  if (position === 'beforebegin') this.before(fragment);
+  else if (position === 'afterbegin') this.prepend(fragment);
+  else if (position === 'beforeend') this.append(fragment);
+  else if (position === 'afterend') this.after(fragment);
+  else throw new DOMException('Invalid position', 'SyntaxError');
+};
+
 function setNetworkState(state){
   const el = $('network-status');
   if (state === true) { el.classList.remove('show'); el.textContent = ''; return; }
@@ -26,10 +90,10 @@ const networkFetch = (url, options) => fetch(url, options).then(
   response => { setNetworkState(true); return response; },
   error => { setNetworkState(false); throw error; },
 );
-const api = (path) => networkFetch(BASE + '/api' + path, { headers: TOKEN ? { Authorization: 'Bearer ' + TOKEN } : {} })
+const api = (path) => networkFetch(BASE + '/api' + path, { credentials:'same-origin' })
   .then(r => { if (r.status === 401) { unpair(); throw 0; } return r.json(); });
 const apiMutation = (path) => networkFetch(BASE + '/api' + path, {
-  method: 'POST', headers: TOKEN ? { Authorization: 'Bearer ' + TOKEN } : {},
+  method: 'POST', credentials:'same-origin',
 }).then(async r => {
   if (r.status === 401) { unpair(); throw new Error('Signed out'); }
   const data = await r.json().catch(() => ({}));
@@ -78,7 +142,7 @@ if (!navigator.onLine) setNetworkState(false);
 window.addEventListener('offline', () => setNetworkState(false));
 window.addEventListener('online', () => {
   setNetworkState('reconnecting');
-  if (TOKEN) { poll(); if (currentPage) loadPage(currentPage); }
+  if (AUTHENTICATED) { poll(); if (currentPage) loadPage(currentPage); }
 });
 
 // ── Account auth (identical for headless + desktop-remote; no pairing code) ──
@@ -88,6 +152,7 @@ let HOSTED = false;
 let authMode = 'login'; // 'register' on first-run
 
 function paired(){
+  AUTHENTICATED = true;
   $('pair-screen').style.display='none';
   api('/host').then(h => {
     HOSTED = !!h.headless;
@@ -103,9 +168,9 @@ function paired(){
 
 // Sign out — also the 401 handler in api(). Revokes the session server-side.
 function unpair(){
-  const t = TOKEN;
-  TOKEN=''; localStorage.removeItem('opal_token');
-  if (t) fetch(BASE + '/api/auth/logout', { method:'POST', headers:{ Authorization:'Bearer '+t } }).catch(()=>{});
+  const wasAuthenticated = AUTHENTICATED;
+  AUTHENTICATED = false;
+  if (wasAuthenticated) fetch(BASE + '/api/auth/logout', { method:'POST', credentials:'same-origin' }).catch(()=>{});
   showAuth();
 }
 
@@ -143,7 +208,7 @@ async function submitAuth(){
     const r = await fetch(BASE + '/api/auth/' + (reg ? 'register' : 'login'),
       { method:'POST', headers, body });
     const d = await r.json().catch(()=>({}));
-    if (r.ok && d.token) { SETUP_TOKEN=''; $('auth-setup').value=''; TOKEN = d.token; localStorage.setItem('opal_token', TOKEN); paired(); }
+    if (r.ok && d.ok) { SETUP_TOKEN=''; $('auth-setup').value=''; paired(); }
     else $('pair-err').textContent = r.status === 401 ? 'Wrong username or password.' : (d.error || 'Something went wrong.');
   } catch { $('pair-err').textContent = 'Can’t reach Opal — is the server running?'; }
   finally { $('pair-btn').disabled = false; }

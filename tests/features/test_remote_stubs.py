@@ -74,8 +74,9 @@ def test_comic_page_route():
     cm = _src("src/services/comics.zig")
     cp = _src("src/services/comics_pure.zig")
     checks = {
-        # <img> can't send an Authorization header → ?t= token, same as /poster.
-        "token-in-query media route": '"/api/comics/page"' in rm and "rs.handleComicPage(stream, i)" in rm,
+        # <img> carries the same-origin HttpOnly session cookie automatically.
+        "cookie-authenticated media route": '"/api/comics/page"' in rm
+            and "rs.handleComicPage(stream, i)" in rm and "extractCredential(request)" in rm,
         "handler serves the bytes": "pub fn handleComicPage(" in rs and "comics.copyPage(idx, alloc)" in rs,
         # page_pixels holds the ORIGINAL encoded bytes — sniff, don't guess.
         "mime sniffed": "imageMime(bytes)" in rs and "pub fn imageMime(" in cp,

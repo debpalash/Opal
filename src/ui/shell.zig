@@ -681,7 +681,7 @@ fn renderPage(r: Route) !void {
         .search => drawer.renderTabContent(.Search),
         .home => @import("home.zig").render(), // personal hub: metrics + lists
         .browse => {
-            subTabs(&.{ .TMDB, .YouTube, .Iptv, .Anime, .Podcasts, .Radio, .Music, .Comics, .Web, .RSS, .Jellyfin, .Plex, .Audiobooks, .Opds, .Novels, .Vndb, .Drama }, &state.app.browse_source, 100);
+            browseSourcePicker();
             drawer.renderTabContent(state.app.browse_source);
         },
         .watching => @import("../services/tv_library.zig").renderContent(),
@@ -698,6 +698,40 @@ fn renderPage(r: Route) !void {
             state.app.system_tab = .Logs;
             drawer.renderTabContent(.Logs);
         },
+    }
+}
+
+const BROWSE_SOURCES = [_]state.DrawerTab{ .TMDB, .YouTube, .Iptv, .Anime, .Podcasts, .Radio, .Music, .Comics, .Web, .RSS, .Jellyfin, .Plex, .Audiobooks, .Opds, .Novels, .Vndb, .Drama };
+
+/// Browse is one task with a source filter, not seventeen permanent navigation
+/// tabs. Connectors remain reachable from the command palette even when their
+/// setup is incomplete; Plugins/Settings owns configuration.
+fn browseSourcePicker() void {
+    var labels: [BROWSE_SOURCES.len][]const u8 = undefined;
+    var selected: usize = 0;
+    for (BROWSE_SOURCES, 0..) |source, i| {
+        labels[i] = tabLabel(source);
+        if (source == state.app.browse_source) selected = i;
+    }
+
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .horizontal,
+        .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+    });
+    defer row.deinit();
+    _ = dvui.label(@src(), "Source", .{}, .{
+        .color_text = theme.colors.text_secondary,
+        .gravity_y = 0.5,
+        .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+    });
+    if (dvui.dropdown(@src(), &labels, .{ .choice = &selected }, .{}, .{
+        .color_fill = theme.colors.bg_surface,
+        .color_text = theme.colors.text_primary,
+        .corner_radius = theme.dims.rad_sm,
+        .padding = .{ .x = theme.spacing.sm, .y = 4, .w = theme.spacing.sm, .h = 4 },
+    })) {
+        state.app.browse_source = BROWSE_SOURCES[selected];
+        state.app.drawer_tab = state.app.browse_source;
     }
 }
 

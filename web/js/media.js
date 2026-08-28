@@ -175,7 +175,7 @@ function openComic(url){
         : 'Loading…';
       if (d.pages) {
         $('cx-pages').innerHTML = Array.from({ length: d.downloaded }, (_, i) =>
-          `<img class="cx-page" loading="lazy" src="${BASE}/api/comics/page?i=${i}&t=${encodeURIComponent(TOKEN)}">`).join('');
+          `<img class="cx-page" loading="lazy" src="${BASE}/api/comics/page?i=${i}">`).join('');
       }
       if ((d.pages && d.downloaded >= d.pages) || ticks > 90) clearInterval(cxPages);
     } catch { clearInterval(cxPages); }

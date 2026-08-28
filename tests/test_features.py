@@ -24,6 +24,7 @@ from features import harness
 # harness.REGISTRY. Order here is the run/report order (results are grouped by
 # category downstream, so it is not load-bearing).
 from features import (  # noqa: F401
+    test_architecture,
     test_database,
     test_build,
     test_voice,

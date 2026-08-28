@@ -410,7 +410,7 @@ async function loadBrowse(){
           ? 'Add a TMDB key on the desktop (Settings) to browse.' : 'Trending now';
         $('browse-grid').innerHTML = (d.items || []).map(it => `
           <div class="card" data-id="${it.id}" data-type="${esc(it.type)}" data-title="${esc(it.title)}">
-            ${it.poster ? `<img loading="lazy" src="${BASE}/poster?path=${encodeURIComponent(it.poster)}&t=${TOKEN}">` : '<img>'}
+            ${it.poster ? `<img loading="lazy" src="${BASE}/poster?path=${encodeURIComponent(it.poster)}">` : '<img>'}
             <div class="cap">${esc(it.title)}<br><span class="rt">${it.rating || ''}${it.rating ? '%' : ''} ${esc(it.type || '')}</span></div>
           </div>`).join('') || '<div class="empty">Nothing loaded</div>';
         $('browse-grid').querySelectorAll('.card').forEach(c => c.onclick = () =>

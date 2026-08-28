@@ -682,6 +682,7 @@ def test_version_reaches_host_api_and_user_agents():
         "release user agent is derived": '"Opal/" ++ version' in meta,
         "legacy host literal removed": '"0.1.2"' not in remote,
         "legacy user agents removed": "Opal/1.0" not in all_zig,
+        "no release-looking Opal user agent literals": not re.search(r'Opal/\d+\.\d+\.\d+', all_zig),
         "development representation documented": "do not add an implicit `-dev` suffix" in contributing,
     }
     missing = [k for k, v in checks.items() if not v]

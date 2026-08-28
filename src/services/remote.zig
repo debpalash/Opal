@@ -339,6 +339,22 @@ fn extractBearer(request: []const u8) ?[]const u8 {
     return null;
 }
 
+const SESSION_COOKIE = "opal_session";
+
+fn extractSessionCookie(request: []const u8) ?[]const u8 {
+    const raw = (requestHeader(request, "cookie") catch return null) orelse return null;
+    return @import("remote_auth_pure.zig").cookieValue(raw, SESSION_COOKIE);
+}
+
+/// Browser requests authenticate with an HttpOnly cookie; extensions and
+/// automation retain Authorization: Bearer support.
+fn extractCredential(request: []const u8) ?[]const u8 {
+    return extractBearer(request) orelse extractSessionCookie(request);
+}
+
+const SESSION_COOKIE_SET = "Set-Cookie: opal_session={s}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Strict\r\n";
+const SESSION_COOKIE_CLEAR = "Set-Cookie: opal_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict\r\n";
+
 const HeaderError = error{ DuplicateHeader, MalformedHeader };
 
 /// Extract exactly one HTTP header. Security-sensitive setup headers must not
@@ -658,10 +674,9 @@ fn serverLoop() void {
 
     std.debug.print("[remote] web UI + JSON API on http://{s}:{d}\n", .{ ip, port });
 
-    // Thread-per-connection: a video /stream (H2) or a slow client must not
-    // freeze every other request the way the old sequential accept→handle
-    // loop did. API handler logic stays serialized via api_mutex, so the
-    // shared-state assumptions of the single-thread era still hold.
+    // Thread-per-connection: a video stream or slow API client must not freeze
+    // unrelated status/playback requests. Feature handlers own their snapshot
+    // locks; socket writes are bounded in remote_http and happen afterwards.
     while (running.load(.acquire)) {
         const conn = server.accept(io_g.io()) catch continue;
         if (remote_connections.fetchAdd(1, .acq_rel) >= MAX_REMOTE_CONNECTIONS) {
@@ -725,11 +740,6 @@ fn clientKey(address: std.Io.net.IpAddress) u64 {
     }
 }
 
-/// Serializes /api/* handler logic across connection threads — exactly the
-/// guarantees handlers were written under when the server was sequential.
-/// Static/stream paths do NOT take it (they touch no shared app state).
-var api_mutex: @import("../core/sync.zig").Mutex = .{};
-
 fn handleRequest(stream: std.Io.net.Stream, client_key: u64) !void {
     var buf: [4096]u8 = undefined;
     const request = remote_http.readRequest(stream, &buf) catch |err| {
@@ -767,10 +777,9 @@ fn handleRequest(stream: std.Io.net.Stream, client_key: u64) !void {
     // bootstraps the authenticated API after these files load.
     if (@import("remote_static.zig").serve(stream, path)) return;
 
-    // Media routes (/stream, /vtt, /poster): <video>/<img> can't attach an
-    // Authorization header, so these take the token as ?t= instead. Same
-    // constant-time check as the Bearer gate; dispatch lives in
-    // remote_stream.zig to keep this file to routing/auth.
+    // Browser media and SSE requests authenticate through the HttpOnly session
+    // cookie. Automation can still use an Authorization header; credentials
+    // are never accepted in URLs.
     if (std.mem.eql(u8, path, "/events") or std.mem.eql(u8, path, "/stream") or std.mem.eql(u8, path, "/transcode") or std.mem.eql(u8, path, "/vtt") or std.mem.eql(u8, path, "/poster") or std.mem.eql(u8, path, "/now-playing/art") or std.mem.eql(u8, path, "/api/jellyfin/poster") or std.mem.eql(u8, path, "/api/podcasts/poster") or std.mem.eql(u8, path, "/api/comics/page")) {
         // isAuthorized, not a bare api_token compare: the web UI authenticates
         // with a SESSION token (there is no token injection into the page any
@@ -778,16 +787,14 @@ fn handleRequest(stream: std.Io.net.Stream, client_key: u64) !void {
         // "Play here" destination had nothing to point <video> at. A session
         // token is already a full-power bearer for every /api/* route, so
         // honouring it here is consistency, not a widening of access.
-        var t_dec: [96]u8 = undefined;
-        const t_raw = getQueryParam(query, "t") orelse "";
-        const t = urlDecode(t_raw, &t_dec) orelse t_raw;
+        const t = extractCredential(request) orelse "";
         if (!isAuthorized(t)) {
             sendUnauthorized(stream);
             return;
         }
         // SSE status stream — pushes playback status ~1×/s so the web client
         // drops its 1s polling. Held OPEN on this connection thread (not under
-        // api_mutex), so it never blocks other requests. Bounded to ~1h.
+        // any application lock), so it never blocks other requests. Bounded to ~1h.
         if (std.mem.eql(u8, path, "/events")) {
             const hdr = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\nAccess-Control-Allow-Origin: *\r\n\r\n";
             io_g.streamWriteAll(stream, hdr) catch return;
@@ -854,7 +861,7 @@ fn handleRequest(stream: std.Io.net.Stream, client_key: u64) !void {
             // Reconcile setup.token with the authoritative account table, but
             // never serialize the credential (or even a masked derivative).
             reconcileSetupToken();
-            const authed = if (extractBearer(request)) |b| principalForBearer(b) != null else false;
+            const authed = if (extractCredential(request)) |b| principalForBearer(b) != null else false;
             var jb: [64]u8 = undefined;
             const j = std.fmt.bufPrint(&jb, "{{\"needs_setup\":{s},\"authed\":{s}}}", .{
                 if (auth_store.userCount() == 0) "true" else "false",
@@ -866,8 +873,8 @@ fn handleRequest(stream: std.Io.net.Stream, client_key: u64) !void {
 
         if (std.mem.eql(u8, sub, "logout")) {
             if (!requireMethod(stream, method, "POST")) return;
-            if (extractBearer(request)) |b| auth_store.revokeSession(b);
-            sendJson(stream, "{\"ok\":true}");
+            if (extractCredential(request)) |b| auth_store.revokeSession(b);
+            remote_http.sendJsonExtra(stream, "200 OK", "{\"ok\":true}", SESSION_COOKIE_CLEAR);
             return;
         }
 
@@ -953,9 +960,9 @@ fn handleRequest(stream: std.Io.net.Stream, client_key: u64) !void {
                 sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"server error\"}");
                 return;
             }
-            var jb: [96]u8 = undefined;
-            const j = std.fmt.bufPrint(&jb, "{{\"token\":\"{s}\"}}", .{tok[0..]}) catch return;
-            sendJson(stream, j);
+            var cookie_buf: [256]u8 = undefined;
+            const cookie = std.fmt.bufPrint(&cookie_buf, SESSION_COOKIE_SET, .{tok[0..]}) catch return;
+            remote_http.sendJsonExtra(stream, "200 OK", "{\"ok\":true}", cookie);
             return;
         }
 
@@ -963,9 +970,9 @@ fn handleRequest(stream: std.Io.net.Stream, client_key: u64) !void {
         return;
     }
 
-    // All other endpoints require Bearer auth: the static api.token (automation
-    // / the browser extension) OR a live web-login session token.
-    const presented = extractBearer(request) orelse {
+    // All other endpoints accept an HttpOnly browser session cookie or Bearer
+    // auth from the static api.token/browser extension automation clients.
+    const presented = extractCredential(request) orelse {
         sendUnauthorized(stream);
         return;
     };
@@ -996,9 +1003,7 @@ fn handleRequest(stream: std.Io.net.Stream, client_key: u64) !void {
     // policy can fix a bot wall. scrape_fetch already defeats exactly that for
     // the Zig scrapers; this is the same call, reachable over the API.
     //
-    // Deliberately handled BEFORE the api_mutex block below: scrapeFetch blocks
-    // up to ~45s on the browser fallback, and holding api_mutex for that long
-    // would freeze every other endpoint (playback control included). It runs on
+    // scrapeFetch can block up to ~45s on the browser fallback. It runs on
     // this connection thread, which satisfies scrapeFetch's worker-thread-only
     // contract — never the UI thread.
     if (std.mem.eql(u8, path, "/api/scrape")) {
@@ -1007,8 +1012,6 @@ fn handleRequest(stream: std.Io.net.Stream, client_key: u64) !void {
     }
 
     if (std.mem.startsWith(u8, path, "/api/")) {
-        api_mutex.lock();
-        defer api_mutex.unlock();
         handleApi(stream, path[4..], query, request);
     } else {
         const resp = "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nNot Found";

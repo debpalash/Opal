@@ -630,8 +630,9 @@ def test_web_play_here():
         # extension and let an MKV through.
         "classifies name not wrapper url": "callers must pass the media NAME" in pure
             and "classifyName || url" in ui,
-        # <video src> cannot send a header, so media routes take ?t=.
-        "stream url carries token": "function streamUrl(" in ui and "&t=" in ui,
+        # Media/SSE rely on the same-origin HttpOnly cookie; secrets never enter URLs.
+        "stream url uses cookie auth": "function streamUrl(" in ui and "&t=" not in ui
+            and "opal_session" in rm and "HttpOnly" in rm and "SameSite=Strict" in rm,
         # The web page holds a SESSION token; /stream used to accept only the
         # machine api.token, so a logged-in user could not stream at all.
         "stream accepts sessions": "if (!isAuthorized(t))" in rm,
@@ -647,6 +648,54 @@ def test_web_play_here():
     if missing:
         return "fail", "play-here incomplete: " + ", ".join(missing)
     return "pass", "Play here: direct-play with codec refusal, session-token /stream, 5 play paths routed"
+
+
+@test("Web UI isolates provider markup and browser credentials", "Web UI")
+def test_web_ui_security_boundaries():
+    ui = _web_app()
+    core = _src("web/js/core.js")
+    remote = _remote_api()
+    static = _src("src/services/remote_static.zig")
+    scripts = "\n".join(_src(f"web/js/{name}") for name in (
+        "core.js", "now-playing.js", "catalog.js", "playback.js",
+        "integrations.js", "media.js", "discovery.js", "boot.js",
+    ))
+    checks = {
+        "HttpOnly strict session cookie": all(x in remote for x in
+            ("opal_session", "HttpOnly", "SameSite=Strict", "extractSessionCookie")),
+        "browser token not persisted": "localStorage.setItem('opal_token'" not in scripts,
+        "credentials absent from media URLs": "&t=" not in scripts and "?t=" not in scripts,
+        "CSP locks active content": all(x in static for x in
+            ("default-src 'self'", "object-src 'none'", "frame-ancestors 'none'")),
+        "DOM publication is synchronously sanitized": all(x in core for x in
+            ("safeDomFragment", "blockedElements", "name.startsWith('on')",
+             "urlAttributes", "replaceChildren")),
+        "hostile URL schemes rejected": "parsed.protocol === 'http:'" in core
+            and "parsed.protocol === 'data:'" in core,
+        "account boot checks cookie session": "d.authed ? paired() : showAuth()" in ui,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "web security regression(s): " + ", ".join(missing)
+    return "pass", "HttpOnly cookies, token-free URLs, CSP, and synchronous DOM sanitization"
+
+
+@test("Remote API never serializes socket writes behind a global lock", "Remote")
+def test_remote_response_concurrency_boundary():
+    remote = _remote_api()
+    wire = _src("src/services/remote_http.zig")
+    checks = {
+        "global API mutex removed": "api_mutex" not in remote,
+        "connection handlers remain independent": "std.Thread.spawn(.{}, Handler.run" in remote,
+        "ordinary writes have deadline": "RESPONSE_WRITE_TIMEOUT_S" in wire
+            and "std.Io.Select(WriteEvent)" in wire and "API response write timed out" in wire,
+        "player snapshots unlock before SSE writes": "state.players_mutex.unlock();" in remote
+            and "io_g.streamWriteAll(stream, ev)" in remote,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "remote concurrency regression(s): " + ", ".join(missing)
+    return "pass", "per-connection API handling with bounded lock-free response writes"
 
 
 @test("Torrent per-file streaming + pluggable HLS", "Web UI")

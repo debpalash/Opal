@@ -83,9 +83,8 @@ class RemoteResourceLimitsLiveTest(unittest.TestCase):
             setup_token=token,
         )
         self.assertEqual(response.status, 200, response.body)
-        session = response.json()["token"]  # type: ignore[index]
-        self.assertIsInstance(session, str)
-        return session
+        self.assertEqual(response.json(), {"ok": True})
+        return response.session_cookie()
 
     def login(self, username: str, password: str) -> setup_live.Response:
         return setup_live.request(
@@ -95,12 +94,12 @@ class RemoteResourceLimitsLiveTest(unittest.TestCase):
             form={"username": username, "password": password},
         )
 
-    def authenticated(self, path: str, session: str) -> setup_live.Response:
+    def authenticated(self, path: str, session_cookie: str) -> setup_live.Response:
         return setup_live.request(
             "GET",
             path,
             host=self.opal.loopback_authority,
-            extra_headers=(("Authorization", f"Bearer {session}"),),
+            extra_headers=(("Cookie", session_cookie),),
         )
 
     def test_exact_full_framing_and_transfer_encoding_rejection(self) -> None:

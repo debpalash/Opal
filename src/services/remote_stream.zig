@@ -49,7 +49,7 @@ fn openServedFile(rel: []const u8) ?std.Io.File {
     };
 }
 
-/// GET /stream?file=<rel>[&t=token] — Range-aware file streaming from the
+/// GET /stream?file=<rel> — Range-aware, cookie/Bearer-authenticated streaming from the
 /// downloads dir. Works mid-download (reads whatever bytes exist; the
 /// torrent path already prioritizes sequential pieces for streaming).
 pub fn handleStream(stream: std.Io.net.Stream, request: []const u8, rel: []const u8) void {
@@ -87,7 +87,7 @@ pub fn handleStream(stream: std.Io.net.Stream, request: []const u8, rel: []const
     }
 }
 
-/// GET /vtt?file=<rel .srt/.vtt>[&t=] — subtitle sidecar as WebVTT.
+/// GET /vtt?file=<rel .srt/.vtt> — subtitle sidecar as WebVTT.
 pub fn handleVtt(stream: std.Io.net.Stream, rel: []const u8) void {
     var file = openServedFile(rel) orelse return send404(stream);
     defer file.close(io_g.io());
@@ -112,7 +112,7 @@ pub fn handleVtt(stream: std.Io.net.Stream, rel: []const u8) void {
     if (writeAll(stream, h)) _ = writeAll(stream, body);
 }
 
-/// GET /poster?path=<tmdb poster_path>[&t=] — serve from the shared poster
+/// GET /poster?path=<tmdb poster_path> — serve from the shared poster
 /// disk cache; on miss, fetch from TMDB once and cache (same store the
 /// desktop grid uses, so phone browsing warms the desktop and vice versa).
 pub fn handlePoster(stream: std.Io.net.Stream, tmdb_path: []const u8) void {
@@ -122,7 +122,7 @@ pub fn handlePoster(stream: std.Io.net.Stream, tmdb_path: []const u8) void {
     serveProxied(stream, url, url);
 }
 
-/// GET /api/jellyfin/poster?id=<itemId>[&t=] — proxy a Jellyfin item's Primary
+/// GET /api/jellyfin/poster?id=<itemId> — proxy a Jellyfin item's Primary
 /// image through the shared poster disk cache. The connected server URL + auth
 /// token live in state (never sent by the browser), so the phone never sees the
 /// Jellyfin credentials; `<img>` just references this same-origin route. The id
@@ -155,7 +155,7 @@ pub fn handleJfPoster(stream: std.Io.net.Stream, item_id: []const u8) void {
     serveProxied(stream, url, cache_key);
 }
 
-/// GET /api/comics/page?i=<n>[&t=] — serve one downloaded comic page.
+/// GET /api/comics/page?i=<n> — serve one downloaded comic page.
 ///
 /// `state.app.comic.page_pixels[i]` already holds the ORIGINAL encoded bytes the
 /// source served (comics.zig downloads, it never re-encodes), so this is a copy
@@ -175,7 +175,7 @@ pub fn handleComicPage(stream: std.Io.net.Stream, idx: usize) void {
     if (writeAll(stream, h)) _ = writeAll(stream, bytes);
 }
 
-/// GET /api/podcasts/poster?idx=<n>[&t=] — proxy a podcast show's iTunes cover
+/// GET /api/podcasts/poster?idx=<n> — proxy a podcast show's iTunes cover
 /// (a public https URL held in state) through the shared poster disk cache. By
 /// index (not an arbitrary URL param) so the proxy can only ever fetch an
 /// artwork URL the desktop already parsed — no SSRF surface.
@@ -193,7 +193,7 @@ pub fn handlePodcastPoster(stream: std.Io.net.Stream, idx: usize) void {
     serveProxied(stream, url, url);
 }
 
-/// GET /now-playing/art?t=<token>&k=<revision> — proxy the active player's
+/// GET /now-playing/art?k=<revision> — proxy the active player's
 /// artwork without exposing its source URL to the browser. Plex/Jellyfin cover
 /// URLs can carry credentials; status JSON reports only a hash used for cache
 /// busting, while this handler snapshots the real URL under players_mutex.
@@ -464,7 +464,7 @@ const TranscodeInput = struct {
     }
 };
 
-/// `/transcode?file=<rel>&t=<token>[&start=<seconds>]`
+/// `/transcode?file=<rel>[&start=<seconds>]`
 ///
 /// Cleanup note, because three obvious fixes here were wrong.
 ///

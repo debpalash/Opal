@@ -4,13 +4,13 @@
 function openPlayer(rel){
   const v = $('video');
   $('player-title').textContent = rel.split('/').pop();
-  v.src = `${BASE}/stream?file=${encodeURIComponent(rel)}&t=${TOKEN}`;
+  v.src = `${BASE}/stream?file=${encodeURIComponent(rel)}`;
   // Sidecar subs: same name, .srt/.vtt
   [...v.querySelectorAll('track')].forEach(tr => tr.remove());
   const base = rel.replace(/\.[^.]+$/, '');
   const tr = document.createElement('track');
   tr.kind = 'subtitles'; tr.label = 'Subtitles'; tr.default = true;
-  tr.src = `${BASE}/vtt?file=${encodeURIComponent(base + '.srt')}&t=${TOKEN}`;
+  tr.src = `${BASE}/vtt?file=${encodeURIComponent(base + '.srt')}`;
   v.appendChild(tr);
   $('player').classList.add('on');
 }
@@ -93,10 +93,9 @@ const NATIVE_HLS = (() => { const v = document.createElement('video');
 /// The one entry point every play button goes through.
 /// `url` must already be browser-reachable (/stream?file=… or a direct URL).
 /// `fallback` runs when we cannot play here (or the user chose the desktop).
-// <video src> cannot send an Authorization header, so the media routes take
-// the token as ?t= instead. Same token the API calls use.
+// Browser media requests carry the HttpOnly session cookie automatically.
 function streamUrl(rel){
-  return BASE + '/stream?file=' + encodeURIComponent(rel) + '&t=' + encodeURIComponent(TOKEN);
+  return BASE + '/stream?file=' + encodeURIComponent(rel);
 }
 function dispatchPlay(url, title, fallback, classifyName){
   if (!PLAY_HERE) return fallback ? fallback() : undefined;
@@ -129,7 +128,6 @@ function relFromStreamUrl(url){
 
 function transcodeUrl(rel, startSecs){
   return BASE + '/transcode?file=' + encodeURIComponent(rel)
-       + '&t=' + encodeURIComponent(TOKEN)
        + (startSecs ? '&start=' + Math.floor(startSecs) : '');
 }
 

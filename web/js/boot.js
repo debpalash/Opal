@@ -10,4 +10,7 @@ syncNavMode();
 openPage(routePage() || 'home', { replace:true, focus:false });
 
 // ── Authentication boot ──
-if (TOKEN) paired(); else showAuth();
+fetch(BASE + '/api/auth/status', { credentials:'same-origin' })
+  .then(r => r.json())
+  .then(d => d.authed ? paired() : showAuth())
+  .catch(showAuth);
