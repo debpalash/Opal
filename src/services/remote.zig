@@ -3465,7 +3465,7 @@ fn apiPodcasts(stream: std.Io.net.Stream, api_path: []const u8, query: []const u
     const view = podcasts_svc.snapshot();
     var json_buf: [32768]u8 = undefined;
     var w = std.Io.Writer.fixed(&json_buf);
-    w.writeAll("{\"results\":[") catch return;
+    w.print("{{\"generation\":{d},\"results\":[", .{view.generation}) catch return;
     for (0..view.result_count) |ri| {
         const r = view.results[ri];
         if (r.name_len == 0) continue;
@@ -4357,7 +4357,7 @@ fn apiJellyfin(stream: std.Io.net.Stream, api_path: []const u8, query: []const u
     const view = jf.remoteSnapshot();
     var json_buf: [32768]u8 = undefined;
     var w = std.Io.Writer.fixed(&json_buf);
-    w.writeAll("{\"connected\":") catch return;
+    w.print("{{\"generation\":{d},\"connected\":", .{view.generation}) catch return;
     w.writeAll(if (view.connected) "true" else "false") catch return;
     w.writeAll(",\"loading\":") catch return;
     w.writeAll(if (view.loading) "true" else "false") catch return;

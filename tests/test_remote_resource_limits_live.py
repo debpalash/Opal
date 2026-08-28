@@ -13,6 +13,8 @@ the fixed test port is already occupied.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
+import json
 import os
 from pathlib import Path
 import socket
@@ -226,6 +228,57 @@ class RemoteResourceLimitsLiveTest(unittest.TestCase):
         status = self.authenticated("/api/status", session)
         self.assertEqual(status.status, 200, status.body)
         self.assertNotIn("retry-after", {name.lower() for name, _ in status.headers})
+
+    def test_media_sse_and_concurrent_snapshot_contracts(self) -> None:
+        cookie = self.claim_admin("snapshot-admin")
+
+        unauth = setup_live.request(
+            "GET", "/api/podcasts/poster?idx=999",
+            host=self.opal.loopback_authority,
+        )
+        self.assertEqual(unauth.status, 401, unauth.body)
+        authorized = self.authenticated("/api/podcasts/poster?idx=999", cookie)
+        self.assertEqual(authorized.status, 404, authorized.body)
+
+        # EventSource cannot attach Authorization, so prove the same-origin
+        # session cookie reaches a real SSE response and yields an event.
+        sock = socket.create_connection(("127.0.0.1", DEFAULT_PORT), timeout=4)
+        try:
+            sock.settimeout(4)
+            sock.sendall((
+                "GET /events HTTP/1.1\r\n"
+                f"Host: {self.opal.loopback_authority}\r\n"
+                f"Cookie: {cookie}\r\n"
+                "Connection: close\r\n\r\n"
+            ).encode("ascii"))
+            wire = b""
+            while b"data:" not in wire:
+                wire += sock.recv(8192)
+            self.assertIn(b"HTTP/1.1 200 OK", wire)
+            self.assertIn(b"text/event-stream", wire)
+            payload = wire.split(b"data:", 1)[1].split(b"\n\n", 1)[0].strip()
+            json.loads(payload)
+        finally:
+            sock.close()
+
+        # Race provider publication against independent API readers. Every
+        # response must remain valid JSON with a whole generation-tagged view.
+        def reader(_: int) -> int:
+            response = self.authenticated("/api/podcasts", cookie)
+            self.assertEqual(response.status, 200, response.body[:200])
+            payload = response.json()
+            self.assertIsInstance(payload["generation"], int)  # type: ignore[index]
+            self.assertIsInstance(payload["results"], list)  # type: ignore[index]
+            self.assertIsInstance(payload["episodes"], list)  # type: ignore[index]
+            return payload["generation"]  # type: ignore[index,return-value]
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            trigger = pool.submit(
+                self.authenticated, "/api/podcasts/search?q=opal", cookie,
+            )
+            generations = list(pool.map(reader, range(48)))
+            self.assertEqual(trigger.result(timeout=10).status, 200)
+        self.assertTrue(all(generation >= 0 for generation in generations))
 
 
 def parse_args() -> tuple[argparse.Namespace, list[str]]:
