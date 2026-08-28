@@ -112,13 +112,12 @@ pub fn handleVtt(stream: std.Io.net.Stream, rel: []const u8) void {
     if (writeAll(stream, h)) _ = writeAll(stream, body);
 }
 
-/// GET /poster?path=<tmdb poster_path> — serve from the shared poster
-/// disk cache; on miss, fetch from TMDB once and cache (same store the
-/// desktop grid uses, so phone browsing warms the desktop and vice versa).
-pub fn handlePoster(stream: std.Io.net.Stream, tmdb_path: []const u8) void {
-    if (tmdb_path.len == 0 or tmdb_path.len > 96 or tmdb_path[0] != '/') return send404(stream);
-    var url_buf: [160]u8 = undefined;
-    const url = std.fmt.bufPrint(&url_buf, "https://image.tmdb.org/t/p/w185{s}", .{tmdb_path}) catch return send404(stream);
+/// GET /poster?path=<catalog artwork> — serve from the shared poster cache.
+/// The pure resolver accepts TMDB fragments and Cinemeta's Metahub artwork,
+/// but rejects every other absolute URL so this route cannot be used for SSRF.
+pub fn handlePoster(stream: std.Io.net.Stream, poster_path: []const u8) void {
+    var url_buf: [640]u8 = undefined;
+    const url = pure.catalogPosterUrl(poster_path, &url_buf) orelse return send404(stream);
     serveProxied(stream, url, url);
 }
 

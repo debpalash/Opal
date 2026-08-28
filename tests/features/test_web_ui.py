@@ -508,7 +508,8 @@ def test_unified_details_model():
             and "prefillSearch(c.dataset.title" not in ui,
         "search funnels through details": "openDetails(r.media === 'tv'" in ui,
         "overview + action row": 'id="show-overview"' in ui and 'id="show-actions"' in ui
-            and ui.count("renderOverview(d.overview)") == 2,
+            and "renderOverview(d.overview)" in ui
+            and "renderOverview(meta.overview || meta.description)" in ui,
         # Streams stay one action away, and a metadata failure still leaves an
         # honest path to them instead of a dead panel.
         "streams one action away": "prefillSearch(normQuery(title))" in ui
@@ -519,6 +520,36 @@ def test_unified_details_model():
     if missing:
         return "fail", "unified details incomplete: " + ", ".join(missing)
     return "pass", "one details panel: /api/movie + /api/tv, media-typed search rows, action row"
+
+
+@test("Keyless Movies/TV browse has posters, compact filters, and live search", "Web UI")
+def test_keyless_web_catalog_controls():
+    ui = _web_app()
+    catalog = _src("src/services/remote_catalog_api.zig")
+    stream = _src("src/services/remote_stream.zig")
+    pure = _src("src/services/remote_stream_pure.zig")
+    checks = {
+        "compact filter menu": 'id="browse-filters"' in ui
+            and all(f'id="browse-{name}"' in ui for name in ("type", "category", "genre", "apply")),
+        "search form and debounce": 'id="browse-search"' in ui and 'id="browse-q"' in ui
+            and "browseDebounce" in ui and "setTimeout(() => loadBrowse(true), 450)" in ui,
+        "provider-neutral API": "remote_catalog_api.zig" in _src("src/services/remote.zig")
+            and 'tmdb_api.zig").fetchCurrentView(false)' in catalog
+            and 'wire.queryParam(query, "type")' in catalog,
+        "absolute keyless posters": "catalogPosterUrl" in stream
+            and "https://images.metahub.space/" in pure,
+        "poster proxy stays allowlisted": "https://127.0.0.1/private" in pure
+            and "images.metahub.space.evil.test" in pure,
+        "broken art degrades": "poster-missing" in ui and "img.addEventListener('error'" in ui,
+        "TV cards open keyless episode browser": "data-imdb" in ui
+            and "showCinemetaVideos" in ui and "cinemetaSeasons" in ui
+            and "d.meta.videos" in ui
+            and ".catch(() => ({episodes:[]}))" in ui,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "missing: " + ", ".join(missing)
+    return "pass", "keyless catalog: posters, filters, search, and TV season/episode drill-down"
 
 
 @test("Web Settings page (registry-driven, desktop parity)", "Web UI")

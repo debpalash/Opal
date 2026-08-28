@@ -292,6 +292,7 @@ function stopPageWork(){
   clearInterval(searchWatch); clearInterval(animeWatch); clearInterval(podWatch); clearInterval(jfWatch); clearInterval(ytWatch); clearInterval(aiWatch); clearInterval(muWatch); clearInterval(raWatch);
   clearInterval(cxWatch); clearInterval(cxPages); clearInterval(nvWatch); clearInterval(drWatch);
   clearInterval(vnWatch); clearInterval(absWatch); clearInterval(opWatch); clearInterval(plWatch);
+  clearInterval(browseWatch); clearTimeout(browseDebounce);
   clearTimeout(recWatch); clearTimeout(castWatch); clearTimeout(partyWatch); clearTimeout(playerToolsWatch);
   if (currentPage === 'np') { setCastOpen(false); setPlayerToolsOpen(false); }
   jfLibTries = 0;

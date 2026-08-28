@@ -190,6 +190,8 @@ pub const TvContinueItem = struct {
 
 pub const TmdbItem = struct {
     id: i32 = 0,
+    imdb_id: [16]u8 = std.mem.zeroes([16]u8),
+    imdb_id_len: usize = 0,
     title: [128]u8 = std.mem.zeroes([128]u8),
     title_len: usize = 0,
     year: [8]u8 = std.mem.zeroes([8]u8),
@@ -730,6 +732,8 @@ pub const AppState = struct {
         // flags persisted via db tv_watched.
         tv_detail_open: bool = false,
         tv_id: i32 = 0,
+        tv_imdb_id: [16]u8 = std.mem.zeroes([16]u8),
+        tv_imdb_id_len: usize = 0,
         tv_name: [128]u8 = std.mem.zeroes([128]u8),
         tv_name_len: usize = 0,
         tv_poster_path: [64]u8 = std.mem.zeroes([64]u8),

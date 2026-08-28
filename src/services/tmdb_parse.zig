@@ -152,6 +152,8 @@ fn parseAndAddCinemetaItem(json: []const u8, out: *std.ArrayListUnmanaged(state.
     var item = state.TmdbItem{};
     const imdb_id = extractJsonString(json, "\"imdb_id\":") orelse
         extractJsonString(json, "\"id\":") orelse "";
+    if (@import("cinemeta_pure.zig").validImdbId(imdb_id))
+        copyInto(&item.imdb_id, &item.imdb_id_len, imdb_id);
     item.id = extractJsonInt(json, "\"moviedb_id\":");
     if (item.id == 0 and imdb_id.len > 0) item.id = @import("cinemeta_pure.zig").stableId(imdb_id);
 

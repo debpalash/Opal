@@ -20,7 +20,7 @@ def test_web_remote_module_boundaries():
     )
     backend_modules = (
         "remote_http.zig", "remote_static.zig", "remote_status.zig",
-        "remote_library_api.zig", "remote_transfer_api.zig",
+        "remote_library_api.zig", "remote_transfer_api.zig", "remote_catalog_api.zig",
     )
     checks = {
         "top router stays below 5k lines": len(remote.splitlines()) < 5000,
@@ -36,6 +36,7 @@ def test_web_remote_module_boundaries():
         ),
         "router delegates": all(name in remote for name in (
             "remote_static.zig", "remote_status.zig", "remote_library_api.zig", "remote_transfer_api.zig",
+            "remote_catalog_api.zig",
         )),
     }
     missing = [name for name, ok in checks.items() if not ok]

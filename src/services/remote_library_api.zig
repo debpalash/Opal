@@ -248,12 +248,36 @@ fn tvDetails(stream: std.Io.net.Stream, query: []const u8) void {
         wire.sendJson(stream, "{\"error\":\"bad id\"}");
         return;
     };
+    if (state.app.tmdb.api_key_len == 0) {
+        var imdb_buf: [32]u8 = undefined;
+        const imdb = if (wire.queryParam(query, "imdb")) |raw| (wire.urlDecode(raw, &imdb_buf) orelse "") else "";
+        if (!@import("cinemeta_pure.zig").validImdbId(imdb)) {
+            wire.sendJson(stream, "{\"error\":\"keyless TV metadata unavailable\"}");
+            return;
+        }
+        sendCinemetaSeries(stream, imdb);
+        return;
+    }
     var path_buf: [96]u8 = undefined;
     const path = if (wire.queryParam(query, "season")) |raw| blk: {
         const season = std.fmt.parseInt(i32, raw, 10) catch 0;
         break :blk std.fmt.bufPrint(&path_buf, "/3/tv/{d}/season/{d}", .{ id, season }) catch return;
     } else std.fmt.bufPrint(&path_buf, "/3/tv/{d}", .{id}) catch return;
     sendTmdbJson(stream, path);
+}
+
+fn sendCinemetaSeries(stream: std.Io.net.Stream, imdb: []const u8) void {
+    const alloc = @import("../core/alloc.zig").allocator;
+    const body = alloc.alloc(u8, 1024 * 1024) catch return;
+    defer alloc.free(body);
+    var path_buf: [64]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buf, "/meta/series/{s}.json", .{imdb}) catch return;
+    const len = @import("tmdb_api.zig").cinemetaApiInto(path, body);
+    if (len == 0) {
+        wire.sendJson(stream, "{\"error\":\"cinemeta fetch failed\"}");
+        return;
+    }
+    wire.sendJson(stream, body[0..len]);
 }
 
 fn movieDetails(stream: std.Io.net.Stream, query: []const u8) void {

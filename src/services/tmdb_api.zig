@@ -51,7 +51,7 @@ pub fn fetchCurrentView(append: bool) void {
 
 fn browseCacheKey(buf: []u8) []const u8 {
     const t = &state.app.tmdb;
-    return std.fmt.bufPrint(buf, "catalog:browse:{d}:{d}:{d}:{d}:{d}:{d}", .{
+    return std.fmt.bufPrint(buf, "catalog:browse:v2:{d}:{d}:{d}:{d}:{d}:{d}", .{
         @intFromBool(t.api_key_len > 0),
         @intFromEnum(t.category),
         @intFromEnum(t.media_filter),
@@ -63,6 +63,7 @@ fn browseCacheKey(buf: []u8) []const u8 {
 
 fn serializeItem(w: *ccp.Writer, it: state.TmdbItem) void {
     w.i32v(it.id);
+    w.blob(it.imdb_id[0..@min(it.imdb_id_len, it.imdb_id.len)]);
     w.blob(it.title[0..@min(it.title_len, it.title.len)]);
     w.blob(it.year[0..@min(it.year_len, it.year.len)]);
     w.blob(it.release_date[0..@min(it.release_date_len, it.release_date.len)]);
@@ -83,6 +84,7 @@ fn copyField(dst: []u8, len: *usize, src: []const u8) void {
 fn deserializeItem(r: *ccp.Reader) ?state.TmdbItem {
     var it = state.TmdbItem{};
     it.id = r.i32v() orelse return null;
+    copyField(&it.imdb_id, &it.imdb_id_len, r.blob() orelse return null);
     copyField(&it.title, &it.title_len, r.blob() orelse return null);
     copyField(&it.year, &it.year_len, r.blob() orelse return null);
     copyField(&it.release_date, &it.release_date_len, r.blob() orelse return null);
@@ -495,6 +497,21 @@ pub fn tmdbApiInto(path_query: []const u8, key: []const u8, buf: []u8) usize {
     var attempt: u8 = 0;
     while (attempt < 2) : (attempt += 1) {
         const n = curlFallbackInto(url, auth, buf);
+        if (n > 0) return n;
+        if (attempt < 1) @import("../core/io_global.zig").sleep(250 * std.time.ns_per_ms);
+    }
+    return 0;
+}
+
+/// Fetch one Cinemeta JSON document through the same bounded curl seam used by
+/// the keyless catalog. Only the fixed Cinemeta origin is accepted.
+pub fn cinemetaApiInto(path: []const u8, buf: []u8) usize {
+    if (path.len == 0 or path[0] != '/' or std.mem.indexOf(u8, path, "..") != null) return 0;
+    var url_buf: [768]u8 = undefined;
+    const url = std.fmt.bufPrint(&url_buf, "https://v3-cinemeta.strem.io{s}", .{path}) catch return 0;
+    var attempt: u8 = 0;
+    while (attempt < 2) : (attempt += 1) {
+        const n = curlFallbackInto(url, "", buf);
         if (n > 0) return n;
         if (attempt < 1) @import("../core/io_global.zig").sleep(250 * std.time.ns_per_ms);
     }

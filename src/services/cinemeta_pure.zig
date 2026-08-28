@@ -5,7 +5,12 @@ const std = @import("std");
 /// Split the top-level objects in Cinemeta's `metas` array without treating
 /// braces inside JSON strings as structure.
 pub fn splitMetaObjects(body: []const u8, out: [][]const u8) usize {
-    const key = "\"metas\":[";
+    return splitArrayObjects(body, "\"metas\":[", out);
+}
+
+/// Split objects from a named JSON array. Used by series metadata's `videos`
+/// list as well as catalog `metas`; string contents never affect brace depth.
+pub fn splitArrayObjects(body: []const u8, key: []const u8, out: [][]const u8) usize {
     const start = std.mem.indexOf(u8, body, key) orelse return 0;
     var i = start + key.len;
     var depth: i32 = 0;
@@ -41,6 +46,12 @@ pub fn splitMetaObjects(body: []const u8, out: [][]const u8) usize {
     return count;
 }
 
+pub fn validImdbId(value: []const u8) bool {
+    if (value.len < 4 or value.len > 15 or !std.mem.startsWith(u8, value, "tt")) return false;
+    for (value[2..]) |ch| if (!std.ascii.isDigit(ch)) return false;
+    return true;
+}
+
 /// Stable positive card/list id when a Cinemeta record has no TMDB id.
 pub fn stableId(imdb_id: []const u8) i32 {
     const hash = std.hash.Wyhash.hash(0, imdb_id);
@@ -60,4 +71,13 @@ test "stableId is positive and deterministic" {
     try std.testing.expect(stableId("tt0944947") > 0);
     try std.testing.expectEqual(stableId("tt0944947"), stableId("tt0944947"));
     try std.testing.expect(stableId("tt0944947") != stableId("tt0903747"));
+}
+
+test "series metadata video arrays and IMDb ids are bounded" {
+    const body = "{\"meta\":{\"videos\":[{\"season\":1,\"overview\":\"x } y\"},{\"season\":2}]}}";
+    var out: [4][]const u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 2), splitArrayObjects(body, "\"videos\":[", &out));
+    try std.testing.expect(validImdbId("tt26545992"));
+    try std.testing.expect(!validImdbId("nm26545992"));
+    try std.testing.expect(!validImdbId("tt12/path"));
 }

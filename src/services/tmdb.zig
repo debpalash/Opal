@@ -61,9 +61,11 @@ fn freeEpisodeStills() void {
 fn fetchEpisodeStill(e: *state.TvEpisode) void {
     if (e.still_attempted or e.still_fetching or e.still_path_len == 0) return;
     var url_buf: [256]u8 = undefined;
-    const url = std.fmt.bufPrint(&url_buf, "https://image.tmdb.org/t/p/w300{s}", .{
-        e.still_path[0..@min(e.still_path_len, e.still_path.len)],
-    }) catch return;
+    const path = e.still_path[0..@min(e.still_path_len, e.still_path.len)];
+    const url = if (std.mem.startsWith(u8, path, "https://") or std.mem.startsWith(u8, path, "http://"))
+        path
+    else
+        std.fmt.bufPrint(&url_buf, "https://image.tmdb.org/t/p/w300{s}", .{path}) catch return;
     @import("../core/poster.zig").fetchAsync(url, &e.still_pixels, &e.still_w, &e.still_h, &e.still_fetching);
     // Only latch "attempted" once fetchAsync confirmed a worker actually
     // started (still_fetching flips true synchronously on success). The
@@ -1267,6 +1269,9 @@ fn openTvDetail(item: *state.TmdbItem) void {
     const t = &state.app.tmdb;
     t.tv_detail_open = true;
     t.tv_id = item.id;
+    const ilen = @min(item.imdb_id_len, t.tv_imdb_id.len);
+    @memcpy(t.tv_imdb_id[0..ilen], item.imdb_id[0..ilen]);
+    t.tv_imdb_id_len = ilen;
 
     // renderTvDetail() is only ever drawn from the Browse/TMDB route (see
     // renderTmdbContent). A click from a Home rail (Trending tonight,
@@ -1313,6 +1318,7 @@ fn closeTvDetail() void {
     t.tv_season_count = 0;
     t.tv_episode_count = 0;
     t.tv_sel_season = 0;
+    t.tv_imdb_id_len = 0;
     for (0..t.tv_episode_watched.len) |i| t.tv_episode_watched[i] = false;
     _ = tv_gen.fetchAdd(1, .acq_rel);
 }
@@ -1324,33 +1330,42 @@ fn closeTvDetail() void {
 /// title so clicking either part of a TV card shows its episodes.
 fn openOrSearch(item: *state.TmdbItem) void {
     const mt = item.media_type[0..@min(item.media_type_len, item.media_type.len)];
-    if (std.mem.eql(u8, mt, "tv") and state.app.tmdb.api_key_len > 0)
+    if (std.mem.eql(u8, mt, "tv"))
         openTvDetail(item)
     else
         sendToSearch(item);
 }
 
 fn fetchSeasons(tmdb_id: i32) void {
-    if (state.app.tmdb.api_key_len == 0) return;
+    const use_cinemeta = state.app.tmdb.api_key_len == 0;
+    if (use_cinemeta and state.app.tmdb.tv_imdb_id_len == 0) return;
     state.app.tmdb.tv_seasons_loading = true;
     const my_gen = tv_gen.load(.acquire);
+    const imdb_id = state.app.tmdb.tv_imdb_id;
+    const imdb_id_len = state.app.tmdb.tv_imdb_id_len;
 
-    if (@import("../core/workers.zig").spawnLegacy(fetchSeasonsThread, .{ tmdb_id, my_gen })) |th| {
+    if (@import("../core/workers.zig").spawnLegacy(fetchSeasonsThread, .{ tmdb_id, my_gen, use_cinemeta, imdb_id, imdb_id_len })) |th| {
         @import("../core/workers.zig").release(th); // never joined — detach to avoid leaking the handle
     } else |_| {
         state.app.tmdb.tv_seasons_loading = false;
     }
 }
 
-fn fetchSeasonsThread(tmdb_id: i32, my_gen: u32) void {
+fn fetchSeasonsThread(tmdb_id: i32, my_gen: u32, use_cinemeta: bool, imdb_id: [16]u8, imdb_id_len: usize) void {
     defer state.app.tmdb.tv_seasons_loading = false;
 
     var url_buf: [128]u8 = undefined;
-    const url = std.fmt.bufPrint(&url_buf, "/3/tv/{d}", .{tmdb_id}) catch return;
+    const url = if (use_cinemeta)
+        std.fmt.bufPrint(&url_buf, "/meta/series/{s}.json", .{imdb_id[0..imdb_id_len]}) catch return
+    else
+        std.fmt.bufPrint(&url_buf, "/3/tv/{d}", .{tmdb_id}) catch return;
 
-    const buf = alloc.alloc(u8, 256 * 1024) catch return;
+    const buf = alloc.alloc(u8, if (use_cinemeta) 1024 * 1024 else 256 * 1024) catch return;
     defer alloc.free(buf);
-    const bytes = @import("tmdb_api.zig").tmdbApiInto(url, state.app.tmdb.api_key[0..state.app.tmdb.api_key_len], buf);
+    const bytes = if (use_cinemeta)
+        api.cinemetaApiInto(url, buf)
+    else
+        api.tmdbApiInto(url, state.app.tmdb.api_key[0..state.app.tmdb.api_key_len], buf);
     if (bytes == 0) {
         var lb: [96]u8 = undefined;
         const lm = std.fmt.bufPrint(&lb, "TV seasons fetch FAILED (id={d}) — empty response", .{tmdb_id}) catch "TV seasons fetch failed";
@@ -1362,7 +1377,7 @@ fn fetchSeasonsThread(tmdb_id: i32, my_gen: u32) void {
     // Superseded by a newer open/close? Drop silently.
     if (tv_gen.load(.acquire) != my_gen) return;
 
-    parseSeasons(body);
+    if (use_cinemeta) parseCinemetaSeasons(body) else parseSeasons(body);
 
     // Persist the season map + aired frontier the moment a show is opened.
     //
@@ -1371,7 +1386,7 @@ fn fetchSeasonsThread(tmdb_id: i32, my_gen: u32) void {
     // read "Caught up" at 0/10 watched. Opening a show is exactly when we have
     // the document in hand, so store it: "we don't know" stops being reachable
     // for anything the user has actually looked at.
-    {
+    if (!use_cinemeta) {
         const tp = @import("tv_pure.zig");
         var seasons: [tp.MAX_SEASONS]tp.Season = undefined;
         const ns = tp.parseSeasonMap(body, &seasons);
@@ -1501,6 +1516,49 @@ fn parseSeasons(json: []const u8) void {
     }
 }
 
+/// Build the desktop season chips from Cinemeta's series `videos` array.
+/// Cinemeta exposes episodes directly rather than separate season documents,
+/// so each distinct positive season is accumulated into the existing model.
+fn parseCinemetaSeasons(json: []const u8) void {
+    const t = &state.app.tmdb;
+    t.tv_season_count = 0;
+    const key = "\"videos\":[";
+    const start = std.mem.indexOf(u8, json, key) orelse return;
+    const open = start + key.len - 1;
+    const arr = json[open..arrayEnd(json, open)];
+
+    var pos: usize = 0;
+    while (true) {
+        const found = nextJsonObject(arr, pos) orelse break;
+        pos = found.end;
+        const sn = jsonInt(found.obj, "\"season\":");
+        const ep = jsonInt(found.obj, "\"episode\":");
+        if (sn < 1 or ep < 1) continue;
+
+        var index: ?usize = null;
+        for (0..t.tv_season_count) |i| {
+            if (t.tv_seasons[i].season_number == sn) {
+                index = i;
+                break;
+            }
+        }
+        if (index == null) {
+            if (t.tv_season_count >= t.tv_seasons.len) continue;
+            index = t.tv_season_count;
+            var s = &t.tv_seasons[t.tv_season_count];
+            s.* = .{};
+            s.season_number = sn;
+            const name = std.fmt.bufPrint(&s.name, "Season {d}", .{sn}) catch "";
+            s.name_len = name.len;
+            s.air_date_len = jsonStr(found.obj, "\"released\":\"", &s.air_date);
+            s.air_date_len = @min(s.air_date_len, 10);
+            t.tv_season_count += 1;
+        }
+        const s = &t.tv_seasons[index.?];
+        s.episode_count = @intCast(@min(@as(i32, std.math.maxInt(u16)), @max(@as(i32, s.episode_count), ep)));
+    }
+}
+
 /// Index just past the matching `]` for the `[` at `open` (string-aware).
 fn arrayEnd(json: []const u8, open: usize) usize {
     var i = open;
@@ -1535,28 +1593,37 @@ fn arrayEnd(json: []const u8, open: usize) usize {
 // ── Episodes fetch (/tv/{id}/season/{n}) ──
 
 fn fetchEpisodes(tmdb_id: i32, season_number: i32) void {
-    if (state.app.tmdb.api_key_len == 0) return;
+    const use_cinemeta = state.app.tmdb.api_key_len == 0;
+    if (use_cinemeta and state.app.tmdb.tv_imdb_id_len == 0) return;
     freeEpisodeStills(); // free GPU textures before overwriting episode slots
     state.app.tmdb.tv_episodes_loading = true;
     state.app.tmdb.tv_episode_count = 0;
     const my_gen = tv_gen.load(.acquire);
+    const imdb_id = state.app.tmdb.tv_imdb_id;
+    const imdb_id_len = state.app.tmdb.tv_imdb_id_len;
 
-    if (@import("../core/workers.zig").spawnLegacy(fetchEpisodesThread, .{ tmdb_id, season_number, my_gen })) |th| {
+    if (@import("../core/workers.zig").spawnLegacy(fetchEpisodesThread, .{ tmdb_id, season_number, my_gen, use_cinemeta, imdb_id, imdb_id_len })) |th| {
         @import("../core/workers.zig").release(th); // never joined — detach to avoid leaking the handle
     } else |_| {
         state.app.tmdb.tv_episodes_loading = false;
     }
 }
 
-fn fetchEpisodesThread(tmdb_id: i32, season_number: i32, my_gen: u32) void {
+fn fetchEpisodesThread(tmdb_id: i32, season_number: i32, my_gen: u32, use_cinemeta: bool, imdb_id: [16]u8, imdb_id_len: usize) void {
     defer state.app.tmdb.tv_episodes_loading = false;
 
     var url_buf: [160]u8 = undefined;
-    const url = std.fmt.bufPrint(&url_buf, "/3/tv/{d}/season/{d}", .{ tmdb_id, season_number }) catch return;
+    const url = if (use_cinemeta)
+        std.fmt.bufPrint(&url_buf, "/meta/series/{s}.json", .{imdb_id[0..imdb_id_len]}) catch return
+    else
+        std.fmt.bufPrint(&url_buf, "/3/tv/{d}/season/{d}", .{ tmdb_id, season_number }) catch return;
 
-    const buf = alloc.alloc(u8, 256 * 1024) catch return;
+    const buf = alloc.alloc(u8, if (use_cinemeta) 1024 * 1024 else 256 * 1024) catch return;
     defer alloc.free(buf);
-    const bytes = @import("tmdb_api.zig").tmdbApiInto(url, state.app.tmdb.api_key[0..state.app.tmdb.api_key_len], buf);
+    const bytes = if (use_cinemeta)
+        api.cinemetaApiInto(url, buf)
+    else
+        api.tmdbApiInto(url, state.app.tmdb.api_key[0..state.app.tmdb.api_key_len], buf);
     if (bytes == 0) {
         if (tv_gen.load(.acquire) != my_gen) return; // superseded — drop silently
         var lb: [96]u8 = undefined;
@@ -1568,7 +1635,7 @@ fn fetchEpisodesThread(tmdb_id: i32, season_number: i32, my_gen: u32) void {
 
     if (tv_gen.load(.acquire) != my_gen) return;
 
-    parseEpisodes(body);
+    if (use_cinemeta) parseCinemetaEpisodes(body, season_number) else parseEpisodes(body);
 
     if (tv_gen.load(.acquire) != my_gen) return;
 
@@ -1612,6 +1679,39 @@ fn parseEpisodes(json: []const u8) void {
         e.vote_average = jsonFloat(obj, "\"vote_average\":");
         e.runtime = @intCast(@max(0, jsonInt(obj, "\"runtime\":")));
 
+        t.tv_episode_count += 1;
+    }
+}
+
+/// Fill one selected season from Cinemeta's flattened series videos.
+fn parseCinemetaEpisodes(json: []const u8, season_number: i32) void {
+    const t = &state.app.tmdb;
+    t.tv_episode_count = 0;
+    const key = "\"videos\":[";
+    const start = std.mem.indexOf(u8, json, key) orelse return;
+    const open = start + key.len - 1;
+    const arr = json[open..arrayEnd(json, open)];
+
+    var pos: usize = 0;
+    while (t.tv_episode_count < t.tv_episodes.len) {
+        const found = nextJsonObject(arr, pos) orelse break;
+        pos = found.end;
+        if (jsonInt(found.obj, "\"season\":") != season_number) continue;
+        const episode_number = jsonInt(found.obj, "\"episode\":");
+        if (episode_number < 1) continue;
+
+        var e = &t.tv_episodes[t.tv_episode_count];
+        e.* = .{};
+        e.episode_number = episode_number;
+        e.name_len = jsonStr(found.obj, "\"title\":\"", &e.name);
+        if (e.name_len == 0) {
+            const name = std.fmt.bufPrint(&e.name, "Episode {d}", .{episode_number}) catch "";
+            e.name_len = name.len;
+        }
+        e.overview_len = jsonStr(found.obj, "\"overview\":\"", &e.overview);
+        e.air_date_len = jsonStr(found.obj, "\"released\":\"", &e.air_date);
+        e.air_date_len = @min(e.air_date_len, 10);
+        e.still_path_len = jsonStr(found.obj, "\"thumbnail\":\"", &e.still_path);
         t.tv_episode_count += 1;
     }
 }

@@ -48,14 +48,15 @@ pub fn contentType(name: []const u8) []const u8 {
     for (ext, 0..) |ch, i| lower_buf[i] = std.ascii.toLower(ch);
     const e = lower_buf[0..ext.len];
     const map = [_]struct { e: []const u8, t: []const u8 }{
-        .{ .e = "mp4", .t = "video/mp4" },   .{ .e = "m4v", .t = "video/mp4" },
-        .{ .e = "webm", .t = "video/webm" }, .{ .e = "mkv", .t = "video/x-matroska" },
+        .{ .e = "mp4", .t = "video/mp4" },       .{ .e = "m4v", .t = "video/mp4" },
+        .{ .e = "webm", .t = "video/webm" },     .{ .e = "mkv", .t = "video/x-matroska" },
         .{ .e = "avi", .t = "video/x-msvideo" }, .{ .e = "mov", .t = "video/quicktime" },
-        .{ .e = "mp3", .t = "audio/mpeg" },  .{ .e = "m4a", .t = "audio/mp4" },
-        .{ .e = "flac", .t = "audio/flac" }, .{ .e = "ogg", .t = "audio/ogg" },
-        .{ .e = "wav", .t = "audio/wav" },   .{ .e = "vtt", .t = "text/vtt" },
+        .{ .e = "mp3", .t = "audio/mpeg" },      .{ .e = "m4a", .t = "audio/mp4" },
+        .{ .e = "flac", .t = "audio/flac" },     .{ .e = "ogg", .t = "audio/ogg" },
+        .{ .e = "wav", .t = "audio/wav" },       .{ .e = "vtt", .t = "text/vtt" },
         .{ .e = "srt", .t = "text/vtt" }, // always served converted
-        .{ .e = "jpg", .t = "image/jpeg" },  .{ .e = "jpeg", .t = "image/jpeg" },
+        .{ .e = "jpg", .t = "image/jpeg" },
+        .{ .e = "jpeg", .t = "image/jpeg" },
         .{ .e = "png", .t = "image/png" },
     };
     for (map) |m| if (std.mem.eql(u8, m.e, e)) return m.t;
@@ -79,6 +80,28 @@ pub fn safeRelPath(rel: []const u8) bool {
         if (std.mem.eql(u8, part, ".") or std.mem.eql(u8, part, "..")) return false;
     }
     return true;
+}
+
+/// Resolve the two artwork shapes emitted by the movie/TV catalog without
+/// turning `/poster` into an arbitrary server-side URL fetcher. TMDB records
+/// carry a relative path; the keyless Cinemeta fallback carries an absolute
+/// Metahub URL. Every other scheme/host is rejected.
+pub fn catalogPosterUrl(raw: []const u8, out: []u8) ?[]const u8 {
+    if (raw.len == 0 or raw.len > 512 or std.mem.indexOfScalar(u8, raw, 0) != null) return null;
+    if (std.mem.indexOfAny(u8, raw, "\r\n\\") != null) return null;
+
+    if (raw[0] == '/') {
+        if (raw.len > 96 or std.mem.indexOf(u8, raw, "..") != null or
+            std.mem.indexOfAny(u8, raw, "?#") != null) return null;
+        return std.fmt.bufPrint(out, "https://image.tmdb.org/t/p/w185{s}", .{raw}) catch null;
+    }
+
+    const metahub = "https://images.metahub.space/";
+    if (!std.mem.startsWith(u8, raw, metahub)) return null;
+    if (std.mem.indexOfAny(u8, raw[metahub.len..], "?#") != null) return null;
+    if (out.len < raw.len) return null;
+    @memcpy(out[0..raw.len], raw);
+    return out[0..raw.len];
 }
 
 /// Convert SRT bytes to WebVTT into `out`. Returns bytes written.
@@ -154,6 +177,22 @@ test "safeRelPath blocks traversal and absolutes" {
     try std.testing.expect(!safeRelPath("C:/Windows/win.ini"));
     try std.testing.expect(!safeRelPath("a//b"));
     try std.testing.expect(safeRelPath("Show..Name/Episode.mkv"));
+}
+
+test "catalogPosterUrl accepts catalog artwork without enabling SSRF" {
+    var out: [640]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        "https://image.tmdb.org/t/p/w185/abc.jpg",
+        catalogPosterUrl("/abc.jpg", &out).?,
+    );
+    try std.testing.expectEqualStrings(
+        "https://images.metahub.space/poster/small/tt123/img",
+        catalogPosterUrl("https://images.metahub.space/poster/small/tt123/img", &out).?,
+    );
+    try std.testing.expect(catalogPosterUrl("http://images.metahub.space/poster/a", &out) == null);
+    try std.testing.expect(catalogPosterUrl("https://images.metahub.space.evil.test/a", &out) == null);
+    try std.testing.expect(catalogPosterUrl("https://127.0.0.1/private", &out) == null);
+    try std.testing.expect(catalogPosterUrl("/../private", &out) == null);
 }
 
 test "srtToVtt: header, comma→dot, index lines dropped, text preserved" {

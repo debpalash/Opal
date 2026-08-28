@@ -390,34 +390,99 @@ async function loadActivity(){
   } catch { $('history').innerHTML = '<div class="empty">—</div>'; }
 }
 
-// ── Browse (TMDB trending) ──
-let browseLoaded = false;
-async function loadBrowse(){
-  if (browseLoaded) return;
-  $('browse-hint').innerHTML = '<span class="spin"></span> Loading trending…';
-  // /api/tmdb returns the DESKTOP's current results; ask for trending then poll briefly.
-  try { await api('/tmdb/trending'); } catch {}
+// ── Movies & TV catalog (TMDB when configured, keyless Cinemeta otherwise) ──
+let browseLoaded = false, browseWatch = null, browseGeneration = 0, browseDebounce = null;
+
+function browseType(){ return $('browse-type').value || 'all'; }
+function browseFeedLabel(){
+  const q = $('browse-q').value.trim();
+  if (q) return `Results for “${q}”`;
+  const feed = $('browse-category').selectedOptions[0]?.textContent || 'Trending';
+  const type = $('browse-type').selectedOptions[0]?.textContent || 'Movies & TV';
+  return `${feed} ${type.toLowerCase()}`;
+}
+function browseEndpoint(){
+  const q = $('browse-q').value.trim();
+  if (q) return '/tmdb/search?q=' + encodeURIComponent(q) + '&type=' + encodeURIComponent(browseType());
+  const params = new URLSearchParams({
+    type: browseType(), category: $('browse-category').value, genre: $('browse-genre').value,
+  });
+  return '/tmdb/trending?' + params;
+}
+function renderBrowse(items){
+  $('browse-grid').innerHTML = items.map(it => `
+    <div class="card${it.poster ? '' : ' poster-missing'}" tabindex="0" role="button"
+      data-id="${it.id}" data-imdb="${esc(it.imdb || '')}" data-type="${esc(it.type)}" data-title="${esc(it.title)}">
+      ${it.poster ? `<img loading="lazy" decoding="async" alt="" src="${BASE}/poster?path=${encodeURIComponent(it.poster)}">` : ''}
+      <div class="cap" title="${esc(it.title)}">${esc(it.title)}<br><span class="rt">${it.rating || ''}${it.rating ? '%' : ''} ${esc(it.type === 'tv' ? 'TV' : 'Movie')}</span></div>
+    </div>`).join('') || '<div class="empty">No matching movies or shows.</div>';
+  $('browse-grid').querySelectorAll('.card').forEach(c => {
+    const open = () => openDetails(c.dataset.type === 'tv' ? 'tv' : 'movie', +c.dataset.id, c.dataset.title, c.dataset.imdb);
+    c.onclick = open;
+    c.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } };
+    const img = c.querySelector('img');
+    if (img) img.addEventListener('error', () => { img.remove(); c.classList.add('poster-missing'); }, { once:true });
+  });
+}
+const browseDelay = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function waitForBrowseIdle(generation){
+  for (let attempt = 0; attempt < 40; attempt++) {
+    if (generation !== browseGeneration) return false;
+    try {
+      const current = await api('/tmdb');
+      if (!current.loading) return true;
+    } catch { return false; }
+    await browseDelay(200);
+  }
+  return false;
+}
+async function loadBrowse(force){
+  if (browseLoaded && !force) return;
+  clearInterval(browseWatch);
+  const generation = ++browseGeneration;
+  browseLoaded = false;
+  $('browse-hint').innerHTML = '<span class="spin"></span> Loading ' + esc(browseFeedLabel().toLowerCase()) + '…';
+  $('browse-grid').innerHTML = '';
+  try {
+    if (!await waitForBrowseIdle(generation) || generation !== browseGeneration) return;
+    await api(browseEndpoint());
+  }
+  catch { $('browse-hint').textContent = 'Could not start the catalog request.'; return; }
+
   let tries = 0;
-  const t = setInterval(async () => {
+  browseWatch = setInterval(async () => {
+    if (generation !== browseGeneration) return clearInterval(browseWatch);
     tries++;
     try {
       const d = await api('/tmdb');
-      if ((d.items || []).length || tries > 10) {
-        clearInterval(t);
-        browseLoaded = (d.items || []).length > 0;
-        $('browse-hint').textContent = d.has_key === false
-          ? 'Add a TMDB key on the desktop (Settings) to browse.' : 'Trending now';
-        $('browse-grid').innerHTML = (d.items || []).map(it => `
-          <div class="card" data-id="${it.id}" data-type="${esc(it.type)}" data-title="${esc(it.title)}">
-            ${it.poster ? `<img loading="lazy" src="${BASE}/poster?path=${encodeURIComponent(it.poster)}">` : '<img>'}
-            <div class="cap">${esc(it.title)}<br><span class="rt">${it.rating || ''}${it.rating ? '%' : ''} ${esc(it.type || '')}</span></div>
-          </div>`).join('') || '<div class="empty">Nothing loaded</div>';
-        $('browse-grid').querySelectorAll('.card').forEach(c => c.onclick = () =>
-          openDetails(c.dataset.type === 'tv' ? 'tv' : 'movie', +c.dataset.id, c.dataset.title));
+      // Do not paint the previous desktop/web query while the replacement is
+      // still in flight. The pending result swap is atomic on the app thread.
+      if (!d.loading || tries > 24) {
+        clearInterval(browseWatch);
+        const items = d.items || [];
+        browseLoaded = true;
+        renderBrowse(items);
+        $('browse-hint').textContent = items.length
+          ? `${browseFeedLabel()} · ${items.length} titles${d.has_key ? '' : ' · keyless catalog'}`
+          : `No results for ${browseFeedLabel().toLowerCase()}.`;
       }
-    } catch { clearInterval(t); }
-  }, 800);
+    } catch {
+      clearInterval(browseWatch);
+      $('browse-hint').textContent = 'Catalog temporarily unavailable. Try again.';
+    }
+  }, 500);
 }
+
+$('browse-search').addEventListener('submit', e => { e.preventDefault(); loadBrowse(true); });
+$('browse-q').addEventListener('input', () => {
+  clearTimeout(browseDebounce);
+  browseDebounce = setTimeout(() => loadBrowse(true), 450);
+});
+$('browse-apply').onclick = () => {
+  $('browse-q').value = '';
+  $('browse-filters').open = false;
+  loadBrowse(true);
+};
 
 // ── TV show drill-down ──
 function normQuery(title){
@@ -431,7 +496,7 @@ function prefillSearch(q){
   $('q').value = q;
   runSearch();
 }
-let showId = 0, showTitle = '', showSeason = 0;
+let showId = 0, showTitle = '', showSeason = 0, showImdb = '', showCinemetaVideos = null;
 
 // One panel serves movie and TV details; every entry point (Browse, unified
 // search, Watching, calendar) funnels through openDetails so metadata,
@@ -453,9 +518,9 @@ function renderOverview(text){
 const detailsMeta = parts => parts.filter(Boolean).join(' · ');
 const ratingLabel = v => v > 0 ? '★ ' + Number(v).toFixed(1) : '';
 
-function openDetails(kind, id, title){
+function openDetails(kind, id, title, imdb){
   if (kind === 'movie') return openMovie(id, title);
-  return openShow(id, title);
+  return openShow(id, title, imdb || '');
 }
 
 async function openMovie(id, title){
@@ -478,19 +543,21 @@ async function openMovie(id, title){
   } catch { $('show-meta').textContent = 'Details unavailable — you can still find streams.'; }
 }
 
-async function openShow(id, title){
-  showId = id; showTitle = title;
+async function openShow(id, title, imdb){
+  showId = id; showTitle = title; showImdb = imdb; showCinemetaVideos = null;
   resetDetailsPanel(title);
   try {
-    const d = await api('/tv?id=' + id);
-    const seasons = (d.seasons || []).filter(x => x.season_number >= 1);
+    const d = await api('/tv?id=' + id + (showImdb ? '&imdb=' + encodeURIComponent(showImdb) : ''));
+    const meta = d.meta || d;
+    if (d.meta) showCinemetaVideos = d.meta.videos || [];
+    const seasons = d.meta ? cinemetaSeasons(showCinemetaVideos) : (d.seasons || []).filter(x => x.season_number >= 1);
     $('show-meta').textContent = detailsMeta([
-      (d.first_air_date || '').slice(0, 4),
-      (d.number_of_seasons || seasons.length) + ' seasons',
-      ratingLabel(d.vote_average),
-      (d.genres || []).slice(0, 3).map(g => g.name).join(', '),
+      (meta.first_air_date || meta.year || '').slice(0, 4),
+      seasons.length + ' seasons',
+      ratingLabel(meta.vote_average || meta.imdbRating),
+      (meta.genres || meta.genre || []).slice(0, 3).map(g => g.name || g).join(', '),
     ]);
-    renderOverview(d.overview);
+    renderOverview(meta.overview || meta.description);
     $('season-chips').innerHTML = seasons.map((x, i) =>
       `<button data-sn="${x.season_number}" class="${i === 0 ? 'on' : ''}">S${x.season_number}</button>`).join('');
     $('season-chips').querySelectorAll('button').forEach(b => b.onclick = () => {
@@ -500,6 +567,15 @@ async function openShow(id, title){
     if (seasons.length) loadSeason(seasons[0].season_number);
   } catch { $('show-meta').textContent = 'Failed to load'; }
   loadLatest(id);
+}
+
+function cinemetaSeasons(videos){
+  const counts = new Map();
+  (videos || []).forEach(e => {
+    const season = +e.season || 0, episode = +e.episode || 0;
+    if (season >= 1) counts.set(season, Math.max(counts.get(season) || 0, episode));
+  });
+  return [...counts].sort((a,b) => a[0] - b[0]).map(([season_number, episode_count]) => ({season_number, episode_count}));
 }
 
 // ── Play-latest row (top of the show page) ──
@@ -540,8 +616,11 @@ async function loadSeason(sn){
   $('episodes').innerHTML = '<div class="empty"><span class="spin"></span></div>';
   try {
     const [d, seenData] = await Promise.all([
-      api('/tv?id=' + showId + '&season=' + sn),
-      api('/library/watched?kind=tv&id=' + showId + '&season=' + sn),
+      showCinemetaVideos ? Promise.resolve({episodes: showCinemetaVideos.filter(e => +e.season === sn).map(e => ({
+        episode_number:+e.episode || 0, name:e.title || `Episode ${e.episode}`,
+        overview:e.overview || '', air_date:(e.released || '').slice(0,10),
+      }))}) : api('/tv?id=' + showId + '&season=' + sn + (showImdb ? '&imdb=' + encodeURIComponent(showImdb) : '')),
+      api('/library/watched?kind=tv&id=' + showId + '&season=' + sn).catch(() => ({episodes:[]})),
     ]);
     const seen = new Set(seenData.episodes || []);
     $('episodes').innerHTML = (d.episodes || []).map(e => `

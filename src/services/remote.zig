@@ -1397,7 +1397,7 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
     }
     // TMDB
     if (std.mem.startsWith(u8, api_path, "/tmdb")) {
-        apiTmdb(stream, api_path, query);
+        @import("remote_catalog_api.zig").handle(stream, api_path, query);
         return;
     }
     // YouTube
@@ -3273,73 +3273,6 @@ fn apiSettingsToggle(query: []const u8) void {
             state.app.nsfw_filter_enabled = !state.app.nsfw_filter_enabled;
         }
     }
-}
-
-fn apiTmdb(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
-    // Kick a trending fetch (web Browse tab); results land in the shared
-    // list the plain /tmdb GET below returns.
-    if (std.mem.eql(u8, api_path, "/tmdb/trending")) {
-        if (!state.app.tmdb.is_loading.load(.acquire) and state.app.tmdb.results.items.len == 0) {
-            state.app.tmdb.view = .Trending;
-            state.app.tmdb.page = 1;
-            state.app.tmdb.loaded_once = true;
-            @import("tmdb_api.zig").fetchCurrentView(false);
-        }
-        sendJson(stream, "{\"ok\":true}");
-        return;
-    }
-    if (std.mem.eql(u8, api_path, "/tmdb/search")) {
-        if (getQueryParam(query, "q")) |q| {
-            var decoded: [256]u8 = undefined;
-            const dq = urlDecode(q, &decoded) orelse q;
-            // Copy to tmdb search buf and trigger
-            const slen = @min(dq.len, 127);
-            @memcpy(state.app.tmdb.search_buf[0..slen], dq[0..slen]);
-            state.app.tmdb.search_buf[slen] = 0;
-            state.app.tmdb.view = .Search;
-            state.app.tmdb.page = 1;
-            const tmdb_api = @import("tmdb_api.zig");
-            tmdb_api.fetchCurrentView(false);
-        }
-        sendJson(stream, "{\"ok\":true,\"action\":\"tmdb_search\"}");
-        return;
-    }
-    // Return current TMDB results. HTTP thread — hold results_mutex while
-    // iterating: the UI thread mutates `results` under it (applyPendingResults).
-    var json_buf: [32768]u8 = undefined;
-    var w = std.Io.Writer.fixed(&json_buf);
-    w.writeAll("{\"items\":[") catch return;
-    {
-        state.app.tmdb.results_mutex.lock();
-        defer state.app.tmdb.results_mutex.unlock();
-        const items = &state.app.tmdb.results;
-        for (items.items, 0..) |item, idx| {
-            // Cap BEFORE the separator: writing the comma first emits a trailing
-            // comma on the 30th row, producing JSON the web UI can't parse. Latent
-            // until a grid actually exceeded 30 rows (YouTube channel pages do).
-            if (idx >= 30) break;
-            if (idx > 0) w.writeAll(",") catch return;
-            const rating_pct = @as(u8, @intFromFloat(std.math.clamp(item.rating * 10.0, 0.0, 100.0)));
-            w.print("{{\"id\":{d},\"title\":\"", .{item.id}) catch return;
-            escJsonWrite(&w, item.title[0..item.title_len]);
-            w.writeAll("\",\"year\":\"") catch return;
-            escJsonWrite(&w, item.year[0..item.year_len]);
-            w.print("\",\"rating\":{d},\"type\":\"", .{rating_pct}) catch return;
-            escJsonWrite(&w, item.media_type[0..item.media_type_len]);
-            w.writeAll("\",\"overview\":\"") catch return;
-            escJsonWrite(&w, item.overview[0..@min(item.overview_len, 200)]);
-            // poster_path feeds the web client's /poster?path= cache proxy.
-            w.writeAll("\",\"poster\":\"") catch return;
-            escJsonWrite(&w, item.poster_path[0..item.poster_path_len]);
-            w.writeAll("\"}") catch return;
-        }
-        w.writeAll("],\"loading\":") catch return;
-        w.writeAll(if (state.app.tmdb.is_loading.load(.acquire)) "true" else "false") catch return;
-        w.writeAll(",\"has_key\":") catch return;
-        w.writeAll(if (state.app.tmdb.api_key_len > 0) "true" else "false") catch return;
-        w.writeAll("}") catch return;
-    }
-    sendJson(stream, json_buf[0..w.end]);
 }
 
 fn apiYoutube(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {

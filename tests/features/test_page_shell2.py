@@ -204,6 +204,10 @@ def test_keyless_movie_tv_feed():
         "movies and series supported": '"movie"' in api and '"series"' in api,
         "Cinemeta cards parsed": "parseCinemetaResponse" in parser
             and '\\"imdbRating\\":' in parser and '\\"moviedb_id\\":' in parser,
+        "keyless TV opens seasons and episodes": "parseCinemetaSeasons" in page
+            and "parseCinemetaEpisodes" in page
+            and "api.cinemetaApiInto(url, buf)" in page
+            and "api_key_len > 0" not in _between(page, "fn openOrSearch", "fn fetchSeasons"),
         "absolute poster URLs supported": 'startsWith(u8, path, "https://")' in api,
         "setup says key optional": "no catalog API key required" in onboarding
             and "TMDB details (optional)" in onboarding,

@@ -96,7 +96,36 @@
 
   <!-- Browse -->
   <section class="page" id="page-browse">
-    <div class="hint" id="browse-hint">Trending now</div>
+    <div class="browse-toolbar">
+      <form id="browse-search" role="search">
+        <label class="sr-only" for="browse-q">Search movies and TV shows</label>
+        <input type="search" id="browse-q" placeholder="Search movies & TV…" autocomplete="off" autocapitalize="off">
+        <button type="submit">Search</button>
+      </form>
+      <details class="browse-filters" id="browse-filters">
+        <summary>Filters</summary>
+        <div class="browse-filter-panel">
+          <label>Type<select id="browse-type">
+            <option value="all">Movies & TV</option><option value="movie">Movies</option><option value="tv">TV shows</option>
+          </select></label>
+          <label>Feed<select id="browse-category">
+            <option value="trending">Trending</option><option value="popular">Popular</option>
+            <option value="top_rated">Top rated</option><option value="new">New</option>
+          </select></label>
+          <label>Genre<select id="browse-genre">
+            <option value="0">All genres</option><option value="1">Action</option><option value="2">Adventure</option>
+            <option value="3">Animation</option><option value="4">Comedy</option><option value="5">Crime</option>
+            <option value="6">Documentary</option><option value="7">Drama</option><option value="8">Family</option>
+            <option value="9">Fantasy</option><option value="10">History</option><option value="11">Horror</option>
+            <option value="12">Music</option><option value="13">Mystery</option><option value="14">Romance</option>
+            <option value="15">Sci-Fi</option><option value="16">Thriller</option><option value="17">War</option>
+            <option value="18">Western</option>
+          </select></label>
+          <button type="button" id="browse-apply">Apply filters</button>
+        </div>
+      </details>
+    </div>
+    <div class="hint" id="browse-hint" role="status" aria-live="polite">Trending movies and TV — no API key required.</div>
     <div class="grid" id="browse-grid"></div>
   </section>
 
