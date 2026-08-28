@@ -2525,13 +2525,14 @@ fn apiDownloadsPlay(stream: std.Io.net.Stream, query: []const u8) void {
             // frees players at frame top (main.zig), so without this the
             // captured `plyr` could dangle mid-mpv-call → use-after-free.
             state.players_mutex.lock();
-            defer state.players_mutex.unlock();
             if (state.app.active_player_idx >= state.app.players.items.len) {
+                state.players_mutex.unlock();
                 sendJsonStatus(stream, "409 Conflict", "{\"error\":\"no player\"}");
                 return;
             }
             const plyr = state.app.players.items[state.app.active_player_idx];
             plyr.load_file(full_path.ptr);
+            state.players_mutex.unlock();
         } else |_| {
             sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"download path too long\"}");
             return;
