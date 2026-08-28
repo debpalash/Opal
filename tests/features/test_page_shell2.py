@@ -200,6 +200,7 @@ def test_keyless_movie_tv_feed():
         ),
         "zero-key Cinemeta fallback": "v3-cinemeta.strem.io/catalog" in api
             and "fetchCinemetaInto" in api,
+        "catalog redirects followed": '"curl", "-L", "-s"' in api,
         "movies and series supported": '"movie"' in api and '"series"' in api,
         "Cinemeta cards parsed": "parseCinemetaResponse" in parser
             and '\\"imdbRating\\":' in parser and '\\"moviedb_id\\":' in parser,

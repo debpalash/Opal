@@ -402,10 +402,13 @@ fn curlIntoOnce(url: []const u8, auth_header: []const u8, buf: []u8) usize {
     var path_buf: [secure_temp.max_path_len]u8 = undefined;
     const path = scratch.reserveFile("response.json", &path_buf) catch return 0;
 
+    // -L is required by the public Cinemeta endpoint, which currently answers
+    // with a 307 to its catalog shard. Without it we read the redirect text,
+    // reject it as non-JSON, and leave the keyless gallery empty.
     var child = if (auth_header.len > 0)
-        io_g.Child.init(&.{ "curl", "-s", "--connect-timeout", "3", "--config", "-", "--max-time", "8", "-o", path, url }, alloc)
+        io_g.Child.init(&.{ "curl", "-L", "-s", "--connect-timeout", "3", "--config", "-", "--max-time", "8", "-o", path, url }, alloc)
     else
-        io_g.Child.init(&.{ "curl", "-s", "--connect-timeout", "3", "--max-time", "8", "-o", path, url }, alloc);
+        io_g.Child.init(&.{ "curl", "-L", "-s", "--connect-timeout", "3", "--max-time", "8", "-o", path, url }, alloc);
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
     if (auth_header.len > 0) {
