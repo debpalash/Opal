@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-08-28T08:44:52",
+  "timestamp": "2026-08-28T10:22:25",
   "total": 432,
   "passed": 419,
   "failed": 0,
@@ -333,7 +333,7 @@
       "category": "Architecture",
       "status": "pass",
       "detail": "bounded owned supervisor covers startup and five critical verticals",
-      "duration_ms": 27
+      "duration_ms": 28
     },
     {
       "name": "Podcast and Jellyfin readers use immutable feature snapshots",
@@ -354,7 +354,7 @@
       "category": "Database",
       "status": "pass",
       "detail": "85 config entries",
-      "duration_ms": 0
+      "duration_ms": 3
     },
     {
       "name": "Watch History Table",
@@ -402,7 +402,7 @@
       "name": "Poster Cache Table",
       "category": "Database",
       "status": "pass",
-      "detail": "99 cached posters",
+      "detail": "115 cached posters",
       "duration_ms": 0
     },
     {
@@ -522,13 +522,13 @@
       "category": "Build",
       "status": "pass",
       "detail": "Binary: 55.2 MB",
-      "duration_ms": 76
+      "duration_ms": 81
     },
     {
       "name": "Binary Exists",
       "category": "Build",
       "status": "pass",
-      "detail": "55.2 MB, built at 08:44:05",
+      "detail": "55.2 MB, built at 10:22:06",
       "duration_ms": 0
     },
     {
@@ -564,21 +564,21 @@
       "category": "LLM",
       "status": "skip",
       "detail": "LLM server not running",
-      "duration_ms": 13
+      "duration_ms": 18
     },
     {
       "name": "Embedding Server Health",
       "category": "LLM",
       "status": "skip",
       "detail": "Embedding server not running",
-      "duration_ms": 0
+      "duration_ms": 3
     },
     {
       "name": "Headless Server Mode Wired",
       "category": "Server",
       "status": "pass",
       "detail": "compile-time headless entry + coreInit/headlessMain + 0.0.0.0 bind + -Dheadless",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Headless Render Guards",
@@ -592,7 +592,7 @@
       "category": "Unit Tests",
       "status": "pass",
       "detail": "all pure-Zig unit tests pass",
-      "duration_ms": 1679
+      "duration_ms": 1652
     },
     {
       "name": "Poster/image fetch uses curl not std.http",
@@ -662,7 +662,7 @@
       "category": "Packaging",
       "status": "pass",
       "detail": "default path calls no sudo and installs executable + nova2 under ~/.local",
-      "duration_ms": 32
+      "duration_ms": 33
     },
     {
       "name": "File associations + single instance",
@@ -690,14 +690,14 @@
       "category": "Build",
       "status": "pass",
       "detail": "/api/host and Opal user agents derive from build.zig.zon",
-      "duration_ms": 18
+      "duration_ms": 19
     },
     {
       "name": "Every release ships highlights and a commit list",
       "category": "Packaging",
       "status": "pass",
       "detail": "notes = CHANGELOG highlights + generated commits; 14 versions documented",
-      "duration_ms": 45
+      "duration_ms": 48
     },
     {
       "name": "First-run onboarding actually runs on first run",
@@ -711,14 +711,14 @@
       "category": "Build",
       "status": "pass",
       "detail": "42 workflow shell step(s) parse under bash -n",
-      "duration_ms": 71
+      "duration_ms": 79
     },
     {
       "name": "No AI attribution in commit trailers",
       "category": "Build",
       "status": "pass",
-      "detail": "88 commit(s) since the rule, none with AI attribution",
-      "duration_ms": 118
+      "detail": "89 commit(s) since the rule, none with AI attribution",
+      "duration_ms": 124
     },
     {
       "name": "The landing page's photographic bands are static and present",
@@ -781,14 +781,14 @@
       "category": "Voice",
       "status": "skip",
       "detail": "kittentts not installed (optional)",
-      "duration_ms": 20
+      "duration_ms": 23
     },
     {
       "name": "PulseAudio Echo Cancel",
       "category": "Voice",
       "status": "warn",
       "detail": "Not loaded (loads on voice server start)",
-      "duration_ms": 3
+      "duration_ms": 4
     },
     {
       "name": "Conversational: voice-server echo guard + live partials",
@@ -830,14 +830,14 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 27
+      "duration_ms": 28
     },
     {
       "name": "--check degrades: opal-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 16
+      "duration_ms": 17
     },
     {
       "name": "--check degrades: opal-tts-server.py",
@@ -1061,7 +1061,7 @@
       "category": "AI Models",
       "status": "pass",
       "detail": "all 5 URLs resolve (HTTP 200)",
-      "duration_ms": 5030
+      "duration_ms": 5614
     },
     {
       "name": "Cloud LLM Backend + No Silent Local Installs",
@@ -1145,7 +1145,7 @@
       "category": "Browser",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 31
+      "duration_ms": 30
     },
     {
       "name": "Bridge protocol selftest",
@@ -1173,14 +1173,14 @@
       "category": "UI Standards",
       "status": "pass",
       "detail": "no emoji in UI string literals",
-      "duration_ms": 54
+      "duration_ms": 57
     },
     {
       "name": "Browser: CloakBrowser engine + upgrades",
       "category": "Browser",
       "status": "pass",
       "detail": "engine picker + find/zoom/downloads/history/reader wired",
-      "duration_ms": 52
+      "duration_ms": 54
     },
     {
       "name": "Every widget follows the active theme (no bare-options dvui widgets)",
@@ -2139,7 +2139,7 @@
       "category": "Integration",
       "status": "pass",
       "detail": "toolbar + panel + options all use images/icon-*.png (4 sizes declared)",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Opal Connect's icon says whether Opal is connected",
@@ -2433,7 +2433,7 @@
       "category": "Web UI",
       "status": "pass",
       "detail": "For You + cast device lifecycle + rotate/flip use the real remote API",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "name": "Web search, open, queue, and watch party use full workflow APIs",
@@ -2706,7 +2706,7 @@
       "category": "Remote API",
       "status": "pass",
       "detail": "/api/party/* + /api/cast/* backed by watch_party.zig + cast.zig",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "name": "Comic page images served over HTTP",
@@ -2783,7 +2783,7 @@
       "category": "Web UI",
       "status": "pass",
       "detail": "/api/logs: ring serialized under lockRead, level/error filters + tab",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Headless pumps worker\u2192UI publish seams",
@@ -2846,7 +2846,7 @@
       "category": "Windows",
       "status": "pass",
       "detail": "all http.Client construction routes through newClient()",
-      "duration_ms": 35
+      "duration_ms": 34
     },
     {
       "name": "http: newClient prewarms TLS state",
@@ -2867,7 +2867,7 @@
       "category": "Windows",
       "status": "pass",
       "detail": "entropy comes from io_global.randomSecure() everywhere",
-      "duration_ms": 35
+      "duration_ms": 33
     },
     {
       "name": "csprng: io_global.randomSecure exists and is fail-closed",
@@ -2888,7 +2888,7 @@
       "category": "Windows",
       "status": "pass",
       "detail": "every sub-add goes through the argv helper",
-      "duration_ms": 33
+      "duration_ms": 32
     },
     {
       "name": "mpv: mpvSubAdd helper uses mpv_command argv form",
@@ -2944,14 +2944,14 @@
       "category": "Windows",
       "status": "pass",
       "detail": "elf-needed.py fails closed on unreadable input",
-      "duration_ms": 8
+      "duration_ms": 7
     },
     {
       "name": "portability: no hardcoded /dev/null in spawned argv",
       "category": "Windows",
       "status": "pass",
       "detail": "every spawned argv uses io_global.devNull()",
-      "duration_ms": 34
+      "duration_ms": 33
     },
     {
       "name": "portability: no raw pkill outside io_global",
@@ -2986,7 +2986,7 @@
       "category": "Windows",
       "status": "pass",
       "detail": "thumbnails, subtitles and friends use the platform cache dir",
-      "duration_ms": 31
+      "duration_ms": 32
     },
     {
       "name": "storage: page accounts for every store, not just one cache",
@@ -3091,14 +3091,14 @@
       "category": "Sources",
       "status": "pass",
       "detail": "installed base drives the nova2 engines",
-      "duration_ms": 50
+      "duration_ms": 54
     },
     {
       "name": "Sources fail over to mirror domains",
       "category": "Sources",
       "status": "pass",
       "detail": "ordered failover + last-good memory, both layers",
-      "duration_ms": 50
+      "duration_ms": 53
     },
     {
       "name": "Installed sources are migrated when the manifest corrects an endpoint",
@@ -3133,7 +3133,7 @@
       "category": "Sources",
       "status": "pass",
       "detail": "shipped Prowlarr URL returns a parseable torznab feed over HTTP (4 requests); Jackett's path and a non-numeric indexer both 404 as Prowlarr would",
-      "duration_ms": 3
+      "duration_ms": 4
     },
     {
       "name": "EZTV: JSON API backend, sharing the Stremio IMDb lookup",
@@ -3161,7 +3161,7 @@
       "category": "Torrents",
       "status": "pass",
       "detail": "23 plugins import and expose their capabilities",
-      "duration_ms": 59
+      "duration_ms": 60
     },
     {
       "name": "nova2 engine catalog: plugins declare url + name + categories",
@@ -3182,14 +3182,14 @@
       "category": "Torrents",
       "status": "pass",
       "detail": "unresolvable magnets skip their row; feed() survives",
-      "duration_ms": 11
+      "duration_ms": 10
     },
     {
       "name": "nova2 engine catalog: nothing prints to stdout but results",
       "category": "Torrents",
       "status": "pass",
       "detail": "all 23 engines emit only via prettyPrinter",
-      "duration_ms": 19
+      "duration_ms": 20
     },
     {
       "name": "The anti-block fallback does not depend on the Web Remote toggle",

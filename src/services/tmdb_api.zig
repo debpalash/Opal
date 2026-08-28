@@ -373,8 +373,9 @@ pub fn fetchPoster(item: *state.TmdbItem) void {
     // which this provider's hand-rolled worker was missing.
     const path = item.poster_path[0..item.poster_path_len];
     var url_buf: [256]u8 = undefined;
+    var compat_buf: [256]u8 = undefined;
     const url = if (std.mem.startsWith(u8, path, "https://") or std.mem.startsWith(u8, path, "http://"))
-        path
+        (@import("cinemeta_pure.zig").compatiblePosterUrl(path, &compat_buf) orelse return)
     else
         std.fmt.bufPrint(&url_buf, "https://image.tmdb.org/t/p/w185{s}", .{path}) catch return;
     @import("../core/poster.zig").fetchAsync(url, &item.poster_pixels, &item.poster_w, &item.poster_h, &item.poster_fetching);

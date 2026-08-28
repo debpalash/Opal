@@ -52,6 +52,19 @@ pub fn validImdbId(value: []const u8) bool {
     return true;
 }
 
+/// Metahub's extensionless poster endpoint may return WebP, which stb_image
+/// cannot decode. Its `.jpg` variant forces a compatible JPEG while preserving
+/// every other provider URL unchanged.
+pub fn compatiblePosterUrl(raw: []const u8, out: []u8) ?[]const u8 {
+    const host = "https://images.metahub.space/";
+    const force_jpeg = std.mem.startsWith(u8, raw, host) and std.mem.endsWith(u8, raw, "/img");
+    const needed = raw.len + @as(usize, if (force_jpeg) 4 else 0);
+    if (raw.len == 0 or needed > out.len) return null;
+    @memcpy(out[0..raw.len], raw);
+    if (force_jpeg) @memcpy(out[raw.len..needed], ".jpg");
+    return out[0..needed];
+}
+
 /// Stable positive card/list id when a Cinemeta record has no TMDB id.
 pub fn stableId(imdb_id: []const u8) i32 {
     const hash = std.hash.Wyhash.hash(0, imdb_id);
@@ -80,4 +93,16 @@ test "series metadata video arrays and IMDb ids are bounded" {
     try std.testing.expect(validImdbId("tt26545992"));
     try std.testing.expect(!validImdbId("nm26545992"));
     try std.testing.expect(!validImdbId("tt12/path"));
+}
+
+test "Metahub posters force a decoder-compatible JPEG variant" {
+    var out: [128]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        "https://images.metahub.space/poster/small/tt12042730/img.jpg",
+        compatiblePosterUrl("https://images.metahub.space/poster/small/tt12042730/img", &out).?,
+    );
+    try std.testing.expectEqualStrings(
+        "https://example.test/poster.jpg",
+        compatiblePosterUrl("https://example.test/poster.jpg", &out).?,
+    );
 }

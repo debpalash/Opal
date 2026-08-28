@@ -180,6 +180,10 @@ def test_responsive_shell_tiers():
         "dialogs fit the live window": "pub fn fitWindowSize(" in _src("src/ui/theme.zig")
             and "fitWindowSize(" in _src("src/ui/command_palette.zig")
             and "fitWindowSize(" in _src("src/ui/metadata_dialog.zig"),
+        "source popup follows theme": "fn browseSourceSelect(" in sh
+            and "dvui.floatingMenu(" in sh
+            and "color_fill = theme.colors.bg_surface" in sh
+            and "dvui.dropdown(@src(), labels" not in sh,
     }
     missing = [name for name, ok in checks.items() if not ok]
     if missing:
@@ -209,6 +213,8 @@ def test_keyless_movie_tv_feed():
             and "api.cinemetaApiInto(url, buf)" in page
             and "api_key_len > 0" not in _between(page, "fn openOrSearch", "fn fetchSeasons"),
         "absolute poster URLs supported": 'startsWith(u8, path, "https://")' in api,
+        "WebP posters request JPEG fallback": "compatiblePosterUrl(path" in api
+            and '".jpg"' in _src("src/services/cinemeta_pure.zig"),
         "setup says key optional": "no catalog API key required" in onboarding
             and "TMDB details (optional)" in onboarding,
     }

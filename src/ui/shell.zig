@@ -746,15 +746,51 @@ fn browseSourcePicker() void {
         .gravity_y = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
     });
-    if (dvui.dropdown(@src(), labels[0..available_count], .{ .choice = &selected }, .{}, .{
+    if (browseSourceSelect(labels[0..available_count], selected)) |picked| {
+        state.app.browse_source = available[picked];
+        state.app.drawer_tab = state.app.browse_source;
+    }
+}
+
+/// Theme-owned source selector. dvui.dropdown's popup uses its default light
+/// surface, which becomes a bright white panel under every dark Opal theme.
+fn browseSourceSelect(labels: []const []const u8, selected: usize) ?usize {
+    var picked: ?usize = null;
+    var menu = dvui.menu(@src(), .horizontal, .{
+        .color_fill = transparent,
+        .gravity_y = 0.5,
+    });
+    defer menu.deinit();
+
+    if (dvui.menuItemLabel(@src(), labels[selected], .{ .submenu = true }, .{
+        .min_size_content = .{ .w = 135, .h = 0 },
+        .background = true,
         .color_fill = theme.colors.bg_surface,
+        .color_fill_hover = theme.colors.bg_hover,
         .color_text = theme.colors.text_primary,
         .corner_radius = theme.dims.rad_sm,
         .padding = .{ .x = theme.spacing.sm, .y = 4, .w = theme.spacing.sm, .h = 4 },
-    })) {
-        state.app.browse_source = available[selected];
-        state.app.drawer_tab = state.app.browse_source;
+    })) |anchor| {
+        var popup = dvui.floatingMenu(@src(), .{ .from = anchor }, .{});
+        defer popup.deinit();
+        var choices = dvui.menu(@src(), .vertical, .{
+            .background = true,
+            .color_fill = theme.colors.bg_surface,
+            .border = dvui.Rect.all(1),
+            .color_border = theme.colors.border_subtle,
+            .corner_radius = theme.dims.rad_sm,
+        });
+        defer choices.deinit();
+        for (labels, 0..) |label, i| {
+            if (dvui.menuItemLabel(@src(), label, .{}, .{
+                .id_extra = i,
+                .expand = .horizontal,
+                .color_fill_hover = theme.colors.bg_hover,
+                .color_text = if (i == selected) theme.colors.accent else theme.colors.text_primary,
+            }) != null) picked = i;
+        }
     }
+    return picked;
 }
 
 fn tabLabel(t: state.DrawerTab) []const u8 {
