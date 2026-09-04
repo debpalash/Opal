@@ -7,15 +7,12 @@ const search = @import("../services/search.zig");
 const transfers = @import("../services/transfers.zig");
 const input_pure = @import("input_pure.zig");
 
-fn gracefulShutdown() void {
-    // Save all player positions before exit
-    for (state.app.players.items) |p| {
-        p.saveCurrentPosition();
-    }
-    // Flush config
-    const config = @import("../core/config.zig");
-    config.save();
-    std.process.exit(0);
+fn requestAppClose() void {
+    // Let App run the normal teardown path. Saving config or terminating the
+    // process from inside input dispatch can block the UI event thread and
+    // leaves Wayland/Windows presenting an apparently frozen window.
+    @import("titlebar.zig").close_requested = true;
+    dvui.refresh(null, @src(), null);
 }
 
 pub fn processGlobalInputs() void {
@@ -68,7 +65,8 @@ pub fn processGlobalInputs() void {
                     continue;
                 }
                 if (key == .q) {
-                    gracefulShutdown();
+                    requestAppClose();
+                    continue;
                 }
                 if (key == .i) {
                     state.app.media_info_open = !state.app.media_info_open;
@@ -116,7 +114,9 @@ pub fn processGlobalInputs() void {
                 continue;
             }
 
-            // Ctrl+W = Close active player (like browser tab close)
+            // Ctrl+W closes a secondary player like a browser tab. With one
+            // (or no) player, it closes the application, matching the native
+            // window shortcut instead of silently refusing to do anything.
             if (key == .w and ctrl_or_cmd) {
                 if (state.app.players.items.len > 1) {
                     const idx = state.app.active_player_idx;
@@ -131,7 +131,7 @@ pub fn processGlobalInputs() void {
                         state.showToast("Player closed (Ctrl+Shift+T to restore)");
                     }
                 } else {
-                    state.showToast("Can't close last player");
+                    requestAppClose();
                 }
                 dvui.refresh(null, @src(), null);
                 continue;

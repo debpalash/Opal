@@ -560,3 +560,21 @@ def test_shutdown_cancellation_order():
     if missing:
         return "fail", "shutdown cancellation regression: " + ", ".join(missing)
     return "pass", "blocking searches, streams, HTTP, and poster curl cancel before worker drain"
+
+
+@test("Keyboard close uses normal teardown and unmaps first", "Stability")
+def test_keyboard_close_uses_normal_teardown_and_unmaps_first():
+    inputs = _src("src/ui/input.zig")
+    mn = _src("src/main.zig")
+    checks = {
+        "ctrl-w closes final window": "if (state.app.players.items.len > 1)" in inputs
+        and "requestAppClose();" in inputs,
+        "ctrl-q avoids process exit": "std.process.exit" not in inputs,
+        "normal close latch used": '@import("titlebar.zig").close_requested = true;' in inputs,
+        "surface hidden before teardown": "SDL_HideWindow" in mn
+        and mn.index("SDL_HideWindow") < mn.index("workers.armShutdownDeadline"),
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "keyboard close regression: " + ", ".join(missing)
+    return "pass", "Ctrl+W/Ctrl+Q use normal teardown; native surface unmaps first"
