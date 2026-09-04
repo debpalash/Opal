@@ -566,13 +566,23 @@ def test_shutdown_cancellation_order():
 def test_keyboard_close_uses_normal_teardown_and_unmaps_first():
     inputs = _src("src/ui/input.zig")
     mn = _src("src/main.zig")
+    player = _src("src/player/player.zig")
     checks = {
-        "ctrl-w closes final window": "if (state.app.players.items.len > 1)" in inputs
+        "ctrl-w closes final window": "fn closePlayerOrApp()" in inputs
         and "requestAppClose();" in inputs,
+        "ctrl-w bypasses text focus": inputs.index("if (key == .w)")
+        < inputs.index("If a text entry is focused"),
         "ctrl-q avoids process exit": "std.process.exit" not in inputs,
         "normal close latch used": '@import("titlebar.zig").close_requested = true;' in inputs,
         "surface hidden before teardown": "SDL_HideWindow" in mn
         and mn.index("SDL_HideWindow") < mn.index("workers.armShutdownDeadline"),
+        "playback stopped asynchronously": "pub fn stopForShutdown" in player
+        and "mpv_command_async" in player,
+        "playback stopped before unmap": "p.stopForShutdown()" in mn
+        and mn.index("p.stopForShutdown()") < mn.index("SDL_HideWindow"),
+        "raw SDL close is latched": "SDL_WINDOWEVENT_CLOSE" in mn
+        and "sdl_close_requested.store(true" in mn
+        and "sdl_close_requested.load(.acquire)" in mn,
     }
     missing = [k for k, ok in checks.items() if not ok]
     if missing:

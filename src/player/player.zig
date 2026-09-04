@@ -1048,6 +1048,14 @@ pub const MediaPlayer = struct {
         _ = c.mpv.mpv_command_string(self.mpv_ctx, "cycle pause");
     }
 
+    /// Silence playback as soon as application shutdown starts. The command is
+    /// asynchronous so a demuxer blocked on network/torrent input cannot stall
+    /// the UI thread while the native window is being closed.
+    pub fn stopForShutdown(self: *MediaPlayer) void {
+        var args = [_][*c]const u8{ "stop", null };
+        _ = c.mpv.mpv_command_async(self.mpv_ctx, 0, &args);
+    }
+
     pub fn cycleRotation(self: *MediaPlayer) void {
         self.rotation = @mod(self.rotation + 90, 360);
         var cmd_buf: [64]u8 = undefined;

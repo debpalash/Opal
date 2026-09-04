@@ -33,6 +33,11 @@ var cli_open_done: bool = false;
 // preserving an explicit user-selected density override.
 var device_scale_applied: bool = false;
 
+// SDL's Wayland backend can surface a compositor close before dvui translates
+// it into its own window event. The raw event watch latches it so appFrame
+// cannot continue running after the native surface has gone away.
+var sdl_close_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
 const app_start_options: dvui.App.StartOptions = .{
     .size = .{ .w = 1400.0, .h = 820.0 },
     .title = "Opal",
@@ -476,6 +481,11 @@ fn forwardToRunningInstance(arg: []const u8) bool {
 
 pub fn appDeinit() void {
     const workers = @import("core/workers.zig");
+    // Stop audible/visible media before the surface disappears. Player
+    // destruction intentionally happens later, after workers are drained, but
+    // playback must not continue invisibly throughout that cleanup window.
+    for (state.app.players.items) |p| p.stopForShutdown();
+
     // Remove the native surface immediately. Teardown can include third-party
     // media/network destructors; keeping the surface mapped while they finish
     // makes the compositor report a closing application as unresponsive.
@@ -605,6 +615,11 @@ fn hexVal(ch: u8) ?u8 {
 
 fn sdlEventWatch(_: ?*anyopaque, event: [*c]c.sdl.SDL_Event) callconv(.c) c_int {
     const t = event.*.type;
+    if (t == c.sdl.SDL_QUIT or
+        (t == c.sdl.SDL_WINDOWEVENT and event.*.window.event == c.sdl.SDL_WINDOWEVENT_CLOSE))
+    {
+        sdl_close_requested.store(true, .release);
+    }
     // Log drops or unknown things to see what Wayland is sending
     if (t >= c.sdl.SDL_DROPFILE and t <= c.sdl.SDL_DROPCOMPLETE) {
         std.debug.print("[SDL_EVENT] Wayland event type: {d}\n", .{t});
@@ -783,6 +798,7 @@ fn appFrame() !dvui.App.Result {
     // This used to run near the end of the frame, so one busy subsystem could
     // prevent the close event from being acknowledged and make the compositor
     // report Opal as unresponsive before teardown had even started.
+    if (sdl_close_requested.load(.acquire)) return .close;
     for (dvui.events()) |*e| {
         if (e.evt == .window and e.evt.window.action == .close) return .close;
     }

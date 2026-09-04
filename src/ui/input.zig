@@ -15,6 +15,25 @@ fn requestAppClose() void {
     dvui.refresh(null, @src(), null);
 }
 
+fn closePlayerOrApp() void {
+    if (state.app.players.items.len > 1) {
+        const idx = state.app.active_player_idx;
+        if (idx < state.app.players.items.len) {
+            const p = state.app.players.items[idx];
+            // Save URL for Ctrl+Shift+T restore.
+            if (p.source_url_len > 0) {
+                state.pushClosedUrl(p.source_url[0..p.source_url_len]);
+            }
+            p.saveCurrentPosition();
+            state.app.pending_remove_player_idx = @intCast(idx);
+            state.showToast("Player closed (Ctrl+Shift+T to restore)");
+        }
+    } else {
+        requestAppClose();
+    }
+    dvui.refresh(null, @src(), null);
+}
+
 pub fn processGlobalInputs() void {
     for (dvui.events()) |*e| {
         if (e.evt == .key and e.evt.key.action == .down) {
@@ -68,6 +87,13 @@ pub fn processGlobalInputs() void {
                     requestAppClose();
                     continue;
                 }
+                if (key == .w) {
+                    // Always active, including while a search/address field is
+                    // focused. Native close shortcuts must never be swallowed
+                    // by text editing.
+                    closePlayerOrApp();
+                    continue;
+                }
                 if (key == .i) {
                     state.app.media_info_open = !state.app.media_info_open;
                     dvui.refresh(null, @src(), null);
@@ -109,29 +135,6 @@ pub fn processGlobalInputs() void {
                     state.navigateToTab(.Queue);
                 } else {
                     state.app.drawer_open = !state.app.drawer_open;
-                }
-                dvui.refresh(null, @src(), null);
-                continue;
-            }
-
-            // Ctrl+W closes a secondary player like a browser tab. With one
-            // (or no) player, it closes the application, matching the native
-            // window shortcut instead of silently refusing to do anything.
-            if (key == .w and ctrl_or_cmd) {
-                if (state.app.players.items.len > 1) {
-                    const idx = state.app.active_player_idx;
-                    if (idx < state.app.players.items.len) {
-                        const p = state.app.players.items[idx];
-                        // Save URL for Ctrl+Shift+T restore
-                        if (p.source_url_len > 0) {
-                            state.pushClosedUrl(p.source_url[0..p.source_url_len]);
-                        }
-                        p.saveCurrentPosition();
-                        state.app.pending_remove_player_idx = @intCast(idx);
-                        state.showToast("Player closed (Ctrl+Shift+T to restore)");
-                    }
-                } else {
-                    requestAppClose();
                 }
                 dvui.refresh(null, @src(), null);
                 continue;
