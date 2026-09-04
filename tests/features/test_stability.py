@@ -550,6 +550,11 @@ def test_shutdown_cancellation_order():
         "VNDB worker uses window-safe wake": "state.wakeUi();" in vndb,
         "service refreshes always carry a window": not service_refresh_offenders,
         "drop worker counted once": "workers.enter()" not in drop_ingest and "workers.leave()" not in drop_ingest,
+        "close frame does not save synchronously": "config.save();\n            return .close;" not in mn,
+        "shutdown deadline armed": "workers.armShutdownDeadline(5_000);" in mn,
+        "config saved after drain": 0 <= mn.find('core/config.zig").save()') and drain < mn.find('core/config.zig").save()'),
+        "shutdown deadline completed": "workers.finishShutdown();" in mn,
+        "close handled before service work": 0 <= mn.find("e.evt.window.action == .close) return .close;") < mn.find("state.applyPendingNav();"),
     }
     missing = [k for k, ok in checks.items() if not ok]
     if missing:

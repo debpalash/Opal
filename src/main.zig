@@ -475,9 +475,15 @@ fn forwardToRunningInstance(arg: []const u8) bool {
 }
 
 pub fn appDeinit() void {
+    const workers = @import("core/workers.zig");
+    // No teardown bug may leave an unresponsive window around indefinitely.
+    // Normal shutdown finishes in well under a second; this only fires when a
+    // worker, child process, or third-party destructor is irrecoverably stuck.
+    workers.armShutdownDeadline(5_000);
+
     // Publish shutdown before stopping services so the detached startup worker
     // cannot bring one back after its stop call has already run.
-    @import("core/workers.zig").markQuitting();
+    workers.markQuitting();
 
     // Stop listeners before releasing state they can still touch.
     @import("services/remote.zig").stop();
@@ -503,8 +509,13 @@ pub fn appDeinit() void {
     // Join all owned work before any buffers, services, HTTP state, or the
     // allocator it may publish into are released. 800 ms is the diagnostic
     // threshold, not permission for a worker to outlive shared state.
-    @import("core/workers.zig").beginShutdownAndDrain(800);
+    workers.beginShutdownAndDrain(800);
     @import("player/drop_ingest.zig").deinit();
+
+    // Persist only after background work has stopped using the shared SQLite
+    // connection. Saving from the close-event frame used to block that frame
+    // behind workers, making the window look frozen before teardown began.
+    @import("core/config.zig").save();
 
     // Drop the macOS Now Playing card before the players go away (no-op elsewhere).
     @import("player/media_remote.zig").clear();
@@ -574,6 +585,7 @@ pub fn appDeinit() void {
 
     // Trigger GeneralPurposeAllocator leak dump on exit
     @import("core/alloc.zig").deinit();
+    workers.finishShutdown();
 }
 
 fn hexVal(ch: u8) ?u8 {
@@ -758,6 +770,17 @@ fn appFrame() !dvui.App.Result {
     // debug.widget_id matches a rendered widget. Can get stuck if user
     // accidentally toggles dvui debug panel.
     dvui.currentWindow().debug.widget_id = .zero;
+
+    // Closing outranks every service tick, database write, and media action.
+    // This used to run near the end of the frame, so one busy subsystem could
+    // prevent the close event from being acknowledged and make the compositor
+    // report Opal as unresponsive before teardown had even started.
+    for (dvui.events()) |*e| {
+        if (e.evt == .window and e.evt.window.action == .close) return .close;
+    }
+    // The Windows client-side close button is rendered late in a frame and
+    // leaves this latch for the next one.
+    if (@import("ui/titlebar.zig").close_requested) return .close;
 
     // Apply any theme change requested off the UI thread (config.load runs
     // theme.setPreset on the background worker, which can't touch dvui directly).
@@ -1214,22 +1237,6 @@ fn appFrame() !dvui.App.Result {
             c.sdl.SDL_EnableScreenSaver();
             S.disabled = false;
         }
-    }
-
-    // Global Key Handlers (Process at start of frame to ensure state is ready for render)
-    for (dvui.events()) |*e| {
-        if (e.evt == .window and e.evt.window.action == .close) {
-            // Save config on exit to persist window position
-            const config = @import("core/config.zig");
-            config.save();
-            return .close;
-        }
-    }
-
-    // Custom title bar's close button (set during last frame's render).
-    if (@import("ui/titlebar.zig").close_requested) {
-        @import("core/config.zig").save();
-        return .close;
     }
 
     input.processGlobalInputs();

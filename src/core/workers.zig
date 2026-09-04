@@ -22,10 +22,43 @@ var slots_mutex: sync.Mutex = .{};
 
 var active: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
 var quitting: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+var shutdown_complete: std.atomic.Value(bool) = std.atomic.Value(bool).init(true);
 
 /// Initialize admission before any service is allowed to start work.
 pub fn init() void {
     quitting.store(false, .release);
+    shutdown_complete.store(true, .release);
+}
+
+/// Arm a process-level ceiling for application teardown. This thread is
+/// deliberately outside the supervised worker set: its job is to end the
+/// process if a buggy worker or third-party destructor prevents that set from
+/// draining. The OS then reclaims memory and handles, which is preferable to a
+/// permanently frozen window that the compositor must kill.
+pub fn armShutdownDeadline(timeout_ms: i64) void {
+    shutdown_complete.store(false, .release);
+    const Guard = struct {
+        fn run(limit_ms: i64) void {
+            const started = io.milliTimestamp();
+            while (!shutdown_complete.load(.acquire)) {
+                if (shutdownDeadlineReached(started, io.milliTimestamp(), limit_ms)) {
+                    std.debug.print("[shutdown] teardown exceeded {d}ms; forcing process exit\n", .{limit_ms});
+                    std.process.exit(0);
+                }
+                io.sleep(10 * std.time.ns_per_ms);
+            }
+        }
+    };
+    const guard = std.Thread.spawn(.{}, Guard.run, .{timeout_ms}) catch return;
+    guard.detach();
+}
+
+pub fn finishShutdown() void {
+    shutdown_complete.store(true, .release);
+}
+
+pub fn shutdownDeadlineReached(started_ms: i64, now_ms: i64, timeout_ms: i64) bool {
+    return now_ms - started_ms >= @max(timeout_ms, 1);
 }
 
 fn reapFinishedLocked() void {
@@ -230,4 +263,11 @@ test "quitting flag flips and drain returns immediately when idle" {
     const elapsed = io.milliTimestamp() - before;
     try std.testing.expect(isQuitting());
     try std.testing.expect(elapsed < 1_000);
+}
+
+test "shutdown deadline has a one millisecond floor" {
+    try std.testing.expect(!shutdownDeadlineReached(100, 100, 0));
+    try std.testing.expect(shutdownDeadlineReached(100, 101, 0));
+    try std.testing.expect(!shutdownDeadlineReached(100, 5_099, 5_000));
+    try std.testing.expect(shutdownDeadlineReached(100, 5_100, 5_000));
 }
