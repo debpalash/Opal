@@ -10,6 +10,28 @@ Add a section BEFORE tagging; a missing one ships a release that says so.
 Headings are `## vX.Y.Z — YYYY-MM-DD`, newest first. The version token must
 match the tag exactly.
 
+## v0.8.0 — 2026-09-05
+
+- **TV browsing fits small and short windows.** Episode thumbnails, titles,
+  descriptions and controls adapt to available space, with a single page
+  scroller and a themed, scrollable season picker. Selecting a season dismisses
+  the menu; Retry can recover a failed season fetch.
+- **Continue watching shows episodes, not raw filenames.** Home offers one
+  landscape card per tracked show, episode artwork when available, and an exact
+  next-episode action. Keyless episode metadata works after restarting too.
+- **Navigation is compact and search is unified.** The source picker sits by
+  the logo, and one field handles questions, searches and pasted links. Narrow
+  windows retain navigation and wrap their controls.
+- **Episode startup and tracking are more reliable.** Playback enters its
+  loading state promptly, tries bounded fallback sources, selects the requested
+  torrent episode, and tracks actual viewing rather than counting seeks as
+  watched time. Large season libraries and specials retain their identities.
+- **Restore your session with confirmation.** Closing saves playback position
+  and episode identity; reopening asks before restoring playback.
+- **Update checks and Linux packaging are hardened.** Update work uses bounded,
+  cancellable processes and synchronized state; subprocesses inherit the
+  environment, and Linux `.run` packages include required runtime resources.
+
 ## v0.7.0 — 2026-09-05
 
 - **Closing Opal is immediate and final, even during active playback.** Native
