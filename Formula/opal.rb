@@ -16,7 +16,7 @@ class Opal < Formula
   license "GPL-3.0-only"
 
   url "https://github.com/debpalash/Opal/releases/download/v0.7.0/opal-0.7.0-macos-arm64.tar.gz"
-  sha256 "665585a75bc1e67eb54958daa3e0858dbae996fd1c3667f3ec601fa7725f53f1"
+  sha256 "826679d8663ebed228d09172f698e1bf4a8b4d9c60ad91dbc90dc86f6493528d"
 
   # The published binary is Apple-silicon only (GitHub retired the Intel runners).
   # Say so up front instead of installing something that cannot run.
