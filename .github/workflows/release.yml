@@ -20,12 +20,32 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Existing release tag to rebuild (for example v0.7.0)"
+        required: true
+        type: string
 
 permissions:
   contents: write
 
+env:
+  OPAL_RELEASE_TAG: ${{ inputs.version || github.ref_name }}
+
 jobs:
+  validate-release:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Validate release tag
+        run: |
+          if [[ ! "$OPAL_RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release tag: $OPAL_RELEASE_TAG" >&2
+            exit 2
+          fi
+
   macos-arm64:
+    needs: validate-release
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -46,7 +66,7 @@ jobs:
         run: ./scripts/build-app.sh
       - name: Package
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${OPAL_RELEASE_TAG#v}"
           ditto -c -k --keepParent dist/Opal.app "Opal-${VERSION}-macos-arm64.app.zip"
           tar -C zig-out/bin -czf "opal-${VERSION}-macos-arm64.tar.gz" opal
           # build-app.sh also emits dist/Opal-<ver>.dmg when create-dmg is present
@@ -63,6 +83,7 @@ jobs:
           if-no-files-found: error
 
   linux-x86_64:
+    needs: validate-release
     runs-on: ubuntu-24.04
     # Best-effort: onnxruntime has no apt package on 24.04; we vendor the
     # upstream release. If this job breaks, the release still ships macOS.
@@ -112,7 +133,7 @@ jobs:
         run: python3 scripts/check-isa-baseline.py zig-out/bin/opal
       - name: Package binary tarball
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${OPAL_RELEASE_TAG#v}"
           mkdir -p opal-${VERSION}-linux-x86_64
           cp zig-out/bin/opal opal-${VERSION}-linux-x86_64/
           cp libtorrent_wrapper.so opal-${VERSION}-linux-x86_64/ 2>/dev/null || true
@@ -137,12 +158,12 @@ jobs:
             "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VER}/nfpm_${NFPM_VER}_Linux_x86_64.tar.gz"
           tar xzf nfpm.tgz nfpm
           # packaging/nfpm.yaml interpolates ${VERSION} from the environment.
-          export VERSION="${GITHUB_REF_NAME#v}"
+          export VERSION="${OPAL_RELEASE_TAG#v}"
           ./nfpm package -f packaging/nfpm.yaml -p deb -t "opal_${VERSION}_amd64.deb"
           ./nfpm package -f packaging/nfpm.yaml -p rpm -t "opal-${VERSION}-1.x86_64.rpm"
       - name: Package AppImage
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${OPAL_RELEASE_TAG#v}"
           # Keep the executable beside its private wrapper and runtime resources
           # so main.zig's executable-relative lookup works without /usr paths.
           # The resource tree is essential: torrent search shells out to nova2,
@@ -194,10 +215,10 @@ jobs:
           ARCH=x86_64 ./appimagetool --appimage-extract-and-run AppDir "Opal-${VERSION}-x86_64.AppImage"
       - name: Verify AppImage runtime
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${OPAL_RELEASE_TAG#v}"
           APPIMAGE="Opal-${VERSION}-x86_64.AppImage"
           chmod +x "$APPIMAGE"
-          "$APPIMAGE" --appimage-extract >/dev/null
+          ./"$APPIMAGE" --appimage-extract >/dev/null
 
           # Recheck the packaged filesystem before launch. This prevents a
           # runner-installed libtorrent from turning a broken artifact green.
@@ -230,7 +251,7 @@ jobs:
           fi
       - name: Package .run installer (makeself)
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${OPAL_RELEASE_TAG#v}"
           # Staging dir is the self-extracting payload; install.sh runs from
           # inside it after extraction and copies into /usr/local (needs sudo).
           mkdir -p staging
@@ -268,6 +289,7 @@ jobs:
   # breaks; drop the flag once a few tagged builds have produced working
   # artifacts.
   windows-x86_64:
+    needs: validate-release
     runs-on: windows-2022
     continue-on-error: true
     permissions:
@@ -360,7 +382,7 @@ jobs:
 
       - name: Stage portable payload (exe + wrapper + DLL closure)
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${OPAL_RELEASE_TAG#v}"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           mkdir -p staging
           cp zig-out/bin/opal.exe staging/
@@ -672,6 +694,7 @@ jobs:
   # ── Browser extension (Opal Connect) ────────────────────────────────────
   # Builds the Chrome + Firefox packages and ships them as release assets.
   extension:
+    needs: validate-release
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -723,10 +746,12 @@ jobs:
         # "Full Changelog: compare/v0.6.2...v0.6.3" and nothing else. Ours
         # pairs the hand-written CHANGELOG.md section with the real commit list.
         run: |
-          ./scripts/release-notes.sh "${GITHUB_REF_NAME}" > RELEASE_NOTES.md
+          ./scripts/release-notes.sh "${OPAL_RELEASE_TAG}" > RELEASE_NOTES.md
           cat RELEASE_NOTES.md
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.OPAL_RELEASE_TAG }}
+          overwrite_files: true
           files: |
             artifacts/Opal-*-macos-arm64.app.zip
             artifacts/Opal-*-macos-arm64.dmg
@@ -780,7 +805,7 @@ jobs:
       - name: Push PKGBUILDs to AUR
         env:
           AUR_CI: "1"
-          AUR_RELEASE_TAG: ${{ github.ref_name }}
+          AUR_RELEASE_TAG: ${{ env.OPAL_RELEASE_TAG }}
           AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
           AUR_USERNAME: ${{ vars.AUR_USERNAME }}
           AUR_EMAIL: ${{ vars.AUR_EMAIL }}

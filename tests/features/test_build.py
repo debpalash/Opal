@@ -482,6 +482,8 @@ def test_linux_installer_rootless_default():
         "AppImage gets a headless launch smoke":
             "timeout --signal=TERM 5s xvfb-run -a squashfs-root/AppRun" in release
             and 'if [ "$STATUS" -ne 124 ]' in release,
+        "AppImage verification executes the local artifact":
+            './"$APPIMAGE" --appimage-extract' in release,
         "tarball carries torrent engines": "cp -r engines opal-${VERSION}-linux-x86_64/" in release,
         "AUR binary installs torrent engines": 'cp -r engines' in aur_bin,
     }
@@ -744,6 +746,10 @@ def test_release_notes():
         "the generator runs in the publish job": "scripts/release-notes.sh" in wf,
         # Without full history the commit list comes out empty and nobody notices.
         "publish checks out full history": "fetch-depth: 0" in wf,
+        "failed platform releases can be rebuilt safely":
+            "workflow_dispatch:" in wf
+            and "tag_name: ${{ env.OPAL_RELEASE_TAG }}" in wf
+            and "overwrite_files: true" in wf,
         "generator emits both halves": "## Highlights" in sh and "## Changes" in sh,
     }
     missing = [k for k, v in checks.items() if not v]
