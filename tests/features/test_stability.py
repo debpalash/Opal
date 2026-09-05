@@ -576,6 +576,9 @@ def test_keyboard_close_uses_normal_teardown_and_unmaps_first():
         "normal close latch used": '@import("titlebar.zig").close_requested = true;' in inputs,
         "surface hidden before teardown": "SDL_HideWindow" in mn
         and mn.index("SDL_HideWindow") < mn.index("workers.armShutdownDeadline"),
+        "surface access desktop-only": 'if (comptime !@import("build_options").headless)' in mn
+        and mn.index('if (comptime !@import("build_options").headless)')
+        < mn.index("SDL_HideWindow"),
         "playback stopped asynchronously": "pub fn stopForShutdown" in player
         and "mpv_command_async" in player,
         "playback stopped before unmap": "p.stopForShutdown()" in mn

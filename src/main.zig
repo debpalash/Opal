@@ -489,9 +489,11 @@ pub fn appDeinit() void {
     // Remove the native surface immediately. Teardown can include third-party
     // media/network destructors; keeping the surface mapped while they finish
     // makes the compositor report a closing application as unresponsive.
-    if (dvui_win) |win| {
-        const sdl_win: ?*c.sdl.SDL_Window = @ptrCast(win.backend.impl.window);
-        if (sdl_win != null) c.sdl.SDL_HideWindow(sdl_win);
+    if (comptime !@import("build_options").headless) {
+        if (dvui_win) |win| {
+            const sdl_win: ?*c.sdl.SDL_Window = @ptrCast(win.backend.impl.window);
+            if (sdl_win != null) c.sdl.SDL_HideWindow(sdl_win);
+        }
     }
 
     // No teardown bug may leave an unresponsive window around indefinitely.
