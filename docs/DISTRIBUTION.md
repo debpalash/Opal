@@ -438,7 +438,7 @@ actually works — and it's free.
 - [x] `SHA256SUMS.txt` is generated and published by the release job.
 - [x] Homebrew tap is public and synchronized by
       `packaging/homebrew-tap/push-tap.sh`; the formula installs the verified
-      prebuilt `v0.6.6` asset.
+      prebuilt `v0.7.0` asset.
 - [x] In-app updater (`src/services/updater.zig`) polls `releases/latest` and
       reads the same build-generated version source as the packaged app.
 

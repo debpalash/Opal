@@ -23,7 +23,7 @@
 #                            separately; AUR publish just needs the metadata.)
 #    Then:
 #      AUR_SSH_PRIVATE_KEY=… AUR_USERNAME=… AUR_EMAIL=… \
-#        AUR_RELEASE_TAG=v0.6.6 AUR_SKIP_MAKEPKG=1 ./push-to-aur.sh
+#        AUR_RELEASE_TAG=v0.7.0 AUR_SKIP_MAKEPKG=1 ./push-to-aur.sh
 set -euo pipefail
 cd "$(dirname "$0")"
 

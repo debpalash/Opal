@@ -10,6 +10,25 @@ Add a section BEFORE tagging; a missing one ships a release that says so.
 Headings are `## vX.Y.Z — YYYY-MM-DD`, newest first. The version token must
 match the tag exactly.
 
+## v0.7.0 — 2026-09-05
+
+- **Closing Opal is immediate and final, even during active playback.** Native
+  window close, `Ctrl+W`, and `Ctrl+Q` now share one bounded teardown path;
+  playback stops before the surface disappears, raw SDL/Wayland close events
+  cannot leave a windowless stream behind, and stuck workers cannot keep the
+  process alive indefinitely.
+- **Background work no longer races the UI during shutdown.** Resolver, search,
+  poster, HTTP, and stream-proxy work receives cancellation before teardown,
+  UI refreshes carry the real window, and the worker supervisor drains owned
+  tasks before shared state is released.
+- **Linux AppImages launch through an explicit runtime entry point.** The
+  release pipeline now packages the expected AppRun launcher and validates the
+  resulting image, alongside the existing tarball, DEB, RPM, and `.run`
+  formats.
+- **The keyless Movies & TV flow is documented end to end.** A new guide shows
+  how Cinemeta browsing, search, posters, and TV season/episode navigation work
+  without a TMDB key, with clearer privacy and provider-boundary documentation.
+
 ## v0.6.6 — 2026-08-28
 
 - **Movies and TV now work without a catalog API key.** The built-in Cinemeta
