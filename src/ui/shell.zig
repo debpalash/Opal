@@ -28,8 +28,16 @@ const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
 
 /// Frame entry — called from appFrame when page_shell_enabled.
 pub fn render() !void {
+    const live_width = @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().w, state.app.ui_scale);
+    const titlebar = @import("titlebar.zig");
+    const live_height = @import("../core/scale_pure.zig").layoutUnits(
+        @max(1, dvui.windowRect().h - @as(f32, if (titlebar.active()) titlebar.HEIGHT else 0)),
+        state.app.ui_scale,
+    );
     var root = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .expand = .both,
+        // Page minimum widths must not push navigation beyond the window.
+        .min_size_content = .{ .w = live_width, .h = live_height },
+        .max_size_content = .{ .w = live_width, .h = live_height },
         .background = true,
         .color_fill = theme.colors.bg_app,
     });
@@ -50,7 +58,7 @@ pub fn render() !void {
     const w = scale_pure.layoutUnits(window_rect.w, state.app.ui_scale);
     const h = scale_pure.layoutUnits(window_rect.h, state.app.ui_scale);
     const compact = scale_pure.isCompact(w, state.app.ui_scale);
-    const narrow = scale_pure.isNarrow(w, state.app.ui_scale);
+    const narrow = scale_pure.isNarrow(w, state.app.ui_scale) or w < 1200;
     const tiny = scale_pure.isTiny(w, state.app.ui_scale);
     const short = scale_pure.isShort(h, state.app.ui_scale);
 
@@ -112,8 +120,19 @@ pub fn render() !void {
         }
         const prev_alpha = dvui.alpha(nav_alpha);
         renderTopNav(compact, narrow);
+        if (compact) {
+            var search_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .expand = .horizontal,
+                .padding = dvui.Rect.all(theme.spacing.xs),
+            });
+            omnibox(true);
+            search_row.deinit();
+        }
         dvui.alphaSet(prev_alpha);
     }
+
+    // Reserve bottom navigation before the page takes the remaining height.
+    if (compact and !immersive) renderBottomTabs(tiny or short);
 
     {
         // The Player route owns its full bleed (video grid); every other page
@@ -164,10 +183,6 @@ pub fn render() !void {
     if (state.app.router.current != .player and anyHasMedia()) {
         footer.renderGlobalBottomTray();
     }
-
-    // Compact: bottom tab bar (mobile-style) below everything — also hidden in
-    // immersive playback so the video reaches the bottom edge.
-    if (compact and !immersive) renderBottomTabs(tiny or short);
 
     // Stream-key popover — floating, opened from the overflow menu. (Its
     // legacy render site is the header, which never runs in the shell.)
@@ -240,6 +255,8 @@ fn renderTopNav(compact: bool, narrow: bool) void {
         }
     }
 
+    browseSourcePicker();
+
     // Back / forward — disabled (dimmed, inert) when there's no history in
     // that direction. Previously canGoBack() was passed as `active`, which
     // painted Back as a toggled-on accent chip whenever ANY history existed —
@@ -257,30 +274,25 @@ fn renderTopNav(compact: bool, narrow: bool) void {
     if (!compact) {
         // Home / Downloads / Queue / History are icon-only (tooltip on hover);
         // the content destinations keep their labels.
-        // Search/Browse/Watching keep their labels when wide, collapse to
-        // icon-only when narrow so the row fits without wrapping/clipping.
+        // Search and Browse are owned by the omnibox and source selector.
         navLink(.home, "Home", icons.tvg.lucide.house, 1, true);
-        navLink(.search, "Search", icons.tvg.lucide.search, 2, narrow);
-        navLink(.browse, "Browse", icons.tvg.lucide.compass, 3, narrow);
         navLink(.watching, "Watching", icons.tvg.lucide.tv, 7, narrow);
         navLink(.downloads, "Downloads", icons.tvg.lucide.download, 4, true);
         navLink(.queue, "Queue", icons.tvg.lucide.@"list-video", 5, true);
         navLink(.history, "History", icons.tvg.lucide.history, 6, true);
     }
 
-    // At phone-like widths Search already has a persistent bottom destination.
-    // Keeping the 200pt field here squeezed or clipped every action beside it.
+    // Compact widths render the same input in a dedicated row below the nav.
     if (!compact) omnibox(narrow);
 
-    // Flexible spacer — absorbs the leftover nav width so the omnibox stays a
-    // fixed size and the right-side actions sit at the window edge.
-    {
+    // The search field takes available width; compact keeps actions right-aligned.
+    if (compact) {
         var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
         sp.deinit();
     }
 
     // Donate chip — dropped at narrow so the tighter row doesn't clip.
-    if (!narrow) header.donateButton();
+    if (!narrow and !compact) header.donateButton();
 
     // Right-side actions (icon-only). The former "Assistant" button opened the
     // AI/Voice SETTINGS page (renderAIContent) — that now lives in Settings ›
@@ -293,7 +305,7 @@ fn renderTopNav(compact: bool, narrow: bool) void {
     // "Logs & Plugins" icon, which meant two clicks and no hint that Suwayomi /
     // Debrid / Trakt lived there at all. The dropdown lists every section, so
     // each is one click from anywhere.
-    if (!compact) {
+    if (!compact and !narrow) {
         pluginsMenu();
         if (components.iconButton(@src(), icons.tvg.lucide.@"scroll-text", "Logs", state.app.router.current == .system)) {
             state.app.router.navigate(.system);
@@ -302,7 +314,7 @@ fn renderTopNav(compact: bool, narrow: bool) void {
         // Same persisted switch as Settings › Web Remote Control.
         header.renderWebUiButton();
     }
-    if (components.iconButton(@src(), icons.tvg.lucide.settings, "Settings", state.app.router.current == .settings)) {
+    if (!compact and components.iconButton(@src(), icons.tvg.lucide.settings, "Settings", state.app.router.current == .settings)) {
         state.app.router.navigate(.settings);
     }
 
@@ -511,16 +523,13 @@ fn navLink(r: Route, label: []const u8, icon: []const u8, id_extra: usize, icon_
 fn omnibox(narrow: bool) void {
     var te = dvui.textEntry(@src(), .{
         .text = .{ .buffer = &state.app.magnet_buf },
-        .placeholder = if (narrow) "Search…" else "Ask, search, or paste a link…",
+        .placeholder = if (narrow) "Ask, search, paste…" else "Ask, search, or paste a link…",
     }, .{
-        // Fixed width (no .expand): dvui's horizontal expand ignores
-        // max_size_content, so the box used to stretch to fill the whole nav
-        // gap and read as an oversized bar. A fixed, proportionate width + a
-        // flexible spacer after it (in renderTopNav) keeps it a tidy search
-        // field and pushes the right-side actions to the edge.
-        .min_size_content = .{ .w = if (narrow) 200 else 340, .h = 26 },
-        .max_size_content = .{ .w = if (narrow) 200 else 340, .h = 26 },
-        .margin = .{ .x = theme.spacing.md, .y = 0, .w = 4, .h = 0 },
+        // Consume only the width left after navigation/actions. On compact
+        // windows this is the full second row, never a hidden search control.
+        .expand = .horizontal,
+        .min_size_content = .{ .w = 80, .h = 26 },
+        .margin = .{ .x = theme.spacing.xs, .y = 0, .w = 4, .h = 0 },
         .color_fill = theme.colors.bg_elevated,
         .color_border = theme.colors.border_subtle,
         .border = dvui.Rect.all(1),
@@ -681,7 +690,6 @@ fn renderPage(r: Route) !void {
         .search => drawer.renderTabContent(.Search),
         .home => @import("home.zig").render(), // personal hub: metrics + lists
         .browse => {
-            browseSourcePicker();
             drawer.renderTabContent(state.app.browse_source);
         },
         .watching => @import("../services/tv_library.zig").renderContent(),
@@ -736,19 +744,10 @@ fn browseSourcePicker() void {
         selected = 0;
     }
 
-    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .expand = .horizontal,
-        .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
-    });
-    defer row.deinit();
-    _ = dvui.label(@src(), "Source", .{}, .{
-        .color_text = theme.colors.text_secondary,
-        .gravity_y = 0.5,
-        .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
-    });
     if (browseSourceSelect(labels[0..available_count], selected)) |picked| {
         state.app.browse_source = available[picked];
         state.app.drawer_tab = state.app.browse_source;
+        state.app.router.navigate(.browse);
     }
 }
 
@@ -763,7 +762,7 @@ fn browseSourceSelect(labels: []const []const u8, selected: usize) ?usize {
     defer menu.deinit();
 
     if (dvui.menuItemLabel(@src(), labels[selected], .{ .submenu = true }, .{
-        .min_size_content = .{ .w = 135, .h = 0 },
+        .min_size_content = .{ .w = 100, .h = 0 },
         .background = true,
         .color_fill = theme.colors.bg_surface,
         .color_fill_hover = theme.colors.bg_hover,
@@ -771,7 +770,14 @@ fn browseSourceSelect(labels: []const []const u8, selected: usize) ?usize {
         .corner_radius = theme.dims.rad_sm,
         .padding = .{ .x = theme.spacing.sm, .y = 4, .w = theme.spacing.sm, .h = 4 },
     })) |anchor| {
-        var popup = dvui.floatingMenu(@src(), .{ .from = anchor }, .{});
+        var popup = dvui.floatingMenu(@src(), .{ .from = anchor }, .{
+            .background = true,
+            .color_fill = theme.colors.bg_surface,
+            .color_border = theme.colors.border_subtle,
+            .border = dvui.Rect.all(1),
+            .padding = dvui.Rect.all(2),
+            .corner_radius = theme.dims.rad_sm,
+        });
         defer popup.deinit();
         var choices = dvui.menu(@src(), .vertical, .{
             .background = true,
@@ -952,6 +958,7 @@ fn pluginTabIcon(t: router.PluginTab) []const u8 {
 fn renderBottomTabs(dense: bool) void {
     var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
+        .gravity_y = 1,
         .min_size_content = .{ .w = 0, .h = if (dense) 40 else 52 },
         .background = true,
         .color_fill = theme.colors.bg_surface,
@@ -962,8 +969,8 @@ fn renderBottomTabs(dense: bool) void {
     defer bar.deinit();
 
     bottomTab(.home, "Home", icons.tvg.lucide.house, 401, dense);
-    bottomTab(.search, "Search", icons.tvg.lucide.search, 402, dense);
-    bottomTab(.browse, "Browse", icons.tvg.lucide.compass, 403, dense);
+    bottomTab(.watching, "Watching", icons.tvg.lucide.tv, 402, dense);
+    bottomTab(.history, "History", icons.tvg.lucide.history, 403, dense);
     bottomTab(.downloads, "Downloads", icons.tvg.lucide.download, 404, dense);
     bottomTab(.player, "Player", icons.tvg.lucide.play, 405, dense);
 }

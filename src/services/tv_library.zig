@@ -145,8 +145,6 @@ fn syncWorker() void {
     const body = alloc.alloc(u8, 256 * 1024) catch return;
     defer alloc.free(body);
 
-    var seasons: [tp.MAX_SEASONS]tp.Season = undefined;
-    var watched: [tp.MAX_WATCHED]tp.Ep = undefined;
     var updated: usize = 0;
 
     // The Home "Coming up" rail is built from this same pass — it used to make
@@ -196,12 +194,16 @@ fn syncWorker() void {
             next_name,
         );
 
-        const ns = tp.parseSeasonMap(doc, &seasons);
+        const seasons = alloc.alloc(tp.Season, std.mem.count(u8, doc, "\"season_number\"")) catch continue;
+        defer alloc.free(seasons);
+        const ns = tp.parseSeasonMap(doc, seasons);
         if (ns > 0) db.tvUpsertSeasons(sh.tmdb_id, seasons[0..ns]);
 
         // Stage the Coming-up rail from the SAME document + the SAME next-up
         // answer the library uses, so the two surfaces can never disagree.
-        const nw = db.tvLoadWatchedAll(sh.tmdb_id, &watched);
+        const watched = db.tvWatchedList(alloc, sh.tmdb_id) catch continue;
+        defer alloc.free(watched);
+        const nw = watched.len;
         const la: ?tp.Ep = if (last_ep.season > 0) last_ep else null;
         const nxt = tp.nextUp(seasons[0..ns], watched[0..nw], la);
         cal.stage(
@@ -233,12 +235,13 @@ fn syncWorker() void {
 /// aired. This is the one entry point the rest of the app uses (the TV detail
 /// Resume button calls it) — nothing re-derives "next".
 pub fn nextUpFor(tmdb_id: i32) ?tp.Ep {
-    var seasons: [tp.MAX_SEASONS]tp.Season = undefined;
-    var watched: [tp.MAX_WATCHED]tp.Ep = undefined;
-
-    const ns = db.tvLoadSeasons(tmdb_id, &seasons);
+    const seasons = db.tvSeasonList(alloc, tmdb_id) catch return null;
+    defer alloc.free(seasons);
+    const watched = db.tvWatchedList(alloc, tmdb_id) catch return null;
+    defer alloc.free(watched);
+    const ns = seasons.len;
     if (ns == 0) return null;
-    const nw = db.tvLoadWatchedAll(tmdb_id, &watched);
+    const nw = watched.len;
 
     var shows: [MAX_SHOWS]db.TvShowRow = undefined;
     const n = db.tvGetShows(&shows);
@@ -267,9 +270,7 @@ pub fn lastAiredFor(tmdb_id: i32) ?struct { ep: tp.Ep, watched: bool } {
     }
     const la = last_aired orelse return null;
 
-    var watched: [tp.MAX_WATCHED]tp.Ep = undefined;
-    const nw = db.tvLoadWatchedAll(tmdb_id, &watched);
-    return .{ .ep = la, .watched = tp.isWatched(watched[0..nw], la) };
+    return .{ .ep = la, .watched = db.tvIsWatched(tmdb_id, la.season, la.episode) };
 }
 
 /// The user's hand-set status for one item, or `.none`.
@@ -291,8 +292,9 @@ pub fn neighborEpisode(delta: i32) ?tp.Ep {
     if (!playingEpisode()) return null;
     const pe = &state.app.playing_episode;
 
-    var seasons: [tp.MAX_SEASONS]tp.Season = undefined;
-    const ns = db.tvLoadSeasons(pe.tmdb_id, &seasons);
+    const seasons = db.tvSeasonList(alloc, pe.tmdb_id) catch return null;
+    defer alloc.free(seasons);
+    const ns = seasons.len;
     if (ns == 0) return null; // no season map yet — we genuinely don't know
 
     const cur = tp.Ep{ .season = pe.season, .episode = pe.episode };
@@ -405,7 +407,7 @@ fn itemExistsLocked(item: ItemRef) bool {
 
 fn tvId(item: ItemRef) CommandError!i32 {
     const id = std.fmt.parseInt(i32, item.id, 10) catch return error.ItemNotFound;
-    if (id <= 0) return error.ItemNotFound;
+    if (id == 0) return error.ItemNotFound;
     return id;
 }
 
@@ -498,14 +500,15 @@ fn addTvRows() void {
     var shows: [MAX_SHOWS]db.TvShowRow = undefined;
     const n = db.tvGetShows(&shows);
 
-    var seasons: [tp.MAX_SEASONS]tp.Season = undefined;
-    var watched: [tp.MAX_WATCHED]tp.Ep = undefined;
-
     for (shows[0..n]) |*sh| {
         if (sh.tmdb_id == 0) continue;
 
-        const ns = db.tvLoadSeasons(sh.tmdb_id, &seasons);
-        const nw = db.tvLoadWatchedAll(sh.tmdb_id, &watched);
+        const seasons = db.tvSeasonList(alloc, sh.tmdb_id) catch continue;
+        defer alloc.free(seasons);
+        const watched = db.tvWatchedList(alloc, sh.tmdb_id) catch continue;
+        defer alloc.free(watched);
+        const ns = seasons.len;
+        const nw = watched.len;
 
         // A show with no season map yet still gets a row — it reads "Not synced
         // yet" until the sync lands. Dropping it would make the library look empty
@@ -885,6 +888,110 @@ fn renderUpNextRail() void {
     for (order[0..row_count]) |idx| {
         if (!tp.visible(&rows[idx], filter, kind_filter) or !inBucket(&rows[idx], .up_next)) continue;
         renderCard(idx, idx);
+    }
+}
+
+// Private UI snapshot: remote requests may rebuild the shared snapshot while
+// Home is drawing, so never retain pointers into `rows` across its mutex.
+var home_rows: [MAX_SHOWS]tp.Row = undefined;
+var home_count: usize = 0;
+
+pub fn renderHomeEpisodes() bool {
+    if (!state.app.init_history_loaded) return false;
+    syncOnce();
+    home_count = snapshotCopy(&home_rows);
+    const any = for (home_rows[0..home_count]) |r| {
+        if (homeEpisodeVisible(&r)) break true;
+    } else false;
+    if (!any) return false;
+
+    _ = dvui.label(@src(), "Continue watching", .{}, .{
+        .font = dvui.themeGet().font_heading,
+        .color_text = theme.colors.text_primary,
+        .padding = dvui.Rect.all(theme.spacing.xs),
+    });
+    var rail = dvui.scrollArea(@src(), .{ .horizontal = .auto, .vertical = .none }, .{
+        .expand = .horizontal,
+        .background = false,
+        .min_size_content = .{ .w = 10, .h = 258 },
+    });
+    defer rail.deinit();
+    var strip = dvui.box(@src(), .{ .dir = .horizontal }, .{});
+    defer strip.deinit();
+    var count: usize = 0;
+    for (home_rows[0..home_count], 0..) |*r, i| {
+        if (!homeEpisodeVisible(r)) continue;
+        if (count == 12) break;
+        count += 1;
+        const preview = @import("episode_art.zig").get(r.tmdb_id, r.next, r.nameSlice());
+        const metadata = if (preview) |p| (if (p.ready.load(.acquire)) &p.metadata else null) else null;
+        const have_still = if (metadata) |m| m.url_len > 0 and !preview.?.image.poster_failed else false;
+        var label_buf: [128]u8 = undefined;
+        var title_buf: [80]u8 = undefined;
+        var ep_buf: [80]u8 = undefined;
+        const clip = @import("../ui/home_pure.zig").clipLabel;
+        const episode_title = if (metadata) |m| clip(&ep_buf, m.title[0..m.title_len], 18) else "";
+        var code_buf: [24]u8 = undefined;
+        const subtitle = std.fmt.bufPrint(&label_buf, "{s}{s}{s}", .{
+            tp.episodeLabel(r.next, &code_buf),
+            if (episode_title.len > 0) " · " else "",
+            episode_title,
+        }) catch "Next episode";
+        var resume_buf: [48]u8 = undefined;
+        const resume_label = if (r.resume_secs > 2)
+            std.fmt.bufPrint(&resume_buf, "Resume · {d} min", .{@as(u32, @intFromFloat(@min(r.resume_secs / 60, 99999)))}) catch "Resume"
+        else
+            "Play episode";
+        const progress: ?f32 = if (metadata) |m| (if (r.resume_secs > 0 and m.runtime_secs > 0)
+            @floatCast(std.math.clamp(r.resume_secs / m.runtime_secs, 0, 1))
+        else
+            null) else null;
+        const click = @import("../ui/media_card.zig").render(@src(), i + 92000, if (have_still) &preview.?.image else posterFor(r), .{
+            .landscape = true,
+            .poster_url = if (have_still) metadata.?.url[0..metadata.?.url_len] else r.posterUrlSlice(),
+            .title = @import("tmdb.zig").safeUtf8(clip(&title_buf, r.nameSlice(), 28)),
+            .subtitle = @import("tmdb.zig").safeUtf8(subtitle),
+            .subtitle_accent = true,
+            .progress = progress,
+            .action_label = resume_label,
+        });
+        switch (click) {
+            .open => openRow(r),
+            .action => playRow(r),
+            else => {},
+        }
+    }
+    return true;
+}
+
+fn homeEpisodeVisible(r: *const tp.Row) bool {
+    return tp.homeEpisodeVisible(r);
+}
+
+/// Suppress duplicate raw file cards only for a positively matched tracked show.
+/// Unknown/local episodes remain reachable in the recent-files rail.
+pub fn homeRepresentsFile(name: []const u8) bool {
+    var query_buf: [512]u8 = undefined;
+    var show_buf: [256]u8 = undefined;
+    const parsed = @import("subtitles_pure.zig").parse(name, &query_buf, &show_buf);
+    if (!parsed.is_tv) return false;
+    for (home_rows[0..home_count]) |*r| {
+        if (r.kind == .tv and std.ascii.eqlIgnoreCase(parsed.show, r.nameSlice())) return true;
+    }
+    return false;
+}
+
+pub fn deinitPosters() void {
+    // Shutdown only, after all image workers have drained.
+    for (&poster_items) |*it| {
+        if (comptime !@import("build_options").headless) {
+            if (it.poster_tex) |tex| {
+                if (state.app.dvui_win) |win| win.backend.textureDestroy(tex);
+            }
+        }
+        if (it.poster_pixels) |pixels| std.heap.c_allocator.free(pixels);
+        it.poster_pixels = null;
+        it.poster_tex = null;
     }
 }
 

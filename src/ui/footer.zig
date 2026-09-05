@@ -2593,7 +2593,9 @@ pub fn renderResumePrompt() void {
     // unsigned before {d:0>2} — zero-padded SIGNED ints print a forced "+".
     var ts_buf: [16]u8 = undefined;
     const ts = @import("../services/youtube_pure.zig").formatDuration(@intFromFloat(@max(state.app.resume_prompt_pos_secs, 0)), &ts_buf);
-    const msg = if (ts.len > 0)
+    const msg = if (state.app.resume_prompt_session)
+        "Restore your previous session?"
+    else if (ts.len > 0)
         std.fmt.bufPrint(&msg_buf, "Resume \u{201c}{s}\u{201d} at {s}?", .{ label, ts }) catch label
     else
         std.fmt.bufPrint(&msg_buf, "Resume \u{201c}{s}\u{201d} \u{b7} {d}%", .{ label, state.app.resume_prompt_pct }) catch label;
@@ -2603,7 +2605,7 @@ pub fn renderResumePrompt() void {
         .margin = .{ .x = 0, .y = 0, .w = theme.spacing.md, .h = 0 },
     });
 
-    if (dvui.button(@src(), "Resume", .{}, .{
+    if (dvui.button(@src(), if (state.app.resume_prompt_session) "Restore" else "Resume", .{}, .{
         .color_fill = theme.colors.accent,
         .color_text = theme.colors.text_on_accent,
         .corner_radius = theme.dims.rad_sm,
@@ -2611,17 +2613,41 @@ pub fn renderResumePrompt() void {
         .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
     })) {
         // loadContent creates a player if none exists on a cold start.
-        @import("../services/browser.zig").resumePlayback(state.app.resume_prompt_link[0..state.app.resume_prompt_link_len]);
+        if (state.app.resume_prompt_session) {
+            if (state.app.session_restore_count > 0) {
+                @import("../services/tmdb.zig").armStoredEpisode(state.app.session_tv_id, state.app.session_tv_season, state.app.session_tv_episode, state.app.session_restore_urls[0][0..state.app.session_restore_lens[0]]);
+                @import("../services/browser.zig").resumePlayback(state.app.session_restore_urls[0][0..state.app.session_restore_lens[0]]);
+                if (state.app.active_player_idx < state.app.players.items.len) {
+                    const p = state.app.players.items[state.app.active_player_idx];
+                    p.restore_session_position = state.app.session_position;
+                    p.resume_position_secs = state.app.session_position;
+                    if (p.is_torrent and state.app.session_file_idx >= 0)
+                        p.selected_file_idx = state.app.session_file_idx;
+                    p.restore_session_paused = state.app.session_paused;
+                    p.restore_session_speed = state.app.session_speed;
+                    p.resume_seeked = false;
+                }
+            }
+            state.app.router.navigate(state.app.session_route);
+        } else {
+            @import("../services/browser.zig").resumePlayback(state.app.resume_prompt_link[0..state.app.resume_prompt_link_len]);
+        }
         state.app.resume_prompt_active = false;
     }
 
-    if (dvui.button(@src(), "\u{2715}", .{}, .{
+    if (dvui.button(@src(), if (state.app.resume_prompt_session) "Start Fresh" else "\u{2715}", .{}, .{
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
         .color_text = theme.colors.text_tertiary,
         .border = dvui.Rect.all(0),
         .corner_radius = theme.dims.rad_sm,
         .gravity_y = 0.5,
     })) {
+        if (state.app.resume_prompt_session) {
+            state.app.session_saved = false;
+            state.app.session_restore_count = 0;
+            state.app.router.navigate(.home);
+            state.app.config_dirty = true;
+        }
         state.app.resume_prompt_active = false;
     }
 }

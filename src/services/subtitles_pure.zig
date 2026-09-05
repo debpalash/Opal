@@ -29,7 +29,7 @@ pub fn findSxxEyy(name: []const u8) ?struct { at: usize, s: u16, e: u16 } {
         var j = i + 1;
         var s: u32 = 0;
         var sd: usize = 0;
-        while (j < name.len and name[j] >= '0' and name[j] <= '9' and sd < 2) : (j += 1) {
+        while (j < name.len and name[j] >= '0' and name[j] <= '9' and sd < 3) : (j += 1) {
             s = s * 10 + (name[j] - '0');
             sd += 1;
         }
@@ -38,14 +38,22 @@ pub fn findSxxEyy(name: []const u8) ?struct { at: usize, s: u16, e: u16 } {
         j += 1;
         var e: u32 = 0;
         var ed: usize = 0;
-        while (j < name.len and name[j] >= '0' and name[j] <= '9' and ed < 3) : (j += 1) {
+        while (j < name.len and name[j] >= '0' and name[j] <= '9' and ed < 5) : (j += 1) {
             e = e * 10 + (name[j] - '0');
             ed += 1;
         }
         if (ed == 0) continue;
+        if (e > std.math.maxInt(u16) or (j < name.len and std.ascii.isDigit(name[j]))) continue;
         return .{ .at = i, .s = @intCast(s), .e = @intCast(e) };
     }
     return null;
+}
+
+test "episode filenames support long-running shows without truncating numbers" {
+    const parsed = findSxxEyy("Show.S075E1600.mkv").?;
+    try std.testing.expectEqual(@as(u16, 75), parsed.s);
+    try std.testing.expectEqual(@as(u16, 1600), parsed.e);
+    try std.testing.expect(findSxxEyy("Show.S01E999999.mkv") == null);
 }
 
 /// Copy `src` into `out`, turning `.`/`_`/`-` separators into spaces and
@@ -447,17 +455,19 @@ pub fn subdlLangCode(code: []const u8) []const u8 {
     const pairs = [_]struct { c: []const u8, s: []const u8 }{
         .{ .c = "eng", .s = "EN" }, .{ .c = "en", .s = "EN" },
         .{ .c = "spa", .s = "ES" }, .{ .c = "es", .s = "ES" },
-        .{ .c = "fre", .s = "FR" }, .{ .c = "fra", .s = "FR" }, .{ .c = "fr", .s = "FR" },
-        .{ .c = "ger", .s = "DE" }, .{ .c = "deu", .s = "DE" }, .{ .c = "de", .s = "DE" },
+        .{ .c = "fre", .s = "FR" }, .{ .c = "fra", .s = "FR" },
+        .{ .c = "fr", .s = "FR" },  .{ .c = "ger", .s = "DE" },
+        .{ .c = "deu", .s = "DE" }, .{ .c = "de", .s = "DE" },
         .{ .c = "por", .s = "PT" }, .{ .c = "pt", .s = "PT" },
         .{ .c = "ita", .s = "IT" }, .{ .c = "it", .s = "IT" },
         .{ .c = "rus", .s = "RU" }, .{ .c = "ru", .s = "RU" },
-        .{ .c = "chi", .s = "ZH" }, .{ .c = "zho", .s = "ZH" }, .{ .c = "zh", .s = "ZH" },
-        .{ .c = "jpn", .s = "JA" }, .{ .c = "ja", .s = "JA" },
-        .{ .c = "kor", .s = "KO" }, .{ .c = "ko", .s = "KO" },
-        .{ .c = "hin", .s = "HI" }, .{ .c = "hi", .s = "HI" },
-        .{ .c = "ara", .s = "AR" }, .{ .c = "ar", .s = "AR" },
-        .{ .c = "tur", .s = "TR" }, .{ .c = "tr", .s = "TR" },
+        .{ .c = "chi", .s = "ZH" }, .{ .c = "zho", .s = "ZH" },
+        .{ .c = "zh", .s = "ZH" },  .{ .c = "jpn", .s = "JA" },
+        .{ .c = "ja", .s = "JA" },  .{ .c = "kor", .s = "KO" },
+        .{ .c = "ko", .s = "KO" },  .{ .c = "hin", .s = "HI" },
+        .{ .c = "hi", .s = "HI" },  .{ .c = "ara", .s = "AR" },
+        .{ .c = "ar", .s = "AR" },  .{ .c = "tur", .s = "TR" },
+        .{ .c = "tr", .s = "TR" },
     };
     for (pairs) |p| if (std.ascii.eqlIgnoreCase(p.c, code)) return p.s;
     return "EN";
@@ -467,15 +477,15 @@ pub fn subdlLangCode(code: []const u8) []const u8 {
 /// Falls back to "English" for anything unmapped.
 pub fn langFullName(code: []const u8) []const u8 {
     const pairs = [_]struct { c: []const u8, n: []const u8 }{
-        .{ .c = "en", .n = "English" },   .{ .c = "eng", .n = "English" },
-        .{ .c = "es", .n = "Spanish" },   .{ .c = "spa", .n = "Spanish" },
-        .{ .c = "fr", .n = "French" },    .{ .c = "fre", .n = "French" },
-        .{ .c = "de", .n = "German" },    .{ .c = "ger", .n = "German" },
-        .{ .c = "it", .n = "Italian" },   .{ .c = "ita", .n = "Italian" },
-        .{ .c = "pt", .n = "Portuguese" },.{ .c = "por", .n = "Portuguese" },
-        .{ .c = "ru", .n = "Russian" },   .{ .c = "rus", .n = "Russian" },
-        .{ .c = "ja", .n = "Japanese" },  .{ .c = "jpn", .n = "Japanese" },
-        .{ .c = "ko", .n = "Korean" },    .{ .c = "kor", .n = "Korean" },
+        .{ .c = "en", .n = "English" },    .{ .c = "eng", .n = "English" },
+        .{ .c = "es", .n = "Spanish" },    .{ .c = "spa", .n = "Spanish" },
+        .{ .c = "fr", .n = "French" },     .{ .c = "fre", .n = "French" },
+        .{ .c = "de", .n = "German" },     .{ .c = "ger", .n = "German" },
+        .{ .c = "it", .n = "Italian" },    .{ .c = "ita", .n = "Italian" },
+        .{ .c = "pt", .n = "Portuguese" }, .{ .c = "por", .n = "Portuguese" },
+        .{ .c = "ru", .n = "Russian" },    .{ .c = "rus", .n = "Russian" },
+        .{ .c = "ja", .n = "Japanese" },   .{ .c = "jpn", .n = "Japanese" },
+        .{ .c = "ko", .n = "Korean" },     .{ .c = "kor", .n = "Korean" },
     };
     for (pairs) |p| if (std.mem.eql(u8, p.c, code)) return p.n;
     return "English";

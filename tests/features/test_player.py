@@ -142,7 +142,7 @@ def test_tv_seasons():
                         and "tv_watched" in db and "tv_continue" in db),
         "detail view": "openTvDetail" in tm and "renderTvDetail" in tm,
         "season/episode fetch": "/tv/" in tm and "/season/" in tm,
-        "tracking wired": "tvMarkWatched" in tm and "tvLoadWatched" in tm,
+        "tracking wired": "tvMarkWatched" in tm and "tvIsWatched" in tm,
     }
     missing = [k for k, v in checks.items() if not v]
     if not missing:
@@ -178,7 +178,7 @@ def test_watch_commit_smart_play_onboarding():
                                        and "markWatchedEpisode" in _between(tm, "pub fn commitPendingWatch", "\nfn ")
                                        and "tvTouchShow" in _between(tm, "pub fn commitPendingWatch", "\nfn ")),
         "smart pick pure": "pub fn pickBest" in rk and "PickCand" in rk,
-        "smart play wired": "smartPlayEpisode" in tm and "pickBest" in tm and "setUniversalQuery" in tm,
+        "smart play wired": "smartPlayEpisode" in tm and "rank.pickForStartup(" in tm and "setUniversalQuery" in tm,
         "wizard": "installStarterPack" in ob and "onboarded" in ob,
         "starter pack": "pub fn installStarterPack" in pr and "torrentio" in pr,
         "persist + grandfather": '"onboarded"' in cfg and "anyInstalled" in cfg,

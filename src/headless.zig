@@ -102,6 +102,8 @@ pub fn headlessMain() !void {
         // them in on desktop). Without this pump, /api/tmdb and the unified
         // search's TMDB rows stayed empty forever on a headless box.
         @import("services/tmdb_api.zig").applyPendingResults();
+        @import("services/tmdb.zig").checkEpisodeStartup();
+        @import("services/tmdb.zig").applyPendingDetail();
 
         const now_ms = io.milliTimestamp();
         if (now_ms - last_tick_ms >= tick_interval_ms) {

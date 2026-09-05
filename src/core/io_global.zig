@@ -82,6 +82,10 @@ var threaded: std.Io.Threaded = undefined;
 var constructing = std.atomic.Value(bool).init(false);
 var ready = std.atomic.Value(bool).init(false);
 
+const DarwinEnvironment = struct {
+    extern "c" fn _NSGetEnviron() *[*:null]?[*:0]u8;
+};
+
 pub fn io() std.Io {
     if (!ready.load(.acquire)) {
         if (constructing.cmpxchgStrong(false, true, .acq_rel, .acquire) == null) {
@@ -93,10 +97,9 @@ pub fn io() std.Io {
             // "curl: (6) Could not resolve host" — silently emptying every
             // network-backed feature (browse tabs, search, posters, plugins).
             // Hand children the real process environment. The `.global` block
-            // only exists on Windows's GlobalBlock (POSIX's PosixBlock has no
-            // such member), and POSIX already inherits a working env under the
-            // default, so this override is Windows-only and comptime-pruned
-            // elsewhere. `.async_limit = .unlimited` applies everywhere: blocking
+            // only exists on Windows's GlobalBlock. POSIX needs its libc block
+            // explicitly too: the Threaded default is an empty environment.
+            // `.async_limit = .unlimited` applies everywhere: blocking
             // child-stdout reads hold an async slot for as long as curl runs, and
             // startup fires several fetches at once (tmdb + anime + calendar +
             // yt-dlp + posters); the default (cpu_count - 1) limit could be
@@ -104,7 +107,10 @@ pub fn io() std.Io {
             threaded = if (builtin.os.tag == .windows)
                 std.Io.Threaded.init(alloc, .{ .environ = .{ .block = .global }, .async_limit = .unlimited })
             else
-                std.Io.Threaded.init(alloc, .{ .async_limit = .unlimited });
+                std.Io.Threaded.init(alloc, .{
+                    .environ = .{ .block = .{ .slice = std.mem.span(if (builtin.os.tag == .macos) DarwinEnvironment._NSGetEnviron().* else std.c.environ) } },
+                    .async_limit = .unlimited,
+                });
             ready.store(true, .release);
         } else {
             // Another thread is constructing — wait for it to publish.

@@ -4,6 +4,26 @@ shared @test decorator, helpers, and run_all()."""
 from .harness import *  # noqa: F401,F403
 import os, sys, subprocess, sqlite3, socket, time, json  # noqa: F401
 
+@test("TV details adapt thumbnails, text, seasons and actions to available width", "Page Shell")
+def test_tv_detail_responsive():
+    detail = _src("src/services/tmdb.zig").split("fn renderTvDetail() void {", 1)[1]
+    checks = {
+        "live and drawer width": 'tv_layout_pure.zig' in detail and 'parent_width' in detail,
+        "one page scroller": detail.count('dvui.scrollArea(') == 1,
+        "stacked narrow cards": '.dir = if (layout.stacked) .vertical else .horizontal' in detail,
+        "proportional thumbnails": '.w = layout.thumbnail_width, .h = layout.thumbnail_height' in detail,
+        "wrapped title and overview": 'episode_title.addTextClick(' in detail and 'overview.addText(' in detail,
+        "bounded season menu": 'dvui.floatingMenu(' in detail and 'season_label' in detail,
+        "visible artwork only": 'still_box.data().visible()' in detail,
+        "stacked season labels stay in flow": detail.count('.gravity_y = if (layout.stacked) 0 else 0.5') == 2,
+        "season selection dismisses popup": 'choices.close();' in detail,
+        "retry recovers missing seasons": 'else fetchSeasons(t.tv_id);' in detail,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", ", ".join(missing)
+    return "pass", "responsive TV detail uses wrapped content and one vertical scroller"
+
 @test("Watching library: all kinds, next-up, user status", "Page Shell")
 def test_tv_tracking():
     # TV tracking used to be ~80% built and quietly wrong: next-up could not
@@ -263,15 +283,16 @@ def test_nav_donate_button():
                                 and 'openExternal(DONATE_URL)' in hdr),
         # A donate chip that spawns its own child process = duplicated launcher.
         "no second launcher": "Child.init(" not in hdr,
-        # Room for the chip came from the omnibox cap, not from overlapping it.
-        # The omnibox is now a fixed, responsive width (no .expand), tighter than
-        # the old 640 so the nav row fits the chip + right-side actions.
-        "omnibox narrowed": ".max_size_content = .{ .w = if (narrow)" in shell,
+        # The input flexes into available space and moves to its own compact
+        # row; the optional donate chip is hidden before space gets tight.
+        "omnibox responsive": '.min_size_content = .{ .w = 80, .h = 26 }' in shell
+            and 'if (!narrow and !compact) header.donateButton();' in shell
+            and 'omnibox(true);' in shell,
     }
     missing = [k for k, v in checks.items() if not v]
     if missing:
         return "fail", "donate button wiring incomplete: " + ", ".join(missing)
-    return "pass", "donate chip: header.zig → openExternal, omnibox width-capped"
+    return "pass", "donate chip: header.zig → openExternal, responsive unified input"
 
 
 @test("EZTV Release Calendar (neutral + live)", "Page Shell")

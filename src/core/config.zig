@@ -178,12 +178,37 @@ pub fn accrueUsage() void {
 }
 
 fn saveSessionUrls() void {
+    if (!state.app.session_close_captured and state.app.session_saved and
+        (!state.app.resume_prompt_checked or state.app.resume_prompt_active)) return;
+    if (state.app.session_close_captured) {
+        db.exec("DELETE FROM config WHERE key LIKE 'session_url_%'");
+        setKey("session_saved", if (state.app.incognito_mode) "0" else "1");
+        if (state.app.incognito_mode) return;
+        var buf: [64]u8 = undefined;
+        setKey("session_route", @tagName(state.app.session_route));
+        setKey("session_position", std.fmt.bufPrint(&buf, "{d:.3}", .{state.app.session_position}) catch "0");
+        setKey("session_paused", if (state.app.session_paused) "1" else "0");
+        setKey("session_speed", std.fmt.bufPrint(&buf, "{d:.3}", .{state.app.session_speed}) catch "1");
+        setKey("session_file_idx", std.fmt.bufPrint(&buf, "{d}", .{state.app.session_file_idx}) catch "-1");
+        setKey("session_tv_id", std.fmt.bufPrint(&buf, "{d}", .{state.app.session_tv_id}) catch "0");
+        setKey("session_tv_season", std.fmt.bufPrint(&buf, "{d}", .{state.app.session_tv_season}) catch "0");
+        setKey("session_tv_episode", std.fmt.bufPrint(&buf, "{d}", .{state.app.session_tv_episode}) catch "0");
+        const pe = &state.app.playing_episode;
+        if (state.app.session_tv_id != 0 and pe.tmdb_id == state.app.session_tv_id and pe.season == state.app.session_tv_season and pe.episode == state.app.session_tv_episode) {
+            db.tvSavePosition(pe.tmdb_id, pe.season, pe.episode, state.app.session_position, state.app.session_duration);
+            db.tvSavePlayedSeconds(pe.tmdb_id, pe.season, pe.episode, pe.played_seconds);
+        }
+        if (state.app.session_restore_count > 0)
+            setKey("session_url_0", state.app.session_restore_urls[0][0..state.app.session_restore_lens[0]]);
+        return;
+    }
     {
         const del_sql = "DELETE FROM config WHERE key LIKE 'session_url_%'";
         const del_stmt = db.prepare(del_sql) orelse return;
         defer db.finalize(del_stmt);
         _ = db.step(del_stmt);
     }
+    if (!state.app.session_saved) setKey("session_saved", "0");
     if (state.app.incognito_mode) return;
     var slot: usize = 0;
     var i: usize = 0;
@@ -198,6 +223,47 @@ fn saveSessionUrls() void {
         const key = std.fmt.bufPrint(&key_buf, "session_url_{d}", .{slot}) catch continue;
         setKey(key, url);
         slot += 1;
+    }
+}
+
+/// Capture event-cached playback before stop clears it; SQLite is saved later.
+pub fn captureCloseSession() void {
+    const has_media = state.app.active_player_idx < state.app.players.items.len and blk: {
+        const p = state.app.players.items[state.app.active_player_idx];
+        break :blk p.current_url_len > 0 or (p.is_torrent and p.source_url_len > 0);
+    };
+    if (!state.app.incognito_mode and state.app.session_saved and !has_media and
+        (!state.app.resume_prompt_checked or (state.app.resume_prompt_session and state.app.resume_prompt_active))) return;
+    state.app.session_close_captured = true;
+    state.app.session_route = state.app.router.current;
+    state.app.session_restore_count = 0;
+    state.app.session_position = 0;
+    state.app.session_file_idx = -1;
+    state.app.session_tv_id = 0;
+    state.app.session_tv_season = 0;
+    state.app.session_tv_episode = 0;
+    if (state.app.incognito_mode or state.app.active_player_idx >= state.app.players.items.len) return;
+    const p = state.app.players.items[state.app.active_player_idx];
+    const url = if (p.is_torrent and p.source_url_len > 0)
+        p.source_url[0..p.source_url_len]
+    else
+        p.current_url[0..p.current_url_len];
+    if (url.len == 0 or url.len >= 2048) return;
+    if (std.mem.startsWith(u8, url, "http://127.0.0.1:") or std.mem.startsWith(u8, url, "http://localhost:")) return;
+    @memcpy(state.app.session_restore_urls[0][0..url.len], url);
+    state.app.session_restore_lens[0] = url.len;
+    state.app.session_restore_count = 1;
+    const snap = p.playbackSnapshot();
+    state.app.session_position = snap.time_pos;
+    state.app.session_duration = snap.duration;
+    state.app.session_paused = snap.paused;
+    state.app.session_speed = snap.speed;
+    state.app.session_file_idx = if (p.is_torrent) p.selected_file_idx else -1;
+    const pe = &state.app.playing_episode;
+    if (pe.matches(p.current_url[0..p.current_url_len])) {
+        state.app.session_tv_id = pe.tmdb_id;
+        state.app.session_tv_season = pe.season;
+        state.app.session_tv_episode = pe.episode;
     }
 }
 
@@ -496,6 +562,26 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         state.app.win_h = std.fmt.parseInt(i32, val, 10) catch 800;
     } else if (std.mem.eql(u8, key, "drawer_open")) {
         // Ignored — sidebar always starts closed for a clean first impression
+    } else if (std.mem.eql(u8, key, "session_saved")) {
+        state.app.session_saved = std.mem.eql(u8, val, "1");
+    } else if (std.mem.eql(u8, key, "session_route")) {
+        state.app.session_route = std.meta.stringToEnum(@import("router.zig").Route, val) orelse .home;
+    } else if (std.mem.eql(u8, key, "session_position")) {
+        const pos = std.fmt.parseFloat(f64, val) catch 0;
+        state.app.session_position = if (std.math.isFinite(pos) and pos >= 0) pos else 0;
+    } else if (std.mem.eql(u8, key, "session_paused")) {
+        state.app.session_paused = std.mem.eql(u8, val, "1");
+    } else if (std.mem.eql(u8, key, "session_speed")) {
+        const speed = std.fmt.parseFloat(f64, val) catch 1;
+        state.app.session_speed = if (std.math.isFinite(speed)) std.math.clamp(speed, 0.25, 4) else 1;
+    } else if (std.mem.eql(u8, key, "session_file_idx")) {
+        state.app.session_file_idx = std.fmt.parseInt(i32, val, 10) catch -1;
+    } else if (std.mem.eql(u8, key, "session_tv_id")) {
+        state.app.session_tv_id = std.fmt.parseInt(i32, val, 10) catch 0;
+    } else if (std.mem.eql(u8, key, "session_tv_season")) {
+        state.app.session_tv_season = std.fmt.parseInt(i32, val, 10) catch 0;
+    } else if (std.mem.eql(u8, key, "session_tv_episode")) {
+        state.app.session_tv_episode = std.fmt.parseInt(i32, val, 10) catch 0;
     } else if (std.mem.startsWith(u8, key, "session_url_")) {
         const idx_str = key["session_url_".len..];
         const idx = std.fmt.parseInt(usize, idx_str, 10) catch return;

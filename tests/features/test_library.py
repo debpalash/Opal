@@ -203,8 +203,9 @@ def card_action_row_fits():
     checks = {
         "height depends on the card's contents": "pub fn cardHeight(has_progress: bool, has_actions: bool)" in mc,
         "action row is budgeted": "ACTION_H" in mc and "if (has_actions) ACTION_H else 0" in mc,
-        "card height is a floor": ".min_size_content = .{ .w = CARD_W, .h = h }" in render,
-        "card height is not a ceiling": ".max_size_content = .{ .w = CARD_W, .h = std.math.floatMax(f32) }" in render,
+        "card height is a floor": ".min_size_content = .{ .w = width, .h = h }" in render,
+        "card height is not a ceiling": ".max_size_content = .{ .w = width, .h = std.math.floatMax(f32) }" in render,
+        "episode cards reserve landscape artwork": "if (card.landscape) 126 else POSTER_H" in render,
         # The rail that shows these cards must not re-impose the ceiling.
         "release rail does not clamp height": "media_card.cardHeight(false, true) + 12" in ez
                                               and ".max_size_content = .{ .w = std.math.floatMax(f32), .h = std.math.floatMax(f32) }" in ez,

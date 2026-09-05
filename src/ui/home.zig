@@ -81,7 +81,8 @@ pub fn render() void {
     var wrap = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
     defer wrap.deinit();
     const avail = wrap.data().rect.w;
-    const colw: f32 = if (avail > 1) @min(920.0, avail) else 920.0;
+    const live_w = @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().w, state.app.ui_scale);
+    const colw: f32 = @max(1, @min(if (avail > 1) @min(920.0, avail) else 920.0, live_w - 32));
     var hub = dvui.box(@src(), .{ .dir = .vertical }, .{
         .gravity_x = 0.5,
         .min_size_content = .{ .w = colw, .h = 0 },
@@ -130,6 +131,7 @@ pub fn render() void {
 
     renderHero();
     // Resume first — the most actionable row lives right under the prompt.
+    const has_tv_episodes = @import("../services/tv_library.zig").renderHomeEpisodes();
     renderRecentlyPlayed();
     top.deinit();
 
@@ -177,7 +179,7 @@ pub fn render() void {
 
     // Nothing at all to show → the value-prop tiles + gentle CTA fill the shell.
     const everything_empty = watching.items.len == 0 and watchlist.items.len == 0 and
-        favorites.items.len == 0 and wh.count == 0;
+        favorites.items.len == 0 and wh.count == 0 and !has_tv_episodes;
     if (everything_empty) {
         renderCapabilities();
         if (state.app.tmdb.api_key_len == 0) renderEmptyState();
@@ -348,15 +350,17 @@ fn renderTrendingRail(card_w: f32) bool {
 
 fn renderHero() void {
     const home_pure = @import("home_pure.zig");
+    const win_w = @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().w, state.app.ui_scale);
+    const compact = win_w < 650;
 
     // App-shell hero: compact enough that the rails below stay on-screen.
     // windowRect() is logical units (same space as layout).
     const win_h = dvui.windowRect().h;
-    const tall = win_h >= 980;
+    const tall = win_h >= 980 and !compact;
     // Breathing room below the top nav before the greeting. Generous (the user
     // wants clear separation) but capped so the Trending rail below stays near
     // the fold rather than being pushed off-screen.
-    const top_pad = std.math.clamp(win_h * 0.08, 64.0, 150.0);
+    const top_pad = if (compact) theme.spacing.sm else std.math.clamp(win_h * 0.04, 16.0, 48.0);
 
     var hero = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
@@ -367,7 +371,7 @@ fn renderHero() void {
     const hour = localHour();
 
     // Headline — big when there's room, ramp-display when the shell is tight.
-    _ = dvui.label(@src(), "{s}", .{home_pure.headlineForHour(hour)}, .{
+    _ = dvui.label(@src(), "{s}", .{if (compact) "What’s next?" else home_pure.headlineForHour(hour)}, .{
         .color_text = theme.colors.text_primary,
         .font = dvui.themeGet().font_title.withSize(if (tall) 26 else 21),
         .gravity_x = 0.5,
@@ -384,7 +388,7 @@ fn renderHero() void {
     // The big prompt — same unified input the header uses (media plays,
     // questions go to the AI, everything else fans out to search). The pill
     // sizes and centers itself (fixed 480-620 width, gravity 0.5).
-    @import("header.zig").renderUrlInput(true);
+    if (!state.app.page_shell_enabled) @import("header.zig").renderUrlInput(true);
 
     // Suggestion chips — conversation starters that submit straight to the AI.
     {
@@ -394,7 +398,7 @@ fn renderHero() void {
         });
         defer wrap.deinit();
         const avail = wrap.data().rect.w;
-        const chips_w: f32 = if (avail > 1) @min(800.0, avail) else 800.0;
+        const chips_w: f32 = @max(1, @min(if (avail > 1) @min(800.0, avail) else 800.0, win_w - 64));
         var chips = dvui.flexbox(@src(), .{ .justify_content = .center }, .{
             .gravity_x = 0.5,
             .min_size_content = .{ .w = chips_w, .h = 0 },
@@ -409,6 +413,7 @@ fn renderHero() void {
             .{ .icon = icons.tvg.lucide.telescope, .label = "Mind-bending sci-fi", .prompt = "Find a mind-bending sci-fi show" },
         };
         for (starters, 0..) |st, i| {
+            if (compact and i >= 2) break;
             var chip = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .id_extra = i,
                 .background = true,
@@ -1182,8 +1187,8 @@ fn renderRecentlyPlayed() void {
     const home_pure = @import("home_pure.zig");
     const playable = playableHistory();
     // Everything deleted → no section at all (header with zero cards reads broken).
-    const any_playable = for (playable) |p| {
-        if (p) break true;
+    const any_playable = for (playable, 0..) |p, i| {
+        if (p and !recentFileHidden(i)) break true;
     } else false;
     if (!any_playable) return;
 
@@ -1199,7 +1204,7 @@ fn renderRecentlyPlayed() void {
             .gravity_y = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
-        _ = dvui.label(@src(), "Jump back in", .{}, .{
+        _ = dvui.label(@src(), "Recent files", .{}, .{
             .color_text = theme.colors.text_primary,
             .font = dvui.themeGet().font_heading,
             .gravity_y = 0.5,
@@ -1220,7 +1225,7 @@ fn renderRecentlyPlayed() void {
     var shown: usize = 0;
     var i: usize = 0;
     while (i < wh.count and shown < 12) : (i += 1) {
-        if (!playable[i]) continue; // media deleted from disk — no dead resume card
+        if (!playable[i] or recentFileHidden(i)) continue;
         shown += 1;
         const e = &wh.entries[i];
         // Cleaned display name (basename, no extension, dots→spaces); bare
@@ -1234,7 +1239,7 @@ fn renderRecentlyPlayed() void {
             cleaned;
         var clip_buf: [40]u8 = undefined;
         const name = tmdb.safeUtf8(home_pure.clipLabel(&clip_buf, display, 28));
-        const frac: f32 = std.math.clamp(@as(f32, @floatCast(e.percent)), 0.0, 1.0);
+        const frac = home_pure.historyFraction(e.percent);
         const pct: u8 = @intFromFloat(frac * 100.0);
         const done = pct >= 90;
 
@@ -1380,6 +1385,11 @@ fn renderRecentlyPlayed() void {
             if (e.link_len > 0) browser.resumePlayback(e.link[0..e.link_len]);
         }
     }
+}
+
+fn recentFileHidden(i: usize) bool {
+    const e = &wh.entries[i];
+    return @import("../services/tv_library.zig").homeRepresentsFile(e.name[0..e.name_len]);
 }
 
 // ── Empty state ──

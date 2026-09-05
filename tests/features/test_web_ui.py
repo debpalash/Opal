@@ -313,7 +313,7 @@ def test_play_latest_episode():
     pure = _src("src/services/tv_pure.zig")
     checks = {
         # One source of truth for "latest aired + watched", shared by both UIs.
-        "shared lookup": "pub fn lastAiredFor(" in lib and "tp.isWatched(watched[0..nw], la)" in lib,
+        "shared lookup": "pub fn lastAiredFor(" in lib and "db.tvIsWatched(tmdb_id, la.season, la.episode)" in lib,
         "pure label + tests": "pub fn recentEpisodeLabel(" in pure
             and "pub fn isWatched(" in pure
             and 'test "recentEpisodeLabel: watched and unwatched"' in pure,
@@ -355,7 +355,7 @@ def test_play_button_feedback():
             and "episode_play_pending.store(true, .release)" in tmdb,
         "cleared by the worker": "episode_play_pending.store(false, .release)" in tmdb,
         # The three paths that used to be silent now all speak.
-        "repeat click toasts": "Already finding a stream" in tmdb,
+        "new episode replaces pending request": "episode_generation.fetchAdd" in tmdb and "resolver.cancel()" in tmdb,
         "impossible click toasts": "still syncing this show" in tmdb,
         "no bare `if (S.busy) return;`": "if (S.busy) return;" not in tmdb,
         # Both buttons show the busy state and stop acting.
@@ -376,7 +376,7 @@ def test_play_button_feedback():
     missing = [k for k, ok in checks.items() if not ok]
     if missing:
         return "fail", "play-button feedback incomplete: " + ", ".join(missing)
-    return "pass", "Play buttons: Finding… + spinner while resolving, toasts on repeat/impossible clicks"
+    return "pass", "Play buttons: Finding… + spinner; new episode requests supersede pending work"
 
 
 @test("Desktop Settings has a Web UI tab (not buried under AI & Scripts)", "Web UI")

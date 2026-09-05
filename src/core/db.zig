@@ -396,6 +396,9 @@ fn createTables() void {
     // Idempotent — exec() swallows the duplicate-column error on re-run.
     exec("ALTER TABLE tv_watched ADD COLUMN position_secs REAL DEFAULT 0");
     exec("ALTER TABLE tv_watched ADD COLUMN duration_secs REAL DEFAULT 0");
+    exec("ALTER TABLE tv_watched ADD COLUMN played_secs REAL DEFAULT 0");
+    exec("CREATE TABLE IF NOT EXISTS tv_browse (tmdb_id INTEGER PRIMARY KEY, season INTEGER NOT NULL)");
+    exec("CREATE TABLE IF NOT EXISTS tv_external_ids (tmdb_id INTEGER PRIMARY KEY, imdb_id TEXT NOT NULL)");
 
     // One row per tracked show. `tracked` is the explicit Track/Untrack flag;
     // untracking never deletes tv_watched rows, so re-tracking restores progress.
@@ -1346,6 +1349,8 @@ pub fn tvMarkWatched(tmdb_id: i32, season: u32, episode: u32, watched: bool) voi
         \\VALUES(?, ?, ?, ?, ?)
         \\ON CONFLICT(tmdb_id, season, episode) DO UPDATE SET
         \\  watched = excluded.watched,
+        \\  played_secs = CASE WHEN excluded.watched = 0 THEN 0 ELSE tv_watched.played_secs END,
+        \\  position_secs = CASE WHEN excluded.watched = 0 THEN 0 ELSE tv_watched.position_secs END,
         \\  updated_at = excluded.updated_at
     ;
     const stmt = prepare(sql) orelse {
@@ -1389,6 +1394,15 @@ pub fn tvLoadWatched(tmdb_id: i32, season: u32, out: []bool) void {
         if (idx >= out.len) continue;
         out[idx] = true;
     }
+}
+
+pub fn tvIsWatched(id: i32, season: i32, episode: i32) bool {
+    const stmt = prepare("SELECT watched FROM tv_watched WHERE tmdb_id=? AND season=? AND episode=?") orelse return false;
+    defer finalize(stmt);
+    bindInt(stmt, 1, id);
+    bindInt(stmt, 2, season);
+    bindInt(stmt, 3, episode);
+    return step(stmt) == c.SQLITE_ROW and columnInt(stmt, 0) != 0;
 }
 
 /// Upsert a continue-watching entry keyed by `tmdb_id`, stamping updated_at (ms)
@@ -1697,6 +1711,30 @@ pub fn tvLoadSeasons(tmdb_id: i32, out: []tv_pure.Season) usize {
     return n;
 }
 
+pub fn tvSeasonList(allocator: std.mem.Allocator, id: i32) ![]tv_pure.Season {
+    var entries: std.ArrayList(tv_pure.Season) = .empty;
+    errdefer entries.deinit(allocator);
+    const stmt = prepare("SELECT season,episode_count FROM tv_seasons WHERE tmdb_id=? ORDER BY season") orelse return error.DatabaseUnavailable;
+    defer finalize(stmt);
+    bindInt(stmt, 1, id);
+    while (step(stmt) == c.SQLITE_ROW) {
+        try entries.append(allocator, .{ .number = @intCast(columnInt(stmt, 0)), .episode_count = @intCast(std.math.clamp(columnInt(stmt, 1), 0, std.math.maxInt(u16))) });
+    }
+    return entries.toOwnedSlice(allocator);
+}
+
+pub fn tvWatchedList(allocator: std.mem.Allocator, id: i32) ![]tv_pure.Ep {
+    var entries: std.ArrayList(tv_pure.Ep) = .empty;
+    errdefer entries.deinit(allocator);
+    const stmt = prepare("SELECT season,episode FROM tv_watched WHERE tmdb_id=? AND watched<>0 ORDER BY season,episode") orelse return error.DatabaseUnavailable;
+    defer finalize(stmt);
+    bindInt(stmt, 1, id);
+    while (step(stmt) == c.SQLITE_ROW) {
+        try entries.append(allocator, .{ .season = @intCast(columnInt(stmt, 0)), .episode = @intCast(columnInt(stmt, 1)) });
+    }
+    return entries.toOwnedSlice(allocator);
+}
+
 /// Every watched episode of a show, across ALL seasons. This is what makes
 /// cross-season next-up possible — the old path only ever loaded the currently
 /// open season's flags, so it could not see past a season boundary.
@@ -1749,6 +1787,61 @@ pub fn tvSavePosition(tmdb_id: i32, season: i32, episode: i32, position: f64, du
     bindDouble(stmt, 5, duration);
     bindInt64(stmt, 6, io_global.milliTimestamp());
     _ = step(stmt);
+}
+
+pub fn tvPlayedSeconds(id: i32, season: i32, episode: i32) f64 {
+    const stmt = prepare("SELECT played_secs FROM tv_watched WHERE tmdb_id=? AND season=? AND episode=?") orelse return 0;
+    defer finalize(stmt);
+    bindInt(stmt, 1, id);
+    bindInt(stmt, 2, season);
+    bindInt(stmt, 3, episode);
+    return if (step(stmt) == c.SQLITE_ROW) columnDouble(stmt, 0) else 0;
+}
+
+pub fn tvSavePlayedSeconds(id: i32, season: i32, episode: i32, seconds: f64) void {
+    if (!std.math.isFinite(seconds) or seconds < 0) return;
+    const stmt = prepare("UPDATE tv_watched SET played_secs=MAX(played_secs, ?) WHERE tmdb_id=? AND season=? AND episode=?") orelse return;
+    defer finalize(stmt);
+    bindDouble(stmt, 1, seconds);
+    bindInt(stmt, 2, id);
+    bindInt(stmt, 3, season);
+    bindInt(stmt, 4, episode);
+    _ = step(stmt);
+}
+
+pub fn tvRememberSeason(id: i32, season: i32) void {
+    const stmt = prepare("INSERT INTO tv_browse(tmdb_id,season) VALUES(?,?) ON CONFLICT(tmdb_id) DO UPDATE SET season=excluded.season") orelse return;
+    defer finalize(stmt);
+    bindInt(stmt, 1, id);
+    bindInt(stmt, 2, season);
+    _ = step(stmt);
+}
+
+pub fn tvRememberImdb(id: i32, imdb: []const u8) void {
+    if (!@import("../services/cinemeta_pure.zig").validImdbId(imdb)) return;
+    const stmt = prepare("INSERT INTO tv_external_ids VALUES(?,?) ON CONFLICT(tmdb_id) DO UPDATE SET imdb_id=excluded.imdb_id") orelse return;
+    defer finalize(stmt);
+    bindInt(stmt, 1, id);
+    bindText(stmt, 2, imdb);
+    _ = step(stmt);
+}
+
+pub fn tvImdbId(id: i32, out: []u8) []const u8 {
+    const stmt = prepare("SELECT imdb_id FROM tv_external_ids WHERE tmdb_id=?") orelse return "";
+    defer finalize(stmt);
+    bindInt(stmt, 1, id);
+    if (step(stmt) != c.SQLITE_ROW) return "";
+    const value = columnText(stmt, 0) orelse return "";
+    if (value.len > out.len) return "";
+    @memcpy(out[0..value.len], value);
+    return out[0..value.len];
+}
+
+pub fn tvRememberedSeason(id: i32) ?i32 {
+    const stmt = prepare("SELECT season FROM tv_browse WHERE tmdb_id=?") orelse return null;
+    defer finalize(stmt);
+    bindInt(stmt, 1, id);
+    return if (step(stmt) == c.SQLITE_ROW) @intCast(columnInt(stmt, 0)) else null;
 }
 
 // ── User-set library status (any kind) ──

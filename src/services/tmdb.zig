@@ -16,6 +16,180 @@ const alloc = @import("tmdb_parse.zig").alloc;
 pub const saveLists = store.saveLists;
 pub const loadLists = store.loadLists;
 
+test "TV detail grows beyond old season and episode limits and includes specials" {
+    defer deinitDetail();
+    var doc: std.ArrayList(u8) = .empty;
+    defer doc.deinit(std.testing.allocator);
+    try doc.appendSlice(std.testing.allocator, "{\"seasons\":[");
+    for (0..75) |i| {
+        const entry = try std.fmt.allocPrint(std.testing.allocator, "{s}{{\"season_number\":{d},\"episode_count\":200}}", .{ if (i == 0) "" else ",", i });
+        defer std.testing.allocator.free(entry);
+        try doc.appendSlice(std.testing.allocator, entry);
+    }
+    try doc.appendSlice(std.testing.allocator, "]}");
+    parseSeasons(doc.items);
+    try std.testing.expectEqual(@as(usize, 75), state.app.tmdb.tv_season_count);
+    doc.clearRetainingCapacity();
+    try doc.appendSlice(std.testing.allocator, "{\"episodes\":[");
+    for (0..600) |i| {
+        const entry = try std.fmt.allocPrint(std.testing.allocator, "{s}{{\"episode_number\":{d},\"name\":\"Episode\"}}", .{ if (i == 0) "" else ",", i + 1 });
+        defer std.testing.allocator.free(entry);
+        try doc.appendSlice(std.testing.allocator, entry);
+    }
+    try doc.appendSlice(std.testing.allocator, "]}");
+    parseEpisodes(doc.items);
+    try std.testing.expectEqual(@as(usize, 600), state.app.tmdb.tv_episode_count);
+    try std.testing.expectEqual(@as(i32, 600), state.app.tmdb.tv_episodes[599].episode_number);
+    const cinemeta = "{\"videos\":[{\"season\":0,\"episode\":1,\"title\":\"Special\"},{\"season\":1,\"episode\":7,\"title\":\"Seventh\"}]}";
+    parseCinemetaSeasons(cinemeta);
+    try std.testing.expectEqual(@as(usize, 2), state.app.tmdb.tv_season_count);
+    try std.testing.expectEqual(@as(i32, 0), state.app.tmdb.tv_seasons[0].season_number);
+    parseCinemetaEpisodes(cinemeta, 0);
+    try std.testing.expectEqual(@as(usize, 1), state.app.tmdb.tv_episode_count);
+    try std.testing.expectEqualStrings("Special", state.app.tmdb.tv_episodes[0].name[0..state.app.tmdb.tv_episodes[0].name_len]);
+}
+
+test "TV detail restore rearms the exact episode without resolving or autoplay" {
+    defer state.app.playing_episode = .{};
+    defer state.app.pending_watch = .{};
+    armStoredEpisode(123, 4, 7, "https://example.invalid/episode.mp4");
+    try std.testing.expect(state.app.playing_episode.armed);
+    try std.testing.expect(!state.app.playing_episode.active);
+    try std.testing.expectEqual(@as(i32, 123), state.app.pending_watch.tmdb_id);
+    try std.testing.expectEqual(@as(i32, 4), state.app.pending_watch.season);
+    try std.testing.expectEqual(@as(i32, 7), state.app.pending_watch.episode);
+    try std.testing.expect(!episode_play_pending.load(.acquire));
+    armStoredEpisode(0, 0, 0, "");
+    try std.testing.expect(!state.app.playing_episode.armed);
+}
+
+const DetailDocument = struct {
+    buffer: []u8,
+    len: usize,
+    id: i32,
+    generation: u32,
+    cinemeta: bool,
+    season: ?i32 = null,
+};
+var detail_mutex = @import("../core/sync.zig").Mutex{};
+var detail_document: ?DetailDocument = null;
+var retired_episodes: std.ArrayList([]state.TvEpisode) = .empty;
+
+fn publishDetail(doc: DetailDocument) void {
+    detail_mutex.lock();
+    defer detail_mutex.unlock();
+    if (doc.generation != tv_gen.load(.acquire)) {
+        alloc.free(doc.buffer);
+        return;
+    }
+    if (detail_document) |old| alloc.free(old.buffer);
+    detail_document = doc;
+    state.wakeUi();
+}
+
+pub fn applyPendingDetail() void {
+    detail_mutex.lock();
+    const document = detail_document;
+    detail_document = null;
+    detail_mutex.unlock();
+    if (document) |doc| {
+        defer alloc.free(doc.buffer);
+        if (doc.generation == tv_gen.load(.acquire)) {
+            if (doc.season) |season| {
+                applyEpisodes(doc.buffer[0..doc.len], doc.id, season, doc.generation, doc.cinemeta);
+            } else {
+                applySeasons(doc.buffer[0..doc.len], doc.id, doc.generation, doc.cinemeta);
+            }
+        }
+    }
+    var i: usize = 0;
+    while (i < retired_episodes.items.len) {
+        const entries = retired_episodes.items[i];
+        var busy = false;
+        for (entries) |e| busy = busy or e.still_fetching;
+        if (busy) {
+            i += 1;
+            continue;
+        }
+        for (entries) |*e| @import("../core/poster.zig").deinitPoster(&e.still_pixels, &e.still_tex);
+        alloc.free(entries);
+        _ = retired_episodes.swapRemove(i);
+    }
+}
+
+fn sizeSeasons(count: usize) bool {
+    const entries = alloc.alloc(state.TvSeason, count) catch return false;
+    @memset(entries, .{});
+    alloc.free(state.app.tmdb.tv_seasons);
+    state.app.tmdb.tv_seasons = entries;
+    return true;
+}
+
+fn sizeEpisodes(count: usize) bool {
+    const entries = alloc.alloc(state.TvEpisode, count) catch return false;
+    const watched = alloc.alloc(bool, count) catch {
+        alloc.free(entries);
+        return false;
+    };
+    if (state.app.tmdb.tv_episodes.len > 0) {
+        retired_episodes.append(alloc, state.app.tmdb.tv_episodes) catch {
+            alloc.free(entries);
+            alloc.free(watched);
+            return false;
+        };
+    }
+    @memset(entries, .{});
+    @memset(watched, false);
+    alloc.free(state.app.tmdb.tv_episode_watched);
+    state.app.tmdb.tv_episode_watched = watched;
+    state.app.tmdb.tv_episodes = entries;
+    return true;
+}
+
+fn objectCount(json: []const u8, season: ?i32) usize {
+    var pos: usize = 0;
+    var count: usize = 0;
+    while (nextJsonObject(json, pos)) |found| {
+        pos = found.end;
+        if (season == null or jsonInt(found.obj, "\"season\":") == season.?) count += 1;
+    }
+    return count;
+}
+
+pub fn deinitDetail() void {
+    detail_mutex.lock();
+    if (detail_document) |doc| alloc.free(doc.buffer);
+    detail_document = null;
+    detail_mutex.unlock();
+    for (state.app.tmdb.tv_episodes) |*e| destroyEpisodeAtShutdown(e);
+    for (retired_episodes.items) |entries| {
+        for (entries) |*e| destroyEpisodeAtShutdown(e);
+        alloc.free(entries);
+    }
+    retired_episodes.deinit(alloc);
+    alloc.free(state.app.tmdb.tv_seasons);
+    alloc.free(state.app.tmdb.tv_episodes);
+    alloc.free(state.app.tmdb.tv_episode_watched);
+    state.app.tmdb.tv_seasons = &.{};
+    state.app.tmdb.tv_episodes = &.{};
+    state.app.tmdb.tv_episode_watched = &.{};
+    state.app.tmdb.tv_episode_count = 0;
+    state.app.tmdb.tv_season_count = 0;
+    retired_episodes = .empty;
+}
+
+fn destroyEpisodeAtShutdown(e: *state.TvEpisode) void {
+    // The worker barrier has drained and no frame is active at shutdown.
+    if (comptime !@import("build_options").headless) {
+        if (e.still_tex) |texture| {
+            if (state.app.dvui_win) |win| win.backend.textureDestroy(texture);
+        }
+    }
+    e.still_tex = null;
+    if (e.still_pixels) |pixels| std.heap.c_allocator.free(pixels);
+    e.still_pixels = null;
+}
+
 /// Re-export the shared valid-UTF-8 guard (see core/text.zig). Free text drawn
 /// by dvui must pass through this or dvui's layout can panic on stray bytes.
 pub const safeUtf8 = @import("../core/text.zig").safeUtf8;
@@ -1256,6 +1430,7 @@ var tv_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 /// click; poster_path may be empty (detail fetch fills what it needs).
 pub fn openTvDetailById(id: i32, name: []const u8, poster_path: []const u8) void {
     var item = state.TmdbItem{ .id = id };
+    item.imdb_id_len = db.tvImdbId(id, &item.imdb_id).len;
     const nlen = @min(name.len, item.title.len);
     @memcpy(item.title[0..nlen], name[0..nlen]);
     item.title_len = nlen;
@@ -1272,6 +1447,7 @@ fn openTvDetail(item: *state.TmdbItem) void {
     const ilen = @min(item.imdb_id_len, t.tv_imdb_id.len);
     @memcpy(t.tv_imdb_id[0..ilen], item.imdb_id[0..ilen]);
     t.tv_imdb_id_len = ilen;
+    if (ilen > 0) db.tvRememberImdb(item.id, item.imdb_id[0..ilen]);
 
     // renderTvDetail() is only ever drawn from the Browse/TMDB route (see
     // renderTmdbContent). A click from a Home rail (Trending tonight,
@@ -1290,6 +1466,8 @@ fn openTvDetail(item: *state.TmdbItem) void {
     t.tv_poster_path_len = plen;
 
     // Reset season/episode state for the fresh show.
+    t.tv_seasons_loading = false;
+    t.tv_episodes_loading = false;
     t.tv_season_count = 0;
     t.tv_sel_season = 0;
     t.tv_episode_count = 0;
@@ -1352,32 +1530,67 @@ fn fetchSeasons(tmdb_id: i32) void {
 }
 
 fn fetchSeasonsThread(tmdb_id: i32, my_gen: u32, use_cinemeta: bool, imdb_id: [16]u8, imdb_id_len: usize) void {
-    defer state.app.tmdb.tv_seasons_loading = false;
-
     var url_buf: [128]u8 = undefined;
     const url = if (use_cinemeta)
         std.fmt.bufPrint(&url_buf, "/meta/series/{s}.json", .{imdb_id[0..imdb_id_len]}) catch return
     else
         std.fmt.bufPrint(&url_buf, "/3/tv/{d}", .{tmdb_id}) catch return;
 
-    const buf = alloc.alloc(u8, if (use_cinemeta) 1024 * 1024 else 256 * 1024) catch return;
-    defer alloc.free(buf);
+    const buf = alloc.alloc(u8, 8 * 1024 * 1024) catch {
+        publishDetail(.{ .buffer = &.{}, .len = 0, .id = tmdb_id, .generation = my_gen, .cinemeta = use_cinemeta });
+        return;
+    };
     const bytes = if (use_cinemeta)
         api.cinemetaApiInto(url, buf)
     else
         api.tmdbApiInto(url, state.app.tmdb.api_key[0..state.app.tmdb.api_key_len], buf);
+    publishDetail(.{ .buffer = buf, .len = bytes, .id = tmdb_id, .generation = my_gen, .cinemeta = use_cinemeta });
+}
+
+fn applySeasons(body: []const u8, tmdb_id: i32, my_gen: u32, use_cinemeta: bool) void {
+    defer state.app.tmdb.tv_seasons_loading = false;
+    const bytes = body.len;
     if (bytes == 0) {
         var lb: [96]u8 = undefined;
         const lm = std.fmt.bufPrint(&lb, "TV seasons fetch FAILED (id={d}) — empty response", .{tmdb_id}) catch "TV seasons fetch failed";
         logs.pushLog("error", "tmdb", lm, true);
         return;
     }
-    const body = buf[0..bytes];
 
     // Superseded by a newer open/close? Drop silently.
     if (tv_gen.load(.acquire) != my_gen) return;
 
     if (use_cinemeta) parseCinemetaSeasons(body) else parseSeasons(body);
+    std.mem.sort(state.TvSeason, state.app.tmdb.tv_seasons[0..state.app.tmdb.tv_season_count], {}, struct {
+        fn less(_: void, a: state.TvSeason, b: state.TvSeason) bool {
+            return a.season_number < b.season_number;
+        }
+    }.less);
+    const tp = @import("tv_pure.zig");
+    for (state.app.tmdb.tv_seasons[0..state.app.tmdb.tv_season_count]) |season| {
+        const entry = [_]tp.Season{.{ .number = season.season_number, .episode_count = season.episode_count }};
+        db.tvUpsertSeasons(tmdb_id, &entry);
+    }
+    if (use_cinemeta) {
+        var aired: tp.Ep = .{};
+        if (std.mem.indexOf(u8, body, "\"videos\":[")) |start| {
+            const open = start + "\"videos\":[".len - 1;
+            const videos = body[open..arrayEnd(body, open)];
+            var pos: usize = 0;
+            while (nextJsonObject(videos, pos)) |found| {
+                pos = found.end;
+                var date: [32]u8 = undefined;
+                const len = jsonStr(found.obj, "\"released\":\"", &date);
+                const epoch = @import("tv_calendar_pure.zig").dateToEpoch(date[0..@min(len, 10)]) orelse continue;
+                if (epoch > @divTrunc(io.milliTimestamp(), 1000)) continue;
+                const season = jsonInt(found.obj, "\"season\":");
+                const episode = jsonInt(found.obj, "\"episode\":");
+                if (season > aired.season or (season == aired.season and episode > aired.episode)) aired = .{ .season = season, .episode = episode };
+            }
+        }
+        db.tvUpsertShow(tmdb_id, state.app.tmdb.tv_name[0..state.app.tmdb.tv_name_len], state.app.tmdb.tv_poster_path[0..state.app.tmdb.tv_poster_path_len], "", aired, .{}, 0, "");
+        @import("tv_library.zig").markDirty();
+    }
 
     // Persist the season map + aired frontier the moment a show is opened.
     //
@@ -1387,11 +1600,6 @@ fn fetchSeasonsThread(tmdb_id: i32, my_gen: u32, use_cinemeta: bool, imdb_id: [1
     // the document in hand, so store it: "we don't know" stops being reachable
     // for anything the user has actually looked at.
     if (!use_cinemeta) {
-        const tp = @import("tv_pure.zig");
-        var seasons: [tp.MAX_SEASONS]tp.Season = undefined;
-        const ns = tp.parseSeasonMap(body, &seasons);
-        if (ns > 0) db.tvUpsertSeasons(tmdb_id, seasons[0..ns]);
-
         const cal_pure = @import("tv_calendar_pure.zig");
         const last = cal_pure.parseEpisodeToAir(body, "\"last_episode_to_air\":");
         const next = cal_pure.parseEpisodeToAir(body, "\"next_episode_to_air\":");
@@ -1432,6 +1640,16 @@ fn fetchSeasonsThread(tmdb_id: i32, my_gen: u32, use_cinemeta: bool, imdb_id: [1
     while (i < state.app.tmdb.tv_season_count) : (i += 1) {
         if (state.app.tmdb.tv_seasons[i].season_number >= 1) {
             sel = i;
+            break;
+        }
+    }
+    const preferred = db.tvRememberedSeason(tmdb_id) orelse blk: {
+        const next = @import("tv_library.zig").nextUpFor(tmdb_id) orelse break :blk -1;
+        break :blk next.season;
+    };
+    for (state.app.tmdb.tv_seasons[0..state.app.tmdb.tv_season_count], 0..) |season, index| {
+        if (season.season_number == preferred) {
+            sel = index;
             break;
         }
     }
@@ -1483,7 +1701,7 @@ fn nextJsonObject(json: []const u8, from: usize) ?struct { obj: []const u8, end:
     return null;
 }
 
-/// Scan TMDB /tv/{id} JSON for the `seasons` array and fill tv_seasons (cap 40).
+/// Read the seasons array into response-sized storage.
 /// Iterates complete brace-matched objects so field order/association is correct.
 fn parseSeasons(json: []const u8) void {
     const t = &state.app.tmdb;
@@ -1499,6 +1717,7 @@ fn parseSeasons(json: []const u8) void {
     const arr = json[pos..arr_end];
 
     var p: usize = 0;
+    if (!sizeSeasons(objectCount(arr, null))) return;
     while (t.tv_season_count < t.tv_seasons.len) {
         const found = nextJsonObject(arr, p) orelse break;
         const obj = found.obj;
@@ -1508,7 +1727,7 @@ fn parseSeasons(json: []const u8) void {
         s.* = .{};
         s.season_number = jsonInt(obj, "\"season_number\":");
         s.name_len = jsonStr(obj, "\"name\":\"", &s.name);
-        s.episode_count = @intCast(@max(0, jsonInt(obj, "\"episode_count\":")));
+        s.episode_count = @intCast(std.math.clamp(jsonInt(obj, "\"episode_count\":"), 0, std.math.maxInt(u16)));
         s.air_date_len = jsonStr(obj, "\"air_date\":\"", &s.air_date);
         s.poster_path_len = jsonStr(obj, "\"poster_path\":\"", &s.poster_path);
 
@@ -1526,6 +1745,7 @@ fn parseCinemetaSeasons(json: []const u8) void {
     const start = std.mem.indexOf(u8, json, key) orelse return;
     const open = start + key.len - 1;
     const arr = json[open..arrayEnd(json, open)];
+    if (!sizeSeasons(objectCount(arr, null))) return;
 
     var pos: usize = 0;
     while (true) {
@@ -1533,7 +1753,7 @@ fn parseCinemetaSeasons(json: []const u8) void {
         pos = found.end;
         const sn = jsonInt(found.obj, "\"season\":");
         const ep = jsonInt(found.obj, "\"episode\":");
-        if (sn < 1 or ep < 1) continue;
+        if (sn < 0 or ep < 1) continue;
 
         var index: ?usize = null;
         for (0..t.tv_season_count) |i| {
@@ -1593,12 +1813,13 @@ fn arrayEnd(json: []const u8, open: usize) usize {
 // ── Episodes fetch (/tv/{id}/season/{n}) ──
 
 fn fetchEpisodes(tmdb_id: i32, season_number: i32) void {
+    db.tvRememberSeason(tmdb_id, season_number);
     const use_cinemeta = state.app.tmdb.api_key_len == 0;
     if (use_cinemeta and state.app.tmdb.tv_imdb_id_len == 0) return;
     freeEpisodeStills(); // free GPU textures before overwriting episode slots
     state.app.tmdb.tv_episodes_loading = true;
     state.app.tmdb.tv_episode_count = 0;
-    const my_gen = tv_gen.load(.acquire);
+    const my_gen = tv_gen.fetchAdd(1, .acq_rel) + 1;
     const imdb_id = state.app.tmdb.tv_imdb_id;
     const imdb_id_len = state.app.tmdb.tv_imdb_id_len;
 
@@ -1610,20 +1831,26 @@ fn fetchEpisodes(tmdb_id: i32, season_number: i32) void {
 }
 
 fn fetchEpisodesThread(tmdb_id: i32, season_number: i32, my_gen: u32, use_cinemeta: bool, imdb_id: [16]u8, imdb_id_len: usize) void {
-    defer state.app.tmdb.tv_episodes_loading = false;
-
     var url_buf: [160]u8 = undefined;
     const url = if (use_cinemeta)
         std.fmt.bufPrint(&url_buf, "/meta/series/{s}.json", .{imdb_id[0..imdb_id_len]}) catch return
     else
         std.fmt.bufPrint(&url_buf, "/3/tv/{d}/season/{d}", .{ tmdb_id, season_number }) catch return;
 
-    const buf = alloc.alloc(u8, if (use_cinemeta) 1024 * 1024 else 256 * 1024) catch return;
-    defer alloc.free(buf);
+    const buf = alloc.alloc(u8, 8 * 1024 * 1024) catch {
+        publishDetail(.{ .buffer = &.{}, .len = 0, .id = tmdb_id, .generation = my_gen, .cinemeta = use_cinemeta, .season = season_number });
+        return;
+    };
     const bytes = if (use_cinemeta)
         api.cinemetaApiInto(url, buf)
     else
         api.tmdbApiInto(url, state.app.tmdb.api_key[0..state.app.tmdb.api_key_len], buf);
+    publishDetail(.{ .buffer = buf, .len = bytes, .id = tmdb_id, .generation = my_gen, .cinemeta = use_cinemeta, .season = season_number });
+}
+
+fn applyEpisodes(body: []const u8, tmdb_id: i32, season_number: i32, my_gen: u32, use_cinemeta: bool) void {
+    defer state.app.tmdb.tv_episodes_loading = false;
+    const bytes = body.len;
     if (bytes == 0) {
         if (tv_gen.load(.acquire) != my_gen) return; // superseded — drop silently
         var lb: [96]u8 = undefined;
@@ -1631,11 +1858,15 @@ fn fetchEpisodesThread(tmdb_id: i32, season_number: i32, my_gen: u32, use_cineme
         logs.pushLog("error", "tmdb", lm, true);
         return;
     }
-    const body = buf[0..bytes];
 
     if (tv_gen.load(.acquire) != my_gen) return;
 
     if (use_cinemeta) parseCinemetaEpisodes(body, season_number) else parseEpisodes(body);
+    std.mem.sort(state.TvEpisode, state.app.tmdb.tv_episodes[0..state.app.tmdb.tv_episode_count], {}, struct {
+        fn less(_: void, a: state.TvEpisode, b: state.TvEpisode) bool {
+            return a.episode_number < b.episode_number;
+        }
+    }.less);
 
     if (tv_gen.load(.acquire) != my_gen) return;
 
@@ -1644,14 +1875,15 @@ fn fetchEpisodesThread(tmdb_id: i32, season_number: i32, my_gen: u32, use_cineme
     const count = state.app.tmdb.tv_episode_count;
     for (0..@min(count, state.app.tmdb.tv_episode_watched.len)) |i| state.app.tmdb.tv_episode_watched[i] = false;
     if (count > 0 and season_number >= 0) {
-        db.tvLoadWatched(tmdb_id, @intCast(season_number), state.app.tmdb.tv_episode_watched[0..count]);
+        for (state.app.tmdb.tv_episodes[0..count], 0..) |episode, index| {
+            state.app.tmdb.tv_episode_watched[index] = db.tvIsWatched(tmdb_id, season_number, episode.episode_number);
+        }
     }
 
     logs.pushLog("info", "tmdb", "TV episodes loaded", false);
 }
 
-/// Scan TMDB /tv/{id}/season/{n} JSON for the `episodes` array, filling
-/// tv_episodes (cap 120).
+/// Read the episodes array into response-sized storage.
 fn parseEpisodes(json: []const u8) void {
     const t = &state.app.tmdb;
     t.tv_episode_count = 0;
@@ -1663,6 +1895,7 @@ fn parseEpisodes(json: []const u8) void {
     const arr_end = arrayEnd(json, pos);
     const arr = json[pos..arr_end];
 
+    if (!sizeEpisodes(objectCount(arr, null))) return;
     var p: usize = 0;
     while (t.tv_episode_count < t.tv_episodes.len) {
         const found = nextJsonObject(arr, p) orelse break;
@@ -1691,6 +1924,7 @@ fn parseCinemetaEpisodes(json: []const u8, season_number: i32) void {
     const start = std.mem.indexOf(u8, json, key) orelse return;
     const open = start + key.len - 1;
     const arr = json[open..arrayEnd(json, open)];
+    if (!sizeEpisodes(objectCount(arr, season_number))) return;
 
     var pos: usize = 0;
     while (t.tv_episode_count < t.tv_episodes.len) {
@@ -1704,6 +1938,7 @@ fn parseCinemetaEpisodes(json: []const u8, season_number: i32) void {
         e.* = .{};
         e.episode_number = episode_number;
         e.name_len = jsonStr(found.obj, "\"title\":\"", &e.name);
+        if (e.name_len == 0) e.name_len = jsonStr(found.obj, "\"name\":\"", &e.name);
         if (e.name_len == 0) {
             const name = std.fmt.bufPrint(&e.name, "Episode {d}", .{episode_number}) catch "";
             e.name_len = name.len;
@@ -1961,6 +2196,118 @@ fn playTvEpisode(episode: i32) void {
 /// finishes. Read by the Resume / Play-latest buttons each frame to render
 /// their "Finding…" state — see tv_pure.playAction.
 pub var episode_play_pending: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+var episode_mutex = @import("../core/sync.zig").Mutex{};
+var episode_generation: std.atomic.Value(u64) = .init(0);
+var episode_query: [256]u8 = undefined;
+var episode_query_len: usize = 0;
+var attempted_urls: [3][2048]u8 = undefined;
+var attempted_lens: [3]usize = .{ 0, 0, 0 };
+var attempt_count: usize = 0;
+var attempt_started_ms: i64 = 0;
+var attempt_ready: bool = false;
+
+pub fn armStoredEpisode(id: i32, season: i32, episode: i32, source: []const u8) void {
+    episode_mutex.lock();
+    defer episode_mutex.unlock();
+    state.app.playing_episode = .{};
+    state.app.pending_watch = .{};
+    if (id == 0 or season < 0 or episode < 1) return;
+    var shows: [@import("tv_pure.zig").MAX_SHOWS]db.TvShowRow = undefined;
+    const n = db.tvGetShows(&shows);
+    const pw = &state.app.pending_watch;
+    for (shows[0..n]) |sh| {
+        if (sh.tmdb_id != id) continue;
+        pw.name_len = @min(sh.name_len, pw.name.len);
+        @memcpy(pw.name[0..pw.name_len], sh.name[0..pw.name_len]);
+        pw.poster_path_len = @min(sh.poster_path_len, pw.poster_path.len);
+        @memcpy(pw.poster_path[0..pw.poster_path_len], sh.poster_path[0..pw.poster_path_len]);
+        break;
+    }
+    pw.tmdb_id = id;
+    pw.season = season;
+    pw.episode = episode;
+    pw.armed = true;
+    state.app.playing_episode.tmdb_id = id;
+    state.app.playing_episode.season = season;
+    state.app.playing_episode.episode = episode;
+    state.app.playing_episode.armed = true;
+    if (pw.name_len > 0 and source.len > 0 and source.len <= attempted_urls[0].len) {
+        _ = episode_generation.fetchAdd(1, .acq_rel);
+        episode_query_len = tmdb_pure.episodeQuery(pw.name[0..pw.name_len], season, episode, &episode_query).len;
+        attempt_count = 1;
+        @memcpy(attempted_urls[0][0..source.len], source);
+        attempted_lens[0] = source.len;
+        attempt_started_ms = io.monotonicMilliTimestamp();
+        attempt_ready = false;
+    }
+}
+
+fn spawnEpisodeResolve(generation: u64) void {
+    episode_play_pending.store(true, .release);
+    state.wakeUi();
+    if (@import("../core/workers.zig").spawnLegacy(struct {
+        fn run(query: [256]u8, len: usize, gen: u64) void {
+            defer {
+                episode_mutex.lock();
+                defer episode_mutex.unlock();
+                if (episode_generation.load(.acquire) == gen) episode_play_pending.store(false, .release);
+                state.wakeUi();
+            }
+            smartPlayEpisode(query[0..len], gen);
+        }
+    }.run, .{ episode_query, episode_query_len, generation })) |th| {
+        @import("../core/workers.zig").release(th);
+    } else |_| {
+        episode_play_pending.store(false, .release);
+        search.setUniversalQuery(episode_query[0..episode_query_len]);
+        state.navigateToTab(.Search);
+    }
+}
+
+/// Bounded fallback, never retry the same URL or take over unrelated media.
+pub fn retryEpisodeSource(url: []const u8) bool {
+    episode_mutex.lock();
+    defer episode_mutex.unlock();
+    if (attempt_count == 0 or attempt_started_ms == 0) return false;
+    const index = attempt_count - 1;
+    const decision = tmdb_pure.episodeRetryDecision(attempt_count, std.mem.eql(u8, url, attempted_urls[index][0..attempted_lens[index]]), episode_play_pending.load(.acquire));
+    if (decision == .ignore) return false;
+    attempt_started_ms = 0;
+    attempt_ready = false;
+    if (decision == .manual) {
+        search.setUniversalQuery(episode_query[0..episode_query_len]);
+        state.navigateToTab(.Search);
+        state.showToast("Sources failed. Choose another source to continue.");
+        return true;
+    }
+    state.app.playing_episode.armed = true;
+    state.app.playing_episode.active = false;
+    spawnEpisodeResolve(episode_generation.load(.acquire));
+    state.showToast("Stream failed. Trying another source…");
+    return true;
+}
+
+pub fn checkEpisodeStartup() void {
+    var url: [2048]u8 = undefined;
+    var len: usize = 0;
+    episode_mutex.lock();
+    if (!attempt_ready and attempt_started_ms != 0 and io.monotonicMilliTimestamp() - attempt_started_ms > 30_000 and attempt_count > 0) {
+        const p = if (state.app.active_player_idx < state.app.players.items.len) state.app.players.items[state.app.active_player_idx] else null;
+        if (p) |player| {
+            const source = if (player.is_torrent and player.source_url_len > 0) player.source_url[0..player.source_url_len] else player.current_url[0..player.current_url_len];
+            if (!std.mem.eql(u8, source, attempted_urls[attempt_count - 1][0..attempted_lens[attempt_count - 1]])) {
+                attempt_started_ms = 0;
+            } else if (player.last_seen_pos > 0 and !player.is_loading and !player.cached_paused_for_cache) {
+                attempt_ready = true;
+            } else {
+                len = attempted_lens[attempt_count - 1];
+                @memcpy(url[0..len], attempted_urls[attempt_count - 1][0..len]);
+            }
+        }
+    }
+    episode_mutex.unlock();
+    if (len > 0) _ = retryEpisodeSource(url[0..len]);
+}
 
 pub fn playEpisodeOf(
     tmdb_id: i32,
@@ -1977,6 +2324,17 @@ pub fn playEpisodeOf(
         return;
     }
 
+    episode_mutex.lock();
+    defer episode_mutex.unlock();
+    const generation = episode_generation.fetchAdd(1, .acq_rel) + 1;
+    resolver.cancel();
+    attempt_count = 0;
+    attempt_started_ms = 0;
+    episode_play_pending.store(true, .release);
+    state.gotoPlayer();
+    for (state.app.players.items) |p| p.stopForShutdown();
+    state.wakeUi();
+
     // "S2E4" on the loading screen's meta line — the episode you are waiting
     // for, not just the show name.
     var epc_buf: [16]u8 = undefined;
@@ -1984,7 +2342,7 @@ pub fn playEpisodeOf(
     state.stashPendingPlayFull(name, poster_path, ep_overview, .tv, "", 0, ep_code);
 
     // Arm the deferred watch commit. The player's time-pos stream commits it
-    // (DB + Trakt + Continue) once real playback passes ~2 minutes — clicking
+    // (DB + Trakt + Continue) once actual viewing reaches completion — clicking
     // ▶ used to mark watched instantly, wrong now that a resolve (and possibly
     // a manual pick) sits between click and playback.
     {
@@ -2004,7 +2362,7 @@ pub fn playEpisodeOf(
 
     // Arm the per-episode resume binding. The next file the player loads claims
     // this arm and records its URL; from then on, save/resume only fire for THAT
-    // url (see state.playing_episode). pending_watch is consumed at the 2-minute
+    // url (see state.playing_episode). pending_watch is consumed at the completion
     // commit and so cannot carry the binding for the whole playback.
     {
         const pe = &state.app.playing_episode;
@@ -2027,30 +2385,6 @@ pub fn playEpisodeOf(
     const q = @import("tmdb_pure.zig").episodeQuery(raw_name, season, episode, &qbuf);
 
     // Smart play in a worker (copy the query BY VALUE per thread conventions).
-    const S = struct {
-        var busy: bool = false;
-        var query: [256]u8 = undefined;
-        var qlen: usize = 0;
-        fn worker() void {
-            defer {
-                @This().busy = false;
-                episode_play_pending.store(false, .release);
-                // This runs on the resolver thread; passing null asks DVUI to
-                // discover a current window on the wrong thread and emits a
-                // warning (or can race during shutdown). Route through the
-                // thread-safe explicit-window helper instead.
-                state.wakeUi(); // repaint the button back to idle
-            }
-            smartPlayEpisode(@This().query[0..@This().qlen]);
-        }
-    };
-    if (S.busy) {
-        // Previously a bare `return` — the second click vanished with no toast,
-        // no button change, nothing. Single-flight is correct; silence isn't.
-        state.showToast("Already finding a stream…");
-        return;
-    }
-    S.busy = true;
     // Drives the Resume / Play-latest buttons' "Finding…" state. The toast
     // expires after 3.5s but the resolve can run ~15s, so the button is the
     // only feedback that survives the whole wait.
@@ -2059,18 +2393,9 @@ pub fn playEpisodeOf(
     // so without an explicit repaint the busy state would not appear until the
     // next incidental event — exactly the "no instant feedback" symptom.
     state.wakeUi();
-    @memset(&S.query, 0);
-    @memcpy(S.query[0..q.len], q);
-    S.qlen = q.len;
-    if (@import("../core/workers.zig").spawnLegacy(S.worker, .{})) |th| {
-        @import("../core/workers.zig").release(th);
-    } else |_| {
-        S.busy = false;
-        episode_play_pending.store(false, .release);
-        // Spawn failed — degrade to the visible source picker.
-        search.setUniversalQuery(q);
-        state.navigateToTab(.Search);
-    }
+    @memcpy(episode_query[0..q.len], q);
+    episode_query_len = q.len;
+    spawnEpisodeResolve(generation);
     state.showToast("Finding the best stream…");
 }
 
@@ -2078,14 +2403,15 @@ pub fn playEpisodeOf(
 /// candidate (rank order; dead magnets and weak title-matches never auto-play
 /// — resolver_rank.pickBest, pure + tested), else land on the Search picker
 /// with the results already populated.
-fn smartPlayEpisode(query: []const u8) void {
+fn smartPlayEpisode(query: []const u8, generation: u64) void {
     const rank = @import("resolver_rank.zig");
-    resolver.resolve(query, "tv");
-
-    var waited: usize = 0;
-    while (resolver.isResolving() and waited < 150) : (waited += 1) {
-        io.sleep(100 * std.time.ns_per_ms);
+    episode_mutex.lock();
+    if (episode_generation.load(.acquire) != generation) {
+        episode_mutex.unlock();
+        return;
     }
+    resolver.resolve(query, "tv");
+    episode_mutex.unlock();
 
     // Snapshot the chosen candidate under the lock (results are kept
     // insertion-sorted by score, so rank order == array order).
@@ -2094,33 +2420,53 @@ fn smartPlayEpisode(query: []const u8) void {
     var chosen_name: [256]u8 = undefined;
     var chosen_name_len: usize = 0;
     var chosen_source: resolver.SourceType = .torrent;
-    {
-        resolver.results_mutex.lock();
-        defer resolver.results_mutex.unlock();
-        var cands: [64]rank.PickCand = undefined;
-        const n = @min(resolver.result_count, cands.len);
-        for (0..n) |ci| {
-            const it = &resolver.results[ci];
-            const playable = (it.source == .stremio or it.source == .torrent) and it.url_len > 0;
-            cands[ci] = .{
-                .playable = playable,
-                .needs_seeds = it.source == .torrent,
-                .match_pct = it.match_pct,
-                .seeds = it.seeds,
-            };
+    var waited: usize = 0;
+    while (waited <= 150) : (waited += 1) {
+        if (@import("../core/workers.zig").isQuitting()) return;
+        {
+            episode_mutex.lock();
+            defer episode_mutex.unlock();
+            if (episode_generation.load(.acquire) != generation) return;
+            resolver.results_mutex.lock();
+            defer resolver.results_mutex.unlock();
+            var cands: [64]rank.PickCand = undefined;
+            const n = @min(resolver.result_count, cands.len);
+            for (0..n) |ci| {
+                const it = &resolver.results[ci];
+                var playable = (it.source == .stremio or it.source == .torrent) and it.url_len > 0;
+                for (0..attempt_count) |a| {
+                    if (std.mem.eql(u8, it.url[0..it.url_len], attempted_urls[a][0..attempted_lens[a]])) playable = false;
+                }
+                cands[ci] = .{
+                    .playable = playable,
+                    .needs_seeds = it.source == .torrent,
+                    .match_pct = it.match_pct,
+                    .seeds = it.seeds,
+                };
+            }
+            if (rank.pickForStartup(cands[0..n], resolver.isResolving() and waited < 150)) |pi| {
+                const it = &resolver.results[pi];
+                chosen_url_len = it.url_len;
+                @memcpy(chosen_url[0..it.url_len], it.url[0..it.url_len]);
+                chosen_name_len = @min(it.name_len, chosen_name.len);
+                @memcpy(chosen_name[0..chosen_name_len], it.name[0..chosen_name_len]);
+                chosen_source = it.source;
+            }
         }
-        if (rank.pickBest(cands[0..n])) |pi| {
-            const it = &resolver.results[pi];
-            chosen_url_len = it.url_len;
-            @memcpy(chosen_url[0..it.url_len], it.url[0..it.url_len]);
-            chosen_name_len = @min(it.name_len, chosen_name.len);
-            @memcpy(chosen_name[0..chosen_name_len], it.name[0..chosen_name_len]);
-            chosen_source = it.source;
-        }
+        if (chosen_url_len > 0 or !resolver.isResolving()) break;
+        io.sleep(100 * std.time.ns_per_ms);
     }
 
+    episode_mutex.lock();
+    defer episode_mutex.unlock();
+    if (episode_generation.load(.acquire) != generation or @import("../core/workers.zig").isQuitting()) return;
     if (chosen_url_len > 0) {
         const url = chosen_url[0..chosen_url_len];
+        @memcpy(attempted_urls[attempt_count][0..url.len], url);
+        attempted_lens[attempt_count] = url.len;
+        attempt_count += 1;
+        attempt_started_ms = io.monotonicMilliTimestamp();
+        attempt_ready = false;
         // The stash made by playEpisodeOf describes the show the user ASKED
         // for. Attach it only if the release we picked really is that show —
         // the rank bar (60%) is deliberately loose, and a release whose
@@ -2181,23 +2527,39 @@ pub fn commitPendingWatch() void {
             }
         }
     }
-    logs.pushLog("info", "tmdb", "Episode marked watched (2min played)", false);
+    logs.pushLog("info", "tmdb", "Episode completed (90% viewed)", false);
 }
 
 // ══════════════════════════════════════════════════════════
 // TV detail view UI
 // ══════════════════════════════════════════════════════════
 
+fn tvWrappedText(src: std.builtin.SourceLocation, value: []const u8, options: dvui.Options) void {
+    var text = dvui.textLayout(src, .{}, options.override(.{ .expand = .horizontal, .background = false }));
+    text.addText(safeUtf8(value), .{});
+    text.deinit();
+}
+
 fn renderTvDetail() void {
     const t = &state.app.tmdb;
     const poster = @import("../core/poster.zig");
 
-    var page = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+    const live_width = @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().w, state.app.ui_scale);
+    const parent_width = dvui.parentGet().data().contentRect().w;
+    const layout = @import("../ui/tv_layout_pure.zig").calculate(@max(1, @min(live_width - 24, if (parent_width > 1) parent_width else live_width - 24)));
+    // The header, season controls and episodes share one vertical scroller.
+    // A short window must not lose its episode list below a fixed tall header.
+    var page_scroll = dvui.scrollArea(@src(), .{ .horizontal = .none }, .{ .expand = .both, .background = false });
+    defer page_scroll.deinit();
+    var page = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .min_size_content = .{ .w = layout.width, .h = 0 },
+        .max_size_content = dvui.Options.MaxSize.width(layout.width),
+    });
     defer page.deinit();
 
     // ── Header: Back + show name ──
     {
-        var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        var hdr = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .horizontal,
             .padding = .{ .x = 10, .y = 8, .w = 10, .h = 8 },
             .background = true,
@@ -2216,7 +2578,7 @@ fn renderTvDetail() void {
                 .corner_radius = theme.dims.rad_sm,
                 .padding = .{ .x = 6, .y = 4, .w = 10, .h = 4 },
                 .margin = .{ .x = 0, .y = 0, .w = 10, .h = 0 },
-                .gravity_y = 0.5,
+                .gravity_y = 0,
             });
             defer back.deinit();
             var back_hover = false;
@@ -2241,15 +2603,19 @@ fn renderTvDetail() void {
         var tvn_buf: [128]u8 = undefined;
         // The name expands, so it eats the slack and pushes the status chips to
         // the right edge of the header.
-        _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(t.tv_name[0..@min(t.tv_name_len, t.tv_name.len)], &tvn_buf)}, .{
+        var show_title = dvui.textLayout(@src(), .{}, .{
+            .background = false,
             .color_text = theme.colors.text_primary,
             .expand = .horizontal,
             .font = dvui.themeGet().font_heading,
-            .gravity_y = 0.5,
         });
+        show_title.addText(safeUtf8Buf(t.tv_name[0..@min(t.tv_name_len, t.tv_name.len)], &tvn_buf), .{});
+        show_title.deinit();
 
         // Plan / Watching / Completed / Dropped — changeable at any time.
+        var status_row = dvui.flexbox(@src(), .{}, .{ .expand = .horizontal });
         renderStatusChips();
+        status_row.deinit();
     }
 
     // ── TVmaze "Next episode" line (keyless; fills TMDB's gap). Only shown for
@@ -2257,7 +2623,7 @@ fn renderTvDetail() void {
     {
         var next_buf: [96]u8 = undefined;
         if (@import("tvmaze.zig").nextLabel(t.tv_id, &next_buf)) |next_str| {
-            _ = dvui.label(@src(), "{s}", .{next_str}, .{
+            tvWrappedText(@src(), next_str, .{
                 .color_text = theme.colors.accent,
                 .padding = .{ .x = 14, .y = 4, .w = 14, .h = 2 },
             });
@@ -2270,7 +2636,7 @@ fn renderTvDetail() void {
         var rat_buf: [96]u8 = undefined;
         if (@import("omdb.zig").ratingsLabel(t.tv_id, &rat_buf)) |rat_str| {
             var safe_buf: [96]u8 = undefined;
-            _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(rat_str, &safe_buf)}, .{
+            tvWrappedText(@src(), safeUtf8Buf(rat_str, &safe_buf), .{
                 .color_text = theme.colors.text_secondary,
                 .padding = .{ .x = 14, .y = 2, .w = 14, .h = 2 },
             });
@@ -2278,7 +2644,7 @@ fn renderTvDetail() void {
         var det_buf: [160]u8 = undefined;
         if (@import("omdb.zig").detailsLabel(t.tv_id, &det_buf)) |det_str| {
             var safe_buf: [160]u8 = undefined;
-            _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(det_str, &safe_buf)}, .{
+            tvWrappedText(@src(), safeUtf8Buf(det_str, &safe_buf), .{
                 .color_text = theme.colors.text_tertiary,
                 .padding = .{ .x = 14, .y = 0, .w = 14, .h = 4 },
             });
@@ -2295,34 +2661,54 @@ fn renderTvDetail() void {
     }
 
     {
-        var sbar = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
+        var sbar = dvui.menu(@src(), .horizontal, .{
             .expand = .horizontal,
             .padding = .{ .x = 10, .y = 8, .w = 10, .h = 4 },
         });
         defer sbar.deinit();
-
-        var si: usize = 0;
-        while (si < t.tv_season_count) : (si += 1) {
-            const sn = t.tv_seasons[si].season_number;
-            const active = si == t.tv_sel_season;
-            var lbl_buf: [16]u8 = undefined;
-            const lbl = if (sn == 0)
-                "Specials"
-            else
-                (std.fmt.bufPrint(&lbl_buf, "S{d}", .{sn}) catch "S?");
-            if (dvui.button(@src(), lbl, .{}, .{
-                .id_extra = si + 30000,
+        var season_buf: [32]u8 = undefined;
+        const selected_season = if (t.tv_sel_season < t.tv_season_count) t.tv_seasons[t.tv_sel_season].season_number else 1;
+        const season_label = if (selected_season == 0) "Specials" else (std.fmt.bufPrint(&season_buf, "Season {d}", .{@as(u32, @intCast(@max(0, selected_season)))}) catch "Season");
+        if (dvui.menuItemLabel(@src(), season_label, .{ .submenu = true }, .{
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = theme.colors.text_primary,
+            .padding = dvui.Rect.all(8),
+            .corner_radius = theme.dims.rad_sm,
+        })) |anchor| {
+            var popup = dvui.floatingMenu(@src(), .{ .from = anchor }, .{
                 .background = true,
-                .color_fill = if (active) theme.colors.accent else theme.colors.bg_surface,
-                .color_text = if (active) dvui.Color.white else theme.colors.text_secondary,
-                .corner_radius = theme.dims.rad_sm,
-                .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
-                .margin = .{ .x = 0, .y = 0, .w = 6, .h = 2 },
-            })) {
-                if (si != t.tv_sel_season) {
-                    t.tv_sel_season = si;
-                    _ = tv_gen.fetchAdd(1, .acq_rel);
-                    fetchEpisodes(t.tv_id, sn);
+                .color_fill = theme.colors.bg_surface,
+                .color_border = theme.colors.border_subtle,
+                .border = dvui.Rect.all(1),
+                .padding = dvui.Rect.all(2),
+            });
+            defer popup.deinit();
+            var choices = dvui.menu(@src(), .vertical, .{});
+            defer choices.deinit();
+            var si: usize = 0;
+            while (si < t.tv_season_count) : (si += 1) {
+                const sn = t.tv_seasons[si].season_number;
+                const active = si == t.tv_sel_season;
+                var lbl_buf: [16]u8 = undefined;
+                const lbl = if (sn == 0)
+                    "Specials"
+                else
+                    (std.fmt.bufPrint(&lbl_buf, "Season {d}", .{@as(u32, @intCast(@max(0, sn)))}) catch "Season");
+                if (dvui.menuItemLabel(@src(), lbl, .{}, .{
+                    .id_extra = si + 30000,
+                    .background = true,
+                    .color_fill = if (active) theme.colors.accent else theme.colors.bg_surface,
+                    .color_text = if (active) theme.colors.text_on_accent else theme.colors.text_secondary,
+                    .corner_radius = theme.dims.rad_sm,
+                    .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
+                    .margin = .{ .x = 0, .y = 0, .w = 6, .h = 2 },
+                }) != null) {
+                    choices.close();
+                    if (si != t.tv_sel_season) {
+                        t.tv_sel_season = si;
+                        _ = tv_gen.fetchAdd(1, .acq_rel);
+                        fetchEpisodes(t.tv_id, sn);
+                    }
                 }
             }
         }
@@ -2330,7 +2716,7 @@ fn renderTvDetail() void {
 
     // ── Season info + watched progress bar ──
     if (t.tv_episode_count > 0 or (t.tv_sel_season < t.tv_season_count)) {
-        var sinfo = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        var sinfo = dvui.box(@src(), .{ .dir = if (layout.stacked) .vertical else .horizontal }, .{
             .expand = .horizontal,
             .padding = .{ .x = 12, .y = 0, .w = 12, .h = 6 },
         });
@@ -2348,14 +2734,16 @@ fn renderTvDetail() void {
                 (std.fmt.bufPrint(&si_buf, "{d} episodes", .{ep_count}) catch "");
             _ = dvui.label(@src(), "{s}", .{si_str}, .{
                 .color_text = theme.colors.text_secondary,
-                .gravity_y = 0.5,
+                .gravity_y = if (layout.stacked) 0 else 0.5,
             });
         }
 
         // Spacer + watched count (right-aligned)
         if (t.tv_episode_count > 0) {
-            var spacer = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
-            spacer.deinit();
+            if (!layout.stacked) {
+                var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+                spacer.deinit();
+            }
 
             const watched = tvWatchedCount();
             const total = t.tv_episode_count;
@@ -2363,7 +2751,7 @@ fn renderTvDetail() void {
             const ws = std.fmt.bufPrint(&wbuf, "{d}/{d} watched", .{ watched, total }) catch "";
             _ = dvui.label(@src(), "{s}", .{ws}, .{
                 .color_text = theme.colors.text_secondary,
-                .gravity_y = 0.5,
+                .gravity_y = if (layout.stacked) 0 else 0.5,
             });
         }
     }
@@ -2402,11 +2790,11 @@ fn renderTvDetail() void {
     // offering a Resume that would go hunting for an episode that doesn't exist.
     if (t.tv_episode_count > 0) {
         const nxt = tvNextUp();
-        var prow = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        var prow = dvui.flexbox(@src(), .{}, .{
             .expand = .horizontal,
             .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 },
             .background = true,
-            .color_fill = dvui.Color{ .r = 16, .g = 18, .b = 26, .a = 255 },
+            .color_fill = theme.colors.bg_surface,
             .color_border = theme.colors.border_subtle,
             .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
         });
@@ -2570,16 +2958,13 @@ fn renderTvDetail() void {
             .margin = .{ .x = 14, .y = 4, .w = 0, .h = 0 },
         })) {
             const season = tvSelSeasonNumber();
-            if (season >= 0) fetchEpisodes(t.tv_id, season);
+            if (season >= 0) fetchEpisodes(t.tv_id, season) else fetchSeasons(t.tv_id);
         }
         return;
     }
 
     const next_ep_num = tvNextUnwatched();
     const sel_season_num = tvSelSeasonNumber(); // for TVmaze air-date backfill
-
-    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = false });
-    defer scroll.deinit();
 
     var ei: usize = 0;
     while (ei < t.tv_episode_count) : (ei += 1) {
@@ -2591,9 +2976,9 @@ fn renderTvDetail() void {
         _ = poster.uploadIfReady(&e.still_pixels, e.still_w, e.still_h, &e.still_tex);
 
         const card_fill = if (is_watched)
-            dvui.Color{ .r = 16, .g = 18, .b = 24, .a = 255 }
+            theme.colors.bg_deep
         else if (is_next)
-            dvui.Color{ .r = 22, .g = 26, .b = 36, .a = 255 }
+            theme.colors.bg_elevated
         else
             theme.colors.bg_surface;
 
@@ -2603,13 +2988,14 @@ fn renderTvDetail() void {
         else
             .{ .x = 0, .y = 0, .w = 0, .h = 1 };
 
-        var ecard = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        var ecard = dvui.box(@src(), .{ .dir = if (layout.stacked) .vertical else .horizontal }, .{
             .id_extra = ei + 40000,
             .expand = .horizontal,
             .background = true,
             .color_fill = card_fill,
             .color_border = border_color,
             .border = border_rect,
+            .padding = dvui.Rect.all(8),
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
         });
         defer ecard.deinit();
@@ -2619,16 +3005,21 @@ fn renderTvDetail() void {
             var still_box = dvui.box(@src(), .{ .dir = .vertical }, .{
                 .id_extra = ei + 42000,
                 .background = true,
-                .color_fill = dvui.Color{ .r = 12, .g = 14, .b = 20, .a = 255 },
-                .min_size_content = .{ .w = 160, .h = 90 },
-                .gravity_y = 0.5,
+                .color_fill = theme.colors.bg_elevated,
+                .min_size_content = .{ .w = layout.thumbnail_width, .h = layout.thumbnail_height },
+                .max_size_content = .{ .w = layout.thumbnail_width, .h = layout.thumbnail_height },
+                .gravity_x = if (layout.stacked) 0.5 else 0,
+                .gravity_y = 0,
             });
             defer still_box.deinit();
 
             if (e.still_tex) |*tex| {
-                _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
+                _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* }, .shrink = .ratio }, .{
                     .id_extra = ei + 42100,
-                    .expand = .both,
+                    .expand = .ratio,
+                    .gravity_x = 0.5,
+                    .gravity_y = 0.5,
+                    .label = .{ .text = safeUtf8(e.name[0..@min(e.name_len, e.name.len)]) },
                 });
             } else {
                 // Placeholder: episode number centered
@@ -2636,14 +3027,14 @@ fn renderTvDetail() void {
                 const ep_num_str = std.fmt.bufPrint(&ep_num_buf, "{d}", .{e.episode_number}) catch "";
                 _ = dvui.label(@src(), "{s}", .{ep_num_str}, .{
                     .id_extra = ei + 42200,
-                    .color_text = dvui.Color{ .r = 60, .g = 65, .b = 80, .a = 255 },
+                    .color_text = theme.colors.text_secondary,
                     .gravity_x = 0.5,
                     .gravity_y = 0.5,
                     .expand = .both,
                     .font = dvui.themeGet().font_heading,
                 });
                 // Start the fetch if available and not yet tried
-                if (!e.still_attempted and e.still_path_len > 0) {
+                if (still_box.data().visible() and !e.still_attempted and e.still_path_len > 0) {
                     fetchEpisodeStill(e);
                 }
             }
@@ -2653,14 +3044,14 @@ fn renderTvDetail() void {
         {
             var info = dvui.box(@src(), .{ .dir = .vertical }, .{
                 .id_extra = ei + 43000,
-                .expand = .both,
+                .expand = .horizontal,
                 .padding = .{ .x = 10, .y = 8, .w = 10, .h = 8 },
             });
             defer info.deinit();
 
             // Title row: "E{n}" chip + episode name (expandable) + [▶] play button
             {
-                var title_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                var title_row = dvui.flexbox(@src(), .{}, .{
                     .id_extra = ei + 43100,
                     .expand = .horizontal,
                 });
@@ -2684,26 +3075,12 @@ fn renderTvDetail() void {
                         .id_extra = ei + 43115,
                         .background = true,
                         .color_fill = theme.colors.accent,
-                        .color_text = dvui.Color.white,
+                        .color_text = theme.colors.text_on_accent,
                         .corner_radius = theme.dims.rad_sm,
                         .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
                         .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
                         .gravity_y = 0.5,
                     });
-                }
-
-                // Episode title (clickable → play)
-                var ep_name_buf: [128]u8 = undefined;
-                const ep_name = safeUtf8Buf(e.name[0..@min(e.name_len, e.name.len)], &ep_name_buf);
-                if (dvui.button(@src(), ep_name, .{}, .{
-                    .id_extra = ei + 43120,
-                    .expand = .horizontal,
-                    .color_text = if (is_watched) theme.colors.text_secondary else theme.colors.text_primary,
-                    .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                    .padding = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
-                    .gravity_y = 0.5,
-                })) {
-                    playTvEpisode(e.episode_number);
                 }
 
                 // Play button — lucide icon in an accent pill.
@@ -2735,33 +3112,38 @@ fn renderTvDetail() void {
                 }
             }
 
-            // Overview snippet (truncated to 120 chars)
+            // Titles and descriptions wrap independently of the action row.
+            var ep_name_buf: [128]u8 = undefined;
+            var episode_title = dvui.textLayout(@src(), .{}, .{
+                .background = false,
+                .id_extra = ei + 43120,
+                .expand = .horizontal,
+                .color_text = if (is_watched) theme.colors.text_secondary else theme.colors.text_primary,
+                .font = dvui.themeGet().font_heading,
+            });
+            if (episode_title.addTextClick(safeUtf8Buf(e.name[0..@min(e.name_len, e.name.len)], &ep_name_buf), .{}) != null) {
+                playTvEpisode(e.episode_number);
+            }
+            episode_title.deinit();
+
+            // Show the full stored overview; never cut a sentence at 120 bytes.
             if (e.overview_len > 0) {
                 const ov_raw = e.overview[0..@min(e.overview_len, e.overview.len)];
-                var ov_buf: [128]u8 = undefined;
-                const ov_str = if (ov_raw.len <= 120)
-                    safeUtf8Buf(ov_raw, &ov_buf)
-                else blk: {
-                    @memcpy(ov_buf[0..117], ov_raw[0..117]);
-                    ov_buf[117] = '.';
-                    ov_buf[118] = '.';
-                    ov_buf[119] = '.';
-                    // In-place validation only — ov_buf is already a stable
-                    // copy. safeUtf8Buf(ov_buf, &ov_buf) was an @memcpy-
-                    // arguments-alias PANIC for any overview > 120 bytes.
-                    break :blk safeUtf8(ov_buf[0..120]);
-                };
-                _ = dvui.label(@src(), "{s}", .{ov_str}, .{
+                var overview = dvui.textLayout(@src(), .{}, .{
+                    .background = false,
                     .id_extra = ei + 43200,
-                    .color_text = dvui.Color{ .r = 140, .g = 145, .b = 160, .a = 255 },
+                    .expand = .horizontal,
+                    .color_text = theme.colors.text_secondary,
                     .padding = .{ .x = 0, .y = 4, .w = 0, .h = 2 },
                 });
+                overview.addText(safeUtf8(ov_raw), .{});
+                overview.deinit();
             }
 
             // Meta line: air_date · runtime · [star icon] rating (the old
             // star text glyph was missing from the UI font — lucide instead).
             {
-                var mrow = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = ei + 43300 });
+                var mrow = dvui.flexbox(@src(), .{}, .{ .id_extra = ei + 43300, .expand = .horizontal });
                 defer mrow.deinit();
 
                 var meta: [48]u8 = undefined;

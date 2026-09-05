@@ -1,4 +1,8 @@
 const std = @import("std");
+
+test "TV detail module" {
+    _ = @import("services/tmdb.zig");
+}
 const builtin = @import("builtin");
 const dvui = @import("dvui");
 const c = @import("core/c.zig");
@@ -480,6 +484,7 @@ fn forwardToRunningInstance(arg: []const u8) bool {
 }
 
 pub fn appDeinit() void {
+    @import("core/config.zig").captureCloseSession();
     const workers = @import("core/workers.zig");
     // Stop audible/visible media before the surface disappears. Player
     // destruction intentionally happens later, after workers are drained, but
@@ -555,6 +560,9 @@ pub fn appDeinit() void {
     @import("services/comics.zig").freeSearchCovers();
 
     // Clean up UI arrays
+    @import("services/tmdb.zig").deinitDetail();
+    @import("services/episode_art.zig").deinit();
+    @import("services/tv_library.zig").deinitPosters();
     state.app.tmdb.results.deinit(@import("core/alloc.zig").allocator);
     state.app.tmdb.pending_results.deinit(@import("core/alloc.zig").allocator);
     state.app.tmdb.favorites.deinit(@import("core/alloc.zig").allocator);
@@ -878,7 +886,11 @@ fn appFrame() !dvui.App.Result {
         const whp = @import("player/watch_history_pure.zig");
         // Seconds-accurate rows gate on the exact position (>=30s in, <95% of
         // duration); legacy percent-only rows keep the old percent predicate.
-        const offer = state.app.players.items.len == 0 and wh.count > 0 and blk: {
+        if (state.app.session_saved and !state.app.incognito_mode and state.app.players.items.len == 0) {
+            state.app.resume_prompt_session = true;
+            state.app.resume_prompt_active = true;
+        }
+        const offer = !state.app.session_saved and state.app.players.items.len == 0 and wh.count > 0 and blk: {
             const e0 = &wh.entries[0];
             if (e0.link_len == 0) break :blk false;
             if (e0.position_secs > 0) break :blk whp.resumeEligible(e0.position_secs, e0.duration_secs);
@@ -1212,6 +1224,8 @@ fn appFrame() !dvui.App.Result {
     }
 
     player.updateTorrentBackgroundTasks();
+    @import("services/tmdb.zig").checkEpisodeStartup();
+    @import("services/tmdb.zig").applyPendingDetail();
 
     // Native macOS Now Playing + hardware media keys: drain pending remote
     // commands (play/pause/seek from media keys, AirPods, Control Center)

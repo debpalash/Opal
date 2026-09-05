@@ -491,11 +491,23 @@ pub const AppState = struct {
     session_restore_lens: [16]usize = std.mem.zeroes([16]usize),
     session_restore_count: usize = 0,
     session_restore_done: bool = false,
+    session_saved: bool = false,
+    session_close_captured: bool = false,
+    session_route: @import("router.zig").Route = .home,
+    session_position: f64 = 0,
+    session_duration: f64 = 0,
+    session_paused: bool = true,
+    session_speed: f64 = 1,
+    session_file_idx: i32 = -1,
+    session_tv_id: i32 = 0,
+    session_tv_season: i32 = 0,
+    session_tv_episode: i32 = 0,
+    resume_prompt_session: bool = false,
 
     // ── Pending TV watch commit ──
     // Armed when the user launches an episode; committed (DB + Trakt +
     // Continue-Watching upsert + in-memory flag) only after playback actually
-    // progresses past the threshold (tmdb_pure.tvWatchCommitDue, ~2min) —
+    // reaches the completion threshold (tmdb_pure.tvWatchCommitDue) —
     // clicking ▶ alone no longer marks anything watched. Written by the UI
     // thread on arm; read + committed from the player event thread (bool
     // flip-gated, same convention as the worker-written watched flags).
@@ -513,7 +525,7 @@ pub const AppState = struct {
 
     /// Which episode the player is currently playing, for the whole playback.
     ///
-    /// Distinct from `pending_watch`, which is *consumed* at the 2-minute watch
+    /// Distinct from `pending_watch`, which is *consumed* at the completion
     /// commit and so cannot carry this. The player needs the binding to persist
     /// for the entire session in order to save a per-episode resume position into
     /// tv_watched (keyed by tmdb_id+season+episode — real episode identity, unlike
@@ -537,6 +549,10 @@ pub const AppState = struct {
         episode: i32 = 0,
         url: [4096]u8 = std.mem.zeroes([4096]u8),
         url_len: usize = 0,
+
+        played_seconds: f64 = 0,
+        sample_ms: i64 = 0,
+        sample_pos: f64 = 0,
 
         pub fn matches(self: *const @This(), url: []const u8) bool {
             return self.active and self.url_len > 0 and
@@ -738,15 +754,15 @@ pub const AppState = struct {
         tv_name_len: usize = 0,
         tv_poster_path: [64]u8 = std.mem.zeroes([64]u8),
         tv_poster_path_len: usize = 0,
-        tv_seasons: [40]TvSeason = std.mem.zeroes([40]TvSeason),
+        tv_seasons: []TvSeason = &.{},
         tv_season_count: usize = 0,
         tv_sel_season: usize = 0, // index into tv_seasons
         tv_seasons_loading: bool = false,
-        tv_episodes: [120]TvEpisode = std.mem.zeroes([120]TvEpisode),
+        tv_episodes: []TvEpisode = &.{},
         tv_episode_count: usize = 0,
         tv_episodes_loading: bool = false,
         // episode N of the selected season → tv_episode_watched[N-1].
-        tv_episode_watched: [120]bool = std.mem.zeroes([120]bool),
+        tv_episode_watched: []bool = &.{},
     } = .{},
 
     // ── OpenSubtitles ──

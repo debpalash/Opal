@@ -138,7 +138,7 @@ class IsolatedOpal:
         if os.name == "posix":
             self.setup_path.chmod(0o600)
 
-    def start(self) -> str:
+    def start(self, *, require_setup: bool = True) -> str:
         assert BINARY is not None
         self._require_free_port()
         for directory in (
@@ -189,6 +189,9 @@ class IsolatedOpal:
             self.testcase.fail(
                 f"headless Opal did not become healthy ({last_error!r}):\n{self.safe_log()}"
             )
+
+        if not require_setup:
+            return ""
 
         while time.monotonic() < deadline and not self.setup_path.is_file():
             time.sleep(0.05)

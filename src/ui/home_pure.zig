@@ -2,6 +2,18 @@
 
 const std = @import("std");
 
+pub fn historyFraction(percent: f64) f32 {
+    if (!std.math.isFinite(percent)) return 0;
+    return @floatCast(std.math.clamp(percent / 100.0, 0, 1));
+}
+
+test "history percentages are not normalized fractions" {
+    try std.testing.expectEqual(@as(f32, 0.42), historyFraction(42));
+    try std.testing.expectEqual(@as(f32, 1), historyFraction(100));
+    try std.testing.expectEqual(@as(f32, 0), historyFraction(std.math.nan(f64)));
+    try std.testing.expectEqual(@as(f32, 0), historyFraction(-5));
+}
+
 /// True for bare content-hash names ("8248045d177933fc") that watch history
 /// records for torrent streams. The Home console shows those as a friendly
 /// "Torrent stream" label instead of raw hex.

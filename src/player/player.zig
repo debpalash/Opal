@@ -149,6 +149,9 @@ pub const MediaPlayer = struct {
     current_url: [2048]u8 = std.mem.zeroes([2048]u8),
     current_url_len: usize = 0,
     resume_seeked: bool = false,
+    restore_session_position: ?f64 = null,
+    restore_session_paused: bool = true,
+    restore_session_speed: f64 = 1,
     /// Monotonic deadline for playback-position persistence. Database writes
     /// must follow elapsed time, not video/UI frame rate.
     last_position_save_ms: i64 = 0,
@@ -451,6 +454,9 @@ pub const MediaPlayer = struct {
         @memset(&self.current_url, 0);
         self.current_url_len = 0;
         self.resume_seeked = false;
+        self.restore_session_position = null;
+        self.restore_session_paused = true;
+        self.restore_session_speed = 1;
         self.last_position_save_ms = 0;
         self.is_loading = false;
         self.loading_label_len = 0;
@@ -963,6 +969,7 @@ pub const MediaPlayer = struct {
             const pe = &state.app.playing_episode;
             if (pe.matches(self.current_url[0..self.current_url_len])) {
                 @import("../core/db.zig").tvSavePosition(pe.tmdb_id, pe.season, pe.episode, pos, dur);
+                @import("../core/db.zig").tvSavePlayedSeconds(pe.tmdb_id, pe.season, pe.episode, pe.played_seconds);
             }
         }
     }
@@ -971,23 +978,38 @@ pub const MediaPlayer = struct {
     pub fn tryResumePosition(self: *MediaPlayer) void {
         if (self.resume_seeked or self.current_url_len == 0 or self.current_url_len > self.current_url.len) return;
         self.resume_seeked = true;
-        const history = @import("../services/history.zig");
-
+        const pe = &state.app.playing_episode;
         const cur = self.current_url[0..self.current_url_len];
+        if (pe.armed) {
+            pe.armed = false;
+            const n = @min(cur.len, pe.url.len);
+            @memcpy(pe.url[0..n], cur[0..n]);
+            pe.url_len = n;
+            pe.played_seconds = @import("../core/db.zig").tvPlayedSeconds(pe.tmdb_id, pe.season, pe.episode);
+            pe.sample_ms = 0;
+            pe.active = true;
+            const pw = &state.app.pending_watch;
+            @import("../core/db.zig").tvTouchShow(pe.tmdb_id, pw.name[0..pw.name_len], pw.poster_path[0..pw.poster_path_len]);
+            @import("../services/tv_library.zig").markDirty();
+        }
+        if (self.restore_session_position) |position| {
+            self.restore_session_position = null;
+            var paused: c_int = if (self.restore_session_paused) 1 else 0;
+            var speed = self.restore_session_speed;
+            _ = c.mpv.mpv_set_property(self.mpv_ctx, "pause", c.mpv.MPV_FORMAT_FLAG, &paused);
+            _ = c.mpv.mpv_set_property(self.mpv_ctx, "speed", c.mpv.MPV_FORMAT_DOUBLE, &speed);
+            var command: [80]u8 = undefined;
+            const seek = std.fmt.bufPrintZ(&command, "seek {d:.3} absolute", .{position}) catch return;
+            _ = c.mpv.mpv_command_string(self.mpv_ctx, seek.ptr);
+            return;
+        }
+        const history = @import("../services/history.zig");
 
         // Claim a pending episode arm: this load is the episode that was just
         // launched, so bind the binding to THIS url. Everything afterwards
         // (position saves, resumes) is gated on the url still matching, so the
         // binding dies with the media rather than leaking onto the next thing
         // that plays.
-        const pe = &state.app.playing_episode;
-        if (pe.armed) {
-            pe.armed = false;
-            const n = @min(cur.len, pe.url.len);
-            @memcpy(pe.url[0..n], cur[0..n]);
-            pe.url_len = n;
-            pe.active = true; // last
-        }
 
         // Prefer the per-episode position for a tracked episode. The URL-keyed
         // lookup can't help there: an episode's URL is a torrent/stream link that
@@ -1356,6 +1378,10 @@ pub fn updateTorrentBackgroundTasks() void {
                 p.cached_video_height = 0;
                 p.cached_sub_text_len = 0;
             } else if (ev.*.event_id == c.mpv.MPV_EVENT_FILE_LOADED) {
+                if (p.restore_session_position != null or state.app.playing_episode.armed) {
+                    p.resume_seeked = false;
+                    p.tryResumePosition();
+                }
                 // Colour metadata is known now, which is the earliest the `auto`
                 // picture preset can decide anything — before this, video-params
                 // is empty and every file would look SDR.
@@ -1412,6 +1438,24 @@ pub fn updateTorrentBackgroundTasks() void {
                         @import("subtitles.zig").startSearch(&state.app.sub_engine, qname);
                 }
             } else if (ev.*.event_id == c.mpv.MPV_EVENT_END_FILE) {
+                const ended = @as(*c.mpv.mpv_event_end_file, @ptrCast(@alignCast(ev.*.data)));
+                if (ended.reason == c.mpv.MPV_END_FILE_REASON_ERROR) {
+                    const source = if (p.is_torrent and p.source_url_len > 0) p.source_url[0..p.source_url_len] else p.current_url[0..p.current_url_len];
+                    if (@import("../services/tmdb.zig").retryEpisodeSource(source)) continue;
+                }
+                if (ended.reason != c.mpv.MPV_END_FILE_REASON_EOF) continue;
+                if (state.app.playing_episode.matches(p.current_url[0..p.current_url_len])) {
+                    // A streaming torrent can hit a temporary EOF before its
+                    // remaining pieces arrive. Only advance after a real end.
+                    var complete: f32 = 1;
+                    if (p.current_torrent_id >= 0)
+                        _ = c.mpv.torrent_poll(state.torrentSession(), p.current_torrent_id, p.selected_file_idx, null, 0, &complete, null, null);
+                    if (complete >= 0.99) {
+                        p.saveCurrentPosition();
+                        if (state.app.auto_advance) @import("../services/tv_library.zig").playNeighborEpisode(1);
+                        continue;
+                    }
+                }
                 if (p.current_torrent_id >= 0 and p.torrent_is_ready) {
                     // Torrent streaming: check if download is complete
                     var pct: f32 = 0.0;
@@ -1554,8 +1598,18 @@ pub fn updateTorrentBackgroundTasks() void {
                             // clicking ▶ alone marks nothing watched.
                             {
                                 const pw = &state.app.pending_watch;
+                                const pe = &state.app.playing_episode;
+                                const bound = pe.matches(p.current_url[0..p.current_url_len]);
+                                if (bound) {
+                                    if (pe.sample_ms != 0 and !p.cached_paused and !p.cached_paused_for_cache) {
+                                        pe.played_seconds += @import("../services/tmdb_pure.zig").playedDelta(pe.sample_pos, newpos, @as(f64, @floatFromInt(now_ms - pe.sample_ms)) / 1000, p.cached_speed);
+                                    }
+                                    pe.sample_ms = now_ms;
+                                    pe.sample_pos = newpos;
+                                }
                                 if (pw.armed and !pw.committed and
-                                    @import("../services/tmdb_pure.zig").tvWatchCommitDue(newpos) and
+                                    bound and pw.tmdb_id == pe.tmdb_id and pw.season == pe.season and pw.episode == pe.episode and
+                                    @import("../services/tmdb_pure.zig").tvWatchCommitDue(newpos, p.cached_duration, pe.played_seconds) and
                                     state.app.active_player_idx < state.app.players.items.len and
                                     state.app.players.items[state.app.active_player_idx] == p)
                                 {
@@ -1613,6 +1667,8 @@ pub fn updateTorrentBackgroundTasks() void {
                 }
 
                 if (p.has_metadata) {
+                    if (p.selected_file_idx >= c.mpv.torrent_get_file_count(state.torrentSession(), p.current_torrent_id))
+                        p.selected_file_idx = -1;
                     // Auto-select the largest PLAYABLE file if not yet selected.
                     // Non-media (.exe/.rar/.zip/…) is never auto-selected: it fed
                     // mpv garbage ("Failed to recognize file format") and, for
@@ -1623,6 +1679,8 @@ pub fn updateTorrentBackgroundTasks() void {
                         const f_count = c.mpv.torrent_get_file_count(state.torrentSession(), p.current_torrent_id);
                         var max_sz: i64 = 0;
                         var max_idx: i32 = -1;
+                        var episode_idx: i32 = -1;
+                        var playable_count: usize = 0;
                         var risky_count: i32 = 0;
                         var i: i32 = 0;
                         while (i < f_count) : (i += 1) {
@@ -1632,6 +1690,12 @@ pub fn updateTorrentBackgroundTasks() void {
                             const name = std.mem.sliceTo(&fname, 0);
                             if (media_ext.isExecutableOrArchive(name)) risky_count += 1;
                             if (!media_ext.isPlayable(name)) continue; // skip non-media
+                            playable_count += 1;
+                            if (state.app.playing_episode.armed) {
+                                if (@import("../services/subtitles_pure.zig").findSxxEyy(name)) |episode| {
+                                    if (episode.s == state.app.playing_episode.season and episode.e == state.app.playing_episode.episode) episode_idx = i;
+                                }
+                            }
                             const sz = c.mpv.torrent_get_file_size(state.torrentSession(), p.current_torrent_id, i);
                             if (sz > max_sz) {
                                 max_sz = sz;
@@ -1639,6 +1703,15 @@ pub fn updateTorrentBackgroundTasks() void {
                             }
                         }
 
+                        if (episode_idx >= 0) {
+                            max_idx = episode_idx;
+                        } else if (state.app.playing_episode.armed and playable_count > 1) {
+                            p.selected_file_idx = -2;
+                            p.is_loading = false;
+                            _ = @import("../services/tmdb.zig").retryEpisodeSource(p.source_url[0..p.source_url_len]);
+                            state.showToast("The requested episode could not be identified in this torrent.");
+                            continue;
+                        }
                         if (max_idx < 0) {
                             // No playable file at all — refuse to load, warn.
                             var lb: [96]u8 = undefined;

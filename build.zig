@@ -176,6 +176,13 @@ pub fn build(b: *std.Build) void {
     });
     exe.root_module.addImport("icons", icons_dep.module("icons"));
 
+    const tv_detail_tests = b.addTest(.{
+        .root_module = exe.root_module,
+        .filters = &.{"TV detail"},
+    });
+    const run_tv_detail_tests = b.addRunArtifact(tv_detail_tests);
+    b.step("test-tv-detail", "Test production TV metadata and restore helpers").dependOn(&run_tv_detail_tests.step);
+
     // DPI-bypass sidecar (debpalash/zig-bypassdpi): a cross-platform userspace
     // proxy that fragments the TLS ClientHello so ISP DPI can't read the SNI.
     // Built as its own exe here and installed alongside `opal`; the app spawns it
@@ -1394,6 +1401,22 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_home_pure).step);
+    const test_tv_layout = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/ui/tv_layout_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_tv_layout).step);
+    const test_episode_art = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/episode_art_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_episode_art).step);
 
     // Pipeline test imports ai_intent_pure + resolver_rank siblings.
     const test_pipeline = b.addTest(.{

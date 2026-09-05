@@ -129,8 +129,13 @@ fn watchedEpisodes(stream: std.Io.net.Stream, query: []const u8) void {
         wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"season required\"}");
         return;
     };
-    var episodes: [service.MAX_EPISODES_PER_SEASON]u32 = undefined;
-    const count = service.watchedEpisodes(kind, id, season, &episodes) catch |err| {
+    const alloc = @import("../core/alloc.zig").allocator;
+    const episodes = alloc.alloc(u32, service.MAX_EPISODES_PER_SEASON) catch {
+        wire.sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
+        return;
+    };
+    defer alloc.free(episodes);
+    const count = service.watchedEpisodes(kind, id, season, episodes) catch |err| {
         const status: []const u8 = if (err == error.ItemNotFound) "404 Not Found" else "400 Bad Request";
         const body: []const u8 = switch (err) {
             error.ItemNotFound => "{\"error\":\"library item not found\"}",
@@ -140,8 +145,12 @@ fn watchedEpisodes(stream: std.Io.net.Stream, query: []const u8) void {
         wire.sendJsonStatus(stream, status, body);
         return;
     };
-    var json: [4096]u8 = undefined;
-    var w = std.Io.Writer.fixed(&json);
+    const json = alloc.alloc(u8, 32 + count * 7) catch {
+        wire.sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
+        return;
+    };
+    defer alloc.free(json);
+    var w = std.Io.Writer.fixed(json);
     w.writeAll("{\"episodes\":[") catch return;
     for (episodes[0..count], 0..) |episode, i| {
         if (i > 0) w.writeAll(",") catch return;

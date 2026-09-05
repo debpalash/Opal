@@ -40,6 +40,7 @@ class ShutdownLiveTest(unittest.TestCase):
                 # Start real provider workers. These commands return immediately;
                 # the owned supervisor must cancel/join their network work.
                 for path in (
+                    "/api/about?action=check",
                     "/api/podcasts/search?q=opal",
                     "/api/anime/search?q=opal",
                     "/api/youtube/search?q=opal",

@@ -31,7 +31,7 @@ pub const MatchInfo = struct {
 };
 
 const stop_words = [_][]const u8{
-    "the", "a", "an", "of", "in", "on", "to", "and",
+    "the", "a",  "an", "of", "in", "on", "to", "and",
     "for", "is", "it", "my", "me", "at", "by",
 };
 
@@ -154,20 +154,30 @@ pub fn computeMatch(item: Item, query: []const u8, intent: []const u8) MatchInfo
     const pct: u8 = counts.pct();
 
     if (match_words == 0) return .{
-        .match_pct = 0, .score = 9999,
-        .match_words = 0, .total_words = total_words,
+        .match_pct = 0,
+        .score = 9999,
+        .match_words = 0,
+        .total_words = total_words,
     };
 
     const relevance: u32 = 100 - @as(u32, pct);
     const is_movie_or_show = std.mem.eql(u8, intent, "movie") or std.mem.eql(u8, intent, "show");
 
     var source_w: u32 = switch (item.source) {
-        .jellyfin => 0, .stremio => 5, .torrent => 8, .anime => 12, .youtube => 20,
+        .jellyfin => 0,
+        .stremio => 5,
+        .torrent => 8,
+        .anime => 12,
+        .youtube => 20,
     };
     if (is_movie_or_show and item.source == .youtube) source_w += 1000;
 
     const quality_bonus: u32 = switch (item.quality) {
-        4 => 2, 3 => 0, 2 => 5, 1 => 10, else => 15,
+        4 => 2,
+        3 => 0,
+        2 => 5,
+        1 => 10,
+        else => 15,
     };
 
     // Seed bonus is bounded so a well-seeded torrent can NEVER beat an
@@ -175,13 +185,7 @@ pub fn computeMatch(item: Item, query: []const u8, intent: []const u8) MatchInfo
     // source_w(torrent=8) − source_w(jellyfin=0) = 8. Capping the bonus at 7
     // keeps inter-torrent ordering (high-seed vs low-seed still differs)
     // while preventing cross-source leapfrogging.
-    const seed_bonus: u32 = if (item.seeds > 100) 7
-        else if (item.seeds > 50) 6
-        else if (item.seeds > 20) 5
-        else if (item.seeds > 10) 4
-        else if (item.seeds > 5) 3
-        else if (item.seeds > 0) 1
-        else 0;
+    const seed_bonus: u32 = if (item.seeds > 100) 7 else if (item.seeds > 50) 6 else if (item.seeds > 20) 5 else if (item.seeds > 10) 4 else if (item.seeds > 5) 3 else if (item.seeds > 0) 1 else 0;
 
     const junk = junkTitlePenalty(lower_name[0..nlen], lower_query[0..ql]);
     const raw = relevance + source_w + quality_bonus + junk;
@@ -206,14 +210,14 @@ pub fn computeMatch(item: Item, query: []const u8, intent: []const u8) MatchInfo
 /// lowercased title; a marker the QUERY itself contains is skipped, so
 /// "iron man lyrics" still ranks lyric videos normally.
 const junk_markers = [_][]const u8{
-    "lyric",       "karaoke",     "compilation",       "movie clip",
-    "(clip",       " clip)",      "(scene",            " scene)",
-    "trailer",     "teaser",      "reaction",          "recap",
-    "explained",   "behind the scenes",                "soundtrack",
-    "suit up",     "best of",     "top 10",            "top 20",
-    "8d audio",    "fan made",    "fanmade",           "(cover",
-    "full ost",    " clip",       "film review",       "& review",
-    "fact & ",     "action scenes",                    "final battle",
+    "lyric",         "karaoke",           "compilation", "movie clip",
+    "(clip",         " clip)",            "(scene",      " scene)",
+    "trailer",       "teaser",            "reaction",    "recap",
+    "explained",     "behind the scenes", "soundtrack",  "suit up",
+    "best of",       "top 10",            "top 20",      "8d audio",
+    "fan made",      "fanmade",           "(cover",      "full ost",
+    " clip",         "film review",       "& review",    "fact & ",
+    "action scenes", "final battle",
 };
 
 /// Additive score penalty (lower score = better rank, so junk sinks well
@@ -281,9 +285,9 @@ pub fn rankAll(items: []const Item, query: []const u8, intent: []const u8, out: 
 
 test "computeMatch: exact title on jellyfin ranks top" {
     const items = [_]Item{
-        .{ .name = "The Boys S01E01 1080p",         .source = .jellyfin, .quality = 3, .seeds = 0 },
-        .{ .name = "The Boys Parody YouTube Clip",  .source = .youtube,  .quality = 2, .seeds = 0 },
-        .{ .name = "The Boys S01E01 720p WEB",      .source = .torrent,  .quality = 2, .seeds = 150 },
+        .{ .name = "The Boys S01E01 1080p", .source = .jellyfin, .quality = 3, .seeds = 0 },
+        .{ .name = "The Boys Parody YouTube Clip", .source = .youtube, .quality = 2, .seeds = 0 },
+        .{ .name = "The Boys S01E01 720p WEB", .source = .torrent, .quality = 2, .seeds = 150 },
     };
     var buf: [8]Ranked = undefined;
     const ranked = rankAll(&items, "the boys s01e01", "show", &buf);
@@ -294,7 +298,7 @@ test "computeMatch: exact title on jellyfin ranks top" {
 test "computeMatch: youtube penalized for show intent" {
     const items = [_]Item{
         .{ .name = "Inception 2010 YouTube Trailer HD", .source = .youtube, .quality = 3, .seeds = 0 },
-        .{ .name = "Inception 2010 BluRay 1080p",       .source = .torrent, .quality = 3, .seeds = 200 },
+        .{ .name = "Inception 2010 BluRay 1080p", .source = .torrent, .quality = 3, .seeds = 200 },
     };
     var buf: [4]Ranked = undefined;
     const ranked = rankAll(&items, "inception 2010", "movie", &buf);
@@ -305,7 +309,7 @@ test "computeMatch: youtube penalized for show intent" {
 test "computeMatch: numeric tokens word-bounded" {
     // "2" must not match "2008" / "2022"
     const items = [_]Item{
-        .{ .name = "Iron Man 2008",     .source = .torrent, .quality = 3, .seeds = 100 },
+        .{ .name = "Iron Man 2008", .source = .torrent, .quality = 3, .seeds = 100 },
         .{ .name = "Iron Man 2 (2010)", .source = .torrent, .quality = 3, .seeds = 50 },
     };
     var buf: [4]Ranked = undefined;
@@ -321,8 +325,8 @@ test "computeMatch: genre-only query yields zero matches (garbage diagnostic)" {
     // This test documents the failure: no item in a generic result set will
     // have "jazz" as a useful title token, match_pct collapses.
     const items = [_]Item{
-        .{ .name = "The Boys S01E01",       .source = .jellyfin, .quality = 3 },
-        .{ .name = "Inception 2010 BluRay", .source = .torrent,  .quality = 3, .seeds = 100 },
+        .{ .name = "The Boys S01E01", .source = .jellyfin, .quality = 3 },
+        .{ .name = "Inception 2010 BluRay", .source = .torrent, .quality = 3, .seeds = 100 },
     };
     var buf: [4]Ranked = undefined;
     const ranked = rankAll(&items, "jazz", "auto", &buf);
@@ -331,7 +335,7 @@ test "computeMatch: genre-only query yields zero matches (garbage diagnostic)" {
 
 test "computeMatch: stop words stripped" {
     const items = [_]Item{
-        .{ .name = "The Matrix",         .source = .jellyfin, .quality = 3 },
+        .{ .name = "The Matrix", .source = .jellyfin, .quality = 3 },
         .{ .name = "Completely Unrelated", .source = .torrent, .quality = 3, .seeds = 0 },
     };
     var buf: [4]Ranked = undefined;
@@ -353,7 +357,7 @@ test "computeMatch: high-seed torrent beats low-seed torrent" {
 test "computeMatch: quality preference — 1080p beats 480p at tie" {
     const items = [_]Item{
         .{ .name = "Inception 1080p", .source = .torrent, .quality = 3, .seeds = 100 },
-        .{ .name = "Inception 480p",  .source = .torrent, .quality = 1, .seeds = 100 },
+        .{ .name = "Inception 480p", .source = .torrent, .quality = 1, .seeds = 100 },
     };
     var buf: [4]Ranked = undefined;
     const ranked = rankAll(&items, "inception", "movie", &buf);
@@ -434,6 +438,27 @@ pub fn pickBest(cands: []const PickCand) ?usize {
         return i;
     }
     return null;
+}
+
+/// Start immediately only on a complete query match while sources are arriving.
+/// Once the search finishes, retain the normal source-picker confidence bar.
+pub fn pickForStartup(cands: []const PickCand, searching: bool) ?usize {
+    if (!searching) return pickBest(cands);
+    for (cands, 0..) |candidate, index| {
+        if (candidate.match_pct == 100 and pickBest(&.{candidate}) != null) return index;
+    }
+    return null;
+}
+
+test "episode startup accepts an early exact seeded match without waiting for providers" {
+    const candidates = [_]PickCand{
+        .{ .playable = true, .needs_seeds = true, .match_pct = 80, .seeds = 100 },
+        .{ .playable = true, .needs_seeds = true, .match_pct = 100, .seeds = 0 },
+        .{ .playable = true, .needs_seeds = true, .match_pct = 100, .seeds = 20 },
+    };
+    try std.testing.expectEqual(@as(?usize, null), pickForStartup(candidates[0..2], true));
+    try std.testing.expectEqual(@as(?usize, 2), pickForStartup(&candidates, true));
+    try std.testing.expectEqual(@as(?usize, 0), pickForStartup(&candidates, false));
 }
 
 /// May the poster/synopsis we stashed for `query` be shown while `name` loads?

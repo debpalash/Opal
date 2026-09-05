@@ -373,6 +373,22 @@ fn renderAudioNowPlaying(i: usize, p: *player.MediaPlayer) void {
 }
 
 pub fn renderGrid() !void {
+    if (@import("../services/tmdb.zig").episode_play_pending.load(.acquire)) {
+        var waiting = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .expand = .both,
+            .padding = dvui.Rect.all(theme.spacing.md),
+        });
+        defer waiting.deinit();
+        dvui.spinner(@src(), .{ .color_text = theme.colors.accent });
+        _ = dvui.label(@src(), "Finding stream…", .{}, .{
+            .color_text = theme.colors.text_primary,
+        });
+        _ = dvui.label(@src(), "Playback starts when a matching stream is ready.", .{}, .{
+            .color_text = theme.colors.text_secondary,
+        });
+        dvui.refresh(null, @src(), null);
+        return;
+    }
     const grid_columns = computeGridColumns();
     muteBackgroundPlayers();
 

@@ -33,7 +33,7 @@ pub const SPECIALS_SEASON: i32 = 0;
 pub const MAX_SEASONS: usize = 60;
 pub const MAX_WATCHED: usize = 2000;
 pub const MAX_SHOWS: usize = 200;
-pub const MAX_EPISODES_PER_SEASON: i32 = 512;
+pub const MAX_EPISODES_PER_SEASON: i32 = std.math.maxInt(u16);
 
 pub const Season = struct {
     number: i32 = 0,
@@ -61,7 +61,7 @@ pub const Ep = struct {
 /// creating unbounded, meaningless rows while leaving ample room for long
 /// daily shows.
 pub fn validUserEpisode(e: Ep) bool {
-    return e.season > SPECIALS_SEASON and e.season <= 999 and
+    return e.season >= SPECIALS_SEASON and e.season <= 999 and
         e.episode > 0 and e.episode <= MAX_EPISODES_PER_SEASON;
 }
 
@@ -462,6 +462,30 @@ pub const Row = struct {
         };
     }
 };
+
+/// Home includes an in-progress first episode even before any episode has
+/// been completed. Explicit completed/dropped states still win.
+pub fn homeEpisodeVisible(r: *const Row) bool {
+    const status = effectiveStatus(r.user, r.status);
+    return r.kind == .tv and r.has_next and status != .completed and status != .dropped and
+        (status == .watching or (std.math.isFinite(r.resume_secs) and r.resume_secs > 2));
+}
+
+test "Home includes first-episode resumes and excludes completed or dropped shows" {
+    var row: Row = .{ .has_next = true, .resume_secs = 300 };
+    try std.testing.expect(homeEpisodeVisible(&row));
+    row.user = .dropped;
+    try std.testing.expect(!homeEpisodeVisible(&row));
+    row.user = .completed;
+    try std.testing.expect(!homeEpisodeVisible(&row));
+    row.user = .none;
+    row.resume_secs = 0;
+    try std.testing.expect(!homeEpisodeVisible(&row));
+    row.status = .watching;
+    try std.testing.expect(homeEpisodeVisible(&row));
+    row.has_next = false;
+    try std.testing.expect(!homeEpisodeVisible(&row));
+}
 
 /// Sort bucket: what the user most likely wants to click. Shows with an episode
 /// ready to watch come first; finished shows sink to the bottom.
@@ -1170,10 +1194,11 @@ test "isWatched: empty set watches nothing" {
     try std.testing.expect(!isWatched(&none, .{ .season = 1, .episode = 1 }));
 }
 
-test "user episode commands reject specials and absurd identities" {
+test "user episode commands allow specials but reject absurd identities" {
     try std.testing.expect(validUserEpisode(.{ .season = 1, .episode = 1 }));
     try std.testing.expect(validUserEpisode(.{ .season = 99, .episode = MAX_EPISODES_PER_SEASON }));
-    try std.testing.expect(!validUserEpisode(.{ .season = 0, .episode = 1 }));
+    try std.testing.expect(validUserEpisode(.{ .season = 0, .episode = 1 }));
+    try std.testing.expect(!validUserEpisode(.{ .season = -1, .episode = 1 }));
     try std.testing.expect(!validUserEpisode(.{ .season = 1, .episode = 0 }));
     try std.testing.expect(!validUserEpisode(.{ .season = 1, .episode = MAX_EPISODES_PER_SEASON + 1 }));
 }

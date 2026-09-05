@@ -430,22 +430,42 @@ test "episodeQuery zero-pads via unsigned (x-men S+2E+2 regression)" {
     try std.testing.expectEqualStrings("silo s00e00", episodeQuery("Silo", -1, 0, &b));
 }
 
-/// True once playback has progressed enough to count the episode as watched
-/// (2 minutes). Clicking ▶ no longer marks anything — the commit happens from
-/// the player's time-pos stream (see player.zig → tmdb.commitPendingWatch).
-/// NaN-safe: mpv reports NaN time-pos during loading/EOF edges.
-pub fn tvWatchCommitDue(time_pos_s: f64) bool {
-    if (!std.math.isFinite(time_pos_s)) return false;
-    return time_pos_s >= 120.0;
+/// Credits position alone is not completion: a seek must not mark watched.
+pub fn tvWatchCommitDue(position: f64, duration: f64, played: f64) bool {
+    if (!std.math.isFinite(position) or !std.math.isFinite(duration) or !std.math.isFinite(played)) return false;
+    return duration > 0 and position >= duration * 0.9 and played >= duration * 0.9;
 }
 
-test "tvWatchCommitDue: 2min threshold, NaN-safe" {
-    try std.testing.expect(!tvWatchCommitDue(0));
-    try std.testing.expect(!tvWatchCommitDue(119.9));
-    try std.testing.expect(tvWatchCommitDue(120.0));
-    try std.testing.expect(tvWatchCommitDue(4000));
-    try std.testing.expect(!tvWatchCommitDue(std.math.nan(f64)));
-    try std.testing.expect(!tvWatchCommitDue(-5));
+pub fn playedDelta(previous: f64, position: f64, elapsed: f64, speed: f64) f64 {
+    const delta = position - previous;
+    if (!std.math.isFinite(delta) or elapsed <= 0 or elapsed > 5 or speed <= 0) return 0;
+    return if (delta > 0 and delta <= elapsed * speed + 0.5) delta else 0;
+}
+
+pub const RetryDecision = enum { ignore, retry, manual };
+pub fn episodeRetryDecision(attempts: usize, same_source: bool, resolving: bool) RetryDecision {
+    if (attempts == 0 or !same_source or resolving) return .ignore;
+    return if (attempts < 3) .retry else .manual;
+}
+
+test "episode fallback is bounded and cannot replace unrelated playback" {
+    try std.testing.expectEqual(RetryDecision.ignore, episodeRetryDecision(1, false, false));
+    try std.testing.expectEqual(RetryDecision.ignore, episodeRetryDecision(1, true, true));
+    try std.testing.expectEqual(RetryDecision.retry, episodeRetryDecision(1, true, false));
+    try std.testing.expectEqual(RetryDecision.retry, episodeRetryDecision(2, true, false));
+    try std.testing.expectEqual(RetryDecision.manual, episodeRetryDecision(3, true, false));
+}
+
+test "TV completion requires duration and actual viewing, not seeking" {
+    try std.testing.expect(!tvWatchCommitDue(120, 2400, 120));
+    try std.testing.expect(!tvWatchCommitDue(2300, 2400, 120));
+    try std.testing.expect(tvWatchCommitDue(2160, 2400, 2160));
+    try std.testing.expect(tvWatchCommitDue(54, 60, 54));
+    try std.testing.expect(!tvWatchCommitDue(4000, 0, 4000));
+    try std.testing.expect(!tvWatchCommitDue(std.math.nan(f64), 60, 60));
+    try std.testing.expectEqual(@as(f64, 0), playedDelta(10, 2000, 1, 1));
+    try std.testing.expectEqual(@as(f64, 0), playedDelta(10, 5, 1, 1));
+    try std.testing.expectEqual(@as(f64, 2), playedDelta(10, 12, 1, 2));
 }
 
 /// Gate for the one-shot "Trending tonight" / Movies&TV initial fetch.

@@ -493,7 +493,9 @@ pub fn stopLocal() void {
 
 fn localLoop() void {
     const addr = std.Io.net.IpAddress.parseIp4("127.0.0.1", local_port) catch return;
-    var server = addr.listen(io_g.io(), .{ .reuse_address = true }) catch return;
+    // Zig's reuse_address also enables SO_REUSEPORT. Sharing this port lets
+    // another instance consume our stopLocal wakeup and strands this accept.
+    var server = addr.listen(io_g.io(), .{}) catch return;
     defer server.deinit(io_g.io());
 
     while (local_running.load(.acquire)) {
@@ -1226,17 +1228,18 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
     if (std.mem.eql(u8, api_path, "/about")) {
         const up = @import("updater.zig");
         if (std.mem.eql(u8, getQueryParam(query, "action") orelse "", "check")) up.checkAsync();
+        const update = up.snapshot();
         var out: [512]u8 = undefined;
         var w = std.Io.Writer.fixed(&out);
         w.writeAll("{\"version\":\"") catch return;
         escJsonWrite(&w, up.APP_VERSION);
         w.writeAll("\",\"latest\":\"") catch return;
-        escJsonWrite(&w, up.latestTag());
+        escJsonWrite(&w, update.latestTag());
         w.print("\",\"has_update\":{s},\"checking\":{s},\"error\":\"", .{
-            if (up.has_update) "true" else "false",
-            if (up.is_checking) "true" else "false",
+            if (update.has_update) "true" else "false",
+            if (update.is_checking) "true" else "false",
         }) catch return;
-        escJsonWrite(&w, up.lastError());
+        escJsonWrite(&w, update.lastError());
         w.writeAll("\"}") catch return;
         sendJson(stream, out[0..w.end]);
         return;

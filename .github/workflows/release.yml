@@ -260,12 +260,20 @@ jobs:
           cp packaging/opal.desktop staging/
           cp assets/logo.svg staging/opal.svg
           cp LICENSE staging/
+          cp -r engines staging/
+          mkdir -p staging/scripts staging/web
+          cp scripts/camoufox_bridge.py staging/scripts/
+          cp -R web/. staging/web/
+          cp assets/logo.svg staging/web/icon.svg
+          cp data/plugins-manifest.json data/manga-sources-sfw.json staging/
           cat > staging/install.sh <<'EOF'
           #!/bin/sh
           set -e
           PREFIX="${PREFIX:-/usr/local}"
           install -Dm755 opal                  "$PREFIX/bin/opal"
           install -Dm755 libtorrent_wrapper.so "$PREFIX/lib/opal/libtorrent_wrapper.so"
+          cp -R engines scripts web "$PREFIX/lib/opal/"
+          install -m644 plugins-manifest.json manga-sources-sfw.json "$PREFIX/lib/opal/"
           install -Dm644 opal.desktop          "$PREFIX/share/applications/opal.desktop"
           install -Dm644 opal.svg              "$PREFIX/share/icons/hicolor/scalable/apps/opal.svg"
           echo "Opal installed to $PREFIX/bin/opal"

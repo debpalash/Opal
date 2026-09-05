@@ -1279,6 +1279,7 @@ fn renderAboutTab() void {
     sectionHeader("About", "Version, updates, credits & support", 25, @src());
     {
         const updater = @import("../services/updater.zig");
+        const update = updater.snapshot();
         var card = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .horizontal,
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm },
@@ -1340,7 +1341,7 @@ fn renderAboutTab() void {
                 var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
                 spacer.deinit();
             }
-            if (updater.is_checking) {
+            if (update.is_checking) {
                 _ = dvui.label(@src(), "Checking…", .{}, .{ .id_extra = 2511, .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
                 dvui.refresh(null, @src(), null); // worker has no UI wake — poll while pending
             } else if (dvui.button(@src(), "Check for Updates", .{}, .{
@@ -1420,20 +1421,23 @@ fn renderAboutTab() void {
         });
 
         // Status row — only show once we have a signal.
-        if (updater.has_update) {
+        if (update.has_update) {
             components.divider();
             var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
             defer row.deinit();
             _ = dvui.label(@src(), "Latest", .{}, .{ .color_text = labelText(), .gravity_y = 0.5 });
-            _ = dvui.label(@src(), "  v{s}", .{updater.latestTag()}, .{ .id_extra = 2520, .color_text = theme.colors.success, .gravity_y = 0.5 });
+            _ = dvui.label(@src(), "  v{s}", .{update.latestTag()}, .{ .id_extra = 2520, .color_text = theme.colors.success, .gravity_y = 0.5 });
             {
                 var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
                 spacer.deinit();
             }
-            if (updater.is_downloading) {
+            if (update.is_downloading) {
+                dvui.refresh(null, @src(), null);
                 _ = dvui.label(@src(), "Downloading…", .{}, .{ .id_extra = 2521, .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
-            } else if (updater.dl_url_len > 0) {
-                if (dvui.button(@src(), "Download & Install", .{}, .{
+            } else if (@import("builtin").os.tag != .macos) {
+                _ = dvui.label(@src(), "Update using your package manager or the release download", .{}, .{ .color_text = theme.colors.text_secondary });
+            } else if (update.dl_url_len > 0) {
+                if (dvui.button(@src(), "Download & Open Installer", .{}, .{
                     .id_extra = 2522,
                     .color_fill = btn_active,
                     .color_text = btn_text_active,
@@ -1446,13 +1450,13 @@ fn renderAboutTab() void {
             } else {
                 _ = dvui.label(@src(), "No .dmg asset on release", .{}, .{ .id_extra = 2523, .color_text = theme.colors.warning, .gravity_y = 0.5 });
             }
-        } else if (updater.last_check_ts > 0 and !updater.is_checking) {
+        } else if (update.last_check_ts > 0 and !update.is_checking) {
             components.divider();
             _ = dvui.label(@src(), "Up to date", .{}, .{ .id_extra = 2530, .color_text = theme.colors.success });
         }
 
-        if (updater.last_error_len > 0) {
-            _ = dvui.label(@src(), "  {s}", .{updater.lastError()}, .{ .id_extra = 2540, .color_text = theme.colors.warning, .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 } });
+        if (update.last_error_len > 0) {
+            _ = dvui.label(@src(), "  {s}", .{update.lastError()}, .{ .id_extra = 2540, .color_text = theme.colors.warning, .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 } });
         }
     }
 }

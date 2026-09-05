@@ -54,6 +54,8 @@ pub fn cardHeight(has_progress: bool, has_actions: bool) f32 {
 pub const Click = enum { none, open, action, remove };
 
 pub const Card = struct {
+    /// Episode rails use a landscape still instead of a portrait poster.
+    landscape: bool = false,
     /// Fully-qualified artwork URL. Empty renders the empty poster frame.
     poster_url: []const u8 = "",
     title: []const u8 = "",
@@ -96,11 +98,13 @@ pub fn render(src: std.builtin.SourceLocation, id_extra: usize, it: *state.TmdbI
     // carries the same parts, so they all size alike), but nothing is silently
     // cut off if the estimate is low or a font/theme change makes a row taller.
     // Getting this wrong now costs a few pixels of layout, not a missing button.
-    const h = cardHeight(card.progress != null, card.action_label != null or card.removable);
+    const width: f32 = if (card.landscape) 224 else CARD_W;
+    const art_h: f32 = if (card.landscape) 126 else POSTER_H;
+    const h = cardHeight(card.progress != null, card.action_label != null or card.removable) - POSTER_H + art_h;
     var box = dvui.box(src, .{ .dir = .vertical }, .{
         .id_extra = id_extra,
-        .min_size_content = .{ .w = CARD_W, .h = h },
-        .max_size_content = .{ .w = CARD_W, .h = std.math.floatMax(f32) },
+        .min_size_content = .{ .w = width, .h = h },
+        .max_size_content = .{ .w = width, .h = std.math.floatMax(f32) },
         .margin = dvui.Rect.all(6),
     });
     defer box.deinit();
@@ -113,8 +117,8 @@ pub fn render(src: std.builtin.SourceLocation, id_extra: usize, it: *state.TmdbI
             .background = true,
             .color_fill = theme.colors.bg_elevated,
             .corner_radius = dvui.Rect.all(8),
-            .min_size_content = .{ .w = CARD_W, .h = POSTER_H },
-            .max_size_content = .{ .w = CARD_W, .h = POSTER_H },
+            .min_size_content = .{ .w = width, .h = art_h },
+            .max_size_content = .{ .w = width, .h = art_h },
             .padding = dvui.Rect.all(0),
         });
         bw.processEvents();
@@ -130,6 +134,11 @@ pub fn render(src: std.builtin.SourceLocation, id_extra: usize, it: *state.TmdbI
                 });
             }
         } else {
+            _ = dvui.label(@src(), "{s}", .{if (card.landscape) "Episode preview" else "Artwork unavailable"}, .{
+                .color_text = theme.colors.text_secondary,
+                .gravity_x = 0.5,
+                .gravity_y = 0.5,
+            });
             // Full attempted -> failed transition. Gating on !failed without ever
             // SETTING it is how the TMDB grid used to re-spawn a fetch for a dead
             // poster on every single frame.
