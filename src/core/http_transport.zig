@@ -124,7 +124,7 @@ pub fn fetch(client: *std.http.Client, url: []const u8, buf: []u8, opts: Options
     var wd: Watchdog = .{
         .deadline_ms = io.monotonicMilliTimestamp() +| @as(i64, effectiveTimeoutSecs(opts.timeout_secs)) * 1000,
     };
-    const wd_thread = if (comptime !is_windows) startWatchdog(&wd) catch return null else null;
+    const wd_thread: ?std.Thread = if (!is_windows) startWatchdog(&wd) catch return null else null;
     defer {
         wd.done.store(true, .release);
         if (wd_thread) |thread| thread.join();

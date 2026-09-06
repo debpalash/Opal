@@ -327,17 +327,21 @@ fn renderToolbar(count: usize) void {
 
     // Mode chips (always).
     renderSubTab(0, .Trending, "Hot");
-    renderSubTab(1, .Search, "Find");
+    renderSubTab(1, .Search, "Search");
     renderSubTab(2, .Favorites, "Favs");
     renderSubTab(3, .Watchlist, "List");
     renderSubTab(4, .Watching, "Now");
 
+    // Catalog search — always visible so Movies/TV search is discoverable
+    // instead of hidden behind the Search tab. Typing auto-switches to the
+    // .Search view via renderSearchInline's live-search path; clearing the
+    // box restores Trending.
+    toolbarDivider(900);
+    renderSearchInline();
+
     // Contextual controls.
     switch (state.app.tmdb.view) {
-        .Search => {
-            toolbarDivider(900);
-            renderSearchInline();
-        },
+        .Search => {},
         .Trending => {
             toolbarDivider(901);
             renderCatChip(0, .trending, "Trending");
@@ -456,7 +460,8 @@ fn toolbarDivider(id: usize) void {
     d.deinit();
 }
 
-/// Compact inline search box (Find mode) — replaces the old full-width bar.
+/// Compact inline search box — always visible in the toolbar (replaces the
+/// old full-width bar and the old Find-only box).
 fn renderSearchInline() void {
     const components = @import("../ui/components.zig");
     // Canonical compact toolbar input (shared with YouTube/Comics so every
@@ -640,7 +645,7 @@ var gallery_si: dvui.ScrollInfo = .{};
 /// inactive; the first arrow press lights index 0). UI thread only.
 var grid_focus: ?usize = null;
 
-/// True while the Find-mode search box has focus — arrows/Enter belong to the
+/// True while the toolbar search box has focus — arrows/Enter belong to the
 /// text field then, not the grid (set each frame in renderSearchInline).
 var search_focused: bool = false;
 
