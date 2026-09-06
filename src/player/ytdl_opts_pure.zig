@@ -23,10 +23,6 @@
 const std = @import("std");
 
 pub const Options = struct {
-    /// Reuse the browser's cookie jar. Only set when a profile actually exists —
-    /// yt-dlp hard-aborts ("could not find firefox cookies database") otherwise,
-    /// which would take playback down with it.
-    firefox_cookies: bool = false,
     /// Empty = direct.
     proxy: []const u8 = "",
 };
@@ -50,15 +46,14 @@ pub fn buildRawOptions(opts: Options, out: []u8) ?[]const u8 {
         }
     }.f;
 
-    if (opts.firefox_cookies) {
-        if (!append(out, &w, "cookies-from-browser=firefox,")) return null;
-    }
-    if (!append(out, &w, "no-check-certificates=,no-playlist=")) return null;
+    if (!append(out, &w, "ignore-config=,no-playlist=")) return null;
 
     // A comma in the proxy would be read by mpv as an option separator.
     if (opts.proxy.len > 0 and
         std.mem.indexOfScalar(u8, opts.proxy, ',') == null and
-        std.mem.indexOfScalar(u8, opts.proxy, '\n') == null)
+        std.mem.indexOfScalar(u8, opts.proxy, '\n') == null and
+        std.mem.indexOfScalar(u8, opts.proxy, '\r') == null and
+        std.mem.indexOfScalar(u8, opts.proxy, 0) == null)
     {
         if (!append(out, &w, ",proxy=")) return null;
         if (!append(out, &w, opts.proxy)) return null;
@@ -70,43 +65,42 @@ pub fn buildRawOptions(opts: Options, out: []u8) ?[]const u8 {
 test "default: no cookies, no proxy" {
     var b: [400]u8 = undefined;
     try std.testing.expectEqualStrings(
-        "no-check-certificates=,no-playlist=",
+        "ignore-config=,no-playlist=",
         buildRawOptions(.{}, &b).?,
     );
 }
 
-test "firefox cookies prefix" {
+test "normal playback cannot grant cookies or disable TLS" {
     var b: [400]u8 = undefined;
-    try std.testing.expectEqualStrings(
-        "cookies-from-browser=firefox,no-check-certificates=,no-playlist=",
-        buildRawOptions(.{ .firefox_cookies = true }, &b).?,
-    );
+    const options = buildRawOptions(.{}, &b).?;
+    try std.testing.expect(std.mem.indexOf(u8, options, "cookies") == null);
+    try std.testing.expect(std.mem.indexOf(u8, options, "no-check-certificates") == null);
 }
 
 test "proxy appended last" {
     var b: [400]u8 = undefined;
     try std.testing.expectEqualStrings(
-        "no-check-certificates=,no-playlist=,proxy=http://127.0.0.1:8080",
+        "ignore-config=,no-playlist=,proxy=http://127.0.0.1:8080",
         buildRawOptions(.{ .proxy = "http://127.0.0.1:8080" }, &b).?,
     );
 }
 
-test "cookies + proxy together" {
+test "socks proxy without browser credentials" {
     var b: [400]u8 = undefined;
     try std.testing.expectEqualStrings(
-        "cookies-from-browser=firefox,no-check-certificates=,no-playlist=,proxy=socks5://h:1",
-        buildRawOptions(.{ .firefox_cookies = true, .proxy = "socks5://h:1" }, &b).?,
+        "ignore-config=,no-playlist=,proxy=socks5://h:1",
+        buildRawOptions(.{ .proxy = "socks5://h:1" }, &b).?,
     );
 }
 
 test "a comma/newline in the proxy is dropped, not emitted" {
     var b: [400]u8 = undefined;
     try std.testing.expectEqualStrings(
-        "no-check-certificates=,no-playlist=",
+        "ignore-config=,no-playlist=",
         buildRawOptions(.{ .proxy = "http://a,b" }, &b).?,
     );
     try std.testing.expectEqualStrings(
-        "no-check-certificates=,no-playlist=",
+        "ignore-config=,no-playlist=",
         buildRawOptions(.{ .proxy = "http://a\nb" }, &b).?,
     );
 }
@@ -124,9 +118,7 @@ test "regression: never pins a youtube player client" {
     var b: [400]u8 = undefined;
     const cases = [_]Options{
         .{},
-        .{ .firefox_cookies = true },
         .{ .proxy = "http://p:1" },
-        .{ .firefox_cookies = true, .proxy = "http://p:1" },
     };
     for (cases) |o| {
         const s = buildRawOptions(o, &b).?;

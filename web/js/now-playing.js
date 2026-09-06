@@ -98,19 +98,49 @@ function applyStatus(d){
   for (const id of ['b-toggle', 'b-back', 'b-fwd', 'b-mute']) $(id).disabled = !active;
 }
 // EventSource sends the same-origin HttpOnly session cookie automatically.
-let es = null, pollTimer = null;
-function startStatus(){
+let es = null, pollTimer = null, statusGeneration = 0, statusPollInFlight = null;
+function stopStatus(){
+  ++statusGeneration;
+  clearTimeout(pollTimer); pollTimer = null;
   if (es) { es.close(); es = null; }
-  try {
-    es = new EventSource(BASE + '/events');
-    es.onmessage = e => { try { applyStatus(JSON.parse(e.data)); } catch {} };
-    es.onerror = () => { es.close(); es = null; $('conn-dot').classList.remove('on'); poll(); };
-  } catch { poll(); }
 }
-async function poll(){
-  clearTimeout(pollTimer);
-  try { applyStatus(await api('/status')); } catch { $('conn-dot').classList.remove('on'); }
-  pollTimer = setTimeout(poll, 1000); // fallback loop only
+function startStatus(){
+  stopStatus();
+  if (!AUTHENTICATED) return;
+  const generation = statusGeneration;
+  try {
+    const source = new EventSource(BASE + '/events');
+    es = source;
+    source.onmessage = e => {
+      if (!AUTHENTICATED || generation !== statusGeneration || es !== source) return;
+      try { applyStatus(JSON.parse(e.data)); setNetworkState(true); } catch {}
+    };
+    source.onerror = () => {
+      if (generation !== statusGeneration || es !== source) return;
+      source.close(); es = null;
+      $('conn-dot').classList.remove('on');
+      poll(generation);
+    };
+  } catch { poll(generation); }
+}
+async function poll(generation = statusGeneration){
+  // SSE, online events, and a slow fallback request must not create competing
+  // loops. An old login's response cannot paint or schedule work in a new one.
+  if (!AUTHENTICATED || generation !== statusGeneration || es
+      || statusPollInFlight?.generation === generation) return;
+  clearTimeout(pollTimer); pollTimer = null;
+  const request = {generation};
+  statusPollInFlight = request;
+  try {
+    const status = await api('/status');
+    if (AUTHENTICATED && generation === statusGeneration && !es) applyStatus(status);
+  } catch {
+    if (generation === statusGeneration) $('conn-dot').classList.remove('on');
+  } finally {
+    if (statusPollInFlight === request) statusPollInFlight = null;
+    if (AUTHENTICATED && generation === statusGeneration && !es)
+      pollTimer = setTimeout(() => poll(generation), 1000);
+  }
 }
 let seekHeld = false, volHeld = false;
 $('seek').addEventListener('pointerdown', () => seekHeld = true);

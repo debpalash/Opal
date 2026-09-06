@@ -90,29 +90,6 @@ const MpvPlaybackSink = struct {
     }
 };
 
-/// True if a Firefox profile dir exists, so yt-dlp's --cookies-from-browser
-/// firefox won't abort. Checked once and cached.
-var ff_checked: bool = false;
-var ff_exists: bool = false;
-fn firefoxProfileExists() bool {
-    if (ff_checked) return ff_exists;
-    ff_checked = true;
-    const io = @import("../core/io_global.zig");
-    const home = @import("../core/paths.zig").homeDir();
-    var buf: [512]u8 = undefined;
-    const macos = std.fmt.bufPrint(&buf, "{s}/Library/Application Support/Firefox/Profiles", .{home}) catch return false;
-    if (io.cwdAccess(macos, .{})) {
-        ff_exists = true;
-        return true;
-    } else |_| {}
-    const linux = std.fmt.bufPrint(&buf, "{s}/.mozilla/firefox", .{home}) catch return false;
-    if (io.cwdAccess(linux, .{})) {
-        ff_exists = true;
-        return true;
-    } else |_| {}
-    return false;
-}
-
 pub const video_w = 1920;
 pub const video_h = 1080;
 
@@ -1101,10 +1078,8 @@ pub const MediaPlayer = struct {
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "ytdl-format", active_fmt.ptr);
 
         // ytdl-raw-options is a top-level mpv option (NOT script-opts!)
-        // cookies-from-browser: reuse Firefox session for auth/cookie walls —
-        //   but ONLY if a Firefox profile exists, else yt-dlp aborts with
-        //   "could not find firefox cookies database" and playback fails.
-        // no-check-certificates: bypass SSL issues
+        // Never silently borrow browser logins or inherit unrelated yt-dlp config.
+        // TLS verification stays enabled; a browser profile's existence is not consent.
         // no-playlist: prevent ytdl_hook from expanding model/channel pages
         // Raw options are built by ytdl_opts_pure (tested) so the exact string
         // mpv receives is covered — including the regression that no YouTube
@@ -1112,7 +1087,6 @@ pub const MediaPlayer = struct {
         const ytdl_opts = @import("ytdl_opts_pure.zig");
         var raw_buf: [400]u8 = undefined;
         if (ytdl_opts.buildRawOptions(.{
-            .firefox_cookies = firefoxProfileExists(),
             .proxy = state.app.proxy_url[0..state.app.proxy_url_len],
         }, &raw_buf)) |raw| {
             var raw_z: [401]u8 = undefined;

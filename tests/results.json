@@ -1,9 +1,9 @@
 {
-  "timestamp": "2026-09-05T22:14:14",
+  "timestamp": "2026-09-06T11:09:26",
   "total": 435,
-  "passed": 422,
-  "failed": 0,
-  "warnings": 4,
+  "passed": 400,
+  "failed": 23,
+  "warnings": 3,
   "skipped": 9,
   "categories": {
     "Architecture": {
@@ -13,32 +13,32 @@
       "skip": 0
     },
     "Database": {
-      "pass": 10,
-      "fail": 0,
+      "pass": 3,
+      "fail": 7,
       "warn": 1,
       "skip": 0
     },
     "Memory": {
-      "pass": 4,
-      "fail": 0,
-      "warn": 1,
+      "pass": 1,
+      "fail": 4,
+      "warn": 0,
       "skip": 0
     },
     "Config": {
-      "pass": 5,
-      "fail": 0,
+      "pass": 0,
+      "fail": 6,
       "warn": 0,
-      "skip": 1
+      "skip": 0
     },
     "Recall": {
-      "pass": 3,
-      "fail": 0,
+      "pass": 2,
+      "fail": 1,
       "warn": 0,
       "skip": 0
     },
     "Build": {
-      "pass": 11,
-      "fail": 0,
+      "pass": 10,
+      "fail": 1,
       "warn": 1,
       "skip": 0
     },
@@ -55,8 +55,8 @@
       "skip": 0
     },
     "Unit Tests": {
-      "pass": 1,
-      "fail": 0,
+      "pass": 0,
+      "fail": 1,
       "warn": 0,
       "skip": 0
     },
@@ -73,8 +73,8 @@
       "skip": 0
     },
     "Packaging": {
-      "pass": 11,
-      "fail": 0,
+      "pass": 10,
+      "fail": 1,
       "warn": 0,
       "skip": 0
     },
@@ -115,10 +115,10 @@
       "skip": 0
     },
     "AI Models": {
-      "pass": 7,
+      "pass": 6,
       "fail": 0,
       "warn": 0,
-      "skip": 0
+      "skip": 1
     },
     "Settings": {
       "pass": 1,
@@ -217,8 +217,8 @@
       "skip": 0
     },
     "Web UI": {
-      "pass": 41,
-      "fail": 0,
+      "pass": 40,
+      "fail": 1,
       "warn": 0,
       "skip": 0
     },
@@ -307,8 +307,8 @@
       "skip": 0
     },
     "Sources": {
-      "pass": 11,
-      "fail": 0,
+      "pass": 10,
+      "fail": 1,
       "warn": 0,
       "skip": 0
     }
@@ -352,43 +352,43 @@
     {
       "name": "Config Table",
       "category": "Database",
-      "status": "pass",
-      "detail": "94 config entries",
-      "duration_ms": 0
+      "status": "fail",
+      "detail": "unable to open database file",
+      "duration_ms": 10
     },
     {
       "name": "Watch History Table",
       "category": "Database",
-      "status": "pass",
-      "detail": "5 watch entries",
+      "status": "fail",
+      "detail": "unable to open database file",
       "duration_ms": 0
     },
     {
       "name": "Search History Table",
       "category": "Database",
-      "status": "pass",
-      "detail": "0 searches",
+      "status": "fail",
+      "detail": "unable to open database file",
       "duration_ms": 0
     },
     {
       "name": "Download History Table",
       "category": "Database",
-      "status": "pass",
-      "detail": "15 downloads",
+      "status": "fail",
+      "detail": "unable to open database file",
       "duration_ms": 0
     },
     {
       "name": "TMDB Items Table",
       "category": "Database",
-      "status": "pass",
-      "detail": "0 TMDB items",
+      "status": "fail",
+      "detail": "unable to open database file",
       "duration_ms": 0
     },
     {
       "name": "AI Memory Table",
       "category": "Database",
-      "status": "pass",
-      "detail": "0 memories",
+      "status": "fail",
+      "detail": "unable to open database file",
       "duration_ms": 0
     },
     {
@@ -401,78 +401,78 @@
     {
       "name": "Poster Cache Table",
       "category": "Database",
-      "status": "pass",
-      "detail": "396 cached posters",
+      "status": "fail",
+      "detail": "unable to open database file",
       "duration_ms": 0
     },
     {
       "name": "Conversation Log Table",
       "category": "Memory",
-      "status": "pass",
-      "detail": "0 logged conversations",
+      "status": "fail",
+      "detail": "unable to open database file",
       "duration_ms": 0
     },
     {
       "name": "User Preferences Table",
       "category": "Memory",
-      "status": "pass",
-      "detail": "active_hour=15:00 (w:20)",
+      "status": "fail",
+      "detail": "unable to open database file",
       "duration_ms": 0
     },
     {
       "name": "Watch Sessions Table",
       "category": "Memory",
-      "status": "pass",
-      "detail": "0 sessions",
+      "status": "fail",
+      "detail": "unable to open database file",
       "duration_ms": 0
     },
     {
       "name": "Proactive Suggestion Query",
       "category": "Memory",
-      "status": "warn",
-      "detail": "No unfinished content to suggest",
+      "status": "fail",
+      "detail": "unable to open database file",
       "duration_ms": 0
     },
     {
       "name": "Theme Persistence",
       "category": "Config",
-      "status": "pass",
-      "detail": "Theme: Midnight",
+      "status": "fail",
+      "detail": "unable to open database file",
       "duration_ms": 0
     },
     {
       "name": "UI Scale Config",
       "category": "Config",
-      "status": "pass",
-      "detail": "Scale: 1.00x",
+      "status": "fail",
+      "detail": "unable to open database file",
       "duration_ms": 0
     },
     {
       "name": "TTS Voice Config",
       "category": "Config",
-      "status": "pass",
-      "detail": "Voice: Luna",
+      "status": "fail",
+      "detail": "unable to open database file",
       "duration_ms": 0
     },
     {
       "name": "TTS Speed Config",
       "category": "Config",
-      "status": "pass",
-      "detail": "Speed: 1.00x",
+      "status": "fail",
+      "detail": "unable to open database file",
       "duration_ms": 0
     },
     {
       "name": "Window State Persistence",
       "category": "Config",
-      "status": "pass",
-      "detail": "1110x526 at (0,0)",
+      "status": "fail",
+      "detail": "unable to open database file",
       "duration_ms": 0
     },
     {
       "name": "Jellyfin Integration Config",
       "category": "Config",
-      "status": "skip",
-      "detail": "Not configured",
+      "status": "fail",
+      "detail": "unable to open database file",
       "duration_ms": 0
     },
     {
@@ -499,8 +499,8 @@
     {
       "name": "aimemory position_secs Column",
       "category": "Recall",
-      "status": "pass",
-      "detail": "position_secs migration applied",
+      "status": "fail",
+      "detail": "unable to open database file",
       "duration_ms": 0
     },
     {
@@ -520,9 +520,9 @@
     {
       "name": "Zig Build",
       "category": "Build",
-      "status": "pass",
-      "detail": "Binary: 55.9 MB",
-      "duration_ms": 81
+      "status": "fail",
+      "detail": "install\n+- install opal\n   +- compile exe opal Debug native 3 errors\nerror: sub-compilation of compiler_rt failed\n    note: failed to check cache: manifest_create ReadOnlyFileSystem\n/home/pal/.local/s",
+      "duration_ms": 119
     },
     {
       "name": "Binary Exists",
@@ -564,7 +564,7 @@
       "category": "LLM",
       "status": "skip",
       "detail": "LLM server not running",
-      "duration_ms": 14
+      "duration_ms": 4
     },
     {
       "name": "Embedding Server Health",
@@ -590,9 +590,9 @@
     {
       "name": "Zig Unit Tests",
       "category": "Unit Tests",
-      "status": "pass",
-      "detail": "all pure-Zig unit tests pass",
-      "duration_ms": 1665
+      "status": "fail",
+      "detail": "error: sub-compilation of compiler_rt failed",
+      "duration_ms": 1462
     },
     {
       "name": "Poster/image fetch uses curl not std.http",
@@ -660,9 +660,9 @@
     {
       "name": "Linux Installer Is Rootless By Default",
       "category": "Packaging",
-      "status": "pass",
-      "detail": "default path calls no sudo and installs executable + nova2 under ~/.local",
-      "duration_ms": 30
+      "status": "fail",
+      "detail": "rootless execution failed: rootless install exits successfully \u2014 /home/pal/github/Opal/scripts/install.sh: line 82: /home/pal/.config/opal/.install-method: Read-only file system",
+      "duration_ms": 26
     },
     {
       "name": "File associations + single instance",
@@ -690,7 +690,7 @@
       "category": "Build",
       "status": "pass",
       "detail": "/api/host and Opal user agents derive from build.zig.zon",
-      "duration_ms": 19
+      "duration_ms": 17
     },
     {
       "name": "Every release ships highlights and a commit list",
@@ -717,8 +717,8 @@
       "name": "No AI attribution in commit trailers",
       "category": "Build",
       "status": "pass",
-      "detail": "104 commit(s) since the rule, none with AI attribution",
-      "duration_ms": 134
+      "detail": "105 commit(s) since the rule, none with AI attribution",
+      "duration_ms": 131
     },
     {
       "name": "The landing page's photographic bands are static and present",
@@ -767,28 +767,28 @@
       "category": "Voice",
       "status": "skip",
       "detail": "silero-vad not installed (optional)",
-      "duration_ms": 20
+      "duration_ms": 19
     },
     {
       "name": "Faster-Whisper Available",
       "category": "Voice",
       "status": "skip",
       "detail": "faster-whisper not installed (optional)",
-      "duration_ms": 21
+      "duration_ms": 19
     },
     {
       "name": "KittenTTS Available",
       "category": "Voice",
       "status": "skip",
       "detail": "kittentts not installed (optional)",
-      "duration_ms": 20
+      "duration_ms": 19
     },
     {
       "name": "PulseAudio Echo Cancel",
       "category": "Voice",
       "status": "warn",
       "detail": "Not loaded (loads on voice server start)",
-      "duration_ms": 3
+      "duration_ms": 2
     },
     {
       "name": "Conversational: voice-server echo guard + live partials",
@@ -809,14 +809,14 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 27
+      "duration_ms": 24
     },
     {
       "name": "Compiles: opal-stt-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 25
+      "duration_ms": 24
     },
     {
       "name": "Compiles: opal-tts-server.py",
@@ -830,7 +830,7 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 26
+      "duration_ms": 25
     },
     {
       "name": "--check degrades: opal-stt-server.py",
@@ -844,21 +844,21 @@
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 19
+      "duration_ms": 18
     },
     {
       "name": "--check degrades: opal-voice-server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "clean exit 4 (deps absent (fallback))",
-      "duration_ms": 17
+      "duration_ms": 19
     },
     {
       "name": "Tracked + compiles: tools/lang_server.py",
       "category": "Voice Scripts",
       "status": "pass",
       "detail": "tracked + py_compile OK",
-      "duration_ms": 29
+      "duration_ms": 26
     },
     {
       "name": "Parakeet conversational self-install wired",
@@ -1059,9 +1059,9 @@
     {
       "name": "Catalog URLs Reachable",
       "category": "AI Models",
-      "status": "pass",
-      "detail": "all 5 URLs resolve (HTTP 200)",
-      "duration_ms": 4921
+      "status": "skip",
+      "detail": "network unavailable",
+      "duration_ms": 0
     },
     {
       "name": "Cloud LLM Backend + No Silent Local Installs",
@@ -1145,14 +1145,14 @@
       "category": "Browser",
       "status": "pass",
       "detail": "py_compile OK",
-      "duration_ms": 29
+      "duration_ms": 27
     },
     {
       "name": "Bridge protocol selftest",
       "category": "Browser",
       "status": "pass",
       "detail": "framing + pump model OK",
-      "duration_ms": 21
+      "duration_ms": 18
     },
     {
       "name": "Browser bookmarks SQL matches schema",
@@ -1173,7 +1173,7 @@
       "category": "UI Standards",
       "status": "pass",
       "detail": "no emoji in UI string literals",
-      "duration_ms": 53
+      "duration_ms": 51
     },
     {
       "name": "Browser: CloakBrowser engine + upgrades",
@@ -1586,7 +1586,7 @@
       "category": "Stability",
       "status": "pass",
       "detail": "no discarded std.Thread.spawn handles in src/",
-      "duration_ms": 18
+      "duration_ms": 17
     },
     {
       "name": "TMDB Fetch Stages Results Off-Thread",
@@ -1831,7 +1831,7 @@
       "category": "Page Shell",
       "status": "pass",
       "detail": "canonical tokens only; legacy aliases deleted",
-      "duration_ms": 8
+      "duration_ms": 9
     },
     {
       "name": "Compact Type Ramp Drives dvui Fonts",
@@ -2160,7 +2160,7 @@
       "category": "Integration",
       "status": "pass",
       "detail": "toolbar + panel + options all use images/icon-*.png (4 sizes declared)",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Opal Connect's icon says whether Opal is connected",
@@ -2426,7 +2426,7 @@
       "category": "Architecture",
       "status": "pass",
       "detail": "HTML  <1k, JS modules <1k, router <5k, feature APIs <500 lines",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "name": "Now Playing exposes rich state without leaking artwork credentials",
@@ -2566,13 +2566,13 @@
       "category": "Web UI",
       "status": "pass",
       "detail": "Access page: pw change/reset, revoke-all, token rotate, bind mode+port (all bearer-gated)",
-      "duration_ms": 1
+      "duration_ms": 0
     },
     {
       "name": "Play-latest button: TV show page (desktop + web)",
       "category": "Web UI",
-      "status": "pass",
-      "detail": "Play-latest: shared lastAiredFor+isWatched, desktop button, web row + /api/tv/recent",
+      "status": "fail",
+      "detail": "play-latest incomplete: same search path as Find, loads with the show page",
       "duration_ms": 0
     },
     {
@@ -2670,8 +2670,8 @@
       "name": "web feature bundles parse",
       "category": "Web UI",
       "status": "pass",
-      "detail": "8 feature bundles, 162950 bytes \u2014 node --check clean",
-      "duration_ms": 16
+      "detail": "8 feature bundles, 165976 bytes \u2014 node --check clean",
+      "duration_ms": 20
     },
     {
       "name": "Auth core (bcrypt) present + tested",
@@ -2867,7 +2867,7 @@
       "category": "Windows",
       "status": "pass",
       "detail": "all http.Client construction routes through newClient()",
-      "duration_ms": 36
+      "duration_ms": 34
     },
     {
       "name": "http: newClient prewarms TLS state",
@@ -2888,7 +2888,7 @@
       "category": "Windows",
       "status": "pass",
       "detail": "entropy comes from io_global.randomSecure() everywhere",
-      "duration_ms": 33
+      "duration_ms": 31
     },
     {
       "name": "csprng: io_global.randomSecure exists and is fail-closed",
@@ -2909,7 +2909,7 @@
       "category": "Windows",
       "status": "pass",
       "detail": "every sub-add goes through the argv helper",
-      "duration_ms": 32
+      "duration_ms": 31
     },
     {
       "name": "mpv: mpvSubAdd helper uses mpv_command argv form",
@@ -2972,14 +2972,14 @@
       "category": "Windows",
       "status": "pass",
       "detail": "every spawned argv uses io_global.devNull()",
-      "duration_ms": 36
+      "duration_ms": 34
     },
     {
       "name": "portability: no raw pkill outside io_global",
       "category": "Windows",
       "status": "pass",
       "detail": "all process kills route through the portable helpers",
-      "duration_ms": 37
+      "duration_ms": 35
     },
     {
       "name": "portability: kill helpers cover all three platforms",
@@ -3049,7 +3049,7 @@
       "category": "Windows",
       "status": "pass",
       "detail": "all home-directory lookups route through paths.homeDir()",
-      "duration_ms": 33
+      "duration_ms": 31
     },
     {
       "name": "yt-dlp: a present-but-unrunnable binary stands itself down",
@@ -3063,7 +3063,7 @@
       "category": "Windows",
       "status": "pass",
       "detail": "every config path is built from paths.configDir()",
-      "duration_ms": 33
+      "duration_ms": 31
     },
     {
       "name": "lanIp: absolute paths, no cached failure, non-macOS arm",
@@ -3077,7 +3077,7 @@
       "category": "Windows",
       "status": "pass",
       "detail": "signal delivery routes through the portable helpers",
-      "duration_ms": 35
+      "duration_ms": 34
     },
     {
       "name": "Live public tracker list fetched, cached and injected",
@@ -3105,21 +3105,21 @@
       "category": "Sources",
       "status": "pass",
       "detail": "one config file, read by the engine",
-      "duration_ms": 52
+      "duration_ms": 49
     },
     {
       "name": "nova2 engines read the installed source config",
       "category": "Sources",
       "status": "pass",
       "detail": "installed base drives the nova2 engines",
-      "duration_ms": 51
+      "duration_ms": 49
     },
     {
       "name": "Sources fail over to mirror domains",
       "category": "Sources",
       "status": "pass",
       "detail": "ordered failover + last-good memory, both layers",
-      "duration_ms": 51
+      "duration_ms": 50
     },
     {
       "name": "Installed sources are migrated when the manifest corrects an endpoint",
@@ -3140,7 +3140,7 @@
       "category": "Sources",
       "status": "pass",
       "detail": "all 32 manifest bases agree with their engine's own default, so unifying the config cannot disable a working host",
-      "duration_ms": 0
+      "duration_ms": 1
     },
     {
       "name": "Every Torznab-compatible source id is actually queried",
@@ -3152,9 +3152,9 @@
     {
       "name": "Prowlarr: the shipped URL resolves on a server that answers",
       "category": "Sources",
-      "status": "pass",
-      "detail": "shipped Prowlarr URL returns a parseable torznab feed over HTTP (4 requests); Jackett's path and a non-numeric indexer both 404 as Prowlarr would",
-      "duration_ms": 3
+      "status": "fail",
+      "detail": "[Errno 1] Operation not permitted",
+      "duration_ms": 2
     },
     {
       "name": "EZTV: JSON API backend, sharing the Stremio IMDb lookup",
@@ -3189,7 +3189,7 @@
       "category": "Torrents",
       "status": "pass",
       "detail": "every plugin declares an absolute url, name and supported_categories; 1 known instance-attr-only engine",
-      "duration_ms": 1
+      "duration_ms": 2
     },
     {
       "name": "nova2 engine catalog: no engine is orphaned by the install gate",

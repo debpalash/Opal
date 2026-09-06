@@ -497,11 +497,19 @@ function prefillSearch(q){
   runSearch();
 }
 let showId = 0, showTitle = '', showSeason = 0, showImdb = '', showCinemetaVideos = null;
+let detailsGeneration = 0, seasonGeneration = 0, latestGeneration = 0;
+const detailsCurrent = generation => generation === detailsGeneration && $('show-page').classList.contains('on');
+function closeDetails(){
+  ++detailsGeneration; ++seasonGeneration; ++latestGeneration;
+  $('show-page').classList.remove('on');
+}
 
 // One panel serves movie and TV details; every entry point (Browse, unified
 // search, Watching, calendar) funnels through openDetails so metadata,
 // overview, and the action row can never diverge between media kinds.
 function resetDetailsPanel(title){
+  ++detailsGeneration; ++seasonGeneration; ++latestGeneration;
+  showId = 0; showTitle = title; showSeason = 0; showImdb = ''; showCinemetaVideos = null;
   $('show-title').textContent = title;
   $('show-meta').innerHTML = '<span class="spin"></span> Loading…';
   $('show-overview').hidden = true; $('show-overview').textContent = '';
@@ -509,6 +517,7 @@ function resetDetailsPanel(title){
   $('show-latest').style.display = 'none'; $('show-latest').innerHTML = '';
   $('season-chips').innerHTML = ''; $('episodes').innerHTML = '';
   $('show-page').classList.add('on');
+  return detailsGeneration;
 }
 function renderOverview(text){
   if (!text) return;
@@ -524,13 +533,14 @@ function openDetails(kind, id, title, imdb){
 }
 
 async function openMovie(id, title){
-  resetDetailsPanel(title);
+  const generation = resetDetailsPanel(title);
   // The stream hunt works even when TMDB metadata does not, so the action row
   // renders before the fetch instead of behind it.
   $('show-actions').innerHTML = '<button type="button" id="show-find">▶ Find streams</button>';
-  $('show-find').onclick = () => { $('show-page').classList.remove('on'); prefillSearch(normQuery(title)); };
+  $('show-find').onclick = () => { closeDetails(); prefillSearch(normQuery(title)); };
   try {
     const d = await api('/movie?id=' + id);
+    if (!detailsCurrent(generation)) return;
     if (d.error) { $('show-meta').textContent = 'Details unavailable — you can still find streams.'; return; }
     if (d.title) $('show-title').textContent = d.title;
     $('show-meta').textContent = detailsMeta([
@@ -540,14 +550,17 @@ async function openMovie(id, title){
       (d.genres || []).slice(0, 3).map(g => g.name).join(', '),
     ]) || 'Movie';
     renderOverview(d.overview);
-  } catch { $('show-meta').textContent = 'Details unavailable — you can still find streams.'; }
+  } catch {
+    if (detailsCurrent(generation)) $('show-meta').textContent = 'Details unavailable — you can still find streams.';
+  }
 }
 
 async function openShow(id, title, imdb){
+  const generation = resetDetailsPanel(title);
   showId = id; showTitle = title; showImdb = imdb; showCinemetaVideos = null;
-  resetDetailsPanel(title);
   try {
     const d = await api('/tv?id=' + id + (showImdb ? '&imdb=' + encodeURIComponent(showImdb) : ''));
+    if (!detailsCurrent(generation)) return;
     const meta = d.meta || d;
     if (d.meta) showCinemetaVideos = d.meta.videos || [];
     const seasons = d.meta ? cinemetaSeasons(showCinemetaVideos) : (d.seasons || []).filter(x => x.season_number >= 1);
@@ -565,8 +578,8 @@ async function openShow(id, title, imdb){
       loadSeason(+b.dataset.sn);
     });
     if (seasons.length) loadSeason(seasons[0].season_number);
-  } catch { $('show-meta').textContent = 'Failed to load'; }
-  loadLatest(id);
+  } catch { if (detailsCurrent(generation)) $('show-meta').textContent = 'Failed to load'; }
+  if (detailsCurrent(generation)) loadLatest(id, generation);
 }
 
 function cinemetaSeasons(videos){
@@ -584,34 +597,46 @@ function cinemetaSeasons(videos){
 // latest drop still exists and you still want to know you have seen it.
 // Hidden entirely when the server has no aired frontier — offering a play
 // button for an episode nobody can confirm exists is worse than no button.
-async function loadLatest(id){
+async function loadLatest(id, generation = detailsGeneration){
+  if (!detailsCurrent(generation) || id !== showId) return;
+  const request = ++latestGeneration, title = showTitle;
   const el = $('show-latest');
   el.style.display = 'none'; el.innerHTML = '';
   try {
     const d = await api('/tv/recent?id=' + id);
+    if (!detailsCurrent(generation) || request !== latestGeneration) return;
     if (!d || !d.found) return;
-    const q = normQuery(showTitle) + ' s' + String(d.season).padStart(2,'0') + 'e' + String(d.episode).padStart(2,'0');
+    const q = normQuery(title) + ' s' + String(d.season).padStart(2,'0') + 'e' + String(d.episode).padStart(2,'0');
     el.innerHTML = `<button class="latest-btn" data-q="${esc(q)}">▶ Play ${esc(d.label.split(' · ')[0])}</button>
       <button class="latest-badge ${d.watched ? 'seen' : ''}" aria-pressed="${d.watched}">${d.watched ? '✓ Watched' : 'Mark watched'}</button>`;
     el.style.display = '';
     // Same destination as the per-episode "Find ⭢" button — one search path,
     // so the top button can never resolve differently from the list below it.
     el.querySelector('.latest-btn').onclick = () => {
-      $('show-page').classList.remove('on');
+      closeDetails();
       prefillSearch(q);
     };
     el.querySelector('.latest-badge').onclick = async b => {
-      b.currentTarget.disabled = true;
+      if (!detailsCurrent(generation) || request !== latestGeneration) return;
+      const button = b.currentTarget;
+      button.disabled = true;
       try {
         await apiMutation('/library/action?action=watched&kind=tv&id=' + id
           + '&season=' + d.season + '&episode=' + d.episode + '&value=' + !d.watched);
-        await loadLatest(id);
+        if (!detailsCurrent(generation)) return;
+        await loadLatest(id, generation);
+        if (!detailsCurrent(generation)) return;
         if (showSeason === d.season) await loadSeason(showSeason);
-      } catch (err) { toast(err.message || 'Could not update watched state.'); }
+      } catch (err) {
+        if (detailsCurrent(generation)) { button.disabled = false; toast(err.message || 'Could not update watched state.'); }
+      }
     };
   } catch {}
 }
 async function loadSeason(sn){
+  const generation = detailsGeneration, id = showId, title = showTitle;
+  if (!detailsCurrent(generation) || !id) return;
+  const request = ++seasonGeneration;
   showSeason = sn;
   $('episodes').innerHTML = '<div class="empty"><span class="spin"></span></div>';
   try {
@@ -619,38 +644,47 @@ async function loadSeason(sn){
       showCinemetaVideos ? Promise.resolve({episodes: showCinemetaVideos.filter(e => +e.season === sn).map(e => ({
         episode_number:+e.episode || 0, name:e.title || `Episode ${e.episode}`,
         overview:e.overview || '', air_date:(e.released || '').slice(0,10),
-      }))}) : api('/tv?id=' + showId + '&season=' + sn + (showImdb ? '&imdb=' + encodeURIComponent(showImdb) : '')),
-      api('/library/watched?kind=tv&id=' + showId + '&season=' + sn).catch(() => ({episodes:[]})),
+      }))}) : api('/tv?id=' + id + '&season=' + sn + (showImdb ? '&imdb=' + encodeURIComponent(showImdb) : '')),
+      api('/library/watched?kind=tv&id=' + id + '&season=' + sn).catch(() => ({episodes:[]})),
     ]);
+    if (!detailsCurrent(generation) || request !== seasonGeneration) return;
     const seen = new Set(seenData.episodes || []);
     $('episodes').innerHTML = (d.episodes || []).map(e => `
       <div class="ep"><div class="h">
         <span>E${String(e.episode_number).padStart(2,'0')} · ${esc(e.name || '')}</span>
         <div class="ep-actions">
           <button class="watched-toggle ${seen.has(e.episode_number) ? 'seen' : ''}" data-action="watched"
+            data-show="${id}" data-details="${generation}"
             data-season="${sn}" data-episode="${e.episode_number}" data-value="${!seen.has(e.episode_number)}"
             aria-pressed="${seen.has(e.episode_number)}">${seen.has(e.episode_number) ? '✓ Watched' : 'Mark watched'}</button>
-          <button class="find" data-action="find" data-q="${esc(normQuery(showTitle))} s${String(sn).padStart(2,'0')}e${String(e.episode_number).padStart(2,'0')}">Find ⭢</button>
+          <button class="find" data-action="find" data-q="${esc(normQuery(title))} s${String(sn).padStart(2,'0')}e${String(e.episode_number).padStart(2,'0')}">Find ⭢</button>
         </div>
       </div>
       <div class="o">${esc((e.overview || '').slice(0, 160))}${e.air_date ? ' · ' + esc(e.air_date) : ''}</div></div>`).join('')
       || '<div class="empty">No episodes</div>';
-  } catch { $('episodes').innerHTML = '<div class="empty">Failed</div>'; }
+  } catch {
+    if (detailsCurrent(generation) && request === seasonGeneration)
+      $('episodes').innerHTML = '<div class="empty">Could not load episodes. Select the season to retry.</div>';
+  }
 }
 $('episodes').addEventListener('click', async e => {
   const button = e.target.closest('button[data-action]'); if (!button) return;
   if (button.dataset.action === 'find') {
-    $('show-page').classList.remove('on'); prefillSearch(button.dataset.q); return;
+    closeDetails(); prefillSearch(button.dataset.q); return;
   }
+  const id = +button.dataset.show, generation = +button.dataset.details;
+  if (!detailsCurrent(generation) || id !== showId) return;
   button.disabled = true;
   try {
-    await apiMutation('/library/action?action=watched&kind=tv&id=' + showId
+    await apiMutation('/library/action?action=watched&kind=tv&id=' + id
       + '&season=' + button.dataset.season + '&episode=' + button.dataset.episode
       + '&value=' + button.dataset.value);
-    await Promise.all([loadSeason(showSeason), loadLatest(showId)]);
-  } catch (err) { button.disabled = false; toast(err.message || 'Could not update watched state.'); }
+    if (detailsCurrent(generation)) await Promise.all([loadSeason(showSeason), loadLatest(id, generation)]);
+  } catch (err) {
+    if (detailsCurrent(generation)) { button.disabled = false; toast(err.message || 'Could not update watched state.'); }
+  }
 });
-$('show-back').onclick = () => $('show-page').classList.remove('on');
+$('show-back').onclick = closeDetails;
 
 // ── Coming up rail ──
 // The coming-up rail already renders into #cal for the Playing page. Home

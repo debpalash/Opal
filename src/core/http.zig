@@ -1,5 +1,5 @@
 const std = @import("std");
-const builtin = @import("builtin");
+const transport = @import("http_transport.zig");
 const logs = @import("logs.zig");
 const alloc = @import("alloc.zig");
 const io_global = @import("io_global.zig");
@@ -27,17 +27,7 @@ const workers = @import("workers.zig");
 // the caller's in-flight latch stuck and the route permanently empty).
 // ══════════════════════════════════════════════════════════
 
-pub const HttpOptions = struct {
-    timeout_secs: u8 = 10,
-    user_agent: []const u8 = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
-    referer: ?[]const u8 = null,
-    max_response: usize = 256 * 1024, // 256KB default
-    accept: ?[]const u8 = null,
-    method: std.http.Method = .GET,
-    payload: ?[]const u8 = null,
-    content_type: ?[]const u8 = null,
-    auth_header: ?[]const u8 = null,
-};
+pub const HttpOptions = transport.Options;
 
 pub const HttpResponse = struct {
     body: []u8,
@@ -156,170 +146,12 @@ pub fn deinit() void {
 /// a slow-but-alive server isn't cut off, at most 20s so no fetch can hang
 /// unboundedly even when the caller passed 0 or a huge value. Pure — routed
 /// through by fetch() so the shipped clamp is the tested clamp.
-pub fn effectiveTimeoutSecs(requested: u8) u8 {
-    return std.math.clamp(requested, @as(u8, 1), @as(u8, 20));
-}
+pub const effectiveTimeoutSecs = transport.effectiveTimeoutSecs;
 
-const is_windows = builtin.os.tag == .windows;
-
-// ── Stall watchdog ────────────────────────────────────────
-// Bounds a single request. std.http's request()/receiveHead()/reader expose NO
-// per-request deadline in 0.16, and the Threaded Io backend does BLOCKING
-// readv() syscalls where EAGAIN (SO_RCVTIMEO) and EBADF (closing the fd) are
-// both `errnoBug` → panic. The one safe way to unblock a stalled read is
-// shutdown(): it makes the blocked readv return 0 (EOF) via the SUCCESS path.
-// So a small watchdog thread, armed with this request's socket fd, calls
-// shutdown() once the deadline passes and the fetch hasn't signalled done.
-// POSIX only (the shutdown/fd plumbing is libc); on Windows the shared client
-// still applies but the per-request timeout is a no-op (documented follow-up).
-const Watchdog = struct {
-    done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-    fd: std.atomic.Value(c_int) = std.atomic.Value(c_int).init(-1),
-    timeout_ms: i64,
-
-    fn run(self: *Watchdog) void {
-        const deadline = io_global.milliTimestamp() + self.timeout_ms;
-        while (!self.done.load(.acquire)) {
-            // App teardown must not sit behind the normal 10-20 second network
-            // timeout. shutdown(2) wakes the blocking std.http read through its
-            // normal EOF path, so use the global worker cancellation token as
-            // an immediate deadline.
-            if (workers.isQuitting()) break;
-            const now = io_global.milliTimestamp();
-            if (now >= deadline) break;
-            // Poll in short steps so the happy path (fetch sets done, then
-            // joins) waits at most ~5ms; over a full stall this is a few
-            // thousand cheap wakeups — negligible CPU.
-            const remaining = deadline - now;
-            const step_ms: u64 = @intCast(@min(remaining, @as(i64, 5)));
-            io_global.sleep(step_ms * 1_000_000);
-        }
-        if (self.done.load(.acquire)) return; // fetch finished — nothing to unblock
-        const fd = self.fd.load(.acquire);
-        if (fd >= 0) _ = std.c.shutdown(fd, @as(c_int, std.c.SHUT.RDWR));
-    }
-};
-
-/// Fetch URL into caller-provided buffer. Returns slice of response body.
+/// Fetch URL into caller-provided buffer using the shared keep-alive client.
 pub fn fetch(url: []const u8, buf: []u8, opts: HttpOptions) ?[]const u8 {
-    // Do not start an unguarded request after shutdown has closed admission to
-    // watchdog threads. Existing requests are interrupted by Watchdog.run.
     if (workers.isQuitting()) return null;
-
-    // Build headers
-    var headers_buf: [8]std.http.Header = undefined;
-    var header_count: usize = 0;
-
-    headers_buf[header_count] = .{ .name = "User-Agent", .value = opts.user_agent };
-    header_count += 1;
-
-    if (opts.referer) |ref| {
-        headers_buf[header_count] = .{ .name = "Referer", .value = ref };
-        header_count += 1;
-    }
-
-    if (opts.accept) |acc| {
-        headers_buf[header_count] = .{ .name = "Accept", .value = acc };
-        header_count += 1;
-    }
-
-    if (opts.content_type) |ct| {
-        headers_buf[header_count] = .{ .name = "Content-Type", .value = ct };
-        header_count += 1;
-    }
-
-    if (opts.auth_header) |auth| {
-        // e.g. "Authorization: Bearer xxx" -> We construct it inside or split?
-        // We will assume auth_header provides ONLY the value and we use name="Authorization". Wait, Jellyfin uses "X-Emby-Authorization"!
-        // Let's assume auth_header is the raw header line like "X-Emby-Authorization: xxx"
-        if (std.mem.indexOfScalar(u8, auth, ':')) |colon| {
-            headers_buf[header_count] = .{
-                .name = auth[0..colon],
-                .value = auth[colon + 1 ..], // Will leave leading space which std.http tolerates
-            };
-            header_count += 1;
-        }
-    }
-
-    // Shared, keep-alive client (see sharedClient). Never deinit'd here.
-    const client = sharedClient();
-
-    const uri = std.Uri.parse(url) catch {
-        logs.pushLog("warn", "http", "Invalid URL", true);
-        return null;
-    };
-
-    // Arm the stall watchdog BEFORE connecting so it bounds the whole request.
-    // It gets this request's socket fd right after connect (below) and, if the
-    // deadline passes with the fetch still stuck, shutdown()s the socket so the
-    // blocked read returns EOF instead of hanging the worker forever.
-    var wd = Watchdog{ .timeout_ms = @as(i64, effectiveTimeoutSecs(opts.timeout_secs)) * 1000 };
-    var wd_thread: ?std.Thread = null;
-    if (comptime !is_windows) {
-        wd_thread = @import("workers.zig").spawnLegacy(Watchdog.run, .{&wd}) catch null;
-    }
-    defer {
-        wd.done.store(true, .release);
-        if (wd_thread) |t| t.join();
-    }
-
-    var req = client.request(opts.method, uri, .{
-        .redirect_behavior = @enumFromInt(5), // Follow up to 5 redirects
-        .extra_headers = headers_buf[0..header_count],
-    }) catch {
-        logs.pushLog("warn", "http", "HTTP connect failed", true);
-        return null;
-    };
-    defer req.deinit();
-
-    // Hand the watchdog this request's socket so it can unblock a stalled read.
-    // (Covers the send + receiveHead + body read of the initial connection —
-    // i.e. the direct source fetches that were hanging. A stall on a *new*
-    // connection opened while std follows a redirect uses a different fd and is
-    // not covered; the initial hop and pooled reuse are.)
-    if (comptime !is_windows) {
-        if (req.connection) |conn| {
-            wd.fd.store(@intCast(conn.stream_reader.stream.socket.handle), .release);
-        }
-    }
-
-    if (opts.payload) |payload| {
-        req.sendBodyComplete(@constCast(payload)) catch return null;
-    } else {
-        req.sendBodiless() catch {
-            logs.pushLog("warn", "http", "HTTP send failed", true);
-            return null;
-        };
-    }
-
-    var redirect_buf: [8 * 1024]u8 = undefined;
-    var response = req.receiveHead(&redirect_buf) catch {
-        logs.pushLog("warn", "http", "HTTP receive failed", true);
-        return null;
-    };
-
-    if (response.head.status != .ok and response.head.status != .created) {
-        return null;
-    }
-
-    // Read body
-    var transfer_buf: [16 * 1024]u8 = undefined;
-    const reader = response.reader(&transfer_buf);
-
-    // Clamp the read limit to the caller's buffer — never allocate/download more
-    // than we can return (a huge response otherwise allocs then gets discarded).
-    const read_limit = @min(opts.max_response, buf.len);
-    const body = reader.allocRemaining(alloc.allocator, std.Io.Limit.limited(read_limit)) catch {
-        return null;
-    };
-    defer alloc.allocator.free(body);
-
-    if (body.len < 2 or body.len > buf.len) {
-        return null;
-    }
-
-    @memcpy(buf[0..body.len], body);
-    return buf[0..body.len];
+    return transport.fetch(sharedClient(), url, buf, opts);
 }
 
 /// Fetch URL into heap-allocated buffer (caller must free with c_allocator).

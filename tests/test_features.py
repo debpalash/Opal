@@ -14,6 +14,24 @@ Output is unchanged: tests/results.json (schema read by tests/dashboard.html).
 
 import os
 import sys
+import argparse
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Opal feature checks (database diagnostics are read-only).")
+    parser.add_argument("--database", help="Use an isolated SQLite fixture instead of the app database")
+    parser.add_argument("--results", help="Write the JSON report to this path instead of tests/results.json")
+    return parser.parse_args()
+
+
+# Parse before importing/registering checks: --help and invalid arguments must
+# not accidentally launch the full suite, build the app, or overwrite a report.
+if __name__ == "__main__":
+    args = parse_args()
+    if args.database:
+        os.environ["OPAL_TEST_DB"] = args.database
+    if args.results:
+        os.environ["OPAL_TEST_RESULTS"] = args.results
 
 # Make the `features` package importable regardless of CWD.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

@@ -889,14 +889,11 @@ fn startThumbBackfill() void {
 
                 // yt-dlp --get-thumbnail <url> (bundled/system binary — bare
                 // "yt-dlp" isn't on the GUI process PATH).
-                const argv = [_][]const u8{
-                    @import("ytdlp.zig").binary(), "--get-thumbnail",
-                    "--no-warnings",               "--no-check-certificates",
-                    "--cookies-from-browser",      "firefox",
-                    url,
-                };
+                const argv_policy = @import("ytdlp_argv_pure.zig");
+                var argv_storage: argv_policy.Argv = undefined;
+                const argv = argv_policy.build(@import("ytdlp.zig").binary(), url, .thumbnail, "", &argv_storage);
 
-                var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
+                var child = @import("../core/io_global.zig").Child.init(argv, alloc);
                 child.stdout_behavior = .Pipe;
                 child.stderr_behavior = .Ignore;
                 child.spawn() catch continue;

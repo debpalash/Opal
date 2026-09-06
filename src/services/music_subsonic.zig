@@ -644,16 +644,13 @@ pub fn downloadSong(idx: usize) void {
                 const ytdlp = @import("ytdlp.zig");
                 var out_tmpl: [256]u8 = undefined;
                 const otmpl = std.fmt.bufPrint(&out_tmpl, "{s}.%(ext)s", .{namep[0..name_len]}) catch return;
-                const argv = [_][]const u8{
-                    ytdlp.binary(),     "-x",
-                    "--audio-format",   "mp3",
-                    "--audio-quality",  "0",
-                    "--embed-metadata", "--embed-thumbnail",
-                    "--no-playlist",    "--paths",
-                    dirp[0..dir_len],   "-o",
-                    otmpl,              url[0..url_len],
-                };
-                var child = io.Child.init(&argv, alloc);
+                const argv_policy = @import("ytdlp_argv_pure.zig");
+                var argv_storage: argv_policy.Argv = undefined;
+                const argv = argv_policy.build(ytdlp.binary(), url[0..url_len], .{ .audio_download = .{
+                    .directory = dirp[0..dir_len],
+                    .output_template = otmpl,
+                } }, "", &argv_storage);
+                var child = io.Child.init(argv, alloc);
                 child.stdin_behavior = .Ignore;
                 child.stdout_behavior = .Ignore;
                 child.stderr_behavior = .Ignore;

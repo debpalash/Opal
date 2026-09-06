@@ -90,8 +90,8 @@ fn extractThread() void {
     queue_mod.initDb();
 
     // yt-dlp --flat-playlist -j <url> outputs one JSON object per line
-    // Pass --cookies-from-browser=firefox (like phub-cli) for sites requiring auth
-    // If proxy is configured, also pass --proxy
+    // App-owned extraction never reads a browser login or arbitrary yt-dlp config.
+    // Keep the explicitly configured proxy, if present.
     const has_proxy = state.app.proxy_url_len > 0;
     const proxy_str = state.app.proxy_url[0..state.app.proxy_url_len];
 
@@ -100,18 +100,9 @@ fn extractThread() void {
     // returns storyboard-only formats, which broke every YouTube resolve. yt-dlp
     // maintains its own client-fallback chain; let it choose. See
     // src/player/ytdl_opts_pure.zig for the full history.
-    const argv_proxy = [_][]const u8{
-        ytdlp_bin,       "--flat-playlist",        "-j",
-        "--no-warnings", "--cookies-from-browser", "firefox",
-        "--proxy",       proxy_str,                "--",
-        url,
-    };
-    const argv_direct = [_][]const u8{
-        ytdlp_bin,       "--flat-playlist",        "-j",
-        "--no-warnings", "--cookies-from-browser", "firefox",
-        "--",            url,
-    };
-    const argv: []const []const u8 = if (has_proxy) &argv_proxy else &argv_direct;
+    const argv_policy = @import("ytdlp_argv_pure.zig");
+    var argv_storage: argv_policy.Argv = undefined;
+    const argv = argv_policy.build(ytdlp_bin, url, .playlist_json, if (has_proxy) proxy_str else "", &argv_storage);
 
     var child = @import("../core/io_global.zig").Child.init(argv, alloc);
     child.stdout_behavior = .Pipe;

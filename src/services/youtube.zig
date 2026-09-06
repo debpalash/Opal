@@ -975,34 +975,9 @@ fn runYtdlp(target: []const u8, item_range: ?[]const u8, gen: u32) void {
     // %(upload_date)s is YYYYMMDD or NA on flat-playlist; %(channel_id)s feeds
     // the clickable channel → channel-videos view.
     const ytdlp_bin = @import("ytdlp.zig").binary();
-    var argv_buf: [13][]const u8 = undefined;
-    var argc: usize = 0;
-    for ([_][]const u8{
-        ytdlp_bin,
-        "--flat-playlist",
-        "--print",
-        "%(id)s\t%(title)s\t%(channel)s\t%(duration)s\t%(view_count)s\t%(upload_date)s\t%(channel_id)s",
-        "--no-warnings",
-        "--socket-timeout",
-        "10",
-        // NOTE: deliberately NO `--extractor-args youtube:player_client=…`.
-        // Pinning a client freezes us to whatever worked the day it was
-        // written; the `tv` pin we used to carry here now returns only
-        // storyboard formats on the playback path. yt-dlp maintains its own
-        // client-fallback chain — let it choose.
-    }) |a| {
-        argv_buf[argc] = a;
-        argc += 1;
-    }
-    if (item_range) |r| {
-        argv_buf[argc] = "-I";
-        argc += 1;
-        argv_buf[argc] = r;
-        argc += 1;
-    }
-    argv_buf[argc] = target;
-    argc += 1;
-    const argv = argv_buf[0..argc];
+    const argv_policy = @import("ytdlp_argv_pure.zig");
+    var argv_storage: argv_policy.Argv = undefined;
+    const argv = argv_policy.build(ytdlp_bin, target, .{ .youtube_listing = item_range }, "", &argv_storage);
 
     // yt-dlp is only the fallback, but it still owns network extractors and
     // may launch helpers. Keep its line-by-line UI publishing while bounding

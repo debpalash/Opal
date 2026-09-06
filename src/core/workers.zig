@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const io = @import("io_global.zig");
 
 // Process-owned worker supervisor. New work is admitted through `spawn`, which
@@ -23,6 +24,10 @@ var slots_mutex: sync.Mutex = .{};
 var active: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
 var quitting: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var shutdown_complete: std.atomic.Value(bool) = std.atomic.Value(bool).init(true);
+
+// Test-only scheduling seam: suspend a legacy caller after its optimistic
+// shutdown check, before it reserves an active task. Production builds omit it.
+var legacy_admission_hook_for_test: ?*const fn () void = null;
 
 /// Initialize admission before any service is allowed to start work.
 pub fn init() void {
@@ -119,15 +124,11 @@ pub fn spawn(comptime function: anytype, args: anytype) !void {
 /// handle in the bounded slot table.
 pub fn spawnLegacy(comptime function: anytype, args: anytype) !std.Thread {
     if (isQuitting()) return error.ShuttingDown;
-
-    // This compatibility path is bounded too. Reserving before allocation and
-    // spawn gives callers immediate backpressure instead of recreating the old
-    // unbounded detached-thread storm under a different name.
-    const previous = active.fetchAdd(1, .acq_rel);
-    if (previous >= MAX_LEGACY_TASKS) {
-        _ = active.fetchSub(1, .acq_rel);
-        return error.WorkQueueFull;
+    if (builtin.is_test) {
+        if (legacy_admission_hook_for_test) |hook| hook();
     }
+
+    try reserveLegacyTask();
     errdefer leave();
 
     const Args = @TypeOf(args);
@@ -147,6 +148,24 @@ pub fn spawnLegacy(comptime function: anytype, args: anytype) !std.Thread {
     return std.Thread.spawn(.{}, Context.run, .{context}) catch |err| {
         return err;
     };
+}
+
+fn reserveLegacyTask() !void {
+    // Admission and the drain's empty-worker observation share one lock. A
+    // quitting check followed by an unlocked increment allowed this ordering:
+    // check(false) -> drain sees zero and returns -> increment -> start worker.
+    // That worker could access application state after teardown had freed it.
+    // Re-check under the drain lock, then reserve before releasing it. Allocation
+    // and OS thread creation stay outside the lock; the reservation protects
+    // both until either the worker completes or spawn's errdefer releases it.
+    slots_mutex.lock();
+    defer slots_mutex.unlock();
+    if (isQuitting()) return error.ShuttingDown;
+    const previous = active.fetchAdd(1, .acq_rel);
+    if (previous >= MAX_LEGACY_TASKS) {
+        _ = active.fetchSub(1, .acq_rel);
+        return error.WorkQueueFull;
+    }
 }
 
 /// Relinquish a compatibility handle after `spawnLegacy` has registered its
@@ -251,6 +270,65 @@ test "legacy native handles remain behind the shutdown barrier after detach" {
     thread.detach();
     beginShutdownAndDrain(1_000);
     try std.testing.expect(T.ran.load(.acquire));
+    try std.testing.expectEqual(@as(i64, 0), activeCount());
+}
+
+test "legacy admission resumed after shutdown cannot start an untracked task" {
+    const T = struct {
+        var at_admission = std.atomic.Value(bool).init(false);
+        var resume_admission = std.atomic.Value(bool).init(false);
+        var rejected = std.atomic.Value(bool).init(false);
+        var ran = std.atomic.Value(bool).init(false);
+
+        fn pauseAdmission() void {
+            at_admission.store(true, .release);
+            while (!resume_admission.load(.acquire))
+                io.sleep(std.time.ns_per_ms);
+        }
+
+        fn task() void {
+            ran.store(true, .release);
+        }
+
+        fn submit() void {
+            const thread = spawnLegacy(task, .{}) catch |err| {
+                rejected.store(err == error.ShuttingDown, .release);
+                return;
+            };
+            thread.join();
+        }
+    };
+
+    init();
+    T.at_admission.store(false, .release);
+    T.resume_admission.store(false, .release);
+    T.rejected.store(false, .release);
+    T.ran.store(false, .release);
+    legacy_admission_hook_for_test = T.pauseAdmission;
+    defer legacy_admission_hook_for_test = null;
+
+    const submitter = try std.Thread.spawn(.{}, T.submit, .{});
+    var joined = false;
+    defer if (!joined) {
+        T.resume_admission.store(true, .release);
+        submitter.join();
+    };
+
+    // The barrier fixes the interleaving: the optimistic check already passed,
+    // but shutdown must still be allowed to close admission and finish draining.
+    // The deadline only detects a broken test setup; it does not create the race.
+    const deadline = io.monotonicMilliTimestamp() + 2_000;
+    while (!T.at_admission.load(.acquire) and io.monotonicMilliTimestamp() < deadline)
+        io.sleep(std.time.ns_per_ms);
+    try std.testing.expect(T.at_admission.load(.acquire));
+    beginShutdownAndDrain(1_000);
+    try std.testing.expectEqual(@as(i64, 0), activeCount());
+
+    T.resume_admission.store(true, .release);
+    submitter.join();
+    joined = true;
+    try std.testing.expect(T.rejected.load(.acquire));
+    try std.testing.expect(!T.ran.load(.acquire));
     try std.testing.expectEqual(@as(i64, 0), activeCount());
 }
 

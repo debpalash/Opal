@@ -23,6 +23,7 @@ import time
 import socket
 import sys
 import re as _re
+from pathlib import Path
 
 # Windows consoles default to cp1252, which can't encode the ✅/❌ status glyphs
 # this harness prints (UnicodeEncodeError mid-run). Force UTF-8 output so the
@@ -34,9 +35,18 @@ except Exception:
     pass
 
 # harness.py lives at tests/features/harness.py → three dirnames to the repo root.
-DB_PATH = os.path.expanduser("~/.config/opal/opal.db")
+def database_path():
+    """Allow deterministic fixtures without reading a developer's library."""
+    explicit = os.environ.get("OPAL_TEST_DB")
+    if explicit:
+        return os.path.abspath(os.path.expanduser(explicit))
+    config = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    return os.path.join(config, "opal", "opal.db")
+
+
+DB_PATH = database_path()
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-RESULTS_FILE = os.path.join(PROJECT_DIR, "tests", "results.json")
+RESULTS_FILE = os.environ.get("OPAL_TEST_RESULTS") or os.path.join(PROJECT_DIR, "tests", "results.json")
 
 __all__ = [
     "test", "TestResult", "results", "REGISTRY", "run_all",
@@ -96,7 +106,9 @@ def test(name, category):
 def get_db():
     if not os.path.exists(DB_PATH):
         return None
-    return sqlite3.connect(DB_PATH)
+    # Diagnostics must never mutate the app's live database. as_uri escapes
+    # spaces, '#' and '?' instead of treating a fixture path as URI options.
+    return sqlite3.connect(Path(DB_PATH).resolve().as_uri() + "?mode=ro", uri=True)
 
 
 def _src(rel):
@@ -166,10 +178,12 @@ _EMOJI = _re.compile(
 # ══════════════════════════════════════════════════════════
 
 def run_all():
+    # Repeated runs in one process must not retain the previous report.
+    results.clear()
     test_fns = list(REGISTRY)
 
     print(f"\n{'='*60}")
-    print(f"  ZigZag Feature Test Suite — {len(test_fns)} tests")
+    print(f"  Opal Feature Test Suite — {len(test_fns)} tests")
     print(f"{'='*60}\n")
 
     for fn in test_fns:

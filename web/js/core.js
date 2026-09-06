@@ -159,7 +159,7 @@ if (!navigator.onLine) setNetworkState(false);
 window.addEventListener('offline', () => setNetworkState(false));
 window.addEventListener('online', () => {
   setNetworkState('reconnecting');
-  if (AUTHENTICATED) { poll(); if (currentPage) loadPage(currentPage); }
+  if (AUTHENTICATED) { startStatus(); if (currentPage) loadPage(currentPage); }
 });
 
 // ── Account auth (identical for headless + desktop-remote; no pairing code) ──
@@ -187,6 +187,8 @@ function paired(){
 function unpair(){
   const wasAuthenticated = AUTHENTICATED;
   AUTHENTICATED = false;
+  stopStatus();
+  if (wasAuthenticated) stopPageWork();
   if (wasAuthenticated) fetch(BASE + '/api/auth/logout', { method:'POST', credentials:'same-origin' }).catch(()=>{});
   showAuth();
 }
@@ -286,6 +288,7 @@ $('nav-close').onclick = () => closeMore(true);
 $('nav-scrim').onclick = () => closeMore(true);
 
 function stopPageWork(){
+  closeDetails();
   // Leaving the current tab: stop any settle watchers still polling a now-hidden
   // page (they otherwise keep hitting the server for ~36s). clearInterval on a
   // null/stale handle is a harmless no-op.

@@ -2470,11 +2470,11 @@ fn resolveYouTube(query_buf: [256]u8, qlen: usize) void {
     };
 
     const ytdlp_bin = @import("ytdlp.zig").binary();
-    const argv = [_][]const u8{
-        ytdlp_bin, "--flat-playlist", "--dump-json", "--no-warnings", sa,
-    };
+    const argv_policy = @import("ytdlp_argv_pure.zig");
+    var argv_storage: argv_policy.Argv = undefined;
+    const argv = argv_policy.build(ytdlp_bin, sa, .search_json, "", &argv_storage);
     var buf: [64 * 1024]u8 = undefined;
-    const execution = @import("../core/bounded_process.zig").run(&argv, &buf, .{ .timeout_ms = 20_000 });
+    const execution = @import("../core/bounded_process.zig").run(argv, &buf, .{ .timeout_ms = 20_000 });
     if (!execution.ok()) {
         noteWorkerOutcome(switch (execution.failure) {
             .spawn => .unavailable,
