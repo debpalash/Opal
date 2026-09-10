@@ -96,8 +96,35 @@ pub const video_h = 1080;
 pub const MediaPlayer = struct {
     mpv_ctx: *c.mpv.mpv_handle,
     mpv_gl: ?*c.mpv.mpv_render_context,
+    /// Front buffer: the last frame the render worker finished. Read by the
+    /// UI upload and by frame OCR — both under `frame_mutex`.
     pixels: []dvui.Color.PMA,
     texture: ?dvui.Texture,
+
+    // ── Software render worker ──
+    // mpv's SW render API rasterises on the CALLING thread (colour
+    // conversion, scaling, OSD). Doing that on the UI thread stalled every
+    // dvui frame for the whole conversion (25–200 ms at 4K). `render_thread`
+    // renders into `back_pixels` and swaps it with `pixels` under
+    // `frame_mutex`; the UI thread only uploads the front buffer.
+    back_pixels: []dvui.Color.PMA,
+    render_thread: ?std.Thread,
+    render_stop: std.atomic.Value(bool),
+    /// Set by mpv's update callback (any thread) to wake the worker.
+    render_wake: std.Io.Event,
+    frame_mutex: @import("../core/sync.zig").Mutex,
+    /// A finished frame sits in `pixels` and has not been uploaded yet.
+    frame_ready: bool,
+    /// Dimensions of the frame in `pixels` (row stride is frame_w * 4 bytes).
+    frame_w: u32,
+    frame_h: u32,
+    /// Pixel layout of the frame in `pixels` (the `sw_format` it was rendered
+    /// with), so the upload always creates a texture that matches the bytes
+    /// even if the format choice changes after the worker started.
+    frame_fmt: dvui.enums.TexturePixelFormat,
+    /// Render size requested by the UI (native size capped to the buffer).
+    want_w: std.atomic.Value(u32),
+    want_h: std.atomic.Value(u32),
     current_torrent_id: i32,
     torrent_is_ready: bool,
     has_metadata: bool,
@@ -510,13 +537,29 @@ pub const MediaPlayer = struct {
         self.dialogue_last_hash = 0;
         self.proxy_handle = @import("stream_proxy.zig").INVALID_HANDLE;
 
+        self.render_thread = null;
+        self.render_stop = std.atomic.Value(bool).init(false);
+        self.render_wake = .unset;
+        self.frame_mutex = .{};
+        self.frame_ready = false;
+        self.frame_w = 0;
+        self.frame_h = 0;
+        self.frame_fmt = swTextureFormat();
+        self.want_w = std.atomic.Value(u32).init(0);
+        self.want_h = std.atomic.Value(u32).init(0);
         if (state.app.is_headless) {
             // Headless: no display surface, so no software-render pixel buffer.
             // Empty slice — deinit's allocator.free on a zero-len slice is a no-op.
             self.pixels = &.{};
+            self.back_pixels = &.{};
         } else {
             self.pixels = try allocator.alloc(dvui.Color.PMA, video_w * video_h);
             @memset(self.pixels, dvui.Color.PMA.black);
+            self.back_pixels = allocator.alloc(dvui.Color.PMA, video_w * video_h) catch |err| {
+                allocator.free(self.pixels);
+                return err;
+            };
+            @memset(self.back_pixels, dvui.Color.PMA.black);
         }
 
         self.mpv_ctx = c.mpv.mpv_create() orelse {
@@ -531,6 +574,7 @@ pub const MediaPlayer = struct {
             // self.pixels was allocated just above (empty slice when headless);
             // free it and the struct so this failed init leaks nothing.
             allocator.free(self.pixels);
+            allocator.free(self.back_pixels);
             allocator.destroy(self);
             return error.MpvCreateFailed;
         };
@@ -682,6 +726,11 @@ pub const MediaPlayer = struct {
             }
         }
 
+        // ── Escape hatch: OPAL_MPV_OPTS="name=value;name=value" ──
+        // Raw mpv options applied last (they override everything above), for
+        // diagnosing playback on a machine we cannot see. Not a user setting.
+        applyEnvMpvOpts(self.mpv_ctx);
+
         // Scan scripts before init (but loading happens after)
         const scripts_mgr = @import("../services/scripts.zig");
         if (!state.app.scripts_scanned) scripts_mgr.scanScripts();
@@ -742,15 +791,100 @@ pub const MediaPlayer = struct {
                 logs.pushLog("error", "player", "mpv render-context creation failed — video disabled for this player (audio still works)", true);
                 return self;
             }
-            // Wake the UI loop whenever mpv has a new frame ready. Without
-            // this, dvui sleeps on input idle (no mouse movement) and the
-            // texture freezes even though audio keeps playing because the
-            // pixel-buffer transfer in ui/grid.zig only happens inside a
-            // dvui frame. The callback fires on an mpv-owned thread, so we
-            // use the cross-thread form of dvui.refresh (passing *Window).
-            c.mpv.mpv_render_context_set_update_callback(self.mpv_gl, &mpvRenderUpdateCallback, null);
+            // The render worker owns every mpv_render_* call from here on: it
+            // waits on `render_wake`, which mpv's update callback sets from an
+            // mpv-owned thread whenever a new frame (or redraw) is pending.
+            // The worker wakes dvui itself once a frame is in the front
+            // buffer, so the UI only redraws when there is something to show.
+            self.render_thread = std.Thread.spawn(.{}, renderWorker, .{self}) catch |err| {
+                // Same degrade path as a failed render context: audio and
+                // controls keep working, video stays black for this player.
+                std.debug.print("[player] render worker spawn failed: {s}\n", .{@errorName(err)});
+                logs.pushLog("error", "player", "video render thread could not start — video disabled for this player (audio still works)", true);
+                c.mpv.mpv_render_context_free(self.mpv_gl);
+                self.mpv_gl = null;
+                return self;
+            };
+            c.mpv.mpv_render_context_set_update_callback(self.mpv_gl, &mpvRenderUpdateCallback, @ptrCast(self));
         }
         return self;
+    }
+
+    /// Software render worker. Loop: wait for mpv's "new frame" signal, ask
+    /// mpv what changed, rasterise the frame into the back buffer at the size
+    /// the UI asked for, publish it as the front buffer, wake dvui.
+    ///
+    /// mpv paces us: mpv_render_context_render blocks until the frame's
+    /// target display time (its default), so the worker sleeps between frames
+    /// and never spins. Only this thread calls mpv_render_* after init.
+    fn renderWorker(self: *MediaPlayer) void {
+        const io = @import("../core/io_global.zig").io();
+        while (true) {
+            self.render_wake.waitUncancelable(io);
+            self.render_wake.reset();
+            if (self.render_stop.load(.acquire)) return;
+            const gl = self.mpv_gl orelse return;
+
+            const flags = c.mpv.mpv_render_context_update(gl);
+            if ((flags & c.mpv.MPV_RENDER_UPDATE_FRAME) == 0) continue;
+
+            var w = self.want_w.load(.acquire);
+            var h = self.want_h.load(.acquire);
+            if (w < 2 or h < 2 or @as(usize, w) * @as(usize, h) > self.back_pixels.len) {
+                w = video_w;
+                h = video_h;
+            }
+            const size = [2]c_int{ @intCast(w), @intCast(h) };
+            const pitch: usize = @as(usize, w) * 4;
+            // Snapshot the format for this frame: the UI may switch
+            // `sw_format` once (native texture format pick) after we started.
+            const fmt = sw_format;
+            var params = [_]c.mpv.mpv_render_param{
+                .{ .type = c.mpv.MPV_RENDER_PARAM_SW_SIZE, .data = @constCast(&size) },
+                .{ .type = c.mpv.MPV_RENDER_PARAM_SW_FORMAT, .data = @constCast(fmt) },
+                .{ .type = c.mpv.MPV_RENDER_PARAM_SW_STRIDE, .data = @constCast(&pitch) },
+                .{ .type = c.mpv.MPV_RENDER_PARAM_SW_POINTER, .data = self.back_pixels.ptr },
+                .{ .type = c.mpv.MPV_RENDER_PARAM_INVALID, .data = null },
+            };
+            const t0: i64 = if (perf.enabled) perfNow() else 0;
+            const rc = c.mpv.mpv_render_context_render(gl, &params);
+            if (perf.enabled) {
+                const dt = perfNow() - t0;
+                _ = perf.frames.fetchAdd(1, .monotonic);
+                _ = perf.render_ns.fetchAdd(dt, .monotonic);
+                _ = perf.render_max_ns.fetchMax(dt, .monotonic);
+            }
+            if (rc < 0) continue;
+
+            // Publish: the just-rendered buffer becomes the front buffer.
+            self.frame_mutex.lock();
+            const front = self.pixels;
+            self.pixels = self.back_pixels;
+            self.back_pixels = front;
+            self.frame_w = w;
+            self.frame_h = h;
+            self.frame_fmt = textureFormatOf(fmt);
+            self.frame_ready = true;
+            self.frame_mutex.unlock();
+            wakeDvuiFromMpv();
+        }
+    }
+
+    /// Blank both pixel buffers (new file / stop) and queue the black frame for
+    /// upload, so the pane never shows the previous video's last frame.
+    fn clearFrame(self: *MediaPlayer) void {
+        if (self.pixels.len == 0) return;
+        self.frame_mutex.lock();
+        defer self.frame_mutex.unlock();
+        // Front buffer only: the worker may be mid-render into the back buffer
+        // (it renders outside the lock on purpose), and that render replaces
+        // the back buffer's contents anyway.
+        @memset(self.pixels, dvui.Color.PMA.black);
+        if (self.texture) |tex| {
+            self.frame_w = tex.width;
+            self.frame_h = tex.height;
+            self.frame_ready = true;
+        }
     }
 
     pub fn load_file(self: *MediaPlayer, path: [*c]const u8) void {
@@ -797,22 +931,9 @@ pub const MediaPlayer = struct {
         self.saveCurrentPosition();
         self.last_position_save_ms = @import("../core/io_global.zig").monotonicMilliTimestamp();
 
-        @memset(self.pixels, dvui.Color.PMA.black);
-        if (self.texture) |*tex| {
-            // Slice to the TEXTURE's size, not the whole pixel buffer.
-            //
-            // `pixels` is allocated once at video_w * video_h, but the texture is
-            // created in grid.zig at the current RENDER size (rw x rh), which is a
-            // different number. dvui's Texture.update hard-@panics on a length
-            // mismatch — it is not a catchable error, so the `catch {}` here was
-            // decoration. Loading a second file while a texture was alive (a
-            // playlist advance, or the buffering reload below) crashed the process:
-            //   "Texture size and supplied Content did not match"
-            const npix = @as(usize, tex.width) * @as(usize, tex.height);
-            if (npix > 0 and npix <= self.pixels.len) {
-                _ = dvui.Texture.update(tex, self.pixels[0..npix], .linear) catch {};
-            }
-        }
+        // Blank the pane (queued as a frame for the UI upload) so the previous
+        // video's last frame never lingers under the new file's loading state.
+        self.clearFrame();
         // Set loading state for UI feedback
         self.is_loading = true;
         const path_span = request.url;
@@ -1088,6 +1209,9 @@ pub const MediaPlayer = struct {
         var raw_buf: [400]u8 = undefined;
         if (ytdl_opts.buildRawOptions(.{
             .proxy = state.app.proxy_url[0..state.app.proxy_url_len],
+            // Additive (deno stays yt-dlp's default); a missing node only
+            // reproduces the "no JS runtime" warning, so no probing needed.
+            .js_runtime = "node",
         }, &raw_buf)) |raw| {
             var raw_z: [401]u8 = undefined;
             @memcpy(raw_z[0..raw.len], raw);
@@ -1212,12 +1336,20 @@ pub const MediaPlayer = struct {
             @import("stream_proxy.zig").stopProxy(self.proxy_handle);
             self.proxy_handle = @import("stream_proxy.zig").INVALID_HANDLE;
         }
+        // Stop the render worker BEFORE freeing the render context: only one
+        // thread may be inside mpv_render_* at a time, and the worker may be
+        // parked in mpv_render_context_render waiting for a frame's target
+        // time (at most one frame interval).
+        if (self.render_thread) |t| {
+            self.render_stop.store(true, .release);
+            self.render_wake.set(@import("../core/io_global.zig").io());
+            t.join();
+            self.render_thread = null;
+        }
         c.mpv.mpv_render_context_free(self.mpv_gl);
-            // Additive (deno stays yt-dlp's default); a missing node only
-            // reproduces the "no JS runtime" warning, so no probing needed.
-            .js_runtime = "node",
         c.mpv.mpv_terminate_destroy(self.mpv_ctx);
         allocator.free(self.pixels);
+        allocator.free(self.back_pixels);
         allocator.destroy(self);
     }
 };
@@ -1228,8 +1360,11 @@ pub const MediaPlayer = struct {
 /// updates. Without this, dvui's SDL backend sleeps on input idle and
 /// the video freezes while audio continues. dvui.refresh is explicitly
 /// thread-safe when a *Window is passed (see dvui/src/dvui.zig).
-fn mpvRenderUpdateCallback(_: ?*anyopaque) callconv(.c) void {
-    wakeDvuiFromMpv();
+fn mpvRenderUpdateCallback(ctx: ?*anyopaque) callconv(.c) void {
+    // Notification-only (no mpv API allowed in here): hand the frame to the
+    // player's render worker, which rasterises it and then wakes dvui.
+    const p: *MediaPlayer = @ptrCast(@alignCast(ctx orelse return));
+    p.render_wake.set(@import("../core/io_global.zig").io());
 }
 
 /// Invoked for every queued mpv client event, including audio-only streams and
@@ -1266,6 +1401,20 @@ pub fn applyPicturePreset(p: anytype) void {
     const gamma = getPropStringInto(p.mpv_ctx, "video-params/gamma", &gamma_buf);
     const primaries = getPropStringInto(p.mpv_ctx, "video-params/primaries", &prim_buf);
 
+    // Software-scaler threading, decided per file. HDR sources carry per-frame
+    // metadata (Dolby Vision RPU / HDR10+ scene data) that makes mpv treat
+    // every frame as a format change: it rebuilds its zimg graph AND its
+    // thread pool on every single frame. Measured on a 4K DV episode with a
+    // 32-thread CPU: ~200 ms per frame (4 fps) with the "auto" pool, 25 ms
+    // with one thread (no pool to rebuild). SDR sources rebuild once, so they
+    // keep the multi-threaded default. Live option: mpv re-reads it on the
+    // next frame.
+    _ = c.mpv.mpv_set_option_string(
+        p.mpv_ctx,
+        "zimg-threads",
+        if (av_pure.isHdrVideo(gamma, primaries)) "1" else "auto",
+    );
+
     const chosen = av_pure.resolveAuto(
         av_pure.picturePresetFromInt(state.app.picture_preset),
         gamma,
@@ -1291,6 +1440,131 @@ pub fn applyPicturePreset(p: anytype) void {
 /// instead of an opaque "Auto".
 pub fn colorGammaOf(p: anytype, buf: []u8) []const u8 {
     return getPropStringInto(p.mpv_ctx, "video-params/gamma", buf);
+}
+
+// ── Playback perf probe ──
+// Enabled with OPAL_PLAYBACK_STATS=1. Times the two UI-thread costs of the
+// software render path (mpv render → RGBA buffer, then buffer → GPU texture)
+// and prints them with mpv's own drop counters every ~2s to stderr.
+pub const PerfProbe = struct {
+    enabled: bool = false,
+    // Written by the render worker, read by the UI thread → atomics.
+    frames: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    render_ns: std.atomic.Value(i64) = std.atomic.Value(i64).init(0),
+    render_max_ns: std.atomic.Value(i64) = std.atomic.Value(i64).init(0),
+    // UI thread only.
+    ui_frames: u32 = 0,
+    uploads: u32 = 0,
+    upload_ns: i64 = 0,
+    upload_max_ns: i64 = 0,
+    last_report_ms: i64 = 0,
+};
+pub var perf: PerfProbe = .{};
+
+/// Render-target pixel format handed to mpv's software renderer. "rgb0" (the
+/// documented fast path) by default; OPAL_SW_FORMAT overrides it for testing.
+pub var sw_format: [*:0]const u8 = "rgb0";
+/// True when OPAL_SW_FORMAT pinned `sw_format`; the UI's native-format pick
+/// (ui/grid.zig chooseSwFormat) then leaves it alone.
+pub var sw_format_forced: bool = false;
+
+/// dvui texture pixel format matching an mpv render-target format's byte order.
+pub fn textureFormatOf(fmt: [*:0]const u8) dvui.enums.TexturePixelFormat {
+    const f = std.mem.span(fmt);
+    if (std.mem.eql(u8, f, "rgba")) return .rgba_32;
+    if (std.mem.eql(u8, f, "bgra")) return .bgra_32;
+    if (std.mem.eql(u8, f, "bgr0")) return .bgrx_32;
+    return .rgbx_32;
+}
+
+/// dvui texture pixel format matching the current `sw_format`.
+pub fn swTextureFormat() dvui.enums.TexturePixelFormat {
+    return textureFormatOf(sw_format);
+}
+
+fn applyEnvMpvOpts(ctx: *c.mpv.mpv_handle) void {
+    if (std.c.getenv("OPAL_SW_FORMAT")) |raw| {
+        const v = std.mem.span(raw);
+        const known = [_][*:0]const u8{ "rgba", "rgb0", "bgr0", "bgra" };
+        for (known) |k| {
+            if (std.mem.eql(u8, v, std.mem.span(k))) {
+                sw_format = k;
+                sw_format_forced = true;
+            }
+        }
+    }
+    const raw = std.c.getenv("OPAL_MPV_OPTS") orelse return;
+    var it = std.mem.splitScalar(u8, std.mem.span(raw), ';');
+    while (it.next()) |kv| {
+        const eq = std.mem.indexOfScalar(u8, kv, '=') orelse continue;
+        var kbuf: [128]u8 = undefined;
+        var vbuf: [1024]u8 = undefined;
+        const k = std.fmt.bufPrintZ(&kbuf, "{s}", .{kv[0..eq]}) catch continue;
+        const v = std.fmt.bufPrintZ(&vbuf, "{s}", .{kv[eq + 1 ..]}) catch continue;
+        const rc = c.mpv.mpv_set_option_string(ctx, k.ptr, v.ptr);
+        std.debug.print("[mpv-opts] {s}={s} -> {d}\n", .{ k, v, rc });
+    }
+}
+
+pub fn perfInit() void {
+    const raw = std.c.getenv("OPAL_PLAYBACK_STATS") orelse return;
+    const v = std.mem.span(raw);
+    perf.enabled = v.len > 0 and v[0] != '0';
+}
+
+pub fn perfNow() i64 {
+    return @intCast(std.Io.Clock.awake.now(@import("../core/io_global.zig").io()).nanoseconds);
+}
+
+pub fn perfReport(p: *MediaPlayer) void {
+    if (!perf.enabled) return;
+    const now_ms = @import("../core/io_global.zig").monotonicMilliTimestamp();
+    if (perf.last_report_ms == 0) {
+        perf.last_report_ms = now_ms;
+        return;
+    }
+    if (now_ms - perf.last_report_ms < 2000) return;
+    const dt_s = @as(f64, @floatFromInt(now_ms - perf.last_report_ms)) / 1000.0;
+    perf.last_report_ms = now_ms;
+    var b1: [64]u8 = undefined;
+    var b2: [64]u8 = undefined;
+    var b3: [64]u8 = undefined;
+    var b4: [64]u8 = undefined;
+    var b5: [64]u8 = undefined;
+    var b6: [64]u8 = undefined;
+    var b7: [64]u8 = undefined;
+    var b8: [64]u8 = undefined;
+    const frames = perf.frames.swap(0, .monotonic);
+    const render_ns = perf.render_ns.swap(0, .monotonic);
+    const render_max_ns = perf.render_max_ns.swap(0, .monotonic);
+    const fr: f64 = @floatFromInt(@max(frames, 1));
+    const uf: f64 = @floatFromInt(@max(perf.uploads, 1));
+    std.debug.print(
+        "[perf] {d:.1}s: vid_frames={d} ({d:.1}/s) ui_frames={d} ({d:.1}/s) render avg={d:.2}ms max={d:.2}ms upload avg={d:.2}ms max={d:.2}ms | hwdec={s} drop_vo={s} drop_dec={s} delayed={s} vf_fps={s} in={s} out={s} cache={s}s\n",
+        .{
+            dt_s,
+            frames,
+            @as(f64, @floatFromInt(frames)) / dt_s,
+            perf.ui_frames,
+            @as(f64, @floatFromInt(perf.ui_frames)) / dt_s,
+            @as(f64, @floatFromInt(render_ns)) / fr / 1e6,
+            @as(f64, @floatFromInt(render_max_ns)) / 1e6,
+            @as(f64, @floatFromInt(perf.upload_ns)) / uf / 1e6,
+            @as(f64, @floatFromInt(perf.upload_max_ns)) / 1e6,
+            getPropStringInto(p.mpv_ctx, "hwdec-current", &b1),
+            getPropStringInto(p.mpv_ctx, "frame-drop-count", &b2),
+            getPropStringInto(p.mpv_ctx, "decoder-frame-drop-count", &b3),
+            getPropStringInto(p.mpv_ctx, "vo-delayed-frame-count", &b4),
+            getPropStringInto(p.mpv_ctx, "estimated-vf-fps", &b5),
+            getPropStringInto(p.mpv_ctx, "video-params/pixelformat", &b6),
+            getPropStringInto(p.mpv_ctx, "video-out-params/pixelformat", &b7),
+            getPropStringInto(p.mpv_ctx, "demuxer-cache-duration", &b8),
+        },
+    );
+    perf.ui_frames = 0;
+    perf.uploads = 0;
+    perf.upload_ns = 0;
+    perf.upload_max_ns = 0;
 }
 
 /// Read an mpv string property into `buf`, returning a slice of it (empty when

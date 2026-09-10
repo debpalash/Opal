@@ -1,10 +1,10 @@
 //! frame_ocr.zig — OCR the active player's current video frame.
 //!
 //! Reuses the native PP-OCRv5 ONNX pipeline (the same C wrapper that
-//! src/services/comics.zig drives). The mpv software renderer fills the
-//! player's pixel buffer at a fixed `player.video_w` x `player.video_h`
-//! surface (the video is letterboxed inside it), so those are the real
-//! dimensions of the RGBA frame. Frames are opaque, so the premultiplied
+//! src/services/comics.zig drives). The player's render worker fills the
+//! front pixel buffer at the video's native size (`p.frame_w` x `p.frame_h`,
+//! capped to `player.video_w` x `player.video_h`), published under
+//! `p.frame_mutex`. Frames are opaque, so the premultiplied
 //! `dvui.Color.PMA` bytes are byte-identical to straight RGBA — we can
 //! cast the pixel pointer straight through to the C wrapper.
 //!
@@ -88,39 +88,42 @@ pub fn ocrCurrentFrame(out_buf: []u8) usize {
     if (state.app.active_player_idx >= state.app.players.items.len) return 0;
     const p = state.app.players.items[state.app.active_player_idx];
 
-    // Pixel buffer must be allocated/ready.
-    const pixels = p.pixels;
-    if (pixels.len == 0) return 0;
-
-    // Real frame dimensions: mpv renders into the full software surface.
-    const w: c_int = player.video_w;
-    const h: c_int = player.video_h;
-    if (w <= 0 or h <= 0) return 0;
-
-    // Sanity: the buffer must actually hold w*h pixels.
-    const need: usize = @as(usize, @intCast(w)) * @as(usize, @intCast(h));
-    if (pixels.len < need) return 0;
-
+    // Pixel buffer must be allocated/ready (headless has none).
+    if (p.pixels.len == 0) return 0;
     if (!ensureOcrInit()) return 0;
 
-    // ── Snapshot the live frame so OCR can't race mpv's render thread. ──
+    // ── Snapshot the live frame so OCR can't race the render worker. ──
+    // `p.pixels` is the front buffer and is only stable under `frame_mutex`:
+    // the worker swaps it with the back buffer when a frame completes. The
+    // frame is rendered at the video's native size (frame_w × frame_h, row
+    // stride frame_w * 4), NOT the full video_w × video_h surface — reading
+    // the fixed size laid the rows out wrong and garbled OCR.
+    scratch_mutex.lock();
+    defer scratch_mutex.unlock();
+
+    p.frame_mutex.lock();
+    const w: c_int = @intCast(p.frame_w);
+    const h: c_int = @intCast(p.frame_h);
+    const need: usize = @as(usize, p.frame_w) * @as(usize, p.frame_h);
+    if (w <= 0 or h <= 0 or need > p.pixels.len) {
+        p.frame_mutex.unlock();
+        return 0;
+    }
     // Each PMA pixel is 4 bytes; copy the exact w*h*4 byte window we need.
     const byte_len: usize = need * 4;
-    const src_bytes: [*]const u8 = @ptrCast(pixels.ptr);
-
-    scratch_mutex.lock();
     // Lazily allocate / grow the reusable scratch buffer.
     if (scratch == null or scratch.?.len < byte_len) {
         if (scratch) |old| alloc.allocator.free(old);
         scratch = null;
         scratch = alloc.allocator.alloc(u8, byte_len) catch {
-            scratch_mutex.unlock();
+            p.frame_mutex.unlock();
             return 0;
         };
     }
     const buf = scratch.?;
+    const src_bytes: [*]const u8 = @ptrCast(p.pixels.ptr);
     @memcpy(buf[0..byte_len], src_bytes[0..byte_len]);
-    scratch_mutex.unlock();
+    p.frame_mutex.unlock();
 
     // Opaque video frame: PMA bytes == straight RGBA bytes. Pass the SNAPSHOT
     // (not the live p.pixels) so a concurrent render/realloc can't corrupt us.

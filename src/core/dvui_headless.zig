@@ -69,6 +69,18 @@ pub const TexturePixelFormat = enum {
     argb_32,
     bgra_32,
     abgr_32,
+
+    rgbx_32,
+    xrgb_32,
+    bgrx_32,
+    xbgr_32,
+};
+
+/// Mirrors `dvui.enums` so shared code can name `dvui.enums.TexturePixelFormat`
+/// (the player's software-render worker does) in both builds.
+pub const enums = struct {
+    pub const TexturePixelFormat = @import("dvui_headless.zig").TexturePixelFormat;
+    pub const TextureInterpolation = @import("dvui_headless.zig").TextureInterpolation;
 };
 
 pub const TextureError = error{ TextureCreate, TextureRead, TextureUpdate, NotImplemented, OutOfMemory };
@@ -80,6 +92,7 @@ pub const Texture = struct {
     ptr: *anyopaque,
     width: u32,
     height: u32,
+    format: TexturePixelFormat = .rgba_32,
 
     pub fn update(tex: *Texture, pma: []const Color.PMA, interpolation: TextureInterpolation) TextureError!void {
         _ = tex;
