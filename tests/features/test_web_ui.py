@@ -304,6 +304,35 @@ def test_web_ui_access_page():
     return "pass", "Access page: pw change/reset, revoke-all, token rotate, bind mode+port (all bearer-gated)"
 
 
+@test("Phone pairing: LAN URL + setup code as a scannable QR in Settings", "Web UI")
+def test_phone_pairing_qr():
+    # Issue #46: the README advertised a phone remote on :41595 but nothing in
+    # the app said how to reach it from a phone. Settings › Web UI now shows a
+    # QR code of the LAN URL (carrying the one-time setup code while no account
+    # exists), drawn by an in-tree encoder verified against a reference encoder.
+    st = _src("src/ui/settings.zig")
+    qr = _src("src/core/qr_pure.zig")
+    urls = _src("src/services/remote_url_pure.zig")
+    readme = _src("README.md")
+    checks = {
+        "lan url helpers": "pub fn webUiLanUrl(" in urls and "pub fn webUiLanSetupUrl(" in urls,
+        "lan url never loopback": 'webUiLanUrl("127.0.0.1", 41595, &buf)' in urls,
+        "encoder is reference-checked": 'test "matches the reference encoder: v6, mask 2' in qr
+            and 'test "Reed-Solomon: the ISO 18004 annex example' in qr,
+        "setup code rides in the fragment": "#setup=" in qr and "/#setup={s}" in urls,
+        "settings draws it": "fn renderPhoneQr(" in st and "renderPhoneQr();" in st
+            and "qr.paintRgba(" in st and ".nearest, .rgba_32)" in st,
+        "only when LAN-bound, with a hint otherwise": "remote.bind_mode != .lan" in st
+            and "set Network below to LAN" in st,
+        "cached per url, not per frame": "std.hash.Wyhash.hash(0, u)" in st and "webui_qr_key" in st,
+        "readme points at it": "From your phone" in readme and "scan the QR code" in readme,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", f"phone pairing incomplete: {missing}"
+    return "pass", "Settings › Web UI shows a LAN+setup QR (in-tree encoder, reference-verified); README explains"
+
+
 @test("Play-latest button: TV show page (desktop + web)", "Web UI")
 def test_play_latest_episode():
     ui = _web_app()

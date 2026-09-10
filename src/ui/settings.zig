@@ -4638,6 +4638,79 @@ fn zLen(buf: []const u8) usize {
     return std.mem.indexOfScalar(u8, buf, 0) orelse buf.len;
 }
 
+// ── Phone pairing QR (issue #46) ──
+// The LAN URL — with the one-time setup code in the fragment while no account
+// exists yet — encoded by core/qr_pure and shown as a texture, so reaching Opal
+// from a phone is one scan instead of typing an IP, a port and 64 hex digits.
+// Encoded once per distinct URL (hash-keyed) rather than every frame.
+const qr_scale: u8 = 4;
+const qr_quiet: u8 = 4;
+const qr_max_edge: usize = (@import("../core/qr_pure.zig").max_size + 2 * @as(usize, qr_quiet)) * qr_scale;
+var webui_qr_px: [qr_max_edge * qr_max_edge * 4]u8 align(4) = undefined;
+var webui_qr_tex: ?dvui.Texture = null;
+var webui_qr_key: u64 = 0;
+
+fn renderPhoneQr() void {
+    const remote = @import("../services/remote.zig");
+    const remote_url = @import("../services/remote_url_pure.zig");
+    const qr = @import("../core/qr_pure.zig");
+    const note_opts = dvui.Options{
+        .color_text = theme.colors.text_secondary,
+        .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
+    };
+
+    if (remote.bind_mode != .lan) {
+        _ = dvui.label(@src(), "To open Opal on your phone, set Network below to LAN — a QR code to scan appears here.", .{}, note_opts);
+        return;
+    }
+    const ip = remote.lanIp();
+    var url_buf: [192]u8 = undefined;
+    var setup: [remote.SETUP_TOKEN_HEX_LEN]u8 = undefined;
+    const has_setup = remote.setupToken(&setup);
+    const url: ?[]const u8 = (if (has_setup) remote_url.webUiLanSetupUrl(ip, remote.port, &setup, &url_buf) else null) orelse
+        remote_url.webUiLanUrl(ip, remote.port, &url_buf);
+    const u = url orelse {
+        _ = dvui.label(@src(), "No LAN address found — connect this machine to Wi-Fi or Ethernet to pair a phone.", .{}, note_opts);
+        return;
+    };
+
+    const key = std.hash.Wyhash.hash(0, u);
+    if (webui_qr_tex == null or key != webui_qr_key) {
+        if (webui_qr_tex) |t| dvui.textureDestroyLater(t);
+        webui_qr_tex = null;
+        webui_qr_key = key;
+        var m: qr.Matrix = .{};
+        if (qr.encode(u, &m)) |_| {
+            if (qr.paintRgba(&m, qr_scale, qr_quiet, .{ 0, 0, 0, 255 }, .{ 255, 255, 255, 255 }, &webui_qr_px)) |edge| {
+                const n = edge * edge;
+                const pma: []dvui.Color.PMA = @as([*]dvui.Color.PMA, @ptrCast(@alignCast(&webui_qr_px)))[0..n];
+                // Nearest: a QR must stay crisp; bilinear smearing between
+                // modules is exactly what makes phone cameras miss the read.
+                webui_qr_tex = dvui.textureCreate(pma, @intCast(edge), @intCast(edge), .nearest, .rgba_32) catch null;
+            }
+        } else |_| {}
+    }
+
+    _ = dvui.label(@src(), "{s}", .{if (has_setup)
+        "Scan with your phone on the same network — it opens Opal and carries your one-time setup code."
+    else
+        "Scan with your phone on the same network to open Opal's web remote."}, note_opts);
+    if (webui_qr_tex) |tex| {
+        _ = dvui.image(@src(), .{ .source = .{ .texture = tex } }, .{
+            .min_size_content = .{ .w = 184, .h = 184 },
+            .max_size_content = .{ .w = 184, .h = 184 },
+            .margin = .{ .x = 0, .y = 4, .w = 0, .h = 8 },
+        });
+    }
+    var plain_buf: [96]u8 = undefined;
+    if (remote_url.webUiLanUrl(ip, remote.port, &plain_buf)) |plain| {
+        _ = dvui.label(@src(), "{s}", .{plain}, .{
+            .color_text = theme.colors.text_primary,
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
+        });
+    }
+}
+
 fn renderWebUiTab() void {
     const remote = @import("../services/remote.zig");
     const access = @import("../services/access_pure.zig");
@@ -4694,6 +4767,7 @@ fn renderWebUiTab() void {
                 state.showToast("Address copied");
             }
         }
+        if (state.app.web_remote_enabled) renderPhoneQr();
     }
 
     // ── Account ──
