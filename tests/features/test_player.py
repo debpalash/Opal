@@ -372,7 +372,10 @@ def test_loadfile_runtime_version_shape():
         "pure version gate": "pub fn loadfileHasIndexArg(" in pure
             and "loadfile_index_api_version: u32 = (2 << 16) | 3" in pure,
         "gate is unit-tested": 'test "loadfile index argument only on mpv 0.38+' in pure,
-        "sink asks the runtime": "loadfileHasIndexArg(c.mpv.mpv_client_api_version())" in pl,
+        # Cast at the call site: c_ulong is 64-bit on Linux/macOS, 32-bit on
+        # Windows — passing it uncast only compiled on Windows.
+        "sink asks the runtime": "const runtime_api: u32 = @intCast(c.mpv.mpv_client_api_version());" in pl
+            and "loadfileHasIndexArg(runtime_api)" in pl,
         "index only when supported": "if (with_index) intNode(-1) else options_node" in pl
             and "if (with_index) arg_values.len else arg_values.len - 1" in pl,
         "reject is not ignored": "const rc = c.mpv.mpv_command_node(self.ctx, &command_node, null);" in pl

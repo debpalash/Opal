@@ -75,7 +75,10 @@ const MpvPlaybackSink = struct {
         // libmpv (Ubuntu 22.04's 0.34) takes `loadfile <url> <flags> <options>`
         // and would read the index as the options map, rejecting the whole
         // command (issue #47). Decided from the RUNTIME library version.
-        const with_index = playback_load.loadfileHasIndexArg(c.mpv.mpv_client_api_version());
+        // c_ulong is 64-bit on Linux/macOS and 32-bit on Windows; the value
+        // itself is a 16.16 pair, so it always fits u32.
+        const runtime_api: u32 = @intCast(c.mpv.mpv_client_api_version());
+        const with_index = playback_load.loadfileHasIndexArg(runtime_api);
         var arg_values = [_]c.mpv.mpv_node{
             stringNode("loadfile"),
             stringNode(url_z.ptr),
@@ -97,11 +100,10 @@ const MpvPlaybackSink = struct {
             // and the UI showed "Opening stream" forever. Say what happened,
             // in the log ring AND on screen, with the library version so a
             // too-old libmpv is recognisable at a glance.
-            const api = c.mpv.mpv_client_api_version();
             var msg_buf: [256]u8 = undefined;
             const msg = std.fmt.bufPrint(&msg_buf, "loadfile rejected by libmpv (client API {d}.{d}): {s}", .{
-                api >> 16,
-                api & 0xffff,
+                runtime_api >> 16,
+                runtime_api & 0xffff,
                 std.mem.span(c.mpv.mpv_error_string(rc)),
             }) catch "loadfile rejected by libmpv";
             logs.pushLog("error", "player", msg, true);
