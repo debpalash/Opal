@@ -381,6 +381,7 @@ fn detectResourceRoot() void {
 }
 
 fn appInit(win: *dvui.Window) !void {
+    player.perfInit();
     // ── CLI argument handling (before anything heavy starts) ──
     // `opal /path/to/file.mp4` or `opal https://example.com/stream`
     // Deferred: store in buffer, appFrame loads after player is ready.
@@ -490,6 +491,10 @@ pub fn appDeinit() void {
     // destruction intentionally happens later, after workers are drained, but
     // playback must not continue invisibly throughout that cleanup window.
     for (state.app.players.items) |p| p.stopForShutdown();
+    // The software render workers are supervisor-admitted threads that only
+    // exit when told to; players are destroyed after the drain below, so
+    // stop them now or the drain waits out its deadline on every close.
+    for (state.app.players.items) |p| p.stopRenderWorker();
 
     // Remove the native surface immediately. Teardown can include third-party
     // media/network destructors; keeping the surface mapped while they finish
@@ -982,15 +987,17 @@ fn appFrame() !dvui.App.Result {
     }
 
     // Process CLI file argument (deferred from appInit)
-    if (!cli_open_done and cli_open_len > 0 and state.app.players.items.len > 0) {
+    // No player-exists precondition: windowed startup no longer creates a
+    // player (only headless does), so gating on `players.items.len > 0` meant
+    // `opal <file>` silently never opened the file on the desktop. loadContent
+    // → playDirect creates the player on demand.
+    if (!cli_open_done and cli_open_len > 0) {
         cli_open_done = true;
         const fpath = cli_open_buf[0..cli_open_len];
-        if (state.app.active_player_idx < state.app.players.items.len) {
-            const browser = @import("services/browser.zig");
-            browser.loadContent(fpath);
-            logs.pushLog("info", "open", "Loaded file from CLI", false);
-            state.showToast("Playing from CLI");
-        }
+        const browser = @import("services/browser.zig");
+        browser.loadContent(fpath);
+        logs.pushLog("info", "open", "Loaded file from CLI", false);
+        state.showToast("Playing from CLI");
     }
 
     // Process a path forwarded by a second `opal <file>` launch (remote

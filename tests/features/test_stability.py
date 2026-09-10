@@ -451,13 +451,17 @@ def test_stream_readiness_gate():
         "buffer bar shows readiness": "gate.bufferPercent(" in gr,
 
         # CRASH REGRESSION: load_file blanks the video texture, but `pixels` is
-        # allocated at video_w*video_h while the texture is created in grid.zig at
-        # the current RENDER size. dvui's Texture.update hard-@panics on a length
-        # mismatch (it is not a catchable error, so the `catch {}` was decoration),
-        # so reloading a file while a texture was alive aborted the process with
-        # "Texture size and supplied Content did not match". Slice to the texture.
-        "texture update sliced to texture size": ("const npix = @as(usize, tex.width) * @as(usize, tex.height);" in pl
-                                                  and "self.pixels[0..npix]" in pl),
+        # allocated at video_w*video_h while the texture is created at the
+        # current RENDER size. dvui's Texture.update hard-@panicked on a length
+        # mismatch ("Texture size and supplied Content did not match"), so
+        # reloading a file while a texture was alive aborted the process. The
+        # render worker now publishes frames with their own w/h, the blank is
+        # published AT THE TEXTURE'S size, and the UI upload recreates the
+        # texture whenever the frame size differs instead of updating in place.
+        "texture update sliced to texture size": ("self.frame_w = tex.width;" in pl
+                                                  and "self.frame_h = tex.height;" in pl
+                                                  and "tex.width != w or tex.height != h" in gr
+                                                  and "dvui.Texture.update(" not in gr),
         # A read of 0 is a legitimate EOF; only a NEGATIVE read is a failure that
         # must abort the connection. Treating 0 as failure aborted every clean end.
         "eof is not an error": "if (read == 0) break;" in px and "if (read < 0) {" in px,
@@ -527,6 +531,9 @@ def test_search_workers_reaped():
 def test_shutdown_cancellation_order():
     mn = _src("src/main.zig")
     http = _src("src/core/http.zig")
+    # The stall watchdog lives in the extracted transport module now.
+    transport = _src("src/core/http_transport.zig")
+    watchdog_run = transport[transport.find("fn run(self: *Watchdog)"):]
     resolver = _src("src/services/resolver.zig")
     vndb = _src("src/services/vndb.zig")
     drop_ingest = _src("src/player/drop_ingest.zig")
@@ -545,7 +552,10 @@ def test_shutdown_cancellation_order():
         "resolver cancelled before drain": 0 <= mn.find('services/resolver.zig").cancel()') < drain,
         "search cancelled before drain": 0 <= mn.find("search.shutdown()") < drain,
         "stream listeners stopped before drain": 0 <= mn.find('player/stream_proxy.zig").stopAll()') < drain,
-        "HTTP watchdog observes quit": "if (workers.isQuitting()) break;" in http,
+        # The watchdog's poll loop must expire (unblocking the stalled read)
+        # as soon as shutdown starts, not only at its own deadline.
+        "HTTP watchdog observes quit": transport.find("fn run(self: *Watchdog)") >= 0
+            and "workers.isQuitting()" in watchdog_run[:watchdog_run.find("self.expire();")],
         "image curl observes quit": ".cancel_flag = workers.quittingSignal()" in http,
         "VNDB worker uses window-safe wake": "state.wakeUi();" in vndb,
         "service refreshes always carry a window": not service_refresh_offenders,

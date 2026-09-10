@@ -47,7 +47,10 @@ const Watchdog = struct {
         return true;
     }
 
-    fn detach(self: *Watchdog) void {
+    /// Forget the guarded socket so a late expire() cannot shutdown(2) an fd
+    /// that the request is about to close or pool. (Named to avoid reading as
+    /// std.Thread.detach: the watchdog thread itself is always joined.)
+    fn unbindSocket(self: *Watchdog) void {
         self.mutex.lock();
         defer self.mutex.unlock();
         self.socket = null;
@@ -92,7 +95,7 @@ fn releaseRequest(req: *std.http.Client.Request, wd: *Watchdog) void {
     // Exclude a concurrent shutdown(2) BEFORE deinit closes or pools the fd.
     // Automatic std.http redirects also release sockets internally, so fetch
     // handles redirects explicitly and uses this boundary on every hop.
-    wd.detach();
+    wd.unbindSocket();
     req.deinit();
     if (builtin.is_test) {
         if (after_cleanup_for_test) |hook| hook(wd);

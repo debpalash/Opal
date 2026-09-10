@@ -281,6 +281,125 @@ pub fn muteBackgroundPlayers() void {
     }
 }
 
+/// Upload the render worker's latest finished frame (if any) into the player's
+/// streaming texture. Returns true when a new frame was uploaded.
+///
+/// The texture is created straight through SDL as STREAMING so every frame is
+/// an in-place SDL_UpdateTexture (a memcpy into the driver's staging buffer).
+/// dvui's SDL2 backend has no textureUpdate, so dvui.Texture.update would
+/// destroy + recreate the GPU texture on EVERY frame — measured at ~21 ms per
+/// 1080p frame on Windows/D3D9, half a 24 fps frame budget on its own.
+fn uploadFrame(p: *player.MediaPlayer) bool {
+    if (comptime @import("build_options").headless) return false;
+    p.frame_mutex.lock();
+    defer p.frame_mutex.unlock();
+    if (!p.frame_ready) return false;
+    const w = p.frame_w;
+    const h = p.frame_h;
+    const fmt = p.frame_fmt;
+    if (w < 2 or h < 2) {
+        p.frame_ready = false;
+        return false;
+    }
+    const t0: i64 = if (player.perf.enabled) player.perfNow() else 0;
+    // Size or pixel layout changed (new file / track switch / format pick) →
+    // the texture can't be updated in place; recreate.
+    if (p.texture) |tex| {
+        if (tex.width != w or tex.height != h or tex.format != fmt) {
+            dvui.textureDestroyLater(tex);
+            p.texture = null;
+        }
+    }
+    if (p.texture == null) {
+        p.texture = createStreamingTexture(w, h, fmt) catch {
+            p.frame_ready = false;
+            return false;
+        };
+    }
+    const tex_ptr: *c.sdl.SDL_Texture = @ptrCast(@alignCast(p.texture.?.ptr));
+    // pixels is laid out at exactly frame_w * 4 bytes per row (the worker
+    // renders with that stride), so the whole front buffer is one rect.
+    const rc = c.sdl.SDL_UpdateTexture(tex_ptr, null, @ptrCast(p.pixels.ptr), @intCast(w * 4));
+    p.frame_ready = false;
+    if (player.perf.enabled) {
+        const dt = player.perfNow() - t0;
+        player.perf.uploads += 1;
+        player.perf.upload_ns += dt;
+        player.perf.upload_max_ns = @max(player.perf.upload_max_ns, dt);
+    }
+    return rc == 0;
+}
+
+fn sdlPixelFormat(fmt: dvui.enums.TexturePixelFormat) u32 {
+    return switch (fmt) {
+        .rgba_32 => c.sdl.SDL_PIXELFORMAT_RGBA32,
+        .bgra_32 => c.sdl.SDL_PIXELFORMAT_BGRA32,
+        .bgrx_32 => c.sdl.SDL_PIXELFORMAT_BGRX32,
+        else => c.sdl.SDL_PIXELFORMAT_RGBX32,
+    };
+}
+
+var sw_format_chosen = false;
+
+/// Pick the render-target byte order mpv should produce so that the SDL
+/// renderer can take the bytes as-is. SDL_UpdateTexture on a texture whose
+/// format the renderer does not support natively converts every pixel in
+/// software on the UI thread — with D3D9 (SDL2's default on Windows) that made
+/// an RGBX 1080p upload cost ~22 ms instead of ~2 ms. Runs once per process
+/// (the UI thread creates the renderer, so it is always initialised by now).
+fn chooseSwFormat() void {
+    if (comptime @import("build_options").headless) return;
+    if (sw_format_chosen) return;
+    sw_format_chosen = true;
+    if (player.sw_format_forced) return;
+    const renderer: *c.sdl.SDL_Renderer = @ptrCast(@alignCast(dvui.currentWindow().backend.impl.renderer));
+    var info: c.sdl.SDL_RendererInfo = undefined;
+    if (c.sdl.SDL_GetRendererInfo(renderer, &info) != 0) return;
+    // Candidates in mpv's own preference order (the documented fast "x"
+    // formats first), each paired with the SDL format holding the same bytes.
+    const candidates = [_]struct { mpv: [*:0]const u8, tex: dvui.enums.TexturePixelFormat }{
+        .{ .mpv = "bgr0", .tex = .bgrx_32 },
+        .{ .mpv = "rgb0", .tex = .rgbx_32 },
+        .{ .mpv = "bgra", .tex = .bgra_32 },
+        .{ .mpv = "rgba", .tex = .rgba_32 },
+    };
+    const n: usize = @min(@as(usize, @intCast(info.num_texture_formats)), info.texture_formats.len);
+    for (candidates) |cand| {
+        const want = sdlPixelFormat(cand.tex);
+        for (info.texture_formats[0..n]) |f| {
+            if (f == want) {
+                player.sw_format = cand.mpv;
+                if (player.perf.enabled) std.debug.print("[video] SDL renderer '{s}': native texture format {s}\n", .{ info.name, cand.mpv });
+                return;
+            }
+        }
+    }
+    if (player.perf.enabled) std.debug.print("[video] SDL renderer '{s}': no matching native format, keeping {s}\n", .{ info.name, player.sw_format });
+}
+
+/// A dvui-compatible texture (same renderer, same premultiplied blend mode and
+/// linear filtering dvui uses) whose pixels can be replaced in place.
+fn createStreamingTexture(w: u32, h: u32, fmt: dvui.enums.TexturePixelFormat) !dvui.Texture {
+    if (comptime @import("build_options").headless) return error.TextureCreate;
+    const renderer: *c.sdl.SDL_Renderer = @ptrCast(@alignCast(dvui.currentWindow().backend.impl.renderer));
+    _ = c.sdl.SDL_SetHint(c.sdl.SDL_HINT_RENDER_SCALE_QUALITY, "linear");
+    const tex = c.sdl.SDL_CreateTexture(renderer, sdlPixelFormat(fmt), c.sdl.SDL_TEXTUREACCESS_STREAMING, @intCast(w), @intCast(h)) orelse {
+        logs.pushLog("error", "player", "video texture creation failed — SDL_CreateTexture", true);
+        return error.TextureCreate;
+    };
+    _ = c.sdl.SDL_SetTextureScaleMode(tex, c.sdl.SDL_ScaleModeLinear);
+    const pma_blend = c.sdl.SDL_ComposeCustomBlendMode(
+        c.sdl.SDL_BLENDFACTOR_ONE,
+        c.sdl.SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
+        c.sdl.SDL_BLENDOPERATION_ADD,
+        c.sdl.SDL_BLENDFACTOR_ONE,
+        c.sdl.SDL_BLENDFACTOR_ONE_MINUS_SRC_ALPHA,
+        c.sdl.SDL_BLENDOPERATION_ADD,
+    );
+    _ = c.sdl.SDL_SetTextureBlendMode(tex, pma_blend);
+    return dvui.Texture{ .ptr = tex, .width = w, .height = h, .format = fmt };
+}
+
 /// The audio now-playing pane — cover art + title/subtitle over a black fill,
 /// shown for a podcast episode / radio station (no video frame, metadata set).
 /// The caller gates this on `p.np_title_len > 0 and p.texture == null`. The
@@ -435,39 +554,17 @@ pub fn renderGrid() !void {
         // rather than splitting the cell height vertically
         var cell_wrapper = dvui.overlay(@src(), .{ .id_extra = i + 11000, .expand = .both });
 
-        // When not showing MPV, still drain its render context to prevent blocking.
-        // Guarded on a non-null render context: in windowed mode mpv_gl is always
-        // non-null so this runs exactly as before; a null context (e.g. headless,
-        // or a render-context that failed to create) skips it safely.
-        if (p.provider != .mpv and p.mpv_gl != null) {
-            const flags = c.mpv.mpv_render_context_update(p.mpv_gl);
-            if ((flags & c.mpv.MPV_RENDER_UPDATE_FRAME) != 0) {
-                const size = [2]c_int{ player.video_w, player.video_h };
-                const img_format = "rgba";
-                const pitch: usize = player.video_w * 4;
-                var drain_params = [_]c.mpv.mpv_render_param{
-                    .{ .type = c.mpv.MPV_RENDER_PARAM_SW_SIZE, .data = @constCast(&size) },
-                    .{ .type = c.mpv.MPV_RENDER_PARAM_SW_FORMAT, .data = @constCast(img_format.ptr) },
-                    .{ .type = c.mpv.MPV_RENDER_PARAM_SW_STRIDE, .data = @constCast(&pitch) },
-                    .{ .type = c.mpv.MPV_RENDER_PARAM_SW_POINTER, .data = p.pixels.ptr },
-                    .{ .type = c.mpv.MPV_RENDER_PARAM_INVALID, .data = null },
-                };
-                _ = c.mpv.mpv_render_context_render(p.mpv_gl, &drain_params);
-            }
-        }
-
         switch (p.provider) {
             .mpv => {
                 // ── MPV Video Player ──
-                // All render-context + texture work is gated on a non-null render
-                // context. In windowed mode mpv_gl is always non-null so this block
-                // executes exactly as before; a null context (headless, or a context
-                // that failed to create) skips the GPU/texture path safely. p.texture
-                // then stays null, and the `if (p.texture) |*tex|` display block below
-                // is already null-safe.
+                // mpv rasterises on the player's own render thread (see
+                // player.renderWorker) into a CPU back buffer; this UI-thread
+                // block only (a) tells the worker what size to render at and
+                // (b) uploads a finished frame into a persistent streaming SDL
+                // texture. Gated on a non-null render context: headless (or a
+                // context that failed to create) has no worker and p.texture
+                // stays null, which the display block below already handles.
                 if (p.mpv_gl != null) {
-                    const flags = c.mpv.mpv_render_context_update(p.mpv_gl);
-
                     // Render at the video's NATIVE size (capped to the 1080p
                     // buffer, aspect-preserving) instead of a fixed 1920×1080.
                     // The fixed target made mpv software-scale + RGBA-convert
@@ -481,51 +578,21 @@ pub fn renderGrid() !void {
                         player.video_w,
                         player.video_h,
                     );
-                    const rw: c_int = @intCast(render_size.width);
-                    const rh: c_int = @intCast(render_size.height);
-                    const size = [2]c_int{ rw, rh };
-                    const img_format = "rgba";
-                    const pitch: usize = @as(usize, @intCast(rw)) * 4;
-                    const npix: usize = @as(usize, @intCast(rw)) * @as(usize, @intCast(rh));
-                    // Don't let mpv SLEEP the UI thread for frame pacing:
-                    // by default render() blocks until the frame's target
-                    // display time (production samples showed 86% of the
-                    // main thread parked in a cond_wait inside libmpv).
-                    // The frame callback already wakes us exactly when a
-                    // new frame exists; render immediately and move on.
-                    var no_block: c_int = 0;
-                    var render_params = [_]c.mpv.mpv_render_param{
-                        .{ .type = c.mpv.MPV_RENDER_PARAM_SW_SIZE, .data = @constCast(&size) },
-                        .{ .type = c.mpv.MPV_RENDER_PARAM_SW_FORMAT, .data = @constCast(img_format.ptr) },
-                        .{ .type = c.mpv.MPV_RENDER_PARAM_SW_STRIDE, .data = @constCast(&pitch) },
-                        .{ .type = c.mpv.MPV_RENDER_PARAM_SW_POINTER, .data = p.pixels.ptr },
-                        .{ .type = c.mpv.MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME, .data = &no_block },
-                        .{ .type = c.mpv.MPV_RENDER_PARAM_INVALID, .data = null },
-                    };
+                    chooseSwFormat();
+                    p.want_w.store(render_size.width, .release);
+                    p.want_h.store(render_size.height, .release);
 
-                    if ((flags & c.mpv.MPV_RENDER_UPDATE_FRAME) != 0) {
-                        if (c.mpv.mpv_render_context_render(p.mpv_gl, &render_params) >= 0) {
-                            // MPV renders with "rgba" format — alpha is already 0xFF, no fill needed
-                            // Size changed (new file / track switch) → the old
-                            // texture can't be updated in place; recreate.
-                            if (p.texture) |tex| {
-                                if (tex.width != @as(u32, @intCast(rw)) or tex.height != @as(u32, @intCast(rh))) {
-                                    dvui.textureDestroyLater(tex);
-                                    p.texture = null;
-                                }
-                            }
-                            if (p.texture == null) {
-                                p.texture = try dvui.textureCreate(p.pixels[0..npix], @intCast(rw), @intCast(rh), .linear, .rgba_32);
-                            } else {
-                                try dvui.Texture.update(&p.texture.?, p.pixels[0..npix], .linear);
-                            }
-                            // First frame rendered — clear loading state
-                            p.is_loading = false;
-                            // Try to resume from saved position on first frame
-                            p.tryResumePosition();
-                            // Only request UI refresh when we actually have a new video frame
-                            dvui.refresh(null, @src(), null);
-                        }
+                    if (player.perf.enabled) {
+                        player.perf.ui_frames += 1;
+                        player.perfReport(p);
+                    }
+                    if (uploadFrame(p)) {
+                        // First frame rendered — clear loading state
+                        p.is_loading = false;
+                        // Try to resume from saved position on first frame
+                        p.tryResumePosition();
+                        // Only request UI refresh when we actually have a new video frame
+                        dvui.refresh(null, @src(), null);
                     }
                 }
 
