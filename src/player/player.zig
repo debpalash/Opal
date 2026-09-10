@@ -1095,14 +1095,18 @@ pub const MediaPlayer = struct {
             _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "ytdl-raw-options", &raw_z);
         }
 
-        // script-opts: ytdl_hook config + sponsorblock
-        // try_ytdl_first=no: try direct playback before yt-dlp (avoids playlist expansion)
-        // exclude patterns: model/channel pages that expand into huge playlists
+        // script-opts: ytdl_hook config (+ sponsorblock). Built by
+        // ytdl_opts_pure.buildScriptOpts (tested) because the old ad-hoc
+        // string started its exclude value with `%`, which mpv parses as its
+        // %<len>% escape — the WHOLE option was rejected, ytdl_path with it,
+        // and YouTube only worked where a system yt-dlp happened to be on PATH.
         var buf: [512]u8 = undefined;
-        const sp_opts = if (state.app.sponsorblock_enabled) ",sponsorblock-mark=all" else "";
-        if (std.fmt.bufPrintZ(&buf, "ytdl_hook-ytdl_path={s},ytdl_hook-try_ytdl_first=no,ytdl_hook-exclude=%.*/model/.*|%.*/channels/.*|%.*/pornstar/.*|%.*/playlist.*{s}", .{ ytdl_path, sp_opts })) |opts| {
+        if (ytdl_opts.buildScriptOpts(.{
+            .ytdl_path = ytdl_path,
+            .sponsorblock = state.app.sponsorblock_enabled,
+        }, &buf)) |opts| {
             _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "script-opts", opts.ptr);
-        } else |_| {}
+        }
     }
 
     /// Export A-B loop segment to file using ffmpeg (background thread).
@@ -1209,6 +1213,9 @@ pub const MediaPlayer = struct {
             self.proxy_handle = @import("stream_proxy.zig").INVALID_HANDLE;
         }
         c.mpv.mpv_render_context_free(self.mpv_gl);
+            // Additive (deno stays yt-dlp's default); a missing node only
+            // reproduces the "no JS runtime" warning, so no probing needed.
+            .js_runtime = "node",
         c.mpv.mpv_terminate_destroy(self.mpv_ctx);
         allocator.free(self.pixels);
         allocator.destroy(self);
