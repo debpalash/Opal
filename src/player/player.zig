@@ -796,7 +796,10 @@ pub const MediaPlayer = struct {
             // mpv-owned thread whenever a new frame (or redraw) is pending.
             // The worker wakes dvui itself once a frame is in the front
             // buffer, so the UI only redraws when there is something to show.
-            self.render_thread = std.Thread.spawn(.{}, renderWorker, .{self}) catch |err| {
+            // Admitted through the owned supervisor's compatibility seam so
+            // it is counted by the shutdown drain; stopRenderWorker() (run
+            // from appDeinit, BEFORE the drain) is what makes it exit.
+            self.render_thread = @import("../core/workers.zig").spawnLegacy(renderWorker, .{self}) catch |err| {
                 // Same degrade path as a failed render context: audio and
                 // controls keep working, video stays black for this player.
                 std.debug.print("[player] render worker spawn failed: {s}\n", .{@errorName(err)});
@@ -1176,6 +1179,24 @@ pub const MediaPlayer = struct {
         _ = c.mpv.mpv_command_async(self.mpv_ctx, 0, &args);
     }
 
+    /// Stop and join the software render worker (idempotent; video stays
+    /// black afterwards, so this is shutdown-only). The worker is admitted
+    /// through the owned supervisor and players are destroyed only AFTER the
+    /// worker drain, so appDeinit calls this BEFORE the drain — otherwise
+    /// every shutdown would wait out the drain deadline on a thread that only
+    /// exits in deinit. Must run before mpv_render_context_free: only one
+    /// thread may be inside mpv_render_* at a time, and the worker may be
+    /// parked in mpv_render_context_render waiting for a frame's target time
+    /// (at most one frame interval).
+    pub fn stopRenderWorker(self: *MediaPlayer) void {
+        if (self.render_thread) |t| {
+            self.render_stop.store(true, .release);
+            self.render_wake.set(@import("../core/io_global.zig").io());
+            t.join();
+            self.render_thread = null;
+        }
+    }
+
     pub fn cycleRotation(self: *MediaPlayer) void {
         self.rotation = @mod(self.rotation + 90, 360);
         var cmd_buf: [64]u8 = undefined;
@@ -1340,12 +1361,7 @@ pub const MediaPlayer = struct {
         // thread may be inside mpv_render_* at a time, and the worker may be
         // parked in mpv_render_context_render waiting for a frame's target
         // time (at most one frame interval).
-        if (self.render_thread) |t| {
-            self.render_stop.store(true, .release);
-            self.render_wake.set(@import("../core/io_global.zig").io());
-            t.join();
-            self.render_thread = null;
-        }
+        self.stopRenderWorker();
         c.mpv.mpv_render_context_free(self.mpv_gl);
         c.mpv.mpv_terminate_destroy(self.mpv_ctx);
         allocator.free(self.pixels);

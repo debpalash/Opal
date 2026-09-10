@@ -333,8 +333,12 @@ def test_play_latest_episode():
             and "latest-badge" in ui,
         "web hides when not found": "if (!d || !d.found) return;" in ui,
         # Top button and the per-episode rows must resolve identically.
-        "same search path as Find": "prefillSearch(q)" in ui and "normQuery(showTitle)" in ui,
-        "loads with the show page": "loadLatest(id);" in ui,
+        # (Find was renamed to Search; the top button and the per-episode rows
+        # both go through prefillSearch(normQuery(title) + sXXeYY).)
+        "same search path as Find": "prefillSearch(q)" in ui and "normQuery(title)" in ui,
+        # Guarded by the details generation so a stale response cannot land on
+        # a different show's page.
+        "loads with the show page": "loadLatest(id, generation)" in ui,
     }
     missing = [k for k, ok in checks.items() if not ok]
     if missing:

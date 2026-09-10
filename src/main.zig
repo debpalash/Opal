@@ -491,6 +491,10 @@ pub fn appDeinit() void {
     // destruction intentionally happens later, after workers are drained, but
     // playback must not continue invisibly throughout that cleanup window.
     for (state.app.players.items) |p| p.stopForShutdown();
+    // The software render workers are supervisor-admitted threads that only
+    // exit when told to; players are destroyed after the drain below, so
+    // stop them now or the drain waits out its deadline on every close.
+    for (state.app.players.items) |p| p.stopRenderWorker();
 
     // Remove the native surface immediately. Teardown can include third-party
     // media/network destructors; keeping the surface mapped while they finish

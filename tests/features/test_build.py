@@ -367,7 +367,9 @@ def test_http_shared_client_and_timeout():
     # route permanently empty. Fix: one process-global keep-alive client (safe to
     # share — std.http.Client's ConnectionPool has its own mutex), and
     # timeout_secs enforced via a socket watchdog that unblocks a stalled read.
-    h = _src("src/core/http.zig")
+    # The fetch mechanics (watchdog, timeout clamp, redirect hops) were extracted
+    # from http.zig into http_transport.zig; the guarantees below span both files.
+    h = _src("src/core/http.zig") + "\n" + _src("src/core/http_transport.zig")
     mn = _src("src/main.zig")
     checks = {
         # No per-call Client construction remains inside the file. Code only:

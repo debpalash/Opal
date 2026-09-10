@@ -342,7 +342,13 @@ def test_hosted_mode_and_perf():
         "queue reorder": '"/queue/move"' in rm and "moveQueueItem" in _src("src/services/queue.zig") and "qmv" in web,
         # Perf: release allocator, non-blocking mpv render, no built-in Lua VMs.
         "release allocator": "smp_allocator" in al,
-        "no mpv render block": "MPV_RENDER_PARAM_BLOCK_FOR_TARGET_TIME" in gr,
+        # The UI thread must never park inside mpv_render_context_render. It
+        # used to pass BLOCK_FOR_TARGET_TIME=0 from grid.zig; now grid.zig does
+        # not render at all — a per-player worker (player.renderWorker) owns
+        # every mpv_render_* call and lets mpv pace it, and the UI thread only
+        # uploads the finished front buffer.
+        "no mpv render block": "mpv_render_context_render" not in gr
+            and "fn renderWorker(" in pl and "fn uploadFrame(" in gr,
         "mpv lua trimmed": "load-osd-console" in pl and "load-stats-overlay" in pl,
     }
     missing = [k for k, v in checks.items() if not v]

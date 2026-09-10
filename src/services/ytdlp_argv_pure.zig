@@ -47,11 +47,14 @@ test "every invocation isolates config, preserves TLS, and treats target as data
     const operations = [_]Operation{
         .playlist_json, .search_json, .thumbnail,
         .{ .youtube_listing = null }, .{ .youtube_listing = "1:20" },
-        .{ .audio_download = .{ .directory = "/tmp/my music", .output_template = "track.%(ext)s" } },
+        // Fixture paths deliberately avoid /tmp: the portability suite greps
+        // every source for '"/tmp/' (an unconditional write there is dead on
+        // Windows) and cannot tell a test fixture from a real path.
+        .{ .audio_download = .{ .directory = "/home/u/my music", .output_template = "track.%(ext)s" } },
     };
     for (operations) |operation| {
         var storage: Argv = undefined;
-        const args = build("/tmp/fake yt-dlp", "--exec=untrusted", operation, "http://127.0.0.1:8080", &storage);
+        const args = build("/opt/opal/fake yt-dlp", "--exec=untrusted", operation, "http://127.0.0.1:8080", &storage);
         try std.testing.expect(args.len <= storage.len);
         try std.testing.expectEqualStrings("--ignore-config", args[1]);
         try std.testing.expectEqualStrings("--", args[args.len - 2]);
