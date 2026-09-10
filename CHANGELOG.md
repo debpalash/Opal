@@ -10,6 +10,27 @@ Add a section BEFORE tagging; a missing one ships a release that says so.
 Headings are `## vX.Y.Z — YYYY-MM-DD`, newest first. The version token must
 match the tag exactly.
 
+## v0.8.1 — 2026-09-10
+
+- **YouTube plays on Windows again, and picks the right stream.** The bundled
+  yt-dlp path never reached mpv (a malformed option made mpv drop it), so
+  YouTube links failed unless a system yt-dlp happened to be on PATH. Fixed.
+  HDR uploads now play their SDR rendition — the correct picture on Opal's
+  8-bit render path, ~20% less bandwidth, and 4K60 at a steady 60 fps.
+- **4K HDR files play smoothly.** Video is rendered on a per-player worker
+  thread and uploaded in place into a persistent texture, and HDR sources no
+  longer rebuild mpv's scaler every frame. A 4K Dolby Vision file that ran at
+  ~4 fps now holds its native rate.
+- **Works with Ubuntu 22.04's mpv 0.34.** Playback no longer hangs on
+  "Opening stream" on libmpv older than 0.38; a rejected load is now reported
+  in the log and as a toast instead of silently. Minimum versions (libmpv,
+  SDL, glibc for the AppImage) are documented in the README.
+- **Pair a phone with one scan.** Settings › Web UI shows a QR code of the LAN
+  address (carrying the one-time setup code on first use) when the server is
+  bound to your LAN, plus a README walkthrough.
+- **`opal <file-or-url>` opens the file again** on the desktop build.
+- **Movies/TV catalog search is always visible**, and "Find" is now "Search".
+
 ## v0.8.0 — 2026-09-05
 
 - **TV browsing fits small and short windows.** Episode thumbnails, titles,
