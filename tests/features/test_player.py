@@ -357,6 +357,37 @@ def test_hosted_mode_and_perf():
     return "fail", f"missing: {missing}"
 
 
+@test("loadfile shape follows the runtime libmpv version; rejects are surfaced", "Player")
+def test_loadfile_runtime_version_shape():
+    # Issue #47: mpv 0.38 inserted an <index> argument into `loadfile`. Passing
+    # five arguments to Ubuntu 22.04's mpv 0.34 made it read our -1 as the
+    # options map and reject the command; the UI then hung on "Opening stream"
+    # with the only clue on stdout. The argument shape must come from
+    # mpv_client_api_version() at RUNTIME (not the headers), and a rejected
+    # command must reach the log ring and a toast.
+    pl = _src("src/player/player.zig")
+    pure = _src("src/player/playback_load_pure.zig")
+    readme = _src("README.md")
+    checks = {
+        "pure version gate": "pub fn loadfileHasIndexArg(" in pure
+            and "loadfile_index_api_version: u32 = (2 << 16) | 3" in pure,
+        "gate is unit-tested": 'test "loadfile index argument only on mpv 0.38+' in pure,
+        "sink asks the runtime": "loadfileHasIndexArg(c.mpv.mpv_client_api_version())" in pl,
+        "index only when supported": "if (with_index) intNode(-1) else options_node" in pl
+            and "if (with_index) arg_values.len else arg_values.len - 1" in pl,
+        "reject is not ignored": "const rc = c.mpv.mpv_command_node(self.ctx, &command_node, null);" in pl
+            and "_ = c.mpv.mpv_command_node(self.ctx, &command_node, null);" not in pl,
+        "reject reaches log + toast": "loadfile rejected by libmpv" in pl
+            and 'logs.pushLog("error", "player", msg, true);' in pl
+            and "state.showToast(msg);" in pl,
+        "floors documented": "libmpv **0.34**" in readme and "glibc 2.38" in readme and "2.0.22" in readme,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", f"loadfile compat incomplete: {missing}"
+    return "pass", "loadfile takes 4 args below client API 2.3, 5 from 0.38; rejects logged + toasted; floors in README"
+
+
 @test("Anime Seasons/Calendar/Tracking", "Browse")
 def test_anime_netflix_experience():
     # Netflix/Apple-TV+ anime browse: mode toolbar, Seasonal (/seasons),

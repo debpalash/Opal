@@ -34,6 +34,32 @@ pub const Request = struct {
     headers: []const HttpHeader = &.{},
 };
 
+/// mpv 0.38.0 (client API 2.3) inserted an `<index>` argument into `loadfile`
+/// between `<flags>` and `<options>`. Passing five arguments to an older
+/// libmpv makes it read our `-1` index as the options map and reject the
+/// command with "argument options has incompatible type" — the file never
+/// loads and the UI sits on "Opening stream" (issue #47, Ubuntu 22.04 ships
+/// mpv 0.34). Choose the argument shape from the RUNTIME client API version
+/// (`mpv_client_api_version()`), never the headers we compiled against.
+pub const loadfile_index_api_version: u32 = (2 << 16) | 3; // MPV_MAKE_VERSION(2, 3)
+
+pub fn loadfileHasIndexArg(runtime_api_version: u32) bool {
+    return runtime_api_version >= loadfile_index_api_version;
+}
+
+/// Oldest libmpv the load path is written for (mpv 0.34 = client API 2.0):
+/// below this `loadfile` has no per-file options map at all.
+pub const min_supported_api_version: u32 = (2 << 16) | 0;
+
+test "loadfile index argument only on mpv 0.38+ (client API 2.3+)" {
+    try std.testing.expect(!loadfileHasIndexArg((1 << 16) | 109)); // mpv 0.33
+    try std.testing.expect(!loadfileHasIndexArg((2 << 16) | 0)); // mpv 0.34/0.35
+    try std.testing.expect(!loadfileHasIndexArg((2 << 16) | 2)); // mpv 0.37
+    try std.testing.expect(loadfileHasIndexArg((2 << 16) | 3)); // mpv 0.38
+    try std.testing.expect(loadfileHasIndexArg((2 << 16) | 5)); // mpv 0.40/0.41
+    try std.testing.expect(loadfileHasIndexArg((3 << 16) | 0)); // future major
+}
+
 /// HTTP options attached to one mpv playlist entry by `loadfile`.  Values are
 /// always explicit, including the defaults, so an appended entry cannot later
 /// inherit whatever happens to be configured on the player context.

@@ -123,6 +123,14 @@ zig build run        # first build is slow; incrementals are fast
 **Linux/Wayland:** use `make run` (forces system SDL2 — the bundled one is
 X11-only). macOS builds read `HOMEBREW_PREFIX` (default `/opt/homebrew`).
 
+**Minimum versions (Linux):** libmpv **0.34** or newer (mpv 0.38+ recommended;
+Ubuntu 22.04's 0.34 works — Opal picks the `loadfile` argument shape from the
+library version at runtime), SDL **2.0.22** or newer when building against the
+system SDL via `make run` (jammy's 2.0.20 lacks `SDL_PIXELFORMAT_RGBX32`; the
+default `zig build run` bundles a new-enough SDL, X11 only), and the prebuilt
+AppImage needs **glibc 2.38** (Debian 12 / Mint 21: build from source instead). A rejected `loadfile` is now reported in the app's log and as
+a toast rather than hanging on "Opening stream".
+
 </details>
 
 <details>
@@ -222,6 +230,13 @@ Where it's all going: [`ROADMAP.md`](ROADMAP.md).
 | <kbd>S</kbd> search | <kbd>B</kbd> browser | <kbd>D</kbd> library | <kbd>H</kbd> history |
 | <kbd>F</kbd> fullscreen | <kbd>P</kbd> playlist | <kbd>G</kbd> grid layout | <kbd>Z</kbd> fit/crop |
 | <kbd>⌘</kbd><kbd>O</kbd> open file | <kbd>⌘</kbd><kbd>,</kbd> settings | <kbd>Esc</kbd> back out | <kbd>⇧</kbd><kbd>I</kbd> **cheat sheet** |
+
+**📱 From your phone:** Settings › Web UI → *Enable Web UI*, set *Network* to
+**LAN**, then scan the QR code shown there (it carries the one-time setup code
+on first use). That opens `http://<your-pc-ip>:41595` in the phone's browser —
+plain HTTP on your own network, no account or cloud involved. Installing it as
+a home-screen app needs a secure context (HTTPS); see
+[docs/web-companion.md](docs/web-companion.md).
 
 ## 🧩 Browser extension
 

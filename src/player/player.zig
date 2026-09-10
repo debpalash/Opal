@@ -71,22 +71,42 @@ const MpvPlaybackSink = struct {
             .format = c.mpv.MPV_FORMAT_NODE_MAP,
         };
 
+        // mpv 0.38+ takes `loadfile <url> <flags> <index> <options>`; older
+        // libmpv (Ubuntu 22.04's 0.34) takes `loadfile <url> <flags> <options>`
+        // and would read the index as the options map, rejecting the whole
+        // command (issue #47). Decided from the RUNTIME library version.
+        const with_index = playback_load.loadfileHasIndexArg(c.mpv.mpv_client_api_version());
         var arg_values = [_]c.mpv.mpv_node{
             stringNode("loadfile"),
             stringNode(url_z.ptr),
             stringNode(mode.mpvArg().ptr),
-            intNode(-1),
+            if (with_index) intNode(-1) else options_node,
             options_node,
         };
         var arg_list: c.mpv.mpv_node_list = .{
-            .num = arg_values.len,
+            .num = if (with_index) arg_values.len else arg_values.len - 1,
             .values = @ptrCast(&arg_values),
         };
         var command_node: c.mpv.mpv_node = .{
             .u = .{ .list = &arg_list },
             .format = c.mpv.MPV_FORMAT_NODE_ARRAY,
         };
-        _ = c.mpv.mpv_command_node(self.ctx, &command_node, null);
+        const rc = c.mpv.mpv_command_node(self.ctx, &command_node, null);
+        if (rc < 0) {
+            // A rejected load used to be silent: mpv wrote one line to stdout
+            // and the UI showed "Opening stream" forever. Say what happened,
+            // in the log ring AND on screen, with the library version so a
+            // too-old libmpv is recognisable at a glance.
+            const api = c.mpv.mpv_client_api_version();
+            var msg_buf: [256]u8 = undefined;
+            const msg = std.fmt.bufPrint(&msg_buf, "loadfile rejected by libmpv (client API {d}.{d}): {s}", .{
+                api >> 16,
+                api & 0xffff,
+                std.mem.span(c.mpv.mpv_error_string(rc)),
+            }) catch "loadfile rejected by libmpv";
+            logs.pushLog("error", "player", msg, true);
+            state.showToast(msg);
+        }
     }
 };
 

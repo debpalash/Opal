@@ -28,6 +28,58 @@ pub fn webUiSetupUrl(port: u16, setup_token: []const u8, buf: []u8) ?[]const u8 
     return std.fmt.bufPrint(buf, "http://127.0.0.1:{d}/#setup={s}", .{ port, setup_token }) catch null;
 }
 
+/// The address a PHONE on the same network opens (issue #46): the LAN IP, not
+/// loopback. Null when there is no LAN address to show or `buf` is too small.
+pub fn webUiLanUrl(lan_ip: []const u8, port: u16, buf: []u8) ?[]const u8 {
+    if (!routableLanIp(lan_ip)) return null;
+    return std.fmt.bufPrint(buf, "http://{s}:{d}/", .{ lan_ip, port }) catch null;
+}
+
+/// A dotted quad a phone can actually connect to: not empty, not loopback,
+/// and not the 0.0.0.0 the server BINDS (a valid-looking quad that is never
+/// a destination — the same trap `webUiUrl`'s regression test guards).
+fn routableLanIp(ip: []const u8) bool {
+    return ip.len > 0 and isDottedQuad(ip) and
+        !std.mem.startsWith(u8, ip, "127.") and
+        !std.mem.startsWith(u8, ip, "0.");
+}
+
+/// LAN URL carrying the one-time first-admin setup capability in the
+/// fragment, so scanning one QR code from the phone lands on a page that can
+/// create the account without typing the 64-hex code. Same validation and
+/// fragment placement as `webUiSetupUrl`; null once setup is closed (no
+/// token) or when there is no LAN address.
+pub fn webUiLanSetupUrl(lan_ip: []const u8, port: u16, setup_token: []const u8, buf: []u8) ?[]const u8 {
+    if (setup_token.len != 64) return null;
+    for (setup_token) |ch| {
+        if (!std.ascii.isDigit(ch) and !(ch >= 'a' and ch <= 'f')) return null;
+    }
+    if (!routableLanIp(lan_ip)) return null;
+    return std.fmt.bufPrint(buf, "http://{s}:{d}/#setup={s}", .{ lan_ip, port, setup_token }) catch null;
+}
+
+test "webUiLanUrl: LAN address only, never loopback or empty" {
+    var buf: [96]u8 = undefined;
+    try std.testing.expectEqualStrings("http://192.168.1.42:41595/", webUiLanUrl("192.168.1.42", 41595, &buf).?);
+    try std.testing.expectEqual(@as(?[]const u8, null), webUiLanUrl("", 41595, &buf));
+    try std.testing.expectEqual(@as(?[]const u8, null), webUiLanUrl("127.0.0.1", 41595, &buf));
+    try std.testing.expectEqual(@as(?[]const u8, null), webUiLanUrl("0.0.0.0", 41595, &buf));
+    try std.testing.expectEqual(@as(?[]const u8, null), webUiLanUrl("not an ip", 41595, &buf));
+}
+
+test "webUiLanSetupUrl: setup capability stays in the fragment; closed setup yields null" {
+    const token = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    var buf: [160]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        "http://10.0.0.7:41595/#setup=" ++ token,
+        webUiLanSetupUrl("10.0.0.7", 41595, token, &buf).?,
+    );
+    try std.testing.expectEqual(@as(?[]const u8, null), webUiLanSetupUrl("10.0.0.7", 41595, "", &buf));
+    try std.testing.expectEqual(@as(?[]const u8, null), webUiLanSetupUrl("", 41595, token, &buf));
+    var tiny: [16]u8 = undefined;
+    try std.testing.expectEqual(@as(?[]const u8, null), webUiLanSetupUrl("10.0.0.7", 41595, token, &tiny));
+}
+
 /// Tooltip for the header Web UI button. `lan_ip` is only consulted when
 /// `running` — callers pass "" while off so the toggle never pays for the
 /// `ipconfig` probe behind `remote.lanIp()` on a cold first frame.
