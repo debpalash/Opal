@@ -99,7 +99,10 @@ document.getElementById('result').textContent = JSON.stringify({{
                     # Ubuntu's Chromium package occasionally leaves a zygote
                     # alive after --dump-dom emitted the complete document.
                     # Reap the private process group and validate that output.
-                    os.killpg(proc.pid, signal.SIGKILL)
+                    if os.name == "nt":
+                        proc.kill()
+                    else:
+                        os.killpg(proc.pid, signal.SIGKILL)
                     tail_out, tail_err = proc.communicate()
 
                     def as_text(value: str | bytes | None) -> str:
@@ -111,7 +114,8 @@ document.getElementById('result').textContent = JSON.stringify({{
                 server.shutdown()
                 server.server_close()
                 server_thread.join(timeout=2)
-            if proc.returncode not in (0, -signal.SIGKILL) and '<pre id="result">' not in stdout:
+            killed_code = -getattr(signal, "SIGKILL", 9)
+            if proc.returncode not in (0, killed_code) and '<pre id="result">' not in stdout:
                 self.fail(f"Chromium exited with {proc.returncode}:\n{stderr[-2000:]}")
         marker = '<pre id="result">'
         self.assertIn(marker, stdout, stderr[-2000:])

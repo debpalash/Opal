@@ -26,6 +26,32 @@ if (location.hash.startsWith('#setup=')) {
 
 const $ = id => document.getElementById(id);
 
+// Session-only performance probe. Event Timing measures input-to-next-paint;
+// no URLs, labels, or user content are retained.
+const webPerf = (() => {
+  const started = performance.now(), interactions = [], longTasks = [];
+  let shellMs = null;
+  const push = (list, value) => { if (Number.isFinite(value)) { list.push(value); if (list.length > 128) list.shift(); } };
+  try {
+    new PerformanceObserver(list => list.getEntries().forEach(e => push(interactions, e.duration)))
+      .observe({type:'event', buffered:true, durationThreshold:16});
+  } catch {}
+  try {
+    new PerformanceObserver(list => list.getEntries().forEach(e => push(longTasks, e.duration)))
+      .observe({type:'longtask', buffered:true});
+  } catch {}
+  const percentile = (values, p) => {
+    if (!values.length) return null;
+    const sorted = values.slice().sort((a,b) => a-b);
+    return sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * p) - 1)];
+  };
+  return {
+    shellReady(){ if (shellMs === null) requestAnimationFrame(() => requestAnimationFrame(() => { shellMs = performance.now() - started; })); },
+    summary(){ return {shell_ms:shellMs, interaction_p95_ms:percentile(interactions,.95), interaction_count:interactions.length,
+      long_task_max_ms:longTasks.length ? Math.max(...longTasks) : 0, long_task_count:longTasks.length}; },
+  };
+})();
+
 // Context-specific serialization for the legacy compact renderers below.
 // Attribute encoding is intentionally stricter than text encoding: quotes must
 // remain data when a provider value appears inside a quoted attribute. URL

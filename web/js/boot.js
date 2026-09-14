@@ -8,6 +8,7 @@ navPageButtons.forEach(button => {
 });
 syncNavMode();
 openPage(routePage() || 'home', { replace:true, focus:false });
+webPerf.shellReady();
 
 // ── Authentication boot ──
 fetch(BASE + '/api/auth/status', { credentials:'same-origin' })

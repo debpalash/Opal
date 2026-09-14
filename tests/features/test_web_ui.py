@@ -490,6 +490,7 @@ def test_webui_password_reset_usable():
 @test("Web Watching library (desktop .watching parity)", "Web UI")
 def test_web_watching_library():
     ui = _web_app()
+    css = _src("web/styles/app.css")
     rm = _remote_api()
     lib = _src("src/services/tv_library.zig")
     checks = {
@@ -524,11 +525,32 @@ def test_web_watching_library():
         "stale page bounded": "Math.min(9, Math.max(1" in ui,
         "bounded server page": 'wire.queryParam(query, "limit")' in rm
             and "limit > 96" in rm and "catalog_total" in rm,
+        "offscreen rendering skipped": "content-visibility:auto" in css
+            and "contain-intrinsic-size:auto" in css
+            and "#watch-list>.watch-row" in css,
     }
     missing = [k for k, ok in checks.items() if not ok]
     if missing:
         return "fail", "Watching page incomplete: " + ", ".join(missing)
     return "pass", "Watching: /api/library (locked snapshot, desktop order) + filter chips + drill-down"
+
+
+@test("Web performance budgets are measured on the real client", "Web UI")
+def test_web_performance_probe():
+    ui = _web_app()
+    checks = {
+        "event timing p95": "PerformanceObserver" in ui and "interaction_p95_ms" in ui
+            and "percentile(interactions,.95)" in ui,
+        "painted shell timing": "webPerf.shellReady()" in ui
+            and "requestAnimationFrame(() => requestAnimationFrame" in ui,
+        "long task signal": "long_task_max_ms" in ui and "type:'longtask'" in ui,
+        "visible diagnostics": 'id="web-perf"' in ui and "Interaction p95" in ui,
+        "bounded samples": "list.length > 128" in ui,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "web performance measurement incomplete: " + ", ".join(missing)
+    return "pass", "painted shell, Event Timing p95 and bounded long-task metrics visible in Diagnostics"
 
 
 @test("Movies and shows share one details panel with real metadata", "Web UI")

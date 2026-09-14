@@ -108,7 +108,9 @@ commands, non-finite numbers, out-of-range values, and unknown actions.
 - [ ] Collections, playlists, queue add/remove/reorder/play, bulk actions
 - [ ] Library scan/import, metadata corrections, duplicate handling
 - [ ] Cross-source semantic deduplication and fallback stream candidates
-- [ ] Persisted filters, sorting, view mode, pagination, and virtualized grids
+- [x] Persisted filters, sorting, view mode, pagination, and virtualized grids
+      (validated native filter/grid preferences; web filter/sort/density/page
+      preferences; bounded server pages; intrinsic-size off-screen rendering)
 
 ### Wave 4 — source and integration ownership
 
