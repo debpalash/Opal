@@ -596,8 +596,9 @@ def test_ytdlp_verifies_execution():
     body = m.group(0)
     checks = {
         "runs the binary": '"--version"' in body,
-        "requires a clean exit": "term.exited == 0" in body,
-        "requires actual output": "n > 0" in body,
+        "requires a clean exit": "result.ok()" in body,
+        "requires actual output": "result.output" in body,
+        "bounded process tree": "bounded_process.run" in body and "timeout_ms" in body,
         # Standing down is the point: getPath() going null is what makes
         # binary() fall through to a PATH lookup, which is what unblocked the
         # reporter when they installed yt-dlp themselves.
@@ -605,7 +606,7 @@ def test_ytdlp_verifies_execution():
         "clears the binary() cache": "resolved_done.store(false" in body,
         "tells the user": 'logs.pushLog(' in body,
         # ~20s cold start on the macOS standalone build — never on the UI thread.
-        "verification runs off-thread": "spawnLegacy(verifyWorker" in src,
+        "verification runs off-thread": "spawn(verifyWorker" in src,
     }
     bad = [k for k, v in checks.items() if not v]
     if bad:

@@ -14,8 +14,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const io_global = @import("io_global.zig");
-const alloc = @import("alloc.zig").allocator;
+const bounded_process = @import("bounded_process.zig");
 
 const is_windows = builtin.os.tag == .windows;
 
@@ -43,19 +42,13 @@ var probing = std.atomic.Value(bool).init(false);
 
 /// True when `exe` runs Python and prints the probe token.
 fn works(exe: []const u8) bool {
-    var child = io_global.Child.init(&.{ exe, "-c", "print(" ++ probe_token ++ ")" }, alloc);
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    child.spawn() catch return false;
     var buf: [64]u8 = undefined;
-    const n = if (child.stdout) |*so| io_global.readAll(so, &buf) catch 0 else 0;
-    const term = child.wait() catch return false;
-    switch (term) {
-        .exited => |code| if (code != 0) return false,
-        else => return false,
-    }
-    return std.mem.indexOf(u8, buf[0..n], probe_token) != null;
+    const result = bounded_process.run(
+        &.{ exe, "-c", "print(" ++ probe_token ++ ")" },
+        &buf,
+        .{ .timeout_ms = 3_000, .terminate_grace_ms = 100 },
+    );
+    return result.ok() and std.mem.indexOf(u8, result.output, probe_token) != null;
 }
 
 /// The first interpreter that actually works, or null when Python is absent.

@@ -8,8 +8,6 @@ const bounded_process = @import("../core/bounded_process.zig");
 const update_pure = @import("ytdlp_update_pure.zig");
 const sync = @import("../core/sync.zig");
 
-const alloc = @import("../core/alloc.zig").allocator;
-
 // yt-dlp GitHub releases URL for standalone binary
 const YTDLP_URL_LINUX = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp";
 const YTDLP_URL_MACOS = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos";
@@ -31,20 +29,15 @@ pub fn getPath() ?[]const u8 {
 /// not. Runs on its own thread: the macOS standalone build cold-starts ~20s.
 fn verifyWorker() void {
     const path = bin_path_buf[0..bin_path_len];
-    var child = io.Child.init(&.{ path, "--version" }, alloc);
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    var ok = false;
-    if (child.spawn()) {
-        var buf: [64]u8 = undefined;
-        const n = if (child.stdout) |*so| io.readAll(so, &buf) catch 0 else 0;
-        // yt-dlp --version prints a bare date-ish version and exits 0. Requiring
-        // both guards against a truncated file that spawns and dies instantly.
-        if (child.wait()) |term| {
-            ok = n > 0 and term == .exited and term.exited == 0;
-        } else |_| {}
-    } else |_| {}
+    var buf: [64]u8 = undefined;
+    const result = bounded_process.run(
+        &.{ path, "--version" },
+        &buf,
+        .{ .timeout_ms = 30_000, .terminate_grace_ms = 150 },
+    );
+    // yt-dlp --version prints a bare date-ish version and exits 0. Requiring
+    // both guards against a truncated file that spawns and dies instantly.
+    const ok = result.ok() and std.mem.trim(u8, result.output, " \r\n\t").len > 0;
     if (ok) return;
     // Stand down: getPath() goes null, so binary() resolves to a PATH lookup
     // and mpv gets a name it can find if the user installed one themselves.
@@ -113,11 +106,9 @@ var version_busy = std.atomic.Value(bool).init(false);
 pub fn ensureVersion() void {
     if (version_ready.load(.acquire)) return;
     if (version_busy.swap(true, .acq_rel)) return; // one in flight already
-    if (@import("../core/workers.zig").spawnLegacy(versionWorker, .{})) |t| {
-        @import("../core/workers.zig").release(t);
-    } else |_| {
+    @import("../core/workers.zig").spawn(versionWorker, .{}) catch {
         version_busy.store(false, .release);
-    }
+    };
 }
 
 /// Re-query the version after an update (clears the cache).
@@ -144,19 +135,18 @@ fn versionWorker() void {
     // every frame (the pre-fix bug).
     version_len = 0;
     const argv = [_][]const u8{ binary(), "--version" };
-    var child = io.Child.init(&argv, alloc);
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    if (child.spawn()) {
-        var buf: [64]u8 = undefined;
-        const n = if (child.stdout) |*so| io.readAll(so, &buf) catch 0 else 0;
-        _ = child.wait() catch {};
-        const trimmed = std.mem.trim(u8, buf[0..n], " \r\n\t");
+    var buf: [64]u8 = undefined;
+    const result = bounded_process.run(
+        &argv,
+        &buf,
+        .{ .timeout_ms = 30_000, .terminate_grace_ms = 150 },
+    );
+    if (result.ok()) {
+        const trimmed = std.mem.trim(u8, result.output, " \r\n\t");
         const m = @min(trimmed.len, version_buf.len);
         @memcpy(version_buf[0..m], trimmed[0..m]);
         version_len = m;
-    } else |_| {}
+    }
     version_ready.store(true, .release);
     if (state.app.dvui_win) |win| @import("dvui").refresh(win, @src(), null);
 }
@@ -216,7 +206,7 @@ pub fn discoverExisting() bool {
         is_ready.store(true, .release);
         resolved_done.store(false, .release);
         logs.pushLog("info", "ytdlp", "yt-dlp binary found", false);
-        if (@import("../core/workers.zig").spawnLegacy(verifyWorker, .{})) |t| @import("../core/workers.zig").release(t) else |_| {}
+        @import("../core/workers.zig").spawn(verifyWorker, .{}) catch {};
         return true;
     } else |_| {}
 

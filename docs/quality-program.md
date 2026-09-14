@@ -104,7 +104,7 @@ route is not a completed row.
 | Route-bound player surfaces | Leaving Now Playing closes pickers/info/stats/playlist so hidden modals cannot consume a later first click |
 | Windows TV integration gate | Test runner now inherits required MSYS2 runtime DLL path; headless production TV-detail tests pass |
 | Aero Snap contract | Installed benchmark asserts caption/sizing styles plus native HTCAPTION hit-test; current run has zero failures |
-| Recoverable yt-dlp updates | HTTPS-only staged download, official asset SHA-256, bounded probe and atomic publish preserve the working helper on every failure |
+| Recoverable yt-dlp updates | HTTPS-only staged download, official asset SHA-256, bounded process-tree probes and atomic publish preserve the working helper on every failure; Python discovery and version checks also have strict output/deadline limits |
 | Stable server identity | One random SQLite-persisted install ID now identifies Jellyfin video/music and Plex requests; adapters report the actual app version |
 | Recoverable Jellyfin auth | HTTP 401/403 is distinguished from transport failure, expired secrets are cleared, and disconnected sources remain reachable for sign-in |
 | Fast recoverable Plex | Plex library traffic uses pooled native HTTP instead of one curl process per page; 401/403 clears expired secrets and returns to sign-in |
