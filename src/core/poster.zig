@@ -32,9 +32,18 @@ const MAX_CONCURRENT: u32 = 8;
 /// before spawning; if it returns false, skip and retry next frame. Release in
 /// the worker's defer. Keeps every provider under the same MAX_CONCURRENT.
 pub fn tryClaimSlot() bool {
-    if (in_flight.load(.acquire) >= MAX_CONCURRENT) return false;
-    _ = in_flight.fetchAdd(1, .acq_rel);
-    return true;
+    // A load followed by fetchAdd is not a cap: multiple provider workers can
+    // all observe MAX_CONCURRENT - 1 and increment past the limit together.
+    // Reserve with CAS so the process-wide memory/network ceiling stays exact.
+    var observed = in_flight.load(.acquire);
+    while (observed < MAX_CONCURRENT) {
+        if (in_flight.cmpxchgWeak(observed, observed + 1, .acq_rel, .acquire)) |changed| {
+            observed = changed;
+        } else {
+            return true;
+        }
+    }
+    return false;
 }
 pub fn releaseSlot() void {
     _ = in_flight.fetchSub(1, .acq_rel);
@@ -199,9 +208,8 @@ pub fn fetchAsync(url: []const u8, pixels_out: *?[]u8, w_out: *u32, h_out: *u32,
     if (url.len > 1024) return;
     // Don't set fetching_flag when over the cap — leave the card unfetched so
     // it retries on a later frame once an in-flight slot frees.
-    if (in_flight.load(.acquire) >= MAX_CONCURRENT) return;
+    if (!tryClaimSlot()) return;
     fetching_flag.* = true;
-    _ = in_flight.fetchAdd(1, .acq_rel);
 
     const Args = struct { url_buf: [1024]u8, url_len: usize, pix: *?[]u8, w: *u32, h: *u32, flag: *bool };
 
@@ -211,7 +219,7 @@ pub fn fetchAsync(url: []const u8, pixels_out: *?[]u8, w_out: *u32, h_out: *u32,
     if (@import("workers.zig").spawnLegacy(struct {
         fn worker(args: Args) void {
             defer args.flag.* = false;
-            defer _ = in_flight.fetchSub(1, .acq_rel);
+            defer releaseSlot();
 
             const workers = @import("workers.zig");
             if (workers.isQuitting()) return;
@@ -284,7 +292,7 @@ pub fn fetchAsync(url: []const u8, pixels_out: *?[]u8, w_out: *u32, h_out: *u32,
         @import("workers.zig").release(t);
     } else |_| {
         fetching_flag.* = false;
-        _ = in_flight.fetchSub(1, .acq_rel); // spawn failed — release the slot we reserved
+        releaseSlot(); // spawn failed — release the slot we reserved
     }
 }
 
