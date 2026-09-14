@@ -872,6 +872,33 @@ def test_self_hosted_credentials_use_post_bodies():
     return "pass", "Jellyfin, Audiobookshelf, and OPDS credentials use POST bodies and scrub temporary buffers"
 
 
+@test("Plex and Jellyfin share an accessible details dialog", "Parity")
+def test_server_item_details_dialog():
+    html = _src("web/index.html")
+    css = _src("web/styles/app.css")
+    media = _src("web/js/media.js")
+    discovery = _src("web/js/discovery.js")
+    plex = _src("src/services/plex.zig")
+    plex_api = _src("src/services/remote_plex_api.zig")
+    remote = _src("src/services/remote.zig")
+    checks = {
+        "semantic modal": '<dialog id="source-details"' in html and 'aria-labelledby="source-details-title"' in html,
+        "responsive glass layout": "#source-details::backdrop" in css and "backdrop-filter:blur" in css and "@media(max-width:560px)" in css,
+        "one renderer for both adapters": "function openSourceDetails(source, item, trigger)" in media and "source === 'Jellyfin'" in media and "source === 'Plex'" in media,
+        "focus restored": "sourceDetailsReturnFocus.focus()" in media,
+        "outside click closes": "event.target === $('source-details')" in media,
+        "Jellyfin details affordance": "data-jf-details" in discovery and "openSourceDetails('Jellyfin'" in discovery,
+        "Plex details affordance": "plex-details" in media and "openSourceDetails('Plex'" in media,
+        "Jellyfin overview projected": 'item.overview[0..@min(item.overview_len' in remote,
+        "Plex overview parsed and projected": 'jstr(m, "summary")' in plex and "item.overview" in plex_api,
+        "details actions reuse typed mutations": "apiMutation('/plex/action" in media and "apiMutation('/jellyfin/action" in media,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "server details incomplete: " + ", ".join(missing)
+    return "pass", "Plex and Jellyfin details are responsive, keyboard-modal, actionable, and source-owned"
+
+
 @test("Remote API never serializes socket writes behind a global lock", "Remote")
 def test_remote_response_concurrency_boundary():
     remote = _remote_api()

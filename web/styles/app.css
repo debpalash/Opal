@@ -468,6 +468,24 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
 .plex-progress{height:3px;margin-top:7px;background:var(--bg-elevated);border-radius:999px;overflow:hidden}
 .plex-progress i{display:block;height:100%;background:var(--accent)}
 @media (hover:none){.jf-card-actions{opacity:1;transform:none}}
+#source-details{width:min(760px,calc(100vw - 24px));max-height:min(82vh,760px);padding:0;
+  color:var(--text-1);background:color-mix(in srgb,var(--bg-surface) 88%,transparent);
+  border:1px solid var(--border);border-radius:18px;box-shadow:0 24px 80px rgba(0,0,0,.55);
+  backdrop-filter:blur(22px) saturate(1.2);overflow:auto}
+#source-details::backdrop{background:rgba(3,4,9,.68);backdrop-filter:blur(7px)}
+#source-details-close{position:sticky;z-index:2;float:right;top:10px;margin:10px 10px 0 0;
+  background:var(--bg-elevated);border:1px solid var(--border);border-radius:999px;padding:7px 12px}
+.source-details-layout{display:grid;grid-template-columns:minmax(150px,220px) 1fr;gap:22px;padding:28px}
+#source-details-art{width:100%;aspect-ratio:2/3;object-fit:cover;border-radius:12px;background:var(--bg-elevated)}
+.source-details-copy{min-width:0;padding-top:8px}
+#source-details-title{margin:5px 0;font-size:clamp(22px,4vw,34px);line-height:1.1}
+#source-details-overview{color:var(--text-2);line-height:1.6;white-space:pre-line;margin:18px 0}
+#source-details-overview:empty::before{content:"No description available.";color:var(--text-3)}
+#source-details-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:18px}
+#source-details-actions .primary{background:var(--accent);border-color:var(--accent);color:#0c0c11;font-weight:700}
+#source-details-actions select{background:var(--bg-elevated);color:var(--text-1);border:1px solid var(--border);
+  border-radius:var(--rad-sm);padding:8px 10px}
+@media(max-width:560px){.source-details-layout{grid-template-columns:1fr;padding:20px}.source-details-layout>img{max-width:150px}}
 @media (max-width:420px){
   #browse-search button{padding-inline:10px}
   .browse-filters summary{padding-inline:10px}

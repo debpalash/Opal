@@ -97,9 +97,9 @@ commands, non-finite numbers, out-of-range values, and unknown actions.
 ### Wave 3 — library ownership
 
 - [ ] Unified details view for movies, shows, seasons, episodes, audio, books,
-      podcasts, comics, and source-specific items — movies and shows now share
-      one panel (`openDetails` → `/api/movie` + `/api/tv`) with overview,
-      metadata, and a Find-streams action row; remaining kinds still pending
+      podcasts, comics, and source-specific items — movies and shows share one
+      panel (`openDetails` → `/api/movie` + `/api/tv`), while Plex and Jellyfin
+      share an actionable semantic details dialog; remaining kinds still pending
 - [x] Exact TV/anime episode watched/unwatched state from library and show pages
 - [x] Automatic/plan/watching/completed/dropped status mutations and safe
       TV/anime untracking that keeps watch history

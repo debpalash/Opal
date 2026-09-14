@@ -632,6 +632,22 @@
     </div>
   </nav>
 
+<!-- Unified source-item details: one accessible surface for Plex/Jellyfin and
+     future adapters, instead of provider-specific action-only rows. -->
+<dialog id="source-details" aria-labelledby="source-details-title" aria-describedby="source-details-overview">
+  <button type="button" id="source-details-close" aria-label="Close details">Close</button>
+  <div class="source-details-layout">
+    <img id="source-details-art" alt="" hidden>
+    <div class="source-details-copy">
+      <div class="hint" id="source-details-source"></div>
+      <h2 id="source-details-title"></h2>
+      <div class="hint" id="source-details-meta"></div>
+      <p id="source-details-overview"></p>
+      <div class="quick" id="source-details-actions"></div>
+    </div>
+  </div>
+</dialog>
+
 <!-- Unified media details: movies and TV shows share this panel -->
 <div id="show-page">
   <button type="button" id="show-back">‹ Back</button>

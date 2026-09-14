@@ -47,6 +47,8 @@ const Item = struct {
     rating_key_len: usize = 0,
     title: [160]u8 = std.mem.zeroes([160]u8),
     title_len: usize = 0,
+    overview: [768]u8 = std.mem.zeroes([768]u8),
+    overview_len: usize = 0,
     year: [8]u8 = std.mem.zeroes([8]u8),
     year_len: usize = 0,
     part: [256]u8 = std.mem.zeroes([256]u8), // /library/parts/.../file.ext
@@ -601,6 +603,11 @@ fn fetchWindow(request: BrowseRequest, start: usize, gen: u64) void {
         const tl = @min(title.len, it.title.len);
         @memcpy(it.title[0..tl], title[0..tl]);
         it.title_len = tl;
+        if (jstr(m, "summary")) |overview| {
+            const ol = @min(overview.len, it.overview.len);
+            @memcpy(it.overview[0..ol], overview[0..ol]);
+            it.overview_len = ol;
+        }
         if (m.object.get("year")) |y| if (y == .integer) {
             const ys = std.fmt.bufPrint(&it.year, "{d}", .{y.integer}) catch "";
             it.year_len = ys.len;

@@ -4318,6 +4318,8 @@ fn apiJellyfin(stream: std.Io.net.Stream, method: []const u8, api_path: []const 
         escJsonWrite(&w, item.name[0..item.name_len]);
         w.writeAll("\",\"type\":\"") catch return;
         escJsonWrite(&w, item.media_type[0..item.media_type_len]);
+        w.writeAll("\",\"overview\":\"") catch return;
+        escJsonWrite(&w, txt.safeUtf8(item.overview[0..@min(item.overview_len, item.overview.len)]));
         w.print("\",\"year\":{d},\"folder\":{s},\"runtime\":{d},\"progress\":{d},\"favorite\":{s},\"played\":{s},\"image\":{s}}}", .{
             item.year,
             if (item.is_folder) "true" else "false",

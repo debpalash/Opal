@@ -286,15 +286,17 @@ function renderJfItems(items){
   // Poster cards (image + title). Items without a Primary image (it.image
   // false) fall back to the placeholder <img> tile — graceful, still labelled.
   $('jf-items').innerHTML = items.length
-    ? '<div class="grid">' + items.map(it => {
+    ? '<div class="grid">' + items.map((it, itemIndex) => {
         const meta = [it.type, it.year || '', it.runtime ? fmt(it.runtime) : ''].filter(Boolean).join(' · ');
         const progress = it.runtime > 0 && it.progress > 0 ? Math.min(100, Math.round(it.progress / it.runtime * 100)) : 0;
         return `<div class="card" data-id="${esc(it.id)}" data-folder="${it.folder}" data-type="${esc(it.type || '')}">
           ${it.image ? `<img loading="lazy" src="${BASE}/api/jellyfin/poster?id=${encodeURIComponent(it.id)}">` : '<img>'}
-          ${!it.folder ? `<div class="jf-card-actions">
+          <div class="jf-card-actions">
+            <button data-jf-details="${itemIndex}" aria-label="View details" title="View details">i</button>
+          ${!it.folder ? `
             <button data-jf-action="favorite" data-enabled="${!it.favorite}" aria-label="${it.favorite ? 'Remove from favorites' : 'Add to favorites'}" title="${it.favorite ? 'Remove from favorites' : 'Add to favorites'}">${it.favorite ? '&#9733;' : '&#9734;'}</button>
             <button data-jf-action="played" data-enabled="${!it.played}" aria-label="${it.played ? 'Mark unwatched' : 'Mark watched'}" title="${it.played ? 'Mark unwatched' : 'Mark watched'}">${it.played ? '&#10003;' : '&#9675;'}</button>
-          </div>` : ''}
+          ` : ''}</div>
           ${progress ? `<div class="jf-progress" title="${progress}% watched"><i style="width:${progress}%"></i></div>` : ''}
           <div class="cap">${esc(it.name)}<br><span class="rt">${esc(meta)}</span></div>
         </div>`;
@@ -311,6 +313,10 @@ function renderJfItems(items){
       await loadJellyfin();
       setTimeout(loadJellyfin, 1200); // reconcile a late server rejection/rollback
     } catch (error) { toast(error.message || 'Jellyfin update failed'); button.disabled = false; }
+  });
+  $('jf-items').querySelectorAll('[data-jf-details]').forEach(button => button.onclick = event => {
+    event.stopPropagation();
+    openSourceDetails('Jellyfin', items[Number(button.dataset.jfDetails)] || {}, button);
   });
   $('jf-items').querySelectorAll('.card').forEach(el => el.onclick = () => {
     const id = el.dataset.id;

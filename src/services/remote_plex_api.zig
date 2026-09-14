@@ -64,7 +64,9 @@ fn conflict(stream: std.Io.net.Stream, message: []const u8) bool {
 
 fn status(stream: std.Io.net.Stream) void {
     const allocator = @import("../core/alloc.zig").allocator;
-    const json = allocator.alloc(u8, 192 * 1024) catch return;
+    // Up to 300 bounded rows can each carry a 768-byte overview. Keep the
+    // projection bounded but large enough that a full page never truncates.
+    const json = allocator.alloc(u8, 512 * 1024) catch return;
     defer allocator.free(json);
     var w = std.Io.Writer.fixed(json);
     w.print("{{\"connected\":{s},\"loading\":{s},\"state\":\"{s}\",\"active_section\":{d},\"depth\":{d},\"server\":\"", .{
@@ -91,6 +93,8 @@ fn status(stream: std.Io.net.Stream) void {
         wire.writeJsonString(&w, txt.safeUtf8(item.title[0..@min(item.title_len, item.title.len)]));
         w.writeAll("\",\"id\":\"") catch return;
         wire.writeJsonString(&w, item.rating_key[0..@min(item.rating_key_len, item.rating_key.len)]);
+        w.writeAll("\",\"overview\":\"") catch return;
+        wire.writeJsonString(&w, txt.safeUtf8(item.overview[0..@min(item.overview_len, item.overview.len)]));
         w.writeAll("\",\"year\":\"") catch return;
         wire.writeJsonString(&w, txt.safeUtf8(item.year[0..@min(item.year_len, item.year.len)]));
         w.writeAll("\",\"type\":\"") catch return;

@@ -405,6 +405,86 @@ function plexRatingOptions(current){
     return `<option value="${value}"${value === selected ? ' selected' : ''}>${label}</option>`;
   }).join('');
 }
+let sourceDetailsReturnFocus = null;
+function closeSourceDetails(){
+  const dialog = $('source-details');
+  if (dialog.open) dialog.close();
+}
+function detailAction(label, run, primary){
+  const button = document.createElement('button');
+  button.type = 'button'; button.textContent = label;
+  if (primary) button.className = 'primary';
+  button.onclick = async () => {
+    button.disabled = true;
+    try { await run(); } catch (error) {
+      button.disabled = false; toast(error.message || 'Action failed');
+    }
+  };
+  return button;
+}
+function openSourceDetails(source, item, trigger){
+  const dialog = $('source-details'), actions = $('source-details-actions');
+  sourceDetailsReturnFocus = trigger || document.activeElement;
+  $('source-details-source').textContent = source;
+  $('source-details-title').textContent = item.name || item.title || 'Untitled';
+  const runtime = Number(item.runtime || item.duration || 0);
+  $('source-details-meta').textContent = [item.type || '', item.year || '', runtime ? fmt(runtime) : ''].filter(Boolean).join(' · ');
+  $('source-details-overview').textContent = item.overview || '';
+  const art = $('source-details-art');
+  const artUrl = source === 'Jellyfin' && item.image
+    ? `${BASE}/api/jellyfin/poster?id=${encodeURIComponent(item.id)}` : '';
+  art.hidden = !artUrl; art.src = artUrl; art.alt = artUrl ? `Poster for ${item.name || item.title || 'item'}` : '';
+  actions.replaceChildren();
+  if (source === 'Jellyfin') {
+    const play = async () => {
+      if (item.folder) { closeSourceDetails(); jfBrowse(item.id); return; }
+      const route = isJfAudio(item.type) ? '/jellyfin/play_audio?id=' : '/jellyfin/play?id=';
+      await api(route + encodeURIComponent(item.id)); closeSourceDetails();
+    };
+    actions.append(detailAction(item.folder ? 'Open' : (item.progress && !item.played ? 'Resume' : 'Play'), play, true));
+    if (!item.folder) {
+      actions.append(detailAction(item.favorite ? 'Remove favorite' : 'Favorite', async () => {
+        await apiMutation('/jellyfin/action?id=' + encodeURIComponent(item.id) + '&action=favorite&enabled=' + !item.favorite);
+        closeSourceDetails(); await loadJellyfin(); setTimeout(loadJellyfin, 1200);
+      }));
+      actions.append(detailAction(item.played ? 'Mark unwatched' : 'Mark watched', async () => {
+        await apiMutation('/jellyfin/action?id=' + encodeURIComponent(item.id) + '&action=played&enabled=' + !item.played);
+        closeSourceDetails(); await loadJellyfin(); setTimeout(loadJellyfin, 1200);
+      }));
+    }
+  } else if (source === 'Plex') {
+    actions.append(detailAction(item.folder ? 'Open' : (item.progress && !item.played ? 'Resume' : 'Play'), async () => {
+      await apiMutation('/plex/' + (item.folder ? 'open_item' : 'play') + '?id=' + encodeURIComponent(item.id));
+      closeSourceDetails(); pollPlex();
+    }, true));
+    if (!item.folder) {
+      actions.append(detailAction(item.played ? 'Mark unwatched' : 'Mark watched', async () => {
+        await apiMutation('/plex/action?id=' + encodeURIComponent(item.id) + '&action=played&enabled=' + !item.played);
+        closeSourceDetails(); pollPlex();
+      }));
+      const rating = document.createElement('select');
+      rating.className = 'plex-rating'; rating.dataset.id = item.id;
+      rating.setAttribute('aria-label', `Rate ${item.title || 'item'}`);
+      rating.innerHTML = plexRatingOptions(item.rating);
+      rating.onchange = async () => {
+        rating.disabled = true;
+        try {
+          await apiMutation('/plex/action?id=' + encodeURIComponent(item.id) + '&action=rating&rating=' + encodeURIComponent(rating.value));
+          closeSourceDetails(); pollPlex();
+        } catch (error) { rating.disabled = false; toast(error.message || 'Could not update rating.'); }
+      };
+      actions.append(rating);
+    }
+  }
+  if (!dialog.open) dialog.showModal();
+}
+$('source-details-close').onclick = closeSourceDetails;
+$('source-details').addEventListener('click', event => { if (event.target === $('source-details')) closeSourceDetails(); });
+$('source-details').addEventListener('close', () => {
+  $('source-details-art').removeAttribute('src');
+  if (sourceDetailsReturnFocus && sourceDetailsReturnFocus.isConnected) sourceDetailsReturnFocus.focus();
+  sourceDetailsReturnFocus = null;
+});
 function pollPlex(){
   clearInterval(plWatch);
   let ticks = 0;
@@ -444,6 +524,7 @@ function renderPlex(d){
         ${browsing && r.duration ? `<span class="src">${r.played ? 'Watched' : (r.progress ? `${fmt(r.progress)} / ${fmt(r.duration)}` : fmt(r.duration))}</span>` : ''}
         ${browsing && !r.folder ? `<button class="plex-watched" data-id="${esc(r.id || '')}" data-enabled="${!r.played}" aria-label="${r.played ? 'Mark unwatched' : 'Mark watched'}" title="${r.played ? 'Mark unwatched' : 'Mark watched'}">${r.played ? '&#10003;' : '&#9675;'}</button>` : ''}
         ${browsing && !r.folder ? `<select class="plex-rating" data-id="${esc(r.id || '')}" aria-label="Rate ${esc(r.title)}">${plexRatingOptions(r.rating)}</select>` : ''}
+        ${browsing ? `<button class="plex-details" data-i="${i}">Details</button>` : ''}
         <button class="play" data-i="${i}" data-id="${browsing ? esc(r.id || '') : ''}">${browsing ? (r.folder ? 'Open' : (r.progress && !r.played ? 'Resume' : 'Play')) : 'Open'}</button></div>
       ${items && r.duration && r.progress ? `<div class="plex-progress"><i style="width:${Math.min(100,Math.round(r.progress/r.duration*100))}%"></i></div>` : ''}
     </div>`).join('') || (d.connected ? '<div class="empty">Nothing here</div>' : '');
@@ -475,6 +556,9 @@ function renderPlex(d){
         pollPlex();
       } catch (error) { select.disabled = false; toast(error.message || 'Could not update rating.'); }
     };
+  });
+  $('plex-results').querySelectorAll('.plex-details').forEach(button => {
+    button.onclick = () => openSourceDetails('Plex', rows[Number(button.dataset.i)] || {}, button);
   });
 }
 
