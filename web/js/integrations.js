@@ -176,6 +176,8 @@ async function loadTrakt() {
     $('trakt-hint').textContent = d.user_code
       ? 'Go to trakt.tv/activate and enter ' + d.user_code
       : 'Requesting a code…';
+  } else if (d.needs_reauth) {
+    $('trakt-hint').textContent = `Authorization revoked — reconnect to send ${Number(d.queued || 0)} queued`;
   } else {
     $('trakt-hint').textContent = 'Not connected.';
   }
@@ -185,24 +187,38 @@ async function loadTrakt() {
   if (d.pending && !traktPoll) traktPoll = setInterval(loadTrakt, 3000);
   if (!d.pending && traktPoll) { clearInterval(traktPoll); traktPoll = null; }
 }
-$('trakt-save').onclick = async () => {
-  const put = (k, v) => fetch(BASE + '/api/trakt', {
+async function saveTraktDrafts() {
+  const put = async (k, v) => {
+    const response = await fetch(BASE + '/api/trakt', {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: 'key=' + encodeURIComponent(k) + '&value=' + encodeURIComponent(v),
-  });
-  // Empty means "leave alone", same rule as the integrations block above.
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Could not save Trakt settings');
+  };
   if ($('trakt-id').value) await put('client_id', $('trakt-id').value.trim());
   if ($('trakt-secret').value) await put('client_secret', $('trakt-secret').value);
   $('trakt-id').value = ''; $('trakt-secret').value = '';
-  $('trakt-hint').textContent = 'Saved ✓';
-  loadTrakt();
+}
+$('trakt-save').onclick = async () => {
+  // Empty means "leave alone", same rule as the integrations block above.
+  try {
+    await saveTraktDrafts();
+    $('trakt-hint').textContent = 'Saved ✓';
+    loadTrakt();
+  } catch (error) { $('trakt-hint').textContent = error.message; }
 };
 $('trakt-connect').onclick = async () => {
-  await fetch(BASE + '/api/trakt?action=connect',
-    { method:'POST', credentials:'same-origin' });
-  loadTrakt();
+  try {
+    await saveTraktDrafts();
+    const response = await fetch(BASE + '/api/trakt?action=connect',
+      { method:'POST', credentials:'same-origin' });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Could not start Trakt authorization');
+    loadTrakt();
+  } catch (error) { $('trakt-hint').textContent = error.message; }
 };
 $('trakt-disconnect').onclick = async () => {
   await fetch(BASE + '/api/trakt?action=disconnect',

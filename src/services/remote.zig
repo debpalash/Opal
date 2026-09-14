@@ -2821,12 +2821,11 @@ fn apiTrakt(stream: std.Io.net.Stream, method: []const u8, query: []const u8, bo
     if (credParam(body, query, "action", &abuf)) |action| {
         if (!requireMethod(stream, method, "POST")) return;
         if (std.mem.eql(u8, action, "connect")) {
-            if (trakt.client_id_len == 0) {
-                sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"set client_id first\"}");
+            if (!trakt.startDeviceAuth()) {
+                sendJsonStatus(stream, "409 Conflict", "{\"error\":\"save the Trakt client ID and secret first, or wait for the current authorization\"}");
                 return;
             }
-            trakt.startDeviceAuth();
-            sendJson(stream, "{\"ok\":true,\"pending\":true}");
+            sendJsonStatus(stream, "202 Accepted", "{\"ok\":true,\"pending\":true}");
             return;
         }
         if (std.mem.eql(u8, action, "disconnect")) {
@@ -2847,41 +2846,28 @@ fn apiTrakt(stream: std.Io.net.Stream, method: []const u8, query: []const u8, bo
         if (!requireMethod(stream, method, "POST")) return;
         var vbuf: [128]u8 = undefined;
         const val = credParam(body, query, "value", &vbuf) orelse "";
-        const Field = struct { name: []const u8, buf: []u8, len: *usize };
-        const fields = [_]Field{
-            .{ .name = "client_id", .buf = &trakt.client_id, .len = &trakt.client_id_len },
-            .{ .name = "client_secret", .buf = &trakt.client_secret, .len = &trakt.client_secret_len },
-        };
-        for (fields) |f| {
-            if (!std.mem.eql(u8, f.name, key)) continue;
-            if (val.len > f.buf.len) {
-                sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"value too long\"}");
-                return;
-            }
-            @memset(f.buf, 0);
-            @memcpy(f.buf[0..val.len], val);
-            f.len.* = val.len;
-            trakt.save();
+        if (trakt.setCredential(key, val)) {
             sendJson(stream, "{\"ok\":true}");
             return;
         }
-        sendJsonStatus(stream, "404 Not Found", "{\"error\":\"unknown trakt setting\"}");
+        sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"invalid or empty Trakt setting\"}");
         return;
     }
+    const account = trakt.snapshot();
     var out: [512]u8 = undefined;
     var w = std.Io.Writer.fixed(&out);
     // has_client_id / has_client_secret, never the values — same rule the
     // /plugins GET follows for the debrid key.
     w.print("{{\"connected\":{s},\"pending\":{s},\"scrobbling\":{s},\"queued\":{d},\"has_client_id\":{s},\"has_client_secret\":{s},\"user_code\":\"", .{
-        if (trakt.isConnected()) "true" else "false",
-        if (trakt.auth_pending) "true" else "false",
-        if (trakt.is_scrobbling) "true" else "false",
-        trakt.pendingCount(),
-        if (trakt.client_id_len > 0) "true" else "false",
-        if (trakt.client_secret_len > 0) "true" else "false",
+        if (account.connected) "true" else "false",
+        if (account.pending) "true" else "false",
+        if (account.scrobbling) "true" else "false",
+        account.queued,
+        if (account.has_client_id) "true" else "false",
+        if (account.has_client_secret) "true" else "false",
     }) catch return;
-    escJsonWrite(&w, trakt.user_code[0..@min(trakt.user_code_len, trakt.user_code.len)]);
-    w.writeAll("\"}") catch return;
+    escJsonWrite(&w, account.user_code[0..account.user_code_len]);
+    w.print("\",\"needs_reauth\":{s}}}", .{if (account.needs_reauth) "true" else "false"}) catch return;
     sendJson(stream, out[0..w.end]);
 }
 

@@ -1442,12 +1442,17 @@ fn renderDebrid() void {
 /// Trakt.tv connect panel — scrobble + sync watched to the user's Trakt account.
 fn renderTrakt() void {
     const tr = @import("trakt.zig");
+    const account = tr.snapshot();
+    const Draft = struct {
+        var client_id: [128]u8 = std.mem.zeroes([128]u8);
+        var client_secret: [128]u8 = std.mem.zeroes([128]u8);
+    };
     var card = cardBegin(@src(), 2);
     defer card.deinit();
 
     cardTitle(@src(), "Trakt.tv", "Sync your watched history.");
 
-    if (tr.isConnected()) {
+    if (account.connected) {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
         defer row.deinit();
         _ = dvui.label(@src(), "Connected", .{}, .{ .color_text = theme.colors.success, .gravity_y = 0.5 });
@@ -1466,22 +1471,33 @@ fn renderTrakt() void {
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
     defer row.deinit();
 
-    var idte = dvui.textEntry(@src(), .{ .text = .{ .buffer = &tr.client_id }, .placeholder = "Trakt client id" }, .{ .expand = .horizontal, .gravity_y = 0.5 });
+    var idte = dvui.textEntry(@src(), .{ .text = .{ .buffer = &Draft.client_id }, .placeholder = if (account.has_client_id) "client id saved" else "Trakt client id" }, .{ .expand = .horizontal, .gravity_y = 0.5 });
     idte.deinit();
-    tr.client_id_len = std.mem.indexOfScalar(u8, &tr.client_id, 0) orelse tr.client_id.len;
 
-    var scte = dvui.textEntry(@src(), .{ .text = .{ .buffer = &tr.client_secret }, .placeholder = "client secret" }, .{ .expand = .horizontal, .gravity_y = 0.5, .margin = .{ .x = theme.spacing.sm, .y = 0, .w = theme.spacing.sm, .h = 0 } });
+    var scte = dvui.textEntry(@src(), .{ .text = .{ .buffer = &Draft.client_secret }, .placeholder = if (account.has_client_secret) "secret saved" else "client secret" }, .{ .expand = .horizontal, .gravity_y = 0.5, .margin = .{ .x = theme.spacing.sm, .y = 0, .w = theme.spacing.sm, .h = 0 } });
     scte.deinit();
-    tr.client_secret_len = std.mem.indexOfScalar(u8, &tr.client_secret, 0) orelse tr.client_secret.len;
 
-    const label_txt = if (tr.auth_pending and tr.user_code_len > 0) "Waiting" else "Connect";
-    if (dvui.button(@src(), label_txt, .{}, .{ .color_fill = theme.colors.accent, .color_text = dvui.Color.white, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 7, .w = 12, .h = 7 }, .gravity_y = 0.5 })) {
-        tr.save();
-        tr.startDeviceAuth();
+    const id_len = std.mem.indexOfScalar(u8, &Draft.client_id, 0) orelse Draft.client_id.len;
+    const secret_len = std.mem.indexOfScalar(u8, &Draft.client_secret, 0) orelse Draft.client_secret.len;
+    if ((id_len > 0 or secret_len > 0) and dvui.button(@src(), "Save keys", .{}, .{ .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.text_secondary, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 7, .w = 12, .h = 7 }, .gravity_y = 0.5 })) {
+        if (id_len > 0) _ = tr.setCredential("client_id", Draft.client_id[0..id_len]);
+        if (secret_len > 0) _ = tr.setCredential("client_secret", Draft.client_secret[0..secret_len]);
+        @memset(&Draft.client_id, 0);
+        @memset(&Draft.client_secret, 0);
+        state.showToastTyped("Trakt keys saved", .success);
     }
 
-    if (tr.auth_pending and tr.user_code_len > 0) {
-        _ = dvui.label(@src(), "Enter code {s} at trakt.tv/activate", .{tr.user_code[0..tr.user_code_len]}, .{ .color_text = theme.colors.accent, .margin = .{ .x = 0, .y = 6, .w = 0, .h = 0 } });
+    const label_txt = if (account.pending) "Waiting" else "Connect";
+    if (dvui.button(@src(), label_txt, .{}, .{ .color_fill = theme.colors.accent, .color_text = dvui.Color.white, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 7, .w = 12, .h = 7 }, .gravity_y = 0.5 })) {
+        if (id_len > 0) _ = tr.setCredential("client_id", Draft.client_id[0..id_len]);
+        if (secret_len > 0) _ = tr.setCredential("client_secret", Draft.client_secret[0..secret_len]);
+        @memset(&Draft.client_id, 0);
+        @memset(&Draft.client_secret, 0);
+        if (!tr.startDeviceAuth()) state.showToast("Save both Trakt keys first");
+    }
+
+    if (account.pending and account.user_code_len > 0) {
+        _ = dvui.label(@src(), "Enter code {s} at trakt.tv/activate", .{account.user_code[0..account.user_code_len]}, .{ .color_text = theme.colors.accent, .margin = .{ .x = 0, .y = 6, .w = 0, .h = 0 } });
     }
 }
 

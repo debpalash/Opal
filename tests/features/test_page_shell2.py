@@ -309,6 +309,21 @@ def test_trakt_durable_outbox():
             and 'requireMethod(stream, method, "POST")' in remote,
         "visible queue and retry": '\\"queued\\\":{d}' in remote
             and 'id="trakt-retry"' in ui and "action=retry" in ui,
+        "owned cancellable authorization": "workers.spawn(deviceAuthWorker" in trakt
+            and "auth_generation" in trakt and "workers.isQuitting()" in trakt,
+        "revoked credential recovery": "status == 401" in trakt
+            and "credential_revision" in trakt and "needs_reauth" in remote
+            and "Authorization revoked" in ui,
+        "single-use token refresh": "refresh_token" in trakt
+            and "grant_type" in trakt
+            and "https://auth.trakt.tv/oauth/token" in trakt
+            and "refreshAccessToken(delivery.revision)" in trakt,
+        "provider polling contract": 'extractJsonInt(resp, "interval")' in trakt
+            and 'extractJsonInt(resp, "expires_in")' in trakt,
+        "thread-safe account projection": "pub fn snapshot() Snapshot" in trakt
+            and "credential_mutex" in trakt and "trakt.snapshot()" in remote,
+        "one-click credential connect": "saveTraktDrafts();" in ui
+            and ui.count("await saveTraktDrafts();") >= 2,
     }
     missing = [name for name, ok in checks.items() if not ok]
     if missing:
