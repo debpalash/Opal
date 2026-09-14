@@ -188,6 +188,10 @@ def movie_history_removal_sync():
     history = _src("src/services/history.zig")
     trakt = _src("src/services/trakt.zig")
     simkl = _src("src/services/simkl.zig")
+    library = _src("src/services/tv_library.zig")
+    remote = _src("src/services/remote_library_api.zig")
+    web = _src("web/js/integrations.js")
+    main = _src("src/main.zig")
     checks = {
         "catalog id persisted": "catalog_tmdb_id INTEGER" in db
             and "catalog_tmdb_id" in history and "catalog_movie_tmdb_id" in player,
@@ -200,6 +204,14 @@ def movie_history_removal_sync():
             and '"/sync/history/remove"' in simkl,
         "latest state wins": 'enqueueState("trakt", operation' in trakt
             and 'enqueueState("simkl", operation' in simkl,
+        "web removal is UI-thread safe": "requestRemove(item.id)" in library
+            and "pub fn requestRemove" in wh and "pub fn drainUi" in wh
+            and 'watch_history.zig").drainUi()' in main,
+        "response acknowledges mutation": "remove_applied.load(.acquire) >= ticket" in wh,
+        "web exposes movie remove": "r.kind !== 'movie' ? '<button class=\"watch-remove\"" not in web
+            and '<button class="watch-remove" data-action="remove">' in web
+            and "action=remove&kind=" in web,
+        "full identity accepted": "var id_buf: [512]u8" in remote,
     }
     missing = [name for name, ok in checks.items() if not ok]
     if missing:

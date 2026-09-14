@@ -123,7 +123,7 @@ fn watchedEpisodes(stream: std.Io.net.Stream, query: []const u8) void {
         wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"unknown library kind\"}");
         return;
     };
-    var id_buf: [128]u8 = undefined;
+    var id_buf: [512]u8 = undefined;
     const id = if (wire.queryParam(query, "id")) |raw| (wire.urlDecode(raw, &id_buf) orelse "") else "";
     const season = std.fmt.parseInt(i32, wire.queryParam(query, "season") orelse "", 10) catch {
         wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"season required\"}");
@@ -141,6 +141,7 @@ fn watchedEpisodes(stream: std.Io.net.Stream, query: []const u8) void {
             error.ItemNotFound => "{\"error\":\"library item not found\"}",
             error.InvalidEpisode => "{\"error\":\"invalid season\"}",
             error.Unsupported => "{\"error\":\"watched state is not available for this kind\"}",
+            error.Busy => unreachable,
         };
         wire.sendJsonStatus(stream, status, body);
         return;
@@ -223,6 +224,7 @@ fn libraryAction(stream: std.Io.net.Stream, query: []const u8) void {
             error.ItemNotFound => "{\"error\":\"library changed; refresh and retry\"}",
             error.InvalidEpisode => "{\"error\":\"invalid episode\"}",
             error.Unsupported => "{\"error\":\"action is not safe for this library kind yet\"}",
+            error.Busy => "{\"error\":\"library update queue is busy; retry\"}",
         };
         wire.sendJsonStatus(stream, status, body);
         return;

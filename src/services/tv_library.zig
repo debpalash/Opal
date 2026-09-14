@@ -410,7 +410,7 @@ pub const Command = union(Action) {
     refresh,
 };
 
-pub const CommandError = error{ ItemNotFound, InvalidEpisode, Unsupported };
+pub const CommandError = error{ ItemNotFound, InvalidEpisode, Unsupported, Busy };
 pub const MAX_EPISODES_PER_SEASON: usize = @intCast(tp.MAX_EPISODES_PER_SEASON);
 
 /// The single mutation path for local and connected-account TV history.
@@ -481,10 +481,7 @@ pub fn apply(command: Command) CommandError!void {
             switch (item.kind) {
                 .tv => db.tvSetTracked(try tvId(item), false),
                 .anime => db.animeRemoveContinue(item.id),
-                // watch_history's cache is UI-thread-owned. Mutating it from an
-                // HTTP worker would race the native grid, so movie history stays
-                // unavailable here until that store owns a synchronized command.
-                .movie => return error.Unsupported,
+                .movie => if (!@import("../player/watch_history.zig").requestRemove(item.id)) return error.Busy,
             }
             markDirty();
         },

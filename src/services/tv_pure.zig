@@ -34,6 +34,7 @@ pub const MAX_SEASONS: usize = 60;
 pub const MAX_WATCHED: usize = 2000;
 pub const MAX_SHOWS: usize = 200;
 pub const MAX_EPISODES_PER_SEASON: i32 = std.math.maxInt(u16);
+pub const MAX_NAME_ID: usize = 256;
 
 pub const Season = struct {
     number: i32 = 0,
@@ -389,7 +390,7 @@ pub const Row = struct {
     tmdb_id: i32 = 0,
     /// Stable string identity used for library_status: the TMDB id for TV, the
     /// MAL id for anime, the normalized name for a movie.
-    id: [64]u8 = std.mem.zeroes([64]u8),
+    id: [MAX_NAME_ID]u8 = std.mem.zeroes([MAX_NAME_ID]u8),
     id_len: usize = 0,
 
     name: [128]u8 = std.mem.zeroes([128]u8),

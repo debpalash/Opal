@@ -276,6 +276,18 @@ pub fn resolveFileKey(link: []const u8, buf: []u8) []const u8 {
 
 pub var entries: [MAX_WATCH_HISTORY]WatchEntry = undefined;
 pub var count: usize = 0;
+const REMOVE_QUEUE_CAP: usize = 16;
+const RemoveRequest = struct {
+    name: [MAX_NAME_LEN]u8 = std.mem.zeroes([MAX_NAME_LEN]u8),
+    len: usize = 0,
+    ticket: u64 = 0,
+};
+var remove_queue: [REMOVE_QUEUE_CAP]RemoveRequest = [_]RemoveRequest{.{}} ** REMOVE_QUEUE_CAP;
+var remove_head: usize = 0;
+var remove_count: usize = 0;
+var remove_mutex: @import("../core/sync.zig").Mutex = .{};
+var remove_ticket: std.atomic.Value(u64) = .init(0);
+var remove_applied: std.atomic.Value(u64) = .init(0);
 
 pub fn init() void {
     count = 0;
@@ -467,6 +479,76 @@ pub fn remove(idx: usize) void {
         entries[i] = entries[i + 1];
     }
     count -= 1;
+}
+
+fn removeByName(name: []const u8) bool {
+    for (entries[0..count], 0..) |*entry, index| {
+        if (!std.mem.eql(u8, entry.name[0..entry.name_len], name)) continue;
+        remove(index);
+        @import("../services/tv_library.zig").markDirty();
+        return true;
+    }
+    return false;
+}
+
+/// Queue a web/API history mutation for the UI thread, which owns the live
+/// cache. Headless mode has no renderer and may apply it under the queue lock.
+pub fn requestRemove(name: []const u8) bool {
+    if (name.len == 0 or name.len >= MAX_NAME_LEN) return false;
+    remove_mutex.lock();
+    if (state.app.is_headless) {
+        const removed = removeByName(name);
+        remove_mutex.unlock();
+        return removed;
+    }
+    var ticket: u64 = 0;
+    for (0..remove_count) |offset| {
+        const index = (remove_head + offset) % REMOVE_QUEUE_CAP;
+        if (std.mem.eql(u8, remove_queue[index].name[0..remove_queue[index].len], name)) {
+            ticket = remove_queue[index].ticket;
+            break;
+        }
+    }
+    if (ticket == 0) {
+        if (remove_count >= REMOVE_QUEUE_CAP) {
+            remove_mutex.unlock();
+            return false;
+        }
+        ticket = remove_ticket.fetchAdd(1, .acq_rel) + 1;
+        const tail = (remove_head + remove_count) % REMOVE_QUEUE_CAP;
+        remove_queue[tail] = .{};
+        @memcpy(remove_queue[tail].name[0..name.len], name);
+        remove_queue[tail].len = name.len;
+        remove_queue[tail].ticket = ticket;
+        remove_count += 1;
+    }
+    remove_mutex.unlock();
+    state.wakeUi();
+    // The HTTP mutation response means the cache has actually changed, not
+    // merely that work was accepted. Bound the wait so a closing UI cannot
+    // strand a server connection.
+    var waited: usize = 0;
+    while (waited < 500 and remove_applied.load(.acquire) < ticket) : (waited += 1)
+        @import("../core/io_global.zig").sleep(10 * std.time.ns_per_ms);
+    return remove_applied.load(.acquire) >= ticket;
+}
+
+/// Apply queued remote history mutations from appFrame before any history UI
+/// reads the cache.
+pub fn drainUi() void {
+    while (true) {
+        remove_mutex.lock();
+        if (remove_count == 0) {
+            remove_mutex.unlock();
+            return;
+        }
+        const request = remove_queue[remove_head];
+        remove_head = (remove_head + 1) % REMOVE_QUEUE_CAP;
+        remove_count -= 1;
+        remove_mutex.unlock();
+        _ = removeByName(request.name[0..request.len]);
+        remove_applied.store(request.ticket, .release);
+    }
 }
 
 /// No-op — SQLite is always in sync.

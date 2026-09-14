@@ -566,7 +566,7 @@ function renderWatch(){
         ${r.has_next && r.kind !== 'movie' ? `<button data-action="watched" title="Advance to the following episode">Mark ${ep} watched</button>` : ''}
         ${r.has_next && r.kind === 'tv' ? `<button class="watch-next" data-action="find-next">Find ${ep}</button>` : ''}
         <button data-action="open">${r.kind === 'tv' ? 'Details' : 'Find'}</button>
-        ${r.kind !== 'movie' ? '<button class="watch-remove" data-action="remove">Remove</button>' : ''}
+        <button class="watch-remove" data-action="remove">Remove</button>
       </div>
     </div>`;
   }).join('') || '<div class="empty">Nothing here</div>';
@@ -596,7 +596,8 @@ $('watch-list').addEventListener('click', e => {
     changeLibrary('action=watched&kind=' + r.kind + '&id=' + encodeURIComponent(r.id)
       + '&season=' + r.next_season + '&episode=' + r.next_episode + '&value=true');
   } else if (button.dataset.action === 'remove') {
-    if (!confirm(`Remove ${r.name} from Watching? Watch history is kept.`)) return;
+    const note = r.kind === 'movie' ? 'This removes its local and connected-account history.' : 'Watch history is kept.';
+    if (!confirm(`Remove ${r.name} from Watching? ${note}`)) return;
     changeLibrary('action=remove&kind=' + r.kind + '&id=' + encodeURIComponent(r.id) + '&confirm=1');
   }
 });
