@@ -288,3 +288,30 @@ def test_iptv_catalog():
     if missing:
         return "fail", "Catalog wiring incomplete: " + ", ".join(missing)
     return "pass", "Live TV catalog: SQLite (100k) + curated opt-in sources + SWR 24h ingest + nsfw-gated adult"
+
+
+@test("Live TV supports multiple independently managed custom playlists", "Video")
+def test_iptv_custom_source_crud():
+    service = _src("src/services/iptv.zig")
+    remote = _src("src/services/remote.zig")
+    html = _src("web/index.html")
+    web = _src("web/js/integrations.js")
+    checks = {
+        "bounded source slots": "MAX_CUSTOM_SOURCES: usize = 8" in service,
+        "durable CRUD": all(marker in service for marker in (
+            "pub fn setCustomSource", "pub fn removeCustomSource", "pub fn firstFreeCustomSlot",
+        )),
+        "every custom source ingested": "for (0..MAX_CUSTOM_SOURCES)" in service
+            and "ingestOne(id, .m3u" in service,
+        "adult false is not truthy": 'std.mem.eql(u8, value, "1")' in service,
+        "typed API list and mutations": r'\"custom\":[' in remote
+            and 'startsWith(u8, id, "iptv-custom-")' in remote,
+        "URLs sent in POST body": "apiFormMutation('/livetv/sources'" in web,
+        "web add edit remove": all(marker in html + web for marker in (
+            'id="ltv-custom-name"', 'id="ltv-custom-adult"', "data-ltv-edit", "data-ltv-remove",
+        )),
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "custom IPTV lifecycle incomplete: " + ", ".join(missing)
+    return "pass", "up to eight custom playlists persist and can be added, edited, classified, refreshed, and removed independently"

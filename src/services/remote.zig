@@ -1273,9 +1273,7 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
         sendJson(stream, out[0..w.end]);
         return;
     }
-    // Live TV settings — the curated source list behind Settings › Live TV.
-    // The /livetv *browser* was already covered; this is the part that decides
-    // what is in the catalog at all.
+    // Curated and custom Live TV source settings.
     if (std.mem.eql(u8, api_path, "/livetv/sources")) {
         apiLiveTvSources(stream, query, body);
         return;
@@ -2765,14 +2763,7 @@ fn apiParty(stream: std.Io.net.Stream, query: []const u8) void {
 ///
 /// The debrid API key is never echoed back: it is a credential, and the page
 /// only needs to know whether one is set.
-/// `/api/livetv/sources` — Settings › Live TV, for the web UI.
-///
-/// GET lists the curated sources with their installed state and channel count.
-/// POST takes `?action=refresh`, or `?id=<source>&action=install|remove`, or a
-/// custom playlist via `?id=iptv-custom&url=<m3u>`.
-///
-/// Every id is matched against the compiled-in SOURCES table before use, so a
-/// caller cannot name an arbitrary source_config entry and have it written.
+/// Curated and bounded custom Live TV source lifecycle.
 fn apiLiveTvSources(stream: std.Io.net.Stream, query: []const u8, body: []const u8) void {
     const iptv = @import("iptv.zig");
     const sources = @import("iptv_sources.zig");
@@ -2789,6 +2780,29 @@ fn apiLiveTvSources(stream: std.Io.net.Stream, query: []const u8, body: []const 
     }
     var ibuf: [64]u8 = undefined;
     if (credParam(body, query, "id", &ibuf)) |id| {
+        if (std.mem.startsWith(u8, id, "iptv-custom-")) {
+            const slot = std.fmt.parseInt(usize, id["iptv-custom-".len..], 10) catch iptv.MAX_CUSTOM_SOURCES;
+            const a = action orelse "";
+            if (std.mem.eql(u8, a, "remove")) {
+                if (!iptv.removeCustomSource(slot)) return sendJsonStatus(stream, "404 Not Found", "{\"error\":\"custom playlist not found\"}");
+                return sendJson(stream, "{\"ok\":true}");
+            }
+            var nbuf: [128]u8 = undefined;
+            var ubuf: [512]u8 = undefined;
+            const name = credParam(body, query, "name", &nbuf) orelse "";
+            const url = credParam(body, query, "url", &ubuf) orelse "";
+            const safe = struct {
+                fn value(text: []const u8) bool {
+                    for (text) |ch| if (ch < 0x20 or ch == '"' or ch == '\\') return false;
+                    return true;
+                }
+            }.value;
+            if ((!std.mem.startsWith(u8, url, "http://") and !std.mem.startsWith(u8, url, "https://")) or !safe(name) or !safe(url))
+                return sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"valid name and http(s) playlist required\"}");
+            const adult = std.mem.eql(u8, credParam(body, query, "adult", &abuf) orelse "", "1");
+            if (!iptv.setCustomSource(slot, name, url, adult)) return sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"could not save custom playlist\"}");
+            return sendJson(stream, "{\"ok\":true}");
+        }
         // The custom playlist is the one entry whose URL comes from the caller.
         if (std.mem.eql(u8, id, sources.CUSTOM_ID)) {
             var ubuf: [512]u8 = undefined;
@@ -2841,7 +2855,24 @@ fn apiLiveTvSources(stream: std.Io.net.Stream, query: []const u8, body: []const 
         if (iptv.isIngesting()) "true" else "false",
     }) catch return;
     escJsonWrite(&w, source_config.get(sources.CUSTOM_ID, "url") orelse "");
-    w.writeAll("\",\"sources\":[") catch return;
+    w.writeAll("\",\"custom\":[") catch return;
+    var custom_first = true;
+    var custom_id_buf: [32]u8 = undefined;
+    for (0..iptv.MAX_CUSTOM_SOURCES) |slot| {
+        const id = iptv.customSourceId(slot, &custom_id_buf);
+        const url = source_config.get(id, "url") orelse continue;
+        if (!custom_first) w.writeByte(',') catch return;
+        custom_first = false;
+        w.print("{{\"id\":\"{s}\",\"name\":\"", .{id}) catch return;
+        escJsonWrite(&w, source_config.get(id, "name") orelse "Custom playlist");
+        w.writeAll("\",\"url\":\"") catch return;
+        escJsonWrite(&w, url);
+        w.print("\",\"adult\":{s},\"channels\":{d}}}", .{
+            if (std.mem.eql(u8, source_config.get(id, "adult") orelse "", "1")) "true" else "false",
+            iptv.sourceChannelCount(id),
+        }) catch return;
+    }
+    w.writeAll("],\"sources\":[") catch return;
     var first = true;
     for (sources.SOURCES) |src| {
         if (std.mem.eql(u8, src.id, sources.CUSTOM_ID)) continue; // reported above

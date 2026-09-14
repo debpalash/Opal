@@ -339,12 +339,6 @@ $('suwa-stop').onclick = async () => {
 };
 
 // ── Setup page folding ──
-// Setup grew to ~10,500px: eleven sections stacked flat, so anything past the
-// third was a scroll expedition. Each `.sect` header now folds the run of
-// elements after it, and only the first is open on arrival. Done in JS over the
-// existing markup rather than by restructuring it, so every id the loaders look
-// up stays exactly where it was — the nodes are MOVED into a wrapper, not
-// recreated, so existing references survive.
 let setupFolded = false;
 function foldSetup(){
   if (setupFolded) return;
@@ -352,11 +346,6 @@ function foldSetup(){
   if (!page) return;
   setupFolded = true;
   const kids = [...page.children];
-  // `body` tracks where subsequent siblings go, but each header's handler must
-  // close over ITS OWN pair. Hoisting both out of the loop made every header
-  // toggle the last section instead of its own — clicking "Plugins" opened
-  // "Access". Caught by clicking one in a real browser; a source-level check
-  // could not have seen it.
   let body = null, first = true;
   for (const el of kids) {
     if (el.classList.contains('sect')) {
@@ -385,7 +374,9 @@ async function loadLiveTvSources() {
   $('ltv-hint').textContent = d.ingesting
     ? 'Refreshing channels…'
     : d.total + ' channels in your catalog';
-  if (!$('ltv-custom').value) $('ltv-custom').value = d.custom_url || '';
+  const custom = d.custom || [];
+  $('ltv-custom-list').innerHTML = custom.map(item => `<div class="cfg-row"><span>${esc(item.name)} · ${item.channels || 0} channels${item.adult ? ' · 18+' : ''}</span><span><button type="button" data-ltv-edit="${esc(item.id)}">Edit</button><button type="button" data-ltv-remove="${esc(item.id)}">Remove</button></span></div>`).join('');
+  $('ltv-custom-list')._items = custom;
   const list = $('ltv-list');
   list.textContent = '';
   for (const s of d.sources || []) {
@@ -409,11 +400,33 @@ async function loadLiveTvSources() {
   }
 }
 $('ltv-custom-save').onclick = async () => {
-  await api('/livetv/sources?id=iptv-custom&url='
-            + encodeURIComponent($('ltv-custom').value.trim()));
-  $('ltv-hint').textContent = 'Saved ✓';
-  setTimeout(loadLiveTvSources, 1000);
+  const items = $('ltv-custom-list')._items || [];
+  const editing = $('ltv-custom-save').dataset.id || '';
+  const used = new Set(items.map(item => item.id));
+  let id = editing;
+  if (!id) for (let slot = 0; slot < 8; slot++) if (!used.has('iptv-custom-' + slot)) { id = 'iptv-custom-' + slot; break; }
+  if (!id) return toast('Remove a custom playlist before adding another');
+  try {
+    await apiFormMutation('/livetv/sources', {id, action:'save', name:$('ltv-custom-name').value.trim(),
+      url:$('ltv-custom').value.trim(), adult:$('ltv-custom-adult').checked ? '1' : '0'});
+    $('ltv-custom-name').value = ''; $('ltv-custom').value = ''; $('ltv-custom-adult').checked = false;
+    $('ltv-custom-save').dataset.id = ''; $('ltv-custom-save').textContent = 'Add playlist';
+    $('ltv-hint').textContent = 'Saved ✓'; await loadLiveTvSources();
+  } catch (error) { toast(error.message || 'Could not save playlist'); }
 };
+$('ltv-custom-list').addEventListener('click', async event => {
+  const edit = event.target.closest('[data-ltv-edit]');
+  const remove = event.target.closest('[data-ltv-remove]');
+  if (edit) {
+    const item = ($('ltv-custom-list')._items || []).find(row => row.id === edit.dataset.ltvEdit); if (!item) return;
+    $('ltv-custom-name').value = item.name; $('ltv-custom').value = item.url; $('ltv-custom-adult').checked = !!item.adult;
+    $('ltv-custom-save').dataset.id = item.id; $('ltv-custom-save').textContent = 'Save changes';
+  }
+  if (remove && confirm('Remove this playlist? Its channels will leave the catalog.')) {
+    try { await apiFormMutation('/livetv/sources', {id:remove.dataset.ltvRemove, action:'remove'}); await loadLiveTvSources(); }
+    catch (error) { toast(error.message || 'Could not remove playlist'); }
+  }
+});
 $('ltv-refresh').onclick = async () => {
   await api('/livetv/sources?action=refresh');
   $('ltv-hint').textContent = 'Refreshing…';

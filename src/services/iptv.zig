@@ -300,7 +300,10 @@ pub fn anySourceInstalled() bool {
     for (sources.SOURCES) |s| {
         if (source_config.has(s.id)) return true;
     }
-    return source_config.get(sources.CUSTOM_ID, "url") != null;
+    if (source_config.get(sources.CUSTOM_ID, "url") != null) return true;
+    var id_buf: [32]u8 = undefined;
+    for (0..MAX_CUSTOM_SOURCES) |slot| if (source_config.has(customSourceId(slot, &id_buf))) return true;
+    return false;
 }
 
 /// Install the default-on curated sources once, so the tab lights up out of the
@@ -410,6 +413,12 @@ fn ingestWorker(force: bool) void {
         @memcpy(ub[0..ul], u[0..ul]);
         if (ingestOne(sources.CUSTOM_ID, .m3u, ub[0..ul], force)) changed = true;
     }
+    var custom_id_buf: [32]u8 = undefined;
+    for (0..MAX_CUSTOM_SOURCES) |slot| {
+        const id = customSourceId(slot, &custom_id_buf);
+        const url = source_config.get(id, "url") orelse continue;
+        if (ingestOne(id, .m3u, url, force)) changed = true;
+    }
 
     if (changed) {
         refillFromCatalog();
@@ -456,7 +465,7 @@ fn ingestOne(id: []const u8, kind: sources.Kind, fallback_url: []const u8, force
     // A source the user declared adult (custom playlist "adult" flag) flags ALL
     // its channels nsfw, so an adult playlist is gated even when its channel
     // names/groups don't self-identify.
-    const force_adult = source_config.get(id, "adult") != null;
+    const force_adult = if (source_config.get(id, "adult")) |value| std.mem.eql(u8, value, "1") else false;
 
     // Replace the source's rows atomically: clear then insert. ingestChannels
     // applies the adult gate (group denylist + parser flag) per channel too.
@@ -540,6 +549,47 @@ pub fn setCustomUrl(url: []const u8, adult: bool) void {
     else
         std.fmt.bufPrint(&body_buf, "{{\"url\":\"{s}\"}}", .{url}) catch return;
     if (source_config.install(sources.CUSTOM_ID, body)) refreshAllSources(true);
+}
+
+pub const MAX_CUSTOM_SOURCES: usize = 8;
+
+pub fn customSourceId(slot: usize, out: *[32]u8) []const u8 {
+    return std.fmt.bufPrint(out, "iptv-custom-{d}", .{slot}) catch "";
+}
+
+pub fn setCustomSource(slot: usize, name: []const u8, url: []const u8, adult: bool) bool {
+    if (slot >= MAX_CUSTOM_SOURCES or name.len == 0 or name.len > 80 or url.len == 0 or url.len > 500) return false;
+    if (!std.mem.startsWith(u8, url, "http://") and !std.mem.startsWith(u8, url, "https://")) return false;
+    for (name) |ch| if (ch < 0x20 or ch == '"' or ch == '\\') return false;
+    for (url) |ch| if (ch < 0x20 or ch == '"' or ch == '\\') return false;
+    var id_buf: [32]u8 = undefined;
+    const id = customSourceId(slot, &id_buf);
+    var body_buf: [768]u8 = undefined;
+    const body = std.fmt.bufPrint(&body_buf, "{{\"name\":\"{s}\",\"url\":\"{s}\",\"adult\":\"{s}\"}}", .{
+        name,
+        url,
+        if (adult) "1" else "0",
+    }) catch return false;
+    if (!source_config.install(id, body)) return false;
+    refreshAllSources(true);
+    return true;
+}
+
+pub fn removeCustomSource(slot: usize) bool {
+    if (slot >= MAX_CUSTOM_SOURCES) return false;
+    var id_buf: [32]u8 = undefined;
+    const id = customSourceId(slot, &id_buf);
+    if (!source_config.has(id)) return false;
+    source_config.uninstallById(id);
+    catalog.removeSource(id);
+    refillFromCatalog();
+    return true;
+}
+
+pub fn firstFreeCustomSlot() ?usize {
+    var id_buf: [32]u8 = undefined;
+    for (0..MAX_CUSTOM_SOURCES) |slot| if (!source_config.has(customSourceId(slot, &id_buf))) return slot;
+    return null;
 }
 
 /// Channels a source contributed (fast; from the meta row). For the settings UI.

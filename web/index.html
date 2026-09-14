@@ -532,8 +532,11 @@
       <div class="acc-title">Live TV sources</div>
       <div class="hint" id="ltv-hint">Loading…</div>
       <div id="ltv-list"></div>
-      <div class="cfg-row"><span>Custom playlist (M3U)</span><input id="ltv-custom" placeholder="https://…/playlist.m3u"></div>
-      <button id="ltv-custom-save" class="quick-btn">Save playlist</button>
+      <div class="cfg-row"><span>Custom playlist name</span><input id="ltv-custom-name" placeholder="My channels" maxlength="80"></div>
+      <div class="cfg-row"><span>Playlist URL (M3U)</span><input id="ltv-custom" type="url" placeholder="https://…/playlist.m3u"></div>
+      <label class="plugin-toggle"><input id="ltv-custom-adult" type="checkbox"> Treat every channel as adult content</label>
+      <button id="ltv-custom-save" class="quick-btn">Add playlist</button>
+      <div id="ltv-custom-list"></div>
       <button id="ltv-refresh" class="quick-btn">Refresh channels</button>
     </div>
 
