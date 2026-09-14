@@ -419,8 +419,10 @@ def test_hosted_mode_and_perf():
             and "player_prewarm_ready.store(true, .release)" in _src("src/main.zig")
             and "shutdownWarmPlayer" in _src("src/main.zig"),
         "first click never waits for prewarm": "warmPlayerPreparing()" in _src("src/services/browser.zig")
+            and "!state.app.player_prewarm_ready.load(.acquire)" in _src("src/services/browser.zig")
             and "deferPlayback(request)" in _src("src/services/browser.zig")
             and "drainDeferredPlayback()" in _src("src/main.zig")
+            and "state.wakeUi();" in _between(_src("src/main.zig"), "state.app.player_prewarm_ready.store", "Deferred voice-backend")
             and "playDirect(owned.playbackRequest())" in _src("src/services/browser.zig"),
     }
     missing = [k for k, v in checks.items() if not v]

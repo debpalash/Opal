@@ -129,7 +129,7 @@ route is not a completed row.
 | Adaptive non-blocking omnibox | Shell and embedded/legacy entry boxes share one intent contract: links/files open, plain text searches the visible Browse source when supported and otherwise fans into universal search, `?` searches local memory, and `>`/questions invoke the assistant. Source-specific dispatch is service-owned instead of duplicated across UI modules; embedding/recall runs on a generation-safe owned worker and only the newest result enters the resolver from the UI thread |
 | Actionable web playback failure | The shared status/player snapshots expose a bounded escaped failure reason; desktop and web Retry use one typed action and preserve playback owner, credential-free identity, provider restore link, request headers and torrent loopback policy |
 | Bounded untrusted image decode | One shared decoder probes headers before stb allocation and rejects invalid/overflowing dimensions. Covers are capped at 24 MiB, while browser frames and long comic pages use explicit 128 MiB class budgets; no production provider calls raw stb decode directly |
-| Non-blocking first playback click | Recent/Home rendering performs no filesystem probes, and a click landing during libmpv prewarm is copied into a bounded owned request and handed off on the next ready frame instead of blocking the UI thread |
+| Non-blocking first playback click | Recent/Home rendering performs no filesystem probes. A click arriving before configuration/script readiness or during libmpv prewarm is copied into a bounded owned request; both readiness transitions wake the frame loop and hand it off without blocking the UI thread or requiring another click |
 
 ## Test commands
 

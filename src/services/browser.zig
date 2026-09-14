@@ -2494,7 +2494,7 @@ fn deferPlayback(request: PlaybackRequest) bool {
 /// UI-frame pump for a first click that arrived during libmpv preparation.
 /// The request is handed off once and never makes the render thread wait.
 pub fn drainDeferredPlayback() void {
-    if (player.warmPlayerPreparing()) return;
+    if (!state.app.player_prewarm_ready.load(.acquire) or player.warmPlayerPreparing()) return;
     deferred_playback_mutex.lock();
     if (!deferred_playback_pending) {
         deferred_playback_mutex.unlock();
@@ -2511,7 +2511,8 @@ pub fn playDirect(request: PlaybackRequest) void {
     if (state.app.players.items.len == 0) {
         // Never freeze the click/render thread behind an in-progress prewarm.
         // Its completion wakes appFrame, which drains this owned request.
-        if (request.mode == .replace and player.warmPlayerPreparing() and deferPlayback(request)) {
+        const first_player_not_ready = !state.app.player_prewarm_ready.load(.acquire) or player.warmPlayerPreparing();
+        if (request.mode == .replace and first_player_not_ready and deferPlayback(request)) {
             state.showToast("Opening media…");
             return;
         }

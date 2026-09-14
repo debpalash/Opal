@@ -297,6 +297,10 @@ pub fn coreInit() !void {
             // libmpv now has every setting/script input it needs. Let its idle
             // prewarm overlap voice probes, cache maintenance and history I/O.
             state.app.player_prewarm_ready.store(true, .release);
+            // A first playback request may already be waiting for this exact
+            // barrier. Wake the frame loop so it schedules prewarm and drains
+            // the request without needing a second user event.
+            state.wakeUi();
 
             // Deferred voice-backend default promotion (was synchronous in
             // coreInit, on the first-frame path). Runs here, after
