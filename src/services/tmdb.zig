@@ -2090,11 +2090,9 @@ fn tvWatchedCount() usize {
     return n;
 }
 
-/// The library-status control: Plan / Watching / Completed / Dropped.
-///
-/// Rendered next to the show name so it's changeable at any moment, from the one
-/// place the user is already looking. Clicking the ACTIVE chip clears it, which
-/// returns the show to auto-derived status and untracks it.
+/// Compact library-status control: Plan / Watching / Completed / Dropped.
+/// One menu replaces four permanent header buttons; removal is explicit instead
+/// of being hidden behind clicking the already-selected status.
 ///
 /// Untracking flips flags and nothing else — it NEVER deletes tv_watched rows, so
 /// an accidental click cannot destroy watch history, and re-tracking restores
@@ -2107,20 +2105,53 @@ pub fn renderStatusChips() void {
 
     const cur = detailUiSnapshot().status;
 
-    const options = [_]tp.UserStatus{ .plan, .watching, .completed, .dropped };
-    for (options, 0..) |opt, i| {
-        const on = cur == opt;
-        if (dvui.button(@src(), tp.userStatusName(opt), .{}, .{
-            .id_extra = 7710 + i,
+    var menu = dvui.menu(@src(), .horizontal, .{});
+    defer menu.deinit();
+    var current_buf: [32]u8 = undefined;
+    const current_label = if (cur == .none)
+        "Add to library"
+    else
+        (std.fmt.bufPrint(&current_buf, "Status: {s}", .{tp.userStatusName(cur)}) catch "Library status");
+    if (dvui.menuItemLabel(@src(), current_label, .{ .submenu = true }, .{
+        .background = true,
+        .color_fill = if (cur == .none) theme.colors.bg_elevated else theme.colors.accent,
+        .color_text = if (cur == .none) theme.colors.text_secondary else theme.colors.text_on_accent,
+        .corner_radius = theme.dims.rad_sm,
+        .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
+        .gravity_y = 0.5,
+    })) |anchor| {
+        var popup = dvui.floatingMenu(@src(), .{ .from = anchor }, .{
             .background = true,
-            .color_fill = if (on) theme.colors.accent else theme.colors.bg_elevated,
-            .color_text = if (on) theme.colors.text_on_accent else theme.colors.text_secondary,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
-            .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
-            .gravity_y = 0.5,
-        })) {
-            setShowStatus(if (on) .none else opt);
+            .color_fill = theme.colors.bg_surface,
+            .color_border = theme.colors.border_subtle,
+            .border = dvui.Rect.all(1),
+            .padding = dvui.Rect.all(2),
+        });
+        defer popup.deinit();
+        var choices = dvui.menu(@src(), .vertical, .{});
+        defer choices.deinit();
+        const options = [_]tp.UserStatus{ .plan, .watching, .completed, .dropped };
+        for (options, 0..) |opt, i| {
+            const active = cur == opt;
+            if (dvui.menuItemLabel(@src(), tp.userStatusName(opt), .{}, .{
+                .id_extra = 7710 + i,
+                .background = true,
+                .color_fill = if (active) theme.colors.accent else theme.colors.bg_surface,
+                .color_text = if (active) theme.colors.text_on_accent else theme.colors.text_secondary,
+                .corner_radius = theme.dims.rad_sm,
+                .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
+            }) != null) {
+                choices.close();
+                if (!active) setShowStatus(opt);
+            }
+        }
+        if (cur != .none and dvui.menuItemLabel(@src(), "Remove from library", .{}, .{
+            .id_extra = 7720,
+            .color_text = theme.colors.danger,
+            .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
+        }) != null) {
+            choices.close();
+            setShowStatus(.none);
         }
     }
 }
