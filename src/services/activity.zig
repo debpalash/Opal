@@ -98,7 +98,6 @@ fn kickFlush() void {
     if (flush_busy.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) return;
     @import("../core/workers.zig").spawn(struct {
         fn worker() void {
-            defer flush_busy.store(false, .release);
             flushPending();
         }
     }.worker, .{}) catch {
@@ -114,12 +113,17 @@ fn flushPending() void {
         var batch: [MAX_PENDING]Event = undefined;
         pending_mutex.lock();
         const n = pending_count;
-        if (n > 0) {
-            @memcpy(batch[0..n], pending[0..n]);
-            pending_count = 0;
+        if (n == 0) {
+            // Publish idle while holding the same mutex record() uses to add
+            // work. An enqueue either lands before this check and is drained,
+            // or lands after the latch is false and starts a new worker.
+            flush_busy.store(false, .release);
+            pending_mutex.unlock();
+            return;
         }
+        @memcpy(batch[0..n], pending[0..n]);
+        pending_count = 0;
         pending_mutex.unlock();
-        if (n == 0) return;
         for (batch[0..n]) |*ev| writeEvent(ev);
     }
 }

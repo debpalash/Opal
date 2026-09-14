@@ -102,7 +102,8 @@ def test_owned_worker_supervisor():
             ),
         "playback enrichment workers are owned": "spawnLegacy(" not in _between(
             _src("src/services/ai_memory.zig"), "pub fn ingestMemory(", "// Context retrieval"
-        ) and "flush_busy.cmpxchgStrong(" in _src("src/services/activity.zig"),
+        ) and "flush_busy.cmpxchgStrong(" in _src("src/services/activity.zig")
+            and "flush_busy.store(false, .release);\n            pending_mutex.unlock();" in _src("src/services/activity.zig"),
     }
     missing = [name for name, ok in checks.items() if not ok]
     if missing:
