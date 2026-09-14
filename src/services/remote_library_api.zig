@@ -22,7 +22,7 @@ pub fn handle(stream: std.Io.net.Stream, method: []const u8, path: []const u8, q
         return true;
     }
     if (std.mem.eql(u8, path, "/library")) {
-        if (wire.requireMethod(stream, method, "GET")) library(stream);
+        if (wire.requireMethod(stream, method, "GET")) library(stream, query);
         return true;
     }
     if (std.mem.eql(u8, path, "/library/watched")) {
@@ -69,7 +69,23 @@ fn calendar(stream: std.Io.net.Stream) void {
     wire.sendJson(stream, json[0..w.end]);
 }
 
-fn library(stream: std.Io.net.Stream) void {
+const LibrarySort = enum { smart, recent, title, progress };
+
+fn rowProgress(row: *const @import("tv_pure.zig").Row) f32 {
+    if (row.prog.total > 0) return row.prog.fraction();
+    return row.pct / 100.0;
+}
+
+fn libraryLessThan(sort: LibrarySort, a: @import("tv_pure.zig").Row, b: @import("tv_pure.zig").Row) bool {
+    return switch (sort) {
+        .smart => @import("tv_pure.zig").lessThan(&a, &b),
+        .recent => if (a.updated_at != b.updated_at) a.updated_at > b.updated_at else std.mem.lessThan(u8, a.nameSlice(), b.nameSlice()),
+        .title => std.ascii.lessThanIgnoreCase(a.nameSlice(), b.nameSlice()),
+        .progress => if (rowProgress(&a) != rowProgress(&b)) rowProgress(&a) > rowProgress(&b) else std.mem.lessThan(u8, a.nameSlice(), b.nameSlice()),
+    };
+}
+
+fn library(stream: std.Io.net.Stream, query: []const u8) void {
     const service = @import("tv_library.zig");
     const model = @import("tv_pure.zig");
     const alloc = @import("../core/alloc.zig").allocator;
@@ -78,7 +94,35 @@ fn library(stream: std.Io.net.Stream) void {
         return;
     };
     defer alloc.free(rows);
-    const count = service.snapshotCopy(rows);
+    const catalog_count = service.snapshotCopy(rows);
+    const filter = std.meta.stringToEnum(model.Filter, wire.queryParam(query, "filter") orelse "all") orelse {
+        wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"unknown library filter\"}");
+        return;
+    };
+    const kind = std.meta.stringToEnum(model.KindFilter, wire.queryParam(query, "kind") orelse "all") orelse {
+        wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"unknown library kind filter\"}");
+        return;
+    };
+    const sort = std.meta.stringToEnum(LibrarySort, wire.queryParam(query, "sort") orelse "smart") orelse {
+        wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"unknown library sort\"}");
+        return;
+    };
+    const offset = std.fmt.parseInt(usize, wire.queryParam(query, "offset") orelse "0", 10) catch {
+        wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"invalid library offset\"}");
+        return;
+    };
+    const limit = std.fmt.parseInt(usize, wire.queryParam(query, "limit") orelse "48", 10) catch 0;
+    if (limit == 0 or limit > 96 or offset > model.MAX_SHOWS) {
+        wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"library page out of range\"}");
+        return;
+    }
+    var count: usize = 0;
+    for (rows[0..catalog_count]) |row| {
+        if (!model.matchesFilter(&row, filter) or !model.matchesKind(&row, kind)) continue;
+        rows[count] = row;
+        count += 1;
+    }
+    std.mem.sort(model.Row, rows[0..count], sort, libraryLessThan);
     const json = alloc.alloc(u8, 128 * 1024) catch {
         wire.sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
         return;
@@ -86,8 +130,10 @@ fn library(stream: std.Io.net.Stream) void {
     defer alloc.free(json);
     var w = std.Io.Writer.fixed(json);
 
-    w.print("{{\"syncing\":{s},\"items\":[", .{if (service.isSyncing()) "true" else "false"}) catch return;
-    for (rows[0..count], 0..) |*row, i| {
+    const start = @min(offset, count);
+    const end = @min(start + limit, count);
+    w.print("{{\"syncing\":{s},\"total\":{d},\"catalog_total\":{d},\"offset\":{d},\"limit\":{d},\"items\":[", .{ if (service.isSyncing()) "true" else "false", count, catalog_count, start, limit }) catch return;
+    for (rows[start..end], 0..) |*row, i| {
         if (i > 0) w.writeAll(",") catch return;
         var status_buf: [48]u8 = undefined;
         const status = model.statusLabel(row, &status_buf);

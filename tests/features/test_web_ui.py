@@ -505,7 +505,8 @@ def test_web_watching_library():
         # The filter chips need the status TAG, not the display label.
         "emits status tag": r'\"state\":\"{s}\"' in rm
             and "effectiveStatus(row.user, row.status)" in rm,
-        "page filters on tag": "r.state === watchFilter" in ui,
+        "server filters on tag": "model.matchesFilter(&row, filter)" in rm
+            and "model.matchesKind(&row, kind)" in rm,
         "page + nav": 'id="page-watch"' in ui and 'data-page="watch"' in ui
             and "async function loadWatch(" in ui,
         # TV rows reuse the existing drill-down (season list + Play-latest).
@@ -514,11 +515,15 @@ def test_web_watching_library():
         "durable view state": "opal.watch.filter" in ui and "opal.watch.kind" in ui
             and "opal.watch.sort" in ui and "opal.watch.density" in ui,
         "sorting and density": 'id="watch-sort"' in ui and 'id="watch-density"' in ui
-            and "watchSort === 'progress'" in ui and "classList.toggle('compact'" in ui,
+            and "const LibrarySort = enum { smart, recent, title, progress };" in rm
+            and "classList.toggle('compact'" in ui,
         "bounded persisted pagination": 'id="watch-page-size"' in ui
             and 'id="watch-pager"' in ui and "opal.watch.pageSize" in ui
-            and "opal.watch.page" in ui and "list.slice(pageStart, pageStart + watchPageSize)" in ui
-            and "watchPage > pageCount" in ui,
+            and "opal.watch.page" in ui and "offset:String((watchPage - 1) * watchPageSize)" in ui
+            and "limit:String(watchPageSize)" in ui and "watchPage > pages" in ui,
+        "stale page bounded": "Math.min(9, Math.max(1" in ui,
+        "bounded server page": 'wire.queryParam(query, "limit")' in rm
+            and "limit > 96" in rm and "catalog_total" in rm,
     }
     missing = [k for k, ok in checks.items() if not ok]
     if missing:
