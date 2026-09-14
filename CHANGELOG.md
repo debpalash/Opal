@@ -10,6 +10,48 @@ Add a section BEFORE tagging; a missing one ships a release that says so.
 Headings are `## vX.Y.Z — YYYY-MM-DD`, newest first. The version token must
 match the tag exactly.
 
+## v0.8.5 — 2026-09-13
+
+**Releaser:** Palash Debnath
+
+- **Files open like a media player should.** Opal presents a finished first
+  frame instead of exposing the startup shell, overlaps safe initialization,
+  prepares libmpv early, and keeps local-file loading off unrelated database,
+  model and network work. Measured Windows ReleaseFast baselines are 171 ms
+  startup p95 and 121 ms local-video first-frame p95.
+- **Now Playing is an immersive, responsive surface.** Video occupies the full
+  client area while glass controls and navigation float above it, remain
+  legible over bright scenes, hide smoothly when idle, and avoid overlapping
+  close actions. Back, Settings, Close and track pickers respond on the first
+  click; outside clicks dismiss popovers without consuming the intended action.
+- **Windows behavior is native again.** The custom title bar exposes caption
+  hit testing, resize borders, maximize/restore behavior and Aero Snap while
+  preserving drag from safe background regions. File and magnet associations
+  now cover the common video, audio, playlist and torrent formats.
+- **Playback choices survive the next file and restart.** Aspect mode, speed,
+  hardware decoding, audio/subtitle language and track choices are restored
+  safely. Direct, playlist, queue and torrent playback have explicit ownership,
+  actionable pre-playback fallback, and honest hardware-decoder feedback.
+- **The omnibox finally adapts to intent.** Links and paths open, normal text
+  searches the visible source or universal catalog, `?` recalls local memory,
+  and `>` or a question invokes the assistant. Slow semantic recall runs in a
+  generation-safe worker instead of freezing the interface, and Browse uses a
+  compact grouped source menu.
+- **Queues, torrents and self-hosted libraries recover cleanly.** Queue order,
+  repeat/shuffle and cold-start actions are durable; torrent opens wait for the
+  engine without needing a second click and restart from privacy-safe swarm
+  identity plus bounded fast-resume data. Jellyfin, Plex and Audiobookshelf
+  regain authenticated resume, alternate-version recovery and non-blocking
+  progress reporting.
+- **Credentials and helpers are safer.** Windows secrets use current-user DPAPI
+  with legacy migration, credential-bearing playback URLs are scrubbed from
+  persistent identity, and yt-dlp/model downloads are explicit, HTTPS-only,
+  checksum-aware staged updates that cannot replace a working helper on a bad
+  download.
+- **The release has measurable gates.** Startup, playback, close and resource
+  probes are checked alongside Zig unit tests, web lifecycle tests and 442
+  whole-product feature checks using an isolated generated database fixture.
+
 ## v0.8.1 — 2026-09-10
 
 - **YouTube plays on Windows again, and picks the right stream.** The bundled
