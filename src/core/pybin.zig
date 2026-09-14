@@ -15,6 +15,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const bounded_process = @import("bounded_process.zig");
+const io_global = @import("io_global.zig");
 
 const is_windows = builtin.os.tag == .windows;
 
@@ -58,8 +59,9 @@ pub fn python() ?[]const u8 {
         return if (resolved_len > 0) resolved_buf[0..resolved_len] else null;
     }
     if (probing.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) {
-        // Another thread is probing — wait for it to publish.
-        while (!probed.load(.acquire)) std.atomic.spinLoopHint();
+        // Another worker is probing. This can take seconds for a cold Python
+        // install; sleep instead of burning a CPU core in an atomic spin loop.
+        while (!probed.load(.acquire)) io_global.sleep(std.time.ns_per_ms);
         return if (resolved_len > 0) resolved_buf[0..resolved_len] else null;
     }
     for (candidates) |cand| {
