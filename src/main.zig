@@ -1069,6 +1069,7 @@ fn appFrame() !dvui.App.Result {
     @import("services/search.zig").drainMemorySearch();
     @import("services/auto_subs.zig").pollAttach();
     @import("player/watch_history.zig").drainUi();
+    @import("services/history.zig").drainDownloadHistoryUi();
 
     // Adaptive default scale — DVUI already applies a reported display scale,
     // so Auto starts at 1.0× and never shrinks below it. A Linux panel probe

@@ -125,7 +125,7 @@ commands, non-finite numbers, out-of-range values, and unknown actions.
 - [ ] Debrid, Suwayomi, Audiobookshelf, OPDS, IPTV, RSS, and custom source CRUD
 - [x] Download/torrent pause, resume, cancel, per-file priority, rate limits,
       file lists, progress, ETA, and errors
-- [ ] Transfer history cleanup, reveal-on-host, and explicit disk deletion
+- [x] Transfer history cleanup, reveal-on-host, and explicit disk deletion
 
 ### Wave 5 — web-native product quality
 

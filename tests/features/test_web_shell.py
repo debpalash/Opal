@@ -384,6 +384,14 @@ def test_web_transfer_management_contract():
             and "disk deletion requires confirm=DELETE" in remote
             and 'data-file-action="delete"' in ui and 'data-file-action="reveal"' in ui
             and "HOSTED ? ''" in ui,
+        "stable transfer-history cleanup": '"/downloads/history"' in remote
+            and '"/downloads/history/action"' in remote
+            and "snapshotDownloadHistory(" in _src("src/services/history.zig")
+            and "WHERE rowid=?1" in _src("src/services/history.zig")
+            and "requestDownloadHistoryAction(" in _src("src/services/history.zig")
+            and "drainDownloadHistoryUi()" in _src("src/main.zig")
+            and 'id="download-history-clear"' in ui
+            and "Downloaded files stay on disk" in ui,
         "all player loads use POST": "api('/load?url='" not in ui and "apiMutation('/load?url='" in ui,
     }
     missing = [k for k, ok in checks.items() if not ok]

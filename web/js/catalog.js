@@ -392,7 +392,7 @@ async function loadDownloads(){
 }
 
 async function loadActivity(){
-  await Promise.all([loadQueue(), pollTransfers()]);
+  await Promise.all([loadQueue(), loadDownloadHistory(), pollTransfers()]);
   try {
     // /api/history = recent SEARCHES (plain strings) — tap to run again.
     const h = await api('/history');
@@ -402,6 +402,35 @@ async function loadActivity(){
     $('history').querySelectorAll('.file').forEach(el => el.onclick = () => prefillSearch(el.dataset.q));
   } catch { $('history').innerHTML = '<div class="empty">—</div>'; }
 }
+
+async function loadDownloadHistory(){
+  try {
+    const d = await api('/downloads/history'), items = Array.isArray(d.items) ? d.items : [];
+    $('download-history-clear').disabled = items.length === 0;
+    $('download-history').innerHTML = items.map(item => `<div class="file">
+      <div class="n">${esc(item.name || 'Download')}</div>
+      <button type="button" class="danger" data-download-history="remove" data-id="${item.id}" data-name="${encodeURIComponent(item.name || 'download')}">Remove</button>
+    </div>`).join('') || '<div class="empty">No transfer history</div>';
+  } catch {
+    $('download-history-clear').disabled = true;
+    $('download-history').innerHTML = '<div class="empty">Transfer history unavailable</div>';
+  }
+}
+
+async function changeDownloadHistory(action, id, name){
+  const prompt = action === 'clear' ? 'Clear all transfer history? Downloaded files stay on disk.'
+    : `Remove “${name}” from transfer history? Downloaded files stay on disk.`;
+  if (!confirm(prompt)) return;
+  const params = new URLSearchParams({action, confirm:'1'});
+  if (id != null) params.set('id', id);
+  try { await apiMutation('/downloads/history/action?' + params); toast(action === 'clear' ? 'Transfer history cleared' : 'History item removed'); await loadDownloadHistory(); }
+  catch (err) { toast(err.message || 'Could not clean transfer history'); }
+}
+$('download-history').addEventListener('click', e => {
+  const button = e.target.closest('[data-download-history="remove"]');
+  if (button) changeDownloadHistory('remove', button.dataset.id, decodeURIComponent(button.dataset.name || 'download'));
+});
+$('download-history-clear').onclick = () => changeDownloadHistory('clear');
 
 // ── Movies & TV catalog (TMDB when configured, keyless Cinemeta otherwise) ──
 let browseLoaded = false, browseWatch = null, browseGeneration = 0, browseDebounce = null;

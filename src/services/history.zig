@@ -278,6 +278,89 @@ pub fn saveDownloadHistory() void {
     // No-op: SQLite is always in sync.
 }
 
+pub const DownloadHistoryEntry = struct {
+    id: i64 = 0,
+    name: [state.MAX_DL_NAME_LEN]u8 = undefined,
+    name_len: usize = 0,
+};
+
+pub fn snapshotDownloadHistory(out: []DownloadHistoryEntry) usize {
+    const stmt = db.prepare("SELECT rowid,name FROM download_history ORDER BY downloaded_at DESC,rowid DESC LIMIT 100") orelse return 0;
+    defer db.finalize(stmt);
+    var count: usize = 0;
+    while (count < out.len and db.step(stmt) == db.c.SQLITE_ROW) {
+        const name = db.columnText(stmt, 1) orelse continue;
+        if (name.len == 0 or name.len >= state.MAX_DL_NAME_LEN) continue;
+        out[count] = .{ .id = db.columnInt64(stmt, 0) };
+        @memcpy(out[count].name[0..name.len], name);
+        out[count].name_len = name.len;
+        count += 1;
+    }
+    return count;
+}
+
+pub const DownloadHistoryAction = enum { remove, clear };
+const DownloadHistoryRequest = struct { action: DownloadHistoryAction = .remove, id: i64 = 0, ticket: u64 = 0 };
+const download_request_cap = 16;
+var download_requests: [download_request_cap]DownloadHistoryRequest = undefined;
+var download_request_head: usize = 0;
+var download_request_count: usize = 0;
+var download_request_mutex: @import("../core/sync.zig").Mutex = .{};
+var download_request_ticket = std.atomic.Value(u64).init(0);
+var download_request_applied = std.atomic.Value(u64).init(0);
+
+fn applyDownloadHistoryAction(action: DownloadHistoryAction, id: i64) void {
+    const sql = if (action == .clear) "DELETE FROM download_history" else "DELETE FROM download_history WHERE rowid=?1";
+    const stmt = db.prepare(sql) orelse return;
+    defer db.finalize(stmt);
+    if (action == .remove) db.bindInt64(stmt, 1, id);
+    _ = db.step(stmt);
+    loadDownloadHistory();
+}
+
+/// Queue a remote mutation for the UI thread and acknowledge only after the
+/// SQLite row and native cache agree. Headless owns no render thread, so it
+/// applies synchronously under the same producer lock.
+pub fn requestDownloadHistoryAction(action: DownloadHistoryAction, id: i64) bool {
+    if (action == .remove and id <= 0) return false;
+    download_request_mutex.lock();
+    if (state.app.is_headless) {
+        applyDownloadHistoryAction(action, id);
+        download_request_mutex.unlock();
+        return true;
+    }
+    if (download_request_count >= download_request_cap) {
+        download_request_mutex.unlock();
+        return false;
+    }
+    const ticket = download_request_ticket.fetchAdd(1, .acq_rel) + 1;
+    const tail = (download_request_head + download_request_count) % download_request_cap;
+    download_requests[tail] = .{ .action = action, .id = id, .ticket = ticket };
+    download_request_count += 1;
+    download_request_mutex.unlock();
+    state.wakeUi();
+    var waited: usize = 0;
+    while (waited < 500 and download_request_applied.load(.acquire) < ticket) : (waited += 1)
+        @import("../core/io_global.zig").sleep(10 * std.time.ns_per_ms);
+    return download_request_applied.load(.acquire) >= ticket;
+}
+
+pub fn drainDownloadHistoryUi() void {
+    while (true) {
+        download_request_mutex.lock();
+        if (download_request_count == 0) {
+            download_request_mutex.unlock();
+            return;
+        }
+        const request = download_requests[download_request_head];
+        download_request_head = (download_request_head + 1) % download_request_cap;
+        download_request_count -= 1;
+        download_request_mutex.unlock();
+        applyDownloadHistoryAction(request.action, request.id);
+        download_request_applied.store(request.ticket, .release);
+    }
+}
+
 // ══════════════════════════════════════════════════════════
 // Migration from old flat files
 // ══════════════════════════════════════════════════════════

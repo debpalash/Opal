@@ -18,7 +18,53 @@ pub fn handle(stream: std.Io.net.Stream, method: []const u8, path: []const u8, q
         if (wire.requireMethod(stream, method, "POST")) applyDiskAction(stream, query);
         return true;
     }
+    if (std.mem.eql(u8, path, "/downloads/history")) {
+        if (wire.requireMethod(stream, method, "GET")) downloadHistory(stream);
+        return true;
+    }
+    if (std.mem.eql(u8, path, "/downloads/history/action")) {
+        if (wire.requireMethod(stream, method, "POST")) applyDownloadHistoryAction(stream, query);
+        return true;
+    }
     return false;
+}
+
+fn downloadHistory(stream: std.Io.net.Stream) void {
+    const history = @import("history.zig");
+    var entries: [state.MAX_DL_HISTORY]history.DownloadHistoryEntry = undefined;
+    const count = history.snapshotDownloadHistory(&entries);
+    var json: [32768]u8 = undefined;
+    var w = std.Io.Writer.fixed(&json);
+    w.writeAll("{\"items\":[") catch return;
+    for (entries[0..count], 0..) |*entry, i| {
+        if (i > 0) w.writeAll(",") catch return;
+        w.print("{{\"id\":{d},\"name\":\"", .{entry.id}) catch return;
+        wire.writeJsonString(&w, entry.name[0..entry.name_len]);
+        w.writeAll("\"}") catch return;
+    }
+    w.writeAll("]}") catch return;
+    wire.sendJson(stream, json[0..w.end]);
+}
+
+fn applyDownloadHistoryAction(stream: std.Io.net.Stream, query: []const u8) void {
+    const history = @import("history.zig");
+    const action = std.meta.stringToEnum(history.DownloadHistoryAction, wire.queryParam(query, "action") orelse "") orelse {
+        wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"unknown history action\"}");
+        return;
+    };
+    if (!std.mem.eql(u8, wire.queryParam(query, "confirm") orelse "", "1")) {
+        wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"history cleanup requires confirm=1\"}");
+        return;
+    }
+    const id = if (action == .remove) std.fmt.parseInt(i64, wire.queryParam(query, "id") orelse "", 10) catch {
+        wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"history id required\"}");
+        return;
+    } else 0;
+    if (!history.requestDownloadHistoryAction(action, id)) {
+        wire.sendJsonStatus(stream, "409 Conflict", "{\"error\":\"history cleanup queue busy\"}");
+        return;
+    }
+    wire.sendJson(stream, "{\"ok\":true}");
 }
 
 fn applyDiskAction(stream: std.Io.net.Stream, query: []const u8) void {
