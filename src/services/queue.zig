@@ -1113,24 +1113,15 @@ fn drainThumbResults() void {
 }
 
 fn decodeThumb(item_id: i64, body: []const u8) ?ThumbResult {
-    var w: c_int = 0;
-    var h: c_int = 0;
-    var comp: c_int = 0;
-    const pixels = dvui.c.stbi_load_from_memory(body.ptr, @intCast(body.len), &w, &h, &comp, 4);
-    if (pixels == null) return null;
-    defer dvui.c.stbi_image_free(pixels);
-    if (w <= 0 or h <= 0) return null;
-
-    const pixel_count = std.math.mul(usize, @intCast(w), @intCast(h)) catch return null;
-    if (pixel_count > 16 * 1024 * 1024) return null;
-    const p_len = std.math.mul(usize, pixel_count, 4) catch return null;
-    const owned = alloc.alloc(u8, p_len) catch return null;
-    @memcpy(owned, pixels[0..p_len]);
+    const decoded = @import("../core/poster.zig").decodeCover(body) orelse return null;
+    defer decoded.deinit();
+    const owned = alloc.alloc(u8, decoded.rgba_len) catch return null;
+    @memcpy(owned, decoded.pixels[0..decoded.rgba_len]);
     return .{
         .item_id = item_id,
         .pixels = owned,
-        .width = @intCast(w),
-        .height = @intCast(h),
+        .width = @intCast(decoded.width),
+        .height = @intCast(decoded.height),
         .failed = false,
     };
 }

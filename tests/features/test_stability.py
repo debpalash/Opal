@@ -363,6 +363,7 @@ def test_poster_pixel_allocator():
 @test("Shared artwork is bounded before RGBA decode", "Memory")
 def test_poster_decode_budget():
     poster = _src("src/core/poster.zig")
+    queue = _src("src/services/queue.zig")
     policy = _src("src/core/image_limits_pure.zig")
     build = _src("build.zig")
     checks = {
@@ -371,6 +372,8 @@ def test_poster_decode_budget():
             and poster.index("stbi_info_from_memory") < poster.index("stbi_load_from_memory")
         ),
         "shared cover budget enforced": "image_limits.coverRgbaBytes(info_w, info_h)" in poster,
+        "queue thumbnails share safe decoder": "decodeCover(body)" in queue
+            and "stbi_load_from_memory" not in _between(queue, "fn decodeThumb", "fn thumbWorker"),
         "24 MiB cap": "COVER_MAX_RGBA_BYTES: u64 = 24 * 1024 * 1024" in policy,
         "overflow-safe multiplication": "std.math.mul" in policy,
         "pure policy in build gate": "test_image_limits_pure" in build,
@@ -378,7 +381,7 @@ def test_poster_decode_budget():
     missing = [name for name, ok in checks.items() if not ok]
     if missing:
         return "fail", "unbounded shared artwork decode: " + ", ".join(missing)
-    return "pass", "poster headers are probed before a maximum 24 MiB RGBA allocation"
+    return "pass", "poster and queue thumbnails are probed before a maximum 24 MiB RGBA allocation"
 
 
 @test("Windows Port: Source Invariants", "Stability")
