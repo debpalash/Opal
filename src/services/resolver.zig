@@ -471,6 +471,24 @@ threadlocal var worker_reported: SourceStatus = .done;
 threadlocal var worker_produced: bool = false;
 var lifecycle_mutex = @import("../core/sync.zig").Mutex{};
 
+/// Lock the result set only while it still belongs to `generation`.
+/// The lifecycle lock prevents a successor resolve from replacing the rows
+/// while a consumer copies them.
+pub fn lockResultsForGeneration(generation: u32) bool {
+    lifecycle_mutex.lock();
+    if (run_gen.load(.acquire) != generation) {
+        lifecycle_mutex.unlock();
+        return false;
+    }
+    results_mutex.lock();
+    return true;
+}
+
+pub fn unlockResultsForGeneration() void {
+    results_mutex.unlock();
+    lifecycle_mutex.unlock();
+}
+
 /// Remote clients receive opaque identities, never local paths, magnets, or
 /// expiring signed URLs. The fixed FIFO transfers a validated result copy back
 /// to the UI thread, where all player/navigation mutations already belong.
@@ -3226,12 +3244,17 @@ fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
 // ══════════════════════════════════════════════════════════
 
 pub fn playItem(idx: usize) void {
-    if (idx >= result_count) return;
+    results_mutex.lock();
+    if (idx >= result_count) {
+        results_mutex.unlock();
+        return;
+    }
     const item = results[idx];
+    results_mutex.unlock();
     playResolvedItem(&item);
 }
 
-fn playResolvedItem(item: *const ResolvedItem) void {
+pub fn playResolvedItem(item: *const ResolvedItem) void {
     switch (item.source) {
         .jellyfin => {
             const jf = @import("jellyfin.zig");

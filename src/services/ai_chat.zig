@@ -1210,12 +1210,10 @@ pub fn renderInlineResults() void {
 
 pub fn playChatResult(idx: usize) void {
     if (idx >= chat_result_count) return;
-    // Copy item into resolver's global results slot 0 and play
-    resolver.results_mutex.lock();
-    resolver.results[0] = chat_results[idx];
-    if (resolver.result_count == 0) resolver.result_count = 1;
-    resolver.results_mutex.unlock();
-    resolver.playItem(0);
+    // Chat cards own stable value copies; do not overwrite an unrelated live
+    // resolver search just to route one card into playback.
+    const item = chat_results[idx];
+    resolver.playResolvedItem(&item);
     chat_results_active = false;
     awaiting_confirmation = false;
 }

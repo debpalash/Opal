@@ -1823,30 +1823,40 @@ fn fetchStreamThread(ep_buf: [8]u8, ep_len: usize) void {
     logs.pushLog("info", "anime", "Resolving stream via Torrents...", false);
 
     const resolver = @import("resolver.zig");
-    resolver.resolve(query, "anime");
+    const resolver_generation = resolver.resolveTracked(query, "anime");
 
     var waited: usize = 0;
     while (resolver.isResolving() and waited < 100) : (waited += 1) {
+        if (!resolver.generationIsCurrent(resolver_generation)) return;
         @import("../core/io_global.zig").sleep(100 * std.time.ns_per_ms);
     }
 
+    var chosen: ?resolver.ResolvedItem = null;
     {
-        resolver.results_mutex.lock();
-        defer resolver.results_mutex.unlock();
+        if (!resolver.lockResultsForGeneration(resolver_generation)) return;
+        defer resolver.unlockResultsForGeneration();
 
         for (0..resolver.result_count) |i| {
             const item = resolver.results[i];
             if (item.source == .torrent or item.source == .stremio) {
-                const srch = @import("search.zig");
-                srch.loadTorrentToPlayer(item.url[0..item.url_len]);
-
-                var log_buf2: [128]u8 = undefined;
-                const log_msg2 = std.fmt.bufPrintZ(&log_buf2, "Playing: {s}", .{item.name[0..@min(item.name_len, 40)]}) catch "Playing";
-                logs.pushLog("info", "anime", log_msg2, false);
-                return;
+                chosen = item;
+                break;
             }
         }
     }
+
+    if (chosen) |item| {
+        if (!resolver.generationIsCurrent(resolver_generation)) return;
+        const srch = @import("search.zig");
+        srch.loadTorrentToPlayer(item.url[0..item.url_len]);
+
+        var log_buf2: [128]u8 = undefined;
+        const log_msg2 = std.fmt.bufPrintZ(&log_buf2, "Playing: {s}", .{item.name[0..@min(item.name_len, 40)]}) catch "Playing";
+        logs.pushLog("info", "anime", log_msg2, false);
+        return;
+    }
+
+    if (!resolver.generationIsCurrent(resolver_generation)) return;
 
     // ── Phase 2: DDL fallback via AnimePahe ──
     logs.pushLog("info", "anime", "No torrent peers. Trying DDL fallback...", false);

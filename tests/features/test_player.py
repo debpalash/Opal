@@ -167,6 +167,11 @@ def test_watch_commit_smart_play_onboarding():
     pr = _src("src/services/plugin_repo.zig")
     cfg = _src("src/core/config.zig")
     mn = _src("src/main.zig")
+    ai_context = _src("src/services/ai_context.zig")
+    ai_tools = _src("src/services/ai_tools.zig")
+    anime = _src("src/services/anime.zig")
+    drama = _src("src/services/drama.zig")
+    ai_chat = _src("src/services/ai_chat.zig")
     checks = {
         "no click-time mark": "tvMarkWatched" not in _between(tm, "fn playTvEpisode", "\nfn "),
         "pending watch state": "pending_watch" in st and "armed" in st,
@@ -182,8 +187,16 @@ def test_watch_commit_smart_play_onboarding():
         "smart play wired": "smartPlayEpisode" in tm and "rank.pickForStartup(" in tm and "setUniversalQuery" in tm,
         "smart pick owns resolver generation": "pub fn resolveTracked(" in resolver
             and "generationIsCurrent(" in resolver
+            and "lockResultsForGeneration(" in resolver
             and "resolver.resolveTracked(query" in tm
             and tm.count("resolver.generationIsCurrent(resolver_generation)") >= 2,
+        "async consumers own resolver generation": all(
+            "resolveTracked(" in source and "generationIsCurrent(" in source
+            and "lockResultsForGeneration(" in source
+            for source in (ai_context, ai_tools, anime, drama)
+        ),
+        "chat play does not mutate live search": "resolver.playResolvedItem(&item)" in ai_chat
+            and "resolver.results[0]" not in _between(ai_chat, "pub fn playChatResult", "\nfn "),
         "wizard": "installStarterPack" in ob and "onboarded" in ob,
         "starter pack": "pub fn installStarterPack" in pr and "torrentio" in pr,
         "persist + grandfather": '"onboarded"' in cfg and "anyInstalled" in cfg,

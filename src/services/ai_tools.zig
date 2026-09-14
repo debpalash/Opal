@@ -259,17 +259,17 @@ fn executeFindAndPlay(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
     var norm_buf: [256]u8 = undefined;
     const query = ai_intent.normalizeQuery(raw_query, &norm_buf);
 
-    // Clear previous results immediately so UI shows fresh state
     const chat = @import("ai_chat.zig");
+    const resolver = @import("resolver.zig");
+    const resolver_generation = resolver.resolveTracked(query, content_type);
+
+    // Clear previous results only after this tool owns a generation. Older
+    // consumers can no longer republish stale cards after this reset.
     chat.chat_result_count = 0;
     chat.chat_results_active = false;
     chat.awaiting_confirmation = false;
     chat.recommended_idx = null;
     @memset(std.mem.asBytes(&chat.chat_results), 0);
-
-    // Run resolver (searches all sources in parallel)
-    const resolver = @import("resolver.zig");
-    resolver.resolve(query, content_type);
 
     // Rich catalog rail: also kick a TMDB fetch so the transcript shows
     // Browse-grade poster cards, not just plain source rows (shared helper —
@@ -287,20 +287,23 @@ fn executeFindAndPlay(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
     var waited: usize = 0;
     const wait_cap: usize = if (is_play_best) 150 else 50;
     while (resolver.isResolving() and waited < wait_cap) : (waited += 1) {
-        if (!is_play_best and resolver.result_count >= 3 and waited >= 15) break;
+        if (!resolver.generationIsCurrent(resolver_generation)) {
+            return std.fmt.allocPrint(alloc, "Search was replaced by a newer request.", .{}) catch null;
+        }
+        if (!is_play_best and resolver.resultCount() >= 3 and waited >= 15) break;
         @import("../core/io_global.zig").sleep(100 * std.time.ns_per_ms);
     }
 
     // Copy new results to chat state for inline rendering
-    chat.chat_results_active = true;
-
-    resolver.results_mutex.lock();
+    if (!resolver.lockResultsForGeneration(resolver_generation)) {
+        return std.fmt.allocPrint(alloc, "Search was replaced by a newer request.", .{}) catch null;
+    }
     const count = @min(resolver.result_count, 12);
     for (0..count) |i| {
         chat.chat_results[i] = resolver.results[i];
     }
     chat.chat_result_count = count;
-    resolver.results_mutex.unlock();
+    chat.chat_results_active = count > 0;
 
     // Set recommended index if play_best
     if (std.mem.eql(u8, action, "play_best") and count > 0) {
@@ -310,6 +313,7 @@ fn executeFindAndPlay(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
         chat.recommended_idx = null;
         chat.awaiting_confirmation = false;
     }
+    resolver.unlockResultsForGeneration();
 
     // Build result summary for AI response
     var result = alloc.alloc(u8, MAX_TOOL_RESULT) catch return null;

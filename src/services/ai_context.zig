@@ -829,7 +829,7 @@ fn fastPathResolve(query_buf: [256]u8, query_len: usize, assistant_idx: usize, a
     }
 
     const query = query_buf[0..query_len];
-    resolver.resolve(query, "auto");
+    const resolver_generation = resolver.resolveTracked(query, "auto");
 
     // Rich catalog rail — the "play …"/"find …" fast path skipped the LLM
     // tool, so the transcript showed only plain source rows.
@@ -845,7 +845,8 @@ fn fastPathResolve(query_buf: [256]u8, query_len: usize, assistant_idx: usize, a
     var waited: usize = 0;
     const max_ticks: usize = 300; // 300 × 100ms = 30s hard cap
     while (waited < max_ticks) : (waited += 1) {
-        const rc = resolver.result_count;
+        if (!resolver.generationIsCurrent(resolver_generation)) return;
+        const rc = resolver.resultCount();
         const done = !resolver.isResolving();
         // play_best must NOT early-exit on the first fast results: YouTube
         // answers in ~1s while torrents take 5-15s, so the auto-pick kept
@@ -863,7 +864,7 @@ fn fastPathResolve(query_buf: [256]u8, query_len: usize, assistant_idx: usize, a
     }
 
     // Copy results to chat, filtering out error/garbage results
-    resolver.results_mutex.lock();
+    if (!resolver.lockResultsForGeneration(resolver_generation)) return;
     const raw_count = @min(resolver.result_count, 64);
     var filtered_count: usize = 0;
     var has_indexer_error = false;
@@ -880,7 +881,6 @@ fn fastPathResolve(query_buf: [256]u8, query_len: usize, assistant_idx: usize, a
         filtered_count += 1;
     }
     chat.chat_result_count = filtered_count;
-    resolver.results_mutex.unlock();
     chat.chat_results_active = filtered_count > 0;
 
     // Set recommendation for play commands
@@ -891,6 +891,7 @@ fn fastPathResolve(query_buf: [256]u8, query_len: usize, assistant_idx: usize, a
         chat.recommended_idx = null;
         chat.awaiting_confirmation = false;
     }
+    resolver.unlockResultsForGeneration();
 
     // Save search context for "next episode" etc.
     saveSearchContext(query);

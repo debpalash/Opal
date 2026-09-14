@@ -254,17 +254,18 @@ pub fn playSelected() void {
 
             logs.pushLog("info", "drama", "Resolving stream via universal search…", false);
             const resolver = @import("resolver.zig");
-            resolver.resolve(qzs, "tv");
+            const resolver_generation = resolver.resolveTracked(qzs, "tv");
 
             var waited: usize = 0;
             while (resolver.isResolving() and waited < 120) : (waited += 1) {
+                if (!resolver.generationIsCurrent(resolver_generation)) return;
                 io_g.sleep(100 * std.time.ns_per_ms);
             }
 
-            resolver.results_mutex.lock();
             var chosen_url: [2048]u8 = undefined;
             var chosen_len: usize = 0;
             var chosen_src: resolver.SourceType = .torrent;
+            if (!resolver.lockResultsForGeneration(resolver_generation)) return;
             for (0..resolver.result_count) |i| {
                 const item = resolver.results[i];
                 switch (item.source) {
@@ -278,13 +279,14 @@ pub fn playSelected() void {
                     else => {},
                 }
             }
-            resolver.results_mutex.unlock();
+            resolver.unlockResultsForGeneration();
 
             if (chosen_len == 0) {
                 logs.pushLog("error", "drama", "No streams found. Try universal search.", true);
                 return;
             }
 
+            if (!resolver.generationIsCurrent(resolver_generation)) return;
             const url = chosen_url[0..chosen_len];
             if (chosen_src == .torrent) {
                 @import("search.zig").loadTorrentToPlayer(url);
