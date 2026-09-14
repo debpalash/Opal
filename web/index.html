@@ -333,6 +333,15 @@
   <section class="page" id="page-rss">
     <div class="hint" id="rss-hint">Your torrent RSS feeds — tap a feed to refresh.</div>
     <div class="chips" id="rss-feeds"></div>
+    <details class="acc-group source-manager">
+      <summary>Manage feeds</summary>
+      <form id="rss-add-form" class="source-add-form">
+        <label>Feed name<input id="rss-add-name" maxlength="63" autocomplete="off"></label>
+        <label>Feed URL<input id="rss-add-url" type="url" maxlength="511" inputmode="url" autocomplete="url" placeholder="https://example.com/feed.xml"></label>
+        <button type="submit" class="quick-btn">Add feed</button>
+      </form>
+      <div id="rss-manage"></div>
+    </details>
     <div id="rss-items"></div>
   </section>
 

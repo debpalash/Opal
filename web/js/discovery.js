@@ -419,7 +419,7 @@ $('jf-search').addEventListener('keydown', e => { if (e.key === 'Enter') { $('jf
 $('jf-disconnect').onclick = async () => { try { await api('/jellyfin/disconnect'); } catch {} loadJellyfin(); };
 
 // ── RSS ──
-// GET /rss -> {feeds:[name], items:[{title,seeds,peers,size,magnet}], fetching}.
+// GET /rss -> {feeds:[{name,url,enabled}], items:[{title,seeds,peers,size,magnet}], fetching}.
 // /rss/refresh?idx=N re-fetches feed N; items carry a magnet -> /load like Search.
 // The API sends sizes as a BYTE COUNT, sometimes as a numeric string and
 // sometimes as -1 for "the source did not say". Coerce and reject the
@@ -444,9 +444,44 @@ async function loadRss(){
   } catch { $('rss-hint').textContent = '—'; }
 }
 function renderRssFeeds(feeds){
-  $('rss-feeds').innerHTML = feeds.map((f, i) => `<button data-idx="${i}">${esc(f)}</button>`).join('');
-  $('rss-feeds').querySelectorAll('button').forEach(b => b.onclick = () => refreshFeed(+b.dataset.idx, b));
+  const normalized = feeds.map(feed => typeof feed === 'string' ? {name:feed,url:'',enabled:true} : feed);
+  $('rss-feeds').innerHTML = normalized.map((feed, i) => `<button data-idx="${i}" ${feed.enabled === false ? 'disabled' : ''}>${esc(feed.name)}</button>`).join('');
+  $('rss-feeds').querySelectorAll('button:not([disabled])').forEach(button => button.onclick = () => refreshFeed(+button.dataset.idx, button));
+  $('rss-manage').innerHTML = normalized.map((feed, i) => `<div class="rss-source" data-idx="${i}">
+    <input class="rss-source-name" aria-label="Feed name" maxlength="63" value="${escAttr(feed.name || '')}">
+    <input class="rss-source-url" aria-label="Feed URL" type="url" maxlength="511" value="${escAttr(feed.url || '')}">
+    <label class="plugin-toggle"><input class="rss-source-enabled" type="checkbox" ${feed.enabled === false ? '' : 'checked'}> Enabled</label>
+    <div class="rss-source-actions"><button type="button" class="text-btn rss-save">Save</button><button type="button" class="text-btn rss-remove">Remove</button></div>
+  </div>`).join('') || '<div class="empty">No feeds configured.</div>';
 }
+$('rss-add-form').onsubmit = async event => {
+  event.preventDefault();
+  const name = $('rss-add-name').value.trim(), url = $('rss-add-url').value.trim();
+  try {
+    await apiFormMutation('/rss/manage', {action:'add', name, url});
+    $('rss-add-name').value = $('rss-add-url').value = '';
+    toast('Feed added'); await loadRss();
+  } catch (error) { $('rss-hint').textContent = error.message || 'Could not add feed.'; }
+};
+$('rss-manage').addEventListener('click', async event => {
+  const row = event.target.closest('.rss-source');
+  if (!row) return;
+  const idx = row.dataset.idx;
+  try {
+    if (event.target.closest('.rss-remove')) {
+      if (!confirm('Remove this RSS feed?')) return;
+      await apiFormMutation('/rss/manage', {action:'remove', idx});
+      toast('Feed removed');
+    } else if (event.target.closest('.rss-save')) {
+      await apiFormMutation('/rss/manage', {action:'update', idx,
+        name:row.querySelector('.rss-source-name').value.trim(),
+        url:row.querySelector('.rss-source-url').value.trim(),
+        enabled:row.querySelector('.rss-source-enabled').checked ? '1' : '0'});
+      toast('Feed saved');
+    } else return;
+    await loadRss();
+  } catch (error) { $('rss-hint').textContent = error.message || 'Could not update feed.'; }
+});
 function refreshFeed(idx, btn){
   document.querySelectorAll('#rss-feeds button').forEach(x => x.classList.toggle('on', x === btn));
   $('rss-hint').innerHTML = '<span class="spin"></span> Refreshing…';

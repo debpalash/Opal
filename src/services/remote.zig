@@ -1136,6 +1136,11 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
         apiRssList(stream);
         return;
     }
+    if (std.mem.eql(u8, api_path, "/rss/manage")) {
+        if (!requireMethod(stream, method, "POST")) return;
+        apiRssManage(stream, query, body);
+        return;
+    }
     if (std.mem.eql(u8, api_path, "/rss/refresh")) {
         const rss = @import("rss.zig");
         const idx_str = getQueryParam(query, "idx") orelse "0";
@@ -2409,9 +2414,11 @@ fn apiRssList(stream: std.Io.net.Stream) void {
     for (0..rss.feed_count) |fi| {
         const f = &rss.feeds[fi];
         if (fi > 0) w.writeAll(",") catch return;
-        w.writeAll("\"") catch return;
+        w.writeAll("{\"name\":\"") catch return;
         escJsonWrite(&w, f.name[0..f.name_len]);
-        w.writeAll("\"") catch return;
+        w.writeAll("\",\"url\":\"") catch return;
+        escJsonWrite(&w, f.url[0..f.url_len]);
+        w.print("\",\"enabled\":{s}}}", .{if (f.enabled) "true" else "false"}) catch return;
     }
     w.writeAll("],\"items\":[") catch return;
     for (0..rss.item_count) |ri| {
@@ -2429,6 +2436,53 @@ fn apiRssList(stream: std.Io.net.Stream) void {
     w.writeAll(if (rss.is_fetching) "true" else "false") catch return;
     w.writeAll("}") catch return;
     sendJson(stream, json_buf[0..w.end]);
+}
+
+fn apiRssManage(stream: std.Io.net.Stream, query: []const u8, body: []const u8) void {
+    const rss = @import("rss.zig");
+    var action_buf: [16]u8 = undefined;
+    const action = credParam(body, query, "action", &action_buf) orelse {
+        sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"action required\"}");
+        return;
+    };
+    var index_buf: [16]u8 = undefined;
+    const idx = if (credParam(body, query, "idx", &index_buf)) |raw|
+        (std.fmt.parseInt(usize, raw, 10) catch rss.feed_count)
+    else
+        rss.feed_count;
+    if (std.mem.eql(u8, action, "remove")) {
+        if (idx >= rss.feed_count) {
+            sendJsonStatus(stream, "404 Not Found", "{\"error\":\"feed not found\"}");
+            return;
+        }
+        if (!rss.removeFeedManaged(idx)) {
+            sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"could not persist feed removal\"}");
+            return;
+        }
+        sendJson(stream, "{\"ok\":true}");
+        return;
+    }
+    var name_buf: [64]u8 = undefined;
+    var url_buf: [512]u8 = undefined;
+    const name = credParam(body, query, "name", &name_buf) orelse "";
+    const url = credParam(body, query, "url", &url_buf) orelse "";
+    var enabled_buf: [8]u8 = undefined;
+    const enabled = !std.mem.eql(u8, credParam(body, query, "enabled", &enabled_buf) orelse "1", "0");
+    if (std.mem.eql(u8, action, "add")) {
+        if (!rss.addFeedManaged(name, url)) {
+            sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"invalid feed or feed limit reached\"}");
+            return;
+        }
+    } else if (std.mem.eql(u8, action, "update")) {
+        if (!rss.updateFeed(idx, name, url, enabled)) {
+            sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"invalid feed\"}");
+            return;
+        }
+    } else {
+        sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"action must be add, update, or remove\"}");
+        return;
+    }
+    sendJson(stream, "{\"ok\":true}");
 }
 
 fn apiDownloads(stream: std.Io.net.Stream, query: []const u8) void {

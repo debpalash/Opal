@@ -68,7 +68,7 @@ def test_anime_schedule():
         # ── ANN RSS feed registered as a built-in default ──
         "ANN feed url": "https://www.animenewsnetwork.com/all/rss.xml" in rss,
         "ANN feed named": '"Anime News Network"' in rss,
-        "ANN via addFeed": 'addFeed("Anime News Network"' in rss,
+        "ANN added to defaults": 'appendFeed("Anime News Network"' in rss,
         # ── Pure module registered in the `zig build test` step ──
         "test registered": 'b.path("src/services/anime_schedule_pure.zig")' in build,
     }

@@ -536,6 +536,11 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
 .form-field input:focus{border-color:var(--accent)}
 #jf-connect{background:var(--accent);color:#0c0c11;font-weight:600;border-radius:var(--rad);padding:11px 18px;width:100%}
 #jf-disconnect{color:var(--text-2);font-size:13px;margin-top:6px}
+.source-manager summary{cursor:pointer;color:var(--text-2);font-weight:650}
+.source-add-form{display:grid;grid-template-columns:minmax(120px,1fr) minmax(220px,2fr) auto;gap:8px;align-items:end;margin:12px 0}
+.source-add-form label{display:flex;flex-direction:column;gap:5px;color:var(--text-3);font-size:12px}
+.rss-source{display:grid;grid-template-columns:minmax(120px,1fr) minmax(220px,2fr) auto auto;gap:8px;align-items:center;padding:9px 0;border-top:1px solid var(--border)}
+.rss-source-actions{display:flex;gap:3px}.rss-remove{color:var(--danger)}
 
 /* player overlay */
 #player{position:fixed;inset:0;background:#000;z-index:60;display:none;flex-direction:column}
@@ -564,4 +569,6 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
   .cfg-row span{flex:1 1 180px;overflow-wrap:anywhere}
   .cfg-row input:not([type=checkbox]){width:auto;flex:1 1 220px}
   button,a,input,select,textarea{overflow-wrap:anywhere}
+  .source-add-form,.rss-source{grid-template-columns:1fr}
+  .rss-source-actions{justify-content:flex-end}
 }

@@ -5,6 +5,9 @@ const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
 const c = @import("../core/c.zig");
 const player = @import("../player/player.zig");
+const io = @import("../core/io_global.zig");
+const paths = @import("../core/paths.zig");
+const rss_alloc = @import("../core/alloc.zig").allocator;
 
 // ══════════════════════════════════════════════════════════
 // RSS Torrent Feed Reader
@@ -51,15 +54,15 @@ var add_url_len: usize = 0;
 var add_name_buf: [64]u8 = [_]u8{0} ** 64;
 var add_name_len: usize = 0;
 
-pub fn init() void {
+fn initDefaults() void {
     // Pre-populate with EZTV
-    addFeed("EZTV", "https://myrss.org/eztv");
+    appendFeed("EZTV", "https://myrss.org/eztv");
     // Anime News Network — anime/manga industry news (keyless public RSS). Same
     // class as EZTV above: a built-in default feed the user can remove.
-    addFeed("Anime News Network", "https://www.animenewsnetwork.com/all/rss.xml");
+    appendFeed("Anime News Network", "https://www.animenewsnetwork.com/all/rss.xml");
 }
 
-pub fn addFeed(name: []const u8, url: []const u8) void {
+fn appendFeed(name: []const u8, url: []const u8) void {
     if (feed_count >= MAX_FEEDS) return;
     var f = &feeds[feed_count];
     const nlen = @min(name.len, 63);
@@ -72,7 +75,7 @@ pub fn addFeed(name: []const u8, url: []const u8) void {
     feed_count += 1;
 }
 
-pub fn removeFeed(idx: usize) void {
+fn removeFeedRaw(idx: usize) void {
     if (idx >= feed_count) return;
     var i = idx;
     while (i + 1 < feed_count) : (i += 1) {
@@ -84,9 +87,123 @@ pub fn removeFeed(idx: usize) void {
     }
 }
 
+fn validFeed(name: []const u8, url: []const u8) bool {
+    return name.len > 0 and name.len < 64 and url.len > 0 and url.len < 512 and
+        (std.mem.startsWith(u8, url, "https://") or std.mem.startsWith(u8, url, "http://"));
+}
+
+fn configPath(buf: []u8) []const u8 {
+    var dir_buf: [512]u8 = undefined;
+    return std.fmt.bufPrint(buf, "{s}/rss-feeds.json", .{paths.configDir(&dir_buf)}) catch "rss-feeds.json";
+}
+
+fn writeJsonString(writer: *std.Io.Writer, value: []const u8) !void {
+    for (value) |ch| switch (ch) {
+        '"' => try writer.writeAll("\\\""),
+        '\\' => try writer.writeAll("\\\\"),
+        '\n' => try writer.writeAll("\\n"),
+        '\r' => try writer.writeAll("\\r"),
+        '\t' => try writer.writeAll("\\t"),
+        else => if (ch >= 0x20) try writer.writeByte(ch),
+    };
+}
+
+fn saveFeeds() bool {
+    var dir_buf: [512]u8 = undefined;
+    io.cwdMakePath(paths.configDir(&dir_buf)) catch return false;
+    var out: [8192]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&out);
+    writer.writeByte('[') catch return false;
+    for (feeds[0..feed_count], 0..) |*feed, i| {
+        if (i > 0) writer.writeByte(',') catch return false;
+        writer.writeAll("{\"name\":\"") catch return false;
+        writeJsonString(&writer, feed.name[0..feed.name_len]) catch return false;
+        writer.writeAll("\",\"url\":\"") catch return false;
+        writeJsonString(&writer, feed.url[0..feed.url_len]) catch return false;
+        writer.print("\",\"enabled\":{s}}}", .{if (feed.enabled) "true" else "false"}) catch return false;
+    }
+    writer.writeByte(']') catch return false;
+    var path_buf: [640]u8 = undefined;
+    @import("../core/secret_file.zig").write(configPath(&path_buf), out[0..writer.end]) catch return false;
+    return true;
+}
+
+fn loadFeeds() bool {
+    var path_buf: [640]u8 = undefined;
+    const body = io.cwdReadFileAlloc(configPath(&path_buf), rss_alloc, 16 * 1024) catch return false;
+    defer rss_alloc.free(body);
+    var parsed = std.json.parseFromSlice(std.json.Value, rss_alloc, body, .{}) catch return false;
+    defer parsed.deinit();
+    if (parsed.value != .array) return false;
+    feed_count = 0;
+    for (parsed.value.array.items) |entry| {
+        if (entry != .object) continue;
+        const name = entry.object.get("name") orelse continue;
+        const url = entry.object.get("url") orelse continue;
+        if (name != .string or url != .string or !validFeed(name.string, url.string)) continue;
+        appendFeed(name.string, url.string);
+        if (entry.object.get("enabled")) |enabled| {
+            if (enabled == .bool and feed_count > 0) feeds[feed_count - 1].enabled = enabled.bool;
+        }
+    }
+    return true;
+}
+
+pub fn init() void {
+    if (loadFeeds()) return;
+    initDefaults();
+    _ = saveFeeds();
+}
+
+pub fn addFeed(name: []const u8, url: []const u8) void {
+    if (!validFeed(name, url) or feed_count >= MAX_FEEDS) return;
+    appendFeed(name, url);
+    _ = saveFeeds();
+}
+
+pub fn addFeedManaged(name: []const u8, url: []const u8) bool {
+    if (!validFeed(name, url) or feed_count >= MAX_FEEDS) return false;
+    appendFeed(name, url);
+    if (saveFeeds()) return true;
+    feed_count -= 1;
+    return false;
+}
+
+pub fn updateFeed(idx: usize, name: []const u8, url: []const u8, enabled: bool) bool {
+    if (idx >= feed_count or !validFeed(name, url)) return false;
+    const feed = &feeds[idx];
+    const previous = feed.*;
+    @memcpy(feed.name[0..name.len], name);
+    feed.name_len = name.len;
+    @memcpy(feed.url[0..url.len], url);
+    feed.url_len = url.len;
+    feed.enabled = enabled;
+    if (saveFeeds()) return true;
+    feed.* = previous;
+    return false;
+}
+
+pub fn removeFeed(idx: usize) void {
+    removeFeedRaw(idx);
+    _ = saveFeeds();
+}
+
+pub fn removeFeedManaged(idx: usize) bool {
+    if (idx >= feed_count) return false;
+    const previous_feeds = feeds;
+    const previous_count = feed_count;
+    const previous_active = active_feed_idx;
+    removeFeedRaw(idx);
+    if (saveFeeds()) return true;
+    feeds = previous_feeds;
+    feed_count = previous_count;
+    active_feed_idx = previous_active;
+    return false;
+}
+
 pub fn fetchFeed(idx: usize) void {
     if (is_fetching) return;
-    if (idx >= feed_count) return;
+    if (idx >= feed_count or !feeds[idx].enabled) return;
     active_feed_idx = idx;
     is_fetching = true;
     fetch_error = false;

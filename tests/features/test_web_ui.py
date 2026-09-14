@@ -926,6 +926,29 @@ def test_server_item_details_dialog():
     return "pass", "Server, audio, anime, book, podcast, comic, novel, drama, and RSS details share one safe accessible surface"
 
 
+@test("RSS sources persist and support complete web management", "Web UI")
+def test_rss_source_crud_and_persistence():
+    rss = _src("src/services/rss.zig")
+    remote = _remote_api()
+    html = _src("web/index.html")
+    js = _src("web/js/discovery.js")
+    checks = {
+        "durable source file": "rss-feeds.json" in rss and "loadFeeds()" in rss and "saveFeeds()" in rss,
+        "safe URL validation": 'startsWith(u8, url, "https://")' in rss and 'startsWith(u8, url, "http://")' in rss,
+        "add update remove": all(marker in rss for marker in ("addFeedManaged", "updateFeed", "removeFeedManaged")),
+        "failed writes roll back": "previous_feeds" in rss and "feed.* = previous" in rss and "feed_count -= 1" in rss,
+        "API CRUD route": 'api_path, "/rss/manage"' in remote and "fn apiRssManage(" in remote,
+        "structured feed projection": '\\"enabled\\":{s}' in remote and '\\"url\\":\\"' in remote,
+        "management form": all(marker in html for marker in ("rss-add-form", "rss-add-name", "rss-add-url", "rss-manage")),
+        "web add edit remove": all(marker in js for marker in ("action:'add'", "action:'update'", "action:'remove'")),
+        "disabled state": "rss-source-enabled" in js and "button:not([disabled])" in js,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "RSS source management incomplete: " + ", ".join(missing)
+    return "pass", "RSS feeds persist and expose validated add/edit/enable/remove workflows"
+
+
 @test("Remote API never serializes socket writes behind a global lock", "Remote")
 def test_remote_response_concurrency_boundary():
     remote = _remote_api()
