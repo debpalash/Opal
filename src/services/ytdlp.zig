@@ -16,8 +16,24 @@ const YTDLP_SUMS_URL = "https://github.com/yt-dlp/yt-dlp/releases/latest/downloa
 
 var is_downloading = std.atomic.Value(bool).init(false);
 var is_ready = std.atomic.Value(bool).init(false);
+var existing_rejected = std.atomic.Value(bool).init(false);
 var bin_path_buf: [512]u8 = undefined;
 var bin_path_len: usize = 0;
+var discovery_mutex: sync.Mutex = .{};
+// 255=unchecked, 0=no absolute system install, 1..3=candidate index + 1.
+// Only the tiny index changes; returned path storage is always a string literal.
+var system_binary_pick = std.atomic.Value(u8).init(255);
+const SYSTEM_BINARY_CANDIDATES = [_][]const u8{
+    "/opt/homebrew/bin/yt-dlp",
+    "/usr/local/bin/yt-dlp",
+    "/usr/bin/yt-dlp",
+};
+
+fn cachedSystemBinary(pick: u8) ?[]const u8 {
+    if (pick == 0 or pick == 255) return null;
+    const idx = pick - 1;
+    return if (idx < SYSTEM_BINARY_CANDIDATES.len) SYSTEM_BINARY_CANDIDATES[idx] else null;
+}
 
 /// Get the path to the bundled yt-dlp binary, or null if not ready yet
 pub fn getPath() ?[]const u8 {
@@ -39,55 +55,41 @@ fn verifyWorker() void {
     // both guards against a truncated file that spawns and dies instantly.
     const ok = result.ok() and std.mem.trim(u8, result.output, " \r\n\t").len > 0;
     if (ok) return;
-    // Stand down: getPath() goes null, so binary() resolves to a PATH lookup
-    // and mpv gets a name it can find if the user installed one themselves.
+    // Stand down: getPath() goes null, so binary() can use a PATH install while
+    // the checksum-verified replacement is downloaded in the background.
+    existing_rejected.store(true, .release);
     is_ready.store(false, .release);
-    bin_path_len = 0;
-    resolved_done.store(false, .release);
     logs.pushLog(
         "error",
         "ytdlp",
         "Bundled yt-dlp will not run (truncated download, or blocked by the OS) — falling back to PATH",
         true,
     );
+    ensureAvailable();
 }
-
-var resolved_buf: [512]u8 = undefined;
-var resolved_len: usize = 0;
-var resolved_done = std.atomic.Value(bool).init(false);
-var resolved_mutex: sync.Mutex = .{};
 
 /// The yt-dlp executable to spawn. Prefers a system install (absolute path —
 /// the GUI process PATH usually lacks /opt/homebrew/bin, so a bare "yt-dlp"
 /// fails) because the bundled macOS standalone binary cold-starts ~20s per
-/// run; falls back to the bundled copy, then to a bare PATH lookup. Cached.
+/// run; falls back to the bundled copy, then to a bare PATH lookup. Every
+/// returned slice is immutable, including the once-published bundled path.
 pub fn binary() []const u8 {
-    if (resolved_done.load(.acquire)) return resolved_buf[0..resolved_len];
-    resolved_mutex.lock();
-    defer resolved_mutex.unlock();
-    if (resolved_done.load(.acquire)) return resolved_buf[0..resolved_len];
     // Absolute system installs, per platform. The POSIX brew/usr prefixes can
     // never exist on Windows, where a system yt-dlp is on PATH (scoop/winget/
     // pip) — probing them there just wasted three syscalls before falling
     // through to the bundled copy.
-    const candidates = if (@import("builtin").os.tag == .windows) [_][]const u8{} else [_][]const u8{
-        "/opt/homebrew/bin/yt-dlp",
-        "/usr/local/bin/yt-dlp",
-        "/usr/bin/yt-dlp",
-    };
-    for (candidates) |c| {
-        if (io.cwdAccess(c, .{})) {
-            @memcpy(resolved_buf[0..c.len], c);
-            resolved_len = c.len;
-            resolved_done.store(true, .release);
-            return resolved_buf[0..resolved_len];
-        } else |_| {}
+    const cached = system_binary_pick.load(.acquire);
+    if (cached != 255) return cachedSystemBinary(cached) orelse getPath() orelse "yt-dlp";
+    if (comptime builtin.os.tag != .windows) {
+        for (SYSTEM_BINARY_CANDIDATES, 0..) |candidate, idx| {
+            if (io.cwdAccess(candidate, .{})) {
+                system_binary_pick.store(@intCast(idx + 1), .release);
+                return candidate;
+            } else |_| {}
+        }
     }
-    const pick = getPath() orelse "yt-dlp";
-    @memcpy(resolved_buf[0..pick.len], pick);
-    resolved_len = pick.len;
-    resolved_done.store(true, .release);
-    return resolved_buf[0..resolved_len];
+    system_binary_pick.store(0, .release);
+    return getPath() orelse "yt-dlp";
 }
 
 // ── Version (cached; queried on a bg thread so the UI never blocks) ──
@@ -175,6 +177,10 @@ pub fn isDownloading() bool {
 pub fn discoverExisting() bool {
     if (is_ready.load(.acquire)) return true;
     if (is_downloading.load(.acquire)) return false;
+    discovery_mutex.lock();
+    defer discovery_mutex.unlock();
+    if (is_ready.load(.acquire)) return true;
+    if (is_downloading.load(.acquire) or existing_rejected.load(.acquire)) return false;
 
     // Install under the app's REAL config dir (paths.configDir), not a
     // hand-rolled HOME + "/.config/opal".
@@ -204,7 +210,6 @@ pub fn discoverExisting() bool {
     // which is exactly what unblocked that reporter.
     if (@import("../core/io_global.zig").cwdAccess(path, .{})) {
         is_ready.store(true, .release);
-        resolved_done.store(false, .release);
         logs.pushLog("info", "ytdlp", "yt-dlp binary found", false);
         @import("../core/workers.zig").spawn(verifyWorker, .{}) catch {};
         return true;
@@ -231,7 +236,9 @@ pub fn ensureAvailable() void {
 /// Update yt-dlp by re-downloading the latest release
 pub fn update() void {
     if (is_downloading.load(.acquire)) return;
-    if (bin_path_len == 0) {
+    // Acquire-ready is the publication barrier for bin_path_buf/bin_path_len;
+    // never inspect the non-atomic length while discovery may be writing it.
+    if (!is_ready.load(.acquire)) {
         ensureAvailable();
         return;
     }
@@ -336,8 +343,8 @@ fn downloadWorker() void {
         logs.pushLog("error", "ytdlp", "Could not publish yt-dlp update; keeping the working version", true);
         return;
     };
+    existing_rejected.store(false, .release);
     is_ready.store(true, .release);
-    resolved_done.store(false, .release);
     invalidateVersion(); // re-query the version after a fresh download/update
     logs.pushLog("info", "ytdlp", "yt-dlp binary ready!", true);
     state.showToast("yt-dlp updated successfully!");

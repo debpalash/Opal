@@ -599,11 +599,13 @@ def test_ytdlp_verifies_execution():
         "requires a clean exit": "result.ok()" in body,
         "requires actual output": "result.output" in body,
         "bounded process tree": "bounded_process.run" in body and "timeout_ms" in body,
-        # Standing down is the point: getPath() going null is what makes
-        # binary() fall through to a PATH lookup, which is what unblocked the
-        # reporter when they installed yt-dlp themselves.
-        "disowns the bad binary": "is_ready.store(false" in body and "bin_path_len = 0" in body,
-        "clears the binary() cache": "resolved_done.store(false" in body,
+        # Standing down makes getPath() null, but the path bytes remain
+        # immutable because an in-flight spawn may still hold their slice.
+        "disowns the bad binary": "is_ready.store(false" in body
+            and "existing_rejected.store(true" in body,
+        "keeps published path immutable": "bin_path_len = 0" not in body
+            and "resolved_done" not in src,
+        "starts verified replacement": "ensureAvailable();" in body,
         "tells the user": 'logs.pushLog(' in body,
         # ~20s cold start on the macOS standalone build — never on the UI thread.
         "verification runs off-thread": "spawn(verifyWorker" in src,
@@ -611,7 +613,7 @@ def test_ytdlp_verifies_execution():
     bad = [k for k, v in checks.items() if not v]
     if bad:
         return "fail", "verifyWorker missing: " + ", ".join(bad)
-    return "pass", "a bundled yt-dlp that will not run is disowned in favour of PATH"
+    return "pass", "bad bundled yt-dlp is disowned without racing readers, then replaced"
 
 
 @test("portability: no hand-built ~/.config/opal paths", "Windows")
