@@ -393,8 +393,9 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
     Pre.set(&status_radio, .radio);
     Pre.set(&status_podcast, .podcast);
 
-    // Fire every backend in parallel. Each handle is detached (never joined) —
-    // discarding it via `_ =` leaks the pthread resource for the process life.
+    // Fire every backend in parallel through the process-owned supervisor.
+    // Superseded waves may overlap briefly, so the global admission cap also
+    // prevents rapid searches from growing native threads without bound.
     const Spawn = struct {
         // Wrapper stamps the worker thread's generation (threadlocal) before
         // running the backend, so pushResult can drop pushes from a superseded
@@ -409,13 +410,11 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
                     f(wq, wqlen);
                 }
             };
-            if (@import("../core/workers.zig").spawnLegacy(Wrap.run, .{ resolver_query, resolver_query_len, run_id })) |t| {
-                @import("../core/workers.zig").release(t);
-            } else |_| {
+            @import("../core/workers.zig").spawn(Wrap.run, .{ resolver_query, resolver_query_len, run_id }) catch {
                 // resolve() owns lifecycle_mutex here, so this failure belongs
                 // to the run being initialized and cannot race a successor.
                 st.store(.unavailable, .release);
-            }
+            };
         }
     };
     if (sourceOn(.local)) Spawn.go(resolveLocalFiles, &status_local); // instant — already on disk

@@ -45,6 +45,8 @@ def test_universal_search_fanout():
         "workers spawned": all(
             f"if (sourceOn(.{b})) Spawn.go(resolve" in res for b in ("livetv", "music", "radio", "podcast")
         ),
+        "fan-out uses bounded owned workers": "workers.zig\").spawn(Wrap.run" in res
+            and "spawnLegacy(Wrap.run" not in res,
         "status atomics": all(
             f"pub var status_{s} = std.atomic.Value(SourceStatus)" in res
             for s in ("livetv", "music", "radio", "podcast")
