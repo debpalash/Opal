@@ -1,0 +1,34 @@
+"""SIMKL PIN authorization and durable history delivery."""
+from .harness import *  # noqa: F401,F403
+
+
+@test("SIMKL PIN auth and durable watched sync", "Integration")
+def test_simkl_sync_lifecycle():
+    service = _src("src/services/simkl.zig")
+    api = _src("src/services/remote_sync_api.zig")
+    ui = _web_app()
+    checks = {
+        "initialized": 'simkl.zig").init()' in _src("src/main.zig"),
+        "official pin flow": 'apiUrl("/oauth/pin"' in service
+            and '"/oauth/pin/{s}"' in service and "https://simkl.com/pin" in ui,
+        "required request identity": "client_id={s}&app-name=opal&app-version={s}" in service
+            and '"-A", USER_AGENT' in service,
+        "provider interval honored": 'extractJsonInt(response[0..n], "interval")' in service
+            and "waited < interval" in service,
+        "encrypted credential": "secret_store.seal" in service
+            and "secret_store.reveal" in service and "[2048]u8" in service,
+        "token never serialized": "simkl_state" in api and "access_token[0.." not in api,
+        "durable history": 'outbox.enqueue("simkl", "history"' in service
+            and 'outbox.nextDue("simkl"' in service and "outbox.deferFailure" in service,
+        "tv completion hook": 'simkl.zig").markWatchedEpisode' in _src("src/services/tmdb.zig"),
+        "http semantics": '"%{http_code}"' in service and "status == 401" in service
+            and "needs_reauth" in api,
+        "owned bounded work": "workers.spawn(pinAuthWorker" in service
+            and "workers.spawn(drainOutbox" in service and '"--max-time"' in service,
+        "web lifecycle": 'id="simkl-connect"' in ui and 'id="simkl-retry"' in ui
+            and "scheduleSyncAccountPoll" in ui and "provider:'simkl'" in ui,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "SIMKL sync incomplete: " + ", ".join(missing)
+    return "pass", "Official PIN auth + encrypted token + durable TV history + visible revoked/retry state"

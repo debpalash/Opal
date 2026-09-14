@@ -2595,6 +2595,7 @@ pub fn commitPendingWatch() void {
     const pw = &state.app.pending_watch;
     db.tvMarkWatched(pw.tmdb_id, @intCast(@max(0, pw.season)), @intCast(@max(1, pw.episode)), true);
     @import("trakt.zig").markWatchedEpisode(pw.tmdb_id, pw.season, pw.episode);
+    @import("simkl.zig").markWatchedEpisode(pw.tmdb_id, pw.season, pw.episode);
 
     // Auto-track: watching an episode puts the show in My Shows. tvTouchShow
     // creates the row if absent and bumps updated_at (which drives "most recently

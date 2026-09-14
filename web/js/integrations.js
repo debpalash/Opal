@@ -239,6 +239,21 @@ async function loadSyncAccounts() {
   $('anilist-authorize').hidden = !account.authorize_url;
   $('anilist-authorize').href = account.authorize_url || '#';
   $('anilist-retry').hidden = !account.queued;
+  const simkl = data.simkl || {};
+  $('simkl-id').placeholder = simkl.has_client_id ? 'set — type to replace' : 'required';
+  $('simkl-hint').textContent = simkl.connected
+    ? `Connected${simkl.queued ? ` · ${simkl.queued} queued` : ' · synced'}`
+    : simkl.needs_reauth ? `Authorization revoked · reconnect to send ${simkl.queued || 0} queued`
+    : simkl.pending ? (simkl.user_code ? `Enter ${simkl.user_code} at simkl.com/pin` : 'Requesting a PIN…')
+    : 'Not connected.';
+  $('simkl-pin').hidden = !simkl.user_code;
+  $('simkl-retry').hidden = !simkl.queued;
+  if (simkl.pending) scheduleSyncAccountPoll();
+}
+let syncAccountPoll = 0;
+function scheduleSyncAccountPoll() {
+  clearTimeout(syncAccountPoll);
+  syncAccountPoll = setTimeout(loadSyncAccounts, 5000);
 }
 $('anilist-save').onclick = async () => {
   try {
@@ -254,6 +269,27 @@ $('anilist-disconnect').onclick = async () => {
 };
 $('anilist-retry').onclick = async () => {
   await syncAccountMutation({provider:'anilist',action:'retry'});
+  loadSyncAccounts();
+};
+$('simkl-save').onclick = async () => {
+  try {
+    if ($('simkl-id').value) await syncAccountMutation({provider:'simkl',action:'set',key:'client_id',value:$('simkl-id').value.trim()});
+    $('simkl-id').value = '';
+    await loadSyncAccounts();
+  } catch (error) { $('simkl-hint').textContent = error.message; }
+};
+$('simkl-connect').onclick = async () => {
+  try {
+    await syncAccountMutation({provider:'simkl',action:'connect'});
+    await loadSyncAccounts();
+  } catch (error) { $('simkl-hint').textContent = error.message; }
+};
+$('simkl-disconnect').onclick = async () => {
+  await syncAccountMutation({provider:'simkl',action:'disconnect'});
+  loadSyncAccounts();
+};
+$('simkl-retry').onclick = async () => {
+  await syncAccountMutation({provider:'simkl',action:'retry'});
   loadSyncAccounts();
 };
 
