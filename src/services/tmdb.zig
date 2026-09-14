@@ -1449,6 +1449,7 @@ fn openTvDetail(item: *state.TmdbItem) void {
     const t = &state.app.tmdb;
     t.tv_detail_open = true;
     t.tv_id = item.id;
+    invalidateDetailUiSnapshot();
     const ilen = @min(item.imdb_id_len, t.tv_imdb_id.len);
     @memcpy(t.tv_imdb_id[0..ilen], item.imdb_id[0..ilen]);
     t.tv_imdb_id_len = ilen;
@@ -1502,6 +1503,7 @@ fn closeTvDetail() void {
     t.tv_episode_count = 0;
     t.tv_sel_season = 0;
     t.tv_imdb_id_len = 0;
+    invalidateDetailUiSnapshot();
     for (0..t.tv_episode_watched.len) |i| t.tv_episode_watched[i] = false;
     _ = tv_gen.fetchAdd(1, .acq_rel);
 }
@@ -2039,6 +2041,45 @@ fn jsonStr(obj: []const u8, quoted_key: []const u8, dst: []u8) usize {
 
 // ── Watched-tracking helpers ──
 
+const DetailUiSnapshot = struct {
+    status: @import("tv_pure.zig").UserStatus = .none,
+    library: @import("tv_library.zig").DetailSnapshot = .{},
+};
+
+var detail_ui_snapshot: DetailUiSnapshot = .{};
+var detail_ui_snapshot_id: i32 = 0;
+var detail_ui_snapshot_seen_epoch: u32 = 0;
+var detail_ui_snapshot_seen_library_revision: u32 = 0;
+var detail_ui_snapshot_epoch = std.atomic.Value(u32).init(1);
+
+fn invalidateDetailUiSnapshot() void {
+    _ = detail_ui_snapshot_epoch.fetchAdd(1, .release);
+}
+
+/// Immediate-mode rendering may call this from several controls in one frame.
+/// Refresh only after a real library mutation/sync, then let every control
+/// share the exact same DB-derived answer.
+fn detailUiSnapshot() *const DetailUiSnapshot {
+    const id = state.app.tmdb.tv_id;
+    const epoch = detail_ui_snapshot_epoch.load(.acquire);
+    const library_revision = @import("tv_library.zig").revision();
+    if (detail_ui_snapshot_id == id and detail_ui_snapshot_seen_epoch == epoch and
+        detail_ui_snapshot_seen_library_revision == library_revision)
+        return &detail_ui_snapshot;
+
+    var idbuf: [24]u8 = undefined;
+    const id_str = std.fmt.bufPrint(&idbuf, "{d}", .{id}) catch "";
+    var sbuf: [16]u8 = undefined;
+    detail_ui_snapshot = .{
+        .status = @import("tv_pure.zig").userStatusFromStr(db.libraryGetStatus("tv", id_str, &sbuf)),
+        .library = @import("tv_library.zig").detailSnapshotFor(id),
+    };
+    detail_ui_snapshot_id = id;
+    detail_ui_snapshot_seen_epoch = epoch;
+    detail_ui_snapshot_seen_library_revision = library_revision;
+    return &detail_ui_snapshot;
+}
+
 /// Number of watched episodes in the loaded range.
 fn tvWatchedCount() usize {
     var n: usize = 0;
@@ -2064,12 +2105,7 @@ pub fn renderStatusChips() void {
 
     const tp = @import("tv_pure.zig");
 
-    // Cheap single-row lookups on the UI thread: sqlite is FULLMUTEX with an 8MB
-    // cache, and this is two indexed reads per frame.
-    var idbuf: [24]u8 = undefined;
-    const id_str = std.fmt.bufPrint(&idbuf, "{d}", .{t.tv_id}) catch return;
-    var sbuf: [16]u8 = undefined;
-    const cur = tp.userStatusFromStr(db.libraryGetStatus("tv", id_str, &sbuf));
+    const cur = detailUiSnapshot().status;
 
     const options = [_]tp.UserStatus{ .plan, .watching, .completed, .dropped };
     for (options, 0..) |opt, i| {
@@ -2101,6 +2137,7 @@ fn setShowStatus(next: @import("tv_pure.zig").UserStatus) void {
     const poster = t.tv_poster_path[0..@min(t.tv_poster_path_len, t.tv_poster_path.len)];
 
     db.librarySetStatus("tv", id_str, tp.userStatusToStr(next));
+    invalidateDetailUiSnapshot();
 
     if (next == .none) {
         db.tvSetTracked(t.tv_id, false);
@@ -2128,7 +2165,7 @@ fn setShowStatus(next: @import("tv_pure.zig").UserStatus) void {
 ///
 /// Returns null when there is genuinely nothing to watch (caught up / completed).
 fn tvNextUp() ?@import("tv_pure.zig").Ep {
-    return @import("tv_library.zig").nextUpFor(state.app.tmdb.tv_id);
+    return detailUiSnapshot().library.next;
 }
 
 /// Next unwatched episode WITHIN the open season, for the in-list "Next" badge.
@@ -2160,6 +2197,7 @@ fn tvToggleWatched(ep_idx: usize, ep: i32) void {
     if (season >= 0) db.tvMarkWatched(state.app.tmdb.tv_id, @intCast(season), @intCast(ep), flag);
     // Progress, next-up and the show's bucket all just changed.
     @import("tv_library.zig").markDirty();
+    invalidateDetailUiSnapshot();
 }
 
 // ── Episode playback ──
@@ -2520,6 +2558,7 @@ pub fn commitPendingWatch() void {
     // because an episode of it played.
     db.tvTouchShow(pw.tmdb_id, pw.name[0..pw.name_len], pw.poster_path[0..pw.poster_path_len]);
     @import("tv_library.zig").markDirty();
+    invalidateDetailUiSnapshot();
 
     // Reflect in the TV detail if it's open on the same show + season.
     const t = &state.app.tmdb;
@@ -2877,7 +2916,9 @@ fn renderTvDetail() void {
         // answers "is the newest one out, and have I seen it?" — which Resume
         // structurally cannot say, because once you are caught up it goes null
         // and the finale you just watched disappears from the header entirely.
-        if (@import("tv_library.zig").lastAiredFor(t.tv_id)) |latest| {
+        const detail_snapshot = detailUiSnapshot();
+        if (detail_snapshot.library.last_aired) |latest_ep| {
+            const latest_watched = detail_snapshot.library.last_aired_watched;
             var lat = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .background = true,
                 // Muted next to Resume's accent fill: this is the secondary
@@ -2912,12 +2953,12 @@ fn renderTvDetail() void {
             var lat_buf: [48]u8 = undefined;
             const lat_act = @import("tv_pure.zig").playAction(
                 play_busy,
-                @import("tv_pure.zig").recentEpisodeLabel(latest.ep, latest.watched, &lat_buf),
+                @import("tv_pure.zig").recentEpisodeLabel(latest_ep, latest_watched, &lat_buf),
             );
             _ = dvui.label(@src(), "{s}", .{lat_act.label}, .{
                 // Watched fades; unwatched stays primary so the new drop is what
                 // catches the eye.
-                .color_text = if (latest.watched or play_busy) theme.colors.text_secondary else theme.colors.text_primary,
+                .color_text = if (latest_watched or play_busy) theme.colors.text_secondary else theme.colors.text_primary,
                 .gravity_y = 0.5,
             });
             if (lat_clicked and lat_act.clickable) {
@@ -2925,8 +2966,8 @@ fn renderTvDetail() void {
                     t.tv_id,
                     safeUtf8(t.tv_name[0..@min(t.tv_name_len, t.tv_name.len)]),
                     t.tv_poster_path[0..@min(t.tv_poster_path_len, t.tv_poster_path.len)],
-                    latest.ep.season,
-                    latest.ep.episode,
+                    latest_ep.season,
+                    latest_ep.episode,
                     "",
                 );
             }
@@ -2988,7 +3029,7 @@ fn renderTvDetail() void {
     const tv_layout = @import("../ui/tv_layout_pure.zig");
     var today_buf: [16]u8 = undefined;
     const today = @import("tmdb_pure.zig").ymd(@import("../core/io_global.zig").timestamp(), &today_buf) orelse "";
-    const aired_frontier = @import("tv_library.zig").lastAiredFor(t.tv_id);
+    const aired_frontier = detailUiSnapshot().library.last_aired;
     var episode_row: ?*dvui.BoxWidget = null;
 
     var ei: usize = 0;
@@ -3003,8 +3044,8 @@ fn renderTvDetail() void {
         else
             (@import("tvmaze.zig").airdateFor(t.tv_id, sel_season_num, e.episode_number, &tv_air_buf) orelse "");
         const known_aired = if (aired_frontier) |frontier|
-            sel_season_num < frontier.ep.season or
-                (sel_season_num == frontier.ep.season and e.episode_number <= frontier.ep.episode)
+            sel_season_num < frontier.season or
+                (sel_season_num == frontier.season and e.episode_number <= frontier.episode)
         else
             false;
         const episode_state = tv_layout.episodeState(air, today, known_aired);

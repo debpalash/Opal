@@ -29,6 +29,32 @@ def test_tv_detail_responsive():
         return "fail", ", ".join(missing)
     return "pass", "responsive TV detail uses wrapped content and one vertical scroller"
 
+
+@test("TV details do not query SQLite at frame rate", "Page Shell")
+def test_tv_detail_cached_library_snapshot():
+    tm = _src("src/services/tmdb.zig")
+    lib = _src("src/services/tv_library.zig")
+    render = tm.split("fn renderTvDetail() void {", 1)[1]
+    status = _between(tm, "pub fn renderStatusChips", "fn setShowStatus")
+    checks = {
+        "one combined DB projection": "pub fn detailSnapshotFor(" in lib
+            and "tp.nextUp(seasons, watched" in lib
+            and "tp.isWatched(watched, latest)" in lib,
+        "frame shares cached projection": "fn detailUiSnapshot()" in tm
+            and "detail_ui_snapshot_seen_library_revision" in tm,
+        "event driven refresh": "pub fn revision() u32" in lib
+            and "library_revision.fetchAdd" in lib,
+        "mutations invalidate": tm.count("invalidateDetailUiSnapshot();") >= 5,
+        "resume avoids direct DB": "detailUiSnapshot().library.next" in tm,
+        "status avoids direct DB": "libraryGetStatus(" not in status,
+        "render avoids legacy projections": "nextUpFor(" not in render
+            and "lastAiredFor(" not in render,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", ", ".join(missing)
+    return "pass", "status, next-up and aired frontier share one invalidation-aware snapshot"
+
 @test("Watching library: all kinds, next-up, user status", "Page Shell")
 def test_tv_tracking():
     # TV tracking used to be ~80% built and quietly wrong: next-up could not

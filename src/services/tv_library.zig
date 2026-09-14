@@ -88,9 +88,17 @@ fn posterFor(r: *const tp.Row) *state.TmdbItem {
 /// Set by anything that changes what the library should show: a watch commit, a
 /// watched toggle, a status change, or the sync worker publishing fresh metadata.
 var library_dirty = std.atomic.Value(bool).init(true);
+var library_revision = std.atomic.Value(u32).init(1);
 
 pub fn markDirty() void {
     library_dirty.store(true, .release);
+    _ = library_revision.fetchAdd(1, .release);
+}
+
+/// Monotonic mutation/sync marker for detail projections. Consumers can cache
+/// SQLite-derived state until this changes instead of polling on a timer.
+pub fn revision() u32 {
+    return library_revision.load(.acquire);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -234,23 +242,38 @@ fn syncWorker() void {
 /// The next episode of `tmdb_id`, across ALL seasons and clamped to what has
 /// aired. This is the one entry point the rest of the app uses (the TV detail
 /// Resume button calls it) — nothing re-derives "next".
-pub fn nextUpFor(tmdb_id: i32) ?tp.Ep {
-    const seasons = db.tvSeasonList(alloc, tmdb_id) catch return null;
-    defer alloc.free(seasons);
-    const watched = db.tvWatchedList(alloc, tmdb_id) catch return null;
-    defer alloc.free(watched);
-    const ns = seasons.len;
-    if (ns == 0) return null;
-    const nw = watched.len;
+pub const DetailSnapshot = struct {
+    next: ?tp.Ep = null,
+    last_aired: ?tp.Ep = null,
+    last_aired_watched: bool = false,
+};
 
+/// Load the episode facts used together by a detail screen in one DB pass.
+/// Calling `nextUpFor` and `lastAiredFor` separately duplicated the season,
+/// watched and show scans; doing that from an immediate-mode frame loop made
+/// the detail page perform hundreds of queries per second.
+pub fn detailSnapshotFor(tmdb_id: i32) DetailSnapshot {
+    var out: DetailSnapshot = .{};
     var shows: [MAX_SHOWS]db.TvShowRow = undefined;
     const n = db.tvGetShows(&shows);
-    var last_aired: ?tp.Ep = null;
     for (shows[0..n]) |*sh| {
-        if (sh.tmdb_id == tmdb_id and sh.last_aired.season > 0) last_aired = sh.last_aired;
+        if (sh.tmdb_id == tmdb_id and sh.last_aired.season > 0) {
+            out.last_aired = sh.last_aired;
+            break;
+        }
     }
 
-    return tp.nextUp(seasons[0..ns], watched[0..nw], last_aired);
+    const seasons = db.tvSeasonList(alloc, tmdb_id) catch return out;
+    defer alloc.free(seasons);
+    const watched = db.tvWatchedList(alloc, tmdb_id) catch return out;
+    defer alloc.free(watched);
+    if (seasons.len > 0) out.next = tp.nextUp(seasons, watched, out.last_aired);
+    if (out.last_aired) |latest| out.last_aired_watched = tp.isWatched(watched, latest);
+    return out;
+}
+
+pub fn nextUpFor(tmdb_id: i32) ?tp.Ep {
+    return detailSnapshotFor(tmdb_id).next;
 }
 
 /// The most recently AIRED episode of `tmdb_id`, and whether it has been
@@ -262,15 +285,9 @@ pub fn nextUpFor(tmdb_id: i32) ?tp.Ep {
 /// has to name it and say so. Watched-ness goes through `tp.isWatched` so the
 /// button and the episode list can never disagree about the same episode.
 pub fn lastAiredFor(tmdb_id: i32) ?struct { ep: tp.Ep, watched: bool } {
-    var shows: [MAX_SHOWS]db.TvShowRow = undefined;
-    const n = db.tvGetShows(&shows);
-    var last_aired: ?tp.Ep = null;
-    for (shows[0..n]) |*sh| {
-        if (sh.tmdb_id == tmdb_id and sh.last_aired.season > 0) last_aired = sh.last_aired;
-    }
-    const la = last_aired orelse return null;
-
-    return .{ .ep = la, .watched = db.tvIsWatched(tmdb_id, la.season, la.episode) };
+    const snapshot = detailSnapshotFor(tmdb_id);
+    const latest = snapshot.last_aired orelse return null;
+    return .{ .ep = latest, .watched = snapshot.last_aired_watched };
 }
 
 /// The user's hand-set status for one item, or `.none`.
