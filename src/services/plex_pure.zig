@@ -29,6 +29,17 @@ pub fn validRatingKey(key: []const u8) bool {
     return true;
 }
 
+/// Build Plex's documented played/unplayed mutation. Authentication stays in
+/// the X-Plex-Token header; only stable media identity enters the URL.
+pub fn watchedMutationUrl(server: []const u8, rating_key: []const u8, watched: bool, out: []u8) ?[]const u8 {
+    if (server.len == 0 or !validRatingKey(rating_key)) return null;
+    return std.fmt.bufPrint(out, "{s}/:/{s}?key={s}&identifier=com.plexapp.plugins.library", .{
+        std.mem.trimEnd(u8, server, "/"),
+        if (watched) "scrobble" else "unscrobble",
+        rating_key,
+    }) catch null;
+}
+
 pub const VersionSelection = struct {
     primary: ?usize = null,
     fallback: ?usize = null,
@@ -415,4 +426,17 @@ test "workerMayPublish: a plain mid-fetch switch to another section is rejected"
 test "workerMayPublish: same generation but a different section is rejected" {
     // Defensive: generation alone isn't the whole identity either.
     try std.testing.expect(!workerMayPublish(0, 7, 1, 7));
+}
+
+test "Plex watched mutation URL is stable and token free" {
+    var buf: [256]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        "https://plex.local:32400/:/scrobble?key=42&identifier=com.plexapp.plugins.library",
+        watchedMutationUrl("https://plex.local:32400/", "42", true, &buf).?,
+    );
+    try std.testing.expectEqualStrings(
+        "https://plex.local:32400/:/unscrobble?key=42&identifier=com.plexapp.plugins.library",
+        watchedMutationUrl("https://plex.local:32400", "42", false, &buf).?,
+    );
+    try std.testing.expect(watchedMutationUrl("https://plex.local", "../42", true, &buf) == null);
 }

@@ -116,8 +116,9 @@ commands, non-finite numbers, out-of-range values, and unknown actions.
 
 - [ ] Complete Plex/Jellyfin connection, library, search, details, playback,
       progress/favorite mutations, and failure recovery — stable Plex hierarchy,
-      resume playback, Jellyfin user-state mutations, and both recovery paths
-      are shipped; unified server-item details and Plex mutations remain
+      resume playback, Jellyfin user-state mutations, Plex watched mutations,
+      and both recovery paths are shipped; unified server-item details plus
+      Plex favorite/rating mutations remain
 - [x] Source endpoint catalog with accurate installed state, grouping/filtering,
       bounded refresh, version update, install/remove, and integration config
 - [x] Source health, permission review, diagnostics, and executable-plugin

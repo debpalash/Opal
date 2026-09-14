@@ -151,3 +151,24 @@ def test_plex_hierarchy():
     if missing:
         return "fail", "Plex hierarchy incomplete: " + ", ".join(missing)
     return "pass", "Plex shows→seasons→episodes and artists→albums→tracks drill down with bounded Back navigation"
+
+
+@test("Plex watched state mutates by stable identity", "Plex")
+def test_plex_watched_mutation():
+    svc = _src("src/services/plex.zig")
+    pure = _src("src/services/plex_pure.zig")
+    api = _src("src/services/remote_plex_api.zig")
+    web = _src("web/js/media.js")
+    checks = {
+        "documented token-free mutation URL": "watchedMutationUrl" in pure and '"scrobble" else "unscrobble"' in pure,
+        "server uses PUT and header auth": ".method = .PUT" in svc and '"X-Plex-Token: {s}"' in svc,
+        "owned optimistic mutation": "pub fn setWatched" in svc and "spawn(runWatchedMutation" in svc and "rollbackWatched" in svc,
+        "stale rollback guarded": "user_data_gen" in svc and "browse_generation" in svc,
+        "typed web endpoint": '"/plex/action"' in api and '"played"' in api,
+        "accessible web toggle": "plex-watched" in web and "Mark unwatched" in web and "apiMutation('/plex/action" in web,
+        "native toggle": '"Mark watched"' in svc and "setWatched(" in svc,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "Plex watched mutation incomplete: " + ", ".join(missing)
+    return "pass", "Plex watched state is synchronized from native and web"

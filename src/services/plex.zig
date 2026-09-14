@@ -56,6 +56,7 @@ const Item = struct {
     view_offset_ms: i64 = 0,
     duration_ms: i64 = 0,
     view_count: i64 = 0,
+    user_data_gen: u32 = 0,
     media_type: [16]u8 = std.mem.zeroes([16]u8),
     media_type_len: usize = 0,
     is_folder: bool = false,
@@ -721,6 +722,96 @@ pub fn playByRatingKey(rating_key: []const u8) bool {
     return false;
 }
 
+const WatchedMutation = struct {
+    rating_key: [32]u8 = std.mem.zeroes([32]u8),
+    rating_key_len: usize = 0,
+    server: [256]u8 = std.mem.zeroes([256]u8),
+    server_len: usize = 0,
+    token: [128]u8 = std.mem.zeroes([128]u8),
+    token_len: usize = 0,
+    enabled: bool,
+    previous_count: i64,
+    previous_offset_ms: i64,
+    generation: u32,
+    browse_generation: u64,
+};
+
+/// Optimistically update Plex watched state and send the documented PUT on an
+/// owned worker. Generation checks prevent an older failure from undoing a
+/// newer click or state from a different browse page.
+pub fn setWatched(rating_key: []const u8, enabled: bool) bool {
+    if (!isConnected() or !plex_pure.validRatingKey(rating_key)) return false;
+    var request: WatchedMutation = .{
+        .enabled = enabled,
+        .previous_count = 0,
+        .previous_offset_ms = 0,
+        .generation = 0,
+        .browse_generation = view_gen.load(.acquire),
+    };
+    request.server_len = @min(server_uri_len, request.server.len);
+    @memcpy(request.server[0..request.server_len], server_uri[0..request.server_len]);
+    request.token_len = @min(server_token_len, request.token.len);
+    @memcpy(request.token[0..request.token_len], server_token[0..request.token_len]);
+    request.rating_key_len = @min(rating_key.len, request.rating_key.len);
+    @memcpy(request.rating_key[0..request.rating_key_len], rating_key[0..request.rating_key_len]);
+
+    var found = false;
+    for (items[0..item_count]) |*item| {
+        if (!std.mem.eql(u8, item.rating_key[0..item.rating_key_len], rating_key)) continue;
+        request.previous_count = item.view_count;
+        request.previous_offset_ms = item.view_offset_ms;
+        item.user_data_gen +%= 1;
+        request.generation = item.user_data_gen;
+        item.view_count = if (enabled) 1 else 0;
+        if (!enabled) item.view_offset_ms = 0;
+        found = true;
+        break;
+    }
+    if (!found) return false;
+    @import("../core/workers.zig").spawn(runWatchedMutation, .{request}) catch {
+        rollbackWatched(request);
+        return false;
+    };
+    state.wakeUi();
+    return true;
+}
+
+fn rollbackWatched(request: WatchedMutation) void {
+    if (view_gen.load(.acquire) != request.browse_generation) return;
+    for (items[0..item_count]) |*item| {
+        if (item.user_data_gen != request.generation or
+            !std.mem.eql(u8, item.rating_key[0..item.rating_key_len], request.rating_key[0..request.rating_key_len])) continue;
+        item.view_count = request.previous_count;
+        item.view_offset_ms = request.previous_offset_ms;
+        state.wakeUi();
+        return;
+    }
+}
+
+fn runWatchedMutation(value: WatchedMutation) void {
+    var request = value;
+    defer @memset(&request.token, 0);
+    var url_buf: [512]u8 = undefined;
+    const url = plex_pure.watchedMutationUrl(request.server[0..request.server_len], request.rating_key[0..request.rating_key_len], request.enabled, &url_buf) orelse return rollbackWatched(request);
+    var token_header: [160]u8 = undefined;
+    defer @memset(&token_header, 0);
+    const auth = std.fmt.bufPrint(&token_header, "X-Plex-Token: {s}", .{request.token[0..request.token_len]}) catch return rollbackWatched(request);
+    var response: [1024]u8 = undefined;
+    var status: ?std.http.Status = null;
+    _ = @import("../core/http.zig").fetch(url, &response, .{
+        .method = .PUT,
+        .timeout_secs = 10,
+        .auth_header = auth,
+        .status_out = &status,
+    }) orelse {
+        if (status) |code| if (plex_pure.authRejected(@intFromEnum(code))) expireAuthSession();
+        rollbackWatched(request);
+        return;
+    };
+    const code = if (status) |s| @intFromEnum(s) else 0;
+    if (code < 200 or code >= 300) rollbackWatched(request);
+}
+
 fn playResolvedItem(it: Item) void {
     if (it.part_len == 0) {
         state.showToastTyped("No playable part", .warning);
@@ -930,6 +1021,15 @@ pub fn renderContent() void {
                 play(i);
             }
         }
+        if (!it.is_folder and it.rating_key_len > 0 and dvui.button(@src(), if (it.view_count > 0) "Watched" else "Mark watched", .{}, .{
+            .id_extra = i + 91500,
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = if (it.view_count > 0) theme.colors.accent else theme.colors.text_secondary,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
+            .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
+            .gravity_y = 0.5,
+        })) _ = setWatched(it.rating_key[0..it.rating_key_len], it.view_count == 0);
     }
 
     // Infinite scroll: fetch + append the next Container-Start/Size window as

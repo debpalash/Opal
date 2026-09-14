@@ -434,6 +434,7 @@ function renderPlex(d){
         ${r.year ? `<span class="src">${esc(r.year)}</span>` : ''}
         ${browsing && r.type ? `<span class="src">${esc(r.type)}</span>` : ''}
         ${browsing && r.duration ? `<span class="src">${r.played ? 'Watched' : (r.progress ? `${fmt(r.progress)} / ${fmt(r.duration)}` : fmt(r.duration))}</span>` : ''}
+        ${browsing && !r.folder ? `<button class="plex-watched" data-id="${esc(r.id || '')}" data-enabled="${!r.played}" aria-label="${r.played ? 'Mark unwatched' : 'Mark watched'}" title="${r.played ? 'Mark unwatched' : 'Mark watched'}">${r.played ? '&#10003;' : '&#9675;'}</button>` : ''}
         <button class="play" data-i="${i}" data-id="${browsing ? esc(r.id || '') : ''}">${browsing ? (r.folder ? 'Open' : (r.progress && !r.played ? 'Resume' : 'Play')) : 'Open'}</button></div>
       ${items && r.duration && r.progress ? `<div class="plex-progress"><i style="width:${Math.min(100,Math.round(r.progress/r.duration*100))}%"></i></div>` : ''}
     </div>`).join('') || (d.connected ? '<div class="empty">Nothing here</div>' : '');
@@ -444,6 +445,16 @@ function renderPlex(d){
         ? apiMutation('/plex/' + (row.folder ? 'open_item' : 'play') + '?id=' + encodeURIComponent(b.dataset.id))
         : apiMutation('/plex/open?idx=' + b.dataset.i);
       request.catch(()=>{}); pollPlex();
+    };
+  });
+  $('plex-results').querySelectorAll('.plex-watched').forEach(button => {
+    button.onclick = async () => {
+      button.disabled = true;
+      try {
+        await apiMutation('/plex/action?id=' + encodeURIComponent(button.dataset.id) +
+          '&action=played&enabled=' + button.dataset.enabled);
+        pollPlex();
+      } catch (error) { button.disabled = false; toast(error.message || 'Could not update watched state.'); }
     };
   });
 }
