@@ -2508,6 +2508,13 @@ pub fn drainDeferredPlayback() void {
 
 pub fn playDirect(request: PlaybackRequest) void {
     if (request.url.len == 0) return;
+    // Start the end-to-end clock at the shared in-app Play seam. Previously
+    // MediaPlayer.load armed it only after player acquisition, so a cold click
+    // deferred behind configuration/libmpv preparation looked artificially
+    // fast in timing.log even though that wait was visible to the viewer.
+    // Preserve an existing trigger from CLI, single-instance forwarding, or a
+    // superseded rapid click so one user intent still owns the whole pipeline.
+    if (request.mode == .replace and !player.openTriggerArmed()) player.openTriggerNow();
     if (state.app.players.items.len == 0) {
         // Never freeze the click/render thread behind an in-progress prewarm.
         // Its completion wakes appFrame, which drains this owned request.

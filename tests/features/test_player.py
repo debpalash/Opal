@@ -424,6 +424,11 @@ def test_hosted_mode_and_perf():
             and "drainDeferredPlayback()" in _src("src/main.zig")
             and "state.wakeUi();" in _between(_src("src/main.zig"), "state.app.player_prewarm_ready.store", "Deferred voice-backend")
             and "playDirect(owned.playbackRequest())" in _src("src/services/browser.zig"),
+        "in-app timing starts before deferred acquisition": "!player.openTriggerArmed()" in _between(
+            _src("src/services/browser.zig"), "pub fn playDirect(", "if (state.app.players.items.len == 0)"
+        ) and "player.openTriggerNow()" in _between(
+            _src("src/services/browser.zig"), "pub fn playDirect(", "if (state.app.players.items.len == 0)"
+        ),
     }
     missing = [k for k, v in checks.items() if not v]
     if not missing:
