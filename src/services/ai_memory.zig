@@ -400,14 +400,35 @@ pub fn getResumeTarget(url_buf: []u8) ?struct { url: []const u8, position: f64 }
 // Preference Learning
 // ══════════════════════════════════════════════════════════
 
-/// Increment preference weight for a key (e.g., genre, time_of_day)
+const PreferenceUpdate = struct {
+    key: [64]u8 = undefined,
+    key_len: usize = 0,
+    value: [128]u8 = undefined,
+    value_len: usize = 0,
+};
+
+/// Increment preference weight without putting SQLite on the playback/UI
+/// path. Preference learning is lossy enrichment, so a saturated/shutting-down
+/// worker supervisor may safely drop it. The sink-level incognito check keeps
+/// callers from accidentally persisting private activity.
 pub fn learnPreference(key: []const u8, value: []const u8) void {
+    const workers = @import("../core/workers.zig");
+    if (@import("../core/state.zig").app.incognito_mode or workers.isQuitting() or key.len == 0 or value.len == 0) return;
+    var update: PreferenceUpdate = .{};
+    update.key_len = @min(key.len, update.key.len);
+    update.value_len = @min(value.len, update.value.len);
+    @memcpy(update.key[0..update.key_len], key[0..update.key_len]);
+    @memcpy(update.value[0..update.value_len], value[0..update.value_len]);
+    workers.spawn(learnPreferenceWorker, .{update}) catch {};
+}
+
+fn learnPreferenceWorker(update: PreferenceUpdate) void {
     const sql = "INSERT INTO user_preferences(key, value, weight, updated_at) VALUES(?1, ?2, 1.0, strftime('%s','now')) " ++
         "ON CONFLICT(key) DO UPDATE SET weight = weight + 1.0, value = ?2, updated_at = strftime('%s','now')";
     const stmt = db.prepare(sql) orelse return;
     defer db.finalize(stmt);
-    db.bindText(stmt, 1, key);
-    db.bindText(stmt, 2, value);
+    db.bindText(stmt, 1, update.key[0..update.key_len]);
+    db.bindText(stmt, 2, update.value[0..update.value_len]);
     _ = db.step(stmt);
 }
 

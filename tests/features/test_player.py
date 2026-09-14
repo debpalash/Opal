@@ -429,6 +429,10 @@ def test_hosted_mode_and_perf():
         ) and "player.openTriggerNow()" in _between(
             _src("src/services/browser.zig"), "pub fn playDirect(", "if (state.app.players.items.len == 0)"
         ),
+        "playback preference write is asynchronous": "workers.spawn(learnPreferenceWorker" in _src("src/services/ai_memory.zig")
+            and 'core/state.zig").app.incognito_mode' in _between(
+                _src("src/services/ai_memory.zig"), "pub fn learnPreference(", "fn learnPreferenceWorker("
+            ),
     }
     missing = [k for k, v in checks.items() if not v]
     if not missing:
