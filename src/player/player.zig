@@ -140,6 +140,7 @@ const PositionSnapshot = struct {
     season: i32 = 0,
     episode: i32 = 0,
     played_seconds: f64 = 0,
+    catalog_movie_tmdb_id: i32 = 0,
 };
 
 const PositionSaveJob = struct {
@@ -228,7 +229,7 @@ fn writePositionSave(job: PositionSaveJob) void {
     // defense if a queued item was superseded while its predecessor was active.
     if (!position_save_pure.accept(&position_save_stamps, &position_save_stamp_cursor, identity_hash, job.sequence)) return;
 
-    @import("../services/history.zig").savePlaybackPositionBackground(identity, snapshot.position, snapshot.duration);
+    @import("../services/history.zig").savePlaybackPositionBackground(identity, snapshot.position, snapshot.duration, snapshot.catalog_movie_tmdb_id);
     @import("../services/server_progress.zig").submit(identity, snapshot.position, snapshot.duration, job.force_remote);
     if (snapshot.episode_active) {
         @import("../core/db.zig").tvSavePosition(
@@ -1607,6 +1608,8 @@ pub const MediaPlayer = struct {
             snapshot.season = pe.season;
             snapshot.episode = pe.episode;
             snapshot.played_seconds = pe.played_seconds;
+        } else if (self.catalog_tmdb_id > 0) {
+            snapshot.catalog_movie_tmdb_id = self.catalog_tmdb_id;
         }
         return snapshot;
     }
@@ -2808,6 +2811,11 @@ pub fn updateTorrentBackgroundTasks() void {
                                 p.catalog_sample_pos = newpos;
                                 if (@import("../services/tmdb_pure.zig").watchCommitDue(newpos, p.cached_duration, p.catalog_played_seconds) and isActivePlayer(p)) {
                                     p.catalog_movie_committed = true;
+                                    const history_identity = if (p.history_identity_len > 0)
+                                        p.history_identity[0..p.history_identity_len]
+                                    else
+                                        p.current_url[0..p.current_url_len];
+                                    @import("watch_history.zig").bindCatalogMovie(history_identity, p.catalog_tmdb_id);
                                     @import("../services/trakt.zig").markWatchedMovie(p.catalog_tmdb_id);
                                     @import("../services/simkl.zig").markWatchedMovie(p.catalog_tmdb_id);
                                 }
@@ -3128,7 +3136,7 @@ pub fn updateTorrentBackgroundTasks() void {
                         var dur_s: f64 = 0;
                         _ = c.mpv.mpv_get_property(p.mpv_ctx, "time-pos", c.mpv.MPV_FORMAT_DOUBLE, &pos_s);
                         _ = c.mpv.mpv_get_property(p.mpv_ctx, "duration", c.mpv.MPV_FORMAT_DOUBLE, &dur_s);
-                        watch.savePositionFull(t_name3[0..n3_len], percent_pos, pos_s, dur_s, p.source_url[0..p.source_url_len]);
+                        watch.savePositionFull(t_name3[0..n3_len], percent_pos, pos_s, dur_s, p.source_url[0..p.source_url_len], p.catalog_tmdb_id);
                     }
                 }
             }

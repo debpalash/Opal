@@ -88,17 +88,17 @@ pub fn saveSearchHistory() void {
 /// Local files are keyed by their absolute path (file identity — survives a
 /// relative-path or file:// re-open); streams keep the URL as key.
 pub fn savePlaybackPosition(url: []const u8, position: f64, duration: f64) void {
-    savePlaybackPositionImpl(url, position, duration, true);
+    savePlaybackPositionImpl(url, position, duration, true, 0);
 }
 
 /// Ordered player persistence workers already publish taste progress on the
 /// caller/UI side. This variant performs only the durable row update, avoiding
 /// cross-thread mutation of activity's current-item tracker.
-pub fn savePlaybackPositionBackground(url: []const u8, position: f64, duration: f64) void {
-    savePlaybackPositionImpl(url, position, duration, false);
+pub fn savePlaybackPositionBackground(url: []const u8, position: f64, duration: f64, catalog_tmdb_id: i32) void {
+    savePlaybackPositionImpl(url, position, duration, false, catalog_tmdb_id);
 }
 
-fn savePlaybackPositionImpl(url: []const u8, position: f64, duration: f64, publish_activity: bool) void {
+fn savePlaybackPositionImpl(url: []const u8, position: f64, duration: f64, publish_activity: bool, catalog_tmdb_id: i32) void {
     if (state.app.incognito_mode) return;
     if (url.len == 0 or url.len >= 2048 or duration < 5) return;
 
@@ -125,8 +125,9 @@ fn savePlaybackPositionImpl(url: []const u8, position: f64, duration: f64, publi
     const name = if (file_key.len > 0 and file_key.len < 2048) file_key else persisted.identity;
     const reopen = if (file_key.len > 0) name else persisted.reopen;
 
-    const sql = "INSERT INTO watch_history (name, percent, position_secs, duration_secs, file_key, link) VALUES (?1, ?2, ?3, ?4, ?5, ?6) " ++
-        "ON CONFLICT(name) DO UPDATE SET percent=?2, position_secs=?3, duration_secs=?4, file_key=?5, link=?6, updated_at=strftime('%s','now')";
+    const sql = "INSERT INTO watch_history (name, percent, position_secs, duration_secs, file_key, link, catalog_tmdb_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) " ++
+        "ON CONFLICT(name) DO UPDATE SET percent=?2, position_secs=?3, duration_secs=?4, file_key=?5, link=?6, " ++
+        "catalog_tmdb_id=CASE WHEN ?7 > 0 THEN ?7 ELSE catalog_tmdb_id END, updated_at=strftime('%s','now')";
     const stmt = db.prepare(sql) orelse return;
     defer db.finalize(stmt);
     db.bindText(stmt, 1, name);
@@ -135,6 +136,7 @@ fn savePlaybackPositionImpl(url: []const u8, position: f64, duration: f64, publi
     db.bindDouble(stmt, 4, duration);
     db.bindText(stmt, 5, file_key);
     db.bindText(stmt, 6, reopen);
+    db.bindInt(stmt, 7, @max(0, catalog_tmdb_id));
     _ = db.step(stmt);
 }
 

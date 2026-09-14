@@ -6,7 +6,6 @@ const pure = @import("watch_history_pure.zig");
 
 /// Watch history: remembers playback position for each torrent.
 /// SQLite-backed with in-memory cache for fast lookups during playback.
-
 pub const MAX_WATCH_HISTORY: usize = 200;
 pub const MAX_NAME_LEN: usize = 256;
 pub const MAX_LINK_LEN: usize = 4096;
@@ -19,6 +18,7 @@ pub const WatchEntry = struct {
     percent: f64 = 0.0,
     position_secs: f64 = 0.0,
     duration_secs: f64 = 0.0,
+    catalog_tmdb_id: i32 = 0,
 };
 
 // ══════════════════════════════════════════════════════════
@@ -28,7 +28,7 @@ pub const WatchEntry = struct {
 /// v1 (implicit, user_version 0): name/percent/link — percent keyed by title.
 /// v2: + position_secs, duration_secs, file_key (absolute filesystem path for
 /// local files; '' for streams/torrents, which keep the legacy name key).
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 /// Upgrade an existing DB in place. Versioned via PRAGMA user_version; the
 /// ALTERs are additionally idempotent (db.exec swallows duplicate-column
@@ -45,6 +45,13 @@ pub fn migrateSchema() void {
     db.exec("ALTER TABLE watch_history ADD COLUMN position_secs REAL DEFAULT 0");
     db.exec("ALTER TABLE watch_history ADD COLUMN duration_secs REAL DEFAULT 0");
     db.exec("ALTER TABLE watch_history ADD COLUMN file_key TEXT DEFAULT ''");
+    db.exec("ALTER TABLE watch_history ADD COLUMN catalog_tmdb_id INTEGER NOT NULL DEFAULT 0");
+    if (db.tableExists("watch_history_backup")) {
+        db.exec("ALTER TABLE watch_history_backup ADD COLUMN position_secs REAL DEFAULT 0");
+        db.exec("ALTER TABLE watch_history_backup ADD COLUMN duration_secs REAL DEFAULT 0");
+        db.exec("ALTER TABLE watch_history_backup ADD COLUMN file_key TEXT DEFAULT ''");
+        db.exec("ALTER TABLE watch_history_backup ADD COLUMN catalog_tmdb_id INTEGER NOT NULL DEFAULT 0");
+    }
     // Backfill file identity for rows whose legacy name key was already a
     // local path — those resume path-keyed immediately, no data loss.
     db.exec("UPDATE watch_history SET file_key = name WHERE file_key = '' AND name LIKE '/%'");
@@ -63,7 +70,7 @@ pub fn migrateSchema() void {
         // URLs. The stable item id is sufficient to reconstruct both at use.
         db.exec("UPDATE library_items SET poster='', deep_link=item_id WHERE kind='audiobook'");
     }
-    db.exec("PRAGMA user_version = 3");
+    db.exec("PRAGMA user_version = 4");
 }
 
 /// One-time v3 privacy migration. It preserves resume percentages/seconds but
@@ -312,12 +319,12 @@ pub fn savePosition(name: []const u8, percent: f64, link: []const u8) void {
     db.bindText(stmt, 4, file_key);
     _ = db.step(stmt);
 
-    updateCache(safe_name, percent, null, null, safe_link);
+    updateCache(safe_name, percent, null, null, safe_link, null);
 }
 
 /// Save a seconds-accurate watch position (plus percent for UI that reads it).
 /// Same keying and cadence as savePosition, just richer data.
-pub fn savePositionFull(name: []const u8, percent: f64, position_secs: f64, duration_secs: f64, link: []const u8) void {
+pub fn savePositionFull(name: []const u8, percent: f64, position_secs: f64, duration_secs: f64, link: []const u8, catalog_tmdb_id: i32) void {
     if (state.app.incognito_mode) return;
     if (name.len == 0 or name.len >= MAX_NAME_LEN) return;
     if (percent < 0.5) return;
@@ -331,11 +338,12 @@ pub fn savePositionFull(name: []const u8, percent: f64, position_secs: f64, dura
     var key_buf: [MAX_LINK_LEN]u8 = undefined;
     const file_key = resolveFileKey(link, &key_buf);
 
-    const sql = "INSERT INTO watch_history (name, percent, position_secs, duration_secs, link, file_key, updated_at) " ++
-        "VALUES (?1, ?2, ?3, ?4, ?5, ?6, strftime('%s','now')) " ++
+    const sql = "INSERT INTO watch_history (name, percent, position_secs, duration_secs, link, file_key, catalog_tmdb_id, updated_at) " ++
+        "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, strftime('%s','now')) " ++
         "ON CONFLICT(name) DO UPDATE SET percent=excluded.percent, position_secs=excluded.position_secs, " ++
         "duration_secs=excluded.duration_secs, link=excluded.link, " ++
-        "file_key=CASE WHEN excluded.file_key <> '' THEN excluded.file_key ELSE file_key END, updated_at=strftime('%s','now')";
+        "file_key=CASE WHEN excluded.file_key <> '' THEN excluded.file_key ELSE file_key END, " ++
+        "catalog_tmdb_id=CASE WHEN excluded.catalog_tmdb_id > 0 THEN excluded.catalog_tmdb_id ELSE catalog_tmdb_id END, updated_at=strftime('%s','now')";
     const stmt = db.prepare(sql) orelse return;
     defer db.finalize(stmt);
     db.bindText(stmt, 1, safe_name);
@@ -344,9 +352,10 @@ pub fn savePositionFull(name: []const u8, percent: f64, position_secs: f64, dura
     db.bindDouble(stmt, 4, duration_secs);
     db.bindText(stmt, 5, safe_link);
     db.bindText(stmt, 6, file_key);
+    db.bindInt(stmt, 7, @max(0, catalog_tmdb_id));
     _ = db.step(stmt);
 
-    updateCache(safe_name, percent, position_secs, duration_secs, safe_link);
+    updateCache(safe_name, percent, position_secs, duration_secs, safe_link, if (catalog_tmdb_id > 0) catalog_tmdb_id else null);
 
     // Mirror into the unified read-model (services/library_store) so the home
     // "Continue" rail spans every vertical, not just TMDB. Keyed by the file
@@ -356,13 +365,14 @@ pub fn savePositionFull(name: []const u8, percent: f64, position_secs: f64, dura
 
 /// Update (or insert at front of) the in-memory cache. Null seconds leave the
 /// cached seconds untouched, mirroring the percent-only SQL above.
-fn updateCache(name: []const u8, percent: f64, position_secs: ?f64, duration_secs: ?f64, link: []const u8) void {
+fn updateCache(name: []const u8, percent: f64, position_secs: ?f64, duration_secs: ?f64, link: []const u8, catalog_tmdb_id: ?i32) void {
     for (0..count) |i| {
         const existing = entries[i].name[0..entries[i].name_len];
         if (std.mem.eql(u8, existing, name)) {
             entries[i].percent = percent;
             if (position_secs) |p| entries[i].position_secs = p;
             if (duration_secs) |d| entries[i].duration_secs = d;
+            if (catalog_tmdb_id) |id| entries[i].catalog_tmdb_id = id;
             entries[i].link_len = 0;
             if (link.len > 0 and link.len < MAX_LINK_LEN) {
                 @memcpy(entries[i].link[0..link.len], link);
@@ -384,6 +394,7 @@ fn updateCache(name: []const u8, percent: f64, position_secs: ?f64, duration_sec
     entries[0].percent = percent;
     entries[0].position_secs = position_secs orelse 0;
     entries[0].duration_secs = duration_secs orelse 0;
+    entries[0].catalog_tmdb_id = catalog_tmdb_id orelse 0;
     if (link.len > 0 and link.len < MAX_LINK_LEN) {
         @memcpy(entries[0].link[0..link.len], link);
         entries[0].link_len = link.len;
@@ -411,10 +422,32 @@ pub fn getEntry(name: []const u8) ?*const WatchEntry {
     return null;
 }
 
+/// Attach verified catalog identity to an already-created resume row. Called
+/// on the UI thread at movie completion so the live cache and durable row agree
+/// immediately; provider URLs and release titles are never guessed into IDs.
+pub fn bindCatalogMovie(identity: []const u8, tmdb_id: i32) void {
+    if (identity.len == 0 or tmdb_id <= 0) return;
+    var safe_buf: [MAX_LINK_LEN]u8 = undefined;
+    const safe = pure.persistedTarget(identity, &safe_buf);
+    const stmt = db.prepare("UPDATE watch_history SET catalog_tmdb_id=?1 WHERE name=?2 OR link=?3") orelse return;
+    defer db.finalize(stmt);
+    db.bindInt(stmt, 1, tmdb_id);
+    db.bindText(stmt, 2, safe.identity);
+    db.bindText(stmt, 3, safe.reopen);
+    _ = db.step(stmt);
+    for (entries[0..count]) |*entry| {
+        const name = entry.name[0..entry.name_len];
+        const link = entry.link[0..entry.link_len];
+        if (std.mem.eql(u8, name, safe.identity) or std.mem.eql(u8, link, safe.reopen))
+            entry.catalog_tmdb_id = tmdb_id;
+    }
+}
+
 /// Remove an entry.
 pub fn remove(idx: usize) void {
     if (idx >= count) return;
     const name = entries[idx].name[0..entries[idx].name_len];
+    const catalog_tmdb_id = entries[idx].catalog_tmdb_id;
 
     // Delete from DB
     const sql = "DELETE FROM watch_history WHERE name = ?1";
@@ -422,6 +455,11 @@ pub fn remove(idx: usize) void {
     defer db.finalize(stmt);
     db.bindText(stmt, 1, name);
     _ = db.step(stmt);
+
+    if (catalog_tmdb_id > 0) {
+        @import("../services/trakt.zig").markUnwatchedMovie(catalog_tmdb_id);
+        @import("../services/simkl.zig").markUnwatchedMovie(catalog_tmdb_id);
+    }
 
     // Remove from cache
     var i: usize = idx;
@@ -475,7 +513,7 @@ pub fn restoreBackup() void {
 pub fn load() void {
     init();
 
-    const sql = "SELECT name, percent, link, position_secs, duration_secs FROM watch_history WHERE percent >= 0.5 ORDER BY updated_at DESC LIMIT 200";
+    const sql = "SELECT name, percent, link, position_secs, duration_secs, catalog_tmdb_id FROM watch_history WHERE percent >= 0.5 ORDER BY updated_at DESC LIMIT 200";
     const stmt = db.prepare(sql) orelse return;
     defer db.finalize(stmt);
 
@@ -501,6 +539,7 @@ pub fn load() void {
 
         entries[idx].position_secs = db.columnDouble(stmt, 3);
         entries[idx].duration_secs = db.columnDouble(stmt, 4);
+        entries[idx].catalog_tmdb_id = @max(0, db.columnInt(stmt, 5));
 
         count += 1;
     }
@@ -526,18 +565,27 @@ pub fn exportJson() void {
         json.appendSlice(alloc, "{\"name\":\"") catch return;
         // Escape name for JSON
         for (entries[i].name[0..entries[i].name_len]) |ch| {
-            if (ch == '"') { json.appendSlice(alloc, "\\\"") catch return; }
-            else if (ch == '\\') { json.appendSlice(alloc, "\\\\") catch return; }
-            else if (ch == '\n') { json.appendSlice(alloc, "\\n") catch return; }
-            else { json.append(alloc, ch) catch return; }
+            if (ch == '"') {
+                json.appendSlice(alloc, "\\\"") catch return;
+            } else if (ch == '\\') {
+                json.appendSlice(alloc, "\\\\") catch return;
+            } else if (ch == '\n') {
+                json.appendSlice(alloc, "\\n") catch return;
+            } else {
+                json.append(alloc, ch) catch return;
+            }
         }
         var pct_buf: [32]u8 = undefined;
         const pct_str = std.fmt.bufPrint(&pct_buf, "\",\"percent\":{d:.2},\"link\":\"", .{entries[i].percent}) catch continue;
         json.appendSlice(alloc, pct_str) catch return;
         for (entries[i].link[0..entries[i].link_len]) |ch| {
-            if (ch == '"') { json.appendSlice(alloc, "\\\"") catch return; }
-            else if (ch == '\\') { json.appendSlice(alloc, "\\\\") catch return; }
-            else { json.append(alloc, ch) catch return; }
+            if (ch == '"') {
+                json.appendSlice(alloc, "\\\"") catch return;
+            } else if (ch == '\\') {
+                json.appendSlice(alloc, "\\\\") catch return;
+            } else {
+                json.append(alloc, ch) catch return;
+            }
         }
         json.appendSlice(alloc, "\"}") catch return;
     }

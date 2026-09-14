@@ -180,6 +180,33 @@ def watch_items_are_removable():
     return "pass", "history rows remove individually; posters can leave Continue Watching"
 
 
+@test("Verified movie history removal synchronizes by catalog identity", "Library")
+def movie_history_removal_sync():
+    db = _src("src/core/db.zig")
+    wh = _src("src/player/watch_history.zig")
+    player = _src("src/player/player.zig")
+    history = _src("src/services/history.zig")
+    trakt = _src("src/services/trakt.zig")
+    simkl = _src("src/services/simkl.zig")
+    checks = {
+        "catalog id persisted": "catalog_tmdb_id INTEGER" in db
+            and "catalog_tmdb_id" in history and "catalog_movie_tmdb_id" in player,
+        "verified identity bound": "bindCatalogMovie(history_identity, p.catalog_tmdb_id)" in player
+            and "pub fn bindCatalogMovie" in wh,
+        "native removal syncs": "markUnwatchedMovie(catalog_tmdb_id)" in wh,
+        "trakt removal": "pub fn markUnwatchedMovie" in trakt
+            and '"/sync/history/remove"' in trakt,
+        "simkl removal": "pub fn markUnwatchedMovie" in simkl
+            and '"/sync/history/remove"' in simkl,
+        "latest state wins": 'enqueueState("trakt", operation' in trakt
+            and 'enqueueState("simkl", operation' in simkl,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "movie history removal sync incomplete: " + ", ".join(missing)
+    return "pass", "verified movie identity survives history persistence and drives exact provider removal"
+
+
 @test("Card action row is never clipped out of its own card", "Library")
 def card_action_row_fits():
     """The Watching page's Play and Remove controls were squeezed to zero height.

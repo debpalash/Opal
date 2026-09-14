@@ -188,12 +188,21 @@ fn setEpisodeWatched(show_tmdb: i32, season: i32, episode: i32, watched: bool) v
 
 /// Mark a movie watched in the user's Trakt history.
 pub fn markWatchedMovie(tmdb_id: i32) void {
+    setMovieWatched(tmdb_id, true);
+}
+
+pub fn markUnwatchedMovie(tmdb_id: i32) void {
+    setMovieWatched(tmdb_id, false);
+}
+
+fn setMovieWatched(tmdb_id: i32, watched: bool) void {
     if (!isConnected()) return;
     var body: [128]u8 = undefined;
     const payload = std.fmt.bufPrint(&body, "{{\"movies\":[{{\"ids\":{{\"tmdb\":{d}}}}}]}}", .{tmdb_id}) catch return;
     var key_buf: [32]u8 = undefined;
     const key = std.fmt.bufPrint(&key_buf, "movie:{d}", .{tmdb_id}) catch return;
-    if (outbox.enqueue("trakt", "history", key, payload)) kickOutbox();
+    const operation = if (watched) "history" else "history_remove";
+    if (outbox.enqueueState("trakt", operation, key, payload)) kickOutbox();
 }
 
 pub fn pendingCount() usize {

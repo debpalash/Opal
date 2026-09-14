@@ -1830,8 +1830,8 @@ def movie_completion_sync():
         "one completion per load": "catalog_movie_committed" in player
             and "p.catalog_movie_committed = true" in player,
         "both account providers": "markWatchedMovie(p.catalog_tmdb_id)" in player
-            and 'outbox.enqueue("trakt", "history"' in trakt
-            and 'outbox.enqueue("simkl", "history"' in simkl,
+            and 'outbox.enqueueState("trakt", operation' in trakt
+            and 'outbox.enqueueState("simkl", operation' in simkl,
         "pure seek guard": "played >= duration * 0.9" in pure,
     }
     missing = [name for name, ok in checks.items() if not ok]

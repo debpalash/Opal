@@ -345,8 +345,8 @@ def test_taste_receipts():
     return "fail", "taste receipts not fully wired"
 
 
-@test("Exact resume: schema v3 + path keying", "Database")
-def test_exact_resume_schema_v3():
+@test("Exact resume: schema v4 + path and catalog identity", "Database")
+def test_exact_resume_schema_v4():
     # Replays the shipped v1→v2 migration (player/watch_history.zig
     # migrateSchema) against a scratch sqlite seeded with the LEGACY schema:
     # existing percent-keyed rows must survive, gain position_secs /
@@ -370,15 +370,18 @@ def test_exact_resume_schema_v3():
     # Legacy v1 schema — pre-seconds, pre-file_key.
     conn.execute("CREATE TABLE watch_history (name TEXT PRIMARY KEY, percent REAL DEFAULT 0, "
                  "link TEXT DEFAULT '', updated_at INTEGER DEFAULT (strftime('%s','now')))")
-    # createTables() creates this before migrateSchema(); v3 scrubs its legacy URLs.
+    # createTables() creates these before migrateSchema(); v3 scrubs legacy URLs
+    # and v4 keeps a cleared-history backup shape-compatible for restoration.
     conn.execute("CREATE TABLE library_items (kind TEXT, item_id TEXT, poster TEXT DEFAULT '', deep_link TEXT DEFAULT '')")
+    conn.execute("CREATE TABLE watch_history_backup (name TEXT PRIMARY KEY, percent REAL DEFAULT 0, "
+                 "link TEXT DEFAULT '', updated_at INTEGER DEFAULT (strftime('%s','now')))")
     conn.execute("INSERT INTO watch_history (name, percent, link) VALUES ('/Users/x/Movies/Foo.mkv', 42.0, '')")
     conn.execute("INSERT INTO watch_history (name, percent, link) VALUES ('file:///Users/x/Bar.mkv', 10.0, '')")
     conn.execute("INSERT INTO watch_history (name, percent, link) VALUES ('Some.Torrent.1080p', 55.0, 'magnet:?xt=abc')")
     for s in stmts:
         conn.execute(s)  # shipped statements must run verbatim on a v1 DB
     cols = [r[1] for r in conn.execute("PRAGMA table_info(watch_history)")]
-    for col in ("position_secs", "duration_secs", "file_key"):
+    for col in ("position_secs", "duration_secs", "file_key", "catalog_tmdb_id"):
         if col not in cols:
             return "fail", f"column {col} missing after migration"
     rows = dict(conn.execute("SELECT name, file_key FROM watch_history"))
@@ -390,8 +393,11 @@ def test_exact_resume_schema_v3():
         return "fail", "torrent row must keep the legacy name key (empty file_key)"
     if conn.execute("SELECT COUNT(*) FROM watch_history").fetchone()[0] != 3:
         return "fail", "migration lost rows"
-    if conn.execute("PRAGMA user_version").fetchone()[0] != 3:
-        return "fail", "user_version not stamped to 3"
+    if conn.execute("PRAGMA user_version").fetchone()[0] != 4:
+        return "fail", "user_version not stamped to 4"
+    backup_cols = [r[1] for r in conn.execute("PRAGMA table_info(watch_history_backup)")]
+    if not all(col in backup_cols for col in ("position_secs", "duration_secs", "file_key", "catalog_tmdb_id")):
+        return "fail", "history backup not kept schema-compatible"
     conn.close()
 
     # Wiring: pure module registered + routed; resume UIs reuse formatDuration.

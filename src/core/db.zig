@@ -174,6 +174,7 @@ fn createTables() void {
         \\  percent REAL DEFAULT 0,
         \\  position_secs REAL DEFAULT 0,
         \\  duration_secs REAL DEFAULT 0,
+        \\  catalog_tmdb_id INTEGER NOT NULL DEFAULT 0,
         \\  file_key TEXT DEFAULT '',
         \\  link TEXT DEFAULT '',
         \\  updated_at INTEGER DEFAULT (strftime('%s','now'))

@@ -243,12 +243,21 @@ fn setEpisodeWatched(tmdb_id: i32, season: i32, episode: i32, watched: bool) voi
 }
 
 pub fn markWatchedMovie(tmdb_id: i32) void {
+    setMovieWatched(tmdb_id, true);
+}
+
+pub fn markUnwatchedMovie(tmdb_id: i32) void {
+    setMovieWatched(tmdb_id, false);
+}
+
+fn setMovieWatched(tmdb_id: i32, watched: bool) void {
     if (!enabled.load(.acquire) or tmdb_id <= 0) return;
     var body: [160]u8 = undefined;
     const payload = std.fmt.bufPrint(&body, "{{\"movies\":[{{\"ids\":{{\"tmdb\":\"{d}\"}}}}]}}", .{tmdb_id}) catch return;
     var key_buf: [40]u8 = undefined;
     const key = std.fmt.bufPrint(&key_buf, "movie:{d}", .{tmdb_id}) catch return;
-    if (outbox.enqueue("simkl", "history", key, payload)) kickOutbox();
+    const operation = if (watched) "history" else "history_remove";
+    if (outbox.enqueueState("simkl", operation, key, payload)) kickOutbox();
 }
 
 pub fn pendingCount() usize {
