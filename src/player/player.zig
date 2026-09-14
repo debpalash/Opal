@@ -148,12 +148,22 @@ const PositionSaveJob = struct {
     sequence: u64,
 };
 
+const POSITION_SAVE_QUEUE_CAP: usize = 16;
 const position_save_pure = @import("position_save_pure.zig");
 var position_save_sequence = std.atomic.Value(u64).init(0);
 var position_save_pending = std.atomic.Value(u32).init(0);
-var position_save_mutex: @import("../core/sync.zig").Mutex = .{};
+var position_save_queue: [POSITION_SAVE_QUEUE_CAP]PositionSaveJob = undefined;
+var position_save_queue_head: usize = 0;
+var position_save_queue_count: usize = 0;
+var position_save_worker_active: bool = false;
+var position_save_queue_mutex: @import("../core/sync.zig").Mutex = .{};
 var position_save_stamps: [16]position_save_pure.Stamp = [_]position_save_pure.Stamp{.{}} ** 16;
 var position_save_stamp_cursor: usize = 0;
+
+fn samePositionIdentity(a: PositionSnapshot, b: PositionSnapshot) bool {
+    return a.identity_len == b.identity_len and
+        std.mem.eql(u8, a.identity[0..a.identity_len], b.identity[0..b.identity_len]);
+}
 
 fn persistPositionSnapshot(snapshot: PositionSnapshot, force_remote: bool) void {
     if (state.app.incognito_mode or snapshot.identity_len == 0) return;
@@ -168,24 +178,53 @@ fn persistPositionSnapshot(snapshot: PositionSnapshot, force_remote: bool) void 
         .force_remote = force_remote,
         .sequence = position_save_sequence.fetchAdd(1, .acq_rel) + 1,
     };
-    _ = position_save_pending.fetchAdd(1, .acq_rel);
-    @import("../core/workers.zig").spawn(positionSaveWorker, .{job}) catch {
+
+    var start_worker = false;
+    position_save_queue_mutex.lock();
+    var coalesced = false;
+    for (0..position_save_queue_count) |offset| {
+        const index = (position_save_queue_head + offset) % POSITION_SAVE_QUEUE_CAP;
+        if (!samePositionIdentity(position_save_queue[index].snapshot, snapshot)) continue;
+        const preserve_force = position_save_queue[index].force_remote;
+        position_save_queue[index] = job;
+        position_save_queue[index].force_remote = preserve_force or force_remote;
+        coalesced = true;
+        break;
+    }
+    if (!coalesced) {
+        if (position_save_queue_count < POSITION_SAVE_QUEUE_CAP) {
+            const tail = (position_save_queue_head + position_save_queue_count) % POSITION_SAVE_QUEUE_CAP;
+            position_save_queue[tail] = job;
+            position_save_queue_count += 1;
+            _ = position_save_pending.fetchAdd(1, .acq_rel);
+        } else {
+            // Keep memory and worker use fixed under pathological rapid media
+            // switching. The newest resume point is more useful than the
+            // oldest queued one, and the in-flight save remains untouched.
+            position_save_queue[position_save_queue_head] = job;
+        }
+    }
+    if (!position_save_worker_active) {
+        position_save_worker_active = true;
+        start_worker = true;
+    }
+    position_save_queue_mutex.unlock();
+
+    if (!start_worker) return;
+    @import("../core/workers.zig").spawn(positionSaveDrainWorker, .{}) catch {
         // Resource exhaustion is exceptional; preserve resume correctness even
-        // then, accepting a synchronous fallback instead of dropping progress.
-        positionSaveWorker(job);
+        // then. The active latch makes this caller the sole synchronous drainer.
+        positionSaveDrainWorker();
     };
 }
 
-fn positionSaveWorker(job: PositionSaveJob) void {
-    defer _ = position_save_pending.fetchSub(1, .acq_rel);
+fn writePositionSave(job: PositionSaveJob) void {
     const snapshot = job.snapshot;
     const identity = snapshot.identity[0..snapshot.identity_len];
     const identity_hash = std.hash.Wyhash.hash(0, identity);
 
-    // Serialize resume stores and reject an older worker that happened to win
-    // thread scheduling after a newer save for the same media identity.
-    position_save_mutex.lock();
-    defer position_save_mutex.unlock();
+    // The single drainer serializes stores. Keep the sequence gate as a final
+    // defense if a queued item was superseded while its predecessor was active.
     if (!position_save_pure.accept(&position_save_stamps, &position_save_stamp_cursor, identity_hash, job.sequence)) return;
 
     @import("../services/history.zig").savePlaybackPositionBackground(identity, snapshot.position, snapshot.duration);
@@ -204,6 +243,26 @@ fn positionSaveWorker(job: PositionSaveJob) void {
             snapshot.episode,
             snapshot.played_seconds,
         );
+    }
+}
+
+fn positionSaveDrainWorker() void {
+    while (true) {
+        position_save_queue_mutex.lock();
+        if (position_save_queue_count == 0) {
+            // Publish idle while holding the producer lock. An enqueue can now
+            // either be observed by us or take responsibility for a new worker.
+            position_save_worker_active = false;
+            position_save_queue_mutex.unlock();
+            return;
+        }
+        const job = position_save_queue[position_save_queue_head];
+        position_save_queue_head = (position_save_queue_head + 1) % POSITION_SAVE_QUEUE_CAP;
+        position_save_queue_count -= 1;
+        position_save_queue_mutex.unlock();
+
+        writePositionSave(job);
+        _ = position_save_pending.fetchSub(1, .acq_rel);
     }
 }
 

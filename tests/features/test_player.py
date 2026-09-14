@@ -439,8 +439,11 @@ def test_hosted_mode_and_perf():
             pl, "pub fn load(self: *MediaPlayer", "pub fn commitPlayback(self: *MediaPlayer"
         ).index("persistPositionSnapshot(snapshot, true)")
             and "const previous_position = self.captureCurrentPosition();" in pl,
-        "resume persistence is ordered off-thread": "spawn(positionSaveWorker" in pl
-            and "position_save_mutex.lock();" in pl
+        "resume persistence is bounded and coalesced off-thread": "spawn(positionSaveDrainWorker" in pl
+            and "POSITION_SAVE_QUEUE_CAP" in pl
+            and "samePositionIdentity(" in pl
+            and "position_save_worker_active = false;" in pl
+            and "position_save_queue_mutex.lock();" in pl
             and "position_save_pure.accept(" in pl
             and "savePlaybackPositionBackground(" in _src("src/services/history.zig")
             and "flushPositionSavesForShutdown(150);" in _src("src/main.zig")
