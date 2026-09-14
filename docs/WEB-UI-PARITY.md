@@ -64,12 +64,12 @@ happy-path button does not cover every operation behind that native page.
 - [x] Home recommendations with refresh and playable handoff
 - [x] Cast scan, device selection, active state, and stop
 - [x] Rotate and flip from Now Playing
-- [ ] One merged search result model across torrent, TMDB, YouTube, anime,
+- [x] One merged search result model across torrent, TMDB, YouTube, anime,
       Jellyfin, Plex, local/server libraries, and installed plugins
       - Native and web now share the resolver's ranked, stale-while-revalidate
         result stream and opaque, generation-checked actions. Connected Plex
-        and typed catalog rows now participate; installed-plugin result adapters
-        remain to finish it.
+        and typed catalog rows now participate. Installed plugins fan out with
+        bounded execution, exact-content trust, and stable opaque actions.
 - [x] Open or queue an arbitrary URL/magnet with an optional title
 - [x] Watch-party status, peer count, chat history/send, host, join, and leave
 - [ ] Consistent Play here / Play on Opal / Queue actions on every playable card

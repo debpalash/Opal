@@ -61,6 +61,8 @@ pub const PluginResult = struct {
 
 // ── Plugin Manifest ──
 pub const Plugin = struct {
+    id: [64]u8 = std.mem.zeroes([64]u8),
+    id_len: usize = 0,
     name: [64]u8 = std.mem.zeroes([64]u8),
     name_len: usize = 0,
     version: [16]u8 = std.mem.zeroes([16]u8),
@@ -168,54 +170,9 @@ pub fn scanPlugins() void {
         if (entry.kind != .directory) continue;
         if (plugin_count >= MAX_PLUGINS) break;
 
-        // Check for manifest.json
-        var manifest_path: [600]u8 = undefined;
-        const mp = std.fmt.bufPrint(&manifest_path, "{s}/{s}/manifest.json", .{ plugin_dir, entry.name }) catch continue;
-
-        const file = @import("../core/io_global.zig").cwdOpenFile(mp, .{}) catch continue;
-        defer file.close(@import("../core/io_global.zig").io());
-
-        var manifest_buf: [4096]u8 = undefined;
-        const manifest_len = @import("../core/io_global.zig").readAll(file, &manifest_buf) catch continue;
-        if (manifest_len < 5) continue;
-        const json = manifest_buf[0..manifest_len];
-
-        var p = &plugins[plugin_count];
-        p.* = std.mem.zeroes(Plugin);
-
-        // Parse manifest fields
-        extractJsonString(json, "name", &p.name, &p.name_len);
-        extractJsonString(json, "version", &p.version, &p.version_len);
-        extractJsonString(json, "description", &p.description, &p.description_len);
-        extractJsonString(json, "author", &p.author, &p.author_len);
-        if (extractField(json, "allow_unsafe")) |v| {
-            p.allow_unsafe = std.mem.eql(u8, v, "true");
-        }
-
-        if (p.name_len == 0) {
-            // Use directory name as fallback
-            const nl = @min(entry.name.len, 64);
-            @memcpy(p.name[0..nl], entry.name[0..nl]);
-            p.name_len = nl;
-        }
-
-        // Store path
-        var full_path: [512]u8 = undefined;
-        const fp = std.fmt.bufPrint(&full_path, "{s}/{s}", .{ plugin_dir, entry.name }) catch continue;
-        const fpl = @min(fp.len, 512);
-        @memcpy(p.path[0..fpl], fp[0..fpl]);
-        p.path_len = fpl;
-
-        // Check which executables exist
-        p.has_search = fileExists(p.path[0..p.path_len], "search");
-        p.has_resolve = fileExists(p.path[0..p.path_len], "resolve");
-        p.has_trending = fileExists(p.path[0..p.path_len], "trending");
-
-        p.user_trusted = pluginContentApproved(p);
-
-        p.enabled = true;
-        p.loaded = true;
-
+        const loaded = loadPluginAt(plugin_dir, entry.name) orelse continue;
+        plugins[plugin_count] = loaded;
+        const p = &plugins[plugin_count];
         plugin_count += 1;
 
         var log_buf: [128]u8 = undefined;
@@ -224,6 +181,43 @@ pub fn scanPlugins() void {
     }
 
     scanned = true;
+}
+
+fn loadPluginAt(plugin_dir: []const u8, id: []const u8) ?Plugin {
+    if (!@import("../core/source_config_pure.zig").validId(id)) return null;
+    var manifest_path: [600]u8 = undefined;
+    const path = std.fmt.bufPrint(&manifest_path, "{s}/{s}/manifest.json", .{ plugin_dir, id }) catch return null;
+    const file = @import("../core/io_global.zig").cwdOpenFile(path, .{}) catch return null;
+    defer file.close(@import("../core/io_global.zig").io());
+    var manifest_buf: [4096]u8 = undefined;
+    const manifest_len = @import("../core/io_global.zig").readAll(file, &manifest_buf) catch return null;
+    if (manifest_len < 5) return null;
+    const json = manifest_buf[0..manifest_len];
+
+    var plugin: Plugin = .{};
+    plugin.id_len = @min(id.len, plugin.id.len);
+    @memcpy(plugin.id[0..plugin.id_len], id[0..plugin.id_len]);
+    extractJsonString(json, "name", &plugin.name, &plugin.name_len);
+    extractJsonString(json, "version", &plugin.version, &plugin.version_len);
+    extractJsonString(json, "description", &plugin.description, &plugin.description_len);
+    extractJsonString(json, "author", &plugin.author, &plugin.author_len);
+    if (extractField(json, "allow_unsafe")) |value|
+        plugin.allow_unsafe = std.mem.eql(u8, value, "true");
+    if (plugin.name_len == 0) {
+        plugin.name_len = @min(id.len, plugin.name.len);
+        @memcpy(plugin.name[0..plugin.name_len], id[0..plugin.name_len]);
+    }
+    var full_path: [512]u8 = undefined;
+    const fp = std.fmt.bufPrint(&full_path, "{s}/{s}", .{ plugin_dir, id }) catch return null;
+    plugin.path_len = @min(fp.len, plugin.path.len);
+    @memcpy(plugin.path[0..plugin.path_len], fp[0..plugin.path_len]);
+    plugin.has_search = fileExists(plugin.path[0..plugin.path_len], "search");
+    plugin.has_resolve = fileExists(plugin.path[0..plugin.path_len], "resolve");
+    plugin.has_trending = fileExists(plugin.path[0..plugin.path_len], "trending");
+    plugin.user_trusted = pluginContentApproved(&plugin);
+    plugin.enabled = true;
+    plugin.loaded = true;
+    return plugin;
 }
 
 fn fileExists(dir: []const u8, name: []const u8) bool {
@@ -379,6 +373,119 @@ fn logPluginProcessFailure(name: []const u8, result: bounded_process.Result) voi
     logs.pushLog("error", "plugin", msg, true);
 }
 
+pub const UniversalResult = struct {
+    plugin_id: [64]u8 = std.mem.zeroes([64]u8),
+    plugin_id_len: usize = 0,
+    plugin_name: [64]u8 = std.mem.zeroes([64]u8),
+    plugin_name_len: usize = 0,
+    row: @import("plugins_pure.zig").SearchRow = .{},
+};
+
+const UNIVERSAL_PLUGIN_CAP: usize = 8;
+const UNIVERSAL_ROWS_PER_PLUGIN: usize = 6;
+
+fn discoverSearchPlugins(out: []Plugin) usize {
+    var dir_buf: [512]u8 = undefined;
+    const plugin_dir = getPluginDir(&dir_buf);
+    if (plugin_dir.len == 0) return 0;
+    var dir = @import("../core/io_global.zig").cwdOpenDir(plugin_dir, .{ .iterate = true }) catch return 0;
+    defer dir.close(@import("../core/io_global.zig").io());
+    var iterator = dir.iterate();
+    var count: usize = 0;
+    while (iterator.next(@import("../core/io_global.zig").io()) catch null) |entry| {
+        if (count >= out.len) break;
+        if (entry.kind != .directory) continue;
+        const plugin = loadPluginAt(plugin_dir, entry.name) orelse continue;
+        if (!plugin.enabled or !plugin.has_search) continue;
+        out[count] = plugin;
+        count += 1;
+    }
+    return count;
+}
+
+fn searchPluginInto(plugin: Plugin, query: []const u8, out: []UniversalResult) usize {
+    var exec_buf: [600]u8 = undefined;
+    const exec = std.fmt.bufPrint(&exec_buf, "{s}/search", .{plugin.path[0..plugin.path_len]}) catch return 0;
+    const pp = @import("plugins_pure.zig");
+    const is_lua = detectLuaScript(exec);
+    const trusted_now = pluginContentApproved(&plugin);
+    const direct_argv = [_][]const u8{ exec, query };
+    var sandbox_argv: [8][]const u8 = undefined;
+    const argv: []const []const u8 = switch (pp.runMode(is_lua, plugin.allow_unsafe, trusted_now)) {
+        .sandbox_lua => blk: {
+            const extras = [_][]const u8{query};
+            logSandboxed(plugin.name[0..plugin.name_len]);
+            break :blk buildSandboxedLuaArgv(&sandbox_argv, exec, &extras);
+        },
+        .direct => blk: {
+            if (plugin.allow_unsafe and trusted_now) logUnsafeWarn(plugin.name[0..plugin.name_len]);
+            break :blk &direct_argv;
+        },
+        .deny => {
+            logUntrustedNative(&plugin);
+            return 0;
+        },
+    };
+
+    var response: [64 * 1024]u8 = undefined;
+    const run = bounded_process.run(argv, &response, .{ .timeout_ms = 8_000 });
+    if (!run.ok()) {
+        logPluginProcessFailure(plugin.name[0..plugin.name_len], run);
+        return 0;
+    }
+    var rows: [UNIVERSAL_ROWS_PER_PLUGIN]pp.SearchRow = [_]pp.SearchRow{.{}} ** UNIVERSAL_ROWS_PER_PLUGIN;
+    const count = pp.parseSearchRows(c_alloc, run.output, &rows) orelse {
+        logs.pushLog("error", "plugin", "Universal search plugin returned malformed JSON", false);
+        return 0;
+    };
+    const n = @min(count, out.len);
+    for (rows[0..n], 0..) |row, i| {
+        var result: UniversalResult = .{ .row = row };
+        result.plugin_id_len = @min(plugin.id_len, result.plugin_id.len);
+        @memcpy(result.plugin_id[0..result.plugin_id_len], plugin.id[0..result.plugin_id_len]);
+        result.plugin_name_len = @min(plugin.name_len, result.plugin_name.len);
+        @memcpy(result.plugin_name[0..result.plugin_name_len], plugin.name[0..result.plugin_name_len]);
+        out[i] = result;
+    }
+    return n;
+}
+
+/// Search every installed executable plugin in parallel, with isolated output
+/// slots and a strict per-process deadline. The parent resolver worker joins
+/// every child before returning, so no plugin can publish after its generation.
+pub fn searchInstalledInto(query: []const u8, out: []UniversalResult) usize {
+    if (query.len == 0 or out.len == 0) return 0;
+    var discovered: [UNIVERSAL_PLUGIN_CAP]Plugin = [_]Plugin{.{}} ** UNIVERSAL_PLUGIN_CAP;
+    const plugin_len = discoverSearchPlugins(&discovered);
+    if (plugin_len == 0) return 0;
+
+    var query_buf: [256]u8 = std.mem.zeroes([256]u8);
+    const query_len = @min(query.len, query_buf.len);
+    @memcpy(query_buf[0..query_len], query[0..query_len]);
+    var slots: [UNIVERSAL_PLUGIN_CAP][UNIVERSAL_ROWS_PER_PLUGIN]UniversalResult =
+        [_][UNIVERSAL_ROWS_PER_PLUGIN]UniversalResult{[_]UniversalResult{.{}} ** UNIVERSAL_ROWS_PER_PLUGIN} ** UNIVERSAL_PLUGIN_CAP;
+    var counts: [UNIVERSAL_PLUGIN_CAP]usize = [_]usize{0} ** UNIVERSAL_PLUGIN_CAP;
+    var threads: [UNIVERSAL_PLUGIN_CAP]?std.Thread = [_]?std.Thread{null} ** UNIVERSAL_PLUGIN_CAP;
+    const Task = struct {
+        fn run(plugin: Plugin, owned_query: [256]u8, owned_query_len: usize, slot: *[UNIVERSAL_ROWS_PER_PLUGIN]UniversalResult, count: *usize) void {
+            count.* = searchPluginInto(plugin, owned_query[0..owned_query_len], slot);
+        }
+    };
+    for (discovered[0..plugin_len], 0..) |plugin, i| {
+        threads[i] = @import("../core/workers.zig").spawnLegacy(Task.run, .{ plugin, query_buf, query_len, &slots[i], &counts[i] }) catch null;
+    }
+    for (threads[0..plugin_len]) |thread| if (thread) |handle| handle.join();
+
+    var written: usize = 0;
+    for (0..plugin_len) |i| {
+        const n = @min(counts[i], out.len - written);
+        @memcpy(out[written .. written + n], slots[i][0..n]);
+        written += n;
+        if (written >= out.len) break;
+    }
+    return written;
+}
+
 pub fn runPluginSearch(query: []const u8) void {
     if (active_plugin >= plugin_count) return;
     if (!plugins[active_plugin].has_search) return;
@@ -465,7 +572,18 @@ pub fn runPluginTrending() void {
 
 pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
     if (active_plugin >= plugin_count) return;
-    if (!plugins[active_plugin].has_resolve) return;
+    runPluginResolveWith(plugins[active_plugin], id, episode);
+}
+
+pub fn runPluginResolveById(plugin_id: []const u8, id: []const u8, episode: []const u8) void {
+    if (!@import("../core/source_config_pure.zig").validId(plugin_id)) return;
+    var dir_buf: [512]u8 = undefined;
+    const plugin = loadPluginAt(getPluginDir(&dir_buf), plugin_id) orelse return;
+    runPluginResolveWith(plugin, id, episode);
+}
+
+fn runPluginResolveWith(plugin: Plugin, id: []const u8, episode: []const u8) void {
+    if (!plugin.has_resolve) return;
 
     // ── Instant feedback: show loading on player immediately ──
     if (state.app.players.items.len > 0 and state.app.active_player_idx < state.app.players.items.len) {
@@ -490,10 +608,9 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
     @memcpy(ep_buf[0..ep_len], episode[0..ep_len]);
 
     if (@import("../core/workers.zig").spawnLegacy(struct {
-        fn worker(rid_buf: [128]u8, rid_len: usize, rep_buf: [32]u8, rep_len: usize, pidx: usize) void {
+        fn worker(rid_buf: [128]u8, rid_len: usize, rep_buf: [32]u8, rep_len: usize, p: Plugin) void {
             const rid = rid_buf[0..rid_len];
             const rep = rep_buf[0..rep_len];
-            const p = plugins[pidx];
             var exec_buf: [600]u8 = undefined;
             const exec = std.fmt.bufPrint(&exec_buf, "{s}/resolve", .{p.path[0..p.path_len]}) catch return;
 
@@ -726,7 +843,7 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
                 logs.pushLog("error", "plugin", "Resolve: no URL in response", false);
             }
         }
-    }.worker, .{ id_buf, id_len, ep_buf, ep_len, active_plugin })) |t| @import("../core/workers.zig").release(t) else |_| {}
+    }.worker, .{ id_buf, id_len, ep_buf, ep_len, plugin })) |t| @import("../core/workers.zig").release(t) else |_| {}
 }
 
 fn executeAndParse(argv: []const []const u8) void {

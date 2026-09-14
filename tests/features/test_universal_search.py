@@ -20,6 +20,8 @@ def test_universal_search_fanout():
     build = _src("build.zig")
     plex = _src("src/services/plex.zig")
     plex_pure = _src("src/services/plex_pure.zig")
+    plugins = _src("src/services/plugins.zig")
+    plugins_pure = _src("src/services/plugins_pure.zig")
 
     checks = {
         # ── Source identity ──
@@ -27,6 +29,7 @@ def test_universal_search_fanout():
             f"    {s}," in res for s in ("livetv", "music", "radio", "podcast")
         ),
         "plex source type": "    plex," in res,
+        "plugin source type": "    plugin," in res,
         "toolbar pills declared": "stremio, rss, livetv, music, radio, podcast }" in res,
         # The mask must be derived from the enum, not a hand-written literal —
         # a hardcoded 0xFF silently left every new pill off.
@@ -65,6 +68,8 @@ def test_universal_search_fanout():
             for s in ("livetv", "music", "radio", "podcast")
         ),
         "plex lifecycle covered": "status_plex.load(.acquire) != .searching" in res,
+        "plugin lifecycle covered": "status_plugins.load(.acquire) != .searching" in res
+            and "Spawn.go(resolveInstalledPlugins" in res,
         "per-source cap": "AUDIO_MAX" in res,
         # Heap, not the 512KB worker stack (CLAUDE.md thread-safety rule).
         "heap response buffers": res.count("alloc.alloc(u8, 512 * 1024)") >= 3,
@@ -72,6 +77,7 @@ def test_universal_search_fanout():
         # ── Ranking: a song must not outrank the episode you asked for ──
         "audio ranked below video": ".livetv => 21" in res and ".music => 22" in res and ".podcast => 24" in res and ".radio => 26" in res,
         "plex ranks as personal library": ".plex => 2" in res,
+        "plugins rank ahead of public adapters": ".plugin => 4" in res,
         "audio penalized for movie/show intent": (
             "item.source == .music or item.source == .radio or item.source == .podcast" in res
         ),
@@ -87,6 +93,17 @@ def test_universal_search_fanout():
         "podcast opens its tab": ".podcast => {" in res and "state.navigateToTab(.Podcasts)" in res,
         "plex resumes with alternate": ".plex => @import(\"plex.zig\").playSearchItem(" in res
             and "fallback_part" in plex and "resumeEligible(position, duration)" in plex,
+        "plugin results resolve by stable identity": "runPluginResolveById(" in res
+            and "plugin_item_id" in res and "item.plugin_id[0..item.plugin_id_len]" in res,
+        "plugin action keys are collision-safe": "item.source == .plugin" in res
+            and "hash.update(item.plugin_item_id" in res,
+        "installed plugin fan-out is bounded and joined": "pub fn searchInstalledInto(" in plugins
+            and "UNIVERSAL_PLUGIN_CAP: usize = 8" in plugins
+            and ".timeout_ms = 8_000" in plugins and "handle.join()" in plugins,
+        "plugin rows are strictly projected": "pub fn parseSearchRows(" in plugins_pure
+            and "plugin search projection is bounded strict and playable" in plugins_pure,
+        "untrusted native plugins fail closed": "pluginContentApproved(&plugin)" in plugins
+            and ".deny =>" in plugins,
 
         # ── UI surfaces (an unhandled switch arm is a compile error, but the
         #    pills/summary rows are data literals that silently omit) ──
@@ -116,6 +133,7 @@ def test_universal_search_fanout():
             and '"Unavailable"' in srch and '"Partial"' in srch,
         "sourceBitOf maps them": all(f".{s} => .{s}," in srch for s in ("livetv", "music", "radio", "podcast")),
         "ai chat labels": all(f'.{s} => "{s.capitalize()}"' in chat for s in ("music", "radio")),
+        "plugin discovery adds no toolbar clutter": ".plugin => null" in srch,
     }
 
     missing = [k for k, ok in checks.items() if not ok]

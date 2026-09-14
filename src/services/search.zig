@@ -2097,6 +2097,7 @@ fn sourceBitOf(item: *const @import("resolver.zig").ResolvedItem) ?@import("reso
         // no-hit summary claim that a torrent provider returned something.
         .tmdb => null,
         .plex => null,
+        .plugin => null,
         .livetv => .livetv,
         .music => .music,
         .radio => .radio,
@@ -2263,6 +2264,7 @@ fn renderCompactRow(idx: usize, item: *const @import("resolver.zig").ResolvedIte
         .local => dvui.Color{ .r = 130, .g = 230, .b = 200, .a = 255 },
         .tmdb => dvui.Color{ .r = 1, .g = 180, .b = 228, .a = 255 },
         .plex => dvui.Color{ .r = 229, .g = 160, .b = 13, .a = 255 },
+        .plugin => dvui.Color{ .r = 190, .g = 140, .b = 245, .a = 255 },
         .comics => dvui.Color{ .r = 200, .g = 150, .b = 255, .a = 255 },
         .livetv => dvui.Color{ .r = 150, .g = 220, .b = 150, .a = 255 },
         .music => dvui.Color{ .r = 255, .g = 170, .b = 90, .a = 255 },
@@ -2278,6 +2280,7 @@ fn renderCompactRow(idx: usize, item: *const @import("resolver.zig").ResolvedIte
         .local => "On disk",
         .tmdb => "Catalog",
         .plex => "Plex",
+        .plugin => "Plugin",
         .comics => "Comics",
         .livetv => "Live TV",
         .music => "Music",

@@ -41,6 +41,61 @@ pub const RunMode = enum { sandbox_lua, direct, deny };
 
 pub const ResponseKind = enum { results, resolve };
 
+pub const SearchRow = struct {
+    id: [128]u8 = std.mem.zeroes([128]u8),
+    id_len: usize = 0,
+    title: [128]u8 = std.mem.zeroes([128]u8),
+    title_len: usize = 0,
+    stream_url: [512]u8 = std.mem.zeroes([512]u8),
+    stream_url_len: usize = 0,
+    year: [8]u8 = std.mem.zeroes([8]u8),
+    year_len: usize = 0,
+    media_type: [16]u8 = std.mem.zeroes([16]u8),
+    media_type_len: usize = 0,
+    episodes: u16 = 0,
+};
+
+fn copyJsonString(value: std.json.Value, key: []const u8, dst: []u8, len: *usize) void {
+    if (value != .object) return;
+    const field = value.object.get(key) orelse return;
+    if (field != .string) return;
+    len.* = @min(field.string.len, dst.len);
+    @memcpy(dst[0..len.*], field.string[0..len.*]);
+}
+
+/// Strict, bounded projection for search/trending protocol rows. Invalid JSON
+/// or a wrong envelope is null; valid empty arrays return zero.
+pub fn parseSearchRows(allocator: std.mem.Allocator, input: []const u8, out: []SearchRow) ?usize {
+    const trimmed = std.mem.trim(u8, input, " \t\r\n");
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, trimmed, .{}) catch return null;
+    defer parsed.deinit();
+    if (parsed.value != .array) return null;
+
+    var count: usize = 0;
+    for (parsed.value.array.items) |value| {
+        if (count >= out.len) break;
+        if (value != .object) return null;
+        var row: SearchRow = .{};
+        copyJsonString(value, "id", &row.id, &row.id_len);
+        copyJsonString(value, "title", &row.title, &row.title_len);
+        copyJsonString(value, "stream_url", &row.stream_url, &row.stream_url_len);
+        copyJsonString(value, "year", &row.year, &row.year_len);
+        copyJsonString(value, "type", &row.media_type, &row.media_type_len);
+        if (value.object.get("episodes")) |episodes| {
+            if (episodes == .integer and episodes.integer > 0)
+                row.episodes = @intCast(@min(episodes.integer, std.math.maxInt(u16)));
+        }
+        if (row.id_len == 0 and row.stream_url_len == 0) continue;
+        if (row.title_len == 0) {
+            row.title_len = @min(row.id_len, row.title.len);
+            @memcpy(row.title[0..row.title_len], row.id[0..row.title_len]);
+        }
+        out[count] = row;
+        count += 1;
+    }
+    return count;
+}
+
 /// Parse and validate the top-level plugin protocol envelope before the
 /// compatibility parser in plugins.zig inspects individual fields. This keeps
 /// arbitrary text containing a stray `{` from being accepted as a result and
@@ -111,6 +166,25 @@ test "plugin response envelopes reject malformed JSON and wrong roots" {
     try std.testing.expect(validResponse(allocator, "{\"url\":\"https://example.test/v\"}", .resolve));
     try std.testing.expect(!validResponse(allocator, "[{\"url\":\"x\"}]", .resolve));
     try std.testing.expect(!validResponse(allocator, "{\"url\":", .resolve));
+}
+
+test "plugin search projection is bounded strict and playable" {
+    const fixture =
+        \\[
+        \\ {"id":"show-1","title":"A Show","year":"2026","type":"series","episodes":12},
+        \\ {"id":"direct","title":"Live","stream_url":"https://media.example/live.m3u8","type":"video"},
+        \\ {"title":"not actionable"}
+        \\]
+    ;
+    var rows: [4]SearchRow = [_]SearchRow{.{}} ** 4;
+    const count = parseSearchRows(std.testing.allocator, fixture, &rows).?;
+    try std.testing.expectEqual(@as(usize, 2), count);
+    try std.testing.expectEqualStrings("A Show", rows[0].title[0..rows[0].title_len]);
+    try std.testing.expectEqual(@as(u16, 12), rows[0].episodes);
+    try std.testing.expectEqualStrings("https://media.example/live.m3u8", rows[1].stream_url[0..rows[1].stream_url_len]);
+    try std.testing.expectEqual(@as(?usize, 0), parseSearchRows(std.testing.allocator, "[]", &rows));
+    try std.testing.expect(parseSearchRows(std.testing.allocator, "{}", &rows) == null);
+    try std.testing.expect(parseSearchRows(std.testing.allocator, "[1]", &rows) == null);
 }
 
 test "originOf extracts scheme+host, rejects non-http / empty host" {

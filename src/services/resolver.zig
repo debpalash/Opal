@@ -34,6 +34,7 @@ pub const SourceType = enum {
     radio, // a radio station stream — HTTP direct
     podcast, // a podcast show — opens the Podcasts tab on that feed
     plex, // connected Plex library — credential-free deep-link playback
+    plugin, // trusted installed executable plugin
 };
 
 pub const ResolvedItem = struct {
@@ -81,6 +82,11 @@ pub const ResolvedItem = struct {
     duration_secs: f32 = 0,
     fallback_url: [256]u8 = std.mem.zeroes([256]u8),
     fallback_url_len: usize = 0,
+    plugin_id: [64]u8 = std.mem.zeroes([64]u8),
+    plugin_id_len: usize = 0,
+    plugin_item_id: [128]u8 = std.mem.zeroes([128]u8),
+    plugin_item_id_len: usize = 0,
+    plugin_episodes: u16 = 0,
 };
 
 // Shared result buffer. The cap is a hard ceiling on a single search wave —
@@ -128,6 +134,7 @@ pub var status_radio = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_podcast = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_catalog = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_plex = std.atomic.Value(SourceStatus).init(.idle);
+pub var status_plugins = std.atomic.Value(SourceStatus).init(.idle);
 
 // Explicit u8 backing so std.atomic.Value(SourceStatus) is byte-atomic. The
 // richer terminal values make an empty source distinguishable from a network,
@@ -416,6 +423,7 @@ pub fn resolveTracked(query: []const u8, intent: []const u8) u32 {
     Pre.set(&status_podcast, .podcast);
     status_catalog.store(.searching, .release);
     status_plex.store(.searching, .release);
+    status_plugins.store(.searching, .release);
 
     // Fire every backend in parallel through the process-owned supervisor.
     // Superseded waves may overlap briefly, so the global admission cap also
@@ -444,6 +452,7 @@ pub fn resolveTracked(query: []const u8, intent: []const u8) u32 {
     if (sourceOn(.local)) Spawn.go(resolveLocalFiles, &status_local); // instant — already on disk
     Spawn.go(resolveCatalog, &status_catalog); // typed movie/show metadata, always available keylessly
     Spawn.go(resolvePlex, &status_plex); // connected personal library; unavailable is immediate
+    Spawn.go(resolveInstalledPlugins, &status_plugins); // trusted executable content plugins
     if (sourceOn(.rss)) Spawn.go(resolveRss, &status_rss); // already-fetched magnets matching query
     if (sourceOn(.jellyfin)) Spawn.go(resolveJellyfin, &status_jf);
     // 1337x is covered by nova2's one337x.py engine (spawned above with "all").
@@ -541,7 +550,10 @@ pub fn actionKey(item: *const ResolvedItem) u64 {
     var hash = std.hash.Wyhash.init(0x6f70_616c_7365_6172);
     const source_byte = [_]u8{@intCast(@intFromEnum(item.source))};
     hash.update(&source_byte);
-    if (item.source == .tmdb and item.catalog_id != 0) {
+    if (item.source == .plugin and item.plugin_id_len > 0) {
+        hash.update(item.plugin_id[0..item.plugin_id_len]);
+        hash.update(item.plugin_item_id[0..item.plugin_item_id_len]);
+    } else if (item.source == .tmdb and item.catalog_id != 0) {
         hash.update(std.mem.asBytes(&item.catalog_id));
         hash.update(item.catalog_kind[0..item.catalog_kind_len]);
         hash.update(item.catalog_imdb[0..item.catalog_imdb_len]);
@@ -1140,7 +1152,7 @@ fn attrValue(html: []const u8, name: []const u8, limit: usize) ?[]const u8 {
 // ══════════════════════════════════════════════════════════
 
 fn cacheKey(buf: []u8, query: []const u8) []const u8 {
-    return std.fmt.bufPrint(buf, "search:v3:{s}", .{query}) catch "search:v3:";
+    return std.fmt.bufPrint(buf, "search:v4:{s}", .{query}) catch "search:v4:";
 }
 
 /// Serialize the current `results` (under caller's lock) into `out`.
@@ -1180,6 +1192,9 @@ fn serializeRows(rows: []const ResolvedItem, out: []u8) ?[]u8 {
         w.f32v(it.resume_position_secs);
         w.f32v(it.duration_secs);
         w.blob(it.fallback_url[0..@min(it.fallback_url_len, it.fallback_url.len)]);
+        w.blob(it.plugin_id[0..@min(it.plugin_id_len, it.plugin_id.len)]);
+        w.blob(it.plugin_item_id[0..@min(it.plugin_item_id_len, it.plugin_item_id.len)]);
+        w.u16v(it.plugin_episodes);
     }
     return w.done();
 }
@@ -1229,6 +1244,9 @@ fn deserializeInto(bytes: []const u8) usize {
         it.resume_position_secs = r.f32v() orelse break;
         it.duration_secs = r.f32v() orelse break;
         copyField(&it.fallback_url, &it.fallback_url_len, r.blob() orelse break);
+        copyField(&it.plugin_id, &it.plugin_id_len, r.blob() orelse break);
+        copyField(&it.plugin_item_id, &it.plugin_item_id_len, r.blob() orelse break);
+        it.plugin_episodes = r.u16v() orelse break;
         results[count] = it;
         count += 1;
     }
@@ -1317,7 +1335,8 @@ fn checkAllDoneLocked(run: u32) void {
         status_nasa.load(.acquire) != .searching and status_commons.load(.acquire) != .searching and
         status_music.load(.acquire) != .searching and status_radio.load(.acquire) != .searching and
         status_podcast.load(.acquire) != .searching and status_livetv.load(.acquire) != .searching and
-        status_catalog.load(.acquire) != .searching and status_plex.load(.acquire) != .searching)
+        status_catalog.load(.acquire) != .searching and status_plex.load(.acquire) != .searching and
+        status_plugins.load(.acquire) != .searching)
     {
         // Swap so the resolving→done transition fires exactly once even if two
         // finishing workers observe "all done" concurrently — only the winner
@@ -1381,6 +1400,7 @@ fn computeMatchAgainst(item: ResolvedItem, query_override: []const u8) MatchInfo
         .local => 0, // already on disk — instant, rank first
         .jellyfin => 1,
         .plex => 2,
+        .plugin => 4,
         .stremio => 5,
         .torrent => 8,
         .anime => 12,
@@ -1548,6 +1568,34 @@ fn resolvePlex(query_buf: [256]u8, qlen: usize) void {
         item.resume_position_secs = entry.resume_secs;
         item.duration_secs = entry.duration_secs;
         copyField(&item.fallback_url, &item.fallback_url_len, entry.fallback_part[0..entry.fallback_part_len]);
+        _ = pushResult(item);
+    }
+}
+
+fn resolveInstalledPlugins(query_buf: [256]u8, qlen: usize) void {
+    defer finishWorker(&status_plugins, .done);
+    const plugins = @import("plugins.zig");
+    var found: [24]plugins.UniversalResult = [_]plugins.UniversalResult{.{}} ** 24;
+    const count = plugins.searchInstalledInto(query_buf[0..qlen], &found);
+    if (count == 0) {
+        noteWorkerOutcome(.no_results);
+        return;
+    }
+    for (found[0..count]) |entry| {
+        var item = ResolvedItem{ .source = .plugin, .plugin_episodes = entry.row.episodes };
+        copyField(&item.name, &item.name_len, entry.row.title[0..entry.row.title_len]);
+        const media_type = entry.row.media_type[0..entry.row.media_type_len];
+        const year = entry.row.year[0..entry.row.year_len];
+        const detail = if (year.len > 0)
+            std.fmt.bufPrint(&item.detail, "{s} · {s} · {s}", .{ entry.plugin_name[0..entry.plugin_name_len], media_type, year }) catch entry.plugin_name[0..entry.plugin_name_len]
+        else if (media_type.len > 0)
+            std.fmt.bufPrint(&item.detail, "{s} · {s}", .{ entry.plugin_name[0..entry.plugin_name_len], media_type }) catch entry.plugin_name[0..entry.plugin_name_len]
+        else
+            entry.plugin_name[0..entry.plugin_name_len];
+        item.detail_len = detail.len;
+        copyField(&item.url, &item.url_len, entry.row.stream_url[0..entry.row.stream_url_len]);
+        copyField(&item.plugin_id, &item.plugin_id_len, entry.plugin_id[0..entry.plugin_id_len]);
+        copyField(&item.plugin_item_id, &item.plugin_item_id_len, entry.row.id[0..entry.row.id_len]);
         _ = pushResult(item);
     }
 }
@@ -3377,6 +3425,20 @@ pub fn playResolvedItem(item: *const ResolvedItem) void {
             item.resume_position_secs,
             item.duration_secs,
         ),
+        .plugin => {
+            const url = item.url[0..item.url_len];
+            if (std.mem.startsWith(u8, url, "magnet:?")) {
+                @import("search.zig").loadTorrentToPlayer(url);
+            } else if (std.mem.startsWith(u8, url, "http://") or std.mem.startsWith(u8, url, "https://")) {
+                @import("browser.zig").playDirect(.{ .url = url, .title = item.name[0..item.name_len] });
+            } else {
+                @import("plugins.zig").runPluginResolveById(
+                    item.plugin_id[0..item.plugin_id_len],
+                    item.plugin_item_id[0..item.plugin_item_id_len],
+                    "1",
+                );
+            }
+        },
         .torrent => {
             // Central chokepoint for torrent playback from universal results —
             // row clicks and play buttons all land here, so a scam-flagged
