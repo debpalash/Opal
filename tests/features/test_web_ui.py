@@ -515,6 +515,10 @@ def test_web_watching_library():
             and "opal.watch.sort" in ui and "opal.watch.density" in ui,
         "sorting and density": 'id="watch-sort"' in ui and 'id="watch-density"' in ui
             and "watchSort === 'progress'" in ui and "classList.toggle('compact'" in ui,
+        "bounded persisted pagination": 'id="watch-page-size"' in ui
+            and 'id="watch-pager"' in ui and "opal.watch.pageSize" in ui
+            and "opal.watch.page" in ui and "list.slice(pageStart, pageStart + watchPageSize)" in ui
+            and "watchPage > pageCount" in ui,
     }
     missing = [k for k, ok in checks.items() if not ok]
     if missing:

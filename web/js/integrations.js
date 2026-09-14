@@ -510,11 +510,14 @@ const watchSaved = (key, allowed, fallback) => {
 const watchFilters = ['all','watching','caught_up','unstarted','completed','dropped'];
 const watchKinds = ['all','tv','anime','movie'];
 const watchSorts = ['smart','recent','title','progress'];
+const watchPageSizes = ['24','48','96'];
 let watchRows = null;
 let watchFilter = watchSaved('opal.watch.filter', watchFilters, 'all');
 let watchKind = watchSaved('opal.watch.kind', watchKinds, 'all');
 let watchSort = watchSaved('opal.watch.sort', watchSorts, 'smart');
 let watchCompact = watchSaved('opal.watch.density', ['comfortable','compact'], 'comfortable') === 'compact';
+let watchPageSize = Number(watchSaved('opal.watch.pageSize', watchPageSizes, '48'));
+let watchPage = (() => { try { return Math.max(1, Number.parseInt(localStorage.getItem('opal.watch.page') || '1', 10) || 1); } catch { return 1; } })();
 let watchSyncing = false;
 let watchSyncTimer = null, watchSyncPolls = 0;
 async function loadWatch(){
@@ -540,6 +543,7 @@ function restoreWatchControls(){
   if (filter) chooseWatchFilter($('watch-filters'), filter);
   if (kind) chooseWatchFilter($('watch-kind-filters'), kind);
   $('watch-sort').value = watchSort;
+  $('watch-page-size').value = String(watchPageSize);
   $('watch-density').setAttribute('aria-pressed', String(watchCompact));
   $('watch-density').classList.toggle('on', watchCompact);
   $('watch-list').classList.toggle('compact', watchCompact);
@@ -547,16 +551,25 @@ function restoreWatchControls(){
 restoreWatchControls();
 $('watch-filters').addEventListener('click', e => {
   const b = e.target.closest('button[data-f]'); if (!b) return;
-  chooseWatchFilter($('watch-filters'), b); watchFilter = b.dataset.f; saveWatchChoice('opal.watch.filter', watchFilter); renderWatch();
+  chooseWatchFilter($('watch-filters'), b); watchFilter = b.dataset.f; saveWatchChoice('opal.watch.filter', watchFilter); setWatchPage(1); renderWatch();
 });
 $('watch-kind-filters').addEventListener('click', e => {
   const b = e.target.closest('button[data-f]'); if (!b) return;
-  chooseWatchFilter($('watch-kind-filters'), b); watchKind = b.dataset.f; saveWatchChoice('opal.watch.kind', watchKind); renderWatch();
+  chooseWatchFilter($('watch-kind-filters'), b); watchKind = b.dataset.f; saveWatchChoice('opal.watch.kind', watchKind); setWatchPage(1); renderWatch();
 });
 $('watch-sort').addEventListener('change', e => {
   watchSort = watchSorts.includes(e.target.value) ? e.target.value : 'smart';
-  saveWatchChoice('opal.watch.sort', watchSort); renderWatch();
+  saveWatchChoice('opal.watch.sort', watchSort); setWatchPage(1); renderWatch();
 });
+$('watch-page-size').addEventListener('change', e => {
+  watchPageSize = Number(watchPageSizes.includes(e.target.value) ? e.target.value : '48');
+  saveWatchChoice('opal.watch.pageSize', String(watchPageSize)); setWatchPage(1); renderWatch();
+});
+function setWatchPage(page){
+  watchPage = Math.max(1, page); saveWatchChoice('opal.watch.page', String(watchPage));
+}
+$('watch-prev').addEventListener('click', () => { setWatchPage(watchPage - 1); renderWatch(); $('watch-list').scrollIntoView({block:'start'}); });
+$('watch-next-page').addEventListener('click', () => { setWatchPage(watchPage + 1); renderWatch(); $('watch-list').scrollIntoView({block:'start'}); });
 $('watch-density').addEventListener('click', () => {
   watchCompact = !watchCompact; saveWatchChoice('opal.watch.density', watchCompact ? 'compact' : 'comfortable');
   restoreWatchControls(); renderWatch();
@@ -580,10 +593,14 @@ function renderWatch(){
   if (watchSort === 'title') list.sort((a,b) => String(a.name || '').localeCompare(String(b.name || '')));
   else if (watchSort === 'progress') list.sort((a,b) => ((b.total ? b.watched/b.total : b.pct/100) || 0) - ((a.total ? a.watched/a.total : a.pct/100) || 0));
   else if (watchSort === 'recent') list.sort((a,b) => (b.updated_at || 0) - (a.updated_at || 0));
+  const pageCount = Math.max(1, Math.ceil(list.length / watchPageSize));
+  if (watchPage > pageCount) setWatchPage(pageCount);
+  const pageStart = (watchPage - 1) * watchPageSize;
+  const pageRows = list.slice(pageStart, pageStart + watchPageSize);
   $('watch-hint').textContent = rows.length
     ? `${list.length} of ${rows.length} tracked${watchSyncing ? ' · syncing metadata…' : ''}`
     : 'Nothing tracked yet — play something, or add a show from Browse.';
-  $('watch-list').innerHTML = list.map((r, i) => {
+  $('watch-list').innerHTML = pageRows.map((r, i) => {
     const pct = r.total > 0 ? Math.round(100 * r.watched / r.total) : (r.pct || 0);
     const ep = r.has_next ? `S${String(r.next_season).padStart(2,'0')}E${String(r.next_episode).padStart(2,'0')}` : '';
     const next = r.has_next
@@ -605,7 +622,12 @@ function renderWatch(){
       </div>
     </div>`;
   }).join('') || '<div class="empty">Nothing here</div>';
-  $('watch-list')._rows = list;
+  $('watch-list')._rows = pageRows;
+  const pager = $('watch-pager');
+  pager.hidden = list.length <= watchPageSize;
+  $('watch-page-label').textContent = `Page ${watchPage} of ${pageCount}`;
+  $('watch-prev').disabled = watchPage <= 1;
+  $('watch-next-page').disabled = watchPage >= pageCount;
 }
 async function changeLibrary(params){
   $('watch-hint').textContent = 'Updating library…';

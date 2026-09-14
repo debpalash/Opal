@@ -394,9 +394,15 @@
       </div>
       <div class="watch-view-controls" aria-label="Library view options">
         <label>Sort <select id="watch-sort"><option value="smart">Up next</option><option value="recent">Recent</option><option value="title">Title</option><option value="progress">Progress</option></select></label>
+        <label>Per page <select id="watch-page-size"><option value="24">24</option><option value="48">48</option><option value="96">96</option></select></label>
         <button id="watch-density" type="button" aria-pressed="false">Compact</button>
       </div>
       <div id="watch-list"></div>
+      <nav id="watch-pager" class="watch-pager" aria-label="Watching pages" hidden>
+        <button id="watch-prev" type="button">Previous</button>
+        <span id="watch-page-label" aria-live="polite"></span>
+        <button id="watch-next-page" type="button">Next</button>
+      </nav>
   </section>
   <section class="page" id="page-setup">
     <div class="sect">Sources</div>
