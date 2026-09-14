@@ -453,6 +453,17 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_text).step);
 
+    // Untrusted artwork must be dimension/byte bounded before stb allocates
+    // decompressed RGBA memory.
+    const test_image_limits_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/image_limits_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_image_limits_pure).step);
+
     const test_voice = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/voice_filter.zig"),

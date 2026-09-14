@@ -13,6 +13,7 @@ const su_pure = @import("storage_usage_pure.zig");
 // ══════════════════════════════════════════════════════════
 
 const c_alloc = std.heap.c_allocator;
+const image_limits = @import("image_limits_pure.zig");
 
 /// Cap on simultaneous in-flight poster fetches across ALL providers (TMDB,
 /// Anime, Jellyfin, YouTube, Plugins share this one daemon). Each worker holds a
@@ -239,10 +240,19 @@ pub fn fetchAsync(url: []const u8, pixels_out: *?[]u8, w_out: *u32, h_out: *u32,
                 };
                 if (workers.isQuitting()) return;
                 var comp: c_int = 0;
+                var info_w: c_int = 0;
+                var info_h: c_int = 0;
+                var info_comp: c_int = 0;
                 w = 0;
                 h = 0;
-                decoded = dvui.c.stbi_load_from_memory(data.ptr, @intCast(data.len), &w, &h, &comp, 4);
-                if (decoded != null and w > 0 and h > 0 and w <= 8192 and h <= 8192) {
+                const header_ok = dvui.c.stbi_info_from_memory(data.ptr, @intCast(data.len), &info_w, &info_h, &info_comp) != 0;
+                const expected_bytes = if (header_ok) image_limits.coverRgbaBytes(info_w, info_h) else null;
+                if (expected_bytes != null) {
+                    decoded = dvui.c.stbi_load_from_memory(data.ptr, @intCast(data.len), &w, &h, &comp, 4);
+                }
+                if (decoded != null and w == info_w and h == info_h and
+                    image_limits.coverRgbaBytes(w, h) == expected_bytes)
+                {
                     if (!used_cache) cacheStore(key, data, @intCast(w), @intCast(h));
                     break;
                 }
@@ -257,9 +267,8 @@ pub fn fetchAsync(url: []const u8, pixels_out: *?[]u8, w_out: *u32, h_out: *u32,
             const pixels = decoded orelse return;
             defer dvui.c.stbi_image_free(pixels);
 
-            // Compute in usize to avoid i32 overflow on large images
-            // (w * h * 4 would otherwise be evaluated in c_int).
-            const p_len: usize = @as(usize, @intCast(w)) * @as(usize, @intCast(h)) * 4;
+            // Header dimensions were accepted before stb allocated and decoded.
+            const p_len = image_limits.coverRgbaBytes(w, h) orelse return;
             const p_slice = c_alloc.alloc(u8, p_len) catch return;
             @memcpy(p_slice, pixels[0..p_len]);
 
