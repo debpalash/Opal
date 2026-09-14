@@ -2795,16 +2795,10 @@ fn coverWorker(idx: usize) void {
     if (total < 100) return;
 
     // Decode → RGBA pixels.
-    var w: c_int = 0;
-    var h: c_int = 0;
-    var comp: c_int = 0;
-    const pixels = dvui.c.stbi_load_from_memory(tmp_buf.ptr, @intCast(total), &w, &h, &comp, 4);
-    if (pixels == null or w <= 0 or h <= 0) return;
-    defer dvui.c.stbi_image_free(pixels);
-
-    const p_len: usize = @as(usize, @intCast(w)) * @as(usize, @intCast(h)) * 4;
-    const p_slice = alloc.alloc(u8, p_len) catch return;
-    @memcpy(p_slice, pixels[0..p_len]);
+    const decoded = @import("../core/image_decode.zig").cover(tmp_buf[0..total]) orelse return;
+    defer decoded.deinit();
+    const p_slice = alloc.alloc(u8, decoded.rgba_len) catch return;
+    @memcpy(p_slice, decoded.pixels[0..decoded.rgba_len]);
 
     // Publish only if this result slot is still alive (a newer search could have
     // freed/repurposed it) and we're not shutting down (freeSearchCovers may
@@ -2813,8 +2807,8 @@ fn coverWorker(idx: usize) void {
         alloc.free(p_slice);
         return;
     }
-    sr_cover_w[idx] = @intCast(w);
-    sr_cover_h[idx] = @intCast(h);
+    sr_cover_w[idx] = @intCast(decoded.width);
+    sr_cover_h[idx] = @intCast(decoded.height);
     sr_cover_pixels[idx] = p_slice;
     produced = true; // real pixels published → don't latch failure
 }
@@ -3713,32 +3707,20 @@ fn decodePageTexture(pg: usize) void {
     if (pg >= 128) return;
     if (state.app.comic.page_pixels[pg] != null and state.app.comic.page_textures[pg] == null and !page_decode_failed[pg]) {
         const raw = state.app.comic.page_pixels[pg].?;
-        var w: c_int = 0;
-        var h: c_int = 0;
-        var channels: c_int = 0;
-        const rgba = dvui.c.stbi_load_from_memory(
-            raw.ptr,
-            @as(c_int, @intCast(raw.len)),
-            &w,
-            &h,
-            &channels,
-            4,
-        );
-        if (rgba != null and w > 0 and h > 0) {
-            const uw: u32 = @intCast(w);
-            const uh: u32 = @intCast(h);
+        if (@import("../core/image_decode.zig").comicPage(raw)) |decoded| {
+            defer decoded.deinit();
+            const uw: u32 = @intCast(decoded.width);
+            const uh: u32 = @intCast(decoded.height);
             const pixel_count = @as(usize, uw) * @as(usize, uh);
-            const pma_slice: [*]const dvui.Color.PMA = @ptrCast(@alignCast(rgba));
+            const pma_slice: [*]const dvui.Color.PMA = @ptrCast(@alignCast(decoded.pixels));
             if (dvui.textureCreate(pma_slice[0..pixel_count], uw, uh, .linear, .rgba_32)) |tex| {
                 state.app.comic.page_textures[pg] = tex;
                 state.app.comic.page_widths[pg] = uw;
                 state.app.comic.page_heights[pg] = uh;
             } else |_| {}
-            dvui.c.stbi_image_free(rgba);
         } else {
             // Undecodable bytes — latch so we don't retry the heavy decode each frame.
             page_decode_failed[pg] = true;
-            if (rgba != null) dvui.c.stbi_image_free(rgba);
         }
     }
 }
@@ -3789,31 +3771,20 @@ pub fn ocrPage(pg: usize) void {
     }
 
     // Decode JPEG to RGBA
-    var w: c_int = 0;
-    var h: c_int = 0;
-    var channels: c_int = 0;
-    const rgba = dvui.c.stbi_load_from_memory(
-        raw.ptr,
-        @as(c_int, @intCast(raw.len)),
-        &w,
-        &h,
-        &channels,
-        4,
-    );
-    if (rgba == null or w <= 0 or h <= 0) {
+    const decoded = @import("../core/image_decode.zig").comicPage(raw) orelse {
         state.app.comic.ocr_done[pg] = true;
         return;
-    }
-    defer dvui.c.stbi_image_free(rgba);
+    };
+    defer decoded.deinit();
 
     // Run OCR via C wrapper (gated so the empty-struct stub built when
     // -Docr=false is never type-checked; Zig skips analysis of branches
     // under a comptime-known condition).
     if (has_ocr) {
         const result = ocr_c.ocr_recognize_rgba(
-            @ptrCast(rgba),
-            w,
-            h,
+            @ptrCast(decoded.pixels),
+            decoded.width,
+            decoded.height,
         );
 
         if (result != null) {

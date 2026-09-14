@@ -648,20 +648,15 @@ fn bridgeReaderThread() void {
                 // streams continuously, so a pre-goto frame arriving 80ms
                 // after Enter used to dismiss the loading bar mid-navigation.
                 // is_loading clears on the navigate response / error instead.
-                var w: c_int = 0;
-                var h: c_int = 0;
-                var ch: c_int = 0;
-                const rgba = dvui.c.stbi_load_from_memory(jpeg_buf.ptr, @intCast(frame_size), &w, &h, &ch, 4);
-                if (rgba != null and w > 0 and h > 0 and w <= 8192 and h <= 8192) {
-                    defer dvui.c.stbi_image_free(rgba);
-                    const p_len: usize = @as(usize, @intCast(w)) * @as(usize, @intCast(h)) * 4;
-                    if (frame_alloc.alloc(u8, p_len)) |p_slice| {
-                        @memcpy(p_slice, rgba[0..p_len]);
+                if (@import("../core/image_decode.zig").browserFrame(jpeg_buf)) |decoded| {
+                    defer decoded.deinit();
+                    if (frame_alloc.alloc(u8, decoded.rgba_len)) |p_slice| {
+                        @memcpy(p_slice, decoded.pixels[0..decoded.rgba_len]);
                         frame_lock.lock();
                         if (frame_pixels) |old| frame_alloc.free(old);
                         frame_pixels = p_slice;
-                        frame_pix_w = @intCast(w);
-                        frame_pix_h = @intCast(h);
+                        frame_pix_w = @intCast(decoded.width);
+                        frame_pix_h = @intCast(decoded.height);
                         frame_dirty.store(true, .release);
                         frame_lock.unlock();
                         // Wake the UI so streamed frames paint at the pump's

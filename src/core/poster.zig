@@ -15,40 +15,8 @@ const su_pure = @import("storage_usage_pure.zig");
 const c_alloc = std.heap.c_allocator;
 const image_limits = @import("image_limits_pure.zig");
 
-/// A decoded untrusted cover whose allocation was approved from image headers
-/// before stb expanded it. Call `deinit` unless ownership is copied elsewhere.
-pub const DecodedCover = struct {
-    pixels: [*c]u8,
-    width: c_int,
-    height: c_int,
-    rgba_len: usize,
-
-    pub fn deinit(self: DecodedCover) void {
-        dvui.c.stbi_image_free(self.pixels);
-    }
-};
-
-/// Shared safe decoder for provider covers and thumbnails. A compressed-input
-/// cap is not enough: dimensions are probed and bounded before RGBA allocation.
-pub fn decodeCover(data: []const u8) ?DecodedCover {
-    if (data.len == 0 or data.len > std.math.maxInt(c_int)) return null;
-    var info_w: c_int = 0;
-    var info_h: c_int = 0;
-    var info_comp: c_int = 0;
-    if (dvui.c.stbi_info_from_memory(data.ptr, @intCast(data.len), &info_w, &info_h, &info_comp) == 0) return null;
-    const rgba_len = image_limits.coverRgbaBytes(info_w, info_h) orelse return null;
-
-    var width: c_int = 0;
-    var height: c_int = 0;
-    var comp: c_int = 0;
-    const pixels = dvui.c.stbi_load_from_memory(data.ptr, @intCast(data.len), &width, &height, &comp, 4);
-    if (pixels == null) return null;
-    if (width != info_w or height != info_h or image_limits.coverRgbaBytes(width, height) != rgba_len) {
-        dvui.c.stbi_image_free(pixels);
-        return null;
-    }
-    return .{ .pixels = pixels, .width = width, .height = height, .rgba_len = rgba_len };
-}
+pub const DecodedCover = @import("image_decode.zig").DecodedRgba;
+pub const decodeCover = @import("image_decode.zig").cover;
 
 /// Cap on simultaneous in-flight poster fetches across ALL providers (TMDB,
 /// Anime, Jellyfin, YouTube, Plugins share this one daemon). Each worker holds a
