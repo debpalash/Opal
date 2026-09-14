@@ -88,7 +88,9 @@ def test_server_verticals():
     rm = _remote_api()
     ui = _web_app()
     checks = {
-        "routes exist": all(f"fn api{n}(" in rm for n in ("Abs", "Opds", "Plex")),
+        "routes exist": all(f"fn api{n}(" in rm for n in ("Abs", "Opds"))
+            and "remote_plex_api.zig" in _src("src/services/remote.zig")
+            and 'path, "/plex"' in _src("src/services/remote_plex_api.zig"),
         "abs flow": all(f'"/abs/{s}"' in rm for s in ("login", "logout", "libraries", "open", "back", "play")),
         "opds flow": all(f'"/opds/{s}"' in rm for s in ("connect", "disconnect", "open", "back", "more")),
         # Plex sign-in is the PIN flow — there is no username/password route

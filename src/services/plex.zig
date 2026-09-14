@@ -56,6 +56,9 @@ const Item = struct {
     view_offset_ms: i64 = 0,
     duration_ms: i64 = 0,
     view_count: i64 = 0,
+    media_type: [16]u8 = std.mem.zeroes([16]u8),
+    media_type_len: usize = 0,
+    is_folder: bool = false,
 };
 
 pub const SearchItem = plex_pure.SearchItem;
@@ -78,6 +81,32 @@ const PLEX_PAGE_SIZE: usize = 50;
 var current_start: usize = 0;
 var more_available: bool = true;
 var loading_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
+const MAX_NAV_DEPTH: usize = 8;
+var nav_keys: [MAX_NAV_DEPTH][32]u8 = std.mem.zeroes([MAX_NAV_DEPTH][32]u8);
+var nav_key_lens: [MAX_NAV_DEPTH]usize = [_]usize{0} ** MAX_NAV_DEPTH;
+var nav_titles: [MAX_NAV_DEPTH][160]u8 = std.mem.zeroes([MAX_NAV_DEPTH][160]u8);
+var nav_title_lens: [MAX_NAV_DEPTH]usize = [_]usize{0} ** MAX_NAV_DEPTH;
+pub var nav_depth: usize = 0;
+
+const BrowseRequest = struct {
+    section_idx: usize = 0,
+    child_key: [32]u8 = std.mem.zeroes([32]u8),
+    child_key_len: usize = 0,
+
+    fn isChild(self: *const BrowseRequest) bool {
+        return self.child_key_len > 0;
+    }
+};
+
+fn currentBrowseRequest() BrowseRequest {
+    var request: BrowseRequest = .{ .section_idx = active_section };
+    if (nav_depth > 0) {
+        request.child_key = nav_keys[nav_depth - 1];
+        request.child_key_len = nav_key_lens[nav_depth - 1];
+    }
+    return request;
+}
 
 // A section index alone can't tell "still the same fetch" from "the same section
 // was re-opened mid-fetch" (see plex_pure.workerMayPublish). `view_gen` is bumped
@@ -163,6 +192,7 @@ pub fn disconnect() void {
     server_token_len = 0;
     section_count = 0;
     item_count = 0;
+    nav_depth = 0;
     current_start = 0;
     more_available = true;
     // Clear the load latch too — otherwise signing into a DIFFERENT account
@@ -423,6 +453,7 @@ fn beginSectionLoad() void {
 pub fn fetchItems(section_idx: usize) void {
     if (!isConnected() or section_idx >= section_count) return;
     active_section = section_idx;
+    nav_depth = 0;
     // Supersede every in-flight worker: re-opening the SAME section still yields
     // a new generation, which is what an index compare alone can't express.
     const new_gen = view_gen.fetchAdd(1, .acq_rel) + 1;
@@ -436,21 +467,54 @@ pub fn fetchItems(section_idx: usize) void {
     // stranded at 150). The generation guard can't catch that: loadMore reads
     // view_gen after this bump, so its stale append carries the CURRENT gen.
     beginSectionLoad();
-    const S = struct {
-        var idx: usize = 0;
-        var gen: u64 = 0;
-        fn run() void {
-            defer is_loading.store(false, .release);
-            fetchWindow(@This().idx, 0, @This().gen);
-        }
-    };
-    S.idx = section_idx;
-    S.gen = new_gen;
-    if (@import("../core/workers.zig").spawnLegacy(S.run, .{})) |t| {
-        @import("../core/workers.zig").release(t);
-    } else |_| {
+    @import("../core/workers.zig").spawn(runBrowseRequest, .{ BrowseRequest{ .section_idx = section_idx }, new_gen }) catch {
         is_loading.store(false, .release); // never strand the tab "loading"
+    };
+}
+
+fn runBrowseRequest(request: BrowseRequest, gen: u64) void {
+    defer is_loading.store(false, .release);
+    fetchWindow(request, 0, gen);
+}
+
+pub fn openChild(rating_key: []const u8) bool {
+    if (!isConnected() or nav_depth >= MAX_NAV_DEPTH or !plex_pure.validRatingKey(rating_key)) return false;
+    var title: [160]u8 = undefined;
+    var title_len: usize = 0;
+    for (items[0..item_count]) |item| {
+        if (!item.is_folder or !std.mem.eql(u8, item.rating_key[0..item.rating_key_len], rating_key)) continue;
+        title_len = @min(item.title_len, title.len);
+        @memcpy(title[0..title_len], item.title[0..title_len]);
+        break;
     }
+    if (title_len == 0) return false;
+    const key_len = @min(rating_key.len, nav_keys[nav_depth].len);
+    @memcpy(nav_keys[nav_depth][0..key_len], rating_key[0..key_len]);
+    nav_key_lens[nav_depth] = key_len;
+    @memcpy(nav_titles[nav_depth][0..title_len], title[0..title_len]);
+    nav_title_lens[nav_depth] = title_len;
+    nav_depth += 1;
+    const gen = view_gen.fetchAdd(1, .acq_rel) + 1;
+    beginSectionLoad();
+    @import("../core/workers.zig").spawn(runBrowseRequest, .{ currentBrowseRequest(), gen }) catch {
+        nav_depth -= 1;
+        is_loading.store(false, .release);
+        return false;
+    };
+    return true;
+}
+
+pub fn browseBack() bool {
+    if (nav_depth == 0) return false;
+    nav_depth -= 1;
+    const gen = view_gen.fetchAdd(1, .acq_rel) + 1;
+    beginSectionLoad();
+    @import("../core/workers.zig").spawn(runBrowseRequest, .{ currentBrowseRequest(), gen }) catch {
+        nav_depth += 1;
+        is_loading.store(false, .release);
+        return false;
+    };
+    return true;
 }
 /// Initial load driven by the section-list worker. Unlike fetchItems() this
 /// already runs off the UI thread, and item_count == 0 makes loadMore() bail, so
@@ -459,7 +523,7 @@ fn fetchItemsSync(section_idx: usize, gen: u64) void {
     if (section_idx >= section_count) return;
     beginSectionLoad();
     defer is_loading.store(false, .release);
-    fetchWindow(section_idx, 0, gen);
+    fetchWindow(.{ .section_idx = section_idx }, 0, gen);
 }
 
 /// Fetch one X-Plex-Container-Start/Size window for `section_idx` and append
@@ -469,11 +533,15 @@ fn fetchItemsSync(section_idx: usize, gen: u64) void {
 /// Advances `current_start` by the server-reported row count (not just the
 /// rows we managed to store) and clears `more_available` once a window comes
 /// back short or the fixed items[] buffer fills.
-fn fetchWindow(section_idx: usize, start: usize, gen: u64) void {
-    if (section_idx >= section_count) return;
-    const sec = &sections[section_idx];
+fn fetchWindow(request: BrowseRequest, start: usize, gen: u64) void {
+    if (!request.isChild() and request.section_idx >= section_count) return;
     var url: [460]u8 = undefined;
-    const u = std.fmt.bufPrint(&url, "{s}/library/sections/{s}/all?X-Plex-Container-Start={d}&X-Plex-Container-Size={d}", .{ server_uri[0..server_uri_len], sec.key[0..sec.key_len], start, PLEX_PAGE_SIZE }) catch return;
+    const u = if (request.isChild())
+        std.fmt.bufPrint(&url, "{s}/library/metadata/{s}/children?X-Plex-Container-Start={d}&X-Plex-Container-Size={d}", .{ server_uri[0..server_uri_len], request.child_key[0..request.child_key_len], start, PLEX_PAGE_SIZE }) catch return
+    else blk: {
+        const sec = &sections[request.section_idx];
+        break :blk std.fmt.bufPrint(&url, "{s}/library/sections/{s}/all?X-Plex-Container-Start={d}&X-Plex-Container-Size={d}", .{ server_uri[0..server_uri_len], sec.key[0..sec.key_len], start, PLEX_PAGE_SIZE }) catch return;
+    };
     // Heap buffer — never a big stack buffer on a spawned thread (CLAUDE.md).
     const buf = alloc.alloc(u8, 524288) catch return;
     defer alloc.free(buf);
@@ -492,7 +560,8 @@ fn fetchWindow(section_idx: usize, start: usize, gen: u64) void {
     // more_available all belong to whichever load is currently live; a stale
     // response — even an error/empty one — must not clobber it). The generation
     // is what catches the A→B→A case the index compare passes.
-    if (!plex_pure.workerMayPublish(section_idx, gen, active_section, view_gen.load(.acquire))) return;
+    if (view_gen.load(.acquire) != gen) return;
+    if (!request.isChild() and !plex_pure.workerMayPublish(request.section_idx, gen, active_section, view_gen.load(.acquire))) return;
 
     const mc = parsed.value.object.get("MediaContainer") orelse return;
     const meta = mc.object.get("Metadata") orelse {
@@ -536,6 +605,14 @@ fn fetchWindow(section_idx: usize, start: usize, gen: u64) void {
         }
         if (m.object.get("viewCount")) |value| {
             if (value == .integer and value.integer > 0) it.view_count = value.integer;
+        }
+        if (jstr(m, "type")) |media_type| {
+            const ml = @min(media_type.len, it.media_type.len);
+            @memcpy(it.media_type[0..ml], media_type[0..ml]);
+            it.media_type_len = ml;
+            it.is_folder = std.mem.eql(u8, media_type, "show") or std.mem.eql(u8, media_type, "season") or
+                std.mem.eql(u8, media_type, "artist") or std.mem.eql(u8, media_type, "album") or
+                std.mem.eql(u8, media_type, "photoalbum");
         }
         if (m.object.get("Media")) |media| if (media == .array and media.array.items.len > 0) {
             var versions: [32][]const u8 = undefined;
@@ -614,24 +691,17 @@ pub fn loadMore() void {
     }
     if (loading_more.swap(true, .acq_rel)) return; // lost the race — another append in flight
 
-    const S = struct {
-        var section_idx: usize = 0;
-        var start: usize = 0;
-        var gen: u64 = 0;
-        fn run() void {
-            defer loading_more.store(false, .release);
-            fetchWindow(@This().section_idx, @This().start, @This().gen);
-        }
-    };
-    S.section_idx = active_section;
-    S.start = current_start;
-    // Capture (not bump) — an append belongs to the load that's already live.
-    S.gen = view_gen.load(.acquire);
-    if (@import("../core/workers.zig").spawnLegacy(S.run, .{})) |t| {
-        @import("../core/workers.zig").release(t);
-    } else |_| {
+    const request = currentBrowseRequest();
+    const start = current_start;
+    const gen = view_gen.load(.acquire);
+    @import("../core/workers.zig").spawn(runLoadMore, .{ request, start, gen }) catch {
         loading_more.store(false, .release);
-    }
+    };
+}
+
+fn runLoadMore(request: BrowseRequest, start: usize, gen: u64) void {
+    defer loading_more.store(false, .release);
+    fetchWindow(request, start, gen);
 }
 
 pub fn play(idx: usize) void {
@@ -799,7 +869,19 @@ pub fn renderContent() void {
     {
         var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .padding = .{ .x = 8, .y = 8, .w = 8, .h = 6 }, .background = true, .color_fill = theme.colors.bg_app });
         defer hdr.deinit();
+        if (nav_depth > 0 and dvui.button(@src(), "Back", .{}, .{
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = theme.colors.text_secondary,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 8, .y = 5, .w = 8, .h = 5 },
+            .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
+            .gravity_y = 0.5,
+        })) _ = browseBack();
         _ = dvui.label(@src(), "Plex · {s}", .{server_name[0..server_name_len]}, .{ .color_text = theme.colors.accent, .gravity_y = 0.5 });
+        if (nav_depth > 0) _ = dvui.label(@src(), "  /  {s}", .{nav_titles[nav_depth - 1][0..nav_title_lens[nav_depth - 1]]}, .{
+            .color_text = theme.colors.text_secondary,
+            .gravity_y = 0.5,
+        });
         {
             var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
             sp.deinit();
@@ -841,8 +923,12 @@ pub fn renderContent() void {
             var sp = dvui.box(@src(), .{}, .{ .id_extra = i + 91300, .expand = .horizontal });
             sp.deinit();
         }
-        if (it.part_len > 0 and dvui.button(@src(), "Play", .{}, .{ .id_extra = i + 91400, .color_fill = theme.colors.accent, .color_text = dvui.Color.white, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 }, .gravity_y = 0.5 })) {
-            play(i);
+        if ((it.is_folder or it.part_len > 0) and dvui.button(@src(), if (it.is_folder) "Open" else if (it.view_offset_ms > 0 and it.view_count == 0) "Resume" else "Play", .{}, .{ .id_extra = i + 91400, .color_fill = theme.colors.accent, .color_text = dvui.Color.white, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 }, .gravity_y = 0.5 })) {
+            if (it.is_folder) {
+                _ = openChild(it.rating_key[0..it.rating_key_len]);
+            } else {
+                play(i);
+            }
         }
     }
 

@@ -86,7 +86,7 @@ def test_plex_restored_session_loads_library():
     fetch_items = svc.split("pub fn fetchItems(")[1].split("\npub fn ")[0] if "pub fn fetchItems(" in svc else ""
     checks["fetchItems resets before spawning (not in the worker)"] = (
         "beginSectionLoad()" in fetch_items
-        and fetch_items.index("beginSectionLoad()") < fetch_items.index("spawnLegacy(")
+        and fetch_items.index("beginSectionLoad()") < fetch_items.index("spawn(runBrowseRequest")
     )
     checks["reset claims is_loading synchronously"] = "is_loading.store(true" in svc.split("fn beginSectionLoad()")[1][:200]
     checks["a failed spawn doesn't strand the tab loading"] = (
@@ -106,7 +106,7 @@ def test_plex_restored_session_loads_library():
 @test("Plex web playback uses stable identity and resume state", "Plex")
 def test_plex_stable_web_playback():
     svc = _src("src/services/plex.zig")
-    remote = _src("src/services/remote.zig")
+    remote = _remote_api()
     web = _src("web/js/media.js")
     css = _src("web/styles/app.css")
     checks = {
@@ -117,7 +117,7 @@ def test_plex_stable_web_playback():
         "POST-only playback": 'requireMethod(stream, method, "POST")' in remote,
         "remote action takes id": 'getQueryParam(query, "id")' in remote and "playByRatingKey(id)" in remote,
         "remote emits resume state": all(field in remote for field in ("view_offset_ms", "duration_ms", "view_count")),
-        "web does not play by index": "apiMutation('/plex/play?id='" in web and "'/plex/play?idx='" not in web,
+        "web does not play by index": "row.folder ? 'open_item' : 'play'" in web and "'/plex/play?idx='" not in web,
         "web labels resume": "'Resume'" in web,
         "web paints progress": "plex-progress" in web and ".plex-progress" in css,
     }
@@ -125,3 +125,29 @@ def test_plex_stable_web_playback():
     if missing:
         return "fail", "Plex stable playback incomplete: " + ", ".join(missing)
     return "pass", "Plex web cards preserve resume state and execute playback by stable rating key"
+
+
+@test("Plex TV and music hierarchy drills down", "Plex")
+def test_plex_hierarchy():
+    svc = _src("src/services/plex.zig")
+    api = _src("src/services/remote_plex_api.zig")
+    web = _src("web/js/media.js")
+    checks = {
+        "folder types classified": all(kind in svc for kind in ('"show"', '"season"', '"artist"', '"album"')),
+        "children endpoint paginated": "/library/metadata/{s}/children?X-Plex-Container-Start" in svc,
+        "bounded navigation": "MAX_NAV_DEPTH" in svc and "nav_depth >= MAX_NAV_DEPTH" in svc,
+        "back refetches parent": "pub fn browseBack" in svc and "currentBrowseRequest()" in svc,
+        "rapid requests copied": "spawn(runBrowseRequest" in svc and "spawnLegacy(S.run" not in svc,
+        "stale page rejected": "view_gen.load(.acquire) != gen" in svc,
+        "typed web actions": all(route in api for route in ('"/plex/open_item"', '"/plex/back"', '"/plex/play"')),
+        "mutations require POST": 'requireMethod(stream, method, "POST")' in api,
+        "web folder drilldown": "row.folder ? 'open_item' : 'play'" in web,
+        "web back follows hierarchy": "apiMutation('/plex/back')" in web,
+        "root sections stay reachable": "data-plex-section" in web and "active_section" in web,
+        "native folder drilldown": "openChild(it.rating_key" in svc,
+        "folder title remains server-owned": "if (!item.is_folder" in svc and "plex.openChild(id)" in api,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "Plex hierarchy incomplete: " + ", ".join(missing)
+    return "pass", "Plex shows→seasons→episodes and artists→albums→tracks drill down with bounded Back navigation"

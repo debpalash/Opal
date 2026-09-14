@@ -418,23 +418,31 @@ function renderPlex(d){
     ? `Enter <b>${esc(d.pin)}</b> at plex.tv/link`
     : (d.loading ? '<span class="spin"></span> Loading…' : esc(d.status || (d.connected ? (d.server || 'Connected') : 'Not connected.')));
   const items = (d.items || []).length > 0;
-  $('plex-crumbs').innerHTML = items ? '<button class="more" id="plex-back">‹ Sections</button>' : '';
-  if ($('plex-back')) $('plex-back').onclick = () => { api('/plex/sections').catch(()=>{}); pollPlex(); };
-  const rows = items ? d.items : (d.sections || []);
+  const browsing = (d.depth || 0) > 0 || items;
+  $('plex-crumbs').innerHTML = (d.depth || 0) > 0
+    ? '<button class="more" id="plex-back">‹ Back</button>'
+    : (d.sections || []).map((section, i) => `<button class="more${i === d.active_section ? ' on' : ''}" data-plex-section="${i}">${esc(section.title)}</button>`).join('');
+  if ($('plex-back')) $('plex-back').onclick = () => { apiMutation('/plex/back').catch(()=>{}); pollPlex(); };
+  $('plex-crumbs').querySelectorAll('[data-plex-section]').forEach(button => {
+    button.onclick = () => { apiMutation('/plex/open?idx=' + button.dataset.plexSection).catch(()=>{}); pollPlex(); };
+  });
+  const rows = browsing ? (d.items || []) : (d.sections || []);
   $('plex-results').innerHTML = rows.map((r, i) => `
     <div class="result">
       <div class="t">${esc(r.title)}</div>
       <div class="m">
         ${r.year ? `<span class="src">${esc(r.year)}</span>` : ''}
-        ${items && r.duration ? `<span class="src">${r.played ? 'Watched' : (r.progress ? `${fmt(r.progress)} / ${fmt(r.duration)}` : fmt(r.duration))}</span>` : ''}
-        <button class="play" data-i="${i}" data-id="${items ? esc(r.id || '') : ''}">${items ? (r.progress && !r.played ? 'Resume' : 'Play') : 'Open'}</button></div>
+        ${browsing && r.type ? `<span class="src">${esc(r.type)}</span>` : ''}
+        ${browsing && r.duration ? `<span class="src">${r.played ? 'Watched' : (r.progress ? `${fmt(r.progress)} / ${fmt(r.duration)}` : fmt(r.duration))}</span>` : ''}
+        <button class="play" data-i="${i}" data-id="${browsing ? esc(r.id || '') : ''}">${browsing ? (r.folder ? 'Open' : (r.progress && !r.played ? 'Resume' : 'Play')) : 'Open'}</button></div>
       ${items && r.duration && r.progress ? `<div class="plex-progress"><i style="width:${Math.min(100,Math.round(r.progress/r.duration*100))}%"></i></div>` : ''}
     </div>`).join('') || (d.connected ? '<div class="empty">Nothing here</div>' : '');
   $('plex-results').querySelectorAll('button[data-i]').forEach(b => {
     b.onclick = () => {
-      const request = items
-        ? apiMutation('/plex/play?id=' + encodeURIComponent(b.dataset.id))
-        : api('/plex/open?idx=' + b.dataset.i);
+      const row = rows[Number(b.dataset.i)] || {};
+      const request = browsing
+        ? apiMutation('/plex/' + (row.folder ? 'open_item' : 'play') + '?id=' + encodeURIComponent(b.dataset.id))
+        : apiMutation('/plex/open?idx=' + b.dataset.i);
       request.catch(()=>{}); pollPlex();
     };
   });
@@ -498,8 +506,8 @@ $('opds-go').onclick = () => {
   $('opds-pass').value = '';
   pollOpds();
 };
-$('plex-go').onclick = () => { api('/plex/connect').catch(()=>{}); pollPlex(); };
-$('plex-out').onclick = () => { api('/plex/disconnect').catch(()=>{}); pollPlex(); };
+$('plex-go').onclick = () => { apiMutation('/plex/connect').catch(()=>{}); pollPlex(); };
+$('plex-out').onclick = () => { apiMutation('/plex/disconnect').catch(()=>{}); pollPlex(); };
 $('lg-refresh').onclick = () => loadLogs();
 $('lg-errors').onclick = () => {
   logErrorsOnly = !logErrorsOnly;

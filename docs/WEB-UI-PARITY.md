@@ -115,7 +115,9 @@ commands, non-finite numbers, out-of-range values, and unknown actions.
 ### Wave 4 — source and integration ownership
 
 - [ ] Complete Plex/Jellyfin connection, library, search, details, playback,
-      progress/favorite mutations, and failure recovery
+      progress/favorite mutations, and failure recovery — stable Plex hierarchy,
+      resume playback, Jellyfin user-state mutations, and both recovery paths
+      are shipped; unified server-item details and Plex mutations remain
 - [x] Source endpoint catalog with accurate installed state, grouping/filtering,
       bounded refresh, version update, install/remove, and integration config
 - [x] Source health, permission review, diagnostics, and executable-plugin

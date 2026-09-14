@@ -1105,6 +1105,7 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
     const method = request[0..method_end];
     if (@import("remote_transfer_api.zig").handle(stream, method, api_path, query)) return;
     if (@import("remote_library_api.zig").handle(stream, method, api_path, query)) return;
+    if (@import("remote_plex_api.zig").handle(stream, method, api_path, query)) return;
     // ── Non-player endpoints checked first ──
     // Search
     if (std.mem.eql(u8, api_path, "/search")) {
@@ -1493,10 +1494,6 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
     }
     if (std.mem.startsWith(u8, api_path, "/opds")) {
         apiOpds(stream, api_path, query);
-        return;
-    }
-    if (std.mem.startsWith(u8, api_path, "/plex")) {
-        apiPlex(stream, method, api_path, query);
         return;
     }
     // Jellyfin
@@ -3973,100 +3970,6 @@ fn apiOpds(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) v
         }) catch return;
         escJsonWrite(&w, txt.safeUtf8(e.contentTypeSlice()));
         w.writeAll("\"}") catch return;
-    }
-    w.writeAll("]}") catch return;
-    sendJson(stream, json_buf[0..w.end]);
-}
-
-/// GET /api/plex — Plex sections → items → play.
-///
-/// Sign-in is Plex's PIN flow: `/plex/connect` starts it and the status payload
-/// carries `pin`, which the user enters at plex.tv/link. There is no
-/// username/password route because plex.zig doesn't have one.
-fn apiPlex(stream: std.Io.net.Stream, method: []const u8, api_path: []const u8, query: []const u8) void {
-    const plex = @import("plex.zig");
-
-    if (std.mem.eql(u8, api_path, "/plex/connect")) {
-        plex.connect();
-        sendJson(stream, "{\"ok\":true,\"action\":\"plex_connect\"}");
-        return;
-    }
-    if (std.mem.eql(u8, api_path, "/plex/disconnect")) {
-        plex.disconnect();
-        sendJson(stream, "{\"ok\":true,\"action\":\"plex_disconnect\"}");
-        return;
-    }
-    if (std.mem.eql(u8, api_path, "/plex/sections")) {
-        plex.fetchSections();
-        sendJson(stream, "{\"ok\":true,\"action\":\"plex_sections\"}");
-        return;
-    }
-    if (std.mem.eql(u8, api_path, "/plex/open")) {
-        const idx = std.fmt.parseInt(usize, getQueryParam(query, "idx") orelse "999", 10) catch 999;
-        if (idx >= plex.section_count) {
-            sendJsonStatus(stream, "404 Not Found", "{\"error\":\"no such section\"}");
-            return;
-        }
-        plex.fetchItems(idx);
-        sendJson(stream, "{\"ok\":true,\"action\":\"plex_open\"}");
-        return;
-    }
-    if (std.mem.eql(u8, api_path, "/plex/more")) {
-        plex.loadMore();
-        sendJson(stream, "{\"ok\":true,\"action\":\"plex_more\"}");
-        return;
-    }
-    if (std.mem.eql(u8, api_path, "/plex/play")) {
-        if (!requireMethod(stream, method, "POST")) return;
-        var id_buf: [64]u8 = undefined;
-        const id_raw = getQueryParam(query, "id") orelse "";
-        const id = urlDecode(id_raw, &id_buf) orelse id_raw;
-        if (!plex.playByRatingKey(id)) {
-            sendJsonStatus(stream, "404 Not Found", "{\"error\":\"no such item\"}");
-            return;
-        }
-        sendJson(stream, "{\"ok\":true,\"action\":\"plex_play\"}");
-        return;
-    }
-
-    const a = @import("../core/alloc.zig").allocator;
-    const json_buf = a.alloc(u8, 192 * 1024) catch return;
-    defer a.free(json_buf);
-    var w = std.Io.Writer.fixed(json_buf);
-    w.print("{{\"connected\":{s},\"loading\":{s},\"state\":\"{s}\",\"active_section\":{d},\"server\":\"", .{
-        if (plex.isConnected()) "true" else "false",
-        if (plex.is_loading.load(.acquire)) "true" else "false",
-        @tagName(plex.conn_state.load(.acquire)),
-        plex.active_section,
-    }) catch return;
-    escJsonWrite(&w, txt.safeUtf8(plex.server_name[0..@min(plex.server_name_len, plex.server_name.len)]));
-    w.writeAll("\",\"pin\":\"") catch return;
-    escJsonWrite(&w, txt.safeUtf8(plex.pin_code[0..@min(plex.pin_code_len, plex.pin_code.len)]));
-    w.writeAll("\",\"status\":\"") catch return;
-    escJsonWrite(&w, txt.safeUtf8(plex.status_msg[0..@min(plex.status_msg_len, plex.status_msg.len)]));
-    w.writeAll("\",\"sections\":[") catch return;
-    const sn = @min(plex.section_count, plex.sections.len);
-    for (plex.sections[0..sn], 0..) |*s, i| {
-        if (i > 0) w.writeAll(",") catch return;
-        w.writeAll("{\"title\":\"") catch return;
-        escJsonWrite(&w, txt.safeUtf8(s.title[0..@min(s.title_len, s.title.len)]));
-        w.writeAll("\"}") catch return;
-    }
-    w.writeAll("],\"items\":[") catch return;
-    const inn = @min(plex.item_count, plex.items.len);
-    for (plex.items[0..inn], 0..) |*it, i| {
-        if (i > 0) w.writeAll(",") catch return;
-        w.writeAll("{\"title\":\"") catch return;
-        escJsonWrite(&w, txt.safeUtf8(it.title[0..@min(it.title_len, it.title.len)]));
-        w.writeAll("\",\"id\":\"") catch return;
-        escJsonWrite(&w, it.rating_key[0..@min(it.rating_key_len, it.rating_key.len)]);
-        w.writeAll("\",\"year\":\"") catch return;
-        escJsonWrite(&w, txt.safeUtf8(it.year[0..@min(it.year_len, it.year.len)]));
-        w.print("\",\"progress\":{d},\"duration\":{d},\"played\":{s}}}", .{
-            @divTrunc(it.view_offset_ms, 1000),
-            @divTrunc(it.duration_ms, 1000),
-            if (it.view_count > 0) "true" else "false",
-        }) catch return;
     }
     w.writeAll("]}") catch return;
     sendJson(stream, json_buf[0..w.end]);

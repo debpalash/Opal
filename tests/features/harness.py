@@ -247,6 +247,7 @@ def _remote_api():
     names = (
         "remote.zig", "remote_http.zig", "remote_static.zig",
         "remote_status.zig", "remote_library_api.zig", "remote_transfer_api.zig",
+        "remote_plex_api.zig",
     )
     return "\n".join(_src(f"src/services/{name}") for name in names)
 
