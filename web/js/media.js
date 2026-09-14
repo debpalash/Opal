@@ -536,6 +536,10 @@ function openSourceDetails(source, item, trigger){
       closeSourceDetails(); pollPlex();
     }, true));
     if (!item.folder) {
+      actions.append(detailAction(item.favorite ? 'Remove favorite' : 'Favorite', async () => {
+        await apiMutation('/plex/action?id=' + encodeURIComponent(item.id) + '&action=favorite&enabled=' + !item.favorite);
+        closeSourceDetails(); pollPlex();
+      }));
       actions.append(detailAction(item.played ? 'Mark unwatched' : 'Mark watched', async () => {
         await apiMutation('/plex/action?id=' + encodeURIComponent(item.id) + '&action=played&enabled=' + !item.played);
         closeSourceDetails(); pollPlex();
@@ -668,6 +672,7 @@ function renderPlex(d){
         ${r.year ? `<span class="src">${esc(r.year)}</span>` : ''}
         ${browsing && r.type ? `<span class="src">${esc(r.type)}</span>` : ''}
         ${browsing && r.duration ? `<span class="src">${r.played ? 'Watched' : (r.progress ? `${fmt(r.progress)} / ${fmt(r.duration)}` : fmt(r.duration))}</span>` : ''}
+        ${browsing && !r.folder ? `<button class="plex-favorite" data-id="${esc(r.id || '')}" data-enabled="${!r.favorite}" aria-label="${r.favorite ? 'Remove favorite' : 'Add favorite'}" title="${r.favorite ? 'Remove favorite' : 'Add favorite'}">${r.favorite ? '&#9733;' : '&#9734;'}</button>` : ''}
         ${browsing && !r.folder ? `<button class="plex-watched" data-id="${esc(r.id || '')}" data-enabled="${!r.played}" aria-label="${r.played ? 'Mark unwatched' : 'Mark watched'}" title="${r.played ? 'Mark unwatched' : 'Mark watched'}">${r.played ? '&#10003;' : '&#9675;'}</button>` : ''}
         ${browsing && !r.folder ? `<select class="plex-rating" data-id="${esc(r.id || '')}" aria-label="Rate ${esc(r.title)}">${plexRatingOptions(r.rating)}</select>` : ''}
         ${browsing ? `<button class="plex-details" data-i="${i}">Details</button>` : ''}
@@ -691,6 +696,16 @@ function renderPlex(d){
           '&action=played&enabled=' + button.dataset.enabled);
         pollPlex();
       } catch (error) { button.disabled = false; toast(error.message || 'Could not update watched state.'); }
+    };
+  });
+  $('plex-results').querySelectorAll('.plex-favorite').forEach(button => {
+    button.onclick = async () => {
+      button.disabled = true;
+      try {
+        await apiMutation('/plex/action?id=' + encodeURIComponent(button.dataset.id) +
+          '&action=favorite&enabled=' + button.dataset.enabled);
+        pollPlex();
+      } catch (error) { button.disabled = false; toast(error.message || 'Could not update favorite.'); }
     };
   });
   $('plex-results').querySelectorAll('.plex-rating').forEach(select => {

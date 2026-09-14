@@ -33,6 +33,10 @@ pub fn handle(stream: std.Io.net.Stream, method: []const u8, path: []const u8, q
             const raw = wire.queryParam(query, "enabled") orelse return badRequest(stream, "missing enabled state");
             const enabled = if (std.mem.eql(u8, raw, "true")) true else if (std.mem.eql(u8, raw, "false")) false else return badRequest(stream, "invalid enabled state");
             if (!plex.setWatched(id, enabled)) return conflict(stream, "item unavailable");
+        } else if (std.mem.eql(u8, action, "favorite")) {
+            const raw = wire.queryParam(query, "enabled") orelse return badRequest(stream, "missing enabled state");
+            const enabled = if (std.mem.eql(u8, raw, "true")) true else if (std.mem.eql(u8, raw, "false")) false else return badRequest(stream, "invalid enabled state");
+            if (!plex.setFavorite(id, enabled)) return conflict(stream, "item unavailable");
         } else if (std.mem.eql(u8, action, "rating")) {
             const rating = std.fmt.parseFloat(f32, wire.queryParam(query, "rating") orelse "") catch return badRequest(stream, "invalid rating");
             if (!std.math.isFinite(rating) or rating < 0 or rating > 10) return badRequest(stream, "invalid rating");
@@ -99,9 +103,9 @@ fn status(stream: std.Io.net.Stream) void {
         wire.writeJsonString(&w, txt.safeUtf8(item.year[0..@min(item.year_len, item.year.len)]));
         w.writeAll("\",\"type\":\"") catch return;
         wire.writeJsonString(&w, item.media_type[0..@min(item.media_type_len, item.media_type.len)]);
-        w.print("\",\"folder\":{s},\"progress\":{d},\"duration\":{d},\"played\":{s},\"rating\":{d}}}", .{
-            if (item.is_folder) "true" else "false",      @divTrunc(item.view_offset_ms, 1000), @divTrunc(item.duration_ms, 1000),
-            if (item.view_count > 0) "true" else "false", item.user_rating,
+        w.print("\",\"folder\":{s},\"progress\":{d},\"duration\":{d},\"played\":{s},\"favorite\":{s},\"rating\":{d}}}", .{
+            if (item.is_folder) "true" else "false",      @divTrunc(item.view_offset_ms, 1000),      @divTrunc(item.duration_ms, 1000),
+            if (item.view_count > 0) "true" else "false", if (item.is_favorite) "true" else "false", item.user_rating,
         }) catch return;
     }
     w.writeAll("]}") catch return;

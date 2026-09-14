@@ -65,6 +65,19 @@ pub fn setFavorite(kind: []const u8, item_id: []const u8, fav: bool, title: []co
     _ = db.step(stmt);
 }
 
+/// Read one source-owned favorite flag by stable identity. Source adapters use
+/// this while rebuilding their transient browse rows so an Opal-local favorite
+/// survives reconnects and pagination even when the upstream server has no
+/// equivalent mutation (Plex is the important case).
+pub fn isFavorite(kind: []const u8, item_id: []const u8) bool {
+    if (kind.len == 0 or item_id.len == 0) return false;
+    const stmt = db.prepare("SELECT is_favorite FROM library_items WHERE kind=?1 AND item_id=?2 LIMIT 1") orelse return false;
+    defer db.finalize(stmt);
+    db.bindText(stmt, 1, kind);
+    db.bindText(stmt, 2, item_id);
+    return db.step(stmt) == db.c.SQLITE_ROW and db.columnInt64(stmt, 0) != 0;
+}
+
 fn readRow(stmt: ?*db.Stmt, out: *pure.LibraryItem) void {
     out.* = .{};
     db.copyColumn(stmt, 0, out.kind[0..], &out.kind_len);

@@ -116,12 +116,12 @@ commands, non-finite numbers, out-of-range values, and unknown actions.
 
 ### Wave 4 — source and integration ownership
 
-- [ ] Complete Plex/Jellyfin connection, library, search, details, playback,
+- [x] Complete Plex/Jellyfin connection, library, search, details, playback,
       progress/favorite mutations, and failure recovery — stable Plex hierarchy,
       resume playback, Jellyfin user-state mutations, Plex watched mutations,
       and both recovery paths are shipped; unified server-item details plus
-      Plex favorite semantics remain (Plex watched and 0–10 rating mutations
-      are complete)
+      and failure recovery; Plex favorites use Opal's unified library because
+      Plex Media Server has no equivalent server-library favorite mutation
 - [x] Source endpoint catalog with accurate installed state, grouping/filtering,
       bounded refresh, version update, install/remove, and integration config
 - [x] Source health, permission review, diagnostics, and executable-plugin

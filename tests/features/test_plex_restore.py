@@ -193,3 +193,24 @@ def test_plex_rating_mutation():
     if missing:
         return "fail", "Plex rating mutation incomplete: " + ", ".join(missing)
     return "pass", "Plex 0–10 half-step ratings synchronize by stable identity"
+
+
+@test("Plex favorites persist in Opal by stable identity", "Plex")
+def test_plex_favorite_mutation():
+    svc = _src("src/services/plex.zig")
+    api = _src("src/services/remote_plex_api.zig")
+    store = _src("src/services/library_store.zig")
+    web = _src("web/js/media.js")
+    checks = {
+        "stable local lookup": "pub fn isFavorite" in store and 'isFavorite("plex"' in svc,
+        "unified library persistence": 'setFavorite("plex"' not in svc and '"plex",\n            rating_key,' in svc,
+        "typed endpoint": 'std.mem.eql(u8, action, "favorite")' in api and "plex.setFavorite(id, enabled)" in api,
+        "projected state": 'favorite\\\":{s}' in api and "item.is_favorite" in api,
+        "accessible web toggle": "plex-favorite" in web and "Add favorite" in web and "Remove favorite" in web,
+        "details mutation": "&action=favorite&enabled=" in web,
+        "native toggle": 'if (it.is_favorite) "Favorited" else "Favorite"' in svc,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "Plex favorite persistence incomplete: " + ", ".join(missing)
+    return "pass", "Plex favorites persist across browse rebuilds and join the unified Favorites rail"

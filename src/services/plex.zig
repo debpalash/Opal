@@ -59,6 +59,7 @@ const Item = struct {
     duration_ms: i64 = 0,
     view_count: i64 = 0,
     user_rating: f32 = 0,
+    is_favorite: bool = false,
     watched_gen: u32 = 0,
     rating_gen: u32 = 0,
     media_type: [16]u8 = std.mem.zeroes([16]u8),
@@ -664,6 +665,9 @@ fn fetchWindow(request: BrowseRequest, start: usize, gen: u64) void {
                 it.fallback_part_len = pl;
             }
         };
+        if (it.rating_key_len > 0) {
+            it.is_favorite = @import("library_store.zig").isFavorite("plex", it.rating_key[0..it.rating_key_len]);
+        }
         item_count += 1;
     }
     current_start = start + returned;
@@ -740,6 +744,35 @@ pub fn playByRatingKey(rating_key: []const u8) bool {
     for (items[0..item_count]) |item| {
         if (!std.mem.eql(u8, item.rating_key[0..item.rating_key_len], rating_key)) continue;
         playResolvedItem(item);
+        return true;
+    }
+    return false;
+}
+
+/// Plex Media Server exposes watched and personal-rating mutations but no
+/// server-library favorite flag. Keep this preference in Opal's unified
+/// library read model under the stable rating key; it then participates in the
+/// same Favorites rail as every other adapter.
+pub fn setFavorite(rating_key: []const u8, enabled: bool) bool {
+    if (!isConnected() or !plex_pure.validRatingKey(rating_key)) return false;
+    for (items[0..item_count]) |*item| {
+        if (!std.mem.eql(u8, item.rating_key[0..item.rating_key_len], rating_key)) continue;
+        if (item.is_folder) return false;
+        var deep_buf: [640]u8 = undefined;
+        const deep = if (item.part_len > 0)
+            (plex_pure.buildDeepLink(rating_key, item.part[0..item.part_len], &deep_buf) orelse "")
+        else
+            "";
+        @import("library_store.zig").setFavorite(
+            "plex",
+            rating_key,
+            enabled,
+            item.title[0..item.title_len],
+            "",
+            deep,
+        );
+        item.is_favorite = enabled;
+        state.wakeUi();
         return true;
     }
     return false;
@@ -1134,6 +1167,15 @@ pub fn renderContent() void {
             .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
             .gravity_y = 0.5,
         })) _ = setWatched(it.rating_key[0..it.rating_key_len], it.view_count == 0);
+        if (!it.is_folder and it.rating_key_len > 0 and dvui.button(@src(), if (it.is_favorite) "Favorited" else "Favorite", .{}, .{
+            .id_extra = i + 91550,
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = if (it.is_favorite) theme.colors.warning else theme.colors.text_secondary,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
+            .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
+            .gravity_y = 0.5,
+        })) _ = setFavorite(it.rating_key[0..it.rating_key_len], !it.is_favorite);
         if (!it.is_folder and it.rating_key_len > 0) {
             var rating_choice: usize = @intFromFloat(@round(std.math.clamp(it.user_rating, 0, 10) * 2));
             if (dvui.dropdown(@src(), &RATING_LABELS, .{ .choice = &rating_choice }, .{}, .{
