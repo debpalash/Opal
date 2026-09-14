@@ -148,13 +148,20 @@ function renderComics(rows){
   const html = rows.map((r, i) => `
     <div class="result">
       <div class="t">${esc(r.title)}</div>
-      <div class="m"><button class="play" data-cx="${encodeURIComponent(r.url)}">Read</button></div>
+      <div class="m"><button class="comic-details" data-details="${i}">Details</button>
+        <button class="play" data-cx="${encodeURIComponent(r.url)}">Read</button></div>
     </div>`).join('') || '<div class="empty">No results yet</div>';
   if (html === lastHtml.comics) return;
   lastHtml.comics = html;
   $('cx-results').innerHTML = html;
   $('cx-results').querySelectorAll('button[data-cx]').forEach(b => {
     b.onclick = () => openComic(decodeURIComponent(b.dataset.cx));
+  });
+  $('cx-results').querySelectorAll('.comic-details').forEach(button => {
+    const comic = rows[Number(button.dataset.details)] || {};
+    button.onclick = () => openSourceDetails('Comic', {
+      ...comic, name:comic.title, type:'Comic', artUrl:comic.cover || '', url:comic.url,
+    }, button);
   });
 }
 function openComic(url){
@@ -236,7 +243,8 @@ function renderNovels(d){
   $('nv-results').innerHTML = rows.map((r, i) => `
     <div class="result">
       <div class="t">${esc(r.title)}</div>
-      <div class="m"><button class="play" data-nv="${i}" data-kind="${kind}">${kind === 'open' ? 'Open' : 'Read'}</button></div>
+      <div class="m"><button class="novel-details" data-details="${i}" data-kind="${kind}">Details</button>
+        <button class="play" data-nv="${i}" data-kind="${kind}">${kind === 'open' ? 'Open' : 'Read'}</button></div>
     </div>`).join('') || '<div class="empty">Nothing here</div>';
   $('nv-results').querySelectorAll('button[data-nv]').forEach(b => {
     b.onclick = () => {
@@ -277,6 +285,7 @@ function renderDrama(rows){
       <div class="m">
         ${r.year ? `<span class="src">${esc(r.year)}</span>` : ''}
         ${r.vote ? `<span>★ ${r.vote}</span>` : ''}
+        <button class="drama-details" data-details="${i}">Details</button>
         <button class="play" data-i="${i}">Play</button></div>
     </div>`).join('') || '<div class="empty">No titles yet</div>';
   if (html === lastHtml.drama) return;
@@ -284,6 +293,13 @@ function renderDrama(rows){
   $('dr-results').innerHTML = html;
   $('dr-results').querySelectorAll('button[data-i]').forEach(b => {
     b.onclick = () => { api('/drama/play?idx=' + b.dataset.i).catch(()=>{}); b.textContent = 'Resolving…'; };
+  });
+  $('dr-results').querySelectorAll('.drama-details').forEach(button => {
+    const drama = rows[Number(button.dataset.details)] || {};
+    button.onclick = () => openSourceDetails('Drama', {
+      ...drama, type:'TV series', meta:[drama.year, drama.vote ? `Rating ${drama.vote}` : ''].filter(Boolean).join(' · '),
+      artUrl:drama.poster_path ? `https://image.tmdb.org/t/p/w500${drama.poster_path}` : '', index:Number(button.dataset.details),
+    }, button);
   });
 }
 
@@ -311,18 +327,26 @@ function pollVndb(){
   }, 900);
 }
 function renderVndb(rows){
-  const html = rows.map(r => `
+  const html = rows.map((r, i) => `
     <div class="result">
       <div class="t">${esc(r.title)}</div>
       <div class="m">
         ${r.released ? `<span class="src">${esc(r.released)}</span>` : ''}
         ${r.rating ? `<span>★ ${r.rating}</span>` : ''}
+        <button class="vndb-details" data-details="${i}">Details</button>
       </div>
       <div class="sub">${esc((r.description || '').slice(0, 220))}</div>
     </div>`).join('') || '<div class="empty">No titles yet</div>';
   if (html === lastHtml.vndb) return;
   lastHtml.vndb = html;
   $('vn-results').innerHTML = html;
+  $('vn-results').querySelectorAll('.vndb-details').forEach(button => {
+    const novel = rows[Number(button.dataset.details)] || {};
+    button.onclick = () => openSourceDetails('Visual novel', {
+      ...novel, name:novel.title, type:'Visual novel', overview:novel.description || '',
+      meta:[novel.released, novel.rating ? `Rating ${novel.rating}` : ''].filter(Boolean).join(' · '), artUrl:novel.image || '',
+    }, button);
+  });
 }
 
 // ── Audiobookshelf ──
@@ -412,6 +436,13 @@ function renderOpds(d){
       meta:entry.streamable ? `${entry.pages} pages` : '', index:Number(button.dataset.details),
     }, button);
   });
+  $('nv-results').querySelectorAll('.novel-details').forEach(button => {
+    const row = rows[Number(button.dataset.details)] || {};
+    button.onclick = () => openSourceDetails('Novel', {
+      ...row, name:row.title, type:button.dataset.kind === 'chapter' ? 'Chapter' : 'Novel',
+      kind:button.dataset.kind === 'chapter' ? 'chapter' : 'novel', index:Number(button.dataset.details),
+    }, button);
+  });
 }
 
 // ── Plex (sign-in is Plex's PIN flow — enter the code at plex.tv/link) ──
@@ -441,6 +472,13 @@ function detailAction(label, run, primary){
   };
   return button;
 }
+function sourceArtUrl(value){
+  if (!value) return '';
+  try {
+    const url = new URL(value, location.href);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : '';
+  } catch { return ''; }
+}
 function openSourceDetails(source, item, trigger){
   const dialog = $('source-details'), actions = $('source-details-actions');
   sourceDetailsReturnFocus = trigger || document.activeElement;
@@ -450,8 +488,8 @@ function openSourceDetails(source, item, trigger){
   $('source-details-meta').textContent = item.meta || [item.type || '', item.year || '', runtime ? fmt(runtime) : ''].filter(Boolean).join(' · ');
   $('source-details-overview').textContent = item.overview || '';
   const art = $('source-details-art');
-  const artUrl = item.artUrl || (source === 'Jellyfin' && item.image
-    ? `${BASE}/api/jellyfin/poster?id=${encodeURIComponent(item.id)}` : '');
+  const artUrl = sourceArtUrl(item.artUrl || (source === 'Jellyfin' && item.image
+    ? `${BASE}/api/jellyfin/poster?id=${encodeURIComponent(item.id)}` : ''));
   art.hidden = !artUrl; art.src = artUrl; art.alt = artUrl ? `Poster for ${item.name || item.title || 'item'}` : '';
   actions.replaceChildren();
   if (source === 'Jellyfin') {
@@ -507,6 +545,22 @@ function openSourceDetails(source, item, trigger){
       closeSourceDetails();
       if (item.kind === 'show') loadPodEpisodes(item.index);
       else await api('/podcasts/play?idx=' + encodeURIComponent(item.index));
+    }, true));
+  } else if (source === 'Comic') {
+    actions.append(detailAction('Read', () => { closeSourceDetails(); openComic(item.url); }, true));
+  } else if (source === 'Novel') {
+    actions.append(detailAction(item.kind === 'chapter' ? 'Read' : 'Open', async () => {
+      if (item.kind !== 'chapter') novelIdx = item.index;
+      await api('/novels/' + (item.kind === 'chapter' ? 'chapter' : 'open') + '?idx=' + encodeURIComponent(item.index));
+      closeSourceDetails(); pollNovels();
+    }, true));
+  } else if (source === 'Drama') {
+    actions.append(detailAction('Find streams', async () => {
+      await api('/drama/play?idx=' + encodeURIComponent(item.index)); closeSourceDetails();
+    }, true));
+  } else if (source === 'RSS') {
+    actions.append(detailAction('Play', async () => {
+      await apiMutation('/load?url=' + encodeURIComponent(item.url)); closeSourceDetails();
     }, true));
   }
   if (!dialog.open) dialog.showModal();

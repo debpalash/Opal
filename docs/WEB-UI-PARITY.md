@@ -99,8 +99,9 @@ commands, non-finite numbers, out-of-range values, and unknown actions.
 - [ ] Unified details view for movies, shows, seasons, episodes, audio, books,
       podcasts, comics, and source-specific items — movies and shows share one
       panel (`openDetails` → `/api/movie` + `/api/tv`), while Plex, Jellyfin,
-      Audiobookshelf, OPDS and podcasts share an actionable semantic details
-      dialog; comics and remaining source kinds are still pending
+      Audiobookshelf, OPDS, podcasts, comics, novels, visual novels, drama and
+      RSS share an actionable semantic details dialog; music/radio and remaining
+      specialized source kinds are still pending
 - [x] Exact TV/anime episode watched/unwatched state from library and show pages
 - [x] Automatic/plan/watching/completed/dropped status mutations and safe
       TV/anime untracking that keeps watch history

@@ -885,7 +885,9 @@ def test_server_item_details_dialog():
         "semantic modal": '<dialog id="source-details"' in html and 'aria-labelledby="source-details-title"' in html,
         "responsive glass layout": "#source-details::backdrop" in css and "backdrop-filter:blur" in css and "@media(max-width:560px)" in css,
         "one renderer across adapters": "function openSourceDetails(source, item, trigger)" in media and all(
-            f"source === '{source}'" in media for source in ("Jellyfin", "Plex", "Audiobookshelf", "OPDS", "Podcast")
+            f"source === '{source}'" in media for source in (
+                "Jellyfin", "Plex", "Audiobookshelf", "OPDS", "Podcast", "Comic", "Novel", "Drama", "RSS"
+            )
         ),
         "focus restored": "sourceDetailsReturnFocus.focus()" in media,
         "outside click closes": "event.target === $('source-details')" in media,
@@ -898,11 +900,15 @@ def test_server_item_details_dialog():
         "OPDS details": "opds-details" in media and "'/opds/open?idx='" in media,
         "podcast show and episode details": "pod-details" in discovery and "pod-episode-details" in discovery,
         "podcast publisher projected": 'r.artist[0..@min(r.artist_len' in remote,
+        "comic and novel details": all(marker in media for marker in ("comic-details", "novel-details", "source === 'Comic'", "source === 'Novel'")),
+        "catalog details": all(marker in media for marker in ("drama-details", "vndb-details", "sourceArtUrl")),
+        "RSS details": "rss-details" in discovery and "source === 'RSS'" in media,
+        "art protocol allowlist": "url.protocol === 'http:' || url.protocol === 'https:'" in media,
     }
     missing = [name for name, ok in checks.items() if not ok]
     if missing:
         return "fail", "server details incomplete: " + ", ".join(missing)
-    return "pass", "Server, audiobook, publication, podcast, and episode details share one accessible action surface"
+    return "pass", "Server, book, podcast, comic, novel, drama, and RSS details share one safe accessible surface"
 
 
 @test("Remote API never serializes socket writes behind a global lock", "Remote")

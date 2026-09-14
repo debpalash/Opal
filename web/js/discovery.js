@@ -436,12 +436,14 @@ function refreshFeed(idx, btn){
   }, 900);
 }
 function renderRssItems(items, fetching){
-  const html = items.slice(0, 80).map(it => `
+  const visible = items.slice(0, 80);
+  const html = visible.map((it, i) => `
     <div class="result">
       <div class="t">${esc(it.title)}</div>
       <div class="m">
         ${it.seeds ? `<span>▲ ${esc(String(it.seeds))}</span>` : ''}
         ${it.size ? `<span>${fmtSize(it.size)}</span>` : ''}
+        <button class="rss-details" data-details="${i}">Details</button>
         <button class="play" data-url="${encodeURIComponent(it.magnet || '')}">Play</button>
       </div>
     </div>`).join('') || (fetching ? '<div class="empty"><span class="spin"></span></div>' : '<div class="empty">No items — refresh a feed</div>');
@@ -452,5 +454,12 @@ function renderRssItems(items, fetching){
     const u = b.dataset.url; if (!u) return;
     b.textContent = 'Sent ✓';
     apiMutation('/load?url=' + u).catch(()=>{});
+  });
+  $('rss-items').querySelectorAll('.rss-details').forEach(button => {
+    const item = visible[Number(button.dataset.details)] || {};
+    button.onclick = () => openSourceDetails('RSS', {
+      ...item, name:item.title, type:'RSS item',
+      meta:[item.seeds ? `${item.seeds} seeds` : '', fmtSize(item.size)].filter(Boolean).join(' · '), url:item.magnet || '',
+    }, button);
   });
 }
