@@ -1212,23 +1212,20 @@ pub fn fetchThumb(item: *state.YtItem) void {
                     break :blk body;
                 };
 
-                var comp: c_int = 0;
                 w = 0;
                 h = 0;
-                pixels = dvui.c.stbi_load_from_memory(body.ptr, @intCast(body.len), &w, &h, &comp, 4);
-                if (pixels != null and w > 0 and h > 0) {
+                if (poster.decodeCover(body)) |cover| {
+                    pixels = cover.pixels;
+                    w = cover.width;
+                    h = cover.height;
                     if (!used_cache) poster.cacheStoreForUrl(turl, body, @intCast(w), @intCast(h));
                     break;
                 }
-                if (pixels != null) dvui.c.stbi_image_free(pixels);
-                pixels = null;
                 if (used_cache) poster.cacheDeleteForUrl(turl) else return;
             }
             if (pixels == null) return;
             defer dvui.c.stbi_image_free(pixels);
-            // usize-first: w*h*4 in c_int overflows on a large crafted image and
-            // panics this worker thread (whole-app abort).
-            const p_len: usize = @as(usize, @intCast(w)) * @as(usize, @intCast(h)) * 4;
+            const p_len = @import("../core/image_limits_pure.zig").coverRgbaBytes(w, h) orelse return;
             const p_slice = alloc.alloc(u8, p_len) catch return;
             @memcpy(p_slice, pixels[0..p_len]);
 

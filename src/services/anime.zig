@@ -4271,28 +4271,16 @@ pub fn fetchPoster(item: *state.AnimeResult) void {
                 return;
             }
 
-            var w: c_int = 0;
-            var h: c_int = 0;
-            var comp: c_int = 0;
-            const pixels = dvui.c.stbi_load_from_memory(body.ptr, @intCast(body.len), &w, &h, &comp, 4);
-            if (pixels == null) {
-                markDone(result_idx, u);
-                return;
-            }
-            defer dvui.c.stbi_image_free(pixels);
-
-            if (w <= 0 or h <= 0) {
-                markDone(result_idx, u);
-                return;
-            }
-            // Compute in usize: w*h*4 in c_int (i32) overflows on a large crafted
-            // image, panicking this worker thread and aborting the whole app.
-            const p_len: usize = @as(usize, @intCast(w)) * @as(usize, @intCast(h)) * 4;
-            const p_slice = std.heap.c_allocator.alloc(u8, p_len) catch {
+            const decoded = @import("../core/poster.zig").decodeCover(body) orelse {
                 markDone(result_idx, u);
                 return;
             };
-            @memcpy(p_slice, pixels[0..p_len]);
+            defer decoded.deinit();
+            const p_slice = std.heap.c_allocator.alloc(u8, decoded.rgba_len) catch {
+                markDone(result_idx, u);
+                return;
+            };
+            @memcpy(p_slice, decoded.pixels[0..decoded.rgba_len]);
 
             // Verify the slot still holds the same URL before publishing.
             if (result_idx < state.app.anime.result_count) {
@@ -4300,8 +4288,8 @@ pub fn fetchPoster(item: *state.AnimeResult) void {
                 if (ptr.poster_url_len == u.len and
                     std.mem.eql(u8, ptr.poster_url[0..ptr.poster_url_len], u))
                 {
-                    ptr.poster_w = @intCast(w);
-                    ptr.poster_h = @intCast(h);
+                    ptr.poster_w = @intCast(decoded.width);
+                    ptr.poster_h = @intCast(decoded.height);
                     ptr.poster_pixels = p_slice;
                     ptr.poster_fetching = false;
                     return;
@@ -4369,34 +4357,22 @@ pub fn fetchContinuePoster(item: *state.ContinueItem) void {
                 return;
             }
 
-            var w: c_int = 0;
-            var h: c_int = 0;
-            var comp: c_int = 0;
-            const pixels = dvui.c.stbi_load_from_memory(body.ptr, @intCast(body.len), &w, &h, &comp, 4);
-            if (pixels == null) {
-                markDone(idx, url);
-                return;
-            }
-            defer dvui.c.stbi_image_free(pixels);
-
-            if (w <= 0 or h <= 0) {
-                markDone(idx, url);
-                return;
-            }
-            // usize-first: w*h*4 in c_int overflows on a large crafted image and
-            // panics this worker thread (whole-app abort).
-            const p_len: usize = @as(usize, @intCast(w)) * @as(usize, @intCast(h)) * 4;
-            const p_slice = std.heap.c_allocator.alloc(u8, p_len) catch {
+            const decoded = @import("../core/poster.zig").decodeCover(body) orelse {
                 markDone(idx, url);
                 return;
             };
-            @memcpy(p_slice, pixels[0..p_len]);
+            defer decoded.deinit();
+            const p_slice = std.heap.c_allocator.alloc(u8, decoded.rgba_len) catch {
+                markDone(idx, url);
+                return;
+            };
+            @memcpy(p_slice, decoded.pixels[0..decoded.rgba_len]);
 
             if (idx < state.app.anime.continue_count) {
                 const ptr = &state.app.anime.continue_items[idx];
                 if (ptr.poster_url_len == url.len and std.mem.eql(u8, ptr.poster_url[0..ptr.poster_url_len], url)) {
-                    ptr.poster_w = @intCast(w);
-                    ptr.poster_h = @intCast(h);
+                    ptr.poster_w = @intCast(decoded.width);
+                    ptr.poster_h = @intCast(decoded.height);
                     ptr.poster_pixels = p_slice;
                     ptr.poster_fetching = false;
                     return;
