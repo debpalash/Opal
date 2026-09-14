@@ -2235,7 +2235,20 @@ pub fn loadTorrentToPlayer(magnet_link: []const u8) void {
     const logs = @import("../core/logs.zig");
     const playermod = @import("../player/player.zig");
 
-    // Auto-create a player if none exists
+    if (magnet_link.len == 0) {
+        logs.pushLog("error", "search", "Empty magnet link", true);
+        return;
+    }
+
+    // The cold-start torrent FIFO can retain a direct magnet before a player
+    // exists. Initializing libmpv first only delayed acknowledgement.
+    if (std.mem.startsWith(u8, magnet_link, "magnet:?")) {
+        addMagnetToEngine(magnet_link);
+        return;
+    }
+
+    // Detail-page resolution uses the player as its loading surface. Direct
+    // magnets returned above and never pay this initialization cost.
     if (state.app.players.items.len == 0) {
         if (playermod.acquire(@import("../core/alloc.zig").allocator)) |new_p| {
             state.app.players.append(@import("../core/alloc.zig").allocator, new_p) catch {
@@ -2250,19 +2263,8 @@ pub fn loadTorrentToPlayer(magnet_link: []const u8) void {
         }
     }
 
-    if (state.app.active_player_idx >= state.app.players.items.len) {
+    if (state.app.players.items.len > 0 and state.app.active_player_idx >= state.app.players.items.len) {
         state.app.active_player_idx = state.app.players.items.len - 1;
-    }
-
-    if (magnet_link.len == 0) {
-        logs.pushLog("error", "search", "Empty magnet link", true);
-        return;
-    }
-
-    // If it's already a magnet link, use directly
-    if (std.mem.startsWith(u8, magnet_link, "magnet:?")) {
-        addMagnetToEngine(magnet_link);
-        return;
     }
 
     // If it's an HTTP URL (detail page), resolve to magnet in background
@@ -2418,8 +2420,9 @@ fn hexVal(ch: u8) ?u4 {
 fn addMagnetToEngine(magnet_link: []const u8) void {
     const playermod = @import("../player/player.zig");
 
-    // Auto-create a player if none exists
-    if (state.app.players.items.len == 0) {
+    // A cold-start magnet can live in the pending FIFO without a player;
+    // initialize libmpv only once the engine can consume it.
+    if (state.torrentSession() != null and state.app.players.items.len == 0) {
         if (playermod.acquire(@import("../core/alloc.zig").allocator)) |new_p| {
             state.app.players.append(@import("../core/alloc.zig").allocator, new_p) catch {
                 new_p.deinit(@import("../core/alloc.zig").allocator);
@@ -2429,7 +2432,7 @@ fn addMagnetToEngine(magnet_link: []const u8) void {
         } else |_| return;
     }
 
-    if (state.app.active_player_idx >= state.app.players.items.len) {
+    if (state.app.players.items.len > 0 and state.app.active_player_idx >= state.app.players.items.len) {
         state.app.active_player_idx = state.app.players.items.len - 1;
     }
 
@@ -2553,8 +2556,9 @@ pub fn addTorrentFileToEngine(path: []const u8) void {
         return;
     }
 
-    // Auto-create a player if none exists (cold-start `opal foo.torrent`).
-    if (state.app.players.items.len == 0) {
+    // A cold-start `.torrent` path can live in the pending FIFO without a
+    // player; initialize libmpv only once the engine can consume it.
+    if (state.torrentSession() != null and state.app.players.items.len == 0) {
         if (playermod.acquire(@import("../core/alloc.zig").allocator)) |new_p| {
             state.app.players.append(@import("../core/alloc.zig").allocator, new_p) catch {
                 new_p.deinit(@import("../core/alloc.zig").allocator);
@@ -2568,7 +2572,7 @@ pub fn addTorrentFileToEngine(path: []const u8) void {
         }
     }
 
-    if (state.app.active_player_idx >= state.app.players.items.len) {
+    if (state.app.players.items.len > 0 and state.app.active_player_idx >= state.app.players.items.len) {
         state.app.active_player_idx = state.app.players.items.len - 1;
     }
 

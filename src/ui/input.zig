@@ -164,16 +164,11 @@ pub fn processGlobalInputs() void {
             if (key == .t and ctrl_or_cmd and mod.shift()) {
                 var restore_buf: [2048]u8 = undefined;
                 if (state.popClosedUrl(&restore_buf)) |url| {
-                    const player = @import("../player/player.zig");
-                    if (player.acquire(@import("../core/alloc.zig").allocator)) |p| {
-                        state.app.players.append(@import("../core/alloc.zig").allocator, p) catch {};
-                        state.app.active_player_idx = state.app.players.items.len - 1;
-
-                        // Load the restored URL into the new player.
-                        const browser = @import("../services/browser.zig");
-                        browser.loadContent(url);
-                        state.showToast("Restored closed player");
-                    } else |_| {}
+                    // The shared direct-play seam creates (or asynchronously
+                    // acquires) the player. Doing that here used to block this
+                    // keyboard-input frame when libmpv prewarm was unfinished.
+                    @import("../services/browser.zig").loadContent(url);
+                    state.showToast("Restored closed player");
                 } else {
                     state.showToast("No closed players to restore");
                 }

@@ -1025,9 +1025,18 @@ def test_torrent_session_not_ready_is_reported():
                 and "state.wakeUi();" in main)
     if not required:
         return "fail", "cold-start torrent action is not safely queued and flushed"
+    # A queue that is reached only after libmpv initialization still freezes
+    # the first click. Both engine-add paths must avoid creating a player until
+    # the session is ready, and direct magnets must route before the detail-page
+    # loading surface is constructed.
+    direct = _between(src, "pub fn loadTorrentToPlayer", "fn hexVal")
+    if src.count("state.torrentSession() != null and state.app.players.items.len == 0") < 2:
+        return "fail", "cold torrent open still initializes libmpv before queueing"
+    if direct.find("addMagnetToEngine(magnet_link);") > direct.find("playermod.acquire("):
+        return "fail", "direct magnet does not bypass detail-page player creation"
     if "try again in a moment" in _between(src, "fn addMagnetToEngine", "fn attachTorrentToPlayer"):
         return "fail", "magnet path still asks for a second click"
-    return "pass", "magnet and .torrent cold-start actions auto-flush once on the UI thread"
+    return "pass", "magnet and .torrent cold-start actions queue without blocking on libmpv"
 
 
 @test("torrents: active restart intent is private and deterministic", "Torrents")

@@ -1079,6 +1079,10 @@ fn appFrame() !dvui.App.Result {
         player_warmup_scheduled = true;
         player.scheduleWarmPlayer(@import("core/alloc.zig").allocator);
     }
+    // A first Home/Recents/direct-play click can land while that worker is
+    // still preparing libmpv. Complete its owned handoff without ever waiting
+    // inside the input/render frame.
+    @import("services/browser.zig").drainDeferredPlayback();
 
     // Keep the few legacy layout consumers on the live dvui window size. Do
     // not query/persist SDL position here: Wayland positions are compositor

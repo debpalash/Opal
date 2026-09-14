@@ -2398,15 +2398,128 @@ pub const PlaybackRequest = struct {
     subtitle: []const u8 = "",
     user_agent: []const u8 = "",
     headers: []const player.HttpHeader = &.{},
+    /// Internal deferred/retry seam. Normal callers should pass `headers`.
+    prepared_header_fields: []const u8 = "",
     /// Optional cache namespace for a best-effort remote health probe. Keeping
     /// this on the request makes candidate health a property of the playback
     /// seam instead of forcing each card/view to invent its own hook.
     health_kind: []const u8 = "",
 };
 
+fn FixedPlaybackField(comptime capacity: usize) type {
+    return struct {
+        bytes: [capacity]u8 = undefined,
+        len: usize = 0,
+
+        fn set(self: *@This(), value: []const u8) bool {
+            if (value.len > self.bytes.len) return false;
+            @memcpy(self.bytes[0..value.len], value);
+            self.len = value.len;
+            return true;
+        }
+
+        fn slice(self: *const @This()) []const u8 {
+            return self.bytes[0..self.len];
+        }
+    };
+}
+
+/// Owned request kept only for the short interval where the first libmpv core
+/// is still being prepared. Slices from provider workers and UI stack frames
+/// must never outlive the call that supplied them, hence the fixed copies.
+const DeferredPlayback = struct {
+    url: FixedPlaybackField(8192) = .{},
+    fallback_url: FixedPlaybackField(8192) = .{},
+    history_identity: FixedPlaybackField(8192) = .{},
+    restore_target: FixedPlaybackField(8192) = .{},
+    art_url: FixedPlaybackField(1024) = .{},
+    title: FixedPlaybackField(512) = .{},
+    subtitle: FixedPlaybackField(512) = .{},
+    user_agent: FixedPlaybackField(512) = .{},
+    header_fields: FixedPlaybackField(2048) = .{},
+    health_kind: FixedPlaybackField(64) = .{},
+    mode: player.LoadMode = .replace,
+    resume_position_secs: ?f64 = null,
+
+    fn init(request: PlaybackRequest) ?DeferredPlayback {
+        var out: DeferredPlayback = .{};
+        if (!out.url.set(request.url) or
+            !out.fallback_url.set(request.fallback_url) or
+            !out.history_identity.set(request.history_identity) or
+            !out.restore_target.set(request.restore_target) or
+            !out.art_url.set(request.art_url) or
+            !out.title.set(request.title) or
+            !out.subtitle.set(request.subtitle) or
+            !out.user_agent.set(request.user_agent) or
+            !out.health_kind.set(request.health_kind)) return null;
+
+        var fields_buf: [2048]u8 = undefined;
+        const fields = if (request.prepared_header_fields.len > 0)
+            request.prepared_header_fields
+        else
+            @import("../player/http_headers_pure.zig").buildHeaderFields(request.headers, &fields_buf);
+        if (!out.header_fields.set(fields)) return null;
+        out.mode = request.mode;
+        out.resume_position_secs = request.resume_position_secs;
+        return out;
+    }
+
+    fn playbackRequest(self: *const DeferredPlayback) PlaybackRequest {
+        return .{
+            .url = self.url.slice(),
+            .fallback_url = self.fallback_url.slice(),
+            .mode = self.mode,
+            .history_identity = self.history_identity.slice(),
+            .restore_target = self.restore_target.slice(),
+            .resume_position_secs = self.resume_position_secs,
+            .art_url = self.art_url.slice(),
+            .title = self.title.slice(),
+            .subtitle = self.subtitle.slice(),
+            .user_agent = self.user_agent.slice(),
+            .prepared_header_fields = self.header_fields.slice(),
+            .health_kind = self.health_kind.slice(),
+        };
+    }
+};
+
+var deferred_playback: DeferredPlayback = .{};
+var deferred_playback_pending: bool = false;
+var deferred_playback_mutex: @import("../core/sync.zig").Mutex = .{};
+
+fn deferPlayback(request: PlaybackRequest) bool {
+    const owned = DeferredPlayback.init(request) orelse return false;
+    deferred_playback_mutex.lock();
+    deferred_playback = owned;
+    deferred_playback_pending = true;
+    deferred_playback_mutex.unlock();
+    state.wakeUi();
+    return true;
+}
+
+/// UI-frame pump for a first click that arrived during libmpv preparation.
+/// The request is handed off once and never makes the render thread wait.
+pub fn drainDeferredPlayback() void {
+    if (player.warmPlayerPreparing()) return;
+    deferred_playback_mutex.lock();
+    if (!deferred_playback_pending) {
+        deferred_playback_mutex.unlock();
+        return;
+    }
+    const owned = deferred_playback;
+    deferred_playback_pending = false;
+    deferred_playback_mutex.unlock();
+    playDirect(owned.playbackRequest());
+}
+
 pub fn playDirect(request: PlaybackRequest) void {
     if (request.url.len == 0) return;
     if (state.app.players.items.len == 0) {
+        // Never freeze the click/render thread behind an in-progress prewarm.
+        // Its completion wakes appFrame, which drains this owned request.
+        if (request.mode == .replace and player.warmPlayerPreparing() and deferPlayback(request)) {
+            state.showToast("Opening media…");
+            return;
+        }
         if (player.acquire(alloc)) |np| {
             state.app.players.append(alloc, np) catch {
                 np.deinit(alloc);
@@ -2439,6 +2552,7 @@ pub fn playDirect(request: PlaybackRequest) void {
         .resume_position_secs = request.resume_position_secs,
         .user_agent = request.user_agent,
         .headers = request.headers,
+        .prepared_header_fields = request.prepared_header_fields,
     });
 
     if (request.mode == .replace) {

@@ -3,7 +3,6 @@ const dvui = @import("dvui");
 const icons = @import("icons");
 const c = @import("../core/c.zig");
 const state = @import("../core/state.zig");
-const player = @import("../player/player.zig");
 const logs = @import("../core/logs.zig");
 const search = @import("../services/search.zig");
 const transfers = @import("../services/transfers.zig");
@@ -14,24 +13,6 @@ const components = @import("components.zig");
 pub fn handleClipboardPaste() void {
     const clip_text = dvui.clipboardText();
     if (clip_text.len == 0) return;
-
-    // Auto-create a player if none exists
-    if (state.app.players.items.len == 0) {
-        if (player.acquire(@import("../core/alloc.zig").allocator)) |new_p| {
-            state.app.players.append(@import("../core/alloc.zig").allocator, new_p) catch {
-                new_p.deinit(@import("../core/alloc.zig").allocator);
-                return;
-            };
-            state.app.active_player_idx = 0;
-        } else |_| {
-            return;
-        }
-    }
-
-    if (state.app.players.items.len == 0) return;
-    if (state.app.active_player_idx >= state.app.players.items.len) {
-        state.app.active_player_idx = state.app.players.items.len - 1;
-    }
 
     if (std.mem.startsWith(u8, clip_text, "magnet:?")) {
         const searcher = @import("../services/search.zig");

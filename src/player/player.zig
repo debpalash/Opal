@@ -1787,6 +1787,10 @@ fn warmPlayerWorker(allocator: std.mem.Allocator) void {
     defer {
         warm_done.store(true, .release);
         warm_event.set(@import("../core/io_global.zig").io());
+        // A playback request may have been deferred instead of blocking the UI
+        // on this worker. Publish completion before waking the frame loop so it
+        // can acquire the prepared core immediately.
+        state.wakeUi();
     }
     if (warm_cancel.load(.acquire) or @import("../core/workers.zig").isQuitting()) return;
     const prepared = MediaPlayer.initPrepared(allocator, false) catch return;
@@ -1797,7 +1801,12 @@ fn warmPlayerWorker(allocator: std.mem.Allocator) void {
     warm_mutex.lock();
     warm_player = prepared;
     warm_mutex.unlock();
-    state.wakeUi();
+}
+
+/// True only while the off-thread libmpv preparation is unfinished. UI entry
+/// points use this to defer their request instead of waiting inside a click.
+pub fn warmPlayerPreparing() bool {
+    return warm_started.load(.acquire) and !warm_done.load(.acquire);
 }
 
 /// Get the prepared engine when available; a click arriving during preparation
