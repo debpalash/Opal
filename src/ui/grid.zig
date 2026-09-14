@@ -630,21 +630,7 @@ pub fn renderGrid() !void {
                     var actions = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_x = 0.5 });
                     defer actions.deinit();
                     if (components.actionButton(@src(), "Try again", .primary, i + 5604)) {
-                        var retry_buf: [2048]u8 = undefined;
-                        const retry_len = @min(p.current_url_len, retry_buf.len);
-                        @memcpy(retry_buf[0..retry_len], p.current_url[0..retry_len]);
-                        var ua_buf: [2048]u8 = undefined;
-                        const ua_len = @min(p.current_user_agent_len, ua_buf.len);
-                        @memcpy(ua_buf[0..ua_len], p.current_user_agent[0..ua_len]);
-                        var headers_buf: [2048]u8 = undefined;
-                        const headers_len = @min(p.current_header_fields_len, headers_buf.len);
-                        @memcpy(headers_buf[0..headers_len], p.current_header_fields[0..headers_len]);
-                        p.load(.{
-                            .url = retry_buf[0..retry_len],
-                            .user_agent = ua_buf[0..ua_len],
-                            .prepared_header_fields = headers_buf[0..headers_len],
-                            .loopback_stream = p.current_loopback_stream,
-                        });
+                        _ = p.retryCurrentLoad();
                     }
                     if (components.actionButton(@src(), "Close", .secondary, i + 5605)) {
                         state.app.pending_remove_player_idx = @as(i32, @intCast(i));

@@ -84,7 +84,7 @@ happy-path button does not cover every operation behind that native page.
 - [x] Explicit next-episode selection and exact search handoff
 - [x] Now-playing metadata/art, loading/buffering/recovery state, and live
       cast/watch-party presence
-- [ ] Fatal playback error reason and explicit retry action
+- [x] Fatal playback error reason and explicit retry action
 
 These controls use one typed player snapshot and bounded action schema rather
 than one ad-hoc route per button. The server owns validation and rejects raw

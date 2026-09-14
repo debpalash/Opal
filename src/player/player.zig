@@ -1327,6 +1327,45 @@ pub const MediaPlayer = struct {
         self.setLoadError(message);
     }
 
+    /// Retry the current logical item without losing its owner, credential-free
+    /// history identity, provider deep link, HTTP identity, or loopback policy.
+    /// The desktop and remote player both use this seam so a retry behaves the
+    /// same regardless of which surface requested it.
+    pub fn retryCurrentLoad(self: *MediaPlayer) bool {
+        if (self.current_url_len == 0) return false;
+
+        var url: [MAX_LOAD_URL]u8 = undefined;
+        const url_len = @min(self.current_url_len, url.len);
+        @memcpy(url[0..url_len], self.current_url[0..url_len]);
+        var user_agent: [2048]u8 = undefined;
+        const user_agent_len = @min(self.current_user_agent_len, user_agent.len);
+        @memcpy(user_agent[0..user_agent_len], self.current_user_agent[0..user_agent_len]);
+        var headers: [2048]u8 = undefined;
+        const headers_len = @min(self.current_header_fields_len, headers.len);
+        @memcpy(headers[0..headers_len], self.current_header_fields[0..headers_len]);
+        var history_identity: [2048]u8 = undefined;
+        const history_len = @min(self.history_identity_len, history_identity.len);
+        @memcpy(history_identity[0..history_len], self.history_identity[0..history_len]);
+        var restore_target: [2048]u8 = undefined;
+        const restore_len = @min(self.restore_target_len, restore_target.len);
+        @memcpy(restore_target[0..restore_len], self.restore_target[0..restore_len]);
+
+        const origin = self.playback_origin;
+        const queue_item_id = self.queue_item_id;
+        const loopback_stream = self.current_loopback_stream;
+        self.load(.{
+            .url = url[0..url_len],
+            .origin = origin,
+            .queue_item_id = queue_item_id,
+            .history_identity = history_identity[0..history_len],
+            .restore_target = restore_target[0..restore_len],
+            .user_agent = user_agent[0..user_agent_len],
+            .prepared_header_fields = headers[0..headers_len],
+            .loopback_stream = loopback_stream,
+        });
+        return true;
+    }
+
     /// Load a direct network stream with an explicit User-Agent and an arbitrary
     /// set of per-request HTTP headers (Referer, Origin, Cookie, …).
     ///

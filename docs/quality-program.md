@@ -127,6 +127,7 @@ route is not a completed row.
 | Actionable hardware fallback | Opal observes mpv's authoritative `hwdec-current` state and reports software fallback once per load only after a real video size exists; unavailable/early property states, audio, an explicit software preference, and active GPU decoding do not trigger a false warning |
 | Portable quality inventory | Windows runs in UTF-8, source paths are normalized, POSIX-only execution probes are separated from static contracts, and an explicit missing `--database` path is populated from the shipped schema as a disposable fixture; current isolated report: 430 passed, 0 failed, 12 environment/optional-component skips, 0 warnings |
 | Adaptive non-blocking omnibox | Shell and embedded/legacy entry boxes share one intent contract: links/files open, plain text searches the visible Browse source when supported and otherwise fans into universal search, `?` searches local memory, and `>`/questions invoke the assistant. Source-specific dispatch is service-owned instead of duplicated across UI modules; embedding/recall runs on a generation-safe owned worker and only the newest result enters the resolver from the UI thread |
+| Actionable web playback failure | The shared status/player snapshots expose a bounded escaped failure reason; desktop and web Retry use one typed action and preserve playback owner, credential-free identity, provider restore link, request headers and torrent loopback policy |
 
 ## Test commands
 

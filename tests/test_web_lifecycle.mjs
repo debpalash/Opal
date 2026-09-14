@@ -37,6 +37,7 @@ function fixture(...files){
     querySelector(){ return new Element(); }
     setAttribute(name, value){ this.attributes.set(name, value); }
     removeAttribute(name){ this.attributes.delete(name); }
+    replaceChildren(...children){ this.children = children; }
     toggleAttribute(name, value){ value ? this.setAttribute(name, '') : this.removeAttribute(name); }
     focus(){}
     insertAdjacentHTML(){}
@@ -63,7 +64,7 @@ function fixture(...files){
       constructor(url){ this.url = url; this.closed = false; sources.push(this); }
       close(){ this.closed = true; }
     },
-    document:{getElementById:$, querySelectorAll:() => [], addEventListener(){}, body:new Element()},
+    document:{getElementById:$, querySelectorAll:() => [], createElement:() => new Element(), addEventListener(){}, body:new Element()},
     location:{origin:'http://fixture.invalid', hash:'', hostname:'fixture.invalid'},
     localStorage:{getItem:() => '', removeItem(){}}, history:{},
     navigator:{onLine:true}, window,
@@ -175,6 +176,29 @@ function statusFixture(){
   f.run('applyStatus = status => rendered.push(status)');
   return f;
 }
+
+test('fatal playback status exposes one retry through the typed action route', async () => {
+  const f = fixture('now-playing.js');
+  f.run(`
+    $('i-pp').firstElementChild = new Element();
+    applyStatus({active:true,title:'Broken media',error:'Decoder unavailable',retryable:true,
+      pos:0,dur:0,vol:100,paused:true,loading:false,buffering:false});
+  `);
+  assert.equal(f.$('np-error').hidden, false);
+  assert.equal(f.$('np-error-text').textContent, 'Decoder unavailable');
+  assert.equal(f.$('np-retry').disabled, false);
+
+  const retry = f.$('np-retry').onclick();
+  assert.equal(f.$('np-retry').disabled, true);
+  f.take('/player/action?action=retry').resolve({ok:true});
+  await retry;
+  assert.equal(f.$('np-retry').disabled, false);
+  assert.equal(f.$('np-retry').textContent, 'Try again');
+
+  f.run(`applyStatus({active:true,title:'Recovered',error:'',retryable:false,
+    pos:1,dur:10,vol:100,paused:false,loading:false,buffering:false})`);
+  assert.equal(f.$('np-error').hidden, true);
+});
 
 test('fallback polling has at most one in-flight request', async () => {
   const f = statusFixture();

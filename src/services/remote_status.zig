@@ -19,7 +19,7 @@ pub fn build(buf: []u8) []const u8 {
     const party_role = party.role;
     const party_peers = party.peerCount();
     if (state.app.active_player_idx >= state.app.players.items.len) {
-        w.print("{{\"active\":false,\"pos\":0,\"dur\":0,\"vol\":0,\"paused\":true,\"loading\":false,\"buffering\":false,\"recovering\":false,\"title\":\"No media\",\"subtitle\":\"\",\"overview\":\"\",\"kind\":\"\",\"year\":\"\",\"extra\":\"\",\"rating\":0,\"source\":\"\",\"has_art\":false,\"art_key\":\"\",\"casting\":{s},\"party_role\":\"{s}\",\"party_peers\":{d}}}", .{
+        w.print("{{\"active\":false,\"pos\":0,\"dur\":0,\"vol\":0,\"paused\":true,\"loading\":false,\"buffering\":false,\"recovering\":false,\"error\":\"\",\"retryable\":false,\"title\":\"No media\",\"subtitle\":\"\",\"overview\":\"\",\"kind\":\"\",\"year\":\"\",\"extra\":\"\",\"rating\":0,\"source\":\"\",\"has_art\":false,\"art_key\":\"\",\"casting\":{s},\"party_role\":\"{s}\",\"party_peers\":{d}}}", .{
             if (casting) "true" else "false",
             @tagName(party_role),
             party_peers,
@@ -69,8 +69,10 @@ pub fn build(buf: []u8) []const u8 {
     const active = player.current_url_len > 0 or loading or !std.mem.eql(u8, title, "No media");
     const raw_rating: f64 = @floatCast(player.loading_rating);
     const rating = std.math.clamp(finite(raw_rating, 0), 0, 10);
+    const load_error = txt.safeUtf8(player.load_error[0..@min(player.load_error_len, player.load_error.len)]);
+    const retryable = load_error.len > 0 and player.current_url_len > 0;
 
-    w.print("{{\"active\":{s},\"pos\":{d:.1},\"dur\":{d:.1},\"vol\":{d:.0},\"paused\":{s},\"loading\":{s},\"buffering\":{s},\"recovering\":{s},\"title\":\"", .{
+    w.print("{{\"active\":{s},\"pos\":{d:.1},\"dur\":{d:.1},\"vol\":{d:.0},\"paused\":{s},\"loading\":{s},\"buffering\":{s},\"recovering\":{s},\"error\":\"", .{
         if (active) "true" else "false",
         @max(0, finite(playback.time_pos, 0)),
         @max(0, finite(playback.duration, 0)),
@@ -80,6 +82,8 @@ pub fn build(buf: []u8) []const u8 {
         if (buffering) "true" else "false",
         if (recovering) "true" else "false",
     }) catch return buf[0..0];
+    wire.writeJsonString(&w, load_error);
+    w.print("\",\"retryable\":{s},\"title\":\"", .{if (retryable) "true" else "false"}) catch return buf[0..0];
     wire.writeJsonString(&w, title);
     w.writeAll("\",\"subtitle\":\"") catch return buf[0..0];
     wire.writeJsonString(&w, subtitle);

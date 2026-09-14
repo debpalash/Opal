@@ -67,6 +67,7 @@ pub const Action = union(enum) {
     loop_b,
     loop_clear,
     clip_export,
+    retry_current,
     close_player,
 };
 
@@ -152,6 +153,7 @@ pub fn parse(name: []const u8, value: ?[]const u8) ParseError!Action {
     if (std.mem.eql(u8, name, "loop-b")) return .loop_b;
     if (std.mem.eql(u8, name, "loop-clear")) return .loop_clear;
     if (std.mem.eql(u8, name, "clip-export")) return .clip_export;
+    if (std.mem.eql(u8, name, "retry")) return .retry_current;
     if (std.mem.eql(u8, name, "close")) return .close_player;
     return error.UnknownAction;
 }
@@ -185,6 +187,7 @@ test "fixed actions need no caller-controlled command text" {
     try std.testing.expectEqual(Action.playlist_next, try parse("playlist-next", null));
     try std.testing.expectEqual(Action.screenshot, try parse("screenshot", null));
     try std.testing.expectEqual(Action.loop_clear, try parse("loop-clear", null));
+    try std.testing.expectEqual(Action.retry_current, try parse("retry", null));
     try std.testing.expectError(error.UnknownAction, parse("quit", null));
     try std.testing.expectError(error.MissingValue, parse("speed", null));
 }

@@ -170,6 +170,11 @@ main{padding:6px 16px 24px;max-width:720px;margin:0 auto}
   display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 #np-overview[hidden]{display:none}
 #page-np[aria-busy=true] .np-kicker{opacity:.8}
+.np-error{display:flex;align-items:center;gap:14px;margin:14px 0;padding:12px 14px;border:1px solid color-mix(in srgb,var(--danger) 45%,var(--border));
+  border-radius:var(--rad);background:color-mix(in srgb,var(--danger) 9%,var(--bg-surface));color:var(--text-1)}
+.np-error[hidden]{display:none}.np-error div{display:flex;flex:1;min-width:0;flex-direction:column;gap:3px}
+.np-error span{color:var(--text-2);font-size:13px;overflow-wrap:anywhere}.np-error button{flex:none;padding:8px 12px;border-radius:var(--rad-sm);background:var(--accent);color:#0c0c11;font-weight:700}
+.np-error button:disabled{opacity:.55;cursor:wait}
 .transport button:disabled,.vol-row button:disabled{opacity:.38;cursor:not-allowed}
 @media (max-width:560px){
   .np-hero{grid-template-columns:88px minmax(0,1fr);gap:14px;align-items:start;min-height:132px}

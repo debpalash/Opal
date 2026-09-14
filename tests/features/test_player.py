@@ -307,6 +307,15 @@ def test_typed_playback_origin():
             and "playback.relativeIndex(" in queue,
         "torrent internal loads preserve owner": ".origin = .torrent" in ply
             and ".loopback_stream = true" in ply,
+        "manual retry preserves owner and request identity": (
+            "pub fn retryCurrentLoad(" in ply
+            and ".origin = origin" in ply
+            and ".queue_item_id = queue_item_id" in ply
+            and ".history_identity = history_identity" in ply
+            and ".restore_target = restore_target" in ply
+            and ".prepared_header_fields = headers" in ply
+            and ".loopback_stream = loopback_stream" in ply
+        ),
     }
     missing = [k for k, v in checks.items() if not v]
     if missing:

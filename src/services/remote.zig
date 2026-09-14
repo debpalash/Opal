@@ -4795,6 +4795,8 @@ fn apiPlayerSnapshot(stream: std.Io.net.Stream, ap: *player.MediaPlayer, players
     defer if (device_c != null) c.mpv.mpv_free(@ptrCast(device_c));
     const aspect = if (aspect_c != null) std.mem.span(aspect_c) else "-1";
     const active_device = if (device_c != null) std.mem.span(device_c) else "auto";
+    const load_error = txt.safeUtf8(ap.load_error[0..@min(ap.load_error_len, ap.load_error.len)]);
+    const retryable = load_error.len > 0 and ap.current_url_len > 0;
 
     w.writeAll("{\"state\":{\"title\":\"") catch return;
     escJsonWrite(&w, txt.safeUtf8(if (title_c != null) std.mem.span(title_c) else "No media"));
@@ -4830,7 +4832,9 @@ fn apiPlayerSnapshot(stream: std.Io.net.Stream, ap: *player.MediaPlayer, players
     escJsonWrite(&w, txt.safeUtf8(aspect));
     w.writeAll("\",\"audio_device\":\"") catch return;
     escJsonWrite(&w, txt.safeUtf8(active_device));
-    w.writeAll("\"},\"chapters\":[") catch return;
+    w.writeAll("\",\"error\":\"") catch return;
+    escJsonWrite(&w, load_error);
+    w.print("\",\"retryable\":{s}}},\"chapters\":[", .{if (retryable) "true" else "false"}) catch return;
     writePlayerChapters(&w, ap, chapter_count, chapter);
     w.writeAll("],\"tracks\":{\"audio\":[") catch return;
     writePlayerTracks(&w, ap, "audio");
@@ -4964,6 +4968,14 @@ fn apiPlayerAction(stream: std.Io.net.Stream, ap: *player.MediaPlayer, query: []
         .loop_b => ap.setLoopB(),
         .loop_clear => ap.clearLoop(),
         .clip_export => ap.exportClip(),
+        .retry_current => if (!ap.retryCurrentLoad()) {
+            if (players_locked.*) {
+                players_locked.* = false;
+                state.players_mutex.unlock();
+            }
+            sendJsonStatus(stream, "409 Conflict", "{\"error\":\"nothing to retry\"}");
+            return;
+        },
         .close_player => state.app.pending_remove_player_idx = @intCast(state.app.active_player_idx),
     }
     state.wakeUi();

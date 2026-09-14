@@ -245,6 +245,12 @@ def test_typed_full_web_player_contract():
         "track/aspect/device validation": all(
             token in pure for token in ("audio-track", "subtitle-track", "16:9", "utf8ValidateSlice")
         ),
+        "fatal error is actionable": (
+            'id="np-error"' in ui and 'id="np-retry"' in ui
+            and "apiMutation('/player/action?action=retry')" in ui
+            and 'name, "retry"' in pure and ".retry_current =>" in remote
+            and "retryable" in remote
+        ),
         "complete player deck": all(
             token in ui for token in (
                 'id="b-player-tools"', "tool-speed", "tool-chapter", "tool-audio",

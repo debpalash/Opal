@@ -51,7 +51,9 @@ $('np-art').onerror = () => { $('np-art').hidden = true; };
 function applyStatus(d){
   $('conn-dot').classList.add('on');
   const active = d.active === true || (d.active == null && d.title && d.title !== 'No media');
-  const state = d.recovering ? 'Recovering'
+  const error = active && d.error ? String(d.error) : '';
+  const state = error ? 'Error'
+    : d.recovering ? 'Recovering'
     : d.loading ? 'Loading'
     : d.buffering ? 'Buffering'
     : d.paused ? 'Paused' : 'Playing';
@@ -65,6 +67,10 @@ function applyStatus(d){
   setStatusText('np-overview', active ? d.overview : '');
   $('np-overview').hidden = !active || !d.overview;
   $('page-np').setAttribute('aria-busy', active && (d.loading || d.buffering) ? 'true' : 'false');
+  $('np-error').hidden = !error;
+  setStatusText('np-error-text', error);
+  $('np-retry').hidden = !error || !d.retryable;
+  $('np-retry').disabled = retryPending || !d.retryable;
 
   const meta = [];
   if (active) {
@@ -157,6 +163,24 @@ $('b-fs').onclick     = () => api('/fullscreen').catch(()=>{});
 $('b-rotate').onclick = () => api('/rotate').then(() => toast('Rotated picture')).catch(()=>{});
 $('b-flip').onclick   = () => api('/flip').then(() => toast('Flipped picture')).catch(()=>{});
 
+let retryPending = false;
+$('np-retry').onclick = async () => {
+  if (retryPending) return;
+  retryPending = true;
+  $('np-retry').disabled = true;
+  $('np-retry').textContent = 'Retrying…';
+  try {
+    await apiMutation('/player/action?action=retry');
+    toast('Retrying playback');
+  } catch (e) {
+    toast(e.message || 'Could not retry playback');
+  } finally {
+    retryPending = false;
+    $('np-retry').textContent = 'Try again';
+    if (!$('np-retry').hidden) $('np-retry').disabled = false;
+  }
+};
+
 // Cast is already a complete remote API; the web page previously left it to
 // the browser extension, so phone users could not choose a living-room screen.
 let castWatch = null, castPolls = 0;
@@ -231,7 +255,9 @@ function renderPlayerTools(d){
   const speedNow = playerNum(s.speed, 1);
   const speeds = [...new Set([.25,.5,.75,1,1.25,1.5,2,3,4,speedNow])].sort((a,b) => a-b);
   const aspectNow = !s.aspect || s.aspect === '-1' || s.aspect === 'no' ? 'auto' : s.aspect;
-  $('player-tools-state').textContent = `Playback controls ready${s.title ? ' for ' + s.title : ''}.`;
+  $('player-tools-state').textContent = s.error
+    ? `Playback stopped: ${s.error}`
+    : `Playback controls ready${s.title ? ' for ' + s.title : ''}.`;
   $('player-tools-body').innerHTML = `<div class="tool-grid">
     <div class="tool"><label for="tool-speed">Playback speed</label><select id="tool-speed" data-player-action="speed">
       ${speeds.map(v => playerOption(v, `${v}×`, speedNow)).join('')}</select></div>
