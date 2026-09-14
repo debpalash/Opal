@@ -95,6 +95,8 @@ def test_owned_worker_supervisor():
         "detach compatibility is tracked": not detached_without_seam,
         "legacy admission bounded": "MAX_LEGACY_TASKS" in workers
             and "previous >= MAX_LEGACY_TASKS" in workers,
+        "shared artwork worker is owned": "spawnLegacy(" not in _src("src/core/poster.zig")
+            and 'workers.zig").spawn(' in _src("src/core/poster.zig"),
     }
     missing = [name for name, ok in checks.items() if not ok]
     if missing:

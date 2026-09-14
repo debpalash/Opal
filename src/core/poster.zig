@@ -216,7 +216,7 @@ pub fn fetchAsync(url: []const u8, pixels_out: *?[]u8, w_out: *u32, h_out: *u32,
     var url_buf: [1024]u8 = undefined;
     @memcpy(url_buf[0..url.len], url);
 
-    if (@import("workers.zig").spawnLegacy(struct {
+    @import("workers.zig").spawn(struct {
         fn worker(args: Args) void {
             defer args.flag.* = false;
             defer releaseSlot();
@@ -288,12 +288,10 @@ pub fn fetchAsync(url: []const u8, pixels_out: *?[]u8, w_out: *u32, h_out: *u32,
             // the w/h/pix writes above with proper ordering for uploadIfReady.
             if (@import("state.zig").app.dvui_win) |win| dvui.refresh(win, @src(), null);
         }
-    }.worker, .{Args{ .url_buf = url_buf, .url_len = url.len, .pix = pixels_out, .w = w_out, .h = h_out, .flag = fetching_flag }})) |t| {
-        @import("workers.zig").release(t);
-    } else |_| {
+    }.worker, .{Args{ .url_buf = url_buf, .url_len = url.len, .pix = pixels_out, .w = w_out, .h = h_out, .flag = fetching_flag }}) catch {
         fetching_flag.* = false;
         releaseSlot(); // spawn failed — release the slot we reserved
-    }
+    };
 }
 
 /// Upload pending pixel data to GPU texture. Call from render thread.
