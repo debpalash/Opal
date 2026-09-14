@@ -251,6 +251,10 @@ function playerRange(id, label, action, value, min, max, step, suffix){
 function renderPlayerTools(d){
   const s = d.state || {};
   const chapters = d.chapters || [], audio = d.tracks?.audio || [], subtitles = d.tracks?.subtitles || [];
+  const subtitleDiscovery = d.subtitle_discovery || {};
+  const onlineSubs = subtitleDiscovery.results || [];
+  const subtitleBusy = ['searching','downloading'].includes(subtitleDiscovery.state);
+  const generation = subtitleDiscovery.generation || {};
   const devices = d.audio_devices || [];
   const speedNow = playerNum(s.speed, 1);
   const speeds = [...new Set([.25,.5,.75,1,1.25,1.5,2,3,4,speedNow])].sort((a,b) => a-b);
@@ -288,6 +292,21 @@ function renderPlayerTools(d){
     ${playerRange('tool-saturation','Saturation','saturation',s.saturation,-100,100,5,'')}
     ${playerRange('tool-gamma','Gamma','gamma',s.gamma,-100,100,5,'')}
   </div>
+  <section class="subtitle-discovery" aria-labelledby="online-subtitles-title">
+    <div class="subtitle-discovery-head">
+      <div><h3 id="online-subtitles-title">Find subtitles</h3>
+        <small>${esc(subtitleDiscovery.query ? `Results for ${subtitleDiscovery.query}` : 'Search open providers or transcribe a local file')}</small></div>
+      <div class="subtitle-discovery-actions">
+        <button type="button" data-player-action="subtitle-search"${subtitleBusy ? ' disabled' : ''}>${subtitleDiscovery.state === 'searching' ? 'Searching…' : 'Search online'}</button>
+        <button type="button" data-player-action="subtitle-generate"${generation.running ? ' disabled' : ''}>${generation.running ? 'Generating…' : 'Generate locally'}</button>
+      </div>
+    </div>
+    ${generation.status ? `<div class="subtitle-generation-status" role="status">${esc(generation.status)}</div>` : ''}
+    <div class="subtitle-results">${onlineSubs.map(result => `<div class="subtitle-result">
+      <span><strong>${esc(result.title || 'Subtitle')}</strong><small>${esc([result.lang, result.source].filter(Boolean).join(' · '))}</small></span>
+      <button type="button" data-player-action="subtitle-download" data-value="${+result.index}"${subtitleBusy || result.loaded ? ' disabled' : ''}>${result.loaded ? 'Loaded' : subtitleDiscovery.state === 'downloading' && +subtitleDiscovery.selected === +result.index ? 'Downloading…' : 'Download & use'}</button>
+    </div>`).join('') || `<div class="subtitle-empty">${subtitleBusy ? 'Searching subtitle providers…' : 'No online subtitle results yet.'}</div>`}</div>
+  </section>
   <div class="tool-actions">
     <button type="button" data-player-action="playlist-previous">Previous item</button>
     <button type="button" data-player-action="playlist-next">Next item</button>

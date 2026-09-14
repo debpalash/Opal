@@ -82,7 +82,7 @@ happy-path button does not cover every operation behind that native page.
 - [x] Screenshot, A/B loop, clip export, and close-player action
 - [x] Picture presets and brightness/contrast/saturation/gamma
 - [x] Audio output device and equalizer presets
-- [ ] Online/AI subtitle search, selection, download, and generation state
+- [x] Online/AI subtitle search, selection, download, and generation state
 - [x] Player queue add/play/remove/reorder/clear with live played state
 - [x] Playlist previous/next, repeat, and shuffle share native playlist rules
 - [x] Explicit next-episode selection and exact search handoff

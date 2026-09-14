@@ -24,6 +24,7 @@ pub var whisper_model_size_len: usize = 4;
 pub var in_progress: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 pub var status_buf: [128]u8 = std.mem.zeroes([128]u8);
 pub var status_len: usize = 0;
+var status_mutex: sync.Mutex = .{};
 
 /// Path of the last generated .srt file (for export UI)
 pub var last_srt_path: [600]u8 = std.mem.zeroes([600]u8);
@@ -43,9 +44,25 @@ const PendingAttach = struct {
 };
 
 fn setStatus(msg: []const u8) void {
+    status_mutex.lock();
+    defer status_mutex.unlock();
     const n = @min(msg.len, status_buf.len);
     @memcpy(status_buf[0..n], msg[0..n]);
     status_len = n;
+}
+
+pub const StatusSnapshot = struct {
+    text: [128]u8 = std.mem.zeroes([128]u8),
+    len: usize = 0,
+};
+
+pub fn statusSnapshot() StatusSnapshot {
+    status_mutex.lock();
+    defer status_mutex.unlock();
+    var out: StatusSnapshot = .{};
+    out.len = @min(status_len, out.text.len);
+    @memcpy(out.text[0..out.len], status_buf[0..out.len]);
+    return out;
 }
 
 fn resolveWhisperBin() ?[]const u8 {

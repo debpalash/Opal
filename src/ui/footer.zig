@@ -375,6 +375,7 @@ pub fn renderSubPicker() void {
     const engine_mod = @import("../player/subtitles.zig"); // keyless engine
     const engine = &state.app.sub_engine;
     const auto_subs = @import("../services/auto_subs.zig");
+    const auto_sub_status = auto_subs.statusSnapshot();
     const text_mod = @import("../core/text.zig");
     const has_key = state.app.opensub_api_key_len > 0;
 
@@ -513,8 +514,8 @@ pub fn renderSubPicker() void {
         subStatusRow("Transcribing with whisper…", 57013);
     }
 
-    if (auto_subs.status_len > 0 and !auto_subs.in_progress.load(.acquire)) {
-        _ = dvui.label(@src(), "{s}", .{auto_subs.status_buf[0..auto_subs.status_len]}, .{
+    if (auto_sub_status.len > 0 and !auto_subs.in_progress.load(.acquire)) {
+        _ = dvui.label(@src(), "{s}", .{auto_sub_status.text[0..auto_sub_status.len]}, .{
             .color_text = theme.colors.text_secondary,
             .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = theme.spacing.xs },
         });

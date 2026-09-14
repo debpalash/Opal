@@ -299,6 +299,13 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
 .tool-actions button:hover{color:var(--text-1);border-color:var(--accent-dim)}
 .tool-actions .danger{color:var(--danger);margin-left:auto}
 .player-tools-state{color:var(--text-3);font-size:12px;font-variant-numeric:tabular-nums}
+.subtitle-discovery{margin-top:12px;padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--bg-elevated)}
+.subtitle-discovery-head,.subtitle-result{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.subtitle-discovery h3{font-size:14px;margin:0 0 3px}.subtitle-discovery small{display:block;color:var(--text-3)}
+.subtitle-discovery-actions{display:flex;flex-wrap:wrap;gap:7px}.subtitle-discovery-actions button,.subtitle-result button{white-space:nowrap}
+.subtitle-results{display:grid;gap:6px;margin-top:10px}.subtitle-result{padding-top:7px;border-top:1px solid var(--border)}
+.subtitle-result strong{display:block;font-size:13px}.subtitle-generation-status,.subtitle-empty{margin-top:8px;color:var(--text-3);font-size:12px}
+@media(max-width:560px){.subtitle-discovery-head,.subtitle-result{align-items:flex-start;flex-direction:column}.subtitle-discovery-actions{width:100%}}
 .party-log{max-height:220px;overflow:auto;overscroll-behavior:contain;margin:10px 0;padding:8px;
   background:var(--bg-app);border:1px solid var(--border);border-radius:var(--rad-sm)}
 .party-msg{padding:6px 8px;border-bottom:1px solid var(--border);overflow-wrap:anywhere}

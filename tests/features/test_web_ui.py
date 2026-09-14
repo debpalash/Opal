@@ -720,6 +720,36 @@ def test_web_play_here():
     return "pass", "Play here: direct-play with codec refusal, session-token /stream, 5 play paths routed"
 
 
+@test("Web player owns online and AI subtitle workflow", "Web UI")
+def test_web_subtitle_workflow():
+    ui = _web_app()
+    remote = _remote_api()
+    actions = _src("src/services/player_api_pure.zig")
+    auto = _src("src/services/auto_subs.zig")
+    checks = {
+        "typed action allowlist": all(name in actions for name in (
+            '"subtitle-search"', '"subtitle-download"', '"subtitle-generate"')),
+        "download index bounded": "boundedInt(usize, value, 0, 14)" in actions
+            and 'parse("subtitle-download", "15")' in actions,
+        "snapshot exposes discovery state": "writeSubtitleDiscovery" in remote
+            and "subtitle_discovery" in remote and "generation" in remote,
+        "actions call shared native engines": "searchFromActivePlayer(engine)" in remote
+            and "downloadIndex(engine, idx)" in remote and "auto_subs.transcribeCurrent()" in remote,
+        "busy and stale result conflicts": "subtitle operation already running" in remote
+            and "subtitle result unavailable" in remote,
+        "web renders source-tagged results": "subtitleDiscovery.results" in ui
+            and "result.source" in ui and "Download & use" in ui,
+        "web exposes search and generation": 'data-player-action="subtitle-search"' in ui
+            and 'data-player-action="subtitle-generate"' in ui,
+        "generation status is locked": "pub fn statusSnapshot()" in auto
+            and "status_mutex.lock()" in auto,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "web subtitle workflow incomplete: " + ", ".join(missing)
+    return "pass", "typed online search/download and local generation with live state in one player deck"
+
+
 @test("Web UI isolates provider markup and browser credentials", "Web UI")
 def test_web_ui_security_boundaries():
     ui = _web_app()

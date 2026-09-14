@@ -4685,6 +4685,36 @@ fn writePlayerAudioDevices(w: *std.Io.Writer, ap: *player.MediaPlayer, active: [
     }
 }
 
+fn writeSubtitleDiscovery(w: *std.Io.Writer) void {
+    const subtitles = @import("../player/subtitles.zig");
+    const auto_subs = @import("auto_subs.zig");
+    const engine = &state.app.sub_engine;
+    const query_len = @min(engine.query_len, engine.query_buf.len);
+    const result_count = @min(engine.result_count, engine.results.len);
+    const generated = auto_subs.statusSnapshot();
+    w.writeAll("{\"state\":\"") catch return;
+    w.writeAll(@tagName(engine.state)) catch return;
+    w.writeAll("\",\"query\":\"") catch return;
+    escJsonWrite(w, txt.safeUtf8(engine.query_buf[0..query_len]));
+    w.writeAll("\",\"results\":[") catch return;
+    for (engine.results[0..result_count], 0..) |*result, i| {
+        if (i > 0) w.writeAll(",") catch break;
+        w.print("{{\"index\":{d},\"title\":\"", .{i}) catch break;
+        escJsonWrite(w, txt.safeUtf8(result.movie_name[0..@min(result.movie_name_len, result.movie_name.len)]));
+        w.writeAll("\",\"lang\":\"") catch break;
+        escJsonWrite(w, txt.safeUtf8(result.lang[0..@min(result.lang_len, result.lang.len)]));
+        w.writeAll("\",\"source\":\"") catch break;
+        escJsonWrite(w, subtitles.sourceName(result.source));
+        w.print("\",\"loaded\":{s}}}", .{if (engine.loaded_idx == @as(i32, @intCast(i))) "true" else "false"}) catch break;
+    }
+    w.print("],\"selected\":{d},\"generation\":{{\"running\":{s},\"status\":\"", .{
+        @min(engine.selected_idx, result_count),
+        if (auto_subs.in_progress.load(.acquire)) "true" else "false",
+    }) catch return;
+    escJsonWrite(w, txt.safeUtf8(generated.text[0..generated.len]));
+    w.writeAll("\"}}}") catch return;
+}
+
 /// A single rich player snapshot. This is the deep interface for every browser
 /// player surface: controls do not independently rediscover tracks, chapters,
 /// output devices, filter state, or loop state through shallow routes.
@@ -4768,7 +4798,9 @@ fn apiPlayerSnapshot(stream: std.Io.net.Stream, ap: *player.MediaPlayer, players
     writePlayerTracks(&w, ap, "audio");
     w.writeAll("],\"subtitles\":[") catch return;
     writePlayerTracks(&w, ap, "sub");
-    w.writeAll("]},\"audio_devices\":[") catch return;
+    w.writeAll("]},\"subtitle_discovery\":") catch return;
+    writeSubtitleDiscovery(&w);
+    w.writeAll(",\"audio_devices\":[") catch return;
     writePlayerAudioDevices(&w, ap, active_device);
     w.writeAll("]}") catch return;
     sendJsonUnlockPlayers(stream, out[0..w.end], players_locked);
@@ -4856,6 +4888,42 @@ fn apiPlayerAction(stream: std.Io.net.Stream, ap: *player.MediaPlayer, query: []
         },
         .audio_track => |v| setTrack(ap, "aid", v),
         .subtitle_track => |v| setTrack(ap, "sid", v),
+        .subtitle_search => {
+            const engine = &state.app.sub_engine;
+            if (engine.state == .searching or engine.state == .downloading) {
+                if (players_locked.*) {
+                    players_locked.* = false;
+                    state.players_mutex.unlock();
+                }
+                sendJsonStatus(stream, "409 Conflict", "{\"error\":\"subtitle operation already running\"}");
+                return;
+            }
+            @import("../player/subtitles.zig").searchFromActivePlayer(engine);
+        },
+        .subtitle_download => |idx| {
+            const engine = &state.app.sub_engine;
+            if (idx >= engine.result_count or engine.state == .searching or engine.state == .downloading) {
+                if (players_locked.*) {
+                    players_locked.* = false;
+                    state.players_mutex.unlock();
+                }
+                sendJsonStatus(stream, "409 Conflict", "{\"error\":\"subtitle result unavailable\"}");
+                return;
+            }
+            @import("../player/subtitles.zig").downloadIndex(engine, idx);
+        },
+        .subtitle_generate => {
+            const auto_subs = @import("auto_subs.zig");
+            if (auto_subs.in_progress.load(.acquire)) {
+                if (players_locked.*) {
+                    players_locked.* = false;
+                    state.players_mutex.unlock();
+                }
+                sendJsonStatus(stream, "409 Conflict", "{\"error\":\"subtitle generation already running\"}");
+                return;
+            }
+            auto_subs.transcribeCurrent();
+        },
         .aspect => |v| _ = c.mpv.mpv_set_property_string(ap.mpv_ctx, "video-aspect-override", v.mpvValue().ptr),
         .subtitle_delay => |v| setPlayerDouble(ap, "sub-delay", v),
         .zoom => |v| setPlayerDouble(ap, "video-zoom", v),

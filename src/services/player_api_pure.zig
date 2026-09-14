@@ -44,6 +44,9 @@ pub const Action = union(enum) {
     chapter: usize,
     audio_track: Track,
     subtitle_track: Track,
+    subtitle_search,
+    subtitle_download: usize,
+    subtitle_generate,
     aspect: Aspect,
     subtitle_delay: f64,
     zoom: f64,
@@ -123,6 +126,9 @@ pub fn parse(name: []const u8, value: ?[]const u8) ParseError!Action {
     if (std.mem.eql(u8, name, "chapter")) return .{ .chapter = try boundedInt(usize, value, 0, 9_999) };
     if (std.mem.eql(u8, name, "audio-track")) return .{ .audio_track = try track(value) };
     if (std.mem.eql(u8, name, "subtitle-track")) return .{ .subtitle_track = try track(value) };
+    if (std.mem.eql(u8, name, "subtitle-search")) return .subtitle_search;
+    if (std.mem.eql(u8, name, "subtitle-download")) return .{ .subtitle_download = try boundedInt(usize, value, 0, 14) };
+    if (std.mem.eql(u8, name, "subtitle-generate")) return .subtitle_generate;
     if (std.mem.eql(u8, name, "aspect")) {
         const raw = try required(value);
         const a: Aspect = if (std.mem.eql(u8, raw, "auto")) .auto else if (std.mem.eql(u8, raw, "16:9")) .wide else if (std.mem.eql(u8, raw, "4:3")) .classic else if (std.mem.eql(u8, raw, "21:9")) .cinema else return error.InvalidValue;
@@ -190,4 +196,8 @@ test "fixed actions need no caller-controlled command text" {
     try std.testing.expectEqual(Action.retry_current, try parse("retry", null));
     try std.testing.expectError(error.UnknownAction, parse("quit", null));
     try std.testing.expectError(error.MissingValue, parse("speed", null));
+    try std.testing.expectEqual(Action.subtitle_search, try parse("subtitle-search", null));
+    try std.testing.expectEqual(@as(usize, 14), (try parse("subtitle-download", "14")).subtitle_download);
+    try std.testing.expectError(error.OutOfRange, parse("subtitle-download", "15"));
+    try std.testing.expectEqual(Action.subtitle_generate, try parse("subtitle-generate", null));
 }
