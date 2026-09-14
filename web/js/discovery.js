@@ -44,15 +44,19 @@ function renderAi(d){
   const rh = (d.results || []).map(r => `
     <div class="result">
       <div class="t">${esc(r.name)}</div>
-      <div class="m"><span class="src">${esc(r.detail || '')}</span>
-        <button class="play" data-url="${encodeURIComponent(r.url || '')}">Play</button></div>
+      <div class="m"><span class="src">${esc(r.detail || '')}</span><span class="actions">
+        <button class="queue-btn" data-ai-queue="${encodeURIComponent(r.url || '')}" data-title="${esc(r.name || '')}">Queue</button>
+        <button class="play" data-url="${encodeURIComponent(r.url || '')}" data-title="${esc(r.name || '')}">Play</button></span></div>
     </div>`).join('');
   if (rh !== lastHtml.aiRes) {
     lastHtml.aiRes = rh;
     $('ai-results').innerHTML = rh;
     $('ai-results').querySelectorAll('.play').forEach(b => b.onclick = () => {
-      const u = b.dataset.url; if (!u) return;
-      apiMutation('/load?url=' + u).catch(()=>{}); b.textContent = 'Sent ✓';
+      const u = decodeURIComponent(b.dataset.url || ''); if (!u) return;
+      dispatchPlay(u, b.dataset.title || '', () => apiMutation('/load?url=' + encodeURIComponent(u)));
+    });
+    $('ai-results').querySelectorAll('[data-ai-queue]').forEach(button => {
+      button.onclick = () => queueMedia(decodeURIComponent(button.dataset.aiQueue || ''), button.dataset.title || '', button);
     });
   }
 }
@@ -276,14 +280,19 @@ function renderPodEpisodes(eps){
     ? '<div class="sect">Episodes</div>' + eps.map((e, i) => `
       <div class="result">
         <div class="t">${esc(e.title)}</div>
-        <div class="m"><span class="src">${esc([e.date, e.duration].filter(Boolean).join(' · '))}</span>
+        <div class="m"><span class="src">${esc([e.date, e.duration].filter(Boolean).join(' · '))}</span><span class="actions">
           <button class="pod-episode-details" data-details="${i}">Details</button>
-          <button class="play" data-ep="${i}">▶ Play</button></div>
+          <button class="queue-btn" data-pod-queue="${i}">Queue</button>
+          <button class="play" data-ep="${i}">▶ Play</button></span></div>
       </div>`).join('')
     : '<div class="empty">No episodes</div>';
   $('pod-episodes').querySelectorAll('.play').forEach(b => b.onclick = () => {
-    api('/podcasts/play?idx=' + encodeURIComponent(b.dataset.ep)).catch(()=>{});
-    b.textContent = '▶';
+    const episode = eps[Number(b.dataset.ep)] || {};
+    dispatchPlay(episode.url || '', episode.title || '', () => api('/podcasts/play?idx=' + encodeURIComponent(b.dataset.ep)));
+  });
+  $('pod-episodes').querySelectorAll('[data-pod-queue]').forEach(button => {
+    const episode = eps[Number(button.dataset.podQueue)] || {};
+    button.onclick = () => queueMedia(episode.url || '', episode.title || '', button);
   });
   $('pod-episodes').querySelectorAll('.pod-episode-details').forEach(button => {
     const episode = eps[Number(button.dataset.details)] || {};
@@ -507,17 +516,21 @@ function renderRssItems(items, fetching){
       <div class="m">
         ${it.seeds ? `<span>▲ ${esc(String(it.seeds))}</span>` : ''}
         ${it.size ? `<span>${fmtSize(it.size)}</span>` : ''}
-        <button class="rss-details" data-details="${i}">Details</button>
-        <button class="play" data-url="${encodeURIComponent(it.magnet || '')}">Play</button>
+        <span class="actions"><button class="rss-details" data-details="${i}">Details</button>
+        <button class="queue-btn" data-rss-queue="${i}">Queue</button>
+        <button class="play" data-url="${encodeURIComponent(it.magnet || '')}" data-title="${esc(it.title || '')}">Play</button></span>
       </div>
     </div>`).join('') || (fetching ? '<div class="empty"><span class="spin"></span></div>' : '<div class="empty">No items — refresh a feed</div>');
   if (html === lastHtml.rssItems) return;
   lastHtml.rssItems = html;
   $('rss-items').innerHTML = html;
   $('rss-items').querySelectorAll('.play').forEach(b => b.onclick = () => {
-    const u = b.dataset.url; if (!u) return;
-    b.textContent = 'Sent ✓';
-    apiMutation('/load?url=' + u).catch(()=>{});
+    const u = decodeURIComponent(b.dataset.url || ''); if (!u) return;
+    playMediaUrl(u, b.dataset.title || '', b);
+  });
+  $('rss-items').querySelectorAll('[data-rss-queue]').forEach(button => {
+    const item = visible[Number(button.dataset.rssQueue)] || {};
+    button.onclick = () => queueMedia(item.magnet || '', item.title || '', button);
   });
   $('rss-items').querySelectorAll('.rss-details').forEach(button => {
     const item = visible[Number(button.dataset.details)] || {};

@@ -2364,8 +2364,13 @@ fn apiLiveTv(stream: std.Io.net.Stream, query: []const u8) void {
     const n = cat.queryPage(rows, offset, q);
     const total = cat.count(q);
 
-    var json_buf: [32768]u8 = undefined;
-    var w = std.Io.Writer.fixed(&json_buf);
+    const allocator = @import("../core/alloc.zig").allocator;
+    const json_buf = allocator.alloc(u8, 192 * 1024) catch {
+        sendJsonStatus(stream, "503 Service Unavailable", "{\"error\":\"channel catalog unavailable\"}");
+        return;
+    };
+    defer allocator.free(json_buf);
+    var w = std.Io.Writer.fixed(json_buf);
     w.print("{{\"total\":{d},\"offset\":{d},\"channels\":[", .{ total, offset }) catch return;
     for (rows[0..n], 0..) |ch, i| {
         if (i > 0) w.writeAll(",") catch return;
@@ -3522,8 +3527,13 @@ fn apiPodcasts(stream: std.Io.net.Stream, api_path: []const u8, query: []const u
     }
     // GET /podcasts → results + episodes for the current show.
     const view = podcasts_svc.snapshot();
-    var json_buf: [32768]u8 = undefined;
-    var w = std.Io.Writer.fixed(&json_buf);
+    const allocator = @import("../core/alloc.zig").allocator;
+    const json_buf = allocator.alloc(u8, 192 * 1024) catch {
+        sendJsonStatus(stream, "503 Service Unavailable", "{\"error\":\"podcast view unavailable\"}");
+        return;
+    };
+    defer allocator.free(json_buf);
+    var w = std.Io.Writer.fixed(json_buf);
     w.print("{{\"generation\":{d},\"results\":[", .{view.generation}) catch return;
     for (0..view.result_count) |ri| {
         const r = view.results[ri];
@@ -3550,6 +3560,8 @@ fn apiPodcasts(stream: std.Io.net.Stream, api_path: []const u8, query: []const u
         escJsonWrite(&w, e.date[0..e.date_len]);
         w.writeAll("\",\"duration\":\"") catch return;
         escJsonWrite(&w, e.duration[0..e.duration_len]);
+        w.writeAll("\",\"url\":\"") catch return;
+        escJsonWrite(&w, e.audio_url[0..@min(e.audio_url_len, e.audio_url.len)]);
         w.writeAll("\"}") catch return;
     }
     w.writeAll("],\"selected\":") catch return;

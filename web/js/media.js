@@ -586,8 +586,11 @@ function openSourceDetails(source, item, trigger){
     actions.append(detailAction(item.kind === 'show' ? 'View episodes' : 'Play', async () => {
       closeSourceDetails();
       if (item.kind === 'show') loadPodEpisodes(item.index);
-      else await api('/podcasts/play?idx=' + encodeURIComponent(item.index));
+      else dispatchPlay(item.url || '', item.title || item.name || '', () => api('/podcasts/play?idx=' + encodeURIComponent(item.index)));
     }, true));
+    if (item.kind === 'episode' && item.url) actions.append(detailAction('Queue', async () => {
+      await queueMedia(item.url, item.title || item.name || ''); closeSourceDetails();
+    }));
   } else if (source === 'Music') {
     actions.append(detailAction('Play', async () => {
       closeSourceDetails();
@@ -642,6 +645,9 @@ function openSourceDetails(source, item, trigger){
     actions.append(detailAction('Play', async () => {
       await apiMutation('/load?url=' + encodeURIComponent(item.url)); closeSourceDetails();
     }, true));
+    if (item.url) actions.append(detailAction('Queue', async () => {
+      await queueMedia(item.url, item.title || item.name || ''); closeSourceDetails();
+    }));
   }
   if (!dialog.open) dialog.showModal();
 }

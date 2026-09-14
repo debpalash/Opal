@@ -981,6 +981,29 @@ def test_reading_server_connection_lifecycle():
     return "pass", "ABS/OPDS persist securely, restore immediately, edit/disconnect once, and POST mutations"
 
 
+@test("Direct-url cards share play-here and queue behavior", "Web UI")
+def test_direct_url_play_and_queue_actions():
+    discovery = _src("web/js/discovery.js")
+    media = _src("web/js/media.js")
+    remote = _remote_api()
+    checks = {
+        "AI play dispatch": "dispatchPlay(u, b.dataset.title" in discovery,
+        "AI queue": "data-ai-queue" in discovery and "queueMedia(decodeURIComponent(button.dataset.aiQueue" in discovery,
+        "podcast URL projected": "e.audio_url[0..@min(e.audio_url_len" in remote,
+        "podcast response bounded": "podcast view unavailable" in remote and "192 * 1024" in remote,
+        "podcast card play dispatch": "dispatchPlay(episode.url || '', episode.title" in discovery,
+        "podcast card queue": "data-pod-queue" in discovery and "queueMedia(episode.url" in discovery,
+        "podcast details queue": "item.kind === 'episode' && item.url" in media and "queueMedia(item.url" in media,
+        "RSS card queue": "data-rss-queue" in discovery and "queueMedia(item.magnet" in discovery,
+        "RSS selected-destination play": "playMediaUrl(u, b.dataset.title" in discovery,
+        "RSS details queue": "source === 'RSS'" in media and media.count("await queueMedia(item.url") >= 3,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "direct media actions incomplete: " + ", ".join(missing)
+    return "pass", "AI, podcast, and RSS cards share selected-destination play plus durable queue"
+
+
 @test("Remote API never serializes socket writes behind a global lock", "Remote")
 def test_remote_response_concurrency_boundary():
     remote = _remote_api()
