@@ -251,10 +251,11 @@ async function loadSyncAccounts() {
   $('anilist-token').placeholder = account.connected ? 'set — type to replace' : 'paste token after authorization';
   $('anilist-hint').textContent = account.connected
     ? `Connected${account.queued ? ` · ${account.queued} queued` : ' · synced'}`
+    : account.needs_reauth ? `Authorization revoked · reconnect to send ${account.queued || 0} queued`
     : 'Not connected. Save your client ID, authorize, then paste the token.';
   $('anilist-authorize').hidden = !account.authorize_url;
   $('anilist-authorize').href = account.authorize_url || '#';
-  $('anilist-retry').hidden = !account.queued;
+  $('anilist-retry').hidden = !account.queued || !!account.needs_reauth;
   const simkl = data.simkl || {};
   $('simkl-id').placeholder = simkl.has_client_id ? 'set — type to replace' : 'required';
   $('simkl-hint').textContent = simkl.connected

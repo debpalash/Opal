@@ -11,16 +11,18 @@ pub fn handle(stream: std.Io.net.Stream, method: []const u8, query: []const u8, 
     if (!http.requireMethod(stream, method, "GET")) return;
     var auth_buf: [256]u8 = undefined;
     const auth_url = anilist.authorizationUrl(&auth_buf);
+    const anilist_state = anilist.snapshot();
     const simkl_state = simkl.snapshot();
     var out: [1024]u8 = undefined;
     var writer = std.Io.Writer.fixed(&out);
     writer.print("{{\"anilist\":{{\"connected\":{s},\"has_client_id\":{s},\"queued\":{d},\"authorize_url\":\"", .{
-        if (anilist.enabled and anilist.access_token_len > 0) "true" else "false",
-        if (anilist.client_id_len > 0) "true" else "false",
-        anilist.pendingCount(),
+        if (anilist_state.connected) "true" else "false",
+        if (anilist_state.has_client_id) "true" else "false",
+        anilist_state.queued,
     }) catch return;
     http.writeJsonString(&writer, auth_url);
-    writer.print("\"}},\"simkl\":{{\"connected\":{s},\"pending\":{s},\"needs_reauth\":{s},\"has_client_id\":{s},\"queued\":{d},\"user_code\":\"", .{
+    writer.print("\",\"needs_reauth\":{s}}},\"simkl\":{{\"connected\":{s},\"pending\":{s},\"needs_reauth\":{s},\"has_client_id\":{s},\"queued\":{d},\"user_code\":\"", .{
+        if (anilist_state.needs_reauth) "true" else "false",
         if (simkl_state.connected) "true" else "false",
         if (simkl_state.pending) "true" else "false",
         if (simkl_state.needs_reauth) "true" else "false",

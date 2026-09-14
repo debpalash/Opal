@@ -17,8 +17,20 @@ pub var access_token: [2048]u8 = std.mem.zeroes([2048]u8);
 pub var access_token_len: usize = 0;
 pub var client_id: [32]u8 = std.mem.zeroes([32]u8);
 pub var client_id_len: usize = 0;
-pub var enabled: bool = false;
+pub var enabled: std.atomic.Value(bool) = .init(false);
 var outbox_busy: std.atomic.Value(bool) = .init(false);
+var authorization_revoked: std.atomic.Value(bool) = .init(false);
+var credential_mutex: @import("../core/sync.zig").Mutex = .{};
+
+pub const AccountSnapshot = struct { connected: bool, has_client_id: bool, queued: usize, needs_reauth: bool };
+
+pub fn snapshot() AccountSnapshot {
+    credential_mutex.lock();
+    const has_token = access_token_len > 0;
+    const has_client = client_id_len > 0;
+    credential_mutex.unlock();
+    return .{ .connected = enabled.load(.acquire) and has_token, .has_client_id = has_client, .queued = outbox.count("anilist"), .needs_reauth = authorization_revoked.load(.acquire) };
+}
 
 fn cfgPath(buf: []u8) []const u8 {
     var config: [512]u8 = undefined;
@@ -43,9 +55,9 @@ pub fn init() void {
     if (value != .string) return;
     const plain = secret_store.reveal(value.string, &access_token) orelse return;
     access_token_len = plain.len;
-    enabled = access_token_len > 0;
+    enabled.store(access_token_len > 0, .release);
     if (!secret_store.isSealed(value.string)) save();
-    if (enabled) kickOutbox();
+    if (enabled.load(.acquire)) kickOutbox();
 }
 
 fn save() void {
@@ -66,6 +78,8 @@ fn validClientId(id: []const u8) bool {
 
 pub fn setClientId(id: []const u8) bool {
     if (!validClientId(id)) return false;
+    credential_mutex.lock();
+    defer credential_mutex.unlock();
     @memset(&client_id, 0);
     @memcpy(client_id[0..id.len], id);
     client_id_len = id.len;
@@ -74,32 +88,46 @@ pub fn setClientId(id: []const u8) bool {
 }
 
 pub fn authorizationUrl(buf: []u8) []const u8 {
+    credential_mutex.lock();
+    defer credential_mutex.unlock();
     if (client_id_len == 0) return "";
     return std.fmt.bufPrint(buf, "https://anilist.co/api/v2/oauth/authorize?client_id={s}&response_type=token", .{client_id[0..client_id_len]}) catch "";
 }
 
 pub fn setToken(token: []const u8) bool {
     if (token.len == 0 or token.len > access_token.len) return false;
+    credential_mutex.lock();
     @memset(&access_token, 0);
     @memcpy(access_token[0..token.len], token);
     access_token_len = token.len;
-    enabled = true;
+    authorization_revoked.store(false, .release);
+    enabled.store(true, .release);
     save();
+    credential_mutex.unlock();
     kickOutbox();
     return true;
 }
 
 pub fn disconnect() void {
+    credential_mutex.lock();
     @memset(&access_token, 0);
     access_token_len = 0;
-    enabled = false;
+    enabled.store(false, .release);
+    authorization_revoked.store(false, .release);
     save();
+    credential_mutex.unlock();
 }
 
 /// Update watch progress for an anime on AniList.
 /// `media_id` is the AniList media ID, `episode` is the episode number.
 pub fn updateProgress(media_id: i64, episode: i32) void {
-    if (!enabled or access_token_len == 0 or media_id <= 0) return;
+    // A revoked account keeps its invalid token in memory as the explicit
+    // "was connected" marker until disconnect/replacement. Continue coalescing
+    // progress while offline; kickOutbox stays disabled until reconnection.
+    credential_mutex.lock();
+    const configured = access_token_len > 0;
+    credential_mutex.unlock();
+    if (!configured or media_id <= 0) return;
     var gql_buf: [512]u8 = undefined;
     const payload = std.fmt.bufPrint(&gql_buf,
         \\{{"query":"mutation {{ SaveMediaListEntry(mediaId: {d}, progress: {d}, status: CURRENT) {{ id progress }} }}"}}
@@ -119,7 +147,7 @@ pub fn retryPending() void {
 }
 
 fn kickOutbox() void {
-    if (!enabled or access_token_len == 0 or workers.isQuitting()) return;
+    if (!enabled.load(.acquire) or workers.isQuitting()) return;
     if (outbox_busy.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) return;
     workers.spawn(drainOutbox, .{}) catch outbox_busy.store(false, .release);
 }
@@ -130,9 +158,19 @@ fn drainOutbox() void {
         var job: outbox.Job = .{};
         const now = io_global.timestamp();
         if (!outbox.nextDue("anilist", now, &job)) return;
-        if (postMutation(job.payload[0..job.payload_len])) {
-            outbox.complete(job.id);
-            continue;
+        switch (postMutation(job.payload[0..job.payload_len])) {
+            .success => {
+                outbox.complete(job.id);
+                continue;
+            },
+            .revoked => {
+                authorization_revoked.store(true, .release);
+                enabled.store(false, .release);
+                outbox.deferFailure(job.id, job.attempts, now, "Authorization revoked; reconnect required");
+                logs.pushLog("error", "anilist", "AniList authorization was revoked; reconnect to resume queued sync", true);
+                return;
+            },
+            .retry => {},
         }
         outbox.deferFailure(job.id, job.attempts, now, "HTTP delivery failed");
         const delay = outbox.retryDelaySeconds(job.attempts);
@@ -141,25 +179,40 @@ fn drainOutbox() void {
     }
 }
 
-fn postMutation(payload: []const u8) bool {
+const Delivery = enum { success, retry, revoked };
+
+fn postMutation(payload: []const u8) Delivery {
     const alloc = @import("../core/alloc.zig").allocator;
+    var token: [2048]u8 = undefined;
+    defer @memset(&token, 0);
+    credential_mutex.lock();
+    const token_len = access_token_len;
+    @memcpy(token[0..token_len], access_token[0..token_len]);
+    credential_mutex.unlock();
+    if (token_len == 0) return .retry;
     var auth_buf: [2200]u8 = undefined;
-    const auth = std.fmt.bufPrintZ(&auth_buf, "Authorization: Bearer {s}", .{access_token[0..access_token_len]}) catch return false;
+    const auth = std.fmt.bufPrintZ(&auth_buf, "Authorization: Bearer {s}", .{token[0..token_len]}) catch return .retry;
     var child = io_global.Child.init(&.{
-        "curl",                     "-fsS",     "--connect-timeout", "5",  "--max-time",                     "15",
+        "curl",                     "-sS",      "--connect-timeout", "5",  "--max-time",                     "15",
         "-X",                       "POST",     ANILIST_API,         "-H", "Content-Type: application/json", "-H",
-        "Accept: application/json", "--config", "-",                 "-d", payload,
+        "Accept: application/json", "--config", "-",                 "-d", payload,                          "-o",
+        io_global.devNull(),        "-w",       "%{http_code}",
     }, alloc);
-    child.stdout_behavior = .Ignore;
+    child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
-    @import("../core/curl_secret.zig").spawnWithHeaders(&child, &.{auth}) catch return false;
-    const result = child.wait() catch return false;
-    if (result == .exited and result.exited == 0) {
+    @import("../core/curl_secret.zig").spawnWithHeaders(&child, &.{auth}) catch return .retry;
+    var status_buf: [16]u8 = undefined;
+    const status_len = if (child.stdout) |*stdout| io_global.readAll(stdout, &status_buf) catch 0 else 0;
+    const result = child.wait() catch return .retry;
+    if (result != .exited or result.exited != 0) return .retry;
+    const status = std.fmt.parseInt(u16, std.mem.trim(u8, status_buf[0..status_len], " \r\n\t"), 10) catch return .retry;
+    if (status >= 200 and status < 300) {
         logs.pushLog("info", "anilist", "AniList progress updated", false);
-        return true;
+        return .success;
     }
+    if (status == 401) return .revoked;
     logs.pushLog("warn", "anilist", "AniList sync queued for retry", false);
-    return false;
+    return .retry;
 }
 
 /// Fetch AniList metadata for a batch of MAL ids in ONE keyless GraphQL query.

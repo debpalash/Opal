@@ -24,6 +24,13 @@ def test_anilist_sync_lifecycle():
             and "r.anilist_id = m.id" in anime and "anilist.updateProgress(r.anilist_id" in anime,
         "durable outbox": 'outbox.enqueue("anilist", "progress"' in service
             and "outbox.nextDue" in service and "outbox.deferFailure" in service,
+        "revoked auth is actionable": "const Delivery = enum { success, retry, revoked }" in service
+            and "status == 401" in service and "authorization_revoked" in service
+            and "needs_reauth" in api and "Authorization revoked" in ui
+            and "!account.queued || !!account.needs_reauth" in ui,
+        "revoked progress still coalesces": "if (!configured or media_id <= 0) return;" in service,
+        "credential copy is race-free": "credential_mutex" in service
+            and "@memcpy(token[0..token_len], access_token[0..token_len])" in service,
         "owned bounded delivery": "workers.spawn(drainOutbox" in service
             and '"--connect-timeout"' in service and '"--max-time"' in service,
         "web lifecycle": 'id="anilist-authorize"' in ui

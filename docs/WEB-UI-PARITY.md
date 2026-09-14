@@ -121,7 +121,9 @@ commands, non-finite numbers, out-of-range values, and unknown actions.
 - [x] Source health, permission review, diagnostics, and executable-plugin
       lifecycle in the web client. Native/unsafe execution is blocked until an
       explicit, plugin-ID-and-content-addressed approval; updates revoke trust.
-- [ ] Trakt/AniList/SIMKL authorization, sync state, conflicts, and retry queue
+- [x] Trakt/AniList/SIMKL authorization, sync state, conflicts, and retry queue
+      (write-only encrypted credentials, reconnect-required state, latest-state
+      coalescing, durable backoff queues, explicit retry/disconnect controls)
 - [ ] Debrid, Suwayomi, Audiobookshelf, OPDS, IPTV, RSS, and custom source CRUD
 - [x] Download/torrent pause, resume, cancel, per-file priority, rate limits,
       file lists, progress, ETA, and errors
