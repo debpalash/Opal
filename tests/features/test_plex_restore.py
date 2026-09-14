@@ -101,3 +101,27 @@ def test_plex_restored_session_loads_library():
         "path, backed-off retry (not a pre-success latch), failure surfaced; "
         "stale-append guarded by a generation counter (A->B->A safe)"
     )
+
+
+@test("Plex web playback uses stable identity and resume state", "Plex")
+def test_plex_stable_web_playback():
+    svc = _src("src/services/plex.zig")
+    remote = _src("src/services/remote.zig")
+    web = _src("web/js/media.js")
+    css = _src("web/styles/app.css")
+    checks = {
+        "server view state parsed": all(field in svc for field in ("viewOffset", "duration", "viewCount")),
+        "stable rating-key action": "pub fn playByRatingKey" in svc,
+        "rating key validated": "validRatingKey(rating_key)" in svc,
+        "action resolves current item": "for (items[0..item_count])" in svc,
+        "POST-only playback": 'requireMethod(stream, method, "POST")' in remote,
+        "remote action takes id": 'getQueryParam(query, "id")' in remote and "playByRatingKey(id)" in remote,
+        "remote emits resume state": all(field in remote for field in ("view_offset_ms", "duration_ms", "view_count")),
+        "web does not play by index": "apiMutation('/plex/play?id='" in web and "'/plex/play?idx='" not in web,
+        "web labels resume": "'Resume'" in web,
+        "web paints progress": "plex-progress" in web and ".plex-progress" in css,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "Plex stable playback incomplete: " + ", ".join(missing)
+    return "pass", "Plex web cards preserve resume state and execute playback by stable rating key"

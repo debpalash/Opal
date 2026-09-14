@@ -465,6 +465,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
 .jf-card-actions button:disabled{opacity:.55}
 .jf-progress{position:absolute;left:0;right:0;bottom:44px;height:3px;background:rgba(0,0,0,.35)}
 .jf-progress i{display:block;height:100%;background:var(--accent)}
+.plex-progress{height:3px;margin-top:7px;background:var(--bg-elevated);border-radius:999px;overflow:hidden}
+.plex-progress i{display:block;height:100%;background:var(--accent)}
 @media (hover:none){.jf-card-actions{opacity:1;transform:none}}
 @media (max-width:420px){
   #browse-search button{padding-inline:10px}

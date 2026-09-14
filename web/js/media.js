@@ -426,10 +426,17 @@ function renderPlex(d){
       <div class="t">${esc(r.title)}</div>
       <div class="m">
         ${r.year ? `<span class="src">${esc(r.year)}</span>` : ''}
-        <button class="play" data-i="${i}">${items ? 'Play' : 'Open'}</button></div>
+        ${items && r.duration ? `<span class="src">${r.played ? 'Watched' : (r.progress ? `${fmt(r.progress)} / ${fmt(r.duration)}` : fmt(r.duration))}</span>` : ''}
+        <button class="play" data-i="${i}" data-id="${items ? esc(r.id || '') : ''}">${items ? (r.progress && !r.played ? 'Resume' : 'Play') : 'Open'}</button></div>
+      ${items && r.duration && r.progress ? `<div class="plex-progress"><i style="width:${Math.min(100,Math.round(r.progress/r.duration*100))}%"></i></div>` : ''}
     </div>`).join('') || (d.connected ? '<div class="empty">Nothing here</div>' : '');
   $('plex-results').querySelectorAll('button[data-i]').forEach(b => {
-    b.onclick = () => { api('/plex/' + (items ? 'play' : 'open') + '?idx=' + b.dataset.i).catch(()=>{}); pollPlex(); };
+    b.onclick = () => {
+      const request = items
+        ? apiMutation('/plex/play?id=' + encodeURIComponent(b.dataset.id))
+        : api('/plex/open?idx=' + b.dataset.i);
+      request.catch(()=>{}); pollPlex();
+    };
   });
 }
 

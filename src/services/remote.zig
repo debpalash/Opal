@@ -1496,7 +1496,7 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
         return;
     }
     if (std.mem.startsWith(u8, api_path, "/plex")) {
-        apiPlex(stream, api_path, query);
+        apiPlex(stream, method, api_path, query);
         return;
     }
     // Jellyfin
@@ -3983,7 +3983,7 @@ fn apiOpds(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) v
 /// Sign-in is Plex's PIN flow: `/plex/connect` starts it and the status payload
 /// carries `pin`, which the user enters at plex.tv/link. There is no
 /// username/password route because plex.zig doesn't have one.
-fn apiPlex(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
+fn apiPlex(stream: std.Io.net.Stream, method: []const u8, api_path: []const u8, query: []const u8) void {
     const plex = @import("plex.zig");
 
     if (std.mem.eql(u8, api_path, "/plex/connect")) {
@@ -4017,12 +4017,14 @@ fn apiPlex(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) v
         return;
     }
     if (std.mem.eql(u8, api_path, "/plex/play")) {
-        const idx = std.fmt.parseInt(usize, getQueryParam(query, "idx") orelse "999", 10) catch 999;
-        if (idx >= plex.item_count) {
+        if (!requireMethod(stream, method, "POST")) return;
+        var id_buf: [64]u8 = undefined;
+        const id_raw = getQueryParam(query, "id") orelse "";
+        const id = urlDecode(id_raw, &id_buf) orelse id_raw;
+        if (!plex.playByRatingKey(id)) {
             sendJsonStatus(stream, "404 Not Found", "{\"error\":\"no such item\"}");
             return;
         }
-        plex.play(idx);
         sendJson(stream, "{\"ok\":true,\"action\":\"plex_play\"}");
         return;
     }
@@ -4056,9 +4058,15 @@ fn apiPlex(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) v
         if (i > 0) w.writeAll(",") catch return;
         w.writeAll("{\"title\":\"") catch return;
         escJsonWrite(&w, txt.safeUtf8(it.title[0..@min(it.title_len, it.title.len)]));
+        w.writeAll("\",\"id\":\"") catch return;
+        escJsonWrite(&w, it.rating_key[0..@min(it.rating_key_len, it.rating_key.len)]);
         w.writeAll("\",\"year\":\"") catch return;
         escJsonWrite(&w, txt.safeUtf8(it.year[0..@min(it.year_len, it.year.len)]));
-        w.writeAll("\"}") catch return;
+        w.print("\",\"progress\":{d},\"duration\":{d},\"played\":{s}}}", .{
+            @divTrunc(it.view_offset_ms, 1000),
+            @divTrunc(it.duration_ms, 1000),
+            if (it.view_count > 0) "true" else "false",
+        }) catch return;
     }
     w.writeAll("]}") catch return;
     sendJson(stream, json_buf[0..w.end]);

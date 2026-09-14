@@ -55,6 +55,7 @@ const Item = struct {
     fallback_part_len: usize = 0,
     view_offset_ms: i64 = 0,
     duration_ms: i64 = 0,
+    view_count: i64 = 0,
 };
 
 pub const SearchItem = plex_pure.SearchItem;
@@ -533,6 +534,9 @@ fn fetchWindow(section_idx: usize, start: usize, gen: u64) void {
         if (m.object.get("duration")) |value| {
             if (value == .integer and value.integer > 0) it.duration_ms = value.integer;
         }
+        if (m.object.get("viewCount")) |value| {
+            if (value == .integer and value.integer > 0) it.view_count = value.integer;
+        }
         if (m.object.get("Media")) |media| if (media == .array and media.array.items.len > 0) {
             var versions: [32][]const u8 = undefined;
             var version_count: usize = 0;
@@ -632,7 +636,22 @@ pub fn loadMore() void {
 
 pub fn play(idx: usize) void {
     if (idx >= item_count) return;
-    const it = &items[idx];
+    playResolvedItem(items[idx]);
+}
+
+/// Stable remote action: resolve the server-owned rating key at execution
+/// time instead of trusting an array index from an older paginated snapshot.
+pub fn playByRatingKey(rating_key: []const u8) bool {
+    if (!plex_pure.validRatingKey(rating_key)) return false;
+    for (items[0..item_count]) |item| {
+        if (!std.mem.eql(u8, item.rating_key[0..item.rating_key_len], rating_key)) continue;
+        playResolvedItem(item);
+        return true;
+    }
+    return false;
+}
+
+fn playResolvedItem(it: Item) void {
     if (it.part_len == 0) {
         state.showToastTyped("No playable part", .warning);
         return;
