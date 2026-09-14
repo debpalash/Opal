@@ -145,14 +145,13 @@ pub fn ingestMemory(role: []const u8, content: []const u8, context_type: []const
         .allocator = allocator,
     };
 
-    const t = @import("../core/workers.zig").spawnLegacy(ingestWorker, .{args}) catch {
+    @import("../core/workers.zig").spawn(ingestWorker, .{args}) catch {
         allocator.free(args.role);
         allocator.free(args.content);
         allocator.free(args.context_type);
         allocator.free(args.media_title);
         return;
     };
-    @import("../core/workers.zig").release(t);
 }
 
 // ── Context retrieval for RAG ──

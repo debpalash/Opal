@@ -100,6 +100,9 @@ def test_owned_worker_supervisor():
             and "spawnLegacy(" not in _between(
                 _src("src/services/plugins.zig"), "pub fn fetchPoster(item: *PluginResult)", "// UI Rendering"
             ),
+        "playback enrichment workers are owned": "spawnLegacy(" not in _between(
+            _src("src/services/ai_memory.zig"), "pub fn ingestMemory(", "// Context retrieval"
+        ) and "flush_busy.cmpxchgStrong(" in _src("src/services/activity.zig"),
     }
     missing = [name for name, ok in checks.items() if not ok]
     if missing:

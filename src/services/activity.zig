@@ -95,9 +95,8 @@ pub fn record(kind: Kind, title: []const u8, meta: Meta) void {
 }
 
 fn kickFlush() void {
-    if (flush_busy.load(.acquire)) return;
-    flush_busy.store(true, .release);
-    const th = @import("../core/workers.zig").spawnLegacy(struct {
+    if (flush_busy.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) return;
+    @import("../core/workers.zig").spawn(struct {
         fn worker() void {
             defer flush_busy.store(false, .release);
             flushPending();
@@ -106,7 +105,6 @@ fn kickFlush() void {
         flush_busy.store(false, .release);
         return;
     };
-    @import("../core/workers.zig").release(th);
 }
 
 /// Drain the pending buffer to SQLite. Runs on the flush worker only.
