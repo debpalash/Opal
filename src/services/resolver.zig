@@ -863,60 +863,27 @@ fn isLocalMedia(name: []const u8) bool {
 /// filename matches the query — instant, zero-network results so a movie you
 /// already have is findable straight from the omnibox.
 fn resolveLocalFiles(q: [256]u8, qlen: usize) void {
-    const io_global = @import("../core/io_global.zig");
     defer finishWorker(&status_local, .done);
     if (qlen == 0) return;
-
-    var ql: [256]u8 = undefined;
-    for (0..qlen) |i| ql[i] = std.ascii.toLower(q[i]);
-    const query = ql[0..qlen];
-
-    var path_buf: [1024]u8 = undefined;
-    const save_path = if (state.app.save_path_len > 0)
-        state.app.save_path_buf[0..state.app.save_path_len]
-    else
-        @import("../core/paths.zig").defaultSavePath(&path_buf);
-    if (save_path.len == 0) {
-        noteWorkerOutcome(.unavailable);
-        return;
-    }
-
-    var dir = io_global.cwdOpenDir(save_path, .{ .iterate = true }) catch {
-        noteWorkerOutcome(.unavailable);
-        return;
-    };
-    defer dir.close(io_global.io());
-
-    var iter = dir.iterate();
-    var found: usize = 0;
-    while (iter.next(io_global.io()) catch null) |entry| {
-        if (found >= 20) break;
-        if (entry.kind != .file) continue;
-        const name = entry.name;
-        if (!isLocalMedia(name)) continue;
-
-        var nl: [512]u8 = undefined;
-        if (name.len > nl.len) continue;
-        for (0..name.len) |i| nl[i] = std.ascii.toLower(name[i]);
-        if (std.mem.indexOf(u8, nl[0..name.len], query) == null) continue;
-
+    const library = @import("local_library.zig");
+    var local: [20]library.Item = undefined;
+    const found = library.search(q[0..qlen], false, &local);
+    for (local[0..found]) |*entry| {
         var item = ResolvedItem{ .source = .local };
-        const nlen = @min(name.len, 255);
-        @memcpy(item.name[0..nlen], name[0..nlen]);
+        const nlen = @min(entry.title_len, item.name.len);
+        @memcpy(item.name[0..nlen], entry.title[0..nlen]);
         item.name_len = nlen;
-
-        var url_buf: [2048]u8 = undefined;
-        const url = std.fmt.bufPrint(&url_buf, "{s}/{s}", .{ save_path, name }) catch continue;
-        const ulen = @min(url.len, item.url.len);
-        @memcpy(item.url[0..ulen], url[0..ulen]);
+        const ulen = @min(entry.path_len, item.url.len);
+        @memcpy(item.url[0..ulen], entry.path[0..ulen]);
         item.url_len = ulen;
-
-        const d = "On disk";
-        @memcpy(item.detail[0..d.len], d);
-        item.detail_len = d.len;
-
+        var detail_buf: [128]u8 = undefined;
+        const detail = if (entry.duplicate_count > 1)
+            std.fmt.bufPrint(&detail_buf, "On disk · {d} likely duplicates", .{entry.duplicate_count}) catch "On disk"
+        else
+            "On disk";
+        @memcpy(item.detail[0..detail.len], detail);
+        item.detail_len = detail.len;
         _ = pushResult(item);
-        found += 1;
     }
 }
 

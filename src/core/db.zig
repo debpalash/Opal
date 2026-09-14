@@ -561,6 +561,31 @@ fn createTables() void {
     );
     exec("CREATE INDEX IF NOT EXISTS idx_collection_items_parent ON media_collection_items(collection_id, position)");
 
+    // Persistent local-media index. Searches read this table instead of walking
+    // the download tree on every query; user corrections survive rescans.
+    exec(
+        \\CREATE TABLE IF NOT EXISTS local_media (
+        \\  path TEXT PRIMARY KEY,
+        \\  root TEXT NOT NULL,
+        \\  title TEXT NOT NULL,
+        \\  display_title TEXT DEFAULT '',
+        \\  media_kind TEXT DEFAULT '',
+        \\  size INTEGER NOT NULL DEFAULT 0,
+        \\  mtime INTEGER NOT NULL DEFAULT 0,
+        \\  fingerprint TEXT DEFAULT '',
+        \\  scan_token INTEGER NOT NULL DEFAULT 0
+        \\)
+    );
+    exec("CREATE INDEX IF NOT EXISTS idx_local_media_title ON local_media(title COLLATE NOCASE)");
+    exec("CREATE INDEX IF NOT EXISTS idx_local_media_display ON local_media(display_title COLLATE NOCASE)");
+    exec("CREATE INDEX IF NOT EXISTS idx_local_media_fingerprint ON local_media(fingerprint)");
+    exec(
+        \\CREATE TABLE IF NOT EXISTS local_library_roots (
+        \\  path TEXT PRIMARY KEY,
+        \\  added_at INTEGER DEFAULT (strftime('%s','now'))
+        \\)
+    );
+
     // Live TV stream-health cache (probe results). Keyed by url_hash; `status` is
     // the pure Health enum int (0 unknown/1 live/2 slow/3 dead), `checked_at`
     // drives the TTL so a "Working only" filter is instant on revisit. See

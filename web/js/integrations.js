@@ -523,6 +523,7 @@ let watchPage = (() => { try { return Math.min(9, Math.max(1, Number.parseInt(lo
 let watchSyncing = false;
 let watchSyncTimer = null, watchSyncPolls = 0;
 async function loadWatch(){
+  loadLocalLibrary();
   clearTimeout(watchSyncTimer);
   $('watch-hint').innerHTML = '<span class="spin"></span> Loading…';
   try {
@@ -544,6 +545,66 @@ async function loadWatch(){
 function chooseWatchFilter(group, button){
   group.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === button));
 }
+
+let localLibraryTimer = 0;
+async function loadLocalLibrary(){
+  clearTimeout(localLibraryTimer);
+  const query = $('local-query').value.trim();
+  const duplicates = $('local-duplicates').checked;
+  try {
+    const data = await api('/local-library?q=' + encodeURIComponent(query) + (duplicates ? '&duplicates=1' : ''));
+    const items = data.items || [];
+    const roots = data.roots || [];
+    $('local-roots').innerHTML = roots.map(root => `<span>${esc(root.name)} <button type="button" data-root-remove="${root.id}" aria-label="Remove ${esc(root.name)}">Ã—</button></span>`).join('');
+    $('local-hint').textContent = data.scanning ? 'Refreshing the index in the backgroundâ€¦' :
+      `${items.length} indexed file${items.length === 1 ? '' : 's'} shown${duplicates ? ' with likely duplicates' : ''}.`;
+    $('local-results').innerHTML = items.map((item, index) => `<div class="file local-media-row" data-i="${index}">
+      <div class="n"><input class="local-title" value="${esc(item.title)}" maxlength="255" aria-label="Corrected title">
+        <div class="file-meta"><span>${fmtSize(item.size)}</span>${item.copies > 1 ? `<span>${item.copies} likely duplicates</span>` : ''}</div></div>
+      <select class="local-kind" aria-label="Media type">
+        ${[['','Automatic'],['movie','Movie'],['tv','TV episode'],['music','Music'],['audiobook','Audiobook'],['other','Other']]
+          .map(([value,label]) => `<option value="${value}"${item.kind === value ? ' selected' : ''}>${label}</option>`).join('')}
+      </select><button type="button" data-local-save>Save metadata</button></div>`).join('') ||
+      '<div class="empty">No indexed files match. Scan after changing the download folder.</div>';
+    $('local-results')._items = items;
+    if (data.scanning && $('page-watch').classList.contains('on')) localLibraryTimer = setTimeout(loadLocalLibrary, 800);
+  } catch { $('local-hint').textContent = 'Local library index unavailable.'; }
+}
+$('local-query').addEventListener('input', () => {
+  clearTimeout(localLibraryTimer); localLibraryTimer = setTimeout(loadLocalLibrary, 180);
+});
+$('local-duplicates').addEventListener('change', loadLocalLibrary);
+$('local-scan').onclick = async () => {
+  $('local-scan').disabled = true;
+  try { await apiMutation('/local-library/action?action=scan'); await loadLocalLibrary(); }
+  catch (error) { toast(error.message || 'Could not start library scan'); }
+  finally { $('local-scan').disabled = false; }
+};
+$('local-root-add').onclick = async () => {
+  const input = $('local-root'); const path = input.value.trim();
+  if (!path) { input.focus(); return; }
+  try {
+    await apiFormMutation('/local-library/action', {action:'add-root', path});
+    input.value = ''; toast('Library folder added'); await loadLocalLibrary();
+  } catch (error) { toast(error.message || 'Could not import folder'); }
+};
+$('local-roots').addEventListener('click', async event => {
+  const button = event.target.closest('[data-root-remove]'); if (!button) return;
+  if (!confirm('Remove this folder from Opal’s index? Files stay on disk.')) return;
+  try { await apiFormMutation('/local-library/action', {action:'remove-root', id:button.dataset.rootRemove}); await loadLocalLibrary(); }
+  catch (error) { toast(error.message || 'Could not remove folder'); }
+});
+$('local-results').addEventListener('click', async event => {
+  const button = event.target.closest('[data-local-save]'); if (!button) return;
+  const row = button.closest('.local-media-row');
+  const item = $('local-results')._items?.[+row.dataset.i]; if (!item) return;
+  button.disabled = true;
+  try {
+    await apiFormMutation('/local-library/action', {action:'correct', id:item.id,
+      title:row.querySelector('.local-title').value.trim(), kind:row.querySelector('.local-kind').value});
+    toast('Metadata saved'); await loadLocalLibrary();
+  } catch (error) { toast(error.message || 'Could not save metadata'); button.disabled = false; }
+});
 function saveWatchChoice(key, value){ try { localStorage.setItem(key, value); } catch {} }
 function restoreWatchControls(){
   const filter = $('watch-filters').querySelector(`[data-f="${watchFilter}"]`);

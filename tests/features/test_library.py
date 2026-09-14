@@ -244,6 +244,51 @@ def movie_preferences_persist():
     return "pass", "movie favorites and half-step ratings survive restart under stable TMDB identity"
 
 
+@test("Local library is indexed, correctable, and duplicate-aware", "Library")
+def local_library_index():
+    db = _src("src/core/db.zig")
+    service = _src("src/services/local_library.zig")
+    resolver = _src("src/services/resolver.zig")
+    main = _src("src/main.zig")
+    remote = _src("src/services/remote_local_library_api.zig")
+    page = _src("web/index.html")
+    web = _src("web/js/integrations.js")
+    native = _src("src/ui/local_library_ui.zig")
+    watching = _src("src/services/tv_library.zig")
+    checks = {
+        "durable indexed schema": "CREATE TABLE IF NOT EXISTS local_media" in db
+            and "idx_local_media_fingerprint" in db
+            and "CREATE TABLE IF NOT EXISTS local_library_roots" in db,
+        "bounded recursive scan": "MAX_FILES" in service and "MAX_DEPTH" in service
+            and "never follow symlinks" in service,
+        "sampled content identity": "readPositionalAll" in service and "first and last" not in service
+            and "contentFingerprint" in service,
+        "stale rows retired": "scan_token<>?2" in service,
+        "offline roots preserved": "if (!rootAvailable(root_path)) continue" in service,
+        "managed roots": all(marker in service for marker in (
+            "pub fn addRoot", "pub fn listRoots", "pub fn removeRoot",
+        )),
+        "search avoids filesystem walk": 'library.search(q[0..qlen], false' in resolver
+            and "cwdOpenDir(save_path" not in resolver,
+        "startup refresh is off-thread": 'local_library.zig").scanAsync()' in main,
+        "opaque remote rows": '\\"id\\":{d}' in remote and '\\"path\\":' not in remote,
+        "typed corrections": "invalid metadata correction" in remote and "pub fn correct" in service,
+        "management UI": all(marker in page + web for marker in (
+            'id="local-scan"', 'id="local-query"', 'id="local-duplicates"',
+            'id="local-root"', 'id="local-root-add"', "data-root-remove",
+            "data-local-save", "Likely duplicates only", "apiFormMutation('/local-library/action'",
+        )),
+        "native manager": "local_library_ui.zig" in watching and all(marker in native for marker in (
+            "library.scanAsync()", "library.addRoot", "library.removeRoot", "duplicates_only",
+            "library.correct(edit_id", "Search indexed files",
+        )),
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "local library lifecycle incomplete: " + ", ".join(missing)
+    return "pass", "recursive local media is indexed once, searched instantly, corrected safely, and grouped by sampled identity"
+
+
 @test("Card action row is never clipped out of its own card", "Library")
 def card_action_row_fits():
     """The Watching page's Play and Remove controls were squeezed to zero height.

@@ -1106,6 +1106,7 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
     if (@import("remote_transfer_api.zig").handle(stream, method, api_path, query)) return;
     if (@import("remote_library_api.zig").handle(stream, method, api_path, query)) return;
     if (@import("remote_collections_api.zig").handle(stream, method, api_path, query)) return;
+    if (@import("remote_local_library_api.zig").handle(stream, method, api_path, query, body)) return;
     if (@import("remote_plex_api.zig").handle(stream, method, api_path, query)) return;
     // ── Non-player endpoints checked first ──
     // Search

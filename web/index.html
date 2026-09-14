@@ -428,6 +428,15 @@
         <span id="watch-page-label" aria-live="polite"></span>
         <button id="watch-next-page" type="button">Next</button>
       </nav>
+      <div class="sect-bar"><div class="sect">Local library</div><button id="local-scan" class="text-btn">Scan files</button></div>
+      <div class="search-row">
+        <input id="local-query" type="search" placeholder="Search indexed filesâ€¦" autocomplete="off">
+        <label class="plugin-toggle"><input id="local-duplicates" type="checkbox"> Likely duplicates only</label>
+      </div>
+      <div class="search-row"><input id="local-root" placeholder="Add a media folder path" autocomplete="off"><button id="local-root-add">Import folder</button></div>
+      <div id="local-roots" class="season-chips" aria-label="Imported media folders"></div>
+      <div id="local-hint" class="hint" role="status" aria-live="polite"></div>
+      <div id="local-results"></div>
   </section>
   <section class="page" id="page-setup">
     <div class="sect">Sources</div>

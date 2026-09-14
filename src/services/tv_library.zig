@@ -714,6 +714,7 @@ pub fn renderContent() void {
     // release feed below personal progress so opening Watching always answers
     // "what should I continue?" first.
     eztv.renderSection();
+    @import("../ui/local_library_ui.zig").render();
 }
 
 fn renderControlBar() void {

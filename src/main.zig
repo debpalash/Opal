@@ -355,6 +355,9 @@ pub fn coreInit() !void {
             // double-clicked local file can resume as soon as the DB rows exist.
             state.app.init_history_loaded = true;
             state.wakeUi();
+            // Build/refresh the recursive local-media index off the startup and
+            // search hot paths. Queries use the previous durable snapshot now.
+            @import("services/local_library.zig").scanAsync();
             // Load installed source endpoints (opal-plugins). No file → every
             // gated source stays inert until the user installs it.
             @import("core/source_config.zig").reload();
