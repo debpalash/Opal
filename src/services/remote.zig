@@ -2965,14 +2965,12 @@ fn apiPlugins(stream: std.Io.net.Stream, method: []const u8, query: []const u8, 
 
     if (std.mem.eql(u8, method, "POST")) {
         var kbuf: [32]u8 = undefined;
-        // Body first: debrid_key and the GitHub token are secrets, and a query
-        // string is the one place they would end up in logs or browser history.
         if (credParam(body, query, "key", &kbuf)) |key| {
             var vbuf: [256]u8 = undefined;
             const val = credParam(body, query, "value", &vbuf) orelse "";
-            // These settings do not live in config.tsv. Persist them through
-            // the same store as the desktop UI instead of merely dirtying the
-            // unrelated main configuration.
+            if (std.mem.eql(u8, key, "debrid_provider") and !repo.validDebridProvider(val))
+                return sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"unsupported debrid provider\"}");
+            // Persist these integration settings through their owning store.
             const Persist = enum { none, debrid, token };
             const Field = struct { name: []const u8, buf: []u8, len: *usize, persist: Persist = .none };
             const fields = [_]Field{
@@ -3008,6 +3006,10 @@ fn apiPlugins(stream: std.Io.net.Stream, method: []const u8, query: []const u8, 
             sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"missing action or setting key\"}");
             return;
         };
+        if (std.mem.eql(u8, action_name, "clear-debrid")) {
+            repo.clearDebrid();
+            return sendJson(stream, "{\"ok\":true}");
+        }
         if (std.mem.eql(u8, action_name, "approve-exec") or std.mem.eql(u8, action_name, "revoke-exec")) {
             var id_buf: [64]u8 = undefined;
             const id = credParam(body, query, "id", &id_buf) orelse {

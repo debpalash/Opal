@@ -98,6 +98,22 @@ pub fn debridKey() []const u8 {
     return debrid_key_buf[0..debrid_key_len];
 }
 
+pub fn validDebridProvider(provider: []const u8) bool {
+    const providers = [_][]const u8{ "realdebrid", "alldebrid", "premiumize", "torbox", "debridlink" };
+    for (providers) |allowed| if (std.mem.eql(u8, provider, allowed)) return true;
+    return false;
+}
+
+/// Disconnect without leaving a recoverable credential in memory or on disk.
+pub fn clearDebrid() void {
+    @memset(&debrid_key_buf, 0);
+    debrid_key_len = 0;
+    @memset(&debrid_provider_buf, 0);
+    debrid_provider_len = 0;
+    var path_buf: [600]u8 = undefined;
+    io.deleteFileAbsolute(debridPath(&path_buf)) catch {};
+}
+
 fn setMsg(comptime fmt: []const u8, args: anytype) void {
     const s = std.fmt.bufPrint(&status_msg, fmt, args) catch status_msg[0..0];
     status_msg_len = s.len;

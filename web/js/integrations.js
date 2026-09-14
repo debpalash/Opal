@@ -210,6 +210,15 @@ $('trakt-save').onclick = async () => {
     loadTrakt();
   } catch (error) { $('trakt-hint').textContent = error.message; }
 };
+$('plug-debrid-clear').onclick = async () => {
+  if (!confirm('Disconnect debrid and remove its saved API key?')) return;
+  try {
+    await apiFormMutation('/plugins', {action:'clear-debrid'});
+    $('plug-debrid-key').value = '';
+    toast('Debrid disconnected');
+    await loadPlugins();
+  } catch (error) { toast(error.message || 'Could not disconnect debrid'); }
+};
 $('trakt-connect').onclick = async () => {
   try {
     await saveTraktDrafts();

@@ -1437,6 +1437,10 @@ fn renderDebrid() void {
         pr.saveDebrid();
         state.showToastTyped("Debrid saved", .success);
     }
+    if (pr.debrid_key_len > 0 and dvui.button(@src(), "Disconnect", .{}, .{ .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.text_secondary, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 7, .w = 12, .h = 7 }, .gravity_y = 0.5 })) {
+        pr.clearDebrid();
+        state.showToast("Debrid disconnected");
+    }
 }
 
 /// Trakt.tv connect panel — scrobble + sync watched to the user's Trakt account.

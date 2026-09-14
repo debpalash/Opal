@@ -951,6 +951,30 @@ def test_rss_source_crud_and_persistence():
     return "pass", "RSS feeds persist and expose validated add/edit/enable/remove workflows"
 
 
+@test("Debrid connection has validated save and complete disconnect", "Web UI")
+def test_debrid_connection_lifecycle():
+    repo = _src("src/services/plugin_repo.zig")
+    native = _src("src/services/plugins.zig")
+    remote = _remote_api()
+    html = _src("web/index.html")
+    web = _src("web/js/integrations.js")
+    checks = {
+        "provider allowlist": "pub fn validDebridProvider" in repo
+            and "unsupported debrid provider" in remote,
+        "secret erased and file removed": "pub fn clearDebrid" in repo
+            and "@memset(&debrid_key_buf, 0)" in repo and "deleteFileAbsolute" in repo,
+        "native disconnect": '"Disconnect"' in native and "pr.clearDebrid()" in native,
+        "typed remote disconnect": 'action_name, "clear-debrid"' in remote
+            and "repo.clearDebrid()" in remote,
+        "web disconnect": 'id="plug-debrid-clear"' in html
+            and "action:'clear-debrid'" in web and "apiFormMutation('/plugins'" in web,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "debrid lifecycle incomplete: " + ", ".join(missing)
+    return "pass", "debrid provider is allowlisted; disconnect erases memory and the encrypted credential file"
+
+
 @test("Audiobookshelf and OPDS connections have durable web lifecycle controls", "Web UI")
 def test_reading_server_connection_lifecycle():
     remote = _remote_api()
