@@ -88,6 +88,17 @@ pub fn saveSearchHistory() void {
 /// Local files are keyed by their absolute path (file identity — survives a
 /// relative-path or file:// re-open); streams keep the URL as key.
 pub fn savePlaybackPosition(url: []const u8, position: f64, duration: f64) void {
+    savePlaybackPositionImpl(url, position, duration, true);
+}
+
+/// Ordered player persistence workers already publish taste progress on the
+/// caller/UI side. This variant performs only the durable row update, avoiding
+/// cross-thread mutation of activity's current-item tracker.
+pub fn savePlaybackPositionBackground(url: []const u8, position: f64, duration: f64) void {
+    savePlaybackPositionImpl(url, position, duration, false);
+}
+
+fn savePlaybackPositionImpl(url: []const u8, position: f64, duration: f64, publish_activity: bool) void {
     if (state.app.incognito_mode) return;
     if (url.len == 0 or url.len >= 2048 or duration < 5) return;
 
@@ -101,7 +112,7 @@ pub fn savePlaybackPosition(url: []const u8, position: f64, duration: f64) void 
     const percent = if (duration > 0) (position / duration) * 100.0 else 0;
     // Local taste engine: feed watch depth (finish/abandon detection). Must
     // run BEFORE the nearly-finished early-return or finishes would never be seen.
-    @import("activity.zig").onProgress(persisted.identity, percent);
+    if (publish_activity) @import("activity.zig").onProgress(persisted.identity, percent);
     // Don't save if nearly finished — treat as "watched"
     if (percent > whp.FINISHED_FRACTION * 100.0) return;
     // Don't save very early positions (<2%)

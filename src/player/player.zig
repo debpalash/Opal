@@ -142,10 +142,54 @@ const PositionSnapshot = struct {
     played_seconds: f64 = 0,
 };
 
+const PositionSaveJob = struct {
+    snapshot: PositionSnapshot,
+    force_remote: bool,
+    sequence: u64,
+};
+
+const position_save_pure = @import("position_save_pure.zig");
+var position_save_sequence = std.atomic.Value(u64).init(0);
+var position_save_pending = std.atomic.Value(u32).init(0);
+var position_save_mutex: @import("../core/sync.zig").Mutex = .{};
+var position_save_stamps: [16]position_save_pure.Stamp = [_]position_save_pure.Stamp{.{}} ** 16;
+var position_save_stamp_cursor: usize = 0;
+
 fn persistPositionSnapshot(snapshot: PositionSnapshot, force_remote: bool) void {
+    if (state.app.incognito_mode or snapshot.identity_len == 0) return;
     const identity = snapshot.identity[0..snapshot.identity_len];
-    @import("../services/history.zig").savePlaybackPosition(identity, snapshot.position, snapshot.duration);
-    @import("../services/server_progress.zig").submit(identity, snapshot.position, snapshot.duration, force_remote);
+    const percent = if (snapshot.duration > 0) (snapshot.position / snapshot.duration) * 100.0 else 0;
+    // Activity owns UI-thread current-item state; publish here rather than from
+    // the database worker. Durable persistence below deliberately skips it.
+    @import("../services/activity.zig").onProgress(identity, percent);
+
+    const job: PositionSaveJob = .{
+        .snapshot = snapshot,
+        .force_remote = force_remote,
+        .sequence = position_save_sequence.fetchAdd(1, .acq_rel) + 1,
+    };
+    _ = position_save_pending.fetchAdd(1, .acq_rel);
+    @import("../core/workers.zig").spawn(positionSaveWorker, .{job}) catch {
+        // Resource exhaustion is exceptional; preserve resume correctness even
+        // then, accepting a synchronous fallback instead of dropping progress.
+        positionSaveWorker(job);
+    };
+}
+
+fn positionSaveWorker(job: PositionSaveJob) void {
+    defer _ = position_save_pending.fetchSub(1, .acq_rel);
+    const snapshot = job.snapshot;
+    const identity = snapshot.identity[0..snapshot.identity_len];
+    const identity_hash = std.hash.Wyhash.hash(0, identity);
+
+    // Serialize resume stores and reject an older worker that happened to win
+    // thread scheduling after a newer save for the same media identity.
+    position_save_mutex.lock();
+    defer position_save_mutex.unlock();
+    if (!position_save_pure.accept(&position_save_stamps, &position_save_stamp_cursor, identity_hash, job.sequence)) return;
+
+    @import("../services/history.zig").savePlaybackPositionBackground(identity, snapshot.position, snapshot.duration);
+    @import("../services/server_progress.zig").submit(identity, snapshot.position, snapshot.duration, job.force_remote);
     if (snapshot.episode_active) {
         @import("../core/db.zig").tvSavePosition(
             snapshot.tmdb_id,
@@ -160,6 +204,18 @@ fn persistPositionSnapshot(snapshot: PositionSnapshot, force_remote: bool) void 
             snapshot.episode,
             snapshot.played_seconds,
         );
+    }
+}
+
+/// Final resume persistence must enqueue its authenticated server update before
+/// server_progress.flushForShutdown() runs. Keep this barrier short; the global
+/// owned-worker drain still guarantees local DB completion after the window is
+/// hidden if storage is unusually slow.
+pub fn flushPositionSavesForShutdown(timeout_ms: i64) void {
+    const io_g = @import("../core/io_global.zig");
+    const deadline = io_g.monotonicMilliTimestamp() + @max(timeout_ms, 1);
+    while (position_save_pending.load(.acquire) != 0 and io_g.monotonicMilliTimestamp() < deadline) {
+        io_g.sleep(std.time.ns_per_ms);
     }
 }
 

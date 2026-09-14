@@ -439,6 +439,13 @@ def test_hosted_mode_and_perf():
             pl, "pub fn load(self: *MediaPlayer", "pub fn commitPlayback(self: *MediaPlayer"
         ).index("persistPositionSnapshot(snapshot, true)")
             and "const previous_position = self.captureCurrentPosition();" in pl,
+        "resume persistence is ordered off-thread": "spawn(positionSaveWorker" in pl
+            and "position_save_mutex.lock();" in pl
+            and "position_save_pure.accept(" in pl
+            and "savePlaybackPositionBackground(" in _src("src/services/history.zig")
+            and "flushPositionSavesForShutdown(150);" in _src("src/main.zig")
+            and _src("src/main.zig").index("flushPositionSavesForShutdown(150);") < _src("src/main.zig").index("server_progress.zig\").flushForShutdown")
+            and 'b.path("src/player/position_save_pure.zig")' in _src("build.zig"),
     }
     missing = [k for k, v in checks.items() if not v]
     if not missing:

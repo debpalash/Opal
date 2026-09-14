@@ -737,6 +737,11 @@ pub fn appDeinit() void {
         }
     }
 
+    // Let ordered resume workers enqueue their final authenticated update
+    // before the server queue is flushed. Slow local storage still finishes
+    // under the owned-worker drain after the window is hidden.
+    player.flushPositionSavesForShutdown(150);
+
     // Surface is already gone; allow a local media server a tightly bounded
     // chance to receive its final stop/progress without making close feel hung.
     @import("services/server_progress.zig").flushForShutdown(120);
