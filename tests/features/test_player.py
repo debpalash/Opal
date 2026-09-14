@@ -433,6 +433,12 @@ def test_hosted_mode_and_perf():
             and 'core/state.zig").app.incognito_mode' in _between(
                 _src("src/services/ai_memory.zig"), "pub fn learnPreference(", "fn learnPreferenceWorker("
             ),
+        "new load precedes outgoing resume persistence": _between(
+            pl, "pub fn load(self: *MediaPlayer", "pub fn commitPlayback(self: *MediaPlayer"
+        ).index("self.commitPlayback(request);") < _between(
+            pl, "pub fn load(self: *MediaPlayer", "pub fn commitPlayback(self: *MediaPlayer"
+        ).index("persistPositionSnapshot(snapshot, true)")
+            and "const previous_position = self.captureCurrentPosition();" in pl,
     }
     missing = [k for k, v in checks.items() if not v]
     if not missing:

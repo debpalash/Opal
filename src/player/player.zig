@@ -130,6 +130,39 @@ const MpvPlaybackSink = struct {
 pub const video_w = 1920;
 pub const video_h = 1080;
 
+const PositionSnapshot = struct {
+    identity: [MAX_LOAD_URL]u8 = undefined,
+    identity_len: usize = 0,
+    position: f64 = 0,
+    duration: f64 = 0,
+    episode_active: bool = false,
+    tmdb_id: i32 = 0,
+    season: i32 = 0,
+    episode: i32 = 0,
+    played_seconds: f64 = 0,
+};
+
+fn persistPositionSnapshot(snapshot: PositionSnapshot, force_remote: bool) void {
+    const identity = snapshot.identity[0..snapshot.identity_len];
+    @import("../services/history.zig").savePlaybackPosition(identity, snapshot.position, snapshot.duration);
+    @import("../services/server_progress.zig").submit(identity, snapshot.position, snapshot.duration, force_remote);
+    if (snapshot.episode_active) {
+        @import("../core/db.zig").tvSavePosition(
+            snapshot.tmdb_id,
+            snapshot.season,
+            snapshot.episode,
+            snapshot.position,
+            snapshot.duration,
+        );
+        @import("../core/db.zig").tvSavePlayedSeconds(
+            snapshot.tmdb_id,
+            snapshot.season,
+            snapshot.episode,
+            snapshot.played_seconds,
+        );
+    }
+}
+
 pub const MediaPlayer = struct {
     mpv_ctx: *c.mpv.mpv_handle,
     mpv_gl: ?*c.mpv.mpv_render_context,
@@ -1143,12 +1176,10 @@ pub const MediaPlayer = struct {
             self.source_url_len = 0;
         }
 
-        // Trigger-to-play milestone: the URL is about to reach mpv (directly
-        // below, or via the async streamlink resolver that returns early).
-        openLoadIssued();
-
-        // Save position of current video before switching
-        self.saveCurrentPositionFinal();
+        // Snapshot the outgoing item before its identity fields are replaced.
+        // Persistence follows the new mpv handoff, so decode can begin while
+        // the old resume row is committed without losing episode identity.
+        const previous_position = self.captureCurrentPosition();
         self.last_position_save_ms = @import("../core/io_global.zig").monotonicMilliTimestamp();
 
         // Blank the pane (queued as a frame for the UI upload) so the previous
@@ -1232,7 +1263,9 @@ pub const MediaPlayer = struct {
             const p_idx: usize = for (state.app.players.items, 0..) |p, i| {
                 if (p.mpv_ctx == self.mpv_ctx) break i;
             } else 0;
+            openLoadIssued();
             streamlink.resolveStreamUrlAsync(path_span, p_idx);
+            if (previous_position) |snapshot| persistPositionSnapshot(snapshot, true);
             return; // Don't call mpv loadfile directly — the async thread will do it
         }
 
@@ -1252,7 +1285,10 @@ pub const MediaPlayer = struct {
         // remembered instead; mpv resolves them against each new track list.
         self.applyPersistentPreferences();
 
+        // Stamp the actual handoff, not the earlier bookkeeping phase.
+        openLoadIssued();
         self.commitPlayback(request);
+        if (previous_position) |snapshot| persistPositionSnapshot(snapshot, true);
         @import("../services/server_progress.zig").started(self.history_identity[0..self.history_identity_len]);
 
         // ── Memory hooks: record playback for cross-session intelligence ──
@@ -1412,33 +1448,37 @@ pub const MediaPlayer = struct {
     }
 
     fn saveCurrentPositionImpl(self: *MediaPlayer, force_remote: bool) void {
-        if (self.current_url_len == 0 or self.current_url_len > self.current_url.len) return;
+        const snapshot = self.captureCurrentPosition() orelse return;
+        persistPositionSnapshot(snapshot, force_remote);
+    }
+
+    fn captureCurrentPosition(self: *MediaPlayer) ?PositionSnapshot {
+        if (self.current_url_len == 0 or self.current_url_len > self.current_url.len) return null;
         var pos: f64 = 0;
         var dur: f64 = 0;
         _ = c.mpv.mpv_get_property(self.mpv_ctx, "time-pos", c.mpv.MPV_FORMAT_DOUBLE, &pos);
         _ = c.mpv.mpv_get_property(self.mpv_ctx, "duration", c.mpv.MPV_FORMAT_DOUBLE, &dur);
-        if (pos > 1 and dur > 5) {
-            const history = @import("../services/history.zig");
-            const identity = if (self.history_identity_len > 0)
-                self.history_identity[0..self.history_identity_len]
-            else
-                self.current_url[0..self.current_url_len];
-            history.savePlaybackPosition(identity, pos, dur);
-            @import("../services/server_progress.zig").submit(identity, pos, dur, force_remote);
+        if (!(pos > 1 and dur > 5)) return null;
 
-            // Per-episode resume, stored under real episode identity
-            // (tmdb_id, season, episode) rather than the URL — an episode's URL is
-            // a torrent/stream link that differs between sessions and sources.
-            //
-            // Only fires when THIS player's current URL is the one the episode
-            // binding claimed; otherwise a movie played after an episode would
-            // write its position into the episode's row.
-            const pe = &state.app.playing_episode;
-            if (pe.matches(self.current_url[0..self.current_url_len])) {
-                @import("../core/db.zig").tvSavePosition(pe.tmdb_id, pe.season, pe.episode, pos, dur);
-                @import("../core/db.zig").tvSavePlayedSeconds(pe.tmdb_id, pe.season, pe.episode, pe.played_seconds);
-            }
+        const identity = if (self.history_identity_len > 0)
+            self.history_identity[0..self.history_identity_len]
+        else
+            self.current_url[0..self.current_url_len];
+        var snapshot: PositionSnapshot = .{ .position = pos, .duration = dur };
+        snapshot.identity_len = @min(identity.len, snapshot.identity.len);
+        @memcpy(snapshot.identity[0..snapshot.identity_len], identity[0..snapshot.identity_len]);
+
+        // Only capture an episode binding while it matches this exact outgoing
+        // stream; the copied scalar identity remains valid after the new load.
+        const pe = &state.app.playing_episode;
+        if (pe.matches(self.current_url[0..self.current_url_len])) {
+            snapshot.episode_active = true;
+            snapshot.tmdb_id = pe.tmdb_id;
+            snapshot.season = pe.season;
+            snapshot.episode = pe.episode;
+            snapshot.played_seconds = pe.played_seconds;
         }
+        return snapshot;
     }
 
     /// Check for and apply saved resume position (called after first frame renders)
