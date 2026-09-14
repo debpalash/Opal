@@ -163,7 +163,7 @@ def test_plex_watched_mutation():
         "documented token-free mutation URL": "watchedMutationUrl" in pure and '"scrobble" else "unscrobble"' in pure,
         "server uses PUT and header auth": ".method = .PUT" in svc and '"X-Plex-Token: {s}"' in svc,
         "owned optimistic mutation": "pub fn setWatched" in svc and "spawn(runWatchedMutation" in svc and "rollbackWatched" in svc,
-        "stale rollback guarded": "user_data_gen" in svc and "browse_generation" in svc,
+        "stale rollback guarded": "watched_gen" in svc and "browse_generation" in svc,
         "typed web endpoint": '"/plex/action"' in api and '"played"' in api,
         "accessible web toggle": "plex-watched" in web and "Mark unwatched" in web and "apiMutation('/plex/action" in web,
         "native toggle": '"Mark watched"' in svc and "setWatched(" in svc,
@@ -172,3 +172,24 @@ def test_plex_watched_mutation():
     if missing:
         return "fail", "Plex watched mutation incomplete: " + ", ".join(missing)
     return "pass", "Plex watched state is synchronized from native and web"
+
+
+@test("Plex ratings synchronize from native and web", "Plex")
+def test_plex_rating_mutation():
+    svc = _src("src/services/plex.zig")
+    pure = _src("src/services/plex_pure.zig")
+    api = _src("src/services/remote_plex_api.zig")
+    web = _src("web/js/media.js")
+    checks = {
+        "server rating parsed": 'm.object.get("userRating")' in svc,
+        "bounded token-free URL": "pub fn ratingMutationUrl" in pure and 'identifier=com.plexapp.plugins.library&rating=' in pure,
+        "PUT with header token": "runRatingMutation" in svc and ".method = .PUT" in svc and '"X-Plex-Token: {s}"' in svc,
+        "independent generation rollback": "rating_gen" in svc and "rollbackRating" in svc,
+        "typed bounded endpoint": 'std.mem.eql(u8, action, "rating")' in api and "parseFloat(f32" in api,
+        "half-step web control": "plexRatingOptions" in web and "length:21" in web and "plex-rating" in web,
+        "native control": "RATING_LABELS" in svc and "setRating(" in svc,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "Plex rating mutation incomplete: " + ", ".join(missing)
+    return "pass", "Plex 0–10 half-step ratings synchronize by stable identity"

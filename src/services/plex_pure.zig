@@ -40,6 +40,13 @@ pub fn watchedMutationUrl(server: []const u8, rating_key: []const u8, watched: b
     }) catch null;
 }
 
+pub fn ratingMutationUrl(server: []const u8, rating_key: []const u8, rating: f32, out: []u8) ?[]const u8 {
+    if (server.len == 0 or !validRatingKey(rating_key) or !std.math.isFinite(rating) or rating < 0 or rating > 10) return null;
+    return std.fmt.bufPrint(out, "{s}/:/rate?key={s}&identifier=com.plexapp.plugins.library&rating={d:.1}", .{
+        std.mem.trimEnd(u8, server, "/"), rating_key, rating,
+    }) catch null;
+}
+
 pub const VersionSelection = struct {
     primary: ?usize = null,
     fallback: ?usize = null,
@@ -439,4 +446,14 @@ test "Plex watched mutation URL is stable and token free" {
         watchedMutationUrl("https://plex.local:32400", "42", false, &buf).?,
     );
     try std.testing.expect(watchedMutationUrl("https://plex.local", "../42", true, &buf) == null);
+}
+
+test "Plex rating mutation accepts bounded half-star values" {
+    var buf: [256]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        "https://plex.local:32400/:/rate?key=42&identifier=com.plexapp.plugins.library&rating=7.5",
+        ratingMutationUrl("https://plex.local:32400/", "42", 7.5, &buf).?,
+    );
+    try std.testing.expect(ratingMutationUrl("https://plex.local", "42", 10.5, &buf) == null);
+    try std.testing.expect(ratingMutationUrl("https://plex.local", "42", std.math.nan(f32), &buf) == null);
 }

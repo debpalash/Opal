@@ -56,10 +56,17 @@ const Item = struct {
     view_offset_ms: i64 = 0,
     duration_ms: i64 = 0,
     view_count: i64 = 0,
-    user_data_gen: u32 = 0,
+    user_rating: f32 = 0,
+    watched_gen: u32 = 0,
+    rating_gen: u32 = 0,
     media_type: [16]u8 = std.mem.zeroes([16]u8),
     media_type_len: usize = 0,
     is_folder: bool = false,
+};
+
+const RATING_LABELS = [_][]const u8{
+    "Unrated", "0.5", "1.0", "1.5", "2.0", "2.5", "3.0", "3.5", "4.0", "4.5",  "5.0",
+    "5.5",     "6.0", "6.5", "7.0", "7.5", "8.0", "8.5", "9.0", "9.5", "10.0",
 };
 
 pub const SearchItem = plex_pure.SearchItem;
@@ -607,6 +614,15 @@ fn fetchWindow(request: BrowseRequest, start: usize, gen: u64) void {
         if (m.object.get("viewCount")) |value| {
             if (value == .integer and value.integer > 0) it.view_count = value.integer;
         }
+        if (m.object.get("userRating")) |value| switch (value) {
+            .integer => if (value.integer >= 0 and value.integer <= 10) {
+                it.user_rating = @floatFromInt(value.integer);
+            },
+            .float => if (std.math.isFinite(value.float) and value.float >= 0 and value.float <= 10) {
+                it.user_rating = @floatCast(value.float);
+            },
+            else => {},
+        };
         if (jstr(m, "type")) |media_type| {
             const ml = @min(media_type.len, it.media_type.len);
             @memcpy(it.media_type[0..ml], media_type[0..ml]);
@@ -760,8 +776,8 @@ pub fn setWatched(rating_key: []const u8, enabled: bool) bool {
         if (!std.mem.eql(u8, item.rating_key[0..item.rating_key_len], rating_key)) continue;
         request.previous_count = item.view_count;
         request.previous_offset_ms = item.view_offset_ms;
-        item.user_data_gen +%= 1;
-        request.generation = item.user_data_gen;
+        item.watched_gen +%= 1;
+        request.generation = item.watched_gen;
         item.view_count = if (enabled) 1 else 0;
         if (!enabled) item.view_offset_ms = 0;
         found = true;
@@ -779,7 +795,7 @@ pub fn setWatched(rating_key: []const u8, enabled: bool) bool {
 fn rollbackWatched(request: WatchedMutation) void {
     if (view_gen.load(.acquire) != request.browse_generation) return;
     for (items[0..item_count]) |*item| {
-        if (item.user_data_gen != request.generation or
+        if (item.watched_gen != request.generation or
             !std.mem.eql(u8, item.rating_key[0..item.rating_key_len], request.rating_key[0..request.rating_key_len])) continue;
         item.view_count = request.previous_count;
         item.view_offset_ms = request.previous_offset_ms;
@@ -810,6 +826,87 @@ fn runWatchedMutation(value: WatchedMutation) void {
     };
     const code = if (status) |s| @intFromEnum(s) else 0;
     if (code < 200 or code >= 300) rollbackWatched(request);
+}
+
+const RatingMutation = struct {
+    rating_key: [32]u8 = std.mem.zeroes([32]u8),
+    rating_key_len: usize = 0,
+    server: [256]u8 = std.mem.zeroes([256]u8),
+    server_len: usize = 0,
+    token: [128]u8 = std.mem.zeroes([128]u8),
+    token_len: usize = 0,
+    rating: f32,
+    previous: f32,
+    generation: u32,
+    browse_generation: u64,
+};
+
+pub fn setRating(rating_key: []const u8, rating: f32) bool {
+    if (!isConnected() or !std.math.isFinite(rating) or rating < 0 or rating > 10 or !plex_pure.validRatingKey(rating_key)) return false;
+    var request: RatingMutation = .{
+        .rating = rating,
+        .previous = 0,
+        .generation = 0,
+        .browse_generation = view_gen.load(.acquire),
+    };
+    request.server_len = @min(server_uri_len, request.server.len);
+    @memcpy(request.server[0..request.server_len], server_uri[0..request.server_len]);
+    request.token_len = @min(server_token_len, request.token.len);
+    @memcpy(request.token[0..request.token_len], server_token[0..request.token_len]);
+    request.rating_key_len = @min(rating_key.len, request.rating_key.len);
+    @memcpy(request.rating_key[0..request.rating_key_len], rating_key[0..request.rating_key_len]);
+    var found = false;
+    for (items[0..item_count]) |*item| {
+        if (!std.mem.eql(u8, item.rating_key[0..item.rating_key_len], rating_key)) continue;
+        request.previous = item.user_rating;
+        item.rating_gen +%= 1;
+        request.generation = item.rating_gen;
+        item.user_rating = rating;
+        found = true;
+        break;
+    }
+    if (!found) return false;
+    @import("../core/workers.zig").spawn(runRatingMutation, .{request}) catch {
+        rollbackRating(request);
+        return false;
+    };
+    state.wakeUi();
+    return true;
+}
+
+fn rollbackRating(request: RatingMutation) void {
+    if (view_gen.load(.acquire) != request.browse_generation) return;
+    for (items[0..item_count]) |*item| {
+        if (item.rating_gen != request.generation or
+            !std.mem.eql(u8, item.rating_key[0..item.rating_key_len], request.rating_key[0..request.rating_key_len])) continue;
+        item.user_rating = request.previous;
+        state.wakeUi();
+        return;
+    }
+}
+
+fn runRatingMutation(value: RatingMutation) void {
+    var request = value;
+    defer @memset(&request.token, 0);
+    var url_buf: [512]u8 = undefined;
+    const url = plex_pure.ratingMutationUrl(request.server[0..request.server_len], request.rating_key[0..request.rating_key_len], request.rating, &url_buf) orelse return rollbackRating(request);
+    var token_header: [160]u8 = undefined;
+    defer @memset(&token_header, 0);
+    const auth = std.fmt.bufPrint(&token_header, "X-Plex-Token: {s}", .{request.token[0..request.token_len]}) catch return rollbackRating(request);
+    var response: [1024]u8 = undefined;
+    var status: ?std.http.Status = null;
+    _ = @import("../core/http.zig").fetch(url, &response, .{
+        .method = .PUT,
+        .timeout_secs = 10,
+        .auth_header = auth,
+        .status_out = &status,
+    }) orelse {
+        if (status) |code| if (plex_pure.authRejected(@intFromEnum(code))) expireAuthSession();
+        rollbackRating(request);
+        return;
+    };
+    const code = if (status) |s| @intFromEnum(s) else 0;
+    if (code < 200 or code >= 300) rollbackRating(request);
 }
 
 fn playResolvedItem(it: Item) void {
@@ -1030,6 +1127,21 @@ pub fn renderContent() void {
             .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
             .gravity_y = 0.5,
         })) _ = setWatched(it.rating_key[0..it.rating_key_len], it.view_count == 0);
+        if (!it.is_folder and it.rating_key_len > 0) {
+            var rating_choice: usize = @intFromFloat(@round(std.math.clamp(it.user_rating, 0, 10) * 2));
+            if (dvui.dropdown(@src(), &RATING_LABELS, .{ .choice = &rating_choice }, .{}, .{
+                .id_extra = i + 91600,
+                .color_fill = theme.colors.bg_elevated,
+                .color_text = if (it.user_rating > 0) theme.colors.warning else theme.colors.text_secondary,
+                .corner_radius = theme.dims.rad_sm,
+                .padding = .{ .x = 7, .y = 4, .w = 7, .h = 4 },
+                .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
+                .gravity_y = 0.5,
+            })) {
+                const selected: f32 = @as(f32, @floatFromInt(rating_choice)) / 2.0;
+                if (@abs(selected - it.user_rating) >= 0.01) _ = setRating(it.rating_key[0..it.rating_key_len], selected);
+            }
+        }
     }
 
     // Infinite scroll: fetch + append the next Container-Start/Size window as

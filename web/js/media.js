@@ -397,6 +397,14 @@ function renderOpds(d){
 
 // ── Plex (sign-in is Plex's PIN flow — enter the code at plex.tv/link) ──
 function loadPlex(){ pollPlex(); }
+function plexRatingOptions(current){
+  const selected = Math.round(Math.max(0, Math.min(10, Number(current) || 0)) * 2) / 2;
+  return Array.from({length:21}, (_, i) => {
+    const value = i / 2;
+    const label = value === 0 ? 'Unrated' : `Rating ${value.toFixed(1)}`;
+    return `<option value="${value}"${value === selected ? ' selected' : ''}>${label}</option>`;
+  }).join('');
+}
 function pollPlex(){
   clearInterval(plWatch);
   let ticks = 0;
@@ -435,6 +443,7 @@ function renderPlex(d){
         ${browsing && r.type ? `<span class="src">${esc(r.type)}</span>` : ''}
         ${browsing && r.duration ? `<span class="src">${r.played ? 'Watched' : (r.progress ? `${fmt(r.progress)} / ${fmt(r.duration)}` : fmt(r.duration))}</span>` : ''}
         ${browsing && !r.folder ? `<button class="plex-watched" data-id="${esc(r.id || '')}" data-enabled="${!r.played}" aria-label="${r.played ? 'Mark unwatched' : 'Mark watched'}" title="${r.played ? 'Mark unwatched' : 'Mark watched'}">${r.played ? '&#10003;' : '&#9675;'}</button>` : ''}
+        ${browsing && !r.folder ? `<select class="plex-rating" data-id="${esc(r.id || '')}" aria-label="Rate ${esc(r.title)}">${plexRatingOptions(r.rating)}</select>` : ''}
         <button class="play" data-i="${i}" data-id="${browsing ? esc(r.id || '') : ''}">${browsing ? (r.folder ? 'Open' : (r.progress && !r.played ? 'Resume' : 'Play')) : 'Open'}</button></div>
       ${items && r.duration && r.progress ? `<div class="plex-progress"><i style="width:${Math.min(100,Math.round(r.progress/r.duration*100))}%"></i></div>` : ''}
     </div>`).join('') || (d.connected ? '<div class="empty">Nothing here</div>' : '');
@@ -455,6 +464,16 @@ function renderPlex(d){
           '&action=played&enabled=' + button.dataset.enabled);
         pollPlex();
       } catch (error) { button.disabled = false; toast(error.message || 'Could not update watched state.'); }
+    };
+  });
+  $('plex-results').querySelectorAll('.plex-rating').forEach(select => {
+    select.onchange = async () => {
+      select.disabled = true;
+      try {
+        await apiMutation('/plex/action?id=' + encodeURIComponent(select.dataset.id) +
+          '&action=rating&rating=' + encodeURIComponent(select.value));
+        pollPlex();
+      } catch (error) { select.disabled = false; toast(error.message || 'Could not update rating.'); }
     };
   });
 }

@@ -118,7 +118,8 @@ commands, non-finite numbers, out-of-range values, and unknown actions.
       progress/favorite mutations, and failure recovery — stable Plex hierarchy,
       resume playback, Jellyfin user-state mutations, Plex watched mutations,
       and both recovery paths are shipped; unified server-item details plus
-      Plex favorite/rating mutations remain
+      Plex favorite semantics remain (Plex watched and 0–10 rating mutations
+      are complete)
 - [x] Source endpoint catalog with accurate installed state, grouping/filtering,
       bounded refresh, version update, install/remove, and integration config
 - [x] Source health, permission review, diagnostics, and executable-plugin
