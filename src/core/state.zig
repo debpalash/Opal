@@ -262,6 +262,9 @@ pub const JfItem = struct {
     has_image: bool = false,
     runtime_ticks: i64 = 0,
     played_ticks: i64 = 0,
+    is_favorite: bool = false,
+    is_played: bool = false,
+    user_data_gen: u32 = 0,
     poster_fetching: bool = false,
     // Failure latch (mirrors TmdbItem): a fetch that completed without
     // producing pixels marks poster_failed so the renderer stops re-spawning a

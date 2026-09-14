@@ -4360,11 +4360,14 @@ fn apiJellyfin(stream: std.Io.net.Stream, api_path: []const u8, query: []const u
         sendJson(stream, "{\"ok\":true,\"action\":\"play_audio\"}");
         return;
     }
-
     // Default: return full status
     const view = jf.remoteSnapshot();
-    var json_buf: [32768]u8 = undefined;
-    var w = std.Io.Writer.fixed(&json_buf);
+    const json_buf = @import("../core/alloc.zig").allocator.alloc(u8, 192 * 1024) catch {
+        sendJsonStatus(stream, "503 Service Unavailable", "{\"error\":\"Jellyfin snapshot unavailable\"}");
+        return;
+    };
+    defer @import("../core/alloc.zig").allocator.free(json_buf);
+    var w = std.Io.Writer.fixed(json_buf);
     w.print("{{\"generation\":{d},\"connected\":", .{view.generation}) catch return;
     w.writeAll(if (view.connected) "true" else "false") catch return;
     w.writeAll(",\"loading\":") catch return;
@@ -4403,10 +4406,13 @@ fn apiJellyfin(stream: std.Io.net.Stream, api_path: []const u8, query: []const u
         escJsonWrite(&w, item.name[0..item.name_len]);
         w.writeAll("\",\"type\":\"") catch return;
         escJsonWrite(&w, item.media_type[0..item.media_type_len]);
-        w.print("\",\"year\":{d},\"folder\":{s},\"runtime\":{d},\"image\":{s}}}", .{
+        w.print("\",\"year\":{d},\"folder\":{s},\"runtime\":{d},\"progress\":{d},\"favorite\":{s},\"played\":{s},\"image\":{s}}}", .{
             item.year,
             if (item.is_folder) "true" else "false",
             runtime_sec,
+            @divTrunc(item.played_ticks, 10_000_000),
+            if (item.is_favorite) "true" else "false",
+            if (item.is_played) "true" else "false",
             if (item.has_image) "true" else "false",
         }) catch return;
     }

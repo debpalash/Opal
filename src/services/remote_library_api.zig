@@ -33,11 +33,35 @@ pub fn handle(stream: std.Io.net.Stream, method: []const u8, path: []const u8, q
         if (wire.requireMethod(stream, method, "POST")) libraryAction(stream, query);
         return true;
     }
+    if (std.mem.eql(u8, path, "/jellyfin/action")) {
+        if (wire.requireMethod(stream, method, "POST")) jellyfinAction(stream, query);
+        return true;
+    }
     if (std.mem.eql(u8, path, "/tv/recent")) {
         if (wire.requireMethod(stream, method, "GET")) recentEpisode(stream, query);
         return true;
     }
     return false;
+}
+
+fn jellyfinAction(stream: std.Io.net.Stream, query: []const u8) void {
+    const jf = @import("jellyfin.zig");
+    var id_buf: [64]u8 = undefined;
+    const id = if (wire.queryParam(query, "id")) |raw| (wire.urlDecode(raw, &id_buf) orelse "") else "";
+    const action = std.meta.stringToEnum(jf.UserDataAction, wire.queryParam(query, "action") orelse "") orelse {
+        wire.sendJsonStatus(stream, "400 Bad Request", "{\"ok\":false,\"error\":\"invalid action\"}");
+        return;
+    };
+    const raw = wire.queryParam(query, "enabled") orelse "";
+    const enabled = if (std.mem.eql(u8, raw, "true")) true else if (std.mem.eql(u8, raw, "false")) false else {
+        wire.sendJsonStatus(stream, "400 Bad Request", "{\"ok\":false,\"error\":\"invalid enabled value\"}");
+        return;
+    };
+    if (!jf.setUserData(id, action, enabled)) {
+        wire.sendJsonStatus(stream, "409 Conflict", "{\"ok\":false,\"error\":\"item unavailable\"}");
+        return;
+    }
+    wire.sendJson(stream, "{\"ok\":true,\"action\":\"user_data\"}");
 }
 
 fn calendar(stream: std.Io.net.Stream) void {

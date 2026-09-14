@@ -249,8 +249,8 @@ function renderPodEpisodes(eps){
 }
 
 // ── Jellyfin ──
-// GET /jellyfin -> {connected,loading,error?,libraries:[{id,name,type}],items:[{id,name,type,year,folder,runtime}]}.
-// /jellyfin/{login,libraries,browse,search,play,play_audio,disconnect} trigger async work.
+// GET /jellyfin includes server-owned favorite, watched, and resume state.
+// Mutations use POST /jellyfin/action; navigation/play routes trigger async work.
 let jfWatch = null;
 let jfLibTries = 0;          // bounded retry counter for empty-library polling
 const JF_LIB_MAX = 8;        // stop after this many tries so we never hammer forever
@@ -288,12 +288,30 @@ function renderJfItems(items){
   $('jf-items').innerHTML = items.length
     ? '<div class="grid">' + items.map(it => {
         const meta = [it.type, it.year || '', it.runtime ? fmt(it.runtime) : ''].filter(Boolean).join(' · ');
+        const progress = it.runtime > 0 && it.progress > 0 ? Math.min(100, Math.round(it.progress / it.runtime * 100)) : 0;
         return `<div class="card" data-id="${esc(it.id)}" data-folder="${it.folder}" data-type="${esc(it.type || '')}">
           ${it.image ? `<img loading="lazy" src="${BASE}/api/jellyfin/poster?id=${encodeURIComponent(it.id)}">` : '<img>'}
+          ${!it.folder ? `<div class="jf-card-actions">
+            <button data-jf-action="favorite" data-enabled="${!it.favorite}" aria-label="${it.favorite ? 'Remove from favorites' : 'Add to favorites'}" title="${it.favorite ? 'Remove from favorites' : 'Add to favorites'}">${it.favorite ? '&#9733;' : '&#9734;'}</button>
+            <button data-jf-action="played" data-enabled="${!it.played}" aria-label="${it.played ? 'Mark unwatched' : 'Mark watched'}" title="${it.played ? 'Mark unwatched' : 'Mark watched'}">${it.played ? '&#10003;' : '&#9675;'}</button>
+          </div>` : ''}
+          ${progress ? `<div class="jf-progress" title="${progress}% watched"><i style="width:${progress}%"></i></div>` : ''}
           <div class="cap">${esc(it.name)}<br><span class="rt">${esc(meta)}</span></div>
         </div>`;
       }).join('') + '</div>'
     : '<div class="empty">Nothing here</div>';
+  $('jf-items').querySelectorAll('[data-jf-action]').forEach(button => button.onclick = async event => {
+    event.stopPropagation();
+    const card = button.closest('.card');
+    const enabled = button.dataset.enabled === 'true';
+    button.disabled = true;
+    try {
+      await apiMutation('/jellyfin/action?id=' + encodeURIComponent(card.dataset.id) +
+        '&action=' + encodeURIComponent(button.dataset.jfAction) + '&enabled=' + enabled);
+      await loadJellyfin();
+      setTimeout(loadJellyfin, 1200); // reconcile a late server rejection/rollback
+    } catch (error) { toast(error.message || 'Jellyfin update failed'); button.disabled = false; }
+  });
   $('jf-items').querySelectorAll('.card').forEach(el => el.onclick = () => {
     const id = el.dataset.id;
     if (el.dataset.folder === 'true') { jfBrowse(id); return; }

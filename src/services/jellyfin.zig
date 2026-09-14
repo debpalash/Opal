@@ -41,6 +41,8 @@ pub const PresentationItem = struct {
     has_image: bool,
     runtime_ticks: i64,
     played_ticks: i64,
+    is_favorite: bool,
+    is_played: bool,
 };
 
 pub const RemoteItem = PresentationItem;
@@ -60,6 +62,8 @@ fn copyPresentationItem(item: state.JfItem) PresentationItem {
         .has_image = item.has_image,
         .runtime_ticks = item.runtime_ticks,
         .played_ticks = item.played_ticks,
+        .is_favorite = item.is_favorite,
+        .is_played = item.is_played,
     };
 }
 
@@ -148,6 +152,8 @@ pub const ConnectionSnapshot = struct {
     server_len: usize,
     token: [256]u8,
     token_len: usize,
+    user_id: [64]u8,
+    user_id_len: usize,
 };
 
 pub fn connectionSnapshot() ConnectionSnapshot {
@@ -159,6 +165,8 @@ pub fn connectionSnapshot() ConnectionSnapshot {
         .server_len = @min(state.app.jf.server_url_len, state.app.jf.server_url.len),
         .token = state.app.jf.token,
         .token_len = @min(state.app.jf.token_len, state.app.jf.token.len),
+        .user_id = state.app.jf.user_id,
+        .user_id_len = @min(state.app.jf.user_id_len, state.app.jf.user_id.len),
     };
 }
 
@@ -720,8 +728,11 @@ fn parseItemsResponse(body: []const u8, append: bool) usize {
             item.runtime_ticks = t;
         }
         if (std.mem.indexOf(u8, obj, "\"UserData\":")) |ud_start| {
-            if (extractJsonInt(obj[ud_start..], "\"PlaybackPositionTicks\":")) |ticks|
+            const ud = obj[ud_start..];
+            if (extractJsonInt(ud, "\"PlaybackPositionTicks\":")) |ticks|
                 item.played_ticks = ticks;
+            item.is_favorite = extractJsonBool(ud, "\"IsFavorite\":") orelse false;
+            item.is_played = extractJsonBool(ud, "\"Played\":") orelse false;
         }
 
         // Primary image presence: Jellyfin serializes `"ImageTags":{"Primary":…}`
@@ -1143,6 +1154,8 @@ pub fn fetchResume() void {
                     if (extractJsonInt(ud, "\"PlaybackPositionTicks\":")) |pt| {
                         item.played_ticks = pt;
                     }
+                    item.is_favorite = extractJsonBool(ud, "\"IsFavorite\":") orelse false;
+                    item.is_played = extractJsonBool(ud, "\"Played\":") orelse false;
                 }
 
                 next_count += 1;
@@ -1292,6 +1305,108 @@ fn extractJsonInt(json: []const u8, key: []const u8) ?i64 {
 
     if (end == val_start) return null;
     return std.fmt.parseInt(i64, json[val_start..end], 10) catch null;
+}
+
+fn extractJsonBool(json: []const u8, key: []const u8) ?bool {
+    const idx = std.mem.indexOf(u8, json, key) orelse return null;
+    const value = std.mem.trimStart(u8, json[idx + key.len ..], " \t\r\n");
+    if (std.mem.startsWith(u8, value, "true")) return true;
+    if (std.mem.startsWith(u8, value, "false")) return false;
+    return null;
+}
+
+pub const UserDataAction = enum { favorite, played };
+
+const UserDataMutation = struct {
+    item_id: [64]u8 = std.mem.zeroes([64]u8),
+    item_id_len: usize = 0,
+    action: UserDataAction,
+    enabled: bool,
+    previous: bool,
+    generation: u32,
+};
+
+/// Update Jellyfin-owned user state without blocking the UI or remote server
+/// thread. The snapshot changes optimistically; a rejected request rolls back
+/// only if no newer action has superseded it.
+pub fn setUserData(item_id: []const u8, action: UserDataAction, enabled: bool) bool {
+    if (!@import("jellyfin_pure.zig").validItemId(item_id)) return false;
+    var request: UserDataMutation = .{ .action = action, .enabled = enabled, .previous = false, .generation = 0 };
+    request.item_id_len = @min(item_id.len, request.item_id.len);
+    @memcpy(request.item_id[0..request.item_id_len], item_id[0..request.item_id_len]);
+
+    store_mutex.lock();
+    var found = false;
+    for (state.app.jf.items[0..state.app.jf.item_count]) |*item| {
+        if (!std.mem.eql(u8, item.id[0..item.id_len], item_id)) continue;
+        request.previous = if (action == .favorite) item.is_favorite else item.is_played;
+        item.user_data_gen +%= 1;
+        request.generation = item.user_data_gen;
+        if (action == .favorite) item.is_favorite = enabled else item.is_played = enabled;
+        found = true;
+        break;
+    }
+    if (found) publication_gen +%= 1;
+    store_mutex.unlock();
+    if (!found) return false;
+
+    workers.spawn(runUserDataMutation, .{request}) catch {
+        rollbackUserDataMutation(request);
+        return false;
+    };
+    state.wakeUi();
+    return true;
+}
+
+fn rollbackUserDataMutation(request: UserDataMutation) void {
+    store_mutex.lock();
+    defer store_mutex.unlock();
+    for (state.app.jf.items[0..state.app.jf.item_count]) |*item| {
+        if (item.user_data_gen != request.generation or
+            !std.mem.eql(u8, item.id[0..item.id_len], request.item_id[0..request.item_id_len])) continue;
+        if (request.action == .favorite) item.is_favorite = request.previous else item.is_played = request.previous;
+        publication_gen +%= 1;
+        state.wakeUi();
+        return;
+    }
+}
+
+fn runUserDataMutation(request: UserDataMutation) void {
+    var connection = connectionSnapshot();
+    defer @memset(&connection.token, 0);
+    if (!connection.connected or connection.user_id_len == 0) {
+        rollbackUserDataMutation(request);
+        return;
+    }
+    const collection = if (request.action == .favorite) "FavoriteItems" else "PlayedItems";
+    var url_buf: [768]u8 = undefined;
+    const url = std.fmt.bufPrint(&url_buf, "{s}/Users/{s}/{s}/{s}", .{
+        connection.server[0..connection.server_len], connection.user_id[0..connection.user_id_len],
+        collection,                                  request.item_id[0..request.item_id_len],
+    }) catch {
+        rollbackUserDataMutation(request);
+        return;
+    };
+    var auth_buf: [600]u8 = undefined;
+    const device_id = if (state.app.install_id[0] != 0) state.app.install_id[0..] else "opal";
+    const auth = std.fmt.bufPrint(&auth_buf, "X-Emby-Authorization: MediaBrowser Client=\"Opal\", Device=\"Desktop\", DeviceId=\"{s}\", Version=\"{s}\", Token=\"{s}\"", .{
+        device_id, @import("../core/app_meta.zig").version, connection.token[0..connection.token_len],
+    }) catch {
+        rollbackUserDataMutation(request);
+        return;
+    };
+    var response_buf: [4096]u8 = undefined;
+    var status: ?std.http.Status = null;
+    _ = @import("../core/http.zig").fetch(url, &response_buf, .{
+        .method = if (request.enabled) .POST else .DELETE,
+        .auth_header = auth,
+        .timeout_secs = 10,
+        .status_out = &status,
+    }) orelse {
+        if (status) |code| if (@import("jellyfin_pure.zig").authRejected(@intFromEnum(code))) expireAuthSession();
+        rollbackUserDataMutation(request);
+        return;
+    };
 }
 
 fn findObjEnd(json: []const u8, start: usize) usize {

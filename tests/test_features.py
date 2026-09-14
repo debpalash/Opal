@@ -86,6 +86,7 @@ from features import (  # noqa: F401
     test_content_cache,
     test_browse_infinite_scroll,
     test_plex_restore,
+    test_jellyfin_state,
     test_allanime_gated,
     test_plugins_logs_ui,
     test_dpi_bypass,

@@ -225,7 +225,8 @@ pub fn fetch(client: *std.http.Client, url: []const u8, buf: []u8, opts: Options
                 redirects += 1;
                 continue;
             },
-            .ok, .created => {},
+            .ok, .created, .accepted => {},
+            .no_content => return buf[0..0],
             else => return null,
         }
 
