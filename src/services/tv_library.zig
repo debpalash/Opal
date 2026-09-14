@@ -413,6 +413,20 @@ pub const Command = union(Action) {
 pub const CommandError = error{ ItemNotFound, InvalidEpisode, Unsupported };
 pub const MAX_EPISODES_PER_SEASON: usize = @intCast(tp.MAX_EPISODES_PER_SEASON);
 
+/// The single mutation path for local and connected-account TV history.
+pub fn setEpisodeWatched(tmdb_id: i32, season: u32, episode: u32, watched: bool) void {
+    if (tmdb_id <= 0 or episode == 0) return;
+    db.tvMarkWatched(tmdb_id, season, episode, watched);
+    if (watched) {
+        @import("trakt.zig").markWatchedEpisode(tmdb_id, @intCast(season), @intCast(episode));
+        @import("simkl.zig").markWatchedEpisode(tmdb_id, @intCast(season), @intCast(episode));
+    } else {
+        @import("trakt.zig").markUnwatchedEpisode(tmdb_id, @intCast(season), @intCast(episode));
+        @import("simkl.zig").markUnwatchedEpisode(tmdb_id, @intCast(season), @intCast(episode));
+    }
+    markDirty();
+}
+
 fn itemExistsLocked(item: ItemRef) bool {
     if (item.id.len == 0 or item.id.len > (tp.Row{}).id.len) return false;
     buildSnapshotLocked();
@@ -439,7 +453,7 @@ pub fn apply(command: Command) CommandError!void {
                 return error.ItemNotFound;
             if (!tp.validUserEpisode(cmd.episode)) return error.InvalidEpisode;
             switch (cmd.item.kind) {
-                .tv => db.tvMarkWatched(
+                .tv => setEpisodeWatched(
                     try tvId(cmd.item),
                     @intCast(cmd.episode.season),
                     @intCast(cmd.episode.episode),
@@ -451,7 +465,7 @@ pub fn apply(command: Command) CommandError!void {
                 },
                 .movie => return error.Unsupported,
             }
-            markDirty();
+            if (cmd.item.kind != .tv) markDirty();
         },
         .status => |cmd| {
             snapshot_mutex.lock();

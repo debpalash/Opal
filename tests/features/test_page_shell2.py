@@ -279,7 +279,7 @@ def test_trakt_wired():
         and "pub fn init()" in tr
         and tr.count("client_secret") >= 4  # decl + save + load + token poll
         and "renderTrakt" in pg
-        and "markWatchedEpisode" in tm
+        and "setEpisodeWatched" in tm
         and "trakt.zig\").init()" in _src("src/main.zig")
     )
     return ("pass", "device-flow + persistence + mark-watched wired") if ok else ("fail", "trakt not fully wired")
@@ -303,7 +303,7 @@ def test_trakt_durable_outbox():
             and "queued for retry" in trakt,
         "single owned drain": "outbox_busy.cmpxchgStrong" in trakt
             and "workers.spawn(drainOutbox" in trakt,
-        "watched events do not drop while busy": 'outbox.enqueue("trakt", "history"' in trakt
+        "watched events do not drop while busy": 'outbox.enqueueState("trakt", operation' in trakt
             and "var busy: bool" not in trakt,
         "post-only mutation": "apiTrakt(stream, method" in remote
             and 'requireMethod(stream, method, "POST")' in remote,

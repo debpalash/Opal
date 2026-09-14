@@ -148,6 +148,7 @@ fn createTables() void {
         \\  provider TEXT NOT NULL,
         \\  operation TEXT NOT NULL,
         \\  event_key TEXT NOT NULL,
+        \\  state_key TEXT NOT NULL DEFAULT '',
         \\  payload TEXT NOT NULL,
         \\  attempts INTEGER NOT NULL DEFAULT 0,
         \\  next_attempt_at INTEGER NOT NULL DEFAULT 0,
@@ -156,6 +157,11 @@ fn createTables() void {
         \\  UNIQUE(provider, operation, event_key)
         \\)
     );
+    // A state_key identifies a mutable remote fact (for example one episode's
+    // watched flag).  Its partial unique index makes offline toggles
+    // latest-state-wins without changing append-only events such as progress.
+    exec("ALTER TABLE sync_outbox ADD COLUMN state_key TEXT NOT NULL DEFAULT ''");
+    exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_outbox_state ON sync_outbox(provider, state_key) WHERE state_key <> ''");
     exec("CREATE INDEX IF NOT EXISTS idx_sync_outbox_due ON sync_outbox(provider, next_attempt_at, id)");
 
     // Watch history (playback resume positions). file_key is the absolute

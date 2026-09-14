@@ -225,12 +225,21 @@ fn extractJsonInt(json: []const u8, key: []const u8) ?i64 {
 }
 
 pub fn markWatchedEpisode(tmdb_id: i32, season: i32, episode: i32) void {
+    setEpisodeWatched(tmdb_id, season, episode, true);
+}
+
+pub fn markUnwatchedEpisode(tmdb_id: i32, season: i32, episode: i32) void {
+    setEpisodeWatched(tmdb_id, season, episode, false);
+}
+
+fn setEpisodeWatched(tmdb_id: i32, season: i32, episode: i32, watched: bool) void {
     if (!enabled.load(.acquire) or tmdb_id <= 0) return;
     var payload_buf: [320]u8 = undefined;
     const payload = std.fmt.bufPrint(&payload_buf, "{{\"shows\":[{{\"ids\":{{\"tmdb\":\"{d}\"}},\"seasons\":[{{\"number\":{d},\"episodes\":[{{\"number\":{d}}}]}}]}}]}}", .{ tmdb_id, season, episode }) catch return;
     var key_buf: [64]u8 = undefined;
     const key = std.fmt.bufPrint(&key_buf, "show:{d}:{d}:{d}", .{ tmdb_id, season, episode }) catch return;
-    if (outbox.enqueue("simkl", "history", key, payload)) kickOutbox();
+    const operation = if (watched) "history" else "history_remove";
+    if (outbox.enqueueState("simkl", operation, key, payload)) kickOutbox();
 }
 
 pub fn markWatchedMovie(tmdb_id: i32) void {
@@ -302,7 +311,12 @@ fn postSync(operation: []const u8, payload: []const u8) Delivery {
     credential_mutex.unlock();
     if (client_len == 0 or token_len == 0) return .retry;
     var url_buf: [512]u8 = undefined;
-    const path = if (std.mem.eql(u8, operation, "watchlist")) "/sync/add-to-list" else "/sync/history";
+    const path = if (std.mem.eql(u8, operation, "watchlist"))
+        "/sync/add-to-list"
+    else if (std.mem.eql(u8, operation, "history_remove"))
+        "/sync/history/remove"
+    else
+        "/sync/history";
     const url = apiUrl(path, client[0..client_len], &url_buf) orelse return .retry;
     var auth_buf: [2200]u8 = undefined;
     const auth = std.fmt.bufPrintZ(&auth_buf, "Authorization: Bearer {s}", .{token[0..token_len]}) catch return .retry;

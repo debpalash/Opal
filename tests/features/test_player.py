@@ -142,7 +142,7 @@ def test_tv_seasons():
                         and "tv_watched" in db and "tv_continue" in db),
         "detail view": "openTvDetail" in tm and "renderTvDetail" in tm,
         "season/episode fetch": "/tv/" in tm and "/season/" in tm,
-        "tracking wired": "tvMarkWatched" in tm and "tvIsWatched" in tm,
+        "tracking wired": "setEpisodeWatched" in tm and "tvIsWatched" in tm,
     }
     missing = [k for k, v in checks.items() if not v]
     if not missing:
@@ -180,8 +180,7 @@ def test_watch_commit_smart_play_onboarding():
         # the show. It used to upsert tv_continue (which stored the LAST WATCHED
         # episode); that table is superseded by tv_shows, and "what's next" is now
         # derived by tv_pure rather than stored — see the TV Tracking test.
-        "commit does db+trakt+track": ("tvMarkWatched" in _between(tm, "pub fn commitPendingWatch", "\nfn ")
-                                       and "markWatchedEpisode" in _between(tm, "pub fn commitPendingWatch", "\nfn ")
+        "commit does db+sync+track": ("setEpisodeWatched" in _between(tm, "pub fn commitPendingWatch", "\nfn ")
                                        and "tvTouchShow" in _between(tm, "pub fn commitPendingWatch", "\nfn ")),
         "smart pick pure": "pub fn pickBest" in rk and "PickCand" in rk,
         "smart play wired": "smartPlayEpisode" in tm and "rank.pickForStartup(" in tm and "setUniversalQuery" in tm,

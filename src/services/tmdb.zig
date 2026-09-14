@@ -2235,9 +2235,8 @@ fn tvToggleWatched(ep_idx: usize, ep: i32) void {
     const flag = !state.app.tmdb.tv_episode_watched[ep_idx];
     state.app.tmdb.tv_episode_watched[ep_idx] = flag;
     const season = tvSelSeasonNumber();
-    if (season >= 0) db.tvMarkWatched(state.app.tmdb.tv_id, @intCast(season), @intCast(ep), flag);
+    if (season >= 0) @import("tv_library.zig").setEpisodeWatched(state.app.tmdb.tv_id, @intCast(season), @intCast(ep), flag);
     // Progress, next-up and the show's bucket all just changed.
-    @import("tv_library.zig").markDirty();
     invalidateDetailUiSnapshot();
 }
 
@@ -2594,9 +2593,7 @@ fn smartPlayEpisode(query: []const u8, generation: u64) void {
 /// spawns its own worker, so this is cheap enough for the event loop.
 pub fn commitPendingWatch() void {
     const pw = &state.app.pending_watch;
-    db.tvMarkWatched(pw.tmdb_id, @intCast(@max(0, pw.season)), @intCast(@max(1, pw.episode)), true);
-    @import("trakt.zig").markWatchedEpisode(pw.tmdb_id, pw.season, pw.episode);
-    @import("simkl.zig").markWatchedEpisode(pw.tmdb_id, pw.season, pw.episode);
+    @import("tv_library.zig").setEpisodeWatched(pw.tmdb_id, @intCast(@max(0, pw.season)), @intCast(@max(1, pw.episode)), true);
 
     // Auto-track: watching an episode puts the show in My Shows. tvTouchShow
     // creates the row if absent and bumps updated_at (which drives "most recently
@@ -2604,7 +2601,6 @@ pub fn commitPendingWatch() void {
     // — a show the user explicitly untracked must not resurrect itself just
     // because an episode of it played.
     db.tvTouchShow(pw.tmdb_id, pw.name[0..pw.name_len], pw.poster_path[0..pw.poster_path_len]);
-    @import("tv_library.zig").markDirty();
     invalidateDetailUiSnapshot();
 
     // Reflect in the TV detail if it's open on the same show + season.

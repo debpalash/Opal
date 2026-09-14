@@ -169,12 +169,21 @@ pub fn disconnect() void {
 /// Mark a TV episode watched in the user's Trakt history (id-based — reliable,
 /// unlike the title-only scrobble). Called when an episode is played.
 pub fn markWatchedEpisode(show_tmdb: i32, season: i32, episode: i32) void {
+    setEpisodeWatched(show_tmdb, season, episode, true);
+}
+
+pub fn markUnwatchedEpisode(show_tmdb: i32, season: i32, episode: i32) void {
+    setEpisodeWatched(show_tmdb, season, episode, false);
+}
+
+fn setEpisodeWatched(show_tmdb: i32, season: i32, episode: i32, watched: bool) void {
     if (!isConnected()) return;
     var body: [256]u8 = undefined;
     const payload = std.fmt.bufPrint(&body, "{{\"shows\":[{{\"ids\":{{\"tmdb\":{d}}},\"seasons\":[{{\"number\":{d},\"episodes\":[{{\"number\":{d}}}]}}]}}]}}", .{ show_tmdb, season, episode }) catch return;
     var key_buf: [64]u8 = undefined;
     const key = std.fmt.bufPrint(&key_buf, "show:{d}:{d}:{d}", .{ show_tmdb, season, episode }) catch return;
-    if (outbox.enqueue("trakt", "history", key, payload)) kickOutbox();
+    const operation = if (watched) "history" else "history_remove";
+    if (outbox.enqueueState("trakt", operation, key, payload)) kickOutbox();
 }
 
 /// Mark a movie watched in the user's Trakt history.
@@ -210,7 +219,11 @@ fn drainOutbox() void {
         var job: outbox.Job = .{};
         const now = io_global.timestamp();
         if (!outbox.nextDue("trakt", now, &job)) return;
-        const delivery = postScrobble("/sync/history", job.payload[0..job.payload_len]);
+        const endpoint = if (std.mem.eql(u8, job.operation[0..job.operation_len], "history_remove"))
+            "/sync/history/remove"
+        else
+            "/sync/history";
+        const delivery = postScrobble(endpoint, job.payload[0..job.payload_len]);
         if (delivery.status == .success) {
             outbox.complete(job.id);
             continue;

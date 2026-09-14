@@ -31,6 +31,24 @@ pub fn enqueue(provider: []const u8, operation: []const u8, event_key: []const u
     return db.step(stmt) == db.c.SQLITE_DONE;
 }
 
+/// Queue the newest value of a mutable provider state. A single SQLite UPSERT
+/// atomically replaces an older pending opposite action for the same state key.
+pub fn enqueueState(provider: []const u8, operation: []const u8, state_key: []const u8, payload: []const u8) bool {
+    if (provider.len == 0 or operation.len == 0 or state_key.len == 0 or payload.len == 0 or payload.len > 1024) return false;
+    const stmt = db.prepare(
+        "INSERT INTO sync_outbox(provider,operation,event_key,state_key,payload) VALUES(?1,?2,?3,?3,?4) " ++
+            "ON CONFLICT(provider,state_key) WHERE state_key <> '' DO UPDATE SET " ++
+            "operation=excluded.operation,event_key=excluded.event_key,payload=excluded.payload," ++
+            "attempts=0,next_attempt_at=0,last_error='',created_at=strftime('%s','now')",
+    ) orelse return false;
+    defer db.finalize(stmt);
+    db.bindText(stmt, 1, provider);
+    db.bindText(stmt, 2, operation);
+    db.bindText(stmt, 3, state_key);
+    db.bindText(stmt, 4, payload);
+    return db.step(stmt) == db.c.SQLITE_DONE;
+}
+
 pub fn nextDue(provider: []const u8, now: i64, out: *Job) bool {
     const stmt = db.prepare("SELECT id,operation,payload,attempts FROM sync_outbox WHERE provider=?1 AND next_attempt_at<=?2 ORDER BY id LIMIT 1") orelse return false;
     defer db.finalize(stmt);
