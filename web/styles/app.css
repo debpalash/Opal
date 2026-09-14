@@ -346,6 +346,13 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
 .watch-actions button:hover,.watched-toggle:hover{border-color:var(--accent);color:var(--text-1)}
 .watch-actions .watch-next{color:var(--accent)}
 .watch-actions .watch-remove{color:var(--danger);margin-left:auto}
+.watch-view-controls{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin:4px 0 10px;color:var(--text-2)}
+.watch-view-controls label{display:flex;align-items:center;gap:7px}
+.watch-view-controls select,.watch-view-controls button{min-height:34px;border:1px solid var(--border);border-radius:8px;background:var(--bg-elevated);color:var(--text-1);padding:5px 9px}
+.watch-view-controls button.on{border-color:var(--accent);color:var(--accent)}
+#watch-list.compact .watch-row{grid-template-columns:52px minmax(0,1fr);padding:8px;gap:8px}
+#watch-list.compact .watch-row>.poster{width:52px;height:72px}
+#watch-list.compact .watch-actions{margin-top:5px}
 .watched-toggle.seen{color:var(--accent);border-color:var(--accent-dim)}
 /* Play-latest row at the top of the TV show page. */
 #show-latest{display:flex;align-items:center;gap:10px;padding:8px 0}

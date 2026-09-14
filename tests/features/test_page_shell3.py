@@ -160,6 +160,9 @@ def test_watching_progress_first_layout():
                                   and "renderGrid(.saved)" in lib),
         "top-aligned content": ".gravity_y = 0" in _between(lib, "pub fn renderContent", "fn renderControlBar"),
         "quiet segmented filters": "components.segment(" in lib,
+        "filters persist": "watching_filter" in _src("src/core/state.zig")
+            and 'setKey("watching_filter"' in _src("src/core/config.zig")
+            and "state.markConfigDirty()" in lib,
         "useful empty states": ('"Browse movies & TV"' in lib
                                 and '"Clear filters"' in lib),
         "local filenames cleaned": ("display_name.clean(" in lib

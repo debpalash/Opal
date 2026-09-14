@@ -95,7 +95,7 @@ fn library(stream: std.Io.net.Stream) void {
         wire.writeJsonString(&w, row.name[0..@min(row.name_len, row.name.len)]);
         w.writeAll("\",\"id\":\"") catch return;
         wire.writeJsonString(&w, row.id[0..@min(row.id_len, row.id.len)]);
-        w.print("\",\"kind\":\"{s}\",\"user_status\":\"{s}\",\"tmdb_id\":{d},\"watched\":{d},\"total\":{d},\"has_next\":{s},\"next_season\":{d},\"next_episode\":{d},\"pct\":{d:.0},\"state\":\"{s}\",\"status\":\"", .{
+        w.print("\",\"kind\":\"{s}\",\"user_status\":\"{s}\",\"tmdb_id\":{d},\"watched\":{d},\"total\":{d},\"has_next\":{s},\"next_season\":{d},\"next_episode\":{d},\"pct\":{d:.0},\"updated_at\":{d},\"state\":\"{s}\",\"status\":\"", .{
             @tagName(row.kind),
             @tagName(row.user),
             row.tmdb_id,
@@ -105,6 +105,7 @@ fn library(stream: std.Io.net.Stream) void {
             row.next.season,
             row.next.episode,
             row.pct,
+            row.updated_at,
             @tagName(model.effectiveStatus(row.user, row.status)),
         }) catch return;
         wire.writeJsonString(&w, status);

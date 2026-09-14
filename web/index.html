@@ -384,15 +384,19 @@
       <button data-f="anime">Anime</button>
       <button data-f="movie">Movies</button>
     </div>
-    <div class="season-chips" id="watch-filters" aria-label="Watch status">
+      <div class="season-chips" id="watch-filters" aria-label="Watch status">
       <button data-f="all" class="on">All</button>
       <button data-f="watching">Watching</button>
       <button data-f="caught_up">Caught up</button>
       <button data-f="unstarted">Unstarted</button>
       <button data-f="completed">Completed</button>
       <button data-f="dropped">Dropped</button>
-    </div>
-    <div id="watch-list"></div>
+      </div>
+      <div class="watch-view-controls" aria-label="Library view options">
+        <label>Sort <select id="watch-sort"><option value="smart">Up next</option><option value="recent">Recent</option><option value="title">Title</option><option value="progress">Progress</option></select></label>
+        <button id="watch-density" type="button" aria-pressed="false">Compact</button>
+      </div>
+      <div id="watch-list"></div>
   </section>
   <section class="page" id="page-setup">
     <div class="sect">Sources</div>

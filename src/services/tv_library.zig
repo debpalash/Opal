@@ -655,6 +655,7 @@ fn addMovieRows() void {
         r.setName(display_name.clean(&display_buf, name));
         r.setId(name);
         r.pct = @floatCast(e.percent);
+        r.updated_at = e.updated_at;
         r.prog = .{
             .watched = @intFromFloat(@max(0, @min(100, e.percent))),
             .total = 100,
@@ -672,6 +673,10 @@ const CARD_W: f32 = 150;
 const POSTER_H: f32 = CARD_W * 1.5;
 
 pub fn renderContent() void {
+    if (state.app.config_loaded.load(.acquire)) {
+        filter = @enumFromInt(state.app.watching_filter);
+        kind_filter = @enumFromInt(state.app.watching_kind_filter);
+    }
     syncOnce();
     // Hold the snapshot lock for the whole frame's read. buildSnapshot alone
     // isn't enough: warmNextUp / renderControlBar / renderGrid all iterate
@@ -783,8 +788,11 @@ fn renderControlBar() void {
         defer group.deinit();
         _ = dvui.label(@src(), "TYPE", .{}, .{ .color_text = theme.colors.text_tertiary });
         const labels = [_][]const u8{ "All", "TV", "Anime", "Movies" };
-        if (components.segment(@src(), &labels, @intFromEnum(kind_filter))) |picked|
+        if (components.segment(@src(), &labels, @intFromEnum(kind_filter))) |picked| {
             kind_filter = @enumFromInt(picked);
+            state.app.watching_kind_filter = @intCast(picked);
+            state.markConfigDirty();
+        }
     }
     {
         var group = dvui.box(@src(), .{ .dir = .vertical }, .{
@@ -794,8 +802,11 @@ fn renderControlBar() void {
         defer group.deinit();
         _ = dvui.label(@src(), "PROGRESS", .{}, .{ .color_text = theme.colors.text_tertiary });
         const labels = [_][]const u8{ "All", "In progress", "Caught up", "Planned", "Done", "Dropped" };
-        if (components.segment(@src(), &labels, @intFromEnum(filter))) |picked|
+        if (components.segment(@src(), &labels, @intFromEnum(filter))) |picked| {
             filter = @enumFromInt(picked);
+            state.app.watching_filter = @intCast(picked);
+            state.markConfigDirty();
+        }
     }
 }
 

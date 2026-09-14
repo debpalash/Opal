@@ -52,6 +52,8 @@ pub fn save() void {
         .cols_3 => "3",
         .cols_4 => "4",
     });
+    setKey("watching_filter", fmtInt(&fb, @intCast(state.app.watching_filter)));
+    setKey("watching_kind_filter", fmtInt(&fb, @intCast(state.app.watching_kind_filter)));
     setKey("seek_sync", if (state.app.seek_sync) "1" else "0");
     setKey("hwdec2", if (state.app.hwdec_enabled) "1" else "0");
     setKey("auto_advance", if (state.app.auto_advance) "1" else "0");
@@ -475,6 +477,12 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         theme.setReducedMotion(state.app.reduce_motion);
     } else if (std.mem.eql(u8, key, "grid_mode")) {
         state.app.grid_mode = if (std.mem.eql(u8, val, "1")) .cols_1 else if (std.mem.eql(u8, val, "2")) .cols_2 else if (std.mem.eql(u8, val, "3")) .cols_3 else if (std.mem.eql(u8, val, "4")) .cols_4 else .auto;
+    } else if (std.mem.eql(u8, key, "watching_filter")) {
+        const parsed = std.fmt.parseInt(u8, val, 10) catch 0;
+        state.app.watching_filter = if (parsed <= @intFromEnum(@import("../services/tv_pure.zig").Filter.dropped)) parsed else 0;
+    } else if (std.mem.eql(u8, key, "watching_kind_filter")) {
+        const parsed = std.fmt.parseInt(u8, val, 10) catch 0;
+        state.app.watching_kind_filter = if (parsed <= @intFromEnum(@import("../services/tv_pure.zig").KindFilter.movie)) parsed else 0;
     } else if (std.mem.eql(u8, key, "seek_sync")) {
         state.app.seek_sync = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "hwdec2")) {

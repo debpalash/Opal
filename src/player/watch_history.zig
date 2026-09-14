@@ -19,6 +19,7 @@ pub const WatchEntry = struct {
     position_secs: f64 = 0.0,
     duration_secs: f64 = 0.0,
     catalog_tmdb_id: i32 = 0,
+    updated_at: i64 = 0,
 };
 
 // ══════════════════════════════════════════════════════════
@@ -385,6 +386,7 @@ fn updateCache(name: []const u8, percent: f64, position_secs: ?f64, duration_sec
             if (position_secs) |p| entries[i].position_secs = p;
             if (duration_secs) |d| entries[i].duration_secs = d;
             if (catalog_tmdb_id) |id| entries[i].catalog_tmdb_id = id;
+            entries[i].updated_at = @import("../core/io_global.zig").timestamp();
             entries[i].link_len = 0;
             if (link.len > 0 and link.len < MAX_LINK_LEN) {
                 @memcpy(entries[i].link[0..link.len], link);
@@ -407,6 +409,7 @@ fn updateCache(name: []const u8, percent: f64, position_secs: ?f64, duration_sec
     entries[0].position_secs = position_secs orelse 0;
     entries[0].duration_secs = duration_secs orelse 0;
     entries[0].catalog_tmdb_id = catalog_tmdb_id orelse 0;
+    entries[0].updated_at = @import("../core/io_global.zig").timestamp();
     if (link.len > 0 and link.len < MAX_LINK_LEN) {
         @memcpy(entries[0].link[0..link.len], link);
         entries[0].link_len = link.len;
@@ -610,7 +613,7 @@ pub fn restoreBackup() void {
 pub fn load() void {
     init();
 
-    const sql = "SELECT name, percent, link, position_secs, duration_secs, catalog_tmdb_id FROM watch_history WHERE percent >= 0.5 ORDER BY updated_at DESC LIMIT 200";
+    const sql = "SELECT name, percent, link, position_secs, duration_secs, catalog_tmdb_id, updated_at FROM watch_history WHERE percent >= 0.5 ORDER BY updated_at DESC LIMIT 200";
     const stmt = db.prepare(sql) orelse return;
     defer db.finalize(stmt);
 
@@ -637,6 +640,7 @@ pub fn load() void {
         entries[idx].position_secs = db.columnDouble(stmt, 3);
         entries[idx].duration_secs = db.columnDouble(stmt, 4);
         entries[idx].catalog_tmdb_id = @max(0, db.columnInt(stmt, 5));
+        entries[idx].updated_at = db.columnInt64(stmt, 6);
 
         count += 1;
     }

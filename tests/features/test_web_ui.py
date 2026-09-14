@@ -511,6 +511,10 @@ def test_web_watching_library():
         # TV rows reuse the existing drill-down (season list + Play-latest).
         "reuses show drilldown": "openShow(r.tmdb_id, r.name)" in ui,
         "progress bar": "wbar" in ui,
+        "durable view state": "opal.watch.filter" in ui and "opal.watch.kind" in ui
+            and "opal.watch.sort" in ui and "opal.watch.density" in ui,
+        "sorting and density": 'id="watch-sort"' in ui and 'id="watch-density"' in ui
+            and "watchSort === 'progress'" in ui and "classList.toggle('compact'" in ui,
     }
     missing = [k for k, ok in checks.items() if not ok]
     if missing:

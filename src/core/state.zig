@@ -362,6 +362,8 @@ pub const AppState = struct {
     // prevents every Opal client from appearing as the same physical device.
     install_id: [32]u8 = std.mem.zeroes([32]u8),
     grid_mode: GridMode = .auto,
+    watching_filter: u8 = 0,
+    watching_kind_filter: u8 = 0,
     seek_sync: bool = false,
     // Hardware video decoding (VideoToolbox/VAAPI/D3D11 via mpv "auto-safe").
     // ON by default — software decode was the main CPU eater during playback;

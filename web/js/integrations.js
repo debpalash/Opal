@@ -503,7 +503,19 @@ $('party-chat-form').addEventListener('submit', async e => {
 // Desktop parity for the `.watching` route. /api/library returns rows already
 // in the desktop's display order (tv_pure.sortOrder), so the two surfaces agree
 // on ordering without the page re-sorting anything.
-let watchRows = null, watchFilter = 'all', watchKind = 'all', watchSyncing = false;
+const watchSaved = (key, allowed, fallback) => {
+  try { const value = localStorage.getItem(key); return allowed.includes(value) ? value : fallback; }
+  catch { return fallback; }
+};
+const watchFilters = ['all','watching','caught_up','unstarted','completed','dropped'];
+const watchKinds = ['all','tv','anime','movie'];
+const watchSorts = ['smart','recent','title','progress'];
+let watchRows = null;
+let watchFilter = watchSaved('opal.watch.filter', watchFilters, 'all');
+let watchKind = watchSaved('opal.watch.kind', watchKinds, 'all');
+let watchSort = watchSaved('opal.watch.sort', watchSorts, 'smart');
+let watchCompact = watchSaved('opal.watch.density', ['comfortable','compact'], 'comfortable') === 'compact';
+let watchSyncing = false;
 let watchSyncTimer = null, watchSyncPolls = 0;
 async function loadWatch(){
   clearTimeout(watchSyncTimer);
@@ -521,13 +533,33 @@ async function loadWatch(){
 function chooseWatchFilter(group, button){
   group.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === button));
 }
+function saveWatchChoice(key, value){ try { localStorage.setItem(key, value); } catch {} }
+function restoreWatchControls(){
+  const filter = $('watch-filters').querySelector(`[data-f="${watchFilter}"]`);
+  const kind = $('watch-kind-filters').querySelector(`[data-f="${watchKind}"]`);
+  if (filter) chooseWatchFilter($('watch-filters'), filter);
+  if (kind) chooseWatchFilter($('watch-kind-filters'), kind);
+  $('watch-sort').value = watchSort;
+  $('watch-density').setAttribute('aria-pressed', String(watchCompact));
+  $('watch-density').classList.toggle('on', watchCompact);
+  $('watch-list').classList.toggle('compact', watchCompact);
+}
+restoreWatchControls();
 $('watch-filters').addEventListener('click', e => {
   const b = e.target.closest('button[data-f]'); if (!b) return;
-  chooseWatchFilter($('watch-filters'), b); watchFilter = b.dataset.f; renderWatch();
+  chooseWatchFilter($('watch-filters'), b); watchFilter = b.dataset.f; saveWatchChoice('opal.watch.filter', watchFilter); renderWatch();
 });
 $('watch-kind-filters').addEventListener('click', e => {
   const b = e.target.closest('button[data-f]'); if (!b) return;
-  chooseWatchFilter($('watch-kind-filters'), b); watchKind = b.dataset.f; renderWatch();
+  chooseWatchFilter($('watch-kind-filters'), b); watchKind = b.dataset.f; saveWatchChoice('opal.watch.kind', watchKind); renderWatch();
+});
+$('watch-sort').addEventListener('change', e => {
+  watchSort = watchSorts.includes(e.target.value) ? e.target.value : 'smart';
+  saveWatchChoice('opal.watch.sort', watchSort); renderWatch();
+});
+$('watch-density').addEventListener('click', () => {
+  watchCompact = !watchCompact; saveWatchChoice('opal.watch.density', watchCompact ? 'compact' : 'comfortable');
+  restoreWatchControls(); renderWatch();
 });
 $('watch-refresh').onclick = async () => {
   $('watch-hint').textContent = 'Starting metadata refresh…';
@@ -545,6 +577,9 @@ function renderWatch(){
   // filter name. Same enum the desktop's chips use, so both agree on counts.
   const list = rows.filter(r => (watchFilter === 'all' || r.state === watchFilter)
     && (watchKind === 'all' || r.kind === watchKind));
+  if (watchSort === 'title') list.sort((a,b) => String(a.name || '').localeCompare(String(b.name || '')));
+  else if (watchSort === 'progress') list.sort((a,b) => ((b.total ? b.watched/b.total : b.pct/100) || 0) - ((a.total ? a.watched/a.total : a.pct/100) || 0));
+  else if (watchSort === 'recent') list.sort((a,b) => (b.updated_at || 0) - (a.updated_at || 0));
   $('watch-hint').textContent = rows.length
     ? `${list.length} of ${rows.length} tracked${watchSyncing ? ' · syncing metadata…' : ''}`
     : 'Nothing tracked yet — play something, or add a show from Browse.';
