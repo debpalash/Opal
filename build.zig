@@ -524,6 +524,15 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_plugins_trust).step);
 
+    const test_sync_outbox = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/sync_outbox_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_sync_outbox).step);
+
     // Headless account auth: bcrypt hash/verify + credential validation.
     const test_auth_pure = b.addTest(.{
         .root_module = b.createModule(.{

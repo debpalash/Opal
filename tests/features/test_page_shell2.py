@@ -285,6 +285,37 @@ def test_trakt_wired():
     return ("pass", "device-flow + persistence + mark-watched wired") if ok else ("fail", "trakt not fully wired")
 
 
+@test("Trakt watched sync is durable and retryable", "Page Shell")
+def test_trakt_durable_outbox():
+    db = _src("src/core/db.zig")
+    queue = _src("src/services/sync_outbox.zig")
+    pure = _src("src/services/sync_outbox_pure.zig")
+    trakt = _src("src/services/trakt.zig")
+    remote = _src("src/services/remote.zig")
+    ui = _web_app()
+    checks = {
+        "durable schema": "CREATE TABLE IF NOT EXISTS sync_outbox" in db
+            and "UNIQUE(provider, operation, event_key)" in db,
+        "deduplicated enqueue": "ON CONFLICT(provider,operation,event_key)" in queue,
+        "ordered due delivery": "next_attempt_at<=?2 ORDER BY id LIMIT 1" in queue,
+        "bounded retry policy": "retryDelaySeconds" in pure and "900" in pure,
+        "http failures detected": '"-fsS"' in trakt and '"--max-time"' in trakt
+            and "queued for retry" in trakt,
+        "single owned drain": "outbox_busy.cmpxchgStrong" in trakt
+            and "workers.spawn(drainOutbox" in trakt,
+        "watched events do not drop while busy": 'outbox.enqueue("trakt", "history"' in trakt
+            and "var busy: bool" not in trakt,
+        "post-only mutation": "apiTrakt(stream, method" in remote
+            and 'requireMethod(stream, method, "POST")' in remote,
+        "visible queue and retry": '\\"queued\\\":{d}' in remote
+            and 'id="trakt-retry"' in ui and "action=retry" in ui,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "Trakt durable sync incomplete: " + ", ".join(missing)
+    return "pass", "Trakt watched events persist, deduplicate, back off and expose manual retry state"
+
+
 @test("Keyless Subtitle Fetch Works E2E", "Page Shell")
 def test_keyless_subtitle_fetch_e2e():
     # Three real bugs fixed so auto-download actually lands an SRT:

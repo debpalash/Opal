@@ -169,7 +169,9 @@ async function loadTrakt() {
   $('trakt-id').placeholder = d.has_client_id ? 'set — type to replace' : 'not set';
   $('trakt-secret').placeholder = d.has_client_secret ? 'set — type to replace' : 'not set';
   if (d.connected) {
-    $('trakt-hint').textContent = d.scrobbling ? 'Connected — scrobbling' : 'Connected';
+    const queued = Number(d.queued || 0);
+    $('trakt-hint').textContent = (d.scrobbling ? 'Connected — scrobbling' : 'Connected')
+      + (queued ? ` · ${queued} queued` : ' · synced');
   } else if (d.pending) {
     $('trakt-hint').textContent = d.user_code
       ? 'Go to trakt.tv/activate and enter ' + d.user_code
@@ -177,6 +179,7 @@ async function loadTrakt() {
   } else {
     $('trakt-hint').textContent = 'Not connected.';
   }
+  $('trakt-retry').hidden = !d.queued;
   // Only poll while a device auth is in flight, and stop the moment it lands —
   // otherwise the page keeps a timer alive for the whole session.
   if (d.pending && !traktPoll) traktPoll = setInterval(loadTrakt, 3000);
@@ -203,6 +206,11 @@ $('trakt-connect').onclick = async () => {
 };
 $('trakt-disconnect').onclick = async () => {
   await fetch(BASE + '/api/trakt?action=disconnect',
+    { method:'POST', credentials:'same-origin' });
+  loadTrakt();
+};
+$('trakt-retry').onclick = async () => {
+  await fetch(BASE + '/api/trakt?action=retry',
     { method:'POST', credentials:'same-origin' });
   loadTrakt();
 };

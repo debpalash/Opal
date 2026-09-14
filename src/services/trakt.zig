@@ -3,6 +3,8 @@ const state = @import("../core/state.zig");
 const logs = @import("../core/logs.zig");
 const io_global = @import("../core/io_global.zig");
 const secret_store = @import("../core/secret_store.zig");
+const outbox = @import("sync_outbox.zig");
+const workers = @import("../core/workers.zig");
 
 // ══════════════════════════════════════════════════════════
 // Trakt.tv Scrobbling — auto-report watch progress
@@ -20,6 +22,7 @@ pub var access_token: [256]u8 = std.mem.zeroes([256]u8);
 pub var access_token_len: usize = 0;
 pub var enabled: bool = false;
 pub var is_scrobbling: bool = false;
+var outbox_busy: std.atomic.Value(bool) = .init(false);
 
 pub fn isConnected() bool {
     return access_token_len > 0;
@@ -77,7 +80,10 @@ pub fn init() void {
     loadStr(parsed.value, "client_id", &client_id, &client_id_len);
     const legacy_secret = loadSecretStr(parsed.value, "client_secret", &client_secret, &client_secret_len);
     const legacy_token = loadSecretStr(parsed.value, "access_token", &access_token, &access_token_len);
-    if (access_token_len > 0) enabled = true;
+    if (access_token_len > 0) {
+        enabled = true;
+        kickOutbox();
+    }
     if (@import("builtin").os.tag == .windows and (legacy_secret or legacy_token)) save();
 }
 
@@ -91,49 +97,56 @@ pub fn disconnect() void {
 /// unlike the title-only scrobble). Called when an episode is played.
 pub fn markWatchedEpisode(show_tmdb: i32, season: i32, episode: i32) void {
     if (!isConnected()) return;
-    const S = struct {
-        var busy: bool = false;
-        var sid: i32 = 0;
-        var sn: i32 = 0;
-        var ep: i32 = 0;
-        fn worker() void {
-            defer busy = false;
-            var body: [256]u8 = undefined;
-            const b = std.fmt.bufPrintZ(&body, "{{\"shows\":[{{\"ids\":{{\"tmdb\":{d}}},\"seasons\":[{{\"number\":{d},\"episodes\":[{{\"number\":{d}}}]}}]}}]}}", .{ sid, sn, ep }) catch return;
-            postScrobble("/sync/history", b);
-        }
-    };
-    if (S.busy) return;
-    S.busy = true;
-    S.sid = show_tmdb;
-    S.sn = season;
-    S.ep = episode;
-    @import("../core/workers.zig").release(@import("../core/workers.zig").spawnLegacy(S.worker, .{}) catch {
-        S.busy = false;
-        return;
-    });
+    var body: [256]u8 = undefined;
+    const payload = std.fmt.bufPrint(&body, "{{\"shows\":[{{\"ids\":{{\"tmdb\":{d}}},\"seasons\":[{{\"number\":{d},\"episodes\":[{{\"number\":{d}}}]}}]}}]}}", .{ show_tmdb, season, episode }) catch return;
+    var key_buf: [64]u8 = undefined;
+    const key = std.fmt.bufPrint(&key_buf, "show:{d}:{d}:{d}", .{ show_tmdb, season, episode }) catch return;
+    if (outbox.enqueue("trakt", "history", key, payload)) kickOutbox();
 }
 
 /// Mark a movie watched in the user's Trakt history.
 pub fn markWatchedMovie(tmdb_id: i32) void {
     if (!isConnected()) return;
-    const S = struct {
-        var busy: bool = false;
-        var id: i32 = 0;
-        fn worker() void {
-            defer busy = false;
-            var body: [128]u8 = undefined;
-            const b = std.fmt.bufPrintZ(&body, "{{\"movies\":[{{\"ids\":{{\"tmdb\":{d}}}}}]}}", .{id}) catch return;
-            postScrobble("/sync/history", b);
-        }
+    var body: [128]u8 = undefined;
+    const payload = std.fmt.bufPrint(&body, "{{\"movies\":[{{\"ids\":{{\"tmdb\":{d}}}}}]}}", .{tmdb_id}) catch return;
+    var key_buf: [32]u8 = undefined;
+    const key = std.fmt.bufPrint(&key_buf, "movie:{d}", .{tmdb_id}) catch return;
+    if (outbox.enqueue("trakt", "history", key, payload)) kickOutbox();
+}
+
+pub fn pendingCount() usize {
+    return outbox.count("trakt");
+}
+
+pub fn retryPending() void {
+    outbox.retryNow("trakt");
+    kickOutbox();
+}
+
+fn kickOutbox() void {
+    if (!isConnected() or workers.isQuitting()) return;
+    if (outbox_busy.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) return;
+    workers.spawn(drainOutbox, .{}) catch {
+        outbox_busy.store(false, .release);
     };
-    if (S.busy) return;
-    S.busy = true;
-    S.id = tmdb_id;
-    @import("../core/workers.zig").release(@import("../core/workers.zig").spawnLegacy(S.worker, .{}) catch {
-        S.busy = false;
-        return;
-    });
+}
+
+fn drainOutbox() void {
+    defer outbox_busy.store(false, .release);
+    while (!workers.isQuitting()) {
+        var job: outbox.Job = .{};
+        const now = io_global.timestamp();
+        if (!outbox.nextDue("trakt", now, &job)) return;
+        if (postScrobble("/sync/history", job.payload[0..job.payload_len])) {
+            outbox.complete(job.id);
+            continue;
+        }
+        outbox.deferFailure(job.id, job.attempts, now, "HTTP delivery failed");
+        const delay = outbox.retryDelaySeconds(job.attempts);
+        var elapsed: i64 = 0;
+        while (elapsed < delay and !workers.isQuitting()) : (elapsed += 1)
+            io_global.sleep(std.time.ns_per_s);
+    }
 }
 
 /// Called when playback starts — POST /scrobble/start
@@ -163,7 +176,7 @@ pub fn scrobbleStart(title: []const u8, progress: f64) void {
         \\{{"movie":{{"title":"{s}"}},"progress":{d:.1}}}
     , .{ esc[0..ei], progress }) catch return;
 
-    postScrobble("/scrobble/start", json);
+    _ = postScrobble("/scrobble/start", json);
 }
 
 /// Called when playback pauses — POST /scrobble/pause
@@ -187,7 +200,7 @@ pub fn scrobblePause(title: []const u8, progress: f64) void {
     const json = std.fmt.bufPrintZ(&json_buf,
         \\{{"movie":{{"title":"{s}"}},"progress":{d:.1}}}
     , .{ esc[0..ei], progress }) catch return;
-    postScrobble("/scrobble/pause", json);
+    _ = postScrobble("/scrobble/pause", json);
 }
 
 /// Called when playback stops — POST /scrobble/stop
@@ -211,35 +224,39 @@ pub fn scrobbleStop(title: []const u8, progress: f64) void {
     const json = std.fmt.bufPrintZ(&json_buf,
         \\{{"movie":{{"title":"{s}"}},"progress":{d:.1}}}
     , .{ esc[0..ei], progress }) catch return;
-    postScrobble("/scrobble/stop", json);
+    _ = postScrobble("/scrobble/stop", json);
 }
 
-fn postScrobble(endpoint: []const u8, json_body: []const u8) void {
+fn postScrobble(endpoint: []const u8, json_body: []const u8) bool {
     const alloc = @import("../core/alloc.zig").allocator;
     var url_buf: [256]u8 = undefined;
-    const url = std.fmt.bufPrintZ(&url_buf, "{s}{s}", .{ TRAKT_API_URL, endpoint }) catch return;
+    const url = std.fmt.bufPrintZ(&url_buf, "{s}{s}", .{ TRAKT_API_URL, endpoint }) catch return false;
 
     var auth_buf: [300]u8 = undefined;
-    const auth = std.fmt.bufPrintZ(&auth_buf, "Authorization: Bearer {s}", .{access_token[0..access_token_len]}) catch return;
+    const auth = std.fmt.bufPrintZ(&auth_buf, "Authorization: Bearer {s}", .{access_token[0..access_token_len]}) catch return false;
 
     var cid_buf: [200]u8 = undefined;
-    const cid_hdr = std.fmt.bufPrintZ(&cid_buf, "trakt-api-key: {s}", .{client_id[0..client_id_len]}) catch return;
+    const cid_hdr = std.fmt.bufPrintZ(&cid_buf, "trakt-api-key: {s}", .{client_id[0..client_id_len]}) catch return false;
 
     var child = io_global.Child.init(&.{
-        "curl", "-s",                             "-X",      "POST",                 url,
-        "-H",   "Content-Type: application/json", "-H",      "trakt-api-version: 2", "--config",
-        "-",    "-d",                             json_body,
+        "curl",                           "-fsS",    "--connect-timeout",    "5",        "--max-time",
+        "15",                             "-X",      "POST",                 url,        "-H",
+        "Content-Type: application/json", "-H",      "trakt-api-version: 2", "--config", "-",
+        "-d",                             json_body,
     }, alloc);
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
     @import("../core/curl_secret.zig").spawnWithHeaders(&child, &.{ cid_hdr, auth }) catch {
         logs.pushLog("warn", "trakt", "Failed to send scrobble", false);
-        return;
+        return false;
     };
-    const result = child.wait() catch return;
+    const result = child.wait() catch return false;
     if (result == .exited and result.exited == 0) {
         logs.pushLog("info", "trakt", "Scrobble sent", false);
+        return true;
     }
+    logs.pushLog("warn", "trakt", "Trakt rejected or failed a sync request; queued for retry", false);
+    return false;
 }
 
 /// OAuth Device Code flow — step 1: get device code

@@ -139,6 +139,25 @@ fn createTables() void {
     // table before paused intent was added; duplicate-column errors are benign.
     exec("ALTER TABLE active_torrent_intents ADD COLUMN paused INTEGER NOT NULL DEFAULT 0");
 
+    // Durable third-party sync outbox. Playback commits locally first, then
+    // providers acknowledge these rows; network/auth failures never discard a
+    // watched event. Payloads contain media identifiers only, never tokens.
+    exec(
+        \\CREATE TABLE IF NOT EXISTS sync_outbox (
+        \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
+        \\  provider TEXT NOT NULL,
+        \\  operation TEXT NOT NULL,
+        \\  event_key TEXT NOT NULL,
+        \\  payload TEXT NOT NULL,
+        \\  attempts INTEGER NOT NULL DEFAULT 0,
+        \\  next_attempt_at INTEGER NOT NULL DEFAULT 0,
+        \\  last_error TEXT NOT NULL DEFAULT '',
+        \\  created_at INTEGER DEFAULT (strftime('%s','now')),
+        \\  UNIQUE(provider, operation, event_key)
+        \\)
+    );
+    exec("CREATE INDEX IF NOT EXISTS idx_sync_outbox_due ON sync_outbox(provider, next_attempt_at, id)");
+
     // Watch history (playback resume positions). file_key is the absolute
     // filesystem path for local files ('' for streams/torrents) — see
     // player/watch_history.zig migrateSchema() for the v1→v2 upgrade, which

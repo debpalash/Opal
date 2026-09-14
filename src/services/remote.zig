@@ -1298,7 +1298,7 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
     // Trakt: scrobbling + watch-status sync. GET reports connection state; POST
     // takes ?action=connect|disconnect or a client_id/client_secret write.
     if (std.mem.eql(u8, api_path, "/trakt")) {
-        apiTrakt(stream, query, body);
+        apiTrakt(stream, method, query, body);
         return;
     }
     // Suwayomi: the manga extension server Opal can run for you. GET reports
@@ -2811,10 +2811,11 @@ fn apiLiveTvSources(stream: std.Io.net.Stream, query: []const u8, body: []const 
 /// POST takes `?action=connect|disconnect`, or a `key`/`value` pair writing
 /// client_id / client_secret. Device auth is the whole reason this is small:
 /// the browser never handles the token, it just shows the code and polls.
-fn apiTrakt(stream: std.Io.net.Stream, query: []const u8, body: []const u8) void {
+fn apiTrakt(stream: std.Io.net.Stream, method: []const u8, query: []const u8, body: []const u8) void {
     const trakt = @import("trakt.zig");
     var abuf: [16]u8 = undefined;
     if (credParam(body, query, "action", &abuf)) |action| {
+        if (!requireMethod(stream, method, "POST")) return;
         if (std.mem.eql(u8, action, "connect")) {
             if (trakt.client_id_len == 0) {
                 sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"set client_id first\"}");
@@ -2829,11 +2830,17 @@ fn apiTrakt(stream: std.Io.net.Stream, query: []const u8, body: []const u8) void
             sendJson(stream, "{\"ok\":true}");
             return;
         }
-        sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"action must be connect or disconnect\"}");
+        if (std.mem.eql(u8, action, "retry")) {
+            trakt.retryPending();
+            sendJson(stream, "{\"ok\":true}");
+            return;
+        }
+        sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"action must be connect, disconnect or retry\"}");
         return;
     }
     var kbuf: [24]u8 = undefined;
     if (credParam(body, query, "key", &kbuf)) |key| {
+        if (!requireMethod(stream, method, "POST")) return;
         var vbuf: [128]u8 = undefined;
         const val = credParam(body, query, "value", &vbuf) orelse "";
         const Field = struct { name: []const u8, buf: []u8, len: *usize };
@@ -2861,10 +2868,11 @@ fn apiTrakt(stream: std.Io.net.Stream, query: []const u8, body: []const u8) void
     var w = std.Io.Writer.fixed(&out);
     // has_client_id / has_client_secret, never the values — same rule the
     // /plugins GET follows for the debrid key.
-    w.print("{{\"connected\":{s},\"pending\":{s},\"scrobbling\":{s},\"has_client_id\":{s},\"has_client_secret\":{s},\"user_code\":\"", .{
+    w.print("{{\"connected\":{s},\"pending\":{s},\"scrobbling\":{s},\"queued\":{d},\"has_client_id\":{s},\"has_client_secret\":{s},\"user_code\":\"", .{
         if (trakt.isConnected()) "true" else "false",
         if (trakt.auth_pending) "true" else "false",
         if (trakt.is_scrobbling) "true" else "false",
+        trakt.pendingCount(),
         if (trakt.client_id_len > 0) "true" else "false",
         if (trakt.client_secret_len > 0) "true" else "false",
     }) catch return;
