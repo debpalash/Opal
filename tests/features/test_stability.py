@@ -389,6 +389,8 @@ def test_poster_decode_budget():
             for source in [*cover_providers, browser, comics]),
         "cover providers share safe decoder": all("decodeCover(" in source
             and "stbi_load_from_memory" not in source for source in cover_providers),
+        "plugin artwork uses bounded transport": "fetchImage(url, img_buf.?)" in cover_providers[2]
+            and "Child.init" not in _between(cover_providers[2], "pub fn fetchPoster(item: *PluginResult)", "// UI Rendering"),
         "browser and comics use distinct budgets": "browserFrame(jpeg_buf)" in browser
             and comics.count("comicPage(raw)") == 2
             and "COMIC_PAGE_MAX_RGBA_BYTES: u64 = 128 * 1024 * 1024" in policy,

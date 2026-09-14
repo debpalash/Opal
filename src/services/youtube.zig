@@ -1167,8 +1167,6 @@ pub fn fetchThumb(item: *state.YtItem) void {
 
     workers.spawn(struct {
         fn worker(ptr: *state.YtItem) void {
-            workers.enter();
-            defer workers.leave();
             defer ptr.thumb_fetching = false;
             defer @import("../core/poster.zig").releaseSlot();
 

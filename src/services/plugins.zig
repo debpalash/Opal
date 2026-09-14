@@ -879,7 +879,7 @@ pub fn fetchPoster(item: *PluginResult) void {
     if (!@import("../core/poster.zig").tryClaimSlot()) return;
     item.poster_fetching = true;
 
-    if (@import("../core/workers.zig").spawnLegacy(struct {
+    @import("../core/workers.zig").spawn(struct {
         fn worker(ptr: *PluginResult) void {
             defer ptr.poster_fetching = false;
             defer @import("../core/poster.zig").releaseSlot();
@@ -899,20 +899,11 @@ pub fn fetchPoster(item: *PluginResult) void {
             while (attempt < 2) : (attempt += 1) {
                 const used_cache = attempt == 0 and cached != null;
                 const img: []const u8 = if (used_cache) cached.? else blk: {
-                    const argv = [_][]const u8{ "curl", "-sL", "--max-time", "10", url };
-                    var child = @import("../core/io_global.zig").Child.init(&argv, c_alloc);
-                    child.stdout_behavior = .Pipe;
-                    child.stderr_behavior = .Ignore;
-                    _ = child.spawn() catch {
-                        logSpawnFail(argv[0]);
-                        return;
-                    };
-
                     if (img_buf == null) img_buf = c_alloc.alloc(u8, 512 * 1024) catch return;
-                    const img_len = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, img_buf.?) catch 0 else 0;
-                    _ = child.wait() catch {};
-                    if (img_len < 100) return;
-                    break :blk img_buf.?[0..img_len];
+                    // Use the bounded transport: a raw fixed-buffer pipe can
+                    // stop reading at 512 KiB while curl is still writing,
+                    // then deadlock forever in child.wait().
+                    break :blk @import("../core/http.zig").fetchImage(url, img_buf.?) orelse return;
                 };
 
                 w = 0;
@@ -938,10 +929,10 @@ pub fn fetchPoster(item: *PluginResult) void {
             ptr.poster_pixels = p_slice;
             results_mutex.unlock();
         }
-    }.worker, .{item})) |t| @import("../core/workers.zig").release(t) else |_| {
+    }.worker, .{item}) catch {
         item.poster_fetching = false;
         @import("../core/poster.zig").releaseSlot(); // spawn failed — release the slot
-    }
+    };
 }
 
 // ══════════════════════════════════════════════════════════
