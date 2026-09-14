@@ -686,6 +686,12 @@ const parakeet_v3_backend: Backend = .{
 /// Runtime selection — default to the one that ships with brew today.
 pub var active_kind: Kind = .whisper_cpp_plus_say;
 
+/// True once a persisted "voice_backend" config key has been applied (or the
+/// user picked one in Settings this session). The startup default-promotion
+/// (sherpa/parakeet auto-detect) must only run when this is false — it must
+/// never override an explicit choice.
+pub var voice_backend_explicit: bool = false;
+
 pub fn active() Backend {
     return backendFor(active_kind);
 }

@@ -2,6 +2,7 @@ const std = @import("std");
 const state = @import("../core/state.zig");
 const logs = @import("../core/logs.zig");
 const io_global = @import("../core/io_global.zig");
+const secret_store = @import("../core/secret_store.zig");
 
 // ══════════════════════════════════════════════════════════
 // Trakt.tv Scrobbling — auto-report watch progress
@@ -31,10 +32,27 @@ fn cfgPath(buf: []u8) []const u8 {
 
 /// Persist client id/secret + access token.
 pub fn save() void {
-    var b: [900]u8 = undefined;
-    const body = std.fmt.bufPrint(&b, "{{\"client_id\":\"{s}\",\"client_secret\":\"{s}\",\"access_token\":\"{s}\"}}", .{ client_id[0..client_id_len], client_secret[0..client_secret_len], access_token[0..access_token_len] }) catch return;
+    var protected_secret: [512]u8 = undefined;
+    defer @memset(&protected_secret, 0);
+    var protected_token: [768]u8 = undefined;
+    defer @memset(&protected_token, 0);
+    const sealed_secret = secret_store.seal(client_secret[0..client_secret_len], &protected_secret) orelse return;
+    const sealed_token = secret_store.seal(access_token[0..access_token_len], &protected_token) orelse return;
+    var b: [2048]u8 = undefined;
+    const body = std.fmt.bufPrint(&b, "{{\"client_id\":\"{s}\",\"client_secret\":\"{s}\",\"access_token\":\"{s}\"}}", .{ client_id[0..client_id_len], sealed_secret, sealed_token }) catch return;
     var pb: [600]u8 = undefined;
     @import("../core/secret_file.zig").write(cfgPath(&pb), body) catch {};
+}
+
+fn loadSecretStr(obj: std.json.Value, key: []const u8, buf: []u8, len: *usize) bool {
+    const value = obj.object.get(key) orelse return false;
+    if (value != .string or value.string.len == 0) return false;
+    const plain = secret_store.reveal(value.string, buf) orelse {
+        std.log.warn("could not unlock saved Trakt credentials", .{});
+        return false;
+    };
+    len.* = plain.len;
+    return !secret_store.isSealed(value.string);
 }
 
 fn loadStr(obj: std.json.Value, key: []const u8, buf: []u8, len: *usize) void {
@@ -57,9 +75,10 @@ pub fn init() void {
     defer parsed.deinit();
     if (parsed.value != .object) return;
     loadStr(parsed.value, "client_id", &client_id, &client_id_len);
-    loadStr(parsed.value, "client_secret", &client_secret, &client_secret_len);
-    loadStr(parsed.value, "access_token", &access_token, &access_token_len);
+    const legacy_secret = loadSecretStr(parsed.value, "client_secret", &client_secret, &client_secret_len);
+    const legacy_token = loadSecretStr(parsed.value, "access_token", &access_token, &access_token_len);
     if (access_token_len > 0) enabled = true;
+    if (@import("builtin").os.tag == .windows and (legacy_secret or legacy_token)) save();
 }
 
 pub fn disconnect() void {

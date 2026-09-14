@@ -706,45 +706,13 @@ pub fn runPluginResolve(id: []const u8, episode: []const u8) void {
                 // ── Video/stream: original handler ──
                 if (url.len < 5) return;
 
-                const c = @import("../core/c.zig");
                 if (state.app.players.items.len == 0 or state.app.active_player_idx >= state.app.players.items.len) return;
 
                 // Check if it's a magnet link → torrent engine
                 if (std.mem.startsWith(u8, url, "magnet:?")) {
-                    if (state.torrentSession() == null) {
-                        logs.pushLog("error", "plugin", "Torrent engine not ready", false);
-                        return;
-                    }
-                    var null_term: [4096]u8 = undefined;
-                    @memset(&null_term, 0);
-                    const clen = @min(url.len, 4095);
-                    @memcpy(null_term[0..clen], url[0..clen]);
-
-                    const tid = c.mpv.torrent_add_magnet(state.torrentSession(), @ptrCast(&null_term[0]), state.getSavePath());
-                    if (tid >= 0) {
-                        const pl = state.app.players.items[state.app.active_player_idx];
-                        pl.current_torrent_id = tid;
-                        pl.torrent_is_ready = false;
-                        pl.has_metadata = false;
-                        pl.last_load_time = 0;
-                        pl.selected_file_idx = -1;
-                        pl.metadata_start_time = @import("../core/io_global.zig").timestamp();
-                        pl.is_loading = true;
-                        pl.is_torrent = true;
-                        const lbl = "Plugin torrent";
-                        @memcpy(pl.loading_label[0..lbl.len], lbl);
-                        pl.loading_label_len = lbl.len;
-                        // Store URL
-                        const ulen = @min(url.len, 2048);
-                        @memcpy(pl.source_url[0..ulen], url[0..ulen]);
-                        pl.source_url_len = ulen;
-                        @memcpy(pl.current_url[0..ulen], url[0..ulen]);
-                        pl.current_url_len = ulen;
-                        logs.pushLog("info", "plugin", "Torrent magnet added", false);
-                    } else {
-                        logs.pushLog("error", "plugin", "Failed to add magnet", false);
-                        state.showToast("Couldn't add torrent (invalid or duplicate magnet)");
-                    }
+                    // Reuse the one cold-start-safe handoff path; plugin results
+                    // must not lose the first click while DHT initializes.
+                    @import("search.zig").loadTorrentToPlayer(url);
                 } else {
                     // Structured arguments in the typed seam avoid command-string
                     // quoting/injection and clear credentials from the prior host.

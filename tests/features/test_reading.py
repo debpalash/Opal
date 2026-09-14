@@ -151,7 +151,7 @@ def test_comic_resume():
         "applies pending page": "fn applyPendingResume" in comics,
         # Reopen from home.
         "deep link opener": "pub fn openDeepLink" in comics,
-        "home dispatch": '"comics"' in home and "services/comics.zig" in home,
+        "home dispatch": ".comics =>" in home and "services/comics.zig" in home,
     }
     missing = [k for k, ok in checks.items() if not ok]
     if missing:
@@ -197,7 +197,7 @@ def test_podcast_resume():
         "throttled": "NP_INTERVAL_MS" in podcasts,
         # Reopen from home.
         "deep link opener": "pub fn openDeepLink" in podcasts,
-        "home dispatch": '"podcast"' in home and "services/podcasts.zig" in home,
+        "home dispatch": ".podcast =>" in home and "services/podcasts.zig" in home,
     }
     missing = [k for k, ok in checks.items() if not ok]
     if missing:

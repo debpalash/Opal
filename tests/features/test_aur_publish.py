@@ -13,7 +13,7 @@ from .harness import *  # noqa: F401,F403
 
 def _read(rel):
     fp = _os.path.join(PROJECT_DIR, rel)
-    return open(fp).read() if _os.path.exists(fp) else ""
+    return open(fp, encoding="utf-8").read() if _os.path.exists(fp) else ""
 
 
 @test("AUR push script: package list expands to two packages", "Packaging")
@@ -37,7 +37,10 @@ def test_aur_pkg_list_regression():
     if not m:
         return "fail", "could not locate the package-list block to execute"
     snippet = m.group(0) + '\nprintf "%s\\n" "${PKGS[@]}"'
-    out = subprocess.run(["bash", "-c", snippet, "_"], capture_output=True, text=True)
+    shell = _posix_shell()
+    if shell is None:
+        return "skip", "package-list source guard passes; no POSIX shell for expansion probe"
+    out = subprocess.run([shell, "-c", snippet, "_"], capture_output=True, text=True)
     got = out.stdout.split()
     if got != ["opal-media-player", "opal-media-player-bin"]:
         return "fail", f"default package list expands to {got!r}, want the two Opal media packages"

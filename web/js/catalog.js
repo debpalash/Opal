@@ -288,6 +288,13 @@ async function loadQueue(){
     const q = await api('/queue');
     const items = q.items || [];
     const played = items.filter(i => i.played).length;
+    $('queue-shuffle').textContent = `Shuffle: ${q.shuffle ? 'on' : 'off'}`;
+    $('queue-shuffle').setAttribute('aria-pressed', q.shuffle ? 'true' : 'false');
+    $('queue-repeat').textContent = `Repeat: ${q.repeat || 'off'}`;
+    $('queue-previous').disabled = items.length === 0;
+    $('queue-next').disabled = items.length === 0;
+    $('queue-shuffle').disabled = items.length < 2;
+    $('queue-repeat').disabled = items.length === 0;
     $('queue-clear-played').disabled = played === 0;
     $('queue-clear').disabled = items.length === 0;
     $('queue-status').textContent = `${items.length} queue item${items.length === 1 ? '' : 's'}, ${played} played`;
@@ -312,6 +319,10 @@ async function loadQueue(){
     $('queue').innerHTML = '<div class="empty">Queue unavailable</div>';
     $('queue-clear-played').disabled = true;
     $('queue-clear').disabled = true;
+    $('queue-previous').disabled = true;
+    $('queue-next').disabled = true;
+    $('queue-shuffle').disabled = true;
+    $('queue-repeat').disabled = true;
   }
 }
 
@@ -332,6 +343,10 @@ $('queue').addEventListener('click', e => {
 });
 $('queue-clear-played').onclick = () => changeQueue('clear-played');
 $('queue-clear').onclick = () => changeQueue('clear');
+$('queue-previous').onclick = () => changeQueue('previous');
+$('queue-next').onclick = () => changeQueue('next');
+$('queue-shuffle').onclick = () => changeQueue('toggle-shuffle');
+$('queue-repeat').onclick = () => changeQueue('cycle-repeat');
 
 async function loadDownloads(){
   try {

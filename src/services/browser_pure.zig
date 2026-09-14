@@ -38,10 +38,29 @@ pub fn percentEncodeQuery(input: []const u8, out: []u8) []const u8 {
 }
 
 fn hasScheme(s: []const u8) bool {
-    return std.mem.startsWith(u8, s, "http://") or
-        std.mem.startsWith(u8, s, "https://") or
-        std.mem.startsWith(u8, s, "file://") or
-        std.mem.startsWith(u8, s, "about:");
+    const colon = std.mem.indexOfScalar(u8, s, ':') orelse return false;
+    // A one-letter prefix is a Windows drive, not a URI scheme (C:\\...).
+    if (colon < 2 or !std.ascii.isAlphabetic(s[0])) return false;
+    for (s[1..colon]) |ch| {
+        if (!std.ascii.isAlphanumeric(ch) and ch != '+' and ch != '-' and ch != '.') return false;
+    }
+    if (colon + 2 < s.len and s[colon + 1] == '/' and s[colon + 2] == '/') return true;
+    // Schemes commonly entered without //; don't mistake localhost:3000 for one.
+    const scheme = s[0..colon];
+    return std.ascii.eqlIgnoreCase(scheme, "about") or
+        std.ascii.eqlIgnoreCase(scheme, "magnet") or
+        std.ascii.eqlIgnoreCase(scheme, "data") or
+        std.ascii.eqlIgnoreCase(scheme, "mailto");
+}
+
+fn isExplicitPath(s: []const u8) bool {
+    if (std.mem.startsWith(u8, s, "/") or
+        std.mem.startsWith(u8, s, "\\\\") or
+        std.mem.startsWith(u8, s, "~/") or
+        std.mem.startsWith(u8, s, "./") or
+        std.mem.startsWith(u8, s, "../")) return true;
+    return s.len >= 3 and std.ascii.isAlphabetic(s[0]) and s[1] == ':' and
+        (s[2] == '\\' or s[2] == '/');
 }
 
 /// Heuristic: does the (trimmed, scheme-less) input look like a host the user
@@ -284,7 +303,7 @@ pub fn historyMatchScore(query: []const u8, url: []const u8, title: []const u8) 
 pub fn resolveAddress(input: []const u8, out: []u8) []const u8 {
     const s = std.mem.trim(u8, input, " \t\r\n");
     if (s.len == 0) return s;
-    if (hasScheme(s)) return s;
+    if (hasScheme(s) or isExplicitPath(s)) return s;
     if (looksLikeHost(s)) {
         const n = @min(s.len, out.len -| 8);
         return std.fmt.bufPrint(out, "https://{s}", .{s[0..n]}) catch s;
@@ -294,6 +313,35 @@ pub fn resolveAddress(input: []const u8, out: []u8) []const u8 {
     @memcpy(out[0..prefix.len], prefix);
     const q = percentEncodeQuery(s, out[prefix.len..]);
     return out[0 .. prefix.len + q.len];
+}
+
+/// Intent behind the shared navbar box. Keeping this pure makes Enter routing
+/// deterministic and prevents URL/path heuristics from drifting between views.
+pub const OmniboxIntent = enum { empty, memory, assistant, open, search };
+
+pub fn classifyOmnibox(input: []const u8) OmniboxIntent {
+    const s = std.mem.trim(u8, input, " \t\r\n");
+    if (s.len == 0) return .empty;
+    if (s.len > 1 and s[0] == '?') return .memory;
+    if (s[0] == '>') return .assistant;
+    if (hasScheme(s) or isExplicitPath(s) or looksLikeHost(s)) return .open;
+    // Bare local filenames such as movie.mkv have a dot and resemble hosts, but
+    // the content router knows their extension and should send them to mpv.
+    if (routeContent(s) != .web) return .open;
+    if (s[s.len - 1] == '?') return .assistant;
+    return .search;
+}
+
+/// Normalize input already classified as `.open`. Unlike `resolveAddress`, a
+/// bare media filename stays a local filename instead of becoming a fake host.
+pub fn resolveOpenTarget(input: []const u8, out: []u8) []const u8 {
+    const s = std.mem.trim(u8, input, " \t\r\n");
+    if (s.len == 0 or hasScheme(s) or isExplicitPath(s) or hasKnownContentExtension(s)) return s;
+    if (looksLikeHost(s)) {
+        const n = @min(s.len, out.len -| 8);
+        return std.fmt.bufPrint(out, "https://{s}", .{s[0..n]}) catch s;
+    }
+    return s;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -348,6 +396,14 @@ pub fn composeKeyCombo(base: []const u8, ctrl: bool, cmd: bool, alt: bool, shift
 
 pub const ContentRoute = enum { mpv, comic_viewer, web, torrent };
 
+const media_exts = [_][]const u8{
+    ".mp4", ".m4v",  ".mkv",  ".avi",  ".mov",  ".webm", ".flv", ".wmv",
+    ".mpg", ".mpeg", ".ts",   ".m2ts", ".mts",  ".vob",  ".3gp", ".ogv",
+    ".mp3", ".flac", ".wav",  ".ogg",  ".opus", ".oga",  ".aac", ".m4a",
+    ".mka", ".wma",  ".aiff", ".m3u8",
+};
+const image_exts = [_][]const u8{ ".jpg", ".jpeg", ".png", ".gif", ".webp" };
+
 /// Case-insensitive suffix test. `.torrent` has to match `.TORRENT` too — the
 /// extension comes from whatever the user's filesystem / a web server wrote.
 fn endsWithIgnoreCase(haystack: []const u8, suffix: []const u8) bool {
@@ -357,6 +413,13 @@ fn endsWithIgnoreCase(haystack: []const u8, suffix: []const u8) bool {
         if (std.ascii.toLower(a) != std.ascii.toLower(b)) return false;
     }
     return true;
+}
+
+fn hasKnownContentExtension(value: []const u8) bool {
+    if (endsWithIgnoreCase(value, ".torrent")) return true;
+    for (media_exts) |ext| if (endsWithIgnoreCase(value, ext)) return true;
+    for (image_exts) |ext| if (endsWithIgnoreCase(value, ext)) return true;
+    return false;
 }
 
 /// Determine the correct pane provider for a given URL
@@ -369,14 +432,11 @@ pub fn routeContent(url: []const u8) ContentRoute {
     if (std.mem.startsWith(u8, url, "magnet:")) return .torrent;
     if (endsWithIgnoreCase(url, ".torrent")) return .torrent;
 
-    // Video/audio extensions → mpv
-    const mpv_exts = [_][]const u8{
-        ".mp4", ".mkv",  ".avi", ".webm", ".flv", ".mov", ".m4v",
-        ".mp3", ".flac", ".ogg", ".wav",  ".aac", ".m4a", ".m3u8",
-        ".ts",
-    };
-    for (mpv_exts) |ext| {
-        if (std.mem.endsWith(u8, url, ext)) return .mpv;
+    // Video/audio extensions → mpv. Case-insensitive: cameras and Windows
+    // tools routinely write .MP4/.MOV/.AVI, and a double-clicked uppercase
+    // file must play, not land in the web browser.
+    for (media_exts) |ext| {
+        if (endsWithIgnoreCase(url, ext)) return .mpv;
     }
 
     // Video hosting sites → mpv (via yt-dlp)
@@ -405,10 +465,9 @@ pub fn routeContent(url: []const u8) ContentRoute {
         if (std.mem.indexOf(u8, url, domain) != null) return .comic_viewer;
     }
 
-    // Image galleries → comic_viewer
-    const img_exts = [_][]const u8{ ".jpg", ".jpeg", ".png", ".gif", ".webp" };
-    for (img_exts) |ext| {
-        if (std.mem.endsWith(u8, url, ext)) return .comic_viewer;
+    // Image galleries → comic_viewer (case-insensitive, same as above).
+    for (image_exts) |ext| {
+        if (endsWithIgnoreCase(url, ext)) return .comic_viewer;
     }
 
     // Everything else → web browser
@@ -464,6 +523,27 @@ test "resolveAddress falls back to search for phrases" {
         "https://duckduckgo.com/?q=node.js+tutorial",
         resolveAddress("node.js tutorial", &buf),
     );
+}
+
+test "omnibox classifies links paths questions and searches" {
+    try std.testing.expectEqual(OmniboxIntent.empty, classifyOmnibox("  "));
+    try std.testing.expectEqual(OmniboxIntent.open, classifyOmnibox("https://www.youtube.com/watch?v=HHUQvEWQLfI"));
+    try std.testing.expectEqual(OmniboxIntent.open, classifyOmnibox("https://example.com/?"));
+    try std.testing.expectEqual(OmniboxIntent.open, classifyOmnibox("youtube.com/watch?v=HHUQvEWQLfI"));
+    try std.testing.expectEqual(OmniboxIntent.open, classifyOmnibox("C:\\Movies\\Reacher 4K.mkv"));
+    try std.testing.expectEqual(OmniboxIntent.open, classifyOmnibox("\\\\nas\\media\\film.mp4"));
+    try std.testing.expectEqual(OmniboxIntent.open, classifyOmnibox("movie.mkv"));
+    try std.testing.expectEqual(OmniboxIntent.memory, classifyOmnibox("?rainy scene"));
+    try std.testing.expectEqual(OmniboxIntent.assistant, classifyOmnibox(">summarize this"));
+    try std.testing.expectEqual(OmniboxIntent.assistant, classifyOmnibox("what should I watch?"));
+    try std.testing.expectEqual(OmniboxIntent.search, classifyOmnibox("reacher season four"));
+}
+
+test "resolveOpenTarget preserves files and prefixes bare hosts" {
+    var buf: [512]u8 = undefined;
+    try std.testing.expectEqualStrings("https://youtube.com/watch?v=HHUQvEWQLfI", resolveOpenTarget("youtube.com/watch?v=HHUQvEWQLfI", &buf));
+    try std.testing.expectEqualStrings("movie.mkv", resolveOpenTarget("movie.mkv", &buf));
+    try std.testing.expectEqualStrings("C:\\Movies\\Reacher.mkv", resolveOpenTarget(" C:\\Movies\\Reacher.mkv ", &buf));
 }
 
 test "keypress forwarding suppresses plain text keys" {
@@ -606,4 +686,21 @@ test "routeContent regression: a .torrent must never route to the web browser" {
     // A .torrent whose path happens to contain a video-hosting domain string
     // must still be a torrent — the torrent test runs BEFORE the domain loops.
     try std.testing.expectEqual(ContentRoute.torrent, routeContent("/dl/youtube.com-rip.torrent"));
+}
+
+test "routeContent is case-insensitive and covers common container/codec extensions" {
+    // Cameras and Windows tools write uppercase extensions; a double-clicked
+    // MYCLIP.MP4 must play, not land in the web browser.
+    try std.testing.expectEqual(ContentRoute.mpv, routeContent("C:\\Users\\u\\Videos\\MYCLIP.MP4"));
+    try std.testing.expectEqual(ContentRoute.mpv, routeContent("/home/u/Vid/clip.MKV"));
+    try std.testing.expectEqual(ContentRoute.mpv, routeContent("/home/u/Vid/clip.Mov"));
+    try std.testing.expectEqual(ContentRoute.mpv, routeContent("https://x.cdn/movie.WEBM"));
+    try std.testing.expectEqual(ContentRoute.comic_viewer, routeContent("/home/u/Pics/photo.JPG"));
+    // Containers/codecs the old list missed must reach mpv too.
+    try std.testing.expectEqual(ContentRoute.mpv, routeContent("/home/u/Vid/clip.wmv"));
+    try std.testing.expectEqual(ContentRoute.mpv, routeContent("/home/u/Vid/clip.mpg"));
+    try std.testing.expectEqual(ContentRoute.mpv, routeContent("/home/u/Vid/clip.m2ts"));
+    try std.testing.expectEqual(ContentRoute.mpv, routeContent("/home/u/Music/song.opus"));
+    try std.testing.expectEqual(ContentRoute.mpv, routeContent("/home/u/Music/song.mka"));
+    try std.testing.expectEqual(ContentRoute.mpv, routeContent("/home/u/Music/song.wma"));
 }

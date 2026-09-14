@@ -168,9 +168,10 @@ class Pump:
         self.last_attempt = float("-inf")
         self.poke()
 
-    def interval(self):
+    def interval(self, now=None):
         """Current capture interval, or None when idle-stopped."""
-        now = time.monotonic()
+        if now is None:
+            now = time.monotonic()
         quiet = now - max(self.last_activity, self.last_change)
         since_input = now - self.last_activity
         if since_input < ACTIVE_WINDOW_S or now - self.last_change < ACTIVE_WINDOW_S:
@@ -213,13 +214,15 @@ class Pump:
         self.last_attempt = now
         self.capture(page)
 
-    def seconds_until_due(self):
+    def seconds_until_due(self, now=None):
         """Queue-wait timeout: time until the next capture is allowed, or
         None when idle-stopped (block on the queue indefinitely)."""
-        iv = self.interval()
+        if now is None:
+            now = time.monotonic()
+        iv = self.interval(now)
         if iv is None:
             return None
-        return max(0.0, self.last_attempt + iv - time.monotonic())
+        return max(0.0, self.last_attempt + iv - now)
 
     def push_page_state(self, page):
         """Push {"title","url"} when the page navigated underneath us."""
@@ -836,9 +839,10 @@ def selftest():
     p2 = Pump()
     if p2.seconds_until_due() != 0.0:
         failures.append("pump due at init")
-    p2.last_attempt = time.monotonic()
-    due = p2.seconds_until_due()
-    if due is None or not (0.0 < due <= FPS_ACTIVE_INTERVAL):
+    stamp = time.monotonic()
+    p2.last_attempt = stamp
+    due = p2.seconds_until_due(stamp)
+    if due is None or not (0.0 < due <= FPS_ACTIVE_INTERVAL + 1e-6):
         failures.append("pump rate gate")
     p2.last_activity -= IDLE_STOP_S + SETTLE_WINDOW_S + 1
     p2.last_change = p2.last_activity

@@ -908,7 +908,10 @@ fn findBookmark(url: []const u8) ?usize {
 fn toggleBookmark() void {
     const b = &state.app.browser;
     if (b.url_len == 0) return;
-    const url = b.url_buf[0..b.url_len];
+    const raw_url = b.url_buf[0..b.url_len];
+    var safe_buf: [2048]u8 = undefined;
+    const url = @import("../player/watch_history_pure.zig").credentialSafeIdentity(raw_url, &safe_buf);
+    if (url.len == 0) return;
     if (findBookmark(url)) |bi| {
         const stmt = db.prepare("DELETE FROM browser_bookmarks WHERE url = ?1") orelse return;
         defer db.finalize(stmt);
@@ -946,6 +949,9 @@ fn toggleBookmark() void {
 fn recordVisit(url: []const u8, title: []const u8) void {
     if (state.app.incognito_mode) return;
     if (!std.mem.startsWith(u8, url, "http")) return;
+    var safe_buf: [2048]u8 = undefined;
+    const safe_url = @import("../player/watch_history_pure.zig").credentialSafeIdentity(url, &safe_buf);
+    if (safe_url.len == 0) return;
     const stmt = db.prepare(
         \\INSERT INTO browser_history (url, title) VALUES (?1, ?2)
         \\ON CONFLICT(url) DO UPDATE SET
@@ -954,7 +960,7 @@ fn recordVisit(url: []const u8, title: []const u8) void {
         \\  title = CASE WHEN excluded.title != '' THEN excluded.title ELSE title END
     ) orelse return;
     defer db.finalize(stmt);
-    db.bindText(stmt, 1, url);
+    db.bindText(stmt, 1, safe_url);
     db.bindText(stmt, 2, title);
     _ = db.step(stmt);
     hist_loaded = false; // autocomplete cache refreshes lazily
@@ -2301,6 +2307,77 @@ fn maybeSyncViewport(w_in: f32, h_in: f32) void {
 // Content Router — auto-detect provider from URL
 // ══════════════════════════════════════════════════════════
 
+fn copySearch(dst: []u8, query: []const u8) void {
+    @memset(dst, 0);
+    const n = @min(query.len, dst.len -| 1);
+    @memcpy(dst[0..n], query[0..n]);
+}
+
+/// Route a plain omnibox query to the source currently visible on Browse.
+/// Both shell and embedded/legacy omniboxes call this service-owned seam, so
+/// the same text in the same view can never trigger two different products.
+/// Sources without a native query endpoint return false for universal fallback.
+pub fn searchCurrentBrowse(query: []const u8) bool {
+    if (query.len == 0 or state.app.router.current != .browse) return false;
+    switch (state.app.browse_source) {
+        .TMDB => {
+            copySearch(&state.app.tmdb.search_buf, query);
+            state.app.tmdb.view = .Search;
+            state.app.tmdb.page = 1;
+            @import("tmdb_api.zig").fetchCurrentView(false);
+        },
+        .YouTube => {
+            copySearch(&state.app.yt.search_buf, query);
+            @import("youtube.zig").fetchYoutube(query);
+        },
+        .Anime => {
+            copySearch(&state.app.anime.search_buf, query);
+            state.app.anime.mode = .search;
+            state.app.anime.sched_view = false;
+            @import("anime.zig").searchAnime(query);
+        },
+        .Podcasts => {
+            copySearch(&state.app.podcasts.search_buf, query);
+            @import("podcasts.zig").searchPodcasts(query);
+        },
+        .Radio => {
+            copySearch(&state.app.radio.search_buf, query);
+            @import("radio.zig").searchRadio(query);
+        },
+        .Iptv => {
+            copySearch(&state.app.iptv.search_buf, query);
+            @import("iptv.zig").searchIptv(query);
+        },
+        .Music => {
+            copySearch(&state.app.music.search_buf, query);
+            @import("music_subsonic.zig").searchMusic(query);
+        },
+        .Comics => {
+            copySearch(&state.app.comic.search_buf, query);
+            @import("comics.zig").searchComics(query);
+        },
+        .Novels => {
+            copySearch(&state.app.novels.search_buf, query);
+            state.app.novels.view = .search;
+            @import("novels.zig").searchNovels(query);
+        },
+        .Vndb => {
+            copySearch(&state.app.vndb.search_buf, query);
+            state.app.vndb.selected_idx = null;
+            @import("vndb.zig").searchVndb(query);
+        },
+        .Jellyfin => @import("jellyfin.zig").searchFor(query),
+        .Web => {
+            var url_buf: [2048]u8 = undefined;
+            navigate(pure.resolveAddress(query, &url_buf));
+        },
+        else => return false,
+    }
+    state.app.router.navigate(.browse);
+    state.showToast("Searching current source…");
+    return true;
+}
+
 // Routing logic lives in browser_pure.zig (unit-tested); re-exported here so
 // callers keep importing browser.routeContent / browser.ContentRoute.
 pub const ContentRoute = pure.ContentRoute;
@@ -2311,7 +2388,11 @@ pub const routeContent = pure.routeContent;
 /// cannot accidentally implement only part of a playback transition.
 pub const PlaybackRequest = struct {
     url: []const u8,
+    fallback_url: []const u8 = "",
     mode: player.LoadMode = .replace,
+    history_identity: []const u8 = "",
+    restore_target: []const u8 = "",
+    resume_position_secs: ?f64 = null,
     art_url: []const u8 = "",
     title: []const u8 = "",
     subtitle: []const u8 = "",
@@ -2326,7 +2407,7 @@ pub const PlaybackRequest = struct {
 pub fn playDirect(request: PlaybackRequest) void {
     if (request.url.len == 0) return;
     if (state.app.players.items.len == 0) {
-        if (player.MediaPlayer.init(alloc)) |np| {
+        if (player.acquire(alloc)) |np| {
             state.app.players.append(alloc, np) catch {
                 np.deinit(alloc);
                 return;
@@ -2351,7 +2432,11 @@ pub fn playDirect(request: PlaybackRequest) void {
 
     p.load(.{
         .url = request.url,
+        .fallback_url = request.fallback_url,
         .mode = request.mode,
+        .history_identity = request.history_identity,
+        .restore_target = request.restore_target,
+        .resume_position_secs = request.resume_position_secs,
         .user_agent = request.user_agent,
         .headers = request.headers,
     });
@@ -2476,6 +2561,22 @@ pub fn loadContent(url: []const u8) void {
 /// launch Resume prompt are *known playback*, so this forces the player: magnets
 /// go through the torrent engine, comics to the reader, everything else into mpv.
 pub fn resumePlayback(url: []const u8) void {
+    if (std.mem.startsWith(u8, url, "opal://jellyfin/video/")) {
+        @import("jellyfin.zig").playItem(url["opal://jellyfin/video/".len..]);
+        return;
+    }
+    if (std.mem.startsWith(u8, url, "opal://jellyfin/audio/")) {
+        @import("jellyfin.zig").playAudioItem(url["opal://jellyfin/audio/".len..]);
+        return;
+    }
+    if (std.mem.startsWith(u8, url, "opal://plex/")) {
+        @import("plex.zig").resumePlayback(url);
+        return;
+    }
+    if (std.mem.startsWith(u8, url, "opal://audiobookshelf/")) {
+        @import("audiobookshelf.zig").playBookById(url["opal://audiobookshelf/".len..], "Audiobook", "");
+        return;
+    }
     if (std.mem.startsWith(u8, url, "magnet:")) {
         @import("search.zig").loadTorrentToPlayer(url); // handles player reveal
         return;

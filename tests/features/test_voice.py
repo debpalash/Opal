@@ -359,8 +359,10 @@ def test_sherpa_canon():
     deps = os.path.join(PROJECT_DIR, "src/core/deps.zig")
     with open(deps) as f:
         content = f.read()
-    if 'cp "$m" "$d/$stem.onnx"' in content:
-        return "pass", "canonicalization step present"
+    if ('renameStagedFile(source_path' in content
+            and '"encoder.onnx"' in content
+            and '.layout = .stream' in content):
+        return "pass", "cross-platform staged canonicalization present"
     return "fail", "downloader leaves versioned onnx names (streaming dead)"
 
 

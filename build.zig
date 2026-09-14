@@ -120,6 +120,7 @@ pub fn build(b: *std.Build) void {
         // Force fortify off for every module that @cImports windows headers:
         // ours, dvui's (tinyfiledialogs), and dvui's sdl backend (SDL.h).
         exe.root_module.addCMacro("_FORTIFY_SOURCE", "0");
+        exe.root_module.linkSystemLibrary("crypt32", .{});
         // Win32 window-procedure fixes the custom title bar can't get through
         // SDL: work-area-aware maximize and caption double-click. Desktop only
         // — it calls into SDL, which the headless build does not link.
@@ -181,6 +182,12 @@ pub fn build(b: *std.Build) void {
         .filters = &.{"TV detail"},
     });
     const run_tv_detail_tests = b.addRunArtifact(tv_detail_tests);
+    if (is_windows) {
+        run_tv_detail_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{
+            msys_path_prefix,
+            b.graph.environ_map.get("PATH") orelse "",
+        }));
+    }
     b.step("test-tv-detail", "Test production TV metadata and restore helpers").dependOn(&run_tv_detail_tests.step);
 
     // DPI-bypass sidecar (debpalash/zig-bypassdpi): a cross-platform userspace
@@ -913,6 +920,26 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_ytdl_opts_pure).step);
 
+    // yt-dlp helper updater: exact release-asset checksum matching and strict
+    // staged version-probe output validation before atomic publication.
+    const test_ytdlp_update_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/ytdlp_update_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_ytdlp_update_pure).step);
+
+    const test_install_identity_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/install_identity_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_install_identity_pure).step);
+
     // mpv per-request HTTP headers: comma-safe joining for `http-header-fields`
     // and the Origin-from-Referer derivation. player.zig routes through these.
     const test_http_headers_pure = b.addTest(.{
@@ -934,6 +961,28 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_playback_load_pure).step);
+
+    // A media-version fallback stays armed through demux/decoder setup, is
+    // consumed once on a pre-playback failure, and cannot switch mid-stream.
+    const test_playback_fallback_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/player/playback_fallback_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_playback_fallback_pure).step);
+
+    // Hardware-decoder feedback waits until mpv has a real video decoder and
+    // distinguishes software fallback from unavailable/early property states.
+    const test_hwdec_feedback_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/player/hwdec_feedback_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_hwdec_feedback_pure).step);
 
     // DPI-bypass sidecar: mode validation, the "127.0.0.1:<port>" builder, and
     // the enabled&&running proxy gate. dpi_bypass.zig routes through these.
@@ -978,6 +1027,28 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_transfers_pure).step);
+
+    // Cold-start torrent opens are never discarded while the DHT/session worker
+    // initializes: preserve FIFO order, bounded capacity and source integrity.
+    const test_torrent_open_queue = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/torrent_open_queue.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_torrent_open_queue).step);
+
+    // Durable torrent restart stores only canonical v1/v2 swarm identities;
+    // private trackers, passkeys, peers and descriptive fields are stripped.
+    const test_torrent_intent_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/torrent_intent_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_torrent_intent_pure).step);
 
     // Comics sources — MangaDex URL building + allocation-free JSON scanning.
     // The ids land straight in a request path, so isValidId() is a security gate;
@@ -1392,6 +1463,17 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_ytdl_format_pure).step);
 
+    // Playback milestone ordering: stale render notifications from the old
+    // file must not be reported as the replacement load's first frame.
+    const test_playback_timing_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/player/playback_timing_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_playback_timing_pure).step);
+
     // Home console display helpers (hex-hash watch-history names).
     const test_home_pure = b.addTest(.{
         .root_module = b.createModule(.{
@@ -1556,6 +1638,20 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_watch_history_pure).step);
 
+    const test_secret_store = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/secret_store.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    if (is_windows) {
+        test_secret_store.root_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/lib", .{mingw_prefix}) });
+        test_secret_store.root_module.linkSystemLibrary("crypt32", .{});
+    }
+    test_step.dependOn(&b.addRunArtifact(test_secret_store).step);
+
     // Playlist advance engine — nextIndex/prevIndex across repeat modes
     // (off/all/one) plus the seeded deterministic shuffle permutation.
     // player.zig's auto-advance and the drawer's prev/next buttons route
@@ -1568,6 +1664,17 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_playlist_pure).step);
+
+    // Durable queue playback reuses the playlist repeat/shuffle engine while
+    // resolving the current row by stable SQLite identity.
+    const test_queue_playback_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/player/queue_playback_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_queue_playback_pure).step);
 
     // Scam/malware torrent heuristics (exe/scr/archive "movies", password
     // bait, implausible sizes). search.zig rows and resolver.playItem route
@@ -1627,6 +1734,17 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_audiobookshelf_pure).step);
+
+    // Stable provider-route parsing, progress validity/deduplication, and the
+    // exact bounded JSON payload used by non-blocking server progress sync.
+    const test_server_progress_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/server_progress_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_server_progress_pure).step);
 
     // OPDS reading-server client: Atom feed entry parsing (nav vs acquisition,
     // cover thumbnail-vs-full preference, XML-entity decode), relative→absolute

@@ -123,6 +123,14 @@ pub fn renderSettingsContent() void {
     });
     defer outer.deinit();
 
+    // The settings state is restored on the background init worker. Do not
+    // expose mutable defaults for the few milliseconds before that completes:
+    // an immediate click could otherwise be overwritten by the disk value.
+    if (!state.app.config_loaded.load(.acquire)) {
+        components.emptyState(icons.tvg.lucide.loader, "Loading preferences", "Your saved settings will be ready in a moment");
+        return;
+    }
+
     // Responsive: collapse the left nav to an icon-only rail when the settings
     // region is narrow (small window / drawer / device). rect.w is 0 on the
     // very first paint → default to the expanded layout (no collapse flash).
@@ -325,7 +333,7 @@ fn renderRightPane() void {
 
     // Crossfade tab switches — the inner settings navigation popped instantly
     // while every shell route fades with the same motion tokens.
-    var tab_fade = dvui.animate(@src(), .{ .kind = .alpha, .duration = theme.motion.base, .easing = theme.motion.enter }, .{
+    var tab_fade = dvui.animate(@src(), .{ .kind = .alpha, .duration = theme.motionDuration(theme.motion.base), .easing = theme.motion.enter }, .{
         .id_extra = @intFromEnum(state.app.settings_tab),
         .expand = .both,
     });
@@ -517,6 +525,7 @@ fn renderAIContentBody() void {
                 .gravity_x = 0.0,
             })) {
                 vb.active_kind = kind;
+                vb.voice_backend_explicit = true;
                 state.markConfigDirty();
                 state.showToast("Voice backend changed");
             }
@@ -687,16 +696,27 @@ fn renderAIContentBody() void {
     {
         const deps = @import("../core/deps.zig");
         const ds = deps.check();
-        // Whisper.cpp tiny model (~39MB)
-        modelRow("Whisper Tiny (39MB)", icons.tvg.lucide.@"audio-waveform", ds.whisper_model, deps.whisper_model_downloading.load(.acquire), 5000, @src());
-        // Sherpa STT model (~40MB)
-        modelRow("Sherpa STT (40MB)", icons.tvg.lucide.mic, ds.sherpa_model, deps.sherpa_model_downloading, 5001, @src());
-        // Sherpa Piper TTS (~40MB)
-        modelRow("Piper TTS (40MB)", icons.tvg.lucide.@"volume-2", ds.sherpa_tts_model, deps.sherpa_tts_downloading, 5002, @src());
-        // Kokoro TTS (~330MB)
-        modelRow("Kokoro TTS (330MB)", icons.tvg.lucide.@"audio-lines", ds.sherpa_kokoro_model, deps.sherpa_kokoro_downloading, 5003, @src());
-        // Streaming Zipformer (~80MB)
-        modelRow("Stream ASR (80MB)", icons.tvg.lucide.radio, ds.sherpa_stream_model, deps.sherpa_stream_downloading, 5004, @src());
+        // Download sizes reflect the pinned upstream release assets.
+        if (modelRow("Whisper Tiny (75MB)", icons.tvg.lucide.@"audio-waveform", ds.whisper_model, deps.whisper_model_downloading.load(.acquire), 5000, @src())) {
+            deps.fetchWhisperModelAsync();
+            state.showToast("Downloading Whisper Tiny (75 MB)");
+        }
+        if (modelRow("Sherpa STT (113MB)", icons.tvg.lucide.mic, ds.sherpa_model, deps.sherpa_model_downloading.load(.acquire), 5001, @src())) {
+            deps.fetchSherpaWhisperAsync();
+            state.showToast("Downloading Sherpa STT (113 MB)");
+        }
+        if (modelRow("Piper TTS (64MB)", icons.tvg.lucide.@"volume-2", ds.sherpa_tts_model, deps.sherpa_tts_downloading.load(.acquire), 5002, @src())) {
+            deps.fetchSherpaTtsAsync();
+            state.showToast("Downloading Piper TTS (64 MB)");
+        }
+        if (modelRow("Kokoro TTS (305MB)", icons.tvg.lucide.@"audio-lines", ds.sherpa_kokoro_model, deps.sherpa_kokoro_downloading.load(.acquire), 5003, @src())) {
+            deps.fetchSherpaKokoroAsync();
+            state.showToast("Downloading Kokoro TTS (305 MB)");
+        }
+        if (modelRow("Stream ASR (296MB)", icons.tvg.lucide.radio, ds.sherpa_stream_model, deps.sherpa_stream_downloading.load(.acquire), 5004, @src())) {
+            deps.fetchSherpaStreamAsync();
+            state.showToast("Downloading Stream ASR (296 MB)");
+        }
         // MLX Whisper (~1.6GB) — custom row with live status
         {
             const mlx_installed = ds.mlx_whisper_model and ds.mlx_whisper_cli;
@@ -957,7 +977,7 @@ fn aiSectionWithIcon(icon_data: anytype, comptime title: []const u8, comptime su
     }
 }
 
-fn modelRow(comptime name: []const u8, icon_data: anytype, installed: bool, downloading: bool, id_extra: usize, src: std.builtin.SourceLocation) void {
+fn modelRow(comptime name: []const u8, icon_data: anytype, installed: bool, downloading: bool, id_extra: usize, src: std.builtin.SourceLocation) bool {
     // Calm: a spacing-only row (no card fill / border / radius). The icon
     // tint + a text-only status pill carry the state.
     var row = dvui.box(src, .{ .dir = .horizontal }, .{
@@ -991,8 +1011,17 @@ fn modelRow(comptime name: []const u8, icon_data: anytype, installed: bool, down
     } else if (installed) {
         components.statusPill("Installed", .success);
     } else {
-        components.statusPill("Not installed", .info);
+        return dvui.button(src, "Download", .{}, .{
+            .id_extra = id_extra + 60,
+            .color_fill = theme.colors.accent,
+            .color_text = theme.colors.text_on_accent,
+            .border = dvui.Rect.all(0),
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+            .gravity_y = 0.5,
+        });
     }
+    return false;
 }
 
 // ── Shared selects (used by both the AI drawer tab and the Language tab) ──
@@ -1095,6 +1124,15 @@ fn renderGeneralTab() void {
     }
 
     // Grid Layout — short ramp via segment.
+    {
+        const before = state.app.reduce_motion;
+        components.toggleRow(@src(), "Reduce motion", "Make route, panel, toggle and notification transitions immediate", &state.app.reduce_motion);
+        if (state.app.reduce_motion != before) {
+            theme.setReducedMotion(state.app.reduce_motion);
+            state.markConfigDirty();
+        }
+    }
+
     settingRow("Grid Layout", 11, @src());
     {
         const modes = [_]state.GridMode{ .auto, .cols_1, .cols_2, .cols_3, .cols_4 };
@@ -3392,11 +3430,15 @@ fn renderLangLearnTab() void {
                 var cmd_buf: [64]u8 = undefined;
                 if (clicked == 0) {
                     _ = c.mpv.mpv_command_string(p.mpv_ctx, "set sid no");
+                    state.app.subtitles_enabled = false;
                 } else {
                     if (std.fmt.bufPrintZ(&cmd_buf, "set sid {d}", .{clicked})) |cmd| {
                         _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
                     } else |_| {}
+                    _ = c.mpv.mpv_command_string(p.mpv_ctx, "set sub-visibility yes");
+                    state.app.subtitles_enabled = true;
                 }
+                state.markConfigDirty();
             }
         } else {
             _ = dvui.label(@src(), "No active player", .{}, .{ .color_text = theme.colors.text_tertiary });
@@ -4165,18 +4207,20 @@ pub fn renderDepsModal() void {
         pending: bool = false, // model being downloaded
     };
     const deps_mod = @import("../core/deps.zig");
-    const sherpa_dl = deps_mod.sherpa_model_downloading;
-    const tts_dl = deps_mod.sherpa_tts_downloading;
+    const sherpa_dl = deps_mod.sherpa_model_downloading.load(.acquire);
+    const tts_dl = deps_mod.sherpa_tts_downloading.load(.acquire);
+    const stream_dl = deps_mod.sherpa_stream_downloading.load(.acquire);
+    const kokoro_dl = deps_mod.sherpa_kokoro_downloading.load(.acquire);
     const rows = [_]DepRow{
         .{ .name = "apfel", .desc = "LLM backend (Apple Intelligence)", .ok = s.apfel },
         .{ .name = "ffmpeg", .desc = "Mic capture for voice mode", .ok = s.ffmpeg },
         .{ .name = "whisper-cpp", .desc = "STT engine (default)", .ok = s.whisper },
-        .{ .name = "ggml-tiny.en", .desc = "whisper model (auto-downloading)", .ok = s.whisper_model, .pending = !s.whisper_model },
+        .{ .name = "ggml-tiny.en", .desc = if (deps_mod.whisper_model_downloading.load(.acquire)) "Downloading Whisper Tiny…" else "download from Models & Dependencies", .ok = s.whisper_model, .pending = deps_mod.whisper_model_downloading.load(.acquire) },
         .{ .name = "sherpa-onnx", .desc = "STT engine (optional — streaming + VITS TTS)", .ok = s.sherpa_onnx },
         .{ .name = "sherpa STT model", .desc = if (sherpa_dl) "Downloading sherpa whisper-tiny…" else "click Download", .ok = s.sherpa_model, .pending = sherpa_dl },
         .{ .name = "sherpa TTS model", .desc = if (tts_dl) "Downloading Piper-VITS en_US-lessac-medium…" else "click Download", .ok = s.sherpa_tts_model, .pending = tts_dl },
-        .{ .name = "sherpa streaming", .desc = if (deps_mod.sherpa_stream_downloading) "Downloading streaming Zipformer…" else "click Download", .ok = s.sherpa_stream_model, .pending = deps_mod.sherpa_stream_downloading },
-        .{ .name = "sherpa Kokoro", .desc = if (deps_mod.sherpa_kokoro_downloading) "Downloading Kokoro (~330MB)…" else "premium TTS, 53+ voices", .ok = s.sherpa_kokoro_model, .pending = deps_mod.sherpa_kokoro_downloading },
+        .{ .name = "sherpa streaming", .desc = if (stream_dl) "Downloading streaming Zipformer…" else "click Download", .ok = s.sherpa_stream_model, .pending = stream_dl },
+        .{ .name = "sherpa Kokoro", .desc = if (kokoro_dl) "Downloading Kokoro (~305MB)…" else "premium TTS, 53+ voices", .ok = s.sherpa_kokoro_model, .pending = kokoro_dl },
     };
 
     for (rows, 0..) |r, i| {

@@ -164,7 +164,8 @@ def test_player_dropups():
         "chip anchor recorded": "picker_anchor" in ft and "recordAnchor(" in ft,
         "panel anchors to the chip": "footer.anchorFor(" in pk,
         # With no backdrop there is nothing to swallow a stray click, so Esc must work.
-        "esc dismisses": "pub fn handleDropUpKeys(" in pk and "pickers.handleDropUpKeys();" in ft,
+        "esc dismisses": "pub fn handleDropUpInput(" in pk
+            and "pickers.handleDropUpInput();" in ft and "ke.code == .escape" in pk,
         # FF button now toggles fullscreen, reusing the same path the 'f' key drives.
         "ff toggles fullscreen": ("fullscreen_player_idx" in ft
                                   and 'components.tip(@src(), wd, if (is_fs) "Exit fullscreen (f)"' in ft),
@@ -266,7 +267,7 @@ def test_c_toggles_subs():
     return "pass", "C toggles sub-visibility; comic viewer still auto-routed by URL"
 
 
-@test("Nav Donate Button", "Page Shell")
+@test("Donate remains reachable without nav clutter", "Page Shell")
 def test_nav_donate_button():
     # The button itself is dvui draw code (GUI-only, not unit-testable), so this
     # pins the wiring instead: one URL constant, the chip lives in header.zig,
@@ -277,22 +278,19 @@ def test_nav_donate_button():
     settings = _src("src/ui/settings.zig")
     checks = {
         "single URL constant": hdr.count("pub const DONATE_URL") == 1,
-        "chip in header": "pub fn donateButton()" in hdr and "lucide.heart" in hdr,
-        "shell call site": "header.donateButton();" in shell,
+        "reachable in More": 'menuItemLabel(@src(), "Donate"' in shell,
         "reuses openExternal": ("pub fn openExternal" in settings
                                 and 'openExternal(DONATE_URL)' in hdr),
         # A donate chip that spawns its own child process = duplicated launcher.
         "no second launcher": "Child.init(" not in hdr,
         # The input flexes into available space and moves to its own compact
         # row; the optional donate chip is hidden before space gets tight.
-        "omnibox responsive": '.min_size_content = .{ .w = 80, .h = 26 }' in shell
-            and 'if (!narrow and !compact) header.donateButton();' in shell
-            and 'omnibox(true);' in shell,
+        "omnibox responsive": 'if (!compact) omnibox(narrow);' in shell and 'omnibox(true);' in shell,
     }
     missing = [k for k, v in checks.items() if not v]
     if missing:
         return "fail", "donate button wiring incomplete: " + ", ".join(missing)
-    return "pass", "donate chip: header.zig → openExternal, responsive unified input"
+    return "pass", "Donate stays one action away in More; primary nav stays uncluttered"
 
 
 @test("EZTV Release Calendar (neutral + live)", "Page Shell")

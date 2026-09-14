@@ -27,9 +27,14 @@ const is_windows = builtin.os.tag == .windows;
 /// this file still compiles everywhere.
 const native = if (is_windows) struct {
     extern fn opal_titlebar_install_native(win: ?*anyopaque) void;
+    extern fn opal_titlebar_begin_native_drag(win: ?*anyopaque) c_int;
 } else struct {
     fn opal_titlebar_install_native(win: ?*anyopaque) void {
         _ = win;
+    }
+    fn opal_titlebar_begin_native_drag(win: ?*anyopaque) c_int {
+        _ = win;
+        return 0;
     }
 };
 
@@ -58,6 +63,10 @@ var installed: bool = false;
 var band_frac: f32 = 0.05;
 var controls_frac: f32 = 0.85;
 var controls_active: bool = false;
+
+fn playerOverlay() bool {
+    return state.app.page_shell_enabled and state.app.router.current == .player;
+}
 
 /// Whether the custom title bar should be active. Windows-only for now; other
 /// platforms keep their native decorations (macOS traffic lights, etc.).
@@ -120,10 +129,17 @@ pub fn ensureEnabled(win: ?*c.sdl.SDL_Window) void {
     native.opal_titlebar_install_native(win);
 }
 
+/// Enter the platform's native caption-drag loop from a drag gesture on the
+/// video surface. Windows owns the move from here, including Aero Snap.
+pub fn beginNativeDrag() bool {
+    if (!active() or sdl_window == null) return false;
+    return native.opal_titlebar_begin_native_drag(sdl_window) != 0;
+}
+
 fn ctlButton(id: u32, icon_data: []const u8, danger: bool) bool {
     return dvui.buttonIcon(@src(), "", icon_data, .{}, .{}, .{
         .id_extra = id,
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = if (playerOverlay()) theme.transparent else theme.colors.bg_surface,
         .color_fill_hover = if (danger) theme.colors.danger else theme.colors.bg_hover,
         .color_text = theme.colors.text_secondary,
         .border = dvui.Rect.all(0),
@@ -147,7 +163,7 @@ pub fn render() void {
     var bar = dvui.overlay(@src(), .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = if (playerOverlay()) theme.transparent else theme.colors.bg_surface,
         .min_size_content = .{ .w = 0, .h = HEIGHT },
     });
 

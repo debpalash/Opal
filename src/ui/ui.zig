@@ -177,7 +177,7 @@ pub fn renderWorkspaceModals() void {
 
         // Fade the dialog content in (dvui floating windows have no built-in
         // open animation; AnimateWidget self-drives its repaints).
-        var fade = dvui.animate(@src(), .{ .kind = .alpha, .duration = theme.motion.fast, .easing = theme.motion.enter }, .{ .expand = .both });
+        var fade = dvui.animate(@src(), .{ .kind = .alpha, .duration = theme.motionDuration(theme.motion.fast), .easing = theme.motion.enter }, .{ .expand = .both });
         defer fade.deinit();
 
         // Body
@@ -264,7 +264,7 @@ pub fn renderWorkspaceModals() void {
         defer win.deinit();
         win.dragAreaSet(dvui.windowHeader("Load Workspace", "", &state.app.ws_load_open));
 
-        var fade = dvui.animate(@src(), .{ .kind = .alpha, .duration = theme.motion.fast, .easing = theme.motion.enter }, .{ .expand = .both });
+        var fade = dvui.animate(@src(), .{ .kind = .alpha, .duration = theme.motionDuration(theme.motion.fast), .easing = theme.motion.enter }, .{ .expand = .both });
         defer fade.deinit();
 
         // Body

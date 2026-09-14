@@ -9,6 +9,24 @@ const alloc = @import("../core/alloc.zig").allocator;
 var store_mutex: @import("../core/sync.zig").Mutex = .{};
 var publication_gen: u64 = 0;
 
+const RecoveryRequest = struct {
+    item_id: [64]u8 = std.mem.zeroes([64]u8),
+    item_id_len: usize = 0,
+    identity: [128]u8 = std.mem.zeroes([128]u8),
+    identity_len: usize = 0,
+    player_idx: usize = 0,
+};
+
+var recovery_active = std.atomic.Value(bool).init(false);
+var recovery_ready = std.atomic.Value(bool).init(false);
+var recovery_player_idx: usize = 0;
+var recovery_identity: [128]u8 = std.mem.zeroes([128]u8);
+var recovery_identity_len: usize = 0;
+var recovery_url: [4096]u8 = std.mem.zeroes([4096]u8);
+var recovery_url_len: usize = 0;
+var recovery_error: [128]u8 = std.mem.zeroes([128]u8);
+var recovery_error_len: usize = 0;
+
 pub const PresentationItem = struct {
     id: [64]u8,
     id_len: usize,
@@ -314,7 +332,9 @@ pub fn authenticate() void {
             @memcpy(&user_buf_local, &state.app.jf.login_user_buf);
             var pass_buf_local: [128]u8 = undefined;
             @memcpy(&pass_buf_local, &state.app.jf.login_pass_buf);
+            @memset(&state.app.jf.login_pass_buf, 0);
             store_mutex.unlock();
+            defer @memset(&pass_buf_local, 0);
             const server = server_buf[0..server_len];
 
             if (server.len == 0) {
@@ -352,17 +372,26 @@ pub fn authenticate() void {
             const url = std.fmt.bufPrint(&url_buf, "{s}/Users/AuthenticateByName", .{server}) catch return;
 
             var auth_hdr: [256]u8 = undefined;
-            const auth_val = std.fmt.bufPrint(&auth_hdr, "X-Emby-Authorization: MediaBrowser Client=\"Opal\", Device=\"Desktop\", DeviceId=\"opal-001\", Version=\"1.0\"", .{}) catch return;
+            const device_id = if (state.app.install_id[0] != 0) state.app.install_id[0..] else "opal";
+            const auth_val = std.fmt.bufPrint(&auth_hdr, "X-Emby-Authorization: MediaBrowser Client=\"Opal\", Device=\"Desktop\", DeviceId=\"{s}\", Version=\"{s}\"", .{ device_id, @import("../core/app_meta.zig").version }) catch return;
 
             var resp_buf: [16384]u8 = undefined;
+            var response_status: ?std.http.Status = null;
             const resp = @import("../core/http.zig").fetch(url, &resp_buf, .{
                 .method = .POST,
                 .payload = body,
                 .content_type = "application/json",
                 .auth_header = auth_val,
                 .timeout_secs = 10,
+                .status_out = &response_status,
             }) orelse {
-                setLoginError("Failed to connect or no response");
+                if (response_status) |status| {
+                    if (@import("jellyfin_pure.zig").authRejected(@intFromEnum(status))) {
+                        setLoginError("Sign-in rejected — check credentials");
+                        return;
+                    }
+                }
+                setLoginError("Server unavailable — check address and network");
                 return;
             };
 
@@ -557,7 +586,7 @@ fn searchItemsSync(query: []const u8, my_gen: u32, append: bool) void {
 
     const start_index: usize = if (append) state.app.jf.item_count else 0;
     var url_buf: [1024]u8 = undefined;
-    const url = std.fmt.bufPrint(&url_buf, "{s}/Users/{s}/Items?SearchTerm={s}&Recursive=true&Limit={d}&StartIndex={d}&Fields=Overview,Path&IncludeItemTypes=Movie,Series,Episode,Audio,MusicAlbum", .{ server, uid, enc, JF_SEARCH_LIMIT, start_index }) catch return;
+    const url = std.fmt.bufPrint(&url_buf, "{s}/Users/{s}/Items?SearchTerm={s}&Recursive=true&Limit={d}&StartIndex={d}&Fields=Overview,Path,MediaSources&IncludeItemTypes=Movie,Series,Episode,Audio,MusicAlbum", .{ server, uid, enc, JF_SEARCH_LIMIT, start_index }) catch return;
 
     const body = jfGet(url) orelse return;
     defer alloc.free(body);
@@ -581,7 +610,7 @@ fn fetchItemsSync(parent_id: []const u8, recursive: bool, my_gen: u32, append: b
     var url_buf: [1024]u8 = undefined;
     const rec_str: []const u8 = if (recursive) "&Recursive=true" else "";
     const start_index: usize = if (append) state.app.jf.item_count else 0;
-    const url = std.fmt.bufPrint(&url_buf, "{s}/Users/{s}/Items?ParentId={s}&Fields=Overview,Path&Limit={d}&StartIndex={d}{s}", .{ server, uid, parent_id, JF_PAGE_LIMIT, start_index, rec_str }) catch return;
+    const url = std.fmt.bufPrint(&url_buf, "{s}/Users/{s}/Items?ParentId={s}&Fields=Overview,Path,MediaSources&Limit={d}&StartIndex={d}{s}", .{ server, uid, parent_id, JF_PAGE_LIMIT, start_index, rec_str }) catch return;
 
     const body = jfGet(url) orelse return;
     defer alloc.free(body);
@@ -646,6 +675,11 @@ fn parseItemsResponse(body: []const u8, append: bool) usize {
             @memcpy(item.id[0..ilen], id[0..ilen]);
             item.id_len = ilen;
         }
+        if (@import("jellyfin_pure.zig").firstMediaSourceId(obj)) |source_id| {
+            const slen = @min(source_id.len, item.media_source_id.len);
+            @memcpy(item.media_source_id[0..slen], source_id[0..slen]);
+            item.media_source_id_len = slen;
+        }
 
         // Name
         if (extractJsonString(obj, "\"Name\":\"")) |name| {
@@ -685,6 +719,10 @@ fn parseItemsResponse(body: []const u8, append: bool) usize {
         if (extractJsonInt(obj, "\"RunTimeTicks\":")) |t| {
             item.runtime_ticks = t;
         }
+        if (std.mem.indexOf(u8, obj, "\"UserData\":")) |ud_start| {
+            if (extractJsonInt(obj[ud_start..], "\"PlaybackPositionTicks\":")) |ticks|
+                item.played_ticks = ticks;
+        }
 
         // Primary image presence: Jellyfin serializes `"ImageTags":{"Primary":…}`
         // on items that have cover art. Scope the "Primary" lookup to the
@@ -707,43 +745,220 @@ fn parseItemsResponse(body: []const u8, append: bool) usize {
 // Playback
 // ══════════════════════════════════════════════════════════
 
-pub fn playItem(item_id: []const u8) void {
-    const server = state.app.jf.server_url[0..state.app.jf.server_url_len];
-    const token = state.app.jf.token[0..state.app.jf.token_len];
+const transcode_profile =
+    \\{"EnableDirectPlay":false,"EnableDirectStream":false,"EnableTranscoding":true,"AllowVideoStreamCopy":true,"AllowAudioStreamCopy":true,"DeviceProfile":{"Name":"Opal compatibility","MaxStreamingBitrate":120000000,"TranscodingProfiles":[{"Container":"ts","Type":"Video","VideoCodec":"h264","AudioCodec":"aac","Protocol":"hls","Context":"Streaming","MaxAudioChannels":"8","MinSegments":1,"BreakOnNonKeyFrames":true}]}}
+;
 
-    if (server.len == 0 or token.len == 0) return;
+/// Begin a server-generated HLS fallback after both immediate direct-play URLs
+/// failed. Normal playback never waits for this request.
+pub fn requestTranscodeRecovery(identity: []const u8, player_idx: usize) bool {
+    const prefix = "opal://jellyfin/video/";
+    if (!std.mem.startsWith(u8, identity, prefix) or player_idx >= state.app.players.items.len) return false;
+    const item_id = identity[prefix.len..];
+    if (!@import("jellyfin_pure.zig").validItemId(item_id)) return false;
+    if (recovery_active.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) return false;
 
-    // Build direct stream URL (null-terminated for C API)
-    var url_buf: [1024]u8 = undefined;
-    const url = std.fmt.bufPrintZ(&url_buf, "{s}/Videos/{s}/stream?static=true&api_key={s}", .{ server, item_id, token }) catch return;
+    var request: RecoveryRequest = .{ .player_idx = player_idx };
+    request.item_id_len = item_id.len;
+    @memcpy(request.item_id[0..item_id.len], item_id);
+    request.identity_len = @min(identity.len, request.identity.len);
+    @memcpy(request.identity[0..request.identity_len], identity[0..request.identity_len]);
+    recovery_ready.store(false, .release);
 
-    // Use the player module to load URL into mpv
-    if (state.app.active_player_idx < state.app.players.items.len) {
-        const p = state.app.players.items[state.app.active_player_idx];
-        p.load_file(url.ptr);
-        state.showToast("Playing from Jellyfin");
+    workers.spawn(struct {
+        fn worker(req: RecoveryRequest) void {
+            var connection = connectionSnapshot();
+            defer @memset(&connection.token, 0);
+            var user_id: [64]u8 = undefined;
+            var user_id_len: usize = 0;
+            store_mutex.lock();
+            user_id_len = @min(state.app.jf.user_id_len, user_id.len);
+            @memcpy(user_id[0..user_id_len], state.app.jf.user_id[0..user_id_len]);
+            store_mutex.unlock();
+
+            var url_buf: [512]u8 = undefined;
+            var auth_buf: [600]u8 = undefined;
+            defer @memset(&auth_buf, 0);
+            var resolved_buf: [4096]u8 = undefined;
+            var resolved: []const u8 = "";
+            var failure: []const u8 = "Jellyfin could not provide a compatible stream";
+            var response_status: ?std.http.Status = null;
+
+            if (connection.connected and connection.server_len > 0 and connection.token_len > 0 and
+                @import("jellyfin_pure.zig").validItemId(user_id[0..user_id_len]))
+            request_block: {
+                const url = std.fmt.bufPrint(&url_buf, "{s}/Items/{s}/PlaybackInfo?UserId={s}", .{
+                    connection.server[0..connection.server_len],
+                    req.item_id[0..req.item_id_len],
+                    user_id[0..user_id_len],
+                }) catch break :request_block;
+                const device_id = if (state.app.install_id[0] != 0) state.app.install_id[0..] else "opal";
+                const auth = std.fmt.bufPrint(&auth_buf, "X-Emby-Authorization: MediaBrowser Client=\"Opal\", Device=\"Desktop\", DeviceId=\"{s}\", Version=\"{s}\", Token=\"{s}\"", .{
+                    device_id,
+                    @import("../core/app_meta.zig").version,
+                    connection.token[0..connection.token_len],
+                }) catch break :request_block;
+                const response_buf = alloc.alloc(u8, 256 * 1024) catch break :request_block;
+                defer {
+                    @memset(response_buf, 0);
+                    alloc.free(response_buf);
+                }
+                const response = @import("../core/http.zig").fetch(url, response_buf, .{
+                    .method = .POST,
+                    .payload = transcode_profile,
+                    .content_type = "application/json",
+                    .accept = "application/json",
+                    .auth_header = auth,
+                    .timeout_secs = 12,
+                    .status_out = &response_status,
+                }) orelse {
+                    if (response_status) |status| if (@import("jellyfin_pure.zig").authRejected(@intFromEnum(status))) {
+                        expireAuthSession();
+                        failure = "Jellyfin session expired — reconnect to play";
+                    };
+                    break :request_block;
+                };
+                resolved = @import("jellyfin_pure.zig").transcodingUrl(connection.server[0..connection.server_len], response, &resolved_buf) orelse break :request_block;
+            }
+
+            recovery_player_idx = req.player_idx;
+            recovery_identity_len = req.identity_len;
+            @memcpy(recovery_identity[0..req.identity_len], req.identity[0..req.identity_len]);
+            recovery_url_len = @min(resolved.len, recovery_url.len);
+            if (recovery_url_len > 0) @memcpy(recovery_url[0..recovery_url_len], resolved[0..recovery_url_len]);
+            recovery_error_len = if (recovery_url_len == 0) @min(failure.len, recovery_error.len) else 0;
+            if (recovery_error_len > 0) @memcpy(recovery_error[0..recovery_error_len], failure[0..recovery_error_len]);
+            recovery_ready.store(true, .release);
+            state.wakeUi();
+        }
+    }.worker, .{request}) catch {
+        recovery_active.store(false, .release);
+        return false;
+    };
+    return true;
+}
+
+/// UI-thread publication point for the bounded recovery worker.
+pub fn drainTranscodeRecovery() void {
+    if (!recovery_ready.swap(false, .acq_rel)) return;
+    defer recovery_active.store(false, .release);
+    if (recovery_player_idx >= state.app.players.items.len) return;
+    const p = state.app.players.items[recovery_player_idx];
+    if (!std.mem.eql(u8, p.history_identity[0..p.history_identity_len], recovery_identity[0..recovery_identity_len])) return;
+    if (recovery_url_len > 0) {
+        p.applyServerRecovery(recovery_url[0..recovery_url_len]);
+        state.showToast("Using Jellyfin compatible stream");
+    } else {
+        p.failServerRecovery(if (recovery_error_len > 0) recovery_error[0..recovery_error_len] else "Jellyfin playback negotiation failed");
     }
 }
 
+pub fn playItem(item_id: []const u8) void {
+    const jp = @import("jellyfin_pure.zig");
+    if (!jp.validItemId(item_id)) return;
+    const server = state.app.jf.server_url[0..state.app.jf.server_url_len];
+    const token = state.app.jf.token[0..state.app.jf.token_len];
+
+    if (server.len == 0 or token.len == 0) return;
+
+    // Direct play starts immediately. When browse metadata identified a
+    // preferred media version, target it first and retain the server-selected
+    // generic stream as a one-shot pre-load fallback.
+    var url_buf: [1024]u8 = undefined;
+    var source_buf: [64]u8 = undefined;
+    const source_id = cachedMediaSourceId(item_id, &source_buf);
+    const url = jp.videoStreamUrl(server, item_id, source_id, &url_buf) orelse return;
+    var fallback_buf: [1024]u8 = undefined;
+    const fallback = if (source_id.len > 0) (jp.videoStreamUrl(server, item_id, "", &fallback_buf) orelse "") else "";
+    const headers = [_]player.HttpHeader{.{ .name = "X-Emby-Token", .value = token }};
+
+    var deep_buf: [128]u8 = undefined;
+    const deep = std.fmt.bufPrint(&deep_buf, "opal://jellyfin/video/{s}", .{item_id}) catch return;
+    var title_buf: [256]u8 = undefined;
+    const title = cachedItemName(item_id, &title_buf);
+    var art_buf: [512]u8 = undefined;
+    const art = jp.primaryImageUrl(server, item_id, token, &art_buf) orelse "";
+    @import("browser.zig").playDirect(.{
+        .url = url,
+        .fallback_url = fallback,
+        .history_identity = deep,
+        .restore_target = deep,
+        .art_url = art,
+        .title = title,
+        .resume_position_secs = cachedItemResume(item_id),
+        .headers = &headers,
+    });
+    state.showToast("Playing from Jellyfin");
+}
+
+fn cachedMediaSourceId(item_id: []const u8, out: []u8) []const u8 {
+    store_mutex.lock();
+    defer store_mutex.unlock();
+    const groups = .{ state.app.jf.items[0..state.app.jf.item_count], state.app.jf.resume_items[0..state.app.jf.resume_count] };
+    inline for (groups) |items| for (items) |item| {
+        if (!std.mem.eql(u8, item.id[0..item.id_len], item_id) or item.media_source_id_len == 0) continue;
+        const n = @min(item.media_source_id_len, out.len);
+        @memcpy(out[0..n], item.media_source_id[0..n]);
+        return out[0..n];
+    };
+    return "";
+}
+
 pub fn playAudioItem(item_id: []const u8) void {
+    if (!@import("jellyfin_pure.zig").validItemId(item_id)) return;
     const server = state.app.jf.server_url[0..state.app.jf.server_url_len];
     const token = state.app.jf.token[0..state.app.jf.token_len];
 
     if (server.len == 0 or token.len == 0) return;
 
     var url_buf: [1024]u8 = undefined;
-    const url = std.fmt.bufPrintZ(&url_buf, "{s}/Audio/{s}/universal?api_key={s}&UserId={s}", .{
+    const url = std.fmt.bufPrintZ(&url_buf, "{s}/Audio/{s}/universal?UserId={s}", .{
         server,
         item_id,
-        token,
         state.app.jf.user_id[0..state.app.jf.user_id_len],
     }) catch return;
+    const headers = [_]player.HttpHeader{.{ .name = "X-Emby-Token", .value = token }};
 
-    if (state.app.active_player_idx < state.app.players.items.len) {
-        const p = state.app.players.items[state.app.active_player_idx];
-        p.load_file(url.ptr);
-        state.showToast("Playing audio from Jellyfin");
-    }
+    var deep_buf: [128]u8 = undefined;
+    const deep = std.fmt.bufPrint(&deep_buf, "opal://jellyfin/audio/{s}", .{item_id}) catch return;
+    var title_buf: [256]u8 = undefined;
+    const title = cachedItemName(item_id, &title_buf);
+    @import("browser.zig").playDirect(.{
+        .url = url,
+        .history_identity = deep,
+        .restore_target = deep,
+        .title = title,
+        .resume_position_secs = cachedItemResume(item_id),
+        .headers = &headers,
+    });
+    state.showToast("Playing audio from Jellyfin");
+}
+
+fn cachedItemName(item_id: []const u8, out: []u8) []const u8 {
+    store_mutex.lock();
+    defer store_mutex.unlock();
+    const groups = .{ state.app.jf.items[0..state.app.jf.item_count], state.app.jf.resume_items[0..state.app.jf.resume_count] };
+    inline for (groups) |items| for (items) |item| {
+        if (std.mem.eql(u8, item.id[0..item.id_len], item_id)) {
+            const n = @min(item.name_len, out.len);
+            @memcpy(out[0..n], item.name[0..n]);
+            return out[0..n];
+        }
+    };
+    return "Jellyfin";
+}
+
+fn cachedItemResume(item_id: []const u8) ?f64 {
+    store_mutex.lock();
+    defer store_mutex.unlock();
+    const groups = .{ state.app.jf.items[0..state.app.jf.item_count], state.app.jf.resume_items[0..state.app.jf.resume_count] };
+    inline for (groups) |items| for (items) |item| {
+        if (!std.mem.eql(u8, item.id[0..item.id_len], item_id)) continue;
+        const position = @as(f64, @floatFromInt(item.played_ticks)) / 10_000_000.0;
+        const duration = @as(f64, @floatFromInt(item.runtime_ticks)) / 10_000_000.0;
+        if (@import("../player/watch_history_pure.zig").resumeEligible(position, duration)) return position;
+    };
+    return null;
 }
 
 /// Disconnect from Jellyfin
@@ -873,7 +1088,7 @@ pub fn fetchResume() void {
             const uid = state.app.jf.user_id[0..state.app.jf.user_id_len];
 
             var url_buf: [512]u8 = undefined;
-            const url = std.fmt.bufPrint(&url_buf, "{s}/Users/{s}/Items/Resume?Limit=16&Fields=Overview&MediaTypes=Video", .{ server, uid }) catch return;
+            const url = std.fmt.bufPrint(&url_buf, "{s}/Users/{s}/Items/Resume?Limit=16&Fields=Overview,MediaSources&MediaTypes=Video", .{ server, uid }) catch return;
 
             const body = jfGet(url) orelse return;
             defer alloc.free(body);
@@ -906,6 +1121,11 @@ pub fn fetchResume() void {
                     const ilen = @min(id.len, item.id.len);
                     @memcpy(item.id[0..ilen], id[0..ilen]);
                     item.id_len = ilen;
+                }
+                if (@import("jellyfin_pure.zig").firstMediaSourceId(obj)) |source_id| {
+                    const slen = @min(source_id.len, item.media_source_id.len);
+                    @memcpy(item.media_source_id[0..slen], source_id[0..slen]);
+                    item.media_source_id_len = slen;
                 }
                 if (extractJsonString(obj, "\"Name\":\"")) |name| {
                     const nlen = @min(name.len, item.name.len);
@@ -989,21 +1209,61 @@ fn jfGet(url: []const u8) ?[]u8 {
     const token = state.app.jf.token[0..state.app.jf.token_len];
 
     var auth_buf: [600]u8 = undefined;
-    const auth = std.fmt.bufPrint(&auth_buf, "X-Emby-Authorization: MediaBrowser Client=\"Opal\", Device=\"Desktop\", DeviceId=\"opal-001\", Version=\"1.0\", Token=\"{s}\"", .{token}) catch return null;
+    const device_id = if (state.app.install_id[0] != 0) state.app.install_id[0..] else "opal";
+    const auth = std.fmt.bufPrint(&auth_buf, "X-Emby-Authorization: MediaBrowser Client=\"Opal\", Device=\"Desktop\", DeviceId=\"{s}\", Version=\"{s}\", Token=\"{s}\"", .{ device_id, @import("../core/app_meta.zig").version, token }) catch return null;
 
     const resp_buf = alloc.alloc(u8, 256 * 1024) catch return null;
     defer alloc.free(resp_buf);
+    var response_status: ?std.http.Status = null;
     const resp = @import("../core/http.zig").fetch(url, resp_buf, .{
         .timeout_secs = 15,
         .accept = "application/json",
         .auth_header = auth,
-    }) orelse return null;
+        .status_out = &response_status,
+    }) orelse {
+        if (response_status) |status| {
+            if (@import("jellyfin_pure.zig").authRejected(@intFromEnum(status))) expireAuthSession();
+        }
+        return null;
+    };
 
     const resp_len = resp.len;
 
     const result = alloc.alloc(u8, resp_len) catch return null;
     @memcpy(result, resp_buf[0..resp_len]);
     return result;
+}
+
+fn expireAuthSession() void {
+    store_mutex.lock();
+    if (!state.app.jf.connected) {
+        store_mutex.unlock();
+        return;
+    }
+    state.app.jf.connected = false;
+    @memset(&state.app.jf.token, 0);
+    state.app.jf.token_len = 0;
+    @memset(&state.app.jf.user_id, 0);
+    state.app.jf.user_id_len = 0;
+    const message = "Session expired — sign in again";
+    @memcpy(state.app.jf.login_error[0..message.len], message);
+    state.app.jf.login_error_len = message.len;
+    state.app.jf.view = .Libraries;
+    for (state.app.jf.items[0..state.app.jf.item_count]) |*old| freeItemPoster(old);
+    for (state.app.jf.resume_items[0..state.app.jf.resume_count]) |*old| freeItemPoster(old);
+    state.app.jf.library_count = 0;
+    state.app.jf.item_count = 0;
+    state.app.jf.resume_count = 0;
+    state.app.jf.nav_depth = 0;
+    state.app.jf.resume_loaded.store(false, .release);
+    publication_gen +%= 1;
+    store_mutex.unlock();
+    current_source = .none;
+    current_query_len = 0;
+    more_available = false;
+    _ = paging_gen.fetchAdd(1, .acq_rel);
+    state.markConfigDirty();
+    state.wakeUi();
 }
 
 fn extractJsonString(json: []const u8, key: []const u8) ?[]const u8 {

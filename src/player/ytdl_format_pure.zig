@@ -45,16 +45,22 @@ pub const HEIGHTS = [_]?u16{ 720, 1080, 2160, null };
 //   4. best combined non-AV1 progressive stream
 //   5. best (any codec, incl. AV1) — last resort so playback never hard-fails
 const F720: [:0]const u8 =
+    "bestvideo[height<=?720][protocol^=http][vcodec!*=av01][dynamic_range=?SDR]+bestaudio[protocol^=http]/" ++
+    "bestvideo[height<=?720][protocol^=http][vcodec!*=av01]+bestaudio[protocol^=http]/" ++
     "bestvideo[height<=?720][vcodec!*=av01][dynamic_range=?SDR]+bestaudio/" ++
     "bestvideo[height<=?720][vcodec!*=av01]+bestaudio/" ++
     "bestvideo[vcodec!*=av01]+bestaudio/" ++
     "best[vcodec!*=av01]/best";
 const F1080: [:0]const u8 =
+    "bestvideo[height<=?1080][protocol^=http][vcodec!*=av01][dynamic_range=?SDR]+bestaudio[protocol^=http]/" ++
+    "bestvideo[height<=?1080][protocol^=http][vcodec!*=av01]+bestaudio[protocol^=http]/" ++
     "bestvideo[height<=?1080][vcodec!*=av01][dynamic_range=?SDR]+bestaudio/" ++
     "bestvideo[height<=?1080][vcodec!*=av01]+bestaudio/" ++
     "bestvideo[vcodec!*=av01]+bestaudio/" ++
     "best[vcodec!*=av01]/best";
 const F2160: [:0]const u8 =
+    "bestvideo[height<=?2160][protocol^=http][vcodec!*=av01][dynamic_range=?SDR]+bestaudio[protocol^=http]/" ++
+    "bestvideo[height<=?2160][protocol^=http][vcodec!*=av01]+bestaudio[protocol^=http]/" ++
     "bestvideo[height<=?2160][vcodec!*=av01][dynamic_range=?SDR]+bestaudio/" ++
     "bestvideo[height<=?2160][vcodec!*=av01]+bestaudio/" ++
     "bestvideo[vcodec!*=av01]+bestaudio/" ++
@@ -92,6 +98,20 @@ test "each video tier carries its own height cap" {
     try std.testing.expect(std.mem.indexOf(u8, formatFor(2), "height<=?2160") != null);
 }
 
+test "video tiers prefer direct HTTP streams before adaptive manifests" {
+    for ([_]usize{ 0, 1, 2 }) |idx| {
+        const f = formatFor(idx);
+        const first_sep = std.mem.indexOfScalar(u8, f, '/').?;
+        const first = f[0..first_sep];
+        try std.testing.expect(std.mem.indexOf(u8, first, "bestvideo") != null);
+        try std.testing.expect(std.mem.indexOf(u8, first, "[protocol^=http]") != null);
+        try std.testing.expect(std.mem.indexOf(u8, first, "+bestaudio[protocol^=http]") != null);
+
+        // HLS-only sites still have a protocol-agnostic fallback.
+        try std.testing.expect(std.mem.indexOf(u8, f[first_sep + 1 ..], "+bestaudio/") != null);
+    }
+}
+
 // Regression: "4K YouTube stutters / looks washed out". An HDR upload has both
 // an HDR and an SDR rendition; the software render path can only show SDR, and
 // converting the 10-bit HDR stream cost UI-thread time on every 4K frame. The
@@ -120,7 +140,9 @@ test "every video tier asks for the SDR rendition first, then any range" {
 
 test "exact 4K chain (what mpv hands yt-dlp for the 4K tier)" {
     try std.testing.expectEqualStrings(
-        "bestvideo[height<=?2160][vcodec!*=av01][dynamic_range=?SDR]+bestaudio/" ++
+        "bestvideo[height<=?2160][protocol^=http][vcodec!*=av01][dynamic_range=?SDR]+bestaudio[protocol^=http]/" ++
+            "bestvideo[height<=?2160][protocol^=http][vcodec!*=av01]+bestaudio[protocol^=http]/" ++
+            "bestvideo[height<=?2160][vcodec!*=av01][dynamic_range=?SDR]+bestaudio/" ++
             "bestvideo[height<=?2160][vcodec!*=av01]+bestaudio/" ++
             "bestvideo[vcodec!*=av01]+bestaudio/" ++
             "best[vcodec!*=av01]/best",

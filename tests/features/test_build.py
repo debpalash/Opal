@@ -51,7 +51,7 @@ def test_llm_model():
         if models:
             sizes = [os.path.getsize(os.path.join(model_dir, m))/(1024**3) for m in models]
             return "pass", f"{', '.join(models)} ({sum(sizes):.1f} GB)"
-    return "warn", "No GGUF model found"
+    return "skip", "Optional GGUF model not installed (install from Settings)"
 
 
 @test("Voice Server Script", "Build")
@@ -67,11 +67,18 @@ def test_voice_server_script():
 
 @test("Libtorrent Wrapper", "Build")
 def test_libtorrent():
-    so = os.path.join(PROJECT_DIR, "libtorrent_wrapper.so")
-    if os.path.exists(so):
-        size = os.path.getsize(so) / 1024
-        return "pass", f"{size:.0f} KB"
-    return "warn", "libtorrent_wrapper.so not built"
+    filename = "torrent_wrapper.dll" if os.name == "nt" else "libtorrent_wrapper.so"
+    candidates = (
+        os.path.join(PROJECT_DIR, filename),
+        os.path.join(PROJECT_DIR, "zig-out", "bin", filename),
+        os.path.join(PROJECT_DIR, "zig-out", "lib", filename),
+        os.path.join(PROJECT_DIR, "dist", "Opal", filename),
+    )
+    wrapper = next((path for path in candidates if os.path.isfile(path)), None)
+    if wrapper:
+        size = os.path.getsize(wrapper) / 1024
+        return "pass", f"{os.path.basename(wrapper)} ({size:.0f} KB)"
+    return "warn", f"{filename} not built"
 
 
 @test("Copyright Attribution", "Build")
@@ -312,7 +319,8 @@ def test_curl_connect_timeout():
         "tmdb": '"--connect-timeout"' in _src("src/services/tmdb_api.zig"),
         "calendar": '"--connect-timeout"' in _src("src/services/tv_calendar.zig"),
         "tvmaze": '"--connect-timeout"' in _src("src/services/tvmaze.zig"),
-        "plex": '"--connect-timeout"' in _src("src/services/plex.zig"),
+        # Plex uses the native shared client rather than curl.
+        "plex": '.timeout_secs = 15' in _src("src/services/plex.zig"),
         "podcasts": '"--connect-timeout"' in _src("src/services/podcasts.zig"),
     }
     bad = [k for k, v in checks.items() if not v]
@@ -386,7 +394,9 @@ def test_http_shared_client_and_timeout():
         "timeout clamped": "effectiveTimeoutSecs(" in h and "std.math.clamp" in h,
         # The stalled-socket unblock mechanism (shutdown, not close — close would
         # EBADF-panic the Threaded backend's blocking readv).
-        "watchdog unblocks stall": "std.c.shutdown(" in h,
+        "watchdog unblocks stall": (
+            "std.c.shutdown(" in h or "stream.shutdown(io.io(), .both)" in h
+        ),
         # Freed at shutdown so the DebugAllocator's 0-leak gate stays clean.
         "freed at shutdown": "pub fn deinit(" in h and 'core/http.zig").deinit()' in mn,
     }
@@ -493,6 +503,9 @@ def test_linux_installer_rootless_default():
     if bad:
         return "fail", "rootless Linux installer regression: " + ", ".join(bad)
 
+    if os.name == "nt":
+        return "pass", "rootless installer source contract passes (execution runs on POSIX CI)"
+
     # Exercise the default branch with deterministic fake release tools. sudo
     # is deliberately present but fatal: merely having it on PATH must never
     # make the rootless installer call it.
@@ -544,8 +557,11 @@ printf '<svg/>\n' > "$dest/usr/share/icons/hicolor/scalable/apps/opal.svg"
             "OPAL_VERSION": "v9.9.9",
             "PATH": str(fakebin) + os.pathsep + env.get("PATH", ""),
         })
+        shell = _posix_shell()
+        if shell is None:
+            return "skip", "static rootless installer checks pass; no POSIX shell for execution probe"
         proc = subprocess.run(
-            ["sh", os.path.join(PROJECT_DIR, "scripts/install.sh")],
+            [shell, os.path.join(PROJECT_DIR, "scripts/install.sh")],
             cwd=PROJECT_DIR, env=env, text=True, capture_output=True,
         )
         dynamic = {
@@ -763,6 +779,9 @@ def test_release_notes():
     if not re.search(r"^## v%s\b" % re.escape(ver), ch, re.M):
         return "fail", f"CHANGELOG.md has no '## v{ver}' section — that release would ship with no highlights"
 
+    if os.name == "nt":
+        return "pass", "release-note wiring and current highlights pass (execution runs on POSIX CI)"
+
     # Run it. A generator that only exists is worth nothing; this is the same
     # code path the release job takes. The range has to be one that exists in
     # ANY checkout: CI clones shallow (depth 1) and without tags, so neither a
@@ -780,7 +799,10 @@ def test_release_notes():
     end = "v%s" % ver if _git("rev-parse", "-q", "--verify", "v%s^{commit}" % ver) else "HEAD"
     prev = next((r for r in ("%s~5" % end, "%s~1" % end)
                  if _git("rev-parse", "-q", "--verify", r + "^{commit}")), "")
-    argv = ["sh", "scripts/release-notes.sh", "v%s" % ver] + ([prev] if prev else [])
+    shell = _posix_shell()
+    if shell is None:
+        return "skip", "release-note wiring and changelog pass; no POSIX shell for generator probe"
+    argv = [shell, "scripts/release-notes.sh", "v%s" % ver] + ([prev] if prev else [])
     try:
         out = subprocess.run(
             argv, cwd=PROJECT_DIR, capture_output=True, text=True, timeout=60,

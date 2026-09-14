@@ -69,33 +69,17 @@ fn realCheck() Status {
     s.sherpa_onnx = have("/opt/homebrew/bin/sherpa-onnx-offline") or
         have("/usr/local/bin/sherpa-onnx-offline");
 
-    // sherpa STT + TTS models — probe a canonical file per bundle.
-    var sherpa_home_buf: [512]u8 = undefined;
+    // Model status means runnable, not merely "one file exists". This also
+    // makes interrupted legacy installs show a repairable Download action.
     var __cfg_buf_0: [512]u8 = undefined;
     const home2 = @import("paths.zig").configDir(&__cfg_buf_0);
-    if (std.fmt.bufPrintZ(&sherpa_home_buf, "{s}/models/sherpa-whisper-tiny/tiny-tokens.txt", .{home2})) |p| {
-        s.sherpa_model = have(p);
-    } else |_| {}
-    var sherpa_tts_buf: [512]u8 = undefined;
-    if (std.fmt.bufPrintZ(&sherpa_tts_buf, "{s}/models/sherpa-vits-piper/en_US-lessac-medium.onnx", .{home2})) |p| {
-        s.sherpa_tts_model = have(p);
-    } else |_| {}
-    var sherpa_stream_buf: [512]u8 = undefined;
-    if (std.fmt.bufPrintZ(&sherpa_stream_buf, "{s}/models/sherpa-stream-zipformer/encoder.onnx", .{home2})) |p| {
-        s.sherpa_stream_model = have(p);
-    } else |_| {}
-    var sherpa_kokoro_buf: [512]u8 = undefined;
-    if (std.fmt.bufPrintZ(&sherpa_kokoro_buf, "{s}/models/sherpa-kokoro/model.onnx", .{home2})) |p| {
-        s.sherpa_kokoro_model = have(p);
-    } else |_| {}
-    var pk2_buf: [512]u8 = undefined;
-    if (std.fmt.bufPrintZ(&pk2_buf, "{s}/models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8/encoder.int8.onnx", .{home2})) |p| {
-        s.parakeet_v2_model = have(p);
-    } else |_| {}
-    var pk3_buf: [512]u8 = undefined;
-    if (std.fmt.bufPrintZ(&pk3_buf, "{s}/models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/encoder.int8.onnx", .{home2})) |p| {
-        s.parakeet_v3_model = have(p);
-    } else |_| {}
+    s.sherpa_model = installedModelReady(home2, "sherpa-whisper-tiny", &.{ "tiny-encoder.onnx", "tiny-decoder.onnx", "tiny-tokens.txt" });
+    s.sherpa_tts_model = installedModelReady(home2, "sherpa-vits-piper", &.{ "en_US-lessac-medium.onnx", "lexicon.txt", "tokens.txt", "espeak-ng-data" });
+    s.sherpa_stream_model = installedModelReady(home2, "sherpa-stream-zipformer", &.{ "encoder.onnx", "decoder.onnx", "joiner.onnx", "tokens.txt" });
+    s.sherpa_kokoro_model = installedModelReady(home2, "sherpa-kokoro", &.{ "model.onnx", "voices.bin", "tokens.txt", "espeak-ng-data" });
+    const parakeet_files = &.{ "encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt" };
+    s.parakeet_v2_model = installedModelReady(home2, "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8", parakeet_files);
+    s.parakeet_v3_model = installedModelReady(home2, "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8", parakeet_files);
     s.sherpa_mic_cli = have("/opt/homebrew/bin/sherpa-onnx-microphone") or
         have("/usr/local/bin/sherpa-onnx-microphone");
 
@@ -103,7 +87,10 @@ fn realCheck() Status {
     var __cfg_buf_1: [512]u8 = undefined;
     const home = @import("paths.zig").configDir(&__cfg_buf_1);
     if (std.fmt.bufPrintZ(&home_buf, "{s}/models/ggml-tiny.en.bin", .{home})) |model_path| {
-        s.whisper_model = have(model_path);
+        // Avoid hashing 75 MiB on every settings-frame TTL refresh; exact byte
+        // length catches interrupted legacy downloads. Fresh installs are also
+        // SHA-256 verified before publication below.
+        s.whisper_model = downloadedFileMatches(model_path, 77_704_715, null);
     } else |_| {}
 
     // MLX Whisper (Apple Silicon only — harmless no-op on other platforms)
@@ -120,6 +107,154 @@ fn realCheck() Status {
 fn have(path: []const u8) bool {
     io_global.cwdAccess(path, .{}) catch return false;
     return true;
+}
+
+fn processSucceeded(term: io_global.Child.Term) bool {
+    return switch (term) {
+        .exited => |code| code == 0,
+        else => false,
+    };
+}
+
+fn removeChildTree(parent_path: []const u8, child_name: []const u8) void {
+    var dir = io_global.openDirAbsolute(parent_path, .{}) catch return;
+    defer dir.close(io_global.io());
+    dir.deleteTree(io_global.io(), child_name) catch {};
+}
+
+fn downloadedFileMatches(path: []const u8, expected_size: u64, expected_sha256: ?[]const u8) bool {
+    const file = io_global.openFileAbsolute(path, .{}) catch return false;
+    defer file.close(io_global.io());
+    if ((file.length(io_global.io()) catch return false) != expected_size) return false;
+    const expected = expected_sha256 orelse return true;
+
+    var hash = std.crypto.hash.sha2.Sha256.init(.{});
+    var buf: [64 * 1024]u8 = undefined;
+    while (true) {
+        const n = io_global.read(file, &buf) catch return false;
+        if (n == 0) break;
+        hash.update(buf[0..n]);
+    }
+    var digest: [32]u8 = undefined;
+    hash.final(&digest);
+    const actual = std.fmt.bytesToHex(digest, .lower);
+    return std.mem.eql(u8, &actual, expected);
+}
+
+/// Fetch into a disposable sibling file and validate it before any live model
+/// path is touched. GitHub's older ASR assets do not publish hashes, so those
+/// are pinned to their release-API byte length; newer assets also pin SHA-256.
+fn downloadVerified(url: []const u8, stage_path: []const u8, expected_size: u64, expected_sha256: ?[]const u8) bool {
+    io_global.deleteFileAbsolute(stage_path) catch {};
+    var curl = io_global.Child.init(&.{
+        "curl",         "-L",                "--fail", "--silent",
+        "--show-error", "--proto",           "=https", "--proto-redir",
+        "=https",       "--connect-timeout", "15",     "--retry",
+        "2",            "--retry-delay",     "1",      "-o",
+        stage_path,     url,
+    }, @import("alloc.zig").allocator);
+    curl.stdout_behavior = .Ignore;
+    curl.stderr_behavior = .Ignore;
+    const term = curl.spawnAndWait() catch return false;
+    return processSucceeded(term) and downloadedFileMatches(stage_path, expected_size, expected_sha256);
+}
+
+fn renameStagedFile(dir_path: []const u8, preferred: []const u8, fallback: ?[]const u8, canonical: []const u8) bool {
+    var src_buf: [1024]u8 = undefined;
+    var dst_buf: [1024]u8 = undefined;
+    const dst = std.fmt.bufPrint(&dst_buf, "{s}/{s}", .{ dir_path, canonical }) catch return false;
+    io_global.deleteFileAbsolute(dst) catch {};
+
+    const first = std.fmt.bufPrint(&src_buf, "{s}/{s}", .{ dir_path, preferred }) catch return false;
+    if (io_global.renameAbsolute(first, dst)) |_| return true else |_| {}
+    const alternate = fallback orelse return false;
+    const second = std.fmt.bufPrint(&src_buf, "{s}/{s}", .{ dir_path, alternate }) catch return false;
+    io_global.renameAbsolute(second, dst) catch return false;
+    return true;
+}
+
+const ModelLayout = enum { direct, whisper, stream };
+
+const ArchiveModel = struct {
+    url: []const u8,
+    archive_name: []const u8,
+    source_dir: []const u8,
+    target_dir: []const u8,
+    required_files: []const []const u8,
+    expected_size: u64,
+    expected_sha256: ?[]const u8 = null,
+    layout: ModelLayout = .direct,
+};
+
+fn modelFilesReady(model_path: []const u8, required_files: []const []const u8) bool {
+    for (required_files) |name| {
+        var path_buf: [1100]u8 = undefined;
+        const path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ model_path, name }) catch return false;
+        if (!have(path)) return false;
+    }
+    return required_files.len != 0;
+}
+
+fn installedModelReady(config_dir: []const u8, model_dir: []const u8, required_files: []const []const u8) bool {
+    var path_buf: [1024]u8 = undefined;
+    const model_path = std.fmt.bufPrint(&path_buf, "{s}/models/{s}", .{ config_dir, model_dir }) catch return false;
+    return modelFilesReady(model_path, required_files);
+}
+
+fn canonicalizeModel(layout: ModelLayout, source_path: []const u8) bool {
+    return switch (layout) {
+        .direct => true,
+        .whisper => renameStagedFile(source_path, "tiny.en-encoder.int8.onnx", "tiny.en-encoder.onnx", "tiny-encoder.onnx") and
+            renameStagedFile(source_path, "tiny.en-decoder.int8.onnx", "tiny.en-decoder.onnx", "tiny-decoder.onnx") and
+            renameStagedFile(source_path, "tiny.en-tokens.txt", null, "tiny-tokens.txt"),
+        .stream => renameStagedFile(source_path, "encoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx", "encoder-epoch-99-avg-1-chunk-16-left-128.onnx", "encoder.onnx") and
+            renameStagedFile(source_path, "decoder-epoch-99-avg-1-chunk-16-left-128.onnx", "decoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx", "decoder.onnx") and
+            renameStagedFile(source_path, "joiner-epoch-99-avg-1-chunk-16-left-128.int8.onnx", "joiner-epoch-99-avg-1-chunk-16-left-128.onnx", "joiner.onnx"),
+    };
+}
+
+/// Install a compressed model transactionally: verified archive -> isolated
+/// extraction directory -> layout validation -> same-volume atomic publish.
+fn installArchiveModel(spec: ArchiveModel) bool {
+    var cfg_buf: [512]u8 = undefined;
+    const config_dir = @import("paths.zig").configDir(&cfg_buf);
+    var models_buf: [640]u8 = undefined;
+    const models_dir = std.fmt.bufPrint(&models_buf, "{s}/models", .{config_dir}) catch return false;
+    io_global.makeDirAbsolute(models_dir) catch {};
+
+    var target_buf: [1024]u8 = undefined;
+    const target_path = std.fmt.bufPrint(&target_buf, "{s}/{s}", .{ models_dir, spec.target_dir }) catch return false;
+    if (modelFilesReady(target_path, spec.required_files)) return true;
+
+    var archive_buf: [1024]u8 = undefined;
+    const archive_path = std.fmt.bufPrint(&archive_buf, "{s}/.{s}.part", .{ models_dir, spec.archive_name }) catch return false;
+    defer io_global.deleteFileAbsolute(archive_path) catch {};
+    if (!downloadVerified(spec.url, archive_path, spec.expected_size, spec.expected_sha256)) return false;
+
+    var stage_name_buf: [256]u8 = undefined;
+    const stage_name = std.fmt.bufPrint(&stage_name_buf, ".opal-model-stage-{s}", .{spec.archive_name}) catch return false;
+    removeChildTree(models_dir, stage_name);
+    defer removeChildTree(models_dir, stage_name);
+    var stage_buf: [768]u8 = undefined;
+    const stage_path = std.fmt.bufPrint(&stage_buf, "{s}/{s}", .{ models_dir, stage_name }) catch return false;
+    io_global.makeDirAbsolute(stage_path) catch return false;
+
+    var untar = io_global.Child.init(&.{ "tar", "-xjf", archive_path, "-C", stage_path }, @import("alloc.zig").allocator);
+    untar.stdout_behavior = .Ignore;
+    untar.stderr_behavior = .Ignore;
+    const term = untar.spawnAndWait() catch return false;
+    if (!processSucceeded(term)) return false;
+
+    var source_buf: [1024]u8 = undefined;
+    const source_path = std.fmt.bufPrint(&source_buf, "{s}/{s}", .{ stage_path, spec.source_dir }) catch return false;
+    if (!canonicalizeModel(spec.layout, source_path)) return false;
+    if (!modelFilesReady(source_path, spec.required_files)) return false;
+
+    // A previously interrupted legacy installer may have left an incomplete
+    // destination. It is replaced only after the new bundle is fully verified.
+    removeChildTree(models_dir, spec.target_dir);
+    io_global.renameAbsolute(source_path, target_path) catch return false;
+    return modelFilesReady(target_path, spec.required_files);
 }
 
 /// One-liner brew install command for missing deps. Copy-paste ready.
@@ -165,8 +300,8 @@ pub fn installCmd(buf: []u8, s: Status) []const u8 {
 /// thread. Idempotent — no-op if present.
 /// Fetch + extract the sherpa-onnx whisper-tiny bundle
 /// (tokens + encoder + decoder) to ~/.config/opal/models/sherpa-whisper-tiny/.
-/// ~40 MB compressed. Runs on a background thread. Idempotent.
-pub var sherpa_model_downloading: bool = false;
+/// ~113 MiB compressed. Runs on a background thread. Idempotent.
+pub var sherpa_model_downloading: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 // ── NVIDIA Parakeet TDT (sherpa-onnx int8 exports) ──
 // URLs + file names verified against the k2-fsa release assets (2026-07-02).
@@ -188,49 +323,25 @@ pub fn fetchParakeetBlocking(is_v3: bool) bool {
     else
         "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2";
 
-    var home_buf: [512]u8 = undefined;
-    var __cfg_buf_2: [512]u8 = undefined;
-    const home = @import("paths.zig").configDir(&__cfg_buf_2);
-    const models_dir = std.fmt.bufPrintZ(&home_buf, "{s}/models", .{home}) catch return false;
-    io_global.makeDirAbsolute(models_dir) catch {};
-
-    // Already extracted → no-op.
-    var check_buf: [512]u8 = undefined;
-    const check_path = std.fmt.bufPrintZ(&check_buf, "{s}/{s}/encoder.int8.onnx", .{ models_dir, dir_name }) catch return false;
-    if (io_global.cwdAccess(check_path, .{})) |_| return true else |_| {}
-
-    var tar_buf: [512]u8 = undefined;
-    const tar_path = std.fmt.bufPrintZ(&tar_buf, "{s}/{s}.tar.bz2", .{ models_dir, dir_name }) catch return false;
-
     logs.pushLog("info", "deps", if (is_v3) "Fetching Parakeet TDT 0.6B v3 (~490MB)…" else "Fetching Parakeet TDT 0.6B v2 (~480MB)…", false);
-    var curl = io_global.Child.init(&.{
-        "curl", "-L", "--fail", "--silent", "--show-error", "-o", tar_path, url,
-    }, @import("alloc.zig").allocator);
-    curl.stdout_behavior = .Ignore;
-    curl.stderr_behavior = .Ignore;
-    curl.spawn() catch {
-        logs.pushLog("error", "deps", "curl missing — can't fetch Parakeet model", true);
-        return false;
-    };
-    _ = curl.wait() catch {};
-
-    // Archive extracts to a top-level dir named exactly dir_name.
-    var untar = io_global.Child.init(&.{
-        "tar", "-xjf", tar_path, "-C", models_dir,
-    }, @import("alloc.zig").allocator);
-    untar.stdout_behavior = .Ignore;
-    untar.stderr_behavior = .Ignore;
-    _ = untar.spawnAndWait() catch {};
-
-    io_global.deleteFileAbsolute(tar_path) catch {};
-
-    if (io_global.cwdAccess(check_path, .{})) |_| {
+    const ok = installArchiveModel(.{
+        .url = url,
+        .archive_name = if (is_v3) "parakeet-v3.tar.bz2" else "parakeet-v2.tar.bz2",
+        .source_dir = dir_name,
+        .target_dir = dir_name,
+        .required_files = &.{ "encoder.int8.onnx", "decoder.int8.onnx", "joiner.int8.onnx", "tokens.txt" },
+        .expected_size = if (is_v3) 487_170_055 else 482_468_385,
+        .expected_sha256 = if (is_v3)
+            "5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf"
+        else
+            "157c157bc51155e03e37d2466522a3a737dd9c72bb25f36eb18912964161e1ad",
+    });
+    if (ok) {
         logs.pushLog("info", "deps", "Parakeet TDT model ready", false);
         return true;
-    } else |_| {
-        logs.pushLog("error", "deps", "Parakeet download/extract failed — see network and disk space", true);
-        return false;
     }
+    logs.pushLog("error", "deps", "Parakeet download/extract failed — see network and disk space", true);
+    return false;
 }
 
 pub fn fetchParakeetAsync(v3: bool) void {
@@ -249,271 +360,119 @@ pub fn fetchParakeetAsync(v3: bool) void {
 }
 
 pub fn fetchSherpaWhisperAsync() void {
-    if (sherpa_model_downloading) return;
-    sherpa_model_downloading = true;
+    if (sherpa_model_downloading.swap(true, .acq_rel)) return;
     const S = struct {
         fn worker() void {
-            defer sherpa_model_downloading = false;
-            var home_buf: [512]u8 = undefined;
-            var __cfg_buf_3: [512]u8 = undefined;
-            const home = @import("paths.zig").configDir(&__cfg_buf_3);
-            const models_dir = std.fmt.bufPrintZ(&home_buf, "{s}/models", .{home}) catch return;
-            io_global.makeDirAbsolute(models_dir) catch {};
-
-            var tar_buf: [512]u8 = undefined;
-            const tar_path = std.fmt.bufPrintZ(&tar_buf, "{s}/sherpa-whisper-tiny.tar.bz2", .{models_dir}) catch return;
-
-            // If model already extracted, no-op.
-            var check_buf: [512]u8 = undefined;
-            const check_path = std.fmt.bufPrintZ(&check_buf, "{s}/sherpa-whisper-tiny/tiny-encoder.onnx", .{models_dir}) catch return;
-            if (io_global.cwdAccess(check_path, .{})) |_| return else |_| {}
-
-            logs.pushLog("info", "deps", "Fetching sherpa whisper-tiny (~40MB)…", true);
-            var curl = io_global.Child.init(&.{
-                "curl", "-L",     "--fail",                                                                                                 "--silent", "--show-error",
-                "-o",   tar_path, "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-tiny.en.tar.bz2",
-            }, @import("alloc.zig").allocator);
-            curl.stdout_behavior = .Ignore;
-            curl.stderr_behavior = .Ignore;
-            curl.spawn() catch {
-                logs.pushLog("error", "deps", "curl missing — can't fetch sherpa model", false);
-                return;
-            };
-            _ = curl.wait() catch {};
-
-            // Extract via tar -xjf (bzip2) into models/. The archive
-            // unpacks to sherpa-onnx-whisper-tiny.en/ — we rename for
-            // a shorter stable path.
-            var untar = io_global.Child.init(&.{
-                "tar", "-xjf", tar_path, "-C", models_dir,
-            }, @import("alloc.zig").allocator);
-            untar.stdout_behavior = .Ignore;
-            untar.stderr_behavior = .Ignore;
-            _ = untar.spawnAndWait() catch {};
-
-            var src_buf: [512]u8 = undefined;
-            const src = std.fmt.bufPrintZ(&src_buf, "{s}/sherpa-onnx-whisper-tiny.en", .{models_dir}) catch return;
-            var dst_buf: [512]u8 = undefined;
-            const dst = std.fmt.bufPrintZ(&dst_buf, "{s}/sherpa-whisper-tiny", .{models_dir}) catch return;
-            var mv = io_global.Child.init(&.{ "mv", "-f", src, dst }, @import("alloc.zig").allocator);
-            mv.stdout_behavior = .Ignore;
-            mv.stderr_behavior = .Ignore;
-            _ = mv.spawnAndWait() catch {};
-
-            io_global.deleteFileAbsolute(tar_path) catch {};
-            logs.pushLog("info", "deps", "Sherpa whisper-tiny ready", true);
+            logs.pushLog("info", "deps", "Fetching sherpa whisper-tiny (~113MB)…", true);
+            defer sherpa_model_downloading.store(false, .release);
+            if (installArchiveModel(.{
+                .url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-tiny.en.tar.bz2",
+                .archive_name = "sherpa-whisper-tiny.tar.bz2",
+                .source_dir = "sherpa-onnx-whisper-tiny.en",
+                .target_dir = "sherpa-whisper-tiny",
+                .required_files = &.{ "tiny-encoder.onnx", "tiny-decoder.onnx", "tiny-tokens.txt" },
+                .expected_size = 118_071_777,
+                .layout = .whisper,
+            })) {
+                logs.pushLog("info", "deps", "Sherpa whisper-tiny ready", true);
+            } else {
+                logs.pushLog("error", "deps", "Sherpa whisper download failed validation; no model was installed", true);
+            }
         }
     };
     if (@import("workers.zig").spawnLegacy(S.worker, .{})) |t| @import("workers.zig").release(t) else |_| {
-        sherpa_model_downloading = false;
+        sherpa_model_downloading.store(false, .release);
     }
 }
 
 /// Fetch + extract Piper VITS en_US-lessac-medium TTS bundle
-/// (~40MB) to ~/.config/opal/models/sherpa-vits-piper/.
-pub var sherpa_tts_downloading: bool = false;
+/// (~64MB) to ~/.config/opal/models/sherpa-vits-piper/.
+pub var sherpa_tts_downloading: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 pub fn fetchSherpaTtsAsync() void {
-    if (sherpa_tts_downloading) return;
-    sherpa_tts_downloading = true;
+    if (sherpa_tts_downloading.swap(true, .acq_rel)) return;
     const S = struct {
         fn worker() void {
-            defer sherpa_tts_downloading = false;
-            var home_buf: [512]u8 = undefined;
-            var __cfg_buf_4: [512]u8 = undefined;
-            const home = @import("paths.zig").configDir(&__cfg_buf_4);
-            const models_dir = std.fmt.bufPrintZ(&home_buf, "{s}/models", .{home}) catch return;
-            io_global.makeDirAbsolute(models_dir) catch {};
-
-            var tar_buf: [512]u8 = undefined;
-            const tar_path = std.fmt.bufPrintZ(&tar_buf, "{s}/sherpa-vits-piper.tar.bz2", .{models_dir}) catch return;
-
-            var check_buf: [512]u8 = undefined;
-            const check_path = std.fmt.bufPrintZ(&check_buf, "{s}/sherpa-vits-piper/en_US-lessac-medium.onnx", .{models_dir}) catch return;
-            if (io_global.cwdAccess(check_path, .{})) |_| return else |_| {}
-
-            logs.pushLog("info", "deps", "Fetching sherpa Piper-VITS (~40MB)…", true);
-            var curl = io_global.Child.init(&.{
-                "curl", "-L",     "--fail",                                                                                                    "--silent", "--show-error",
-                "-o",   tar_path, "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-lessac-medium.tar.bz2",
-            }, @import("alloc.zig").allocator);
-            curl.stdout_behavior = .Ignore;
-            curl.stderr_behavior = .Ignore;
-            curl.spawn() catch {
-                logs.pushLog("error", "deps", "curl missing — can't fetch TTS model", false);
-                return;
-            };
-            _ = curl.wait() catch {};
-
-            var untar = io_global.Child.init(&.{
-                "tar", "-xjf", tar_path, "-C", models_dir,
-            }, @import("alloc.zig").allocator);
-            untar.stdout_behavior = .Ignore;
-            untar.stderr_behavior = .Ignore;
-            _ = untar.spawnAndWait() catch {};
-
-            var src_buf: [512]u8 = undefined;
-            const src = std.fmt.bufPrintZ(&src_buf, "{s}/vits-piper-en_US-lessac-medium", .{models_dir}) catch return;
-            var dst_buf: [512]u8 = undefined;
-            const dst = std.fmt.bufPrintZ(&dst_buf, "{s}/sherpa-vits-piper", .{models_dir}) catch return;
-            var mv = io_global.Child.init(&.{ "mv", "-f", src, dst }, @import("alloc.zig").allocator);
-            mv.stdout_behavior = .Ignore;
-            mv.stderr_behavior = .Ignore;
-            _ = mv.spawnAndWait() catch {};
-
-            io_global.deleteFileAbsolute(tar_path) catch {};
-            logs.pushLog("info", "deps", "Sherpa TTS model ready", true);
+            logs.pushLog("info", "deps", "Fetching sherpa Piper-VITS (~64MB)…", true);
+            defer sherpa_tts_downloading.store(false, .release);
+            if (installArchiveModel(.{
+                .url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-lessac-medium.tar.bz2",
+                .archive_name = "sherpa-vits-piper.tar.bz2",
+                .source_dir = "vits-piper-en_US-lessac-medium",
+                .target_dir = "sherpa-vits-piper",
+                .required_files = &.{ "en_US-lessac-medium.onnx", "lexicon.txt", "tokens.txt", "espeak-ng-data" },
+                .expected_size = 67_230_653,
+                .expected_sha256 = "9e3febfacf0abf4270172d2958bcec246032b7e88efc2720840cc80c93de334e",
+            })) {
+                logs.pushLog("info", "deps", "Sherpa TTS model ready", true);
+            } else {
+                logs.pushLog("error", "deps", "Piper model download failed validation; no model was installed", true);
+            }
         }
     };
     if (@import("workers.zig").spawnLegacy(S.worker, .{})) |t| @import("workers.zig").release(t) else |_| {
-        sherpa_tts_downloading = false;
+        sherpa_tts_downloading.store(false, .release);
     }
 }
 
-/// Fetch Kokoro multi-voice TTS bundle (~330MB) for highest-quality
+/// Fetch Kokoro multi-voice TTS bundle (~305MB) for highest-quality
 /// synthesis. Has 53+ English speakers selectable via --sid. Opt-in —
 /// Piper stays the default because of size.
-pub var sherpa_kokoro_downloading: bool = false;
+pub var sherpa_kokoro_downloading: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 pub fn fetchSherpaKokoroAsync() void {
-    if (sherpa_kokoro_downloading) return;
-    sherpa_kokoro_downloading = true;
+    if (sherpa_kokoro_downloading.swap(true, .acq_rel)) return;
     const S = struct {
         fn worker() void {
-            defer sherpa_kokoro_downloading = false;
-            var home_buf: [512]u8 = undefined;
-            var __cfg_buf_5: [512]u8 = undefined;
-            const home = @import("paths.zig").configDir(&__cfg_buf_5);
-            const models_dir = std.fmt.bufPrintZ(&home_buf, "{s}/models", .{home}) catch return;
-            io_global.makeDirAbsolute(models_dir) catch {};
-
-            var tar_buf: [512]u8 = undefined;
-            const tar_path = std.fmt.bufPrintZ(&tar_buf, "{s}/sherpa-kokoro.tar.bz2", .{models_dir}) catch return;
-
-            var check_buf: [512]u8 = undefined;
-            const check_path = std.fmt.bufPrintZ(&check_buf, "{s}/sherpa-kokoro/model.onnx", .{models_dir}) catch return;
-            if (io_global.cwdAccess(check_path, .{})) |_| return else |_| {}
-
-            logs.pushLog("info", "deps", "Fetching Kokoro TTS (~330MB)…", true);
-            var curl = io_global.Child.init(&.{
-                "curl", "-L",     "--fail",                                                                                     "--silent", "--show-error",
-                "-o",   tar_path, "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-en-v0_19.tar.bz2",
-            }, @import("alloc.zig").allocator);
-            curl.stdout_behavior = .Ignore;
-            curl.stderr_behavior = .Ignore;
-            curl.spawn() catch return;
-            _ = curl.wait() catch {};
-
-            var untar = io_global.Child.init(&.{
-                "tar", "-xjf", tar_path, "-C", models_dir,
-            }, @import("alloc.zig").allocator);
-            untar.stdout_behavior = .Ignore;
-            untar.stderr_behavior = .Ignore;
-            _ = untar.spawnAndWait() catch {};
-
-            var src_buf: [512]u8 = undefined;
-            const src = std.fmt.bufPrintZ(&src_buf, "{s}/kokoro-en-v0_19", .{models_dir}) catch return;
-            var dst_buf: [512]u8 = undefined;
-            const dst = std.fmt.bufPrintZ(&dst_buf, "{s}/sherpa-kokoro", .{models_dir}) catch return;
-            var mv = io_global.Child.init(&.{ "mv", "-f", src, dst }, @import("alloc.zig").allocator);
-            mv.stdout_behavior = .Ignore;
-            mv.stderr_behavior = .Ignore;
-            _ = mv.spawnAndWait() catch {};
-
-            io_global.deleteFileAbsolute(tar_path) catch {};
-            logs.pushLog("info", "deps", "Kokoro model ready (53+ voices)", true);
+            logs.pushLog("info", "deps", "Fetching Kokoro TTS (~305MB)…", true);
+            defer sherpa_kokoro_downloading.store(false, .release);
+            if (installArchiveModel(.{
+                .url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-en-v0_19.tar.bz2",
+                .archive_name = "sherpa-kokoro.tar.bz2",
+                .source_dir = "kokoro-en-v0_19",
+                .target_dir = "sherpa-kokoro",
+                .required_files = &.{ "model.onnx", "voices.bin", "tokens.txt", "espeak-ng-data" },
+                .expected_size = 319_625_534,
+                .expected_sha256 = "912804855a04745fa77a30be545b3f9a5d15c4d66db00b88cbcd4921df605ac7",
+            })) {
+                logs.pushLog("info", "deps", "Kokoro model ready (53+ voices)", true);
+            } else {
+                logs.pushLog("error", "deps", "Kokoro model download failed validation; no model was installed", true);
+            }
         }
     };
     if (@import("workers.zig").spawnLegacy(S.worker, .{})) |t| @import("workers.zig").release(t) else |_| {
-        sherpa_kokoro_downloading = false;
+        sherpa_kokoro_downloading.store(false, .release);
     }
 }
 
-/// Fetch sherpa streaming Zipformer bundle (~80MB) for live-convo
+/// Fetch sherpa streaming Zipformer bundle (~296MB) for live-convo
 /// (VAD-driven real-time transcription, replaces the fixed 15s record).
-pub var sherpa_stream_downloading: bool = false;
+pub var sherpa_stream_downloading: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 pub fn fetchSherpaStreamAsync() void {
-    if (sherpa_stream_downloading) return;
-    sherpa_stream_downloading = true;
+    if (sherpa_stream_downloading.swap(true, .acq_rel)) return;
     const S = struct {
         fn worker() void {
-            defer sherpa_stream_downloading = false;
-            var home_buf: [512]u8 = undefined;
-            var __cfg_buf_6: [512]u8 = undefined;
-            const home = @import("paths.zig").configDir(&__cfg_buf_6);
-            const models_dir = std.fmt.bufPrintZ(&home_buf, "{s}/models", .{home}) catch return;
-            io_global.makeDirAbsolute(models_dir) catch {};
-
-            var tar_buf: [512]u8 = undefined;
-            const tar_path = std.fmt.bufPrintZ(&tar_buf, "{s}/sherpa-stream-zipformer.tar.bz2", .{models_dir}) catch return;
-
-            var check_buf: [512]u8 = undefined;
-            const check_path = std.fmt.bufPrintZ(&check_buf, "{s}/sherpa-stream-zipformer/encoder.onnx", .{models_dir}) catch return;
-            if (io_global.cwdAccess(check_path, .{})) |_| return else |_| {}
-
-            logs.pushLog("info", "deps", "Fetching streaming Zipformer (~80MB)…", true);
-            var curl = io_global.Child.init(&.{
-                "curl", "-L",     "--fail",                                                                                                                   "--silent", "--show-error",
-                "-o",   tar_path, "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-2023-06-26.tar.bz2",
-            }, @import("alloc.zig").allocator);
-            curl.stdout_behavior = .Ignore;
-            curl.stderr_behavior = .Ignore;
-            curl.spawn() catch {
-                logs.pushLog("error", "deps", "curl missing — can't fetch streaming model", false);
-                return;
-            };
-            _ = curl.wait() catch {};
-
-            var untar = io_global.Child.init(&.{
-                "tar", "-xjf", tar_path, "-C", models_dir,
-            }, @import("alloc.zig").allocator);
-            untar.stdout_behavior = .Ignore;
-            untar.stderr_behavior = .Ignore;
-            _ = untar.spawnAndWait() catch {};
-
-            // Upstream archive dir name is long; rename to short stable path.
-            var src_buf: [512]u8 = undefined;
-            const src = std.fmt.bufPrintZ(&src_buf, "{s}/sherpa-onnx-streaming-zipformer-en-2023-06-26", .{models_dir}) catch return;
-            var dst_buf: [512]u8 = undefined;
-            const dst = std.fmt.bufPrintZ(&dst_buf, "{s}/sherpa-stream-zipformer", .{models_dir}) catch return;
-            var mv = io_global.Child.init(&.{ "mv", "-f", src, dst }, @import("alloc.zig").allocator);
-            mv.stdout_behavior = .Ignore;
-            mv.stderr_behavior = .Ignore;
-            _ = mv.spawnAndWait() catch {};
-
-            // The archive ships versioned, dual-precision weights
-            // (encoder-epoch-…-128.onnx plus a .int8.onnx). Both deps.check()
-            // and voice_backend.spawnStreamingConvo() expect canonical
-            // encoder.onnx / decoder.onnx / joiner.onnx — without this mapping
-            // sherpa_stream_model is permanently false and streaming never
-            // activates. Prefer int8 for a small on-device footprint (~68MB),
-            // fall back to fp32, then drop the unused variants.
-            const canon_script =
-                \\d="$1"
-                \\for stem in encoder decoder joiner; do
-                \\  if [ ! -f "$d/$stem.onnx" ]; then
-                \\    m=$(ls "$d/$stem"-*.int8.onnx 2>/dev/null | head -1)
-                \\    [ -z "$m" ] && m=$(ls "$d/$stem"-*.onnx 2>/dev/null | head -1)
-                \\    [ -n "$m" ] && cp "$m" "$d/$stem.onnx"
-                \\  fi
-                \\done
-                \\rm -f "$d"/*-epoch-*.onnx "$d"/bpe.model "$d"/*.sh "$d"/README.md
-            ;
-            var canon = io_global.Child.init(
-                &.{ "sh", "-c", canon_script, "sh", dst },
-                @import("alloc.zig").allocator,
-            );
-            canon.stdout_behavior = .Ignore;
-            canon.stderr_behavior = .Ignore;
-            _ = canon.spawnAndWait() catch {};
-
-            io_global.deleteFileAbsolute(tar_path) catch {};
-            logs.pushLog("info", "deps", "Streaming Zipformer model ready", true);
+            logs.pushLog("info", "deps", "Fetching streaming Zipformer (~296MB)…", true);
+            defer sherpa_stream_downloading.store(false, .release);
+            if (installArchiveModel(.{
+                .url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-2023-06-26.tar.bz2",
+                .archive_name = "sherpa-stream-zipformer.tar.bz2",
+                .source_dir = "sherpa-onnx-streaming-zipformer-en-2023-06-26",
+                .target_dir = "sherpa-stream-zipformer",
+                .required_files = &.{ "encoder.onnx", "decoder.onnx", "joiner.onnx", "tokens.txt" },
+                .expected_size = 310_414_022,
+                .layout = .stream,
+            })) {
+                logs.pushLog("info", "deps", "Streaming Zipformer model ready", true);
+            } else {
+                logs.pushLog("error", "deps", "Streaming model download failed validation; no model was installed", true);
+            }
         }
     };
     if (@import("workers.zig").spawnLegacy(S.worker, .{})) |t| @import("workers.zig").release(t) else |_| {
-        sherpa_stream_downloading = false;
+        sherpa_stream_downloading.store(false, .release);
     }
 }
 
@@ -535,23 +494,29 @@ pub fn fetchWhisperModelAsync() void {
             io_global.makeDirAbsolute(dir) catch {};
             var path_buf: [512]u8 = undefined;
             const model_path = std.fmt.bufPrintZ(&path_buf, "{s}/ggml-tiny.en.bin", .{dir}) catch return;
-            io_global.cwdAccess(model_path, .{}) catch {
-                // Missing — fetch
-                logs.pushLog("info", "deps", "Fetching whisper tiny model (~39MB)…", false);
-                var curl = io_global.Child.init(&.{
-                    "curl", "-L",       "--fail",                                                                     "--silent", "--show-error",
-                    "-o",   model_path, "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin",
-                }, @import("alloc.zig").allocator);
-                curl.stdout_behavior = .Ignore;
-                curl.stderr_behavior = .Ignore;
-                curl.spawn() catch {
-                    logs.pushLog("error", "deps", "curl not found — cannot fetch whisper model", true);
+            if (downloadedFileMatches(model_path, 77_704_715, null)) return;
+
+            logs.pushLog("info", "deps", "Fetching Whisper tiny.en (75MB)…", false);
+            var stage_buf: [544]u8 = undefined;
+            const stage_path = std.fmt.bufPrint(&stage_buf, "{s}.part", .{model_path}) catch return;
+            defer io_global.deleteFileAbsolute(stage_path) catch {};
+            if (downloadVerified(
+                "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin",
+                stage_path,
+                77_704_715,
+                "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f",
+            )) {
+                // Only an invalid legacy file can exist here; the verified
+                // staged model remains isolated until the final rename.
+                io_global.deleteFileAbsolute(model_path) catch {};
+                io_global.renameAbsolute(stage_path, model_path) catch {
+                    logs.pushLog("error", "deps", "Could not publish verified Whisper model", true);
                     return;
                 };
-                _ = curl.wait() catch {};
                 logs.pushLog("info", "deps", "Whisper model ready", false);
-                return;
-            };
+            } else {
+                logs.pushLog("error", "deps", "Whisper download failed validation; no model was installed", true);
+            }
         }
     };
     if (whisper_model_downloading.swap(true, .acq_rel)) return; // already running

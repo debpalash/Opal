@@ -28,7 +28,7 @@ pub const WatchEntry = struct {
 /// v1 (implicit, user_version 0): name/percent/link — percent keyed by title.
 /// v2: + position_secs, duration_secs, file_key (absolute filesystem path for
 /// local files; '' for streams/torrents, which keep the legacy name key).
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 /// Upgrade an existing DB in place. Versioned via PRAGMA user_version; the
 /// ALTERs are additionally idempotent (db.exec swallows duplicate-column
@@ -50,7 +50,209 @@ pub fn migrateSchema() void {
     db.exec("UPDATE watch_history SET file_key = name WHERE file_key = '' AND name LIKE '/%'");
     db.exec("UPDATE watch_history SET file_key = substr(name, 8) WHERE file_key = '' AND name LIKE 'file:///%'");
     db.exec("CREATE INDEX IF NOT EXISTS idx_watch_file_key ON watch_history(file_key)");
-    db.exec("PRAGMA user_version = 2");
+    if (version < 3) {
+        scrubWatchTable("watch_history");
+        if (db.tableExists("watch_history_backup")) scrubWatchTable("watch_history_backup");
+        scrubSessionTargets();
+        scrubActivityTargets();
+        scrubSingleUrlColumn("browser_history", "url", .credential_identity);
+        scrubSingleUrlColumn("browser_bookmarks", "url", .credential_identity);
+        scrubSingleUrlColumn("search_history", "query", .identity);
+        scrubDownloadTargets();
+        // Older Audiobookshelf rows embedded token-bearing stream and cover
+        // URLs. The stable item id is sufficient to reconstruct both at use.
+        db.exec("UPDATE library_items SET poster='', deep_link=item_id WHERE kind='audiobook'");
+    }
+    db.exec("PRAGMA user_version = 3");
+}
+
+/// One-time v3 privacy migration. It preserves resume percentages/seconds but
+/// rewrites URL primary keys to their credential-free identity and drops links
+/// that cannot safely be reopened without the source adapter.
+fn scrubWatchTable(comptime table: []const u8) void {
+    var after_rowid: i64 = -1;
+    var budget: usize = 100_000;
+    while (budget > 0) : (budget -= 1) {
+        var rowid: i64 = 0;
+        var old_name_buf: [8192]u8 = undefined;
+        var old_link_buf: [8192]u8 = undefined;
+        var old_name_len: usize = 0;
+        var old_link_len: usize = 0;
+        {
+            const stmt = db.prepare("SELECT rowid,name,link FROM " ++ table ++ " WHERE rowid>?1 ORDER BY rowid LIMIT 1") orelse return;
+            defer db.finalize(stmt);
+            db.bindInt64(stmt, 1, after_rowid);
+            if (db.step(stmt) != db.c.SQLITE_ROW) break;
+            rowid = db.columnInt64(stmt, 0);
+            if (db.columnText(stmt, 1)) |value| {
+                old_name_len = @min(value.len, old_name_buf.len);
+                @memcpy(old_name_buf[0..old_name_len], value[0..old_name_len]);
+            }
+            if (db.columnText(stmt, 2)) |value| {
+                old_link_len = @min(value.len, old_link_buf.len);
+                @memcpy(old_link_buf[0..old_link_len], value[0..old_link_len]);
+            }
+        }
+        after_rowid = rowid;
+        const old_name = old_name_buf[0..old_name_len];
+        const old_link = old_link_buf[0..old_link_len];
+        var name_buf: [8192]u8 = undefined;
+        var link_buf: [8192]u8 = undefined;
+        const safe_name = pure.persistedTarget(old_name, &name_buf).identity;
+        const safe_link = pure.persistedTarget(old_link, &link_buf).reopen;
+        if (safe_name.len == 0) continue;
+        if (std.mem.eql(u8, old_name, safe_name) and std.mem.eql(u8, old_link, safe_link)) continue;
+
+        const stmt = db.prepare("UPDATE OR REPLACE " ++ table ++ " SET name=?1,link=?2 WHERE rowid=?3") orelse continue;
+        defer db.finalize(stmt);
+        db.bindText(stmt, 1, safe_name);
+        db.bindText(stmt, 2, safe_link);
+        db.bindInt64(stmt, 3, rowid);
+        _ = db.step(stmt);
+    }
+}
+
+fn scrubSessionTargets() void {
+    var idx: usize = 0;
+    while (idx < 16) : (idx += 1) {
+        var key_buf: [32]u8 = undefined;
+        const key = std.fmt.bufPrint(&key_buf, "session_url_{d}", .{idx}) catch continue;
+        var value_buf: [4096]u8 = undefined;
+        var value_len: usize = 0;
+        {
+            const stmt = db.prepare("SELECT value FROM config WHERE key=?1") orelse continue;
+            defer db.finalize(stmt);
+            db.bindText(stmt, 1, key);
+            if (db.step(stmt) != db.c.SQLITE_ROW) continue;
+            if (db.columnText(stmt, 0)) |value| {
+                value_len = @min(value.len, value_buf.len);
+                @memcpy(value_buf[0..value_len], value[0..value_len]);
+            }
+        }
+        var safe_buf: [4096]u8 = undefined;
+        const safe = pure.persistedTarget(value_buf[0..value_len], &safe_buf).reopen;
+        const stmt = db.prepare(if (safe.len > 0)
+            "UPDATE config SET value=?1 WHERE key=?2"
+        else
+            "DELETE FROM config WHERE key=?2") orelse continue;
+        defer db.finalize(stmt);
+        if (safe.len > 0) db.bindText(stmt, 1, safe);
+        db.bindText(stmt, 2, key);
+        _ = db.step(stmt);
+    }
+}
+
+fn scrubActivityTargets() void {
+    scrubKeyColumn("activity_log", "rowid");
+    scrubKeyColumn("taste_items", "id");
+}
+
+const UrlPolicy = enum { identity, credential_identity };
+
+fn scrubSingleUrlColumn(comptime table: []const u8, comptime column: []const u8, comptime policy: UrlPolicy) void {
+    var after_rowid: i64 = -1;
+    var budget: usize = 100_000;
+    while (budget > 0) : (budget -= 1) {
+        var rowid: i64 = 0;
+        var old_buf: [8192]u8 = undefined;
+        var old_len: usize = 0;
+        {
+            const stmt = db.prepare("SELECT rowid," ++ column ++ " FROM " ++ table ++ " WHERE rowid>?1 ORDER BY rowid LIMIT 1") orelse return;
+            defer db.finalize(stmt);
+            db.bindInt64(stmt, 1, after_rowid);
+            if (db.step(stmt) != db.c.SQLITE_ROW) break;
+            rowid = db.columnInt64(stmt, 0);
+            if (db.columnText(stmt, 1)) |value| {
+                old_len = @min(value.len, old_buf.len);
+                @memcpy(old_buf[0..old_len], value[0..old_len]);
+            }
+        }
+        after_rowid = rowid;
+        var safe_buf: [8192]u8 = undefined;
+        const old = old_buf[0..old_len];
+        const safe = switch (policy) {
+            .identity => pure.persistedTarget(old, &safe_buf).identity,
+            .credential_identity => pure.credentialSafeIdentity(old, &safe_buf),
+        };
+        if (safe.len == 0 or std.mem.eql(u8, old, safe)) continue;
+        const stmt = db.prepare("UPDATE OR REPLACE " ++ table ++ " SET " ++ column ++ "=?1 WHERE rowid=?2") orelse continue;
+        defer db.finalize(stmt);
+        db.bindText(stmt, 1, safe);
+        db.bindInt64(stmt, 2, rowid);
+        _ = db.step(stmt);
+    }
+}
+
+fn scrubDownloadTargets() void {
+    var after_rowid: i64 = -1;
+    var budget: usize = 100_000;
+    while (budget > 0) : (budget -= 1) {
+        var rowid: i64 = 0;
+        var name_buf: [8192]u8 = undefined;
+        var link_buf: [8192]u8 = undefined;
+        var name_len: usize = 0;
+        var link_len: usize = 0;
+        {
+            const stmt = db.prepare("SELECT rowid,name,link FROM download_history WHERE rowid>?1 ORDER BY rowid LIMIT 1") orelse return;
+            defer db.finalize(stmt);
+            db.bindInt64(stmt, 1, after_rowid);
+            if (db.step(stmt) != db.c.SQLITE_ROW) break;
+            rowid = db.columnInt64(stmt, 0);
+            if (db.columnText(stmt, 1)) |value| {
+                name_len = @min(value.len, name_buf.len);
+                @memcpy(name_buf[0..name_len], value[0..name_len]);
+            }
+            if (db.columnText(stmt, 2)) |value| {
+                link_len = @min(value.len, link_buf.len);
+                @memcpy(link_buf[0..link_len], value[0..link_len]);
+            }
+        }
+        after_rowid = rowid;
+        var safe_name_buf: [8192]u8 = undefined;
+        var safe_link_buf: [8192]u8 = undefined;
+        const old_name = name_buf[0..name_len];
+        const old_link = link_buf[0..link_len];
+        const safe_name = pure.persistedTarget(old_name, &safe_name_buf).identity;
+        const safe_link = pure.persistedTarget(old_link, &safe_link_buf).reopen;
+        if (safe_name.len == 0) continue;
+        if (std.mem.eql(u8, old_name, safe_name) and std.mem.eql(u8, old_link, safe_link)) continue;
+        const stmt = db.prepare("UPDATE download_history SET name=?1,link=?2 WHERE rowid=?3") orelse continue;
+        defer db.finalize(stmt);
+        db.bindText(stmt, 1, safe_name);
+        db.bindText(stmt, 2, safe_link);
+        db.bindInt64(stmt, 3, rowid);
+        _ = db.step(stmt);
+    }
+}
+
+fn scrubKeyColumn(comptime table: []const u8, comptime id_col: []const u8) void {
+    var after_id: i64 = -1;
+    var budget: usize = 100_000;
+    while (budget > 0) : (budget -= 1) {
+        var id: i64 = 0;
+        var old_buf: [8192]u8 = undefined;
+        var old_len: usize = 0;
+        {
+            const stmt = db.prepare("SELECT " ++ id_col ++ ",key FROM " ++ table ++ " WHERE " ++ id_col ++ ">?1 ORDER BY " ++ id_col ++ " LIMIT 1") orelse return;
+            defer db.finalize(stmt);
+            db.bindInt64(stmt, 1, after_id);
+            if (db.step(stmt) != db.c.SQLITE_ROW) break;
+            id = db.columnInt64(stmt, 0);
+            if (db.columnText(stmt, 1)) |value| {
+                old_len = @min(value.len, old_buf.len);
+                @memcpy(old_buf[0..old_len], value[0..old_len]);
+            }
+        }
+        after_id = id;
+        var safe_buf: [8192]u8 = undefined;
+        const safe = pure.persistedTarget(old_buf[0..old_len], &safe_buf).identity;
+        if (safe.len == 0 or std.mem.eql(u8, safe, old_buf[0..old_len])) continue;
+        const stmt = db.prepare("UPDATE OR REPLACE " ++ table ++ " SET key=?1 WHERE " ++ id_col ++ "=?2") orelse continue;
+        defer db.finalize(stmt);
+        db.bindText(stmt, 1, safe);
+        db.bindInt64(stmt, 2, id);
+        _ = db.step(stmt);
+    }
 }
 
 /// Resolve the file-identity key for a playback link: absolute filesystem path
@@ -84,9 +286,15 @@ pub fn savePosition(name: []const u8, percent: f64, link: []const u8) void {
     if (name.len == 0 or name.len >= MAX_NAME_LEN) return;
     if (percent < 0.5) return;
 
+    var name_buf: [MAX_LINK_LEN]u8 = undefined;
+    const safe_name = pure.persistedTarget(name, &name_buf).identity;
+    if (safe_name.len == 0 or safe_name.len >= MAX_NAME_LEN) return;
+    var link_buf: [MAX_LINK_LEN]u8 = undefined;
+    const safe_link = pure.persistedTarget(link, &link_buf).reopen;
+
     // Local taste engine: torrent playback progress arrives here under the
     // torrent's real name (the proxy URL seen by load_file carries none).
-    @import("../services/activity.zig").onProgress(name, percent);
+    @import("../services/activity.zig").onProgress(safe_name, percent);
 
     var key_buf: [MAX_LINK_LEN]u8 = undefined;
     const file_key = resolveFileKey(link, &key_buf);
@@ -98,17 +306,13 @@ pub fn savePosition(name: []const u8, percent: f64, link: []const u8) void {
         "file_key=CASE WHEN excluded.file_key <> '' THEN excluded.file_key ELSE file_key END, updated_at=strftime('%s','now')";
     const stmt = db.prepare(sql) orelse return;
     defer db.finalize(stmt);
-    db.bindText(stmt, 1, name);
+    db.bindText(stmt, 1, safe_name);
     db.bindDouble(stmt, 2, percent);
-    if (link.len > 0 and link.len < MAX_LINK_LEN) {
-        db.bindText(stmt, 3, link);
-    } else {
-        db.bindText(stmt, 3, "");
-    }
+    db.bindText(stmt, 3, safe_link);
     db.bindText(stmt, 4, file_key);
     _ = db.step(stmt);
 
-    updateCache(name, percent, null, null, link);
+    updateCache(safe_name, percent, null, null, safe_link);
 }
 
 /// Save a seconds-accurate watch position (plus percent for UI that reads it).
@@ -117,6 +321,12 @@ pub fn savePositionFull(name: []const u8, percent: f64, position_secs: f64, dura
     if (state.app.incognito_mode) return;
     if (name.len == 0 or name.len >= MAX_NAME_LEN) return;
     if (percent < 0.5) return;
+
+    var name_buf: [MAX_LINK_LEN]u8 = undefined;
+    const safe_name = pure.persistedTarget(name, &name_buf).identity;
+    if (safe_name.len == 0 or safe_name.len >= MAX_NAME_LEN) return;
+    var link_buf: [MAX_LINK_LEN]u8 = undefined;
+    const safe_link = pure.persistedTarget(link, &link_buf).reopen;
 
     var key_buf: [MAX_LINK_LEN]u8 = undefined;
     const file_key = resolveFileKey(link, &key_buf);
@@ -128,24 +338,20 @@ pub fn savePositionFull(name: []const u8, percent: f64, position_secs: f64, dura
         "file_key=CASE WHEN excluded.file_key <> '' THEN excluded.file_key ELSE file_key END, updated_at=strftime('%s','now')";
     const stmt = db.prepare(sql) orelse return;
     defer db.finalize(stmt);
-    db.bindText(stmt, 1, name);
+    db.bindText(stmt, 1, safe_name);
     db.bindDouble(stmt, 2, percent);
     db.bindDouble(stmt, 3, position_secs);
     db.bindDouble(stmt, 4, duration_secs);
-    if (link.len > 0 and link.len < MAX_LINK_LEN) {
-        db.bindText(stmt, 5, link);
-    } else {
-        db.bindText(stmt, 5, "");
-    }
+    db.bindText(stmt, 5, safe_link);
     db.bindText(stmt, 6, file_key);
     _ = db.step(stmt);
 
-    updateCache(name, percent, position_secs, duration_secs, link);
+    updateCache(safe_name, percent, position_secs, duration_secs, safe_link);
 
     // Mirror into the unified read-model (services/library_store) so the home
     // "Continue" rail spans every vertical, not just TMDB. Keyed by the file
     // identity so the same title reconciles across sessions; `link` resumes it.
-    @import("../services/library_store.zig").upsertProgress("watch", file_key, name, "", position_secs, duration_secs, "", link);
+    @import("../services/library_store.zig").upsertProgress("watch", file_key, safe_name, "", position_secs, duration_secs, "", safe_link);
 }
 
 /// Update (or insert at front of) the in-memory cache. Null seconds leave the
@@ -157,6 +363,7 @@ fn updateCache(name: []const u8, percent: f64, position_secs: ?f64, duration_sec
             entries[i].percent = percent;
             if (position_secs) |p| entries[i].position_secs = p;
             if (duration_secs) |d| entries[i].duration_secs = d;
+            entries[i].link_len = 0;
             if (link.len > 0 and link.len < MAX_LINK_LEN) {
                 @memcpy(entries[i].link[0..link.len], link);
                 entries[i].link_len = link.len;

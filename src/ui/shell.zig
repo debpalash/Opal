@@ -20,18 +20,38 @@ const router = @import("../core/router.zig");
 const Route = router.Route;
 
 const search_mod = @import("../services/search.zig");
+const browser = @import("../services/browser.zig");
+const browser_pure = @import("../services/browser_pure.zig");
 
 const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
+
+var player_top_chrome_rect: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
+
+pub fn mouseInPlayerTopChrome(p: dvui.Point.Physical) bool {
+    const r = player_top_chrome_rect;
+    return p.x >= r.x and p.x <= r.x + r.w and p.y >= r.y and p.y <= r.y + r.h;
+}
 
 // Sub-navigation selections live in state.app (so any service can navigate to
 // a Browse/Library/System sub-tab via state.navigateToTab without importing shell).
 
 /// Frame entry — called from appFrame when page_shell_enabled.
 pub fn render() !void {
+    // Player popovers and panels are route-bound. Leaving Now Playing must not
+    // leave an invisible modal armed that reappears on the next visit or eats
+    // the first click on another page.
+    if (state.app.router.current != .player) {
+        footer.closePickers();
+        state.app.playlist_drawer_open = false;
+        state.app.media_info_open = false;
+        state.app.stats_overlay_open = false;
+    }
+
     const live_width = @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().w, state.app.ui_scale);
     const titlebar = @import("titlebar.zig");
+    const titlebar_in_flow = titlebar.active() and state.app.router.current != .player;
     const live_height = @import("../core/scale_pure.zig").layoutUnits(
-        @max(1, dvui.windowRect().h - @as(f32, if (titlebar.active()) titlebar.HEIGHT else 0)),
+        @max(1, dvui.windowRect().h - @as(f32, if (titlebar_in_flow) titlebar.HEIGHT else 0)),
         state.app.ui_scale,
     );
     var root = dvui.box(@src(), .{ .dir = .vertical }, .{
@@ -84,27 +104,80 @@ pub fn render() !void {
     var idle_ms: i64 = 0;
     var hide_eligible = false; // idle threshold crossed → nav fading or hidden
     if (state.app.router.current == .player) {
-        if (fullscreen) {
-            hide_eligible = true;
-        } else {
-            var playing_video = false;
-            if (state.app.active_player_idx < state.app.players.items.len) {
-                const ap = state.app.players.items[state.app.active_player_idx];
-                playing_video = ap.texture != null and !ap.cached_paused;
-            }
-            const text_len = std.mem.indexOfScalar(u8, &state.app.magnet_buf, 0) orelse state.app.magnet_buf.len;
-            const now_ms = @import("../core/io_global.zig").milliTimestamp();
-            idle_ms = now_ms - state.app.last_mouse_move_ms;
-            hide_eligible = autohide.shouldHideChrome(.{
-                .playing_video = playing_video,
-                .typing = text_len > 0,
-                .idle_ms = idle_ms,
-                .threshold_ms = autohide.DEFAULT_THRESHOLD_MS,
-            });
+        var playing_video = false;
+        if (state.app.active_player_idx < state.app.players.items.len) {
+            const ap = state.app.players.items[state.app.active_player_idx];
+            playing_video = ap.texture != null and !ap.cached_paused;
         }
+        const text_len = std.mem.indexOfScalar(u8, &state.app.magnet_buf, 0) orelse state.app.magnet_buf.len;
+        const now_ms = @import("../core/io_global.zig").milliTimestamp();
+        idle_ms = now_ms - state.app.last_mouse_move_ms;
+        hide_eligible = autohide.shouldHideChrome(.{
+            .playing_video = playing_video,
+            .typing = text_len > 0,
+            .idle_ms = idle_ms,
+            .threshold_ms = autohide.DEFAULT_THRESHOLD_MS,
+        });
     }
-    // Fully immersive once the fade completes (fullscreen skips the fade).
-    const immersive = hide_eligible and (fullscreen or idle_ms >= autohide.DEFAULT_THRESHOLD_MS + autohide.FADE_MS);
+    const immersive = hide_eligible and idle_ms >= autohide.DEFAULT_THRESHOLD_MS + autohide.FADE_MS;
+
+    if (state.app.router.current == .player) {
+        // Player is a true layer stack: the video owns the entire route and
+        // chrome is painted above it. Neither the nav nor the transport panel
+        // participates in layout, so showing controls never resizes the frame.
+        var nav_alpha: f32 = 1.0;
+        if (hide_eligible and !immersive) {
+            const t = @as(f32, @floatFromInt(idle_ms - autohide.DEFAULT_THRESHOLD_MS)) / @as(f32, @floatFromInt(autohide.FADE_MS));
+            nav_alpha = 1.0 - std.math.clamp(t, 0.0, 1.0);
+            dvui.refresh(null, @src(), null);
+        }
+
+        var stage = dvui.overlay(@src(), .{ .expand = .both });
+        try renderPage(.player);
+
+        if (!immersive) {
+            const prev_alpha = dvui.alpha(nav_alpha);
+            var top_chrome = dvui.overlay(@src(), .{
+                .expand = .horizontal,
+                .gravity_y = 0.0,
+            });
+            // A continuous edge gradient reads like polished playback chrome;
+            // separate uniform title/nav fills read as stacked dark toolbars.
+            // Paint this first so all controls float above it.
+            {
+                var backdrop = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
+                const edge_alphas = [_]u8{ 96, 92, 86, 78, 68, 56, 44, 32, 20, 10, 4 };
+                inline for (edge_alphas, 0..) |alpha, i| {
+                    var slice = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                        .id_extra = i + 9810,
+                        .expand = .horizontal,
+                        .background = true,
+                        .color_fill = theme.playerGlass(alpha),
+                        .min_size_content = .{ .w = 0, .h = 9 },
+                        .max_size_content = .{ .w = 0, .h = 9 },
+                    });
+                    slice.deinit();
+                }
+                backdrop.deinit();
+            }
+            var chrome_controls = dvui.box(@src(), .{ .dir = .vertical }, .{
+                .expand = .horizontal,
+                .gravity_y = 0.0,
+            });
+            // On the Player route the custom Windows title strip belongs to
+            // this overlay as well, so the video extends behind all top chrome.
+            titlebar.render();
+            renderPlayerTopNav();
+            player_top_chrome_rect = chrome_controls.data().borderRectScale().r;
+            chrome_controls.deinit();
+            top_chrome.deinit();
+            dvui.alphaSet(prev_alpha);
+        }
+        stage.deinit();
+
+        header.renderStreamKeyPopoverIfOpen();
+        return;
+    }
 
     if (!immersive) {
         // Fade the nav out over the same window as the control-bar fade
@@ -164,7 +237,7 @@ pub fn render() !void {
                 .plugins => @intFromEnum(state.app.plugin_tab),
                 else => 0,
             };
-            var page_fade = dvui.animate(@src(), .{ .kind = .alpha, .duration = theme.motion.base, .easing = theme.motion.enter }, .{
+            var page_fade = dvui.animate(@src(), .{ .kind = .alpha, .duration = theme.motionDuration(theme.motion.base), .easing = theme.motion.enter }, .{
                 .id_extra = @as(usize, @intFromEnum(r)) * 100 + sub_key,
                 .expand = .both,
             });
@@ -209,8 +282,8 @@ fn renderTopNav(compact: bool, narrow: bool) void {
         .min_size_content = .{ .w = 0, .h = 30 },
         .background = true,
         .color_fill = transparent,
-        .color_border = theme.colors.border_subtle,
-        .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
+        .color_border = if (state.app.router.current == .player) transparent else theme.colors.border_subtle,
+        .border = if (state.app.router.current == .player) dvui.Rect.all(0) else .{ .x = 0, .y = 0, .w = 0, .h = 1 },
         .padding = .{ .x = if (compact) theme.spacing.xs else theme.spacing.md, .y = 1, .w = if (compact) theme.spacing.xs else theme.spacing.md, .h = 1 },
     });
     defer bar.deinit();
@@ -261,13 +334,8 @@ fn renderTopNav(compact: bool, narrow: bool) void {
     // that direction. Previously canGoBack() was passed as `active`, which
     // painted Back as a toggled-on accent chip whenever ANY history existed —
     // the same visual language the route buttons use for "current page".
-    if (components.iconButtonEx(@src(), icons.tvg.lucide.@"chevron-left", "Back", false, state.app.router.canGoBack())) {
+    if (chromeIconButton(@src(), icons.tvg.lucide.@"chevron-left", "Back", false, state.app.router.canGoBack())) {
         state.app.router.goBack();
-    }
-    if (!compact) {
-        if (components.iconButtonEx(@src(), icons.tvg.lucide.@"chevron-right", "Forward", false, state.app.router.canGoForward())) {
-            state.app.router.goForward();
-        }
     }
 
     // Primary nav links — hidden in compact (bottom tab bar takes over).
@@ -277,9 +345,6 @@ fn renderTopNav(compact: bool, narrow: bool) void {
         // Search and Browse are owned by the omnibox and source selector.
         navLink(.home, "Home", icons.tvg.lucide.house, 1, true);
         navLink(.watching, "Watching", icons.tvg.lucide.tv, 7, narrow);
-        navLink(.downloads, "Downloads", icons.tvg.lucide.download, 4, true);
-        navLink(.queue, "Queue", icons.tvg.lucide.@"list-video", 5, true);
-        navLink(.history, "History", icons.tvg.lucide.history, 6, true);
     }
 
     // Compact widths render the same input in a dedicated row below the nav.
@@ -292,29 +357,19 @@ fn renderTopNav(compact: bool, narrow: bool) void {
     }
 
     // Donate chip — dropped at narrow so the tighter row doesn't clip.
-    if (!narrow and !compact) header.donateButton();
 
     // Right-side actions (icon-only). The former "Assistant" button opened the
     // AI/Voice SETTINGS page (renderAIContent) — that now lives in Settings ›
     // AI & Voice, so it's dropped from the primary nav. AI chat is reachable
     // via the omnibox ('>' or trailing '?') — the conversation lives on Home.
-    if (components.iconButton(@src(), icons.tvg.lucide.play, "Now playing", state.app.router.current == .player)) {
+    if (chromeIconButton(@src(), icons.tvg.lucide.play, "Now playing", state.app.router.current == .player, true)) {
         state.app.router.navigate(.player);
     }
     // Plugins — its own nav-bar menu. Was a sub-tab hidden behind the
     // "Logs & Plugins" icon, which meant two clicks and no hint that Suwayomi /
     // Debrid / Trakt lived there at all. The dropdown lists every section, so
     // each is one click from anywhere.
-    if (!compact and !narrow) {
-        pluginsMenu();
-        if (components.iconButton(@src(), icons.tvg.lucide.@"scroll-text", "Logs", state.app.router.current == .system)) {
-            state.app.router.navigate(.system);
-        }
-        // Web UI (globe) — starts/stops the LAN server and opens it in a browser.
-        // Same persisted switch as Settings › Web Remote Control.
-        header.renderWebUiButton();
-    }
-    if (!compact and components.iconButton(@src(), icons.tvg.lucide.settings, "Settings", state.app.router.current == .settings)) {
+    if (!compact and chromeIconButton(@src(), icons.tvg.lucide.settings, "Settings", state.app.router.current == .settings, true)) {
         state.app.router.navigate(.settings);
     }
 
@@ -342,10 +397,57 @@ fn renderTopNav(compact: bool, narrow: bool) void {
                 .corner_radius = dvui.Rect.all(theme.radius.md),
             });
             defer col.deinit();
-            if (compact) renderCompactDestinations();
+            renderSecondaryDestinations(compact);
             renderOverflowItems();
         }
     }
+}
+
+/// Playback-only header. Browsing destinations and the omnibox belong to the
+/// browsing shell; repeating all of them over a film creates a wall of icons.
+fn renderPlayerTopNav() void {
+    var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .horizontal,
+        .min_size_content = .{ .w = 0, .h = 30 },
+        .padding = .{ .x = theme.spacing.md, .y = 1, .w = theme.spacing.md, .h = 1 },
+    });
+    defer bar.deinit();
+
+    if (components.iconButtonOverlay(@src(), icons.tvg.lucide.@"chevron-left", "Back", false, true)) {
+        if (state.app.router.canGoBack()) state.app.router.goBack() else state.app.router.navigate(.home);
+        dvui.refresh(null, @src(), null);
+    }
+
+    if (state.app.active_player_idx < state.app.players.items.len) {
+        const p = state.app.players.items[state.app.active_player_idx];
+        if (p.current_url_len > 0) {
+            const raw = p.current_url[0..p.current_url_len];
+            var safe_buf: [2048]u8 = undefined;
+            const full = @import("../player/watch_history_pure.zig").persistedTarget(raw, &safe_buf).identity;
+            const base = std.fs.path.basename(full);
+            const clipped = if (base.len > 72) base[0..72] else base;
+            _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8(clipped)}, .{
+                .expand = .horizontal,
+                .color_text = theme.colors.text_primary,
+                .gravity_y = 0.5,
+                .margin = .{ .x = theme.spacing.sm, .y = 0, .w = theme.spacing.sm, .h = 0 },
+            });
+        }
+    }
+
+    var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+    spacer.deinit();
+    if (components.iconButtonOverlay(@src(), icons.tvg.lucide.settings, "Settings", false, true)) {
+        state.app.router.navigate(.settings);
+        dvui.refresh(null, @src(), null);
+    }
+}
+
+fn chromeIconButton(src: std.builtin.SourceLocation, icon: []const u8, tooltip: []const u8, active: bool, enabled: bool) bool {
+    if (state.app.router.current == .player) {
+        return components.iconButtonOverlay(src, icon, tooltip, active, enabled);
+    }
+    return components.iconButtonEx(src, icon, tooltip, active, enabled);
 }
 
 /// Nav-bar Plugins menu: a puzzle-icon dropdown listing every section of the
@@ -397,17 +499,28 @@ fn pluginsMenu() void {
 
 /// Body of the top-nav overflow menu. Each item is a leaf menuItemLabel; dvui
 /// closes the floating menu on activation.
-fn renderCompactDestinations() void {
+fn renderSecondaryDestinations(compact: bool) void {
     const item_opts = dvui.Options{ .expand = .horizontal, .color_text = theme.colors.text_primary };
     // The compact shell deliberately removes the desktop link row. Keep every
     // destination reachable instead of treating "mobile" as five hand-picked
     // pages and silently losing the rest of the application.
-    if (dvui.menuItemLabel(@src(), "Watching", .{}, item_opts) != null) state.app.router.navigate(.watching);
+    if (compact) {
+        if (dvui.menuItemLabel(@src(), "Home", .{}, item_opts) != null) state.app.router.navigate(.home);
+        if (dvui.menuItemLabel(@src(), "Watching", .{}, item_opts) != null) state.app.router.navigate(.watching);
+    }
+    if (dvui.menuItemLabel(@src(), "Downloads", .{}, item_opts) != null) state.app.router.navigate(.downloads);
     if (dvui.menuItemLabel(@src(), "Queue", .{}, item_opts) != null) state.app.router.navigate(.queue);
     if (dvui.menuItemLabel(@src(), "History", .{}, item_opts) != null) state.app.router.navigate(.history);
     if (dvui.menuItemLabel(@src(), "Plugins", .{}, item_opts) != null) state.app.router.navigate(.plugins);
     if (dvui.menuItemLabel(@src(), "Logs", .{}, item_opts) != null) state.app.router.navigate(.system);
-    if (dvui.menuItemLabel(@src(), "Settings", .{}, item_opts) != null) state.app.router.navigate(.settings);
+    if (dvui.menuItemLabel(@src(), "Web remote settings", .{}, item_opts) != null) {
+        state.app.settings_tab = .WebUi;
+        state.app.router.navigate(.settings);
+    }
+    if (dvui.menuItemLabel(@src(), "Donate", .{}, item_opts) != null) {
+        @import("settings.zig").openExternal(header.DONATE_URL);
+    }
+    if (compact and dvui.menuItemLabel(@src(), "Settings", .{}, item_opts) != null) state.app.router.navigate(.settings);
 }
 
 fn renderOverflowItems() void {
@@ -521,17 +634,24 @@ fn navLink(r: Route, label: []const u8, icon: []const u8, id_extra: usize, icon_
 ///   • leading '>' or trailing '?'    → AI assistant (chat)
 ///   • anything else                  → UNIFIED search across all sources
 fn omnibox(narrow: bool) void {
+    var placeholder_buf: [96]u8 = undefined;
+    const placeholder: []const u8 = if (state.app.router.current == .browse)
+        std.fmt.bufPrint(&placeholder_buf, "Search {s}, or paste a link…", .{tabLabel(state.app.browse_source)}) catch "Search this source, or paste a link…"
+    else if (narrow)
+        "Search, ask, paste…"
+    else
+        "Search everything, ask, or paste a link…";
     var te = dvui.textEntry(@src(), .{
         .text = .{ .buffer = &state.app.magnet_buf },
-        .placeholder = if (narrow) "Ask, search, paste…" else "Ask, search, or paste a link…",
+        .placeholder = placeholder,
     }, .{
         // Consume only the width left after navigation/actions. On compact
         // windows this is the full second row, never a hidden search control.
         .expand = .horizontal,
         .min_size_content = .{ .w = 80, .h = 26 },
         .margin = .{ .x = theme.spacing.xs, .y = 0, .w = 4, .h = 0 },
-        .color_fill = theme.colors.bg_elevated,
-        .color_border = theme.colors.border_subtle,
+        .color_fill = if (state.app.router.current == .player) theme.playerGlass(40) else theme.colors.bg_elevated,
+        .color_border = if (state.app.router.current == .player) theme.playerGlass(76) else theme.colors.border_subtle,
         .border = dvui.Rect.all(1),
         .corner_radius = dvui.Rect.all(theme.radius.md),
         .gravity_y = 0.5,
@@ -563,7 +683,7 @@ fn omnibox(narrow: bool) void {
             icons.tvg.lucide.mic
         else
             icons.tvg.lucide.headphones;
-        if (components.iconButton(@src(), voice_icon, "Voice / conversation mode", voice.conversation_active.load(.acquire))) {
+        if (chromeIconButton(@src(), voice_icon, "Voice / conversation mode", voice.conversation_active.load(.acquire), true)) {
             voice.toggleConversation();
         }
     }
@@ -574,32 +694,50 @@ fn omnibox(narrow: bool) void {
 
     if (!entered) return;
     if (len == 0) return;
-    const text = state.app.magnet_buf[0..len];
+    const text = std.mem.trim(u8, state.app.magnet_buf[0..len], " \t\r\n");
+    switch (browser_pure.classifyOmnibox(text)) {
+        .empty => {},
+        .memory => {
+            search_mod.memorySearch(std.mem.trim(u8, text[1..], " \t"));
+            @memset(&state.app.magnet_buf, 0);
+            state.app.router.navigate(.search);
+        },
+        .assistant => {
+            header.submitInput();
+            // The conversation renders on HOME (home.zig chat mode); the
+            // .assistant route hosts AI SETTINGS, not the chat.
+            state.app.router.navigate(.home);
+        },
+        .open => openOmniboxTarget(text),
+        .search => {
+            if (browser.searchCurrentBrowse(text)) {
+                @memset(&state.app.magnet_buf, 0);
+            } else {
+                search_mod.submitQuery(text);
+                @memset(&state.app.magnet_buf, 0);
+                state.app.router.navigate(.search);
+            }
+        },
+    }
+}
 
-    // Leading '?' → conversational memory search over your own watch history
-    // ("?the rainy argument scene") — seeds the matched title into multi-source
-    // search. (Trailing '?' is AI chat, handled below.)
-    if (text[0] == '?' and len > 1) {
-        search_mod.memorySearch(text[1..]);
-        @memset(&state.app.magnet_buf, 0);
-        return;
-    }
-
-    if (isMedia(text)) {
-        header.submitInput(); // loads into player (clears buffer); helper routes the player nav
-        return;
-    }
-    if (text[0] == '>' or text[len - 1] == '?') {
-        header.submitInput(); // → AI chat
-        // The conversation renders on HOME (home.zig chat mode); the
-        // .assistant route hosts AI SETTINGS, not the chat.
-        state.app.router.navigate(.home);
-        return;
-    }
-    // Default: unified search across every source.
-    search_mod.submitQuery(text);
+fn openOmniboxTarget(text: []const u8) void {
+    var normalized_buf: [2048]u8 = undefined;
+    const normalized = browser_pure.resolveOpenTarget(text, &normalized_buf);
+    // resolveOpenTarget may return a slice into magnet_buf; browser.loadContent
+    // needs it intact after the visible box is cleared.
+    var target_buf: [2048]u8 = undefined;
+    const n = @min(normalized.len, target_buf.len);
+    @memcpy(target_buf[0..n], normalized[0..n]);
     @memset(&state.app.magnet_buf, 0);
-    state.app.router.navigate(.search);
+    const target = target_buf[0..n];
+    state.showToast(switch (browser_pure.routeContent(target)) {
+        .mpv => "Preparing playback…",
+        .comic_viewer => "Opening reader…",
+        .torrent => "Opening torrent…",
+        .web => "Opening in Web…",
+    });
+    browser.loadContent(target);
 }
 
 /// Shared interaction for the box-based nav rows (top-nav links, sub-tabs,
@@ -632,12 +770,6 @@ fn navRowInteract(row: *dvui.BoxWidget) bool {
     row.drawBackground();
     if (focused) row.data().focusBorder();
     return activated;
-}
-
-fn isMedia(text: []const u8) bool {
-    const prefixes = [_][]const u8{ "magnet:", "http://", "https://", "file://", "/", "~/", "./", "ftp://", "rtmp://", "rtsp://" };
-    for (prefixes) |p| if (std.mem.startsWith(u8, text, p)) return true;
-    return false;
 }
 
 // ── Page dispatch ──
@@ -710,62 +842,40 @@ fn renderPage(r: Route) !void {
 }
 
 const BROWSE_SOURCES = [_]state.DrawerTab{ .TMDB, .YouTube, .Iptv, .Anime, .Podcasts, .Radio, .Music, .Comics, .Web, .RSS, .Jellyfin, .Plex, .Audiobooks, .Opds, .Novels, .Vndb, .Drama };
+const WATCH_SOURCES = [_]state.DrawerTab{ .TMDB, .YouTube, .Anime, .Drama, .Iptv };
+const LISTEN_SOURCES = [_]state.DrawerTab{ .Podcasts, .Radio, .Music, .Audiobooks };
+const READ_SOURCES = [_]state.DrawerTab{ .Comics, .Novels, .Vndb, .Opds, .RSS };
+const CONNECTED_SOURCES = [_]state.DrawerTab{ .Web, .Jellyfin, .Plex };
 
 /// Browse is one task with a source filter, not seventeen permanent navigation
 /// tabs. Connectors remain reachable from the command palette even when their
 /// setup is incomplete; Plugins/Settings owns configuration.
-fn browseSourceAvailable(source: state.DrawerTab) bool {
-    return switch (source) {
-        .Iptv => @import("../core/source_config.zig").has("iptv-org"),
-        .RSS => @import("../services/rss.zig").feed_count > 0,
-        .Jellyfin => @import("../services/jellyfin.zig").connectionSnapshot().connected,
-        .Plex => @import("../services/plex.zig").conn_state.load(.acquire) == .connected,
-        .Audiobooks => state.app.abs.connected,
-        .Opds => state.app.opds.connected,
-        else => true,
-    };
-}
-
 fn browseSourcePicker() void {
-    var labels: [BROWSE_SOURCES.len][]const u8 = undefined;
-    var available: [BROWSE_SOURCES.len]state.DrawerTab = undefined;
-    var available_count: usize = 0;
-    var selected: usize = 0;
-    for (BROWSE_SOURCES) |source| {
-        if (!browseSourceAvailable(source)) continue;
-        available[available_count] = source;
-        labels[available_count] = tabLabel(source);
-        if (source == state.app.browse_source) selected = available_count;
-        available_count += 1;
-    }
-    if (!browseSourceAvailable(state.app.browse_source)) {
-        state.app.browse_source = available[0];
-        state.app.drawer_tab = available[0];
-        selected = 0;
-    }
-
-    if (browseSourceSelect(labels[0..available_count], selected)) |picked| {
-        state.app.browse_source = available[picked];
+    if (browseSourceSelect()) |picked| {
+        state.app.browse_source = picked;
         state.app.drawer_tab = state.app.browse_source;
         state.app.router.navigate(.browse);
     }
 }
 
-/// Theme-owned source selector. dvui.dropdown's popup uses its default light
-/// surface, which becomes a bright white panel under every dark Opal theme.
-fn browseSourceSelect(labels: []const []const u8, selected: usize) ?usize {
-    var picked: ?usize = null;
+/// Compact task-grouped source selector, retaining every source. Disconnected
+/// integrations stay discoverable so their sign-in/recovery UI remains usable.
+/// Keep it single-level: cascading hover submenus were fragile at the window
+/// edges and could lose their anchor before a source click reached them.
+fn browseSourceSelect() ?state.DrawerTab {
+    var picked: ?state.DrawerTab = null;
     var menu = dvui.menu(@src(), .horizontal, .{
         .color_fill = transparent,
         .gravity_y = 0.5,
     });
     defer menu.deinit();
 
-    if (dvui.menuItemLabel(@src(), labels[selected], .{ .submenu = true }, .{
-        .min_size_content = .{ .w = 100, .h = 0 },
+    const selected = state.app.browse_source;
+    if (dvui.menuItemLabel(@src(), tabLabel(selected), .{ .submenu = true }, .{
+        .min_size_content = .{ .w = 118, .h = 0 },
         .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .color_fill_hover = theme.colors.bg_hover,
+        .color_fill = if (state.app.router.current == .player) transparent else theme.colors.bg_surface,
+        .color_fill_hover = if (state.app.router.current == .player) theme.playerGlass(42) else theme.colors.bg_hover,
         .color_text = theme.colors.text_primary,
         .corner_radius = theme.dims.rad_sm,
         .padding = .{ .x = theme.spacing.sm, .y = 4, .w = theme.spacing.sm, .h = 4 },
@@ -775,28 +885,46 @@ fn browseSourceSelect(labels: []const []const u8, selected: usize) ?usize {
             .color_fill = theme.colors.bg_surface,
             .color_border = theme.colors.border_subtle,
             .border = dvui.Rect.all(1),
-            .padding = dvui.Rect.all(2),
-            .corner_radius = theme.dims.rad_sm,
+            .padding = dvui.Rect.all(theme.spacing.xs),
+            .corner_radius = theme.dims.rad_lg,
         });
         defer popup.deinit();
         var choices = dvui.menu(@src(), .vertical, .{
             .background = true,
             .color_fill = theme.colors.bg_surface,
-            .border = dvui.Rect.all(1),
-            .color_border = theme.colors.border_subtle,
-            .corner_radius = theme.dims.rad_sm,
+            .corner_radius = theme.dims.rad_lg,
         });
         defer choices.deinit();
-        for (labels, 0..) |label, i| {
-            if (dvui.menuItemLabel(@src(), label, .{}, .{
-                .id_extra = i,
-                .expand = .horizontal,
-                .color_fill_hover = theme.colors.bg_hover,
-                .color_text = if (i == selected) theme.colors.accent else theme.colors.text_primary,
-            }) != null) picked = i;
-        }
+        browseSourceSection("WATCH", &WATCH_SOURCES, 8100, &picked);
+        browseSourceSection("LISTEN", &LISTEN_SOURCES, 8200, &picked);
+        browseSourceSection("READ", &READ_SOURCES, 8300, &picked);
+        browseSourceSection("WEB & LIBRARIES", &CONNECTED_SOURCES, 8400, &picked);
     }
     return picked;
+}
+
+fn browseSourceSection(label: []const u8, sources: []const state.DrawerTab, id: usize, picked: *?state.DrawerTab) void {
+    const selected = state.app.browse_source;
+
+    _ = dvui.label(@src(), "{s}", .{label}, .{
+        .id_extra = id,
+        .expand = .horizontal,
+        .min_size_content = .{ .w = 196, .h = 14 },
+        .color_text = theme.colors.text_tertiary,
+        .padding = .{ .x = theme.spacing.sm, .y = 5, .w = theme.spacing.sm, .h = 2 },
+    });
+    for (sources, 0..) |source, i| {
+        if (dvui.menuItemLabel(@src(), tabLabel(source), .{}, .{
+            .id_extra = id + i + 1,
+            .expand = .horizontal,
+            .min_size_content = .{ .w = 196, .h = 28 },
+            .color_fill = if (source == selected) theme.colors.bg_elevated else transparent,
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_text = if (source == selected) theme.colors.accent else theme.colors.text_primary,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = theme.spacing.sm, .y = 3, .w = theme.spacing.sm, .h = 3 },
+        }) != null) picked.* = source;
+    }
 }
 
 fn tabLabel(t: state.DrawerTab) []const u8 {

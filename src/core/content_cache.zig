@@ -10,8 +10,8 @@
 //!
 //! Security / robustness:
 //!  • Encrypted at rest with XChaCha20-Poly1305 under a random 32-byte key kept
-//!    at `~/.config/opal/cache.key` (mode 0600). If the key can't be made or
-//!    read, the cache DISABLES itself (never stores plaintext).
+//!    at `~/.config/opal/cache.key` (current-user DPAPI on Windows, mode 0600
+//!    elsewhere). If the key can't be made/read, the cache DISABLES itself.
 //!  • The AAD binds each entry to its key hash + header, so a tampered or
 //!    relocated file fails authentication and is treated as a miss.
 //!  • Writes are atomic (temp file + rename) — a crash never leaves a half
@@ -28,6 +28,8 @@ const paths = @import("paths.zig");
 const alloc = @import("alloc.zig").allocator;
 const state = @import("state.zig");
 const logs = @import("logs.zig");
+const secret_store = @import("secret_store.zig");
+const secret_file = @import("secret_file.zig");
 
 const sync = @import("sync.zig");
 
@@ -112,16 +114,26 @@ fn loadOrCreateKey() bool {
     var path_buf: [640]u8 = undefined;
     const path = keyFilePath(&path_buf) orelse return false;
 
-    // Try to read an existing key.
-    if (io.openFileAbsolute(path, .{})) |f| {
-        defer f.close(io.io());
-        var buf: [32]u8 = undefined;
-        const n = io.readAll(f, &buf) catch 0;
-        if (n == 32) {
-            @memcpy(&install_key, &buf);
-            return true;
+    // Try to read an existing key. Windows protects it with DPAPI; a legacy
+    // raw key remains readable and is upgraded without invalidating entries.
+    if (io.cwdReadFileAlloc(path, alloc, 512)) |stored| {
+        defer {
+            @memset(stored, 0);
+            alloc.free(stored);
         }
-        // Wrong size → corrupt; fall through and regenerate.
+        var plain: [32]u8 = undefined;
+        defer @memset(&plain, 0);
+        if (secret_store.reveal(stored, &plain)) |key| {
+            if (key.len == install_key.len) {
+                @memcpy(&install_key, key);
+                if (@import("builtin").os.tag == .windows and !secret_store.isSealed(stored)) {
+                    if (!persistInstallKey(path, &plain)) return false;
+                }
+                return true;
+            }
+        }
+        // Wrong size or corrupt envelope → regenerate; stale entries then fail
+        // authentication and are discarded as normal cache misses.
     } else |_| {}
 
     // Generate a fresh key and persist it at mode 0600.
@@ -133,20 +145,17 @@ fn loadOrCreateKey() bool {
     const cfg_dir = paths.configDir(&cfg_buf);
     io.cwdMakePath(cfg_dir) catch {};
 
-    const perms = if (@import("builtin").os.tag == .windows)
-        std.Io.File.Permissions.default_file
-    else
-        std.Io.File.Permissions.fromMode(0o600);
-    const f = io.createFileAbsolute(path, .{
-        .read = false,
-        .truncate = true,
-        .permissions = perms,
-    }) catch return false;
-    defer f.close(io.io());
-    io.writeAll(f, &newkey) catch return false;
-    if (@import("builtin").os.tag != .windows)
-        f.setPermissions(io.io(), std.Io.File.Permissions.fromMode(0o600)) catch {};
+    defer @memset(&newkey, 0);
+    if (!persistInstallKey(path, &newkey)) return false;
     @memcpy(&install_key, &newkey);
+    return true;
+}
+
+fn persistInstallKey(path: []const u8, key: *const [32]u8) bool {
+    var protected: [256]u8 = undefined;
+    defer @memset(&protected, 0);
+    const stored = secret_store.seal(key, &protected) orelse return false;
+    secret_file.write(path, stored) catch return false;
     return true;
 }
 

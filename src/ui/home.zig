@@ -151,6 +151,9 @@ pub fn render() void {
     const rail_h: f32 = card_w * 1.5 + RAIL_EXTRA;
     const foryou_h: f32 = 132 + 24 + 38; // discovery_ui CARD_H + strip + header
 
+    // One cross-media Continue rail: films, files, podcasts, audiobooks,
+    // comics, novels and anime all enter through the same read model.
+    if (budget >= rail_h and renderLibraryContinueRail(card_w)) budget -= rail_h;
     if (watching.items.len > 0 and budget >= rail_h) {
         posterStrip("Continue Watching", icons.tvg.lucide.play, watching, .Watching, 1, card_w);
         budget -= rail_h;
@@ -956,6 +959,7 @@ const LibSlot = struct {
     url_hash: u64 = 0,
 };
 var lib_slots: [24]LibSlot = [_]LibSlot{.{}} ** 24;
+var continue_slots: [24]LibSlot = [_]LibSlot{.{}} ** 24;
 
 /// Route a library row by its `kind`. Every kind a producer writes must land
 /// here — a row that can't be reopened is worse than no row:
@@ -970,49 +974,56 @@ fn openLibItem(item: *const library_pure.LibraryItem) void {
     if (link.len == 0) return;
     const kind = item.kind[0..@min(item.kind_len, item.kind.len)];
     const title = item.title[0..@min(item.title_len, item.title.len)];
-    if (std.mem.eql(u8, kind, "iptv")) {
-        browser.loadContentDirectMeta(link, "", title, "");
-    } else if (std.mem.eql(u8, kind, "audiobook")) {
-        browser.loadContentDirectMeta(link, item.poster[0..@min(item.poster_len, item.poster.len)], title, "");
-    } else if (std.mem.eql(u8, kind, "anime")) {
-        @import("../services/anime.zig").jumpToAnime(link);
-        state.app.browse_source = .Anime;
-        state.app.router.navigate(.browse);
-    } else if (std.mem.eql(u8, kind, "novels")) {
-        @import("../services/novels.zig").openDeepLink(link);
-    } else if (std.mem.eql(u8, kind, "comics")) {
-        @import("../services/comics.zig").openDeepLink(link);
-    } else if (std.mem.eql(u8, kind, "podcast")) {
-        @import("../services/podcasts.zig").openDeepLink(link);
-    } else {
-        browser.resumePlayback(link);
+    switch (library_pure.parseKind(kind)) {
+        .iptv, .radio, .music => browser.loadContentDirectMeta(link, item.poster[0..@min(item.poster_len, item.poster.len)], title, ""),
+        .audiobook => @import("../services/audiobookshelf.zig").playBookById(link, title, ""),
+        .anime => {
+            @import("../services/anime.zig").jumpToAnime(link);
+            state.app.browse_source = .Anime;
+            state.app.router.navigate(.browse);
+        },
+        .novels => @import("../services/novels.zig").openDeepLink(link),
+        .comics => @import("../services/comics.zig").openDeepLink(link),
+        .podcast => @import("../services/podcasts.zig").openDeepLink(link),
+        else => browser.resumePlayback(link),
     }
 }
 
 /// Returns true if the rail rendered (has favorites). Cross-vertical — surfaces
 /// IPTV/music/etc. favorites the TMDB rails can't.
+fn renderLibraryContinueRail(card_w: f32) bool {
+    var items: [24]library_pure.LibraryItem = undefined;
+    const n = library_store.loadContinue(items[0..]);
+    return renderLibraryItemsRail(items[0..n], "Continue", icons.tvg.lucide.play, 7600, card_w, continue_slots[0..]);
+}
+
 fn renderLibraryRail(card_w: f32) bool {
     var items: [24]library_pure.LibraryItem = undefined;
     const n = library_store.loadFavorites(items[0..]);
+    return renderLibraryItemsRail(items[0..n], "Your Library", icons.tvg.lucide.@"library-big", 7700, card_w, lib_slots[0..]);
+}
+
+fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []const u8, heading_icon: []const u8, base_id: usize, card_w: f32, slots: []LibSlot) bool {
+    const n = @min(items.len, slots.len);
     if (n == 0) return false;
 
     // Header (icon + label; no TMDB "See all").
     {
         var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .id_extra = 7700,
+            .id_extra = base_id,
             .expand = .horizontal,
             .padding = .{ .x = theme.spacing.xs, .y = theme.spacing.sm, .w = theme.spacing.xs, .h = theme.spacing.xs },
         });
         defer hdr.deinit();
-        dvui.icon(@src(), "yourlib", icons.tvg.lucide.@"library-big", .{}, .{
-            .id_extra = 7700,
+        dvui.icon(@src(), heading, heading_icon, .{}, .{
+            .id_extra = base_id,
             .color_text = theme.colors.accent,
             .min_size_content = theme.iconSize(.sm),
             .gravity_y = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
-        _ = dvui.label(@src(), "Your Library", .{}, .{
-            .id_extra = 7700,
+        _ = dvui.label(@src(), "{s}", .{heading}, .{
+            .id_extra = base_id,
             .color_text = theme.colors.text_primary,
             .font = dvui.themeGet().font_heading,
             .gravity_y = 0.5,
@@ -1021,7 +1032,7 @@ fn renderLibraryRail(card_w: f32) bool {
 
     const poster_h = card_w * 1.5;
     var scroll = dvui.scrollArea(@src(), .{ .horizontal = .auto, .vertical = .none }, .{
-        .id_extra = 7701,
+        .id_extra = base_id + 1,
         .expand = .horizontal,
         .background = false,
         .min_size_content = .{ .w = 10, .h = poster_h + STRIP_CHROME },
@@ -1029,7 +1040,7 @@ fn renderLibraryRail(card_w: f32) bool {
         .padding = .{ .x = theme.spacing.xs, .y = 0, .w = theme.spacing.xs, .h = theme.spacing.xs },
     });
     defer scroll.deinit();
-    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 7701 });
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = base_id + 1 });
     defer row.deinit();
 
     const poster = @import("../core/poster.zig");
@@ -1037,16 +1048,16 @@ fn renderLibraryRail(card_w: f32) bool {
     while (i < n) : (i += 1) {
         const item = &items[i];
         var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .id_extra = i + 7710,
-            .min_size_content = .{ .w = card_w, .h = poster_h + 20 },
-            .max_size_content = .{ .w = card_w, .h = poster_h + 20 },
+            .id_extra = i + base_id + 10,
+            .min_size_content = .{ .w = card_w, .h = poster_h + 38 },
+            .max_size_content = .{ .w = card_w, .h = poster_h + 38 },
             .margin = dvui.Rect.all(4),
         });
         defer card.deinit();
 
         var bw: dvui.ButtonWidget = undefined;
         bw.init(@src(), .{}, .{
-            .id_extra = i + 7730,
+            .id_extra = i + base_id + 30,
             .background = true,
             .color_fill = theme.colors.bg_elevated,
             .corner_radius = dvui.Rect.all(8),
@@ -1056,7 +1067,7 @@ fn renderLibraryRail(card_w: f32) bool {
         bw.processEvents();
         bw.drawBackground();
 
-        const slot = &lib_slots[i];
+        const slot = &slots[i];
         const purl = item.poster[0..@min(item.poster_len, item.poster.len)];
         if (purl.len > 0) {
             const h = std.hash.Fnv1a_64.hash(purl);
@@ -1071,9 +1082,9 @@ fn renderLibraryRail(card_w: f32) bool {
                 poster.fetchAsync(purl, &slot.pixels, &slot.w, &slot.h, &slot.fetching);
         }
         if (slot.tex) |*tex| {
-            _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{ .id_extra = i + 7740, .expand = .both, .corner_radius = dvui.Rect.all(8) });
+            _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{ .id_extra = i + base_id + 40, .expand = .both, .corner_radius = dvui.Rect.all(8) });
         } else {
-            _ = dvui.icon(@src(), "libglyph", icons.tvg.lucide.star, .{}, .{ .id_extra = i + 7740, .color_text = theme.colors.text_tertiary, .gravity_x = 0.5, .gravity_y = 0.5, .expand = .both });
+            _ = dvui.icon(@src(), "libglyph", heading_icon, .{}, .{ .id_extra = i + base_id + 40, .color_text = theme.colors.text_tertiary, .gravity_x = 0.5, .gravity_y = 0.5, .expand = .both });
         }
         const clicked = bw.clicked();
         bw.drawFocus();
@@ -1082,11 +1093,29 @@ fn renderLibraryRail(card_w: f32) bool {
 
         var t_safe: [200]u8 = undefined;
         _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(item.title[0..@min(item.title_len, item.title.len)], &t_safe)}, .{
-            .id_extra = i + 7750,
+            .id_extra = i + base_id + 50,
             .color_text = theme.colors.text_secondary,
             .min_size_content = .{ .w = card_w, .h = 0 },
             .max_size_content = .{ .w = card_w, .h = 18 },
         });
+        if (item.percent > 0) {
+            var progress = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .id_extra = i + base_id + 60,
+                .background = true,
+                .color_fill = theme.colors.bg_elevated,
+                .min_size_content = .{ .w = card_w, .h = 3 },
+                .max_size_content = .{ .w = card_w, .h = 3 },
+            });
+            var fill = dvui.box(@src(), .{}, .{
+                .id_extra = i + base_id + 70,
+                .background = true,
+                .color_fill = theme.colors.accent,
+                .min_size_content = .{ .w = card_w * @as(f32, @floatCast(std.math.clamp(item.percent / 100, 0, 1))), .h = 3 },
+                .max_size_content = .{ .w = card_w * @as(f32, @floatCast(std.math.clamp(item.percent / 100, 0, 1))), .h = 3 },
+            });
+            fill.deinit();
+            progress.deinit();
+        }
     }
     return true;
 }
@@ -1148,36 +1177,20 @@ fn sectionHeader(title: []const u8, icon: []const u8, view: state.TmdbView, id: 
 
 // ── Jump back in (watch history) — resume cards with progress ──
 
-/// True when a history entry's media still exists AND can actually be
-/// resumed: local files are stat'd (deleted downloads/library files must not
-/// resurface as resume cards); a blank link can never be resumed at all (the
-/// click handler below only fires `resumePlayback` when `link_len > 0`), so
-/// those are filtered out too rather than shown as dead, do-nothing cards;
-/// remaining non-local links (magnets, http, jellyfin) can't be checked and
-/// pass. Results are cached and re-verified every few seconds or when
-/// history changes — stat'ing every entry every frame would be syscall noise.
+/// Memory-only filter for recent items. Filesystem validation previously stat'd
+/// every local path during the first Home frame; sleeping and network-backed
+/// drives could block the UI. mpv opens asynchronously and reports failures,
+/// so this path only rejects legacy rows that have no resumable link.
+// Current policy: no filesystem I/O here. mpv validates the selected item
+// asynchronously; keeping Home memory-only avoids waking slow/network drives.
 fn playableHistory() []const bool {
-    const io_g = @import("../core/io_global.zig");
     const home_pure = @import("home_pure.zig");
     const S = struct {
         var ok: [wh.MAX_WATCH_HISTORY]bool = undefined;
-        var last_ts: i64 = 0;
-        var last_count: usize = 0;
     };
-    const now = io_g.timestamp();
-    if (wh.count != S.last_count or now - S.last_ts >= 5) {
-        S.last_count = wh.count;
-        S.last_ts = now;
-        for (0..wh.count) |i| {
-            const e = &wh.entries[i];
-            const link = e.link[0..e.link_len];
-            S.ok[i] = if (!home_pure.hasResumableLink(link))
-                false
-            else if (home_pure.localFsPath(link)) |fs_path| blk: {
-                _ = io_g.cwdStatFile(fs_path) catch break :blk false;
-                break :blk true;
-            } else true;
-        }
+    for (0..wh.count) |i| {
+        const e = &wh.entries[i];
+        S.ok[i] = home_pure.hasResumableLink(e.link[0..e.link_len]);
     }
     return S.ok[0..wh.count];
 }

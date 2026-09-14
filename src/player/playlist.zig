@@ -118,17 +118,21 @@ fn renderQueueTab() void {
 // count changes or shuffle is toggled on. UI-thread only (drawer + the
 // player event pump both run on the frame thread).
 var shuffle_order: std.ArrayListUnmanaged(u32) = .empty;
+var shuffle_order_seed: u64 = 0;
 
 fn rebuildShuffleOrder(count: usize) void {
     shuffle_order.resize(alloc, count) catch return;
     // Deterministic given a seed (tests seed playlist_pure directly);
     // production seeds from the wall clock.
-    pure.buildShuffleOrder(shuffle_order.items, @bitCast(io_global.milliTimestamp()));
+    const seed = if (state.app.playlist_shuffle_seed != 0) state.app.playlist_shuffle_seed else 1;
+    pure.buildShuffleOrder(shuffle_order.items, seed);
+    shuffle_order_seed = seed;
 }
 
 fn shuffleOrderSlice(count: usize) ?[]const u32 {
     if (!state.app.playlist_shuffle or count == 0) return null;
-    if (shuffle_order.items.len != count) rebuildShuffleOrder(count);
+    const seed = if (state.app.playlist_shuffle_seed != 0) state.app.playlist_shuffle_seed else 1;
+    if (shuffle_order.items.len != count or shuffle_order_seed != seed) rebuildShuffleOrder(count);
     if (shuffle_order.items.len != count) return null; // resize failed
     return shuffle_order.items;
 }
@@ -137,6 +141,7 @@ pub fn setShuffle(enabled: bool) void {
     if (state.app.playlist_shuffle == enabled) return;
     state.app.playlist_shuffle = enabled;
     if (enabled) {
+        state.app.playlist_shuffle_seed = @intCast(@max(1, io_global.milliTimestamp()));
         const count = if (state.app.playlist) |pl| pl.entries.items.len else 0;
         rebuildShuffleOrder(count);
     }
@@ -172,6 +177,7 @@ pub fn advance(p: anytype, dir: i32) AdvanceResult {
 }
 
 fn findCurrent(p: anytype, pl: *const m3u.M3UPlaylist) ?usize {
+    if (p.playback_origin != .playlist) return null;
     const url = p.source_url[0..p.source_url_len];
     if (url.len == 0) return null;
     for (pl.entries.items, 0..) |e, i|
@@ -185,11 +191,7 @@ fn playEntryOn(p: anytype, idx: usize) void {
     const entry = pl.entries.items[idx];
     p.current_torrent_id = -1;
     p.is_torrent = false;
-    const copy_len = @min(entry.url.len, p.source_url.len - 1);
-    @memcpy(p.source_url[0..copy_len], entry.url[0..copy_len]);
-    p.source_url[copy_len] = 0;
-    p.source_url_len = copy_len;
-    p.load_file(@ptrCast(p.source_url[0..copy_len].ptr));
+    p.load(.{ .url = entry.url, .origin = .playlist });
 }
 
 /// Swap entry `idx` one slot up (dir < 0) or down (dir > 0). No-op at ends.

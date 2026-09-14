@@ -126,6 +126,19 @@ fn createTables() void {
         \\)
     );
 
+    // Active transfer restart intent. `identity` is an info-hash-only magnet;
+    // tracker URLs, web seeds, display names and passkeys are never stored.
+    exec(
+        \\CREATE TABLE IF NOT EXISTS active_torrent_intents (
+        \\  identity TEXT PRIMARY KEY,
+        \\  paused INTEGER NOT NULL DEFAULT 0,
+        \\  added_at INTEGER DEFAULT (strftime('%s','now'))
+        \\)
+    );
+    // Forward-compatible with the brief development build that introduced the
+    // table before paused intent was added; duplicate-column errors are benign.
+    exec("ALTER TABLE active_torrent_intents ADD COLUMN paused INTEGER NOT NULL DEFAULT 0");
+
     // Watch history (playback resume positions). file_key is the absolute
     // filesystem path for local files ('' for streams/torrents) — see
     // player/watch_history.zig migrateSchema() for the v1→v2 upgrade, which

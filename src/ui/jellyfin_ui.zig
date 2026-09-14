@@ -175,6 +175,7 @@ fn renderLoginForm() void {
                     std.mem.sliceTo(&login_pass, 0),
                 );
                 jf.authenticate();
+                @memset(&login_pass, 0);
             }
         } else {
             _ = dvui.label(@src(), "Connecting...", .{}, .{

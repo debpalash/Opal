@@ -20,7 +20,6 @@ pub const MusicSong = music.MusicSong;
 
 /// A stable device id — Jellyfin's `universal` endpoint requires one to open a
 /// playback session.
-pub const DEVICE_ID = "opal-001";
 
 // ── Validation ──
 
@@ -60,15 +59,18 @@ pub fn buildSearchUrl(out: []u8, base: []const u8, api_key: []const u8, query: [
 /// The playable audio URL. `static=true` tells Jellyfin to serve the ORIGINAL
 /// bytes (no transcode, no session negotiation), which is exactly what mpv
 /// wants — the transcoding variants of `universal` need a live playback session.
-pub fn buildStreamUrl(out: []u8, base: []const u8, api_key: []const u8, item_id: []const u8) ?[]const u8 {
-    if (!isValidBase(base) or api_key.len == 0) return null;
+pub fn buildStreamUrl(out: []u8, base: []const u8, api_key: []const u8, item_id: []const u8, device_id: []const u8) ?[]const u8 {
+    if (!isValidBase(base) or api_key.len == 0 or device_id.len == 0) return null;
     if (!jf_pure.validItemId(item_id)) return null;
     var ken: [256]u8 = undefined;
     const kn = percentEncode(api_key, &ken);
+    var den: [96]u8 = undefined;
+    const dn = percentEncode(device_id, &den);
+    if (dn == 0) return null;
     return std.fmt.bufPrint(
         out,
         "{s}/Audio/{s}/universal?api_key={s}&DeviceId={s}&static=true",
-        .{ trimBase(base), item_id, ken[0..kn], DEVICE_ID },
+        .{ trimBase(base), item_id, ken[0..kn], den[0..dn] },
     ) catch null;
 }
 
@@ -178,7 +180,7 @@ test "auth token rides the query, not a header, on every URL" {
     var b: [700]u8 = undefined;
     try std.testing.expect(std.mem.indexOf(u8, buildSearchUrl(&b, "http://n:8096", "tok", "x", 5).?, "api_key=tok") != null);
     var c: [700]u8 = undefined;
-    try std.testing.expect(std.mem.indexOf(u8, buildStreamUrl(&c, "http://n:8096", "tok", "abc").?, "api_key=tok") != null);
+    try std.testing.expect(std.mem.indexOf(u8, buildStreamUrl(&c, "http://n:8096", "tok", "abc", "dev1").?, "api_key=tok") != null);
     var d: [700]u8 = undefined;
     try std.testing.expect(std.mem.indexOf(u8, buildCoverUrl(&d, "http://n:8096", "tok", "abc").?, "api_key=tok") != null);
 }
@@ -186,8 +188,8 @@ test "auth token rides the query, not a header, on every URL" {
 test "stream URL is the static (untranscoded) universal endpoint" {
     var b: [700]u8 = undefined;
     try std.testing.expectEqualStrings(
-        "http://nas:8096/Audio/f1e2d3/universal?api_key=abc&DeviceId=opal-001&static=true",
-        buildStreamUrl(&b, "http://nas:8096", "abc", "f1e2d3").?,
+        "http://nas:8096/Audio/f1e2d3/universal?api_key=abc&DeviceId=0012abff456789cdef10203040506070&static=true",
+        buildStreamUrl(&b, "http://nas:8096", "abc", "f1e2d3", "0012abff456789cdef10203040506070").?,
     );
 }
 
@@ -206,8 +208,13 @@ test "URL builders reject a bad base, an empty key, and a path-escaping id" {
     try std.testing.expect(buildSearchUrl(&b, "http://nas:8096", "", "q", 5) == null);
     try std.testing.expect(buildSearchUrl(&b, "http://nas:8096", "k", "", 5) == null);
     // An id carrying `?`/`/` would splice extra path or query segments in.
-    try std.testing.expect(buildStreamUrl(&b, "http://nas:8096", "k", "a/../x") == null);
-    try std.testing.expect(buildStreamUrl(&b, "http://nas:8096", "k", "a?b=c") == null);
+    try std.testing.expect(buildStreamUrl(&b, "http://nas:8096", "k", "a/../x", "dev") == null);
+    try std.testing.expect(buildStreamUrl(&b, "http://nas:8096", "k", "a?b=c", "dev") == null);
+    try std.testing.expect(buildStreamUrl(&b, "http://nas:8096", "k", "abc", "") == null);
+    try std.testing.expectEqualStrings(
+        "http://nas:8096/Audio/abc/universal?api_key=k&DeviceId=a%26b&static=true",
+        buildStreamUrl(&b, "http://nas:8096", "k", "abc", "a&b").?,
+    );
     try std.testing.expect(buildCoverUrl(&b, "http://nas:8096", "k", "") == null);
 }
 

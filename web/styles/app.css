@@ -358,7 +358,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
 .queue-actions .queue-play{color:var(--accent);font-weight:650}
 .queue-actions .danger{color:var(--danger)}
 .queue-item.played .n{opacity:.68}
-.queue-toolbar{display:flex;align-items:center;gap:4px}
+.queue-toolbar{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:4px}
 .queue-toolbar button:disabled{opacity:.4;cursor:default}
 @media (max-width:560px){
   .queue-item{align-items:flex-start;flex-wrap:wrap}

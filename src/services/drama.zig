@@ -314,7 +314,7 @@ pub fn playSelected() void {
 pub fn playUrlDirect(url: []const u8) void {
     if (url.len == 0) return;
     if (state.app.players.items.len == 0) {
-        if (@import("../player/player.zig").MediaPlayer.init(alloc)) |np| {
+        if (@import("../player/player.zig").acquire(alloc)) |np| {
             state.app.players.append(alloc, np) catch {
                 np.deinit(alloc);
                 return;

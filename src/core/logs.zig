@@ -63,6 +63,51 @@ pub fn unlockRead() void {
     log_mutex.unlock();
 }
 
+/// Build a bounded, chronological support bundle from the already-redacted log
+/// ring. The newest entries win when the ring is larger than the clipboard
+/// budget. The caller owns the returned slice.
+pub fn diagnosticsSnapshot(allocator: std.mem.Allocator) ![]u8 {
+    const max_bytes: usize = 256 * 1024;
+    const heading = "Opal diagnostics (sensitive values redacted)\n";
+
+    log_mutex.lock();
+    defer log_mutex.unlock();
+
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator, heading);
+
+    var first = log_count;
+    var estimated = heading.len;
+    while (first > 0) {
+        const entry = getLogAt(first - 1);
+        const line_cost = entry.level.len + entry.prefix.len + entry.text.len + 40;
+        if (estimated + line_cost > max_bytes) break;
+        estimated += line_cost;
+        first -= 1;
+    }
+    // A single oversized newest entry must not produce an empty bundle.
+    if (first == log_count and log_count > 0) first -= 1;
+
+    var i = first;
+    while (i < log_count and out.items.len < max_bytes) : (i += 1) {
+        const entry = getLogAt(i);
+        var prefix_buf: [96]u8 = undefined;
+        const prefix = std.fmt.bufPrint(
+            &prefix_buf,
+            "[{d}] {s}{s}{s}",
+            .{ entry.timestamp, entry.level, if (entry.prefix.len > 0) " " else "", entry.prefix },
+        ) catch "[log]";
+        const parts = [_][]const u8{ prefix, ": ", entry.text, "\n" };
+        for (parts) |part| {
+            const remaining = max_bytes - out.items.len;
+            if (remaining == 0) break;
+            try out.appendSlice(allocator, part[0..@min(part.len, remaining)]);
+        }
+    }
+    return try out.toOwnedSlice(allocator);
+}
+
 /// Free all log entries — call during app shutdown to prevent GPA leak reports
 pub fn deinit() void {
     log_mutex.lock();

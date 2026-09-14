@@ -1,6 +1,34 @@
 //! Pure types + decisions for the unified `library_items` read-model.
 const std = @import("std");
 
+/// Shared media vocabulary for every producer and presentation. Persistence
+/// remains string-compatible, while routing code gets an exhaustive enum.
+pub const ContentKind = enum {
+    watch,
+    movie,
+    tv,
+    anime,
+    podcast,
+    audiobook,
+    music,
+    radio,
+    iptv,
+    comics,
+    novels,
+    other,
+
+    pub fn id(self: ContentKind) []const u8 {
+        return @tagName(self);
+    }
+};
+
+pub fn parseKind(value: []const u8) ContentKind {
+    inline for (std.meta.fields(ContentKind)) |field| {
+        if (std.ascii.eqlIgnoreCase(value, field.name)) return @enumFromInt(field.value);
+    }
+    return .other;
+}
+
 /// A denormalized cross-vertical library row (fixed buffers per Opal convention).
 pub const LibraryItem = struct {
     kind: [16]u8 = std.mem.zeroes([16]u8),
@@ -52,4 +80,11 @@ test "percentOf + isContinue bands" {
     // floor hid every first chapter from the Continue rail.
     try std.testing.expect(isContinue(1.0));
     try std.testing.expect(!isContinue(98)); // essentially done
+}
+
+test "content kind keeps persisted adapters typed" {
+    try std.testing.expectEqual(ContentKind.podcast, parseKind("podcast"));
+    try std.testing.expectEqual(ContentKind.iptv, parseKind("IPTV"));
+    try std.testing.expectEqual(ContentKind.other, parseKind("future-adapter"));
+    try std.testing.expectEqualStrings("audiobook", ContentKind.audiobook.id());
 }

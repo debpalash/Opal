@@ -680,6 +680,9 @@ pub fn loadIntoMpv(engine: *SubtitleEngine, mpv_ctx: *c.mpv.mpv_handle) void {
 
     const path = engine.srt_path[0..engine.srt_path_len];
     _ = c.mpvSubAdd(mpv_ctx, path);
+    _ = c.mpv.mpv_command_string(mpv_ctx, "set sub-visibility yes");
+    state.app.subtitles_enabled = true;
+    state.markConfigDirty();
     engine.loaded_idx = @intCast(@min(engine.selected_idx, std.math.maxInt(i32)));
     state.showToast("Subtitle loaded");
     logs.pushLog("info", "subs", "Subtitle loaded into player", false);

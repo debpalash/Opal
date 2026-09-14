@@ -83,6 +83,7 @@ pub fn saveWorkspaceNamed(allocator: std.mem.Allocator, raw_name: []const u8) vo
 
     var ws_players = std.ArrayListUnmanaged(WorkspacePlayer).empty;
     defer ws_players.deinit(allocator);
+    defer for (ws_players.items) |wsp| allocator.free(@constCast(wsp.source_url));
 
     for (state.app.players.items) |p| {
         // Try multiple sources for the URL
@@ -92,11 +93,15 @@ pub fn saveWorkspaceNamed(allocator: std.mem.Allocator, raw_name: []const u8) vo
         if (url.len == 0 and p.source_url_len > 0 and p.source_url_len <= 2048) {
             url = p.source_url[0..p.source_url_len];
         }
-        // 2. current_url (set by load_file)
+        // 2. adapter deep link (rebuilds authenticated URLs after restart)
+        if (url.len == 0 and p.restore_target_len > 0 and p.restore_target_len <= 2048) {
+            url = p.restore_target[0..p.restore_target_len];
+        }
+        // 3. current_url (set by load_file)
         if (url.len == 0 and p.current_url_len > 0 and p.current_url_len <= 2048) {
             url = p.current_url[0..p.current_url_len];
         }
-        // 3. Ask mpv for its current path
+        // 4. Ask mpv for its current path
         if (url.len == 0) {
             var mpv_path: ?[*:0]const u8 = null;
             if (c.mpv.mpv_get_property(p.mpv_ctx, "path", c.mpv.MPV_FORMAT_STRING, @ptrCast(&mpv_path)) == 0) {
@@ -110,16 +115,23 @@ pub fn saveWorkspaceNamed(allocator: std.mem.Allocator, raw_name: []const u8) vo
         }
 
         if (url.len == 0) continue;
+        var safe_buf: [2048]u8 = undefined;
+        const safe_url = @import("../player/watch_history_pure.zig").persistedTarget(url, &safe_buf).reopen;
+        if (safe_url.len == 0) continue;
+        const owned_url = allocator.dupe(u8, safe_url) catch continue;
 
         var percent: f64 = 0.0;
         _ = c.mpv.mpv_get_property(p.mpv_ctx, "percent-pos", c.mpv.MPV_FORMAT_DOUBLE, &percent);
 
         ws_players.append(allocator, .{
-            .source_url = url,
+            .source_url = owned_url,
             .is_torrent = p.is_torrent,
             .cell_volume = p.cell_volume,
             .playback_percent = percent,
-        }) catch continue;
+        }) catch {
+            allocator.free(owned_url);
+            continue;
+        };
     }
 
     const data = WorkspaceData{
@@ -213,7 +225,10 @@ pub fn loadWorkspaceNamed(allocator: std.mem.Allocator, raw_name: []const u8) vo
     var any_success = false;
 
     for (data.players) |wsp| {
-        if (player.MediaPlayer.init(allocator)) |p| {
+        var safe_buf: [2048]u8 = undefined;
+        const safe_url = @import("../player/watch_history_pure.zig").persistedTarget(wsp.source_url, &safe_buf).reopen;
+        if (safe_url.len == 0 or safe_url.len >= 2048) continue;
+        if (player.acquire(allocator)) |p| {
             p.cell_volume = wsp.cell_volume;
             state.app.players.append(allocator, p) catch {
                 p.deinit(allocator);
@@ -221,15 +236,15 @@ pub fn loadWorkspaceNamed(allocator: std.mem.Allocator, raw_name: []const u8) vo
             };
             any_success = true;
 
-            if (wsp.source_url.len > 0 and wsp.source_url.len < 2048) {
+            if (safe_url.len > 0) {
                 var c_str: [2048]u8 = undefined;
-                @memcpy(c_str[0..wsp.source_url.len], wsp.source_url);
-                c_str[wsp.source_url.len] = 0;
+                @memcpy(c_str[0..safe_url.len], safe_url);
+                c_str[safe_url.len] = 0;
 
                 const c_url = @as([*c]const u8, @ptrCast(&c_str[0]));
 
-                @memcpy(p.source_url[0..wsp.source_url.len], wsp.source_url);
-                p.source_url_len = wsp.source_url.len;
+                @memcpy(p.source_url[0..safe_url.len], safe_url);
+                p.source_url_len = safe_url.len;
 
                 if (wsp.is_torrent) {
                     const tid = c.mpv.torrent_add_magnet(state.torrentSession(), c_url, state.getSavePath());
@@ -239,6 +254,7 @@ pub fn loadWorkspaceNamed(allocator: std.mem.Allocator, raw_name: []const u8) vo
                         p.has_metadata = false;
                         p.last_load_time = 0;
                         p.is_torrent = true;
+                        p.playback_origin = .torrent;
                         p.resume_percent = wsp.playback_percent;
                     } else {
                         @import("../core/logs.zig").pushLog("error", "workspace", "Failed to restore torrent (invalid/duplicate magnet)", true);
@@ -246,7 +262,12 @@ pub fn loadWorkspaceNamed(allocator: std.mem.Allocator, raw_name: []const u8) vo
                 } else {
                     p.is_torrent = false;
                     p.resume_percent = wsp.playback_percent;
-                    p.load_file(c_url);
+                    if (std.mem.startsWith(u8, safe_url, "opal://")) {
+                        state.app.active_player_idx = state.app.players.items.len - 1;
+                        @import("../services/browser.zig").resumePlayback(safe_url);
+                    } else {
+                        p.load_file(c_url);
+                    }
                 }
             } else {
                 p.is_torrent = false;

@@ -13,6 +13,7 @@ def test_render_hot_paths_and_drop_ingest():
     main = _src("src/main.zig")
     state = _src("src/core/state.zig")
     drop = _src("src/player/drop_ingest.zig")
+    render_worker = _between(player, "fn renderWorker(self: *MediaPlayer)", "/// Blank both pixel buffers")
     overlay = _between(footer, "pub fn renderLiquidGlassOverlay", "fn activeMediaPlayer")
     now_playing = _between(footer, "fn renderNowPlayingBar", "pub fn renderMediaTray")
     observed = (
@@ -27,7 +28,7 @@ def test_render_hot_paths_and_drop_ingest():
             f'"{name}"' not in overlay and f'"{name}"' not in now_playing
             for name in ("percent-pos", "time-pos", "duration", "volume")
         ),
-        "video sizing uses snapshot": "playbackSnapshot()" in grid and "renderSize(" in grid,
+        "video sizing uses snapshot": "playbackSnapshot()" in grid and "renderSizeForAspect(" in grid,
         "video sizing IPC removed": 'mpv_get_property(p.mpv_ctx, "dwidth"' not in grid,
         "drop IO runs on worker": "spawnLegacy(" in drop and "scanDirectory" in drop,
         "drop scan is bounded": "max_folder_entries" in drop and "workers.isQuitting()" in drop,
@@ -35,11 +36,17 @@ def test_render_hot_paths_and_drop_ingest():
         "frame mailboxes atomic": "std.atomic.Value(bool)" in state
                                   and "dropped_file_ready.load(.acquire)" in main
                                   and "remote_open_ready.load(.acquire)" in main,
+        "first frame wakes UI before telemetry": (
+            render_worker.find("wakeDvuiFromMpv();") >= 0
+            and render_worker.find("wakeDvuiFromMpv();") < render_worker.find("openFirstFrame();")
+        ),
+        "timing persistence is backgrounded": "fn timingFlushWorker()" in player
+            and "spawn(timingFlushWorker" in player,
     }
     missing = [name for name, ok in checks.items() if not ok]
     if missing:
         return "fail", "hot-path regression(s): " + ", ".join(missing)
-    return "pass", "mpv render state cached; drop IO bounded+backgrounded; idle locks gated"
+    return "pass", "render state is event-fed; first-frame telemetry and drop IO are backgrounded"
 
 @test("Log Severity By Level", "Stability")
 def test_log_severity_by_level():
@@ -400,6 +407,7 @@ def test_stream_readiness_gate():
     cp = _src("src/player/container_pure.zig")
     gate = _src("src/player/stream_gate.zig")
     pl = _src("src/player/player.zig")
+    load_pure = _src("src/player/playback_load_pure.zig")
     px = _src("src/player/stream_proxy.zig")
     cpp = _src("src/torrent_wrapper.cpp")
     hdr = _src("src/torrent_wrapper.h")
@@ -444,8 +452,13 @@ def test_stream_readiness_gate():
 
         # Never truncate a body we promised a Content-Length for.
         "proxy never truncates": "aborting so the player reconnects" in px,
-        # A network timeout reaches ffmpeg as a fake EOF.
-        "no network timeout": '"network-timeout", "0"' in pl,
+        # A timeout on the blocking loopback proxy reaches ffmpeg as a fake EOF,
+        # while ordinary web streams must retain their bounded timeout.
+        "torrent proxy alone has no network timeout": (
+            "unbounded_network_read = true" in pl
+            and "networkTimeout(request.unbounded_network_read)" in load_pure
+            and 'return if (unbounded_read) "0" else "15"' in load_pure
+        ),
 
         # The bar must report readiness, not whole-torrent progress.
         "buffer bar shows readiness": "gate.bufferPercent(" in gr,

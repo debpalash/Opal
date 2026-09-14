@@ -454,7 +454,10 @@ fn tryInstantCommand(raw_input: []const u8, fl_raw: []const u8) bool {
             if (p.loading_label_len > 0) {
                 addInstantResponse(raw_input, p.loading_label[0..p.loading_label_len]);
             } else if (p.current_url_len > 0) {
-                addInstantResponse(raw_input, p.current_url[0..@min(p.current_url_len, 120)]);
+                const raw = p.current_url[0..@min(p.current_url_len, p.current_url.len)];
+                var safe_buf: [2048]u8 = undefined;
+                const safe = @import("../player/watch_history_pure.zig").persistedTarget(raw, &safe_buf).identity;
+                addInstantResponse(raw_input, safe[0..@min(safe.len, 120)]);
             } else {
                 addInstantResponse(raw_input, "Nothing playing right now.");
             }

@@ -62,6 +62,10 @@ pub fn validItemId(id: []const u8) bool {
     return true;
 }
 
+pub fn authRejected(status_code: u16) bool {
+    return status_code == 401 or status_code == 403;
+}
+
 /// Build the direct audio stream URL. The `?token=` query is how Audiobookshelf
 /// authenticates a plain GET (same mechanism its cover endpoint uses, no header
 /// needed) — so mpv can open it directly. `/download` streams the item's media
@@ -459,6 +463,14 @@ test "libraryItemsUrl embeds limit + 0-based page, rejects a bad library id" {
 test "bearerHeader builds Authorization" {
     var buf: [128]u8 = undefined;
     try std.testing.expectEqualStrings("Authorization: Bearer TOK123", bearerHeader("TOK123", &buf).?);
+}
+
+test "auth rejection is distinct from transport and provider failures" {
+    try std.testing.expect(authRejected(401));
+    try std.testing.expect(authRejected(403));
+    try std.testing.expect(!authRejected(0));
+    try std.testing.expect(!authRejected(404));
+    try std.testing.expect(!authRejected(500));
 }
 
 test "parseProgressSeconds reads currentTime, null when absent" {

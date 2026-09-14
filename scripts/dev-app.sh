@@ -87,6 +87,15 @@ if [ ! -f "$APP/Contents/Info.plist" ]; then
             <array><string>torrent</string></array>
         </dict>
     </array>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeRole</key><string>Viewer</string>
+            <key>CFBundleURLName</key><string>Magnet Link</string>
+            <key>CFBundleURLSchemes</key>
+            <array><string>magnet</string></array>
+        </dict>
+    </array>
 </dict>
 </plist>
 PLIST

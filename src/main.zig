@@ -27,43 +27,89 @@ var hud_last_ms: i64 = 0;
 // Window reference for SDL position/size persistence
 var dvui_win: ?*dvui.Window = null;
 
-// ── CLI open-file deferred buffer ──
-// Stored in appInit, consumed in appFrame once players are ready.
-var cli_open_buf: [2048]u8 = std.mem.zeroes([2048]u8);
-var cli_open_len: usize = 0;
+// ── CLI open-file deferred queue ──
+// Parsed in appInit, consumed in appFrame once the UI thread is up.
+// Multi-slot: opening several files at once (Explorer multi-select,
+// `opal a.mkv b.mkv`) plays the first and queues the rest instead of
+// silently dropping all but one.
+const MAX_CLI_ARGS: usize = 8;
+var cli_args: [MAX_CLI_ARGS][2048]u8 = std.mem.zeroes([MAX_CLI_ARGS][2048]u8);
+var cli_arg_lens: [MAX_CLI_ARGS]usize = std.mem.zeroes([MAX_CLI_ARGS]usize);
+var cli_arg_count: usize = 0;
 var cli_open_done: bool = false;
 
 // One-shot latch: apply the adaptive 1.0× default after config has loaded while
 // preserving an explicit user-selected density override.
 var device_scale_applied: bool = false;
+var player_preferences_applied: bool = false;
 
 // SDL's Wayland backend can surface a compositor close before dvui translates
 // it into its own window event. The raw event watch latches it so appFrame
 // cannot continue running after the native surface has gone away.
 var sdl_close_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
+// Windows creates a decorated SDL surface before appInit and the first DVUI
+// frame. Showing it immediately exposes a dark client area with the temporary
+// white native border while startup work runs. Keep it hidden through the
+// first render/present cycle, then reveal it at the start of the next frame.
+// Revealing at the end of the first appFrame is still too early: DVUI calls
+// SDL_RenderPresent only after appFrame returns, briefly exposing SDL's empty
+// backbuffer (the black window with a white L-shaped edge).
+var startup_window_revealed: bool = builtin.os.tag != .windows;
+var startup_frame_submitted: bool = builtin.os.tag != .windows;
+var first_frame_complete: bool = false;
+var player_warmup_scheduled: bool = false;
+
+// Kernel-owned marker for the Windows single-instance fast path. A connect to
+// an unused loopback port takes ~2 seconds on machines whose firewall drops
+// the SYN, and a bind probe is not a reliable ownership test on Windows. The
+// first Opal process retains this handle for its lifetime; later file-open
+// launches see ERROR_ALREADY_EXISTS and perform the authenticated HTTP handoff.
+const win_instance = if (builtin.os.tag == .windows) struct {
+    extern "kernel32" fn CreateMutexW(
+        lpMutexAttributes: ?*anyopaque,
+        bInitialOwner: c_int,
+        lpName: [*:0]const u16,
+    ) callconv(.winapi) ?*anyopaque;
+    extern "kernel32" fn GetLastError() callconv(.winapi) u32;
+    extern "kernel32" fn ReleaseMutex(hMutex: ?*anyopaque) callconv(.winapi) c_int;
+    extern "kernel32" fn CloseHandle(hObject: ?*anyopaque) callconv(.winapi) c_int;
+    extern "kernel32" fn SetDefaultDllDirectories(directoryFlags: u32) callconv(.winapi) c_int;
+    const already_exists: u32 = 183;
+    const load_library_search_default_dirs: u32 = 0x00001000;
+} else struct {};
+var instance_mutex_handle: ?*anyopaque = null;
+
 const app_start_options: dvui.App.StartOptions = .{
     .size = .{ .w = 1400.0, .h = 820.0 },
     .title = "Opal",
     .vsync = true,
+    .hidden = builtin.os.tag == .windows,
 };
 
 /// SDL consumes desktop identity hints before it creates the Wayland surface.
 /// Using a startFn is the only dvui.App seam that runs early enough. Keep the
 /// app id aligned with opal.desktop and StartupWMClass so launchers/compositors
 /// group every Opal window under the installed desktop entry.
-fn linuxStartOptions() dvui.App.StartOptions {
+fn platformStartOptions() dvui.App.StartOptions {
+    if (comptime builtin.os.tag == .windows) {
+        // Explorer/file-association launches may inherit the media directory as
+        // CWD. Never let an untrusted download folder satisfy later LoadLibrary
+        // calls; packaged dependencies still resolve from the application dir.
+        _ = win_instance.SetDefaultDllDirectories(win_instance.load_library_search_default_dirs);
+    }
     _ = c.sdl.SDL_SetHint("SDL_APP_NAME", "Opal");
-    _ = c.sdl.SDL_SetHint("SDL_APP_ID", "opal");
-    _ = c.sdl.SDL_SetHint("SDL_VIDEO_WAYLAND_WMCLASS", "opal");
+    // A click that activates the window must also reach its target button.
+    _ = c.sdl.SDL_SetHint("SDL_MOUSE_FOCUS_CLICKTHROUGH", "1");
+    if (comptime builtin.os.tag == .linux) {
+        _ = c.sdl.SDL_SetHint("SDL_APP_ID", "opal");
+        _ = c.sdl.SDL_SetHint("SDL_VIDEO_WAYLAND_WMCLASS", "opal");
+    }
     return app_start_options;
 }
 
 pub const dvui_app: dvui.App = .{
-    .config = if (builtin.os.tag == .linux)
-        .{ .startFn = &linuxStartOptions }
-    else
-        .{ .options = app_start_options },
+    .config = .{ .startFn = &platformStartOptions },
     .initFn = appInit,
     .frameFn = appFrame,
     .deinitFn = appDeinit,
@@ -108,6 +154,20 @@ pub fn coreInit() !void {
     // Runtime initialization (env vars can't be read at comptime)
     state.initPaths();
     state.loadTmdbTokenFromEnv();
+    logs.logs_allocator = @import("core/alloc.zig").allocator;
+
+    // mpv snapshots the yt-dlp executable while the player is initialized.
+    // Resolve the bundled absolute path now so a cold YouTube launch cannot
+    // race the background bootstrap and get stuck with a bare PATH lookup.
+    {
+        const ytdlp = @import("services/ytdlp.zig");
+        if (cli_arg_count == 0) {
+            ytdlp.ensureAvailable();
+        } else {
+            const kind = @import("services/single_instance_pure.zig").classifyArg(cli_args[0][0..cli_arg_lens[0]]);
+            if (kind == .url) ytdlp.ensureAvailable() else _ = ytdlp.discoverExisting();
+        }
+    }
 
     // Source endpoints are tiny local JSON files, so load them before the
     // first frame. Loading them only in the background init worker created a
@@ -116,39 +176,39 @@ pub fn coreInit() !void {
     @import("core/source_config.zig").reload();
 
     theme.setTheme();
-    logs.logs_allocator = @import("core/alloc.zig").allocator;
 
-    // Bootstrap: fetch whisper tiny model (39MB) in background if missing.
-    // Skips if already present. Binaries (apfel/ffmpeg/whisper-cpp) must
-    // come via brew — we only surface install hints via deps.installCmd.
-    @import("core/deps.zig").fetchWhisperModelAsync();
+    // Voice/model downloads are explicit Settings actions. Startup performs no
+    // speculative model network transfer.
 
-    // Phase 5 default-promotion — if every sherpa piece is present
-    // (CLIs + STT + TTS + streaming models), switch voice backend to
-    // sherpa-onnx silently. User can still override in Settings.
-    {
-        const deps = @import("core/deps.zig");
-        const vb = @import("services/voice_backend.zig");
-        if (deps.sherpaReady(deps.check())) {
-            vb.active_kind = .sherpa_onnx;
-        }
-        // Parakeet promotion outranks it: when the self-installed
-        // conversational stack (voice_setup) is present, default to the
-        // fastest ASR we ship. Settings choice still overrides afterwards.
-        if (@import("services/voice_setup.zig").convoReady()) {
-            vb.active_kind = if (@import("services/voice_setup.zig").parakeetV3Present())
-                .parakeet_tdt_v3
-            else
-                .parakeet_tdt_v2;
-        }
-    }
+    // Voice-backend default promotion intentionally does NOT run here: it is
+    // ~30 filesystem probes (deps.check + voice_setup convo scan) on the
+    // first-frame path. It runs in the background init worker instead, after
+    // config.load, so a saved explicit choice always wins (see below).
     state.app.players = .empty;
     search.search_results = .empty;
 
-    // Init torrent session in background — DHT bootstrap takes 5-10s
+    // Init the torrent session in the background, but keep media-first startup
+    // quiet. DHT bootstrap is unrelated work for a local file or web video and
+    // used to contend with extraction/decoding immediately. Magnet launches
+    // still start it now; normal browsing waits briefly, other media waits long
+    // enough for first-frame work to finish. Every wait is shutdown-cancellable.
     state.setTorrentSession(null);
+    const torrent_init_delay_ms: u16 = if (cli_arg_count == 0)
+        750
+    else switch (@import("services/single_instance_pure.zig").classifyArg(cli_args[0][0..cli_arg_lens[0]])) {
+        .magnet, .torrent_file => 0,
+        .url, .local => 5_000,
+    };
     @import("core/workers.zig").spawn(struct {
-        fn worker() void {
+        fn worker(delay_ms: u16) void {
+            const workers = @import("core/workers.zig");
+            const io_g = @import("core/io_global.zig");
+            var waited_ms: u16 = 0;
+            while (waited_ms < delay_ms) : (waited_ms += 25) {
+                if (workers.isQuitting()) return;
+                io_g.sleep(25 * std.time.ns_per_ms);
+            }
+            if (workers.isQuitting()) return;
             state.setTorrentSession(c.mpv.torrent_init());
             // Fresh session defaults to unlimited — re-apply the persisted cap
             // if config already loaded (idempotent; config load covers the
@@ -156,8 +216,11 @@ pub fn coreInit() !void {
             state.applyDownloadLimitIfReady();
             state.applyTorrentProxyIfReady();
             logs.pushLog("info", "torrent", "Torrent session ready", false);
+            // A cold-start magnet/.torrent click may be waiting for this exact
+            // publication. Wake the UI; it owns the eventual player mutation.
+            state.wakeUi();
         }
-    }.worker, .{}) catch {};
+    }.worker, .{torrent_init_delay_ms}) catch {};
 
     std.Io.Dir.cwd().createDirPath(@import("core/io_global.zig").io(), state.app.save_path_buf[0..state.app.save_path_len]) catch {};
     // Create libmpv only when something is actually played. Initializing it
@@ -184,6 +247,10 @@ pub fn coreInit() !void {
             // ── Unified SQLite Database ──
             const database = @import("core/db.zig");
             database.init();
+
+            // Load the durable play queue off the first-frame/UI path. Queue
+            // actions received before this completes are retained and flushed.
+            @import("services/queue.zig").initDb();
 
             // Web-UI account store: ensure the users/sessions tables exist and
             // drop expired sessions. (Kept out of db.zig to preserve the
@@ -223,6 +290,43 @@ pub fn coreInit() !void {
             // Load all persistent data from SQLite
             config.load();
 
+            // Discover optional mpv scripts on this same database-owning init
+            // thread. The idle player prewarm can then skip filesystem/SQLite
+            // work instead of racing this connection from a second worker.
+            @import("services/scripts.zig").scanScripts();
+            // libmpv now has every setting/script input it needs. Let its idle
+            // prewarm overlap voice probes, cache maintenance and history I/O.
+            state.app.player_prewarm_ready.store(true, .release);
+
+            // Deferred voice-backend default promotion (was synchronous in
+            // coreInit, on the first-frame path). Runs here, after
+            // config.load, so an explicit saved choice always wins: only
+            // promote when the user never picked one and the backend is still
+            // the shipping default. Single-byte enum store; the UI thread may
+            // read it concurrently, which is benign.
+            {
+                const deps = @import("core/deps.zig");
+                const vb = @import("services/voice_backend.zig");
+                const vs = @import("services/voice_setup.zig");
+                if (!vb.voice_backend_explicit and vb.active_kind == .whisper_cpp_plus_say) {
+                    // Phase 5 default-promotion — if every sherpa piece is
+                    // present (CLIs + STT + TTS + streaming models), switch
+                    // voice backend to sherpa-onnx silently.
+                    if (deps.sherpaReady(deps.check())) {
+                        vb.active_kind = .sherpa_onnx;
+                    }
+                    // Parakeet promotion outranks it: when the self-installed
+                    // conversational stack (voice_setup) is present, default
+                    // to the fastest ASR we ship.
+                    if (vs.convoReady()) {
+                        vb.active_kind = if (vs.parakeetV3Present())
+                            .parakeet_tdt_v3
+                        else
+                            .parakeet_tdt_v2;
+                    }
+                }
+            }
+
             // A quick close can arrive while the local DB/config work above is
             // running. Do not start long-lived services or network warmups once
             // teardown has begun.
@@ -242,6 +346,11 @@ pub fn coreInit() !void {
             hist.loadDownloadHistory();
             watch.load();
             watch.checkBackup(); // arms the "Restore cleared history" affordance
+            // Resume and player preferences are useful before source/plugin
+            // maintenance and network warmups. Publish readiness here so a
+            // double-clicked local file can resume as soon as the DB rows exist.
+            state.app.init_history_loaded = true;
+            state.wakeUi();
             // Load installed source endpoints (opal-plugins). No file → every
             // gated source stays inert until the user installs it.
             @import("core/source_config.zig").reload();
@@ -282,36 +391,46 @@ pub fn coreInit() !void {
             if (state.app.dpi_bypass_enabled) @import("services/dpi_bypass.zig").start();
             // Signal the UI thread that watch history is ready so the "resume
             // last played?" launch prompt can arm (monotonic one-way flag).
-            state.app.init_history_loaded = true;
             tmdb_store.loadLists();
 
-            // Route warm-up — kick the most-visited browse fetches from this bg
-            // init thread so Home/Browse/Anime are already populated before the
-            // user navigates there, instead of a cold network wait on first open.
-            // Each warm fn spawns its own worker and is idempotent via the render
-            // latches (tmdb.loaded_once / anime.has_loaded_trending /
-            // is_loading / SWR stamp), so a later navigation reuses the result
-            // rather than refetching; results also seed the encrypted content
-            // cache for the next cold start. Best-effort: no key → fetchCurrentView
-            // no-ops and the normal on-navigation fetch takes over.
-            if (state.app.tmdb.api_key_len > 0 and !state.app.tmdb.loaded_once) {
-                state.app.tmdb.loaded_once = true; // Home/Browse must not refetch over this
-                @import("services/tmdb_api.zig").fetchCurrentView(false);
-            }
-            @import("services/anime.zig").loadTrendingAnime();
-            @import("services/tv_calendar.zig").refreshOnce();
+            const media_first_launch = cli_arg_count > 0;
 
-            // Ensure yt-dlp binary is available
-            const ytdlp = @import("services/ytdlp.zig");
-            ytdlp.ensureAvailable();
-
-            // Probe GitHub for a newer release (non-blocking). Result
-            // surfaces in Settings → About.
-            @import("services/updater.zig").checkAsync();
+            scheduleDeferredNetworkWarmups(media_first_launch);
 
             logs.pushLog("info", "init", "Background init complete", false);
         }
     }.worker, .{}) catch {};
+}
+
+/// Give the first interaction/playback a quiet startup window before launching
+/// speculative network work. Besides reducing contention, this makes a quick
+/// open-and-close cancel in milliseconds rather than waiting for browse/update
+/// HTTP requests to hit their timeouts. Every destination still starts its own
+/// fetch immediately when the user navigates there.
+fn scheduleDeferredNetworkWarmups(media_first_launch: bool) void {
+    const workers = @import("core/workers.zig");
+    workers.spawn(struct {
+        fn worker(skip_browse: bool) void {
+            const io_g = @import("core/io_global.zig");
+            var waited_ms: u16 = 0;
+            while (waited_ms < 750) : (waited_ms += 25) {
+                if (workers.isQuitting()) return;
+                io_g.sleep(25 * std.time.ns_per_ms);
+            }
+            if (workers.isQuitting()) return;
+
+            if (!skip_browse and state.app.tmdb.api_key_len > 0 and !state.app.tmdb.loaded_once) {
+                state.app.tmdb.loaded_once = true;
+                @import("services/tmdb_api.zig").fetchCurrentView(false);
+            }
+            if (!skip_browse) {
+                @import("services/anime.zig").loadTrendingAnime();
+                @import("services/tv_calendar.zig").refreshOnce();
+            }
+            if (workers.isQuitting()) return;
+            @import("services/updater.zig").checkAsync();
+        }
+    }.worker, .{media_first_launch}) catch {};
 }
 
 /// Find the directory holding bundled runtime resources (engines/, scripts/, …).
@@ -380,11 +499,40 @@ fn detectResourceRoot() void {
     }
 }
 
+/// True when `path` names an existing local directory. Absolute-looking paths
+/// (POSIX `/…`, UNC `\\…`, Windows drive `C:/…`) go through the absolute
+/// opener, everything else relative to the CWD. URLs/magnets trivially fail
+/// the probe and return false.
+fn isLocalDirectory(path: []const u8) bool {
+    if (path.len == 0) return false;
+    const io_g = @import("core/io_global.zig");
+    const is_abs = path[0] == '/' or path[0] == '\\' or
+        (path.len >= 3 and path[1] == ':' and (path[2] == '/' or path[2] == '\\'));
+    if (is_abs) {
+        if (io_g.openDirAbsolute(path, .{})) |d| {
+            var dd = d;
+            dd.close(io_g.io());
+            return true;
+        } else |_| return false;
+    }
+    if (io_g.cwdOpenDir(path, .{})) |d| {
+        var dd = d;
+        dd.close(io_g.io());
+        return true;
+    } else |_| return false;
+}
+
 fn appInit(win: *dvui.Window) !void {
     player.perfInit();
+    // The log-ring allocator must be set before ANY pushLog call.
+    // startLocal() below logs (token loaded/created) and runs before
+    // coreInit, which used to own this assignment — without it the first
+    // launch segfaults in the allocator vtable.
+    @import("core/logs.zig").logs_allocator = @import("core/alloc.zig").allocator;
     // ── CLI argument handling (before anything heavy starts) ──
-    // `opal /path/to/file.mp4` or `opal https://example.com/stream`
-    // Deferred: store in buffer, appFrame loads after player is ready.
+    // `opal /path/to/file.mp4` or `opal https://example.com/stream`.
+    // Every argument is normalized and deferred: appFrame plays the first and
+    // queues the rest once the UI thread is up.
     if (dvui.App.main_init) |init_data| {
         // Windows requires the allocating iterator (argv arrives as one
         // WTF-16 command line that must be split); POSIX iterates in place.
@@ -394,21 +542,47 @@ fn appInit(win: *dvui.Window) !void {
             init_data.minimal.args.iterate();
         defer args_iter.deinit(); // no-op on POSIX
         _ = args_iter.next(); // skip argv[0] (binary name)
-        if (args_iter.next()) |arg| {
-            const len = @min(arg.len, cli_open_buf.len - 1);
-            @memcpy(cli_open_buf[0..len], arg[0..len]);
-            cli_open_len = len;
-            std.debug.print("[CLI] Will open: {s}\n", .{cli_open_buf[0..len]});
+        while (args_iter.next()) |arg| {
+            if (cli_arg_count >= MAX_CLI_ARGS) break;
+            const n = @import("services/single_instance_pure.zig").normalizeOpenArg(arg, &cli_args[cli_arg_count]);
+            if (n == 0) continue;
+            cli_arg_lens[cli_arg_count] = n;
+            cli_arg_count += 1;
+            std.debug.print("[CLI] Will open: {s}\n", .{cli_args[cli_arg_count - 1][0..n]});
         }
+        // Trigger-to-play T0: the user asked for these files now. (Process
+        // start is marginally earlier — window/SDL init runs before appInit —
+        // so cold-launch totals read ~100ms short; second-instance forwards
+        // stamp their own T0 at handoff instead.)
+        if (cli_arg_count > 0) player.openTriggerNow();
     }
 
-    // Single-instance: if another Opal already serves the local JSON API, hand
-    // it our argument and quit instead of opening a second window. Connection
-    // failure (no instance, or Web Remote off) → normal startup below.
-    if (cli_open_len > 0 and forwardToRunningInstance(cli_open_buf[0..cli_open_len])) {
+    // Claim the Windows marker even on a no-argument launch, so future
+    // Explorer file opens can cheaply identify this process as their target.
+    // POSIX keeps the existing immediate socket-only check.
+    const another_instance = claimInstanceMarker();
+
+    // Single-instance: if another Opal is already running, hand it our
+    // arguments and quit instead of opening a second window. The first
+    // argument decides: if it lands, the rest are forwarded best-effort and
+    // we exit; if it doesn't, nothing is listening and we start normally with
+    // the full argument list. Connection failure (no instance, or no token) →
+    // normal startup below.
+    if (cli_arg_count > 0 and another_instance and forwardToRunningInstance(cli_args[0][0..cli_arg_lens[0]])) {
+        var i: usize = 1;
+        while (i < cli_arg_count) : (i += 1) {
+            _ = forwardToRunningInstance(cli_args[i][0..cli_arg_lens[i]]);
+        }
         std.debug.print("[CLI] Forwarded to running instance, exiting.\n", .{});
         std.process.exit(0);
     }
+
+    // Bind the always-on loopback listener NOW, synchronously, before the
+    // window exists: a file double-clicked seconds from now must find a
+    // single-instance endpoint already accepting. Later startLocal calls (the
+    // background init worker) are no-ops via its running latch; stopLocal at
+    // teardown is unchanged.
+    @import("services/remote.zig").startLocal();
 
     // Record THIS (UI/render) thread so theme.applyToDvui can tell UI-thread
     // calls from background-worker calls (config.load → setPreset). Must run
@@ -440,57 +614,110 @@ fn appInit(win: *dvui.Window) !void {
     detectResourceRoot();
 }
 
-/// Second-instance forwarding: POST our file/URL argument to an already-
-/// running Opal's JSON API (remote.zig /api/open) and return true so the
-/// caller exits instead of starting a second UI. Authenticates with the same
-/// bearer token the running instance persists to <configDir>/api.token —
-/// readable here because both instances run as the same user. Any failure
-/// (nothing listening, no token, non-2xx) → false → normal startup. A
-/// 127.0.0.1 connect succeeds or is refused immediately, so no explicit
-/// timeout plumbing is needed.
+/// Second-instance forwarding: POST one file/URL argument to an already-
+/// running Opal's loopback API (/api/open) and return true so the caller exits
+/// instead of starting a second UI.
+///
+/// The always-on loopback listener (remote.startLocal) is tried first, so the
+/// handoff works with a stock configuration; the opt-in Web Remote port is
+/// tried second for an older instance that predates the always-on route.
+/// Authenticates with the same bearer token the running instance persists to
+/// <configDir>/api.token — readable here because both instances run as the
+/// same user. Any failure (nothing listening, no token, non-200) → false →
+/// normal startup. On Windows the named process marker gates this call, so a
+/// cold launch never pays the multi-second timeout some firewalls impose on a
+/// closed loopback port.
+///
+/// Raw socket, not core/http: this runs before workers exist and must stay
+/// dependency-light for a process that is about to exit.
 fn forwardToRunningInstance(arg: []const u8) bool {
     const io_g = @import("core/io_global.zig");
-    const sip = @import("services/single_instance_pure.zig");
+    const remote = @import("services/remote.zig");
 
     var dir_buf: [512]u8 = undefined;
     var tok_path_buf: [768]u8 = undefined;
     const tok_path = std.fmt.bufPrint(&tok_path_buf, "{s}/api.token", .{
         @import("core/paths.zig").configDir(&dir_buf),
     }) catch return false;
-    var tok_file = io_g.openFileAbsolute(tok_path, .{}) catch return false;
+    const tok_file = io_g.openFileAbsolute(tok_path, .{}) catch return false;
+    var tf = tok_file;
+    defer tf.close(io_g.io());
     var tok_buf: [32]u8 = undefined; // TOKEN_HEX_LEN in remote.zig
-    const tok_n = io_g.readAll(tok_file, &tok_buf) catch 0;
-    tok_file.close(io_g.io());
+    const tok_n = io_g.readAll(tf, &tok_buf) catch 0;
     if (tok_n != tok_buf.len) return false;
 
-    var url_buf: [6300]u8 = undefined; // worst case: 2048 arg bytes ×3 encoded
-    const url = sip.buildOpenUrl(@import("services/remote.zig").port, arg, &url_buf) orelse return false;
-    var auth_buf: [48]u8 = undefined;
-    const auth = std.fmt.bufPrint(&auth_buf, "Bearer {s}", .{tok_buf[0..tok_n]}) catch return false;
+    // One token read; try each listener in turn.
+    const ports = [_]u16{ remote.local_port, remote.port };
+    for (ports) |p| {
+        if (forwardOpenToPort(p, arg, tok_buf[0..tok_n])) return true;
+    }
+    return false;
+}
 
-    var client = @import("core/http.zig").newClient();
-    defer client.deinit();
-    const uri = std.Uri.parse(url) catch return false;
-    var req = client.request(.POST, uri, .{ .extra_headers = &.{
-        .{ .name = "Authorization", .value = auth },
-    } }) catch return false;
-    defer req.deinit();
-    // POST requires a body path in 0.16's client (sendBodiless asserts) —
-    // send an explicit empty body / Content-Length: 0.
-    var empty_body: [0]u8 = .{};
-    req.sendBodyComplete(&empty_body) catch return false;
-    var redirect_buf: [4096]u8 = undefined;
-    var response = req.receiveHead(&redirect_buf) catch return false;
-    return response.head.status.class() == .success;
+/// Return true when another Windows Opal process already owns the marker.
+/// The first process retains ownership until appDeinit. On non-Windows the
+/// caller preserves the existing socket-only behavior.
+fn claimInstanceMarker() bool {
+    if (comptime builtin.os.tag != .windows) return true;
+    if (instance_mutex_handle != null) return false;
+
+    const marker_name = std.unicode.utf8ToUtf16LeStringLiteral("Local\\Opal.SingleInstance.v1");
+    const handle = win_instance.CreateMutexW(null, 1, marker_name) orelse {
+        // If the marker is unavailable, fail open to the authenticated socket
+        // check rather than disabling an otherwise working handoff.
+        return true;
+    };
+    if (win_instance.GetLastError() == win_instance.already_exists) {
+        _ = win_instance.CloseHandle(handle);
+        return true;
+    }
+    instance_mutex_handle = handle;
+    return false;
+}
+
+/// POST one /api/open?path=<arg> to 127.0.0.1:<port> with the given bearer
+/// token. True only on an HTTP 200 — a refused connection, a short write, or
+/// any other status means "not handled", never "half handled".
+fn forwardOpenToPort(port: u16, arg: []const u8, token_hex: []const u8) bool {
+    const io_g = @import("core/io_global.zig");
+    const sip = @import("services/single_instance_pure.zig");
+
+    var path_buf: [3 * 2048 + 16]u8 = undefined;
+    const req_path = sip.buildOpenPath(arg, &path_buf) orelse return false;
+
+    const addr = std.Io.net.IpAddress.parseIp4("127.0.0.1", port) catch return false;
+    const conn = addr.connect(io_g.io(), .{ .mode = .stream }) catch return false;
+    var sock = conn;
+    defer sock.close(io_g.io());
+
+    var req_buf: [3 * 2048 + 512]u8 = undefined;
+    const req = std.fmt.bufPrint(&req_buf, "POST {s} HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {s}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", .{ req_path, token_hex }) catch return false;
+    io_g.streamWriteAll(sock, req) catch return false;
+    var resp: [256]u8 = undefined;
+    const n = io_g.streamRead(sock, &resp) catch return false;
+    return std.mem.indexOf(u8, resp[0..n], " 200 ") != null;
 }
 
 pub fn appDeinit() void {
+    if (comptime builtin.os.tag == .windows) {
+        if (instance_mutex_handle) |handle| {
+            _ = win_instance.ReleaseMutex(handle);
+            _ = win_instance.CloseHandle(handle);
+            instance_mutex_handle = null;
+        }
+    }
     @import("core/config.zig").captureCloseSession();
     const workers = @import("core/workers.zig");
+    // A prepared player is not in state.app.players yet; dispose it explicitly
+    // before draining workers so its libmpv core cannot outlive shared state.
+    player.shutdownWarmPlayer(@import("core/alloc.zig").allocator);
     // Stop audible/visible media before the surface disappears. Player
     // destruction intentionally happens later, after workers are drained, but
     // playback must not continue invisibly throughout that cleanup window.
-    for (state.app.players.items) |p| p.stopForShutdown();
+    for (state.app.players.items) |p| {
+        p.saveCurrentPositionFinal();
+        p.stopForShutdown();
+    }
     // The software render workers are supervisor-admitted threads that only
     // exit when told to; players are destroyed after the drain below, so
     // stop them now or the drain waits out its deadline on every close.
@@ -505,6 +732,10 @@ pub fn appDeinit() void {
             if (sdl_win != null) c.sdl.SDL_HideWindow(sdl_win);
         }
     }
+
+    // Surface is already gone; allow a local media server a tightly bounded
+    // chance to receive its final stop/progress without making close feel hung.
+    @import("services/server_progress.zig").flushForShutdown(120);
 
     // No teardown bug may leave an unresponsive window around indefinitely.
     // Normal shutdown finishes in well under a second; this only fires when a
@@ -541,6 +772,7 @@ pub fn appDeinit() void {
     // threshold, not permission for a worker to outlive shared state.
     workers.beginShutdownAndDrain(800);
     @import("player/drop_ingest.zig").deinit();
+    @import("services/queue.zig").deinit();
 
     // Persist only after background work has stopped using the shared SQLite
     // connection. Saving from the close-event frame used to block that frame
@@ -600,7 +832,9 @@ pub fn appDeinit() void {
 
     // One process-table scan instead of seven serial scans. On Windows each
     // old scan launched PowerShell + CIM, which dominated close latency.
-    @import("core/io_global.zig").killAnyByCommandLine(&kill_targets, false);
+    if (voice.sidecarCleanupNeeded()) {
+        @import("core/io_global.zig").killAnyByCommandLine(&kill_targets, false);
+    }
     // Sidecars are gone; their random 0700 socket/audio workspace can now be
     // removed without racing a writer.
     voice.deinit();
@@ -608,6 +842,11 @@ pub fn appDeinit() void {
     // llama-server (AI backend)
     const server = @import("services/ai_server.zig");
     server.stopServer();
+
+    // All database users and the final config transaction are finished. Close
+    // SQLite explicitly so WAL/checkpoint state and file handles are settled
+    // before the allocator and process disappear.
+    @import("core/db.zig").deinit();
 
     // Release the process-global keep-alive HTTP client (pooled connections)
     // so the leak report below stays at 0. Workers are already stopped here.
@@ -619,13 +858,6 @@ pub fn appDeinit() void {
     // Trigger GeneralPurposeAllocator leak dump on exit
     @import("core/alloc.zig").deinit();
     workers.finishShutdown();
-}
-
-fn hexVal(ch: u8) ?u8 {
-    if (ch >= '0' and ch <= '9') return ch - '0';
-    if (ch >= 'a' and ch <= 'f') return ch - 'a' + 10;
-    if (ch >= 'A' and ch <= 'F') return ch - 'A' + 10;
-    return null;
 }
 
 fn sdlEventWatch(_: ?*anyopaque, event: [*c]c.sdl.SDL_Event) callconv(.c) c_int {
@@ -644,29 +876,9 @@ fn sdlEventWatch(_: ?*anyopaque, event: [*c]c.sdl.SDL_Event) callconv(.c) c_int 
         state.app.dropped_file_lock.lock();
         defer state.app.dropped_file_lock.unlock();
         if (event.*.drop.file) |file_c_str| {
-            var span = std.mem.span(file_c_str);
-            if (std.mem.startsWith(u8, span, "file://")) {
-                span = span[7..];
-            }
-            // URL-decode %XX sequences (e.g. %20 → space)
+            const span = std.mem.span(file_c_str);
             var decoded: [2048]u8 = undefined;
-            var di: usize = 0;
-            var si: usize = 0;
-            while (si < span.len and di < decoded.len - 1) {
-                if (span[si] == '%' and si + 2 < span.len) {
-                    const hi = hexVal(span[si + 1]);
-                    const lo = hexVal(span[si + 2]);
-                    if (hi != null and lo != null) {
-                        decoded[di] = hi.? * 16 + lo.?;
-                        di += 1;
-                        si += 3;
-                        continue;
-                    }
-                }
-                decoded[di] = span[si];
-                di += 1;
-                si += 1;
-            }
+            const di = @import("services/single_instance_pure.zig").normalizeOpenArg(span, decoded[0 .. decoded.len - 1]);
             std.debug.print("[SDL_DROP] Got dropped file: {s}\n", .{decoded[0..di]});
             @memcpy(state.app.dropped_file_path[0..di], decoded[0..di]);
             state.app.dropped_file_path[di] = 0;
@@ -821,9 +1033,28 @@ fn appFrame() !dvui.App.Result {
     // leaves this latch for the next one.
     if (@import("ui/titlebar.zig").close_requested) return .close;
 
+    // A true startup_frame_submitted means the preceding callback returned,
+    // Window.end completed, and SDL_RenderPresent populated the hidden native
+    // window. It is now safe to map that already-rendered surface. Do this at
+    // the start of the second frame so no incomplete backbuffer can flash.
+    if (comptime builtin.os.tag == .windows) {
+        if (startup_frame_submitted and !startup_window_revealed) {
+            if (dvui_win) |win| {
+                const sdl_win: ?*c.sdl.SDL_Window = @ptrCast(win.backend.impl.window);
+                if (sdl_win != null) c.sdl.SDL_ShowWindow(sdl_win);
+                startup_window_revealed = true;
+            }
+        }
+    }
+
     // Apply any theme change requested off the UI thread (config.load runs
     // theme.setPreset on the background worker, which can't touch dvui directly).
     theme.reapplyIfPending();
+
+    // Queue producers include playlist/AI/remote worker threads. Drain their
+    // bounded commands here so live queue and player state stay UI-thread-owned.
+    @import("services/queue.zig").drainUi();
+    @import("services/search.zig").drainMemorySearch();
 
     // Adaptive default scale — DVUI already applies a reported display scale,
     // so Auto starts at 1.0× and never shrinks below it. A Linux panel probe
@@ -837,6 +1068,16 @@ fn appFrame() !dvui.App.Result {
             // so the first layout is stable and a manual choice still wins.
             state.app.ui_scale = @import("core/display_info.zig").defaultScale(dvui.windowNaturalScale());
         }
+    }
+
+    // Prepare the first libmpv core after a complete UI frame and the narrow
+    // config/script barrier. Overlap it with cache/history/source startup work
+    // so the first Home/Recents click does not wait behind unrelated I/O.
+    if (!player_warmup_scheduled and first_frame_complete and cli_arg_count == 0 and
+        state.app.player_prewarm_ready.load(.acquire))
+    {
+        player_warmup_scheduled = true;
+        player.scheduleWarmPlayer(@import("core/alloc.zig").allocator);
     }
 
     // Keep the few legacy layout consumers on the live dvui window size. Do
@@ -863,6 +1104,15 @@ fn appFrame() !dvui.App.Result {
     // Consume a navigation queued from a worker thread (AI tools, resolver).
     state.applyPendingNav();
 
+    // Honor a magnet/.torrent action made during delayed DHT startup. The
+    // background initializer only publishes + wakes; the UI thread performs
+    // the player and list mutation here.
+    @import("services/search.zig").flushPendingTorrentOpen();
+
+    // Rejoin saved active swarms only after DB + libtorrent are both ready.
+    // This intentionally does not open a player or change the current route.
+    @import("services/torrent_intents.zig").restoreIfReady();
+
     // Swap in TMDB pages staged by fetch workers (UI thread owns `results`;
     // workers staging + this apply is what keeps the render loop's iteration
     // safe — see state.zig tmdb.results comment).
@@ -882,8 +1132,10 @@ fn appFrame() !dvui.App.Result {
     // Resume prompt (replaces the old silent session restore): once watch history
     // has loaded, arm a one-shot banner offering to reopen the most-recent item
     // instead of auto-reopening it. Cold start only — skip if something already
-    // plays (e.g. a CLI/file-arg open). See resume_pure for the predicate.
-    if (!state.app.resume_prompt_checked and state.app.init_history_loaded) {
+    // plays (e.g. a CLI/file-arg open), and never when launched to open
+    // something: a double-clicked file must play, not sit under a "resume
+    // last?" banner. See resume_pure for the predicate.
+    if (!state.app.resume_prompt_checked and state.app.init_history_loaded and cli_arg_count == 0) {
         state.app.resume_prompt_checked = true;
         state.app.session_restore_done = true;
         const wh = @import("player/watch_history.zig");
@@ -986,57 +1238,95 @@ fn appFrame() !dvui.App.Result {
         }
     }
 
-    // Process CLI file argument (deferred from appInit)
+    // Process CLI file arguments (deferred from appInit).
     // No player-exists precondition: windowed startup no longer creates a
     // player (only headless does), so gating on `players.items.len > 0` meant
     // `opal <file>` silently never opened the file on the desktop. loadContent
     // → playDirect creates the player on demand.
-    if (!cli_open_done and cli_open_len > 0) {
+    // First argument plays; the rest join the watch queue. Directories go
+    // through the folder ingest (background scan + playlist drawer), exactly
+    // like a drag-dropped folder — loadContent would misroute them to the
+    // in-app browser.
+    if (!cli_open_done and cli_arg_count > 0) {
         cli_open_done = true;
-        const fpath = cli_open_buf[0..cli_open_len];
         const browser = @import("services/browser.zig");
-        browser.loadContent(fpath);
-        logs.pushLog("info", "open", "Loaded file from CLI", false);
-        state.showToast("Playing from CLI");
+        var i: usize = 0;
+        while (i < cli_arg_count) : (i += 1) {
+            const fpath = cli_args[i][0..cli_arg_lens[i]];
+            if (i == 0) {
+                if (isLocalDirectory(fpath)) {
+                    if (@import("player/drop_ingest.zig").start(fpath)) {
+                        state.showToast("Opening folder...");
+                    } else {
+                        browser.loadContent(fpath);
+                    }
+                } else {
+                    browser.loadContent(fpath);
+                }
+                logs.pushLog("info", "open", "Loaded file from CLI", false);
+                state.showToast("Playing from CLI");
+            } else {
+                @import("services/queue.zig").addToQueue(fpath, fpath, "cli");
+            }
+        }
+        if (cli_arg_count > 1) {
+            logs.pushLog("info", "open", "Queued extra CLI files", false);
+            state.showToast("Extra files queued");
+        }
     }
 
-    // Process a path forwarded by a second `opal <file>` launch (remote
-    // /api/open). Snapshot under the lock, release, then do the UI-thread work.
+    // Process paths forwarded by other `opal <file>` launches (remote
+    // /api/open). Drains the whole FIFO: the first entry plays, the rest are
+    // queued. Each entry is snapshotted under the lock, released, then
+    // handled with the UI-thread work.
     {
-        var fwd_buf: [2048]u8 = undefined;
-        var fwd_len: usize = 0;
-        var type_buf: [16]u8 = undefined;
-        var type_len: usize = 0;
-        var title_buf: [512]u8 = undefined;
-        var title_len: usize = 0;
-        var art_buf: [1024]u8 = undefined;
-        var art_len: usize = 0;
-        var sub_buf: [256]u8 = undefined;
-        var sub_len: usize = 0;
-        if (state.app.remote_open_ready.load(.acquire)) {
-            state.app.remote_open_lock.lock();
-            if (state.app.remote_open_ready.swap(false, .acq_rel)) {
-                fwd_len = state.app.remote_open_len;
-                @memcpy(fwd_buf[0..fwd_len], state.app.remote_open_path[0..fwd_len]);
-                type_len = state.app.remote_open_type_len;
-                @memcpy(type_buf[0..type_len], state.app.remote_open_type[0..type_len]);
-                title_len = state.app.remote_open_title_len;
-                @memcpy(title_buf[0..title_len], state.app.remote_open_title[0..title_len]);
-                art_len = state.app.remote_open_art_len;
-                @memcpy(art_buf[0..art_len], state.app.remote_open_art[0..art_len]);
-                sub_len = state.app.remote_open_subtitle_len;
-                @memcpy(sub_buf[0..sub_len], state.app.remote_open_subtitle[0..sub_len]);
-                // One-shot: clear the meta so a later bare open doesn't reuse it.
-                state.app.remote_open_type_len = 0;
-                state.app.remote_open_title_len = 0;
-                state.app.remote_open_art_len = 0;
-                state.app.remote_open_subtitle_len = 0;
-            }
-            state.app.remote_open_lock.unlock();
-        }
-        if (fwd_len > 0) {
+        var first = true;
+        while (true) {
+            var fwd_buf: [2048]u8 = undefined;
+            var fwd_len: usize = 0;
+            var type_buf: [16]u8 = undefined;
+            var type_len: usize = 0;
+            var title_buf: [512]u8 = undefined;
+            var title_len: usize = 0;
+            var art_buf: [1024]u8 = undefined;
+            var art_len: usize = 0;
+            var sub_buf: [256]u8 = undefined;
+            var sub_len: usize = 0;
+            if (state.app.remote_open_ready.load(.acquire)) {
+                state.app.remote_open_lock.lock();
+                if (state.app.remote_open_count > 0) {
+                    const e = &state.app.remote_open_queue[state.app.remote_open_head];
+                    fwd_len = e.path_len;
+                    @memcpy(fwd_buf[0..fwd_len], e.path[0..fwd_len]);
+                    type_len = e.kind_len;
+                    @memcpy(type_buf[0..type_len], e.kind[0..type_len]);
+                    title_len = e.title_len;
+                    @memcpy(title_buf[0..title_len], e.title[0..title_len]);
+                    art_len = e.art_len;
+                    @memcpy(art_buf[0..art_len], e.art[0..art_len]);
+                    sub_len = e.subtitle_len;
+                    @memcpy(sub_buf[0..sub_len], e.subtitle[0..sub_len]);
+                    state.app.remote_open_head = (state.app.remote_open_head + 1) % state.REMOTE_OPEN_QUEUE_CAP;
+                    state.app.remote_open_count -= 1;
+                    state.app.remote_open_ready.store(state.app.remote_open_count > 0, .release);
+                } else {
+                    state.app.remote_open_ready.store(false, .release);
+                }
+                state.app.remote_open_lock.unlock();
+            } else break;
+            if (fwd_len == 0) continue;
+            // A forwarded file dismisses the launch resume prompt — the user
+            // asked for THIS file, not last session's.
+            state.app.resume_prompt_active = false;
             const url = fwd_buf[0..fwd_len];
             const kind = type_buf[0..type_len];
+            if (!first) {
+                const title = if (title_len > 0) title_buf[0..title_len] else url;
+                @import("services/queue.zig").addToQueue(url, title, "file-open");
+                logs.pushLog("info", "queue", "Queued forwarded file", false);
+                continue;
+            }
+            first = false;
             if (std.mem.eql(u8, kind, "queue")) {
                 // "Queue in Opal" — add to the watch queue instead of playing.
                 const title = if (title_len > 0) title_buf[0..title_len] else url;
@@ -1231,6 +1521,7 @@ fn appFrame() !dvui.App.Result {
     }
 
     player.updateTorrentBackgroundTasks();
+    @import("services/jellyfin.zig").drainTranscodeRecovery();
     @import("services/tmdb.zig").checkEpisodeStartup();
     @import("services/tmdb.zig").applyPendingDetail();
 
@@ -1290,7 +1581,7 @@ fn appFrame() !dvui.App.Result {
 
     // Track mouse motion — feeds the shared chrome idle clock.
     for (dvui.events()) |*e| {
-        if (e.evt == .mouse and e.evt.mouse.action == .motion) {
+        if (e.evt == .mouse and (e.evt.mouse.action == .motion or e.evt.mouse.action == .press or e.evt.mouse.action == .release)) {
             state.app.last_mouse_x = e.evt.mouse.p.x;
             state.app.last_mouse_y = e.evt.mouse.p.y;
             state.app.last_mouse_move_ms = @import("core/io_global.zig").milliTimestamp();
@@ -1338,6 +1629,7 @@ fn appFrame() !dvui.App.Result {
             }
         }
     }
+    const player_chrome_overlay = state.app.page_shell_enabled and state.app.router.current == .player;
     var app_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .color_fill = theme.colors.bg_app });
     defer app_box.deinit();
 
@@ -1350,7 +1642,10 @@ fn appFrame() !dvui.App.Result {
             const sdl_win: ?*c.sdl.SDL_Window = @ptrCast(win.backend.impl.window);
             titlebar.ensureEnabled(sdl_win);
         }
-        titlebar.render();
+        // The page-shell player renders this strip inside its own hover layer,
+        // allowing video to occupy the pixels behind it. Other routes retain
+        // the normal in-flow title strip.
+        if (!player_chrome_overlay) titlebar.render();
     }
 
     var scale_w = dvui.scale(@src(), .{ .scale = &state.app.ui_scale }, .{ .expand = .both });
@@ -1510,6 +1805,27 @@ fn appFrame() !dvui.App.Result {
     if (builtin.mode == .Debug and
         @import("core/io_global.zig").getenv("OPAL_HUD") != null) renderHudOverlay();
 
+    if (comptime builtin.os.tag == .windows) {
+        if (!startup_frame_submitted) {
+            startup_frame_submitted = true;
+            // Ensure the event loop enters the second frame immediately even
+            // when no media or background worker is otherwise refreshing it.
+            const reveal_tick = dvui.Id.extendId(null, @src(), 0);
+            dvui.timer(reveal_tick, 1);
+        }
+    }
+
+    // A fast CLI/file-association launch may create mpv before the background
+    // config read completes. Replay the loaded preferences once, immediately,
+    // instead of leaving that first player on defaults until the next file.
+    if (!player_preferences_applied and state.app.config_loaded.load(.acquire)) {
+        player_preferences_applied = true;
+        for (state.app.players.items) |p| p.applyPersistentPreferences();
+    }
+    // Buttons can request exit during this frame; do not wait for another
+    // input event to wake a paused/idle player before honoring that request.
+    if (@import("ui/titlebar.zig").close_requested) return .close;
+    first_frame_complete = true;
     return .ok;
 }
 

@@ -309,7 +309,10 @@ def test_cloud_llm_backend():
     srv = _src("src/services/ai_server.zig")
     ctx = _src("src/services/ai_context.zig")
     cfg = _src("src/core/config.zig")
+    deps = _src("src/core/deps.zig")
+    archive_installer = _between(deps, "fn downloadVerified", "/// One-liner brew install")
     stg = _src("src/ui/settings.zig")
+    main = _src("src/main.zig")
     checks = {
         "cloud kind": "cloud" in srv and "CLOUD_PROVIDERS" in srv,
         "env-keyed providers": "_API_KEY" in srv and "OPENROUTER" in srv and "GROQ" in srv,
@@ -319,6 +322,15 @@ def test_cloud_llm_backend():
         # 3.2GB first-message download). The fn still exists for the explicit
         # Settings/chat-card buttons.
         "no silent download": "startModelDownload" not in _between(srv, "pub fn ensureReady", "\npub fn"),
+        "voice models are explicit": "fetchWhisperModelAsync" not in main
+            and 'modelRow("Whisper Tiny' in stg
+            and "deps.fetchWhisperModelAsync();" in stg,
+        "voice models publish transactionally": ".opal-model-stage" in deps
+            and "downloadVerified" in deps
+            and "processSucceeded(term)" in deps
+            and "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f" in deps
+            and '"mv", "-f"' not in archive_installer
+            and '"sh", "-c"' not in archive_installer,
         "config persists cloud": '"cloud"' in cfg and "ai_cloud_provider" in cfg,
         "settings picker": "Cloud API" in stg and "cloudProviderHasKey" in stg,
     }

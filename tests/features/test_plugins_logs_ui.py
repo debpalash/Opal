@@ -66,10 +66,9 @@ def test_logs_compacted():
                     "source prefix, routed through logs_pure, windowing preserved")
 
 
-@test("Plugins has its own nav-bar menu and route", "UI Standards")
+@test("Plugins has a dedicated route and clean overflow entry", "UI Standards")
 def test_plugins_navbar_menu():
-    """Plugins moved out of the combined "Logs & Plugins" system page into a
-    dedicated nav-bar dropdown + `.plugins` route with its own sub-tabs."""
+    """Plugins keeps a first-class route/sub-tabs without crowding primary chrome."""
     sh = _src("src/ui/shell.zig")
     rt = _src("src/core/router.zig")
     st = _src("src/core/state.zig")
@@ -88,17 +87,12 @@ def test_plugins_navbar_menu():
         # State holds the sub-tab.
         "plugin_tab state": "plugin_tab: @import(\"router.zig\").PluginTab" in st,
         "drawer tab routes to it": ".Plugins => app.router.navigate(.plugins)" in st,
-        # Nav bar: a real dropdown menu, not a sub-tab behind the Logs icon.
-        "menu fn": "fn pluginsMenu()" in sh,
-        "menu mounted": "    pluginsMenu();" in sh,
-        "menu iterates table": "router.PLUGIN_TABS" in sh and "router.pluginTabLabel(" in sh,
-        "menu shows hints": "router.pluginTabHint(" in sh,
-        "menu sets tab + navigates": "state.app.plugin_tab = t;" in sh,
-        "puzzle icon": "icons.tvg.lucide.puzzle" in sh,
+        "overflow entry": 'menuItemLabel(@src(), "Plugins"' in sh,
+        "not mounted in primary nav": "    pluginsMenu();" not in sh,
         # The old combined button is gone; Logs stands alone. (Match the call
         # site, not the string — the comment above it still names the old page.)
-        "logs button renamed": 'icons.tvg.lucide.@"scroll-text", "Logs",' in sh
-                               and 'icons.tvg.lucide.@"scroll-text", "Logs & Plugins"' not in sh,
+        "logs separately named": 'menuItemLabel(@src(), "Logs"' in sh
+                                 and 'icons.tvg.lucide.@"scroll-text", "Logs & Plugins"' not in sh,
         "no logs/plugins subtab strip": "&.{ .Logs, .Plugins }" not in sh,
         # Page renders one section at a time, sharing the generic tab strip.
         "plugins page case": ".plugins => {" in sh,
@@ -112,9 +106,7 @@ def test_plugins_navbar_menu():
     missing = [k for k, v in checks.items() if not v]
     if missing:
         return "fail", "plugins nav-bar menu incomplete: " + ", ".join(missing)
-    return "pass", ("Plugins is a top-level route with a nav-bar dropdown (5 sections, "
-                    "labels+hints from router.PLUGIN_TABS) and an in-page tab strip "
-                    "sharing subTabsOf; Logs is now its own button")
+    return "pass", "Plugins and Logs have separate overflow entries; Plugins keeps its in-page tabs"
 
 
 @test("Installed sources are not silently dropped by a full table", "UI Standards")

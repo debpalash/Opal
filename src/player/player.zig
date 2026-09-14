@@ -5,9 +5,11 @@ const state = @import("../core/state.zig");
 const logs = @import("../core/logs.zig");
 const http_headers = @import("http_headers_pure.zig");
 const playback_load = @import("playback_load_pure.zig");
+const playback_fallback = @import("playback_fallback_pure.zig");
 const playback_snapshot = @import("playback_snapshot_pure.zig");
 pub const HttpHeader = http_headers.HttpHeader;
 pub const LoadMode = playback_load.Mode;
+pub const PlaybackOrigin = playback_load.Origin;
 pub const LoadRequest = playback_load.Request;
 pub const PlaybackSnapshot = playback_snapshot.Snapshot;
 
@@ -56,10 +58,14 @@ const MpvPlaybackSink = struct {
         var option_values = [_]c.mpv.mpv_node{
             stringNode(user_agent_z.ptr),
             stringNode(header_fields_z.ptr),
+            stringNode(options.cache_pause_initial.ptr),
+            stringNode(options.network_timeout.ptr),
         };
         var option_keys = [_][*c]u8{
             @constCast("user-agent"),
             @constCast("http-header-fields"),
+            @constCast("cache-pause-initial"),
+            @constCast("network-timeout"),
         };
         var option_list: c.mpv.mpv_node_list = .{
             .num = option_values.len,
@@ -106,8 +112,17 @@ const MpvPlaybackSink = struct {
                 runtime_api & 0xffff,
                 std.mem.span(c.mpv.mpv_error_string(rc)),
             }) catch "loadfile rejected by libmpv";
-            logs.pushLog("error", "player", msg, true);
-            state.showToast(msg);
+            var delivered = false;
+            for (state.app.players.items) |p| {
+                if (p.mpv_ctx != self.ctx) continue;
+                p.setLoadError(msg);
+                delivered = true;
+                break;
+            }
+            if (!delivered) {
+                logs.pushLog("error", "player", msg, true);
+                state.showToast(msg);
+            }
         }
     }
 };
@@ -157,6 +172,8 @@ pub const MediaPlayer = struct {
     is_loading: bool = false,
     loading_label: [128]u8 = std.mem.zeroes([128]u8),
     loading_label_len: usize = 0,
+    load_error: [192]u8 = std.mem.zeroes([192]u8),
+    load_error_len: usize = 0,
     thumb_texture: ?dvui.Texture = null,
     thumb_texture_path: [384]u8 = std.mem.zeroes([384]u8),
     thumb_texture_path_len: usize = 0,
@@ -168,14 +185,33 @@ pub const MediaPlayer = struct {
     rotation: i32, // 0, 90, 180, 270
     source_url: [2048]u8,
     source_url_len: usize,
+    playback_origin: PlaybackOrigin = .direct,
+    queue_item_id: i64 = -1,
     is_torrent: bool,
     metadata_start_time: i64,
     resume_percent: f64 = 0.0,
     resume_position_secs: f64 = 0.0, // exact-second resume (wins over percent)
-    current_url: [2048]u8 = std.mem.zeroes([2048]u8),
+    current_url: [MAX_LOAD_URL]u8 = std.mem.zeroes([MAX_LOAD_URL]u8),
     current_url_len: usize = 0,
+    fallback_url: [MAX_LOAD_URL]u8 = std.mem.zeroes([MAX_LOAD_URL]u8),
+    fallback_url_len: usize = 0,
+    fallback_recovery: playback_fallback.State = .{},
+    server_recovery_attempted: bool = false,
+    history_identity: [2048]u8 = std.mem.zeroes([2048]u8),
+    history_identity_len: usize = 0,
+    restore_target: [2048]u8 = std.mem.zeroes([2048]u8),
+    restore_target_len: usize = 0,
+    current_user_agent: [2048]u8 = std.mem.zeroes([2048]u8),
+    current_user_agent_len: usize = 0,
+    current_header_fields: [2048]u8 = std.mem.zeroes([2048]u8),
+    current_header_fields_len: usize = 0,
+    current_unbounded_network_read: bool = false,
+    /// First-attempt YouTube manifest skipping is safe for normal videos. Keep
+    /// one robust retry armed until FILE_LOADED for live/restricted edge cases.
+    ytdl_fast_retry_pending: bool = false,
     resume_seeked: bool = false,
     restore_session_position: ?f64 = null,
+    provider_resume_position: ?f64 = null,
     restore_session_paused: bool = true,
     restore_session_speed: f64 = 1,
     /// Monotonic deadline for playback-position persistence. Database writes
@@ -198,6 +234,9 @@ pub const MediaPlayer = struct {
     cached_playlist_pos: i64 = 0,
     cached_video_width: i64 = 0,
     cached_video_height: i64 = 0,
+    cached_hwdec: [32]u8 = std.mem.zeroes([32]u8),
+    cached_hwdec_len: usize = 0,
+    hwdec_fallback_notified: bool = false,
     // True only when this player is playing ANIME-sourced media (armed by the
     // anime play flow via services/anime_skip.zig). Gates auto-skip so we
     // don't apply crowdsourced anime timestamps to arbitrary files.
@@ -303,6 +342,31 @@ pub const MediaPlayer = struct {
         };
     }
 
+    /// Replay viewer-level choices onto this mpv context. Safe before, during,
+    /// or after a load; used when async config finishes after a fast CLI open.
+    pub fn applyPersistentPreferences(self: *MediaPlayer) void {
+        var volume = state.app.playback_volume;
+        var speed = state.app.playback_speed;
+        var muted: c_int = if (state.app.playback_muted) 1 else 0;
+        _ = c.mpv.mpv_set_property(self.mpv_ctx, "volume", c.mpv.MPV_FORMAT_DOUBLE, &volume);
+        _ = c.mpv.mpv_set_property(self.mpv_ctx, "speed", c.mpv.MPV_FORMAT_DOUBLE, &speed);
+        _ = c.mpv.mpv_set_property(self.mpv_ctx, "mute", c.mpv.MPV_FORMAT_FLAG, &muted);
+        if (state.app.audio_lang_len > 0)
+            _ = c.mpv.mpv_set_property_string(self.mpv_ctx, "alang", state.app.audio_lang_buf[0..].ptr);
+        if (state.app.sub_lang_len > 0)
+            _ = c.mpv.mpv_set_property_string(self.mpv_ctx, "slang", state.app.sub_lang_buf[0..].ptr);
+        _ = c.mpv.mpv_set_property_string(self.mpv_ctx, "sub-visibility", if (state.app.subtitles_enabled) "yes" else "no");
+        if (state.app.audio_device_len > 0)
+            _ = c.mpv.mpv_set_property_string(self.mpv_ctx, "audio-device", state.app.audio_device_buf[0..].ptr);
+        if (state.app.video_aspect_len > 0)
+            _ = c.mpv.mpv_set_property_string(self.mpv_ctx, "video-aspect-override", state.app.video_aspect_buf[0..].ptr);
+        self.cached_volume = volume;
+        self.cached_speed = speed;
+        self.cached_muted = muted != 0;
+        self.cell_volume = volume;
+        self.cell_speed = speed;
+    }
+
     /// Set (or clear, with empty args) the now-playing audio metadata + cover
     /// art. UI-thread only. Copies the strings in (clamped) and releases any
     /// prior art — but only when no fetch is mid-flight for this slot: freeing
@@ -370,8 +434,10 @@ pub const MediaPlayer = struct {
             if (ts.len > 0 and !std.mem.eql(u8, ts, "No file") and
                 !std.mem.eql(u8, ts, "stream") and !std.mem.eql(u8, ts, "mpv") and ts.len > 1)
             {
-                const limit = @min(ts.len, out_buf.len);
-                @memcpy(out_buf[0..limit], ts[0..limit]);
+                var safe_title_buf: [2048]u8 = undefined;
+                const display_title = @import("watch_history_pure.zig").persistedTarget(ts, &safe_title_buf).identity;
+                const limit = @min(display_title.len, out_buf.len);
+                @memcpy(out_buf[0..limit], display_title[0..limit]);
                 return limit;
             }
         }
@@ -456,6 +522,27 @@ pub const MediaPlayer = struct {
     }
 
     pub fn init(allocator: std.mem.Allocator) !*MediaPlayer {
+        return initPrepared(allocator, true);
+    }
+
+    fn maybeNotifyHwdecFallback(self: *MediaPlayer) void {
+        const current: ?[]const u8 = if (self.cached_hwdec_len > 0)
+            self.cached_hwdec[0..self.cached_hwdec_len]
+        else
+            null;
+        if (!@import("hwdec_feedback_pure.zig").shouldNotify(
+            state.app.hwdec_enabled,
+            current,
+            self.cached_video_width,
+            self.cached_video_height,
+            self.hwdec_fallback_notified,
+        )) return;
+        self.hwdec_fallback_notified = true;
+        logs.pushLog("warn", "player", "Hardware decoding unavailable for this video; using software decoding", false);
+        state.showToast("GPU decode unavailable — using software for this video");
+    }
+
+    fn initPrepared(allocator: std.mem.Allocator, start_renderer: bool) !*MediaPlayer {
         const self = try allocator.create(MediaPlayer);
         self.texture = null;
         self.current_torrent_id = -1;
@@ -465,13 +552,15 @@ pub const MediaPlayer = struct {
         self.last_error_time = 0;
         self.is_buffering_paused = false;
         self.selected_file_idx = -1;
-        self.cell_volume = 100.0;
-        self.cell_speed = 1.0;
+        self.cell_volume = state.app.playback_volume;
+        self.cell_speed = state.app.playback_speed;
         self.loop_a = -1.0;
         self.loop_b = -1.0;
         self.is_flipped = false;
         self.rotation = 0;
         self.source_url_len = 0;
+        self.playback_origin = .direct;
+        self.queue_item_id = -1;
         self.is_torrent = false;
         self.metadata_start_time = 0;
         self.resume_percent = 0.0;
@@ -479,13 +568,30 @@ pub const MediaPlayer = struct {
         @memset(&self.source_url, 0);
         @memset(&self.current_url, 0);
         self.current_url_len = 0;
+        @memset(&self.fallback_url, 0);
+        self.fallback_url_len = 0;
+        self.fallback_recovery = .{};
+        self.server_recovery_attempted = false;
+        @memset(&self.history_identity, 0);
+        self.history_identity_len = 0;
+        @memset(&self.restore_target, 0);
+        self.restore_target_len = 0;
+        @memset(&self.current_user_agent, 0);
+        self.current_user_agent_len = 0;
+        @memset(&self.current_header_fields, 0);
+        self.current_header_fields_len = 0;
+        self.current_unbounded_network_read = false;
+        self.ytdl_fast_retry_pending = false;
         self.resume_seeked = false;
         self.restore_session_position = null;
+        self.provider_resume_position = null;
         self.restore_session_paused = true;
         self.restore_session_speed = 1;
         self.last_position_save_ms = 0;
         self.is_loading = false;
         self.loading_label_len = 0;
+        @memset(&self.load_error, 0);
+        self.load_error_len = 0;
         self.provider = .mpv;
         self.thumb_texture = null;
         @memset(&self.thumb_texture_path, 0);
@@ -501,14 +607,17 @@ pub const MediaPlayer = struct {
         self.cached_paused = true;
         self.last_seen_pos = 0;
         self.cached_duration = 0;
-        self.cached_volume = 100;
-        self.cached_speed = 1;
-        self.cached_muted = false;
+        self.cached_volume = state.app.playback_volume;
+        self.cached_speed = state.app.playback_speed;
+        self.cached_muted = state.app.playback_muted;
         self.cached_paused_for_cache = false;
         self.cached_playlist_count = 0;
         self.cached_playlist_pos = 0;
         self.cached_video_width = 0;
         self.cached_video_height = 0;
+        @memset(&self.cached_hwdec, 0);
+        self.cached_hwdec_len = 0;
+        self.hwdec_fallback_notified = false;
         self.anime_skip_active = false;
         self.cached_vid_no = false;
         self.vis_applied = false;
@@ -569,19 +678,17 @@ pub const MediaPlayer = struct {
         self.frame_fmt = swTextureFormat();
         self.want_w = std.atomic.Value(u32).init(0);
         self.want_h = std.atomic.Value(u32).init(0);
-        if (state.app.is_headless) {
+        if (state.app.is_headless or !start_renderer) {
             // Headless: no display surface, so no software-render pixel buffer.
             // Empty slice — deinit's allocator.free on a zero-len slice is a no-op.
             self.pixels = &.{};
             self.back_pixels = &.{};
         } else {
             self.pixels = try allocator.alloc(dvui.Color.PMA, video_w * video_h);
-            @memset(self.pixels, dvui.Color.PMA.black);
             self.back_pixels = allocator.alloc(dvui.Color.PMA, video_w * video_h) catch |err| {
                 allocator.free(self.pixels);
                 return err;
             };
-            @memset(self.back_pixels, dvui.Color.PMA.black);
         }
 
         self.mpv_ctx = c.mpv.mpv_create() orelse {
@@ -616,6 +723,9 @@ pub const MediaPlayer = struct {
         // samples put 7 idle Lua threads per mpv instance; drop them. NOTE:
         // ytdl_hook must stay (it resolves YouTube/streaming URLs), so we
         // disable the individual scripts rather than load-scripts=no.
+        // `load-console` is the current mpv option. Keep the legacy spelling as
+        // a harmless compatibility attempt for older packaged builds.
+        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "load-console", "no");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "load-osd-console", "no");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "load-select", "no");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "load-positioning", "no");
@@ -623,22 +733,28 @@ pub const MediaPlayer = struct {
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "load-context-menu", "no");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "load-stats-overlay", "no");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "load-auto-profiles", "no");
-        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "input-cursor", "yes");
-        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "msg-level", "all=status");
-        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "terminal", "yes");
+        // Opal owns all keyboard, pointer and chrome input. Avoid initializing
+        // mpv's unused input bindings and terminal/status machinery.
+        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "input-builtin-bindings", "no");
+        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "input-default-bindings", "no");
+        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "input-cursor", "no");
+        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "msg-level", "all=warn");
+        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "terminal", "no");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "clipboard-backends", "");
 
-        // Streaming-optimized: large demuxer cache for torrent + network tolerance
-        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "cache", "yes");
+        // Let mpv cache network/slow sources but bypass its demuxer cache for
+        // ordinary local files. Forcing cache=yes made cold disk opens retain
+        // data they can seek directly.
+        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "cache", "auto");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "cache-secs", "120");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "demuxer-max-bytes", "300MiB");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "demuxer-readahead-secs", "60");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "demuxer-max-back-bytes", "100MiB");
-        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "force-seekable", "yes");
+        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "force-seekable", "no");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "hr-seek", "yes");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "keep-open", "always");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "loop-file", "inf");
-        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "demuxer-seekable-cache", "yes");
+        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "demuxer-seekable-cache", "auto");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "idle", "yes");
 
         // ── Opt-in playback options ──
@@ -674,7 +790,8 @@ pub const MediaPlayer = struct {
         // With HTTP proxy for torrents, cache-pause works correctly:
         // the proxy stalls HTTP when pieces aren't ready, mpv shows "Buffering..."
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "cache-pause", "yes");
-        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "cache-pause-initial", "yes");
+        // Typed loads override this to yes only for the blocking torrent proxy.
+        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "cache-pause-initial", "no");
         // 1s (mpv's own default), not 3. cache-pause-initial means mpv opens in
         // the buffering state and will not start until this many seconds of
         // media are demuxed — pulled through a proxy that blocks per piece. At 3
@@ -684,15 +801,15 @@ pub const MediaPlayer = struct {
         // earlier is a possible early re-buffer, not a stutter.
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "cache-pause-wait", "1");
         // Network timeouts — retry aggressively instead of giving up
-        // 0 = never time out a network read.
+        // Ordinary web reads get a finite recovery deadline.
         //
-        // This is load-bearing for torrent streaming. ffmpeg cannot distinguish a
+        // Infinite reads remain load-bearing for torrent streaming. ffmpeg cannot distinguish a
         // read ERROR from end-of-file (demux_lavf.c returns AVERROR_EOF for both),
         // so a 30s timeout on a slow torrent read reached mpv as "the file ended" —
         // it stopped cleanly, with no error, and no amount of further downloading
-        // brought it back. Blocking on a slow stream is fine and expected; timing
-        // out is fatal.
-        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "network-timeout", "0");
+        // brought it back. The torrent loopback entry therefore overrides this
+        // default back to 0, while YouTube/IPTV/direct HTTP use 15 seconds.
+        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "network-timeout", "15");
         // reconnect_on_http_error used to appear TWICE here ("…=4xx,…=5xx").
         // stream-lavf-o is a KEY-VALUE list, so that is one key set twice and
         // ffmpeg keeps the last write — 4xx reconnects were silently disabled,
@@ -702,11 +819,9 @@ pub const MediaPlayer = struct {
         // (Verified against mpv 0.41 — a wrong length is a hard parse error,
         // so this escape is checked, not merely tolerated.)
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "stream-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_delay_max=5,reconnect_on_network_error=1,reconnect_on_http_error=%7%4xx,5xx");
-        // HLS-specific: tolerate errors and start further behind live edge to build a huge preload buffer
+        // Prefer the highest HLS rendition. Do not force a ten-segment live-edge
+        // delay; libavformat's default selects the appropriate edge.
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "hls-bitrate", "max");
-        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "demuxer-lavf-o", "live_start_index=-10");
-        // Increase low-level read buffer for choppy networks
-        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "stream-buffer-size", "8MiB");
 
         // ── Premium quality defaults (natural-harmonia-gropius reference) ──
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "deinterlace", "auto");
@@ -720,7 +835,10 @@ pub const MediaPlayer = struct {
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "audio-file-auto", "fuzzy");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "sub-auto", "fuzzy");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "sub-font-size", "40");
-        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "save-position-on-quit", "yes");
+        // Opal owns resume identity and persistence. mpv watch-later state is a
+        // second filename-keyed authority and adds avoidable disk work.
+        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "save-position-on-quit", "no");
+        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "resume-playback", "no");
 
         _ = c.mpv.mpv_request_log_messages(self.mpv_ctx, "warn");
         self.applyYtdlFormat();
@@ -758,6 +876,7 @@ pub const MediaPlayer = struct {
         if (!state.app.scripts_scanned) scripts_mgr.scanScripts();
 
         _ = c.mpv.mpv_initialize(self.mpv_ctx);
+        self.applyPersistentPreferences();
 
         // The render callback only fires for video frames. Wake dvui for every
         // queued client event too, so audio-only playback, pause changes and
@@ -783,6 +902,7 @@ pub const MediaPlayer = struct {
         _ = c.mpv.mpv_observe_property(self.mpv_ctx, 0, "playlist-pos", c.mpv.MPV_FORMAT_INT64);
         _ = c.mpv.mpv_observe_property(self.mpv_ctx, 0, "dwidth", c.mpv.MPV_FORMAT_INT64);
         _ = c.mpv.mpv_observe_property(self.mpv_ctx, 0, "dheight", c.mpv.MPV_FORMAT_INT64);
+        _ = c.mpv.mpv_observe_property(self.mpv_ctx, 0, "hwdec-current", c.mpv.MPV_FORMAT_STRING);
 
         // Load enabled user scripts individually (must happen after mpv_initialize)
         for (0..state.app.script_count) |si| {
@@ -800,7 +920,7 @@ pub const MediaPlayer = struct {
             .{ .type = c.mpv.MPV_RENDER_PARAM_INVALID, .data = null },
         };
         self.mpv_gl = null;
-        if (!state.app.is_headless) {
+        if (start_renderer and !state.app.is_headless) {
             // Windowed: create the software render context and wire the
             // frame-ready callback. Headless leaves mpv_gl == null (vo=null,
             // no pixel buffer) — the render path is skipped entirely there.
@@ -833,6 +953,38 @@ pub const MediaPlayer = struct {
             c.mpv.mpv_render_context_set_update_callback(self.mpv_gl, &mpvRenderUpdateCallback, @ptrCast(self));
         }
         return self;
+    }
+
+    /// Attach the software renderer to a player whose libmpv core was prepared
+    /// off-thread. Texture upload still remains owned by the UI thread.
+    fn startPreparedRenderer(self: *MediaPlayer, allocator: std.mem.Allocator) !void {
+        if (state.app.is_headless or self.mpv_gl != null) return;
+        if (self.pixels.len == 0) {
+            self.pixels = try allocator.alloc(dvui.Color.PMA, video_w * video_h);
+            self.back_pixels = allocator.alloc(dvui.Color.PMA, video_w * video_h) catch |err| {
+                allocator.free(self.pixels);
+                self.pixels = &.{};
+                return err;
+            };
+        }
+
+        var params = [_]c.mpv.mpv_render_param{
+            .{ .type = c.mpv.MPV_RENDER_PARAM_API_TYPE, .data = @constCast(c.mpv.MPV_RENDER_API_TYPE_SW) },
+            .{ .type = c.mpv.MPV_RENDER_PARAM_INVALID, .data = null },
+        };
+        if (c.mpv.mpv_render_context_create(&self.mpv_gl, self.mpv_ctx, &params) < 0) {
+            self.mpv_gl = null;
+            logs.pushLog("error", "player", "mpv render context unavailable; audio remains usable", true);
+            return;
+        }
+        self.render_thread = @import("../core/workers.zig").spawnLegacy(renderWorker, .{self}) catch |err| {
+            std.debug.print("[player] render worker spawn failed: {s}\n", .{@errorName(err)});
+            logs.pushLog("error", "player", "video render worker unavailable; audio remains usable", true);
+            c.mpv.mpv_render_context_free(self.mpv_gl);
+            self.mpv_gl = null;
+            return;
+        };
+        c.mpv.mpv_render_context_set_update_callback(self.mpv_gl, &mpvRenderUpdateCallback, @ptrCast(self));
     }
 
     /// Software render worker. Loop: wait for mpv's "new frame" signal, ask
@@ -891,7 +1043,14 @@ pub const MediaPlayer = struct {
             self.frame_fmt = textureFormatOf(fmt);
             self.frame_ready = true;
             self.frame_mutex.unlock();
+            // Wake the UI immediately after publication. Timing persistence is
+            // deliberately asynchronous; diagnostics must never delay the frame
+            // they are measuring.
             wakeDvuiFromMpv();
+            // Trigger-to-play milestone: first published video frame. Reports
+            // once per armed trigger, then disarms (openFirstFrame no-ops when
+            // nothing is armed, so the per-frame cost is one branch).
+            if (open_trigger_ns != 0) openFirstFrame();
         }
     }
 
@@ -916,6 +1075,17 @@ pub const MediaPlayer = struct {
         self.load(.{ .url = std.mem.span(path) });
     }
 
+    fn setLoadError(self: *MediaPlayer, message: []const u8) void {
+        @memset(&self.load_error, 0);
+        const n = @min(message.len, self.load_error.len);
+        @memcpy(self.load_error[0..n], message[0..n]);
+        self.load_error_len = n;
+        self.is_loading = false;
+        logs.pushLog("error", "player", self.load_error[0..n], true);
+        state.showToast(self.load_error[0..n]);
+        state.wakeUi();
+    }
+
     /// Start a typed media load. Replace performs the full playback transition;
     /// append deliberately changes only mpv's playlist. Both modes ultimately
     /// cross `commitPlayback`, which owns per-entry HTTP options and the sole
@@ -933,6 +1103,8 @@ pub const MediaPlayer = struct {
             @import("../core/logs.zig").pushLog("warn", "player", "Ignored empty media path", true);
             return;
         }
+        var public_identity_buf: [MAX_LOAD_URL]u8 = undefined;
+        const public_identity = @import("watch_history_pure.zig").persistedTarget(guard_span, &public_identity_buf).identity;
         if (guard_span[0] == '/') {
             const io_g = @import("../core/io_global.zig");
             if (io_g.cwdStatFile(guard_span)) |st| {
@@ -952,8 +1124,31 @@ pub const MediaPlayer = struct {
             return;
         }
 
+        // A replace starts a new logical playback owner. This is separate from
+        // commitPlayback because async resolution/fallback commits belong to
+        // the already-staged original request and must not erase its identity.
+        self.playback_origin = request.origin;
+        self.queue_item_id = if (request.origin == .queue) request.queue_item_id else -1;
+        if (request.origin != .torrent) {
+            self.current_torrent_id = -1;
+            self.torrent_is_ready = false;
+            self.is_torrent = false;
+        }
+        if (request.origin == .playlist) {
+            const n = @min(request.url.len, self.source_url.len - 1);
+            @memcpy(self.source_url[0..n], request.url[0..n]);
+            self.source_url[n] = 0;
+            self.source_url_len = n;
+        } else if (request.origin != .torrent) {
+            self.source_url_len = 0;
+        }
+
+        // Trigger-to-play milestone: the URL is about to reach mpv (directly
+        // below, or via the async streamlink resolver that returns early).
+        openLoadIssued();
+
         // Save position of current video before switching
-        self.saveCurrentPosition();
+        self.saveCurrentPositionFinal();
         self.last_position_save_ms = @import("../core/io_global.zig").monotonicMilliTimestamp();
 
         // Blank the pane (queued as a frame for the UI upload) so the previous
@@ -961,15 +1156,58 @@ pub const MediaPlayer = struct {
         self.clearFrame();
         // Set loading state for UI feedback
         self.is_loading = true;
+        @memset(&self.load_error, 0);
+        self.load_error_len = 0;
         const path_span = request.url;
-        const copy_len = @min(path_span.len, self.loading_label.len);
-        @memcpy(self.loading_label[0..copy_len], path_span[0..copy_len]);
-        self.loading_label_len = copy_len;
+        const label = if (public_identity.len > 0) public_identity else "Private stream";
+        const label_len = @min(label.len, self.loading_label.len);
+        @memcpy(self.loading_label[0..label_len], label[0..label_len]);
+        self.loading_label_len = label_len;
 
-        // Store current URL for resume tracking
-        @memcpy(self.current_url[0..copy_len], path_span[0..copy_len]);
-        self.current_url_len = copy_len;
+        // Store the full bounded identity for retry/resume/history. The loading
+        // label is intentionally short, but must never impose its 128-byte cap
+        // on a signed URL whose query credentials can be much longer.
+        const url_len = @min(path_span.len, self.current_url.len);
+        @memcpy(self.current_url[0..url_len], path_span[0..url_len]);
+        self.current_url_len = url_len;
+        const requested_identity = if (request.history_identity.len > 0) request.history_identity else public_identity;
+        var identity_buf: [MAX_LOAD_URL]u8 = undefined;
+        const safe_identity = @import("watch_history_pure.zig").persistedTarget(requested_identity, &identity_buf).identity;
+        const identity_len = @min(safe_identity.len, self.history_identity.len);
+        @memcpy(self.history_identity[0..identity_len], safe_identity[0..identity_len]);
+        self.history_identity_len = identity_len;
+        const requested_restore = if (request.restore_target.len > 0) request.restore_target else @import("watch_history_pure.zig").persistedTarget(path_span, &identity_buf).reopen;
+        var restore_buf: [MAX_LOAD_URL]u8 = undefined;
+        const safe_restore = @import("watch_history_pure.zig").persistedTarget(requested_restore, &restore_buf).reopen;
+        const restore_len = @min(safe_restore.len, self.restore_target.len);
+        @memcpy(self.restore_target[0..restore_len], safe_restore[0..restore_len]);
+        self.restore_target_len = restore_len;
+        const user_agent = playback_load.effectiveUserAgent(request);
+        const ua_len = @min(user_agent.len, self.current_user_agent.len);
+        @memcpy(self.current_user_agent[0..ua_len], user_agent[0..ua_len]);
+        self.current_user_agent_len = ua_len;
+        var header_buf: [2048]u8 = undefined;
+        const header_fields = playback_load.resolvedHeaderFields(request, &header_buf);
+        const header_len = @min(header_fields.len, self.current_header_fields.len);
+        @memcpy(self.current_header_fields[0..header_len], header_fields[0..header_len]);
+        self.current_header_fields_len = header_len;
+        self.current_unbounded_network_read = request.unbounded_network_read;
+        self.fallback_url_len = 0;
+        self.fallback_recovery.reset();
+        self.server_recovery_attempted = false;
+        if (request.fallback_url.len <= self.fallback_url.len and
+            playback_load.shouldArmFallback(path_span, request.fallback_url, request.mode) and
+            @import("resume_pure.zig").plausibleMediaPath(request.fallback_url))
+        {
+            @memcpy(self.fallback_url[0..request.fallback_url.len], request.fallback_url);
+            self.fallback_url_len = request.fallback_url.len;
+            self.fallback_recovery.arm(true);
+        }
+        self.ytdl_fast_retry_pending = std.ascii.indexOfIgnoreCase(path_span, "youtube.com/") != null or
+            std.ascii.indexOfIgnoreCase(path_span, "youtu.be/") != null;
+        if (self.ytdl_fast_retry_pending) self.applyYtdlRawOptions(true, true);
         self.resume_seeked = false;
+        self.provider_resume_position = playback_load.saneResumePosition(request.resume_position_secs);
 
         // Anime-Skip: consume a one-shot arm from the anime play flow. Every
         // load starts non-anime; the anime episode load flow arms just before
@@ -1003,18 +1241,30 @@ pub const MediaPlayer = struct {
         // file it would replace the actual picture with a waveform. Re-armed by the
         // "vid" observer once we know the new file is audio-only.
         self.vis_applied = false;
+        self.cached_video_width = 0;
+        self.cached_video_height = 0;
+        self.cached_hwdec_len = 0;
+        self.hwdec_fallback_notified = false;
         _ = c.mpv.mpv_set_property_string(self.mpv_ctx, "lavfi-complex", "");
 
+        // Replay the viewer's last explicit media choices before loading the
+        // next file. Numeric aid/sid values are file-local, so language tags are
+        // remembered instead; mpv resolves them against each new track list.
+        self.applyPersistentPreferences();
+
         self.commitPlayback(request);
+        @import("../services/server_progress.zig").started(self.history_identity[0..self.history_identity_len]);
 
         // ── Memory hooks: record playback for cross-session intelligence ──
         {
             // Local taste engine: settles the previous item (abandon
             // detection) and logs the .play event (buffered, off-thread).
-            @import("../services/activity.zig").onPlay(path_span);
+            const identity = self.history_identity[0..self.history_identity_len];
+            @import("../services/activity.zig").onPlay(identity);
 
             const ai_memory = @import("../services/ai_memory.zig");
-            const title = path_span;
+            const title = identity;
+            if (title.len == 0) return;
             // Ingest into vector memory
             ai_memory.ingestMemory("system", title, "media", title);
             // Learn time-of-day preference
@@ -1035,6 +1285,46 @@ pub const MediaPlayer = struct {
         if (request.url.len == 0 or request.url.len > MAX_LOAD_URL) return;
         var sink: MpvPlaybackSink = .{ .ctx = self.mpv_ctx };
         _ = playback_load.dispatch(&sink, request);
+    }
+
+    /// Reserve the one provider-negotiated recovery allowed for this load.
+    /// Called only after local/direct alternatives have failed.
+    pub fn beginServerRecovery(self: *MediaPlayer) bool {
+        if (self.server_recovery_attempted) return false;
+        self.server_recovery_attempted = true;
+        self.is_loading = true;
+        self.load_error_len = 0;
+        const label = "Negotiating compatible stream...";
+        @memcpy(self.loading_label[0..label.len], label);
+        self.loading_label_len = label.len;
+        return true;
+    }
+
+    /// Apply a provider-generated URL without beginning another logical media
+    /// transition. Identity, artwork, saved resume, and sanitized auth headers
+    /// stay attached to the original item.
+    pub fn applyServerRecovery(self: *MediaPlayer, url: []const u8) void {
+        if (url.len == 0 or url.len > self.current_url.len or
+            !@import("resume_pure.zig").plausibleMediaPath(url))
+        {
+            self.failServerRecovery("Server returned an unusable playback URL");
+            return;
+        }
+        @memcpy(self.current_url[0..url.len], url);
+        self.current_url_len = url.len;
+        self.resume_seeked = false;
+        self.is_loading = true;
+        self.load_error_len = 0;
+        self.commitPlayback(.{
+            .url = self.current_url[0..self.current_url_len],
+            .user_agent = self.current_user_agent[0..self.current_user_agent_len],
+            .prepared_header_fields = self.current_header_fields[0..self.current_header_fields_len],
+            .unbounded_network_read = self.current_unbounded_network_read,
+        });
+    }
+
+    pub fn failServerRecovery(self: *MediaPlayer, message: []const u8) void {
+        self.setLoadError(message);
     }
 
     /// Load a direct network stream with an explicit User-Agent and an arbitrary
@@ -1073,6 +1363,16 @@ pub const MediaPlayer = struct {
 
     /// Save current playback position to DB (called periodically from render loop)
     pub fn saveCurrentPosition(self: *MediaPlayer) void {
+        self.saveCurrentPositionImpl(false);
+    }
+
+    /// Save immediately when leaving an item, including its authenticated
+    /// server progress. The network submission itself remains asynchronous.
+    pub fn saveCurrentPositionFinal(self: *MediaPlayer) void {
+        self.saveCurrentPositionImpl(true);
+    }
+
+    fn saveCurrentPositionImpl(self: *MediaPlayer, force_remote: bool) void {
         if (self.current_url_len == 0 or self.current_url_len > self.current_url.len) return;
         var pos: f64 = 0;
         var dur: f64 = 0;
@@ -1080,7 +1380,12 @@ pub const MediaPlayer = struct {
         _ = c.mpv.mpv_get_property(self.mpv_ctx, "duration", c.mpv.MPV_FORMAT_DOUBLE, &dur);
         if (pos > 1 and dur > 5) {
             const history = @import("../services/history.zig");
-            history.savePlaybackPosition(self.current_url[0..self.current_url_len], pos, dur);
+            const identity = if (self.history_identity_len > 0)
+                self.history_identity[0..self.history_identity_len]
+            else
+                self.current_url[0..self.current_url_len];
+            history.savePlaybackPosition(identity, pos, dur);
+            @import("../services/server_progress.zig").submit(identity, pos, dur, force_remote);
 
             // Per-episode resume, stored under real episode identity
             // (tmdb_id, season, episode) rather than the URL — an episode's URL is
@@ -1100,6 +1405,21 @@ pub const MediaPlayer = struct {
     /// Check for and apply saved resume position (called after first frame renders)
     pub fn tryResumePosition(self: *MediaPlayer) void {
         if (self.resume_seeked or self.current_url_len == 0 or self.current_url_len > self.current_url.len) return;
+        // A connected provider supplied this position in the typed load
+        // request. It neither depends on the local DB finishing its cold load
+        // nor inherits "restore last session paused" semantics.
+        if (self.provider_resume_position) |position| {
+            self.provider_resume_position = null;
+            self.resume_seeked = true;
+            var command: [80]u8 = undefined;
+            const seek = std.fmt.bufPrintZ(&command, "seek {d:.3} absolute", .{position}) catch return;
+            _ = c.mpv.mpv_command_string(self.mpv_ctx, seek.ptr);
+            return;
+        }
+        // A media-first launch can beat the background DB/config load. Keep the
+        // attempt armed so the regular frame tick retries as soon as history is
+        // published instead of permanently treating the item as new.
+        if (!state.app.init_history_loaded) return;
         self.resume_seeked = true;
         const pe = &state.app.playing_episode;
         const cur = self.current_url[0..self.current_url_len];
@@ -1141,7 +1461,10 @@ pub const MediaPlayer = struct {
         const saved_pos = if (pe.matches(cur))
             @import("../core/db.zig").tvGetPosition(pe.tmdb_id, pe.season, pe.episode)
         else
-            history.getPlaybackPosition(cur);
+            history.getPlaybackPosition(if (self.history_identity_len > 0)
+                self.history_identity[0..self.history_identity_len]
+            else
+                cur);
 
         // Only resume a position worth resuming: >= ~30s in and not
         // effectively finished (see watch_history_pure thresholds).
@@ -1241,7 +1564,25 @@ pub const MediaPlayer = struct {
         // ytdl-format is a top-level mpv option
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "ytdl-format", active_fmt.ptr);
 
-        // ytdl-raw-options is a top-level mpv option (NOT script-opts!)
+        self.applyYtdlRawOptions(true, false);
+
+        // script-opts: ytdl_hook config (+ sponsorblock). Built by
+        // ytdl_opts_pure.buildScriptOpts (tested) because the old ad-hoc
+        // string started its exclude value with `%`, which mpv parses as its
+        // %<len>% escape — the WHOLE option was rejected, ytdl_path with it,
+        // and YouTube only worked where a system yt-dlp happened to be on PATH.
+        const ytdl_opts = @import("ytdl_opts_pure.zig");
+        var buf: [512]u8 = undefined;
+        if (ytdl_opts.buildScriptOpts(.{
+            .ytdl_path = ytdl_path,
+            .sponsorblock = state.app.sponsorblock_enabled,
+        }, &buf)) |opts| {
+            _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "script-opts", opts.ptr);
+        }
+    }
+
+    fn applyYtdlRawOptions(self: *MediaPlayer, fast: bool, runtime: bool) void {
+        // ytdl-raw-options is a top-level mpv option (NOT script-opts!).
         // Never silently borrow browser logins or inherit unrelated yt-dlp config.
         // TLS verification stays enabled; a browser profile's existence is not consent.
         // no-playlist: prevent ytdl_hook from expanding model/channel pages
@@ -1255,24 +1596,16 @@ pub const MediaPlayer = struct {
             // Additive (deno stays yt-dlp's default); a missing node only
             // reproduces the "no JS runtime" warning, so no probing needed.
             .js_runtime = "node",
+            .youtube_fast = fast,
         }, &raw_buf)) |raw| {
             var raw_z: [401]u8 = undefined;
             @memcpy(raw_z[0..raw.len], raw);
             raw_z[raw.len] = 0;
-            _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "ytdl-raw-options", &raw_z);
-        }
-
-        // script-opts: ytdl_hook config (+ sponsorblock). Built by
-        // ytdl_opts_pure.buildScriptOpts (tested) because the old ad-hoc
-        // string started its exclude value with `%`, which mpv parses as its
-        // %<len>% escape — the WHOLE option was rejected, ytdl_path with it,
-        // and YouTube only worked where a system yt-dlp happened to be on PATH.
-        var buf: [512]u8 = undefined;
-        if (ytdl_opts.buildScriptOpts(.{
-            .ytdl_path = ytdl_path,
-            .sponsorblock = state.app.sponsorblock_enabled,
-        }, &buf)) |opts| {
-            _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "script-opts", opts.ptr);
+            if (runtime) {
+                _ = c.mpv.mpv_set_property_string(self.mpv_ctx, "ytdl-raw-options", &raw_z);
+            } else {
+                _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "ytdl-raw-options", &raw_z);
+            }
         }
     }
 
@@ -1372,7 +1705,7 @@ pub const MediaPlayer = struct {
     }
 
     pub fn deinit(self: *MediaPlayer, allocator: std.mem.Allocator) void {
-        self.saveCurrentPosition();
+        self.saveCurrentPositionFinal();
         @import("../core/poster.zig").deinitPoster(&self.loading_poster_pixels, &self.loading_poster_tex);
         @import("../core/poster.zig").deinitPoster(&self.np_art_pixels, &self.np_art_tex);
         if (self.proxy_handle.isValid()) {
@@ -1391,6 +1724,75 @@ pub const MediaPlayer = struct {
         allocator.destroy(self);
     }
 };
+
+// One prepared idle engine removes libmpv/script initialization from the first
+// Home/Recents click. It is scheduled only after the first painted window and
+// config restore, so process startup and file-association launches stay lean.
+var warm_started = std.atomic.Value(bool).init(false);
+var warm_done = std.atomic.Value(bool).init(false);
+var warm_cancel = std.atomic.Value(bool).init(false);
+var warm_event: std.Io.Event = .unset;
+var warm_mutex: @import("../core/sync.zig").Mutex = .{};
+var warm_player: ?*MediaPlayer = null;
+
+pub fn scheduleWarmPlayer(allocator: std.mem.Allocator) void {
+    if (state.app.is_headless or state.app.players.items.len != 0) return;
+    if (warm_started.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) return;
+    @import("../core/workers.zig").spawn(warmPlayerWorker, .{allocator}) catch {
+        warm_done.store(true, .release);
+        warm_event.set(@import("../core/io_global.zig").io());
+    };
+}
+
+fn warmPlayerWorker(allocator: std.mem.Allocator) void {
+    defer {
+        warm_done.store(true, .release);
+        warm_event.set(@import("../core/io_global.zig").io());
+    }
+    if (warm_cancel.load(.acquire) or @import("../core/workers.zig").isQuitting()) return;
+    const prepared = MediaPlayer.initPrepared(allocator, false) catch return;
+    if (warm_cancel.load(.acquire) or @import("../core/workers.zig").isQuitting()) {
+        prepared.deinit(allocator);
+        return;
+    }
+    warm_mutex.lock();
+    warm_player = prepared;
+    warm_mutex.unlock();
+    state.wakeUi();
+}
+
+/// Get the prepared engine when available; a click arriving during preparation
+/// waits only for the remaining work instead of initializing a duplicate core.
+pub fn acquire(allocator: std.mem.Allocator) !*MediaPlayer {
+    if (warm_started.load(.acquire) and !warm_done.load(.acquire)) {
+        warm_event.waitUncancelable(@import("../core/io_global.zig").io());
+    }
+    warm_mutex.lock();
+    const prepared = warm_player;
+    warm_player = null;
+    warm_mutex.unlock();
+    if (prepared) |p| {
+        p.startPreparedRenderer(allocator) catch |err| {
+            p.deinit(allocator);
+            return err;
+        };
+        return p;
+    }
+    return MediaPlayer.init(allocator);
+}
+
+/// Cancel and dispose an unused prepared engine before the worker barrier.
+pub fn shutdownWarmPlayer(allocator: std.mem.Allocator) void {
+    warm_cancel.store(true, .release);
+    if (warm_started.load(.acquire) and !warm_done.load(.acquire)) {
+        warm_event.waitUncancelable(@import("../core/io_global.zig").io());
+    }
+    warm_mutex.lock();
+    const prepared = warm_player;
+    warm_player = null;
+    warm_mutex.unlock();
+    if (prepared) |p| p.deinit(allocator);
+}
 
 /// Invoked by mpv (on an mpv-owned thread) whenever a new video frame is
 /// ready for rendering. We wake the dvui main loop so that the
@@ -1618,10 +2020,190 @@ fn getPropStringInto(ctx: ?*c.mpv.mpv_handle, name: [*:0]const u8, buf: []u8) []
     return buf[0..n];
 }
 
+// ── Trigger-to-play timing ──
+// Wall-clock milestones from a user open trigger (CLI arg, forwarded
+// second-instance open, or in-app open) to playback. Reported via
+// std.debug.print AND <configDir>/timing.log, because a GUI-subsystem launch
+// has no console to read back.
+//   trigger     — user action parsed (appInit CLI / stashRemoteOpen / first load)
+//   load-issued — MediaPlayer.load handed the URL to mpv
+//   file-loaded — MPV_EVENT_FILE_LOADED (demuxed, tracks known)
+//   first-frame — first published video frame (audio-only reports at file-loaded)
+pub var open_trigger_ns: i64 = 0;
+var timing_armed = std.atomic.Value(bool).init(false);
+var open_load_ns: i64 = 0;
+var open_loaded_ns: i64 = 0;
+var open_first_frame_ns: i64 = 0;
+var timing_frame_gate: @import("playback_timing_pure.zig").FrameGate = .{};
+var timing_mutex: @import("../core/sync.zig").Mutex = .{};
+var timing_ring: [12][256]u8 = std.mem.zeroes([12][256]u8);
+var timing_ring_lens: [12]usize = std.mem.zeroes([12]usize);
+var timing_ring_count: usize = 0;
+var timing_ring_generation: u64 = 0;
+var timing_flush_pending = std.atomic.Value(bool).init(false);
+
+/// Arm (or re-arm) the trigger clock. Trigger sites call this when no trigger
+/// is already armed so rapid successive opens attribute to the first intent.
+pub fn openTriggerNow() void {
+    timing_mutex.lock();
+    defer timing_mutex.unlock();
+    open_trigger_ns = perfNow();
+    timing_armed.store(true, .release);
+    open_load_ns = 0;
+    open_loaded_ns = 0;
+    open_first_frame_ns = 0;
+    timing_frame_gate.reset();
+}
+
+pub fn openTriggerArmed() bool {
+    return timing_armed.load(.acquire);
+}
+
+/// Called from MediaPlayer.load (replace path, incl. the async streamlink
+/// branch): stamps load-issued, arming the trigger when nothing did (in-app
+/// opens). A stale armed trigger is kept — the first frame still attributes
+/// to the original user intent — but load/loaded stamps restart for this file.
+pub fn openLoadIssued() void {
+    timing_mutex.lock();
+    defer timing_mutex.unlock();
+    const now = perfNow();
+    if (open_trigger_ns == 0) {
+        open_trigger_ns = now;
+        timing_armed.store(true, .release);
+    }
+    open_load_ns = now;
+    open_loaded_ns = 0;
+    open_first_frame_ns = 0;
+    timing_frame_gate.loadIssued();
+    timingReportLocked("load-issued", now, false);
+}
+
+/// Called on MPV_EVENT_FILE_LOADED. Audio-only files never publish a video
+/// frame, so they report and disarm here instead. Otherwise the trigger stays
+/// armed until the first frame lands, whichever order the two arrive in (the
+/// render worker and the UI event pump race).
+pub fn openFileLoaded(has_video: bool) void {
+    if (!timing_armed.load(.acquire)) return;
+    timing_mutex.lock();
+    defer timing_mutex.unlock();
+    if (open_trigger_ns == 0) return;
+    const now = perfNow();
+    open_loaded_ns = now;
+    timing_frame_gate.fileLoaded();
+    timingReportLocked(if (has_video) "file-loaded" else "file-loaded(audio-only)", now, !has_video);
+}
+
+/// Called when the render worker publishes a video frame. Reports once per
+/// armed trigger. Render notifications before FILE_LOADED can belong to the
+/// previous file and are rejected by the generation gate.
+pub fn openFirstFrame() void {
+    if (!timing_armed.load(.acquire)) return;
+    timing_mutex.lock();
+    defer timing_mutex.unlock();
+    if (open_trigger_ns == 0 or open_first_frame_ns != 0 or !timing_frame_gate.acceptFirstFrame()) return;
+    const now = perfNow();
+    open_first_frame_ns = now;
+    timingReportLocked("first-frame", now, open_loaded_ns != 0);
+}
+
+/// Caller holds timing_mutex so milestone reads, logging, and disarming form
+/// one transaction across the UI and render threads.
+fn timingReportLocked(stage: []const u8, now_ns: i64, disarm: bool) void {
+    const toMs = struct {
+        fn f(ns: i64) f64 {
+            return @as(f64, @floatFromInt(ns)) / 1e6;
+        }
+    }.f;
+    var buf: [256]u8 = undefined;
+    const line = std.fmt.bufPrint(&buf, "[timing] {s}: trigger+{d:.0}ms load+{d:.0}ms loaded+{d:.0}ms\n", .{
+        stage,
+        toMs(now_ns - open_trigger_ns),
+        if (open_load_ns == 0) @as(f64, 0) else toMs(now_ns - open_load_ns),
+        if (open_loaded_ns == 0) @as(f64, 0) else toMs(now_ns - open_loaded_ns),
+    }) catch return;
+    std.debug.print("{s}", .{line});
+    queueTimingLogLocked(line);
+    if (disarm) {
+        timing_armed.store(false, .release);
+        open_trigger_ns = 0;
+        open_load_ns = 0;
+        open_loaded_ns = 0;
+        open_first_frame_ns = 0;
+        timing_frame_gate.reset();
+    }
+}
+
+/// Queue the last few timing lines for a background write. The render/UI thread
+/// only copies a tiny fixed buffer and schedules at most one flusher; slow or
+/// antivirus-filtered storage can never sit between frame publication and paint.
+/// timing_mutex is held by the caller.
+fn queueTimingLogLocked(line: []const u8) void {
+    if (timing_ring_count >= timing_ring.len) {
+        std.mem.copyForwards([256]u8, timing_ring[0..], timing_ring[1..]);
+        std.mem.copyForwards(usize, timing_ring_lens[0..], timing_ring_lens[1..]);
+        timing_ring_count = timing_ring.len - 1;
+    }
+    const n = @min(line.len, timing_ring[0].len);
+    @memcpy(timing_ring[timing_ring_count][0..n], line[0..n]);
+    timing_ring_lens[timing_ring_count] = n;
+    timing_ring_count += 1;
+
+    timing_ring_generation +%= 1;
+    if (timing_flush_pending.swap(true, .acq_rel)) return;
+    @import("../core/workers.zig").spawn(timingFlushWorker, .{}) catch {
+        timing_flush_pending.store(false, .release);
+    };
+}
+
+/// Snapshot and persist on an owned worker. If another milestone arrives while
+/// writing, loop and publish the newer snapshot before releasing the one-worker
+/// latch. Fixed buffers keep this allocation-free and teardown-safe.
+fn timingFlushWorker() void {
+    const io_g = @import("../core/io_global.zig");
+    while (true) {
+        // Coalesce load/file/frame milestones that land in one scheduler turn.
+        io_g.sleep(2 * std.time.ns_per_ms);
+
+        var out: [12 * 256]u8 = undefined;
+        var w: usize = 0;
+        var generation: u64 = 0;
+        timing_mutex.lock();
+        for (0..timing_ring_count) |i| {
+            const ln = timing_ring_lens[i];
+            @memcpy(out[w..][0..ln], timing_ring[i][0..ln]);
+            w += ln;
+        }
+        generation = timing_ring_generation;
+        timing_mutex.unlock();
+
+        var dir_buf: [512]u8 = undefined;
+        var path_buf: [768]u8 = undefined;
+        if (std.fmt.bufPrint(&path_buf, "{s}/timing.log", .{
+            @import("../core/paths.zig").configDir(&dir_buf),
+        })) |path| {
+            if (io_g.createFileAbsolute(path, .{ .truncate = true })) |f| {
+                io_g.writeAll(f, out[0..w]) catch {};
+                f.close(io_g.io());
+            } else |_| {}
+        } else |_| {}
+
+        timing_mutex.lock();
+        const stable = timing_ring_generation == generation;
+        if (stable) timing_flush_pending.store(false, .release);
+        timing_mutex.unlock();
+        if (stable) return;
+    }
+}
+
 fn eventDouble(pc: *const c.mpv.mpv_event_property, fallback: f64) f64 {
     if (pc.format != c.mpv.MPV_FORMAT_DOUBLE or pc.data == null) return fallback;
     const value = @as(*const f64, @ptrCast(@alignCast(pc.data))).*;
     return if (std.math.isFinite(value)) value else fallback;
+}
+
+fn isActivePlayer(p: *const MediaPlayer) bool {
+    return state.app.active_player_idx < state.app.players.items.len and
+        state.app.players.items[state.app.active_player_idx] == p;
 }
 
 fn eventInt64(pc: *const c.mpv.mpv_event_property) i64 {
@@ -1671,7 +2253,9 @@ pub fn updateTorrentBackgroundTasks() void {
                 p.cached_video_height = 0;
                 p.cached_sub_text_len = 0;
             } else if (ev.*.event_id == c.mpv.MPV_EVENT_FILE_LOADED) {
-                if (p.restore_session_position != null or state.app.playing_episode.armed) {
+                p.ytdl_fast_retry_pending = false;
+                p.load_error_len = 0;
+                if (p.restore_session_position != null or p.provider_resume_position != null or state.app.playing_episode.armed) {
                     p.resume_seeked = false;
                     p.tryResumePosition();
                 }
@@ -1687,6 +2271,7 @@ pub fn updateTorrentBackgroundTasks() void {
                 var sub_count: i64 = 0;
                 _ = c.mpv.mpv_get_property(p.mpv_ctx, "sub", c.mpv.MPV_FORMAT_INT64, &sub_count);
                 var has_sub = false;
+                var has_video = false;
                 {
                     var tc: i64 = 0;
                     _ = c.mpv.mpv_get_property(p.mpv_ctx, "track-list/count", c.mpv.MPV_FORMAT_INT64, &tc);
@@ -1696,12 +2281,17 @@ pub fn updateTorrentBackgroundTasks() void {
                         const qz = std.fmt.bufPrintZ(&q, "track-list/{d}/type", .{ti}) catch continue;
                         const ts = c.mpv.mpv_get_property_string(p.mpv_ctx, qz.ptr);
                         if (ts != null) {
-                            if (std.mem.eql(u8, std.mem.span(ts), "sub")) has_sub = true;
+                            const ttype = std.mem.span(ts);
+                            if (std.mem.eql(u8, ttype, "sub")) has_sub = true;
+                            if (std.mem.eql(u8, ttype, "video")) has_video = true;
                             c.mpv.mpv_free(@ptrCast(ts));
                         }
-                        if (has_sub) break;
+                        if (has_sub and has_video) break;
                     }
                 }
+                // Trigger-to-play milestone (audio-only reports + disarms here;
+                // video reports again at its first published frame).
+                openFileLoaded(has_video);
                 if (!has_sub and state.app.auto_download_subs and p.current_torrent_id < 0) {
                     // Non-torrent playback: fire the keyless subtitle engine
                     // (rest.opensubtitles.org → Gestdown) off the media title or
@@ -1730,11 +2320,73 @@ pub fn updateTorrentBackgroundTasks() void {
                     if (qname.len > 0)
                         @import("subtitles.zig").startSearch(&state.app.sub_engine, qname);
                 }
+            } else if (ev.*.event_id == c.mpv.MPV_EVENT_PLAYBACK_RESTART) {
+                // Demuxing alone is not proof that a version is usable: codec
+                // initialization may still fail after FILE_LOADED. Disarm only
+                // once mpv says playback actually started.
+                p.fallback_recovery.playbackStarted();
             } else if (ev.*.event_id == c.mpv.MPV_EVENT_END_FILE) {
                 const ended = @as(*c.mpv.mpv_event_end_file, @ptrCast(@alignCast(ev.*.data)));
                 if (ended.reason == c.mpv.MPV_END_FILE_REASON_ERROR) {
+                    // Server/library adapters may provide one alternate URL for
+                    // the same logical item (another media version or the
+                    // server's generic direct stream). Preserve the stable
+                    // identity, headers, resume point and player surface while
+                    // retrying it, and never loop after that second attempt.
+                    if (p.fallback_url_len > 0 and p.fallback_recovery.takeOnFailure()) {
+                        const fallback_len = p.fallback_url_len;
+                        @memcpy(p.current_url[0..fallback_len], p.fallback_url[0..fallback_len]);
+                        p.current_url_len = fallback_len;
+                        p.resume_seeked = false;
+                        p.is_loading = true;
+                        const label = "Trying compatible stream...";
+                        @memcpy(p.loading_label[0..label.len], label);
+                        p.loading_label_len = label.len;
+                        logs.pushLog("info", "player", "Primary stream failed; trying compatible fallback", false);
+                        p.commitPlayback(.{
+                            .url = p.current_url[0..p.current_url_len],
+                            .user_agent = p.current_user_agent[0..p.current_user_agent_len],
+                            .prepared_header_fields = p.current_header_fields[0..p.current_header_fields_len],
+                            .unbounded_network_read = p.current_unbounded_network_read,
+                        });
+                        continue;
+                    }
+                    const identity = p.history_identity[0..p.history_identity_len];
+                    if (std.mem.startsWith(u8, identity, "opal://jellyfin/video/") and p.beginServerRecovery()) {
+                        const p_idx: usize = for (state.app.players.items, 0..) |candidate, idx| {
+                            if (candidate == p) break idx;
+                        } else state.app.players.items.len;
+                        if (@import("../services/jellyfin.zig").requestTranscodeRecovery(identity, p_idx)) {
+                            logs.pushLog("info", "jellyfin", "Direct streams failed; negotiating server transcode", false);
+                            continue;
+                        }
+                    }
+                    if (std.mem.startsWith(u8, identity, "opal://plex/item/") and p.beginServerRecovery()) {
+                        var transcode_buf: [2048]u8 = undefined;
+                        if (@import("../services/plex.zig").transcodeRecoveryUrl(identity, &transcode_buf)) |transcode_url| {
+                            logs.pushLog("info", "plex", "Direct versions failed; using server transcode", false);
+                            p.applyServerRecovery(transcode_url);
+                            continue;
+                        }
+                    }
+                    // Normal YouTube videos skip manifest/config requests for a
+                    // substantially faster first frame. Live/restricted edge
+                    // cases can need those requests, so retry exactly once with
+                    // the complete extractor path before surfacing the error.
+                    if (p.ytdl_fast_retry_pending and p.current_url_len > 0) {
+                        p.ytdl_fast_retry_pending = false;
+                        p.applyYtdlRawOptions(false, true);
+                        logs.pushLog("info", "ytdlp", "Fast extraction unavailable; retrying robust YouTube path", false);
+                        p.commitPlayback(.{ .url = p.current_url[0..p.current_url_len] });
+                        continue;
+                    }
                     const source = if (p.is_torrent and p.source_url_len > 0) p.source_url[0..p.source_url_len] else p.current_url[0..p.current_url_len];
                     if (@import("../services/tmdb.zig").retryEpisodeSource(source)) continue;
+
+                    const detail = std.mem.span(c.mpv.mpv_error_string(ended.@"error"));
+                    var error_buf: [256]u8 = undefined;
+                    const message = std.fmt.bufPrint(&error_buf, "Could not play this media: {s}", .{detail}) catch "Could not play this media";
+                    p.setLoadError(message);
                 }
                 if (ended.reason != c.mpv.MPV_END_FILE_REASON_EOF) continue;
                 if (state.app.playing_episode.matches(p.current_url[0..p.current_url_len])) {
@@ -1744,7 +2396,7 @@ pub fn updateTorrentBackgroundTasks() void {
                     if (p.current_torrent_id >= 0)
                         _ = c.mpv.torrent_poll(state.torrentSession(), p.current_torrent_id, p.selected_file_idx, null, 0, &complete, null, null);
                     if (complete >= 0.99) {
-                        p.saveCurrentPosition();
+                        p.saveCurrentPositionFinal();
                         if (state.app.auto_advance) @import("../services/tv_library.zig").playNeighborEpisode(1);
                         continue;
                     }
@@ -1833,6 +2485,14 @@ pub fn updateTorrentBackgroundTasks() void {
                         const prev_paused = p.cached_paused;
                         const new_paused = (flag != 0);
                         p.cached_paused = new_paused;
+                        if (prev_paused != new_paused and p.history_identity_len > 0) {
+                            @import("../services/server_progress.zig").playState(
+                                p.history_identity[0..p.history_identity_len],
+                                p.last_seen_pos,
+                                p.cached_duration,
+                                new_paused,
+                            );
+                        }
                         // Co-watcher: fire only on a genuine playing->paused transition
                         // for the *active* player (pointer identity, bounds-guarded).
                         if (!prev_paused and new_paused and
@@ -1916,11 +2576,28 @@ pub fn updateTorrentBackgroundTasks() void {
                 } else if (std.mem.eql(u8, pname, "duration")) {
                     p.cached_duration = eventDouble(pc, 0);
                 } else if (std.mem.eql(u8, pname, "volume")) {
-                    p.cached_volume = eventDouble(pc, 100);
+                    const value = eventDouble(pc, 100);
+                    p.cached_volume = value;
+                    if (state.app.config_loaded.load(.acquire) and isActivePlayer(p) and @abs(value - state.app.playback_volume) > 0.01) {
+                        state.app.playback_volume = std.math.clamp(value, 0, 100);
+                        p.cell_volume = state.app.playback_volume;
+                        state.markConfigDirty();
+                    }
                 } else if (std.mem.eql(u8, pname, "speed")) {
-                    p.cached_speed = eventDouble(pc, 1);
+                    const value = eventDouble(pc, 1);
+                    p.cached_speed = value;
+                    if (state.app.config_loaded.load(.acquire) and isActivePlayer(p) and @abs(value - state.app.playback_speed) > 0.001) {
+                        state.app.playback_speed = std.math.clamp(value, 0.25, 4);
+                        p.cell_speed = state.app.playback_speed;
+                        state.markConfigDirty();
+                    }
                 } else if (std.mem.eql(u8, pname, "mute")) {
-                    p.cached_muted = eventFlag(pc);
+                    const value = eventFlag(pc);
+                    p.cached_muted = value;
+                    if (state.app.config_loaded.load(.acquire) and isActivePlayer(p) and value != state.app.playback_muted) {
+                        state.app.playback_muted = value;
+                        state.markConfigDirty();
+                    }
                 } else if (std.mem.eql(u8, pname, "paused-for-cache")) {
                     p.cached_paused_for_cache = eventFlag(pc);
                 } else if (std.mem.eql(u8, pname, "playlist-count")) {
@@ -1929,8 +2606,20 @@ pub fn updateTorrentBackgroundTasks() void {
                     p.cached_playlist_pos = eventInt64(pc);
                 } else if (std.mem.eql(u8, pname, "dwidth")) {
                     p.cached_video_width = eventInt64(pc);
+                    p.maybeNotifyHwdecFallback();
                 } else if (std.mem.eql(u8, pname, "dheight")) {
                     p.cached_video_height = eventInt64(pc);
+                    p.maybeNotifyHwdecFallback();
+                } else if (std.mem.eql(u8, pname, "hwdec-current")) {
+                    p.cached_hwdec_len = 0;
+                    if (pc.*.format == c.mpv.MPV_FORMAT_STRING and pc.*.data != null) {
+                        const sptr = @as(*[*c]u8, @ptrCast(@alignCast(pc.*.data))).*;
+                        const value = if (sptr != null) std.mem.span(sptr) else "";
+                        const n = @min(value.len, p.cached_hwdec.len);
+                        @memcpy(p.cached_hwdec[0..n], value[0..n]);
+                        p.cached_hwdec_len = n;
+                    }
+                    p.maybeNotifyHwdecFallback();
                 }
             } else if (ev.*.event_id == c.mpv.MPV_EVENT_LOG_MESSAGE) {
                 const log_msg = @as(*c.mpv.mpv_event_log_message, @ptrCast(@alignCast(ev.*.data)));
@@ -2141,19 +2830,15 @@ pub fn updateTorrentBackgroundTasks() void {
                         p.proxy_handle = h;
                         var url_buf: [128]u8 = undefined;
                         if (stream_proxy.getStreamUrl(h, &url_buf)) |stream_url| {
-                            var url_z: [128]u8 = undefined;
-                            const ul = @min(stream_url.len, 127);
-                            @memcpy(url_z[0..ul], stream_url[0..ul]);
-                            url_z[ul] = 0;
-                            p.load_file(@as([*c]const u8, @ptrCast(&url_z[0])));
+                            p.load(.{ .url = stream_url, .origin = .torrent, .unbounded_network_read = true });
                             logs.pushLog("info", "player", "Streaming via HTTP proxy", false);
                         } else {
                             // Fallback to raw file if URL generation fails
-                            p.load_file(@as([*c]const u8, @ptrCast(&null_term_path[0])));
+                            p.load(.{ .url = null_term_path[0..safe_len], .origin = .torrent });
                         }
                     } else {
                         // Fallback to raw file if proxy fails to start
-                        p.load_file(@as([*c]const u8, @ptrCast(&null_term_path[0])));
+                        p.load(.{ .url = null_term_path[0..safe_len], .origin = .torrent });
                         logs.pushLog("warn", "player", "Proxy failed, using raw file", false);
                     }
 

@@ -5,6 +5,8 @@ const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
 const c = @import("../core/c.zig");
 const layout = @import("queue_layout_pure.zig");
+const playback = @import("../player/queue_playback_pure.zig");
+const playlist_pure = @import("../player/playlist_pure.zig");
 
 const alloc = @import("../core/alloc.zig").allocator;
 
@@ -14,6 +16,7 @@ const alloc = @import("../core/alloc.zig").allocator;
 
 pub const QueueItem = struct {
     id: i64 = 0, // SQLite rowid
+    position: i64 = 0, // explicit durable display/play order
     url: [2048]u8 = std.mem.zeroes([2048]u8),
     url_len: usize = 0,
     title: [256]u8 = std.mem.zeroes([256]u8),
@@ -36,35 +39,77 @@ pub const QueueItem = struct {
     played: bool = false,
 };
 
-const MAX_QUEUE: usize = 200;
-pub const Action = enum { @"clear-played", clear, @"move-up", @"move-down", remove, play };
+pub const MAX_QUEUE: usize = 200;
+pub const Action = enum {
+    @"clear-played",
+    clear,
+    @"move-up",
+    @"move-down",
+    remove,
+    play,
+    previous,
+    next,
+    @"toggle-shuffle",
+    @"cycle-repeat",
+};
 pub var queue_items: [MAX_QUEUE]QueueItem = undefined;
 pub var queue_count: usize = 0;
+var data_lock = @import("../core/sync.zig").Mutex{};
 var db: ?*c.sqlite.sqlite3 = null;
-var db_initialized: bool = false;
+// 0 waiting, 1 initializing, 2 ready, 3 closing. Release/acquire publishes
+// both the SQLite handle and the initial queue snapshot across threads.
+var db_state = std.atomic.Value(u8).init(0);
+
+// One full playlist can arrive from an extractor before the next UI frame.
+const PENDING_CAP: usize = MAX_QUEUE;
+var pending_items: [PENDING_CAP]QueueItem = undefined;
+var pending_count: usize = 0;
+var pending_lock = @import("../core/sync.zig").Mutex{};
+
+const ACTION_CAP: usize = 64;
+const PendingAction = struct {
+    action: Action,
+    item_id: ?i64,
+    request_id: u64,
+};
+var pending_actions: [ACTION_CAP]PendingAction = undefined;
+var pending_action_head: usize = 0;
+var pending_action_count: usize = 0;
+var action_lock = @import("../core/sync.zig").Mutex{};
+var next_action_id: u64 = 1;
+var completed_action_id = std.atomic.Value(u64).init(0);
+
+var shuffle_order: [MAX_QUEUE]u32 = undefined;
+var shuffle_order_len: usize = 0;
+var shuffle_order_seed: u64 = 0;
 
 // ══════════════════════════════════════════════════════════
 // SQLite Database Management
 // ══════════════════════════════════════════════════════════
 
 pub fn initDb() void {
-    if (db_initialized) return;
+    if (db_state.cmpxchgStrong(0, 1, .acq_rel, .acquire) != null) return;
+    var success = false;
+    defer if (!success) db_state.store(0, .release);
 
     var __cfg_buf_0: [512]u8 = undefined;
     const home = @import("../core/paths.zig").configDir(&__cfg_buf_0);
-    var path_buf: [256]u8 = undefined;
+    var path_buf: [640]u8 = undefined;
     const db_path = std.fmt.bufPrintZ(&path_buf, "{s}/queue.db", .{home}) catch return;
 
     // Ensure directory exists
-    var dir_buf: [256]u8 = undefined;
+    var dir_buf: [640]u8 = undefined;
     const dir_path = std.fmt.bufPrintZ(&dir_buf, "{s}", .{home}) catch return;
     _ = @import("../core/io_global.zig").makeDirAbsolute(dir_path) catch {};
 
-    if (c.sqlite.sqlite3_open(db_path.ptr, &db) != c.sqlite.SQLITE_OK) {
+    const flags = c.sqlite.SQLITE_OPEN_READWRITE | c.sqlite.SQLITE_OPEN_CREATE | c.sqlite.SQLITE_OPEN_FULLMUTEX;
+    if (c.sqlite.sqlite3_open_v2(db_path.ptr, &db, flags, null) != c.sqlite.SQLITE_OK) {
         db = null;
         return;
     }
-    db_initialized = true;
+    _ = c.sqlite.sqlite3_busy_timeout(db.?, 2500);
+    _ = c.sqlite.sqlite3_exec(db.?, "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;", null, null, null);
+    @import("../core/secret_file.zig").restrictExisting(std.mem.sliceTo(db_path, 0));
 
     // Create table
     const sql = "CREATE TABLE IF NOT EXISTS queue (" ++
@@ -75,26 +120,78 @@ pub fn initDb() void {
         "thumb_url TEXT DEFAULT ''," ++
         "duration INTEGER DEFAULT 0," ++
         "added_at INTEGER DEFAULT 0," ++
-        "played INTEGER DEFAULT 0" ++
+        "played INTEGER DEFAULT 0," ++
+        "position INTEGER NOT NULL DEFAULT 0" ++
         ");";
     _ = c.sqlite.sqlite3_exec(db.?, sql, null, null, null);
 
     // Migration: add thumb_url column if missing
     const migrate_sql = "ALTER TABLE queue ADD COLUMN thumb_url TEXT DEFAULT '';";
     _ = c.sqlite.sqlite3_exec(db.?, migrate_sql, null, null, null);
-    // (table creation moved above)
+    _ = c.sqlite.sqlite3_exec(db.?, "ALTER TABLE queue ADD COLUMN position INTEGER NOT NULL DEFAULT 0;", null, null, null);
+    // Preserve the exact legacy visible order (which was id DESC), then make
+    // all future inserts append at the bottom through an explicit position.
+    _ = c.sqlite.sqlite3_exec(db.?, "UPDATE queue SET position = -id WHERE position = 0;", null, null, null);
 
+    data_lock.lock();
+    defer data_lock.unlock();
     loadFromDb();
+    flushPending();
+    success = true;
+    state.wakeUi();
+}
+
+pub fn isReady() bool {
+    return db_state.load(.acquire) == 2;
+}
+
+pub fn deinit() void {
+    if (db_state.swap(3, .acq_rel) == 3) return;
+
+    // Workers are drained before this call, so ownership is stable and all
+    // queue-side image resources can be released on the main thread.
+    thumb_result_lock.lock();
+    for (thumb_results[0..thumb_result_count]) |result| {
+        if (result.pixels) |pixels| alloc.free(pixels);
+    }
+    thumb_result_count = 0;
+    thumb_result_lock.unlock();
+    for (queue_items[0..queue_count]) |*item| {
+        if (item.thumb_pixels) |pixels| alloc.free(pixels);
+        if (item.thumb_tex) |tex| {
+            if (state.app.dvui_win) |win| win.backend.textureDestroy(tex);
+        }
+        item.thumb_pixels = null;
+        item.thumb_tex = null;
+    }
+    queue_count = 0;
+
+    if (db) |handle| {
+        _ = c.sqlite.sqlite3_close_v2(handle);
+        db = null;
+    }
 }
 
 fn loadFromDb() void {
     if (db == null) return;
-    queue_count = 0;
-
-    const sql = "SELECT id, url, title, source, duration, added_at, played, thumb_url FROM queue ORDER BY id DESC LIMIT 200;";
+    const sql = "SELECT id, url, title, source, duration, added_at, played, thumb_url, position FROM queue ORDER BY position ASC, id ASC LIMIT 200;";
     var stmt: ?*c.sqlite.sqlite3_stmt = null;
     if (c.sqlite.sqlite3_prepare_v2(db.?, sql, -1, &stmt, null) != c.sqlite.SQLITE_OK) return;
     defer _ = c.sqlite.sqlite3_finalize(stmt);
+
+    const old_count = queue_count;
+    const old_items: ?[]QueueItem = if (old_count > 0) alloc.alloc(QueueItem, old_count) catch return else null;
+    if (old_items) |items| @memcpy(items, queue_items[0..old_count]);
+    defer if (old_items) |items| {
+        for (items) |*old| {
+            if (old.thumb_pixels) |pixels| alloc.free(pixels);
+            if (old.thumb_tex) |tex| {
+                if (dvui.current_window != null) dvui.textureDestroyLater(tex);
+            }
+        }
+        alloc.free(items);
+    };
+    queue_count = 0;
 
     while (c.sqlite.sqlite3_step(stmt) == c.sqlite.SQLITE_ROW) {
         if (queue_count >= MAX_QUEUE) break;
@@ -138,6 +235,24 @@ fn loadFromDb() void {
                 item.thumb_url_len = thlen;
             }
         }
+        item.position = c.sqlite.sqlite3_column_int64(stmt, 8);
+
+        // A DB reload changes metadata/order, not thumbnail ownership. Transfer
+        // live resources by stable row ID and leave removed rows for cleanup.
+        if (old_items) |items| {
+            for (items) |*old| {
+                if (old.id != item.id) continue;
+                item.thumb_tex = old.thumb_tex;
+                item.thumb_pixels = old.thumb_pixels;
+                item.thumb_w = old.thumb_w;
+                item.thumb_h = old.thumb_h;
+                item.thumb_fetching = old.thumb_fetching;
+                item.thumb_failed = old.thumb_failed;
+                old.thumb_tex = null;
+                old.thumb_pixels = null;
+                break;
+            }
+        }
 
         queue_items[queue_count] = item;
         queue_count += 1;
@@ -156,15 +271,92 @@ fn getTransient() c.sqlite.sqlite3_destructor_type {
 }
 
 pub fn addToQueueWithThumb(url: []const u8, title: []const u8, source: []const u8, thumb_url: []const u8) void {
-    initDb();
-    if (db == null) return;
+    if (!validInput(url, title, source, thumb_url)) return;
+    // Producers include background playlist extractors. Always stage their
+    // immutable copy; only the UI thread mutates the live queue after startup.
+    if (!enqueuePending(url, title, source, thumb_url))
+        @import("../core/logs.zig").pushLog("error", "queue", "Pending queue is full", true);
+    state.wakeUi();
+}
 
-    // Local taste engine: queueing something is a positive taste signal.
-    @import("activity.zig").record(.queue_add, title, .{ .key = url });
+fn validInput(url: []const u8, title: []const u8, source: []const u8, thumb_url: []const u8) bool {
+    return url.len > 0 and url.len < 2048 and title.len < 256 and source.len < 32 and thumb_url.len < 512;
+}
 
-    const sql = "INSERT INTO queue (url, title, source, thumb_url, added_at) VALUES (?1, ?2, ?3, ?4, ?5);";
+fn enqueuePending(url: []const u8, title: []const u8, source: []const u8, thumb_url: []const u8) bool {
+    pending_lock.lock();
+    defer pending_lock.unlock();
+    if (pending_count >= PENDING_CAP) return false;
+    var item = QueueItem{};
+    @memcpy(item.url[0..url.len], url);
+    item.url_len = url.len;
+    @memcpy(item.title[0..title.len], title);
+    item.title_len = title.len;
+    @memcpy(item.source[0..source.len], source);
+    item.source_len = source.len;
+    @memcpy(item.thumb_url[0..thumb_url.len], thumb_url);
+    item.thumb_url_len = thumb_url.len;
+    pending_items[pending_count] = item;
+    pending_count += 1;
+    return true;
+}
+
+fn flushPending() void {
+    pending_lock.lock();
+    defer pending_lock.unlock();
+    if (pending_count > 0 and db != null)
+        _ = c.sqlite.sqlite3_exec(db.?, "BEGIN IMMEDIATE;", null, null, null);
+    for (pending_items[0..pending_count]) |*item| {
+        const url = item.url[0..item.url_len];
+        const title = item.title[0..item.title_len];
+        const source = item.source[0..item.source_len];
+        const thumb = item.thumb_url[0..item.thumb_url_len];
+        if (insertReady(url, title, source, thumb)) {
+            queue_count += 1;
+            @import("activity.zig").record(.queue_add, title, .{ .key = url });
+        }
+        item.* = .{};
+    }
+    if (pending_count > 0 and db != null)
+        _ = c.sqlite.sqlite3_exec(db.?, "COMMIT;", null, null, null);
+    pending_count = 0;
+    loadFromDb();
+    // Publish ready while still holding the pending lock. An add that observed
+    // state=initializing either entered this batch before publication, or waits
+    // and then observes ready; it can never land in an already-drained queue.
+    db_state.store(2, .release);
+}
+
+/// Drain producer work on the UI thread. Called every frame even when the
+/// drawer is closed, so queueing never depends on a particular view being open.
+pub fn drainUi() void {
+    if (!isReady()) return;
+
+    pending_lock.lock();
+    const has_adds = pending_count > 0;
+    pending_lock.unlock();
+    if (has_adds) {
+        data_lock.lock();
+        flushPending();
+        data_lock.unlock();
+    }
+
+    drainPendingActions();
+    drainThumbResults();
+    if (backfill_refresh_pending.swap(false, .acq_rel)) {
+        data_lock.lock();
+        loadFromDb();
+        data_lock.unlock();
+    }
+}
+
+fn insertReady(url: []const u8, title: []const u8, source: []const u8, thumb_url: []const u8) bool {
+    if (db == null) return false;
+    if (queue_count >= MAX_QUEUE) return false;
+    const sql = "INSERT INTO queue (url, title, source, thumb_url, added_at, position) " ++
+        "VALUES (?1, ?2, ?3, ?4, ?5, MAX(COALESCE((SELECT MAX(position) FROM queue), 0) + 1, 1));";
     var stmt: ?*c.sqlite.sqlite3_stmt = null;
-    if (c.sqlite.sqlite3_prepare_v2(db.?, sql, -1, &stmt, null) != c.sqlite.SQLITE_OK) return;
+    if (c.sqlite.sqlite3_prepare_v2(db.?, sql, -1, &stmt, null) != c.sqlite.SQLITE_OK) return false;
     defer _ = c.sqlite.sqlite3_finalize(stmt);
 
     _ = c.sqlite.sqlite3_bind_text(stmt, 1, url.ptr, @intCast(url.len), getTransient());
@@ -173,11 +365,12 @@ pub fn addToQueueWithThumb(url: []const u8, title: []const u8, source: []const u
     _ = c.sqlite.sqlite3_bind_text(stmt, 4, thumb_url.ptr, @intCast(thumb_url.len), getTransient());
     _ = c.sqlite.sqlite3_bind_int64(stmt, 5, @import("../core/io_global.zig").timestamp());
 
-    _ = c.sqlite.sqlite3_step(stmt);
-    loadFromDb();
+    return c.sqlite.sqlite3_step(stmt) == c.sqlite.SQLITE_DONE;
 }
 
 pub fn removeFromQueue(item_id: i64) void {
+    data_lock.lock();
+    defer data_lock.unlock();
     if (db == null) return;
 
     const sql = "DELETE FROM queue WHERE id = ?1;";
@@ -191,6 +384,8 @@ pub fn removeFromQueue(item_id: i64) void {
 }
 
 pub fn markPlayed(item_id: i64) void {
+    data_lock.lock();
+    defer data_lock.unlock();
     if (db == null) return;
 
     const sql = "UPDATE queue SET played = 1 WHERE id = ?1;";
@@ -204,35 +399,57 @@ pub fn markPlayed(item_id: i64) void {
 }
 
 pub fn clearPlayed() void {
+    data_lock.lock();
+    defer data_lock.unlock();
     if (db == null) return;
     _ = c.sqlite.sqlite3_exec(db.?, "DELETE FROM queue WHERE played = 1;", null, null, null);
     loadFromDb();
 }
 
 pub fn clearAll() void {
+    data_lock.lock();
+    defer data_lock.unlock();
     if (db == null) return;
     _ = c.sqlite.sqlite3_exec(db.?, "DELETE FROM queue;", null, null, null);
     loadFromDb();
 }
 
-/// Auto-advance: find next unplayed queue item and load into player.
-pub fn playNextUnplayed(player: anytype) void {
-    const extractors = @import("extractors.zig");
-    initDb();
-    for (queue_items[0..queue_count]) |*item| {
-        if (!item.played and item.url_len > 0) {
-            const raw_url = item.url[0..item.url_len];
-            var norm_buf: [2048]u8 = undefined;
-            const norm_url = extractors.normalizeUrl(raw_url, &norm_buf);
-            var url_z: [2049]u8 = undefined;
-            @memcpy(url_z[0..norm_url.len], norm_url);
-            url_z[norm_url.len] = 0;
-            player.load_file(@ptrCast(&url_z[0]));
-            markPlayed(item.id);
-            state.showToast("Playing next from queue");
-            return;
-        }
+fn shuffleOrderSlice() ?[]const u32 {
+    if (!state.app.playlist_shuffle or queue_count == 0) return null;
+    const seed = if (state.app.playlist_shuffle_seed != 0) state.app.playlist_shuffle_seed else 1;
+    if (shuffle_order_len != queue_count or shuffle_order_seed != seed) {
+        shuffle_order_len = queue_count;
+        shuffle_order_seed = seed;
+        playlist_pure.buildShuffleOrder(shuffle_order[0..queue_count], seed);
     }
+    return shuffle_order[0..queue_count];
+}
+
+/// Shared native/remote/auto-advance decision. Stable row identity survives
+/// reorder; repeat and shuffle use the same persisted policy as M3U playback.
+pub fn playRelative(player: anytype, dir: i32) bool {
+    if (!isReady() or queue_count == 0) return false;
+    var ids: [MAX_QUEUE]i64 = undefined;
+    var played: [MAX_QUEUE]bool = undefined;
+    for (queue_items[0..queue_count], 0..) |*item, i| {
+        ids[i] = item.id;
+        played[i] = item.played;
+    }
+    const current_id = if (player.playback_origin == .queue) player.queue_item_id else -1;
+    const target = playback.relativeIndex(
+        ids[0..queue_count],
+        played[0..queue_count],
+        current_id,
+        dir,
+        state.app.playlist_repeat,
+        shuffleOrderSlice(),
+    ) orelse return false;
+    playQueueItemOn(player, &queue_items[target]);
+    return true;
+}
+
+pub fn playNextUnplayed(player: anytype) void {
+    if (playRelative(player, 1)) state.showToast("Playing next from queue");
 }
 
 // ══════════════════════════════════════════════════════════
@@ -240,7 +457,14 @@ pub fn playNextUnplayed(player: anytype) void {
 // ══════════════════════════════════════════════════════════
 
 pub fn renderContent() void {
-    initDb();
+    if (!isReady()) {
+        _ = dvui.label(@src(), "Loading queue…", .{}, .{
+            .color_text = theme.colors.text_secondary,
+            .gravity_x = 0.5,
+            .gravity_y = 0.5,
+        });
+        return;
+    }
 
     // Auto-trigger thumb backfill on first render
     if (!thumb_backfill_done.load(.acquire) and !thumb_backfill_active.load(.acquire) and queue_count > 0) {
@@ -314,6 +538,37 @@ pub fn renderContent() void {
         })) {
             clearPlayed();
         }
+    }
+
+    // One shared play-order policy for Queue and imported playlists. Compact
+    // text controls stay understandable without icon/tooltip discovery.
+    {
+        const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
+        var playback_bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
+        });
+        defer playback_bar.deinit();
+
+        if (dvui.button(@src(), if (state.app.playlist_shuffle) "Shuffle: on" else "Shuffle: off", .{}, .{
+            .color_fill = transparent,
+            .color_text = if (state.app.playlist_shuffle) theme.colors.accent else theme.colors.text_secondary,
+        })) _ = apply(.@"toggle-shuffle", null);
+
+        const repeat_label: []const u8 = switch (state.app.playlist_repeat) {
+            .off => "Repeat: off",
+            .all => "Repeat: all",
+            .one => "Repeat: one",
+        };
+        if (dvui.button(@src(), repeat_label, .{}, .{
+            .color_fill = transparent,
+            .color_text = if (state.app.playlist_repeat == .off) theme.colors.text_secondary else theme.colors.accent,
+        })) _ = apply(.@"cycle-repeat", null);
+
+        if (dvui.button(@src(), "Previous", .{}, .{ .color_fill = transparent, .color_text = theme.colors.text_secondary }))
+            _ = apply(.previous, null);
+        if (dvui.button(@src(), "Next", .{}, .{ .color_fill = transparent, .color_text = theme.colors.text_secondary }))
+            _ = apply(.next, null);
     }
 
     // ── Now Playing from mpv ──
@@ -572,18 +827,19 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
 }
 
 fn playQueueItem(item: *QueueItem) void {
-    const extractors = @import("extractors.zig");
     if (state.app.active_player_idx >= state.app.players.items.len) return;
     const ap = state.app.players.items[state.app.active_player_idx];
+    playQueueItemOn(ap, item);
+}
+
+fn playQueueItemOn(ap: anytype, item: *QueueItem) void {
+    const extractors = @import("extractors.zig");
 
     const raw_url = item.url[0..item.url_len];
     var norm_buf: [2048]u8 = undefined;
     const norm_url = extractors.normalizeUrl(raw_url, &norm_buf);
-    var url_z: [2049]u8 = undefined;
-    @memcpy(url_z[0..norm_url.len], norm_url);
-    url_z[norm_url.len] = 0;
 
-    ap.load_file(@ptrCast(&url_z[0]));
+    ap.load(.{ .url = norm_url, .origin = .queue, .queue_item_id = item.id });
     markPlayed(item.id);
     state.showToast("Playing from queue");
 }
@@ -613,19 +869,122 @@ pub fn apply(action: Action, idx: ?usize) bool {
         .@"move-down" => moveQueueItem(idx orelse return false, 1),
         .remove => return removeQueueIndex(idx orelse return false),
         .play => return playQueueIndex(idx orelse return false),
+        .previous, .next => {
+            if (state.app.active_player_idx >= state.app.players.items.len) return false;
+            return playRelative(
+                state.app.players.items[state.app.active_player_idx],
+                if (action == .next) 1 else -1,
+            );
+        },
+        .@"toggle-shuffle" => {
+            state.app.playlist_shuffle = !state.app.playlist_shuffle;
+            if (state.app.playlist_shuffle)
+                state.app.playlist_shuffle_seed = @intCast(@max(1, @import("../core/io_global.zig").milliTimestamp()));
+            shuffle_order_len = 0;
+            state.markConfigDirty();
+        },
+        .@"cycle-repeat" => {
+            state.app.playlist_repeat = state.app.playlist_repeat.cycled();
+            state.markConfigDirty();
+        },
     }
     return true;
 }
 
 /// Run a single UPDATE inside an already-open transaction. Returns true on
 /// success (prepared + stepped to SQLITE_DONE).
-fn swapStep(sql: [*c]const u8, bind1: ?i64, bind2: ?i64) bool {
+fn swapStep(position: i64, id: i64) bool {
     var stmt: ?*c.sqlite.sqlite3_stmt = null;
-    if (c.sqlite.sqlite3_prepare_v2(db.?, sql, -1, &stmt, null) != c.sqlite.SQLITE_OK) return false;
+    if (c.sqlite.sqlite3_prepare_v2(db.?, "UPDATE queue SET position = ?1 WHERE id = ?2;", -1, &stmt, null) != c.sqlite.SQLITE_OK) return false;
     defer _ = c.sqlite.sqlite3_finalize(stmt);
-    if (bind1) |v| _ = c.sqlite.sqlite3_bind_int64(stmt, 1, v);
-    if (bind2) |v| _ = c.sqlite.sqlite3_bind_int64(stmt, 2, v);
+    _ = c.sqlite.sqlite3_bind_int64(stmt, 1, position);
+    _ = c.sqlite.sqlite3_bind_int64(stmt, 2, id);
     return c.sqlite.sqlite3_step(stmt) == c.sqlite.SQLITE_DONE;
+}
+
+/// Copy a coherent snapshot for non-UI adapters without exposing mutable queue
+/// storage across threads. The caller owns `out` and may serialize it unlocked.
+pub fn snapshotItems(out: []QueueItem) usize {
+    data_lock.lock();
+    defer data_lock.unlock();
+    const count = @min(queue_count, out.len);
+    @memcpy(out[0..count], queue_items[0..count]);
+    return count;
+}
+
+/// Stage a remote action by stable row identity. Indices are presentation
+/// coordinates and may change before the UI thread applies the request.
+pub fn requestAction(action: Action, idx: ?usize) ?u64 {
+    var item_id: ?i64 = null;
+    const needs_item = switch (action) {
+        .play, .remove, .@"move-up", .@"move-down" => true,
+        else => false,
+    };
+    if (needs_item) {
+        data_lock.lock();
+        defer data_lock.unlock();
+        const i = idx orelse return null;
+        if (i >= queue_count) return null;
+        item_id = queue_items[i].id;
+    }
+
+    action_lock.lock();
+    defer action_lock.unlock();
+    if (pending_action_count >= ACTION_CAP) return null;
+    const request_id = next_action_id;
+    next_action_id +%= 1;
+    if (next_action_id == 0) next_action_id = 1;
+    const tail = (pending_action_head + pending_action_count) % ACTION_CAP;
+    pending_actions[tail] = .{ .action = action, .item_id = item_id, .request_id = request_id };
+    pending_action_count += 1;
+    state.wakeUi();
+    return request_id;
+}
+
+/// Remote connection workers wait briefly for the UI-thread receipt so their
+/// immediate follow-up snapshot cannot race the mutation they just requested.
+pub fn waitAction(request_id: u64, timeout_ms: i64) bool {
+    const io = @import("../core/io_global.zig");
+    const deadline = io.monotonicMilliTimestamp() + @max(timeout_ms, 1);
+    while (completed_action_id.load(.acquire) < request_id) {
+        if (io.monotonicMilliTimestamp() >= deadline) return false;
+        io.sleep(2 * std.time.ns_per_ms);
+    }
+    return true;
+}
+
+fn indexById(id: i64) ?usize {
+    for (queue_items[0..queue_count], 0..) |*item, i| {
+        if (item.id == id) return i;
+    }
+    return null;
+}
+
+fn drainPendingActions() void {
+    while (true) {
+        action_lock.lock();
+        if (pending_action_count == 0) {
+            action_lock.unlock();
+            return;
+        }
+        const request = pending_actions[pending_action_head];
+        pending_action_head = (pending_action_head + 1) % ACTION_CAP;
+        pending_action_count -= 1;
+        action_lock.unlock();
+
+        if (request.action == .clear or request.action == .@"clear-played" or
+            request.action == .previous or request.action == .next or
+            request.action == .@"toggle-shuffle" or request.action == .@"cycle-repeat")
+        {
+            _ = apply(request.action, null);
+            completed_action_id.store(request.request_id, .release);
+            continue;
+        }
+        if (request.item_id) |id| {
+            if (indexById(id)) |idx| _ = apply(request.action, idx);
+        }
+        completed_action_id.store(request.request_id, .release);
+    }
 }
 
 /// Move the item at `idx` up (dir < 0) or down (dir > 0) one slot; persists
@@ -637,32 +996,33 @@ pub fn moveQueueItem(idx: usize, dir: i32) void {
 }
 
 fn swapQueueItems(idx_a: usize, idx_b: usize) void {
+    data_lock.lock();
+    defer data_lock.unlock();
     if (idx_a >= queue_count or idx_b >= queue_count) return;
     if (idx_a == idx_b) return;
 
-    // Original row IDs, before any swap. We exchange the two row IDs in the DB
-    // (using -1 as a temp to dodge the PK unique constraint) so display order
-    // persists, then mirror the swap in memory only after a clean COMMIT.
+    // Row IDs are stable item identity; only explicit position changes. The old
+    // implementation swapped primary keys, making identity refer to different
+    // content after a reorder.
     const id_a = queue_items[idx_a].id;
     const id_b = queue_items[idx_b].id;
+    const pos_a = queue_items[idx_a].position;
+    const pos_b = queue_items[idx_b].position;
 
     // If there is no DB, just swap in memory (nothing to persist atomically).
     if (db == null) {
         const tmp = queue_items[idx_a];
         queue_items[idx_a] = queue_items[idx_b];
         queue_items[idx_b] = tmp;
-        queue_items[idx_a].id = id_b;
-        queue_items[idx_b].id = id_a;
+        queue_items[idx_a].position = pos_a;
+        queue_items[idx_b].position = pos_b;
         return;
     }
 
-    // All three UPDATEs run inside one transaction; roll back on any failure
-    // so the persisted IDs never end up half-swapped.
+    // Both position updates are transactional, so order cannot half-swap.
     if (c.sqlite.sqlite3_exec(db.?, "BEGIN;", null, null, null) != c.sqlite.SQLITE_OK) return;
 
-    const ok = swapStep("UPDATE queue SET id = -1 WHERE id = ?1;", id_a, null) and
-        swapStep("UPDATE queue SET id = ?1 WHERE id = ?2;", id_a, id_b) and
-        swapStep("UPDATE queue SET id = ?1 WHERE id = -1;", id_b, null);
+    const ok = swapStep(pos_b, id_a) and swapStep(pos_a, id_b);
 
     if (!ok) {
         _ = c.sqlite.sqlite3_exec(db.?, "ROLLBACK;", null, null, null);
@@ -673,13 +1033,12 @@ fn swapQueueItems(idx_a: usize, idx_b: usize) void {
         return;
     }
 
-    // Commit succeeded — now mirror the swap in memory, fixing up the IDs that
-    // were exchanged in the DB.
+    // Commit succeeded — mirror order while preserving stable row IDs.
     const tmp = queue_items[idx_a];
     queue_items[idx_a] = queue_items[idx_b];
     queue_items[idx_b] = tmp;
-    queue_items[idx_a].id = id_b;
-    queue_items[idx_b].id = id_a;
+    queue_items[idx_a].position = pos_a;
+    queue_items[idx_b].position = pos_b;
 }
 
 /// Queue thumbnail cache. Was "/tmp/opal_thumbs/queue" — absent on Windows, so
@@ -699,6 +1058,146 @@ fn thumbCachePath(item_id: i64, out: *[384]u8) ?[]const u8 {
 const MAX_THUMB_THREADS: i64 = 4;
 var thumb_threads_active: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
 
+const ThumbJob = struct {
+    item_id: i64,
+    url: [512]u8,
+    url_len: usize,
+};
+
+const ThumbResult = struct {
+    item_id: i64,
+    pixels: ?[]u8 = null,
+    width: u32 = 0,
+    height: u32 = 0,
+    failed: bool = true,
+};
+
+const THUMB_RESULT_CAP: usize = 16;
+var thumb_results: [THUMB_RESULT_CAP]ThumbResult = undefined;
+var thumb_result_count: usize = 0;
+var thumb_result_lock = @import("../core/sync.zig").Mutex{};
+
+fn publishThumbResult(result: ThumbResult) void {
+    thumb_result_lock.lock();
+    defer thumb_result_lock.unlock();
+    if (thumb_result_count >= THUMB_RESULT_CAP) {
+        if (result.pixels) |pixels| alloc.free(pixels);
+        return;
+    }
+    thumb_results[thumb_result_count] = result;
+    thumb_result_count += 1;
+    state.wakeUi();
+}
+
+fn drainThumbResults() void {
+    thumb_result_lock.lock();
+    defer thumb_result_lock.unlock();
+    for (thumb_results[0..thumb_result_count]) |result| {
+        var consumed = false;
+        for (queue_items[0..queue_count]) |*item| {
+            if (item.id != result.item_id) continue;
+            if (item.thumb_pixels) |old| alloc.free(old);
+            item.thumb_pixels = result.pixels;
+            item.thumb_w = result.width;
+            item.thumb_h = result.height;
+            item.thumb_fetching = false;
+            item.thumb_failed = result.failed;
+            consumed = true;
+            break;
+        }
+        if (!consumed) if (result.pixels) |pixels| alloc.free(pixels);
+    }
+    thumb_result_count = 0;
+}
+
+fn decodeThumb(item_id: i64, body: []const u8) ?ThumbResult {
+    var w: c_int = 0;
+    var h: c_int = 0;
+    var comp: c_int = 0;
+    const pixels = dvui.c.stbi_load_from_memory(body.ptr, @intCast(body.len), &w, &h, &comp, 4);
+    if (pixels == null) return null;
+    defer dvui.c.stbi_image_free(pixels);
+    if (w <= 0 or h <= 0) return null;
+
+    const pixel_count = std.math.mul(usize, @intCast(w), @intCast(h)) catch return null;
+    if (pixel_count > 16 * 1024 * 1024) return null;
+    const p_len = std.math.mul(usize, pixel_count, 4) catch return null;
+    const owned = alloc.alloc(u8, p_len) catch return null;
+    @memcpy(owned, pixels[0..p_len]);
+    return .{
+        .item_id = item_id,
+        .pixels = owned,
+        .width = @intCast(w),
+        .height = @intCast(h),
+        .failed = false,
+    };
+}
+
+fn thumbWorker(job: ThumbJob) void {
+    defer _ = thumb_threads_active.fetchSub(1, .acq_rel);
+    var published = false;
+    defer if (!published) publishThumbResult(.{ .item_id = job.item_id });
+
+    const id = job.item_id;
+    const url = job.url[0..job.url_len];
+    var path_buf: [384]u8 = undefined;
+    const cached_body = blk: {
+        const cache_path = thumbCachePath(id, &path_buf) orelse break :blk null;
+        const file = @import("../core/io_global.zig").cwdOpenFile(cache_path, .{}) catch break :blk null;
+        defer file.close(@import("../core/io_global.zig").io());
+        const stat = file.stat(@import("../core/io_global.zig").io()) catch break :blk null;
+        if (stat.size <= 100 or stat.size >= 2 * 1024 * 1024) break :blk null;
+        const cached = alloc.alloc(u8, stat.size) catch break :blk null;
+        const n = @import("../core/io_global.zig").readAll(file, cached) catch {
+            alloc.free(cached);
+            break :blk null;
+        };
+        if (n <= 100) {
+            alloc.free(cached);
+            break :blk null;
+        }
+        break :blk cached[0..n];
+    };
+
+    if (cached_body) |body| {
+        defer alloc.free(body);
+        if (decodeThumb(id, body)) |result| {
+            publishThumbResult(result);
+            published = true;
+        }
+        return;
+    }
+
+    var client = @import("../core/http.zig").newClient();
+    defer client.deinit();
+    const uri = std.Uri.parse(url) catch return;
+    var req = client.request(.GET, uri, .{ .extra_headers = &.{.{ .name = "Accept", .value = "image/jpeg, image/webp" }} }) catch return;
+    defer req.deinit();
+    req.sendBodiless() catch return;
+    var redirect_buf: [8192]u8 = undefined;
+    var response = req.receiveHead(&redirect_buf) catch return;
+    if (response.head.status != .ok) return;
+    var transfer_buf: [4096]u8 = undefined;
+    var decompress: std.http.Decompress = undefined;
+    var rdr = response.readerDecompressing(&transfer_buf, &decompress, &.{});
+    const body = rdr.allocRemaining(alloc, std.Io.Limit.limited(2 * 1024 * 1024)) catch return;
+    defer alloc.free(body);
+    if (body.len < 100) return;
+
+    var tdir_buf: [512]u8 = undefined;
+    @import("../core/io_global.zig").cwdMakePath(thumbCacheDir(&tdir_buf)) catch {};
+    if (thumbCachePath(id, &path_buf)) |cache_path| {
+        if (@import("../core/io_global.zig").cwdCreateFile(cache_path, .{})) |cf| {
+            _ = @import("../core/io_global.zig").writeAll(cf, body) catch {};
+            cf.close(@import("../core/io_global.zig").io());
+        } else |_| {}
+    }
+    if (decodeThumb(id, body)) |result| {
+        publishThumbResult(result);
+        published = true;
+    }
+}
+
 fn fetchQueueThumb(item: *QueueItem) void {
     if (item.thumb_url_len == 0 or item.thumb_fetching or item.thumb_failed) return;
 
@@ -711,134 +1210,13 @@ fn fetchQueueThumb(item: *QueueItem) void {
     }
 
     item.thumb_fetching = true;
-
-    // Copy ID and URL into struct statics so the thread doesn't hold a pointer
-    // into the mutable queue_items array (which can be rewritten by loadFromDb).
-    const S = struct {
-        var item_id: i64 = 0;
-        var url_buf: [512]u8 = undefined;
-        var url_len: usize = 0;
-
-        fn findById(id: i64) ?*QueueItem {
-            for (queue_items[0..queue_count]) |*qi| {
-                if (qi.id == id) return qi;
-            }
-            return null;
-        }
-
-        fn worker() void {
-            defer _ = thumb_threads_active.fetchSub(1, .acq_rel);
-
-            const id = @This().item_id;
-            const url = @This().url_buf[0..@This().url_len];
-
-            // 1) Check disk cache first
-            var path_buf: [384]u8 = undefined;
-            const cached_body = blk: {
-                const cache_path = thumbCachePath(id, &path_buf) orelse break :blk null;
-                const file = @import("../core/io_global.zig").cwdOpenFile(cache_path, .{}) catch break :blk null;
-                defer file.close(@import("../core/io_global.zig").io());
-                const stat = file.stat(@import("../core/io_global.zig").io()) catch break :blk null;
-                if (stat.size <= 100 or stat.size >= 2 * 1024 * 1024) break :blk null;
-                const cached = alloc.alloc(u8, stat.size) catch break :blk null;
-                const n = @import("../core/io_global.zig").readAll(file, cached) catch {
-                    alloc.free(cached);
-                    break :blk null;
-                };
-                if (n <= 100) {
-                    alloc.free(cached);
-                    break :blk null;
-                }
-                break :blk cached[0..n];
-            };
-
-            if (cached_body) |body| {
-                defer alloc.free(body);
-                decodeAndStoreById(id, body);
-                return;
-            }
-
-            // 2) Download from network
-            var client = @import("../core/http.zig").newClient();
-            defer client.deinit();
-
-            const uri = std.Uri.parse(url) catch return;
-            var req = client.request(.GET, uri, .{ .extra_headers = &.{.{ .name = "Accept", .value = "image/jpeg, image/webp" }} }) catch return;
-            defer req.deinit();
-            req.sendBodiless() catch return;
-
-            var redirect_buf: [8192]u8 = undefined;
-            var response = req.receiveHead(&redirect_buf) catch return;
-            if (response.head.status != .ok) return;
-
-            var transfer_buf: [4096]u8 = undefined;
-            var decompress: std.http.Decompress = undefined;
-            var rdr = response.readerDecompressing(&transfer_buf, &decompress, &.{});
-
-            const body = rdr.allocRemaining(alloc, std.Io.Limit.limited(2 * 1024 * 1024)) catch return;
-            defer alloc.free(body);
-
-            if (body.len < 100) return;
-
-            // 3) Save to disk cache
-            var tdir_buf: [512]u8 = undefined;
-            @import("../core/io_global.zig").cwdMakePath(thumbCacheDir(&tdir_buf)) catch {};
-            if (thumbCachePath(id, &path_buf)) |cache_path| {
-                if (@import("../core/io_global.zig").cwdCreateFile(cache_path, .{})) |cf| {
-                    _ = @import("../core/io_global.zig").writeAll(cf, body) catch {};
-                    cf.close(@import("../core/io_global.zig").io());
-                } else |_| {}
-            }
-
-            // 4) Decode and store pixels
-            decodeAndStoreById(id, body);
-        }
-
-        fn decodeAndStoreById(id: i64, body: []const u8) void {
-            var w: c_int = 0;
-            var h: c_int = 0;
-            var comp: c_int = 0;
-            const pixels = dvui.c.stbi_load_from_memory(body.ptr, @intCast(body.len), &w, &h, &comp, 4);
-            if (pixels == null) return;
-            defer dvui.c.stbi_image_free(pixels);
-
-            if (w <= 0 or h <= 0) return;
-            // usize-first: w*h*4 in c_int overflows on a large crafted image and
-            // panics this worker thread (whole-app abort).
-            const p_len: usize = @as(usize, @intCast(w)) * @as(usize, @intCast(h)) * 4;
-            const p_slice = alloc.alloc(u8, p_len) catch return;
-            @memcpy(p_slice, pixels[0..p_len]);
-
-            // Look up item by ID — safe even if array was rewritten
-            if (@This().findById(id)) |ptr| {
-                ptr.thumb_w = @intCast(w);
-                ptr.thumb_h = @intCast(h);
-                ptr.thumb_pixels = p_slice;
-                ptr.thumb_fetching = false;
-                ptr.thumb_failed = false;
-            } else {
-                // Item no longer in queue — free the decoded pixels
-                alloc.free(p_slice);
-            }
-        }
-    };
-
-    S.item_id = item.id;
+    var job: ThumbJob = .{ .item_id = item.id, .url = undefined, .url_len = item.thumb_url_len };
     const url = item.thumb_url[0..item.thumb_url_len];
-    if (url.len > S.url_buf.len) {
+    @memcpy(job.url[0..url.len], url);
+    @import("../core/workers.zig").spawn(thumbWorker, .{job}) catch {
         item.thumb_fetching = false;
         _ = thumb_threads_active.fetchSub(1, .acq_rel);
-        return;
-    }
-    @memcpy(S.url_buf[0..url.len], url);
-    S.url_len = url.len;
-
-    if (@import("../core/workers.zig").spawnLegacy(S.worker, .{})) |t| {
-        @import("../core/workers.zig").release(t);
-    } else |_| {
-        item.thumb_fetching = false;
-        _ = thumb_threads_active.fetchSub(1, .acq_rel);
-    }
+    };
 }
 
 // ══════════════════════════════════════════════════════════
@@ -848,6 +1226,7 @@ fn fetchQueueThumb(item: *QueueItem) void {
 var thumb_backfill_active: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var thumb_backfill_done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var thumb_backfill_cancel: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+var backfill_refresh_pending: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 fn startThumbBackfill() void {
     if (thumb_backfill_active.load(.acquire)) return;
@@ -859,6 +1238,8 @@ fn startThumbBackfill() void {
         fn worker() void {
             defer {
                 thumb_backfill_active.store(false, .release);
+                backfill_refresh_pending.store(true, .release);
+                state.wakeUi();
                 state.showToast("Thumbnail fetch complete");
             }
 
@@ -868,6 +1249,7 @@ fn startThumbBackfill() void {
             var url_lens: [MAX_QUEUE]usize = undefined;
             var need_count: usize = 0;
 
+            data_lock.lock();
             for (queue_items[0..queue_count]) |*item| {
                 if (item.thumb_url_len == 0 and item.url_len > 0) {
                     ids[need_count] = item.id;
@@ -877,6 +1259,7 @@ fn startThumbBackfill() void {
                     if (need_count >= MAX_QUEUE) break;
                 }
             }
+            data_lock.unlock();
 
             if (need_count == 0) return;
 
@@ -933,15 +1316,4 @@ fn updateThumbUrl(item_id: i64, thumb_url: []const u8) void {
     _ = c.sqlite.sqlite3_bind_text(stmt, 1, thumb_url.ptr, @intCast(thumb_url.len), getTransient());
     _ = c.sqlite.sqlite3_bind_int64(stmt, 2, item_id);
     _ = c.sqlite.sqlite3_step(stmt);
-
-    // Update in-memory item too
-    for (queue_items[0..queue_count]) |*item| {
-        if (item.id == item_id) {
-            const tlen = @min(thumb_url.len, 511);
-            @memcpy(item.thumb_url[0..tlen], thumb_url[0..tlen]);
-            item.thumb_url_len = tlen;
-            item.thumb_fetching = false;
-            break;
-        }
-    }
 }

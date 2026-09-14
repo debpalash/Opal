@@ -74,7 +74,21 @@ pub fn mouseInControlPanel(p: dvui.Point.Physical) bool {
 /// True while any in-player picker popover is open — main.zig holds the
 /// control overlay visible so a popover can't outlive its anchor bar.
 pub fn pickerOpen() bool {
-    return open_picker != .none;
+    return open_picker != .none or state.app.sub_picker_open;
+}
+
+/// Close every player control popover, including the online subtitle finder
+/// whose open flag lives in AppState because its workers outlive this module.
+pub fn closePickers() void {
+    open_picker = .none;
+    state.app.sub_picker_open = false;
+}
+
+/// All footer picker chips share one open slot.
+fn togglePicker(kind: PickerKind) void {
+    const was_open = open_picker == kind and !state.app.sub_picker_open;
+    closePickers();
+    if (!was_open) open_picker = kind;
 }
 
 // ── Helpers ──
@@ -1072,6 +1086,7 @@ fn applyUniversalLanguage(ctx: ?*c.mpv.mpv_handle, lang: []const u8) void {
             _ = c.mpv.mpv_command_string(ctx, s.ptr);
         } else |_| {}
         _ = c.mpv.mpv_command_string(ctx, "set sub-visibility yes");
+        state.app.subtitles_enabled = true;
     }
     // Drive the online / AI subtitle search language too. `lang` is often the
     // caller's own sub_lang_buf slice (the universal-language chip passes the
@@ -1079,6 +1094,8 @@ fn applyUniversalLanguage(ctx: ?*c.mpv.mpv_handle, lang: []const u8) void {
     // panicked ("arguments alias"). setFixedBuf no-ops the identical-slice case.
     if (lang.len > 0) {
         @import("../core/text.zig").setFixedBuf(state.app.sub_lang_buf[0..], &state.app.sub_lang_len, lang);
+        @import("../core/text.zig").setFixedBuf(state.app.audio_lang_buf[0..], &state.app.audio_lang_len, lang);
+        state.markConfigDirty();
     }
     state.showToast(if (best_aid >= 0 or best_sid >= 0)
         "Language applied to audio & subtitles"
@@ -1326,6 +1343,11 @@ pub fn renderLiquidGlassOverlay() void {
     const has_media = active_p.texture != null or active_p.torrent_is_ready or active_p.current_torrent_id >= 0 or active_p.current_url_len > 0 or active_p.is_loading;
     if (!has_media) return;
 
+    // Dismiss an existing picker before this frame's controls run. The press is
+    // intentionally passed through, eliminating the old two-click interaction
+    // for Back, Settings, Close, and switching directly between pickers.
+    pickers.handleDropUpInput();
+
     const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
 
     // ── Auto-hide if playing and idle for 2.5s. Stay visible while a popover is open. ──
@@ -1340,7 +1362,7 @@ pub fn renderLiquidGlassOverlay() void {
     // uses). During video playback the mpv render callback keeps frames coming so
     // the fade advances; paused → chrome_held so no fade.
     const idle_ms = now_ms - state.app.last_mouse_move_ms;
-    const chrome_held = is_paused or open_picker != .none;
+    const chrome_held = is_paused or pickerOpen();
     const FADE_START_MS: i64 = 2500;
     const FADE_LEN_MS: i64 = 220;
     if (!chrome_held and idle_ms > FADE_START_MS + FADE_LEN_MS) return; // fully hidden
@@ -1367,17 +1389,15 @@ pub fn renderLiquidGlassOverlay() void {
     // video (the standard streaming-player treatment) instead of ending in a
     // hard border. Approximates a gradient — dvui has no gradient fill.
     {
-        const scrim_alphas = [_]u8{ 14, 36, 68, 110 };
+        const scrim_alphas = [_]u8{ 1, 3, 6, 10, 16, 24 };
         inline for (scrim_alphas, 0..) |sa, si| {
-            var g = theme.colors.bg_glass;
-            g.a = sa;
             var sl = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .id_extra = si + 9200,
                 .expand = .horizontal,
                 .background = true,
-                .color_fill = g,
-                .min_size_content = .{ .w = 0, .h = 5 },
-                .max_size_content = .{ .w = 0, .h = 5 },
+                .color_fill = theme.playerGlass(sa),
+                .min_size_content = .{ .w = 0, .h = 4 },
+                .max_size_content = .{ .w = 0, .h = 4 },
             });
             sl.deinit();
         }
@@ -1386,14 +1406,33 @@ pub fn renderLiquidGlassOverlay() void {
     // ── Footer panel: translucent glass (bg_glass, ~63% opaque) — the video
     // stays visible through the chrome; the scrim above keeps the transition
     // soft and the controls legible over bright scenes. ──
-    var panel = dvui.box(@src(), .{ .dir = .vertical }, .{
+    var panel = dvui.overlay(@src(), .{
         .expand = .horizontal,
-        .background = true,
-        .color_fill = theme.colors.bg_glass,
         .padding = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
     });
     defer panel.deinit();
     control_panel_rect = panel.data().borderRectScale().r;
+
+    // Bottom-edge gradient behind the controls. It is darkest only at the
+    // physical edge and dissolves upward, avoiding a flat rectangular band.
+    {
+        var backdrop = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .gravity_y = 1.0 });
+        const edge_alphas = [_]u8{ 4, 10, 18, 28, 40, 54, 70, 86, 100 };
+        inline for (edge_alphas, 0..) |alpha, i| {
+            var slice = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .id_extra = i + 9240,
+                .expand = .horizontal,
+                .background = true,
+                .color_fill = theme.playerGlass(alpha),
+                .min_size_content = .{ .w = 0, .h = 9 },
+                .max_size_content = .{ .w = 0, .h = 9 },
+            });
+            slice.deinit();
+        }
+        backdrop.deinit();
+    }
+    var panel_content = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .gravity_y = 1.0 });
+    defer panel_content.deinit();
 
     // ── Wheel on scrubber band = ±5s seek ──
     for (dvui.events()) |*ev| {
@@ -1844,7 +1883,7 @@ pub fn renderLiquidGlassOverlay() void {
             const ar_text = currentAspectChipText(active_p.mpv_ctx);
             const ar_active = !std.mem.eql(u8, ar_text, "Auto");
             if (pickerIconChip(@src(), 700, icons.tvg.lucide.ratio, ar_text, ar_active, "Aspect ratio", .aspect)) {
-                open_picker = if (open_picker == .aspect) .none else .aspect;
+                togglePicker(.aspect);
             }
         }
 
@@ -1854,7 +1893,7 @@ pub fn renderLiquidGlassOverlay() void {
             const chp = currentChapterChipText(active_p.mpv_ctx, &chp_buf);
             if (chp.count > 1) {
                 if (pickerIconChip(@src(), 701, icons.tvg.lucide.bookmark, chp.text, true, "Chapters", .chapter)) {
-                    open_picker = if (open_picker == .chapter) .none else .chapter;
+                    togglePicker(.chapter);
                 }
             }
         }
@@ -1864,7 +1903,7 @@ pub fn renderLiquidGlassOverlay() void {
             var aud_buf: [32]u8 = undefined;
             const aud = currentTrackChipText(active_p.mpv_ctx, "audio", &aud_buf);
             if (pickerIconChip(@src(), 702, icons.tvg.lucide.music, aud.text, aud.active, "Audio track", .audio)) {
-                open_picker = if (open_picker == .audio) .none else .audio;
+                togglePicker(.audio);
             }
         }
 
@@ -1873,7 +1912,7 @@ pub fn renderLiquidGlassOverlay() void {
         if (fit.secondary_chips) {
             const dev_pinned = currentAudioDevicePinned(active_p.mpv_ctx);
             if (pickerIconChip(@src(), 708, icons.tvg.lucide.speaker, "", dev_pinned, "Audio output device", .audio_device)) {
-                open_picker = if (open_picker == .audio_device) .none else .audio_device;
+                togglePicker(.audio_device);
             }
         }
 
@@ -1882,7 +1921,7 @@ pub fn renderLiquidGlassOverlay() void {
             var sub_buf: [32]u8 = undefined;
             const sub = currentTrackChipText(active_p.mpv_ctx, "sub", &sub_buf);
             if (pickerIconChip(@src(), 703, icons.tvg.lucide.captions, sub.text, sub.active, "Subtitle track", .sub)) {
-                open_picker = if (open_picker == .sub) .none else .sub;
+                togglePicker(.sub);
             }
         }
 
@@ -1891,7 +1930,7 @@ pub fn renderLiquidGlassOverlay() void {
             const cur_lang = state.app.sub_lang_buf[0..state.app.sub_lang_len];
             const chip = if (cur_lang.len > 0) cur_lang else "eng";
             if (pickerIconChip(@src(), 704, icons.tvg.lucide.globe, chip, cur_lang.len > 0, "Subtitle search language", .lang)) {
-                open_picker = if (open_picker == .lang) .none else .lang;
+                togglePicker(.lang);
             }
         }
 
@@ -1914,10 +1953,10 @@ pub fn renderLiquidGlassOverlay() void {
             // it. It used to only ever open, so the chip could not dismiss what it
             // had opened (harmless with a modal scrim to click through; not with a
             // backdrop-less drop-up).
-            state.app.sub_picker_open = !state.app.sub_picker_open;
-            if (state.app.sub_picker_open) {
-                // Only one panel at a time.
-                open_picker = .none;
+            const opening = !state.app.sub_picker_open;
+            closePickers();
+            if (opening) {
+                state.app.sub_picker_open = true;
                 @import("../player/subtitles.zig").searchFromActivePlayer(&state.app.sub_engine);
                 if (state.app.opensub_api_key_len > 0) {
                     const subs = @import("../services/subtitles.zig");
@@ -1933,7 +1972,7 @@ pub fn renderLiquidGlassOverlay() void {
                 var f_buf: [16]u8 = undefined;
                 const f_chip = std.fmt.bufPrint(&f_buf, "{d}", .{file_count}) catch "";
                 if (pickerIconChip(@src(), 706, icons.tvg.lucide.list, f_chip, true, "Files in torrent", .playlist)) {
-                    open_picker = if (open_picker == .playlist) .none else .playlist;
+                    togglePicker(.playlist);
                 }
             }
         }
@@ -2081,6 +2120,7 @@ pub fn renderLiquidGlassOverlay() void {
                         @import("../core/logs.zig").pushLog("warn", "torrent", "Delete file failed", true);
                     };
                 }
+                @import("../services/torrent_intents.zig").forgetTorrent(tid);
                 c.mpv.torrent_remove(state.torrentSession(), tid);
                 // STABLE-SLOT model: torrent ids are never renumbered on remove,
                 // so other handles stay valid — only clear players on this one.
@@ -2122,8 +2162,6 @@ pub fn renderLiquidGlassOverlay() void {
     }
 
     // ── Floating popovers (rendered last — they're free-positioned) ──
-    // Esc dismisses whichever drop-up is open (there is no backdrop to catch it).
-    pickers.handleDropUpKeys();
     pickers.renderChapterPickerPopover(active_p);
     pickers.renderAspectPickerPopover(active_p);
     pickers.renderTrackPickerPopover(active_p, "audio", .audio);
@@ -2560,7 +2598,7 @@ pub fn renderResumePrompt() void {
 
     // Fade in like the toast — the banner is the first thing a returning user
     // sees; popping in fully formed read as a glitch.
-    var prompt_fade = dvui.animate(@src(), .{ .kind = .alpha, .duration = theme.motion.base, .easing = theme.motion.enter }, .{ .expand = .both });
+    var prompt_fade = dvui.animate(@src(), .{ .kind = .alpha, .duration = theme.motionDuration(theme.motion.base), .easing = theme.motion.enter }, .{ .expand = .both });
     defer prompt_fade.deinit();
 
     var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -2667,7 +2705,7 @@ pub fn renderToast() void {
     // toast gets a fresh widget id → firstFrame true → the fade re-triggers
     // (AnimateWidget only auto-starts on the first frame of a given id). Using a
     // counter (not toast_expire) means back-to-back toasts still each fade in.
-    var toast_fade = dvui.animate(@src(), .{ .kind = .alpha, .duration = theme.motion.base, .easing = theme.motion.enter }, .{
+    var toast_fade = dvui.animate(@src(), .{ .kind = .alpha, .duration = theme.motionDuration(theme.motion.base), .easing = theme.motion.enter }, .{
         .id_extra = @as(usize, @truncate(state.app.toast_seq)),
         .expand = .both,
     });
@@ -2677,7 +2715,7 @@ pub fn renderToast() void {
     // Self-drive repaints through the fade (and request the expiry frame) so
     // the exit animates even when nothing else refreshes the UI.
     const remaining_ms = state.app.toast_expire - now;
-    const fade_out_ms: i64 = @divTrunc(theme.motion.base, 1000);
+    const fade_out_ms: i64 = @divTrunc(theme.motionDuration(theme.motion.base), 1000);
     if (remaining_ms <= fade_out_ms) {
         const t: f32 = @as(f32, @floatFromInt(remaining_ms)) / @as(f32, @floatFromInt(fade_out_ms));
         const prev = dvui.alpha(theme.motion.exit(std.math.clamp(t, 0.0, 1.0)));

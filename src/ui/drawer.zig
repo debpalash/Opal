@@ -194,7 +194,7 @@ pub fn renderDrawer() void {
     }
     // Fade the drawer in on open — the largest chrome transition in the app
     // was an instant 560px pop while routes and toasts animate.
-    var open_fade = dvui.animate(@src(), .{ .kind = .alpha, .duration = theme.motion.base, .easing = theme.motion.enter }, .{
+    var open_fade = dvui.animate(@src(), .{ .kind = .alpha, .duration = theme.motionDuration(theme.motion.base), .easing = theme.motion.enter }, .{
         .id_extra = drawer_open_seq,
         .expand = .vertical,
     });
@@ -795,6 +795,27 @@ fn renderLogsContent() void {
         }
         components.tip(@src(), filter_wd, if (logs.show_only_errors) "Showing errors only — click for all logs" else "Showing all logs — click for errors only");
 
+        var copy_wd: dvui.WidgetData = undefined;
+        if (dvui.buttonIcon(@src(), "Copy diagnostics", icons.tvg.lucide.copy, .{}, .{}, .{
+            .data_out = &copy_wd,
+            .color_fill = TRANSPARENT,
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_text = theme.colors.text_secondary,
+            .corner_radius = RADIUS_SM,
+            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+            .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
+            .gravity_y = 0.5,
+        })) {
+            if (logs.diagnosticsSnapshot(logs.logs_allocator)) |snapshot| {
+                defer logs.logs_allocator.free(snapshot);
+                dvui.clipboardTextSet(snapshot);
+                state.showToast("Diagnostics copied — sensitive values redacted");
+            } else |_| {
+                state.showToastTyped("Couldn't copy diagnostics", .warning);
+            }
+        }
+        components.tip(@src(), copy_wd, "Copy recent redacted diagnostics");
+
         // Clear — two-step arm (was an unlabeled trash icon that wiped the
         // console in one click, with no tooltip either).
         if (components.confirmDangerButton(@src(), "Clear", 0)) {
@@ -808,6 +829,10 @@ fn renderLogsContent() void {
     var inner = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs } });
     defer inner.deinit();
 
+    // Keep count, empty-state decision and all entry reads under the same lock.
+    // A worker may append or evict while this route is visible.
+    logs.lockRead();
+    defer logs.unlockRead();
     const count = logs.logCount();
     if (count == 0) {
         components.emptyState(icons.tvg.lucide.@"scroll-text", "No logs yet", "App activity will appear here");
@@ -823,8 +848,6 @@ fn renderLogsContent() void {
     // most expensive page in the app while mostly drawing rows outside the
     // scroll viewport.
     const MAX_RENDER: usize = 200;
-    logs.lockRead();
-    defer logs.unlockRead();
     const snap = logs.logCount();
 
     // Compact the FILTERED stream: collapse CONSECUTIVE identical lines (same

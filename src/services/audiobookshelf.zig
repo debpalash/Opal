@@ -46,10 +46,6 @@ var resume_item_id_len: usize = 0;
 // resume_item_id — the fetch worker is the only reader).
 var resume_title: [200]u8 = undefined;
 var resume_title_len: usize = 0;
-var resume_cover: [256]u8 = undefined;
-var resume_cover_len: usize = 0;
-var resume_stream_url: [512]u8 = undefined;
-var resume_stream_url_len: usize = 0;
 
 // ── Infinite-scroll pagination (Books view) ──
 // ABS `/api/libraries/{id}/items` pages are 0-based; `current_page` is the
@@ -118,6 +114,8 @@ pub fn authenticate() void {
             @memcpy(&user_buf, &state.app.abs.login_user_buf);
             var pass_buf: [128]u8 = undefined;
             @memcpy(&pass_buf, &state.app.abs.login_pass_buf);
+            @memset(&state.app.abs.login_pass_buf, 0);
+            defer @memset(&pass_buf, 0);
 
             if (server.len == 0) {
                 setLoginError("Server URL is empty");
@@ -145,13 +143,21 @@ pub fn authenticate() void {
             const url = std.fmt.bufPrint(&url_buf, "{s}/login", .{server}) catch return;
 
             var resp_buf: [32768]u8 = undefined;
+            var response_status: ?std.http.Status = null;
             const resp = http.fetch(url, &resp_buf, .{
                 .method = .POST,
                 .payload = body,
                 .content_type = "application/json",
                 .timeout_secs = 10,
+                .status_out = &response_status,
             }) orelse {
-                setLoginError("Failed to connect or no response");
+                if (response_status) |status| {
+                    if (pure.authRejected(@intFromEnum(status))) {
+                        setLoginError("Sign-in rejected — check credentials");
+                        return;
+                    }
+                }
+                setLoginError("Server unavailable — check address and network");
                 return;
             };
 
@@ -394,25 +400,69 @@ pub fn playBook(idx: usize) void {
     const rlen = @min(idlen, resume_item_id.len);
     @memcpy(resume_item_id[0..rlen], id_buf[0..rlen]);
     resume_item_id_len = rlen;
-    // Display snapshot the fetch worker mirrors into library_items. A stream URL
-    // too long for the deep_link column is stored as empty rather than truncated
-    // (a half URL would resume nothing).
+    // Display snapshot for the unified library row. Only stable item identity
+    // is persisted; token-bearing stream/cover URLs stay in this call frame.
     const rt = @min(tlen, resume_title.len);
     @memcpy(resume_title[0..rt], title_buf[0..rt]);
     resume_title_len = rt;
-    const rc = @min(cover.len, resume_cover.len);
-    @memcpy(resume_cover[0..rc], cover[0..rc]);
-    resume_cover_len = rc;
-    if (url.len <= resume_stream_url.len) {
-        @memcpy(resume_stream_url[0..url.len], url);
-        resume_stream_url_len = url.len;
-    } else resume_stream_url_len = 0;
     resume_mutex.unlock();
     resume_decided.store(false, .release);
     resume_pending.store(true, .release);
     ResumeFetch.spawn();
 
-    @import("browser.zig").loadContentDirectMeta(url, cover, title_buf[0..tlen], author_buf[0..alen]);
+    var deep_buf: [128]u8 = undefined;
+    const deep = std.fmt.bufPrint(&deep_buf, "opal://audiobookshelf/{s}", .{id_buf[0..idlen]}) catch return;
+    @import("browser.zig").playDirect(.{
+        .url = url,
+        .history_identity = deep,
+        .restore_target = deep,
+        .art_url = cover,
+        .title = title_buf[0..tlen],
+        .subtitle = author_buf[0..alen],
+    });
+    logs.pushLog("info", "audiobookshelf", "Streaming audiobook", false);
+}
+
+/// Reopen a persisted audiobook by stable item id. The current token is added
+/// only at the playback edge and never enters the unified library database.
+pub fn playBookById(id: []const u8, title: []const u8, author: []const u8) void {
+    const server = state.app.abs.server_url[0..state.app.abs.server_url_len];
+    const token = state.app.abs.token[0..state.app.abs.token_len];
+    if (server.len == 0 or token.len == 0) {
+        state.showToast("Connect Audiobookshelf to resume");
+        return;
+    }
+    var url_buf: [1024]u8 = undefined;
+    const url = pure.streamUrl(server, id, token, &url_buf) orelse {
+        state.showToast("Cannot play this audiobook");
+        return;
+    };
+    var cover_buf: [1024]u8 = undefined;
+    const cover = pure.coverUrl(server, id, token, &cover_buf) orelse "";
+
+    resume_mutex.lock();
+    resume_target_secs = 0;
+    const rlen = @min(id.len, resume_item_id.len);
+    @memcpy(resume_item_id[0..rlen], id[0..rlen]);
+    resume_item_id_len = rlen;
+    const rt = @min(title.len, resume_title.len);
+    @memcpy(resume_title[0..rt], title[0..rt]);
+    resume_title_len = rt;
+    resume_mutex.unlock();
+    resume_decided.store(false, .release);
+    resume_pending.store(true, .release);
+    ResumeFetch.spawn();
+
+    var deep_buf: [128]u8 = undefined;
+    const deep = std.fmt.bufPrint(&deep_buf, "opal://audiobookshelf/{s}", .{id}) catch return;
+    @import("browser.zig").playDirect(.{
+        .url = url,
+        .history_identity = deep,
+        .restore_target = deep,
+        .art_url = cover,
+        .title = title,
+        .subtitle = author,
+    });
     logs.pushLog("info", "audiobookshelf", "Streaming audiobook", false);
 }
 
@@ -448,12 +498,6 @@ const ResumeFetch = struct {
         var title_local: [200]u8 = undefined;
         const tl = @min(resume_title_len, title_local.len);
         @memcpy(title_local[0..tl], resume_title[0..tl]);
-        var cover_local: [256]u8 = undefined;
-        const cl = @min(resume_cover_len, cover_local.len);
-        @memcpy(cover_local[0..cl], resume_cover[0..cl]);
-        var link_local: [512]u8 = undefined;
-        const ll = @min(resume_stream_url_len, link_local.len);
-        @memcpy(link_local[0..ll], resume_stream_url[0..ll]);
         resume_mutex.unlock();
         if (idl == 0 or !pure.validItemId(id_local[0..idl])) return;
 
@@ -475,16 +519,16 @@ const ResumeFetch = struct {
         // Done before the resume decision so a finished/near-zero book still
         // refreshes its row (library_pure decides what belongs on the rail).
         const info = pure.parseProgress(body);
-        if (ll > 0 and tl > 0) {
+        if (idl > 0 and tl > 0) {
             @import("library_store.zig").upsertProgress(
                 "audiobook",
                 id_local[0..idl],
                 title_local[0..tl],
-                cover_local[0..cl],
+                "",
                 info.current_time orelse 0,
                 info.duration orelse 0,
                 "",
-                link_local[0..ll],
+                id_local[0..idl],
             );
         }
 
@@ -546,6 +590,7 @@ pub fn tick() void {
 /// Disconnect + clear session (keeps the server URL so reconnect is one field).
 pub fn disconnect() void {
     state.app.abs.connected = false;
+    @memset(&state.app.abs.token, 0);
     state.app.abs.token_len = 0;
     state.app.abs.library_count = 0;
     state.app.abs.book_count = 0;
@@ -564,15 +609,44 @@ fn absGet(url: []const u8) ?[]u8 {
 
     const resp_buf = alloc.alloc(u8, 512 * 1024) catch return null;
     defer alloc.free(resp_buf);
+    var response_status: ?std.http.Status = null;
     const resp = http.fetch(url, resp_buf, .{
         .timeout_secs = 15,
         .accept = "application/json",
         .auth_header = auth,
-    }) orelse return null;
+        .status_out = &response_status,
+    }) orelse {
+        if (response_status) |status| {
+            if (pure.authRejected(@intFromEnum(status))) expireAuthSession();
+        }
+        return null;
+    };
 
     const result = alloc.alloc(u8, resp.len) catch return null;
     @memcpy(result, resp);
     return result;
+}
+
+fn expireAuthSession() void {
+    parse_mutex.lock();
+    if (!state.app.abs.connected) {
+        parse_mutex.unlock();
+        return;
+    }
+    state.app.abs.connected = false;
+    @memset(&state.app.abs.token, 0);
+    state.app.abs.token_len = 0;
+    state.app.abs.library_count = 0;
+    state.app.abs.book_count = 0;
+    state.app.abs.view = .Libraries;
+    const message = "Session expired — sign in again";
+    @memcpy(state.app.abs.login_error[0..message.len], message);
+    state.app.abs.login_error_len = message.len;
+    current_page = 0;
+    more_available = false;
+    parse_mutex.unlock();
+    state.markConfigDirty();
+    state.wakeUi();
 }
 
 // ══════════════════════════════════════════════════════════

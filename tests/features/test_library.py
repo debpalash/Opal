@@ -73,7 +73,9 @@ def test_library_producers():
     checks["anime jump path"] = "pub fn jumpToAnime" in anime
     # home.zig's kind dispatch handles every producer kind above.
     for kind in producers:
-        checks[f"resume dispatch: {kind}"] = f'"{kind}"' in home
+        checks[f"resume dispatch: {kind}"] = (
+            "switch (library_pure.parseKind(kind))" in home and f'.{kind}' in home
+        )
     checks["dispatch calls novel opener"] = "openDeepLink(link)" in home
     checks["dispatch calls anime jump"] = "jumpToAnime(link)" in home
     # Comics + podcasts route through their own tested deep-link openers, not

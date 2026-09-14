@@ -143,7 +143,13 @@ fn classify(path: []const u8) Result {
 }
 
 fn scanDirectory(playlist: *m3u.M3UPlaylist, dir_path: []const u8) bool {
-    var dir = if (dir_path.len > 0 and dir_path[0] == '/')
+    // Absolute detection must cover Windows too: a dropped/CLI folder like
+    // `C:\Movies` or `C:/Movies` is absolute but starts with neither `/` nor
+    // `\`, and probing it relative to the CWD would fail the open and report
+    // an empty folder.
+    const absolute = dir_path.len > 0 and (dir_path[0] == '/' or dir_path[0] == '\\' or
+        (dir_path.len >= 3 and dir_path[1] == ':' and (dir_path[2] == '/' or dir_path[2] == '\\')));
+    var dir = if (absolute)
         io_global.openDirAbsolute(dir_path, .{ .iterate = true }) catch return false
     else
         io_global.cwdOpenDir(dir_path, .{ .iterate = true }) catch return false;
@@ -166,9 +172,13 @@ fn hasPlaylistExtension(path: []const u8) bool {
 }
 
 fn isMediaFile(name: []const u8) bool {
+    // Keep in sync with browser_pure.routeContent's mpv list: a folder full
+    // of .wmv files must not report "No media files found".
     const extensions = [_][]const u8{
-        ".mp4", ".mkv",  ".avi", ".webm", ".mov", ".flv",  ".ts",
-        ".mp3", ".flac", ".wav", ".ogg",  ".m4a", ".opus",
+        ".mp4", ".m4v",  ".mkv",  ".avi",  ".mov",  ".webm", ".flv", ".wmv",
+        ".mpg", ".mpeg", ".ts",   ".m2ts", ".mts",  ".vob",  ".3gp", ".ogv",
+        ".mp3", ".flac", ".wav",  ".ogg",  ".opus", ".oga",  ".aac", ".m4a",
+        ".mka", ".wma",  ".aiff",
     };
     for (extensions) |extension| {
         if (endsWithIgnoreCase(name, extension)) return true;

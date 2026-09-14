@@ -31,24 +31,32 @@ class FeatureHarnessTest(unittest.TestCase):
 
     def test_explicit_database_and_xdg_paths(self):
         with patch.dict(os.environ, {"OPAL_TEST_DB": "/tmp/fixture.db", "XDG_CONFIG_HOME": "/tmp/other"}):
-            self.assertEqual(harness.database_path(), "/tmp/fixture.db")
+            self.assertEqual(harness.database_path(), os.path.abspath("/tmp/fixture.db"))
         with patch.dict(os.environ, {"OPAL_TEST_DB": "", "XDG_CONFIG_HOME": "/tmp/fixture-config"}):
-            self.assertEqual(harness.database_path(), "/tmp/fixture-config/opal/opal.db")
+            self.assertEqual(harness.database_path(), os.path.join("/tmp/fixture-config", "opal", "opal.db"))
 
     def test_database_is_read_only_and_uri_path_is_escaped(self):
         with tempfile.TemporaryDirectory(prefix="opal-harness-") as root:
-            db_path = Path(root) / "fixture ?# library.db"
-            with sqlite3.connect(db_path) as db:
+            # `?` is a useful URI edge on POSIX but is not a legal Windows
+            # filename. Space + `#` still prove path-to-URI escaping on every OS.
+            db_path = Path(root) / "fixture # library.db"
+            db = sqlite3.connect(db_path)
+            try:
                 db.execute("CREATE TABLE marker(value TEXT)")
                 db.execute("INSERT INTO marker VALUES ('unchanged')")
+                db.commit()
+            finally:
+                db.close()
             with patch.object(harness, "DB_PATH", str(db_path)):
                 db = harness.get_db()
-                self.addCleanup(db.close)
-                self.assertEqual(db.execute("SELECT value FROM marker").fetchone(), ("unchanged",))
-                with self.assertRaises(sqlite3.OperationalError):
-                    db.execute("DELETE FROM marker")
-                with self.assertRaises(sqlite3.OperationalError):
-                    db.execute("CREATE TABLE injected(value TEXT)")
+                try:
+                    self.assertEqual(db.execute("SELECT value FROM marker").fetchone(), ("unchanged",))
+                    with self.assertRaises(sqlite3.OperationalError):
+                        db.execute("DELETE FROM marker")
+                    with self.assertRaises(sqlite3.OperationalError):
+                        db.execute("CREATE TABLE injected(value TEXT)")
+                finally:
+                    db.close()
 
     def test_missing_database_is_not_created(self):
         with tempfile.TemporaryDirectory(prefix="opal-harness-") as root:

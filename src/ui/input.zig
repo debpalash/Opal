@@ -24,7 +24,7 @@ fn closePlayerOrApp() void {
             if (p.source_url_len > 0) {
                 state.pushClosedUrl(p.source_url[0..p.source_url_len]);
             }
-            p.saveCurrentPosition();
+            p.saveCurrentPositionFinal();
             state.app.pending_remove_player_idx = @intCast(idx);
             state.showToast("Player closed (Ctrl+Shift+T to restore)");
         }
@@ -49,13 +49,10 @@ pub fn processGlobalInputs() void {
                 const footer = @import("footer.zig");
                 if (dvui.focusedWidgetId() != null) {
                     dvui.focusWidget(null, null, null);
-                } else if (state.app.sub_picker_open) {
-                    // Player modals peel before bigger surfaces: subtitle
-                    // dialog, then any open picker popover (audio/sub/
-                    // chapter/aspect/lang/playlist).
-                    state.app.sub_picker_open = false;
-                } else if (footer.open_picker != .none) {
-                    footer.open_picker = .none;
+                } else if (footer.pickerOpen()) {
+                    // Every footer popover shares one dismissal path, including
+                    // the separately stored online-subtitle finder.
+                    footer.closePickers();
                 } else if (state.app.fullscreen_player_idx != null) {
                     state.app.fullscreen_player_idx = null;
                 } else if (state.app.playlist_drawer_open) {
@@ -168,7 +165,7 @@ pub fn processGlobalInputs() void {
                 var restore_buf: [2048]u8 = undefined;
                 if (state.popClosedUrl(&restore_buf)) |url| {
                     const player = @import("../player/player.zig");
-                    if (player.MediaPlayer.init(@import("../core/alloc.zig").allocator)) |p| {
+                    if (player.acquire(@import("../core/alloc.zig").allocator)) |p| {
                         state.app.players.append(@import("../core/alloc.zig").allocator, p) catch {};
                         state.app.active_player_idx = state.app.players.items.len - 1;
 
@@ -290,13 +287,12 @@ pub fn processGlobalInputs() void {
                     // Z = Toggle video fill mode (fit / cover)
                     .z => {
                         state.app.video_fill_mode = if (state.app.video_fill_mode == .fit) .cover else .fit;
-                        // Apply panscan to all players
-                        const panscan_val = if (state.app.video_fill_mode == .cover) "1.0" else "0.0";
-                        for (state.app.players.items) |ap| {
-                            _ = c.mpv.mpv_set_option_string(ap.mpv_ctx, "panscan", panscan_val);
-                        }
+                        // The UI owns cover cropping because it knows the actual
+                        // cell viewport. Applying mpv panscan here as well would
+                        // crop twice and still would not remove DVUI letterboxing.
                         const mode_str = if (state.app.video_fill_mode == .cover) "Cover (crop fill)" else "Fit (letterbox)";
                         state.showToast(mode_str);
+                        state.markConfigDirty();
                         dvui.refresh(null, @src(), null);
                         continue;
                     },
@@ -327,6 +323,8 @@ pub fn processGlobalInputs() void {
 
                             var vis: c_int = 0;
                             const shown = c.mpv.mpv_get_property(ap.mpv_ctx, "sub-visibility", c.mpv.MPV_FORMAT_FLAG, &vis) >= 0 and vis != 0;
+                            state.app.subtitles_enabled = shown;
+                            state.markConfigDirty();
                             _ = c.mpv.mpv_command_string(ap.mpv_ctx, "show-text \"Subtitles: ${sub-visibility}\" 1500");
                             state.showToast(if (shown) "Subtitles on" else "Subtitles off");
                         }

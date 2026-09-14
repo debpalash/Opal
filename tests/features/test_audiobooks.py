@@ -61,9 +61,9 @@ def test_audiobookshelf():
         "browse sub-tab": ".Audiobooks," in shell or ".Audiobooks }" in shell,
 
         # ── Playback: stream URL → load_file → gotoPlayer (Now Playing card) ──
-        "play routes through load_file/gotoPlayer": (
+        "play routes through typed playback": (
             "pub fn playBook(" in svc
-            and "loadContentDirectMeta(" in svc),
+            and 'browser.zig").playDirect(.{' in svc),
         # loadContentDirectMeta is the shared audio path that load_file's the URL,
         # sets now-playing metadata, and calls state.gotoPlayer().
         "shared audio path calls gotoPlayer": "state.gotoPlayer();" in _src("src/services/browser.zig"),

@@ -44,7 +44,7 @@ def _zig_sources():
             if not fn.endswith(".zig"):
                 continue
             fp = _os.path.join(root, fn)
-            rel = _os.path.relpath(fp, PROJECT_DIR)
+            rel = _os.path.relpath(fp, PROJECT_DIR).replace(_os.sep, "/")
             out.append((rel, open(fp, encoding="utf-8", errors="replace").read()))
     return out
 
@@ -406,7 +406,8 @@ def test_no_tmp_in_feature_caches():
     for rel, text in _zig_sources():
         if any(rel.replace("\\", "/").endswith(e) for e in exempt):
             continue
-        for i, ln in enumerate(_strip_comments(text).splitlines(), 1):
+        production = text.split('\ntest "', 1)[0]
+        for i, ln in enumerate(_strip_comments(production).splitlines(), 1):
             if '"/tmp/' not in ln:
                 continue
             # `… catch "/tmp/x"` is a last-resort fallback for when the real
@@ -600,8 +601,8 @@ def test_ytdlp_verifies_execution():
         # Standing down is the point: getPath() going null is what makes
         # binary() fall through to a PATH lookup, which is what unblocked the
         # reporter when they installed yt-dlp themselves.
-        "disowns the bad binary": "is_ready = false" in body and "bin_path_len = 0" in body,
-        "clears the binary() cache": "resolved_done = false" in body,
+        "disowns the bad binary": "is_ready.store(false" in body and "bin_path_len = 0" in body,
+        "clears the binary() cache": "resolved_done.store(false" in body,
         "tells the user": 'logs.pushLog(' in body,
         # ~20s cold start on the macOS standalone build — never on the UI thread.
         "verification runs off-thread": "spawnLegacy(verifyWorker" in src,

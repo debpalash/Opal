@@ -451,8 +451,8 @@ pub fn start() void {
     server_thread = @import("../core/workers.zig").spawnLegacy(serverLoop, .{}) catch null;
 }
 
-/// Loopback-only companion listener, ALWAYS on, serving exactly one route:
-/// `/api/scrape`.
+/// Loopback-only companion listener, ALWAYS on, serving exactly two routes:
+/// `/api/scrape` and `/api/open`.
 ///
 /// The nova2 Python engines reach Opal's anti-detect browser over HTTP because
 /// they run in a child process. Hanging that on `start()` tied it to Settings ›
@@ -461,8 +461,14 @@ pub fn start() void {
 /// meant exposing the whole JSON API to the LAN. Two unrelated things behind one
 /// switch.
 ///
+/// `/api/open` is here for the same reason: single-instance forwarding
+/// (`opal <file>` handing its argument to the already-running window) must
+/// work out of the box. Gating it on Web Remote meant a double-clicked file
+/// opened a second window for everyone who never enabled the toggle.
+///
 /// This binds 127.0.0.1 only, so it is not reachable from the network no matter
-/// what the Web Remote toggle says, and it still requires the same bearer token.
+/// what the Web Remote toggle says, and both routes still require the same
+/// bearer token.
 pub var local_port: u16 = 41596;
 var local_running: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var local_thread: ?std.Thread = null;
@@ -530,9 +536,9 @@ fn localLoop() void {
     }
 }
 
-/// `/api/scrape` and nothing else. Deliberately NOT a second door into handleApi:
-/// this listener exists whether or not the user opted into the remote API, so its
-/// surface stays exactly one route.
+/// `/api/scrape` and `/api/open`, nothing else. Deliberately NOT a second door
+/// into handleApi: this listener exists whether or not the user opted into the
+/// remote API, so its surface stays exactly these two routes.
 fn handleLocalRequest(stream: std.Io.net.Stream) void {
     var buf: [4096]u8 = undefined;
     const request = remote_http.readRequest(stream, &buf) catch |err| {
@@ -552,7 +558,7 @@ fn handleLocalRequest(stream: std.Io.net.Stream) void {
     const path = path_parts.next() orelse return;
     const query = path_parts.next() orelse "";
 
-    if (!std.mem.eql(u8, path, "/api/scrape")) {
+    if (!std.mem.eql(u8, path, "/api/scrape") and !std.mem.eql(u8, path, "/api/open")) {
         const resp = "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nNot Found";
         _ = io_g.streamWriteAll(stream, resp) catch {};
         return;
@@ -565,6 +571,18 @@ fn handleLocalRequest(stream: std.Io.net.Stream) void {
         sendUnauthorized(stream);
         return;
     };
+    if (std.mem.eql(u8, path, "/api/open")) {
+        // Single-instance handoff from a second `opal <file>` launch. Same
+        // query shape as the main server's /api/open (path= alias url=, plus
+        // the extension's title=/art=/subtitle=), same UI-thread hand-off.
+        if (consumeExpensiveBudget(presented, principal, "/api/open", query)) |wait| {
+            sendRateLimit(stream, wait);
+            return;
+        }
+        handleOpenQuery(query);
+        sendJson(stream, "{\"ok\":true,\"action\":\"open\"}");
+        return;
+    }
     if (consumeExpensiveBudget(presented, principal, "/api/scrape", query)) |wait| {
         sendRateLimit(stream, wait);
         return;
@@ -1018,31 +1036,64 @@ fn handleRequest(stream: std.Io.net.Stream, client_key: u64) !void {
 }
 
 /// Stash a URL + optional type/metadata for the UI thread to open. Backs both
-/// /api/open and /api/ingest (browser extension): the UI thread consumes this
-/// once, routing by `kind` (queue vs play) and, when meta is present, showing a
+/// /api/open and /api/ingest (browser extension): the UI thread drains the
+/// FIFO, routing by `kind` (queue vs play) and, when meta is present, showing a
 /// proper now-playing card via browser.loadContentDirectMeta. All strings must
 /// already be percent-decoded. Empty `url` is a no-op. Wakes the idle UI loop.
+///
+/// A bounded FIFO (not a single slot): rapid successive opens — several
+/// double-clicked files each forwarded by their own second instance, or a
+/// multi-file CLI launch — must not collapse into just the last one. When full
+/// the newest request is dropped with a log rather than evicting an older,
+/// not-yet-played open.
 fn stashRemoteOpen(url: []const u8, kind: []const u8, title: []const u8, art: []const u8, subtitle: []const u8) void {
     if (url.len == 0) return;
+    // Trigger-to-play T0 for forwarded opens. Arm only when free so rapid
+    // successive opens attribute to the first intent, not the last stash.
+    if (!player.openTriggerArmed()) player.openTriggerNow();
     state.app.remote_open_lock.lock();
     defer state.app.remote_open_lock.unlock();
-    const n = @min(url.len, state.app.remote_open_path.len);
-    @memcpy(state.app.remote_open_path[0..n], url[0..n]);
-    state.app.remote_open_len = n;
-    const kn = @min(kind.len, state.app.remote_open_type.len);
-    @memcpy(state.app.remote_open_type[0..kn], kind[0..kn]);
-    state.app.remote_open_type_len = kn;
-    const tn = @min(title.len, state.app.remote_open_title.len);
-    @memcpy(state.app.remote_open_title[0..tn], title[0..tn]);
-    state.app.remote_open_title_len = tn;
-    const an = @min(art.len, state.app.remote_open_art.len);
-    @memcpy(state.app.remote_open_art[0..an], art[0..an]);
-    state.app.remote_open_art_len = an;
-    const sn = @min(subtitle.len, state.app.remote_open_subtitle.len);
-    @memcpy(state.app.remote_open_subtitle[0..sn], subtitle[0..sn]);
-    state.app.remote_open_subtitle_len = sn;
+    if (state.app.remote_open_count >= state.REMOTE_OPEN_QUEUE_CAP) {
+        logs.pushLog("warn", "open", "Remote open queue full — dropping newest request", false);
+        return;
+    }
+    const slot = &state.app.remote_open_queue[(state.app.remote_open_head + state.app.remote_open_count) % state.REMOTE_OPEN_QUEUE_CAP];
+    const n = @min(url.len, slot.path.len);
+    @memcpy(slot.path[0..n], url[0..n]);
+    slot.path_len = n;
+    const kn = @min(kind.len, slot.kind.len);
+    @memcpy(slot.kind[0..kn], kind[0..kn]);
+    slot.kind_len = kn;
+    const tn = @min(title.len, slot.title.len);
+    @memcpy(slot.title[0..tn], title[0..tn]);
+    slot.title_len = tn;
+    const an = @min(art.len, slot.art.len);
+    @memcpy(slot.art[0..an], art[0..an]);
+    slot.art_len = an;
+    const sn = @min(subtitle.len, slot.subtitle.len);
+    @memcpy(slot.subtitle[0..sn], subtitle[0..sn]);
+    slot.subtitle_len = sn;
+    state.app.remote_open_count += 1;
     state.app.remote_open_ready.store(true, .release);
     state.wakeUi(); // idle UI loop won't run a frame otherwise
+}
+
+/// Shared `/api/open` query handling for the main server and the always-on
+/// loopback listener. Accepts `path` (single-instance forwarder, web UI) as an
+/// alias for `url` (browser extension), plus the extension's optional
+/// title=/art=/subtitle= rich metadata. Stashes kind "media" for the UI thread.
+fn handleOpenQuery(query: []const u8) void {
+    if (getQueryParam(query, "path") orelse getQueryParam(query, "url")) |raw| {
+        var dec_buf: [2048]u8 = undefined;
+        const decoded = urlDecode(raw, &dec_buf) orelse raw;
+        var title_buf: [512]u8 = undefined;
+        const title = if (getQueryParam(query, "title")) |t| (urlDecode(t, &title_buf) orelse "") else "";
+        var art_buf: [1024]u8 = undefined;
+        const art = if (getQueryParam(query, "art")) |a| (urlDecode(a, &art_buf) orelse "") else "";
+        var sub_buf: [256]u8 = undefined;
+        const subtitle = if (getQueryParam(query, "subtitle")) |s| (urlDecode(s, &sub_buf) orelse "") else "";
+        stashRemoteOpen(decoded, "media", title, art, subtitle);
+    }
 }
 
 fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8, request: []const u8) void {
@@ -1280,20 +1331,11 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
     if (std.mem.eql(u8, api_path, "/open")) {
         // Accept `url` as an alias for `path`: the browser extension (and this
         // endpoint's documented shape) POST /api/open?url=<enc>, while the web
-        // UI uses ?path=. Both route through the same UI-thread hand-off.
+        // UI and the single-instance forwarder use ?path=. Both route through
+        // the same UI-thread hand-off.
         // Optional `title`/`art`/`subtitle` (browser extension rich-metadata
         // send) render a proper now-playing card instead of a bare URL.
-        if (getQueryParam(query, "path") orelse getQueryParam(query, "url")) |raw| {
-            var dec_buf: [2048]u8 = undefined;
-            const decoded = urlDecode(raw, &dec_buf) orelse raw;
-            var title_buf: [512]u8 = undefined;
-            const title = if (getQueryParam(query, "title")) |t| (urlDecode(t, &title_buf) orelse "") else "";
-            var art_buf: [1024]u8 = undefined;
-            const art = if (getQueryParam(query, "art")) |a| (urlDecode(a, &art_buf) orelse "") else "";
-            var sub_buf: [256]u8 = undefined;
-            const subtitle = if (getQueryParam(query, "subtitle")) |s| (urlDecode(s, &sub_buf) orelse "") else "";
-            stashRemoteOpen(decoded, "media", title, art, subtitle);
-        }
+        handleOpenQuery(query);
         sendJson(stream, "{\"ok\":true,\"action\":\"open\"}");
         return;
     }
@@ -1474,8 +1516,8 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
         apiPartyCast(stream, api_path, query);
         return;
     }
-    // Queue browsing and non-play mutations remain useful before a player
-    // exists. Playback itself takes players_mutex inside apiQueueAction.
+    // Queue browsing remains useful before a player exists. Mutations are
+    // staged by stable identity and applied by the UI-thread queue drain.
     if (std.mem.eql(u8, api_path, "/queue")) {
         if (!requireMethod(stream, method, "GET")) return;
         apiQueueSnapshot(stream);
@@ -2331,7 +2373,10 @@ fn apiLiveTv(stream: std.Io.net.Stream, query: []const u8) void {
 fn apiHistory(stream: std.Io.net.Stream) void {
     var json_buf: [16384]u8 = undefined;
     var w = std.Io.Writer.fixed(&json_buf);
-    w.writeAll("{\"items\":[") catch return;
+    w.print("{{\"shuffle\":{s},\"repeat\":\"{s}\",\"items\":[", .{
+        if (state.app.playlist_shuffle) "true" else "false",
+        @tagName(state.app.playlist_repeat),
+    }) catch return;
     var hi: usize = 0;
     while (hi < state.app.search_history_count) : (hi += 1) {
         const q = state.app.search_history_buf[hi][0..state.app.search_history_len[hi]];
@@ -4522,6 +4567,10 @@ fn apiUnifiedSearch(stream: std.Io.net.Stream, query: []const u8) void {
 
 fn apiQueueSnapshot(stream: std.Io.net.Stream) void {
     const q = @import("queue.zig");
+    if (!q.isReady()) {
+        sendJsonStatus(stream, "503 Service Unavailable", "{\"error\":\"queue is starting\"}");
+        return;
+    }
     const alloc = @import("../core/alloc.zig").allocator;
     // 200 items × a 2KB URL can exceed 400KB. Heap allocation avoids both
     // truncating the queue and blowing the 64KB connection-thread stack.
@@ -4530,10 +4579,15 @@ fn apiQueueSnapshot(stream: std.Io.net.Stream) void {
         return;
     };
     defer alloc.free(out);
+    const snapshot = alloc.alloc(q.QueueItem, q.MAX_QUEUE) catch {
+        sendJsonStatus(stream, "503 Service Unavailable", "{\"error\":\"queue unavailable\"}");
+        return;
+    };
+    defer alloc.free(snapshot);
     var w = std.Io.Writer.fixed(out);
     w.writeAll("{\"items\":[") catch return;
-    const count = @min(q.queue_count, q.queue_items.len);
-    for (q.queue_items[0..count], 0..) |*item, i| {
+    const count = q.snapshotItems(snapshot);
+    for (snapshot[0..count], 0..) |*item, i| {
         if (i > 0) w.writeAll(",") catch return;
         w.print("{{\"id\":{d},\"played\":{s},\"duration\":{d},\"added_at\":{d},\"title\":\"", .{
             item.id,
@@ -4554,6 +4608,10 @@ fn apiQueueSnapshot(stream: std.Io.net.Stream) void {
 
 fn apiQueueAction(stream: std.Io.net.Stream, query: []const u8) void {
     const q = @import("queue.zig");
+    if (!q.isReady()) {
+        sendJsonStatus(stream, "503 Service Unavailable", "{\"error\":\"queue is starting\"}");
+        return;
+    }
     const action_name = getQueryParam(query, "action") orelse {
         sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"queue action required\"}");
         return;
@@ -4568,8 +4626,18 @@ fn apiQueueAction(stream: std.Io.net.Stream, query: []const u8) void {
             return;
         }
     }
-    if (action == .clear or action == .@"clear-played") {
-        _ = q.apply(action, null);
+    if (action == .clear or action == .@"clear-played" or
+        action == .previous or action == .next or
+        action == .@"toggle-shuffle" or action == .@"cycle-repeat")
+    {
+        const request_id = q.requestAction(action, null) orelse {
+            sendJsonStatus(stream, "503 Service Unavailable", "{\"error\":\"queue busy\"}");
+            return;
+        };
+        if (!q.waitAction(request_id, 250)) {
+            sendJsonStatus(stream, "202 Accepted", "{\"ok\":true,\"pending\":true}");
+            return;
+        }
         sendJson(stream, "{\"ok\":true}");
         return;
     }
@@ -4578,20 +4646,14 @@ fn apiQueueAction(stream: std.Io.net.Stream, query: []const u8) void {
         sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"queue index required\"}");
         return;
     };
-    if (idx >= q.queue_count) {
-        sendJsonStatus(stream, "404 Not Found", "{\"error\":\"queue item not found\"}");
+    const request_id = q.requestAction(action, idx) orelse {
+        sendJsonStatus(stream, "404 Not Found", "{\"error\":\"queue item not found or busy\"}");
+        return;
+    };
+    if (!q.waitAction(request_id, 250)) {
+        sendJsonStatus(stream, "202 Accepted", "{\"ok\":true,\"pending\":true}");
         return;
     }
-    const lock_players = action == .play;
-    if (lock_players) state.players_mutex.lock();
-    if (lock_players and state.app.active_player_idx >= state.app.players.items.len) {
-        state.players_mutex.unlock();
-        sendJsonStatus(stream, "409 Conflict", "{\"error\":\"no player\"}");
-        return;
-    }
-    _ = q.apply(action, idx);
-    if (lock_players) state.players_mutex.unlock();
-    state.wakeUi();
     sendJson(stream, "{\"ok\":true}");
 }
 

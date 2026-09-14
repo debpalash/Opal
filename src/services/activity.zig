@@ -264,10 +264,13 @@ pub fn onPlay(path: []const u8) void {
     if (!enabled()) return;
     settlePrevious();
     if (path.len == 0 or isLocalNoise(path)) return;
-    const title = taste_pure.deriveTitle(path);
+    var safe_buf: [MAX_KEY]u8 = undefined;
+    const safe = @import("../player/watch_history_pure.zig").persistedTarget(path, &safe_buf).identity;
+    if (safe.len == 0) return;
+    const title = taste_pure.deriveTitle(safe);
     if (title.len == 0) return;
-    setCurrent(path, title);
-    record(.play, title, .{ .key = path });
+    setCurrent(safe, title);
+    record(.play, title, .{ .key = safe });
 }
 
 /// Chokepoint: periodic position saves (history.savePlaybackPosition and
@@ -276,15 +279,18 @@ pub fn onPlay(path: []const u8) void {
 pub fn onProgress(key: []const u8, percent: f64) void {
     if (!enabled()) return;
     if (key.len == 0 or !std.math.isFinite(percent)) return;
-    if (!sameAsCurrent(key)) {
+    var safe_buf: [MAX_KEY]u8 = undefined;
+    const safe = @import("../player/watch_history_pure.zig").persistedTarget(key, &safe_buf).identity;
+    if (safe.len == 0) return;
+    if (!sameAsCurrent(safe)) {
         settlePrevious();
-        if (isLocalNoise(key)) return;
-        const title = taste_pure.deriveTitle(key);
+        if (isLocalNoise(safe)) return;
+        const title = taste_pure.deriveTitle(safe);
         if (title.len == 0) return;
-        setCurrent(key, title);
+        setCurrent(safe, title);
         // A torrent's proxy-URL play was skipped as local noise — its first
         // named progress report is the real "play" signal.
-        record(.play, title, .{ .key = key });
+        record(.play, title, .{ .key = safe });
     }
     if (percent > cur_percent) cur_percent = percent;
     if (!cur_finished and cur_percent >= FINISH_PCT) {

@@ -339,7 +339,7 @@ pub fn toggleRow(
             dvui.animation(pid, "knob", .{
                 .start_val = from,
                 .end_val = target,
-                .end_time = theme.motion.fast,
+                .end_time = theme.motionDuration(theme.motion.fast),
                 .easing = theme.motion.move,
             });
         }
@@ -463,6 +463,32 @@ pub fn iconButtonEx(
     active: bool,
     enabled: bool,
 ) bool {
+    return iconButtonExColors(src, icon, tooltip, active, enabled, tk.bg_elevated(), tk.bg_hover(), tk.bg_elevated());
+}
+
+/// Player chrome variant: active state is expressed by the accent glyph alone.
+/// Its resting surface is completely clear and hover/press feedback retains
+/// only a low-opacity tint over the moving picture.
+pub fn iconButtonOverlay(
+    src: std.builtin.SourceLocation,
+    icon: []const u8,
+    tooltip: []const u8,
+    active: bool,
+    enabled: bool,
+) bool {
+    return iconButtonExColors(src, icon, tooltip, active, enabled, theme.transparent, theme.playerGlass(42), theme.playerGlass(64));
+}
+
+fn iconButtonExColors(
+    src: std.builtin.SourceLocation,
+    icon: []const u8,
+    tooltip: []const u8,
+    active: bool,
+    enabled: bool,
+    active_fill: dvui.Color,
+    hover_fill: dvui.Color,
+    press_fill: dvui.Color,
+) bool {
     if (!enabled) {
         // Same geometry as the live button (ButtonWidget default margin 4 +
         // our padding 6 + 20px glyph) so layouts don't shift when state flips.
@@ -483,9 +509,9 @@ pub fn iconButtonEx(
     // transparent-fill button in the app had ZERO pointer feedback.
     const clicked = dvui.buttonIcon(src, "iconButton", icon, .{}, .{}, .{
         .data_out = &wd,
-        .color_fill = if (active) tk.bg_elevated() else theme.transparent,
-        .color_fill_hover = tk.bg_hover(),
-        .color_fill_press = tk.bg_elevated(),
+        .color_fill = if (active) active_fill else theme.transparent,
+        .color_fill_hover = hover_fill,
+        .color_fill_press = press_fill,
         .color_text = if (active) tk.accent_primary() else tk.text_secondary(),
         .border = dvui.Rect.all(0),
         .corner_radius = tk.rad_sm,
@@ -558,12 +584,17 @@ pub fn listItem(
         dvui.icon(@src(), "li", ic, .{}, .{
             .id_extra = id_extra,
             .color_text = tk.text_secondary(),
-            .min_size_content = .{ .w = 16, .h = 16 }, .max_size_content = .{ .w = 16, .h = 16 },
-            .gravity_y = 0.5, .margin = .{ .x = 0, .y = 0, .w = tk.sp_sm, .h = 0 },
+            .min_size_content = .{ .w = 16, .h = 16 },
+            .max_size_content = .{ .w = 16, .h = 16 },
+            .gravity_y = 0.5,
+            .margin = .{ .x = 0, .y = 0, .w = tk.sp_sm, .h = 0 },
         });
     }
     _ = dvui.label(@src(), "{s}", .{label}, .{ .id_extra = id_extra, .gravity_y = 0.5, .color_text = tk.text_primary(), .font = fontAt(tk.fs_body) });
-    { var s = dvui.box(@src(), .{}, .{ .id_extra = id_extra, .expand = .horizontal }); s.deinit(); }
+    {
+        var s = dvui.box(@src(), .{}, .{ .id_extra = id_extra, .expand = .horizontal });
+        s.deinit();
+    }
     if (trailing.len > 0) {
         _ = dvui.label(@src(), "{s}", .{trailing}, .{ .id_extra = id_extra, .gravity_y = 0.5, .color_text = tk.text_tertiary(), .font = fontAt(tk.fs_small) });
     }

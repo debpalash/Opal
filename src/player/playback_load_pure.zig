@@ -24,15 +24,71 @@ pub const Mode = enum {
     }
 };
 
+/// Logical owner of a replace load. This prevents a direct file opened after a
+/// playlist/torrent/queue item from inheriting the previous owner's advance
+/// behavior while allowing resolver/recovery commits to retain it.
+pub const Origin = enum(u8) { direct, playlist, queue, torrent };
+
 pub const browser_user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " ++
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 pub const Request = struct {
     url: []const u8,
+    /// Optional second URL for the same logical item. The player tries this
+    /// exactly once only when the primary fails before FILE_LOADED. It shares
+    /// the request's identity, headers and resume point.
+    fallback_url: []const u8 = "",
     mode: Mode = .replace,
+    origin: Origin = .direct,
+    queue_item_id: i64 = -1,
+    /// Stable, credential-free identity used for progress and local memory.
+    /// Empty derives one from `url` at the player boundary.
+    history_identity: []const u8 = "",
+    /// Credential-free deep link that can reconstruct the live URL after a
+    /// restart. Empty keeps only public/local URLs restoreable.
+    restore_target: []const u8 = "",
+    /// Provider-authoritative resume point. Applied once after FILE_LOADED;
+    /// null lets ordinary local watch history decide.
+    resume_position_secs: ?f64 = null,
     user_agent: []const u8 = "",
     headers: []const HttpHeader = &.{},
+    /// Internal retry seam: already sanitized by buildHeaderFields on the
+    /// original request. Normal callers should pass `headers` instead.
+    prepared_header_fields: []const u8 = "",
+    /// Torrent's loopback proxy deliberately blocks until pieces arrive.
+    unbounded_network_read: bool = false,
 };
+
+test "replace loads default to direct ownership and no queue identity" {
+    const request: Request = .{ .url = "movie.mkv" };
+    try std.testing.expectEqual(Origin.direct, request.origin);
+    try std.testing.expectEqual(@as(i64, -1), request.queue_item_id);
+}
+
+pub fn shouldArmFallback(primary: []const u8, fallback: []const u8, mode: Mode) bool {
+    return mode == .replace and fallback.len > 0 and
+        !std.mem.eql(u8, primary, fallback);
+}
+
+test "fallback is replace-only and must differ from the primary" {
+    try std.testing.expect(shouldArmFallback("https://a/one", "https://a/two", .replace));
+    try std.testing.expect(!shouldArmFallback("https://a/one", "https://a/one", .replace));
+    try std.testing.expect(!shouldArmFallback("https://a/one", "", .replace));
+    try std.testing.expect(!shouldArmFallback("https://a/one", "https://a/two", .append));
+}
+
+pub fn saneResumePosition(value: ?f64) ?f64 {
+    const position = value orelse return null;
+    if (!std.math.isFinite(position) or position < 1 or position > 315_576_000) return null;
+    return position;
+}
+
+test "provider resume positions reject invalid and absurd values" {
+    try std.testing.expect(saneResumePosition(null) == null);
+    try std.testing.expect(saneResumePosition(std.math.nan(f64)) == null);
+    try std.testing.expect(saneResumePosition(-1) == null);
+    try std.testing.expectEqual(@as(f64, 123.5), saneResumePosition(123.5).?);
+}
 
 /// mpv 0.38.0 (client API 2.3) inserted an `<index>` argument into `loadfile`
 /// between `<flags>` and `<options>`. Passing five arguments to an older
@@ -66,7 +122,45 @@ test "loadfile index argument only on mpv 0.38+ (client API 2.3+)" {
 pub const FileOptions = struct {
     user_agent: []const u8,
     header_fields: []const u8,
+    cache_pause_initial: [:0]const u8,
+    network_timeout: [:0]const u8,
 };
+
+/// Begin ordinary local and network playback as soon as the demuxer has a
+/// frame. The initial cache gate remains only for Opal's torrent proxy: that
+/// endpoint can block while pieces arrive and needs the protected runway.
+/// mpv's normal cache-pause still handles a later network underrun.
+pub fn cachePauseInitial(url: []const u8, unbounded_read: bool) [:0]const u8 {
+    _ = url;
+    return if (unbounded_read) "yes" else "no";
+}
+
+pub fn networkTimeout(unbounded_read: bool) [:0]const u8 {
+    return if (unbounded_read) "0" else "15";
+}
+
+pub fn effectiveUserAgent(request: Request) []const u8 {
+    if (request.user_agent.len > 0) return request.user_agent;
+    if (request.headers.len > 0 or request.prepared_header_fields.len > 0) return browser_user_agent;
+    return "libmpv";
+}
+
+pub fn resolvedHeaderFields(request: Request, out: []u8) []const u8 {
+    if (request.prepared_header_fields.len > 0) {
+        const prepared = request.prepared_header_fields;
+        if (prepared.len > out.len or std.mem.indexOfAny(u8, prepared, "\r\n\x00") != null) return "";
+        @memcpy(out[0..prepared.len], prepared);
+        return out[0..prepared.len];
+    }
+    return http_headers.buildHeaderFields(request.headers, out);
+}
+
+test "local media bypasses initial cache gate" {
+    try std.testing.expectEqualStrings("no", cachePauseInitial("D:\\Media\\movie.mkv", false));
+    try std.testing.expectEqualStrings("no", cachePauseInitial("FILE:///D:/Media/movie.mkv", false));
+    try std.testing.expectEqualStrings("no", cachePauseInitial("https://cdn.example/movie.mkv", false));
+    try std.testing.expectEqualStrings("yes", cachePauseInitial("http://127.0.0.1/torrent", true));
+}
 
 /// Send one request to a command sink.  The sink interface is deliberately
 /// tiny: `setOption(name, value)` and `loadFile(url, mode, file_options)`.
@@ -85,18 +179,14 @@ pub fn dispatch(sink: anytype, request: Request) bool {
     // Header-gated hosts historically received a browser UA when the caller
     // supplied only Referer/Origin.  Preserve that behavior without allowing a
     // prior request's custom UA to become the implicit default.
-    const effective_ua = if (request.user_agent.len > 0)
-        request.user_agent
-    else if (request.headers.len > 0)
-        browser_user_agent
-    else
-        "";
     var joined: [2048]u8 = undefined;
-    const fields = http_headers.buildHeaderFields(request.headers, &joined);
+    const fields = resolvedHeaderFields(request, &joined);
 
     sink.loadFile(request.url, request.mode, .{
-        .user_agent = if (effective_ua.len > 0) effective_ua else "libmpv",
+        .user_agent = effectiveUserAgent(request),
         .header_fields = fields,
+        .cache_pause_initial = cachePauseInitial(request.url, request.unbounded_network_read),
+        .network_timeout = networkTimeout(request.unbounded_network_read),
     });
     return true;
 }
@@ -114,6 +204,8 @@ const FakeEvent = struct {
     user_agent_len: usize = 0,
     header_fields: [256]u8 = undefined,
     header_fields_len: usize = 0,
+    network_timeout: [8]u8 = undefined,
+    network_timeout_len: usize = 0,
 
     fn nameSlice(self: *const FakeEvent) []const u8 {
         return self.name[0..self.name_len];
@@ -129,6 +221,10 @@ const FakeEvent = struct {
 
     fn headerFieldsSlice(self: *const FakeEvent) []const u8 {
         return self.header_fields[0..self.header_fields_len];
+    }
+
+    fn networkTimeoutSlice(self: *const FakeEvent) []const u8 {
+        return self.network_timeout[0..self.network_timeout_len];
     }
 };
 
@@ -154,6 +250,8 @@ const FakeSink = struct {
         @memcpy(event.user_agent[0..event.user_agent_len], options.user_agent[0..event.user_agent_len]);
         event.header_fields_len = @min(options.header_fields.len, event.header_fields.len);
         @memcpy(event.header_fields[0..event.header_fields_len], options.header_fields[0..event.header_fields_len]);
+        event.network_timeout_len = @min(options.network_timeout.len, event.network_timeout.len);
+        @memcpy(event.network_timeout[0..event.network_timeout_len], options.network_timeout[0..event.network_timeout_len]);
         self.events[self.len] = event;
         self.len += 1;
     }
@@ -255,4 +353,35 @@ test "headers without an explicit UA receive a fresh browser UA" {
 
     try std.testing.expectEqualStrings(browser_user_agent, sink.events[2].userAgentSlice());
     try std.testing.expectEqualStrings("Referer: https://embed.example/", sink.events[2].headerFieldsSlice());
+}
+
+test "only an explicitly blocking proxy receives an infinite read timeout" {
+    var sink: FakeSink = .{};
+    try std.testing.expect(dispatch(&sink, .{ .url = "https://www.youtube.com/watch?v=x" }));
+    try std.testing.expectEqualStrings("15", sink.events[2].networkTimeoutSlice());
+
+    sink.len = 0;
+    try std.testing.expect(dispatch(&sink, .{
+        .url = "http://127.0.0.1:49152/stream/token",
+        .unbounded_network_read = true,
+    }));
+    try std.testing.expectEqualStrings("0", sink.events[2].networkTimeoutSlice());
+}
+
+test "prepared retry headers preserve sanitized identity and reject injection" {
+    var sink: FakeSink = .{};
+    try std.testing.expect(dispatch(&sink, .{
+        .url = "https://cdn.example/signed",
+        .user_agent = "Original-UA",
+        .prepared_header_fields = "Referer: https://embed.example,Cookie: safe=1",
+    }));
+    try std.testing.expectEqualStrings("Original-UA", sink.events[2].userAgentSlice());
+    try std.testing.expectEqualStrings("Referer: https://embed.example,Cookie: safe=1", sink.events[2].headerFieldsSlice());
+
+    sink.len = 0;
+    try std.testing.expect(dispatch(&sink, .{
+        .url = "https://cdn.example/bad",
+        .prepared_header_fields = "Referer: good\r\nInjected: bad",
+    }));
+    try std.testing.expectEqualStrings("", sink.events[2].headerFieldsSlice());
 }

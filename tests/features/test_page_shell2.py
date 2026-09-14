@@ -131,10 +131,16 @@ def test_color_alias_collapse():
                    "bg_input", "active_border"):
         if legacy + ":" in struct_body:
             return "fail", f"legacy color alias still defined: {legacy}"
-    import subprocess
-    r = subprocess.run(["grep", "-rn", "colors.text_main\|colors.semantic_\|colors.bg_input\|colors.accent_primary",
-                        "src/"], capture_output=True, text=True)
-    hits = [l for l in r.stdout.splitlines() if ".zig:" in l]
+    hits = []
+    needles = ("colors.text_main", "colors.semantic_", "colors.bg_input", "colors.accent_primary")
+    for root, _, files in os.walk(os.path.join(PROJECT_DIR, "src")):
+        for name in files:
+            if not name.endswith(".zig"):
+                continue
+            path = os.path.join(root, name)
+            for line_no, line in enumerate(open(path, encoding="utf-8"), 1):
+                if any(needle in line for needle in needles):
+                    hits.append(f"{os.path.relpath(path, PROJECT_DIR)}:{line_no}")
     if hits:
         return "fail", f"legacy alias call sites remain: {hits[:3]}"
     if "pub const transparent" not in th:
@@ -344,7 +350,8 @@ def test_subdl_provider():
     # Key plumbing: fixed buffer in state, persisted both ways in config.
     if "subdl_api_key" not in state or "subdl_api_key_len" not in state:
         return "fail", "subdl_api_key not added to state.zig"
-    if 'setKey("subdl_api_key"' not in cfg or '"subdl_api_key"' not in cfg:
+    if ('setSecretKey("subdl_api_key"' not in cfg
+            or 'loadSecretValue(key, val, &state.app.subdl_api_key' not in cfg):
         return "fail", "subdl_api_key not persisted/loaded in config.zig"
 
     # Pure, unit-tested parser + language mapper; production routes through them.
@@ -512,6 +519,9 @@ def test_unified_downloads():
         # explicitly confirmed action in the expanded panel.
         "remove ≠ delete from disk": ("confirmDangerButton(@src(), \"Remove\"" in tr
                                       and "Delete files from disk" in tr),
+        "disk actions confined to save root": ("pub fn safeDiskRelative(" in pure
+                                                and "fn rowDiskPath(" in tr
+                                                and "tp.safeDiskRelative(relative)" in tr),
         # Dropping the proxy teardown leaks an accept-loop thread + a port.
         "proxy torn down on remove": "stream_proxy.stopProxy(p.proxy_handle)" in tr,
         "folder drill-down kept": "browse_subdir_len" in tr and "← Up" in tr,

@@ -34,6 +34,22 @@ pub const MAX_DL_HISTORY: usize = 100;
 pub const MAX_DL_NAME_LEN: usize = 256;
 pub const MAX_DL_LINK_LEN: usize = 4096;
 
+/// Capacity of the forwarded-open FIFO (remote /api/open). Must be declared
+/// at container level: struct fields cannot be interleaved with declarations.
+pub const REMOTE_OPEN_QUEUE_CAP: usize = 8;
+pub const RemoteOpenEntry = struct {
+    path: [2048]u8 = std.mem.zeroes([2048]u8),
+    path_len: usize = 0,
+    kind: [16]u8 = std.mem.zeroes([16]u8),
+    kind_len: usize = 0,
+    art: [1024]u8 = std.mem.zeroes([1024]u8),
+    art_len: usize = 0,
+    title: [512]u8 = std.mem.zeroes([512]u8),
+    title_len: usize = 0,
+    subtitle: [256]u8 = std.mem.zeroes([256]u8),
+    subtitle_len: usize = 0,
+};
+
 pub const AnimeResult = struct {
     id: [64]u8 = std.mem.zeroes([64]u8),
     id_len: usize = 0,
@@ -229,6 +245,8 @@ pub const AbsView = enum { Libraries, Books };
 pub const JfItem = struct {
     id: [64]u8 = std.mem.zeroes([64]u8),
     id_len: usize = 0,
+    media_source_id: [64]u8 = std.mem.zeroes([64]u8),
+    media_source_id_len: usize = 0,
     name: [256]u8 = std.mem.zeroes([256]u8),
     name_len: usize = 0,
     media_type: [32]u8 = std.mem.zeroes([32]u8),
@@ -325,6 +343,7 @@ pub const AppState = struct {
     // responsiveness remains automatic. Picking another scale makes it a
     // persistent manual override.
     ui_scale_auto: bool = true,
+    reduce_motion: bool = false,
     // Set true once config.load() has run, so the first frame can safely
     // decide whether to apply the auto device scale (config load is async on
     // the init worker; without this the device scale could race the saved
@@ -335,6 +354,12 @@ pub const AppState = struct {
     // published key — fixes both the fire-before-ready race and the torn key read
     // that left the first-launch Trending fetch permanently empty.
     config_loaded: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    // Published after config + optional mpv-script discovery. The UI uses this
+    // narrow barrier to prewarm libmpv while unrelated startup I/O continues.
+    player_prewarm_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    // Random, persistent per-install identity shared by server adapters. This
+    // prevents every Opal client from appearing as the same physical device.
+    install_id: [32]u8 = std.mem.zeroes([32]u8),
     grid_mode: GridMode = .auto,
     seek_sync: bool = false,
     // Hardware video decoding (VideoToolbox/VAAPI/D3D11 via mpv "auto-safe").
@@ -345,7 +370,9 @@ pub const AppState = struct {
     hwdec_enabled: bool = true,
     show_cell_overlay: bool = true,
     hovered_cell_idx: ?usize = null,
-    video_fill_mode: VideoFillMode = .fit,
+    // Fill the viewport by default. Z still toggles back to aspect-fit when the
+    // viewer wants to see the uncropped frame.
+    video_fill_mode: VideoFillMode = .cover,
     cheatsheet_open: bool = false,
     /// Command palette overlay (Ctrl/Cmd+K). Ephemeral — deliberately not
     /// persisted; reopening the app into a modal search box would be hostile.
@@ -480,6 +507,9 @@ pub const AppState = struct {
     // (nextIndex/prevIndex). Persisted as config keys like auto_advance.
     playlist_repeat: @import("../player/playlist_pure.zig").RepeatMode = .off,
     playlist_shuffle: bool = false,
+    // Persists the active shuffle permutation across restarts. Both M3U and
+    // durable Queue playback derive their order from this shared seed.
+    playlist_shuffle_seed: u64 = 0,
 
     // ── Recently closed players (Ctrl+Shift+T undo stack) ──
     closed_urls: [16][2048]u8 = std.mem.zeroes([16][2048]u8),
@@ -586,6 +616,11 @@ pub const AppState = struct {
     resume_prompt_label_len: usize = 0,
     resume_prompt_pct: u8 = 0, // saved progress (0–100)
     resume_prompt_pos_secs: f64 = 0, // exact saved position; 0 = percent-only legacy row
+    // Last explicit transport preferences. These apply to every new player and
+    // survive restart independently of whether session restore is accepted.
+    playback_volume: f64 = 100,
+    playback_speed: f64 = 1,
+    playback_muted: bool = false,
     eq_preset: usize = 0,
     // Video color filters — persisted i32 in mpv's -100..100 range. Replayed at
     // player init (player.zig) so they survive restart / apply to new files;
@@ -617,25 +652,18 @@ pub const AppState = struct {
     dropped_file_len: usize = 0,
     dropped_file_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     dropped_file_lock: @import("sync.zig").Mutex = .{},
-    // Path/URL forwarded by a second `opal <file>` launch (remote /api/open,
-    // written on an API connection thread). appFrame consumes it on the UI
-    // thread via browser.loadContent — the same route a direct CLI open takes.
-    remote_open_path: [2048]u8 = std.mem.zeroes([2048]u8),
-    remote_open_len: usize = 0,
+    // Paths/URLs forwarded by other `opal <file>` launches (remote /api/open,
+    // written on an API connection thread). A FIFO, not a single slot: Windows
+    // Explorer fires one process per file when several are opened at once, and
+    // each second instance POSTs before the UI thread runs its next frame — a
+    // single slot would keep only the last file. appFrame drains the whole
+    // queue (first plays, the rest are queued) via browser.loadContent — the
+    // same route a direct CLI open takes.
+    remote_open_queue: [REMOTE_OPEN_QUEUE_CAP]RemoteOpenEntry = std.mem.zeroes([REMOTE_OPEN_QUEUE_CAP]RemoteOpenEntry),
+    remote_open_head: usize = 0,
+    remote_open_count: usize = 0,
     remote_open_ready: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     remote_open_lock: @import("sync.zig").Mutex = .{},
-    // Typed routing + rich metadata for a remote open/ingest (browser extension).
-    // Populated under remote_open_lock alongside remote_open_path; consumed once
-    // on the UI thread. `type` selects play vs queue; the meta strings feed
-    // browser.loadContentDirectMeta so an extension send shows a proper card.
-    remote_open_type: [16]u8 = std.mem.zeroes([16]u8),
-    remote_open_type_len: usize = 0,
-    remote_open_art: [1024]u8 = std.mem.zeroes([1024]u8),
-    remote_open_art_len: usize = 0,
-    remote_open_title: [512]u8 = std.mem.zeroes([512]u8),
-    remote_open_title_len: usize = 0,
-    remote_open_subtitle: [256]u8 = std.mem.zeroes([256]u8),
-    remote_open_subtitle_len: usize = 0,
     pending_has_metadata: bool = false,
     pending_files_selection: [2048]bool = std.mem.zeroes([2048]bool),
     download_rate_limit: i32 = 0,
@@ -684,6 +712,17 @@ pub const AppState = struct {
     ytdl_format_idx: usize = 1,
     sub_lang_buf: [8]u8 = [_]u8{ 'e', 'n', 'g', 0, 0, 0, 0, 0 },
     sub_lang_len: usize = 3,
+    /// Last explicit subtitle visibility choice; reapplied to new media.
+    subtitles_enabled: bool = true,
+    /// Last explicitly selected embedded audio language. Track IDs are local to
+    /// each file, so remembering the language is the portable cross-file form.
+    audio_lang_buf: [16]u8 = std.mem.zeroes([16]u8),
+    audio_lang_len: usize = 0,
+    /// Last output device and aspect choice, replayed before each media load.
+    audio_device_buf: [256]u8 = std.mem.zeroes([256]u8),
+    audio_device_len: usize = 0,
+    video_aspect_buf: [16]u8 = [_]u8{ '-', '1', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
+    video_aspect_len: usize = 2,
 
     // ── Search & Download History ──
     search_history_buf: [MAX_SEARCH_HISTORY][MAX_QUERY_LEN]u8 = std.mem.zeroes([MAX_SEARCH_HISTORY][MAX_QUERY_LEN]u8),

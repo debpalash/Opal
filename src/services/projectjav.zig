@@ -286,9 +286,11 @@ fn parseHtml(html: []const u8) void {
 /// Start background probing of all torrents via libtorrent to get file sizes
 fn startProbing() void {
     if (probing_started) return;
-    probing_started = true;
-
     const ses = state.torrentSession() orelse return;
+    // Do not latch before the delayed session exists: renderContent retries
+    // this function, whereas the old ordering permanently disabled probing
+    // when results arrived during cold startup.
+    probing_started = true;
 
     for (0..torrent_count) |idx| {
         const t = &torrents[idx];

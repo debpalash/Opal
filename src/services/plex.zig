@@ -1,7 +1,7 @@
 //! Plex client — PIN auth (plex.tv/link) → server discovery → library browse →
 //! direct-play. Plex's API differs from Jellyfin/Emby: plex.tv auth + X-Plex-Token
 //! + server discovery via plex.tv/api/v2/resources. JSON is requested with an
-//! Accept header. The user's auth token is persisted at ~/.config/opal/plex.json.
+//! Accept header. Auth tokens are persisted in a protected local envelope.
 
 const std = @import("std");
 const dvui = @import("dvui");
@@ -12,8 +12,8 @@ const paths = @import("../core/paths.zig");
 const logs = @import("../core/logs.zig");
 const state = @import("../core/state.zig");
 const plex_pure = @import("plex_pure.zig");
+const secret_store = @import("../core/secret_store.zig");
 
-const CLIENT_ID = "opal-media-9a3f"; // X-Plex-Client-Identifier (stable per build)
 const Json = std.json.Value;
 
 pub const ConnState = enum(u8) { disconnected, awaiting, connected, err };
@@ -43,12 +43,18 @@ pub var section_count: usize = 0;
 pub var active_section: usize = 0;
 
 const Item = struct {
+    rating_key: [32]u8 = std.mem.zeroes([32]u8),
+    rating_key_len: usize = 0,
     title: [160]u8 = std.mem.zeroes([160]u8),
     title_len: usize = 0,
     year: [8]u8 = std.mem.zeroes([8]u8),
     year_len: usize = 0,
     part: [256]u8 = std.mem.zeroes([256]u8), // /library/parts/.../file.ext
     part_len: usize = 0,
+    fallback_part: [256]u8 = std.mem.zeroes([256]u8),
+    fallback_part_len: usize = 0,
+    view_offset_ms: i64 = 0,
+    duration_ms: i64 = 0,
 };
 pub var items: [300]Item = undefined;
 pub var item_count: usize = 0;
@@ -104,10 +110,26 @@ fn cfgPath(buf: []u8) []const u8 {
     return std.fmt.bufPrint(buf, "{s}/plex.json", .{paths.configDir(&c)}) catch "";
 }
 fn save() void {
-    var b: [1024]u8 = undefined;
-    const body = std.fmt.bufPrint(&b, "{{\"token\":\"{s}\",\"server\":\"{s}\",\"server_token\":\"{s}\",\"name\":\"{s}\"}}", .{ token(), server_uri[0..server_uri_len], serverTok(), server_name[0..server_name_len] }) catch return;
+    var protected_token: [512]u8 = undefined;
+    defer @memset(&protected_token, 0);
+    var protected_server_token: [512]u8 = undefined;
+    defer @memset(&protected_server_token, 0);
+    const sealed_token = secret_store.seal(token(), &protected_token) orelse return;
+    const sealed_server_token = secret_store.seal(serverTok(), &protected_server_token) orelse return;
+    var b: [3072]u8 = undefined;
+    const body = std.fmt.bufPrint(&b, "{{\"token\":\"{s}\",\"server\":\"{s}\",\"server_token\":\"{s}\",\"name\":\"{s}\"}}", .{ sealed_token, server_uri[0..server_uri_len], sealed_server_token, server_name[0..server_name_len] }) catch return;
     var pb: [600]u8 = undefined;
     @import("../core/secret_file.zig").write(cfgPath(&pb), body) catch {};
+}
+fn loadSecretStr(obj: Json, key: []const u8, buf: []u8, len: *usize) bool {
+    const v = obj.object.get(key) orelse return false;
+    if (v != .string or v.string.len == 0) return false;
+    const plain = secret_store.reveal(v.string, buf) orelse {
+        std.log.warn("could not unlock saved Plex credentials", .{});
+        return false;
+    };
+    len.* = plain.len;
+    return !secret_store.isSealed(v.string);
 }
 fn loadStr(obj: Json, key: []const u8, buf: []u8, len: *usize) void {
     if (obj.object.get(key)) |v| if (v == .string and v.string.len <= buf.len) {
@@ -124,13 +146,15 @@ pub fn init() void {
     var parsed = std.json.parseFromSlice(Json, alloc, body, .{}) catch return;
     defer parsed.deinit();
     if (parsed.value != .object) return;
-    loadStr(parsed.value, "token", &token_buf, &token_len);
+    const legacy_token = loadSecretStr(parsed.value, "token", &token_buf, &token_len);
     loadStr(parsed.value, "server", &server_uri, &server_uri_len);
-    loadStr(parsed.value, "server_token", &server_token, &server_token_len);
+    const legacy_server_token = loadSecretStr(parsed.value, "server_token", &server_token, &server_token_len);
     loadStr(parsed.value, "name", &server_name, &server_name_len);
     if (token_len > 0) conn_state.store(.connected, .release);
+    if (@import("builtin").os.tag == .windows and (legacy_token or legacy_server_token)) save();
 }
 pub fn disconnect() void {
+    @import("server_progress.zig").clearPlexConnection();
     token_len = 0;
     server_uri_len = 0;
     server_token_len = 0;
@@ -147,35 +171,44 @@ pub fn disconnect() void {
     save();
 }
 
-// ── curl helper ──────────────────────────────────────────────────────────────
-fn httpGet(url: []const u8, post: bool, tok: []const u8, buf: []u8) usize {
+// ── pooled HTTP helper ───────────────────────────────────────────────────────
+fn httpGet(url: []const u8, post: bool, tok: []const u8, buf: []u8, status_out: ?*?std.http.Status) usize {
     var tok_hdr: [180]u8 = undefined;
     const th = std.fmt.bufPrint(&tok_hdr, "X-Plex-Token: {s}", .{tok}) catch return 0;
-    var argv_storage = [_][]const u8{
-        "curl",              "-s",
-        "--connect-timeout", "3",
-        "-H",                "Accept: application/json",
-        "-H",                "X-Plex-Product: Opal",
-        "-H",                "X-Plex-Client-Identifier: " ++ CLIENT_ID,
-        "--config",          "-",
-        "--max-time",        "15",
-        url,
+    const client_id = if (state.app.install_id[0] != 0) state.app.install_id[0..] else "opal";
+    const extra_headers = [_]std.http.Header{
+        .{ .name = "X-Plex-Product", .value = "Opal" },
+        .{ .name = "X-Plex-Client-Identifier", .value = client_id },
+        .{ .name = "X-Plex-Version", .value = @import("../core/app_meta.zig").version },
     };
-    var child = if (post) blk: {
-        var a2: [argv_storage.len + 2][]const u8 = undefined;
-        a2[0] = "curl";
-        a2[1] = "-s";
-        a2[2] = "-X";
-        a2[3] = "POST";
-        for (argv_storage[2..], 0..) |x, i| a2[4 + i] = x;
-        break :blk io.Child.init(&a2, alloc);
-    } else io.Child.init(&argv_storage, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    @import("../core/curl_secret.zig").spawnWithHeaders(&child, &.{th}) catch return 0;
-    const n = if (child.stdout) |*so| io.readAll(so, buf) catch 0 else 0;
-    _ = child.wait() catch {};
-    return n;
+    const body = @import("../core/http.zig").fetch(url, buf, .{
+        .method = if (post) .POST else .GET,
+        .timeout_secs = 15,
+        .max_response = buf.len,
+        .accept = "application/json",
+        .auth_header = if (tok.len > 0) th else null,
+        .extra_headers = &extra_headers,
+        .status_out = status_out,
+    }) orelse return 0;
+    return body.len;
+}
+
+fn expireAuthSession() void {
+    @import("server_progress.zig").clearPlexConnection();
+    @memset(&token_buf, 0);
+    token_len = 0;
+    @memset(&server_token, 0);
+    server_token_len = 0;
+    section_count = 0;
+    item_count = 0;
+    current_start = 0;
+    more_available = false;
+    sections_loaded_once.store(false, .release);
+    _ = view_gen.fetchAdd(1, .acq_rel);
+    conn_state.store(.disconnected, .release);
+    setStatus("Session expired — sign in again", .{});
+    save();
+    state.wakeUi();
 }
 
 fn jstr(obj: Json, key: []const u8) ?[]const u8 {
@@ -198,7 +231,7 @@ pub fn connect() void {
 fn pinWorker() void {
     var buf: [16384]u8 = undefined;
     // Plain pin → a short 4-char code usable at plex.tv/link (strong pins are long).
-    const n = httpGet("https://plex.tv/api/v2/pins", true, "", &buf);
+    const n = httpGet("https://plex.tv/api/v2/pins", true, "", &buf, null);
     if (n == 0) {
         conn_state.store(.err, .release);
         setStatus("Network error", .{});
@@ -226,7 +259,7 @@ fn pinWorker() void {
     var waited: usize = 0;
     while (waited < 120) : (waited += 3) {
         io.sleep(3 * std.time.ns_per_s);
-        const m = httpGet(purl, false, "", &buf);
+        const m = httpGet(purl, false, "", &buf, null);
         if (m == 0) continue;
         var pp = std.json.parseFromSlice(Json, alloc, buf[0..m], .{}) catch continue;
         defer pp.deinit();
@@ -245,8 +278,13 @@ fn pinWorker() void {
 
 fn discoverServers() void {
     var buf: [262144]u8 = undefined;
-    const n = httpGet("https://plex.tv/api/v2/resources?includeHttps=1&includeRelay=1", false, token(), &buf);
+    var status: ?std.http.Status = null;
+    const n = httpGet("https://plex.tv/api/v2/resources?includeHttps=1&includeRelay=1", false, token(), &buf, &status);
     if (n == 0) {
+        if (status) |s| if (plex_pure.authRejected(@intFromEnum(s))) {
+            expireAuthSession();
+            return;
+        };
         conn_state.store(.err, .release);
         setStatus("Server lookup failed", .{});
         return;
@@ -324,8 +362,13 @@ fn fetchSectionsSync() void {
     var url: [320]u8 = undefined;
     const u = std.fmt.bufPrint(&url, "{s}/library/sections", .{server_uri[0..server_uri_len]}) catch return;
     var buf: [65536]u8 = undefined;
-    const n = httpGet(u, false, serverTok(), &buf);
+    var status: ?std.http.Status = null;
+    const n = httpGet(u, false, serverTok(), &buf, &status);
     if (n == 0) {
+        if (status) |s| if (plex_pure.authRejected(@intFromEnum(s))) {
+            expireAuthSession();
+            return;
+        };
         logs.pushLog("warn", "plex", "Library list failed — retrying shortly", true);
         return;
     }
@@ -431,8 +474,12 @@ fn fetchWindow(section_idx: usize, start: usize, gen: u64) void {
     // Heap buffer — never a big stack buffer on a spawned thread (CLAUDE.md).
     const buf = alloc.alloc(u8, 524288) catch return;
     defer alloc.free(buf);
-    const n = httpGet(u, false, serverTok(), buf);
-    if (n == 0) return;
+    var status: ?std.http.Status = null;
+    const n = httpGet(u, false, serverTok(), buf, &status);
+    if (n == 0) {
+        if (status) |s| if (plex_pure.authRejected(@intFromEnum(s))) expireAuthSession();
+        return;
+    }
     var parsed = std.json.parseFromSlice(Json, alloc, buf[0..n], .{}) catch return;
     defer parsed.deinit();
 
@@ -461,6 +508,16 @@ fn fetchWindow(section_idx: usize, start: usize, gen: u64) void {
         const title = jstr(m, "title") orelse continue;
         var it = &items[item_count];
         it.* = .{};
+        if (jstr(m, "ratingKey")) |rating_key| {
+            if (plex_pure.validRatingKey(rating_key)) {
+                const rl = @min(rating_key.len, it.rating_key.len);
+                @memcpy(it.rating_key[0..rl], rating_key[0..rl]);
+                it.rating_key_len = rl;
+            }
+        } else if (m.object.get("ratingKey")) |rating_value| if (rating_value == .integer and rating_value.integer >= 0) {
+            const rendered = std.fmt.bufPrint(&it.rating_key, "{d}", .{rating_value.integer}) catch "";
+            it.rating_key_len = rendered.len;
+        };
         const tl = @min(title.len, it.title.len);
         @memcpy(it.title[0..tl], title[0..tl]);
         it.title_len = tl;
@@ -468,16 +525,37 @@ fn fetchWindow(section_idx: usize, start: usize, gen: u64) void {
             const ys = std.fmt.bufPrint(&it.year, "{d}", .{y.integer}) catch "";
             it.year_len = ys.len;
         };
-        // First Media → first Part → key (direct-play file).
+        if (m.object.get("viewOffset")) |value| {
+            if (value == .integer and value.integer > 0) it.view_offset_ms = value.integer;
+        }
+        if (m.object.get("duration")) |value| {
+            if (value == .integer and value.integer > 0) it.duration_ms = value.integer;
+        }
         if (m.object.get("Media")) |media| if (media == .array and media.array.items.len > 0) {
-            const m0 = media.array.items[0];
-            if (m0 == .object) if (m0.object.get("Part")) |parts| if (parts == .array and parts.array.items.len > 0) {
-                if (jstr(parts.array.items[0], "key")) |pk| {
-                    const pl = @min(pk.len, it.part.len);
-                    @memcpy(it.part[0..pl], pk[0..pl]);
-                    it.part_len = pl;
-                }
-            };
+            var versions: [32][]const u8 = undefined;
+            var version_count: usize = 0;
+            for (media.array.items) |version| {
+                if (version_count >= versions.len) break;
+                if (version != .object) continue;
+                const parts = version.object.get("Part") orelse continue;
+                if (parts != .array or parts.array.items.len == 0) continue;
+                const pk = jstr(parts.array.items[0], "key") orelse continue;
+                versions[version_count] = pk;
+                version_count += 1;
+            }
+            const selected = plex_pure.selectVersionParts(versions[0..version_count]);
+            if (selected.primary) |idx| {
+                const pk = versions[idx];
+                const pl = @min(pk.len, it.part.len);
+                @memcpy(it.part[0..pl], pk[0..pl]);
+                it.part_len = pl;
+            }
+            if (selected.fallback) |idx| {
+                const pk = versions[idx];
+                const pl = @min(pk.len, it.fallback_part.len);
+                @memcpy(it.fallback_part[0..pl], pk[0..pl]);
+                it.fallback_part_len = pl;
+            }
         };
         item_count += 1;
     }
@@ -531,9 +609,95 @@ pub fn play(idx: usize) void {
         state.showToastTyped("No playable part", .warning);
         return;
     }
+    if (it.rating_key_len > 0) {
+        const position = @as(f64, @floatFromInt(it.view_offset_ms)) / 1000.0;
+        const duration = @as(f64, @floatFromInt(it.duration_ms)) / 1000.0;
+        const resume_at = if (@import("../player/watch_history_pure.zig").resumeEligible(position, duration)) position else null;
+        playPartTrackedAt(it.rating_key[0..it.rating_key_len], it.part[0..it.part_len], it.fallback_part[0..it.fallback_part_len], it.title[0..it.title_len], resume_at);
+    } else {
+        playPart(it.part[0..it.part_len], it.title[0..it.title_len]);
+    }
+}
+
+/// Reconstruct a Plex stream from a credential-free media-part path.
+pub fn playPart(part: []const u8, title: []const u8) void {
+    if (!plex_pure.validPartPath(part) or server_uri_len == 0 or serverTok().len == 0) {
+        state.showToastTyped("Reconnect Plex to resume", .warning);
+        return;
+    }
     var url: [600]u8 = undefined;
-    const u = std.fmt.bufPrint(&url, "{s}{s}?X-Plex-Token={s}", .{ server_uri[0..server_uri_len], it.part[0..it.part_len], serverTok() }) catch return;
-    @import("browser.zig").loadContent(u);
+    const u = std.fmt.bufPrint(&url, "{s}{s}", .{ server_uri[0..server_uri_len], part }) catch return;
+    const headers = [_]@import("../player/player.zig").HttpHeader{.{ .name = "X-Plex-Token", .value = serverTok() }};
+    var deep_buf: [320]u8 = undefined;
+    const deep = std.fmt.bufPrint(&deep_buf, "opal://plex{s}", .{part}) catch return;
+    @import("browser.zig").playDirect(.{
+        .url = u,
+        .history_identity = deep,
+        .restore_target = deep,
+        .title = title,
+        .headers = &headers,
+    });
+}
+
+pub fn playPartTracked(rating_key: []const u8, part: []const u8, title: []const u8) void {
+    playPartTrackedAt(rating_key, part, "", title, null);
+}
+
+/// Build a fresh universal-transcoder URL after all direct versions failed.
+/// Authentication stays in the already-staged X-Plex-Token player header.
+pub fn transcodeRecoveryUrl(identity: []const u8, out: []u8) ?[]const u8 {
+    const parsed = plex_pure.parseDeepLink(identity) orelse return null;
+    if (server_uri_len == 0 or serverTok().len == 0) return null;
+    var random: [16]u8 = undefined;
+    if (!io.randomSecure(&random)) return null;
+    defer @memset(&random, 0);
+    const session = std.fmt.bytesToHex(random, .lower);
+    const client_id = if (state.app.install_id[0] != 0) state.app.install_id[0..] else "opal";
+    return plex_pure.transcodeUrl(
+        server_uri[0..server_uri_len],
+        parsed.rating_key,
+        &session,
+        client_id,
+        @import("../core/app_meta.zig").version,
+        out,
+    );
+}
+
+fn playPartTrackedAt(rating_key: []const u8, part: []const u8, fallback_part: []const u8, title: []const u8, resume_position_secs: ?f64) void {
+    if (!plex_pure.validRatingKey(rating_key) or !plex_pure.validPartPath(part) or server_uri_len == 0 or serverTok().len == 0) {
+        state.showToastTyped("Reconnect Plex to resume", .warning);
+        return;
+    }
+    var url: [600]u8 = undefined;
+    const u = std.fmt.bufPrint(&url, "{s}{s}", .{ server_uri[0..server_uri_len], part }) catch return;
+    var fallback_buf: [600]u8 = undefined;
+    const fallback = if (plex_pure.validPartPath(fallback_part))
+        (std.fmt.bufPrint(&fallback_buf, "{s}{s}", .{ server_uri[0..server_uri_len], fallback_part }) catch "")
+    else
+        "";
+    const headers = [_]@import("../player/player.zig").HttpHeader{.{ .name = "X-Plex-Token", .value = serverTok() }};
+    var deep_buf: [384]u8 = undefined;
+    const deep = plex_pure.buildDeepLink(rating_key, part, &deep_buf) orelse return;
+    @import("server_progress.zig").registerPlexConnection(server_uri[0..server_uri_len], serverTok());
+    @import("browser.zig").playDirect(.{
+        .url = u,
+        .fallback_url = fallback,
+        .history_identity = deep,
+        .restore_target = deep,
+        .title = title,
+        .resume_position_secs = resume_position_secs,
+        .headers = &headers,
+    });
+}
+
+pub fn resumePlayback(deep_link: []const u8) void {
+    if (plex_pure.parseDeepLink(deep_link)) |parsed| {
+        playPartTracked(parsed.rating_key, parsed.part, "Plex");
+        return;
+    }
+    const legacy_prefix = "opal://plex";
+    if (std.mem.startsWith(u8, deep_link, legacy_prefix))
+        playPart(deep_link[legacy_prefix.len..], "Plex");
 }
 
 // ── UI ───────────────────────────────────────────────────────────────────────

@@ -21,10 +21,10 @@ const MimeGroup = struct {
 };
 
 // ── Linux MIME types ──────────────────────────────────────
-const VIDEO_MIMES = &[_][]const u8{ "video/mp4", "video/x-matroska", "video/x-msvideo", "video/webm", "video/quicktime", "video/mpeg", "video/ogg", "video/x-flv", "video/x-ms-wmv", "video/3gpp" };
-const AUDIO_MIMES = &[_][]const u8{ "audio/mpeg", "audio/flac", "audio/ogg", "audio/wav", "audio/x-wav", "audio/aac", "audio/mp4", "audio/x-m4a", "audio/opus", "audio/webm" };
+const VIDEO_MIMES = &[_][]const u8{ "video/mp4", "video/x-matroska", "video/x-msvideo", "video/webm", "video/quicktime", "video/mpeg", "video/mp2t", "video/ogg", "video/x-flv", "video/x-ms-wmv", "video/x-ms-asf", "video/3gpp", "video/3gpp2" };
+const AUDIO_MIMES = &[_][]const u8{ "audio/mpeg", "audio/flac", "audio/ogg", "audio/wav", "audio/x-wav", "audio/aac", "audio/mp4", "audio/x-m4a", "audio/opus", "audio/webm", "audio/x-ms-wma", "audio/x-aiff" };
 const TORRENT_MIMES = &[_][]const u8{ "application/x-bittorrent", "x-scheme-handler/magnet" };
-const PLAYLIST_MIMES = &[_][]const u8{ "audio/x-mpegurl", "application/x-mpegurl", "audio/mpegurl", "application/vnd.apple.mpegurl" };
+const PLAYLIST_MIMES = &[_][]const u8{ "audio/x-mpegurl", "application/x-mpegurl", "audio/mpegurl", "application/vnd.apple.mpegurl", "audio/x-scpls" };
 const COMICS_MIMES = &[_][]const u8{ "application/x-cbz", "application/x-cbr", "application/x-cb7", "application/x-cbt", "application/vnd.comicbook+zip", "application/vnd.comicbook-rar" };
 
 // ── macOS UTI identifiers ─────────────────────────────────
@@ -340,10 +340,10 @@ fn ensureDesktopFileBlocking() void {
     @import("../core/io_global.zig").cwdMakePath(dp) catch {};
     var fb: [512]u8 = undefined;
     const fp = std.fmt.bufPrintZ(&fb, "{s}/opal.desktop", .{dp}) catch return;
-    const ml = "video/mp4;video/x-matroska;video/x-msvideo;video/webm;video/quicktime;video/mpeg;video/ogg;video/x-flv;video/x-ms-wmv;video/3gpp;" ++
-        "audio/mpeg;audio/flac;audio/ogg;audio/wav;audio/x-wav;audio/aac;audio/mp4;audio/x-m4a;audio/opus;audio/webm;" ++
+    const ml = "video/mp4;video/x-matroska;video/x-msvideo;video/webm;video/quicktime;video/mpeg;video/mp2t;video/ogg;video/x-flv;video/x-ms-wmv;video/x-ms-asf;video/3gpp;video/3gpp2;" ++
+        "audio/mpeg;audio/flac;audio/ogg;audio/wav;audio/x-wav;audio/aac;audio/mp4;audio/x-m4a;audio/opus;audio/webm;audio/x-ms-wma;audio/x-aiff;" ++
         "application/x-bittorrent;x-scheme-handler/magnet;" ++
-        "audio/x-mpegurl;application/x-mpegurl;audio/mpegurl;application/vnd.apple.mpegurl;" ++
+        "audio/x-mpegurl;application/x-mpegurl;audio/mpegurl;application/vnd.apple.mpegurl;audio/x-scpls;" ++
         "application/x-cbz;application/x-cbr;application/x-cb7;application/x-cbt;application/vnd.comicbook+zip;application/vnd.comicbook-rar;";
     var cb: [2560]u8 = undefined;
     const ct = std.fmt.bufPrint(&cb, "[Desktop Entry]\nName=Opal\nComment=Opal — Play everything\nExec={s} %U\nIcon=opal\nTerminal=false\nType=Application\nCategories=AudioVideo;Video;Audio;Player;\nMimeType={s}\nStartupNotify=true\n", .{ exe, ml }) catch return;

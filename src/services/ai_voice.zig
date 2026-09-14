@@ -192,21 +192,42 @@ fn setError(err: []const u8) void {
 // ── Server Management ──
 var servers_warming: bool = false;
 var server_start_mutex: @import("../core/sync.zig").Mutex = .{};
+// A Windows CIM process scan costs roughly a second. Do it only when a voice
+// feature is actually requested, and only once, before launching new helpers.
+var stale_servers_cleaned: bool = false; // guarded by server_start_mutex
+var sidecar_cleanup_needed = std.atomic.Value(bool).init(false);
 
 /// Kill any leftover voice/tts server processes from a previous run.
-/// Call once at startup to prevent duplicate server accumulation.
+/// Called lazily by the first voice-server request, before launching helpers.
 pub fn killStaleServers() void {
-    // Kill any running python server processes by script name
-    @import("../core/io_global.zig").killByCommandLine("opal-voice-server.py", false);
-    @import("../core/io_global.zig").killByCommandLine("opal-tts-server.py", false);
-    // STT server is spawned later by ensureSttServer — kill any leftover too,
-    // otherwise it accumulates as a zombie opal-stt-server.py across runs.
-    @import("../core/io_global.zig").killByCommandLine("opal-stt-server.py", false);
+    // Serialize cleanup with every server start.  Startup invokes this on a
+    // worker, so a very fast click on the voice controls waits for the stale
+    // process snapshot to finish instead of having its newly-created server
+    // killed underneath it.
+    server_start_mutex.lock();
+    defer server_start_mutex.unlock();
+    if (stale_servers_cleaned) return;
+
+    // One process-table scan, not three.  On Windows each scan starts
+    // PowerShell + CIM and costs around 1.5 seconds; doing this three times on
+    // the first UI frame delayed an unrelated double-clicked video by ~5s.
+    const stale_servers = [_][]const u8{
+        "opal-voice-server.py",
+        "opal-tts-server.py",
+        "opal-stt-server.py",
+    };
+    @import("../core/io_global.zig").killAnyByCommandLine(&stale_servers, false);
     // Reset flags
     voice_server_started = false;
     tts_server_started = false;
     stt_server_started = false;
+    stale_servers_cleaned = true;
     logs.pushLog("info", "voice", "Stale servers killed", true);
+}
+
+/// Whether this session may own a voice helper that needs a shutdown sweep.
+pub fn sidecarCleanupNeeded() bool {
+    return sidecar_cleanup_needed.load(.acquire);
 }
 
 /// Called after voice workers/sidecars have been stopped during app shutdown.
@@ -226,8 +247,10 @@ pub fn deinit() void {
 pub fn preWarmServers() void {
     if (servers_warming or (voice_server_started and tts_server_started)) return;
     servers_warming = true;
+    sidecar_cleanup_needed.store(true, .release);
     if (@import("../core/workers.zig").spawnLegacy(struct {
         fn run() void {
+            killStaleServers();
             ensureVoiceServer();
             ensureTtsServer();
         }
@@ -299,6 +322,8 @@ fn conversationLoopAuto() void {
 }
 
 fn ensureVoiceServer() void {
+    sidecar_cleanup_needed.store(true, .release);
+    killStaleServers();
     server_start_mutex.lock();
     defer server_start_mutex.unlock();
     if (voice_server_started) return;
@@ -335,6 +360,10 @@ fn ensureVoiceServer() void {
 }
 
 pub fn ensureSttServer() void {
+    sidecar_cleanup_needed.store(true, .release);
+    killStaleServers();
+    server_start_mutex.lock();
+    defer server_start_mutex.unlock();
     if (stt_server_started) return;
     const socket_path = (runtimePaths() orelse return).sttSocket();
     if (@import("../core/io_global.zig").cwdAccess(socket_path, .{})) |_| {
@@ -362,6 +391,10 @@ pub fn ensureSttServer() void {
 }
 
 pub fn ensureTtsServer() void {
+    sidecar_cleanup_needed.store(true, .release);
+    killStaleServers();
+    server_start_mutex.lock();
+    defer server_start_mutex.unlock();
     if (tts_server_started) return;
     const paths = runtimePaths() orelse return;
     const socket_path = paths.ttsSocket();

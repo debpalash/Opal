@@ -207,7 +207,7 @@ pub fn killByCommandLine(pattern: []const u8, force: bool) void {
         }
         const script = std.fmt.bufPrint(
             &script_buf,
-            "Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -like '*{s}*' }} | " ++
+            "Get-CimInstance Win32_Process | Where-Object {{ $_.ProcessId -ne $PID -and $_.CommandLine -like '*{s}*' }} | " ++
                 "ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}",
             .{pat_buf[0..n]},
         ) catch return;
@@ -238,7 +238,7 @@ pub fn killAnyByCommandLine(patterns: []const []const u8, force: bool) void {
     if (is_windows) {
         var script_buf: [2048]u8 = undefined;
         var n: usize = 0;
-        const prefix = "Get-CimInstance Win32_Process | Where-Object { ";
+        const prefix = "Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and (";
         @memcpy(script_buf[n .. n + prefix.len], prefix);
         n += prefix.len;
         for (patterns, 0..) |pattern, i| {
@@ -262,7 +262,7 @@ pub fn killAnyByCommandLine(patterns: []const []const u8, force: bool) void {
             script_buf[n + 1] = '\'';
             n += 2;
         }
-        const suffix = " } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }";
+        const suffix = ") } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }";
         if (n + suffix.len > script_buf.len) return;
         @memcpy(script_buf[n .. n + suffix.len], suffix);
         n += suffix.len;

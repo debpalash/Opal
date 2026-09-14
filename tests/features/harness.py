@@ -23,6 +23,7 @@ import time
 import socket
 import sys
 import re as _re
+import shutil
 from pathlib import Path
 
 # Windows consoles default to cp1252, which can't encode the ✅/❌ status glyphs
@@ -48,10 +49,98 @@ DB_PATH = database_path()
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 RESULTS_FILE = os.environ.get("OPAL_TEST_RESULTS") or os.path.join(PROJECT_DIR, "tests", "results.json")
 
+
+def _create_isolated_db_fixture():
+    """Materialize a disposable DB when --database names a missing file.
+
+    The feature suite must never open or seed a user's profile.  An explicit
+    OPAL_TEST_DB is different: it is a caller-owned fixture, so derive its
+    tables from the Zig schema and seed only deterministic test values.
+    """
+    if not os.environ.get("OPAL_TEST_DB") or os.path.exists(DB_PATH):
+        return
+
+    db_source = Path(PROJECT_DIR, "src", "core", "db.zig").read_text(encoding="utf-8")
+    statements = []
+    lines = db_source.splitlines()
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+        if stripped.startswith("\\\\CREATE TABLE IF NOT EXISTS") or stripped.startswith("\\\\CREATE VIRTUAL TABLE IF NOT EXISTS"):
+            sql_lines = []
+            while i < len(lines) and lines[i].strip().startswith("\\\\"):
+                sql_lines.append(lines[i].strip()[2:])
+                i += 1
+            statements.append("\n".join(sql_lines))
+            continue
+        i += 1
+
+    statements.extend(_re.findall(
+        r'exec\("(CREATE TABLE IF NOT EXISTS [^"\\]+)"\)', db_source,
+    ))
+    if not statements:
+        raise RuntimeError("could not derive isolated database fixture from db.zig")
+
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        for sql in statements:
+            # Python's stock SQLite does not load sqlite-vec.  Preserve the
+            # virtual tables' externally queried shape with local test doubles.
+            if sql.startswith("CREATE VIRTUAL TABLE IF NOT EXISTS vec_aimemory"):
+                sql = "CREATE TABLE IF NOT EXISTS vec_aimemory (id INTEGER PRIMARY KEY, embedding BLOB)"
+            elif sql.startswith("CREATE VIRTUAL TABLE IF NOT EXISTS vec_taste"):
+                sql = "CREATE TABLE IF NOT EXISTS vec_taste (id INTEGER PRIMARY KEY, embedding BLOB)"
+            conn.execute(sql)
+
+        # Idempotent migrations that are intentionally separate from CREATE.
+        columns = {
+            "aimemory": (("position_secs", "REAL DEFAULT 0"),),
+            "tv_watched": (
+                ("position_secs", "REAL DEFAULT 0"),
+                ("duration_secs", "REAL DEFAULT 0"),
+                ("played_secs", "REAL DEFAULT 0"),
+            ),
+        }
+        for table, additions in columns.items():
+            present = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+            for name, declaration in additions:
+                if name not in present:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
+
+        defaults = {
+            "theme_preset": "Midnight",
+            "ui_scale": "1.0",
+            "tts_voice": "Bella",
+            "tts_speed": "1.0",
+            "win_x": "100", "win_y": "100", "win_w": "1440", "win_h": "800",
+        }
+        conn.executemany(
+            "INSERT OR REPLACE INTO config(key, value) VALUES (?, ?)", defaults.items(),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO watch_history"
+            "(name, percent, position_secs, duration_secs, file_key, link) "
+            "VALUES ('fixture.mkv', 0.5, 60, 120, '/fixture/fixture.mkv', '')"
+        )
+        conn.execute("PRAGMA user_version=3")
+        conn.commit()
+    except Exception:
+        conn.close()
+        try:
+            os.remove(DB_PATH)
+        except OSError:
+            pass
+        raise
+    conn.close()
+
+
+_create_isolated_db_fixture()
+
 __all__ = [
     "test", "TestResult", "results", "REGISTRY", "run_all",
     "get_db", "_src", "_web_app", "_web_js", "_remote_api", "_between", "_parse_catalog",
-    "DB_PATH", "PROJECT_DIR", "RESULTS_FILE", "_EMOJI", "_re",
+    "DB_PATH", "PROJECT_DIR", "RESULTS_FILE", "_EMOJI", "_re", "_posix_shell",
 ]
 
 
@@ -113,7 +202,30 @@ def get_db():
 
 def _src(rel):
     p = os.path.join(PROJECT_DIR, rel)
-    return open(p).read() if os.path.exists(p) else ""
+    return open(p, encoding="utf-8").read() if os.path.exists(p) else ""
+
+
+def _posix_shell():
+    """Return a working POSIX shell, including common Windows dev installs."""
+    candidates = [os.environ.get("OPAL_TEST_SH"), shutil.which("sh")]
+    if os.name == "nt":
+        candidates.extend((
+            r"C:\msys64\usr\bin\sh.exe",
+            r"C:\Program Files\Git\bin\sh.exe",
+            r"C:\Program Files\Git\usr\bin\sh.exe",
+        ))
+    for candidate in candidates:
+        if not candidate or not os.path.isfile(candidate):
+            continue
+        try:
+            probe = subprocess.run(
+                [candidate, "-c", "exit 0"], capture_output=True, timeout=5,
+            )
+            if probe.returncode == 0:
+                return candidate
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return None
 
 
 def _web_js():
@@ -151,7 +263,7 @@ def _parse_catalog():
     """Extract MODEL_CATALOG entries from ai_server.zig as dicts."""
     import re
     src = os.path.join(PROJECT_DIR, "src/services/ai_server.zig")
-    with open(src) as f:
+    with open(src, encoding="utf-8") as f:
         content = f.read()
     start = content.find("MODEL_CATALOG")
     if start < 0:
@@ -221,7 +333,7 @@ def run_all():
         "tests": [r.to_dict() for r in results]
     }
 
-    with open(RESULTS_FILE, "w") as f:
+    with open(RESULTS_FILE, "w", encoding="utf-8") as f:
         json.dump(output, f, indent=2)
     print(f"  Results written to {RESULTS_FILE}")
 

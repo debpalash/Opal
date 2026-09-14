@@ -546,8 +546,9 @@ pub fn renderGrid() !void {
 
         // Fullscreen → edge-to-edge: drop the inset margin + rounded corners.
         const fs = state.app.fullscreen_player_idx != null;
-        const cell_margin = if (fs) dvui.Rect.all(0) else dvui.Rect.all(2);
-        const cell_radius = if (fs) dvui.Rect.all(0) else theme.dims.rad_sm;
+        const full_bleed = fs or (state.app.page_shell_enabled and state.app.router.current == .player);
+        const cell_margin = if (full_bleed) dvui.Rect.all(0) else dvui.Rect.all(2);
+        const cell_radius = if (full_bleed) dvui.Rect.all(0) else theme.dims.rad_sm;
         var cell_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = i, .min_size_content = .{ .w = 10, .h = 10 }, .max_size_content = .{ .w = max_cell_w, .h = std.math.floatMax(f32) }, .expand = .both, .background = true, .color_fill = cell_fill, .color_border = cell_color, .border = border_rect, .margin = cell_margin, .corner_radius = cell_radius });
 
         // Single wrapper overlay — ensures video content and control badges layer
@@ -572,11 +573,12 @@ pub fn renderGrid() !void {
                     // for a 720p file (3.7MB) — a large share of the playback
                     // CPU. The GPU upscales the smaller texture for free.
                     const playback = p.playbackSnapshot();
-                    const render_size = @import("../player/playback_snapshot_pure.zig").renderSize(
+                    const render_size = @import("../player/playback_snapshot_pure.zig").renderSizeForAspect(
                         playback.video_width,
                         playback.video_height,
                         player.video_w,
                         player.video_h,
+                        state.app.video_aspect_buf[0..state.app.video_aspect_len],
                     );
                     chooseSwFormat();
                     p.want_w.store(render_size.width, .release);
@@ -596,7 +598,58 @@ pub fn renderGrid() !void {
                     }
                 }
 
-                if (p.np_title_len > 0 and p.texture == null) {
+                if (p.load_error_len > 0) {
+                    var error_panel = dvui.box(@src(), .{ .dir = .vertical }, .{
+                        .id_extra = i + 5600,
+                        .gravity_x = 0.5,
+                        .gravity_y = 0.45,
+                        .max_size_content = .{ .w = 520, .h = std.math.floatMax(f32) },
+                        .padding = dvui.Rect.all(theme.spacing.xl),
+                    });
+                    defer error_panel.deinit();
+
+                    dvui.icon(@src(), "Playback error", icons.tvg.lucide.x, .{}, .{
+                        .id_extra = i + 5601,
+                        .color_text = theme.colors.danger,
+                        .min_size_content = theme.iconSize(.lg),
+                        .gravity_x = 0.5,
+                        .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.md },
+                    });
+                    _ = dvui.label(@src(), "Playback stopped", .{}, .{
+                        .id_extra = i + 5602,
+                        .color_text = theme.colors.text_primary,
+                        .gravity_x = 0.5,
+                    });
+                    _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8(p.load_error[0..p.load_error_len])}, .{
+                        .id_extra = i + 5603,
+                        .color_text = theme.colors.text_secondary,
+                        .gravity_x = 0.5,
+                        .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = theme.spacing.lg },
+                    });
+
+                    var actions = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_x = 0.5 });
+                    defer actions.deinit();
+                    if (components.actionButton(@src(), "Try again", .primary, i + 5604)) {
+                        var retry_buf: [2048]u8 = undefined;
+                        const retry_len = @min(p.current_url_len, retry_buf.len);
+                        @memcpy(retry_buf[0..retry_len], p.current_url[0..retry_len]);
+                        var ua_buf: [2048]u8 = undefined;
+                        const ua_len = @min(p.current_user_agent_len, ua_buf.len);
+                        @memcpy(ua_buf[0..ua_len], p.current_user_agent[0..ua_len]);
+                        var headers_buf: [2048]u8 = undefined;
+                        const headers_len = @min(p.current_header_fields_len, headers_buf.len);
+                        @memcpy(headers_buf[0..headers_len], p.current_header_fields[0..headers_len]);
+                        p.load(.{
+                            .url = retry_buf[0..retry_len],
+                            .user_agent = ua_buf[0..ua_len],
+                            .prepared_header_fields = headers_buf[0..headers_len],
+                            .unbounded_network_read = p.current_unbounded_network_read,
+                        });
+                    }
+                    if (components.actionButton(@src(), "Close", .secondary, i + 5605)) {
+                        state.app.pending_remove_player_idx = @as(i32, @intCast(i));
+                    }
+                } else if (p.np_title_len > 0 and p.texture == null) {
                     // ── Audio now-playing pane (podcast / radio) ──
                     // No video frame + rich metadata set → show cover art +
                     // title/subtitle instead of the black/empty hero state.
@@ -617,7 +670,32 @@ pub fn renderGrid() !void {
                         @as(f32, @floatFromInt(tex.width)) / @as(f32, @floatFromInt(tex.height))
                     else
                         16.0 / 9.0;
-                    const img_wd = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{ .id_extra = i, .min_size_content = .{ .w = tex_ar * 10.0, .h = 10.0 }, .expand = .ratio, .gravity_x = 0.5, .gravity_y = 0.5 });
+                    var img_wd = if (state.app.video_fill_mode == .cover) blk: {
+                        // Cover the entire player viewport without distorting the
+                        // frame. The oversized axis is centered and clipped by the
+                        // cell overlay, exactly like CSS object-fit: cover.
+                        const viewport = cell_overlay.data().contentRect();
+                        const viewport_ar = if (viewport.h > 0) viewport.w / viewport.h else tex_ar;
+                        const cover_size: dvui.Size = if (viewport_ar > tex_ar)
+                            .{ .w = viewport.w, .h = viewport.w / tex_ar }
+                        else
+                            .{ .w = viewport.h * tex_ar, .h = viewport.h };
+                        break :blk dvui.image(@src(), .{
+                            .source = .{ .texture = tex.* },
+                            .shrink = .none,
+                        }, .{
+                            .id_extra = i,
+                            .min_size_content = cover_size,
+                            .gravity_x = 0.5,
+                            .gravity_y = 0.5,
+                        });
+                    } else dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
+                        .id_extra = i,
+                        .min_size_content = .{ .w = tex_ar * 10.0, .h = 10.0 },
+                        .expand = .ratio,
+                        .gravity_x = 0.5,
+                        .gravity_y = 0.5,
+                    });
 
                     // Raw click-on-video handling. Guards matter here:
                     //  • compare against the PHYSICAL screen rect — me.p is
@@ -634,14 +712,35 @@ pub fn renderGrid() !void {
                     //    overlay, not a floating window) is up.
                     const img_rs = img_wd.borderRectScale().r;
                     const footer_mod = @import("footer.zig");
-                    const cell_clicks_blocked = state.app.pending_magnet_tid >= 0 or state.app.settings_open;
+                    const cell_clicks_blocked = state.app.pending_magnet_tid >= 0 or state.app.settings_open or footer_mod.pickerOpen();
+                    const SurfaceGesture = struct {
+                        var armed_cell: ?usize = null;
+                        const drag_name = "opal-player-window-move";
+                    };
                     for (dvui.events()) |*e| {
                         if (e.evt == .mouse and !e.handled and !cell_clicks_blocked) {
                             const me = e.evt.mouse;
                             if (me.floating_win != dvui.subwindowCurrentId()) continue;
                             const over_controls = state.app.show_cell_overlay and footer_mod.mouseInControlPanel(me.p);
-                            if (!over_controls and me.p.x >= img_rs.x and me.p.x <= img_rs.x + img_rs.w and me.p.y >= img_rs.y and me.p.y <= img_rs.y + img_rs.h) {
-                                if (me.action == .press and me.button == .left) {
+                            const over_top_chrome = state.app.page_shell_enabled and
+                                state.app.router.current == .player and
+                                state.app.show_cell_overlay and
+                                @import("shell.zig").mouseInPlayerTopChrome(me.p);
+                            const over_video = me.p.x >= img_rs.x and me.p.x <= img_rs.x + img_rs.w and me.p.y >= img_rs.y and me.p.y <= img_rs.y + img_rs.h;
+
+                            if (SurfaceGesture.armed_cell == i) {
+                                if (me.action == .motion) {
+                                    if (dvui.dragging(me.p, SurfaceGesture.drag_name) != null) {
+                                        SurfaceGesture.armed_cell = null;
+                                        dvui.captureMouse(null, e.num);
+                                        dvui.dragEnd();
+                                        e.handle(@src(), &img_wd);
+                                        _ = @import("titlebar.zig").beginNativeDrag();
+                                    }
+                                } else if (me.action == .release and me.button == .left) {
+                                    SurfaceGesture.armed_cell = null;
+                                    dvui.captureMouse(null, e.num);
+                                    dvui.dragEnd();
                                     state.app.active_player_idx = i;
                                     // Double-click → fullscreen, single → pause.
                                     // Shares input_pure.DoubleTap with the F F
@@ -664,6 +763,17 @@ pub fn renderGrid() !void {
                                         // Single click: toggle pause
                                         p.togglePause();
                                     }
+                                    e.handle(@src(), &img_wd);
+                                }
+                                continue;
+                            }
+
+                            if (!over_controls and !over_top_chrome and over_video) {
+                                if (me.action == .press and me.button == .left and state.app.dragging_magnet_len == 0) {
+                                    SurfaceGesture.armed_cell = i;
+                                    dvui.captureMouse(&img_wd, e.num);
+                                    dvui.dragPreStart(me.p, .{ .name = SurfaceGesture.drag_name });
+                                    e.handle(@src(), &img_wd);
                                 } else if (me.action == .release and me.button == .left) {
                                     if (state.app.dragging_magnet_len > 0) {
                                         state.app.active_player_idx = i;
@@ -717,6 +827,7 @@ pub fn renderGrid() !void {
                             })) {
                                 p.current_torrent_id = -1;
                                 p.is_torrent = false;
+                                p.playback_origin = .direct;
                                 p.torrent_is_ready = false;
                                 p.has_metadata = false;
                                 p.metadata_start_time = 0;
@@ -760,7 +871,11 @@ pub fn renderGrid() !void {
                         loading_box.deinit();
                     }
 
-                    if (state.app.show_cell_overlay) {
+                    // The dedicated Player page already has a media-close action
+                    // in its bottom transport row. Keeping this cell-close chip
+                    // would stack a second X over the window close button.
+                    const dedicated_player = state.app.page_shell_enabled and state.app.router.current == .player;
+                    if (state.app.show_cell_overlay and !dedicated_player) {
                         var tr_box = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i, .expand = .none, .gravity_x = 1.0, .gravity_y = 0.0, .padding = dvui.Rect.all(8) });
 
                         var x_bg = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i, .background = true, .color_fill = theme.colors.overlay, .corner_radius = dvui.Rect.all(theme.radius.pill), .padding = theme.dims.pad_xs });
@@ -1077,10 +1192,17 @@ pub fn renderGrid() !void {
                         {
                             const show_pct = lpure.phaseShowsPercent(phase) and (gated or buf_pct > 0);
                             var phase_buf: [64]u8 = undefined;
-                            const phase_txt: []const u8 = if (show_pct)
-                                (std.fmt.bufPrint(&phase_buf, "{s} \u{00B7} {d}%", .{ lpure.phaseLabel(phase), buf_pct }) catch lpure.phaseLabel(phase))
+                            const loading_url = p.current_url[0..@min(p.current_url_len, p.current_url.len)];
+                            const phase_base: []const u8 = if (phase == .opening and
+                                (std.mem.indexOf(u8, loading_url, "youtube.com") != null or
+                                    std.mem.indexOf(u8, loading_url, "youtu.be") != null))
+                                "Resolving YouTube stream"
                             else
                                 lpure.phaseLabel(phase);
+                            const phase_txt: []const u8 = if (show_pct)
+                                (std.fmt.bufPrint(&phase_buf, "{s} \u{00B7} {d}%", .{ phase_base, buf_pct }) catch phase_base)
+                            else
+                                phase_base;
                             _ = dvui.label(@src(), "{s}", .{phase_txt}, .{
                                 .id_extra = i + 3190,
                                 .color_text = theme.colors.text_secondary,

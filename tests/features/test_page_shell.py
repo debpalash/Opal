@@ -48,9 +48,18 @@ def test_no_dead_drawer_tab():
 @test("Omnibox → Unified Search", "Page Shell")
 def test_omnibox_search():
     shell = open(os.path.join(PROJECT_DIR, "src/ui/shell.zig")).read()
+    header = open(os.path.join(PROJECT_DIR, "src/ui/header.zig")).read()
     search = open(os.path.join(PROJECT_DIR, "src/services/search.zig")).read()
-    if "submitQuery" in shell and "pub fn submitQuery" in search and "navigate(.search)" in shell:
-        return "pass", "omnibox routes plain queries to unified search"
+    main = open(os.path.join(PROJECT_DIR, "src/main.zig")).read()
+    memory_entry = _between(search, "pub fn memorySearch(", "fn memorySearchWorker(")
+    if ("submitQuery" in shell and "pub fn submitQuery" in search and "navigate(.search)" in shell
+            and "switch (browser_pure.classifyOmnibox(trimmed))" in header
+            and "search.submitQuery(trimmed)" in header
+            and "spawn(memorySearchWorker" in memory_entry
+            and "getEmbedding" not in memory_entry
+            and "pub fn drainMemorySearch" in search
+            and "drainMemorySearch()" in main):
+        return "pass", "both omniboxes share intent routing; memory lookup publishes asynchronously"
     return "fail", "omnibox not wired to unified search"
 
 

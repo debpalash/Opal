@@ -423,6 +423,9 @@ fn doDownload(file_id: i64) void {
     if (state.app.active_player_idx < state.app.players.items.len) {
         const p = state.app.players.items[state.app.active_player_idx];
         _ = c.mpvSubAdd(p.mpv_ctx, sub_path);
+        _ = c.mpv.mpv_command_string(p.mpv_ctx, "set sub-visibility yes");
+        state.app.subtitles_enabled = true;
+        state.markConfigDirty();
     }
 
     state.showToast("Subtitle loaded");
@@ -690,6 +693,9 @@ fn doSubdlDownload(url_path: []const u8) void {
     if (state.app.active_player_idx < state.app.players.items.len) {
         const p = state.app.players.items[state.app.active_player_idx];
         _ = c.mpvSubAdd(p.mpv_ctx, srt);
+        _ = c.mpv.mpv_command_string(p.mpv_ctx, "set sub-visibility yes");
+        state.app.subtitles_enabled = true;
+        state.markConfigDirty();
     }
 
     state.showToast("Subtitle loaded");

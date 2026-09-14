@@ -49,7 +49,7 @@ var last_build_ms: i64 = 0;
 var expanded_key: [256]u8 = std.mem.zeroes([256]u8);
 var expanded_key_len: usize = 0;
 
-pub const TorrentAction = enum { pause, @"resume", priority, cancel };
+pub const TorrentAction = enum { pause, @"resume", recheck, priority, cancel };
 
 // Staging rows live at module scope, not on the UI stack: a tp.Row is ~700B and
 // three arrays of them would be ~350KB of stack per frame.
@@ -138,7 +138,7 @@ fn buildSnapshot() void {
         r.progress = progress;
         r.dl_rate = if (dl_rate > 0) @intCast(dl_rate) else 0;
         r.seeds = if (seeds > 0) @intCast(@min(seeds, 65535)) else 0;
-        r.poll_err = rc < 0;
+        r.poll_err = rc < 0 or c.mpv.torrent_has_error(ses, i) != 0;
         r.has_metadata = rc >= 0 and pbuf[0] != 0;
         r.paused = c.mpv.torrent_is_paused(ses, i) != 0;
         const tsize = c.mpv.torrent_get_total_size(ses, i);
@@ -263,6 +263,16 @@ fn rowKey(r: *const tp.Row) []const u8 {
 /// would hand one row's armed state to another.
 fn rowId(r: *const tp.Row) usize {
     return @truncate(std.hash.Wyhash.hash(0x0DA1, rowKey(r)));
+}
+
+/// Resolve only the single safe root entry captured by the file scanner or
+/// torrent metadata. Stored/imported rows are untrusted until this boundary.
+fn rowDiskPath(r: *const tp.Row, out: *[1024]u8) ?[:0]const u8 {
+    const relative = r.diskSlice();
+    if (!r.hasFile() or !tp.safeDiskRelative(relative)) return null;
+    const save_path = state.app.save_path_buf[0..state.app.save_path_len];
+    if (save_path.len == 0) return null;
+    return std.fmt.bufPrintZ(out, "{s}/{s}", .{ save_path, relative }) catch null;
 }
 
 fn isExpanded(r: *const tp.Row) bool {
@@ -604,6 +614,8 @@ fn renderRow(r: *const tp.Row, i: usize) bool {
             if (state.app.active_player_idx < state.app.players.items.len) {
                 const p = state.app.players.items[state.app.active_player_idx];
                 p.current_torrent_id = r.torrent_id;
+                p.is_torrent = true;
+                p.playback_origin = .torrent;
                 p.torrent_is_ready = false;
                 p.has_metadata = false;
                 p.last_load_time = 0;
@@ -620,9 +632,8 @@ fn renderRow(r: *const tp.Row, i: usize) bool {
             .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
             .gravity_y = 0.5,
         })) {
-            const save_path = state.app.save_path_buf[0..state.app.save_path_len];
             var fp: [1024]u8 = undefined;
-            if (std.fmt.bufPrintZ(&fp, "{s}/{s}", .{ save_path, r.diskSlice() })) |full| {
+            if (rowDiskPath(r, &fp)) |full| {
                 if (state.app.active_player_idx < state.app.players.items.len) {
                     state.app.players.items[state.app.active_player_idx].load_file(full);
                     // Record into the SHARED watch-history store (with the file
@@ -631,7 +642,7 @@ fn renderRow(r: *const tp.Row, i: usize) bool {
                     @import("../player/watch_history.zig").savePosition(r.diskSlice(), 1.0, full);
                     state.gotoPlayer();
                 }
-            } else |_| {}
+            } else {}
         }
     }
 
@@ -647,6 +658,7 @@ fn renderRow(r: *const tp.Row, i: usize) bool {
             .gravity_y = 0.5,
         })) {
             const d = r.diskSlice();
+            if (!tp.safeDiskRelative(d)) return false;
             const nlen = @min(d.len, browse_subdir_buf.len);
             @memcpy(browse_subdir_buf[0..nlen], d[0..nlen]);
             browse_subdir_len = nlen;
@@ -675,6 +687,18 @@ fn renderRow(r: *const tp.Row, i: usize) bool {
         }
     }
 
+    // A real libtorrent storage/tracker error is recoverable in-place. Recheck
+    // revalidates existing bytes and resumes without discarding the transfer.
+    if (r.hasTorrent() and st == .errored) {
+        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"rotate-cw", .{}, .{}, .{
+            .id_extra = rid,
+            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_text = theme.colors.accent,
+            .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
+            .gravity_y = 0.5,
+        })) _ = recheckTorrent(r.torrent_id);
+    }
+
     // Re-download from the history link.
     if (r.hasHistory() and !r.hasTorrent()) {
         const hidx: usize = @intCast(r.hist_idx);
@@ -701,11 +725,10 @@ fn renderRow(r: *const tp.Row, i: usize) bool {
             .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
             .gravity_y = 0.5,
         })) {
-            const save_path = state.app.save_path_buf[0..state.app.save_path_len];
             var fp: [1024]u8 = undefined;
-            if (std.fmt.bufPrintZ(&fp, "{s}/{s}", .{ save_path, r.diskSlice() })) |full| {
+            if (rowDiskPath(r, &fp)) |full| {
                 openInFileManager(full);
-            } else |_| {}
+            } else {}
         }
     }
 
@@ -744,6 +767,7 @@ pub fn setTorrentPaused(id: c_int, paused: bool) bool {
         c.mpv.torrent_pause(ses, id)
     else
         c.mpv.torrent_resume(ses, id);
+    @import("torrent_intents.zig").setPaused(id, paused);
     rows_dirty.store(true, .release);
     return true;
 }
@@ -754,6 +778,14 @@ pub fn setTorrentFilePriority(id: c_int, file_idx: c_int, priority: c_int) bool 
     if (file_idx < 0 or file_idx >= c.mpv.torrent_get_file_count(ses, id)) return false;
     if (priority != 0 and priority != 7) return false;
     c.mpv.torrent_set_file_priority(ses, id, file_idx, priority);
+    rows_dirty.store(true, .release);
+    return true;
+}
+
+pub fn recheckTorrent(id: c_int) bool {
+    const ses = state.torrentSession();
+    if (!liveTorrent(ses, id)) return false;
+    c.mpv.torrent_force_recheck(ses, id);
     rows_dirty.store(true, .release);
     return true;
 }
@@ -777,6 +809,7 @@ pub fn applyTorrentAction(id: c_int, action: TorrentAction, file_idx: c_int, pri
     return switch (action) {
         .pause => setTorrentPaused(id, true),
         .@"resume" => setTorrentPaused(id, false),
+        .recheck => recheckTorrent(id),
         .priority => setTorrentFilePriority(id, file_idx, priority),
         .cancel => removeTorrentById(id),
     };
@@ -795,6 +828,7 @@ fn downloadHistoryHasName(name: []const u8) bool {
 }
 
 fn dropLiveTorrent(id: c_int) void {
+    @import("torrent_intents.zig").forgetTorrent(id);
     c.mpv.torrent_remove(state.torrentSession(), id);
     // STABLE-SLOT model: torrent ids are never renumbered on remove, so other
     // handles stay valid — only clear the one that was deleted.
@@ -852,18 +886,16 @@ fn renderExpanded(r: *const tp.Row) bool {
                 .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
                 .gravity_y = 0.5,
             }) and !hashing) {
-                const save_path = state.app.save_path_buf[0..state.app.save_path_len];
                 var vp: [1024]u8 = undefined;
-                if (std.fmt.bufPrint(&vp, "{s}/{s}", .{ save_path, r.diskSlice() })) |full| {
+                if (rowDiskPath(r, &vp)) |full| {
                     startVtHash(full);
-                } else |_| {}
+                } else {}
             }
         }
 
         if (components.confirmDangerButton(@src(), "Delete files from disk", rowId(r))) {
-            const save_path = state.app.save_path_buf[0..state.app.save_path_len];
             var dp: [1024]u8 = undefined;
-            if (std.fmt.bufPrintZ(&dp, "{s}/{s}", .{ save_path, r.diskSlice() })) |del| {
+            if (rowDiskPath(r, &dp)) |del| {
                 // Stat the target rather than trusting r.is_dir: a completed
                 // torrent that downloaded a FOLDER is a torrent row with is_dir
                 // == false, so deleteFile would silently no-op and leave the
@@ -882,7 +914,7 @@ fn renderExpanded(r: *const tp.Row) bool {
                 expanded_key_len = 0;
                 state.showToast("Deleted");
                 return true;
-            } else |_| {}
+            } else {}
         }
     }
     return false;
@@ -1200,6 +1232,8 @@ fn renderExpandedFiles(torrent_id: i32) void {
             if (state.app.active_player_idx < state.app.players.items.len) {
                 const p = state.app.players.items[state.app.active_player_idx];
                 p.current_torrent_id = torrent_id;
+                p.is_torrent = true;
+                p.playback_origin = .torrent;
                 p.selected_file_idx = f_idx;
                 p.torrent_is_ready = false;
                 p.has_metadata = true;

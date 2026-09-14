@@ -60,6 +60,37 @@ static void clampMaximizeToWorkArea(HWND hwnd, MINMAXINFO *mmi)
 static LRESULT CALLBACK opalWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
     switch (msg) {
+    case WM_NCHITTEST: {
+        int logical_w = 0, logical_h = 0;
+        RECT wr;
+        LRESULT hit = CallWindowProcW(g_prev_proc, hwnd, msg, wparam, lparam);
+        /* Preserve the SDL/native resize edges. If the SDL callback did not
+         * promote our custom title band, return a real caption hit so Windows
+         * owns dragging, drag-to-restore, and Aero Snap. */
+        if (hit != HTCLIENT || !g_window || !GetWindowRect(hwnd, &wr)) {
+            return hit;
+        }
+        SDL_GetWindowSize(g_window, &logical_w, &logical_h);
+        if (logical_w > 0 && logical_h > 0) {
+            const int physical_w = wr.right - wr.left;
+            const int physical_h = wr.bottom - wr.top;
+            const int title_h = MulDiv(30, physical_h, logical_h);
+            const int controls_w = MulDiv(3 * 44, physical_w, logical_w);
+            const int x = (int)(short)LOWORD(lparam);
+            const int y = (int)(short)HIWORD(lparam);
+            if (y >= wr.top && y < wr.top + title_h && x < wr.right - controls_w) {
+                return HTCAPTION;
+            }
+        }
+        return hit;
+    }
+    case WM_NCCALCSIZE:
+        /* Retain native resize/snap style bits without showing their standard
+         * non-client frame; Opal draws the entire title area itself. */
+        if (wparam) {
+            return 0;
+        }
+        break;
     case WM_GETMINMAXINFO: {
         /* SDL first: it also enforces the window's min/max size constraints. */
         LRESULT res = CallWindowProcW(g_prev_proc, hwnd, msg, wparam, lparam);
@@ -90,7 +121,7 @@ void opal_titlebar_install_native(SDL_Window *win)
     SDL_SysWMinfo info;
     HWND hwnd;
 
-    if (g_prev_proc != NULL || win == NULL) {
+    if (win == NULL) {
         return;
     }
     SDL_VERSION(&info.version);
@@ -105,7 +136,55 @@ void opal_titlebar_install_native(SDL_Window *win)
     /* The W variants matter: SDL registers a Unicode window class, and
      * subclassing with the ANSI entry points would silently convert the window
      * to ANSI and mangle IME / non-Latin text input. */
-    g_prev_proc = (WNDPROC)(LONG_PTR)SetWindowLongPtrW(hwnd, GWLP_WNDPROC, (LONG_PTR)opalWndProc);
+    if (g_prev_proc == NULL) {
+        g_prev_proc = (WNDPROC)(LONG_PTR)SetWindowLongPtrW(hwnd, GWLP_WNDPROC, (LONG_PTR)opalWndProc);
+    }
+    {
+        LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+        /* Keep the native caption contract even though WM_NCCALCSIZE removes
+         * its visible area. Windows 11 uses it with WS_MAXIMIZEBOX to enable
+         * Snap Layouts for custom-drawn title bars. */
+        LONG_PTR desired = style | WS_CAPTION | WS_THICKFRAME |
+                           WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_SYSMENU;
+        if (desired != style) {
+            SetWindowLongPtrW(hwnd, GWL_STYLE, desired);
+            SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER |
+                         SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        }
+    }
+}
+
+/* Begin the real Windows caption-move loop from a client-area gesture. This
+ * preserves Aero Snap, multi-monitor dragging, and drag-to-restore behavior;
+ * manually calling SDL_SetWindowPosition on every mouse move would lose all
+ * three. The caller waits for a small motion threshold before entering here,
+ * so an ordinary click can retain its player action. */
+int opal_titlebar_begin_native_drag(SDL_Window *win)
+{
+    SDL_SysWMinfo info;
+    HWND hwnd;
+
+    if (win == NULL) {
+        return 0;
+    }
+    SDL_VERSION(&info.version);
+    if (!SDL_GetWindowWMInfo(win, &info) || info.subsystem != SDL_SYSWM_WINDOWS) {
+        return 0;
+    }
+    hwnd = info.info.win.window;
+    if (hwnd == NULL) {
+        return 0;
+    }
+
+    {
+        POINT pt;
+        GetCursorPos(&pt);
+        ReleaseCapture();
+        SendMessageW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION,
+                     MAKELPARAM((short)pt.x, (short)pt.y));
+    }
+    return 1;
 }
 
 #endif /* _WIN32 */

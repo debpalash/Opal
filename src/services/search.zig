@@ -46,6 +46,66 @@ pub var search_abort: std.atomic.Value(bool) = std.atomic.Value(bool).init(false
 pub var search_thread: ?std.Thread = null;
 pub var search_buf = std.mem.zeroes([1024]u8);
 
+// Memory-assisted omnibox queries may invoke an embedding backend. Keep that
+// work off the render thread, publish only the newest generation, and begin the
+// normal universal resolver fan-out from the UI thread in drainMemorySearch().
+const MemoryQuery = struct {
+    phrase: [1024]u8 = std.mem.zeroes([1024]u8),
+    phrase_len: usize = 0,
+    current_title: [128]u8 = std.mem.zeroes([128]u8),
+    current_title_len: usize = 0,
+    current_pos: f64 = 0,
+    generation: u64 = 0,
+};
+
+const MemoryPublish = struct {
+    query: [1024]u8 = std.mem.zeroes([1024]u8),
+    query_len: usize = 0,
+    generation: u64 = 0,
+};
+
+var memory_generation = std.atomic.Value(u64).init(0);
+var memory_publish_lock: @import("../core/sync.zig").Mutex = .{};
+var memory_publish_ready = std.atomic.Value(bool).init(false);
+var memory_publish: MemoryPublish = .{};
+
+const torrent_open_queue = @import("torrent_open_queue.zig");
+var pending_torrent_lock: @import("../core/sync.zig").Mutex = .{};
+var pending_torrent_ready = std.atomic.Value(bool).init(false);
+var pending_torrents: torrent_open_queue.Queue = .{};
+
+fn deferTorrentOpen(kind: torrent_open_queue.Kind, source: []const u8) bool {
+    pending_torrent_lock.lock();
+    const accepted = pending_torrents.push(kind, source);
+    if (accepted) pending_torrent_ready.store(true, .release);
+    pending_torrent_lock.unlock();
+    if (!accepted) return false;
+    state.wakeUi();
+    return true;
+}
+
+/// Called from the UI frame after the background torrent session publishes.
+/// A bounded FIFO retains every ordinary cold-start action. One item is handled
+/// per frame so player/list mutation remains serialized without a long frame.
+pub fn flushPendingTorrentOpen() void {
+    if (state.torrentSession() == null or !pending_torrent_ready.load(.acquire)) return;
+
+    var entry: ?torrent_open_queue.Entry = null;
+    var more = false;
+    pending_torrent_lock.lock();
+    entry = pending_torrents.pop();
+    more = pending_torrents.count > 0;
+    pending_torrent_ready.store(more, .release);
+    pending_torrent_lock.unlock();
+    const pending = entry orelse return;
+
+    switch (pending.kind) {
+        .magnet => addMagnetToEngine(pending.slice()),
+        .torrent_file => addTorrentFileToEngine(pending.slice()),
+    }
+    if (more) state.wakeUi();
+}
+
 // Universal-search result sort mode (Relevance / Quality / Seeds).
 const UniSort = enum(usize) { relevance = 0, quality = 1, seeds = 2 };
 var uni_sort: UniSort = .relevance;
@@ -56,6 +116,9 @@ var uni_sort: UniSort = .relevance;
 // nowhere and never frees buffers the new worker owns — avoids the UAF/
 // double-free when triggerSearch aborts-and-respawns. (H2)
 pub var search_generation = std.atomic.Value(u64).init(0);
+// Set once a nova2 subprocess is successfully started. Ordinary sessions skip
+// the comparatively expensive process-table sweep during shutdown.
+var nova_may_exist = std.atomic.Value(bool).init(false);
 
 pub const SortType = enum { Seeds, Size, Peers, Health, Time };
 pub var current_sort: SortType = .Seeds;
@@ -298,6 +361,7 @@ pub fn asyncSearchTask(query: []const u8, my_gen: u64) void {
         failSearch(my_gen, "Could not start Python torrent sources (check Python and the engines folder)");
         return;
     };
+    nova_may_exist.store(true, .release);
 
     // Magnet URIs can carry a long tracker list. Real rows from the installed
     // engines exceed 1 KiB; takeDelimiter reports StreamTooLong when its
@@ -659,44 +723,96 @@ pub var memory_mode: bool = false;
 /// Mandatory offline fallback: if getEmbedding fails OR no confident scene hit,
 /// degrade to a plain unified search over the user's phrase. Never hard-fails.
 pub fn memorySearch(phrase: []const u8) void {
-    if (phrase.len == 0) return;
+    const trimmed = std.mem.trim(u8, phrase, " \t\r\n");
+    if (trimmed.len == 0) return;
+
+    const allocator = @import("../core/alloc.zig").allocator;
+    const query = allocator.create(MemoryQuery) catch {
+        submitQuery(trimmed);
+        return;
+    };
+    query.* = .{};
+    query.generation = memory_generation.fetchAdd(1, .acq_rel) + 1;
+    query.phrase_len = @min(trimmed.len, query.phrase.len - 1);
+    @memcpy(query.phrase[0..query.phrase_len], trimmed[0..query.phrase_len]);
+
+    // Snapshot player context on the UI thread; the worker never walks the
+    // mutable player list or calls libmpv.
+    if (state.app.active_player_idx < state.app.players.items.len) {
+        const p = state.app.players.items[state.app.active_player_idx];
+        query.current_pos = @max(0, p.last_seen_pos);
+        if (p.loading_label_len > 0 and p.loading_label_len <= p.loading_label.len) {
+            query.current_title_len = @min(p.loading_label_len, query.current_title.len);
+            @memcpy(query.current_title[0..query.current_title_len], p.loading_label[0..query.current_title_len]);
+        }
+    }
+
+    state.showToast("Searching your memory…");
+    @import("../core/workers.zig").spawn(memorySearchWorker, .{query}) catch {
+        allocator.destroy(query);
+        submitQuery(trimmed);
+    };
+}
+
+fn memorySearchWorker(query: *MemoryQuery) void {
+    const allocator = @import("../core/alloc.zig").allocator;
+    defer allocator.destroy(query);
 
     const ai_memory = @import("ai_memory.zig");
     const db = @import("../core/db.zig");
+    const phrase = query.phrase[0..query.phrase_len];
 
     // Embed the phrase; a null embedding makes retrieveScene use its keyword/LIKE
     // fallback (also spoiler-clamped). Either path is safe.
     var floats: [ai_memory.EMBED_DIM]f32 = undefined;
     const ok = ai_memory.getEmbedding(phrase, &floats);
 
-    // Active player's current title + time-pos drive the spoiler clamp. Guard the
-    // index properly; an empty title means no same-title restriction.
-    var cur_title: []const u8 = "";
-    var cur_pos: f64 = 0;
-    if (state.app.active_player_idx < state.app.players.items.len) {
-        const p = state.app.players.items[state.app.active_player_idx];
-        _ = c.mpv.mpv_get_property(p.mpv_ctx, "time-pos", c.mpv.MPV_FORMAT_DOUBLE, &cur_pos);
-        cur_title = if (p.loading_label_len > 0 and p.loading_label_len <= 128)
-            p.loading_label[0..p.loading_label_len]
-        else
-            "";
-    }
-
     // Nearest scene memory (spoiler clamp reused from db.retrieveScene — not
     // reimplemented here).
-    const hit = db.retrieveScene(if (ok) floats[0..] else null, phrase, cur_title, cur_pos);
+    const hit = db.retrieveScene(
+        if (ok) floats[0..] else null,
+        phrase,
+        query.current_title[0..query.current_title_len],
+        query.current_pos,
+    );
 
-    if (hit) |h| {
+    if (memory_generation.load(.acquire) != query.generation or
+        @import("../core/workers.zig").isQuitting()) return;
+
+    const selected = if (hit) |h| blk: {
         const seed = h.title[0..h.title_len];
-        if (seed.len > 0) {
-            // Seed = the matched title; fan into the existing multi-source search.
-            submitQuery(seed);
-            return;
-        }
-    }
+        break :blk if (seed.len > 0) seed else phrase;
+    } else phrase;
 
-    // Offline / no-hit fallback: plain unified search over the raw phrase.
-    submitQuery(phrase);
+    memory_publish_lock.lock();
+    if (memory_generation.load(.acquire) == query.generation) {
+        memory_publish.query_len = @min(selected.len, memory_publish.query.len - 1);
+        @memset(&memory_publish.query, 0);
+        @memcpy(memory_publish.query[0..memory_publish.query_len], selected[0..memory_publish.query_len]);
+        memory_publish.generation = query.generation;
+        memory_publish_ready.store(true, .release);
+    }
+    memory_publish_lock.unlock();
+    state.wakeUi();
+}
+
+/// UI-thread publication seam for memorySearchWorker. Stale generations are
+/// discarded; the current one fans into the ordinary deterministic search.
+pub fn drainMemorySearch() void {
+    if (!memory_publish_ready.load(.acquire)) return;
+    var local: [1024]u8 = undefined;
+    var len: usize = 0;
+    var generation: u64 = 0;
+    memory_publish_lock.lock();
+    if (memory_publish_ready.load(.acquire)) {
+        len = memory_publish.query_len;
+        @memcpy(local[0..len], memory_publish.query[0..len]);
+        generation = memory_publish.generation;
+        memory_publish_ready.store(false, .release);
+    }
+    memory_publish_lock.unlock();
+    if (len == 0 or generation != memory_generation.load(.acquire)) return;
+    submitQuery(local[0..len]);
 }
 
 /// Shutdown sweep: reap any lingering `engines/nova2.py` torrent-search
@@ -718,7 +834,7 @@ pub fn reapWorkers() void {
 pub fn shutdown() void {
     search_abort.store(true, .release);
     _ = search_generation.fetchAdd(1, .acq_rel);
-    reapWorkers();
+    if (nova_may_exist.load(.acquire)) reapWorkers();
     if (search_thread) |t| t.join();
     search_thread = null;
     is_searching.store(false, .release);
@@ -2121,7 +2237,7 @@ pub fn loadTorrentToPlayer(magnet_link: []const u8) void {
 
     // Auto-create a player if none exists
     if (state.app.players.items.len == 0) {
-        if (playermod.MediaPlayer.init(@import("../core/alloc.zig").allocator)) |new_p| {
+        if (playermod.acquire(@import("../core/alloc.zig").allocator)) |new_p| {
             state.app.players.append(@import("../core/alloc.zig").allocator, new_p) catch {
                 new_p.deinit(@import("../core/alloc.zig").allocator);
                 logs.pushLog("error", "search", "Failed to create player", true);
@@ -2304,7 +2420,7 @@ fn addMagnetToEngine(magnet_link: []const u8) void {
 
     // Auto-create a player if none exists
     if (state.app.players.items.len == 0) {
-        if (playermod.MediaPlayer.init(@import("../core/alloc.zig").allocator)) |new_p| {
+        if (playermod.acquire(@import("../core/alloc.zig").allocator)) |new_p| {
             state.app.players.append(@import("../core/alloc.zig").allocator, new_p) catch {
                 new_p.deinit(@import("../core/alloc.zig").allocator);
                 return;
@@ -2328,8 +2444,13 @@ fn addMagnetToEngine(magnet_link: []const u8) void {
     // sent people off checking a link that was fine. Clicking a result in the
     // first few seconds after launch did nothing and blamed the link.
     if (state.torrentSession() == null) {
-        @import("../core/logs.zig").pushLog("warn", "search", "Torrent engine still starting — magnet not added", true);
-        state.showToast("Torrent engine is still starting — try again in a moment");
+        if (deferTorrentOpen(.magnet, magnet_link)) {
+            @import("../core/logs.zig").pushLog("info", "search", "Torrent queued until engine startup completes", false);
+            state.showToast("Torrent queued — starting engine");
+        } else {
+            @import("../core/logs.zig").pushLog("error", "search", "Cold-start torrent queue is full", true);
+            state.showToast("Too many torrents queued — wait for startup");
+        }
         return;
     }
 
@@ -2351,6 +2472,7 @@ fn attachTorrentToPlayer(tid: c_int, source: []const u8) void {
     if (state.app.active_player_idx >= state.app.players.items.len) return;
 
     if (tid >= 0) {
+        @import("torrent_intents.zig").rememberTorrent(tid);
         const p = state.app.players.items[state.app.active_player_idx];
 
         // Stop whatever is playing RIGHT NOW.
@@ -2375,6 +2497,7 @@ fn attachTorrentToPlayer(tid: c_int, source: []const u8) void {
         p.metadata_start_time = @import("../core/io_global.zig").timestamp();
         p.is_loading = true;
         p.is_torrent = true;
+        p.playback_origin = .torrent;
         const lbl = "Torrent stream";
         @memcpy(p.loading_label[0..lbl.len], lbl);
         p.loading_label_len = lbl.len;
@@ -2432,7 +2555,7 @@ pub fn addTorrentFileToEngine(path: []const u8) void {
 
     // Auto-create a player if none exists (cold-start `opal foo.torrent`).
     if (state.app.players.items.len == 0) {
-        if (playermod.MediaPlayer.init(@import("../core/alloc.zig").allocator)) |new_p| {
+        if (playermod.acquire(@import("../core/alloc.zig").allocator)) |new_p| {
             state.app.players.append(@import("../core/alloc.zig").allocator, new_p) catch {
                 new_p.deinit(@import("../core/alloc.zig").allocator);
                 logs.pushLog("error", "search", "Failed to create player", true);
@@ -2455,8 +2578,13 @@ pub fn addTorrentFileToEngine(path: []const u8) void {
     @memcpy(null_term_path[0..copy_len], path[0..copy_len]);
 
     if (state.torrentSession() == null) {
-        @import("../core/logs.zig").pushLog("warn", "search", "Torrent engine still starting — .torrent not added", true);
-        state.showToast("Torrent engine is still starting — try again in a moment");
+        if (deferTorrentOpen(.torrent_file, path)) {
+            @import("../core/logs.zig").pushLog("info", "search", ".torrent queued until engine startup completes", false);
+            state.showToast("Torrent queued — starting engine");
+        } else {
+            @import("../core/logs.zig").pushLog("error", "search", "Cold-start torrent queue is full", true);
+            state.showToast("Too many torrents queued — wait for startup");
+        }
         return;
     }
     const tid = c.mpv.torrent_add_file(state.torrentSession(), @ptrCast(&null_term_path[0]), state.getSavePath());

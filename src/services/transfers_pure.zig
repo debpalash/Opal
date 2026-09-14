@@ -198,12 +198,30 @@ pub fn firstPathComponentAfter(abs: []const u8, save_path: []const u8) ?[]const 
     var root = save_path;
     while (root.len > 1 and root[root.len - 1] == '/') root = root[0 .. root.len - 1];
     if (!std.mem.startsWith(u8, abs, root)) return null;
+    // Prefix equality is not path ancestry: `/downloads-elsewhere/x` is not
+    // below `/downloads`. Require a separator at the root boundary.
+    if (abs.len > root.len and abs[root.len] != '/' and abs[root.len] != '\\') return null;
     var rest = abs[root.len..];
-    while (rest.len > 0 and rest[0] == '/') rest = rest[1..];
+    while (rest.len > 0 and (rest[0] == '/' or rest[0] == '\\')) rest = rest[1..];
     if (rest.len == 0) return null;
-    const end = std.mem.indexOfScalar(u8, rest, '/') orelse rest.len;
+    const end = std.mem.indexOfAny(u8, rest, "/\\") orelse rest.len;
     if (end == 0) return null;
-    return rest[0..end];
+    const component = rest[0..end];
+    if (!safeDiskRelative(component)) return null;
+    return component;
+}
+
+/// Validate the single root entry stored by a transfer row before it is joined
+/// to the user's configured save root. Reject every platform's traversal,
+/// absolute, device, UNC and alternate-data-stream spellings even when state
+/// was imported from another OS.
+pub fn safeDiskRelative(rel: []const u8) bool {
+    if (rel.len == 0 or rel.len > DISK_LEN) return false;
+    if (rel[0] == '/' or rel[0] == '\\') return false;
+    if (std.mem.indexOfScalar(u8, rel, 0) != null) return false;
+    if (std.mem.indexOfScalar(u8, rel, ':') != null) return false;
+    if (std.mem.indexOfAny(u8, rel, "/\\") != null) return false;
+    return !std.mem.eql(u8, rel, ".") and !std.mem.eql(u8, rel, "..");
 }
 
 pub const Match = enum { same_strong, same_weak, different, unknown };
@@ -488,7 +506,20 @@ test "firstPathComponentAfter finds the entry a torrent creates on disk" {
     try std.testing.expectEqualStrings("movie.mkv", firstPathComponentAfter("/dl/movie.mkv", "/dl").?);
     try std.testing.expectEqualStrings("Show.S01", firstPathComponentAfter("/dl/Show.S01/ep1.mkv", "/dl/").?);
     try std.testing.expect(firstPathComponentAfter("/other/x.mkv", "/dl") == null);
+    try std.testing.expect(firstPathComponentAfter("/dl-elsewhere/x.mkv", "/dl") == null);
+    try std.testing.expect(firstPathComponentAfter("/dl/../outside", "/dl") == null);
     try std.testing.expect(firstPathComponentAfter("", "/dl") == null); // no metadata yet
+}
+
+test "safeDiskRelative rejects cross-platform traversal and device paths" {
+    const safe = [_][]const u8{ "movie.mkv", "Show.S01", "album - song.flac" };
+    for (safe) |path| try std.testing.expect(safeDiskRelative(path));
+    const unsafe = [_][]const u8{
+        "",                   "../outside",           "nested/../../outside", "/absolute",   "\\absolute",
+        "C:/Windows/win.ini", "C:\\Windows\\win.ini", "\\\\server\\share",    "file:stream", "nested/./file",
+        "nested\\..\\file",
+    };
+    for (unsafe) |path| try std.testing.expect(!safeDiskRelative(path));
 }
 
 test "matchStrength: a hash mismatch is DECISIVE — same title must not collapse" {

@@ -221,13 +221,10 @@ On every torrent search where the engine filter is `all` or `eztv`
   on Opal's behalf.
 
 ### YouTube playlist / channel extraction
-`src/services/extractors.zig:94-107` shells out to `yt-dlp --flat-playlist -j …`,
-optionally with `--proxy <user-proxy>`. yt-dlp talks to whatever site the URL is for.
-**Privacy note:** the extractor unconditionally passes
-`--cookies-from-browser firefox`. This means **Opal will read your Firefox cookie jar
-and ship the matching cookies to whatever host yt-dlp contacts** for any URL that
-needs auth. The flow is local-to-yt-dlp (no detour through Opal's process), but it's
-worth knowing.
+Opal shells out to its yt-dlp helper with an isolated configuration and,
+optionally, the proxy explicitly configured in Opal. yt-dlp talks to the site
+named by the URL. Normal extraction does not read browser cookies, inherit a
+user yt-dlp configuration, or disable TLS verification.
 
 ---
 
@@ -433,8 +430,6 @@ lost:
 3. **Remote JSON API bind address.** Even with the v2 bearer token, default-binding
    to `0.0.0.0` exposes the API to the entire LAN. Consider `127.0.0.1` by default
    with an opt-in LAN toggle.
-4. **`extractors.zig` `--cookies-from-browser=firefox`** is unconditional. Some
-   users won't want their Firefox cookies surfaced to yt-dlp. Add a setting.
-5. **Jellyfin `DeviceId="zigzag-001"`** is shared across all installs. Switch to a
+4. **Jellyfin `DeviceId="zigzag-001"`** is shared across all installs. Switch to a
    per-install random hex string stored in config — that's actually more private
    *and* better for Jellyfin's session list.

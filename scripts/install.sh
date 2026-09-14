@@ -180,7 +180,7 @@ Exec=$bindir/opal %U
 Icon=opal
 Terminal=false
 Categories=AudioVideo;Video;Player;
-MimeType=video/x-matroska;video/mp4;video/webm;video/quicktime;video/x-msvideo;video/mpeg;video/mp2t;video/ogg;audio/mpeg;audio/flac;audio/mp4;audio/aac;audio/ogg;audio/opus;audio/x-wav;audio/x-matroska;audio/x-mpegurl;application/x-mpegURL;application/vnd.apple.mpegurl;application/x-bittorrent;x-scheme-handler/magnet;
+MimeType=video/x-matroska;video/mp4;video/webm;video/quicktime;video/x-msvideo;video/mpeg;video/mp2t;video/ogg;video/x-flv;video/x-ms-wmv;video/x-ms-asf;video/3gpp;video/3gpp2;audio/mpeg;audio/flac;audio/mp4;audio/aac;audio/ogg;audio/opus;audio/x-wav;audio/x-matroska;audio/x-mpegurl;audio/x-ms-wma;audio/x-aiff;application/x-mpegURL;application/vnd.apple.mpegurl;application/x-bittorrent;audio/x-scpls;x-scheme-handler/magnet;
 StartupNotify=true
 StartupWMClass=opal
 EOF

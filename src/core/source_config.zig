@@ -16,6 +16,7 @@ const std = @import("std");
 const paths = @import("paths.zig");
 const io = @import("io_global.zig");
 const alloc = @import("alloc.zig").allocator;
+const secret_store = @import("secret_store.zig");
 
 const pure = @import("source_config_pure.zig");
 const logs = @import("logs.zig");
@@ -34,6 +35,60 @@ const Entry = struct {
 var entries: [MAX_ENTRIES]Entry = undefined;
 var entry_count: usize = 0;
 var mutex: @import("sync.zig").Mutex = .{};
+
+const Protection = union(enum) {
+    unchanged,
+    protected: []u8,
+    invalid,
+};
+
+fn protectJsonSecrets(json_fields: []const u8) Protection {
+    if (@import("builtin").os.tag != .windows) return .unchanged;
+    var parsed = std.json.parseFromSlice(std.json.Value, alloc, json_fields, .{}) catch return .invalid;
+    defer parsed.deinit();
+    if (parsed.value != .object) return .invalid;
+
+    var needs_protection = false;
+    var scan = parsed.value.object.iterator();
+    while (scan.next()) |field| {
+        const value = field.value_ptr.*;
+        if (pure.isSecretField(field.key_ptr.*) and value == .string and value.string.len > 0 and !secret_store.isSealed(value.string)) {
+            needs_protection = true;
+            break;
+        }
+    }
+    if (!needs_protection) return .unchanged;
+
+    var out: [64 * 1024]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&out);
+    writer.writeByte('{') catch return .invalid;
+    var first = true;
+    var fields = parsed.value.object.iterator();
+    while (fields.next()) |field| {
+        if (!first) writer.writeByte(',') catch return .invalid;
+        first = false;
+        const encoded_key = std.json.Stringify.valueAlloc(alloc, field.key_ptr.*, .{}) catch return .invalid;
+        defer alloc.free(encoded_key);
+        writer.writeAll(encoded_key) catch return .invalid;
+        writer.writeByte(':') catch return .invalid;
+
+        const value = field.value_ptr.*;
+        if (pure.isSecretField(field.key_ptr.*) and value == .string and value.string.len > 0 and !secret_store.isSealed(value.string)) {
+            var sealed_buf: [2048]u8 = undefined;
+            defer @memset(&sealed_buf, 0);
+            const sealed = secret_store.seal(value.string, &sealed_buf) orelse return .invalid;
+            const encoded = std.json.Stringify.valueAlloc(alloc, sealed, .{}) catch return .invalid;
+            defer alloc.free(encoded);
+            writer.writeAll(encoded) catch return .invalid;
+        } else {
+            const encoded = std.json.Stringify.valueAlloc(alloc, value, .{}) catch return .invalid;
+            defer alloc.free(encoded);
+            writer.writeAll(encoded) catch return .invalid;
+        }
+    }
+    writer.writeByte('}') catch return .invalid;
+    return .{ .protected = alloc.dupe(u8, out[0..writer.end]) catch return .invalid };
+}
 
 /// Absolute path of the installed-sources directory.
 pub fn sourcesDir(buf: []u8) []const u8 {
@@ -88,10 +143,24 @@ pub fn reload() void {
         defer parsed.deinit();
         if (parsed.value != .object) continue;
 
+        var needs_migration = false;
         var fit = parsed.value.object.iterator();
         while (fit.next()) |fkv| {
             switch (fkv.value_ptr.*) {
-                .string => |s| putEntry(id, fkv.key_ptr.*, s),
+                .string => |s| {
+                    if (pure.isSecretField(fkv.key_ptr.*) and s.len > 0) {
+                        var plain: [pure.MAX_VAL_LEN]u8 = undefined;
+                        defer @memset(&plain, 0);
+                        if (secret_store.reveal(s, &plain)) |revealed| {
+                            putEntry(id, fkv.key_ptr.*, revealed);
+                            if (@import("builtin").os.tag == .windows and !secret_store.isSealed(s)) needs_migration = true;
+                        } else {
+                            logs.pushLog("warn", "sources", "Could not unlock an installed source credential", false);
+                        }
+                    } else {
+                        putEntry(id, fkv.key_ptr.*, s);
+                    }
+                },
                 // A list-valued field (`"mirrors": ["https://a", "https://b"]`)
                 // is folded into the same comma-separated string a hand-written
                 // `"mirrors": "a,b"` produces, so mirrors_pure has exactly ONE
@@ -112,6 +181,15 @@ pub fn reload() void {
                         w += el.string.len;
                     }
                     if (w > 0) putEntry(id, fkv.key_ptr.*, joined[0..w]);
+                },
+                else => {},
+            }
+        }
+        if (needs_migration) {
+            switch (protectJsonSecrets(body)) {
+                .protected => |protected| {
+                    defer alloc.free(protected);
+                    @import("secret_file.zig").write(fp, protected) catch {};
                 },
                 else => {},
             }
@@ -147,7 +225,14 @@ pub fn install(id: []const u8, json_fields: []const u8) bool {
 
     var fp_buf: [700]u8 = undefined;
     const fp = std.fmt.bufPrint(&fp_buf, "{s}/{s}.json", .{ dir_path, id }) catch return false;
-    io.cwdWriteFile(.{ .sub_path = fp, .data = json_fields }) catch return false;
+    switch (protectJsonSecrets(json_fields)) {
+        .invalid => return false,
+        .unchanged => @import("secret_file.zig").write(fp, json_fields) catch return false,
+        .protected => |protected| {
+            defer alloc.free(protected);
+            @import("secret_file.zig").write(fp, protected) catch return false;
+        },
+    }
     reload();
     return true;
 }

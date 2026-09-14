@@ -83,7 +83,7 @@ class torrentfunk(object):
 
     def download_torrent(self, info):
         html = retrieve_url(info)
-        m = re.search('(/tor/.+?\s)', html)
+        m = re.search(r'(/tor/.+?\s)', html)
         if m and len(m.groups()) > 0:
             print(download_file(self.url + m.group(1)))
 

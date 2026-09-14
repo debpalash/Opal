@@ -190,7 +190,7 @@ def test_web_ui_music_radio():
     return "pass", "Music + Radio: search/poll/play routes + tabs (hosted plays stream URL)"
 
 
-@test("Header Web UI toggle button (start/stop + auto-open)", "Web UI")
+@test("Web UI access stays reachable without header clutter", "Web UI")
 def test_header_web_ui_button():
     hdr = _src("src/ui/header.zig")
     sh = _src("src/ui/shell.zig")
@@ -203,12 +203,11 @@ def test_header_web_ui_button():
         # runs when page_shell_enabled is off. A button wired solely into that
         # legacy header is invisible in the default UI. It must be called from
         # shell.zig's nav cluster, which is what actually renders.
-        "wired into the live page shell": "header.renderWebUiButton();" in sh,
+        "reachable from live shell": 'menuItemLabel(@src(), "Web remote settings"' in sh,
         # Guarded: a missing call must report as this named check, not blow up
         # the whole test with a bare "substring not found".
-        "shell cluster, not the overflow menu": (
-            0 <= sh.find("header.renderWebUiButton();") < sh.find("fn renderOverflowItems()")
-        ),
+        "opens correct settings page": "state.app.settings_tab = .WebUi;" in sh,
+        "not mounted in primary nav": "header.renderWebUiButton();" not in sh,
         "globe icon": "icons.tvg.lucide.globe" in hdr,
         # Same persisted switch as Settings > Web Remote, so the two stay in sync.
         "shares settings flag": "state.app.web_remote_enabled" in hdr and "state.markConfigDirty()" in hdr,
@@ -228,7 +227,7 @@ def test_header_web_ui_button():
     missing = [k for k, ok in checks.items() if not ok]
     if missing:
         return "fail", "header Web UI button incomplete: " + ", ".join(missing)
-    return "pass", "Header globe toggle: start/stop web remote + opens 127.0.0.1:41595 once listening"
+    return "pass", "Web Remote stays reachable from More without crowding the primary header"
 
 
 @test("Web UI Access page: password, sessions, token, bind", "Web UI")

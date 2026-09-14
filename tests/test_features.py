@@ -17,6 +17,16 @@ import sys
 import argparse
 
 
+# The inventory reads the UTF-8 Zig/web tree from hundreds of small checks.
+# Windows Python otherwise inherits the legacy ANSI codec and reports every
+# non-ASCII source file as a product failure. Re-exec once in Python's native
+# UTF-8 mode; the environment also makes spawned Python probes deterministic.
+if os.name == "nt":
+    os.environ["PYTHONUTF8"] = "1"
+    if __name__ == "__main__" and not sys.flags.utf8_mode:
+        os.execv(sys.executable, [sys.executable, *sys.argv])
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Opal feature checks (database diagnostics are read-only).")
     parser.add_argument("--database", help="Use an isolated SQLite fixture instead of the app database")

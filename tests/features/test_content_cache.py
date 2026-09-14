@@ -7,6 +7,8 @@ from .harness import *  # noqa: F401,F403
 def test_content_cache():
     pure = _src("src/core/content_cache_pure.zig")
     drv = _src("src/core/content_cache.zig")
+    secret_file = _src("src/core/secret_file.zig")
+    secret_store = _src("src/core/secret_store.zig")
     build = _src("build.zig")
     cfg = _src("src/core/config.zig")
     st = _src("src/core/state.zig")
@@ -32,7 +34,12 @@ def test_content_cache():
         "tested serializer primitive": ("pub const Writer" in pure and "pub const Reader" in pure),
         # ── Driver: AEAD + key file + atomic write + decrypt-fail-as-miss ──
         "driver uses an AEAD": ("XChaCha20Poly1305" in drv or "Aes256Gcm" in drv),
-        "per-install key file (0600)": ("cache.key" in drv and "0o600" in drv),
+        "per-install key protected": (
+            "cache.key" in drv
+            and "secret_file.write" in drv
+            and "0o600" in secret_file
+            and "CryptProtectData" in secret_store
+        ),
         "key failure disables (no plaintext)": ("key_ok" in drv
                                                 and "disabled" in drv.lower()),
         "atomic write (temp + rename)": (".tmp" in drv and "renameAbsolute" in drv),

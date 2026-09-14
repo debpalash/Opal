@@ -40,6 +40,9 @@ const dropup = @import("dropup_pure.zig");
 /// mutable pointer. Recomputed from the chip anchor every frame, so a panel tracks
 /// its chip if the control bar moves (e.g. entering fullscreen).
 var dropup_rects: [9]dvui.Rect = [_]dvui.Rect{.{}} ** 9;
+/// Physical bounds from the last rendered frame. Mouse events are physical,
+/// while FloatingWindowWidget placement uses logical coordinates.
+var dropup_screen_rects: [9]dvui.Rect.Physical = [_]dvui.Rect.Physical{.{}} ** 9;
 
 /// Open a backdrop-less panel anchored above `kind`'s chip. Caller must deinit.
 pub fn beginDropUp(
@@ -62,7 +65,7 @@ pub fn beginDropUp(
     const i: usize = @intCast(@max(0, @intFromEnum(kind)));
     dropup_rects[i] = .{ .x = pt.x, .y = pt.y, .w = w, .h = h };
 
-    return dvui.floatingWindow(src, .{
+    const fw = dvui.floatingWindow(src, .{
         .modal = false, // no backdrop — the video stays visible and undimmed
         .rect = &dropup_rects[i],
         .open_flag = open,
@@ -77,6 +80,8 @@ pub fn beginDropUp(
         .corner_radius = dvui.Rect.all(theme.radius.md),
         .padding = dvui.Rect.all(theme.spacing.xs),
     });
+    dropup_screen_rects[i] = fw.data().borderRectScale().r;
+    return fw;
 }
 
 /// Small caption at the top of a drop-up. Replaces the modal's title bar: it names
@@ -88,18 +93,39 @@ pub fn dropUpTitle(src: std.builtin.SourceLocation, text: []const u8) void {
     });
 }
 
-/// Esc closes whichever drop-up is open. With no backdrop there is nothing to
-/// swallow a stray click, so Esc and re-clicking the chip are the dismissal paths.
-pub fn handleDropUpKeys() void {
+/// Run before the footer controls and popovers render. An outside press closes
+/// the old popover but deliberately remains unhandled, so the same press can
+/// activate Back, Settings, Close, or a different picker in one click.
+pub fn handleDropUpInput() void {
     // The Find-Subtitles panel is a drop-up too, but its open state lives on
     // state.app.sub_picker_open rather than footer.open_picker — Esc has to close
     // whichever is up.
     if (footer.open_picker == .none and !state.app.sub_picker_open) return;
+    const active_kind: footer.PickerKind = if (footer.open_picker != .none) footer.open_picker else .subs;
+    const i: usize = @intCast(@max(0, @intFromEnum(active_kind)));
+    const panel_rect = dropup_screen_rects[i];
+
     for (dvui.events()) |*e| {
-        if (e.evt != .key) continue;
-        if (e.evt.key.action == .down and e.evt.key.code == .escape) {
-            footer.open_picker = .none;
-            state.app.sub_picker_open = false;
+        switch (e.evt) {
+            .key => |ke| {
+                if (!e.handled and ke.action == .down and ke.code == .escape) {
+                    footer.closePickers();
+                    e.handled = true;
+                }
+            },
+            .mouse => |me| {
+                if (me.action == .press and me.button == .left and
+                    panel_rect.w > 0 and panel_rect.h > 0 and
+                    !dropup.contains(
+                        .{ .x = panel_rect.x, .y = panel_rect.y, .w = panel_rect.w, .h = panel_rect.h },
+                        me.p.x,
+                        me.p.y,
+                    ))
+                {
+                    footer.closePickers();
+                }
+            },
+            else => {},
         }
     }
 }
@@ -206,7 +232,12 @@ pub fn renderAspectPickerPopover(active_p: *player.MediaPlayer) void {
             if (std.fmt.bufPrintZ(&cmd, "set video-aspect-override \"{s}\"", .{m})) |cstr| {
                 _ = c.mpv.mpv_command_string(active_p.mpv_ctx, cstr.ptr);
             } else |_| {}
+            @memset(state.app.video_aspect_buf[0..], 0);
+            @memcpy(state.app.video_aspect_buf[0..m.len], m);
+            state.app.video_aspect_len = m.len;
+            state.markConfigDirty();
             footer.open_picker = .none;
+            dvui.refresh(null, @src(), null);
         }
     }
     if (!open) footer.open_picker = .none;
@@ -230,6 +261,30 @@ pub fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []con
 
     var count: i64 = 0;
     _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "track-list/count", c.mpv.MPV_FORMAT_INT64, &count);
+
+    // Visibility is separate from the selected subtitle track. Preserve the sid
+    // so turning subtitles back on is instant, while remembering the off choice
+    // for the next file and the next app launch.
+    if (kind == .sub) {
+        var visible: c_int = 1;
+        _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "sub-visibility", c.mpv.MPV_FORMAT_FLAG, &visible);
+        if (dvui.button(@src(), "Off", .{}, .{
+            .id_extra = 9990,
+            .expand = .horizontal,
+            .color_fill = if (visible == 0) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_text = if (visible == 0) theme.colors.accent else theme.colors.text_primary,
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
+            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+            .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
+        })) {
+            _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "set sub-visibility no");
+            state.app.subtitles_enabled = false;
+            state.markConfigDirty();
+            footer.closePickers();
+        }
+    }
 
     var rows_rendered: usize = 0;
     var i: i64 = 0;
@@ -255,11 +310,16 @@ pub fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []con
 
         var name_buf: [128]u8 = undefined;
         var row_name: []const u8 = "Unknown";
+        var track_lang_buf: [16]u8 = std.mem.zeroes([16]u8);
+        var track_lang_len: usize = 0;
         var qlang_buf: [64]u8 = undefined;
         const lq = std.fmt.bufPrintZ(&qlang_buf, "track-list/{d}/lang", .{i}) catch continue;
         const lc = c.mpv.mpv_get_property_string(active_p.mpv_ctx, lq.ptr);
         if (lc != null) {
-            row_name = std.fmt.bufPrint(&name_buf, "{s}", .{std.mem.span(lc)}) catch "Err";
+            const lang = std.mem.span(lc);
+            row_name = std.fmt.bufPrint(&name_buf, "{s}", .{lang}) catch "Err";
+            track_lang_len = @min(lang.len, track_lang_buf.len - 1);
+            @memcpy(track_lang_buf[0..track_lang_len], lang[0..track_lang_len]);
             c.mpv.mpv_free(@ptrCast(lc));
         } else {
             var qtitle_buf: [64]u8 = undefined;
@@ -291,7 +351,24 @@ pub fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []con
             if (std.fmt.bufPrintZ(&cmd, "set {s} {d}", .{ prop, t_id })) |cstr| {
                 _ = c.mpv.mpv_command_string(active_p.mpv_ctx, cstr.ptr);
             } else |_| {}
-            footer.open_picker = .none;
+            if (kind == .sub) {
+                _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "set sub-visibility yes");
+                state.app.subtitles_enabled = true;
+            }
+            if (track_lang_len > 0) {
+                if (kind == .audio) {
+                    @memset(state.app.audio_lang_buf[0..], 0);
+                    @memcpy(state.app.audio_lang_buf[0..track_lang_len], track_lang_buf[0..track_lang_len]);
+                    state.app.audio_lang_len = track_lang_len;
+                } else {
+                    const n = @min(track_lang_len, state.app.sub_lang_buf.len);
+                    @memset(state.app.sub_lang_buf[0..], 0);
+                    @memcpy(state.app.sub_lang_buf[0..n], track_lang_buf[0..n]);
+                    state.app.sub_lang_len = n;
+                }
+            }
+            state.markConfigDirty();
+            footer.closePickers();
         }
     }
 
@@ -316,7 +393,7 @@ pub fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []con
             .corner_radius = dvui.Rect.all(theme.radius.sm),
             .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
         })) {
-            footer.open_picker = .none;
+            footer.closePickers();
             state.app.sub_picker_open = true;
             @import("../player/subtitles.zig").searchFromActivePlayer(&state.app.sub_engine);
             if (state.app.opensub_api_key_len > 0) {
@@ -388,6 +465,11 @@ pub fn renderAudioDevicePickerPopover(active_p: *player.MediaPlayer) void {
             @memcpy(name_z[0..d.name_len], d.name[0..d.name_len]);
             name_z[d.name_len] = 0;
             _ = c.mpv.mpv_set_property_string(active_p.mpv_ctx, "audio-device", @ptrCast(&name_z));
+            @memset(state.app.audio_device_buf[0..], 0);
+            const remembered_len = @min(d.name_len, state.app.audio_device_buf.len - 1);
+            @memcpy(state.app.audio_device_buf[0..remembered_len], d.name[0..remembered_len]);
+            state.app.audio_device_len = remembered_len;
+            state.markConfigDirty();
             var toast_buf: [192]u8 = undefined;
             const msg = std.fmt.bufPrint(&toast_buf, "Audio output: {s}", .{d.label()}) catch "Audio output changed";
             state.showToast(msg);

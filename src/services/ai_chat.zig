@@ -322,8 +322,8 @@ fn initCallbacks() void {
     server.setErrorCallback(&setError);
 }
 
-/// One-time service wiring: voice transcript callback, error sink, zombie
-/// server sweep, LLM path check. MUST NOT live only inside a render fn —
+/// One-time service wiring: voice transcript callback and error sink. MUST NOT
+/// live only inside a render fn —
 /// it used to run in renderChatBody, which lost all callers when chat moved
 /// to Home, leaving on_transcribed_fn null: voice conversations recorded and
 /// transcribed fine, then dropped every transcript silently.
@@ -334,13 +334,6 @@ pub fn ensureInit() void {
     // ensureReady (send path), the Settings AI panel, and the chat setup
     // card each call checkPaths (idempotent) right before reading its state.
     initCallbacks();
-    const K = struct {
-        var done: bool = false;
-    };
-    if (!K.done) {
-        K.done = true;
-        voice.killStaleServers();
-    }
 }
 
 /// Re-export for player.zig media hooks

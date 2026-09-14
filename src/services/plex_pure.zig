@@ -6,8 +6,94 @@ const std = @import("std");
 
 /// How long to wait before re-attempting a section load that failed. Short
 /// enough that a user who fixes their wifi sees the library without a restart,
-/// long enough that a persistent failure doesn't spawn a curl per frame.
+/// long enough that a persistent failure doesn't spawn a request per frame.
 pub const SECTIONS_RETRY_S: i64 = 15;
+
+pub fn authRejected(status_code: u16) bool {
+    return status_code == 401 or status_code == 403;
+}
+
+/// Plex media-part paths come from server metadata and are appended to the
+/// selected server origin. Keep the persisted deep link path-only and reject
+/// traversal/query/control injection before reconstruction.
+pub fn validPartPath(path: []const u8) bool {
+    if (path.len < 2 or path.len > 256 or path[0] != '/') return false;
+    if (std.mem.indexOf(u8, path, "..") != null) return false;
+    for (path) |ch| if (ch == '?' or ch == '#' or ch == '\r' or ch == '\n' or ch == 0) return false;
+    return true;
+}
+
+pub fn validRatingKey(key: []const u8) bool {
+    if (key.len == 0 or key.len > 32) return false;
+    for (key) |ch| if (!std.ascii.isDigit(ch)) return false;
+    return true;
+}
+
+pub const VersionSelection = struct {
+    primary: ?usize = null,
+    fallback: ?usize = null,
+};
+
+/// Choose at most two distinct playable media versions in server order.
+/// Callers pass the first Part path from each Media row; later parts in one
+/// row are split-file continuations and deliberately never enter this list.
+pub fn selectVersionParts(parts: []const []const u8) VersionSelection {
+    var out: VersionSelection = .{};
+    for (parts, 0..) |part, idx| {
+        if (!validPartPath(part)) continue;
+        if (out.primary == null) {
+            out.primary = idx;
+            continue;
+        }
+        if (!std.mem.eql(u8, part, parts[out.primary.?])) {
+            out.fallback = idx;
+            break;
+        }
+    }
+    return out;
+}
+
+fn safeToken(value: []const u8, max_len: usize) bool {
+    if (value.len == 0 or value.len > max_len) return false;
+    for (value) |ch| if (!std.ascii.isAlphanumeric(ch) and ch != '-' and ch != '.' and ch != '_') return false;
+    return true;
+}
+
+/// Credential-free HLS recovery URL for Plex's universal transcoder. The
+/// X-Plex-Token remains in the player's HTTP headers and is never serialized
+/// into this URL. This is used only after all direct media versions fail.
+pub fn transcodeUrl(server: []const u8, rating_key: []const u8, session: []const u8, client_id: []const u8, app_version: []const u8, out: []u8) ?[]const u8 {
+    if (server.len == 0 or !validRatingKey(rating_key) or
+        !safeToken(session, 64) or !safeToken(client_id, 64) or !safeToken(app_version, 32)) return null;
+    return std.fmt.bufPrint(
+        out,
+        "{s}/video/:/transcode/universal/start.m3u8?path=%2Flibrary%2Fmetadata%2F{s}&mediaIndex=0&partIndex=0&protocol=hls&hasMDE=1&fastSeek=1&directPlay=0&directStream=0&videoResolution=1920x1080&maxVideoBitrate=20000&videoQuality=100&subtitles=auto&session={s}&X-Plex-Client-Identifier={s}&X-Plex-Client-Profile-Name=Chrome&X-Plex-Product=Opal&X-Plex-Version={s}&X-Plex-Platform=Chrome",
+        .{ server, rating_key, session, client_id, app_version },
+    ) catch null;
+}
+
+pub const DeepLink = struct {
+    rating_key: []const u8,
+    part: []const u8,
+};
+
+/// Stable, credential-free Plex identity. The rating key drives timeline
+/// reporting while the media-part path reconstructs direct playback.
+pub fn buildDeepLink(rating_key: []const u8, part: []const u8, buf: []u8) ?[]const u8 {
+    if (!validRatingKey(rating_key) or !validPartPath(part)) return null;
+    return std.fmt.bufPrint(buf, "opal://plex/item/{s}/part{s}", .{ rating_key, part }) catch null;
+}
+
+pub fn parseDeepLink(link: []const u8) ?DeepLink {
+    const prefix = "opal://plex/item/";
+    if (!std.mem.startsWith(u8, link, prefix)) return null;
+    const tail = link[prefix.len..];
+    const marker = std.mem.indexOf(u8, tail, "/part/") orelse return null;
+    const rating_key = tail[0..marker];
+    const part = tail[marker + "/part".len ..];
+    if (!validRatingKey(rating_key) or !validPartPath(part)) return null;
+    return .{ .rating_key = rating_key, .part = part };
+}
 
 /// Should the Plex tab kick off a `/library/sections` fetch this frame?
 ///
@@ -25,7 +111,7 @@ pub const SECTIONS_RETRY_S: i64 = 15;
 ///     class of bug this fixes. So the caller latches only after a fetch parses.
 ///   - Latching on "we have sections" looks equivalent but silently breaks a
 ///     server with ZERO libraries: the fetch succeeds, returns an empty list,
-///     and a count-based check would keep firing a /library/sections curl every
+///     and a count-based check would keep firing a /library/sections request every
 ///     SECTIONS_RETRY_S seconds forever. An empty library is a successful load.
 /// Until that latch, `last_attempt_s` + the backoff give a failed load a retry
 /// without spawning a worker per frame.
@@ -79,6 +165,57 @@ test "regression: restored token with no sections triggers a fetch (blank-tab-on
     try std.testing.expect(shouldFetchSections(true, false, false, 0, 1000));
 }
 
+test "auth rejection is distinct from provider and transport failures" {
+    try std.testing.expect(authRejected(401));
+    try std.testing.expect(authRejected(403));
+    try std.testing.expect(!authRejected(0));
+    try std.testing.expect(!authRejected(404));
+    try std.testing.expect(!authRejected(500));
+}
+
+test "Plex part deep links stay path-only" {
+    try std.testing.expect(validPartPath("/library/parts/45/file.mkv"));
+    try std.testing.expect(!validPartPath("library/parts/45"));
+    try std.testing.expect(!validPartPath("/library/../secret"));
+    try std.testing.expect(!validPartPath("/part?X-Plex-Token=stolen"));
+}
+
+test "Plex version selection skips unusable and duplicate parts" {
+    const candidates = [_][]const u8{
+        "",
+        "../bad",
+        "/library/parts/10/movie.mkv",
+        "/library/parts/10/movie.mkv",
+        "/library/parts/20/movie.mp4",
+    };
+    const selected = selectVersionParts(&candidates);
+    try std.testing.expectEqual(@as(?usize, 2), selected.primary);
+    try std.testing.expectEqual(@as(?usize, 4), selected.fallback);
+    try std.testing.expect(selectVersionParts(&[_][]const u8{"bad"}).primary == null);
+}
+
+test "Plex transcode recovery URL is bounded and credential-free" {
+    var out: [1024]u8 = undefined;
+    const url = transcodeUrl("https://plex.example", "1234", "abc123", "client-1", "0.8.1", &out).?;
+    try std.testing.expect(std.mem.startsWith(u8, url, "https://plex.example/video/:/transcode/universal/start.m3u8?"));
+    try std.testing.expect(std.mem.indexOf(u8, url, "path=%2Flibrary%2Fmetadata%2F1234") != null);
+    try std.testing.expect(std.mem.indexOf(u8, url, "directPlay=0&directStream=0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, url, "hasMDE=1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, url, "X-Plex-Client-Profile-Name=Chrome") != null);
+    try std.testing.expect(std.mem.indexOf(u8, url, "X-Plex-Token") == null);
+    try std.testing.expect(transcodeUrl("https://plex.example", "12/x", "s", "c", "1", &out) == null);
+}
+
+test "tracked Plex deep links round-trip rating key and media path" {
+    var buf: [384]u8 = undefined;
+    const link = buildDeepLink("12345", "/library/parts/45/file.mkv", &buf).?;
+    const parsed = parseDeepLink(link).?;
+    try std.testing.expectEqualStrings("12345", parsed.rating_key);
+    try std.testing.expectEqualStrings("/library/parts/45/file.mkv", parsed.part);
+    try std.testing.expect(parseDeepLink("opal://plex/item/12x/part/library/parts/1/a.mkv") == null);
+    try std.testing.expect(buildDeepLink("12", "/library/../secret", &buf) == null);
+}
+
 test "shouldFetchSections: no fetch when disconnected" {
     try std.testing.expect(!shouldFetchSections(false, false, false, 0, 1000));
 }
@@ -90,7 +227,7 @@ test "shouldFetchSections: a successful load stops the trigger" {
 test "regression: a server with ZERO libraries must not poll forever" {
     // A successful fetch that returns an empty section list IS a load. Latching
     // on "section_count > 0" instead of "the fetch succeeded" would leave this
-    // firing a /library/sections curl every SECTIONS_RETRY_S for the whole run.
+    // firing a /library/sections request every SECTIONS_RETRY_S for the whole run.
     const loaded_once = true; // fetch succeeded; it just had nothing in it
     try std.testing.expect(!shouldFetchSections(true, loaded_once, false, 1000, 1000 + 10_000));
 }

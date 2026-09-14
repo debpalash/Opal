@@ -21,7 +21,7 @@ def test_typed_playback_load_seam():
             if not name.endswith(".zig"):
                 continue
             path = os.path.join(root, name)
-            rel = os.path.relpath(path, PROJECT_DIR)
+            rel = os.path.relpath(path, PROJECT_DIR).replace(os.sep, "/")
             text = open(path, encoding="utf-8").read()
             if ('"loadfile"' in text or 'loadfile \\"' in text) and rel != "src/player/player.zig":
                 offenders.append(rel)
@@ -265,6 +265,55 @@ def test_tv_calendar_and_hwdec():
     return "fail", f"missing: {missing}"
 
 
+@test("Hardware decode fallback is visible and non-repeating", "Player")
+def test_hwdec_fallback_feedback():
+    ply = _src("src/player/player.zig")
+    pure = _src("src/player/hwdec_feedback_pure.zig")
+    build = _src("build.zig")
+    checks = {
+        "observed runtime state": '"hwdec-current"' in ply
+            and "cached_hwdec_len" in ply,
+        "once-per-load feedback": "hwdec_fallback_notified = false" in ply
+            and "maybeNotifyHwdecFallback" in ply
+            and "GPU decode unavailable" in ply,
+        "no early false positive": "width <= 0 or height <= 0" in pure
+            and 'std.mem.eql(u8, value, "no")' in pure,
+        "pure behavior test": "test_hwdec_feedback_pure" in build
+            and 'root_source_file = b.path("src/player/hwdec_feedback_pure.zig")' in build,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", f"hardware decode feedback incomplete: {missing}"
+    return "pass", "software fallback is reported once only after a real video decoder exists"
+
+
+@test("Playback ownership prevents stale playlist and torrent advance", "Player")
+def test_typed_playback_origin():
+    load = _src("src/player/playback_load_pure.zig")
+    ply = _src("src/player/player.zig")
+    playlist = _src("src/player/playlist.zig")
+    queue = _src("src/services/queue.zig")
+    checks = {
+        "typed origin": "pub const Origin = enum" in load
+            and "origin: Origin = .direct" in load
+            and "queue_item_id: i64 = -1" in load,
+        "replace clears stale owner": "self.playback_origin = request.origin" in ply
+            and "self.current_torrent_id = -1" in ply
+            and "self.source_url_len = 0" in ply,
+        "playlist is explicit": "p.playback_origin != .playlist" in playlist
+            and ".origin = .playlist" in playlist,
+        "queue identity is stable": ".origin = .queue" in queue
+            and ".queue_item_id = item.id" in queue
+            and "playback.relativeIndex(" in queue,
+        "torrent internal loads preserve owner": ".origin = .torrent" in ply
+            and ".unbounded_network_read = true" in ply,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", f"typed playback ownership incomplete: {missing}"
+    return "pass", "direct/playlist/queue/torrent replacement and advance ownership is explicit"
+
+
 @test("Web Companion: Account Auth + LAN Bind + Bundled Page", "Remote")
 def test_web_companion():
     # The pairing code is gone (test_headless_auth.py owns the account system).
@@ -349,7 +398,17 @@ def test_hosted_mode_and_perf():
         # uploads the finished front buffer.
         "no mpv render block": "mpv_render_context_render" not in gr
             and "fn renderWorker(" in pl and "fn uploadFrame(" in gr,
-        "mpv lua trimmed": "load-osd-console" in pl and "load-stats-overlay" in pl,
+        "mpv startup trimmed": '"load-console", "no"' in pl
+            and '"load-stats-overlay", "no"' in pl
+            and '"input-builtin-bindings", "no"' in pl
+            and '"terminal", "no"' in pl,
+        "first player prepared after first frame": "scheduleWarmPlayer" in pl
+            and "initPrepared(allocator, false)" in pl
+            and "startPreparedRenderer" in pl
+            and "first_frame_complete" in _src("src/main.zig")
+            and "player_prewarm_ready.load(.acquire)" in _src("src/main.zig")
+            and "player_prewarm_ready.store(true, .release)" in _src("src/main.zig")
+            and "shutdownWarmPlayer" in _src("src/main.zig"),
     }
     missing = [k for k, v in checks.items() if not v]
     if not missing:
@@ -1642,3 +1701,53 @@ def fullscreen_reaches_the_window():
     if missing:
         return "fail", "window fullscreen not wired: " + ", ".join(missing)
     return "pass", "one per-frame reconcile drives SDL from fullscreen_player_idx"
+
+
+@test("Self-hosted playback selects versions and retries once", "Player")
+def self_hosted_playback_version_fallback():
+    """Jellyfin/Plex keep instant direct play but no longer assume one URL."""
+    load = _src("src/player/playback_load_pure.zig")
+    fallback = _src("src/player/playback_fallback_pure.zig")
+    player = _src("src/player/player.zig")
+    browser = _src("src/services/browser.zig")
+    jf = _src("src/services/jellyfin.zig")
+    jfp = _src("src/services/jellyfin_pure.zig")
+    plex = _src("src/services/plex.zig")
+    main = _src("src/main.zig")
+    jf_play = _between(jf, "pub fn playItem(", "pub fn playAudioItem(")
+    plex_play = _between(plex, "pub fn playPart(", "pub fn resumePlayback(")
+    checks = {
+        "typed fallback request": "fallback_url: []const u8" in load,
+        "play seam forwards fallback": ".fallback_url = request.fallback_url" in browser,
+        "fallback lifecycle is pure and tested": "pub const State = struct" in fallback
+            and "takeOnFailure" in fallback and "playbackStarted" in fallback,
+        "fallback is one-shot before visible error": "takeOnFailure()" in player
+            and player.index("takeOnFailure()") < player.index("Could not play this media"),
+        "actual playback disarms fallback": "MPV_EVENT_PLAYBACK_RESTART" in player
+            and "fallback_recovery.playbackStarted()" in player,
+        "Jellyfin requests media versions": "Fields=Overview,Path,MediaSources" in jf
+            and "firstMediaSourceId" in jfp,
+        "Jellyfin targets version then generic": "cachedMediaSourceId" in jf_play
+            and ".fallback_url = fallback" in jf_play,
+        "Jellyfin negotiates only after direct failure": "requestTranscodeRecovery" in player
+            and "PlaybackInfo?UserId=" in jf and '"EnableDirectPlay":false' in jf,
+        "negotiated result returns on UI thread": "drainTranscodeRecovery();" in main
+            and "applyServerRecovery" in jf,
+        "generated URL drops legacy query token": "stripApiKey" in jfp
+            and "transcodingUrl" in jfp,
+        "Jellyfin playback token is a header": "X-Emby-Token" in jf_play
+            and "api_key=" not in jf_play,
+        "Plex walks versions": "for (media.array.items) |version|" in plex
+            and "fallback_part" in plex,
+        "Plex playback token is a header": "X-Plex-Token" in plex_play
+            and "?X-Plex-Token=" not in plex_play,
+        "Plex server transcode is failure-only": "transcodeRecoveryUrl" in plex
+            and "opal://plex/item/" in player
+            and "Direct versions failed; using server transcode" in player,
+        "Plex transcode URL remains token-free": "pub fn transcodeUrl" in _src("src/services/plex_pure.zig")
+            and "?X-Plex-Token=" not in _between(_src("src/services/plex_pure.zig"), "pub fn transcodeUrl", "pub const DeepLink"),
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "self-hosted fallback incomplete: " + ", ".join(missing)
+    return "pass", "preferred versions, header auth, one bounded compatible fallback"

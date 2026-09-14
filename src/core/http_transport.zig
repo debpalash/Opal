@@ -18,13 +18,17 @@ pub const Options = struct {
     payload: ?[]const u8 = null,
     content_type: ?[]const u8 = null,
     auth_header: ?[]const u8 = null,
+    extra_headers: []const std.http.Header = &.{},
+    // Optional response status for callers that need to distinguish an HTTP
+    // rejection (for example expired credentials) from transport failure.
+    // Remains null if no response head was received.
+    status_out: ?*?std.http.Status = null,
 };
 
 pub fn effectiveTimeoutSecs(requested: u8) u8 {
     return std.math.clamp(requested, @as(u8, 1), @as(u8, 20));
 }
 
-const is_windows = builtin.os.tag == .windows;
 const max_redirects = 5;
 var fail_watchdog_spawn_for_test = false;
 var after_cleanup_for_test: ?*const fn (*Watchdog) void = null;
@@ -60,12 +64,11 @@ const Watchdog = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
         self.expired.store(true, .release);
-        if (comptime !is_windows) {
-            if (self.socket) |stream| {
-                // shutdown wakes a blocked std.Io read through EOF. Closing
-                // from this thread could instead panic or hit a recycled fd.
-                _ = std.c.shutdown(stream.socket.handle, std.c.SHUT.RDWR);
-            }
+        if (self.socket) |stream| {
+            // Portable socket shutdown wakes a blocked std.Io read on Windows
+            // and POSIX. Closing here could instead race request cleanup or hit
+            // a recycled handle, so ownership stays with the request thread.
+            stream.shutdown(io.io(), .both) catch {};
         }
     }
 
@@ -119,24 +122,25 @@ fn validHeader(name: []const u8, value: []const u8) bool {
 }
 
 /// Fetch into a caller-owned bounded buffer. The client must outlive the call.
-/// POSIX response reads are deadline/cancellation guarded; Windows retains its
-/// existing std.http behavior until its socket interruption path is validated.
+/// Response reads are deadline/cancellation guarded on every desktop platform.
 pub fn fetch(client: *std.http.Client, url: []const u8, buf: []u8, opts: Options) ?[]const u8 {
     if (workers.isQuitting()) return null;
+    if (opts.status_out) |out| out.* = null;
     var uri = std.Uri.parse(url) catch return null;
     var wd: Watchdog = .{
         .deadline_ms = io.monotonicMilliTimestamp() +| @as(i64, effectiveTimeoutSecs(opts.timeout_secs)) * 1000,
     };
-    const wd_thread: ?std.Thread = if (!is_windows) startWatchdog(&wd) catch return null else null;
+    const wd_thread = startWatchdog(&wd) catch return null;
     defer {
         wd.done.store(true, .release);
-        if (wd_thread) |thread| thread.join();
+        wd_thread.join();
     }
 
     var method = opts.method;
     var payload = opts.payload;
     var content_type = opts.content_type;
     var auth = opts.auth_header;
+    var extra_headers = opts.extra_headers;
     var referer = opts.referer;
     // Each resolved URI may borrow unchanged components from an earlier hop.
     // Keep all five buffers alive until the complete redirect chain finishes.
@@ -147,7 +151,7 @@ pub fn fetch(client: *std.http.Client, url: []const u8, buf: []u8, opts: Options
         if (!std.ascii.eqlIgnoreCase(uri.scheme, "http") and
             !std.ascii.eqlIgnoreCase(uri.scheme, "https")) return null;
 
-        var headers: [6]std.http.Header = undefined;
+        var headers: [16]std.http.Header = undefined;
         var count: usize = 0;
         headers[count] = .{ .name = "User-Agent", .value = opts.user_agent };
         count += 1;
@@ -172,6 +176,11 @@ pub fn fetch(client: *std.http.Client, url: []const u8, buf: []u8, opts: Options
                 count += 1;
             }
         }
+        if (count + extra_headers.len > headers.len) return null;
+        for (extra_headers) |header| {
+            headers[count] = header;
+            count += 1;
+        }
         for (headers[0..count]) |header| {
             if (!validHeader(header.name, header.value)) return null;
         }
@@ -181,16 +190,15 @@ pub fn fetch(client: *std.http.Client, url: []const u8, buf: []u8, opts: Options
             .extra_headers = headers[0..count],
         }) catch return null;
         defer releaseRequest(&req, &wd);
-        if (comptime !is_windows) {
-            const connection = req.connection orelse return null;
-            if (!wd.attach(connection.stream_reader.stream)) return null;
-        }
+        const connection = req.connection orelse return null;
+        if (!wd.attach(connection.stream_reader.stream)) return null;
         if (payload) |body| {
             req.sendBodyComplete(@constCast(body)) catch return null;
         } else {
             req.sendBodiless() catch return null;
         }
         var response = req.receiveHead(&.{}) catch return null;
+        if (opts.status_out) |out| out.* = response.head.status;
         switch (response.head.status) {
             .moved_permanently, .found, .see_other, .temporary_redirect, .permanent_redirect => {
                 if (redirects == max_redirects) return null;
@@ -204,6 +212,7 @@ pub fn fetch(client: *std.http.Client, url: []const u8, buf: []u8, opts: Options
                     // to another scheme/host/port, including sibling domains.
                     auth = null;
                     referer = null;
+                    extra_headers = &.{};
                 }
                 if ((response.head.status == .see_other and method != .HEAD) or
                     ((response.head.status == .moved_permanently or response.head.status == .found) and method == .POST))

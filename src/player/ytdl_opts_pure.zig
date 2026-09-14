@@ -36,7 +36,13 @@ pub const Options = struct {
     /// that is merely likely to exist (node ships on far more machines than
     /// deno) is free.
     js_runtime: []const u8 = "",
+    /// Skip YouTube manifest/config requests on the first attempt. Direct HTTP
+    /// formats still resolve; the player retries once with this disabled when
+    /// a live/restricted video genuinely needs the robust extraction path.
+    youtube_fast: bool = false,
 };
+
+const YOUTUBE_FAST_ARGS = "youtube:player_skip=configs;skip=hls,dash";
 
 /// A value may be spliced into mpv's comma-separated key=value list only if it
 /// cannot terminate the entry early or smuggle a second key — and if it does
@@ -76,6 +82,11 @@ pub fn buildRawOptions(opts: Options, out: []u8) ?[]const u8 {
     if (safeListValue(opts.js_runtime)) {
         if (!append(out, &w, ",js-runtimes=")) return null;
         if (!append(out, &w, opts.js_runtime)) return null;
+    }
+
+    if (opts.youtube_fast) {
+        if (!append(out, &w, ",extractor-args=%41%")) return null;
+        if (!append(out, &w, YOUTUBE_FAST_ARGS)) return null;
     }
 
     // A comma in the proxy would be read by mpv as an option separator.
@@ -284,6 +295,14 @@ test "js runtime is emitted before the proxy and only when named" {
     try std.testing.expect(std.mem.indexOf(u8, buildRawOptions(.{}, &b).?, "js-runtimes") == null);
 }
 
+test "fast YouTube extraction uses a length escape for its comma" {
+    var b: [400]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        "ignore-config=,no-playlist=,js-runtimes=node,extractor-args=%41%youtube:player_skip=configs;skip=hls,dash",
+        buildRawOptions(.{ .js_runtime = "node", .youtube_fast = true }, &b).?,
+    );
+}
+
 test "a comma/newline in the js runtime is dropped, not emitted" {
     var b: [400]u8 = undefined;
     try std.testing.expectEqualStrings(
@@ -304,16 +323,17 @@ test "too-small buffer yields null rather than a truncated option string" {
 // Regression: "YouTube links not playing / Requested format is not available".
 // Pinning youtube:player_client=tv made every video resolve to storyboards only
 // (sb0..sb3), so the height-based format selector matched nothing. Nothing this
-// module emits may pin a player client again.
+// module emits may pin a player client again. The fast path may use other
+// extractor arguments, but it must still leave client selection to yt-dlp.
 test "regression: never pins a youtube player client" {
     var b: [400]u8 = undefined;
     const cases = [_]Options{
         .{},
         .{ .proxy = "http://p:1" },
+        .{ .youtube_fast = true },
     };
     for (cases) |o| {
         const s = buildRawOptions(o, &b).?;
         try std.testing.expect(std.mem.indexOf(u8, s, "player_client") == null);
-        try std.testing.expect(std.mem.indexOf(u8, s, "extractor-args") == null);
     }
 }

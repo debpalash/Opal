@@ -51,6 +51,34 @@ pub fn renderSize(video_width: i64, video_height: i64, max_width: u32, max_heigh
     };
 }
 
+/// Fit the render target to a user-selected display aspect. mpv applies the
+/// same override while drawing; shaping its target here is what makes the
+/// resulting texture, and therefore Fit/Cover, visibly adopt the selection.
+pub fn renderSizeForAspect(video_width: i64, video_height: i64, max_width: u32, max_height: u32, aspect: []const u8) RenderSize {
+    const base = renderSize(video_width, video_height, max_width, max_height);
+    if (aspect.len == 0 or std.mem.eql(u8, aspect, "-1")) return base;
+
+    const colon = std.mem.indexOfScalar(u8, aspect, ':') orelse return base;
+    const numerator = std.fmt.parseUnsigned(u64, aspect[0..colon], 10) catch return base;
+    const denominator = std.fmt.parseUnsigned(u64, aspect[colon + 1 ..], 10) catch return base;
+    if (numerator == 0 or denominator == 0 or base.width < 2 or base.height < 2) return base;
+
+    const bw: u128 = base.width;
+    const bh: u128 = base.height;
+    const num: u128 = numerator;
+    const den: u128 = denominator;
+    if (bw * den > bh * num) {
+        return .{
+            .width = @max(2, @as(u32, @intCast(bh * num / den))),
+            .height = base.height,
+        };
+    }
+    return .{
+        .width = base.width,
+        .height = @max(2, @as(u32, @intCast(bw * den / num))),
+    };
+}
+
 fn finiteNonNegative(value: f64) f64 {
     if (!std.math.isFinite(value) or value < 0) return 0;
     return value;
@@ -69,4 +97,12 @@ test "render size preserves aspect and never upscales" {
     try std.testing.expectEqual(RenderSize{ .width = 607, .height = 1080 }, renderSize(1080, 1920, 1920, 1080));
     try std.testing.expectEqual(RenderSize{ .width = 1920, .height = 1080 }, renderSize(0, 0, 1920, 1080));
     try std.testing.expectEqual(RenderSize{ .width = 1920, .height = 2 }, renderSize(std.math.maxInt(i64), 1, 1920, 1080));
+}
+
+test "aspect override reshapes the render target" {
+    try std.testing.expectEqual(RenderSize{ .width = 1920, .height = 1080 }, renderSizeForAspect(1920, 1080, 1920, 1080, "-1"));
+    try std.testing.expectEqual(RenderSize{ .width = 1440, .height = 1080 }, renderSizeForAspect(1920, 1080, 1920, 1080, "4:3"));
+    try std.testing.expectEqual(RenderSize{ .width = 1920, .height = 822 }, renderSizeForAspect(1920, 1080, 1920, 1080, "21:9"));
+    try std.testing.expectEqual(RenderSize{ .width = 1440, .height = 810 }, renderSizeForAspect(1440, 1080, 1920, 1080, "16:9"));
+    try std.testing.expectEqual(RenderSize{ .width = 1920, .height = 1080 }, renderSizeForAspect(1920, 1080, 1920, 1080, "bad"));
 }

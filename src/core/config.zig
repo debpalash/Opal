@@ -3,6 +3,22 @@ const state = @import("state.zig");
 const paths = @import("paths.zig");
 const db = @import("db.zig");
 const theme = @import("../ui/theme.zig");
+const watch_history_pure = @import("../player/watch_history_pure.zig");
+const secret_store = @import("secret_store.zig");
+
+var legacy_secrets_mask: u16 = 0;
+
+fn secretBit(key: []const u8) u16 {
+    const names = [_][]const u8{
+        "proxy_url",    "tmdb_api_key",  "opensub_api_key",
+        "omdb_api_key", "subdl_api_key", "jf_token",
+        "abs_token",    "opds_user",     "opds_pass",
+    };
+    for (names, 0..) |name, index| {
+        if (std.mem.eql(u8, key, name)) return @as(u16, 1) << @intCast(index);
+    }
+    return 0;
+}
 
 /// Persistent config — saves/loads from opal.db config table.
 /// Migrates from old config.tsv on first run.
@@ -22,9 +38,13 @@ pub fn save() void {
     // Accrue in-app usage time since the last save into the lifetime counter.
     accrueUsage();
     setKey("usage_seconds", fmtInt(&fb, @as(usize, @intCast(@max(0, state.app.usage_seconds_total)))));
+    if (@import("install_identity_pure.zig").valid(&state.app.install_id)) {
+        setKey("install_id", &state.app.install_id);
+    }
 
     setKey("ui_scale", fmtFloat(&fb, state.app.ui_scale));
     setKey("ui_scale_auto", if (state.app.ui_scale_auto) "1" else "0");
+    setKey("reduce_motion", if (state.app.reduce_motion) "1" else "0");
     setKey("grid_mode", switch (state.app.grid_mode) {
         .auto => "auto",
         .cols_1 => "1",
@@ -37,6 +57,7 @@ pub fn save() void {
     setKey("auto_advance", if (state.app.auto_advance) "1" else "0");
     setKey("playlist_repeat", @tagName(state.app.playlist_repeat));
     setKey("playlist_shuffle", if (state.app.playlist_shuffle) "1" else "0");
+    setKey("playlist_shuffle_seed", fmtInt(&fb, @intCast(state.app.playlist_shuffle_seed)));
     setKey("nsfw_filter", if (state.app.nsfw_filter_enabled) "1" else "0");
     setKey("gallerydl_enabled", if (state.app.gallerydl_enabled) "1" else "0");
     setKey("scrape_use_browser", if (state.app.scrape_use_browser) "1" else "0");
@@ -48,6 +69,14 @@ pub fn save() void {
     setKey("auto_download_subs", if (state.app.auto_download_subs) "1" else "0");
     setKey("save_path", state.app.save_path_buf[0..state.app.save_path_len]);
     setKey("sub_lang", state.app.sub_lang_buf[0..state.app.sub_lang_len]);
+    setKey("subtitles_enabled", if (state.app.subtitles_enabled) "1" else "0");
+    setKey("audio_lang", state.app.audio_lang_buf[0..state.app.audio_lang_len]);
+    setKey("audio_device", state.app.audio_device_buf[0..state.app.audio_device_len]);
+    setKey("video_aspect", state.app.video_aspect_buf[0..state.app.video_aspect_len]);
+    setKey("playback_volume", fmtFloat(&fb, @floatCast(state.app.playback_volume)));
+    setKey("playback_speed", fmtFloat(&fb, @floatCast(state.app.playback_speed)));
+    setKey("playback_muted", if (state.app.playback_muted) "1" else "0");
+    setKey("video_fill_mode", @tagName(state.app.video_fill_mode));
     setKey("translate_lang", state.app.translate_lang_buf[0..state.app.translate_lang_len]);
     setKey("translate_enabled", if (state.app.translate_enabled) "1" else "0");
     setKey("tts_voice", state.app.tts_voice_buf[0..state.app.tts_voice_len]);
@@ -63,7 +92,7 @@ pub fn save() void {
     setKey("download_rate_limit", fmtInt(&fb, @as(usize, @intCast(state.app.download_rate_limit))));
     setKey("http_dl_segments", fmtInt(&fb, @as(usize, state.app.http_dl_segments)));
     setKey("http_dl_max_concurrent", fmtInt(&fb, @as(usize, state.app.http_dl_max_concurrent)));
-    setKey("proxy_url", state.app.proxy_url[0..state.app.proxy_url_len]);
+    setSecretKey("proxy_url", state.app.proxy_url[0..state.app.proxy_url_len]);
     setKey("dpi_bypass_enabled", if (state.app.dpi_bypass_enabled) "1" else "0");
     setKey("dpi_bypass_mode", if (state.app.dpi_bypass_mode_len > 0) state.app.dpi_bypass_mode[0..state.app.dpi_bypass_mode_len] else "sni");
     setKey("ytdl_format_idx", fmtInt(&fb, state.app.ytdl_format_idx));
@@ -71,10 +100,10 @@ pub fn save() void {
     // Persist only USER keys, never the build-time embedded default: writing the
     // default would pin it in the user's DB and defeat key rotation, and would
     // make a fresh install look "already onboarded". Empty string clears the row.
-    setKey("tmdb_api_key", if (state.app.tmdb.api_key_is_default) "" else state.app.tmdb.api_key[0..state.app.tmdb.api_key_len]);
-    setKey("opensub_api_key", state.app.opensub_api_key[0..state.app.opensub_api_key_len]);
-    setKey("omdb_api_key", if (state.app.omdb_api_key_is_default) "" else state.app.omdb_api_key[0..state.app.omdb_api_key_len]);
-    setKey("subdl_api_key", state.app.subdl_api_key[0..state.app.subdl_api_key_len]);
+    setSecretKey("tmdb_api_key", if (state.app.tmdb.api_key_is_default) "" else state.app.tmdb.api_key[0..state.app.tmdb.api_key_len]);
+    setSecretKey("opensub_api_key", state.app.opensub_api_key[0..state.app.opensub_api_key_len]);
+    setSecretKey("omdb_api_key", if (state.app.omdb_api_key_is_default) "" else state.app.omdb_api_key[0..state.app.omdb_api_key_len]);
+    setSecretKey("subdl_api_key", state.app.subdl_api_key[0..state.app.subdl_api_key_len]);
     setKey("sponsorblock_enabled", if (state.app.sponsorblock_enabled) "1" else "0");
     setKey("anime_skip_enabled", if (state.app.anime_skip_enabled) "1" else "0");
     setKey("anime_skip_intro", if (state.app.anime_skip_intro) "1" else "0");
@@ -90,7 +119,7 @@ pub fn save() void {
     setKey("vf_gamma", fmtI32(&fb, state.app.vf_gamma));
     setKey("cowatch_sensitivity", @tagName(@import("../services/co_watch.zig").sensitivity));
     setKey("jf_server_url", state.app.jf.server_url[0..state.app.jf.server_url_len]);
-    setKey("jf_token", state.app.jf.token[0..state.app.jf.token_len]);
+    setSecretKey("jf_token", state.app.jf.token[0..state.app.jf.token_len]);
     setKey("jf_user_id", state.app.jf.user_id[0..state.app.jf.user_id_len]);
     if (state.app.jf.token_len > 0) {
         setKey("jf_connected", "1");
@@ -101,17 +130,17 @@ pub fn save() void {
     // Audiobookshelf — persist server + token (the Bearer token is enough to
     // resume the session; the password is never stored).
     setKey("abs_server_url", state.app.abs.server_url[0..state.app.abs.server_url_len]);
-    setKey("abs_token", state.app.abs.token[0..state.app.abs.token_len]);
+    setSecretKey("abs_token", state.app.abs.token[0..state.app.abs.token_len]);
     setKey("abs_connected", if (state.app.abs.token_len > 0) "1" else "0");
     // OPDS reading server (Komga/Kavita/Calibre-Web/LANraragi). Basic-auth
-    // creds persist like the jf token — plaintext in the local config db. The
-    // user/pass buffers are null-terminated by the text-entry widget.
+    // credentials use the protected local envelope. The user/pass buffers are
+    // null-terminated by the text-entry widget.
     {
         const u_len = std.mem.indexOfScalar(u8, &state.app.opds.user_buf, 0) orelse state.app.opds.user_buf.len;
         const p_len = std.mem.indexOfScalar(u8, &state.app.opds.pass_buf, 0) orelse state.app.opds.pass_buf.len;
         setKey("opds_url", state.app.opds.server_url[0..state.app.opds.server_url_len]);
-        setKey("opds_user", state.app.opds.user_buf[0..u_len]);
-        setKey("opds_pass", state.app.opds.pass_buf[0..p_len]);
+        setSecretKey("opds_user", state.app.opds.user_buf[0..u_len]);
+        setSecretKey("opds_pass", state.app.opds.pass_buf[0..p_len]);
         setKey("opds_connected", if (state.app.opds.connected) "1" else "0");
     }
 
@@ -198,8 +227,12 @@ fn saveSessionUrls() void {
             db.tvSavePosition(pe.tmdb_id, pe.season, pe.episode, state.app.session_position, state.app.session_duration);
             db.tvSavePlayedSeconds(pe.tmdb_id, pe.season, pe.episode, pe.played_seconds);
         }
-        if (state.app.session_restore_count > 0)
-            setKey("session_url_0", state.app.session_restore_urls[0][0..state.app.session_restore_lens[0]]);
+        if (state.app.session_restore_count > 0) {
+            const raw = state.app.session_restore_urls[0][0..state.app.session_restore_lens[0]];
+            var safe_buf: [2048]u8 = undefined;
+            const safe = watch_history_pure.persistedTarget(raw, &safe_buf).reopen;
+            if (safe.len > 0) setKey("session_url_0", safe);
+        }
         return;
     }
     {
@@ -215,13 +248,19 @@ fn saveSessionUrls() void {
     while (i < state.app.players.items.len and slot < 16) : (i += 1) {
         const p = state.app.players.items[i];
         if (p.current_url_len == 0 or p.current_url_len > p.current_url.len) continue;
-        const url = p.current_url[0..p.current_url_len];
+        const url = if (p.restore_target_len > 0 and p.restore_target_len <= p.restore_target.len)
+            p.restore_target[0..p.restore_target_len]
+        else
+            p.current_url[0..p.current_url_len];
         // Skip ephemeral torrent-streaming loopback URLs; torrent has random port.
         if (std.mem.startsWith(u8, url, "http://127.0.0.1:") or
             std.mem.startsWith(u8, url, "http://localhost:")) continue;
+        var safe_buf: [2048]u8 = undefined;
+        const safe = watch_history_pure.persistedTarget(url, &safe_buf).reopen;
+        if (safe.len == 0) continue;
         var key_buf: [32]u8 = undefined;
         const key = std.fmt.bufPrint(&key_buf, "session_url_{d}", .{slot}) catch continue;
-        setKey(key, url);
+        setKey(key, safe);
         slot += 1;
     }
 }
@@ -246,14 +285,23 @@ pub fn captureCloseSession() void {
     const p = state.app.players.items[state.app.active_player_idx];
     const url = if (p.is_torrent and p.source_url_len > 0)
         p.source_url[0..p.source_url_len]
+    else if (p.restore_target_len > 0 and p.restore_target_len <= p.restore_target.len)
+        p.restore_target[0..p.restore_target_len]
     else
         p.current_url[0..p.current_url_len];
     if (url.len == 0 or url.len >= 2048) return;
     if (std.mem.startsWith(u8, url, "http://127.0.0.1:") or std.mem.startsWith(u8, url, "http://localhost:")) return;
-    @memcpy(state.app.session_restore_urls[0][0..url.len], url);
-    state.app.session_restore_lens[0] = url.len;
-    state.app.session_restore_count = 1;
+    var safe_buf: [2048]u8 = undefined;
+    const safe = watch_history_pure.persistedTarget(url, &safe_buf).reopen;
+    if (safe.len > 0 and safe.len <= state.app.session_restore_urls[0].len) {
+        @memcpy(state.app.session_restore_urls[0][0..safe.len], safe);
+        state.app.session_restore_lens[0] = safe.len;
+        state.app.session_restore_count = 1;
+    }
     const snap = p.playbackSnapshot();
+    state.app.playback_volume = snap.volume;
+    state.app.playback_speed = snap.speed;
+    state.app.playback_muted = snap.muted;
     state.app.session_position = snap.time_pos;
     state.app.session_duration = snap.duration;
     state.app.session_paused = snap.paused;
@@ -271,24 +319,55 @@ pub fn captureCloseSession() void {
 pub fn saveIfDirty() void {
     if (state.app.incognito_mode) return; // incognito: never persist
     if (!state.app.config_dirty) return;
+    // The window can be interactive before the background database/config load
+    // finishes. Keep the dirty bit armed until a real connection is available;
+    // clearing it before save() would silently discard an early user change.
+    if (!state.app.config_loaded.load(.acquire) or db.get() == null) return;
     const now = @import("io_global.zig").timestamp();
     if (now - state.app.last_config_save < 2) return; // debounce
+    save();
     state.app.config_dirty = false;
     state.app.last_config_save = now;
-    save();
 }
 
 pub fn load() void {
     ensureDir();
+    legacy_secrets_mask = 0;
 
-    const sql = "SELECT key, value FROM config";
-    const stmt = db.prepare(sql) orelse return;
-    defer db.finalize(stmt);
+    // Publish readiness even if the config table cannot be queried. Defaults
+    // are a valid fallback; leaving this false forever would strand Settings
+    // in its cold-load guard and prevent dirty preferences from ever saving.
+    defer {
+        state.app.config_loaded.store(true, .release);
+        state.wakeUi();
+    }
 
-    while (db.step(stmt) == db.c.SQLITE_ROW) {
-        const key = db.columnText(stmt, 0) orelse continue;
-        const val = db.columnText(stmt, 1) orelse continue;
-        applyConfig(key, val);
+    {
+        const sql = "SELECT key, value FROM config";
+        const stmt = db.prepare(sql) orelse return;
+        defer db.finalize(stmt);
+
+        while (db.step(stmt) == db.c.SQLITE_ROW) {
+            const key = db.columnText(stmt, 0) orelse continue;
+            const val = db.columnText(stmt, 1) orelse continue;
+            applyConfig(key, val);
+        }
+    }
+
+    // Existing installs stored these rows as plaintext. Once all values have
+    // been restored, replace only the credential rows with protected values.
+    // A protection failure leaves the original row untouched.
+    if (@import("builtin").os.tag == .windows and legacy_secrets_mask != 0) {
+        migrateLoadedSecrets();
+    }
+
+    const identity = @import("install_identity_pure.zig");
+    if (!identity.valid(&state.app.install_id)) {
+        var random: [16]u8 = undefined;
+        if (@import("io_global.zig").randomSecure(&random)) {
+            state.app.install_id = identity.encode(random);
+            setKey("install_id", &state.app.install_id);
+        }
     }
 
     // Normalize the pair only after reading every row: SQLite does not promise
@@ -321,7 +400,6 @@ pub fn load() void {
     // without racing this async load. See main.zig appFrame.
     // .release so every write above (esp. the tmdb_api_key bytes+len) is
     // published to any thread that later loads config_loaded with .acquire.
-    state.app.config_loaded.store(true, .release);
 }
 
 fn setKey(key: []const u8, val: []const u8) void {
@@ -333,13 +411,68 @@ fn setKey(key: []const u8, val: []const u8) void {
     _ = db.step(stmt);
 }
 
+fn setSecretKey(key: []const u8, val: []const u8) void {
+    if (val.len == 0) {
+        setKey(key, "");
+        return;
+    }
+    var protected: [1024]u8 = undefined;
+    defer @memset(&protected, 0);
+    const sealed = secret_store.seal(val, &protected) orelse {
+        std.log.warn("could not protect config credential '{s}'; keeping previous value", .{key});
+        return;
+    };
+    setKey(key, sealed);
+}
+
+fn loadSecretValue(key: []const u8, stored: []const u8, dst: []u8, len: *usize) bool {
+    const plain = secret_store.reveal(stored, dst) orelse {
+        std.log.warn("could not unlock a saved credential; sign-in may be required", .{});
+        return false;
+    };
+    len.* = plain.len;
+    if (@import("builtin").os.tag == .windows and stored.len > 0 and !secret_store.isSealed(stored)) {
+        legacy_secrets_mask |= secretBit(key);
+    }
+    return true;
+}
+
+fn migrateLoadedSecrets() void {
+    const mask = legacy_secrets_mask;
+    // REPLACE deletes the old SQLite cell; secure_delete zeroes that payload,
+    // and truncating the WAL prevents a plaintext copy surviving migration.
+    db.exec("PRAGMA secure_delete=ON");
+    db.exec("BEGIN");
+    if (mask & secretBit("proxy_url") != 0) setSecretKey("proxy_url", state.app.proxy_url[0..state.app.proxy_url_len]);
+    if (mask & secretBit("tmdb_api_key") != 0) setSecretKey("tmdb_api_key", if (state.app.tmdb.api_key_is_default) "" else state.app.tmdb.api_key[0..state.app.tmdb.api_key_len]);
+    if (mask & secretBit("opensub_api_key") != 0) setSecretKey("opensub_api_key", state.app.opensub_api_key[0..state.app.opensub_api_key_len]);
+    if (mask & secretBit("omdb_api_key") != 0) setSecretKey("omdb_api_key", if (state.app.omdb_api_key_is_default) "" else state.app.omdb_api_key[0..state.app.omdb_api_key_len]);
+    if (mask & secretBit("subdl_api_key") != 0) setSecretKey("subdl_api_key", state.app.subdl_api_key[0..state.app.subdl_api_key_len]);
+    if (mask & secretBit("jf_token") != 0) setSecretKey("jf_token", state.app.jf.token[0..state.app.jf.token_len]);
+    if (mask & secretBit("abs_token") != 0) setSecretKey("abs_token", state.app.abs.token[0..state.app.abs.token_len]);
+    const user_len = std.mem.indexOfScalar(u8, &state.app.opds.user_buf, 0) orelse state.app.opds.user_buf.len;
+    const pass_len = std.mem.indexOfScalar(u8, &state.app.opds.pass_buf, 0) orelse state.app.opds.pass_buf.len;
+    if (mask & secretBit("opds_user") != 0) setSecretKey("opds_user", state.app.opds.user_buf[0..user_len]);
+    if (mask & secretBit("opds_pass") != 0) setSecretKey("opds_pass", state.app.opds.pass_buf[0..pass_len]);
+    db.exec("COMMIT");
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    legacy_secrets_mask = 0;
+}
+
 fn applyConfig(key: []const u8, val: []const u8) void {
     if (std.mem.eql(u8, key, "usage_seconds")) {
         state.app.usage_seconds_total = std.fmt.parseInt(i64, val, 10) catch 0;
+    } else if (std.mem.eql(u8, key, "install_id")) {
+        if (@import("install_identity_pure.zig").valid(val)) {
+            @memcpy(&state.app.install_id, val);
+        }
     } else if (std.mem.eql(u8, key, "ui_scale")) {
         state.app.ui_scale = @import("scale_pure.zig").clampScale(std.fmt.parseFloat(f32, val) catch 1.0);
     } else if (std.mem.eql(u8, key, "ui_scale_auto")) {
         state.app.ui_scale_auto = std.mem.eql(u8, val, "1");
+    } else if (std.mem.eql(u8, key, "reduce_motion")) {
+        state.app.reduce_motion = std.mem.eql(u8, val, "1");
+        theme.setReducedMotion(state.app.reduce_motion);
     } else if (std.mem.eql(u8, key, "grid_mode")) {
         state.app.grid_mode = if (std.mem.eql(u8, val, "1")) .cols_1 else if (std.mem.eql(u8, val, "2")) .cols_2 else if (std.mem.eql(u8, val, "3")) .cols_3 else if (std.mem.eql(u8, val, "4")) .cols_4 else .auto;
     } else if (std.mem.eql(u8, key, "seek_sync")) {
@@ -357,6 +490,8 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         state.app.playlist_repeat = std.meta.stringToEnum(RepeatMode, val) orelse .off;
     } else if (std.mem.eql(u8, key, "playlist_shuffle")) {
         state.app.playlist_shuffle = std.mem.eql(u8, val, "1");
+    } else if (std.mem.eql(u8, key, "playlist_shuffle_seed")) {
+        state.app.playlist_shuffle_seed = std.fmt.parseInt(u64, val, 10) catch 0;
     } else if (std.mem.eql(u8, key, "nsfw_filter")) {
         state.app.nsfw_filter_enabled = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "gallerydl_enabled")) {
@@ -385,6 +520,36 @@ fn applyConfig(key: []const u8, val: []const u8) void {
             @memcpy(state.app.sub_lang_buf[0..val.len], val);
             state.app.sub_lang_len = val.len;
         }
+    } else if (std.mem.eql(u8, key, "subtitles_enabled")) {
+        state.app.subtitles_enabled = std.mem.eql(u8, val, "1");
+    } else if (std.mem.eql(u8, key, "audio_lang")) {
+        if (val.len < state.app.audio_lang_buf.len) {
+            @memset(state.app.audio_lang_buf[0..], 0);
+            @memcpy(state.app.audio_lang_buf[0..val.len], val);
+            state.app.audio_lang_len = val.len;
+        }
+    } else if (std.mem.eql(u8, key, "audio_device")) {
+        if (val.len < state.app.audio_device_buf.len) {
+            @memset(state.app.audio_device_buf[0..], 0);
+            @memcpy(state.app.audio_device_buf[0..val.len], val);
+            state.app.audio_device_len = val.len;
+        }
+    } else if (std.mem.eql(u8, key, "playback_volume")) {
+        const volume = std.fmt.parseFloat(f64, val) catch 100;
+        state.app.playback_volume = if (std.math.isFinite(volume)) std.math.clamp(volume, 0, 100) else 100;
+    } else if (std.mem.eql(u8, key, "playback_speed")) {
+        const speed = std.fmt.parseFloat(f64, val) catch 1;
+        state.app.playback_speed = if (std.math.isFinite(speed)) std.math.clamp(speed, 0.25, 4) else 1;
+    } else if (std.mem.eql(u8, key, "playback_muted")) {
+        state.app.playback_muted = std.mem.eql(u8, val, "1");
+    } else if (std.mem.eql(u8, key, "video_aspect")) {
+        if (val.len > 0 and val.len < state.app.video_aspect_buf.len) {
+            @memset(state.app.video_aspect_buf[0..], 0);
+            @memcpy(state.app.video_aspect_buf[0..val.len], val);
+            state.app.video_aspect_len = val.len;
+        }
+    } else if (std.mem.eql(u8, key, "video_fill_mode")) {
+        state.app.video_fill_mode = if (std.mem.eql(u8, val, "fit")) .fit else .cover;
     } else if (std.mem.eql(u8, key, "translate_lang")) {
         if (val.len > 0 and val.len <= 8) {
             @memcpy(state.app.translate_lang_buf[0..val.len], val);
@@ -431,9 +596,9 @@ fn applyConfig(key: []const u8, val: []const u8) void {
     } else if (std.mem.eql(u8, key, "http_dl_max_concurrent")) {
         state.app.http_dl_max_concurrent = std.math.clamp(std.fmt.parseInt(u32, val, 10) catch 3, 1, 8);
     } else if (std.mem.eql(u8, key, "proxy_url")) {
-        if (val.len > 0 and val.len < state.app.proxy_url.len) {
-            @memcpy(state.app.proxy_url[0..val.len], val);
-            state.app.proxy_url_len = val.len;
+        var restored_len: usize = 0;
+        if (val.len > 0 and loadSecretValue(key, val, state.app.proxy_url[0 .. state.app.proxy_url.len - 1], &restored_len) and restored_len > 0) {
+            state.app.proxy_url_len = restored_len;
             // The session may not exist yet; applyTorrentProxyIfReady is
             // idempotent and main.zig calls it again once it does.
             state.applyTorrentProxyIfReady();
@@ -455,27 +620,27 @@ fn applyConfig(key: []const u8, val: []const u8) void {
     } else if (std.mem.eql(u8, key, "drawer_width_px")) {
         state.app.drawer_width_px = std.fmt.parseFloat(f32, val) catch 480.0;
     } else if (std.mem.eql(u8, key, "tmdb_api_key")) {
-        if (val.len > 0 and val.len <= 256) {
+        var restored_len: usize = 0;
+        if (val.len > 0 and loadSecretValue(key, val, &state.app.tmdb.api_key, &restored_len) and restored_len > 0) {
             // A saved key is a real user key — override any embedded default.
-            @memcpy(state.app.tmdb.api_key[0..val.len], val);
-            state.app.tmdb.api_key_len = val.len;
+            state.app.tmdb.api_key_len = restored_len;
             state.app.tmdb.api_key_is_default = false;
         }
     } else if (std.mem.eql(u8, key, "opensub_api_key")) {
-        if (val.len > 0 and val.len <= 128) {
-            @memcpy(state.app.opensub_api_key[0..val.len], val);
-            state.app.opensub_api_key_len = val.len;
+        var restored_len: usize = 0;
+        if (val.len > 0 and loadSecretValue(key, val, &state.app.opensub_api_key, &restored_len) and restored_len > 0) {
+            state.app.opensub_api_key_len = restored_len;
         }
     } else if (std.mem.eql(u8, key, "omdb_api_key")) {
-        if (val.len > 0 and val.len <= 128) {
-            @memcpy(state.app.omdb_api_key[0..val.len], val);
-            state.app.omdb_api_key_len = val.len;
+        var restored_len: usize = 0;
+        if (val.len > 0 and loadSecretValue(key, val, &state.app.omdb_api_key, &restored_len) and restored_len > 0) {
+            state.app.omdb_api_key_len = restored_len;
             state.app.omdb_api_key_is_default = false;
         }
     } else if (std.mem.eql(u8, key, "subdl_api_key")) {
-        if (val.len > 0 and val.len <= 128) {
-            @memcpy(state.app.subdl_api_key[0..val.len], val);
-            state.app.subdl_api_key_len = val.len;
+        var restored_len: usize = 0;
+        if (val.len > 0 and loadSecretValue(key, val, &state.app.subdl_api_key, &restored_len) and restored_len > 0) {
+            state.app.subdl_api_key_len = restored_len;
         }
     } else if (std.mem.eql(u8, key, "sponsorblock_enabled")) {
         state.app.sponsorblock_enabled = std.mem.eql(u8, val, "1");
@@ -511,9 +676,9 @@ fn applyConfig(key: []const u8, val: []const u8) void {
             state.app.jf.server_url_len = val.len;
         }
     } else if (std.mem.eql(u8, key, "jf_token")) {
-        if (val.len > 0 and val.len < state.app.jf.token.len) {
-            @memcpy(state.app.jf.token[0..val.len], val);
-            state.app.jf.token_len = val.len;
+        var restored_len: usize = 0;
+        if (val.len > 0 and loadSecretValue(key, val, state.app.jf.token[0 .. state.app.jf.token.len - 1], &restored_len) and restored_len > 0) {
+            state.app.jf.token_len = restored_len;
         }
     } else if (std.mem.eql(u8, key, "jf_user_id")) {
         if (val.len > 0 and val.len < state.app.jf.user_id.len) {
@@ -529,9 +694,9 @@ fn applyConfig(key: []const u8, val: []const u8) void {
             state.app.abs.server_url_len = val.len;
         }
     } else if (std.mem.eql(u8, key, "abs_token")) {
-        if (val.len > 0 and val.len < state.app.abs.token.len) {
-            @memcpy(state.app.abs.token[0..val.len], val);
-            state.app.abs.token_len = val.len;
+        var restored_len: usize = 0;
+        if (val.len > 0 and loadSecretValue(key, val, state.app.abs.token[0 .. state.app.abs.token.len - 1], &restored_len) and restored_len > 0) {
+            state.app.abs.token_len = restored_len;
         }
     } else if (std.mem.eql(u8, key, "abs_connected")) {
         state.app.abs.connected = std.mem.eql(u8, val, "1") and state.app.abs.token_len > 0;
@@ -541,12 +706,14 @@ fn applyConfig(key: []const u8, val: []const u8) void {
             state.app.opds.server_url_len = val.len;
         }
     } else if (std.mem.eql(u8, key, "opds_user")) {
-        if (val.len > 0 and val.len < state.app.opds.user_buf.len) {
-            @memcpy(state.app.opds.user_buf[0..val.len], val);
+        var restored_len: usize = 0;
+        if (val.len > 0 and loadSecretValue(key, val, state.app.opds.user_buf[0 .. state.app.opds.user_buf.len - 1], &restored_len)) {
+            state.app.opds.user_buf[restored_len] = 0;
         }
     } else if (std.mem.eql(u8, key, "opds_pass")) {
-        if (val.len > 0 and val.len < state.app.opds.pass_buf.len) {
-            @memcpy(state.app.opds.pass_buf[0..val.len], val);
+        var restored_len: usize = 0;
+        if (val.len > 0 and loadSecretValue(key, val, state.app.opds.pass_buf[0 .. state.app.opds.pass_buf.len - 1], &restored_len)) {
+            state.app.opds.pass_buf[restored_len] = 0;
         }
     } else if (std.mem.eql(u8, key, "opds_connected")) {
         // Connected only if a catalog URL was also restored.
@@ -588,8 +755,11 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         if (idx >= 16 or val.len == 0 or val.len >= 2048) return;
         if (std.mem.startsWith(u8, val, "http://127.0.0.1:") or
             std.mem.startsWith(u8, val, "http://localhost:")) return;
-        @memcpy(state.app.session_restore_urls[idx][0..val.len], val);
-        state.app.session_restore_lens[idx] = val.len;
+        var safe_buf: [2048]u8 = undefined;
+        const safe = watch_history_pure.persistedTarget(val, &safe_buf).reopen;
+        if (safe.len == 0) return;
+        @memcpy(state.app.session_restore_urls[idx][0..safe.len], safe);
+        state.app.session_restore_lens[idx] = safe.len;
         if (idx + 1 > state.app.session_restore_count) {
             state.app.session_restore_count = idx + 1;
         }
@@ -659,6 +829,9 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         const voice_backend = @import("../services/voice_backend.zig");
         if (std.meta.stringToEnum(voice_backend.Kind, val)) |k| {
             voice_backend.active_kind = k;
+            // A stored choice is explicit: the startup auto-promotion must
+            // not override it (see the deferred promotion in main.zig).
+            voice_backend.voice_backend_explicit = true;
         }
     } else if (std.mem.eql(u8, key, "search_sources")) {
         const resolver = @import("../services/resolver.zig");

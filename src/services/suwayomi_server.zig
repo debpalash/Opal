@@ -39,6 +39,9 @@ var status: std.atomic.Value(u8) = std.atomic.Value(u8).init(@intFromEnum(Status
 var msg_buf: [96]u8 = std.mem.zeroes([96]u8);
 var msg_len: usize = 0;
 var busy: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+// Only terminate a JVM this process actually launched. This also preserves an
+// independently managed server owned by the user.
+var launched_by_opal: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 fn setStatus(s: Status, m: []const u8) void {
     status.store(@intFromEnum(s), .release);
@@ -255,6 +258,7 @@ fn worker() void {
         setStatus(.err, "Failed to launch java");
         return;
     };
+    launched_by_opal.store(true, .release);
     // Do NOT wait() — the server runs for the app's lifetime; stopEmbedded()
     // (and app shutdown) kill it by pattern.
 
@@ -281,6 +285,8 @@ fn worker() void {
 /// Windows side — `pkill` does not exist there, so this used to be a silent
 /// no-op and left a 166 MB server running after Opal quit.
 pub fn stopEmbedded() void {
-    io.killByCommandLine(PKILL_PAT, false);
+    if (launched_by_opal.swap(false, .acq_rel)) {
+        io.killByCommandLine(PKILL_PAT, false);
+    }
     if (statusEnum() != .no_java) setStatus(.idle, "Server stopped");
 }

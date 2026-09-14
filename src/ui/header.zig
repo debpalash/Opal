@@ -17,7 +17,7 @@ pub fn handleClipboardPaste() void {
 
     // Auto-create a player if none exists
     if (state.app.players.items.len == 0) {
-        if (player.MediaPlayer.init(@import("../core/alloc.zig").allocator)) |new_p| {
+        if (player.acquire(@import("../core/alloc.zig").allocator)) |new_p| {
             state.app.players.append(@import("../core/alloc.zig").allocator, new_p) catch {
                 new_p.deinit(@import("../core/alloc.zig").allocator);
                 return;
@@ -75,10 +75,11 @@ pub const DONATE_URL = "https://ko-fi.com/debpalash";
 /// site. Reuses `settings.openExternal` (the existing macOS `open` / Windows
 /// `start` / `xdg-open` launcher) rather than spawning its own child process.
 pub fn donateButton() void {
+    const player_overlay = state.app.page_shell_enabled and state.app.router.current == .player;
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .min_size_content = .{ .w = 0, .h = 24 },
         .background = true,
-        .color_fill = theme.colors.bg_elevated,
+        .color_fill = if (player_overlay) theme.transparent else theme.colors.bg_elevated,
         .corner_radius = dvui.Rect.all(theme.radius.md),
         .padding = .{ .x = theme.spacing.sm, .y = 2, .w = theme.spacing.sm, .h = 2 },
         .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
@@ -90,7 +91,7 @@ pub fn donateButton() void {
 
     var hovered = false;
     const activated = dvui.clicked(row.data(), .{ .hovered = &hovered });
-    if (hovered) row.data().options.color_fill = theme.colors.bg_hover;
+    if (hovered) row.data().options.color_fill = if (player_overlay) theme.playerGlass(42) else theme.colors.bg_hover;
     row.drawBackground();
 
     dvui.icon(@src(), "Donate", icons.tvg.lucide.heart, .{}, .{
@@ -379,7 +380,9 @@ fn renderTitleLabel() void {
         const p = state.app.players.items[state.app.active_player_idx];
         media_loaded = p.current_url_len > 0 or p.texture != null;
         if (p.current_url_len > 0 and p.current_url_len <= 2048) {
-            const full_path = p.current_url[0..p.current_url_len];
+            const raw_path = p.current_url[0..p.current_url_len];
+            var safe_path_buf: [2048]u8 = undefined;
+            const full_path = @import("../player/watch_history_pure.zig").persistedTarget(raw_path, &safe_path_buf).identity;
             var basename: []const u8 = full_path;
             if (std.mem.lastIndexOfScalar(u8, full_path, '/')) |slash| {
                 basename = full_path[slash + 1 ..];
@@ -495,7 +498,11 @@ pub fn renderWebUiButton() void {
     // the server is on, so the header's first frame stays free.
     const tip = remote_url.webUiTooltip(on, if (on) remote.lanIp() else "", remote.port, &tip_buf);
 
-    if (components.iconButton(@src(), icons.tvg.lucide.globe, tip, on)) {
+    const clicked = if (state.app.page_shell_enabled and state.app.router.current == .player)
+        components.iconButtonOverlay(@src(), icons.tvg.lucide.globe, tip, on, true)
+    else
+        components.iconButton(@src(), icons.tvg.lucide.globe, tip, on);
+    if (clicked) {
         state.app.web_remote_enabled = !on;
         state.markConfigDirty(); // persisted as web_remote — survives restarts
         if (state.app.web_remote_enabled) {
@@ -753,10 +760,10 @@ pub fn renderUrlInput(is_large: bool) void {
     if (clicked_load or enter_pressed) submitInput();
 }
 
-/// Process the current input buffer (`state.app.magnet_buf`): route media
-/// (magnet / URL / path) to the player, everything else to the AI chat.
-/// Shared by the header input and the page-shell omnibox so both behave
-/// identically. Clears the buffer when consumed.
+/// Process the current input buffer (`state.app.magnet_buf`) through the same
+/// adaptive intent contract as the page-shell omnibox: open media/addresses,
+/// search plain text, use `?` for memory, and `>`/a trailing question mark for
+/// the assistant. Clears the buffer when consumed.
 pub fn submitInput() void {
     {
         const len = std.mem.indexOfScalar(u8, &state.app.magnet_buf, 0) orelse state.app.magnet_buf.len;
@@ -770,79 +777,70 @@ pub fn submitInput() void {
             if (search.memory_mode) {
                 search.memorySearch(text);
                 @memset(&state.app.magnet_buf, 0);
+                state.navigateToTabNow(.Search);
                 return;
             }
 
-            // Unified input: route to AI chat if not URL/magnet/path. Media goes to player.
-            const looks_like_media =
-                std.mem.startsWith(u8, text, "magnet:") or
-                std.mem.startsWith(u8, text, "http://") or
-                std.mem.startsWith(u8, text, "https://") or
-                std.mem.startsWith(u8, text, "file://") or
-                std.mem.startsWith(u8, text, "/") or
-                std.mem.startsWith(u8, text, "~/") or
-                std.mem.startsWith(u8, text, "./") or
-                std.mem.startsWith(u8, text, "ftp://") or
-                std.mem.startsWith(u8, text, "rtmp://") or
-                std.mem.startsWith(u8, text, "rtsp://");
-
-            if (!looks_like_media) {
-                const ai_chat = @import("../services/ai_chat.zig");
-                const copy_len = @min(len, ai_chat.input_buf.len - 1);
-                @memset(&ai_chat.input_buf, 0);
-                @memcpy(ai_chat.input_buf[0..copy_len], text[0..copy_len]);
-                ai_chat.input_len = copy_len;
-                // Chat renders inline in empty player card — no floating window.
-                // trySendMessage auto-starts apfel/llama-server if not running.
-                ai_chat.trySendMessage();
-                @memset(&state.app.magnet_buf, 0);
-                return;
+            const browser_pure = @import("../services/browser_pure.zig");
+            const trimmed = std.mem.trim(u8, text, " \t\r\n");
+            switch (browser_pure.classifyOmnibox(trimmed)) {
+                .empty => return,
+                .memory => {
+                    search.memorySearch(std.mem.trim(u8, trimmed[1..], " \t"));
+                    @memset(&state.app.magnet_buf, 0);
+                    state.navigateToTabNow(.Search);
+                    return;
+                },
+                .assistant => {
+                    const prompt = if (trimmed[0] == '>') std.mem.trim(u8, trimmed[1..], " \t") else trimmed;
+                    const ai_chat = @import("../services/ai_chat.zig");
+                    const copy_len = @min(prompt.len, ai_chat.input_buf.len - 1);
+                    @memset(&ai_chat.input_buf, 0);
+                    @memcpy(ai_chat.input_buf[0..copy_len], prompt[0..copy_len]);
+                    ai_chat.input_len = copy_len;
+                    if (copy_len > 0) ai_chat.trySendMessage();
+                    @memset(&state.app.magnet_buf, 0);
+                    return;
+                },
+                .search => {
+                    const searched_current = @import("../services/browser.zig").searchCurrentBrowse(trimmed);
+                    if (!searched_current) {
+                        search.submitQuery(trimmed);
+                        state.navigateToTabNow(.Search);
+                    }
+                    @memset(&state.app.magnet_buf, 0);
+                    return;
+                },
+                .open => {},
             }
 
             // [2049] not [2048]: when the dvui text entry is filled to exactly 2048
             // bytes it leaves NO null terminator, so len can be 2048 and writing the
             // terminator at null_term_uri[len] would be one past a [2048] buffer.
             var null_term_uri: [2049]u8 = undefined;
-            @memcpy(null_term_uri[0..len], text);
-            null_term_uri[len] = 0;
+            @memcpy(null_term_uri[0..trimmed.len], trimmed);
+            null_term_uri[trimmed.len] = 0;
 
-            // Auto-create a player if none exists
-            if (state.app.players.items.len == 0) {
-                if (player.MediaPlayer.init(@import("../core/alloc.zig").allocator)) |new_p| {
-                    state.app.players.append(@import("../core/alloc.zig").allocator, new_p) catch {
-                        new_p.deinit(@import("../core/alloc.zig").allocator);
-                    };
-                    state.app.active_player_idx = 0;
-                } else |_| {}
+            if (@import("../services/projectjav.zig").isProjectJavUrl(null_term_uri[0..trimmed.len])) {
+                @import("../services/projectjav.zig").fetchTorrents(null_term_uri[0..trimmed.len]);
+                @memset(&state.app.magnet_buf, 0);
+                state.showToast("Fetching torrents...");
+                return;
             }
 
-            if (state.app.active_player_idx < state.app.players.items.len) {
-                if (std.mem.startsWith(u8, null_term_uri[0..len], "magnet:?")) {
-                    const tid = c.mpv.torrent_add_magnet(state.torrentSession(), @ptrCast(&null_term_uri[0]), state.getSavePath());
-                    if (tid >= 0) {
-                        state.app.pending_magnet_tid = tid;
-                        state.app.pending_magnet_player_idx = state.app.active_player_idx;
-                        state.app.pending_has_metadata = false;
-                        @memcpy(state.app.pending_source_url[0..len], null_term_uri[0..len]);
-                        state.app.pending_source_url_len = len;
-                        for (&state.app.pending_files_selection) |*b| b.* = true;
-                        state.app.drawer_open = false;
-                        @memset(&state.app.magnet_buf, 0);
-                        state.showToast("Magnet added — fetching metadata...");
-                    } else {
-                        state.showToast("Failed to add magnet link");
-                    }
-                } else if (@import("../services/projectjav.zig").isProjectJavUrl(null_term_uri[0..len])) {
-                    @import("../services/projectjav.zig").fetchTorrents(null_term_uri[0..len]);
-                    @memset(&state.app.magnet_buf, 0);
-                    state.showToast("Fetching torrents...");
-                } else {
-                    @memset(&state.app.magnet_buf, 0);
-                    state.showToast("Routing content...");
-                    const browser = @import("../services/browser.zig");
-                    browser.loadContent(null_term_uri[0..len]);
-                }
-            }
+            var normalized_buf: [2048]u8 = undefined;
+            const normalized = browser_pure.resolveOpenTarget(null_term_uri[0..trimmed.len], &normalized_buf);
+            var target_buf: [2048]u8 = undefined;
+            const target_len = @min(normalized.len, target_buf.len);
+            @memcpy(target_buf[0..target_len], normalized[0..target_len]);
+            @memset(&state.app.magnet_buf, 0);
+            state.showToast(switch (browser_pure.routeContent(target_buf[0..target_len])) {
+                .mpv => "Preparing playback…",
+                .comic_viewer => "Opening reader…",
+                .torrent => "Opening torrent…",
+                .web => "Opening in Web…",
+            });
+            @import("../services/browser.zig").loadContent(target_buf[0..target_len]);
         }
     }
 }
@@ -870,7 +868,9 @@ pub fn renderTabBar() void {
         var clean_len: usize = 0;
 
         if (p.current_url_len > 0 and p.current_url_len <= 2048) {
-            const full = p.current_url[0..p.current_url_len];
+            const raw = p.current_url[0..p.current_url_len];
+            var safe_buf: [2048]u8 = undefined;
+            const full = @import("../player/watch_history_pure.zig").persistedTarget(raw, &safe_buf).identity;
             var basename: []const u8 = full;
             if (std.mem.lastIndexOfScalar(u8, full, '/')) |sl| {
                 basename = full[sl + 1 ..];

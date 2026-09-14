@@ -28,6 +28,7 @@ const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
 const lyrics = @import("lyrics.zig");
 const mpvc = @import("../core/c.zig");
 const alloc = @import("../core/alloc.zig").allocator;
+const secret_store = @import("../core/secret_store.zig");
 
 const agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
@@ -126,6 +127,22 @@ var plex_token: [160]u8 = undefined;
 var plex_token_len: usize = 0;
 var plex_checked_s: i64 = 0;
 
+fn parsePlexCreds(body: []const u8) bool {
+    var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch return false;
+    defer parsed.deinit();
+    if (parsed.value != .object) return false;
+    const server_value = parsed.value.object.get("server") orelse return false;
+    if (server_value != .string or server_value.string.len == 0 or server_value.string.len > plex_base.len) return false;
+    const token_value = parsed.value.object.get("server_token") orelse parsed.value.object.get("token") orelse return false;
+    if (token_value != .string or token_value.string.len == 0) return false;
+    const plain = secret_store.reveal(token_value.string, &plex_token) orelse return false;
+    if (!px_pure.isValidBase(server_value.string)) return false;
+    @memcpy(plex_base[0..server_value.string.len], server_value.string);
+    plex_base_len = server_value.string.len;
+    plex_token_len = plain.len;
+    return true;
+}
+
 fn plexCreds(base_out: []u8, tok_out: []u8) ?ServerCreds {
     const now = io.timestamp();
     // A backwards clock (NTP step / suspend) must not wedge the refresh.
@@ -139,10 +156,7 @@ fn plexCreds(base_out: []u8, tok_out: []u8) ?ServerCreds {
         if (path.len > 0) {
             if (io.cwdReadFileAlloc(path, alloc, 8192)) |body| {
                 defer alloc.free(body);
-                if (px_pure.parseCreds(body, &plex_base, &plex_token)) |c| {
-                    plex_base_len = c.base.len;
-                    plex_token_len = c.token.len;
-                }
+                _ = parsePlexCreds(body);
             } else |_| {}
         }
     }
@@ -564,7 +578,8 @@ pub fn playSong(idx: usize) void {
         SRC_JELLYFIN => {
             if (id.len == 0) return;
             const c = jfCreds(&b, &tokb) orelse return;
-            url = jf_pure.buildStreamUrl(&url_buf, c.base, c.token, id) orelse return;
+            const device_id = if (state.app.install_id[0] != 0) state.app.install_id[0..] else "opal";
+            url = jf_pure.buildStreamUrl(&url_buf, c.base, c.token, id, device_id) orelse return;
         },
         SRC_PLEX => {
             // play_url holds the server-relative Part.key; the base + token are
@@ -698,7 +713,8 @@ pub fn downloadSong(idx: usize) void {
             SRC_JELLYFIN => blk: {
                 if (id.len == 0) return;
                 const c = jfCreds(&b, &tokb) orelse return;
-                break :blk jf_pure.buildStreamUrl(&url_buf, c.base, c.token, id) orelse return;
+                const device_id = if (state.app.install_id[0] != 0) state.app.install_id[0..] else "opal";
+                break :blk jf_pure.buildStreamUrl(&url_buf, c.base, c.token, id, device_id) orelse return;
             },
             SRC_PLEX => blk: {
                 if (purl.len == 0) return;

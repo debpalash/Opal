@@ -28,6 +28,9 @@ void torrent_set_extra_trackers(TorrentSession session, const char* newline_sepa
 
 // Get the total number of registered torrents
 int torrent_count(TorrentSession session);
+// Persist modified piece/file/priority state for fast restart. Called only from
+// the torrent watchdog thread; returns the number of updated checkpoints.
+int torrent_checkpoint(TorrentSession session);
 
 // Stop and remove a specific torrent
 void torrent_remove(TorrentSession session, int torrent_id);
@@ -61,6 +64,10 @@ void torrent_get_name(TorrentSession session, int torrent_id, char* out_name, in
 // failure (out is always NUL-terminated).
 int torrent_get_infohash(TorrentSession session, int torrent_id, char* out, int out_len);
 
+// Minimal identity-only magnet (v1, v2, or hybrid). Contains no display name,
+// trackers, web seeds or peers, so it is safe to use as durable restart intent.
+int torrent_get_identity_magnet(TorrentSession session, int torrent_id, char* out, int out_len);
+
 // Destroy the session
 void torrent_destroy(TorrentSession session);
 
@@ -79,6 +86,8 @@ void torrent_seek_prioritize(TorrentSession session, int torrent_id, int file_id
 void torrent_pause(TorrentSession session, int torrent_id);
 void torrent_resume(TorrentSession session, int torrent_id);
 int torrent_is_paused(TorrentSession session, int torrent_id);
+int torrent_has_error(TorrentSession session, int torrent_id);
+void torrent_force_recheck(TorrentSession session, int torrent_id);
 int torrent_get_num_peers(TorrentSession session, int torrent_id);
 int torrent_get_upload_rate(TorrentSession session, int torrent_id);
 long long torrent_get_total_size(TorrentSession session, int torrent_id);

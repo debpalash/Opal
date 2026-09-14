@@ -2,7 +2,7 @@
 
 **Opal — Play everything** (config dir: `opal`)
 
-_Last updated: 2026-06-26_
+_Last updated: 2026-09-13_
 
 Opal is a **local-first** desktop media runtime. It is built so that your data
 stays on your machine. **There is no telemetry, no analytics, no crash
@@ -33,18 +33,32 @@ network requests it makes (and only when), and how to delete everything.
 
 ## What Opal stores, and where
 
-All persistent data lives under your XDG config and cache directories. Opal
-never writes to hidden cloud locations.
+Persistent data lives under `%APPDATA%/opal` and `%LOCALAPPDATA%/opal/cache`
+on Windows, or the XDG config/cache directories on other systems. Opal never
+writes it to hidden cloud locations.
 
 ### Configuration — `~/.config/opal/`
 
 | File / item | Contents |
 | --- | --- |
-| `config.tsv` | Your app settings and preferences |
-| TMDB v4 bearer token | Stored locally; required only if you use TMDB browse/search |
-| OpenSubtitles / Jellyfin / Trakt / AniList / SIMKL keys | Stored locally; only if you configure those integrations |
+| `opal.db` | Your app settings, local history, caches and configured integration credentials |
+| `plex.json` | Plex server metadata and protected account/server tokens |
 | `api.token` (mode `0600`) | Bearer token for the local remote JSON API |
 | `plugins/<name>/` | Any third-party content-source plugins you install |
+
+On Windows, saved API keys, proxy credentials, Jellyfin/Audiobookshelf/Trakt
+tokens, OPDS credentials, Plex tokens, private-repository/debrid keys and the
+content-cache encryption key are encrypted with current-user Windows DPAPI.
+Legacy plaintext values are migrated in place after they are successfully
+read. They can be decrypted only in the same Windows user context, so this
+protects backups and casual disk inspection, not malicious software already
+running as you. On non-Windows systems, Opal currently relies on the user's
+profile/file permissions and does not claim keychain encryption.
+
+Installed source maps also protect recognized key/token/user/password fields
+on Windows while leaving ordinary endpoint metadata editable. The local remote
+API and one-time setup token files intentionally remain owner-readable text so
+external automation can consume them; treat those files like passwords.
 
 ### Local database — `~/.config/opal/opal.db` (SQLite)
 
@@ -57,6 +71,11 @@ A single local SQLite database holds:
   768-dimension embeddings stored via **sqlite-vec**
 - `conversation_log` — your local AI chat history
 - `user_preferences` — taste vectors / recommendation signals
+
+Token-bearing and signed media URLs are not retained in these history records.
+Opal stores a credential-free media identity instead; Jellyfin, Plex and
+Audiobookshelf links are reconstructed from current account credentials only
+when playback begins. Existing affected rows are scrubbed by schema v3.
 
 This database is **local-only**. It is never uploaded.
 
@@ -98,8 +117,9 @@ GitHub, whose privacy policy applies.
   posters; requires your own TMDB token.
 - **Jellyfin** — your own configured Jellyfin server.
 - **YouTube** — Piped instances and/or `yt-dlp`/Google for search and playback.
-  Note: YouTube extraction may use browser cookies for authenticated requests;
-  this sends those cookies to the host yt-dlp contacts.
+  Normal extraction runs with isolated configuration and does not read browser
+  cookies. Opal sends the requested video URL and the explicitly configured
+  proxy, if any, to its local `yt-dlp` helper.
 - **OpenSubtitles** — subtitle search/download.
 - **Torrent indexers / scraper sites** — the bundled search engines and content
   scrapers contact their respective sites only when you search/resolve.

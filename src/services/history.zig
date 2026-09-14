@@ -29,11 +29,15 @@ pub fn addSearchHistory(query: []const u8) void {
     if (state.app.incognito_mode) return;
     if (query.len == 0 or query.len >= state.MAX_QUERY_LEN) return;
 
+    var safe_buf: [state.MAX_QUERY_LEN]u8 = undefined;
+    const safe_query = @import("../player/watch_history_pure.zig").persistedTarget(query, &safe_buf).identity;
+    if (safe_query.len == 0 or safe_query.len >= state.MAX_QUERY_LEN) return;
+
     // Insert into DB (UNIQUE constraint auto-deduplicates; update timestamp on conflict)
     const sql = "INSERT INTO search_history (query) VALUES (?1) ON CONFLICT(query) DO UPDATE SET searched_at=strftime('%s','now')";
     const stmt = db.prepare(sql) orelse return;
     defer db.finalize(stmt);
-    db.bindText(stmt, 1, query);
+    db.bindText(stmt, 1, safe_query);
     _ = db.step(stmt);
 
     // Refresh in-memory cache
@@ -90,10 +94,14 @@ pub fn savePlaybackPosition(url: []const u8, position: f64, duration: f64) void 
     const wh = @import("../player/watch_history.zig");
     const whp = @import("../player/watch_history_pure.zig");
 
+    var persisted_buf: [2048]u8 = undefined;
+    const persisted = whp.persistedTarget(url, &persisted_buf);
+    if (persisted.identity.len == 0) return;
+
     const percent = if (duration > 0) (position / duration) * 100.0 else 0;
     // Local taste engine: feed watch depth (finish/abandon detection). Must
     // run BEFORE the nearly-finished early-return or finishes would never be seen.
-    @import("activity.zig").onProgress(url, percent);
+    @import("activity.zig").onProgress(persisted.identity, percent);
     // Don't save if nearly finished — treat as "watched"
     if (percent > whp.FINISHED_FRACTION * 100.0) return;
     // Don't save very early positions (<2%)
@@ -103,7 +111,8 @@ pub fn savePlaybackPosition(url: []const u8, position: f64, duration: f64) void 
     const file_key = wh.resolveFileKey(url, &key_buf);
     // For local files the row is keyed by the absolute path; storing it as
     // `link` too lets the launch resume prompt reopen the file directly.
-    const name = if (file_key.len > 0 and file_key.len < 2048) file_key else url;
+    const name = if (file_key.len > 0 and file_key.len < 2048) file_key else persisted.identity;
+    const reopen = if (file_key.len > 0) name else persisted.reopen;
 
     const sql = "INSERT INTO watch_history (name, percent, position_secs, duration_secs, file_key, link) VALUES (?1, ?2, ?3, ?4, ?5, ?6) " ++
         "ON CONFLICT(name) DO UPDATE SET percent=?2, position_secs=?3, duration_secs=?4, file_key=?5, link=?6, updated_at=strftime('%s','now')";
@@ -114,7 +123,7 @@ pub fn savePlaybackPosition(url: []const u8, position: f64, duration: f64) void 
     db.bindDouble(stmt, 3, position);
     db.bindDouble(stmt, 4, duration);
     db.bindText(stmt, 5, file_key);
-    db.bindText(stmt, 6, name);
+    db.bindText(stmt, 6, reopen);
     _ = db.step(stmt);
 }
 
@@ -127,6 +136,10 @@ pub fn getPlaybackPosition(url: []const u8) f64 {
 
     const wh = @import("../player/watch_history.zig");
     const whp = @import("../player/watch_history_pure.zig");
+
+    var persisted_buf: [2048]u8 = undefined;
+    const persisted = whp.persistedTarget(url, &persisted_buf);
+    if (persisted.identity.len == 0) return 0;
 
     var key_buf: [2048]u8 = undefined;
     const file_key = wh.resolveFileKey(url, &key_buf);
@@ -147,7 +160,7 @@ pub fn getPlaybackPosition(url: []const u8) f64 {
         const sql = "SELECT position_secs FROM watch_history WHERE name = ?1";
         const stmt = db.prepare(sql) orelse return 0;
         defer db.finalize(stmt);
-        db.bindText(stmt, 1, url);
+        db.bindText(stmt, 1, persisted.identity);
         if (db.step(stmt) == db.c.SQLITE_ROW) {
             legacy_pos = db.columnDouble(stmt, 0);
         }
@@ -159,14 +172,20 @@ pub fn getPlaybackPosition(url: []const u8) f64 {
 /// Clear resume position after a video is fully watched
 pub fn clearPlaybackPosition(url: []const u8) void {
     const wh = @import("../player/watch_history.zig");
+    const whp = @import("../player/watch_history_pure.zig");
     var key_buf: [2048]u8 = undefined;
     const file_key = wh.resolveFileKey(url, &key_buf);
 
-    const sql = "DELETE FROM watch_history WHERE name = ?1 OR (?2 <> '' AND file_key = ?2)";
+    var persisted_buf: [2048]u8 = undefined;
+    const persisted = whp.persistedTarget(url, &persisted_buf);
+    if (persisted.identity.len == 0) return;
+
+    const sql = "DELETE FROM watch_history WHERE name = ?1 OR name = ?2 OR (?3 <> '' AND file_key = ?3)";
     const stmt = db.prepare(sql) orelse return;
     defer db.finalize(stmt);
-    db.bindText(stmt, 1, url);
-    db.bindText(stmt, 2, file_key);
+    db.bindText(stmt, 1, persisted.identity);
+    db.bindText(stmt, 2, url); // legacy pre-v3 row
+    db.bindText(stmt, 3, file_key);
     _ = db.step(stmt);
 }
 
@@ -179,11 +198,18 @@ pub fn addDownloadHistory(name: []const u8, link: []const u8) void {
     if (name.len == 0 or name.len >= state.MAX_DL_NAME_LEN) return;
     if (link.len >= state.MAX_DL_LINK_LEN) return;
 
+    const whp = @import("../player/watch_history_pure.zig");
+    var name_buf: [state.MAX_DL_LINK_LEN]u8 = undefined;
+    const safe_name = whp.persistedTarget(name, &name_buf).identity;
+    if (safe_name.len == 0 or safe_name.len >= state.MAX_DL_NAME_LEN) return;
+    var link_buf: [state.MAX_DL_LINK_LEN]u8 = undefined;
+    const safe_link = whp.persistedTarget(link, &link_buf).reopen;
+
     const sql = "INSERT INTO download_history (name, link) VALUES (?1, ?2)";
     const stmt = db.prepare(sql) orelse return;
     defer db.finalize(stmt);
-    db.bindText(stmt, 1, name);
-    db.bindText(stmt, 2, link);
+    db.bindText(stmt, 1, safe_name);
+    db.bindText(stmt, 2, safe_link);
     _ = db.step(stmt);
 
     // Refresh cache

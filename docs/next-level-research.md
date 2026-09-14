@@ -82,11 +82,14 @@ not silently substitute Tailscale, Tailchat, or another similarly named product.
 5. **P1 — Complete owned-server client workflows.** Build fixture servers for
    Jellyfin and Plex covering expired credentials, empty and large libraries,
    nested shows/seasons, multiple media versions, unsupported codecs/subtitles,
-   progress reporting and reconnect. Use per-install random device identity:
-   currently Jellyfin uses `opal-001`, and Plex uses `opal-media-9a3f`. The Plex
-   HTTP helper already sends secret headers through stdin; preserve that. Both
-   direct-play paths put tokens in URLs, so test redaction across history, logs,
-   screenshots, API snapshots and caches rather than asserting an unverified leak.
+   progress reporting and reconnect. Per-install random device identity is now
+   shared across Jellyfin video/music and Plex, with the actual app version.
+   Plex now sends secret headers in-process through pooled native HTTP. Both
+   direct-play paths put tokens in URLs at the mpv boundary. Persisted progress,
+   sessions, workspaces, browser/download history, local AI memory and visible
+   loading titles now use credential-free identities; v3 scrubs older rows and
+   adapter deep links reconstruct credentials at playback time. Keep fixture
+   coverage for screenshots, API snapshots and every newly-added cache.
 
 6. **P1 — Make transfer management durable and safe.** Introduce typed policy
    and operations for upload/download limits, scheduling, seeding goals,

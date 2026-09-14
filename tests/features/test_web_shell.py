@@ -281,10 +281,13 @@ def test_web_queue_management_contract():
             and "std.meta.stringToEnum(q.Action, action_name)" in remote,
         "native behavior reused": "pub fn playQueueIndex(" in queue
             and "pub fn removeQueueIndex(" in queue
-            and "playQueueItem(&queue_items[idx])" in queue and "q.apply(action, idx)" in remote,
+            and "playQueueItem(&queue_items[idx])" in queue
+            and "q.requestAction(action, idx)" in remote,
         "complete management deck": all(
             token in ui for token in (
                 'id="queue-clear-played"', 'id="queue-clear"',
+                'id="queue-previous"', 'id="queue-next"',
+                'id="queue-shuffle"', 'id="queue-repeat"',
                 'data-action="play"', 'data-action="move-up"',
                 'data-action="move-down"', 'data-action="remove"',
             )
@@ -300,6 +303,42 @@ def test_web_queue_management_contract():
     if missing:
         return "fail", "web queue management incomplete: " + ", ".join(missing)
     return "pass", "snapshot + POST play/remove/reorder/clear share the native queue implementation"
+
+
+@test("Queue startup, order, and identity are deterministic", "Queue")
+def test_queue_persistence_contract():
+    queue = _src("src/services/queue.zig")
+    main = _src("src/main.zig")
+    remote = _remote_api()
+    checks = {
+        "background lifecycle": '@import("services/queue.zig").initDb();' in main
+            and '@import("services/queue.zig").deinit();' in main,
+        "serialized connection": "SQLITE_OPEN_FULLMUTEX" in queue
+            and "sqlite3_close_v2" in queue,
+        "cold additions retained": "PENDING_CAP" in queue
+            and "enqueuePending(" in queue and "flushPending()" in queue,
+        "explicit FIFO order": "position INTEGER NOT NULL" in queue
+            and "ORDER BY position ASC, id ASC" in queue
+            and "SELECT MAX(position) FROM queue" in queue,
+        "stable reorder identity": "UPDATE queue SET position = ?1 WHERE id = ?2" in queue
+            and "UPDATE queue SET id = -1" not in queue,
+        "bounded input": "fn validInput(" in queue and "queue_count >= MAX_QUEUE" in queue,
+        "readiness boundary": remote.count("queue is starting") >= 2,
+        "UI-thread ownership": '@import("services/queue.zig").drainUi();' in main
+            and "pub fn requestAction(" in queue
+            and "pub fn snapshotItems(" in queue,
+        "isolated thumbnail work": "const ThumbJob = struct" in queue
+            and "publishThumbResult(" in queue
+            and "var item_id: i64 = 0" not in queue,
+        "shared persisted play order": "queue_playback_pure.zig" in queue
+            and "playlist_shuffle_seed" in queue
+            and "pub fn playRelative(" in queue
+            and 'origin = .queue' in queue,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "queue persistence contract incomplete: " + ", ".join(missing)
+    return "pass", "cold additions survive; append/advance/reorder retain deterministic order and identity"
 
 
 @test("Web can operate direct downloads and torrents", "Web UI")

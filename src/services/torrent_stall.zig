@@ -32,6 +32,8 @@ const pure = @import("torrent_stall_pure.zig");
 /// keyed by id with a free-slot scan; 32 concurrent torrents is far beyond what
 /// a streaming session ever has open.
 const MAX_WATCH = 32;
+const CHECKPOINT_MS: i64 = 10_000;
+var last_checkpoint_ms: i64 = 0;
 
 var ids: [MAX_WATCH]i32 = [_]i32{-1} ** MAX_WATCH;
 var watches: [MAX_WATCH]pure.Watch = [_]pure.Watch{.{}} ** MAX_WATCH;
@@ -113,6 +115,9 @@ fn loop() void {
         tick();
         io_g.sleep(250 * std.time.ns_per_ms);
     }
+    // Final only-if-modified checkpoint after the window is hidden. This keeps
+    // a clean close from forcing a full file recheck on the next launch.
+    if (state.torrentSession()) |ses| _ = c.mpv.torrent_checkpoint(ses);
 }
 
 /// Sample every live torrent and act on the pure verdict. Throttled to 2 Hz.
@@ -175,6 +180,10 @@ pub fn tick() void {
                 queueToast("Torrent stalled: no peers found. Try another source.");
             },
         }
+    }
+    if (now_ms - last_checkpoint_ms >= CHECKPOINT_MS) {
+        last_checkpoint_ms = now_ms;
+        _ = c.mpv.torrent_checkpoint(ses);
     }
 }
 

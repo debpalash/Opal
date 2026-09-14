@@ -15,6 +15,7 @@ const logs = @import("../core/logs.zig");
 const pure = @import("../core/source_config_pure.zig");
 const state = @import("../core/state.zig");
 const sync = @import("../core/sync.zig");
+const secret_store = @import("../core/secret_store.zig");
 
 // Cap on parsed manifest entries. The bundled plugins-manifest.json already
 // exceeds 32 (47 entries), so a low cap silently drops sources past the limit
@@ -124,9 +125,13 @@ pub fn init() void {
     if (io.cwdReadFileAlloc(tp, alloc, 4096)) |body| {
         defer alloc.free(body);
         const t = std.mem.trim(u8, body, " \r\n\t");
-        if (t.len > 0 and t.len <= token_buf.len) {
-            @memcpy(token_buf[0..t.len], t);
-            token_len = t.len;
+        if (t.len > 0) {
+            if (secret_store.reveal(t, &token_buf)) |plain| {
+                token_len = plain.len;
+                if (@import("builtin").os.tag == .windows and !secret_store.isSealed(t)) saveToken();
+            } else {
+                std.log.warn("could not unlock saved plugin repository token", .{});
+            }
         }
     } else |_| {}
     loadDebrid();
@@ -145,9 +150,13 @@ fn loadDebrid() void {
         @memcpy(debrid_provider_buf[0..v.string.len], v.string);
         debrid_provider_len = v.string.len;
     };
-    if (parsed.value.object.get("key")) |v| if (v == .string and v.string.len <= debrid_key_buf.len) {
-        @memcpy(debrid_key_buf[0..v.string.len], v.string);
-        debrid_key_len = v.string.len;
+    if (parsed.value.object.get("key")) |v| if (v == .string and v.string.len > 0) {
+        if (secret_store.reveal(v.string, &debrid_key_buf)) |plain| {
+            debrid_key_len = plain.len;
+            if (@import("builtin").os.tag == .windows and !secret_store.isSealed(v.string)) saveDebrid();
+        } else {
+            std.log.warn("could not unlock saved debrid credential", .{});
+        }
     };
 }
 
@@ -157,8 +166,11 @@ pub fn saveDebrid() void {
     var dir_buf: [600]u8 = undefined;
     const dir = std.fmt.bufPrint(&dir_buf, "{s}/plugins", .{paths.configDir(&cfg)}) catch return;
     io.cwdMakePath(dir) catch {};
-    var body_buf: [400]u8 = undefined;
-    const body = std.fmt.bufPrint(&body_buf, "{{\"provider\":\"{s}\",\"key\":\"{s}\"}}", .{ debridProvider(), debridKey() }) catch return;
+    var protected_key: [512]u8 = undefined;
+    defer @memset(&protected_key, 0);
+    const sealed_key = secret_store.seal(debridKey(), &protected_key) orelse return;
+    var body_buf: [768]u8 = undefined;
+    const body = std.fmt.bufPrint(&body_buf, "{{\"provider\":\"{s}\",\"key\":\"{s}\"}}", .{ debridProvider(), sealed_key }) catch return;
     var pb: [600]u8 = undefined;
     @import("../core/secret_file.zig").write(debridPath(&pb), body) catch {};
 }
@@ -171,7 +183,10 @@ pub fn saveToken() void {
     io.cwdMakePath(dir) catch {};
     var pb: [600]u8 = undefined;
     const tp = tokenPath(&pb);
-    @import("../core/secret_file.zig").write(tp, token_buf[0..token_len]) catch {};
+    var protected: [768]u8 = undefined;
+    defer @memset(&protected, 0);
+    const sealed = secret_store.seal(token_buf[0..token_len], &protected) orelse return;
+    @import("../core/secret_file.zig").write(tp, sealed) catch {};
 }
 
 // ── Fetch manifest ───────────────────────────────────────────────────────────
@@ -454,11 +469,6 @@ fn writeSource(id: []const u8, data: []const u8) bool {
 /// The version is spliced in as the first key rather than appended, so it
 /// survives a `data` payload that ends in a trailing newline or whitespace.
 fn writeSourceVersioned(id: []const u8, data: []const u8, version: []const u8) bool {
-    var dir_buf: [600]u8 = undefined;
-    io.cwdMakePath(source_config.sourcesDir(&dir_buf)) catch {};
-    var fp_buf: [700]u8 = undefined;
-    const path = sourceFilePath(&fp_buf, id);
-
     var stamped: [2048]u8 = undefined;
     var payload = data;
     // Only splice when we have a version AND the payload is a JSON object we
@@ -472,9 +482,7 @@ fn writeSourceVersioned(id: []const u8, data: []const u8, version: []const u8) b
         }) catch data;
     }
 
-    io.cwdWriteFile(.{ .sub_path = path, .data = payload }) catch return false;
-    source_config.reload();
-    return true;
+    return source_config.install(id, payload);
 }
 
 /// Rewrite installed sources whose manifest entry has since been corrected.

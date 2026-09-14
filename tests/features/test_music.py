@@ -97,9 +97,10 @@ def test_music():
             for m, fn in (("jf_pure", "buildSearchUrl"), ("jf_pure", "buildStreamUrl"),
                           ("jf_pure", "buildCoverUrl"), ("jf_pure", "parseSong"),
                           ("px_pure", "buildSearchUrl"), ("px_pure", "buildStreamUrl"),
-                          ("px_pure", "buildCoverUrl"), ("px_pure", "parseSong"),
-                          ("px_pure", "parseCreds"))
+                          ("px_pure", "buildCoverUrl"), ("px_pure", "parseSong"))
         ),
+        "plex credentials decrypted at boundary": "secret_store.reveal(" in svc
+            and "px_pure.isValidBase(" in svc,
         "selector offers all four": all(
             f'"{n}"' in svc for n in ("JioSaavn", "Subsonic", "Jellyfin", "Plex")
         ),

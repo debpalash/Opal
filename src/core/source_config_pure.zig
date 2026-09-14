@@ -54,6 +54,22 @@ pub fn validField(field: []const u8, val: []const u8) bool {
     return true;
 }
 
+/// Flat source maps may carry private-server credentials as well as endpoints.
+/// Keep the classification narrow so ordinary URLs and version metadata remain
+/// human-editable while known authentication fields can use protected storage.
+pub fn isSecretField(field: []const u8) bool {
+    const names = [_][]const u8{
+        "api",      "apikey",       "api_key", "key",
+        "token",    "access_token", "secret",  "client_secret",
+        "pass",     "password",     "passwd",  "user",
+        "username",
+    };
+    for (names) |name| {
+        if (std.ascii.eqlIgnoreCase(field, name)) return true;
+    }
+    return false;
+}
+
 /// Source id from a directory entry name, or null when the name is not an
 /// installable source file.
 pub fn idFromFileName(name: []const u8) ?[]const u8 {
@@ -145,6 +161,15 @@ test "validField mirrors the fixed buffers it feeds" {
     try expect(validField("f" ** MAX_FIELD_LEN, "x"));
     try expect(!validField("base", "v" ** (MAX_VAL_LEN + 1)));
     try expect(validField("base", "v" ** MAX_VAL_LEN));
+}
+
+test "credential fields are classified without hiding ordinary endpoints" {
+    try expect(isSecretField("apikey"));
+    try expect(isSecretField("PASS"));
+    try expect(isSecretField("username"));
+    try expect(!isSecretField("base"));
+    try expect(!isSecretField("stremio"));
+    try expect(!isSecretField(VERSION_KEY));
 }
 
 // ── Installed-source versioning ───────────────────────────────────────────
@@ -245,19 +270,14 @@ pub fn shouldRetire(host: []const u8, installed_val: []const u8) bool {
 
 test "shouldRetire only fires on the host that actually died" {
     // The two measured cases.
-    try expect(shouldRetire("cyberflix.elfhosted.com",
-        "https://cyberflix.elfhosted.com/manifest.json"));
-    try expect(shouldRetire("knightcrawler.elfhosted.com",
-        "https://knightcrawler.elfhosted.com/manifest.json"));
+    try expect(shouldRetire("cyberflix.elfhosted.com", "https://cyberflix.elfhosted.com/manifest.json"));
+    try expect(shouldRetire("knightcrawler.elfhosted.com", "https://knightcrawler.elfhosted.com/manifest.json"));
     // A user who re-pointed the id at their own instance keeps it: same id,
     // different host. Retiring this would delete working user config.
-    try expect(!shouldRetire("knightcrawler.elfhosted.com",
-        "http://192.168.1.10:7000/manifest.json"));
-    try expect(!shouldRetire("cyberflix.elfhosted.com",
-        "https://cyberflix.example.net/manifest.json"));
+    try expect(!shouldRetire("knightcrawler.elfhosted.com", "http://192.168.1.10:7000/manifest.json"));
+    try expect(!shouldRetire("cyberflix.elfhosted.com", "https://cyberflix.example.net/manifest.json"));
     // A debrid-substituted URL still carries the host, so it must still match.
-    try expect(shouldRetire("knightcrawler.elfhosted.com",
-        "https://knightcrawler.elfhosted.com/realdebrid/ABC123/manifest.json"));
+    try expect(shouldRetire("knightcrawler.elfhosted.com", "https://knightcrawler.elfhosted.com/realdebrid/ABC123/manifest.json"));
     // No value on disk for that field is NOT grounds to delete a keyed
     // retirement — the file may hold a different field entirely.
     try expect(!shouldRetire("cyberflix.elfhosted.com", ""));

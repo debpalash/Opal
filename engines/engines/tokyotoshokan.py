@@ -36,7 +36,7 @@ class tokyotoshokan(object):
     class MyHtmlParseWithBlackJack(HTMLParser):
         def __init__(self, url):
             HTMLParser.__init__(self)
-            self.get_size_regex = re_compile(".*Size:\s+([^ ]*)\s+.*")
+            self.get_size_regex = re_compile(r".*Size:\s+([^ ]*)\s+.*")
             self.url = url
             self.current_item = None
             self.size_found = False
@@ -98,8 +98,8 @@ class tokyotoshokan(object):
                 self.current_item[self.stat_name] = data
 
     def handle_more_pages(self, last_page_url, parser, query, skip_first=False):
-        torrent_list = re_compile("(?s)<table class=\"listing\">(.*)</table>")
-        additional_links = re_compile("\?lastid=[0-9]+&page=[0-9]+&terms={}".format(query.replace('%20', '\\+')))
+        torrent_list = re_compile(r"(?s)<table class=\"listing\">(.*)</table>")
+        additional_links = re_compile(r"\?lastid=[0-9]+&page=[0-9]+&terms={}".format(query.replace('%20', '\\+')))
 
         data = retrieve_url(last_page_url)
         data = torrent_list.search(data).group(0)

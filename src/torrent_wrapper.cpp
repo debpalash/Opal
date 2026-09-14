@@ -8,6 +8,8 @@
 #include <libtorrent/create_torrent.hpp>
 #include <libtorrent/bencode.hpp>
 #include <libtorrent/entry.hpp>
+#include <libtorrent/read_resume_data.hpp>
+#include <libtorrent/write_resume_data.hpp>
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -20,6 +22,12 @@
 #include <mutex>
 #include <atomic>
 #include <map>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 struct TorrentNode {
     lt::torrent_handle handle;
@@ -149,6 +157,80 @@ static bool cache_matches(const lt::add_torrent_params& atp, const lt::torrent_i
     if (want.has_v2() && got.has_v2()) return want.v2 == got.v2;
     if (want.has_v1() && got.has_v1()) return want.v1 == got.v1;
     return false;
+}
+
+static bool hashes_match(const lt::info_hash_t& want, const lt::info_hash_t& got) {
+    if (want.has_v2() && got.has_v2() && want.v2 == got.v2) return true;
+    if (want.has_v1() && got.has_v1() && want.v1 == got.v1) return true;
+    return false;
+}
+
+static std::string resume_path_for_cache(const std::string& cached_path) {
+    constexpr char suffix[] = ".torrent";
+    if (cached_path.size() >= sizeof(suffix) - 1
+        && cached_path.compare(cached_path.size() - (sizeof(suffix) - 1), sizeof(suffix) - 1, suffix) == 0) {
+        return cached_path.substr(0, cached_path.size() - (sizeof(suffix) - 1)) + ".fastresume";
+    }
+    return cached_path + ".fastresume";
+}
+
+// Fast-resume avoids hashing every byte of a large existing download at every
+// launch. The file is bounded and accepted only when its swarm hash matches the
+// add request; corrupt/stale data simply falls back to libtorrent's safe check.
+static void load_fastresume(const std::string& path, const lt::info_hash_t& expected,
+                            const std::string& save_path, lt::add_torrent_params& atp) {
+    std::ifstream in(path, std::ios_base::binary | std::ios_base::ate);
+    if (!in) return;
+    auto const end = in.tellg();
+    if (end <= 0 || end > 16 * 1024 * 1024) return;
+    std::vector<char> bytes(static_cast<std::size_t>(end));
+    in.seekg(0, std::ios_base::beg);
+    if (!in.read(bytes.data(), static_cast<std::streamsize>(bytes.size()))) return;
+
+    lt::error_code ec;
+    auto resumed = lt::read_resume_data(lt::span<char const>(bytes.data(), bytes.size()), ec);
+    if (ec || !hashes_match(expected, resumed.info_hashes)) return;
+    resumed.save_path = save_path;
+    if (!resumed.ti && atp.ti) resumed.ti = atp.ti;
+    atp = std::move(resumed);
+}
+
+static bool replace_file(const std::string& staged, const std::string& destination) {
+#ifdef _WIN32
+    return MoveFileExA(staged.c_str(), destination.c_str(),
+        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+#else
+    return std::rename(staged.c_str(), destination.c_str()) == 0;
+#endif
+}
+
+static bool save_fastresume(const std::shared_ptr<TorrentNode>& node) {
+    if (!node || !node->alive || !node->handle.is_valid()) return false;
+    try {
+        if (!node->handle.need_save_resume_data()) return false;
+        // Synchronous only on Opal's torrent watchdog thread, never the UI.
+        // This avoids making any other component consume the session alert queue.
+        lt::add_torrent_params data = node->handle.get_resume_data();
+        std::vector<char> encoded = lt::write_resume_data_buf(data);
+        if (encoded.empty() || encoded.size() > 16 * 1024 * 1024) return false;
+
+        const std::string path = resume_path_for_cache(node->cached_path);
+        const std::string staged = path + ".new";
+        {
+            std::ofstream out(staged, std::ios_base::binary | std::ios_base::trunc);
+            if (!out) return false;
+            out.write(encoded.data(), static_cast<std::streamsize>(encoded.size()));
+            out.flush();
+            if (!out.good()) return false;
+        }
+        if (!replace_file(staged, path)) {
+            std::remove(staged.c_str());
+            return false;
+        }
+        return true;
+    } catch (...) {
+        return false;
+    }
 }
 
 // ─── Helper: Get file piece range ───
@@ -312,6 +394,8 @@ extern "C" int torrent_add_magnet(TorrentSession session, const char* magnet_url
         // poll, and the add proceeds as a plain magnet in the meantime.
         std::remove(cached_path.c_str());
     }
+    const lt::info_hash_t expected_hashes = atp.info_hashes;
+    load_fastresume(resume_path_for_cache(cached_path), expected_hashes, save_path, atp);
 
     auto node = std::make_shared<TorrentNode>();
     {
@@ -384,6 +468,8 @@ extern "C" int torrent_add_file(TorrentSession session, const char* torrent_path
     std::ostringstream ss;
     ss << ti->info_hashes().get_best();
     std::string cached_path = std::string(save_path) + "/" + ss.str() + ".torrent";
+    const lt::info_hash_t expected_hashes = ti->info_hashes();
+    load_fastresume(resume_path_for_cache(cached_path), expected_hashes, save_path, atp);
 
     auto node = std::make_shared<TorrentNode>();
     {
@@ -420,6 +506,20 @@ extern "C" int torrent_count(TorrentSession session) {
     // is covered; erased/never-issued ids cheaply report not-alive via get_node's
     // map miss, so dead-id iteration is bounded work, not an unbounded leak.
     return ctx->next_id;
+}
+
+extern "C" int torrent_checkpoint(TorrentSession session) {
+    if (!session) return 0;
+    SessionContext* ctx = static_cast<SessionContext*>(session);
+    std::vector<std::shared_ptr<TorrentNode>> snap;
+    {
+        std::lock_guard<std::mutex> lk(ctx->mtx);
+        snap.reserve(ctx->torrents.size());
+        for (auto const& item : ctx->torrents) snap.push_back(item.second);
+    }
+    int saved = 0;
+    for (auto const& node : snap) if (save_fastresume(node)) ++saved;
+    return saved;
 }
 
 extern "C" void torrent_get_name(TorrentSession session, int torrent_id, char* out_name, int max_len) {
@@ -459,6 +559,38 @@ extern "C" int torrent_get_infohash(TorrentSession session, int torrent_id, char
         std::string hex = ss.str();
         if (hex.empty() || static_cast<int>(hex.size()) >= out_len) return -1;
         std::strncpy(out, hex.c_str(), out_len);
+        out[out_len - 1] = '\0';
+        return 0;
+    } catch(...) {
+        return -1;
+    }
+}
+
+extern "C" int torrent_get_identity_magnet(TorrentSession session, int torrent_id, char* out, int out_len) {
+    if (!session || torrent_id < 0 || !out || out_len <= 0) return -1;
+    out[0] = '\0';
+    SessionContext* ctx = static_cast<SessionContext*>(session);
+    auto node = get_node(ctx, torrent_id);
+    if (!node) return -1;
+
+    try {
+        if (!node->alive || !node->handle.is_valid()) return -1;
+        auto const hashes = node->handle.info_hashes();
+        std::ostringstream ss;
+        ss << "magnet:?";
+        bool have = false;
+        if (hashes.has_v1()) {
+            ss << "xt=urn:btih:" << hashes.v1;
+            have = true;
+        }
+        if (hashes.has_v2()) {
+            if (have) ss << '&';
+            ss << "xt=urn:btmh:1220" << hashes.v2;
+            have = true;
+        }
+        std::string identity = ss.str();
+        if (!have || static_cast<int>(identity.size()) >= out_len) return -1;
+        std::strncpy(out, identity.c_str(), out_len);
         out[out_len - 1] = '\0';
         return 0;
     } catch(...) {
@@ -910,6 +1042,31 @@ extern "C" int torrent_is_paused(TorrentSession session, int torrent_id) {
         return (flags & lt::torrent_flags::paused) ? 1 : 0;
     } catch (...) {}
     return 0;
+}
+
+extern "C" int torrent_has_error(TorrentSession session, int torrent_id) {
+    if (!session || torrent_id < 0) return 0;
+    SessionContext* ctx = static_cast<SessionContext*>(session);
+    auto node = get_node(ctx, torrent_id);
+    if (!node) return 0;
+    try {
+        if (!node->alive || !node->handle.is_valid()) return 0;
+        return node->handle.status().errc ? 1 : 0;
+    } catch (...) {}
+    return 0;
+}
+
+extern "C" void torrent_force_recheck(TorrentSession session, int torrent_id) {
+    if (!session || torrent_id < 0) return;
+    SessionContext* ctx = static_cast<SessionContext*>(session);
+    auto node = get_node(ctx, torrent_id);
+    if (!node) return;
+    try {
+        if (!node->alive || !node->handle.is_valid()) return;
+        node->ready_flag = false;
+        node->handle.force_recheck();
+        node->handle.resume();
+    } catch (...) {}
 }
 
 extern "C" int torrent_get_num_peers(TorrentSession session, int torrent_id) {

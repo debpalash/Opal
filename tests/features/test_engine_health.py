@@ -285,7 +285,7 @@ def engines_do_not_pollute_stdout():
         with open(path, encoding="utf-8", errors="replace") as fh:
             src = fh.read()
         try:
-            tree = ast.parse(src)
+            tree = ast.parse(src, filename=path)
         except SyntaxError as exc:
             problems.append(f"{name}: does not parse ({exc})")
             continue
@@ -346,7 +346,9 @@ def scrape_endpoint_is_always_reachable():
         # Not gated on the toggle the way remote.start() is.
         "not behind web_remote": "web_remote_enabled) @import(\"services/remote.zig\").startLocal"
                                  not in mn,
-        "serves only /api/scrape": 'if (!std.mem.eql(u8, path, "/api/scrape"))' in rm,
+        "serves only scrape and single-instance open": (
+            'if (!std.mem.eql(u8, path, "/api/scrape") and !std.mem.eql(u8, path, "/api/open"))' in rm
+        ),
         # Authorization now resolves an explicit Principal rather than folding
         # session and machine credentials into the old boolean isAuthorized.
         "still requires authorization": "principalForBearer(presented)" in rm.split("fn handleLocalRequest")[1],
@@ -359,7 +361,7 @@ def scrape_endpoint_is_always_reachable():
     missing = [k for k, v in checks.items() if not v]
     if missing:
         return "fail", "scrape listener wiring incomplete: " + ", ".join(missing)
-    return "pass", ("loopback-only /api/scrape runs regardless of Web Remote; "
+    return "pass", ("loopback-only scrape/open listener runs regardless of Web Remote; "
                     "client prefers 41596 and falls back to 41595")
 
 
@@ -994,20 +996,73 @@ def academictorrents_and_filter():
     return "pass", "all terms required; empty terms dropped; single-term search intact"
 
 
-@test("torrents: adding before the engine is up says so", "Torrents")
+@test("torrents: cold-start adds are deferred, not discarded", "Torrents")
 def test_torrent_session_not_ready_is_reported():
     # The session is built on a background thread at startup — the comment in
     # main.zig says DHT bootstrap takes 5-10s. Inside that window
     # torrent_add_magnet gets a NULL session, returns -1, and the -1 branch
     # reported "invalid or duplicate magnet". Observed 2026-08-04: a magnet
     # posted to /api/load right after launch vanished with no torrent and no
-    # error, and re-posting the identical link seconds later worked. The message
-    # sent you off checking a link that was never the problem.
+    # error, and re-posting the identical link seconds later worked. Cold-start
+    # actions must now queue once and flush on the UI thread after publication.
     src = _src("src/services/search.zig")
+    queue = _src("src/services/torrent_open_queue.zig")
+    build = _src("build.zig")
     guards = src.count("if (state.torrentSession() == null) {")
     if guards < 2:
         return "fail", (f"only {guards} of the 2 add paths (magnet, .torrent) check for a "
                         "session — the other still reports a good link as invalid")
-    if "still starting" not in src:
-        return "fail", "the not-ready case has no user-facing message"
-    return "pass", "both add paths report a not-yet-ready engine instead of blaming the link"
+    main = _src("src/main.zig")
+    required = ("deferTorrentOpen(.magnet" in src
+                and "deferTorrentOpen(.torrent_file" in src
+                and "pub fn flushPendingTorrentOpen()" in src
+                and "pending_torrent_lock" in src
+                and "pending_torrent_ready" in src
+                and "torrent_open_queue.Queue" in src
+                and "pub fn push(" in queue and "pub fn pop(" in queue
+                and "src/services/torrent_open_queue.zig" in build
+                and "flushPendingTorrentOpen();" in main
+                and "state.wakeUi();" in main)
+    if not required:
+        return "fail", "cold-start torrent action is not safely queued and flushed"
+    if "try again in a moment" in _between(src, "fn addMagnetToEngine", "fn attachTorrentToPlayer"):
+        return "fail", "magnet path still asks for a second click"
+    return "pass", "magnet and .torrent cold-start actions auto-flush once on the UI thread"
+
+
+@test("torrents: active restart intent is private and deterministic", "Torrents")
+def test_torrent_restart_intent_contract():
+    pure = _src("src/services/torrent_intent_pure.zig")
+    intents = _src("src/services/torrent_intents.zig")
+    db = _src("src/core/db.zig")
+    main = _src("src/main.zig")
+    search = _src("src/services/search.zig")
+    transfers = _src("src/services/transfers.zig")
+    wrapper = _src("src/torrent_wrapper.cpp")
+    stall = _src("src/services/torrent_stall.zig")
+    build = _src("build.zig")
+    required = ("active_torrent_intents" in db
+                and "pub fn canonicalIdentity(" in pure
+                and "pub fn rememberTorrent(" in intents
+                and "pub fn forgetTorrent(" in intents
+                and "pub fn setPaused(" in intents
+                and "pub fn restoreIfReady(" in intents
+                and "LIMIT 128" in intents
+                and "torrent_get_identity_magnet" in wrapper
+                and "load_fastresume(" in wrapper
+                and "save_fastresume(" in wrapper
+                and "torrent_checkpoint" in wrapper
+                and "CHECKPOINT_MS" in stall
+                and "torrent_has_error" in wrapper
+                and "torrent_force_recheck" in wrapper
+                and "recheckTorrent(" in transfers
+                and "rememberTorrent(tid);" in search
+                and "forgetTorrent(id);" in transfers
+                and "setPaused(id, paused);" in transfers
+                and "restoreIfReady();" in main
+                and "src/services/torrent_intent_pure.zig" in build)
+    if not required:
+        return "fail", "active torrent intent is not fully wired through accept/restore/remove"
+    if "tr=" in _between(pure, "pub fn canonicalIdentity", 'test "identity strips'):
+        return "fail", "canonical durable identity appears to retain tracker parameters"
+    return "pass", "restart rejoins canonical v1/v2 swarms without persisting private magnet fields"
