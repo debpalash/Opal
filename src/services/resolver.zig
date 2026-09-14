@@ -321,7 +321,14 @@ fn normalizeQuery(raw: []const u8, buf: *[256]u8) []const u8 {
 
 /// Main entry: fire all backends in parallel
 pub fn resolve(query: []const u8, intent: []const u8) void {
-    if (query.len == 0) return;
+    _ = resolveTracked(query, intent);
+}
+
+/// Start a live resolve and return the generation that exclusively owns its
+/// result stream. Playback auto-pickers must retain this token so a later user
+/// search can supersede them without letting them consume unrelated rows.
+pub fn resolveTracked(query: []const u8, intent: []const u8) u32 {
+    if (query.len == 0) return run_gen.load(.acquire);
     // A run transition and every live worker publication share this lock. A
     // generation check without the lock has a TOCTOU window: an old worker can
     // validate, the next run can clear/reset, and then the old worker can write
@@ -448,6 +455,11 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
     // no worker exists to call checkAllDone().
     checkAllDoneLocked(this_run);
     lifecycle_mutex.unlock();
+    return this_run;
+}
+
+pub fn generationIsCurrent(generation: u32) bool {
+    return run_gen.load(.acquire) == generation;
 }
 
 /// Monotonic search generation. Each worker thread carries the generation it

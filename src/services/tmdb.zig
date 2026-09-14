@@ -2484,7 +2484,7 @@ fn smartPlayEpisode(query: []const u8, generation: u64) void {
         episode_mutex.unlock();
         return;
     }
-    resolver.resolve(query, "tv");
+    const resolver_generation = resolver.resolveTracked(query, "tv");
     episode_mutex.unlock();
 
     // Snapshot the chosen candidate under the lock (results are kept
@@ -2497,6 +2497,9 @@ fn smartPlayEpisode(query: []const u8, generation: u64) void {
     var waited: usize = 0;
     while (waited <= 150) : (waited += 1) {
         if (@import("../core/workers.zig").isQuitting()) return;
+        // Universal search is intentionally superseding. Never let an episode
+        // auto-picker consume rows belonging to the newer query.
+        if (!resolver.generationIsCurrent(resolver_generation)) return;
         {
             episode_mutex.lock();
             defer episode_mutex.unlock();
@@ -2533,7 +2536,9 @@ fn smartPlayEpisode(query: []const u8, generation: u64) void {
 
     episode_mutex.lock();
     defer episode_mutex.unlock();
-    if (episode_generation.load(.acquire) != generation or @import("../core/workers.zig").isQuitting()) return;
+    if (episode_generation.load(.acquire) != generation or
+        !resolver.generationIsCurrent(resolver_generation) or
+        @import("../core/workers.zig").isQuitting()) return;
     if (chosen_url_len > 0) {
         const url = chosen_url[0..chosen_url_len];
         @memcpy(attempted_urls[attempt_count][0..url.len], url);

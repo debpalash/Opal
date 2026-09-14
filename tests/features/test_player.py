@@ -159,6 +159,7 @@ def test_watch_commit_smart_play_onboarding():
     # 3) First-run wizard: starter source pack + TMDB key + AI note; onboarded
     #    flag persisted; pre-wizard installs grandfathered.
     tm = _src("src/services/tmdb.zig")
+    resolver = _src("src/services/resolver.zig")
     pl = _src("src/player/player.zig")
     st = _src("src/core/state.zig")
     rk = _src("src/services/resolver_rank.zig")
@@ -179,6 +180,10 @@ def test_watch_commit_smart_play_onboarding():
                                        and "tvTouchShow" in _between(tm, "pub fn commitPendingWatch", "\nfn ")),
         "smart pick pure": "pub fn pickBest" in rk and "PickCand" in rk,
         "smart play wired": "smartPlayEpisode" in tm and "rank.pickForStartup(" in tm and "setUniversalQuery" in tm,
+        "smart pick owns resolver generation": "pub fn resolveTracked(" in resolver
+            and "generationIsCurrent(" in resolver
+            and "resolver.resolveTracked(query" in tm
+            and tm.count("resolver.generationIsCurrent(resolver_generation)") >= 2,
         "wizard": "installStarterPack" in ob and "onboarded" in ob,
         "starter pack": "pub fn installStarterPack" in pr and "torrentio" in pr,
         "persist + grandfather": '"onboarded"' in cfg and "anyInstalled" in cfg,
