@@ -975,6 +975,32 @@ def test_debrid_connection_lifecycle():
     return "pass", "debrid provider is allowlisted; disconnect erases memory and the encrypted credential file"
 
 
+@test("Suwayomi supports embedded and external server lifecycle", "Web UI")
+def test_suwayomi_server_lifecycle():
+    api = _src("src/services/remote_suwayomi_api.zig")
+    remote = _remote_api()
+    native = _src("src/services/plugins.zig")
+    html = _src("web/index.html")
+    web = _src("web/js/integrations.js")
+    checks = {
+        "dedicated API boundary": "remote_suwayomi_api.zig" in remote,
+        "validated external endpoint": "fn validBase" in api and "http(s) Suwayomi URL" in api,
+        "durable edit": 'action, "save"' in api and 'source_config.install("suwayomi"' in api,
+        "complete disconnect": 'action, "disconnect"' in api and 'uninstallById("suwayomi")' in api
+            and "server.stopEmbedded()" in api,
+        "state projection": r'\"configured\"' in api and r'\"base\"' in api,
+        "web controls": all(marker in html + web for marker in (
+            'id="suwa-base"', 'id="suwa-save"', 'id="suwa-disconnect"',
+            "action:'save'", "action:'disconnect'",
+        )),
+        "native disconnect": 'sc.uninstallById("suwayomi")' in native and '"Disconnected"' in native,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "Suwayomi lifecycle incomplete: " + ", ".join(missing)
+    return "pass", "embedded and external Suwayomi servers can be started, edited, validated, and disconnected"
+
+
 @test("Audiobookshelf and OPDS connections have durable web lifecycle controls", "Web UI")
 def test_reading_server_connection_lifecycle():
     remote = _remote_api()

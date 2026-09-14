@@ -24,6 +24,7 @@ def test_web_remote_module_boundaries():
         "remote_plex_api.zig",
         "remote_collections_api.zig",
         "remote_local_library_api.zig",
+        "remote_suwayomi_api.zig",
     )
     checks = {
         "top router stays below 5k lines": len(remote.splitlines()) < 5000,
@@ -42,6 +43,7 @@ def test_web_remote_module_boundaries():
             "remote_catalog_api.zig", "remote_plex_api.zig",
             "remote_collections_api.zig",
             "remote_local_library_api.zig",
+            "remote_suwayomi_api.zig",
         )),
     }
     missing = [name for name, ok in checks.items() if not ok]

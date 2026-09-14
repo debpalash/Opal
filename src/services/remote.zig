@@ -1316,7 +1316,7 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
     // Suwayomi: the manga extension server Opal can run for you. GET reports
     // status; POST takes ?action=start|stop.
     if (std.mem.eql(u8, api_path, "/suwayomi")) {
-        apiSuwayomi(stream, query, body);
+        @import("remote_suwayomi_api.zig").handle(stream, method, query, body);
         return;
     }
     // Home hub: at-a-glance counts + what to continue.
@@ -2926,36 +2926,6 @@ fn apiTrakt(stream: std.Io.net.Stream, method: []const u8, query: []const u8, bo
     }) catch return;
     escJsonWrite(&w, account.user_code[0..account.user_code_len]);
     w.print("\",\"needs_reauth\":{s}}}", .{if (account.needs_reauth) "true" else "false"}) catch return;
-    sendJson(stream, out[0..w.end]);
-}
-
-/// `/api/suwayomi` — the Plugins › Suwayomi tab, for the web UI.
-///
-/// The manga extension server Opal can run on the user's behalf. GET reports
-/// status; POST takes `?action=start|stop`. No credentials are involved, so
-/// this one is only a lifecycle control.
-fn apiSuwayomi(stream: std.Io.net.Stream, query: []const u8, body: []const u8) void {
-    const suwa = @import("suwayomi_server.zig");
-    var abuf: [16]u8 = undefined;
-    if (credParam(body, query, "action", &abuf)) |action| {
-        if (std.mem.eql(u8, action, "start")) {
-            suwa.startEmbedded();
-            sendJson(stream, "{\"ok\":true}");
-            return;
-        }
-        if (std.mem.eql(u8, action, "stop")) {
-            suwa.stopEmbedded();
-            sendJson(stream, "{\"ok\":true}");
-            return;
-        }
-        sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"action must be start or stop\"}");
-        return;
-    }
-    var out: [512]u8 = undefined;
-    var w = std.Io.Writer.fixed(&out);
-    w.print("{{\"running\":{s},\"status\":\"", .{if (suwa.isRunning()) "true" else "false"}) catch return;
-    escJsonWrite(&w, suwa.statusText());
-    w.writeAll("\"}") catch return;
     sendJson(stream, out[0..w.end]);
 }
 

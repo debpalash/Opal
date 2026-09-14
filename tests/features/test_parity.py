@@ -278,7 +278,7 @@ def test_new_plugin_routes():
     ui = _web_app()
     checks = {
         "trakt route": 'api_path, "/trakt"' in rm and "fn apiTrakt(" in rm,
-        "suwayomi route": 'api_path, "/suwayomi"' in rm and "fn apiSuwayomi(" in rm,
+        "suwayomi route": 'api_path, "/suwayomi"' in rm and "remote_suwayomi_api.zig" in rm,
         "about route": 'api_path, "/about"' in rm,
         # The Trakt access token must never leave the machine: device auth means
         # the browser only ever needs the short activation code.

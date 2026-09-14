@@ -1403,6 +1403,13 @@ fn renderSuwayomi() void {
         if (dvui.button(@src(), "Test", .{}, .{ .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.text_secondary, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 }, .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 }, .gravity_y = 0.5 })) {
             suwaTest();
         }
+        if (sc.get("suwayomi", "base") != null and dvui.button(@src(), "Disconnect", .{}, .{ .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.danger, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 }, .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 }, .gravity_y = 0.5 })) {
+            srv.stopEmbedded();
+            sc.uninstallById("suwayomi");
+            @memset(&suwa_url_buf, 0);
+            suwa_prefilled = false;
+            setSuwaMsg("Disconnected");
+        }
     }
     if (suwa_test_len > 0) {
         _ = dvui.label(@src(), "{s}", .{suwa_test_msg[0..suwa_test_len]}, .{ .color_text = theme.colors.text_secondary, .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 } });

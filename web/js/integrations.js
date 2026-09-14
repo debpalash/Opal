@@ -324,6 +324,7 @@ async function loadSuwayomi() {
   let d;
   try { d = await api('/suwayomi'); } catch (e) { $('suwa-hint').textContent = 'Unavailable'; return; }
   $('suwa-hint').textContent = d.status || (d.running ? 'Running' : 'Stopped');
+  if (document.activeElement !== $('suwa-base')) $('suwa-base').value = d.base || '';
 }
 $('suwa-start').onclick = async () => {
   await fetch(BASE + '/api/suwayomi?action=start',
@@ -516,6 +517,15 @@ $('party-chat-form').addEventListener('submit', async e => {
 const watchSaved = (key, allowed, fallback) => {
   try { const value = localStorage.getItem(key); return allowed.includes(value) ? value : fallback; }
   catch { return fallback; }
+};
+$('suwa-save').onclick = async () => {
+  try { await apiFormMutation('/suwayomi', {action:'save', base:$('suwa-base').value.trim()}); toast('Suwayomi server saved'); await loadSuwayomi(); }
+  catch (error) { toast(error.message || 'Could not save Suwayomi server'); }
+};
+$('suwa-disconnect').onclick = async () => {
+  if (!confirm('Disconnect Suwayomi? Your manga library remains on its server.')) return;
+  try { await apiFormMutation('/suwayomi', {action:'disconnect'}); $('suwa-base').value = ''; toast('Suwayomi disconnected'); await loadSuwayomi(); }
+  catch (error) { toast(error.message || 'Could not disconnect Suwayomi'); }
 };
 const watchFilters = ['all','watching','caught_up','unstarted','completed','dropped'];
 const watchKinds = ['all','tv','anime','movie'];
