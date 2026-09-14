@@ -10,7 +10,7 @@ Add a section BEFORE tagging; a missing one ships a release that says so.
 Headings are `## vX.Y.Z — YYYY-MM-DD`, newest first. The version token must
 match the tag exactly.
 
-## v0.8.5 — 2026-09-13
+## v0.8.5 — 2026-09-14
 
 **Releaser:** Palash Debnath
 

@@ -10,6 +10,8 @@
 #include <libtorrent/entry.hpp>
 #include <libtorrent/read_resume_data.hpp>
 #include <libtorrent/write_resume_data.hpp>
+#include <libtorrent/alert.hpp>
+#include <libtorrent/alert_types.hpp>
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -204,13 +206,10 @@ static bool replace_file(const std::string& staged, const std::string& destinati
 #endif
 }
 
-static bool save_fastresume(const std::shared_ptr<TorrentNode>& node) {
+static bool save_fastresume(const std::shared_ptr<TorrentNode>& node,
+                            const lt::add_torrent_params& data) {
     if (!node || !node->alive || !node->handle.is_valid()) return false;
     try {
-        if (!node->handle.need_save_resume_data()) return false;
-        // Synchronous only on Opal's torrent watchdog thread, never the UI.
-        // This avoids making any other component consume the session alert queue.
-        lt::add_torrent_params data = node->handle.get_resume_data();
         std::vector<char> encoded = lt::write_resume_data_buf(data);
         if (encoded.empty() || encoded.size() > 16 * 1024 * 1024) return false;
 
@@ -517,8 +516,51 @@ extern "C" int torrent_checkpoint(TorrentSession session) {
         snap.reserve(ctx->torrents.size());
         for (auto const& item : ctx->torrents) snap.push_back(item.second);
     }
+    // save_resume_data() is the portable libtorrent API: 2.0 (Ubuntu 24.04)
+    // exposes only this asynchronous form, while 2.1 added get_resume_data().
+    // Queue every request first, then drain matching alerts under ONE bounded
+    // deadline. Checkpointing runs on Opal's torrent watchdog, never the UI,
+    // and no other wrapper component consumes the session alert queue.
+    std::vector<std::shared_ptr<TorrentNode>> pending;
+    pending.reserve(snap.size());
+    for (auto const& node : snap) {
+        try {
+            if (!node || !node->alive || !node->handle.is_valid()
+                || !node->handle.need_save_resume_data()) continue;
+            node->handle.save_resume_data();
+            pending.push_back(node);
+        } catch (...) {}
+    }
+
     int saved = 0;
-    for (auto const& node : snap) if (save_fastresume(node)) ++saved;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(750);
+    while (!pending.empty()) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) break;
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+        if (ctx->ses->wait_for_alert(remaining) == nullptr) break;
+
+        std::vector<lt::alert*> alerts;
+        ctx->ses->pop_alerts(&alerts);
+        for (lt::alert* alert : alerts) {
+            const lt::torrent_handle* completed = nullptr;
+            const lt::add_torrent_params* data = nullptr;
+            if (auto* ok = lt::alert_cast<lt::save_resume_data_alert>(alert)) {
+                completed = &ok->handle;
+                data = &ok->params;
+            } else if (auto* failed = lt::alert_cast<lt::save_resume_data_failed_alert>(alert)) {
+                completed = &failed->handle;
+            }
+            if (!completed) continue;
+
+            for (std::size_t i = 0; i < pending.size(); ++i) {
+                if (pending[i]->handle != *completed) continue;
+                if (data && save_fastresume(pending[i], *data)) ++saved;
+                pending.erase(pending.begin() + static_cast<std::ptrdiff_t>(i));
+                break;
+            }
+        }
+    }
     return saved;
 }
 

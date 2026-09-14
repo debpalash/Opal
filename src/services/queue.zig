@@ -159,7 +159,9 @@ pub fn deinit() void {
     for (queue_items[0..queue_count]) |*item| {
         if (item.thumb_pixels) |pixels| alloc.free(pixels);
         if (item.thumb_tex) |tex| {
-            if (state.app.dvui_win) |win| win.backend.textureDestroy(tex);
+            if (comptime !@import("build_options").headless) {
+                if (state.app.dvui_win) |win| win.backend.textureDestroy(tex);
+            }
         }
         item.thumb_pixels = null;
         item.thumb_tex = null;
