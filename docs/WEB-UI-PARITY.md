@@ -107,7 +107,7 @@ commands, non-finite numbers, out-of-range values, and unknown actions.
       TV/anime untracking that keeps watch history
 - [x] Type/status filters and bounded metadata refresh state
 - [x] Favorite, rating, continue/resume, and synchronized movie-history removal
-- [ ] Collections, playlists, queue add/remove/reorder/play, bulk actions
+- [x] Collections, playlists, queue add/remove/reorder/play, bulk actions
 - [ ] Library scan/import, metadata corrections, duplicate handling
 - [ ] Cross-source semantic deduplication and fallback stream candidates
 - [x] Persisted filters, sorting, view mode, pagination, and virtualized grids

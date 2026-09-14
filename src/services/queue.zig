@@ -82,6 +82,7 @@ var completed_action_id = std.atomic.Value(u64).init(0);
 var shuffle_order: [MAX_QUEUE]u32 = undefined;
 var shuffle_order_len: usize = 0;
 var shuffle_order_seed: u64 = 0;
+var collection_name_buf: [96]u8 = std.mem.zeroes([96]u8);
 
 // ══════════════════════════════════════════════════════════
 // SQLite Database Management
@@ -542,6 +543,8 @@ pub fn renderContent() void {
         }
     }
 
+    renderCollections();
+
     // One shared play-order policy for Queue and imported playlists. Compact
     // text controls stay understandable without icon/tooltip discovery.
     {
@@ -604,6 +607,80 @@ pub fn renderContent() void {
 
     for (queue_items[0..queue_count], 0..) |*item, idx| {
         renderQueueCard(item, idx);
+    }
+}
+
+fn renderCollections() void {
+    const collections = @import("collections.zig");
+    var rows: [collections.MAX_COLLECTIONS]collections.Summary = undefined;
+    const count = collections.list(&rows);
+
+    var panel = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .horizontal,
+        .background = true,
+        .color_fill = theme.colors.bg_surface,
+        .corner_radius = theme.dims.rad_sm,
+        .padding = dvui.Rect.all(8),
+        .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
+    });
+    defer panel.deinit();
+
+    var create = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+    defer create.deinit();
+    var input = dvui.textEntry(@src(), .{
+        .text = .{ .buffer = &collection_name_buf },
+        .placeholder = "Collection name",
+    }, .{
+        .expand = .horizontal,
+        .color_fill = theme.colors.bg_elevated,
+        .color_text = theme.colors.text_primary,
+        .corner_radius = theme.dims.rad_sm,
+        .padding = .{ .x = 8, .y = 5, .w = 8, .h = 5 },
+        .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+    });
+    const save_enter = input.enter_pressed;
+    input.deinit();
+    if (dvui.button(@src(), "Save queue", .{}, .{
+        .color_fill = theme.colors.accent,
+        .color_text = theme.colors.text_on_accent,
+        .corner_radius = theme.dims.rad_sm,
+    }) or save_enter) {
+        const name = std.mem.sliceTo(&collection_name_buf, 0);
+        if (collections.saveQueue(name)) {
+            @memset(&collection_name_buf, 0);
+            state.showToast("Collection saved");
+        } else state.showToast("Enter a collection name");
+    }
+
+    for (rows[0..count], 0..) |*row, index| {
+        var line = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = index,
+            .expand = .horizontal,
+            .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
+        });
+        defer line.deinit();
+        _ = dvui.labelNoFmt(@src(), row.name[0..row.name_len], .{}, .{
+            .id_extra = index,
+            .expand = .horizontal,
+            .color_text = theme.colors.text_primary,
+        });
+        var count_buf: [32]u8 = undefined;
+        const count_label = std.fmt.bufPrint(&count_buf, "{d} items", .{row.item_count}) catch "";
+        _ = dvui.labelNoFmt(@src(), count_label, .{}, .{ .id_extra = index, .color_text = theme.colors.text_tertiary });
+        if (dvui.button(@src(), "Append", .{}, .{ .id_extra = index, .color_fill = theme.colors.bg_elevated })) {
+            if (collections.enqueueNative(row.id, false)) state.showToast("Collection appended");
+        }
+        if (dvui.button(@src(), "Replace", .{}, .{ .id_extra = index, .color_fill = theme.colors.bg_elevated })) {
+            if (collections.enqueueNative(row.id, true)) state.showToast("Queue replaced");
+        }
+        if (dvui.button(@src(), "Delete", .{}, .{
+            .id_extra = index,
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = theme.colors.danger,
+        })) {
+            if (collections.remove(row.id)) state.showToast("Collection deleted");
+            break;
+        }
     }
 }
 

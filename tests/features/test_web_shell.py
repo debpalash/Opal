@@ -361,6 +361,7 @@ def test_named_queue_collections():
     remote = _src("src/services/remote_collections_api.zig")
     page = _src("web/index.html")
     ui = _src("web/js/catalog.js")
+    native = _src("src/services/queue.zig")
     checks = {
         "normalized schema": "media_collections" in db and "media_collection_items" in db,
         "coherent queue snapshot": "queue.snapshotItems" in service and "BEGIN IMMEDIATE" in service,
@@ -374,6 +375,8 @@ def test_named_queue_collections():
             'id="collection-name"', 'id="collection-save"', 'id="collections"',
             "Save current queue", "data-collection=\"append\"", "data-collection=\"replace\"",
         )),
+        "desktop shares storage": "renderCollections()" in native
+            and "collections.enqueueNative" in native and "collections.saveQueue" in native,
     }
     missing = [name for name, ok in checks.items() if not ok]
     if missing:

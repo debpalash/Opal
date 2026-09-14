@@ -105,6 +105,18 @@ pub fn enqueue(id: i64, replace: bool) bool {
         const ticket = queue.requestAction(.clear, null) orelse return false;
         if (!queue.waitAction(ticket, 5000)) return false;
     }
+    return enqueueItems(id);
+}
+
+/// UI-thread variant: apply replacement immediately instead of queueing an
+/// action and waiting on the same thread that would drain it.
+pub fn enqueueNative(id: i64, replace: bool) bool {
+    if (id <= 0 or !queue.isReady()) return false;
+    if (replace) queue.clearAll();
+    return enqueueItems(id);
+}
+
+fn enqueueItems(id: i64) bool {
     const stmt = db.prepare("SELECT url,title,source,thumb_url FROM media_collection_items WHERE collection_id=?1 ORDER BY position LIMIT ?2") orelse return false;
     defer db.finalize(stmt);
     db.bindInt64(stmt, 1, id);
