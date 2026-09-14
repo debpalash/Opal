@@ -296,6 +296,7 @@ def test_iptv_custom_source_crud():
     remote = _src("src/services/remote.zig")
     html = _src("web/index.html")
     web = _src("web/js/integrations.js")
+    native = _src("src/ui/settings.zig")
     checks = {
         "bounded source slots": "MAX_CUSTOM_SOURCES: usize = 8" in service,
         "durable CRUD": all(marker in service for marker in (
@@ -309,6 +310,10 @@ def test_iptv_custom_source_crud():
         "URLs sent in POST body": "apiFormMutation('/livetv/sources'" in web,
         "web add edit remove": all(marker in html + web for marker in (
             'id="ltv-custom-name"', 'id="ltv-custom-adult"', "data-ltv-edit", "data-ltv-remove",
+        )),
+        "native add edit remove and legacy migration": all(marker in native for marker in (
+            "livetv_edit_slot", "iptv.firstFreeCustomSlot()", "iptv.removeCustomSource(slot)",
+            "livetv_migrate_legacy", 'iptv.setCustomUrl("", false)',
         )),
     }
     missing = [name for name, ok in checks.items() if not ok]

@@ -3192,7 +3192,10 @@ fn renderCacheSection() void {
 // this tab is purely UI over that API. Custom-URL text is backed by a settings-
 // local buffer prefilled once from the saved config (see below).
 var livetv_url_buf: [512]u8 = std.mem.zeroes([512]u8);
+var livetv_name_buf: [81]u8 = std.mem.zeroes([81]u8);
 var livetv_url_prefilled: bool = false;
+var livetv_edit_slot: ?usize = null;
+var livetv_migrate_legacy: bool = false;
 // Whether to flag the custom playlist as adult (all its channels NSFW-gated).
 var livetv_adult: bool = false;
 var source_config_checked: bool = false;
@@ -3323,16 +3326,58 @@ fn renderLiveTvTab() void {
     }
 
     // ── Custom playlist ──
-    sectionHeader("Custom playlist", "Add your own M3U / M3U8 URL", 30, @src());
+    sectionHeader("Custom playlists", "Add and manage up to eight M3U / M3U8 sources", 30, @src());
     {
-        // Prefill the local buffer once from the saved custom URL.
+        var custom_id_buf: [32]u8 = undefined;
+        for (0..iptv.MAX_CUSTOM_SOURCES) |slot| {
+            const id = iptv.customSourceId(slot, &custom_id_buf);
+            const saved_url = source_config.get(id, "url") orelse continue;
+            const saved_name = source_config.get(id, "name") orelse "Custom playlist";
+            var source_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 400 + slot, .expand = .horizontal });
+            defer source_row.deinit();
+            _ = dvui.label(@src(), "{s} · {d} channels", .{ saved_name, iptv.sourceChannelCount(id) }, .{
+                .id_extra = 420 + slot,
+                .expand = .horizontal,
+                .color_text = theme.colors.text_secondary,
+            });
+            if (dvui.button(@src(), "Edit", .{}, .{ .id_extra = 440 + slot, .color_fill = theme.colors.bg_elevated })) {
+                @memset(&livetv_name_buf, 0);
+                @memset(&livetv_url_buf, 0);
+                @memcpy(livetv_name_buf[0..@min(saved_name.len, livetv_name_buf.len - 1)], saved_name[0..@min(saved_name.len, livetv_name_buf.len - 1)]);
+                @memcpy(livetv_url_buf[0..@min(saved_url.len, livetv_url_buf.len - 1)], saved_url[0..@min(saved_url.len, livetv_url_buf.len - 1)]);
+                livetv_adult = std.mem.eql(u8, source_config.get(id, "adult") orelse "", "1");
+                livetv_edit_slot = slot;
+                livetv_migrate_legacy = false;
+            }
+            if (dvui.button(@src(), "Remove", .{}, .{ .id_extra = 460 + slot, .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.danger })) {
+                _ = iptv.removeCustomSource(slot);
+                if (livetv_edit_slot == slot) livetv_edit_slot = null;
+                state.showToast("Removed custom playlist");
+                break;
+            }
+        }
+
+        // Prefill the old single slot once so saving migrates it without loss.
         if (!livetv_url_prefilled) {
             if (source_config.get(sources.CUSTOM_ID, "url")) |saved| {
                 const n = @min(saved.len, livetv_url_buf.len - 1);
                 @memcpy(livetv_url_buf[0..n], saved[0..n]);
+                const legacy_name = "Imported playlist";
+                @memcpy(livetv_name_buf[0..legacy_name.len], legacy_name);
+                livetv_adult = std.mem.eql(u8, source_config.get(sources.CUSTOM_ID, "adult") orelse "", "1");
+                livetv_migrate_legacy = true;
             }
             livetv_url_prefilled = true;
         }
+
+        var name_entry = dvui.textEntry(@src(), .{ .text = .{ .buffer = &livetv_name_buf }, .placeholder = "Playlist name" }, .{
+            .id_extra = 299,
+            .expand = .horizontal,
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = theme.colors.text_primary,
+            .corner_radius = theme.dims.rad_sm,
+        });
+        name_entry.deinit();
 
         {
             var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &livetv_url_buf }, .placeholder = "https://provider/playlist.m3u8" }, .{
@@ -3348,12 +3393,9 @@ fn renderLiveTvTab() void {
             te.deinit();
         }
 
-        // Adult (18+) flag: mark every channel from this playlist NSFW, so it's
-        // hidden unless the NSFW filter is off (Live TV adult content is governed
-        // by that setting). Prefill from the saved custom-source config.
         if (!source_config_checked) {
             source_config_checked = true;
-            livetv_adult = @import("../core/source_config.zig").get("iptv-custom", "adult") != null;
+            if (!livetv_url_prefilled) livetv_adult = false;
         }
         _ = dvui.checkbox(@src(), &livetv_adult, "Adult (18+) playlist — hidden unless NSFW filter is off", .{
             .id_extra = 305,
@@ -3366,7 +3408,7 @@ fn renderLiveTvTab() void {
         });
         defer btn_row.deinit();
 
-        if (dvui.button(@src(), "Save", .{}, .{
+        if (dvui.button(@src(), if (livetv_edit_slot != null) "Save changes" else "Add playlist", .{}, .{
             .id_extra = 302,
             .color_fill = theme.colors.accent,
             .color_text = theme.colors.text_on_accent,
@@ -3376,10 +3418,21 @@ fn renderLiveTvTab() void {
         })) {
             const raw = livetv_url_buf[0 .. std.mem.indexOfScalar(u8, &livetv_url_buf, 0) orelse livetv_url_buf.len];
             const trimmed = std.mem.trim(u8, raw, " \t\r\n");
-            iptv.setCustomUrl(trimmed, livetv_adult);
-            state.showToast(if (trimmed.len > 0) "Saved custom playlist" else "Cleared custom playlist");
+            const raw_name = livetv_name_buf[0 .. std.mem.indexOfScalar(u8, &livetv_name_buf, 0) orelse livetv_name_buf.len];
+            const name = std.mem.trim(u8, raw_name, " \t\r\n");
+            const slot = livetv_edit_slot orelse iptv.firstFreeCustomSlot();
+            if (slot) |target| {
+                if (iptv.setCustomSource(target, name, trimmed, livetv_adult)) {
+                    if (livetv_migrate_legacy) iptv.setCustomUrl("", false);
+                    @memset(&livetv_name_buf, 0);
+                    @memset(&livetv_url_buf, 0);
+                    livetv_edit_slot = null;
+                    livetv_migrate_legacy = false;
+                    state.showToast("Saved custom playlist");
+                } else state.showToastTyped("Enter a name and valid HTTP(S) playlist URL", .err);
+            } else state.showToastTyped("Remove a playlist before adding another", .err);
         }
-        if (dvui.button(@src(), "Clear", .{}, .{
+        if (dvui.button(@src(), "Cancel", .{}, .{
             .id_extra = 303,
             .color_fill = theme.colors.bg_elevated,
             .color_text = theme.colors.text_secondary,
@@ -3389,9 +3442,10 @@ fn renderLiveTvTab() void {
             .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
         })) {
             @memset(&livetv_url_buf, 0);
+            @memset(&livetv_name_buf, 0);
             livetv_adult = false;
-            iptv.setCustomUrl("", false);
-            state.showToast("Cleared custom playlist");
+            livetv_edit_slot = null;
+            livetv_migrate_legacy = false;
         }
     }
 }
