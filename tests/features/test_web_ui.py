@@ -679,6 +679,35 @@ def test_web_home_plugins_party():
     return "pass", "Home hub + Plugins manager + Watch Party wired to /home, /plugins, /party"
 
 
+@test("Web executable-plugin permissions and lifecycle", "Web UI")
+def test_web_executable_plugin_permissions():
+    ui = _web_app()
+    rm = _remote_api()
+    projection = _src("src/services/remote_plugins_api.zig")
+    plugins = _src("src/services/plugins.zig")
+    trust = _src("src/services/plugins_trust.zig")
+    checks = {
+        "inventory": '"],\\\"executables\\\":["' in rm
+            and "snapshotInstalled" in projection and "hasNativeEntrypoint" in projection,
+        "explicit confirmation": '"approve-exec"' in rm and '"revoke-exec"' in rm
+            and "plugin trust change requires confirm=1" in rm,
+        "mutation": "setContentTrust" in plugins and "plugin-trust" in plugins
+            and "changeTrust" in projection,
+        "identity and bytes bound": "approvalDigest" in trust
+            and 'hash.update("opal-plugin-approval-v1\\x00")' in trust
+            and "hash.update(plugin_id)" in trust and "hash.update(tree_digest)" in trust,
+        "full tree fails closed": "digestTree" in trust and "UnsupportedFileType" in trust
+            and "PathSetChanged" in trust,
+        "web review": 'id="plug-exec-list"' in ui and "renderExecutablePlugins" in ui
+            and "file and network access" in ui and "files change" in ui,
+        "no executable path leak": '\\"path\\\"' not in projection,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "executable-plugin lifecycle incomplete: " + ", ".join(missing)
+    return "pass", "Executable plugins: capability inventory + explicit content-bound trust lifecycle"
+
+
 @test("Web UI plays media in the browser (Play here destination)", "Web UI")
 def test_web_play_here():
     """The browser used to be a remote control whenever the desktop app was up:

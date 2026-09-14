@@ -330,6 +330,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
   border-radius:var(--rad-sm);color:var(--accent);font-weight:650}
 .plugin-row .plugin-action.remove{border-color:var(--border);color:var(--danger)}
 .plugin-row .plugin-action:disabled{opacity:.5;cursor:wait}
+.executable-plugin small{display:block;color:var(--text-3);font-weight:400;margin-top:5px}.plugin-blocked{border-color:color-mix(in srgb,var(--danger) 35%,var(--border))}
 @media (max-width:560px){
   .plugin-toolbar{align-items:stretch;flex-direction:column}.plugin-toggle{min-height:38px}
   .plugin-head-actions{width:100%;justify-content:flex-end}

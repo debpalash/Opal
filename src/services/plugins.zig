@@ -84,7 +84,7 @@ pub const Plugin = struct {
     allow_unsafe: bool = false,
     // Approval for this exact plugin content. The marker lives in Opal's
     // app-owned trust directory, not in the distributable plugin directory;
-    // its name is a SHA-256 digest of the normalized complete plugin tree.
+    // its name binds the plugin ID to a SHA-256 digest of the normalized tree.
     user_trusted: bool = false,
 };
 
@@ -232,8 +232,10 @@ fn fileExists(dir: []const u8, name: []const u8) bool {
 /// stored outside `<config>/plugins/<name>` so an installed bundle cannot ship
 /// its own approval, and the digest invalidates approval after any update.
 fn approvalMarkerPath(p: *const Plugin, out: []u8) ?[]const u8 {
+    var tree_digest: [32]u8 = undefined;
+    if (!pluginDigest(p, &tree_digest)) return null;
     var digest: [32]u8 = undefined;
-    if (!pluginDigest(p, &digest)) return null;
+    plugin_trust.approvalDigest(p.id[0..p.id_len], &tree_digest, &digest);
     var hex: [64]u8 = undefined;
     const digits = "0123456789abcdef";
     for (digest, 0..) |byte, i| {
@@ -256,6 +258,71 @@ fn pluginContentApproved(p: *const Plugin) bool {
     const stat = file.stat(io.io()) catch return false;
     if (stat.kind != .file) return false;
     return true;
+}
+
+pub const TrustChange = enum { applied, unchanged, not_found, failed };
+
+pub fn snapshotInstalled(out: []Plugin) usize {
+    var dir_buf: [512]u8 = undefined;
+    const plugin_dir = getPluginDir(&dir_buf);
+    if (plugin_dir.len == 0) return 0;
+    var dir = @import("../core/io_global.zig").cwdOpenDir(plugin_dir, .{ .iterate = true }) catch return 0;
+    defer dir.close(@import("../core/io_global.zig").io());
+    var iterator = dir.iterate();
+    var count: usize = 0;
+    while (iterator.next(@import("../core/io_global.zig").io()) catch null) |entry| {
+        if (count >= out.len) break;
+        if (entry.kind != .directory) continue;
+        out[count] = loadPluginAt(plugin_dir, entry.name) orelse continue;
+        count += 1;
+    }
+    return count;
+}
+
+pub fn hasNativeEntrypoint(plugin: *const Plugin) bool {
+    const Entry = struct { name: []const u8, present: bool };
+    const entries = [_]Entry{
+        .{ .name = "search", .present = plugin.has_search },
+        .{ .name = "resolve", .present = plugin.has_resolve },
+        .{ .name = "trending", .present = plugin.has_trending },
+    };
+    for (entries) |entry| {
+        if (!entry.present) continue;
+        var path_buf: [600]u8 = undefined;
+        const path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ plugin.path[0..plugin.path_len], entry.name }) catch return true;
+        if (!detectLuaScript(path)) return true;
+    }
+    return false;
+}
+
+/// Approve or revoke the exact currently-installed plugin bytes. The marker
+/// lives outside the plugin directory, so bundles cannot grant themselves
+/// execution permission and any update invalidates the approval.
+pub fn setContentTrust(id: []const u8, trusted: bool) TrustChange {
+    if (!@import("../core/source_config_pure.zig").validId(id)) return .not_found;
+    var dir_buf: [512]u8 = undefined;
+    const plugin = loadPluginAt(getPluginDir(&dir_buf), id) orelse return .not_found;
+    const approved = pluginContentApproved(&plugin);
+    if (approved == trusted) return .unchanged;
+    var marker_buf: [800]u8 = undefined;
+    const marker = approvalMarkerPath(&plugin, &marker_buf) orelse return .failed;
+    const io = @import("../core/io_global.zig");
+    if (!trusted) {
+        io.deleteFileAbsolute(marker) catch return .failed;
+        return if (!pluginContentApproved(&plugin)) .applied else .failed;
+    }
+    var cfg_buf: [512]u8 = undefined;
+    var trust_dir_buf: [600]u8 = undefined;
+    const trust_dir = std.fmt.bufPrint(&trust_dir_buf, "{s}/plugin-trust", .{paths.configDir(&cfg_buf)}) catch return .failed;
+    io.cwdMakePath(trust_dir) catch return .failed;
+    const permissions = if (@import("builtin").os.tag == .windows)
+        std.Io.File.Permissions.default_file
+    else
+        std.Io.File.Permissions.fromMode(0o600);
+    const file = io.createFileAbsolute(marker, .{ .exclusive = true, .permissions = permissions }) catch
+        return if (pluginContentApproved(&plugin)) .unchanged else .failed;
+    file.close(io.io());
+    return if (pluginContentApproved(&plugin)) .applied else .failed;
 }
 
 fn pluginDigest(p: *const Plugin, out: *[32]u8) bool {

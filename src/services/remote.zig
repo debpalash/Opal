@@ -2947,11 +2947,26 @@ fn apiPlugins(stream: std.Io.net.Stream, method: []const u8, query: []const u8, 
             return;
         }
 
-        var action_buf: [16]u8 = undefined;
+        var action_buf: [32]u8 = undefined;
         const action_name = credParam(body, query, "action", &action_buf) orelse {
             sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"missing action or setting key\"}");
             return;
         };
+        if (std.mem.eql(u8, action_name, "approve-exec") or std.mem.eql(u8, action_name, "revoke-exec")) {
+            var id_buf: [64]u8 = undefined;
+            const id = credParam(body, query, "id", &id_buf) orelse {
+                sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"plugin id required\"}");
+                return;
+            };
+            var confirm_buf: [4]u8 = undefined;
+            if (!std.mem.eql(u8, credParam(body, query, "confirm", &confirm_buf) orelse "", "1")) {
+                sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"plugin trust change requires confirm=1\"}");
+                return;
+            }
+            const response = @import("remote_plugins_api.zig").changeTrust(action_name, id);
+            if (response.status) |status| sendJsonStatus(stream, status, response.json) else sendJson(stream, response.json);
+            return;
+        }
         const action = std.meta.stringToEnum(repo.Action, action_name) orelse {
             sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"unknown plugin action\"}");
             return;
@@ -3000,18 +3015,10 @@ fn apiPlugins(stream: std.Io.net.Stream, method: []const u8, query: []const u8, 
     defer alloc.free(out);
     var w = std.Io.Writer.fixed(out);
     w.writeAll("{\"sources\":[") catch return;
-    for (catalog[0..source_count], 0..) |*p, i| {
-        if (i > 0) w.writeAll(",") catch return;
-        w.writeAll("{\"id\":\"") catch return;
-        escJsonWrite(&w, p.id[0..@min(p.id_len, p.id.len)]);
-        w.writeAll("\",\"name\":\"") catch return;
-        escJsonWrite(&w, p.name[0..@min(p.name_len, p.name.len)]);
-        w.writeAll("\",\"kind\":\"") catch return;
-        escJsonWrite(&w, p.kind[0..@min(p.kind_len, p.kind.len)]);
-        w.writeAll("\",\"version\":\"") catch return;
-        escJsonWrite(&w, p.version[0..@min(p.version_len, p.version.len)]);
-        w.print("\",\"installed\":{s}}}", .{if (repo.isInstalled(p.idSlice())) "true" else "false"}) catch return;
-    }
+    const plugin_api = @import("remote_plugins_api.zig");
+    plugin_api.writeSources(&w, catalog[0..source_count]) catch return;
+    w.writeAll("],\"executables\":[") catch return;
+    plugin_api.writeExecutables(&w) catch return;
     w.writeAll("],\"status\":\"") catch return;
     escJsonWrite(&w, @tagName(repo.status.load(.acquire)));
     w.writeAll("\",\"repo\":\"") catch return;

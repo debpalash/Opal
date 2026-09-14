@@ -2,6 +2,7 @@
 
 // ── Plugins (Setup › Plugins) ──
 let pluginSources = [];
+let executablePlugins = [];
 let pluginPollTimer = 0;
 let pluginPollRemaining = 0;
 const pluginGroups = [
@@ -37,10 +38,26 @@ function renderPlugins(){
     return rows ? `<div class="plugin-category">${label}</div>${rows}` : '';
   }).join('') || '<div class="empty">No sources match this filter.</div>';
 }
+function renderExecutablePlugins(){
+  $('plug-exec-list').innerHTML = executablePlugins.map(plugin => {
+    const capabilities = [plugin.search && 'Search', plugin.resolve && 'Resolve', plugin.trending && 'Trending'].filter(Boolean);
+    const needsApproval = plugin.mode === 'blocked' || (plugin.allow_unsafe && !plugin.trusted);
+    const modeLabel = plugin.mode === 'invalid' ? 'Invalid manifest' : plugin.mode === 'blocked' ? 'Blocked' : plugin.mode === 'full-access' ? 'Full user access' : 'Lua sandbox';
+    return `<div class="file plugin-row executable-plugin ${plugin.mode === 'blocked' || plugin.mode === 'invalid' ? 'plugin-blocked' : ''}">
+      <div class="n">${esc(plugin.name || plugin.id)}
+        <div class="file-meta"><span class="src">${esc(modeLabel)}</span>
+          ${plugin.version ? `<span>v${esc(plugin.version)}</span>` : ''}<span>${esc(capabilities.join(' · ') || 'No runnable entrypoints')}</span></div>
+        ${plugin.description ? `<small>${esc(plugin.description)}</small>` : ''}</div>
+      ${plugin.trusted ? `<button type="button" class="plugin-action remove" data-exec-action="revoke-exec" data-id="${encodeURIComponent(plugin.id)}">Revoke access</button>`
+        : needsApproval ? `<button type="button" class="plugin-action" data-exec-action="approve-exec" data-id="${encodeURIComponent(plugin.id)}">Review & approve</button>` : ''}
+    </div>`;
+  }).join('') || '<div class="empty">No executable content plugins installed.</div>';
+}
 async function loadPlugins(){
   try {
     const d = await api('/plugins');
     pluginSources = Array.isArray(d.sources) ? d.sources : [];
+    executablePlugins = Array.isArray(d.executables) ? d.executables : [];
     const installed = pluginSources.filter(source => source.installed).length;
     const state = d.status === 'fetching' ? ' · refreshing catalog…'
       : d.status === 'err' ? ' · refresh failed; cached catalog shown' : '';
@@ -51,6 +68,7 @@ async function loadPlugins(){
     $('plug-token').placeholder = d.has_token ? 'set — type to replace' : 'not set';
     $('plug-debrid-key').placeholder = d.has_debrid_key ? 'set — type to replace' : 'not set';
     renderPlugins();
+    renderExecutablePlugins();
     clearTimeout(pluginPollTimer);
     if (d.status === 'fetching' && pluginPollRemaining > 0) {
       pluginPollRemaining--;
@@ -93,6 +111,26 @@ $('plug-update').onclick = () => changePlugin('update');
 $('plug-list').addEventListener('click', event => {
   const button = event.target.closest('button[data-action][data-id]');
   if (button) changePlugin(button.dataset.action, decodeURIComponent(button.dataset.id));
+});
+$('plug-exec-list').addEventListener('click', async event => {
+  const button = event.target.closest('button[data-exec-action][data-id]');
+  if (!button) return;
+  const action = button.dataset.execAction;
+  const id = decodeURIComponent(button.dataset.id);
+  const plugin = executablePlugins.find(item => item.id === id);
+  const warning = action === 'approve-exec'
+    ? `Approve ${plugin?.name || id}? Native or unsafe plugins run with your user account's file and network access. Approval is revoked automatically when its files change.`
+    : `Revoke execution access for ${plugin?.name || id}?`;
+  if (!confirm(warning)) return;
+  button.disabled = true;
+  try {
+    await apiMutation('/plugins?' + new URLSearchParams({action, id, confirm:'1'}));
+    toast(action === 'approve-exec' ? 'Plugin version approved' : 'Plugin access revoked');
+    await loadPlugins();
+  } catch (error) {
+    toast(error.message || 'Could not change plugin access');
+    button.disabled = false;
+  }
 });
 $('plug-save').onclick = async () => {
   // Body, not query string: the token and the debrid key are secrets, and a URL

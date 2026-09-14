@@ -12,6 +12,18 @@ pub const MAX_TREE_ENTRIES: usize = 4096;
 pub const MAX_TREE_BYTES: u64 = 64 * 1024 * 1024;
 pub const MAX_PATH_BYTES: usize = 1024 * 1024;
 
+/// Bind an approval to both the installed plugin identity and its canonical
+/// tree digest. Identical bytes installed under another ID must be reviewed
+/// independently.
+pub fn approvalDigest(plugin_id: []const u8, tree_digest: *const [32]u8, out: *[32]u8) void {
+    var hash = std.crypto.hash.sha2.Sha256.init(.{});
+    hash.update("opal-plugin-approval-v1\x00");
+    hashLength(&hash, plugin_id.len);
+    hash.update(plugin_id);
+    hash.update(tree_digest);
+    hash.final(out);
+}
+
 pub const DigestError = error{
     EmptyTree,
     MissingManifest,
@@ -298,4 +310,17 @@ test "manifest and executable are required for a trust identity" {
         error.MissingExecutable,
         digestTree(system_io, root.dir, std.testing.allocator, &digest),
     );
+}
+
+test "approval digest is bound to plugin identity and content" {
+    const tree_a = [_]u8{0x31} ** 32;
+    const tree_b = [_]u8{0x32} ** 32;
+    var left: [32]u8 = undefined;
+    var other_id: [32]u8 = undefined;
+    var other_tree: [32]u8 = undefined;
+    approvalDigest("alpha", &tree_a, &left);
+    approvalDigest("beta", &tree_a, &other_id);
+    approvalDigest("alpha", &tree_b, &other_tree);
+    try std.testing.expect(!std.mem.eql(u8, &left, &other_id));
+    try std.testing.expect(!std.mem.eql(u8, &left, &other_tree));
 }
