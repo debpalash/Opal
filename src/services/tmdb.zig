@@ -2723,11 +2723,14 @@ fn renderTvDetail() void {
     }
 
     {
-        var sbar = dvui.menu(@src(), .horizontal, .{
+        var season_toolbar = dvui.box(@src(), .{ .dir = if (layout.stacked) .vertical else .horizontal }, .{
             .expand = .horizontal,
-            .padding = .{ .x = 10, .y = 8, .w = 10, .h = 4 },
+            .padding = .{ .x = 10, .y = 6, .w = 10, .h = 5 },
         });
-        defer sbar.deinit();
+        defer season_toolbar.deinit();
+        var sbar = dvui.menu(@src(), .horizontal, .{
+            .padding = .{ .x = 0, .y = 0, .w = if (layout.stacked) 0 else 10, .h = 0 },
+        });
         var season_buf: [32]u8 = undefined;
         const selected_season = if (t.tv_sel_season < t.tv_season_count) t.tv_seasons[t.tv_sel_season].season_number else 1;
         const season_label = if (selected_season == 0) "Specials" else (std.fmt.bufPrint(&season_buf, "Season {d}", .{@as(u32, @intCast(@max(0, selected_season)))}) catch "Season");
@@ -2774,47 +2777,48 @@ fn renderTvDetail() void {
                 }
             }
         }
-    }
+        sbar.deinit();
 
-    // ── Season info + watched progress bar ──
-    if (t.tv_episode_count > 0 or (t.tv_sel_season < t.tv_season_count)) {
-        var sinfo = dvui.box(@src(), .{ .dir = if (layout.stacked) .vertical else .horizontal }, .{
-            .expand = .horizontal,
-            .padding = .{ .x = 12, .y = 0, .w = 12, .h = 6 },
-        });
-        defer sinfo.deinit();
-
-        // Season name / episode count from the season struct
-        if (t.tv_sel_season < t.tv_season_count) {
-            const s = t.tv_seasons[t.tv_sel_season];
-            var si_buf: [64]u8 = undefined;
-            const year = if (s.air_date_len >= 4) s.air_date[0..4] else "";
-            const ep_count = if (t.tv_episode_count > 0) t.tv_episode_count else @as(usize, s.episode_count);
-            const si_str = if (year.len > 0)
-                (std.fmt.bufPrint(&si_buf, "{d} episodes · {s}", .{ ep_count, year }) catch "")
-            else
-                (std.fmt.bufPrint(&si_buf, "{d} episodes", .{ep_count}) catch "");
-            _ = dvui.label(@src(), "{s}", .{si_str}, .{
-                .color_text = theme.colors.text_secondary,
-                .gravity_y = if (layout.stacked) 0 else 0.5,
+        // Season identity and progress sit in this same toolbar instead of
+        // consuming another full-width band below the selector.
+        if (t.tv_episode_count > 0 or (t.tv_sel_season < t.tv_season_count)) {
+            var sinfo = dvui.box(@src(), .{ .dir = if (layout.stacked) .vertical else .horizontal }, .{
+                .expand = .horizontal,
             });
-        }
+            defer sinfo.deinit();
 
-        // Spacer + watched count (right-aligned)
-        if (t.tv_episode_count > 0) {
-            if (!layout.stacked) {
-                var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
-                spacer.deinit();
+            // Season name / episode count from the season struct
+            if (t.tv_sel_season < t.tv_season_count) {
+                const s = t.tv_seasons[t.tv_sel_season];
+                var si_buf: [64]u8 = undefined;
+                const year = if (s.air_date_len >= 4) s.air_date[0..4] else "";
+                const ep_count = if (t.tv_episode_count > 0) t.tv_episode_count else @as(usize, s.episode_count);
+                const si_str = if (year.len > 0)
+                    (std.fmt.bufPrint(&si_buf, "{d} episodes · {s}", .{ ep_count, year }) catch "")
+                else
+                    (std.fmt.bufPrint(&si_buf, "{d} episodes", .{ep_count}) catch "");
+                _ = dvui.label(@src(), "{s}", .{si_str}, .{
+                    .color_text = theme.colors.text_secondary,
+                    .gravity_y = if (layout.stacked) 0 else 0.5,
+                });
             }
 
-            const watched = tvWatchedCount();
-            const total = t.tv_episode_count;
-            var wbuf: [32]u8 = undefined;
-            const ws = std.fmt.bufPrint(&wbuf, "{d}/{d} watched", .{ watched, total }) catch "";
-            _ = dvui.label(@src(), "{s}", .{ws}, .{
-                .color_text = theme.colors.text_secondary,
-                .gravity_y = if (layout.stacked) 0 else 0.5,
-            });
+            // Spacer + watched count (right-aligned)
+            if (t.tv_episode_count > 0) {
+                if (!layout.stacked) {
+                    var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+                    spacer.deinit();
+                }
+
+                const watched = tvWatchedCount();
+                const total = t.tv_episode_count;
+                var wbuf: [32]u8 = undefined;
+                const ws = std.fmt.bufPrint(&wbuf, "{d}/{d} watched", .{ watched, total }) catch "";
+                _ = dvui.label(@src(), "{s}", .{ws}, .{
+                    .color_text = theme.colors.text_secondary,
+                    .gravity_y = if (layout.stacked) 0 else 0.5,
+                });
+            }
         }
     }
 
