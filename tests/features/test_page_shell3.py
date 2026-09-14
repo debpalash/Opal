@@ -10,14 +10,19 @@ def test_tv_detail_responsive():
     checks = {
         "live and drawer width": 'tv_layout_pure.zig' in detail and 'parent_width' in detail,
         "one page scroller": detail.count('dvui.scrollArea(') == 1,
-        "stacked narrow cards": '.dir = if (layout.stacked) .vertical else .horizontal' in detail,
-        "proportional thumbnails": '.w = layout.thumbnail_width, .h = layout.thumbnail_height' in detail,
+        "stacked narrow cards": 'const card_stacked = layout.stacked and playable;' in detail,
+        "proportional thumbnails": 'layout.thumbnail_width' in detail and 'layout.thumbnail_height' in detail,
         "wrapped title and overview": 'episode_title.addTextClick(' in detail and 'overview.addText(' in detail,
         "bounded season menu": 'dvui.floatingMenu(' in detail and 'season_label' in detail,
         "visible artwork only": 'still_box.data().visible()' in detail,
         "stacked season labels stay in flow": detail.count('.gravity_y = if (layout.stacked) 0 else 0.5') == 2,
         "season selection dismisses popup": 'choices.close();' in detail,
         "retry recovers missing seasons": 'else fetchSeasons(t.tv_id);' in detail,
+        "dense desktop catalogue": 'layout.columns' in detail and 'layout.card_width' in detail,
+        "aligned episode actions": 'var title_row = dvui.box(@src(), .{ .dir = .horizontal }' in detail,
+        "future episodes are inert": 'const playable = episode_state == .available;' in detail
+            and 'if (playable) {' in detail and '"Upcoming" else "TBA"' in detail,
+        "bounded synopsis preview": 'home_pure.zig' in detail and 'clipLabel(&ov_clip_buf' in detail,
     }
     missing = [name for name, ok in checks.items() if not ok]
     if missing:
