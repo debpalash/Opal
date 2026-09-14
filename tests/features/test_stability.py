@@ -433,6 +433,13 @@ def test_windows_port_invariants():
     sl = _src("src/services/streamlink.zig")
     if "std.posix.kill" in sl:
         return "fail", "streamlink regressed to std.posix.kill (breaks Windows compile); use io_global.terminateProcess"
+    if "bounded.StreamProcess.init" not in sl or "cancel_epoch" not in sl or "pub fn drainResolved()" not in sl:
+        return "fail", "streamlink resolver lost bounded/cancellable process ownership or UI-thread publication"
+    if "spawn(resolveWorker" not in sl or "spawnLegacy(S.worker" in sl:
+        return "fail", "streamlink resolver must use an owned worker and never mutate a player from that worker"
+    main = _src("src/main.zig")
+    if 'services/streamlink.zig").drainResolved();' not in main:
+        return "fail", "streamlink resolver publications are not drained on the UI thread"
     return "pass", "MINGW_PREFIX + dll.a link + win arms in io_global/sync/paths intact"
 
 

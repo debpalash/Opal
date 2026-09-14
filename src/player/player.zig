@@ -159,6 +159,7 @@ var position_save_worker_active: bool = false;
 var position_save_queue_mutex: @import("../core/sync.zig").Mutex = .{};
 var position_save_stamps: [16]position_save_pure.Stamp = [_]position_save_pure.Stamp{.{}} ** 16;
 var position_save_stamp_cursor: usize = 0;
+var playback_load_sequence = std.atomic.Value(u64).init(0);
 
 fn samePositionIdentity(a: PositionSnapshot, b: PositionSnapshot) bool {
     return a.identity_len == b.identity_len and
@@ -318,6 +319,9 @@ pub const MediaPlayer = struct {
     last_error_time: i64 = 0,
     is_buffering_paused: bool = false,
     is_loading: bool = false,
+    /// Process-unique identity for this logical replacement load. Async
+    /// resolvers publish against it instead of dereferencing a stale player.
+    load_serial: u64 = 0,
     loading_label: [128]u8 = std.mem.zeroes([128]u8),
     loading_label_len: usize = 0,
     load_error: [192]u8 = std.mem.zeroes([192]u8),
@@ -1275,6 +1279,7 @@ pub const MediaPlayer = struct {
         // A replace starts a new logical playback owner. This is separate from
         // commitPlayback because async resolution/fallback commits belong to
         // the already-staged original request and must not erase its identity.
+        self.load_serial = playback_load_sequence.fetchAdd(1, .acq_rel) + 1;
         self.playback_origin = request.origin;
         self.queue_item_id = if (request.origin == .queue) request.queue_item_id else -1;
         if (request.origin != .torrent) {
@@ -1374,12 +1379,8 @@ pub const MediaPlayer = struct {
             const resolving_msg = "Resolving live stream...";
             @memcpy(self.loading_label[0..resolving_msg.len], resolving_msg);
             self.loading_label_len = resolving_msg.len;
-            // Get player index for async callback
-            const p_idx: usize = for (state.app.players.items, 0..) |p, i| {
-                if (p.mpv_ctx == self.mpv_ctx) break i;
-            } else 0;
             openLoadIssued();
-            streamlink.resolveStreamUrlAsync(path_span, p_idx);
+            streamlink.resolveStreamUrlAsync(path_span, self, self.load_serial);
             if (previous_position) |snapshot| persistPositionSnapshot(snapshot, true);
             return; // Don't call mpv loadfile directly — the async thread will do it
         }

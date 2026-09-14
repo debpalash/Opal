@@ -1533,6 +1533,9 @@ fn appFrame() !dvui.App.Result {
         }
     }
 
+    // Apply live-stream resolver publications on the UI thread before pumping
+    // mpv. Resolver workers never retain or dereference player pointers.
+    @import("services/streamlink.zig").drainResolved();
     player.updateTorrentBackgroundTasks();
     @import("services/jellyfin.zig").drainTranscodeRecovery();
     @import("services/tmdb.zig").checkEpisodeStartup();

@@ -62,123 +62,165 @@ pub fn getResolverPath() []const u8 {
     return "bin/streamlink_resolve.py";
 }
 
-/// Resolve a live stream URL to a direct HLS URL via our Python helper.
-/// Returns the resolved URL in a static buffer, or null on failure.
-pub fn resolveStreamUrl(url: []const u8) ?[]const u8 {
-    const S = struct {
-        var result_buf: [2048]u8 = undefined;
+const ResolveJob = struct {
+    url: [1024]u8 = undefined,
+    url_len: usize = 0,
+    resolver: [512]u8 = undefined,
+    resolver_len: usize = 0,
+    target_address: usize = 0,
+    load_serial: u64 = 0,
+    epoch: u64 = 0,
+};
+
+const ResolvePublication = struct {
+    target_address: usize = 0,
+    load_serial: u64 = 0,
+    success: bool = false,
+    url: [2048]u8 = undefined,
+    url_len: usize = 0,
+};
+
+var resolve_epoch = std.atomic.Value(u64).init(0);
+var resolve_publication: ResolvePublication = .{};
+var resolve_publication_ready = false;
+var resolve_publication_mutex: @import("../core/sync.zig").Mutex = .{};
+
+fn publishResolution(job: ResolveJob, stream_url: ?[]const u8) void {
+    const workers = @import("../core/workers.zig");
+    if (workers.isQuitting() or resolve_epoch.load(.acquire) != job.epoch) return;
+
+    resolve_publication_mutex.lock();
+    defer resolve_publication_mutex.unlock();
+    // Re-check under the publication lock so a newer request cannot be
+    // overwritten by an old helper that finished at the same instant.
+    if (resolve_epoch.load(.acquire) != job.epoch) return;
+    resolve_publication = .{
+        .target_address = job.target_address,
+        .load_serial = job.load_serial,
+        .success = stream_url != null,
     };
-
-    // Find the resolver script
-    const resolver = getResolverPath();
-
-    const argv: []const []const u8 = &.{
-        "python3",
-        resolver,
-        url,
-        "best",
-    };
-
-    var child = @import("../core/io_global.zig").Child.init(argv, @import("../core/alloc.zig").allocator);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-
-    const logs = @import("../core/logs.zig");
-    child.spawn() catch |err| {
-        if (err == error.FileNotFound) {
-            logs.pushLog("ERROR", "streamlink", "python3 not installed (or not in PATH) — cannot resolve live stream", true);
-        } else {
-            logs.pushLog("ERROR", "streamlink", "failed to spawn resolver helper", true);
-        }
-        std.log.warn("[streamlink] Failed to spawn resolver: {s}", .{@errorName(err)});
-        return null;
-    };
-
-    const bytes_read = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, &S.result_buf) catch 0 else 0;
-    const term = child.wait() catch |err| blk: {
-        std.log.warn("[streamlink] resolver wait() failed: {s}", .{@errorName(err)});
-        break :blk @import("../core/io_global.zig").Child.Term{ .unknown = 0 };
-    };
-    switch (term) {
-        .exited => |code| if (code != 0) {
-            logs.pushLog("WARN", "streamlink", "resolver exited with a non-zero status", false);
-        },
-        else => logs.pushLog("WARN", "streamlink", "resolver terminated abnormally", false),
+    if (stream_url) |url| {
+        const n = @min(url.len, resolve_publication.url.len);
+        @memcpy(resolve_publication.url[0..n], url[0..n]);
+        resolve_publication.url_len = n;
     }
-
-    const trimmed = std.mem.trim(u8, S.result_buf[0..bytes_read], " \t\r\n");
-    if (trimmed.len == 0) return null;
-
-    // Check for error responses
-    if (std.mem.startsWith(u8, trimmed, "error:") or std.mem.eql(u8, trimmed, "offline")) {
-        std.log.info("[streamlink] {s}", .{trimmed});
-        return null;
-    }
-
-    // Must be a URL
-    if (!std.mem.startsWith(u8, trimmed, "http")) return null;
-
-    // Copy to start of static buffer
-    if (@intFromPtr(trimmed.ptr) != @intFromPtr(&S.result_buf[0])) {
-        var tmp: [2048]u8 = undefined;
-        @memcpy(tmp[0..trimmed.len], trimmed);
-        @memcpy(S.result_buf[0..trimmed.len], tmp[0..trimmed.len]);
-    }
-
-    std.log.info("[streamlink] Resolved: {s}", .{S.result_buf[0..trimmed.len]});
-    return S.result_buf[0..trimmed.len];
+    resolve_publication_ready = true;
+    state.wakeUi();
 }
 
-/// Async version: resolve via streamlink in a background thread,
-/// then load the result into the player.
-pub fn resolveStreamUrlAsync(url: []const u8, player_idx: usize) void {
-    const playermod = @import("../player/player.zig");
-    const S = struct {
-        var busy: bool = false;
-        var url_copy: [1024]u8 = undefined;
-        var url_len: usize = 0;
-        // Snapshot the STABLE *MediaPlayer pointer (heap-stable across players
-        // ArrayList reallocs / single-player collapse reordering) instead of a
-        // raw index, which the frame-top collapse can reorder or invalidate.
-        var target: ?*playermod.MediaPlayer = null;
+fn resolveWorker(job: ResolveJob) void {
+    const workers = @import("../core/workers.zig");
+    const python = @import("../core/pybin.zig").python() orelse {
+        @import("../core/logs.zig").pushLog("error", "streamlink", @import("../core/pybin.zig").missingHint(), true);
+        publishResolution(job, null);
+        return;
+    };
+    if (resolve_epoch.load(.acquire) != job.epoch or workers.isQuitting()) return;
 
-        fn worker() void {
-            defer @This().busy = false;
-            const p = @This().target orelse return;
-            if (resolveStreamUrl(url_copy[0..url_len])) |stream_url| {
-                // `load()` already staged the original page URL as the stable
-                // playback identity. Commit only the resolved HLS command, but
-                // still cross the typed seam so prior host credentials clear.
-                p.commitPlayback(.{ .url = stream_url });
-                std.log.info("[streamlink] resolved stream committed", .{});
-            } else {
-                std.log.warn("[streamlink] Failed to resolve stream", .{});
-                // Clear the stuck "Resolving live stream..." state — mpv never gets
-                // a loadfile on failure, so is_loading would otherwise never clear.
-                p.is_loading = false;
-                const fail = "Stream offline or unavailable";
-                @memset(&p.loading_label, 0);
-                @memcpy(p.loading_label[0..fail.len], fail);
-                p.loading_label_len = fail.len;
-                state.showToast("Stream offline or unavailable");
-            }
-        }
+    const argv = [_][]const u8{
+        python,
+        job.resolver[0..job.resolver_len],
+        job.url[0..job.url_len],
+        "best",
+    };
+    const bounded = @import("../core/bounded_process.zig");
+    var process = bounded.StreamProcess.init(&argv, .{
+        .timeout_ms = 30_000,
+        .terminate_grace_ms = 200,
+        .max_output_bytes = 2048,
+        .stderr_behavior = .Ignore,
+        .cancel_epoch = .{ .epoch64 = .{ .value = &resolve_epoch, .expected = job.epoch } },
+        .cancel_flag = workers.quittingSignal(),
+    });
+    process.start() catch {
+        @import("../core/logs.zig").pushLog("error", "streamlink", "Could not start the live-stream resolver", false);
+        publishResolution(job, null);
+        return;
     };
 
-    if (S.busy) return;
-    if (url.len >= S.url_copy.len) return;
-    // Resolve the stable player pointer up front, on the caller (UI) thread,
-    // while the index is still valid. Guard the lookup.
-    if (player_idx >= state.app.players.items.len) return;
-    S.target = state.app.players.items[player_idx];
-    S.busy = true;
-    @memcpy(S.url_copy[0..url.len], url);
-    S.url_len = url.len;
-
-    if (@import("../core/workers.zig").spawnLegacy(S.worker, .{})) |t| @import("../core/workers.zig").release(t) else |_| {
-        S.busy = false;
-        std.log.warn("[streamlink] Failed to spawn resolver thread", .{});
+    var output: [2048]u8 = undefined;
+    const n = if (process.stdout()) |stdout| @import("../core/io_global.zig").readAll(stdout, &output) catch 0 else 0;
+    _ = process.noteOutput(n);
+    const result = process.finish();
+    if (!result.ok()) {
+        if (!result.cancelled and !workers.isQuitting())
+            @import("../core/logs.zig").pushLog("warn", "streamlink", "Live-stream resolver timed out or failed", false);
+        publishResolution(job, null);
+        return;
     }
+
+    const trimmed = std.mem.trim(u8, output[0..n], " \t\r\n");
+    if (trimmed.len == 0 or
+        std.mem.startsWith(u8, trimmed, "error:") or
+        std.mem.eql(u8, trimmed, "offline") or
+        !std.mem.startsWith(u8, trimmed, "http"))
+    {
+        publishResolution(job, null);
+        return;
+    }
+    publishResolution(job, trimmed);
+}
+
+/// Resolve a live URL away from the UI thread. Every request owns its URL and
+/// resolver path; a newer request cancels an older helper instead of silently
+/// dropping the click or letting stale output replace the active media.
+pub fn resolveStreamUrlAsync(url: []const u8, target: *@import("../player/player.zig").MediaPlayer, load_serial: u64) void {
+    if (url.len == 0 or url.len > 1024 or load_serial == 0) return;
+    const resolver = getResolverPath();
+    if (resolver.len == 0 or resolver.len > 512) return;
+
+    var job: ResolveJob = .{
+        .url_len = url.len,
+        .resolver_len = resolver.len,
+        .target_address = @intFromPtr(target),
+        .load_serial = load_serial,
+        .epoch = resolve_epoch.fetchAdd(1, .acq_rel) + 1,
+    };
+    @memcpy(job.url[0..url.len], url);
+    @memcpy(job.resolver[0..resolver.len], resolver);
+
+    resolve_publication_mutex.lock();
+    resolve_publication_ready = false;
+    resolve_publication_mutex.unlock();
+    @import("../core/workers.zig").spawn(resolveWorker, .{job}) catch {
+        @import("../core/logs.zig").pushLog("error", "streamlink", "Could not start the live-stream resolver worker", false);
+        publishResolution(job, null);
+    };
+}
+
+/// UI-thread handoff. A result is applied only if both the heap-stable address
+/// and the process-unique logical load still match a live player.
+pub fn drainResolved() void {
+    var publication: ResolvePublication = undefined;
+    resolve_publication_mutex.lock();
+    if (!resolve_publication_ready) {
+        resolve_publication_mutex.unlock();
+        return;
+    }
+    publication = resolve_publication;
+    resolve_publication_ready = false;
+    resolve_publication_mutex.unlock();
+
+    const target: ?*@import("../player/player.zig").MediaPlayer = for (state.app.players.items) |player| {
+        if (@intFromPtr(player) == publication.target_address and player.load_serial == publication.load_serial)
+            break player;
+    } else null;
+    const player = target orelse return;
+
+    if (publication.success and publication.url_len > 0) {
+        // `load()` staged the public page as stable history identity. Commit
+        // only the resolved HLS URL through the typed credential-clearing seam.
+        player.commitPlayback(.{ .url = publication.url[0..publication.url_len] });
+        std.log.info("[streamlink] resolved stream committed", .{});
+        return;
+    }
+
+    player.is_loading = false;
+    const fail = "Stream offline or unavailable";
+    @memset(&player.loading_label, 0);
+    @memcpy(player.loading_label[0..fail.len], fail);
+    player.loading_label_len = fail.len;
+    state.showToast(fail);
 }
 
 // ══════════════════════════════════════════════════════════
