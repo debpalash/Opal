@@ -884,7 +884,9 @@ def test_server_item_details_dialog():
     checks = {
         "semantic modal": '<dialog id="source-details"' in html and 'aria-labelledby="source-details-title"' in html,
         "responsive glass layout": "#source-details::backdrop" in css and "backdrop-filter:blur" in css and "@media(max-width:560px)" in css,
-        "one renderer for both adapters": "function openSourceDetails(source, item, trigger)" in media and "source === 'Jellyfin'" in media and "source === 'Plex'" in media,
+        "one renderer across adapters": "function openSourceDetails(source, item, trigger)" in media and all(
+            f"source === '{source}'" in media for source in ("Jellyfin", "Plex", "Audiobookshelf", "OPDS", "Podcast")
+        ),
         "focus restored": "sourceDetailsReturnFocus.focus()" in media,
         "outside click closes": "event.target === $('source-details')" in media,
         "Jellyfin details affordance": "data-jf-details" in discovery and "openSourceDetails('Jellyfin'" in discovery,
@@ -892,11 +894,15 @@ def test_server_item_details_dialog():
         "Jellyfin overview projected": 'item.overview[0..@min(item.overview_len' in remote,
         "Plex overview parsed and projected": 'jstr(m, "summary")' in plex and "item.overview" in plex_api,
         "details actions reuse typed mutations": "apiMutation('/plex/action" in media and "apiMutation('/jellyfin/action" in media,
+        "audiobook details": "abs-details" in media and "'/abs/play?idx='" in media,
+        "OPDS details": "opds-details" in media and "'/opds/open?idx='" in media,
+        "podcast show and episode details": "pod-details" in discovery and "pod-episode-details" in discovery,
+        "podcast publisher projected": 'r.artist[0..@min(r.artist_len' in remote,
     }
     missing = [name for name, ok in checks.items() if not ok]
     if missing:
         return "fail", "server details incomplete: " + ", ".join(missing)
-    return "pass", "Plex and Jellyfin details are responsive, keyboard-modal, actionable, and source-owned"
+    return "pass", "Server, audiobook, publication, podcast, and episode details share one accessible action surface"
 
 
 @test("Remote API never serializes socket writes behind a global lock", "Remote")

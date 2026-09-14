@@ -355,10 +355,21 @@ function renderAbs(d){
         ${r.author ? `<span class="src">${esc(r.author)}</span>` : ''}
         ${r.media_type ? `<span class="src">${esc(r.media_type)}</span>` : ''}
         ${r.duration ? `<span>${fmt(r.duration)}</span>` : ''}
+        ${books ? `<button class="abs-details" data-details="${i}">Details</button>` : ''}
         <button class="play" data-i="${i}">${books ? 'Play' : 'Open'}</button></div>
     </div>`).join('') || (d.connected ? '<div class="empty">Nothing here</div>' : '');
   $('abs-results').querySelectorAll('button[data-i]').forEach(b => {
     b.onclick = () => { api('/abs/' + (books ? 'play' : 'open') + '?idx=' + b.dataset.i).catch(()=>{}); pollAbs(); };
+  });
+  $('abs-results').querySelectorAll('.abs-details').forEach(button => {
+    button.onclick = () => {
+      const book = rows[Number(button.dataset.details)] || {};
+      openSourceDetails('Audiobookshelf', {
+        ...book, name:book.title, type:'Audiobook',
+        meta:[book.author, book.duration ? fmt(book.duration) : ''].filter(Boolean).join(' · '),
+        index:Number(button.dataset.details),
+      }, button);
+    };
   });
 }
 
@@ -388,10 +399,18 @@ function renderOpds(d){
       <div class="m">
         ${e.nav ? '<span class="src">folder</span>' : ''}
         ${e.streamable ? `<span class="src">${e.pages} pages</span>` : ''}
+        <button class="opds-details" data-details="${i}">Details</button>
         <button class="play" data-i="${i}">${e.nav ? 'Open' : 'Read'}</button></div>
     </div>`).join('') || (d.connected ? '<div class="empty">Empty feed</div>' : '');
   $('opds-results').querySelectorAll('button[data-i]').forEach(b => {
     b.onclick = () => { api('/opds/open?idx=' + b.dataset.i).catch(()=>{}); pollOpds(); };
+  });
+  $('opds-results').querySelectorAll('.opds-details').forEach(button => {
+    const entry = (d.entries || [])[Number(button.dataset.details)] || {};
+    button.onclick = () => openSourceDetails('OPDS', {
+      ...entry, name:entry.title, type:entry.nav ? 'Collection' : (entry.type || 'Publication'),
+      meta:entry.streamable ? `${entry.pages} pages` : '', index:Number(button.dataset.details),
+    }, button);
   });
 }
 
@@ -428,11 +447,11 @@ function openSourceDetails(source, item, trigger){
   $('source-details-source').textContent = source;
   $('source-details-title').textContent = item.name || item.title || 'Untitled';
   const runtime = Number(item.runtime || item.duration || 0);
-  $('source-details-meta').textContent = [item.type || '', item.year || '', runtime ? fmt(runtime) : ''].filter(Boolean).join(' · ');
+  $('source-details-meta').textContent = item.meta || [item.type || '', item.year || '', runtime ? fmt(runtime) : ''].filter(Boolean).join(' · ');
   $('source-details-overview').textContent = item.overview || '';
   const art = $('source-details-art');
-  const artUrl = source === 'Jellyfin' && item.image
-    ? `${BASE}/api/jellyfin/poster?id=${encodeURIComponent(item.id)}` : '';
+  const artUrl = item.artUrl || (source === 'Jellyfin' && item.image
+    ? `${BASE}/api/jellyfin/poster?id=${encodeURIComponent(item.id)}` : '');
   art.hidden = !artUrl; art.src = artUrl; art.alt = artUrl ? `Poster for ${item.name || item.title || 'item'}` : '';
   actions.replaceChildren();
   if (source === 'Jellyfin') {
@@ -475,6 +494,20 @@ function openSourceDetails(source, item, trigger){
       };
       actions.append(rating);
     }
+  } else if (source === 'Audiobookshelf') {
+    actions.append(detailAction('Play', async () => {
+      await api('/abs/play?idx=' + encodeURIComponent(item.index)); closeSourceDetails(); pollAbs();
+    }, true));
+  } else if (source === 'OPDS') {
+    actions.append(detailAction(item.nav ? 'Open' : 'Read', async () => {
+      await api('/opds/open?idx=' + encodeURIComponent(item.index)); closeSourceDetails(); pollOpds();
+    }, true));
+  } else if (source === 'Podcast') {
+    actions.append(detailAction(item.kind === 'show' ? 'View episodes' : 'Play', async () => {
+      closeSourceDetails();
+      if (item.kind === 'show') loadPodEpisodes(item.index);
+      else await api('/podcasts/play?idx=' + encodeURIComponent(item.index));
+    }, true));
   }
   if (!dialog.open) dialog.showModal();
 }

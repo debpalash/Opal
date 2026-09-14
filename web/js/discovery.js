@@ -213,13 +213,22 @@ function renderPodResults(rs){
         : '<div class="thumb"></div>'}
       <div class="body">
         <div class="t">${esc(r.name)}</div>
-        <div class="m"><button class="play" data-idx="${i}">Episodes ⭢</button></div>
+        <div class="m">${r.artist ? `<span class="src">${esc(r.artist)}</span>` : ''}
+          <button class="pod-details" data-details="${i}">Details</button>
+          <button class="play" data-idx="${i}">Episodes ⭢</button></div>
       </div>
     </div>`).join('') || '<div class="empty">No results yet</div>';
   if (html === lastHtml.podResults) return;
   lastHtml.podResults = html;
   $('pod-results').innerHTML = html;
   $('pod-results').querySelectorAll('.play').forEach(b => b.onclick = () => loadPodEpisodes(+b.dataset.idx));
+  $('pod-results').querySelectorAll('.pod-details').forEach(button => {
+    const show = rs[Number(button.dataset.details)] || {};
+    button.onclick = () => openSourceDetails('Podcast', {
+      ...show, type:'Podcast', meta:show.artist || '', kind:'show', index:Number(button.dataset.details),
+      artUrl:show.art ? `${BASE}/api/podcasts/poster?idx=${encodeURIComponent(button.dataset.details)}` : '',
+    }, button);
+  });
 }
 function loadPodEpisodes(idx){
   $('pod-episodes').innerHTML = '<div class="empty"><span class="spin"></span></div>';
@@ -239,12 +248,20 @@ function renderPodEpisodes(eps){
       <div class="result">
         <div class="t">${esc(e.title)}</div>
         <div class="m"><span class="src">${esc([e.date, e.duration].filter(Boolean).join(' · '))}</span>
+          <button class="pod-episode-details" data-details="${i}">Details</button>
           <button class="play" data-ep="${i}">▶ Play</button></div>
       </div>`).join('')
     : '<div class="empty">No episodes</div>';
   $('pod-episodes').querySelectorAll('.play').forEach(b => b.onclick = () => {
     api('/podcasts/play?idx=' + encodeURIComponent(b.dataset.ep)).catch(()=>{});
     b.textContent = '▶';
+  });
+  $('pod-episodes').querySelectorAll('.pod-episode-details').forEach(button => {
+    const episode = eps[Number(button.dataset.details)] || {};
+    button.onclick = () => openSourceDetails('Podcast', {
+      ...episode, name:episode.title, type:'Episode', meta:[episode.date, episode.duration].filter(Boolean).join(' · '),
+      kind:'episode', index:Number(button.dataset.details),
+    }, button);
   });
 }
 

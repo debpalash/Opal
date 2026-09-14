@@ -3477,6 +3477,8 @@ fn apiPodcasts(stream: std.Io.net.Stream, api_path: []const u8, query: []const u
         if (ri > 0) w.writeAll(",") catch return;
         w.writeAll("{\"name\":\"") catch return;
         escJsonWrite(&w, r.name[0..r.name_len]);
+        w.writeAll("\",\"artist\":\"") catch return;
+        escJsonWrite(&w, r.artist[0..@min(r.artist_len, r.artist.len)]);
         // `art` tells the web client whether to request the cover proxy
         // (/api/podcasts/poster?idx=…) or fall back to a placeholder tile.
         w.writeAll("\",\"art\":") catch return;
