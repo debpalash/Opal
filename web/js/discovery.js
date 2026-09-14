@@ -341,7 +341,7 @@ $('jf-connect').onclick = () => {
   if (!s || !u) { $('jf-hint').textContent = 'Enter server URL and username'; return; }
   $('jf-hint').innerHTML = '<span class="spin"></span> Connecting…';
   jfLibTries = 0; // fresh connection: allow the bounded library retry again
-  api('/jellyfin/login?server=' + encodeURIComponent(s) + '&user=' + encodeURIComponent(u) + '&pass=' + encodeURIComponent(p)).catch(()=>{});
+  apiFormMutation('/jellyfin/login', {server:s, user:u, pass:p}).catch(()=>{});
   clearInterval(jfWatch);
   let tries = 0;
   jfWatch = setInterval(async () => {

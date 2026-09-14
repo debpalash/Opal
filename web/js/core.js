@@ -143,6 +143,16 @@ const apiMutation = (path) => networkFetch(BASE + '/api' + path, {
   if (!r.ok || data.ok === false) throw new Error(data.error || 'Request failed');
   return data;
 });
+const apiFormMutation = (path, values) => networkFetch(BASE + '/api' + path, {
+  method: 'POST', credentials:'same-origin',
+  headers: {'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},
+  body: new URLSearchParams(values).toString(),
+}).then(async r => {
+  if (r.status === 401) { unpair(); throw new Error('Signed out'); }
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok || data.ok === false) throw new Error(data.error || 'Request failed');
+  return data;
+});
 // Per-container cache of the last innerHTML we assigned. Renderers that poll
 // (search/torrents/anime/podcast/rss) build the HTML string, then only touch
 // the DOM when it actually changed — avoids re-parsing identical markup and

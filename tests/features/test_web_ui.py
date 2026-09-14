@@ -844,6 +844,34 @@ def test_web_ui_security_boundaries():
     return "pass", "HttpOnly cookies, token-free URLs, CSP, and synchronous DOM sanitization"
 
 
+@test("Self-hosted credentials never enter request URLs", "Security")
+def test_self_hosted_credentials_use_post_bodies():
+    core = _src("web/js/core.js")
+    media = _src("web/js/media.js")
+    discovery = _src("web/js/discovery.js")
+    remote = _src("src/services/remote.zig")
+    checks = {
+        "form mutation helper": "const apiFormMutation" in core and "new URLSearchParams(values)" in core,
+        "jellyfin uses body": "apiFormMutation('/jellyfin/login'" in discovery,
+        "audiobookshelf uses body": "apiFormMutation('/abs/login'" in media,
+        "opds uses body": "apiFormMutation('/opds/connect'" in media,
+        "no password query construction": all(fragment not in media + discovery for fragment in (
+            "&pass=' +", "?server=' + encodeURIComponent", "/jellyfin/login?",
+        )),
+        "credential routes are post-only": remote.count('if (!requireMethod(stream, method, "POST")) return;') >= 3,
+        "backend reads body": all(signature in remote for signature in (
+            "apiAbs(stream, method, api_path, query, body)",
+            "apiOpds(stream, method, api_path, query, body)",
+            "apiJellyfin(stream, method, api_path, query, body)",
+        )) and remote.count('credParam(body, "", "pass"') >= 3,
+        "temporary password bytes scrubbed": remote.count("defer @memset(") >= 3,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "self-hosted credential transport incomplete: " + ", ".join(missing)
+    return "pass", "Jellyfin, Audiobookshelf, and OPDS credentials use POST bodies and scrub temporary buffers"
+
+
 @test("Remote API never serializes socket writes behind a global lock", "Remote")
 def test_remote_response_concurrency_boundary():
     remote = _remote_api()

@@ -1489,16 +1489,16 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
     }
     // Self-hosted servers: Audiobookshelf, OPDS catalogs, Plex.
     if (std.mem.startsWith(u8, api_path, "/abs")) {
-        apiAbs(stream, api_path, query);
+        apiAbs(stream, method, api_path, query, body);
         return;
     }
     if (std.mem.startsWith(u8, api_path, "/opds")) {
-        apiOpds(stream, api_path, query);
+        apiOpds(stream, method, api_path, query, body);
         return;
     }
     // Jellyfin
     if (std.mem.startsWith(u8, api_path, "/jellyfin")) {
-        apiJellyfin(stream, api_path, query);
+        apiJellyfin(stream, method, api_path, query, body);
         return;
     }
     // Unified Search — fans out to all sources
@@ -3769,33 +3769,34 @@ fn apiNovels(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
 
 /// GET /api/abs — Audiobookshelf: libraries → books → play.
 ///
-/// `/abs/login?server=&user=&pass=`, `/abs/libraries`, `/abs/open?idx=`,
+/// `POST /abs/login`, `/abs/libraries`, `/abs/open?idx=`,
 /// `/abs/back`, `/abs/more`, `/abs/play?idx=`, `/abs/logout`.
-fn apiAbs(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
+fn apiAbs(stream: std.Io.net.Stream, method: []const u8, api_path: []const u8, query: []const u8, body: []const u8) void {
     const abs = @import("audiobookshelf.zig");
     const s = &state.app.abs;
 
     if (std.mem.eql(u8, api_path, "/abs/login")) {
+        if (!requireMethod(stream, method, "POST")) return;
         // Credentials come from the POST body where possible (credParam), so a
         // password never lands in a URL or an access log — same rule as
         // /api/auth/login.
         var dec: [256]u8 = undefined;
-        if (getQueryParam(query, "server")) |v| {
-            const sv = txt.safeUtf8(urlDecode(v, &dec) orelse v);
+        defer @memset(&dec, 0);
+        if (credParam(body, "", "server", &dec)) |v| {
+            const sv = txt.safeUtf8(v);
             const n = @min(sv.len, s.server_url.len);
             @memcpy(s.server_url[0..n], sv[0..n]);
             s.server_url_len = n;
         }
-        if (getQueryParam(query, "user")) |v| {
-            var d2: [128]u8 = undefined;
-            const uv = txt.safeUtf8(urlDecode(v, &d2) orelse v);
+        if (credParam(body, "", "user", &dec)) |v| {
+            const uv = txt.safeUtf8(v);
+            @memset(&s.login_user_buf, 0);
             const n = @min(uv.len, s.login_user_buf.len - 1);
             @memcpy(s.login_user_buf[0..n], uv[0..n]);
             s.login_user_buf[n] = 0;
         }
-        if (getQueryParam(query, "pass")) |v| {
-            var d3: [128]u8 = undefined;
-            const pv = urlDecode(v, &d3) orelse v;
+        if (credParam(body, "", "pass", &dec)) |pv| {
+            @memset(&s.login_pass_buf, 0);
             const n = @min(pv.len, s.login_pass_buf.len - 1);
             @memcpy(s.login_pass_buf[0..n], pv[0..n]);
             s.login_pass_buf[n] = 0;
@@ -3883,33 +3884,34 @@ fn apiAbs(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) vo
     sendJson(stream, json_buf[0..w.end]);
 }
 
-/// GET /api/opds — an OPDS catalog (Komga / Kavita / Calibre-Web / LANraragi).
-/// Browse-only: `/opds/connect`, `/opds/open?idx=`, `/opds/back`, `/opds/more`,
+/// OPDS catalog support (Komga / Kavita / Calibre-Web / LANraragi).
+/// Browse-only: `POST /opds/connect`, `/opds/open?idx=`, `/opds/back`, `/opds/more`,
 /// `/opds/disconnect`.
-fn apiOpds(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
+fn apiOpds(stream: std.Io.net.Stream, method: []const u8, api_path: []const u8, query: []const u8, body: []const u8) void {
     const opds = @import("opds.zig");
     const o = &state.app.opds;
 
     if (std.mem.eql(u8, api_path, "/opds/connect")) {
+        if (!requireMethod(stream, method, "POST")) return;
         var dec: [256]u8 = undefined;
-        if (getQueryParam(query, "server")) |v| {
-            const sv = txt.safeUtf8(urlDecode(v, &dec) orelse v);
+        defer @memset(&dec, 0);
+        if (credParam(body, "", "server", &dec)) |v| {
+            const sv = txt.safeUtf8(v);
             const n = @min(sv.len, o.server_url.len);
             @memcpy(o.server_url[0..n], sv[0..n]);
             o.server_url_len = n;
         }
         // user_buf/pass_buf are NUL-TERMINATED with no _len companion (see
         // config.zig) — write the terminator, don't set a length.
-        if (getQueryParam(query, "user")) |v| {
-            var d2: [128]u8 = undefined;
-            const uv = txt.safeUtf8(urlDecode(v, &d2) orelse v);
+        if (credParam(body, "", "user", &dec)) |v| {
+            const uv = txt.safeUtf8(v);
+            @memset(&o.user_buf, 0);
             const n = @min(uv.len, o.user_buf.len - 1);
             @memcpy(o.user_buf[0..n], uv[0..n]);
             o.user_buf[n] = 0;
         }
-        if (getQueryParam(query, "pass")) |v| {
-            var d3: [128]u8 = undefined;
-            const pv = urlDecode(v, &d3) orelse v;
+        if (credParam(body, "", "pass", &dec)) |pv| {
+            @memset(&o.pass_buf, 0);
             const n = @min(pv.len, o.pass_buf.len - 1);
             @memcpy(o.pass_buf[0..n], pv[0..n]);
             o.pass_buf[n] = 0;
@@ -4203,19 +4205,18 @@ fn apiComics(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
     sendJson(stream, json_buf[0..w.end]);
 }
 
-fn apiJellyfin(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
+fn apiJellyfin(stream: std.Io.net.Stream, method: []const u8, api_path: []const u8, query: []const u8, body: []const u8) void {
     const jf = @import("jellyfin.zig");
 
     if (std.mem.eql(u8, api_path, "/jellyfin/login")) {
+        if (!requireMethod(stream, method, "POST")) return;
         var server_buf: [256]u8 = undefined;
         var user_buf: [128]u8 = undefined;
         var pass_buf: [128]u8 = undefined;
-        const server_raw = getQueryParam(query, "server") orelse "";
-        const user_raw = getQueryParam(query, "user") orelse "";
-        const pass_raw = getQueryParam(query, "pass") orelse "";
-        const server = @import("../core/text.zig").safeUtf8(urlDecode(server_raw, &server_buf) orelse server_raw);
-        const username = @import("../core/text.zig").safeUtf8(urlDecode(user_raw, &user_buf) orelse user_raw);
-        const password = urlDecode(pass_raw, &pass_buf) orelse pass_raw;
+        defer @memset(&pass_buf, 0);
+        const server = @import("../core/text.zig").safeUtf8(credParam(body, "", "server", &server_buf) orelse "");
+        const username = @import("../core/text.zig").safeUtf8(credParam(body, "", "user", &user_buf) orelse "");
+        const password = credParam(body, "", "pass", &pass_buf) orelse "";
         jf.configureLogin(server, username, password);
         jf.authenticate();
         sendJson(stream, "{\"ok\":true,\"action\":\"login\"}");

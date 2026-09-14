@@ -490,19 +490,16 @@ onGo('vn-go', 'vn-q', runVndb);
 $('cx-close').onclick = () => closeComic();
 $('dr-more').onclick = () => { api('/drama/more').catch(()=>{}); loadDrama(); };
 $('abs-go').onclick = () => {
-  // Credentials go in the query here; the server reads them the same way the
-  // desktop settings form does. Serve the web UI over TLS or Tailscale
-  // (deploy/) — that is what keeps them off the wire in the clear.
-  api('/abs/login?server=' + encodeURIComponent($('abs-server').value.trim())
-    + '&user=' + encodeURIComponent($('abs-user').value)
-    + '&pass=' + encodeURIComponent($('abs-pass').value)).catch(()=>{});
+  apiFormMutation('/abs/login', {
+    server:$('abs-server').value.trim(), user:$('abs-user').value, pass:$('abs-pass').value,
+  }).catch(()=>{});
   $('abs-pass').value = '';
   pollAbs();
 };
 $('opds-go').onclick = () => {
-  api('/opds/connect?server=' + encodeURIComponent($('opds-server').value.trim())
-    + '&user=' + encodeURIComponent($('opds-user').value)
-    + '&pass=' + encodeURIComponent($('opds-pass').value)).catch(()=>{});
+  apiFormMutation('/opds/connect', {
+    server:$('opds-server').value.trim(), user:$('opds-user').value, pass:$('opds-pass').value,
+  }).catch(()=>{});
   $('opds-pass').value = '';
   pollOpds();
 };
