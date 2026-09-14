@@ -10,6 +10,7 @@ def test_jellyfin_user_state():
     remote = _src("src/services/remote.zig")
     web = _src("web/js/discovery.js")
     css = _src("web/styles/app.css")
+    desktop = _src("src/ui/jellyfin_ui.zig")
     transport = _src("src/core/http_transport.zig")
     checks = {
         "state fields": all(field in state for field in ("is_favorite", "is_played", "user_data_gen")),
@@ -24,6 +25,8 @@ def test_jellyfin_user_state():
         "accessible controls": 'aria-label="${it.favorite' in web and 'aria-label="${it.played' in web,
         "resume progress rendered": "jf-progress" in web and ".jf-progress" in css,
         "touch actions visible": "@media (hover:none)" in css,
+        "native typed activation": all(text in desktop for text in ("fn activateItem", "jf.openFolder", "jf.playAudioItem")),
+        "native user-state actions": desktop.count("jf.setUserData(") >= 2,
         "empty mutation responses accepted": ".no_content => return buf[0..0]" in transport,
     }
     missing = [name for name, ok in checks.items() if not ok]

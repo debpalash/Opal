@@ -554,7 +554,18 @@ fn renderSkeletonRows() void {
 
 /// Card footer height below the poster — referenced by the uniform card
 /// sizing AND the grid's virtualization row pitch. Keep single-sourced.
-const CARD_FOOTER_H: f32 = 32;
+const CARD_FOOTER_H: f32 = 38;
+
+fn activateItem(item: *const jf.PresentationItem) void {
+    const id = item.id[0..item.id_len];
+    if (item.is_folder) {
+        jf.openFolder(id, safeUtf8(item.name[0..item.name_len]));
+    } else if (std.mem.eql(u8, item.media_type[0..item.media_type_len], "Audio")) {
+        jf.playAudioItem(id);
+    } else {
+        jf.playItem(id);
+    }
+}
 
 fn updatePoster(slot_idx: usize, item: *const jf.PresentationItem) *PosterSlot {
     const slot = &poster_slots[slot_idx];
@@ -609,8 +620,7 @@ fn renderPosterCard(item: *const jf.PresentationItem, slot_idx: usize, idx: usiz
                 .expand = .both,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
             })) {
-                const id = item.id[0..item.id_len];
-                jf.playItem(id);
+                activateItem(item);
             }
             _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
                 .id_extra = idx + 70,
@@ -625,8 +635,7 @@ fn renderPosterCard(item: *const jf.PresentationItem, slot_idx: usize, idx: usiz
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                 .color_text = theme.colors.accent,
             })) {
-                const id = item.id[0..item.id_len];
-                jf.playItem(id);
+                activateItem(item);
             }
         }
 
@@ -659,14 +668,39 @@ fn renderPosterCard(item: *const jf.PresentationItem, slot_idx: usize, idx: usiz
         pb.deinit();
     }
 
-    // Title — fills card width, dvui ellipsizes (no manual char truncation).
-    var jf_title_buf: [256]u8 = undefined;
-    _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(item.name[0..item.name_len], &jf_title_buf)}, .{
+    // Compact title + server-owned user-state actions. Keeping these in the
+    // footer makes them keyboard/touch reachable instead of hover-only.
+    var footer = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .id_extra = idx + 90,
         .expand = .horizontal,
-        .color_text = theme.colors.text_primary,
         .padding = .{ .x = 4, .y = 3, .w = 4, .h = 2 },
     });
+    defer footer.deinit();
+    var jf_title_buf: [256]u8 = undefined;
+    _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(item.name[0..item.name_len], &jf_title_buf)}, .{
+        .id_extra = idx + 91,
+        .expand = .horizontal,
+        .color_text = theme.colors.text_primary,
+        .gravity_y = 0.5,
+    });
+    if (!item.is_folder) {
+        if (dvui.buttonIcon(@src(), "favorite", icons.tvg.lucide.star, .{}, .{}, .{
+            .id_extra = idx + 92,
+            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_text = if (item.is_favorite) theme.colors.warning else theme.colors.text_secondary,
+            .min_size_content = .{ .w = 14, .h = 14 },
+            .padding = dvui.Rect.all(4),
+            .gravity_y = 0.5,
+        })) _ = jf.setUserData(item.id[0..item.id_len], .favorite, !item.is_favorite);
+        if (dvui.buttonIcon(@src(), "watched", if (item.is_played) icons.tvg.lucide.@"circle-check-big" else icons.tvg.lucide.circle, .{}, .{}, .{
+            .id_extra = idx + 93,
+            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_text = if (item.is_played) theme.colors.success else theme.colors.text_secondary,
+            .min_size_content = .{ .w = 14, .h = 14 },
+            .padding = dvui.Rect.all(4),
+            .gravity_y = 0.5,
+        })) _ = jf.setUserData(item.id[0..item.id_len], .played, !item.is_played);
+    }
 }
 
 // ══════════════════════════════════════════════════════════
