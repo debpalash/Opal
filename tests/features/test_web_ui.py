@@ -886,7 +886,8 @@ def test_server_item_details_dialog():
         "responsive glass layout": "#source-details::backdrop" in css and "backdrop-filter:blur" in css and "@media(max-width:560px)" in css,
         "one renderer across adapters": "function openSourceDetails(source, item, trigger)" in media and all(
             f"source === '{source}'" in media for source in (
-                "Jellyfin", "Plex", "Audiobookshelf", "OPDS", "Podcast", "Comic", "Novel", "Drama", "RSS"
+                "Jellyfin", "Plex", "Audiobookshelf", "OPDS", "Podcast", "Music", "Radio", "Anime", "Live TV", "YouTube",
+                "Comic", "Novel", "Drama", "RSS"
             )
         ),
         "focus restored": "sourceDetailsReturnFocus.focus()" in media,
@@ -903,12 +904,22 @@ def test_server_item_details_dialog():
         "comic and novel details": all(marker in media for marker in ("comic-details", "novel-details", "source === 'Comic'", "source === 'Novel'")),
         "catalog details": all(marker in media for marker in ("drama-details", "vndb-details", "sourceArtUrl")),
         "RSS details": "rss-details" in discovery and "source === 'RSS'" in media,
+        "music radio and anime details": all(marker in media for marker in (
+            "music-details", "radio-details", "anime-details", "source === 'Music'", "source === 'Radio'", "source === 'Anime'",
+        )),
+        "music and radio queue actions": all(marker in media for marker in (
+            'data-queue="${i}"', "queueMedia(song.url", "queueMedia(station.url",
+        )),
+        "live TV and YouTube details": all(marker in discovery for marker in (
+            "tv-details", "yt-details", "openSourceDetails('Live TV'", "openSourceDetails('YouTube'",
+        )),
+        "live TV and YouTube queue actions": "data-tv-queue" in discovery and "queueMedia('https://www.youtube.com/watch?v='" in discovery,
         "art protocol allowlist": "url.protocol === 'http:' || url.protocol === 'https:'" in media,
     }
     missing = [name for name, ok in checks.items() if not ok]
     if missing:
         return "fail", "server details incomplete: " + ", ".join(missing)
-    return "pass", "Server, book, podcast, comic, novel, drama, and RSS details share one safe accessible surface"
+    return "pass", "Server, audio, anime, book, podcast, comic, novel, drama, and RSS details share one safe accessible surface"
 
 
 @test("Remote API never serializes socket writes behind a global lock", "Remote")

@@ -34,12 +34,20 @@ function renderAnimeResults(rs){
     <div class="result">
       <div class="t">${esc(r.name)}</div>
       <div class="m"><span class="src">${r.episodes || 0} eps</span>
+        <button class="anime-details" data-details="${i}">Details</button>
         <button class="play" data-idx="${i}">Episodes ⭢</button></div>
     </div>`).join('') || '<div class="empty">No results yet</div>';
   if (html === lastHtml.animeResults) return;
   lastHtml.animeResults = html;
   $('anime-results').innerHTML = html;
   $('anime-results').querySelectorAll('.play').forEach(b => b.onclick = () => loadAnimeEpisodes(+b.dataset.idx));
+  $('anime-results').querySelectorAll('.anime-details').forEach(button => {
+    const anime = rs[Number(button.dataset.details)] || {};
+    button.onclick = () => openSourceDetails('Anime', {
+      ...anime, title:anime.name, type:'Anime', meta:`${anime.episodes || 0} episodes`,
+      index:Number(button.dataset.details),
+    }, button);
+  });
 }
 function loadAnimeEpisodes(idx){
   $('anime-episodes').innerHTML = '<div class="empty"><span class="spin"></span></div>';
@@ -96,6 +104,8 @@ function renderMusic(songs){
     <div class="result">
       <div class="t">${esc(s.title)}</div>
       <div class="m"><span class="src">${esc(s.artist || '')}</span>
+        <button class="music-details" data-details="${i}">Details</button>
+        ${s.url ? `<button class="queue-btn" data-queue="${i}">Queue</button>` : ''}
         <button class="play" data-i="${i}" data-url="${encodeURIComponent(s.url || '')}">Play</button></div>
     </div>`).join('') || '<div class="empty">No songs yet</div>';
   if (html === lastHtml.music) return;
@@ -106,6 +116,17 @@ function renderMusic(songs){
     const t = b.parentElement.parentElement.querySelector('.t').textContent;
     if (HOSTED && u) return openStreamUrl(u, t);
     dispatchPlay(u, t, () => { api('/music/play?idx=' + b.dataset.i).catch(()=>{}); b.textContent = 'Sent ✓'; });
+  });
+  $('mu-results').querySelectorAll('[data-queue]').forEach(button => {
+    const song = songs[Number(button.dataset.queue)] || {};
+    button.onclick = () => queueMedia(song.url || '', song.title || '', button);
+  });
+  $('mu-results').querySelectorAll('.music-details').forEach(button => {
+    const song = songs[Number(button.dataset.details)] || {};
+    button.onclick = () => openSourceDetails('Music', {
+      ...song, type:'Song', meta:song.artist || '', artUrl:song.cover || '',
+      index:Number(button.dataset.details),
+    }, button);
   });
 }
 
@@ -546,6 +567,44 @@ function openSourceDetails(source, item, trigger){
       if (item.kind === 'show') loadPodEpisodes(item.index);
       else await api('/podcasts/play?idx=' + encodeURIComponent(item.index));
     }, true));
+  } else if (source === 'Music') {
+    actions.append(detailAction('Play', async () => {
+      closeSourceDetails();
+      dispatchPlay(item.url || '', item.title || '', () => api('/music/play?idx=' + encodeURIComponent(item.index)));
+    }, true));
+    if (item.url) actions.append(detailAction('Queue', async () => {
+      await queueMedia(item.url, item.title || ''); closeSourceDetails();
+    }));
+  } else if (source === 'Radio') {
+    actions.append(detailAction('Listen', async () => {
+      closeSourceDetails();
+      dispatchPlay(item.url || '', item.name || '', () => api('/radio/play?idx=' + encodeURIComponent(item.index)));
+    }, true));
+    if (item.url) actions.append(detailAction('Queue', async () => {
+      await queueMedia(item.url, item.name || ''); closeSourceDetails();
+    }));
+  } else if (source === 'Anime') {
+    actions.append(detailAction('View episodes', () => {
+      closeSourceDetails(); loadAnimeEpisodes(item.index);
+    }, true));
+  } else if (source === 'Live TV') {
+    actions.append(detailAction('Watch', () => {
+      closeSourceDetails(); dispatchPlay(item.url || '', item.name || '', () =>
+        apiMutation('/load?url=' + encodeURIComponent(item.url || '')));
+    }, true));
+    if (item.url) actions.append(detailAction('Queue', async () => {
+      await queueMedia(item.url, item.name || ''); closeSourceDetails();
+    }));
+  } else if (source === 'YouTube') {
+    const url = 'https://www.youtube.com/watch?v=' + (item.id || '');
+    actions.append(detailAction('Play', () => {
+      closeSourceDetails();
+      if (HOSTED || PLAY_HERE) openYtEmbed(item.id, item.title || '');
+      else return apiMutation('/load?url=' + encodeURIComponent(url));
+    }, true));
+    if (item.id) actions.append(detailAction('Queue', async () => {
+      await queueMedia(url, item.title || ''); closeSourceDetails();
+    }));
   } else if (source === 'Comic') {
     actions.append(detailAction('Read', () => { closeSourceDetails(); openComic(item.url); }, true));
   } else if (source === 'Novel') {
@@ -741,6 +800,8 @@ function renderRadio(sts){
       <div class="m">
         ${s.country ? `<span class="src">${esc(s.country)}</span>` : ''}
         ${s.tags ? `<span>${esc((s.tags || '').split(',').slice(0,2).join(', '))}</span>` : ''}
+        <button class="radio-details" data-details="${i}">Details</button>
+        ${s.url ? `<button class="queue-btn" data-queue="${i}">Queue</button>` : ''}
         <button class="play" data-i="${i}" data-url="${encodeURIComponent(s.url || '')}">Listen</button></div>
     </div>`).join('') || '<div class="empty">No stations yet</div>';
   if (html === lastHtml.radio) return;
@@ -751,5 +812,16 @@ function renderRadio(sts){
     const t = b.parentElement.parentElement.querySelector('.t').textContent;
     if (HOSTED && u) return openStreamUrl(u, t);
     dispatchPlay(u, t, () => { api('/radio/play?idx=' + b.dataset.i).catch(()=>{}); b.textContent = 'Sent ✓'; });
+  });
+  $('ra-results').querySelectorAll('[data-queue]').forEach(button => {
+    const station = sts[Number(button.dataset.queue)] || {};
+    button.onclick = () => queueMedia(station.url || '', station.name || '', button);
+  });
+  $('ra-results').querySelectorAll('.radio-details').forEach(button => {
+    const station = sts[Number(button.dataset.details)] || {};
+    button.onclick = () => openSourceDetails('Radio', {
+      ...station, type:'Station', meta:[station.country || '', station.tags || ''].filter(Boolean).join(' · '),
+      artUrl:station.favicon || '', index:Number(button.dataset.details),
+    }, button);
   });
 }

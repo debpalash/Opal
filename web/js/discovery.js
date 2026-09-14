@@ -92,6 +92,8 @@ function appendTv(chans){
         ${c.country ? `<span class="src">${esc(c.country)}</span>` : ''}
         ${c.quality ? `<span>${esc(c.quality)}</span>` : ''}
         ${c.category ? `<span>${esc(c.category)}</span>` : ''}
+        <button class="tv-details" data-channel="${encodeURIComponent(JSON.stringify(c))}">Details</button>
+        <button class="queue-btn" data-tv-queue="${encodeURIComponent(c.url)}" data-name="${esc(c.name)}">Queue</button>
         <button class="play" data-url="${encodeURIComponent(c.url)}" data-name="${esc(c.name)}">Watch</button>
       </div>
     </div>`).join('');
@@ -104,6 +106,20 @@ function appendTv(chans){
       dispatchPlay(url, b.dataset.name, () => {
         apiMutation('/load?url=' + encodeURIComponent(url)).catch(()=>{}); b.textContent = 'Sent ✓';
       });
+    };
+  });
+  $('tv-results').querySelectorAll('[data-tv-queue]:not([data-wired])').forEach(button => {
+    button.setAttribute('data-wired', '1');
+    button.onclick = () => queueMedia(decodeURIComponent(button.dataset.tvQueue), button.dataset.name || '', button);
+  });
+  $('tv-results').querySelectorAll('.tv-details:not([data-wired])').forEach(button => {
+    button.setAttribute('data-wired', '1');
+    button.onclick = () => {
+      const channel = JSON.parse(decodeURIComponent(button.dataset.channel));
+      openSourceDetails('Live TV', {
+        ...channel, type:'Channel', artUrl:channel.logo || '',
+        meta:[channel.country || '', channel.quality || '', channel.category || ''].filter(Boolean).join(' · '),
+      }, button);
     };
   });
 }
@@ -156,6 +172,8 @@ function renderYt(items){
         <span class="src">${esc(v.channel || '')}</span>
         ${(v.dur_min || v.dur_sec) ? `<span>${v.dur_min}:${String(v.dur_sec).padStart(2,'0')}</span>` : ''}
         ${v.views ? `<span>${fmtViews(v.views)} views</span>` : ''}
+        <button class="yt-details" data-details="${esc(v.id)}">Details</button>
+        <button class="queue-btn" data-queue="${esc(v.id)}">Queue</button>
         <button class="play" data-id="${esc(v.id)}" data-title="${esc(v.title)}">Play</button>
       </div>
     </div>`).join('') || '<div class="empty">No results yet</div>';
@@ -166,6 +184,17 @@ function renderYt(items){
     if (HOSTED || PLAY_HERE) return openYtEmbed(b.dataset.id, b.dataset.title);
     apiMutation('/load?url=' + encodeURIComponent('https://www.youtube.com/watch?v=' + b.dataset.id)).catch(()=>{});
     b.textContent = 'Sent ✓';
+  });
+  $('yt-results').querySelectorAll('[data-queue]').forEach(button => {
+    const video = items.find(item => item.id === button.dataset.queue) || {};
+    button.onclick = () => queueMedia('https://www.youtube.com/watch?v=' + (video.id || ''), video.title || '', button);
+  });
+  $('yt-results').querySelectorAll('.yt-details').forEach(button => {
+    const video = items.find(item => item.id === button.dataset.details) || {};
+    button.onclick = () => openSourceDetails('YouTube', {
+      ...video, type:'Video',
+      meta:[video.channel || '', (video.dur_min || video.dur_sec) ? `${video.dur_min}:${String(video.dur_sec).padStart(2,'0')}` : ''].filter(Boolean).join(' · '),
+    }, button);
   });
 }
 function openYtEmbed(id, title){
