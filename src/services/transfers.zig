@@ -50,6 +50,39 @@ var expanded_key: [256]u8 = std.mem.zeroes([256]u8);
 var expanded_key_len: usize = 0;
 
 pub const TorrentAction = enum { pause, @"resume", recheck, priority, cancel };
+pub const DiskAction = enum { reveal, delete };
+pub const DiskActionError = error{ InvalidPath, NotFound, Io };
+
+/// Execute an explicit action against one direct child of the configured
+/// download root. Validation happens before joining the host path.
+pub fn applyDiskAction(rel: []const u8, action: DiskAction) DiskActionError!void {
+    if (!tp.safeDiskRelative(rel)) return error.InvalidPath;
+    var root_buf: [512]u8 = undefined;
+    const root = if (state.app.save_path_len > 0)
+        state.app.save_path_buf[0..state.app.save_path_len]
+    else
+        @import("../core/paths.zig").defaultSavePath(&root_buf);
+    var root_dir = io_global.cwdOpenDir(root, .{ .iterate = true }) catch return error.NotFound;
+    defer root_dir.close(io_global.io());
+    var found_kind: ?std.Io.File.Kind = null;
+    var iterator = root_dir.iterate();
+    while (iterator.next(io_global.io()) catch return error.Io) |entry| {
+        if (!std.mem.eql(u8, entry.name, rel)) continue;
+        if (entry.kind != .file and entry.kind != .directory) return error.InvalidPath;
+        found_kind = entry.kind;
+        break;
+    }
+    const kind = found_kind orelse return error.NotFound;
+    var full_buf: [1024]u8 = undefined;
+    const full = std.fmt.bufPrintZ(&full_buf, "{s}/{s}", .{ root, rel }) catch return error.InvalidPath;
+    switch (action) {
+        .reveal => openInFileManager(full),
+        .delete => if (kind == .directory)
+            io_global.cwdDeleteTree(full) catch return error.Io
+        else
+            io_global.cwdDeleteFile(full) catch return error.Io,
+    }
+}
 
 // Staging rows live at module scope, not on the UI stack: a tp.Row is ~700B and
 // three arrays of them would be ~350KB of stack per frame.

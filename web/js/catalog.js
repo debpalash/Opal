@@ -360,7 +360,11 @@ async function loadDownloads(){
       const name = item.name || '';
       const detail = item.is_dir ? 'Folder' : fmtSize(item.size);
       return `<div class="file"><div class="n">${esc(name)}${detail ? `<div class="file-meta">${esc(detail)}</div>` : ''}</div>
-        ${item.is_dir ? '' : `<button class="play" data-n="${encodeURIComponent(name)}">Play</button>`}</div>`;
+        <div class="transfer-actions">
+          ${item.is_dir ? '' : `<button class="play" data-n="${encodeURIComponent(name)}">Play</button>`}
+          ${HOSTED ? '' : `<button data-file-action="reveal" data-n="${encodeURIComponent(name)}">Reveal</button>`}
+          <button class="danger" data-file-action="delete" data-n="${encodeURIComponent(name)}">Delete from disk</button>
+        </div></div>`;
     }).join('') + (files.length > cap
       ? `<div class="empty">${files.length - cap} more not shown — newest ${cap} listed</div>` : '')
       || '<div class="empty">No downloaded files</div>';
@@ -371,6 +375,15 @@ async function loadDownloads(){
         button.textContent = 'Sent ✓';
         apiMutation('/downloads/play?file=' + button.dataset.n).catch(()=>{});
       }, rel);
+    });
+    $('downloads').querySelectorAll('[data-file-action]').forEach(button => button.onclick = async () => {
+      const action = button.dataset.fileAction, name = decodeURIComponent(button.dataset.n || '');
+      if (action === 'delete' && !confirm(`Permanently delete “${name}” from disk? This cannot be undone.`)) return;
+      const params = new URLSearchParams({action, file:name});
+      if (action === 'delete') params.set('confirm', 'DELETE');
+      button.disabled = true;
+      try { await apiMutation('/downloads/file-action?' + params); toast(action === 'delete' ? 'Deleted from disk' : 'Revealed on Opal'); await loadDownloads(); }
+      catch (err) { button.disabled = false; toast(err.message || 'File action failed'); }
     });
   } catch {
     $('download-jobs').innerHTML = '<div class="empty">Downloads unavailable</div>';

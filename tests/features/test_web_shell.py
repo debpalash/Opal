@@ -378,6 +378,12 @@ def test_web_transfer_management_contract():
         ),
         "confirmed destructive operations": "params.set('confirm', '1')" in ui
             and "requires confirm=1" in remote and "cancel requires confirm=1" in remote,
+        "explicit confined disk actions": '"/downloads/file-action"' in remote
+            and "pub fn applyDiskAction(" in transfers and "tp.safeDiskRelative(rel)" in transfers
+            and "entry.kind != .file and entry.kind != .directory" in transfers
+            and "disk deletion requires confirm=DELETE" in remote
+            and 'data-file-action="delete"' in ui and 'data-file-action="reveal"' in ui
+            and "HOSTED ? ''" in ui,
         "all player loads use POST": "api('/load?url='" not in ui and "apiMutation('/load?url='" in ui,
     }
     missing = [k for k, ok in checks.items() if not ok]

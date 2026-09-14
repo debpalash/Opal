@@ -14,7 +14,32 @@ pub fn handle(stream: std.Io.net.Stream, method: []const u8, path: []const u8, q
         if (wire.requireMethod(stream, method, "POST")) applyAction(stream, query);
         return true;
     }
+    if (std.mem.eql(u8, path, "/downloads/file-action")) {
+        if (wire.requireMethod(stream, method, "POST")) applyDiskAction(stream, query);
+        return true;
+    }
     return false;
+}
+
+fn applyDiskAction(stream: std.Io.net.Stream, query: []const u8) void {
+    const transfers = @import("transfers.zig");
+    const action = std.meta.stringToEnum(transfers.DiskAction, wire.queryParam(query, "action") orelse "") orelse {
+        wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"unknown file action\"}");
+        return;
+    };
+    var decoded: [512]u8 = undefined;
+    const rel = if (wire.queryParam(query, "file")) |raw| (wire.urlDecode(raw, &decoded) orelse "") else "";
+    if (action == .delete and !std.mem.eql(u8, wire.queryParam(query, "confirm") orelse "", "DELETE")) {
+        wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"disk deletion requires confirm=DELETE\"}");
+        return;
+    }
+    transfers.applyDiskAction(rel, action) catch |err| {
+        const status: []const u8 = if (err == error.NotFound) "404 Not Found" else if (err == error.InvalidPath) "400 Bad Request" else "500 Internal Server Error";
+        const body: []const u8 = if (err == error.NotFound) "{\"error\":\"download not found\"}" else if (err == error.InvalidPath) "{\"error\":\"invalid download path\"}" else "{\"error\":\"file action failed\"}";
+        wire.sendJsonStatus(stream, status, body);
+        return;
+    };
+    wire.sendJson(stream, "{\"ok\":true}");
 }
 
 fn snapshot(stream: std.Io.net.Stream) void {
