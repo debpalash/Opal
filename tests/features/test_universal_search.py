@@ -85,7 +85,7 @@ def test_universal_search_fanout():
         # ── Result cap widened so late finishers aren't starved ──
         "MAX_RESULTS constant": "pub const MAX_RESULTS: usize = 96;" in res,
         "no stale 64 cap": "result_count >= 64" not in res,
-        "cache blob resized": "SEARCH_BLOB_CAP: usize = 512 * 1024" in res,
+        "cache blob sized for fallback candidates": "SEARCH_BLOB_CAP: usize = 768 * 1024" in res,
 
         # ── Playback routing ──
         "music/radio play direct": ".youtube, .stremio, .local, .music, .radio => {" in res,

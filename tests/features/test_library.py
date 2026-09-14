@@ -289,6 +289,30 @@ def local_library_index():
     return "pass", "recursive local media is indexed once, searched instantly, corrected safely, and grouped by sampled identity"
 
 
+@test("Universal results merge semantic duplicates with playback fallback", "Library")
+def semantic_result_fallbacks():
+    pure = _src("src/services/resolver_dedup_pure.zig")
+    resolver = _src("src/services/resolver.zig")
+    player = _src("src/player/player.zig")
+    checks = {
+        "semantic key is pure and tested": "pub fn semanticKey" in pure
+            and "pub fn sameSemantic" in pure
+            and "preserves editions" in pure,
+        "transport identity still wins": "dedup.sameItem(current_url, url)" in resolver,
+        "semantic merge is source bounded": "fallbackCompatible(items[d].source, scored_item.source)" in resolver,
+        "best ranked candidate stays primary": "scored_item.score < items[d].score" in resolver
+            and "ByScore.lessThan" in resolver,
+        "runner-up retained": "scored_item.fallback_url" in resolver
+            and "items[d].fallback_url_len == 0" in resolver,
+        "fallback reaches player": ".fallback_url = item.fallback_url" in resolver
+            and "fallback_recovery.takeOnFailure()" in player,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "semantic fallback pipeline incomplete: " + ", ".join(missing)
+    return "pass", "same-title direct streams merge; the best result plays first and the runner-up retries once"
+
+
 @test("Card action row is never clipped out of its own card", "Library")
 def card_action_row_fits():
     """The Watching page's Play and Remove controls were squeezed to zero height.

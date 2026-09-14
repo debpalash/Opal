@@ -109,7 +109,7 @@ commands, non-finite numbers, out-of-range values, and unknown actions.
 - [x] Favorite, rating, continue/resume, and synchronized movie-history removal
 - [x] Collections, playlists, queue add/remove/reorder/play, bulk actions
 - [x] Library scan/import, metadata corrections, duplicate handling
-- [ ] Cross-source semantic deduplication and fallback stream candidates
+- [x] Cross-source semantic deduplication and fallback stream candidates
 - [x] Persisted filters, sorting, view mode, pagination, and virtualized grids
       (validated native filter/grid preferences; web filter/sort/density/page
       preferences; bounded server pages; intrinsic-size off-screen rendering)

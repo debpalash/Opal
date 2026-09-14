@@ -80,7 +80,7 @@ pub const ResolvedItem = struct {
     catalog_imdb_len: usize = 0,
     resume_position_secs: f32 = 0,
     duration_secs: f32 = 0,
-    fallback_url: [256]u8 = std.mem.zeroes([256]u8),
+    fallback_url: [2048]u8 = std.mem.zeroes([2048]u8),
     fallback_url_len: usize = 0,
     plugin_id: [64]u8 = std.mem.zeroes([64]u8),
     plugin_id_len: usize = 0,
@@ -103,7 +103,7 @@ pub var results_mutex = @import("../core/sync.zig").Mutex{};
 // pushResult). Guarded by results_mutex. Serialized blobs cap at ~160 KB
 // (MAX_RESULTS rows × fixed buffers), so 512 KB is a safe scratch size.
 var results_from_cache: bool = false;
-const SEARCH_BLOB_CAP: usize = 512 * 1024;
+const SEARCH_BLOB_CAP: usize = 768 * 1024;
 const SEARCH_TTL_S: i64 = @import("browse_cache.zig").TTL_S;
 
 // Search state — shared across 7 worker threads + UI; access via atomics.
@@ -794,18 +794,6 @@ fn pushInto(
     const name = item.name[0..@min(item.name_len, 256)];
     if (isErrorResult(name)) return false;
 
-    // Cross-source dedup: the same release surfaced by several sources (same
-    // magnet infohash, or identical URL) collapses to one row so the list
-    // doesn't flood. Keyed by the tested pure `sameItem`.
-    {
-        const dedup = @import("resolver_dedup_pure.zig");
-        const url = item.url[0..@min(item.url_len, item.url.len)];
-        var d: usize = 0;
-        while (d < count.*) : (d += 1) {
-            if (dedup.sameItem(items[d].url[0..@min(items[d].url_len, items[d].url.len)], url)) return true; // dup — silently dropped
-        }
-    }
-
     var scored_item = item;
     const match_info = computeMatchAgainst(scored_item, query);
     if (match_info.match_pct == 0) return false;
@@ -814,6 +802,34 @@ fn pushInto(
     const score = match_info.score;
     scored_item.score = score; // cache so re-inserts don't recompute (S45)
     scored_item.is_nsfw = @import("search.zig").isNsfwName(name); // S16
+
+    // Exact duplicates collapse by transport identity. Direct streams with the
+    // same semantic title additionally collapse into one ranked row while the
+    // runner-up remains armed as an automatic pre-load fallback.
+    {
+        const dedup = @import("resolver_dedup_pure.zig");
+        const url = scored_item.url[0..@min(scored_item.url_len, scored_item.url.len)];
+        var d: usize = 0;
+        while (d < count.*) : (d += 1) {
+            const current_url = items[d].url[0..@min(items[d].url_len, items[d].url.len)];
+            if (dedup.sameItem(current_url, url)) return true;
+            if (!fallbackCompatible(items[d].source, scored_item.source) or
+                !dedup.sameSemantic(items[d].name[0..items[d].name_len], name)) continue;
+            if (scored_item.score < items[d].score) {
+                copyField(&scored_item.fallback_url, &scored_item.fallback_url_len, current_url);
+                items[d] = scored_item;
+                const ByScore = struct {
+                    fn lessThan(_: void, a: ResolvedItem, b: ResolvedItem) bool {
+                        return a.score < b.score;
+                    }
+                };
+                std.sort.insertion(ResolvedItem, items[0..count.*], {}, ByScore.lessThan);
+            } else if (items[d].fallback_url_len == 0) {
+                copyField(&items[d].fallback_url, &items[d].fallback_url_len, url);
+            }
+            return true;
+        }
+    }
 
     // SWR: the first live result of a fresh wave replaces the cache-seeded
     // placeholder, so stale cached rows never mix with the revalidated set.
@@ -841,6 +857,18 @@ fn pushInto(
     items[insert_at] = scored_item;
     count.* += 1;
     return true;
+}
+
+fn fallbackCompatible(a: SourceType, b: SourceType) bool {
+    if (a == b) return switch (a) {
+        .youtube, .stremio, .local, .music, .radio => true,
+        else => false,
+    };
+    const video_a = a == .youtube or a == .stremio or a == .local;
+    const video_b = b == .youtube or b == .stremio or b == .local;
+    const audio_a = a == .youtube or a == .music;
+    const audio_b = b == .youtube or b == .music;
+    return (video_a and video_b) or (audio_a and audio_b);
 }
 
 const local_media_exts = [_][]const u8{
@@ -3497,6 +3525,7 @@ pub fn playResolvedItem(item: *const ResolvedItem) void {
         .youtube, .stremio, .local, .music, .radio => {
             @import("browser.zig").playDirect(.{
                 .url = item.url[0..item.url_len],
+                .fallback_url = item.fallback_url[0..item.fallback_url_len],
                 .title = item.name[0..item.name_len],
                 .subtitle = item.detail[0..item.detail_len],
             });
