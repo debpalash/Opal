@@ -2,6 +2,7 @@
 zig-out/
 .zig-cache/
 .agent/
+/.build-check/
 # === Secrets ===
 .env
 
