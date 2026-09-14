@@ -1039,6 +1039,30 @@ def test_torrent_session_not_ready_is_reported():
     return "pass", "magnet and .torrent cold-start actions queue without blocking on libmpv"
 
 
+@test("torrent detail resolution is bounded and stale-safe", "Torrents")
+def test_torrent_detail_resolution_contract():
+    src = _src("src/services/search.zig")
+    main = _src("src/main.zig")
+    worker = _between(src, "fn resolveDetailWorker", "pub fn drainResolvedTorrentDetail")
+    direct = _between(src, "pub fn loadTorrentToPlayer", "fn hexVal")
+    checks = {
+        "bounded process and output": "bounded_process.StreamProcess" in worker
+            and "256 * 1024" in worker and "timeout_ms = 11_000" in worker,
+        "cancelled on supersession/shutdown": "cancel_epoch" in worker
+            and "quittingSignal()" in worker,
+        "no raw child wait": "Child.init" not in direct and "spawnLegacy" not in direct,
+        "owned worker": "spawn(resolveDetailWorker" in direct,
+        "new intent supersedes": "detail_resolve_generation.fetchAdd" in direct,
+        "opaque player identity": "player_address" in src and "load_serial" in src,
+        "UI-thread publication": "pub fn drainResolvedTorrentDetail" in src
+            and "drainResolvedTorrentDetail();" in main,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "torrent detail resolver incomplete: " + ", ".join(missing)
+    return "pass", "detail-page resolver is output/time bounded and publishes only to its owning load"
+
+
 @test("torrents: active restart intent is private and deterministic", "Torrents")
 def test_torrent_restart_intent_contract():
     pure = _src("src/services/torrent_intent_pure.zig")

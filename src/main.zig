@@ -1121,6 +1121,7 @@ fn appFrame() !dvui.App.Result {
     // Honor a magnet/.torrent action made during delayed DHT startup. The
     // background initializer only publishes + wakes; the UI thread performs
     // the player and list mutation here.
+    @import("services/search.zig").drainResolvedTorrentDetail();
     @import("services/search.zig").flushPendingTorrentOpen();
 
     // Rejoin saved active swarms only after DB + libtorrent are both ready.

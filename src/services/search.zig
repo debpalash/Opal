@@ -74,6 +74,166 @@ var pending_torrent_lock: @import("../core/sync.zig").Mutex = .{};
 var pending_torrent_ready = std.atomic.Value(bool).init(false);
 var pending_torrents: torrent_open_queue.Queue = .{};
 
+const DetailResolveStatus = enum { success, fetch_failed, no_magnet };
+const DetailResolveRequest = struct {
+    url: [4096]u8 = std.mem.zeroes([4096]u8),
+    url_len: usize = 0,
+    generation: u64 = 0,
+    player_address: usize = 0,
+    load_serial: u64 = 0,
+};
+const DetailResolvePublication = struct {
+    magnet: [4096]u8 = std.mem.zeroes([4096]u8),
+    magnet_len: usize = 0,
+    generation: u64 = 0,
+    player_address: usize = 0,
+    load_serial: u64 = 0,
+    status: DetailResolveStatus = .fetch_failed,
+};
+var detail_resolve_generation = std.atomic.Value(u64).init(0);
+var detail_resolve_lock: @import("../core/sync.zig").Mutex = .{};
+var detail_resolve_ready = std.atomic.Value(bool).init(false);
+var detail_resolve_publication: DetailResolvePublication = .{};
+
+fn publishDetailResolve(request: DetailResolveRequest, status: DetailResolveStatus, magnet: []const u8) void {
+    if (request.generation != detail_resolve_generation.load(.acquire)) return;
+    detail_resolve_lock.lock();
+    defer detail_resolve_lock.unlock();
+    if (request.generation != detail_resolve_generation.load(.acquire)) return;
+    var publication: DetailResolvePublication = .{
+        .generation = request.generation,
+        .player_address = request.player_address,
+        .load_serial = request.load_serial,
+        .status = status,
+    };
+    publication.magnet_len = @min(magnet.len, publication.magnet.len);
+    @memcpy(publication.magnet[0..publication.magnet_len], magnet[0..publication.magnet_len]);
+    detail_resolve_publication = publication;
+    detail_resolve_ready.store(true, .release);
+    state.wakeUi();
+}
+
+fn resolveDetailWorker(request: DetailResolveRequest) void {
+    const allocator = @import("../core/alloc.zig").allocator;
+    const html_buf = allocator.alloc(u8, 256 * 1024) catch {
+        publishDetailResolve(request, .fetch_failed, "");
+        return;
+    };
+    defer allocator.free(html_buf);
+    const url = request.url[0..request.url_len];
+    const argv = [_][]const u8{
+        "curl",       "-sL",
+        "-H",         "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+        "--max-time", "10",
+        url,
+    };
+    var process = bounded_process.StreamProcess.init(&argv, .{
+        .timeout_ms = 11_000,
+        .terminate_grace_ms = 150,
+        .max_output_bytes = html_buf.len,
+        .cancel_epoch = .{ .epoch64 = .{ .value = &detail_resolve_generation, .expected = request.generation } },
+        .cancel_flag = @import("../core/workers.zig").quittingSignal(),
+    });
+    process.start() catch {
+        publishDetailResolve(request, .fetch_failed, "");
+        return;
+    };
+    var total: usize = 0;
+    var read_failed = false;
+    if (process.stdout()) |stdout| {
+        while (total < html_buf.len) {
+            const n = @import("../core/io_global.zig").read(stdout, html_buf[total..]) catch {
+                read_failed = true;
+                process.requestStop();
+                break;
+            };
+            if (n == 0) break;
+            total += n;
+            if (!process.noteOutput(n)) break;
+        }
+        if (!read_failed and total == html_buf.len) {
+            var extra: [1]u8 = undefined;
+            const n = @import("../core/io_global.zig").read(stdout, &extra) catch 0;
+            if (n > 0) _ = process.noteOutput(n);
+        }
+    }
+    const outcome = process.finish();
+    if (outcome.cancelled or request.generation != detail_resolve_generation.load(.acquire) or
+        @import("../core/workers.zig").isQuitting()) return;
+    // A page larger than the cap is deliberately terminated, but its bounded
+    // prefix is still useful when it already contains the magnet link.
+    if ((read_failed or (!outcome.ok() and !outcome.output_limited)) or total < 50) {
+        publishDetailResolve(request, .fetch_failed, "");
+        return;
+    }
+
+    const html = html_buf[0..total];
+    if (std.mem.indexOf(u8, html, "magnet:?")) |start| {
+        var end = start;
+        while (end < html.len and html[end] != '"' and html[end] != '\'' and html[end] != ' ' and html[end] != '<') : (end += 1) {}
+        if (end - start > 20) {
+            publishDetailResolve(request, .success, html[start..end]);
+            return;
+        }
+    }
+    if (std.mem.indexOf(u8, html, "magnet%3A%3F")) |start| {
+        var end = start;
+        while (end < html.len and html[end] != '"' and html[end] != '\'' and html[end] != ' ' and html[end] != '<') : (end += 1) {}
+        var decoded: [4096]u8 = undefined;
+        var di: usize = 0;
+        var si = start;
+        while (si < end and di < decoded.len) {
+            if (html[si] == '%' and si + 2 < end) {
+                const hi = hexVal(html[si + 1]);
+                const lo = hexVal(html[si + 2]);
+                if (hi != null and lo != null) {
+                    decoded[di] = (@as(u8, hi.?) << 4) | @as(u8, lo.?);
+                    di += 1;
+                    si += 3;
+                    continue;
+                }
+            }
+            decoded[di] = html[si];
+            di += 1;
+            si += 1;
+        }
+        if (di > 20 and std.mem.startsWith(u8, decoded[0..di], "magnet:?")) {
+            publishDetailResolve(request, .success, decoded[0..di]);
+            return;
+        }
+    }
+    publishDetailResolve(request, .no_magnet, "");
+}
+
+/// Apply a detail-page result only to the exact player/load that requested it.
+/// Worker threads never dereference MediaPlayer or mutate navigation state.
+pub fn drainResolvedTorrentDetail() void {
+    if (!detail_resolve_ready.load(.acquire)) return;
+    detail_resolve_lock.lock();
+    if (!detail_resolve_ready.load(.acquire)) {
+        detail_resolve_lock.unlock();
+        return;
+    }
+    const publication = detail_resolve_publication;
+    detail_resolve_ready.store(false, .release);
+    detail_resolve_lock.unlock();
+    if (publication.generation != detail_resolve_generation.load(.acquire)) return;
+    if (state.app.active_player_idx >= state.app.players.items.len) return;
+    const current = state.app.players.items[state.app.active_player_idx];
+    if (@intFromPtr(current) != publication.player_address or current.load_serial != publication.load_serial) return;
+    if (publication.status == .success) {
+        addMagnetToEngine(publication.magnet[0..publication.magnet_len]);
+        return;
+    }
+    current.is_loading = false;
+    const message = if (publication.status == .no_magnet)
+        "No magnet found on detail page"
+    else
+        "Failed to fetch torrent detail page";
+    @import("../core/logs.zig").pushLog("error", "search", message, true);
+    state.showToast(message);
+}
+
 fn deferTorrentOpen(kind: torrent_open_queue.Kind, source: []const u8) bool {
     pending_torrent_lock.lock();
     const accepted = pending_torrents.push(kind, source);
@@ -2239,6 +2399,9 @@ pub fn loadTorrentToPlayer(magnet_link: []const u8) void {
         logs.pushLog("error", "search", "Empty magnet link", true);
         return;
     }
+    // Every newer torrent intent supersedes a still-resolving detail page,
+    // including an immediate magnet that needs no resolver worker.
+    const action_generation = detail_resolve_generation.fetchAdd(1, .acq_rel) +% 1;
 
     // The cold-start torrent FIFO can retain a direct magnet before a player
     // exists. Initializing libmpv first only delayed acknowledgement.
@@ -2271,13 +2434,8 @@ pub fn loadTorrentToPlayer(magnet_link: []const u8) void {
     if (std.mem.startsWith(u8, magnet_link, "http://") or std.mem.startsWith(u8, magnet_link, "https://")) {
         logs.pushLog("info", "search", "Resolving detail page to magnet...", false);
 
-        // Show loading state on the current active player. We do NOT capture the
-        // *MediaPlayer pointer into the detached worker: the frame-top single-player
-        // collapse / teardown can destroy() that player during the up-to-10s resolve,
-        // which would make any later write a use-after-free. Instead the worker
-        // re-looks-up the current active player under the bounds guard whenever it
-        // needs to clear the loading flag (same semantics as addMagnetToEngine, which
-        // already operates on the current active player).
+        // Show loading state, but pass only its process-unique identity to the
+        // worker. The UI-thread drain revalidates pointer address + load serial.
         if (state.app.active_player_idx < state.app.players.items.len) {
             const p = state.app.players.items[state.app.active_player_idx];
             p.is_loading = true;
@@ -2286,124 +2444,22 @@ pub fn loadTorrentToPlayer(magnet_link: []const u8) void {
             p.loading_label_len = lbl.len;
         }
 
-        // Copy URL for thread
-        var url_copy: [4096]u8 = undefined;
-        const ulen = @min(magnet_link.len, 4095);
-        @memcpy(url_copy[0..ulen], magnet_link[0..ulen]);
-
-        const ThreadContext = struct {
-            url: [4096]u8,
-            url_len: usize,
+        const current = state.app.players.items[state.app.active_player_idx];
+        detail_resolve_lock.lock();
+        detail_resolve_ready.store(false, .release);
+        detail_resolve_lock.unlock();
+        var request: DetailResolveRequest = .{
+            .generation = action_generation,
+            .player_address = @intFromPtr(current),
+            .load_serial = current.load_serial,
         };
-        const ctx_store = ThreadContext{ .url = url_copy, .url_len = ulen };
-
-        if (@import("../core/workers.zig").spawnLegacy(struct {
-            // Clear the loading flag on the CURRENT active player via a bounds-guarded
-            // re-lookup. Never deref a captured *MediaPlayer — it may have been
-            // destroy()'d by teardown / single-player collapse during the resolve.
-            fn clearLoading() void {
-                if (state.app.active_player_idx < state.app.players.items.len) {
-                    state.app.players.items[state.app.active_player_idx].is_loading = false;
-                }
-            }
-            fn worker(ctx: ThreadContext) void {
-                const alloc = @import("../core/alloc.zig").allocator;
-                const u = ctx.url[0..ctx.url_len];
-
-                // Fetch detail page with curl
-                const argv = [_][]const u8{
-                    "curl",       "-sL",
-                    "-H",         "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
-                    "--max-time", "10",
-                    u,
-                };
-                var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
-                child.stdout_behavior = .Pipe;
-                child.stderr_behavior = .Ignore;
-                _ = child.spawn() catch return;
-
-                // Heap-allocate the 256KB fetch buffer: a buffer this large on a
-                // spawned thread's stack would overflow the 512KB macOS thread stack.
-                const html_buf = alloc.alloc(u8, 256 * 1024) catch {
-                    _ = child.wait() catch {};
-                    @import("../core/logs.zig").pushLog("error", "search", "Out of memory resolving magnet", true);
-                    @This().clearLoading();
-                    return;
-                };
-                defer alloc.free(html_buf);
-                var total: usize = 0;
-                if (child.stdout) |*so| {
-                    while (total < html_buf.len) {
-                        const n = @import("../core/io_global.zig").read(so, html_buf[total..]) catch break;
-                        if (n == 0) break;
-                        total += n;
-                    }
-                }
-                _ = child.wait() catch {};
-
-                if (total < 50) {
-                    const logs2 = @import("../core/logs.zig");
-                    logs2.pushLog("error", "search", "Failed to fetch detail page", true);
-                    @This().clearLoading();
-                    return;
-                }
-
-                const html = html_buf[0..total];
-
-                // Find magnet link in HTML — try raw first, then URL-encoded
-                const magnet_needle = "magnet:?";
-                const encoded_needle = "magnet%3A%3F";
-
-                if (std.mem.indexOf(u8, html, magnet_needle)) |mag_start| {
-                    // Raw magnet link
-                    var mag_end = mag_start;
-                    while (mag_end < html.len and html[mag_end] != '"' and html[mag_end] != '\'' and html[mag_end] != ' ' and html[mag_end] != '<') {
-                        mag_end += 1;
-                    }
-                    const resolved_magnet = html[mag_start..mag_end];
-                    if (resolved_magnet.len > 20) {
-                        addMagnetToEngine(resolved_magnet);
-                        return;
-                    }
-                } else if (std.mem.indexOf(u8, html, encoded_needle)) |enc_start| {
-                    // URL-encoded magnet (mylink.cloud/?url=magnet%3A%3F...)
-                    var enc_end = enc_start;
-                    while (enc_end < html.len and html[enc_end] != '"' and html[enc_end] != '\'' and html[enc_end] != ' ' and html[enc_end] != '<') {
-                        enc_end += 1;
-                    }
-                    const encoded = html[enc_start..enc_end];
-                    // URL-decode: replace %XX with byte
-                    var decoded_buf: [4096]u8 = undefined;
-                    var di: usize = 0;
-                    var si: usize = 0;
-                    while (si < encoded.len and di < decoded_buf.len) {
-                        if (encoded[si] == '%' and si + 2 < encoded.len) {
-                            const hi = hexVal(encoded[si + 1]);
-                            const lo = hexVal(encoded[si + 2]);
-                            if (hi != null and lo != null) {
-                                decoded_buf[di] = (@as(u8, hi.?) << 4) | @as(u8, lo.?);
-                                di += 1;
-                                si += 3;
-                                continue;
-                            }
-                        }
-                        decoded_buf[di] = encoded[si];
-                        di += 1;
-                        si += 1;
-                    }
-                    if (di > 20 and std.mem.startsWith(u8, decoded_buf[0..di], "magnet:?")) {
-                        addMagnetToEngine(decoded_buf[0..di]);
-                        return;
-                    }
-                }
-
-                const logs2 = @import("../core/logs.zig");
-                logs2.pushLog("error", "search", "No magnet found on detail page", true);
-                @This().clearLoading();
-            }
-        }.worker, .{ctx_store})) |t| @import("../core/workers.zig").release(t) else |_| {
+        const ulen = @min(magnet_link.len, 4095);
+        @memcpy(request.url[0..ulen], magnet_link[0..ulen]);
+        request.url_len = ulen;
+        @import("../core/workers.zig").spawn(resolveDetailWorker, .{request}) catch {
+            current.is_loading = false;
             logs.pushLog("error", "search", "Failed to spawn resolver thread", true);
-        }
+        };
         return;
     }
 
@@ -2555,6 +2611,7 @@ pub fn addTorrentFileToEngine(path: []const u8) void {
         logs.pushLog("error", "search", "Empty torrent file path", true);
         return;
     }
+    _ = detail_resolve_generation.fetchAdd(1, .acq_rel);
 
     // A cold-start `.torrent` path can live in the pending FIFO without a
     // player; initialize libmpv only once the engine can consume it.
