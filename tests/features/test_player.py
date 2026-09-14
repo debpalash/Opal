@@ -304,7 +304,9 @@ def test_typed_playback_origin():
             and ".origin = .playlist" in playlist,
         "queue identity is stable": ".origin = .queue" in queue
             and ".queue_item_id = item.id" in queue
-            and "playback.relativeIndex(" in queue,
+            and "playback.relativeIndex(" in queue
+            and "playRoutedQueueItem(item)" in queue
+            and '@import("browser.zig").playDirect' in queue,
         "torrent internal loads preserve owner": ".origin = .torrent" in ply
             and ".loopback_stream = true" in ply,
         "manual retry preserves owner and request identity": (

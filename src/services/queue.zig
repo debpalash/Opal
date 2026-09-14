@@ -829,12 +829,35 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
 }
 
 fn playQueueItem(item: *QueueItem) void {
-    if (state.app.active_player_idx >= state.app.players.items.len) return;
+    if (playRoutedQueueItem(item)) {
+        markPlayed(item.id);
+        state.showToast("Playing from queue");
+        return;
+    }
+    // Queue is also reachable before the first player exists. Use the shared
+    // direct-play seam in that case so it can acquire/prewarm libmpv without
+    // making the first Queue click a silent no-op.
+    if (state.app.active_player_idx >= state.app.players.items.len) {
+        @import("browser.zig").playDirect(.{
+            .url = item.url[0..item.url_len],
+            .title = item.title[0..item.title_len],
+            .origin = .queue,
+            .queue_item_id = item.id,
+        });
+        markPlayed(item.id);
+        state.showToast("Playing from queue");
+        return;
+    }
     const ap = state.app.players.items[state.app.active_player_idx];
     playQueueItemOn(ap, item);
 }
 
 fn playQueueItemOn(ap: anytype, item: *QueueItem) void {
+    if (playRoutedQueueItem(item)) {
+        markPlayed(item.id);
+        state.showToast("Playing from queue");
+        return;
+    }
     const extractors = @import("extractors.zig");
 
     const raw_url = item.url[0..item.url_len];
@@ -844,6 +867,29 @@ fn playQueueItemOn(ap: anytype, item: *QueueItem) void {
     ap.load(.{ .url = norm_url, .origin = .queue, .queue_item_id = item.id });
     markPlayed(item.id);
     state.showToast("Playing from queue");
+}
+
+/// Identities that need provider reconstruction cannot be handed to mpv as a
+/// raw URL. Route them through the same typed entry points as Recents/Resume.
+fn playRoutedQueueItem(item: *const QueueItem) bool {
+    const url = item.url[0..item.url_len];
+    const source = item.source[0..item.source_len];
+    if (std.mem.eql(u8, source, "torrent") or std.mem.startsWith(u8, url, "magnet:")) {
+        if (std.mem.endsWith(u8, url, ".torrent") and
+            !std.mem.startsWith(u8, url, "http://") and
+            !std.mem.startsWith(u8, url, "https://"))
+        {
+            @import("search.zig").addTorrentFileToEngine(url);
+        } else {
+            @import("search.zig").loadTorrentToPlayer(url);
+        }
+        return true;
+    }
+    if (std.mem.startsWith(u8, url, "opal://")) {
+        @import("browser.zig").resumePlayback(url);
+        return true;
+    }
+    return false;
 }
 
 /// Non-UI adapters use indices from a freshly-read queue snapshot. Keep the

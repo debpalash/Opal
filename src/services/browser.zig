@@ -2385,6 +2385,8 @@ pub const PlaybackRequest = struct {
     url: []const u8,
     fallback_url: []const u8 = "",
     mode: player.LoadMode = .replace,
+    origin: player.PlaybackOrigin = .direct,
+    queue_item_id: i64 = -1,
     history_identity: []const u8 = "",
     restore_target: []const u8 = "",
     resume_position_secs: ?f64 = null,
@@ -2434,6 +2436,8 @@ const DeferredPlayback = struct {
     header_fields: FixedPlaybackField(2048) = .{},
     health_kind: FixedPlaybackField(64) = .{},
     mode: player.LoadMode = .replace,
+    origin: player.PlaybackOrigin = .direct,
+    queue_item_id: i64 = -1,
     resume_position_secs: ?f64 = null,
 
     fn init(request: PlaybackRequest) ?DeferredPlayback {
@@ -2455,6 +2459,8 @@ const DeferredPlayback = struct {
             @import("../player/http_headers_pure.zig").buildHeaderFields(request.headers, &fields_buf);
         if (!out.header_fields.set(fields)) return null;
         out.mode = request.mode;
+        out.origin = request.origin;
+        out.queue_item_id = request.queue_item_id;
         out.resume_position_secs = request.resume_position_secs;
         return out;
     }
@@ -2464,6 +2470,8 @@ const DeferredPlayback = struct {
             .url = self.url.slice(),
             .fallback_url = self.fallback_url.slice(),
             .mode = self.mode,
+            .origin = self.origin,
+            .queue_item_id = self.queue_item_id,
             .history_identity = self.history_identity.slice(),
             .restore_target = self.restore_target.slice(),
             .resume_position_secs = self.resume_position_secs,
@@ -2550,6 +2558,8 @@ pub fn playDirect(request: PlaybackRequest) void {
         .url = request.url,
         .fallback_url = request.fallback_url,
         .mode = request.mode,
+        .origin = request.origin,
+        .queue_item_id = request.queue_item_id,
         .history_identity = request.history_identity,
         .restore_target = request.restore_target,
         .resume_position_secs = request.resume_position_secs,
