@@ -525,12 +525,16 @@ fn createTables() void {
         \\  duration_secs REAL DEFAULT 0,
         \\  percent REAL DEFAULT 0,
         \\  is_favorite INTEGER DEFAULT 0,
+        \\  user_rating REAL DEFAULT -1,
         \\  next_label TEXT DEFAULT '',
         \\  deep_link TEXT DEFAULT '',
         \\  updated_at INTEGER DEFAULT (strftime('%s','now')),
         \\  PRIMARY KEY (kind, item_id)
         \\)
     );
+    // Forward-compatible with databases created before personal ratings joined
+    // the unified library model. Duplicate-column errors are benign.
+    exec("ALTER TABLE library_items ADD COLUMN user_rating REAL DEFAULT -1");
     exec("CREATE INDEX IF NOT EXISTS idx_library_updated ON library_items(updated_at DESC)");
 
     // Live TV stream-health cache (probe results). Keyed by url_hash; `status` is

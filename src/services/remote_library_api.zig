@@ -33,6 +33,14 @@ pub fn handle(stream: std.Io.net.Stream, method: []const u8, path: []const u8, q
         if (wire.requireMethod(stream, method, "POST")) libraryAction(stream, query);
         return true;
     }
+    if (std.mem.eql(u8, path, "/library/item")) {
+        if (wire.requireMethod(stream, method, "GET")) libraryItem(stream, query);
+        return true;
+    }
+    if (std.mem.eql(u8, path, "/library/item/action")) {
+        if (wire.requireMethod(stream, method, "POST")) libraryItemAction(stream, query);
+        return true;
+    }
     if (std.mem.eql(u8, path, "/jellyfin/action")) {
         if (wire.requireMethod(stream, method, "POST")) jellyfinAction(stream, query);
         return true;
@@ -42,6 +50,65 @@ pub fn handle(stream: std.Io.net.Stream, method: []const u8, path: []const u8, q
         return true;
     }
     return false;
+}
+
+fn libraryIdentity(stream: std.Io.net.Stream, query: []const u8, kind_buf: []u8, id_buf: []u8) ?struct { kind: []const u8, id: []const u8 } {
+    const kind = if (wire.queryParam(query, "kind")) |raw| (wire.urlDecode(raw, kind_buf) orelse "") else "";
+    const id = if (wire.queryParam(query, "id")) |raw| (wire.urlDecode(raw, id_buf) orelse "") else "";
+    if (kind.len == 0 or kind.len > 16 or id.len == 0 or id.len > 128) {
+        wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"invalid library identity\"}");
+        return null;
+    }
+    return .{ .kind = kind, .id = id };
+}
+
+fn libraryItem(stream: std.Io.net.Stream, query: []const u8) void {
+    var kind_buf: [32]u8 = undefined;
+    var id_buf: [256]u8 = undefined;
+    const identity = libraryIdentity(stream, query, &kind_buf, &id_buf) orelse return;
+    const item = @import("library_store.zig").getState(identity.kind, identity.id);
+    var json: [192]u8 = undefined;
+    const body = std.fmt.bufPrint(&json, "{{\"favorite\":{s},\"rating\":{d:.1},\"resume_secs\":{d:.3},\"duration_secs\":{d:.3}}}", .{
+        if (item.favorite) "true" else "false", item.user_rating, item.resume_secs, item.duration_secs,
+    }) catch return;
+    wire.sendJson(stream, body);
+}
+
+fn libraryItemAction(stream: std.Io.net.Stream, query: []const u8) void {
+    var kind_buf: [32]u8 = undefined;
+    var id_buf: [256]u8 = undefined;
+    const identity = libraryIdentity(stream, query, &kind_buf, &id_buf) orelse return;
+    var title_buf: [512]u8 = undefined;
+    var poster_buf: [1024]u8 = undefined;
+    const title = if (wire.queryParam(query, "title")) |raw| (wire.urlDecode(raw, &title_buf) orelse "") else "";
+    const poster = if (wire.queryParam(query, "poster")) |raw| (wire.urlDecode(raw, &poster_buf) orelse "") else "";
+    const action = wire.queryParam(query, "action") orelse "";
+    const store = @import("library_store.zig");
+    if (std.mem.eql(u8, action, "favorite")) {
+        const enabled = wire.queryParam(query, "enabled") orelse "";
+        if (!std.mem.eql(u8, enabled, "true") and !std.mem.eql(u8, enabled, "false")) {
+            wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"invalid favorite value\"}");
+            return;
+        }
+        var link_buf: [544]u8 = undefined;
+        const deep_link = std.fmt.bufPrint(&link_buf, "opal://search/{s}", .{title}) catch "";
+        store.setFavorite(identity.kind, identity.id, std.mem.eql(u8, enabled, "true"), title, poster, deep_link);
+    } else if (std.mem.eql(u8, action, "rating")) {
+        const raw = wire.queryParam(query, "value") orelse "";
+        const rating: ?f64 = if (std.mem.eql(u8, raw, "clear")) null else std.fmt.parseFloat(f64, raw) catch {
+            wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"invalid rating\"}");
+            return;
+        };
+        if (rating) |value| if (!std.math.isFinite(value) or value < 0 or value > 10 or @mod(value * 2, 1) != 0) {
+            wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"rating must be a half-step from 0 to 10\"}");
+            return;
+        };
+        store.setRating(identity.kind, identity.id, rating, title, poster);
+    } else {
+        wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"unknown library item action\"}");
+        return;
+    }
+    wire.sendJson(stream, "{\"ok\":true}");
 }
 
 fn jellyfinAction(stream: std.Io.net.Stream, query: []const u8) void {

@@ -574,8 +574,54 @@ function openDetails(kind, id, title, imdb){
   return openShow(id, title, imdb || '');
 }
 
+function personalRatingOptions(value){
+  const current = Number(value);
+  return ['<option value="clear">Rate</option>'].concat(Array.from({length:21}, (_, i) => {
+    const rating = i / 2;
+    return `<option value="${rating}"${current === rating ? ' selected' : ''}>${rating.toFixed(1)} / 10</option>`;
+  })).join('');
+}
+
+async function renderMovieLibraryActions(id, title, poster, generation){
+  const actions = $('show-actions');
+  const state = await api('/library/item?kind=movie&id=' + encodeURIComponent(id));
+  if (!detailsCurrent(generation) || +id !== showId) return;
+  const favorite = document.createElement('button');
+  favorite.type = 'button';
+  favorite.textContent = state.favorite ? '★ Favorited' : '☆ Favorite';
+  favorite.setAttribute('aria-pressed', state.favorite ? 'true' : 'false');
+  favorite.onclick = async () => {
+    const enabled = favorite.getAttribute('aria-pressed') !== 'true';
+    favorite.disabled = true;
+    try {
+      await apiMutation('/library/item/action?kind=movie&id=' + encodeURIComponent(id) +
+        '&action=favorite&enabled=' + enabled + '&title=' + encodeURIComponent(title) +
+        '&poster=' + encodeURIComponent(poster || ''));
+      favorite.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+      favorite.textContent = enabled ? '★ Favorited' : '☆ Favorite';
+    } catch (error) { toast(error.message || 'Could not update favorite.'); }
+    finally { favorite.disabled = false; }
+  };
+  const rating = document.createElement('select');
+  rating.className = 'personal-rating';
+  rating.setAttribute('aria-label', `Rate ${title}`);
+  rating.innerHTML = personalRatingOptions(state.rating);
+  rating.onchange = async () => {
+    rating.disabled = true;
+    try {
+      await apiMutation('/library/item/action?kind=movie&id=' + encodeURIComponent(id) +
+        '&action=rating&value=' + encodeURIComponent(rating.value) + '&title=' + encodeURIComponent(title) +
+        '&poster=' + encodeURIComponent(poster || ''));
+      toast(rating.value === 'clear' ? 'Rating cleared' : `Rated ${rating.value} / 10`);
+    } catch (error) { toast(error.message || 'Could not update rating.'); }
+    finally { rating.disabled = false; }
+  };
+  actions.append(favorite, rating);
+}
+
 async function openMovie(id, title, imdb = ''){
   const generation = resetDetailsPanel(title);
+  showId = id;
   // The stream hunt works even when TMDB metadata does not, so the action row
   // renders before the fetch instead of behind it.
   $('show-actions').innerHTML = '<button type="button" id="show-find">▶ Find streams</button>';
@@ -593,6 +639,10 @@ async function openMovie(id, title, imdb = ''){
       (meta.genres || meta.genre || []).slice(0, 3).map(g => g.name || g).join(', '),
     ]) || 'Movie';
     renderOverview(meta.overview || meta.description);
+    const resolvedTitle = meta.title || meta.name || title;
+    const poster = meta.poster_path ? 'https://image.tmdb.org/t/p/w500' + meta.poster_path : (meta.poster || meta.background || '');
+    renderMovieLibraryActions(id, resolvedTitle, poster, generation)
+      .catch(() => { if (detailsCurrent(generation)) toast('Personal library state is unavailable.'); });
   } catch {
     if (detailsCurrent(generation)) $('show-meta').textContent = 'Details unavailable — you can still find streams.';
   }

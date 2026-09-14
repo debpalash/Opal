@@ -218,6 +218,32 @@ def movie_history_removal_sync():
     return "pass", "verified movie identity survives history persistence and drives exact provider removal"
 
 
+@test("Movie favorites and personal ratings persist in the unified library", "Library")
+def movie_preferences_persist():
+    db = _src("src/core/db.zig")
+    store = _src("src/services/library_store.zig")
+    remote = _src("src/services/remote_library_api.zig")
+    browser = _src("src/services/browser.zig")
+    web = _src("web/js/catalog.js")
+    checks = {
+        "rating schema": "user_rating REAL DEFAULT -1" in db,
+        "state preserves other fields": "pub fn getState" in store and "pub fn setRating" in store
+            and "ON CONFLICT(kind,item_id) DO UPDATE SET user_rating" in store,
+        "typed read and mutation routes": '"/library/item"' in remote
+            and '"/library/item/action"' in remote and "requireMethod(stream, method, \"POST\")" in remote,
+        "bounded half-step validation": "rating must be a half-step from 0 to 10" in remote,
+        "movie detail favorite": "renderMovieLibraryActions" in web and "☆ Favorite" in web,
+        "movie detail rating": "personalRatingOptions" in web and "Rated ${rating.value} / 10" in web,
+        "mutations use POST helper": "apiMutation('/library/item/action?kind=movie" in web,
+        "favorite can reopen": "opal://search/{s}" in remote and '"opal://search/"' in browser
+            and "triggerSearch(query)" in browser,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "movie preference persistence incomplete: " + ", ".join(missing)
+    return "pass", "movie favorites and half-step ratings survive restart under stable TMDB identity"
+
+
 @test("Card action row is never clipped out of its own card", "Library")
 def card_action_row_fits():
     """The Watching page's Play and Remove controls were squeezed to zero height.

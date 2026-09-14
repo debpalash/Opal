@@ -43,6 +43,8 @@ pub const LibraryItem = struct {
     duration_secs: f64 = 0,
     percent: f64 = 0,
     is_favorite: bool = false,
+    /// Personal 0..10 rating; -1 means unrated.
+    user_rating: f64 = -1,
     next_label: [48]u8 = std.mem.zeroes([48]u8),
     next_label_len: usize = 0,
     deep_link: [512]u8 = std.mem.zeroes([512]u8),

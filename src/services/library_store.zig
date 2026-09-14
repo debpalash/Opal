@@ -78,6 +78,51 @@ pub fn isFavorite(kind: []const u8, item_id: []const u8) bool {
     return db.step(stmt) == db.c.SQLITE_ROW and db.columnInt64(stmt, 0) != 0;
 }
 
+pub const ItemState = struct {
+    favorite: bool = false,
+    user_rating: f64 = -1,
+    resume_secs: f64 = 0,
+    duration_secs: f64 = 0,
+};
+
+/// Read the durable user-owned state for one stable, source-namespaced item.
+pub fn getState(kind: []const u8, item_id: []const u8) ItemState {
+    if (kind.len == 0 or item_id.len == 0) return .{};
+    const stmt = db.prepare("SELECT is_favorite,user_rating,resume_secs,duration_secs FROM library_items WHERE kind=?1 AND item_id=?2 LIMIT 1") orelse return .{};
+    defer db.finalize(stmt);
+    db.bindText(stmt, 1, kind);
+    db.bindText(stmt, 2, item_id);
+    if (db.step(stmt) != db.c.SQLITE_ROW) return .{};
+    return .{
+        .favorite = db.columnInt64(stmt, 0) != 0,
+        .user_rating = db.columnDouble(stmt, 1),
+        .resume_secs = db.columnDouble(stmt, 2),
+        .duration_secs = db.columnDouble(stmt, 3),
+    };
+}
+
+/// Persist a personal half-step rating. `null` clears it without removing any
+/// progress or favorite state carried by the same unified row.
+pub fn setRating(kind: []const u8, item_id: []const u8, rating: ?f64, title: []const u8, poster: []const u8) void {
+    if (kind.len == 0 or item_id.len == 0) return;
+    const value = if (rating) |r| std.math.clamp(r, 0, 10) else -1;
+    const stmt = db.prepare(
+        "INSERT INTO library_items(kind,item_id,title,poster,user_rating,updated_at) " ++
+            "VALUES(?1,?2,?3,?4,?5,strftime('%s','now')) " ++
+            "ON CONFLICT(kind,item_id) DO UPDATE SET user_rating=excluded.user_rating, " ++
+            "title=CASE WHEN excluded.title!='' THEN excluded.title ELSE title END, " ++
+            "poster=CASE WHEN excluded.poster!='' THEN excluded.poster ELSE poster END, " ++
+            "updated_at=excluded.updated_at",
+    ) orelse return;
+    defer db.finalize(stmt);
+    db.bindText(stmt, 1, kind);
+    db.bindText(stmt, 2, item_id);
+    db.bindText(stmt, 3, title);
+    db.bindText(stmt, 4, poster);
+    db.bindDouble(stmt, 5, value);
+    _ = db.step(stmt);
+}
+
 fn readRow(stmt: ?*db.Stmt, out: *pure.LibraryItem) void {
     out.* = .{};
     db.copyColumn(stmt, 0, out.kind[0..], &out.kind_len);
@@ -88,11 +133,12 @@ fn readRow(stmt: ?*db.Stmt, out: *pure.LibraryItem) void {
     out.duration_secs = db.columnDouble(stmt, 5);
     out.percent = db.columnDouble(stmt, 6);
     out.is_favorite = db.columnInt64(stmt, 7) != 0;
-    db.copyColumn(stmt, 8, out.next_label[0..], &out.next_label_len);
-    db.copyColumn(stmt, 9, out.deep_link[0..], &out.deep_link_len);
+    out.user_rating = db.columnDouble(stmt, 8);
+    db.copyColumn(stmt, 9, out.next_label[0..], &out.next_label_len);
+    db.copyColumn(stmt, 10, out.deep_link[0..], &out.deep_link_len);
 }
 
-const COLS = "kind,item_id,title,poster,resume_secs,duration_secs,percent,is_favorite,next_label,deep_link";
+const COLS = "kind,item_id,title,poster,resume_secs,duration_secs,percent,is_favorite,user_rating,next_label,deep_link";
 
 /// Continue-watching rows (in-progress, newest first) into `out`; count filled.
 pub fn loadContinue(out: []pure.LibraryItem) usize {
