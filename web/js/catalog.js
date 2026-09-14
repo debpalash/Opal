@@ -269,6 +269,7 @@ function wireTorrentFiles(){
 }
 
 async function loadQueue(){
+  loadCollections();
   try {
     const q = await api('/queue');
     const items = q.items || [];
@@ -402,6 +403,52 @@ async function loadActivity(){
     $('history').querySelectorAll('.file').forEach(el => el.onclick = () => prefillSearch(el.dataset.q));
   } catch { $('history').innerHTML = '<div class="empty">—</div>'; }
 }
+
+async function loadCollections(){
+  const box = $('collections');
+  try {
+    const data = await api('/collections');
+    const items = data.items || [];
+    box.innerHTML = items.map(item => `<div class="file collection-item">
+      <div class="n"><div>${esc(item.name)}</div><div class="file-meta"><span>${item.count} item${item.count === 1 ? '' : 's'}</span></div></div>
+      <div class="queue-actions">
+        <button type="button" data-collection="append" data-id="${item.id}">Append</button>
+        <button type="button" data-collection="replace" data-id="${item.id}">Replace queue</button>
+        <button type="button" class="danger" data-collection="remove" data-id="${item.id}">Delete</button>
+      </div></div>`).join('') || '<div class="hint">Save the current queue as a reusable collection.</div>';
+  } catch { box.innerHTML = '<div class="hint">Collections unavailable.</div>'; }
+}
+
+async function collectionAction(action, id){
+  if (action === 'remove' && !confirm('Delete this collection? The current queue is unchanged.')) return;
+  const params = new URLSearchParams({action});
+  if (id) params.set('id', id);
+  if (action === 'remove') params.set('confirm', '1');
+  try {
+    await apiMutation('/collections/action?' + params);
+    toast(action === 'append' ? 'Collection appended' : action === 'replace' ? 'Queue replaced' : 'Collection deleted');
+    await loadCollections();
+    if (action === 'append' || action === 'replace') setTimeout(loadQueue, 40);
+  } catch (error) { toast(error.message || 'Could not update collection'); }
+}
+$('collections').addEventListener('click', event => {
+  const button = event.target.closest('button[data-collection]');
+  if (button) collectionAction(button.dataset.collection, button.dataset.id);
+});
+$('collection-save').onclick = async () => {
+  const input = $('collection-name');
+  const name = input.value.trim();
+  if (!name) { input.focus(); return; }
+  const button = $('collection-save');
+  button.disabled = true;
+  try {
+    await apiMutation('/collections/action?action=save&name=' + encodeURIComponent(name));
+    input.value = '';
+    toast('Collection saved');
+    await loadCollections();
+  } catch (error) { toast(error.message || 'Could not save collection'); }
+  finally { button.disabled = false; }
+};
 
 async function loadDownloadHistory(){
   try {

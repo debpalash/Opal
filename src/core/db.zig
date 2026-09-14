@@ -537,6 +537,30 @@ fn createTables() void {
     exec("ALTER TABLE library_items ADD COLUMN user_rating REAL DEFAULT -1");
     exec("CREATE INDEX IF NOT EXISTS idx_library_updated ON library_items(updated_at DESC)");
 
+    // Named, reusable queue snapshots. Queue playback remains authoritative in
+    // queue.db; these tables are the user's durable playlist/collection layer.
+    exec(
+        \\CREATE TABLE IF NOT EXISTS media_collections (
+        \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
+        \\  name TEXT NOT NULL UNIQUE,
+        \\  created_at INTEGER DEFAULT (strftime('%s','now')),
+        \\  updated_at INTEGER DEFAULT (strftime('%s','now'))
+        \\)
+    );
+    exec(
+        \\CREATE TABLE IF NOT EXISTS media_collection_items (
+        \\  collection_id INTEGER NOT NULL,
+        \\  position INTEGER NOT NULL,
+        \\  url TEXT NOT NULL,
+        \\  title TEXT DEFAULT '',
+        \\  source TEXT DEFAULT 'direct',
+        \\  thumb_url TEXT DEFAULT '',
+        \\  PRIMARY KEY(collection_id, position),
+        \\  FOREIGN KEY(collection_id) REFERENCES media_collections(id) ON DELETE CASCADE
+        \\)
+    );
+    exec("CREATE INDEX IF NOT EXISTS idx_collection_items_parent ON media_collection_items(collection_id, position)");
+
     // Live TV stream-health cache (probe results). Keyed by url_hash; `status` is
     // the pure Health enum int (0 unknown/1 live/2 slow/3 dead), `checked_at`
     // drives the TTL so a "Working only" filter is instant on revisit. See

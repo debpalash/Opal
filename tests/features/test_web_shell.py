@@ -22,6 +22,7 @@ def test_web_remote_module_boundaries():
         "remote_http.zig", "remote_static.zig", "remote_status.zig",
         "remote_library_api.zig", "remote_transfer_api.zig", "remote_catalog_api.zig",
         "remote_plex_api.zig",
+        "remote_collections_api.zig",
     )
     checks = {
         "top router stays below 5k lines": len(remote.splitlines()) < 5000,
@@ -38,6 +39,7 @@ def test_web_remote_module_boundaries():
         "router delegates": all(name in remote for name in (
             "remote_static.zig", "remote_status.zig", "remote_library_api.zig", "remote_transfer_api.zig",
             "remote_catalog_api.zig", "remote_plex_api.zig",
+            "remote_collections_api.zig",
         )),
     }
     missing = [name for name, ok in checks.items() if not ok]
@@ -350,6 +352,33 @@ def test_queue_persistence_contract():
     if missing:
         return "fail", "queue persistence contract incomplete: " + ", ".join(missing)
     return "pass", "cold additions survive; append/advance/reorder retain deterministic order and identity"
+
+
+@test("Named collections snapshot and restore the durable queue", "Web UI")
+def test_named_queue_collections():
+    db = _src("src/core/db.zig")
+    service = _src("src/services/collections.zig")
+    remote = _src("src/services/remote_collections_api.zig")
+    page = _src("web/index.html")
+    ui = _src("web/js/catalog.js")
+    checks = {
+        "normalized schema": "media_collections" in db and "media_collection_items" in db,
+        "coherent queue snapshot": "queue.snapshotItems" in service and "BEGIN IMMEDIATE" in service,
+        "ordered restore": "ORDER BY position" in service and "addToQueueWithThumb" in service,
+        "replace waits for UI owner": "queue.requestAction(.clear" in service and "queue.waitAction" in service,
+        "typed POST routes": '"/collections"' in remote and '"/collections/action"' in remote
+            and "unknown collection action" in remote,
+        "destructive confirmation": "remove requires confirm=1" in remote
+            and "Delete this collection?" in ui,
+        "complete web workflow": all(marker in page + ui for marker in (
+            'id="collection-name"', 'id="collection-save"', 'id="collections"',
+            "Save current queue", "data-collection=\"append\"", "data-collection=\"replace\"",
+        )),
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "named collections incomplete: " + ", ".join(missing)
+    return "pass", "named collections atomically snapshot and append/replace through the durable queue"
 
 
 @test("Web can operate direct downloads and torrents", "Web UI")
