@@ -452,6 +452,17 @@
     </div>
 
     <div class="acc-group">
+      <div class="acc-title">AniList</div>
+      <div class="hint" id="anilist-hint">Loading…</div>
+      <div class="cfg-row"><span>Client ID</span><input id="anilist-id" inputmode="numeric" placeholder="unchanged"></div>
+      <div class="cfg-row"><span>Access token</span><input id="anilist-token" type="password" maxlength="2048" placeholder="unchanged" autocomplete="off"></div>
+      <button id="anilist-save" class="quick-btn">Save</button>
+      <a id="anilist-authorize" class="quick-btn" target="_blank" rel="noopener" hidden>Authorize with AniList</a>
+      <button id="anilist-disconnect" class="quick-btn">Disconnect</button>
+      <button id="anilist-retry" class="quick-btn" hidden>Retry queued sync</button>
+    </div>
+
+    <div class="acc-group">
       <div class="acc-title">Suwayomi</div>
       <div class="hint" id="suwa-hint">Loading…</div>
       <button id="suwa-start" class="quick-btn">Start server</button>

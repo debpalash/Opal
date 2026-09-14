@@ -262,6 +262,11 @@ pub fn urlDecode(src: []const u8, buf: []u8) ?[]const u8 {
     return buf[0..o];
 }
 
+pub fn formParam(body: []const u8, query: []const u8, key: []const u8, out: []u8) ?[]const u8 {
+    const raw = queryParam(body, key) orelse queryParam(query, key) orelse return null;
+    return urlDecode(raw, out) orelse raw;
+}
+
 /// Write the contents of one JSON string (without surrounding quotes).
 pub fn writeJsonString(w: *std.Io.Writer, value: []const u8) void {
     for (value) |ch| switch (ch) {
@@ -286,6 +291,8 @@ test "query and URL helpers stay bounded" {
     try std.testing.expectEqualStrings("two", queryParam("one=1&name=two", "name").?);
     var out: [16]u8 = undefined;
     try std.testing.expectEqualStrings("a b/c", urlDecode("a+b%2Fc", &out).?);
+    var form: [16]u8 = undefined;
+    try std.testing.expectEqualStrings("body value", formParam("key=body+value", "key=query", "key", &form).?);
 }
 
 test "JSON string writer escapes control characters" {

@@ -215,6 +215,48 @@ $('trakt-retry').onclick = async () => {
   loadTrakt();
 };
 
+// AniList uses its official desktop/PIN OAuth flow. Credential bytes are only
+// ever POSTed; GET returns booleans, queue state and the public authorize URL.
+async function syncAccountMutation(params) {
+  const response = await fetch(BASE + '/api/sync-accounts', {
+    method:'POST', credentials:'same-origin',
+    headers:{'Content-Type':'application/x-www-form-urlencoded'},
+    body:new URLSearchParams(params),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || 'Could not update sync account');
+}
+async function loadSyncAccounts() {
+  let data;
+  try { data = await api('/sync-accounts'); }
+  catch (_) { $('anilist-hint').textContent = 'Unavailable'; return; }
+  const account = data.anilist || {};
+  $('anilist-id').placeholder = account.has_client_id ? 'set — type to replace' : 'required';
+  $('anilist-token').placeholder = account.connected ? 'set — type to replace' : 'paste token after authorization';
+  $('anilist-hint').textContent = account.connected
+    ? `Connected${account.queued ? ` · ${account.queued} queued` : ' · synced'}`
+    : 'Not connected. Save your client ID, authorize, then paste the token.';
+  $('anilist-authorize').hidden = !account.authorize_url;
+  $('anilist-authorize').href = account.authorize_url || '#';
+  $('anilist-retry').hidden = !account.queued;
+}
+$('anilist-save').onclick = async () => {
+  try {
+    if ($('anilist-id').value) await syncAccountMutation({provider:'anilist',action:'set',key:'client_id',value:$('anilist-id').value.trim()});
+    if ($('anilist-token').value) await syncAccountMutation({provider:'anilist',action:'set',key:'access_token',value:$('anilist-token').value.trim()});
+    $('anilist-id').value = ''; $('anilist-token').value = '';
+    await loadSyncAccounts();
+  } catch (error) { $('anilist-hint').textContent = error.message; }
+};
+$('anilist-disconnect').onclick = async () => {
+  await syncAccountMutation({provider:'anilist',action:'disconnect'});
+  loadSyncAccounts();
+};
+$('anilist-retry').onclick = async () => {
+  await syncAccountMutation({provider:'anilist',action:'retry'});
+  loadSyncAccounts();
+};
+
 // ── Suwayomi (Setup › Plugins › Suwayomi) ──
 async function loadSuwayomi() {
   let d;

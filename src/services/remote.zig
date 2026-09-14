@@ -1301,6 +1301,10 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
         apiTrakt(stream, method, query, body);
         return;
     }
+    if (std.mem.eql(u8, api_path, "/sync-accounts")) {
+        @import("remote_sync_api.zig").handle(stream, method, query, body);
+        return;
+    }
     // Suwayomi: the manga extension server Opal can run for you. GET reports
     // status; POST takes ?action=start|stop.
     if (std.mem.eql(u8, api_path, "/suwayomi")) {

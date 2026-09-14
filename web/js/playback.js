@@ -36,6 +36,7 @@ async function loadSetup(){
   loadSettings();
   loadPlugins();
   loadTrakt();
+  loadSyncAccounts();
   loadSuwayomi();
   loadAbout();
   loadLiveTvSources();

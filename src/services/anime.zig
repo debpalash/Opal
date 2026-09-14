@@ -340,6 +340,7 @@ fn serializeAnime(w: *ccp.Writer, it: state.AnimeResult) void {
     w.blob(it.atype[0..@min(it.atype_len, it.atype.len)]);
     w.u16v(it.year);
     w.boolv(it.airing);
+    w.u32v(@intCast(@max(it.anilist_id, 0)));
 }
 
 fn animeCopyField(dst: []u8, len: *usize, src: []const u8) void {
@@ -363,6 +364,7 @@ fn deserializeAnime(r: *ccp.Reader) ?state.AnimeResult {
     animeCopyField(&it.atype, &it.atype_len, r.blob() orelse return null);
     it.year = r.u16v() orelse return null;
     it.airing = r.boolv() orelse return null;
+    it.anilist_id = r.u32v() orelse return null;
     return it;
 }
 
@@ -1323,6 +1325,7 @@ fn anilistEnrichThread(my_gen: u32) void {
             if (r.id_len == 0) continue;
             const rid = std.fmt.parseInt(i64, r.id[0..r.id_len], 10) catch continue;
             if (rid != m.id_mal) continue;
+            r.anilist_id = m.id;
             // Fill only where Jikan was empty — never clobber live data.
             if (r.score == 0.0 and m.score10 > 0.0) r.score = m.score10;
             if (r.overview_len == 0 and m.description.len > 0)
@@ -1741,6 +1744,7 @@ pub fn playEpisode(ep_no: []const u8) void {
             const db = @import("../core/db.zig");
             db.animeMarkWatched(mal_id, ep_num, true);
             db.animeUpsertContinue(mal_id, r.name[0..r.name_len], r.poster_url[0..r.poster_url_len], ep_num, r.episodes);
+            if (r.anilist_id > 0) anilist.updateProgress(r.anilist_id, ep_num);
             // Mirror into the unified read-model so the home Continue rail shows
             // anime alongside the other verticals. anime_continue (above) stays
             // authoritative; progress is measured in EPISODES, and the deep link

@@ -3,6 +3,9 @@ const state = @import("../core/state.zig");
 const logs = @import("../core/logs.zig");
 const io_global = @import("../core/io_global.zig");
 const anilist_pure = @import("anilist_pure.zig");
+const secret_store = @import("../core/secret_store.zig");
+const outbox = @import("sync_outbox.zig");
+const workers = @import("../core/workers.zig");
 
 // ══════════════════════════════════════════════════════════
 // AniList Sync — anime watch progress via GraphQL API
@@ -10,44 +13,153 @@ const anilist_pure = @import("anilist_pure.zig");
 
 const ANILIST_API = "https://graphql.anilist.co";
 
-pub var access_token: [256]u8 = std.mem.zeroes([256]u8);
+pub var access_token: [2048]u8 = std.mem.zeroes([2048]u8);
 pub var access_token_len: usize = 0;
+pub var client_id: [32]u8 = std.mem.zeroes([32]u8);
+pub var client_id_len: usize = 0;
 pub var enabled: bool = false;
+var outbox_busy: std.atomic.Value(bool) = .init(false);
+
+fn cfgPath(buf: []u8) []const u8 {
+    var config: [512]u8 = undefined;
+    return std.fmt.bufPrint(buf, "{s}/anilist.json", .{@import("../core/paths.zig").configDir(&config)}) catch "";
+}
+
+pub fn init() void {
+    const alloc = @import("../core/alloc.zig").allocator;
+    var path_buf: [600]u8 = undefined;
+    const path = cfgPath(&path_buf);
+    @import("../core/secret_file.zig").restrictExisting(path);
+    const body = io_global.cwdReadFileAlloc(path, alloc, 8192) catch return;
+    defer alloc.free(body);
+    var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch return;
+    defer parsed.deinit();
+    if (parsed.value != .object) return;
+    if (parsed.value.object.get("client_id")) |id| if (id == .string and validClientId(id.string)) {
+        @memcpy(client_id[0..id.string.len], id.string);
+        client_id_len = id.string.len;
+    };
+    const value = parsed.value.object.get("access_token") orelse return;
+    if (value != .string) return;
+    const plain = secret_store.reveal(value.string, &access_token) orelse return;
+    access_token_len = plain.len;
+    enabled = access_token_len > 0;
+    if (!secret_store.isSealed(value.string)) save();
+    if (enabled) kickOutbox();
+}
+
+fn save() void {
+    var protected: [4096]u8 = undefined;
+    defer @memset(&protected, 0);
+    const sealed = secret_store.seal(access_token[0..access_token_len], &protected) orelse return;
+    var body_buf: [4352]u8 = undefined;
+    const body = std.fmt.bufPrint(&body_buf, "{{\"client_id\":\"{s}\",\"access_token\":\"{s}\"}}", .{ client_id[0..client_id_len], sealed }) catch return;
+    var path_buf: [600]u8 = undefined;
+    @import("../core/secret_file.zig").write(cfgPath(&path_buf), body) catch {};
+}
+
+fn validClientId(id: []const u8) bool {
+    if (id.len == 0 or id.len > client_id.len) return false;
+    for (id) |ch| if (ch < '0' or ch > '9') return false;
+    return true;
+}
+
+pub fn setClientId(id: []const u8) bool {
+    if (!validClientId(id)) return false;
+    @memset(&client_id, 0);
+    @memcpy(client_id[0..id.len], id);
+    client_id_len = id.len;
+    save();
+    return true;
+}
+
+pub fn authorizationUrl(buf: []u8) []const u8 {
+    if (client_id_len == 0) return "";
+    return std.fmt.bufPrint(buf, "https://anilist.co/api/v2/oauth/authorize?client_id={s}&response_type=token", .{client_id[0..client_id_len]}) catch "";
+}
+
+pub fn setToken(token: []const u8) bool {
+    if (token.len == 0 or token.len > access_token.len) return false;
+    @memset(&access_token, 0);
+    @memcpy(access_token[0..token.len], token);
+    access_token_len = token.len;
+    enabled = true;
+    save();
+    kickOutbox();
+    return true;
+}
+
+pub fn disconnect() void {
+    @memset(&access_token, 0);
+    access_token_len = 0;
+    enabled = false;
+    save();
+}
 
 /// Update watch progress for an anime on AniList.
 /// `media_id` is the AniList media ID, `episode` is the episode number.
 pub fn updateProgress(media_id: i64, episode: i32) void {
     if (!enabled or access_token_len == 0 or media_id <= 0) return;
+    var gql_buf: [512]u8 = undefined;
+    const payload = std.fmt.bufPrint(&gql_buf,
+        \\{{"query":"mutation {{ SaveMediaListEntry(mediaId: {d}, progress: {d}, status: CURRENT) {{ id progress }} }}"}}
+    , .{ media_id, episode }) catch return;
+    var key_buf: [64]u8 = undefined;
+    const key = std.fmt.bufPrint(&key_buf, "media:{d}", .{media_id}) catch return;
+    if (outbox.enqueue("anilist", "progress", key, payload)) kickOutbox();
+}
 
-    if (@import("../core/workers.zig").spawnLegacy(struct {
-        fn worker(mid: i64, ep: i32) void {
-            const alloc = @import("../core/alloc.zig").allocator;
+pub fn pendingCount() usize {
+    return outbox.count("anilist");
+}
 
-            var gql_buf: [512]u8 = undefined;
-            const gql = std.fmt.bufPrintZ(&gql_buf,
-                \\{{"query":"mutation {{ SaveMediaListEntry(mediaId: {d}, progress: {d}, status: CURRENT) {{ id progress }} }}"}}
-            , .{ mid, ep }) catch return;
+pub fn retryPending() void {
+    outbox.retryNow("anilist");
+    kickOutbox();
+}
 
-            var auth_buf: [300]u8 = undefined;
-            const auth = std.fmt.bufPrintZ(&auth_buf, "Authorization: Bearer {s}", .{access_token[0..access_token_len]}) catch return;
+fn kickOutbox() void {
+    if (!enabled or access_token_len == 0 or workers.isQuitting()) return;
+    if (outbox_busy.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) return;
+    workers.spawn(drainOutbox, .{}) catch outbox_busy.store(false, .release);
+}
 
-            var child = io_global.Child.init(&.{
-                "curl", "-s",                             "-X", "POST",                     ANILIST_API,
-                "-H",   "Content-Type: application/json", "-H", "Accept: application/json", "--config",
-                "-",    "-d",                             gql,
-            }, alloc);
-            child.stdout_behavior = .Ignore;
-            child.stderr_behavior = .Ignore;
-            @import("../core/curl_secret.zig").spawnWithHeaders(&child, &.{auth}) catch {
-                logs.pushLog("warn", "anilist", "Failed to update progress", false);
-                return;
-            };
-            const result = child.wait() catch return;
-            if (result == .exited and result.exited == 0) {
-                logs.pushLog("info", "anilist", "AniList progress updated", false);
-            }
+fn drainOutbox() void {
+    defer outbox_busy.store(false, .release);
+    while (!workers.isQuitting()) {
+        var job: outbox.Job = .{};
+        const now = io_global.timestamp();
+        if (!outbox.nextDue("anilist", now, &job)) return;
+        if (postMutation(job.payload[0..job.payload_len])) {
+            outbox.complete(job.id);
+            continue;
         }
-    }.worker, .{ media_id, episode })) |t| @import("../core/workers.zig").release(t) else |_| {}
+        outbox.deferFailure(job.id, job.attempts, now, "HTTP delivery failed");
+        const delay = outbox.retryDelaySeconds(job.attempts);
+        var elapsed: i64 = 0;
+        while (elapsed < delay and !workers.isQuitting()) : (elapsed += 1) io_global.sleep(std.time.ns_per_s);
+    }
+}
+
+fn postMutation(payload: []const u8) bool {
+    const alloc = @import("../core/alloc.zig").allocator;
+    var auth_buf: [2200]u8 = undefined;
+    const auth = std.fmt.bufPrintZ(&auth_buf, "Authorization: Bearer {s}", .{access_token[0..access_token_len]}) catch return false;
+    var child = io_global.Child.init(&.{
+        "curl",                     "-fsS",     "--connect-timeout", "5",  "--max-time",                     "15",
+        "-X",                       "POST",     ANILIST_API,         "-H", "Content-Type: application/json", "-H",
+        "Accept: application/json", "--config", "-",                 "-d", payload,
+    }, alloc);
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Ignore;
+    @import("../core/curl_secret.zig").spawnWithHeaders(&child, &.{auth}) catch return false;
+    const result = child.wait() catch return false;
+    if (result == .exited and result.exited == 0) {
+        logs.pushLog("info", "anilist", "AniList progress updated", false);
+        return true;
+    }
+    logs.pushLog("warn", "anilist", "AniList sync queued for retry", false);
+    return false;
 }
 
 /// Fetch AniList metadata for a batch of MAL ids in ONE keyless GraphQL query.

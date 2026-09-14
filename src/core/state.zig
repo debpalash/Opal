@@ -53,6 +53,7 @@ pub const RemoteOpenEntry = struct {
 pub const AnimeResult = struct {
     id: [64]u8 = std.mem.zeroes([64]u8),
     id_len: usize = 0,
+    anilist_id: i64 = 0,
     name: [128]u8 = std.mem.zeroes([128]u8),
     name_len: usize = 0,
     episodes: u16 = 0,
