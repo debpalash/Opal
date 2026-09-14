@@ -25,7 +25,7 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
    bespoke class: Setup's TMDB key, the source-catalog filter, and the whole
    Access page. Range/checkbox/radio opt out below. */
 input,select,textarea{font:inherit;color:var(--text-1);background:var(--bg-elevated);
-  border:1px solid var(--border);border-radius:var(--rad);padding:8px 10px}
+  border:1px solid var(--border);border-radius:var(--rad);padding:8px 10px;min-width:0;max-width:100%}
 input:focus,select:focus,textarea:focus{border-color:var(--accent)}
 input[type=range],input[type=checkbox],input[type=radio]{background:transparent;border:0;padding:0}
 option{background:var(--bg-elevated);color:var(--text-1)}
@@ -551,3 +551,17 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
   background:var(--bg-surface)}
 #player .bar .t{flex:1;font-size:13px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #player .bar button{color:var(--accent);font-weight:600}
+
+/* Browser zoom reduces the CSS viewport. Keep controls readable and operable
+   at 200% without horizontal scrolling or clipped actions. This lives last so
+   the compact overrides win over each component's desktop declaration. */
+@media (max-width:700px){
+  .search-row,.result .m,.cfg-row,.party-chat{flex-wrap:wrap}
+  .search-row>input,.party-chat>input{flex:1 1 220px}
+  .result .actions{width:100%;margin-left:0;justify-content:flex-end;flex-wrap:wrap}
+  .result .play{margin-left:0}
+  .cfg-row{align-items:flex-start}
+  .cfg-row span{flex:1 1 180px;overflow-wrap:anywhere}
+  .cfg-row input:not([type=checkbox]){width:auto;flex:1 1 220px}
+  button,a,input,select,textarea{overflow-wrap:anywhere}
+}

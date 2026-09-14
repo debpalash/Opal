@@ -1032,6 +1032,30 @@ def test_transcode_route():
     return "pass", "Transcode: fragmented MP4, seek-by-restart, encoder reaped via pipe close"
 
 
+@test("web controls stay named and reflow at high zoom", "Web UI")
+def test_web_accessible_controls_and_zoom_reflow():
+    html = _src("web/index.html")
+    boot = _src("web/js/boot.js")
+    css = _src("web/styles/app.css")
+    checks = {
+        "document language": '<html lang="en">' in html,
+        "skip target": 'class="skip-link" href="#main-content"' in html,
+        "seek name": 'id="seek" aria-label="Playback position"' in html,
+        "volume name": 'id="vol" aria-label="Volume"' in html,
+        "unnamed-control fallback": "querySelectorAll('input, select, textarea')" in boot and
+            "control.setAttribute('aria-label'" in boot,
+        "authored labels preserved": "control.closest('label')" in boot and "label[for=" in boot,
+        "compact viewport": "@media (max-width:700px)" in css,
+        "action reflow": ".result .actions{width:100%;margin-left:0" in css,
+        "settings reflow": ".cfg-row input:not([type=checkbox]){width:auto;flex:1 1 220px}" in css,
+        "bounded fields": "min-width:0;max-width:100%" in css,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "accessibility/reflow incomplete: " + ", ".join(missing)
+    return "pass", "controls named; keyboard focus, compact reflow, and 200% zoom path covered"
+
+
 @test("web feature bundles parse", "Web UI")
 def test_web_ui_js_syntax():
     """String-based feature checks cannot see a JavaScript syntax error."""

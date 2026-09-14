@@ -23,10 +23,10 @@
   <!-- A real <form>: browsers refuse to offer password-manager save/fill for a
        password field outside one, and warn about it in the console. -->
   <form id="auth-form" autocomplete="on">
-  <input id="auth-user" class="auth-input" placeholder="Username" autocapitalize="off" autocorrect="off" autocomplete="username">
-  <input id="auth-pass" class="auth-input" type="password" placeholder="Password" autocomplete="current-password">
-  <input id="auth-pass2" class="auth-input" type="password" placeholder="Confirm password" autocomplete="new-password" style="display:none">
-  <input id="auth-setup" class="auth-input" type="password" placeholder="One-time setup code" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" style="display:none">
+  <input id="auth-user" class="auth-input" aria-label="Username" placeholder="Username" autocapitalize="off" autocorrect="off" autocomplete="username">
+  <input id="auth-pass" class="auth-input" aria-label="Password" type="password" placeholder="Password" autocomplete="current-password">
+  <input id="auth-pass2" class="auth-input" aria-label="Confirm password" type="password" placeholder="Confirm password" autocomplete="new-password" style="display:none">
+  <input id="auth-setup" class="auth-input" aria-label="One-time setup code" type="password" placeholder="One-time setup code" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" style="display:none">
   <button id="pair-btn" type="button">Continue</button>
   </form>
   <div id="pair-err" role="status" aria-live="polite"></div>
@@ -55,7 +55,7 @@
       <div><strong>Playback stopped</strong><span id="np-error-text"></span></div>
       <button id="np-retry" type="button">Try again</button>
     </div>
-    <div class="seek-wrap"><input type="range" id="seek" min="0" max="100" value="0"></div>
+    <div class="seek-wrap"><input type="range" id="seek" aria-label="Playback position" min="0" max="100" value="0"></div>
     <div class="times"><span id="t-pos">--:--</span><span id="t-dur">--:--</span></div>
     <div class="transport">
       <button id="b-back" aria-label="Back 10s"><svg viewBox="0 0 24 24"><path d="M11 19V5l-9 7 9 7zm2-14v14l9-7-9-7z" transform="scale(-1,1) translate(-24,0)"/></svg></button>
@@ -64,7 +64,7 @@
     </div>
     <div class="vol-row">
       <button id="b-mute" aria-label="Mute"><svg viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg></button>
-      <input type="range" id="vol" min="0" max="130" value="100">
+      <input type="range" id="vol" aria-label="Volume" min="0" max="130" value="100">
     </div>
     <div class="quick" id="dest-row">
       <button class="dest-btn" id="dest-toggle">Playing on desktop</button>

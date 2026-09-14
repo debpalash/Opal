@@ -215,3 +215,9 @@ The live runner refuses a busy server port; supply required runtime library
 paths for a bare Linux binary. Browser/GUI tests may need explicit execution
 approval and an isolated display. Real account/tailnet integration remains
 unverified until an authorized test environment is available.
+
+Accessibility checks also enforce explicit names for transport sliders, a
+fallback accessible name for every remaining form control, preserved authored
+labels, and compact viewport reflow. Browser zoom reduces the CSS viewport, so
+the 700px layout is the deterministic 200% zoom path for supported desktop
+window sizes.
