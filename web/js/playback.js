@@ -205,7 +205,8 @@ function toast(msg){
   t.textContent = msg; t.className = 'on';
   clearTimeout(toast._h); toast._h = setTimeout(() => t.className = '', 4000);
 }
-$('dest-toggle').onclick = () => setPlayHere(!PLAY_HERE);
+$('dest-here').onclick = () => setPlayHere(true);
+$('dest-opal').onclick = () => setPlayHere(false);
 // Wrapping the credential fields in <form> gives password managers something
 // to attach to and silences the browser warning; these forward Enter to the
 // existing button handlers rather than ever navigating.
@@ -217,8 +218,8 @@ $('dest-toggle').onclick = () => setPlayHere(!PLAY_HERE);
 function setPlayHere(on){
   PLAY_HERE = !!on;
   localStorage.setItem('opal_play_here', PLAY_HERE ? '1' : '0');
-  document.querySelectorAll('.dest-btn').forEach(b =>
-    b.textContent = PLAY_HERE ? 'Playing here' : 'Playing on desktop');
+  $('dest-here').setAttribute('aria-pressed', PLAY_HERE ? 'true' : 'false');
+  $('dest-opal').setAttribute('aria-pressed', PLAY_HERE ? 'false' : 'true');
 }
 
 // Is the server able to transcode? Asked once, and only used to choose between

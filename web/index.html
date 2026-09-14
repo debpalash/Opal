@@ -35,6 +35,10 @@
 <header>
   <div class="logo" aria-hidden="true"></div><h1>Opal</h1><div class="dot" id="conn-dot" aria-hidden="true"></div>
   <div id="network-status" role="status" aria-live="polite"></div>
+  <div id="dest-row" class="destination-switch" role="group" aria-label="Default playback destination">
+    <button class="dest-btn" id="dest-here" type="button" aria-pressed="false">Play here</button>
+    <button class="dest-btn" id="dest-opal" type="button" aria-pressed="true">Play on Opal</button>
+  </div>
 </header>
 
 <main id="main-content" tabindex="-1">
@@ -65,9 +69,6 @@
     <div class="vol-row">
       <button id="b-mute" aria-label="Mute"><svg viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg></button>
       <input type="range" id="vol" aria-label="Volume" min="0" max="130" value="100">
-    </div>
-    <div class="quick" id="dest-row">
-      <button class="dest-btn" id="dest-toggle">Playing on desktop</button>
     </div>
       <div class="quick" id="np-quick">
         <button id="b-sub">Subtitles ⭢</button>

@@ -776,7 +776,9 @@ def test_web_play_here():
         "stream accepts sessions": "if (!isAuthorized(t))" in rm,
         # Every play path goes through one dispatcher.
         "single dispatcher": ui.count("dispatchPlay(") >= 5,
-        "destination toggle persists": "opal_play_here" in ui and "function setPlayHere(" in ui,
+        "explicit destination switch persists": "opal_play_here" in ui and "function setPlayHere(" in ui
+            and 'id="dest-here"' in ui and 'id="dest-opal"' in ui
+            and "setAttribute('aria-pressed'" in ui,
         # HLS: Safari natively, others get the honest message.
         "hls handled separately": "NATIVE_HLS" in ui and "'hls'" in ui,
         # Live torrents stream off disk while downloading.

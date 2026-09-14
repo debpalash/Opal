@@ -251,8 +251,14 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
 .tor-filelist{margin-top:6px}
 .tor-filelist:empty{display:none}
 /* Playback-destination chip + the refusal toast. */
-.dest-btn{background:var(--bg-elevated);border:1px solid var(--border);color:var(--text-1);
-  border-radius:999px;padding:6px 12px;font-size:13px;cursor:pointer}
+.destination-switch{display:flex;margin-left:auto;padding:2px;background:var(--bg-elevated);
+  border:1px solid var(--border);border-radius:999px}
+.dest-btn{background:transparent;border:0;color:var(--text-2);border-radius:999px;
+  padding:6px 11px;font-size:12px;cursor:pointer;white-space:nowrap}
+.dest-btn[aria-pressed="true"]{background:var(--accent);color:var(--bg);box-shadow:0 1px 8px #0004}
+.dest-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media(max-width:560px){.destination-switch{position:fixed;right:10px;bottom:72px;z-index:18;
+  box-shadow:0 8px 28px #0008}.dest-btn{padding:7px 10px}}
 #pt-toast{position:fixed;left:50%;bottom:84px;transform:translateX(-50%);z-index:60;
   background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--rad);
   padding:10px 14px;font-size:14px;max-width:min(90vw,520px);opacity:0;pointer-events:none;
