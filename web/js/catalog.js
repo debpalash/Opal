@@ -54,7 +54,7 @@ function runSearch(){
     ticks++;
     try {
       const d = await api('/unified_search');
-      renderUnifiedResults(d.results || []);
+      renderUnifiedResults(d);
       if ((!d.loading && ticks > 2) || ticks > 40) {
         clearInterval(searchWatch);
         const sources = new Set((d.results || []).map(r => r.source).filter(Boolean));
@@ -64,29 +64,22 @@ function runSearch(){
   }, 900);
 }
 
-function unifiedActionLabel(action){
-  if (action === 'magnet' || action === 'yt_play' || action === 'jf_play') return 'Play';
-  if (action === 'jf_browse') return 'Open';
-  if (action === 'anime_detail') return 'Episodes';
-  if (action === 'tmdb_detail') return 'Details';
-  return 'Open';
+function unifiedActionLabel(source){
+  if (source === 'comics') return 'Read';
+  if (source === 'podcast' || source === 'anime' || source === 'tmdb') return 'Open';
+  return 'Play';
 }
-function queueableUnified(r){
-  if (r.action === 'magnet') return r.data || '';
-  if (r.action === 'yt_play' && r.data) return 'https://www.youtube.com/watch?v=' + r.data;
-  return '';
-}
-function renderUnifiedResults(rs){
+function renderUnifiedResults(payload){
+  const rs = payload.results || [], generation = payload.generation || 0;
   const shown = rs.slice(0, 80);
   const html = shown.map((r, i) => {
-    const queueUrl = queueableUnified(r);
     return `<div class="result">
       <div class="t">${esc(r.title)}</div>
       <div class="m"><span class="src">${esc(r.source || '')}</span>
         ${r.detail ? `<span>${esc(r.detail)}</span>` : ''}
         <span class="actions">
-          ${queueUrl ? `<button class="queue-btn" data-i="${i}">Queue</button>` : ''}
-          <button class="play" data-i="${i}">${unifiedActionLabel(r.action)}</button>
+          ${r.queueable ? `<button class="queue-btn" data-i="${i}" data-gen="${generation}">Queue</button>` : ''}
+          <button class="play" data-i="${i}" data-gen="${generation}">${unifiedActionLabel(r.source)}</button>
         </span>
       </div>
     </div>`;
@@ -94,37 +87,25 @@ function renderUnifiedResults(rs){
   if (html === lastHtml.results) return;
   lastHtml.results = html;
   $('results').innerHTML = html;
-  $('results').querySelectorAll('.play').forEach(b => b.onclick = () => runUnifiedAction(shown[+b.dataset.i], b));
-  $('results').querySelectorAll('.queue-btn').forEach(b => {
-    const r = shown[+b.dataset.i];
-    b.onclick = () => queueMedia(queueableUnified(r), r.title, b);
-  });
+  $('results').querySelectorAll('.play').forEach(b =>
+    b.onclick = () => runUnifiedAction(shown[+b.dataset.i], +b.dataset.gen, 'play', b));
+  $('results').querySelectorAll('.queue-btn').forEach(b =>
+    b.onclick = () => runUnifiedAction(shown[+b.dataset.i], +b.dataset.gen, 'queue', b));
 }
-function runUnifiedAction(r, button){
-  if (!r) return;
-  if (r.action === 'magnet') return playMediaUrl(r.data, r.title, button);
-  if (r.action === 'yt_play') {
-    if ((HOSTED || PLAY_HERE) && r.data) return openYtEmbed(r.data, r.title);
-    return playMediaUrl('https://www.youtube.com/watch?v=' + r.data, r.title, button);
+async function runUnifiedAction(r, generation, action, button){
+  if (!r || !r.key) return;
+  button.disabled = true;
+  button.textContent = action === 'queue' ? 'Adding...' : 'Opening...';
+  try {
+    await apiMutation('/unified_search/' + action + '?generation=' + generation + '&key=' + encodeURIComponent(r.key));
+    button.textContent = action === 'queue' ? 'Queued' : 'Sent';
+    toast(action === 'queue' ? 'Added to queue' : 'Opening in Opal');
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = action === 'queue' ? 'Retry queue' : unifiedActionLabel(r.source);
+    toast(error?.message || 'Result changed; search again');
   }
-  if (r.action === 'anime_detail') {
-    openPage('anime', { focus:true }); $('anime-q').value = r.title || ''; runAnime(); return;
-  }
-  if (r.action === 'jf_browse') {
-    openPage('jf', { focus:true }); jfBrowse(r.data); return;
-  }
-  if (r.action === 'jf_play') {
-    api('/jellyfin/play?id=' + encodeURIComponent(r.data || '')).catch(()=>{});
-    button.textContent = 'Sent ✓'; return;
-  }
-  // TMDB is metadata, not a stream: open the unified details panel, where
-  // Find streams narrows to playable resolver results. Older rows without a
-  // media kind fall straight through to the stream search.
-  if (r.action === 'tmdb_detail' && r.media && r.data)
-    return openDetails(r.media === 'tv' ? 'tv' : 'movie', +r.data, r.title || '');
-  runStreamSearch(r.title || $('q').value.trim());
 }
-
 function runStreamSearch(title){
   if (!title) return;
   $('q').value = title;

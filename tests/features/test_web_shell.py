@@ -180,9 +180,13 @@ def test_web_discovery_and_party_workflows():
     checks = {
         "merged search": "function renderUnifiedResults(" in ui
             and "api('/unified_search?q='" in ui and "api('/unified_search')" in ui,
-        "source actions": all(
-            action in ui for action in ("magnet", "yt_play", "tmdb_detail", "anime_detail", "jf_browse", "jf_play")
-        ),
+        "opaque source actions": "r.key" in ui and "r.queueable" in ui
+            and "apiMutation('/unified_search/' + action" in ui
+            and "resolver.resolve(dq" in remote
+            and "resolver.lockRemoteSnapshot()" in remote
+            and "resolver.actionKey(item)" in remote
+            and "resolver.requestRemoteAction" in remote
+            and "drainRemoteAction()" in _src("src/main.zig"),
         "stream drill-down": "function runStreamSearch(" in ui
             and "function renderTorrentResults(" in ui,
         "open URL form": 'id="open-media-form"' in ui and "function remoteOpenUrl(" in ui
@@ -195,7 +199,7 @@ def test_web_discovery_and_party_workflows():
             and "partyDo('join'" in ui,
         "server contracts": all(
             f'\"{endpoint}\"' in remote
-            for endpoint in ("/unified_search", "/open", "/ingest", "/party/status", "/party/chat", "/party/host", "/party/join", "/party/leave")
+            for endpoint in ("/unified_search", "/unified_search/play", "/unified_search/queue", "/open", "/ingest", "/party/status", "/party/chat", "/party/host", "/party/join", "/party/leave")
         ),
     }
     missing = [k for k, ok in checks.items() if not ok]

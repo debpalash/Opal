@@ -1063,6 +1063,7 @@ fn appFrame() !dvui.App.Result {
     // Queue producers include playlist/AI/remote worker threads. Drain their
     // bounded commands here so live queue and player state stay UI-thread-owned.
     @import("services/queue.zig").drainUi();
+    @import("services/resolver.zig").drainRemoteAction();
     @import("services/search.zig").drainMemorySearch();
 
     // Adaptive default scale — DVUI already applies a reported display scale,

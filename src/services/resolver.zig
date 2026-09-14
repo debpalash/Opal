@@ -459,6 +459,123 @@ threadlocal var worker_reported: SourceStatus = .done;
 threadlocal var worker_produced: bool = false;
 var lifecycle_mutex = @import("../core/sync.zig").Mutex{};
 
+/// Remote clients receive opaque identities, never local paths, magnets, or
+/// expiring signed URLs. The fixed FIFO transfers a validated result copy back
+/// to the UI thread, where all player/navigation mutations already belong.
+pub const RemoteActionKind = enum { play, queue };
+pub const RemoteActionResult = enum { accepted, stale, not_found, full };
+const REMOTE_ACTION_CAP: usize = 8;
+const RemoteAction = struct {
+    kind: RemoteActionKind = .play,
+    item: ResolvedItem = .{},
+};
+var remote_actions: [REMOTE_ACTION_CAP]RemoteAction = [_]RemoteAction{.{}} ** REMOTE_ACTION_CAP;
+var remote_action_head: usize = 0;
+var remote_action_count: usize = 0;
+var remote_action_mutex = @import("../core/sync.zig").Mutex{};
+
+/// Freeze the run identity and its rows as one snapshot. A generation read
+/// outside lifecycle_mutex can pair a successor generation with predecessor
+/// rows while resolve() is waiting to clear them.
+pub fn lockRemoteSnapshot() u32 {
+    lifecycle_mutex.lock();
+    results_mutex.lock();
+    return run_gen.load(.acquire);
+}
+
+pub fn unlockRemoteSnapshot() void {
+    results_mutex.unlock();
+    lifecycle_mutex.unlock();
+}
+
+pub fn actionKey(item: *const ResolvedItem) u64 {
+    var hash = std.hash.Wyhash.init(0x6f70_616c_7365_6172);
+    const source_byte = [_]u8{@intCast(@intFromEnum(item.source))};
+    hash.update(&source_byte);
+    if (item.jf_item_id_len > 0) {
+        hash.update(item.jf_item_id[0..item.jf_item_id_len]);
+    } else if (item.url_len > 0) {
+        hash.update(item.url[0..item.url_len]);
+    } else {
+        hash.update(item.name[0..item.name_len]);
+    }
+    const key = hash.final();
+    return if (key == 0) 1 else key;
+}
+
+/// Queue playback currently carries only a URL, so header-gated live streams,
+/// catalog/navigation rows, and torrent detail pages are deliberately excluded.
+/// This keeps the web Queue button honest until those identities become typed.
+pub fn isRemoteQueueable(item: *const ResolvedItem) bool {
+    const url = item.url[0..item.url_len];
+    return switch (item.source) {
+        .youtube, .local, .music, .radio => url.len > 0,
+        .stremio => std.mem.startsWith(u8, url, "http://") or std.mem.startsWith(u8, url, "https://"),
+        else => false,
+    };
+}
+
+pub fn requestRemoteAction(generation: u32, key: u64, kind: RemoteActionKind) RemoteActionResult {
+    var found: ?ResolvedItem = null;
+    lifecycle_mutex.lock();
+    if (generation != run_gen.load(.acquire)) {
+        lifecycle_mutex.unlock();
+        return .stale;
+    }
+    results_mutex.lock();
+    for (results[0..result_count]) |item| {
+        if (actionKey(&item) != key) continue;
+        if (kind == .queue and !isRemoteQueueable(&item)) {
+            results_mutex.unlock();
+            lifecycle_mutex.unlock();
+            return .not_found;
+        }
+        found = item;
+        break;
+    }
+    results_mutex.unlock();
+    lifecycle_mutex.unlock();
+
+    const item = found orelse return .not_found;
+    remote_action_mutex.lock();
+    defer remote_action_mutex.unlock();
+    if (remote_action_count >= REMOTE_ACTION_CAP) return .full;
+    remote_actions[(remote_action_head + remote_action_count) % REMOTE_ACTION_CAP] = .{
+        .kind = kind,
+        .item = item,
+    };
+    remote_action_count += 1;
+    state.wakeUi();
+    return .accepted;
+}
+
+/// Drain at most one command per frame so a burst of remote clicks cannot turn
+/// one UI frame into an unbounded chain of player/navigation work.
+pub fn drainRemoteAction() void {
+    var action: RemoteAction = undefined;
+    remote_action_mutex.lock();
+    if (remote_action_count == 0) {
+        remote_action_mutex.unlock();
+        return;
+    }
+    action = remote_actions[remote_action_head];
+    remote_action_head = (remote_action_head + 1) % REMOTE_ACTION_CAP;
+    remote_action_count -= 1;
+    remote_action_mutex.unlock();
+
+    switch (action.kind) {
+        .play => {
+            @import("../player/player.zig").openTriggerNow();
+            playResolvedItem(&action.item);
+        },
+        .queue => @import("queue.zig").addToQueue(
+            action.item.url[0..action.item.url_len],
+            action.item.name[0..action.item.name_len],
+            @tagName(action.item.source),
+        ),
+    }
+}
+
 /// Supersede every live resolver wave. Bounded subprocess guards observe the
 /// generation change and terminate their process trees; native HTTP workers
 /// observe the global workers.isQuitting() token during app shutdown.
@@ -3098,8 +3215,11 @@ fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
 
 pub fn playItem(idx: usize) void {
     if (idx >= result_count) return;
-    const item = &results[idx];
+    const item = results[idx];
+    playResolvedItem(&item);
+}
 
+fn playResolvedItem(item: *const ResolvedItem) void {
     switch (item.source) {
         .jellyfin => {
             const jf = @import("jellyfin.zig");

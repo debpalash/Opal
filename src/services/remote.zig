@@ -1502,7 +1502,18 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
     }
     // Unified Search — fans out to all sources
     if (std.mem.eql(u8, api_path, "/unified_search")) {
-        apiUnifiedSearch(stream, query);
+        if (!requireMethod(stream, method, "GET")) return;
+        apiUnifiedResolverSearch(stream, query);
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/unified_search/play")) {
+        if (!requireMethod(stream, method, "POST")) return;
+        apiUnifiedSearchAction(stream, query, .play);
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/unified_search/queue")) {
+        if (!requireMethod(stream, method, "POST")) return;
+        apiUnifiedSearchAction(stream, query, .queue);
         return;
     }
     if (std.mem.eql(u8, api_path, "/recommendations")) {
@@ -4404,163 +4415,74 @@ fn apiJellyfin(stream: std.Io.net.Stream, api_path: []const u8, query: []const u
 // Call with ?q=<query> to trigger. Call without to just read current results.
 // ══════════════════════════════════════════════════════════
 
-fn apiUnifiedSearch(stream: std.Io.net.Stream, query: []const u8) void {
+fn apiUnifiedResolverSearch(stream: std.Io.net.Stream, query: []const u8) void {
+    const resolver = @import("resolver.zig");
     if (getQueryParam(query, "q")) |q| {
         var decoded: [256]u8 = undefined;
         const dq = urlDecode(q, &decoded) orelse q;
-        const slen = @min(dq.len, 255);
-
-        // 1. Trigger torrent search
-        const search_svc = @import("search.zig");
-        search_svc.triggerSearch(dq);
-
-        // 2. Trigger TMDB search (if API key set)
-        if (state.app.tmdb.api_key_len > 0) {
-            @memcpy(state.app.tmdb.search_buf[0..slen], dq[0..slen]);
-            state.app.tmdb.search_buf[slen] = 0;
-            state.app.tmdb.view = .Search;
-            state.app.tmdb.page = 1;
-            const tmdb_api = @import("tmdb_api.zig");
-            tmdb_api.fetchCurrentView(false);
-        }
-
-        // 3. Trigger YouTube search
-        @memcpy(state.app.yt.search_buf[0..slen], dq[0..slen]);
-        state.app.yt.search_buf[slen] = 0;
-        const yt = @import("youtube.zig");
-        const yt_qlen = std.mem.indexOfScalar(u8, &state.app.yt.search_buf, 0) orelse state.app.yt.search_buf.len;
-        yt.fetchYoutube(state.app.yt.search_buf[0..yt_qlen]);
-
-        // 4. Trigger Anime search
-        @memcpy(state.app.anime.search_buf[0..slen], dq[0..slen]);
-        state.app.anime.search_buf[slen] = 0;
-        const anime = @import("anime.zig");
-        const anime_qlen = std.mem.indexOfScalar(u8, &state.app.anime.search_buf, 0) orelse state.app.anime.search_buf.len;
-        anime.searchAnime(state.app.anime.search_buf[0..anime_qlen]);
-
-        // 5. Trigger Jellyfin search (if connected)
-        if (state.app.jf.connected) {
-            @memcpy(state.app.jf.search_buf[0..slen], dq[0..slen]);
-            state.app.jf.search_buf[slen] = 0;
-            const jf = @import("jellyfin.zig");
-            jf.searchItems();
-        }
+        resolver.resolve(dq[0..@min(dq.len, 255)], "auto");
     }
 
-    // ── Collect results from all sources ──
+    // Snapshot under the resolver transaction, then release it before JSON
+    // encoding and socket I/O so a slow web client cannot stall search workers.
+    const allocator = @import("../core/alloc.zig").allocator;
+    const snapshot = allocator.alloc(resolver.ResolvedItem, 80) catch {
+        sendJsonStatus(stream, "503 Service Unavailable", "{\"error\":\"search snapshot unavailable\"}");
+        return;
+    };
+    defer allocator.free(snapshot);
+    const generation = resolver.lockRemoteSnapshot();
+    const loading = resolver.isResolving();
+    const count = @min(resolver.result_count, snapshot.len);
+    @memcpy(snapshot[0..count], resolver.results[0..count]);
+    resolver.unlockRemoteSnapshot();
+
+    // Opaque action keys preserve native playback semantics while keeping
+    // local paths, magnets, signed URLs and request headers out of web JSON.
     var json_buf: [65536]u8 = undefined;
     var w = std.Io.Writer.fixed(&json_buf);
-
-    // Track loading state across all sources
-    const search_svc = @import("search.zig");
-    const any_loading = search_svc.is_searching.load(.acquire) or
-        state.app.tmdb.is_loading.load(.acquire) or
-        state.app.yt.is_loading.load(.acquire) or
-        state.app.anime.is_loading.load(.acquire) or
-        state.app.jf.is_loading.load(.acquire);
-
-    w.writeAll("{\"loading\":") catch return;
-    w.writeAll(if (any_loading) "true" else "false") catch return;
-    w.writeAll(",\"results\":[") catch return;
-
-    var total: usize = 0;
-
-    // ── Torrent results ──
-    {
-        search_svc.search_results_mutex.lock();
-        defer search_svc.search_results_mutex.unlock();
-        for (search_svc.search_results.items) |r| {
-            if (w.end + 2048 > json_buf.len) break; // reserve tail → never truncate mid-array
-            if (total > 0) w.writeAll(",") catch return;
-            w.writeAll("{\"source\":\"torrent\",\"title\":\"") catch return;
-            escJsonWrite(&w, r.name);
-            w.writeAll("\",\"detail\":\"") catch return;
-            escJsonWrite(&w, r.size);
-            w.writeAll(" · ") catch return;
-            escJsonWrite(&w, r.seeds);
-            w.writeAll(" seeds\",\"action\":\"magnet\",\"data\":\"") catch return;
-            escJsonWrite(&w, r.link);
-            w.writeAll("\"}") catch return;
-            total += 1;
-            if (total >= 80) break;
-        }
-    }
-
-    // ── TMDB results ── (HTTP thread: iterate under results_mutex — the UI
-    // thread mutates `results` under it in applyPendingResults)
-    if (state.app.tmdb.api_key_len > 0) {
-        state.app.tmdb.results_mutex.lock();
-        defer state.app.tmdb.results_mutex.unlock();
-        for (state.app.tmdb.results.items, 0..) |item, idx| {
-            if (idx >= 10) break;
-            if (w.end + 2048 > json_buf.len) break;
-            if (total > 0) w.writeAll(",") catch return;
-            const rating_pct = @as(u8, @intFromFloat(std.math.clamp(item.rating * 10.0, 0.0, 100.0)));
-            w.writeAll("{\"source\":\"tmdb\",\"title\":\"") catch return;
-            escJsonWrite(&w, item.title[0..item.title_len]);
-            w.writeAll("\",\"detail\":\"") catch return;
-            escJsonWrite(&w, item.year[0..item.year_len]);
-            w.print(" · {d}%\",\"action\":\"tmdb_detail\",\"media\":\"", .{rating_pct}) catch return;
-            escJsonWrite(&w, item.media_type[0..item.media_type_len]);
-            w.print("\",\"data\":\"{d}\"}}", .{item.id}) catch return;
-            total += 1;
-        }
-    }
-
-    // ── YouTube results ──
-    for (state.app.yt.results.items) |yt_item| {
-        if (total >= 80) break;
-        if (w.end + 2048 > json_buf.len) break;
-        if (yt_item.title_len == 0) continue;
-        if (total > 0) w.writeAll(",") catch return;
-        w.writeAll("{\"source\":\"youtube\",\"title\":\"") catch return;
-        escJsonWrite(&w, yt_item.title[0..yt_item.title_len]);
+    w.print("{{\"loading\":{s},\"generation\":{d},\"results\":[", .{
+        if (loading) "true" else "false",
+        generation,
+    }) catch return;
+    for (snapshot[0..count], 0..) |*item, idx| {
+        if (w.end + 3072 > json_buf.len) break;
+        if (idx > 0) w.writeAll(",") catch return;
+        w.writeAll("{\"source\":\"") catch return;
+        escJsonWrite(&w, @tagName(item.source));
+        w.writeAll("\",\"title\":\"") catch return;
+        escJsonWrite(&w, item.name[0..item.name_len]);
         w.writeAll("\",\"detail\":\"") catch return;
-        escJsonWrite(&w, yt_item.uploader[0..yt_item.uploader_len]);
-        w.writeAll("\",\"action\":\"yt_play\",\"data\":\"") catch return;
-        escJsonWrite(&w, yt_item.video_id[0..yt_item.video_id_len]);
-        w.writeAll("\"}") catch return;
-        total += 1;
+        escJsonWrite(&w, item.detail[0..item.detail_len]);
+        w.print("\",\"key\":\"{x}\",\"queueable\":{s}}}", .{
+            resolver.actionKey(item),
+            if (resolver.isRemoteQueueable(item)) "true" else "false",
+        }) catch return;
     }
-
-    // ── Anime results ──
-    for (0..state.app.anime.result_count) |ai| {
-        if (total >= 80) break;
-        if (w.end + 2048 > json_buf.len) break;
-        const a_item = state.app.anime.results[ai];
-        if (a_item.name_len == 0) continue;
-        if (total > 0) w.writeAll(",") catch return;
-        w.writeAll("{\"source\":\"anime\",\"title\":\"") catch return;
-        escJsonWrite(&w, a_item.name[0..a_item.name_len]);
-        w.writeAll("\",\"detail\":\"Anime\",\"action\":\"anime_detail\",\"data\":\"") catch return;
-        escJsonWrite(&w, a_item.id[0..a_item.id_len]);
-        w.writeAll("\"}") catch return;
-        total += 1;
-    }
-
-    // ── Jellyfin results ──
-    const jf_view = @import("jellyfin.zig").remoteSnapshot();
-    if (jf_view.connected) {
-        for (0..jf_view.item_count) |ji| {
-            if (total >= 80) break;
-            if (w.end + 2048 > json_buf.len) break;
-            const jf_item = jf_view.items[ji];
-            if (jf_item.name_len == 0) continue;
-            if (total > 0) w.writeAll(",") catch return;
-            const act: []const u8 = if (jf_item.is_folder) "jf_browse" else "jf_play";
-            w.writeAll("{\"source\":\"jellyfin\",\"title\":\"") catch return;
-            escJsonWrite(&w, jf_item.name[0..jf_item.name_len]);
-            w.writeAll("\",\"detail\":\"") catch return;
-            escJsonWrite(&w, jf_item.media_type[0..jf_item.media_type_len]);
-            w.print("\",\"action\":\"{s}\",\"data\":\"", .{act}) catch return;
-            escJsonWrite(&w, jf_item.id[0..jf_item.id_len]);
-            w.writeAll("\"}") catch return;
-            total += 1;
-        }
-    }
-
     w.writeAll("]}") catch return;
     sendJson(stream, json_buf[0..w.end]);
+}
+
+fn apiUnifiedSearchAction(
+    stream: std.Io.net.Stream,
+    query: []const u8,
+    kind: @import("resolver.zig").RemoteActionKind,
+) void {
+    const resolver = @import("resolver.zig");
+    const generation = std.fmt.parseInt(u32, getQueryParam(query, "generation") orelse "", 10) catch {
+        sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"invalid generation\"}");
+        return;
+    };
+    const key = std.fmt.parseInt(u64, getQueryParam(query, "key") orelse "", 16) catch {
+        sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"invalid result key\"}");
+        return;
+    };
+    switch (resolver.requestRemoteAction(generation, key, kind)) {
+        .accepted => sendJson(stream, "{\"ok\":true}"),
+        .stale => sendJsonStatus(stream, "409 Conflict", "{\"error\":\"search results changed; refresh and retry\"}"),
+        .not_found => sendJsonStatus(stream, "404 Not Found", "{\"error\":\"result is unavailable\"}"),
+        .full => sendJsonStatus(stream, "503 Service Unavailable", "{\"error\":\"action queue is busy\"}"),
+    }
 }
 
 // ── Web parity handlers (H3) ─────────────────────────────────────────────────
