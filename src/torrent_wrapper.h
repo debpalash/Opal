@@ -103,9 +103,13 @@ long long torrent_get_downloaded(TorrentSession session, int torrent_id);
 // the attempt cap are the CALLER's job and live in torrent_stall_pure.zig.
 void torrent_force_reannounce(TorrentSession session, int torrent_id);
 
-// Piece-aware reads for HTTP streaming proxy
+// Piece-aware reads for HTTP streaming proxy. torrent_read_bytes returns bytes,
+// 0 at EOF, -1 for a permanent error, or -2 when its bounded wait expires or a
+// proxy stop cancels the read. A -2 response is recoverable: close the partial
+// HTTP body so the player reconnects and requests the range again.
 int torrent_get_piece_size(TorrentSession session, int torrent_id);
 int torrent_read_bytes(TorrentSession session, int torrent_id, int file_idx, long long offset, char* out_buf, int buf_len);
+void torrent_cancel_reads(TorrentSession session, int torrent_id);
 long long torrent_get_file_offset(TorrentSession session, int torrent_id, int file_idx);
 
 // ─── Byte-range streaming primitives ───

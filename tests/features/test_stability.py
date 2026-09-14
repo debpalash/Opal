@@ -450,14 +450,18 @@ def test_stream_readiness_gate():
         "priorities before deadlines": (cpp.index("prioritize_pieces(prios)")
                                         < cpp.index("set_piece_deadline(lt::piece_index_t(p), dl)")),
 
-        # Never truncate a body we promised a Content-Length for.
-        "proxy never truncates": "aborting so the player reconnects" in px,
-        # A timeout on the blocking loopback proxy reaches ffmpeg as a fake EOF,
-        # while ordinary web streams must retain their bounded timeout.
-        "torrent proxy alone has no network timeout": (
-            "unbounded_network_read = true" in pl
-            and "networkTimeout(request.unbounded_network_read)" in load_pure
-            and 'return if (unbounded_read) "0" else "15"' in load_pure
+        # An incomplete body closes the connection and invokes ffmpeg recovery;
+        # it is never misreported as a successful EOF.
+        "proxy reconnects incomplete bodies": "aborting so the player reconnects" in px,
+        # Both proxy and player reads are bounded; the proxy closes the short
+        # body at 15 seconds and mpv retains a 20-second safety backstop.
+        "torrent proxy reads are bounded and cancellable": (
+            "loopback_stream = true" in pl
+            and "networkTimeout(request.loopback_stream)" in load_pure
+            and 'return if (loopback_stream) "20" else "15"' in load_pure
+            and "MAX_WAIT_MS = 15 * 1000" in cpp
+            and "torrent_cancel_reads" in cpp
+            and "torrent_cancel_reads" in px
         ),
 
         # The bar must report readiness, not whole-torrent progress.

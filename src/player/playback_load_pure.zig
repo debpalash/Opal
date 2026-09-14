@@ -55,8 +55,8 @@ pub const Request = struct {
     /// Internal retry seam: already sanitized by buildHeaderFields on the
     /// original request. Normal callers should pass `headers` instead.
     prepared_header_fields: []const u8 = "",
-    /// Torrent's loopback proxy deliberately blocks until pieces arrive.
-    unbounded_network_read: bool = false,
+    /// This request is served by Opal's bounded torrent loopback proxy.
+    loopback_stream: bool = false,
 };
 
 test "replace loads default to direct ownership and no queue identity" {
@@ -130,13 +130,15 @@ pub const FileOptions = struct {
 /// frame. The initial cache gate remains only for Opal's torrent proxy: that
 /// endpoint can block while pieces arrive and needs the protected runway.
 /// mpv's normal cache-pause still handles a later network underrun.
-pub fn cachePauseInitial(url: []const u8, unbounded_read: bool) [:0]const u8 {
+pub fn cachePauseInitial(url: []const u8, loopback_stream: bool) [:0]const u8 {
     _ = url;
-    return if (unbounded_read) "yes" else "no";
+    return if (loopback_stream) "yes" else "no";
 }
 
-pub fn networkTimeout(unbounded_read: bool) [:0]const u8 {
-    return if (unbounded_read) "0" else "15";
+pub fn networkTimeout(loopback_stream: bool) [:0]const u8 {
+    // The proxy itself abandons a no-progress piece wait at 15 seconds. Give
+    // that reconnect path five seconds to close before mpv's own backstop fires.
+    return if (loopback_stream) "20" else "15";
 }
 
 pub fn effectiveUserAgent(request: Request) []const u8 {
@@ -185,8 +187,8 @@ pub fn dispatch(sink: anytype, request: Request) bool {
     sink.loadFile(request.url, request.mode, .{
         .user_agent = effectiveUserAgent(request),
         .header_fields = fields,
-        .cache_pause_initial = cachePauseInitial(request.url, request.unbounded_network_read),
-        .network_timeout = networkTimeout(request.unbounded_network_read),
+        .cache_pause_initial = cachePauseInitial(request.url, request.loopback_stream),
+        .network_timeout = networkTimeout(request.loopback_stream),
     });
     return true;
 }
@@ -355,7 +357,7 @@ test "headers without an explicit UA receive a fresh browser UA" {
     try std.testing.expectEqualStrings("Referer: https://embed.example/", sink.events[2].headerFieldsSlice());
 }
 
-test "only an explicitly blocking proxy receives an infinite read timeout" {
+test "torrent loopback retains a finite defense-in-depth timeout" {
     var sink: FakeSink = .{};
     try std.testing.expect(dispatch(&sink, .{ .url = "https://www.youtube.com/watch?v=x" }));
     try std.testing.expectEqualStrings("15", sink.events[2].networkTimeoutSlice());
@@ -363,9 +365,9 @@ test "only an explicitly blocking proxy receives an infinite read timeout" {
     sink.len = 0;
     try std.testing.expect(dispatch(&sink, .{
         .url = "http://127.0.0.1:49152/stream/token",
-        .unbounded_network_read = true,
+        .loopback_stream = true,
     }));
-    try std.testing.expectEqualStrings("0", sink.events[2].networkTimeoutSlice());
+    try std.testing.expectEqualStrings("20", sink.events[2].networkTimeoutSlice());
 }
 
 test "prepared retry headers preserve sanitized identity and reject injection" {

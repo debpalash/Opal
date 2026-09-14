@@ -21,6 +21,7 @@
 #include <memory>
 #include <thread>
 #include <chrono>
+#include <cstdint>
 #include <mutex>
 #include <atomic>
 #include <map>
@@ -41,6 +42,10 @@ struct TorrentNode {
     // Opened once per (node,file) and reused, instead of a fresh ifstream per chunk.
     std::ifstream read_stream;
     int read_stream_file_idx = -1;
+    // Incrementing this generation interrupts every bounded proxy read for this
+    // torrent. Readers poll it outside the session mutex, so proxy teardown does
+    // not wait on a missing piece or a dead swarm.
+    std::atomic<std::uint64_t> read_generation{0};
 };
 
 // ─── Extra public trackers ───
@@ -1213,15 +1218,26 @@ extern "C" long long torrent_get_file_offset(TorrentSession session, int torrent
     return -1;
 }
 
-// Block-read: waits until pieces covering [offset..offset+buf_len) for the given file
-// are downloaded, then reads from disk. Returns bytes read, or -1 on error.
-// This provides back-pressure: the HTTP proxy stalls until data is available.
+extern "C" void torrent_cancel_reads(TorrentSession session, int torrent_id) {
+    if (!session || torrent_id < 0) return;
+    SessionContext* ctx = static_cast<SessionContext*>(session);
+    auto node = get_node(ctx, torrent_id);
+    if (!node) return;
+    node->read_generation.fetch_add(1, std::memory_order_acq_rel);
+}
+
+// Bounded block-read: waits until pieces covering [offset..offset+buf_len) for
+// the given file are downloaded, then reads from disk. Returns bytes read, 0 at
+// EOF, -1 on a permanent error, or -2 when cancelled / its 15-second no-progress
+// deadline expires. This retains back-pressure without pinning a proxy worker or
+// application shutdown indefinitely.
 extern "C" int torrent_read_bytes(TorrentSession session, int torrent_id, int file_idx,
                                    long long offset, char* out_buf, int buf_len) {
     if (!session || torrent_id < 0 || file_idx < 0 || !out_buf || buf_len <= 0) return -1;
     SessionContext* ctx = static_cast<SessionContext*>(session);
     auto node = get_node(ctx, torrent_id);
     if (!node) return -1;
+    const std::uint64_t read_generation = node->read_generation.load(std::memory_order_acquire);
 
     try {
         {
@@ -1269,17 +1285,18 @@ extern "C" int torrent_read_bytes(TorrentSession session, int torrent_id, int fi
         // had ended and gave up for good. That is why downloading more never
         // rescued a stalled stream: the demuxer was already dead.
         //
-        // Blocking is safe (mpv is designed to wait on a slow stream); truncating
-        // is fatal. So wait as long as the torrent is alive and could still make
-        // progress, and re-arm the deadline periodically — libtorrent converts a
+        // A bounded wait is safe (mpv is designed to wait on a slow stream), and
+        // a deliberately short body drives its reconnect path. Wait only until
+        // the recovery deadline, and re-arm periodically — libtorrent converts a
         // deadline to an ABSOLUTE time point, so a stale one stops being urgent.
         const int POLL_MS = 25;
         const int REARM_EVERY = 2000 / POLL_MS;          // re-assert the deadline every 2s
-        const int MAX_WAIT_MS = 10 * 60 * 1000;          // backstop against a truly wedged read
+        const int MAX_WAIT_MS = 15 * 1000;               // hard no-progress recovery deadline
         const int MAX_ATTEMPTS = MAX_WAIT_MS / POLL_MS;
 
         bool ready = false;
         for (int attempt = 0; attempt < MAX_ATTEMPTS && !ready; ++attempt) {
+            if (node->read_generation.load(std::memory_order_acquire) != read_generation) return -2;
             {
                 std::lock_guard<std::mutex> lk(ctx->mtx);
                 if (!node->alive || !node->handle.is_valid()) return -1;
@@ -1299,7 +1316,11 @@ extern "C" int torrent_read_bytes(TorrentSession session, int torrent_id, int fi
             }
             if (!ready) std::this_thread::sleep_for(std::chrono::milliseconds(POLL_MS));
         }
-        if (!ready) return -1; // wedged for 10 minutes — genuinely dead
+        if (!ready) return -2;
+
+        // Cancellation may race with the final readiness observation. Avoid a
+        // disk read for a proxy that is already being torn down.
+        if (node->read_generation.load(std::memory_order_acquire) != read_generation) return -2;
 
         // Read from disk via a persistent stream kept on the node — opened once
         // per (node,file_index) and reused across chunks instead of reopening

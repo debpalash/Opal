@@ -22,8 +22,8 @@ const io_g = @import("../core/io_global.zig");
 //   4. stopProxy(handle) tears down that one stream
 //
 // Back-pressure (the reason this proxy exists at all) is unchanged:
-// torrent_read_bytes blocks the worker until the requested pieces
-// arrive, so mpv never reads undownloaded data.
+// torrent_read_bytes waits up to 15 seconds for requested pieces, so mpv never
+// reads undownloaded data. A deadline closes the short body and mpv reconnects.
 // ══════════════════════════════════════════════════════════
 
 const CHUNK_SIZE: usize = 512 * 1024;
@@ -226,14 +226,20 @@ pub fn stopProxy(h: Handle) void {
     s.stop = true;
     const port = s.port;
     const thread = s.thread;
+    const torrent_id = s.torrent_id;
     streams_mutex.unlock();
+
+    // Wake a handler that is currently waiting for a missing torrent piece.
+    // The C++ reader observes the generation change within its 25 ms poll.
+    c.mpv.torrent_cancel_reads(state.torrentSession(), torrent_id);
 
     // Kick accept() awake by making one local connection.
     if (port > 0) {
-        const addr = std.Io.net.IpAddress.parseIp4("127.0.0.1", port) catch return;
-        if (addr.connect(io_g.io(), .{ .mode = .stream })) |conn| {
-            var c2 = conn;
-            c2.close(io_g.io());
+        if (std.Io.net.IpAddress.parseIp4("127.0.0.1", port)) |addr| {
+            if (addr.connect(io_g.io(), .{ .mode = .stream })) |conn| {
+                var c2 = conn;
+                c2.close(io_g.io());
+            } else |_| {}
         } else |_| {}
     }
 
@@ -478,13 +484,15 @@ fn handleConnection(args: ConnArgs) !void {
         // good — which is why a stalled stream never recovered no matter how much
         // more downloaded.
         //
-        // torrent_read_bytes now blocks rather than timing out, so a negative
-        // return means the torrent is genuinely gone. Abort the connection WITHOUT
-        // completing the body, so ffmpeg sees a premature close (bytes sent <
-        // Content-Length) and takes its reconnect path instead of its EOF path.
-        // Never finish a body we could not fill.
+        // A deadline/cancellation (-2) is recoverable; a permanent error (-1) is
+        // not. Both must abort WITHOUT completing the promised body so ffmpeg
+        // takes its reconnect path instead of treating missing bytes as EOF.
         if (read < 0) {
-            logs.pushLog("warn", "stream", "read failed mid-body - aborting so the player reconnects", true);
+            if (read == -2) {
+                logs.pushLog("warn", "stream", "piece wait expired or was cancelled - reconnecting", false);
+            } else {
+                logs.pushLog("warn", "stream", "read failed mid-body - aborting so the player reconnects", true);
+            }
             return;
         }
 

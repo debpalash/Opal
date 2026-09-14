@@ -643,7 +643,7 @@ pub fn renderGrid() !void {
                             .url = retry_buf[0..retry_len],
                             .user_agent = ua_buf[0..ua_len],
                             .prepared_header_fields = headers_buf[0..headers_len],
-                            .unbounded_network_read = p.current_unbounded_network_read,
+                            .loopback_stream = p.current_loopback_stream,
                         });
                     }
                     if (components.actionButton(@src(), "Close", .secondary, i + 5605)) {

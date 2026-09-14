@@ -205,7 +205,7 @@ pub const MediaPlayer = struct {
     current_user_agent_len: usize = 0,
     current_header_fields: [2048]u8 = std.mem.zeroes([2048]u8),
     current_header_fields_len: usize = 0,
-    current_unbounded_network_read: bool = false,
+    current_loopback_stream: bool = false,
     /// First-attempt YouTube manifest skipping is safe for normal videos. Keep
     /// one robust retry armed until FILE_LOADED for live/restricted edge cases.
     ytdl_fast_retry_pending: bool = false,
@@ -580,7 +580,7 @@ pub const MediaPlayer = struct {
         self.current_user_agent_len = 0;
         @memset(&self.current_header_fields, 0);
         self.current_header_fields_len = 0;
-        self.current_unbounded_network_read = false;
+        self.current_loopback_stream = false;
         self.ytdl_fast_retry_pending = false;
         self.resume_seeked = false;
         self.restore_session_position = null;
@@ -807,8 +807,8 @@ pub const MediaPlayer = struct {
         // read ERROR from end-of-file (demux_lavf.c returns AVERROR_EOF for both),
         // so a 30s timeout on a slow torrent read reached mpv as "the file ended" —
         // it stopped cleanly, with no error, and no amount of further downloading
-        // brought it back. The torrent loopback entry therefore overrides this
-        // default back to 0, while YouTube/IPTV/direct HTTP use 15 seconds.
+        // brought it back. YouTube/IPTV/direct HTTP use 15 seconds; the bounded
+        // torrent loopback gets a 20-second defense-in-depth timeout per load.
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "network-timeout", "15");
         // reconnect_on_http_error used to appear TWICE here ("…=4xx,…=5xx").
         // stream-lavf-o is a KEY-VALUE list, so that is one key set twice and
@@ -1191,7 +1191,7 @@ pub const MediaPlayer = struct {
         const header_len = @min(header_fields.len, self.current_header_fields.len);
         @memcpy(self.current_header_fields[0..header_len], header_fields[0..header_len]);
         self.current_header_fields_len = header_len;
-        self.current_unbounded_network_read = request.unbounded_network_read;
+        self.current_loopback_stream = request.loopback_stream;
         self.fallback_url_len = 0;
         self.fallback_recovery.reset();
         self.server_recovery_attempted = false;
@@ -1319,7 +1319,7 @@ pub const MediaPlayer = struct {
             .url = self.current_url[0..self.current_url_len],
             .user_agent = self.current_user_agent[0..self.current_user_agent_len],
             .prepared_header_fields = self.current_header_fields[0..self.current_header_fields_len],
-            .unbounded_network_read = self.current_unbounded_network_read,
+            .loopback_stream = self.current_loopback_stream,
         });
     }
 
@@ -2347,7 +2347,7 @@ pub fn updateTorrentBackgroundTasks() void {
                             .url = p.current_url[0..p.current_url_len],
                             .user_agent = p.current_user_agent[0..p.current_user_agent_len],
                             .prepared_header_fields = p.current_header_fields[0..p.current_header_fields_len],
-                            .unbounded_network_read = p.current_unbounded_network_read,
+                            .loopback_stream = p.current_loopback_stream,
                         });
                         continue;
                     }
@@ -2830,7 +2830,7 @@ pub fn updateTorrentBackgroundTasks() void {
                         p.proxy_handle = h;
                         var url_buf: [128]u8 = undefined;
                         if (stream_proxy.getStreamUrl(h, &url_buf)) |stream_url| {
-                            p.load(.{ .url = stream_url, .origin = .torrent, .unbounded_network_read = true });
+                            p.load(.{ .url = stream_url, .origin = .torrent, .loopback_stream = true });
                             logs.pushLog("info", "player", "Streaming via HTTP proxy", false);
                         } else {
                             // Fallback to raw file if URL generation fails

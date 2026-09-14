@@ -97,7 +97,7 @@ route is not a completed row.
 | One-click player popover dismissal | Outside presses pass through to Back/Settings/Close/other pickers; full native test suite |
 | Idle shutdown sidecar policy | Voice/search/comics process sweeps are demand-driven; installed close p95 reduced to 771 ms |
 | Durable preference lifecycle | Early changes remain dirty until storage is ready; SQLite closes after its final consumer |
-| Per-stream recovery policy | Ordinary web reads have a 15-second recovery deadline; only the blocking torrent proxy remains unbounded |
+| Per-stream recovery policy | Complete; torrent piece waits recover after 15 seconds, proxy stop cancels within one 25 ms poll, incomplete bodies reconnect, and mpv retains a finite 20-second backstop |
 | Actionable playback failure | Exhausted loads leave the spinner, show Retry/Close, and preserve the full URL, agent, headers and timeout policy |
 | Resource regression gate | Idle peak 108.4 MB working set / 1,966 handles; clean close leaves no observed child process |
 | Cold preference integrity | Settings remain read-only until async restore publishes readiness; query failure falls back to usable defaults |

@@ -306,7 +306,7 @@ def test_typed_playback_origin():
             and ".queue_item_id = item.id" in queue
             and "playback.relativeIndex(" in queue,
         "torrent internal loads preserve owner": ".origin = .torrent" in ply
-            and ".unbounded_network_read = true" in ply,
+            and ".loopback_stream = true" in ply,
     }
     missing = [k for k, v in checks.items() if not v]
     if missing:
