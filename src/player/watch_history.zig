@@ -491,6 +491,21 @@ fn removeByName(name: []const u8) bool {
     return false;
 }
 
+/// Stable-identity UI mutation; unlike the legacy index API this remains
+/// correct if another history write changes array order before a click lands.
+pub fn removeByNameUi(name: []const u8) bool {
+    return removeByName(name);
+}
+
+pub fn copyByName(name: []const u8, out: *WatchEntry) bool {
+    for (entries[0..count]) |entry| {
+        if (!std.mem.eql(u8, entry.name[0..entry.name_len], name)) continue;
+        out.* = entry;
+        return true;
+    }
+    return false;
+}
+
 /// Queue a web/API history mutation for the UI thread, which owns the live
 /// cache. Headless mode has no renderer and may apply it under the queue lock.
 pub fn requestRemove(name: []const u8) bool {

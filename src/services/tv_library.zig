@@ -654,7 +654,6 @@ fn addMovieRows() void {
         var display_buf: [256]u8 = undefined;
         r.setName(display_name.clean(&display_buf, name));
         r.setId(name);
-        r.hist_idx = @intCast(i);
         r.pct = @floatCast(e.percent);
         r.prog = .{
             .watched = @intFromFloat(@max(0, @min(100, e.percent))),
@@ -1198,10 +1197,9 @@ fn removeRow(r: *const tp.Row) void {
             db.animeRemoveContinue(mal);
         },
         .movie => {
-            // hist_idx is an index into a live array, so it is only valid for
+            // Stable history identity survives snapshot rebuilds and concurrent
             // this frame's snapshot — remove immediately and rebuild.
-            if (r.hist_idx < 0) return;
-            @import("../player/watch_history.zig").remove(@intCast(r.hist_idx));
+            if (!@import("../player/watch_history.zig").removeByNameUi(r.idSlice())) return;
         },
     }
     // The snapshot is cached until something marks it stale; without this the
@@ -1220,7 +1218,7 @@ fn playLabel(r: *const tp.Row) ?[]const u8 {
             return if (r.resume_secs > 2) "Resume" else "Play next";
         },
         .movie => {
-            if (r.hist_idx < 0) return null;
+            if (r.id_len == 0) return null;
             if (r.pct >= tp.MOVIE_DONE_PCT) return "Watch again";
             return if (r.pct >= tp.MOVIE_START_PCT) "Resume" else "Play";
         },
@@ -1255,11 +1253,9 @@ fn playRow(r: *const tp.Row) void {
         },
         .movie => {
             const watch = @import("../player/watch_history.zig");
-            if (r.hist_idx < 0) return;
-            const i: usize = @intCast(r.hist_idx);
-            if (i >= watch.count or i >= watch.entries.len) return; // history moved under us
-            const e = &watch.entries[i];
-            const link = e.link[0..@min(e.link_len, e.link.len)];
+            var entry: watch.WatchEntry = .{};
+            if (!watch.copyByName(r.idSlice(), &entry)) return;
+            const link = entry.link[0..@min(entry.link_len, entry.link.len)];
             if (link.len == 0) return;
             @import("browser.zig").resumePlayback(link);
         },

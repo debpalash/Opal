@@ -117,7 +117,7 @@ def test_watching_remove():
         "dispatch exists": "fn removeRow(" in lib,
         "tv un-tracks": "db.tvSetTracked(r.tmdb_id, false)" in lib,
         "anime drops continue row": "db.animeRemoveContinue(mal)" in lib,
-        "movie drops history entry": "watch_history.zig\").remove(" in lib,
+        "movie drops history entry": "removeByNameUi(r.idSlice())" in lib,
         "anime delete added": "pub fn animeRemoveContinue(" in dbz,
         # Narrow on purpose: only the continue row, never the watched flags.
         "anime delete is narrow": "DELETE FROM anime_continue WHERE mal_id = ?" in dbz,
@@ -129,9 +129,8 @@ def test_watching_remove():
     if missing:
         return "fail", "watching remove incomplete: " + ", ".join(missing)
 
-    # A movie row's hist_idx indexes a live array, so it must be guarded.
-    if "if (r.hist_idx < 0) return;" not in lib:
-        return "fail", "movie removal does not guard hist_idx < 0"
+    if "hist_idx" in lib:
+        return "fail", "movie actions still depend on a transient history index"
     return "pass", ("all three kinds removable from Watching; watched flags "
                     "preserved so re-adding does not reset progress")
 

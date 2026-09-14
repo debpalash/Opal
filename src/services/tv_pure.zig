@@ -406,9 +406,6 @@ pub const Row = struct {
     user: UserStatus = .none,
     /// Movies only: watched fraction, 0-100 (watch_history percent).
     pct: f32 = 0,
-    /// Movies only: index into watch_history.entries, or -1. Resume needs the link.
-    hist_idx: i32 = -1,
-
     next: Ep = .{},
     has_next: bool = false,
     prog: Progress = .{},
