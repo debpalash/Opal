@@ -536,6 +536,8 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
 .form-field input:focus{border-color:var(--accent)}
 #jf-connect{background:var(--accent);color:#0c0c11;font-weight:600;border-radius:var(--rad);padding:11px 18px;width:100%}
 #jf-disconnect{color:var(--text-2);font-size:13px;margin-top:6px}
+.source-session-actions{display:flex;justify-content:flex-end;gap:4px;margin:2px 0 8px}
+.source-session-actions[hidden]{display:none}.source-session-actions .danger{color:var(--danger)}
 .source-manager summary{cursor:pointer;color:var(--text-2);font-weight:650}
 .source-add-form{display:grid;grid-template-columns:minmax(120px,1fr) minmax(220px,2fr) auto;gap:8px;align-items:end;margin:12px 0}
 .source-add-form label{display:flex;flex-direction:column;gap:5px;color:var(--text-3);font-size:12px}

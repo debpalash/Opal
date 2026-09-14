@@ -371,27 +371,35 @@ function renderVndb(rows){
 }
 
 // ── Audiobookshelf ──
-function loadAbs(){ pollAbs(); }
+let absRestoreRequested = false;
+function loadAbs(){ absRestoreRequested = false; pollAbs(); }
 function pollAbs(){
   clearInterval(absWatch);
   let ticks = 0;
-  absWatch = setInterval(async () => {
+  const tick = async () => {
     ticks++;
     try {
       const d = await api('/abs');
       renderAbs(d);
       if ((!d.loading && ticks > 1) || ticks > 40) clearInterval(absWatch);
     } catch { clearInterval(absWatch); }
-  }, 900);
+  };
+  tick();
+  absWatch = setInterval(tick, 900);
 }
 function renderAbs(d){
   $('abs-login').style.display = d.connected ? 'none' : '';
+  $('abs-session').hidden = !d.connected;
   if (!d.connected && d.server && !$('abs-server').value) $('abs-server').value = d.server;
   $('abs-hint').innerHTML = d.loading ? '<span class="spin"></span> Loading…'
     : (d.error || (d.connected ? (d.library || 'Pick a library') : 'Sign in to your Audiobookshelf server.'));
   const books = d.view === 'Books';
+  if (d.connected && !d.loading && !books && !(d.libraries || []).length && !absRestoreRequested) {
+    absRestoreRequested = true;
+    apiMutation('/abs/libraries').catch(error => { $('abs-hint').textContent = error.message || 'Could not restore libraries.'; });
+  }
   $('abs-crumbs').innerHTML = books ? '<button class="more" id="abs-back">‹ Libraries</button>' : '';
-  if ($('abs-back')) $('abs-back').onclick = () => { api('/abs/back').catch(()=>{}); pollAbs(); };
+  if ($('abs-back')) $('abs-back').onclick = () => { apiMutation('/abs/back').catch(()=>{}); pollAbs(); };
   const rows = books ? (d.books || []) : (d.libraries || []);
   $('abs-results').innerHTML = rows.map((r, i) => `
     <div class="result">
@@ -404,7 +412,7 @@ function renderAbs(d){
         <button class="play" data-i="${i}">${books ? 'Play' : 'Open'}</button></div>
     </div>`).join('') || (d.connected ? '<div class="empty">Nothing here</div>' : '');
   $('abs-results').querySelectorAll('button[data-i]').forEach(b => {
-    b.onclick = () => { api('/abs/' + (books ? 'play' : 'open') + '?idx=' + b.dataset.i).catch(()=>{}); pollAbs(); };
+    b.onclick = () => { apiMutation('/abs/' + (books ? 'play' : 'open') + '?idx=' + b.dataset.i).catch(()=>{}); pollAbs(); };
   });
   $('abs-results').querySelectorAll('.abs-details').forEach(button => {
     button.onclick = () => {
@@ -419,25 +427,34 @@ function renderAbs(d){
 }
 
 // ── OPDS catalog ──
-function loadOpds(){ pollOpds(); }
+let opdsRestoreRequested = false;
+function loadOpds(){ opdsRestoreRequested = false; pollOpds(); }
 function pollOpds(){
   clearInterval(opWatch);
   let ticks = 0;
-  opWatch = setInterval(async () => {
+  const tick = async () => {
     ticks++;
     try {
       const d = await api('/opds');
       renderOpds(d);
       if ((!d.loading && ticks > 1) || ticks > 40) clearInterval(opWatch);
     } catch { clearInterval(opWatch); }
-  }, 900);
+  };
+  tick();
+  opWatch = setInterval(tick, 900);
 }
 function renderOpds(d){
   $('opds-login').style.display = d.connected ? 'none' : '';
+  $('opds-session').hidden = !d.connected;
+  if (!d.connected && d.server && !$('opds-server').value) $('opds-server').value = d.server;
+  if (d.connected && !d.loading && !(d.entries || []).length && !opdsRestoreRequested) {
+    opdsRestoreRequested = true;
+    apiMutation('/opds/connect').catch(error => { $('opds-hint').textContent = error.message || 'Could not restore catalog.'; });
+  }
   $('opds-hint').innerHTML = d.loading ? '<span class="spin"></span> Loading…'
     : (d.error ? esc(d.message || 'Connection failed') : (d.connected ? (d.feed || '') : 'Point this at any OPDS catalog (Komga, Kavita, Calibre-Web, LANraragi).'));
   $('opds-crumbs').innerHTML = d.depth > 0 ? '<button class="more" id="opds-back">‹ Back</button>' : '';
-  if ($('opds-back')) $('opds-back').onclick = () => { api('/opds/back').catch(()=>{}); pollOpds(); };
+  if ($('opds-back')) $('opds-back').onclick = () => { apiMutation('/opds/back').catch(()=>{}); pollOpds(); };
   $('opds-results').innerHTML = (d.entries || []).map((e, i) => `
     <div class="result">
       <div class="t">${esc(e.title)}</div>
@@ -448,7 +465,7 @@ function renderOpds(d){
         <button class="play" data-i="${i}">${e.nav ? 'Open' : 'Read'}</button></div>
     </div>`).join('') || (d.connected ? '<div class="empty">Empty feed</div>' : '');
   $('opds-results').querySelectorAll('button[data-i]').forEach(b => {
-    b.onclick = () => { api('/opds/open?idx=' + b.dataset.i).catch(()=>{}); pollOpds(); };
+    b.onclick = () => { apiMutation('/opds/open?idx=' + b.dataset.i).catch(()=>{}); pollOpds(); };
   });
   $('opds-results').querySelectorAll('.opds-details').forEach(button => {
     const entry = (d.entries || [])[Number(button.dataset.details)] || {};
@@ -559,11 +576,11 @@ function openSourceDetails(source, item, trigger){
     }
   } else if (source === 'Audiobookshelf') {
     actions.append(detailAction('Play', async () => {
-      await api('/abs/play?idx=' + encodeURIComponent(item.index)); closeSourceDetails(); pollAbs();
+      await apiMutation('/abs/play?idx=' + encodeURIComponent(item.index)); closeSourceDetails(); pollAbs();
     }, true));
   } else if (source === 'OPDS') {
     actions.append(detailAction(item.nav ? 'Open' : 'Read', async () => {
-      await api('/opds/open?idx=' + encodeURIComponent(item.index)); closeSourceDetails(); pollOpds();
+      await apiMutation('/opds/open?idx=' + encodeURIComponent(item.index)); closeSourceDetails(); pollOpds();
     }, true));
   } else if (source === 'Podcast') {
     actions.append(detailAction(item.kind === 'show' ? 'View episodes' : 'Play', async () => {
@@ -767,20 +784,30 @@ onGo('nv-go', 'nv-q', runNovels);
 onGo('vn-go', 'vn-q', runVndb);
 $('cx-close').onclick = () => closeComic();
 $('dr-more').onclick = () => { api('/drama/more').catch(()=>{}); loadDrama(); };
-$('abs-go').onclick = () => {
-  apiFormMutation('/abs/login', {
-    server:$('abs-server').value.trim(), user:$('abs-user').value, pass:$('abs-pass').value,
-  }).catch(()=>{});
-  $('abs-pass').value = '';
-  pollAbs();
+$('abs-go').onclick = async () => {
+  const button = $('abs-go'); button.disabled = true;
+  try {
+    await apiFormMutation('/abs/login', {
+      server:$('abs-server').value.trim(), user:$('abs-user').value, pass:$('abs-pass').value,
+    });
+    pollAbs();
+  } catch (error) { $('abs-hint').textContent = error.message || 'Could not connect.'; }
+  finally { $('abs-pass').value = ''; button.disabled = false; }
 };
-$('opds-go').onclick = () => {
-  apiFormMutation('/opds/connect', {
-    server:$('opds-server').value.trim(), user:$('opds-user').value, pass:$('opds-pass').value,
-  }).catch(()=>{});
-  $('opds-pass').value = '';
-  pollOpds();
+$('abs-out').onclick = async () => { await apiMutation('/abs/logout').catch(error => toast(error.message)); pollAbs(); };
+$('abs-edit').onclick = () => $('abs-out').click();
+$('opds-go').onclick = async () => {
+  const button = $('opds-go'); button.disabled = true;
+  try {
+    await apiFormMutation('/opds/connect', {
+      server:$('opds-server').value.trim(), user:$('opds-user').value, pass:$('opds-pass').value,
+    });
+    pollOpds();
+  } catch (error) { $('opds-hint').textContent = error.message || 'Could not connect.'; }
+  finally { $('opds-pass').value = ''; button.disabled = false; }
 };
+$('opds-out').onclick = async () => { await apiMutation('/opds/disconnect').catch(error => toast(error.message)); pollOpds(); };
+$('opds-edit').onclick = () => $('opds-out').click();
 $('plex-go').onclick = () => { apiMutation('/plex/connect').catch(()=>{}); pollPlex(); };
 $('plex-out').onclick = () => { apiMutation('/plex/disconnect').catch(()=>{}); pollPlex(); };
 $('lg-refresh').onclick = () => loadLogs();

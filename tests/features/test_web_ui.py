@@ -949,6 +949,38 @@ def test_rss_source_crud_and_persistence():
     return "pass", "RSS feeds persist and expose validated add/edit/enable/remove workflows"
 
 
+@test("Audiobookshelf and OPDS connections have durable web lifecycle controls", "Web UI")
+def test_reading_server_connection_lifecycle():
+    remote = _remote_api()
+    media = _src("web/js/media.js")
+    html = _src("web/index.html")
+    config = _src("src/core/config.zig")
+    checks = {
+        "protected credentials persist": all(marker in config for marker in (
+            'setSecretKey("abs_token"', 'setSecretKey("opds_user"', 'setSecretKey("opds_pass"',
+        )),
+        "connection state restores": all(marker in config for marker in (
+            '"abs_connected"', '"opds_connected"', 'loadSecretValue(key, val',
+        )),
+        "server projected without credentials": '\\"server\\":\\"' in remote,
+        "explicit lifecycle buttons": all(marker in html for marker in (
+            "abs-session", "abs-edit", "abs-out", "opds-session", "opds-edit", "opds-out",
+        )),
+        "one click disconnect": "apiMutation('/abs/logout')" in media and "apiMutation('/opds/disconnect')" in media,
+        "restored content reloads": "apiMutation('/abs/libraries')" in media and "apiMutation('/opds/connect')" in media,
+        "polls immediately": media.count("tick();") >= 2,
+        "mutations use POST": all(marker in media for marker in (
+            "apiMutation('/abs/back')", "apiMutation('/opds/back')", "apiMutation('/opds/open?idx='",
+        )),
+        "server enforces methods": remote.count('requireMethod(stream, method, "POST")') >= 20,
+        "unknown actions rejected": "unknown Audiobookshelf action" in remote and "unknown OPDS action" in remote,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "reading-server lifecycle incomplete: " + ", ".join(missing)
+    return "pass", "ABS/OPDS persist securely, restore immediately, edit/disconnect once, and POST mutations"
+
+
 @test("Remote API never serializes socket writes behind a global lock", "Remote")
 def test_remote_response_concurrency_boundary():
     remote = _remote_api()

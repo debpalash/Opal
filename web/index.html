@@ -243,6 +243,10 @@
       <div class="search-row"><input id="abs-user" placeholder="Username" autocapitalize="off"><input id="abs-pass" type="password" placeholder="Password"></div>
       <div class="search-row"><button id="abs-go">Sign in</button></div>
     </div>
+    <div class="source-session-actions" id="abs-session" hidden>
+      <button type="button" id="abs-edit" class="text-btn">Change server</button>
+      <button type="button" id="abs-out" class="text-btn danger">Disconnect</button>
+    </div>
     <div class="hint" id="abs-hint"></div>
     <div id="abs-crumbs"></div>
     <div id="abs-results"></div>
@@ -253,6 +257,10 @@
       <div class="search-row"><input id="opds-server" placeholder="https://komga.example.com/opds/v1.2/catalog" autocapitalize="off"></div>
       <div class="search-row"><input id="opds-user" placeholder="Username (optional)" autocapitalize="off"><input id="opds-pass" type="password" placeholder="Password"></div>
       <div class="search-row"><button id="opds-go">Connect</button></div>
+    </div>
+    <div class="source-session-actions" id="opds-session" hidden>
+      <button type="button" id="opds-edit" class="text-btn">Change catalog</button>
+      <button type="button" id="opds-out" class="text-btn danger">Disconnect</button>
     </div>
     <div class="hint" id="opds-hint"></div>
     <div id="opds-crumbs"></div>

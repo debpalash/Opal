@@ -3862,16 +3862,19 @@ fn apiAbs(stream: std.Io.net.Stream, method: []const u8, api_path: []const u8, q
         return;
     }
     if (std.mem.eql(u8, api_path, "/abs/logout")) {
+        if (!requireMethod(stream, method, "POST")) return;
         abs.disconnect();
         sendJson(stream, "{\"ok\":true,\"action\":\"abs_logout\"}");
         return;
     }
     if (std.mem.eql(u8, api_path, "/abs/libraries")) {
+        if (!requireMethod(stream, method, "POST")) return;
         abs.fetchLibraries();
         sendJson(stream, "{\"ok\":true,\"action\":\"abs_libraries\"}");
         return;
     }
     if (std.mem.eql(u8, api_path, "/abs/open")) {
+        if (!requireMethod(stream, method, "POST")) return;
         const idx = std.fmt.parseInt(usize, getQueryParam(query, "idx") orelse "999", 10) catch 999;
         if (idx >= s.library_count) {
             sendJsonStatus(stream, "404 Not Found", "{\"error\":\"no such library\"}");
@@ -3882,16 +3885,19 @@ fn apiAbs(stream: std.Io.net.Stream, method: []const u8, api_path: []const u8, q
         return;
     }
     if (std.mem.eql(u8, api_path, "/abs/back")) {
+        if (!requireMethod(stream, method, "POST")) return;
         abs.goToLibraries();
         sendJson(stream, "{\"ok\":true,\"action\":\"abs_back\"}");
         return;
     }
     if (std.mem.eql(u8, api_path, "/abs/more")) {
+        if (!requireMethod(stream, method, "POST")) return;
         abs.loadMore();
         sendJson(stream, "{\"ok\":true,\"action\":\"abs_more\"}");
         return;
     }
     if (std.mem.eql(u8, api_path, "/abs/play")) {
+        if (!requireMethod(stream, method, "POST")) return;
         const idx = std.fmt.parseInt(usize, getQueryParam(query, "idx") orelse "999", 10) catch 999;
         if (idx >= s.book_count) {
             sendJsonStatus(stream, "404 Not Found", "{\"error\":\"no such book\"}");
@@ -3902,6 +3908,11 @@ fn apiAbs(stream: std.Io.net.Stream, method: []const u8, api_path: []const u8, q
         return;
     }
 
+    if (!std.mem.eql(u8, api_path, "/abs")) {
+        sendJsonStatus(stream, "404 Not Found", "{\"error\":\"unknown Audiobookshelf action\"}");
+        return;
+    }
+    if (!requireMethod(stream, method, "GET")) return;
     const a = @import("../core/alloc.zig").allocator;
     const json_buf = a.alloc(u8, 192 * 1024) catch return;
     defer a.free(json_buf);
@@ -3977,11 +3988,13 @@ fn apiOpds(stream: std.Io.net.Stream, method: []const u8, api_path: []const u8, 
         return;
     }
     if (std.mem.eql(u8, api_path, "/opds/disconnect")) {
+        if (!requireMethod(stream, method, "POST")) return;
         opds.disconnect();
         sendJson(stream, "{\"ok\":true,\"action\":\"opds_disconnect\"}");
         return;
     }
     if (std.mem.eql(u8, api_path, "/opds/open")) {
+        if (!requireMethod(stream, method, "POST")) return;
         const idx = std.fmt.parseInt(usize, getQueryParam(query, "idx") orelse "999", 10) catch 999;
         if (idx >= o.entry_count) {
             sendJsonStatus(stream, "404 Not Found", "{\"error\":\"no such entry\"}");
@@ -3992,16 +4005,23 @@ fn apiOpds(stream: std.Io.net.Stream, method: []const u8, api_path: []const u8, 
         return;
     }
     if (std.mem.eql(u8, api_path, "/opds/back")) {
+        if (!requireMethod(stream, method, "POST")) return;
         opds.goBack();
         sendJson(stream, "{\"ok\":true,\"action\":\"opds_back\"}");
         return;
     }
     if (std.mem.eql(u8, api_path, "/opds/more")) {
+        if (!requireMethod(stream, method, "POST")) return;
         opds.loadMore();
         sendJson(stream, "{\"ok\":true,\"action\":\"opds_more\"}");
         return;
     }
 
+    if (!std.mem.eql(u8, api_path, "/opds")) {
+        sendJsonStatus(stream, "404 Not Found", "{\"error\":\"unknown OPDS action\"}");
+        return;
+    }
+    if (!requireMethod(stream, method, "GET")) return;
     const a = @import("../core/alloc.zig").allocator;
     const json_buf = a.alloc(u8, 256 * 1024) catch return;
     defer a.free(json_buf);
@@ -4013,6 +4033,8 @@ fn apiOpds(stream: std.Io.net.Stream, method: []const u8, api_path: []const u8, 
         if (o.fetch_error) "true" else "false",
     }) catch return;
     escJsonWrite(&w, txt.safeUtf8(o.error_msg[0..@min(o.error_msg_len, o.error_msg.len)]));
+    w.writeAll("\",\"server\":\"") catch return;
+    escJsonWrite(&w, txt.safeUtf8(o.server_url[0..@min(o.server_url_len, o.server_url.len)]));
     w.writeAll("\",\"feed\":\"") catch return;
     escJsonWrite(&w, txt.safeUtf8(o.feed_title[0..@min(o.feed_title_len, o.feed_title.len)]));
     w.writeAll("\",\"entries\":[") catch return;
