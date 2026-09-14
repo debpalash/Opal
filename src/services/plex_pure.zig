@@ -77,6 +77,115 @@ pub const DeepLink = struct {
     part: []const u8,
 };
 
+pub const SearchItem = struct {
+    title: [160]u8 = std.mem.zeroes([160]u8),
+    title_len: usize = 0,
+    detail: [96]u8 = std.mem.zeroes([96]u8),
+    detail_len: usize = 0,
+    identity: [384]u8 = std.mem.zeroes([384]u8),
+    identity_len: usize = 0,
+    fallback_part: [256]u8 = std.mem.zeroes([256]u8),
+    fallback_part_len: usize = 0,
+    resume_secs: f32 = 0,
+    duration_secs: f32 = 0,
+};
+
+fn jsonString(value: std.json.Value, key: []const u8) ?[]const u8 {
+    if (value != .object) return null;
+    const field = value.object.get(key) orelse return null;
+    return if (field == .string) field.string else null;
+}
+
+/// Project Plex's mixed `/search` response into bounded, playable rows.
+/// Missing `Metadata` is a valid empty search; malformed containers are null.
+pub fn parseSearchItems(allocator: std.mem.Allocator, body: []const u8, out: []SearchItem) ?usize {
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, body, .{}) catch return null;
+    defer parsed.deinit();
+    if (parsed.value != .object) return null;
+    const container = parsed.value.object.get("MediaContainer") orelse return null;
+    if (container != .object) return null;
+    const metadata = container.object.get("Metadata") orelse return 0;
+    if (metadata != .array) return null;
+
+    var written: usize = 0;
+    for (metadata.array.items) |entry| {
+        if (written >= out.len) break;
+        if (entry != .object) continue;
+        const raw_title = jsonString(entry, "title") orelse continue;
+
+        var rating_key_buf: [32]u8 = undefined;
+        const rating_key = if (jsonString(entry, "ratingKey")) |key|
+            key
+        else if (entry.object.get("ratingKey")) |value|
+            if (value == .integer and value.integer >= 0)
+                (std.fmt.bufPrint(&rating_key_buf, "{d}", .{value.integer}) catch continue)
+            else
+                continue
+        else
+            continue;
+        if (!validRatingKey(rating_key)) continue;
+
+        const media = entry.object.get("Media") orelse continue;
+        if (media != .array) continue;
+        var parts: [32][]const u8 = undefined;
+        var part_count: usize = 0;
+        for (media.array.items) |version| {
+            if (part_count >= parts.len) break;
+            if (version != .object) continue;
+            const version_parts = version.object.get("Part") orelse continue;
+            if (version_parts != .array or version_parts.array.items.len == 0) continue;
+            const part = jsonString(version_parts.array.items[0], "key") orelse continue;
+            parts[part_count] = part;
+            part_count += 1;
+        }
+        const selected = selectVersionParts(parts[0..part_count]);
+        const part = if (selected.primary) |idx| parts[idx] else continue;
+
+        var result: SearchItem = .{};
+        const kind = jsonString(entry, "type") orelse "media";
+        const display_title = if (std.mem.eql(u8, kind, "episode")) blk: {
+            const show = jsonString(entry, "grandparentTitle") orelse "";
+            if (show.len == 0) break :blk raw_title;
+            const rendered = std.fmt.bufPrint(&result.title, "{s} · {s}", .{ show, raw_title }) catch raw_title;
+            result.title_len = rendered.len;
+            break :blk result.title[0..result.title_len];
+        } else raw_title;
+        if (result.title_len == 0) {
+            result.title_len = @min(display_title.len, result.title.len);
+            @memcpy(result.title[0..result.title_len], display_title[0..result.title_len]);
+        }
+
+        var year_buf: [16]u8 = undefined;
+        const year = if (entry.object.get("year")) |value|
+            if (value == .integer) (std.fmt.bufPrint(&year_buf, "{d}", .{value.integer}) catch "") else ""
+        else
+            "";
+        const detail = if (year.len > 0)
+            std.fmt.bufPrint(&result.detail, "Plex · {s} · {s}", .{ kind, year }) catch "Plex"
+        else
+            std.fmt.bufPrint(&result.detail, "Plex · {s}", .{kind}) catch "Plex";
+        result.detail_len = detail.len;
+
+        const identity = buildDeepLink(rating_key, part, &result.identity) orelse continue;
+        result.identity_len = identity.len;
+        if (selected.fallback) |idx| {
+            result.fallback_part_len = @min(parts[idx].len, result.fallback_part.len);
+            @memcpy(result.fallback_part[0..result.fallback_part_len], parts[idx][0..result.fallback_part_len]);
+        }
+        if (entry.object.get("viewOffset")) |value| {
+            if (value == .integer and value.integer > 0)
+                result.resume_secs = @floatCast(@as(f64, @floatFromInt(value.integer)) / 1000.0);
+        }
+        if (entry.object.get("duration")) |value| {
+            if (value == .integer and value.integer > 0)
+                result.duration_secs = @floatCast(@as(f64, @floatFromInt(value.integer)) / 1000.0);
+        }
+        out[written] = result;
+        written += 1;
+    }
+    return written;
+}
+
 /// Stable, credential-free Plex identity. The rating key drives timeline
 /// reporting while the media-part path reconstructs direct playback.
 pub fn buildDeepLink(rating_key: []const u8, part: []const u8, buf: []u8) ?[]const u8 {
@@ -214,6 +323,27 @@ test "tracked Plex deep links round-trip rating key and media path" {
     try std.testing.expectEqualStrings("/library/parts/45/file.mkv", parsed.part);
     try std.testing.expect(parseDeepLink("opal://plex/item/12x/part/library/parts/1/a.mkv") == null);
     try std.testing.expect(buildDeepLink("12", "/library/../secret", &buf) == null);
+}
+
+test "Plex search projection keeps playable identity resume and alternate" {
+    const fixture =
+        \\{"MediaContainer":{"Metadata":[
+        \\  {"ratingKey":"42","title":"Pilot","grandparentTitle":"Lanterns","type":"episode","year":2026,"viewOffset":90000,"duration":3600000,"Media":[{"Part":[{"key":"/library/parts/1/pilot.mkv"}]},{"Part":[{"key":"/library/parts/2/pilot.mp4"}]}]},
+        \\  {"ratingKey":"bad/key","title":"Unsafe","Media":[{"Part":[{"key":"/library/parts/3/bad.mkv"}]}]},
+        \\  {"ratingKey":7,"title":"Movie","type":"movie","Media":[{"Part":[{"key":"/library/parts/4/movie.mkv"}]}]}
+        \\]}}
+    ;
+    var rows: [4]SearchItem = [_]SearchItem{.{}} ** 4;
+    const count = parseSearchItems(std.testing.allocator, fixture, &rows).?;
+    try std.testing.expectEqual(@as(usize, 2), count);
+    try std.testing.expectEqualStrings("Lanterns · Pilot", rows[0].title[0..rows[0].title_len]);
+    try std.testing.expectEqualStrings("opal://plex/item/42/part/library/parts/1/pilot.mkv", rows[0].identity[0..rows[0].identity_len]);
+    try std.testing.expectEqualStrings("/library/parts/2/pilot.mp4", rows[0].fallback_part[0..rows[0].fallback_part_len]);
+    try std.testing.expectEqual(@as(f32, 90), rows[0].resume_secs);
+    try std.testing.expectEqual(@as(f32, 3600), rows[0].duration_secs);
+    try std.testing.expectEqualStrings("Movie", rows[1].title[0..rows[1].title_len]);
+    try std.testing.expectEqual(@as(?usize, 0), parseSearchItems(std.testing.allocator, "{\"MediaContainer\":{}}", &rows));
+    try std.testing.expect(parseSearchItems(std.testing.allocator, "[]", &rows) == null);
 }
 
 test "shouldFetchSections: no fetch when disconnected" {

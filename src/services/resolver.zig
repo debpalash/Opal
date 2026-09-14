@@ -33,6 +33,7 @@ pub const SourceType = enum {
     music, // a song — HTTP direct / yt-dlp
     radio, // a radio station stream — HTTP direct
     podcast, // a podcast show — opens the Podcasts tab on that feed
+    plex, // connected Plex library — credential-free deep-link playback
 };
 
 pub const ResolvedItem = struct {
@@ -76,6 +77,10 @@ pub const ResolvedItem = struct {
     catalog_kind_len: usize = 0,
     catalog_imdb: [16]u8 = std.mem.zeroes([16]u8),
     catalog_imdb_len: usize = 0,
+    resume_position_secs: f32 = 0,
+    duration_secs: f32 = 0,
+    fallback_url: [256]u8 = std.mem.zeroes([256]u8),
+    fallback_url_len: usize = 0,
 };
 
 // Shared result buffer. The cap is a hard ceiling on a single search wave —
@@ -122,6 +127,7 @@ pub var status_music = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_radio = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_podcast = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_catalog = std.atomic.Value(SourceStatus).init(.idle);
+pub var status_plex = std.atomic.Value(SourceStatus).init(.idle);
 
 // Explicit u8 backing so std.atomic.Value(SourceStatus) is byte-atomic. The
 // richer terminal values make an empty source distinguishable from a network,
@@ -409,6 +415,7 @@ pub fn resolveTracked(query: []const u8, intent: []const u8) u32 {
     Pre.set(&status_radio, .radio);
     Pre.set(&status_podcast, .podcast);
     status_catalog.store(.searching, .release);
+    status_plex.store(.searching, .release);
 
     // Fire every backend in parallel through the process-owned supervisor.
     // Superseded waves may overlap briefly, so the global admission cap also
@@ -436,6 +443,7 @@ pub fn resolveTracked(query: []const u8, intent: []const u8) u32 {
     };
     if (sourceOn(.local)) Spawn.go(resolveLocalFiles, &status_local); // instant — already on disk
     Spawn.go(resolveCatalog, &status_catalog); // typed movie/show metadata, always available keylessly
+    Spawn.go(resolvePlex, &status_plex); // connected personal library; unavailable is immediate
     if (sourceOn(.rss)) Spawn.go(resolveRss, &status_rss); // already-fetched magnets matching query
     if (sourceOn(.jellyfin)) Spawn.go(resolveJellyfin, &status_jf);
     // 1337x is covered by nova2's one337x.py engine (spawned above with "all").
@@ -1132,7 +1140,7 @@ fn attrValue(html: []const u8, name: []const u8, limit: usize) ?[]const u8 {
 // ══════════════════════════════════════════════════════════
 
 fn cacheKey(buf: []u8, query: []const u8) []const u8 {
-    return std.fmt.bufPrint(buf, "search:v2:{s}", .{query}) catch "search:v2:";
+    return std.fmt.bufPrint(buf, "search:v3:{s}", .{query}) catch "search:v3:";
 }
 
 /// Serialize the current `results` (under caller's lock) into `out`.
@@ -1169,6 +1177,9 @@ fn serializeRows(rows: []const ResolvedItem, out: []u8) ?[]u8 {
         w.i32v(it.catalog_id);
         w.blob(it.catalog_kind[0..@min(it.catalog_kind_len, it.catalog_kind.len)]);
         w.blob(it.catalog_imdb[0..@min(it.catalog_imdb_len, it.catalog_imdb.len)]);
+        w.f32v(it.resume_position_secs);
+        w.f32v(it.duration_secs);
+        w.blob(it.fallback_url[0..@min(it.fallback_url_len, it.fallback_url.len)]);
     }
     return w.done();
 }
@@ -1215,6 +1226,9 @@ fn deserializeInto(bytes: []const u8) usize {
         it.catalog_id = r.i32v() orelse break;
         copyField(&it.catalog_kind, &it.catalog_kind_len, r.blob() orelse break);
         copyField(&it.catalog_imdb, &it.catalog_imdb_len, r.blob() orelse break);
+        it.resume_position_secs = r.f32v() orelse break;
+        it.duration_secs = r.f32v() orelse break;
+        copyField(&it.fallback_url, &it.fallback_url_len, r.blob() orelse break);
         results[count] = it;
         count += 1;
     }
@@ -1303,7 +1317,7 @@ fn checkAllDoneLocked(run: u32) void {
         status_nasa.load(.acquire) != .searching and status_commons.load(.acquire) != .searching and
         status_music.load(.acquire) != .searching and status_radio.load(.acquire) != .searching and
         status_podcast.load(.acquire) != .searching and status_livetv.load(.acquire) != .searching and
-        status_catalog.load(.acquire) != .searching)
+        status_catalog.load(.acquire) != .searching and status_plex.load(.acquire) != .searching)
     {
         // Swap so the resolving→done transition fires exactly once even if two
         // finishing workers observe "all done" concurrently — only the winner
@@ -1366,6 +1380,7 @@ fn computeMatchAgainst(item: ResolvedItem, query_override: []const u8) MatchInfo
     var source_w: u32 = switch (item.source) {
         .local => 0, // already on disk — instant, rank first
         .jellyfin => 1,
+        .plex => 2,
         .stremio => 5,
         .torrent => 8,
         .anime => 12,
@@ -1508,6 +1523,32 @@ fn resolveJellyfin(query_buf: [256]u8, qlen: usize) void {
 
         if (item.name_len > 0) _ = pushResult(item);
         pos = obj_end;
+    }
+}
+
+fn resolvePlex(query_buf: [256]u8, qlen: usize) void {
+    defer finishWorker(&status_plex, .done);
+    const plex = @import("plex.zig");
+    if (!plex.isConnected()) {
+        noteWorkerOutcome(.unavailable);
+        return;
+    }
+
+    var found: [20]plex.SearchItem = [_]plex.SearchItem{.{}} ** 20;
+    const count = plex.searchInto(query_buf[0..qlen], &found);
+    if (count == 0) {
+        noteWorkerOutcome(.no_results);
+        return;
+    }
+    for (found[0..count]) |entry| {
+        var item = ResolvedItem{ .source = .plex };
+        copyField(&item.name, &item.name_len, entry.title[0..entry.title_len]);
+        copyField(&item.detail, &item.detail_len, entry.detail[0..entry.detail_len]);
+        copyField(&item.url, &item.url_len, entry.identity[0..entry.identity_len]);
+        item.resume_position_secs = entry.resume_secs;
+        item.duration_secs = entry.duration_secs;
+        copyField(&item.fallback_url, &item.fallback_url_len, entry.fallback_part[0..entry.fallback_part_len]);
+        _ = pushResult(item);
     }
 }
 
@@ -3329,6 +3370,13 @@ pub fn playResolvedItem(item: *const ResolvedItem) void {
             jf.playItem(item.jf_item_id[0..item.jf_item_id_len]);
             state.gotoPlayer();
         },
+        .plex => @import("plex.zig").playSearchItem(
+            item.url[0..item.url_len],
+            item.fallback_url[0..item.fallback_url_len],
+            item.name[0..item.name_len],
+            item.resume_position_secs,
+            item.duration_secs,
+        ),
         .torrent => {
             // Central chokepoint for torrent playback from universal results —
             // row clicks and play buttons all land here, so a scam-flagged

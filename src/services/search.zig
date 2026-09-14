@@ -2096,6 +2096,7 @@ fn sourceBitOf(item: *const @import("resolver.zig").ResolvedItem) ?@import("reso
         // backend. They must not disappear with the Torrents pill or make the
         // no-hit summary claim that a torrent provider returned something.
         .tmdb => null,
+        .plex => null,
         .livetv => .livetv,
         .music => .music,
         .radio => .radio,
@@ -2261,6 +2262,7 @@ fn renderCompactRow(idx: usize, item: *const @import("resolver.zig").ResolvedIte
         .youtube => dvui.Color{ .r = 255, .g = 80, .b = 80, .a = 255 },
         .local => dvui.Color{ .r = 130, .g = 230, .b = 200, .a = 255 },
         .tmdb => dvui.Color{ .r = 1, .g = 180, .b = 228, .a = 255 },
+        .plex => dvui.Color{ .r = 229, .g = 160, .b = 13, .a = 255 },
         .comics => dvui.Color{ .r = 200, .g = 150, .b = 255, .a = 255 },
         .livetv => dvui.Color{ .r = 150, .g = 220, .b = 150, .a = 255 },
         .music => dvui.Color{ .r = 255, .g = 170, .b = 90, .a = 255 },
@@ -2275,6 +2277,7 @@ fn renderCompactRow(idx: usize, item: *const @import("resolver.zig").ResolvedIte
         .youtube => "YouTube",
         .local => "On disk",
         .tmdb => "Catalog",
+        .plex => "Plex",
         .comics => "Comics",
         .livetv => "Live TV",
         .music => "Music",

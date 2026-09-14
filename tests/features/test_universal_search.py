@@ -18,12 +18,15 @@ def test_universal_search_fanout():
     chat = _src("src/services/ai_chat.zig")
     lifecycle = _src("src/services/resolver_lifecycle_pure.zig")
     build = _src("build.zig")
+    plex = _src("src/services/plex.zig")
+    plex_pure = _src("src/services/plex_pure.zig")
 
     checks = {
         # ── Source identity ──
         "music/radio/podcast source types": all(
             f"    {s}," in res for s in ("livetv", "music", "radio", "podcast")
         ),
+        "plex source type": "    plex," in res,
         "toolbar pills declared": "stremio, rss, livetv, music, radio, podcast }" in res,
         # The mask must be derived from the enum, not a hand-written literal —
         # a hardcoded 0xFF silently left every new pill off.
@@ -35,6 +38,11 @@ def test_universal_search_fanout():
         "radio worker": "fn resolveRadio(" in res,
         "podcast worker": "fn resolvePodcasts(" in res,
         "live tv worker": "fn resolveLiveTv(" in res,
+        "plex isolated search": "pub fn searchInto(query: []const u8, out: []SearchItem)" in plex
+            and "fn resolvePlex(" in res and "Spawn.go(resolvePlex" in res,
+        "plex search parser is fixture-tested": "plex_pure.parseSearchItems(" in plex
+            and "Plex search projection keeps playable identity resume and alternate" in plex_pure
+            and 'b.path("src/services/plex_pure.zig")' in build,
         # The tab entry point mutates state.app.iptv; the fan-out must not.
         "live tv uses tab-independent entry": "iptv.searchInto(" in res and "searchIptv(" not in res,
         "live tv carries play hints": "item.http_ua" in res and "item.http_referrer" in res,
@@ -56,12 +64,14 @@ def test_universal_search_fanout():
             f"status_{s}.load(.acquire) != .searching" in res
             for s in ("livetv", "music", "radio", "podcast")
         ),
+        "plex lifecycle covered": "status_plex.load(.acquire) != .searching" in res,
         "per-source cap": "AUDIO_MAX" in res,
         # Heap, not the 512KB worker stack (CLAUDE.md thread-safety rule).
         "heap response buffers": res.count("alloc.alloc(u8, 512 * 1024)") >= 3,
 
         # ── Ranking: a song must not outrank the episode you asked for ──
         "audio ranked below video": ".livetv => 21" in res and ".music => 22" in res and ".podcast => 24" in res and ".radio => 26" in res,
+        "plex ranks as personal library": ".plex => 2" in res,
         "audio penalized for movie/show intent": (
             "item.source == .music or item.source == .radio or item.source == .podcast" in res
         ),
@@ -75,6 +85,8 @@ def test_universal_search_fanout():
         "music/radio play direct": ".youtube, .stremio, .local, .music, .radio => {" in res,
         "live tv replays its headers": ".livetv => {" in res and "loadContentDirectMetaHeaders(" in res and "originFromReferer(" in res,
         "podcast opens its tab": ".podcast => {" in res and "state.navigateToTab(.Podcasts)" in res,
+        "plex resumes with alternate": ".plex => @import(\"plex.zig\").playSearchItem(" in res
+            and "fallback_part" in plex and "resumeEligible(position, duration)" in plex,
 
         # ── UI surfaces (an unhandled switch arm is a compile error, but the
         #    pills/summary rows are data literals that silently omit) ──
@@ -109,7 +121,7 @@ def test_universal_search_fanout():
     missing = [k for k, ok in checks.items() if not ok]
     if missing:
         return "fail", "Fan-out incomplete: " + ", ".join(missing)
-    return "pass", "Universal search reaches live tv/music/radio/podcasts; cap 96; audio ranked below video"
+    return "pass", "Universal search reaches Plex/live TV/music/radio/podcasts; cap 96; personal libraries rank first"
 
 
 @test("Synced lyrics (lrclib)", "Audio")

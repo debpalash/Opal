@@ -56,6 +56,8 @@ const Item = struct {
     view_offset_ms: i64 = 0,
     duration_ms: i64 = 0,
 };
+
+pub const SearchItem = plex_pure.SearchItem;
 pub var items: [300]Item = undefined;
 pub var item_count: usize = 0;
 pub var is_loading: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
@@ -563,6 +565,32 @@ fn fetchWindow(section_idx: usize, start: usize, gen: u64) void {
     if (returned < PLEX_PAGE_SIZE or item_count >= items.len) more_available = false;
 }
 
+/// Search the connected Plex server without touching the Plex tab's live
+/// section/items buffers. This makes the omnibox a real cross-library search
+/// while keeping worker ownership isolated from browse pagination.
+pub fn searchInto(query: []const u8, out: []SearchItem) usize {
+    if (query.len == 0 or out.len == 0 or !isConnected() or server_uri_len == 0 or serverTok().len == 0) return 0;
+
+    var enc_buf: [768]u8 = undefined;
+    const encoded = @import("../core/http.zig").urlEncode(query, &enc_buf);
+    var url_buf: [1200]u8 = undefined;
+    const url = std.fmt.bufPrint(&url_buf, "{s}/search?query={s}&limit={d}", .{
+        server_uri[0..server_uri_len], encoded, @min(out.len, 24),
+    }) catch return 0;
+
+    const body = alloc.alloc(u8, 512 * 1024) catch return 0;
+    defer alloc.free(body);
+    var status: ?std.http.Status = null;
+    @import("../core/rate_limit.zig").acquire("plex", 5.0);
+    const n = httpGet(url, false, serverTok(), body, &status);
+    if (n == 0) {
+        if (status) |s| if (plex_pure.authRejected(@intFromEnum(s))) expireAuthSession();
+        return 0;
+    }
+
+    return plex_pure.parseSearchItems(alloc, body[0..n], out) orelse 0;
+}
+
 /// Infinite-scroll appender: fetch the NEXT Container-Start/Size window for the
 /// currently-open section and append it onto items[]. Guarded by `loading_more`
 /// + the main `is_loading` atomic so a near-bottom scroll can't spawn a burst.
@@ -698,6 +726,17 @@ pub fn resumePlayback(deep_link: []const u8) void {
     const legacy_prefix = "opal://plex";
     if (std.mem.startsWith(u8, deep_link, legacy_prefix))
         playPart(deep_link[legacy_prefix.len..], "Plex");
+}
+
+pub fn playSearchItem(deep_link: []const u8, fallback_part: []const u8, title: []const u8, position_secs: f32, duration_secs: f32) void {
+    const parsed = plex_pure.parseDeepLink(deep_link) orelse {
+        state.showToastTyped("Plex item is no longer available", .warning);
+        return;
+    };
+    const position: f64 = position_secs;
+    const duration: f64 = duration_secs;
+    const resume_at = if (@import("../player/watch_history_pure.zig").resumeEligible(position, duration)) position else null;
+    playPartTrackedAt(parsed.rating_key, parsed.part, fallback_part, title, resume_at);
 }
 
 // ── UI ───────────────────────────────────────────────────────────────────────
