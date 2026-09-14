@@ -1065,6 +1065,7 @@ fn appFrame() !dvui.App.Result {
     @import("services/queue.zig").drainUi();
     @import("services/resolver.zig").drainRemoteAction();
     @import("services/search.zig").drainMemorySearch();
+    @import("services/auto_subs.zig").pollAttach();
 
     // Adaptive default scale — DVUI already applies a reported display scale,
     // so Auto starts at 1.0× and never shrinks below it. A Linux panel probe
@@ -1380,6 +1381,7 @@ fn appFrame() !dvui.App.Result {
             // captured *MediaPlayer right now (use-after-free otherwise).
             state.players_mutex.lock();
             defer state.players_mutex.unlock();
+            @import("services/auto_subs.zig").cancelForMediaChange();
             var p_rem = state.app.players.orderedRemove(idx);
             // Save URL for Ctrl+Shift+T undo
             if (p_rem.current_url_len > 0 and p_rem.current_url_len <= 2048) {
@@ -1411,6 +1413,7 @@ fn appFrame() !dvui.App.Result {
         // Lock against the remote API thread (see the deferred-removal block above).
         state.players_mutex.lock();
         defer state.players_mutex.unlock();
+        @import("services/auto_subs.zig").cancelForMediaChange();
         const keep = @min(state.app.active_player_idx, state.app.players.items.len - 1);
         var i: usize = state.app.players.items.len;
         while (i > 0) {

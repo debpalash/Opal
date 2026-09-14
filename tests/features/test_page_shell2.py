@@ -404,7 +404,21 @@ def test_auto_download_subs():
     eng = open(os.path.join(PROJECT_DIR, "src/player/subtitles.zig")).read()
     if "auto_load" not in eng or "engine.auto_load" not in eng:
         return "fail", "engine lost the auto_load search→download chain flag"
-    return "pass", "FILE_LOADED with no sub track auto-fires the keyless engine (toggle-gated)"
+    auto = open(os.path.join(PROJECT_DIR, "src/services/auto_subs.zig")).read()
+    auto_pure = open(os.path.join(PROJECT_DIR, "src/services/auto_subs_pure.zig")).read()
+    main = open(os.path.join(PROJECT_DIR, "src/main.zig")).read()
+    build = open(os.path.join(PROJECT_DIR, "build.zig")).read()
+    if "bounded_process.StreamProcess.init" not in auto or "cancel_epoch" not in auto:
+        return "fail", "AI subtitle ffmpeg/Whisper children are not deadline/cancellation contained"
+    if "publishAttach(args" not in auto or "pub fn pollAttach()" not in auto:
+        return "fail", "generated subtitles bypass the UI-thread attachment handoff"
+    if "target_policy.matches" not in auto or "load_serial" not in auto_pure or "player_addr" not in auto_pure:
+        return "fail", "generated subtitles can attach to a replacement player/load"
+    if 'b.path("src/services/auto_subs_pure.zig")' not in build:
+        return "fail", "AI subtitle attachment identity policy is not unit-tested"
+    if "cancelForMediaChange()" not in player or 'auto_subs.zig").pollAttach()' not in main:
+        return "fail", "player replacement/removal does not cancel and drain AI subtitle work"
+    return "pass", "keyless auto-fetch plus contained, cancellation-safe AI subtitle generation and exact-load attach"
 
 
 @test("Sub Picker Lists Keyless Results", "Page Shell")

@@ -432,6 +432,15 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_playback_snapshot_pure).step);
 
+    const test_auto_subs_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/auto_subs_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_auto_subs_pure).step);
+
     const test_position_save_pure = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/player/position_save_pure.zig"),

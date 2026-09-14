@@ -2,6 +2,9 @@ const std = @import("std");
 const state = @import("../core/state.zig");
 const logs = @import("../core/logs.zig");
 const c = @import("../core/c.zig");
+const bounded_process = @import("../core/bounded_process.zig");
+const sync = @import("../core/sync.zig");
+const target_policy = @import("auto_subs_pure.zig");
 
 // ══════════════════════════════════════════════════════════
 // Auto Subtitles — whisper.cpp transcription of the current media.
@@ -25,6 +28,19 @@ pub var status_len: usize = 0;
 /// Path of the last generated .srt file (for export UI)
 pub var last_srt_path: [600]u8 = std.mem.zeroes([600]u8);
 pub var last_srt_path_len: usize = 0;
+
+var run_epoch = std.atomic.Value(u64).init(1);
+var pending_mutex: sync.Mutex = .{};
+var pending_attach: PendingAttach = .{};
+
+const PendingAttach = struct {
+    ready: bool = false,
+    player_addr: usize = 0,
+    load_serial: u64 = 0,
+    epoch: u64 = 0,
+    path: [600]u8 = std.mem.zeroes([600]u8),
+    path_len: usize = 0,
+};
 
 fn setStatus(msg: []const u8) void {
     const n = @min(msg.len, status_buf.len);
@@ -86,6 +102,9 @@ pub fn transcribeCurrent() void {
         return;
     }
     const p = state.app.players.items[state.app.active_player_idx];
+    const epoch = run_epoch.load(.acquire);
+    const player_addr = @intFromPtr(p);
+    const load_serial = p.load_serial;
 
     // Capture the current media path up-front so a file change mid-run
     // doesn't corrupt the transcription target.
@@ -123,7 +142,7 @@ pub fn transcribeCurrent() void {
         in_progress.store(false, .release);
         return;
     };
-    args.* = .{ .path = media_path };
+    args.* = .{ .path = media_path, .epoch = epoch, .player_addr = player_addr, .load_serial = load_serial };
 
     if (@import("../core/workers.zig").spawnLegacy(worker, .{args})) |t| @import("../core/workers.zig").release(t) else |_| {
         alloc.free(args.path);
@@ -133,7 +152,77 @@ pub fn transcribeCurrent() void {
     }
 }
 
-const WorkerArgs = struct { path: []u8 };
+const WorkerArgs = struct {
+    path: []u8,
+    epoch: u64,
+    player_addr: usize,
+    load_serial: u64,
+};
+
+fn runContained(argv: []const []const u8, timeout_ms: i64, epoch: u64) bool {
+    var process = bounded_process.StreamProcess.init(argv, .{
+        .timeout_ms = timeout_ms,
+        .terminate_grace_ms = 500,
+        .max_output_bytes = 64 * 1024,
+        .cancel_epoch = .{ .epoch64 = .{ .value = &run_epoch, .expected = epoch } },
+        .cancel_flag = @import("../core/workers.zig").quittingSignal(),
+    });
+    process.start() catch return false;
+    return process.finish().ok();
+}
+
+fn publishAttach(args: *const WorkerArgs, path: []const u8) bool {
+    if (run_epoch.load(.acquire) != args.epoch) return false;
+    pending_mutex.lock();
+    defer pending_mutex.unlock();
+    if (run_epoch.load(.acquire) != args.epoch) return false;
+    pending_attach = .{
+        .ready = true,
+        .player_addr = args.player_addr,
+        .load_serial = args.load_serial,
+        .epoch = args.epoch,
+    };
+    pending_attach.path_len = @min(path.len, pending_attach.path.len);
+    @memcpy(pending_attach.path[0..pending_attach.path_len], path[0..pending_attach.path_len]);
+    state.wakeUi();
+    return true;
+}
+
+/// Cancel a transcription when playback identity changes. The contained
+/// process watchdog terminates the entire ffmpeg/Whisper tree promptly.
+pub fn cancelForMediaChange() void {
+    _ = run_epoch.fetchAdd(1, .acq_rel);
+    pending_mutex.lock();
+    pending_attach.ready = false;
+    pending_mutex.unlock();
+}
+
+/// UI-thread handoff: only the exact player/load that requested transcription
+/// may receive the generated track.
+pub fn pollAttach() void {
+    var pending: PendingAttach = .{};
+    pending_mutex.lock();
+    if (pending_attach.ready) {
+        pending = pending_attach;
+        pending_attach.ready = false;
+    }
+    pending_mutex.unlock();
+    if (!pending.ready) return;
+    if (state.app.active_player_idx >= state.app.players.items.len) return;
+    const player = state.app.players.items[state.app.active_player_idx];
+    const target: target_policy.Target = .{
+        .player_addr = pending.player_addr,
+        .load_serial = pending.load_serial,
+        .epoch = pending.epoch,
+    };
+    if (!target_policy.matches(target, @intFromPtr(player), player.load_serial, run_epoch.load(.acquire))) return;
+    _ = c.mpvSubAdd(player.mpv_ctx, pending.path[0..pending.path_len]);
+    last_srt_path_len = @min(pending.path_len, last_srt_path.len);
+    @memcpy(last_srt_path[0..last_srt_path_len], pending.path[0..last_srt_path_len]);
+    setStatus("Auto-subtitles ready");
+    logs.pushLog("info", "subs", "Auto-subtitles generated via whisper", false);
+    state.showToast("Auto-subs loaded");
+}
 
 fn worker(args: *WorkerArgs) void {
     const alloc = @import("../core/alloc.zig").allocator;
@@ -187,19 +276,8 @@ fn worker(args: *WorkerArgs) void {
         "-ar",    "16000", "-ac", "1",
         "-vn",    "-f",    "wav", tmp_wav,
     };
-    var ff = @import("../core/io_global.zig").Child.init(&ff_argv, alloc);
-    ff.stdout_behavior = .Ignore;
-    ff.stderr_behavior = .Ignore;
-    ff.spawn() catch {
-        setStatus("ffmpeg spawn failed");
-        return;
-    };
-    const ff_res = ff.wait() catch {
-        setStatus("ffmpeg crashed");
-        return;
-    };
-    if (ff_res != .exited or ff_res.exited != 0) {
-        setStatus("ffmpeg failed (unsupported media?)");
+    if (!runContained(&ff_argv, 30 * 60 * 1000, args.epoch)) {
+        setStatus(if (run_epoch.load(.acquire) != args.epoch) "Transcription cancelled" else "ffmpeg failed or timed out");
         return;
     }
 
@@ -232,19 +310,8 @@ fn worker(args: *WorkerArgs) void {
         "--no-prints",
         "", "", // padding for array size match
     };
-    var wh = @import("../core/io_global.zig").Child.init(&wh_argv, alloc);
-    wh.stdout_behavior = .Ignore;
-    wh.stderr_behavior = .Ignore;
-    wh.spawn() catch {
-        setStatus("whisper-cli spawn failed");
-        return;
-    };
-    const wh_res = wh.wait() catch {
-        setStatus("whisper crashed");
-        return;
-    };
-    if (wh_res != .exited or wh_res.exited != 0) {
-        setStatus("whisper failed");
+    if (!runContained(&wh_argv, 4 * 60 * 60 * 1000, args.epoch)) {
+        setStatus(if (run_epoch.load(.acquire) != args.epoch) "Transcription cancelled" else "whisper failed or timed out");
         return;
     }
 
@@ -285,32 +352,12 @@ fn worker(args: *WorkerArgs) void {
                 file.close(io.io());
             }
         }
-        const target_len = @min(fallback.len, last_srt_path.len);
-        @memcpy(last_srt_path[0..target_len], fallback[0..target_len]);
-        last_srt_path_len = target_len;
         setStatus("Loading subtitles...");
-        if (state.app.active_player_idx < state.app.players.items.len) {
-            const p = state.app.players.items[state.app.active_player_idx];
-            _ = c.mpvSubAdd(p.mpv_ctx, fallback);
-        }
-        setStatus("Auto-subtitles ready");
-        logs.pushLog("info", "subs", "Auto-subtitles generated via whisper", false);
-        state.showToast("Auto-subs loaded");
+        _ = publishAttach(args, fallback);
         return;
     };
     const load_target = final_srt;
 
-    // Track last generated SRT for export UI
-    const target_len = @min(load_target.len, last_srt_path.len);
-    @memcpy(last_srt_path[0..target_len], load_target[0..target_len]);
-    last_srt_path_len = target_len;
-
     setStatus("Loading subtitles...");
-    if (state.app.active_player_idx < state.app.players.items.len) {
-        const p = state.app.players.items[state.app.active_player_idx];
-        _ = c.mpvSubAdd(p.mpv_ctx, load_target);
-    }
-    setStatus("Auto-subtitles ready");
-    logs.pushLog("info", "subs", "Auto-subtitles generated via whisper", false);
-    state.showToast("Auto-subs loaded");
+    _ = publishAttach(args, load_target);
 }

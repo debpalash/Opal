@@ -1280,6 +1280,7 @@ pub const MediaPlayer = struct {
         // A replace starts a new logical playback owner. This is separate from
         // commitPlayback because async resolution/fallback commits belong to
         // the already-staged original request and must not erase its identity.
+        @import("../services/auto_subs.zig").cancelForMediaChange();
         self.load_serial = playback_load_sequence.fetchAdd(1, .acq_rel) + 1;
         self.playback_origin = request.origin;
         self.queue_item_id = if (request.origin == .queue) request.queue_item_id else -1;
