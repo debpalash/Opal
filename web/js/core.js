@@ -30,6 +30,7 @@ const $ = id => document.getElementById(id);
 // no URLs, labels, or user content are retained.
 const webPerf = (() => {
   const started = performance.now(), interactions = [], longTasks = [];
+  const budget = Object.freeze({shell_ms:1500, interaction_p95_ms:100, long_task_max_ms:250});
   let shellMs = null;
   const push = (list, value) => { if (Number.isFinite(value)) { list.push(value); if (list.length > 128) list.shift(); } };
   try {
@@ -47,8 +48,14 @@ const webPerf = (() => {
   };
   return {
     shellReady(){ if (shellMs === null) requestAnimationFrame(() => requestAnimationFrame(() => { shellMs = performance.now() - started; })); },
-    summary(){ return {shell_ms:shellMs, interaction_p95_ms:percentile(interactions,.95), interaction_count:interactions.length,
-      long_task_max_ms:longTasks.length ? Math.max(...longTasks) : 0, long_task_count:longTasks.length}; },
+    summary(){
+      const interactionP95 = percentile(interactions,.95);
+      const longTaskMax = longTasks.length ? Math.max(...longTasks) : 0;
+      const measured = shellMs !== null && interactions.length >= 5;
+      return {shell_ms:shellMs, interaction_p95_ms:interactionP95, interaction_count:interactions.length,
+        long_task_max_ms:longTaskMax, long_task_count:longTasks.length, budget,
+        within_budget:measured ? shellMs <= budget.shell_ms && interactionP95 <= budget.interaction_p95_ms && longTaskMax <= budget.long_task_max_ms : null};
+    },
   };
 })();
 

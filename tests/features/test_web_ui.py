@@ -546,11 +546,15 @@ def test_web_performance_probe():
         "long task signal": "long_task_max_ms" in ui and "type:'longtask'" in ui,
         "visible diagnostics": 'id="web-perf"' in ui and "Interaction p95" in ui,
         "bounded samples": "list.length > 128" in ui,
+        "explicit budgets": "shell_ms:1500" in ui and "interaction_p95_ms:100" in ui
+            and "long_task_max_ms:250" in ui,
+        "runtime verdict": "within_budget:" in ui and "Within budget" in ui
+            and "Over budget" in ui and "perfNode.dataset.state" in ui,
     }
     missing = [k for k, ok in checks.items() if not ok]
     if missing:
         return "fail", "web performance measurement incomplete: " + ", ".join(missing)
-    return "pass", "painted shell, Event Timing p95 and bounded long-task metrics visible in Diagnostics"
+    return "pass", "painted shell, Event Timing p95 and bounded long-task metrics enforce a visible budget"
 
 
 @test("Movies and shows share one details panel with real metadata", "Web UI")

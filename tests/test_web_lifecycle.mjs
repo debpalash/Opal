@@ -7,6 +7,7 @@ import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import vm from 'node:vm';
 import test from 'node:test';
+import {performance} from 'node:perf_hooks';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const source = file => process.env.OPAL_WEB_REVISION
@@ -42,7 +43,7 @@ function fixture(...files){
     focus(){}
     insertAdjacentHTML(){}
   }
-  const elements = new Map(), requests = [], timers = new Map(), sources = [], rendered = [], network = [];
+  const elements = new Map(), requests = [], timers = new Map(), sources = [], rendered = [], network = [], observers = [];
   let nextTimer = 0;
   const $ = id => { if (!elements.has(id)) elements.set(id, new Element()); return elements.get(id); };
   const request = path => {
@@ -55,7 +56,12 @@ function fixture(...files){
   const context = vm.createContext({
     $, Element, BASE:'http://fixture.invalid', AUTHENTICATED:true,
     api:request, apiMutation:request, esc:String, lastHtml:{},
-    URL, URLSearchParams, console, rendered, network,
+    URL, URLSearchParams, console, rendered, network, performance,
+    requestAnimationFrame:fn => { fn(); return 1; },
+    PerformanceObserver:class {
+      constructor(callback){ this.callback = callback; observers.push(this); }
+      observe(options){ this.type = options.type; }
+    },
     setNetworkState: state => network.push(state),
     setTimeout(fn, ms){ const id = ++nextTimer; timers.set(id, {fn, ms}); return id; },
     clearTimeout:id => timers.delete(id),
@@ -79,8 +85,20 @@ function fixture(...files){
     assert.ok(found, `Missing request ${path}; pending: ${requests.filter(r => !r.taken).map(r => r.path)}`);
     found.taken = true; return found;
   };
-  return {$, run, take, requests, timers, sources, rendered, network, window};
+  return {$, run, take, requests, timers, sources, rendered, network, observers, window};
 }
+
+test('web performance budget produces a measured pass and failure', () => {
+  const f = fixture('core.js');
+  f.run('webPerf.shellReady()');
+  const event = f.observers.find(observer => observer.type === 'event');
+  const longTask = f.observers.find(observer => observer.type === 'longtask');
+  event.callback({getEntries:() => [20, 30, 40, 50, 60].map(duration => ({duration}))});
+  longTask.callback({getEntries:() => [{duration:80}]});
+  assert.equal(f.run('webPerf.summary().within_budget'), true);
+  event.callback({getEntries:() => [{duration:180}]});
+  assert.equal(f.run('webPerf.summary().within_budget'), false);
+});
 
 test('late show metadata cannot overwrite a different show or start its seasons', async () => {
   const f = fixture('catalog.js');

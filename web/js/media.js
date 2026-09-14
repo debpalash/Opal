@@ -730,7 +730,10 @@ let logErrorsOnly = false;
 async function loadLogs(){
   const perf = webPerf.summary();
   const metric = value => value === null ? 'measuring' : `${Math.round(value)} ms`;
-  $('web-perf').textContent = `Shell ${metric(perf.shell_ms)} · Interaction p95 ${metric(perf.interaction_p95_ms)} (${perf.interaction_count}) · Long tasks ${perf.long_task_count}, max ${Math.round(perf.long_task_max_ms)} ms`;
+  const perfNode = $('web-perf');
+  const verdict = perf.within_budget === null ? 'Measuring budget' : perf.within_budget ? 'Within budget' : 'Over budget';
+  perfNode.dataset.state = perf.within_budget === null ? 'measuring' : perf.within_budget ? 'pass' : 'fail';
+  perfNode.textContent = `${verdict} · Shell ${metric(perf.shell_ms)} / ${perf.budget.shell_ms} ms · Interaction p95 ${metric(perf.interaction_p95_ms)} / ${perf.budget.interaction_p95_ms} ms (${perf.interaction_count}) · Long task max ${Math.round(perf.long_task_max_ms)} / ${perf.budget.long_task_max_ms} ms`;
   $('lg-hint').innerHTML = '<span class="spin"></span> Loading…';
   try {
     const d = await api('/logs?limit=300' + (logErrorsOnly ? '&errors=1' : ''));

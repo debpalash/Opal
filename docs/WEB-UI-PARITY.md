@@ -142,7 +142,7 @@ commands, non-finite numbers, out-of-range values, and unknown actions.
 - [ ] Screen-reader pass, 200% zoom/reflow, localization-ready strings
 - [x] TV/remote directional focus, activation, overlay Back/Escape behavior,
       and large-screen sidebar layout
-- [ ] Performance budgets: useful shell under 1.5 s on LAN, interaction under
+- [x] Performance budgets: useful shell under 1.5 s on LAN, interaction under
       100 ms, no unbounded polling, bounded DOM lists and payloads
 
 ## Operation contract
