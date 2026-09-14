@@ -233,6 +233,15 @@ pub fn markWatchedEpisode(tmdb_id: i32, season: i32, episode: i32) void {
     if (outbox.enqueue("simkl", "history", key, payload)) kickOutbox();
 }
 
+pub fn markWatchedMovie(tmdb_id: i32) void {
+    if (!enabled.load(.acquire) or tmdb_id <= 0) return;
+    var body: [160]u8 = undefined;
+    const payload = std.fmt.bufPrint(&body, "{{\"movies\":[{{\"ids\":{{\"tmdb\":\"{d}\"}}}}]}}", .{tmdb_id}) catch return;
+    var key_buf: [40]u8 = undefined;
+    const key = std.fmt.bufPrint(&key_buf, "movie:{d}", .{tmdb_id}) catch return;
+    if (outbox.enqueue("simkl", "history", key, payload)) kickOutbox();
+}
+
 pub fn pendingCount() usize {
     return outbox.count("simkl");
 }

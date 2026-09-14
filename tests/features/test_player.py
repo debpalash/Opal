@@ -1811,3 +1811,31 @@ def self_hosted_playback_version_fallback():
     if missing:
         return "fail", "self-hosted fallback incomplete: " + ", ".join(missing)
     return "pass", "preferred versions, header auth, one bounded compatible fallback"
+
+
+@test("Movie completion sync is identity-bound and seek-resistant", "Player")
+def movie_completion_sync():
+    state = _src("src/core/state.zig")
+    tmdb = _src("src/services/tmdb.zig")
+    player = _src("src/player/player.zig")
+    pure = _src("src/services/tmdb_pure.zig")
+    trakt = _src("src/services/trakt.zig")
+    simkl = _src("src/services/simkl.zig")
+    checks = {
+        "stable id crosses resolver": "pending_play_tmdb_id" in state
+            and "catalog_tmdb_id = app.pending_play_tmdb_id" in state
+            and "pending_play_tmdb_id = if (item.id > 0)" in tmdb,
+        "unrelated loads clear identity": state.count("app.pending_play_tmdb_id = 0") >= 2,
+        "real viewed time required": "catalog_played_seconds" in player
+            and "playedDelta(" in player and "watchCommitDue(" in player,
+        "one completion per load": "catalog_movie_committed" in player
+            and "p.catalog_movie_committed = true" in player,
+        "both account providers": "markWatchedMovie(p.catalog_tmdb_id)" in player
+            and 'outbox.enqueue("trakt", "history"' in trakt
+            and 'outbox.enqueue("simkl", "history"' in simkl,
+        "pure seek guard": "played >= duration * 0.9" in pure,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "movie history sync incomplete: " + ", ".join(missing)
+    return "pass", "verified TMDB identity syncs once only after real viewing"

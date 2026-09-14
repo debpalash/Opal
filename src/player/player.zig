@@ -450,6 +450,13 @@ pub const MediaPlayer = struct {
     loading_trivia: [400]u8 = std.mem.zeroes([400]u8),
     loading_trivia_len: usize = 0,
     loading_trivia_fetching: bool = false,
+    /// Verified TMDB movie identity copied through the pending-play handoff.
+    /// Playback must accumulate real viewed time before account sync fires.
+    catalog_tmdb_id: i32 = 0,
+    catalog_movie_committed: bool = false,
+    catalog_played_seconds: f64 = 0,
+    catalog_sample_ms: i64 = 0,
+    catalog_sample_pos: f64 = 0,
 
     // ── Now-playing audio metadata (podcast episode / radio station) ──
     // Set via setNowPlaying on the meta play path (browser.loadContentDirectMeta)
@@ -801,6 +808,11 @@ pub const MediaPlayer = struct {
         self.loading_trivia_len = 0;
         @memset(&self.loading_trivia, 0);
         self.loading_trivia_fetching = false;
+        self.catalog_tmdb_id = 0;
+        self.catalog_movie_committed = false;
+        self.catalog_played_seconds = 0;
+        self.catalog_sample_ms = 0;
+        self.catalog_sample_pos = 0;
         @memset(&self.np_art_url, 0);
         self.np_art_url_len = 0;
         @memset(&self.np_title, 0);
@@ -2775,6 +2787,29 @@ pub fn updateTorrentBackgroundTasks() void {
                                     pw.committed = true;
                                     pw.armed = false;
                                     @import("../services/tmdb.zig").commitPendingWatch();
+                                }
+                            }
+                            // Movie history uses the same seek-resistant rule as
+                            // episodes: credits position alone is insufficient;
+                            // at least 90% must have advanced during real play.
+                            if (p.catalog_tmdb_id > 0 and
+                                p.loading_kind == @import("../ui/loading_pure.zig").MediaKind.movie.toInt() and
+                                !p.catalog_movie_committed)
+                            {
+                                if (p.catalog_sample_ms != 0 and !p.cached_paused and !p.cached_paused_for_cache) {
+                                    p.catalog_played_seconds += @import("../services/tmdb_pure.zig").playedDelta(
+                                        p.catalog_sample_pos,
+                                        newpos,
+                                        @as(f64, @floatFromInt(now_ms - p.catalog_sample_ms)) / 1000,
+                                        p.cached_speed,
+                                    );
+                                }
+                                p.catalog_sample_ms = now_ms;
+                                p.catalog_sample_pos = newpos;
+                                if (@import("../services/tmdb_pure.zig").watchCommitDue(newpos, p.cached_duration, p.catalog_played_seconds) and isActivePlayer(p)) {
+                                    p.catalog_movie_committed = true;
+                                    @import("../services/trakt.zig").markWatchedMovie(p.catalog_tmdb_id);
+                                    @import("../services/simkl.zig").markWatchedMovie(p.catalog_tmdb_id);
                                 }
                             }
                         }

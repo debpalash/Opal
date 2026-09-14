@@ -431,9 +431,13 @@ test "episodeQuery zero-pads via unsigned (x-men S+2E+2 regression)" {
 }
 
 /// Credits position alone is not completion: a seek must not mark watched.
-pub fn tvWatchCommitDue(position: f64, duration: f64, played: f64) bool {
+pub fn watchCommitDue(position: f64, duration: f64, played: f64) bool {
     if (!std.math.isFinite(position) or !std.math.isFinite(duration) or !std.math.isFinite(played)) return false;
     return duration > 0 and position >= duration * 0.9 and played >= duration * 0.9;
+}
+
+pub fn tvWatchCommitDue(position: f64, duration: f64, played: f64) bool {
+    return watchCommitDue(position, duration, played);
 }
 
 pub fn playedDelta(previous: f64, position: f64, elapsed: f64, speed: f64) f64 {

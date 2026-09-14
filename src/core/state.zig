@@ -703,6 +703,9 @@ pub const AppState = struct {
     /// for an episode.
     pending_play_extra: [96]u8 = std.mem.zeroes([96]u8),
     pending_play_extra_len: usize = 0,
+    /// Stable catalog identity for account history sync. Zero means the play
+    /// did not originate from a metadata item with a verified TMDB identity.
+    pending_play_tmdb_id: i32 = 0,
 
     // Directory that holds bundled runtime resources (engines/, scripts/, …).
     // Empty = use the current working directory (dev: launched from project
@@ -1642,6 +1645,7 @@ pub fn clearPendingPlay() void {
     app.pending_play_year_len = 0;
     app.pending_play_rating = 0;
     app.pending_play_extra_len = 0;
+    app.pending_play_tmdb_id = 0;
 }
 
 /// Move the pending-play stash onto `p` and clear it, so the loading screen can
@@ -1679,6 +1683,11 @@ pub fn consumePendingPlay(p: *MediaPlayer) void {
     p.loading_rating = app.pending_play_rating;
     p.loading_extra_len = app.pending_play_extra_len;
     @memcpy(p.loading_extra[0..p.loading_extra_len], app.pending_play_extra[0..p.loading_extra_len]);
+    p.catalog_tmdb_id = app.pending_play_tmdb_id;
+    p.catalog_movie_committed = false;
+    p.catalog_played_seconds = 0;
+    p.catalog_sample_ms = 0;
+    p.catalog_sample_pos = 0;
 
     // Clear the stash so it can't leak onto a later unrelated play (a raw
     // drag-dropped torrent, a pasted URL).
@@ -1690,6 +1699,7 @@ pub fn consumePendingPlay(p: *MediaPlayer) void {
     app.pending_play_year_len = 0;
     app.pending_play_rating = 0;
     app.pending_play_extra_len = 0;
+    app.pending_play_tmdb_id = 0;
 }
 
 /// Show a toast notification for 3 seconds.

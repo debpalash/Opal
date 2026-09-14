@@ -1396,6 +1396,7 @@ fn sendToSearch(item: *state.TmdbItem) void {
         item.rating,
         safeUtf8(item.genre_text[0..@min(item.genre_text_len, item.genre_text.len)]),
     );
+    state.app.pending_play_tmdb_id = if (item.id > 0) item.id else 0;
     state.navigateToTab(.Search);
     // Universal (all-source) search — populates resolver.results, which is what
     // the Search tab's universal view renders. triggerSearch() only fills the
