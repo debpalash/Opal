@@ -703,6 +703,7 @@ pub const MediaPlayer = struct {
         self.last_load_time = 0;
         self.last_error_time = 0;
         self.is_buffering_paused = false;
+        self.load_serial = 0;
         self.selected_file_idx = -1;
         self.cell_volume = state.app.playback_volume;
         self.cell_speed = state.app.playback_speed;

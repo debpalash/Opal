@@ -5,6 +5,7 @@ const http = @import("../core/http.zig");
 const parse = @import("tmdb_parse.zig");
 const content_cache = @import("../core/content_cache.zig");
 const ccp = @import("../core/content_cache_pure.zig");
+const rate_limit = @import("../core/rate_limit.zig");
 
 const alloc = parse.alloc;
 
@@ -143,6 +144,37 @@ pub fn seedBrowseFromCache() void {
 }
 
 const FetchMode = enum { search, browse };
+
+/// Synchronous, side-effect-free catalog lookup for the universal resolver.
+/// Results are copied into caller-owned storage; the Browse page's live and
+/// pending lists are never touched by this worker.
+pub fn searchCatalogInto(query: []const u8, out: []state.TmdbItem) usize {
+    if (query.len == 0 or out.len == 0) return 0;
+    var staged: std.ArrayListUnmanaged(state.TmdbItem) = .empty;
+    defer staged.deinit(alloc);
+
+    const key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
+    if (key.len > 0) {
+        var url_buf: [512]u8 = undefined;
+        const url = buildApiUrl(&url_buf, .search, query, .trending, .all, .week, 0, 0, 1) orelse return 0;
+        rate_limit.acquire("tmdb", 3.0);
+        const body = httpGet(url, key) orelse return 0;
+        defer alloc.free(body);
+        parse.parseTmdbResponse(body, &staged);
+    } else {
+        fetchCinemetaInto(&staged, .search, query, .trending, .all, 0, 1);
+    }
+
+    var written: usize = 0;
+    for (staged.items) |item| {
+        if (written >= out.len) break;
+        const kind = item.media_type[0..@min(item.media_type_len, item.media_type.len)];
+        if (!std.mem.eql(u8, kind, "movie") and !std.mem.eql(u8, kind, "tv")) continue;
+        out[written] = item;
+        written += 1;
+    }
+    return written;
+}
 
 fn fetchTmdb(mode: FetchMode, query: []const u8, append: bool) void {
     if (state.app.tmdb.is_loading.load(.acquire)) return;

@@ -341,7 +341,8 @@ def test_play_latest_episode():
     pure = _src("src/services/tv_pure.zig")
     checks = {
         # One source of truth for "latest aired + watched", shared by both UIs.
-        "shared lookup": "pub fn lastAiredFor(" in lib and "db.tvIsWatched(tmdb_id, la.season, la.episode)" in lib,
+        "shared lookup": "pub fn detailSnapshotFor(" in lib
+            and "last_aired_watched" in lib and "tp.isWatched(watched" in lib,
         "pure label + tests": "pub fn recentEpisodeLabel(" in pure
             and "pub fn isWatched(" in pure
             and 'test "recentEpisodeLabel: watched and unwatched"' in pure,
@@ -349,9 +350,9 @@ def test_play_latest_episode():
         # which case nextUp is null and the button would vanish.
         "distinct from nextUp": 'test "recent vs nextUp: the latest aired episode can already be watched"' in pure,
         # Desktop: button in the TV detail header row, reusing playEpisodeOf.
-        "desktop button": '"tv-latest"' in tmdb and "lastAiredFor(t.tv_id)" in tmdb
-            and "recentEpisodeLabel(latest.ep, latest.watched" in tmdb,
-        "desktop plays the episode": 0 <= tmdb.find("latest.ep.season") and "playEpisodeOf(" in tmdb,
+        "desktop button": '"tv-latest"' in tmdb and "detailUiSnapshot()" in tmdb
+            and "recentEpisodeLabel(latest_ep, latest_watched" in tmdb,
+        "desktop plays the episode": 0 <= tmdb.find("latest_ep.season") and "playEpisodeOf(" in tmdb,
         # Web: route + top row.
         "route": '"/tv/recent"' in rm and "fn recentEpisode(" in rm,
         "route reports watched": '\\"watched\\":{s}' in rm and "lastAiredFor(id)" in rm,
@@ -522,6 +523,8 @@ def test_unified_details_model():
     ui = _web_app()
     lib = _src("src/services/remote_library_api.zig")
     rm = _src("src/services/remote.zig")
+    resolver = _src("src/services/resolver.zig")
+    tmdb_api = _src("src/services/tmdb_api.zig")
     checks = {
         # Server: movie details join the TV route through one TMDB proxy seam,
         # so the browser never holds the TMDB key for either kind.
@@ -531,7 +534,12 @@ def test_unified_details_model():
             and lib.count("tmdbApiInto(") == 1,
         # Search rows say which kind they are; the web routes on it.
         "search rows carry media kind": '\\"media\\":\\"' in rm
-            and "item.media_type[0..item.media_type_len]" in rm,
+            and "item.catalog_kind[0..item.catalog_kind_len]" in rm,
+        "shared resolver owns catalog search": "fn resolveCatalog(" in resolver
+            and "searchCatalogInto(" in resolver and "pub fn searchCatalogInto(" in tmdb_api,
+        "catalog independent from torrent filter": ".tmdb => null" in _src("src/services/search.zig"),
+        "keyless movie metadata": 'sendCinemetaMeta(stream, "movie", imdb)' in lib
+            and "meta.overview || meta.description" in ui,
         # Web: one entry point and one shared panel reset for both kinds, so
         # movie and TV details cannot drift apart.
         "one entry point": "function openDetails(" in ui and "function openMovie(" in ui,
@@ -540,8 +548,7 @@ def test_unified_details_model():
             and "prefillSearch(c.dataset.title" not in ui,
         "search funnels through details": "openDetails(r.media === 'tv'" in ui,
         "overview + action row": 'id="show-overview"' in ui and 'id="show-actions"' in ui
-            and "renderOverview(d.overview)" in ui
-            and "renderOverview(meta.overview || meta.description)" in ui,
+            and ui.count("renderOverview(meta.overview || meta.description)") >= 2,
         # Streams stay one action away, and a metadata failure still leaves an
         # honest path to them instead of a dead panel.
         "streams one action away": "prefillSearch(normQuery(title))" in ui

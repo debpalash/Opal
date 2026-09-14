@@ -706,6 +706,12 @@ def test_resolver_sink():
         "live path still the globals": "pushInto(&results, &result_count, &results_from_cache" in rv,
         "encoder takes explicit rows": "fn serializeRows(" in rv,
         "live encoder delegates": "return serializeRows(results[0.." in rv,
+        # Cached rows must retain the fields used by scam checks and typed
+        # catalog drill-down; otherwise a cold hit behaves differently.
+        "cache preserves torrent safety metadata": "w.u32v(@truncate(it.size_bytes))" in rv
+            and "it.leech = r.u16v()" in rv,
+        "cache preserves catalog identity": "w.i32v(it.catalog_id)" in rv
+            and "copyField(&it.catalog_kind" in rv and "copyField(&it.catalog_imdb" in rv,
         # Ranking must be shared, or the cache disagrees with the search.
         "one insert path": rv.count("fn pushInto(") == 1,
         # A warm scores against its OWN query; the live query would match 0%.

@@ -4454,6 +4454,12 @@ fn apiUnifiedResolverSearch(stream: std.Io.net.Stream, query: []const u8) void {
         escJsonWrite(&w, item.name[0..item.name_len]);
         w.writeAll("\",\"detail\":\"") catch return;
         escJsonWrite(&w, item.detail[0..item.detail_len]);
+        if (item.source == .tmdb and item.catalog_id != 0) {
+            w.writeAll("\",\"media\":\"") catch return;
+            escJsonWrite(&w, item.catalog_kind[0..item.catalog_kind_len]);
+            w.print("\",\"id\":{d},\"imdb\":\"", .{item.catalog_id}) catch return;
+            escJsonWrite(&w, item.catalog_imdb[0..item.catalog_imdb_len]);
+        }
         w.print("\",\"key\":\"{x}\",\"queueable\":{s}}}", .{
             resolver.actionKey(item),
             if (resolver.isRemoteQueueable(item)) "true" else "false",

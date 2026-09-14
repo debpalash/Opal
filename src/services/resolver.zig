@@ -68,6 +68,14 @@ pub const ResolvedItem = struct {
     http_ua_len: usize = 0,
     http_referrer: [160]u8 = std.mem.zeroes([160]u8),
     http_referrer_len: usize = 0,
+    // Typed catalog identity. Populated only for `.tmdb`; it lets native and
+    // web search open the same movie/show details without exposing a provider
+    // API key or guessing from display text.
+    catalog_id: i32 = 0,
+    catalog_kind: [8]u8 = std.mem.zeroes([8]u8),
+    catalog_kind_len: usize = 0,
+    catalog_imdb: [16]u8 = std.mem.zeroes([16]u8),
+    catalog_imdb_len: usize = 0,
 };
 
 // Shared result buffer. The cap is a hard ceiling on a single search wave —
@@ -113,6 +121,7 @@ pub var status_livetv = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_music = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_radio = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_podcast = std.atomic.Value(SourceStatus).init(.idle);
+pub var status_catalog = std.atomic.Value(SourceStatus).init(.idle);
 
 // Explicit u8 backing so std.atomic.Value(SourceStatus) is byte-atomic. The
 // richer terminal values make an empty source distinguishable from a network,
@@ -399,6 +408,7 @@ pub fn resolveTracked(query: []const u8, intent: []const u8) u32 {
     Pre.set(&status_music, .music);
     Pre.set(&status_radio, .radio);
     Pre.set(&status_podcast, .podcast);
+    status_catalog.store(.searching, .release);
 
     // Fire every backend in parallel through the process-owned supervisor.
     // Superseded waves may overlap briefly, so the global admission cap also
@@ -425,6 +435,7 @@ pub fn resolveTracked(query: []const u8, intent: []const u8) u32 {
         }
     };
     if (sourceOn(.local)) Spawn.go(resolveLocalFiles, &status_local); // instant — already on disk
+    Spawn.go(resolveCatalog, &status_catalog); // typed movie/show metadata, always available keylessly
     if (sourceOn(.rss)) Spawn.go(resolveRss, &status_rss); // already-fetched magnets matching query
     if (sourceOn(.jellyfin)) Spawn.go(resolveJellyfin, &status_jf);
     // 1337x is covered by nova2's one337x.py engine (spawned above with "all").
@@ -522,7 +533,11 @@ pub fn actionKey(item: *const ResolvedItem) u64 {
     var hash = std.hash.Wyhash.init(0x6f70_616c_7365_6172);
     const source_byte = [_]u8{@intCast(@intFromEnum(item.source))};
     hash.update(&source_byte);
-    if (item.jf_item_id_len > 0) {
+    if (item.source == .tmdb and item.catalog_id != 0) {
+        hash.update(std.mem.asBytes(&item.catalog_id));
+        hash.update(item.catalog_kind[0..item.catalog_kind_len]);
+        hash.update(item.catalog_imdb[0..item.catalog_imdb_len]);
+    } else if (item.jf_item_id_len > 0) {
         hash.update(item.jf_item_id[0..item.jf_item_id_len]);
     } else if (item.url_len > 0) {
         hash.update(item.url[0..item.url_len]);
@@ -885,6 +900,45 @@ fn resolveLocalFiles(q: [256]u8, qlen: usize) void {
     }
 }
 
+/// Catalog metadata belongs in the same resolver as playable sources so every
+/// search surface can open a real movie/show detail page. It is intentionally
+/// ranked last: an exact playable result remains the quickest action.
+fn resolveCatalog(query_buf: [256]u8, qlen: usize) void {
+    defer finishWorker(&status_catalog, .done);
+    if (qlen == 0) return;
+
+    var catalog: [24]state.TmdbItem = [_]state.TmdbItem{.{}} ** 24;
+    const count = @import("tmdb_api.zig").searchCatalogInto(query_buf[0..qlen], &catalog);
+    if (count == 0) {
+        noteWorkerOutcome(.no_results);
+        return;
+    }
+
+    for (catalog[0..count]) |entry| {
+        var item = ResolvedItem{ .source = .tmdb, .catalog_id = entry.id };
+        const title_len = @min(entry.title_len, item.name.len);
+        @memcpy(item.name[0..title_len], entry.title[0..title_len]);
+        item.name_len = title_len;
+
+        const kind = entry.media_type[0..@min(entry.media_type_len, entry.media_type.len)];
+        const kind_len = @min(kind.len, item.catalog_kind.len);
+        @memcpy(item.catalog_kind[0..kind_len], kind[0..kind_len]);
+        item.catalog_kind_len = kind_len;
+        const imdb_len = @min(entry.imdb_id_len, item.catalog_imdb.len);
+        @memcpy(item.catalog_imdb[0..imdb_len], entry.imdb_id[0..imdb_len]);
+        item.catalog_imdb_len = imdb_len;
+
+        const year = entry.year[0..@min(entry.year_len, entry.year.len)];
+        const label = if (std.mem.eql(u8, kind, "tv")) "TV details" else "Movie details";
+        const detail = if (year.len > 0)
+            std.fmt.bufPrint(&item.detail, "{s} · {s}", .{ year, label }) catch label
+        else
+            label;
+        item.detail_len = detail.len;
+        _ = pushResult(item);
+    }
+}
+
 /// Match already-fetched RSS feed items against the query and surface them as
 /// torrent-source results (they carry magnet URIs → play via loadTorrentToPlayer).
 fn resolveRss(q: [256]u8, qlen: usize) void {
@@ -1078,7 +1132,7 @@ fn attrValue(html: []const u8, name: []const u8, limit: usize) ?[]const u8 {
 // ══════════════════════════════════════════════════════════
 
 fn cacheKey(buf: []u8, query: []const u8) []const u8 {
-    return std.fmt.bufPrint(buf, "search:{s}", .{query}) catch "search:";
+    return std.fmt.bufPrint(buf, "search:v2:{s}", .{query}) catch "search:v2:";
 }
 
 /// Serialize the current `results` (under caller's lock) into `out`.
@@ -1103,12 +1157,18 @@ fn serializeRows(rows: []const ResolvedItem, out: []u8) ?[]u8 {
         w.u8v(@intFromEnum(it.source));
         w.u8v(it.quality);
         w.u16v(it.seeds);
+        w.u32v(@truncate(it.size_bytes));
+        w.u32v(@truncate(it.size_bytes >> 32));
+        w.u16v(it.leech);
         w.u8v(it.match_pct);
         w.u32v(it.score);
         w.boolv(it.is_nsfw);
         w.blob(it.jf_item_id[0..@min(it.jf_item_id_len, it.jf_item_id.len)]);
         w.blob(it.http_ua[0..@min(it.http_ua_len, it.http_ua.len)]);
         w.blob(it.http_referrer[0..@min(it.http_referrer_len, it.http_referrer.len)]);
+        w.i32v(it.catalog_id);
+        w.blob(it.catalog_kind[0..@min(it.catalog_kind_len, it.catalog_kind.len)]);
+        w.blob(it.catalog_imdb[0..@min(it.catalog_imdb_len, it.catalog_imdb.len)]);
     }
     return w.done();
 }
@@ -1139,6 +1199,10 @@ fn deserializeInto(bytes: []const u8) usize {
         it.source = if (src_tag < src_fields) @enumFromInt(src_tag) else .torrent;
         it.quality = r.u8v() orelse break;
         it.seeds = r.u16v() orelse break;
+        const size_lo = r.u32v() orelse break;
+        const size_hi = r.u32v() orelse break;
+        it.size_bytes = @as(u64, size_lo) | (@as(u64, size_hi) << 32);
+        it.leech = r.u16v() orelse break;
         it.match_pct = r.u8v() orelse break;
         it.score = r.u32v() orelse break;
         it.is_nsfw = r.boolv() orelse break;
@@ -1148,6 +1212,9 @@ fn deserializeInto(bytes: []const u8) usize {
         copyField(&it.http_ua, &it.http_ua_len, ua);
         const ref = r.blob() orelse break;
         copyField(&it.http_referrer, &it.http_referrer_len, ref);
+        it.catalog_id = r.i32v() orelse break;
+        copyField(&it.catalog_kind, &it.catalog_kind_len, r.blob() orelse break);
+        copyField(&it.catalog_imdb, &it.catalog_imdb_len, r.blob() orelse break);
         results[count] = it;
         count += 1;
     }
@@ -1235,7 +1302,8 @@ fn checkAllDoneLocked(run: u32) void {
         status_archive.load(.acquire) != .searching and
         status_nasa.load(.acquire) != .searching and status_commons.load(.acquire) != .searching and
         status_music.load(.acquire) != .searching and status_radio.load(.acquire) != .searching and
-        status_podcast.load(.acquire) != .searching and status_livetv.load(.acquire) != .searching)
+        status_podcast.load(.acquire) != .searching and status_livetv.load(.acquire) != .searching and
+        status_catalog.load(.acquire) != .searching)
     {
         // Swap so the resolving→done transition fires exactly once even if two
         // finishing workers observe "all done" concurrently — only the winner
@@ -3304,10 +3372,17 @@ pub fn playResolvedItem(item: *const ResolvedItem) void {
             state.navigateToTab(.Comics);
         },
         .tmdb => {
-            // Catalog stub, not directly playable — kick off a universal source
-            // search for its title so the user can pick a real stream. Must use
-            // submitQuery (resolver fan-out) so results land in the universal view.
-            @import("search.zig").submitQuery(item.name[0..item.name_len]);
+            const kind = item.catalog_kind[0..item.catalog_kind_len];
+            if (std.mem.eql(u8, kind, "tv") and item.catalog_id != 0) {
+                @import("tmdb.zig").openTvDetailByIdentity(
+                    item.catalog_id,
+                    item.catalog_imdb[0..item.catalog_imdb_len],
+                    item.name[0..item.name_len],
+                    "",
+                );
+            } else {
+                @import("search.zig").submitQuery(item.name[0..item.name_len]);
+            }
         },
         .podcast => {
             // No open-by-feed entry point exists yet, so hand the show title to

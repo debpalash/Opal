@@ -94,6 +94,10 @@ function renderUnifiedResults(payload){
 }
 async function runUnifiedAction(r, generation, action, button){
   if (!r || !r.key) return;
+  if (action === 'play' && r.source === 'tmdb' && r.media && r.id) {
+    openDetails(r.media === 'tv' ? 'tv' : 'movie', +r.id, r.title || '', r.imdb || '');
+    return;
+  }
   button.disabled = true;
   button.textContent = action === 'queue' ? 'Adding...' : 'Opening...';
   try {
@@ -524,28 +528,29 @@ const detailsMeta = parts => parts.filter(Boolean).join(' · ');
 const ratingLabel = v => v > 0 ? '★ ' + Number(v).toFixed(1) : '';
 
 function openDetails(kind, id, title, imdb){
-  if (kind === 'movie') return openMovie(id, title);
+  if (kind === 'movie') return openMovie(id, title, imdb || '');
   return openShow(id, title, imdb || '');
 }
 
-async function openMovie(id, title){
+async function openMovie(id, title, imdb = ''){
   const generation = resetDetailsPanel(title);
   // The stream hunt works even when TMDB metadata does not, so the action row
   // renders before the fetch instead of behind it.
   $('show-actions').innerHTML = '<button type="button" id="show-find">▶ Find streams</button>';
   $('show-find').onclick = () => { closeDetails(); prefillSearch(normQuery(title)); };
   try {
-    const d = await api('/movie?id=' + id);
+    const d = await api('/movie?id=' + id + (imdb ? '&imdb=' + encodeURIComponent(imdb) : ''));
     if (!detailsCurrent(generation)) return;
     if (d.error) { $('show-meta').textContent = 'Details unavailable — you can still find streams.'; return; }
-    if (d.title) $('show-title').textContent = d.title;
+    const meta = d.meta || d;
+    if (meta.title || meta.name) $('show-title').textContent = meta.title || meta.name;
     $('show-meta').textContent = detailsMeta([
-      (d.release_date || '').slice(0, 4),
-      d.runtime ? d.runtime + ' min' : '',
-      ratingLabel(d.vote_average),
-      (d.genres || []).slice(0, 3).map(g => g.name).join(', '),
+      (meta.release_date || meta.year || '').slice(0, 4),
+      meta.runtime ? meta.runtime + ' min' : '',
+      ratingLabel(meta.vote_average || meta.imdbRating),
+      (meta.genres || meta.genre || []).slice(0, 3).map(g => g.name || g).join(', '),
     ]) || 'Movie';
-    renderOverview(d.overview);
+    renderOverview(meta.overview || meta.description);
   } catch {
     if (detailsCurrent(generation)) $('show-meta').textContent = 'Details unavailable — you can still find streams.';
   }

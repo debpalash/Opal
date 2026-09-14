@@ -2072,9 +2072,9 @@ fn renderUniversalResults() void {
         const item = &resolver.results[idx];
         if (item.name_len == 0) continue;
         const sbit = sourceBitOf(item);
-        source_has.insert(sbit);
+        if (sbit) |bit| source_has.insert(bit);
         if (state.app.nsfw_filter_enabled and item.is_nsfw) continue;
-        if (!resolver.sourceOn(sbit)) continue;
+        if (sbit) |bit| if (!resolver.sourceOn(bit)) continue;
         renderCompactRow(idx, item);
     }
 
@@ -2083,7 +2083,7 @@ fn renderUniversalResults() void {
 
 /// Toolbar filter pill governing a result (RSS magnets are pushed with
 /// source=.torrent, split from real torrents by their detail prefix).
-fn sourceBitOf(item: *const @import("resolver.zig").ResolvedItem) @import("resolver.zig").SourceBit {
+fn sourceBitOf(item: *const @import("resolver.zig").ResolvedItem) ?@import("resolver.zig").SourceBit {
     return switch (item.source) {
         .torrent => if (std.mem.startsWith(u8, item.detail[0..item.detail_len], "RSS")) .rss else .torrent,
         .jellyfin => .jellyfin,
@@ -2092,7 +2092,10 @@ fn sourceBitOf(item: *const @import("resolver.zig").ResolvedItem) @import("resol
         .comics => .comics,
         .stremio => .stremio,
         .local => .local,
-        .tmdb => .torrent, // not produced by the universal fan-out
+        // Catalog rows are always-on discovery results, not a playable-source
+        // backend. They must not disappear with the Torrents pill or make the
+        // no-hit summary claim that a torrent provider returned something.
+        .tmdb => null,
         .livetv => .livetv,
         .music => .music,
         .radio => .radio,

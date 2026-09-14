@@ -56,7 +56,7 @@ def test_drama_module():
         "no tokusatsu residue": no_toku,
         # ── Play routes through load_file + gotoPlayer (guarded) ──
         "play worker": "pub fn playSelected" in svc,
-        "play via resolver": "resolver.resolve(" in svc,
+        "play via resolver": "resolver.resolveTracked(" in svc,
         "play load_file": "load_file(" in svc,
         "play gotoPlayer": "state.gotoPlayer()" in svc,
         "player idx guard": "active_player_idx >= state.app.players.items.len" in svc,

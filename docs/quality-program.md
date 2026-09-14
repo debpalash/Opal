@@ -136,6 +136,7 @@ route is not a completed row.
 | Safe live-stream resolution | Streamlink helpers run in contained process trees with a 30-second deadline, strict output cap, supersession cancellation and shutdown cancellation. Workers publish fixed snapshots only; the UI thread validates a process-unique player/load identity before committing HLS output, so closing or replacing a player cannot become a stale-pointer write |
 | Dense TV episode browsing | TV detail uses one compact title/status hierarchy and season toolbar, a centered reading-width canvas, two-column desktop episode catalogue, aligned title/actions and bounded synopsis previews. Upcoming and undated entries use small inert tiles with explicit Upcoming/TBA state instead of empty full-size artwork and misleading Play controls; narrow layouts retain full-width playable artwork. |
 | Event-driven TV detail state | Status, cross-season Resume and aired-frontier state are projected in one database pass and shared by every control. A monotonic library revision invalidates the UI snapshot after real mutations or metadata sync, eliminating per-frame SQLite scans and allocations while keeping watched/status changes immediate. |
+| Typed universal catalog discovery | Movie and TV metadata is restored to the shared resolver without stealing priority from playable results. Native and web clients carry provider identity into details, keyless Cinemeta supports both shows and movies, and the versioned cold cache preserves torrent size/leech safety metadata alongside catalog identity. |
 
 ## Test commands
 

@@ -1434,8 +1434,17 @@ var tv_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 /// don't hold a TmdbItem (the Home "Coming up" rail). Same flow as a poster
 /// click; poster_path may be empty (detail fetch fills what it needs).
 pub fn openTvDetailById(id: i32, name: []const u8, poster_path: []const u8) void {
+    openTvDetailByIdentity(id, "", name, poster_path);
+}
+
+pub fn openTvDetailByIdentity(id: i32, imdb_id: []const u8, name: []const u8, poster_path: []const u8) void {
     var item = state.TmdbItem{ .id = id };
-    item.imdb_id_len = db.tvImdbId(id, &item.imdb_id).len;
+    if (imdb_id.len > 0) {
+        item.imdb_id_len = @min(imdb_id.len, item.imdb_id.len);
+        @memcpy(item.imdb_id[0..item.imdb_id_len], imdb_id[0..item.imdb_id_len]);
+    } else {
+        item.imdb_id_len = db.tvImdbId(id, &item.imdb_id).len;
+    }
     const nlen = @min(name.len, item.title.len);
     @memcpy(item.title[0..nlen], name[0..nlen]);
     item.title_len = nlen;
@@ -3218,7 +3227,8 @@ fn renderTvDetail() void {
                 }
 
                 if (!playable) {
-                    _ = dvui.label(@src(), if (episode_state == .upcoming) "Upcoming" else "TBA", .{}, .{
+                    const availability = if (episode_state == .upcoming) "Upcoming" else "TBA";
+                    _ = dvui.label(@src(), "{s}", .{availability}, .{
                         .id_extra = ei + 43116,
                         .background = true,
                         .color_fill = theme.colors.bg_elevated,
