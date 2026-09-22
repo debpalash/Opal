@@ -1241,3 +1241,17 @@ def test_site_compare_and_seo():
     if missing:
         return "fail", "compare/seo: " + ", ".join(missing)
     return "pass", f"matrix vs {len(rivals)} products, sourced; JSON-LD parses ({', '.join(t for t in types if t)})"
+
+
+@test("Native catalog and TV regressions", "Unit Tests")
+def test_native_catalog_tv():
+    try:
+        result = subprocess.run(
+            ["zig", "build", "test-browse", "test-tv-detail", "-Doptimize=ReleaseFast"],
+            cwd=PROJECT_DIR, capture_output=True, text=True, timeout=300,
+        )
+        if result.returncode:
+            return "fail", result.stderr[-1500:]
+        return "pass", "production parsing, request replay, poster ownership, parallel catalogs and cached seasons"
+    except subprocess.TimeoutExpired:
+        return "fail", "Native catalog/TV tests timed out (>300s)"

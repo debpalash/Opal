@@ -184,41 +184,40 @@ pub const PosterRequest = struct {
 /// Fetch a poster image from URL in a background thread.
 /// Sets fetching_flag while working, writes pixels/w/h on success.
 //
-// SAFETY (fetching_flag is a plain *bool, not *std.atomic.Value(bool)):
-// This flag is only ever a re-entry guard. The check-then-set below
-// (`if (fetching_flag.*) return; ... fetching_flag.* = true;`) and the worker's
-// `defer args.flag.* = false;` all run for a single card whose fetch is kicked
-// off exclusively from the UI (render) thread — the flag is written true on the
-// UI thread and cleared false on the one detached worker that owns it, never
-// concurrently set by two threads. The pointed-to field (poster_fetching /
-// still_fetching / loading_poster_fetching) is shared with several manual-worker
-// providers (plugins, jellyfin, anime's own fetchPoster) and is defined across 5
-// distinct state structs, so making it atomic would cascade to 60+ access sites
-// well beyond this daemon. What actually bounds concurrency here is the atomic
-// `in_flight` counter (acquire/release) — the real cross-thread invariant (the
-// MAX_CONCURRENT cap and slot accounting) is already atomic; the per-card bool is
-// not a cross-thread hand-off, so a plain bool is sufficient and correct.
+// Legacy callers must keep output fields alive while the worker runs. New
+// callers should stage their outputs and use fetchAsyncPublished's atomic
+// completion handoff, as the catalog does, before reading or recycling them.
 pub fn fetchAsync(url: []const u8, pixels_out: *?[]u8, w_out: *u32, h_out: *u32, fetching_flag: *bool) void {
-    if (fetching_flag.*) return;
+    _ = fetchAsyncPublished(url, pixels_out, w_out, h_out, fetching_flag, null);
+}
+
+/// Optional completion handoff for callers that stage images outside live rows.
+/// Output storage must survive until completion is acquired by the caller.
+pub fn fetchAsyncPublished(url: []const u8, pixels_out: *?[]u8, w_out: *u32, h_out: *u32, fetching_flag: *bool, completion: ?*std.atomic.Value(bool)) bool {
+    if (fetching_flag.*) return false;
     // Bound the URL and copy it by value into the worker args (CLAUDE.md:
     // never pass a slice into a mutable array to a detached thread). Callers
     // pass item.poster_url[0..len] — a slice into a results[] buffer that a
     // fetch worker may rewrite mid-flight. Copy the bytes so each worker owns
     // its URL and there's no shared-slice race.
-    if (url.len > 1024) return;
+    if (url.len > 1024) return false;
     // Don't set fetching_flag when over the cap — leave the card unfetched so
     // it retries on a later frame once an in-flight slot frees.
-    if (!tryClaimSlot()) return;
+    if (!tryClaimSlot()) return false;
     fetching_flag.* = true;
 
-    const Args = struct { url_buf: [1024]u8, url_len: usize, pix: *?[]u8, w: *u32, h: *u32, flag: *bool };
+    const Args = struct { url_buf: [1024]u8, url_len: usize, pix: *?[]u8, w: *u32, h: *u32, flag: *bool, completion: ?*std.atomic.Value(bool) };
 
     var url_buf: [1024]u8 = undefined;
     @memcpy(url_buf[0..url.len], url);
 
     @import("workers.zig").spawn(struct {
         fn worker(args: Args) void {
-            defer args.flag.* = false;
+            defer {
+                args.flag.* = false;
+                if (args.completion) |done| done.store(true, .release);
+                @import("state.zig").wakeUi();
+            }
             defer releaseSlot();
 
             const workers = @import("workers.zig");
@@ -288,10 +287,12 @@ pub fn fetchAsync(url: []const u8, pixels_out: *?[]u8, w_out: *u32, h_out: *u32,
             // the w/h/pix writes above with proper ordering for uploadIfReady.
             if (@import("state.zig").app.dvui_win) |win| dvui.refresh(win, @src(), null);
         }
-    }.worker, .{Args{ .url_buf = url_buf, .url_len = url.len, .pix = pixels_out, .w = w_out, .h = h_out, .flag = fetching_flag }}) catch {
+    }.worker, .{Args{ .url_buf = url_buf, .url_len = url.len, .pix = pixels_out, .w = w_out, .h = h_out, .flag = fetching_flag, .completion = completion }}) catch {
         fetching_flag.* = false;
         releaseSlot(); // spawn failed — release the slot we reserved
+        return false;
     };
+    return true;
 }
 
 /// Upload pending pixel data to GPU texture. Call from render thread.

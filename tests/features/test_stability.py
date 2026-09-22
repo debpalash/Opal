@@ -382,7 +382,7 @@ def test_poster_decode_budget():
         ),
         "shared allocation budget enforced": "limits.rgbaBytes(info_w, info_h, max_edge, max_bytes)" in decoder,
         "global fetch cap is race-free": "in_flight.cmpxchgWeak(" in poster
-            and "if (!tryClaimSlot()) return;" in poster,
+            and "if (!tryClaimSlot()) return false;" in poster,
         "queue thumbnails share safe decoder": "decodeCover(body)" in queue
             and "stbi_load_from_memory" not in _between(queue, "fn decodeThumb", "fn thumbWorker"),
         "providers avoid raw stb decode": all("stbi_load_from_memory" not in source

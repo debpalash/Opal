@@ -742,3 +742,49 @@ def test_resolver_sink():
         return "fail", "resolver sink incomplete: " + ", ".join(missing)
     return "pass", ("results routed through a per-thread sink; warm fills the "
                     "cache with the same ranking and encoder, never the live list")
+
+
+@test("Internet Archive torrent search emits bounded, encoded, playable rows", "Sources")
+def test_archive_torrents():
+    proc = _run_py('''
+        import json
+        from unittest.mock import patch
+        from urllib.parse import urlparse, parse_qs, quote
+        from engines.internetarchive import internetarchive
+        rows = []
+        calls = []
+        def fetch(url, **options):
+            assert options.get("unescape_html_entities") is False
+            calls.append(url)
+            return json.dumps({'response': {'docs': [
+                {'identifier': 'film & one', 'title': 'A film\\nsecond line', 'item_size': 1234},
+                {'identifier': None, 'title': 'invalid'},
+            ]}})
+        engine = internetarchive()
+        engine.url = 'https://archive.example'
+        with patch('engines.internetarchive.retrieve_url', fetch), patch('engines.internetarchive.prettyPrinter', rows.append):
+            engine.search(quote('A & B'), 'movies')
+        assert len(calls) == 1
+        params = parse_qs(urlparse(calls[0]).query)
+        assert 'title:"A & B"' in params['q'][0]
+        assert 'mediatype:movies' in params['q'][0]
+        assert params['rows'] == ['50']
+        assert len(rows) == 1
+        assert rows[0]['link'] == 'https://archive.example/download/film%20%26%20one/film%20%26%20one_archive.torrent'
+        assert rows[0]['name'] == 'A film second line'
+        assert rows[0]['seeds'] == -1
+    ''')
+    return ("pass", "single request, valid torrent link, unknown seeds retained") if proc.returncode == 0 else ("fail", proc.stderr)
+
+
+@test("bitmagnet install entry reaches the native Torznab resolver", "Sources")
+def test_bitmagnet_source():
+    with open(os.path.join(PROJECT_DIR, 'data', 'plugins-manifest.json')) as f:
+        plugins = _json.load(f)['plugins']
+    entry = next(p for p in plugins if p['id'] == 'bitmagnet')
+    assert entry['endpoints']['path'] == '/torznab/api'
+    assert entry['endpoints']['base'] == 'http://127.0.0.1:3333'
+    src = _src('src/services/resolver.zig')
+    ids = _between(src, 'const TORZNAB_IDS', ';')
+    assert '"bitmagnet"' in ids
+    return 'pass', 'installable bitmagnet endpoint dispatched by native resolver'

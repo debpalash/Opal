@@ -1,3 +1,9 @@
+test "Browse regression modules" {
+    _ = @import("services/tmdb_api.zig");
+    _ = @import("services/tmdb_parse.zig");
+    _ = @import("services/tmdb_store.zig");
+}
+
 const std = @import("std");
 
 test "TV detail module" {

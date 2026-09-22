@@ -168,6 +168,27 @@
       }
     },
     {
+      "id": "bitmagnet",
+      "name": "bitmagnet (self-hosted)",
+      "type": "torrent",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "http://127.0.0.1:3333",
+        "path": "/torznab/api",
+        "apikey": "",
+        "indexer": "all"
+      }
+    },
+    {
+      "id": "internetarchive",
+      "name": "Internet Archive",
+      "type": "torrent",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://archive.org"
+      }
+    },
+    {
       "id": "readallcomics",
       "name": "ReadAllComics",
       "type": "comics",

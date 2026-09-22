@@ -11,8 +11,7 @@ pub fn splitMetaObjects(body: []const u8, out: [][]const u8) usize {
 /// Split objects from a named JSON array. Used by series metadata's `videos`
 /// list as well as catalog `metas`; string contents never affect brace depth.
 pub fn splitArrayObjects(body: []const u8, key: []const u8, out: [][]const u8) usize {
-    const start = std.mem.indexOf(u8, body, key) orelse return 0;
-    var i = start + key.len;
+    var i = arrayStart(body, key) orelse return 0;
     var depth: i32 = 0;
     var object_start: ?usize = null;
     var in_string = false;
@@ -44,6 +43,60 @@ pub fn splitArrayObjects(body: []const u8, key: []const u8, out: [][]const u8) u
         }
     }
     return count;
+}
+
+/// Locate a top-level field value without matching escaped text or nested fields.
+/// Callers retain the historical `"key":[` spelling; JSON whitespace is optional.
+pub fn valueStart(body: []const u8, key: []const u8) ?usize {
+    if (key.len < 3 or key[0] != '"') return null;
+    const end = std.mem.indexOfScalarPos(u8, key, 1, '"') orelse return null;
+    const quoted = key[0 .. end + 1];
+    var depth: usize = 0;
+    var i: usize = 0;
+    while (i < body.len) {
+        const ch = body[i];
+        if (ch == '"') {
+            const start = i;
+            i += 1;
+            while (i < body.len and body[i] != '"') : (i += 1) {
+                if (body[i] == '\\') i += 1;
+            }
+            if (i >= body.len) return null;
+            i += 1;
+            if (depth == 1 and std.mem.eql(u8, body[start..i], quoted)) {
+                while (i < body.len and std.ascii.isWhitespace(body[i])) : (i += 1) {}
+                if (i >= body.len or body[i] != ':') continue;
+                i += 1;
+                while (i < body.len and std.ascii.isWhitespace(body[i])) : (i += 1) {}
+                if (i < body.len) return i;
+            }
+            continue;
+        }
+        if (ch == '{' or ch == '[') depth += 1;
+        if (ch == '}' or ch == ']') depth -|= 1;
+        i += 1;
+    }
+    return null;
+}
+
+pub fn arrayStart(body: []const u8, key: []const u8) ?usize {
+    if (valueStart(body, key)) |i| {
+        return if (body[i] == '[') i + 1 else null;
+    }
+    // Cinemeta wraps its videos in `meta`; catalog fields remain top-level.
+    if (std.mem.startsWith(u8, key, "\"videos\"")) {
+        const meta = valueStart(body, "\"meta\"") orelse return null;
+        const i = valueStart(body[meta..], key) orelse return null;
+        return if (body[meta + i] == '[') meta + i + 1 else null;
+    }
+    return null;
+}
+
+test "catalog arrays tolerate whitespace and ignore nested lookalikes" {
+    var objects: [4][]const u8 = undefined;
+    const body = "{\"nested\":{\"metas\":[{\"id\":0}]},\"metas\" : \n [{\"id\":1}]}";
+    try std.testing.expectEqual(@as(usize, 1), splitMetaObjects(body, &objects));
+    try std.testing.expectEqualStrings("{\"id\":1}", objects[0]);
 }
 
 pub fn validImdbId(value: []const u8) bool {
