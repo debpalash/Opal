@@ -441,9 +441,9 @@ pub fn pickBest(cands: []const PickCand) ?usize {
 }
 
 /// Start immediately only on a complete query match while sources are arriving.
-/// Once the search finishes, retain the normal source-picker confidence bar.
+/// Completion must not relax episode identity: partial matches stay in the picker.
 pub fn pickForStartup(cands: []const PickCand, searching: bool) ?usize {
-    if (!searching) return pickBest(cands);
+    _ = searching;
     for (cands, 0..) |candidate, index| {
         if (candidate.match_pct == 100 and pickBest(&.{candidate}) != null) return index;
     }
@@ -458,7 +458,7 @@ test "episode startup accepts an early exact seeded match without waiting for pr
     };
     try std.testing.expectEqual(@as(?usize, null), pickForStartup(candidates[0..2], true));
     try std.testing.expectEqual(@as(?usize, 2), pickForStartup(&candidates, true));
-    try std.testing.expectEqual(@as(?usize, 0), pickForStartup(&candidates, false));
+    try std.testing.expectEqual(@as(?usize, 2), pickForStartup(&candidates, false));
 }
 
 /// May the poster/synopsis we stashed for `query` be shown while `name` loads?
@@ -563,4 +563,15 @@ test "pickBest: stremio streams need no seeds; empty/junk lists yield null" {
     };
     try std.testing.expectEqual(@as(?usize, null), pickBest(&junk));
     try std.testing.expectEqual(@as(?usize, null), pickBest(&.{}));
+}
+
+test "episode auto play must not select a different episode after search finishes" {
+    const match = matchCounts("House.of.the.Dragon.S02E03.1080p", "house of the dragon s02e04");
+    const candidates = [_]PickCand{.{
+        .playable = true,
+        .needs_seeds = true,
+        .match_pct = match.pct(),
+        .seeds = 100,
+    }};
+    try std.testing.expectEqual(@as(?usize, null), pickForStartup(&candidates, false));
 }

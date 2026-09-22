@@ -73,6 +73,10 @@ const DetailDocument = struct {
 };
 var detail_mutex = @import("../core/sync.zig").Mutex{};
 var detail_document: ?DetailDocument = null;
+// UI-owned, one-show cache. Cinemeta already returns every season in one
+// document, so switching seasons should not download it again.
+var cached_cinemeta: ?DetailDocument = null;
+var cached_cinemeta_at: i64 = 0;
 var retired_episodes: std.ArrayList([]state.TvEpisode) = .empty;
 
 fn publishDetail(doc: DetailDocument) void {
@@ -93,8 +97,15 @@ pub fn applyPendingDetail() void {
     detail_document = null;
     detail_mutex.unlock();
     if (document) |doc| {
-        defer alloc.free(doc.buffer);
+        var retained = false;
+        defer if (!retained) alloc.free(doc.buffer);
         if (doc.generation == tv_gen.load(.acquire)) {
+            if (doc.cinemeta and doc.len > 0 and @import("cinemeta_pure.zig").arrayStart(doc.buffer[0..doc.len], "\"videos\":[") != null) {
+                if (cached_cinemeta) |old| alloc.free(old.buffer);
+                cached_cinemeta = doc;
+                cached_cinemeta_at = @import("browse_cache.zig").now();
+                retained = true;
+            }
             if (doc.season) |season| {
                 applyEpisodes(doc.buffer[0..doc.len], doc.id, season, doc.generation, doc.cinemeta);
             } else {
@@ -157,6 +168,9 @@ fn objectCount(json: []const u8, season: ?i32) usize {
 }
 
 pub fn deinitDetail() void {
+    if (cached_cinemeta) |doc| alloc.free(doc.buffer);
+    cached_cinemeta = null;
+    cached_cinemeta_at = 0;
     detail_mutex.lock();
     if (detail_document) |doc| alloc.free(doc.buffer);
     detail_document = null;
@@ -200,6 +214,7 @@ pub const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
 /// touches items whose worker has finished (`!poster_fetching`), so it can't
 /// race a still-running worker. Call at shutdown before the lists deinit.
 pub fn freeImageBuffers() void {
+    api.drainPosterResults();
     const lists = [_]*std.ArrayListUnmanaged(state.TmdbItem){
         &state.app.tmdb.results,   &state.app.tmdb.favorites,
         &state.app.tmdb.watchlist, &state.app.tmdb.watching,
@@ -348,7 +363,7 @@ fn renderToolbar(count: usize) void {
             renderCatChip(1, .popular, "Popular");
             renderCatChip(2, .top_rated, "Top Rated");
             if (state.app.tmdb.api_key_len > 0) {
-                renderCatChip(3, .now_playing, "In Cinemas");
+                renderCatChip(3, .now_playing, if (state.app.tmdb.media_filter == .tv) "On Air" else "In Cinemas");
                 renderCatChip(4, .upcoming, "Upcoming");
             } else {
                 // Cinemeta exposes a newest-by-year catalog, but does not make
@@ -563,9 +578,12 @@ fn renderSubTab(idx: usize, view: state.TmdbView, label: []const u8) void {
 }
 
 fn switchView(view: state.TmdbView) void {
-    if (view != state.app.tmdb.view) resetGalleryScroll();
+    const changed = view != state.app.tmdb.view;
+    const leaving_search = state.app.tmdb.view == .Search;
+    if (changed) resetGalleryScroll();
     state.app.tmdb.view = view;
-    if (view == .Trending and state.app.tmdb.results.items.len == 0) {
+    if (view == .Trending and (leaving_search or state.app.tmdb.results.items.len == 0)) {
+        state.app.tmdb.page = 1;
         api.fetchCurrentView(false);
     }
 }
@@ -1590,8 +1608,8 @@ fn applySeasons(body: []const u8, tmdb_id: i32, my_gen: u32, use_cinemeta: bool)
     }
     if (use_cinemeta) {
         var aired: tp.Ep = .{};
-        if (std.mem.indexOf(u8, body, "\"videos\":[")) |start| {
-            const open = start + "\"videos\":[".len - 1;
+        if (@import("cinemeta_pure.zig").arrayStart(body, "\"videos\":[")) |start| {
+            const open = start - 1;
             const videos = body[open..arrayEnd(body, open)];
             var pos: usize = 0;
             while (nextJsonObject(videos, pos)) |found| {
@@ -1726,10 +1744,8 @@ fn parseSeasons(json: []const u8) void {
 
     // Anchor on the seasons array, then bound to its matching ']' so we never
     // wander into trailing top-level objects.
-    const arr_key = std.mem.indexOf(u8, json, "\"seasons\":") orelse return;
-    var pos = arr_key + "\"seasons\":".len;
-    while (pos < json.len and json[pos] != '[') : (pos += 1) {}
-    if (pos >= json.len) return;
+    const start = @import("cinemeta_pure.zig").arrayStart(json, "\"seasons\":[") orelse return;
+    const pos = start - 1;
     const arr_end = arrayEnd(json, pos);
     const arr = json[pos..arr_end];
 
@@ -1759,8 +1775,8 @@ fn parseCinemetaSeasons(json: []const u8) void {
     const t = &state.app.tmdb;
     t.tv_season_count = 0;
     const key = "\"videos\":[";
-    const start = std.mem.indexOf(u8, json, key) orelse return;
-    const open = start + key.len - 1;
+    const start = @import("cinemeta_pure.zig").arrayStart(json, key) orelse return;
+    const open = start - 1;
     const arr = json[open..arrayEnd(json, open)];
     if (!sizeSeasons(objectCount(arr, null))) return;
 
@@ -1840,6 +1856,16 @@ fn fetchEpisodes(tmdb_id: i32, season_number: i32) void {
     const imdb_id = state.app.tmdb.tv_imdb_id;
     const imdb_id_len = state.app.tmdb.tv_imdb_id_len;
 
+    if (use_cinemeta) {
+        if (cached_cinemeta) |doc| {
+            if (doc.id == tmdb_id and !@import("browse_cache.zig").isStale(cached_cinemeta_at)) {
+                applyEpisodes(doc.buffer[0..doc.len], tmdb_id, season_number, my_gen, true);
+                state.wakeUi();
+                return;
+            }
+        }
+    }
+
     if (@import("../core/workers.zig").spawnLegacy(fetchEpisodesThread, .{ tmdb_id, season_number, my_gen, use_cinemeta, imdb_id, imdb_id_len })) |th| {
         @import("../core/workers.zig").release(th); // never joined — detach to avoid leaking the handle
     } else |_| {
@@ -1905,10 +1931,8 @@ fn parseEpisodes(json: []const u8) void {
     const t = &state.app.tmdb;
     t.tv_episode_count = 0;
 
-    const arr_key = std.mem.indexOf(u8, json, "\"episodes\":") orelse return;
-    var pos = arr_key + "\"episodes\":".len;
-    while (pos < json.len and json[pos] != '[') : (pos += 1) {}
-    if (pos >= json.len) return;
+    const start = @import("cinemeta_pure.zig").arrayStart(json, "\"episodes\":[") orelse return;
+    const pos = start - 1;
     const arr_end = arrayEnd(json, pos);
     const arr = json[pos..arr_end];
 
@@ -1938,8 +1962,8 @@ fn parseCinemetaEpisodes(json: []const u8, season_number: i32) void {
     const t = &state.app.tmdb;
     t.tv_episode_count = 0;
     const key = "\"videos\":[";
-    const start = std.mem.indexOf(u8, json, key) orelse return;
-    const open = start + key.len - 1;
+    const start = @import("cinemeta_pure.zig").arrayStart(json, key) orelse return;
+    const open = start - 1;
     const arr = json[open..arrayEnd(json, open)];
     if (!sizeEpisodes(objectCount(arr, season_number))) return;
 
@@ -1992,14 +2016,13 @@ fn jsonIntHere(s: []const u8) i32 {
 /// Find `key` in `obj` and parse the integer that follows. `null` (no digits)
 /// → 0. Returns 0 if the key is absent.
 fn jsonInt(obj: []const u8, key: []const u8) i32 {
-    const idx = std.mem.indexOf(u8, obj, key) orelse return 0;
-    return jsonIntHere(obj[idx + key.len ..]);
+    const idx = @import("cinemeta_pure.zig").valueStart(obj, key) orelse return 0;
+    return jsonIntHere(obj[idx..]);
 }
 
 /// Find `key` in `obj` and parse the float that follows (0 on absence/error).
 fn jsonFloat(obj: []const u8, key: []const u8) f32 {
-    const idx = std.mem.indexOf(u8, obj, key) orelse return 0;
-    var p = idx + key.len;
+    var p = @import("cinemeta_pure.zig").valueStart(obj, key) orelse return 0;
     while (p < obj.len and (obj[p] == ' ' or obj[p] == ':')) : (p += 1) {}
     const start = p;
     while (p < obj.len and ((obj[p] >= '0' and obj[p] <= '9') or obj[p] == '.' or obj[p] == '-')) : (p += 1) {}
@@ -2012,8 +2035,9 @@ fn jsonFloat(obj: []const u8, key: []const u8) f32 {
 /// a JSON `null` value (→ 0) and \" escapes inside the string. Drops the
 /// backslash on recognized escapes; keeps everything else verbatim.
 fn jsonStr(obj: []const u8, quoted_key: []const u8, dst: []u8) usize {
-    const idx = std.mem.indexOf(u8, obj, quoted_key) orelse return 0;
-    const start = idx + quoted_key.len;
+    const idx = @import("cinemeta_pure.zig").valueStart(obj, quoted_key) orelse return 0;
+    if (obj[idx] != '"') return 0;
+    const start = idx + 1;
     var i = start;
     var out: usize = 0;
     while (i < obj.len and out < dst.len) {
@@ -3346,4 +3370,35 @@ fn renderTvDetail() void {
             episode_row = null;
         }
     }
+}
+
+test "TV detail formatted series metadata keeps seasons and episode titles" {
+    defer deinitDetail();
+    const body = "{\"meta\" : {\"videos\" : [ {\"season\" : 2, \"episode\" : 3, \"title\" : \"The Arrival\"} ]}}";
+    parseCinemetaSeasons(body);
+    try std.testing.expectEqual(@as(usize, 1), state.app.tmdb.tv_season_count);
+    try std.testing.expectEqual(@as(i32, 2), state.app.tmdb.tv_seasons[0].season_number);
+    parseCinemetaEpisodes(body, 2);
+    try std.testing.expectEqual(@as(usize, 1), state.app.tmdb.tv_episode_count);
+    const episode = state.app.tmdb.tv_episodes[0];
+    try std.testing.expectEqualStrings("The Arrival", episode.name[0..episode.name_len]);
+}
+
+test "TV detail season switches reuse the published series document without a worker" {
+    defer deinitDetail();
+    const t = &state.app.tmdb;
+    const old_imdb_len = t.tv_imdb_id_len;
+    defer t.tv_imdb_id_len = old_imdb_len;
+    t.tv_imdb_id_len = 9;
+    @memcpy(t.tv_imdb_id[0..9], "tt1234567");
+    const body = "{\"meta\":{\"videos\":[{\"season\":1,\"episode\":1,\"title\":\"First\"},{\"season\":2,\"episode\":3,\"title\":\"Second\"}]}}";
+    const buffer = try alloc.dupe(u8, body);
+    publishDetail(.{ .buffer = buffer, .len = buffer.len, .id = 123, .generation = tv_gen.load(.acquire), .cinemeta = true, .season = 1 });
+    applyPendingDetail();
+    try std.testing.expect(cached_cinemeta != null);
+    fetchEpisodes(123, 2);
+    try std.testing.expect(!t.tv_episodes_loading);
+    try std.testing.expectEqual(@as(usize, 1), t.tv_episode_count);
+    try std.testing.expectEqual(@as(i32, 3), t.tv_episodes[0].episode_number);
+    try std.testing.expectEqualStrings("Second", t.tv_episodes[0].name[0..t.tv_episodes[0].name_len]);
 }

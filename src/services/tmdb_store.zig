@@ -46,12 +46,24 @@ pub fn toggleList(list: *std.ArrayListUnmanaged(state.TmdbItem), item: *state.Tm
 
     for (list.items, 0..) |entry, i| {
         if (entry.id == item.id) {
-            _ = list.orderedRemove(i);
-            removeFromDbList(item.id, list_name);
+            const id = entry.id;
+            var removed = list.orderedRemove(i);
+            @import("../core/poster.zig").deinitPoster(&removed.poster_pixels, &removed.poster_tex);
+            removeFromDbList(id, list_name);
             return;
         }
     }
-    list.append(alloc, item.*) catch {};
+    // Lists own their poster resources; copying a live card's texture/pixels
+    // aliases ownership and can also copy a permanently busy worker flag.
+    var saved = item.*;
+    saved.poster_pixels = null;
+    saved.poster_tex = null;
+    saved.poster_fetching = false;
+    saved.poster_attempted = false;
+    saved.poster_failed = false;
+    saved.poster_w = 0;
+    saved.poster_h = 0;
+    list.append(alloc, saved) catch return;
 
     upsertItem(item);
     addToDbList(item.id, list_name);
@@ -193,4 +205,17 @@ pub fn migrateOldDb() void {
     const old_db_path = std.fmt.bufPrintZ(&path_buf, "{s}/tmdb.db", .{home}) catch return;
     // Just delete it — data was already in tmdb_lists.tsv which we migrated above
     @import("../core/io_global.zig").deleteFileAbsolute(old_db_path) catch {};
+}
+
+test "Browse regression saved lists do not inherit image ownership or busy flags" {
+    var list: std.ArrayListUnmanaged(state.TmdbItem) = .empty;
+    defer list.deinit(alloc);
+    var item = state.TmdbItem{ .id = 42, .poster_fetching = true, .poster_attempted = true };
+    item.poster_pixels = try std.heap.c_allocator.alloc(u8, 4);
+    defer std.heap.c_allocator.free(item.poster_pixels.?);
+    toggleList(&list, &item);
+    try std.testing.expectEqual(@as(usize, 1), list.items.len);
+    try std.testing.expect(!list.items[0].poster_fetching);
+    try std.testing.expect(list.items[0].poster_pixels == null);
+    try std.testing.expect(!list.items[0].poster_attempted);
 }

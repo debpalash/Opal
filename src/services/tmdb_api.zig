@@ -21,19 +21,27 @@ const TMDB_MAX_CACHED_ITEMS: usize = 100;
 // Unified Fetch Logic
 // ══════════════════════════════════════════════════════════
 
+// UI-thread-only: coalesce changes while one worker owns the request snapshot.
+var refresh_queued: std.atomic.Value(bool) = .init(false);
+
 pub fn fetchCurrentView(append: bool) void {
-    if (state.app.tmdb.is_loading.load(.acquire)) return;
+    if (state.app.tmdb.is_loading.load(.acquire)) {
+        if (!append) refresh_queued.store(true, .release);
+        return;
+    }
+    // A worker may have finished between frames. Do not publish its page over
+    // the newer selection, or let its append flag contaminate a replacement.
+    state.app.tmdb.results_mutex.lock();
+    state.app.tmdb.pending_ready = false;
+    state.app.tmdb.results_mutex.unlock();
+    refresh_queued.store(false, .release);
 
     // SWR: stamp the cache time on a fresh (non-append) load so revisits within
     // the TTL skip the network (see browse_cache + renderTmdbContent).
     if (!append) state.app.tmdb.last_fetch_s = @import("browse_cache.zig").now();
 
-    // CRITICAL: reserve a large, STABLE capacity for the results buffer once,
-    // up front (before any poster-fetch worker thread can hold a *TmdbItem into
-    // it). Poster workers write ptr.poster_w/_pixels asynchronously; if a later
-    // page append() reallocated the buffer, those pointers would dangle → crash
-    // (seen with infinite scroll). With capacity reserved here and appends
-    // capped below it (see renderGallery), append never reallocates.
+    // Reserve once to keep scrolling/appending cheap. Poster jobs publish by
+    // identity on the UI thread, so reallocating no longer invalidates workers.
     state.app.tmdb.results.ensureTotalCapacity(alloc, 2048) catch {};
 
     if (state.app.tmdb.view == .Search) {
@@ -98,7 +106,7 @@ fn deserializeItem(r: *ccp.Reader) ?state.TmdbItem {
 }
 
 /// SWR write — persist a fresh page-1 browse set (called from the fetch worker).
-fn putBrowseCache(items: []const state.TmdbItem) void {
+fn putBrowseCache(items: []const state.TmdbItem, key: []const u8) void {
     if (!state.app.content_cache_enabled) return;
     if (items.len == 0) return;
     const buf = alloc.alloc(u8, TMDB_BLOB_CAP) catch return;
@@ -109,8 +117,6 @@ fn putBrowseCache(items: []const state.TmdbItem) void {
     var i: usize = 0;
     while (i < n) : (i += 1) serializeItem(&w, items[i]);
     const blob = w.done() orelse return;
-    var key_buf: [96]u8 = undefined;
-    const key = browseCacheKey(&key_buf);
     content_cache.put(key, blob, TMDB_BROWSE_TTL_S);
 }
 
@@ -191,8 +197,11 @@ fn fetchTmdb(mode: FetchMode, query: []const u8, append: bool) void {
         var genre_idx: usize = 0;
         var discover_sort: u8 = 0;
         var page: u32 = 1;
+        var cache_key: [96]u8 = undefined;
+        var cache_key_len: usize = 0;
     };
 
+    S.cache_key_len = browseCacheKey(&S.cache_key).len;
     S.fetch_mode = mode;
     S.do_append = append;
     S.category = state.app.tmdb.category;
@@ -213,6 +222,7 @@ fn fetchTmdb(mode: FetchMode, query: []const u8, append: bool) void {
         fn worker() void {
             defer {
                 state.app.tmdb.is_loading.store(false, .release);
+                state.wakeUi();
             }
 
             const key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
@@ -238,7 +248,7 @@ fn fetchTmdb(mode: FetchMode, query: []const u8, append: bool) void {
             // the next cold start paints instantly. Search + infinite-scroll
             // pages are not cached.
             if (S.fetch_mode == .browse and !S.do_append and S.page == 1)
-                putBrowseCache(staged.items);
+                putBrowseCache(staged.items, S.cache_key[0..S.cache_key_len]);
 
             state.app.tmdb.results_mutex.lock();
             defer state.app.tmdb.results_mutex.unlock();
@@ -288,12 +298,31 @@ fn fetchCinemetaType(out: *std.ArrayListUnmanaged(state.TmdbItem), content_type:
 }
 
 fn fetchCinemetaInto(out: *std.ArrayListUnmanaged(state.TmdbItem), mode: FetchMode, query: []const u8, cat: state.TmdbCategory, mf: state.TmdbMediaFilter, genre_idx: usize, page: u32) void {
+    fetchCinemetaIntoUsing(fetchCinemetaType, out, mode, query, cat, mf, genre_idx, page);
+}
+
+fn fetchCinemetaIntoUsing(comptime fetchType: anytype, out: *std.ArrayListUnmanaged(state.TmdbItem), mode: FetchMode, query: []const u8, cat: state.TmdbCategory, mf: state.TmdbMediaFilter, genre_idx: usize, page: u32) void {
     switch (mf) {
-        .movie => fetchCinemetaType(out, "movie", mode, query, cat, genre_idx, page),
-        .tv => fetchCinemetaType(out, "series", mode, query, cat, genre_idx, page),
+        .movie => fetchType(out, "movie", mode, query, cat, genre_idx, page),
+        .tv => fetchType(out, "series", mode, query, cat, genre_idx, page),
         .all => {
-            fetchCinemetaType(out, "movie", mode, query, cat, genre_idx, page);
-            fetchCinemetaType(out, "series", mode, query, cat, genre_idx, page);
+            // Independent catalogs overlap their network waits. The child is
+            // joined before returning, so it never outlives these inputs.
+            const Fetch = struct {
+                fn run(rows: *std.ArrayListUnmanaged(state.TmdbItem), m: FetchMode, q: []const u8, c: state.TmdbCategory, g: usize, p: u32) void {
+                    fetchType(rows, "series", m, q, c, g, p);
+                }
+            };
+            var series: std.ArrayListUnmanaged(state.TmdbItem) = .empty;
+            defer series.deinit(alloc);
+            const worker = @import("../core/workers.zig").spawnLegacy(Fetch.run, .{ &series, mode, query, cat, genre_idx, page }) catch {
+                fetchType(out, "movie", mode, query, cat, genre_idx, page);
+                fetchType(out, "series", mode, query, cat, genre_idx, page);
+                return;
+            };
+            fetchType(out, "movie", mode, query, cat, genre_idx, page);
+            worker.join();
+            out.appendSlice(alloc, series.items) catch {};
         },
     }
 }
@@ -304,14 +333,21 @@ fn fetchCinemetaInto(out: *std.ArrayListUnmanaged(state.TmdbItem), mode: FetchMo
 /// iterate it without locking; non-UI readers (remote, ai_intent) take
 /// `results_mutex`, which this holds while mutating.
 pub fn applyPendingResults() void {
+    drainPosterResults();
     const t = &state.app.tmdb;
+    if (refresh_queued.load(.acquire)) {
+        if (!t.is_loading.load(.acquire)) fetchCurrentView(false);
+        return;
+    }
     t.results_mutex.lock();
     defer t.results_mutex.unlock();
     if (!t.pending_ready) return;
     t.pending_ready = false;
-    if (!t.pending_append) t.results.clearRetainingCapacity();
-    // Within the capacity reserved by fetchCurrentView — no realloc, so
-    // poster workers' *TmdbItem pointers stay valid (see the CRITICAL note).
+    if (!t.pending_append) {
+        for (t.results.items) |*item| @import("../core/poster.zig").deinitPoster(&item.poster_pixels, &item.poster_tex);
+        t.results.clearRetainingCapacity();
+    }
+    // Poster publication does not retain pointers into this growable list.
     t.results.appendSlice(alloc, t.pending_results.items) catch {};
     t.pending_results.clearRetainingCapacity();
     t.total_pages = t.pending_total_pages;
@@ -356,6 +392,12 @@ fn buildApiUrl(buf: *[512]u8, mode: FetchMode, query: []const u8, cat: state.Tmd
         return std.fmt.bufPrint(buf, "https://api.themoviedb.org/3/search/{s}?query={s}&page={d}", .{ search_type, enc, page }) catch null;
     }
 
+    if (mf == .tv and (cat == .now_playing or cat == .upcoming)) {
+        var day_buf: [16]u8 = undefined;
+        const today = @import("tmdb_pure.zig").ymd(@import("../core/io_global.zig").timestamp(), &day_buf) orelse return null;
+        return @import("tmdb_pure.zig").tvWindowUrl(buf, cat == .upcoming, today, page);
+    }
+
     return switch (cat) {
         .trending => std.fmt.bufPrint(buf, "https://api.themoviedb.org/3/trending/{s}/{s}?page={d}", .{ trending_mt, tw_str, page }) catch null,
         .popular => std.fmt.bufPrint(buf, "https://api.themoviedb.org/3/{s}/popular?page={d}", .{ list_mt, page }) catch null,
@@ -397,6 +439,47 @@ pub fn fetchDiscover(genre_id: u32) void {
 // Poster Fetching
 // ══════════════════════════════════════════════════════════
 
+// Workers own fixed slots, never pointers into replaceable catalog rows.
+const PosterJob = struct {
+    active: bool = false,
+    done: std.atomic.Value(bool) = .init(false),
+    fetching: bool = false,
+    id: i32 = 0,
+    path: [64]u8 = undefined,
+    path_len: usize = 0,
+    pixels: ?[]u8 = null,
+    w: u32 = 0,
+    h: u32 = 0,
+};
+var poster_jobs: [8]PosterJob = .{PosterJob{}} ** 8;
+
+pub fn drainPosterResults() void {
+    const lists = [_]*std.ArrayListUnmanaged(state.TmdbItem){
+        &state.app.tmdb.results,   &state.app.tmdb.favorites,
+        &state.app.tmdb.watchlist, &state.app.tmdb.watching,
+    };
+    for (&poster_jobs) |*job| {
+        if (!job.active or !job.done.load(.acquire)) continue;
+        found: for (lists) |list| {
+            for (list.items) |*item| {
+                if (!item.poster_fetching or item.id != job.id or
+                    !std.mem.eql(u8, item.poster_path[0..item.poster_path_len], job.path[0..job.path_len])) continue;
+                item.poster_fetching = false;
+                if (item.poster_tex == null and item.poster_pixels == null) {
+                    item.poster_pixels = job.pixels;
+                    item.poster_w = job.w;
+                    item.poster_h = job.h;
+                    job.pixels = null;
+                }
+                break :found;
+            }
+        }
+        if (job.pixels) |pixels| std.heap.c_allocator.free(pixels);
+        job.pixels = null;
+        job.active = false;
+    }
+}
+
 pub fn fetchPoster(item: *state.TmdbItem) void {
     if (item.poster_path_len == 0 or item.poster_fetching) return;
     // Route through the shared poster daemon: it carries the global concurrency
@@ -410,7 +493,16 @@ pub fn fetchPoster(item: *state.TmdbItem) void {
         (@import("cinemeta_pure.zig").compatiblePosterUrl(path, &compat_buf) orelse return)
     else
         std.fmt.bufPrint(&url_buf, "https://image.tmdb.org/t/p/w185{s}", .{path}) catch return;
-    @import("../core/poster.zig").fetchAsync(url, &item.poster_pixels, &item.poster_w, &item.poster_h, &item.poster_fetching);
+    for (&poster_jobs) |*job| {
+        if (job.active) continue;
+        job.done.store(false, .release);
+        job.id = item.id;
+        job.path_len = path.len;
+        @memcpy(job.path[0..path.len], path);
+        job.active = @import("../core/poster.zig").fetchAsyncPublished(url, &job.pixels, &job.w, &job.h, &job.fetching, &job.done);
+        item.poster_fetching = job.active;
+        return;
+    }
 }
 
 /// Sticky flag: some networks SNI-block api.themoviedb.org over HTTPS (the TLS
@@ -574,4 +666,92 @@ fn httpGet(url: []const u8, bearer_token: []const u8) ?[]u8 {
         if (attempt < 1) @import("../core/io_global.zig").sleep(250 * std.time.ns_per_ms);
     }
     return null;
+}
+
+test "Browse regression busy filter changes are queued and obsolete pages stay unpublished" {
+    const t = &state.app.tmdb;
+    t.is_loading.store(true, .release);
+    defer t.is_loading.store(false, .release);
+    defer refresh_queued.store(false, .release);
+    t.pending_ready = true;
+    defer t.pending_ready = false;
+    fetchCurrentView(false);
+    try std.testing.expect(refresh_queued.load(.acquire));
+    applyPendingResults();
+    try std.testing.expect(t.pending_ready);
+    try std.testing.expectEqual(@as(usize, 0), t.results.items.len);
+    // Finish the old load, then replay the newest (empty) search. No network
+    // is needed, and the old page must never become the visible result list.
+    const old_view = t.view;
+    const old_search = t.search_buf;
+    defer t.view = old_view;
+    defer t.search_buf = old_search;
+    defer {
+        t.results.deinit(alloc);
+        t.results = .empty;
+    }
+    t.view = .Search;
+    t.search_buf[0] = 0;
+    t.is_loading.store(false, .release);
+    applyPendingResults();
+    try std.testing.expect(!refresh_queued.load(.acquire));
+    try std.testing.expect(!t.pending_ready);
+    try std.testing.expectEqual(@as(usize, 0), t.results.items.len);
+}
+
+test "Browse regression poster completion never writes into a replaced row" {
+    const t = &state.app.tmdb;
+    defer {
+        t.results.deinit(alloc);
+        t.results = .empty;
+    }
+    try t.results.append(alloc, .{ .id = 2, .poster_fetching = true });
+    const job = &poster_jobs[0];
+    job.active = true;
+    job.id = 1; // The old card was replaced before its poster finished.
+    job.path_len = 0;
+    job.pixels = try std.heap.c_allocator.alloc(u8, 4);
+    job.done.store(true, .release);
+    drainPosterResults();
+    try std.testing.expect(!job.active);
+    try std.testing.expect(job.pixels == null);
+    try std.testing.expect(t.results.items[0].poster_pixels == null);
+    try std.testing.expect(t.results.items[0].poster_fetching);
+    // A matching completion is transferred exactly once to the live card.
+    job.active = true;
+    job.id = 2;
+    job.pixels = try std.heap.c_allocator.alloc(u8, 4);
+    job.w = 1;
+    job.h = 1;
+    drainPosterResults();
+    try std.testing.expect(!t.results.items[0].poster_fetching);
+    try std.testing.expectEqual(@as(usize, 4), t.results.items[0].poster_pixels.?.len);
+    std.heap.c_allocator.free(t.results.items[0].poster_pixels.?);
+}
+
+test "Browse regression movie and series network waits overlap and retain both catalogs" {
+    const Fixture = struct {
+        var started: std.atomic.Value(u32) = .init(0);
+        var overlapped: std.atomic.Value(bool) = .init(true);
+        fn fetch(rows: *std.ArrayListUnmanaged(state.TmdbItem), kind: []const u8, _: FetchMode, _: []const u8, _: state.TmdbCategory, _: usize, _: u32) void {
+            _ = started.fetchAdd(1, .acq_rel);
+            const clock = @import("../core/io_global.zig");
+            const deadline = clock.monotonicMilliTimestamp() + 1000;
+            while (started.load(.acquire) < 2) {
+                if (clock.monotonicMilliTimestamp() >= deadline) {
+                    overlapped.store(false, .release);
+                    break;
+                }
+                clock.sleep(std.time.ns_per_ms);
+            }
+            rows.append(alloc, .{ .id = if (std.mem.eql(u8, kind, "movie")) 1 else 2 }) catch {};
+        }
+    };
+    var rows: std.ArrayListUnmanaged(state.TmdbItem) = .empty;
+    defer rows.deinit(alloc);
+    fetchCinemetaIntoUsing(Fixture.fetch, &rows, .browse, "", .trending, .all, 0, 1);
+    try std.testing.expect(Fixture.overlapped.load(.acquire));
+    try std.testing.expectEqual(@as(usize, 2), rows.items.len);
+    try std.testing.expectEqual(@as(i32, 1), rows.items[0].id);
+    try std.testing.expectEqual(@as(i32, 2), rows.items[1].id);
 }

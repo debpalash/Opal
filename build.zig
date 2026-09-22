@@ -190,6 +190,16 @@ pub fn build(b: *std.Build) void {
     }
     b.step("test-tv-detail", "Test production TV metadata and restore helpers").dependOn(&run_tv_detail_tests.step);
 
+    const browse_tests = b.addTest(.{
+        .root_module = exe.root_module,
+        .filters = &.{"Browse regression"},
+    });
+    const run_browse_tests = b.addRunArtifact(browse_tests);
+    if (is_windows) run_browse_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{
+        msys_path_prefix, b.graph.environ_map.get("PATH") orelse "",
+    }));
+    b.step("test-browse", "Test production catalog parsing and asynchronous publication").dependOn(&run_browse_tests.step);
+
     // DPI-bypass sidecar (debpalash/zig-bypassdpi): a cross-platform userspace
     // proxy that fragments the TLS ClientHello so ISP DPI can't read the SNI.
     // Built as its own exe here and installed alongside `opal`; the app spawns it

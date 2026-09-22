@@ -41,47 +41,7 @@ pub fn looksLikeJson(body: []const u8) bool {
 /// that corrupted item ids and broke TV-detail for "FROM" / "House of the
 /// Dragon"). Returns the object count (capped at out.len).
 pub fn splitResultObjects(body: []const u8, out: [][]const u8) usize {
-    const key = "\"results\":[";
-    const rs = std.mem.indexOf(u8, body, key) orelse return 0;
-    var i = rs + key.len;
-    var depth: i32 = 0;
-    var obj_start: ?usize = null;
-    var in_str = false;
-    var esc = false;
-    var count: usize = 0;
-    while (i < body.len and count < out.len) : (i += 1) {
-        const c = body[i];
-        if (in_str) {
-            if (esc) {
-                esc = false;
-            } else if (c == '\\') {
-                esc = true;
-            } else if (c == '"') {
-                in_str = false;
-            }
-            continue;
-        }
-        switch (c) {
-            '"' => in_str = true,
-            '{' => {
-                if (depth == 0) obj_start = i;
-                depth += 1;
-            },
-            '}' => {
-                depth -= 1;
-                if (depth == 0) {
-                    if (obj_start) |s| {
-                        out[count] = body[s .. i + 1];
-                        count += 1;
-                        obj_start = null;
-                    }
-                }
-            },
-            ']' => if (depth == 0) break,
-            else => {},
-        }
-    }
-    return count;
+    return @import("cinemeta_pure.zig").splitArrayObjects(body, "\"results\":[", out);
 }
 
 /// First non-negative integer following `key` in `s` (digits only). Used to pull
@@ -578,4 +538,26 @@ test "upcomingUrl filters to future releases (issue #21 regression)" {
     // Page is threaded through for infinite scroll.
     const u_p7 = upcomingUrl(&b, "2026-07-26", 7).?;
     try std.testing.expect(std.mem.indexOf(u8, u_p7, "page=7") != null);
+}
+
+test "browse accepts whitespace between the results key and array" {
+    var objects: [4][]const u8 = undefined;
+    const body = "{\"results\" : \n [{\"id\":1,\"name\":\"Show\"}],\"total_pages\":1}";
+    try std.testing.expectEqual(@as(usize, 1), splitResultObjects(body, &objects));
+}
+
+/// TV chips must use television endpoints rather than movie theatrical lists.
+pub fn tvWindowUrl(buf: []u8, upcoming: bool, today: []const u8, page: u32) ?[]const u8 {
+    if (!upcoming) return std.fmt.bufPrint(buf, "https://api.themoviedb.org/3/tv/on_the_air?page={d}", .{page}) catch null;
+    if (today.len != 10) return null;
+    return std.fmt.bufPrint(buf, "https://api.themoviedb.org/3/discover/tv?first_air_date.gte={s}&sort_by=first_air_date.asc&page={d}", .{ today, page }) catch null;
+}
+
+test "TV airing and upcoming catalogs stay on TV endpoints and preserve pages" {
+    var buf: [256]u8 = undefined;
+    try std.testing.expectEqualStrings("https://api.themoviedb.org/3/tv/on_the_air?page=3", tvWindowUrl(&buf, false, "", 3).?);
+    const upcoming = tvWindowUrl(&buf, true, "2026-09-22", 2).?;
+    try std.testing.expect(std.mem.indexOf(u8, upcoming, "/discover/tv?") != null);
+    try std.testing.expect(std.mem.indexOf(u8, upcoming, "first_air_date.gte=2026-09-22") != null);
+    try std.testing.expect(std.mem.endsWith(u8, upcoming, "page=2"));
 }

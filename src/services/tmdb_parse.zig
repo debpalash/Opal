@@ -37,8 +37,8 @@ fn genreName(id: i32) ?[]const u8 {
 // ══════════════════════════════════════════════════════════
 
 pub fn extractJsonString(json: []const u8, key: []const u8) ?[]const u8 {
-    const ki = std.mem.indexOf(u8, json, key) orelse return null;
-    const after = json[ki + key.len ..];
+    const ki = @import("cinemeta_pure.zig").valueStart(json, key) orelse return null;
+    const after = json[ki..];
     var i: usize = 0;
     while (i < after.len and (after[i] == ' ' or after[i] == ':')) i += 1;
     if (i >= after.len or after[i] != '"') return null;
@@ -48,12 +48,13 @@ pub fn extractJsonString(json: []const u8, key: []const u8) ?[]const u8 {
         if (after[i] == '\\') i += 1;
         i += 1;
     }
+    if (i >= after.len) return null;
     return after[start..i];
 }
 
 pub fn extractJsonInt(json: []const u8, key: []const u8) i32 {
-    const ki = std.mem.indexOf(u8, json, key) orelse return 0;
-    const after = json[ki + key.len ..];
+    const ki = @import("cinemeta_pure.zig").valueStart(json, key) orelse return 0;
+    const after = json[ki..];
     var i: usize = 0;
     while (i < after.len and (after[i] == ' ')) i += 1;
     var result: i32 = 0;
@@ -64,8 +65,8 @@ pub fn extractJsonInt(json: []const u8, key: []const u8) i32 {
 }
 
 pub fn extractJsonFloat(json: []const u8, key: []const u8) f32 {
-    const ki = std.mem.indexOf(u8, json, key) orelse return 0;
-    const after = json[ki + key.len ..];
+    const ki = @import("cinemeta_pure.zig").valueStart(json, key) orelse return 0;
+    const after = json[ki..];
     var i: usize = 0;
     while (i < after.len and (after[i] == ' ')) i += 1;
     const start = i;
@@ -92,7 +93,7 @@ pub fn formatDate(out_buf: *[16]u8, iso: []const u8) []const u8 {
 /// UI thread iterates mid-frame (that race was the renderCatalogRail
 /// out-of-bounds crash).
 pub fn parseTmdbResponse(body: []const u8, out: *std.ArrayListUnmanaged(state.TmdbItem)) void {
-    if (std.mem.indexOf(u8, body, "\"results\":[") == null) {
+    if (@import("cinemeta_pure.zig").arrayStart(body, "\"results\":[") == null) {
         parseAndAddItem(body, out) catch {};
         return;
     }
@@ -287,4 +288,17 @@ fn parseGenreIds(json: []const u8, item: *state.TmdbItem) void {
         @memcpy(item.genre_text[0..gpos], genre_buf[0..gpos]);
         item.genre_text_len = gpos;
     }
+}
+
+test "Browse regression formatted catalog JSON populates movie and TV cards" {
+    var rows: std.ArrayListUnmanaged(state.TmdbItem) = .empty;
+    defer rows.deinit(alloc);
+    parseTmdbResponse("{\"results\" : [ {\"id\" : 42, \"name\" : \"Example TV\", \"first_air_date\" : \"2026-01-01\"} ]}", &rows);
+    try std.testing.expectEqual(@as(usize, 1), rows.items.len);
+    try std.testing.expectEqual(@as(i32, 42), rows.items[0].id);
+    try std.testing.expectEqualStrings("Example TV", rows.items[0].title[0..rows.items[0].title_len]);
+    rows.clearRetainingCapacity();
+    parseCinemetaResponse("{\"metas\" : [ {\"id\" : \"tt1234567\", \"name\" : \"Example Movie\", \"type\" : \"movie\"} ]}", &rows);
+    try std.testing.expectEqual(@as(usize, 1), rows.items.len);
+    try std.testing.expectEqualStrings("Example Movie", rows.items[0].title[0..rows.items[0].title_len]);
 }

@@ -1923,7 +1923,7 @@ fn resolveYts(query_buf: [256]u8, qlen: usize) void {
 /// already queries it, and listing it would hit the user's Jackett twice on every
 /// search. That is the same double-scrape that made the native 1337x resolver
 /// worth deleting rather than repairing.
-const TORZNAB_IDS = [_][]const u8{ "torznab", "prowlarr" };
+const TORZNAB_IDS = [_][]const u8{ "torznab", "prowlarr", "bitmagnet" };
 
 // ══════════════════════════════════════════════════════════
 // Backend: EZTV (JSON API)

@@ -21,3 +21,4 @@ torrentproject: 1.92
 torrentscsv: 1.8
 uindex: 1.3
 yts: 1.4
+internetarchive: 1.0
