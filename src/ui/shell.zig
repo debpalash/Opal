@@ -358,6 +358,11 @@ fn renderTopNav(compact: bool, narrow: bool) void {
 
     // Donate chip — dropped at narrow so the tighter row doesn't clip.
 
+    // Donate — text chip (not an icon action) so it reads as an ask, not a
+    // toggle. Hidden in compact, like the nav links: the omnibox already has
+    // to share a narrow row with the icon actions there.
+    if (!compact) header.donateButton();
+
     // Right-side actions (icon-only). The former "Assistant" button opened the
     // AI/Voice SETTINGS page (renderAIContent) — that now lives in Settings ›
     // AI & Voice, so it's dropped from the primary nav. AI chat is reachable
