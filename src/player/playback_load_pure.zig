@@ -90,6 +90,61 @@ test "provider resume positions reject invalid and absurd values" {
     try std.testing.expectEqual(@as(f64, 123.5), saneResumePosition(123.5).?);
 }
 
+/// True when a periodic watch-history save must be SKIPPED because mpv is
+/// parked at the end of a still-incomplete torrent, not because the user
+/// watched anything.
+///
+/// mpv reports percent-pos 100 at EOF even when 9% is on disk (a Black
+/// Panther 2160p sat at "2:41:18/2:41:18" with 8.9% downloaded). The 5s saver
+/// used to record that as percent=100/position=duration — a poisoned row that
+/// marks an unwatched movie fully watched and can never resume correctly.
+/// Complete torrents (and genuine finishes, which go through
+/// saveCurrentPositionFinal) are unaffected: only an incomplete torrent parked
+/// at/near the end is refused.
+pub fn skipEofParkedSave(torrent_incomplete: bool, percent_pos: f64, pos_secs: f64, dur_secs: f64) bool {
+    if (!torrent_incomplete) return false;
+    if (std.math.isFinite(percent_pos) and percent_pos >= 99.0) return true;
+    if (std.math.isFinite(pos_secs) and std.math.isFinite(dur_secs) and dur_secs > 0 and
+        pos_secs >= 0.99 * dur_secs) return true;
+    return false;
+}
+
+test "eof-parked saves are skipped only for incomplete torrents at the end" {
+    // The observed poisoning: EOF-parked, 8.9% on disk.
+    try std.testing.expect(skipEofParkedSave(true, 100.0, 9678.0, 9678.0));
+    try std.testing.expect(skipEofParkedSave(true, 99.5, 100.0, 200.0));
+    try std.testing.expect(skipEofParkedSave(true, 50.0, 992.0, 1000.0)); // pos >= 99% dur
+    // Mid-stream positions on an incomplete torrent are still worth saving.
+    try std.testing.expect(!skipEofParkedSave(true, 50.0, 500.0, 1000.0));
+    try std.testing.expect(!skipEofParkedSave(true, 96.0, 960.0, 1000.0)); // near end, not parked
+    try std.testing.expect(!skipEofParkedSave(true, 3.0, 120.0, 0.0)); // unknown duration
+    // Complete torrents (and non-torrents) always save: a 100% row is truthful.
+    try std.testing.expect(!skipEofParkedSave(false, 100.0, 9678.0, 9678.0));
+    // NaN properties (mpv unavailable) never count as parked.
+    try std.testing.expect(!skipEofParkedSave(true, std.math.nan(f64), std.math.nan(f64), std.math.nan(f64)));
+}
+
+/// Resume point for an EOF reload on a still-incomplete torrent.
+///
+/// mpv EOFs when the proxy's 15s piece wait expires mid-body (ffmpeg reads a
+/// truncated body as end-of-file, it has no reconnect path), and the reload
+/// used to restart from 0 whenever percent-pos was unusable at EOF (>= 99.9,
+/// <= 0.1, NaN) — every stall visibly threw playback back to the beginning.
+/// Returns a seconds resume when the caller should override, null to keep the
+/// existing percent-pos path. last_good_secs is the newest non-EOF-parked
+/// position the saver recorded, so a stall resumes where it stalled.
+pub fn eofReloadResumeSecs(cur_pct_usable: bool, last_good_secs: f64) ?f64 {
+    if (cur_pct_usable) return null;
+    return saneResumePosition(last_good_secs);
+}
+
+test "eof reload resumes at last good position when percent is unusable" {
+    try std.testing.expect(eofReloadResumeSecs(true, 500.0) == null); // percent path handles it
+    try std.testing.expectEqual(@as(f64, 500.0), eofReloadResumeSecs(false, 500.0).?);
+    try std.testing.expect(eofReloadResumeSecs(false, 0.0) == null); // nothing good yet: from start
+    try std.testing.expect(eofReloadResumeSecs(false, std.math.nan(f64)) == null);
+}
+
 /// mpv 0.38.0 (client API 2.3) inserted an `<index>` argument into `loadfile`
 /// between `<flags>` and `<options>`. Passing five arguments to an older
 /// libmpv makes it read our `-1` index as the options map and reject the

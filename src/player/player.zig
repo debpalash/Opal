@@ -344,6 +344,12 @@ pub const MediaPlayer = struct {
     metadata_start_time: i64,
     resume_percent: f64 = 0.0,
     resume_position_secs: f64 = 0.0, // exact-second resume (wins over percent)
+    /// Newest non-EOF-parked time-pos observed during playback. An EOF reload
+    /// on a still-incomplete torrent resumes here instead of restarting from
+    /// 0 when percent-pos is unusable (parked at ~100/NaN after the file
+    /// closed). Reset on every replace load; the 5s saver re-records it once
+    /// mpv reports a trustworthy position again.
+    last_good_pos_secs: f64 = 0.0,
     current_url: [MAX_LOAD_URL]u8 = std.mem.zeroes([MAX_LOAD_URL]u8),
     current_url_len: usize = 0,
     fallback_url: [MAX_LOAD_URL]u8 = std.mem.zeroes([MAX_LOAD_URL]u8),
@@ -726,6 +732,7 @@ pub const MediaPlayer = struct {
         self.metadata_start_time = 0;
         self.resume_percent = 0.0;
         self.resume_position_secs = 0.0;
+        self.last_good_pos_secs = 0.0;
         @memset(&self.source_url, 0);
         @memset(&self.current_url, 0);
         self.current_url_len = 0;
@@ -1295,6 +1302,11 @@ pub const MediaPlayer = struct {
         // the already-staged original request and must not erase its identity.
         @import("../services/auto_subs.zig").cancelForMediaChange();
         self.load_serial = playback_load_sequence.fetchAdd(1, .acq_rel) + 1;
+        // A replace is a new logical position: a previous file's stall point
+        // must never become this file's EOF-reload resume. Reloads of the SAME
+        // file are unaffected — the resume fields are consumed into mpv
+        // options before this runs (see the torrent readiness gate below).
+        self.last_good_pos_secs = 0.0;
         self.playback_origin = request.origin;
         self.queue_item_id = if (request.origin == .queue) request.queue_item_id else -1;
         if (request.origin != .torrent) {
@@ -2668,10 +2680,22 @@ pub fn updateTorrentBackgroundTasks() void {
                         // watch-history percent (written every few hundred frames),
                         // so a mid-stream stall visibly threw playback backwards.
                         var cur_pct: f64 = 0;
+                        var cur_usable = false;
                         if (c.mpv.mpv_get_property(p.mpv_ctx, "percent-pos", c.mpv.MPV_FORMAT_DOUBLE, &cur_pct) >= 0) {
                             if (cur_pct > 0.1 and cur_pct < 99.9 and !std.math.isNan(cur_pct)) {
                                 p.resume_percent = cur_pct;
+                                cur_usable = true;
                             }
+                        }
+                        // percent-pos is unusable at a parked EOF (>= 99.9, or
+                        // NaN once the file closed): without this the reload
+                        // silently fell back to 0 and every stall restarted the
+                        // movie from the beginning. Resume at the newest
+                        // non-EOF-parked position instead; when nothing
+                        // trustworthy was ever observed, from-start remains.
+                        if (playback_load.eofReloadResumeSecs(cur_usable, p.last_good_pos_secs)) |secs| {
+                            p.resume_percent = 0.0;
+                            p.resume_position_secs = secs;
                         }
 
                         p.torrent_is_ready = false;
@@ -3136,7 +3160,22 @@ pub fn updateTorrentBackgroundTasks() void {
                         var dur_s: f64 = 0;
                         _ = c.mpv.mpv_get_property(p.mpv_ctx, "time-pos", c.mpv.MPV_FORMAT_DOUBLE, &pos_s);
                         _ = c.mpv.mpv_get_property(p.mpv_ctx, "duration", c.mpv.MPV_FORMAT_DOUBLE, &dur_s);
-                        watch.savePositionFull(t_name3[0..n3_len], percent_pos, pos_s, dur_s, p.source_url[0..p.source_url_len], p.catalog_tmdb_id);
+                        // Torrent completion for the EOF-park guard below: one
+                        // C call per 5s save tick, never per frame.
+                        var complete: f32 = 1;
+                        _ = c.mpv.torrent_poll(state.torrentSession(), p.current_torrent_id, p.selected_file_idx, null, 0, &complete, null, null);
+                        // Never record mpv parked at the end of a still-
+                        // incomplete torrent: percent-pos reads 100 at EOF
+                        // with single-digit percent on disk, and that row
+                        // marks an unwatched file fully watched (and can never
+                        // resume correctly). Genuine finishes go through
+                        // saveCurrentPositionFinal, not here.
+                        if (!playback_load.skipEofParkedSave(complete < 0.99, percent_pos, pos_s, dur_s)) {
+                            watch.savePositionFull(t_name3[0..n3_len], percent_pos, pos_s, dur_s, p.source_url[0..p.source_url_len], p.catalog_tmdb_id);
+                            // Newest trustworthy position: an EOF-reload stall
+                            // resumes here instead of restarting from 0.
+                            if (std.math.isFinite(pos_s) and pos_s > 0) p.last_good_pos_secs = pos_s;
+                        }
                     }
                 }
             }
