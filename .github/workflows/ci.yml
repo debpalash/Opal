@@ -254,6 +254,13 @@ jobs:
             Write-Host "CIM kill works: /health unreachable ($($_.Exception.GetType().Name))"
           }
 
+      # The server smoke excludes ui/win_titlebar.c; compile the desktop
+      # surface too so Windows caption/DPI fixes are gated before a release
+      # tag is created. Do this after the server has been shut down because
+      # both builds write zig-out/bin/opal.exe.
+      - name: Build Windows desktop (ReleaseSafe)
+        run: zig build -Doptimize=ReleaseSafe
+
   docker-headless:
     runs-on: ubuntu-latest
     timeout-minutes: 45
