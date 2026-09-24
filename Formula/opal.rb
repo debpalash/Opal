@@ -1,59 +1,29 @@
 class Opal < Formula
-  # Binary formula: installs the prebuilt release binary.
-  #
-  # This used to build from source, which meant `depends_on "zig" => :build` and
-  # `depends_on xcode: ["15.0", :build]` — so `brew install debpalash/tap/opal`
-  # died on any machine that had only the Command Line Tools:
-  #
-  #   opal: A full installation of Xcode.app 15.0 is required to compile
-  #   this software. Installing just the Command Line Tools is not sufficient.
-  #
-  # Nobody should need a 15 GB Xcode download to install a media player. We already
-  # publish a compiled arm64 binary with every release, so install that.
+  # The release app bundles its media and torrent dylibs; the bare CLI tarball
+  # needs a matching Homebrew mpv/FFmpeg and cannot be installed independently.
   desc "Pure-Zig desktop media browser and AI copilot"
   homepage "https://github.com/debpalash/Opal"
-  version "0.8.5"
+  version "0.8.6"
   license "GPL-3.0-only"
 
-  url "https://github.com/debpalash/Opal/releases/download/v0.8.5/opal-0.8.5-macos-arm64.tar.gz"
-  sha256 "78f093912ac9e4b0cd00acfb0d35a94a344af955b5bc2613de53e790ae4fc1c4"
+  url "https://github.com/debpalash/Opal/releases/download/v0.8.6/Opal-0.8.6-macos-arm64.app.zip"
+  sha256 "5e92c5211d7c3260a56225572ced0d35abad2d2e41eeb6906da8f78ee0a2c8cb"
 
   # The published binary is Apple-silicon only (GitHub retired the Intel runners).
   # Say so up front instead of installing something that cannot run.
   depends_on arch: :arm64
   depends_on :macos
 
-  # Runtime — this is a bare binary, so it links against Homebrew's dylibs. (The
-  # .app bundle from the same release vendors these instead and needs none of them;
-  # that is what scripts/install.sh installs by default.)
-  depends_on "libtorrent-rasterbar"
-  depends_on "mpv"
-  depends_on "onnxruntime"
-  depends_on "sqlite"
-
-  # Voice pipeline (all optional; voice mode degrades gracefully if missing).
-  depends_on "ffmpeg" => :recommended      # mic capture via avfoundation
-  depends_on "whisper-cpp" => :recommended # STT default backend
-
   def install
-    bin.install "opal"
+    prefix.install "Opal.app"
+    bin.write_exec_script prefix/"Opal.app/Contents/MacOS/Opal"
   end
 
   def caveats
     <<~EOS
-      Opal stores config + models in ~/.config/opal/.
-
-      This formula installs the command-line binary. For the GUI app bundle
-      (self-contained — it vendors mpv/SDL and needs no Homebrew deps):
-        curl -fsSL https://raw.githubusercontent.com/debpalash/Opal/main/scripts/install.sh | sh
-
-      To enable voice/STT, keep `whisper-cpp` and `ffmpeg` on PATH.
+      Launch Opal with `opal` or `open "#{prefix}/Opal.app"`.
+      Config and models live in ~/.config/opal/.
+      Voice capture and transcription need ffmpeg and whisper-cpp separately.
     EOS
-  end
-
-  test do
-    # A GUI binary with no --version flag (it would open a window and never exit),
-    # so assert install shape rather than launching it.
-    assert_predicate bin/"opal", :executable?
   end
 end

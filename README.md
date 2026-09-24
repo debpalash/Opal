@@ -87,6 +87,9 @@ Or pick your row — every file is on [Releases](../../releases):
 | 🪟 | **Windows** (x64) — **alpha** | run the `.msi` — or unzip the portable `.zip` |
 | 🛠 | **From source** | `git clone` → `zig build run` |
 
+Homebrew installs the self-contained macOS `.app` bundle; `opal` launches that
+app directly. No Homebrew mpv or FFmpeg dependency is needed to install it.
+
 <sub>🍎 macOS may call the `.dmg` **"damaged"** — it isn't; we're not Apple-notarized
 yet. The one-command installer skips the dialog, or run `sudo xattr -cr
 /Applications/Opal.app` once. 🍎 Intel Macs: build from source
