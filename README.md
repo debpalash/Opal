@@ -117,6 +117,13 @@ playback, or **+** to queue a torrent. Install sources from
 **Settings → General → Install source plugins**; the source catalog reports
 the last operation and links to redacted Logs.
 
+Deleting a playing torrent stops its stream before removing the download, and
+the empty player offers **Open file** or **Browse search**. To hand playback to
+VLC, install VLC and choose **Settings → Playback → Open in VLC** while media
+is playing; VLC is optional and Opal reports if it is not installed. Source
+installation shows its current step and an error or success result; redacted
+Logs include the failed step and a recovery procedure.
+
 The Linux AppImage uses the system's OpenSSL 3 libraries alongside system
 `libcurl` (rather than bundling an older OpenSSL that conflicts on rolling
 distributions). The AppImage requires `libssl.so.3` and `libcrypto.so.3` on

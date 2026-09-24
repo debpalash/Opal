@@ -1740,6 +1740,55 @@ pub const MediaPlayer = struct {
         _ = c.mpv.mpv_command_string(self.mpv_ctx, "cycle pause");
     }
 
+    /// Remove a deleted torrent from this player without removing the player
+    /// pane. Stop mpv before the torrent session/file is torn down, so Windows
+    /// can release its open file handle; clear the logical load as well as the
+    /// transport so the last frame, loading overlay and mini-player disappear.
+    pub fn unloadRemovedTorrent(self: *MediaPlayer, torrent_id: i32) void {
+        if (self.current_torrent_id != torrent_id) return;
+        self.load_serial = playback_load_sequence.fetchAdd(1, .acq_rel) + 1;
+        const stream_proxy = @import("stream_proxy.zig");
+        if (self.proxy_handle.isValid()) {
+            // Cancel pending torrent reads before issuing a synchronous mpv
+            // stop, otherwise the demuxer can hold the UI thread until its
+            // network-read timeout expires.
+            stream_proxy.stopProxy(self.proxy_handle);
+            self.proxy_handle = stream_proxy.INVALID_HANDLE;
+        }
+        _ = c.mpv.mpv_command_string(self.mpv_ctx, "stop");
+        self.clearFrame();
+        self.current_torrent_id = -1;
+        self.selected_file_idx = -1;
+        self.is_torrent = false;
+        self.playback_origin = .direct;
+        self.queue_item_id = -1;
+        self.torrent_is_ready = false;
+        self.has_metadata = false;
+        self.is_buffering_paused = false;
+        self.is_loading = false;
+        self.metadata_start_time = 0;
+        self.current_url_len = 0;
+        self.source_url_len = 0;
+        self.fallback_url_len = 0;
+        self.fallback_recovery = .{};
+        self.current_loopback_stream = false;
+        self.ytdl_fast_retry_pending = false;
+        self.history_identity_len = 0;
+        self.restore_target_len = 0;
+        self.loading_label_len = 0;
+        self.load_error_len = 0;
+        self.np_title_len = 0;
+        self.np_subtitle_len = 0;
+        self.restore_session_position = null;
+        self.provider_resume_position = null;
+        self.resume_seeked = false;
+        self.last_good_pos_secs = 0;
+        self.last_seen_pos = 0;
+        self.cached_duration = 0;
+        self.cached_paused = true;
+        state.wakeUi();
+    }
+
     /// Silence playback as soon as application shutdown starts. The command is
     /// asynchronous so a demuxer blocked on network/torrent input cannot stall
     /// the UI thread while the native window is being closed.

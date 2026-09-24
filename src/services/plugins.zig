@@ -1210,6 +1210,7 @@ fn renderSourcePlugins() void {
         const working = operation.stage == .fetching or operation.stage == .writing;
         var status_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .padding = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = theme.spacing.sm } });
         if (working) dvui.spinner(@src(), .{ .min_size_content = .{ .w = 18, .h = 18 }, .max_size_content = .{ .w = 18, .h = 18 } });
+        if (working) dvui.refresh(null, @src(), null);
         const stage_text: []const u8 = switch (operation.stage) {
             .fetching => "Fetching source definition",
             .writing => "Writing source configuration",
@@ -1224,8 +1225,11 @@ fn renderSourcePlugins() void {
             .gravity_y = 0.5,
         });
         status_row.deinit();
-        _ = dvui.label(@src(), "Operation: bundled JSON write or HTTPS fetch then write to Opal's sources folder (auth hidden).", .{}, .{ .color_text = theme.colors.text_tertiary, .expand = .horizontal });
-        _ = dvui.label(@src(), "No shell command runs for source installs.", .{}, .{ .color_text = theme.colors.text_tertiary });
+        _ = dvui.label(@src(), "{s}", .{if (operation.fetch_remote)
+            "Procedure: HTTPS GET GitHub contents API for the source definition (optional bearer header redacted) → write JSON into Opal's sources folder."
+        else
+            "Procedure: write bundled source JSON into Opal's sources folder. No network request."}, .{ .color_text = theme.colors.text_tertiary, .expand = .horizontal });
+        _ = dvui.label(@src(), "No shell command runs for source installs. Private token, endpoint contents and media URLs are never printed in Logs.", .{}, .{ .color_text = theme.colors.text_tertiary });
         if (dvui.button(@src(), "View logs", .{}, .{ .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.text_primary, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 } })) {
             state.navigateToTab(.Logs);
         }

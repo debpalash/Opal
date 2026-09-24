@@ -116,6 +116,10 @@ pub const TINY_PT: f32 = 520;
 pub const NARROW_PT: f32 = 950;
 /// Short windows need the same space-saving bottom navigation as tiny ones.
 pub const SHORT_PT: f32 = 560;
+/// The desktop nav's icon links, source picker, actions and minimum omnibox
+/// need this much room INSIDE the user-scale widget. A large UI multiplier can
+/// exhaust layout units even if the OS window is wider than COMPACT_PT.
+pub const DESKTOP_NAV_MIN_LAYOUT_UNITS: f32 = 640;
 
 /// Scaled layout units → on-screen points.
 pub fn layoutPoints(rect_w: f32, ui_scale: f32) f32 {
@@ -135,6 +139,12 @@ pub fn layoutUnits(points: f32, ui_scale: f32) f32 {
 pub fn isCompact(rect_w: f32, ui_scale: f32) bool {
     const pt = layoutPoints(rect_w, ui_scale);
     return pt > 1 and pt < COMPACT_PT;
+}
+
+/// Prefer the compact row when either the OS window is small or the user
+/// density scale leaves too few layout units for the full desktop nav.
+pub fn needsCompactNav(rect_w: f32, ui_scale: f32) bool {
+    return isCompact(rect_w, ui_scale) or (rect_w > 1 and rect_w < DESKTOP_NAV_MIN_LAYOUT_UNITS);
 }
 
 pub fn isTiny(rect_w: f32, ui_scale: f32) bool {
@@ -260,6 +270,21 @@ test "breakpoints are inert on a degenerate first frame" {
     // A bogus scale must not turn a wide window into a phone.
     try std.testing.expect(!isCompact(2000, 0));
     try std.testing.expect(!isNarrow(2000, std.math.nan(f32)));
+}
+
+test "high user scale moves laptop navigation into the compact tier" {
+    // Windows 150% display scaling makes a 1366px panel ~911 window points:
+    // that alone is NOT below the compact threshold. A 1.5x user UI scale
+    // leaves only ~607 layout units, which cannot carry the desktop nav row.
+    const os_width: f32 = 1366.0 / 1.5;
+    const layout_width = layoutUnits(os_width, 1.5);
+    try std.testing.expect(!isCompact(layout_width, 1.5));
+    try std.testing.expect(needsCompactNav(layout_width, 1.5));
+    // At default user scale the same window retains its desktop row.
+    try std.testing.expect(!needsCompactNav(os_width, 1.0));
+    // This transition is measured in layout units, so OS DPI and UI scale
+    // are each applied only once.
+    try std.testing.expect(needsCompactNav(layoutUnits(1366.0 / 1.25, 2), 2));
 }
 
 test "layoutPoints round-trips a known window" {

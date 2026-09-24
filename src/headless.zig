@@ -94,6 +94,14 @@ pub fn headlessMain() !void {
         // Every 100ms rather than on the 2s tick: it is an atomic swap when
         // idle, and a reader waiting on a page shouldn't eat 2s of latency.
         @import("services/comics.zig").drainPendingLoad();
+        // The remote /api/load handler can queue a magnet while libtorrent
+        // initializes. Desktop frames drain that FIFO, but headless has no
+        // frame: without this the transfer never exists and cannot be canceled.
+        // The HTTP handler holds players_mutex while it loads a magnet; keep
+        // the same owner boundary while the headless loop attaches queued ones.
+        @import("core/state.zig").players_mutex.lock();
+        @import("services/search.zig").flushPendingTorrentOpen();
+        @import("core/state.zig").players_mutex.unlock();
         // Same class of seam: drama's fetch worker stages results under a mutex
         // and the RENDER path commits them. No render path here, so the parse
         // succeeded and result_count stayed 0.

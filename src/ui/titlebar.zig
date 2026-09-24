@@ -10,13 +10,13 @@
 //! Enabled on Windows by default (state.app.custom_titlebar). On a build where
 //! it's off, nothing here runs and the native title bar is kept.
 
-const std = @import("std");
 const builtin = @import("builtin");
 const dvui = @import("dvui");
 const icons = @import("icons");
 const c = @import("../core/c.zig");
 const theme = @import("theme.zig");
 const state = @import("../core/state.zig");
+const geometry = @import("titlebar_geometry.zig");
 
 const is_windows = builtin.os.tag == .windows;
 
@@ -27,10 +27,15 @@ const is_windows = builtin.os.tag == .windows;
 /// this file still compiles everywhere.
 const native = if (is_windows) struct {
     extern fn opal_titlebar_install_native(win: ?*anyopaque) void;
+    extern fn opal_titlebar_set_geometry(band: f32, controls: f32) void;
     extern fn opal_titlebar_begin_native_drag(win: ?*anyopaque) c_int;
 } else struct {
     fn opal_titlebar_install_native(win: ?*anyopaque) void {
         _ = win;
+    }
+    fn opal_titlebar_set_geometry(band: f32, controls: f32) void {
+        _ = band;
+        _ = controls;
     }
     fn opal_titlebar_begin_native_drag(win: ?*anyopaque) c_int {
         _ = win;
@@ -40,10 +45,7 @@ const native = if (is_windows) struct {
 
 /// Logical (unscaled) bar height, in dvui points. Compact — just tall enough
 /// for the logo + window controls.
-pub const HEIGHT: f32 = 30;
-/// Logical width of each window-control button.
-const BTN_W: f32 = 44;
-const NUM_BTNS: f32 = 3;
+pub const HEIGHT: f32 = geometry.HEIGHT;
 
 /// Set by the close button; appFrame polls this and returns `.close`.
 pub var close_requested: bool = false;
@@ -144,7 +146,8 @@ fn ctlButton(id: u32, icon_data: []const u8, danger: bool) bool {
         .color_text = theme.colors.text_secondary,
         .border = dvui.Rect.all(0),
         .corner_radius = dvui.Rect.all(0),
-        .padding = .{ .x = 15, .y = 8, .w = 15, .h = 8 },
+        .margin = dvui.Rect.all(0),
+        .padding = .{ .x = 16, .y = 8, .w = 16, .h = 8 },
         .min_size_content = .{ .w = 12, .h = 12 },
         .max_size_content = .{ .w = 12, .h = 12 },
         .gravity_y = 0.5,
@@ -212,12 +215,14 @@ pub fn render() void {
 
     bar.deinit();
 
-    // Hit-test geometry as FRACTIONS of the window (invariant to whatever units
-    // SDL reports points in). Band height = logical HEIGHT ÷ window logical
-    // height; controls occupy the rightmost NUM_BTNS×BTN_W logical pts. Uses the
-    // dvui window rect (points) so the ratio is unit-consistent.
+    // The player draws this bar inside dvui.scale(ui_scale); other routes
+    // draw it outside. The Win32 hit-test must exclude the *rendered* control
+    // widths, not the unscaled 132-point footprint on the player route.
+    // Fractions also work when SDL's window coordinates differ from pixels.
     const wr = dvui.windowRect();
-    band_frac = if (wr.h > 0) HEIGHT / wr.h else 0.05;
-    controls_frac = if (wr.w > 0) 1.0 - (NUM_BTNS * BTN_W) / wr.w else 0.85;
+    const hit = geometry.hitRegion(wr.w, wr.h, if (playerOverlay()) state.app.ui_scale else 1.0);
+    band_frac = hit.band_fraction;
+    controls_frac = hit.controls_fraction;
     controls_active = true;
+    native.opal_titlebar_set_geometry(band_frac, controls_frac);
 }

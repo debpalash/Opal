@@ -36,6 +36,16 @@
 
 static WNDPROC g_prev_proc;
 static SDL_Window *g_window;
+/* Same fractions used by SDL's title-bar hit-test. The player paints the bar
+ * inside its UI-scale layer, so hard-coded 30/132 window units are wrong there. */
+static float g_band_frac = 0.05f;
+static float g_controls_frac = 0.85f;
+
+void opal_titlebar_set_geometry(float band, float controls)
+{
+    g_band_frac = band;
+    g_controls_frac = controls;
+}
 
 /* Maximize to the work area (screen minus taskbar/appbars) of the monitor the
  * window currently sits on. ptMaxPosition is relative to the monitor origin,
@@ -61,7 +71,6 @@ static LRESULT CALLBACK opalWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
 {
     switch (msg) {
     case WM_NCHITTEST: {
-        int logical_w = 0, logical_h = 0;
         RECT wr;
         LRESULT hit = CallWindowProcW(g_prev_proc, hwnd, msg, wparam, lparam);
         /* Preserve the SDL/native resize edges. If the SDL callback did not
@@ -70,15 +79,14 @@ static LRESULT CALLBACK opalWndProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
         if (hit != HTCLIENT || !g_window || !GetWindowRect(hwnd, &wr)) {
             return hit;
         }
-        SDL_GetWindowSize(g_window, &logical_w, &logical_h);
-        if (logical_w > 0 && logical_h > 0) {
+        if (wr.right > wr.left && wr.bottom > wr.top) {
             const int physical_w = wr.right - wr.left;
             const int physical_h = wr.bottom - wr.top;
-            const int title_h = MulDiv(30, physical_h, logical_h);
-            const int controls_w = MulDiv(3 * 44, physical_w, logical_w);
+            const int title_h = (int)(physical_h * g_band_frac);
+            const int controls_x = wr.left + (int)(physical_w * g_controls_frac);
             const int x = (int)(short)LOWORD(lparam);
             const int y = (int)(short)HIWORD(lparam);
-            if (y >= wr.top && y < wr.top + title_h && x < wr.right - controls_w) {
+            if (y >= wr.top && y < wr.top + title_h && x < controls_x) {
                 return HTCAPTION;
             }
         }

@@ -64,21 +64,20 @@ pub fn render() !void {
     defer root.deinit();
 
     // Responsive breakpoints use the live OS window, not this root widget's
-    // previous-frame rect. The latter could leave the old navbar mounted after
-    // resize and push More off-screen until some unrelated repaint happened.
-    //   compact (< 900pt): mobile layout — desktop links give way to bottom
-    //     tabs and the More menu (including global Search).
-    //   narrow  (< 950pt, or < 1200 layout units): top nav with icon-only
-    //     links and a tighter omnibox so everything fits as you resize.
-    // Device thresholds are ON-SCREEN POINTS; the additional narrow-layout
-    // guard uses scaled layout units. This shell renders inside
-    // dvui.scale(ui_scale), so scale_pure converts the OS window dimensions
-    // before comparing them; using raw pixels can push More off-screen.
+    // previous-frame rect. The latter could leave the outgoing navbar mounted
+    // after resize and push More off-screen until a later repaint.
+    // The OS-point compact tier also activates if a large user scale leaves
+    // too few layout units for the desktop nav's minimum child widths.
+    //   compact: bottom tabs and More replace desktop links;
+    //   narrow: icon-only top links and a tighter omnibox;
+    //   tiny/short: the densest complete shell.
+    // This shell renders inside dvui.scale(ui_scale), so convert OS window
+    // dimensions before comparing either point or layout-unit thresholds.
     const scale_pure = @import("../core/scale_pure.zig");
     const window_rect = dvui.windowRect();
     const w = scale_pure.layoutUnits(window_rect.w, state.app.ui_scale);
     const h = scale_pure.layoutUnits(window_rect.h, state.app.ui_scale);
-    const compact = scale_pure.isCompact(w, state.app.ui_scale);
+    const compact = scale_pure.needsCompactNav(w, state.app.ui_scale);
     const narrow = scale_pure.isNarrow(w, state.app.ui_scale) or w < 1200;
     const tiny = scale_pure.isTiny(w, state.app.ui_scale);
     const short = scale_pure.isShort(h, state.app.ui_scale);
@@ -432,6 +431,18 @@ fn renderPlayerTopNav() void {
 
     var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
     spacer.deinit();
+    if (state.app.active_player_idx < state.app.players.items.len) {
+        const p = state.app.players.items[state.app.active_player_idx];
+        const external = @import("../services/external_player.zig");
+        const url = p.current_url[0..p.current_url_len];
+        if (external.playable(url) and components.iconButtonOverlay(@src(), icons.tvg.lucide.@"external-link", "Open in VLC", false, true)) {
+            if (external.launch(url)) {
+                state.showToast("Opening in VLC…");
+            } else {
+                state.showToastTyped("Could not open in VLC · see Logs", .err);
+            }
+        }
+    }
     if (components.iconButtonOverlay(@src(), icons.tvg.lucide.settings, "Settings", false, true)) {
         state.app.router.navigate(.settings);
         dvui.refresh(null, @src(), null);

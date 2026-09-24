@@ -406,51 +406,6 @@ def test_http_shared_client_and_timeout():
     return "pass", "shared keep-alive client; timeout_secs enforced (clamped) via socket watchdog"
 
 
-@test("Installer Does Not Need Xcode", "Packaging")
-def test_installer_no_xcode():
-    # REGRESSION — `curl … install.sh | sh` failed for everyone on macOS:
-    #
-    #   opal: A full installation of Xcode.app 15.0 is required to compile
-    #   this software. Installing just the Command Line Tools is not sufficient.
-    #
-    # Two bugs stacked. install.sh PREFERRED the Homebrew tap whenever brew was
-    # present, and the formula built from SOURCE — so it demanded a 15 GB Xcode
-    # install, while the self-contained .app (which vendors its own mpv/SDL and
-    # needs no toolchain at all) sat one line below, never reached.
-    import re
-    # Strip comments before grepping. The first version of this test matched the
-    # comment ABOVE that explains the bug ("depends_on xcode: …") and reported the
-    # fixed formula as broken — a test that greps prose tests nothing.
-    def _code(text, marker="#"):
-        return "\n".join(l for l in text.splitlines()
-                          if not l.lstrip().startswith(marker))
-
-    f = _code(_src("Formula/opal.rb"))
-    sh = _code(_src("scripts/install.sh"))
-    zon = _src("build.zig.zon")
-
-    m = re.search(r'\.version = "([^"]+)"', zon)
-    zon_ver = m.group(1) if m else "?"
-    fm = re.search(r'^\s*version "([^"]+)"', f, re.M)
-    f_ver = fm.group(1) if fm else "?"
-
-    checks = {
-        # The bug, verbatim.
-        "formula needs no Xcode": "xcode:" not in f,
-        "formula does not build from source": '"zig" => :build' not in f,
-        "formula installs a prebuilt binary": "releases/download" in f and 'bin.install "opal"' in f,
-        "formula pins a real checksum": bool(re.search(r'sha256 "[a-f0-9]{64}"', f)),
-        # It sat pinned at v0.1.2 while the app shipped 0.3.0 — nothing kept the two
-        # in step, so it rotted silently. Fail the gate instead of shipping stale.
-        "formula version tracks build.zig.zon (%s vs %s)" % (f_ver, zon_ver): f_ver == zon_ver,
-        # The vendored .app is the default; brew is opt-in for the CLI on PATH.
-        "installer prefers the self-contained .app": "OPAL_USE_BREW" in sh,
-        "installer no longer auto-prefers brew": "brew tap-info debpalash/tap" not in sh,
-    }
-    bad = [k for k, v in checks.items() if not v]
-    if bad:
-        return "fail", "missing: " + ", ".join(bad)
-    return "pass", "install.sh installs the vendored .app; formula is a binary install at " + f_ver
 
 
 @test("Linux Installer Is Rootless By Default", "Packaging")

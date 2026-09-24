@@ -64,7 +64,8 @@ jobs:
       - name: Install native dependencies
         run: |
           brew update
-          brew install mpv sqlite onnxruntime sdl2 libtorrent-rasterbar
+          brew install ffmpeg sqlite sdl2 libtorrent-rasterbar meson ninja pkgconf
+          ./scripts/install-macos-mpv.sh
       - name: Build (ReleaseSafe)
         run: zig build -Doptimize=ReleaseSafe
       - name: Binary exists
@@ -83,7 +84,8 @@ jobs:
       - name: Install native dependencies
         run: |
           brew update
-          brew install mpv sqlite onnxruntime sdl2 libtorrent-rasterbar
+          brew install ffmpeg sqlite sdl2 libtorrent-rasterbar meson ninja pkgconf
+          ./scripts/install-macos-mpv.sh
       - name: Run tests/test_features.py
         run: python3 tests/test_features.py
 
@@ -145,20 +147,26 @@ jobs:
       - uses: actions/checkout@v4
       - uses: msys2/setup-msys2@v2
         with:
-          # MINGW64, not UCRT64 — see release.yml for the CRT-mismatch story.
+          # zig's windows-gnu build and MINGW64 share MSVCRT; UCRT64 mpv
+          # cannot be substituted. Build libmpv from pinned source below.
           msystem: MINGW64
           path-type: inherit
           update: true
           install: >-
             git
             mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-mpv
+            mingw-w64-x86_64-SDL2
+            mingw-w64-x86_64-ffmpeg
+            mingw-w64-x86_64-libass
+            mingw-w64-x86_64-meson
             mingw-w64-x86_64-sqlite3
             mingw-w64-x86_64-libtorrent-rasterbar
             mingw-w64-x86_64-pkgconf
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
+      - name: Build MINGW64 libmpv
+        run: ./scripts/install-mingw64-mpv.sh
       - name: Build headless (ReleaseSafe)
         run: zig build -Dheadless=true -Doptimize=ReleaseSafe
       - name: Boot + smoke
@@ -170,15 +178,15 @@ jobs:
           # Resources must sit beside the exe: detectResourceRoot probes for
           # engines/nova2.py, and without it torrent search silently returns
           # nothing (the issue #21 packaging bug).
-          cp -r engines web zig-out/bin/ 2>/dev/null || true
-          cp data/plugins-manifest.json zig-out/bin/ 2>/dev/null || true
+          cp -r engines web zig-out/bin/
+          cp data/plugins-manifest.json zig-out/bin/
           # The C++ torrent wrapper is built by a sh step in build.zig and lands
           # in the REPO ROOT, not in zig-out/bin. The exe links it by name, so
           # launching from zig-out/bin without it dies instantly with
           # "torrent_wrapper.dll: cannot open shared object file" — which is
           # exactly what this job had been failing on since it was added, with
           # no output to say so. The release job stages it the same way.
-          cp torrent_wrapper.dll zig-out/bin/ 2>/dev/null || cp libtorrent_wrapper.dll zig-out/bin/ 2>/dev/null || true
+          cp torrent_wrapper.dll zig-out/bin/
           cd zig-out/bin
           # Capture the app's own output. Without this the job could only ever
           # report "exited before serving" with no reason attached — a red gate
