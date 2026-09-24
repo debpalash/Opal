@@ -72,6 +72,14 @@ jobs:
       - name: Binary exists
         run: test -x zig-out/bin/opal
 
+      # Exercise the exact release bundle path before creating a tag: linking
+      # the binary alone does not verify bundled FFmpeg/mpv install names or
+      # ad-hoc codesigning of the standalone .app.
+      - name: Build macOS app bundle
+        run: |
+          ./scripts/build-app.sh
+          test -x dist/Opal.app/Contents/MacOS/Opal
+
   # Feature suite — source-level checks (DB schema, config, thread-safety
   # sweeps, script compilation) plus a full zig build, so it needs the same
   # native deps as build-macos. Optional components report as "skip".
