@@ -315,6 +315,7 @@ pub fn setErrorCallback(f: *const fn ([]const u8) void) void {
 
 fn setError(err: []const u8) void {
     if (set_error_fn) |f| f(err);
+    logs.pushLog("error", "ai", err, true);
 }
 
 pub fn getServerUrl(buf: *[128]u8) []const u8 {
@@ -657,6 +658,7 @@ pub fn startModelDownload() void {
     const dl_str = "Downloading...";
     @memcpy(download_progress_buf[0..dl_str.len], dl_str);
     download_progress_len = dl_str.len;
+    logs.pushLog("info", "ai", "Downloading GGUF model via curl -L --progress-bar into local models folder", false);
 
     const t = @import("../core/workers.zig").spawnLegacy(downloadModelThread, .{}) catch {
         model_downloading = false;
@@ -727,6 +729,7 @@ fn downloadModelThread() void {
 pub fn installLlamaServer() void {
     if (server_installing) return;
     server_installing = true;
+    logs.pushLog("info", "ai", if (is_macos) "Installing llama-server: brew install llama.cpp" else "Installing Shimmy: download release binary via curl, then chmod +x", false);
 
     const t = @import("../core/workers.zig").spawnLegacy(installThread, .{}) catch {
         server_installing = false;
@@ -797,6 +800,7 @@ fn installLlamaServerMac() void {
     // Re-detect after install.
     if (macLlamaServerOnPath()) |path| {
         applyFoundPath(path);
+        logs.pushLog("info", "ai", "llama-server installed via Homebrew", false);
         state.showToast("llama-server installed!");
     } else {
         setError("brew install succeeded but llama-server not found");

@@ -145,6 +145,8 @@ fn downloadedFileMatches(path: []const u8, expected_size: u64, expected_sha256: 
 /// path is touched. GitHub's older ASR assets do not publish hashes, so those
 /// are pinned to their release-API byte length; newer assets also pin SHA-256.
 fn downloadVerified(url: []const u8, stage_path: []const u8, expected_size: u64, expected_sha256: ?[]const u8) bool {
+    var cmd_buf: [512]u8 = undefined;
+    logs.pushLog("info", "deps", std.fmt.bufPrint(&cmd_buf, "Command: curl -L --fail --proto =https --proto-redir =https -o <staged model> {s}", .{url}) catch "Downloading verified model via HTTPS", false);
     io_global.deleteFileAbsolute(stage_path) catch {};
     var curl = io_global.Child.init(&.{
         "curl",         "-L",                "--fail", "--silent",
@@ -239,6 +241,7 @@ fn installArchiveModel(spec: ArchiveModel) bool {
     const stage_path = std.fmt.bufPrint(&stage_buf, "{s}/{s}", .{ models_dir, stage_name }) catch return false;
     io_global.makeDirAbsolute(stage_path) catch return false;
 
+    logs.pushLog("info", "deps", "Command: tar -xjf <verified model archive> -C <staging dir>", false);
     var untar = io_global.Child.init(&.{ "tar", "-xjf", archive_path, "-C", stage_path }, @import("alloc.zig").allocator);
     untar.stdout_behavior = .Ignore;
     untar.stderr_behavior = .Ignore;
@@ -621,16 +624,21 @@ pub fn fetchMlxWhisperModelAsync() void {
                 mlx_whisper_step = 1;
                 setStatus("Installing uv…", .{});
                 logs.pushLog("info", "deps", "Installing uv (Python package manager)…", true);
+                logs.pushLog("info", "deps", "Command: sh -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'", false);
                 // Official installer: curl -LsSf https://astral.sh/uv/install.sh | sh
                 var uv_install = io_global.Child.init(&.{
                     "sh", "-c", "curl -LsSf https://astral.sh/uv/install.sh | sh",
                 }, alloc);
                 uv_install.stdout_behavior = .Ignore;
                 uv_install.stderr_behavior = .Ignore;
-                _ = uv_install.spawnAndWait() catch {
-                    logs.pushLog("error", "deps", "Failed to install uv — check internet connection", true);
+                const uv_result = uv_install.spawnAndWait() catch {
+                    logs.pushLog("error", "deps", "Failed to launch uv installer", true);
                     return;
                 };
+                if (!processSucceeded(uv_result)) {
+                    logs.pushLog("error", "deps", "uv installer exited unsuccessfully", true);
+                    return;
+                }
                 // Re-check after install
                 uv_bin = findUv(&uv_buf);
                 if (uv_bin == null) {
@@ -655,15 +663,20 @@ pub fn fetchMlxWhisperModelAsync() void {
                 mlx_whisper_step = 2;
                 setStatus("Creating Python venv…", .{});
                 logs.pushLog("info", "deps", "Creating isolated Python environment…", true);
+                logs.pushLog("info", "deps", "Command: uv venv <mlx-venv> --python 3.12", false);
                 var venv_create = io_global.Child.init(&.{
                     uv, "venv", venv_dir, "--python", "3.12",
                 }, alloc);
                 venv_create.stdout_behavior = .Ignore;
                 venv_create.stderr_behavior = .Ignore;
-                _ = venv_create.spawnAndWait() catch {
-                    logs.pushLog("error", "deps", "uv venv creation failed", true);
+                const venv_result = venv_create.spawnAndWait() catch {
+                    logs.pushLog("error", "deps", "uv venv creation failed to launch", true);
                     return;
                 };
+                if (!processSucceeded(venv_result)) {
+                    logs.pushLog("error", "deps", "uv venv creation exited unsuccessfully", true);
+                    return;
+                }
                 logs.pushLog("info", "deps", "Python venv ready", true);
             }
 
@@ -673,16 +686,21 @@ pub fn fetchMlxWhisperModelAsync() void {
                 mlx_whisper_step = 3;
                 setStatus("Installing mlx-whisper…", .{});
                 logs.pushLog("info", "deps", "Installing mlx-whisper…", true);
+                logs.pushLog("info", "deps", "Command: uv pip install mlx-whisper --python <mlx-venv>/bin/python", false);
                 var pip_install = io_global.Child.init(&.{
                     uv,         "pip",       "install", "mlx-whisper",
                     "--python", venv_python,
                 }, alloc);
                 pip_install.stdout_behavior = .Ignore;
                 pip_install.stderr_behavior = .Ignore;
-                _ = pip_install.spawnAndWait() catch {
-                    logs.pushLog("error", "deps", "mlx-whisper install failed", true);
+                const pip_result = pip_install.spawnAndWait() catch {
+                    logs.pushLog("error", "deps", "mlx-whisper install failed to launch", true);
                     return;
                 };
+                if (!processSucceeded(pip_result)) {
+                    logs.pushLog("error", "deps", "mlx-whisper install exited unsuccessfully", true);
+                    return;
+                }
                 logs.pushLog("info", "deps", "mlx-whisper installed", true);
             }
 
@@ -699,6 +717,7 @@ pub fn fetchMlxWhisperModelAsync() void {
             // Use the venv's huggingface-cli (installed as mlx-whisper dependency)
             var hf_cli_buf: [512]u8 = undefined;
             const venv_hf = std.fmt.bufPrintZ(&hf_cli_buf, "{s}/bin/huggingface-cli", .{venv_dir}) catch return;
+            logs.pushLog("info", "deps", "Command: huggingface-cli download mlx-community/whisper-large-v3-turbo", false);
 
             var hf_cli = io_global.Child.init(&.{
                 venv_hf, "download", MLX_WHISPER_HF_REPO,
@@ -712,6 +731,7 @@ pub fn fetchMlxWhisperModelAsync() void {
                 }
             } else |_| {}
 
+            logs.pushLog("info", "deps", "Fallback: curl -L --fail config.json and weights.safetensors from Hugging Face", false);
             // Fallback: direct curl download
             var model_dir_buf: [512]u8 = undefined;
             const model_dir = std.fmt.bufPrintZ(&model_dir_buf, "{s}/.cache/huggingface/hub/{s}/snapshots/main", .{ home, MLX_WHISPER_CACHE_DIR }) catch return;
@@ -729,7 +749,14 @@ pub fn fetchMlxWhisperModelAsync() void {
             }, alloc);
             cfg_dl.stdout_behavior = .Ignore;
             cfg_dl.stderr_behavior = .Ignore;
-            _ = cfg_dl.spawnAndWait() catch {};
+            const cfg_result = cfg_dl.spawnAndWait() catch {
+                logs.pushLog("error", "deps", "Failed to download MLX Whisper config", true);
+                return;
+            };
+            if (!processSucceeded(cfg_result)) {
+                logs.pushLog("error", "deps", "MLX Whisper config download exited unsuccessfully", true);
+                return;
+            }
 
             // weights.safetensors (~1.6GB)
             var wt_buf: [768]u8 = undefined;
@@ -740,10 +767,14 @@ pub fn fetchMlxWhisperModelAsync() void {
             }, alloc);
             wt_dl.stdout_behavior = .Ignore;
             wt_dl.stderr_behavior = .Ignore;
-            _ = wt_dl.spawnAndWait() catch {
+            const weights_result = wt_dl.spawnAndWait() catch {
                 logs.pushLog("error", "deps", "Failed to download MLX Whisper weights", true);
                 return;
             };
+            if (!processSucceeded(weights_result) or !mlxWhisperModelCached(home)) {
+                logs.pushLog("error", "deps", "MLX Whisper weights download failed validation", true);
+                return;
+            }
 
             mlx_whisper_step = 5;
             setStatus("Ready", .{});

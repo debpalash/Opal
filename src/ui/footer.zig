@@ -2241,14 +2241,24 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
     });
     defer row.deinit();
 
+    // Condense secondary controls before they can push Stop/Close off a small
+    // laptop viewport (or a larger UI scale). Keep title and transport usable.
+    const bar_pt = @import("../core/scale_pure.zig").layoutPoints(row.data().rect.w, state.app.ui_scale);
+    const compact = bar_pt < 760;
+    const narrow = bar_pt < 640;
+    const show_volume = !compact;
+    const show_queue = !narrow;
+    const show_time = bar_pt >= 520;
+    const show_skip = bar_pt >= 420;
+
     var wd: dvui.WidgetData = undefined;
 
     // ── Left: glyph + now-playing title (ellipsized, capped width) ──
     {
         var left = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .gravity_y = 0.5,
-            .min_size_content = .{ .w = 200, .h = 0 },
-            .max_size_content = .{ .w = 280, .h = 0 },
+            .min_size_content = .{ .w = if (compact) 110 else 200, .h = 0 },
+            .max_size_content = .{ .w = if (compact) 170 else 280, .h = 0 },
         });
         defer left.deinit();
 
@@ -2335,6 +2345,7 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
             sp.deinit();
         }
 
+        if (show_skip) {
         // Previous — best-effort. No prev-queue API, so use mpv playlist-prev
         // (handles internal playlists / torrent files); harmless otherwise.
         if (dvui.buttonIcon(@src(), "np-prev", icons.tvg.lucide.@"skip-back", .{}, .{}, .{
@@ -2351,6 +2362,7 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
             _ = c.mpv.mpv_command_string(p.mpv_ctx, "playlist-prev");
         }
         components.tip(@src(), wd, "Previous");
+        }
 
         // Play / Pause — the single accent affordance.
         const toggle_icon = if (is_paused) icons.tvg.lucide.play else icons.tvg.lucide.pause;
@@ -2370,6 +2382,7 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
         }
         components.tip(@src(), wd, "Play/Pause");
 
+        if (show_skip) {
         // Next — plays the next unplayed queue item.
         if (dvui.buttonIcon(@src(), "np-next", icons.tvg.lucide.@"skip-forward", .{}, .{}, .{
             .data_out = &wd,
@@ -2385,6 +2398,7 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
             queue.playNextUnplayed(p);
         }
         components.tip(@src(), wd, "Next (from queue)");
+        }
 
         {
             var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
@@ -2393,7 +2407,7 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
     }
 
     // ── Time readout: elapsed / total ──
-    {
+    if (show_time) {
         const safe_time = @max(0.0, if (std.math.isNan(time_pos)) 0.0 else time_pos);
         const safe_dur = @max(0.0, if (std.math.isNan(duration)) 0.0 else duration);
         var cur_buf: [16]u8 = undefined;
@@ -2413,7 +2427,7 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
     }
 
     // ── Right: volume slider + queue toggle ──
-    {
+    if (show_volume) {
         _ = dvui.icon(@src(), "np-vol-ic", icons.tvg.lucide.@"volume-2", .{}, .{
             .color_text = theme.colors.text_secondary,
             .min_size_content = theme.iconSize(.sm),
@@ -2437,9 +2451,10 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
                 _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
             } else |_| {}
         }
+    }
 
-        // Queue / playlist toggle — opens the torrent files dropdown when this
-        // is a multi-file torrent; also shows the queue count badge.
+    // Queue / playlist is secondary to transport and Stop on small screens.
+    if (show_queue) {
         var q_buf: [16]u8 = undefined;
         const q_label = std.fmt.bufPrint(&q_buf, "{d}", .{queue.queue_count}) catch "";
         if (pickerIconChip(@src(), 720, icons.tvg.lucide.@"list-music", q_label, queue.queue_count > 0, "Queue / playlist", .none)) {
@@ -2450,6 +2465,22 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
         defer pl_menu.deinit();
         playlistDropdownMenu(p);
     }
+
+    // Closing the media player is not pausing: use the same removal path as
+    // the in-player X so mpv stops and this bar disappears on the next frame.
+    if (dvui.buttonIcon(@src(), "np-close", icons.tvg.lucide.x, .{}, .{}, .{
+        .data_out = &wd,
+        .color_fill = transparent,
+        .color_text = theme.colors.text_secondary,
+        .border = dvui.Rect.all(0),
+        .corner_radius = dvui.Rect.all(theme.radius.sm),
+        .gravity_y = 0.5,
+        .min_size_content = .{ .w = 30, .h = 30 },
+        .max_size_content = .{ .w = 30, .h = 30 },
+    })) {
+        state.app.pending_remove_player_idx = @as(i32, @intCast(state.app.active_player_idx));
+    }
+    components.tip(@src(), wd, "Stop and close player");
 }
 
 /// The thin torrent-activity strip — unchanged from the original tray. Rendered

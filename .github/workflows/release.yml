@@ -195,6 +195,17 @@ jobs:
             --deploy-deps-only AppDir/usr/lib/opal/libtorrent_wrapper.so \
             --custom-apprun packaging/AppRun
 
+          # linuxdeploy includes the runner's OpenSSL 3 libraries through the
+          # torrent wrapper closure. A newer distro loads its own libcurl and
+          # libngtcp2 against that older bundled libssl via AppRun's
+          # LD_LIBRARY_PATH; Arch then fails on missing OPENSSL_3.2/3.5 symbols
+          # before Opal starts (#54). Use the host's matching OpenSSL pair for
+          # both bundled and host consumers instead. The supported glibc 2.38+
+          # distributions supply libssl.so.3 and libcrypto.so.3.
+          find AppDir/usr/lib \( -name 'libssl.so*' -o -name 'libcrypto.so*' \) -delete
+          test -z "$(find AppDir/usr/lib \( -name 'libssl.so*' -o -name 'libcrypto.so*' \) -print -quit)"
+
+
           # Add Opal after dependency deployment so linuxdeploy cannot rewrite
           # its runpath or recursively bundle the host's media stack.
           cp zig-out/bin/opal AppDir/usr/lib/opal/
@@ -227,6 +238,9 @@ jobs:
             awk '/^libtorrent-rasterbar\.so/{print; exit}')"
           test -n "$TORRENT_SONAME"
           find -L squashfs-root/usr/lib -name "$TORRENT_SONAME" -type f -print -quit | grep -q .
+          # A release can pass on the builder yet fail on Arch if an old
+          # libssl/libcrypto sneaks back into the packed LD_LIBRARY_PATH.
+          test -z "$(find squashfs-root/usr/lib \( -name 'libssl.so*' -o -name 'libcrypto.so*' \) -print -quit)"
 
           SMOKE_ROOT="$RUNNER_TEMP/opal-appimage-smoke"
           install -d "$SMOKE_ROOT/home" "$SMOKE_ROOT/config" \

@@ -62,6 +62,72 @@ pub var status_msg_len: usize = 0;
 pub var plugins: [MAX]Plugin = undefined;
 pub var plugin_count: usize = 0;
 var catalog_mutex: sync.Mutex = .{};
+/// The last source operation, independent of catalog refresh status. Only
+/// stages with real work are shown; source installs have no measurable percentage.
+pub const InstallStage = enum { idle, fetching, writing, installed, removed, failed };
+pub const InstallSnapshot = struct {
+    stage: InstallStage = .idle,
+    id: [32]u8 = std.mem.zeroes([32]u8),
+    id_len: usize = 0,
+    reason: []const u8 = "",
+    pub fn idSlice(self: *const InstallSnapshot) []const u8 {
+        return self.id[0..self.id_len];
+    }
+};
+var install_snapshot: InstallSnapshot = .{};
+var install_busy = false;
+var install_file: [128]u8 = undefined;
+var install_file_len: usize = 0;
+
+fn beginInstallLocked(id: []const u8, stage: InstallStage) void {
+    install_snapshot = .{ .stage = stage };
+    @memcpy(install_snapshot.id[0..id.len], id);
+    install_snapshot.id_len = id.len;
+}
+
+pub fn installStatus() InstallSnapshot {
+    catalog_mutex.lock();
+    defer catalog_mutex.unlock();
+    return install_snapshot;
+}
+
+fn setInstallStage(stage: InstallStage, reason: []const u8) void {
+    catalog_mutex.lock();
+    defer catalog_mutex.unlock();
+    install_snapshot.stage = stage;
+    install_snapshot.reason = reason;
+    if (stage == .installed or stage == .failed) install_busy = false;
+}
+
+fn logInstall(level: []const u8, id: []const u8, detail: []const u8) void {
+    var buf: [160]u8 = undefined;
+    logs.pushLog(level, "sources", std.fmt.bufPrint(&buf, "Source {s}: {s}", .{ id, detail }) catch detail, std.mem.eql(u8, level, "error"));
+}
+
+fn installWorker() void {
+    var id_buf: [32]u8 = undefined;
+    const id_len = install_snapshot.id_len;
+    @memcpy(id_buf[0..id_len], install_snapshot.id[0..id_len]);
+    const id = id_buf[0..id_len];
+    var buf: [16384]u8 = undefined;
+    const n = fetchRepoFile(install_file[0..install_file_len], &buf);
+    if (n == 0 or buf[0] != '{' or std.mem.indexOf(u8, buf[0..n], "\"Not Found\"") != null) {
+        logInstall("error", id, "fetch source definition failed (credentials hidden)");
+        setInstallStage(.failed, "Could not fetch source definition");
+        state.showToastTyped("Install failed (fetch)", .err);
+        return;
+    }
+    setInstallStage(.writing, "");
+    if (!writeSource(id, buf[0..n])) {
+        logInstall("error", id, "write source configuration failed");
+        setInstallStage(.failed, "Could not write source configuration");
+        state.showToastTyped("Install failed (write)", .err);
+        return;
+    }
+    logInstall("info", id, "definition installed");
+    setInstallStage(.installed, "");
+    state.showToastTyped("Source installed", .success);
+}
 
 /// Copy an immutable catalog view for UI/API callers. Remote refresh publishes
 /// under the same lock, so a client never pairs half of one manifest with half
@@ -248,6 +314,7 @@ pub fn refresh() ApplyResult {
 fn fail(comptime msg: []const u8) void {
     status.store(.err, .release);
     setMsg(msg, .{});
+    logs.pushLog("error", "sources", "Catalog refresh failed: " ++ msg, true);
 }
 
 fn refreshWorker() void {
@@ -420,16 +487,23 @@ pub fn apply(action: Action, id: []const u8) ApplyResult {
     defer catalog_mutex.unlock();
     const idx = findPluginLocked(id) orelse return .not_found;
     const installed = isInstalled(id);
+    if (install_busy) return .busy;
     if (action == .install) {
         if (installed) return .unchanged;
-        const async_install = plugins[idx].endpoints_len == 0 and plugins[idx].file_len > 0;
-        install(idx);
-        if (async_install) return .accepted;
-        return if (isInstalled(id)) .applied else .failed;
+        beginInstallLocked(id, if (plugins[idx].endpoints_len == 0 and plugins[idx].file_len > 0) .fetching else .writing);
+        return install(idx);
     }
     if (!installed) return .unchanged;
+    beginInstallLocked(id, .removed);
     uninstall(idx);
-    return if (isInstalled(id)) .failed else .applied;
+    if (isInstalled(id)) {
+        install_snapshot.stage = .failed;
+        install_snapshot.reason = "Could not remove source configuration";
+        logInstall("error", id, "remove source configuration failed");
+        return .failed;
+    }
+    logInstall("info", id, "removed");
+    return .applied;
 }
 
 /// Installed == the source file exists on disk.
@@ -564,69 +638,45 @@ pub fn retireDeadSources() usize {
     return retired;
 }
 
-pub fn install(idx: usize) void {
-    if (idx >= plugin_count) return;
+fn install(idx: usize) ApplyResult {
     const pl = &plugins[idx];
 
-    // Prefer the manifest's INLINE endpoints (already in memory) over a network
-    // fetch. Every bundled/remote entry inlines its endpoints, so fetching the
-    // per-plugin repo file for each install was pure waste — and worse, it
-    // burned GitHub's 60-req/hour unauthenticated limit, so after a handful of
-    // clicks every further install 403'd ("a few install, most don't"). Only
-    // fall back to the network file when the manifest didn't inline endpoints.
+    // Inline definitions need only a local write. File-only entries require
+    // a network fetch, whose worker owns the slot until its outcome is known.
     if (pl.endpoints_len == 0 and pl.file_len > 0) {
-        const S = struct {
-            var busy: bool = false;
-            var id: [32]u8 = undefined;
-            var id_len: usize = 0;
-            var file: [128]u8 = undefined;
-            var file_len: usize = 0;
-            var name: [48]u8 = undefined;
-            var name_len: usize = 0;
-            fn worker() void {
-                defer busy = false;
-                var buf: [16384]u8 = undefined;
-                const n = fetchRepoFile(file[0..file_len], &buf);
-                const ok = n > 0 and buf[0] == '{' and std.mem.indexOf(u8, buf[0..n], "\"Not Found\"") == null;
-                if (!ok) {
-                    state.showToastTyped("Install failed (fetch)", .err);
-                    return;
-                }
-                if (!writeSource(id[0..id_len], buf[0..n])) {
-                    state.showToastTyped("Install failed (write)", .err);
-                    return;
-                }
-                var tb: [80]u8 = undefined;
-                state.showToastTyped(std.fmt.bufPrint(&tb, "Installed {s}", .{name[0..name_len]}) catch "Installed", .success);
-            }
+        install_busy = true;
+        @memcpy(install_file[0..pl.file_len], pl.file[0..pl.file_len]);
+        install_file_len = pl.file_len;
+        const thread = @import("../core/workers.zig").spawnLegacy(installWorker, .{}) catch {
+            install_busy = false;
+            install_snapshot.stage = .failed;
+            install_snapshot.reason = "Could not start fetch worker";
+            logInstall("error", pl.idSlice(), "could not start fetch worker");
+            return .failed;
         };
-        if (S.busy) return;
-        S.busy = true;
-        @memcpy(S.id[0..pl.id_len], pl.idSlice());
-        S.id_len = pl.id_len;
-        @memcpy(S.file[0..pl.file_len], pl.file[0..pl.file_len]);
-        S.file_len = pl.file_len;
-        @memcpy(S.name[0..pl.name_len], pl.nameSlice());
-        S.name_len = pl.name_len;
-        @import("../core/workers.zig").release(@import("../core/workers.zig").spawnLegacy(S.worker, .{}) catch {
-            S.busy = false;
-            return;
-        });
-        state.showToastTyped("Installing", .info);
-        return;
+        @import("../core/workers.zig").release(thread);
+        state.showToastTyped("Installing source", .info);
+        return .accepted;
     }
-
-    // Legacy: endpoints inline in the manifest → write directly.
     if (pl.endpoints_len == 0) {
+        install_snapshot.stage = .failed;
+        install_snapshot.reason = "Source has no endpoint definition";
         state.showToastTyped("Plugin has no endpoint", .warning);
-        return;
+        logInstall("error", pl.idSlice(), "no endpoint definition");
+        return .failed;
     }
     if (!writeSourceVersioned(pl.idSlice(), pl.endpoints[0..pl.endpoints_len], pl.version[0..pl.version_len])) {
+        install_snapshot.stage = .failed;
+        install_snapshot.reason = "Could not write source configuration";
         state.showToastTyped("Install failed (write)", .err);
-        return;
+        logInstall("error", pl.idSlice(), "write source configuration failed");
+        return .failed;
     }
+    install_snapshot.stage = .installed;
+    logInstall("info", pl.idSlice(), "definition installed");
     var tb: [80]u8 = undefined;
     state.showToastTyped(std.fmt.bufPrint(&tb, "Installed {s}", .{pl.nameSlice()}) catch "Installed", .success);
+    return .applied;
 }
 
 pub fn uninstall(idx: usize) void {

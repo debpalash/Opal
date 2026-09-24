@@ -15,6 +15,8 @@ const fileassoc = @import("settings_fileassoc.zig");
 // never hand the spawned thread a stack slice (see CLAUDE.md thread-safety notes).
 const TerminalLauncher = struct {
     var busy: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+    const LaunchState = enum(u8) { idle, launching, opened, failed };
+    var status: std.atomic.Value(LaunchState) = std.atomic.Value(LaunchState).init(.idle);
     var script_buf: [512]u8 = undefined;
     var script_len: usize = 0;
 
@@ -27,18 +29,32 @@ const TerminalLauncher = struct {
         );
         osa.stdout_behavior = .Ignore;
         osa.stderr_behavior = .Ignore;
-        _ = osa.spawnAndWait() catch {};
+        const term = osa.spawnAndWait() catch {
+            status.store(.failed, .release);
+            logs.pushLog("error", "deps", "Could not open Terminal to run dependency command", true);
+            state.wakeUi();
+            return;
+        };
+        const ok = switch (term) {
+            .exited => |code| code == 0,
+            else => false,
+        };
+        status.store(if (ok) .opened else .failed, .release);
+        logs.pushLog(if (ok) "info" else "error", "deps", if (ok) "Dependency command sent to Terminal; waiting for installed dependency detection (Terminal runs separately)" else "Terminal did not accept dependency command", !ok);
+        state.wakeUi();
     }
 
     /// Copy `script` into the static buffer and launch it on a detached thread.
     /// No-op (returns false) if a launch is already in flight.
     fn launch(script: []const u8) bool {
         if (busy.swap(true, .acquire)) return false;
+        status.store(.launching, .release);
         const n = @min(script.len, TerminalLauncher.script_buf.len);
         @memcpy(TerminalLauncher.script_buf[0..n], script[0..n]);
         TerminalLauncher.script_len = n;
         const t = @import("../core/workers.zig").spawnLegacy(worker, .{}) catch {
             busy.store(false, .release);
+            status.store(.failed, .release);
             return false;
         };
         @import("../core/workers.zig").release(t);
@@ -138,7 +154,7 @@ pub fn renderSettingsContent() void {
     const compact = region_w > 1 and region_w < 440;
 
     renderLeftNav(compact);
-    renderRightPane();
+    renderRightPane(compact);
 }
 
 // ── Left navigator (search box + vertical tab list) ──
@@ -231,7 +247,7 @@ fn renderLeftNav(compact: bool) void {
 fn sectionMatchesSearch(tab: state.SettingsTab) bool {
     if (search_len == 0) return true;
     const sections: []const []const u8 = switch (tab) {
-        .General => &.{ "Interface", "Behavior", "TMDB", "Theme", "Scale", "Grid", "NSFW", "Seek Sync", "API Key" },
+        .General => &.{ "Interface", "Behavior", "TMDB", "Theme", "Scale", "Grid", "NSFW", "Seek Sync", "API Key", "Plugins", "Sources", "Content plugins" },
         .Playback => &.{ "Video Processing", "Audio Equalizer", "Playback Extras", "Prefetch", "Passthrough", "Exclusive", "Audio Output", "Device", "Streaming", "Shortcuts", "Filters", "Capture", "Hardware", "Decode", "Deband", "Interpolation", "Brightness", "Contrast", "Saturation", "Gamma", "Screenshot", "Auto-advance", "Resume" },
         .About => &.{ "About", "Version", "Update", "Credits", "License", "Donate", "Sponsors", "Links", "TMDB" },
         .Subtitles => &.{ "OpenSubtitles", "Subdl", "Language", "Search", "API Key", "Font", "Delay", "Whisper" },
@@ -323,7 +339,7 @@ fn navTabRow(tab: state.SettingsTab, label: []const u8, icon: []const u8, id_ext
 
 // ── Right pane (scrollable content area) ──
 
-fn renderRightPane() void {
+fn renderRightPane(compact: bool) void {
     var pane = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
         .background = true,
@@ -387,6 +403,13 @@ fn renderRightPane() void {
         .About => "About Opal",
     });
 
+    if (state.app.settings_tab == .General or
+        state.app.settings_tab == .Playback or
+        state.app.settings_tab == .Network or
+        state.app.settings_tab == .AI or
+        state.app.settings_tab == .Scripts or
+        state.app.settings_tab == .About or
+        state.app.settings_tab == .LiveTv) renderInstallActivity(compact);
     switch (state.app.settings_tab) {
         .General => renderGeneralTab(),
         .Playback => renderPlaybackTab(),
@@ -766,6 +789,7 @@ fn renderAIContentBody() void {
         parakeetModelRow("Parakeet TDT 0.6B v2 · English (480MB)", ds.parakeet_v2_model, deps.parakeet_v2_downloading.load(.acquire), false, 5006);
         parakeetModelRow("Parakeet TDT 0.6B v3 · 25 languages (490MB)", ds.parakeet_v3_model, deps.parakeet_v3_downloading.load(.acquire), true, 5007);
     }
+    _ = dvui.label(@src(), "Model operation: HTTPS curl → verify staged download → extract (archive models). MLX Whisper also installs uv, a Python venv, and mlx-whisper.", .{}, .{ .color_text = theme.colors.text_tertiary });
 }
 
 /// One NVIDIA Parakeet model row: name + Installed pill / live download
@@ -1089,7 +1113,75 @@ fn ttsSpeedSegment(id_base: usize) void {
     }
 }
 
+/// Installation logs are redacted at the ring seam. Show recent outcomes here
+/// so completion/failure remains visible even after a short-lived toast fades.
+fn renderInstallActivity(compact: bool) void {
+    var activity = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .horizontal,
+        .background = true,
+        .color_fill = theme.colors.bg_surface,
+        .corner_radius = theme.dims.rad_sm,
+        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
+    });
+    defer activity.deinit();
+    if (dvui.button(@src(), if (compact) "Open install logs" else "Installation activity · Open Logs", .{}, .{
+        .color_fill = theme.colors.bg_elevated,
+        .color_text = theme.colors.accent,
+        .corner_radius = theme.dims.rad_sm,
+        .padding = .{ .x = theme.spacing.sm, .y = 4, .w = theme.spacing.sm, .h = 4 },
+    })) state.navigateToTab(.Logs);
+    if (compact) return;
+
+    logs.lockRead();
+    defer logs.unlockRead();
+    var shown: usize = 0;
+    var index = logs.logCount();
+    const oldest = index -| 64;
+    while (index > oldest and shown < 2) {
+        index -= 1;
+        const entry = logs.getLog(index);
+        const source = entry.prefix;
+        if (!std.mem.eql(u8, source, "deps") and
+            !std.mem.eql(u8, source, "scripts") and
+            !std.mem.eql(u8, source, "sources") and
+            !std.mem.eql(u8, source, "ytdlp") and
+            !std.mem.eql(u8, source, "updater") and
+            !std.mem.eql(u8, source, "browser") and
+            !std.mem.eql(u8, source, "ai") and
+            !std.mem.eql(u8, source, "iptv")) continue;
+        const preview = entry.text[0..@min(entry.text.len, 44)];
+        _ = dvui.label(@src(), "{s}: {s}{s}", .{
+            @import("../core/text.zig").safeUtf8(source),
+            @import("../core/text.zig").safeUtf8(preview),
+            if (entry.text.len > preview.len) "…" else "",
+        }, .{ .id_extra = shown, .color_text = if (entry.is_error) theme.colors.danger else theme.colors.text_tertiary });
+        shown += 1;
+    }
+}
+
 fn renderGeneralTab() void {
+    // Plugin installs live on the Plugins route rather than behind the
+    // Settings scroll pane. Offer both destinations at the top of General.
+    sectionHeader("Plugins", "Install sources or manage executable content plugins", 9, @src());
+    if (dvui.button(@src(), "Install source plugins", .{}, .{
+        .color_fill = theme.colors.accent,
+        .color_text = theme.colors.text_on_accent,
+        .corner_radius = theme.dims.rad_sm,
+        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
+    })) {
+        state.app.plugin_tab = .sources;
+        state.navigateToTab(.Plugins);
+    }
+    if (dvui.button(@src(), "Content plugins", .{}, .{
+        .color_fill = theme.colors.bg_elevated,
+        .color_text = theme.colors.text_primary,
+        .corner_radius = theme.dims.rad_sm,
+        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
+    })) {
+        state.app.plugin_tab = .content;
+        state.navigateToTab(.Plugins);
+    }
+
     // ── Interface ── (whitespace-separated, no card chrome)
     sectionHeader("Interface", "Customize how Opal looks and feels", 10, @src());
 
@@ -1394,9 +1486,7 @@ fn renderAboutTab() void {
             }
         }
 
-        // Welcome guide — the first-run wizard is the only place the app
-        // explains itself, so make it reopenable instead of a one-shot users
-        // can never get back after clicking through it.
+        // The first-run welcome remains available after setup from About.
         {
             var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 2520, .expand = .horizontal });
             defer row.deinit();
@@ -1495,6 +1585,9 @@ fn renderAboutTab() void {
 
         if (update.last_error_len > 0) {
             _ = dvui.label(@src(), "  {s}", .{update.lastError()}, .{ .id_extra = 2540, .color_text = theme.colors.warning, .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 } });
+        }
+        if (@import("builtin").os.tag == .macos and update.has_update) {
+            _ = dvui.label(@src(), "Update operation: curl -L --fail to a temporary DMG → SHA-256 verification → open in Finder.", .{}, .{ .color_text = theme.colors.text_tertiary });
         }
     }
 }
@@ -1771,6 +1864,7 @@ fn renderPlaybackTab() void {
             .padding = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
         });
     }
+    _ = dvui.label(@src(), "Install operation: HTTPS curl to staged file → SHA-256 verification → --version probe → publish.", .{}, .{ .color_text = theme.colors.text_tertiary });
 
     // ── Keyboard Shortcuts ── (quiet text, no card chrome)
     sectionHeader("Keyboard Shortcuts", "", 21, @src());
@@ -2078,6 +2172,20 @@ fn renderNetworkTab() void {
                 }
             }
         }
+        const install_state = browser.installStatus();
+        if (install_state != .idle) {
+            _ = dvui.label(@src(), "Last browser installation: {s}", .{switch (install_state) {
+                .running => "Working…",
+                .failed => "Failed · see Logs",
+                .done => "Completed",
+                .idle => unreachable,
+            }}, .{ .color_text = if (install_state == .failed) theme.colors.danger else theme.colors.text_secondary });
+            if (install_state == .running) dvui.refresh(null, @src(), null);
+        }
+        _ = dvui.label(@src(), "Commands: python3 -m venv; venv Python -m pip install --upgrade {s}", .{switch (browser.active_engine) {
+            .camoufox => "camoufox; python -m camoufox fetch",
+            .cloakbrowser => "cloakbrowser (binary fetched at first launch)",
+        }}, .{ .color_text = theme.colors.text_tertiary });
     }
 
     // Proxy URL
@@ -3320,7 +3428,13 @@ fn renderLiveTvTab() void {
                 state.showToast("Removed a Live TV source");
             } else {
                 iptv.installSource(s.id);
-                state.showToast("Installing Live TV source…");
+                if (source_config.has(s.id)) {
+                    state.showToast("Live TV source enabled · ingesting channels");
+                    logs.pushLog("info", "iptv", "Live TV source configured; fetching public playlist via HTTPS", false);
+                } else {
+                    state.showToastTyped("Could not install Live TV source · see Logs", .err);
+                    logs.pushLog("error", "iptv", "Live TV source configuration write failed", true);
+                }
             }
         }
     }
@@ -4012,10 +4126,17 @@ fn renderScriptsTab() void {
             }
         }
 
-        if (installed) {
+        const install_state = scripts.installStatus(i);
+        if (install_state == .downloading) {
+            components.statusPill("Downloading…", .info);
+            dvui.refresh(null, @src(), null);
+        } else if (installed) {
             components.statusPill("Installed", .success);
-        } else {
-            if (dvui.button(@src(), "Install", .{}, .{
+        } else if (install_state == .failed) {
+            components.statusPill("Failed · see Logs", .warn);
+        }
+        if (!installed and install_state != .downloading) {
+            if (dvui.button(@src(), if (install_state == .failed) "Retry" else "Install", .{}, .{
                 .id_extra = i + 8100,
                 .color_fill = theme.colors.accent,
                 .color_text = theme.colors.text_on_accent,
@@ -4039,6 +4160,7 @@ fn renderScriptsTab() void {
             .color_text = theme.colors.text_tertiary,
         });
     }
+    _ = dvui.label(@src(), "Install command: curl -fLsS --max-time 15 (curated script URL to Opal scripts folder).", .{}, .{ .color_text = theme.colors.text_tertiary });
 
     // Info footer
     _ = dvui.label(@src(), "Scripts load on next player creation. Restart app to apply changes.", .{}, .{
@@ -4513,7 +4635,7 @@ pub fn renderDepsModal() void {
     // Install one-liner + actions row
     var cmd_buf: [256]u8 = undefined;
     const cmd = deps.installCmd(&cmd_buf, s);
-    if (cmd.len > 0) {
+    if (cmd.len > 0 and @import("builtin").os.tag == .macos) {
         _ = dvui.label(@src(), "Install missing with Homebrew:", .{}, .{
             .color_text = theme.colors.text_primary,
             .margin = .{ .y = 14 },
@@ -4554,8 +4676,12 @@ pub fn renderDepsModal() void {
             ) catch "";
             if (script.len > 0) {
                 // Launch on a detached thread so the frame never blocks.
-                _ = TerminalLauncher.launch(script);
-                state.showToast("Running in Terminal — come back when done");
+                if (TerminalLauncher.launch(script)) {
+                    logs.pushLog("info", "deps", cmd, false);
+                    state.showToast("Opening Terminal; installation runs there");
+                } else {
+                    state.showToastTyped("Could not open Terminal · see Logs", .err);
+                }
             }
         }
 
@@ -4570,6 +4696,24 @@ pub fn renderDepsModal() void {
             dvui.clipboardTextSet(cmd);
             state.showToast("Copied to clipboard");
         }
+    }
+    if (@import("builtin").os.tag != .macos and (!s.ffmpeg or !s.whisper)) {
+        _ = dvui.label(@src(), "Install missing ffmpeg / whisper-cpp with your system package manager. No automatic system installer is available here.", .{}, .{ .color_text = theme.colors.text_secondary });
+    }
+    const terminal_state = TerminalLauncher.status.load(.acquire);
+    if (terminal_state != .idle) {
+        _ = dvui.label(@src(), "Dependency command: {s}", .{switch (terminal_state) {
+            .launching => "Opening Terminal…",
+            .opened => "Sent to Terminal · verify installed rows above",
+            .failed => "Terminal launch failed · see Logs",
+            .idle => unreachable,
+        }}, .{ .color_text = if (terminal_state == .failed) theme.colors.danger else theme.colors.text_secondary });
+        if (terminal_state == .launching) dvui.refresh(null, @src(), null);
+    }
+    _ = dvui.label(@src(), "Model downloads: HTTPS curl → verify → extract staged archive (no shell for source plugins).", .{}, .{ .color_text = theme.colors.text_tertiary });
+    if (dvui.button(@src(), "View installation logs", .{}, .{ .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.accent })) {
+        state.app.deps_modal_open = false;
+        state.navigateToTab(.Logs);
     }
 
     // Footer row: auto-recheck hint + skip button

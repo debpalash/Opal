@@ -99,10 +99,35 @@ yet. The one-command installer skips the dialog, or run `sudo xattr -cr
 > [file issues](https://github.com/debpalash/Opal/issues); they are what moves it
 > forward. macOS (Apple silicon) and Linux x86_64 are the supported platforms.
 
-**First launch:** Movies & TV browsing uses the built-in Cinemeta catalog without
-a setup key. Add a free **TMDB v4 token** in **Settings**
-(<kbd>⌘</kbd><kbd>,</kbd>) for richer metadata. Voice and AI models are opt-in
-downloads; one button each, nothing installs itself.
+Start on Home with **Search all sources** or **Browse movies & TV**. The
+navigation bar's Search opens universal results from anywhere. On compact
+windows, Search is also under **More**; playback controls are under
+**More → Playback options**, and workspace, remote, theme and shortcut tools
+are under **More → More tools**.
+
+On smaller Windows displays, Opal fits its initial window inside the usable
+desktop area. The bottom Now Playing bar stays visible while media plays;
+use its **×** to stop and close it. Movies & TV keeps search and filters in one
+icon toolbar:
+hover an icon for its name, and scroll across the toolbar in a narrow window.
+Poster cards keep list actions and **Details** available without hover; selected
+lists stay highlighted. Universal search uses compact rows and groups YouTube
+trailers and teasers separately; click a result row or its Play button to start
+playback, or **+** to queue a torrent. Install sources from
+**Settings → General → Install source plugins**; the source catalog reports
+the last operation and links to redacted Logs.
+
+The Linux AppImage uses the system's OpenSSL 3 libraries alongside system
+`libcurl` (rather than bundling an older OpenSSL that conflicts on rolling
+distributions). The AppImage requires `libssl.so.3` and `libcrypto.so.3` on
+the host.
+
+**First launch:** The welcome screen offers keyless Movies & TV browsing and
+optional one-click source installation for universal search. Choose **Home** to
+open local files instead. Add a free **TMDB v4 token** in **Settings**
+(<kbd>⌘</kbd><kbd>,</kbd>) for richer metadata. Voice and AI models remain
+opt-in; nothing downloads itself. Reopen the welcome screen from
+**Settings → About**.
 
 <details>
 <summary><b>🧱 Building from source</b></summary>

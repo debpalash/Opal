@@ -21,6 +21,57 @@ pub const Meta = struct {
     seeds: u16 = 0,
     leech: u16 = 0,
 };
+/// YouTube search returns both watchable titles and promotional clips. Limit
+/// the preview section to standalone "trailer"/"teaser" words; a substring
+/// match would mislabel titles such as "Trailer Park Boys" or "Trailers".
+/// Explicit full-length labels win when a title mentions both.
+pub fn isPreviewTitle(title: []const u8) bool {
+    const full_markers = [_][]const u8{
+        "full movie", "full film", "full episode", "full length",
+        "complete movie", "complete film", "entire movie", "entire film",
+    };
+    for (full_markers) |marker| {
+        if (hasWords(title, marker)) return false;
+    }
+    // "Trailer Park Boys" is a title, not a promotional designation.
+    if (hasWords(title, "trailer park") and
+        !hasWords(title, "official trailer") and
+        !hasWords(title, "teaser") and
+        !hasTrailingPreviewWord(title)) return false;
+    return hasWords(title, "trailer") or hasWords(title, "teaser");
+}
+
+fn hasTrailingPreviewWord(title: []const u8) bool {
+    var end = title.len;
+    while (end > 0 and !std.ascii.isAlphanumeric(title[end - 1])) : (end -= 1) {}
+    for ([_][]const u8{ "trailer", "teaser" }) |word| {
+        if (end >= word.len and std.ascii.eqlIgnoreCase(title[end - word.len .. end], word) and
+            (end == word.len or !std.ascii.isAlphanumeric(title[end - word.len - 1]))) return true;
+    }
+    return false;
+}
+
+fn hasWords(haystack: []const u8, words: []const u8) bool {
+    if (words.len > haystack.len) return false;
+    for (0..haystack.len - words.len + 1) |start| {
+        if (start > 0 and std.ascii.isAlphanumeric(haystack[start - 1])) continue;
+        var h = start;
+        var w: usize = 0;
+        while (w < words.len) : (w += 1) {
+            if (words[w] == ' ') {
+                if (h >= haystack.len or
+                    !(std.ascii.isWhitespace(haystack[h]) or haystack[h] == '-' or haystack[h] == '_')) break;
+                while (h < haystack.len and
+                    (std.ascii.isWhitespace(haystack[h]) or haystack[h] == '-' or haystack[h] == '_')) : (h += 1) {}
+            } else {
+                if (h >= haystack.len or std.ascii.toLower(haystack[h]) != words[w]) break;
+                h += 1;
+            }
+        }
+        if (w == words.len and (h == haystack.len or !std.ascii.isAlphanumeric(haystack[h]))) return true;
+    }
+    return false;
+}
 
 /// Human-readable payload size. Chooses the unit by magnitude, one decimal for
 /// GB and none below — a release list is scanned, not audited, and "1.4 GB"
@@ -177,4 +228,16 @@ test "metaLine: huge values still fit the row buffer search.zig uses" {
     try t.expect(std.mem.indexOf(u8, s, "TB") != null);
     try t.expect(std.mem.indexOf(u8, s, "65535 seeds") != null);
     try t.expect(std.mem.indexOf(u8, s, "65535 leech") != null);
+}
+
+test "YouTube preview titles are standalone promotional clips, not full movies" {
+    try t.expect(isPreviewTitle("Some Movie (2026) - Official Trailer"));
+    try t.expect(isPreviewTitle("Some Movie | TEASER #2"));
+    try t.expect(isPreviewTitle("Trailer Park Boys Official Trailer"));
+    try t.expect(!isPreviewTitle("Trailer Park Boys: The Movie"));
+    try t.expect(!isPreviewTitle("Some Movie Full Movie (Trailer in credits)"));
+    try t.expect(!isPreviewTitle("The Trailers (2026)"));
+    try t.expect(!isPreviewTitle("Teasertown: Full Film"));
+    try t.expect(!isPreviewTitle("Some Movie - Official Trailer - Full Movie"));
+    try t.expect(!isPreviewTitle("Some Movie - Full-Movie (Trailer included)"));
 }

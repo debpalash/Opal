@@ -787,8 +787,8 @@ pub const AppState = struct {
         // reaches everyone) and out of the "already onboarded" heuristic.
         api_key_is_default: bool = false,
         loaded_once: bool = false,
-        // Gallery card target width (px) — user-cyclable compact/normal/large/xl.
-        card_w: f32 = 124,
+        // Gallery target width in layout units; users can adjust with +/−.
+        card_w: f32 = 180,
 
         // ── TV seasons/episodes detail (Netflix-style drill-down) ──
         // Opened by clicking a media_type=="tv" card. seasons from /tv/{id};

@@ -2,6 +2,8 @@ const std = @import("std");
 const state = @import("../core/state.zig");
 const paths = @import("../core/paths.zig");
 const db = @import("../core/db.zig");
+const logs = @import("../core/logs.zig");
+const sync = @import("../core/sync.zig");
 
 // ══════════════════════════════════════════════════════════
 // MPV Script Manager
@@ -161,58 +163,79 @@ pub const recommended_scripts = [_]RecommendedScript{
     },
 };
 
-/// Download a recommended script to ~/.config/opal/scripts/.
+pub const ScriptInstallStatus = enum { idle, downloading, installed, failed };
+var install_status: [recommended_scripts.len]ScriptInstallStatus = [_]ScriptInstallStatus{.idle} ** recommended_scripts.len;
+var install_mutex: sync.Mutex = .{};
+
+pub fn installStatus(idx: usize) ScriptInstallStatus {
+    if (idx >= recommended_scripts.len) return .idle;
+    install_mutex.lock();
+    defer install_mutex.unlock();
+    return install_status[idx];
+}
+
+fn finishInstall(idx: usize, success: bool) void {
+    install_mutex.lock();
+    install_status[idx] = if (success) .installed else .failed;
+    install_mutex.unlock();
+    state.app.scripts_scanned = false;
+    state.wakeUi();
+}
+
+/// Fetch a curated mpv script into Opal's scripts folder.
 pub fn installScript(rec_idx: usize) void {
     if (rec_idx >= recommended_scripts.len) return;
-    const rec = recommended_scripts[rec_idx];
-
-    var __cfg_buf_1: [512]u8 = undefined;
-    const home = @import("../core/paths.zig").configDir(&__cfg_buf_1);
-    var dir_buf: [512]u8 = undefined;
-    const dir = std.fmt.bufPrint(&dir_buf, "{s}/scripts", .{home}) catch return;
-    @import("../core/io_global.zig").cwdMakePath(dir) catch {};
-
-    // Spawn curl in background
-    var path_buf: [512]u8 = undefined;
-    const out_path = std.fmt.bufPrintZ(&path_buf, "{s}/{s}", .{ dir, rec.filename }) catch return;
-
-    const allocator = @import("../core/alloc.zig").allocator;
-
-    // Heap-dup strings so they survive into the spawned thread
-    const url_z = allocator.dupeZ(u8, rec.url) catch return;
-    const out_z = allocator.dupeZ(u8, out_path) catch return;
-
-    // Build heap-allocated argv array
-    const argv = allocator.alloc([]const u8, 7) catch return;
-    argv[0] = "curl";
-    argv[1] = "-sL";
-    argv[2] = "-o";
-    argv[3] = out_z;
-    argv[4] = "--max-time";
-    argv[5] = "15";
-    argv[6] = url_z;
-
-    const child_ptr = allocator.create(@import("../core/io_global.zig").Child) catch return;
-    child_ptr.* = @import("../core/io_global.zig").Child.init(argv, allocator);
-    child_ptr.stderr_behavior = .Ignore;
-    child_ptr.stdout_behavior = .Ignore;
-
-    if (@import("../core/workers.zig").spawnLegacy(struct {
-        fn worker(c2: *@import("../core/io_global.zig").Child, alloc: std.mem.Allocator, url_owned: [:0]const u8, out_owned: [:0]const u8, argv_owned: [][]const u8) void {
-            _ = c2.spawnAndWait() catch {};
-            alloc.destroy(c2);
-            alloc.free(url_owned);
-            alloc.free(out_owned);
-            alloc.free(argv_owned);
-            // Re-scan after download
-            state.app.scripts_scanned = false;
-        }
-    }.worker, .{ child_ptr, allocator, url_z, out_z, argv })) |t| {
-        @import("../core/workers.zig").release(t);
-    } else |_| {
-        allocator.destroy(child_ptr);
-        allocator.free(url_z);
-        allocator.free(out_z);
-        allocator.free(argv);
+    install_mutex.lock();
+    if (install_status[rec_idx] == .downloading) {
+        install_mutex.unlock();
+        return;
     }
+    install_status[rec_idx] = .downloading;
+    install_mutex.unlock();
+    const thread = @import("../core/workers.zig").spawnLegacy(installScriptWorker, .{rec_idx}) catch {
+        finishInstall(rec_idx, false);
+        logs.pushLog("error", "scripts", "Could not start script download worker", true);
+        return;
+    };
+    @import("../core/workers.zig").release(thread);
+}
+
+fn installScriptWorker(idx: usize) void {
+    const rec = recommended_scripts[idx];
+    var cfg_buf: [512]u8 = undefined;
+    var dir_buf: [600]u8 = undefined;
+    const dir = std.fmt.bufPrint(&dir_buf, "{s}/scripts", .{paths.configDir(&cfg_buf)}) catch {
+        finishInstall(idx, false);
+        logs.pushLog("error", "scripts", "Scripts folder path is too long", true);
+        return;
+    };
+    const io = @import("../core/io_global.zig");
+    io.cwdMakePath(dir) catch {
+        finishInstall(idx, false);
+        logs.pushLog("error", "scripts", "Could not create scripts folder", true);
+        return;
+    };
+    var file_buf: [768]u8 = undefined;
+    const dest = std.fmt.bufPrint(&file_buf, "{s}/{s}", .{ dir, rec.filename }) catch {
+        finishInstall(idx, false);
+        logs.pushLog("error", "scripts", "Script output path is too long", true);
+        return;
+    };
+    var msg: [384]u8 = undefined;
+    logs.pushLog("info", "scripts", std.fmt.bufPrint(&msg, "curl -fLsS --max-time 15 -o <Opal scripts>/{s} {s}", .{ rec.filename, rec.url }) catch "Downloading curated script", false);
+    var child = io.Child.init(&.{ "curl", "-fLsS", "--max-time", "15", "-o", dest, rec.url }, @import("../core/alloc.zig").allocator);
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Ignore;
+    const term = child.spawnAndWait() catch {
+        finishInstall(idx, false);
+        logs.pushLog("error", "scripts", "Script download failed to start", true);
+        return;
+    };
+    const ok = switch (term) {
+        .exited => |code| code == 0,
+        else => false,
+    };
+    if (!ok) io.cwdDeleteFile(dest) catch {};
+    finishInstall(idx, ok);
+    logs.pushLog(if (ok) "info" else "error", "scripts", std.fmt.bufPrint(&msg, "{s}: {s}", .{ rec.name, if (ok) "installed" else "download failed" }) catch "Script download finished", !ok);
 }

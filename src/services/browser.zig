@@ -131,6 +131,9 @@ fn setInstallMsg(msg: []const u8) void {
     install_lock.unlock();
     state.wakeUi();
 }
+pub fn installStatus() InstallState {
+    return @enumFromInt(install_state.load(.acquire));
+}
 
 pub fn installEngine() void {
     if (install_state.load(.acquire) == @intFromEnum(InstallState.running)) return;
@@ -140,36 +143,50 @@ pub fn installEngine() void {
     if (@import("../core/workers.zig").spawnLegacy(installWorker, .{})) |t| @import("../core/workers.zig").release(t) else |_| {
         install_state.store(@intFromEnum(InstallState.failed), .release);
         setInstallMsg("Could not start the installer thread");
+        logs.pushLog("error", "browser", "Could not start browser installer thread", true);
     }
 }
 
-/// Run a command, streaming its output (split on \n AND \r so pip/download
-/// progress bars surface) into install_msg. Returns true on exit code 0.
+/// Show complete progress lines from either of an installer's output pipes.
+fn streamInstallPipe(pipe: *std.Io.File) void {
+    var line_buf: [240]u8 = undefined;
+    var pos: usize = 0;
+    var ch: [1]u8 = undefined;
+    while (true) {
+        const n = io_g.read(pipe, &ch) catch break;
+        if (n == 0) break;
+        if (ch[0] == '\n' or ch[0] == '\r') {
+            if (pos > 0) setInstallMsg(line_buf[0..pos]);
+            pos = 0;
+        } else if (pos < line_buf.len) {
+            line_buf[pos] = ch[0];
+            pos += 1;
+        }
+    }
+    if (pos > 0) setInstallMsg(line_buf[0..pos]);
+}
+
+/// Run a command, streaming stdout and stderr progress into install_msg.
+/// Returns true only on exit code 0.
 fn runInstallStep(argv: []const []const u8) bool {
     var child = io_g.Child.init(argv, alloc);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Pipe;
     _ = child.spawn() catch return false;
-
-    if (child.stdout) |*stdout| {
-        var line_buf: [240]u8 = undefined;
-        var pos: usize = 0;
-        var ch: [1]u8 = undefined;
-        while (true) {
-            const n = io_g.read(stdout, &ch) catch break;
-            if (n == 0) break;
-            if (ch[0] == '\n' or ch[0] == '\r') {
-                if (pos > 0) setInstallMsg(line_buf[0..pos]);
-                pos = 0;
-            } else if (pos < line_buf.len) {
-                line_buf[pos] = ch[0];
-                pos += 1;
-            }
-        }
-        if (pos > 0) setInstallMsg(line_buf[0..pos]);
-    }
-
+    // pip and browser fetchers can emit progress on stderr while stdout is
+    // quiet. Drain both pipes concurrently: serial reads can deadlock once
+    // the unread pipe fills, leaving the install stuck forever.
+    const stderr = if (child.stderr) |*pipe| pipe else {
+        _ = child.kill() catch {};
+        return false;
+    };
+    const stderr_thread = std.Thread.spawn(.{}, streamInstallPipe, .{stderr}) catch {
+        _ = child.kill() catch {};
+        return false;
+    };
+    if (child.stdout) |*stdout| streamInstallPipe(stdout);
+    stderr_thread.join();
     const term = child.wait() catch return false;
     return switch (term) {
         .exited => |code| code == 0,
@@ -182,7 +199,7 @@ fn installWorker() void {
         fn f(msg: []const u8) void {
             install_state.store(@intFromEnum(InstallState.failed), .release);
             setInstallMsg(msg);
-            logs.pushLog("error", "browser", msg, false);
+            logs.pushLog("error", "browser", msg, true);
         }
     }.f;
 
@@ -199,6 +216,7 @@ fn installWorker() void {
     // 1) venv (idempotent — skip when its python already exists)
     if (io_g.cwdAccess(py, .{})) |_| {} else |_| {
         setInstallMsg("Creating Python environment…");
+        logs.pushLog("info", "browser", "Command: python3 -m venv <Opal venv>", false);
         if (!runInstallStep(&.{ "python3", "-m", "venv", venv }))
             return fail("Failed to create the Python venv (is python3 installed?)");
     }
@@ -208,6 +226,8 @@ fn installWorker() void {
         var msg_buf: [96]u8 = undefined;
         setInstallMsg(std.fmt.bufPrint(&msg_buf, "Installing {s} (pip)…", .{pkg}) catch pkg);
     }
+    var cmd_buf: [128]u8 = undefined;
+    logs.pushLog("info", "browser", std.fmt.bufPrint(&cmd_buf, "Command: <venv>/bin/python3 -m pip install --upgrade {s}", .{pkg}) catch "Installing browser engine via pip", false);
     if (!runInstallStep(&.{ py, "-m", "pip", "install", "--upgrade", pkg }))
         return fail("pip install failed — see Logs");
 
@@ -215,6 +235,7 @@ fn installWorker() void {
     switch (engine) {
         .camoufox => {
             setInstallMsg("Downloading the Camoufox browser (~200 MB)…");
+            logs.pushLog("info", "browser", "Command: <venv>/bin/python3 -m camoufox fetch", false);
             if (!runInstallStep(&.{ py, "-m", "camoufox", "fetch" }))
                 return fail("Browser download failed — check network and retry");
             setInstallMsg("Engine installed — starting…");

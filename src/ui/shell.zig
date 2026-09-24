@@ -66,13 +66,14 @@ pub fn render() !void {
     // Responsive breakpoints use the live OS window, not this root widget's
     // previous-frame rect. The latter could leave the old navbar mounted after
     // resize and push More off-screen until some unrelated repaint happened.
-    //   compact (< 900pt): mobile layout — top nav links move to a bottom tab bar.
-    //   narrow  (< 950pt): still a top nav, but nav-link text collapses to
-    //     icons-only and the omnibox tightens so everything fits as you resize.
-    // The thresholds are ON-SCREEN POINTS. This shell renders inside
-    // dvui.scale(ui_scale), so root.rect.w is in scaled units — scale_pure
-    // converts. Comparing the raw value fired the breakpoints ~1/ui_scale too
-    // late and pushed the right-hand nav actions off the window edge.
+    //   compact (< 900pt): mobile layout — desktop links give way to bottom
+    //     tabs and the More menu (including global Search).
+    //   narrow  (< 950pt, or < 1200 layout units): top nav with icon-only
+    //     links and a tighter omnibox so everything fits as you resize.
+    // Device thresholds are ON-SCREEN POINTS; the additional narrow-layout
+    // guard uses scaled layout units. This shell renders inside
+    // dvui.scale(ui_scale), so scale_pure converts the OS window dimensions
+    // before comparing them; using raw pixels can push More off-screen.
     const scale_pure = @import("../core/scale_pure.zig");
     const window_rect = dvui.windowRect();
     const w = scale_pure.layoutUnits(window_rect.w, state.app.ui_scale);
@@ -338,12 +339,13 @@ fn renderTopNav(compact: bool, narrow: bool) void {
         state.app.router.goBack();
     }
 
-    // Primary nav links — hidden in compact (bottom tab bar takes over).
+    // Primary nav links — compact uses bottom tabs and More instead.
     if (!compact) {
-        // Home / Downloads / Queue / History are icon-only (tooltip on hover);
-        // the content destinations keep their labels.
-        // Search and Browse are owned by the omnibox and source selector.
+        // Home is icon-only; Search and Watching gain labels when space allows.
+        // Browse remains in the source selector, while Search always opens the
+        // global results page regardless of the omnibox's current source.
         navLink(.home, "Home", icons.tvg.lucide.house, 1, true);
+        navLink(.search, "Search", icons.tvg.lucide.search, 8, narrow);
         navLink(.watching, "Watching", icons.tvg.lucide.tv, 7, narrow);
     }
 
@@ -356,32 +358,18 @@ fn renderTopNav(compact: bool, narrow: bool) void {
         sp.deinit();
     }
 
-    // Donate chip — dropped at narrow so the tighter row doesn't clip.
-
-    // Donate — text chip (not an icon action) so it reads as an ask, not a
-    // toggle. Hidden in compact, like the nav links: the omnibox already has
-    // to share a narrow row with the icon actions there.
-    if (!compact) header.donateButton();
-
-    // Right-side actions (icon-only). The former "Assistant" button opened the
-    // AI/Voice SETTINGS page (renderAIContent) — that now lives in Settings ›
-    // AI & Voice, so it's dropped from the primary nav. AI chat is reachable
-    // via the omnibox ('>' or trailing '?') — the conversation lives on Home.
+    // Right-side actions stay icon-only; assistant chat is reached through the
+    // omnibox ('>' or trailing '?'), while AI & Voice configuration is in Settings.
     if (chromeIconButton(@src(), icons.tvg.lucide.play, "Now playing", state.app.router.current == .player, true)) {
         state.app.router.navigate(.player);
     }
-    // Plugins — its own nav-bar menu. Was a sub-tab hidden behind the
-    // "Logs & Plugins" icon, which meant two clicks and no hint that Suwayomi /
-    // Debrid / Trakt lived there at all. The dropdown lists every section, so
-    // each is one click from anywhere.
+    // Settings stays in the desktop row; compact exposes it in More.
     if (!compact and chromeIconButton(@src(), icons.tvg.lucide.settings, "Settings", state.app.router.current == .settings, true)) {
         state.app.router.navigate(.settings);
     }
 
-    // Overflow (⋯) — commands that only existed in the legacy header and were
-    // otherwise unreachable in the default shell UI (workspaces, hardware
-    // decode, incognito, seek sync, voice, stream key, theme cycling, the
-    // shortcut cheat sheet).
+    // Overflow (⋯) keeps secondary destinations short and groups advanced
+    // commands into two small submenus that fit laptop screens.
     {
         var m = dvui.menu(@src(), .horizontal, .{ .gravity_y = 0.5 });
         defer m.deinit();
@@ -392,7 +380,10 @@ fn renderTopNav(compact: bool, narrow: bool) void {
             .min_size_content = theme.iconSize(.sm),
             .padding = dvui.Rect.all(6),
         })) |r| {
-            var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
+            var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{
+                .color_fill = theme.colors.bg_surface,
+                .color_border = theme.colors.border_subtle,
+            });
             defer fw.deinit();
             var col = dvui.menu(@src(), .vertical, .{
                 .background = true,
@@ -403,7 +394,6 @@ fn renderTopNav(compact: bool, narrow: bool) void {
             });
             defer col.deinit();
             renderSecondaryDestinations(compact);
-            renderOverflowItems();
         }
     }
 }
@@ -487,6 +477,7 @@ fn pluginsMenu() void {
                 .expand = .horizontal,
                 .color_text = if (active) theme.colors.accent else theme.colors.text_primary,
             }) != null) {
+                fw.close();
                 state.app.plugin_tab = t;
                 state.app.router.navigate(.plugins);
             }
@@ -502,54 +493,103 @@ fn pluginsMenu() void {
     }
 }
 
-/// Body of the top-nav overflow menu. Each item is a leaf menuItemLabel; dvui
-/// closes the floating menu on activation.
+/// Compact bottom tabs already expose Home, Watching, History and Downloads.
+/// Keep More short; lengthy advanced controls belong in two small submenus.
 fn renderSecondaryDestinations(compact: bool) void {
     const item_opts = dvui.Options{ .expand = .horizontal, .color_text = theme.colors.text_primary };
-    // The compact shell deliberately removes the desktop link row. Keep every
-    // destination reachable instead of treating "mobile" as five hand-picked
-    // pages and silently losing the rest of the application.
     if (compact) {
-        if (dvui.menuItemLabel(@src(), "Home", .{}, item_opts) != null) state.app.router.navigate(.home);
-        if (dvui.menuItemLabel(@src(), "Watching", .{}, item_opts) != null) state.app.router.navigate(.watching);
+        if (dvui.menuItemLabel(@src(), "Search all sources", .{}, item_opts) != null) {
+            closeOverflowMenu();
+            state.app.router.navigate(.search);
+        }
+    } else {
+        if (dvui.menuItemLabel(@src(), "Downloads", .{}, item_opts) != null) {
+            closeOverflowMenu();
+            state.app.router.navigate(.downloads);
+        }
+        if (dvui.menuItemLabel(@src(), "History", .{}, item_opts) != null) {
+            closeOverflowMenu();
+            state.app.router.navigate(.history);
+        }
     }
-    if (dvui.menuItemLabel(@src(), "Downloads", .{}, item_opts) != null) state.app.router.navigate(.downloads);
-    if (dvui.menuItemLabel(@src(), "Queue", .{}, item_opts) != null) state.app.router.navigate(.queue);
-    if (dvui.menuItemLabel(@src(), "History", .{}, item_opts) != null) state.app.router.navigate(.history);
-    if (dvui.menuItemLabel(@src(), "Plugins", .{}, item_opts) != null) state.app.router.navigate(.plugins);
-    if (dvui.menuItemLabel(@src(), "Logs", .{}, item_opts) != null) state.app.router.navigate(.system);
-    if (dvui.menuItemLabel(@src(), "Web remote settings", .{}, item_opts) != null) {
-        state.app.settings_tab = .WebUi;
+    // Open the longest submenu near the top so its last action remains visible
+    // on 768px-high displays without depending on mouse-wheel scrolling.
+    if (dvui.menuItemLabel(@src(), "More tools", .{ .submenu = true }, item_opts)) |anchor| {
+        var popup = dvui.floatingMenu(@src(), .{ .from = anchor }, .{ .color_fill = theme.colors.bg_surface, .color_border = theme.colors.border_subtle });
+        defer popup.deinit();
+        renderOverflowItems();
+    }
+    if (dvui.menuItemLabel(@src(), "Playback options", .{ .submenu = true }, item_opts)) |anchor| {
+        var popup = dvui.floatingMenu(@src(), .{ .from = anchor }, .{ .color_fill = theme.colors.bg_surface, .color_border = theme.colors.border_subtle });
+        defer popup.deinit();
+        renderPlaybackOptions();
+    }
+    if (dvui.menuItemLabel(@src(), "Queue", .{}, item_opts) != null) {
+        closeOverflowMenu();
+        state.app.router.navigate(.queue);
+    }
+    if (dvui.menuItemLabel(@src(), "Plugins", .{}, item_opts) != null) {
+        closeOverflowMenu();
+        state.app.router.navigate(.plugins);
+    }
+    if (compact and dvui.menuItemLabel(@src(), "Settings", .{}, item_opts) != null) {
+        closeOverflowMenu();
         state.app.router.navigate(.settings);
     }
-    if (dvui.menuItemLabel(@src(), "Donate", .{}, item_opts) != null) {
-        @import("settings.zig").openExternal(header.DONATE_URL);
+    if (dvui.menuItemLabel(@src(), "Open file…", .{}, item_opts) != null) {
+        closeOverflowMenu();
+        @import("ui.zig").triggerFileOpen();
     }
-    if (compact and dvui.menuItemLabel(@src(), "Settings", .{}, item_opts) != null) state.app.router.navigate(.settings);
 }
 
 fn renderOverflowItems() void {
     const item_opts = dvui.Options{ .expand = .horizontal, .color_text = theme.colors.text_primary };
-    const voice = @import("../services/ai_voice.zig");
-
-    if (dvui.menuItemLabel(@src(), "Open file…", .{}, item_opts) != null) {
-        @import("ui.zig").triggerFileOpen();
+    if (dvui.menuItemLabel(@src(), "Logs", .{}, item_opts) != null) {
+        closeOverflowMenu();
+        state.app.router.navigate(.system);
+    }
+    if (dvui.menuItemLabel(@src(), "Web remote settings", .{}, item_opts) != null) {
+        closeOverflowMenu();
+        state.app.settings_tab = .WebUi;
+        state.app.router.navigate(.settings);
+    }
+    if (dvui.menuItemLabel(@src(), "Donate", .{}, item_opts) != null) {
+        closeOverflowMenu();
+        @import("settings.zig").openExternal(header.DONATE_URL);
     }
     if (dvui.menuItemLabel(@src(), "Save workspace…", .{}, item_opts) != null) {
+        closeOverflowMenu();
         @memset(&state.app.ws_name_input, 0);
         state.app.ws_save_open = true;
         state.app.ws_load_open = false;
     }
     if (dvui.menuItemLabel(@src(), "Load workspace…", .{}, item_opts) != null) {
+        closeOverflowMenu();
         @import("workspace.zig").scanWorkspaces();
         state.app.ws_load_open = true;
         state.app.ws_save_open = false;
     }
+    if (dvui.menuItemLabel(@src(), "Cycle theme", .{}, item_opts) != null) {
+        closeOverflowMenu();
+        theme.cycleTheme();
+        state.showToast(theme.presetName(theme.active_preset));
+    }
+    if (dvui.menuItemLabel(@src(), "Keyboard shortcuts", .{}, item_opts) != null) {
+        closeOverflowMenu();
+        state.app.cheatsheet_open = !state.app.cheatsheet_open;
+    }
+}
+
+fn renderPlaybackOptions() void {
+    const item_opts = dvui.Options{ .expand = .horizontal, .color_text = theme.colors.text_primary };
+    const voice = @import("../services/ai_voice.zig");
     if (dvui.menuItemLabel(@src(), if (state.app.seek_sync) "Seek sync: on" else "Seek sync: off", .{}, item_opts) != null) {
+        closeOverflowMenu();
         state.app.seek_sync = !state.app.seek_sync;
         state.markConfigDirty();
     }
     if (dvui.menuItemLabel(@src(), if (state.app.hwdec_enabled) "Hardware decode: on" else "Hardware decode: off", .{}, item_opts) != null) {
+        closeOverflowMenu();
         state.app.hwdec_enabled = !state.app.hwdec_enabled;
         state.markConfigDirty();
         const hw_val: []const u8 = if (state.app.hwdec_enabled) "auto" else "no";
@@ -561,24 +601,27 @@ fn renderOverflowItems() void {
         }
     }
     if (dvui.menuItemLabel(@src(), if (state.app.incognito_mode) "Incognito: on" else "Incognito: off", .{}, item_opts) != null) {
+        closeOverflowMenu();
         state.app.incognito_mode = !state.app.incognito_mode;
         state.showToast(if (state.app.incognito_mode) "Incognito ON — no history saved" else "Incognito OFF");
     }
     if (dvui.menuItemLabel(@src(), if (voice.conversation_active.load(.acquire)) "Voice conversation: on" else "Voice conversation…", .{}, item_opts) != null) {
+        closeOverflowMenu();
         voice.toggleConversation();
     }
     if (header.hasStreamToken()) {
         if (dvui.menuItemLabel(@src(), "Stream key…", .{}, item_opts) != null) {
+            closeOverflowMenu();
             header.toggleStreamKeyPopover();
         }
     }
-    if (dvui.menuItemLabel(@src(), "Cycle theme", .{}, item_opts) != null) {
-        theme.cycleTheme();
-        state.showToast(theme.presetName(theme.active_preset));
-    }
-    if (dvui.menuItemLabel(@src(), "Keyboard shortcuts", .{}, item_opts) != null) {
-        state.app.cheatsheet_open = !state.app.cheatsheet_open;
-    }
+}
+
+/// dvui menu items activate without dismissing their floating menus. Close
+/// the active popup's entire parent chain before changing route or state, so
+/// clicking the current destination does not leave More covering that view.
+fn closeOverflowMenu() void {
+    if (dvui.FloatingMenuWidget.currentGet()) |popup| popup.close();
 }
 
 /// A top-nav link: whole-row click target, icon + label, accent when active.
@@ -639,13 +682,12 @@ fn navLink(r: Route, label: []const u8, icon: []const u8, id_extra: usize, icon_
 ///   • leading '>' or trailing '?'    → AI assistant (chat)
 ///   • anything else                  → UNIFIED search across all sources
 fn omnibox(narrow: bool) void {
-    var placeholder_buf: [96]u8 = undefined;
-    const placeholder: []const u8 = if (state.app.router.current == .browse)
-        std.fmt.bufPrint(&placeholder_buf, "Search {s}, or paste a link…", .{tabLabel(state.app.browse_source)}) catch "Search this source, or paste a link…"
-    else if (narrow)
-        "Search, ask, paste…"
+    // This field always routes plain text to universal search, even on Browse.
+    // Do not label it as a second Movies & TV search box.
+    const placeholder: []const u8 = if (narrow)
+        "Search all sources, ask, paste…"
     else
-        "Search everything, ask, or paste a link…";
+        "Search all sources, ask, or paste a link…";
     var te = dvui.textEntry(@src(), .{
         .text = .{ .buffer = &state.app.magnet_buf },
         .placeholder = placeholder,
@@ -904,6 +946,9 @@ fn browseSourceSelect() ?state.DrawerTab {
         browseSourceSection("LISTEN", &LISTEN_SOURCES, 8200, &picked);
         browseSourceSection("READ", &READ_SOURCES, 8300, &picked);
         browseSourceSection("WEB & LIBRARIES", &CONNECTED_SOURCES, 8400, &picked);
+        // A leaf selection changes the view, including when choosing the
+        // already-active source. dvui does not dismiss floating menus for us.
+        if (picked != null) popup.close();
     }
     return picked;
 }

@@ -1974,6 +1974,11 @@ fn combinedStreamStatus() @import("resolver.zig").SourceStatus {
     return r.combineManySourceStatuses(&statuses);
 }
 
+const ResultAction = struct {
+    idx: usize,
+    queue: bool = false,
+};
+
 fn renderUniversalResults() void {
     const resolver = @import("resolver.zig");
     const visible_count = resolver.resultCount();
@@ -2047,38 +2052,96 @@ fn renderUniversalResults() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
     defer scroll.deinit();
 
-    var list_layout = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .padding = .{ .x = 0, .y = 4, .w = 0, .h = 100 } });
+    var list_layout = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .padding = .{ .x = 0, .y = 4, .w = 0, .h = 12 } });
     defer list_layout.deinit();
 
-    // Hold the results lock for the read loop so resolver workers can't shift
-    // the array out from under us. Snapshot the count under the lock.
-    resolver.results_mutex.lock();
-    defer resolver.results_mutex.unlock();
-    const snap_count = resolver.result_count;
+    // Snapshot only the activated row before releasing the results lock.
+    // Playback can start another search or acquire this same mutex, so never
+    // invoke a result action while drawing the locked list.
+    var pending: ?ResultAction = null;
+    var selected: ?resolver.ResolvedItem = null;
+    {
+        resolver.results_mutex.lock();
+        defer resolver.results_mutex.unlock();
+        const snap_count = resolver.result_count;
 
-    // ── One flat compact table ──
-    // Every result in the resolver's global sort order (the Relevance /
-    // Quality / Seeds segment above) — no per-source sections. The source
-    // shows as a colored chip on the RIGHT of each row; sources that finished
-    // with nothing collapse into one muted summary line at the bottom.
-    // Record which sources produced at least one row while we're already
-    // walking the array, so the "No hits / Failed" summary below reads a
-    // bitset instead of re-scanning every result per repaint. Keyed by
-    // sourceBitOf (matches the summary's per-source classification, RSS split
-    // included); set before the nsfw/sourceOn filters so it mirrors the
-    // summary's prior full-scan semantics.
-    var source_has = std.EnumSet(resolver.SourceBit).initEmpty();
-    for (0..snap_count) |idx| {
-        const item = &resolver.results[idx];
-        if (item.name_len == 0) continue;
-        const sbit = sourceBitOf(item);
-        if (sbit) |bit| source_has.insert(bit);
-        if (state.app.nsfw_filter_enabled and item.is_nsfw) continue;
-        if (sbit) |bit| if (!resolver.sourceOn(bit)) continue;
-        renderCompactRow(idx, item);
+        // Keep the resolver's relevance/quality order within each section, but
+        // don't interleave YouTube promotional clips with playable movie hits.
+        // Classify only YouTube rows with explicit trailer/teaser title words.
+        var source_has = std.EnumSet(resolver.SourceBit).initEmpty();
+        var visible = [_]bool{false} ** resolver.MAX_RESULTS;
+        var preview_row = [_]bool{false} ** resolver.MAX_RESULTS;
+        var previews: usize = 0;
+        var other_results: usize = 0;
+        for (0..snap_count) |idx| {
+            const item = &resolver.results[idx];
+            if (item.name_len == 0) continue;
+            if (sourceBitOf(item)) |bit| source_has.insert(bit);
+            visible[idx] = showResult(item);
+            if (!visible[idx]) continue;
+            preview_row[idx] = isPreviewResult(item);
+            if (preview_row[idx]) {
+                previews += 1;
+            } else {
+                other_results += 1;
+            }
+        }
+        if (previews > 0 and other_results > 0) renderResultGroupHeading("Movies, shows & other results", 0);
+        for (0..snap_count) |idx| {
+            const item = &resolver.results[idx];
+            if (!visible[idx] or preview_row[idx]) continue;
+            renderCompactRow(idx, item, &pending);
+        }
+        if (previews > 0) {
+            renderResultGroupHeading("Trailers & teasers · YouTube previews", 1);
+            for (0..snap_count) |idx| {
+                const item = &resolver.results[idx];
+                if (!visible[idx] or !preview_row[idx]) continue;
+                renderCompactRow(idx, item, &pending);
+            }
+        }
+
+        renderSourceSummary(source_has);
+        if (pending) |action| selected = resolver.results[action.idx];
     }
+    if (pending) |action| {
+        const item = &(selected.?);
+        if (action.queue) {
+            const risk = @import("torrent_risk_pure.zig").assess(item.name[0..item.name_len], @floatFromInt(item.size_bytes));
+            if (risk.risk == .block) {
+                var tb: [160]u8 = undefined;
+                state.showToastTyped(std.fmt.bufPrint(&tb, "Blocked scam torrent: {s}", .{risk.reason}) catch "Blocked scam torrent", .err);
+            } else {
+                @import("queue.zig").addToQueue(item.url[0..item.url_len], item.name[0..item.name_len], "torrent");
+                state.showToast("Added to queue");
+            }
+        } else {
+            resolver.playResolvedItem(item);
+        }
+    }
+}
 
-    renderSourceSummary(source_has);
+fn showResult(item: *const @import("resolver.zig").ResolvedItem) bool {
+    const resolver = @import("resolver.zig");
+    if (item.name_len == 0 or (state.app.nsfw_filter_enabled and item.is_nsfw)) return false;
+    if (sourceBitOf(item)) |bit| return resolver.sourceOn(bit);
+    return true;
+}
+
+fn isPreviewResult(item: *const @import("resolver.zig").ResolvedItem) bool {
+    return item.source == .youtube and @import("search_meta_pure.zig").isPreviewTitle(item.name[0..item.name_len]);
+}
+
+fn renderResultGroupHeading(text: []const u8, id_extra: usize) void {
+    var heading = dvui.textLayout(@src(), .{ .break_lines = true }, .{
+        .id_extra = id_extra,
+        .expand = .horizontal,
+        .min_size_content = .{ .w = 0, .h = 0 },
+        .background = false,
+        .padding = .{ .x = 20, .y = 12, .w = 12, .h = 6 },
+    });
+    heading.addText(text, .{ .color_text = theme.colors.text_secondary, .font = dvui.themeGet().font_heading });
+    heading.deinit();
 }
 
 /// Toolbar filter pill governing a result (RSS magnets are pushed with
@@ -2238,12 +2301,10 @@ fn renderSourceSummary(source_has: std.EnumSet(@import("resolver.zig").SourceBit
     }
 }
 
-/// One compact single-line result row: title (expands, ellipsizes) · muted
-/// quality/seeds meta · SOURCE chip on the right · play (+queue for
-/// torrents). Whole row clicks to play. Caller holds results_mutex.
-fn renderCompactRow(idx: usize, item: *const @import("resolver.zig").ResolvedItem) void {
-    const resolver = @import("resolver.zig");
-
+/// A result row with a wrapping title and one metadata line beside its actions.
+/// Whole row clicks to play; source, play and queue remain visible.
+/// Caller holds results_mutex.
+fn renderCompactRow(idx: usize, item: *const @import("resolver.zig").ResolvedItem, pending: *?ResultAction) void {
     // Scam heuristics only apply to torrent listings. The size argument used to
     // be a hardcoded 0 because ResolvedItem carried no size, which silently
     // disabled every size-based rule in assess() — a "1080p BluRay" that is 4 MB
@@ -2295,47 +2356,84 @@ fn renderCompactRow(idx: usize, item: *const @import("resolver.zig").ResolvedIte
         .color_fill = theme.transparent,
         .color_border = theme.colors.border_subtle,
         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 }, // hairline separator
-        .padding = .{ .x = 12, .y = 3, .w = 8, .h = 3 },
+        .padding = .{ .x = 12, .y = 5, .w = 8, .h = 5 },
         .margin = .{ .x = 8, .y = 0, .w = 8, .h = 0 },
     });
     defer row.deinit();
     // Plain boxes never render color_fill_hover (dvui gotcha) — set the fill
     // manually while hovered, then draw.
-    var hovered = false;
-    if (dvui.clicked(row.data(), .{ .hovered = &hovered })) resolver.playItem(idx);
+    // Leave child Play and Queue buttons first claim on mouse presses.
+    // dvui.clicked on the parent consumes the event before children see it.
+    const hovered = row.data().borderRectScale().r.contains(dvui.currentWindow().mouse_pt);
     if (hovered) row.data().options.color_fill = theme.colors.bg_hover;
     row.drawBackground();
 
-    // Title — single line, expands, ellipsizes.
-    _ = dvui.label(@src(), "{s}", .{safeUtf8(item.name[0..item.name_len])}, .{
-        .id_extra = idx + 9500,
+    // Reserve the source badge and action targets before laying out untrusted
+    // filenames. Otherwise a long title expands the left box and pushes Play
+    // and Queue outside the scroll viewport on scaled/narrow windows.
+    const action_w: f32 = if (risk.risk != .ok) 210 else if (item.source == .torrent) 152 else 116;
+    const text_w = @max(96, row.data().contentRect().w - action_w);
+    var content = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
-        .color_text = theme.colors.text_primary,
-        .gravity_y = 0.5,
+        .min_size_content = .{ .w = 0, .h = 0 },
+        .max_size_content = dvui.Options.MaxSize.width(text_w),
     });
 
-    // Muted meta: quality · size · seeds/leech. Composition is pure and tested
-    // (search_meta_pure.metaLine) so the formatting rules are not buried in a
-    // draw call.
+    // TextLayout wraps instead of ellipsizing and can break long filenames,
+    // keeping the complete title legible without hover or horizontal scrolling.
     {
-        const meta_pure = @import("search_meta_pure.zig");
-        var meta_buf: [64]u8 = undefined;
-        const meta = meta_pure.metaLine(.{
-            .quality = item.quality,
-            .size_bytes = item.size_bytes,
-            .seeds = item.seeds,
-            .leech = item.leech,
-        }, &meta_buf);
-        if (meta.len > 0) {
-            _ = dvui.label(@src(), "{s}", .{meta}, .{
-                .id_extra = idx + 9600,
-                .color_text = theme.colors.text_secondary,
-                .gravity_y = 0.5,
-                .margin = .{ .x = 8, .y = 0, .w = 8, .h = 0 },
-            });
+        var title = dvui.textLayout(@src(), .{ .break_lines = true }, .{
+            .id_extra = idx + 9500,
+            .expand = .horizontal,
+            .min_size_content = .{ .w = 0, .h = 0 },
+            .max_size_content = dvui.Options.MaxSize.width(text_w),
+            .background = false,
+            .padding = dvui.Rect.all(0),
+        });
+        title.addText(safeUtf8(item.name[0..item.name_len]), .{ .color_text = theme.colors.text_primary });
+        title.deinit();
+    }
+
+    // Some torrent backends repeat the seed count and quality in their detail
+    // strings. Show only the provider here; metaLine owns those numbers.
+    const raw_detail = safeUtf8(item.detail[0..item.detail_len]);
+    var detail = raw_detail;
+    if (item.source == .torrent and std.mem.startsWith(u8, detail, "Torrent · ")) {
+        detail = detail["Torrent · ".len..];
+        if (std.mem.endsWith(u8, detail, " seeds")) {
+            if (std.mem.lastIndexOf(u8, detail, " · ")) |sep| detail = detail[0..sep];
+        } else if (std.mem.startsWith(u8, detail, "YTS · ")) {
+            detail = "YTS";
         }
     }
 
+    const meta_pure = @import("search_meta_pure.zig");
+    var meta_buf: [64]u8 = undefined;
+    const meta = meta_pure.metaLine(.{
+        .quality = item.quality,
+        .size_bytes = item.size_bytes,
+        .seeds = item.seeds,
+        .leech = item.leech,
+    }, &meta_buf);
+    if ((detail.len > 0 and !std.mem.eql(u8, detail, chip_text)) or meta.len > 0) {
+        var metadata = dvui.textLayout(@src(), .{ .break_lines = true }, .{
+            .id_extra = idx + 9400,
+            .expand = .horizontal,
+            .min_size_content = .{ .w = 0, .h = 0 },
+            .max_size_content = dvui.Options.MaxSize.width(text_w),
+            .background = false,
+            .padding = dvui.Rect.all(0),
+        });
+        const show_detail = detail.len > 0 and !std.mem.eql(u8, detail, chip_text);
+        if (show_detail) metadata.addText(detail, .{ .color_text = theme.colors.text_secondary });
+        if (show_detail and meta.len > 0) metadata.addText(" · ", .{ .color_text = theme.colors.text_secondary });
+        if (meta.len > 0) metadata.addText(meta, .{ .color_text = theme.colors.text_secondary });
+        metadata.deinit();
+    }
+    content.deinit();
+
+    var actions = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0.5 });
+    defer actions.deinit();
     // Risk flag — red "Scam?" for blocked rows, amber "Caution" for warns.
     // Hovering the row still shows the full reason via the play/queue toast.
     if (risk.risk != .ok) {
@@ -2375,7 +2473,7 @@ fn renderCompactRow(idx: usize, item: *const @import("resolver.zig").ResolvedIte
         .gravity_y = 0.5,
         .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
     })) {
-        resolver.playItem(idx);
+        pending.* = .{ .idx = idx };
     }
 
     // Torrent results can also be queued for later.
@@ -2388,16 +2486,11 @@ fn renderCompactRow(idx: usize, item: *const @import("resolver.zig").ResolvedIte
             .gravity_y = 0.5,
             .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
         })) {
-            if (risk.risk == .block) {
-                var tb: [160]u8 = undefined;
-                const msg = std.fmt.bufPrint(&tb, "Blocked scam torrent: {s}", .{risk.reason}) catch "Blocked scam torrent";
-                state.showToastTyped(msg, .err);
-            } else {
-                @import("queue.zig").addToQueue(item.url[0..item.url_len], item.name[0..item.name_len], "torrent");
-                state.showToast("Added to queue");
-            }
+            pending.* = .{ .idx = idx, .queue = true };
         }
     }
+
+    if (dvui.clicked(row.data(), .{})) pending.* = .{ .idx = idx };
 }
 
 pub fn loadTorrentToPlayer(magnet_link: []const u8) void {

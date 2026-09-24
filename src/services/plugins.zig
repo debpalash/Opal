@@ -1197,7 +1197,40 @@ fn renderSourcePlugins() void {
             _ = pr.apply(.refresh, "");
         }
     }
+    const catalog_state = pr.status.load(.acquire);
+    if (catalog_state == .fetching) {
+        dvui.spinner(@src(), .{ .min_size_content = .{ .w = 16, .h = 16 }, .max_size_content = .{ .w = 16, .h = 16 } });
+        _ = dvui.label(@src(), "Refreshing source catalog…", .{}, .{ .color_text = theme.colors.text_secondary });
+    } else if (catalog_state == .err) {
+        _ = dvui.label(@src(), "Catalog refresh failed; bundled sources remain available. See Logs.", .{}, .{ .color_text = theme.colors.danger });
+    }
     _ = dvui.label(@src(), "Click Install to enable a source. Only install sources you trust.", .{}, .{ .color_text = theme.colors.text_tertiary, .expand = .horizontal, .margin = .{ .x = 0, .y = 2, .w = 0, .h = 4 } });
+    const operation = pr.installStatus();
+    if (operation.stage != .idle) {
+        const working = operation.stage == .fetching or operation.stage == .writing;
+        var status_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .padding = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = theme.spacing.sm } });
+        if (working) dvui.spinner(@src(), .{ .min_size_content = .{ .w = 18, .h = 18 }, .max_size_content = .{ .w = 18, .h = 18 } });
+        const stage_text: []const u8 = switch (operation.stage) {
+            .fetching => "Fetching source definition",
+            .writing => "Writing source configuration",
+            .installed => "Installed",
+            .removed => "Removed",
+            .failed => operation.reason,
+            .idle => unreachable,
+        };
+        _ = dvui.label(@src(), "{s}: {s}", .{ operation.idSlice(), stage_text }, .{
+            .color_text = if (operation.stage == .failed) theme.colors.danger else if (working) theme.colors.text_secondary else theme.colors.accent,
+            .expand = .horizontal,
+            .gravity_y = 0.5,
+        });
+        status_row.deinit();
+        _ = dvui.label(@src(), "Operation: bundled JSON write or HTTPS fetch then write to Opal's sources folder (auth hidden).", .{}, .{ .color_text = theme.colors.text_tertiary, .expand = .horizontal });
+        _ = dvui.label(@src(), "No shell command runs for source installs.", .{}, .{ .color_text = theme.colors.text_tertiary });
+        if (dvui.button(@src(), "View logs", .{}, .{ .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.text_primary, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 } })) {
+            state.navigateToTab(.Logs);
+        }
+    }
+
 
     if (source_count == 0) {
         const fetching = pr.status.load(.acquire) == .fetching;
@@ -1270,8 +1303,10 @@ fn renderSourcePlugins() void {
                 var sp = dvui.box(@src(), .{}, .{ .id_extra = i + 81300, .expand = .horizontal });
                 sp.deinit();
             }
-            if (dvui.button(@src(), if (installed) "Uninstall" else "Install", .{}, .{ .id_extra = i + 81400, .color_fill = if (installed) theme.colors.bg_elevated else theme.colors.accent, .color_text = if (installed) theme.colors.text_secondary else dvui.Color.white, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 }, .gravity_y = 0.5 })) {
-                _ = pr.apply(if (installed) .uninstall else .install, p.idSlice());
+            if (!(operation.stage == .fetching or operation.stage == .writing)) {
+                if (dvui.button(@src(), if (installed) "Uninstall" else "Install", .{}, .{ .id_extra = i + 81400, .color_fill = if (installed) theme.colors.bg_elevated else theme.colors.accent, .color_text = if (installed) theme.colors.text_secondary else dvui.Color.white, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 }, .gravity_y = 0.5 })) {
+                    _ = pr.apply(if (installed) .uninstall else .install, p.idSlice());
+                }
             }
             shown_total += 1;
         }
@@ -1558,29 +1593,29 @@ fn renderContentPlugins() void {
         });
         defer top.deinit();
 
+        _ = dvui.label(@src(), "Install an executable plugin: place its extracted folder (including manifest.json and its commands) in Opal's plugins folder, then Rescan. Only use plugins you trust.", .{}, .{
+            .color_text = theme.colors.text_tertiary,
+            .expand = .horizontal,
+        });
+        if (dvui.button(@src(), "Open plugins folder", .{}, .{
+            .color_fill = theme.colors.accent,
+            .color_text = theme.colors.text_on_accent,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
+        })) {
+            var dir_buf: [512]u8 = undefined;
+            @import("../ui/settings.zig").openExternal(getPluginDir(&dir_buf));
+        }
+        if (dvui.button(@src(), "Rescan", .{}, .{
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = theme.colors.text_primary,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
+        })) {
+            scanned = false;
+        }
         if (plugin_count == 0) {
-            _ = dvui.label(@src(), "No content plugins installed", .{}, .{
-                .color_text = theme.colors.text_secondary,
-                .expand = .horizontal,
-            });
-
-            var hint_buf: [256]u8 = undefined;
-            var dir_buf2: [512]u8 = undefined;
-            const pd = getPluginDir(&dir_buf2);
-            const hint = std.fmt.bufPrintZ(&hint_buf, "Install plugins to: {s}", .{pd}) catch "Install plugins to the Opal plugins folder";
-            _ = dvui.label(@src(), "{s}", .{hint}, .{
-                .color_text = theme.colors.text_tertiary,
-                .expand = .horizontal,
-            });
-
-            if (dvui.button(@src(), "Rescan", .{}, .{
-                .color_fill = theme.colors.accent,
-                .color_text = dvui.Color.white,
-                .corner_radius = theme.dims.rad_sm,
-                .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
-            })) {
-                scanned = false;
-            }
+            _ = dvui.label(@src(), "No content plugins installed", .{}, .{ .color_text = theme.colors.text_secondary, .expand = .horizontal });
             return;
         }
 

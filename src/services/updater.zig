@@ -55,6 +55,7 @@ pub fn snapshot() Snapshot {
 }
 
 fn setError(msg: []const u8) void {
+    logs.pushLog("error", "updater", msg, true);
     mutex.lock();
     defer mutex.unlock();
     const n = @min(msg.len, current.last_error_buf.len);
