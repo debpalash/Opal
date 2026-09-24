@@ -5,9 +5,9 @@ name: Release
 #
 # Coverage today:
 #   • macos-arm64    — Opal.app bundle (zip) + bare binary tarball    [primary]
-#   • linux-x86_64   — binary tarball + .deb + .rpm + AppImage + .run [best-effort]
+#   • linux-x86_64   — binary tarball + .deb + .rpm + AppImage + .run
 #   • windows-x86_64 — portable .zip + .msi (MSYS2/MINGW64 build +   [ALPHA]
-#                      vendored MS onnxruntime; see the job for why)  [experimental]
+#                      vendored MS onnxruntime; see the job for why)
 #   • aur            — opal-media-player source + prebuilt -bin      [gated]
 #                      (binary tarball repackage); gated on
 #                      AUR_PUBLISH_ENABLED='true' + AUR_SSH_PRIVATE_KEY secret.
@@ -55,7 +55,13 @@ jobs:
       - name: Install native dependencies
         run: |
           brew update
-          brew install mpv sqlite onnxruntime sdl2 libtorrent-rasterbar create-dmg
+          # OCR is off in the default build; ONNX Runtime is not linked.
+          # Sonoma has no usable current FFmpeg/mpv bottle closure: Homebrew
+          # x265 fails on the runner. Build native codecs and libmpv from
+          # pinned source against the 13.0 deployment target instead.
+          brew install sqlite sdl2 libtorrent-rasterbar libass libplacebo meson ninja pkgconf create-dmg
+          ./scripts/install-macos-ffmpeg.sh
+          ./scripts/install-macos-mpv.sh
       - name: Build .app bundle (ReleaseFast)
         # Bake the default TMDB/OMDb keys into the release binary so end users
         # work out of the box (build.zig reads these env vars). Absent secrets
@@ -85,9 +91,8 @@ jobs:
   linux-x86_64:
     needs: validate-release
     runs-on: ubuntu-24.04
-    # Best-effort: onnxruntime has no apt package on 24.04; we vendor the
-    # upstream release. If this job breaks, the release still ships macOS.
-    continue-on-error: true
+    # ONNX Runtime has no apt package on 24.04; vendor the upstream release.
+    # This job must pass before publish: the AppImage fixes issue #54.
     steps:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
@@ -305,15 +310,12 @@ jobs:
             opal-*-linux-x86_64.run
           if-no-files-found: error
 
-  # ── EXPERIMENTAL ─────────────────────────────────────────────────────────
-  # First release cycle for the Windows port. continue-on-error keeps the
-  # release shipping (publish gates on macos-arm64 only) even when this job
-  # breaks; drop the flag once a few tagged builds have produced working
-  # artifacts.
+  # ── WINDOWS ALPHA ────────────────────────────────────────────────────────
+  # Alpha describes user-facing maturity, not an optional artifact. A failed
+  # Windows build must block publication instead of silently omitting the zip.
   windows-x86_64:
     needs: validate-release
     runs-on: windows-2022
-    continue-on-error: true
     permissions:
       contents: read
       id-token: write # OIDC token for azure/login, used by the signing steps
@@ -340,30 +342,27 @@ jobs:
 
       - uses: msys2/setup-msys2@v2
         with:
-          # MINGW64, not UCRT64 (issue #3). v0.1.0 built here against UCRT64
-          # packages, but zig's x86_64-windows-gnu target emits MSVCRT-flavored
-          # MinGW binaries — the UCRT64 DLLs import CRT symbols (strtod, …)
-          # from a different runtime, and the mismatch surfaced on user
-          # machines as "entry point strtod could not be located in opal.exe".
-          # MINGW64 packages link the same msvcrt the zig output does. The one
-          # UCRT64-only dep, onnxruntime (no mingw-w64-x86_64-onnxruntime
-          # exists — packages.msys2.org 404s for the mingw64 repo), is instead
-          # vendored from Microsoft's official MSVC release below.
+          # MINGW64, not UCRT64 (issue #3): zig's windows-gnu build uses
+          # MSVCRT, while UCRT64 binaries import a different CRT. MSYS2
+          # removed MINGW64 mpv in September 2026 while deprecating that
+          # environment. Build libmpv from pinned source against the current
+          # MINGW64 FFmpeg below; never copy in UCRT64 mpv DLLs. Microsoft's
+          # ONNX Runtime uses a C ABI and is vendored separately.
           msystem: MINGW64
           # Inherit the Windows PATH so zig.exe (installed by setup-zig below)
           # is visible inside this shell.
           path-type: inherit
           update: true
-          # Names verified against https://packages.msys2.org (mingw64 repo,
-          # 2026-07). pkgconf Provides: pkg-config — the old standalone
-          # pkg-config package is gone. `unzip` (msys repo) unpacks the
-          # vendored onnxruntime zip.
+          # pkgconf Provides: pkg-config; Meson installs Ninja/Python. `unzip`
+          # (msys repo) unpacks the vendored onnxruntime zip.
           install: >-
             git
             unzip
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-SDL2
-            mingw-w64-x86_64-mpv
+            mingw-w64-x86_64-ffmpeg
+            mingw-w64-x86_64-libass
+            mingw-w64-x86_64-meson
             mingw-w64-x86_64-sqlite3
             mingw-w64-x86_64-libtorrent-rasterbar
             mingw-w64-x86_64-pkgconf
@@ -372,6 +371,8 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
+      - name: Build MINGW64 libmpv
+        run: ./scripts/install-mingw64-mpv.sh
 
       - name: Vendor ONNX Runtime (Microsoft MSVC build)
         run: |
@@ -740,10 +741,9 @@ jobs:
           if-no-files-found: error
 
   publish:
+    # Every platform artifact (especially the fixed AppImage) and the browser
+    # extension must exist before a tag can become a public GitHub release.
     needs: [macos-arm64, linux-x86_64, windows-x86_64, extension]
-    # macos-arm64 must succeed; the best-effort jobs contribute artifacts only
-    # when they happen to pass (unmatched globs below just warn).
-    if: always() && needs.macos-arm64.result == 'success'
     runs-on: ubuntu-24.04
     steps:
       # fetch-depth: 0 — the notes generator walks from the previous tag to

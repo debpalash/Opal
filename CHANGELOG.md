@@ -27,6 +27,16 @@ match the tag exactly.
   torrent quality and seed counts appear once, trailers are grouped separately,
   and the Play and Queue controls remain visible. Adding a torrent to the queue
   no longer starts playback.
+- **Deleting a playing torrent clears the player.** Stopping the stream
+  cancels pending reads and clears its last frame before removing downloaded
+  files; the empty player offers a local file picker or universal search.
+- **Windows playback controls fit scaled displays.** The native titlebar
+  hitboxes follow DPI scaling, compact navigation stays accessible, and an
+  optional VLC handoff is available under Playback settings.
+- **Source installation explains progress and failures.** Its current stage,
+  final status, redacted logs, and recovery steps are visible in the catalog.
+- **Cinemeta poster artwork loads from full image URLs.** Movies & TV no
+  longer truncates long cover URLs, including those in Thor searches.
 
 ## v0.8.5 — 2026-09-14
 

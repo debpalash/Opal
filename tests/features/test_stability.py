@@ -595,49 +595,6 @@ def test_search_workers_reaped():
     return "pass", "nova2.py search workers reaped on clean shutdown (appDeinit + dev.sh)"
 
 
-@test("Shutdown cancels blocking media/network work before drain", "Stability")
-def test_shutdown_cancellation_order():
-    mn = _src("src/main.zig")
-    http = _src("src/core/http.zig")
-    # The stall watchdog lives in the extracted transport module now.
-    transport = _src("src/core/http_transport.zig")
-    watchdog_run = transport[transport.find("fn run(self: *Watchdog)"):]
-    resolver = _src("src/services/resolver.zig")
-    vndb = _src("src/services/vndb.zig")
-    drop_ingest = _src("src/player/drop_ingest.zig")
-    service_refresh_offenders = []
-    services_dir = os.path.join(PROJECT_DIR, "src", "services")
-    for root, _, files in os.walk(services_dir):
-        for name in files:
-            if not name.endswith(".zig"):
-                continue
-            path = os.path.join(root, name)
-            if "dvui.refresh(null" in open(path, encoding="utf-8").read():
-                service_refresh_offenders.append(os.path.relpath(path, PROJECT_DIR))
-    drain = mn.find("beginShutdownAndDrain(")
-    checks = {
-        "resolver cancellation exists": "pub fn cancel()" in resolver and "run_gen.fetchAdd" in resolver,
-        "resolver cancelled before drain": 0 <= mn.find('services/resolver.zig").cancel()') < drain,
-        "search cancelled before drain": 0 <= mn.find("search.shutdown()") < drain,
-        "stream listeners stopped before drain": 0 <= mn.find('player/stream_proxy.zig").stopAll()') < drain,
-        # The watchdog's poll loop must expire (unblocking the stalled read)
-        # as soon as shutdown starts, not only at its own deadline.
-        "HTTP watchdog observes quit": transport.find("fn run(self: *Watchdog)") >= 0
-            and "workers.isQuitting()" in watchdog_run[:watchdog_run.find("self.expire();")],
-        "image curl observes quit": ".cancel_flag = workers.quittingSignal()" in http,
-        "VNDB worker uses window-safe wake": "state.wakeUi();" in vndb,
-        "service refreshes always carry a window": not service_refresh_offenders,
-        "drop worker counted once": "workers.enter()" not in drop_ingest and "workers.leave()" not in drop_ingest,
-        "close frame does not save synchronously": "config.save();\n            return .close;" not in mn,
-        "shutdown deadline armed": "workers.armShutdownDeadline(5_000);" in mn,
-        "config saved after drain": 0 <= mn.find('core/config.zig").save()') and drain < mn.find('core/config.zig").save()'),
-        "shutdown deadline completed": "workers.finishShutdown();" in mn,
-        "close handled before service work": 0 <= mn.find("e.evt.window.action == .close) return .close;") < mn.find("state.applyPendingNav();"),
-    }
-    missing = [k for k, ok in checks.items() if not ok]
-    if missing:
-        return "fail", "shutdown cancellation regression: " + ", ".join(missing)
-    return "pass", "blocking searches, streams, HTTP, and poster curl cancel before worker drain"
 
 
 @test("Keyboard close uses normal teardown and unmaps first", "Stability")

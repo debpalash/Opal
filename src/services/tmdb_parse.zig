@@ -177,7 +177,12 @@ fn parseAndAddCinemetaItem(json: []const u8, out: *std.ArrayListUnmanaged(state.
             copyInto(&item.media_type, &item.media_type_len, "movie");
     }
     parseCinemetaGenres(json, &item);
-    if (extractJsonString(json, "\"poster\":")) |poster| copyInto(&item.poster_path, &item.poster_path_len, poster);
+    if (extractJsonString(json, "\"poster\":")) |poster| {
+        // A clipped absolute URL is not a smaller poster: it is an invalid
+        // address. Cinemeta's IMDb covers commonly exceed the old 64 bytes.
+        if (poster.len <= item.poster_path.len)
+            copyInto(&item.poster_path, &item.poster_path_len, poster);
+    }
     if (item.title_len > 0 and item.id != 0) out.append(alloc, item) catch {};
 }
 
@@ -247,9 +252,8 @@ fn parseAndAddItem(json_obj: []const u8, out: *std.ArrayListUnmanaged(state.Tmdb
     parseGenreIds(json_obj, &item);
 
     if (extractJsonString(json_obj, "\"poster_path\":")) |p| {
-        const plen = @min(p.len, 63);
-        @memcpy(item.poster_path[0..plen], p[0..plen]);
-        item.poster_path_len = plen;
+        if (p.len <= item.poster_path.len)
+            copyInto(&item.poster_path, &item.poster_path_len, p);
     }
 
     if (item.title_len > 0) {
@@ -301,4 +305,19 @@ test "Browse regression formatted catalog JSON populates movie and TV cards" {
     parseCinemetaResponse("{\"metas\" : [ {\"id\" : \"tt1234567\", \"name\" : \"Example Movie\", \"type\" : \"movie\"} ]}", &rows);
     try std.testing.expectEqual(@as(usize, 1), rows.items.len);
     try std.testing.expectEqualStrings("Example Movie", rows.items[0].title[0..rows.items[0].title_len]);
+}
+
+test "Cinemeta catalog keeps full absolute movie and TV poster URLs" {
+    const cover = "https://m.media-amazon.com/images/M/MV5BNjRhNGZjZjEtYTQzYS00OWUxLThjNGEtMTIwMTE2ZDFlZTZkXkEyXkFqcGc@._V1_SX250.jpg";
+    var rows: std.ArrayListUnmanaged(state.TmdbItem) = .empty;
+    defer rows.deinit(alloc);
+    parseCinemetaResponse(
+        "{\"metas\":[{\"id\":\"tt0800369\",\"type\":\"movie\",\"name\":\"Thor\",\"poster\":\"" ++ cover ++ "\"}," ++
+            "{\"id\":\"tt3501632\",\"type\":\"series\",\"name\":\"Thor Series\",\"poster\":\"" ++ cover ++ "\"}]}",
+        &rows,
+    );
+    try std.testing.expectEqual(@as(usize, 2), rows.items.len);
+    for (rows.items) |item| {
+        try std.testing.expectEqualStrings(cover, item.poster_path[0..item.poster_path_len]);
+    }
 }

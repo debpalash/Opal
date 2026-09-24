@@ -248,7 +248,7 @@ fn sectionMatchesSearch(tab: state.SettingsTab) bool {
     if (search_len == 0) return true;
     const sections: []const []const u8 = switch (tab) {
         .General => &.{ "Interface", "Behavior", "TMDB", "Theme", "Scale", "Grid", "NSFW", "Seek Sync", "API Key", "Plugins", "Sources", "Content plugins" },
-        .Playback => &.{ "Video Processing", "Audio Equalizer", "Playback Extras", "Prefetch", "Passthrough", "Exclusive", "Audio Output", "Device", "Streaming", "Shortcuts", "Filters", "Capture", "Hardware", "Decode", "Deband", "Interpolation", "Brightness", "Contrast", "Saturation", "Gamma", "Screenshot", "Auto-advance", "Resume" },
+        .Playback => &.{ "Video Processing", "Audio Equalizer", "Playback Extras", "External VLC", "Prefetch", "Passthrough", "Exclusive", "Audio Output", "Device", "Streaming", "Shortcuts", "Filters", "Capture", "Hardware", "Decode", "Deband", "Interpolation", "Brightness", "Contrast", "Saturation", "Gamma", "Screenshot", "Auto-advance", "Resume" },
         .About => &.{ "About", "Version", "Update", "Credits", "License", "Donate", "Sponsors", "Links", "TMDB" },
         .Subtitles => &.{ "OpenSubtitles", "Subdl", "Language", "Search", "API Key", "Font", "Delay", "Whisper" },
         .Network => &.{ "Download", "Trackers", "Proxy", "Speed", "Limit", "Port", "Browser", "Engine", "Camoufox", "CloakBrowser", "Audiobookshelf", "Audiobook", "OPDS", "Reading", "Komga", "Kavita", "Calibre" },
@@ -1717,6 +1717,37 @@ fn renderPlaybackTab() void {
             state.markConfigDirty();
             state.showToast("Applies to the next file you open");
         }
+    }
+    // External VLC is an opt-in handoff; embedded playback stays untouched.
+    sectionHeader("External VLC", "Open the current file or direct stream in a separate VLC window", 251, @src());
+    {
+        const external = @import("../services/external_player.zig");
+        const has_player = state.app.active_player_idx < state.app.players.items.len;
+        const media = if (has_player) state.app.players.items[state.app.active_player_idx] else null;
+        const url = if (media) |p| p.current_url[0..p.current_url_len] else "";
+        if (external.playable(url)) {
+            if (dvui.button(@src(), "Open current media in VLC", .{}, .{
+                .color_fill = theme.colors.bg_elevated,
+                .color_text = theme.colors.accent,
+                .corner_radius = theme.dims.rad_sm,
+                .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+            })) {
+                if (!external.launch(url)) state.showToastTyped("Could not queue VLC launch · see Logs", .err);
+            }
+        } else {
+            _ = dvui.label(@src(), "Play a file or direct stream to open it in VLC; internal Opal sources cannot be handed off.", .{}, .{ .color_text = theme.colors.text_secondary });
+        }
+        const outcome = external.status();
+        if (outcome != .idle) {
+            _ = dvui.label(@src(), "VLC: {s}", .{switch (outcome) {
+                .launching => "Starting…",
+                .opened => "Opened externally",
+                .failed => "Could not open · see Logs",
+                .idle => unreachable,
+            }}, .{ .color_text = if (outcome == .failed) theme.colors.danger else theme.colors.text_secondary });
+            if (outcome == .launching) dvui.refresh(null, @src(), null);
+        }
+        _ = dvui.label(@src(), "Requires VLC installed (standard Windows, macOS or Linux location, or on PATH). Direct URLs and files only; streams requiring Opal's private headers cannot be transferred. Local torrent streams require Opal to remain open.", .{}, .{ .color_text = theme.colors.text_tertiary });
     }
 
     // ── Audio Output ──
@@ -4160,7 +4191,10 @@ fn renderScriptsTab() void {
             .color_text = theme.colors.text_tertiary,
         });
     }
-    _ = dvui.label(@src(), "Install command: curl -fLsS --max-time 15 (curated script URL to Opal scripts folder).", .{}, .{ .color_text = theme.colors.text_tertiary });
+    _ = dvui.label(@src(), "Install procedure: curl -fLsS --max-time 15 -o <Opal scripts>/<filename> <curated HTTPS URL>; failed downloads are removed. No shell or private credentials.", .{}, .{ .color_text = theme.colors.text_tertiary });
+    if (dvui.button(@src(), "View script installation logs", .{}, .{ .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.accent })) {
+        state.navigateToTab(.Logs);
+    }
 
     // Info footer
     _ = dvui.label(@src(), "Scripts load on next player creation. Restart app to apply changes.", .{}, .{

@@ -836,6 +836,16 @@ pub fn removeTorrentById(id: c_int) bool {
     return true;
 }
 
+/// Delete a live torrent without creating a new download-history entry.
+/// Unlike Remove from Opal, the player's Delete action also deletes its file.
+pub fn deleteTorrentById(id: c_int) bool {
+    if (!liveTorrent(state.torrentSession(), id)) return false;
+    dropLiveTorrent(id);
+    rows_dirty.store(true, .release);
+    expanded_key_len = 0;
+    return true;
+}
+
 /// Typed adapter used by the web/API boundary. `file_idx` and `priority` are
 /// read only by the priority case; callers must hold players_mutex for cancel.
 pub fn applyTorrentAction(id: c_int, action: TorrentAction, file_idx: c_int, priority: c_int) bool {
@@ -861,23 +871,14 @@ fn downloadHistoryHasName(name: []const u8) bool {
 }
 
 fn dropLiveTorrent(id: c_int) void {
+    // Stop the demuxer and proxy before removing the torrent's files/session.
+    // Merely invalidating current_torrent_id leaves is_torrent, the last
+    // texture, and current_url in the player; its dead-torrent overlay then
+    // remains visible even after the transfer was deleted.
+    for (state.app.players.items) |p| p.unloadRemovedTorrent(id);
+    @import("../player/stream_gate.zig").reset(id);
     @import("torrent_intents.zig").forgetTorrent(id);
     c.mpv.torrent_remove(state.torrentSession(), id);
-    // STABLE-SLOT model: torrent ids are never renumbered on remove, so other
-    // handles stay valid — only clear the one that was deleted.
-    for (state.app.players.items) |p| {
-        if (p.current_torrent_id == id) {
-            p.current_torrent_id = -1;
-            p.torrent_is_ready = false;
-            p.has_metadata = false;
-            _ = c.mpv.mpv_command_string(p.mpv_ctx, "stop");
-            const stream_proxy = @import("../player/stream_proxy.zig");
-            if (p.proxy_handle.isValid()) {
-                stream_proxy.stopProxy(p.proxy_handle);
-                p.proxy_handle = stream_proxy.INVALID_HANDLE;
-            }
-        }
-    }
 }
 
 /// Expanded panel. Returns true if it performed a mutation that invalidates the

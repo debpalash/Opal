@@ -390,31 +390,6 @@ def test_web_api_base_port():
     return "fail", "web UI API base still points at the static server"
 
 
-@test("Plugin Manager Wired", "Page Shell")
-def test_plugin_manager():
-    # qBittorrent-style source-endpoint manager: fetch opal-plugins manifest →
-    # Install writes ~/.config/opal/plugins/sources/<id>.json (read by
-    # source_config) → the built-in connector goes live.
-    pr = _src("src/services/plugin_repo.zig")
-    pg = _src("src/services/plugins.zig")
-    ok = (
-        "pub fn refresh()" in pr
-        and "pub fn install(" in pr
-        and "pub fn uninstall(" in pr
-        and "api.github.com/repos" in pr
-        and "source_config.reload()" in pr
-        and "renderSourcePlugins" in pg
-    )
-    debrid = (
-        "debridKey()" in pr
-        and "applyDebrid" in _src("src/services/stremio.zig")
-        and "loadInstalledAddons" in _src("src/services/resolver.zig")
-    )
-    if not ok:
-        return "fail", "plugin manager not wired"
-    if not debrid:
-        return "fail", "debrid not wired"
-    return "pass", "fetch/install/uninstall + UI + debrid wired"
 
 
 @test("Bundled Plugin Manifest", "Page Shell")

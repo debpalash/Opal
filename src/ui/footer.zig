@@ -2115,25 +2115,21 @@ pub fn renderLiquidGlassOverlay() void {
                 var del_rate: c_int = 0;
                 var del_peers: c_int = 0;
                 const del_status = c.mpv.torrent_poll(state.torrentSession(), tid, active_p.selected_file_idx, &del_path, del_path.len, &del_pct, &del_rate, &del_peers);
-                if (del_status >= 1) {
-                    const plen = std.mem.indexOfScalar(u8, &del_path, 0) orelse del_path.len;
-                    @import("../core/io_global.zig").deleteFileAbsolute(del_path[0..plen]) catch {
-                        @import("../core/logs.zig").pushLog("warn", "torrent", "Delete file failed", true);
-                    };
-                }
-                @import("../services/torrent_intents.zig").forgetTorrent(tid);
-                c.mpv.torrent_remove(state.torrentSession(), tid);
-                // STABLE-SLOT model: torrent ids are never renumbered on remove,
-                // so other handles stay valid — only clear players on this one.
-                for (state.app.players.items) |p| {
-                    if (p.current_torrent_id == tid) {
-                        p.current_torrent_id = -1;
-                        p.torrent_is_ready = false;
-                        p.has_metadata = false;
-                        _ = c.mpv.mpv_command_string(p.mpv_ctx, "stop");
+                if (transfers.deleteTorrentById(tid)) {
+                    // Stop the active player/proxy before unlinking the stream
+                    // file. Windows cannot remove a file while mpv holds it.
+                    if (del_status >= 1) {
+                        const plen = std.mem.indexOfScalar(u8, &del_path, 0) orelse del_path.len;
+                        if (plen > 0) {
+                            @import("../core/io_global.zig").deleteFileAbsolute(del_path[0..plen]) catch {
+                                @import("../core/logs.zig").pushLog("warn", "torrent", "Delete file failed", true);
+                                state.showToastTyped("Stream stopped, but file could not be deleted", .err);
+                                return;
+                            };
+                        }
                     }
+                    state.showToast("Stopped and deleted");
                 }
-                state.showToast("Stopped and deleted");
             }
         }
     } else if (active_p.np_title_len > 0) {

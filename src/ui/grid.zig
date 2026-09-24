@@ -508,6 +508,10 @@ pub fn renderGrid() !void {
         dvui.refresh(null, @src(), null);
         return;
     }
+    if (state.app.players.items.len == 0) {
+        renderEmptyPlayer(0);
+        return;
+    }
     const grid_columns = computeGridColumns();
     muteBackgroundPlayers();
 
@@ -519,6 +523,17 @@ pub fn renderGrid() !void {
 
     for (state.app.players.items, 0..) |p, i| {
         if (state.app.fullscreen_player_idx != null and state.app.fullscreen_player_idx.? != i) continue;
+        // Deletion clears the logical media immediately; dispose the old GPU
+        // frame on the UI thread before deciding which player view to render.
+        if (p.provider == .mpv and p.current_torrent_id < 0 and p.current_url_len == 0 and !p.is_loading) {
+            if (p.texture) |tex| {
+                dvui.textureDestroyLater(tex);
+                p.texture = null;
+                p.frame_mutex.lock();
+                p.frame_ready = false;
+                p.frame_mutex.unlock();
+            }
+        }
 
         if (draw_col % grid_columns == 0) {
             if (current_row != null) current_row.?.deinit();
@@ -561,11 +576,11 @@ pub fn renderGrid() !void {
                 // mpv rasterises on the player's own render thread (see
                 // player.renderWorker) into a CPU back buffer; this UI-thread
                 // block only (a) tells the worker what size to render at and
-                // (b) uploads a finished frame into a persistent streaming SDL
-                // texture. Gated on a non-null render context: headless (or a
-                // context that failed to create) has no worker and p.texture
-                // stays null, which the display block below already handles.
-                if (p.mpv_gl != null) {
+                // (b) uploads a finished frame into a persistent SDL texture.
+                // A stopped mpv worker may publish a late frame. Never upload
+                // it after deletion has cleared the logical media identity.
+                // Headless players have no render context or GPU texture.
+                if (p.mpv_gl != null and (p.current_url_len > 0 or p.current_torrent_id >= 0 or p.is_loading)) {
                     // Render at the video's NATIVE size (capped to the 1080p
                     // buffer, aspect-preserving) instead of a fixed 1920×1080.
                     // The fixed target made mpv software-scale + RGBA-convert
@@ -811,13 +826,7 @@ pub fn renderGrid() !void {
                                 .border = dvui.Rect.all(0),
                                 .corner_radius = theme.dims.rad_sm,
                             })) {
-                                p.current_torrent_id = -1;
-                                p.is_torrent = false;
-                                p.playback_origin = .direct;
-                                p.torrent_is_ready = false;
-                                p.has_metadata = false;
-                                p.metadata_start_time = 0;
-                                if (state.app.active_player_idx == i) state.app.active_player_idx = 0;
+                                _ = transfers.deleteTorrentById(p.current_torrent_id);
                             }
                         } else {
                             const dr_mb = @as(f32, @floatFromInt(dl_rate)) / (1024.0 * 1024.0);
@@ -1421,35 +1430,7 @@ pub fn renderGrid() !void {
 
                     const header = @import("header.zig");
                     if (p.current_torrent_id < 0 and i == state.app.active_player_idx and header.shouldUrlInputBeInGrid()) {
-                        // Player empty cell = hero input + resume list ONLY.
-                        // The chat interface moved to the Home page
-                        // (home.zig chat mode) — the
-                        // player surface stays about playback.
-                        var outer = dvui.box(@src(), .{ .dir = .vertical }, .{
-                            .id_extra = i,
-                            .expand = .both,
-                            .color_fill = theme.transparent,
-                        });
-
-                        var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-                            .id_extra = i,
-                            .gravity_x = 0.5,
-                            .gravity_y = 0.34,
-                            .background = false,
-                            .border = dvui.Rect.all(0),
-                            .padding = .{ .x = 24, .y = 20, .w = 24, .h = 20 },
-                            .min_size_content = .{ .w = 620, .h = 0 },
-                            .max_size_content = .{ .w = 760, .h = std.math.floatMax(f32) },
-                        });
-
-                        // Input bar first — primary action, immediately reachable
-                        header.renderUrlInput(true);
-
-                        // Continue Watching — returning users want this front and center
-                        renderContinueWatching();
-
-                        card.deinit();
-                        outer.deinit();
+                        renderEmptyPlayer(i);
                     } else {
                         // Empty / pre-buffer state for an idle player cell.
                         // Loading states get the hourglass empty-state; the truly
@@ -1522,6 +1503,45 @@ pub fn renderGrid() !void {
     }
 
     if (current_row != null) current_row.?.deinit();
+}
+
+fn renderEmptyPlayer(i: usize) void {
+    var outer = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .id_extra = i,
+        .expand = .both,
+        .color_fill = theme.transparent,
+    });
+
+    var card = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .id_extra = i,
+        .gravity_x = 0.5,
+        .gravity_y = 0.34,
+        .expand = .horizontal,
+        .background = false,
+        .border = dvui.Rect.all(0),
+        .padding = .{ .x = 24, .y = 20, .w = 24, .h = 20 },
+        .max_size_content = .{ .w = 760, .h = std.math.floatMax(f32) },
+    });
+
+    _ = dvui.label(@src(), "Drop a file here to play", .{}, .{
+        .color_text = theme.colors.text_primary,
+        .gravity_x = 0.5,
+        .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm },
+    });
+    var actions = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_x = 0.5 });
+    if (components.actionButton(@src(), "Open file", .primary, i + 5512)) {
+        @import("ui.zig").triggerFileOpen();
+    }
+    if (components.actionButton(@src(), "Browse search", .secondary, i + 5513)) {
+        state.app.router.navigate(.search);
+    }
+    actions.deinit();
+
+    @import("header.zig").renderUrlInput(true);
+    renderContinueWatching();
+
+    card.deinit();
+    outer.deinit();
 }
 
 /// "Continue Watching" strip rendered on the empty home screen. Surfaces the

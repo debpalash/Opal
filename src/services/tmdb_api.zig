@@ -445,7 +445,7 @@ const PosterJob = struct {
     done: std.atomic.Value(bool) = .init(false),
     fetching: bool = false,
     id: i32 = 0,
-    path: [64]u8 = undefined,
+    path: [256]u8 = undefined,
     path_len: usize = 0,
     pixels: ?[]u8 = null,
     w: u32 = 0,
@@ -487,8 +487,8 @@ pub fn fetchPoster(item: *state.TmdbItem) void {
     // pixel math (no i32 w*h*4 overflow), and the torn-publish guard — all of
     // which this provider's hand-rolled worker was missing.
     const path = item.poster_path[0..item.poster_path_len];
-    var url_buf: [256]u8 = undefined;
-    var compat_buf: [256]u8 = undefined;
+    var url_buf: [512]u8 = undefined;
+    var compat_buf: [512]u8 = undefined;
     const url = if (std.mem.startsWith(u8, path, "https://") or std.mem.startsWith(u8, path, "http://"))
         (@import("cinemeta_pure.zig").compatiblePosterUrl(path, &compat_buf) orelse return)
     else

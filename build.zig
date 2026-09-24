@@ -1296,6 +1296,17 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_scale_pure).step);
 
+    // Windows title-bar control hitboxes must follow the scaled player
+    // overlay without pushing buttons outside a laptop-sized viewport.
+    const test_titlebar_geometry = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/ui/titlebar_geometry.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_titlebar_geometry).step);
+
     // Runtime display probe: Linux EDID/sysfs fallback plus the shared Auto
     // scale seam used by startup and Settings.
     const test_display_info = b.addTest(.{

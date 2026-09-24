@@ -222,7 +222,9 @@ pub const TmdbItem = struct {
     media_type_len: usize = 0,
     genre_text: [64]u8 = std.mem.zeroes([64]u8),
     genre_text_len: usize = 0,
-    poster_path: [64]u8 = std.mem.zeroes([64]u8),
+    // Cinemeta supplies absolute IMDb/Amazon poster URLs (>64 bytes), whereas
+    // TMDB supplies short relative paths. Keep either address intact.
+    poster_path: [256]u8 = std.mem.zeroes([256]u8),
     poster_path_len: usize = 0,
     poster_fetching: bool = false,
     // Failure latch: a fetch that completed (fetching true→false) without
@@ -800,7 +802,7 @@ pub const AppState = struct {
         tv_imdb_id_len: usize = 0,
         tv_name: [128]u8 = std.mem.zeroes([128]u8),
         tv_name_len: usize = 0,
-        tv_poster_path: [64]u8 = std.mem.zeroes([64]u8),
+        tv_poster_path: [256]u8 = std.mem.zeroes([256]u8),
         tv_poster_path_len: usize = 0,
         tv_seasons: []TvSeason = &.{},
         tv_season_count: usize = 0,

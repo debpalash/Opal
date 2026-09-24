@@ -69,6 +69,7 @@ pub const InstallSnapshot = struct {
     stage: InstallStage = .idle,
     id: [32]u8 = std.mem.zeroes([32]u8),
     id_len: usize = 0,
+    fetch_remote: bool = false,
     reason: []const u8 = "",
     pub fn idSlice(self: *const InstallSnapshot) []const u8 {
         return self.id[0..self.id_len];
@@ -80,7 +81,7 @@ var install_file: [128]u8 = undefined;
 var install_file_len: usize = 0;
 
 fn beginInstallLocked(id: []const u8, stage: InstallStage) void {
-    install_snapshot = .{ .stage = stage };
+    install_snapshot = .{ .stage = stage, .fetch_remote = stage == .fetching };
     @memcpy(install_snapshot.id[0..id.len], id);
     install_snapshot.id_len = id.len;
 }
@@ -110,6 +111,7 @@ fn installWorker() void {
     @memcpy(id_buf[0..id_len], install_snapshot.id[0..id_len]);
     const id = id_buf[0..id_len];
     var buf: [16384]u8 = undefined;
+    logInstall("info", id, "HTTPS GET GitHub contents API with optional private bearer header (header and response hidden)");
     const n = fetchRepoFile(install_file[0..install_file_len], &buf);
     if (n == 0 or buf[0] != '{' or std.mem.indexOf(u8, buf[0..n], "\"Not Found\"") != null) {
         logInstall("error", id, "fetch source definition failed (credentials hidden)");
@@ -117,6 +119,7 @@ fn installWorker() void {
         state.showToastTyped("Install failed (fetch)", .err);
         return;
     }
+    logInstall("info", id, "writing fetched JSON into Opal's sources folder (content hidden)");
     setInstallStage(.writing, "");
     if (!writeSource(id, buf[0..n])) {
         logInstall("error", id, "write source configuration failed");
@@ -491,6 +494,7 @@ pub fn apply(action: Action, id: []const u8) ApplyResult {
     if (action == .install) {
         if (installed) return .unchanged;
         beginInstallLocked(id, if (plugins[idx].endpoints_len == 0 and plugins[idx].file_len > 0) .fetching else .writing);
+        logInstall("info", id, if (install_snapshot.fetch_remote) "install queued: fetch definition via HTTPS then write JSON (no shell, token hidden)" else "install queued: write bundled JSON into Opal's sources folder (no shell)");
         return install(idx);
     }
     if (!installed) return .unchanged;

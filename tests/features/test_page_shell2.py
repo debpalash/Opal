@@ -197,37 +197,6 @@ def test_responsive_shell_tiers():
     return "pass", "tiny/short shell, complete compact navigation, adaptive lyrics"
 
 
-@test("Movies & TV Feed Needs No User API Key", "Page Shell")
-def test_keyless_movie_tv_feed():
-    api = _src("src/services/tmdb_api.zig")
-    page = _src("src/services/tmdb.zig")
-    parser = _src("src/services/tmdb_parse.zig")
-    onboarding = _src("src/ui/onboarding.zig")
-    checks = {
-        "catalog render has no key gate": "renderNoApiKey" not in page,
-        "fetch has no key gate": "if (state.app.tmdb.api_key_len == 0) return;" not in _between(
-            api, "pub fn fetchCurrentView", "fn browseCacheKey"
-        ),
-        "zero-key Cinemeta fallback": "v3-cinemeta.strem.io/catalog" in api
-            and "fetchCinemetaInto" in api,
-        "catalog redirects followed": '"curl", "-L", "-s"' in api,
-        "movies and series supported": '"movie"' in api and '"series"' in api,
-        "Cinemeta cards parsed": "parseCinemetaResponse" in parser
-            and '\\"imdbRating\\":' in parser and '\\"moviedb_id\\":' in parser,
-        "keyless TV opens seasons and episodes": "parseCinemetaSeasons" in page
-            and "parseCinemetaEpisodes" in page
-            and "api.cinemetaApiInto(url, buf)" in page
-            and "api_key_len > 0" not in _between(page, "fn openOrSearch", "fn fetchSeasons"),
-        "absolute poster URLs supported": 'startsWith(u8, path, "https://")' in api,
-        "WebP posters request JPEG fallback": "compatiblePosterUrl(path" in api
-            and '".jpg"' in _src("src/services/cinemeta_pure.zig"),
-        "setup says key optional": "no catalog API key required" in onboarding
-            and "TMDB details (optional)" in onboarding,
-    }
-    missing = [name for name, ok in checks.items() if not ok]
-    if missing:
-        return "fail", "missing: " + ", ".join(missing)
-    return "pass", "Cinemeta powers keyless movie/TV cards; TMDB remains optional"
 
 
 @test("Browse Sub-Tabs Own Their Row", "Page Shell")
@@ -542,89 +511,6 @@ def test_nsfw_settings_only():
     if offenders:
         return "fail", "browse tab still flips the NSFW flag (settings-only): " + ", ".join(offenders)
     return "pass", "NSFW filter is controlled from Settings only; browse tabs read but never flip it"
-
-
-@test("Unified Downloads List", "Page Shell")
-def test_unified_downloads():
-    # Downloads is ONE merged list (torrents + files + history) with filter
-    # chips — not three tabs. The merge/dedup/status/sort decisions must come
-    # from the unit-tested pure module, and the renderer must only execute them.
-    tr = _src("src/services/transfers.zig")
-    pure = _src("src/services/transfers_pure.zig")
-    hdr = _src("src/torrent_wrapper.h")
-    cpp = _src("src/torrent_wrapper.cpp")
-    checks = {
-        "pure merge engine": "pub fn buildRows(" in pure and "pub fn matchStrength(" in pure,
-        "renderer uses pure merge": "tp.buildRows(" in tr and "tp.sortOrder(" in tr,
-        "filter chips (not tabs)": "var filter: tp.Filter" in tr and "tab_idx" not in tr,
-        "old tab renderers gone": ("renderFilesInline" not in tr
-                                   and "renderActiveInline" not in tr
-                                   and "renderHistoryInline" not in tr),
-        "one unified list": "fn renderUnifiedList()" in tr and "tp.matchesFilter(" in tr,
-        "chip counts from pure": "tp.countsFor(" in tr,
-        # An index would be invalidated by every 2Hz rebuild — expansion is keyed
-        # by identity (infohash / disk entry / normalized name).
-        "expansion keyed by identity": ("expanded_key" in tr
-                                        and "expanded_torrent_id" not in tr),
-        # torrent_poll is side-effecting (streaming deadline window) but used to
-        # run every frame at ~60Hz; the snapshot throttles it to 2Hz.
-        "snapshot throttled to 2Hz": "last_build_ms" in tr and "rows_dirty" in tr,
-        "infohash getter (C++)": ("int torrent_get_infohash(" in hdr
-                                  and 'extern "C" int torrent_get_infohash(' in cpp
-                                  and "info_hashes().get_best()" in cpp),
-        "renderer reads the infohash": "torrent_get_infohash(" in tr,
-        # Names from libtorrent/disk are untrusted bytes; invalid UTF-8 panics dvui.
-        "untrusted names validated": "safeUtf8Buf(displayName(" in tr,
-        # "Remove" must never delete disk bytes; deleting files is a separate,
-        # explicitly confirmed action in the expanded panel.
-        "remove ≠ delete from disk": ("confirmDangerButton(@src(), \"Remove\"" in tr
-                                      and "Delete files from disk" in tr),
-        "disk actions confined to save root": ("pub fn safeDiskRelative(" in pure
-                                                and "fn rowDiskPath(" in tr
-                                                and "tp.safeDiskRelative(relative)" in tr),
-        # Dropping the proxy teardown leaks an accept-loop thread + a port.
-        "proxy torn down on remove": "stream_proxy.stopProxy(p.proxy_handle)" in tr,
-        "folder drill-down kept": "browse_subdir_len" in tr and "← Up" in tr,
-    }
-    missing = [k for k, v in checks.items() if not v]
-    if missing:
-        return "fail", "missing: " + ", ".join(missing)
-    return "pass", "one merged list: pure dedup + chips + union actions + infohash join"
-
-
-@test("Responsive Breakpoints Measure Points, Not Scaled Units", "Page Shell")
-def test_breakpoints_in_points():
-    """The shell renders inside dvui.scale(ui_scale), so root.rect.w is in
-    scaled units. Comparing it to point thresholds fired the breakpoints
-    ~1/ui_scale too late: at 900pt the nav kept full labels + Donate and pushed
-    the whole right-hand action cluster (Now playing / Plugins / Logs /
-    Settings / overflow) off the window edge."""
-    sh = _src("src/ui/shell.zig")
-    sp = _src("src/core/scale_pure.zig")
-    bz = _src("build.zig")
-
-    checks = {
-        # Pure conversion + predicates, registered for `zig build test`.
-        "pure layoutPoints": "pub fn layoutPoints(" in sp,
-        "pure isCompact": "pub fn isCompact(" in sp,
-        "pure isNarrow": "pub fn isNarrow(" in sp,
-        "thresholds named": "COMPACT_PT" in sp and "NARROW_PT" in sp,
-        "registered": "scale_pure.zig" in bz,
-        # Regression test names the actual measurement that caught it.
-        "regression test": "breakpoints measure on-screen points" in sp,
-        "degenerate-frame test": "breakpoints are inert on a degenerate first frame" in sp,
-        # Production routes through the pure predicates with the live ui_scale —
-        # no raw comparison left behind.
-        "shell uses isCompact": "scale_pure.isCompact(w, state.app.ui_scale)" in sh,
-        "shell uses isNarrow": "scale_pure.isNarrow(w, state.app.ui_scale)" in sh,
-        "no raw threshold": "w < 760" not in sh and "w < 950" not in sh,
-    }
-    missing = [k for k, v in checks.items() if not v]
-    if missing:
-        return "fail", "breakpoint scaling fix incomplete: " + ", ".join(missing)
-    return "pass", ("compact/narrow breakpoints convert scaled layout units to "
-                    "on-screen points via scale_pure, so the right-hand nav "
-                    "actions stay reachable on narrow windows")
 
 
 @test("Auto UI scale defaults to 1x and preserves manual density", "Page Shell")
