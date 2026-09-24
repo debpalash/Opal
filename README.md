@@ -155,6 +155,13 @@ zig build run        # first build is slow; incrementals are fast
 **Linux/Wayland:** use `make run` (forces system SDL2 — the bundled one is
 X11-only). macOS builds read `HOMEBREW_PREFIX` (default `/opt/homebrew`).
 
+On macOS 14, current Homebrew FFmpeg/mpv dependencies have no working bottle
+closure. Instead of `brew install mpv ffmpeg`, install
+`sqlite sdl2 libtorrent-rasterbar meson ninja pkgconf`, then run
+`./scripts/install-macos-ffmpeg.sh` and `./scripts/install-macos-mpv.sh`
+before `zig build run`. These build shared libraries from checksum-pinned
+source with macOS 13 as the minimum deployment target.
+
 **Minimum versions (Linux):** libmpv **0.34** or newer (mpv 0.38+ recommended;
 Ubuntu 22.04's 0.34 works — Opal picks the `loadfile` argument shape from the
 library version at runtime), SDL **2.0.22** or newer when building against the
