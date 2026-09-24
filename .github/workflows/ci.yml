@@ -64,7 +64,7 @@ jobs:
       - name: Install native dependencies
         run: |
           brew update
-          brew install sqlite sdl2 libtorrent-rasterbar meson ninja pkgconf
+          brew install sqlite sdl2 libtorrent-rasterbar libass libplacebo meson ninja pkgconf
           ./scripts/install-macos-ffmpeg.sh
           ./scripts/install-macos-mpv.sh
       - name: Build (ReleaseSafe)
@@ -85,7 +85,7 @@ jobs:
       - name: Install native dependencies
         run: |
           brew update
-          brew install sqlite sdl2 libtorrent-rasterbar meson ninja pkgconf
+          brew install sqlite sdl2 libtorrent-rasterbar libass libplacebo meson ninja pkgconf
           ./scripts/install-macos-ffmpeg.sh
           ./scripts/install-macos-mpv.sh
       - name: Run tests/test_features.py

@@ -59,7 +59,7 @@ jobs:
           # Sonoma has no usable current FFmpeg/mpv bottle closure: Homebrew
           # x265 fails on the runner. Build native codecs and libmpv from
           # pinned source against the 13.0 deployment target instead.
-          brew install sqlite sdl2 libtorrent-rasterbar meson ninja pkgconf create-dmg
+          brew install sqlite sdl2 libtorrent-rasterbar libass libplacebo meson ninja pkgconf create-dmg
           ./scripts/install-macos-ffmpeg.sh
           ./scripts/install-macos-mpv.sh
       - name: Build .app bundle (ReleaseFast)

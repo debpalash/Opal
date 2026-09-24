@@ -157,7 +157,7 @@ X11-only). macOS builds read `HOMEBREW_PREFIX` (default `/opt/homebrew`).
 
 On macOS 14, current Homebrew FFmpeg/mpv dependencies have no working bottle
 closure. Instead of `brew install mpv ffmpeg`, install
-`sqlite sdl2 libtorrent-rasterbar meson ninja pkgconf`, then run
+`sqlite sdl2 libtorrent-rasterbar libass libplacebo meson ninja pkgconf`, then run
 `./scripts/install-macos-ffmpeg.sh` and `./scripts/install-macos-mpv.sh`
 before `zig build run`. These build shared libraries from checksum-pinned
 source with macOS 13 as the minimum deployment target.
