@@ -307,19 +307,23 @@ if [ -f "$ROOT/assets/Credits.rtf" ]; then
     echo "[build-app] Credits.rtf written (About panel body)"
 fi
 
-# ── 5. Bundle dylibs (mpv, libtorrent_wrapper, onnxruntime) ────
-# Copy whatever the binary links so the app runs on systems without brew.
+# ── 5. Bundle dylibs (mpv, FFmpeg, libtorrent_wrapper) ────
+# Source-built Meson libmpv may use @rpath rather than an absolute Homebrew
+# install name; both forms must be rewritten or the .app fails without brew.
 echo "[build-app] Bundling dylibs…"
 DYLIB_DIR="$APP_DIR/Contents/Frameworks"
+HOMEBREW_PREFIX=${HOMEBREW_PREFIX:-$(brew --prefix)}
 mkdir -p "$DYLIB_DIR"
 
-for DEP in $(otool -L "$APP_DIR/Contents/MacOS/Opal" 2>/dev/null | awk 'NR>1 {print $1}' | grep -E "^/opt/homebrew|^/usr/local" || true); do
+for DEP in $(otool -L "$APP_DIR/Contents/MacOS/Opal" 2>/dev/null | awk 'NR>1 {print $1}' | grep -E "^/opt/homebrew|^/usr/local|^@rpath/" || true); do
     NAME="$(basename "$DEP")"
-    if [ -f "$DEP" ]; then
-        cp -L "$DEP" "$DYLIB_DIR/$NAME"
-        install_name_tool -change "$DEP" "@executable_path/../Frameworks/$NAME" \
-            "$APP_DIR/Contents/MacOS/Opal"
-    fi
+    SOURCE="$DEP"
+    case "$DEP" in @rpath/*) SOURCE="$HOMEBREW_PREFIX/lib/$NAME";; esac
+    [ -f "$SOURCE" ] || { echo "[build-app] Missing dylib: $DEP ($SOURCE)" >&2; exit 1; }
+    cp -L "$SOURCE" "$DYLIB_DIR/$NAME"
+    chmod u+w "$DYLIB_DIR/$NAME"
+    install_name_tool -change "$DEP" "@executable_path/../Frameworks/$NAME" \
+        "$APP_DIR/Contents/MacOS/Opal"
 done
 # Also bundle the torrent wrapper shared lib if present.
 # The binary links it with a bare install_name ("libtorrent_wrapper.so"), so
@@ -331,28 +335,30 @@ if [ -f "$ROOT/libtorrent_wrapper.so" ]; then
         "$APP_DIR/Contents/MacOS/Opal" 2>/dev/null || true
 fi
 
-# Rewrite transitive homebrew links inside bundled dylibs. Libraries can have
-# deep dependency chains (e.g. libavdevice→libavfilter→libavutil→libssl), so
-# we loop until no new dependencies are discovered (max 10 passes).
+# Rewrite transitive homebrew and @rpath links inside bundled dylibs. Libraries
+# can have deep chains (e.g. libavfilter→libavutil→libssl), so repeat until no
+# new dependencies are discovered (max 10 passes).
 PASS=0
 while [ $PASS -lt 10 ]; do
     PASS=$((PASS + 1))
     FOUND_NEW=0
     for LIB in "$DYLIB_DIR"/*.dylib "$DYLIB_DIR"/*.so; do
         [ -f "$LIB" ] || continue
-        for SUB in $(otool -L "$LIB" 2>/dev/null | awk 'NR>1 {print $1}' | grep -E "^/opt/homebrew|^/usr/local" || true); do
+        for SUB in $(otool -L "$LIB" 2>/dev/null | awk 'NR>1 {print $1}' | grep -E "^/opt/homebrew|^/usr/local|^@rpath/" || true); do
             SUB_NAME="$(basename "$SUB")"
-            # Copy transitive dep if missing
-            if [ ! -f "$DYLIB_DIR/$SUB_NAME" ] && [ -f "$SUB" ]; then
-                cp -L "$SUB" "$DYLIB_DIR/$SUB_NAME"
+            SOURCE="$SUB"
+            case "$SUB" in @rpath/*) SOURCE="$HOMEBREW_PREFIX/lib/$SUB_NAME";; esac
+            if [ ! -f "$DYLIB_DIR/$SUB_NAME" ]; then
+                [ -f "$SOURCE" ] || { echo "[build-app] Missing dylib: $SUB ($SOURCE)" >&2; exit 1; }
+                cp -L "$SOURCE" "$DYLIB_DIR/$SUB_NAME"
+                chmod u+w "$DYLIB_DIR/$SUB_NAME"
                 FOUND_NEW=1
             fi
-            install_name_tool -change "$SUB" "@executable_path/../Frameworks/$SUB_NAME" "$LIB" 2>/dev/null || true
+            install_name_tool -change "$SUB" "@executable_path/../Frameworks/$SUB_NAME" "$LIB"
         done
-        # Also fix the library's own install name if it points to homebrew
         OWN_ID=$(otool -D "$LIB" 2>/dev/null | tail -1)
-        case "$OWN_ID" in /opt/homebrew*|/usr/local*)
-            install_name_tool -id "@executable_path/../Frameworks/$(basename "$LIB")" "$LIB" 2>/dev/null || true
+        case "$OWN_ID" in /opt/homebrew*|/usr/local*|@rpath/*)
+            install_name_tool -id "@executable_path/../Frameworks/$(basename "$LIB")" "$LIB"
         ;; esac
     done
     [ $FOUND_NEW -eq 0 ] && break
