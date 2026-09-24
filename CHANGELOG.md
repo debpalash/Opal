@@ -10,6 +10,24 @@ Add a section BEFORE tagging; a missing one ships a release that says so.
 Headings are `## vX.Y.Z — YYYY-MM-DD`, newest first. The version token must
 match the tag exactly.
 
+## v0.8.6 — 2026-09-24
+
+- **The Linux AppImage opens on Arch again.** Packaging keeps the bundled
+  libtorrent runtime but uses the host's OpenSSL pair alongside host libcurl,
+  avoiding the older bundled OpenSSL symbol mismatch. Release verification
+  checks the extracted libraries and starts the packaged app.
+- **First launch is optional and usable in short windows.** A centered welcome
+  dialog offers keyless Movies & TV browsing or Home, with one optional starter
+  source install action; it stays reachable after a window resize.
+- **Movies & TV is easier to browse.** Poster cards remain readable instead of
+  collapsing into tiny columns, the icon toolbar stays aligned and scrolls on
+  narrow windows, and card actions and Details remain reachable while scrolling.
+  Source and More menus close after selecting a destination.
+- **Universal results are denser without hiding actions.** Long titles wrap,
+  torrent quality and seed counts appear once, trailers are grouped separately,
+  and the Play and Queue controls remain visible. Adding a torrent to the queue
+  no longer starts playback.
+
 ## v0.8.5 — 2026-09-14
 
 **Releaser:** Palash Debnath

@@ -303,14 +303,25 @@ pub fn renderTmdbContent() void {
 
     const list = activeList();
 
-    // Single combined toolbar — mode chips, contextual filters (Hot) or the
-    // search box (Find), item count, and card-size controls all on one row.
+    // Keep every filter on one centered row. Flexbox ignores child gravity_y,
+    // which put the search input below its neighboring buttons; on small
+    // windows the toolbar scrolls horizontally instead of wrapping over the
+    // poster viewport.
+    const available_h = @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().h, state.app.ui_scale);
+    const toolbar_h = @min(@max(40, available_h * 0.12), if (toolbar_content_h > 1) toolbar_content_h else 42);
+    var toolbar_scroll = dvui.scrollArea(@src(), .{ .horizontal = .auto, .horizontal_bar = .auto_overlay, .vertical = .none }, .{
+        .expand = .horizontal,
+        .min_size_content = .{ .w = 0, .h = toolbar_h },
+        .max_size_content = dvui.Options.MaxSize.height(toolbar_h),
+        .background = false,
+    });
     renderToolbar(list.items.len);
-
+    toolbar_scroll.deinit();
     // Initial load (nothing to show yet) renders skeleton tiles inside the
     // gallery; a stale-refresh keeps the current results on screen — seamless.
     const show_load_more = state.app.tmdb.view == .Trending or state.app.tmdb.view == .Search;
     renderGallery(list, show_load_more);
+    renderPosterDetails(list);
 }
 
 fn activeList() *std.ArrayListUnmanaged(state.TmdbItem) {
@@ -326,26 +337,30 @@ fn activeList() *std.ArrayListUnmanaged(state.TmdbItem) {
 // Sub-Tabs
 // ══════════════════════════════════════════════════════════
 
-/// One compact, full-width toolbar replacing the old 3–4 stacked filter rows.
-/// Wraps gracefully on narrow widths via flexbox.
+var toolbar_content_h: f32 = 0;
+
+/// One vertically centered, horizontally scrollable row of catalog controls.
 fn renderToolbar(count: usize) void {
     // Cleared every frame; renderSearchInline re-asserts it while the Find
     // box is focused. Without this, leaving Find mode with the box focused
     // left the flag stuck true and arrows dead.
     search_focused = false;
 
-    var bar = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
+    var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
-        .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
+        .min_size_content = .{ .w = 0, .h = 34 },
+        .margin = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
     });
     defer bar.deinit();
+    if (dvui.minSizeGet(bar.data().id)) |size| toolbar_content_h = size.h;
 
-    // Mode chips (always).
-    renderSubTab(0, .Trending, "Hot");
-    renderSubTab(1, .Search, "Search");
-    renderSubTab(2, .Favorites, "Favs");
-    renderSubTab(3, .Watchlist, "List");
-    renderSubTab(4, .Watching, "Now");
+    // Destinations stay visible even on narrow windows. Tooltips give each
+    // icon its full name; the highlighted pill identifies the current view.
+    renderSubTab(0, .Trending, "Browse", icons.tvg.lucide.compass);
+    renderSubTab(1, .Search, "Search", icons.tvg.lucide.search);
+    renderSubTab(2, .Favorites, "Favorites", icons.tvg.lucide.star);
+    renderSubTab(3, .Watchlist, "Watchlist", icons.tvg.lucide.bookmark);
+    renderSubTab(4, .Watching, "Watching", icons.tvg.lucide.eye);
 
     // Catalog search — always visible so Movies/TV search is discoverable
     // instead of hidden behind the Search tab. Typing auto-switches to the
@@ -359,21 +374,21 @@ fn renderToolbar(count: usize) void {
         .Search => {},
         .Trending => {
             toolbarDivider(901);
-            renderCatChip(0, .trending, "Trending");
-            renderCatChip(1, .popular, "Popular");
-            renderCatChip(2, .top_rated, "Top Rated");
+            renderCatChip(0, .trending, "Trending", icons.tvg.lucide.flame);
+            renderCatChip(1, .popular, "Popular", icons.tvg.lucide.@"trending-up");
+            renderCatChip(2, .top_rated, "Top Rated", icons.tvg.lucide.trophy);
             if (state.app.tmdb.api_key_len > 0) {
-                renderCatChip(3, .now_playing, if (state.app.tmdb.media_filter == .tv) "On Air" else "In Cinemas");
-                renderCatChip(4, .upcoming, "Upcoming");
+                renderCatChip(3, .now_playing, if (state.app.tmdb.media_filter == .tv) "On Air" else "In Cinemas", icons.tvg.lucide.clapperboard);
+                renderCatChip(4, .upcoming, "Upcoming", icons.tvg.lucide.@"calendar-days");
             } else {
                 // Cinemeta exposes a newest-by-year catalog, but does not make
                 // theatrical-window claims. Keep the zero-key label honest.
-                renderCatChip(3, .now_playing, "New");
+                renderCatChip(3, .now_playing, "New", icons.tvg.lucide.sparkles);
             }
             toolbarDivider(902);
-            renderFilterChip(10, .all, "All");
-            renderFilterChip(11, .movie, "Movies");
-            renderFilterChip(12, .tv, "TV");
+            renderFilterChip(10, .all, "All", icons.tvg.lucide.@"layout-grid");
+            renderFilterChip(11, .movie, "Movies", icons.tvg.lucide.film);
+            renderFilterChip(12, .tv, "TV", icons.tvg.lucide.tv);
             if (state.app.tmdb.api_key_len > 0 and state.app.tmdb.category == .trending and state.app.tmdb.genre_idx == 0) {
                 toolbarDivider(903);
                 renderTimeChip(20, .week, "Week");
@@ -395,7 +410,9 @@ fn renderToolbar(count: usize) void {
     toolbarDivider(950);
     _ = dvui.label(@src(), "{d} items", .{count}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
     const dim = dvui.Color{ .r = 120, .g = 120, .b = 148, .a = 200 };
+    var smaller_wd: dvui.WidgetData = undefined;
     if (dvui.buttonIcon(@src(), "smaller", icons.tvg.lucide.minus, .{}, .{}, .{
+        .data_out = &smaller_wd,
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
         .color_text = dim,
         .border = dvui.Rect.all(0),
@@ -403,9 +420,12 @@ fn renderToolbar(count: usize) void {
         .padding = dvui.Rect.all(3),
         .gravity_y = 0.5,
     })) {
-        state.app.tmdb.card_w = @max(110, state.app.tmdb.card_w - 40);
+        state.app.tmdb.card_w = @max(160, state.app.tmdb.card_w - 40);
     }
+    @import("../ui/components.zig").tip(@src(), smaller_wd, "Smaller posters");
+    var bigger_wd: dvui.WidgetData = undefined;
     if (dvui.buttonIcon(@src(), "bigger", icons.tvg.lucide.plus, .{}, .{}, .{
+        .data_out = &bigger_wd,
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
         .color_text = dim,
         .border = dvui.Rect.all(0),
@@ -415,6 +435,7 @@ fn renderToolbar(count: usize) void {
     })) {
         state.app.tmdb.card_w = @min(320, state.app.tmdb.card_w + 40);
     }
+    @import("../ui/components.zig").tip(@src(), bigger_wd, "Larger posters");
 }
 
 /// Genre selector — drives /discover?with_genres browsing (paginated like any
@@ -454,6 +475,7 @@ fn renderSortChip(idx: usize, tag: u8, label: []const u8) void {
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
         .color_text = fg,
         .padding = .{ .x = 6, .y = 3, .w = 6, .h = 3 },
+        .gravity_y = 0.5,
     })) {
         state.app.tmdb.discover_sort = tag;
         state.app.tmdb.page = 1;
@@ -469,7 +491,7 @@ fn toolbarDivider(id: usize) void {
         .min_size_content = .{ .w = 1, .h = 18 },
         .background = true,
         .color_fill = theme.colors.border_subtle,
-        .margin = .{ .x = 8, .y = 0, .w = 8, .h = 0 },
+        .margin = .{ .x = 5, .y = 0, .w = 5, .h = 0 },
         .gravity_y = 0.5,
     });
     d.deinit();
@@ -482,8 +504,8 @@ fn renderSearchInline() void {
     // Canonical compact toolbar input (shared with YouTube/Comics so every
     // Browse sub-toolbar has identical input height + padding).
     var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.tmdb.search_buf }, .placeholder = "Search movies & TV…" }, .{
-        .min_size_content = .{ .w = 240, .h = components.TOOLBAR_INPUT_H },
-        .max_size_content = .{ .w = 240, .h = components.TOOLBAR_INPUT_H },
+        .min_size_content = .{ .w = 210, .h = components.TOOLBAR_INPUT_H },
+        .max_size_content = .{ .w = 210, .h = components.TOOLBAR_INPUT_H },
         .color_fill = theme.colors.bg_elevated,
         .color_border = theme.colors.border_subtle,
         .color_text = theme.colors.text_primary,
@@ -546,7 +568,19 @@ fn renderSearchInline() void {
             api.fetchCurrentView(false);
         }
 
-        if (components.toolbarGo(@src(), "Go") or enter_pressed) {
+        var submit_wd: dvui.WidgetData = undefined;
+        const submit = dvui.buttonIcon(@src(), "Search movies & TV", icons.tvg.lucide.@"arrow-right", .{}, .{}, .{
+            .data_out = &submit_wd,
+            .color_fill = theme.colors.accent,
+            .color_text = theme.colors.text_on_accent,
+            .corner_radius = theme.dims.rad_sm,
+            .min_size_content = theme.iconSize(.sm),
+            .padding = dvui.Rect.all(6),
+            .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
+            .gravity_y = 0.5,
+        });
+        components.tip(@src(), submit_wd, "Search movies & TV");
+        if (submit or enter_pressed) {
             // Explicit submit: skip the debounce, and record it so the live path
             // doesn't immediately re-issue the same query.
             @memcpy(L.fired[0..cur.len], cur);
@@ -559,22 +593,31 @@ fn renderSearchInline() void {
     }
 }
 
-fn renderSubTab(idx: usize, view: state.TmdbView, label: []const u8) void {
+fn renderSubTab(idx: usize, view: state.TmdbView, label: []const u8, icon: []const u8) void {
+    const components = @import("../ui/components.zig");
     const active = state.app.tmdb.view == view;
-    const bg = if (active) theme.colors.accent else theme.colors.bg_surface;
-    const fg = if (active) dvui.Color.white else theme.colors.text_secondary;
-
-    if (dvui.button(@src(), label, .{}, .{
+    var wd: dvui.WidgetData = undefined;
+    const clicked = dvui.buttonIcon(@src(), label, icon, .{}, .{}, .{
         .id_extra = idx,
-        .background = true,
-        .color_fill = bg,
-        .color_text = fg,
+        .data_out = &wd,
+        .color_fill = if (active) theme.colors.accent else theme.colors.bg_surface,
+        .color_fill_hover = if (active) theme.colors.accent else theme.colors.bg_hover,
+        .color_text = if (active) theme.colors.text_on_accent else theme.colors.text_secondary,
         .corner_radius = theme.dims.rad_sm,
-        .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
+        .min_size_content = theme.iconSize(.sm),
+        .padding = dvui.Rect.all(6),
         .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
-    })) {
-        switchView(view);
-    }
+        .gravity_y = 0.5,
+    });
+    const tooltip = if (active) switch (view) {
+        .Trending => "Browse (current)",
+        .Search => "Search (current)",
+        .Favorites => "Favorites (current)",
+        .Watchlist => "Watchlist (current)",
+        .Watching => "Watching (current)",
+    } else label;
+    components.tipId(@src(), wd, tooltip, idx);
+    if (clicked) switchView(view);
 }
 
 fn switchView(view: state.TmdbView) void {
@@ -592,17 +635,24 @@ fn switchView(view: state.TmdbView) void {
 // Category Filters (chips reused by the combined toolbar)
 // ══════════════════════════════════════════════════════════
 
-fn renderCatChip(idx: usize, cat: state.TmdbCategory, label: []const u8) void {
+fn renderCatChip(idx: usize, cat: state.TmdbCategory, label: []const u8, icon: []const u8) void {
+    const components = @import("../ui/components.zig");
     // While a genre is active, browsing goes through /discover and the
     // category is inert — don't highlight a chip that isn't driving results.
     const cat_active = state.app.tmdb.category == cat and state.app.tmdb.genre_idx == 0;
-    const fg = if (cat_active) theme.colors.accent else theme.colors.text_secondary;
-    if (dvui.button(@src(), label, .{}, .{
+    var wd: dvui.WidgetData = undefined;
+    const clicked = dvui.buttonIcon(@src(), label, icon, .{}, .{}, .{
         .id_extra = idx + 2000,
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-        .color_text = fg,
-        .padding = .{ .x = 6, .y = 3, .w = 6, .h = 3 },
-    })) {
+        .data_out = &wd,
+        .color_fill = if (cat_active) theme.colors.bg_elevated else theme.transparent,
+        .color_text = if (cat_active) theme.colors.accent else theme.colors.text_secondary,
+        .corner_radius = theme.dims.rad_sm,
+        .min_size_content = theme.iconSize(.sm),
+        .padding = dvui.Rect.all(6),
+        .gravity_y = 0.5,
+    });
+    components.tipId(@src(), wd, label, idx + 2000);
+    if (clicked) {
         state.app.tmdb.category = cat;
         state.app.tmdb.genre_idx = 0; // category chips exit genre-discover mode
         state.app.tmdb.page = 1;
@@ -611,16 +661,23 @@ fn renderCatChip(idx: usize, cat: state.TmdbCategory, label: []const u8) void {
     }
 }
 
-fn renderFilterChip(idx: usize, filter: state.TmdbMediaFilter, label: []const u8) void {
+fn renderFilterChip(idx: usize, filter: state.TmdbMediaFilter, label: []const u8, icon: []const u8) void {
+    const components = @import("../ui/components.zig");
     const active = state.app.tmdb.media_filter == filter;
-    if (dvui.button(@src(), label, .{}, .{
+    var wd: dvui.WidgetData = undefined;
+    const clicked = dvui.buttonIcon(@src(), label, icon, .{}, .{}, .{
         .id_extra = idx + 3000,
+        .data_out = &wd,
         .color_fill = if (active) theme.colors.accent else theme.colors.bg_surface,
         .color_text = if (active) dvui.Color.white else theme.colors.text_secondary,
         .corner_radius = theme.dims.rad_sm,
-        .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
+        .min_size_content = theme.iconSize(.sm),
+        .padding = dvui.Rect.all(6),
         .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
-    })) {
+        .gravity_y = 0.5,
+    });
+    components.tipId(@src(), wd, label, idx + 3000);
+    if (clicked) {
         state.app.tmdb.media_filter = filter;
         state.app.tmdb.page = 1;
         resetGalleryScroll();
@@ -635,6 +692,7 @@ fn renderTimeChip(idx: usize, tw: state.TmdbTimeWindow, label: []const u8) void 
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
         .color_text = fg,
         .padding = .{ .x = 6, .y = 3, .w = 6, .h = 3 },
+        .gravity_y = 0.5,
     })) {
         state.app.tmdb.time_window = tw;
         state.app.tmdb.page = 1;
@@ -651,7 +709,7 @@ fn renderTimeChip(idx: usize, tw: state.TmdbTimeWindow, label: []const u8) void 
 /// card having the same pitch, so these are THE constants: card height is
 /// poster_h + CARD_FOOTER_H (min == max in renderPosterCard), each card has
 /// CARD_VMARGIN above and below, and skeleton tiles use the same size.
-const CARD_FOOTER_H: f32 = 64;
+const CARD_FOOTER_H: f32 = 152;
 const CARD_VMARGIN: f32 = 3;
 
 /// Gallery scroll position — module-level so it survives sub-tab/page-route
@@ -662,6 +720,12 @@ var gallery_si: dvui.ScrollInfo = .{};
 /// Keyboard focus: index of the arrow-key-focused card (null = keyboard nav
 /// inactive; the first arrow press lights index 0). UI thread only.
 var grid_focus: ?usize = null;
+// An explicit Details action keeps synopses usable on short/touch screens:
+// the poster hover scrim cannot fit long descriptions inside a small card.
+var poster_details_open: bool = false;
+var poster_details_id: i32 = 0;
+var poster_details_tv: bool = false;
+
 
 /// True while the toolbar search box has focus — arrows/Enter belong to the
 /// text field then, not the grid (set each frame in renderSearchInline).
@@ -741,13 +805,20 @@ fn renderGallery(items: *std.ArrayListUnmanaged(state.TmdbItem), show_load_more:
     var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &gallery_si }, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
     defer scroll.deinit();
 
-    // Responsive columns from the LIVE page width (one-frame lag; first paint
-    // falls back to a sane default). Card width is user-cyclable (compact↔large).
+    // Use the actual scroll width, reserving both card margins in every
+    // column. The user's size preference changes the density, but never
+    // shrinks a footer below the space its actions need. On very wide pages
+    // keep the density between 6 and 8 columns (compact -> normal -> large).
     const rect_w = scroll.data().rect.w;
-    const avail_w: f32 = @max(240, (if (rect_w > 1) rect_w else 900) - 8);
-    const card_target_w: f32 = state.app.tmdb.card_w;
-    const cols: usize = @max(2, @as(usize, @intFromFloat(avail_w / card_target_w)));
-    const card_w: f32 = @max(100, (avail_w - @as(f32, @floatFromInt(cols)) * 8) / @as(f32, @floatFromInt(cols)));
+    const avail_w: f32 = @max(1, (if (rect_w > 1) rect_w else 900) - 8);
+    const gutter: f32 = 2 * CARD_VMARGIN;
+    const target_w: f32 = @max(160, state.app.tmdb.card_w);
+    const column_cap: usize = @max(6, @min(8, @as(usize, @intFromFloat(1440.0 / target_w))));
+    // If two usable cards fit, don't turn a narrow window into one giant
+    // poster just because the preferred size is set to Large.
+    const min_cols: usize = if (avail_w >= 2 * (160 + gutter)) 2 else 1;
+    const cols: usize = @max(min_cols, @min(column_cap, @as(usize, @intFromFloat((avail_w + gutter) / (target_w + gutter)))));
+    const card_w: f32 = @max(1, (avail_w - @as(f32, @floatFromInt(cols)) * gutter) / @as(f32, @floatFromInt(cols)));
     const poster_h: f32 = card_w * 1.5;
 
     // Initial load with nothing to show yet → skeleton tiles instead of a
@@ -927,16 +998,18 @@ fn renderHoverMeta(item: *state.TmdbItem, idx: usize) void {
         .font = dvui.themeGet().font_heading,
     });
 
-    // Rating · year · type line.
-    {
+    // An absent rating is unknown, not zero. Keep the hover score on the
+    // catalog's native /10 scale, matching the card footer.
+    if (item.rating > 0 or item.year_len > 0) {
         var line = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = idx + 162, .expand = .horizontal, .padding = .{ .x = 0, .y = 2, .w = 0, .h = 2 } });
         defer line.deinit();
-        const pct = @as(u8, @intFromFloat(std.math.clamp(item.rating * 10.0, 0.0, 100.0)));
-        const sc = if (pct >= 70) theme.colors.success else if (pct >= 50) theme.colors.warning else theme.colors.danger;
-        var pb: [8]u8 = undefined;
-        if (std.fmt.bufPrint(&pb, "{d}%", .{pct})) |ps| {
-            _ = dvui.label(@src(), "{s}", .{ps}, .{ .id_extra = idx + 163, .color_text = sc });
-        } else |_| {}
+        if (item.rating > 0) {
+            const sc = if (item.rating >= 7) theme.colors.success else if (item.rating >= 5) theme.colors.warning else theme.colors.text_secondary;
+            var rb: [16]u8 = undefined;
+            if (std.fmt.bufPrint(&rb, "{d:.1}/10", .{item.rating})) |rating| {
+                _ = dvui.label(@src(), "{s}", .{rating}, .{ .id_extra = idx + 163, .color_text = sc });
+            } else |_| {}
+        }
         if (item.year_len > 0) {
             _ = dvui.label(@src(), "  {s}", .{item.year[0..item.year_len]}, .{ .id_extra = idx + 164, .color_text = theme.colors.text_secondary });
         }
@@ -1055,13 +1128,15 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
         });
         defer meta_row.deinit();
 
-        // Rating percentage
-        const pct = @as(u8, @intFromFloat(std.math.clamp(item.rating * 10.0, 0.0, 100.0)));
-        const sc = if (pct >= 70) theme.colors.success else if (pct >= 50) theme.colors.warning else theme.colors.danger;
-        var pb: [8]u8 = undefined;
-        if (std.fmt.bufPrintZ(&pb, "{d}%", .{pct})) |ps| {
-            _ = dvui.label(@src(), "{s}", .{ps}, .{ .id_extra = idx + 310, .color_text = sc });
-        } else |_| {}
+        // A missing vote is not a 0% review. Show the native /10 score only
+        // when the catalog supplies one.
+        if (item.rating > 0) {
+            const sc = if (item.rating >= 7) theme.colors.success else if (item.rating >= 5) theme.colors.warning else theme.colors.text_secondary;
+            var rb: [16]u8 = undefined;
+            if (std.fmt.bufPrintZ(&rb, "{d:.1}/10", .{item.rating})) |rating| {
+                _ = dvui.label(@src(), "{s}", .{rating}, .{ .id_extra = idx + 310, .color_text = sc });
+            } else |_| {}
+        }
 
         // Spacer
         {
@@ -1081,10 +1156,13 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
         }
     }
 
-    // Title — click opens the TV episode detail (or searches, for movies).
+    // Keep the clickable title within its footer budget. Hover metadata and
+    // Details still expose the complete title if it needs more lines.
     if (dvui.button(@src(), title, .{}, .{
         .id_extra = idx + 500,
         .expand = .horizontal,
+        .min_size_content = .{ .w = card_w - 4, .h = 28 },
+        .max_size_content = .{ .w = card_w - 4, .h = 36 },
         .color_text = theme.colors.text_primary,
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
         .padding = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
@@ -1101,25 +1179,31 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
         });
     }
 
-    // Quick actions row
+    // Persistent compact controls are intentional: hiding inactive toggles
+    // behind hover would strand touch users and keyboard focus. Their named
+    // icon buttons remain available at all times; selected lists are marked
+    // with both a strong icon color and a subtle chip.
     {
         var acts = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = idx + 400,
+            .expand = .horizontal,
             .padding = .{ .x = 2, .y = 2, .w = 2, .h = 0 },
         });
         defer acts.deinit();
         const trans = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
-        const dim = dvui.Color{ .r = 120, .g = 120, .b = 148, .a = 160 };
+        const dim = theme.colors.text_secondary;
 
-        // Fav
+        // Favorite
         {
-            const fc = if (store.isInList(&state.app.tmdb.favorites, item.id)) dvui.Color{ .r = 255, .g = 215, .b = 0, .a = 255 } else dim;
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.star, .{}, .{}, .{
+            const selected = store.isInList(&state.app.tmdb.favorites, item.id);
+            const fc = if (selected) dvui.Color{ .r = 255, .g = 215, .b = 0, .a = 255 } else dim;
+            if (dvui.buttonIcon(@src(), if (selected) "Remove favorite" else "Add favorite", icons.tvg.lucide.star, .{}, .{}, .{
                 .id_extra = idx + 7000,
-                .color_fill = trans,
+                .color_fill = if (selected) theme.colors.bg_elevated else trans,
                 .color_text = fc,
-                .padding = dvui.Rect.all(1),
-                .min_size_content = theme.iconSize(.xs),
+                .corner_radius = dvui.Rect.all(theme.radius.sm),
+                .padding = dvui.Rect.all(3),
+                .min_size_content = theme.iconSize(.md),
             })) {
                 store.toggleList(&state.app.tmdb.favorites, item);
                 store.saveLists();
@@ -1127,48 +1211,108 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
         }
         // Watchlist
         {
-            const wc = if (store.isInList(&state.app.tmdb.watchlist, item.id)) theme.colors.accent else dim;
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.bookmark, .{}, .{}, .{
+            const selected = store.isInList(&state.app.tmdb.watchlist, item.id);
+            const wc = if (selected) theme.colors.accent else dim;
+            if (dvui.buttonIcon(@src(), if (selected) "Remove from watchlist" else "Add to watchlist", icons.tvg.lucide.bookmark, .{}, .{}, .{
                 .id_extra = idx + 8000,
-                .color_fill = trans,
+                .color_fill = if (selected) theme.colors.bg_elevated else trans,
                 .color_text = wc,
-                .padding = dvui.Rect.all(1),
-                .min_size_content = theme.iconSize(.xs),
+                .corner_radius = dvui.Rect.all(theme.radius.sm),
+                .padding = dvui.Rect.all(3),
+                .min_size_content = theme.iconSize(.md),
             })) {
                 store.toggleList(&state.app.tmdb.watchlist, item);
                 store.saveLists();
             }
         }
-        // Watching.
-        //
-        // The list-view card (renderCard) has always had this toggle; the poster
-        // card never did. The poster card is what "Continue Watching" on Home is
-        // built from, so the one row where you actually want to say "done with
-        // this" was the one row that could not. Removing it needed a trip to the
-        // TMDB list view to find the same title.
+        // Watching
         {
-            const wac = if (store.isInList(&state.app.tmdb.watching, item.id)) theme.colors.success else dim;
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.eye, .{}, .{}, .{
+            const selected = store.isInList(&state.app.tmdb.watching, item.id);
+            const wac = if (selected) theme.colors.success else dim;
+            if (dvui.buttonIcon(@src(), if (selected) "Stop watching" else "Mark watching", icons.tvg.lucide.eye, .{}, .{}, .{
                 .id_extra = idx + 9000,
-                .color_fill = trans,
+                .color_fill = if (selected) theme.colors.bg_elevated else trans,
                 .color_text = wac,
-                .padding = dvui.Rect.all(1),
-                .min_size_content = theme.iconSize(.xs),
+                .corner_radius = dvui.Rect.all(theme.radius.sm),
+                .padding = dvui.Rect.all(3),
+                .min_size_content = theme.iconSize(.md),
             })) {
                 store.toggleList(&state.app.tmdb.watching, item);
                 store.saveLists();
             }
         }
-        // Search
-        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.search, .{}, .{}, .{
-            .id_extra = idx + 10000,
-            .color_fill = trans,
+        // Poster/title already find streams or episodes; show the full-synopsis
+        // action by name rather than as another tiny, ambiguous icon.
+        var gap = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+        gap.deinit();
+        if (dvui.button(@src(), "Details", .{}, .{
+            .id_extra = idx + 11000,
+            .color_fill = theme.colors.bg_surface,
             .color_text = theme.colors.accent,
-            .padding = dvui.Rect.all(1),
-            .min_size_content = theme.iconSize(.xs),
+            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .padding = dvui.Rect.all(3),
         })) {
-            sendToSearch(item);
+            poster_details_id = item.id;
+            poster_details_tv = std.mem.eql(u8, item.media_type[0..@min(item.media_type_len, item.media_type.len)], "tv");
+            poster_details_open = true;
         }
+    }
+}
+
+fn renderPosterDetails(items: *std.ArrayListUnmanaged(state.TmdbItem)) void {
+    if (!poster_details_open) return;
+    const item = for (items.items) |*candidate| {
+        const tv = std.mem.eql(u8, candidate.media_type[0..@min(candidate.media_type_len, candidate.media_type.len)], "tv");
+        if (candidate.id == poster_details_id and tv == poster_details_tv) break candidate;
+    } else {
+        poster_details_open = false;
+        return;
+    };
+
+    const size = theme.fitWindowSize(.{ .w = 520, .h = 380 }, .{ .w = 260, .h = 200 });
+    var win = dvui.floatingWindow(@src(), .{ .modal = true, .open_flag = &poster_details_open }, .{
+        .min_size_content = size,
+        .color_fill = theme.colors.bg_surface,
+        .color_border = theme.colors.border_subtle,
+        .corner_radius = theme.dims.rad_md,
+    });
+    defer win.deinit();
+    win.dragAreaSet(dvui.windowHeader("Details", "", &poster_details_open));
+
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
+    defer scroll.deinit();
+    var body = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .horizontal,
+        .padding = dvui.Rect.all(12),
+    });
+    defer body.deinit();
+
+    var title_buf: [128]u8 = undefined;
+    _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(item.title[0..@min(item.title_len, item.title.len)], &title_buf)}, .{
+        .expand = .horizontal,
+        .font = dvui.themeGet().font_heading,
+        .color_text = theme.colors.text_primary,
+    });
+    _ = dvui.label(@src(), "{s}  {s}  {d:.1}/10", .{
+        if (poster_details_tv) @as([]const u8, "TV") else "Film",
+        item.year[0..@min(item.year_len, item.year.len)],
+        item.rating,
+    }, .{ .color_text = theme.colors.text_secondary, .margin = .{ .y = 8 } });
+    if (item.overview_len > 0) {
+        var overview_buf: [512]u8 = undefined;
+        var overview = dvui.textLayout(@src(), .{ .break_lines = true }, .{ .expand = .horizontal, .background = false });
+        overview.addText(safeUtf8Buf(item.overview[0..@min(item.overview_len, item.overview.len)], &overview_buf), .{});
+        overview.deinit();
+    } else {
+        _ = dvui.label(@src(), "No synopsis available.", .{}, .{ .color_text = theme.colors.text_secondary });
+    }
+    if (dvui.button(@src(), if (poster_details_tv) "See episodes" else "Find sources", .{}, .{
+        .color_fill = theme.colors.accent,
+        .color_text = theme.colors.text_on_accent,
+        .margin = .{ .y = 12 },
+    })) {
+        poster_details_open = false;
+        openOrSearch(item);
     }
 }
 

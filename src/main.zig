@@ -539,6 +539,10 @@ fn isLocalDirectory(path: []const u8) bool {
 
 fn appInit(win: *dvui.Window) !void {
     player.perfInit();
+    // SDL preserves fractional trackpad deltas; use a normal desktop wheel
+    // step instead of dvui's 20 px default, which takes dozens of notches to
+    // pass one poster and makes long result lists feel stuck.
+    dvui.scroll_speed = 60;
     // The log-ring allocator must be set before ANY pushLog call.
     // startLocal() below logs (token loaded/created) and runs before
     // coreInit, which used to own this assignment — without it the first
@@ -614,6 +618,30 @@ fn appInit(win: *dvui.Window) !void {
     // Also mirror into state.app so worker threads (mpv render-update
     // callback, etc.) can wake the UI via dvui.refresh from any thread.
     state.app.dvui_win = win;
+
+    // The fixed startup size exceeds the usable area on common
+    // 1366×768 laptops. Resize before the first Windows frame is revealed so
+    // the borderless title controls and the bottom transport stay reachable.
+    if (comptime builtin.os.tag == .windows) {
+        const sdl_win: ?*c.sdl.SDL_Window = @ptrCast(win.backend.impl.window);
+        if (sdl_win) |sw| {
+            var bounds: c.sdl.SDL_Rect = undefined;
+            const display = c.sdl.SDL_GetWindowDisplayIndex(sw);
+            if (display >= 0 and c.sdl.SDL_GetDisplayUsableBounds(display, &bounds) == 0 and bounds.w > 0 and bounds.h > 0) {
+                var width: c_int = 0;
+                var height: c_int = 0;
+                c.sdl.SDL_GetWindowSize(sw, &width, &height);
+                const fit_w = @max(1, bounds.w - 32);
+                const fit_h = @max(1, bounds.h - 48);
+                if (width > fit_w or height > fit_h) {
+                    width = @min(width, fit_w);
+                    height = @min(height, fit_h);
+                    c.sdl.SDL_SetWindowSize(sw, width, height);
+                    c.sdl.SDL_SetWindowPosition(sw, bounds.x + @divTrunc(bounds.w - width, 2), bounds.y + @divTrunc(bounds.h - height, 2));
+                }
+            }
+        }
+    }
 
     // Seed the chrome idle clock so the control overlay starts visible for the
     // usual idle window instead of instantly hidden (last_mouse_move_ms == 0

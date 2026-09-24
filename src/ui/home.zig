@@ -130,7 +130,7 @@ pub fn render() void {
     const top_h: f32 = if (dvui.minSizeGet(top.data().id)) |ms| ms.h else 430;
 
     renderHero();
-    // Resume first — the most actionable row lives right under the prompt.
+    // Playback rows follow the primary discovery actions.
     const has_tv_episodes = @import("../services/tv_library.zig").renderHomeEpisodes();
     renderRecentlyPlayed();
     top.deinit();
@@ -180,13 +180,10 @@ pub fn render() void {
     // Cross-vertical favorites (IPTV/music/…) from the unified library_items.
     if (budget >= rail_h and renderLibraryRail(card_w)) budget -= rail_h;
 
-    // Nothing at all to show → the value-prop tiles + gentle CTA fill the shell.
+    // No saved media or history and no TMDB rail to populate the hub yet.
     const everything_empty = watching.items.len == 0 and watchlist.items.len == 0 and
         favorites.items.len == 0 and wh.count == 0 and !has_tv_episodes;
-    if (everything_empty) {
-        renderCapabilities();
-        if (state.app.tmdb.api_key_len == 0) renderEmptyState();
-    }
+    if (everything_empty and state.app.tmdb.api_key_len == 0) renderEmptyState();
 }
 
 /// "Trending tonight" — the discovery rail that makes the idle console feel
@@ -349,7 +346,7 @@ fn renderTrendingRail(card_w: f32) bool {
     return true;
 }
 
-// ── Hero (idle console) — big prompt + suggestion chips ──
+// ── Hero (idle console) — prompt and direct discovery actions ──
 
 fn renderHero() void {
     const home_pure = @import("home_pure.zig");
@@ -381,133 +378,43 @@ fn renderHero() void {
         .margin = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
     });
     if (tall) {
-        _ = dvui.label(@src(), "Ask for a mood, a title, or paste any link — Opal finds it, plays it, and learns your taste.", .{}, .{
+        _ = dvui.label(@src(), "Ask a question or paste a link in the omnibox.", .{}, .{
             .color_text = theme.colors.text_tertiary,
             .gravity_x = 0.5,
             .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = theme.spacing.sm },
         });
     }
 
-    // The big prompt — same unified input the header uses (media plays,
-    // questions go to the AI, everything else fans out to search). The pill
-    // sizes and centers itself (fixed 480-620 width, gravity 0.5).
+    // The shell provides the unified omnibox in its header; only the
+    // standalone layout renders a second input here.
     if (!state.app.page_shell_enabled) @import("header.zig").renderUrlInput(true);
 
-    // Suggestion chips — conversation starters that submit straight to the AI.
-    {
-        var wrap = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .expand = .horizontal,
-            .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 },
-        });
-        defer wrap.deinit();
-        const avail = wrap.data().rect.w;
-        const chips_w: f32 = @max(1, @min(if (avail > 1) @min(800.0, avail) else 800.0, win_w - 64));
-        var chips = dvui.flexbox(@src(), .{ .justify_content = .center }, .{
-            .gravity_x = 0.5,
-            .min_size_content = .{ .w = chips_w, .h = 0 },
-            .max_size_content = dvui.Options.MaxSize.width(chips_w),
-        });
-        defer chips.deinit();
-
-        const starters = [_]struct { icon: []const u8, label: []const u8, prompt: []const u8 }{
-            .{ .icon = icons.tvg.lucide.@"wand-sparkles", .label = "Movie for tonight", .prompt = "Recommend a movie for tonight" },
-            .{ .icon = icons.tvg.lucide.flame, .label = "What's trending?", .prompt = "What's trending this week?" },
-            .{ .icon = icons.tvg.lucide.laugh, .label = "Something funny", .prompt = "Play something funny" },
-            .{ .icon = icons.tvg.lucide.telescope, .label = "Mind-bending sci-fi", .prompt = "Find a mind-bending sci-fi show" },
-        };
-        for (starters, 0..) |st, i| {
-            if (compact and i >= 2) break;
-            var chip = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .id_extra = i,
-                .background = true,
-                .color_fill = theme.colors.bg_surface,
-                .border = dvui.Rect.all(1),
-                .color_border = theme.colors.border_subtle,
-                .corner_radius = dvui.Rect.all(theme.radius.pill),
-                .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
-                .margin = dvui.Rect.all(3),
-            });
-            defer chip.deinit();
-            var hovered = false;
-            if (dvui.clicked(chip.data(), .{ .hovered = &hovered })) {
-                @memset(&state.app.magnet_buf, 0);
-                const n = @min(st.prompt.len, state.app.magnet_buf.len - 1);
-                @memcpy(state.app.magnet_buf[0..n], st.prompt[0..n]);
-                @import("header.zig").submitInput(); // → AI chat; page flips to chat mode
-            }
-            if (hovered) chip.data().options.color_fill = theme.colors.bg_hover;
-            chip.drawBackground();
-
-            dvui.icon(@src(), "chip-icon", st.icon, .{}, .{
-                .id_extra = i,
-                .color_text = theme.colors.accent,
-                .min_size_content = .{ .w = 13, .h = 13 },
-                .gravity_y = 0.5,
-                .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
-            });
-            _ = dvui.label(@src(), "{s}", .{st.label}, .{
-                .id_extra = i,
-                .color_text = theme.colors.text_secondary,
-                .gravity_y = 0.5,
-            });
-        }
-    }
-}
-
-/// Three quiet value-prop tiles — the agent pitch. Shown only when the hub
-/// has no content yet (informational, no hover/click: landing copy, not chrome).
-fn renderCapabilities() void {
-    const caps = [_]struct { icon: []const u8, title: []const u8 }{
-        .{ .icon = icons.tvg.lucide.zap, .title = "Plays everything" },
-        .{ .icon = icons.tvg.lucide.brain, .title = "Learns your taste" },
-        .{ .icon = icons.tvg.lucide.@"audio-lines", .title = "Voice conversations" },
-    };
-
-    var wrap = dvui.box(@src(), .{ .dir = .vertical }, .{
+    // Keep both routes visible with or without a TMDB key or recent files.
+    // Flexbox wraps the buttons on narrow windows.
+    var actions = dvui.flexbox(@src(), .{ .justify_content = .center }, .{
         .expand = .horizontal,
-        .margin = .{ .x = 0, .y = theme.spacing.lg, .w = 0, .h = 0 },
+        .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 },
     });
-    defer wrap.deinit();
-    const avail = wrap.data().rect.w;
-    const row_w: f32 = if (avail > 1) @min(760.0, avail) else 760.0;
-    var row = dvui.flexbox(@src(), .{ .justify_content = .center }, .{
-        .gravity_x = 0.5,
-        .min_size_content = .{ .w = row_w, .h = 0 },
-        .max_size_content = dvui.Options.MaxSize.width(row_w),
-    });
-    defer row.deinit();
+    defer actions.deinit();
 
-    for (caps, 0..) |cap, i| {
-        // Single-line card: icon + title only. Height is content-driven (no
-        // min_size_content.h) so the three cards stay flush with each other.
-        var card = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .id_extra = i,
-            .background = true,
-            .color_fill = theme.colors.bg_surface,
-            .border = dvui.Rect.all(1),
-            .color_border = theme.colors.border_subtle,
-            .corner_radius = dvui.Rect.all(theme.radius.lg),
-            .min_size_content = .{ .w = 208, .h = 0 },
-            .max_size_content = .{ .w = 208, .h = std.math.floatMax(f32) },
-            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
-            .margin = dvui.Rect.all(4),
-        });
-        defer card.deinit();
-
-        var hd = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i, .gravity_x = 0.5 });
-        defer hd.deinit();
-        dvui.icon(@src(), "cap-icon", cap.icon, .{}, .{
-            .id_extra = i,
-            .color_text = theme.colors.accent,
-            .min_size_content = .{ .w = 14, .h = 14 },
-            .gravity_y = 0.5,
-            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
-        });
-        _ = dvui.label(@src(), "{s}", .{cap.title}, .{
-            .id_extra = i,
-            .color_text = theme.colors.text_primary,
-            .gravity_y = 0.5,
-        });
+    if (dvui.button(@src(), "Search all sources", .{}, .{
+        .color_fill = theme.colors.accent,
+        .color_text = theme.colors.text_on_accent,
+        .corner_radius = dvui.Rect.all(theme.radius.sm),
+        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+        .margin = dvui.Rect.all(theme.spacing.xs),
+    })) state.app.router.navigate(.search);
+    if (dvui.button(@src(), "Browse movies & TV", .{}, .{
+        .color_fill = theme.colors.bg_surface,
+        .color_text = theme.colors.text_primary,
+        .border = dvui.Rect.all(1),
+        .color_border = theme.colors.border_subtle,
+        .corner_radius = dvui.Rect.all(theme.radius.sm),
+        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
+        .margin = dvui.Rect.all(theme.spacing.xs),
+    })) {
+        state.app.browse_source = .TMDB;
+        state.app.router.navigate(.browse);
     }
 }
 
@@ -1408,7 +1315,7 @@ fn recentFileHidden(i: usize) bool {
 // ── Empty state ──
 
 fn renderEmptyState() void {
-    // Normal flow block BELOW the stats — must not expand/center over them.
+    // Normal flow block below the rails; never cover the actions above.
     var box = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
         .gravity_x = 0.5,
@@ -1421,24 +1328,21 @@ fn renderEmptyState() void {
         .min_size_content = theme.iconSize(.hero),
         .gravity_x = 0.5,
     });
-    _ = dvui.label(@src(), "Your hub is empty", .{}, .{
+    _ = dvui.label(@src(), "Nothing saved yet", .{}, .{
         .color_text = theme.colors.text_primary,
         .font = dvui.themeGet().font_title,
         .gravity_x = 0.5,
     });
-    _ = dvui.label(@src(), "Browse to discover, then star and bookmark to fill this page.", .{}, .{
+    _ = dvui.label(@src(), "Search or browse to get started.", .{}, .{
         .color_text = theme.colors.text_secondary,
         .gravity_x = 0.5,
     });
-    if (dvui.button(@src(), "Browse", .{}, .{
+    _ = dvui.label(@src(), "An optional TMDB key in Settings", .{}, .{
+        .color_text = theme.colors.text_secondary,
         .gravity_x = 0.5,
-        .margin = .{ .x = 0, .y = theme.spacing.md, .w = 0, .h = 0 },
-        .color_fill = theme.colors.accent,
-        .color_text = theme.colors.text_on_accent,
-        .corner_radius = dvui.Rect.all(theme.radius.sm),
-        .padding = .{ .x = theme.spacing.lg, .y = theme.spacing.sm, .w = theme.spacing.lg, .h = theme.spacing.sm },
-    })) {
-        state.app.browse_source = .TMDB;
-        state.app.router.navigate(.browse);
-    }
+    });
+    _ = dvui.label(@src(), "adds richer metadata.", .{}, .{
+        .color_text = theme.colors.text_secondary,
+        .gravity_x = 0.5,
+    });
 }
