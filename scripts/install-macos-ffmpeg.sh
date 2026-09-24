@@ -10,18 +10,18 @@ if [ "$(uname -s)" != Darwin ] || ! command -v brew >/dev/null; then
 fi
 HOMEBREW_PREFIX=${HOMEBREW_PREFIX:-$(brew --prefix)}
 FFMPEG_VERSION=7.1.5
-FFMPEG_SHA256=de668509caf9e35e3cd162473441fdb29538c6d96ed080292b3cf9e6fc5d558f
+FFMPEG_SHA256=e3963a50831c985933e1a625ed566ec4c7adb5c012c34fa9f84438e1d61bdacc
 WORK_DIR=$(mktemp -d)
 trap 'rm -rf "$WORK_DIR"' EXIT
 
-curl --fail --location --retry 3 --output "$WORK_DIR/ffmpeg.tar.xz" \
-    "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz"
-printf '%s  %s\n' "$FFMPEG_SHA256" "$WORK_DIR/ffmpeg.tar.xz" | shasum -a 256 --check -
-tar -xf "$WORK_DIR/ffmpeg.tar.xz" -C "$WORK_DIR"
+curl --fail --location --retry 3 --output "$WORK_DIR/ffmpeg.tar.gz" \
+    "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n${FFMPEG_VERSION}.tar.gz"
+printf '%s  %s\n' "$FFMPEG_SHA256" "$WORK_DIR/ffmpeg.tar.gz" | shasum -a 256 --check -
+tar -xzf "$WORK_DIR/ffmpeg.tar.gz" -C "$WORK_DIR"
 
 export MACOSX_DEPLOYMENT_TARGET=13.0
 (
-    cd "$WORK_DIR/ffmpeg-$FFMPEG_VERSION"
+    cd "$WORK_DIR/FFmpeg-n$FFMPEG_VERSION"
     ./configure --prefix="$HOMEBREW_PREFIX" --enable-shared --disable-static \
         --disable-programs --disable-doc --disable-autodetect \
         --enable-securetransport --enable-videotoolbox --enable-audiotoolbox
