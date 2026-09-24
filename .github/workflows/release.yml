@@ -56,9 +56,11 @@ jobs:
         run: |
           brew update
           # OCR is off in the default build; ONNX Runtime is not linked.
-          # Build libmpv against native FFmpeg without the unavailable Sonoma
-          # mpv/VapourSynth bottle closure.
-          brew install ffmpeg sqlite sdl2 libtorrent-rasterbar meson ninja pkgconf create-dmg
+          # Sonoma has no usable current FFmpeg/mpv bottle closure: Homebrew
+          # x265 fails on the runner. Build native codecs and libmpv from
+          # pinned source against the 13.0 deployment target instead.
+          brew install sqlite sdl2 libtorrent-rasterbar meson ninja pkgconf create-dmg
+          ./scripts/install-macos-ffmpeg.sh
           ./scripts/install-macos-mpv.sh
       - name: Build .app bundle (ReleaseFast)
         # Bake the default TMDB/OMDb keys into the release binary so end users

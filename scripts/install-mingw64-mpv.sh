@@ -19,11 +19,14 @@ curl --fail --location --retry 3 --output "$WORK_DIR/mpv.tar.gz" \
 printf '%s  %s\n' "$MPV_SHA256" "$WORK_DIR/mpv.tar.gz" | sha256sum --check -
 tar -xzf "$WORK_DIR/mpv.tar.gz" -C "$WORK_DIR"
 
+# Meson runs as native MinGW Python, not MSYS Python: its install prefix must
+# be a Windows path. Passing /mingw64 literally installs under the wrong root.
+native_prefix=$(cygpath -m "$MINGW_PREFIX")
 # The DLL and import library both land under /mingw64. The app uses libmpv,
 # not mpv.exe; skip the CLI, docs and VapourSynth, but keep the normal Windows
 # audio/video outputs. Meson must not download fallback dependencies.
-MSYS2_ARG_CONV_EXCL='--prefix=' meson setup "$WORK_DIR/build" "$WORK_DIR/mpv-$MPV_VERSION" \
-    --prefix="$MINGW_PREFIX" --wrap-mode=nodownload --buildtype=release \
+meson setup "$WORK_DIR/build" "$WORK_DIR/mpv-$MPV_VERSION" \
+    --prefix="$native_prefix" --wrap-mode=nodownload --buildtype=release \
     -Dcplayer=false -Dlibmpv=true -Dvapoursynth=disabled \
     -Dmanpage-build=disabled -Dbuild-date=false
 meson compile -C "$WORK_DIR/build"
