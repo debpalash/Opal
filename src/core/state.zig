@@ -20,7 +20,7 @@ const anime_schedule_pure = @import("../services/anime_schedule_pure.zig");
 
 pub const GridMode = enum { auto, cols_1, cols_2, cols_3, cols_4 };
 pub const ContentProvider = enum { mpv, comic_viewer };
-pub const VideoFillMode = enum { fit, cover };
+pub const VideoFillMode = enum { fit, balanced, cover };
 pub const DrawerTab = enum { Search, Downloads, TMDB, YouTube, Queue, Comics, Anime, Podcasts, Radio, History, RSS, Jellyfin, Plex, Plugins, Logs, Settings, AI, Web, Audiobooks, Opds, Novels, Vndb, Drama, Iptv, Music };
 pub const SettingsTab = enum { General, Playback, Network, Subtitles, Storage, WebUi, Scripts, AI, LangLearn, FileAssoc, LiveTv, About };
 pub const TmdbView = enum { Trending, Search, Favorites, Watchlist, Watching };
@@ -378,9 +378,8 @@ pub const AppState = struct {
     hwdec_enabled: bool = true,
     show_cell_overlay: bool = true,
     hovered_cell_idx: ?usize = null,
-    // Fill the viewport by default. Z still toggles back to aspect-fit when the
-    // viewer wants to see the uncropped frame.
-    video_fill_mode: VideoFillMode = .cover,
+    // Show the complete frame by default. Cropping is an explicit choice.
+    video_fill_mode: VideoFillMode = .fit,
     cheatsheet_open: bool = false,
     /// Command palette overlay (Ctrl/Cmd+K). Ephemeral — deliberately not
     /// persisted; reopening the app into a modal search box would be hostile.
