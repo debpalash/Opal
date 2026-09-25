@@ -13,6 +13,7 @@
 
 const std = @import("std");
 const dvui = @import("dvui");
+const icons = @import("icons");
 const c = @import("../core/c.zig");
 const state = @import("../core/state.zig");
 const player = @import("../player/player.zig");
@@ -84,13 +85,107 @@ pub fn beginDropUp(
     return fw;
 }
 
-/// Small caption at the top of a drop-up. Replaces the modal's title bar: it names
-/// the panel without giving it window chrome.
-pub fn dropUpTitle(src: std.builtin.SourceLocation, text: []const u8) void {
-    _ = dvui.label(src, "{s}", .{text}, .{
-        .color_text = theme.colors.text_tertiary,
-        .padding = .{ .x = theme.spacing.sm, .y = 2, .w = theme.spacing.sm, .h = 4 },
+/// Compact icon-led heading shared by every player drop-up.
+pub fn dropUpTitle(src: std.builtin.SourceLocation, icon: []const u8, text: []const u8) void {
+    var title = dvui.box(src, .{ .dir = .horizontal }, .{
+        .expand = .horizontal,
+        .min_size_content = .{ .w = 0, .h = 36 },
+        .max_size_content = .{ .w = std.math.floatMax(f32), .h = 36 },
+        .padding = .{ .x = theme.spacing.sm, .y = 0, .w = theme.spacing.sm, .h = 0 },
     });
+    defer title.deinit();
+
+    dvui.icon(@src(), "drop-up-title", icon, .{}, .{
+        .color_text = theme.colors.text_secondary,
+        .min_size_content = .{ .w = 16, .h = 16 },
+        .max_size_content = .{ .w = 16, .h = 16 },
+        .gravity_y = 0.5,
+        .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+    });
+    _ = dvui.label(@src(), "{s}", .{text}, .{
+        .color_text = theme.colors.text_primary,
+        .font = dvui.themeGet().font_body.withSize(theme.font_size.body),
+        .gravity_y = 0.5,
+    });
+}
+
+/// A measured popover row with a leading SVG and a fixed trailing selection
+/// slot. Every picker uses the same 36px rhythm, so switching panels does not
+/// make their contents jump vertically or change alignment.
+pub fn pickerOption(
+    src: std.builtin.SourceLocation,
+    id_extra: usize,
+    icon: []const u8,
+    label: []const u8,
+    selected: bool,
+) bool {
+    const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
+    var hovered = false;
+    var row = dvui.box(src, .{ .dir = .horizontal }, .{
+        .id_extra = id_extra,
+        .expand = .horizontal,
+        .background = true,
+        .color_fill = if (selected) theme.colors.bg_surface else transparent,
+        .corner_radius = dvui.Rect.all(theme.radius.sm),
+        // 34px content + 1px top/bottom margin = a 36px option rhythm.
+        .min_size_content = .{ .w = 0, .h = 34 },
+        .max_size_content = .{ .w = std.math.floatMax(f32), .h = 34 },
+        .padding = .{ .x = theme.spacing.sm, .y = 0, .w = theme.spacing.sm, .h = 0 },
+        .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
+    });
+
+    var activated = dvui.clicked(row.data(), .{ .hovered = &hovered });
+    const rid = row.data().id;
+    dvui.tabIndexSet(rid, null);
+    const focused = dvui.focusedWidgetId() == rid;
+    if (focused) {
+        for (dvui.events()) |*e| {
+            if (!e.handled and e.evt == .key and e.evt.key.action == .down and e.evt.key.matchBind("activate")) {
+                e.handle(@src(), row.data());
+                activated = true;
+            }
+        }
+    }
+    row.data().options.color_fill = if (hovered) theme.colors.bg_hover else if (selected) theme.colors.bg_surface else transparent;
+    row.drawBackground();
+    if (focused) row.data().focusBorder();
+
+    dvui.icon(@src(), "picker-leading", icon, .{}, .{
+        .id_extra = id_extra,
+        .color_text = if (selected) theme.colors.accent else theme.colors.text_secondary,
+        .min_size_content = .{ .w = 16, .h = 16 },
+        .max_size_content = .{ .w = 16, .h = 16 },
+        .gravity_y = 0.5,
+        .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+    });
+    _ = dvui.label(@src(), "{s}", .{label}, .{
+        .id_extra = id_extra,
+        .color_text = theme.colors.text_primary,
+        .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
+        .gravity_y = 0.5,
+    });
+    {
+        var spacer = dvui.box(@src(), .{}, .{ .id_extra = id_extra, .expand = .horizontal });
+        spacer.deinit();
+    }
+    if (selected) {
+        dvui.icon(@src(), "picker-selected", icons.tvg.lucide.check, .{}, .{
+            .id_extra = id_extra,
+            .color_text = theme.colors.accent,
+            .min_size_content = .{ .w = 14, .h = 14 },
+            .max_size_content = .{ .w = 14, .h = 14 },
+            .gravity_y = 0.5,
+        });
+    } else {
+        var selection_slot = dvui.box(@src(), .{}, .{
+            .id_extra = id_extra,
+            .min_size_content = .{ .w = 14, .h = 14 },
+            .max_size_content = .{ .w = 14, .h = 14 },
+        });
+        selection_slot.deinit();
+    }
+    row.deinit();
+    return activated;
 }
 
 /// Run before the footer controls and popovers render. An outside press closes
@@ -145,7 +240,7 @@ pub fn renderChapterPickerPopover(active_p: *player.MediaPlayer) void {
     var open: bool = true;
     var fw = beginDropUp(@src(), .chapter, 360, 302, &open);
     defer fw.deinit();
-    dropUpTitle(@src(), "Chapters");
+    dropUpTitle(@src(), icons.tvg.lucide.bookmark, "Chapters");
 
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
@@ -180,15 +275,7 @@ pub fn renderChapterPickerPopover(active_p: *player.MediaPlayer) void {
         }) catch "");
 
         const is_current = i == @as(usize, @intCast(@max(0, current_ch)));
-        if (dvui.button(@src(), label, .{}, .{
-            .id_extra = i,
-            .expand = .horizontal,
-            .color_fill = if (is_current) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = if (is_current) theme.colors.accent else theme.colors.text_primary,
-            .corner_radius = dvui.Rect.all(theme.radius.sm),
-            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
-            .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
-        })) {
+        if (pickerOption(@src(), i, icons.tvg.lucide.bookmark, label, is_current)) {
             var cmd_buf: [32]u8 = undefined;
             if (std.fmt.bufPrintZ(&cmd_buf, "set chapter {d}", .{i})) |cmd| {
                 _ = c.mpv.mpv_command_string(active_p.mpv_ctx, cmd.ptr);
@@ -203,9 +290,9 @@ pub fn renderChapterPickerPopover(active_p: *player.MediaPlayer) void {
 pub fn renderAspectPickerPopover(active_p: *player.MediaPlayer) void {
     if (footer.open_picker != .aspect) return;
     var open: bool = true;
-    var fw = beginDropUp(@src(), .aspect, 236, 388, &open);
+    var fw = beginDropUp(@src(), .aspect, 260, 388, &open);
     defer fw.deinit();
-    dropUpTitle(@src(), "Framing & aspect");
+    dropUpTitle(@src(), icons.tvg.lucide.ratio, "Framing & aspect");
 
     const modes = [_][]const u8{ "-1", "-1", "-1", "16:9", "4:3", "21:9", "239:100", "1:1", "9:16" };
     const labels = [_][]const u8{ "Auto · full frame", "Balanced · gentle crop", "Fill · edge to edge", "16:9 widescreen", "4:3 classic", "21:9 cinema", "2.39:1 cinema", "1:1 square", "9:16 portrait" };
@@ -221,15 +308,7 @@ pub fn renderAspectPickerPopover(active_p: *player.MediaPlayer) void {
             std.mem.eql(u8, state.app.video_aspect_buf[0..state.app.video_aspect_len], "-1") and @as(usize, @intFromEnum(state.app.video_fill_mode)) == k
         else
             std.mem.eql(u8, state.app.video_aspect_buf[0..state.app.video_aspect_len], m);
-        if (dvui.button(@src(), labels[k], .{}, .{
-            .id_extra = k,
-            .expand = .horizontal,
-            .color_fill = if (is_cur) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = if (is_cur) theme.colors.accent else theme.colors.text_primary,
-            .corner_radius = dvui.Rect.all(theme.radius.sm),
-            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
-            .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
-        })) {
+        if (pickerOption(@src(), k, icons.tvg.lucide.ratio, labels[k], is_cur)) {
             var cmd: [64]u8 = undefined;
             if (std.fmt.bufPrintZ(&cmd, "set video-aspect-override \"{s}\"", .{m})) |cstr| {
                 _ = c.mpv.mpv_command_string(active_p.mpv_ctx, cstr.ptr);
@@ -256,7 +335,8 @@ pub fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []con
     const title = if (kind == .audio) "Audio Track" else "Subtitles";
     var fw = beginDropUp(@src(), kind, 320, 262, &open);
     defer fw.deinit();
-    dropUpTitle(@src(), title);
+    const track_icon = if (kind == .audio) icons.tvg.lucide.music else icons.tvg.lucide.captions;
+    dropUpTitle(@src(), track_icon, title);
 
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
@@ -275,17 +355,7 @@ pub fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []con
     if (kind == .sub) {
         var visible: c_int = 1;
         _ = c.mpv.mpv_get_property(active_p.mpv_ctx, "sub-visibility", c.mpv.MPV_FORMAT_FLAG, &visible);
-        if (dvui.button(@src(), "Off", .{}, .{
-            .id_extra = 9990,
-            .expand = .horizontal,
-            .color_fill = if (visible == 0) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = if (visible == 0) theme.colors.accent else theme.colors.text_primary,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
-            .corner_radius = dvui.Rect.all(theme.radius.sm),
-            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
-            .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
-        })) {
+        if (pickerOption(@src(), 9990, icons.tvg.lucide.captions, "Off", visible == 0)) {
             _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "set sub-visibility no");
             state.app.subtitles_enabled = false;
             state.markConfigDirty();
@@ -341,18 +411,13 @@ pub fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []con
         }
 
         rows_rendered += 1;
-        if (dvui.button(@src(), @import("../core/text.zig").safeUtf8(row_name), .{}, .{
-            .id_extra = @as(usize, @intCast(i)),
-            .expand = .horizontal,
-            .color_fill = if (is_selected) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = if (is_selected) theme.colors.accent else theme.colors.text_primary,
-            // Transparent fills kill dvui's derived hover — set it explicitly.
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
-            .corner_radius = dvui.Rect.all(theme.radius.sm),
-            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
-            .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
-        })) {
+        if (pickerOption(
+            @src(),
+            @as(usize, @intCast(i)),
+            track_icon,
+            @import("../core/text.zig").safeUtf8(row_name),
+            is_selected,
+        )) {
             var cmd: [64]u8 = undefined;
             const prop = if (kind == .audio) "aid" else "sid";
             if (std.fmt.bufPrintZ(&cmd, "set {s} {d}", .{ prop, t_id })) |cstr| {
@@ -420,7 +485,7 @@ pub fn renderAudioDevicePickerPopover(active_p: *player.MediaPlayer) void {
     var open: bool = true;
     var fw = beginDropUp(@src(), .audio_device, 340, 302, &open);
     defer fw.deinit();
-    dropUpTitle(@src(), "Audio Output");
+    dropUpTitle(@src(), icons.tvg.lucide.speaker, "Audio Output");
 
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
@@ -456,18 +521,7 @@ pub fn renderAudioDevicePickerPopover(active_p: *player.MediaPlayer) void {
     while (i < dev_count) : (i += 1) {
         const d = &devices[i];
         const is_selected = std.mem.eql(u8, cur, d.nameSlice());
-        if (dvui.button(@src(), @import("../core/text.zig").safeUtf8(d.label()), .{}, .{
-            .id_extra = i,
-            .expand = .horizontal,
-            .color_fill = if (is_selected) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = if (is_selected) theme.colors.accent else theme.colors.text_primary,
-            // Transparent fills kill dvui's derived hover — set it explicitly.
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
-            .corner_radius = dvui.Rect.all(theme.radius.sm),
-            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
-            .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
-        })) {
+        if (pickerOption(@src(), i, icons.tvg.lucide.speaker, @import("../core/text.zig").safeUtf8(d.label()), is_selected)) {
             var name_z: [av_device.name_cap + 1]u8 = undefined;
             @memcpy(name_z[0..d.name_len], d.name[0..d.name_len]);
             name_z[d.name_len] = 0;
@@ -500,7 +554,7 @@ pub fn renderLangPickerPopover() void {
     var open: bool = true;
     var fw = beginDropUp(@src(), .lang, 240, 342, &open);
     defer fw.deinit();
-    dropUpTitle(@src(), "Subtitle language");
+    dropUpTitle(@src(), icons.tvg.lucide.globe, "Subtitle language");
 
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
@@ -521,18 +575,7 @@ pub fn renderLangPickerPopover() void {
 
     for (langs, 0..) |l, k| {
         const is_cur = std.mem.eql(u8, current, l);
-        if (dvui.button(@src(), names[k], .{}, .{
-            .id_extra = k,
-            .expand = .horizontal,
-            .color_fill = if (is_cur) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = if (is_cur) theme.colors.accent else theme.colors.text_primary,
-            // Transparent fills kill dvui's derived hover — set it explicitly.
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
-            .corner_radius = dvui.Rect.all(theme.radius.sm),
-            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
-            .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
-        })) {
+        if (pickerOption(@src(), k, icons.tvg.lucide.globe, names[k], is_cur)) {
             @memcpy(state.app.sub_lang_buf[0..l.len], l);
             state.app.sub_lang_len = l.len;
             state.markConfigDirty();
@@ -559,7 +602,7 @@ pub fn renderPlaylistPickerPopover(active_p: *player.MediaPlayer) void {
     var open: bool = true;
     var fw = beginDropUp(@src(), .playlist, 460, 342, &open);
     defer fw.deinit();
-    dropUpTitle(@src(), "Files");
+    dropUpTitle(@src(), icons.tvg.lucide.list, "Files");
 
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
@@ -578,15 +621,7 @@ pub fn renderPlaylistPickerPopover(active_p: *player.MediaPlayer) void {
         var lbl_buf: [320]u8 = undefined;
         const label = std.fmt.bufPrintZ(&lbl_buf, "{s}  ({d:.1} MB)", .{ std.mem.sliceTo(&name_buf, 0), size_mb }) catch "File";
         const is_sel = active_p.selected_file_idx == @as(i32, @intCast(i));
-        if (dvui.button(@src(), label, .{}, .{
-            .id_extra = i,
-            .expand = .horizontal,
-            .color_fill = if (is_sel) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = if (is_sel) theme.colors.accent else theme.colors.text_primary,
-            .corner_radius = dvui.Rect.all(theme.radius.sm),
-            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
-            .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
-        })) {
+        if (pickerOption(@src(), i, icons.tvg.lucide.list, label, is_sel)) {
             if (active_p.selected_file_idx != @as(i32, @intCast(i))) {
                 _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "stop");
                 const old_idx = active_p.selected_file_idx;

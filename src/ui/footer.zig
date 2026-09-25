@@ -384,7 +384,7 @@ pub fn renderSubPicker() void {
     var win = pickers.beginDropUp(@src(), .subs, 600, 460, &state.app.sub_picker_open);
     defer win.deinit();
 
-    pickers.dropUpTitle(@src(), "Find subtitles");
+    pickers.dropUpTitle(@src(), icons.tvg.lucide.search, "Find subtitles");
 
     var pad = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
@@ -1113,49 +1113,54 @@ fn pickerIconChip(
     tooltip: []const u8,
     kind: PickerKind,
 ) bool {
-    // We do hover detection by comparing the laid-out rect to the mouse pos.
-    // The hover background relies on this — `dvui.clicked` runs *after* the
-    // box is constructed, so the box's background can't depend on its return
-    // value. We instead probe the laid-out rect before deciding the fill.
+    const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
     var btn = dvui.box(src, .{ .dir = .horizontal }, .{
         .id_extra = id_extra,
-        .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
-        .margin = .{ .x = 3, .y = 0, .w = 0, .h = 0 },
-        .min_size_content = .{ .w = 0, .h = 28 },
+        .background = true,
+        .color_fill = if (is_active) theme.colors.bg_surface else transparent,
+        .corner_radius = dvui.Rect.all(theme.radius.sm),
+        .padding = .{ .x = 8, .y = 0, .w = 8, .h = 0 },
+        .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
+        .min_size_content = .{ .w = 0, .h = 30 },
+        .max_size_content = .{ .w = std.math.floatMax(f32), .h = 30 },
         .gravity_y = 0.5,
     });
 
     const btn_rect = btn.data().borderRectScale().r;
     // The drop-up panel floats above this chip, so remember where it landed.
-    recordAnchor(kind, btn_rect);
-    const is_hovered = mouseOverRect(btn_rect);
+    if (kind != .none) recordAnchor(kind, btn_rect);
     var hovered_signal: bool = false;
-    const clicked = dvui.clicked(btn.data(), .{ .hovered = &hovered_signal });
+    var activated = dvui.clicked(btn.data(), .{ .hovered = &hovered_signal });
+    const btn_id = btn.data().id;
+    dvui.tabIndexSet(btn_id, null);
+    const focused = dvui.focusedWidgetId() == btn_id;
+    if (focused) {
+        for (dvui.events()) |*e| {
+            if (!e.handled and e.evt == .key and e.evt.key.action == .down and e.evt.key.matchBind("activate")) {
+                e.handle(@src(), btn.data());
+                activated = true;
+            }
+        }
+    }
+    btn.data().options.color_fill = if (hovered_signal) theme.colors.bg_hover else if (is_active) theme.colors.bg_surface else transparent;
+    btn.drawBackground();
+    if (focused) btn.data().focusBorder();
     const wd_copy = btn.data().*;
 
-    // Hover-only fill — drawn here so it's underneath the icon+label.
-    if (is_hovered) {
-        var bg = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .both,
-            .background = true,
-            .color_fill = theme.colors.bg_hover,
-            .corner_radius = dvui.Rect.all(theme.radius.sm),
-            .min_size_content = .{ .w = 0, .h = 0 },
-        });
-        bg.deinit();
-    }
-
     dvui.icon(@src(), "picker-ic", icon, .{}, .{
-        .color_text = if (is_active) theme.colors.text_primary else theme.colors.text_tertiary,
-        .min_size_content = .{ .w = 14, .h = 14 },
-        .max_size_content = .{ .w = 14, .h = 14 },
+        .id_extra = id_extra,
+        .color_text = if (is_active) theme.colors.accent else theme.colors.text_secondary,
+        .min_size_content = .{ .w = 16, .h = 16 },
+        .max_size_content = .{ .w = 16, .h = 16 },
         .gravity_y = 0.5,
-        .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
+        .margin = .{ .x = 0, .y = 0, .w = 5, .h = 0 },
     });
 
     if (chip_text.len > 0) {
         _ = dvui.label(@src(), "{s}", .{chip_text}, .{
-            .color_text = if (is_active) theme.colors.text_primary else theme.colors.text_tertiary,
+            .id_extra = id_extra,
+            .color_text = if (is_active) theme.colors.text_primary else theme.colors.text_secondary,
+            .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
             .gravity_y = 0.5,
         });
     }
@@ -1165,7 +1170,7 @@ fn pickerIconChip(
     if (tooltip.len > 0) {
         components.tip(src, wd_copy, tooltip);
     }
-    return clicked;
+    return activated;
 }
 
 // ── Querying helpers for the picker chips ──
@@ -1496,9 +1501,10 @@ pub fn renderLiquidGlassOverlay() void {
     {
         var ctrl_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
+            // DVUI adds padding outside min_size_content: 36 + 4 + 4 = 44.
             .min_size_content = .{ .w = 0, .h = 36 },
             .max_size_content = .{ .w = 0, .h = 36 },
-            .padding = .{ .x = theme.spacing.md, .y = 1, .w = theme.spacing.md, .h = 1 },
+            .padding = .{ .x = theme.spacing.md, .y = 4, .w = theme.spacing.md, .h = 4 },
         });
         defer ctrl_row.deinit();
 
@@ -1531,13 +1537,15 @@ pub fn renderLiquidGlassOverlay() void {
             if (dvui.buttonIcon(@src(), "ep-prev", icons.tvg.lucide.@"chevron-first", .{}, .{}, .{
                 .data_out = &wd,
                 .color_fill = transparent,
+                .color_fill_hover = theme.colors.bg_hover,
+                .color_fill_press = theme.colors.bg_elevated,
                 .color_text = if (has_prev) theme.colors.text_primary else theme.colors.text_tertiary,
                 .border = dvui.Rect.all(0),
                 .corner_radius = dvui.Rect.all(theme.radius.sm),
                 .gravity_y = 0.5,
                 .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
-                .min_size_content = theme.iconSize(.xl),
-                .max_size_content = .{ .w = 32, .h = 32 },
+                .min_size_content = .{ .w = 20, .h = 20 },
+                .max_size_content = .{ .w = 20, .h = 20 },
             })) {
                 if (has_prev) tv_lib.playNeighborEpisode(-1);
             }
@@ -1549,37 +1557,41 @@ pub fn renderLiquidGlassOverlay() void {
             if (dvui.buttonIcon(@src(), "skip-prev", icons.tvg.lucide.@"skip-back", .{}, .{}, .{
                 .data_out = &wd,
                 .color_fill = transparent,
+                .color_fill_hover = theme.colors.bg_hover,
+                .color_fill_press = theme.colors.bg_elevated,
                 .color_text = if (playback.playlist_pos > 0) theme.colors.text_primary else theme.colors.text_tertiary,
                 .border = dvui.Rect.all(0),
                 .corner_radius = dvui.Rect.all(theme.radius.sm),
                 .gravity_y = 0.5,
                 .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
-                .min_size_content = theme.iconSize(.xl),
-                .max_size_content = .{ .w = 32, .h = 32 },
+                .min_size_content = .{ .w = 20, .h = 20 },
+                .max_size_content = .{ .w = 20, .h = 20 },
             })) {
                 _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "playlist-prev");
             }
             components.tip(@src(), wd, "Previous track");
         }
 
-        // Rewind 10s — 36px square. Sheds with the rest of the skip group.
+        // Rewind 10s — 32px square. Sheds with the rest of the skip group.
         if (fit.skip_buttons) if (dvui.buttonIcon(@src(), "rewind10", icons.tvg.lucide.rewind, .{}, .{}, .{
             .data_out = &wd,
             .color_fill = transparent,
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .color_text = theme.colors.text_primary,
             .border = dvui.Rect.all(0),
             .corner_radius = dvui.Rect.all(theme.radius.sm),
             .gravity_y = 0.5,
             .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
-            .min_size_content = .{ .w = 30, .h = 30 },
-            .max_size_content = .{ .w = 30, .h = 30 },
+            .min_size_content = .{ .w = 20, .h = 20 },
+            .max_size_content = .{ .w = 20, .h = 20 },
         })) {
             _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "seek -10");
         };
         if (fit.skip_buttons) components.tip(@src(), wd, "Skip back 10s (\xE2\x86\x90)");
 
         // Play / Pause — bare icon, no resting fill: it reads as part of the
-        // transport row rather than a stamped accent chip. Size (34px vs 30px)
+        // transport row rather than a stamped accent chip. Size (36px vs 32px)
         // still marks it as the primary affordance. The icon must be
         // text_primary, NOT text_on_accent — the latter is the dark ink meant to
         // sit on the bright accent fill, and without that fill it would be
@@ -1587,13 +1599,15 @@ pub fn renderLiquidGlassOverlay() void {
         if (dvui.buttonIcon(@src(), "toggle-pp", toggle_icon, .{}, .{}, .{
             .data_out = &wd,
             .color_fill = transparent,
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .color_text = theme.colors.text_primary,
             .border = dvui.Rect.all(0),
             .corner_radius = dvui.Rect.all(theme.radius.md),
             .gravity_y = 0.5,
             .padding = .{ .x = 7, .y = 7, .w = 7, .h = 7 },
-            .min_size_content = .{ .w = 34, .h = 34 },
-            .max_size_content = .{ .w = 34, .h = 34 },
+            .min_size_content = .{ .w = 22, .h = 22 },
+            .max_size_content = .{ .w = 22, .h = 22 },
             .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
         })) {
             active_p.togglePause();
@@ -1633,16 +1647,15 @@ pub fn renderLiquidGlassOverlay() void {
                 const g = player.colorGammaOf(active_p, &gbuf);
                 break :blk if (av_pure.isHdrVideo(g, "")) "Auto \u{00B7} HDR" else "Auto";
             };
-            if (dvui.button(@src(), label, .{}, .{
-                .data_out = &wd,
-                .color_fill = transparent,
-                .color_text = if (cur == .auto) theme.colors.text_primary else theme.colors.accent,
-                .border = dvui.Rect.all(0),
-                .corner_radius = dvui.Rect.all(theme.radius.sm),
-                .gravity_y = 0.5,
-                .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
-                .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
-            })) {
+            if (pickerIconChip(
+                @src(),
+                710,
+                icons.tvg.lucide.sparkles,
+                label,
+                cur != .auto,
+                "Picture preset — Auto detects HDR and corrects it for this display",
+                .none,
+            )) {
                 const next: u8 = (@intFromEnum(cur) + 1) % 6;
                 state.app.picture_preset = next;
                 // Apply to every open player, not just the active one — the
@@ -1652,23 +1665,24 @@ pub fn renderLiquidGlassOverlay() void {
                 state.markConfigDirty();
                 dvui.refresh(null, @src(), null);
             }
-            components.tip(@src(), wd, "Picture preset — Auto detects HDR and corrects it for this display");
         }
 
         // Fullscreen toggle. (This button used to seek +10s; seeking forward is
         // still on the right-arrow key, which is where it always was.)
         {
             const is_fs = state.app.fullscreen_player_idx != null;
-            if (dvui.buttonIcon(@src(), "ff10", icons.tvg.lucide.@"fast-forward", .{}, .{}, .{
+            if (dvui.buttonIcon(@src(), "fullscreen", if (is_fs) icons.tvg.lucide.@"minimize-2" else icons.tvg.lucide.@"maximize-2", .{}, .{}, .{
                 .data_out = &wd,
                 .color_fill = transparent,
+                .color_fill_hover = theme.colors.bg_hover,
+                .color_fill_press = theme.colors.bg_elevated,
                 .color_text = if (is_fs) theme.colors.accent else theme.colors.text_primary,
                 .border = dvui.Rect.all(0),
                 .corner_radius = dvui.Rect.all(theme.radius.sm),
                 .gravity_y = 0.5,
                 .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
-                .min_size_content = .{ .w = 30, .h = 30 },
-                .max_size_content = .{ .w = 30, .h = 30 },
+                .min_size_content = .{ .w = 20, .h = 20 },
+                .max_size_content = .{ .w = 20, .h = 20 },
             })) {
                 // Same toggle the 'f' key drives (input.zig) — one fullscreen path,
                 // not two. The active-player index is only stored when there IS an
@@ -1682,20 +1696,22 @@ pub fn renderLiquidGlassOverlay() void {
                 }
                 dvui.refresh(null, @src(), null);
             }
-            components.tip(@src(), wd, if (is_fs) "Exit fullscreen (f)" else "Fullscreen (f)");
+            components.tip(@src(), wd, if (is_fs) "Exit fullscreen (Esc or F F)" else "Fullscreen (F F)");
         }
 
         if (has_playlist) {
             if (dvui.buttonIcon(@src(), "skip-next", icons.tvg.lucide.@"skip-forward", .{}, .{}, .{
                 .data_out = &wd,
                 .color_fill = transparent,
+                .color_fill_hover = theme.colors.bg_hover,
+                .color_fill_press = theme.colors.bg_elevated,
                 .color_text = if (playback.playlist_pos + 1 < playback.playlist_count) theme.colors.text_primary else theme.colors.text_tertiary,
                 .border = dvui.Rect.all(0),
                 .corner_radius = dvui.Rect.all(theme.radius.sm),
                 .gravity_y = 0.5,
                 .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
-                .min_size_content = theme.iconSize(.xl),
-                .max_size_content = .{ .w = 32, .h = 32 },
+                .min_size_content = .{ .w = 20, .h = 20 },
+                .max_size_content = .{ .w = 20, .h = 20 },
             })) {
                 _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "playlist-next");
             }
@@ -1708,13 +1724,15 @@ pub fn renderLiquidGlassOverlay() void {
             if (dvui.buttonIcon(@src(), "ep-next", icons.tvg.lucide.@"chevron-last", .{}, .{}, .{
                 .data_out = &wd,
                 .color_fill = transparent,
+                .color_fill_hover = theme.colors.bg_hover,
+                .color_fill_press = theme.colors.bg_elevated,
                 .color_text = if (has_next) theme.colors.text_primary else theme.colors.text_tertiary,
                 .border = dvui.Rect.all(0),
                 .corner_radius = dvui.Rect.all(theme.radius.sm),
                 .gravity_y = 0.5,
                 .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
-                .min_size_content = theme.iconSize(.xl),
-                .max_size_content = .{ .w = 32, .h = 32 },
+                .min_size_content = .{ .w = 20, .h = 20 },
+                .max_size_content = .{ .w = 20, .h = 20 },
             })) {
                 if (has_next) tv_lib.playNeighborEpisode(1);
             }
@@ -1800,13 +1818,15 @@ pub fn renderLiquidGlassOverlay() void {
         if (dvui.buttonIcon(@src(), "mute-tog", m_icon, .{}, .{}, .{
             .data_out = &wd,
             .color_fill = transparent,
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .color_text = if (is_muted) theme.colors.text_tertiary else theme.colors.text_primary,
             .border = dvui.Rect.all(0),
             .corner_radius = dvui.Rect.all(theme.radius.sm),
             .gravity_y = 0.5,
             .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
-            .min_size_content = .{ .w = 28, .h = 28 },
-            .max_size_content = .{ .w = 28, .h = 28 },
+            .min_size_content = .{ .w = 20, .h = 20 },
+            .max_size_content = .{ .w = 20, .h = 20 },
             .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
         })) {
             _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "cycle mute");
@@ -2000,12 +2020,14 @@ pub fn renderLiquidGlassOverlay() void {
         if (dvui.buttonIcon(@src(), "close", icons.tvg.lucide.x, .{}, .{}, .{
             .data_out = &wd,
             .color_fill = transparent,
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .color_text = if (close_hovered_now) theme.colors.danger else theme.colors.text_secondary,
             .corner_radius = dvui.Rect.all(theme.radius.sm),
             .border = dvui.Rect.all(0),
             .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
-            .min_size_content = .{ .w = 28, .h = 28 },
-            .max_size_content = .{ .w = 28, .h = 28 },
+            .min_size_content = .{ .w = 20, .h = 20 },
+            .max_size_content = .{ .w = 20, .h = 20 },
             .gravity_y = 0.5,
             .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
         })) {
@@ -2013,7 +2035,7 @@ pub fn renderLiquidGlassOverlay() void {
         }
         // Capture the actual rendered rect for next frame's hover test.
         close_button_rect = wd.borderRectScale().r;
-        components.tip(@src(), wd, "Close player (Esc)");
+        components.tip(@src(), wd, "Close player");
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -2351,22 +2373,22 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
         }
 
         if (show_skip) {
-        // Previous — best-effort. No prev-queue API, so use mpv playlist-prev
-        // (handles internal playlists / torrent files); harmless otherwise.
-        if (dvui.buttonIcon(@src(), "np-prev", icons.tvg.lucide.@"skip-back", .{}, .{}, .{
-            .data_out = &wd,
-            .color_fill = transparent,
-            .color_text = theme.colors.text_primary,
-            .border = dvui.Rect.all(0),
-            .corner_radius = dvui.Rect.all(theme.radius.sm),
-            .gravity_y = 0.5,
-            .padding = .{ .x = 7, .y = 7, .w = 7, .h = 7 },
-            .min_size_content = .{ .w = 34, .h = 34 },
-            .max_size_content = .{ .w = 34, .h = 34 },
-        })) {
-            _ = c.mpv.mpv_command_string(p.mpv_ctx, "playlist-prev");
-        }
-        components.tip(@src(), wd, "Previous");
+            // Previous — best-effort. No prev-queue API, so use mpv playlist-prev
+            // (handles internal playlists / torrent files); harmless otherwise.
+            if (dvui.buttonIcon(@src(), "np-prev", icons.tvg.lucide.@"skip-back", .{}, .{}, .{
+                .data_out = &wd,
+                .color_fill = transparent,
+                .color_text = theme.colors.text_primary,
+                .border = dvui.Rect.all(0),
+                .corner_radius = dvui.Rect.all(theme.radius.sm),
+                .gravity_y = 0.5,
+                .padding = .{ .x = 7, .y = 7, .w = 7, .h = 7 },
+                .min_size_content = .{ .w = 34, .h = 34 },
+                .max_size_content = .{ .w = 34, .h = 34 },
+            })) {
+                _ = c.mpv.mpv_command_string(p.mpv_ctx, "playlist-prev");
+            }
+            components.tip(@src(), wd, "Previous");
         }
 
         // Play / Pause — the single accent affordance.
@@ -2388,21 +2410,21 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
         components.tip(@src(), wd, "Play/Pause");
 
         if (show_skip) {
-        // Next — plays the next unplayed queue item.
-        if (dvui.buttonIcon(@src(), "np-next", icons.tvg.lucide.@"skip-forward", .{}, .{}, .{
-            .data_out = &wd,
-            .color_fill = transparent,
-            .color_text = theme.colors.text_primary,
-            .border = dvui.Rect.all(0),
-            .corner_radius = dvui.Rect.all(theme.radius.sm),
-            .gravity_y = 0.5,
-            .padding = .{ .x = 7, .y = 7, .w = 7, .h = 7 },
-            .min_size_content = .{ .w = 34, .h = 34 },
-            .max_size_content = .{ .w = 34, .h = 34 },
-        })) {
-            queue.playNextUnplayed(p);
-        }
-        components.tip(@src(), wd, "Next (from queue)");
+            // Next — plays the next unplayed queue item.
+            if (dvui.buttonIcon(@src(), "np-next", icons.tvg.lucide.@"skip-forward", .{}, .{}, .{
+                .data_out = &wd,
+                .color_fill = transparent,
+                .color_text = theme.colors.text_primary,
+                .border = dvui.Rect.all(0),
+                .corner_radius = dvui.Rect.all(theme.radius.sm),
+                .gravity_y = 0.5,
+                .padding = .{ .x = 7, .y = 7, .w = 7, .h = 7 },
+                .min_size_content = .{ .w = 34, .h = 34 },
+                .max_size_content = .{ .w = 34, .h = 34 },
+            })) {
+                queue.playNextUnplayed(p);
+            }
+            components.tip(@src(), wd, "Next (from queue)");
         }
 
         {

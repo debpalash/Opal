@@ -28,6 +28,9 @@ const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
 var player_top_chrome_rect: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
 
 pub fn mouseInPlayerTopChrome(p: dvui.Point.Physical) bool {
+    // Fullscreen omits this layer. Do not let its last rendered rectangle
+    // remain as an invisible click blocker over the video.
+    if (state.app.fullscreen_player_idx != null) return false;
     const r = player_top_chrome_rect;
     return p.x >= r.x and p.x <= r.x + r.w and p.y >= r.y and p.y <= r.y + r.h;
 }
@@ -119,7 +122,7 @@ pub fn render() !void {
             .threshold_ms = autohide.DEFAULT_THRESHOLD_MS,
         });
     }
-    const immersive = hide_eligible and idle_ms >= autohide.DEFAULT_THRESHOLD_MS + autohide.FADE_MS;
+    const immersive = autohide.playerImmersive(fullscreen, hide_eligible, idle_ms);
 
     if (state.app.router.current == .player) {
         // Player is a true layer stack: the video owns the entire route and

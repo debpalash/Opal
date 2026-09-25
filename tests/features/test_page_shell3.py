@@ -175,7 +175,7 @@ def test_watching_progress_first_layout():
     return "pass", "up next first; saved library and releases follow; no centered dead space"
 
 
-@test("Player control bar: drop-ups + FF fullscreen", "Page Shell")
+@test("Player control bar: aligned SVG controls + polished drop-ups", "Page Shell")
 def test_player_dropups():
     # The control-bar pickers (aspect / audio / subs / language / files) were
     # MODAL dialogs: a dimming backdrop over the video, a title bar, a close
@@ -183,6 +183,7 @@ def test_player_dropups():
     # backdrop-less panels anchored ABOVE the chip that opened them.
     pk = _src("src/ui/pickers.zig")
     ft = _src("src/ui/footer.zig")
+    sh = _src("src/ui/shell.zig")
     dp = _src("src/ui/dropup_pure.zig")
     bz = _src("build.zig")
     checks = {
@@ -197,18 +198,51 @@ def test_player_dropups():
         # Anchored to the chip that opened it, so it drops UP from that chip.
         "chip anchor recorded": "picker_anchor" in ft and "recordAnchor(" in ft,
         "panel anchors to the chip": "footer.anchorFor(" in pk,
+        # One measured spine keeps every control on the same optical baseline.
+        "44px control spine": (
+            "36 + 4 + 4 = 44" in ft
+            and ".min_size_content = .{ .w = 0, .h = 36 }" in ft
+            and ".max_size_content = .{ .w = 0, .h = 36 }" in ft
+        ),
+        "32px icon controls": _between(ft, "var ctrl_row", "ROW 3").count(
+            ".min_size_content = .{ .w = 20, .h = 20 }"
+        ) >= 7,
+        "transport hover feedback": _between(ft, "var ctrl_row", "ROW 3").count(
+            ".color_fill_hover = theme.colors.bg_hover"
+        ) >= 7,
+        "chips share 30px geometry": (
+            ".min_size_content = .{ .w = 0, .h = 30 }" in ft
+            and ".max_size_content = .{ .w = std.math.floatMax(f32), .h = 30 }" in ft
+        ),
+        # Popovers carry the same visual language as their toolbar trigger:
+        # icon-led header, measured rows and a trailing SVG check state.
+        "svg popover titles": "pub fn dropUpTitle(" in pk and "dvui.icon(" in _between(pk, "pub fn dropUpTitle", "pub fn pickerOption"),
+        "shared picker option": "pub fn pickerOption(" in pk,
+        "selected option check": 'icons.tvg.lucide.check' in _between(pk, "pub fn pickerOption", "pub fn handleDropUpInput"),
+        "aspect options use shared rows": "pickerOption(@src(), k, icons.tvg.lucide.ratio" in pk,
         # With no backdrop there is nothing to swallow a stray click, so Esc must work.
         "esc dismisses": "pub fn handleDropUpInput(" in pk
             and "pickers.handleDropUpInput();" in ft and "ke.code == .escape" in pk,
-        # FF button now toggles fullscreen, reusing the same path the 'f' key drives.
-        "ff toggles fullscreen": ("fullscreen_player_idx" in ft
-                                  and 'components.tip(@src(), wd, if (is_fs) "Exit fullscreen (f)"' in ft),
-        "ff no longer seeks": '"seek 10"' not in ft,
+        # Fullscreen has the right icon, advertises the real double-tap shortcut,
+        # and reuses the same state path the F F key gesture drives.
+        "fullscreen toggles": "fullscreen_player_idx" in ft,
+        "fullscreen icon": ('icons.tvg.lucide.@"maximize-2"' in ft
+                            and 'icons.tvg.lucide.@"minimize-2"' in ft),
+        "fullscreen shortcut truthful": ('"Fullscreen (F F)"' in ft
+                                          and '"Exit fullscreen (Esc or F F)"' in ft),
+        "fullscreen no longer seeks": '"seek 10"' not in ft,
+        # The old Esc label promised an action Esc does not perform.
+        "close tooltip truthful": '"Close player (Esc)"' not in ft,
+        # Hidden fullscreen top chrome must not retain an invisible click target.
+        "fullscreen has no stale top hit region": (
+            "pub fn mouseInPlayerTopChrome" in sh
+            and "fullscreen_player_idx != null" in sh.split("pub fn mouseInPlayerTopChrome")[1].split("\n}")[0]
+        ),
     }
     missing = [k for k, v in checks.items() if not v]
     if missing:
         return "fail", "missing: " + ", ".join(missing)
-    return "pass", "backdrop-less drop-ups anchored above their chip; FF toggles fullscreen"
+    return "pass", "backdrop-less drop-ups anchored above their chip; fullscreen controls match their behavior"
 
 
 @test("Player: prev/next episode buttons", "Page Shell")

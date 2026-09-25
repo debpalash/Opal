@@ -471,19 +471,27 @@ pub fn processGlobalInputs() void {
                             }
                         },
                         .left_bracket => {
-                            _ = c.mpv.mpv_command_string(p.mpv_ctx, "multiply speed 1/1.1");
                             var spd: f64 = 1.0;
                             _ = c.mpv.mpv_get_property(p.mpv_ctx, "speed", c.mpv.MPV_FORMAT_DOUBLE, &spd);
+                            const next = input_pure.speedAfterStep(spd, .slower);
+                            var cmd_buf: [48]u8 = undefined;
+                            if (std.fmt.bufPrintZ(&cmd_buf, "set speed {d:.6}", .{next})) |cmd| {
+                                _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
+                            } else |_| {}
                             var spd_buf: [32]u8 = undefined;
-                            const spd_str = std.fmt.bufPrint(&spd_buf, "Speed: {d:.2}x", .{spd / 1.1}) catch "Speed changed";
+                            const spd_str = std.fmt.bufPrint(&spd_buf, "Speed: {d:.2}x", .{next}) catch "Speed changed";
                             state.showToast(spd_str);
                         },
                         .right_bracket => {
-                            _ = c.mpv.mpv_command_string(p.mpv_ctx, "multiply speed 1.1");
                             var spd: f64 = 1.0;
                             _ = c.mpv.mpv_get_property(p.mpv_ctx, "speed", c.mpv.MPV_FORMAT_DOUBLE, &spd);
+                            const next = input_pure.speedAfterStep(spd, .faster);
+                            var cmd_buf: [48]u8 = undefined;
+                            if (std.fmt.bufPrintZ(&cmd_buf, "set speed {d:.6}", .{next})) |cmd| {
+                                _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
+                            } else |_| {}
                             var spd_buf: [32]u8 = undefined;
-                            const spd_str = std.fmt.bufPrint(&spd_buf, "Speed: {d:.2}x", .{spd * 1.1}) catch "Speed changed";
+                            const spd_str = std.fmt.bufPrint(&spd_buf, "Speed: {d:.2}x", .{next}) catch "Speed changed";
                             state.showToast(spd_str);
                         },
                         .backspace => {
