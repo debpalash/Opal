@@ -33,6 +33,13 @@ pub fn shouldHideChrome(in: Inputs) bool {
     return in.idle_ms >= in.threshold_ms;
 }
 
+/// Whether the player route should omit its in-window navigation layer.
+/// OS fullscreen is immersive immediately, even when playback is paused;
+/// ordinary playback waits for the shared idle fade to finish.
+pub fn playerImmersive(fullscreen: bool, hide_eligible: bool, idle_ms: i64) bool {
+    return fullscreen or (hide_eligible and idle_ms >= DEFAULT_THRESHOLD_MS + FADE_MS);
+}
+
 test "hides only while playing video and idle past the threshold" {
     const base = Inputs{ .playing_video = true, .typing = false, .idle_ms = 3000, .threshold_ms = 2500 };
     try std.testing.expect(shouldHideChrome(base));
@@ -53,4 +60,10 @@ test "hides only while playing video and idle past the threshold" {
 test "chrome idle constants are sane (fade fits inside the idle window)" {
     try std.testing.expect(DEFAULT_THRESHOLD_MS > 0);
     try std.testing.expect(FADE_MS > 0 and FADE_MS < DEFAULT_THRESHOLD_MS);
+}
+
+test "fullscreen player is immersive immediately, including while paused" {
+    try std.testing.expect(playerImmersive(true, false, 0));
+    try std.testing.expect(!playerImmersive(false, true, DEFAULT_THRESHOLD_MS + FADE_MS - 1));
+    try std.testing.expect(playerImmersive(false, true, DEFAULT_THRESHOLD_MS + FADE_MS));
 }

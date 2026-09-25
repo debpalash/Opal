@@ -17,6 +17,22 @@ const std = @import("std");
 /// that neither gesture feels different from the other.
 pub const DOUBLE_TAP_MS: i64 = 500;
 
+pub const SpeedStep = enum { slower, faster };
+pub const MIN_PLAYBACK_SPEED: f64 = 0.25;
+pub const MAX_PLAYBACK_SPEED: f64 = 4.0;
+
+/// Compute the one speed value both the mpv command and feedback toast use.
+/// Keeping the value here prevents the UI from reading an already-updated mpv
+/// property and applying the step a second time in the displayed result.
+pub fn speedAfterStep(current: f64, step: SpeedStep) f64 {
+    if (!std.math.isFinite(current) or current <= 0) return 1.0;
+    const next = switch (step) {
+        .slower => current / 1.1,
+        .faster => current * 1.1,
+    };
+    return std.math.clamp(next, MIN_PLAYBACK_SPEED, MAX_PLAYBACK_SPEED);
+}
+
 /// Tracks one double-tap gesture. Fixed size, no allocation: callers keep one
 /// of these in a `struct { var }` static next to the handler.
 pub const DoubleTap = struct {
@@ -116,4 +132,12 @@ test "a fresh tracker never completes on its first tap" {
     // guard cannot be "target matches" alone.
     var d = DoubleTap{};
     try std.testing.expect(!d.tap(0, 0, DOUBLE_TAP_MS));
+}
+
+test "speed steps report the exact bounded value sent to mpv" {
+    try std.testing.expectApproxEqAbs(@as(f64, 1.1), speedAfterStep(1.0, .faster), 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0 / 1.1), speedAfterStep(1.0, .slower), 0.0001);
+    try std.testing.expectEqual(@as(f64, 4.0), speedAfterStep(4.0, .faster));
+    try std.testing.expectEqual(@as(f64, 0.25), speedAfterStep(0.25, .slower));
+    try std.testing.expectEqual(@as(f64, 1.0), speedAfterStep(std.math.nan(f64), .faster));
 }
