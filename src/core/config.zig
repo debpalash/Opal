@@ -78,7 +78,7 @@ pub fn save() void {
     setKey("playback_volume", fmtFloat(&fb, @floatCast(state.app.playback_volume)));
     setKey("playback_speed", fmtFloat(&fb, @floatCast(state.app.playback_speed)));
     setKey("playback_muted", if (state.app.playback_muted) "1" else "0");
-    setKey("video_fill_mode", @tagName(state.app.video_fill_mode));
+    setKey("video_frame_mode", @tagName(state.app.video_fill_mode));
     setKey("translate_lang", state.app.translate_lang_buf[0..state.app.translate_lang_len]);
     setKey("translate_enabled", if (state.app.translate_enabled) "1" else "0");
     setKey("tts_voice", state.app.tts_voice_buf[0..state.app.tts_voice_len]);
@@ -556,8 +556,8 @@ fn applyConfig(key: []const u8, val: []const u8) void {
             @memcpy(state.app.video_aspect_buf[0..val.len], val);
             state.app.video_aspect_len = val.len;
         }
-    } else if (std.mem.eql(u8, key, "video_fill_mode")) {
-        state.app.video_fill_mode = if (std.mem.eql(u8, val, "fit")) .fit else .cover;
+    } else if (std.mem.eql(u8, key, "video_frame_mode")) {
+        state.app.video_fill_mode = if (std.mem.eql(u8, val, "cover")) .cover else if (std.mem.eql(u8, val, "balanced")) .balanced else .fit;
     } else if (std.mem.eql(u8, key, "translate_lang")) {
         if (val.len > 0 and val.len <= 8) {
             @memcpy(state.app.translate_lang_buf[0..val.len], val);

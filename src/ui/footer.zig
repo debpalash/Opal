@@ -1278,6 +1278,12 @@ fn currentAudioDevicePinned(ctx: *c.mpv.mpv_handle) bool {
 /// pub so pickers.zig's aspect popover can label the current mode; also used
 /// by the toolbar aspect chip in this file.
 pub fn currentAspectChipText(ctx: *c.mpv.mpv_handle) []const u8 {
+    const configured = state.app.video_aspect_buf[0..state.app.video_aspect_len];
+    if (std.mem.eql(u8, configured, "-1")) return switch (state.app.video_fill_mode) {
+        .fit => "Auto",
+        .balanced => "Balanced",
+        .cover => "Fill",
+    };
     // The footer aspect chip polls this every frame, but the override only
     // changes on user action — cache the mpv read at ~2Hz keyed on ctx (same
     // 500ms gate as the audio/sub track chips). Returned values are string
@@ -1299,6 +1305,9 @@ pub fn currentAspectChipText(ctx: *c.mpv.mpv_handle) []const u8 {
         if (std.mem.eql(u8, v, "16:9") or std.mem.startsWith(u8, v, "1.77")) break :blk "16:9";
         if (std.mem.eql(u8, v, "4:3") or std.mem.startsWith(u8, v, "1.33")) break :blk "4:3";
         if (std.mem.eql(u8, v, "21:9") or std.mem.startsWith(u8, v, "2.33")) break :blk "21:9";
+        if (std.mem.eql(u8, v, "239:100") or std.mem.startsWith(u8, v, "2.39")) break :blk "2.39:1";
+        if (std.mem.eql(u8, v, "1:1")) break :blk "1:1";
+        if (std.mem.eql(u8, v, "9:16")) break :blk "9:16";
         break :blk "Auto";
     };
     Cache.key = key;
@@ -1883,7 +1892,7 @@ pub fn renderLiquidGlassOverlay() void {
         if (fit.secondary_chips) {
             const ar_text = currentAspectChipText(active_p.mpv_ctx);
             const ar_active = !std.mem.eql(u8, ar_text, "Auto");
-            if (pickerIconChip(@src(), 700, icons.tvg.lucide.ratio, ar_text, ar_active, "Aspect ratio", .aspect)) {
+            if (pickerIconChip(@src(), 700, icons.tvg.lucide.ratio, ar_text, ar_active, "Framing & aspect", .aspect)) {
                 togglePicker(.aspect);
             }
         }

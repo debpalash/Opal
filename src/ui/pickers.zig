@@ -203,13 +203,12 @@ pub fn renderChapterPickerPopover(active_p: *player.MediaPlayer) void {
 pub fn renderAspectPickerPopover(active_p: *player.MediaPlayer) void {
     if (footer.open_picker != .aspect) return;
     var open: bool = true;
-    var fw = beginDropUp(@src(), .aspect, 200, 182, &open);
+    var fw = beginDropUp(@src(), .aspect, 236, 388, &open);
     defer fw.deinit();
-    dropUpTitle(@src(), "Aspect ratio");
+    dropUpTitle(@src(), "Framing & aspect");
 
-    const cur = footer.currentAspectChipText(active_p.mpv_ctx);
-    const modes = [_][]const u8{ "-1", "16:9", "4:3", "21:9" };
-    const labels = [_][]const u8{ "Auto", "16:9", "4:3", "21:9" };
+    const modes = [_][]const u8{ "-1", "-1", "-1", "16:9", "4:3", "21:9", "239:100", "1:1", "9:16" };
+    const labels = [_][]const u8{ "Auto · full frame", "Balanced · gentle crop", "Fill · edge to edge", "16:9 widescreen", "4:3 classic", "21:9 cinema", "2.39:1 cinema", "1:1 square", "9:16 portrait" };
 
     var pad = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
@@ -218,7 +217,10 @@ pub fn renderAspectPickerPopover(active_p: *player.MediaPlayer) void {
     defer pad.deinit();
 
     for (modes, 0..) |m, k| {
-        const is_cur = std.mem.eql(u8, cur, labels[k]);
+        const is_cur = if (k < 3)
+            std.mem.eql(u8, state.app.video_aspect_buf[0..state.app.video_aspect_len], "-1") and @as(usize, @intFromEnum(state.app.video_fill_mode)) == k
+        else
+            std.mem.eql(u8, state.app.video_aspect_buf[0..state.app.video_aspect_len], m);
         if (dvui.button(@src(), labels[k], .{}, .{
             .id_extra = k,
             .expand = .horizontal,
@@ -235,6 +237,11 @@ pub fn renderAspectPickerPopover(active_p: *player.MediaPlayer) void {
             @memset(state.app.video_aspect_buf[0..], 0);
             @memcpy(state.app.video_aspect_buf[0..m.len], m);
             state.app.video_aspect_len = m.len;
+            state.app.video_fill_mode = switch (k) {
+                1 => .balanced,
+                2 => .cover,
+                else => .fit,
+            };
             state.markConfigDirty();
             footer.open_picker = .none;
             dvui.refresh(null, @src(), null);

@@ -281,7 +281,7 @@ pub fn processGlobalInputs() void {
                     },
                     // Z = Toggle video fill mode (fit / cover)
                     .z => {
-                        state.app.video_fill_mode = if (state.app.video_fill_mode == .fit) .cover else .fit;
+                        state.app.video_fill_mode = if (state.app.video_fill_mode == .cover) .fit else .cover;
                         // The UI owns cover cropping because it knows the actual
                         // cell viewport. Applying mpv panscan here as well would
                         // crop twice and still would not remove DVUI letterboxing.

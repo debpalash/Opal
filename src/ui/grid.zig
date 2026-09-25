@@ -659,41 +659,26 @@ pub fn renderGrid() !void {
                     renderAudioNowPlaying(i, p);
                 } else if (p.texture) |*tex| {
                     var cell_overlay = dvui.overlay(@src(), .{ .id_extra = i, .expand = .both });
-                    // Aspect-preserving fit (letterbox), not stretch. The texture is
-                    // already rendered at the video's native display aspect, so feed
-                    // that ratio to dvui via .expand = .ratio. We pass the aspect via a
-                    // deliberately TINY min_size_content (aspect*10 × 10) so the widget
-                    // never reports a large min size to the parent layout — .ratio only
-                    // uses min_size's *shape*, then grows it to fill the cell keeping the
-                    // ratio. Without this, .expand = .both stretched the frame to the full
-                    // cell, visibly distorting video in full-height / fullscreen windows.
-                    const tex_ar: f32 = if (tex.height > 0)
-                        @as(f32, @floatFromInt(tex.width)) / @as(f32, @floatFromInt(tex.height))
-                    else
-                        16.0 / 9.0;
-                    var img_wd = if (state.app.video_fill_mode == .cover) blk: {
-                        // Cover the entire player viewport without distorting the
-                        // frame. The oversized axis is centered and clipped by the
-                        // cell overlay, exactly like CSS object-fit: cover.
-                        const viewport = cell_overlay.data().contentRect();
-                        const viewport_ar = if (viewport.h > 0) viewport.w / viewport.h else tex_ar;
-                        const cover_size: dvui.Size = if (viewport_ar > tex_ar)
-                            .{ .w = viewport.w, .h = viewport.w / tex_ar }
-                        else
-                            .{ .w = viewport.h * tex_ar, .h = viewport.h };
-                        break :blk dvui.image(@src(), .{
-                            .source = .{ .texture = tex.* },
-                            .shrink = .none,
-                        }, .{
-                            .id_extra = i,
-                            .min_size_content = cover_size,
-                            .gravity_x = 0.5,
-                            .gravity_y = 0.5,
-                        });
-                    } else dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
+                    // All framing modes keep the texture's display aspect. Fit
+                    // contains every pixel; Balanced and Cover center the crop.
+                    const viewport = cell_overlay.data().contentRect();
+                    const framing = @import("../player/playback_snapshot_pure.zig");
+                    const frame_mode: framing.FrameMode = switch (state.app.video_fill_mode) {
+                        .fit => .fit,
+                        .balanced => .balanced,
+                        .cover => .cover,
+                    };
+                    const display = framing.frameSize(
+                        .{ .width = @floatFromInt(tex.width), .height = @floatFromInt(tex.height) },
+                        .{ .width = viewport.w, .height = viewport.h },
+                        frame_mode,
+                    );
+                    var img_wd = dvui.image(@src(), .{
+                        .source = .{ .texture = tex.* },
+                        .shrink = .none,
+                    }, .{
                         .id_extra = i,
-                        .min_size_content = .{ .w = tex_ar * 10.0, .h = 10.0 },
-                        .expand = .ratio,
+                        .min_size_content = .{ .w = display.width, .h = display.height },
                         .gravity_x = 0.5,
                         .gravity_y = 0.5,
                     });

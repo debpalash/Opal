@@ -24,6 +24,23 @@ pub const Snapshot = struct {
 };
 
 pub const RenderSize = struct { width: u32, height: u32 };
+pub const FrameSize = struct { width: f32, height: f32 };
+pub const FrameMode = enum { fit, balanced, cover };
+
+/// Size a frame for the player viewport. Balanced fills some empty space while
+/// limiting the cropped portion of either source axis to 12%.
+pub fn frameSize(frame: FrameSize, viewport: FrameSize, mode: FrameMode) FrameSize {
+    if (frame.width <= 0 or frame.height <= 0 or viewport.width <= 0 or viewport.height <= 0)
+        return .{ .width = 0, .height = 0 };
+    const fit_scale = @min(viewport.width / frame.width, viewport.height / frame.height);
+    const cover_scale = @max(viewport.width / frame.width, viewport.height / frame.height);
+    const scale = switch (mode) {
+        .fit => fit_scale,
+        .balanced => @min(cover_scale, fit_scale / 0.88),
+        .cover => cover_scale,
+    };
+    return .{ .width = frame.width * scale, .height = frame.height * scale };
+}
 
 /// Fit the decoded video into the reusable software-render buffer without
 /// upscaling smaller sources. Invalid/unavailable metadata uses the full buffer.
@@ -105,4 +122,25 @@ test "aspect override reshapes the render target" {
     try std.testing.expectEqual(RenderSize{ .width = 1920, .height = 822 }, renderSizeForAspect(1920, 1080, 1920, 1080, "21:9"));
     try std.testing.expectEqual(RenderSize{ .width = 1440, .height = 810 }, renderSizeForAspect(1440, 1080, 1920, 1080, "16:9"));
     try std.testing.expectEqual(RenderSize{ .width = 1920, .height = 1080 }, renderSizeForAspect(1920, 1080, 1920, 1080, "bad"));
+}
+
+test "frame modes contain, limit cropping, and cover without stretching" {
+    const frame = FrameSize{ .width = 2100, .height = 900 };
+    const viewport = FrameSize{ .width = 1600, .height = 900 };
+    const fit = frameSize(frame, viewport, .fit);
+    const balanced = frameSize(frame, viewport, .balanced);
+    const cover = frameSize(frame, viewport, .cover);
+    try std.testing.expectApproxEqAbs(@as(f32, 1600), fit.width, 0.01);
+    try std.testing.expect(fit.height < viewport.height);
+    try std.testing.expect(balanced.height > fit.height);
+    try std.testing.expect(balanced.height < viewport.height);
+    try std.testing.expect(balanced.width <= viewport.width / 0.88 + 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 900), cover.height, 0.01);
+    try std.testing.expect(cover.width > viewport.width);
+    const portrait = frameSize(.{ .width = 900, .height = 1600 }, viewport, .fit);
+    try std.testing.expectApproxEqAbs(@as(f32, 900), portrait.height, 0.01);
+    try std.testing.expect(portrait.width < viewport.width);
+    const square = frameSize(.{ .width = 1000, .height = 1000 }, viewport, .fit);
+    try std.testing.expectApproxEqAbs(@as(f32, 900), square.width, 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 900), square.height, 0.01);
 }
