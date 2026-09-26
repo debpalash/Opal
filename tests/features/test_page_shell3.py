@@ -185,6 +185,7 @@ def test_player_dropups():
     ft = _src("src/ui/footer.zig")
     sh = _src("src/ui/shell.zig")
     dp = _src("src/ui/dropup_pure.zig")
+    th = _src("src/ui/theme.zig")
     bz = _src("build.zig")
     checks = {
         # Placement is pure + unit-tested; the UI only executes it.
@@ -212,7 +213,8 @@ def test_player_dropups():
         ) >= 7,
         "bright-video contrast": (
             "playerControlFill(false)" in ft
-            and "const player_text = dvui.Color" in ft
+            and "const player_text = theme.player_text" in ft
+            and "pub const player_text: dvui.Color" in th
             and "const edge_alphas = [_]u8{ 92" in ft
         ),
         "chips share 30px geometry": (
