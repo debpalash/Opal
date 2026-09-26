@@ -45,7 +45,7 @@ pub fn weekWindow(now_s: i64, tz_offset_s: i64) Window {
 /// Returns the formatted slice, or "" on a bufPrint overflow (caller aborts).
 pub fn buildQuery(w: Window, out: []u8) []const u8 {
     return std.fmt.bufPrint(out,
-        \\{{"query":"query {{ Page(perPage: 50) {{ airingSchedules(airingAt_greater: {d}, airingAt_lesser: {d}, sort: TIME) {{ episode airingAt media {{ title {{ romaji english }} coverImage {{ medium }} }} }} }} }}"}}
+        \\{{"query":"query {{ Page(perPage: 50) {{ airingSchedules(airingAt_greater: {d}, airingAt_lesser: {d}, sort: TIME) {{ episode airingAt media {{ isAdult genres title {{ romaji english }} coverImage {{ medium }} }} }} }} }}"}}
     , .{ w.start, w.end }) catch "";
 }
 
@@ -113,6 +113,7 @@ pub const Raw = struct {
     airing_at: i64 = 0,
     title: []const u8 = "",
     cover: []const u8 = "",
+    nsfw: bool = false,
 };
 
 /// One published schedule slot (fixed buffers, so state save/restore stays a
@@ -204,6 +205,9 @@ pub const Iter = struct {
             fieldStr(slice, "\"romaji\":\""),
         );
         r.cover = fieldStr(slice, "\"medium\":\"");
+        r.nsfw = std.mem.indexOf(u8, slice, "\"isAdult\":true") != null or
+            std.mem.indexOf(u8, slice, "\"Ecchi\"") != null or
+            std.mem.indexOf(u8, slice, "\"Hentai\"") != null;
         return r;
     }
 };
@@ -212,6 +216,11 @@ pub const Iter = struct {
 /// into fixed buffers. Drops entries with no airing time or no title (a blank
 /// row). Returns the number of slots written (≤ out.len). Allocator-free.
 pub fn parseInto(json: []const u8, out: []Slot) usize {
+    return parseIntoFiltered(json, false, out);
+}
+
+/// Filtered schedule parser used by the Anime browse page.
+pub fn parseIntoFiltered(json: []const u8, nsfw_filter: bool, out: []Slot) usize {
     if (out.len == 0) return 0;
     var it = Iter{ .json = json };
     var n: usize = 0;
@@ -219,6 +228,7 @@ pub fn parseInto(json: []const u8, out: []Slot) usize {
         if (n >= out.len) break;
         if (raw.airing_at <= 0) continue;
         if (raw.title.len == 0) continue;
+        if (nsfw_filter and raw.nsfw) continue;
         var s = &out[n];
         s.* = .{};
         s.episode = raw.episode;
@@ -337,6 +347,21 @@ test "parseInto copies into fixed buffers and drops blank/timeless rows" {
     try std.testing.expectEqual(@as(i64, 1721000000), slots[0].airing_at);
     try std.testing.expectEqualStrings("Alpha", slots[0].title[0..slots[0].title_len]);
     try std.testing.expectEqualStrings("c1", slots[0].cover[0..slots[0].cover_len]);
+}
+
+test "parseIntoFiltered drops adult and ecchi schedule entries" {
+    const json =
+        \\{"data":{"Page":{"airingSchedules":[
+        \\{"episode":1,"airingAt":1721000000,"media":{"isAdult":true,"genres":["Drama"],"title":{"romaji":"Adult","english":"Adult"}}},
+        \\{"episode":2,"airingAt":1721000100,"media":{"isAdult":false,"genres":["Ecchi"],"title":{"romaji":"Ecchi","english":"Ecchi"}}},
+        \\{"episode":3,"airingAt":1721000200,"media":{"isAdult":false,"genres":["Comedy"],"title":{"romaji":"Safe","english":"Safe"}}}
+        \\]}}}
+    ;
+    var slots: [4]Slot = undefined;
+    const n = parseIntoFiltered(json, true, &slots);
+    try std.testing.expectEqual(@as(usize, 1), n);
+    try std.testing.expectEqualStrings("Safe", slots[0].title[0..slots[0].title_len]);
+    try std.testing.expectEqual(@as(usize, 3), parseIntoFiltered(json, false, &slots));
 }
 
 test "bucketCounts groups by local weekday" {

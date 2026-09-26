@@ -12,10 +12,10 @@ const std = @import("std");
 
 /// SFW gate clause for the AniList `media(...)` selector. Mirrors
 /// `anime_pure.sfwSuffix`: when the NSFW filter is on we ask AniList to exclude
-/// adult entries (`isAdult: false`); when off we add nothing. The returned
+/// adult and ecchi entries; when off we add nothing. The returned
 /// string is spliced verbatim into the GraphQL query.
 pub fn adultGate(filter_enabled: bool) []const u8 {
-    return if (filter_enabled) ", isAdult: false" else "";
+    return if (filter_enabled) ", isAdult: false, genre_not_in: [\\\"Ecchi\\\", \\\"Hentai\\\"]" else "";
 }
 
 pub const BrowseKind = enum { airing, top, popular, upcoming };
@@ -195,14 +195,14 @@ pub const Iter = struct {
 // ── tests ──────────────────────────────────────────────────
 
 test "adultGate mirrors the NSFW toggle" {
-    try std.testing.expectEqualStrings(", isAdult: false", adultGate(true));
+    try std.testing.expectEqualStrings(", isAdult: false, genre_not_in: [\\\"Ecchi\\\", \\\"Hentai\\\"]", adultGate(true));
     try std.testing.expectEqualStrings("", adultGate(false));
 }
 
 test "browse payload carries page, filter, and safe adult gate" {
     var buf: [2048]u8 = undefined;
     const payload = browsePayload(&buf, 3, .upcoming, true).?;
-    try std.testing.expect(std.mem.indexOf(u8, payload, "status: NOT_YET_RELEASED, sort: POPULARITY_DESC, isAdult: false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "status: NOT_YET_RELEASED, sort: POPULARITY_DESC, isAdult: false, genre_not_in: [\\\"Ecchi\\\", \\\"Hentai\\\"]") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"page\":3") != null);
     try std.testing.expect(hasNextPage("{\"pageInfo\":{\"hasNextPage\":true}}"));
     try std.testing.expect(!hasNextPage("{\"pageInfo\":{\"hasNextPage\":false}}"));
@@ -211,7 +211,7 @@ test "browse payload carries page, filter, and safe adult gate" {
 test "searchPayload uses variables and JSON-escapes arbitrary titles" {
     var buf: [2048]u8 = undefined;
     const payload = searchPayload(&buf, "A \"title\" \\ next\nline", true).?;
-    try std.testing.expect(std.mem.indexOf(u8, payload, "media(search: $search, type: ANIME, isAdult: false)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "media(search: $search, type: ANIME, isAdult: false, genre_not_in: [\\\"Ecchi\\\", \\\"Hentai\\\"])") != null);
     try std.testing.expect(std.mem.indexOf(u8, payload, "\"search\":\"A \\\"title\\\" \\\\ next\\nline\"") != null);
 }
 

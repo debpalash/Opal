@@ -132,6 +132,8 @@ var fetched_mode: ?state.AnimeMode = null;
 var fetched_season_sel: state.AnimeSeasonSel = .now;
 var fetched_season_year: u16 = 0;
 var fetched_cal_day: u8 = 255;
+var fetched_nsfw_filter: bool = true;
+var clear_for_safe_refresh: bool = false;
 
 /// Switch the active browse mode. Resets the SWR stamp so the explicit switch
 /// always refetches, bumps the generation (drops any in-flight worker), and
@@ -354,7 +356,10 @@ const ANIME_CACHE_TTL_S: i64 = @import("browse_cache.zig").TTL_S;
 const ANIME_BLOB_CAP: usize = 128 * 1024;
 
 fn animeCacheKey(buf: []u8) []const u8 {
-    return std.fmt.bufPrint(buf, "anime:trending:{d}", .{@intFromEnum(trend_filter)}) catch "anime:trending";
+    return std.fmt.bufPrint(buf, "anime:trending:{d}:sfw:{d}", .{
+        @intFromEnum(trend_filter),
+        @intFromBool(state.app.nsfw_filter_enabled),
+    }) catch "anime:trending";
 }
 
 fn serializeAnime(w: *ccp.Writer, it: state.AnimeResult) void {
@@ -1187,20 +1192,17 @@ fn parseJikanDataEx(json: []const u8, my_gen: u32, with_broadcast: bool, start_o
     }
 
     while (pos < json.len and count < state.app.anime.results.len) {
-        // Find next mal_id object securely to avoid nested array overlap
+        // Each Jikan row starts with mal_id. Find its enclosing object end with
+        // balanced JSON scanning so nested producer/genre mal_ids cannot split
+        // a card before its rating or genres.
         const id_idx = std.mem.indexOf(u8, json[pos..], "\"mal_id\":") orelse break;
         pos += id_idx + 9;
+        const obj_open = std.mem.lastIndexOfScalar(u8, json[0..pos], '{') orelse break;
+        const obj_end = anime_pure.jsonObjectEnd(json, obj_open) orelse break;
+        const obj_slice = json[pos..obj_end];
 
-        var next_obj_pos = json.len;
-        if (std.mem.indexOf(u8, json[pos..], "\"mal_id\":")) |nidx| {
-            next_obj_pos = pos + nidx;
-        }
-
-        const obj_slice = json[pos..next_obj_pos];
-
-        // NSFW filter (Settings › Behavior): drop Rx/R+ rated entries. The
-        // request already asks Jikan for sfw=true; this rating check also
-        // catches R+ (ecchi covers) and anything from cached pages.
+        // NSFW filter (Settings › Behavior): drop adult ratings and explicit
+        // Ecchi/Erotica/Hentai genres, including cached responses.
         if (state.app.nsfw_filter_enabled and anime_pure.jikanRatingIsAdult(obj_slice)) continue;
 
         // Extract ID
@@ -1378,7 +1380,7 @@ fn parseJikanDataEx(json: []const u8, my_gen: u32, with_broadcast: bool, start_o
             count += 1;
         }
 
-        pos = next_obj_pos;
+        pos = obj_end;
     }
 
     // Final generation re-check before publishing the count: a newer fetch may
@@ -2273,6 +2275,7 @@ fn publishScraperGrid(html: []const u8, base: []const u8, src: AnimeScraper, my_
             if (detail.len == 0 or detail.len >= scraper_detail_url[idx].len) return false;
             const title = std.mem.trim(u8, title_raw, " \t\r\n");
             if (title.len == 0 or title.len > item.name.len) return false;
+            if (state.app.nsfw_filter_enabled and anime_pure.titleLooksAdult(title)) return false;
 
             @memcpy(state.app.anime.results[idx].name[0..title.len], title);
             item.name_len = title.len;
@@ -2607,6 +2610,7 @@ pub fn playEmbed(embed_url: []const u8) void {
 pub fn renderContent() void {
     // Free any poster textures queued by parse worker threads (UI-thread only).
     drainPendingTexFrees();
+    syncNsfwFilter();
 
     // ── Mode dispatch. Each grid mode reuses results[]/renderGallery; only the
     //    fetch differs. We fire exactly once per (mode + sub-selector) change,
@@ -3335,6 +3339,28 @@ fn dispatchModeFetch() void {
             if (fetched_mode != .mylist) fetched_mode = .mylist;
             if (!state.app.anime.continue_loaded) loadContinue();
         },
+    }
+}
+
+/// Apply Settings › NSFW Filter changes to every Anime browse view. Enabling
+/// it clears the visible grid before a safe cache/network refresh, so previously
+/// loaded adult cards never linger on screen. Disabling it keeps the safe grid
+/// visible while the broader result set refreshes.
+fn syncNsfwFilter() void {
+    const enabled = state.app.nsfw_filter_enabled;
+    if (fetched_nsfw_filter != enabled) {
+        fetched_nsfw_filter = enabled;
+        fetched_mode = null;
+        state.app.anime.last_fetch_s = 0;
+        grid_page = 1;
+        more_available.store(false, .release);
+        search_request.cancel(&state.app.anime.is_loading);
+        anime_schedule.refresh();
+        clear_for_safe_refresh = enabled;
+    }
+    if (clear_for_safe_refresh and state.app.anime.selected_idx == null) {
+        state.app.anime.result_count = 0;
+        clear_for_safe_refresh = false;
     }
 }
 
