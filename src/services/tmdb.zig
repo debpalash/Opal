@@ -274,15 +274,15 @@ fn fetchEpisodeStill(e: *state.TvEpisode) void {
 // ══════════════════════════════════════════════════════════
 
 pub fn renderTmdbContent() void {
-    var content = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .padding = dvui.Rect.all(8) });
-    defer content.deinit();
-
     // TV drill-down takes over the whole view (Netflix/Apple-TV+ style). The
     // normal Trending/Search/etc. gallery is suppressed until the user backs out.
     if (state.app.tmdb.tv_detail_open) {
         renderTvDetail();
         return;
     }
+
+    var content = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .padding = dvui.Rect.all(8) });
+    defer content.deinit();
 
     // Wait for the config worker to publish prefs (esp. the TMDB key) before the
     // one-shot first fetch — else a cold first launch fires+latches before the
@@ -717,6 +717,14 @@ const CARD_VMARGIN: f32 = 3;
 /// switches (dvui's per-id retained scroll state is dropped whenever the
 /// widget skips a frame). Reset explicitly when the view/filters change.
 var gallery_si: dvui.ScrollInfo = .{};
+/// Episode scroll is retained across frames because the season chrome stays
+/// fixed while only the catalogue beneath it moves.
+var tv_episode_si: dvui.ScrollInfo = .{};
+
+fn resetEpisodeScroll() void {
+    if (@import("build_options").headless) return;
+    tv_episode_si.scrollToOffset(.vertical, 0);
+}
 
 /// Keyboard focus: index of the arrow-key-focused card (null = keyboard nav
 /// inactive; the first arrow press lights index 0). UI thread only.
@@ -1626,6 +1634,7 @@ pub fn openTvDetailByIdentity(id: i32, imdb_id: []const u8, name: []const u8, po
 fn openTvDetail(item: *state.TmdbItem) void {
     const t = &state.app.tmdb;
     t.tv_detail_open = true;
+    resetEpisodeScroll();
     t.tv_id = item.id;
     invalidateDetailUiSnapshot();
     const ilen = @min(item.imdb_id_len, t.tv_imdb_id.len);
@@ -1677,6 +1686,7 @@ fn closeTvDetail() void {
     const t = &state.app.tmdb;
     freeEpisodeStills();
     t.tv_detail_open = false;
+    resetEpisodeScroll();
     t.tv_season_count = 0;
     t.tv_episode_count = 0;
     t.tv_sel_season = 0;
@@ -2805,17 +2815,15 @@ fn renderTvDetail() void {
     const t = &state.app.tmdb;
     const poster = @import("../core/poster.zig");
 
-    const live_width = @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().w, state.app.ui_scale);
     const parent_width = dvui.parentGet().data().contentRect().w;
-    const layout = @import("../ui/tv_layout_pure.zig").calculate(@max(1, @min(live_width - 24, if (parent_width > 1) parent_width else live_width - 24)));
-    // The header, season controls and episodes share one vertical scroller.
-    // A short window must not lose its episode list below a fixed tall header.
-    var page_scroll = dvui.scrollArea(@src(), .{ .horizontal = .none }, .{ .expand = .both, .background = false });
-    defer page_scroll.deinit();
+    const live_width = @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().w, state.app.ui_scale);
+    const layout = @import("../ui/tv_layout_pure.zig").calculate(if (parent_width > 1) parent_width else @max(1, live_width - 16));
+    // Full-bleed fixed shell. Only the episode catalogue below scrolls, so the
+    // show identity, season switcher and primary actions remain available.
     var page = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .min_size_content = .{ .w = layout.width, .h = 0 },
-        .max_size_content = dvui.Options.MaxSize.width(layout.width),
-        .gravity_x = 0.5,
+        .expand = .both,
+        .background = true,
+        .color_fill = theme.colors.bg_deep,
     });
     defer page.deinit();
 
@@ -2823,7 +2831,7 @@ fn renderTvDetail() void {
     {
         var hdr = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .horizontal,
-            .padding = .{ .x = 10, .y = 8, .w = 10, .h = 8 },
+            .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
             .background = true,
             .color_fill = theme.colors.bg_surface,
             .color_border = theme.colors.border_subtle,
@@ -2842,7 +2850,7 @@ fn renderTvDetail() void {
                 .background = true,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                 .corner_radius = theme.dims.rad_sm,
-                .padding = .{ .x = 6, .y = 4, .w = 10, .h = 4 },
+                .padding = .{ .x = 4, .y = 3, .w = 8, .h = 3 },
                 .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
                 .gravity_y = 0.5,
             });
@@ -2942,7 +2950,7 @@ fn renderTvDetail() void {
     {
         var season_toolbar = dvui.box(@src(), .{ .dir = if (layout.stacked) .vertical else .horizontal }, .{
             .expand = .horizontal,
-            .padding = .{ .x = 10, .y = 6, .w = 10, .h = 5 },
+            .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
         });
         defer season_toolbar.deinit();
         var sbar = dvui.menu(@src(), .horizontal, .{
@@ -2988,6 +2996,7 @@ fn renderTvDetail() void {
                     choices.close();
                     if (si != t.tv_sel_season) {
                         t.tv_sel_season = si;
+                        resetEpisodeScroll();
                         _ = tv_gen.fetchAdd(1, .acq_rel);
                         fetchEpisodes(t.tv_id, sn);
                     }
@@ -3075,7 +3084,7 @@ fn renderTvDetail() void {
         const nxt = tvNextUp();
         var prow = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
+            .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
             .background = false,
         });
         defer prow.deinit();
@@ -3216,6 +3225,26 @@ fn renderTvDetail() void {
     }
 
     // ── Episode list ──
+    // This is the page's only scrolling region. Uniform row geometry lets us
+    // render just the visible rows instead of rebuilding a whole long season
+    // every frame.
+    var episode_scroll = dvui.scrollArea(@src(), .{
+        .scroll_info = &tv_episode_si,
+        .horizontal = .none,
+        .vertical_bar = .auto_overlay,
+    }, .{
+        .expand = .both,
+        .background = true,
+        .color_fill = theme.colors.bg_deep,
+    });
+    defer episode_scroll.deinit();
+
+    var episode_catalog = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .horizontal,
+        .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
+    });
+    defer episode_catalog.deinit();
+
     if (t.tv_episodes_loading and t.tv_episode_count == 0) {
         _ = dvui.label(@src(), "Loading episodes…", .{}, .{
             .color_text = theme.colors.accent,
@@ -3253,8 +3282,25 @@ fn renderTvDetail() void {
     const aired_frontier = detailUiSnapshot().library.last_aired;
     var episode_row: ?*dvui.BoxWidget = null;
 
-    var ei: usize = 0;
-    while (ei < t.tv_episode_count) : (ei += 1) {
+    const episode_card_h: f32 = if (layout.stacked) layout.thumbnail_height + 116 else 112;
+    const episode_gap: f32 = 6;
+    // Card height is content height; include its 6px top/bottom padding and
+    // bottom margin so virtual spacers exactly match laid-out rows.
+    const episode_row_h = episode_card_h + 12 + episode_gap;
+    const total_rows = (t.tv_episode_count + layout.columns - 1) / layout.columns;
+    const visible = tmdb_pure.visibleRows(total_rows, episode_row_h, tv_episode_si.viewport.y, tv_episode_si.viewport.h, 2);
+
+    if (visible.first > 0) {
+        var top_spacer = dvui.box(@src(), .{}, .{
+            .id_extra = 38990,
+            .min_size_content = .{ .w = 1, .h = episode_row_h * @as(f32, @floatFromInt(visible.first)) },
+        });
+        top_spacer.deinit();
+    }
+
+    var ei: usize = visible.first * layout.columns;
+    const episode_end = @min(t.tv_episode_count, visible.last * layout.columns);
+    while (ei < episode_end) : (ei += 1) {
         const e = &t.tv_episodes[ei];
         const is_watched = ei < t.tv_episode_watched.len and t.tv_episode_watched[ei];
         const is_next = e.episode_number == next_ep_num;
@@ -3304,10 +3350,11 @@ fn renderTvDetail() void {
             .color_fill = card_fill,
             .color_border = border_color,
             .border = border_rect,
-            .padding = dvui.Rect.all(8),
-            .margin = .{ .x = 0, .y = 0, .w = if (layout.columns == 2 and ei % 2 == 0) 8 else 0, .h = 8 },
-            .min_size_content = .{ .w = layout.card_width, .h = 0 },
-            .max_size_content = .{ .w = layout.card_width, .h = std.math.floatMax(f32) },
+            .corner_radius = theme.dims.rad_sm,
+            .padding = dvui.Rect.all(6),
+            .margin = .{ .x = 0, .y = 0, .w = if (layout.columns == 2 and ei % 2 == 0) 8 else 0, .h = episode_gap },
+            .min_size_content = .{ .w = layout.card_width, .h = episode_card_h },
+            .max_size_content = .{ .w = layout.card_width, .h = episode_card_h },
         });
 
         // ── Left: episode still thumbnail ──
@@ -3359,7 +3406,7 @@ fn renderTvDetail() void {
             var info = dvui.box(@src(), .{ .dir = .vertical }, .{
                 .id_extra = ei + 43000,
                 .expand = .horizontal,
-                .padding = .{ .x = 10, .y = 8, .w = 10, .h = 8 },
+                .padding = .{ .x = 8, .y = 5, .w = 8, .h = 5 },
             });
             defer info.deinit();
 
@@ -3461,7 +3508,7 @@ fn renderTvDetail() void {
             if (playable and e.overview_len > 0) {
                 const ov_raw = e.overview[0..@min(e.overview_len, e.overview.len)];
                 var ov_clip_buf: [196]u8 = undefined;
-                const ov_short = @import("../ui/home_pure.zig").clipLabel(&ov_clip_buf, ov_raw, 188);
+                const ov_short = @import("../ui/home_pure.zig").clipLabel(&ov_clip_buf, ov_raw, 150);
                 var overview = dvui.textLayout(@src(), .{}, .{
                     .background = false,
                     .id_extra = ei + 43200,
@@ -3515,10 +3562,18 @@ fn renderTvDetail() void {
             }
         }
         ecard.deinit();
-        if ((ei + 1) % layout.columns == 0 or ei + 1 == t.tv_episode_count) {
+        if ((ei + 1) % layout.columns == 0 or ei + 1 == episode_end) {
             episode_row.?.deinit();
             episode_row = null;
         }
+    }
+
+    if (visible.last < total_rows) {
+        var bottom_spacer = dvui.box(@src(), .{}, .{
+            .id_extra = 38991,
+            .min_size_content = .{ .w = 1, .h = episode_row_h * @as(f32, @floatFromInt(total_rows - visible.last)) },
+        });
+        bottom_spacer.deinit();
     }
 }
 
