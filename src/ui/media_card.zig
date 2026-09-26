@@ -125,14 +125,13 @@ pub fn render(src: std.builtin.SourceLocation, id_extra: usize, it: *state.TmdbI
         bw.drawBackground();
         if (bw.clicked()) clicked = .open;
 
-        if (poster.uploadIfReady(&it.poster_pixels, it.poster_w, it.poster_h, &it.poster_tex)) {
-            if (it.poster_tex) |*tex| {
-                _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
-                    .id_extra = id_extra,
-                    .expand = .both,
-                    .corner_radius = dvui.Rect.all(8),
-                });
-            }
+        _ = poster.uploadIfReady(&it.poster_pixels, it.poster_w, it.poster_h, &it.poster_tex);
+        if (it.poster_tex) |*tex| {
+            _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
+                .id_extra = id_extra,
+                .expand = .both,
+                .corner_radius = dvui.Rect.all(8),
+            });
         } else {
             _ = dvui.label(@src(), "{s}", .{if (card.landscape) "Episode preview" else "Artwork unavailable"}, .{
                 .color_text = theme.colors.text_secondary,

@@ -528,6 +528,8 @@ fn createTables() void {
         \\  user_rating REAL DEFAULT -1,
         \\  next_label TEXT DEFAULT '',
         \\  deep_link TEXT DEFAULT '',
+        \\  home_hidden INTEGER DEFAULT 0,
+        \\  home_pinned INTEGER DEFAULT 0,
         \\  updated_at INTEGER DEFAULT (strftime('%s','now')),
         \\  PRIMARY KEY (kind, item_id)
         \\)
@@ -535,6 +537,8 @@ fn createTables() void {
     // Forward-compatible with databases created before personal ratings joined
     // the unified library model. Duplicate-column errors are benign.
     exec("ALTER TABLE library_items ADD COLUMN user_rating REAL DEFAULT -1");
+    exec("ALTER TABLE library_items ADD COLUMN home_hidden INTEGER DEFAULT 0");
+    exec("ALTER TABLE library_items ADD COLUMN home_pinned INTEGER DEFAULT 0");
     exec("CREATE INDEX IF NOT EXISTS idx_library_updated ON library_items(updated_at DESC)");
 
     // Named, reusable queue snapshots. Queue playback remains authoritative in

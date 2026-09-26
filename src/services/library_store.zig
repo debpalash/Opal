@@ -136,16 +136,18 @@ fn readRow(stmt: ?*db.Stmt, out: *pure.LibraryItem) void {
     out.user_rating = db.columnDouble(stmt, 8);
     db.copyColumn(stmt, 9, out.next_label[0..], &out.next_label_len);
     db.copyColumn(stmt, 10, out.deep_link[0..], &out.deep_link_len);
+    out.home_hidden = db.columnInt64(stmt, 11) != 0;
+    out.home_pinned = db.columnInt64(stmt, 12) != 0;
 }
 
-const COLS = "kind,item_id,title,poster,resume_secs,duration_secs,percent,is_favorite,user_rating,next_label,deep_link";
+const COLS = "kind,item_id,title,poster,resume_secs,duration_secs,percent,is_favorite,user_rating,next_label,deep_link,home_hidden,home_pinned";
 
 /// Continue-watching rows (in-progress, newest first) into `out`; count filled.
 pub fn loadContinue(out: []pure.LibraryItem) usize {
     // The band is comptime-formatted from the pure constants rather than
     // hardcoded, so the SQL filter and `pure.isContinue` can never drift apart.
     const BAND = std.fmt.comptimePrint(
-        " FROM library_items WHERE percent > {d} AND percent < {d} ORDER BY updated_at DESC LIMIT ?1",
+        " FROM library_items WHERE percent > {d} AND percent < {d} AND home_hidden=0 ORDER BY home_pinned DESC,updated_at DESC LIMIT ?1",
         .{ pure.CONTINUE_MIN_PCT, pure.CONTINUE_MAX_PCT },
     );
     const stmt = db.prepare("SELECT " ++ COLS ++ BAND) orelse return 0;
@@ -154,6 +156,44 @@ pub fn loadContinue(out: []pure.LibraryItem) usize {
     var n: usize = 0;
     while (n < out.len and db.step(stmt) == db.c.SQLITE_ROW) : (n += 1) readRow(stmt, &out[n]);
     return n;
+}
+
+/// Pinning only changes Home ordering. Source progress and favorites remain
+/// authoritative and untouched.
+pub fn setHomePinned(kind: []const u8, item_id: []const u8, pinned: bool) void {
+    const stmt = db.prepare("UPDATE library_items SET home_pinned=?3 WHERE kind=?1 AND item_id=?2") orelse return;
+    defer db.finalize(stmt);
+    db.bindText(stmt, 1, kind);
+    db.bindText(stmt, 2, item_id);
+    db.bindInt(stmt, 3, if (pinned) 1 else 0);
+    _ = db.step(stmt);
+}
+
+/// Dismiss one Home card without deleting playback progress or its source row.
+pub fn setHomeHidden(kind: []const u8, item_id: []const u8, hidden: bool) void {
+    const stmt = db.prepare("UPDATE library_items SET home_hidden=?3 WHERE kind=?1 AND item_id=?2") orelse return;
+    defer db.finalize(stmt);
+    db.bindText(stmt, 1, kind);
+    db.bindText(stmt, 2, item_id);
+    db.bindInt(stmt, 3, if (hidden) 1 else 0);
+    _ = db.step(stmt);
+}
+
+pub fn hiddenContinueCount() usize {
+    const stmt = db.prepare("SELECT count(*) FROM library_items WHERE home_hidden=1 AND percent > ?1 AND percent < ?2") orelse return 0;
+    defer db.finalize(stmt);
+    db.bindDouble(stmt, 1, pure.CONTINUE_MIN_PCT);
+    db.bindDouble(stmt, 2, pure.CONTINUE_MAX_PCT);
+    if (db.step(stmt) != db.c.SQLITE_ROW) return 0;
+    return @intCast(@max(0, db.columnInt64(stmt, 0)));
+}
+
+pub fn restoreHiddenContinue() void {
+    const stmt = db.prepare("UPDATE library_items SET home_hidden=0 WHERE home_hidden=1 AND percent > ?1 AND percent < ?2") orelse return;
+    defer db.finalize(stmt);
+    db.bindDouble(stmt, 1, pure.CONTINUE_MIN_PCT);
+    db.bindDouble(stmt, 2, pure.CONTINUE_MAX_PCT);
+    _ = db.step(stmt);
 }
 
 /// Favorites (newest first) into `out`; count filled.
