@@ -1976,11 +1976,11 @@ pub fn renderLiquidGlassOverlay() void {
         const video_is_playing = !active_p.is_loading and !active_p.cached_vid_no and
             active_p.texture != null and active_p.cached_video_width > 0;
         if (playing_youtube and video_is_playing and fit.secondary_chips) {
-            const quality_labels = [_][]const u8{ "720p", "1080p", "4K", "Audio" };
-            const quality = if (active_p.youtube_fast_active)
-                "360p"
+            var quality_buf: [16]u8 = undefined;
+            const quality = if (active_p.youtube_active_height > 0)
+                std.fmt.bufPrint(&quality_buf, "{d}p", .{active_p.youtube_active_height}) catch "Video"
             else
-                quality_labels[@min(state.app.ytdl_format_idx, quality_labels.len - 1)];
+                "Audio";
             if (pickerIconChip(@src(), 711, icons.tvg.lucide.monitor, quality, true, "YouTube stream quality", .quality)) {
                 togglePicker(.quality);
             }

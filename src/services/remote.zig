@@ -4936,6 +4936,19 @@ fn apiPlayerAction(stream: std.Io.net.Stream, ap: *player.MediaPlayer, query: []
             for (state.app.players.items) |p| _ = c.mpv.mpv_set_property_string(p.mpv_ctx, "af", spec.ptr);
             state.markConfigDirty();
         },
+        .quality => |v| {
+            if (!ap.youtubeQualityAvailable(v)) {
+                if (players_locked.*) {
+                    players_locked.* = false;
+                    state.players_mutex.unlock();
+                }
+                sendJsonStatus(stream, "409 Conflict", "{\"error\":\"quality unavailable\"}");
+                return;
+            }
+            state.app.ytdl_format_idx = v;
+            state.markConfigDirty();
+            ap.reloadYoutubeAtQuality();
+        },
         .audio_device => |v| {
             var zbuf: [129]u8 = undefined;
             const z = std.fmt.bufPrintZ(&zbuf, "{s}", .{v}) catch return;

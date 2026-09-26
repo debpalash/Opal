@@ -815,6 +815,7 @@ pub fn appDeinit() void {
     @import("services/resolver.zig").cancel();
     search.shutdown();
     @import("player/stream_proxy.zig").stopAll();
+    @import("player/youtube_range_proxy.zig").stopAll();
 
     // Join all owned work before any buffers, services, HTTP state, or the
     // allocator it may publish into are released. 800 ms is the diagnostic

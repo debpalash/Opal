@@ -55,6 +55,10 @@ pub const Request = struct {
     /// Internal retry seam: already sanitized by buildHeaderFields on the
     /// original request. Normal callers should pass `headers` instead.
     prepared_header_fields: []const u8 = "",
+    /// Optional external audio stream paired with a video-only URL.
+    audio_file: []const u8 = "",
+    /// Display title for transport controls when `url` is an opaque proxy URL.
+    media_title: []const u8 = "",
     /// This request is served by Opal's bounded torrent loopback proxy.
     loopback_stream: bool = false,
 };
@@ -179,6 +183,8 @@ pub const FileOptions = struct {
     header_fields: []const u8,
     cache_pause_initial: [:0]const u8,
     network_timeout: [:0]const u8,
+    audio_file: []const u8,
+    media_title: []const u8,
 };
 
 /// Begin ordinary local and network playback as soon as the demuxer has a
@@ -244,6 +250,8 @@ pub fn dispatch(sink: anytype, request: Request) bool {
         .header_fields = fields,
         .cache_pause_initial = cachePauseInitial(request.url, request.loopback_stream),
         .network_timeout = networkTimeout(request.loopback_stream),
+        .audio_file = request.audio_file,
+        .media_title = request.media_title,
     });
     return true;
 }
