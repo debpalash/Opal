@@ -172,23 +172,24 @@ pub const CoverSlot = struct {
     }
 };
 
-/// Fill the current parent with a fetched cover, an animated loading skeleton,
-/// or a quiet fallback icon. This keeps image lifecycle and failure latching
-/// identical across secondary browse pages.
-pub fn coverArt(src: std.builtin.SourceLocation, id_extra: usize, slot: *CoverSlot, url: []const u8, fallback_icon: []const u8, radius: f32) void {
-    const hash = if (url.len > 0) std.hash.Fnv1a_64.hash(url) else 0;
+pub fn syncCoverSlot(slot: *CoverSlot, key: []const u8) void {
+    const hash = if (key.len > 0) std.hash.Fnv1a_64.hash(key) else 0;
     if (slot.url_hash != hash and !slot.fetching) {
         slot.reset();
         slot.url_hash = hash;
     }
+}
 
+pub fn pollCoverSlot(slot: *CoverSlot) void {
     _ = poster.uploadIfReady(&slot.pixels, slot.w, slot.h, &slot.tex);
     if (slot.fetching) {
         slot.attempted = true;
     } else if (slot.attempted and slot.pixels == null and slot.tex == null) {
         slot.failed = true;
     }
+}
 
+pub fn renderCoverSlot(src: std.builtin.SourceLocation, id_extra: usize, slot: *CoverSlot, expects_art: bool, fallback_icon: []const u8, radius: f32) void {
     if (slot.tex) |tex| {
         _ = dvui.image(src, .{ .source = .{ .texture = tex } }, .{
             .id_extra = id_extra,
@@ -197,16 +198,10 @@ pub fn coverArt(src: std.builtin.SourceLocation, id_extra: usize, slot: *CoverSl
         });
         return;
     }
-
-    if (url.len > 0 and !slot.failed and !slot.fetching) {
-        poster.fetchAsync(url, &slot.pixels, &slot.w, &slot.h, &slot.fetching);
-        if (slot.fetching) slot.attempted = true;
-    }
-    if (url.len > 0 and !slot.failed) {
+    if (expects_art and !slot.failed) {
         coverSkeleton(src, id_extra, radius);
         return;
     }
-
     _ = dvui.icon(src, "cover-fallback", fallback_icon, .{}, .{
         .id_extra = id_extra,
         .color_text = theme.colors.accent_dim,
@@ -215,6 +210,20 @@ pub fn coverArt(src: std.builtin.SourceLocation, id_extra: usize, slot: *CoverSl
         .gravity_x = 0.5,
         .gravity_y = 0.5,
     });
+}
+
+/// Fill the current parent with a fetched cover, an animated loading skeleton,
+/// or a quiet fallback icon. This keeps image lifecycle and failure latching
+/// identical across secondary browse pages.
+pub fn coverArt(src: std.builtin.SourceLocation, id_extra: usize, slot: *CoverSlot, url: []const u8, fallback_icon: []const u8, radius: f32) void {
+    syncCoverSlot(slot, url);
+    pollCoverSlot(slot);
+
+    if (url.len > 0 and !slot.failed and !slot.fetching) {
+        poster.fetchAsync(url, &slot.pixels, &slot.w, &slot.h, &slot.fetching);
+        if (slot.fetching) slot.attempted = true;
+    }
+    renderCoverSlot(src, id_extra, slot, url.len > 0, fallback_icon, radius);
 }
 
 /// A responsive gallery can use the same placeholder geometry as its real

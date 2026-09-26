@@ -35,11 +35,17 @@ const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
 const components = @import("../ui/components.zig");
 const logs = @import("../core/logs.zig");
+const poster = @import("../core/poster.zig");
 const pure = @import("opds_pure.zig");
 const safeUtf8 = @import("../core/text.zig").safeUtf8;
 const tmdb_pure = @import("tmdb_pure.zig");
 
 const alloc = @import("../core/alloc.zig").allocator;
+const c_alloc = std.heap.c_allocator;
+const OPDS_CARD_TARGET_W: f32 = 150;
+const OPDS_CARD_GAP: f32 = 4;
+const OPDS_CARD_FOOTER_H: f32 = 54;
+var entry_covers: [300]components.CoverSlot = [_]components.CoverSlot{.{}} ** 300;
 
 // Publish-side lock: the detached fetch worker snapshots feed entries into
 // state.app.opds.* under this mutex. The UI reads entry_count then entries —
@@ -141,6 +147,88 @@ fn opdsGet(url: []const u8, user: []const u8, pass: []const u8) ?[]u8 {
     const result = alloc.alloc(u8, n) catch return null;
     @memcpy(result, resp_buf[0..n]);
     return result;
+}
+
+const CoverFetchArgs = struct {
+    url: [512]u8,
+    url_len: usize,
+    user: [128]u8,
+    user_len: usize,
+    pass: [128]u8,
+    pass_len: usize,
+    pixels: *?[]u8,
+    w: *u32,
+    h: *u32,
+    fetching: *bool,
+};
+
+/// OPDS covers often require the catalog's Basic auth. Keep that credential in
+/// curl stdin through opdsGet rather than falling back to an unauthenticated
+/// generic image request or exposing it in process arguments.
+fn fetchCoverAsync(url: []const u8, slot: *components.CoverSlot) void {
+    if (url.len == 0 or url.len > 512 or slot.fetching or !poster.tryClaimSlot()) return;
+    var args = CoverFetchArgs{
+        .url = undefined,
+        .url_len = url.len,
+        .user = std.mem.zeroes([128]u8),
+        .user_len = 0,
+        .pass = std.mem.zeroes([128]u8),
+        .pass_len = 0,
+        .pixels = &slot.pixels,
+        .w = &slot.w,
+        .h = &slot.h,
+        .fetching = &slot.fetching,
+    };
+    @memcpy(args.url[0..url.len], url);
+    const user = state.app.opds.user_buf[0 .. std.mem.indexOfScalar(u8, &state.app.opds.user_buf, 0) orelse state.app.opds.user_buf.len];
+    const pass = state.app.opds.pass_buf[0 .. std.mem.indexOfScalar(u8, &state.app.opds.pass_buf, 0) orelse state.app.opds.pass_buf.len];
+    args.user_len = @min(user.len, args.user.len);
+    args.pass_len = @min(pass.len, args.pass.len);
+    @memcpy(args.user[0..args.user_len], user[0..args.user_len]);
+    @memcpy(args.pass[0..args.pass_len], pass[0..args.pass_len]);
+    slot.fetching = true;
+    slot.attempted = true;
+    @import("../core/workers.zig").spawn(struct {
+        fn run(a: CoverFetchArgs) void {
+            defer {
+                a.fetching.* = false;
+                poster.releaseSlot();
+                state.wakeUi();
+            }
+            if (@import("../core/workers.zig").isQuitting()) return;
+            const url_slice = a.url[0..a.url_len];
+            const cached = poster.cacheLoadForUrl(url_slice);
+            defer if (cached) |bytes| poster.cacheFreeEncoded(bytes);
+            var downloaded: ?[]u8 = null;
+            defer if (downloaded) |bytes| alloc.free(bytes);
+
+            var decoded: ?poster.DecodedCover = null;
+            if (cached) |bytes| {
+                decoded = poster.decodeCover(bytes);
+                if (decoded == null) poster.cacheDeleteForUrl(url_slice);
+            }
+            if (decoded == null) {
+                downloaded = opdsGet(url_slice, a.user[0..a.user_len], a.pass[0..a.pass_len]);
+                const bytes = downloaded orelse return;
+                decoded = poster.decodeCover(bytes) orelse return;
+                poster.cacheStoreForUrl(url_slice, bytes, @intCast(decoded.?.width), @intCast(decoded.?.height));
+            }
+            const cover = decoded.?;
+            defer cover.deinit();
+            const copy = c_alloc.alloc(u8, cover.rgba_len) catch return;
+            @memcpy(copy, cover.pixels[0..cover.rgba_len]);
+            if (@import("../core/workers.zig").isQuitting()) {
+                c_alloc.free(copy);
+                return;
+            }
+            a.w.* = @intCast(cover.width);
+            a.h.* = @intCast(cover.height);
+            a.pixels.* = copy;
+        }
+    }.run, .{args}) catch {
+        slot.fetching = false;
+        poster.releaseSlot();
+    };
 }
 
 // ══════════════════════════════════════════════════════════
@@ -708,8 +796,19 @@ fn renderFeed() void {
     }
 
     const bounded_count = @min(count, state.app.opds.entries.len);
-    const row_h: f32 = 64;
-    const win = tmdb_pure.visibleRows(bounded_count, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 4);
+    const rect_w = scroll.data().rect.w;
+    const avail_w: f32 = @max(240, (if (rect_w > 1) rect_w else 900) - 8);
+    const cols: usize = @max(1, @as(usize, @intFromFloat(avail_w / OPDS_CARD_TARGET_W)));
+    const cols_f: f32 = @floatFromInt(cols);
+    const card_w: f32 = @max(104, (avail_w - cols_f * 2 * OPDS_CARD_GAP) / cols_f);
+    const poster_h = card_w * 1.45;
+    const row_h = poster_h + OPDS_CARD_FOOTER_H + 2 * OPDS_CARD_GAP;
+    if (bounded_count == 0) {
+        components.coverSkeletonGrid(@src(), 88000, cols, card_w, poster_h, OPDS_CARD_FOOTER_H, 3);
+        return;
+    }
+    const total_rows = (bounded_count + cols - 1) / cols;
+    const win = tmdb_pure.visibleRows(total_rows, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 2);
     if (win.first > 0) {
         var sp = dvui.box(@src(), .{}, .{
             .id_extra = 89998,
@@ -717,13 +816,19 @@ fn renderFeed() void {
         });
         sp.deinit();
     }
-    for (win.first..win.last) |i| {
-        renderEntryRow(i, row_h);
+    var r: usize = win.first;
+    while (r < win.last) : (r += 1) {
+        const base = r * cols;
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = base + 89000, .expand = .horizontal });
+        defer row.deinit();
+        var col: usize = 0;
+        while (col < cols and base + col < bounded_count) : (col += 1)
+            renderEntryCard(base + col, card_w, poster_h);
     }
-    if (win.last < bounded_count) {
+    if (win.last < total_rows) {
         var sp = dvui.box(@src(), .{}, .{
             .id_extra = 89999,
-            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(bounded_count - win.last)) },
+            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(total_rows - win.last)) },
         });
         sp.deinit();
     }
@@ -752,53 +857,64 @@ fn renderFeed() void {
     }
 }
 
-fn renderEntryRow(idx: usize, row_h: f32) void {
+fn renderEntryCard(idx: usize, card_w: f32, poster_h: f32) void {
     const row_data = entryRow(idx) orelse return;
     const e = &row_data;
-
-    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .id_extra = idx,
-        .expand = .horizontal,
-        .min_size_content = .{ .w = 0, .h = row_h },
-        .max_size_content = .{ .w = std.math.floatMax(f32), .h = row_h },
-        .padding = .{ .x = 14, .y = 8, .w = 14, .h = 8 },
+    const fallback = if (e.is_navigation) icons.tvg.lucide.folder else icons.tvg.lucide.@"book-open";
+    var card = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .id_extra = idx + 90000,
+        .min_size_content = .{ .w = card_w, .h = poster_h + OPDS_CARD_FOOTER_H },
+        .max_size_content = .{ .w = card_w, .h = poster_h + OPDS_CARD_FOOTER_H },
+        .margin = dvui.Rect.all(OPDS_CARD_GAP),
         .background = true,
         .color_fill = theme.colors.bg_surface,
+        .color_fill_hover = theme.colors.bg_hover,
+        .corner_radius = dvui.Rect.all(theme.radius.md),
     });
-    defer row.deinit();
+    defer card.deinit();
 
-    // Title + type/kind subtitle.
-    {
-        var col = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = idx, .expand = .horizontal, .gravity_y = 0.5 });
-        defer col.deinit();
+    var bw: dvui.ButtonWidget = undefined;
+    bw.init(@src(), .{}, .{
+        .id_extra = idx + 90100,
+        .background = true,
+        .color_fill = theme.colors.bg_elevated,
+        .corner_radius = dvui.Rect.all(theme.radius.md),
+        .min_size_content = .{ .w = card_w, .h = poster_h },
+        .max_size_content = .{ .w = card_w, .h = poster_h },
+        .padding = dvui.Rect.all(0),
+    });
+    bw.processEvents();
+    bw.drawBackground();
+    const cover_url = e.coverSlice();
+    const slot = &entry_covers[idx];
+    components.syncCoverSlot(slot, cover_url);
+    components.pollCoverSlot(slot);
+    if (cover_url.len > 0 and !slot.failed and slot.tex == null and slot.pixels == null and !slot.fetching)
+        fetchCoverAsync(cover_url, slot);
+    components.renderCoverSlot(@src(), idx + 90200, slot, cover_url.len > 0, fallback, theme.radius.md);
+    const clicked = bw.clicked();
+    bw.drawFocus();
+    bw.deinit();
+    if (clicked) openEntry(idx);
 
-        _ = dvui.label(@src(), "{s}", .{safeUtf8(e.titleSlice())}, .{
-            .id_extra = idx,
-            .color_text = theme.colors.text_primary,
-        });
-
-        const subtitle: []const u8 = if (e.is_navigation)
-            "Folder"
-        else switch (pure.readerRoute(e.contentTypeSlice())) {
-            .comics => "Comic / manga",
-            .external => "Ebook (opens externally)",
-            .unsupported => "Download",
-        };
-        _ = dvui.label(@src(), "{s}", .{subtitle}, .{
-            .id_extra = idx,
-            .color_text = theme.colors.text_tertiary,
-        });
-    }
-
-    const action: []const u8 = if (e.is_navigation) "Open ›" else "Read";
-    if (dvui.button(@src(), action, .{}, .{
-        .id_extra = idx,
-        .corner_radius = theme.dims.rad_sm,
-        .color_fill = theme.colors.accent,
-        .color_text = theme.colors.text_on_accent,
-        .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
-        .gravity_y = 0.5,
-    })) {
+    _ = dvui.label(@src(), "{s}", .{safeUtf8(e.titleSlice())}, .{
+        .id_extra = idx + 90300,
+        .color_text = theme.colors.text_primary,
+        .font = dvui.themeGet().font_heading.withSize(theme.font_size.small),
+        .min_size_content = .{ .w = card_w, .h = 22 },
+        .max_size_content = .{ .w = card_w, .h = 22 },
+        .padding = .{ .x = 5, .y = 5, .w = 5, .h = 0 },
+    });
+    const subtitle: []const u8 = if (e.is_navigation)
+        "Collection"
+    else switch (pure.readerRoute(e.contentTypeSlice())) {
+        .comics => "Comic / manga",
+        .external => "Ebook",
+        .unsupported => "Download",
+    };
+    var meta = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = idx + 90400, .expand = .horizontal, .padding = .{ .x = 5, .y = 0, .w = 3, .h = 3 } });
+    defer meta.deinit();
+    _ = dvui.label(@src(), "{s}", .{subtitle}, .{ .id_extra = idx + 90500, .color_text = theme.colors.text_tertiary, .expand = .horizontal, .gravity_y = 0.5 });
+    if (components.iconButton(@src(), if (e.is_navigation) icons.tvg.lucide.@"folder-open" else icons.tvg.lucide.@"book-open", if (e.is_navigation) "Open" else "Read", true))
         openEntry(idx);
-    }
 }
