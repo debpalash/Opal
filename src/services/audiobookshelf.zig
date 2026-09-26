@@ -771,7 +771,7 @@ fn renderLibraries() void {
             .color_fill = theme.colors.bg_surface,
         });
         defer hdr.deinit();
-        _ = dvui.label(@src(), "Audiobookshelf", .{}, .{ .color_text = theme.colors.accent, .gravity_y = 0.5 });
+        _ = dvui.label(@src(), "Audiobookshelf", .{}, .{ .color_text = theme.colors.text_primary, .font = dvui.themeGet().font_heading, .gravity_y = 0.5 });
         {
             var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
             sp.deinit();
@@ -779,12 +779,7 @@ fn renderLibraries() void {
         if (state.app.abs.is_loading.load(.acquire)) {
             dvui.spinner(@src(), .{ .color_text = theme.colors.accent, .min_size_content = theme.iconSize(.md), .gravity_y = 0.5 });
         }
-        if (dvui.buttonIcon(@src(), "disconnect", icons.tvg.lucide.@"log-out", .{}, .{}, .{
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_secondary,
-            .padding = dvui.Rect.all(5),
-            .corner_radius = theme.dims.rad_sm,
-        })) disconnect();
+        if (components.iconButton(@src(), icons.tvg.lucide.@"log-out", "Disconnect Audiobookshelf", false)) disconnect();
     }
 
     if (state.app.abs.library_count == 0 and !state.app.abs.is_loading.load(.acquire)) {
@@ -824,19 +819,13 @@ fn renderBooks() void {
             .color_fill = theme.colors.bg_surface,
         });
         defer hdr.deinit();
-        if (dvui.buttonIcon(@src(), "Back", icons.tvg.lucide.@"arrow-left", .{}, .{}, .{
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_secondary,
-            .corner_radius = theme.dims.rad_sm,
-            .gravity_y = 0.5,
-            .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
-        })) {
+        if (components.iconButton(@src(), icons.tvg.lucide.@"arrow-left", "Back to libraries", false)) {
             goToLibraries();
             return;
         }
         var title_buf: [96]u8 = undefined;
         const title = safeUtf8Buf(state.app.abs.selected_lib_name[0..state.app.abs.selected_lib_name_len], &title_buf);
-        _ = dvui.label(@src(), "{s}", .{title}, .{ .color_text = theme.colors.text_primary, .expand = .horizontal, .gravity_y = 0.5 });
+        _ = dvui.label(@src(), "{s}", .{title}, .{ .color_text = theme.colors.text_primary, .font = dvui.themeGet().font_heading, .expand = .horizontal, .gravity_y = 0.5 });
         if (state.app.abs.is_loading.load(.acquire)) {
             dvui.spinner(@src(), .{ .color_text = theme.colors.accent, .min_size_content = theme.iconSize(.md), .gravity_y = 0.5 });
         }

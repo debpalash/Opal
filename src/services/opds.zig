@@ -724,17 +724,12 @@ fn renderFeed() void {
         });
         defer row.deinit();
 
-        if (state.app.opds.nav_depth > 0) {
-            if (dvui.button(@src(), "‹ Back", .{}, .{
-                .corner_radius = theme.dims.rad_sm,
-                .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
-                .gravity_y = 0.5,
-            })) goBack();
-        }
+        if (components.iconButtonEx(@src(), icons.tvg.lucide.@"arrow-left", "Back", false, state.app.opds.nav_depth > 0)) goBack();
 
         const title = state.app.opds.feed_title[0..state.app.opds.feed_title_len];
         _ = dvui.label(@src(), "{s}", .{if (title.len > 0) safeUtf8(title) else "Library"}, .{
             .color_text = theme.colors.text_primary,
+            .font = dvui.themeGet().font_heading,
             .gravity_y = 0.5,
             .margin = .{ .x = 10, .y = 0, .w = 0, .h = 0 },
         });
@@ -744,11 +739,7 @@ fn renderFeed() void {
             spacer.deinit();
         }
 
-        if (dvui.button(@src(), "Disconnect", .{}, .{
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
-            .gravity_y = 0.5,
-        })) disconnect();
+        if (components.iconButton(@src(), icons.tvg.lucide.@"log-out", "Disconnect reading server", false)) disconnect();
     }
 
     if (state.app.opds.is_loading.load(.acquire)) {

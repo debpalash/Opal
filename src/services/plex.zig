@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const dvui = @import("dvui");
+const icons = @import("icons");
 const theme = @import("../ui/theme.zig");
 const components = @import("../ui/components.zig");
 const io = @import("../core/io_global.zig");
@@ -1109,15 +1110,8 @@ pub fn renderContent() void {
     {
         var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .padding = .{ .x = 8, .y = 8, .w = 8, .h = 6 }, .background = true, .color_fill = theme.colors.bg_app });
         defer hdr.deinit();
-        if (nav_depth > 0 and dvui.button(@src(), "Back", .{}, .{
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_secondary,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 8, .y = 5, .w = 8, .h = 5 },
-            .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
-            .gravity_y = 0.5,
-        })) _ = browseBack();
-        _ = dvui.label(@src(), "Plex · {s}", .{server_name[0..server_name_len]}, .{ .color_text = theme.colors.accent, .gravity_y = 0.5 });
+        if (components.iconButtonEx(@src(), icons.tvg.lucide.@"arrow-left", "Back", false, nav_depth > 0)) _ = browseBack();
+        _ = dvui.label(@src(), "Plex · {s}", .{server_name[0..server_name_len]}, .{ .color_text = theme.colors.text_primary, .font = dvui.themeGet().font_heading, .gravity_y = 0.5 });
         if (nav_depth > 0) _ = dvui.label(@src(), "  /  {s}", .{nav_titles[nav_depth - 1][0..nav_title_lens[nav_depth - 1]]}, .{
             .color_text = theme.colors.text_secondary,
             .gravity_y = 0.5,
@@ -1126,7 +1120,7 @@ pub fn renderContent() void {
             var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
             sp.deinit();
         }
-        if (dvui.button(@src(), "Disconnect", .{}, .{ .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.text_secondary, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 8, .y = 5, .w = 8, .h = 5 }, .gravity_y = 0.5 })) {
+        if (components.iconButton(@src(), icons.tvg.lucide.@"log-out", "Disconnect Plex", false)) {
             disconnect();
             return;
         }
@@ -1137,14 +1131,7 @@ pub fn renderContent() void {
         for (0..section_count) |i| {
             const sec = &sections[i];
             const active = i == active_section;
-            if (dvui.button(@src(), sec.title[0..sec.title_len], .{}, .{
-                .id_extra = i + 90000,
-                .color_fill = if (active) theme.colors.accent else theme.colors.bg_elevated,
-                .color_text = if (active) dvui.Color.white else theme.colors.text_secondary,
-                .corner_radius = theme.dims.rad_sm,
-                .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
-                .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
-            })) {
+            if (components.filterChip(@src(), sec.title[0..sec.title_len], icons.tvg.lucide.library, active, i + 90000)) {
                 fetchItems(i);
             }
         }
@@ -1229,7 +1216,6 @@ fn itemCoverUrl(it: *const Item, out: []u8) []const u8 {
 }
 
 fn renderItemCard(i: usize, card_w: f32, poster_h: f32) void {
-    const icons = @import("icons");
     const it = &items[i];
     const actionable = it.is_folder or it.part_len > 0;
     var tb: [180]u8 = undefined;
