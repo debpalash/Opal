@@ -109,6 +109,10 @@ pub fn build(b: *std.Build) void {
                 .file = b.path("src/macos/app_menu.m"),
                 .flags = &[_][]const u8{ "-fobjc-arc", "-O2" },
             });
+            exe.root_module.addCSourceFile(.{
+                .file = b.path("src/macos/open_panel.m"),
+                .flags = &[_][]const u8{ "-fobjc-arc", "-O2" },
+            });
             exe.root_module.linkFramework("AppKit", .{});
             exe.root_module.linkFramework("MediaPlayer", .{});
         }

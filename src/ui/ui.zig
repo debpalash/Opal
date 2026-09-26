@@ -10,6 +10,8 @@ const transfers = @import("../services/transfers.zig");
 const theme = @import("theme.zig");
 const metadata_dialog = @import("metadata_dialog.zig");
 const components = @import("components.zig");
+const builtin = @import("builtin");
+const build_options = @import("build_options");
 
 pub const renderHeader = @import("header.zig").renderHeader;
 pub const renderTabBar = @import("header.zig").renderTabBar;
@@ -35,23 +37,11 @@ const FileOpenState = struct {
     var running: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
     var thread: ?std.Thread = null;
 
-    const builtin = @import("builtin");
-
     fn dialogWorker() void {
         const io_global = @import("../core/io_global.zig");
         const alloc = @import("../core/alloc.zig").allocator;
 
-        var child = if (comptime builtin.os.tag == .macos) blk: {
-            // macOS: native file dialog via osascript + AppleScript
-            const script =
-                "activate\n" ++
-                "set theFile to choose file with prompt \"Open Media File\"\n" ++
-                "return POSIX path of theFile";
-            break :blk io_global.Child.init(
-                &.{ "osascript", "-e", script },
-                alloc,
-            );
-        } else if (comptime builtin.os.tag == .windows) blk: {
+        var child = if (comptime builtin.os.tag == .windows) blk: {
             // Windows: native file dialog via PowerShell + WinForms
             const script =
                 "Add-Type -AssemblyName System.Windows.Forms; " ++
@@ -125,6 +115,10 @@ const FileOpenState = struct {
 };
 
 pub fn triggerFileOpen() void {
+    if (comptime builtin.os.tag == .macos) {
+        if (comptime !build_options.headless) @import("../macos/open_panel.zig").show();
+        return;
+    }
     if (!FileOpenState.running.load(.acquire)) {
         FileOpenState.running.store(true, .release);
         FileOpenState.thread = @import("../core/workers.zig").spawnLegacy(FileOpenState.dialogWorker, .{}) catch blk: {
@@ -135,6 +129,13 @@ pub fn triggerFileOpen() void {
 }
 
 pub fn pollFileOpen() void {
+    if (comptime builtin.os.tag == .macos and !build_options.headless) {
+        const selected_len = @import("../macos/open_panel.zig").take(FileOpenState.file_path[0..]);
+        if (selected_len > 0) {
+            FileOpenState.file_path_len = selected_len;
+            FileOpenState.pending.store(true, .release);
+        }
+    }
     if (FileOpenState.pending.load(.acquire)) {
         if (FileOpenState.file_path_len > 0 and state.app.active_player_idx < state.app.players.items.len) {
             // Clamp the terminator index: a picker path that fills file_path exactly
@@ -144,10 +145,10 @@ pub fn pollFileOpen() void {
             logs.pushLog("info", "open", "Loaded local file", false);
         }
         FileOpenState.pending.store(false, .release);
-        if (FileOpenState.thread) |t| {
+        if (comptime builtin.os.tag != .macos) if (FileOpenState.thread) |t| {
             t.join();
             FileOpenState.thread = null;
-        }
+        };
     }
 }
 

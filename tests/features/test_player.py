@@ -787,6 +787,29 @@ def test_macos_now_playing():
     return "fail", f"now-playing wiring missing: {missing}"
 
 
+@test("macOS native Open panel", "Player")
+def test_macos_native_open_panel():
+    objc = _src("src/macos/open_panel.m")
+    zig = _src("src/macos/open_panel.zig")
+    ui = _src("src/ui/ui.zig")
+    build = _src("build.zig")
+    checks = {
+        "app-owned panel": "NSOpenPanel" in objc and "beginSheetModalForWindow" in objc,
+        "usable minimum size": "contentMinSize = NSMakeSize(720.0, 460.0)" in objc,
+        "open and cancel complete": "NSModalResponseOK" in objc and "g_open_panel = nil" in objc,
+        "file-only selection": "canChooseFiles = YES" in objc and "canChooseDirectories = NO" in objc,
+        "selection crosses boundary": "opal_open_panel_take" in objc and "opal_open_panel_take" in zig,
+        "desktop build wiring": "src/macos/open_panel.m" in build,
+        "UI uses native panel": 'macos/open_panel.zig").show()' in ui
+            and 'macos/open_panel.zig").take(' in ui,
+        "detached AppleScript removed": '"osascript", "-e", script' not in ui,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", f"native open-panel regression: {missing}"
+    return "pass", "sized app-owned sheet exposes navigation and reliable Open/Cancel"
+
+
 @test("Playlist: shuffle/repeat/reorder/save", "Player")
 def test_playlist_roundtrip():
     # Pure advance engine registered in the unit-test step.
