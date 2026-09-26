@@ -839,6 +839,8 @@ const CoverSlot = struct {
     w: u32 = 0,
     h: u32 = 0,
     fetching: bool = false,
+    attempted: bool = false,
+    failed: bool = false,
     url_hash: u64 = 0,
 };
 var cover_slots: [RESULTS_CAP]CoverSlot = [_]CoverSlot{.{}} ** RESULTS_CAP;
@@ -1076,11 +1078,16 @@ fn renderCover(i: usize, song: *const pure.MusicSong) void {
             poster.deinitPoster(&slot.pixels, &slot.tex);
             slot.w = 0;
             slot.h = 0;
+            slot.attempted = false;
+            slot.failed = false;
             slot.url_hash = h;
         }
         _ = poster.uploadIfReady(&slot.pixels, slot.w, slot.h, &slot.tex);
-        if (slot.tex == null and !slot.fetching and slot.pixels == null)
+        if (slot.fetching) slot.attempted = true else if (slot.attempted and slot.pixels == null and slot.tex == null) slot.failed = true;
+        if (!slot.failed and slot.tex == null and !slot.fetching and slot.pixels == null) {
             poster.fetchAsync(cover_url, &slot.pixels, &slot.w, &slot.h, &slot.fetching);
+            if (slot.fetching) slot.attempted = true;
+        }
     }
 
     if (slot.tex) |*tex| {
@@ -1089,6 +1096,8 @@ fn renderCover(i: usize, song: *const pure.MusicSong) void {
             .expand = .both,
             .corner_radius = dvui.Rect.all(8),
         });
+    } else if (cover_url.len > 0 and !slot.failed) {
+        components.coverSkeleton(@src(), i + 1000, 8);
     } else {
         _ = dvui.icon(@src(), "", icons.tvg.lucide.music, .{}, .{
             .id_extra = i + 1000,

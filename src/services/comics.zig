@@ -2,6 +2,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
+const shared_components = @import("../ui/components.zig");
 const icons = @import("icons");
 const logs = @import("../core/logs.zig");
 
@@ -3264,13 +3265,16 @@ fn renderCoverCard(idx: usize, cw: f32, cover_h: f32) void {
                 // slot whose cover already failed (404/undecodable) so it can't
                 // re-spawn a curl worker every frame.
                 if (sr_cover_url_lens[idx] > 0 and !sr_cover_failed[idx]) fetchCover(idx);
-                dvui.icon(@src(), "", icons.tvg.lucide.@"book-open", .{}, .{
-                    .id_extra = idx + 150,
-                    .gravity_x = 0.5,
-                    .gravity_y = 0.5,
-                    .color_text = dvui.Color{ .r = h1, .g = h2, .b = 200, .a = 70 },
-                    .expand = .both,
-                });
+                if (sr_cover_url_lens[idx] > 0 and !sr_cover_failed[idx])
+                    shared_components.coverSkeleton(@src(), idx + 150, 8)
+                else
+                    dvui.icon(@src(), "", icons.tvg.lucide.@"book-open", .{}, .{
+                        .id_extra = idx + 150,
+                        .gravity_x = 0.5,
+                        .gravity_y = 0.5,
+                        .color_text = dvui.Color{ .r = h1, .g = h2, .b = 200, .a = 70 },
+                        .expand = .both,
+                    });
                 // Placeholder cards still show the title inside the cover area.
                 if (sr_cover_url_lens[idx] == 0) {
                     _ = dvui.label(@src(), "{s}", .{title}, .{

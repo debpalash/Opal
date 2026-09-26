@@ -74,6 +74,14 @@ fn jsonStrAfter(s: []const u8, key: []const u8) ?[]const u8 {
     return s[vs..ve];
 }
 
+/// Poster fallback from the same TMDB show document used for schedule data.
+/// Older tracked rows may predate poster persistence, so relying only on the
+/// database snapshot leaves Coming up permanently blank.
+pub fn posterPath(body: []const u8) ?[]const u8 {
+    const path = jsonStrAfter(body, "\"poster_path\":\"") orelse return null;
+    return if (path.len > 0) path else null;
+}
+
 /// Extract `"next_episode_to_air": {...}` (or last_) from a TMDB /tv/{id}
 /// body. Returns null when the key is absent or explicitly `null` (ended /
 /// nothing scheduled). `key` must include the quotes + colon prefix, e.g.
@@ -172,6 +180,12 @@ test "parseEpisodeToAir: object, null, and absent" {
     try std.testing.expectEqualStrings("The Vault", next.name[0..next.name_len]);
     try std.testing.expect(parseEpisodeToAir(body, "\"last_episode_to_air\":") == null);
     try std.testing.expect(parseEpisodeToAir("{}", "\"next_episode_to_air\":") == null);
+}
+
+test "posterPath reads show art fallback" {
+    try std.testing.expectEqualStrings("/silo.jpg", posterPath("{\"id\":1,\"poster_path\":\"/silo.jpg\"}").?);
+    try std.testing.expect(posterPath("{\"poster_path\":null}") == null);
+    try std.testing.expect(posterPath("{}") == null);
 }
 
 test "imdbDigits strips tt and validates" {

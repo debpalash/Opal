@@ -49,6 +49,9 @@ pub const LibraryItem = struct {
     next_label_len: usize = 0,
     deep_link: [512]u8 = std.mem.zeroes([512]u8),
     deep_link_len: usize = 0,
+    /// Home-only presentation state. Hiding never deletes source progress.
+    home_hidden: bool = false,
+    home_pinned: bool = false,
 };
 
 /// Percent from resume/duration, clamped to [0,100]. 0 when duration is unknown.

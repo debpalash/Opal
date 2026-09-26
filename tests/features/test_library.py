@@ -135,48 +135,32 @@ def test_watching_remove():
                     "preserved so re-adding does not reset progress")
 
 
-@test("Watched/watching items can be removed one at a time", "Library")
+@test("Home continue cards can be pinned or hidden safely", "Library")
 def watch_items_are_removable():
-    """There was no way to drop a single item — only Clear All.
-
-    watch_history.remove() existed and NOTHING called it: the "Jump back in"
-    rail on Home had no per-card affordance, and the only escape was Settings ›
-    Clear All, which takes the entire history. Separately, the Continue Watching
-    rail is built from renderPosterCard, and the watching toggle lived only in
-    the list-view card (renderCard) — so the one row where you want to say "done
-    with this" was the one row that could not.
-
-    The ordering assertion matters as much as the button: dvui.clicked() consumes
-    the press and a parent runs before its children, so a card that checks its
-    own click before drawing the X swallows every click inside it and the X can
-    never fire. Hover is read from the pointer position instead, and the card's
-    click is checked last.
-    """
+    """Home uses one cross-media Continue rail. Pinning only changes its order;
+    hiding only removes a card from Home and can be reversed from the header.
+    Neither action deletes progress from the source or unified library row."""
     home = _src("src/ui/home.zig")
-    tm = _src("src/services/tmdb.zig")
-    wh = _src("src/player/watch_history.zig")
-
-    rail = _between(home, "fn renderRecentlyPlayed()", "// ── Empty state ──")
-    poster = _between(tm, "pub fn renderPosterCard(", "\nfn renderCard(")
+    store = _src("src/services/library_store.zig")
+    dbz = _src("src/core/db.zig")
 
     checks = {
-        "remove() is actually called now": "wh.remove(i);" in rail,
-        "remove() still deletes from the db": "DELETE FROM watch_history" in wh,
-        # Structural: the X must be reachable, so the card cannot eat the click
-        # first. Hover from geometry, click checked after the button.
-        "hover does not consume the click": "card_r.contains(dvui.currentWindow().mouse_pt)" in rail,
-        "card click checked after remove": rail.index("wh.remove(i);") < rail.index("dvui.clicked(card.data()"),
-        # Removing compacts the array — every later entry shifts down.
-        "iteration stops after removing": "break;" in rail[rail.index("wh.remove(i);"):rail.index("wh.remove(i);") + 200],
-        # Continue Watching is poster cards; it needs the toggle the list has.
-        "poster card can leave the watching list": "state.app.tmdb.watching" in poster
-                                                   and "toggleList(&state.app.tmdb.watching" in poster,
-        "the toggle persists": "store.saveLists();" in poster,
+        "one cross-media rail": 'renderLibraryItemsRail(items[0..n], "Continue"' in home and "renderRecentlyPlayed" not in home,
+        "schema stores home state": "home_hidden INTEGER" in dbz and "home_pinned INTEGER" in dbz,
+        "pin mutation is narrow": "pub fn setHomePinned" in store and "SET home_pinned" in store,
+        "hide mutation is narrow": "pub fn setHomeHidden" in store and "SET home_hidden" in store,
+        "hidden cards excluded": "home_hidden=0" in store,
+        "pinned cards sort first": "ORDER BY home_pinned DESC" in store,
+        "pin control wired": "setHomePinned(" in home and "Pin to front" in home,
+        "hide control wired": "setHomeHidden(" in home and "Remove from Home" in home,
+        "private until hover": "renderPrivateTitle(" in home and "const revealed = !manage_continue or hovered" in home,
+        "hidden cards restorable": "restoreHiddenContinue()" in home and "Restore hidden" in home,
+        "no progress deletion": "DELETE FROM library_items" not in store,
     }
     missing = [k for k, v in checks.items() if not v]
     if missing:
-        return "fail", "per-item removal incomplete: " + ", ".join(missing)
-    return "pass", "history rows remove individually; posters can leave Continue Watching"
+        return "fail", "safe Home continue controls incomplete: " + ", ".join(missing)
+    return "pass", "cross-media Continue cards pin/hide/restore without deleting progress"
 
 
 @test("Verified movie history removal synchronizes by catalog identity", "Library")

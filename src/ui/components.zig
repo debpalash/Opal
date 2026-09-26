@@ -89,6 +89,8 @@ fn fontAt(size: f32) dvui.Font {
 // Per-frame reset
 // ══════════════════════════════════════════════════════════════════════
 
+var cover_skeleton_timer_armed: bool = false;
+
 /// Reset the call-order sequence counters used for id_extra by
 /// sectionHeader/divider/statusPill. MUST be called once at the top of every
 /// frame (main.zig appFrame). Without the reset the counters grow forever, so
@@ -102,6 +104,57 @@ pub fn beginFrame() void {
     sectionheader_seq = 0;
     divider_seq = 0;
     statuspill_seq = 0;
+    cover_skeleton_timer_armed = false;
+}
+
+/// Animated cover placeholder shared by every browse surface. One timer drives
+/// all visible cards, keeping large grids smooth without one timer per tile.
+pub fn coverSkeleton(src: std.builtin.SourceLocation, id_extra: usize, radius: f32) void {
+    const now_ms: i64 = @intCast(@divFloor(dvui.frameTimeNS(), std.time.ns_per_ms));
+    const phase = @as(f32, @floatFromInt(@mod(now_ms, 1400))) / 1400.0;
+    const glow = @import("theme_pure.zig").pulse(@floatFromInt(@mod(now_ms, 1400)), 1400);
+
+    if (!cover_skeleton_timer_armed) {
+        cover_skeleton_timer_armed = true;
+        const timer_id = dvui.Id.extendId(null, @src(), 0);
+        if (dvui.timerDoneOrNone(timer_id)) dvui.timer(timer_id, 40_000);
+    }
+
+    var stack = dvui.overlay(src, .{ .id_extra = id_extra, .expand = .both });
+    defer stack.deinit();
+
+    var base = dvui.box(@src(), .{}, .{
+        .id_extra = id_extra,
+        .expand = .both,
+        .background = true,
+        .color_fill = mixColor(theme.colors.bg_elevated, theme.colors.bg_hover, 0.18 + glow * 0.18),
+        .corner_radius = dvui.Rect.all(radius),
+    });
+    base.deinit();
+
+    var shine = theme.colors.text_secondary;
+    shine.a = 24;
+    var band = dvui.box(@src(), .{}, .{
+        .id_extra = id_extra,
+        .expand = .vertical,
+        .background = true,
+        .color_fill = shine,
+        .corner_radius = dvui.Rect.all(radius),
+        .min_size_content = .{ .w = 34, .h = 1 },
+        .max_size_content = .{ .w = 34, .h = std.math.floatMax(f32) },
+        .gravity_x = phase,
+    });
+    band.deinit();
+}
+
+fn mixColor(a: dvui.Color, b: dvui.Color, t_raw: f32) dvui.Color {
+    const t = std.math.clamp(t_raw, 0, 1);
+    return .{
+        .r = @intFromFloat(@as(f32, @floatFromInt(a.r)) + (@as(f32, @floatFromInt(b.r)) - @as(f32, @floatFromInt(a.r))) * t),
+        .g = @intFromFloat(@as(f32, @floatFromInt(a.g)) + (@as(f32, @floatFromInt(b.g)) - @as(f32, @floatFromInt(a.g))) * t),
+        .b = @intFromFloat(@as(f32, @floatFromInt(a.b)) + (@as(f32, @floatFromInt(b.b)) - @as(f32, @floatFromInt(a.b))) * t),
+        .a = @intFromFloat(@as(f32, @floatFromInt(a.a)) + (@as(f32, @floatFromInt(b.a)) - @as(f32, @floatFromInt(a.a))) * t),
+    };
 }
 
 // ══════════════════════════════════════════════════════════════════════

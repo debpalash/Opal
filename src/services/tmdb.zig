@@ -3,6 +3,7 @@ const dvui = @import("dvui");
 const icons = @import("icons");
 const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
+const shared_components = @import("../ui/components.zig");
 const search = @import("search.zig");
 
 // Sub-modules
@@ -726,7 +727,6 @@ var poster_details_open: bool = false;
 var poster_details_id: i32 = 0;
 var poster_details_tv: bool = false;
 
-
 /// True while the toolbar search box has focus — arrows/Enter belong to the
 /// text field then, not the grid (set each frame in renderSearchInline).
 var search_focused: bool = false;
@@ -1099,13 +1099,16 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
                     api.fetchPoster(item);
                     if (item.poster_fetching) item.poster_attempted = true;
                 }
-                dvui.icon(@src(), "", icons.tvg.lucide.film, .{}, .{
-                    .id_extra = idx + 150,
-                    .gravity_x = 0.5,
-                    .gravity_y = 0.5,
-                    .color_text = dvui.Color{ .r = h1, .g = h2, .b = 180, .a = 60 },
-                    .expand = .both,
-                });
+                if (!item.poster_failed and item.poster_path_len > 0)
+                    shared_components.coverSkeleton(@src(), idx + 150, 8)
+                else
+                    dvui.icon(@src(), "", icons.tvg.lucide.film, .{}, .{
+                        .id_extra = idx + 150,
+                        .gravity_x = 0.5,
+                        .gravity_y = 0.5,
+                        .color_text = dvui.Color{ .r = h1, .g = h2, .b = 180, .a = 60 },
+                        .expand = .both,
+                    });
             }
 
             // Hover reveals richer metadata (overview / rating / year) over a
@@ -1359,12 +1362,15 @@ fn renderCard(item: *state.TmdbItem, idx: usize) void {
             });
         } else {
             if (!item.poster_fetching and item.poster_path_len > 0) api.fetchPoster(item);
-            dvui.icon(@src(), "", icons.tvg.lucide.film, .{}, .{
-                .id_extra = idx + 150,
-                .gravity_x = 0.5,
-                .gravity_y = 0.5,
-                .color_text = dvui.Color{ .r = h1, .g = h2, .b = 180, .a = 80 },
-            });
+            if (item.poster_path_len > 0)
+                shared_components.coverSkeleton(@src(), idx + 150, 6)
+            else
+                dvui.icon(@src(), "", icons.tvg.lucide.film, .{}, .{
+                    .id_extra = idx + 150,
+                    .gravity_x = 0.5,
+                    .gravity_y = 0.5,
+                    .color_text = dvui.Color{ .r = h1, .g = h2, .b = 180, .a = 80 },
+                });
         }
         _ = &poster;
     }

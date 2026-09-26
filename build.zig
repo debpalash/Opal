@@ -105,6 +105,11 @@ pub fn build(b: *std.Build) void {
                 .file = b.path("src/macos/media_remote.m"),
                 .flags = &[_][]const u8{ "-fobjc-arc", "-O2" },
             });
+            exe.root_module.addCSourceFile(.{
+                .file = b.path("src/macos/app_menu.m"),
+                .flags = &[_][]const u8{ "-fobjc-arc", "-O2" },
+            });
+            exe.root_module.linkFramework("AppKit", .{});
             exe.root_module.linkFramework("MediaPlayer", .{});
         }
     } else if (is_windows) {

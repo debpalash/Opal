@@ -1877,13 +1877,16 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) ?CardAction {
                     fetchThumb(item);
                     if (item.thumb_fetching) item.thumb_attempted = true;
                 }
-                dvui.icon(@src(), "ph", icons.tvg.lucide.image, .{}, .{
-                    .id_extra = idx + 150,
-                    .gravity_x = 0.5,
-                    .gravity_y = 0.5,
-                    .color_text = theme.colors.bg_elevated,
-                    .expand = .both,
-                });
+                if (!item.thumb_failed and item.thumbnail_url_len > 0)
+                    components.coverSkeleton(@src(), idx + 150, theme.radius.lg)
+                else
+                    dvui.icon(@src(), "ph", icons.tvg.lucide.image, .{}, .{
+                        .id_extra = idx + 150,
+                        .gravity_x = 0.5,
+                        .gravity_y = 0.5,
+                        .color_text = theme.colors.bg_elevated,
+                        .expand = .both,
+                    });
             }
 
             // Duration badge (bottom-right) — a tight pill over a soft scrim so

@@ -100,11 +100,31 @@ def test_home_distinct():
     if ".home => @import(\"home.zig\").render()" not in shell:
         return "fail", "home route still aliases TMDB content"
     # 2026-07 console redesign: Home is the agentic console — hero prompt +
-    # centered rails (continue/trending/for-you), NOT a metrics dashboard.
-    if ("Continue Watching" in home and "Trending tonight" in home
+    # responsive rails (cross-media continue/trending/for-you), not a metrics dashboard.
+    if ('renderLibraryItemsRail(items[0..n], "Continue"' in home and "Trending tonight" in home
             and "renderHero" in home and "Time in app" not in home):
         return "pass", "Home is the media console (hero + rails, no stats dashboard)"
     return "fail", "home console lacks hero/rails or still has the stats dashboard"
+
+
+@test("Poster textures remain visible after upload", "Page Shell")
+def test_poster_texture_lifetime():
+    """uploadIfReady is true only on the upload frame. Drawing inside that
+    branch makes Coming up and shared media-card covers disappear next frame."""
+    home = _src("src/ui/home.zig")
+    card = _src("src/ui/media_card.zig")
+    coming = _between(home, "fn renderComingUpRail", "fn renderTrendingRail")
+    checks = {
+        "coming up uploads": "_ = poster.uploadIfReady" in coming,
+        "coming up draws stored texture": "if (it.poster_tex)" in coming,
+        "coming up owns its fetch": "poster.fetchAsync(url" in coming and "fetchPoster(it)" not in coming,
+        "shared card uploads": "_ = poster.uploadIfReady" in card,
+        "shared card draws stored texture": "if (it.poster_tex)" in card,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "poster lifetime regression: " + ", ".join(missing)
+    return "pass", "Coming up and shared cards draw persistent uploaded textures"
 
 
 @test("Usage Metrics Persisted", "Page Shell")

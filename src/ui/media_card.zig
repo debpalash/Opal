@@ -125,20 +125,14 @@ pub fn render(src: std.builtin.SourceLocation, id_extra: usize, it: *state.TmdbI
         bw.drawBackground();
         if (bw.clicked()) clicked = .open;
 
-        if (poster.uploadIfReady(&it.poster_pixels, it.poster_w, it.poster_h, &it.poster_tex)) {
-            if (it.poster_tex) |*tex| {
-                _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
-                    .id_extra = id_extra,
-                    .expand = .both,
-                    .corner_radius = dvui.Rect.all(8),
-                });
-            }
-        } else {
-            _ = dvui.label(@src(), "{s}", .{if (card.landscape) "Episode preview" else "Artwork unavailable"}, .{
-                .color_text = theme.colors.text_secondary,
-                .gravity_x = 0.5,
-                .gravity_y = 0.5,
+        _ = poster.uploadIfReady(&it.poster_pixels, it.poster_w, it.poster_h, &it.poster_tex);
+        if (it.poster_tex) |*tex| {
+            _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
+                .id_extra = id_extra,
+                .expand = .both,
+                .corner_radius = dvui.Rect.all(8),
             });
+        } else {
             // Full attempted -> failed transition. Gating on !failed without ever
             // SETTING it is how the TMDB grid used to re-spawn a fetch for a dead
             // poster on every single frame.
@@ -150,6 +144,14 @@ pub fn render(src: std.builtin.SourceLocation, id_extra: usize, it: *state.TmdbI
                 poster.fetchAsync(card.poster_url, &it.poster_pixels, &it.poster_w, &it.poster_h, &it.poster_fetching);
                 if (it.poster_fetching) it.poster_attempted = true;
             }
+            if (!it.poster_failed and card.poster_url.len > 0)
+                components.coverSkeleton(@src(), id_extra + 10, 8)
+            else
+                _ = dvui.label(@src(), "Artwork unavailable", .{}, .{
+                    .color_text = theme.colors.text_secondary,
+                    .gravity_x = 0.5,
+                    .gravity_y = 0.5,
+                });
         }
         bw.deinit();
     }
