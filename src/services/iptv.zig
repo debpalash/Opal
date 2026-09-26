@@ -1015,9 +1015,14 @@ fn renderToolbar() void {
     }
 
     // Quick-filter chips.
-    const chips = [_][]const u8{ "All", "Favorites", "Recent" };
-    if (components.segment(@src(), &chips, @as(usize, state.app.iptv.quick_filter))) |clicked| {
-        if (@as(u8, @intCast(clicked)) != state.app.iptv.quick_filter) selectQuickFilter(@intCast(clicked));
+    const chips = [_]struct { label: []const u8, icon: []const u8 }{
+        .{ .label = "All", .icon = icons.tvg.lucide.tv },
+        .{ .label = "Favorites", .icon = icons.tvg.lucide.star },
+        .{ .label = "Recent", .icon = icons.tvg.lucide.history },
+    };
+    for (chips, 0..) |chip, clicked| {
+        if (components.filterChip(@src(), chip.label, chip.icon, clicked == state.app.iptv.quick_filter, clicked + 28000) and clicked != state.app.iptv.quick_filter)
+            selectQuickFilter(@intCast(clicked));
     }
 
     // Category/country/quality/sort — All view only (Favorites/Recent don't filter).

@@ -3,6 +3,7 @@ const dvui = @import("dvui");
 const icons = @import("icons");
 const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
+const components = @import("../ui/components.zig");
 const io = @import("../core/io_global.zig");
 const workers = @import("../core/workers.zig");
 const tmdb_pure = @import("tmdb_pure.zig"); // unit-tested grid virtualization (visibleRows)
@@ -1285,15 +1286,12 @@ pub fn renderContent() void {
     // Only show the loading line on an INITIAL load (nothing yet) — a
     // stale-refresh keeps current results on screen and swaps in place.
     if (state.app.yt.is_loading.load(.acquire) and state.app.yt.results.items.len == 0) {
-        _ = dvui.label(@src(), "Searching YouTube...", .{}, .{ .color_text = theme.colors.accent, .gravity_x = 0.5, .margin = dvui.Rect.all(12) });
+        components.loadingState("Searching YouTube…");
+        return;
     }
 
     if (state.app.yt.results.items.len == 0 and !state.app.yt.is_loading.load(.acquire)) {
-        _ = dvui.label(@src(), "No results. Try searching for something.", .{}, .{
-            .color_text = theme.colors.text_secondary,
-            .gravity_x = 0.5,
-            .margin = dvui.Rect.all(24),
-        });
+        components.emptyState(icons.tvg.lucide.youtube, "No videos found", "Try a different search or category.");
         return;
     }
 
@@ -1365,15 +1363,18 @@ pub fn renderContent() void {
     if (have > 0 and have < ITEM_CAP and (paged_query_len > 0 or channel_mode.load(.acquire))) {
         const max_y = scroll.si.scrollMax(.vertical);
         const near_bottom = max_y > 0 and scroll.si.viewport.y >= max_y - 800;
-        if (near_bottom and !state.app.yt.is_loading.load(.acquire) and !loading_more.load(.acquire)) {
+        const underfilled = max_y <= 0;
+        if ((near_bottom or underfilled) and !state.app.yt.is_loading.load(.acquire) and !loading_more.load(.acquire)) {
             fetchMore();
         }
         if (loading_more.load(.acquire)) {
-            _ = dvui.label(@src(), "Loading more…", .{}, .{
-                .color_text = theme.colors.text_secondary,
+            dvui.spinner(@src(), .{
+                .color_text = theme.colors.accent,
+                .min_size_content = theme.iconSize(.lg),
                 .gravity_x = 0.5,
-                .padding = dvui.Rect.all(12),
+                .margin = dvui.Rect.all(12),
             });
+            state.wakeUi();
         }
     }
 }
@@ -1426,13 +1427,13 @@ fn maybeFireLiveSearch() void {
 // Toolbar (chips, search, count, card-size)
 // ══════════════════════════════════════════════════════════
 
-const CatChip = struct { label: []const u8, query: []const u8 };
+const CatChip = struct { label: []const u8, query: []const u8, icon: []const u8 };
 const cat_chips = [_]CatChip{
-    .{ .label = "Trending", .query = "trending" },
-    .{ .label = "Music", .query = "music" },
-    .{ .label = "Gaming", .query = "gaming" },
-    .{ .label = "Tech", .query = "tech" },
-    .{ .label = "News", .query = "news" },
+    .{ .label = "Trending", .query = "trending", .icon = icons.tvg.lucide.flame },
+    .{ .label = "Music", .query = "music", .icon = icons.tvg.lucide.music },
+    .{ .label = "Gaming", .query = "gaming", .icon = icons.tvg.lucide.@"gamepad-2" },
+    .{ .label = "Tech", .query = "tech", .icon = icons.tvg.lucide.cpu },
+    .{ .label = "News", .query = "news", .icon = icons.tvg.lucide.newspaper },
 };
 
 fn renderToolbar() void {
@@ -1524,8 +1525,6 @@ fn toolbarDivider(id: usize) void {
 /// must own the event pass so ↑/↓ move the highlight, Enter commits it, and
 /// Esc closes — so te.processEvents() must NOT run (suggestion forwards events).
 fn renderSearchInline() void {
-    const components = @import("../ui/components.zig");
-
     var te = dvui.widgetAlloc(dvui.TextEntryWidget);
     te.init(@src(), .{ .text = .{ .buffer = &state.app.yt.search_buf }, .placeholder = "Search YouTube…" }, .{
         .min_size_content = .{ .w = 240, .h = components.TOOLBAR_INPUT_H },
@@ -1695,17 +1694,7 @@ fn fireSuggest(query: []const u8) void {
 
 fn renderCatChip(idx: usize, chip: CatChip, current: []const u8) void {
     const active = std.mem.eql(u8, current, chip.query);
-    if (dvui.button(@src(), chip.label, .{}, .{
-        .id_extra = idx + 2000,
-        .background = true,
-        .color_fill = if (active) theme.colors.accent else theme.colors.bg_surface,
-        .color_text = if (active) dvui.Color.white else theme.colors.text_secondary,
-        .corner_radius = theme.dims.rad_sm,
-        .padding = .{ .x = 7, .y = 3, .w = 7, .h = 3 },
-        .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
-        .gravity_y = 0.5,
-        .font = metaFont(),
-    })) {
+    if (components.filterChip(@src(), chip.label, chip.icon, active, idx + 2000)) {
         setQuery(chip.query);
         recordFired(chip.query);
         fetchYoutube(chip.query);

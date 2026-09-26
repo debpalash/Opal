@@ -40,11 +40,15 @@ pub fn percentEncode(input: []const u8, out: []u8) usize {
 
 /// `search.getResults` for `query`, returning up to `n` songs as JSON.
 pub fn buildSearchUrl(out: []u8, query: []const u8, n: u32) ?[]const u8 {
+    return buildSearchPageUrl(out, query, n, 1);
+}
+
+pub fn buildSearchPageUrl(out: []u8, query: []const u8, n: u32, page: u32) ?[]const u8 {
     if (query.len == 0) return null;
     var enc: [512]u8 = undefined;
     const qn = percentEncode(query, &enc);
     if (qn == 0) return null;
-    return std.fmt.bufPrint(out, "{s}?__call=search.getResults&q={s}&_format=json&_marker=0&ctx=web6dot0&n={d}&p=1", .{ API, enc[0..qn], n }) catch null;
+    return std.fmt.bufPrint(out, "{s}?__call=search.getResults&q={s}&_format=json&_marker=0&ctx=web6dot0&n={d}&p={d}", .{ API, enc[0..qn], n, @max(1, page) }) catch null;
 }
 
 /// A JioSaavn `perma_url` is what mpv/yt-dlp resolves. Accept only the real host
@@ -163,6 +167,7 @@ test "buildSearchUrl hits the public api.php search endpoint" {
         buildSearchUrl(&b, "arijit singh", 30).?,
     );
     try std.testing.expect(buildSearchUrl(&b, "", 30) == null);
+    try std.testing.expect(std.mem.endsWith(u8, buildSearchPageUrl(&b, "arijit", 40, 3).?, "&n=40&p=3"));
 }
 
 test "isPlayableUrl accepts only jiosaavn song perma_urls" {

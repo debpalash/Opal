@@ -3,6 +3,7 @@ const dvui = @import("dvui");
 const state = @import("../core/state.zig");
 const anime_pure = @import("anime_pure.zig");
 const theme = @import("../ui/theme.zig");
+const components = @import("../ui/components.zig");
 const icons = @import("icons");
 const logs = @import("../core/logs.zig");
 const player = @import("../player/player.zig");
@@ -3900,15 +3901,14 @@ fn toolbarDivider(id: usize) void {
 
 fn renderTrendChip(idx: usize, filter: TrendFilter, label: []const u8) void {
     const active = trend_filter == filter;
-    if (dvui.button(@src(), label, .{}, .{
-        .id_extra = idx + 8000,
-        .background = true,
-        .color_fill = if (active) theme.colors.accent else theme.colors.bg_surface,
-        .color_text = if (active) dvui.Color.white else theme.colors.text_secondary,
-        .corner_radius = theme.dims.rad_sm,
-        .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
-        .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
-    })) {
+    const icon = switch (filter) {
+        .airing => icons.tvg.lucide.radio,
+        .top => icons.tvg.lucide.trophy,
+        .bypopularity => icons.tvg.lucide.flame,
+        .upcoming => icons.tvg.lucide.calendar,
+        .lists => icons.tvg.lucide.list,
+    };
+    if (components.filterChip(@src(), label, icon, active, idx + 8000)) {
         if (trend_filter != filter) {
             trend_filter = filter;
             // Force a refresh even if SWR thinks the cache is fresh.
@@ -3924,11 +3924,7 @@ fn renderTrendChip(idx: usize, filter: TrendFilter, label: []const u8) void {
 
 fn renderGallery() void {
     if (state.app.anime.result_count == 0 and !state.app.anime.is_loading.load(.acquire)) {
-        _ = dvui.label(@src(), "Search for anime or wait for trending...", .{}, .{
-            .color_text = theme.colors.text_secondary,
-            .gravity_x = 0.5,
-            .margin = dvui.Rect.all(24),
-        });
+        components.emptyState(icons.tvg.lucide.sparkles, "No anime found", "Try another search or trending filter.");
         return;
     }
 
@@ -3988,23 +3984,14 @@ fn renderGallery() void {
     {
         const busy = grid_loading_more.load(.acquire);
         if (busy) {
-            _ = dvui.label(@src(), "Loading more…", .{}, .{
-                .id_extra = 80001,
-                .expand = .horizontal,
+            dvui.spinner(@src(), .{
+                .color_text = theme.colors.accent,
+                .min_size_content = theme.iconSize(.lg),
                 .gravity_x = 0.5,
-                .color_text = theme.colors.text_secondary,
                 .margin = .{ .x = 3, .y = 8, .w = 3, .h = 12 },
             });
-        } else if (dvui.button(@src(), "▾ Load more", .{}, .{
-            .id_extra = 80002,
-            .expand = .horizontal,
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.accent,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 8, .y = 12, .w = 8, .h = 12 },
-            .margin = .{ .x = 3, .y = 8, .w = 3, .h = 12 },
-            .gravity_x = 0.5,
-        })) {
+            state.wakeUi();
+        } else if (components.filterChip(@src(), "More", icons.tvg.lucide.@"chevrons-down", false, 80002)) {
             loadMoreGrid(); // tap fallback
         }
 
@@ -4012,7 +3999,7 @@ fn renderGallery() void {
         // ports of the content end), so it feels infinite without a click.
         const si = scroll.si;
         const max_scroll = si.scrollMax(.vertical);
-        if (max_scroll > 0 and si.viewport.y >= max_scroll - si.viewport.h * 1.5) {
+        if (max_scroll <= 0 or si.viewport.y >= max_scroll - si.viewport.h * 1.5) {
             loadMoreGrid();
         }
     }

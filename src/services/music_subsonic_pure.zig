@@ -96,11 +96,15 @@ pub fn buildPingUrl(out: []u8, base: []const u8, authq: []const u8) ?[]const u8 
 
 /// Search: `<base>/rest/search3?query=&songCount=&<authq>`.
 pub fn buildSearchUrl(out: []u8, base: []const u8, authq: []const u8, query: []const u8, song_count: u32) ?[]const u8 {
+    return buildSearchPageUrl(out, base, authq, query, song_count, 0);
+}
+
+pub fn buildSearchPageUrl(out: []u8, base: []const u8, authq: []const u8, query: []const u8, song_count: u32, song_offset: u32) ?[]const u8 {
     if (!isValidBase(base) or query.len == 0) return null;
     var enc: [512]u8 = undefined;
     const qn = percentEncode(query, &enc);
     if (qn == 0) return null;
-    return std.fmt.bufPrint(out, "{s}/rest/search3?query={s}&songCount={d}&artistCount=0&albumCount=0&{s}", .{ trimBase(base), enc[0..qn], song_count, authq }) catch null;
+    return std.fmt.bufPrint(out, "{s}/rest/search3?query={s}&songCount={d}&songOffset={d}&artistCount=0&albumCount=0&{s}", .{ trimBase(base), enc[0..qn], song_count, song_offset, authq }) catch null;
 }
 
 /// The playable audio URL for a song — `format=raw` tells the server NOT to
@@ -254,9 +258,10 @@ test "URL builders produce the Subsonic REST paths (trimming a trailing slash)" 
         buildPingUrl(&b, "http://nas:4040/", authq).?,
     );
     try std.testing.expectEqualStrings(
-        "http://nas:4040/rest/search3?query=daft%20punk&songCount=50&artistCount=0&albumCount=0&u=joe&t=abc&s=def&v=1.16.1&c=Opal&f=json",
+        "http://nas:4040/rest/search3?query=daft%20punk&songCount=50&songOffset=0&artistCount=0&albumCount=0&u=joe&t=abc&s=def&v=1.16.1&c=Opal&f=json",
         buildSearchUrl(&b, "http://nas:4040", authq, "daft punk", 50).?,
     );
+    try std.testing.expect(std.mem.indexOf(u8, buildSearchPageUrl(&b, "http://nas:4040", authq, "x", 40, 80).?, "songOffset=80") != null);
     try std.testing.expectEqualStrings(
         "http://nas:4040/rest/stream?id=300&format=raw&u=joe&t=abc&s=def&v=1.16.1&c=Opal&f=json",
         buildStreamUrl(&b, "http://nas:4040", authq, "300").?,

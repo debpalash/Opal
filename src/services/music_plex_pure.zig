@@ -56,6 +56,10 @@ pub fn isValidPath(p: []const u8) bool {
 
 /// Track search: `<base>/search?query=…&type=10&limit=…&X-Plex-Token=…`.
 pub fn buildSearchUrl(out: []u8, base: []const u8, token: []const u8, query: []const u8, limit: u32) ?[]const u8 {
+    return buildSearchPageUrl(out, base, token, query, limit, 0);
+}
+
+pub fn buildSearchPageUrl(out: []u8, base: []const u8, token: []const u8, query: []const u8, limit: u32, start: u32) ?[]const u8 {
     if (!isValidBase(base) or query.len == 0 or token.len == 0) return null;
     var enc: [512]u8 = undefined;
     const qn = percentEncode(query, &enc);
@@ -64,8 +68,8 @@ pub fn buildSearchUrl(out: []u8, base: []const u8, token: []const u8, query: []c
     const tn = percentEncode(token, &ten);
     return std.fmt.bufPrint(
         out,
-        "{s}/search?query={s}&type={d}&limit={d}&X-Plex-Token={s}",
-        .{ trimBase(base), enc[0..qn], TYPE_TRACK, limit, ten[0..tn] },
+        "{s}/search?query={s}&type={d}&limit={d}&X-Plex-Container-Start={d}&X-Plex-Container-Size={d}&X-Plex-Token={s}",
+        .{ trimBase(base), enc[0..qn], TYPE_TRACK, limit, start, limit, ten[0..tn] },
     ) catch null;
 }
 
@@ -204,9 +208,10 @@ pub fn parseSong(
 test "search URL asks for type=10 (tracks) and trims a trailing slash" {
     var b: [700]u8 = undefined;
     try std.testing.expectEqualStrings(
-        "http://plex:32400/search?query=daft%20punk&type=10&limit=50&X-Plex-Token=tok123",
+        "http://plex:32400/search?query=daft%20punk&type=10&limit=50&X-Plex-Container-Start=0&X-Plex-Container-Size=50&X-Plex-Token=tok123",
         buildSearchUrl(&b, "http://plex:32400/", "tok123", "daft punk", 50).?,
     );
+    try std.testing.expect(std.mem.indexOf(u8, buildSearchPageUrl(&b, "http://plex:32400", "tok123", "x", 40, 80).?, "X-Plex-Container-Start=80") != null);
 }
 
 test "search URL percent-encodes every reserved char (space & = # ? % +)" {

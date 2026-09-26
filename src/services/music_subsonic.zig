@@ -250,6 +250,9 @@ var search_request: LatestRequest = .{};
 // statics while an older worker is starting.
 const SearchJob = struct {
     generation: u32,
+    source: u8 = SRC_JIOSAAVN,
+    offset: u32 = 0,
+    append: bool = false,
     query: [256]u8 = undefined,
     query_len: usize = 0,
     base: [256]u8 = undefined,
@@ -259,6 +262,9 @@ const SearchJob = struct {
 };
 
 const RESULTS_CAP: usize = 200;
+const PAGE_SIZE: usize = 40;
+var more_available: bool = false;
+var loading_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 pub fn searchMusic(query: []const u8) void {
     if (query.len == 0) return;
@@ -266,78 +272,115 @@ pub fn searchMusic(query: []const u8) void {
     state.app.music.fetch_error = false;
 
     const my_gen = search_request.begin(&state.app.music.is_loading);
-    var job: SearchJob = .{ .generation = my_gen };
+    more_available = true;
+    loading_more.store(false, .release);
+    const job = makeSearchJob(query, my_gen, false, 0) orelse return abortSearch(my_gen);
+    if (!spawnSearchJob(job)) search_request.finish(my_gen, &state.app.music.is_loading);
+}
+
+fn makeSearchJob(query: []const u8, generation: u32, append: bool, offset: u32) ?SearchJob {
+    var job: SearchJob = .{ .generation = generation, .source = state.app.music.source, .append = append, .offset = offset };
     job.query_len = @min(query.len, job.query.len);
     @memcpy(job.query[0..job.query_len], query[0..job.query_len]);
+    if (job.source == SRC_JIOSAAVN) return job;
 
-    if (state.app.music.source == SRC_JIOSAAVN) {
-        // JioSaavn — public, keyless.
-        if (@import("../core/workers.zig").spawnLegacy(jiosaavnWorker, .{job})) |t| {
-            @import("../core/workers.zig").release(t);
-        } else |_| {
-            search_request.finish(my_gen, &state.app.music.is_loading);
-        }
-        return;
-    }
-
-    // Every other source needs credentials. Copy them into the immutable job
-    // before spawning so a detached thread never reads reloadable config,
-    // plex.json, or state.app.jf.
+    // Copy credentials into the immutable job so detached workers never read
+    // reloadable config while another frame changes it.
     var b: [256]u8 = undefined;
     var tok: [320]u8 = undefined;
-
-    // std.Thread.spawn takes the function COMPTIME, so the snapshot step picks a
-    // tag and each arm spawns its own worker (no runtime fn pointer).
-    switch (state.app.music.source) {
+    switch (job.source) {
         SRC_SUBSONIC => {
             var q: [300]u8 = undefined;
-            const c = creds(&b, &q) orelse return abortSearch(my_gen);
+            const c = creds(&b, &q) orelse return null;
             copyField(&job.base, &job.base_len, c.base);
             copyField(&job.auth, &job.auth_len, c.authq);
-            spawnWorker(subsonicWorker, job);
         },
         SRC_JELLYFIN => {
-            const c = jfCreds(&b, &tok) orelse return abortSearch(my_gen);
+            const c = jfCreds(&b, &tok) orelse return null;
             copyField(&job.base, &job.base_len, c.base);
             copyField(&job.auth, &job.auth_len, c.token);
-            spawnWorker(jellyfinMusicWorker, job);
         },
         SRC_PLEX => {
-            const c = plexCreds(&b, &tok) orelse return abortSearch(my_gen);
+            const c = plexCreds(&b, &tok) orelse return null;
             copyField(&job.base, &job.base_len, c.base);
             copyField(&job.auth, &job.auth_len, c.token);
-            spawnWorker(plexMusicWorker, job);
         },
-        else => return abortSearch(my_gen),
+        else => return null,
+    }
+    return job;
+}
+
+fn spawnWorker(comptime f: fn (SearchJob) void, job: SearchJob) bool {
+    if (@import("../core/workers.zig").spawnLegacy(f, .{job})) |t| {
+        @import("../core/workers.zig").release(t);
+        return true;
+    } else |_| {
+        return false;
     }
 }
 
-fn spawnWorker(comptime f: fn (SearchJob) void, job: SearchJob) void {
-    if (@import("../core/workers.zig").spawnLegacy(f, .{job})) |t| {
-        @import("../core/workers.zig").release(t);
-    } else |_| {
-        search_request.finish(job.generation, &state.app.music.is_loading);
+fn spawnSearchJob(job: SearchJob) bool {
+    return switch (job.source) {
+        SRC_JIOSAAVN => spawnWorker(jiosaavnWorker, job),
+        SRC_SUBSONIC => spawnWorker(subsonicWorker, job),
+        SRC_JELLYFIN => spawnWorker(jellyfinMusicWorker, job),
+        SRC_PLEX => spawnWorker(plexMusicWorker, job),
+        else => false,
+    };
+}
+
+fn loadMore() void {
+    if (!more_available or loading_more.load(.acquire) or state.app.music.is_loading.load(.acquire)) return;
+    const count = resultCount();
+    if (count == 0 or count >= RESULTS_CAP) {
+        more_available = false;
+        return;
     }
+    const query = std.mem.sliceTo(&state.app.music.search_buf, 0);
+    if (query.len == 0 or loading_more.swap(true, .acq_rel)) return;
+    const job = makeSearchJob(query, search_request.current(), true, @intCast(count)) orelse {
+        loading_more.store(false, .release);
+        return;
+    };
+    if (!spawnSearchJob(job)) loading_more.store(false, .release);
 }
 
 /// Drop the spinner and return without a fetch — the source isn't configured
 /// (or is unknown). Deliberately silent: an unconfigured source is inert, and
 /// the empty grid already carries the "configure this" hint.
 fn abortSearch(my_gen: u32) void {
+    more_available = false;
     search_request.finish(my_gen, &state.app.music.is_loading);
+}
+
+fn finishJob(job: SearchJob, published: bool) void {
+    if (job.append) {
+        if (search_request.isCurrent(job.generation)) {
+            if (!published) more_available = false;
+            loading_more.store(false, .release);
+        }
+    } else search_request.finish(job.generation, &state.app.music.is_loading);
+}
+
+fn publishPage(job: SearchJob, added: usize, base: usize) void {
+    state.app.music.result_count = base + added;
+    more_available = added == PAGE_SIZE and state.app.music.result_count < RESULTS_CAP;
+    if (added == 0 and !job.append) logs.pushLog("info", "music", "No tracks found", false);
 }
 
 /// JioSaavn search worker — public API, no auth. Fills play_url (perma_url) +
 /// a full cover URL; playback hands perma_url to mpv/yt-dlp.
 fn jiosaavnWorker(job: SearchJob) void {
     const my_gen = job.generation;
-    defer search_request.finish(my_gen, &state.app.music.is_loading);
+    var published = false;
+    defer finishJob(job, published);
 
     var url_buf: [1024]u8 = undefined;
-    const url = js_pure.buildSearchUrl(&url_buf, job.query[0..job.query_len], 40) orelse return;
+    const page = job.offset / @as(u32, @intCast(PAGE_SIZE)) + 1;
+    const url = js_pure.buildSearchPageUrl(&url_buf, job.query[0..job.query_len], @intCast(PAGE_SIZE), page) orelse return;
 
     const body = curl(url, 3 * 1024 * 1024, "") orelse {
-        if (search_request.isCurrent(my_gen)) state.app.music.fetch_error = true;
+        if (!job.append and search_request.isCurrent(my_gen)) state.app.music.fetch_error = true;
         return;
     };
     defer alloc.free(body);
@@ -347,16 +390,17 @@ fn jiosaavnWorker(job: SearchJob) void {
     defer parse_mutex.unlock();
     if (search_request.current() != my_gen) return;
 
+    const base: usize = if (job.append) state.app.music.result_count else 0;
     var count: usize = 0;
     var it = js_pure.SongIter{ .json = body };
     while (it.next()) |obj| {
-        if (count >= RESULTS_CAP) break;
+        if (count >= PAGE_SIZE or base + count >= RESULTS_CAP) break;
         var tb: [160]u8 = undefined;
         var ab: [128]u8 = undefined;
         var ub: [400]u8 = undefined;
         var ib: [400]u8 = undefined;
         const s = js_pure.parseSong(obj, &tb, &ab, &ub, &ib) orelse continue;
-        var row = &state.app.music.results[count];
+        var row = &state.app.music.results[base + count];
         row.* = .{};
         copyField(&row.title, &row.title_len, s.title);
         copyField(&row.artist, &row.artist_len, s.artist);
@@ -365,19 +409,20 @@ fn jiosaavnWorker(job: SearchJob) void {
         copyField(&row.cover, &row.cover_len, js_pure.coverUpgrade(s.image, &cov));
         count += 1;
     }
-    state.app.music.result_count = count;
-    if (count == 0) logs.pushLog("info", "music", "No tracks found", false);
+    publishPage(job, count, base);
+    published = true;
 }
 
 fn subsonicWorker(job: SearchJob) void {
     const my_gen = job.generation;
-    defer search_request.finish(my_gen, &state.app.music.is_loading);
+    var published = false;
+    defer finishJob(job, published);
 
     var url_buf: [1024]u8 = undefined;
-    const url = pure.buildSearchUrl(&url_buf, job.base[0..job.base_len], job.auth[0..job.auth_len], job.query[0..job.query_len], 100) orelse return;
+    const url = pure.buildSearchPageUrl(&url_buf, job.base[0..job.base_len], job.auth[0..job.auth_len], job.query[0..job.query_len], @intCast(PAGE_SIZE), job.offset) orelse return;
 
     const body = curl(url, 2 * 1024 * 1024, "") orelse {
-        if (search_request.isCurrent(my_gen)) state.app.music.fetch_error = true;
+        if (!job.append and search_request.isCurrent(my_gen)) state.app.music.fetch_error = true;
         return;
     };
     defer alloc.free(body);
@@ -385,7 +430,7 @@ fn subsonicWorker(job: SearchJob) void {
     if (search_request.current() != my_gen) return; // superseded
 
     if (!pure.responseOk(body)) {
-        state.app.music.fetch_error = true;
+        if (!job.append) state.app.music.fetch_error = true;
         logs.pushLog("info", "music", "Subsonic auth/search failed — check server URL + credentials", false);
         return;
     }
@@ -395,16 +440,17 @@ fn subsonicWorker(job: SearchJob) void {
     if (search_request.current() != my_gen) return;
 
     const scope = pure.songsScope(body);
+    const base: usize = if (job.append) state.app.music.result_count else 0;
     var count: usize = 0;
     var it = pure.SongIter{ .json = scope };
     while (it.next()) |obj| {
-        if (count >= RESULTS_CAP) break;
+        if (count >= PAGE_SIZE or base + count >= RESULTS_CAP) break;
         var idb: [128]u8 = undefined;
         var tb: [160]u8 = undefined;
         var ab: [128]u8 = undefined;
         var cb: [96]u8 = undefined;
         const s = pure.parseSong(obj, &idb, &tb, &ab, &cb) orelse continue;
-        var row = &state.app.music.results[count];
+        var row = &state.app.music.results[base + count];
         row.* = .{};
         copyField(&row.id, &row.id_len, s.id);
         copyField(&row.title, &row.title_len, s.title);
@@ -412,8 +458,8 @@ fn subsonicWorker(job: SearchJob) void {
         copyField(&row.cover, &row.cover_len, s.cover);
         count += 1;
     }
-    state.app.music.result_count = count;
-    if (count == 0) logs.pushLog("info", "music", "No tracks found", false);
+    publishPage(job, count, base);
+    published = true;
 }
 
 /// Jellyfin audio search worker — twin of subsonicWorker. Fills `id` (the item
@@ -421,13 +467,14 @@ fn subsonicWorker(job: SearchJob) void {
 /// URL is built from live creds at play time, never cached in the row.
 fn jellyfinMusicWorker(job: SearchJob) void {
     const my_gen = job.generation;
-    defer search_request.finish(my_gen, &state.app.music.is_loading);
+    var published = false;
+    defer finishJob(job, published);
 
     var url_buf: [1024]u8 = undefined;
-    const url = jf_pure.buildSearchUrl(&url_buf, job.base[0..job.base_len], job.auth[0..job.auth_len], job.query[0..job.query_len], 100) orelse return;
+    const url = jf_pure.buildSearchPageUrl(&url_buf, job.base[0..job.base_len], job.auth[0..job.auth_len], job.query[0..job.query_len], @intCast(PAGE_SIZE), job.offset) orelse return;
 
     const body = curl(url, 2 * 1024 * 1024, "application/json") orelse {
-        if (search_request.isCurrent(my_gen)) state.app.music.fetch_error = true;
+        if (!job.append and search_request.isCurrent(my_gen)) state.app.music.fetch_error = true;
         return;
     };
     defer alloc.free(body);
@@ -440,20 +487,21 @@ fn jellyfinMusicWorker(job: SearchJob) void {
 
     const scope = jf_pure.itemsScope(body);
     if (scope.len == 0) {
-        state.app.music.fetch_error = true;
+        if (!job.append) state.app.music.fetch_error = true;
         logs.pushLog("info", "music", "Jellyfin search failed — check the server sign-in", false);
         return;
     }
 
+    const base: usize = if (job.append) state.app.music.result_count else 0;
     var count: usize = 0;
     var it = jf_pure.ItemIter{ .json = scope };
     while (it.next()) |obj| {
-        if (count >= RESULTS_CAP) break;
+        if (count >= PAGE_SIZE or base + count >= RESULTS_CAP) break;
         var idb: [128]u8 = undefined;
         var tb: [160]u8 = undefined;
         var ab: [128]u8 = undefined;
         const s = jf_pure.parseSong(obj, &idb, &tb, &ab) orelse continue;
-        var row = &state.app.music.results[count];
+        var row = &state.app.music.results[base + count];
         row.* = .{};
         copyField(&row.id, &row.id_len, s.id);
         copyField(&row.title, &row.title_len, s.title);
@@ -461,8 +509,8 @@ fn jellyfinMusicWorker(job: SearchJob) void {
         copyField(&row.cover, &row.cover_len, s.id); // Primary image is keyed by the item id
         count += 1;
     }
-    state.app.music.result_count = count;
-    if (count == 0) logs.pushLog("info", "music", "No tracks found", false);
+    publishPage(job, count, base);
+    published = true;
 }
 
 /// Plex track search worker — twin of subsonicWorker. Fills `id` (ratingKey),
@@ -471,14 +519,15 @@ fn jellyfinMusicWorker(job: SearchJob) void {
 /// token rotation can't strand a cached row.
 fn plexMusicWorker(job: SearchJob) void {
     const my_gen = job.generation;
-    defer search_request.finish(my_gen, &state.app.music.is_loading);
+    var published = false;
+    defer finishJob(job, published);
 
     var url_buf: [1024]u8 = undefined;
-    const url = px_pure.buildSearchUrl(&url_buf, job.base[0..job.base_len], job.auth[0..job.auth_len], job.query[0..job.query_len], 100) orelse return;
+    const url = px_pure.buildSearchPageUrl(&url_buf, job.base[0..job.base_len], job.auth[0..job.auth_len], job.query[0..job.query_len], @intCast(PAGE_SIZE), job.offset) orelse return;
 
     // Plex serves XML unless asked for JSON (plex.zig sends the same header).
     const body = curl(url, 2 * 1024 * 1024, "application/json") orelse {
-        if (search_request.isCurrent(my_gen)) state.app.music.fetch_error = true;
+        if (!job.append and search_request.isCurrent(my_gen)) state.app.music.fetch_error = true;
         return;
     };
     defer alloc.free(body);
@@ -493,15 +542,16 @@ fn plexMusicWorker(job: SearchJob) void {
     // is "no tracks", NOT an error — only a body that isn't a MediaContainer is.
     const scope = px_pure.metadataScope(body);
     if (scope.len == 0 and std.mem.indexOf(u8, body, "MediaContainer") == null) {
-        state.app.music.fetch_error = true;
+        if (!job.append) state.app.music.fetch_error = true;
         logs.pushLog("info", "music", "Plex search failed — check the server sign-in", false);
         return;
     }
 
+    const base: usize = if (job.append) state.app.music.result_count else 0;
     var count: usize = 0;
     var it = px_pure.TrackIter{ .json = scope };
     while (it.next()) |obj| {
-        if (count >= RESULTS_CAP) break;
+        if (count >= PAGE_SIZE or base + count >= RESULTS_CAP) break;
         var idb: [128]u8 = undefined;
         var tb: [160]u8 = undefined;
         var ab: [128]u8 = undefined;
@@ -509,7 +559,7 @@ fn plexMusicWorker(job: SearchJob) void {
         var pb: [256]u8 = undefined;
         const s = px_pure.parseSong(obj, &idb, &tb, &ab, &cb, &pb) orelse continue;
         if (s.part_key.len == 0) continue; // unplayable without a Part
-        var row = &state.app.music.results[count];
+        var row = &state.app.music.results[base + count];
         row.* = .{};
         copyField(&row.id, &row.id_len, s.id);
         copyField(&row.title, &row.title_len, s.title);
@@ -518,8 +568,8 @@ fn plexMusicWorker(job: SearchJob) void {
         copyField(&row.play_url, &row.play_url_len, s.part_key);
         count += 1;
     }
-    state.app.music.result_count = count;
-    if (count == 0) logs.pushLog("info", "music", "No tracks found", false);
+    publishPage(job, count, base);
+    published = true;
 }
 
 fn copyField(dst: []u8, len: *usize, src: []const u8) void {
@@ -811,12 +861,19 @@ pub fn renderContent() void {
         // Every source is always offered (Subsonic's long-standing behaviour):
         // picking an unconfigured one is inert and the empty grid says how to
         // configure it, which is friendlier than a tab that silently vanishes.
-        const sources = [_][]const u8{ "JioSaavn", "Subsonic", "Jellyfin", "Plex" };
-        if (components.segment(@src(), &sources, @as(usize, state.app.music.source))) |clicked| {
-            if (@as(u8, @intCast(clicked)) != state.app.music.source) {
+        const sources = [_]struct { label: []const u8, icon: []const u8 }{
+            .{ .label = "JioSaavn", .icon = icons.tvg.lucide.music },
+            .{ .label = "Subsonic", .icon = icons.tvg.lucide.server },
+            .{ .label = "Jellyfin", .icon = icons.tvg.lucide.library },
+            .{ .label = "Plex", .icon = icons.tvg.lucide.play },
+        };
+        for (sources, 0..) |source, clicked| {
+            if (components.filterChip(@src(), source.label, source.icon, clicked == state.app.music.source, clicked + 91000) and clicked != state.app.music.source) {
                 state.app.music.source = @intCast(clicked);
                 state.app.music.result_count = 0; // switching source clears the grid
                 state.app.music.fetch_error = false;
+                more_available = false;
+                loading_more.store(false, .release);
                 search_request.cancel(&state.app.music.is_loading); // drop any in-flight results
             }
         }
@@ -1177,5 +1234,22 @@ fn renderResults() void {
             .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(total_rows - win.last)) },
         });
         sp.deinit();
+    }
+
+    if (more_available) {
+        const loading = loading_more.load(.acquire);
+        const max_y = scroll.si.scrollMax(.vertical);
+        const near_bottom = max_y > 0 and scroll.si.viewport.y >= max_y - 800;
+        const underfilled = max_y <= 0 and total > 0;
+        if ((near_bottom or underfilled) and !loading) loadMore();
+        if (loading or underfilled) {
+            dvui.spinner(@src(), .{
+                .color_text = theme.colors.accent,
+                .min_size_content = theme.iconSize(.lg),
+                .gravity_x = 0.5,
+                .margin = dvui.Rect.all(12),
+            });
+            state.wakeUi();
+        }
     }
 }
