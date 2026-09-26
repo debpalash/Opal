@@ -128,7 +128,7 @@ function renderMusic(songs){
       <div class="m"><span class="src">${esc(s.artist || '')}</span>
         <button class="music-details" data-details="${i}">Details</button>
         ${s.url ? `<button class="queue-btn" data-queue="${i}">Queue</button>` : ''}
-        <button class="play" data-i="${i}" data-url="${encodeURIComponent(s.url || '')}">Play</button></div>
+        <button class="play" data-destination-verb="Play" data-i="${i}" data-url="${encodeURIComponent(s.url || '')}">${destinationActionLabel('Play')}</button></div>
     </div>`).join('') || '<div class="empty">No songs yet</div>';
   if (html === lastHtml.music) return;
   lastHtml.music = html;
@@ -337,7 +337,7 @@ function renderDrama(rows){
       ${r.poster_path ? `<img src="https://image.tmdb.org/t/p/w342${esc(r.poster_path)}" alt="" loading="lazy" decoding="async">` : ''}
       <div class="jf-card-actions">
         <button class="drama-details" data-details="${i}" aria-label="Details">${mediaIcon('info')}</button>
-        <button class="play" data-i="${i}" aria-label="Play">${mediaIcon('play')}</button>
+        <button class="play" data-i="${i}" aria-label="Play on Opal" title="Play on Opal">${mediaIcon('play')}</button>
       </div>
       <div class="cap" title="${esc(r.name)}">${esc(r.name)}</div>
       <div class="browse-card-meta">
@@ -445,7 +445,7 @@ function renderAbs(d){
         ${r.media_type ? `<span class="src">${esc(r.media_type)}</span>` : ''}
         ${r.duration ? `<span>${fmt(r.duration)}</span>` : ''}
         ${books ? `<button class="abs-details" data-details="${i}">Details</button>` : ''}
-        <button class="play" data-i="${i}">${books ? 'Play' : 'Open'}</button></div>
+        <button class="play" data-i="${i}">${books ? 'Play on Opal' : 'Open'}</button></div>
     </div>`).join('') || (d.connected ? '<div class="empty">Nothing here</div>' : '');
   $('abs-results').querySelectorAll('button[data-i]').forEach(b => {
     b.onclick = () => { apiMutation('/abs/' + (books ? 'play' : 'open') + '?idx=' + b.dataset.i).catch(()=>{}); pollAbs(); };
@@ -572,7 +572,7 @@ function openSourceDetails(source, item, trigger){
       const route = isJfAudio(item.type) ? '/jellyfin/play_audio?id=' : '/jellyfin/play?id=';
       await api(route + encodeURIComponent(item.id)); closeSourceDetails();
     };
-    actions.append(detailAction(item.folder ? 'Open' : (item.progress && !item.played ? 'Resume' : 'Play'), play, true));
+    actions.append(detailAction(item.folder ? 'Open' : (item.progress && !item.played ? 'Resume on Opal' : 'Play on Opal'), play, true));
     if (!item.folder) {
       actions.append(detailAction(item.favorite ? 'Remove favorite' : 'Favorite', async () => {
         await apiMutation('/jellyfin/action?id=' + encodeURIComponent(item.id) + '&action=favorite&enabled=' + !item.favorite);
@@ -584,7 +584,7 @@ function openSourceDetails(source, item, trigger){
       }));
     }
   } else if (source === 'Plex') {
-    actions.append(detailAction(item.folder ? 'Open' : (item.progress && !item.played ? 'Resume' : 'Play'), async () => {
+    actions.append(detailAction(item.folder ? 'Open' : (item.progress && !item.played ? 'Resume on Opal' : 'Play on Opal'), async () => {
       await apiMutation('/plex/' + (item.folder ? 'open_item' : 'play') + '?id=' + encodeURIComponent(item.id));
       closeSourceDetails(); pollPlex();
     }, true));
@@ -611,7 +611,7 @@ function openSourceDetails(source, item, trigger){
       actions.append(rating);
     }
   } else if (source === 'Audiobookshelf') {
-    actions.append(detailAction('Play', async () => {
+    actions.append(detailAction('Play on Opal', async () => {
       await apiMutation('/abs/play?idx=' + encodeURIComponent(item.index)); closeSourceDetails(); pollAbs();
     }, true));
   } else if (source === 'OPDS') {
@@ -619,7 +619,7 @@ function openSourceDetails(source, item, trigger){
       await apiMutation('/opds/open?idx=' + encodeURIComponent(item.index)); closeSourceDetails(); pollOpds();
     }, true));
   } else if (source === 'Podcast') {
-    actions.append(detailAction(item.kind === 'show' ? 'View episodes' : 'Play', async () => {
+    actions.append(detailAction(item.kind === 'show' ? 'View episodes' : destinationActionLabel('Play'), async () => {
       closeSourceDetails();
       if (item.kind === 'show') loadPodEpisodes(item.index);
       else dispatchPlay(item.url || '', item.title || item.name || '', () => api('/podcasts/play?idx=' + encodeURIComponent(item.index)));
@@ -628,7 +628,7 @@ function openSourceDetails(source, item, trigger){
       await queueMedia(item.url, item.title || item.name || ''); closeSourceDetails();
     }));
   } else if (source === 'Music') {
-    actions.append(detailAction('Play', async () => {
+    actions.append(detailAction(destinationActionLabel('Play'), async () => {
       closeSourceDetails();
       dispatchPlay(item.url || '', item.title || '', () => api('/music/play?idx=' + encodeURIComponent(item.index)));
     }, true));
@@ -636,7 +636,7 @@ function openSourceDetails(source, item, trigger){
       await queueMedia(item.url, item.title || ''); closeSourceDetails();
     }));
   } else if (source === 'Radio') {
-    actions.append(detailAction('Listen', async () => {
+    actions.append(detailAction(destinationActionLabel('Listen'), async () => {
       closeSourceDetails();
       dispatchPlay(item.url || '', item.name || '', () => api('/radio/play?idx=' + encodeURIComponent(item.index)));
     }, true));
@@ -648,7 +648,7 @@ function openSourceDetails(source, item, trigger){
       closeSourceDetails(); loadAnimeEpisodes(item.index);
     }, true));
   } else if (source === 'Live TV') {
-    actions.append(detailAction('Watch', () => {
+    actions.append(detailAction(destinationActionLabel('Watch'), () => {
       closeSourceDetails(); dispatchPlay(item.url || '', item.name || '', () =>
         apiMutation('/load?url=' + encodeURIComponent(item.url || '')));
     }, true));
@@ -657,7 +657,7 @@ function openSourceDetails(source, item, trigger){
     }));
   } else if (source === 'YouTube') {
     const url = 'https://www.youtube.com/watch?v=' + (item.id || '');
-    actions.append(detailAction('Play', () => {
+    actions.append(detailAction(destinationActionLabel('Play'), () => {
       closeSourceDetails();
       if (HOSTED || PLAY_HERE) openYtEmbed(item.id, item.title || '');
       else return apiMutation('/load?url=' + encodeURIComponent(url));
@@ -678,7 +678,7 @@ function openSourceDetails(source, item, trigger){
       await api('/drama/play?idx=' + encodeURIComponent(item.index)); closeSourceDetails();
     }, true));
   } else if (source === 'RSS') {
-    actions.append(detailAction('Play', async () => {
+    actions.append(detailAction('Play on Opal', async () => {
       await apiMutation('/load?url=' + encodeURIComponent(item.url)); closeSourceDetails();
     }, true));
     if (item.url) actions.append(detailAction('Queue', async () => {
@@ -735,7 +735,7 @@ function renderPlex(d){
         ${browsing && !r.folder ? `<button class="plex-watched" data-id="${esc(r.id || '')}" data-enabled="${!r.played}" aria-label="${r.played ? 'Mark unwatched' : 'Mark watched'}" title="${r.played ? 'Mark unwatched' : 'Mark watched'}">${r.played ? '&#10003;' : '&#9675;'}</button>` : ''}
         ${browsing && !r.folder ? `<select class="plex-rating" data-id="${esc(r.id || '')}" aria-label="Rate ${esc(r.title)}">${plexRatingOptions(r.rating)}</select>` : ''}
         ${browsing ? `<button class="plex-details" data-i="${i}">Details</button>` : ''}
-        <button class="play" data-i="${i}" data-id="${browsing ? esc(r.id || '') : ''}">${browsing ? (r.folder ? 'Open' : (r.progress && !r.played ? 'Resume' : 'Play')) : 'Open'}</button></div>
+        <button class="play" data-i="${i}" data-id="${browsing ? esc(r.id || '') : ''}">${browsing ? (r.folder ? 'Open' : (r.progress && !r.played ? 'Resume on Opal' : 'Play on Opal')) : 'Open'}</button></div>
       ${items && r.duration && r.progress ? `<div class="plex-progress"><i style="width:${Math.min(100,Math.round(r.progress/r.duration*100))}%"></i></div>` : ''}
     </div>`).join('') || (d.connected ? '<div class="empty">Nothing here</div>' : '');
   $('plex-results').querySelectorAll('button[data-i]').forEach(b => {
@@ -914,7 +914,7 @@ function renderRadio(sts){
         ${s.tags ? `<span>${esc((s.tags || '').split(',').slice(0,2).join(', '))}</span>` : ''}
         <button class="radio-details" data-details="${i}">Details</button>
         ${s.url ? `<button class="queue-btn" data-queue="${i}">Queue</button>` : ''}
-        <button class="play" data-i="${i}" data-url="${encodeURIComponent(s.url || '')}">Listen</button></div>
+        <button class="play" data-destination-verb="Listen" data-i="${i}" data-url="${encodeURIComponent(s.url || '')}">${destinationActionLabel('Listen')}</button></div>
     </div>`).join('') || '<div class="empty">No stations yet</div>';
   if (html === lastHtml.radio) return;
   lastHtml.radio = html;

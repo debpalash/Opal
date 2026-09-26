@@ -67,7 +67,7 @@ function runSearch(){
 function unifiedActionLabel(source){
   if (source === 'comics') return 'Read';
   if (source === 'podcast' || source === 'anime' || source === 'tmdb') return 'Open';
-  return 'Play';
+  return 'Play on Opal';
 }
 function renderUnifiedResults(payload){
   const rs = payload.results || [], generation = payload.generation || 0;
@@ -151,7 +151,7 @@ function renderTorrentResults(rs){
         ${fmtSize(r.size) ? `<span>${esc(fmtSize(r.size))}</span>` : ''}
         <span class="src">${esc(r.source || '')}</span>
         <span class="actions"><button class="queue-btn" data-i="${i}">Queue</button>
-          <button class="play" data-i="${i}">Play</button></span>
+          <button class="play" data-i="${i}">Open on Opal</button></span>
       </div>
     </div>`).join('') || '<div class="empty">No results yet</div>';
   if (html === lastHtml.results) return;
@@ -250,7 +250,7 @@ function wireTorrentFiles(){
           <div class="transfer-actions">
             <button type="button" data-transfer="torrent" data-action="priority" data-id="${id}" data-file="${f.id ?? j}" data-value="0">Skip</button>
             <button type="button" data-transfer="torrent" data-action="priority" data-id="${id}" data-file="${f.id ?? j}" data-value="7">High</button>
-            <button type="button" class="play" data-j="${j}">Play</button>
+            <button type="button" class="play" data-destination-verb="Play" data-j="${j}">${destinationActionLabel('Play')}</button>
           </div></div>`).join('')
         || '<div class="hint">No files yet — metadata still resolving.</div>';
       box.querySelectorAll('.play').forEach(pb => pb.onclick = () => {
@@ -362,7 +362,7 @@ async function loadDownloads(){
       const detail = item.is_dir ? 'Folder' : fmtSize(item.size);
       return `<div class="file"><div class="n">${esc(name)}${detail ? `<div class="file-meta">${esc(detail)}</div>` : ''}</div>
         <div class="transfer-actions">
-          ${item.is_dir ? '' : `<button class="play" data-n="${encodeURIComponent(name)}">Play</button>`}
+          ${item.is_dir ? '' : `<button class="play" data-destination-verb="Play" data-n="${encodeURIComponent(name)}">${destinationActionLabel('Play')}</button>`}
           ${HOSTED ? '' : `<button data-file-action="reveal" data-n="${encodeURIComponent(name)}">Reveal</button>`}
           <button class="danger" data-file-action="delete" data-n="${encodeURIComponent(name)}">Delete from disk</button>
         </div></div>`;

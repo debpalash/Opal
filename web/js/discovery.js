@@ -46,7 +46,7 @@ function renderAi(d){
       <div class="t">${esc(r.name)}</div>
       <div class="m"><span class="src">${esc(r.detail || '')}</span><span class="actions">
         <button class="queue-btn" data-ai-queue="${encodeURIComponent(r.url || '')}" data-title="${esc(r.name || '')}">Queue</button>
-        <button class="play" data-url="${encodeURIComponent(r.url || '')}" data-title="${esc(r.name || '')}">Play</button></span></div>
+        <button class="play" data-destination-verb="Play" data-url="${encodeURIComponent(r.url || '')}" data-title="${esc(r.name || '')}">${destinationActionLabel('Play')}</button></span></div>
     </div>`).join('');
   if (rh !== lastHtml.aiRes) {
     lastHtml.aiRes = rh;
@@ -98,7 +98,7 @@ function appendTv(chans){
         ${c.category ? `<span>${esc(c.category)}</span>` : ''}
         <button class="tv-details" data-channel="${encodeURIComponent(JSON.stringify(c))}">Details</button>
         <button class="queue-btn" data-tv-queue="${encodeURIComponent(c.url)}" data-name="${esc(c.name)}">Queue</button>
-        <button class="play" data-url="${encodeURIComponent(c.url)}" data-name="${esc(c.name)}">Watch</button>
+        <button class="play" data-destination-verb="Watch" data-url="${encodeURIComponent(c.url)}" data-name="${esc(c.name)}">${destinationActionLabel('Watch')}</button>
       </div>
     </div>`).join('');
   $('tv-results').insertAdjacentHTML('beforeend', html);
@@ -178,7 +178,7 @@ function renderYt(items){
         ${v.views ? `<span>${fmtViews(v.views)} views</span>` : ''}
         <button class="yt-details" data-details="${esc(v.id)}">Details</button>
         <button class="queue-btn" data-queue="${esc(v.id)}">Queue</button>
-        <button class="play" data-id="${esc(v.id)}" data-title="${esc(v.title)}">Play</button>
+        <button class="play" data-destination-verb="Play" data-id="${esc(v.id)}" data-title="${esc(v.title)}">${destinationActionLabel('Play')}</button>
       </div>
     </div>`).join('') || '<div class="empty">No results yet</div>';
   if (html === lastHtml.yt) return;
@@ -283,7 +283,7 @@ function renderPodEpisodes(eps){
         <div class="m"><span class="src">${esc([e.date, e.duration].filter(Boolean).join(' · '))}</span><span class="actions">
           <button class="pod-episode-details" data-details="${i}">Details</button>
           <button class="queue-btn" data-pod-queue="${i}">Queue</button>
-          <button class="play" data-ep="${i}">▶ Play</button></span></div>
+          <button class="play" data-destination-verb="Play" data-ep="${i}">${destinationActionLabel('Play')}</button></span></div>
       </div>`).join('')
     : '<div class="empty">No episodes</div>';
   $('pod-episodes').querySelectorAll('.play').forEach(b => b.onclick = () => {
@@ -344,7 +344,7 @@ function renderJfItems(items){
     ? '<div class="grid">' + items.map((it, itemIndex) => {
         const meta = [it.type, it.year || '', it.runtime ? fmt(it.runtime) : ''].filter(Boolean).join(' · ');
         const progress = it.runtime > 0 && it.progress > 0 ? Math.min(100, Math.round(it.progress / it.runtime * 100)) : 0;
-        return `<div class="card" data-id="${esc(it.id)}" data-folder="${it.folder}" data-type="${esc(it.type || '')}">
+        return `<div class="card" role="button" tabindex="0" aria-label="${it.folder ? 'Open' : 'Play on Opal'} ${esc(it.name)}" data-id="${esc(it.id)}" data-folder="${it.folder}" data-type="${esc(it.type || '')}">
           ${it.image ? `<img loading="lazy" src="${BASE}/api/jellyfin/poster?id=${encodeURIComponent(it.id)}">` : '<img>'}
           <div class="jf-card-actions">
             <button data-jf-details="${itemIndex}" aria-label="View details" title="View details">i</button>
@@ -373,12 +373,18 @@ function renderJfItems(items){
     event.stopPropagation();
     openSourceDetails('Jellyfin', items[Number(button.dataset.jfDetails)] || {}, button);
   });
-  $('jf-items').querySelectorAll('.card').forEach(el => el.onclick = () => {
-    const id = el.dataset.id;
-    if (el.dataset.folder === 'true') { jfBrowse(id); return; }
-    const ep = isJfAudio(el.dataset.type) ? '/jellyfin/play_audio?id=' : '/jellyfin/play?id=';
-    api(ep + encodeURIComponent(id)).catch(()=>{});
-    el.style.opacity = '.55';
+  $('jf-items').querySelectorAll('.card').forEach(el => {
+    el.onclick = () => {
+      const id = el.dataset.id;
+      if (el.dataset.folder === 'true') { jfBrowse(id); return; }
+      const ep = isJfAudio(el.dataset.type) ? '/jellyfin/play_audio?id=' : '/jellyfin/play?id=';
+      api(ep + encodeURIComponent(id)).catch(()=>{});
+      el.style.opacity = '.55';
+    };
+    el.onkeydown = event => {
+      if (event.target !== el || (event.key !== 'Enter' && event.key !== ' ')) return;
+      event.preventDefault(); el.click();
+    };
   });
 }
 function jfPollItems(){
@@ -518,7 +524,7 @@ function renderRssItems(items, fetching){
         ${it.size ? `<span>${fmtSize(it.size)}</span>` : ''}
         <span class="actions"><button class="rss-details" data-details="${i}">Details</button>
         <button class="queue-btn" data-rss-queue="${i}">Queue</button>
-        <button class="play" data-url="${encodeURIComponent(it.magnet || '')}" data-title="${esc(it.title || '')}">Play</button></span>
+        <button class="play" data-url="${encodeURIComponent(it.magnet || '')}" data-title="${esc(it.title || '')}">Open on Opal</button></span>
       </div>
     </div>`).join('') || (fetching ? '<div class="empty"><span class="spin"></span></div>' : '<div class="empty">No items — refresh a feed</div>');
   if (html === lastHtml.rssItems) return;
