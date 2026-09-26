@@ -504,6 +504,13 @@ fn applyToDvui() void {
     t.font_heading = .find(.{ .family = app_font_family, .size = font_size.title, .weight = .bold });
     t.font_title = .find(.{ .family = app_font_family, .size = font_size.display, .weight = .bold });
     dvui.themeSet(t);
+
+    // Keep scroll feedback light: overlay bars are a narrow thumb instead of
+    // a chunky track. Individual views control when that thumb is visible.
+    dvui.ScrollBarWidget.defaults.min_size_content = .{ .w = 7, .h = 7 };
+    dvui.ScrollBarWidget.defaults.background = false;
+    dvui.ScrollBarWidget.defaults.border = dvui.Rect.all(0);
+    dvui.ScrollBarWidget.defaults.corner_radius = dvui.Rect.all(4);
 }
 
 pub fn setTheme() void {

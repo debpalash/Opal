@@ -3,18 +3,73 @@
 
 const std = @import("std");
 
-/// True when a Jikan anime object's `rating` marks adult content.
+/// Index just after a JSON object's closing brace. Handles nested objects,
+/// arrays, escaped quotes, and braces inside strings.
+pub fn jsonObjectEnd(json: []const u8, open: usize) ?usize {
+    if (open >= json.len or json[open] != '{') return null;
+    var depth: usize = 0;
+    var in_string = false;
+    var escaped = false;
+    var i = open;
+    while (i < json.len) : (i += 1) {
+        const ch = json[i];
+        if (in_string) {
+            if (escaped) {
+                escaped = false;
+            } else if (ch == '\\') {
+                escaped = true;
+            } else if (ch == '"') {
+                in_string = false;
+            }
+            continue;
+        }
+        if (ch == '"') {
+            in_string = true;
+        } else if (ch == '{') {
+            depth += 1;
+        } else if (ch == '}') {
+            depth -= 1;
+            if (depth == 0) return i + 1;
+        }
+    }
+    return null;
+}
+
+/// True when a Jikan anime object is adult or ecchi content.
 /// Jikan ratings: G, PG, PG-13, "R - 17+ (violence & profanity)",
 /// "R+ - Mild Nudity", "Rx - Hentai". The NSFW filter hides Rx (hentai)
-/// and R+ (nudity/ecchi covers) — plain "R - 17+" stays: violence is not
-/// what the toggle is about. Matching is on the exact "Rx"/"R+" prefix, so
-/// "R -" never false-positives.
+/// and R+ (nudity/ecchi covers), plus entries explicitly classified as Ecchi,
+/// Erotica, or Hentai. Plain "R - 17+" stays: violence is not what the toggle
+/// is about.
 pub fn jikanRatingIsAdult(obj_json: []const u8) bool {
     const key = "\"rating\":\"";
-    const start = (std.mem.indexOf(u8, obj_json, key) orelse return false) + key.len;
-    const rest = obj_json[start..];
-    if (std.mem.startsWith(u8, rest, "Rx")) return true;
-    if (std.mem.startsWith(u8, rest, "R+")) return true;
+    if (std.mem.indexOf(u8, obj_json, key)) |idx| {
+        const rest = obj_json[idx + key.len ..];
+        if (std.mem.startsWith(u8, rest, "Rx") or std.mem.startsWith(u8, rest, "R+")) return true;
+    }
+    const blocked = [_][]const u8{
+        "\"name\":\"Ecchi\"",
+        "\"name\":\"Erotica\"",
+        "\"name\":\"Hentai\"",
+    };
+    for (blocked) |genre| if (std.mem.indexOf(u8, obj_json, genre) != null) return true;
+    return false;
+}
+
+/// Conservative fallback for source cards that provide only a title and no
+/// rating/genre metadata. Whole-word matching avoids names such as "Ecchizen".
+pub fn titleLooksAdult(title: []const u8) bool {
+    const terms = [_][]const u8{ "ecchi", "hentai", "erotica", "porn", "xxx" };
+    for (terms) |term| {
+        var pos: usize = 0;
+        while (pos + term.len <= title.len) : (pos += 1) {
+            if (!std.ascii.eqlIgnoreCase(title[pos .. pos + term.len], term)) continue;
+            const before_ok = pos == 0 or !std.ascii.isAlphanumeric(title[pos - 1]);
+            const end = pos + term.len;
+            const after_ok = end == title.len or !std.ascii.isAlphanumeric(title[end]);
+            if (before_ok and after_ok) return true;
+        }
+    }
     return false;
 }
 
@@ -130,10 +185,32 @@ test "jikanRatingIsAdult flags Rx and R+, keeps R and below" {
     try std.testing.expect(!jikanRatingIsAdult("{\"rating\":\"G - All Ages\"}"));
 }
 
+test "jsonObjectEnd spans nested Jikan metadata" {
+    const json = "[{\"mal_id\":1,\"title\":\"brace } and \\\"quote\\\"\",\"genres\":[{\"mal_id\":9,\"name\":\"Ecchi\"}]},{\"mal_id\":2}]";
+    const first_open = std.mem.indexOfScalar(u8, json, '{').?;
+    const end = jsonObjectEnd(json, first_open).?;
+    try std.testing.expectEqualStrings("{\"mal_id\":1,\"title\":\"brace } and \\\"quote\\\"\",\"genres\":[{\"mal_id\":9,\"name\":\"Ecchi\"}]}", json[first_open..end]);
+}
+
+test "jikanRatingIsAdult flags explicit adult and ecchi genres" {
+    try std.testing.expect(jikanRatingIsAdult("{\"rating\":\"PG-13\",\"genres\":[{\"mal_id\":9,\"name\":\"Ecchi\"}]}"));
+    try std.testing.expect(jikanRatingIsAdult("{\"rating\":null,\"explicit_genres\":[{\"name\":\"Erotica\"}]}"));
+    try std.testing.expect(jikanRatingIsAdult("{\"explicit_genres\":[{\"name\":\"Hentai\"}]}"));
+    try std.testing.expect(!jikanRatingIsAdult("{\"genres\":[{\"name\":\"Comedy\"}],\"title\":\"Ecchi is only in this title\"}"));
+}
+
 test "jikanRatingIsAdult tolerates missing/null rating" {
     try std.testing.expect(!jikanRatingIsAdult("{\"mal_id\":5,\"title\":\"no rating field\"}"));
     try std.testing.expect(!jikanRatingIsAdult("{\"rating\":null}"));
     try std.testing.expect(!jikanRatingIsAdult(""));
+}
+
+test "titleLooksAdult is case-insensitive and respects word boundaries" {
+    try std.testing.expect(titleLooksAdult("Ecchi Collection"));
+    try std.testing.expect(titleLooksAdult("HENTAI: episode 1"));
+    try std.testing.expect(titleLooksAdult("Adults XXX only"));
+    try std.testing.expect(!titleLooksAdult("The Ecchizen Family"));
+    try std.testing.expect(!titleLooksAdult("Romantic comedy"));
 }
 
 test "sfwSuffix" {

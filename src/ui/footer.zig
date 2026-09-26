@@ -2324,15 +2324,15 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
     const duration = playback.duration;
     const volume = playback.volume;
 
-    // ── Bar panel: bg_surface + 1px top border, ~84px tall (compact) ──
+    // ── Full-width dock: scrubber above a balanced three-zone transport row. ──
     var bar = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = theme.colors.bg_elevated,
         .color_border = theme.colors.border_subtle,
         .border = .{ .x = 0, .y = 1, .w = 0, .h = 0 },
-        .min_size_content = .{ .w = 0, .h = 84 },
-        .max_size_content = .{ .w = 0, .h = 84 },
+        .min_size_content = .{ .w = 0, .h = 78 },
+        .max_size_content = .{ .w = 0, .h = 78 },
     });
     defer bar.deinit();
 
@@ -2355,8 +2355,9 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
     const narrow = bar_pt < 640;
     const show_volume = !compact;
     const show_queue = !narrow;
-    const show_time = bar_pt >= 520;
     const show_skip = bar_pt >= 420;
+    const side_min: f32 = if (narrow) 104.0 else 150.0;
+    const side_w: f32 = std.math.clamp(bar_pt * 0.28, side_min, 360.0);
 
     var wd: dvui.WidgetData = undefined;
 
@@ -2364,10 +2365,13 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
     {
         var left = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .gravity_y = 0.5,
-            .min_size_content = .{ .w = if (compact) 110 else 200, .h = 0 },
-            .max_size_content = .{ .w = if (compact) 170 else 280, .h = 0 },
+            .min_size_content = .{ .w = side_w, .h = 0 },
+            .max_size_content = .{ .w = side_w, .h = 0 },
+            .corner_radius = dvui.Rect.all(theme.radius.sm),
         });
         defer left.deinit();
+        if (dvui.clicked(left.data(), .{})) state.app.router.navigate(.player);
+        components.tip(@src(), left.data().*, "Open player");
 
         // Advance now-playing audio cover art (podcast/radio) — idempotent, so
         // the art still appears here even when the player grid isn't on screen.
@@ -2478,7 +2482,7 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
             .color_fill = theme.colors.accent,
             .color_text = theme.colors.text_on_accent,
             .border = dvui.Rect.all(0),
-            .corner_radius = dvui.Rect.all(theme.radius.md),
+            .corner_radius = dvui.Rect.all(theme.radius.pill),
             .gravity_y = 0.5,
             .padding = .{ .x = 10, .y = 10, .w = 10, .h = 10 },
             .min_size_content = .{ .w = 40, .h = 40 },
@@ -2513,27 +2517,19 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
         }
     }
 
-    // ── Time readout: elapsed / total ──
-    if (show_time) {
-        const safe_time = @max(0.0, if (std.math.isNan(time_pos)) 0.0 else time_pos);
-        const safe_dur = @max(0.0, if (std.math.isNan(duration)) 0.0 else duration);
-        var cur_buf: [16]u8 = undefined;
-        var tot_buf: [16]u8 = undefined;
-        const cur_str = formatHmsBuf(&cur_buf, @as(u32, @intFromFloat(safe_time)));
-        const tot_str = formatHmsBuf(&tot_buf, @as(u32, @intFromFloat(safe_dur)));
-        _ = dvui.label(@src(), "{s}", .{cur_str}, .{
-            .color_text = theme.colors.text_primary,
-            .gravity_y = 0.5,
-            .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
-        });
-        _ = dvui.label(@src(), " / {s}", .{tot_str}, .{
-            .color_text = theme.colors.text_tertiary,
-            .gravity_y = 0.5,
-            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
-        });
+    // ── Right: volume, queue, open-player, close. Matches the left zone width
+    // so the transport remains centered in the whole window. ──
+    var right = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .gravity_y = 0.5,
+        .min_size_content = .{ .w = side_w, .h = 0 },
+        .max_size_content = .{ .w = side_w, .h = 0 },
+    });
+    defer right.deinit();
+    {
+        var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+        sp.deinit();
     }
 
-    // ── Right: volume slider + queue toggle ──
     if (show_volume) {
         _ = dvui.icon(@src(), "np-vol-ic", icons.tvg.lucide.@"volume-2", .{}, .{
             .color_text = theme.colors.text_secondary,
@@ -2572,6 +2568,21 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
         defer pl_menu.deinit();
         playlistDropdownMenu(p);
     }
+
+    if (dvui.buttonIcon(@src(), "np-open-player", icons.tvg.lucide.@"maximize-2", .{}, .{}, .{
+        .data_out = &wd,
+        .color_fill = transparent,
+        .color_fill_hover = theme.colors.bg_hover,
+        .color_text = theme.colors.text_primary,
+        .border = dvui.Rect.all(0),
+        .corner_radius = dvui.Rect.all(theme.radius.sm),
+        .gravity_y = 0.5,
+        .min_size_content = .{ .w = 32, .h = 32 },
+        .max_size_content = .{ .w = 32, .h = 32 },
+    })) {
+        state.app.router.navigate(.player);
+    }
+    components.tip(@src(), wd, "Open full player");
 
     // Closing the media player is not pausing: use the same removal path as
     // the in-player X so mpv stops and this bar disappears on the next frame.

@@ -30,7 +30,7 @@ def test_anime_schedule():
         "pure week window": "pub fn weekWindow" in pure,
         "pure graphql builder": "pub fn buildQuery" in pure,
         "airingSchedules query": "airingSchedules(airingAt_greater" in pure and "airingAt_lesser" in pure,
-        "pure parse into fixed buffers": "pub fn parseInto" in pure and "pub const Slot" in pure,
+        "pure parse into fixed buffers": "pub fn parseIntoFiltered" in pure and "pub const Slot" in pure,
         "pure weekday bucketing": "pub fn dayIndexOf" in pure and "pub fn weekdayMon0" in pure,
         "pure time formatting": "pub fn fmtTime" in pure,
         # Zig-0.16 signed-zero-pad workaround: cast to unsigned before {d:0>2}.
@@ -39,8 +39,9 @@ def test_anime_schedule():
         # ── Production routes through the pure fns (no drift) ──
         "service routes through pure": all(
             f"pure.{fn}(" in svc
-            for fn in ("weekWindow", "buildQuery", "parseInto")
+            for fn in ("weekWindow", "buildQuery", "parseIntoFiltered")
         ),
+        "service applies NSFW setting": "state.app.nsfw_filter_enabled" in svc,
         "render routes through pure": all(
             f in anime
             for f in ("asp.dayIndexOf(", "asp.weekdayMon0(", "asp.fmtTime(", "asp.weekdayName(")

@@ -98,7 +98,7 @@ fn worker() void {
     // worker stack), then publish under the mutex.
     const tmp = alloc.alloc(pure.Slot, state.app.anime.sched.len) catch return;
     defer alloc.free(tmp);
-    const n = pure.parseInto(buf[0..bytes], tmp);
+    const n = pure.parseIntoFiltered(buf[0..bytes], state.app.nsfw_filter_enabled, tmp);
 
     parse_mutex.lock();
     defer parse_mutex.unlock();
