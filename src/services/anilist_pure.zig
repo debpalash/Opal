@@ -18,6 +18,26 @@ pub fn adultGate(filter_enabled: bool) []const u8 {
     return if (filter_enabled) ", isAdult: false" else "";
 }
 
+pub const BrowseKind = enum { airing, top, popular, upcoming };
+
+/// Build one keyless AniList browse page. This is the independent fallback for
+/// Jikan's MAL-backed trending pages, which periodically return 5xx responses.
+pub fn browsePayload(out: []u8, page: u32, kind: BrowseKind, filter_enabled: bool) ?[:0]u8 {
+    const selector = switch (kind) {
+        .airing => "status: RELEASING, sort: TRENDING_DESC",
+        .top => "sort: SCORE_DESC",
+        .popular => "sort: POPULARITY_DESC",
+        .upcoming => "status: NOT_YET_RELEASED, sort: POPULARITY_DESC",
+    };
+    return std.fmt.bufPrintZ(out,
+        \\{{"query":"query ($page: Int) {{ Page(page: $page, perPage: 25) {{ pageInfo {{ hasNextPage }} media(type: ANIME, {s}{s}) {{ id idMal averageScore title {{ romaji english }} coverImage {{ large }} episodes seasonYear description(asHtml: false) }} }} }}","variables":{{"page":{d}}}}}
+    , .{ selector, adultGate(filter_enabled), page }) catch null;
+}
+
+pub fn hasNextPage(json: []const u8) bool {
+    return std.mem.indexOf(u8, json, "\"hasNextPage\":true") != null;
+}
+
 /// Build the keyless AniList search request with the title carried as a
 /// GraphQL variable. Keeping user text out of the query itself avoids a second
 /// GraphQL escaping layer; this routine only has to produce a valid JSON string.
@@ -177,6 +197,15 @@ pub const Iter = struct {
 test "adultGate mirrors the NSFW toggle" {
     try std.testing.expectEqualStrings(", isAdult: false", adultGate(true));
     try std.testing.expectEqualStrings("", adultGate(false));
+}
+
+test "browse payload carries page, filter, and safe adult gate" {
+    var buf: [2048]u8 = undefined;
+    const payload = browsePayload(&buf, 3, .upcoming, true).?;
+    try std.testing.expect(std.mem.indexOf(u8, payload, "status: NOT_YET_RELEASED, sort: POPULARITY_DESC, isAdult: false") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"page\":3") != null);
+    try std.testing.expect(hasNextPage("{\"pageInfo\":{\"hasNextPage\":true}}"));
+    try std.testing.expect(!hasNextPage("{\"pageInfo\":{\"hasNextPage\":false}}"));
 }
 
 test "searchPayload uses variables and JSON-escapes arbitrary titles" {

@@ -1,11 +1,23 @@
 'use strict';
 
+const mediaIcon = name => {
+  const path = name === 'play'
+    ? '<path d="M8 5v14l11-7z"/>'
+    : '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7h.01"/>';
+  return `<svg aria-hidden="true" viewBox="0 0 24 24">${path}</svg>`;
+};
+
 // ── Anime ──
 // Server routes are async: /anime/search & /anime/episodes trigger background
 // work and return {ok:true}; poll GET /anime for {results,episodes,selected,loading}.
 let animeWatch = null;
 async function loadAnime(){
-  try { renderAnime(await api('/anime')); } catch {}
+  try {
+    const data = await api('/anime');
+    renderAnime(data);
+    $('anime-more').style.display = data.has_more ? '' : 'none';
+    return data;
+  } catch {}
 }
 function renderAnime(d){ renderAnimeResults(d.results || []); renderAnimeEpisodes(d.episodes || []); }
 $('anime-go').onclick = () => runAnime();
@@ -14,6 +26,7 @@ function runAnime(){
   const q = $('anime-q').value.trim(); if (!q) return;
   $('anime-hint').innerHTML = '<span class="spin"></span> Searching anime…';
   $('anime-results').innerHTML = ''; lastHtml.animeResults = ''; $('anime-episodes').innerHTML = '';
+  $('anime-more').style.display = 'none';
   api('/anime/search?q=' + encodeURIComponent(q)).catch(()=>{});
   clearInterval(animeWatch);
   let ticks = 0;
@@ -24,6 +37,7 @@ function runAnime(){
       renderAnimeResults(d.results || []);
       if ((!d.loading && ticks > 2) || ticks > 40) {
         clearInterval(animeWatch);
+        $('anime-more').style.display = d.has_more ? '' : 'none';
         $('anime-hint').textContent = (d.results || []).length + ' titles — tap one for episodes.';
       }
     } catch { clearInterval(animeWatch); }
@@ -31,11 +45,17 @@ function runAnime(){
 }
 function renderAnimeResults(rs){
   const html = rs.map((r, i) => `
-    <div class="result">
-      <div class="t">${esc(r.name)}</div>
-      <div class="m"><span class="src">${r.episodes || 0} eps</span>
-        <button class="anime-details" data-details="${i}">Details</button>
-        <button class="play" data-idx="${i}">Episodes ⭢</button></div>
+    <div class="card ${r.poster ? '' : 'poster-missing'}">
+      ${r.poster ? `<img src="${esc(r.poster)}" alt="" loading="lazy" decoding="async">` : ''}
+      <div class="jf-card-actions">
+        <button class="anime-details" data-details="${i}" aria-label="Details">${mediaIcon('info')}</button>
+        <button class="play" data-idx="${i}" aria-label="Episodes">${mediaIcon('play')}</button>
+      </div>
+      <div class="cap" title="${esc(r.name)}">${esc(r.name)}</div>
+      <div class="browse-card-meta">
+        <span>${esc([r.type, r.year || ''].filter(Boolean).join(' · '))}</span>
+        ${r.score ? `<span class="rt">★ ${Number(r.score).toFixed(1)}</span>` : ''}
+      </div>
     </div>`).join('') || '<div class="empty">No results yet</div>';
   if (html === lastHtml.animeResults) return;
   lastHtml.animeResults = html;
@@ -44,7 +64,9 @@ function renderAnimeResults(rs){
   $('anime-results').querySelectorAll('.anime-details').forEach(button => {
     const anime = rs[Number(button.dataset.details)] || {};
     button.onclick = () => openSourceDetails('Anime', {
-      ...anime, title:anime.name, type:'Anime', meta:`${anime.episodes || 0} episodes`,
+      ...anime, title:anime.name, type:anime.type || 'Anime', overview:anime.overview || '',
+      meta:[anime.year || '', `${anime.episodes || 0} episodes`, anime.score ? `Rating ${anime.score}` : ''].filter(Boolean).join(' · '),
+      artUrl:anime.poster || '',
       index:Number(button.dataset.details),
     }, button);
   });
@@ -158,7 +180,7 @@ function pollComics(){
     try {
       const d = await api('/comics/results');
       renderComics(d.results || []);
-      if ((!d.loading && ticks > 1) || ticks > 40) {
+      if (!d.loading || ticks > 40) {
         clearInterval(cxWatch);
         $('cx-hint').textContent = (d.results || []).length + ' results.';
       }
@@ -278,36 +300,50 @@ function renderNovels(d){
 }
 
 // ── Drama (browse-only: drama.zig has no search entry point) ──
+async function refreshDrama(){
+  const d = await api('/drama');
+  if (d.needs_tmdb_key) {
+    $('dr-hint').textContent = 'Add a TMDB API key in Setup — the drama catalog is TMDB-backed.';
+    $('dr-more').style.display = 'none';
+    return d;
+  }
+  renderDrama(d.results || []);
+  $('dr-more').style.display = d.has_more ? '' : 'none';
+  return d;
+}
 function loadDrama(){
   clearInterval(drWatch);
   let ticks = 0;
-  drWatch = setInterval(async () => {
+  const tick = async () => {
     ticks++;
     try {
-      const d = await api('/drama');
+      const d = await refreshDrama();
       if (d.needs_tmdb_key) {
         clearInterval(drWatch);
-        $('dr-hint').textContent = 'Add a TMDB API key in Setup — the drama catalog is TMDB-backed.';
         return;
       }
-      renderDrama(d.results || []);
-      $('dr-more').style.display = (d.results || []).length ? '' : 'none';
       if ((!d.loading && ticks > 1) || ticks > 40) {
         clearInterval(drWatch);
         $('dr-hint').textContent = (d.results || []).length + ' titles.';
       }
     } catch { clearInterval(drWatch); }
-  }, 900);
+  };
+  tick();
+  drWatch = setInterval(tick, 900);
 }
 function renderDrama(rows){
   const html = rows.map((r, i) => `
-    <div class="result">
-      <div class="t">${esc(r.name)}</div>
-      <div class="m">
-        ${r.year ? `<span class="src">${esc(r.year)}</span>` : ''}
-        ${r.vote ? `<span>★ ${r.vote}</span>` : ''}
-        <button class="drama-details" data-details="${i}">Details</button>
-        <button class="play" data-i="${i}">Play</button></div>
+    <div class="card ${r.poster_path ? '' : 'poster-missing'}">
+      ${r.poster_path ? `<img src="https://image.tmdb.org/t/p/w342${esc(r.poster_path)}" alt="" loading="lazy" decoding="async">` : ''}
+      <div class="jf-card-actions">
+        <button class="drama-details" data-details="${i}" aria-label="Details">${mediaIcon('info')}</button>
+        <button class="play" data-i="${i}" aria-label="Play">${mediaIcon('play')}</button>
+      </div>
+      <div class="cap" title="${esc(r.name)}">${esc(r.name)}</div>
+      <div class="browse-card-meta">
+        <span>${esc(r.year || 'TV series')}</span>
+        ${r.vote ? `<span class="rt">★ ${Number(r.vote).toFixed(1)}</span>` : ''}
+      </div>
     </div>`).join('') || '<div class="empty">No titles yet</div>';
   if (html === lastHtml.drama) return;
   lastHtml.drama = html;
@@ -789,7 +825,32 @@ onGo('cx-go', 'cx-q', runComics);
 onGo('nv-go', 'nv-q', runNovels);
 onGo('vn-go', 'vn-q', runVndb);
 $('cx-close').onclick = () => closeComic();
-$('dr-more').onclick = () => { api('/drama/more').catch(()=>{}); loadDrama(); };
+function wireInfiniteBrowse(page, buttonId, morePath, refresh){
+  const button = $(buttonId);
+  let pending = false;
+  const more = async () => {
+    if (pending || button.style.display === 'none' || currentPage !== page) return;
+    pending = true; button.disabled = true; button.textContent = 'Loading…';
+    try {
+      await api(morePath);
+      for (let attempt = 0; attempt < 30; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 250));
+        const data = await refresh();
+        if (!data?.loading_more) break;
+      }
+    }
+    finally { pending = false; button.disabled = false; button.textContent = 'Load more'; }
+  };
+  button.onclick = more;
+  if ('IntersectionObserver' in window) {
+    const observer = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) more();
+    }, {rootMargin:'700px 0px'});
+    observer.observe(button);
+  }
+}
+wireInfiniteBrowse('drama', 'dr-more', '/drama/more', refreshDrama);
+wireInfiniteBrowse('anime', 'anime-more', '/anime/more', loadAnime);
 $('abs-go').onclick = async () => {
   const button = $('abs-go'); button.disabled = true;
   try {
