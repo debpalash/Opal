@@ -368,6 +368,10 @@ pub const MediaPlayer = struct {
     /// First attempt uses the range-compatible Android progressive stream.
     /// Keep one default-client retry armed for videos it cannot expose.
     youtube_default_retry_pending: bool = false,
+    /// True while the low-latency combined YouTube rendition is active. The
+    /// footer reports its real resolution instead of the adaptive preference.
+    youtube_fast_active: bool = false,
+    youtube_quality_fallback_pending: bool = false,
     resume_seeked: bool = false,
     restore_session_position: ?f64 = null,
     provider_resume_position: ?f64 = null,
@@ -754,6 +758,8 @@ pub const MediaPlayer = struct {
         self.current_header_fields_len = 0;
         self.current_loopback_stream = false;
         self.youtube_default_retry_pending = false;
+        self.youtube_fast_active = false;
+        self.youtube_quality_fallback_pending = false;
         self.resume_seeked = false;
         self.restore_session_position = null;
         self.provider_resume_position = null;
@@ -1388,7 +1394,8 @@ pub const MediaPlayer = struct {
         }
         self.youtube_default_retry_pending = std.ascii.indexOfIgnoreCase(path_span, "youtube.com/") != null or
             std.ascii.indexOfIgnoreCase(path_span, "youtu.be/") != null;
-        if (self.youtube_default_retry_pending) self.applyYtdlRawOptions(true, true);
+        self.youtube_fast_active = false;
+        self.youtube_quality_fallback_pending = false;
         self.resume_seeked = false;
         self.provider_resume_position = playback_load.saneResumePosition(request.resume_position_secs);
 
@@ -1403,6 +1410,20 @@ pub const MediaPlayer = struct {
         // not inherit the previous podcast/radio cover. loadContentDirectMeta
         // calls setNowPlaying AGAIN right after this, re-populating it.
         self.setNowPlaying("", "", "");
+
+        // Direct InnerTube progressive playback starts in well under a second
+        // on a normal connection. If YouTube changes that response shape, the
+        // resolver hands this same staged request back to yt-dlp automatically.
+        if (self.youtube_default_retry_pending and
+            @import("../services/youtube_player.zig").resolveAsync(path_span, self, self.load_serial))
+        {
+            const resolving_msg = "Starting YouTube video...";
+            @memcpy(self.loading_label[0..resolving_msg.len], resolving_msg);
+            self.loading_label_len = resolving_msg.len;
+            openLoadIssued();
+            if (previous_position) |snapshot| persistPositionSnapshot(snapshot, true);
+            return;
+        }
 
         // ── Streamlink: resolve live stream URLs asynchronously ──
         const streamlink = @import("../services/streamlink.zig");
@@ -1469,6 +1490,52 @@ pub const MediaPlayer = struct {
         if (request.url.len == 0 or request.url.len > MAX_LOAD_URL) return;
         var sink: MpvPlaybackSink = .{ .ctx = self.mpv_ctx };
         _ = playback_load.dispatch(&sink, request);
+    }
+
+    pub fn commitYoutubeFast(self: *MediaPlayer, url: []const u8) void {
+        self.youtube_fast_active = true;
+        // Keep the full extractor armed until FILE_LOADED so a rejected or
+        // expired CDN URL recovers without another click.
+        self.youtube_default_retry_pending = true;
+        self.commitPlayback(.{ .url = url });
+    }
+
+    pub fn commitYoutubeFallback(self: *MediaPlayer) void {
+        if (self.current_url_len == 0) return;
+        self.youtube_fast_active = false;
+        self.youtube_default_retry_pending = true;
+        self.applyYtdlRawOptions(true, true);
+        self.commitPlayback(.{ .url = self.current_url[0..self.current_url_len] });
+    }
+
+    pub fn reloadYoutubeAtQuality(self: *MediaPlayer) void {
+        if (self.current_url_len == 0) return;
+        const url = self.current_url[0..self.current_url_len];
+        if (std.ascii.indexOfIgnoreCase(url, "youtube.com/") == null and
+            std.ascii.indexOfIgnoreCase(url, "youtu.be/") == null) return;
+        const snap = self.playbackSnapshot();
+        self.provider_resume_position = playback_load.saneResumePosition(snap.time_pos);
+        self.youtube_fast_active = false;
+        self.youtube_default_retry_pending = false;
+        self.youtube_quality_fallback_pending = true;
+        self.is_loading = true;
+        self.load_error_len = 0;
+        self.applyYtdlFormat();
+        self.applyYtdlRawOptions(false, true);
+        openLoadIssued();
+        self.commitPlayback(.{ .url = url });
+    }
+
+    pub fn reloadYoutubeFast(self: *MediaPlayer) void {
+        if (self.current_url_len == 0 or self.youtube_fast_active) return;
+        const url = self.current_url[0..self.current_url_len];
+        const snap = self.playbackSnapshot();
+        self.provider_resume_position = playback_load.saneResumePosition(snap.time_pos);
+        self.youtube_quality_fallback_pending = false;
+        self.youtube_default_retry_pending = true;
+        self.is_loading = true;
+        self.load_error_len = 0;
+        _ = @import("../services/youtube_player.zig").resolveAsync(url, self, self.load_serial);
     }
 
     /// Reserve the one provider-negotiated recovery allowed for this load.
@@ -1766,6 +1833,8 @@ pub const MediaPlayer = struct {
         self.fallback_url_len = 0;
         self.fallback_recovery.reset();
         self.youtube_default_retry_pending = false;
+        self.youtube_fast_active = false;
+        self.youtube_quality_fallback_pending = false;
         self.history_identity_len = 0;
         self.restore_target_len = 0;
         self.loading_label_len = 0;
@@ -2573,6 +2642,7 @@ pub fn updateTorrentBackgroundTasks() void {
                 p.cached_sub_text_len = 0;
             } else if (ev.*.event_id == c.mpv.MPV_EVENT_FILE_LOADED) {
                 p.youtube_default_retry_pending = false;
+                p.youtube_quality_fallback_pending = false;
                 p.load_error_len = 0;
                 if (p.restore_session_position != null or p.provider_resume_position != null or state.app.playing_episode.armed) {
                     p.resume_seeked = false;
@@ -2685,6 +2755,18 @@ pub fn updateTorrentBackgroundTasks() void {
                         if (@import("../services/plex.zig").transcodeRecoveryUrl(identity, &transcode_buf)) |transcode_url| {
                             logs.pushLog("info", "plex", "Direct versions failed; using server transcode", false);
                             p.applyServerRecovery(transcode_url);
+                            continue;
+                        }
+                    }
+                    if (p.youtube_quality_fallback_pending and p.current_url_len > 0) {
+                        p.youtube_quality_fallback_pending = false;
+                        if (@import("../services/youtube_player.zig").resolveAsync(
+                            p.current_url[0..p.current_url_len],
+                            p,
+                            p.load_serial,
+                        )) {
+                            logs.pushLog("info", "youtube", "Selected quality unavailable; restoring fast stream", false);
+                            state.showToast("That quality is unavailable; using fast 360p");
                             continue;
                         }
                     }

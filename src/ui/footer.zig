@@ -27,7 +27,7 @@ var time_show_remaining: bool = false;
 
 // Active toolbar dropdown — only one open at a time. We use stable id values
 // derived from the picker kind. -1 = none.
-pub const PickerKind = enum(i32) { none = -1, chapter = 0, aspect = 1, audio = 2, sub = 3, lang = 4, playlist = 5, ar = 6, subs = 7, audio_device = 8 };
+pub const PickerKind = enum(i32) { none = -1, chapter = 0, aspect = 1, audio = 2, sub = 3, lang = 4, playlist = 5, ar = 6, subs = 7, audio_device = 8, quality = 9 };
 // NOTE: `.subs` (the Find-Subtitles panel) is NOT driven by `open_picker` —
 // its open state is `state.app.sub_picker_open`, which auto-search and the
 // keyless engine also set. It has a PickerKind purely so its chip records an
@@ -40,7 +40,7 @@ pub var open_picker: PickerKind = .none;
 /// chip is laid out. The drop-up panels anchor to this: they float ABOVE their
 /// chip with no backdrop, so they need to know where the chip actually landed.
 /// Indexed by @intFromEnum(PickerKind); .none (-1) has no slot.
-pub var picker_anchor: [9]dvui.Rect.Natural = [_]dvui.Rect.Natural{.{}} ** 9;
+pub var picker_anchor: [10]dvui.Rect.Natural = [_]dvui.Rect.Natural{.{}} ** 10;
 
 pub fn anchorFor(kind: PickerKind) dvui.Rect.Natural {
     const i = @intFromEnum(kind);
@@ -106,6 +106,20 @@ fn formatHmsBuf(buf: []u8, sec: u32) []const u8 {
 /// Returns true when the mouse is over the given screen rect this frame.
 fn mouseOverRect(rect: dvui.Rect.Physical) bool {
     return state.app.last_mouse_x >= rect.x and state.app.last_mouse_x <= rect.x + rect.w and state.app.last_mouse_y >= rect.y and state.app.last_mouse_y <= rect.y + rect.h;
+}
+
+// Player chrome uses fixed neutral ink and a dark translucent surface. Theme
+// text colors can be intentionally warm/dim, which is attractive on app
+// panels but loses contrast when the backdrop is a bright moving frame.
+const player_text = dvui.Color{ .r = 247, .g = 244, .b = 239, .a = 255 };
+const player_text_muted = dvui.Color{ .r = 218, .g = 214, .b = 207, .a = 255 };
+
+fn playerControlFill(active: bool) dvui.Color {
+    return theme.playerGlass(if (active) 218 else 174);
+}
+
+fn playerControlHover() dvui.Color {
+    return theme.playerGlass(230);
 }
 
 pub fn aspectDropdownMenu(ctx: *c.mpv.mpv_handle, id_extra: usize) void {
@@ -410,7 +424,7 @@ pub fn renderSubPicker() void {
             .min_size_content = .{ .w = 200, .h = 20 },
             .color_fill = theme.colors.bg_elevated,
             .color_border = theme.colors.border_subtle,
-            .color_text = theme.colors.text_primary,
+            .color_text = player_text,
             .border = dvui.Rect.all(1),
             .corner_radius = dvui.Rect.all(theme.radius.sm),
             .gravity_y = 0.5,
@@ -497,7 +511,7 @@ pub fn renderSubPicker() void {
         const lang_lbl = std.fmt.bufPrint(&lang_buf, "Language: {s}", .{lang}) catch "Language";
         _ = dvui.label(@src(), "{s}", .{lang_lbl}, .{
             .id_extra = 57001,
-            .color_text = theme.colors.text_tertiary,
+            .color_text = player_text_muted,
             .gravity_y = 0.5,
         });
     }
@@ -760,7 +774,7 @@ fn renderScrubber(
     {
         var cur_buf: [16]u8 = undefined;
         _ = dvui.label(@src(), "{s}", .{footer_pure.formatTime(&cur_buf, t_sec)}, .{
-            .color_text = theme.colors.text_primary,
+            .color_text = player_text,
             .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
             .gravity_y = 0.5,
             .min_size_content = .{ .w = elapsed_w, .h = 0 },
@@ -797,7 +811,7 @@ fn renderScrubber(
         // clamped "-0:00" — is the tested one.
         const dur_str = footer_pure.formatTrailing(&dur_buf, t_sec, d_sec, time_show_remaining);
         _ = dvui.label(@src(), "{s}", .{dur_str}, .{
-            .color_text = theme.colors.text_tertiary,
+            .color_text = player_text_muted,
             .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
             .gravity_y = 0.5,
         });
@@ -840,7 +854,7 @@ fn renderScrubber(
     // 1. Base track — thin visual line centered in the tall band.
     fillRounded(
         footer_pure.fillBar(track_rect.x, track_rect.y, track_rect.w, track_rect.h, th_px, 1.0),
-        theme.colors.bg_elevated,
+        theme.playerGlass(210),
         th_px * 0.5,
     );
 
@@ -932,7 +946,7 @@ fn renderScrubber(
         for (PipCache.fracs[0..PipCache.count]) |pip_frac| {
             fillRounded(
                 footer_pure.markerAt(track_rect.x, track_rect.y, track_rect.w, track_rect.h, 2 * px, th_px, pip_frac),
-                theme.colors.text_tertiary,
+                player_text_muted,
                 0,
             );
         }
@@ -1006,7 +1020,7 @@ fn renderScrubber(
 
         var chip = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .background = true,
-            .color_fill = theme.colors.bg_surface,
+            .color_fill = theme.playerGlass(228),
             .corner_radius = dvui.Rect.all(theme.radius.sm),
             .min_size_content = .{ .w = chip_w, .h = 0 },
             .padding = .{ .x = theme.spacing.xs, .y = 1, .w = theme.spacing.xs, .h = 1 },
@@ -1016,7 +1030,7 @@ fn renderScrubber(
         });
         defer chip.deinit();
         _ = dvui.label(@src(), "{s}", .{ht_str}, .{
-            .color_text = theme.colors.text_primary,
+            .color_text = player_text,
             .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
             .gravity_x = 0.5,
             .gravity_y = 0.5,
@@ -1113,11 +1127,10 @@ fn pickerIconChip(
     tooltip: []const u8,
     kind: PickerKind,
 ) bool {
-    const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
     var btn = dvui.box(src, .{ .dir = .horizontal }, .{
         .id_extra = id_extra,
         .background = true,
-        .color_fill = if (is_active) theme.colors.bg_surface else transparent,
+        .color_fill = playerControlFill(is_active),
         .corner_radius = dvui.Rect.all(theme.radius.sm),
         .padding = .{ .x = 8, .y = 0, .w = 8, .h = 0 },
         .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
@@ -1142,14 +1155,14 @@ fn pickerIconChip(
             }
         }
     }
-    btn.data().options.color_fill = if (hovered_signal) theme.colors.bg_hover else if (is_active) theme.colors.bg_surface else transparent;
+    btn.data().options.color_fill = if (hovered_signal) playerControlHover() else playerControlFill(is_active);
     btn.drawBackground();
     if (focused) btn.data().focusBorder();
     const wd_copy = btn.data().*;
 
     dvui.icon(@src(), "picker-ic", icon, .{}, .{
         .id_extra = id_extra,
-        .color_text = if (is_active) theme.colors.accent else theme.colors.text_secondary,
+        .color_text = if (is_active) theme.colors.accent else player_text_muted,
         .min_size_content = .{ .w = 16, .h = 16 },
         .max_size_content = .{ .w = 16, .h = 16 },
         .gravity_y = 0.5,
@@ -1159,7 +1172,7 @@ fn pickerIconChip(
     if (chip_text.len > 0) {
         _ = dvui.label(@src(), "{s}", .{chip_text}, .{
             .id_extra = id_extra,
-            .color_text = if (is_active) theme.colors.text_primary else theme.colors.text_secondary,
+            .color_text = if (is_active) player_text else player_text_muted,
             .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
             .gravity_y = 0.5,
         });
@@ -1363,8 +1376,6 @@ pub fn renderLiquidGlassOverlay() void {
     // for Back, Settings, Close, and switching directly between pickers.
     pickers.handleDropUpInput();
 
-    const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
-
     // ── Auto-hide if playing and idle for 2.5s. Stay visible while a popover is open. ──
     // Pause state mirrors mpv "pause" via the player worker's event loop
     // (cached_paused) — avoids a per-frame mpv IPC read at ~30fps.
@@ -1404,7 +1415,7 @@ pub fn renderLiquidGlassOverlay() void {
     // video (the standard streaming-player treatment) instead of ending in a
     // hard border. Approximates a gradient — dvui has no gradient fill.
     {
-        const scrim_alphas = [_]u8{ 1, 3, 6, 10, 16, 24 };
+        const scrim_alphas = [_]u8{ 8, 18, 32, 52, 76, 104 };
         inline for (scrim_alphas, 0..) |sa, si| {
             var sl = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .id_extra = si + 9200,
@@ -1432,7 +1443,7 @@ pub fn renderLiquidGlassOverlay() void {
     // physical edge and dissolves upward, avoiding a flat rectangular band.
     {
         var backdrop = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .gravity_y = 1.0 });
-        const edge_alphas = [_]u8{ 4, 10, 18, 28, 40, 54, 70, 86, 100 };
+        const edge_alphas = [_]u8{ 92, 108, 124, 140, 156, 172, 188, 202, 214 };
         inline for (edge_alphas, 0..) |alpha, i| {
             var slice = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .id_extra = i + 9240,
@@ -1536,10 +1547,10 @@ pub fn renderLiquidGlassOverlay() void {
             const has_prev = tv_lib.neighborEpisode(-1) != null;
             if (dvui.buttonIcon(@src(), "ep-prev", icons.tvg.lucide.@"chevron-first", .{}, .{}, .{
                 .data_out = &wd,
-                .color_fill = transparent,
-                .color_fill_hover = theme.colors.bg_hover,
-                .color_fill_press = theme.colors.bg_elevated,
-                .color_text = if (has_prev) theme.colors.text_primary else theme.colors.text_tertiary,
+                .color_fill = playerControlFill(false),
+                .color_fill_hover = playerControlHover(),
+                .color_fill_press = playerControlFill(true),
+                .color_text = if (has_prev) player_text else player_text_muted,
                 .border = dvui.Rect.all(0),
                 .corner_radius = dvui.Rect.all(theme.radius.sm),
                 .gravity_y = 0.5,
@@ -1556,10 +1567,10 @@ pub fn renderLiquidGlassOverlay() void {
         if (has_playlist) {
             if (dvui.buttonIcon(@src(), "skip-prev", icons.tvg.lucide.@"skip-back", .{}, .{}, .{
                 .data_out = &wd,
-                .color_fill = transparent,
-                .color_fill_hover = theme.colors.bg_hover,
-                .color_fill_press = theme.colors.bg_elevated,
-                .color_text = if (playback.playlist_pos > 0) theme.colors.text_primary else theme.colors.text_tertiary,
+                .color_fill = playerControlFill(false),
+                .color_fill_hover = playerControlHover(),
+                .color_fill_press = playerControlFill(true),
+                .color_text = if (playback.playlist_pos > 0) player_text else player_text_muted,
                 .border = dvui.Rect.all(0),
                 .corner_radius = dvui.Rect.all(theme.radius.sm),
                 .gravity_y = 0.5,
@@ -1575,10 +1586,10 @@ pub fn renderLiquidGlassOverlay() void {
         // Rewind 10s — 32px square. Sheds with the rest of the skip group.
         if (fit.skip_buttons) if (dvui.buttonIcon(@src(), "rewind10", icons.tvg.lucide.rewind, .{}, .{}, .{
             .data_out = &wd,
-            .color_fill = transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_primary,
+            .color_fill = playerControlFill(false),
+            .color_fill_hover = playerControlHover(),
+            .color_fill_press = playerControlFill(true),
+            .color_text = player_text,
             .border = dvui.Rect.all(0),
             .corner_radius = dvui.Rect.all(theme.radius.sm),
             .gravity_y = 0.5,
@@ -1598,10 +1609,10 @@ pub fn renderLiquidGlassOverlay() void {
         // near-invisible against the glass panel.
         if (dvui.buttonIcon(@src(), "toggle-pp", toggle_icon, .{}, .{}, .{
             .data_out = &wd,
-            .color_fill = transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_primary,
+            .color_fill = playerControlFill(false),
+            .color_fill_hover = playerControlHover(),
+            .color_fill_press = playerControlFill(true),
+            .color_text = player_text,
             .border = dvui.Rect.all(0),
             .corner_radius = dvui.Rect.all(theme.radius.md),
             .gravity_y = 0.5,
@@ -1622,7 +1633,7 @@ pub fn renderLiquidGlassOverlay() void {
             const status = footer_pure.transportLabel(transport);
             if (status.len > 0) {
                 _ = dvui.label(@src(), "{s}", .{status}, .{
-                    .color_text = if (footer_pure.transportBusy(transport)) theme.colors.accent else theme.colors.text_tertiary,
+                    .color_text = if (footer_pure.transportBusy(transport)) theme.colors.accent else player_text_muted,
                     .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
                     .gravity_y = 0.5,
                     .margin = .{ .x = theme.spacing.xs, .y = 0, .w = theme.spacing.xs, .h = 0 },
@@ -1673,10 +1684,10 @@ pub fn renderLiquidGlassOverlay() void {
             const is_fs = state.app.fullscreen_player_idx != null;
             if (dvui.buttonIcon(@src(), "fullscreen", if (is_fs) icons.tvg.lucide.@"minimize-2" else icons.tvg.lucide.@"maximize-2", .{}, .{}, .{
                 .data_out = &wd,
-                .color_fill = transparent,
-                .color_fill_hover = theme.colors.bg_hover,
-                .color_fill_press = theme.colors.bg_elevated,
-                .color_text = if (is_fs) theme.colors.accent else theme.colors.text_primary,
+                .color_fill = playerControlFill(false),
+                .color_fill_hover = playerControlHover(),
+                .color_fill_press = playerControlFill(true),
+                .color_text = if (is_fs) theme.colors.accent else player_text,
                 .border = dvui.Rect.all(0),
                 .corner_radius = dvui.Rect.all(theme.radius.sm),
                 .gravity_y = 0.5,
@@ -1702,10 +1713,10 @@ pub fn renderLiquidGlassOverlay() void {
         if (has_playlist) {
             if (dvui.buttonIcon(@src(), "skip-next", icons.tvg.lucide.@"skip-forward", .{}, .{}, .{
                 .data_out = &wd,
-                .color_fill = transparent,
-                .color_fill_hover = theme.colors.bg_hover,
-                .color_fill_press = theme.colors.bg_elevated,
-                .color_text = if (playback.playlist_pos + 1 < playback.playlist_count) theme.colors.text_primary else theme.colors.text_tertiary,
+                .color_fill = playerControlFill(false),
+                .color_fill_hover = playerControlHover(),
+                .color_fill_press = playerControlFill(true),
+                .color_text = if (playback.playlist_pos + 1 < playback.playlist_count) player_text else player_text_muted,
                 .border = dvui.Rect.all(0),
                 .corner_radius = dvui.Rect.all(theme.radius.sm),
                 .gravity_y = 0.5,
@@ -1723,10 +1734,10 @@ pub fn renderLiquidGlassOverlay() void {
             const has_next = tv_lib.neighborEpisode(1) != null;
             if (dvui.buttonIcon(@src(), "ep-next", icons.tvg.lucide.@"chevron-last", .{}, .{}, .{
                 .data_out = &wd,
-                .color_fill = transparent,
-                .color_fill_hover = theme.colors.bg_hover,
-                .color_fill_press = theme.colors.bg_elevated,
-                .color_text = if (has_next) theme.colors.text_primary else theme.colors.text_tertiary,
+                .color_fill = playerControlFill(false),
+                .color_fill_hover = playerControlHover(),
+                .color_fill_press = playerControlFill(true),
+                .color_text = if (has_next) player_text else player_text_muted,
                 .border = dvui.Rect.all(0),
                 .corner_radius = dvui.Rect.all(theme.radius.sm),
                 .gravity_y = 0.5,
@@ -1779,7 +1790,7 @@ pub fn renderLiquidGlassOverlay() void {
                 var pl_buf: [16]u8 = undefined;
                 if (std.fmt.bufPrintZ(&pl_buf, " \xC2\xB7 {d}/{d}", .{ playback.playlist_pos + 1, playback.playlist_count })) |pl_str| {
                     _ = dvui.label(@src(), "{s}", .{pl_str}, .{
-                        .color_text = theme.colors.text_tertiary,
+                        .color_text = player_text_muted,
                         .gravity_y = 0.5,
                     });
                 } else |_| {}
@@ -1788,7 +1799,7 @@ pub fn renderLiquidGlassOverlay() void {
                 var spd_buf: [16]u8 = undefined;
                 if (std.fmt.bufPrintZ(&spd_buf, " \xC2\xB7 {d:.1}\xC3\x97", .{playback.speed})) |sp| {
                     _ = dvui.label(@src(), "{s}", .{sp}, .{
-                        .color_text = theme.colors.text_tertiary,
+                        .color_text = player_text_muted,
                         .gravity_y = 0.5,
                     });
                 } else |_| {}
@@ -1796,7 +1807,7 @@ pub fn renderLiquidGlassOverlay() void {
             if (active_p.loop_a >= 0) {
                 const loop_lbl = if (active_p.loop_b >= 0) " \xC2\xB7 A-B" else " \xC2\xB7 A..";
                 _ = dvui.label(@src(), "{s}", .{loop_lbl}, .{
-                    .color_text = theme.colors.text_tertiary,
+                    .color_text = player_text_muted,
                     .gravity_y = 0.5,
                 });
             }
@@ -1817,10 +1828,10 @@ pub fn renderLiquidGlassOverlay() void {
         };
         if (dvui.buttonIcon(@src(), "mute-tog", m_icon, .{}, .{}, .{
             .data_out = &wd,
-            .color_fill = transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
-            .color_text = if (is_muted) theme.colors.text_tertiary else theme.colors.text_primary,
+            .color_fill = playerControlFill(false),
+            .color_fill_hover = playerControlHover(),
+            .color_fill_press = playerControlFill(true),
+            .color_text = if (is_muted) player_text_muted else player_text,
             .border = dvui.Rect.all(0),
             .corner_radius = dvui.Rect.all(theme.radius.sm),
             .gravity_y = 0.5,
@@ -1866,12 +1877,12 @@ pub fn renderLiquidGlassOverlay() void {
 
             const vol_f64: f64 = playback.volume;
             var vol_val: f32 = footer_pure.volumeFraction(vol_f64);
-            if (dvui.slider(@src(), .{ .fraction = &vol_val }, .{
+            if (dvui.slider(@src(), .{ .fraction = &vol_val, .color_bar = theme.colors.accent }, .{
                 .expand = .horizontal,
                 .min_size_content = .{ .w = 120, .h = 4 },
                 .max_size_content = .{ .w = 120, .h = 4 },
-                .color_fill = theme.colors.bg_elevated,
-                .color_text = theme.colors.text_secondary,
+                .color_fill = theme.playerGlass(210),
+                .color_text = player_text_muted,
                 .corner_radius = dvui.Rect.all(2),
                 .gravity_y = 0.5,
                 .background = true,
@@ -1889,7 +1900,7 @@ pub fn renderLiquidGlassOverlay() void {
                 var vol_pct_buf: [8]u8 = undefined;
                 const vol_pct_str = std.fmt.bufPrint(&vol_pct_buf, "{d}%", .{vol_pct}) catch "0%";
                 _ = dvui.label(@src(), "{s}", .{vol_pct_str}, .{
-                    .color_text = theme.colors.text_tertiary,
+                    .color_text = player_text_muted,
                     .gravity_y = 0.5,
                     .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
                 });
@@ -1906,6 +1917,19 @@ pub fn renderLiquidGlassOverlay() void {
         }
 
         // ── Picker icon-chips: aspect, chapters, audio, subs, lang, files ──
+
+        const playing_youtube = std.ascii.indexOfIgnoreCase(active_p.current_url[0..active_p.current_url_len], "youtube.com/") != null or
+            std.ascii.indexOfIgnoreCase(active_p.current_url[0..active_p.current_url_len], "youtu.be/") != null;
+        if (playing_youtube and fit.secondary_chips) {
+            const quality_labels = [_][]const u8{ "720p", "1080p", "4K", "Audio" };
+            const quality = if (active_p.youtube_fast_active)
+                "360p"
+            else
+                quality_labels[@min(state.app.ytdl_format_idx, quality_labels.len - 1)];
+            if (pickerIconChip(@src(), 711, icons.tvg.lucide.monitor, quality, true, "YouTube stream quality", .quality)) {
+                togglePicker(.quality);
+            }
+        }
 
         // Aspect — reports state rather than acting; sheds with the
         // secondary chips before anything you press to control playback.
@@ -2019,10 +2043,10 @@ pub fn renderLiquidGlassOverlay() void {
         const close_hovered_now = mouseOverRect(close_button_rect);
         if (dvui.buttonIcon(@src(), "close", icons.tvg.lucide.x, .{}, .{}, .{
             .data_out = &wd,
-            .color_fill = transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
-            .color_text = if (close_hovered_now) theme.colors.danger else theme.colors.text_secondary,
+            .color_fill = playerControlFill(false),
+            .color_fill_hover = playerControlHover(),
+            .color_fill_press = playerControlFill(true),
+            .color_text = if (close_hovered_now) theme.colors.danger else player_text_muted,
             .corner_radius = dvui.Rect.all(theme.radius.sm),
             .border = dvui.Rect.all(0),
             .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
@@ -2084,7 +2108,7 @@ pub fn renderLiquidGlassOverlay() void {
         // Untrusted torrent metadata, truncated at the 64-byte buffer (possibly
         // mid-codepoint) — validate before dvui (matches grid.zig).
         _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8(name_slice)}, .{
-            .color_text = theme.colors.text_tertiary,
+            .color_text = player_text_muted,
             .gravity_y = 0.5,
         });
 
@@ -2096,7 +2120,7 @@ pub fn renderLiquidGlassOverlay() void {
         var stat_buf: [80]u8 = undefined;
         if (std.fmt.bufPrintZ(&stat_buf, "{d:.1}% \xC2\xB7 {d:.1} MB/s \xC2\xB7 {d} seeds", .{ pct * 100.0, rate_mb, seeds })) |st| {
             _ = dvui.label(@src(), "{s}", .{st}, .{
-                .color_text = theme.colors.text_tertiary,
+                .color_text = player_text_muted,
                 .gravity_y = 0.5,
             });
         } else |_| {}
@@ -2112,8 +2136,8 @@ pub fn renderLiquidGlassOverlay() void {
             };
             if (dvui.button(@src(), lim_label, .{}, .{
                 .id_extra = 200,
-                .color_fill = transparent,
-                .color_text = theme.colors.text_tertiary,
+                .color_fill = playerControlFill(false),
+                .color_text = player_text_muted,
                 .border = dvui.Rect.all(0),
                 .corner_radius = dvui.Rect.all(theme.radius.sm),
                 .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
@@ -2176,14 +2200,14 @@ pub fn renderLiquidGlassOverlay() void {
 
         var tbuf: [256]u8 = undefined;
         _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(active_p.np_title[0..@min(active_p.np_title_len, active_p.np_title.len)], &tbuf)}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = player_text_muted,
             .gravity_y = 0.5,
         });
         if (active_p.np_subtitle_len > 0) {
             var sbuf: [192]u8 = undefined;
             _ = dvui.label(@src(), " · {s}", .{@import("../core/text.zig").safeUtf8Buf(active_p.np_subtitle[0..@min(active_p.np_subtitle_len, active_p.np_subtitle.len)], &sbuf)}, .{
                 .id_extra = 3,
-                .color_text = theme.colors.text_tertiary,
+                .color_text = player_text_muted,
                 .gravity_y = 0.5,
             });
         }
@@ -2191,6 +2215,7 @@ pub fn renderLiquidGlassOverlay() void {
 
     // ── Floating popovers (rendered last — they're free-positioned) ──
     pickers.renderChapterPickerPopover(active_p);
+    pickers.renderQualityPickerPopover(active_p);
     pickers.renderAspectPickerPopover(active_p);
     pickers.renderTrackPickerPopover(active_p, "audio", .audio);
     pickers.renderTrackPickerPopover(active_p, "sub", .sub);
