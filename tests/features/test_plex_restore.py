@@ -118,7 +118,7 @@ def test_plex_stable_web_playback():
         "remote action takes id": 'getQueryParam(query, "id")' in remote and "playByRatingKey(id)" in remote,
         "remote emits resume state": all(field in remote for field in ("view_offset_ms", "duration_ms", "view_count")),
         "web does not play by index": "row.folder ? 'open_item' : 'play'" in web and "'/plex/play?idx='" not in web,
-        "web labels resume": "'Resume'" in web,
+        "web labels resume": "'Resume on Opal'" in web,
         "web paints progress": "plex-progress" in web and ".plex-progress" in css,
     }
     missing = [name for name, ok in checks.items() if not ok]

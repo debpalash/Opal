@@ -72,7 +72,9 @@ happy-path button does not cover every operation behind that native page.
         bounded execution, exact-content trust, and stable opaque actions.
 - [x] Open or queue an arbitrary URL/magnet with an optional title
 - [x] Watch-party status, peer count, chat history/send, host, join, and leave
-- [ ] Consistent Play here / Play on Opal / Queue actions on every playable card
+- [x] Consistent Play here / Play on Opal labels on playable cards, with Queue
+      wherever the source exposes a durable media target; opaque provider items
+      clearly identify their desktop-only handoff
 
 ### Wave 2 — full player deck
 
@@ -130,7 +132,7 @@ commands, non-finite numbers, out-of-range values, and unknown actions.
 - [x] Trakt/AniList/SIMKL authorization, sync state, conflicts, and retry queue
       (write-only encrypted credentials, reconnect-required state, latest-state
       coalescing, durable backoff queues, explicit retry/disconnect controls)
-- [ ] Debrid, Suwayomi, Audiobookshelf, OPDS, IPTV, RSS, and custom source CRUD
+- [x] Debrid, Suwayomi, Audiobookshelf, OPDS, IPTV, RSS, and custom source CRUD
 - [x] Download/torrent pause, resume, cancel, per-file priority, rate limits,
       file lists, progress, ETA, and errors
 - [x] Transfer history cleanup, reveal-on-host, and explicit disk deletion
@@ -139,7 +141,9 @@ commands, non-finite numbers, out-of-range values, and unknown actions.
 
 - [x] Installable PWA shell, public-asset-only offline navigation, reconnect state
 - [ ] Multiple users/profiles, session/device management, capability-scoped auth
-- [ ] Screen-reader pass, 200% zoom/reflow, localization-ready strings
+- [ ] Full screen-reader audit and remediation
+- [x] 200% zoom/reflow with compact responsive controls
+- [ ] Localization-ready strings
 - [x] TV/remote directional focus, activation, overlay Back/Escape behavior,
       and large-screen sidebar layout
 - [x] Performance budgets: useful shell under 1.5 s on LAN, interaction under

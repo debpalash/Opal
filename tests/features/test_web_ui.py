@@ -1050,6 +1050,11 @@ def test_direct_url_play_and_queue_actions():
         "RSS card queue": "data-rss-queue" in discovery and "queueMedia(item.magnet" in discovery,
         "RSS selected-destination play": "playMediaUrl(u, b.dataset.title" in discovery,
         "RSS details queue": "source === 'RSS'" in media and media.count("await queueMedia(item.url") >= 3,
+        "destination labels refresh live": "refreshDestinationLabels();" in _src("web/js/playback.js")
+            and "data-destination-verb" in discovery and "data-destination-verb" in media,
+        "magnets name desktop destination": ">Open on Opal</button>" in discovery,
+        "provider-only actions are explicit": "Play on Opal" in media
+            and "aria-label=\"${it.folder ? 'Open' : 'Play on Opal'}" in discovery,
     }
     missing = [name for name, ok in checks.items() if not ok]
     if missing:

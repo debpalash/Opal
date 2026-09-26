@@ -220,6 +220,17 @@ function setPlayHere(on){
   localStorage.setItem('opal_play_here', PLAY_HERE ? '1' : '0');
   $('dest-here').setAttribute('aria-pressed', PLAY_HERE ? 'true' : 'false');
   $('dest-opal').setAttribute('aria-pressed', PLAY_HERE ? 'false' : 'true');
+  refreshDestinationLabels();
+}
+
+function destinationActionLabel(verb){
+  return `${verb || 'Play'} ${(HOSTED || PLAY_HERE) ? 'here' : 'on Opal'}`;
+}
+
+function refreshDestinationLabels(root){
+  (root || document).querySelectorAll('[data-destination-verb]').forEach(button => {
+    button.textContent = destinationActionLabel(button.dataset.destinationVerb);
+  });
 }
 
 // Is the server able to transcode? Asked once, and only used to choose between
