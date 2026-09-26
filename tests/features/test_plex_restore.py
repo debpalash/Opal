@@ -208,7 +208,7 @@ def test_plex_favorite_mutation():
         "projected state": 'favorite\\\":{s}' in api and "item.is_favorite" in api,
         "accessible web toggle": "plex-favorite" in web and "Add favorite" in web and "Remove favorite" in web,
         "details mutation": "&action=favorite&enabled=" in web,
-        "native toggle": 'if (it.is_favorite) "Favorited" else "Favorite"' in svc,
+        "native toggle": 'if (it.is_favorite) "Remove favorite" else "Favorite"' in svc and "setFavorite(" in svc,
     }
     missing = [name for name, ok in checks.items() if not ok]
     if missing:

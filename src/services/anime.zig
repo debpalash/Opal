@@ -3617,6 +3617,11 @@ fn renderContinueGrid() void {
     const card_target_w: f32 = card_w_pref;
     const cols: usize = @max(1, @as(usize, @intFromFloat(avail_w / card_target_w)));
     const card_w: f32 = @max(100, (avail_w - @as(f32, @floatFromInt(cols)) * 8) / @as(f32, @floatFromInt(cols)));
+    const total = state.app.anime.result_count;
+    if (total == 0) {
+        components.coverSkeletonGrid(@src(), 68000, cols, card_w, card_w * 1.45, GRID_CARD_EXTRA_H + 6, 3);
+        return;
+    }
 
     var i: usize = 0;
     while (i < state.app.anime.continue_count) {
@@ -4020,12 +4025,16 @@ fn renderGallery() void {
     const card_target_w: f32 = card_w_pref;
     const cols: usize = @max(1, @as(usize, @intFromFloat(avail_w / card_target_w)));
     const card_w: f32 = @max(100, (avail_w - @as(f32, @floatFromInt(cols)) * 8) / @as(f32, @floatFromInt(cols)));
+    const total = state.app.anime.result_count;
+    if (total == 0) {
+        components.coverSkeletonGrid(@src(), 68000, cols, card_w, card_w * 1.45, GRID_CARD_EXTRA_H + 6, 3);
+        return;
+    }
 
     // ── Virtualization (same shape as tmdb.zig renderGallery) ──
     // Uniform cards → fixed row pitch: content (poster + footer) + the card's
     // 6px bottom padding + 3px top/bottom margins. Off-viewport rows (±2
     // overscan) collapse into spacer boxes.
-    const total = state.app.anime.result_count;
     const row_h: f32 = card_w * 1.45 + GRID_CARD_EXTRA_H + 6 + 6;
     const total_rows = (total + cols - 1) / cols;
     const win = @import("tmdb_pure.zig").visibleRows(total_rows, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 2);

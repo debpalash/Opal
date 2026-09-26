@@ -68,6 +68,10 @@ var loading_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 /// subsequent loadMore() page — must match so a short page reliably signals
 /// "no more results" (see audiobookshelf_pure.libraryItemsUrl).
 const ABS_PAGE_LIMIT: u32 = 64;
+const BOOK_CARD_TARGET_W: f32 = 150;
+const BOOK_CARD_GAP: f32 = 4;
+const BOOK_FOOTER_H: f32 = 50;
+var book_covers: [320]components.CoverSlot = [_]components.CoverSlot{.{}} ** 320;
 
 fn setLoginError(msg: []const u8) void {
     const len = @min(msg.len, state.app.abs.login_error.len);
@@ -839,11 +843,10 @@ fn renderBooks() void {
     }
 
     if (state.app.abs.book_count == 0) {
-        if (state.app.abs.is_loading.load(.acquire))
-            components.loadingState("Loading audiobooks…")
-        else
+        if (!state.app.abs.is_loading.load(.acquire)) {
             components.emptyState(icons.tvg.lucide.@"book-audio", "No audiobooks here", "Choose another library or add books in Audiobookshelf.");
-        return;
+            return;
+        }
     }
 
     var scroll = dvui.scrollArea(@src(), .{}, .{
@@ -853,9 +856,20 @@ fn renderBooks() void {
     });
     defer scroll.deinit();
 
-    const row_h: f32 = 68;
     const count = @min(state.app.abs.book_count, state.app.abs.books.len);
-    const win = tmdb_pure.visibleRows(count, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 4);
+    const rect_w = scroll.data().rect.w;
+    const avail_w: f32 = @max(240, (if (rect_w > 1) rect_w else 900) - 8);
+    const cols: usize = @max(1, @as(usize, @intFromFloat(avail_w / BOOK_CARD_TARGET_W)));
+    const cols_f: f32 = @floatFromInt(cols);
+    const card_w: f32 = @max(104, (avail_w - cols_f * 2 * BOOK_CARD_GAP) / cols_f);
+    const poster_h = card_w * 1.45;
+    const row_h = poster_h + BOOK_FOOTER_H + 2 * BOOK_CARD_GAP;
+    const total_rows = (count + cols - 1) / cols;
+    if (count == 0) {
+        components.coverSkeletonGrid(@src(), 77000, cols, card_w, poster_h, BOOK_FOOTER_H, 3);
+        return;
+    }
+    const win = tmdb_pure.visibleRows(total_rows, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 2);
     if (win.first > 0) {
         var sp = dvui.box(@src(), .{}, .{
             .id_extra = 79998,
@@ -864,64 +878,20 @@ fn renderBooks() void {
         sp.deinit();
     }
 
-    for (win.first..win.last) |i| {
-        const b = &state.app.abs.books[i];
-        var title_buf: [256]u8 = undefined;
-        const title = safeUtf8Buf(b.title[0..b.title_len], &title_buf);
-        var author_buf: [160]u8 = undefined;
-        const author = safeUtf8Buf(b.author[0..b.author_len], &author_buf);
-
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .id_extra = i,
-            .expand = .horizontal,
-            .background = true,
-            .color_fill = theme.colors.bg_surface,
-            .color_border = theme.colors.border_subtle,
-            .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-            .min_size_content = .{ .w = 0, .h = row_h },
-            .max_size_content = .{ .w = std.math.floatMax(f32), .h = row_h },
-            .padding = .{ .x = 10, .y = 8, .w = 10, .h = 8 },
-        });
+    var r: usize = win.first;
+    while (r < win.last) : (r += 1) {
+        const base = r * cols;
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = base + 78000, .expand = .horizontal });
         defer row.deinit();
-
-        _ = dvui.icon(@src(), "", icons.tvg.lucide.@"book-audio", .{}, .{
-            .id_extra = i + 1000,
-            .color_text = theme.colors.accent,
-            .min_size_content = theme.iconSize(.md),
-            .gravity_y = 0.5,
-            .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
-        });
-
-        {
-            var col = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = i + 2000, .expand = .horizontal });
-            defer col.deinit();
-            _ = dvui.label(@src(), "{s}", .{title}, .{
-                .id_extra = i + 3000,
-                .color_text = theme.colors.text_primary,
-                .expand = .horizontal,
-            });
-            if (author.len > 0) {
-                _ = dvui.label(@src(), "{s}", .{author}, .{
-                    .id_extra = i + 4000,
-                    .color_text = theme.colors.text_tertiary,
-                    .expand = .horizontal,
-                });
-            }
-        }
-
-        if (dvui.buttonIcon(@src(), "Play", icons.tvg.lucide.play, .{}, .{}, .{
-            .id_extra = i + 5000,
-            .color_fill = theme.colors.accent,
-            .color_text = dvui.Color.white,
-            .corner_radius = theme.dims.rad_sm,
-            .gravity_y = 0.5,
-        })) playBook(i);
+        var col: usize = 0;
+        while (col < cols and base + col < count) : (col += 1)
+            renderBookCard(base + col, card_w, poster_h);
     }
 
-    if (win.last < count) {
+    if (win.last < total_rows) {
         var sp = dvui.box(@src(), .{}, .{
             .id_extra = 79999,
-            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(count - win.last)) },
+            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(total_rows - win.last)) },
         });
         sp.deinit();
     }
@@ -948,4 +918,66 @@ fn renderBooks() void {
             state.wakeUi(); // wake until the worker's items land
         }
     }
+}
+
+fn renderBookCard(i: usize, card_w: f32, poster_h: f32) void {
+    const b = &state.app.abs.books[i];
+    var title_buf: [256]u8 = undefined;
+    const title = safeUtf8Buf(b.title[0..b.title_len], &title_buf);
+    var author_buf: [160]u8 = undefined;
+    const author = safeUtf8Buf(b.author[0..b.author_len], &author_buf);
+
+    var card = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .id_extra = i + 80000,
+        .min_size_content = .{ .w = card_w, .h = poster_h + BOOK_FOOTER_H },
+        .max_size_content = .{ .w = card_w, .h = poster_h + BOOK_FOOTER_H },
+        .margin = dvui.Rect.all(BOOK_CARD_GAP),
+        .background = true,
+        .color_fill = theme.colors.bg_surface,
+        .color_fill_hover = theme.colors.bg_hover,
+        .corner_radius = dvui.Rect.all(theme.radius.md),
+    });
+    defer card.deinit();
+
+    var bw: dvui.ButtonWidget = undefined;
+    bw.init(@src(), .{}, .{
+        .id_extra = i + 81000,
+        .background = true,
+        .color_fill = theme.colors.bg_elevated,
+        .corner_radius = dvui.Rect.all(theme.radius.md),
+        .min_size_content = .{ .w = card_w, .h = poster_h },
+        .max_size_content = .{ .w = card_w, .h = poster_h },
+        .padding = dvui.Rect.all(0),
+    });
+    bw.processEvents();
+    bw.drawBackground();
+    var cover_buf: [1024]u8 = undefined;
+    const cover = pure.coverUrl(
+        state.app.abs.server_url[0..state.app.abs.server_url_len],
+        b.id[0..b.id_len],
+        state.app.abs.token[0..state.app.abs.token_len],
+        &cover_buf,
+    ) orelse "";
+    components.coverArt(@src(), i + 82000, &book_covers[i], cover, icons.tvg.lucide.@"book-audio", theme.radius.md);
+    const clicked = bw.clicked();
+    bw.drawFocus();
+    bw.deinit();
+    if (clicked) playBook(i);
+
+    _ = dvui.label(@src(), "{s}", .{title}, .{
+        .id_extra = i + 83000,
+        .color_text = theme.colors.text_primary,
+        .font = dvui.themeGet().font_heading.withSize(theme.font_size.small),
+        .min_size_content = .{ .w = card_w, .h = 20 },
+        .max_size_content = .{ .w = card_w, .h = 20 },
+        .padding = .{ .x = 5, .y = 5, .w = 5, .h = 0 },
+    });
+    _ = dvui.label(@src(), "{s}", .{if (author.len > 0) author else "Audiobook"}, .{
+        .id_extra = i + 84000,
+        .color_text = theme.colors.text_tertiary,
+        .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
+        .min_size_content = .{ .w = card_w, .h = 18 },
+        .max_size_content = .{ .w = card_w, .h = 18 },
+        .padding = .{ .x = 5, .y = 0, .w = 5, .h = 4 },
+    });
 }
