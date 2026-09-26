@@ -963,18 +963,23 @@ pub fn renderGrid() !void {
                         // the stack below, and the text sits on a themed surface
                         // where contrast is guaranteed in all seven presets rather
                         // than depending on whatever poster happened to load.
-                        // Doubles as the click target that selects this pane.
-                        if (dvui.button(@src(), "", .{}, .{
+                        // Passive backdrop. This used to be a full-cell button,
+                        // which consumed every click before the player chrome
+                        // rendered above it could see Back, Settings, External,
+                        // or Close. Opal now has a single-media invariant, so a
+                        // loading pane never needs a full-window select target.
+                        var loading_backdrop = dvui.box(@src(), .{}, .{
                             .id_extra = i + 3000,
                             .expand = .both,
+                            .background = true,
                             .color_fill = theme.colors.bg_deep,
                             .border = dvui.Rect.all(0),
                             .corner_radius = theme.dims.rad_sm,
-                        })) {
-                            state.app.active_player_idx = i;
-                        }
+                        });
+                        loading_backdrop.deinit();
 
-                        if (dvui.buttonIcon(@src(), "Cancel loading", icons.tvg.lucide.x, .{}, .{}, .{
+                        const dedicated_player = state.app.page_shell_enabled and state.app.router.current == .player;
+                        if (!dedicated_player and dvui.buttonIcon(@src(), "Cancel loading", icons.tvg.lucide.x, .{}, .{}, .{
                             .id_extra = i + 3001,
                             .gravity_x = 1.0,
                             .gravity_y = 0.0,

@@ -72,6 +72,23 @@ def test_play_navigates():
     return "fail", "playback doesn't navigate to player"
 
 
+@test("Loading Player Chrome Remains Interactive", "Page Shell")
+def test_loading_player_chrome_interactive():
+    shell = open(os.path.join(PROJECT_DIR, "src/ui/shell.zig")).read()
+    grid = open(os.path.join(PROJECT_DIR, "src/ui/grid.zig")).read()
+    loading = _between(grid, "// ── Loading screen", "// ── Poster card")
+    checks = {
+        "passive loading backdrop": "var loading_backdrop = dvui.box" in loading,
+        "no full-cell loading button": 'dvui.button(@src(), "",' not in loading,
+        "chrome owns loading close": 'p.is_loading and components.iconButtonOverlay' in shell
+            and '"Cancel and close"' in shell,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "loading chrome regression: " + ", ".join(missing)
+    return "pass", "loading backdrop is passive; player chrome owns cancellation"
+
+
 @test("Home Distinct From Browse", "Page Shell")
 def test_home_distinct():
     shell = open(os.path.join(PROJECT_DIR, "src/ui/shell.zig")).read()
