@@ -20,6 +20,7 @@ const state = @import("../core/state.zig");
 const logs = @import("../core/logs.zig");
 const pure = @import("podcasts_pure.zig");
 const reliable_fetch = @import("reliable_fetch.zig");
+const io = @import("../core/io_global.zig");
 const workers = @import("../core/workers.zig");
 const LatestRequest = @import("../core/latest_request.zig").Gate;
 
