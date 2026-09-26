@@ -5,6 +5,7 @@ const dvui = @import("dvui");
 const icons = @import("icons");
 const state = @import("../core/state.zig");
 const theme = @import("theme.zig");
+const components = @import("components.zig");
 const poster = @import("../core/poster.zig");
 const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
 const pure = @import("../services/podcasts_pure.zig");
@@ -53,9 +54,9 @@ pub fn renderContent() void {
 }
 
 fn renderSearchBar() void {
-    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+    var row = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
         .expand = .horizontal,
-        .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
+        .padding = .{ .x = 10, .y = 7, .w = 10, .h = 7 },
         .background = true,
         .color_fill = theme.colors.bg_surface,
     });
@@ -68,28 +69,10 @@ fn renderSearchBar() void {
         .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
     });
 
-    var te = dvui.textEntry(@src(), .{
-        .text = .{ .buffer = &state.app.podcasts.search_buf },
-        .placeholder = "Search podcasts…",
-    }, .{
-        .expand = .horizontal,
-        .padding = .{ .x = 6, .y = 4, .w = 6, .h = 4 },
-        .color_fill = theme.colors.bg_elevated,
-        .color_text = theme.colors.text_primary,
-        .corner_radius = theme.dims.rad_sm,
-        .gravity_y = 0.5,
-    });
-    const entered = te.enter_pressed;
-    te.deinit();
-
-    const go = dvui.button(@src(), "Go", .{}, .{
-        .color_fill = theme.colors.accent,
-        .color_text = dvui.Color.white,
-        .corner_radius = theme.dims.rad_sm,
-        .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
-        .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
-        .gravity_y = 0.5,
-    });
+    const layout_w = @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().w, state.app.ui_scale);
+    const search_w = @max(150, @min(280, layout_w - 280));
+    const entered = components.toolbarSearch(@src(), &state.app.podcasts.search_buf, "Search podcasts…", search_w);
+    const go = components.toolbarGo(@src(), "Search");
 
     if (entered or go) {
         const q = std.mem.sliceTo(&state.app.podcasts.search_buf, 0);
@@ -97,7 +80,12 @@ fn renderSearchBar() void {
     }
 
     if (state.app.podcasts.is_loading.load(.acquire)) {
-        _ = dvui.label(@src(), "…", .{}, .{ .color_text = theme.colors.warning, .gravity_y = 0.5 });
+        dvui.spinner(@src(), .{
+            .color_text = theme.colors.accent,
+            .min_size_content = theme.iconSize(.md),
+            .gravity_y = 0.5,
+            .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
+        });
     }
 }
 
@@ -215,17 +203,10 @@ fn renderCard(i: usize, card_w: f32, p: *const pure.Podcast) void {
 fn renderResults(view: *const Snapshot) void {
     const count = view.result_count;
     if (count == 0) {
-        if (!view.loading) {
-            _ = dvui.label(@src(), "Search for a show to get started", .{}, .{
-                .color_text = theme.colors.text_secondary,
-                .padding = .{ .x = 12, .y = 20, .w = 0, .h = 0 },
-            });
-        } else {
-            _ = dvui.label(@src(), "Loading popular shows…", .{}, .{
-                .color_text = theme.colors.text_secondary,
-                .padding = .{ .x = 12, .y = 20, .w = 0, .h = 0 },
-            });
-        }
+        if (view.loading)
+            components.loadingState("Loading popular shows…")
+        else
+            components.emptyState(icons.tvg.lucide.podcast, "Find a podcast", "Search by show, topic, or publisher.");
         return;
     }
 
@@ -236,8 +217,8 @@ fn renderResults(view: *const Snapshot) void {
     });
     defer scroll.deinit();
 
-    _ = dvui.label(@src(), "{s}", .{
-        if (view.showing_popular) "Popular now" else "Results",
+    _ = dvui.label(@src(), "{s} · {d}", .{
+        if (view.showing_popular) "Popular now" else "Results", count,
     }, .{
         .color_text = theme.colors.text_secondary,
         .padding = .{ .x = 8, .y = 8, .w = 8, .h = 2 },
@@ -247,7 +228,7 @@ fn renderResults(view: *const Snapshot) void {
     // falls back to a sane default) — same shape as the TMDB gallery.
     const rect_w = scroll.data().rect.w;
     const avail_w: f32 = @max(240, (if (rect_w > 1) rect_w else 900) - 8);
-    const cols: usize = @max(2, @as(usize, @intFromFloat(avail_w / CARD_TARGET_W)));
+    const cols: usize = @max(1, @as(usize, @intFromFloat(avail_w / CARD_TARGET_W)));
     const cols_f: f32 = @floatFromInt(cols);
     const card_w: f32 = @max(100, (avail_w - cols_f * 2 * CARD_GAP) / cols_f);
 
@@ -321,17 +302,19 @@ fn renderEpisodes(view: *const Snapshot) void {
         });
 
         if (view.episodes_loading) {
-            _ = dvui.label(@src(), "Loading…", .{}, .{ .color_text = theme.colors.warning, .gravity_y = 0.5 });
+            dvui.spinner(@src(), .{
+                .color_text = theme.colors.accent,
+                .min_size_content = theme.iconSize(.md),
+                .gravity_y = 0.5,
+            });
         }
     }
 
     if (view.episode_count == 0) {
-        if (!view.episodes_loading) {
-            _ = dvui.label(@src(), "No episodes found", .{}, .{
-                .color_text = theme.colors.text_secondary,
-                .padding = .{ .x = 12, .y = 20, .w = 0, .h = 0 },
-            });
-        }
+        if (view.episodes_loading)
+            components.loadingState("Loading episodes…")
+        else
+            components.emptyState(icons.tvg.lucide.podcast, "No episodes found", "This show did not publish a readable RSS episode list.");
         return;
     }
 
@@ -342,7 +325,17 @@ fn renderEpisodes(view: *const Snapshot) void {
     });
     defer scroll.deinit();
 
-    for (0..view.episode_count) |i| {
+    const row_h: f32 = 68;
+    const win = tmdb_pure.visibleRows(view.episode_count, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 4);
+    if (win.first > 0) {
+        var sp = dvui.box(@src(), .{}, .{
+            .id_extra = 69998,
+            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(win.first)) },
+        });
+        sp.deinit();
+    }
+
+    for (win.first..win.last) |i| {
         const e = &view.episodes[i];
         var title_buf: [200]u8 = undefined;
         const title = safeUtf8Buf(e.title[0..e.title_len], &title_buf);
@@ -354,6 +347,8 @@ fn renderEpisodes(view: *const Snapshot) void {
             .color_fill = theme.colors.bg_surface,
             .color_border = theme.colors.border_subtle,
             .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
+            .min_size_content = .{ .w = 0, .h = row_h },
+            .max_size_content = .{ .w = std.math.floatMax(f32), .h = row_h },
             .padding = .{ .x = 10, .y = 8, .w = 10, .h = 8 },
         });
         defer row.deinit();
@@ -396,5 +391,13 @@ fn renderEpisodes(view: *const Snapshot) void {
         })) {
             playEpisode(i);
         }
+    }
+
+    if (win.last < view.episode_count) {
+        var sp = dvui.box(@src(), .{}, .{
+            .id_extra = 69999,
+            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(view.episode_count - win.last)) },
+        });
+        sp.deinit();
     }
 }
