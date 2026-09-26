@@ -346,20 +346,26 @@ function foldSetup(){
   if (!page) return;
   setupFolded = true;
   const kids = [...page.children];
-  let body = null, first = true;
+  let body = null, first = true, sectionIndex = 0;
   for (const el of kids) {
     if (el.classList.contains('sect')) {
       const head = el;
       const myBody = document.createElement('div');
       myBody.className = 'fold-body';
+      myBody.id = `setup-section-${sectionIndex++}`;
       head.classList.add('fold');
       head.after(myBody);
       if (!first) { head.classList.add('shut'); myBody.classList.add('shut'); }
+      head.setAttribute('aria-controls', myBody.id);
+      head.setAttribute('aria-expanded', first ? 'true' : 'false');
       first = false;
-      head.onclick = () => {
+      const toggle = () => {
         head.classList.toggle('shut');
         myBody.classList.toggle('shut');
+        head.setAttribute('aria-expanded', head.classList.contains('shut') ? 'false' : 'true');
       };
+      head.onclick = toggle;
+      wireKeyboardClick(head);
       body = myBody;
       continue;
     }
@@ -768,10 +774,10 @@ async function loadSettings(){
         ${ks.map(k => k.kind === 'boolean'
           ? `<label class="cfg-row"><input type="checkbox" data-k="${esc(k.name)}" data-kind="boolean"
                ${k.value ? 'checked' : ''}><span>${esc(k.label)}</span></label>`
-          : `<div class="cfg-row"><span>${esc(k.label)}</span>
+          : `<label class="cfg-row"><span>${esc(k.label)}</span>
                <input data-k="${esc(k.name)}" data-kind="${esc(k.kind)}"
                  ${k.kind === 'integer' ? 'inputmode="numeric"' : ''}
-                 value="${esc(String(k.value ?? ''))}"></div>`).join('')}
+                 value="${esc(String(k.value ?? ''))}"></label>`).join('')}
       </div>`).join('');
     wireSettings();
   } catch { $('cfg-hint').textContent = 'Could not load settings.'; }
