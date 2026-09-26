@@ -1458,7 +1458,7 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
     }
     // Anime
     if (std.mem.startsWith(u8, api_path, "/anime")) {
-        apiAnime(stream, api_path, query);
+        @import("remote_anime_api.zig").handle(stream, api_path, query);
         return;
     }
     // Podcasts
@@ -3396,75 +3396,6 @@ fn apiSettingsToggle(query: []const u8) void {
     }
 }
 
-fn apiAnime(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
-    const anime_svc = @import("anime.zig");
-    if (std.mem.eql(u8, api_path, "/anime/search")) {
-        if (getQueryParam(query, "q")) |q| {
-            var decoded: [256]u8 = undefined;
-            const dq = urlDecode(q, &decoded) orelse q;
-            anime_svc.searchAnime(dq);
-        }
-        sendJson(stream, "{\"ok\":true,\"action\":\"anime_search\"}");
-        return;
-    }
-    if (std.mem.eql(u8, api_path, "/anime/episodes")) {
-        if (getQueryParam(query, "idx")) |idx_str| {
-            const idx = std.fmt.parseInt(usize, idx_str, 10) catch 0;
-            anime_svc.loadEpisodes(idx);
-        }
-        sendJson(stream, "{\"ok\":true,\"action\":\"load_episodes\"}");
-        return;
-    }
-    if (std.mem.eql(u8, api_path, "/anime/play")) {
-        if (getQueryParam(query, "ep")) |ep| {
-            var decoded: [16]u8 = undefined;
-            const ep_str = urlDecode(ep, &decoded) orelse ep;
-            anime_svc.playEpisode(ep_str);
-        }
-        sendJson(stream, "{\"ok\":true,\"action\":\"play_episode\"}");
-        return;
-    }
-    // Return results + episodes
-    var json_buf: [16384]u8 = undefined;
-    var w = std.Io.Writer.fixed(&json_buf);
-    w.writeAll("{\"results\":[") catch return;
-    const result_count = anime_svc.resultCount();
-    var emitted: usize = 0;
-    for (0..result_count) |ri| {
-        const r = anime_svc.resultRow(ri) orelse continue;
-        if (r.name_len == 0) continue;
-        if (emitted > 0) w.writeAll(",") catch return;
-        w.writeAll("{\"name\":\"") catch return;
-        escJsonWrite(&w, txt.safeUtf8(r.name[0..@min(r.name_len, r.name.len)]));
-        w.print("\",\"episodes\":{d}}}", .{r.episodes}) catch return;
-        emitted += 1;
-    }
-    w.writeAll("],\"episodes\":[") catch return;
-    const episode_count = @min(state.app.anime.episode_count, state.app.anime.episode_list.len);
-    var ep_emitted: usize = 0;
-    for (0..episode_count) |ei| {
-        const ep_len = @min(state.app.anime.episode_list_lens[ei], state.app.anime.episode_list[ei].len);
-        if (ep_len == 0) continue;
-        if (ep_emitted > 0) w.writeAll(",") catch return;
-        w.writeAll("\"") catch return;
-        escJsonWrite(&w, txt.safeUtf8(state.app.anime.episode_list[ei][0..ep_len]));
-        w.writeAll("\"") catch return;
-        ep_emitted += 1;
-    }
-    w.writeAll("],\"selected\":") catch return;
-    if (state.app.anime.selected_idx) |si| {
-        w.print("{d}", .{si}) catch return;
-    } else {
-        w.writeAll("null") catch return;
-    }
-    w.writeAll(",\"loading\":") catch return;
-    w.writeAll(if (state.app.anime.is_loading.load(.acquire)) "true" else "false") catch return;
-    w.writeAll(",\"stream_loading\":") catch return;
-    w.writeAll(if (state.app.anime.stream_loading) "true" else "false") catch return;
-    w.writeAll("}") catch return;
-    sendJson(stream, json_buf[0..w.end]);
-}
-
 fn apiPodcasts(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
     const podcasts_svc = @import("podcasts.zig");
     if (std.mem.eql(u8, api_path, "/podcasts/search")) {
@@ -3685,8 +3616,10 @@ fn apiDrama(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) 
     const json_buf = a.alloc(u8, 320 * 1024) catch return;
     defer a.free(json_buf);
     var w = std.Io.Writer.fixed(json_buf);
-    w.print("{{\"loading\":{s},\"streaming\":{s},\"needs_tmdb_key\":false,\"results\":[", .{
+    w.print("{{\"loading\":{s},\"loading_more\":{s},\"has_more\":{s},\"streaming\":{s},\"needs_tmdb_key\":false,\"results\":[", .{
         if (d.is_loading.load(.acquire)) "true" else "false",
+        if (drama.isLoadingMore()) "true" else "false",
+        if (drama.hasMore()) "true" else "false",
         if (d.stream_loading.load(.acquire)) "true" else "false",
     }) catch return;
     const n = drama.resultCount();

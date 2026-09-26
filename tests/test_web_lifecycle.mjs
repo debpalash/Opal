@@ -100,6 +100,30 @@ test('web performance budget produces a measured pass and failure', () => {
   assert.equal(f.run('webPerf.summary().within_budget'), false);
 });
 
+test('anime paging uses the shared browse loader and renders rich cards', async () => {
+  const f = fixture('media.js');
+  f.run(`
+    currentPage = 'anime';
+    $('anime-more').style.display = '';
+    renderAnimeResults([{name:'Frieren', poster:'https://img.invalid/f.jpg', type:'TV',
+      year:2023, score:9.3, episodes:28, overview:'Journey'}]);
+  `);
+  assert.match(f.$('anime-results').innerHTML, /<img/);
+  assert.match(f.$('anime-results').innerHTML, /2023/);
+  assert.match(f.$('anime-results').innerHTML, /9\.3/);
+
+  const action = f.$('anime-more').onclick();
+  f.take('/anime/more').resolve({ok:true});
+  await flush();
+  const timer = [...f.timers.values()][0];
+  assert.ok(timer, 'paging should wait briefly for the worker result');
+  timer.fn();
+  await flush();
+  f.take('/anime').resolve({loading_more:false, has_more:false, results:[], episodes:[]});
+  await action;
+  assert.equal(f.$('anime-more').disabled, false);
+});
+
 test('late show metadata cannot overwrite a different show or start its seasons', async () => {
   const f = fixture('catalog.js');
   const old = f.run("openShow(1, 'Old show', '')");

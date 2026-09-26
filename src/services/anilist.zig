@@ -267,6 +267,23 @@ pub fn fetchSearch(title: []const u8, sfw: bool, out: []u8) usize {
     return n;
 }
 
+/// Fetch a keyless AniList browse page as an independent fallback for Jikan.
+pub fn fetchBrowse(page: u32, kind: anilist_pure.BrowseKind, sfw: bool, out: []u8) usize {
+    const alloc = @import("../core/alloc.zig").allocator;
+    var payload_buf: [2048]u8 = undefined;
+    const payload = anilist_pure.browsePayload(&payload_buf, page, kind, sfw) orelse return 0;
+    var child = io_global.Child.init(&.{
+        "curl", "-s",                             "--connect-timeout", "3",                        "--max-time", "10",    "-X", "POST", ANILIST_API,
+        "-H",   "Content-Type: application/json", "-H",                "Accept: application/json", "-d",         payload,
+    }, alloc);
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Ignore;
+    child.spawn() catch return 0;
+    const n = if (child.stdout) |*s| io_global.readAll(s, out) catch 0 else 0;
+    _ = child.wait() catch {};
+    return n;
+}
+
 /// Search AniList for an anime by title, return media ID.
 pub fn searchAnime(title: []const u8, out_id: *i64) void {
     const alloc = @import("../core/alloc.zig").allocator;

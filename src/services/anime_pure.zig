@@ -62,12 +62,17 @@ fn extractYear(obj: []const u8) u16 {
 pub fn parseJikanMeta(obj: []const u8) JikanMeta {
     var m = JikanMeta{};
 
-    // type — a short string ("TV"/"Movie"/…). Guard the null form.
-    if (std.mem.indexOf(u8, obj, "\"type\":\"")) |ti| {
-        const s = ti + 8;
-        var e = s;
-        while (e < obj.len and obj[e] != '"') : (e += 1) {}
-        if (e <= obj.len) m.atype = obj[s..e];
+    // Jikan's nested title aliases also have `type` (usually "Default") and
+    // appear before the media's own type. Match the closed, known media values
+    // so alias metadata can never leak into the card label.
+    const media_types = [_][]const u8{ "TV", "Movie", "OVA", "ONA", "Special", "Music", "CM", "PV", "TV Special" };
+    for (media_types) |candidate| {
+        var needle_buf: [32]u8 = undefined;
+        const needle = std.fmt.bufPrint(&needle_buf, "\"type\":\"{s}\"", .{candidate}) catch continue;
+        if (std.mem.indexOf(u8, obj, needle) != null) {
+            m.atype = candidate;
+            break;
+        }
     }
 
     // airing — plain boolean; only true matters for the header badge.
@@ -88,6 +93,14 @@ test "parseJikanMeta extracts type, year (aired.prop.from), airing" {
     try std.testing.expectEqualStrings("TV", m.atype);
     try std.testing.expectEqual(@as(u16, 2024), m.year);
     try std.testing.expect(m.airing);
+}
+
+test "parseJikanMeta ignores nested title alias type" {
+    const j =
+        \\{"mal_id":1,"titles":[{"type":"Default","title":"Example"}],"type":"TV","year":2026}
+    ;
+    const m = parseJikanMeta(j);
+    try std.testing.expectEqualStrings("TV", m.atype);
 }
 
 test "parseJikanMeta: finished movie, no airing, null top-level year" {

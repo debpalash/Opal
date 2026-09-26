@@ -56,7 +56,7 @@ var fetch_request: LatestRequest = .{};
 // spawn a burst (mirrors comics/youtube). All read on the UI thread; the append
 // worker runs under the same fetch_request guard so a fresh search drops it.
 var current_page: u32 = 1;
-var more_available: bool = true;
+var more_available: std.atomic.Value(bool) = .init(true);
 var loading_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 /// Set by the worker under pending_mutex: true → applyPending() APPENDS onto
 /// results[] (load-more); false → replaces from index 0 (fresh fetch).
@@ -81,7 +81,7 @@ pub fn loadCatalog() void {
     // Fresh landing feed resets pagination; applyPending() re-derives
     // more_available once page 1 lands.
     current_page = 1;
-    more_available = true;
+    more_available.store(true, .release);
     const my_gen = fetch_request.begin(&state.app.drama.is_loading);
 
     if (@import("../core/workers.zig").spawnLegacy(fetchWorker, .{my_gen})) |t| {
@@ -97,13 +97,13 @@ pub fn loadCatalog() void {
 /// fresh landing feed supersedes it. No-op once `more_available` clears (short
 /// page or the fixed buffer filled). Mirrors comics.loadMoreResults.
 pub fn loadMore() void {
-    if (!more_available) return;
+    if (!more_available.load(.acquire)) return;
     if (state.app.tmdb.api_key_len == 0) return;
     if (state.app.drama.is_loading.load(.acquire)) return;
     if (loading_more.load(.acquire)) return;
     if (state.app.drama.result_count == 0) return;
     if (state.app.drama.result_count >= state.app.drama.results.len) {
-        more_available = false;
+        more_available.store(false, .release);
         return;
     }
     if (loading_more.swap(true, .acq_rel)) return; // lost the race — another append in flight
@@ -183,6 +183,14 @@ pub fn resultCount() usize {
     return @min(state.app.drama.result_count, state.app.drama.results.len);
 }
 
+pub fn hasMore() bool {
+    return more_available.load(.acquire) and resultCount() < state.app.drama.results.len;
+}
+
+pub fn isLoadingMore() bool {
+    return loading_more.load(.acquire);
+}
+
 pub fn resultRow(idx: usize) ?state.DramaResult {
     pending_mutex.lock();
     defer pending_mutex.unlock();
@@ -235,9 +243,9 @@ fn applyPending() void {
     // buffer means there's nothing more to pull.
     current_page = pending_page;
     if (pending_count < TMDB_PAGE_SIZE or state.app.drama.result_count >= cap) {
-        more_available = false;
+        more_available.store(false, .release);
     } else if (!append) {
-        more_available = true;
+        more_available.store(true, .release);
     }
     state.wakeUi();
 }
@@ -433,7 +441,7 @@ pub fn renderContent() void {
     // bottom. Bounded by more_available + loading_more so one scroll can't spawn
     // a burst; `underfilled` keeps paging when the first page is shorter than the
     // viewport. Mirrors services/tmdb.zig.
-    if (more_available) {
+    if (more_available.load(.acquire)) {
         const loading = loading_more.load(.acquire);
         const max_y = scroll.si.scrollMax(.vertical);
         const near_bottom = max_y > 0 and scroll.si.viewport.y >= max_y - 800;
