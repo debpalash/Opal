@@ -453,6 +453,14 @@ pub fn shouldKickTrending(
     return config_loaded and api_key_len > 0 and results_len == 0 and !is_loading and !already_kicked;
 }
 
+/// Retry only a replacement Browse catalog that unexpectedly produced no
+/// cards. Search may legitimately be empty, and append failures must leave the
+/// current page/index alone. `attempt` is zero-based; two retries means at most
+/// three catalog rounds.
+pub fn shouldRetryEmptyCatalog(is_browse: bool, append: bool, item_count: usize, attempt: u8) bool {
+    return is_browse and !append and item_count == 0 and attempt < 2;
+}
+
 test "shouldKickTrending waits for config_loaded (first-start race)" {
     // The exact run-1 condition that must NOT fire early: key present but config
     // not yet published.
@@ -466,6 +474,15 @@ test "shouldKickTrending neutral-ship: no key does not spin" {
 
 test "shouldKickTrending fires once ready" {
     try std.testing.expect(shouldKickTrending(true, 32, 0, false, false));
+}
+
+test "empty default catalog retries twice but search and append stay final" {
+    try std.testing.expect(shouldRetryEmptyCatalog(true, false, 0, 0));
+    try std.testing.expect(shouldRetryEmptyCatalog(true, false, 0, 1));
+    try std.testing.expect(!shouldRetryEmptyCatalog(true, false, 0, 2));
+    try std.testing.expect(!shouldRetryEmptyCatalog(true, false, 20, 0));
+    try std.testing.expect(!shouldRetryEmptyCatalog(false, false, 0, 0));
+    try std.testing.expect(!shouldRetryEmptyCatalog(true, true, 0, 0));
 }
 
 test "shouldKickTrending does not refire after arm or success" {

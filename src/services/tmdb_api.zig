@@ -233,15 +233,43 @@ fn fetchTmdb(mode: FetchMode, query: []const u8, append: bool) void {
             // staged pages in at frame start via applyPendingResults().
             var staged: std.ArrayListUnmanaged(state.TmdbItem) = .empty;
             var total_pages: u32 = 100;
-            if (key.len > 0) {
-                var url_buf: [512]u8 = undefined;
-                const url = buildApiUrl(&url_buf, S.fetch_mode, S.q[0..S.q_len], S.category, S.media_filter, S.time_window, S.genre_idx, S.discover_sort, S.page) orelse return;
-                const body = httpGet(url, key) orelse return;
-                defer alloc.free(body);
-                total_pages = @intCast(@max(1, parse.extractJsonInt(body, "\"total_pages\":")));
-                parse.parseTmdbResponse(body, &staged);
-            } else {
-                fetchCinemetaInto(&staged, S.fetch_mode, S.q[0..S.q_len], S.category, S.media_filter, S.genre_idx, S.page);
+            var attempt: u8 = 0;
+            while (true) : (attempt += 1) {
+                staged.clearRetainingCapacity();
+                total_pages = 100;
+                if (key.len > 0) {
+                    var url_buf: [512]u8 = undefined;
+                    const url = buildApiUrl(&url_buf, S.fetch_mode, S.q[0..S.q_len], S.category, S.media_filter, S.time_window, S.genre_idx, S.discover_sort, S.page) orelse return;
+                    if (httpGet(url, key)) |body| {
+                        total_pages = @intCast(@max(1, parse.extractJsonInt(body, "\"total_pages\":")));
+                        parse.parseTmdbResponse(body, &staged);
+                        alloc.free(body);
+                    }
+                } else {
+                    fetchCinemetaInto(&staged, S.fetch_mode, S.q[0..S.q_len], S.category, S.media_filter, S.genre_idx, S.page);
+                }
+
+                const retry = @import("tmdb_pure.zig").shouldRetryEmptyCatalog(
+                    S.fetch_mode == .browse,
+                    S.do_append,
+                    staged.items.len,
+                    attempt,
+                );
+                if (!retry or refresh_queued.load(.acquire)) break;
+                // Short worker-only backoff: enough for DNS/TLS recovery while
+                // keeping the skeleton responsive. The lower HTTP seam already
+                // bounds each transport attempt.
+                @import("../core/io_global.zig").sleep((250 + @as(u64, attempt) * 250) * std.time.ns_per_ms);
+            }
+
+            // A failed refresh must not erase a cache-backed or previously
+            // loaded catalog. With no visible cards, fall through so the normal
+            // empty state and manual Retry remain available after exhaustion.
+            if (S.fetch_mode == .browse and !S.do_append and staged.items.len == 0) {
+                state.app.tmdb.results_mutex.lock();
+                const have_visible = state.app.tmdb.results.items.len > 0;
+                state.app.tmdb.results_mutex.unlock();
+                if (have_visible) return;
             }
 
             // SWR write: persist the fresh default browse grid (page 1 only) so
