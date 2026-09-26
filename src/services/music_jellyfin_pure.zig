@@ -43,6 +43,10 @@ pub fn percentEncode(input: []const u8, out: []u8) usize {
 /// `Recursive=true` is what makes the search span every library rather than the
 /// root folder, and `Fields=…` pulls the album artist in on the same round trip.
 pub fn buildSearchUrl(out: []u8, base: []const u8, api_key: []const u8, query: []const u8, limit: u32) ?[]const u8 {
+    return buildSearchPageUrl(out, base, api_key, query, limit, 0);
+}
+
+pub fn buildSearchPageUrl(out: []u8, base: []const u8, api_key: []const u8, query: []const u8, limit: u32, start: u32) ?[]const u8 {
     if (!isValidBase(base) or query.len == 0 or api_key.len == 0) return null;
     var enc: [512]u8 = undefined;
     const qn = percentEncode(query, &enc);
@@ -51,8 +55,8 @@ pub fn buildSearchUrl(out: []u8, base: []const u8, api_key: []const u8, query: [
     const kn = percentEncode(api_key, &ken);
     return std.fmt.bufPrint(
         out,
-        "{s}/Items?IncludeItemTypes=Audio&Recursive=true&SearchTerm={s}&Limit={d}&Fields=AlbumArtist&api_key={s}",
-        .{ trimBase(base), enc[0..qn], limit, ken[0..kn] },
+        "{s}/Items?IncludeItemTypes=Audio&Recursive=true&SearchTerm={s}&Limit={d}&StartIndex={d}&Fields=AlbumArtist&api_key={s}",
+        .{ trimBase(base), enc[0..qn], limit, start, ken[0..kn] },
     ) catch null;
 }
 
@@ -165,9 +169,10 @@ pub fn parseSong(obj: []const u8, id_buf: []u8, title_buf: []u8, artist_buf: []u
 test "search URL: audio-only, recursive, trailing slash trimmed" {
     var b: [700]u8 = undefined;
     try std.testing.expectEqualStrings(
-        "http://nas:8096/Items?IncludeItemTypes=Audio&Recursive=true&SearchTerm=daft%20punk&Limit=50&Fields=AlbumArtist&api_key=abc123",
+        "http://nas:8096/Items?IncludeItemTypes=Audio&Recursive=true&SearchTerm=daft%20punk&Limit=50&StartIndex=0&Fields=AlbumArtist&api_key=abc123",
         buildSearchUrl(&b, "http://nas:8096/", "abc123", "daft punk", 50).?,
     );
+    try std.testing.expect(std.mem.indexOf(u8, buildSearchPageUrl(&b, "http://nas:8096", "abc123", "x", 40, 80).?, "StartIndex=80") != null);
 }
 
 test "search URL percent-encodes every reserved char (space & = # ? % +)" {

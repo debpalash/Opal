@@ -413,7 +413,7 @@ fn renderItems() void {
     // Responsive poster grid (fills the page width; was one wide row per item).
     const rect_w = scroll.data().rect.w;
     const avail_w: f32 = @max(240, (if (rect_w > 1) rect_w else 900) - 8);
-    const cols: usize = @max(2, @as(usize, @intFromFloat(avail_w / 150)));
+    const cols: usize = @max(1, @as(usize, @intFromFloat(avail_w / 150)));
     const card_w: f32 = @max(100, (avail_w - @as(f32, @floatFromInt(cols)) * 8) / @as(f32, @floatFromInt(cols)));
 
     // ── Virtualization (same shape as tmdb.zig renderGallery) ──

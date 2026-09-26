@@ -440,6 +440,57 @@ pub fn segment(
     return clicked_index;
 }
 
+/// Compact icon + label filter used by browse toolbars. The whole chip is one
+/// keyboard focus target; fixed icon bounds prevent malformed SVG sizing from
+/// stretching the toolbar.
+pub fn filterChip(
+    src: std.builtin.SourceLocation,
+    label: []const u8,
+    icon: []const u8,
+    active: bool,
+    id_extra: usize,
+) bool {
+    var hovered = false;
+    var chip = dvui.box(src, .{ .dir = .horizontal }, .{
+        .id_extra = id_extra,
+        .background = true,
+        .color_fill = if (active) tk.bg_elevated() else theme.transparent,
+        .corner_radius = tk.rad_pill,
+        .padding = .{ .x = tk.sp_sm, .y = tk.sp_xs, .w = tk.sp_sm, .h = tk.sp_xs },
+        .margin = .{ .x = 1, .y = 1, .w = 1, .h = 1 },
+    });
+    const id = chip.data().id;
+    dvui.tabIndexSet(id, null);
+    var clicked = dvui.clicked(chip.data(), .{ .hovered = &hovered });
+    if (dvui.focusedWidgetId() == id) {
+        for (dvui.events()) |*e| {
+            if (!e.handled and e.evt == .key and e.evt.key.action == .down and e.evt.key.matchBind("activate")) {
+                e.handle(@src(), chip.data());
+                clicked = true;
+            }
+        }
+        chip.data().focusBorder();
+    }
+    if (hovered and !active) chip.data().options.color_fill = tk.bg_hover();
+    chip.drawBackground();
+    dvui.icon(@src(), label, icon, .{}, .{
+        .id_extra = id_extra,
+        .min_size_content = .{ .w = 16, .h = 16 },
+        .max_size_content = .{ .w = 16, .h = 16 },
+        .color_text = if (active) tk.accent_primary() else tk.text_secondary(),
+        .gravity_y = 0.5,
+        .margin = .{ .x = 0, .y = 0, .w = tk.sp_xs, .h = 0 },
+    });
+    _ = dvui.label(@src(), "{s}", .{label}, .{
+        .id_extra = id_extra,
+        .gravity_y = 0.5,
+        .color_text = if (active) tk.text_primary() else tk.text_secondary(),
+        .font = fontAt(tk.fs_small),
+    });
+    chip.deinit();
+    return clicked;
+}
+
 /// 32px square icon button.  Active: subtle bg_elevated fill + accent_primary
 /// glyph, no border.  Inactive: transparent fill + text_secondary glyph, no
 /// border.  Returns true on click.  Tooltip uses `dvui.tooltip` via the local

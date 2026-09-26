@@ -290,6 +290,76 @@ pub fn pickBestAudioFile(json: []const u8) ?[]const u8 {
     return best;
 }
 
+// ── metadata/{id}: pick a readable full-text file ────────────────────────────
+
+fn textTier(name: []const u8) ?u8 {
+    if (name.len == 0 or name.len > 512) return null;
+    var lower: [512]u8 = undefined;
+    for (0..name.len) |i| lower[i] = std.ascii.toLower(name[i]);
+    const l = lower[0..name.len];
+    if (!std.mem.endsWith(u8, l, ".txt")) return null;
+    if (std.mem.endsWith(u8, l, "_meta.txt") or
+        std.mem.indexOf(u8, l, "searchtext") != null)
+        return null;
+    if (std.mem.endsWith(u8, l, "_djvu.txt")) return 0;
+    return 1;
+}
+
+/// Choose a complete plain-text book from an Internet Archive metadata result.
+/// OCR `_djvu.txt` is preferred; otherwise the largest ordinary `.txt` wins.
+/// Metadata and search-index dumps are deliberately excluded.
+pub fn pickBestTextFile(json: []const u8) ?[]const u8 {
+    const files_key = std.mem.indexOf(u8, json, "\"files\"");
+    var pos: usize = files_key orelse 0;
+    var best: ?[]const u8 = null;
+    var best_tier: u8 = 255;
+    var best_size: u64 = 0;
+
+    while (std.mem.indexOfPos(u8, json, pos, "\"name\"")) |ki| {
+        const obj_start = std.mem.lastIndexOfScalar(u8, json[0..ki], '{') orelse {
+            pos = ki + 6;
+            continue;
+        };
+        const obj_e = objEnd(json, obj_start);
+        const block = json[obj_start..obj_e];
+        pos = if (obj_e > pos) obj_e else ki + 6;
+        const name = stringField(block, "name") orelse continue;
+        const tier = textTier(name) orelse continue;
+        const size: u64 = if (scalarField(block, "size")) |s|
+            (std.fmt.parseInt(u64, std.mem.trim(u8, s, " \t\r\n"), 10) catch 0)
+        else
+            0;
+        if (best == null or tier < best_tier or (tier == best_tier and size > best_size)) {
+            best = name;
+            best_tier = tier;
+            best_size = size;
+        }
+    }
+    return best;
+}
+
+/// Percent-encode one URL path segment. Spaces become `%20`, and slashes are
+/// encoded so an archive file name cannot create another path segment.
+pub fn encodePathSegment(segment: []const u8, out: []u8) usize {
+    const hex = "0123456789ABCDEF";
+    var written: usize = 0;
+    for (segment) |ch| {
+        const safe = std.ascii.isAlphanumeric(ch) or ch == '-' or ch == '_' or ch == '.' or ch == '~';
+        if (safe) {
+            if (written >= out.len) break;
+            out[written] = ch;
+            written += 1;
+        } else {
+            if (written + 3 > out.len) break;
+            out[written] = '%';
+            out[written + 1] = hex[ch >> 4];
+            out[written + 2] = hex[ch & 0x0f];
+            written += 3;
+        }
+    }
+    return written;
+}
+
 // ── intent gate for the audio path ───────────────────────────────────────────
 
 /// True when the resolver intent asks for audio content, so the Archive worker
@@ -429,6 +499,23 @@ test "pickBestAudioFile returns null when only images/64kb present" {
     // Malformed input must not crash.
     _ = pickBestAudioFile("{\"files\":[{\"name\":\"trunc");
     _ = pickBestAudioFile("");
+}
+
+test "pickBestTextFile prefers book OCR and excludes indexes" {
+    const metadata =
+        "{\"files\":[" ++
+        "{\"name\":\"book_searchtext.txt\",\"size\":\"9000\"}," ++
+        "{\"name\":\"book_meta.txt\",\"size\":\"8000\"}," ++
+        "{\"name\":\"original.txt\",\"size\":\"7000\"}," ++
+        "{\"name\":\"book_djvu.txt\",\"size\":\"6000\"}]}";
+    try std.testing.expectEqualStrings("book_djvu.txt", pickBestTextFile(metadata).?);
+    try std.testing.expect(pickBestTextFile("{\"files\":[{\"name\":\"cover.jpg\"}]}") == null);
+}
+
+test "archive path segments encode spaces and slashes" {
+    var out: [64]u8 = undefined;
+    const n = encodePathSegment("A book/ch 1.txt", &out);
+    try std.testing.expectEqualStrings("A%20book%2Fch%201.txt", out[0..n]);
 }
 
 test "isAudioIntent gates only audio kinds" {

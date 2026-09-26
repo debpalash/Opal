@@ -3029,7 +3029,7 @@ pub fn renderContent() void {
     // Responsive columns from the live page width (one-frame lag on first paint).
     const rect_w = scroll.data().rect.w;
     const avail_w: f32 = @max(240, (if (rect_w > 1) rect_w else 900) - 8);
-    const cols: usize = @max(2, @as(usize, @intFromFloat(avail_w / card_w)));
+    const cols: usize = @max(1, @as(usize, @intFromFloat(avail_w / card_w)));
     const cw: f32 = @max(100, (avail_w - @as(f32, @floatFromInt(cols)) * 8) / @as(f32, @floatFromInt(cols)));
     const cover_h: f32 = cw * 1.5; // comic covers ~2:3 portrait
 

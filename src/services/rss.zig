@@ -3,6 +3,8 @@ const dvui = @import("dvui");
 const icons = @import("icons");
 const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
+const components = @import("../ui/components.zig");
+const tmdb_pure = @import("tmdb_pure.zig");
 const c = @import("../core/c.zig");
 const player = @import("../player/player.zig");
 const io = @import("../core/io_global.zig");
@@ -16,7 +18,7 @@ const rss_alloc = @import("../core/alloc.zig").allocator;
 // ══════════════════════════════════════════════════════════
 
 const MAX_FEEDS = 8;
-const MAX_ITEMS = 100;
+const MAX_ITEMS = 300;
 const MAX_TITLE = 200;
 const MAX_MAGNET = 1024;
 
@@ -47,6 +49,8 @@ pub var is_fetching: bool = false;
 pub var fetch_error: bool = false;
 var fetch_thread: ?std.Thread = null;
 var active_feed_idx: usize = 0;
+var auto_fetched: bool = false;
+var items_mutex: @import("../core/sync.zig").Mutex = .{};
 
 // ── Add URL input state ──
 var add_url_buf: [512]u8 = [_]u8{0} ** 512;
@@ -246,15 +250,21 @@ fn fetchWorker(idx: usize) void {
     }
     const body = body_buf[0..body_len];
 
-    // Parse items
-    item_count = 0;
+    // Parse into a private page, then publish in one lock. A failed refresh
+    // keeps the previous feed visible instead of clearing it mid-scroll.
+    const parsed_items = rss_alloc.alloc(RssItem, MAX_ITEMS) catch {
+        fetch_error = true;
+        return;
+    };
+    defer rss_alloc.free(parsed_items);
+    var parsed_count: usize = 0;
     var pos: usize = 0;
-    while (pos < body.len and item_count < MAX_ITEMS) {
+    while (pos < body.len and parsed_count < MAX_ITEMS) {
         const item_start = std.mem.indexOfPos(u8, body, pos, "<item>") orelse break;
         const item_end = std.mem.indexOfPos(u8, body, item_start, "</item>") orelse break;
         const block = body[item_start..item_end];
 
-        var item = &items[item_count];
+        var item = &parsed_items[parsed_count];
         item.* = .{};
 
         // Title
@@ -296,9 +306,13 @@ fn fetchWorker(idx: usize) void {
             item.peers = std.fmt.parseInt(u16, s, 10) catch 0;
         }
 
-        if (item.title_len > 0) item_count += 1;
+        if (item.title_len > 0) parsed_count += 1;
         pos = item_end + 7; // skip </item>
     }
+    items_mutex.lock();
+    @memcpy(items[0..parsed_count], parsed_items[0..parsed_count]);
+    item_count = parsed_count;
+    items_mutex.unlock();
 }
 
 fn extractTag(block: []const u8, open: []const u8, close: []const u8) ?[]const u8 {
@@ -332,6 +346,11 @@ pub fn renderContent() void {
     var page = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
     defer page.deinit();
 
+    if (!auto_fetched and feed_count > 0) {
+        auto_fetched = true;
+        fetchFeed(active_feed_idx);
+    }
+
     // Header
     {
         var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -342,6 +361,12 @@ pub fn renderContent() void {
         });
         defer hdr.deinit();
 
+        _ = dvui.icon(@src(), "RSS", icons.tvg.lucide.rss, .{}, .{
+            .color_text = theme.colors.accent,
+            .min_size_content = theme.iconSize(.md),
+            .gravity_y = 0.5,
+            .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+        });
         _ = dvui.label(@src(), "RSS Feeds", .{}, .{
             .color_text = theme.colors.text_primary,
             .gravity_y = 0.5,
@@ -353,12 +378,13 @@ pub fn renderContent() void {
         }
 
         if (is_fetching) {
-            _ = dvui.label(@src(), "Fetching...", .{}, .{
-                .color_text = theme.colors.warning,
+            dvui.spinner(@src(), .{
+                .color_text = theme.colors.accent,
+                .min_size_content = theme.iconSize(.md),
                 .gravity_y = 0.5,
             });
         } else {
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.activity, .{}, .{}, .{
+            if (dvui.buttonIcon(@src(), "Refresh feed", icons.tvg.lucide.@"refresh-cw", .{}, .{}, .{
                 .color_fill = theme.colors.bg_elevated,
                 .color_text = theme.colors.accent,
             })) {
@@ -369,7 +395,7 @@ pub fn renderContent() void {
 
     // Feed selector tabs
     if (feed_count > 0) {
-        var tab_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        var tab_row = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
             .expand = .horizontal,
             .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
             .background = true,
@@ -380,30 +406,14 @@ pub fn renderContent() void {
         for (0..feed_count) |fi| {
             const f = &feeds[fi];
             const active = (fi == active_feed_idx);
-            const bg = if (active) theme.colors.accent else theme.colors.bg_elevated;
-            const fg = if (active) dvui.Color.white else theme.colors.text_secondary;
-            if (dvui.button(@src(), f.name[0..f.name_len], .{}, .{
-                .id_extra = fi,
-                .color_fill = bg,
-                .color_text = fg,
-                .corner_radius = theme.dims.rad_sm,
-                .padding = .{ .x = 6, .y = 4, .w = 6, .h = 4 },
-                .margin = .{ .x = if (fi == 0) @as(u32, 0) else 2, .y = 0, .w = 0, .h = 0 },
-            })) {
-                active_feed_idx = fi;
-                fetchFeed(fi);
+            if (components.filterChip(@src(), f.name[0..f.name_len], icons.tvg.lucide.rss, active, fi + 30000)) {
+                if (!is_fetching) fetchFeed(fi);
             }
         }
 
         // "+" add feed button
         if (feed_count < MAX_FEEDS) {
-            if (dvui.button(@src(), "+", .{}, .{
-                .color_fill = theme.colors.bg_elevated,
-                .color_text = theme.colors.success,
-                .corner_radius = theme.dims.rad_sm,
-                .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
-                .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
-            })) {
+            if (components.filterChip(@src(), "Add", icons.tvg.lucide.plus, false, 39999)) {
                 state.app.rss_show_add = !state.app.rss_show_add;
             }
         }
@@ -478,20 +488,26 @@ pub fn renderContent() void {
         }
     }
 
+    items_mutex.lock();
+    defer items_mutex.unlock();
+
     // Error
     if (fetch_error) {
-        _ = dvui.label(@src(), "Failed to fetch feed", .{}, .{
-            .color_text = theme.colors.danger,
-            .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 },
-        });
+        if (item_count == 0) {
+            components.emptyState(icons.tvg.lucide.@"cloud-off", "Couldn't load this feed", "Check the feed URL and try Refresh.");
+            return;
+        }
+        components.statusPill("Refresh failed · showing saved items", .warn);
+    }
+
+    if (item_count == 0 and is_fetching) {
+        components.loadingState("Loading feed…");
+        return;
     }
 
     // Items list
     if (item_count == 0 and !is_fetching and !fetch_error) {
-        _ = dvui.label(@src(), "No items — click Refresh to load", .{}, .{
-            .color_text = theme.colors.text_secondary,
-            .padding = .{ .x = 12, .y = 20, .w = 0, .h = 0 },
-        });
+        components.emptyState(icons.tvg.lucide.rss, "No feed items", "Choose a feed or refresh it to load entries.");
         return;
     }
 
@@ -502,7 +518,13 @@ pub fn renderContent() void {
     });
     defer scroll.deinit();
 
-    for (0..item_count) |i| {
+    const row_h: f32 = 68;
+    const win = tmdb_pure.visibleRows(item_count, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 4);
+    if (win.first > 0) {
+        var spacer = dvui.box(@src(), .{}, .{ .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(win.first)) } });
+        spacer.deinit();
+    }
+    for (win.first..win.last) |i| {
         const item = &items[i];
         const title = item.title[0..item.title_len];
         const size_buf = formatSize(item.size_bytes);
@@ -516,6 +538,8 @@ pub fn renderContent() void {
             .color_border = theme.colors.border_subtle,
             .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
             .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
+            .min_size_content = .{ .w = 0, .h = row_h },
+            .max_size_content = .{ .w = std.math.floatMax(f32), .h = row_h },
         });
         defer row.deinit();
 
@@ -635,5 +659,9 @@ pub fn renderContent() void {
                 }
             }
         }
+    }
+    if (win.last < item_count) {
+        var spacer = dvui.box(@src(), .{}, .{ .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(item_count - win.last)) } });
+        spacer.deinit();
     }
 }
