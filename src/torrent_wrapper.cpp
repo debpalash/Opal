@@ -1056,6 +1056,36 @@ extern "C" void torrent_seek_prioritize(TorrentSession session, int torrent_id, 
     } catch (...) {}
 }
 
+extern "C" void torrent_set_seek_hint(TorrentSession session, int torrent_id, int file_idx, long long byte_offset) {
+    if (!session || torrent_id < 0 || file_idx < 0 || byte_offset < 0) return;
+    SessionContext* ctx = static_cast<SessionContext*>(session);
+    auto node = get_node(ctx, torrent_id);
+    if (!node) return;
+
+    try {
+        if (!node->alive || !node->handle.is_valid()) return;
+
+        int first_piece, last_piece, total_pieces;
+        if (!get_file_piece_range(node->handle, file_idx, first_piece, last_piece, total_pieces)) return;
+
+        auto ti = node->handle.torrent_file();
+        if (!ti) return;
+        const auto size = ti->files().file_size(lt::file_index_t(file_idx));
+        if (size <= 0) return;
+
+        const auto clamped = std::min<std::int64_t>(byte_offset, size - 1);
+        const auto mapped = ti->files().map_file(lt::file_index_t(file_idx), clamped, 0);
+        const int target_piece = std::max(first_piece, std::min(static_cast<int>(mapped.piece), last_piece));
+
+        // A reconnect at the current play head needs no deadline churn. A real
+        // jump drops urgent requests around the old cursor immediately.
+        if (target_piece == node->last_deadline_piece) return;
+        node->handle.clear_piece_deadlines();
+        apply_streaming_window(node->handle, target_piece, first_piece, last_piece, 30);
+        node->last_deadline_piece = target_piece;
+    } catch (...) {}
+}
+
 // ─── TORRENT MANAGEMENT ───
 
 extern "C" void torrent_pause(TorrentSession session, int torrent_id) {
