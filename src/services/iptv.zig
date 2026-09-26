@@ -1291,27 +1291,16 @@ fn renderResults() void {
     const is_catalog = state.app.iptv.quick_filter == 0;
     const grid_total = if (is_catalog) total_matches else state.app.iptv.result_count;
 
-    if (grid_total == 0) {
-        if (state.app.iptv.is_loading.load(.acquire)) {
-            _ = dvui.label(@src(), "Loading channels...", .{}, .{
-                .color_text = theme.colors.text_secondary,
-                .padding = .{ .x = 12, .y = 20, .w = 0, .h = 0 },
-            });
-        } else if (!anySourceInstalled() and catalog.isEmpty()) {
-            _ = dvui.label(@src(), "Enable a Live TV source in Settings to fill the channel guide", .{}, .{
-                .color_text = theme.colors.text_secondary,
-                .padding = .{ .x = 12, .y = 20, .w = 0, .h = 0 },
-            });
+    if (grid_total == 0 and !state.app.iptv.is_loading.load(.acquire)) {
+        if (!anySourceInstalled() and catalog.isEmpty()) {
+            components.emptyState(icons.tvg.lucide.tv, "Connect Live TV", "Enable a Live TV source in Settings to fill the channel guide.");
         } else {
             const msg = switch (state.app.iptv.quick_filter) {
-                1 => "No favorites yet — tap the star on a channel to save it",
-                2 => "No recently watched channels yet",
+                1 => "Tap the star on a channel to save it.",
+                2 => "Played channels will appear here.",
                 else => "No channels found",
             };
-            _ = dvui.label(@src(), "{s}", .{msg}, .{
-                .color_text = theme.colors.text_secondary,
-                .padding = .{ .x = 12, .y = 20, .w = 0, .h = 0 },
-            });
+            components.emptyState(icons.tvg.lucide.tv, if (state.app.iptv.quick_filter == 1) "No favorites" else if (state.app.iptv.quick_filter == 2) "No recent channels" else "Nothing found", msg);
         }
         return;
     }
@@ -1325,15 +1314,17 @@ fn renderResults() void {
 
     // Heading: total channels across the WHOLE catalog. No "narrow with filters"
     // hint any more — the scroll is unbounded (the window slides).
-    var head_buf: [96]u8 = undefined;
-    const heading = std.fmt.bufPrint(&head_buf, "{d} channels{s}", .{
-        grid_total,
-        if (working_only) " working" else "",
-    }) catch "Live TV channels";
-    _ = dvui.label(@src(), "{s}", .{heading}, .{
-        .color_text = theme.colors.text_secondary,
-        .padding = .{ .x = 8, .y = 8, .w = 8, .h = 2 },
-    });
+    if (grid_total > 0) {
+        var head_buf: [96]u8 = undefined;
+        const heading = std.fmt.bufPrint(&head_buf, "{d} channels{s}", .{
+            grid_total,
+            if (working_only) " working" else "",
+        }) catch "Live TV channels";
+        _ = dvui.label(@src(), "{s}", .{heading}, .{
+            .color_text = theme.colors.text_secondary,
+            .padding = .{ .x = 8, .y = 8, .w = 8, .h = 2 },
+        });
+    }
 
     // Responsive columns from the LIVE page width (one-frame lag; first paint
     // falls back to a sane default) — same shape as radio's grid.
@@ -1342,6 +1333,10 @@ fn renderResults() void {
     const cols: usize = @max(1, @as(usize, @intFromFloat(avail_w / CARD_TARGET_W)));
     const cols_f: f32 = @floatFromInt(cols);
     const card_w: f32 = @max(100, (avail_w - cols_f * 2 * CARD_GAP) / cols_f);
+    if (grid_total == 0) {
+        components.coverSkeletonGrid(@src(), 58000, cols, card_w, card_w, CARD_FOOTER_H, 3);
+        return;
+    }
 
     // ── Virtualization over the WHOLE catalog (sliding window) ──
     // total_rows spans every matching channel, so the scrollbar represents the

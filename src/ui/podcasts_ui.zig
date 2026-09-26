@@ -211,11 +211,8 @@ fn renderCard(i: usize, card_w: f32, p: *const pure.Podcast) void {
 
 fn renderResults(view: *const Snapshot) void {
     const count = view.result_count;
-    if (count == 0) {
-        if (view.loading)
-            components.loadingState("Loading popular shows…")
-        else
-            components.emptyState(icons.tvg.lucide.podcast, "Find a podcast", "Search by show, topic, or publisher.");
+    if (count == 0 and !view.loading) {
+        components.emptyState(icons.tvg.lucide.podcast, "Find a podcast", "Search by show, topic, or publisher.");
         return;
     }
 
@@ -240,6 +237,10 @@ fn renderResults(view: *const Snapshot) void {
     const cols: usize = @max(1, @as(usize, @intFromFloat(avail_w / CARD_TARGET_W)));
     const cols_f: f32 = @floatFromInt(cols);
     const card_w: f32 = @max(100, (avail_w - cols_f * 2 * CARD_GAP) / cols_f);
+    if (count == 0) {
+        components.coverSkeletonGrid(@src(), 48000, cols, card_w, card_w, CARD_FOOTER_H, 3);
+        return;
+    }
 
     const row_h = card_w + CARD_FOOTER_H + 2 * CARD_GAP;
     const total_rows = (count + cols - 1) / cols;

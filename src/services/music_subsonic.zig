@@ -1179,17 +1179,14 @@ fn renderResults() void {
     parse_mutex.lock();
     const total = @min(state.app.music.result_count, state.app.music.results.len);
     parse_mutex.unlock();
-    if (total == 0) {
-        const src = state.app.music.source;
+    const src = state.app.music.source;
+    if (total == 0 and !state.app.music.is_loading.load(.acquire)) {
         const hint: []const u8 = if (!sourceConfigured(src)) switch (src) {
             SRC_JELLYFIN => "Sign in to Jellyfin (Jellyfin tab) to play its music library",
             SRC_PLEX => "Sign in to Plex (Plex tab) to play its music library",
             else => "Configure your music server (Settings) to play your self-hosted library",
         } else "Search by song, artist, or album.";
-        if (state.app.music.is_loading.load(.acquire))
-            components.loadingState("Searching music…")
-        else
-            components.emptyState(icons.tvg.lucide.music, if (sourceConfigured(src)) "Find music" else "Connect this source", hint);
+        components.emptyState(icons.tvg.lucide.music, if (sourceConfigured(src)) "Find music" else "Connect this source", hint);
         return;
     }
 
@@ -1210,6 +1207,10 @@ fn renderResults() void {
     const cols: usize = @max(1, @as(usize, @intFromFloat(avail_w / CARD_TARGET_W)));
     const cols_f: f32 = @floatFromInt(cols);
     const card_w: f32 = @max(100, (avail_w - cols_f * 2 * CARD_GAP) / cols_f);
+    if (total == 0) {
+        components.coverSkeletonGrid(@src(), 48000, cols, card_w, card_w, CARD_FOOTER_H, 3);
+        return;
+    }
 
     const row_h = card_w + CARD_FOOTER_H + 2 * CARD_GAP;
     const total_rows = (total + cols - 1) / cols;

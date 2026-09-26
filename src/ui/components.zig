@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const dvui = @import("dvui");
 const icons = @import("icons");
 const theme = @import("theme.zig");
+const poster = @import("../core/poster.zig");
 
 // Local shim — colors are runtime (read theme.colors per-frame); spacing/radii/fonts are comptime.
 
@@ -145,6 +146,122 @@ pub fn coverSkeleton(src: std.builtin.SourceLocation, id_extra: usize, radius: f
         .gravity_x = phase,
     });
     band.deinit();
+}
+
+/// Reusable lazy cover state for browse providers that keep metadata separate
+/// from UI textures. The URL is copied by poster.fetchAsync before its worker
+/// starts, so callers may build it in a stack buffer.
+pub const CoverSlot = struct {
+    pixels: ?[]u8 = null,
+    tex: ?dvui.Texture = null,
+    w: u32 = 0,
+    h: u32 = 0,
+    fetching: bool = false,
+    attempted: bool = false,
+    failed: bool = false,
+    url_hash: u64 = 0,
+
+    pub fn reset(self: *CoverSlot) void {
+        if (self.fetching) return;
+        poster.deinitPoster(&self.pixels, &self.tex);
+        self.w = 0;
+        self.h = 0;
+        self.attempted = false;
+        self.failed = false;
+        self.url_hash = 0;
+    }
+};
+
+pub fn syncCoverSlot(slot: *CoverSlot, key: []const u8) void {
+    const hash = if (key.len > 0) std.hash.Fnv1a_64.hash(key) else 0;
+    if (slot.url_hash != hash and !slot.fetching) {
+        slot.reset();
+        slot.url_hash = hash;
+    }
+}
+
+pub fn pollCoverSlot(slot: *CoverSlot) void {
+    _ = poster.uploadIfReady(&slot.pixels, slot.w, slot.h, &slot.tex);
+    if (slot.fetching) {
+        slot.attempted = true;
+    } else if (slot.attempted and slot.pixels == null and slot.tex == null) {
+        slot.failed = true;
+    }
+}
+
+pub fn renderCoverSlot(src: std.builtin.SourceLocation, id_extra: usize, slot: *CoverSlot, expects_art: bool, fallback_icon: []const u8, radius: f32) void {
+    if (slot.tex) |tex| {
+        _ = dvui.image(src, .{ .source = .{ .texture = tex } }, .{
+            .id_extra = id_extra,
+            .expand = .both,
+            .corner_radius = dvui.Rect.all(radius),
+        });
+        return;
+    }
+    if (expects_art and !slot.failed) {
+        coverSkeleton(src, id_extra, radius);
+        return;
+    }
+    _ = dvui.icon(src, "cover-fallback", fallback_icon, .{}, .{
+        .id_extra = id_extra,
+        .color_text = theme.colors.accent_dim,
+        .min_size_content = theme.iconSize(.lg),
+        .max_size_content = dvui.Options.MaxSize.size(theme.iconSize(.lg)),
+        .gravity_x = 0.5,
+        .gravity_y = 0.5,
+    });
+}
+
+/// Fill the current parent with a fetched cover, an animated loading skeleton,
+/// or a quiet fallback icon. This keeps image lifecycle and failure latching
+/// identical across secondary browse pages.
+pub fn coverArt(src: std.builtin.SourceLocation, id_extra: usize, slot: *CoverSlot, url: []const u8, fallback_icon: []const u8, radius: f32) void {
+    syncCoverSlot(slot, url);
+    pollCoverSlot(slot);
+
+    if (url.len > 0 and !slot.failed and !slot.fetching) {
+        poster.fetchAsync(url, &slot.pixels, &slot.w, &slot.h, &slot.fetching);
+        if (slot.fetching) slot.attempted = true;
+    }
+    renderCoverSlot(src, id_extra, slot, url.len > 0, fallback_icon, radius);
+}
+
+/// A responsive gallery can use the same placeholder geometry as its real
+/// cards while the first page is loading, avoiding a full-page layout jump.
+pub fn coverSkeletonGrid(src: std.builtin.SourceLocation, id_base: usize, cols: usize, card_w: f32, poster_h: f32, footer_h: f32, rows: usize) void {
+    var r: usize = 0;
+    while (r < rows) : (r += 1) {
+        var row = dvui.box(src, .{ .dir = .horizontal }, .{ .id_extra = id_base + r * 100, .expand = .horizontal });
+        defer row.deinit();
+        var col: usize = 0;
+        while (col < cols) : (col += 1) {
+            const id = id_base + r * 100 + col + 1;
+            var card = dvui.box(src, .{ .dir = .vertical }, .{
+                .id_extra = id,
+                .min_size_content = .{ .w = card_w, .h = poster_h + footer_h },
+                .max_size_content = .{ .w = card_w, .h = poster_h + footer_h },
+                .margin = dvui.Rect.all(theme.spacing.xs),
+            });
+            defer card.deinit();
+            var image = dvui.box(src, .{}, .{
+                .id_extra = id + 20,
+                .min_size_content = .{ .w = card_w, .h = poster_h },
+                .max_size_content = .{ .w = card_w, .h = poster_h },
+            });
+            coverSkeleton(src, id + 21, theme.radius.md);
+            image.deinit();
+            var title = dvui.box(src, .{}, .{
+                .id_extra = id + 40,
+                .background = true,
+                .color_fill = theme.colors.bg_elevated,
+                .corner_radius = dvui.Rect.all(theme.radius.pill),
+                .min_size_content = .{ .w = card_w * 0.72, .h = 8 },
+                .max_size_content = .{ .w = card_w * 0.72, .h = 8 },
+                .margin = .{ .x = 5, .y = 7, .w = 0, .h = 0 },
+            });
+            title.deinit();
+        }
+    }
 }
 
 fn mixColor(a: dvui.Color, b: dvui.Color, t_raw: f32) dvui.Color {

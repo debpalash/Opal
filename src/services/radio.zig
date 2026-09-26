@@ -870,11 +870,8 @@ fn renderResults() void {
     const count = @min(state.app.radio.result_count, state.app.radio.results.len);
     const showing_popular = state.app.radio.showing_popular;
     parse_mutex.unlock();
-    if (count == 0) {
-        if (state.app.radio.is_loading.load(.acquire))
-            components.loadingState("Loading popular stations…")
-        else
-            components.emptyState(icons.tvg.lucide.radio, "Find a station", "Search by station, genre, or country.");
+    if (count == 0 and !state.app.radio.is_loading.load(.acquire)) {
+        components.emptyState(icons.tvg.lucide.radio, "Find a station", "Search by station, genre, or country.");
         return;
     }
 
@@ -899,6 +896,10 @@ fn renderResults() void {
     const cols: usize = @max(1, @as(usize, @intFromFloat(avail_w / CARD_TARGET_W)));
     const cols_f: f32 = @floatFromInt(cols);
     const card_w: f32 = @max(100, (avail_w - cols_f * 2 * CARD_GAP) / cols_f);
+    if (count == 0) {
+        components.coverSkeletonGrid(@src(), 48000, cols, card_w, card_w, CARD_FOOTER_H, 3);
+        return;
+    }
 
     const row_h = card_w + CARD_FOOTER_H + 2 * CARD_GAP;
     const total_rows = (count + cols - 1) / cols;

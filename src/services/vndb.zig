@@ -582,11 +582,8 @@ fn renderCard(i: usize, card_w: f32) void {
 
 fn renderResults() void {
     const count = @min(state.app.vndb.result_count, state.app.vndb.results.len);
-    if (count == 0) {
-        if (state.app.vndb.is_loading.load(.acquire))
-            components.loadingState("Loading popular visual novels…")
-        else
-            components.emptyState(icons.tvg.lucide.@"gamepad-2", "Find a visual novel", "Search the VNDB catalog by title.");
+    if (count == 0 and !state.app.vndb.is_loading.load(.acquire)) {
+        components.emptyState(icons.tvg.lucide.@"gamepad-2", "Find a visual novel", "Search the VNDB catalog by title.");
         return;
     }
 
@@ -611,6 +608,10 @@ fn renderResults() void {
     const cols: usize = @max(1, @as(usize, @intFromFloat(avail_w / CARD_TARGET_W)));
     const cols_f: f32 = @floatFromInt(cols);
     const card_w: f32 = @max(100, (avail_w - cols_f * 2 * CARD_GAP) / cols_f);
+    if (count == 0) {
+        components.coverSkeletonGrid(@src(), 48000, cols, card_w, CARD_COVER_H, CARD_FOOTER_H, 3);
+        return;
+    }
 
     // Uniform cards give the grid a fixed row pitch. Keep only the viewport and
     // two overscan rows alive, while spacers preserve exact scroll geometry.

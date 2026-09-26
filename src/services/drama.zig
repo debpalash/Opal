@@ -386,11 +386,7 @@ pub fn renderContent() void {
         return;
     }
 
-    if (state.app.drama.is_loading.load(.acquire) and state.app.drama.result_count == 0) {
-        components.emptyState(icons.tvg.lucide.clapperboard, "Loading…", "Fetching the catalog from TMDB.");
-        return;
-    }
-    if (state.app.drama.result_count == 0) {
+    if (state.app.drama.result_count == 0 and !state.app.drama.is_loading.load(.acquire)) {
         components.emptyState(icons.tvg.lucide.clapperboard, "Nothing here yet", "Check back later.");
         return;
     }
@@ -402,6 +398,10 @@ pub fn renderContent() void {
     const rect_w = scroll.data().rect.w;
     const avail_w: f32 = @max(CARD_W + 8, (if (rect_w > 1) rect_w else 900) - 2 * theme.spacing.md);
     const cols: usize = @max(1, @as(usize, @intFromFloat(avail_w / (CARD_W + 8))));
+    if (count == 0) {
+        components.coverSkeletonGrid(@src(), 48000, cols, CARD_W, CARD_W * 1.5, 72, 3);
+        return;
+    }
     const row_h: f32 = CARD_W * 1.5 + 72 + 8;
     const total_rows = (count + cols - 1) / cols;
     const win = tmdb_pure.visibleRows(total_rows, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 2);

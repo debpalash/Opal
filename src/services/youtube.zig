@@ -1306,18 +1306,7 @@ pub fn renderContent() void {
     // Suggestions ride a shorter debounce so the dropdown feels live.
     maybeFireSuggest();
 
-    // Only show the loading line on an INITIAL load (nothing yet) — a
-    // stale-refresh keeps current results on screen and swaps in place.
     const total = resultLen();
-    if (state.app.yt.is_loading.load(.acquire) and total == 0) {
-        components.loadingState("Searching YouTube…");
-        return;
-    }
-
-    if (total == 0 and !state.app.yt.is_loading.load(.acquire)) {
-        if (components.emptyStateCta(icons.tvg.lucide.youtube, "No videos found", "Try a different search or refresh this feed.", "Retry")) refreshCurrentFeed();
-        return;
-    }
 
     var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
     defer scroll.deinit();
@@ -1331,6 +1320,13 @@ pub fn renderContent() void {
     const gutter: f32 = 10; // 2 * card margin (5)
     const cols: usize = @max(1, @as(usize, @intFromFloat((avail_w + gutter) / (card_w + gutter))));
     const real_card_w: f32 = @max(120, (avail_w - @as(f32, @floatFromInt(cols - 1)) * gutter) / @as(f32, @floatFromInt(cols)));
+    if (total == 0) {
+        if (state.app.yt.is_loading.load(.acquire))
+            components.coverSkeletonGrid(@src(), 48000, cols, real_card_w, real_card_w * 9.0 / 16.0, cardFooterH(), 3)
+        else if (components.emptyStateCta(icons.tvg.lucide.youtube, "No videos found", "Try a different search or refresh this feed.", "Retry"))
+            refreshCurrentFeed();
+        return;
+    }
 
     // ── Virtualization (same shape as tmdb.zig/comics.zig/jellyfin_ui.zig) ──
     // Cards are uniform (renderCard pins min==max height), so rows have a fixed

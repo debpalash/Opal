@@ -111,8 +111,8 @@ fn mouseOverRect(rect: dvui.Rect.Physical) bool {
 // Player chrome uses fixed neutral ink and a dark translucent surface. Theme
 // text colors can be intentionally warm/dim, which is attractive on app
 // panels but loses contrast when the backdrop is a bright moving frame.
-const player_text = dvui.Color{ .r = 247, .g = 244, .b = 239, .a = 255 };
-const player_text_muted = dvui.Color{ .r = 218, .g = 214, .b = 207, .a = 255 };
+const player_text = theme.player_text;
+const player_text_muted = theme.player_text_muted;
 
 fn playerControlFill(active: bool) dvui.Color {
     return theme.playerGlass(if (active) 218 else 174);
@@ -151,7 +151,7 @@ fn playerButtonIcon(
         .w = side,
         .h = side,
     };
-    const outline = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 235 };
+    const outline = theme.player_icon_outline;
     const step = @max(@as(f32, 1), rs.s);
     const offsets = [_]dvui.Point{
         .{ .x = -step, .y = -step }, .{ .x = 0, .y = -step },   .{ .x = step, .y = -step },
