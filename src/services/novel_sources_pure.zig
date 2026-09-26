@@ -28,7 +28,7 @@ pub const themesia = @import("manga_themesia_pure.zig");
 
 /// Which engine a novel came from — carried per search-result so `openNovel` /
 /// `openChapter` dispatch to the right chapter-list + chapter-text extractor.
-pub const NovelSource = enum { wikisource, madara_novel, lightnovelwp, readwn, readnovelfull };
+pub const NovelSource = enum { wikisource, madara_novel, lightnovelwp, readwn, readnovelfull, internet_archive };
 
 // ══════════════════════════════════════════════════════════
 // Chapter-TEXT container selectors (the ONE new thing per shared engine)
@@ -195,7 +195,7 @@ pub fn chapterContentHtml(html: []const u8, source: NovelSource) ?[]const u8 {
             }
             return null;
         },
-        .wikisource => return null, // handled by novels_pure.extractParseHtml
+        .wikisource, .internet_archive => return null, // handled directly by novels.zig
     }
 }
 
@@ -497,10 +497,10 @@ test "reuse: manga_madara_pure + manga_themesia_pure are wired for shared engine
 
 test "malformed input never crashes (no-panic sweep)" {
     const junk = [_][]const u8{
-        "",                                    "<",
-        "<div class=\"text-left\"",            "<li class=\"novel-item\"><a href=",
-        "<ul class=\"chapter-list\"><li><a",   "<div class=\"epcontent\"><p>",
-        "<span itemprop=\"author\">",          "novel-title only",
+        "",                                  "<",
+        "<div class=\"text-left\"",          "<li class=\"novel-item\"><a href=",
+        "<ul class=\"chapter-list\"><li><a", "<div class=\"epcontent\"><p>",
+        "<span itemprop=\"author\">",        "novel-title only",
     };
     for (junk) |h| {
         _ = chapterContentHtml(h, .madara_novel);

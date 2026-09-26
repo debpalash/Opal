@@ -4,11 +4,9 @@
 //! unit-tested novels_pure.zig; this module owns the async fetch workers,
 //! thread-safety, resume persistence, and the dvui rendering.
 //!
-//! Source (v1): **Wikisource** — the documented, keyless MediaWiki action API
-//! (en.wikisource.org). It is the guaranteed-legal, stable-contract source:
-//! public-domain classics with a JSON search / subpage-list / parse chain. The
-//! source lives behind the same seam comics uses (one URL builder set per
-//! source in the pure module), so more sources can be added later.
+//! Zero-config sources: **Wikisource** (documented MediaWiki action API) and
+//! **Internet Archive** (advanced search + metadata APIs). Both surface
+//! public-domain/open texts and share this module's reader and paging flow.
 //!
 //! Flow:
 //!   searchNovels(q)   → curl list=search    → pure.searchArray  → nr_* titles
@@ -22,11 +20,13 @@ const dvui = @import("dvui");
 const icons = @import("icons");
 const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
+const components = @import("../ui/components.zig");
 const logs = @import("../core/logs.zig");
 const io = @import("../core/io_global.zig");
 const db = @import("../core/db.zig");
 const pure = @import("novels_pure.zig");
 const nsp = @import("novel_sources_pure.zig");
+const archive = @import("archive_pure.zig");
 const source_config = @import("../core/source_config.zig");
 // Anti-block fetch layer — used by the HTML-scraper engines' GETs so a
 // Cloudflare/DDoS-Guard/captcha-fronted source resolves through the anti-detect
@@ -92,7 +92,7 @@ const MAX_CHAPTERS: usize = 400;
 var ch_titles: [MAX_CHAPTERS][256]u8 = undefined;
 var ch_title_lens: [MAX_CHAPTERS]usize = std.mem.zeroes([MAX_CHAPTERS]usize);
 // Absolute chapter URL (scraper engines only; empty for Wikisource).
-var ch_urls: [MAX_CHAPTERS][512]u8 = undefined;
+var ch_urls: [MAX_CHAPTERS][1024]u8 = undefined;
 var ch_url_lens: [MAX_CHAPTERS]usize = std.mem.zeroes([MAX_CHAPTERS]usize);
 var ch_count: usize = 0;
 
@@ -118,7 +118,7 @@ var text_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 pub const ListRow = struct {
     title_buf: [256]u8 = std.mem.zeroes([256]u8),
     title_len: usize = 0,
-    url_buf: [512]u8 = std.mem.zeroes([512]u8),
+    url_buf: [1024]u8 = std.mem.zeroes([1024]u8),
     url_len: usize = 0,
     source: u8 = 0,
 
@@ -183,6 +183,7 @@ var loading_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var wiki_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(true);
 var madara_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(true);
 var lnwp_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(true);
+var archive_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(true);
 // readwn's search POST has no page parameter — it returns one fixed set, so it is
 // never re-fetched by loadMore (implicitly exhausted after page 1).
 
@@ -198,7 +199,7 @@ var work_url_snap_len: usize = 0;
 var chapter_snap: [256]u8 = undefined;
 var chapter_snap_len: usize = 0;
 // Selected chapter's absolute URL (scraper engines) — the chapter-text fetch key.
-var chapter_url_snap: [512]u8 = undefined;
+var chapter_url_snap: [1024]u8 = undefined;
 var chapter_url_snap_len: usize = 0;
 
 const SearchJob = struct {
@@ -236,6 +237,7 @@ pub fn searchNovels(query: []const u8) void {
     wiki_more.store(true, .release);
     madara_more.store(true, .release);
     lnwp_more.store(true, .release);
+    archive_more.store(true, .release);
 
     if (@import("../core/workers.zig").spawnLegacy(searchWorker, .{job})) |t| {
         @import("../core/workers.zig").release(t);
@@ -258,6 +260,12 @@ fn searchWorker(job: SearchJob) void {
 
     var filled: usize = 0;
     filled += fetchWikisource(query, my_gen, filled, 0);
+    if (!search_request.isCurrent(my_gen)) return;
+
+    // A second legal, zero-configuration source. Reuse the same Internet
+    // Archive parser and rate-limit bucket as universal search; only items with
+    // a readable full-text derivative are returned by the Archive query.
+    filled += fetchInternetArchive(query, my_gen, filled, 1);
     if (!search_request.isCurrent(my_gen)) return;
 
     if (madaraNovelBase() != null) {
@@ -364,6 +372,48 @@ fn fetchWikisource(query: []const u8, my_gen: u32, start: usize, offset: u32) us
         if (dn == 0) continue;
         if (rowExists(.wikisource, dec[0..dn], "", start + n)) continue;
         addResult(start + n, .wikisource, dec[0..dn], "");
+        n += 1;
+    }
+    nr_count = start + n;
+    return n;
+}
+
+/// Internet Archive public-domain/CC texts. The listing is cheap and paged;
+/// opening a row resolves its actual `_djvu.txt` (or plain `.txt`) derivative
+/// from metadata instead of guessing a file name.
+fn fetchInternetArchive(query: []const u8, my_gen: u32, start: usize, page: u32) usize {
+    var q_raw: [512]u8 = undefined;
+    const q = std.fmt.bufPrint(&q_raw, "title:({s}) AND mediatype:(texts) AND language:(eng) AND format:(DjVuTXT)", .{query}) catch return 0;
+    var q_enc_buf: [1024]u8 = undefined;
+    const encoded = @import("../core/http.zig").urlEncode(q, &q_enc_buf);
+    var url_buf: [1400]u8 = undefined;
+    const url = std.fmt.bufPrint(
+        &url_buf,
+        "https://archive.org/advancedsearch.php?q={s}&fl[]=identifier&fl[]=title&fl[]=year&rows={d}&page={d}&output=json",
+        .{ encoded, PAGE_SIZE, page },
+    ) catch return 0;
+    @import("../core/rate_limit.zig").acquire("archive", 1.0);
+    const body = curl(url, 512 * 1024) orelse return 0;
+    defer alloc.free(body);
+    if (!search_request.isCurrent(my_gen)) return 0;
+
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (!search_request.isCurrent(my_gen)) return 0;
+
+    var it = archive.iterateDocs(body);
+    var n: usize = 0;
+    while (it.next()) |doc| {
+        if (start + n >= MAX_RESULTS) break;
+        var id_buf: [512]u8 = undefined;
+        const id_len = pure.cj.jsonUnescape(doc.identifier, &id_buf);
+        if (id_len == 0) continue;
+        var title_buf: [256]u8 = undefined;
+        const title_len = if (doc.title.len > 0) pure.cj.jsonUnescape(doc.title, &title_buf) else 0;
+        const title = if (title_len > 0) title_buf[0..title_len] else id_buf[0..id_len];
+        const id = id_buf[0..id_len];
+        if (rowExists(.internet_archive, title, id, start + n)) continue;
+        addResult(start + n, .internet_archive, title, id);
         n += 1;
     }
     nr_count = start + n;
@@ -542,6 +592,12 @@ fn loadMoreWorker(job: SearchJob, next_page: u32) void {
         start += n;
         if (n == 0) wiki_more.store(false, .release);
     }
+    if (archive_more.load(.acquire) and start < MAX_RESULTS) {
+        const n = fetchInternetArchive(query, my_gen, start, next_page);
+        if (search_request.current() != my_gen) return;
+        start += n;
+        if (n == 0) archive_more.store(false, .release);
+    }
     if (madara_more.load(.acquire) and madaraNovelBase() != null and start < MAX_RESULTS) {
         const n = fetchMadaraNovel(query, my_gen, start, next_page);
         if (search_request.current() != my_gen) return;
@@ -555,7 +611,7 @@ fn loadMoreWorker(job: SearchJob, next_page: u32) void {
         if (n == 0) lnwp_more.store(false, .release);
     }
 
-    const any = wiki_more.load(.acquire) or
+    const any = wiki_more.load(.acquire) or archive_more.load(.acquire) or
         (madara_more.load(.acquire) and madaraNovelBase() != null) or
         (lnwp_more.load(.acquire) and lightnovelwpBase() != null);
     more_available.store(any and start < MAX_RESULTS, .release);
@@ -608,6 +664,7 @@ fn chaptersWorker(my_gen: u32) void {
         .lightnovelwp => chaptersLightnovelwp(my_gen),
         .readwn => chaptersReadwn(my_gen),
         .readnovelfull => {}, // not shipped in v1
+        .internet_archive => chaptersInternetArchive(my_gen),
     }
 }
 
@@ -631,7 +688,7 @@ fn reverseChapters(count: usize) void {
         const j = count - 1 - i;
         std.mem.swap([256]u8, &ch_titles[i], &ch_titles[j]);
         std.mem.swap(usize, &ch_title_lens[i], &ch_title_lens[j]);
-        std.mem.swap([512]u8, &ch_urls[i], &ch_urls[j]);
+        std.mem.swap([1024]u8, &ch_urls[i], &ch_urls[j]);
         std.mem.swap(usize, &ch_url_lens[i], &ch_url_lens[j]);
     }
 }
@@ -834,6 +891,52 @@ fn chaptersReadwn(my_gen: u32) void {
     logs.pushLog("info", "novels", "Novel chapter list loaded (readwn)", false);
 }
 
+/// Internet Archive: resolve one real readable file from item metadata and
+/// expose it as a single "Full text" chapter. This keeps the existing reader,
+/// resume, and deep-link paths shared with every other novel source.
+fn chaptersInternetArchive(my_gen: u32) void {
+    var id_buf: [512]u8 = undefined;
+    const id_len = @min(work_url_snap_len, id_buf.len);
+    @memcpy(id_buf[0..id_len], work_url_snap[0..id_len]);
+    if (id_len == 0) return;
+
+    var enc_id_buf: [1536]u8 = undefined;
+    const enc_id_len = archive.encodePathSegment(id_buf[0..id_len], &enc_id_buf);
+    var meta_url_buf: [1700]u8 = undefined;
+    const meta_url = std.fmt.bufPrint(&meta_url_buf, "https://archive.org/metadata/{s}", .{enc_id_buf[0..enc_id_len]}) catch return;
+    @import("../core/rate_limit.zig").acquire("archive", 1.0);
+    const metadata = curl(meta_url, 2 * 1024 * 1024) orelse {
+        state.app.novels.fetch_error = true;
+        return;
+    };
+    defer alloc.free(metadata);
+    if (chapters_gen.load(.acquire) != my_gen) return;
+
+    const raw_file = archive.pickBestTextFile(metadata) orelse {
+        state.app.novels.fetch_error = true;
+        logs.pushLog("info", "novels", "Archive item has no readable text file", false);
+        return;
+    };
+    var file_buf: [512]u8 = undefined;
+    const file_len = pure.cj.jsonUnescape(raw_file, &file_buf);
+    if (file_len == 0) return;
+    var enc_file_buf: [1536]u8 = undefined;
+    const enc_file_len = archive.encodePathSegment(file_buf[0..file_len], &enc_file_buf);
+    var direct_buf: [1024]u8 = undefined;
+    const direct = std.fmt.bufPrint(
+        &direct_buf,
+        "https://archive.org/download/{s}/{s}",
+        .{ enc_id_buf[0..enc_id_len], enc_file_buf[0..enc_file_len] },
+    ) catch return;
+
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (chapters_gen.load(.acquire) != my_gen) return;
+    addChapter(0, "Full text", direct);
+    ch_count = 1;
+    logs.pushLog("info", "novels", "Novel full text resolved (Internet Archive)", false);
+}
+
 // ══════════════════════════════════════════════════════════
 // Open a chapter → fetch + extract its text
 // ══════════════════════════════════════════════════════════
@@ -889,6 +992,8 @@ fn textWorker(my_gen: u32) void {
     defer state.app.novels.text_loading.store(false, .release);
     if (open_source == .wikisource) {
         textWikisource(my_gen);
+    } else if (open_source == .internet_archive) {
+        textInternetArchive(my_gen);
     } else {
         textSourced(my_gen);
     }
@@ -935,11 +1040,41 @@ fn textWikisource(my_gen: u32) void {
     logs.pushLog("info", "novels", "Chapter text extracted", false);
 }
 
+/// Internet Archive's selected derivative is already plain text. Run it
+/// through the common whitespace/entity normalizer so OCR reads like the other
+/// sources and remains bounded by the same fixed reader buffer.
+fn textInternetArchive(my_gen: u32) void {
+    var url_buf: [1024]u8 = undefined;
+    const url_len = @min(chapter_url_snap_len, url_buf.len);
+    @memcpy(url_buf[0..url_len], chapter_url_snap[0..url_len]);
+    const url = url_buf[0..url_len];
+    if (url.len == 0 or !std.mem.startsWith(u8, url, "https://archive.org/download/")) {
+        state.app.novels.fetch_error = true;
+        return;
+    }
+    @import("../core/rate_limit.zig").acquire("archive", 1.0);
+    const body = curl(url, 2 * 1024 * 1024) orelse {
+        state.app.novels.fetch_error = true;
+        return;
+    };
+    defer alloc.free(body);
+    if (text_gen.load(.acquire) != my_gen) return;
+
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (text_gen.load(.acquire) != my_gen) return;
+    const n = pure.htmlToText(body, state.app.novels.text_buf[0..TEXT_CAP]);
+    state.app.novels.text_len = n;
+    state.app.novels.text_truncated = n >= TEXT_CAP;
+    if (n == 0) state.app.novels.fetch_error = true;
+    logs.pushLog("info", "novels", "Novel full text loaded (Internet Archive)", false);
+}
+
 /// Scraper engines: GET the chapter URL, extract the source's prose container
 /// (via novel_sources_pure), then HTML→clean text. The container selector is the
 /// ONLY per-engine difference; everything else is the shared reader pipeline.
 fn textSourced(my_gen: u32) void {
-    var url_buf: [512]u8 = undefined;
+    var url_buf: [1024]u8 = undefined;
     const un = @min(chapter_url_snap_len, url_buf.len);
     @memcpy(url_buf[0..un], chapter_url_snap[0..un]);
     const chapter_url = url_buf[0..un];
@@ -1181,14 +1316,15 @@ fn renderSearchView() void {
     const count = resultCount();
 
     if (count == 0) {
-        const msg = if (state.app.novels.is_loading.load(.acquire))
-            "Searching…"
-        else
-            "Search public-domain novels & light novels to start reading";
-        _ = dvui.label(@src(), "{s}", .{msg}, .{
-            .color_text = theme.colors.text_secondary,
-            .padding = .{ .x = 12, .y = 20, .w = 0, .h = 0 },
-        });
+        if (state.app.novels.is_loading.load(.acquire)) {
+            components.loadingState("Searching Wikisource and Internet Archive…");
+        } else {
+            components.emptyState(
+                icons.tvg.lucide.@"book-open",
+                "Find your next book",
+                "Search public-domain books across multiple libraries.",
+            );
+        }
         return;
     }
 
@@ -1199,13 +1335,16 @@ fn renderSearchView() void {
     });
     defer scroll.deinit();
 
-    _ = dvui.label(@src(), "Results", .{}, .{
+    _ = dvui.label(@src(), "{d} results", .{count}, .{
         .color_text = theme.colors.text_secondary,
-        .padding = .{ .x = 10, .y = 8, .w = 8, .h = 2 },
+        .padding = .{ .x = 12, .y = 8, .w = 8, .h = 4 },
     });
 
-    const row_h: f32 = 46;
-    const win = tmdb_pure.visibleRows(count, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 3);
+    const layout_w = @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().w, state.app.ui_scale);
+    const cols: usize = if (layout_w >= 1060) 4 else if (layout_w >= 760) 3 else if (layout_w >= 500) 2 else 1;
+    const rows = (count + cols - 1) / cols;
+    const row_h: f32 = 126;
+    const win = tmdb_pure.visibleRows(rows, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 2);
     if (win.first > 0) {
         var sp = dvui.box(@src(), .{}, .{
             .id_extra = 49998,
@@ -1214,31 +1353,29 @@ fn renderSearchView() void {
         sp.deinit();
     }
 
-    var i: usize = win.first;
-    while (i < win.last) : (i += 1) {
-        const item = resultRow(i) orelse continue;
-        var name_buf: [256]u8 = undefined;
-        const name = safeUtf8Buf(item.title(), &name_buf);
-        if (dvui.button(@src(), name, .{}, .{
-            .id_extra = i,
+    var row_idx: usize = win.first;
+    while (row_idx < win.last) : (row_idx += 1) {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = 51000 + row_idx,
             .expand = .horizontal,
-            .min_size_content = .{ .w = 0, .h = 20 },
-            .max_size_content = .{ .w = std.math.floatMax(f32), .h = 20 },
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_primary,
-            .corner_radius = theme.dims.rad_sm,
-            .margin = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
-            .padding = .{ .x = 12, .y = 10, .w = 12, .h = 10 },
-            .gravity_x = 0,
-        })) {
-            openNovel(i);
+            .min_size_content = .{ .w = 1, .h = row_h },
+            .max_size_content = .{ .w = std.math.floatMax(f32), .h = row_h },
+            .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
+        });
+        defer row.deinit();
+
+        for (0..cols) |col| {
+            const i = row_idx * cols + col;
+            if (i >= count) break;
+            const item = resultRow(i) orelse continue;
+            renderNovelCard(item, i);
         }
     }
 
-    if (win.last < count) {
+    if (win.last < rows) {
         var sp = dvui.box(@src(), .{}, .{
             .id_extra = 49999,
-            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(count - win.last)) },
+            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(rows - win.last)) },
         });
         sp.deinit();
     }
@@ -1268,9 +1405,9 @@ fn renderSearchView() void {
 }
 
 fn renderSearchBar() void {
-    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+    var row = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
         .expand = .horizontal,
-        .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
+        .padding = .{ .x = 10, .y = 7, .w = 10, .h = 7 },
         .background = true,
         .color_fill = theme.colors.bg_surface,
     });
@@ -1283,28 +1420,10 @@ fn renderSearchBar() void {
         .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
     });
 
-    var te = dvui.textEntry(@src(), .{
-        .text = .{ .buffer = &state.app.novels.search_buf },
-        .placeholder = "Search novels…",
-    }, .{
-        .expand = .horizontal,
-        .padding = .{ .x = 6, .y = 4, .w = 6, .h = 4 },
-        .color_fill = theme.colors.bg_elevated,
-        .color_text = theme.colors.text_primary,
-        .corner_radius = theme.dims.rad_sm,
-        .gravity_y = 0.5,
-    });
-    const entered = te.enter_pressed;
-    te.deinit();
-
-    const go = dvui.button(@src(), "Go", .{}, .{
-        .color_fill = theme.colors.accent,
-        .color_text = dvui.Color.white,
-        .corner_radius = theme.dims.rad_sm,
-        .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
-        .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
-        .gravity_y = 0.5,
-    });
+    const layout_w = @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().w, state.app.ui_scale);
+    const search_w = @max(150, @min(280, layout_w - 280));
+    const entered = components.toolbarSearch(@src(), &state.app.novels.search_buf, "Search novels…", search_w);
+    const go = components.toolbarGo(@src(), "Search");
 
     if (entered or go) {
         const q = std.mem.sliceTo(&state.app.novels.search_buf, 0);
@@ -1312,8 +1431,107 @@ fn renderSearchBar() void {
     }
 
     if (state.app.novels.is_loading.load(.acquire)) {
-        _ = dvui.label(@src(), "…", .{}, .{ .color_text = theme.colors.warning, .gravity_y = 0.5 });
+        dvui.spinner(@src(), .{
+            .color_text = theme.colors.accent,
+            .min_size_content = theme.iconSize(.md),
+            .gravity_y = 0.5,
+            .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
+        });
     }
+}
+
+fn novelSourceLabel(source: NovelSource) []const u8 {
+    return switch (source) {
+        .wikisource => "Wikisource",
+        .internet_archive => "Internet Archive",
+        else => "Connected source",
+    };
+}
+
+fn novelSourceIcon(source: NovelSource) []const u8 {
+    return switch (source) {
+        .wikisource => icons.tvg.lucide.@"book-open",
+        .internet_archive => icons.tvg.lucide.archive,
+        else => icons.tvg.lucide.globe,
+    };
+}
+
+fn renderNovelCard(item: ListRow, index: usize) void {
+    var name_buf: [256]u8 = undefined;
+    const name = safeUtf8Buf(item.title(), &name_buf);
+    const source: NovelSource = @enumFromInt(item.source);
+
+    var bw: dvui.ButtonWidget = undefined;
+    bw.init(@src(), .{}, .{
+        .id_extra = 52000 + index,
+        .expand = .horizontal,
+        .min_size_content = .{ .w = 120, .h = 112 },
+        .max_size_content = .{ .w = std.math.floatMax(f32), .h = 112 },
+        .background = true,
+        .color_fill = theme.colors.bg_elevated,
+        .color_fill_hover = theme.colors.bg_hover,
+        .corner_radius = theme.dims.rad_md,
+        .margin = .{ .x = 4, .y = 3, .w = 4, .h = 3 },
+        .padding = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
+    });
+    bw.processEvents();
+    bw.drawBackground();
+
+    {
+        var body = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = 53000 + index,
+            .expand = .both,
+            .padding = .{ .x = 0, .y = 0, .w = 10, .h = 0 },
+        });
+        defer body.deinit();
+
+        {
+            var spine = dvui.box(@src(), .{ .dir = .vertical }, .{
+                .id_extra = 54000 + index,
+                .min_size_content = .{ .w = 48, .h = 112 },
+                .max_size_content = .{ .w = 48, .h = 112 },
+                .background = true,
+                .color_fill = theme.colors.accent.lerp(theme.colors.bg_surface, 0.35),
+                .corner_radius = .{ .x = theme.radius.md, .y = theme.radius.md, .w = 0, .h = 0 },
+            });
+            defer spine.deinit();
+            dvui.icon(@src(), "novel-source", novelSourceIcon(source), .{}, .{
+                .id_extra = index,
+                .color_text = theme.colors.text_on_accent,
+                .min_size_content = theme.iconSize(.lg),
+                .gravity_x = 0.5,
+                .gravity_y = 0.5,
+            });
+        }
+
+        {
+            var text = dvui.box(@src(), .{ .dir = .vertical }, .{
+                .id_extra = 55000 + index,
+                .expand = .both,
+                .padding = .{ .x = 10, .y = 10, .w = 4, .h = 8 },
+            });
+            defer text.deinit();
+            _ = dvui.label(@src(), "{s}", .{name}, .{
+                .id_extra = 56000 + index,
+                .expand = .horizontal,
+                .color_text = theme.colors.text_primary,
+                .font = dvui.themeGet().font_heading,
+            });
+            {
+                var spacer = dvui.box(@src(), .{}, .{ .id_extra = 57000 + index, .expand = .vertical });
+                spacer.deinit();
+            }
+            _ = dvui.label(@src(), "{s}", .{novelSourceLabel(source)}, .{
+                .id_extra = 58000 + index,
+                .color_text = theme.colors.accent,
+            });
+        }
+    }
+
+    const clicked = bw.clicked();
+    bw.drawFocus();
+    bw.deinit();
+    if (clicked) openNovel(index);
 }
 
 fn renderChaptersView() void {

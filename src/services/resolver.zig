@@ -2314,12 +2314,12 @@ fn resolveArchive(query_buf: [256]u8, qlen: usize) void {
         const prefix = "https://archive.org/download/";
         @memcpy(url_out[0..prefix.len], prefix);
         w = prefix.len;
-        w += encPathSegment(doc.identifier, url_out[w..]);
+        w += ap.encodePathSegment(doc.identifier, url_out[w..]);
         if (w < url_out.len) {
             url_out[w] = '/';
             w += 1;
         }
-        w += encPathSegment(file_name, url_out[w..]);
+        w += ap.encodePathSegment(file_name, url_out[w..]);
         if (w < 8) continue;
 
         // Title (fall back to identifier). JSON escapes are rare here; use raw.
@@ -2354,28 +2354,6 @@ fn resolveArchive(query_buf: [256]u8, qlen: usize) void {
     if (found > 0) {
         logs.pushLog("info", "resolver", "archive.org results found", false);
     }
-}
-
-/// Percent-encode a single URL path segment into `out`, returning bytes written.
-/// Unreserved chars pass through; space and everything else become %XX (space →
-/// %20, never '+' — '+' is a literal plus in a path segment). '/' is encoded so
-/// a stray slash in a name can't split the path.
-fn encPathSegment(seg: []const u8, out: []u8) usize {
-    const hex = "0123456789ABCDEF";
-    var w: usize = 0;
-    for (seg) |ch| {
-        if (w + 3 >= out.len) break;
-        if (std.ascii.isAlphanumeric(ch) or ch == '-' or ch == '_' or ch == '.' or ch == '~') {
-            out[w] = ch;
-            w += 1;
-        } else {
-            out[w] = '%';
-            out[w + 1] = hex[ch >> 4];
-            out[w + 2] = hex[ch & 0x0F];
-            w += 3;
-        }
-    }
-    return w;
 }
 
 /// Copy a JSON-string URL into `out`, undoing `\/` and `\\` escapes (MediaWiki's

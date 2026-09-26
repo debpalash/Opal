@@ -932,14 +932,14 @@ fn browseSourceSelect() ?state.DrawerTab {
     defer menu.deinit();
 
     const selected = state.app.browse_source;
-    if (dvui.menuItemLabel(@src(), tabLabel(selected), .{ .submenu = true }, .{
-        .min_size_content = .{ .w = 118, .h = 0 },
+    if (dvui.menuItemIcon(@src(), tabLabel(selected), iconForTab(selected), .{ .submenu = true }, .{
+        .min_size_content = .{ .w = 142, .h = 32 },
         .background = true,
         .color_fill = if (state.app.router.current == .player) transparent else theme.colors.bg_surface,
         .color_fill_hover = if (state.app.router.current == .player) theme.playerGlass(42) else theme.colors.bg_hover,
         .color_text = theme.colors.text_primary,
         .corner_radius = theme.dims.rad_sm,
-        .padding = .{ .x = theme.spacing.sm, .y = 4, .w = theme.spacing.sm, .h = 4 },
+        .padding = .{ .x = theme.spacing.sm, .y = 5, .w = theme.spacing.sm, .h = 5 },
     })) |anchor| {
         var popup = dvui.floatingMenu(@src(), .{ .from = anchor }, .{
             .background = true,
@@ -973,20 +973,20 @@ fn browseSourceSection(label: []const u8, sources: []const state.DrawerTab, id: 
     _ = dvui.label(@src(), "{s}", .{label}, .{
         .id_extra = id,
         .expand = .horizontal,
-        .min_size_content = .{ .w = 196, .h = 14 },
+        .min_size_content = .{ .w = 232, .h = 14 },
         .color_text = theme.colors.text_tertiary,
         .padding = .{ .x = theme.spacing.sm, .y = 5, .w = theme.spacing.sm, .h = 2 },
     });
     for (sources, 0..) |source, i| {
-        if (dvui.menuItemLabel(@src(), tabLabel(source), .{}, .{
+        if (dvui.menuItemIcon(@src(), tabLabel(source), iconForTab(source), .{}, .{
             .id_extra = id + i + 1,
             .expand = .horizontal,
-            .min_size_content = .{ .w = 196, .h = 28 },
+            .min_size_content = .{ .w = 232, .h = 34 },
             .color_fill = if (source == selected) theme.colors.bg_elevated else transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_text = if (source == selected) theme.colors.accent else theme.colors.text_primary,
             .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = theme.spacing.sm, .y = 3, .w = theme.spacing.sm, .h = 3 },
+            .padding = .{ .x = theme.spacing.sm, .y = 5, .w = theme.spacing.sm, .h = 5 },
         }) != null) picked.* = source;
     }
 }
