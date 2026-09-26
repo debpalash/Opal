@@ -4909,9 +4909,45 @@ var webui_port_buf: [8]u8 = std.mem.zeroes([8]u8);
 var webui_port_seeded: bool = false;
 var webui_user_seeded: bool = false;
 var webui_token_revealed: bool = false;
+var webui_account_status: [160]u8 = std.mem.zeroes([160]u8);
+var webui_account_status_len: usize = 0;
+var webui_account_status_ok: bool = false;
 
 fn zLen(buf: []const u8) usize {
     return std.mem.indexOfScalar(u8, buf, 0) orelse buf.len;
+}
+
+fn setWebUiAccountStatus(message: []const u8, ok: bool) void {
+    const n = @min(message.len, webui_account_status.len - 1);
+    @memcpy(webui_account_status[0..n], message[0..n]);
+    webui_account_status[n] = 0;
+    webui_account_status_len = n;
+    webui_account_status_ok = ok;
+    state.showToastTyped(message, if (ok) .success else .err);
+}
+
+fn webuiAccountField(label: []const u8, buf: []u8, password: bool, id: usize) bool {
+    _ = dvui.label(@src(), "{s}", .{label}, .{
+        .id_extra = id,
+        .color_text = theme.colors.text_secondary,
+        .padding = .{ .x = 0, .y = 4, .w = 0, .h = 2 },
+    });
+    var te = dvui.textEntry(@src(), .{
+        .text = .{ .buffer = buf },
+        .password_char = if (password) "•" else null,
+    }, .{
+        .id_extra = id,
+        .expand = .horizontal,
+        .min_size_content = .{ .w = 250, .h = 20 },
+        .color_fill = theme.colors.bg_elevated,
+        .color_border = theme.colors.border_subtle,
+        .color_text = theme.colors.text_primary,
+        .border = dvui.Rect.all(1),
+        .corner_radius = theme.dims.rad_sm,
+    });
+    const submitted = te.enter_pressed;
+    te.deinit();
+    return submitted;
 }
 
 // ── Phone pairing QR (issue #46) ──
@@ -5070,9 +5106,9 @@ fn renderWebUiTab() void {
             if (auth_store.firstUsername(webui_user_buf[0 .. webui_user_buf.len - 1])) |n|
                 webui_user_buf[n.len] = 0;
         }
-        absField("Username", &webui_user_buf, false, 9101);
-        absField("New password (8+ characters)", &webui_pw_buf, true, 9102);
-        absField("Confirm password", &webui_pw2_buf, true, 9103);
+        _ = webuiAccountField("Username", &webui_user_buf, false, 9101);
+        _ = webuiAccountField("New password (8+ characters)", &webui_pw_buf, true, 9102);
+        const enter_submitted = webuiAccountField("Confirm password", &webui_pw2_buf, true, 9103);
 
         var brow = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
@@ -5080,7 +5116,8 @@ fn renderWebUiTab() void {
         });
         defer brow.deinit();
 
-        if (components.actionButton(@src(), if (users == 0) "Create Account" else "Set Password", .primary, 9003)) {
+        const button_submitted = components.actionButton(@src(), if (users == 0) "Create Account" else "Set Password", .primary, 9003);
+        if (button_submitted or enter_submitted) {
             const uname = webui_user_buf[0..zLen(&webui_user_buf)];
             const pw = webui_pw_buf[0..zLen(&webui_pw_buf)];
             const pw2 = webui_pw2_buf[0..zLen(&webui_pw2_buf)];
@@ -5088,39 +5125,47 @@ fn renderWebUiTab() void {
             // is empty because the desktop is the recovery path (see header).
             const verdict = access.checkPasswordChange("", pw, pw2);
             if (uname.len == 0) {
-                state.showToast("Enter a username");
+                setWebUiAccountStatus("Enter a username", false);
             } else if (verdict != .ok) {
-                state.showToast(verdict.message());
+                setWebUiAccountStatus(verdict.message(), false);
             } else if (auth_store.userIdByName(uname)) |uid| {
-                if (auth_store.setPassword(uid, pw)) {
+                if (auth_store.setPassword(uid, pw) and auth_store.authenticate(uname, pw) == uid) {
                     // A password change that left old logins alive would not
                     // actually revoke anything.
                     const dropped = auth_store.revokeAllSessions(null);
                     var t_buf: [64]u8 = undefined;
-                    state.showToast(std.fmt.bufPrint(&t_buf, "Password set · {d} device(s) signed out", .{dropped}) catch "Password set");
+                    setWebUiAccountStatus(std.fmt.bufPrint(&t_buf, "Password changed · {d} device(s) signed out", .{dropped}) catch "Password changed", true);
                     @memset(&webui_pw_buf, 0);
                     @memset(&webui_pw2_buf, 0);
-                } else state.showToast("Could not set the password");
+                } else setWebUiAccountStatus("Password was not changed", false);
             } else if (users == 0) {
                 // First run only — mirrors /api/auth/register, which closes
                 // registration once any account exists.
                 if (auth_store.createFirstAdmin(uname, pw)) |_| {
                     remote.invalidateSetupToken();
-                    state.showToast("Account created");
+                    setWebUiAccountStatus("Administrator account created — sign in from the Web UI", true);
                     @memset(&webui_pw_buf, 0);
                     @memset(&webui_pw2_buf, 0);
-                } else |e| state.showToast(switch (e) {
+                } else |e| setWebUiAccountStatus(switch (e) {
                     error.SetupClosed => "Account setup is already complete",
                     error.Invalid => "Username 3-32 chars [a-zA-Z0-9._-], password 8+",
                     error.Db => "Database error",
-                });
+                }, false);
             } else {
                 // Previously this fell through to createUser, so a typo in the
                 // username silently made a SECOND admin account instead of
                 // resetting the one you meant.
                 var t_buf: [96]u8 = undefined;
-                state.showToast(std.fmt.bufPrint(&t_buf, "No account named \"{s}\"", .{uname}) catch "No such account");
+                setWebUiAccountStatus(std.fmt.bufPrint(&t_buf, "No account named \"{s}\"", .{uname}) catch "No such account", false);
             }
+        }
+
+        if (webui_account_status_len > 0) {
+            _ = dvui.label(@src(), "{s}", .{webui_account_status[0..webui_account_status_len]}, .{
+                .id_extra = 9104,
+                .color_text = if (webui_account_status_ok) theme.colors.success else theme.colors.danger,
+                .margin = .{ .x = 0, .y = 2, .w = 0, .h = 8 },
+            });
         }
 
         if (users == 0 and components.actionButton(@src(), "Copy Setup Code", .secondary, 9005)) {
