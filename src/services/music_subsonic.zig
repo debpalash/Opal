@@ -523,9 +523,20 @@ fn plexMusicWorker(job: SearchJob) void {
 }
 
 fn copyField(dst: []u8, len: *usize, src: []const u8) void {
-    const n = @min(src.len, dst.len);
-    @memcpy(dst[0..n], src[0..n]);
-    len.* = n;
+    @import("../core/text.zig").setFixedUtf8(dst, len, src);
+}
+
+pub fn resultCount() usize {
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    return @min(state.app.music.result_count, state.app.music.results.len);
+}
+
+pub fn resultRow(idx: usize) ?pure.MusicSong {
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (idx >= state.app.music.result_count or idx >= state.app.music.results.len) return null;
+    return state.app.music.results[idx];
 }
 
 // ══════════════════════════════════════════════════════════

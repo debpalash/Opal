@@ -148,30 +148,46 @@ fn fetchPage(my_gen: u32, page: u32, append: bool) void {
     if (!fetch_request.isCurrent(my_gen)) return; // superseded by a newer fetch
 
     pending_mutex.lock();
-    defer pending_mutex.unlock();
-    if (!fetch_request.isCurrent(my_gen)) return; // re-check under the lock
+    if (!fetch_request.isCurrent(my_gen)) {
+        pending_mutex.unlock();
+        return;
+    } // re-check under the lock
     @memcpy(pending[0..n], items[0..n]);
     pending_count = n;
     pending_page = page;
     pending_append = append;
     pending_ready = true;
+    pending_mutex.unlock();
 
     var lb: [64]u8 = undefined;
     logs.pushLog("info", "drama", std.fmt.bufPrint(&lb, "Loaded {d} titles (TMDB p{d})", .{ n, page }) catch "Loaded", false);
+    state.wakeUi();
 }
 
 /// Drain worker-staged results into the live grid from a non-render caller.
 ///
-/// The desktop reaches applyPending() through renderContent(); headless has no
-/// render path, so its serve loop calls this instead. Without it the fetch
-/// worker parses TMDB fine ("Loaded 20 titles") and `result_count` stays 0
-/// forever — /api/drama returned an empty list with loading:false.
+/// Desktop calls this once per UI frame and headless calls it from its serve
+/// loop. Keeping the publish pump global lets the web browse page progress even
+/// while the desktop is on another tab.
 ///
 /// Safe off the render thread in the headless build: the texture retire below
 /// is a no-op there (textureCreate always fails, so poster_tex is always null)
 /// and dvui.refresh is stubbed out.
 pub fn pumpPending() void {
     applyPending();
+}
+
+pub fn resultCount() usize {
+    pending_mutex.lock();
+    defer pending_mutex.unlock();
+    return @min(state.app.drama.result_count, state.app.drama.results.len);
+}
+
+pub fn resultRow(idx: usize) ?state.DramaResult {
+    pending_mutex.lock();
+    defer pending_mutex.unlock();
+    if (idx >= state.app.drama.result_count or idx >= state.app.drama.results.len) return null;
+    return state.app.drama.results[idx];
 }
 
 /// UI-THREAD ONLY — swap staged results into the live grid, freeing the old

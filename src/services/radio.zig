@@ -116,9 +116,20 @@ fn serializeStation(w: *ccp.Writer, s: pure.Station) void {
 }
 
 fn copyField(dst: []u8, len: *usize, src: []const u8) void {
-    const n = @min(src.len, dst.len);
-    @memcpy(dst[0..n], src[0..n]);
-    len.* = n;
+    @import("../core/text.zig").setFixedUtf8(dst, len, src);
+}
+
+pub fn resultCount() usize {
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    return @min(state.app.radio.result_count, state.app.radio.results.len);
+}
+
+pub fn resultRow(idx: usize) ?pure.Station {
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (idx >= state.app.radio.result_count or idx >= state.app.radio.results.len) return null;
+    return state.app.radio.results[idx];
 }
 
 /// Reads one station from `r`; null when the blob is truncated.

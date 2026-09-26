@@ -247,52 +247,33 @@ pub fn fetchMetaByMalIds(ids_csv: []const u8, sfw: bool, out: []u8) usize {
     return n;
 }
 
-/// Search AniList for an anime by title, return media ID.
-pub fn searchAnime(title: []const u8, out_id: *i64) void {
-    if (title.len == 0) return;
+/// Search AniList's public catalog. Used as a resilient fallback when Jikan's
+/// dependency on MyAnimeList returns an error payload with no rows.
+pub fn fetchSearch(title: []const u8, sfw: bool, out: []u8) usize {
+    if (title.len == 0) return 0;
     const alloc = @import("../core/alloc.zig").allocator;
-
-    var esc: [256]u8 = undefined;
-    var ei: usize = 0;
-    for (title) |ch| {
-        if (ei + 2 >= esc.len) break;
-        if (ch == '"') {
-            esc[ei] = '\\';
-            ei += 1;
-            esc[ei] = '"';
-            ei += 1;
-        } else {
-            esc[ei] = ch;
-            ei += 1;
-        }
-    }
-
-    var gql_buf: [512]u8 = undefined;
-    const gql = std.fmt.bufPrintZ(&gql_buf,
-        \\{{"query":"{{ Media(search: \"{s}\", type: ANIME) {{ id title {{ romaji english }} }} }}"}}
-    , .{esc[0..ei]}) catch return;
+    var payload_buf: [2048]u8 = undefined;
+    const payload = anilist_pure.searchPayload(&payload_buf, title, sfw) orelse return 0;
 
     var child = io_global.Child.init(&.{
-        "curl", "-s",                             "-X", "POST",                     ANILIST_API,
-        "-H",   "Content-Type: application/json", "-H", "Accept: application/json", "-d",
-        gql,
+        "curl", "-s",                             "--connect-timeout", "3",                        "--max-time", "10",    "-X", "POST", ANILIST_API,
+        "-H",   "Content-Type: application/json", "-H",                "Accept: application/json", "-d",         payload,
     }, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
-    child.spawn() catch return;
-
-    var out: [4096]u8 = undefined;
-    const n = if (child.stdout) |*s| io_global.readAll(s, &out) catch 0 else 0;
+    child.spawn() catch return 0;
+    const n = if (child.stdout) |*s| io_global.readAll(s, out) catch 0 else 0;
     _ = child.wait() catch {};
+    return n;
+}
 
-    if (n < 10) return;
-    // Extract "id":NNNN from response
-    if (std.mem.indexOf(u8, out[0..n], "\"id\":")) |idx| {
-        const start = idx + 5;
-        var end = start;
-        while (end < n and out[end] >= '0' and out[end] <= '9') end += 1;
-        if (end > start) {
-            out_id.* = std.fmt.parseInt(i64, out[start..end], 10) catch 0;
-        }
-    }
+/// Search AniList for an anime by title, return media ID.
+pub fn searchAnime(title: []const u8, out_id: *i64) void {
+    const alloc = @import("../core/alloc.zig").allocator;
+    const out = alloc.alloc(u8, 256 * 1024) catch return;
+    defer alloc.free(out);
+    const n = fetchSearch(title, false, out);
+    if (n == 0) return;
+    var iter = anilist_pure.Iter{ .json = out[0..n] };
+    if (iter.next()) |media| out_id.* = media.id;
 }

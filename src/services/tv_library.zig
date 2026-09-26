@@ -891,18 +891,22 @@ fn renderLibrary() void {
 }
 
 fn renderSectionHeading(title: []const u8, count: usize, suffix: []const u8) void {
+    const heading_id: usize = @truncate(std.hash.Wyhash.hash(0, title));
     var heading = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .id_extra = heading_id,
         .expand = .horizontal,
         .padding = .{ .x = theme.spacing.lg, .y = theme.spacing.md, .w = theme.spacing.lg, .h = theme.spacing.xs },
     });
     defer heading.deinit();
 
     _ = dvui.label(@src(), "{s}", .{title}, .{
+        .id_extra = heading_id,
         .color_text = theme.colors.text_primary,
         .font = dvui.themeGet().font_body.withSize(theme.font_size.title),
         .gravity_y = 0.5,
     });
     _ = dvui.label(@src(), "{d} {s}", .{ count, suffix }, .{
+        .id_extra = heading_id,
         .color_text = theme.colors.text_tertiary,
         .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
         .gravity_y = 0.5,

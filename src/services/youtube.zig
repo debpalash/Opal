@@ -16,6 +16,7 @@ const LatestRequest = @import("../core/latest_request.zig").Gate;
 pub const alloc = @import("../core/alloc.zig").allocator;
 
 const safeUtf8 = @import("../core/text.zig").safeUtf8;
+const setFixedUtf8 = @import("../core/text.zig").setFixedUtf8;
 
 var yt_mutex: @import("../core/sync.zig").Mutex = .{};
 // Seamless refresh: instead of clearing results up-front (which blanks the
@@ -369,11 +370,9 @@ fn deserializeYtInto(bytes: []const u8, gen: u32) usize {
         it.video_id_len = @min(vid.len, it.video_id.len);
         @memcpy(it.video_id[0..it.video_id_len], vid[0..it.video_id_len]);
         const title = r.blob() orelse break;
-        it.title_len = @min(title.len, it.title.len);
-        @memcpy(it.title[0..it.title_len], title[0..it.title_len]);
+        setFixedUtf8(&it.title, &it.title_len, title);
         const up = r.blob() orelse break;
-        it.uploader_len = @min(up.len, it.uploader.len);
-        @memcpy(it.uploader[0..it.uploader_len], up[0..it.uploader_len]);
+        setFixedUtf8(&it.uploader, &it.uploader_len, up);
         const cid = r.blob() orelse break;
         it.channel_id_len = @min(cid.len, it.channel_id.len);
         @memcpy(it.channel_id[0..it.channel_id_len], cid[0..it.channel_id_len]);
@@ -799,6 +798,7 @@ fn publishRows(json: []const u8, gen: u32, limit: usize, src: RowSource) usize {
         item.video_id_len = @min(v.id.len, item.video_id.len);
         @memcpy(item.video_id[0..item.video_id_len], v.id[0..item.video_id_len]);
         item.title_len = it_pure.unescapeJson(v.title_raw, &item.title);
+        item.title_len = safeUtf8(item.title[0..item.title_len]).len;
         item.duration = v.duration;
         item.views = v.views;
 
@@ -806,9 +806,9 @@ fn publishRows(json: []const u8, gen: u32, limit: usize, src: RowSource) usize {
         // byline we already know. Search rows carry their own.
         if (v.channel_raw.len > 0) {
             item.uploader_len = it_pure.unescapeJson(v.channel_raw, &item.uploader);
+            item.uploader_len = safeUtf8(item.uploader[0..item.uploader_len]).len;
         } else {
-            item.uploader_len = @min(src.chan_name.len, item.uploader.len);
-            @memcpy(item.uploader[0..item.uploader_len], src.chan_name[0..item.uploader_len]);
+            setFixedUtf8(&item.uploader, &item.uploader_len, src.chan_name);
         }
         const cid = if (v.channel_id.len > 0) v.channel_id else src.chan_id;
         item.channel_id_len = @min(cid.len, item.channel_id.len);
@@ -907,15 +907,11 @@ fn parsePipedResults(json: []const u8, gen: u32) void {
         const window = json[abs_url..window_end];
 
         if (extractJsonStr(window, "\"title\":")) |title| {
-            const tlen = @min(title.len, 127);
-            @memcpy(item.title[0..tlen], title[0..tlen]);
-            item.title_len = tlen;
+            setFixedUtf8(&item.title, &item.title_len, title);
         }
 
         if (extractJsonStr(window, "\"uploaderName\":")) |up| {
-            const ulen = @min(up.len, 63);
-            @memcpy(item.uploader[0..ulen], up[0..ulen]);
-            item.uploader_len = ulen;
+            setFixedUtf8(&item.uploader, &item.uploader_len, up);
         }
 
         if (extractJsonStr(window, "\"uploaderUrl\":")) |uurl| {
@@ -1028,15 +1024,11 @@ fn parseYtdlpLine(line: []const u8) void {
     item.video_id_len = vid.len;
 
     if (it.next()) |title| {
-        const tlen = @min(title.len, 127);
-        @memcpy(item.title[0..tlen], title[0..tlen]);
-        item.title_len = tlen;
+        setFixedUtf8(&item.title, &item.title_len, title);
     }
     if (it.next()) |ch| {
         if (!std.mem.eql(u8, ch, "NA")) {
-            const ulen = @min(ch.len, 63);
-            @memcpy(item.uploader[0..ulen], ch[0..ulen]);
-            item.uploader_len = ulen;
+            setFixedUtf8(&item.uploader, &item.uploader_len, ch);
         }
     }
     if (it.next()) |dur| item.duration = std.fmt.parseInt(i64, dur, 10) catch 0;
@@ -1246,6 +1238,22 @@ pub fn fetchThumb(item: *state.YtItem) void {
 // ══════════════════════════════════════════════════════════
 // UI Rendering (called from drawer.zig)
 // ══════════════════════════════════════════════════════════
+
+/// Stable copies for non-UI readers such as the companion API. The result list
+/// is mutated by detached search workers, so callers must not iterate the
+/// ArrayList directly while a refresh can replace its storage.
+pub fn resultCount() usize {
+    yt_mutex.lock();
+    defer yt_mutex.unlock();
+    return state.app.yt.results.items.len;
+}
+
+pub fn resultRow(idx: usize) ?state.YtItem {
+    yt_mutex.lock();
+    defer yt_mutex.unlock();
+    if (idx >= state.app.yt.results.items.len) return null;
+    return state.app.yt.results.items[idx];
+}
 
 pub fn renderContent() void {
     drainYtTexFrees(); // free textures from a re-search clear (UI thread)

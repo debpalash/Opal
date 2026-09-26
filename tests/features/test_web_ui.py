@@ -170,7 +170,7 @@ def test_web_ui_music_radio():
         # GET seeds the once-per-session popular list.
         "radio seeds popular": "radio.loadPopularOnce()" in rm,
         # Direct stream URLs so a hosted browser can play them itself.
-        "music exposes stream url": "s.play_url[0..s.play_url_len]" in rm,
+        "music exposes stream url": "s.play_url[0..@min(s.play_url_len, s.play_url.len)]" in rm,
         "radio prefers resolved url": "url_resolved_len > 0" in rm,
         # Big result arrays -> heap, not the spawned-thread stack.
         "responses heap-allocated": rm.count("alloc.alloc(u8, 96 * 1024)") >= 2,

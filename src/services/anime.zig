@@ -813,12 +813,81 @@ fn searchThread(job: SearchJob) void {
     const argv = [_][]const u8{
         "curl", "-s", "--connect-timeout", "3", "--max-time", "10", "-A", agent, url,
     };
-    const body = boundedCurl(&argv, buf, 12_000) orelse return;
-    if (body.len == 0) return;
+    if (boundedCurl(&argv, buf, 12_000)) |body| {
+        if (body.len > 0) {
+            const added = parseJikanData(body, my_gen);
+            if (added > 0) {
+                if (search_request.current() == my_gen) more_available = parsePagination(body);
+                logs.pushLog("info", "anime", "Search done (Jikan API)", false);
+                return;
+            }
+        }
+    }
 
-    _ = parseJikanData(body, my_gen);
-    if (search_request.current() == my_gen) more_available = parsePagination(body);
-    logs.pushLog("info", "anime", "Search done (Jikan API)", false);
+    // Jikan can return an HTTP-success JSON error when its MyAnimeList backend
+    // is unavailable. A zero-row response used to clear the visible grid and
+    // report success. AniList is independent and provides the same identifiers
+    // needed by our existing Jikan episode path, so use it as a bounded fallback.
+    if (search_request.current() != my_gen) return;
+    const bytes = anilist.fetchSearch(query, state.app.nsfw_filter_enabled, buf);
+    if (bytes > 0 and publishAniListSearch(buf[0..bytes], my_gen) > 0) {
+        more_available = false;
+        logs.pushLog("info", "anime", "Search done (AniList fallback)", false);
+    } else {
+        logs.pushLog("warn", "anime", "Anime search returned no results", false);
+    }
+}
+
+/// Publish a keyless AniList Page.media response into the existing anime grid.
+/// Only rows with a MAL id are usable because episode discovery is backed by
+/// Jikan. This shares the same lock and generation gate as the primary parser.
+fn publishAniListSearch(json: []const u8, my_gen: u32) usize {
+    anime_parse_mutex.lock();
+    defer anime_parse_mutex.unlock();
+    if (search_request.current() != my_gen) return 0;
+
+    for (0..state.app.anime.results.len) |i| {
+        const old = &state.app.anime.results[i];
+        old.poster_fetching = false;
+        old.expanded = false;
+        if (old.poster_tex) |tex| {
+            queueTexFree(tex);
+            old.poster_tex = null;
+        }
+    }
+    for (0..state.app.anime.broadcast_lens.len) |i| state.app.anime.broadcast_lens[i] = 0;
+    results_are_scraper = false;
+
+    var iter = anilist_pure.Iter{ .json = json };
+    var count: usize = 0;
+    while (iter.next()) |m| {
+        if (count >= state.app.anime.results.len) break;
+        if (m.id_mal <= 0) continue;
+        const title = if (m.title_english.len > 0) m.title_english else m.title_romaji;
+        if (title.len == 0) continue;
+
+        const item = &state.app.anime.results[count];
+        item.id_len = (std.fmt.bufPrint(&item.id, "{d}", .{m.id_mal}) catch continue).len;
+        item.anilist_id = m.id;
+        item.name_len = decodeJsonEscapes(title, &item.name);
+        item.episodes = if (m.episodes > 0) m.episodes else 100;
+        item.score = m.score10;
+        item.overview_len = decodeJsonEscapes(m.description, &item.overview);
+        item.poster_url_len = decodeJsonEscapes(m.cover, &item.poster_url);
+        item.atype_len = 0;
+        item.year = m.year;
+        item.airing = false;
+        item.expanded = false;
+        item.poster_fetching = false;
+        item.poster_attempted = false;
+        item.poster_failed = false;
+        item.poster_tex = null;
+        count += 1;
+    }
+
+    if (search_request.current() != my_gen) return 0;
+    state.app.anime.result_count = count;
+    return count;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1019,6 +1088,19 @@ fn parseJikanData(json: []const u8, my_gen: u32) usize {
 /// same item.poster_tex — the latter would queueTexFree the same GPU texture
 /// twice → double dvui.textureDestroyLater → SIGABRT (see file header).
 var anime_parse_mutex: @import("../core/sync.zig").Mutex = .{};
+
+pub fn resultCount() usize {
+    anime_parse_mutex.lock();
+    defer anime_parse_mutex.unlock();
+    return @min(state.app.anime.result_count, state.app.anime.results.len);
+}
+
+pub fn resultRow(idx: usize) ?state.AnimeResult {
+    anime_parse_mutex.lock();
+    defer anime_parse_mutex.unlock();
+    if (idx >= state.app.anime.result_count or idx >= state.app.anime.results.len) return null;
+    return state.app.anime.results[idx];
+}
 
 fn parseJikanDataEx(json: []const u8, my_gen: u32, with_broadcast: bool, start_offset: usize) usize {
     anime_parse_mutex.lock();

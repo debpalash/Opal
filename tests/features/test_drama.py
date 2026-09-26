@@ -19,6 +19,7 @@ def test_drama_module():
     st = _src("src/core/state.zig")
     shell = _src("src/ui/shell.zig")
     drawer = _src("src/ui/drawer.zig")
+    main = _src("src/main.zig")
     build = _src("build.zig")
 
     # The tokusatsu lane was removed entirely — no residue may remain.
@@ -64,6 +65,8 @@ def test_drama_module():
         "atomic loading flags": "fetch_request.begin(&state.app.drama.is_loading)" in svc
             and "stream_loading.store" in svc,
         "publishes under mutex": "pending_mutex.lock()" in svc,
+        "desktop globally drains staged results": 'services/drama.zig").pumpPending();' in main,
+        "worker wakes the desktop publish pump": "state.wakeUi();" in svc,
         "generation guard": "LatestRequest" in svc and "fetch_request.isCurrent" in svc,
         "threads detached (no un-detached spawn)": "_ = std.Thread.spawn(" not in svc,
         "heap fetch buffer": "alloc.alloc(u8, 256 * 1024)" in svc,

@@ -1175,6 +1175,9 @@ fn appFrame() !dvui.App.Result {
     // workers staging + this apply is what keeps the render loop's iteration
     // safe — see state.zig tmdb.results comment).
     @import("services/tmdb_api.zig").applyPendingResults();
+    // Drama uses the same worker-stage/UI-publish pattern. Drain it globally so
+    // the web browse page progresses even when the desktop is on another tab.
+    @import("services/drama.zig").pumpPending();
 
     // Poll the native file-open dialog worker. This used to live in the legacy
     // header (renderHeader), which never runs in the default page shell — so
