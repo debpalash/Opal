@@ -273,7 +273,7 @@ def test_web_ui_access_page():
         # A password change that left old logins alive would not revoke access.
         "pw change revokes others": (
             0 <= rm.find("setPassword(target_uid")
-            < rm.find("revokeAllSessions(if (principal == .machine)")
+            < rm.find("revokeUserSessions(target_uid")
         ),
         # Rotation must not silently widen the 0600 token file.
         "rotate reuses persistToken": "fn persistToken() void" in rm and "persistToken();" in rm
@@ -302,6 +302,36 @@ def test_web_ui_access_page():
     if missing:
         return "fail", "Access page incomplete: " + ", ".join(missing)
     return "pass", "Access page: pw change/reset, revoke-all, token rotate, bind mode+port (all bearer-gated)"
+
+
+@test("Web UI manages multiple scoped accounts", "Web UI")
+def test_web_ui_multi_account_management():
+    ui = _web_app()
+    rm = _remote_api()
+    st = _src("src/services/auth_store.zig")
+    pure = _src("src/services/access_pure.zig")
+    checks = {
+        "admin session principal": ".admin_session" in pure and "sessionIsAdmin(token)" in rm,
+        "typed account capability": ".manage_users" in pure
+            and "admin sessions manage accounts without gaining machine recovery powers" in pure,
+        "account CRUD routes": all(f'sub, "{route}"' in rm
+            for route in ("users", "users/create", "users/delete")),
+        "account store operations": all(f"pub fn {name}(" in st
+            for name in ("sessionIsAdmin", "listUsers", "deleteUser")),
+        "last admin protected atomically": "SELECT COUNT(*) FROM users WHERE is_admin=1" in st
+            and "RETURNING id" in st,
+        "sessions scoped per account": "liveSessionCountForUser" in st
+            and "revokeUserSessions(target_uid" in rm,
+        "self deletion refused": "you cannot delete the account you are using" in rm,
+        "responsive account UI": all(f'id="{name}"' in ui for name in
+            ("acc-users-group", "acc-user-form", "acc-user-name", "acc-user-password", "acc-user-admin")),
+        "machine-only settings hidden": "acc-machine-token" in ui
+            and "hidden = !d.can_manage_machine" in ui,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "multi-account access incomplete: " + ", ".join(missing)
+    return "pass", "admins manage accounts; password/session actions stay scoped to one user"
 
 
 @test("Phone pairing: LAN URL + setup code as a scannable QR in Settings", "Web UI")

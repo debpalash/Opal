@@ -503,6 +503,8 @@ def test_web_pwa_contract():
             and all(path in worker for path in ("'/events'", "'/stream'", "'/transcode'", "'/poster'", "'/vtt'")),
         "offline fallback": "request.mode === 'navigate'" in worker
             and "Opal is offline" in worker and "caches.match('/index.html')" in worker,
+        "online assets refresh before cache fallback": "fetch(request).then(async response" in worker
+            and ".catch(() => caches.match(request))" in worker,
         "reconnect state": 'id="network-status"' in ui and "setNetworkState('reconnecting')" in ui
             and "window.addEventListener('offline'" in ui,
         "static server routes": all(
