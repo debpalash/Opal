@@ -452,6 +452,16 @@ fn renderPlayerTopNav() void {
                 state.showToastTyped("Could not open in VLC · see Logs", .err);
             }
         }
+        // The transport footer is intentionally absent before the first frame,
+        // so its normal Close action does not exist while a URL is resolving.
+        // Keep cancellation in the player chrome where it remains visible and
+        // clickable throughout loading.
+        if (p.is_loading and components.iconButtonOverlay(@src(), icons.tvg.lucide.x, "Cancel and close", false, true)) {
+            p.cancelCurrentLoad();
+            state.app.pending_remove_player_idx = @intCast(state.app.active_player_idx);
+            state.showToast("Playback cancelled");
+            dvui.refresh(null, @src(), null);
+        }
     }
     if (components.iconButtonOverlay(@src(), icons.tvg.lucide.settings, "Settings", false, true)) {
         state.app.router.navigate(.settings);
