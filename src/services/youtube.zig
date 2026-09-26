@@ -1288,7 +1288,16 @@ pub fn renderContent() void {
         fetchYoutube(currentQuery());
     }
 
+    const available_h = @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().h, state.app.ui_scale);
+    const toolbar_h = @min(@max(40, available_h * 0.12), if (toolbar_content_h > 1) toolbar_content_h else 42);
+    var toolbar_scroll = dvui.scrollArea(@src(), .{ .horizontal = .auto, .horizontal_bar = .auto_overlay, .vertical = .none }, .{
+        .expand = .horizontal,
+        .min_size_content = .{ .w = 0, .h = toolbar_h },
+        .max_size_content = dvui.Options.MaxSize.height(toolbar_h),
+        .background = false,
+    });
     renderToolbar();
+    toolbar_scroll.deinit();
 
     // Debounced live search: fire once the buffer has settled for DEBOUNCE_MS
     // and differs from what we last fired. Enter/button paths fire immediately
@@ -1476,6 +1485,8 @@ const cat_chips = [_]CatChip{
     .{ .label = "Live", .query = "live now", .icon = icons.tvg.lucide.radio },
 };
 
+var toolbar_content_h: f32 = 0;
+
 fn refreshCurrentFeed() void {
     if (!channel_mode.load(.acquire)) {
         fetchYoutube(currentQuery());
@@ -1491,13 +1502,13 @@ fn refreshCurrentFeed() void {
 }
 
 fn renderToolbar() void {
-    var bar = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
+    var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
-        .margin = .{ .x = 0, .y = 0, .w = 0, .h = 5 },
+        .min_size_content = .{ .w = 0, .h = 34 },
+        .margin = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
     });
     defer bar.deinit();
-
-    dvui.icon(@src(), "yt-icon", icons.tvg.lucide.youtube, .{}, .{ .color_text = theme.colors.accent, .gravity_y = 0.5, .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 } });
+    if (dvui.minSizeGet(bar.data().id)) |size| toolbar_content_h = size.h;
 
     // Channel banner — back arrow + the channel whose uploads fill the grid.
     if (channel_mode.load(.acquire)) {
@@ -1549,8 +1560,10 @@ fn renderToolbar() void {
     toolbarDivider(950);
     _ = dvui.label(@src(), "{d} videos", .{resultCount()}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5, .font = metaFont() });
 
-    const dim = dvui.Color{ .r = 120, .g = 120, .b = 148, .a = 200 };
+    const dim = theme.colors.text_secondary;
+    var smaller_wd: dvui.WidgetData = undefined;
     if (dvui.buttonIcon(@src(), "smaller", icons.tvg.lucide.minus, .{}, .{}, .{
+        .data_out = &smaller_wd,
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
         .color_text = dim,
         .border = dvui.Rect.all(0),
@@ -1560,7 +1573,10 @@ fn renderToolbar() void {
     })) {
         card_w = @max(CARD_MIN, card_w - 40);
     }
+    components.tip(@src(), smaller_wd, "Smaller video cards");
+    var bigger_wd: dvui.WidgetData = undefined;
     if (dvui.buttonIcon(@src(), "bigger", icons.tvg.lucide.plus, .{}, .{}, .{
+        .data_out = &bigger_wd,
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
         .color_text = dim,
         .border = dvui.Rect.all(0),
@@ -1570,6 +1586,7 @@ fn renderToolbar() void {
     })) {
         card_w = @min(CARD_MAX, card_w + 40);
     }
+    components.tip(@src(), bigger_wd, "Larger video cards");
 }
 
 /// A faint vertical separator between toolbar groups.

@@ -122,6 +122,59 @@ fn playerControlHover() dvui.Color {
     return theme.playerGlass(230);
 }
 
+/// Player transport icons stay visually bare over the video. Render the SVG
+/// eight times in near-black at one physical pixel offsets, then once in its
+/// foreground color. This produces a real glyph outline without rectangular
+/// button tiles and remains readable over both white and black frames.
+fn playerButtonIcon(
+    src: std.builtin.SourceLocation,
+    name: []const u8,
+    tvg_bytes: []const u8,
+    init_opts: dvui.ButtonWidget.InitOptions,
+    icon_opts: dvui.IconRenderOptions,
+    opts: dvui.Options,
+) bool {
+    const defaults = dvui.Options{ .padding = dvui.Rect.all(4), .label = .{ .text = name } };
+    var bare_opts = opts;
+    bare_opts.color_fill = theme.transparent;
+    bare_opts.color_fill_press = playerControlHover();
+    var bw: dvui.ButtonWidget = undefined;
+    bw.init(src, init_opts, defaults.override(bare_opts));
+    bw.processEvents();
+    bw.drawBackground();
+
+    const rs = bw.data().contentRectScale();
+    const side = @min(rs.r.w, rs.r.h);
+    const base = dvui.Rect.Physical{
+        .x = rs.r.x + (rs.r.w - side) * 0.5,
+        .y = rs.r.y + (rs.r.h - side) * 0.5,
+        .w = side,
+        .h = side,
+    };
+    const outline = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 235 };
+    const step = @max(@as(f32, 1), rs.s);
+    const offsets = [_]dvui.Point{
+        .{ .x = -step, .y = -step }, .{ .x = 0, .y = -step },   .{ .x = step, .y = -step },
+        .{ .x = -step, .y = 0 },     .{ .x = step, .y = 0 },    .{ .x = -step, .y = step },
+        .{ .x = 0, .y = step },      .{ .x = step, .y = step },
+    };
+    for (offsets) |off| {
+        var outlined_rs = rs;
+        outlined_rs.r = base;
+        outlined_rs.r.x += off.x;
+        outlined_rs.r.y += off.y;
+        dvui.renderIcon(name, tvg_bytes, outlined_rs, .{ .colormod = outline }, icon_opts) catch {};
+    }
+    var icon_rs = rs;
+    icon_rs.r = base;
+    dvui.renderIcon(name, tvg_bytes, icon_rs, .{ .colormod = opts.color_text orelse player_text }, icon_opts) catch {};
+
+    const clicked = bw.clicked();
+    bw.drawFocus();
+    bw.deinit();
+    return clicked;
+}
+
 pub fn aspectDropdownMenu(ctx: *c.mpv.mpv_handle, id_extra: usize) void {
     const aspect_c = c.mpv.mpv_get_property_string(ctx, "video-aspect-override");
     defer if (aspect_c != null) c.mpv.mpv_free(@ptrCast(aspect_c));
@@ -1545,7 +1598,7 @@ pub fn renderLiquidGlassOverlay() void {
         const on_episode = tv_lib.playingEpisode() and fit.skip_buttons;
         if (on_episode) {
             const has_prev = tv_lib.neighborEpisode(-1) != null;
-            if (dvui.buttonIcon(@src(), "ep-prev", icons.tvg.lucide.@"chevron-first", .{}, .{}, .{
+            if (playerButtonIcon(@src(), "ep-prev", icons.tvg.lucide.@"chevron-first", .{}, .{}, .{
                 .data_out = &wd,
                 .color_fill = playerControlFill(false),
                 .color_fill_hover = playerControlHover(),
@@ -1565,7 +1618,7 @@ pub fn renderLiquidGlassOverlay() void {
 
         // ── Transport: skip-back | rewind | play/pause | forward | skip-forward ──
         if (has_playlist) {
-            if (dvui.buttonIcon(@src(), "skip-prev", icons.tvg.lucide.@"skip-back", .{}, .{}, .{
+            if (playerButtonIcon(@src(), "skip-prev", icons.tvg.lucide.@"skip-back", .{}, .{}, .{
                 .data_out = &wd,
                 .color_fill = playerControlFill(false),
                 .color_fill_hover = playerControlHover(),
@@ -1584,7 +1637,7 @@ pub fn renderLiquidGlassOverlay() void {
         }
 
         // Rewind 10s — 32px square. Sheds with the rest of the skip group.
-        if (fit.skip_buttons) if (dvui.buttonIcon(@src(), "rewind10", icons.tvg.lucide.rewind, .{}, .{}, .{
+        if (fit.skip_buttons) if (playerButtonIcon(@src(), "rewind10", icons.tvg.lucide.rewind, .{}, .{}, .{
             .data_out = &wd,
             .color_fill = playerControlFill(false),
             .color_fill_hover = playerControlHover(),
@@ -1607,7 +1660,7 @@ pub fn renderLiquidGlassOverlay() void {
         // text_primary, NOT text_on_accent — the latter is the dark ink meant to
         // sit on the bright accent fill, and without that fill it would be
         // near-invisible against the glass panel.
-        if (dvui.buttonIcon(@src(), "toggle-pp", toggle_icon, .{}, .{}, .{
+        if (playerButtonIcon(@src(), "toggle-pp", toggle_icon, .{}, .{}, .{
             .data_out = &wd,
             .color_fill = playerControlFill(false),
             .color_fill_hover = playerControlHover(),
@@ -1682,7 +1735,7 @@ pub fn renderLiquidGlassOverlay() void {
         // still on the right-arrow key, which is where it always was.)
         {
             const is_fs = state.app.fullscreen_player_idx != null;
-            if (dvui.buttonIcon(@src(), "fullscreen", if (is_fs) icons.tvg.lucide.@"minimize-2" else icons.tvg.lucide.@"maximize-2", .{}, .{}, .{
+            if (playerButtonIcon(@src(), "fullscreen", if (is_fs) icons.tvg.lucide.@"minimize-2" else icons.tvg.lucide.@"maximize-2", .{}, .{}, .{
                 .data_out = &wd,
                 .color_fill = playerControlFill(false),
                 .color_fill_hover = playerControlHover(),
@@ -1711,7 +1764,7 @@ pub fn renderLiquidGlassOverlay() void {
         }
 
         if (has_playlist) {
-            if (dvui.buttonIcon(@src(), "skip-next", icons.tvg.lucide.@"skip-forward", .{}, .{}, .{
+            if (playerButtonIcon(@src(), "skip-next", icons.tvg.lucide.@"skip-forward", .{}, .{}, .{
                 .data_out = &wd,
                 .color_fill = playerControlFill(false),
                 .color_fill_hover = playerControlHover(),
@@ -1732,7 +1785,7 @@ pub fn renderLiquidGlassOverlay() void {
         // ── Next episode ──
         if (on_episode) {
             const has_next = tv_lib.neighborEpisode(1) != null;
-            if (dvui.buttonIcon(@src(), "ep-next", icons.tvg.lucide.@"chevron-last", .{}, .{}, .{
+            if (playerButtonIcon(@src(), "ep-next", icons.tvg.lucide.@"chevron-last", .{}, .{}, .{
                 .data_out = &wd,
                 .color_fill = playerControlFill(false),
                 .color_fill_hover = playerControlHover(),
@@ -1826,7 +1879,7 @@ pub fn renderLiquidGlassOverlay() void {
             .low => icons.tvg.lucide.@"volume-1",
             .high => icons.tvg.lucide.@"volume-2",
         };
-        if (dvui.buttonIcon(@src(), "mute-tog", m_icon, .{}, .{}, .{
+        if (playerButtonIcon(@src(), "mute-tog", m_icon, .{}, .{}, .{
             .data_out = &wd,
             .color_fill = playerControlFill(false),
             .color_fill_hover = playerControlHover(),
@@ -1920,7 +1973,9 @@ pub fn renderLiquidGlassOverlay() void {
 
         const playing_youtube = std.ascii.indexOfIgnoreCase(active_p.current_url[0..active_p.current_url_len], "youtube.com/") != null or
             std.ascii.indexOfIgnoreCase(active_p.current_url[0..active_p.current_url_len], "youtu.be/") != null;
-        if (playing_youtube and fit.secondary_chips) {
+        const video_is_playing = !active_p.is_loading and !active_p.cached_vid_no and
+            active_p.texture != null and active_p.cached_video_width > 0;
+        if (playing_youtube and video_is_playing and fit.secondary_chips) {
             const quality_labels = [_][]const u8{ "720p", "1080p", "4K", "Audio" };
             const quality = if (active_p.youtube_fast_active)
                 "360p"
@@ -2041,7 +2096,7 @@ pub fn renderLiquidGlassOverlay() void {
         }
 
         const close_hovered_now = mouseOverRect(close_button_rect);
-        if (dvui.buttonIcon(@src(), "close", icons.tvg.lucide.x, .{}, .{}, .{
+        if (playerButtonIcon(@src(), "close", icons.tvg.lucide.x, .{}, .{}, .{
             .data_out = &wd,
             .color_fill = playerControlFill(false),
             .color_fill_hover = playerControlHover(),
