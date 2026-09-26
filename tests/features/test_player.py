@@ -697,8 +697,10 @@ def test_youtube_browse():
         # SWR refresh re-runs the SEARCH — inside channel view that would
         # silently dump the user back to results.
         "swr gated in channel view": "!channel_mode.load(.acquire) and" in yt,
-        # Play lands the user on the player, not just behind a closed drawer.
-        "play goes to player view": "state.gotoPlayer()" in yt,
+        # YouTube uses the shared direct-play seam, which creates a player on
+        # cold start and owns the navigation transition.
+        "play goes to player view": ("browser.playDirect(.{" in yt
+                                     and "state.gotoPlayer()" in _src("src/services/browser.zig")),
         # Durations: "1:15:03", not "75:03" — and no "+07" sign artifact (Zig
         # zero-pads signed ints with a forced sign).
         "hour-aware duration pure + routed": ("pub fn formatDuration" in ytp
@@ -722,8 +724,8 @@ def test_youtube_card_footer():
     checks = {
         # Sticky thumbnail-anchored icon buttons (no text), Play + Queue.
         "sticky icon action helper": "fn thumbActionIcon(" in yt,
-        "play + queue icons wired": "thumbActionIcon(idx + 171, icons.tvg.lucide.play, true)" in yt
-            and "thumbActionIcon(idx + 172, icons.tvg.lucide.plus, false)" in yt,
+        "play + queue icons wired": 'thumbActionIcon(idx + 171, "Play video", icons.tvg.lucide.play, true)' in yt
+            and 'thumbActionIcon(idx + 172, "Add to queue", icons.tvg.lucide.plus, false)' in yt,
         "actions anchored bottom-left of thumb": ".gravity_x = 0.0," in yt and ".gravity_y = 1.0," in yt,
         # Thumbnail is a plain box now (a wrapping button would eat the icon
         # clicks — parent processes events before children).

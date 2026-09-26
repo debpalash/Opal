@@ -4964,6 +4964,7 @@ fn apiPlayerAction(stream: std.Io.net.Stream, ap: *player.MediaPlayer, query: []
             sendJsonStatus(stream, "409 Conflict", "{\"error\":\"nothing to retry\"}");
             return;
         },
+        .cancel_current => ap.cancelCurrentLoad(),
         .close_player => state.app.pending_remove_player_idx = @intCast(state.app.active_player_idx),
     }
     state.wakeUi();

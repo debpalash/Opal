@@ -214,38 +214,31 @@ def test_fetchimage_curl():
     return "fail", "fetchImage still routes images through std.http (anime posters return NULL)"
 
 
-@test("YouTube playback pins no player client", "Network")
+@test("YouTube playback uses a libmpv-compatible client", "Network")
 def test_youtube_player_client():
-    # REGRESSION — "youtube links not playing". A previous fix pinned
-    # `youtube:player_client=tv` everywhere, because at the time the default web
-    # client got "Sign in to confirm you're not a bot" + HTTP 429. That pin has
-    # since inverted into the bug: the tv client now returns ONLY storyboard
-    # formats (sb0..sb3), so mpv's `bestvideo[height<=?N]+bestaudio/best`
-    # selector matches nothing and every video dies on "Requested format is not
-    # available". Verified against the live API on 2026-07-20.
-    #
-    # yt-dlp maintains its own client-fallback chain; pinning one client freezes
-    # us at whatever was true the day the pin was written. The playback and
-    # extraction paths must therefore pin NOTHING.
+    # Current default adaptive URLs reject FFmpeg's open-ended Range request.
+    # Android exposes a progressive A/V URL that libmpv can read, while the old
+    # TV pin remains banned because it returns storyboard-only results.
     player = _src("src/player/player.zig")
     extractors = _src("src/services/extractors.zig")
     opts = _src("src/player/ytdl_opts_pure.zig")
     build = _src("build.zig")
 
     checks = {
-        "playback unpinned": "player_client" not in player,
+        "compatible first path": "youtube_compatible = fast" in player,
         "extraction unpinned": "youtube:player_client=tv" not in extractors,
         # The raw-options string is built by a tested pure fn so the exact value
         # mpv receives is covered, not just the absence of a substring.
         "raw options routed through pure": "ytdl_opts_pure" in player and "buildRawOptions(" in player,
         "pure module present": "pub fn buildRawOptions" in opts,
-        "pure module guards the pin": 'indexOf(u8, s, "player_client") == null' in opts,
+        "pure module selects android": '"youtube:player_client=android"' in opts,
+        "default retry retained": "youtube_default_retry_pending" in player,
         "test registered": 'b.path("src/player/ytdl_opts_pure.zig")' in build,
     }
     bad = [k for k, v in checks.items() if not v]
     if bad:
         return "fail", "player-client regression: " + ", ".join(bad)
-    return "pass", "no pinned yt-dlp player client; raw options built by tested pure fn"
+    return "pass", "range-compatible YouTube client first, default extractor retry retained"
 
 
 @test("yt-dlp format deprioritizes AV1", "Player")

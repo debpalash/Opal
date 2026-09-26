@@ -24,6 +24,7 @@ var yt_mutex: @import("../core/sync.zig").Mutex = .{};
 // grid for the whole ~3s fetch), the worker arms this and the first new item
 // to arrive clears the old ones — so a stale-refresh swaps in place.
 var pending_clear: bool = false;
+var pending_clear_generation: u32 = 0;
 
 // On re-search, appendYt (worker thread) drops the old results via
 // clearRetainingCapacity — but those YtItems own a GPU thumb_tex + heap
@@ -79,9 +80,9 @@ var search_request: LatestRequest = .{};
 const DEBOUNCE_MS: i64 = 400;
 
 // ── UI controls (module-level, not in state.zig) ──
-var card_w: f32 = 200; // user-cyclable card width, clamp 150..360
-const CARD_MIN: f32 = 150;
-const CARD_MAX: f32 = 360;
+var card_w: f32 = 280; // YouTube-like desktop density; still user-adjustable
+const CARD_MIN: f32 = 200;
+const CARD_MAX: f32 = 420;
 
 /// The card title font. Heading WEIGHT at body SIZE — compact, and small enough
 /// that a two-line title stays short. cardFooterH() MUST measure the SAME font.
@@ -94,10 +95,10 @@ fn titleFont() dvui.Font {
 /// tall title. Icon-only, no text. `accent` fills it with the accent colour (the
 /// primary Play affordance); otherwise a dark scrim keeps a secondary action
 /// legible on any thumbnail. Returns true when clicked.
-fn thumbActionIcon(id: usize, icon: []const u8, accent: bool) bool {
-    return dvui.buttonIcon(@src(), "ytact", icon, .{}, .{}, .{
+fn thumbActionIcon(id: usize, label: []const u8, icon: []const u8, accent: bool) bool {
+    return dvui.buttonIcon(@src(), label, icon, .{}, .{}, .{
         .id_extra = id,
-        .color_text = if (accent) dvui.Color.black else dvui.Color.white,
+        .color_text = if (accent) theme.colors.text_on_accent else dvui.Color.white,
         .color_fill = if (accent) theme.colors.accent else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 175 },
         .color_fill_hover = theme.colors.accent,
         .corner_radius = dvui.Rect.all(16),
@@ -141,6 +142,7 @@ const PAGE_SIZE: usize = 20;
 const ITEM_CAP: usize = 200; // below the 256 reserved capacity → appends never realloc
 var loaded_count: std.atomic.Value(usize) = std.atomic.Value(usize).init(0);
 var loading_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+var more_available: std.atomic.Value(bool) = std.atomic.Value(bool).init(true);
 // The query the current result set is paged on — captured at first fetch so
 // load-more re-runs the right search even if the text box changes mid-scroll.
 var paged_query: [256]u8 = std.mem.zeroes([256]u8);
@@ -149,6 +151,7 @@ var paged_query_len: usize = 0;
 // Set for the duration of a load-more fetch: appendYt then dedupes against the
 // existing grid (yt-dlp re-sends the earlier page) and honours ITEM_CAP.
 var appending_more: bool = false;
+var appending_more_generation: u32 = 0;
 
 // ── InnerTube continuation cursor ──
 // InnerTube hands back an opaque token pointing at the NEXT page of whatever
@@ -184,6 +187,18 @@ fn clearContinuation() void {
     cont_is_browse = false;
 }
 
+fn hasContinuation() bool {
+    yt_mutex.lock();
+    defer yt_mutex.unlock();
+    return cont_token_len > 0;
+}
+
+fn resultLen() usize {
+    yt_mutex.lock();
+    defer yt_mutex.unlock();
+    return state.app.yt.results.items.len;
+}
+
 // ── Channel mode ──
 // Clicking a card's channel name swaps the grid to that channel's uploads
 // (yt-dlp flat-playlist on /channel/{id}/videos). The flag is atomic because
@@ -213,26 +228,29 @@ const SUGG_DEBOUNCE_MS: i64 = 150; // faster than the 400ms search debounce
 
 /// Append a result, clearing stale results lazily on the first new one.
 /// Caller must hold yt_mutex. Keeps the `dates` arrays index-aligned.
-fn appendYt(item: state.YtItem) void {
-    if (pending_clear) {
-        // Free the old items' GPU textures (queued for the UI thread) and heap
-        // pixel buffers before dropping them — clearRetainingCapacity won't.
-        for (state.app.yt.results.items) |*old| {
-            if (old.thumb_tex) |t| {
-                queueYtTexFree(t);
-                old.thumb_tex = null;
-            }
-            if (old.thumb_pixels) |px| {
-                alloc.free(px);
-                old.thumb_pixels = null;
-            }
+fn clearResultsLocked() void {
+    for (state.app.yt.results.items) |*old| {
+        if (old.thumb_tex) |t| {
+            queueYtTexFree(t);
+            old.thumb_tex = null;
         }
-        state.app.yt.results.clearRetainingCapacity();
-        dates.clearRetainingCapacity();
-        dates_lens.clearRetainingCapacity();
+        if (old.thumb_pixels) |px| {
+            alloc.free(px);
+            old.thumb_pixels = null;
+        }
+    }
+    state.app.yt.results.clearRetainingCapacity();
+    dates.clearRetainingCapacity();
+    dates_lens.clearRetainingCapacity();
+}
+
+fn appendYt(item: state.YtItem, generation: u32) void {
+    if (!isCurrent(generation)) return;
+    if (pending_clear and pending_clear_generation == generation) {
+        clearResultsLocked();
         pending_clear = false;
     }
-    if (appending_more) {
+    if (appending_more and appending_more_generation == generation) {
         if (state.app.yt.results.items.len >= ITEM_CAP) return;
         if (videoIdExists(item.video_id[0..item.video_id_len])) return;
     }
@@ -392,7 +410,7 @@ fn deserializeYtInto(bytes: []const u8, gen: u32) usize {
             @memcpy(staged_date[0..8], ymd[0..8]);
             staged_date_len = 8;
         } else staged_date_len = 0;
-        appendYt(it);
+        appendYt(it, gen);
         yt_mutex.unlock();
         count += 1;
     }
@@ -428,8 +446,58 @@ fn storeYtToCache(query: []const u8) void {
     }
 }
 
+const SearchJob = struct {
+    generation: u32,
+    query: [256]u8 = undefined,
+    query_len: usize = 0,
+};
+
+fn searchWorker(job: SearchJob) void {
+    defer search_request.finish(job.generation, &state.app.yt.is_loading);
+    const q = job.query[0..job.query_len];
+
+    if (!armPendingClear(job.generation)) return;
+
+    // Paint cached rows immediately, then let the first live row atomically
+    // replace them. The immutable job lets a newer search safely supersede us.
+    const seeded = populateYtFromCache(q, job.generation);
+    if (!armPendingClear(job.generation)) return;
+
+    if (isCurrent(job.generation)) _ = fetchViaInnerTube(q, job.generation, PAGE_SIZE);
+    if (pendingClear(job.generation) and isCurrent(job.generation)) fetchViaYtdlp(q, job.generation, PAGE_SIZE);
+    if (pendingClear(job.generation) and isCurrent(job.generation)) _ = fetchViaPiped(q, job.generation);
+
+    if (!pendingClear(job.generation) and isCurrent(job.generation)) {
+        storeYtToCache(q);
+        // If InnerTube supplied no continuation and the first page was short,
+        // there is no useful automatic follow-up to request.
+        if (!hasContinuation() and resultLen() < PAGE_SIZE) more_available.store(false, .release);
+    } else if (isCurrent(job.generation)) {
+        yt_mutex.lock();
+        if (!seeded) clearResultsLocked();
+        if (pending_clear_generation == job.generation) pending_clear = false;
+        yt_mutex.unlock();
+        more_available.store(false, .release);
+        nudgeUi(true);
+    }
+}
+
+fn armPendingClear(generation: u32) bool {
+    yt_mutex.lock();
+    defer yt_mutex.unlock();
+    if (!isCurrent(generation)) return false;
+    pending_clear = true;
+    pending_clear_generation = generation;
+    return true;
+}
+
+fn pendingClear(generation: u32) bool {
+    yt_mutex.lock();
+    defer yt_mutex.unlock();
+    return pending_clear and pending_clear_generation == generation;
+}
+
 pub fn fetchYoutube(query: []const u8) void {
-    if (state.app.yt.is_loading.load(.acquire)) return;
     channel_mode.store(false, .release); // a search always leaves channel view
     state.app.yt.last_fetch_s = @import("browse_cache.zig").now(); // SWR stamp
 
@@ -439,67 +507,25 @@ pub fn fetchYoutube(query: []const u8) void {
     // again, marking this one stale.
     const my_gen = search_request.begin(&state.app.yt.is_loading);
 
-    const S = struct {
-        var q_buf: [256]u8 = undefined;
-        var q_len: usize = 0;
-        var gen: u32 = 0;
-    };
-
-    S.q_len = @min(actual_query.len, 255);
-    @memcpy(S.q_buf[0..S.q_len], actual_query[0..S.q_len]);
-    S.gen = my_gen;
+    var job: SearchJob = .{ .generation = my_gen };
+    job.query_len = @min(actual_query.len, job.query.len - 1);
+    @memcpy(job.query[0..job.query_len], actual_query[0..job.query_len]);
 
     // Fresh search → reset paging. Remember the query this result set is paged
     // on so load-more re-runs the same search even if the text box changes.
     loaded_count.store(PAGE_SIZE, .release);
     loading_more.store(false, .release);
+    more_available.store(true, .release);
     clearContinuation(); // new feed → the old feed's page-2 cursor is void
-    paged_query_len = S.q_len;
-    @memcpy(paged_query[0..S.q_len], S.q_buf[0..S.q_len]);
+    paged_query_len = job.query_len;
+    @memcpy(paged_query[0..job.query_len], job.query[0..job.query_len]);
 
     // Reserve a stable capacity (on the caller thread, before the worker /
     // any thumb-fetch worker exists) so later appends never realloc the buffer
     // out from under fetchThumb workers holding *YtItem (cf. the TMDB crash).
     state.app.yt.results.ensureTotalCapacity(alloc, 256) catch {};
 
-    workers.spawn(struct {
-        fn worker() void {
-            defer {
-                search_request.finish(S.gen, &state.app.yt.is_loading);
-            }
-
-            const q = S.q_buf[0..S.q_len];
-
-            yt_mutex.lock();
-            pending_clear = true; // old results stay until the first new one lands
-            yt_mutex.unlock();
-
-            // ── SWR seed ──
-            // Paint the last-known rows for this query from the encrypted disk
-            // cache first (no network) so the grid is never blank, then RE-ARM
-            // pending_clear so the first live row swaps them out in place
-            // (otherwise the live rows would append onto the cached ones).
-            _ = populateYtFromCache(q, S.gen);
-            yt_mutex.lock();
-            pending_clear = true;
-            yt_mutex.unlock();
-
-            // ── Layered fallback: InnerTube → yt-dlp → Piped ──
-            // InnerTube is ~1.1s vs yt-dlp's ~18.6s for the same 20 results, so
-            // it leads. Each later stage runs only if the previous published
-            // nothing AND this search is still current. `pending_clear` (not
-            // results.len) is the "did anything land" signal — the lazy-clear
-            // means the OLD results are still in the list until a new row lands.
-            if (isCurrent(S.gen)) _ = fetchViaInnerTube(q, S.gen, PAGE_SIZE);
-            if (pending_clear and isCurrent(S.gen)) fetchViaYtdlp(q, S.gen, PAGE_SIZE);
-            if (pending_clear and isCurrent(S.gen)) _ = fetchViaPiped(q, S.gen);
-
-            // Live rows landed (pending_clear was consumed after the re-arm) →
-            // refresh the cache entry. A fetch that produced nothing leaves the
-            // cached rows on screen and the stored entry untouched.
-            if (!pending_clear and isCurrent(S.gen)) storeYtToCache(q);
-        }
-    }.worker, .{}) catch {
+    workers.spawn(searchWorker, .{job}) catch {
         search_request.finish(my_gen, &state.app.yt.is_loading);
     };
 }
@@ -507,8 +533,28 @@ pub fn fetchYoutube(query: []const u8) void {
 /// Enter channel mode: swap the grid to `channel_id`'s uploads (seamless —
 /// old results stay until the first channel row lands). UI THREAD ONLY (card
 /// click / context menu). A later fetchYoutube() exits channel mode.
+const ChannelJob = struct {
+    generation: u32,
+    id: [32]u8 = undefined,
+    id_len: usize = 0,
+    name: [64]u8 = undefined,
+    name_len: usize = 0,
+};
+
+fn channelWorker(job: ChannelJob) void {
+    defer search_request.finish(job.generation, &state.app.yt.is_loading);
+    if (!armPendingClear(job.generation)) return;
+    const n = fetchChannelViaInnerTube(job.id[0..job.id_len], job.name[0..job.name_len], job.generation);
+    if (n == 0 and isCurrent(job.generation)) {
+        fetchChannelViaYtdlp(job.id[0..job.id_len], job.generation, PAGE_SIZE);
+    } else if (isCurrent(job.generation)) {
+        const have = resultLen();
+        loaded_count.store(have, .release);
+        more_available.store(hasContinuation() and have < ITEM_CAP, .release);
+    }
+}
+
 pub fn openChannel(channel_id: []const u8, name: []const u8) void {
-    if (state.app.yt.is_loading.load(.acquire)) return;
     var url_check: [96]u8 = undefined;
     if (yt_pure.channelVideosUrl(channel_id, &url_check) == null) return; // no/invalid id
 
@@ -524,48 +570,18 @@ pub fn openChannel(channel_id: []const u8, name: []const u8) void {
     // Channel paging rides loaded_count/-I; the search query is not involved.
     loaded_count.store(PAGE_SIZE, .release);
     loading_more.store(false, .release);
+    more_available.store(true, .release);
     paged_query_len = 0;
 
     state.app.yt.results.ensureTotalCapacity(alloc, 256) catch {};
 
     clearContinuation(); // new feed → the old feed's page-2 cursor is void
 
-    const S = struct {
-        var id_buf: [32]u8 = undefined;
-        var id_len: usize = 0;
-        var name_buf: [64]u8 = undefined;
-        var name_len: usize = 0;
-        var gen: u32 = 0;
-    };
-    S.id_len = channel_id_len;
-    @memcpy(S.id_buf[0..S.id_len], channel_id_buf[0..S.id_len]);
-    // Copy the name too: channel_name_buf is UI-thread state, and the worker
-    // stamps it onto every card (channel-page rows carry no byline).
-    S.name_len = channel_name_len;
-    @memcpy(S.name_buf[0..S.name_len], channel_name_buf[0..S.name_len]);
-    S.gen = my_gen;
+    var job: ChannelJob = .{ .generation = my_gen, .id_len = channel_id_len, .name_len = channel_name_len };
+    @memcpy(job.id[0..job.id_len], channel_id_buf[0..job.id_len]);
+    @memcpy(job.name[0..job.name_len], channel_name_buf[0..job.name_len]);
 
-    workers.spawn(struct {
-        fn worker() void {
-            defer search_request.finish(S.gen, &state.app.yt.is_loading);
-            yt_mutex.lock();
-            pending_clear = true; // seamless swap, same as a re-search
-            yt_mutex.unlock();
-            // InnerTube browse (~0.7s) first; yt-dlp's flat-playlist on the
-            // channel page (~19s) only if it yields nothing.
-            const n = fetchChannelViaInnerTube(S.id_buf[0..S.id_len], S.name_buf[0..S.name_len], S.gen);
-            if (n == 0) {
-                fetchChannelViaYtdlp(S.id_buf[0..S.id_len], S.gen, PAGE_SIZE);
-            } else if (isCurrent(S.gen)) {
-                // A browse page is 30 rows, not PAGE_SIZE — advance the cursor
-                // to what actually landed so load-more doesn't leave a gap.
-                yt_mutex.lock();
-                const have = state.app.yt.results.items.len;
-                yt_mutex.unlock();
-                loaded_count.store(have, .release);
-            }
-        }
-    }.worker, .{}) catch {
+    workers.spawn(channelWorker, .{job}) catch {
         search_request.finish(my_gen, &state.app.yt.is_loading);
         return;
     };
@@ -585,84 +601,81 @@ fn exitChannel() void {
 /// Guarded by `loading_more` + the main is_loading so a near-bottom scroll
 /// can't spam fetches; the generation guard makes a new search supersede an
 /// in-flight load-more.
+const MoreJob = struct {
+    generation: u32,
+    wanted: usize,
+    channel: bool,
+    query: [256]u8 = undefined,
+    query_len: usize = 0,
+    channel_id: [32]u8 = undefined,
+    channel_id_len: usize = 0,
+    channel_name: [64]u8 = undefined,
+    channel_name_len: usize = 0,
+};
+
+fn moreWorker(job: MoreJob) void {
+    defer loading_more.store(false, .release);
+
+    yt_mutex.lock();
+    if (!isCurrent(job.generation)) {
+        yt_mutex.unlock();
+        return;
+    }
+    appending_more = true;
+    appending_more_generation = job.generation;
+    yt_mutex.unlock();
+    defer {
+        yt_mutex.lock();
+        if (appending_more_generation == job.generation) appending_more = false;
+        yt_mutex.unlock();
+    }
+
+    const n = fetchContinuation(job.generation, job.channel_name[0..job.channel_name_len], job.channel_id[0..job.channel_id_len]);
+    if (n > 0) {
+        if (isCurrent(job.generation)) {
+            const have = resultLen();
+            loaded_count.store(have, .release);
+            more_available.store(hasContinuation() and have < ITEM_CAP, .release);
+        }
+        return;
+    }
+
+    const before = resultLen();
+    if (job.channel)
+        fetchChannelViaYtdlp(job.channel_id[0..job.channel_id_len], job.generation, job.wanted)
+    else
+        fetchViaYtdlp(job.query[0..job.query_len], job.generation, job.wanted);
+
+    if (isCurrent(job.generation)) {
+        const after = resultLen();
+        const added = after -| before;
+        loaded_count.store(job.wanted, .release);
+        more_available.store(added > 0 and added >= PAGE_SIZE and after < ITEM_CAP and job.wanted < ITEM_CAP, .release);
+    }
+}
+
 pub fn fetchMore() void {
     if (state.app.yt.is_loading.load(.acquire)) return;
-    if (loading_more.load(.acquire)) return;
+    if (!more_available.load(.acquire)) return;
     if (loaded_count.load(.acquire) >= ITEM_CAP) return;
+    if (loading_more.swap(true, .acq_rel)) return;
     const in_channel = channel_mode.load(.acquire);
-    if (paged_query_len == 0 and !in_channel) return;
-    loading_more.store(true, .release);
+    if (paged_query_len == 0 and !in_channel) {
+        loading_more.store(false, .release);
+        return;
+    }
 
     // This load-more belongs to the current generation; a new search bumps the
     // gen and this worker's appends get dropped (isCurrent).
     const my_gen = search_request.current();
     const want = @min(loaded_count.load(.acquire) + PAGE_SIZE, ITEM_CAP);
 
-    const S = struct {
-        var q_buf: [256]u8 = undefined;
-        var q_len: usize = 0;
-        var gen: u32 = 0;
-        var n: usize = 0;
-        var chan: bool = false;
-        var id_buf: [32]u8 = undefined;
-        var id_len: usize = 0;
-        var name_buf: [64]u8 = undefined;
-        var name_len: usize = 0;
-    };
-    S.q_len = paged_query_len;
-    @memcpy(S.q_buf[0..S.q_len], paged_query[0..S.q_len]);
-    S.gen = my_gen;
-    S.n = want;
-    S.chan = in_channel;
-    S.id_len = channel_id_len;
-    @memcpy(S.id_buf[0..S.id_len], channel_id_buf[0..S.id_len]);
-    S.name_len = channel_name_len;
-    @memcpy(S.name_buf[0..S.name_len], channel_name_buf[0..S.name_len]);
+    var job: MoreJob = .{ .generation = my_gen, .wanted = want, .channel = in_channel, .query_len = paged_query_len, .channel_id_len = channel_id_len, .channel_name_len = channel_name_len };
+    @memcpy(job.query[0..job.query_len], paged_query[0..job.query_len]);
+    @memcpy(job.channel_id[0..job.channel_id_len], channel_id_buf[0..job.channel_id_len]);
+    @memcpy(job.channel_name[0..job.channel_name_len], channel_name_buf[0..job.channel_name_len]);
 
-    workers.spawn(struct {
-        fn worker() void {
-            defer loading_more.store(false, .release);
-
-            yt_mutex.lock();
-            appending_more = true;
-            yt_mutex.unlock();
-            defer {
-                yt_mutex.lock();
-                appending_more = false;
-                yt_mutex.unlock();
-            }
-
-            // ── Fast path: one continuation POST (~1s) ──
-            // The token points straight at the next page, so unlike the yt-dlp
-            // path there's no overlap to re-download and re-dedupe. appendYt
-            // still dedupes (appending_more) and still honours ITEM_CAP.
-            const n = fetchContinuation(S.gen, S.name_buf[0..S.name_len], S.id_buf[0..S.id_len]);
-            if (n > 0) {
-                // A continuation page isn't PAGE_SIZE-shaped (search gives 20,
-                // browse 30), so advance the cursor to what's actually on
-                // screen rather than the requested S.n.
-                if (isCurrent(S.gen)) {
-                    yt_mutex.lock();
-                    const have = state.app.yt.results.items.len;
-                    yt_mutex.unlock();
-                    loaded_count.store(have, .release);
-                }
-                return;
-            }
-
-            // ── Fallback: no token (or the continuation failed) → yt-dlp ──
-            // Re-runs the whole `ytsearch{N}:` / channel listing and leans on
-            // appendYt's videoIdExists dedupe to drop the repeated prefix.
-            if (S.chan)
-                fetchChannelViaYtdlp(S.id_buf[0..S.id_len], S.gen, S.n)
-            else
-                fetchViaYtdlp(S.q_buf[0..S.q_len], S.gen, S.n);
-
-            // Only advance the cursor if this load-more is still current; a
-            // superseding search has already reset loaded_count for its own page.
-            if (isCurrent(S.gen)) loaded_count.store(S.n, .release);
-        }
-    }.worker, .{}) catch {
+    workers.spawn(moreWorker, .{job}) catch {
         loading_more.store(false, .release);
         return;
     };
@@ -830,7 +843,7 @@ fn publishRows(json: []const u8, gen: u32, limit: usize, src: RowSource) usize {
         } else {
             staged_date_len = 0;
         }
-        appendYt(item);
+        appendYt(item, gen);
         yt_mutex.unlock();
         n += 1;
     }
@@ -938,7 +951,7 @@ fn parsePipedResults(json: []const u8, gen: u32) void {
         staged_date_len = 0;
 
         yt_mutex.lock();
-        appendYt(item);
+        appendYt(item, gen);
         yt_mutex.unlock();
         count += 1;
 
@@ -1003,7 +1016,7 @@ fn runYtdlp(target: []const u8, item_range: ?[]const u8, gen: u32) void {
             break; // superseded — stop feeding the grid
         }
         yt_mutex.lock();
-        parseYtdlpLine(line);
+        parseYtdlpLine(line, gen);
         yt_mutex.unlock();
     }
 
@@ -1014,7 +1027,7 @@ fn runYtdlp(target: []const u8, item_range: ?[]const u8, gen: u32) void {
 ///   id \t title \t channel \t duration \t views \t upload_date
 /// yt-dlp prints "NA" for missing fields (flat-playlist) — parseInt then fails
 /// and we fall back to 0; an "NA"/short date is just skipped.
-fn parseYtdlpLine(line: []const u8) void {
+fn parseYtdlpLine(line: []const u8, gen: u32) void {
     var item = state.YtItem{};
     staged_date_len = 0;
 
@@ -1062,7 +1075,7 @@ fn parseYtdlpLine(line: []const u8) void {
         item.thumbnail_url_len = tlen;
     }
 
-    appendYt(item);
+    appendYt(item, gen);
 }
 
 fn isAllDigits(s: []const u8) bool {
@@ -1261,12 +1274,13 @@ pub fn renderContent() void {
     var content = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .padding = dvui.Rect.all(8) });
     defer content.deinit();
 
+    const opening_count = resultLen();
     if (!state.app.yt.loaded_once and !state.app.yt.is_loading.load(.acquire)) {
         state.app.yt.loaded_once = true;
         const q = currentQuery();
         recordFired(q);
         fetchYoutube(q);
-    } else if (state.app.yt.results.items.len > 0 and !state.app.yt.is_loading.load(.acquire) and
+    } else if (opening_count > 0 and !state.app.yt.is_loading.load(.acquire) and
         !channel_mode.load(.acquire) and // an SWR refetch would silently exit channel view
         @import("browse_cache.zig").isStale(state.app.yt.last_fetch_s))
     {
@@ -1274,7 +1288,16 @@ pub fn renderContent() void {
         fetchYoutube(currentQuery());
     }
 
+    const available_h = @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().h, state.app.ui_scale);
+    const toolbar_h = @min(@max(40, available_h * 0.12), if (toolbar_content_h > 1) toolbar_content_h else 42);
+    var toolbar_scroll = dvui.scrollArea(@src(), .{ .horizontal = .auto, .horizontal_bar = .auto_overlay, .vertical = .none }, .{
+        .expand = .horizontal,
+        .min_size_content = .{ .w = 0, .h = toolbar_h },
+        .max_size_content = dvui.Options.MaxSize.height(toolbar_h),
+        .background = false,
+    });
     renderToolbar();
+    toolbar_scroll.deinit();
 
     // Debounced live search: fire once the buffer has settled for DEBOUNCE_MS
     // and differs from what we last fired. Enter/button paths fire immediately
@@ -1285,44 +1308,41 @@ pub fn renderContent() void {
 
     // Only show the loading line on an INITIAL load (nothing yet) — a
     // stale-refresh keeps current results on screen and swaps in place.
-    if (state.app.yt.is_loading.load(.acquire) and state.app.yt.results.items.len == 0) {
+    const total = resultLen();
+    if (state.app.yt.is_loading.load(.acquire) and total == 0) {
         components.loadingState("Searching YouTube…");
         return;
     }
 
-    if (state.app.yt.results.items.len == 0 and !state.app.yt.is_loading.load(.acquire)) {
-        components.emptyState(icons.tvg.lucide.youtube, "No videos found", "Try a different search or category.");
+    if (total == 0 and !state.app.yt.is_loading.load(.acquire)) {
+        if (components.emptyStateCta(icons.tvg.lucide.youtube, "No videos found", "Try a different search or refresh this feed.", "Retry")) refreshCurrentFeed();
         return;
     }
 
     var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
     defer scroll.deinit();
 
-    yt_mutex.lock();
-    defer yt_mutex.unlock();
-
     // Responsive grid of 16:9 video tiles from the LIVE width; the column count
     // derives from the user-cyclable card width. The gutter matches the card's
-    // 4px margin on each side (8px between neighbours) so the grid reads as a
+    // 5px margin on each side (10px between neighbours) so the grid reads as a
     // uniform, evenly-spaced lattice at every width.
     const rect_w = scroll.data().rect.w;
     const avail_w: f32 = @max(260, (if (rect_w > 1) rect_w else 900) - 8);
-    const gutter: f32 = 6; // 2 * card margin (3)
+    const gutter: f32 = 10; // 2 * card margin (5)
     const cols: usize = @max(1, @as(usize, @intFromFloat((avail_w + gutter) / (card_w + gutter))));
     const real_card_w: f32 = @max(120, (avail_w - @as(f32, @floatFromInt(cols - 1)) * gutter) / @as(f32, @floatFromInt(cols)));
 
     // ── Virtualization (same shape as tmdb.zig/comics.zig/jellyfin_ui.zig) ──
     // Cards are uniform (renderCard pins min==max height), so rows have a fixed
-    // pitch: thumb + footer content, plus the card's 4px top/bottom margins
-    // (min_sizeGet = padSize(min_size_content) adds padding + margin around the
-    // content → +8 total). Rows outside the viewport (±2 overscan) collapse into
+    // pitch: thumb + footer content, plus the card's vertical margins.
+    // Rows outside the viewport (±2 overscan) collapse into
     // two spacer boxes, so the grid lays out a handful of rows per frame instead
     // of all ~200 card widget trees. The base index of each row (row * cols) is
     // IDENTICAL to the prior loop's `i`, so every card's id_extra scheme is
     // unchanged and retained widget state is unaffected.
     const thumb_h: f32 = real_card_w * 9.0 / 16.0;
-    const row_h: f32 = thumb_h + cardFooterH() + 6; // +6 = card's 3px top+bottom margin
-    const total_rows = (state.app.yt.results.items.len + cols - 1) / cols;
+    const row_h: f32 = thumb_h + cardFooterH() + 12;
+    const total_rows = (total + cols - 1) / cols;
     const win = tmdb_pure.visibleRows(total_rows, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 2);
 
     if (win.first > 0) {
@@ -1333,14 +1353,26 @@ pub fn renderContent() void {
         sp.deinit();
     }
 
+    var pending_action: ?CardAction = null;
+    var pending_item: state.YtItem = .{};
     var r: usize = win.first;
     while (r < win.last) : (r += 1) {
         const base = r * cols;
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = base + 80000, .expand = .horizontal });
         defer row.deinit();
         var col: usize = 0;
-        while (col < cols and base + col < state.app.yt.results.items.len) : (col += 1) {
-            renderCard(&state.app.yt.results.items[base + col], base + col, real_card_w);
+        while (col < cols and base + col < total) : (col += 1) {
+            const idx = base + col;
+            yt_mutex.lock();
+            if (idx < state.app.yt.results.items.len) {
+                if (renderCard(&state.app.yt.results.items[idx], idx, real_card_w)) |action| {
+                    if (pending_action == null) {
+                        pending_action = action;
+                        pending_item = state.app.yt.results.items[idx];
+                    }
+                }
+            }
+            yt_mutex.unlock();
         }
     }
 
@@ -1359,8 +1391,8 @@ pub fn renderContent() void {
     // buffer capacity so appends never realloc out from under thumb workers).
     // fetchMore() only spawns a thread; the mutex we hold here is taken by that
     // worker asynchronously, so calling it under the lock is safe.
-    const have = state.app.yt.results.items.len;
-    if (have > 0 and have < ITEM_CAP and (paged_query_len > 0 or channel_mode.load(.acquire))) {
+    const have = total;
+    if (more_available.load(.acquire) and have > 0 and have < ITEM_CAP and (paged_query_len > 0 or channel_mode.load(.acquire))) {
         const max_y = scroll.si.scrollMax(.vertical);
         const near_bottom = max_y > 0 and scroll.si.viewport.y >= max_y - 800;
         const underfilled = max_y <= 0;
@@ -1376,7 +1408,21 @@ pub fn renderContent() void {
             });
             state.wakeUi();
         }
+    } else if (have >= PAGE_SIZE and !state.app.yt.is_loading.load(.acquire)) {
+        var end = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .gravity_x = 0.5,
+            .padding = dvui.Rect.all(10),
+        });
+        defer end.deinit();
+        _ = dvui.icon(@src(), "Complete", icons.tvg.lucide.check, .{}, .{
+            .color_text = theme.colors.text_tertiary,
+            .min_size_content = theme.iconSize(.xs),
+            .margin = .{ .x = 0, .y = 0, .w = 5, .h = 0 },
+        });
+        _ = dvui.label(@src(), "You're all caught up", .{}, .{ .color_text = theme.colors.text_tertiary, .font = metaFont() });
     }
+
+    if (pending_action) |action| performCardAction(action, &pending_item);
 }
 
 /// Current search query from the shared buffer (NUL-trimmed).
@@ -1417,7 +1463,7 @@ fn maybeFireLiveSearch() void {
     const same_as_fired = q.len == last_fired_len and std.mem.eql(u8, q, last_fired_query[0..last_fired_len]);
     if (same_as_fired) return;
 
-    if (q.len >= 2 and now_ms - last_edit_ms >= DEBOUNCE_MS and !state.app.yt.is_loading.load(.acquire)) {
+    if (q.len >= 2 and now_ms - last_edit_ms >= DEBOUNCE_MS) {
         recordFired(q);
         fetchYoutube(q);
     }
@@ -1434,16 +1480,35 @@ const cat_chips = [_]CatChip{
     .{ .label = "Gaming", .query = "gaming", .icon = icons.tvg.lucide.@"gamepad-2" },
     .{ .label = "Tech", .query = "tech", .icon = icons.tvg.lucide.cpu },
     .{ .label = "News", .query = "news", .icon = icons.tvg.lucide.newspaper },
+    .{ .label = "Sports", .query = "sports", .icon = icons.tvg.lucide.dumbbell },
+    .{ .label = "Learning", .query = "education", .icon = icons.tvg.lucide.@"graduation-cap" },
+    .{ .label = "Live", .query = "live now", .icon = icons.tvg.lucide.radio },
 };
 
+var toolbar_content_h: f32 = 0;
+
+fn refreshCurrentFeed() void {
+    if (!channel_mode.load(.acquire)) {
+        fetchYoutube(currentQuery());
+        return;
+    }
+    var id: [32]u8 = undefined;
+    var name: [64]u8 = undefined;
+    const id_len = channel_id_len;
+    const name_len = channel_name_len;
+    @memcpy(id[0..id_len], channel_id_buf[0..id_len]);
+    @memcpy(name[0..name_len], channel_name_buf[0..name_len]);
+    openChannel(id[0..id_len], name[0..name_len]);
+}
+
 fn renderToolbar() void {
-    var bar = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
+    var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
-        .margin = .{ .x = 0, .y = 0, .w = 0, .h = 5 },
+        .min_size_content = .{ .w = 0, .h = 34 },
+        .margin = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
     });
     defer bar.deinit();
-
-    dvui.icon(@src(), "yt-icon", icons.tvg.lucide.music, .{}, .{ .color_text = theme.colors.accent, .gravity_y = 0.5, .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 } });
+    if (dvui.minSizeGet(bar.data().id)) |size| toolbar_content_h = size.h;
 
     // Channel banner — back arrow + the channel whose uploads fill the grid.
     if (channel_mode.load(.acquire)) {
@@ -1470,6 +1535,20 @@ fn renderToolbar() void {
 
     renderSearchInline();
 
+    if (state.app.yt.is_loading.load(.acquire)) {
+        dvui.spinner(@src(), .{ .color_text = theme.colors.accent, .min_size_content = theme.iconSize(.sm), .gravity_y = 0.5 });
+    } else if (dvui.buttonIcon(@src(), "Refresh videos", icons.tvg.lucide.@"refresh-cw", .{}, .{}, .{
+        .color_fill = theme.transparent,
+        .color_fill_hover = theme.colors.bg_hover,
+        .color_text = theme.colors.text_secondary,
+        .border = dvui.Rect.all(0),
+        .min_size_content = theme.iconSize(.sm),
+        .padding = dvui.Rect.all(4),
+        .gravity_y = 0.5,
+    })) {
+        refreshCurrentFeed();
+    }
+
     // Category preset chips.
     toolbarDivider(901);
     const q = currentQuery();
@@ -1479,10 +1558,12 @@ fn renderToolbar() void {
 
     // Item count + card-size controls.
     toolbarDivider(950);
-    _ = dvui.label(@src(), "{d} videos", .{state.app.yt.results.items.len}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5, .font = metaFont() });
+    _ = dvui.label(@src(), "{d} videos", .{resultCount()}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5, .font = metaFont() });
 
-    const dim = dvui.Color{ .r = 120, .g = 120, .b = 148, .a = 200 };
+    const dim = theme.colors.text_secondary;
+    var smaller_wd: dvui.WidgetData = undefined;
     if (dvui.buttonIcon(@src(), "smaller", icons.tvg.lucide.minus, .{}, .{}, .{
+        .data_out = &smaller_wd,
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
         .color_text = dim,
         .border = dvui.Rect.all(0),
@@ -1492,7 +1573,10 @@ fn renderToolbar() void {
     })) {
         card_w = @max(CARD_MIN, card_w - 40);
     }
+    components.tip(@src(), smaller_wd, "Smaller video cards");
+    var bigger_wd: dvui.WidgetData = undefined;
     if (dvui.buttonIcon(@src(), "bigger", icons.tvg.lucide.plus, .{}, .{}, .{
+        .data_out = &bigger_wd,
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
         .color_text = dim,
         .border = dvui.Rect.all(0),
@@ -1502,6 +1586,7 @@ fn renderToolbar() void {
     })) {
         card_w = @min(CARD_MAX, card_w + 40);
     }
+    components.tip(@src(), bigger_wd, "Larger video cards");
 }
 
 /// A faint vertical separator between toolbar groups.
@@ -1525,10 +1610,12 @@ fn toolbarDivider(id: usize) void {
 /// must own the event pass so ↑/↓ move the highlight, Enter commits it, and
 /// Esc closes — so te.processEvents() must NOT run (suggestion forwards events).
 fn renderSearchInline() void {
+    const layout_w = @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().w, state.app.ui_scale);
+    const input_w = std.math.clamp(layout_w * 0.30, 180, 300);
     var te = dvui.widgetAlloc(dvui.TextEntryWidget);
     te.init(@src(), .{ .text = .{ .buffer = &state.app.yt.search_buf }, .placeholder = "Search YouTube…" }, .{
-        .min_size_content = .{ .w = 240, .h = components.TOOLBAR_INPUT_H },
-        .max_size_content = .{ .w = 240, .h = components.TOOLBAR_INPUT_H },
+        .min_size_content = .{ .w = input_w, .h = components.TOOLBAR_INPUT_H },
+        .max_size_content = .{ .w = input_w, .h = components.TOOLBAR_INPUT_H },
         .color_fill = theme.colors.bg_elevated,
         .color_border = theme.colors.border_subtle,
         .color_text = theme.colors.text_primary,
@@ -1695,6 +1782,7 @@ fn fireSuggest(query: []const u8) void {
 fn renderCatChip(idx: usize, chip: CatChip, current: []const u8) void {
     const active = std.mem.eql(u8, current, chip.query);
     if (components.filterChip(@src(), chip.label, chip.icon, active, idx + 2000)) {
+        if (active and !channel_mode.load(.acquire)) return;
         setQuery(chip.query);
         recordFired(chip.query);
         fetchYoutube(chip.query);
@@ -1712,7 +1800,10 @@ fn setQuery(q: []const u8) void {
 // Cards
 // ══════════════════════════════════════════════════════════
 
-fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
+const CardAction = enum { play, queue, channel, copy_title, copy_url };
+
+fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) ?CardAction {
+    var action: ?CardAction = null;
     const title = safeUtf8(item.title[0..item.title_len]);
     const thumb_h: f32 = the_card_w * 9.0 / 16.0;
 
@@ -1724,14 +1815,12 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
     const footer_h = cardFooterH();
     var card = dvui.box(@src(), .{ .dir = .vertical }, .{
         .id_extra = idx + 9000,
-        .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .color_border = theme.colors.border_subtle,
-        .border = dvui.Rect.all(1),
-        .corner_radius = dvui.Rect.all(theme.radius.lg),
+        .background = false,
+        .border = dvui.Rect.all(0),
+        .corner_radius = dvui.Rect.all(0),
         .min_size_content = .{ .w = the_card_w, .h = thumb_h + footer_h },
         .max_size_content = .{ .w = the_card_w, .h = thumb_h + footer_h },
-        .margin = .{ .x = 3, .y = 3, .w = 3, .h = 3 },
+        .margin = .{ .x = 5, .y = 5, .w = 5, .h = 7 },
         .padding = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
     });
     defer card.deinit();
@@ -1747,7 +1836,7 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
             .expand = .horizontal,
             .background = true,
             .color_fill = theme.colors.bg_deep,
-            .corner_radius = .{ .x = theme.radius.lg, .y = theme.radius.lg, .w = 0, .h = 0 },
+            .corner_radius = dvui.Rect.all(theme.radius.lg),
             .min_size_content = .{ .w = the_card_w, .h = thumb_h },
             .max_size_content = .{ .w = the_card_w, .h = thumb_h },
             .padding = dvui.Rect.all(0),
@@ -1775,7 +1864,7 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
                 _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
                     .id_extra = idx + 150,
                     .expand = .both,
-                    .corner_radius = dvui.Rect.all(4),
+                    .corner_radius = dvui.Rect.all(theme.radius.lg),
                 });
             } else {
                 // Failure-latch (mirrors TmdbItem/JfItem): stop re-spawning a
@@ -1830,8 +1919,8 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
                     .margin = .{ .x = 6, .y = 0, .w = 0, .h = 6 },
                 });
                 defer abar.deinit();
-                if (thumbActionIcon(idx + 171, icons.tvg.lucide.play, true)) sendToPlayer(item, false);
-                if (thumbActionIcon(idx + 172, icons.tvg.lucide.plus, false)) sendToPlayer(item, true);
+                if (thumbActionIcon(idx + 171, "Play video", icons.tvg.lucide.play, true)) action = .play;
+                if (thumbActionIcon(idx + 172, "Add to queue", icons.tvg.lucide.plus, false)) action = .queue;
             }
         }
     }
@@ -1841,7 +1930,7 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
         var info = dvui.box(@src(), .{ .dir = .vertical }, .{
             .id_extra = idx + 200,
             .expand = .horizontal,
-            .padding = .{ .x = 8, .y = 5, .w = 8, .h = 0 },
+            .padding = .{ .x = 2, .y = 7, .w = 2, .h = 0 },
         });
         defer info.deinit();
 
@@ -1858,14 +1947,14 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
         // bug. With the clamp the title can never steal the actions' space,
         // regardless of font-metric surprises. Same 2-line height cardFooterH
         // reserves, so they cannot drift.
-        _ = dvui.labelNoFmt(@src(), title_2l, .{}, .{
+        if (dvui.labelClick(@src(), "{s}", .{title_2l}, .{}, .{
             .id_extra = idx + 300,
             .expand = .horizontal,
             .color_text = theme.colors.text_primary,
             .font = titleFont(),
             .max_size_content = .{ .w = std.math.floatMax(f32), .h = 2.0 * titleFont().lineHeight() },
             .gravity_y = 0.0,
-        });
+        })) action = .play;
 
         // Two-line meta: channel on its own line, then "1.5M views · 3w ago".
         // Splitting them means dvui ellipsizes the CHANNEL (line 1) and trims
@@ -1890,7 +1979,7 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
                         .color_text = theme.colors.text_secondary,
                         .font = metaFont(),
                     })) {
-                        openChannel(item.channel_id[0..item.channel_id_len], item.uploader[0..item.uploader_len]);
+                        action = .channel;
                     }
                 } else {
                     _ = dvui.labelNoFmt(@src(), ch, .{}, .{
@@ -1935,26 +2024,41 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) void {
 
             if (item.channel_id_len > 0 and item.uploader_len > 0) {
                 if ((dvui.menuItemLabel(@src(), "View Channel", .{}, .{ .expand = .horizontal, .id_extra = idx + 705 })) != null) {
-                    openChannel(item.channel_id[0..item.channel_id_len], item.uploader[0..item.uploader_len]);
+                    action = .channel;
                     fw.close();
                 }
             }
             if ((dvui.menuItemLabel(@src(), "Copy Title", .{}, .{ .expand = .horizontal, .id_extra = idx + 710 })) != null) {
-                dvui.clipboardTextSet(title);
-                state.showToast("Title copied");
+                action = .copy_title;
                 fw.close();
             }
             if (item.video_id_len > 0) {
                 if ((dvui.menuItemLabel(@src(), "Copy YouTube URL", .{}, .{ .expand = .horizontal, .id_extra = idx + 720 })) != null) {
-                    var yt_url_buf: [128]u8 = undefined;
-                    if (std.fmt.bufPrint(&yt_url_buf, "https://www.youtube.com/watch?v={s}", .{item.video_id[0..item.video_id_len]})) |yt_url| {
-                        dvui.clipboardTextSet(yt_url);
-                        state.showToast("YouTube URL copied");
-                    } else |_| {}
+                    action = .copy_url;
                     fw.close();
                 }
             }
         }
+    }
+    return action;
+}
+
+fn performCardAction(action: CardAction, item: *const state.YtItem) void {
+    switch (action) {
+        .play => sendToPlayer(item, false),
+        .queue => sendToPlayer(item, true),
+        .channel => openChannel(item.channel_id[0..item.channel_id_len], item.uploader[0..item.uploader_len]),
+        .copy_title => {
+            dvui.clipboardTextSet(safeUtf8(item.title[0..item.title_len]));
+            state.showToast("Title copied");
+        },
+        .copy_url => {
+            var url_buf: [128]u8 = undefined;
+            if (std.fmt.bufPrint(&url_buf, "https://www.youtube.com/watch?v={s}", .{item.video_id[0..item.video_id_len]})) |url| {
+                dvui.clipboardTextSet(url);
+                state.showToast("YouTube URL copied");
+            } else |_| {}
+        },
     }
 }
 
@@ -2046,21 +2150,19 @@ fn truncateUtf8(s_in: []const u8, max: usize, out: []u8) []const u8 {
     return out[0..oi];
 }
 
-fn sendToPlayer(item: *state.YtItem, appendToPlaylist: bool) void {
-    if (state.app.active_player_idx >= state.app.players.items.len) return;
-    const ap = state.app.players.items[state.app.active_player_idx];
+fn sendToPlayer(item: *const state.YtItem, appendToPlaylist: bool) void {
     const queue_svc = @import("queue.zig");
+    const browser = @import("browser.zig");
 
     var url_buf: [128]u8 = undefined;
     const yt_url = std.fmt.bufPrintZ(&url_buf, "https://www.youtube.com/watch?v={s}", .{item.video_id[0..item.video_id_len]}) catch return;
 
     queue_svc.addToQueue(yt_url, item.title[0..item.title_len], "youtube");
-
-    if (appendToPlaylist) {
-        ap.load(.{ .url = yt_url, .mode = .append });
-        state.showToast("Track queued!");
-    } else {
-        ap.load(.{ .url = yt_url, .mode = .replace });
-        state.gotoPlayer(); // player route + drawer closed — user lands on the video
-    }
+    browser.playDirect(.{
+        .url = yt_url,
+        .mode = if (appendToPlaylist) .append else .replace,
+        .title = item.title[0..item.title_len],
+        .subtitle = item.uploader[0..item.uploader_len],
+    });
+    if (appendToPlaylist) state.showToast("Video queued");
 }

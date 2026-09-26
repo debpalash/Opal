@@ -40,10 +40,39 @@ const dropup = @import("dropup_pure.zig");
 /// Per-picker rect, kept across frames because dvui's FloatingWindowWidget wants a
 /// mutable pointer. Recomputed from the chip anchor every frame, so a panel tracks
 /// its chip if the control bar moves (e.g. entering fullscreen).
-var dropup_rects: [9]dvui.Rect = [_]dvui.Rect{.{}} ** 9;
+var dropup_rects: [10]dvui.Rect = [_]dvui.Rect{.{}} ** 10;
 /// Physical bounds from the last rendered frame. Mouse events are physical,
 /// while FloatingWindowWidget placement uses logical coordinates.
-var dropup_screen_rects: [9]dvui.Rect.Physical = [_]dvui.Rect.Physical{.{}} ** 9;
+var dropup_screen_rects: [10]dvui.Rect.Physical = [_]dvui.Rect.Physical{.{}} ** 10;
+
+pub fn renderQualityPickerPopover(active_p: *player.MediaPlayer) void {
+    if (footer.open_picker != .quality) return;
+    var open = true;
+    var fw = beginDropUp(@src(), .quality, 250, 246, &open);
+    defer fw.deinit();
+    dropUpTitle(@src(), icons.tvg.lucide.monitor, "Stream quality");
+
+    const labels = [_][]const u8{ "720p · efficient", "1080p · sharp", "4K · maximum", "Audio only" };
+    var pad = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .both,
+        .padding = dvui.Rect.all(theme.spacing.sm),
+    });
+    defer pad.deinit();
+    if (pickerOption(@src(), 9399, icons.tvg.lucide.zap, "Fast · 360p", active_p.youtube_fast_active)) {
+        active_p.reloadYoutubeFast();
+        footer.closePickers();
+    }
+    for (labels, 0..) |label, i| {
+        const selected = !active_p.youtube_fast_active and state.app.ytdl_format_idx == i;
+        if (pickerOption(@src(), 9400 + i, icons.tvg.lucide.monitor, label, selected)) {
+            state.app.ytdl_format_idx = i;
+            state.markConfigDirty();
+            active_p.reloadYoutubeAtQuality();
+            footer.closePickers();
+        }
+    }
+    if (!open) footer.closePickers();
+}
 
 /// Open a backdrop-less panel anchored above `kind`'s chip. Caller must deinit.
 pub fn beginDropUp(

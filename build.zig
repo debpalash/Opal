@@ -957,6 +957,15 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_youtube_innertube_pure).step);
 
+    const test_youtube_player_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/youtube_player_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_youtube_player_pure).step);
+
     // mpv ytdl-raw-options: the exact option string handed to mpv, incl. the
     // regression guard that no YouTube player client is ever pinned again.
     const test_ytdl_opts_pure = b.addTest(.{

@@ -39,7 +39,7 @@ def test_music():
         # ── Service: creds gate + async worker + play + covers ──
         "routes through pure": all(
             f"pure.{fn}(" in svc
-            for fn in ("authToken", "buildAuthQuery", "buildSearchUrl",
+            for fn in ("authToken", "buildAuthQuery", "buildSearchPageUrl",
                        "buildStreamUrl", "buildCoverUrl", "parseSong", "responseOk")
         ),
         "source_config gate": 'source_config' in svc and '"subsonic"' in svc,
@@ -97,9 +97,9 @@ def test_music():
         "new workers mirror subsonicWorker": "jellyfinMusicWorker" in svc and "plexMusicWorker" in svc,
         "new sources routed through pure": all(
             f"{m}.{fn}(" in svc
-            for m, fn in (("jf_pure", "buildSearchUrl"), ("jf_pure", "buildStreamUrl"),
+            for m, fn in (("jf_pure", "buildSearchPageUrl"), ("jf_pure", "buildStreamUrl"),
                           ("jf_pure", "buildCoverUrl"), ("jf_pure", "parseSong"),
-                          ("px_pure", "buildSearchUrl"), ("px_pure", "buildStreamUrl"),
+                          ("px_pure", "buildSearchPageUrl"), ("px_pure", "buildStreamUrl"),
                           ("px_pure", "buildCoverUrl"), ("px_pure", "parseSong"))
         ),
         "plex credentials decrypted at boundary": "secret_store.reveal(" in svc

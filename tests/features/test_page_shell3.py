@@ -208,8 +208,13 @@ def test_player_dropups():
             ".min_size_content = .{ .w = 20, .h = 20 }"
         ) >= 7,
         "transport hover feedback": _between(ft, "var ctrl_row", "ROW 3").count(
-            ".color_fill_hover = theme.colors.bg_hover"
+            ".color_fill_hover = playerControlHover()"
         ) >= 7,
+        "bright-video contrast": (
+            "playerControlFill(false)" in ft
+            and "const player_text = dvui.Color" in ft
+            and "const edge_alphas = [_]u8{ 92" in ft
+        ),
         "chips share 30px geometry": (
             ".min_size_content = .{ .w = 0, .h = 30 }" in ft
             and ".max_size_content = .{ .w = std.math.floatMax(f32), .h = 30 }" in ft

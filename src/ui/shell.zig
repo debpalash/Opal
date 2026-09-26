@@ -417,7 +417,14 @@ fn renderPlayerTopNav() void {
 
     if (state.app.active_player_idx < state.app.players.items.len) {
         const p = state.app.players.items[state.app.active_player_idx];
-        if (p.current_url_len > 0) {
+        if (p.np_title_len > 0) {
+            _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8(p.np_title[0..p.np_title_len])}, .{
+                .expand = .horizontal,
+                .color_text = theme.colors.text_primary,
+                .gravity_y = 0.5,
+                .margin = .{ .x = theme.spacing.sm, .y = 0, .w = theme.spacing.sm, .h = 0 },
+            });
+        } else if (p.current_url_len > 0) {
             const raw = p.current_url[0..p.current_url_len];
             var safe_buf: [2048]u8 = undefined;
             const full = @import("../player/watch_history_pure.zig").persistedTarget(raw, &safe_buf).identity;
