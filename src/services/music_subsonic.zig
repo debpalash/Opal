@@ -22,6 +22,7 @@ const px_pure = @import("music_plex_pure.zig");
 const paths = @import("../core/paths.zig");
 const components = @import("../ui/components.zig");
 const io = @import("../core/io_global.zig");
+const reliable_fetch = @import("reliable_fetch.zig");
 const poster = @import("../core/poster.zig");
 const source_config = @import("../core/source_config.zig");
 const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
@@ -379,7 +380,7 @@ fn jiosaavnWorker(job: SearchJob) void {
     const page = job.offset / @as(u32, @intCast(PAGE_SIZE)) + 1;
     const url = js_pure.buildSearchPageUrl(&url_buf, job.query[0..job.query_len], @intCast(PAGE_SIZE), page) orelse return;
 
-    const body = curl(url, 3 * 1024 * 1024, "") orelse {
+    const body = fetchBody(url, 3 * 1024 * 1024, "") orelse {
         if (!job.append and search_request.isCurrent(my_gen)) state.app.music.fetch_error = true;
         return;
     };
@@ -421,7 +422,7 @@ fn subsonicWorker(job: SearchJob) void {
     var url_buf: [1024]u8 = undefined;
     const url = pure.buildSearchPageUrl(&url_buf, job.base[0..job.base_len], job.auth[0..job.auth_len], job.query[0..job.query_len], @intCast(PAGE_SIZE), job.offset) orelse return;
 
-    const body = curl(url, 2 * 1024 * 1024, "") orelse {
+    const body = fetchBody(url, 2 * 1024 * 1024, "") orelse {
         if (!job.append and search_request.isCurrent(my_gen)) state.app.music.fetch_error = true;
         return;
     };
@@ -473,7 +474,7 @@ fn jellyfinMusicWorker(job: SearchJob) void {
     var url_buf: [1024]u8 = undefined;
     const url = jf_pure.buildSearchPageUrl(&url_buf, job.base[0..job.base_len], job.auth[0..job.auth_len], job.query[0..job.query_len], @intCast(PAGE_SIZE), job.offset) orelse return;
 
-    const body = curl(url, 2 * 1024 * 1024, "application/json") orelse {
+    const body = fetchBody(url, 2 * 1024 * 1024, "application/json") orelse {
         if (!job.append and search_request.isCurrent(my_gen)) state.app.music.fetch_error = true;
         return;
     };
@@ -526,7 +527,7 @@ fn plexMusicWorker(job: SearchJob) void {
     const url = px_pure.buildSearchPageUrl(&url_buf, job.base[0..job.base_len], job.auth[0..job.auth_len], job.query[0..job.query_len], @intCast(PAGE_SIZE), job.offset) orelse return;
 
     // Plex serves XML unless asked for JSON (plex.zig sends the same header).
-    const body = curl(url, 2 * 1024 * 1024, "application/json") orelse {
+    const body = fetchBody(url, 2 * 1024 * 1024, "application/json") orelse {
         if (!job.append and search_request.isCurrent(my_gen)) state.app.music.fetch_error = true;
         return;
     };
@@ -796,31 +797,24 @@ pub fn downloadSong(idx: usize) void {
 }
 
 // ══════════════════════════════════════════════════════════
-// curl helper (heap buffer off the worker stack)
+// Shared fetch helper (heap buffer off the worker stack)
 // ══════════════════════════════════════════════════════════
 /// `accept` selects the response format for servers that content-negotiate
 /// (Plex serves XML without it); pass "" when it doesn't matter.
-fn curl(url: []const u8, cap: usize, accept: []const u8) ?[]u8 {
-    var acc_buf: [64]u8 = undefined;
-    const acc = std.fmt.bufPrint(&acc_buf, "Accept: {s}", .{accept}) catch "Accept: */*";
-    const argv_plain = [_][]const u8{ "curl", "-sL", "-A", agent, "--max-time", "20", url };
-    const argv_acc = [_][]const u8{ "curl", "-sL", "-A", agent, "-H", acc, "--max-time", "20", url };
-    const argv: []const []const u8 = if (accept.len > 0) &argv_acc else &argv_plain;
-    var child = io.Child.init(argv, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    _ = child.spawn() catch return null;
-    const buf = alloc.alloc(u8, cap) catch {
-        _ = child.wait() catch {};
-        return null;
-    };
-    const n = if (child.stdout) |*so| io.readAll(so, buf) catch 0 else 0;
-    _ = child.wait() catch {};
-    if (n == 0) {
+fn fetchBody(url: []const u8, cap: usize, accept: []const u8) ?[]u8 {
+    const accept_header = [_]reliable_fetch.Header{.{ .name = "Accept", .value = accept }};
+    const buf = alloc.alloc(u8, cap) catch return null;
+    const body = reliable_fetch.fetch(url, buf, .{
+        .user_agent = agent,
+        .headers = if (accept.len > 0) &accept_header else &.{},
+        .timeout_secs = 20,
+        // These are explicit user-owned JSON APIs, not scraper targets.
+        .impersonate = false,
+    }) orelse {
         alloc.free(buf);
         return null;
-    }
-    return alloc.realloc(buf, n) catch {
+    };
+    return alloc.realloc(buf, body.len) catch {
         alloc.free(buf);
         return null;
     };
