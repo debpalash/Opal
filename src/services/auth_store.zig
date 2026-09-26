@@ -181,6 +181,68 @@ pub fn userIdForSession(token: []const u8) ?i64 {
     return db.columnInt64(stmt, 0);
 }
 
+pub fn sessionIsAdmin(token: []const u8) bool {
+    if (token.len == 0 or token.len > TOKEN_HEX) return false;
+    const stmt = db.prepare(
+        "SELECT u.is_admin FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=?1 AND s.expires_at>?2",
+    ) orelse return false;
+    defer db.finalize(stmt);
+    db.bindText(stmt, 1, token);
+    db.bindInt64(stmt, 2, io.timestamp());
+    return db.step(stmt) == db.c.SQLITE_ROW and db.columnInt(stmt, 0) != 0;
+}
+
+pub const UserSummary = struct {
+    id: i64 = 0,
+    username: [32]u8 = undefined,
+    username_len: usize = 0,
+    is_admin: bool = false,
+    sessions: i64 = 0,
+
+    pub fn name(self: *const UserSummary) []const u8 {
+        return self.username[0..self.username_len];
+    }
+};
+
+pub fn listUsers(out: []UserSummary) usize {
+    const stmt = db.prepare(
+        \\SELECT u.id,u.username,u.is_admin,COUNT(s.token)
+        \\FROM users u LEFT JOIN sessions s ON s.user_id=u.id AND s.expires_at>?1
+        \\GROUP BY u.id,u.username,u.is_admin ORDER BY u.id
+    ) orelse return 0;
+    defer db.finalize(stmt);
+    db.bindInt64(stmt, 1, io.timestamp());
+    var count: usize = 0;
+    while (count < out.len and db.step(stmt) == db.c.SQLITE_ROW) : (count += 1) {
+        const name = db.columnText(stmt, 1) orelse "";
+        const n = @min(name.len, out[count].username.len);
+        out[count].id = db.columnInt64(stmt, 0);
+        @memcpy(out[count].username[0..n], name[0..n]);
+        out[count].username_len = n;
+        out[count].is_admin = db.columnInt(stmt, 2) != 0;
+        out[count].sessions = db.columnInt64(stmt, 3);
+    }
+    return count;
+}
+
+/// Delete an account and its sessions. The final admin is protected in SQL so
+/// concurrent requests cannot leave the server without a recovery account.
+pub fn deleteUser(user_id: i64) bool {
+    const stmt = db.prepare(
+        \\DELETE FROM users WHERE id=?1
+        \\AND (is_admin=0 OR (SELECT COUNT(*) FROM users WHERE is_admin=1)>1)
+        \\RETURNING id
+    ) orelse return false;
+    defer db.finalize(stmt);
+    db.bindInt64(stmt, 1, user_id);
+    if (db.step(stmt) != db.c.SQLITE_ROW) return false;
+    const sessions = db.prepare("DELETE FROM sessions WHERE user_id=?1") orelse return true;
+    defer db.finalize(sessions);
+    db.bindInt64(sessions, 1, user_id);
+    _ = db.step(sessions);
+    return true;
+}
+
 /// Look a user up by name (case-insensitive, matching the UNIQUE COLLATE
 /// NOCASE index). Used by the api.token password-reset path, which names its
 /// target rather than deriving it from a session.
@@ -241,6 +303,29 @@ pub fn liveSessionCount() i64 {
     db.bindInt64(stmt, 1, io.timestamp());
     if (db.step(stmt) != db.c.SQLITE_ROW) return 0;
     return db.columnInt64(stmt, 0);
+}
+
+pub fn liveSessionCountForUser(user_id: i64) i64 {
+    const stmt = db.prepare("SELECT COUNT(*) FROM sessions WHERE user_id=?1 AND expires_at>?2") orelse return 0;
+    defer db.finalize(stmt);
+    db.bindInt64(stmt, 1, user_id);
+    db.bindInt64(stmt, 2, io.timestamp());
+    if (db.step(stmt) != db.c.SQLITE_ROW) return 0;
+    return db.columnInt64(stmt, 0);
+}
+
+pub fn revokeUserSessions(user_id: i64, except: ?[]const u8) i64 {
+    const before = liveSessionCountForUser(user_id);
+    const stmt = (if (except != null)
+        db.prepare("DELETE FROM sessions WHERE user_id=?1 AND token<>?2")
+    else
+        db.prepare("DELETE FROM sessions WHERE user_id=?1")) orelse return 0;
+    defer db.finalize(stmt);
+    db.bindInt64(stmt, 1, user_id);
+    if (except) |keep| db.bindText(stmt, 2, keep);
+    _ = db.step(stmt);
+    const after = liveSessionCountForUser(user_id);
+    return if (before > after) before - after else 0;
 }
 
 /// Revoke every session, optionally sparing one token (the caller's own, so

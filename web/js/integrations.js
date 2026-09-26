@@ -811,10 +811,12 @@ const apiPost = (path, body) => fetch(BASE + '/api/access' + path, {
 }).then(async r => { const d = await r.json().catch(() => ({})); return { ok: r.ok, d }; });
 
 let accViaToken = false;
+let accCanManageUsers = false;
 async function loadAccess(){
   try {
     const d = await api('/access/status');
     accViaToken = !!d.via_token;
+    accCanManageUsers = !!d.can_manage_users;
     $('acc-hint').textContent = accViaToken
       ? 'Authenticated with the machine api.token — you can reset any account.'
       : ('Signed in as ' + (d.username || '—') + '.');
@@ -826,6 +828,10 @@ async function loadAccess(){
       : 'Changing it signs out every other device.';
     $('acc-sess-hint').textContent = d.sessions === 1
       ? '1 signed-in device.' : (d.sessions || 0) + ' signed-in devices.';
+    $('acc-users-group').hidden = !accCanManageUsers;
+    $('acc-machine-token').hidden = !d.can_manage_machine;
+    $('acc-machine-network').hidden = !d.can_manage_machine;
+    if (accCanManageUsers) await loadAccessUsers();
     $('acc-token').value = d.token_masked || '••••••••';
     $('acc-token-show').textContent = 'Show';
     $('acc-bind').value = d.bind || 'lan';
@@ -833,6 +839,45 @@ async function loadAccess(){
     renderBindWarn(d.bind, d.lan_ip, d.port);
   } catch { $('acc-hint').textContent = 'Could not load access settings.'; }
 }
+
+async function loadAccessUsers(){
+  const d = await api('/access/users');
+  const users = d.users || [];
+  $('acc-users').innerHTML = users.map(user => `<div class="acc-user">
+    <span><strong>${esc(user.username)}</strong>${user.is_admin ? ' · Administrator' : ''}<small>${user.sessions || 0} signed-in device${user.sessions === 1 ? '' : 's'}</small></span>
+    <button class="danger" data-user-delete="${user.id}"${user.is_self ? ' disabled title="Current account"' : ''}>Remove</button>
+  </div>`).join('') || '<div class="hint">No accounts.</div>';
+  $('acc-users').querySelectorAll('[data-user-delete]').forEach(button => button.onclick = async () => {
+    const name = button.closest('.acc-user').querySelector('strong').textContent;
+    if (!confirm('Remove account “' + name + '” and sign it out everywhere?')) return;
+    button.disabled = true;
+    const { ok, d: result } = await apiPost('/users/delete', 'id=' + encodeURIComponent(button.dataset.userDelete));
+    $('acc-users-hint').textContent = ok ? 'Account removed.' : (result.error || 'Could not remove account.');
+    await loadAccessUsers();
+  });
+}
+
+$('acc-user-form').onsubmit = async event => {
+  event.preventDefault();
+  const username = $('acc-user-name').value.trim();
+  const password = $('acc-user-password').value;
+  if (username.length < 3 || password.length < 8) {
+    $('acc-users-hint').textContent = 'Use a 3–32 character username and a password of at least 8 characters.';
+    return;
+  }
+  const button = $('acc-user-add');
+  button.disabled = true; button.textContent = 'Adding…';
+  const body = 'username=' + encodeURIComponent(username) + '&password=' + encodeURIComponent(password)
+    + '&admin=' + ($('acc-user-admin').checked ? '1' : '0');
+  const { ok, d } = await apiPost('/users/create', body);
+  button.disabled = false; button.textContent = 'Add account';
+  $('acc-users-hint').textContent = ok ? 'Account added.' : (d.error || 'Could not add account.');
+  if (ok) {
+    $('acc-user-name').value = $('acc-user-password').value = '';
+    $('acc-user-admin').checked = false;
+    await loadAccessUsers();
+  }
+};
 function renderBindWarn(bind, ip, port){
   const w = $('acc-bind-warn');
   if (bind === 'loopback') { w.className = 'hint'; w.textContent = 'Only this machine can reach the server.'; }

@@ -1770,7 +1770,9 @@ fn handleScrapeBody(stream: std.Io.net.Stream, query: []const u8, post: ?[]const
 /// session from inheriting the machine credential's recovery powers.
 fn principalForBearer(token: []const u8) ?access_pure.Principal {
     if (api_token_ready.load(.acquire) and constantTimeEqual(token, api_token[0..])) return .machine;
-    if (@import("auth_store.zig").validSession(token)) return .session;
+    const auth_store = @import("auth_store.zig");
+    if (auth_store.validSession(token))
+        return if (auth_store.sessionIsAdmin(token)) .admin_session else .session;
     return null;
 }
 
@@ -1831,7 +1833,7 @@ fn consumeExpensiveBudget(bearer: []const u8, principal: access_pure.Principal, 
     var identity: [9]u8 = undefined;
     const key = switch (principal) {
         .machine => remote_limits.keyOf("machine-credential"),
-        .session => blk: {
+        .session, .admin_session => blk: {
             const uid = @import("auth_store.zig").userIdForSession(bearer) orelse
                 break :blk remote_limits.keyOf(bearer);
             identity[0] = 'u';
@@ -1906,7 +1908,7 @@ fn handleAccess(
 ) void {
     const auth_store = @import("auth_store.zig");
     const body = requestBody(request);
-    const caller_uid = if (principal == .session) auth_store.userIdForSession(presented) else null;
+    const caller_uid = if (access_pure.isSession(principal)) auth_store.userIdForSession(presented) else null;
 
     // ── status: everything the Access page renders in one round trip.
     if (std.mem.eql(u8, sub, "status")) {
@@ -1915,14 +1917,17 @@ fn handleAccess(
         const username = if (caller_uid) |uid| (auth_store.usernameForId(uid, &name_buf) orelse "") else "";
         var mask_buf: [64]u8 = undefined;
         const masked = if (principal == .machine) access_pure.maskToken(tokenHex(), &mask_buf) else "";
-        var jb: [560]u8 = undefined;
+        const sessions = if (caller_uid) |uid| auth_store.liveSessionCountForUser(uid) else auth_store.liveSessionCount();
+        var jb: [640]u8 = undefined;
         const j = std.fmt.bufPrint(&jb,
-            \\{{"username":"{s}","via_token":{s},"can_manage_machine":{s},"sessions":{d},"token_masked":"{s}","bind":"{s}","port":{d},"lan_ip":"{s}","running":{s}}}
+            \\{{"username":"{s}","via_token":{s},"is_admin":{s},"can_manage_machine":{s},"can_manage_users":{s},"sessions":{d},"token_masked":"{s}","bind":"{s}","port":{d},"lan_ip":"{s}","running":{s}}}
         , .{
             username,
             if (principal == .machine) "true" else "false",
+            if (principal == .admin_session) "true" else "false",
             if (principal == .machine) "true" else "false",
-            auth_store.liveSessionCount(),
+            if (access_pure.allows(principal, .manage_users)) "true" else "false",
+            sessions,
             masked,
             bind_mode.id(),
             port,
@@ -1930,6 +1935,62 @@ fn handleAccess(
             if (isRunning()) "true" else "false",
         }) catch return;
         sendJson(stream, j);
+        return;
+    }
+
+    if (std.mem.eql(u8, sub, "users")) {
+        if (!requireMethod(stream, method, "GET")) return;
+        if (!access_pure.allows(principal, .manage_users)) return sendForbidden(stream);
+        var users: [64]auth_store.UserSummary = undefined;
+        const count = auth_store.listUsers(&users);
+        var out: [8192]u8 = undefined;
+        var w = std.Io.Writer.fixed(&out);
+        w.writeAll("{\"users\":[") catch return sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"too many users\"}");
+        for (users[0..count], 0..) |*user, i| {
+            if (i > 0) w.writeByte(',') catch return;
+            w.print("{{\"id\":{d},\"username\":\"{s}\",\"is_admin\":{s},\"sessions\":{d},\"is_self\":{s}}}", .{
+                user.id,                                                                 user.name(), if (user.is_admin) "true" else "false", user.sessions,
+                if (caller_uid != null and caller_uid.? == user.id) "true" else "false",
+            }) catch return sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"too many users\"}");
+        }
+        w.writeAll("]}") catch return;
+        sendJson(stream, out[0..w.end]);
+        return;
+    }
+
+    if (std.mem.eql(u8, sub, "users/create")) {
+        if (!requireMethod(stream, method, "POST")) return;
+        if (!access_pure.allows(principal, .manage_users)) return sendForbidden(stream);
+        var user_buf: [96]u8 = undefined;
+        var pass_buf: [256]u8 = undefined;
+        var admin_buf: [16]u8 = undefined;
+        const username = credParam(body, "", "username", &user_buf) orelse "";
+        const password = credParam(body, "", "password", &pass_buf) orelse "";
+        const admin = std.mem.eql(u8, credParam(body, "", "admin", &admin_buf) orelse "", "1");
+        auth_store.createUser(username, password, admin) catch |err| {
+            return switch (err) {
+                error.Invalid => sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"username must be 3-32 safe characters and password 8+ characters\"}"),
+                error.Taken => sendJsonStatus(stream, "409 Conflict", "{\"error\":\"username already exists\"}"),
+                error.Db => sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"could not create account\"}"),
+            };
+        };
+        logs.pushLog("info", "remote", "Web UI account created", false);
+        sendJson(stream, "{\"ok\":true}");
+        return;
+    }
+
+    if (std.mem.eql(u8, sub, "users/delete")) {
+        if (!requireMethod(stream, method, "POST")) return;
+        if (!access_pure.allows(principal, .manage_users)) return sendForbidden(stream);
+        var id_buf: [32]u8 = undefined;
+        const raw_id = credParam(body, "", "id", &id_buf) orelse "";
+        const user_id = std.fmt.parseInt(i64, raw_id, 10) catch return sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"invalid account\"}");
+        if (caller_uid != null and caller_uid.? == user_id)
+            return sendJsonStatus(stream, "409 Conflict", "{\"error\":\"you cannot delete the account you are using\"}");
+        if (!auth_store.deleteUser(user_id))
+            return sendJsonStatus(stream, "409 Conflict", "{\"error\":\"account not found or it is the final administrator\"}");
+        logs.pushLog("info", "remote", "Web UI account deleted", false);
+        sendJson(stream, "{\"ok\":true}");
         return;
     }
 
@@ -1955,7 +2016,7 @@ fn handleAccess(
             return;
         }
 
-        const target_uid: i64 = if (principal == .session) blk: {
+        const target_uid: i64 = if (access_pure.isSession(principal)) blk: {
             if (!access_pure.allows(principal, .change_own_password)) {
                 sendForbidden(stream);
                 return;
@@ -2008,7 +2069,7 @@ fn handleAccess(
         }
         // Every other device's session is now stale by intent — a password
         // change that left old logins working would not actually revoke access.
-        const dropped = auth_store.revokeAllSessions(if (principal == .machine) null else presented);
+        const dropped = auth_store.revokeUserSessions(target_uid, if (principal == .machine) null else presented);
         logs.pushLog("info", "remote", "Web UI password changed; other sessions revoked", false);
         var jb: [96]u8 = undefined;
         const j = std.fmt.bufPrint(&jb, "{{\"ok\":true,\"revoked\":{d}}}", .{dropped}) catch return;
@@ -2023,11 +2084,14 @@ fn handleAccess(
             sendForbidden(stream);
             return;
         }
-        if (principal == .session and caller_uid == null) {
+        if (access_pure.isSession(principal) and caller_uid == null) {
             sendUnauthorized(stream);
             return;
         }
-        const dropped = auth_store.revokeAllSessions(if (principal == .machine) null else presented);
+        const dropped = if (caller_uid) |uid|
+            auth_store.revokeUserSessions(uid, presented)
+        else
+            auth_store.revokeAllSessions(null);
         logs.pushLog("info", "remote", "Web UI sessions revoked", false);
         var jb: [64]u8 = undefined;
         const j = std.fmt.bufPrint(&jb, "{{\"ok\":true,\"revoked\":{d}}}", .{dropped}) catch return;

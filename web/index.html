@@ -593,7 +593,19 @@
       <button id="acc-revoke" class="quick-btn">Sign out all other devices</button>
     </div>
 
-    <div class="acc-group">
+    <div class="acc-group" id="acc-users-group" hidden>
+      <div class="acc-title">Accounts</div>
+      <div class="hint" id="acc-users-hint">Add separate accounts for people who use this Opal server.</div>
+      <form id="acc-user-form" class="acc-user-form" autocomplete="off">
+        <input id="acc-user-name" placeholder="Username" minlength="3" maxlength="32" autocapitalize="off" autocomplete="off">
+        <input id="acc-user-password" type="password" placeholder="Password (8+ characters)" minlength="8" maxlength="200" autocomplete="new-password">
+        <label class="acc-check"><input id="acc-user-admin" type="checkbox"> Administrator</label>
+        <button id="acc-user-add" class="quick-btn" type="submit">Add account</button>
+      </form>
+      <div id="acc-users" class="acc-users" aria-live="polite"></div>
+    </div>
+
+    <div class="acc-group" id="acc-machine-token">
       <div class="acc-title">API token</div>
       <div class="hint">For the browser extension and automation. Rotating it breaks anything using the old one.</div>
       <div class="search-row"><input id="acc-token" readonly value="••••••••"><button id="acc-token-show">Show</button></div>
@@ -601,7 +613,7 @@
       <button id="acc-token-rotate" class="quick-btn">Rotate token</button>
     </div>
 
-    <div class="acc-group">
+    <div class="acc-group" id="acc-machine-network">
       <div class="acc-title">Network</div>
       <div class="hint" id="acc-bind-hint">Who can reach this server.</div>
       <select id="acc-bind">

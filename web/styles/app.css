@@ -245,6 +245,11 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
 .acc-group input,.acc-group select{width:100%;margin-top:6px}
 .acc-group .search-row input{margin-top:0}
 .acc-group .quick-btn{margin-top:8px;margin-right:6px}
+.acc-user-form{display:grid;grid-template-columns:minmax(130px,1fr) minmax(180px,1.4fr) auto auto;gap:8px;align-items:center;margin-top:8px}
+.acc-user-form input{margin:0}.acc-check{display:flex;align-items:center;gap:6px;white-space:nowrap;font-size:13px;color:var(--muted)}
+.acc-check input{width:16px;margin:0}.acc-users{display:grid;gap:6px;margin-top:10px}
+.acc-user{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 10px;border:1px solid var(--border);border-radius:var(--rad-sm)}
+.acc-user span{min-width:0}.acc-user small{display:block;color:var(--muted);margin-top:2px}.acc-user .danger{flex:none}
 .acc-warn{color:var(--danger,#e5484d)}
 /* Per-file list inside a torrent row. */
 .tor-files{background:transparent;border:0;color:var(--accent);cursor:pointer;font-size:12px;padding:0 0 0 8px}
@@ -585,6 +590,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
   .cfg-row{align-items:flex-start}
   .cfg-row span{flex:1 1 180px;overflow-wrap:anywhere}
   .cfg-row input:not([type=checkbox]){width:auto;flex:1 1 220px}
+  .acc-user-form{grid-template-columns:1fr}.acc-user-form .quick-btn{width:100%;margin-right:0}
   button,a,input,select,textarea{overflow-wrap:anywhere}
   .source-add-form,.rss-source{grid-template-columns:1fr}
   .rss-source-actions{justify-content:flex-end}

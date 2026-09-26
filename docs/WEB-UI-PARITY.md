@@ -140,7 +140,9 @@ commands, non-finite numbers, out-of-range values, and unknown actions.
 ### Wave 5 — web-native product quality
 
 - [x] Installable PWA shell, public-asset-only offline navigation, reconnect state
-- [ ] Multiple users/profiles, session/device management, capability-scoped auth
+- [x] Multiple accounts, per-account session/device management, and
+      capability-scoped admin authority
+- [ ] Per-user media profiles and state isolation
 - [ ] Full screen-reader audit and remediation
 - [x] 200% zoom/reflow with compact responsive controls
 - [ ] Localization-ready strings

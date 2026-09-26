@@ -16,6 +16,7 @@ const auth = @import("auth_pure.zig");
 /// user session and must never be silently promoted to that capability.
 pub const Principal = enum {
     machine,
+    admin_session,
     session,
 };
 
@@ -27,18 +28,24 @@ pub const Capability = enum {
     reveal_machine_token,
     rotate_machine_token,
     change_binding,
+    manage_users,
 };
 
 pub fn allows(principal: Principal, capability: Capability) bool {
     return switch (capability) {
         .view_access, .revoke_sessions => true,
-        .change_own_password => principal == .session,
+        .change_own_password => principal != .machine,
+        .manage_users => principal == .machine or principal == .admin_session,
         .reset_any_password,
         .reveal_machine_token,
         .rotate_machine_token,
         .change_binding,
         => principal == .machine,
     };
+}
+
+pub fn isSession(principal: Principal) bool {
+    return principal == .session or principal == .admin_session;
 }
 
 // ── Bind mode ──────────────────────────────────────────────────────────────
@@ -213,6 +220,15 @@ test "session capability never includes machine recovery or network authority" {
     try std.testing.expect(!allows(.session, .reveal_machine_token));
     try std.testing.expect(!allows(.session, .rotate_machine_token));
     try std.testing.expect(!allows(.session, .change_binding));
+    try std.testing.expect(!allows(.session, .manage_users));
+}
+
+test "admin sessions manage accounts without gaining machine recovery powers" {
+    try std.testing.expect(allows(.admin_session, .change_own_password));
+    try std.testing.expect(allows(.admin_session, .manage_users));
+    try std.testing.expect(!allows(.admin_session, .reset_any_password));
+    try std.testing.expect(!allows(.admin_session, .reveal_machine_token));
+    try std.testing.expect(!allows(.admin_session, .change_binding));
 }
 
 test "machine credential carries only the intended recovery capabilities" {
@@ -222,5 +238,6 @@ test "machine credential carries only the intended recovery capabilities" {
     try std.testing.expect(allows(.machine, .rotate_machine_token));
     try std.testing.expect(allows(.machine, .change_binding));
     try std.testing.expect(allows(.machine, .revoke_sessions));
+    try std.testing.expect(allows(.machine, .manage_users));
     try std.testing.expect(!allows(.machine, .change_own_password));
 }
