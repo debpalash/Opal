@@ -33,6 +33,7 @@ const logs = @import("../core/logs.zig");
 const pure = @import("iptv_pure.zig");
 const playlist = @import("iptv_playlist_pure.zig");
 const iptv_store = @import("iptv_store.zig");
+const reliable_fetch = @import("reliable_fetch.zig");
 const io = @import("../core/io_global.zig");
 const paths = @import("../core/paths.zig");
 const poster = @import("../core/poster.zig");
@@ -511,7 +512,7 @@ fn ingestBase(base: []const u8, buf: []pure.IptvChannel) usize {
 /// leading BOM (it scans for #EXTINF lines). Adult channels are kept (flagged in
 /// the catalog) so the NSFW setting governs them, not a hard drop.
 fn ingestM3u(url: []const u8, buf: []pure.IptvChannel) usize {
-    const body = curl(url, 16 * 1024 * 1024) orelse return 0;
+    const body = fetchBody(url, 16 * 1024 * 1024) orelse return 0;
     defer alloc.free(body);
     return playlist.parseM3u(body, buf, true, "", "");
 }
@@ -716,28 +717,17 @@ pub fn playChannel(idx: usize) void {
 // Helpers
 // ══════════════════════════════════════════════════════════
 
-/// Fetch `url` with curl into a fresh heap buffer of `cap` bytes. Returns the
-/// filled slice (caller frees) or null on failure/empty. Large buffers stay off
-/// the worker stack (macOS 512KB limit). Shrinks to what was read so the global
-/// DebugAllocator's free-size check passes (an invalid free aborts the process).
-fn curl(url: []const u8, cap: usize) ?[]u8 {
-    const argv = [_][]const u8{ "curl", "-sL", "-A", agent, "--max-time", "30", url };
-    var child = io.Child.init(&argv, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    _ = child.spawn() catch return null;
-
-    const buf = alloc.alloc(u8, cap) catch {
-        _ = child.wait() catch {};
-        return null;
-    };
-    const n = if (child.stdout) |*so| io.readAll(so, buf) catch 0 else 0;
-    _ = child.wait() catch {};
-    if (n == 0) {
+/// Fetch large playlists through the shared bounded, status-aware transport.
+fn fetchBody(url: []const u8, cap: usize) ?[]u8 {
+    const buf = alloc.alloc(u8, cap) catch return null;
+    const body = reliable_fetch.fetch(url, buf, .{
+        .user_agent = agent,
+        .timeout_secs = 30,
+    }) orelse {
         alloc.free(buf);
         return null;
-    }
-    return alloc.realloc(buf, n) catch {
+    };
+    return alloc.realloc(buf, body.len) catch {
         alloc.free(buf);
         return null;
     };
@@ -771,7 +761,7 @@ fn fetchCached(url: []const u8, name: []const u8, cap: usize, ttl_s: i64) ?[]u8 
         }
     } else |_| {}
 
-    const body = curl(url, cap) orelse return null;
+    const body = fetchBody(url, cap) orelse return null;
     paths.ensureCacheDir();
     // Write to a temp sibling then rename so a concurrent reader (or a second
     // worker) never sees a half-written file — rename is atomic on the target.
