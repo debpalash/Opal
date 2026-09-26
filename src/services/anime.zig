@@ -3535,7 +3535,7 @@ fn renderContinueGrid() void {
     const rect_w = scroll.data().rect.w;
     const avail_w: f32 = @max(240, (if (rect_w > 1) rect_w else 900) - 8);
     const card_target_w: f32 = card_w_pref;
-    const cols: usize = @max(2, @as(usize, @intFromFloat(avail_w / card_target_w)));
+    const cols: usize = @max(1, @as(usize, @intFromFloat(avail_w / card_target_w)));
     const card_w: f32 = @max(100, (avail_w - @as(f32, @floatFromInt(cols)) * 8) / @as(f32, @floatFromInt(cols)));
 
     var i: usize = 0;
@@ -3940,7 +3940,7 @@ fn renderGallery() void {
     const rect_w = scroll.data().rect.w;
     const avail_w: f32 = @max(240, (if (rect_w > 1) rect_w else 900) - 8);
     const card_target_w: f32 = card_w_pref;
-    const cols: usize = @max(2, @as(usize, @intFromFloat(avail_w / card_target_w)));
+    const cols: usize = @max(1, @as(usize, @intFromFloat(avail_w / card_target_w)));
     const card_w: f32 = @max(100, (avail_w - @as(f32, @floatFromInt(cols)) * 8) / @as(f32, @floatFromInt(cols)));
 
     // ── Virtualization (same shape as tmdb.zig renderGallery) ──

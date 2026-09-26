@@ -25,6 +25,7 @@ const dvui = @import("dvui");
 const icons = @import("icons");
 const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
+const components = @import("../ui/components.zig");
 const logs = @import("../core/logs.zig");
 const pure = @import("vndb_pure.zig");
 const io = @import("../core/io_global.zig");
@@ -419,9 +420,9 @@ pub fn renderContent() void {
 }
 
 fn renderSearchBar() void {
-    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+    var row = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
         .expand = .horizontal,
-        .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
+        .padding = .{ .x = 10, .y = 7, .w = 10, .h = 7 },
         .background = true,
         .color_fill = theme.colors.bg_surface,
     });
@@ -434,28 +435,10 @@ fn renderSearchBar() void {
         .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
     });
 
-    var te = dvui.textEntry(@src(), .{
-        .text = .{ .buffer = &state.app.vndb.search_buf },
-        .placeholder = "Search visual novels…",
-    }, .{
-        .expand = .horizontal,
-        .padding = .{ .x = 6, .y = 4, .w = 6, .h = 4 },
-        .color_fill = theme.colors.bg_elevated,
-        .color_text = theme.colors.text_primary,
-        .corner_radius = theme.dims.rad_sm,
-        .gravity_y = 0.5,
-    });
-    const entered = te.enter_pressed;
-    te.deinit();
-
-    const go = dvui.button(@src(), "Go", .{}, .{
-        .color_fill = theme.colors.accent,
-        .color_text = dvui.Color.white,
-        .corner_radius = theme.dims.rad_sm,
-        .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
-        .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
-        .gravity_y = 0.5,
-    });
+    const layout_w = @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().w, state.app.ui_scale);
+    const search_w = @max(150, @min(280, layout_w - 280));
+    const entered = components.toolbarSearch(@src(), &state.app.vndb.search_buf, "Search visual novels…", search_w);
+    const go = components.toolbarGo(@src(), "Search");
 
     if (entered or go) {
         const q = std.mem.sliceTo(&state.app.vndb.search_buf, 0);
@@ -463,7 +446,12 @@ fn renderSearchBar() void {
     }
 
     if (state.app.vndb.is_loading.load(.acquire)) {
-        _ = dvui.label(@src(), "…", .{}, .{ .color_text = theme.colors.warning, .gravity_y = 0.5 });
+        dvui.spinner(@src(), .{
+            .color_text = theme.colors.accent,
+            .min_size_content = theme.iconSize(.md),
+            .gravity_y = 0.5,
+            .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
+        });
     }
 }
 
@@ -586,17 +574,10 @@ fn renderCard(i: usize, card_w: f32) void {
 fn renderResults() void {
     const count = @min(state.app.vndb.result_count, state.app.vndb.results.len);
     if (count == 0) {
-        if (!state.app.vndb.is_loading.load(.acquire)) {
-            _ = dvui.label(@src(), "Search for a visual novel to get started", .{}, .{
-                .color_text = theme.colors.text_secondary,
-                .padding = .{ .x = 12, .y = 20, .w = 0, .h = 0 },
-            });
-        } else {
-            _ = dvui.label(@src(), "Loading popular visual novels…", .{}, .{
-                .color_text = theme.colors.text_secondary,
-                .padding = .{ .x = 12, .y = 20, .w = 0, .h = 0 },
-            });
-        }
+        if (state.app.vndb.is_loading.load(.acquire))
+            components.loadingState("Loading popular visual novels…")
+        else
+            components.emptyState(icons.tvg.lucide.@"gamepad-2", "Find a visual novel", "Search the VNDB catalog by title.");
         return;
     }
 
@@ -607,8 +588,8 @@ fn renderResults() void {
     });
     defer scroll.deinit();
 
-    _ = dvui.label(@src(), "{s}", .{
-        if (state.app.vndb.showing_popular) "Most popular visual novels (SFW)" else "Results",
+    _ = dvui.label(@src(), "{s} · {d}", .{
+        if (state.app.vndb.showing_popular) "Most popular visual novels (SFW)" else "Results", count,
     }, .{
         .color_text = theme.colors.text_secondary,
         .padding = .{ .x = 8, .y = 8, .w = 8, .h = 2 },
@@ -618,7 +599,7 @@ fn renderResults() void {
     // falls back to a sane default) — same shape as the TMDB/radio grid.
     const rect_w = scroll.data().rect.w;
     const avail_w: f32 = @max(240, (if (rect_w > 1) rect_w else 900) - 8);
-    const cols: usize = @max(2, @as(usize, @intFromFloat(avail_w / CARD_TARGET_W)));
+    const cols: usize = @max(1, @as(usize, @intFromFloat(avail_w / CARD_TARGET_W)));
     const cols_f: f32 = @floatFromInt(cols);
     const card_w: f32 = @max(100, (avail_w - cols_f * 2 * CARD_GAP) / cols_f);
 
