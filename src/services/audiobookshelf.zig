@@ -18,12 +18,14 @@ const dvui = @import("dvui");
 const icons = @import("icons");
 const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
+const components = @import("../ui/components.zig");
 const logs = @import("../core/logs.zig");
 const pure = @import("audiobookshelf_pure.zig");
 const http = @import("../core/http.zig");
 const c = @import("../core/c.zig");
 const yt_pure = @import("youtube_pure.zig");
 const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
+const tmdb_pure = @import("tmdb_pure.zig");
 
 const alloc = @import("../core/alloc.zig").allocator;
 
@@ -771,7 +773,7 @@ fn renderLibraries() void {
             sp.deinit();
         }
         if (state.app.abs.is_loading.load(.acquire)) {
-            _ = dvui.label(@src(), "…", .{}, .{ .color_text = theme.colors.warning, .gravity_y = 0.5 });
+            dvui.spinner(@src(), .{ .color_text = theme.colors.accent, .min_size_content = theme.iconSize(.md), .gravity_y = 0.5 });
         }
         if (dvui.buttonIcon(@src(), "disconnect", icons.tvg.lucide.@"log-out", .{}, .{}, .{
             .color_fill = theme.colors.bg_elevated,
@@ -782,10 +784,7 @@ fn renderLibraries() void {
     }
 
     if (state.app.abs.library_count == 0 and !state.app.abs.is_loading.load(.acquire)) {
-        _ = dvui.label(@src(), "No libraries found", .{}, .{
-            .color_text = theme.colors.text_secondary,
-            .padding = .{ .x = 12, .y = 20, .w = 0, .h = 0 },
-        });
+        components.emptyState(icons.tvg.lucide.@"book-audio", "No libraries found", "Add an audiobook library in Audiobookshelf, then refresh.");
         return;
     }
 
@@ -835,17 +834,15 @@ fn renderBooks() void {
         const title = safeUtf8Buf(state.app.abs.selected_lib_name[0..state.app.abs.selected_lib_name_len], &title_buf);
         _ = dvui.label(@src(), "{s}", .{title}, .{ .color_text = theme.colors.text_primary, .expand = .horizontal, .gravity_y = 0.5 });
         if (state.app.abs.is_loading.load(.acquire)) {
-            _ = dvui.label(@src(), "Loading…", .{}, .{ .color_text = theme.colors.warning, .gravity_y = 0.5 });
+            dvui.spinner(@src(), .{ .color_text = theme.colors.accent, .min_size_content = theme.iconSize(.md), .gravity_y = 0.5 });
         }
     }
 
     if (state.app.abs.book_count == 0) {
-        if (!state.app.abs.is_loading.load(.acquire)) {
-            _ = dvui.label(@src(), "No books in this library", .{}, .{
-                .color_text = theme.colors.text_secondary,
-                .padding = .{ .x = 12, .y = 20, .w = 0, .h = 0 },
-            });
-        }
+        if (state.app.abs.is_loading.load(.acquire))
+            components.loadingState("Loading audiobooks…")
+        else
+            components.emptyState(icons.tvg.lucide.@"book-audio", "No audiobooks here", "Choose another library or add books in Audiobookshelf.");
         return;
     }
 
@@ -856,7 +853,18 @@ fn renderBooks() void {
     });
     defer scroll.deinit();
 
-    for (0..state.app.abs.book_count) |i| {
+    const row_h: f32 = 68;
+    const count = @min(state.app.abs.book_count, state.app.abs.books.len);
+    const win = tmdb_pure.visibleRows(count, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 4);
+    if (win.first > 0) {
+        var sp = dvui.box(@src(), .{}, .{
+            .id_extra = 79998,
+            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(win.first)) },
+        });
+        sp.deinit();
+    }
+
+    for (win.first..win.last) |i| {
         const b = &state.app.abs.books[i];
         var title_buf: [256]u8 = undefined;
         const title = safeUtf8Buf(b.title[0..b.title_len], &title_buf);
@@ -870,6 +878,8 @@ fn renderBooks() void {
             .color_fill = theme.colors.bg_surface,
             .color_border = theme.colors.border_subtle,
             .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
+            .min_size_content = .{ .w = 0, .h = row_h },
+            .max_size_content = .{ .w = std.math.floatMax(f32), .h = row_h },
             .padding = .{ .x = 10, .y = 8, .w = 10, .h = 8 },
         });
         defer row.deinit();
@@ -906,6 +916,14 @@ fn renderBooks() void {
             .corner_radius = theme.dims.rad_sm,
             .gravity_y = 0.5,
         })) playBook(i);
+    }
+
+    if (win.last < count) {
+        var sp = dvui.box(@src(), .{}, .{
+            .id_extra = 79999,
+            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(count - win.last)) },
+        });
+        sp.deinit();
     }
 
     // Infinite scroll: fetch + append the next ABS library-items page as the

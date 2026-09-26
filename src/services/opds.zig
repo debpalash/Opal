@@ -30,11 +30,14 @@
 
 const std = @import("std");
 const dvui = @import("dvui");
+const icons = @import("icons");
 const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
+const components = @import("../ui/components.zig");
 const logs = @import("../core/logs.zig");
 const pure = @import("opds_pure.zig");
 const safeUtf8 = @import("../core/text.zig").safeUtf8;
+const tmdb_pure = @import("tmdb_pure.zig");
 
 const alloc = @import("../core/alloc.zig").allocator;
 
@@ -661,9 +664,11 @@ fn renderFeed() void {
     }
 
     if (state.app.opds.is_loading.load(.acquire)) {
-        _ = dvui.label(@src(), "Loading…", .{}, .{
-            .color_text = theme.colors.text_secondary,
-            .padding = .{ .x = 16, .y = 8, .w = 16, .h = 8 },
+        dvui.spinner(@src(), .{
+            .color_text = theme.colors.accent,
+            .min_size_content = theme.iconSize(.md),
+            .gravity_x = 0.5,
+            .margin = dvui.Rect.all(8),
         });
     }
 
@@ -698,16 +703,29 @@ fn renderFeed() void {
     parse_mutex.unlock();
 
     if (count == 0 and !state.app.opds.is_loading.load(.acquire)) {
-        _ = dvui.label(@src(), "This feed is empty.", .{}, .{
-            .color_text = theme.colors.text_secondary,
-            .padding = .{ .x = 16, .y = 12, .w = 16, .h = 12 },
-        });
+        components.emptyState(icons.tvg.lucide.library, "This shelf is empty", "Open another catalog or add books on your reading server.");
         return;
     }
 
-    var i: usize = 0;
-    while (i < count and i < state.app.opds.entries.len) : (i += 1) {
-        renderEntryRow(i);
+    const bounded_count = @min(count, state.app.opds.entries.len);
+    const row_h: f32 = 64;
+    const win = tmdb_pure.visibleRows(bounded_count, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 4);
+    if (win.first > 0) {
+        var sp = dvui.box(@src(), .{}, .{
+            .id_extra = 89998,
+            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(win.first)) },
+        });
+        sp.deinit();
+    }
+    for (win.first..win.last) |i| {
+        renderEntryRow(i, row_h);
+    }
+    if (win.last < bounded_count) {
+        var sp = dvui.box(@src(), .{}, .{
+            .id_extra = 89999,
+            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(bounded_count - win.last)) },
+        });
+        sp.deinit();
     }
 
     // Infinite scroll: fetch + append the feed's rel="next" page as the user
@@ -734,13 +752,15 @@ fn renderFeed() void {
     }
 }
 
-fn renderEntryRow(idx: usize) void {
+fn renderEntryRow(idx: usize, row_h: f32) void {
     const row_data = entryRow(idx) orelse return;
     const e = &row_data;
 
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .id_extra = idx,
         .expand = .horizontal,
+        .min_size_content = .{ .w = 0, .h = row_h },
+        .max_size_content = .{ .w = std.math.floatMax(f32), .h = row_h },
         .padding = .{ .x = 14, .y = 8, .w = 14, .h = 8 },
         .background = true,
         .color_fill = theme.colors.bg_surface,
