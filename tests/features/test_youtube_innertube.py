@@ -57,10 +57,10 @@ def test_youtube_innertube():
         # ── Layered fallback: InnerTube -> yt-dlp -> Piped, generation-guarded ──
         "innertube leads": svc.index("fetchViaInnerTube(q,") < svc.index("fetchViaYtdlp(q,"),
         "ytdlp before piped": svc.index("fetchViaYtdlp(q,") < svc.index("fetchViaPiped(q,"),
-        "fallbacks gated on nothing-landed": "if (pending_clear and isCurrent(S.gen)) fetchViaYtdlp" in svc,
-        "piped gated too": "if (pending_clear and isCurrent(S.gen)) _ = fetchViaPiped" in svc,
+        "fallbacks gated on nothing-landed": "if (pendingClear(job.generation) and isCurrent(job.generation)) fetchViaYtdlp" in svc,
+        "piped gated too": "if (pendingClear(job.generation) and isCurrent(job.generation)) _ = fetchViaPiped" in svc,
         "generation guard kept": "fn isCurrent(gen: u32) bool" in svc,
-        "lazy-clear kept": "pending_clear = true; // old results stay until the first new one lands" in svc,
+        "lazy-clear kept": "fn armPendingClear(generation: u32) bool" in svc,
         # ── SWR disk cache of parsed rows ──
         "cache key via normalizeQuery": "it_pure.normalizeQuery" in svc,
         "serializer": "fn serializeYtResults" in svc,
@@ -70,7 +70,7 @@ def test_youtube_innertube():
         "gated on the user toggle": svc.count("if (!state.app.content_cache_enabled) return") >= 2,
         "uses the shared content cache": 'content_cache = @import("../core/content_cache.zig")' in svc,
         "serialization via content_cache_pure": 'ccp = @import("../core/content_cache_pure.zig")' in svc,
-        "re-arms pending_clear after seeding": "pending_clear = true;\n            yt_mutex.unlock();" in svc,
+        "re-arms pending_clear after seeding": svc.count("armPendingClear(job.generation)") >= 3,
         # ── Paging: InnerTube continuation tokens (infinite scroll) ──
         "pure continuation body builder": "pub fn buildContinuationBody" in pure,
         "pure token extractor": "pub fn extractContinuationToken" in pure,
@@ -85,15 +85,18 @@ def test_youtube_innertube():
         "cursor reset on a new feed": svc.count("clearContinuation();") >= 2,
         "continuation fetch": "fn fetchContinuation" in svc,
         "continuation body via the pure fn": "it_pure.buildContinuationBody" in svc,
-        "load-more tries the continuation first": svc.index("fetchContinuation(S.gen,") < svc.index("fetchChannelViaYtdlp(S.id_buf[0..S.id_len], S.gen, S.n)"),
-        "load-more falls back to yt-dlp": "fn fetchMore" in svc and "fetchViaYtdlp(S.q_buf[0..S.q_len], S.gen, S.n)" in svc,
+        "load-more tries the continuation first": svc.index("fetchContinuation(job.generation,") < svc.index("fetchChannelViaYtdlp(job.channel_id[0..job.channel_id_len], job.generation, job.wanted)"),
+        "load-more falls back to yt-dlp": "fn fetchMore" in svc and "fetchViaYtdlp(job.query[0..job.query_len], job.generation, job.wanted)" in svc,
+        "load-more stops at exhaustion": "more_available" in svc and "const added = after -| before;" in svc,
         "cursor read/written under yt_mutex": "const tlen = cont_token_len;" in svc,
         # ── Channel mode on InnerTube browse ──
         "channel fast path": "fn fetchChannelViaInnerTube" in svc,
         "channel browse body via the pure fn": "it_pure.buildChannelBrowseBody" in svc,
         "channel rows via the lockup reader": "it_pure.nextLockupVideo" in svc,
-        "channel falls back to yt-dlp": "if (n == 0) {\n                fetchChannelViaYtdlp" in svc,
-        "channel byline copied for the worker": "S.name_len = channel_name_len;" in svc,
+        "channel falls back to yt-dlp": "if (n == 0 and isCurrent(job.generation))" in svc and "fetchChannelViaYtdlp(job.id[0..job.id_len]" in svc,
+        "channel byline copied for the worker": ".name_len = channel_name_len" in svc and "@memcpy(job.name" in svc,
+        "requests use immutable jobs": all(name in svc for name in ("const SearchJob = struct", "const ChannelJob = struct", "const MoreJob = struct")),
+        "active searches are supersedable": "pub fn fetchYoutube(query" in svc and "if (state.app.yt.is_loading.load(.acquire)) return;" not in svc[svc.index("pub fn fetchYoutube(query"):svc.index("pub fn openChannel")],
         # ── No regressions in the paths we didn't own ──
         "channel mode intact": "fn fetchChannelViaYtdlp" in svc and "pub fn openChannel" in svc,
         "load-more paging intact": "pub fn fetchMore" in svc and "appending_more" in svc,
@@ -122,7 +125,7 @@ def ytdlp_fallback_is_contained():
         "generation cancellation": ".cancel_epoch" in block
             and "&search_request.generation" in block and ".expected = gen" in block,
         "incremental rows retained": "process.stdout()" in block
-            and "takeDelimiter('\\n')" in block and "parseYtdlpLine(line)" in block,
+            and "takeDelimiter('\\n')" in block and "parseYtdlpLine(line, gen)" in block,
         "supersede requests tree stop": "process.requestStop();" in block,
         "owner finishes and reaps": "process.finish()" in block,
         "no raw child spawn": "io.Child.init" not in block and ".spawn()" not in block,
