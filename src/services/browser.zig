@@ -2569,11 +2569,9 @@ pub fn playDirect(request: PlaybackRequest) void {
         state.consumePendingPlay(p);
     }
 
-    if (request.health_kind.len > 0 and
-        (std.mem.startsWith(u8, request.url, "http://") or std.mem.startsWith(u8, request.url, "https://")))
-    {
-        @import("link_health.zig").probe(request.health_kind, request.url);
-    }
+    const link_health = @import("link_health.zig");
+    const health_kind = link_health.pure.playbackKind(request.health_kind, request.url);
+    if (health_kind.len > 0) link_health.probe(health_kind, request.url);
 
     p.load(.{
         .url = request.url,
