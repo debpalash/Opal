@@ -25,6 +25,8 @@ const io = @import("../core/io_global.zig");
 const poster = @import("../core/poster.zig");
 const source_config = @import("../core/source_config.zig");
 const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
+const LatestRequest = @import("../core/latest_request.zig").Gate;
+const tmdb_pure = @import("tmdb_pure.zig");
 const lyrics = @import("lyrics.zig");
 const mpvc = @import("../core/c.zig");
 const alloc = @import("../core/alloc.zig").allocator;
@@ -241,48 +243,46 @@ pub fn saveConfig() void {
 // Thread-safety + worker snapshot
 // ══════════════════════════════════════════════════════════
 var parse_mutex: @import("../core/sync.zig").Mutex = .{};
-var search_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+var search_request: LatestRequest = .{};
 
-// Snapshots handed to the detached worker (never read the reloadable config
-// table or the mutable UI search_buf from the thread).
-var query_buf: [256]u8 = undefined;
-var query_len: usize = 0;
-var w_base: [256]u8 = undefined;
-var w_base_len: usize = 0;
-var w_authq: [320]u8 = undefined;
-var w_authq_len: usize = 0;
-// Jellyfin/Plex reuse w_base for the server origin and w_token for the API
-// key / X-Plex-Token (both go in the query, not a header).
-var w_token: [320]u8 = undefined;
-var w_token_len: usize = 0;
+// Immutable request copied into the worker's launch context. Keeping the query
+// and credentials in one value means rapid searches never race on module
+// statics while an older worker is starting.
+const SearchJob = struct {
+    generation: u32,
+    query: [256]u8 = undefined,
+    query_len: usize = 0,
+    base: [256]u8 = undefined,
+    base_len: usize = 0,
+    auth: [320]u8 = undefined,
+    auth_len: usize = 0,
+};
 
 const RESULTS_CAP: usize = 200;
 
 pub fn searchMusic(query: []const u8) void {
     if (query.len == 0) return;
 
-    state.app.music.is_loading.store(true, .release);
     state.app.music.fetch_error = false;
 
-    // Snapshot the query BEFORE spawning.
-    const n = @min(query.len, query_buf.len);
-    @memcpy(query_buf[0..n], query[0..n]);
-    query_len = n;
-    const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
+    const my_gen = search_request.begin(&state.app.music.is_loading);
+    var job: SearchJob = .{ .generation = my_gen };
+    job.query_len = @min(query.len, job.query.len);
+    @memcpy(job.query[0..job.query_len], query[0..job.query_len]);
 
     if (state.app.music.source == SRC_JIOSAAVN) {
         // JioSaavn — public, keyless.
-        if (@import("../core/workers.zig").spawnLegacy(jiosaavnWorker, .{my_gen})) |t| {
+        if (@import("../core/workers.zig").spawnLegacy(jiosaavnWorker, .{job})) |t| {
             @import("../core/workers.zig").release(t);
         } else |_| {
-            state.app.music.is_loading.store(false, .release);
+            search_request.finish(my_gen, &state.app.music.is_loading);
         }
         return;
     }
 
-    // Every other source needs credentials. Snapshot them into the worker
-    // statics BEFORE spawning — a detached thread must never read the
-    // reloadable config table, plex.json, or state.app.jf.
+    // Every other source needs credentials. Copy them into the immutable job
+    // before spawning so a detached thread never reads reloadable config,
+    // plex.json, or state.app.jf.
     var b: [256]u8 = undefined;
     var tok: [320]u8 = undefined;
 
@@ -291,71 +291,61 @@ pub fn searchMusic(query: []const u8) void {
     switch (state.app.music.source) {
         SRC_SUBSONIC => {
             var q: [300]u8 = undefined;
-            const c = creds(&b, &q) orelse return abortSearch();
-            snapBase(c.base);
-            w_authq_len = @min(c.authq.len, w_authq.len);
-            @memcpy(w_authq[0..w_authq_len], c.authq[0..w_authq_len]);
-            spawnWorker(subsonicWorker, my_gen);
+            const c = creds(&b, &q) orelse return abortSearch(my_gen);
+            copyField(&job.base, &job.base_len, c.base);
+            copyField(&job.auth, &job.auth_len, c.authq);
+            spawnWorker(subsonicWorker, job);
         },
         SRC_JELLYFIN => {
-            const c = jfCreds(&b, &tok) orelse return abortSearch();
-            snapBase(c.base);
-            snapToken(c.token);
-            spawnWorker(jellyfinMusicWorker, my_gen);
+            const c = jfCreds(&b, &tok) orelse return abortSearch(my_gen);
+            copyField(&job.base, &job.base_len, c.base);
+            copyField(&job.auth, &job.auth_len, c.token);
+            spawnWorker(jellyfinMusicWorker, job);
         },
         SRC_PLEX => {
-            const c = plexCreds(&b, &tok) orelse return abortSearch();
-            snapBase(c.base);
-            snapToken(c.token);
-            spawnWorker(plexMusicWorker, my_gen);
+            const c = plexCreds(&b, &tok) orelse return abortSearch(my_gen);
+            copyField(&job.base, &job.base_len, c.base);
+            copyField(&job.auth, &job.auth_len, c.token);
+            spawnWorker(plexMusicWorker, job);
         },
-        else => return abortSearch(),
+        else => return abortSearch(my_gen),
     }
 }
 
-fn spawnWorker(comptime f: fn (u32) void, my_gen: u32) void {
-    if (@import("../core/workers.zig").spawnLegacy(f, .{my_gen})) |t| {
+fn spawnWorker(comptime f: fn (SearchJob) void, job: SearchJob) void {
+    if (@import("../core/workers.zig").spawnLegacy(f, .{job})) |t| {
         @import("../core/workers.zig").release(t);
     } else |_| {
-        state.app.music.is_loading.store(false, .release);
+        search_request.finish(job.generation, &state.app.music.is_loading);
     }
 }
 
 /// Drop the spinner and return without a fetch — the source isn't configured
 /// (or is unknown). Deliberately silent: an unconfigured source is inert, and
 /// the empty grid already carries the "configure this" hint.
-fn abortSearch() void {
-    state.app.music.is_loading.store(false, .release);
-}
-
-fn snapBase(base: []const u8) void {
-    w_base_len = @min(base.len, w_base.len);
-    @memcpy(w_base[0..w_base_len], base[0..w_base_len]);
-}
-
-fn snapToken(t: []const u8) void {
-    w_token_len = @min(t.len, w_token.len);
-    @memcpy(w_token[0..w_token_len], t[0..w_token_len]);
+fn abortSearch(my_gen: u32) void {
+    search_request.finish(my_gen, &state.app.music.is_loading);
 }
 
 /// JioSaavn search worker — public API, no auth. Fills play_url (perma_url) +
 /// a full cover URL; playback hands perma_url to mpv/yt-dlp.
-fn jiosaavnWorker(my_gen: u32) void {
-    defer state.app.music.is_loading.store(false, .release);
+fn jiosaavnWorker(job: SearchJob) void {
+    const my_gen = job.generation;
+    defer search_request.finish(my_gen, &state.app.music.is_loading);
 
     var url_buf: [1024]u8 = undefined;
-    const url = js_pure.buildSearchUrl(&url_buf, query_buf[0..query_len], 40) orelse return;
+    const url = js_pure.buildSearchUrl(&url_buf, job.query[0..job.query_len], 40) orelse return;
 
     const body = curl(url, 3 * 1024 * 1024, "") orelse {
-        state.app.music.fetch_error = true;
+        if (search_request.isCurrent(my_gen)) state.app.music.fetch_error = true;
         return;
     };
     defer alloc.free(body);
-    if (search_gen.load(.acquire) != my_gen) return;
+    if (search_request.current() != my_gen) return;
 
     parse_mutex.lock();
     defer parse_mutex.unlock();
-    if (search_gen.load(.acquire) != my_gen) return;
+    if (search_request.current() != my_gen) return;
 
     var count: usize = 0;
     var it = js_pure.SongIter{ .json = body };
@@ -379,19 +369,20 @@ fn jiosaavnWorker(my_gen: u32) void {
     if (count == 0) logs.pushLog("info", "music", "No tracks found", false);
 }
 
-fn subsonicWorker(my_gen: u32) void {
-    defer state.app.music.is_loading.store(false, .release);
+fn subsonicWorker(job: SearchJob) void {
+    const my_gen = job.generation;
+    defer search_request.finish(my_gen, &state.app.music.is_loading);
 
     var url_buf: [1024]u8 = undefined;
-    const url = pure.buildSearchUrl(&url_buf, w_base[0..w_base_len], w_authq[0..w_authq_len], query_buf[0..query_len], 100) orelse return;
+    const url = pure.buildSearchUrl(&url_buf, job.base[0..job.base_len], job.auth[0..job.auth_len], job.query[0..job.query_len], 100) orelse return;
 
     const body = curl(url, 2 * 1024 * 1024, "") orelse {
-        state.app.music.fetch_error = true;
+        if (search_request.isCurrent(my_gen)) state.app.music.fetch_error = true;
         return;
     };
     defer alloc.free(body);
 
-    if (search_gen.load(.acquire) != my_gen) return; // superseded
+    if (search_request.current() != my_gen) return; // superseded
 
     if (!pure.responseOk(body)) {
         state.app.music.fetch_error = true;
@@ -401,7 +392,7 @@ fn subsonicWorker(my_gen: u32) void {
 
     parse_mutex.lock();
     defer parse_mutex.unlock();
-    if (search_gen.load(.acquire) != my_gen) return;
+    if (search_request.current() != my_gen) return;
 
     const scope = pure.songsScope(body);
     var count: usize = 0;
@@ -428,23 +419,24 @@ fn subsonicWorker(my_gen: u32) void {
 /// Jellyfin audio search worker — twin of subsonicWorker. Fills `id` (the item
 /// id, which is also its Primary-image id, so `cover` mirrors it); the stream
 /// URL is built from live creds at play time, never cached in the row.
-fn jellyfinMusicWorker(my_gen: u32) void {
-    defer state.app.music.is_loading.store(false, .release);
+fn jellyfinMusicWorker(job: SearchJob) void {
+    const my_gen = job.generation;
+    defer search_request.finish(my_gen, &state.app.music.is_loading);
 
     var url_buf: [1024]u8 = undefined;
-    const url = jf_pure.buildSearchUrl(&url_buf, w_base[0..w_base_len], w_token[0..w_token_len], query_buf[0..query_len], 100) orelse return;
+    const url = jf_pure.buildSearchUrl(&url_buf, job.base[0..job.base_len], job.auth[0..job.auth_len], job.query[0..job.query_len], 100) orelse return;
 
     const body = curl(url, 2 * 1024 * 1024, "application/json") orelse {
-        state.app.music.fetch_error = true;
+        if (search_request.isCurrent(my_gen)) state.app.music.fetch_error = true;
         return;
     };
     defer alloc.free(body);
 
-    if (search_gen.load(.acquire) != my_gen) return; // superseded
+    if (search_request.current() != my_gen) return; // superseded
 
     parse_mutex.lock();
     defer parse_mutex.unlock();
-    if (search_gen.load(.acquire) != my_gen) return;
+    if (search_request.current() != my_gen) return;
 
     const scope = jf_pure.itemsScope(body);
     if (scope.len == 0) {
@@ -477,24 +469,25 @@ fn jellyfinMusicWorker(my_gen: u32) void {
 /// `cover` (the `thumb` path) and `play_url` (the `Part.key` path); both paths
 /// are server-relative and get the base + token spliced on at use time, so a
 /// token rotation can't strand a cached row.
-fn plexMusicWorker(my_gen: u32) void {
-    defer state.app.music.is_loading.store(false, .release);
+fn plexMusicWorker(job: SearchJob) void {
+    const my_gen = job.generation;
+    defer search_request.finish(my_gen, &state.app.music.is_loading);
 
     var url_buf: [1024]u8 = undefined;
-    const url = px_pure.buildSearchUrl(&url_buf, w_base[0..w_base_len], w_token[0..w_token_len], query_buf[0..query_len], 100) orelse return;
+    const url = px_pure.buildSearchUrl(&url_buf, job.base[0..job.base_len], job.auth[0..job.auth_len], job.query[0..job.query_len], 100) orelse return;
 
     // Plex serves XML unless asked for JSON (plex.zig sends the same header).
     const body = curl(url, 2 * 1024 * 1024, "application/json") orelse {
-        state.app.music.fetch_error = true;
+        if (search_request.isCurrent(my_gen)) state.app.music.fetch_error = true;
         return;
     };
     defer alloc.free(body);
 
-    if (search_gen.load(.acquire) != my_gen) return; // superseded
+    if (search_request.current() != my_gen) return; // superseded
 
     parse_mutex.lock();
     defer parse_mutex.unlock();
-    if (search_gen.load(.acquire) != my_gen) return;
+    if (search_request.current() != my_gen) return;
 
     // Plex omits "Metadata" entirely on a zero-result search, so an empty scope
     // is "no tracks", NOT an error — only a body that isn't a MediaContainer is.
@@ -530,17 +523,33 @@ fn plexMusicWorker(my_gen: u32) void {
 }
 
 fn copyField(dst: []u8, len: *usize, src: []const u8) void {
-    const n = @min(src.len, dst.len);
-    @memcpy(dst[0..n], src[0..n]);
-    len.* = n;
+    @import("../core/text.zig").setFixedUtf8(dst, len, src);
+}
+
+pub fn resultCount() usize {
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    return @min(state.app.music.result_count, state.app.music.results.len);
+}
+
+pub fn resultRow(idx: usize) ?pure.MusicSong {
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (idx >= state.app.music.result_count or idx >= state.app.music.results.len) return null;
+    return state.app.music.results[idx];
 }
 
 // ══════════════════════════════════════════════════════════
 // Play — hand the stream URL straight to mpv
 // ══════════════════════════════════════════════════════════
 pub fn playSong(idx: usize) void {
-    if (idx >= state.app.music.result_count) return;
-    const song = &state.app.music.results[idx];
+    parse_mutex.lock();
+    if (idx >= state.app.music.result_count) {
+        parse_mutex.unlock();
+        return;
+    }
+    const song = state.app.music.results[idx];
+    parse_mutex.unlock();
 
     // Snapshot title/artist into locals BEFORE the mpv handoff so nothing handed
     // to the player aliases the live results[] row a re-search could rewrite.
@@ -598,7 +607,7 @@ pub fn playSong(idx: usize) void {
     // unusable. loading_pure.posterUrl now takes either form.
     {
         var cov_buf: [1024]u8 = undefined;
-        const cover_url = coverUrlFor(song, &cov_buf);
+        const cover_url = coverUrlFor(&song, &cov_buf);
         state.stashPendingPlayFull(
             name_buf[0..nlen],
             cover_url,
@@ -631,8 +640,13 @@ pub fn playSong(idx: usize) void {
 const dl_pure = @import("music_download_pure.zig");
 
 pub fn downloadSong(idx: usize) void {
-    if (idx >= state.app.music.result_count) return;
-    const song = &state.app.music.results[idx];
+    parse_mutex.lock();
+    if (idx >= state.app.music.result_count) {
+        parse_mutex.unlock();
+        return;
+    }
+    const song = state.app.music.results[idx];
+    parse_mutex.unlock();
 
     // Music dir.
     var dir_buf: [512]u8 = undefined;
@@ -803,7 +817,7 @@ pub fn renderContent() void {
                 state.app.music.source = @intCast(clicked);
                 state.app.music.result_count = 0; // switching source clears the grid
                 state.app.music.fetch_error = false;
-                _ = search_gen.fetchAdd(1, .acq_rel); // drop any in-flight results
+                search_request.cancel(&state.app.music.is_loading); // drop any in-flight results
             }
         }
     }
@@ -1042,9 +1056,7 @@ fn renderCover(i: usize, song: *const pure.MusicSong) void {
     }
 }
 
-fn renderCard(i: usize, card_w: f32) void {
-    const song = &state.app.music.results[i];
-
+fn renderCard(i: usize, card_w: f32, song: *const pure.MusicSong) void {
     var name_buf: [160]u8 = undefined;
     const title = safeUtf8Buf(song.title[0..@min(song.title_len, song.title.len)], &name_buf);
 
@@ -1111,7 +1123,9 @@ fn renderCard(i: usize, card_w: f32) void {
 }
 
 fn renderResults() void {
+    parse_mutex.lock();
     const total = @min(state.app.music.result_count, state.app.music.results.len);
+    parse_mutex.unlock();
     if (total == 0) {
         const src = state.app.music.source;
         const msg: []const u8 = if (!sourceConfigured(src)) switch (src) {
@@ -1142,11 +1156,37 @@ fn renderResults() void {
     const cols_f: f32 = @floatFromInt(cols);
     const card_w: f32 = @max(100, (avail_w - cols_f * 2 * CARD_GAP) / cols_f);
 
-    var r: usize = 0;
-    while (r * cols < total) : (r += 1) {
+    const row_h = card_w + CARD_FOOTER_H + 2 * CARD_GAP;
+    const total_rows = (total + cols - 1) / cols;
+    const win = tmdb_pure.visibleRows(total_rows, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 2);
+
+    if (win.first > 0) {
+        var sp = dvui.box(@src(), .{}, .{
+            .id_extra = 49998,
+            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(win.first)) },
+        });
+        sp.deinit();
+    }
+
+    var r: usize = win.first;
+    while (r < win.last) : (r += 1) {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = r + 50000, .expand = .horizontal });
         defer row.deinit();
         var col: usize = 0;
-        while (col < cols and r * cols + col < total) : (col += 1) renderCard(r * cols + col, card_w);
+        while (col < cols and r * cols + col < total) : (col += 1) {
+            const idx = r * cols + col;
+            parse_mutex.lock();
+            const song = state.app.music.results[idx];
+            parse_mutex.unlock();
+            renderCard(idx, card_w, &song);
+        }
+    }
+
+    if (win.last < total_rows) {
+        var sp = dvui.box(@src(), .{}, .{
+            .id_extra = 49999,
+            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(total_rows - win.last)) },
+        });
+        sp.deinit();
     }
 }

@@ -1453,7 +1453,7 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
     }
     // YouTube
     if (std.mem.startsWith(u8, api_path, "/youtube")) {
-        apiYoutube(stream, api_path, query);
+        @import("remote_youtube_api.zig").handle(stream, api_path, query);
         return;
     }
     // Anime
@@ -2166,7 +2166,7 @@ fn apiMusic(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) 
     if (std.mem.eql(u8, api_path, "/music/play")) {
         if (getQueryParam(query, "idx")) |v| {
             const idx = std.fmt.parseInt(usize, v, 10) catch 0;
-            if (idx < state.app.music.result_count) music.playSong(idx);
+            if (idx < music.resultCount()) music.playSong(idx);
         }
         sendJson(stream, "{\"ok\":true}");
         return;
@@ -2183,18 +2183,18 @@ fn apiMusic(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) 
         state.app.music.source,
     }) catch return;
     var i: usize = 0;
-    const n = @min(state.app.music.result_count, 80);
+    const n = @min(music.resultCount(), 80);
     while (i < n) : (i += 1) {
-        const s = state.app.music.results[i];
+        const s = music.resultRow(i) orelse continue;
         if (i > 0) w.writeAll(",") catch return;
         w.writeAll("{\"title\":\"") catch return;
-        escJsonWrite(&w, s.title[0..s.title_len]);
+        escJsonWrite(&w, txt.safeUtf8(s.title[0..@min(s.title_len, s.title.len)]));
         w.writeAll("\",\"artist\":\"") catch return;
-        escJsonWrite(&w, s.artist[0..s.artist_len]);
+        escJsonWrite(&w, txt.safeUtf8(s.artist[0..@min(s.artist_len, s.artist.len)]));
         w.writeAll("\",\"cover\":\"") catch return;
-        escJsonWrite(&w, s.cover[0..s.cover_len]);
+        escJsonWrite(&w, txt.safeUtf8(s.cover[0..@min(s.cover_len, s.cover.len)]));
         w.writeAll("\",\"url\":\"") catch return;
-        escJsonWrite(&w, s.play_url[0..s.play_url_len]);
+        escJsonWrite(&w, txt.safeUtf8(s.play_url[0..@min(s.play_url_len, s.play_url.len)]));
         w.writeAll("\"}") catch return;
     }
     w.writeAll("]}") catch return;
@@ -2219,14 +2219,14 @@ fn apiRadio(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) 
     if (std.mem.eql(u8, api_path, "/radio/play")) {
         if (getQueryParam(query, "idx")) |v| {
             const idx = std.fmt.parseInt(usize, v, 10) catch 0;
-            if (idx < state.app.radio.result_count) radio.playStation(idx);
+            if (idx < radio.resultCount()) radio.playStation(idx);
         }
         sendJson(stream, "{\"ok\":true}");
         return;
     }
 
     // Nothing loaded yet → seed the popular list (once per session, async).
-    if (state.app.radio.result_count == 0) radio.loadPopularOnce();
+    if (radio.resultCount() == 0) radio.loadPopularOnce();
 
     const buf = alloc.alloc(u8, 96 * 1024) catch {
         sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
@@ -2238,21 +2238,21 @@ fn apiRadio(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) 
         if (state.app.radio.is_loading.load(.acquire)) "true" else "false",
     }) catch return;
     var i: usize = 0;
-    const n = @min(state.app.radio.result_count, 80);
+    const n = @min(radio.resultCount(), 80);
     while (i < n) : (i += 1) {
-        const st = state.app.radio.results[i];
-        const u = if (st.url_resolved_len > 0) st.url_resolved[0..st.url_resolved_len] else st.url[0..st.url_len];
+        const st = radio.resultRow(i) orelse continue;
+        const u = if (st.url_resolved_len > 0) st.url_resolved[0..@min(st.url_resolved_len, st.url_resolved.len)] else st.url[0..@min(st.url_len, st.url.len)];
         if (i > 0) w.writeAll(",") catch return;
         w.writeAll("{\"name\":\"") catch return;
-        escJsonWrite(&w, st.name[0..st.name_len]);
+        escJsonWrite(&w, txt.safeUtf8(st.name[0..@min(st.name_len, st.name.len)]));
         w.writeAll("\",\"url\":\"") catch return;
-        escJsonWrite(&w, u);
+        escJsonWrite(&w, txt.safeUtf8(u));
         w.writeAll("\",\"favicon\":\"") catch return;
-        escJsonWrite(&w, st.favicon[0..st.favicon_len]);
+        escJsonWrite(&w, txt.safeUtf8(st.favicon[0..@min(st.favicon_len, st.favicon.len)]));
         w.writeAll("\",\"tags\":\"") catch return;
-        escJsonWrite(&w, st.tags[0..st.tags_len]);
+        escJsonWrite(&w, txt.safeUtf8(st.tags[0..@min(st.tags_len, st.tags.len)]));
         w.writeAll("\",\"country\":\"") catch return;
-        escJsonWrite(&w, st.country[0..st.country_len]);
+        escJsonWrite(&w, txt.safeUtf8(st.country[0..@min(st.country_len, st.country.len)]));
         w.writeAll("\"}") catch return;
     }
     w.writeAll("]}") catch return;
@@ -3396,54 +3396,12 @@ fn apiSettingsToggle(query: []const u8) void {
     }
 }
 
-fn apiYoutube(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
-    if (std.mem.eql(u8, api_path, "/youtube/search")) {
-        if (getQueryParam(query, "q")) |q| {
-            var decoded: [256]u8 = undefined;
-            const dq = urlDecode(q, &decoded) orelse q;
-            const slen = @min(dq.len, 127);
-            @memcpy(state.app.yt.search_buf[0..slen], dq[0..slen]);
-            state.app.yt.search_buf[slen] = 0;
-            const yt = @import("youtube.zig");
-            yt.fetchYoutube(state.app.yt.search_buf[0..slen]);
-        }
-        sendJson(stream, "{\"ok\":true,\"action\":\"yt_search\"}");
-        return;
-    }
-    // Return current results
-    var json_buf: [32768]u8 = undefined;
-    var w = std.Io.Writer.fixed(&json_buf);
-    w.writeAll("{\"items\":[") catch return;
-    for (state.app.yt.results.items, 0..) |item, idx| {
-        // Cap BEFORE the separator: writing the comma first emits a trailing
-        // comma on the 30th row, producing JSON the web UI can't parse. Latent
-        // until a grid actually exceeded 30 rows (YouTube channel pages do).
-        if (idx >= 30) break;
-        if (idx > 0) w.writeAll(",") catch return;
-        const dur_min = @divTrunc(item.duration, 60);
-        const dur_sec = @rem(item.duration, 60);
-        w.writeAll("{\"id\":\"") catch return;
-        escJsonWrite(&w, item.video_id[0..item.video_id_len]);
-        w.writeAll("\",\"title\":\"") catch return;
-        escJsonWrite(&w, item.title[0..item.title_len]);
-        w.writeAll("\",\"channel\":\"") catch return;
-        escJsonWrite(&w, item.uploader[0..item.uploader_len]);
-        w.print("\",\"dur_min\":{d},\"dur_sec\":{d},\"views\":{d}}}", .{
-            dur_min, dur_sec, item.views,
-        }) catch return;
-    }
-    w.writeAll("],\"loading\":") catch return;
-    w.writeAll(if (state.app.yt.is_loading.load(.acquire)) "true" else "false") catch return;
-    w.writeAll("}") catch return;
-    sendJson(stream, json_buf[0..w.end]);
-}
-
 fn apiAnime(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
+    const anime_svc = @import("anime.zig");
     if (std.mem.eql(u8, api_path, "/anime/search")) {
         if (getQueryParam(query, "q")) |q| {
             var decoded: [256]u8 = undefined;
             const dq = urlDecode(q, &decoded) orelse q;
-            const anime_svc = @import("anime.zig");
             anime_svc.searchAnime(dq);
         }
         sendJson(stream, "{\"ok\":true,\"action\":\"anime_search\"}");
@@ -3452,7 +3410,6 @@ fn apiAnime(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) 
     if (std.mem.eql(u8, api_path, "/anime/episodes")) {
         if (getQueryParam(query, "idx")) |idx_str| {
             const idx = std.fmt.parseInt(usize, idx_str, 10) catch 0;
-            const anime_svc = @import("anime.zig");
             anime_svc.loadEpisodes(idx);
         }
         sendJson(stream, "{\"ok\":true,\"action\":\"load_episodes\"}");
@@ -3462,7 +3419,6 @@ fn apiAnime(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) 
         if (getQueryParam(query, "ep")) |ep| {
             var decoded: [16]u8 = undefined;
             const ep_str = urlDecode(ep, &decoded) orelse ep;
-            const anime_svc = @import("anime.zig");
             anime_svc.playEpisode(ep_str);
         }
         sendJson(stream, "{\"ok\":true,\"action\":\"play_episode\"}");
@@ -3472,22 +3428,28 @@ fn apiAnime(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) 
     var json_buf: [16384]u8 = undefined;
     var w = std.Io.Writer.fixed(&json_buf);
     w.writeAll("{\"results\":[") catch return;
-    for (0..state.app.anime.result_count) |ri| {
-        const r = state.app.anime.results[ri];
+    const result_count = anime_svc.resultCount();
+    var emitted: usize = 0;
+    for (0..result_count) |ri| {
+        const r = anime_svc.resultRow(ri) orelse continue;
         if (r.name_len == 0) continue;
-        if (ri > 0) w.writeAll(",") catch return;
+        if (emitted > 0) w.writeAll(",") catch return;
         w.writeAll("{\"name\":\"") catch return;
-        escJsonWrite(&w, r.name[0..r.name_len]);
+        escJsonWrite(&w, txt.safeUtf8(r.name[0..@min(r.name_len, r.name.len)]));
         w.print("\",\"episodes\":{d}}}", .{r.episodes}) catch return;
+        emitted += 1;
     }
     w.writeAll("],\"episodes\":[") catch return;
-    for (0..state.app.anime.episode_count) |ei| {
-        const ep_len = state.app.anime.episode_list_lens[ei];
+    const episode_count = @min(state.app.anime.episode_count, state.app.anime.episode_list.len);
+    var ep_emitted: usize = 0;
+    for (0..episode_count) |ei| {
+        const ep_len = @min(state.app.anime.episode_list_lens[ei], state.app.anime.episode_list[ei].len);
         if (ep_len == 0) continue;
-        if (ei > 0) w.writeAll(",") catch return;
+        if (ep_emitted > 0) w.writeAll(",") catch return;
         w.writeAll("\"") catch return;
-        escJsonWrite(&w, state.app.anime.episode_list[ei][0..ep_len]);
+        escJsonWrite(&w, txt.safeUtf8(state.app.anime.episode_list[ei][0..ep_len]));
         w.writeAll("\"") catch return;
+        ep_emitted += 1;
     }
     w.writeAll("],\"selected\":") catch return;
     if (state.app.anime.selected_idx) |si| {
@@ -3695,7 +3657,7 @@ fn apiDrama(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) 
 
     if (std.mem.eql(u8, api_path, "/drama/play")) {
         const idx = std.fmt.parseInt(usize, getQueryParam(query, "idx") orelse "999", 10) catch 999;
-        if (idx >= d.result_count) {
+        if (idx >= drama.resultCount()) {
             sendJsonStatus(stream, "404 Not Found", "{\"error\":\"no such drama\"}");
             return;
         }
@@ -3706,7 +3668,7 @@ fn apiDrama(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) 
         return;
     }
     if (std.mem.eql(u8, api_path, "/drama/more")) {
-        drama.loadMore();
+        if (drama.resultCount() == 0) drama.loadCatalog() else drama.loadMore();
         sendJson(stream, "{\"ok\":true,\"action\":\"drama_more\"}");
         return;
     }
@@ -3727,9 +3689,12 @@ fn apiDrama(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) 
         if (d.is_loading.load(.acquire)) "true" else "false",
         if (d.stream_loading.load(.acquire)) "true" else "false",
     }) catch return;
-    const n = @min(d.result_count, d.results.len);
-    for (d.results[0..n], 0..) |*r, i| {
-        if (i > 0) w.writeAll(",") catch return;
+    const n = drama.resultCount();
+    var emitted: usize = 0;
+    for (0..n) |i| {
+        const row = drama.resultRow(i) orelse continue;
+        const r = &row;
+        if (emitted > 0) w.writeAll(",") catch return;
         w.writeAll("{\"id\":\"") catch return;
         escJsonWrite(&w, txt.safeUtf8(r.id[0..@min(r.id_len, r.id.len)]));
         w.writeAll("\",\"name\":\"") catch return;
@@ -3742,6 +3707,7 @@ fn apiDrama(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) 
         w.writeAll("\",\"overview\":\"") catch return;
         escJsonWrite(&w, txt.safeUtf8(r.overview[0..@min(r.overview_len, r.overview.len)]));
         w.print("\",\"vote\":{d:.1}}}", .{r.vote}) catch return;
+        emitted += 1;
     }
     w.writeAll("]}") catch return;
     sendJson(stream, json_buf[0..w.end]);
@@ -4039,6 +4005,7 @@ fn apiOpds(stream: std.Io.net.Stream, method: []const u8, api_path: []const u8, 
         return;
     }
     if (!requireMethod(stream, method, "GET")) return;
+    opds.ensureLoadedOnce();
     const a = @import("../core/alloc.zig").allocator;
     const json_buf = a.alloc(u8, 256 * 1024) catch return;
     defer a.free(json_buf);
@@ -4055,9 +4022,13 @@ fn apiOpds(stream: std.Io.net.Stream, method: []const u8, api_path: []const u8, 
     w.writeAll("\",\"feed\":\"") catch return;
     escJsonWrite(&w, txt.safeUtf8(o.feed_title[0..@min(o.feed_title_len, o.feed_title.len)]));
     w.writeAll("\",\"entries\":[") catch return;
-    const n = @min(o.entry_count, o.entries.len);
-    for (o.entries[0..n], 0..) |*e, i| {
-        if (i > 0) w.writeAll(",") catch return;
+    const n = opds.entryCount();
+    var emitted: usize = 0;
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        const row = opds.entryRow(i) orelse continue;
+        const e = &row;
+        if (emitted > 0) w.writeAll(",") catch return;
         w.writeAll("{\"title\":\"") catch return;
         escJsonWrite(&w, txt.safeUtf8(e.titleSlice()));
         w.print("\",\"nav\":{s},\"streamable\":{s},\"pages\":{d},\"type\":\"", .{
@@ -4067,6 +4038,7 @@ fn apiOpds(stream: std.Io.net.Stream, method: []const u8, api_path: []const u8, 
         }) catch return;
         escJsonWrite(&w, txt.safeUtf8(e.contentTypeSlice()));
         w.writeAll("\"}") catch return;
+        emitted += 1;
     }
     w.writeAll("]}") catch return;
     sendJson(stream, json_buf[0..w.end]);

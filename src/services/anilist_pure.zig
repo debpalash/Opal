@@ -18,6 +18,59 @@ pub fn adultGate(filter_enabled: bool) []const u8 {
     return if (filter_enabled) ", isAdult: false" else "";
 }
 
+/// Build the keyless AniList search request with the title carried as a
+/// GraphQL variable. Keeping user text out of the query itself avoids a second
+/// GraphQL escaping layer; this routine only has to produce a valid JSON string.
+pub fn searchPayload(out: []u8, title: []const u8, filter_enabled: bool) ?[:0]u8 {
+    var escaped: [768]u8 = undefined;
+    var n: usize = 0;
+    for (title) |ch| {
+        const extra: usize = switch (ch) {
+            '"', '\\', '\n', '\r', '\t' => 2,
+            0...8, 11, 12, 14...0x1f => 6,
+            else => 1,
+        };
+        if (n + extra > escaped.len) return null;
+        switch (ch) {
+            '"' => {
+                escaped[n] = '\\';
+                escaped[n + 1] = '"';
+            },
+            '\\' => {
+                escaped[n] = '\\';
+                escaped[n + 1] = '\\';
+            },
+            '\n' => {
+                escaped[n] = '\\';
+                escaped[n + 1] = 'n';
+            },
+            '\r' => {
+                escaped[n] = '\\';
+                escaped[n + 1] = 'r';
+            },
+            '\t' => {
+                escaped[n] = '\\';
+                escaped[n + 1] = 't';
+            },
+            0...8, 11, 12, 14...0x1f => {
+                const hex = "0123456789abcdef";
+                escaped[n] = '\\';
+                escaped[n + 1] = 'u';
+                escaped[n + 2] = '0';
+                escaped[n + 3] = '0';
+                escaped[n + 4] = hex[ch >> 4];
+                escaped[n + 5] = hex[ch & 0x0f];
+            },
+            else => escaped[n] = ch,
+        }
+        n += extra;
+    }
+
+    return std.fmt.bufPrintZ(out,
+        \\{{"query":"query ($search: String) {{ Page(perPage: 25) {{ media(search: $search, type: ANIME{s}) {{ id idMal averageScore title {{ romaji english }} coverImage {{ large }} episodes seasonYear description(asHtml: false) }} }} }}","variables":{{"search":"{s}"}}}}
+    , .{ adultGate(filter_enabled), escaped[0..n] }) catch null;
+}
+
 /// One parsed AniList media entry. String fields are slices into the source
 /// JSON (allocator-free, still JSON-escaped); the caller decodes/copies them.
 pub const Media = struct {
@@ -124,6 +177,13 @@ pub const Iter = struct {
 test "adultGate mirrors the NSFW toggle" {
     try std.testing.expectEqualStrings(", isAdult: false", adultGate(true));
     try std.testing.expectEqualStrings("", adultGate(false));
+}
+
+test "searchPayload uses variables and JSON-escapes arbitrary titles" {
+    var buf: [2048]u8 = undefined;
+    const payload = searchPayload(&buf, "A \"title\" \\ next\nline", true).?;
+    try std.testing.expect(std.mem.indexOf(u8, payload, "media(search: $search, type: ANIME, isAdult: false)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, payload, "\"search\":\"A \\\"title\\\" \\\\ next\\nline\"") != null);
 }
 
 test "Iter parses a well-formed Page.media array" {

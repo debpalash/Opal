@@ -376,6 +376,10 @@ pub const MediaPlayer = struct {
     /// Monotonic deadline for playback-position persistence. Database writes
     /// must follow elapsed time, not video/UI frame rate.
     last_position_save_ms: i64 = 0,
+    /// Libtorrent accessors synchronously rendezvous with its session thread.
+    /// Keep readiness/read-ahead work off the render cadence so mouse and key
+    /// events remain responsive while a torrent is opening or streaming.
+    last_torrent_maintenance_ms: i64 = 0,
     provider: state.ContentProvider = .mpv,
 
     // ── Cached mpv properties (A4) ──
@@ -756,6 +760,7 @@ pub const MediaPlayer = struct {
         self.restore_session_paused = true;
         self.restore_session_speed = 1;
         self.last_position_save_ms = 0;
+        self.last_torrent_maintenance_ms = 0;
         self.is_loading = false;
         self.loading_label_len = 0;
         @memset(&self.load_error, 0);
@@ -2954,6 +2959,9 @@ pub fn updateTorrentBackgroundTasks() void {
         }
 
         if (p.current_torrent_id >= 0) {
+            const timing = @import("playback_timing_pure.zig");
+            if (!timing.torrentMaintenanceDue(now_ms, p.last_torrent_maintenance_ms)) continue;
+            p.last_torrent_maintenance_ms = now_ms;
             if (!p.torrent_is_ready) {
                 var buffering_path: [512]u8 = undefined;
                 const t_status = c.mpv.torrent_poll(state.torrentSession(), p.current_torrent_id, p.selected_file_idx, &buffering_path, @intCast(buffering_path.len), null, null, null);

@@ -60,6 +60,10 @@ var loading_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var next_href_buf: [512]u8 = undefined;
 var next_href_len: usize = 0;
 var fetch_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+// Config restores `connected` after startup, but no connect() call occurs in
+// that path. This latch lets desktop and companion entry points safely kick
+// one root fetch without retrying a failed server on every frame/request.
+var restored_fetch_attempted: std.atomic.Value(bool) = .init(false);
 
 // ══════════════════════════════════════════════════════════
 // HTTP
@@ -237,6 +241,7 @@ fn spawnFetch(mark_connected: bool) void {
         }
     }.worker, .{ mark_connected, my_gen }) catch blk: {
         state.app.opds.is_loading.store(false, .release);
+        setError("Could not start the OPDS request");
         break :blk null;
     };
     // Detach: the result is observed via state.app.opds, never joined.
@@ -366,7 +371,46 @@ pub fn connect() void {
     @memcpy(state.app.opds.current_url[0..n], state.app.opds.server_url[0..n]);
     state.app.opds.current_url_len = n;
     state.app.opds.feed_title_len = 0;
+    restored_fetch_attempted.store(true, .release);
     spawnFetch(true);
+}
+
+/// Start the root feed after a persisted connected session is restored. Safe
+/// to call from every desktop frame and companion GET; only one caller wins.
+pub fn ensureLoadedOnce() void {
+    if (!state.app.opds.connected or state.app.opds.server_url_len == 0) return;
+    if (entryCount() > 0 or state.app.opds.is_loading.load(.acquire)) return;
+    if (restored_fetch_attempted.swap(true, .acq_rel)) return;
+    if (state.app.opds.current_url_len == 0) {
+        const n = @min(state.app.opds.server_url_len, state.app.opds.current_url.len);
+        @memcpy(state.app.opds.current_url[0..n], state.app.opds.server_url[0..n]);
+        state.app.opds.current_url_len = n;
+    }
+    spawnFetch(false);
+}
+
+/// Explicit retry for a failed restored or navigated feed.
+pub fn retry() void {
+    if (state.app.opds.current_url_len == 0) {
+        const n = @min(state.app.opds.server_url_len, state.app.opds.current_url.len);
+        @memcpy(state.app.opds.current_url[0..n], state.app.opds.server_url[0..n]);
+        state.app.opds.current_url_len = n;
+    }
+    restored_fetch_attempted.store(true, .release);
+    spawnFetch(false);
+}
+
+pub fn entryCount() usize {
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    return @min(state.app.opds.entry_count, state.app.opds.entries.len);
+}
+
+pub fn entryRow(idx: usize) ?pure.OpdsEntry {
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (idx >= state.app.opds.entry_count or idx >= state.app.opds.entries.len) return null;
+    return state.app.opds.entries[idx];
 }
 
 /// Settings "Test Connection" button — same fetch as connect().
@@ -417,8 +461,8 @@ pub fn goBack() void {
 /// Open one entry: drill into a subsection, or route an acquisition by content
 /// type (image/comic → in-app comics reader; EPUB/PDF → external; else toast).
 pub fn openEntry(idx: usize) void {
-    if (idx >= state.app.opds.entry_count) return;
-    const e = &state.app.opds.entries[idx];
+    const row = entryRow(idx) orelse return;
+    const e = &row;
     const href = e.hrefSlice();
     if (href.len == 0) return;
 
@@ -468,6 +512,7 @@ pub fn disconnect() void {
     state.app.opds.nav_depth = 0;
     state.app.opds.feed_title_len = 0;
     state.app.opds.current_url_len = 0;
+    restored_fetch_attempted.store(false, .release);
     state.markConfigDirty();
 }
 
@@ -480,6 +525,7 @@ pub fn renderContent() void {
         renderLoginForm();
         return;
     }
+    ensureLoadedOnce();
     renderFeed();
 }
 
@@ -621,6 +667,22 @@ fn renderFeed() void {
         });
     }
 
+    if (state.app.opds.fetch_error and !state.app.opds.is_loading.load(.acquire)) {
+        const msg = state.app.opds.error_msg[0..@min(state.app.opds.error_msg_len, state.app.opds.error_msg.len)];
+        _ = dvui.label(@src(), "{s}", .{if (msg.len > 0) safeUtf8(msg) else "Could not load this catalog."}, .{
+            .color_text = theme.colors.danger,
+            .padding = .{ .x = 16, .y = 8, .w = 16, .h = 6 },
+        });
+        if (dvui.button(@src(), "Retry", .{}, .{
+            .color_fill = theme.colors.accent,
+            .color_text = theme.colors.text_on_accent,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
+            .margin = .{ .x = 16, .y = 0, .w = 0, .h = 8 },
+        })) retry();
+        return;
+    }
+
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
@@ -673,7 +735,8 @@ fn renderFeed() void {
 }
 
 fn renderEntryRow(idx: usize) void {
-    const e = &state.app.opds.entries[idx];
+    const row_data = entryRow(idx) orelse return;
+    const e = &row_data;
 
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .id_extra = idx,

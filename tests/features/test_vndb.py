@@ -52,9 +52,9 @@ def test_vndb_catalog():
         "detail view": "fn renderDetail" in svc and "pub fn openDetail" in svc,
         "torrent/search handoff": "search.submitQuery(" in svc,
         # Thread discipline (mirrors radio.zig).
-        "atomic loading flag": "is_loading.store" in svc,
+        "atomic loading flag": "search_request.begin(&state.app.vndb.is_loading)" in svc,
         "publishes under mutex": "parse_mutex.lock()" in svc,
-        "generation guard": "search_gen" in svc,
+        "generation guard": "LatestRequest" in svc and "search_request.isCurrent" in svc,
         "threads detached": "_ = std.Thread.spawn(" not in svc,
         # curl only — std.http SEGVs on some ISP TLS resets (see comics.zig).
         "curl not std.http": "std.http.Client" not in svc and '"curl"' in svc,

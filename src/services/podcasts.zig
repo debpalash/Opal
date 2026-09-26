@@ -21,6 +21,7 @@ const logs = @import("../core/logs.zig");
 const pure = @import("podcasts_pure.zig");
 const io = @import("../core/io_global.zig");
 const workers = @import("../core/workers.zig");
+const LatestRequest = @import("../core/latest_request.zig").Gate;
 
 const alloc = @import("../core/alloc.zig").allocator;
 
@@ -28,11 +29,11 @@ const agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/2010010
 
 // ── Thread-safety ──
 // Detached workers publish into state.app.podcasts.* under `parse_mutex`, and a
-// monotonic `search_gen` drops stale results so fast re-searches never show
+// monotonic `search_request` drops stale results so fast re-searches never show
 // out-of-order data (mirrors anime.zig). The two `*_loading` flags are atomic
 // (read by UI + remote threads, written by workers).
 var parse_mutex: @import("../core/sync.zig").Mutex = .{};
-var search_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+var search_request: LatestRequest = .{};
 var publication_gen: u64 = 0;
 
 /// Immutable reader view shared by desktop and remote presentations. Provider
@@ -215,19 +216,17 @@ pub fn loadPopularOnce() void {
     popular_fetched.store(true, .release);
     state.app.podcasts.showing_popular = true;
     state.app.podcasts.fetch_error = false;
-    state.app.podcasts.is_loading.store(true, .release);
-
     // Take a generation like a search does, so a user search fired while the
     // chart is in flight supersedes it instead of racing it into results[].
-    const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
+    const my_gen = search_request.begin(&state.app.podcasts.is_loading);
 
     workers.spawn(popularWorker, .{my_gen}) catch {
-        state.app.podcasts.is_loading.store(false, .release);
+        search_request.finish(my_gen, &state.app.podcasts.is_loading);
     };
 }
 
 fn popularWorker(my_gen: u32) void {
-    defer state.app.podcasts.is_loading.store(false, .release);
+    defer search_request.finish(my_gen, &state.app.podcasts.is_loading);
 
     // 1. Chart → the top shows' numeric ids (no feedUrl in this payload).
     // Same story as the search endpoint: this is a fixed top-N chart snapshot
@@ -237,16 +236,16 @@ fn popularWorker(my_gen: u32) void {
     if (chart_url.len == 0) return;
 
     const chart = curl(chart_url, 128 * 1024) orelse {
-        state.app.podcasts.fetch_error = true;
+        if (search_request.isCurrent(my_gen)) state.app.podcasts.fetch_error = true;
         return;
     };
     defer alloc.free(chart);
-    if (search_gen.load(.acquire) != my_gen) return; // superseded by a search
+    if (!search_request.isCurrent(my_gen)) return; // superseded by a search
 
     var ids_buf: [512]u8 = undefined;
     const ids = pure.parseTopChartIds(chart, &ids_buf);
     if (ids.len == 0) {
-        state.app.podcasts.fetch_error = true;
+        if (search_request.isCurrent(my_gen)) state.app.podcasts.fetch_error = true;
         return;
     }
 
@@ -256,15 +255,15 @@ fn popularWorker(my_gen: u32) void {
     if (lookup_url.len == 0) return;
 
     const body = curl(lookup_url, 512 * 1024) orelse {
-        state.app.podcasts.fetch_error = true;
+        if (search_request.isCurrent(my_gen)) state.app.podcasts.fetch_error = true;
         return;
     };
     defer alloc.free(body);
-    if (search_gen.load(.acquire) != my_gen) return;
+    if (!search_request.isCurrent(my_gen)) return;
 
     parse_mutex.lock();
     defer parse_mutex.unlock();
-    if (search_gen.load(.acquire) != my_gen) return; // re-check under lock
+    if (!search_request.isCurrent(my_gen)) return; // re-check under lock
 
     const count = pure.parseItunes(body, &state.app.podcasts.results);
     state.app.podcasts.result_count = count;
@@ -287,7 +286,6 @@ fn popularWorker(my_gen: u32) void {
 pub fn searchPodcasts(query: []const u8) void {
     if (query.len == 0) return;
 
-    state.app.podcasts.is_loading.store(true, .release);
     state.app.podcasts.fetch_error = false;
     state.app.podcasts.showing_popular = false;
     // A search satisfies the "page opens with content" job — never let the
@@ -295,17 +293,17 @@ pub fn searchPodcasts(query: []const u8) void {
     popular_fetched.store(true, .release);
     closeEpisodes();
 
-    const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
+    const my_gen = search_request.begin(&state.app.podcasts.is_loading);
     var job: SearchJob = .{ .generation = my_gen, .query = undefined, .query_len = @min(query.len, 256) };
     @memcpy(job.query[0..job.query_len], query[0..job.query_len]);
 
     workers.spawn(searchWorker, .{job}) catch {
-        state.app.podcasts.is_loading.store(false, .release);
+        search_request.finish(my_gen, &state.app.podcasts.is_loading);
     };
 }
 
 fn searchWorker(job: SearchJob) void {
-    defer state.app.podcasts.is_loading.store(false, .release);
+    defer search_request.finish(job.generation, &state.app.podcasts.is_loading);
 
     // Percent-encode the term (space, &, =, #, ?, %, + at minimum).
     var enc: [768]u8 = undefined;
@@ -322,17 +320,17 @@ fn searchWorker(job: SearchJob) void {
     ) catch return;
 
     const body = curl(url, 256 * 1024) orelse {
-        state.app.podcasts.fetch_error = true;
+        if (search_request.isCurrent(job.generation)) state.app.podcasts.fetch_error = true;
         return;
     };
     defer alloc.free(body);
 
     // Bail if superseded while curl was in flight.
-    if (search_gen.load(.acquire) != job.generation) return;
+    if (!search_request.isCurrent(job.generation)) return;
 
     parse_mutex.lock();
     defer parse_mutex.unlock();
-    if (search_gen.load(.acquire) != job.generation) return; // re-check under lock
+    if (!search_request.isCurrent(job.generation)) return; // re-check under lock
 
     const count = pure.parseItunes(body, &state.app.podcasts.results);
     state.app.podcasts.result_count = count;

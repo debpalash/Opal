@@ -9,6 +9,7 @@ const poster = @import("../core/poster.zig");
 const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
 const pure = @import("../services/podcasts_pure.zig");
 const podcasts = @import("../services/podcasts.zig");
+const tmdb_pure = @import("../services/tmdb_pure.zig");
 
 const Snapshot = podcasts.Snapshot;
 const loadPopularOnce = podcasts.loadPopularOnce;
@@ -243,16 +244,27 @@ fn renderResults(view: *const Snapshot) void {
     });
 
     // Responsive columns from the LIVE page width (one-frame lag; first paint
-    // falls back to a sane default) — same shape as the TMDB gallery. No
-    // virtualization: the grid is capped at results[]'s 50 cards.
+    // falls back to a sane default) — same shape as the TMDB gallery.
     const rect_w = scroll.data().rect.w;
     const avail_w: f32 = @max(240, (if (rect_w > 1) rect_w else 900) - 8);
     const cols: usize = @max(2, @as(usize, @intFromFloat(avail_w / CARD_TARGET_W)));
     const cols_f: f32 = @floatFromInt(cols);
     const card_w: f32 = @max(100, (avail_w - cols_f * 2 * CARD_GAP) / cols_f);
 
-    var r: usize = 0;
-    while (r * cols < count) : (r += 1) {
+    const row_h = card_w + CARD_FOOTER_H + 2 * CARD_GAP;
+    const total_rows = (count + cols - 1) / cols;
+    const win = tmdb_pure.visibleRows(total_rows, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 2);
+
+    if (win.first > 0) {
+        var sp = dvui.box(@src(), .{}, .{
+            .id_extra = 49998,
+            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(win.first)) },
+        });
+        sp.deinit();
+    }
+
+    var r: usize = win.first;
+    while (r < win.last) : (r += 1) {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = r + 50000,
             .expand = .horizontal,
@@ -264,6 +276,14 @@ fn renderResults(view: *const Snapshot) void {
             const i = r * cols + c;
             renderCard(i, card_w, &view.results[i]);
         }
+    }
+
+    if (win.last < total_rows) {
+        var sp = dvui.box(@src(), .{}, .{
+            .id_extra = 49999,
+            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(total_rows - win.last)) },
+        });
+        sp.deinit();
     }
 }
 

@@ -58,6 +58,15 @@ pub fn setFixedBuf(dst: []u8, len_out: *usize, src: []const u8) void {
     len_out.* = n;
 }
 
+/// Copy text into a fixed buffer without leaving a partial UTF-8 codepoint at
+/// the boundary. Network-backed browse rows frequently use `[N]u8` + length;
+/// a byte-wise truncation can otherwise turn valid source text into invalid
+/// JSON or crash a renderer that expects UTF-8.
+pub fn setFixedUtf8(dst: []u8, len_out: *usize, src: []const u8) void {
+    setFixedBuf(dst, len_out, src);
+    len_out.* = safeUtf8(dst[0..len_out.*]).len;
+}
+
 test "setFixedBuf tolerates src aliasing dst (no @memcpy alias panic)" {
     var buf: [8]u8 = undefined;
     @memcpy(buf[0..5], "hello");
@@ -74,6 +83,22 @@ test "setFixedBuf copies disjoint src and truncates to dst" {
     setFixedBuf(dst[0..], &len, "abcdef"); // longer than dst → truncates
     try std.testing.expectEqual(@as(usize, 4), len);
     try std.testing.expectEqualStrings("abcd", dst[0..len]);
+}
+
+test "setFixedUtf8 trims a codepoint split by the fixed buffer" {
+    var dst: [5]u8 = undefined;
+    var len: usize = 0;
+    setFixedUtf8(&dst, &len, "ab\xF0\x9F\x98\x80");
+    try std.testing.expectEqual(@as(usize, 2), len);
+    try std.testing.expectEqualStrings("ab", dst[0..len]);
+}
+
+test "setFixedUtf8 keeps complete multibyte text" {
+    var dst: [6]u8 = undefined;
+    var len: usize = 0;
+    setFixedUtf8(&dst, &len, "ab\xF0\x9F\x98\x80");
+    try std.testing.expectEqual(@as(usize, 6), len);
+    try std.testing.expectEqualStrings("ab\xF0\x9F\x98\x80", dst[0..len]);
 }
 
 test "safeUtf8Buf tolerates aliased src/dst (in-place validation)" {

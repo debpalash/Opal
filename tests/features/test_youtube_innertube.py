@@ -120,7 +120,7 @@ def ytdlp_fallback_is_contained():
         "output budget": ".max_output_bytes = 16 * 1024 * 1024" in block
             and "process.noteOutput" in block,
         "generation cancellation": ".cancel_epoch" in block
-            and "&search_gen" in block and ".expected = gen" in block,
+            and "&search_request.generation" in block and ".expected = gen" in block,
         "incremental rows retained": "process.stdout()" in block
             and "takeDelimiter('\\n')" in block and "parseYtdlpLine(line)" in block,
         "supersede requests tree stop": "process.requestStop();" in block,

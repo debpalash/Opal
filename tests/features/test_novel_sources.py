@@ -62,7 +62,7 @@ def test_novel_source_engines():
         "wikisource always-on default": "fetchWikisource" in svc,
         # ── Thread-safety discipline (workers publish under the existing mutex) ──
         "publishes under mutex": "parse_mutex.lock()" in svc,
-        "generation guards": "search_gen" in svc and "chapters_gen" in svc and "text_gen" in svc,
+        "generation guards": "search_request" in svc and "chapters_gen" in svc and "text_gen" in svc,
         "POST helper for readwn/ajax": "fn curlPost" in svc,
     }
     missing = [k for k, ok in checks.items() if not ok]

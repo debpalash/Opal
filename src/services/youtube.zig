@@ -11,10 +11,12 @@ const it_pure = @import("youtube_innertube_pure.zig"); // unit-tested InnerTube 
 const content_cache = @import("../core/content_cache.zig");
 const ccp = @import("../core/content_cache_pure.zig");
 const bounded_process = @import("../core/bounded_process.zig");
+const LatestRequest = @import("../core/latest_request.zig").Gate;
 
 pub const alloc = @import("../core/alloc.zig").allocator;
 
 const safeUtf8 = @import("../core/text.zig").safeUtf8;
+const setFixedUtf8 = @import("../core/text.zig").setFixedUtf8;
 
 var yt_mutex: @import("../core/sync.zig").Mutex = .{};
 // Seamless refresh: instead of clearing results up-front (which blanks the
@@ -72,7 +74,7 @@ var last_seen_len: usize = 0;
 // Monotonic search generation. Each fetch captures the value at spawn time; a
 // worker that finds itself superseded (a newer search bumped this) discards its
 // results instead of racing them onto the grid out of order.
-var search_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+var search_request: LatestRequest = .{};
 const DEBOUNCE_MS: i64 = 400;
 
 // ── UI controls (module-level, not in state.zig) ──
@@ -196,7 +198,7 @@ var channel_name_len: usize = 0;
 // ── Search suggestions (Google autocomplete, ds=yt) ──
 // A worker fills the fixed rows under sugg_mutex; the dropdown renders a
 // snapshot. sugg_for_* records which query the rows belong to, so a stale
-// list is never shown for a newer query. Generation guard mirrors search_gen.
+// list is never shown for a newer query. Generation guard mirrors search_request.
 const SUGG_MAX = 8;
 var sugg_mutex: @import("../core/sync.zig").Mutex = .{};
 var sugg_rows: [SUGG_MAX][120]u8 = undefined;
@@ -368,11 +370,9 @@ fn deserializeYtInto(bytes: []const u8, gen: u32) usize {
         it.video_id_len = @min(vid.len, it.video_id.len);
         @memcpy(it.video_id[0..it.video_id_len], vid[0..it.video_id_len]);
         const title = r.blob() orelse break;
-        it.title_len = @min(title.len, it.title.len);
-        @memcpy(it.title[0..it.title_len], title[0..it.title_len]);
+        setFixedUtf8(&it.title, &it.title_len, title);
         const up = r.blob() orelse break;
-        it.uploader_len = @min(up.len, it.uploader.len);
-        @memcpy(it.uploader[0..it.uploader_len], up[0..it.uploader_len]);
+        setFixedUtf8(&it.uploader, &it.uploader_len, up);
         const cid = r.blob() orelse break;
         it.channel_id_len = @min(cid.len, it.channel_id.len);
         @memcpy(it.channel_id[0..it.channel_id_len], cid[0..it.channel_id_len]);
@@ -430,14 +430,13 @@ fn storeYtToCache(query: []const u8) void {
 pub fn fetchYoutube(query: []const u8) void {
     if (state.app.yt.is_loading.load(.acquire)) return;
     channel_mode.store(false, .release); // a search always leaves channel view
-    state.app.yt.is_loading.store(true, .release);
     state.app.yt.last_fetch_s = @import("browse_cache.zig").now(); // SWR stamp
 
     const actual_query = if (query.len == 0) "trending music" else query;
 
     // Bump the generation; this fetch owns `my_gen`. A later fetch will bump it
     // again, marking this one stale.
-    const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
+    const my_gen = search_request.begin(&state.app.yt.is_loading);
 
     const S = struct {
         var q_buf: [256]u8 = undefined;
@@ -465,7 +464,7 @@ pub fn fetchYoutube(query: []const u8) void {
     workers.spawn(struct {
         fn worker() void {
             defer {
-                state.app.yt.is_loading.store(false, .release);
+                search_request.finish(S.gen, &state.app.yt.is_loading);
             }
 
             const q = S.q_buf[0..S.q_len];
@@ -500,7 +499,7 @@ pub fn fetchYoutube(query: []const u8) void {
             if (!pending_clear and isCurrent(S.gen)) storeYtToCache(q);
         }
     }.worker, .{}) catch {
-        state.app.yt.is_loading.store(false, .release);
+        search_request.finish(my_gen, &state.app.yt.is_loading);
     };
 }
 
@@ -518,9 +517,8 @@ pub fn openChannel(channel_id: []const u8, name: []const u8) void {
     @memcpy(channel_name_buf[0..channel_name_len], name[0..channel_name_len]);
     channel_mode.store(true, .release);
 
-    state.app.yt.is_loading.store(true, .release);
     state.app.yt.last_fetch_s = @import("browse_cache.zig").now();
-    const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
+    const my_gen = search_request.begin(&state.app.yt.is_loading);
 
     // Channel paging rides loaded_count/-I; the search query is not involved.
     loaded_count.store(PAGE_SIZE, .release);
@@ -548,7 +546,7 @@ pub fn openChannel(channel_id: []const u8, name: []const u8) void {
 
     workers.spawn(struct {
         fn worker() void {
-            defer state.app.yt.is_loading.store(false, .release);
+            defer search_request.finish(S.gen, &state.app.yt.is_loading);
             yt_mutex.lock();
             pending_clear = true; // seamless swap, same as a re-search
             yt_mutex.unlock();
@@ -567,7 +565,7 @@ pub fn openChannel(channel_id: []const u8, name: []const u8) void {
             }
         }
     }.worker, .{}) catch {
-        state.app.yt.is_loading.store(false, .release);
+        search_request.finish(my_gen, &state.app.yt.is_loading);
         return;
     };
 }
@@ -596,7 +594,7 @@ pub fn fetchMore() void {
 
     // This load-more belongs to the current generation; a new search bumps the
     // gen and this worker's appends get dropped (isCurrent).
-    const my_gen = search_gen.load(.acquire);
+    const my_gen = search_request.current();
     const want = @min(loaded_count.load(.acquire) + PAGE_SIZE, ITEM_CAP);
 
     const S = struct {
@@ -672,7 +670,7 @@ pub fn fetchMore() void {
 /// True while `gen` is still the newest search. A stale worker bails so its
 /// (out-of-date) results never reach the grid.
 fn isCurrent(gen: u32) bool {
-    return search_gen.load(.acquire) == gen;
+    return search_request.isCurrent(gen);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -800,6 +798,7 @@ fn publishRows(json: []const u8, gen: u32, limit: usize, src: RowSource) usize {
         item.video_id_len = @min(v.id.len, item.video_id.len);
         @memcpy(item.video_id[0..item.video_id_len], v.id[0..item.video_id_len]);
         item.title_len = it_pure.unescapeJson(v.title_raw, &item.title);
+        item.title_len = safeUtf8(item.title[0..item.title_len]).len;
         item.duration = v.duration;
         item.views = v.views;
 
@@ -807,9 +806,9 @@ fn publishRows(json: []const u8, gen: u32, limit: usize, src: RowSource) usize {
         // byline we already know. Search rows carry their own.
         if (v.channel_raw.len > 0) {
             item.uploader_len = it_pure.unescapeJson(v.channel_raw, &item.uploader);
+            item.uploader_len = safeUtf8(item.uploader[0..item.uploader_len]).len;
         } else {
-            item.uploader_len = @min(src.chan_name.len, item.uploader.len);
-            @memcpy(item.uploader[0..item.uploader_len], src.chan_name[0..item.uploader_len]);
+            setFixedUtf8(&item.uploader, &item.uploader_len, src.chan_name);
         }
         const cid = if (v.channel_id.len > 0) v.channel_id else src.chan_id;
         item.channel_id_len = @min(cid.len, item.channel_id.len);
@@ -908,15 +907,11 @@ fn parsePipedResults(json: []const u8, gen: u32) void {
         const window = json[abs_url..window_end];
 
         if (extractJsonStr(window, "\"title\":")) |title| {
-            const tlen = @min(title.len, 127);
-            @memcpy(item.title[0..tlen], title[0..tlen]);
-            item.title_len = tlen;
+            setFixedUtf8(&item.title, &item.title_len, title);
         }
 
         if (extractJsonStr(window, "\"uploaderName\":")) |up| {
-            const ulen = @min(up.len, 63);
-            @memcpy(item.uploader[0..ulen], up[0..ulen]);
-            item.uploader_len = ulen;
+            setFixedUtf8(&item.uploader, &item.uploader_len, up);
         }
 
         if (extractJsonStr(window, "\"uploaderUrl\":")) |uurl| {
@@ -988,7 +983,7 @@ fn runYtdlp(target: []const u8, item_range: ?[]const u8, gen: u32) void {
         .timeout_ms = 120 * 1000,
         .terminate_grace_ms = 500,
         .max_output_bytes = 16 * 1024 * 1024,
-        .cancel_epoch = .{ .epoch32 = .{ .value = &search_gen, .expected = gen } },
+        .cancel_epoch = .{ .epoch32 = .{ .value = &search_request.generation, .expected = gen } },
     });
     process.start() catch return;
 
@@ -1029,15 +1024,11 @@ fn parseYtdlpLine(line: []const u8) void {
     item.video_id_len = vid.len;
 
     if (it.next()) |title| {
-        const tlen = @min(title.len, 127);
-        @memcpy(item.title[0..tlen], title[0..tlen]);
-        item.title_len = tlen;
+        setFixedUtf8(&item.title, &item.title_len, title);
     }
     if (it.next()) |ch| {
         if (!std.mem.eql(u8, ch, "NA")) {
-            const ulen = @min(ch.len, 63);
-            @memcpy(item.uploader[0..ulen], ch[0..ulen]);
-            item.uploader_len = ulen;
+            setFixedUtf8(&item.uploader, &item.uploader_len, ch);
         }
     }
     if (it.next()) |dur| item.duration = std.fmt.parseInt(i64, dur, 10) catch 0;
@@ -1248,6 +1239,22 @@ pub fn fetchThumb(item: *state.YtItem) void {
 // UI Rendering (called from drawer.zig)
 // ══════════════════════════════════════════════════════════
 
+/// Stable copies for non-UI readers such as the companion API. The result list
+/// is mutated by detached search workers, so callers must not iterate the
+/// ArrayList directly while a refresh can replace its storage.
+pub fn resultCount() usize {
+    yt_mutex.lock();
+    defer yt_mutex.unlock();
+    return state.app.yt.results.items.len;
+}
+
+pub fn resultRow(idx: usize) ?state.YtItem {
+    yt_mutex.lock();
+    defer yt_mutex.unlock();
+    if (idx >= state.app.yt.results.items.len) return null;
+    return state.app.yt.results.items[idx];
+}
+
 pub fn renderContent() void {
     drainYtTexFrees(); // free textures from a re-search clear (UI thread)
     var content = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .padding = dvui.Rect.all(8) });
@@ -1389,7 +1396,7 @@ fn recordFired(q: []const u8) void {
 /// from the previous frame we treat that as a keystroke and reset `last_edit_ms`
 /// — so the window measures *inactivity*. Once the buffer has been stable for
 /// DEBOUNCE_MS, has ≥2 chars, and differs from what we last fired, we fire.
-/// fetchYoutube bumps `search_gen`; an in-flight worker whose gen is superseded
+/// fetchYoutube bumps `search_request`; an in-flight worker whose gen is superseded
 /// drops its results (isCurrent), so fast typing never shows out-of-order rows.
 fn maybeFireLiveSearch() void {
     const q = currentQuery();

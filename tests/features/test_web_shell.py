@@ -25,6 +25,7 @@ def test_web_remote_module_boundaries():
         "remote_collections_api.zig",
         "remote_local_library_api.zig",
         "remote_suwayomi_api.zig",
+        "remote_youtube_api.zig",
     )
     checks = {
         "top router stays below 5k lines": len(remote.splitlines()) < 5000,

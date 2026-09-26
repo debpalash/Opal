@@ -14,6 +14,7 @@ const anilist_pure = @import("anilist_pure.zig");
 const anime_schedule = @import("anime_schedule.zig");
 const anime_schedule_pure = @import("anime_schedule_pure.zig");
 const bounded_process = @import("../core/bounded_process.zig");
+const LatestRequest = @import("../core/latest_request.zig").Gate;
 const workers = @import("../core/workers.zig");
 
 const alloc = @import("../core/alloc.zig").allocator;
@@ -118,7 +119,7 @@ const GRID_CARD_EXTRA_H: f32 = 92;
 
 // ── Mode dispatch (Trending | Seasonal | Calendar | Search | My List) ──
 // Every grid mode reuses results[]/renderGallery; only the fetch differs. A
-// single monotonic generation (`search_gen`, already declared below) guards all
+// single monotonic generation (`search_request`, already declared below) guards all
 // of them so switching modes fast never shows stale results: each fetcher
 // captures the gen it was spawned under and parseJikanData drops on mismatch.
 
@@ -146,7 +147,7 @@ fn setMode(m: state.AnimeMode) void {
     fetched_mode = null; // force renderContent to re-dispatch
     grid_page = 1; // restart infinite-scroll pagination for the new mode
     more_available = false;
-    _ = search_gen.fetchAdd(1, .acq_rel); // drop stale in-flight workers
+    search_request.cancel(&state.app.anime.is_loading); // drop stale in-flight workers
 }
 
 // ── Infinite-scroll pagination (mirrors comics.zig loadMoreResults). ──
@@ -181,6 +182,8 @@ fn buildGridUrl(out: []u8, mode: state.AnimeMode, page: u32) ?[]const u8 {
                 std.fmt.bufPrint(out, "{s}?filter={s}&limit=25&page={d}{s}", .{ jikan_api, fv, page, anime_pure.sfwSuffix(state.app.nsfw_filter_enabled) })) catch null;
         },
         .search => blk: {
+            anime_query_mutex.lock();
+            defer anime_query_mutex.unlock();
             var enc_buf: [768]u8 = undefined;
             var enc_len: usize = 0;
             const qlen = @min(search_query_len, search_query_buf.len);
@@ -234,7 +237,7 @@ pub fn loadMoreGrid() void {
     if (!more_available or grid_loading_more.load(.acquire) or state.app.anime.is_loading.load(.acquire)) return;
     if (state.app.anime.result_count == 0 or state.app.anime.result_count >= state.app.anime.results.len) return;
     if (grid_loading_more.swap(true, .acq_rel)) return;
-    workers.spawn(loadMoreGridWorker, .{ search_gen.load(.acquire), state.app.anime.mode }) catch {
+    workers.spawn(loadMoreGridWorker, .{ search_request.current(), state.app.anime.mode }) catch {
         grid_loading_more.store(false, .release);
     };
 }
@@ -253,7 +256,7 @@ fn loadMoreGridWorker(my_gen: u32, mode: state.AnimeMode) void {
     const body = boundedCurl(&argv, buf, 12_000) orelse return;
     if (body.len == 0) return;
     // Bail if a newer fetch (mode switch / fresh search) superseded us mid-curl.
-    if (search_gen.load(.acquire) != my_gen) return;
+    if (search_request.current() != my_gen) return;
 
     const json = body;
     const added = parseJikanDataEx(json, my_gen, mode == .calendar, state.app.anime.result_count);
@@ -302,7 +305,7 @@ var last_buf_snapshot_len: usize = 0;
 /// Monotonic search generation. Each fired search captures the value it was
 /// spawned under; a worker only publishes if it is still the latest, so fast
 /// typing can't show stale / out-of-order results.
-var search_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+var search_request: LatestRequest = .{};
 
 // ══════════════════════════════════════════════════════════
 // Encrypted on-disk content cache — Trending-grid stale-while-revalidate.
@@ -416,7 +419,6 @@ fn seedTrendingFromCache() void {
 pub fn loadTrendingAnime() void {
     if (state.app.anime.is_loading.load(.acquire)) return;
 
-    state.app.anime.is_loading.store(true, .release);
     // Don't clear result_count here — parseJikanData repopulates and sets the
     // count after the fetch, so a stale-refresh keeps old cards on screen.
     state.app.anime.selected_idx = null;
@@ -427,19 +429,19 @@ pub fn loadTrendingAnime() void {
     has_loaded_trending = true;
     // Trending owns the global generation too, so a stale in-flight search
     // worker won't overwrite freshly-loaded trending cards.
-    _ = search_gen.fetchAdd(1, .acq_rel);
+    const my_gen = search_request.begin(&state.app.anime.is_loading);
 
     // The Lists chip swaps the source: same grid, same results[], different fetch.
     if (usesLists()) {
-        workers.spawn(listsThread, .{}) catch {
-            state.app.anime.is_loading.store(false, .release);
+        workers.spawn(listsThread, .{my_gen}) catch {
+            search_request.finish(my_gen, &state.app.anime.is_loading);
             return;
         };
         return;
     }
 
-    workers.spawn(trendingThread, .{}) catch {
-        state.app.anime.is_loading.store(false, .release);
+    workers.spawn(trendingThread, .{my_gen}) catch {
+        search_request.finish(my_gen, &state.app.anime.is_loading);
         return;
     };
 }
@@ -543,10 +545,8 @@ fn listsStampSet(ts: i64) void {
 /// Fetch worker for the Lists chip. Cache-first: a cached payload paints the grid
 /// before any network work, and the repo is only re-fetched when the stamp is
 /// stale (or there's no cache at all). A failed refresh leaves the cached grid up.
-fn listsThread() void {
-    defer state.app.anime.is_loading.store(false, .release);
-    // Generation this load was spawned under — see searchThread/parseJikanDataEx.
-    const my_gen = search_gen.load(.acquire);
+fn listsThread(my_gen: u32) void {
+    defer search_request.finish(my_gen, &state.app.anime.is_loading);
 
     var url_buf: [512]u8 = undefined;
     const url = listsUrl(&url_buf) orelse return; // uninstalled mid-flight → inert
@@ -583,7 +583,7 @@ fn listsThread() void {
         return;
     }
     // Superseded by a newer fetch (mode switch, chip change) while we were in curl.
-    if (search_gen.load(.acquire) != my_gen) return;
+    if (search_request.current() != my_gen) return;
 
     const json = body;
     const n = publishListsJson(json, my_gen);
@@ -609,7 +609,7 @@ fn listsThread() void {
 /// both read-then-null the same poster_tex (double textureDestroyLater → SIGABRT,
 /// see parseJikanDataEx's header).
 fn publishListsJson(json: []const u8, my_gen: u32) usize {
-    if (search_gen.load(.acquire) != my_gen) return 0; // cheap pre-check, before the alloc
+    if (search_request.current() != my_gen) return 0; // cheap pre-check, before the alloc
 
     // 100 Items ≈ 34 KB — heap, not the worker's stack.
     const items = alloc.alloc(lists_pure.Item, state.app.anime.results.len) catch return 0;
@@ -620,7 +620,7 @@ fn publishListsJson(json: []const u8, my_gen: u32) usize {
 
     anime_parse_mutex.lock();
     defer anime_parse_mutex.unlock();
-    if (search_gen.load(.acquire) != my_gen) return 0; // re-check under the lock
+    if (search_request.current() != my_gen) return 0; // re-check under the lock
 
     // Lists cards are not scraper cards.
     results_are_scraper = false;
@@ -678,10 +678,8 @@ fn jikanGet(url: []const u8, buf: []u8) usize {
     return body.len;
 }
 
-fn trendingThread() void {
-    defer state.app.anime.is_loading.store(false, .release);
-    // Capture the generation this load was spawned under (see searchThread).
-    const my_gen = search_gen.load(.acquire);
+fn trendingThread(my_gen: u32) void {
+    defer search_request.finish(my_gen, &state.app.anime.is_loading);
 
     const jikan_api = "https://api.jikan.moe/v4/top/anime";
     const fv = trend_filter.jikan();
@@ -702,7 +700,7 @@ fn trendingThread() void {
     // left the DEFAULT (airing) trending view permanently blank. When a filtered
     // fetch yields nothing, fall back to the unfiltered top list so the grid is
     // never empty. Only fires when a filter was actually used and we're still current.
-    if (added == 0 and fv.len > 0 and search_gen.load(.acquire) == my_gen) {
+    if (added == 0 and fv.len > 0 and search_request.current() == my_gen) {
         var fb_buf: [256]u8 = undefined;
         const fb = std.fmt.bufPrint(&fb_buf, "{s}?limit=25&page={d}{s}", .{ jikan_api, grid_page, anime_pure.sfwSuffix(state.app.nsfw_filter_enabled) }) catch return;
         const fb_bytes = jikanGet(fb, buf);
@@ -714,7 +712,7 @@ fn trendingThread() void {
     }
 
     if (bytes == 0) return;
-    if (search_gen.load(.acquire) == my_gen) {
+    if (search_request.current() == my_gen) {
         more_available = parsePagination(buf[0..bytes]);
         // SWR write: persist the fresh page-1 Trending grid so the next cold
         // start seeds instantly. Only the latest generation (still current)
@@ -731,49 +729,54 @@ pub fn searchAnime(query: []const u8) void {
     // are dropped, and the search_query_buf is overwritten for the new fetch.
     // (Worst case two curl workers run briefly; the stale one self-discards.)
 
-    state.app.anime.is_loading.store(true, .release);
     // Don't clear result_count — keep prior cards visible until new results
     // arrive (no flicker). The new generation guards against stale publishes.
     state.app.anime.selected_idx = null;
     state.app.anime.episode_count = 0;
 
     // New generation for this search; the worker captures and re-checks it.
-    const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
+    const my_gen = search_request.begin(&state.app.anime.is_loading);
     grid_page = 1; // restart infinite-scroll pagination
     more_available = false;
 
-    // Copy query into a static buffer so the spawned thread doesn't read
-    // from the potentially-mutated UI search_buf.
+    // Keep the query for pagination and hand this worker an immutable copy.
     const safe_len = @min(query.len, search_query_buf.len);
+    anime_query_mutex.lock();
     @memcpy(search_query_buf[0..safe_len], query[0..safe_len]);
     search_query_len = safe_len;
+    anime_query_mutex.unlock();
+    var job: SearchJob = .{ .generation = my_gen, .query_len = safe_len };
+    @memcpy(job.query[0..safe_len], query[0..safe_len]);
 
     // Site-framework source installed → search the site's own catalog instead of
     // Jikan (source_config-gated; INERT by default). See the DooPlay/AnimeStream
     // section below.
     if (activeScraper() != .none) {
-        workers.spawn(scraperSearchThread, .{my_gen}) catch {
-            state.app.anime.is_loading.store(false, .release);
+        workers.spawn(scraperSearchThread, .{job}) catch {
+            search_request.finish(my_gen, &state.app.anime.is_loading);
         };
         return;
     }
 
-    workers.spawn(searchThread, .{my_gen}) catch {
-        state.app.anime.is_loading.store(false, .release);
+    workers.spawn(searchThread, .{job}) catch {
+        search_request.finish(my_gen, &state.app.anime.is_loading);
     };
 }
 
 var search_query_buf: [256]u8 = undefined;
 var search_query_len: usize = 0;
+var anime_query_mutex: @import("../core/sync.zig").Mutex = .{};
 
-fn searchThread(my_gen: u32) void {
-    defer state.app.anime.is_loading.store(false, .release);
-    // Snapshot the query immediately — a newer search may overwrite the static
-    // buffer mid-flight. We only re-check the generation right before publish.
-    var local_query_buf: [256]u8 = undefined;
-    const qlen = @min(search_query_len, local_query_buf.len);
-    @memcpy(local_query_buf[0..qlen], search_query_buf[0..qlen]);
-    const query = local_query_buf[0..qlen];
+const SearchJob = struct {
+    generation: u32,
+    query: [256]u8 = undefined,
+    query_len: usize = 0,
+};
+
+fn searchThread(job: SearchJob) void {
+    const my_gen = job.generation;
+    defer search_request.finish(my_gen, &state.app.anime.is_loading);
+    const query = job.query[0..job.query_len];
 
     const jikan_api = "https://api.jikan.moe/v4/anime";
 
@@ -810,12 +813,81 @@ fn searchThread(my_gen: u32) void {
     const argv = [_][]const u8{
         "curl", "-s", "--connect-timeout", "3", "--max-time", "10", "-A", agent, url,
     };
-    const body = boundedCurl(&argv, buf, 12_000) orelse return;
-    if (body.len == 0) return;
+    if (boundedCurl(&argv, buf, 12_000)) |body| {
+        if (body.len > 0) {
+            const added = parseJikanData(body, my_gen);
+            if (added > 0) {
+                if (search_request.current() == my_gen) more_available = parsePagination(body);
+                logs.pushLog("info", "anime", "Search done (Jikan API)", false);
+                return;
+            }
+        }
+    }
 
-    _ = parseJikanData(body, my_gen);
-    if (search_gen.load(.acquire) == my_gen) more_available = parsePagination(body);
-    logs.pushLog("info", "anime", "Search done (Jikan API)", false);
+    // Jikan can return an HTTP-success JSON error when its MyAnimeList backend
+    // is unavailable. A zero-row response used to clear the visible grid and
+    // report success. AniList is independent and provides the same identifiers
+    // needed by our existing Jikan episode path, so use it as a bounded fallback.
+    if (search_request.current() != my_gen) return;
+    const bytes = anilist.fetchSearch(query, state.app.nsfw_filter_enabled, buf);
+    if (bytes > 0 and publishAniListSearch(buf[0..bytes], my_gen) > 0) {
+        more_available = false;
+        logs.pushLog("info", "anime", "Search done (AniList fallback)", false);
+    } else {
+        logs.pushLog("warn", "anime", "Anime search returned no results", false);
+    }
+}
+
+/// Publish a keyless AniList Page.media response into the existing anime grid.
+/// Only rows with a MAL id are usable because episode discovery is backed by
+/// Jikan. This shares the same lock and generation gate as the primary parser.
+fn publishAniListSearch(json: []const u8, my_gen: u32) usize {
+    anime_parse_mutex.lock();
+    defer anime_parse_mutex.unlock();
+    if (search_request.current() != my_gen) return 0;
+
+    for (0..state.app.anime.results.len) |i| {
+        const old = &state.app.anime.results[i];
+        old.poster_fetching = false;
+        old.expanded = false;
+        if (old.poster_tex) |tex| {
+            queueTexFree(tex);
+            old.poster_tex = null;
+        }
+    }
+    for (0..state.app.anime.broadcast_lens.len) |i| state.app.anime.broadcast_lens[i] = 0;
+    results_are_scraper = false;
+
+    var iter = anilist_pure.Iter{ .json = json };
+    var count: usize = 0;
+    while (iter.next()) |m| {
+        if (count >= state.app.anime.results.len) break;
+        if (m.id_mal <= 0) continue;
+        const title = if (m.title_english.len > 0) m.title_english else m.title_romaji;
+        if (title.len == 0) continue;
+
+        const item = &state.app.anime.results[count];
+        item.id_len = (std.fmt.bufPrint(&item.id, "{d}", .{m.id_mal}) catch continue).len;
+        item.anilist_id = m.id;
+        item.name_len = decodeJsonEscapes(title, &item.name);
+        item.episodes = if (m.episodes > 0) m.episodes else 100;
+        item.score = m.score10;
+        item.overview_len = decodeJsonEscapes(m.description, &item.overview);
+        item.poster_url_len = decodeJsonEscapes(m.cover, &item.poster_url);
+        item.atype_len = 0;
+        item.year = m.year;
+        item.airing = false;
+        item.expanded = false;
+        item.poster_fetching = false;
+        item.poster_attempted = false;
+        item.poster_failed = false;
+        item.poster_tex = null;
+        count += 1;
+    }
+
+    if (search_request.current() != my_gen) return 0;
+    state.app.anime.result_count = count;
+    return count;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -826,22 +898,21 @@ fn searchThread(my_gen: u32) void {
 /// shared results[]/generation machinery (parseJikanData publishes the cards).
 pub fn loadSeasonal() void {
     if (state.app.anime.is_loading.load(.acquire)) return;
-    state.app.anime.is_loading.store(true, .release);
     state.app.anime.selected_idx = null;
     state.app.anime.episode_count = 0;
     state.app.anime.last_fetch_s = @import("browse_cache.zig").now();
     grid_page = 1; // restart infinite-scroll pagination
     more_available = false;
-    const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
+    const my_gen = search_request.begin(&state.app.anime.is_loading);
 
     workers.spawn(seasonalThread, .{my_gen}) catch {
-        state.app.anime.is_loading.store(false, .release);
+        search_request.finish(my_gen, &state.app.anime.is_loading);
         return;
     };
 }
 
 fn seasonalThread(my_gen: u32) void {
-    defer state.app.anime.is_loading.store(false, .release);
+    defer search_request.finish(my_gen, &state.app.anime.is_loading);
 
     const sel = state.app.anime.season_sel;
     const year = state.app.anime.season_year;
@@ -860,7 +931,7 @@ fn seasonalThread(my_gen: u32) void {
     const body = boundedCurl(&argv, buf, 12_000) orelse return;
     if (body.len == 0) return;
     _ = parseJikanData(body, my_gen);
-    if (search_gen.load(.acquire) == my_gen) more_available = parsePagination(body);
+    if (search_request.current() == my_gen) more_available = parsePagination(body);
     logs.pushLog("info", "anime", "Seasonal loaded (Jikan API)", false);
 }
 
@@ -870,22 +941,21 @@ fn seasonalThread(my_gen: u32) void {
 
 pub fn loadCalendar() void {
     if (state.app.anime.is_loading.load(.acquire)) return;
-    state.app.anime.is_loading.store(true, .release);
     state.app.anime.selected_idx = null;
     state.app.anime.episode_count = 0;
     state.app.anime.last_fetch_s = @import("browse_cache.zig").now();
     grid_page = 1; // restart infinite-scroll pagination
     more_available = false;
-    const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
+    const my_gen = search_request.begin(&state.app.anime.is_loading);
 
     workers.spawn(calendarThread, .{my_gen}) catch {
-        state.app.anime.is_loading.store(false, .release);
+        search_request.finish(my_gen, &state.app.anime.is_loading);
         return;
     };
 }
 
 fn calendarThread(my_gen: u32) void {
-    defer state.app.anime.is_loading.store(false, .release);
+    defer search_request.finish(my_gen, &state.app.anime.is_loading);
 
     const day = calDayStr(state.app.anime.cal_day);
     var url_buf: [256]u8 = undefined;
@@ -903,7 +973,7 @@ fn calendarThread(my_gen: u32) void {
     // parseJikanData handles the cards; pass with_broadcast so it also extracts
     // each item's broadcast.string into anime.broadcast[] (aligned to index).
     _ = parseJikanDataEx(body, my_gen, true, 0);
-    if (search_gen.load(.acquire) == my_gen) more_available = parsePagination(body);
+    if (search_request.current() == my_gen) more_available = parsePagination(body);
     logs.pushLog("info", "anime", "Calendar loaded (Jikan API)", false);
 }
 
@@ -1019,6 +1089,19 @@ fn parseJikanData(json: []const u8, my_gen: u32) usize {
 /// twice → double dvui.textureDestroyLater → SIGABRT (see file header).
 var anime_parse_mutex: @import("../core/sync.zig").Mutex = .{};
 
+pub fn resultCount() usize {
+    anime_parse_mutex.lock();
+    defer anime_parse_mutex.unlock();
+    return @min(state.app.anime.result_count, state.app.anime.results.len);
+}
+
+pub fn resultRow(idx: usize) ?state.AnimeResult {
+    anime_parse_mutex.lock();
+    defer anime_parse_mutex.unlock();
+    if (idx >= state.app.anime.result_count or idx >= state.app.anime.results.len) return null;
+    return state.app.anime.results[idx];
+}
+
 fn parseJikanDataEx(json: []const u8, my_gen: u32, with_broadcast: bool, start_offset: usize) usize {
     anime_parse_mutex.lock();
     defer anime_parse_mutex.unlock();
@@ -1028,7 +1111,7 @@ fn parseJikanDataEx(json: []const u8, my_gen: u32, with_broadcast: bool, start_o
     // fast typing never shows out-of-order results, and we don't clobber the
     // newer fetch's cards/textures. (Re-checked here under the lock so a worker
     // that waited on the mutex sees the latest generation.)
-    if (search_gen.load(.acquire) != my_gen) return 0;
+    if (search_request.current() != my_gen) return 0;
 
     var count: usize = start_offset;
     var pos: usize = 0;
@@ -1249,7 +1332,7 @@ fn parseJikanDataEx(json: []const u8, my_gen: u32, with_broadcast: bool, start_o
 
     // Final generation re-check before publishing the count: a newer fetch may
     // have superseded us during parsing. If so, drop our results.
-    if (search_gen.load(.acquire) != my_gen) return 0;
+    if (search_request.current() != my_gen) return 0;
     state.app.anime.result_count = count;
     // Fire-and-forget AniList metadata enrichment for a fresh grid load (all
     // modes route through here). Additive only — see spawnAniListEnrich.
@@ -1268,7 +1351,7 @@ fn parseJikanDataEx(json: []const u8, my_gen: u32, with_broadcast: bool, start_o
 // seasonal/upcoming titles). SFW-gated to honor the same NSFW toggle Jikan uses.
 //
 // Thread-safety: the merge shares state.app.anime.results[] with the Jikan
-// parse, so it takes the same anime_parse_mutex and re-checks search_gen before
+// parse, so it takes the same anime_parse_mutex and re-checks search_request before
 // touching anything. Stale generations (superseded by a newer search) exit at
 // the snapshot gen-check before any network work, so at most one enrich worker
 // per settled query ever reaches curl — no busy flag needed.
@@ -1285,7 +1368,7 @@ fn anilistEnrichThread(my_gen: u32) void {
     {
         anime_parse_mutex.lock();
         defer anime_parse_mutex.unlock();
-        if (search_gen.load(.acquire) != my_gen) return; // superseded — bail cheaply
+        if (search_request.current() != my_gen) return; // superseded — bail cheaply
         sfw = state.app.nsfw_filter_enabled;
         const n = @min(state.app.anime.result_count, 50); // AniList Page perPage cap
         var i: usize = 0;
@@ -1313,7 +1396,7 @@ fn anilistEnrichThread(my_gen: u32) void {
     // 3) Merge under the lock, re-checking the generation.
     anime_parse_mutex.lock();
     defer anime_parse_mutex.unlock();
-    if (search_gen.load(.acquire) != my_gen) return;
+    if (search_request.current() != my_gen) return;
 
     var it = anilist_pure.Iter{ .json = buf[0..bytes] };
     var merged: usize = 0;
@@ -1363,8 +1446,6 @@ pub fn loadEpisodes(idx: usize) void {
         state.app.anime.episode_filler[ep_count] = false;
     }
     state.app.anime.episode_count = ep_count;
-    state.app.anime.is_loading.store(false, .release);
-
     // ── Tracking: zero the watched flags for the visible range, then hydrate
     //    from the DB (animeLoadWatched only sets trues; we must clear first). ──
     for (0..@min(ep_count, state.app.anime.episode_watched.len)) |i| state.app.anime.episode_watched[i] = false;
@@ -1638,11 +1719,10 @@ var jump_busy: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 pub fn jumpToAnime(mal_id: []const u8) void {
     if (mal_id.len == 0 or mal_id.len > 15) return;
     if (jump_busy.swap(true, .acq_rel)) return;
-    state.app.anime.is_loading.store(true, .release);
     state.app.anime.selected_idx = null;
     state.app.anime.episode_count = 0;
     // New generation so any in-flight grid fetch can't clobber results[0].
-    const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
+    const my_gen = search_request.begin(&state.app.anime.is_loading);
     grid_page = 1; // single-anime view has no further pages
     more_available = false;
 
@@ -1653,7 +1733,7 @@ pub fn jumpToAnime(mal_id: []const u8) void {
 
         fn worker() void {
             defer {
-                state.app.anime.is_loading.store(false, .release);
+                search_request.finish(@This().gen, &state.app.anime.is_loading);
                 jump_busy.store(false, .release);
             }
             const id = @This().id_buf[0..@This().id_len];
@@ -1674,7 +1754,7 @@ pub fn jumpToAnime(mal_id: []const u8) void {
             _ = parseJikanData(body, @This().gen);
 
             // If still current, select it and load its episodes on this thread.
-            if (search_gen.load(.acquire) == @This().gen and state.app.anime.result_count > 0) {
+            if (search_request.current() == @This().gen and state.app.anime.result_count > 0) {
                 state.app.anime.selected_idx = 0;
                 loadEpisodes(0);
             }
@@ -1687,7 +1767,7 @@ pub fn jumpToAnime(mal_id: []const u8) void {
     S.gen = my_gen;
 
     workers.spawn(S.worker, .{}) catch {
-        state.app.anime.is_loading.store(false, .release);
+        search_request.finish(my_gen, &state.app.anime.is_loading);
         jump_busy.store(false, .release);
     };
 }
@@ -2032,15 +2112,17 @@ fn slugOf(url: []const u8) []const u8 {
 /// Mirrors searchAnime's generation/loading bookkeeping.
 pub fn loadScraperPopular() void {
     if (activeScraper() == .none) return;
-    state.app.anime.is_loading.store(true, .release);
     state.app.anime.selected_idx = null;
     state.app.anime.episode_count = 0;
-    const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
+    const my_gen = search_request.begin(&state.app.anime.is_loading);
     grid_page = 1;
     more_available = false;
+    anime_query_mutex.lock();
     search_query_len = 0; // empty query → popular
-    workers.spawn(scraperSearchThread, .{my_gen}) catch {
-        state.app.anime.is_loading.store(false, .release);
+    anime_query_mutex.unlock();
+    const job: SearchJob = .{ .generation = my_gen };
+    workers.spawn(scraperSearchThread, .{job}) catch {
+        search_request.finish(my_gen, &state.app.anime.is_loading);
     };
 }
 
@@ -2069,19 +2151,16 @@ fn scraperPost(url: []const u8, referer: []const u8, body: []const u8, dst: []u8
 /// Fetch + parse a scraper search (or popular) grid and publish into results[].
 /// Shares results[]/generation with the Jikan parser → takes anime_parse_mutex and
 /// re-checks the generation, exactly like publishListsJson.
-fn scraperSearchThread(my_gen: u32) void {
-    defer state.app.anime.is_loading.store(false, .release);
+fn scraperSearchThread(job: SearchJob) void {
+    const my_gen = job.generation;
+    defer search_request.finish(my_gen, &state.app.anime.is_loading);
     const src = activeScraper();
     if (src == .none) return;
 
     var base_buf: [256]u8 = undefined;
     const base = scraperBase(src, &base_buf) orelse return;
 
-    // Snapshot the query (a newer search may overwrite the static buffer).
-    var q_buf: [256]u8 = undefined;
-    const qlen = @min(search_query_len, q_buf.len);
-    @memcpy(q_buf[0..qlen], search_query_buf[0..qlen]);
-    const query = q_buf[0..qlen];
+    const query = job.query[0..job.query_len];
 
     var url_buf: [640]u8 = undefined;
     const url = blk: {
@@ -2103,7 +2182,7 @@ fn scraperSearchThread(my_gen: u32) void {
     defer alloc.free(html_buf);
     const n = scraperGet(url, html_buf);
     if (n == 0 or workers_isQuitting()) return;
-    if (search_gen.load(.acquire) != my_gen) return; // superseded mid-fetch
+    if (search_request.current() != my_gen) return; // superseded mid-fetch
 
     const shown = publishScraperGrid(html_buf[0..n], base, src, my_gen);
     var lb: [96]u8 = undefined;
@@ -2119,7 +2198,7 @@ fn workers_isQuitting() bool {
 fn publishScraperGrid(html: []const u8, base: []const u8, src: AnimeScraper, my_gen: u32) usize {
     anime_parse_mutex.lock();
     defer anime_parse_mutex.unlock();
-    if (search_gen.load(.acquire) != my_gen) return 0;
+    if (search_request.current() != my_gen) return 0;
 
     // Fresh load: retire the old cards' poster textures + reset flags.
     for (0..state.app.anime.results.len) |i| {
@@ -2199,7 +2278,7 @@ fn publishScraperGrid(html: []const u8, base: []const u8, src: AnimeScraper, my_
         .none => {},
     }
 
-    if (search_gen.load(.acquire) != my_gen) return 0;
+    if (search_request.current() != my_gen) return 0;
     results_are_scraper = true;
     scraper_kind = src;
     state.app.anime.result_count = count;
