@@ -33,6 +33,8 @@ const rate_limit = @import("../core/rate_limit.zig");
 const search = @import("search.zig");
 const safeUtf8 = @import("../core/text.zig").safeUtf8;
 const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
+const LatestRequest = @import("../core/latest_request.zig").Gate;
+const tmdb_pure = @import("tmdb_pure.zig");
 
 const alloc = @import("../core/alloc.zig").allocator;
 
@@ -70,23 +72,30 @@ var cover_slots: [180]CoverSlot = [_]CoverSlot{.{}} ** 180;
 
 // ── Thread-safety ──
 // The detached fetch worker publishes into state.app.vndb.* under `parse_mutex`,
-// and a monotonic `search_gen` drops stale results so fast re-searches never show
+// and a shared `search_request` drops stale results so fast re-searches never show
 // out-of-order data (mirrors radio.zig). `is_loading` is atomic (read by UI +
 // remote threads, written by the worker).
 var parse_mutex: @import("../core/sync.zig").Mutex = .{};
-var search_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+var search_request: LatestRequest = .{};
 
 // Query snapshot handed to the detached search worker (never read the mutable UI
 // search_buf from the thread). `is_popular` selects which request body is built.
 var query_buf: [256]u8 = undefined;
 var query_len: usize = 0;
 
+const SearchJob = struct {
+    generation: u32,
+    query: [256]u8 = undefined,
+    query_len: usize = 0,
+    is_popular: bool,
+};
+
 // ── Infinite-scroll pagination ──
 // `current_page` is the highest VNDB `page` merged into state.app.vndb.results;
 // `more_available` clears once VNDB's own "more" flag says the query is
 // exhausted or the fixed 180-card buffer fills. `loading_more` serializes
 // append fetches so a single near-bottom scroll can't spawn a burst (mirrors
-// drama.zig/comics.zig). The append worker runs under the current `search_gen`
+// drama.zig/comics.zig). The append worker runs under the current `search_request`
 // so a fresh search/popular re-fetch drops a stale in-flight append.
 var current_page: u32 = 1;
 var more_available: bool = true;
@@ -121,20 +130,22 @@ pub fn loadPopularOnce() void {
     popular_fetched.store(true, .release);
     state.app.vndb.showing_popular = true;
     state.app.vndb.fetch_error = false;
-    state.app.vndb.is_loading.store(true, .release);
     // Fresh landing chart resets pagination; fetchPage() re-derives
     // more_available from VNDB's own "more" flag once page 1 lands.
     current_page = 1;
     more_available = true;
+
+    const my_gen = search_request.begin(&state.app.vndb.is_loading);
+    parse_mutex.lock();
     current_is_popular = true;
-
-    const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
     query_len = 0; // empty query → popular body
+    parse_mutex.unlock();
+    const job: SearchJob = .{ .generation = my_gen, .is_popular = true };
 
-    if (@import("../core/workers.zig").spawnLegacy(fetchWorker, .{ my_gen, true })) |t| {
+    if (@import("../core/workers.zig").spawnLegacy(fetchWorker, .{job})) |t| {
         @import("../core/workers.zig").release(t);
     } else |_| {
-        state.app.vndb.is_loading.store(false, .release);
+        search_request.finish(my_gen, &state.app.vndb.is_loading);
     }
 }
 
@@ -145,7 +156,6 @@ pub fn loadPopularOnce() void {
 pub fn searchVndb(query: []const u8) void {
     if (query.len == 0) return;
 
-    state.app.vndb.is_loading.store(true, .release);
     state.app.vndb.fetch_error = false;
     state.app.vndb.showing_popular = false;
     state.app.vndb.selected_idx = null; // leaving detail on a new search
@@ -156,19 +166,23 @@ pub fn searchVndb(query: []const u8) void {
     // from VNDB's own "more" flag once page 1 lands.
     current_page = 1;
     more_available = true;
-    current_is_popular = false;
 
-    const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
+    const my_gen = search_request.begin(&state.app.vndb.is_loading);
 
-    // Snapshot the query BEFORE spawning — a newer search overwrites query_buf.
+    // Keep the query for pagination and hand this worker an immutable copy.
     const n = @min(query.len, query_buf.len);
+    parse_mutex.lock();
+    current_is_popular = false;
     @memcpy(query_buf[0..n], query[0..n]);
     query_len = n;
+    parse_mutex.unlock();
+    var job: SearchJob = .{ .generation = my_gen, .query_len = n, .is_popular = false };
+    @memcpy(job.query[0..n], query[0..n]);
 
-    if (@import("../core/workers.zig").spawnLegacy(fetchWorker, .{ my_gen, false })) |t| {
+    if (@import("../core/workers.zig").spawnLegacy(fetchWorker, .{job})) |t| {
         @import("../core/workers.zig").release(t);
     } else |_| {
-        state.app.vndb.is_loading.store(false, .release);
+        search_request.finish(my_gen, &state.app.vndb.is_loading);
     }
 }
 
@@ -178,7 +192,7 @@ pub fn searchVndb(query: []const u8) void {
 /// more, or the buffer's full) → the main `is_loading` fetch flag (never
 /// append mid-fresh-fetch) → `loading_more` (serializes so one near-bottom
 /// scroll can't spawn a burst) → an empty grid or a full buffer. Runs under the
-/// CURRENT search_gen so a fresh search/popular re-fetch supersedes a slow
+/// CURRENT search_request so a fresh search/popular re-fetch supersedes a slow
 /// in-flight append. Mirrors services/drama.zig loadMore.
 pub fn loadMore() void {
     if (!more_available) return;
@@ -191,24 +205,28 @@ pub fn loadMore() void {
     }
     if (loading_more.swap(true, .acq_rel)) return; // lost the race — another append in flight
 
-    const my_gen = search_gen.load(.acquire); // stay within the current generation
-    const is_popular = current_is_popular;
+    const my_gen = search_request.current(); // stay within the current generation
     const next = current_page + 1;
-    if (@import("../core/workers.zig").spawnLegacy(loadMoreWorker, .{ my_gen, is_popular, next })) |t| {
+    parse_mutex.lock();
+    var job: SearchJob = .{ .generation = my_gen, .is_popular = current_is_popular };
+    job.query_len = @min(query_len, job.query.len);
+    @memcpy(job.query[0..job.query_len], query_buf[0..job.query_len]);
+    parse_mutex.unlock();
+    if (@import("../core/workers.zig").spawnLegacy(loadMoreWorker, .{ job, next })) |t| {
         @import("../core/workers.zig").release(t);
     } else |_| {
         loading_more.store(false, .release);
     }
 }
 
-fn fetchWorker(my_gen: u32, is_popular: bool) void {
-    defer state.app.vndb.is_loading.store(false, .release);
-    fetchPage(my_gen, is_popular, 1, false);
+fn fetchWorker(job: SearchJob) void {
+    defer search_request.finish(job.generation, &state.app.vndb.is_loading);
+    fetchPage(job, 1, false);
 }
 
-fn loadMoreWorker(my_gen: u32, is_popular: bool, page: u32) void {
+fn loadMoreWorker(job: SearchJob, page: u32) void {
     defer loading_more.store(false, .release);
-    fetchPage(my_gen, is_popular, page, true);
+    fetchPage(job, page, true);
 }
 
 /// Fetch one VNDB page and publish it into state.app.vndb.results. `append`
@@ -218,20 +236,16 @@ fn loadMoreWorker(my_gen: u32, is_popular: bool, page: u32) void {
 /// Same fetch path (buildSearchBody/buildPopularBody) and the same SFW filter
 /// (isSfw, applied inside pure.parseVns) as page 1 — appended pages are
 /// filtered identically, never loosened.
-fn fetchPage(my_gen: u32, is_popular: bool, page: u32, append: bool) void {
-    // Build the POST body from a re-snapshot of the query (a newer search may
-    // overwrite query_buf mid-flight).
+fn fetchPage(job: SearchJob, page: u32, append: bool) void {
+    const my_gen = job.generation;
+    // Build the POST body entirely from the immutable launch snapshot.
     var body_buf: [1024]u8 = undefined;
-    const body = if (is_popular)
+    const body = if (job.is_popular)
         pure.buildPopularBody(page, &body_buf)
-    else blk: {
-        var local: [256]u8 = undefined;
-        const qlen = @min(query_len, local.len);
-        @memcpy(local[0..qlen], query_buf[0..qlen]);
-        break :blk pure.buildSearchBody(local[0..qlen], page, &body_buf);
-    };
+    else
+        pure.buildSearchBody(job.query[0..job.query_len], page, &body_buf);
     if (body.len == 0) {
-        if (!append) state.app.vndb.fetch_error = true;
+        if (!append and search_request.isCurrent(my_gen)) state.app.vndb.fetch_error = true;
         return;
     }
 
@@ -239,16 +253,16 @@ fn fetchPage(my_gen: u32, is_popular: bool, page: u32, append: bool) void {
     rate_limit.acquire("vndb", 1.0);
 
     const resp = curlPost(API_URL, body, 512 * 1024) orelse {
-        if (!append) state.app.vndb.fetch_error = true;
+        if (!append and search_request.isCurrent(my_gen)) state.app.vndb.fetch_error = true;
         return;
     };
     defer alloc.free(resp);
 
-    if (search_gen.load(.acquire) != my_gen) return; // superseded
+    if (!search_request.isCurrent(my_gen)) return; // superseded
 
     parse_mutex.lock();
     defer parse_mutex.unlock();
-    if (search_gen.load(.acquire) != my_gen) return; // re-check under lock
+    if (!search_request.isCurrent(my_gen)) return; // re-check under lock
 
     const cap = state.app.vndb.results.len;
     const base = if (append) state.app.vndb.result_count else 0;
@@ -601,17 +615,29 @@ fn renderResults() void {
     });
 
     // Responsive columns from the LIVE page width (one-frame lag; first paint
-    // falls back to a sane default) — same shape as the TMDB/radio grid. No
-    // virtualization: the grid is capped at results[]'s 180-card buffer (infinite
-    // scroll fills it page by page via loadMore(), below).
+    // falls back to a sane default) — same shape as the TMDB/radio grid.
     const rect_w = scroll.data().rect.w;
     const avail_w: f32 = @max(240, (if (rect_w > 1) rect_w else 900) - 8);
     const cols: usize = @max(2, @as(usize, @intFromFloat(avail_w / CARD_TARGET_W)));
     const cols_f: f32 = @floatFromInt(cols);
     const card_w: f32 = @max(100, (avail_w - cols_f * 2 * CARD_GAP) / cols_f);
 
-    var r: usize = 0;
-    while (r * cols < count) : (r += 1) {
+    // Uniform cards give the grid a fixed row pitch. Keep only the viewport and
+    // two overscan rows alive, while spacers preserve exact scroll geometry.
+    const row_h: f32 = CARD_COVER_H + CARD_FOOTER_H + 2 * CARD_GAP;
+    const total_rows = (count + cols - 1) / cols;
+    const win = tmdb_pure.visibleRows(total_rows, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 2);
+
+    if (win.first > 0) {
+        var sp = dvui.box(@src(), .{}, .{
+            .id_extra = 49998,
+            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(win.first)) },
+        });
+        sp.deinit();
+    }
+
+    var r: usize = win.first;
+    while (r < win.last) : (r += 1) {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = r + 50000,
             .expand = .horizontal,
@@ -620,6 +646,14 @@ fn renderResults() void {
 
         var c: usize = 0;
         while (c < cols and r * cols + c < count) : (c += 1) renderCard(r * cols + c, card_w);
+    }
+
+    if (win.last < total_rows) {
+        var sp = dvui.box(@src(), .{}, .{
+            .id_extra = 49999,
+            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(total_rows - win.last)) },
+        });
+        sp.deinit();
     }
 
     // Infinite scroll: fetch + append the next VNDB page as the user nears the

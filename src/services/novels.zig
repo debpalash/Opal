@@ -33,6 +33,8 @@ const source_config = @import("../core/source_config.zig");
 // browser. Wikisource's JSON API + the POST paths stay on plain curl. See scrapeHtml.
 const scrape = @import("scrape_fetch.zig");
 const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
+const LatestRequest = @import("../core/latest_request.zig").Gate;
+const tmdb_pure = @import("tmdb_pure.zig");
 
 const alloc = @import("../core/alloc.zig").allocator;
 
@@ -103,7 +105,7 @@ var open_source: NovelSource = .wikisource;
 // Detached workers publish under `parse_mutex`; monotonic generations drop stale
 // results so fast re-drills never show out-of-order data (mirrors radio.zig).
 var parse_mutex: @import("../core/sync.zig").Mutex = .{};
-var search_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+var search_request: LatestRequest = .{};
 var chapters_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 var text_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 
@@ -173,7 +175,7 @@ pub fn chapterRow(i: usize) ?ListRow {
 // gates the render trigger; the per-source `*_more` flags let an exhausted source
 // (a short/duplicate page, or a source that genuinely can't page) drop out while
 // the others keep loading. All shared between the UI thread and the append worker,
-// so every flag is atomic (CLAUDE.md). The worker runs under the same `search_gen`
+// so every flag is atomic (CLAUDE.md). The worker runs under the same `search_request`
 // as the initial search, so a fresh query supersedes an in-flight append.
 var current_page: u32 = 1;
 var more_available: std.atomic.Value(bool) = std.atomic.Value(bool).init(true);
@@ -199,6 +201,12 @@ var chapter_snap_len: usize = 0;
 var chapter_url_snap: [512]u8 = undefined;
 var chapter_url_snap_len: usize = 0;
 
+const SearchJob = struct {
+    generation: u32,
+    query: [256]u8 = undefined,
+    query_len: usize = 0,
+};
+
 // Reader text framing cap — matches state.app.novels.text_buf. Anything longer
 // is truncated and flagged (text_truncated) so the UI can say so.
 const TEXT_CAP: usize = 131072;
@@ -210,14 +218,17 @@ const TEXT_CAP: usize = 131072;
 pub fn searchNovels(query: []const u8) void {
     if (query.len == 0 or query.len >= query_snap.len) return;
 
-    state.app.novels.is_loading.store(true, .release);
     state.app.novels.fetch_error = false;
     state.app.novels.view = .search;
 
-    const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
+    const my_gen = search_request.begin(&state.app.novels.is_loading);
     const n = @min(query.len, query_snap.len);
+    parse_mutex.lock();
     @memcpy(query_snap[0..n], query[0..n]);
     query_snap_len = n;
+    parse_mutex.unlock();
+    var job: SearchJob = .{ .generation = my_gen, .query_len = n };
+    @memcpy(job.query[0..n], query[0..n]);
 
     // Fresh query resets infinite-scroll pagination: page 1, every source eligible.
     current_page = 1;
@@ -226,23 +237,20 @@ pub fn searchNovels(query: []const u8) void {
     madara_more.store(true, .release);
     lnwp_more.store(true, .release);
 
-    if (@import("../core/workers.zig").spawnLegacy(searchWorker, .{my_gen})) |t| {
+    if (@import("../core/workers.zig").spawnLegacy(searchWorker, .{job})) |t| {
         @import("../core/workers.zig").release(t);
     } else |_| {
-        state.app.novels.is_loading.store(false, .release);
+        search_request.finish(my_gen, &state.app.novels.is_loading);
     }
 }
 
 /// Query every ACTIVE source and concatenate their rows. Wikisource first (the
 /// always-on legal default), then each scraper engine that a plugin has supplied
 /// a base for. Mirrors comics.zig's searchWorker aggregation.
-fn searchWorker(my_gen: u32) void {
-    defer state.app.novels.is_loading.store(false, .release);
-
-    var local: [256]u8 = undefined;
-    const qlen = @min(query_snap_len, local.len);
-    @memcpy(local[0..qlen], query_snap[0..qlen]);
-    const query = local[0..qlen];
+fn searchWorker(job: SearchJob) void {
+    const my_gen = job.generation;
+    defer search_request.finish(my_gen, &state.app.novels.is_loading);
+    const query = job.query[0..job.query_len];
 
     parse_mutex.lock();
     nr_count = 0;
@@ -250,15 +258,15 @@ fn searchWorker(my_gen: u32) void {
 
     var filled: usize = 0;
     filled += fetchWikisource(query, my_gen, filled, 0);
-    if (search_gen.load(.acquire) != my_gen) return;
+    if (!search_request.isCurrent(my_gen)) return;
 
     if (madaraNovelBase() != null) {
         filled += fetchMadaraNovel(query, my_gen, filled, 1);
-        if (search_gen.load(.acquire) != my_gen) return;
+        if (!search_request.isCurrent(my_gen)) return;
     }
     if (lightnovelwpBase() != null) {
         filled += fetchLightnovelwp(query, my_gen, filled, 1);
-        if (search_gen.load(.acquire) != my_gen) return;
+        if (!search_request.isCurrent(my_gen)) return;
     }
     if (readwnBase() != null) {
         filled += fetchReadwn(query, my_gen, filled);
@@ -335,15 +343,15 @@ fn fetchWikisource(query: []const u8, my_gen: u32, start: usize, offset: u32) us
     var url_buf: [1024]u8 = undefined;
     const url = pure.buildSearchUrl(&url_buf, query, PAGE_SIZE, offset) orelse return 0;
     const body = curl(url, 512 * 1024) orelse {
-        state.app.novels.fetch_error = true;
+        if (search_request.isCurrent(my_gen)) state.app.novels.fetch_error = true;
         return 0;
     };
     defer alloc.free(body);
-    if (search_gen.load(.acquire) != my_gen) return 0;
+    if (search_request.current() != my_gen) return 0;
 
     parse_mutex.lock();
     defer parse_mutex.unlock();
-    if (search_gen.load(.acquire) != my_gen) return 0;
+    if (search_request.current() != my_gen) return 0;
 
     const arr = pure.searchArray(body) orelse return 0;
     var it = pure.cj.ObjIter{ .buf = arr };
@@ -373,11 +381,11 @@ fn fetchMadaraNovel(query: []const u8, my_gen: u32, start: usize, page: u32) usi
     const url = nsp.madara.buildSearchUrl(&url_buf, base, query, page) orelse return 0;
     const body = scrapeHtml(url, 512 * 1024) orelse return 0;
     defer alloc.free(body);
-    if (search_gen.load(.acquire) != my_gen) return 0;
+    if (search_request.current() != my_gen) return 0;
 
     parse_mutex.lock();
     defer parse_mutex.unlock();
-    if (search_gen.load(.acquire) != my_gen) return 0;
+    if (search_request.current() != my_gen) return 0;
 
     var it = nsp.madara.SearchIter{ .html = body };
     var n: usize = 0;
@@ -406,11 +414,11 @@ fn fetchLightnovelwp(query: []const u8, my_gen: u32, start: usize, page: u32) us
     const url = nsp.themesia.buildBrowseUrl(base, lightnovelwpDir(), query, page, "", &url_buf) orelse return 0;
     const body = scrapeHtml(url, 512 * 1024) orelse return 0;
     defer alloc.free(body);
-    if (search_gen.load(.acquire) != my_gen) return 0;
+    if (search_request.current() != my_gen) return 0;
 
     parse_mutex.lock();
     defer parse_mutex.unlock();
-    if (search_gen.load(.acquire) != my_gen) return 0;
+    if (search_request.current() != my_gen) return 0;
 
     var it = nsp.themesia.SearchIter{ .html = body };
     var n: usize = 0;
@@ -446,11 +454,11 @@ fn fetchReadwn(query: []const u8, my_gen: u32, start: usize) usize {
 
     const body = curlPost(url, post, referer, 512 * 1024) orelse return 0;
     defer alloc.free(body);
-    if (search_gen.load(.acquire) != my_gen) return 0;
+    if (search_request.current() != my_gen) return 0;
 
     parse_mutex.lock();
     defer parse_mutex.unlock();
-    if (search_gen.load(.acquire) != my_gen) return 0;
+    if (search_request.current() != my_gen) return 0;
 
     var it = nsp.ReadwnIter{ .html = body };
     var n: usize = 0;
@@ -476,7 +484,7 @@ fn fetchReadwn(query: []const u8, my_gen: u32, start: usize) usize {
 /// Fetch + append the NEXT page of the current search when the user nears the
 /// bottom. Guarded like drama.loadMore: no-op once `more_available` clears, while
 /// the initial search is loading, or while an append is already in flight; a
-/// single scroll can't spawn a burst. Runs under the current `search_gen`, so a
+/// single scroll can't spawn a burst. Runs under the current `search_request`, so a
 /// fresh query supersedes it. Wikisource continues by `sroffset`; the scraper
 /// engines by page number (`current_page + 1`); readwn's search can't page and is
 /// never re-fetched here.
@@ -495,9 +503,14 @@ pub fn loadMore() void {
     }
 
     if (loading_more.swap(true, .acq_rel)) return; // lost the race — append already running
-    const my_gen = search_gen.load(.acquire);
+    const my_gen = search_request.current();
     const next = current_page + 1;
-    if (@import("../core/workers.zig").spawnLegacy(loadMoreWorker, .{ my_gen, next })) |t| {
+    var job: SearchJob = .{ .generation = my_gen };
+    parse_mutex.lock();
+    job.query_len = @min(query_snap_len, job.query.len);
+    @memcpy(job.query[0..job.query_len], query_snap[0..job.query_len]);
+    parse_mutex.unlock();
+    if (@import("../core/workers.zig").spawnLegacy(loadMoreWorker, .{ job, next })) |t| {
         @import("../core/workers.zig").release(t);
         current_page = next; // UI-thread-only write; the worker got `next` by value
     } else |_| {
@@ -510,14 +523,11 @@ pub fn loadMore() void {
 /// marked exhausted so it isn't re-queried on the next scroll; `more_available`
 /// clears once every source is exhausted. Uses the SAME fetch paths (and thus the
 /// same parse + dedup) as the initial search.
-fn loadMoreWorker(my_gen: u32, next_page: u32) void {
+fn loadMoreWorker(job: SearchJob, next_page: u32) void {
+    const my_gen = job.generation;
     defer loading_more.store(false, .release);
-
-    var local: [256]u8 = undefined;
-    const qlen = @min(query_snap_len, local.len);
-    @memcpy(local[0..qlen], query_snap[0..qlen]);
-    const query = local[0..qlen];
-    if (qlen == 0) return;
+    const query = job.query[0..job.query_len];
+    if (query.len == 0) return;
 
     parse_mutex.lock();
     var start = nr_count;
@@ -528,19 +538,19 @@ fn loadMoreWorker(my_gen: u32, next_page: u32) void {
         const offset = wikiCountLocked();
         parse_mutex.unlock();
         const n = fetchWikisource(query, my_gen, start, offset);
-        if (search_gen.load(.acquire) != my_gen) return;
+        if (search_request.current() != my_gen) return;
         start += n;
         if (n == 0) wiki_more.store(false, .release);
     }
     if (madara_more.load(.acquire) and madaraNovelBase() != null and start < MAX_RESULTS) {
         const n = fetchMadaraNovel(query, my_gen, start, next_page);
-        if (search_gen.load(.acquire) != my_gen) return;
+        if (search_request.current() != my_gen) return;
         start += n;
         if (n == 0) madara_more.store(false, .release);
     }
     if (lnwp_more.load(.acquire) and lightnovelwpBase() != null and start < MAX_RESULTS) {
         const n = fetchLightnovelwp(query, my_gen, start, next_page);
-        if (search_gen.load(.acquire) != my_gen) return;
+        if (search_request.current() != my_gen) return;
         start += n;
         if (n == 0) lnwp_more.store(false, .release);
     }
@@ -557,20 +567,20 @@ fn loadMoreWorker(my_gen: u32, next_page: u32) void {
 // ══════════════════════════════════════════════════════════
 
 pub fn openNovel(idx: usize) void {
-    if (idx >= nr_count) return;
+    const row = resultRow(idx) orelse return;
 
     // Snapshot the selected work (source + title + URL) BEFORE spawning — the
     // search grid can be reordered by a fresh search while chapters load.
-    open_source = nr_source[idx];
+    open_source = @enumFromInt(row.source);
 
-    const tlen = @min(nr_title_lens[idx], state.app.novels.work_title.len);
-    @memcpy(state.app.novels.work_title[0..tlen], nr_titles[idx][0..tlen]);
+    const tlen = @min(row.title_len, state.app.novels.work_title.len);
+    @memcpy(state.app.novels.work_title[0..tlen], row.title_buf[0..tlen]);
     state.app.novels.work_title_len = tlen;
-    @memcpy(work_snap[0..tlen], nr_titles[idx][0..tlen]);
+    @memcpy(work_snap[0..tlen], row.title_buf[0..tlen]);
     work_snap_len = tlen;
 
-    const ulen = @min(nr_url_lens[idx], work_url_snap.len);
-    @memcpy(work_url_snap[0..ulen], nr_urls[idx][0..ulen]);
+    const ulen = @min(row.url_len, work_url_snap.len);
+    @memcpy(work_url_snap[0..ulen], row.url_buf[0..ulen]);
     work_url_snap_len = ulen;
 
     state.app.novels.view = .chapters;
@@ -829,7 +839,7 @@ fn chaptersReadwn(my_gen: u32) void {
 // ══════════════════════════════════════════════════════════
 
 pub fn openChapter(idx: usize) void {
-    if (idx >= ch_count) return;
+    const row = chapterRow(idx) orelse return;
 
     state.app.novels.current_chapter = idx;
     state.app.novels.view = .reader;
@@ -840,15 +850,15 @@ pub fn openChapter(idx: usize) void {
 
     // Snapshot the chapter's page title (Wikisource key) + absolute URL (scraper
     // engines) + display label BEFORE spawning.
-    const flen = @min(ch_title_lens[idx], chapter_snap.len);
-    @memcpy(chapter_snap[0..flen], ch_titles[idx][0..flen]);
+    const flen = @min(row.title_len, chapter_snap.len);
+    @memcpy(chapter_snap[0..flen], row.title_buf[0..flen]);
     chapter_snap_len = flen;
 
-    const culen = @min(ch_url_lens[idx], chapter_url_snap.len);
-    @memcpy(chapter_url_snap[0..culen], ch_urls[idx][0..culen]);
+    const culen = @min(row.url_len, chapter_url_snap.len);
+    @memcpy(chapter_url_snap[0..culen], row.url_buf[0..culen]);
     chapter_url_snap_len = culen;
 
-    const label = pure.chapterLabel(ch_titles[idx][0..ch_title_lens[idx]]);
+    const label = pure.chapterLabel(row.title());
     const llen = @min(label.len, state.app.novels.chapter_label.len);
     @memcpy(state.app.novels.chapter_label[0..llen], label[0..llen]);
     state.app.novels.chapter_label_len = llen;
@@ -867,7 +877,7 @@ pub fn openChapter(idx: usize) void {
 /// Next / previous chapter, clamped. No-ops past the ends.
 pub fn nextChapter() void {
     const cur = state.app.novels.current_chapter;
-    if (cur + 1 < ch_count) openChapter(cur + 1);
+    if (cur + 1 < chapterCount()) openChapter(cur + 1);
 }
 pub fn prevChapter() void {
     const cur = state.app.novels.current_chapter;
@@ -1168,9 +1178,7 @@ fn renderSearchView() void {
         });
     }
 
-    parse_mutex.lock();
-    const count = @min(nr_count, MAX_RESULTS);
-    parse_mutex.unlock();
+    const count = resultCount();
 
     if (count == 0) {
         const msg = if (state.app.novels.is_loading.load(.acquire))
@@ -1196,13 +1204,26 @@ fn renderSearchView() void {
         .padding = .{ .x = 10, .y = 8, .w = 8, .h = 2 },
     });
 
-    var i: usize = 0;
-    while (i < count) : (i += 1) {
+    const row_h: f32 = 46;
+    const win = tmdb_pure.visibleRows(count, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 3);
+    if (win.first > 0) {
+        var sp = dvui.box(@src(), .{}, .{
+            .id_extra = 49998,
+            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(win.first)) },
+        });
+        sp.deinit();
+    }
+
+    var i: usize = win.first;
+    while (i < win.last) : (i += 1) {
+        const item = resultRow(i) orelse continue;
         var name_buf: [256]u8 = undefined;
-        const name = safeUtf8Buf(nr_titles[i][0..@min(nr_title_lens[i], nr_titles[i].len)], &name_buf);
+        const name = safeUtf8Buf(item.title(), &name_buf);
         if (dvui.button(@src(), name, .{}, .{
             .id_extra = i,
             .expand = .horizontal,
+            .min_size_content = .{ .w = 0, .h = 20 },
+            .max_size_content = .{ .w = std.math.floatMax(f32), .h = 20 },
             .color_fill = theme.colors.bg_elevated,
             .color_text = theme.colors.text_primary,
             .corner_radius = theme.dims.rad_sm,
@@ -1212,6 +1233,14 @@ fn renderSearchView() void {
         })) {
             openNovel(i);
         }
+    }
+
+    if (win.last < count) {
+        var sp = dvui.box(@src(), .{}, .{
+            .id_extra = 49999,
+            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(count - win.last)) },
+        });
+        sp.deinit();
     }
 
     // Infinite scroll: append the next page of the current query as the user nears
@@ -1324,9 +1353,7 @@ fn renderChaptersView() void {
         });
     }
 
-    parse_mutex.lock();
-    const count = @min(ch_count, MAX_CHAPTERS);
-    parse_mutex.unlock();
+    const count = chapterCount();
 
     if (count == 0) {
         const msg = if (state.app.novels.chapters_loading.load(.acquire)) "Loading chapters…" else "No chapters found";
@@ -1362,14 +1389,27 @@ fn renderChaptersView() void {
     });
     defer scroll.deinit();
 
-    var i: usize = 0;
-    while (i < count) : (i += 1) {
-        const label = pure.chapterLabel(ch_titles[i][0..@min(ch_title_lens[i], ch_titles[i].len)]);
+    const row_h: f32 = 40;
+    const win = tmdb_pure.visibleRows(count, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 4);
+    if (win.first > 0) {
+        var sp = dvui.box(@src(), .{}, .{
+            .id_extra = 49998,
+            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(win.first)) },
+        });
+        sp.deinit();
+    }
+
+    var i: usize = win.first;
+    while (i < win.last) : (i += 1) {
+        const item = chapterRow(i) orelse continue;
+        const label = pure.chapterLabel(item.title());
         var lbl_buf: [256]u8 = undefined;
         const safe = safeUtf8Buf(label, &lbl_buf);
         if (dvui.button(@src(), safe, .{}, .{
             .id_extra = i,
             .expand = .horizontal,
+            .min_size_content = .{ .w = 0, .h = 20 },
+            .max_size_content = .{ .w = std.math.floatMax(f32), .h = 20 },
             .color_fill = theme.colors.bg_elevated,
             .color_text = theme.colors.text_primary,
             .corner_radius = theme.dims.rad_sm,
@@ -1379,6 +1419,14 @@ fn renderChaptersView() void {
         })) {
             openChapter(i);
         }
+    }
+
+    if (win.last < count) {
+        var sp = dvui.box(@src(), .{}, .{
+            .id_extra = 49999,
+            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(count - win.last)) },
+        });
+        sp.deinit();
     }
 }
 
@@ -1464,7 +1512,7 @@ fn renderReaderView() void {
         }
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"chevron-right", .{}, .{}, .{
             .id_extra = 5,
-            .color_text = if (state.app.novels.current_chapter + 1 < ch_count) theme.colors.text_primary else theme.colors.text_tertiary,
+            .color_text = if (state.app.novels.current_chapter + 1 < chapterCount()) theme.colors.text_primary else theme.colors.text_tertiary,
             .gravity_y = 0.5,
             .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
         })) {

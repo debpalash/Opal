@@ -29,6 +29,8 @@ const io = @import("../core/io_global.zig");
 const poster = @import("../core/poster.zig");
 const rate_limit = @import("../core/rate_limit.zig");
 const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
+const LatestRequest = @import("../core/latest_request.zig").Gate;
+const tmdb_pure = @import("tmdb_pure.zig");
 
 const alloc = @import("../core/alloc.zig").allocator;
 
@@ -64,17 +66,23 @@ var station_posters: [180]StationPoster = [_]StationPoster{.{}} ** 180;
 
 // ── Thread-safety ──
 // The detached search worker publishes into state.app.radio.* under
-// `parse_mutex`, and a monotonic `search_gen` drops stale results so fast
+// `parse_mutex`, and a monotonic `search_request` drops stale results so fast
 // re-searches never show out-of-order data (mirrors podcasts.zig / anime.zig).
 // The `is_loading` flag is atomic (read by UI + remote threads, written by the
 // worker).
 var parse_mutex: @import("../core/sync.zig").Mutex = .{};
-var search_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+var search_request: LatestRequest = .{};
 
 // Query snapshot handed to the detached search worker (never read the mutable
 // UI search_buf from the thread).
 var query_buf: [256]u8 = undefined;
 var query_len: usize = 0;
+
+const SearchJob = struct {
+    generation: u32,
+    query: [256]u8 = undefined,
+    query_len: usize = 0,
+};
 
 // ══════════════════════════════════════════════════════════
 // Encrypted on-disk content cache — most-voted stations SWR (mirrors
@@ -190,7 +198,7 @@ const POPULAR_LIMIT: usize = 30;
 // back shorter than RADIO_PAGE_SIZE or the fixed results[] buffer fills.
 // `loading_more` serializes append fetches so a single near-bottom scroll
 // can't spawn a burst (mirrors comics/drama/youtube). All three are read on
-// the UI thread; the append worker runs under the same `search_gen` guard
+// the UI thread; the append worker runs under the same `search_request` guard
 // searchWorker/popularWorker already use, so a fresh search/popular reload
 // drops a stale append instead of racing it into results[].
 var current_offset: usize = 0;
@@ -227,7 +235,6 @@ pub fn loadPopularOnce() void {
     popular_fetched.store(true, .release);
     state.app.radio.showing_popular = true;
     state.app.radio.fetch_error = false;
-    state.app.radio.is_loading.store(true, .release);
     // Fresh popular session — infinite scroll starts over (any pagination
     // state left over from a prior search/popular load is stale).
     current_offset = 0;
@@ -236,17 +243,17 @@ pub fn loadPopularOnce() void {
     // Take a generation like a search does, so a user search fired while the
     // popular fetch is in flight supersedes it instead of racing it into
     // results[].
-    const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
+    const my_gen = search_request.begin(&state.app.radio.is_loading);
 
     if (@import("../core/workers.zig").spawnLegacy(popularWorker, .{my_gen})) |t| {
         @import("../core/workers.zig").release(t); // never joined — detach to avoid leaking the handle
     } else |_| {
-        state.app.radio.is_loading.store(false, .release);
+        search_request.finish(my_gen, &state.app.radio.is_loading);
     }
 }
 
 fn popularWorker(my_gen: u32) void {
-    defer state.app.radio.is_loading.store(false, .release);
+    defer search_request.finish(my_gen, &state.app.radio.is_loading);
 
     // buildPopularUrl (not buildTopVoteUrl) — the votes-descending search form
     // that loadMore's append windows also use, so the popular rail's paging is
@@ -261,16 +268,16 @@ fn popularWorker(my_gen: u32) void {
     rate_limit.acquire("radiobrowser", 1.0);
 
     const body = curl(url, 512 * 1024) orelse {
-        state.app.radio.fetch_error = true;
+        if (search_request.isCurrent(my_gen)) state.app.radio.fetch_error = true;
         return;
     };
     defer alloc.free(body);
 
-    if (search_gen.load(.acquire) != my_gen) return; // superseded by a search
+    if (!search_request.isCurrent(my_gen)) return; // superseded by a search
 
     parse_mutex.lock();
     defer parse_mutex.unlock();
-    if (search_gen.load(.acquire) != my_gen) return; // re-check under lock
+    if (!search_request.isCurrent(my_gen)) return; // re-check under lock
 
     const count = pure.parseStations(body, &state.app.radio.results);
     state.app.radio.result_count = count;
@@ -292,7 +299,6 @@ fn popularWorker(my_gen: u32) void {
 pub fn searchRadio(query: []const u8) void {
     if (query.len == 0) return;
 
-    state.app.radio.is_loading.store(true, .release);
     state.app.radio.fetch_error = false;
     state.app.radio.showing_popular = false;
     // A search satisfies the "page opens with content" job — never let the
@@ -302,31 +308,31 @@ pub fn searchRadio(query: []const u8) void {
     current_offset = 0;
     more_available = true;
 
-    const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
+    const my_gen = search_request.begin(&state.app.radio.is_loading);
 
-    // Snapshot the query BEFORE spawning — a newer search overwrites query_buf.
+    // Keep the query for pagination and hand this worker an immutable copy.
     const n = @min(query.len, query_buf.len);
+    parse_mutex.lock();
     @memcpy(query_buf[0..n], query[0..n]);
     query_len = n;
+    parse_mutex.unlock();
+    var job: SearchJob = .{ .generation = my_gen, .query_len = n };
+    @memcpy(job.query[0..n], query[0..n]);
 
-    if (@import("../core/workers.zig").spawnLegacy(searchWorker, .{my_gen})) |t| {
+    if (@import("../core/workers.zig").spawnLegacy(searchWorker, .{job})) |t| {
         @import("../core/workers.zig").release(t); // never joined — detach to avoid leaking the handle
     } else |_| {
-        state.app.radio.is_loading.store(false, .release);
+        search_request.finish(my_gen, &state.app.radio.is_loading);
     }
 }
 
-fn searchWorker(my_gen: u32) void {
-    defer state.app.radio.is_loading.store(false, .release);
-
-    // Re-snapshot the query — a newer search may overwrite query_buf mid-flight.
-    var local: [256]u8 = undefined;
-    const qlen = @min(query_len, local.len);
-    @memcpy(local[0..qlen], query_buf[0..qlen]);
+fn searchWorker(job: SearchJob) void {
+    const my_gen = job.generation;
+    defer search_request.finish(my_gen, &state.app.radio.is_loading);
 
     // Percent-encode the term (space, &, =, #, ?, %, + at minimum).
     var enc: [768]u8 = undefined;
-    const encoded = percentEncode(local[0..qlen], &enc);
+    const encoded = percentEncode(job.query[0..job.query_len], &enc);
 
     var url_buf: [1024]u8 = undefined;
     const url = pure.buildSearchUrl(encoded, RADIO_PAGE_SIZE, 0, &url_buf);
@@ -336,17 +342,17 @@ fn searchWorker(my_gen: u32) void {
     rate_limit.acquire("radiobrowser", 1.0);
 
     const body = curl(url, 512 * 1024) orelse {
-        state.app.radio.fetch_error = true;
+        if (search_request.isCurrent(my_gen)) state.app.radio.fetch_error = true;
         return;
     };
     defer alloc.free(body);
 
     // Bail if superseded while curl was in flight.
-    if (search_gen.load(.acquire) != my_gen) return;
+    if (!search_request.isCurrent(my_gen)) return;
 
     parse_mutex.lock();
     defer parse_mutex.unlock();
-    if (search_gen.load(.acquire) != my_gen) return; // re-check under lock
+    if (!search_request.isCurrent(my_gen)) return; // re-check under lock
 
     const count = pure.parseStations(body, &state.app.radio.results);
     state.app.radio.result_count = count;
@@ -360,7 +366,7 @@ fn searchWorker(my_gen: u32) void {
 /// Fetch the next window of stations (offset = the current, already-deduped
 /// result_count) and append it onto the existing grid. Guarded by
 /// `loading_more` + the main `is_loading` so a near-bottom scroll can't spawn
-/// a burst; runs under the current `search_gen` so a fresh search/popular
+/// a burst; runs under the current `search_request` so a fresh search/popular
 /// reload supersedes it. No-op once `more_available` clears (a short window or
 /// the fixed results[] buffer filled). Mirrors drama.zig's loadMore().
 pub fn loadMore() void {
@@ -374,11 +380,16 @@ pub fn loadMore() void {
     }
     if (loading_more.swap(true, .acq_rel)) return; // lost the race — another append in flight
 
-    const my_gen = search_gen.load(.acquire); // stay within the current generation
+    const my_gen = search_request.current(); // stay within the current generation
     const offset = state.app.radio.result_count;
     const popular = state.app.radio.showing_popular;
+    var job: SearchJob = .{ .generation = my_gen };
+    parse_mutex.lock();
+    job.query_len = @min(query_len, job.query.len);
+    @memcpy(job.query[0..job.query_len], query_buf[0..job.query_len]);
+    parse_mutex.unlock();
 
-    if (@import("../core/workers.zig").spawnLegacy(loadMoreWorker, .{ my_gen, offset, popular })) |t| {
+    if (@import("../core/workers.zig").spawnLegacy(loadMoreWorker, .{ job, offset, popular })) |t| {
         @import("../core/workers.zig").release(t);
     } else |_| {
         loading_more.store(false, .release);
@@ -387,21 +398,17 @@ pub fn loadMore() void {
 
 /// Worker for one infinite-scroll append. `popular` picks buildPopularUrl vs
 /// buildSearchUrl for the SAME mode the visible grid is in; for a search, the
-/// term is re-read from query_buf (like searchWorker does) — if a newer search
-/// landed in the meantime it already bumped search_gen, so the generation
-/// check below drops this append before it can publish under a stale term.
-fn loadMoreWorker(my_gen: u32, offset: usize, popular: bool) void {
+/// worker receives the same immutable query snapshot as the initial search.
+fn loadMoreWorker(job: SearchJob, offset: usize, popular: bool) void {
+    const my_gen = job.generation;
     defer loading_more.store(false, .release);
 
     var url_buf: [1024]u8 = undefined;
     const url = if (popular)
         pure.buildPopularUrl(RADIO_PAGE_SIZE, offset, &url_buf)
     else blk: {
-        var local: [256]u8 = undefined;
-        const qlen = @min(query_len, local.len);
-        @memcpy(local[0..qlen], query_buf[0..qlen]);
         var enc: [768]u8 = undefined;
-        const encoded = percentEncode(local[0..qlen], &enc);
+        const encoded = percentEncode(job.query[0..job.query_len], &enc);
         break :blk pure.buildSearchUrl(encoded, RADIO_PAGE_SIZE, offset, &url_buf);
     };
     if (url.len == 0) return;
@@ -416,7 +423,7 @@ fn loadMoreWorker(my_gen: u32, offset: usize, popular: bool) void {
     const body = curl(url, 512 * 1024) orelse return;
     defer alloc.free(body);
 
-    if (search_gen.load(.acquire) != my_gen) return; // superseded by a fresh search/popular reload
+    if (!search_request.isCurrent(my_gen)) return; // superseded by a fresh search/popular reload
 
     // Parse into a heap staging buffer — never a big stack array on a spawned
     // thread (CLAUDE.md).
@@ -426,7 +433,7 @@ fn loadMoreWorker(my_gen: u32, offset: usize, popular: bool) void {
 
     parse_mutex.lock();
     defer parse_mutex.unlock();
-    if (search_gen.load(.acquire) != my_gen) return; // re-check under lock
+    if (!search_request.isCurrent(my_gen)) return; // re-check under lock
 
     current_offset = offset;
     // A window shorter than the page size means RadioBrowser has nothing left
@@ -473,8 +480,13 @@ fn loadMoreWorker(my_gen: u32, offset: usize, popular: bool) void {
 /// content-type routing) is used — creating a player if none exists and
 /// revealing the player page. Falls back to `url` when unresolved.
 pub fn playStation(idx: usize) void {
-    if (idx >= state.app.radio.result_count) return;
-    const s = &state.app.radio.results[idx];
+    parse_mutex.lock();
+    if (idx >= state.app.radio.result_count) {
+        parse_mutex.unlock();
+        return;
+    }
+    const s = state.app.radio.results[idx];
+    parse_mutex.unlock();
     const src = if (s.url_resolved_len > 0)
         s.url_resolved[0..s.url_resolved_len]
     else
@@ -738,8 +750,7 @@ fn renderLogo(i: usize, s: *const pure.Station) void {
 }
 
 /// One station card: logo (clickable → play) + name + codec/bitrate/country.
-fn renderCard(i: usize, card_w: f32) void {
-    const s = &state.app.radio.results[i];
+fn renderCard(i: usize, card_w: f32, s: *const pure.Station) void {
 
     // Validate a STABLE COPY: a fetch worker can rewrite results[i] mid-frame
     // and dvui panics on invalid UTF-8 it reads after we validated.
@@ -847,7 +858,10 @@ fn renderCard(i: usize, card_w: f32) void {
 }
 
 fn renderResults() void {
+    parse_mutex.lock();
     const count = @min(state.app.radio.result_count, state.app.radio.results.len);
+    const showing_popular = state.app.radio.showing_popular;
+    parse_mutex.unlock();
     if (count == 0) {
         if (!state.app.radio.is_loading.load(.acquire)) {
             _ = dvui.label(@src(), "Search for a station to get started", .{}, .{
@@ -871,24 +885,34 @@ fn renderResults() void {
     defer scroll.deinit();
 
     _ = dvui.label(@src(), "{s}", .{
-        if (state.app.radio.showing_popular) "Most popular stations" else "Results",
+        if (showing_popular) "Most popular stations" else "Results",
     }, .{
         .color_text = theme.colors.text_secondary,
         .padding = .{ .x = 8, .y = 8, .w = 8, .h = 2 },
     });
 
     // Responsive columns from the LIVE page width (one-frame lag; first paint
-    // falls back to a sane default) — same shape as the TMDB gallery. No
-    // virtualization: the grid is capped at results[]'s 180 cards, grown
-    // incrementally by infinite scroll below.
+    // falls back to a sane default) — same shape as the TMDB gallery.
     const rect_w = scroll.data().rect.w;
     const avail_w: f32 = @max(240, (if (rect_w > 1) rect_w else 900) - 8);
     const cols: usize = @max(2, @as(usize, @intFromFloat(avail_w / CARD_TARGET_W)));
     const cols_f: f32 = @floatFromInt(cols);
     const card_w: f32 = @max(100, (avail_w - cols_f * 2 * CARD_GAP) / cols_f);
 
-    var r: usize = 0;
-    while (r * cols < count) : (r += 1) {
+    const row_h = card_w + CARD_FOOTER_H + 2 * CARD_GAP;
+    const total_rows = (count + cols - 1) / cols;
+    const win = tmdb_pure.visibleRows(total_rows, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 2);
+
+    if (win.first > 0) {
+        var sp = dvui.box(@src(), .{}, .{
+            .id_extra = 49998,
+            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(win.first)) },
+        });
+        sp.deinit();
+    }
+
+    var r: usize = win.first;
+    while (r < win.last) : (r += 1) {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = r + 50000,
             .expand = .horizontal,
@@ -896,7 +920,21 @@ fn renderResults() void {
         defer row.deinit();
 
         var c: usize = 0;
-        while (c < cols and r * cols + c < count) : (c += 1) renderCard(r * cols + c, card_w);
+        while (c < cols and r * cols + c < count) : (c += 1) {
+            const idx = r * cols + c;
+            parse_mutex.lock();
+            const station = state.app.radio.results[idx];
+            parse_mutex.unlock();
+            renderCard(idx, card_w, &station);
+        }
+    }
+
+    if (win.last < total_rows) {
+        var sp = dvui.box(@src(), .{}, .{
+            .id_extra = 49999,
+            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(total_rows - win.last)) },
+        });
+        sp.deinit();
     }
 
     // Infinite scroll: fetch + append the next window (same query/popular

@@ -67,11 +67,13 @@ def test_novels_reader():
         "resume persist + load": "fn saveResume" in svc and "fn loadResume" in svc,
         "resume via KV store": 'RESUME_KIND = "novel_resume"' in svc and "librarySetStatus" in svc,
         # ── Thread-safety discipline ──
-        "atomic loading flags": all(
-            f in svc for f in ("is_loading.store", "chapters_loading.store", "text_loading.store")
-        ),
+        "atomic loading flags": "LatestRequest" in svc
+            and "search_request.begin(&state.app.novels.is_loading)" in svc
+            and all(f in svc for f in ("chapters_loading.store", "text_loading.store")),
         "publishes under mutex": "parse_mutex.lock()" in svc,
-        "generation guards": "search_gen" in svc and "text_gen" in svc,
+        "generation guards": "search_request.isCurrent" in svc and "text_gen" in svc,
+        "immutable search jobs": "const SearchJob = struct" in svc
+            and "fn searchWorker(job: SearchJob)" in svc,
         "threads detached": "_ = std.Thread.spawn(" not in svc,
         # Large fetch buffers heap-allocated (never on the worker stack).
         "heap fetch buffers": "alloc.alloc(u8, 2 * 1024 * 1024)" in svc,

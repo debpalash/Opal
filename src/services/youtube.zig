@@ -11,6 +11,7 @@ const it_pure = @import("youtube_innertube_pure.zig"); // unit-tested InnerTube 
 const content_cache = @import("../core/content_cache.zig");
 const ccp = @import("../core/content_cache_pure.zig");
 const bounded_process = @import("../core/bounded_process.zig");
+const LatestRequest = @import("../core/latest_request.zig").Gate;
 
 pub const alloc = @import("../core/alloc.zig").allocator;
 
@@ -72,7 +73,7 @@ var last_seen_len: usize = 0;
 // Monotonic search generation. Each fetch captures the value at spawn time; a
 // worker that finds itself superseded (a newer search bumped this) discards its
 // results instead of racing them onto the grid out of order.
-var search_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+var search_request: LatestRequest = .{};
 const DEBOUNCE_MS: i64 = 400;
 
 // ── UI controls (module-level, not in state.zig) ──
@@ -196,7 +197,7 @@ var channel_name_len: usize = 0;
 // ── Search suggestions (Google autocomplete, ds=yt) ──
 // A worker fills the fixed rows under sugg_mutex; the dropdown renders a
 // snapshot. sugg_for_* records which query the rows belong to, so a stale
-// list is never shown for a newer query. Generation guard mirrors search_gen.
+// list is never shown for a newer query. Generation guard mirrors search_request.
 const SUGG_MAX = 8;
 var sugg_mutex: @import("../core/sync.zig").Mutex = .{};
 var sugg_rows: [SUGG_MAX][120]u8 = undefined;
@@ -430,14 +431,13 @@ fn storeYtToCache(query: []const u8) void {
 pub fn fetchYoutube(query: []const u8) void {
     if (state.app.yt.is_loading.load(.acquire)) return;
     channel_mode.store(false, .release); // a search always leaves channel view
-    state.app.yt.is_loading.store(true, .release);
     state.app.yt.last_fetch_s = @import("browse_cache.zig").now(); // SWR stamp
 
     const actual_query = if (query.len == 0) "trending music" else query;
 
     // Bump the generation; this fetch owns `my_gen`. A later fetch will bump it
     // again, marking this one stale.
-    const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
+    const my_gen = search_request.begin(&state.app.yt.is_loading);
 
     const S = struct {
         var q_buf: [256]u8 = undefined;
@@ -465,7 +465,7 @@ pub fn fetchYoutube(query: []const u8) void {
     workers.spawn(struct {
         fn worker() void {
             defer {
-                state.app.yt.is_loading.store(false, .release);
+                search_request.finish(S.gen, &state.app.yt.is_loading);
             }
 
             const q = S.q_buf[0..S.q_len];
@@ -500,7 +500,7 @@ pub fn fetchYoutube(query: []const u8) void {
             if (!pending_clear and isCurrent(S.gen)) storeYtToCache(q);
         }
     }.worker, .{}) catch {
-        state.app.yt.is_loading.store(false, .release);
+        search_request.finish(my_gen, &state.app.yt.is_loading);
     };
 }
 
@@ -518,9 +518,8 @@ pub fn openChannel(channel_id: []const u8, name: []const u8) void {
     @memcpy(channel_name_buf[0..channel_name_len], name[0..channel_name_len]);
     channel_mode.store(true, .release);
 
-    state.app.yt.is_loading.store(true, .release);
     state.app.yt.last_fetch_s = @import("browse_cache.zig").now();
-    const my_gen = search_gen.fetchAdd(1, .acq_rel) + 1;
+    const my_gen = search_request.begin(&state.app.yt.is_loading);
 
     // Channel paging rides loaded_count/-I; the search query is not involved.
     loaded_count.store(PAGE_SIZE, .release);
@@ -548,7 +547,7 @@ pub fn openChannel(channel_id: []const u8, name: []const u8) void {
 
     workers.spawn(struct {
         fn worker() void {
-            defer state.app.yt.is_loading.store(false, .release);
+            defer search_request.finish(S.gen, &state.app.yt.is_loading);
             yt_mutex.lock();
             pending_clear = true; // seamless swap, same as a re-search
             yt_mutex.unlock();
@@ -567,7 +566,7 @@ pub fn openChannel(channel_id: []const u8, name: []const u8) void {
             }
         }
     }.worker, .{}) catch {
-        state.app.yt.is_loading.store(false, .release);
+        search_request.finish(my_gen, &state.app.yt.is_loading);
         return;
     };
 }
@@ -596,7 +595,7 @@ pub fn fetchMore() void {
 
     // This load-more belongs to the current generation; a new search bumps the
     // gen and this worker's appends get dropped (isCurrent).
-    const my_gen = search_gen.load(.acquire);
+    const my_gen = search_request.current();
     const want = @min(loaded_count.load(.acquire) + PAGE_SIZE, ITEM_CAP);
 
     const S = struct {
@@ -672,7 +671,7 @@ pub fn fetchMore() void {
 /// True while `gen` is still the newest search. A stale worker bails so its
 /// (out-of-date) results never reach the grid.
 fn isCurrent(gen: u32) bool {
-    return search_gen.load(.acquire) == gen;
+    return search_request.isCurrent(gen);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -988,7 +987,7 @@ fn runYtdlp(target: []const u8, item_range: ?[]const u8, gen: u32) void {
         .timeout_ms = 120 * 1000,
         .terminate_grace_ms = 500,
         .max_output_bytes = 16 * 1024 * 1024,
-        .cancel_epoch = .{ .epoch32 = .{ .value = &search_gen, .expected = gen } },
+        .cancel_epoch = .{ .epoch32 = .{ .value = &search_request.generation, .expected = gen } },
     });
     process.start() catch return;
 
@@ -1389,7 +1388,7 @@ fn recordFired(q: []const u8) void {
 /// from the previous frame we treat that as a keystroke and reset `last_edit_ms`
 /// — so the window measures *inactivity*. Once the buffer has been stable for
 /// DEBOUNCE_MS, has ≥2 chars, and differs from what we last fired, we fire.
-/// fetchYoutube bumps `search_gen`; an in-flight worker whose gen is superseded
+/// fetchYoutube bumps `search_request`; an in-flight worker whose gen is superseded
 /// drops its results (isCurrent), so fast typing never shows out-of-order rows.
 fn maybeFireLiveSearch() void {
     const q = currentQuery();

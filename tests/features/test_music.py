@@ -49,7 +49,10 @@ def test_music():
         "play hands url to mpv": "pub fn playSong" in svc and "loadContentDirectMeta(" in svc,
         "covers via poster daemon": "poster.fetchAsync(" in svc,
         "render entry": "pub fn renderContent" in svc,
-        "thread discipline": "search_gen" in svc and "parse_mutex" in svc and "is_loading.store" in svc,
+        "thread discipline": "LatestRequest" in svc and "parse_mutex" in svc
+            and "search_request.begin(&state.app.music.is_loading)" in svc,
+        "credentials copied into worker job": "const SearchJob = struct" in svc
+            and "auth: [320]u8" in svc and "fn spawnWorker(comptime f: fn (SearchJob) void" in svc,
         "curl not std.http": "std.http.Client" not in svc and '"curl"' in svc,
 
         # ── Enum → state → nav → render → rail/shell ──
@@ -105,7 +108,8 @@ def test_music():
             f'"{n}"' in svc for n in ("JioSaavn", "Subsonic", "Jellyfin", "Plex")
         ),
         "inert when server unconfigured": "fn sourceConfigured(" in svc and "fn jfCreds(" in svc and "fn plexCreds(" in svc,
-        "creds snapshotted before spawn": "fn snapBase(" in svc and "fn snapToken(" in svc and "spawnWorker(" in svc,
+        "creds snapshotted before spawn": "const SearchJob = struct" in svc
+            and "base:" in svc and "auth:" in svc and "spawnWorker(" in svc,
         "player guard on lyrics clock": "state.app.active_player_idx >= state.app.players.items.len" in svc,
         "lyrics still requested on play": "lyrics.clear()" in svc and "lyrics.requestFor(" in svc,
         "does not edit jellyfin/plex services": "jf_pure" in svc and "px_pure" in svc,

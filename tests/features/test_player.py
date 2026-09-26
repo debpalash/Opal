@@ -114,8 +114,8 @@ def test_card_views_polish():
     yt = _src("src/services/youtube.zig")
     cm = _src("src/services/comics.zig")
     checks = {
-        "anime live search": "search_gen" in an and "last_edit_ms" in an,
-        "youtube live search": "search_gen" in yt and "last_edit_ms" in yt,
+        "anime live search": "search_request" in an and "last_edit_ms" in an,
+        "youtube live search": "search_request" in yt and "last_edit_ms" in yt,
         "comics live search": "search_gen" in cm and "last_edit_ms" in cm,
         "anime card size": "card_w" in an,
         "youtube card size": "card_w" in yt,
@@ -531,7 +531,7 @@ def test_anime_lists_plugin():
         # Fetch: curl (never std.http), off the UI thread, into the shared grid.
         "fetches airing feed": "anime-airing.json" in an,
         "curl not std.http": "curl" in an and "std.http" not in an,
-        "detached worker": "listsThread" in an and "search_gen" in an,
+        "detached worker": "listsThread" in an and "search_request" in an,
         # SWR disk cache so it isn't refetched every launch.
         "cached": "cacheStoreForUrl" in an and "cacheLoadForUrl" in an,
         "ttl": "LISTS_TTL_S" in an,

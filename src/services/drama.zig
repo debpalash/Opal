@@ -25,6 +25,8 @@ const logs = @import("../core/logs.zig");
 const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
 const sync = @import("../core/sync.zig");
 const io_g = @import("../core/io_global.zig");
+const LatestRequest = @import("../core/latest_request.zig").Gate;
+const tmdb_pure = @import("tmdb_pure.zig");
 
 const alloc = @import("../core/alloc.zig").allocator;
 
@@ -43,16 +45,16 @@ var pending_count: usize = 0;
 var pending_ready: bool = false;
 var pending_mutex: sync.Mutex = .{};
 
-/// Monotonic fetch generation — bumped on each fetch so a slow in-flight worker's
-/// results are dropped rather than shown if a newer fetch superseded it.
-var fetch_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+/// One lifecycle owns both the generation guard and the loading flag, so a late
+/// worker can never clear the busy state of a newer catalog fetch.
+var fetch_request: LatestRequest = .{};
 
 // ── Infinite-scroll pagination ──
 // `current_page` is the highest TMDB discover page merged into results[];
 // `more_available` clears when a page returns short or the fixed buffer fills.
 // `loading_more` serializes append fetches so a single near-bottom scroll can't
 // spawn a burst (mirrors comics/youtube). All read on the UI thread; the append
-// worker runs under the same fetch_gen guard so a fresh search drops it.
+// worker runs under the same fetch_request guard so a fresh search drops it.
 var current_page: u32 = 1;
 var more_available: bool = true;
 var loading_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
@@ -73,7 +75,6 @@ const TMDB_PAGE_SIZE: usize = 20;
 pub fn loadCatalog() void {
     if (state.app.tmdb.api_key_len == 0) return; // reuses the TMDB key (see tmdb.zig)
     if (state.app.drama.is_loading.load(.acquire)) return;
-    state.app.drama.is_loading.store(true, .release);
     state.app.drama.selected_idx = null;
     state.app.drama.last_fetch_s = @import("browse_cache.zig").now();
     state.app.drama.loaded_once = true;
@@ -81,18 +82,18 @@ pub fn loadCatalog() void {
     // more_available once page 1 lands.
     current_page = 1;
     more_available = true;
-    const my_gen = fetch_gen.fetchAdd(1, .acq_rel) + 1;
+    const my_gen = fetch_request.begin(&state.app.drama.is_loading);
 
     if (@import("../core/workers.zig").spawnLegacy(fetchWorker, .{my_gen})) |t| {
         @import("../core/workers.zig").release(t); // never joined — detach to avoid leaking the handle
     } else |_| {
-        state.app.drama.is_loading.store(false, .release);
+        fetch_request.finish(my_gen, &state.app.drama.is_loading);
     }
 }
 
 /// Infinite-scroll appender: fetch the NEXT TMDB discover page and merge it onto
 /// the existing grid. Guarded by `loading_more` + the main `is_loading` so a
-/// near-bottom scroll can't spawn a burst; runs under the current fetch_gen so a
+/// near-bottom scroll can't spawn a burst; runs under the current fetch_request so a
 /// fresh landing feed supersedes it. No-op once `more_available` clears (short
 /// page or the fixed buffer filled). Mirrors comics.loadMoreResults.
 pub fn loadMore() void {
@@ -106,7 +107,7 @@ pub fn loadMore() void {
         return;
     }
     if (loading_more.swap(true, .acq_rel)) return; // lost the race — another append in flight
-    const my_gen = fetch_gen.load(.acquire); // stay within the current generation
+    const my_gen = fetch_request.current(); // stay within the current generation
     const next = current_page + 1;
     if (@import("../core/workers.zig").spawnLegacy(loadMoreWorker, .{ my_gen, next })) |t| {
         @import("../core/workers.zig").release(t);
@@ -116,7 +117,7 @@ pub fn loadMore() void {
 }
 
 fn fetchWorker(my_gen: u32) void {
-    defer state.app.drama.is_loading.store(false, .release);
+    defer fetch_request.finish(my_gen, &state.app.drama.is_loading);
     fetchPage(my_gen, 1, false);
 }
 
@@ -144,11 +145,11 @@ fn fetchPage(my_gen: u32, page: u32, append: bool) void {
     defer alloc.free(items);
     const n = if (bytes > 0) drama_pure.parseDiscover(buf[0..bytes], items) else 0;
 
-    if (fetch_gen.load(.acquire) != my_gen) return; // superseded by a newer fetch
+    if (!fetch_request.isCurrent(my_gen)) return; // superseded by a newer fetch
 
     pending_mutex.lock();
     defer pending_mutex.unlock();
-    if (fetch_gen.load(.acquire) != my_gen) return; // re-check under the lock
+    if (!fetch_request.isCurrent(my_gen)) return; // re-check under the lock
     @memcpy(pending[0..n], items[0..n]);
     pending_count = n;
     pending_page = page;
@@ -373,14 +374,43 @@ pub fn renderContent() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
     defer scroll.deinit();
 
-    {
-        var grid = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
-            .expand = .horizontal,
-            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.md },
-        });
-        defer grid.deinit();
+    const count = @min(state.app.drama.result_count, state.app.drama.results.len);
+    const rect_w = scroll.data().rect.w;
+    const avail_w: f32 = @max(CARD_W + 8, (if (rect_w > 1) rect_w else 900) - 2 * theme.spacing.md);
+    const cols: usize = @max(1, @as(usize, @intFromFloat(avail_w / (CARD_W + 8))));
+    const row_h: f32 = CARD_W * 1.5 + 72 + 8;
+    const total_rows = (count + cols - 1) / cols;
+    const win = tmdb_pure.visibleRows(total_rows, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 2);
 
-        for (0..state.app.drama.result_count) |i| renderCard(&state.app.drama.results[i], i);
+    if (win.first > 0) {
+        var sp = dvui.box(@src(), .{}, .{
+            .id_extra = 49998,
+            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(win.first)) },
+        });
+        sp.deinit();
+    }
+
+    var r: usize = win.first;
+    while (r < win.last) : (r += 1) {
+        const base = r * cols;
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = base + 50000,
+            .expand = .horizontal,
+            .padding = .{ .x = theme.spacing.md, .y = 0, .w = theme.spacing.md, .h = 0 },
+        });
+        defer row.deinit();
+        var col: usize = 0;
+        while (col < cols and base + col < count) : (col += 1) {
+            renderCard(&state.app.drama.results[base + col], base + col);
+        }
+    }
+
+    if (win.last < total_rows) {
+        var sp = dvui.box(@src(), .{}, .{
+            .id_extra = 49999,
+            .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(total_rows - win.last)) },
+        });
+        sp.deinit();
     }
 
     // Infinite scroll: fetch + append the next TMDB page as the user nears the
