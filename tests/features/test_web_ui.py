@@ -294,6 +294,11 @@ def test_web_ui_access_page():
             f'id="{i}"' in ui
             for i in ("acc-pw-save", "acc-revoke", "acc-token-rotate", "acc-bind-save", "acc-port")
         ),
+        "password form submits by click or Enter": (
+            'id="acc-pw-save" class="quick-btn" type="submit"' in ui
+            and "$('acc-pw-form').onsubmit = submitAccessPassword" in ui
+            and "event.preventDefault()" in ui
+        ),
         "loads with setup page": "loadAccess();" in ui and "async function loadAccess(" in ui,
         "adapts to caller class": "accViaToken" in ui and "via_token" in ui,
         "warns when LAN-exposed": "acc-bind-warn" in ui and "Anyone on your network" in ui,

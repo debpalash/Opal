@@ -100,6 +100,33 @@ test('web performance budget produces a measured pass and failure', () => {
   assert.equal(f.run('webPerf.summary().within_budget'), false);
 });
 
+test('password form submits through its native Enter path', async () => {
+  const f = fixture('integrations.js');
+  f.$('acc-pw-cur').value = 'current-password';
+  f.$('acc-pw-new').value = 'new-password';
+  f.$('acc-pw-conf').value = 'new-password';
+  f.run(`fetch = async (url, options) => {
+    rendered.push({url, body:options.body});
+    return {ok:true, json:async () => ({ok:true, revoked:0})};
+  }`);
+
+  const action = f.run(`$('acc-pw-form').onsubmit({
+    preventDefault(){ rendered.push('prevented'); }
+  })`);
+  await flush();
+  f.take('/access/status').resolve({
+    via_token:false, can_manage_users:false, sessions:1,
+    bind:'lan', port:41595, running:true,
+  });
+  await action;
+
+  assert.equal(f.rendered[0], 'prevented');
+  assert.match(f.rendered[1].url, /\/api\/access\/password$/);
+  assert.match(f.rendered[1].body, /current=current-password/);
+  assert.equal(f.$('acc-pw-new').value, '');
+  assert.match(f.$('acc-pw-hint').textContent, /Password updated/);
+});
+
 test('anime paging uses the shared browse loader and renders rich cards', async () => {
   const f = fixture('media.js');
   f.run(`

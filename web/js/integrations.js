@@ -890,7 +890,8 @@ function renderBindWarn(bind, ip, port){
   else { w.className = 'hint acc-warn'; w.textContent = 'Anyone on your network who can sign in can reach Opal' + (ip ? ' at http://' + ip + ':' + port : '') + '.'; }
 }
 
-$('acc-pw-save').onclick = async () => {
+async function submitAccessPassword(event){
+  event.preventDefault();
   const btn = $('acc-pw-save');
   const nw = $('acc-pw-new').value, cf = $('acc-pw-conf').value;
   // Mirror of access_pure.checkPasswordChange so the common mistakes are
@@ -915,7 +916,8 @@ $('acc-pw-save').onclick = async () => {
     await loadAccess();
   }
   $('acc-pw-hint').textContent = msg;
-};
+}
+$('acc-pw-form').onsubmit = submitAccessPassword;
 
 $('acc-revoke').onclick = async () => {
   const btn = $('acc-revoke');
