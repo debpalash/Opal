@@ -17,6 +17,8 @@ const browser = @import("../services/browser.zig");
 const library_store = @import("../services/library_store.zig");
 const library_pure = @import("../services/library_pure.zig");
 const components = @import("components.zig");
+const db = @import("../core/db.zig");
+const io_global = @import("../core/io_global.zig");
 
 const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
 
@@ -364,44 +366,87 @@ fn renderHero() void {
     });
     defer hero.deinit();
 
-    // Headline stays left aligned with every shelf below it.
+    var header_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+    defer header_row.deinit();
+
     _ = dvui.label(@src(), "Home", .{}, .{
         .color_text = theme.colors.text_primary,
         .font = dvui.themeGet().font_title.withSize(if (tall) 28 else if (compact) 21 else 24),
-        .margin = .{ .x = 0, .y = 2, .w = 0, .h = theme.spacing.xs },
+        .gravity_y = 0.5,
+        .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
     });
+
+    if (heroAction("Search", 1)) state.app.router.navigate(.search);
+    if (heroAction("Browse", 2)) {
+        state.app.browse_source = .TMDB;
+        state.app.router.navigate(.browse);
+    }
+
+    var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+    spacer.deinit();
+
+    const clock = localClock();
+    var greeting_buf: [48]u8 = undefined;
+    const greeting = std.fmt.bufPrint(&greeting_buf, "{s}  ·  {s}", .{ clock.greeting, clock.time }) catch clock.time;
+    _ = dvui.label(@src(), "{s}", .{greeting}, .{
+        .color_text = theme.colors.text_secondary,
+        .font = dvui.themeGet().font_body.withSize(if (compact) theme.font_size.small else theme.font_size.body),
+        .gravity_y = 0.5,
+    });
+    // Wake an otherwise idle window so the minute remains current.
+    dvui.timer(header_row.data().id, 60_000_000);
 
     // The shell provides the unified omnibox in its header; only the
     // standalone layout renders a second input here.
     if (!state.app.page_shell_enabled) @import("header.zig").renderUrlInput(true);
+}
 
-    // Keep both routes visible with or without a TMDB key or recent files.
-    // Flexbox wraps the buttons on narrow windows.
-    var actions = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
-        .expand = .horizontal,
-        .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 0 },
+fn heroAction(label: []const u8, id: usize) bool {
+    return dvui.button(@src(), label, .{}, .{
+        .id_extra = id,
+        .background = true,
+        .color_fill = transparent,
+        .color_fill_hover = theme.colors.bg_hover,
+        .color_text = theme.colors.text_secondary,
+        .border = dvui.Rect.all(0),
+        .corner_radius = dvui.Rect.all(theme.radius.sm),
+        .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
+        .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
+        .gravity_y = 0.5,
     });
-    defer actions.deinit();
+}
 
-    if (dvui.button(@src(), "Search", .{}, .{
-        .color_fill = theme.colors.accent,
-        .color_text = theme.colors.text_on_accent,
-        .corner_radius = dvui.Rect.all(theme.radius.sm),
-        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
-        .margin = dvui.Rect.all(theme.spacing.xs),
-    })) state.app.router.navigate(.search);
-    if (dvui.button(@src(), "Browse", .{}, .{
-        .color_fill = theme.colors.bg_surface,
-        .color_text = theme.colors.text_primary,
-        .border = dvui.Rect.all(1),
-        .color_border = theme.colors.border_subtle,
-        .corner_radius = dvui.Rect.all(theme.radius.sm),
-        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
-        .margin = dvui.Rect.all(theme.spacing.xs),
-    })) {
-        state.app.browse_source = .TMDB;
-        state.app.router.navigate(.browse);
+const ClockText = struct { greeting: []const u8, time: []const u8 };
+var clock_minute: i64 = -1;
+var clock_hour: u8 = 12;
+var clock_text: [5]u8 = "00:00".*;
+
+fn localClock() ClockText {
+    const minute = @divFloor(io_global.timestamp(), 60);
+    if (minute != clock_minute) {
+        const stmt = db.prepare("SELECT strftime('%H:%M','now','localtime'), CAST(strftime('%H','now','localtime') AS INTEGER)");
+        if (stmt) |s| {
+            defer db.finalize(s);
+            if (db.step(s) == db.c.SQLITE_ROW) {
+                if (db.columnText(s, 0)) |value| {
+                    if (value.len == clock_text.len) @memcpy(&clock_text, value);
+                }
+                clock_hour = @intCast(std.math.clamp(db.columnInt(s, 1), 0, 23));
+                clock_minute = minute;
+            }
+        }
     }
+    const greeting: []const u8 = if (clock_hour < 5)
+        "Good night"
+    else if (clock_hour < 12)
+        "Good morning"
+    else if (clock_hour < 17)
+        "Good afternoon"
+    else if (clock_hour < 22)
+        "Good evening"
+    else
+        "Good night";
+    return .{ .greeting = greeting, .time = &clock_text };
 }
 
 // ── Chat mode — full-page transcript + pinned composer ──
@@ -846,6 +891,7 @@ fn posterStrip(title: []const u8, icon: []const u8, items: *std.ArrayListUnmanag
 const LibSlot = struct {
     pixels: ?[]u8 = null,
     tex: ?dvui.Texture = null,
+    blur_tex: ?dvui.Texture = null,
     w: u32 = 0,
     h: u32 = 0,
     fetching: bool = false,
@@ -1045,10 +1091,13 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
             const h = std.hash.Fnv1a_64.hash(purl);
             if (slot.url_hash != h and !slot.fetching) {
                 poster.deinitPoster(&slot.pixels, &slot.tex);
+                if (slot.blur_tex) |tex| dvui.textureDestroyLater(tex);
+                slot.blur_tex = null;
                 slot.w = 0;
                 slot.h = 0;
                 slot.url_hash = h;
             }
+            if (manage_continue) uploadPrivacyBlur(slot);
             _ = poster.uploadIfReady(&slot.pixels, slot.w, slot.h, &slot.tex);
             if (slot.tex == null and !slot.fetching and slot.pixels == null)
                 poster.fetchAsync(purl, &slot.pixels, &slot.w, &slot.h, &slot.fetching);
@@ -1056,15 +1105,8 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
         if (revealed and slot.tex != null) {
             const tex = &slot.tex.?;
             _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{ .id_extra = i + base_id + 40, .expand = .both, .corner_radius = dvui.Rect.all(8) });
-        } else if (!revealed) {
-            _ = dvui.icon(@src(), "private-card", icons.tvg.lucide.@"eye-off", .{}, .{
-                .id_extra = i + base_id + 40,
-                .color_text = theme.colors.text_tertiary,
-                .min_size_content = theme.iconSize(.lg),
-                .gravity_x = 0.5,
-                .gravity_y = 0.5,
-                .expand = .both,
-            });
+        } else if (!revealed and slot.blur_tex != null) {
+            _ = dvui.image(@src(), .{ .source = .{ .texture = slot.blur_tex.? } }, .{ .id_extra = i + base_id + 40, .expand = .both, .corner_radius = dvui.Rect.all(8) });
         } else {
             _ = dvui.icon(@src(), "libglyph", heading_icon, .{}, .{ .id_extra = i + base_id + 40, .color_text = theme.colors.text_tertiary, .gravity_x = 0.5, .gravity_y = 0.5, .expand = .both });
         }
@@ -1102,6 +1144,44 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
         }
     }
     return true;
+}
+
+/// Make a deliberately tiny averaged copy and let linear scaling soften it.
+/// This obscures identifying cover detail without retaining a second full-size
+/// CPU image or doing per-frame filtering.
+fn uploadPrivacyBlur(slot: *LibSlot) void {
+    if (slot.blur_tex != null or slot.pixels == null or slot.w == 0 or slot.h == 0) return;
+    const source = slot.pixels.?;
+    const pixel_count: usize = @as(usize, slot.w) * @as(usize, slot.h);
+    if (source.len != pixel_count * 4) return;
+
+    const blur_w: usize = 8;
+    const blur_h: usize = 12;
+    var blurred: [blur_w * blur_h]dvui.Color.PMA = undefined;
+    for (0..blur_h) |y| {
+        const y0 = y * @as(usize, slot.h) / blur_h;
+        const y1 = @max(y0 + 1, (y + 1) * @as(usize, slot.h) / blur_h);
+        for (0..blur_w) |x| {
+            const x0 = x * @as(usize, slot.w) / blur_w;
+            const x1 = @max(x0 + 1, (x + 1) * @as(usize, slot.w) / blur_w);
+            var sum = [4]u64{ 0, 0, 0, 0 };
+            var count: u64 = 0;
+            for (y0..@min(y1, slot.h)) |sy| {
+                for (x0..@min(x1, slot.w)) |sx| {
+                    const p = (sy * @as(usize, slot.w) + sx) * 4;
+                    inline for (0..4) |channel| sum[channel] += source[p + channel];
+                    count += 1;
+                }
+            }
+            blurred[y * blur_w + x] = .{
+                .r = @intCast(sum[0] / count),
+                .g = @intCast(sum[1] / count),
+                .b = @intCast(sum[2] / count),
+                .a = @intCast(sum[3] / count),
+            };
+        }
+    }
+    slot.blur_tex = dvui.textureCreate(&blurred, blur_w, blur_h, .linear, .rgba_32) catch null;
 }
 
 fn sectionHeader(title: []const u8, icon: []const u8, view: state.TmdbView, id: usize) void {
