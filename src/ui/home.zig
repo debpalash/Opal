@@ -213,18 +213,18 @@ fn renderComingUpRail(card_w: f32) bool {
     {
         var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .padding = .{ .x = theme.spacing.xs, .y = 2, .w = theme.spacing.xs, .h = 2 },
+            .padding = .{ .x = theme.spacing.xs, .y = theme.spacing.sm, .w = theme.spacing.xs, .h = theme.spacing.xs },
         });
         defer hdr.deinit();
         dvui.icon(@src(), "comingup", icons.tvg.lucide.@"calendar-clock", .{}, .{
             .color_text = theme.colors.accent,
-            .min_size_content = theme.iconSize(.sm),
+            .min_size_content = theme.iconSize(.md),
             .gravity_y = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
         _ = dvui.label(@src(), "Coming up", .{}, .{
             .color_text = theme.colors.text_primary,
-            .font = dvui.themeGet().font_heading,
+            .font = dvui.themeGet().font_heading.withSize(17),
             .gravity_y = 0.5,
         });
     }
@@ -260,7 +260,14 @@ fn renderComingUpRail(card_w: f32) bool {
             .id_extra = i + 47000,
             .min_size_content = .{ .w = card_w, .h = poster_h + STRIP_CHROME },
             .max_size_content = .{ .w = card_w, .h = poster_h + STRIP_CHROME },
-            .margin = dvui.Rect.all(4),
+            .background = true,
+            .color_fill = transparent,
+            .color_fill_hover = theme.colors.bg_surface,
+            .color_border = theme.colors.border_subtle,
+            .border = dvui.Rect.all(1),
+            .corner_radius = dvui.Rect.all(theme.radius.lg),
+            .padding = dvui.Rect.all(5),
+            .margin = dvui.Rect.all(6),
         });
         defer card.deinit();
 
@@ -307,6 +314,8 @@ fn renderComingUpRail(card_w: f32) bool {
                         poster.fetchAsync(url, &it.poster_pixels, &it.poster_w, &it.poster_h, &it.poster_fetching);
                     if (it.poster_fetching) it.poster_attempted = true;
                 }
+                if (!it.poster_failed and it.poster_path_len > 0)
+                    components.coverSkeleton(@src(), i + 47200, 8);
             }
             bw.deinit();
         }
@@ -371,7 +380,7 @@ fn renderHero() void {
 
     _ = dvui.label(@src(), "Home", .{}, .{
         .color_text = theme.colors.text_primary,
-        .font = dvui.themeGet().font_title.withSize(if (tall) 28 else if (compact) 21 else 24),
+        .font = dvui.themeGet().font_title.withSize(if (tall) 30 else if (compact) 23 else 27),
         .gravity_y = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
     });
@@ -386,11 +395,15 @@ fn renderHero() void {
     spacer.deinit();
 
     const clock = localClock();
-    var greeting_buf: [48]u8 = undefined;
-    const greeting = std.fmt.bufPrint(&greeting_buf, "{s}  ·  {s}", .{ clock.greeting, clock.time }) catch clock.time;
-    _ = dvui.label(@src(), "{s}", .{greeting}, .{
+    _ = dvui.label(@src(), "{s}", .{clock.greeting}, .{
         .color_text = theme.colors.text_secondary,
         .font = dvui.themeGet().font_body.withSize(if (compact) theme.font_size.small else theme.font_size.body),
+        .gravity_y = 0.5,
+        .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+    });
+    _ = dvui.label(@src(), "{s}", .{clock.time}, .{
+        .color_text = theme.colors.accent,
+        .font = dvui.themeGet().font_heading.withSize(if (compact) theme.font_size.small else 12),
         .gravity_y = 0.5,
     });
     // Wake an otherwise idle window so the minute remains current.
@@ -408,6 +421,7 @@ fn heroAction(label: []const u8, id: usize) bool {
         .color_fill = transparent,
         .color_fill_hover = theme.colors.bg_hover,
         .color_text = theme.colors.text_secondary,
+        .font = dvui.themeGet().font_heading.withSize(12),
         .border = dvui.Rect.all(0),
         .corner_radius = dvui.Rect.all(theme.radius.sm),
         .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
@@ -953,20 +967,20 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
         var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = base_id,
             .expand = .horizontal,
-            .padding = .{ .x = theme.spacing.xs, .y = 2, .w = theme.spacing.xs, .h = 2 },
+            .padding = .{ .x = theme.spacing.xs, .y = theme.spacing.sm, .w = theme.spacing.xs, .h = theme.spacing.xs },
         });
         defer hdr.deinit();
         dvui.icon(@src(), heading, heading_icon, .{}, .{
             .id_extra = base_id,
             .color_text = theme.colors.accent,
-            .min_size_content = theme.iconSize(.sm),
+            .min_size_content = theme.iconSize(.md),
             .gravity_y = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
         _ = dvui.label(@src(), "{s}", .{heading}, .{
             .id_extra = base_id,
             .color_text = theme.colors.text_primary,
-            .font = dvui.themeGet().font_heading,
+            .font = dvui.themeGet().font_heading.withSize(17),
             .gravity_y = 0.5,
         });
         if (hidden_count > 0) {
@@ -1026,7 +1040,14 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
             .id_extra = i + base_id + 10,
             .min_size_content = .{ .w = card_w, .h = poster_h + card_chrome },
             .max_size_content = .{ .w = card_w, .h = poster_h + card_chrome },
-            .margin = dvui.Rect.all(4),
+            .background = true,
+            .color_fill = transparent,
+            .color_fill_hover = theme.colors.bg_surface,
+            .color_border = theme.colors.border_subtle,
+            .border = dvui.Rect.all(1),
+            .corner_radius = dvui.Rect.all(theme.radius.lg),
+            .padding = dvui.Rect.all(5),
+            .margin = dvui.Rect.all(6),
         });
         defer card.deinit();
         const hovered = card.data().borderRectScale().r.contains(dvui.currentWindow().mouse_pt);
@@ -1055,7 +1076,7 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
             _ = dvui.label(@src(), "{s}", .{if (revealed) kind_label else "Private"}, .{
                 .id_extra = i + base_id + 21,
                 .color_text = if (item.home_pinned) theme.colors.accent else theme.colors.text_tertiary,
-                .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
+                .font = dvui.themeGet().font_heading.withSize(theme.font_size.small),
                 .gravity_y = 0.5,
             });
             var spacer = dvui.box(@src(), .{}, .{ .id_extra = i + base_id + 22, .expand = .horizontal });
@@ -1078,7 +1099,7 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
             .id_extra = i + base_id + 30,
             .background = true,
             .color_fill = theme.colors.bg_elevated,
-            .corner_radius = dvui.Rect.all(8),
+            .corner_radius = dvui.Rect.all(theme.radius.lg),
             .min_size_content = .{ .w = card_w, .h = poster_h },
             .max_size_content = .{ .w = card_w, .h = poster_h },
         });
@@ -1104,11 +1125,13 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
         }
         if (revealed and slot.tex != null) {
             const tex = &slot.tex.?;
-            _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{ .id_extra = i + base_id + 40, .expand = .both, .corner_radius = dvui.Rect.all(8) });
+            _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{ .id_extra = i + base_id + 40, .expand = .both, .corner_radius = dvui.Rect.all(theme.radius.lg) });
         } else if (!revealed and slot.blur_tex != null) {
-            _ = dvui.image(@src(), .{ .source = .{ .texture = slot.blur_tex.? } }, .{ .id_extra = i + base_id + 40, .expand = .both, .corner_radius = dvui.Rect.all(8) });
+            _ = dvui.image(@src(), .{ .source = .{ .texture = slot.blur_tex.? } }, .{ .id_extra = i + base_id + 40, .expand = .both, .corner_radius = dvui.Rect.all(theme.radius.lg) });
+        } else if (!revealed) {
+            renderPrivateCoverPlaceholder(i + base_id + 40, heading_icon);
         } else {
-            _ = dvui.icon(@src(), "libglyph", heading_icon, .{}, .{ .id_extra = i + base_id + 40, .color_text = theme.colors.text_tertiary, .gravity_x = 0.5, .gravity_y = 0.5, .expand = .both });
+            renderPrivateCoverPlaceholder(i + base_id + 40, heading_icon);
         }
         const clicked = bw.clicked();
         bw.drawFocus();
@@ -1116,14 +1139,19 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
         if (clicked) openLibItem(item);
 
         var t_safe: [200]u8 = undefined;
-        const private_title = "Hover to reveal";
         const visible_title = @import("../core/text.zig").safeUtf8Buf(item.title[0..@min(item.title_len, item.title.len)], &t_safe);
-        _ = dvui.label(@src(), "{s}", .{if (revealed) visible_title else private_title}, .{
-            .id_extra = i + base_id + 50,
-            .color_text = theme.colors.text_secondary,
-            .min_size_content = .{ .w = card_w, .h = 0 },
-            .max_size_content = .{ .w = card_w, .h = 18 },
-        });
+        if (revealed) {
+            _ = dvui.label(@src(), "{s}", .{visible_title}, .{
+                .id_extra = i + base_id + 50,
+                .color_text = theme.colors.text_primary,
+                .font = dvui.themeGet().font_heading.withSize(theme.font_size.body),
+                .min_size_content = .{ .w = card_w, .h = 18 },
+                .max_size_content = .{ .w = card_w, .h = 18 },
+                .padding = .{ .x = 1, .y = 4, .w = 1, .h = 0 },
+            });
+        } else {
+            renderPrivateTitle(i + base_id + 50, card_w);
+        }
         if (item.percent > 0) {
             var progress = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .id_extra = i + base_id + 60,
@@ -1144,6 +1172,38 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
         }
     }
     return true;
+}
+
+fn renderPrivateCoverPlaceholder(id: usize, glyph: []const u8) void {
+    var backdrop = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .id_extra = id,
+        .expand = .both,
+        .background = true,
+        .color_fill = theme.colors.bg_surface,
+        .corner_radius = dvui.Rect.all(theme.radius.lg),
+    });
+    defer backdrop.deinit();
+    _ = dvui.icon(@src(), "private-cover", glyph, .{}, .{
+        .id_extra = id,
+        .color_text = theme.colors.accent_dim,
+        .min_size_content = theme.iconSize(.xl),
+        .max_size_content = dvui.Options.MaxSize.size(theme.iconSize(.xl)),
+        .gravity_x = 0.5,
+        .gravity_y = 0.5,
+    });
+}
+
+fn renderPrivateTitle(id: usize, card_w: f32) void {
+    var line = dvui.box(@src(), .{}, .{
+        .id_extra = id,
+        .background = true,
+        .color_fill = theme.colors.bg_hover,
+        .corner_radius = dvui.Rect.all(theme.radius.pill),
+        .min_size_content = .{ .w = card_w * 0.64, .h = 8 },
+        .max_size_content = .{ .w = card_w * 0.64, .h = 8 },
+        .margin = .{ .x = 1, .y = 8, .w = 0, .h = 2 },
+    });
+    line.deinit();
 }
 
 /// Make a deliberately tiny averaged copy and let linear scaling soften it.

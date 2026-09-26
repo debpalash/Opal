@@ -504,13 +504,16 @@ fn renderCard(item: *state.DramaResult, idx: usize) void {
             });
         } else {
             ensurePoster(item);
-            dvui.icon(@src(), "", icons.tvg.lucide.clapperboard, .{}, .{
-                .id_extra = idx + 150,
-                .gravity_x = 0.5,
-                .gravity_y = 0.5,
-                .color_text = theme.colors.text_tertiary,
-                .expand = .both,
-            });
+            if (!item.poster_failed and item.poster_path_len > 0)
+                components.coverSkeleton(@src(), idx + 150, theme.radius.md)
+            else
+                dvui.icon(@src(), "", icons.tvg.lucide.clapperboard, .{}, .{
+                    .id_extra = idx + 150,
+                    .gravity_x = 0.5,
+                    .gravity_y = 0.5,
+                    .color_text = theme.colors.text_tertiary,
+                    .expand = .both,
+                });
         }
         const clicked = bw.clicked();
         bw.drawFocus();

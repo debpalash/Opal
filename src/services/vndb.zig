@@ -67,6 +67,8 @@ const CoverSlot = struct {
     w: u32 = 0,
     h: u32 = 0,
     fetching: bool = false,
+    attempted: bool = false,
+    failed: bool = false,
     url_hash: u64 = 0,
 };
 var cover_slots: [180]CoverSlot = [_]CoverSlot{.{}} ** 180;
@@ -474,11 +476,16 @@ fn renderCover(i: usize, v: *const pure.Vn) void {
             poster.deinitPoster(&slot.pixels, &slot.tex);
             slot.w = 0;
             slot.h = 0;
+            slot.attempted = false;
+            slot.failed = false;
             slot.url_hash = h;
         }
         _ = poster.uploadIfReady(&slot.pixels, slot.w, slot.h, &slot.tex);
-        if (slot.tex == null and !slot.fetching and slot.pixels == null)
+        if (slot.fetching) slot.attempted = true else if (slot.attempted and slot.pixels == null and slot.tex == null) slot.failed = true;
+        if (!slot.failed and slot.tex == null and !slot.fetching and slot.pixels == null) {
             poster.fetchAsync(url, &slot.pixels, &slot.w, &slot.h, &slot.fetching);
+            if (slot.fetching) slot.attempted = true;
+        }
     }
 
     if (slot.tex) |*tex| {
@@ -487,6 +494,8 @@ fn renderCover(i: usize, v: *const pure.Vn) void {
             .expand = .both,
             .corner_radius = dvui.Rect.all(8),
         });
+    } else if (url.len > 0 and !slot.failed) {
+        components.coverSkeleton(@src(), i + 1000, 8);
     } else {
         _ = dvui.icon(@src(), "", icons.tvg.lucide.@"gamepad-2", .{}, .{
             .id_extra = i + 1000,

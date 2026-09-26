@@ -15,6 +15,8 @@ const PosterSlot = struct {
     w: u32 = 0,
     h: u32 = 0,
     fetching: bool = false,
+    attempted: bool = false,
+    failed: bool = false,
     id_hash: u64 = 0,
 };
 var poster_slots: [336]PosterSlot = [_]PosterSlot{.{}} ** 336;
@@ -575,13 +577,17 @@ fn updatePoster(slot_idx: usize, item: *const jf.PresentationItem) *PosterSlot {
         poster_util.deinitPoster(&slot.pixels, &slot.tex);
         slot.w = 0;
         slot.h = 0;
+        slot.attempted = false;
+        slot.failed = false;
         slot.id_hash = hash;
     }
     _ = poster_util.uploadIfReady(&slot.pixels, slot.w, slot.h, &slot.tex);
-    if (item.has_image and slot.tex == null and slot.pixels == null and !slot.fetching) {
+    if (slot.fetching) slot.attempted = true else if (slot.attempted and slot.pixels == null and slot.tex == null) slot.failed = true;
+    if (item.has_image and !slot.failed and slot.tex == null and slot.pixels == null and !slot.fetching) {
         var url_buf: [512]u8 = undefined;
         if (jf.primaryImageUrl(id, &url_buf)) |url| {
             poster_util.fetchAsync(url, &slot.pixels, &slot.w, &slot.h, &slot.fetching);
+            if (slot.fetching) slot.attempted = true;
         }
     }
     return slot;
@@ -627,16 +633,15 @@ fn renderPosterCard(item: *const jf.PresentationItem, slot_idx: usize, idx: usiz
                 .expand = .both,
             });
         } else {
-            // Play button as placeholder
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
+            if (item.has_image and !slot.failed)
+                components.coverSkeleton(@src(), idx + 70, theme.radius.md)
+            else if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
                 .id_extra = idx + 60,
                 .gravity_x = 0.5,
                 .gravity_y = 0.5,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                 .color_text = theme.colors.accent,
-            })) {
-                activateItem(item);
-            }
+            })) activateItem(item);
         }
 
         img_box.deinit();

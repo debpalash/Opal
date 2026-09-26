@@ -619,6 +619,7 @@ fn appInit(win: *dvui.Window) !void {
     // Also mirror into state.app so worker threads (mpv render-update
     // callback, etc.) can wake the UI via dvui.refresh from any thread.
     state.app.dvui_win = win;
+    @import("macos/app_menu.zig").init();
 
     // The fixed startup size exceeds the usable area on common
     // 1366×768 laptops. Resize before the first Windows frame is revealed so
@@ -1598,6 +1599,7 @@ fn appFrame() !dvui.App.Result {
     // onto the active player and refresh the system Now Playing card.
     // Compiles to a no-op on non-macOS.
     @import("player/media_remote.zig").frameTick();
+    @import("macos/app_menu.zig").frameTick();
 
     // Anime-Skip: auto-skip crowdsourced intro/recap/credits segments on the
     // active anime player (no-op unless anime-skip is enabled + markers loaded

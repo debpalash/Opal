@@ -3,6 +3,7 @@ const dvui = @import("dvui");
 const icons = @import("icons");
 const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
+const components = @import("../ui/components.zig");
 const logs = @import("../core/logs.zig");
 const player = @import("../player/player.zig");
 const paths = @import("../core/paths.zig");
@@ -56,6 +57,8 @@ pub const PluginResult = struct {
     poster_w: u32 = 0,
     poster_h: u32 = 0,
     poster_tex: ?dvui.Texture = null,
+    poster_attempted: bool = false,
+    poster_failed: bool = false,
     expanded: bool = false,
 };
 
@@ -1235,7 +1238,6 @@ fn renderSourcePlugins() void {
         }
     }
 
-
     if (source_count == 0) {
         const fetching = pr.status.load(.acquire) == .fetching;
         _ = dvui.label(@src(), "{s}", .{if (fetching) "Loading sources…" else "No sources available."}, .{ .color_text = theme.colors.text_tertiary, .margin = .{ .x = 0, .y = 6, .w = 0, .h = 0 } });
@@ -1792,7 +1794,12 @@ fn renderPluginCard(item: *PluginResult, idx: usize) void {
                     .corner_radius = dvui.Rect.all(6),
                 });
             } else {
-                if (!item.poster_fetching and item.poster_url_len > 0) fetchPoster(item);
+                if (item.poster_fetching) item.poster_attempted = true else if (item.poster_attempted and item.poster_pixels == null) item.poster_failed = true;
+                if (!item.poster_failed and !item.poster_fetching and item.poster_url_len > 0) {
+                    fetchPoster(item);
+                    if (item.poster_fetching) item.poster_attempted = true;
+                }
+                if (!item.poster_failed and item.poster_url_len > 0) components.coverSkeleton(@src(), idx + 150, 6);
             }
             _ = &poster;
         }

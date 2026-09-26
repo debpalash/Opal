@@ -2768,13 +2768,16 @@ pub fn renderContent() void {
                             },
                             .none => {},
                         }
-                        dvui.icon(@src(), "det-poster-ph", icons.tvg.lucide.film, .{}, .{
-                            .id_extra = 73,
-                            .gravity_x = 0.5,
-                            .gravity_y = 0.5,
-                            .color_text = dvui.Color{ .r = 90, .g = 100, .b = 130, .a = 120 },
-                            .expand = .both,
-                        });
+                        if (!item.poster_failed and item.poster_url_len > 0)
+                            components.coverSkeleton(@src(), 73, 6)
+                        else
+                            dvui.icon(@src(), "det-poster-ph", icons.tvg.lucide.film, .{}, .{
+                                .id_extra = 73,
+                                .gravity_x = 0.5,
+                                .gravity_y = 0.5,
+                                .color_text = dvui.Color{ .r = 90, .g = 100, .b = 130, .a = 120 },
+                                .expand = .both,
+                            });
                     }
                 }
 
@@ -3695,13 +3698,16 @@ fn renderContinueCard(item: *state.ContinueItem, idx: usize, card_w: f32) void {
                     },
                     .none => {},
                 }
-                dvui.icon(@src(), "", icons.tvg.lucide.play, .{}, .{
-                    .id_extra = idx + 30150,
-                    .gravity_x = 0.5,
-                    .gravity_y = 0.5,
-                    .color_text = dvui.Color{ .r = h1, .g = h2, .b = 180, .a = 80 },
-                    .expand = .both,
-                });
+                if (!item.poster_failed and item.poster_url_len > 0)
+                    components.coverSkeleton(@src(), idx + 30150, 6)
+                else
+                    dvui.icon(@src(), "", icons.tvg.lucide.play, .{}, .{
+                        .id_extra = idx + 30150,
+                        .gravity_x = 0.5,
+                        .gravity_y = 0.5,
+                        .color_text = dvui.Color{ .r = h1, .g = h2, .b = 180, .a = 80 },
+                        .expand = .both,
+                    });
             }
 
             // "E{last}/{total}" progress badge, bottom-left.
@@ -4216,13 +4222,16 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
                     },
                     .none => {},
                 }
-                dvui.icon(@src(), "", icons.tvg.lucide.film, .{}, .{
-                    .id_extra = idx + 150,
-                    .gravity_x = 0.5,
-                    .gravity_y = 0.5,
-                    .color_text = dvui.Color{ .r = h1, .g = h2, .b = 180, .a = 80 },
-                    .expand = .both,
-                });
+                if (!item.poster_failed and item.poster_url_len > 0)
+                    components.coverSkeleton(@src(), idx + 150, 6)
+                else
+                    dvui.icon(@src(), "", icons.tvg.lucide.film, .{}, .{
+                        .id_extra = idx + 150,
+                        .gravity_x = 0.5,
+                        .gravity_y = 0.5,
+                        .color_text = dvui.Color{ .r = h1, .g = h2, .b = 180, .a = 80 },
+                        .expand = .both,
+                    });
             }
 
             // Hover reveals richer metadata over a dimmed scrim.
