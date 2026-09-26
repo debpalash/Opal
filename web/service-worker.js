@@ -1,4 +1,4 @@
-const CACHE = 'opal-shell-v3';
+const CACHE = 'opal-shell-v4';
 const SHELL = [
   '/',
   '/index.html',
@@ -54,9 +54,9 @@ self.addEventListener('fetch', event => {
 
   if (!SHELL.includes(url.pathname)) return;
   event.respondWith(
-    caches.match(request).then(cached => cached || fetch(request).then(async response => {
+    fetch(request).then(async response => {
       if (response.ok) await (await caches.open(CACHE)).put(request, response.clone());
       return response;
-    }))
+    }).catch(() => caches.match(request))
   );
 });
