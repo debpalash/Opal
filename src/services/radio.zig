@@ -5,12 +5,12 @@
 //! thread-safety, and dvui rendering.
 //!
 //! Flow:
-//!   loadPopularOnce() → curl …/json/stations/search?order=votes&reverse=true
+//!   loadPopularOnce() → reliable fetch …/json/stations/search?order=votes&reverse=true
 //!                     (the same host's keyless votes-descending window,
 //!                     answering with the same station objects) →
 //!                     pure.parseStations → results[]. Fires once per session
 //!                     so the page opens populated.
-//!   searchRadio(q)  → curl all.api.radio-browser.info/json/stations/search?name=…
+//!   searchRadio(q)  → reliable fetch all.api.radio-browser.info/json/stations/search?name=…
 //!                     → pure.parseStations → state.app.radio.results[]
 //!   playStation(i)  → browser.loadContentDirect(url_resolved | url) → mpv,
 //!                     then a best-effort click-count ping to /json/url/{uuid}.
@@ -26,7 +26,7 @@ const pure = @import("radio_pure.zig");
 /// App-wide stream-health probing (shared with Live TV) — the "radio" kind.
 const link_health = @import("link_health.zig");
 const RADIO_KIND = "radio";
-const io = @import("../core/io_global.zig");
+const reliable_fetch = @import("reliable_fetch.zig");
 const poster = @import("../core/poster.zig");
 const rate_limit = @import("../core/rate_limit.zig");
 const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
@@ -281,7 +281,7 @@ fn popularWorker(my_gen: u32) void {
     // as the search worker.
     rate_limit.acquire("radiobrowser", 1.0);
 
-    const body = curl(url, 512 * 1024) orelse {
+    const body = fetchBody(url, 512 * 1024) orelse {
         if (search_request.isCurrent(my_gen)) state.app.radio.fetch_error = true;
         return;
     };
@@ -355,7 +355,7 @@ fn searchWorker(job: SearchJob) void {
     // Shared public directory — be a polite citizen (≤ 1 req/sec).
     rate_limit.acquire("radiobrowser", 1.0);
 
-    const body = curl(url, 512 * 1024) orelse {
+    const body = fetchBody(url, 512 * 1024) orelse {
         if (search_request.isCurrent(my_gen)) state.app.radio.fetch_error = true;
         return;
     };
@@ -434,7 +434,7 @@ fn loadMoreWorker(job: SearchJob, offset: usize, popular: bool) void {
     // Best-effort: a failed append just leaves more_available as-is (retried on
     // the next near-bottom scroll) rather than surfacing the page-level
     // fetch_error banner over an already-populated grid.
-    const body = curl(url, 512 * 1024) orelse return;
+    const body = fetchBody(url, 512 * 1024) orelse return;
     defer alloc.free(body);
 
     if (!search_request.isCurrent(my_gen)) return; // superseded by a fresh search/popular reload
@@ -578,7 +578,7 @@ fn clickWorker(uuid_owned: []u8) void {
         "https://all.api.radio-browser.info/json/url/{s}",
         .{uuid_owned},
     ) catch return;
-    if (curl(url, 16 * 1024)) |body| alloc.free(body); // ignore contents
+    if (fetchBody(url, 16 * 1024)) |body| alloc.free(body); // ignore contents
 }
 
 // ══════════════════════════════════════════════════════════
@@ -608,32 +608,22 @@ fn percentEncode(src: []const u8, dst: []u8) []const u8 {
     return dst[0..out];
 }
 
-/// Fetch `url` with curl into a fresh heap buffer of `cap` bytes. Returns the
-/// filled slice (caller frees) or null on failure/empty. Large buffers stay off
-/// the worker stack (macOS 512KB limit).
-fn curl(url: []const u8, cap: usize) ?[]u8 {
-    const argv = [_][]const u8{ "curl", "-sL", "-A", agent, "--max-time", "15", url };
-    var child = io.Child.init(&argv, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    _ = child.spawn() catch return null;
-
+/// Fetch through the shared status-aware transport into a fresh heap buffer.
+/// Large buffers stay off the worker stack (macOS has a small thread stack).
+fn fetchBody(url: []const u8, cap: usize) ?[]u8 {
     const buf = alloc.alloc(u8, cap) catch {
-        _ = child.wait() catch {};
         return null;
     };
-    const n = if (child.stdout) |*so| io.readAll(so, buf) catch 0 else 0;
-    _ = child.wait() catch {};
-    if (n == 0) {
+    const body = reliable_fetch.fetch(url, buf, .{
+        .user_agent = agent,
+        .timeout_secs = 15,
+        .impersonate = false,
+    }) orelse {
         alloc.free(buf);
         return null;
-    }
+    };
 
-    // Shrink to what was actually read. The caller frees what we hand back, and
-    // the global DebugAllocator checks the free size against the allocation size
-    // — returning `buf[0..n]` out of a `cap`-sized allocation is an INVALID FREE
-    // and aborts the process (the podcasts twin of this helper did exactly that).
-    return alloc.realloc(buf, n) catch {
+    return alloc.realloc(buf, body.len) catch {
         alloc.free(buf);
         return null;
     };
