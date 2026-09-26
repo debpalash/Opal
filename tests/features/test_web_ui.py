@@ -502,6 +502,11 @@ def test_webui_password_reset_usable():
             and "ORDER BY id ASC LIMIT 1" in st,
         "username prefilled": "webui_user_seeded" in sg
             and "auth_store.firstUsername(" in sg,
+        "enter submits confirmation": "const enter_submitted = webuiAccountField(" in sg
+            and "button_submitted or enter_submitted" in sg,
+        "write is verified": "auth_store.setPassword(uid, pw) and auth_store.authenticate(uname, pw) == uid" in sg,
+        "result stays visible": "webui_account_status_len > 0" in sg
+            and "setWebUiAccountStatus(" in sg,
         # Creation only on a genuinely empty install, matching /api/auth/register.
         "create only on first run": "} else if (users == 0) {" in sg
             and "auth_store.createFirstAdmin(uname, pw)" in sg,
