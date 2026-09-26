@@ -1215,6 +1215,12 @@ def test_web_accessible_controls_and_zoom_reflow():
         "action reflow": ".result .actions{width:100%;margin-left:0" in css,
         "settings reflow": ".cfg-row input:not([type=checkbox]){width:auto;flex:1 1 220px}" in css,
         "bounded fields": "min-width:0;max-width:100%" in css,
+        "dynamic settings keep authored names": '<label class="cfg-row"><span>${esc(k.label)}</span>' in _src("web/js/integrations.js"),
+        "clickable cards have keyboard semantics": "function wireKeyboardClick(" in _src("web/js/core.js")
+            and "wireKeyboardClick(el, `Continue" in _src("web/js/playback.js")
+            and "wireKeyboardClick(c, `Open" in _src("web/js/catalog.js"),
+        "collapsible setup sections announce state": "head.setAttribute('aria-expanded'" in _src("web/js/integrations.js")
+            and "head.setAttribute('aria-controls'" in _src("web/js/integrations.js"),
     }
     missing = [name for name, ok in checks.items() if not ok]
     if missing:
