@@ -5,7 +5,9 @@
 
 const std = @import("std");
 const dvui = @import("dvui");
+const icons = @import("icons");
 const theme = @import("../ui/theme.zig");
+const components = @import("../ui/components.zig");
 const io = @import("../core/io_global.zig");
 const alloc = @import("../core/alloc.zig").allocator;
 const paths = @import("../core/paths.zig");
@@ -51,6 +53,8 @@ const Item = struct {
     overview_len: usize = 0,
     year: [8]u8 = std.mem.zeroes([8]u8),
     year_len: usize = 0,
+    thumb: [256]u8 = std.mem.zeroes([256]u8),
+    thumb_len: usize = 0,
     part: [256]u8 = std.mem.zeroes([256]u8), // /library/parts/.../file.ext
     part_len: usize = 0,
     fallback_part: [256]u8 = std.mem.zeroes([256]u8),
@@ -76,6 +80,10 @@ pub const SearchItem = plex_pure.SearchItem;
 pub var items: [300]Item = undefined;
 pub var item_count: usize = 0;
 pub var is_loading: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+const PLEX_CARD_TARGET_W: f32 = 150;
+const PLEX_CARD_GAP: f32 = 4;
+const PLEX_CARD_FOOTER_H: f32 = 76;
+var item_covers: [300]components.CoverSlot = [_]components.CoverSlot{.{}} ** 300;
 
 // ── Infinite-scroll pagination ──
 // Plex paginates a section's /all listing via X-Plex-Container-Start/Size query
@@ -609,6 +617,11 @@ fn fetchWindow(request: BrowseRequest, start: usize, gen: u64) void {
             @memcpy(it.overview[0..ol], overview[0..ol]);
             it.overview_len = ol;
         }
+        if (jstr(m, "thumb")) |thumb| {
+            const il = @min(thumb.len, it.thumb.len);
+            @memcpy(it.thumb[0..il], thumb[0..il]);
+            it.thumb_len = il;
+        }
         if (m.object.get("year")) |y| if (y == .integer) {
             const ys = std.fmt.bufPrint(&it.year, "{d}", .{y.integer}) catch "";
             it.year_len = ys.len;
@@ -1097,15 +1110,8 @@ pub fn renderContent() void {
     {
         var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .padding = .{ .x = 8, .y = 8, .w = 8, .h = 6 }, .background = true, .color_fill = theme.colors.bg_app });
         defer hdr.deinit();
-        if (nav_depth > 0 and dvui.button(@src(), "Back", .{}, .{
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_secondary,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 8, .y = 5, .w = 8, .h = 5 },
-            .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
-            .gravity_y = 0.5,
-        })) _ = browseBack();
-        _ = dvui.label(@src(), "Plex · {s}", .{server_name[0..server_name_len]}, .{ .color_text = theme.colors.accent, .gravity_y = 0.5 });
+        if (components.iconButtonEx(@src(), icons.tvg.lucide.@"arrow-left", "Back", false, nav_depth > 0)) _ = browseBack();
+        _ = dvui.label(@src(), "Plex · {s}", .{server_name[0..server_name_len]}, .{ .color_text = theme.colors.text_primary, .font = dvui.themeGet().font_heading, .gravity_y = 0.5 });
         if (nav_depth > 0) _ = dvui.label(@src(), "  /  {s}", .{nav_titles[nav_depth - 1][0..nav_title_lens[nav_depth - 1]]}, .{
             .color_text = theme.colors.text_secondary,
             .gravity_y = 0.5,
@@ -1114,7 +1120,7 @@ pub fn renderContent() void {
             var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
             sp.deinit();
         }
-        if (dvui.button(@src(), "Disconnect", .{}, .{ .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.text_secondary, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 8, .y = 5, .w = 8, .h = 5 }, .gravity_y = 0.5 })) {
+        if (components.iconButton(@src(), icons.tvg.lucide.@"log-out", "Disconnect Plex", false)) {
             disconnect();
             return;
         }
@@ -1125,14 +1131,7 @@ pub fn renderContent() void {
         for (0..section_count) |i| {
             const sec = &sections[i];
             const active = i == active_section;
-            if (dvui.button(@src(), sec.title[0..sec.title_len], .{}, .{
-                .id_extra = i + 90000,
-                .color_fill = if (active) theme.colors.accent else theme.colors.bg_elevated,
-                .color_text = if (active) dvui.Color.white else theme.colors.text_secondary,
-                .corner_radius = theme.dims.rad_sm,
-                .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
-                .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
-            })) {
+            if (components.filterChip(@src(), sec.title[0..sec.title_len], icons.tvg.lucide.library, active, i + 90000)) {
                 fetchItems(i);
             }
         }
@@ -1140,57 +1139,40 @@ pub fn renderContent() void {
 
     var sc = dvui.scrollArea(@src(), .{}, .{ .expand = .both });
     defer sc.deinit();
-    for (0..item_count) |i| {
-        const it = &items[i];
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i + 91000, .expand = .horizontal, .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 } });
+
+    const rect_w = sc.data().rect.w;
+    const avail_w: f32 = @max(240, (if (rect_w > 1) rect_w else 900) - 8);
+    const cols: usize = @max(1, @as(usize, @intFromFloat(avail_w / PLEX_CARD_TARGET_W)));
+    const cols_f: f32 = @floatFromInt(cols);
+    const card_w: f32 = @max(104, (avail_w - cols_f * 2 * PLEX_CARD_GAP) / cols_f);
+    const poster_h = card_w * 1.45;
+    const row_h = poster_h + PLEX_CARD_FOOTER_H + 2 * PLEX_CARD_GAP;
+    if (item_count == 0) {
+        if (is_loading.load(.acquire))
+            components.coverSkeletonGrid(@src(), 90000, cols, card_w, poster_h, PLEX_CARD_FOOTER_H, 3)
+        else
+            components.emptyState(@import("icons").tvg.lucide.library, "This library is empty", "Choose another Plex library.");
+        return;
+    }
+    const total_rows = (item_count + cols - 1) / cols;
+    const win = @import("tmdb_pure.zig").visibleRows(total_rows, row_h, sc.si.viewport.y, sc.si.viewport.h, 2);
+
+    if (win.first > 0) {
+        var sp = dvui.box(@src(), .{}, .{ .id_extra = 90998, .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(win.first)) } });
+        sp.deinit();
+    }
+    var r: usize = win.first;
+    while (r < win.last) : (r += 1) {
+        const base = r * cols;
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = base + 91000, .expand = .horizontal });
         defer row.deinit();
-        var tb: [180]u8 = undefined;
-        _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(it.title[0..it.title_len], &tb)}, .{ .id_extra = i + 91100, .color_text = theme.colors.text_primary, .gravity_y = 0.5 });
-        if (it.year_len > 0) _ = dvui.label(@src(), "  {s}", .{it.year[0..it.year_len]}, .{ .id_extra = i + 91200, .color_text = theme.colors.text_tertiary, .gravity_y = 0.5 });
-        {
-            var sp = dvui.box(@src(), .{}, .{ .id_extra = i + 91300, .expand = .horizontal });
-            sp.deinit();
-        }
-        if ((it.is_folder or it.part_len > 0) and dvui.button(@src(), if (it.is_folder) "Open" else if (it.view_offset_ms > 0 and it.view_count == 0) "Resume" else "Play", .{}, .{ .id_extra = i + 91400, .color_fill = theme.colors.accent, .color_text = dvui.Color.white, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 }, .gravity_y = 0.5 })) {
-            if (it.is_folder) {
-                _ = openChild(it.rating_key[0..it.rating_key_len]);
-            } else {
-                play(i);
-            }
-        }
-        if (!it.is_folder and it.rating_key_len > 0 and dvui.button(@src(), if (it.view_count > 0) "Watched" else "Mark watched", .{}, .{
-            .id_extra = i + 91500,
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = if (it.view_count > 0) theme.colors.accent else theme.colors.text_secondary,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
-            .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
-            .gravity_y = 0.5,
-        })) _ = setWatched(it.rating_key[0..it.rating_key_len], it.view_count == 0);
-        if (!it.is_folder and it.rating_key_len > 0 and dvui.button(@src(), if (it.is_favorite) "Favorited" else "Favorite", .{}, .{
-            .id_extra = i + 91550,
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = if (it.is_favorite) theme.colors.warning else theme.colors.text_secondary,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
-            .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
-            .gravity_y = 0.5,
-        })) _ = setFavorite(it.rating_key[0..it.rating_key_len], !it.is_favorite);
-        if (!it.is_folder and it.rating_key_len > 0) {
-            var rating_choice: usize = @intFromFloat(@round(std.math.clamp(it.user_rating, 0, 10) * 2));
-            if (dvui.dropdown(@src(), &RATING_LABELS, .{ .choice = &rating_choice }, .{}, .{
-                .id_extra = i + 91600,
-                .color_fill = theme.colors.bg_elevated,
-                .color_text = if (it.user_rating > 0) theme.colors.warning else theme.colors.text_secondary,
-                .corner_radius = theme.dims.rad_sm,
-                .padding = .{ .x = 7, .y = 4, .w = 7, .h = 4 },
-                .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
-                .gravity_y = 0.5,
-            })) {
-                const selected: f32 = @as(f32, @floatFromInt(rating_choice)) / 2.0;
-                if (@abs(selected - it.user_rating) >= 0.01) _ = setRating(it.rating_key[0..it.rating_key_len], selected);
-            }
-        }
+        var col: usize = 0;
+        while (col < cols and base + col < item_count) : (col += 1)
+            renderItemCard(base + col, card_w, poster_h);
+    }
+    if (win.last < total_rows) {
+        var sp = dvui.box(@src(), .{}, .{ .id_extra = 90999, .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(total_rows - win.last)) } });
+        sp.deinit();
     }
 
     // Infinite scroll: fetch + append the next Container-Start/Size window as
@@ -1213,6 +1195,89 @@ pub fn renderContent() void {
                 .margin = dvui.Rect.all(12),
             });
             state.wakeUi(); // wake until the worker's items land
+        }
+    }
+}
+
+fn activateItem(i: usize) void {
+    const it = &items[i];
+    if (it.is_folder)
+        _ = openChild(it.rating_key[0..it.rating_key_len])
+    else
+        play(i);
+}
+
+fn itemCoverUrl(it: *const Item, out: []u8) []const u8 {
+    if (it.thumb_len == 0 or server_uri_len == 0 or server_token_len == 0) return "";
+    const thumb = it.thumb[0..it.thumb_len];
+    if (std.mem.startsWith(u8, thumb, "http://") or std.mem.startsWith(u8, thumb, "https://"))
+        return std.fmt.bufPrint(out, "{s}{s}X-Plex-Token={s}", .{ thumb, if (std.mem.indexOfScalar(u8, thumb, '?') == null) "?" else "&", server_token[0..server_token_len] }) catch "";
+    return std.fmt.bufPrint(out, "{s}{s}?X-Plex-Token={s}", .{ server_uri[0..server_uri_len], thumb, server_token[0..server_token_len] }) catch "";
+}
+
+fn renderItemCard(i: usize, card_w: f32, poster_h: f32) void {
+    const it = &items[i];
+    const actionable = it.is_folder or it.part_len > 0;
+    var tb: [180]u8 = undefined;
+    const title = @import("../core/text.zig").safeUtf8Buf(it.title[0..it.title_len], &tb);
+    var card = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .id_extra = i + 92000,
+        .min_size_content = .{ .w = card_w, .h = poster_h + PLEX_CARD_FOOTER_H },
+        .max_size_content = .{ .w = card_w, .h = poster_h + PLEX_CARD_FOOTER_H },
+        .margin = dvui.Rect.all(PLEX_CARD_GAP),
+        .background = true,
+        .color_fill = theme.colors.bg_surface,
+        .color_fill_hover = theme.colors.bg_hover,
+        .corner_radius = dvui.Rect.all(theme.radius.md),
+    });
+    defer card.deinit();
+
+    var bw: dvui.ButtonWidget = undefined;
+    bw.init(@src(), .{}, .{
+        .id_extra = i + 92100,
+        .background = true,
+        .color_fill = theme.colors.bg_elevated,
+        .corner_radius = dvui.Rect.all(theme.radius.md),
+        .min_size_content = .{ .w = card_w, .h = poster_h },
+        .max_size_content = .{ .w = card_w, .h = poster_h },
+        .padding = dvui.Rect.all(0),
+    });
+    bw.processEvents();
+    bw.drawBackground();
+    var cover_buf: [1024]u8 = undefined;
+    components.coverArt(@src(), i + 92200, &item_covers[i], itemCoverUrl(it, &cover_buf), if (it.is_folder) icons.tvg.lucide.folder else if (actionable) icons.tvg.lucide.play else icons.tvg.lucide.image, theme.radius.md);
+    const clicked = bw.clicked();
+    bw.drawFocus();
+    bw.deinit();
+    if (clicked and actionable) activateItem(i);
+
+    _ = dvui.label(@src(), "{s}", .{title}, .{
+        .id_extra = i + 92300,
+        .color_text = theme.colors.text_primary,
+        .font = dvui.themeGet().font_heading.withSize(theme.font_size.small),
+        .min_size_content = .{ .w = card_w, .h = 22 },
+        .max_size_content = .{ .w = card_w, .h = 22 },
+        .padding = .{ .x = 5, .y = 5, .w = 5, .h = 0 },
+    });
+    var tools = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i + 92400, .expand = .horizontal, .padding = .{ .x = 3, .y = 0, .w = 3, .h = 3 } });
+    defer tools.deinit();
+    if (actionable and components.iconButton(@src(), if (it.is_folder) icons.tvg.lucide.@"folder-open" else icons.tvg.lucide.play, if (it.is_folder) "Open" else if (it.view_offset_ms > 0 and it.view_count == 0) "Resume" else "Play", true)) activateItem(i);
+    if (!it.is_folder and it.rating_key_len > 0) {
+        if (components.iconButton(@src(), icons.tvg.lucide.check, if (it.view_count > 0) "Mark unwatched" else "Mark watched", it.view_count > 0))
+            _ = setWatched(it.rating_key[0..it.rating_key_len], it.view_count == 0);
+        if (components.iconButton(@src(), icons.tvg.lucide.heart, if (it.is_favorite) "Remove favorite" else "Favorite", it.is_favorite))
+            _ = setFavorite(it.rating_key[0..it.rating_key_len], !it.is_favorite);
+        var rating_choice: usize = @intFromFloat(@round(std.math.clamp(it.user_rating, 0, 10) * 2));
+        if (dvui.dropdown(@src(), &RATING_LABELS, .{ .choice = &rating_choice }, .{}, .{
+            .id_extra = i + 92500,
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = if (it.user_rating > 0) theme.colors.warning else theme.colors.text_secondary,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 5, .y = 3, .w = 5, .h = 3 },
+            .gravity_y = 0.5,
+        })) {
+            const selected: f32 = @as(f32, @floatFromInt(rating_choice)) / 2.0;
+            if (@abs(selected - it.user_rating) >= 0.01) _ = setRating(it.rating_key[0..it.rating_key_len], selected);
         }
     }
 }

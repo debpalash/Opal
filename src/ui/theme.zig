@@ -254,6 +254,12 @@ pub fn playerGlass(alpha: u8) dvui.Color {
     return glass;
 }
 
+/// Neutral player ink stays readable over every video frame and does not pick
+/// up deliberately muted theme text colors.
+pub const player_text: dvui.Color = .{ .r = 247, .g = 244, .b = 239, .a = 255 };
+pub const player_text_muted: dvui.Color = .{ .r = 218, .g = 214, .b = 207, .a = 255 };
+pub const player_icon_outline: dvui.Color = .{ .r = 0, .g = 0, .b = 0, .a = 235 };
+
 /// Switch to a new theme preset at runtime
 pub fn setPreset(preset: ThemePreset) void {
     active_preset = preset;
