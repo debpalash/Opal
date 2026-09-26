@@ -22,7 +22,23 @@ const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
 
 const STRIP_MAX: usize = 24; // cap cards per strip (perf)
 const STRIP_CHROME: f32 = 88; // pct/type row + wrapped title under each poster
-const RAIL_EXTRA: f32 = STRIP_CHROME + 38; // strip chrome + section header
+const SCROLLBAR_HOLD_NS: i128 = 900 * std.time.ns_per_ms;
+
+// Scrollbars are useful feedback while content is moving, but permanent rails
+// waste space and visually split the shelves. Each scroll area owns a small
+// visibility slot; a DVUI timer wakes the UI once so the overlay can disappear
+// even when playback is paused and the app is otherwise idle.
+var scrollbar_visible_until: [16]i128 = @splat(0);
+
+fn scrollbarMode(slot: usize) dvui.ScrollInfo.ScrollBarMode {
+    return if (dvui.frameTimeNS() < scrollbar_visible_until[slot]) .auto_overlay else .hide;
+}
+
+fn noteUserScroll(slot: usize, delta: dvui.Point, id: dvui.Id) void {
+    if (@abs(delta.x) < 0.01 and @abs(delta.y) < 0.01) return;
+    scrollbar_visible_until[slot] = dvui.frameTimeNS() + SCROLLBAR_HOLD_NS;
+    dvui.timer(id, 900_000);
+}
 
 // ── Chat-mode page state ──
 // Own the transcript's ScrollInfo so new messages can pin the view to the
@@ -61,34 +77,27 @@ pub fn render() void {
         return;
     }
 
-    var scroll = dvui.scrollArea(@src(), .{}, .{
+    var user_scroll: dvui.Point = .{};
+    var scroll = dvui.scrollArea(@src(), .{
+        .vertical_bar = scrollbarMode(0),
+        .user_scroll = &user_scroll,
+    }, .{
         .expand = .both,
         .background = false,
     });
-    defer scroll.deinit();
+    const scroll_id = scroll.data().id;
+    defer {
+        scroll.deinit();
+        noteUserScroll(0, user_scroll, scroll_id);
+    }
 
+    const live_w = @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().w, state.app.ui_scale);
+    const page_pad: f32 = if (live_w < 600) 10 else if (live_w < 1100) 20 else 34;
     var col = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
-        .padding = .{ .x = theme.spacing.sm, .y = 0, .w = theme.spacing.sm, .h = theme.spacing.lg },
+        .padding = .{ .x = page_pad, .y = 0, .w = page_pad, .h = theme.spacing.xl },
     });
     defer col.deinit();
-
-    // Everything lives in ONE centered reading column — the console layout
-    // (like the chat transcript), not a full-width dashboard. dvui expand
-    // ignores max_size_content, so compute a fixed width. Centering caveat:
-    // a horizontal box packs children left along its main axis (gravity there
-    // is ignored) — cross-axis gravity in a VERTICAL parent is what centers.
-    var wrap = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
-    defer wrap.deinit();
-    const avail = wrap.data().rect.w;
-    const live_w = @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().w, state.app.ui_scale);
-    const colw: f32 = @max(1, @min(if (avail > 1) @min(920.0, avail) else 920.0, live_w - 32));
-    var hub = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .gravity_x = 0.5,
-        .min_size_content = .{ .w = colw, .h = 0 },
-        .max_size_content = dvui.Options.MaxSize.width(colw),
-    });
-    defer hub.deinit();
 
     // Generate taste recommendations once per session (DB + vec0 KNN). Wait
     // for the async history load — generating on the very first frame raced
@@ -120,65 +129,39 @@ pub fn render() void {
     const watchlist = &state.app.tmdb.watchlist;
     const favorites = &state.app.tmdb.favorites;
 
-    // ── App-shell fit ──
-    // Home reads as ONE screen, not a scrolling feed: measure everything
-    // above the rails (previous frame's min size — the shell.zig MeasuredH
-    // pattern; estimating heights drifted ~120px and clipped rail titles),
-    // then render rails in priority order while they fit the leftover.
-    // "See all" covers the rest; the scrollArea stays as a safety net.
-    var top = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
-    const top_h: f32 = if (dvui.minSizeGet(top.data().id)) |ms| ms.h else 430;
-
     renderHero();
-    // Playback rows follow the primary discovery actions.
     const has_tv_episodes = @import("../services/tv_library.zig").renderHomeEpisodes();
     renderRecentlyPlayed();
-    top.deinit();
 
-    const win_h = dvui.windowRect().h;
-    const tall = win_h >= 980;
-    var budget: f32 = win_h - 52 - top_h; // 52 ≈ app header bar + page chrome
-    // Card sizing: when the leftover fits only one rail, let the posters grow
-    // into it (down to 84px before a rail is dropped — a small rail beats an
-    // empty shell). With room for several rails, use the preferred size.
-    const pref_w: f32 = if (tall) 132 else 104;
-    const two_rails: f32 = 2 * (84.0 * 1.5 + RAIL_EXTRA);
-    const fit_w: f32 = (budget - RAIL_EXTRA) / 1.5; // invert rail_h(card_w)
-    const card_w: f32 = if (budget < two_rails)
-        std.math.clamp(fit_w, 84.0, 132.0)
+    // Cinema-shelf sizing: broad screens show larger artwork and more cards;
+    // compact screens keep three useful cards in view. The page scroll owns
+    // vertical overflow, so every populated shelf remains available.
+    const card_w: f32 = if (live_w < 600)
+        std.math.clamp((live_w - page_pad * 2) / 3.25, 92.0, 116.0)
     else
-        std.math.clamp(@min(pref_w, fit_w), 84.0, 132.0);
-    const rail_h: f32 = card_w * 1.5 + RAIL_EXTRA;
-    const foryou_h: f32 = 132 + 24 + 38; // discovery_ui CARD_H + strip + header
+        std.math.clamp(live_w / 11.0, 118.0, 176.0);
 
     // One cross-media Continue rail: films, files, podcasts, audiobooks,
     // comics, novels and anime all enter through the same read model.
-    if (budget >= rail_h and renderLibraryContinueRail(card_w)) budget -= rail_h;
-    if (watching.items.len > 0 and budget >= rail_h) {
+    _ = renderLibraryContinueRail(card_w);
+    if (watching.items.len > 0) {
         posterStrip("Continue Watching", icons.tvg.lucide.play, watching, .Watching, 1, card_w);
-        budget -= rail_h;
     }
-    // Trending is the primary discovery content — always render it (the page is
-    // a scrollArea, so it just scrolls into view). Budget-gating it meant a tall
-    // hero / short window hid all TV/movie content, reading as "nothing loaded".
-    if (renderTrendingRail(card_w)) budget -= rail_h;
+    _ = renderTrendingRail(card_w);
     // "Coming up" — poster cards (like Trending) with next-episode countdowns
     // + EZTV availability for the shows the user watches.
-    if (budget >= rail_h and renderComingUpRail(card_w)) budget -= rail_h;
-    if (state.app.taste_enabled and budget >= foryou_h and @import("../services/recommendations.zig").rec_count > 0) {
+    _ = renderComingUpRail(card_w);
+    if (state.app.taste_enabled and @import("../services/recommendations.zig").rec_count > 0) {
         @import("discovery_ui.zig").renderForYouRail();
-        budget -= foryou_h;
     }
-    if (watchlist.items.len > 0 and budget >= rail_h) {
+    if (watchlist.items.len > 0) {
         posterStrip("Watchlist", icons.tvg.lucide.bookmark, watchlist, .Watchlist, 2, card_w);
-        budget -= rail_h;
     }
-    if (favorites.items.len > 0 and budget >= rail_h) {
+    if (favorites.items.len > 0) {
         posterStrip("Favorites", icons.tvg.lucide.star, favorites, .Favorites, 3, card_w);
-        budget -= rail_h;
     }
     // Cross-vertical favorites (IPTV/music/…) from the unified library_items.
-    if (budget >= rail_h and renderLibraryRail(card_w)) budget -= rail_h;
+    _ = renderLibraryRail(card_w);
 
     // No saved media or history and no TMDB rail to populate the hub yet.
     const everything_empty = watching.items.len == 0 and watchlist.items.len == 0 and
@@ -243,14 +226,24 @@ fn renderComingUpRail(card_w: f32) bool {
         });
     }
 
-    var strip = dvui.scrollArea(@src(), .{ .horizontal = .auto, .vertical = .none, .horizontal_bar = .hide }, .{
+    var user_scroll: dvui.Point = .{};
+    var strip = dvui.scrollArea(@src(), .{
+        .horizontal = .auto,
+        .vertical = .none,
+        .horizontal_bar = scrollbarMode(1),
+        .user_scroll = &user_scroll,
+    }, .{
         .expand = .horizontal,
         .background = false,
         .min_size_content = .{ .w = 10, .h = poster_h + STRIP_CHROME },
         .max_size_content = .{ .w = std.math.floatMax(f32), .h = poster_h + STRIP_CHROME },
         .padding = .{ .x = theme.spacing.xs, .y = 0, .w = theme.spacing.xs, .h = theme.spacing.xs },
     });
-    defer strip.deinit();
+    const scroll_id = strip.data().id;
+    defer {
+        strip.deinit();
+        noteUserScroll(1, user_scroll, scroll_id);
+    }
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{});
     defer row.deinit();
 
@@ -353,35 +346,30 @@ fn renderHero() void {
     const win_w = @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().w, state.app.ui_scale);
     const compact = win_w < 650;
 
-    // App-shell hero: compact enough that the rails below stay on-screen.
-    // windowRect() is logical units (same space as layout).
+    // Wide, left-anchored opening like a streaming home screen. The shelves
+    // start close below it so content remains visible at every window height.
     const win_h = dvui.windowRect().h;
     const tall = win_h >= 980 and !compact;
-    // Breathing room below the top nav before the greeting. Generous (the user
-    // wants clear separation) but capped so the Trending rail below stays near
-    // the fold rather than being pushed off-screen.
-    const top_pad = if (compact) theme.spacing.sm else std.math.clamp(win_h * 0.04, 16.0, 48.0);
+    const top_pad = if (compact) theme.spacing.md else std.math.clamp(win_h * 0.035, 18.0, 42.0);
 
     var hero = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
-        .padding = .{ .x = theme.spacing.lg, .y = top_pad, .w = theme.spacing.lg, .h = 0 },
+        .padding = .{ .x = theme.spacing.xs, .y = top_pad, .w = theme.spacing.xs, .h = theme.spacing.md },
     });
     defer hero.deinit();
 
     const hour = localHour();
 
-    // Headline — big when there's room, ramp-display when the shell is tight.
+    // Headline stays left aligned with every shelf below it.
     _ = dvui.label(@src(), "{s}", .{if (compact) "What’s next?" else home_pure.headlineForHour(hour)}, .{
         .color_text = theme.colors.text_primary,
-        .font = dvui.themeGet().font_title.withSize(if (tall) 26 else 21),
-        .gravity_x = 0.5,
-        .margin = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
+        .font = dvui.themeGet().font_title.withSize(if (tall) 32 else if (compact) 22 else 28),
+        .margin = .{ .x = 0, .y = 2, .w = 0, .h = theme.spacing.xs },
     });
-    if (tall) {
+    if (!compact) {
         _ = dvui.label(@src(), "Ask a question or paste a link in the omnibox.", .{}, .{
             .color_text = theme.colors.text_tertiary,
-            .gravity_x = 0.5,
-            .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = theme.spacing.sm },
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm },
         });
     }
 
@@ -391,9 +379,9 @@ fn renderHero() void {
 
     // Keep both routes visible with or without a TMDB key or recent files.
     // Flexbox wraps the buttons on narrow windows.
-    var actions = dvui.flexbox(@src(), .{ .justify_content = .center }, .{
+    var actions = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
         .expand = .horizontal,
-        .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 },
+        .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 0 },
     });
     defer actions.deinit();
 
@@ -835,7 +823,20 @@ fn posterStrip(title: []const u8, icon: []const u8, items: *std.ArrayListUnmanag
     sectionHeader(title, icon, view, id);
 
     const poster_h = card_w * 1.5;
-    var scroll = dvui.scrollArea(@src(), .{ .horizontal = .auto, .vertical = .none }, .{
+    const scrollbar_slot: usize = switch (view) {
+        .Watching => 2,
+        .Trending => 3,
+        .Watchlist => 4,
+        .Favorites => 5,
+        else => 3,
+    };
+    var user_scroll: dvui.Point = .{};
+    var scroll = dvui.scrollArea(@src(), .{
+        .horizontal = .auto,
+        .vertical = .none,
+        .horizontal_bar = scrollbarMode(scrollbar_slot),
+        .user_scroll = &user_scroll,
+    }, .{
         .id_extra = id,
         .expand = .horizontal,
         // Transparent — dvui's default scroll fill is light; show the dark page.
@@ -844,7 +845,11 @@ fn posterStrip(title: []const u8, icon: []const u8, items: *std.ArrayListUnmanag
         .max_size_content = .{ .w = std.math.floatMax(f32), .h = poster_h + STRIP_CHROME },
         .padding = .{ .x = theme.spacing.xs, .y = 0, .w = theme.spacing.xs, .h = theme.spacing.xs },
     });
-    defer scroll.deinit();
+    const scroll_id = scroll.data().id;
+    defer {
+        scroll.deinit();
+        noteUserScroll(scrollbar_slot, user_scroll, scroll_id);
+    }
 
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = id });
     defer row.deinit();
@@ -938,7 +943,14 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
     }
 
     const poster_h = card_w * 1.5;
-    var scroll = dvui.scrollArea(@src(), .{ .horizontal = .auto, .vertical = .none }, .{
+    const scrollbar_slot: usize = if (base_id == 7600) 6 else 7;
+    var user_scroll: dvui.Point = .{};
+    var scroll = dvui.scrollArea(@src(), .{
+        .horizontal = .auto,
+        .vertical = .none,
+        .horizontal_bar = scrollbarMode(scrollbar_slot),
+        .user_scroll = &user_scroll,
+    }, .{
         .id_extra = base_id + 1,
         .expand = .horizontal,
         .background = false,
@@ -946,7 +958,11 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
         .max_size_content = .{ .w = std.math.floatMax(f32), .h = poster_h + STRIP_CHROME },
         .padding = .{ .x = theme.spacing.xs, .y = 0, .w = theme.spacing.xs, .h = theme.spacing.xs },
     });
-    defer scroll.deinit();
+    const scroll_id = scroll.data().id;
+    defer {
+        scroll.deinit();
+        noteUserScroll(scrollbar_slot, user_scroll, scroll_id);
+    }
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = base_id + 1 });
     defer row.deinit();
 
@@ -1131,14 +1147,24 @@ fn renderRecentlyPlayed() void {
         });
     }
 
-    var scroll = dvui.scrollArea(@src(), .{ .horizontal = .auto, .vertical = .none }, .{
+    var user_scroll: dvui.Point = .{};
+    var scroll = dvui.scrollArea(@src(), .{
+        .horizontal = .auto,
+        .vertical = .none,
+        .horizontal_bar = scrollbarMode(8),
+        .user_scroll = &user_scroll,
+    }, .{
         .expand = .horizontal,
         .background = false,
         .min_size_content = .{ .w = 10, .h = 78 },
         .max_size_content = .{ .w = std.math.floatMax(f32), .h = 78 },
         .padding = .{ .x = theme.spacing.xs, .y = 0, .w = theme.spacing.xs, .h = theme.spacing.xs },
     });
-    defer scroll.deinit();
+    const scroll_id = scroll.data().id;
+    defer {
+        scroll.deinit();
+        noteUserScroll(8, user_scroll, scroll_id);
+    }
     var strip = dvui.box(@src(), .{ .dir = .horizontal }, .{});
     defer strip.deinit();
 
