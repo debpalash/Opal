@@ -38,6 +38,9 @@ pub const Request = struct {
     /// exactly once only when the primary fails before FILE_LOADED. It shares
     /// the request's identity, headers and resume point.
     fallback_url: []const u8 = "",
+    /// Optional third candidate for the same item. It is tried only if both
+    /// the primary and `fallback_url` fail before playback starts.
+    fallback_url_2: []const u8 = "",
     mode: Mode = .replace,
     origin: Origin = .direct,
     queue_item_id: i64 = -1,

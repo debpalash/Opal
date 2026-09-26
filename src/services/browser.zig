@@ -2405,6 +2405,7 @@ pub const routeContent = pure.routeContent;
 pub const PlaybackRequest = struct {
     url: []const u8,
     fallback_url: []const u8 = "",
+    fallback_url_2: []const u8 = "",
     mode: player.LoadMode = .replace,
     origin: player.PlaybackOrigin = .direct,
     queue_item_id: i64 = -1,
@@ -2448,6 +2449,7 @@ fn FixedPlaybackField(comptime capacity: usize) type {
 const DeferredPlayback = struct {
     url: FixedPlaybackField(8192) = .{},
     fallback_url: FixedPlaybackField(8192) = .{},
+    fallback_url_2: FixedPlaybackField(8192) = .{},
     history_identity: FixedPlaybackField(8192) = .{},
     restore_target: FixedPlaybackField(8192) = .{},
     art_url: FixedPlaybackField(1024) = .{},
@@ -2465,6 +2467,7 @@ const DeferredPlayback = struct {
         var out: DeferredPlayback = .{};
         if (!out.url.set(request.url) or
             !out.fallback_url.set(request.fallback_url) or
+            !out.fallback_url_2.set(request.fallback_url_2) or
             !out.history_identity.set(request.history_identity) or
             !out.restore_target.set(request.restore_target) or
             !out.art_url.set(request.art_url) or
@@ -2490,6 +2493,7 @@ const DeferredPlayback = struct {
         return .{
             .url = self.url.slice(),
             .fallback_url = self.fallback_url.slice(),
+            .fallback_url_2 = self.fallback_url_2.slice(),
             .mode = self.mode,
             .origin = self.origin,
             .queue_item_id = self.queue_item_id,
@@ -2578,6 +2582,7 @@ pub fn playDirect(request: PlaybackRequest) void {
     p.load(.{
         .url = request.url,
         .fallback_url = request.fallback_url,
+        .fallback_url_2 = request.fallback_url_2,
         .mode = request.mode,
         .origin = request.origin,
         .queue_item_id = request.queue_item_id,

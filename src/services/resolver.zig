@@ -82,6 +82,8 @@ pub const ResolvedItem = struct {
     duration_secs: f32 = 0,
     fallback_url: [2048]u8 = std.mem.zeroes([2048]u8),
     fallback_url_len: usize = 0,
+    fallback_url_2: [2048]u8 = std.mem.zeroes([2048]u8),
+    fallback_url_2_len: usize = 0,
     plugin_id: [64]u8 = std.mem.zeroes([64]u8),
     plugin_id_len: usize = 0,
     plugin_item_id: [128]u8 = std.mem.zeroes([128]u8),
@@ -817,6 +819,8 @@ fn pushInto(
                 !dedup.sameSemantic(items[d].name[0..items[d].name_len], name)) continue;
             if (scored_item.score < items[d].score) {
                 copyField(&scored_item.fallback_url, &scored_item.fallback_url_len, current_url);
+                if (items[d].fallback_url_len > 0)
+                    copyField(&scored_item.fallback_url_2, &scored_item.fallback_url_2_len, items[d].fallback_url[0..items[d].fallback_url_len]);
                 items[d] = scored_item;
                 const ByScore = struct {
                     fn lessThan(_: void, a: ResolvedItem, b: ResolvedItem) bool {
@@ -826,6 +830,8 @@ fn pushInto(
                 std.sort.insertion(ResolvedItem, items[0..count.*], {}, ByScore.lessThan);
             } else if (items[d].fallback_url_len == 0) {
                 copyField(&items[d].fallback_url, &items[d].fallback_url_len, url);
+            } else if (items[d].fallback_url_2_len == 0) {
+                copyField(&items[d].fallback_url_2, &items[d].fallback_url_2_len, url);
             }
             return true;
         }
@@ -1147,7 +1153,7 @@ fn attrValue(html: []const u8, name: []const u8, limit: usize) ?[]const u8 {
 // ══════════════════════════════════════════════════════════
 
 fn cacheKey(buf: []u8, query: []const u8) []const u8 {
-    return std.fmt.bufPrint(buf, "search:v4:{s}", .{query}) catch "search:v4:";
+    return std.fmt.bufPrint(buf, "search:v5:{s}", .{query}) catch "search:v5:";
 }
 
 /// Serialize the current `results` (under caller's lock) into `out`.
@@ -1187,6 +1193,7 @@ fn serializeRows(rows: []const ResolvedItem, out: []u8) ?[]u8 {
         w.f32v(it.resume_position_secs);
         w.f32v(it.duration_secs);
         w.blob(it.fallback_url[0..@min(it.fallback_url_len, it.fallback_url.len)]);
+        w.blob(it.fallback_url_2[0..@min(it.fallback_url_2_len, it.fallback_url_2.len)]);
         w.blob(it.plugin_id[0..@min(it.plugin_id_len, it.plugin_id.len)]);
         w.blob(it.plugin_item_id[0..@min(it.plugin_item_id_len, it.plugin_item_id.len)]);
         w.u16v(it.plugin_episodes);
@@ -1239,6 +1246,7 @@ fn deserializeInto(bytes: []const u8) usize {
         it.resume_position_secs = r.f32v() orelse break;
         it.duration_secs = r.f32v() orelse break;
         copyField(&it.fallback_url, &it.fallback_url_len, r.blob() orelse break);
+        copyField(&it.fallback_url_2, &it.fallback_url_2_len, r.blob() orelse break);
         copyField(&it.plugin_id, &it.plugin_id_len, r.blob() orelse break);
         copyField(&it.plugin_item_id, &it.plugin_item_id_len, r.blob() orelse break);
         it.plugin_episodes = r.u16v() orelse break;
@@ -3504,6 +3512,7 @@ pub fn playResolvedItem(item: *const ResolvedItem) void {
             @import("browser.zig").playDirect(.{
                 .url = item.url[0..item.url_len],
                 .fallback_url = item.fallback_url[0..item.fallback_url_len],
+                .fallback_url_2 = item.fallback_url_2[0..item.fallback_url_2_len],
                 .title = item.name[0..item.name_len],
                 .subtitle = item.detail[0..item.detail_len],
             });
