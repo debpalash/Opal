@@ -417,7 +417,7 @@ async function loadCollections(){
       <div class="queue-actions">
         <button type="button" data-collection="append" data-id="${item.id}">Append</button>
         <button type="button" data-collection="replace" data-id="${item.id}">Replace queue</button>
-        <button type="button" class="danger" data-collection="remove" data-id="${item.id}">Delete</button>
+        ${item.smart ? '' : '<button type="button" class="danger" data-collection="remove" data-id="' + item.id + '">Delete</button>'}
       </div></div>`).join('') || '<div class="hint">Save the current queue as a reusable collection.</div>';
   } catch { box.innerHTML = '<div class="hint">Collections unavailable.</div>'; }
 }
