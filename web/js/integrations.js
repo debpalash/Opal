@@ -936,58 +936,6 @@ $('dl-go').onclick = async () => {
 };
 $('dl-url').addEventListener('keydown', e => { if (e.key === 'Enter') $('dl-go').click(); });
 
-// ── Comic / novel source catalog (Setup) ──
-// /source/catalog is the bundled curated list ({name,base,framework,lang});
-// /source/add installs one so it shows up in Comics / Novels.
-let srcCatalog = null;
-async function loadSources(){
-  if (srcCatalog) return renderSources();
-  try {
-    srcCatalog = await api('/source/catalog');
-    if (!Array.isArray(srcCatalog)) srcCatalog = [];
-    renderSources();
-  } catch { $('srcs-hint').textContent = 'Could not load the source catalog.'; }
-}
-// How many catalog rows to render at once. The list used to hard-slice at 40
-// and only mention the count when a filter was active, so unfiltered you saw 40
-// of 306 with nothing saying so and no way to reach the other 266 short of
-// guessing a name. It also made the Setup page ~12,000px tall. Now: a small
-// page, an explicit "showing X of Y", and a button for the rest.
-const SRC_PAGE = 12;
-let srcShown = SRC_PAGE;
-$('srcs-q').addEventListener('input', () => { srcShown = SRC_PAGE; renderSources(); });
-function renderSources(){
-  const q = $('srcs-q').value.trim().toLowerCase();
-  const all = (srcCatalog || []).filter(s => !q || (s.name || '').toLowerCase().includes(q));
-  const rows = all.slice(0, srcShown);
-  const total = (srcCatalog || []).length;
-  $('srcs-hint').textContent = q
-    ? `${all.length} of ${total} match “${$('srcs-q').value.trim()}” · showing ${rows.length}`
-    : `${total} sources in the catalog · showing ${rows.length}`;
-  $('srcs-list').innerHTML = rows.map(s => `
-    <div class="result">
-      <div class="t">${esc(s.name)}</div>
-      <div class="m"><span class="src">${esc(s.framework || '')}</span>
-        ${s.lang ? `<span>${esc(s.lang)}</span>` : ''}
-        <button class="play" data-fw="${esc(s.framework || '')}" data-base="${encodeURIComponent(s.base || '')}">Install</button></div>
-    </div>`).join('') || '<div class="empty">No matches</div>';
-  // The remainder is reachable without having to guess a name.
-  if (all.length > rows.length) {
-    const more = document.createElement('button');
-    more.className = 'quick-btn';
-    more.textContent = `Show ${Math.min(SRC_PAGE, all.length - rows.length)} more of ${all.length - rows.length}`;
-    more.onclick = () => { srcShown += SRC_PAGE; renderSources(); };
-    $('srcs-list').append(more);
-  }
-  $('srcs-list').querySelectorAll('.play').forEach(b => b.onclick = async () => {
-    b.textContent = '…';
-    try {
-      const d = await api('/source/add?framework=' + encodeURIComponent(b.dataset.fw) + '&base=' + b.dataset.base);
-      b.textContent = (d && d.ok === false) ? 'Failed' : 'Installed ✓';
-    } catch { b.textContent = 'Failed'; }
-  });
-}
-
 // Sign out — revokes the session server-side and returns to the login screen.
 $('signout').onclick = () => unpair();
 $('setup-tmdb-save').onclick = async () => {

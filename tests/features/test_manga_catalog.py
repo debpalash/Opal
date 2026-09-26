@@ -76,6 +76,11 @@ def test_manga_source_catalog():
         problems.append("remote /source/catalog endpoint missing")
     if '"/source/add"' not in remote or "source_config.zig\").install(framework" not in remote:
         problems.append("remote /source/add install (source_config.install) missing")
+    custom_api = _src("src/services/remote_custom_sources_api.zig")
+    if not all(marker in custom_api for marker in (
+        "validFramework", "validBase", 'config.install(framework', 'config.uninstallById(framework)',
+    )):
+        problems.append("typed custom-source read/update/remove lifecycle missing")
 
     if problems:
         return "fail", "; ".join(problems)

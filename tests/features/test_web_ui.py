@@ -123,8 +123,9 @@ def test_web_ui_downloads_and_sources():
         "source catalog ui": 'id="srcs-list"' in ui and "function loadSources(" in ui
             and "/source/catalog" in ui,
         "catalog filter": 'id="srcs-q"' in ui and "function renderSources(" in ui,
-        "install wires source/add": "/source/add?framework=" in ui,
-        "catalog routes exist": '"/source/catalog"' in rm and '"/source/add"' in rm,
+        "catalog wires typed CRUD": "apiFormMutation('/source/config'" in ui
+            and "data-source-action" in ui,
+        "catalog routes exist": '"/source/catalog"' in rm and '"/source/config"' in rm,
     }
     missing = [k for k, ok in checks.items() if not ok]
     if missing:
