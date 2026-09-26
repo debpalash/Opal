@@ -101,7 +101,7 @@ def test_home_distinct():
         return "fail", "home route still aliases TMDB content"
     # 2026-07 console redesign: Home is the agentic console — hero prompt +
     # responsive rails (cross-media continue/trending/for-you), not a metrics dashboard.
-    if ("Continue everything" in home and "Trending tonight" in home
+    if ('renderLibraryItemsRail(items[0..n], "Continue"' in home and "Trending tonight" in home
             and "renderHero" in home and "Time in app" not in home):
         return "pass", "Home is the media console (hero + rails, no stats dashboard)"
     return "fail", "home console lacks hero/rails or still has the stats dashboard"
@@ -117,6 +117,7 @@ def test_poster_texture_lifetime():
     checks = {
         "coming up uploads": "_ = poster.uploadIfReady" in coming,
         "coming up draws stored texture": "if (it.poster_tex)" in coming,
+        "coming up owns its fetch": "poster.fetchAsync(url" in coming and "fetchPoster(it)" not in coming,
         "shared card uploads": "_ = poster.uploadIfReady" in card,
         "shared card draws stored texture": "if (it.poster_tex)" in card,
     }

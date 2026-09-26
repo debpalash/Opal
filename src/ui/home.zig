@@ -295,7 +295,14 @@ fn renderComingUpRail(card_w: f32) bool {
                 } else if (it.poster_attempted and it.poster_pixels == null and it.poster_tex == null) {
                     it.poster_failed = true;
                 } else if (!it.poster_failed and it.poster_pixels == null and it.poster_path_len > 0) {
-                    @import("../services/tmdb_api.zig").fetchPoster(it);
+                    const path = it.poster_path[0..it.poster_path_len];
+                    var url_buf: [512]u8 = undefined;
+                    const url = if (std.mem.startsWith(u8, path, "https://") or std.mem.startsWith(u8, path, "http://"))
+                        path
+                    else
+                        std.fmt.bufPrint(&url_buf, "https://image.tmdb.org/t/p/w342{s}", .{path}) catch "";
+                    if (url.len > 0)
+                        poster.fetchAsync(url, &it.poster_pixels, &it.poster_w, &it.poster_h, &it.poster_fetching);
                     if (it.poster_fetching) it.poster_attempted = true;
                 }
             }
@@ -342,7 +349,6 @@ fn renderTrendingRail(card_w: f32) bool {
 // ── Hero (idle console) — prompt and direct discovery actions ──
 
 fn renderHero() void {
-    const home_pure = @import("home_pure.zig");
     const win_w = @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().w, state.app.ui_scale);
     const compact = win_w < 650;
 
@@ -358,20 +364,12 @@ fn renderHero() void {
     });
     defer hero.deinit();
 
-    const hour = localHour();
-
     // Headline stays left aligned with every shelf below it.
-    _ = dvui.label(@src(), "{s}", .{if (compact) "What’s next?" else home_pure.headlineForHour(hour)}, .{
+    _ = dvui.label(@src(), "Home", .{}, .{
         .color_text = theme.colors.text_primary,
-        .font = dvui.themeGet().font_title.withSize(if (tall) 32 else if (compact) 22 else 28),
+        .font = dvui.themeGet().font_title.withSize(if (tall) 28 else if (compact) 21 else 24),
         .margin = .{ .x = 0, .y = 2, .w = 0, .h = theme.spacing.xs },
     });
-    if (!compact) {
-        _ = dvui.label(@src(), "Ask a question or paste a link in the omnibox.", .{}, .{
-            .color_text = theme.colors.text_tertiary,
-            .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.xs },
-        });
-    }
 
     // The shell provides the unified omnibox in its header; only the
     // standalone layout renders a second input here.
@@ -385,14 +383,14 @@ fn renderHero() void {
     });
     defer actions.deinit();
 
-    if (dvui.button(@src(), "Search all sources", .{}, .{
+    if (dvui.button(@src(), "Search", .{}, .{
         .color_fill = theme.colors.accent,
         .color_text = theme.colors.text_on_accent,
         .corner_radius = dvui.Rect.all(theme.radius.sm),
         .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
         .margin = dvui.Rect.all(theme.spacing.xs),
     })) state.app.router.navigate(.search);
-    if (dvui.button(@src(), "Browse movies & TV", .{}, .{
+    if (dvui.button(@src(), "Browse", .{}, .{
         .color_fill = theme.colors.bg_surface,
         .color_text = theme.colors.text_primary,
         .border = dvui.Rect.all(1),
@@ -404,23 +402,6 @@ fn renderHero() void {
         state.app.browse_source = .TMDB;
         state.app.router.navigate(.browse);
     }
-}
-
-/// Local hour (0-23) via SQLite's localtime — cached for the session.
-/// Zig 0.16 std.time is UTC-only; the linked SQLite gets timezones right.
-fn localHour() u8 {
-    const db = @import("../core/db.zig");
-    const S = struct {
-        var cached: i32 = -1;
-    };
-    if (S.cached < 0) {
-        S.cached = 20; // graceful default: evening
-        if (db.prepare("SELECT CAST(strftime('%H','now','localtime') AS INTEGER)")) |stmt| {
-            defer db.finalize(stmt);
-            if (db.step(stmt) == db.c.SQLITE_ROW) S.cached = db.columnInt(stmt, 0);
-        }
-    }
-    return @intCast(std.math.clamp(S.cached, 0, 23));
 }
 
 // ── Chat mode — full-page transcript + pinned composer ──
@@ -907,7 +888,7 @@ fn renderLibraryContinueRail(card_w: f32) bool {
     var items: [24]library_pure.LibraryItem = undefined;
     const n = library_store.loadContinue(items[0..]);
     const hidden = library_store.hiddenContinueCount();
-    return renderLibraryItemsRail(items[0..n], "Continue everything", icons.tvg.lucide.play, 7600, card_w, continue_slots[0..], hidden);
+    return renderLibraryItemsRail(items[0..n], "Continue", icons.tvg.lucide.play, 7600, card_w, continue_slots[0..], hidden);
 }
 
 fn renderLibraryRail(card_w: f32) bool {
@@ -942,15 +923,6 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
             .font = dvui.themeGet().font_heading,
             .gravity_y = 0.5,
         });
-        if (manage_continue and dvui.windowRect().w >= 760) {
-            _ = dvui.label(@src(), "Videos · series · anime · podcasts · books · comics", .{}, .{
-                .id_extra = base_id + 2,
-                .color_text = theme.colors.text_tertiary,
-                .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
-                .gravity_y = 0.5,
-                .margin = .{ .x = theme.spacing.md, .y = 0, .w = 0, .h = 0 },
-            });
-        }
         if (hidden_count > 0) {
             var spacer = dvui.box(@src(), .{}, .{ .id_extra = base_id + 3, .expand = .horizontal });
             spacer.deinit();
@@ -1011,6 +983,8 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
             .margin = dvui.Rect.all(4),
         });
         defer card.deinit();
+        const hovered = card.data().borderRectScale().r.contains(dvui.currentWindow().mouse_pt);
+        const revealed = !manage_continue or hovered;
 
         if (manage_continue) {
             var tools = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -1032,7 +1006,7 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
                 .iptv => "Live",
                 .other => "Continue",
             };
-            _ = dvui.label(@src(), "{s}", .{kind_label}, .{
+            _ = dvui.label(@src(), "{s}", .{if (revealed) kind_label else "Private"}, .{
                 .id_extra = i + base_id + 21,
                 .color_text = if (item.home_pinned) theme.colors.accent else theme.colors.text_tertiary,
                 .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
@@ -1044,7 +1018,9 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
                 library_store.setHomePinned(item.kind[0..item.kind_len], item.item_id[0..item.item_id_len], !item.home_pinned);
                 dvui.refresh(null, @src(), null);
             }
-            if (components.iconButton(@src(), icons.tvg.lucide.x, "Hide from Home", false)) {
+            // Always available, including while the private card is masked.
+            // This hides only the Home column and preserves resume progress.
+            if (components.iconButton(@src(), icons.tvg.lucide.@"trash-2", "Remove from Home · keeps progress", false)) {
                 library_store.setHomeHidden(item.kind[0..item.kind_len], item.item_id[0..item.item_id_len], true);
                 dvui.refresh(null, @src(), null);
                 continue;
@@ -1077,8 +1053,18 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
             if (slot.tex == null and !slot.fetching and slot.pixels == null)
                 poster.fetchAsync(purl, &slot.pixels, &slot.w, &slot.h, &slot.fetching);
         }
-        if (slot.tex) |*tex| {
+        if (revealed and slot.tex != null) {
+            const tex = &slot.tex.?;
             _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{ .id_extra = i + base_id + 40, .expand = .both, .corner_radius = dvui.Rect.all(8) });
+        } else if (!revealed) {
+            _ = dvui.icon(@src(), "private-card", icons.tvg.lucide.@"eye-off", .{}, .{
+                .id_extra = i + base_id + 40,
+                .color_text = theme.colors.text_tertiary,
+                .min_size_content = theme.iconSize(.lg),
+                .gravity_x = 0.5,
+                .gravity_y = 0.5,
+                .expand = .both,
+            });
         } else {
             _ = dvui.icon(@src(), "libglyph", heading_icon, .{}, .{ .id_extra = i + base_id + 40, .color_text = theme.colors.text_tertiary, .gravity_x = 0.5, .gravity_y = 0.5, .expand = .both });
         }
@@ -1088,7 +1074,9 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
         if (clicked) openLibItem(item);
 
         var t_safe: [200]u8 = undefined;
-        _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(item.title[0..@min(item.title_len, item.title.len)], &t_safe)}, .{
+        const private_title = "Hover to reveal";
+        const visible_title = @import("../core/text.zig").safeUtf8Buf(item.title[0..@min(item.title_len, item.title.len)], &t_safe);
+        _ = dvui.label(@src(), "{s}", .{if (revealed) visible_title else private_title}, .{
             .id_extra = i + base_id + 50,
             .color_text = theme.colors.text_secondary,
             .min_size_content = .{ .w = card_w, .h = 0 },
@@ -1187,20 +1175,12 @@ fn renderEmptyState() void {
         .min_size_content = theme.iconSize(.hero),
         .gravity_x = 0.5,
     });
-    _ = dvui.label(@src(), "Nothing saved yet", .{}, .{
+    _ = dvui.label(@src(), "Nothing here yet", .{}, .{
         .color_text = theme.colors.text_primary,
         .font = dvui.themeGet().font_title,
         .gravity_x = 0.5,
     });
-    _ = dvui.label(@src(), "Search or browse to get started.", .{}, .{
-        .color_text = theme.colors.text_secondary,
-        .gravity_x = 0.5,
-    });
-    _ = dvui.label(@src(), "An optional TMDB key in Settings", .{}, .{
-        .color_text = theme.colors.text_secondary,
-        .gravity_x = 0.5,
-    });
-    _ = dvui.label(@src(), "adds richer metadata.", .{}, .{
+    _ = dvui.label(@src(), "Browse or search to start.", .{}, .{
         .color_text = theme.colors.text_secondary,
         .gravity_x = 0.5,
     });

@@ -137,8 +137,9 @@ pub fn stage(
     e.tmdb_id = tmdb_id;
     e.name_len = @min(name.len, e.name.len);
     @memcpy(e.name[0..e.name_len], name[0..e.name_len]);
-    e.poster_path_len = @min(poster_path.len, e.poster_path.len);
-    @memcpy(e.poster_path[0..e.poster_path_len], poster_path[0..e.poster_path_len]);
+    const resolved_poster = if (poster_path.len > 0) poster_path else pure.posterPath(doc) orelse "";
+    e.poster_path_len = @min(resolved_poster.len, e.poster_path.len);
+    @memcpy(e.poster_path[0..e.poster_path_len], resolved_poster[0..e.poster_path_len]);
 
     if (pure.parseEpisodeToAir(doc, "\"next_episode_to_air\":")) |next| {
         e.next_season = next.season;

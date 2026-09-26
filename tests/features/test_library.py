@@ -145,14 +145,15 @@ def watch_items_are_removable():
     dbz = _src("src/core/db.zig")
 
     checks = {
-        "one cross-media rail": "Continue everything" in home and "renderRecentlyPlayed" not in home,
+        "one cross-media rail": 'renderLibraryItemsRail(items[0..n], "Continue"' in home and "renderRecentlyPlayed" not in home,
         "schema stores home state": "home_hidden INTEGER" in dbz and "home_pinned INTEGER" in dbz,
         "pin mutation is narrow": "pub fn setHomePinned" in store and "SET home_pinned" in store,
         "hide mutation is narrow": "pub fn setHomeHidden" in store and "SET home_hidden" in store,
         "hidden cards excluded": "home_hidden=0" in store,
         "pinned cards sort first": "ORDER BY home_pinned DESC" in store,
         "pin control wired": "setHomePinned(" in home and "Pin to front" in home,
-        "hide control wired": "setHomeHidden(" in home and "Hide from Home" in home,
+        "hide control wired": "setHomeHidden(" in home and "Remove from Home" in home,
+        "private until hover": "Hover to reveal" in home and "const revealed = !manage_continue or hovered" in home,
         "hidden cards restorable": "restoreHiddenContinue()" in home and "Restore hidden" in home,
         "no progress deletion": "DELETE FROM library_items" not in store,
     }
