@@ -50,25 +50,42 @@ const MpvPlaybackSink = struct {
         const user_agent_z = std.fmt.bufPrintZ(&user_agent_buf, "{s}", .{options.user_agent}) catch return;
         var header_fields_buf: [2049]u8 = undefined;
         const header_fields_z = std.fmt.bufPrintZ(&header_fields_buf, "{s}", .{options.header_fields}) catch return;
+        var audio_file_buf: [MAX_LOAD_URL + 1]u8 = undefined;
+        const audio_file_z = std.fmt.bufPrintZ(&audio_file_buf, "{s}", .{options.audio_file}) catch return;
+        var media_title_buf: [257]u8 = undefined;
+        const media_title_z = std.fmt.bufPrintZ(&media_title_buf, "{s}", .{options.media_title}) catch return;
 
         // `loadfile`'s final argument is a native key/value map when invoked
         // through mpv_command_node. This avoids comma/string escaping and,
         // crucially, stores HTTP identity on the playlist entry instead of
         // changing the options of media that is already playing.
-        var option_values = [_]c.mpv.mpv_node{
+        var option_values: [6]c.mpv.mpv_node = undefined;
+        option_values[0..4].* = .{
             stringNode(user_agent_z.ptr),
             stringNode(header_fields_z.ptr),
             stringNode(options.cache_pause_initial.ptr),
             stringNode(options.network_timeout.ptr),
         };
-        var option_keys = [_][*c]u8{
+        var option_keys: [6][*c]u8 = undefined;
+        option_keys[0..4].* = .{
             @constCast("user-agent"),
             @constCast("http-header-fields"),
             @constCast("cache-pause-initial"),
             @constCast("network-timeout"),
         };
+        var option_count: usize = 4;
+        if (options.audio_file.len > 0) {
+            option_values[option_count] = stringNode(audio_file_z.ptr);
+            option_keys[option_count] = @constCast("audio-file");
+            option_count += 1;
+        }
+        if (options.media_title.len > 0) {
+            option_values[option_count] = stringNode(media_title_z.ptr);
+            option_keys[option_count] = @constCast("force-media-title");
+            option_count += 1;
+        }
         var option_list: c.mpv.mpv_node_list = .{
-            .num = option_values.len,
+            .num = @intCast(option_count),
             .values = @ptrCast(&option_values),
             .keys = @ptrCast(&option_keys),
         };
@@ -365,8 +382,8 @@ pub const MediaPlayer = struct {
     current_header_fields: [2048]u8 = std.mem.zeroes([2048]u8),
     current_header_fields_len: usize = 0,
     current_loopback_stream: bool = false,
-    /// First attempt uses the range-compatible Android progressive stream.
-    /// Keep one default-client retry armed for videos it cannot expose.
+    /// Keep one extractor retry armed when direct YouTube stream resolution
+    /// cannot expose a playable rendition.
     youtube_default_retry_pending: bool = false,
     /// True while the low-latency combined YouTube rendition is active. The
     /// footer reports its real resolution instead of the adaptive preference.
@@ -430,6 +447,9 @@ pub const MediaPlayer = struct {
     // v2: handle to the per-player torrent HTTP proxy stream (multi-tenant).
     // INVALID_HANDLE means no proxy is currently running for this player.
     proxy_handle: @import("stream_proxy.zig").Handle = @import("stream_proxy.zig").INVALID_HANDLE,
+    youtube_proxy_handle: @import("youtube_range_proxy.zig").Handle = @import("youtube_range_proxy.zig").invalid_handle,
+    youtube_streams: @import("../services/youtube_player_pure.zig").Streams = .{},
+    youtube_active_height: u16 = 0,
 
     // ── Loading-screen context (poster + trivia while a torrent buffers) ──
     // Populated from state.app.pending_play_* by addMagnetToEngine when a
@@ -760,6 +780,9 @@ pub const MediaPlayer = struct {
         self.youtube_default_retry_pending = false;
         self.youtube_fast_active = false;
         self.youtube_quality_fallback_pending = false;
+        self.youtube_proxy_handle = @import("youtube_range_proxy.zig").invalid_handle;
+        self.youtube_streams = .{};
+        self.youtube_active_height = 0;
         self.resume_seeked = false;
         self.restore_session_position = null;
         self.provider_resume_position = null;
@@ -1313,6 +1336,12 @@ pub const MediaPlayer = struct {
         // the already-staged original request and must not erase its identity.
         @import("../services/auto_subs.zig").cancelForMediaChange();
         self.load_serial = playback_load_sequence.fetchAdd(1, .acq_rel) + 1;
+        if (self.youtube_proxy_handle.valid()) {
+            @import("youtube_range_proxy.zig").stop(self.youtube_proxy_handle);
+            self.youtube_proxy_handle = @import("youtube_range_proxy.zig").invalid_handle;
+            self.youtube_streams = .{};
+            self.youtube_active_height = 0;
+        }
         // A replace is a new logical position: a previous file's stall point
         // must never become this file's EOF-reload resume. Reloads of the SAME
         // file are unaffected — the resume fields are consumed into mpv
@@ -1411,9 +1440,8 @@ pub const MediaPlayer = struct {
         // calls setNowPlaying AGAIN right after this, re-populating it.
         self.setNowPlaying("", "", "");
 
-        // Direct InnerTube progressive playback starts in well under a second
-        // on a normal connection. If YouTube changes that response shape, the
-        // resolver hands this same staged request back to yt-dlp automatically.
+        // Direct InnerTube adaptive playback resolves the real qualities once;
+        // the local range adapter then makes each choice immediately reusable.
         if (self.youtube_default_retry_pending and
             @import("../services/youtube_player.zig").resolveAsync(path_span, self, self.load_serial))
         {
@@ -1500,6 +1528,63 @@ pub const MediaPlayer = struct {
         self.commitPlayback(.{ .url = url });
     }
 
+    pub fn youtubeQualityAvailable(self: *const MediaPlayer, idx: usize) bool {
+        return switch (idx) {
+            0 => self.youtube_streams.video_720.url_len > 0,
+            1 => self.youtube_streams.video_1080.url_len > 0,
+            2 => self.youtube_streams.video_2160.url_len > 0,
+            3 => self.youtube_streams.audio.url_len > 0,
+            else => false,
+        };
+    }
+
+    pub fn commitYoutubeStreams(self: *MediaPlayer, streams: @import("../services/youtube_player_pure.zig").Streams) void {
+        const proxy = @import("youtube_range_proxy.zig");
+        if (self.youtube_proxy_handle.valid()) proxy.stop(self.youtube_proxy_handle);
+        self.youtube_streams = streams;
+        self.youtube_proxy_handle = proxy.start(streams) orelse {
+            self.commitYoutubeFallback();
+            return;
+        };
+        self.youtube_default_retry_pending = false;
+        self.youtube_quality_fallback_pending = false;
+        self.playYoutubeQuality(state.app.ytdl_format_idx, false);
+    }
+
+    fn playYoutubeQuality(self: *MediaPlayer, requested_idx: usize, preserve_position: bool) void {
+        if (!self.youtube_proxy_handle.valid()) return;
+        const proxy = @import("youtube_range_proxy.zig");
+        if (preserve_position) {
+            const snap = self.playbackSnapshot();
+            self.provider_resume_position = playback_load.saneResumePosition(snap.time_pos);
+        }
+        self.is_loading = true;
+        self.load_error_len = 0;
+        self.youtube_fast_active = false;
+        self.youtube_quality_fallback_pending = false;
+        openLoadIssued();
+
+        var media_buf: [256]u8 = undefined;
+        if (requested_idx >= 3) {
+            const media = proxy.url(self.youtube_proxy_handle, 3, true, &media_buf) orelse return;
+            self.youtube_active_height = 0;
+            self.commitPlayback(.{ .url = media, .media_title = self.youtube_streams.titleSlice() });
+            return;
+        }
+        const selected = self.youtube_streams.videoFor(requested_idx) orelse {
+            self.commitYoutubeFallback();
+            return;
+        };
+        const media = proxy.url(self.youtube_proxy_handle, requested_idx, false, &media_buf) orelse return;
+        var audio_buf: [256]u8 = undefined;
+        const audio = if (selected.height > 360 and self.youtube_streams.audio.url_len > 0)
+            proxy.url(self.youtube_proxy_handle, 3, true, &audio_buf) orelse ""
+        else
+            "";
+        self.youtube_active_height = selected.height;
+        self.commitPlayback(.{ .url = media, .audio_file = audio, .media_title = self.youtube_streams.titleSlice() });
+    }
+
     pub fn commitYoutubeFallback(self: *MediaPlayer) void {
         if (self.current_url_len == 0) return;
         self.youtube_fast_active = false;
@@ -1513,6 +1598,10 @@ pub const MediaPlayer = struct {
         const url = self.current_url[0..self.current_url_len];
         if (std.ascii.indexOfIgnoreCase(url, "youtube.com/") == null and
             std.ascii.indexOfIgnoreCase(url, "youtu.be/") == null) return;
+        if (self.youtube_proxy_handle.valid()) {
+            self.playYoutubeQuality(state.app.ytdl_format_idx, true);
+            return;
+        }
         const snap = self.playbackSnapshot();
         self.provider_resume_position = playback_load.saneResumePosition(snap.time_pos);
         self.youtube_fast_active = false;
@@ -1520,7 +1609,7 @@ pub const MediaPlayer = struct {
         self.youtube_quality_fallback_pending = true;
         self.is_loading = true;
         self.load_error_len = 0;
-        self.applyYtdlFormat();
+        _ = c.mpv.mpv_set_property_string(self.mpv_ctx, "ytdl-format", @import("ytdl_format_pure.zig").formatFor(state.app.ytdl_format_idx).ptr);
         self.applyYtdlRawOptions(false, true);
         openLoadIssued();
         self.commitPlayback(.{ .url = url });
@@ -1823,6 +1912,12 @@ pub const MediaPlayer = struct {
             @import("stream_proxy.zig").stopProxy(self.proxy_handle);
             self.proxy_handle = @import("stream_proxy.zig").INVALID_HANDLE;
         }
+        if (self.youtube_proxy_handle.valid()) {
+            @import("youtube_range_proxy.zig").stop(self.youtube_proxy_handle);
+            self.youtube_proxy_handle = @import("youtube_range_proxy.zig").invalid_handle;
+            self.youtube_streams = .{};
+            self.youtube_active_height = 0;
+        }
         var args = [_][*c]const u8{ "stop", null };
         _ = c.mpv.mpv_command_async(self.mpv_ctx, 0, &args);
         self.clearFrame();
@@ -1860,6 +1955,10 @@ pub const MediaPlayer = struct {
             // network-read timeout expires.
             stream_proxy.stopProxy(self.proxy_handle);
             self.proxy_handle = stream_proxy.INVALID_HANDLE;
+        }
+        if (self.youtube_proxy_handle.valid()) {
+            @import("youtube_range_proxy.zig").stop(self.youtube_proxy_handle);
+            self.youtube_proxy_handle = @import("youtube_range_proxy.zig").invalid_handle;
         }
         _ = c.mpv.mpv_command_string(self.mpv_ctx, "stop");
         self.clearFrame();
@@ -2090,6 +2189,10 @@ pub const MediaPlayer = struct {
         if (self.proxy_handle.isValid()) {
             @import("stream_proxy.zig").stopProxy(self.proxy_handle);
             self.proxy_handle = @import("stream_proxy.zig").INVALID_HANDLE;
+        }
+        if (self.youtube_proxy_handle.valid()) {
+            @import("youtube_range_proxy.zig").stop(self.youtube_proxy_handle);
+            self.youtube_proxy_handle = @import("youtube_range_proxy.zig").invalid_handle;
         }
         // Stop the render worker BEFORE freeing the render context: only one
         // thread may be inside mpv_render_* at a time, and the worker may be

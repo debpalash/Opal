@@ -58,12 +58,12 @@ pub fn renderQualityPickerPopover(active_p: *player.MediaPlayer) void {
         .padding = dvui.Rect.all(theme.spacing.sm),
     });
     defer pad.deinit();
-    if (pickerOption(@src(), 9399, icons.tvg.lucide.zap, "Fast · 360p", active_p.youtube_fast_active)) {
-        active_p.reloadYoutubeFast();
-        footer.closePickers();
-    }
     for (labels, 0..) |label, i| {
-        const selected = !active_p.youtube_fast_active and state.app.ytdl_format_idx == i;
+        if (!active_p.youtubeQualityAvailable(i)) continue;
+        const selected = if (i == 3)
+            active_p.youtube_active_height == 0
+        else
+            active_p.youtube_active_height == @as(u16, switch (i) { 0 => 720, 1 => 1080, else => 2160 });
         if (pickerOption(@src(), 9400 + i, icons.tvg.lucide.monitor, label, selected)) {
             state.app.ytdl_format_idx = i;
             state.markConfigDirty();

@@ -58,6 +58,7 @@ pub const Action = union(enum) {
     gamma: i32,
     picture_preset: u8,
     equalizer_preset: u8,
+    quality: usize,
     audio_device: []const u8,
     shuffle: bool,
     repeat: Repeat,
@@ -145,6 +146,7 @@ pub fn parse(name: []const u8, value: ?[]const u8) ParseError!Action {
     if (std.mem.eql(u8, name, "gamma")) return .{ .gamma = try boundedInt(i32, value, -100, 100) };
     if (std.mem.eql(u8, name, "picture-preset")) return .{ .picture_preset = try boundedInt(u8, value, 0, 5) };
     if (std.mem.eql(u8, name, "equalizer-preset")) return .{ .equalizer_preset = try boundedInt(u8, value, 0, 4) };
+    if (std.mem.eql(u8, name, "quality")) return .{ .quality = try boundedInt(usize, value, 0, 3) };
     if (std.mem.eql(u8, name, "audio-device")) return .{ .audio_device = try audioDevice(value) };
     if (std.mem.eql(u8, name, "shuffle")) return .{ .shuffle = try boolean(value) };
     if (std.mem.eql(u8, name, "repeat")) {
@@ -187,6 +189,8 @@ test "only explicit tracks, aspects, presets and devices cross the seam" {
     try std.testing.expectError(error.InvalidValue, parse("aspect", "16:9;quit"));
     try std.testing.expectError(error.InvalidValue, parse("audio-device", "device\nquit"));
     try std.testing.expectError(error.OutOfRange, parse("equalizer-preset", "5"));
+    try std.testing.expectEqual(@as(usize, 1), (try parse("quality", "1")).quality);
+    try std.testing.expectError(error.OutOfRange, parse("quality", "4"));
     try std.testing.expectError(error.InvalidValue, parse("shuffle", "toggle"));
     try std.testing.expectError(error.InvalidValue, parse("repeat", "forever"));
 }

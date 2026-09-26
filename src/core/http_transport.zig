@@ -19,6 +19,9 @@ pub const Options = struct {
     content_type: ?[]const u8 = null,
     auth_header: ?[]const u8 = null,
     extra_headers: []const std.http.Header = &.{},
+    /// Keep a non-secret byte Range across CDN redirects. Other caller
+    /// headers are still stripped when the origin changes.
+    preserve_range_on_redirect: bool = false,
     // Optional response status for callers that need to distinguish an HTTP
     // rejection (for example expired credentials) from transport failure.
     // Remains null if no response head was received.
@@ -213,6 +216,14 @@ pub fn fetch(client: *std.http.Client, url: []const u8, buf: []u8, opts: Options
                     auth = null;
                     referer = null;
                     extra_headers = &.{};
+                    if (opts.preserve_range_on_redirect) {
+                        for (opts.extra_headers, 0..) |header, i| {
+                            if (std.ascii.eqlIgnoreCase(header.name, "Range")) {
+                                extra_headers = opts.extra_headers[i .. i + 1];
+                                break;
+                            }
+                        }
+                    }
                 }
                 if ((response.head.status == .see_other and method != .HEAD) or
                     ((response.head.status == .moved_permanently or response.head.status == .found) and method == .POST))
@@ -225,7 +236,7 @@ pub fn fetch(client: *std.http.Client, url: []const u8, buf: []u8, opts: Options
                 redirects += 1;
                 continue;
             },
-            .ok, .created, .accepted => {},
+            .ok, .created, .accepted, .partial_content => {},
             .no_content => return buf[0..0],
             else => return null,
         }

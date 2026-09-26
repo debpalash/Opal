@@ -95,9 +95,12 @@ pub fn build(buf: []u8) []const u8 {
     wire.writeJsonString(&w, year);
     w.writeAll("\",\"extra\":\"") catch return buf[0..0];
     wire.writeJsonString(&w, extra);
-    w.print("\",\"rating\":{d:.1},\"source\":\"{s}\",\"has_art\":{s},\"art_key\":\"{x:0>16}\",\"casting\":{s},\"party_role\":\"{s}\",\"party_peers\":{d}}}", .{
+    w.print("\",\"rating\":{d:.1},\"source\":\"{s}\",\"video_width\":{d},\"video_height\":{d},\"stream_height\":{d},\"has_art\":{s},\"art_key\":\"{x:0>16}\",\"casting\":{s},\"party_role\":\"{s}\",\"party_peers\":{d}}}", .{
         rating,
         if (player.is_torrent) "torrent" else "direct",
+        @max(0, player.cached_video_width),
+        @max(0, player.cached_video_height),
+        player.youtube_active_height,
         if (art_source.len > 0) "true" else "false",
         art_key,
         if (casting) "true" else "false",

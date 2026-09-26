@@ -50,6 +50,9 @@ pub const HttpResponse = struct {
 var g_client: std.http.Client = undefined;
 var client_ready = std.atomic.Value(bool).init(false);
 var client_init_lock: sync.Mutex = .{};
+var g_stream_client: std.http.Client = undefined;
+var stream_client_ready = std.atomic.Value(bool).init(false);
+var stream_client_init_lock: sync.Mutex = .{};
 
 // When the DPI-bypass sidecar is enabled+running, the shared std.http client
 // tunnels every request through the local proxy via HTTP CONNECT (the proxy
@@ -135,11 +138,29 @@ fn sharedClient() *std.http.Client {
     return &g_client;
 }
 
+/// Shared keep-alive transport for streaming adapters that consume response
+/// bodies incrementally. Callers own each Request, never the client.
+pub fn directStreamingClient() *std.http.Client {
+    if (stream_client_ready.load(.acquire)) return &g_stream_client;
+    stream_client_init_lock.lock();
+    defer stream_client_init_lock.unlock();
+    if (!stream_client_ready.load(.acquire)) {
+        g_stream_client = newClient();
+        stream_client_ready.store(true, .release);
+    }
+    return &g_stream_client;
+}
+
+pub fn fetchDirect(url: []const u8, buf: []u8, opts: HttpOptions) ?[]const u8 {
+    return transport.fetch(directStreamingClient(), url, buf, opts);
+}
+
 /// Release the shared client at process shutdown (frees pooled connections so
 /// the Debug leak report stays at 0). Call once from appDeinit, after workers
 /// have stopped. Idempotent.
 pub fn deinit() void {
     if (client_ready.swap(false, .acq_rel)) g_client.deinit();
+    if (stream_client_ready.swap(false, .acq_rel)) g_stream_client.deinit();
 }
 
 /// Clamp the caller's requested read timeout into a sane bound: at least 1s so
