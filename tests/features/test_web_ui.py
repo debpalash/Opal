@@ -486,14 +486,14 @@ def test_desktop_webui_settings_tab():
     return "pass", "Settings › Web UI: enable/open, account create+reset, revoke-all, token, bind+port"
 
 
-@test("Settings > Web UI: password reset is not a dead click", "Web UI")
+@test("Settings > Web UI: account create and password reset", "Web UI")
 def test_webui_password_reset_usable():
-    """Three bugs shipped in the first cut of this page:
+    """The desktop recovery surface must support both account operations:
       1. Username started empty, so "Set Password" only ever toasted
          "Enter a username" unless you already knew it.
-      2. A username that didn't match fell through to createUser, silently
-         making a SECOND admin account instead of resetting the intended one.
-      3. The createUser error path `return`ed mid-render, aborting the rest of
+      2. Once the first admin existed, a new username was always rejected,
+         so Settings could not register another user.
+      3. The createUser error path must not `return` mid-render and abort the rest of
          the settings page for that frame."""
     sg = _src("src/ui/settings.zig")
     st = _src("src/services/auth_store.zig")
@@ -502,10 +502,12 @@ def test_webui_password_reset_usable():
             and "ORDER BY id ASC LIMIT 1" in st,
         "username prefilled": "webui_user_seeded" in sg
             and "auth_store.firstUsername(" in sg,
-        # Creation only on a genuinely empty install, matching /api/auth/register.
-        "create only on first run": "} else if (users == 0) {" in sg
+        "first account is administrator": "} else if (users == 0) {" in sg
             and "auth_store.createFirstAdmin(uname, pw)" in sg,
-        "unknown name reports, never creates": 'No account named' in sg,
+        "new name creates normal user": "auth_store.createUser(uname, pw, false)" in sg
+            and '"Add User"' in sg,
+        "existing name resets password": '"Set Password"' in sg
+            and "auth_store.setPassword(uid, pw)" in sg,
         # No mid-render return in the error path.
         "no mid-render return": "error.Db => \"Database error\",\n                });\n                return;" not in sg,
         # Reset still revokes, and still shares the tested rules.
@@ -515,7 +517,7 @@ def test_webui_password_reset_usable():
     missing = [k for k, ok in checks.items() if not ok]
     if missing:
         return "fail", "password reset flow incomplete: " + ", ".join(missing)
-    return "pass", "Password reset: username prefilled, unknown name refused, create gated to first run"
+    return "pass", "Settings creates normal users and resets existing passwords; first account remains admin"
 
 
 @test("Web Watching library (desktop .watching parity)", "Web UI")

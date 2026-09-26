@@ -5074,14 +5074,23 @@ fn renderWebUiTab() void {
         absField("New password (8+ characters)", &webui_pw_buf, true, 9102);
         absField("Confirm password", &webui_pw2_buf, true, 9103);
 
+        const entered_name = webui_user_buf[0..zLen(&webui_user_buf)];
+        const account_exists = entered_name.len > 0 and auth_store.userIdByName(entered_name) != null;
+        const account_action = if (users == 0)
+            "Create Administrator"
+        else if (account_exists)
+            "Set Password"
+        else
+            "Add User";
+
         var brow = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
             .margin = .{ .x = 0, .y = 8, .w = 0, .h = 6 },
         });
         defer brow.deinit();
 
-        if (components.actionButton(@src(), if (users == 0) "Create Account" else "Set Password", .primary, 9003)) {
-            const uname = webui_user_buf[0..zLen(&webui_user_buf)];
+        if (components.actionButton(@src(), account_action, .primary, 9003)) {
+            const uname = entered_name;
             const pw = webui_pw_buf[0..zLen(&webui_pw_buf)];
             const pw2 = webui_pw2_buf[0..zLen(&webui_pw2_buf)];
             // Same rules as the web page — one tested implementation. "current"
@@ -5115,11 +5124,18 @@ fn renderWebUiTab() void {
                     error.Db => "Database error",
                 });
             } else {
-                // Previously this fell through to createUser, so a typo in the
-                // username silently made a SECOND admin account instead of
-                // resetting the one you meant.
-                var t_buf: [96]u8 = undefined;
-                state.showToast(std.fmt.bufPrint(&t_buf, "No account named \"{s}\"", .{uname}) catch "No such account");
+                // Physical access to desktop Settings is the same trusted
+                // boundary as password recovery. A new name creates a normal
+                // user; only the first account receives administrator rights.
+                if (auth_store.createUser(uname, pw, false)) |_| {
+                    state.showToast("User account created");
+                    @memset(&webui_pw_buf, 0);
+                    @memset(&webui_pw2_buf, 0);
+                } else |e| state.showToast(switch (e) {
+                    error.Invalid => "Username 3-32 chars [a-zA-Z0-9._-], password 8+",
+                    error.Taken => "Account already exists",
+                    error.Db => "Database error",
+                });
             }
         }
 
