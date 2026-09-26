@@ -80,9 +80,9 @@ var search_request: LatestRequest = .{};
 const DEBOUNCE_MS: i64 = 400;
 
 // ── UI controls (module-level, not in state.zig) ──
-var card_w: f32 = 200; // user-cyclable card width, clamp 150..360
-const CARD_MIN: f32 = 150;
-const CARD_MAX: f32 = 360;
+var card_w: f32 = 280; // YouTube-like desktop density; still user-adjustable
+const CARD_MIN: f32 = 200;
+const CARD_MAX: f32 = 420;
 
 /// The card title font. Heading WEIGHT at body SIZE — compact, and small enough
 /// that a two-line title stays short. cardFooterH() MUST measure the SAME font.
@@ -1315,25 +1315,24 @@ pub fn renderContent() void {
 
     // Responsive grid of 16:9 video tiles from the LIVE width; the column count
     // derives from the user-cyclable card width. The gutter matches the card's
-    // 4px margin on each side (8px between neighbours) so the grid reads as a
+    // 5px margin on each side (10px between neighbours) so the grid reads as a
     // uniform, evenly-spaced lattice at every width.
     const rect_w = scroll.data().rect.w;
     const avail_w: f32 = @max(260, (if (rect_w > 1) rect_w else 900) - 8);
-    const gutter: f32 = 6; // 2 * card margin (3)
+    const gutter: f32 = 10; // 2 * card margin (5)
     const cols: usize = @max(1, @as(usize, @intFromFloat((avail_w + gutter) / (card_w + gutter))));
     const real_card_w: f32 = @max(120, (avail_w - @as(f32, @floatFromInt(cols - 1)) * gutter) / @as(f32, @floatFromInt(cols)));
 
     // ── Virtualization (same shape as tmdb.zig/comics.zig/jellyfin_ui.zig) ──
     // Cards are uniform (renderCard pins min==max height), so rows have a fixed
-    // pitch: thumb + footer content, plus the card's 4px top/bottom margins
-    // (min_sizeGet = padSize(min_size_content) adds padding + margin around the
-    // content → +8 total). Rows outside the viewport (±2 overscan) collapse into
+    // pitch: thumb + footer content, plus the card's vertical margins.
+    // Rows outside the viewport (±2 overscan) collapse into
     // two spacer boxes, so the grid lays out a handful of rows per frame instead
     // of all ~200 card widget trees. The base index of each row (row * cols) is
     // IDENTICAL to the prior loop's `i`, so every card's id_extra scheme is
     // unchanged and retained widget state is unaffected.
     const thumb_h: f32 = real_card_w * 9.0 / 16.0;
-    const row_h: f32 = thumb_h + cardFooterH() + 6; // +6 = card's 3px top+bottom margin
+    const row_h: f32 = thumb_h + cardFooterH() + 12;
     const total_rows = (total + cols - 1) / cols;
     const win = tmdb_pure.visibleRows(total_rows, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 2);
 
@@ -1799,14 +1798,12 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) ?CardAction {
     const footer_h = cardFooterH();
     var card = dvui.box(@src(), .{ .dir = .vertical }, .{
         .id_extra = idx + 9000,
-        .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .color_border = theme.colors.border_subtle,
-        .border = dvui.Rect.all(1),
-        .corner_radius = dvui.Rect.all(theme.radius.lg),
+        .background = false,
+        .border = dvui.Rect.all(0),
+        .corner_radius = dvui.Rect.all(0),
         .min_size_content = .{ .w = the_card_w, .h = thumb_h + footer_h },
         .max_size_content = .{ .w = the_card_w, .h = thumb_h + footer_h },
-        .margin = .{ .x = 3, .y = 3, .w = 3, .h = 3 },
+        .margin = .{ .x = 5, .y = 5, .w = 5, .h = 7 },
         .padding = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
     });
     defer card.deinit();
@@ -1822,7 +1819,7 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) ?CardAction {
             .expand = .horizontal,
             .background = true,
             .color_fill = theme.colors.bg_deep,
-            .corner_radius = .{ .x = theme.radius.lg, .y = theme.radius.lg, .w = 0, .h = 0 },
+            .corner_radius = dvui.Rect.all(theme.radius.lg),
             .min_size_content = .{ .w = the_card_w, .h = thumb_h },
             .max_size_content = .{ .w = the_card_w, .h = thumb_h },
             .padding = dvui.Rect.all(0),
@@ -1850,7 +1847,7 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) ?CardAction {
                 _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
                     .id_extra = idx + 150,
                     .expand = .both,
-                    .corner_radius = dvui.Rect.all(4),
+                    .corner_radius = dvui.Rect.all(theme.radius.lg),
                 });
             } else {
                 // Failure-latch (mirrors TmdbItem/JfItem): stop re-spawning a
@@ -1916,7 +1913,7 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) ?CardAction {
         var info = dvui.box(@src(), .{ .dir = .vertical }, .{
             .id_extra = idx + 200,
             .expand = .horizontal,
-            .padding = .{ .x = 8, .y = 5, .w = 8, .h = 0 },
+            .padding = .{ .x = 2, .y = 7, .w = 2, .h = 0 },
         });
         defer info.deinit();
 
@@ -1933,14 +1930,14 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) ?CardAction {
         // bug. With the clamp the title can never steal the actions' space,
         // regardless of font-metric surprises. Same 2-line height cardFooterH
         // reserves, so they cannot drift.
-        _ = dvui.labelNoFmt(@src(), title_2l, .{}, .{
+        if (dvui.labelClick(@src(), "{s}", .{title_2l}, .{}, .{
             .id_extra = idx + 300,
             .expand = .horizontal,
             .color_text = theme.colors.text_primary,
             .font = titleFont(),
             .max_size_content = .{ .w = std.math.floatMax(f32), .h = 2.0 * titleFont().lineHeight() },
             .gravity_y = 0.0,
-        });
+        })) action = .play;
 
         // Two-line meta: channel on its own line, then "1.5M views · 3w ago".
         // Splitting them means dvui ellipsizes the CHANNEL (line 1) and trims

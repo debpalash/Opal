@@ -365,9 +365,9 @@ pub const MediaPlayer = struct {
     current_header_fields: [2048]u8 = std.mem.zeroes([2048]u8),
     current_header_fields_len: usize = 0,
     current_loopback_stream: bool = false,
-    /// First-attempt YouTube manifest skipping is safe for normal videos. Keep
-    /// one robust retry armed until FILE_LOADED for live/restricted edge cases.
-    ytdl_fast_retry_pending: bool = false,
+    /// First attempt uses the range-compatible Android progressive stream.
+    /// Keep one default-client retry armed for videos it cannot expose.
+    youtube_default_retry_pending: bool = false,
     resume_seeked: bool = false,
     restore_session_position: ?f64 = null,
     provider_resume_position: ?f64 = null,
@@ -753,7 +753,7 @@ pub const MediaPlayer = struct {
         @memset(&self.current_header_fields, 0);
         self.current_header_fields_len = 0;
         self.current_loopback_stream = false;
-        self.ytdl_fast_retry_pending = false;
+        self.youtube_default_retry_pending = false;
         self.resume_seeked = false;
         self.restore_session_position = null;
         self.provider_resume_position = null;
@@ -1386,9 +1386,9 @@ pub const MediaPlayer = struct {
             self.fallback_url_len = request.fallback_url.len;
             self.fallback_recovery.arm(true);
         }
-        self.ytdl_fast_retry_pending = std.ascii.indexOfIgnoreCase(path_span, "youtube.com/") != null or
+        self.youtube_default_retry_pending = std.ascii.indexOfIgnoreCase(path_span, "youtube.com/") != null or
             std.ascii.indexOfIgnoreCase(path_span, "youtu.be/") != null;
-        if (self.ytdl_fast_retry_pending) self.applyYtdlRawOptions(true, true);
+        if (self.youtube_default_retry_pending) self.applyYtdlRawOptions(true, true);
         self.resume_seeked = false;
         self.provider_resume_position = playback_load.saneResumePosition(request.resume_position_secs);
 
@@ -1745,6 +1745,38 @@ pub const MediaPlayer = struct {
         _ = c.mpv.mpv_command_string(self.mpv_ctx, "cycle pause");
     }
 
+    /// Cancel an in-flight or active non-torrent load without destroying the
+    /// player. The asynchronous stop keeps a blocked network demuxer off the UI
+    /// thread; clearing the logical identity immediately makes the pane and
+    /// footer return to their idle state on this frame.
+    pub fn cancelCurrentLoad(self: *MediaPlayer) void {
+        self.load_serial = playback_load_sequence.fetchAdd(1, .acq_rel) + 1;
+        @import("../services/auto_subs.zig").cancelForMediaChange();
+        if (self.proxy_handle.isValid()) {
+            @import("stream_proxy.zig").stopProxy(self.proxy_handle);
+            self.proxy_handle = @import("stream_proxy.zig").INVALID_HANDLE;
+        }
+        var args = [_][*c]const u8{ "stop", null };
+        _ = c.mpv.mpv_command_async(self.mpv_ctx, 0, &args);
+        self.clearFrame();
+        self.is_loading = false;
+        self.is_buffering_paused = false;
+        self.current_url_len = 0;
+        self.source_url_len = 0;
+        self.fallback_url_len = 0;
+        self.fallback_recovery.reset();
+        self.youtube_default_retry_pending = false;
+        self.history_identity_len = 0;
+        self.restore_target_len = 0;
+        self.loading_label_len = 0;
+        self.load_error_len = 0;
+        self.cached_vid_no = false;
+        self.cached_video_width = 0;
+        self.cached_video_height = 0;
+        self.setNowPlaying("", "", "");
+        state.wakeUi();
+    }
+
     /// Remove a deleted torrent from this player without removing the player
     /// pane. Stop mpv before the torrent session/file is torn down, so Windows
     /// can release its open file handle; clear the logical load as well as the
@@ -1777,7 +1809,7 @@ pub const MediaPlayer = struct {
         self.fallback_url_len = 0;
         self.fallback_recovery = .{};
         self.current_loopback_stream = false;
-        self.ytdl_fast_retry_pending = false;
+        self.youtube_default_retry_pending = false;
         self.history_identity_len = 0;
         self.restore_target_len = 0;
         self.loading_label_len = 0;
@@ -1874,7 +1906,7 @@ pub const MediaPlayer = struct {
             // Additive (deno stays yt-dlp's default); a missing node only
             // reproduces the "no JS runtime" warning, so no probing needed.
             .js_runtime = "node",
-            .youtube_fast = fast,
+            .youtube_compatible = fast,
         }, &raw_buf)) |raw| {
             var raw_z: [401]u8 = undefined;
             @memcpy(raw_z[0..raw.len], raw);
@@ -2540,7 +2572,7 @@ pub fn updateTorrentBackgroundTasks() void {
                 p.cached_video_height = 0;
                 p.cached_sub_text_len = 0;
             } else if (ev.*.event_id == c.mpv.MPV_EVENT_FILE_LOADED) {
-                p.ytdl_fast_retry_pending = false;
+                p.youtube_default_retry_pending = false;
                 p.load_error_len = 0;
                 if (p.restore_session_position != null or p.provider_resume_position != null or state.app.playing_episode.armed) {
                     p.resume_seeked = false;
@@ -2656,14 +2688,13 @@ pub fn updateTorrentBackgroundTasks() void {
                             continue;
                         }
                     }
-                    // Normal YouTube videos skip manifest/config requests for a
-                    // substantially faster first frame. Live/restricted edge
-                    // cases can need those requests, so retry exactly once with
-                    // the complete extractor path before surfacing the error.
-                    if (p.ytdl_fast_retry_pending and p.current_url_len > 0) {
-                        p.ytdl_fast_retry_pending = false;
+                    // The reliable progressive client avoids current FFmpeg
+                    // range 403s. If it cannot expose this video, retry exactly
+                    // once through yt-dlp's default client chain.
+                    if (p.youtube_default_retry_pending and p.current_url_len > 0) {
+                        p.youtube_default_retry_pending = false;
                         p.applyYtdlRawOptions(false, true);
-                        logs.pushLog("info", "ytdlp", "Fast extraction unavailable; retrying robust YouTube path", false);
+                        logs.pushLog("info", "ytdlp", "Compatibility stream unavailable; retrying default YouTube path", false);
                         p.commitPlayback(.{ .url = p.current_url[0..p.current_url_len] });
                         continue;
                     }

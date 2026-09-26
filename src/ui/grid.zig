@@ -650,7 +650,7 @@ pub fn renderGrid() !void {
                     if (components.actionButton(@src(), "Close", .secondary, i + 5605)) {
                         state.app.pending_remove_player_idx = @as(i32, @intCast(i));
                     }
-                } else if (p.np_title_len > 0 and p.texture == null) {
+                } else if (p.np_title_len > 0 and p.texture == null and !p.is_loading and p.cached_vid_no) {
                     // ── Audio now-playing pane (podcast / radio) ──
                     // No video frame + rich metadata set → show cover art +
                     // title/subtitle instead of the black/empty hero state.
@@ -972,6 +972,25 @@ pub fn renderGrid() !void {
                             .corner_radius = theme.dims.rad_sm,
                         })) {
                             state.app.active_player_idx = i;
+                        }
+
+                        if (dvui.buttonIcon(@src(), "Cancel loading", icons.tvg.lucide.x, .{}, .{}, .{
+                            .id_extra = i + 3001,
+                            .gravity_x = 1.0,
+                            .gravity_y = 0.0,
+                            .color_fill = theme.colors.overlay,
+                            .color_fill_hover = theme.colors.bg_hover,
+                            .color_text = theme.colors.text_primary,
+                            .border = dvui.Rect.all(0),
+                            .corner_radius = dvui.Rect.all(theme.radius.pill),
+                            .padding = dvui.Rect.all(7),
+                            .margin = dvui.Rect.all(theme.spacing.md),
+                        })) {
+                            if (p.current_torrent_id >= 0)
+                                state.app.pending_remove_player_idx = @as(i32, @intCast(i))
+                            else
+                                p.cancelCurrentLoad();
+                            state.showToast("Playback cancelled");
                         }
 
                         // What fits in THIS cell. The screen lives in a grid cell,
