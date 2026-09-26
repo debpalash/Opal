@@ -22,49 +22,34 @@ fn isSmart(id: i64) bool {
     return id == SMART_CONTINUE or id == SMART_RECENT;
 }
 
-fn smartCount(id: i64) usize {
-    const sql = if (id == SMART_CONTINUE)
-        "SELECT COUNT(*) FROM watch_history WHERE link<>'' AND percent>=2 AND percent<95"
-    else
-        "SELECT COUNT(*) FROM watch_history WHERE link<>''";
-    const stmt = db.prepare(sql) orelse return 0;
-    defer db.finalize(stmt);
-    return if (db.step(stmt) == db.c.SQLITE_ROW) @intCast(@max(db.columnInt64(stmt, 0), 0)) else 0;
-}
-
-fn appendSmart(out: []Summary, count: *usize, id: i64, name: []const u8) void {
-    if (count.* >= out.len) return;
-    const items = smartCount(id);
-    if (items == 0) return;
-    out[count.*] = .{ .id = id, .item_count = items, .smart = true };
-    @memcpy(out[count.*].name[0..name.len], name);
-    out[count.*].name_len = name.len;
-    count.* += 1;
-}
-
 fn validName(name: []const u8) bool {
     const trimmed = std.mem.trim(u8, name, " \t\r\n");
     return trimmed.len > 0 and trimmed.len < 96;
 }
 
 pub fn list(out: []Summary) usize {
-    var n: usize = 0;
-    appendSmart(out, &n, SMART_CONTINUE, "Continue watching");
-    appendSmart(out, &n, SMART_RECENT, "Recently played");
-    if (n >= out.len) return n;
+    if (out.len == 0) return 0;
+    // One statement keeps the per-frame native drawer read bounded: smart
+    // counts and saved collections share a single prepare/step lifecycle.
     const stmt = db.prepare(
-        "SELECT c.id,c.name,COUNT(i.position),c.updated_at FROM media_collections c " ++
-            "LEFT JOIN media_collection_items i ON i.collection_id=c.id " ++
-            "GROUP BY c.id ORDER BY c.updated_at DESC,c.name COLLATE NOCASE LIMIT ?1",
+        "SELECT -1,'Continue watching',COUNT(*),COALESCE(MAX(updated_at),0),1,0 " ++
+            "FROM watch_history WHERE link<>'' AND percent>=2 AND percent<95 HAVING COUNT(*)>0 " ++
+            "UNION ALL SELECT -2,'Recently played',COUNT(*),COALESCE(MAX(updated_at),0),1,0 " ++
+            "FROM watch_history WHERE link<>'' HAVING COUNT(*)>0 " ++
+            "UNION ALL SELECT c.id,c.name,COUNT(i.position),c.updated_at,0,1 " ++
+            "FROM media_collections c LEFT JOIN media_collection_items i ON i.collection_id=c.id GROUP BY c.id " ++
+            "ORDER BY 6,4 DESC,2 COLLATE NOCASE LIMIT ?1",
     ) orelse return 0;
     defer db.finalize(stmt);
-    db.bindInt64(stmt, 1, @intCast(@min(out.len - n, MAX_COLLECTIONS)));
+    db.bindInt64(stmt, 1, @intCast(@min(out.len, MAX_COLLECTIONS)));
+    var n: usize = 0;
     while (n < out.len and db.step(stmt) == db.c.SQLITE_ROW) : (n += 1) {
         out[n] = .{};
         out[n].id = db.columnInt64(stmt, 0);
         db.copyColumn(stmt, 1, &out[n].name, &out[n].name_len);
         out[n].item_count = @intCast(@max(db.columnInt64(stmt, 2), 0));
         out[n].updated_at = db.columnInt64(stmt, 3);
+        out[n].smart = db.columnInt64(stmt, 4) != 0;
     }
     return n;
 }
