@@ -459,6 +459,7 @@ def test_stream_readiness_gate():
     gate = _src("src/player/stream_gate.zig")
     pl = _src("src/player/player.zig")
     load_pure = _src("src/player/playback_load_pure.zig")
+    timing = _src("src/player/playback_timing_pure.zig")
     px = _src("src/player/stream_proxy.zig")
     cpp = _src("src/torrent_wrapper.cpp")
     hdr = _src("src/torrent_wrapper.h")
@@ -496,6 +497,16 @@ def test_stream_readiness_gate():
         # C++ byte-range primitives the gate needs.
         "range primitives": all(f in hdr and f in cpp for f in (
             "torrent_range_ready", "torrent_prioritize_range", "torrent_range_progress")),
+        # The UI thread must not synchronously ask libtorrent about every piece
+        # on every render frame. One status snapshot serves a whole range and
+        # the player maintenance pass runs on a bounded wall-clock cadence.
+        "range checks use status snapshots": (
+            "handle.have_piece" not in _between(cpp, 'extern "C" int torrent_range_ready', 'extern "C" int torrent_range_progress')
+            and "handle.have_piece" not in _between(cpp, 'extern "C" int torrent_range_progress', 'extern "C" void torrent_prioritize_range')
+            and "st.pieces.get_bit" in cpp),
+        "torrent maintenance is cadenced": (
+            "TORRENT_MAINTENANCE_MS" in timing
+            and "torrentMaintenanceDue(now_ms, p.last_torrent_maintenance_ms)" in pl),
         # Priorities BEFORE deadlines: prioritize_pieces() calls
         # remove_time_critical_pieces(), so the reverse order silently drops them.
         "priorities before deadlines": (cpp.index("prioritize_pieces(prios)")

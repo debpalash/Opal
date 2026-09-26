@@ -28,6 +28,15 @@ pub const FrameGate = struct {
     }
 };
 
+/// Torrent readiness and read-ahead maintenance crosses into libtorrent's
+/// session thread. Ten updates per second react quickly enough for startup and
+/// seeking while leaving the UI event loop free to service player controls.
+pub const TORRENT_MAINTENANCE_MS: i64 = 100;
+
+pub fn torrentMaintenanceDue(now_ms: i64, last_ms: i64) bool {
+    return last_ms == 0 or now_ms < last_ms or now_ms - last_ms >= TORRENT_MAINTENANCE_MS;
+}
+
 const std = @import("std");
 
 test "stale render notifications cannot become the new load first frame" {
@@ -52,4 +61,11 @@ test "replacement load requires its own file-loaded event" {
     try std.testing.expect(gate.acceptFirstFrame());
     gate.reset();
     try std.testing.expect(!gate.acceptFirstFrame());
+}
+
+test "torrent maintenance is bounded without stalling after clock reset" {
+    try std.testing.expect(torrentMaintenanceDue(1_000, 0));
+    try std.testing.expect(!torrentMaintenanceDue(1_099, 1_000));
+    try std.testing.expect(torrentMaintenanceDue(1_100, 1_000));
+    try std.testing.expect(torrentMaintenanceDue(50, 1_000));
 }

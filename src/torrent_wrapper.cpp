@@ -1390,14 +1390,20 @@ extern "C" int torrent_range_ready(TorrentSession session, int torrent_id, int f
     if (!node) return 0;
 
     try {
-        std::lock_guard<std::mutex> lk(ctx->mtx);
         if (!node->alive || !node->handle.is_valid()) return 0;
 
         int first_piece = 0, last_piece = 0;
         if (!map_range_to_pieces(node, file_idx, offset, len, first_piece, last_piece)) return 0;
 
+        // One status snapshot contains the complete piece bitfield. Calling
+        // The per-piece accessor performs one synchronous round trip
+        // to libtorrent's session thread for every iteration. During startup that
+        // put the UI thread to sleep dozens of times per frame and made the player
+        // controls appear dead while a torrent was buffering.
+        lt::torrent_status st = node->handle.status();
         for (int p = first_piece; p <= last_piece; ++p) {
-            if (!node->handle.have_piece(lt::piece_index_t(p))) return 0;
+            if (p < 0 || p >= st.pieces.size()
+                || !st.pieces.get_bit(lt::piece_index_t(p))) return 0;
         }
         return 1;
     } catch (...) {}
@@ -1412,7 +1418,6 @@ extern "C" int torrent_range_progress(TorrentSession session, int torrent_id, in
     if (!node) return 0;
 
     try {
-        std::lock_guard<std::mutex> lk(ctx->mtx);
         if (!node->alive || !node->handle.is_valid()) return 0;
 
         int first_piece = 0, last_piece = 0;
@@ -1420,9 +1425,13 @@ extern "C" int torrent_range_progress(TorrentSession session, int torrent_id, in
 
         int total = last_piece - first_piece + 1;
         if (total <= 0) return 0;
+        // As above, inspect a single coherent snapshot instead of making a
+        // blocking session-thread call for every piece in the range.
+        lt::torrent_status st = node->handle.status();
         int have = 0;
         for (int p = first_piece; p <= last_piece; ++p) {
-            if (node->handle.have_piece(lt::piece_index_t(p))) ++have;
+            if (p >= 0 && p < st.pieces.size()
+                && st.pieces.get_bit(lt::piece_index_t(p))) ++have;
         }
         return static_cast<int>((static_cast<long long>(have) * 100) / total);
     } catch (...) {}

@@ -119,9 +119,9 @@ fn rangeProgress(torrent_id: i32, file_idx: i32, off: u64, len: u64) u32 {
 
 /// Is this file ready to hand to mpv?
 ///
-/// Call once per frame from the UI thread while waiting to start. Cheap: piece
-/// lookups only. Never blocks — the one call that can block (`torrent_read_bytes`)
-/// is issued ONLY after its range is confirmed present, so it returns immediately.
+/// Called on the player's bounded torrent-maintenance cadence while waiting to
+/// start. Range checks use one libtorrent status snapshot each; the one call that
+/// can wait (`torrent_read_bytes`) is issued only after its range is present.
 pub fn isReady(torrent_id: i32, file_idx: i32, file_name: []const u8, file_size: u64) bool {
     if (torrent_id < 0 or file_idx < 0) return false;
     // No metadata yet — nothing to plan against. Don't claim ready.
@@ -219,7 +219,9 @@ pub fn isReady(torrent_id: i32, file_idx: i32, file_name: []const u8, file_size:
     const start_pct = rangeProgress(torrent_id, file_idx, 0, start_len);
     g.progress = @intCast(@min(100, start_pct));
 
-    if (rangeReady(torrent_id, file_idx, 0, start_len)) {
+    // `start_pct` came from the same required range. Do not issue a second
+    // synchronous libtorrent query just to ask the boolean form of the answer.
+    if (start_pct == 100) {
         g.ready = true;
         g.progress = 100;
 
