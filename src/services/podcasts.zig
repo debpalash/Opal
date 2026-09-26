@@ -5,13 +5,13 @@
 //! presentation lives in ui/podcasts_ui.zig.
 //!
 //! Flow:
-//!   loadPopularOnce() → curl the Apple top-shows chart → pure.parseTopChartIds
-//!                       → curl itunes.apple.com/lookup?id=… (same result objects
+//!   loadPopularOnce() → reliable fetch of Apple's top-shows chart → pure.parseTopChartIds
+//!                       → reliable fetch itunes.apple.com/lookup?id=… (same result objects
 //!                         as /search) → pure.parseItunes → results[]
 //!                       Fires once per session so the page opens populated.
-//!   searchPodcasts(q) → curl itunes.apple.com/search?media=podcast&term=…
+//!   searchPodcasts(q) → reliable fetch itunes.apple.com/search?media=podcast&term=…
 //!                       → pure.parseItunes → state.app.podcasts.results[]
-//!   loadEpisodes(idx) → curl the show's feedUrl (RSS)
+//!   loadEpisodes(idx) → reliable fetch of the show's feedUrl (RSS)
 //!                       → pure.parseRssEpisodes → state.app.podcasts.episodes[]
 //!   playEpisode(idx)  → browser.loadContentDirect(audio enclosure url) → mpv
 
@@ -19,7 +19,7 @@ const std = @import("std");
 const state = @import("../core/state.zig");
 const logs = @import("../core/logs.zig");
 const pure = @import("podcasts_pure.zig");
-const io = @import("../core/io_global.zig");
+const reliable_fetch = @import("reliable_fetch.zig");
 const workers = @import("../core/workers.zig");
 const LatestRequest = @import("../core/latest_request.zig").Gate;
 
@@ -235,7 +235,7 @@ fn popularWorker(my_gen: u32) void {
     const chart_url = pure.buildTopChartUrl(POPULAR_LIMIT, &chart_url_buf);
     if (chart_url.len == 0) return;
 
-    const chart = curl(chart_url, 128 * 1024) orelse {
+    const chart = fetchBody(chart_url, 128 * 1024) orelse {
         if (search_request.isCurrent(my_gen)) state.app.podcasts.fetch_error = true;
         return;
     };
@@ -254,7 +254,7 @@ fn popularWorker(my_gen: u32) void {
     const lookup_url = pure.buildLookupUrl(ids, &lookup_url_buf);
     if (lookup_url.len == 0) return;
 
-    const body = curl(lookup_url, 512 * 1024) orelse {
+    const body = fetchBody(lookup_url, 512 * 1024) orelse {
         if (search_request.isCurrent(my_gen)) state.app.podcasts.fetch_error = true;
         return;
     };
@@ -319,7 +319,7 @@ fn searchWorker(job: SearchJob) void {
         .{encoded},
     ) catch return;
 
-    const body = curl(url, 256 * 1024) orelse {
+    const body = fetchBody(url, 256 * 1024) orelse {
         if (search_request.isCurrent(job.generation)) state.app.podcasts.fetch_error = true;
         return;
     };
@@ -372,7 +372,7 @@ pub fn loadEpisodes(idx: usize) void {
             // 4 MB, not 1 MB: episodes[] holds 200, and a long-running show's feed
             // is huge (6.9 MB / 583 items for Raj Shamani). At 1 MB the parser only
             // ever saw the newest 61 — the array was two-thirds empty by design.
-            const body = curl(url, 4 * 1024 * 1024) orelse {
+            const body = fetchBody(url, 4 * 1024 * 1024) orelse {
                 state.app.podcasts.fetch_error = true;
                 return;
             };
@@ -568,51 +568,20 @@ fn percentEncode(src: []const u8, dst: []u8) []const u8 {
     return dst[0..out];
 }
 
-/// Fetch `url` with curl into a fresh heap buffer of `cap` bytes. Returns the
-/// filled slice (caller frees) or null on failure/empty. Large buffers stay off
-/// the worker stack (macOS 512KB limit).
-fn curl(url: []const u8, cap: usize) ?[]u8 {
-    const argv = [_][]const u8{ "curl", "-sL", "--connect-timeout", "3", "-A", agent, "--max-time", "10", url };
-    var child = io.Child.init(&argv, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    _ = child.spawn() catch return null;
-
-    const buf = alloc.alloc(u8, cap) catch {
-        _ = child.wait() catch {};
-        return null;
-    };
-    const n = if (child.stdout) |*so| io.readAll(so, buf) catch 0 else 0;
-
-    // Drain whatever curl still has queued, or wait() below never returns.
-    //
-    // readAll() stops the instant `buf` is full and leaves the rest sitting in the
-    // pipe. curl keeps writing, the pipe fills, and curl blocks inside write(2) —
-    // where it can no longer reach its own transfer loop, so `--max-time 15` never
-    // fires. wait() then blocks forever on a process that can never exit.
-    //
-    // Raj Shamani's Figuring Out is a 6.9 MB feed against a 1 MB cap: the worker
-    // thread hung permanently on "Loading…", and because loadEpisodes() early-
-    // returns while episodes_loading is set, EVERY later podcast click was a
-    // silent no-op for the rest of the session.
-    if (n == buf.len) {
-        if (child.stdout) |*so| {
-            var sink: [64 * 1024]u8 = undefined;
-            while ((io.read(so, &sink) catch 0) > 0) {}
-        }
-    }
-
-    _ = child.wait() catch {};
-    if (n == 0) {
+/// Fetch through the shared status-aware transport into a bounded heap buffer.
+/// The transport drains oversized responses, so a large RSS feed cannot wedge
+/// the worker while its child process is blocked on a full stdout pipe.
+fn fetchBody(url: []const u8, cap: usize) ?[]u8 {
+    const buf = alloc.alloc(u8, cap) catch return null;
+    const body = reliable_fetch.fetch(url, buf, .{
+        .user_agent = agent,
+        .timeout_secs = 10,
+    }) orelse {
         alloc.free(buf);
         return null;
-    }
+    };
 
-    // Shrink to what was actually read. The caller frees what we hand back, and
-    // the global DebugAllocator checks the free size against the allocation size
-    // — returning `buf[0..n]` out of a `cap`-sized allocation is an INVALID FREE
-    // and aborts the process (it did: 49584 freed against 524288 allocated).
-    return alloc.realloc(buf, n) catch {
+    return alloc.realloc(buf, body.len) catch {
         alloc.free(buf);
         return null;
     };
