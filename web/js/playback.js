@@ -298,10 +298,13 @@ async function loadHome(){
         <div class="m"><span class="src">${esc(r.kind)}</span>
           ${r.has_next ? `<span>S${String(r.next_season).padStart(2,'0')}E${String(r.next_episode).padStart(2,'0')} next</span>` : '<span>in progress</span>'}</div>
       </div>`).join('') || '<div class="empty">Nothing in progress</div>';
-    $('home-continue').querySelectorAll('.result').forEach(el => el.onclick = () => {
+    $('home-continue').querySelectorAll('.result').forEach(el => {
       const r = cont[+el.dataset.i];
-      if (r && r.kind === 'tv' && r.tmdb_id) openShow(r.tmdb_id, r.name);
-      else prefillSearch(normQuery(r.name));
+      el.onclick = () => {
+        if (r && r.kind === 'tv' && r.tmdb_id) openShow(r.tmdb_id, r.name);
+        else prefillSearch(normQuery(r.name));
+      };
+      wireKeyboardClick(el, `Continue ${r?.name || 'media'}`);
     });
   } catch { $('home-metrics').innerHTML = '<div class="empty">Could not load</div>'; }
   loadCalendarInto('home-cal');

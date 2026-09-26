@@ -400,7 +400,10 @@ async function loadActivity(){
     $('history').innerHTML = (h.items || []).slice(0, 20).map(q =>
       `<div class="file" data-q="${esc(q)}"><div class="n">${esc(q)}</div><span class="play">Search ⭢</span></div>`).join('')
       || '<div class="empty">No history</div>';
-    $('history').querySelectorAll('.file').forEach(el => el.onclick = () => prefillSearch(el.dataset.q));
+    $('history').querySelectorAll('.file').forEach(el => {
+      el.onclick = () => prefillSearch(el.dataset.q);
+      wireKeyboardClick(el, `Search again for ${el.dataset.q}`);
+    });
   } catch { $('history').innerHTML = '<div class="empty">—</div>'; }
 }
 
@@ -835,7 +838,10 @@ async function loadCalendarInto(targetId){
   const src = $('cal'), dst = $(targetId);
   if (!src || !dst) return;
   dst.innerHTML = src.innerHTML;
-  dst.querySelectorAll('.c').forEach(c => c.onclick = () => openShow(+c.dataset.id, c.dataset.n));
+  dst.querySelectorAll('.c').forEach(c => {
+    c.onclick = () => openShow(+c.dataset.id, c.dataset.n);
+    wireKeyboardClick(c, `Open ${c.dataset.n}`);
+  });
 }
 async function loadCalendar(){
   try {
@@ -851,7 +857,10 @@ async function loadCalendar(){
       return `<div class="c" data-id="${e.tmdb_id}" data-n="${esc(e.name)}">
         <div class="n">${esc(e.name)}</div><div class="s ${e.available ? 'avail' : ''}">${lab}</div></div>`;
     }).join('');
-    $('cal').querySelectorAll('.c').forEach(c => c.onclick = () => openShow(+c.dataset.id, c.dataset.n));
+    $('cal').querySelectorAll('.c').forEach(c => {
+      c.onclick = () => openShow(+c.dataset.id, c.dataset.n);
+      wireKeyboardClick(c, `Open ${c.dataset.n}`);
+    });
   } catch {}
 }
 function cd(air){

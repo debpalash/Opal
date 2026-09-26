@@ -143,7 +143,8 @@ commands, non-finite numbers, out-of-range values, and unknown actions.
 - [x] Multiple accounts, per-account session/device management, and
       capability-scoped admin authority
 - [ ] Per-user media profiles and state isolation
-- [ ] Full screen-reader audit and remediation
+- [x] Screen-reader semantics audit across every routed page, including named
+      dynamic controls, keyboard-actionable cards, and announced disclosure state
 - [x] 200% zoom/reflow with compact responsive controls
 - [ ] Localization-ready strings
 - [x] TV/remote directional focus, activation, overlay Back/Escape behavior,

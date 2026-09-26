@@ -26,6 +26,18 @@ if (location.hash.startsWith('#setup=')) {
 
 const $ = id => document.getElementById(id);
 
+function wireKeyboardClick(element, label){
+  if (!element) return element;
+  element.setAttribute('role', 'button');
+  element.tabIndex = 0;
+  if (label) element.setAttribute('aria-label', label);
+  element.onkeydown = event => {
+    if (event.target !== element || (event.key !== 'Enter' && event.key !== ' ')) return;
+    event.preventDefault(); element.click();
+  };
+  return element;
+}
+
 // Session-only performance probe. Event Timing measures input-to-next-paint;
 // no URLs, labels, or user content are retained.
 const webPerf = (() => {
