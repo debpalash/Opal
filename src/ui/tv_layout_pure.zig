@@ -13,9 +13,9 @@ pub const Layout = struct {
 /// Work in layout units after display/UI scaling, including drawer mode.
 pub fn calculate(available: f32) Layout {
     const viewport_width = if (std.math.isFinite(available)) @max(1, available) else 320;
-    // Reading-width cap: ultrawide windows get a dense two-column catalogue
-    // instead of one 1800px row with its controls stranded in the middle.
-    const width = @min(viewport_width, 1480);
+    // Season detail is an immersive catalogue: use the whole pane instead of
+    // centering a reading-width column and wasting the outer thirds.
+    const width = viewport_width;
     const stacked = width < 640;
     const columns: usize = if (width >= 1080) 2 else 1;
     const gap: f32 = 8;
@@ -23,7 +23,7 @@ pub fn calculate(available: f32) Layout {
     // padding on both sides. Account for it here so two cards never overflow
     // their row and silently collapse back into a strange partial column.
     const card_width = @max(1, (if (columns == 2) (width - gap) / 2 else width) - 16);
-    const thumbnail_width = if (stacked) @max(1, card_width - 16) else @min(176, card_width * 0.27);
+    const thumbnail_width = if (stacked) @max(1, card_width - 12) else @min(160, card_width * 0.24);
     return .{
         .viewport_width = viewport_width,
         .width = width,
@@ -62,12 +62,12 @@ test "TV cards fit phone tablet desktop and scaled drawer widths" {
         try std.testing.expect(layout.thumbnail_width <= width);
         try std.testing.expectApproxEqAbs(@as(f32, 16.0 / 9.0), layout.thumbnail_width / layout.thumbnail_height, 0.001);
         try std.testing.expectEqual(width < 640, layout.stacked);
-        try std.testing.expectEqual(@as(usize, if (@min(width, 1480) >= 1080) 2 else 1), layout.columns);
+        try std.testing.expectEqual(@as(usize, if (width >= 1080) 2 else 1), layout.columns);
         try std.testing.expect(layout.card_width <= layout.width);
     }
     try std.testing.expect(calculate(std.math.nan(f32)).stacked);
     try std.testing.expect(calculate(0).thumbnail_width > 0);
-    try std.testing.expectEqual(@as(f32, 1480), calculate(3000).width);
+    try std.testing.expectEqual(@as(f32, 3000), calculate(3000).width);
 }
 
 test "episode state separates playable upcoming and undated entries" {
