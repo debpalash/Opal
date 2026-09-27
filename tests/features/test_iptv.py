@@ -130,8 +130,9 @@ def test_iptv_tab():
         # Thread discipline (mirrors radio.zig).
         "atomic loading flag": "is_loading.store" in svc,
         "publishes under mutex": "parse_mutex.lock()" in svc,
-        # curl only — std.http SEGVs on some ISP TLS resets (see comics.zig).
-        "curl not std.http": "std.http.Client" not in svc and '"curl"' in svc,
+        "reliable fetch transport": (
+            "std.http.Client" not in svc and "reliable_fetch.fetch(" in svc
+        ),
 
         # ── Enum → state → nav → render dispatch → rail/shell ──
         # Assert MEMBERSHIP, not position (concurrent tab additions).
