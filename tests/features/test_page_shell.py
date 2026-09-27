@@ -287,12 +287,13 @@ def test_podcasts_radio_default_content():
         "radio reuses parseStations": "pure.parseStations(" in rad,
         "radio one-shot latch": "popular_fetched" in rad and "pub fn loadPopularOnce" in rad,
         "radio fetch is backgrounded": "spawnLegacy(popularWorker" in rad,
-        # Both curl helpers allocate `cap` bytes and hand back only what was read.
+        # Both fetch helpers allocate `cap` bytes and hand back only what was read.
         # Returning `buf[0..n]` is an INVALID FREE under the global DebugAllocator
         # (it checks free size against alloc size) and aborts the process on launch
         # — 49584 freed against 524288 allocated. The buffer must be shrunk to `n`.
-        "curl shrinks buffer to the read length": all(
-            "alloc.realloc(buf, n)" in s and "return buf[0..n];" not in s
+        "fetch shrinks buffer to the read length": all(
+            ("alloc.realloc(buf, n)" in s or "alloc.realloc(buf, body.len)" in s)
+            and "return buf[0..n];" not in s
             for s in (pod, rad)
         ),
         # ── Cards: artwork via the shared poster daemon, existing click path ──
