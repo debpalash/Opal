@@ -3,11 +3,10 @@ class Opal < Formula
   # needs a matching Homebrew mpv/FFmpeg and cannot be installed independently.
   desc "Pure-Zig desktop media browser and AI copilot"
   homepage "https://github.com/debpalash/Opal"
-  version "0.8.6"
+  url "https://github.com/debpalash/Opal/releases/download/v0.8.7/Opal-0.8.7-macos-arm64.app.zip"
+  version "0.8.7"
+  sha256 "055aeb52eeca077852b357e222e3c8675e30b32a6e2927a7c781513b0dc35e49"
   license "GPL-3.0-only"
-
-  url "https://github.com/debpalash/Opal/releases/download/v0.8.6/Opal-0.8.6-macos-arm64.app.zip"
-  sha256 "5e92c5211d7c3260a56225572ced0d35abad2d2e41eeb6906da8f78ee0a2c8cb"
 
   # The published binary is Apple-silicon only (GitHub retired the Intel runners).
   # Say so up front instead of installing something that cannot run.
