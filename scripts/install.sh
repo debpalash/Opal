@@ -20,7 +20,7 @@
 #   Debian/Ubuntu          verified .deb extracted under $OPAL_PREFIX
 #   other Linux            AppImage → $OPAL_PREFIX/bin + desktop entry
 #                          (both paths require no root)
-#   Linux, OPAL_SYSTEM=1   native .deb/.rpm/AUR package (root/sudo required)
+#   Linux, OPAL_SYSTEM=1   native .deb/.rpm/Pacman package (root/sudo required)
 #   Windows                not handled by this script (deliberately — a sh
 #                          installer is the wrong tool there). Download the
 #                          .msi installer or the portable .zip from
@@ -151,6 +151,12 @@ install_linux_system() {
         receipt rpm; say "done — run: opal"; return
     fi
     if have pacman; then
+        fetch "opal-$VER-1-x86_64.pkg.tar.zst" "$TMP/opal.pkg.tar.zst"
+        say "installing system Pacman package"
+        as_root pacman -U --noconfirm "$TMP/opal.pkg.tar.zst"
+        receipt pacman; say "done — run: opal"; return
+    fi
+    if have yay || have paru; then
         for helper in yay paru; do
             if have "$helper" && "$helper" -Si opal-media-player-bin >/dev/null 2>&1; then
                 say "installing from the AUR via $helper"
@@ -294,6 +300,7 @@ do_uninstall() {
         brew)        brew uninstall opal ;;
         deb)         sudo apt-get remove -y opal ;;
         rpm)         { have dnf && sudo dnf remove -y opal; } || sudo zypper --non-interactive remove opal ;;
+        pacman)      as_root pacman -R --noconfirm opal ;;
         aur)         sudo pacman -R --noconfirm opal-media-player-bin ;;
         app:*)       rm -rf "${method#app:}/Opal.app" ;;
         local-prefix:*)
