@@ -1843,29 +1843,6 @@ fn appFrame() !dvui.App.Result {
         }
     }
 
-    // Keep the on-screen scrubber/overlay ticking during playback — but only
-    // while the control chrome is actually visible, synchronized at ~60fps.
-    // Video FRAMES already repaint on their own via mpv's render-update callback
-    // (player.mpvRenderUpdateCallback → thread-safe dvui.refresh); this tick just
-    // keeps the scrubber/hover animating between frames (and drives audio-only
-    // playback, which has no video frames). The old code called dvui.refresh
-    // EVERY frame, so on a 120Hz ProMotion display the whole UI tree was
-    // re-laid-out 120×/s while the mouse was active — ~1800 idle wake-ups and
-    // the bulk of the playback CPU. A 16.7ms re-arming timer targets 60fps and
-    // lets the loop idle between ticks. Once the
-    // chrome auto-hides (mouse idle > 2.5s) it stops entirely → pure video-fps.
-    // `cached_paused` is observer-cached (no per-frame IPC).
-    const chrome_live = (@import("core/io_global.zig").milliTimestamp() - state.app.last_mouse_move_ms) < @import("ui/chrome_autohide.zig").DEFAULT_THRESHOLD_MS;
-    if (chrome_live) {
-        for (state.app.players.items) |p| {
-            if (p.provider == .mpv and !p.cached_paused) {
-                const tick_id = dvui.Id.extendId(null, @src(), 0);
-                if (dvui.timerDoneOrNone(tick_id)) dvui.timer(tick_id, 16_667);
-                break;
-            }
-        }
-    }
-
     // Frame-time HUD: Debug builds AND opt-in (OPAL_HUD=1).
     //
     // It is opt-in because it has to overlay the chrome to be seen, and the only

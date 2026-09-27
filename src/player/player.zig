@@ -318,6 +318,15 @@ pub const MediaPlayer = struct {
     /// Set by mpv's update callback (any thread) to wake the worker.
     render_wake: std.Io.Event,
     frame_mutex: @import("../core/sync.zig").Mutex,
+    /// Monotonic publication time of the latest video frame. mpv queues a
+    /// `time-pos` client event for the same frame that triggers the render
+    /// callback; the general wakeup callback uses this stamp to avoid waking
+    /// the UI a second time for work the frame publication already drives.
+    last_frame_publish_ms: std.atomic.Value(i64),
+    /// Generic client events drive audio-only and paused playback. Cap those
+    /// wakeups at 30 Hz so high-frequency `time-pos` observations cannot turn
+    /// an audio stream into a display-rate full UI redraw loop.
+    last_client_wake_ms: std.atomic.Value(i64),
     /// A finished frame sits in `pixels` and has not been uploaded yet.
     frame_ready: bool,
     /// Dimensions of the frame in `pixels` (row stride is frame_w * 4 bytes).
@@ -884,6 +893,8 @@ pub const MediaPlayer = struct {
         self.render_stop = std.atomic.Value(bool).init(false);
         self.render_wake = .unset;
         self.frame_mutex = .{};
+        self.last_frame_publish_ms = std.atomic.Value(i64).init(0);
+        self.last_client_wake_ms = std.atomic.Value(i64).init(0);
         self.frame_ready = false;
         self.frame_w = 0;
         self.frame_h = 0;
@@ -1094,7 +1105,7 @@ pub const MediaPlayer = struct {
         // queued client event too, so audio-only playback, pause changes and
         // late metadata cannot sit unprocessed until unrelated pointer input.
         // mpv requires this callback to remain notification-only.
-        c.mpv.mpv_set_wakeup_callback(self.mpv_ctx, &mpvWakeupCallback, null);
+        c.mpv.mpv_set_wakeup_callback(self.mpv_ctx, &mpvWakeupCallback, @ptrCast(self));
 
         // ── Observe properties so the render hot path can read cached fields
         // instead of issuing synchronous mpv_get_property IPC every frame (A4).
@@ -1255,6 +1266,10 @@ pub const MediaPlayer = struct {
             self.frame_fmt = textureFormatOf(fmt);
             self.frame_ready = true;
             self.frame_mutex.unlock();
+            self.last_frame_publish_ms.store(
+                @import("../core/io_global.zig").monotonicMilliTimestamp(),
+                .release,
+            );
             // Wake the UI immediately after publication. Timing persistence is
             // deliberately asynchronous; diagnostics must never delay the frame
             // they are measuring.
@@ -2319,9 +2334,33 @@ fn mpvRenderUpdateCallback(ctx: ?*anyopaque) callconv(.c) void {
     p.render_wake.set(@import("../core/io_global.zig").io());
 }
 
-/// Invoked for every queued mpv client event, including audio-only streams and
-/// property changes that do not produce a render frame.
-fn mpvWakeupCallback(_: ?*anyopaque) callconv(.c) void {
+/// Invoked when mpv queues client events, including audio-only streams and
+/// property changes that do not produce a render frame. Redundant wakeups are
+/// coalesced here before they reach the UI event loop.
+fn mpvWakeupCallback(ctx: ?*anyopaque) callconv(.c) void {
+    // A playing video produces two notifications for the same presentation:
+    // the render callback and a client event (usually observed `time-pos`).
+    // The render worker publishes the actual pixels and wakes dvui, so a
+    // second wake within the following frame window only repeats the complete
+    // layout/present pass. A 75 ms window covers 24/30/60 fps playback. Once
+    // frames stop (pause, audio-only, loading, EOF), it expires and client
+    // events resume waking the UI normally.
+    if (ctx) |raw| {
+        const p: *MediaPlayer = @ptrCast(@alignCast(raw));
+        const last = p.last_frame_publish_ms.load(.acquire);
+        const now = @import("../core/io_global.zig").monotonicMilliTimestamp();
+        if (last > 0 and now >= last and now - last <= 75) {
+            if (perf.enabled) _ = perf.client_wakes_suppressed.fetchAdd(1, .monotonic);
+            return;
+        }
+        const last_client = p.last_client_wake_ms.load(.acquire);
+        if (last_client > 0 and now >= last_client and now - last_client < 33) {
+            if (perf.enabled) _ = perf.client_wakes_suppressed.fetchAdd(1, .monotonic);
+            return;
+        }
+        p.last_client_wake_ms.store(now, .release);
+    }
+    if (perf.enabled) _ = perf.client_wakes.fetchAdd(1, .monotonic);
     wakeDvuiFromMpv();
 }
 
@@ -2404,6 +2443,8 @@ pub const PerfProbe = struct {
     frames: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     render_ns: std.atomic.Value(i64) = std.atomic.Value(i64).init(0),
     render_max_ns: std.atomic.Value(i64) = std.atomic.Value(i64).init(0),
+    client_wakes: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    client_wakes_suppressed: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     // UI thread only.
     ui_frames: u32 = 0,
     uploads: u32 = 0,
@@ -2489,16 +2530,20 @@ pub fn perfReport(p: *MediaPlayer) void {
     const frames = perf.frames.swap(0, .monotonic);
     const render_ns = perf.render_ns.swap(0, .monotonic);
     const render_max_ns = perf.render_max_ns.swap(0, .monotonic);
+    const client_wakes = perf.client_wakes.swap(0, .monotonic);
+    const client_wakes_suppressed = perf.client_wakes_suppressed.swap(0, .monotonic);
     const fr: f64 = @floatFromInt(@max(frames, 1));
     const uf: f64 = @floatFromInt(@max(perf.uploads, 1));
     std.debug.print(
-        "[perf] {d:.1}s: vid_frames={d} ({d:.1}/s) ui_frames={d} ({d:.1}/s) render avg={d:.2}ms max={d:.2}ms upload avg={d:.2}ms max={d:.2}ms | hwdec={s} drop_vo={s} drop_dec={s} delayed={s} vf_fps={s} in={s} out={s} cache={s}s\n",
+        "[perf] {d:.1}s: vid_frames={d} ({d:.1}/s) ui_frames={d} ({d:.1}/s) client_wakes={d} suppressed={d} render avg={d:.2}ms max={d:.2}ms upload avg={d:.2}ms max={d:.2}ms | hwdec={s} drop_vo={s} drop_dec={s} delayed={s} vf_fps={s} in={s} out={s} cache={s}s\n",
         .{
             dt_s,
             frames,
             @as(f64, @floatFromInt(frames)) / dt_s,
             perf.ui_frames,
             @as(f64, @floatFromInt(perf.ui_frames)) / dt_s,
+            client_wakes,
+            client_wakes_suppressed,
             @as(f64, @floatFromInt(render_ns)) / fr / 1e6,
             @as(f64, @floatFromInt(render_max_ns)) / 1e6,
             @as(f64, @floatFromInt(perf.upload_ns)) / uf / 1e6,

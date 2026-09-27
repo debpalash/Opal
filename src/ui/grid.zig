@@ -608,8 +608,10 @@ pub fn renderGrid() !void {
                         p.is_loading = false;
                         // Try to resume from saved position on first frame
                         p.tryResumePosition();
-                        // Only request UI refresh when we actually have a new video frame
-                        dvui.refresh(null, @src(), null);
+                        // The render worker woke this UI frame specifically for
+                        // the published pixels. SDL presents the updated texture
+                        // when this frame ends; scheduling another refresh here
+                        // redraws the entire UI once more with identical pixels.
                     }
                 }
 
