@@ -1,9 +1,9 @@
 //! Loopback adapter for YouTube's adaptive CDN streams.
 //!
 //! Google rejects FFmpeg's open-ended `Range: bytes=N-` request for these
-//! URLs, while bounded ranges work. Each local request is capped to 8 MiB and
-//! forwarded upstream as `bytes=N-M`; the truthful 206 response makes FFmpeg
-//! request the next chunk or seek through this endpoint again.
+//! URLs, while bounded ranges work. Each local response therefore advertises
+//! exactly the bounded chunk it can deliver; FFmpeg reconnects for the next
+//! chunk and can seek by opening a new range at the requested byte.
 
 const std = @import("std");
 const pure = @import("../services/youtube_player_pure.zig");
@@ -14,7 +14,9 @@ const MAX_STREAMS = 8;
 const PORT_START: u16 = 45778;
 const PORT_END: u16 = 45878;
 const TOKEN_LEN = 16;
+// Google Video may reject larger `range=` windows with HTTP 403.
 const UPSTREAM_CHUNK: u64 = 1024 * 1024;
+const UPSTREAM_ATTEMPTS: usize = 3;
 
 const ListenerT = @TypeOf(blk: {
     const a = std.Io.net.IpAddress.parseIp4("127.0.0.1", PORT_START) catch unreachable;
@@ -221,6 +223,82 @@ fn choose(path: []const u8, streams: *const pure.Streams) ?*const pure.Stream {
     return null;
 }
 
+const ByteRange = struct { start: u64, end: u64 };
+const ParsedRange = union(enum) {
+    absent,
+    invalid,
+    range: ByteRange,
+};
+
+/// HTTP field names and the `bytes` unit are case-insensitive. FFmpeg normally
+/// emits `Range`, but accepting only that exact spelling turns a valid seek
+/// into a byte-zero request as soon as a client or library changes casing.
+fn parseRange(request: []const u8, total: u64) ParsedRange {
+    var lines = std.mem.splitSequence(u8, request, "\r\n");
+    _ = lines.next(); // request line
+    while (lines.next()) |line| {
+        if (line.len == 0) break;
+        const colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
+        const name = std.mem.trim(u8, line[0..colon], " \t");
+        if (!std.ascii.eqlIgnoreCase(name, "range")) continue;
+        const value = std.mem.trim(u8, line[colon + 1 ..], " \t");
+        if (value.len < 6 or !std.ascii.eqlIgnoreCase(value[0..6], "bytes=")) return .invalid;
+        const spec = std.mem.trim(u8, value[6..], " \t");
+        if (std.mem.indexOfScalar(u8, spec, ',') != null) return .invalid;
+        const dash = std.mem.indexOfScalar(u8, spec, '-') orelse return .invalid;
+        if (dash == 0) {
+            const suffix = std.fmt.parseInt(u64, spec[1..], 10) catch return .invalid;
+            if (suffix == 0 or total == 0) return .invalid;
+            return .{ .range = .{ .start = total -| suffix, .end = total - 1 } };
+        }
+        const start_byte = std.fmt.parseInt(u64, spec[0..dash], 10) catch return .invalid;
+        if (start_byte >= total) return .invalid;
+        const end = if (dash + 1 < spec.len)
+            std.fmt.parseInt(u64, spec[dash + 1 ..], 10) catch return .invalid
+        else
+            total - 1;
+        if (end < start_byte) return .invalid;
+        return .{ .range = .{ .start = start_byte, .end = @min(end, total - 1) } };
+    }
+    return .absent;
+}
+
+fn responseHead(conn: std.Io.net.Stream, partial: bool, range: ByteRange, total: u64, mime: []const u8) bool {
+    var buf: [512]u8 = undefined;
+    const length = range.end - range.start + 1;
+    const header = if (partial)
+        std.fmt.bufPrint(&buf, "HTTP/1.1 206 Partial Content\r\nContent-Type: {s}\r\nAccept-Ranges: bytes\r\nContent-Range: bytes {d}-{d}/{d}\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n", .{ mime, range.start, range.end, total, length }) catch return false
+    else
+        std.fmt.bufPrint(&buf, "HTTP/1.1 200 OK\r\nContent-Type: {s}\r\nAccept-Ranges: bytes\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n", .{ mime, total }) catch return false;
+    io_g.streamWriteAll(conn, header) catch return false;
+    return true;
+}
+
+fn fetchChunk(selected: *const pure.Stream, start_byte: u64, end_byte: u64, buf: []u8) ?[]const u8 {
+    const length: usize = @intCast(end_byte - start_byte + 1);
+    // The videoplayback endpoint has a first-class `range=` query contract.
+    // It is more reliable across its keep-alive/CDN frontends than issuing a
+    // succession of HTTP Range fields on one pooled client (the latter starts
+    // returning 502 after a few chunks on current Google Video hosts).
+    var url_buf: [pure.MAX_URL + 64]u8 = undefined;
+    const separator: u8 = if (std.mem.indexOfScalar(u8, selected.slice(), '?') == null) '?' else '&';
+    const ranged_url = std.fmt.bufPrint(&url_buf, "{s}{c}range={d}-{d}", .{ selected.slice(), separator, start_byte, end_byte }) catch return null;
+    var attempt: usize = 0;
+    while (attempt < UPSTREAM_ATTEMPTS) : (attempt += 1) {
+        var upstream_status: ?std.http.Status = null;
+        const body = @import("../core/http.zig").fetchDirect(ranged_url, buf, .{
+            .timeout_secs = 12,
+            .user_agent = pure.VR_USER_AGENT,
+            .accept = "*/*",
+            .max_response = length + 1,
+            .status_out = &upstream_status,
+        }) orelse continue;
+        if (body.len == length and
+            (upstream_status == .ok or upstream_status == .partial_content)) return body;
+    }
+    return null;
+}
+
 fn handleConnection(args: ConnArgs) !void {
     mutex.lock();
     const live = slots[args.slot].in_use and slots[args.slot].id == args.id;
@@ -246,49 +324,41 @@ fn handleConnection(args: ConnArgs) !void {
     const selected = choose(path, &streams) orelse return status(args.conn, "404 Not Found", 0);
     if (selected.content_length == 0) return status(args.conn, "502 Bad Gateway", 0);
 
-    var start_byte: u64 = 0;
-    var requested_end: ?u64 = null;
-    if (std.mem.indexOf(u8, request, "Range: bytes=")) |ri| {
-        const value_start = ri + "Range: bytes=".len;
-        const line_end = std.mem.indexOfAnyPos(u8, request, value_start, "\r\n") orelse request.len;
-        const value = request[value_start..line_end];
-        if (std.mem.indexOfScalar(u8, value, '-')) |dash| {
-            start_byte = std.fmt.parseInt(u64, value[0..dash], 10) catch 0;
-            if (dash + 1 < value.len) requested_end = std.fmt.parseInt(u64, value[dash + 1 ..], 10) catch null;
-        }
-    }
     const total = selected.content_length;
-    if (start_byte >= total) return status(args.conn, "416 Range Not Satisfiable", total);
-    var end = @min(total - 1, start_byte + UPSTREAM_CHUNK - 1);
-    if (requested_end) |wanted| end = @min(end, wanted);
-    const length = end - start_byte + 1;
-
-    if (!is_head) {
-        var range_buf: [96]u8 = undefined;
-        const range = std.fmt.bufPrint(&range_buf, "bytes={d}-{d}", .{ start_byte, end }) catch return;
-        const body_buf = @import("../core/alloc.zig").allocator.alloc(u8, @intCast(length + 1)) catch return status(args.conn, "503 Service Unavailable", total);
-        defer @import("../core/alloc.zig").allocator.free(body_buf);
-        const headers = [_]std.http.Header{.{ .name = "Range", .value = range }};
-        const body = @import("../core/http.zig").fetchDirect(selected.slice(), body_buf, .{
-            .timeout_secs = 8,
-            .user_agent = pure.VR_USER_AGENT,
-            .accept = "*/*",
-            .max_response = body_buf.len,
-            .extra_headers = &headers,
-            .preserve_range_on_redirect = true,
-        }) orelse return status(args.conn, "502 Bad Gateway", total);
-        if (body.len != length) return status(args.conn, "502 Bad Gateway", total);
-
-        var header_buf: [512]u8 = undefined;
-        const mime = if (selected.height == 0) "audio/mp4" else if (selected.codec_rank == 1) "video/webm" else "video/mp4";
-        const header = std.fmt.bufPrint(&header_buf, "HTTP/1.1 206 Partial Content\r\nContent-Type: {s}\r\nAccept-Ranges: bytes\r\nContent-Range: bytes {d}-{d}/{d}\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n", .{ mime, start_byte, end, total, length }) catch return;
-        io_g.streamWriteAll(args.conn, header) catch return;
-        io_g.streamWriteAll(args.conn, body) catch return;
+    const parsed = parseRange(request, total);
+    const requested = switch (parsed) {
+        .absent => ByteRange{ .start = 0, .end = total - 1 },
+        .invalid => return status(args.conn, "416 Range Not Satisfiable", total),
+        .range => |r| r,
+    };
+    const served = ByteRange{
+        .start = requested.start,
+        .end = @min(requested.end, requested.start +| (UPSTREAM_CHUNK - 1)),
+    };
+    const mime = if (selected.height == 0) "audio/mp4" else if (selected.codec_rank == 1) "video/webm" else "video/mp4";
+    if (is_head) {
+        _ = responseHead(args.conn, true, served, total, mime);
         return;
     }
 
-    var header_buf: [512]u8 = undefined;
-    const mime = if (selected.height == 0) "audio/mp4" else if (selected.codec_rank == 1) "video/webm" else "video/mp4";
-    const header = std.fmt.bufPrint(&header_buf, "HTTP/1.1 206 Partial Content\r\nContent-Type: {s}\r\nAccept-Ranges: bytes\r\nContent-Range: bytes {d}-{d}/{d}\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n", .{ mime, start_byte, end, total, length }) catch return;
-    io_g.streamWriteAll(args.conn, header) catch return;
+    const body_buf = @import("../core/alloc.zig").allocator.alloc(u8, UPSTREAM_CHUNK + 1) catch return status(args.conn, "503 Service Unavailable", total);
+    defer @import("../core/alloc.zig").allocator.free(body_buf);
+    const body = fetchChunk(selected, served.start, served.end, body_buf) orelse return status(args.conn, "502 Bad Gateway", total);
+    if (!responseHead(args.conn, true, served, total, mime)) return;
+    io_g.streamWriteAll(args.conn, body) catch return;
+}
+
+test "range parser accepts FFmpeg casing and open ended seeks" {
+    const total: u64 = 10_000;
+    const lower = parseRange("GET / HTTP/1.1\r\nrange: bytes=4321-\r\n\r\n", total);
+    try std.testing.expectEqual(ByteRange{ .start = 4321, .end = 9999 }, lower.range);
+    const mixed = parseRange("GET / HTTP/1.1\r\nRaNgE: ByTeS=10-19\r\n\r\n", total);
+    try std.testing.expectEqual(ByteRange{ .start = 10, .end = 19 }, mixed.range);
+}
+
+test "range parser handles suffixes and rejects malformed ranges" {
+    const suffix = parseRange("GET / HTTP/1.1\r\nRange: bytes=-500\r\n\r\n", 10_000);
+    try std.testing.expectEqual(ByteRange{ .start = 9500, .end = 9999 }, suffix.range);
+    try std.testing.expect(parseRange("GET / HTTP/1.1\r\nRange: bytes=900-100\r\n\r\n", 1000) == .invalid);
+    try std.testing.expect(parseRange("GET / HTTP/1.1\r\nHost: localhost\r\n\r\n", 1000) == .absent);
 }

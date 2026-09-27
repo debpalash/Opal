@@ -162,6 +162,81 @@ pub fn parseStreams(allocator: std.mem.Allocator, response: []const u8, out: *St
         (out.audio.url_len > 0 and (out.video_720.url_len > 0 or out.video_1080.url_len > 0 or out.video_2160.url_len > 0));
 }
 
+/// yt-dlp selects a working YouTube client and signs each CDN URL. In
+/// particular, its VISIONOS URLs allow byte ranges throughout the file, while
+/// ANDROID_VR URLs can return 403 for otherwise valid later byte ranges.
+pub fn parseYtdlpStreams(allocator: std.mem.Allocator, response: []const u8, out: *Streams) bool {
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, response, .{}) catch return false;
+    defer parsed.deinit();
+    if (parsed.value != .object) return false;
+    out.* = .{};
+    const root = parsed.value.object;
+    if (root.get("title")) |title| if (title == .string) {
+        out.title_len = @min(title.string.len, out.title.len);
+        @memcpy(out.title[0..out.title_len], title.string[0..out.title_len]);
+    };
+    const formats = root.get("formats") orelse return false;
+    if (formats != .array) return false;
+    for (formats.array.items) |format| {
+        if (format != .object) continue;
+        const obj = format.object;
+        const url_v = obj.get("url") orelse continue;
+        if (url_v != .string) continue;
+        const length = integer(obj.get("filesize"));
+        if (length == 0) continue;
+        const ext_v = obj.get("ext") orelse continue;
+        const video_v = obj.get("vcodec") orelse continue;
+        const audio_v = obj.get("acodec") orelse continue;
+        if (ext_v != .string or video_v != .string or audio_v != .string) continue;
+        const bitrate: u64 = @intFromFloat(@max(0, if (obj.get("tbr")) |v| switch (v) {
+            .float => |n| n * 1000,
+            .integer => |n| @as(f64, @floatFromInt(n)) * 1000,
+            else => 0,
+        } else 0));
+        if (std.mem.eql(u8, video_v.string, "none")) {
+            // AAC is understood by every platform's mpv build. Prefer the
+            // ordinary 140 rendition over DRC and HE-AAC variants.
+            const id_v = obj.get("format_id") orelse continue;
+            if (id_v == .string and std.mem.eql(u8, id_v.string, "140") and
+                std.mem.eql(u8, ext_v.string, "m4a"))
+                copyStream(&out.audio, url_v.string, 0, length, bitrate, 2);
+            continue;
+        }
+        if (!std.mem.eql(u8, audio_v.string, "none")) continue;
+        const rank: u8 = if (std.mem.startsWith(u8, video_v.string, "avc1") and std.mem.eql(u8, ext_v.string, "mp4"))
+            2
+        else if (std.mem.startsWith(u8, video_v.string, "vp9") and std.mem.eql(u8, ext_v.string, "webm"))
+            1
+        else
+            continue;
+        const height: u16 = @intCast(@min(integer(obj.get("height")), 65535));
+        const dst: *Stream = switch (height) {
+            720 => &out.video_720,
+            1080 => &out.video_1080,
+            2160 => &out.video_2160,
+            else => continue,
+        };
+        copyStream(dst, url_v.string, height, length, bitrate, rank);
+    }
+    return out.audio.url_len > 0 and
+        (out.video_720.url_len > 0 or out.video_1080.url_len > 0 or out.video_2160.url_len > 0);
+}
+
+test "yt-dlp formats select seekable AAC and video renditions" {
+    const response =
+        "{\"title\":\"Test\",\"formats\":[" ++
+        "{\"format_id\":\"140-drc\",\"url\":\"https://audio-drc\",\"ext\":\"m4a\",\"vcodec\":\"none\",\"acodec\":\"mp4a.40.2\",\"filesize\":100}," ++
+        "{\"format_id\":\"140\",\"url\":\"https://audio\",\"ext\":\"m4a\",\"vcodec\":\"none\",\"acodec\":\"mp4a.40.2\",\"filesize\":100}," ++
+        "{\"format_id\":\"298\",\"url\":\"https://720\",\"ext\":\"mp4\",\"vcodec\":\"avc1.4d4020\",\"acodec\":\"none\",\"height\":720,\"filesize\":200}," ++
+        "{\"format_id\":\"315\",\"url\":\"https://2160\",\"ext\":\"webm\",\"vcodec\":\"vp9\",\"acodec\":\"none\",\"height\":2160,\"filesize\":300}]}";
+    var streams: Streams = .{};
+    try std.testing.expect(parseYtdlpStreams(std.testing.allocator, response, &streams));
+    try std.testing.expectEqualStrings("https://audio", streams.audio.slice());
+    try std.testing.expectEqualStrings("https://720", streams.video_720.slice());
+    try std.testing.expectEqualStrings("https://2160", streams.video_2160.slice());
+    try std.testing.expectEqualStrings("Test", streams.titleSlice());
+}
+
 /// Select the combined A/V rendition. The Android response currently exposes
 /// itag 18 as a direct URL; it starts without the expensive JS challenge used
 /// by the full adaptive extractor.

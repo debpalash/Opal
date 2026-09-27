@@ -48,6 +48,28 @@ fn publish(job: Job, streams: ?pure.Streams) void {
 }
 
 fn resolveWorker(job: Job) void {
+    // The bundled extractor follows YouTube's current client/signature rules.
+    // Its signed URLs support seeks past the initial CDN window; the VR API
+    // below remains a fallback when the executable is unavailable.
+    const bin = @import("ytdlp.zig").binary();
+    var extractor_url_buf: [96]u8 = undefined;
+    if (std.fmt.bufPrint(&extractor_url_buf, "https://www.youtube.com/watch?v={s}", .{job.id})) |watch_url| {
+        const output = alloc.alloc(u8, 1024 * 1024) catch null;
+        if (output) |buf| {
+            defer alloc.free(buf);
+            const result = @import("../core/bounded_process.zig").run(
+                &.{ bin, "--ignore-config", "--no-warnings", "--no-playlist", "-J", watch_url },
+                buf,
+                .{ .timeout_ms = 30_000, .terminate_grace_ms = 150 },
+            );
+            var streams: pure.Streams = .{};
+            if (result.ok() and pure.parseYtdlpStreams(alloc, result.output, &streams)) {
+                publish(job, streams);
+                return;
+            }
+        }
+    } else |_| {}
+
     var visitor: [2048]u8 = undefined;
     var visitor_len: usize = 0;
     visitor_mutex.lock();
