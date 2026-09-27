@@ -421,7 +421,31 @@ def test_no_tmp_in_feature_caches():
     return "pass", "thumbnails, subtitles and friends use the platform cache dir"
 
 
-# ── 7. Storage settings page ────────────────────────────────────────────────
+# ── 7. Managed browser runtime ──────────────────────────────────────────────
+
+@test("browser bootstrap needs no system Python on Windows", "Windows")
+def test_browser_managed_python():
+    browser = _read("src/services/browser.zig")
+    bridge = _read("scripts/camoufox_bridge.py")
+    release = _read(".github/workflows/release.yml")
+    checks = {
+        "native venv executable": "venv/Scripts/python.exe" in browser,
+        "native site-packages": "venv/Lib/site-packages" in browser,
+        "managed Python creation": 'uv, "venv", venv, "--python", "3.12", "--seed"' in browser,
+        "managed package install": 'uv, "pip", "install", "--python", py' in browser,
+        "uv bundled in release": "uv-x86_64-pc-windows-msvc.zip" in release
+            and 'unzip -j "$UV_ARCHIVE" uv.exe -d staging' in release
+            and "staging/uv.exe" in release,
+        "uv archive verified": "sha256sum -c -" in release,
+        "Windows-safe bridge signals": 'hasattr(signal, "SIGPIPE")' in bridge,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "Windows browser bootstrap regression: " + ", ".join(missing)
+    return "pass", "bundled uv creates a native venv with managed Python 3.12"
+
+
+# ── 8. Storage settings page ────────────────────────────────────────────────
 
 @test("storage: page accounts for every store, not just one cache", "Storage")
 def test_storage_page_itemised():
