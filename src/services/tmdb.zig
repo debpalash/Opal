@@ -5,6 +5,9 @@ const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
 const shared_components = @import("../ui/components.zig");
 const search = @import("search.zig");
+const content_cache = @import("../core/content_cache.zig");
+const content_cache_pure = @import("../core/content_cache_pure.zig");
+const route_resilience = @import("../core/route_resilience_pure.zig");
 
 // Sub-modules
 const api = @import("tmdb_api.zig");
@@ -64,6 +67,31 @@ test "TV detail restore rearms the exact episode without resolving or autoplay" 
     try std.testing.expect(!state.app.playing_episode.armed);
 }
 
+test "TV detail transport failure is retrying rather than an empty catalog" {
+    const t = &state.app.tmdb;
+    defer {
+        t.tv_episodes_loading = false;
+        t.tv_episodes_failed = false;
+        t.tv_episode_retry_count = 0;
+        t.tv_episode_retry_at_ms = 0;
+    }
+    const generation = tv_gen.load(.acquire);
+    t.tv_episode_count = 0;
+    t.tv_episodes_loading = true;
+    t.tv_episodes_failed = false;
+    applyEpisodes("", 123, 1, generation, false);
+    try std.testing.expect(t.tv_episodes_failed);
+    try std.testing.expect(t.tv_episode_retry_at_ms > 0);
+}
+
+test "TV detail accepts authoritative empty arrays but rejects error payloads" {
+    try std.testing.expect(detailBodyValid("{\"episodes\" : []}", false, 1));
+    try std.testing.expect(detailBodyValid("{\"seasons\":[]}", false, null));
+    try std.testing.expect(detailBodyValid("{\"meta\":{\"videos\" : []}}", true, 1));
+    try std.testing.expect(!detailBodyValid("{\"status_code\":34,\"status_message\":\"missing\"}", false, 1));
+    try std.testing.expect(!detailBodyValid("", false, null));
+}
+
 const DetailDocument = struct {
     buffer: []u8,
     len: usize,
@@ -79,6 +107,34 @@ var detail_document: ?DetailDocument = null;
 var cached_cinemeta: ?DetailDocument = null;
 var cached_cinemeta_at: i64 = 0;
 var retired_episodes: std.ArrayList([]state.TvEpisode) = .empty;
+
+const DETAIL_CACHE_TTL_S: i64 = 6 * 60 * 60;
+
+fn detailBodyValid(body: []const u8, use_cinemeta: bool, season: ?i32) bool {
+    if (body.len == 0) return false;
+    const key = if (use_cinemeta) "\"videos\":[" else if (season != null) "\"episodes\":[" else "\"seasons\":[";
+    return @import("cinemeta_pure.zig").arrayStart(body, key) != null;
+}
+
+fn detailCacheKey(out: []u8, tmdb_id: i32, use_cinemeta: bool, season: ?i32) ?[]const u8 {
+    if (use_cinemeta) return std.fmt.bufPrint(out, "catalog:tv-detail:v2:cinemeta:{d}:all", .{tmdb_id}) catch null;
+    if (season) |number| return std.fmt.bufPrint(out, "catalog:tv-detail:v2:tmdb:{d}:s{d}", .{ tmdb_id, number }) catch null;
+    return std.fmt.bufPrint(out, "catalog:tv-detail:v2:tmdb:{d}:seasons", .{tmdb_id}) catch null;
+}
+
+fn scheduleSeasonsRetry() void {
+    const t = &state.app.tmdb;
+    t.tv_seasons_failed = true;
+    t.tv_season_retry_count +|= 1;
+    t.tv_season_retry_at_ms = io.milliTimestamp() + route_resilience.retryDelayMs(t.tv_season_retry_count);
+}
+
+fn scheduleEpisodesRetry() void {
+    const t = &state.app.tmdb;
+    t.tv_episodes_failed = true;
+    t.tv_episode_retry_count +|= 1;
+    t.tv_episode_retry_at_ms = io.milliTimestamp() + route_resilience.retryDelayMs(t.tv_episode_retry_count);
+}
 
 fn publishDetail(doc: DetailDocument) void {
     detail_mutex.lock();
@@ -1660,7 +1716,14 @@ fn openTvDetail(item: *state.TmdbItem) void {
 
     // Reset season/episode state for the fresh show.
     t.tv_seasons_loading = false;
+    t.tv_seasons_failed = false;
+    t.tv_seasons_refresh_pending = false;
+    t.tv_season_retry_count = 0;
+    t.tv_season_retry_at_ms = 0;
     t.tv_episodes_loading = false;
+    t.tv_episodes_failed = false;
+    t.tv_episode_retry_count = 0;
+    t.tv_episode_retry_at_ms = 0;
     t.tv_season_count = 0;
     t.tv_sel_season = 0;
     t.tv_episode_count = 0;
@@ -1691,6 +1754,15 @@ fn closeTvDetail() void {
     t.tv_episode_count = 0;
     t.tv_sel_season = 0;
     t.tv_imdb_id_len = 0;
+    t.tv_seasons_loading = false;
+    t.tv_seasons_failed = false;
+    t.tv_seasons_refresh_pending = false;
+    t.tv_season_retry_count = 0;
+    t.tv_season_retry_at_ms = 0;
+    t.tv_episodes_loading = false;
+    t.tv_episodes_failed = false;
+    t.tv_episode_retry_count = 0;
+    t.tv_episode_retry_at_ms = 0;
     invalidateDetailUiSnapshot();
     for (0..t.tv_episode_watched.len) |i| t.tv_episode_watched[i] = false;
     _ = tv_gen.fetchAdd(1, .acq_rel);
@@ -1710,18 +1782,59 @@ fn openOrSearch(item: *state.TmdbItem) void {
 }
 
 fn fetchSeasons(tmdb_id: i32) void {
-    const use_cinemeta = state.app.tmdb.api_key_len == 0;
-    if (use_cinemeta and state.app.tmdb.tv_imdb_id_len == 0) return;
-    state.app.tmdb.tv_seasons_loading = true;
-    const my_gen = tv_gen.load(.acquire);
-    const imdb_id = state.app.tmdb.tv_imdb_id;
-    const imdb_id_len = state.app.tmdb.tv_imdb_id_len;
+    fetchSeasonsInternal(tmdb_id, true);
+}
 
-    if (@import("../core/workers.zig").spawnLegacy(fetchSeasonsThread, .{ tmdb_id, my_gen, use_cinemeta, imdb_id, imdb_id_len })) |th| {
-        @import("../core/workers.zig").release(th); // never joined — detach to avoid leaking the handle
+fn startSeasonsNetwork(tmdb_id: i32, my_gen: u32) void {
+    const t = &state.app.tmdb;
+    t.tv_seasons_loading = true;
+    const use_cinemeta = t.api_key_len == 0;
+    if (@import("../core/workers.zig").spawnLegacy(fetchSeasonsThread, .{ tmdb_id, my_gen, use_cinemeta, t.tv_imdb_id, t.tv_imdb_id_len })) |th| {
+        @import("../core/workers.zig").release(th);
     } else |_| {
-        state.app.tmdb.tv_seasons_loading = false;
+        t.tv_seasons_loading = false;
+        scheduleSeasonsRetry();
     }
+}
+
+fn fetchSeasonsInternal(tmdb_id: i32, reset_retry: bool) void {
+    const use_cinemeta = state.app.tmdb.api_key_len == 0;
+    const t = &state.app.tmdb;
+    if (reset_retry) {
+        t.tv_seasons_failed = false;
+        t.tv_season_retry_count = 0;
+        t.tv_season_retry_at_ms = 0;
+    }
+    if (use_cinemeta and t.tv_imdb_id_len == 0) {
+        scheduleSeasonsRetry();
+        return;
+    }
+    const my_gen = tv_gen.load(.acquire);
+
+    // Route cache is authoritative enough to render immediately, including a
+    // stale hit. The encrypted cache hard-expires entries after seven days.
+    // This keeps navigation instant and prevents provider outages from
+    // replacing a usable catalog with an empty screen.
+    const cache_buf = alloc.alloc(u8, content_cache_pure.MAX_ENTRY_BYTES) catch null;
+    if (cache_buf) |buf| {
+        defer alloc.free(buf);
+        var key_buf: [96]u8 = undefined;
+        if (detailCacheKey(&key_buf, tmdb_id, use_cinemeta, null)) |key| {
+            if (content_cache.get(key, buf)) |hit| {
+                if (detailBodyValid(hit.bytes, use_cinemeta, null)) {
+                    t.tv_seasons_loading = true;
+                    applySeasons(hit.bytes, tmdb_id, my_gen, use_cinemeta);
+                    // applySeasons starts the selected episode route. Defer a
+                    // stale season refresh until that request publishes: both
+                    // routes share one generation-guarded publication slot.
+                    if (hit.staleness == .stale) t.tv_seasons_refresh_pending = true;
+                    return;
+                }
+            }
+        }
+    }
+
+    startSeasonsNetwork(tmdb_id, my_gen);
 }
 
 fn fetchSeasonsThread(tmdb_id: i32, my_gen: u32, use_cinemeta: bool, imdb_id: [16]u8, imdb_id_len: usize) void {
@@ -1739,21 +1852,29 @@ fn fetchSeasonsThread(tmdb_id: i32, my_gen: u32, use_cinemeta: bool, imdb_id: [1
         api.cinemetaApiInto(url, buf)
     else
         api.tmdbApiInto(url, state.app.tmdb.api_key[0..state.app.tmdb.api_key_len], buf);
+    if (detailBodyValid(buf[0..bytes], use_cinemeta, null)) {
+        var key_buf: [96]u8 = undefined;
+        if (detailCacheKey(&key_buf, tmdb_id, use_cinemeta, null)) |key| content_cache.put(key, buf[0..bytes], DETAIL_CACHE_TTL_S);
+    }
     publishDetail(.{ .buffer = buf, .len = bytes, .id = tmdb_id, .generation = my_gen, .cinemeta = use_cinemeta });
 }
 
 fn applySeasons(body: []const u8, tmdb_id: i32, my_gen: u32, use_cinemeta: bool) void {
+    if (tv_gen.load(.acquire) != my_gen) return;
     defer state.app.tmdb.tv_seasons_loading = false;
     const bytes = body.len;
-    if (bytes == 0) {
+    if (!detailBodyValid(body, use_cinemeta, null)) {
+        scheduleSeasonsRetry();
         var lb: [96]u8 = undefined;
-        const lm = std.fmt.bufPrint(&lb, "TV seasons fetch FAILED (id={d}) — empty response", .{tmdb_id}) catch "TV seasons fetch failed";
+        const lm = std.fmt.bufPrint(&lb, "TV seasons fetch FAILED (id={d}) — invalid response", .{tmdb_id}) catch "TV seasons fetch failed";
         logs.pushLog("error", "tmdb", lm, true);
         return;
     }
 
-    // Superseded by a newer open/close? Drop silently.
-    if (tv_gen.load(.acquire) != my_gen) return;
+    state.app.tmdb.tv_seasons_failed = false;
+    state.app.tmdb.tv_seasons_refresh_pending = false;
+    state.app.tmdb.tv_season_retry_count = 0;
+    state.app.tmdb.tv_season_retry_at_ms = 0;
 
     if (use_cinemeta) parseCinemetaSeasons(body) else parseSeasons(body);
     std.mem.sort(state.TvSeason, state.app.tmdb.tv_seasons[0..state.app.tmdb.tv_season_count], {}, struct {
@@ -2006,19 +2127,30 @@ fn arrayEnd(json: []const u8, open: usize) usize {
 // ── Episodes fetch (/tv/{id}/season/{n}) ──
 
 fn fetchEpisodes(tmdb_id: i32, season_number: i32) void {
+    fetchEpisodesInternal(tmdb_id, season_number, true);
+}
+
+fn fetchEpisodesInternal(tmdb_id: i32, season_number: i32, reset_retry: bool) void {
     db.tvRememberSeason(tmdb_id, season_number);
     const use_cinemeta = state.app.tmdb.api_key_len == 0;
-    if (use_cinemeta and state.app.tmdb.tv_imdb_id_len == 0) return;
-    freeEpisodeStills(); // free GPU textures before overwriting episode slots
-    state.app.tmdb.tv_episodes_loading = true;
-    state.app.tmdb.tv_episode_count = 0;
+    const t = &state.app.tmdb;
+    if (reset_retry) {
+        t.tv_episodes_failed = false;
+        t.tv_episode_retry_count = 0;
+        t.tv_episode_retry_at_ms = 0;
+    }
+    if (use_cinemeta and t.tv_imdb_id_len == 0) {
+        scheduleEpisodesRetry();
+        return;
+    }
     const my_gen = tv_gen.fetchAdd(1, .acq_rel) + 1;
-    const imdb_id = state.app.tmdb.tv_imdb_id;
-    const imdb_id_len = state.app.tmdb.tv_imdb_id_len;
+    const imdb_id = t.tv_imdb_id;
+    const imdb_id_len = t.tv_imdb_id_len;
 
     if (use_cinemeta) {
         if (cached_cinemeta) |doc| {
             if (doc.id == tmdb_id and !@import("browse_cache.zig").isStale(cached_cinemeta_at)) {
+                t.tv_episodes_loading = true;
                 applyEpisodes(doc.buffer[0..doc.len], tmdb_id, season_number, my_gen, true);
                 state.wakeUi();
                 return;
@@ -2026,10 +2158,43 @@ fn fetchEpisodes(tmdb_id: i32, season_number: i32) void {
         }
     }
 
+    const cache_buf = alloc.alloc(u8, content_cache_pure.MAX_ENTRY_BYTES) catch null;
+    if (cache_buf) |buf| {
+        defer alloc.free(buf);
+        var key_buf: [96]u8 = undefined;
+        if (detailCacheKey(&key_buf, tmdb_id, use_cinemeta, season_number)) |key| {
+            if (content_cache.get(key, buf)) |hit| {
+                if (detailBodyValid(hit.bytes, use_cinemeta, season_number)) {
+                    t.tv_episodes_loading = true;
+                    applyEpisodes(hit.bytes, tmdb_id, season_number, my_gen, use_cinemeta);
+                    if (hit.staleness == .stale) {
+                        t.tv_episodes_loading = true;
+                        if (@import("../core/workers.zig").spawnLegacy(fetchEpisodesThread, .{ tmdb_id, season_number, my_gen, use_cinemeta, imdb_id, imdb_id_len })) |th| {
+                            @import("../core/workers.zig").release(th);
+                        } else |_| {
+                            t.tv_episodes_loading = false;
+                            scheduleEpisodesRetry();
+                        }
+                    }
+                    return;
+                }
+            }
+        }
+    }
+
+    // A deliberate season change must not show rows from the old season. A
+    // reconnect keeps any matching rows visible until fresh data arrives.
+    if (reset_retry) {
+        freeEpisodeStills();
+        t.tv_episode_count = 0;
+    }
+    t.tv_episodes_loading = true;
+
     if (@import("../core/workers.zig").spawnLegacy(fetchEpisodesThread, .{ tmdb_id, season_number, my_gen, use_cinemeta, imdb_id, imdb_id_len })) |th| {
         @import("../core/workers.zig").release(th); // never joined — detach to avoid leaking the handle
     } else |_| {
-        state.app.tmdb.tv_episodes_loading = false;
+        t.tv_episodes_loading = false;
+        scheduleEpisodesRetry();
     }
 }
 
@@ -2048,21 +2213,27 @@ fn fetchEpisodesThread(tmdb_id: i32, season_number: i32, my_gen: u32, use_cineme
         api.cinemetaApiInto(url, buf)
     else
         api.tmdbApiInto(url, state.app.tmdb.api_key[0..state.app.tmdb.api_key_len], buf);
+    if (detailBodyValid(buf[0..bytes], use_cinemeta, season_number)) {
+        var key_buf: [96]u8 = undefined;
+        if (detailCacheKey(&key_buf, tmdb_id, use_cinemeta, season_number)) |key| content_cache.put(key, buf[0..bytes], DETAIL_CACHE_TTL_S);
+    }
     publishDetail(.{ .buffer = buf, .len = bytes, .id = tmdb_id, .generation = my_gen, .cinemeta = use_cinemeta, .season = season_number });
 }
 
 fn applyEpisodes(body: []const u8, tmdb_id: i32, season_number: i32, my_gen: u32, use_cinemeta: bool) void {
+    if (tv_gen.load(.acquire) != my_gen) return;
     defer state.app.tmdb.tv_episodes_loading = false;
-    const bytes = body.len;
-    if (bytes == 0) {
-        if (tv_gen.load(.acquire) != my_gen) return; // superseded — drop silently
+    if (!detailBodyValid(body, use_cinemeta, season_number)) {
+        scheduleEpisodesRetry();
         var lb: [96]u8 = undefined;
-        const lm = std.fmt.bufPrint(&lb, "TV episodes fetch FAILED (id={d} s{d}) — empty response", .{ tmdb_id, season_number }) catch "TV episodes fetch failed";
+        const lm = std.fmt.bufPrint(&lb, "TV episodes fetch FAILED (id={d} s{d}) — invalid response", .{ tmdb_id, season_number }) catch "TV episodes fetch failed";
         logs.pushLog("error", "tmdb", lm, true);
         return;
     }
 
-    if (tv_gen.load(.acquire) != my_gen) return;
+    state.app.tmdb.tv_episodes_failed = false;
+    state.app.tmdb.tv_episode_retry_count = 0;
+    state.app.tmdb.tv_episode_retry_at_ms = 0;
 
     if (use_cinemeta) parseCinemetaEpisodes(body, season_number) else parseEpisodes(body);
     std.mem.sort(state.TvEpisode, state.app.tmdb.tv_episodes[0..state.app.tmdb.tv_episode_count], {}, struct {
@@ -2811,9 +2982,35 @@ fn tvWrappedText(src: std.builtin.SourceLocation, value: []const u8, options: dv
     text.deinit();
 }
 
+fn retryFailedDetailFetches() void {
+    const t = &state.app.tmdb;
+    const now = io.milliTimestamp();
+    if (t.tv_seasons_refresh_pending and !t.tv_seasons_loading and !t.tv_episodes_loading) {
+        t.tv_seasons_refresh_pending = false;
+        startSeasonsNetwork(t.tv_id, tv_gen.load(.acquire));
+        return;
+    }
+    if (t.tv_seasons_failed and !t.tv_seasons_loading) {
+        if (now >= t.tv_season_retry_at_ms) {
+            startSeasonsNetwork(t.tv_id, tv_gen.load(.acquire));
+        } else {
+            shared_components.pollRefresh(500_000);
+        }
+        return;
+    }
+    if (t.tv_episodes_failed and !t.tv_episodes_loading) {
+        if (now >= t.tv_episode_retry_at_ms) {
+            fetchEpisodesInternal(t.tv_id, tvSelSeasonNumber(), false);
+        } else {
+            shared_components.pollRefresh(500_000);
+        }
+    }
+}
+
 fn renderTvDetail() void {
     const t = &state.app.tmdb;
     const poster = @import("../core/poster.zig");
+    retryFailedDetailFetches();
 
     const parent_width = dvui.parentGet().data().contentRect().w;
     const live_width = @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().w, state.app.ui_scale);
@@ -2944,6 +3141,21 @@ fn renderTvDetail() void {
             .color_text = theme.colors.accent,
             .padding = .{ .x = 14, .y = 12, .w = 0, .h = 0 },
         });
+        return;
+    }
+
+    if (t.tv_seasons_failed and t.tv_season_count == 0) {
+        _ = dvui.label(@src(), "Reconnecting to the episode catalog…", .{}, .{
+            .color_text = theme.colors.accent,
+            .padding = .{ .x = 14, .y = 12, .w = 0, .h = 4 },
+        });
+        if (dvui.button(@src(), "Retry now", .{}, .{
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = theme.colors.text_primary,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
+            .margin = .{ .x = 14, .y = 0, .w = 0, .h = 0 },
+        })) fetchSeasons(t.tv_id);
         return;
     }
 
@@ -3253,15 +3465,12 @@ fn renderTvDetail() void {
         return;
     }
 
-    if (t.tv_episode_count == 0) {
-        _ = dvui.label(@src(), "No episodes available.", .{}, .{
-            .color_text = theme.colors.text_secondary,
+    if (t.tv_episodes_failed and t.tv_episode_count == 0) {
+        _ = dvui.label(@src(), "Episodes unavailable. Retrying automatically…", .{}, .{
+            .color_text = theme.colors.accent,
             .padding = .{ .x = 14, .y = 16, .w = 0, .h = 0 },
         });
-        // Manual recourse for the rare case the fetch (now retried internally
-        // in tmdbApiInto) still failed outright, e.g. a fully dead network —
-        // check the Logs tab for the specific error.
-        if (dvui.button(@src(), "Retry", .{}, .{
+        if (dvui.button(@src(), "Retry now", .{}, .{
             .color_fill = theme.colors.bg_elevated,
             .color_text = theme.colors.text_primary,
             .corner_radius = theme.dims.rad_sm,
@@ -3271,6 +3480,14 @@ fn renderTvDetail() void {
             const season = tvSelSeasonNumber();
             if (season >= 0) fetchEpisodes(t.tv_id, season) else fetchSeasons(t.tv_id);
         }
+        return;
+    }
+
+    if (t.tv_episode_count == 0) {
+        _ = dvui.label(@src(), "No episodes available.", .{}, .{
+            .color_text = theme.colors.text_secondary,
+            .padding = .{ .x = 14, .y = 16, .w = 0, .h = 0 },
+        });
         return;
     }
 
