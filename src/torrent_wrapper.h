@@ -82,6 +82,10 @@ void torrent_set_proxy(TorrentSession session, const char* scheme, const char* h
 int torrent_get_piece_map(TorrentSession session, int torrent_id, char* out_map, int max_len);
 int torrent_ensure_streaming_buffer(TorrentSession session, int torrent_id, int file_idx, double percent_pos);
 void torrent_seek_prioritize(TorrentSession session, int torrent_id, int file_idx, double percent_pos);
+// Reprioritize directly from an HTTP byte-range request. This catches seeks
+// initiated by mpv, keyboard shortcuts, chapters and remote clients, not only
+// drags on Opal's native seekbar.
+void torrent_set_seek_hint(TorrentSession session, int torrent_id, int file_idx, long long byte_offset);
 // Torrent management
 void torrent_pause(TorrentSession session, int torrent_id);
 void torrent_resume(TorrentSession session, int torrent_id);

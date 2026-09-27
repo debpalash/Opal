@@ -425,6 +425,18 @@ fn handleConnection(args: ConnArgs) !void {
         return;
     }
 
+    // The proxy sees every mpv seek path, including keyboard, chapter and
+    // remote-control seeks. Move libtorrent's urgent window before blocking on
+    // the requested bytes so old play-head deadlines cannot delay the jump.
+    if (has_range) {
+        c.mpv.torrent_set_seek_hint(
+            state.torrentSession(),
+            torrent_id,
+            file_idx,
+            range_start,
+        );
+    }
+
     const content_length = range_end - range_start + 1;
     const mime = getMimeType(fname_buf[0..fname_len]);
 
