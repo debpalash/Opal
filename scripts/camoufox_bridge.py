@@ -859,7 +859,10 @@ def selftest():
 if __name__ == "__main__":
     if "--selftest" in sys.argv:
         sys.exit(selftest())
-    signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+    # SIGPIPE is a POSIX signal and is absent from Python on Windows. The
+    # bridge must still start in Windows release builds after browser setup.
+    if hasattr(signal, "SIGPIPE"):
+        signal.signal(signal.SIGPIPE, signal.SIG_DFL)
     try:
         main()
     except (BrokenPipeError, KeyboardInterrupt):

@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const dvui = @import("dvui");
 const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
@@ -39,15 +40,33 @@ pub fn engineDisplayName(e: Engine) []const u8 {
     };
 }
 
-// Resolve the venv python under the Opal config dir (~/.config/opal/venv/bin/python3).
-// Returns null if $HOME is unset. Falls back to bare "python3" handled by callers.
+// Resolve the venv python under the platform-native Opal config dir.
+// Windows venvs use Scripts/python.exe; POSIX venvs use bin/python3.
 fn getVenvPython() ?[]const u8 {
     var __cfg_buf_0: [512]u8 = undefined;
     const home = @import("../core/paths.zig").configDir(&__cfg_buf_0);
     const S = struct {
         var buf: [512]u8 = undefined;
     };
-    return std.fmt.bufPrint(&S.buf, "{s}/venv/bin/python3", .{home}) catch null;
+    return std.fmt.bufPrint(&S.buf, if (builtin.os.tag == .windows)
+        "{s}/venv/Scripts/python.exe"
+    else
+        "{s}/venv/bin/python3", .{home}) catch null;
+}
+
+// Windows releases bundle uv beside opal.exe. uv supplies its own managed
+// Python, so browser setup works on a clean machine without a system Python.
+fn getBundledUv() ?[]const u8 {
+    if (builtin.os.tag != .windows) return null;
+    const S = struct {
+        var buf: [1024]u8 = undefined;
+    };
+    if (state.resourceRoot()) |root| {
+        const path = std.fmt.bufPrint(&S.buf, "{s}uv.exe", .{root}) catch return null;
+        if (io_g.cwdAccess(path, .{})) |_| return path else |_| {}
+    }
+    if (io_g.cwdAccess("uv.exe", .{})) |_| return "uv.exe" else |_| {}
+    return null;
 }
 
 // Bridge process state (singleton — one browser instance shared across all panes)
@@ -211,14 +230,24 @@ fn installWorker() void {
     var venv_buf: [512]u8 = undefined;
     const venv = std.fmt.bufPrint(&venv_buf, "{s}/venv", .{home}) catch return fail("path too long");
     var py_buf: [512]u8 = undefined;
-    const py = std.fmt.bufPrint(&py_buf, "{s}/bin/python3", .{venv}) catch return fail("path too long");
+    const py = std.fmt.bufPrint(&py_buf, if (builtin.os.tag == .windows)
+        "{s}/Scripts/python.exe"
+    else
+        "{s}/bin/python3", .{venv}) catch return fail("path too long");
 
     // 1) venv (idempotent — skip when its python already exists)
     if (io_g.cwdAccess(py, .{})) |_| {} else |_| {
         setInstallMsg("Creating Python environment…");
-        logs.pushLog("info", "browser", "Command: python3 -m venv <Opal venv>", false);
-        if (!runInstallStep(&.{ "python3", "-m", "venv", venv }))
-            return fail("Failed to create the Python venv (is python3 installed?)");
+        if (builtin.os.tag == .windows) {
+            const uv = getBundledUv() orelse return fail("uv.exe missing — reinstall Opal");
+            logs.pushLog("info", "browser", "Command: uv venv <Opal venv> --python 3.12", false);
+            if (!runInstallStep(&.{ uv, "venv", venv, "--python", "3.12", "--seed" }))
+                return fail("Failed to download the managed Python environment");
+        } else {
+            logs.pushLog("info", "browser", "Command: python3 -m venv <Opal venv>", false);
+            if (!runInstallStep(&.{ "python3", "-m", "venv", venv }))
+                return fail("Failed to create the Python venv (is python3 installed?)");
+        }
     }
 
     // 2) the engine package
@@ -227,9 +256,16 @@ fn installWorker() void {
         setInstallMsg(std.fmt.bufPrint(&msg_buf, "Installing {s} (pip)…", .{pkg}) catch pkg);
     }
     var cmd_buf: [128]u8 = undefined;
-    logs.pushLog("info", "browser", std.fmt.bufPrint(&cmd_buf, "Command: <venv>/bin/python3 -m pip install --upgrade {s}", .{pkg}) catch "Installing browser engine via pip", false);
-    if (!runInstallStep(&.{ py, "-m", "pip", "install", "--upgrade", pkg }))
-        return fail("pip install failed — see Logs");
+    if (builtin.os.tag == .windows) {
+        const uv = getBundledUv() orelse return fail("uv.exe missing — reinstall Opal");
+        logs.pushLog("info", "browser", std.fmt.bufPrint(&cmd_buf, "Command: uv pip install --python <Opal venv> --upgrade {s}", .{pkg}) catch "Installing browser engine via uv", false);
+        if (!runInstallStep(&.{ uv, "pip", "install", "--python", py, "--upgrade", pkg }))
+            return fail("Browser package install failed — see Logs");
+    } else {
+        logs.pushLog("info", "browser", std.fmt.bufPrint(&cmd_buf, "Command: <venv>/bin/python3 -m pip install --upgrade {s}", .{pkg}) catch "Installing browser engine via pip", false);
+        if (!runInstallStep(&.{ py, "-m", "pip", "install", "--upgrade", pkg }))
+            return fail("pip install failed — see Logs");
+    }
 
     // 3) the browser binary
     switch (engine) {
@@ -274,8 +310,16 @@ fn checkVenvPackage(pkg: []const u8) bool {
     var __cfg_buf_2: [512]u8 = undefined;
     const home = @import("../core/paths.zig").configDir(&__cfg_buf_2);
     var py_buf: [512]u8 = undefined;
-    const py = std.fmt.bufPrint(&py_buf, "{s}/venv/bin/python3", .{home}) catch return false;
+    const py = std.fmt.bufPrint(&py_buf, if (builtin.os.tag == .windows)
+        "{s}/venv/Scripts/python.exe"
+    else
+        "{s}/venv/bin/python3", .{home}) catch return false;
     io_g.cwdAccess(py, .{}) catch return false;
+    if (builtin.os.tag == .windows) {
+        var pkg_buf: [768]u8 = undefined;
+        const path = std.fmt.bufPrint(&pkg_buf, "{s}/venv/Lib/site-packages/{s}", .{ home, pkg }) catch return false;
+        if (io_g.cwdAccess(path, .{})) |_| return true else |_| return false;
+    }
     var lib_buf: [512]u8 = undefined;
     const lib = std.fmt.bufPrint(&lib_buf, "{s}/venv/lib", .{home}) catch return false;
     var dir = io_g.cwdOpenDir(lib, .{ .iterate = true }) catch return false;

@@ -411,6 +411,17 @@ jobs:
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           mkdir -p staging
           cp zig-out/bin/opal.exe staging/
+          # Browser setup must work on a clean Windows install, where neither
+          # python nor python3 is present. Bundle checksum-pinned uv; it creates
+          # an isolated venv and downloads its own managed Python on demand.
+          UV_VERSION=0.12.19
+          UV_ARCHIVE=uv-x86_64-pc-windows-msvc.zip
+          curl -fsSL --retry 3 \
+            "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/${UV_ARCHIVE}" \
+            -o "$UV_ARCHIVE"
+          echo "6dbb02d79e419522f1c500f0adb1cddcff0cda7d59b0d66ea7f5e3b4a1b2f5f0  $UV_ARCHIVE" | sha256sum -c -
+          unzip -j "$UV_ARCHIVE" uv.exe -d staging
+          test -f staging/uv.exe || { echo "::error::uv.exe missing from archive"; exit 1; }
           # The torrent wrapper lands next to the repo root (sh step in
           # build.zig). The Windows build names it torrent_wrapper.dll — NO
           # lib prefix (zig's windows-gnu -l search tries `{name}.dll` first,
