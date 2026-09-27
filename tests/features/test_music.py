@@ -53,7 +53,9 @@ def test_music():
             and "search_request.begin(&state.app.music.is_loading)" in svc,
         "credentials copied into worker job": "const SearchJob = struct" in svc
             and "auth: [320]u8" in svc and "fn spawnWorker(comptime f: fn (SearchJob) void" in svc,
-        "curl not std.http": "std.http.Client" not in svc and '"curl"' in svc,
+        "reliable fetch transport": (
+            "std.http.Client" not in svc and "reliable_fetch.fetch(" in svc
+        ),
 
         # ── Enum → state → nav → render → rail/shell ──
         "enum variant": "Music }" in st and "pub const DrawerTab" in st,
