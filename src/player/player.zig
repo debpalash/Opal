@@ -7,6 +7,7 @@ const http_headers = @import("http_headers_pure.zig");
 const playback_load = @import("playback_load_pure.zig");
 const playback_fallback = @import("playback_fallback_pure.zig");
 const playback_snapshot = @import("playback_snapshot_pure.zig");
+const frame_buffer_pool = @import("frame_buffer_pool.zig");
 pub const HttpHeader = http_headers.HttpHeader;
 pub const LoadMode = playback_load.Mode;
 pub const PlaybackOrigin = playback_load.Origin;
@@ -891,9 +892,9 @@ pub const MediaPlayer = struct {
             self.pixels = &.{};
             self.back_pixels = &.{};
         } else {
-            self.pixels = try allocator.alloc(dvui.Color.PMA, video_w * video_h);
-            self.back_pixels = allocator.alloc(dvui.Color.PMA, video_w * video_h) catch |err| {
-                allocator.free(self.pixels);
+            self.pixels = try frame_buffer_pool.acquire(allocator, video_w * video_h);
+            self.back_pixels = frame_buffer_pool.acquire(allocator, video_w * video_h) catch |err| {
+                frame_buffer_pool.release(allocator, self.pixels);
                 return err;
             };
         }
@@ -909,8 +910,8 @@ pub const MediaPlayer = struct {
             state.showToast("Playback engine unavailable — check your mpv install");
             // self.pixels was allocated just above (empty slice when headless);
             // free it and the struct so this failed init leaks nothing.
-            allocator.free(self.pixels);
-            allocator.free(self.back_pixels);
+            frame_buffer_pool.release(allocator, self.pixels);
+            frame_buffer_pool.release(allocator, self.back_pixels);
             allocator.destroy(self);
             return error.MpvCreateFailed;
         };
@@ -1167,9 +1168,9 @@ pub const MediaPlayer = struct {
     fn startPreparedRenderer(self: *MediaPlayer, allocator: std.mem.Allocator) !void {
         if (state.app.is_headless or self.mpv_gl != null) return;
         if (self.pixels.len == 0) {
-            self.pixels = try allocator.alloc(dvui.Color.PMA, video_w * video_h);
-            self.back_pixels = allocator.alloc(dvui.Color.PMA, video_w * video_h) catch |err| {
-                allocator.free(self.pixels);
+            self.pixels = try frame_buffer_pool.acquire(allocator, video_w * video_h);
+            self.back_pixels = frame_buffer_pool.acquire(allocator, video_w * video_h) catch |err| {
+                frame_buffer_pool.release(allocator, self.pixels);
                 self.pixels = &.{};
                 return err;
             };
@@ -2201,11 +2202,15 @@ pub const MediaPlayer = struct {
         self.stopRenderWorker();
         c.mpv.mpv_render_context_free(self.mpv_gl);
         c.mpv.mpv_terminate_destroy(self.mpv_ctx);
-        allocator.free(self.pixels);
-        allocator.free(self.back_pixels);
+        frame_buffer_pool.release(allocator, self.pixels);
+        frame_buffer_pool.release(allocator, self.back_pixels);
         allocator.destroy(self);
     }
 };
+
+pub fn deinitFrameBufferPool(allocator: std.mem.Allocator) void {
+    frame_buffer_pool.deinit(allocator);
+}
 
 // One prepared idle engine removes libmpv/script initialization from the first
 // Home/Recents click. It is scheduled only after the first painted window and

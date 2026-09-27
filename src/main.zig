@@ -838,6 +838,7 @@ pub fn appDeinit() void {
         p.deinit(@import("core/alloc.zig").allocator);
     }
     state.app.players.deinit(@import("core/alloc.zig").allocator);
+    player.deinitFrameBufferPool(@import("core/alloc.zig").allocator);
 
     // Free any poster pixel buffers the renderer never consumed, then arrays.
     @import("services/tmdb.zig").freeImageBuffers();
