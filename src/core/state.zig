@@ -807,9 +807,16 @@ pub const AppState = struct {
         tv_season_count: usize = 0,
         tv_sel_season: usize = 0, // index into tv_seasons
         tv_seasons_loading: bool = false,
+        tv_seasons_failed: bool = false,
+        tv_seasons_refresh_pending: bool = false,
+        tv_season_retry_count: u8 = 0,
+        tv_season_retry_at_ms: i64 = 0,
         tv_episodes: []TvEpisode = &.{},
         tv_episode_count: usize = 0,
         tv_episodes_loading: bool = false,
+        tv_episodes_failed: bool = false,
+        tv_episode_retry_count: u8 = 0,
+        tv_episode_retry_at_ms: i64 = 0,
         // episode N of the selected season → tv_episode_watched[N-1].
         tv_episode_watched: []bool = &.{},
     } = .{},

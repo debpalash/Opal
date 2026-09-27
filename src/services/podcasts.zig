@@ -23,6 +23,7 @@ const reliable_fetch = @import("reliable_fetch.zig");
 const io = @import("../core/io_global.zig");
 const workers = @import("../core/workers.zig");
 const LatestRequest = @import("../core/latest_request.zig").Gate;
+const route_resilience = @import("../core/route_resilience_pure.zig");
 
 const alloc = @import("../core/alloc.zig").allocator;
 
@@ -36,6 +37,10 @@ const agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/2010010
 var parse_mutex: @import("../core/sync.zig").Mutex = .{};
 var search_request: LatestRequest = .{};
 var publication_gen: u64 = 0;
+var episode_gen: std.atomic.Value(u32) = .init(0);
+var episode_failed: std.atomic.Value(bool) = .init(false);
+var episode_retry_count: std.atomic.Value(u8) = .init(0);
+var episode_retry_at_ms: std.atomic.Value(i64) = .init(0);
 
 /// Immutable reader view shared by desktop and remote presentations. Provider
 /// records contain only fixed buffers, so copying under the feature lock severs
@@ -53,6 +58,7 @@ pub const Snapshot = struct {
     showing_popular: bool,
     loading: bool,
     episodes_loading: bool,
+    episodes_failed: bool,
 };
 
 pub fn snapshot() Snapshot {
@@ -71,6 +77,7 @@ pub fn snapshot() Snapshot {
         .showing_popular = state.app.podcasts.showing_popular,
         .loading = state.app.podcasts.is_loading.load(.acquire),
         .episodes_loading = state.app.podcasts.episodes_loading.load(.acquire),
+        .episodes_failed = episode_failed.load(.acquire),
     };
 }
 
@@ -85,6 +92,11 @@ pub fn copyArtwork(idx: usize, out: []u8) usize {
 }
 
 pub fn closeEpisodes() void {
+    _ = episode_gen.fetchAdd(1, .acq_rel);
+    episode_failed.store(false, .release);
+    episode_retry_count.store(0, .release);
+    episode_retry_at_ms.store(0, .release);
+    state.app.podcasts.episodes_loading.store(false, .release);
     parse_mutex.lock();
     defer parse_mutex.unlock();
     state.app.podcasts.selected_idx = null;
@@ -343,7 +355,44 @@ fn searchWorker(job: SearchJob) void {
 // Episodes — a show's RSS feed
 // ══════════════════════════════════════════════════════════
 
+const PODCAST_EPISODE_CACHE_TTL_S: i64 = 6 * 60 * 60;
+const PODCAST_FEED_CAP: usize = 4 * 1024 * 1024;
+
+const EpisodeJob = struct {
+    generation: u32,
+    feed: [300]u8 = undefined,
+    feed_len: usize = 0,
+};
+
+fn rssBodyValid(body: []const u8) bool {
+    return route_resilience.isXmlFeed(body);
+}
+
+fn episodeCacheKey(out: []u8, feed: []const u8) ?[]const u8 {
+    return std.fmt.bufPrint(out, "podcasts:episodes:v1:{s}", .{feed}) catch null;
+}
+
+fn clearEpisodeFailure() void {
+    episode_failed.store(false, .release);
+    episode_retry_count.store(0, .release);
+    episode_retry_at_ms.store(0, .release);
+}
+
+fn markEpisodeFailure(generation: u32) void {
+    if (episode_gen.load(.acquire) != generation) return;
+    const old = episode_retry_count.load(.acquire);
+    const attempt = route_resilience.nextAttempt(old);
+    episode_retry_count.store(attempt, .release);
+    episode_retry_at_ms.store(io.milliTimestamp() + route_resilience.retryDelayMs(attempt), .release);
+    episode_failed.store(true, .release);
+    state.wakeUi();
+}
+
 pub fn loadEpisodes(idx: usize) void {
+    startEpisodes(idx, true);
+}
+
+fn startEpisodes(idx: usize, reset_retry: bool) void {
     if (state.app.podcasts.episodes_loading.load(.acquire)) return;
 
     parse_mutex.lock();
@@ -352,8 +401,11 @@ pub fn loadEpisodes(idx: usize) void {
         return;
     }
     state.app.podcasts.selected_idx = idx;
-    state.app.podcasts.episode_count = 0;
-    state.app.podcasts.fetch_error = false;
+    if (reset_retry) {
+        state.app.podcasts.episode_count = 0;
+        state.app.podcasts.fetch_error = false;
+        clearEpisodeFailure();
+    }
     state.app.podcasts.episodes_loading.store(true, .release);
 
     // Copy the selected show's name (episode-view header) + feed url for the
@@ -363,38 +415,88 @@ pub fn loadEpisodes(idx: usize) void {
     @memcpy(state.app.podcasts.selected_name[0..nlen], p.name[0..nlen]);
     state.app.podcasts.selected_name_len = nlen;
 
-    const S = struct {
-        var feed: [300]u8 = undefined;
-        var feed_len: usize = 0;
-        fn worker() void {
-            defer state.app.podcasts.episodes_loading.store(false, .release);
-            const url = @This().feed[0..@This().feed_len];
-            if (url.len == 0) return;
-            // 4 MB, not 1 MB: episodes[] holds 200, and a long-running show's feed
-            // is huge (6.9 MB / 583 items for Raj Shamani). At 1 MB the parser only
-            // ever saw the newest 61 — the array was two-thirds empty by design.
-            const body = fetchBody(url, 4 * 1024 * 1024) orelse {
-                state.app.podcasts.fetch_error = true;
-                return;
-            };
-            defer alloc.free(body);
-            parse_mutex.lock();
-            defer parse_mutex.unlock();
-            const n = pure.parseRssEpisodes(body, &state.app.podcasts.episodes);
-            state.app.podcasts.episode_count = n;
-            publication_gen +%= 1;
-            logs.pushLog("info", "podcasts", "Episodes loaded (RSS)", false);
-        }
-    };
-    const flen = @min(p.feed_url_len, S.feed.len);
-    @memcpy(S.feed[0..flen], p.feed_url[0..flen]);
-    S.feed_len = flen;
+    var job = EpisodeJob{ .generation = episode_gen.fetchAdd(1, .acq_rel) +% 1 };
+    const flen = @min(p.feed_url_len, job.feed.len);
+    @memcpy(job.feed[0..flen], p.feed_url[0..flen]);
+    job.feed_len = flen;
     publication_gen +%= 1;
     parse_mutex.unlock();
 
-    workers.spawn(S.worker, .{}) catch {
+    workers.spawn(episodeWorker, .{job}) catch {
         state.app.podcasts.episodes_loading.store(false, .release);
+        markEpisodeFailure(job.generation);
     };
+}
+
+pub fn retryEpisodesIfDue() bool {
+    if (!episode_failed.load(.acquire)) return false;
+    if (state.app.podcasts.episodes_loading.load(.acquire)) return true;
+    if (io.milliTimestamp() < episode_retry_at_ms.load(.acquire)) return true;
+    parse_mutex.lock();
+    const selected = state.app.podcasts.selected_idx;
+    parse_mutex.unlock();
+    if (selected) |idx| startEpisodes(idx, false);
+    return true;
+}
+
+fn episodeWorker(job: EpisodeJob) void {
+    defer if (episode_gen.load(.acquire) == job.generation) {
+        state.app.podcasts.episodes_loading.store(false, .release);
+        state.wakeUi();
+    };
+    const url = job.feed[0..job.feed_len];
+    if (url.len == 0) {
+        markEpisodeFailure(job.generation);
+        return;
+    }
+
+    const cache_buf = alloc.alloc(u8, PODCAST_FEED_CAP) catch {
+        markEpisodeFailure(job.generation);
+        return;
+    };
+    defer alloc.free(cache_buf);
+    var key_buf: [340]u8 = undefined;
+    const cache_key = episodeCacheKey(&key_buf, url);
+    if (cache_key) |key| {
+        if (content_cache.get(key, cache_buf)) |hit| {
+            if (publishEpisodes(job.generation, hit.bytes)) {
+                clearEpisodeFailure();
+                if (hit.staleness == .fresh) return;
+            }
+        }
+    }
+
+    var attempt: u8 = 0;
+    while (attempt < 3) : (attempt += 1) {
+        const body = fetchBody(url, PODCAST_FEED_CAP) orelse {
+            if (attempt < 2) io.sleep((250 + @as(u64, attempt) * 500) * std.time.ns_per_ms);
+            continue;
+        };
+        defer alloc.free(body);
+        if (publishEpisodes(job.generation, body)) {
+            if (cache_key) |key| content_cache.put(key, body, PODCAST_EPISODE_CACHE_TTL_S);
+            clearEpisodeFailure();
+            return;
+        }
+        if (attempt < 2) io.sleep((250 + @as(u64, attempt) * 500) * std.time.ns_per_ms);
+    }
+    markEpisodeFailure(job.generation);
+}
+
+fn publishEpisodes(generation: u32, body: []const u8) bool {
+    if (episode_gen.load(.acquire) != generation or !rssBodyValid(body)) return false;
+    const parsed = alloc.alloc(pure.Episode, state.app.podcasts.episodes.len) catch return false;
+    defer alloc.free(parsed);
+    const n = pure.parseRssEpisodes(body, parsed);
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (episode_gen.load(.acquire) != generation or state.app.podcasts.selected_idx == null) return false;
+    @memcpy(state.app.podcasts.episodes[0..n], parsed[0..n]);
+    state.app.podcasts.episode_count = n;
+    publication_gen +%= 1;
+    logs.pushLog("info", "podcasts", "Episodes loaded (RSS)", false);
+    state.wakeUi();
+    return true;
 }
 
 // ══════════════════════════════════════════════════════════

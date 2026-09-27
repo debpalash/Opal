@@ -39,6 +39,7 @@ pub fn renderContent() void {
     loadPopularOnce();
 
     renderSearchBar();
+    if (podcasts.retryEpisodesIfDue()) components.pollRefresh(500_000);
     const view = podcasts.snapshot();
 
     if (view.fetch_error) {
@@ -323,8 +324,18 @@ fn renderEpisodes(view: *const Snapshot) void {
     if (view.episode_count == 0) {
         if (view.episodes_loading)
             components.loadingState("Loading episodes…")
-        else
-            components.emptyState(icons.tvg.lucide.podcast, "No episodes found", "This show did not publish a readable RSS episode list.");
+        else if (view.episodes_failed) {
+            components.emptyState(icons.tvg.lucide.podcast, "Feed unavailable", "Reconnecting automatically. Cached episodes will stay available.");
+            if (view.selected_idx) |idx| {
+                if (dvui.button(@src(), "Retry now", .{}, .{
+                    .color_fill = theme.colors.bg_elevated,
+                    .color_text = theme.colors.text_primary,
+                    .corner_radius = theme.dims.rad_sm,
+                    .gravity_x = 0.5,
+                    .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
+                })) loadEpisodes(idx);
+            }
+        } else components.emptyState(icons.tvg.lucide.podcast, "No episodes found", "This show did not publish a readable RSS episode list.");
         return;
     }
 

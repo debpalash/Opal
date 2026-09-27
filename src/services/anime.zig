@@ -17,6 +17,7 @@ const anime_schedule_pure = @import("anime_schedule_pure.zig");
 const bounded_process = @import("../core/bounded_process.zig");
 const LatestRequest = @import("../core/latest_request.zig").Gate;
 const workers = @import("../core/workers.zig");
+const route_resilience = @import("../core/route_resilience_pure.zig");
 
 const alloc = @import("../core/alloc.zig").allocator;
 
@@ -2151,6 +2152,31 @@ var scraper_ep_len: [200]usize = std.mem.zeroes([200]usize);
 var results_are_scraper: bool = false;
 /// Which framework produced the current results[]/episodes.
 var scraper_kind: AnimeScraper = .none;
+var scraper_episode_gen: std.atomic.Value(u32) = .init(0);
+var scraper_episode_failed: std.atomic.Value(bool) = .init(false);
+var scraper_episode_retry_count: std.atomic.Value(u8) = .init(0);
+var scraper_episode_retry_at_ms: std.atomic.Value(i64) = .init(0);
+const ANIME_DETAIL_CACHE_TTL_S: i64 = 6 * 60 * 60;
+
+fn scraperEpisodeCacheKey(out: []u8, src: AnimeScraper, detail_url: []const u8) ?[]const u8 {
+    return std.fmt.bufPrint(out, "anime:episodes:v1:{s}:{s}", .{ scraperId(src), detail_url }) catch null;
+}
+
+fn markScraperEpisodeFailure(generation: u32) void {
+    if (scraper_episode_gen.load(.acquire) != generation) return;
+    const old = scraper_episode_retry_count.load(.acquire);
+    const attempt = route_resilience.nextAttempt(old);
+    scraper_episode_retry_count.store(attempt, .release);
+    scraper_episode_retry_at_ms.store(@import("../core/io_global.zig").milliTimestamp() + route_resilience.retryDelayMs(attempt), .release);
+    scraper_episode_failed.store(true, .release);
+    state.wakeUi();
+}
+
+fn clearScraperEpisodeFailure() void {
+    scraper_episode_failed.store(false, .release);
+    scraper_episode_retry_count.store(0, .release);
+    scraper_episode_retry_at_ms.store(0, .release);
+}
 
 /// Last path segment of a detail URL (a stable-ish per-title key for watch
 /// tracking; AnimeResult.id is only [64]u8 so we can't store the full URL).
@@ -2344,21 +2370,36 @@ fn publishScraperGrid(html: []const u8, base: []const u8, src: AnimeScraper, my_
 /// episodes (oldest-first). Routed to from loadEpisodes when results are scraper
 /// cards. Sets up the same episode_list/titles/aired arrays the UI already renders.
 fn loadEpisodesScraper(idx: usize) void {
+    startEpisodesScraper(idx, true);
+}
+
+fn startEpisodesScraper(idx: usize, reset_retry: bool) void {
     if (idx >= state.app.anime.result_count) return;
     state.app.anime.selected_idx = idx;
-    state.app.anime.episode_count = 0;
+    if (reset_retry) {
+        state.app.anime.episode_count = 0;
+        clearScraperEpisodeFailure();
+    }
+    const generation = scraper_episode_gen.fetchAdd(1, .acq_rel) +% 1;
     state.app.anime.is_loading.store(true, .release);
-    workers.spawn(episodesScraperThread, .{idx}) catch {
+    workers.spawn(episodesScraperThread, .{ idx, generation }) catch {
         state.app.anime.is_loading.store(false, .release);
+        markScraperEpisodeFailure(generation);
     };
 }
 
-fn episodesScraperThread(idx: usize) void {
-    defer state.app.anime.is_loading.store(false, .release);
+fn episodesScraperThread(idx: usize, generation: u32) void {
+    defer if (scraper_episode_gen.load(.acquire) == generation) state.app.anime.is_loading.store(false, .release);
     const src = scraper_kind;
-    if (src == .none or idx >= state.app.anime.results.len) return;
+    if (src == .none or idx >= state.app.anime.results.len) {
+        markScraperEpisodeFailure(generation);
+        return;
+    }
     const durl = scraper_detail_url[idx][0..scraper_detail_len[idx]];
-    if (durl.len == 0) return;
+    if (durl.len == 0) {
+        markScraperEpisodeFailure(generation);
+        return;
+    }
 
     var base_buf: [256]u8 = undefined;
     const base = scraperBase(src, &base_buf) orelse durl; // fall back to detail origin
@@ -2367,11 +2408,40 @@ fn episodesScraperThread(idx: usize) void {
     @memcpy(detail_copy[0..durl.len], durl);
     const detail_url = detail_copy[0..durl.len];
 
-    const html_buf = alloc.alloc(u8, 1024 * 1024) catch return;
+    const html_buf = alloc.alloc(u8, 1024 * 1024) catch {
+        markScraperEpisodeFailure(generation);
+        return;
+    };
     defer alloc.free(html_buf);
-    const n = scraperGet(detail_url, html_buf);
-    if (n == 0 or workers_isQuitting()) return;
-    const html = html_buf[0..n];
+    var key_buf: [640]u8 = undefined;
+    const cache_key = scraperEpisodeCacheKey(&key_buf, src, detail_url);
+
+    // Paint cached episodes immediately. A stale entry stays visible while a
+    // refresh runs; a provider failure can never replace it with an empty list.
+    if (cache_key) |key| {
+        if (content_cache.get(key, html_buf)) |hit| {
+            if (publishScraperEpisodes(idx, generation, src, detail_url, base, hit.bytes) > 0) {
+                clearScraperEpisodeFailure();
+                if (hit.staleness == .fresh) return;
+            }
+        }
+    }
+
+    var attempt: u8 = 0;
+    while (attempt < 3 and !workers_isQuitting()) : (attempt += 1) {
+        const n = scraperGet(detail_url, html_buf);
+        if (n > 0 and publishScraperEpisodes(idx, generation, src, detail_url, base, html_buf[0..n]) > 0) {
+            if (cache_key) |key| content_cache.put(key, html_buf[0..n], ANIME_DETAIL_CACHE_TTL_S);
+            clearScraperEpisodeFailure();
+            return;
+        }
+        if (attempt < 2) @import("../core/io_global.zig").sleep((250 + @as(u64, attempt) * 500) * std.time.ns_per_ms);
+    }
+    markScraperEpisodeFailure(generation);
+}
+
+fn publishScraperEpisodes(idx: usize, generation: u32, src: AnimeScraper, detail_url: []const u8, base: []const u8, html: []const u8) usize {
+    if (scraper_episode_gen.load(.acquire) != generation or workers_isQuitting()) return 0;
 
     // Collect episodes in document order, then reverse to oldest-first. Heap-
     // allocated (≈74 KB) — never on the worker's ~512 KB stack (CLAUDE.md).
@@ -2383,7 +2453,7 @@ fn episodesScraperThread(idx: usize) void {
         date: [12]u8 = undefined,
         date_len: usize = 0,
     };
-    const tmp = alloc.alloc(EpTmp, 200) catch return;
+    const tmp = alloc.alloc(EpTmp, 200) catch return 0;
     defer alloc.free(tmp);
     var found: usize = 0;
 
@@ -2409,7 +2479,12 @@ fn episodesScraperThread(idx: usize) void {
             var it = dooplay.episodeIter(html);
             while (it.next()) |e| addEp(e.url, e.label, e.date, base, tmp, &found);
             // Movie (no episode list) → single "Movie" episode = the detail page.
-            if (found == 0) addEp(detail_url, "Movie", "", base, tmp, &found);
+            // Require a real player option so a CDN/bot error page cannot be
+            // cached and published as a playable movie.
+            if (found == 0) {
+                var players = dooplay.playerOptionIter(html);
+                if (players.next() != null) addEp(detail_url, "Movie", "", base, tmp, &found);
+            }
         },
         .animestream => {
             var it = animestream.episodeIter(html);
@@ -2420,14 +2495,16 @@ fn episodesScraperThread(idx: usize) void {
         },
         .none => {},
     }
-    if (found == 0 or workers_isQuitting()) return;
-    if (state.app.anime.selected_idx != idx) return; // user navigated away
+    if (found == 0 or workers_isQuitting()) return 0;
+    if (state.app.anime.selected_idx != idx or !results_are_scraper or scraper_kind != src) return 0;
+    if (!std.mem.eql(u8, scraper_detail_url[idx][0..scraper_detail_len[idx]], detail_url)) return 0;
 
     // Publish reversed (oldest-first) into the shared episode arrays. Episode
     // NUMBERS are 1..N (what the UI plays by); the site's own label becomes the
     // episode title. scraper_ep_url[i] is the episode page to resolve on play.
     anime_parse_mutex.lock();
     defer anime_parse_mutex.unlock();
+    if (scraper_episode_gen.load(.acquire) != generation or state.app.anime.selected_idx != idx) return 0;
     const ep_n = @min(found, state.app.anime.episode_list.len);
     for (0..ep_n) |i| {
         const e = &tmp[found - 1 - i]; // reverse
@@ -2456,6 +2533,8 @@ fn episodesScraperThread(idx: usize) void {
     for (0..@min(ep_n, state.app.anime.episode_watched.len)) |i| state.app.anime.episode_watched[i] = false;
     const card_id = state.app.anime.results[idx].id[0..state.app.anime.results[idx].id_len];
     if (card_id.len > 0) @import("../core/db.zig").animeLoadWatched(card_id, state.app.anime.episode_watched[0..ep_n]);
+    state.wakeUi();
+    return ep_n;
 }
 
 /// Resolve the selected episode's EMBED URL (per framework) and hand it to
@@ -2607,6 +2686,16 @@ pub fn playEmbed(embed_url: []const u8) void {
 // UI Rendering (Drawer)
 // ══════════════════════════════════════════════════════════
 
+fn retryScraperEpisodesWhenDue(idx: usize) void {
+    if (!results_are_scraper or !scraper_episode_failed.load(.acquire) or state.app.anime.is_loading.load(.acquire)) return;
+    const now = @import("../core/io_global.zig").milliTimestamp();
+    if (now >= scraper_episode_retry_at_ms.load(.acquire)) {
+        startEpisodesScraper(idx, false);
+    } else {
+        components.pollRefresh(500_000);
+    }
+}
+
 pub fn renderContent() void {
     // Free any poster textures queued by parse worker threads (UI-thread only).
     drainPendingTexFrees();
@@ -2673,6 +2762,7 @@ pub fn renderContent() void {
     // Episode list (if anime selected)
     if (state.app.anime.selected_idx) |sel_idx| {
         if (sel_idx < state.app.anime.result_count) {
+            retryScraperEpisodesWhenDue(sel_idx);
             const r = state.app.anime.results[sel_idx];
             {
                 var sel_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -2689,6 +2779,9 @@ pub fn renderContent() void {
                     .corner_radius = theme.dims.rad_sm,
                     .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
                 })) {
+                    _ = scraper_episode_gen.fetchAdd(1, .acq_rel);
+                    clearScraperEpisodeFailure();
+                    state.app.anime.is_loading.store(false, .release);
                     state.app.anime.selected_idx = null;
                     state.app.anime.episode_count = 0;
                 }
@@ -3145,6 +3238,23 @@ pub fn renderContent() void {
                         }
                     }
                 }
+            } else if (results_are_scraper and state.app.anime.is_loading.load(.acquire)) {
+                _ = dvui.label(@src(), "Loading episodes…", .{}, .{
+                    .color_text = theme.colors.accent,
+                    .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 },
+                });
+            } else if (results_are_scraper and scraper_episode_failed.load(.acquire)) {
+                _ = dvui.label(@src(), "Episode source unavailable. Retrying automatically…", .{}, .{
+                    .color_text = theme.colors.accent,
+                    .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 },
+                });
+                if (dvui.button(@src(), "Retry now", .{}, .{
+                    .color_fill = theme.colors.bg_elevated,
+                    .color_text = theme.colors.text_primary,
+                    .corner_radius = theme.dims.rad_sm,
+                    .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
+                    .margin = .{ .x = 12, .y = 2, .w = 0, .h = 0 },
+                })) startEpisodesScraper(sel_idx, true);
             } else {
                 _ = dvui.label(@src(), "No episodes available", .{}, .{
                     .color_text = theme.colors.text_secondary,
