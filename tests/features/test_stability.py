@@ -246,22 +246,24 @@ def test_plugin_sandbox_hardened():
 @test("Playback Repaint Gated + Async UI Wakes", "Stability")
 def test_smoothness_repaint():
     # Phase 1 smoothness (GUI/thread-only wiring — verified by presence):
-    #  1. the continuous playback refresh no longer runs every frame — it's gated
-    #     on the control chrome being visible (mouse active), so immersive watching
-    #     falls back to callback-driven, video-fps repaints instead of 60Hz relayout.
+    #  1. playback is callback-driven and coalesces the client-event wake with
+    #     the matching published video frame instead of running a second timer.
     #  2. poster decode workers wake the UI (dvui.refresh) so posters don't pop in
     #     only on incidental repaints.
     #  3. AI chat streaming wakes the UI per token chunk so live text renders.
     mn = _src("src/main.zig")
+    pl = _src("src/player/player.zig")
     ps = _src("src/core/poster.zig")
     ac = _src("src/services/ai_context.zig")
-    if "chrome_live" not in mn or "DEFAULT_THRESHOLD_MS" not in mn:
-        return "fail", "playback refresh not gated on chrome visibility (main.zig)"
+    if "last_frame_publish_ms" not in pl or "client_wakes_suppressed" not in pl:
+        return "fail", "mpv client/render wakeups are not coalesced"
+    if "dvui.timer(tick_id, 16_667)" in mn:
+        return "fail", "display-rate playback timer still duplicates frame callbacks"
     if "dvui_win" not in ps or "dvui.refresh(win" not in ps:
         return "fail", "poster worker does not wake the UI after decode"
     if "dvui_win" not in ac or "refresh(win" not in ac:
         return "fail", "AI streaming does not wake the UI"
-    return "pass", "playback repaint gated; poster + AI-stream wakes wired"
+    return "pass", "playback wakes coalesced; poster + AI-stream wakes wired"
 
 
 @test("Frame Loop: Seq Ids Reset + Deferred Nav", "Stability")
