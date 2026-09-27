@@ -372,6 +372,8 @@ pub const MediaPlayer = struct {
     current_url_len: usize = 0,
     fallback_url: [MAX_LOAD_URL]u8 = std.mem.zeroes([MAX_LOAD_URL]u8),
     fallback_url_len: usize = 0,
+    fallback_url_2: [MAX_LOAD_URL]u8 = std.mem.zeroes([MAX_LOAD_URL]u8),
+    fallback_url_2_len: usize = 0,
     fallback_recovery: playback_fallback.State = .{},
     server_recovery_attempted: bool = false,
     history_identity: [2048]u8 = std.mem.zeroes([2048]u8),
@@ -767,6 +769,8 @@ pub const MediaPlayer = struct {
         self.current_url_len = 0;
         @memset(&self.fallback_url, 0);
         self.fallback_url_len = 0;
+        @memset(&self.fallback_url_2, 0);
+        self.fallback_url_2_len = 0;
         self.fallback_recovery = .{};
         self.server_recovery_attempted = false;
         @memset(&self.history_identity, 0);
@@ -1412,6 +1416,7 @@ pub const MediaPlayer = struct {
         self.current_header_fields_len = header_len;
         self.current_loopback_stream = request.loopback_stream;
         self.fallback_url_len = 0;
+        self.fallback_url_2_len = 0;
         self.fallback_recovery.reset();
         self.server_recovery_attempted = false;
         if (request.fallback_url.len <= self.fallback_url.len and
@@ -1421,6 +1426,15 @@ pub const MediaPlayer = struct {
             @memcpy(self.fallback_url[0..request.fallback_url.len], request.fallback_url);
             self.fallback_url_len = request.fallback_url.len;
             self.fallback_recovery.arm(true);
+        }
+        if (self.fallback_url_len > 0 and
+            request.fallback_url_2.len <= self.fallback_url_2.len and
+            playback_load.shouldArmFallback(request.fallback_url, request.fallback_url_2, request.mode) and
+            !std.mem.eql(u8, path_span, request.fallback_url_2) and
+            @import("resume_pure.zig").plausibleMediaPath(request.fallback_url_2))
+        {
+            @memcpy(self.fallback_url_2[0..request.fallback_url_2.len], request.fallback_url_2);
+            self.fallback_url_2_len = request.fallback_url_2.len;
         }
         self.youtube_default_retry_pending = std.ascii.indexOfIgnoreCase(path_span, "youtube.com/") != null or
             std.ascii.indexOfIgnoreCase(path_span, "youtu.be/") != null;
@@ -1927,6 +1941,7 @@ pub const MediaPlayer = struct {
         self.current_url_len = 0;
         self.source_url_len = 0;
         self.fallback_url_len = 0;
+        self.fallback_url_2_len = 0;
         self.fallback_recovery.reset();
         self.youtube_default_retry_pending = false;
         self.youtube_fast_active = false;
@@ -1976,6 +1991,7 @@ pub const MediaPlayer = struct {
         self.current_url_len = 0;
         self.source_url_len = 0;
         self.fallback_url_len = 0;
+        self.fallback_url_2_len = 0;
         self.fallback_recovery = .{};
         self.current_loopback_stream = false;
         self.youtube_default_retry_pending = false;
@@ -2834,6 +2850,14 @@ pub fn updateTorrentBackgroundTasks() void {
                         const fallback_len = p.fallback_url_len;
                         @memcpy(p.current_url[0..fallback_len], p.fallback_url[0..fallback_len]);
                         p.current_url_len = fallback_len;
+                        if (p.fallback_url_2_len > 0) {
+                            @memcpy(p.fallback_url[0..p.fallback_url_2_len], p.fallback_url_2[0..p.fallback_url_2_len]);
+                            p.fallback_url_len = p.fallback_url_2_len;
+                            p.fallback_url_2_len = 0;
+                            p.fallback_recovery.arm(true);
+                        } else {
+                            p.fallback_url_len = 0;
+                        }
                         p.resume_seeked = false;
                         p.is_loading = true;
                         const label = "Trying compatible stream...";
