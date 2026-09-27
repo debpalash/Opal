@@ -50,6 +50,23 @@ pub fn classify(http_code: u32, playable: bool, latency_ms: u32) Status {
     return .live;
 }
 
+/// Choose the cache namespace for a direct playback request. Explicit source
+/// kinds win. Ordinary remote streams share the app-wide `playback` namespace;
+/// local proxies and YouTube page URLs are excluded because probing those does
+/// not measure the extracted media stream.
+pub fn playbackKind(explicit: []const u8, url: []const u8) []const u8 {
+    if (explicit.len > 0) return explicit;
+    if (!std.mem.startsWith(u8, url, "http://") and !std.mem.startsWith(u8, url, "https://")) return "";
+    const lower_host_end = std.mem.indexOfScalarPos(u8, url, if (std.mem.startsWith(u8, url, "https://")) 8 else 7, '/') orelse url.len;
+    const host = url[0..lower_host_end];
+    if (std.ascii.indexOfIgnoreCase(host, "127.0.0.1") != null or
+        std.ascii.indexOfIgnoreCase(host, "localhost") != null or
+        std.ascii.indexOfIgnoreCase(host, "youtube.com") != null or
+        std.ascii.indexOfIgnoreCase(host, "youtu.be") != null)
+        return "";
+    return "playback";
+}
+
 // ══════════════════════════════════════════════════════════
 // Tests
 // ══════════════════════════════════════════════════════════
@@ -110,4 +127,13 @@ test "Status int values are the persisted encoding" {
     try std.testing.expectEqual(@as(u8, 2), @intFromEnum(Status.slow));
     try std.testing.expectEqual(@as(u8, 3), @intFromEnum(Status.dead));
     try std.testing.expectEqual(Status.dead, @as(Status, @enumFromInt(@as(u8, 3))));
+}
+
+test "playback health covers remote streams without probing pages or loopback" {
+    try std.testing.expectEqualStrings("radio", playbackKind("radio", "https://youtube.com/watch?v=x"));
+    try std.testing.expectEqualStrings("playback", playbackKind("", "https://cdn.example/movie.m3u8"));
+    try std.testing.expectEqualStrings("", playbackKind("", "file:///movie.mkv"));
+    try std.testing.expectEqualStrings("", playbackKind("", "http://127.0.0.1:45678/s/token"));
+    try std.testing.expectEqualStrings("", playbackKind("", "https://www.youtube.com/watch?v=x"));
+    try std.testing.expectEqualStrings("", playbackKind("", "https://youtu.be/x"));
 }
