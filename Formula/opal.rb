@@ -4,7 +4,6 @@ class Opal < Formula
   desc "Pure-Zig desktop media browser and AI copilot"
   homepage "https://github.com/debpalash/Opal"
   url "https://github.com/debpalash/Opal/releases/download/v0.8.7/Opal-0.8.7-macos-arm64.app.zip"
-  version "0.8.7"
   sha256 "055aeb52eeca077852b357e222e3c8675e30b32a6e2927a7c781513b0dc35e49"
   license "GPL-3.0-only"
 
@@ -24,5 +23,10 @@ class Opal < Formula
       Config and models live in ~/.config/opal/.
       Voice capture and transcription need ffmpeg and whisper-cpp separately.
     EOS
+  end
+
+  test do
+    assert_predicate prefix/"Opal.app/Contents/MacOS/Opal", :executable?
+    assert_predicate bin/"opal", :executable?
   end
 end
