@@ -10,6 +10,32 @@ Add a section BEFORE tagging; a missing one ships a release that says so.
 Headings are `## vX.Y.Z — YYYY-MM-DD`, newest first. The version token must
 match the tag exactly.
 
+## v0.8.7 — 2026-09-27
+
+- **YouTube starts faster and plays at the requested quality.** Browse cards,
+  filters and player controls now match the rest of Opal; cancellation remains
+  responsive while a stream resolves, 1080p is preferred, and quality changes
+  switch immediately without exposing unavailable formats.
+- **Every browse surface is smoother and more resilient.** Movies, TV, anime,
+  Asian drama, audio, reading, live TV and connected libraries share bounded
+  paging, responsive cards, cover placeholders and reliable cached fetches.
+  Temporary provider failures keep existing content and offer recovery instead
+  of presenting an empty library.
+- **The player stays responsive under demanding video and torrent workloads.**
+  Frame buffers and render targets are reused, redundant redraws are coalesced,
+  torrent range seeks prioritize the requested pieces, and fallback streams are
+  tried without blocking the controls.
+- **Home and season pages use the available window.** Continue items preserve
+  privacy until hover, artwork is restored, compact sections fit more content,
+  and episode lists scroll independently inside an immersive season view.
+- **Remote access and account management are dependable.** Web UI registration,
+  password changes, scoped administration, card actions, keyboard navigation and
+  screen reader behavior now work through the complete native-to-web flow.
+- **Arch and Omarchy gain a direct Pacman package.** Releases now include a
+  checksum-covered `.pkg.tar.zst` alongside the AUR source and binary packages,
+  `.deb`, `.rpm`, AppImage, self-extracting Linux installer, macOS app and DMG,
+  Windows MSI and portable zip, and both browser extensions.
+
 ## v0.8.6 — 2026-09-24
 
 - **The Linux AppImage opens on Arch again.** Packaging keeps the bundled

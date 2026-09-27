@@ -5,7 +5,7 @@ name: Release
 #
 # Coverage today:
 #   • macos-arm64    — Opal.app bundle (zip) + bare binary tarball    [primary]
-#   • linux-x86_64   — binary tarball + .deb + .rpm + AppImage + .run
+#   • linux-x86_64   — tarball + .deb + .rpm + Pacman + AppImage + .run
 #   • windows-x86_64 — portable .zip + .msi (MSYS2/MINGW64 build +   [ALPHA]
 #                      vendored MS onnxruntime; see the job for why)
 #   • aur            — opal-media-player source + prebuilt -bin      [gated]
@@ -155,7 +155,7 @@ jobs:
           cp packaging/opal.desktop opal-${VERSION}-linux-x86_64/
           cp assets/logo.svg opal-${VERSION}-linux-x86_64/opal.svg
           tar czf "opal-${VERSION}-linux-x86_64.tar.gz" opal-${VERSION}-linux-x86_64
-      - name: Package .deb + .rpm (nfpm)
+      - name: Package .deb + .rpm + Pacman (nfpm)
         run: |
           # nfpm has no apt package — pin a release binary from GitHub.
           NFPM_VER=2.41.3
@@ -166,6 +166,7 @@ jobs:
           export VERSION="${OPAL_RELEASE_TAG#v}"
           ./nfpm package -f packaging/nfpm.yaml -p deb -t "opal_${VERSION}_amd64.deb"
           ./nfpm package -f packaging/nfpm.yaml -p rpm -t "opal-${VERSION}-1.x86_64.rpm"
+          ./nfpm package -f packaging/nfpm.yaml -p archlinux -t "opal-${VERSION}-1-x86_64.pkg.tar.zst"
       - name: Package AppImage
         run: |
           VERSION="${OPAL_RELEASE_TAG#v}"
@@ -306,6 +307,7 @@ jobs:
             opal-*-linux-x86_64.tar.gz
             opal_*_amd64.deb
             opal-*.x86_64.rpm
+            opal-*-x86_64.pkg.tar.zst
             Opal-*-x86_64.AppImage
             opal-*-linux-x86_64.run
           if-no-files-found: error
@@ -781,6 +783,7 @@ jobs:
             artifacts/opal-*-linux-x86_64.tar.gz
             artifacts/opal_*_amd64.deb
             artifacts/opal-*.x86_64.rpm
+            artifacts/opal-*-x86_64.pkg.tar.zst
             artifacts/Opal-*-x86_64.AppImage
             artifacts/opal-*-linux-x86_64.run
             artifacts/opal-*-windows-x86_64.zip

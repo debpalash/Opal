@@ -54,3 +54,11 @@ overrides:
       - libsdl2-2.0-0
       - libtorrent-rasterbar2.0
       - ffmpeg
+  archlinux:
+    depends:
+      - mpv
+      - sdl2
+      - sqlite
+      - libtorrent-rasterbar
+      - curl
+      - ffmpeg
