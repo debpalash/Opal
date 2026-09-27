@@ -13,7 +13,13 @@ class Opal < Formula
   depends_on :macos
 
   def install
-    prefix.install "Opal.app"
+    if (buildpath/"Opal.app").directory?
+      prefix.install "Opal.app"
+    else
+      # Homebrew strips an archive's sole top-level directory. The release ZIP
+      # contains only Opal.app, so its Contents directory can become buildpath.
+      (prefix/"Opal.app").install buildpath.children
+    end
     bin.write_exec_script prefix/"Opal.app/Contents/MacOS/Opal"
   end
 
