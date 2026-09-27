@@ -184,7 +184,7 @@ async function loadTrakt() {
   $('trakt-retry').hidden = !d.queued;
   // Only poll while a device auth is in flight, and stop the moment it lands —
   // otherwise the page keeps a timer alive for the whole session.
-  if (d.pending && !traktPoll) traktPoll = setInterval(loadTrakt, 3000);
+  if (d.pending && !traktPoll) traktPoll = settledInterval(loadTrakt, 3000);
   if (!d.pending && traktPoll) { clearInterval(traktPoll); traktPoll = null; }
 }
 async function saveTraktDrafts() {

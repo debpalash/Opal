@@ -17,6 +17,13 @@ a list copies metadata without sharing image ownership. Episode autoplay now
 requires a full query match even when providers finish, leaving partial matches
 for explicit selection.
 
+The web companion serializes every settling poll. A provider response that
+takes longer than the polling interval no longer overlaps the next request or
+publishes a burst of repeated renders. Large Jellyfin, Plex, novels,
+Audiobookshelf, OPDS, and download lists also retain their DOM when the server
+snapshot is byte-for-byte unchanged. The shared safe-markup cache is invalidated
+by direct loading-state writes, so a placeholder cannot strand a cached list.
+
 ## Additional sources
 
 Install these in Plugins:

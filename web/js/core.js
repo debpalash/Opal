@@ -93,6 +93,7 @@ const esc = escAttr;
 // never gets one live frame in which to execute.
 const nativeInnerHTML = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');
 const nativeInsertAdjacentHTML = Element.prototype.insertAdjacentHTML;
+const renderedMarkup = new WeakMap();
 const blockedElements = new Set(['SCRIPT','IFRAME','OBJECT','EMBED','BASE','META','LINK','FORM']);
 const urlAttributes = new Set(['href','src','action','formaction','xlink:href']);
 function safeDomFragment(markup){
@@ -130,9 +131,13 @@ Object.defineProperty(Element.prototype, 'innerHTML', {
   configurable: true,
   enumerable: nativeInnerHTML.enumerable,
   get(){ return nativeInnerHTML.get.call(this); },
-  set(markup){ this.replaceChildren(safeDomFragment(markup)); },
+  set(markup){
+    renderedMarkup.delete(this);
+    this.replaceChildren(safeDomFragment(markup));
+  },
 });
 Element.prototype.insertAdjacentHTML = function(position, markup){
+  renderedMarkup.delete(position === 'afterbegin' || position === 'beforeend' ? this : this.parentElement);
   const fragment = safeDomFragment(markup);
   if (position === 'beforebegin') this.before(fragment);
   else if (position === 'afterbegin') this.prepend(fragment);
@@ -140,6 +145,36 @@ Element.prototype.insertAdjacentHTML = function(position, markup){
   else if (position === 'afterend') this.after(fragment);
   else throw new DOMException('Invalid position', 'SyntaxError');
 };
+
+// Polling views often receive the same snapshot several times while a worker
+// settles. Avoid reparsing, resanitizing and rebuilding an unchanged subtree;
+// direct innerHTML writes above invalidate the entry, so loading placeholders
+// and other imperative updates still force the next real render.
+function setSafeHtml(element, markup){
+  const value = String(markup ?? '');
+  if (renderedMarkup.get(element) === value) return false;
+  element.innerHTML = value;
+  renderedMarkup.set(element, value);
+  return true;
+}
+
+// setInterval starts another async callback even when the preceding network
+// request is still pending. Every settling view uses this guard so a slow
+// source cannot build a request backlog or publish several renders at once.
+function serialPoll(task){
+  let active = false;
+  return async (...args) => {
+    if (active) return;
+    active = true;
+    try { return await task(...args); }
+    finally { active = false; }
+  };
+}
+function settledInterval(task, delay, immediate = false){
+  const poll = serialPoll(task);
+  if (immediate) poll();
+  return setInterval(poll, delay);
+}
 
 function setNetworkState(state){
   const el = $('network-status');

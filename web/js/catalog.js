@@ -50,7 +50,7 @@ function runSearch(){
   api('/unified_search?q=' + encodeURIComponent(q)).catch(()=>{});
   clearInterval(searchWatch);
   let ticks = 0;
-  searchWatch = setInterval(async () => {
+  searchWatch = settledInterval(async () => {
     ticks++;
     try {
       const d = await api('/unified_search');
@@ -118,7 +118,7 @@ function runStreamSearch(title){
   api('/search?q=' + encodeURIComponent(title)).catch(()=>{});
   clearInterval(searchWatch);
   let ticks = 0;
-  searchWatch = setInterval(async () => {
+  searchWatch = settledInterval(async () => {
     ticks++;
     try {
       const d = await api('/search');
@@ -338,7 +338,7 @@ async function loadDownloads(){
   try {
     const d = await api('/downloads');
     const jobs = d.jobs || [];
-    $('download-jobs').innerHTML = jobs.map(job => {
+    const jobsHtml = jobs.map(job => {
       const status = String(job.status || 'queued');
       const pct = Math.max(0, Math.min(100, Number(job.pct) || 0));
       const active = ['queued','probing','running'].includes(status);
@@ -354,9 +354,11 @@ async function loadDownloads(){
           <button type="button" class="danger" data-transfer="download" data-action="${remove}" data-idx="${job.idx}" data-token="${job.token}" data-keeps-file="${status === 'done' ? '1' : '0'}" data-name="${encodeURIComponent(job.name || 'download')}">Remove</button>
         </span></div>${job.error ? `<div class="transfer-error" role="alert">${esc(job.error)}</div>` : ''}</div>`;
     }).join('') || '<div class="empty">No direct downloads</div>';
+    setSafeHtml($('download-jobs'), jobsHtml);
 
     const files = d.files || [], cap = 40, shown = files.slice(0, cap);
-    $('downloads').innerHTML = shown.map(file => {
+    const downloads = $('downloads');
+    const filesHtml = shown.map(file => {
       const item = typeof file === 'string' ? {name:file} : file;
       const name = item.name || '';
       const detail = item.is_dir ? 'Folder' : fmtSize(item.size);
@@ -369,7 +371,8 @@ async function loadDownloads(){
     }).join('') + (files.length > cap
       ? `<div class="empty">${files.length - cap} more not shown — newest ${cap} listed</div>` : '')
       || '<div class="empty">No downloaded files</div>';
-    $('downloads').querySelectorAll('.play').forEach(button => button.onclick = () => {
+    if (!setSafeHtml(downloads, filesHtml)) return;
+    downloads.querySelectorAll('.play').forEach(button => button.onclick = () => {
       const rel = decodeURIComponent(button.dataset.n);
       if (HOSTED) return openPlayer(rel);
       dispatchPlay(streamUrl(rel), rel, () => {
@@ -377,7 +380,7 @@ async function loadDownloads(){
         apiMutation('/downloads/play?file=' + button.dataset.n).catch(()=>{});
       }, rel);
     });
-    $('downloads').querySelectorAll('[data-file-action]').forEach(button => button.onclick = async () => {
+    downloads.querySelectorAll('[data-file-action]').forEach(button => button.onclick = async () => {
       const action = button.dataset.fileAction, name = decodeURIComponent(button.dataset.n || '');
       if (action === 'delete' && !confirm(`Permanently delete “${name}” from disk? This cannot be undone.`)) return;
       const params = new URLSearchParams({action, file:name});
@@ -542,7 +545,7 @@ async function loadBrowse(force){
   catch { $('browse-hint').textContent = 'Could not start the catalog request.'; return; }
 
   let tries = 0;
-  browseWatch = setInterval(async () => {
+  browseWatch = settledInterval(async () => {
     if (generation !== browseGeneration) return clearInterval(browseWatch);
     tries++;
     try {
