@@ -374,7 +374,7 @@ pub fn render() void {
 
     const busy = checking or pending;
     // Keep the status text live while the worker runs (no UI wake otherwise).
-    if (busy) dvui.refresh(null, @src(), null);
+    if (busy) components.pollRefresh(100_000);
 
     // Instruction line — quiet tertiary text, no banner box (calm: separate by
     // whitespace, not a colored bordered panel).

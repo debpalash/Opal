@@ -578,7 +578,7 @@ fn renderAIContentBody() void {
                     .color_text = theme.colors.warning,
                     .gravity_y = 0.5,
                 });
-                dvui.refresh(null, @src(), null); // live-update while the worker runs
+                components.pollRefresh(100_000);
             } else {
                 if (dvui.button(@src(), "Set up (~1.6GB)", .{}, .{
                     .color_fill = theme.colors.accent,
@@ -775,7 +775,7 @@ fn renderAIContentBody() void {
                     .color_text = theme.colors.warning,
                     .gravity_y = 0.5,
                 });
-                dvui.refresh(null, @src(), null); // live-update while the worker runs
+                components.pollRefresh(100_000);
             } else if (mlx_installed) {
                 components.statusPill("Installed", .success);
             } else {
@@ -1473,7 +1473,7 @@ fn renderAboutTab() void {
             }
             if (update.is_checking) {
                 _ = dvui.label(@src(), "Checking…", .{}, .{ .id_extra = 2511, .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
-                dvui.refresh(null, @src(), null); // worker has no UI wake — poll while pending
+                components.pollRefresh(100_000);
             } else if (dvui.button(@src(), "Check for Updates", .{}, .{
                 .id_extra = 2512,
                 .color_fill = btn_inactive,
@@ -1560,7 +1560,7 @@ fn renderAboutTab() void {
                 spacer.deinit();
             }
             if (update.is_downloading) {
-                dvui.refresh(null, @src(), null);
+                components.pollRefresh(100_000);
                 _ = dvui.label(@src(), "Downloading…", .{}, .{ .id_extra = 2521, .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
             } else if (@import("builtin").os.tag != .macos) {
                 _ = dvui.label(@src(), "Update using your package manager or the release download", .{}, .{ .color_text = theme.colors.text_secondary });
@@ -1745,7 +1745,7 @@ fn renderPlaybackTab() void {
                 .failed => "Could not open · see Logs",
                 .idle => unreachable,
             }}, .{ .color_text = if (outcome == .failed) theme.colors.danger else theme.colors.text_secondary });
-            if (outcome == .launching) dvui.refresh(null, @src(), null);
+            if (outcome == .launching) components.pollRefresh(100_000);
         }
         _ = dvui.label(@src(), "Requires VLC installed (standard Windows, macOS or Linux location, or on PATH). Direct URLs and files only; streams requiring Opal's private headers cannot be transferred. Local torrent streams require Opal to remain open.", .{}, .{ .color_text = theme.colors.text_tertiary });
     }
@@ -1865,10 +1865,10 @@ fn renderPlaybackTab() void {
 
         if (ytdlp.isDownloading()) {
             components.statusPill("Updating", .info);
-            dvui.refresh(null, @src(), null); // worker has no UI wake — poll while pending
+            components.pollRefresh(100_000);
         } else if (!ytdlp.versionReady()) {
             components.statusPill("Checking…", .info);
-            dvui.refresh(null, @src(), null); // poll until the version query lands
+            components.pollRefresh(100_000);
         } else if (ytdlp.versionString().len > 0) {
             // Works (system or bundled).
             components.statusPill("Installed", .success);
@@ -2211,7 +2211,7 @@ fn renderNetworkTab() void {
                 .done => "Completed",
                 .idle => unreachable,
             }}, .{ .color_text = if (install_state == .failed) theme.colors.danger else theme.colors.text_secondary });
-            if (install_state == .running) dvui.refresh(null, @src(), null);
+            if (install_state == .running) components.pollRefresh(100_000);
         }
         _ = dvui.label(@src(), "Commands: python3 -m venv; venv Python -m pip install --upgrade {s}", .{switch (browser.active_engine) {
             .camoufox => "camoufox; python -m camoufox fetch",
@@ -2759,7 +2759,7 @@ fn renderSubtitlesTab() void {
                 .color_text = theme.colors.text_tertiary,
                 .gravity_y = 0.5,
             });
-            dvui.refresh(null, @src(), null);
+            components.pollRefresh(100_000);
         }
 
         // Keyless rows — source-tagged; no key required.
@@ -3180,7 +3180,7 @@ fn renderDiskUsageSection() void {
             .color_text = if (busy) theme.colors.warning else theme.colors.text_primary,
             .gravity_y = 0.5,
         });
-        if (busy) dvui.refresh(null, @src(), null); // live-update while scanning
+        if (busy) components.pollRefresh(100_000);
         {
             var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
             sp.deinit();
@@ -3369,7 +3369,7 @@ fn renderLiveTvTab() void {
                 .gravity_y = 0.5,
                 .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
             });
-            dvui.refresh(null, @src(), null); // live-update while the ingest runs
+            components.pollRefresh(100_000);
         }
         if (dvui.button(@src(), "Refresh now", .{}, .{
             .color_fill = theme.colors.accent,
@@ -4160,7 +4160,7 @@ fn renderScriptsTab() void {
         const install_state = scripts.installStatus(i);
         if (install_state == .downloading) {
             components.statusPill("Downloading…", .info);
-            dvui.refresh(null, @src(), null);
+            components.pollRefresh(100_000);
         } else if (installed) {
             components.statusPill("Installed", .success);
         } else if (install_state == .failed) {
@@ -4742,7 +4742,7 @@ pub fn renderDepsModal() void {
             .failed => "Terminal launch failed · see Logs",
             .idle => unreachable,
         }}, .{ .color_text = if (terminal_state == .failed) theme.colors.danger else theme.colors.text_secondary });
-        if (terminal_state == .launching) dvui.refresh(null, @src(), null);
+        if (terminal_state == .launching) components.pollRefresh(100_000);
     }
     _ = dvui.label(@src(), "Model downloads: HTTPS curl → verify → extract staged archive (no shell for source plugins).", .{}, .{ .color_text = theme.colors.text_tertiary });
     if (dvui.button(@src(), "View installation logs", .{}, .{ .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.accent })) {
