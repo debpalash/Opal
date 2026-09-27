@@ -9,9 +9,9 @@
 //! public-domain/open texts and share this module's reader and paging flow.
 //!
 //! Flow:
-//!   searchNovels(q)   → curl list=search    → pure.searchArray  → nr_* titles
-//!   openNovel(idx)    → curl list=allpages  → pure.allpagesArray → ch_* chapters
-//!   openChapter(idx)  → curl action=parse   → pure.extractParseHtml →
+//!   searchNovels(q)   → reliable fetch list=search → pure.searchArray → nr_* titles
+//!   openNovel(idx)    → reliable fetch list=allpages → pure.allpagesArray → ch_* chapters
+//!   openChapter(idx)  → reliable fetch action=parse → pure.extractParseHtml →
 //!                       pure.htmlToText → state.app.novels.text_buf
 //!   next/prev/resume  → openChapter(current ± 1) / the persisted chapter.
 
@@ -22,7 +22,7 @@ const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
 const components = @import("../ui/components.zig");
 const logs = @import("../core/logs.zig");
-const io = @import("../core/io_global.zig");
+const reliable_fetch = @import("reliable_fetch.zig");
 const db = @import("../core/db.zig");
 const pure = @import("novels_pure.zig");
 const nsp = @import("novel_sources_pure.zig");
@@ -350,7 +350,7 @@ fn copyBase(raw: []const u8, out: []u8) []const u8 {
 fn fetchWikisource(query: []const u8, my_gen: u32, start: usize, offset: u32) usize {
     var url_buf: [1024]u8 = undefined;
     const url = pure.buildSearchUrl(&url_buf, query, PAGE_SIZE, offset) orelse return 0;
-    const body = curl(url, 512 * 1024) orelse {
+    const body = fetchBody(url, 512 * 1024) orelse {
         if (search_request.isCurrent(my_gen)) state.app.novels.fetch_error = true;
         return 0;
     };
@@ -393,7 +393,7 @@ fn fetchInternetArchive(query: []const u8, my_gen: u32, start: usize, page: u32)
         .{ encoded, PAGE_SIZE, page },
     ) catch return 0;
     @import("../core/rate_limit.zig").acquire("archive", 1.0);
-    const body = curl(url, 512 * 1024) orelse return 0;
+    const body = fetchBody(url, 512 * 1024) orelse return 0;
     defer alloc.free(body);
     if (!search_request.isCurrent(my_gen)) return 0;
 
@@ -703,7 +703,7 @@ fn chaptersWikisource(my_gen: u32) void {
     var url_buf: [1024]u8 = undefined;
     const url = pure.buildSubpagesUrl(&url_buf, work[0..wlen], MAX_CHAPTERS) orelse return;
 
-    const body = curl(url, 512 * 1024) orelse {
+    const body = fetchBody(url, 512 * 1024) orelse {
         state.app.novels.fetch_error = true;
         return;
     };
@@ -905,7 +905,7 @@ fn chaptersInternetArchive(my_gen: u32) void {
     var meta_url_buf: [1700]u8 = undefined;
     const meta_url = std.fmt.bufPrint(&meta_url_buf, "https://archive.org/metadata/{s}", .{enc_id_buf[0..enc_id_len]}) catch return;
     @import("../core/rate_limit.zig").acquire("archive", 1.0);
-    const metadata = curl(meta_url, 2 * 1024 * 1024) orelse {
+    const metadata = fetchBody(meta_url, 2 * 1024 * 1024) orelse {
         state.app.novels.fetch_error = true;
         return;
     };
@@ -1008,7 +1008,7 @@ fn textWikisource(my_gen: u32) void {
     var url_buf: [1024]u8 = undefined;
     const url = pure.buildChapterUrl(&url_buf, page[0..plen]) orelse return;
 
-    const body = curl(url, 2 * 1024 * 1024) orelse {
+    const body = fetchBody(url, 2 * 1024 * 1024) orelse {
         state.app.novels.fetch_error = true;
         return;
     };
@@ -1053,7 +1053,7 @@ fn textInternetArchive(my_gen: u32) void {
         return;
     }
     @import("../core/rate_limit.zig").acquire("archive", 1.0);
-    const body = curl(url, 2 * 1024 * 1024) orelse {
+    const body = fetchBody(url, 2 * 1024 * 1024) orelse {
         state.app.novels.fetch_error = true;
         return;
     };
@@ -1202,30 +1202,18 @@ fn loadResume() usize {
 // Networking
 // ══════════════════════════════════════════════════════════
 
-/// Fetch `url` with curl into a fresh heap buffer of `cap` bytes. Returns the
-/// filled slice (caller frees) or null on failure/empty. Large buffers stay off
-/// the worker stack (macOS 512KB limit). Mirrors radio.curl.
-fn curl(url: []const u8, cap: usize) ?[]u8 {
-    const argv = [_][]const u8{ "curl", "-sL", "-A", agent, "--max-time", "20", url };
-    var child = io.Child.init(&argv, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    _ = child.spawn() catch return null;
-
-    const buf = alloc.alloc(u8, cap) catch {
-        _ = child.wait() catch {};
-        return null;
-    };
-    const n = if (child.stdout) |*so| io.readAll(so, buf) catch 0 else 0;
-    _ = child.wait() catch {};
-    if (n == 0) {
+/// Fetch a JSON/API response through the shared bounded transport.
+fn fetchBody(url: []const u8, cap: usize) ?[]u8 {
+    const buf = alloc.alloc(u8, cap) catch return null;
+    const body = reliable_fetch.fetch(url, buf, .{
+        .user_agent = agent,
+        .timeout_secs = 20,
+        .impersonate = false,
+    }) orelse {
         alloc.free(buf);
         return null;
-    }
-    // Shrink to the read length — the global DebugAllocator checks free size
-    // against alloc size, so freeing buf[0..n] out of a cap-sized allocation
-    // would abort (see radio.zig / podcasts.zig).
-    return alloc.realloc(buf, n) catch {
+    };
+    return alloc.realloc(buf, body.len) catch {
         alloc.free(buf);
         return null;
     };
@@ -1262,27 +1250,19 @@ fn scrapeHtml(url: []const u8, cap: usize) ?[]u8 {
 }
 
 /// POST `body` to `url` with a `Referer` header (readwn search + Madara AJAX
-/// chapter lists need both). Same heap-buffer discipline as `curl`.
+/// chapter lists need both). Same heap-buffer discipline as `fetchBody`.
 fn curlPost(url: []const u8, body: []const u8, referer: []const u8, cap: usize) ?[]u8 {
-    var ref_hdr: [640]u8 = undefined;
-    const rh = std.fmt.bufPrint(&ref_hdr, "Referer: {s}", .{referer}) catch return null;
-    const argv = [_][]const u8{ "curl", "-sL", "-A", agent, "-H", rh, "--data", body, "--max-time", "20", url };
-    var child = io.Child.init(&argv, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    _ = child.spawn() catch return null;
-
-    const buf = alloc.alloc(u8, cap) catch {
-        _ = child.wait() catch {};
-        return null;
-    };
-    const n = if (child.stdout) |*so| io.readAll(so, buf) catch 0 else 0;
-    _ = child.wait() catch {};
-    if (n == 0) {
+    const buf = alloc.alloc(u8, cap) catch return null;
+    const response = reliable_fetch.fetch(url, buf, .{
+        .user_agent = agent,
+        .referer = referer,
+        .timeout_secs = 20,
+        .post_body = body,
+    }) orelse {
         alloc.free(buf);
         return null;
-    }
-    return alloc.realloc(buf, n) catch {
+    };
+    return alloc.realloc(buf, response.len) catch {
         alloc.free(buf);
         return null;
     };

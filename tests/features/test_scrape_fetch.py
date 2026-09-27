@@ -156,9 +156,12 @@ def test_scrapers_routed_through_scrapefetch():
         "novels search routed": "scrapeHtml(url, 512 * 1024)" in novels,
         "novels chapters routed": "scrapeHtml(murl, 1024 * 1024)" in novels,
         "novels text routed": "scrapeHtml(chapter_url, 2 * 1024 * 1024)" in novels,
-        # Wikisource stays on plain curl (keyless JSON, never challenged); the
-        # POST paths stay on curlPost (scrapeFetch is GET-only).
-        "wikisource stays on curl": "curl(url, 512 * 1024)" in novels,
+        # Wikisource uses the reliable keyless JSON path; POST paths retain the
+        # existing curlPost wrapper because scrapeFetch is GET-only.
+        "wikisource uses reliable fetch": (
+            "fetchBody(url, 512 * 1024)" in novels
+            and "reliable_fetch.fetch(" in novels
+        ),
         "post paths stay on curlPost": "curlPost(" in novels,
     }
 

@@ -77,8 +77,9 @@ def test_novels_reader():
         "threads detached": "_ = std.Thread.spawn(" not in svc,
         # Large fetch buffers heap-allocated (never on the worker stack).
         "heap fetch buffers": "alloc.alloc(u8, 2 * 1024 * 1024)" in svc,
-        # curl only — std.http SEGVs on some ISP TLS resets (see comics.zig).
-        "curl not std.http": "std.http.Client" not in svc and '"curl"' in svc,
+        "reliable fetch transport": (
+            "std.http.Client" not in svc and "reliable_fetch.fetch(" in svc
+        ),
         # ── Pure module registered in the `zig build test` step ──
         "test registered": 'b.path("src/services/novels_pure.zig")' in build,
     }
