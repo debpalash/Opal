@@ -192,14 +192,13 @@ def test_podcasts_wired():
     rem = _remote_api()
     web = _web_app()
     checks = {
-        # REGRESSION — a 6.9 MB feed against a 1 MB cap hung the app permanently.
-        # readAll() stops when the buffer is full and leaves the rest in the pipe;
-        # curl then blocks in write(2), where it can never reach its own --max-time
-        # check, so child.wait() waits forever on a process that cannot exit. The
-        # worker thread hung on "Loading…" — and because loadEpisodes() early-returns
-        # while episodes_loading is set, EVERY later podcast click was a silent no-op
-        # for the rest of the session.
-        "drains curl's pipe (no deadlock)": "while ((io.read(so, &sink) catch 0) > 0) {}" in svc,
+        # REGRESSION — capped reads must keep draining oversized responses so the
+        # transport can exit instead of leaving the worker stuck on "Loading…".
+        "bounded fetch drains oversized responses": (
+            "reliable_fetch.fetch(" in svc
+            and "while (true)" in _src("src/services/reliable_fetch.zig")
+            and "overflow = true" in _src("src/services/reliable_fetch.zig")
+        ),
         # episodes[] holds 200, but a 1 MB cap only ever reached the newest 61.
         "episode cap fills the array": "4 * 1024 * 1024" in svc,
         "enum variant": "Podcasts," in st and "podcasts: struct" in st,
@@ -287,12 +286,13 @@ def test_podcasts_radio_default_content():
         "radio reuses parseStations": "pure.parseStations(" in rad,
         "radio one-shot latch": "popular_fetched" in rad and "pub fn loadPopularOnce" in rad,
         "radio fetch is backgrounded": "spawnLegacy(popularWorker" in rad,
-        # Both curl helpers allocate `cap` bytes and hand back only what was read.
+        # Both fetch helpers allocate `cap` bytes and hand back only what was read.
         # Returning `buf[0..n]` is an INVALID FREE under the global DebugAllocator
         # (it checks free size against alloc size) and aborts the process on launch
         # — 49584 freed against 524288 allocated. The buffer must be shrunk to `n`.
-        "curl shrinks buffer to the read length": all(
-            "alloc.realloc(buf, n)" in s and "return buf[0..n];" not in s
+        "fetch shrinks buffer to the read length": all(
+            ("alloc.realloc(buf, n)" in s or "alloc.realloc(buf, body.len)" in s)
+            and "return buf[0..n];" not in s
             for s in (pod, rad)
         ),
         # ── Cards: artwork via the shared poster daemon, existing click path ──

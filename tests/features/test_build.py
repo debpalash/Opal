@@ -314,7 +314,13 @@ def test_curl_connect_timeout():
         "tvmaze": '"--connect-timeout"' in _src("src/services/tvmaze.zig"),
         # Plex uses the native shared client rather than curl.
         "plex": '.timeout_secs = 15' in _src("src/services/plex.zig"),
-        "podcasts": '"--connect-timeout"' in _src("src/services/podcasts.zig"),
+        "podcasts": (
+            '"--connect-timeout"' in _src("src/services/podcasts.zig")
+            or (
+                "reliable_fetch.fetch(" in _src("src/services/podcasts.zig")
+                and '"--connect-timeout"' in _src("src/services/reliable_fetch_pure.zig")
+            )
+        ),
     }
     bad = [k for k, v in checks.items() if not v]
     if bad:
