@@ -259,15 +259,21 @@ def test_smoothness_repaint():
     pl = _src("src/player/player.zig")
     ps = _src("src/core/poster.zig")
     ac = _src("src/services/ai_context.zig")
+    settings = _src("src/ui/settings.zig")
+    fileassoc = _src("src/ui/settings_fileassoc.zig")
     if "last_frame_publish_ms" not in pl or "client_wakes_suppressed" not in pl:
         return "fail", "mpv client/render wakeups are not coalesced"
     if "dvui.timer(tick_id, 16_667)" in mn:
         return "fail", "display-rate playback timer still duplicates frame callbacks"
+    if "dvui.refresh(null" in settings or "dvui.refresh(null" in fileassoc:
+        return "fail", "settings worker status still drives an unbounded repaint loop"
+    if settings.count("components.pollRefresh(") < 13 or "components.pollRefresh(" not in fileassoc:
+        return "fail", "settings worker status is not covered by bounded polling"
     if "dvui_win" not in ps or "dvui.refresh(win" not in ps:
         return "fail", "poster worker does not wake the UI after decode"
     if "dvui_win" not in ac or "refresh(win" not in ac:
         return "fail", "AI streaming does not wake the UI"
-    return "pass", "playback wakes coalesced; poster + AI-stream wakes wired"
+    return "pass", "playback wakes coalesced; worker status polling bounded; async wakes wired"
 
 
 @test("Frame Loop: Seq Ids Reset + Deferred Nav", "Stability")
