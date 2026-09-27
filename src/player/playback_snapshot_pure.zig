@@ -96,6 +96,40 @@ pub fn renderSizeForAspect(video_width: i64, video_height: i64, max_width: u32, 
     };
 }
 
+/// Choose the smallest useful software render target for the visible player.
+/// The target is bucketed so live window resizing does not recreate the SDL
+/// texture for every pixel of movement. Cover modes retain enough offscreen
+/// image to avoid GPU upscaling at the cropped edges.
+pub fn renderSizeForViewport(
+    video_width: i64,
+    video_height: i64,
+    max_width: u32,
+    max_height: u32,
+    aspect: []const u8,
+    viewport: FrameSize,
+    mode: FrameMode,
+) RenderSize {
+    const source = renderSizeForAspect(video_width, video_height, max_width, max_height, aspect);
+    if (viewport.width < 2 or viewport.height < 2 or
+        !std.math.isFinite(viewport.width) or !std.math.isFinite(viewport.height)) return source;
+
+    const display = frameSize(
+        .{ .width = @floatFromInt(source.width), .height = @floatFromInt(source.height) },
+        viewport,
+        mode,
+    );
+    const target_w = bucketedExtent(display.width, max_width);
+    const target_h = bucketedExtent(display.height, max_height);
+    return renderSize(source.width, source.height, target_w, target_h);
+}
+
+fn bucketedExtent(value: f32, maximum: u32) u32 {
+    if (!std.math.isFinite(value) or value < 2) return maximum;
+    const rounded: u64 = @intFromFloat(@ceil(value));
+    const bucketed = ((rounded + 63) / 64) * 64;
+    return @max(2, @as(u32, @intCast(@min(bucketed, maximum))));
+}
+
 fn finiteNonNegative(value: f64) f64 {
     if (!std.math.isFinite(value) or value < 0) return 0;
     return value;
@@ -122,6 +156,30 @@ test "aspect override reshapes the render target" {
     try std.testing.expectEqual(RenderSize{ .width = 1920, .height = 822 }, renderSizeForAspect(1920, 1080, 1920, 1080, "21:9"));
     try std.testing.expectEqual(RenderSize{ .width = 1440, .height = 810 }, renderSizeForAspect(1440, 1080, 1920, 1080, "16:9"));
     try std.testing.expectEqual(RenderSize{ .width = 1920, .height = 1080 }, renderSizeForAspect(1920, 1080, 1920, 1080, "bad"));
+}
+
+test "viewport render size avoids invisible software work" {
+    try std.testing.expectEqual(
+        RenderSize{ .width = 960, .height = 540 },
+        renderSizeForViewport(3840, 2160, 1920, 1080, "-1", .{ .width = 960, .height = 540 }, .fit),
+    );
+    // Cover keeps enough horizontal image for a tall viewport, with 64 px
+    // bucketing to prevent per-pixel texture recreation during resize.
+    try std.testing.expectEqual(
+        RenderSize{ .width = 1472, .height = 828 },
+        renderSizeForViewport(3840, 2160, 1920, 1080, "-1", .{ .width = 960, .height = 800 }, .cover),
+    );
+    // Never upscale a small source merely because its viewport is large.
+    try std.testing.expectEqual(
+        RenderSize{ .width = 640, .height = 360 },
+        renderSizeForViewport(640, 360, 1920, 1080, "-1", .{ .width = 1600, .height = 900 }, .fit),
+    );
+    // Layout has no physical extent during the first frame: retain the normal
+    // source-aware target until a real viewport is available.
+    try std.testing.expectEqual(
+        RenderSize{ .width = 1920, .height = 1080 },
+        renderSizeForViewport(3840, 2160, 1920, 1080, "-1", .{ .width = 0, .height = 0 }, .fit),
+    );
 }
 
 test "frame modes contain, limit cropping, and cover without stretching" {

@@ -573,6 +573,12 @@ pub fn renderGrid() !void {
         switch (p.provider) {
             .mpv => {
                 // ── MPV Video Player ──
+                const framing = @import("../player/playback_snapshot_pure.zig");
+                const frame_mode: framing.FrameMode = switch (state.app.video_fill_mode) {
+                    .fit => .fit,
+                    .balanced => .balanced,
+                    .cover => .cover,
+                };
                 // mpv rasterises on the player's own render thread (see
                 // player.renderWorker) into a CPU back buffer; this UI-thread
                 // block only (a) tells the worker what size to render at and
@@ -581,19 +587,23 @@ pub fn renderGrid() !void {
                 // it after deletion has cleared the logical media identity.
                 // Headless players have no render context or GPU texture.
                 if (p.mpv_gl != null and (p.current_url_len > 0 or p.current_torrent_id >= 0 or p.is_loading)) {
-                    // Render at the video's NATIVE size (capped to the 1080p
-                    // buffer, aspect-preserving) instead of a fixed 1920×1080.
-                    // The fixed target made mpv software-scale + RGBA-convert
-                    // 8.3MB per frame and upload all of it to the GPU even
-                    // for a 720p file (3.7MB) — a large share of the playback
-                    // CPU. The GPU upscales the smaller texture for free.
+                    // Render only the pixels this physical viewport can show,
+                    // capped to the source and reusable 1080p buffer. This is
+                    // especially valuable in multi-player layouts: a quarter-
+                    // size 4K pane no longer software-scales and uploads a full
+                    // 8.3 MB 1080p texture on every frame. Target dimensions are
+                    // bucketed in the pure sizing policy to avoid texture churn
+                    // while the window is being resized.
                     const playback = p.playbackSnapshot();
-                    const render_size = @import("../player/playback_snapshot_pure.zig").renderSizeForAspect(
+                    const viewport_px = cell_wrapper.data().contentRectScale().r;
+                    const render_size = framing.renderSizeForViewport(
                         playback.video_width,
                         playback.video_height,
                         player.video_w,
                         player.video_h,
                         state.app.video_aspect_buf[0..state.app.video_aspect_len],
+                        .{ .width = viewport_px.w, .height = viewport_px.h },
+                        frame_mode,
                     );
                     chooseSwFormat();
                     p.want_w.store(render_size.width, .release);
@@ -664,12 +674,6 @@ pub fn renderGrid() !void {
                     // All framing modes keep the texture's display aspect. Fit
                     // contains every pixel; Balanced and Cover center the crop.
                     const viewport = cell_overlay.data().contentRect();
-                    const framing = @import("../player/playback_snapshot_pure.zig");
-                    const frame_mode: framing.FrameMode = switch (state.app.video_fill_mode) {
-                        .fit => .fit,
-                        .balanced => .balanced,
-                        .cover => .cover,
-                    };
                     const display = framing.frameSize(
                         .{ .width = @floatFromInt(tex.width), .height = @floatFromInt(tex.height) },
                         .{ .width = viewport.w, .height = viewport.h },

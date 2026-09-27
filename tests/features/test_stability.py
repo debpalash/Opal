@@ -28,7 +28,11 @@ def test_render_hot_paths_and_drop_ingest():
             f'"{name}"' not in overlay and f'"{name}"' not in now_playing
             for name in ("percent-pos", "time-pos", "duration", "volume")
         ),
-        "video sizing uses snapshot": "playbackSnapshot()" in grid and "renderSizeForAspect(" in grid,
+        "video sizing uses viewport snapshot": (
+            "playbackSnapshot()" in grid
+            and "contentRectScale().r" in grid
+            and "renderSizeForViewport(" in grid
+        ),
         "video sizing IPC removed": 'mpv_get_property(p.mpv_ctx, "dwidth"' not in grid,
         "drop IO runs on worker": "spawnLegacy(" in drop and "scanDirectory" in drop,
         "drop scan is bounded": "max_folder_entries" in drop and "workers.isQuitting()" in drop,
