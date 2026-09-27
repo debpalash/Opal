@@ -25,7 +25,7 @@ fn list(stream: std.Io.net.Stream) void {
         if (index > 0) w.writeAll(",") catch return;
         w.print("{{\"id\":{d},\"name\":\"", .{row.id}) catch return;
         wire.writeJsonString(&w, row.name[0..row.name_len]);
-        w.print("\",\"count\":{d},\"updated_at\":{d}}}", .{ row.item_count, row.updated_at }) catch return;
+        w.print("\",\"count\":{d},\"updated_at\":{d},\"smart\":{s}}}", .{ row.item_count, row.updated_at, if (row.smart) "true" else "false" }) catch return;
     }
     w.writeAll("]}") catch return;
     wire.sendJson(stream, json[0..w.end]);

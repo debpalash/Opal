@@ -673,13 +673,15 @@ fn renderCollections() void {
         if (dvui.button(@src(), "Replace", .{}, .{ .id_extra = index, .color_fill = theme.colors.bg_elevated })) {
             if (collections.enqueueNative(row.id, true)) state.showToast("Queue replaced");
         }
-        if (dvui.button(@src(), "Delete", .{}, .{
-            .id_extra = index,
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.danger,
-        })) {
-            if (collections.remove(row.id)) state.showToast("Collection deleted");
-            break;
+        if (!row.smart) {
+            if (dvui.button(@src(), "Delete", .{}, .{
+                .id_extra = index,
+                .color_fill = theme.colors.bg_elevated,
+                .color_text = theme.colors.danger,
+            })) {
+                if (collections.remove(row.id)) state.showToast("Collection deleted");
+                break;
+            }
         }
     }
 }
