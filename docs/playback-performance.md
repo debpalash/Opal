@@ -17,6 +17,12 @@ five-second counters.
   polling or running a display-rate playback timer.
 - The high-quality zimg scaler remains enabled. Faster low-quality scalers were
   rejected because they softened 4K downscaling or dropped frames.
+- Software render targets follow the physical player viewport and stay capped
+  to the source resolution. A 960×540 pane therefore converts and uploads about
+  2.1 MB per frame instead of the 8.3 MB needed by a fixed 1080p texture.
+  Targets use 64-pixel buckets so resizing does not recreate a texture for
+  every pixel of window movement. Fit, Balanced and Fill each retain the pixels
+  needed for their visible crop.
 
 The current software render path still copies mpv output into an SDL texture.
 Eliminating that copy requires a shared GPU rendering path between libmpv and
