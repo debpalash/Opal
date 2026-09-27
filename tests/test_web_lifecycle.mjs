@@ -20,7 +20,7 @@ function fixture(...files){
     constructor(){
       this.listeners = new Map(); this.dataset = {}; this.attributes = new Map();
       this.style = {removeProperty(){}, setProperty(){}};
-      this.textContent = ''; this.value = ''; this.hidden = false; this._html = '';
+      this.textContent = ''; this.value = ''; this.hidden = false; this._html = ''; this.replaceCount = 0;
       const classes = new Set();
       this.classList = {
         add: value => classes.add(value), remove: value => classes.delete(value),
@@ -38,7 +38,7 @@ function fixture(...files){
     querySelector(){ return new Element(); }
     setAttribute(name, value){ this.attributes.set(name, value); }
     removeAttribute(name){ this.attributes.delete(name); }
-    replaceChildren(...children){ this.children = children; }
+    replaceChildren(...children){ this.children = children; this.replaceCount++; }
     toggleAttribute(name, value){ value ? this.setAttribute(name, '') : this.removeAttribute(name); }
     focus(){}
     insertAdjacentHTML(){}
@@ -70,7 +70,11 @@ function fixture(...files){
       constructor(url){ this.url = url; this.closed = false; sources.push(this); }
       close(){ this.closed = true; }
     },
-    document:{getElementById:$, querySelectorAll:() => [], createElement:() => new Element(), addEventListener(){}, body:new Element()},
+    document:{getElementById:$, querySelectorAll:() => [], createElement(tag){
+      const node = new Element();
+      if (tag === 'template') node.content = new Element();
+      return node;
+    }, addEventListener(){}, body:new Element()},
     location:{origin:'http://fixture.invalid', hash:'', hostname:'fixture.invalid'},
     localStorage:{getItem:() => '', removeItem(){}}, history:{},
     navigator:{onLine:true}, window,
@@ -98,6 +102,39 @@ test('web performance budget produces a measured pass and failure', () => {
   assert.equal(f.run('webPerf.summary().within_budget'), true);
   event.callback({getEntries:() => [{duration:180}]});
   assert.equal(f.run('webPerf.summary().within_budget'), false);
+});
+
+test('identical safe markup does not rebuild the same DOM subtree', () => {
+  const f = fixture('core.js');
+  f.run(`
+    setSafeHtml($('cache-probe'), '<article>Same cards</article>');
+    setSafeHtml($('cache-probe'), '<article>Same cards</article>');
+  `);
+  assert.equal(f.$('cache-probe').replaceCount, 1);
+  f.run(`
+    $('cache-probe').innerHTML = '<span>Loading</span>';
+    setSafeHtml($('cache-probe'), '<article>Same cards</article>');
+  `);
+  assert.equal(f.$('cache-probe').replaceCount, 3);
+});
+
+test('settled polling never overlaps a slow request', async () => {
+  const f = fixture('core.js');
+  f.run(`
+    let finishSlowPoll;
+    let slowPollRuns = 0;
+    const runSlowPoll = serialPoll(async () => {
+      slowPollRuns++;
+      await new Promise(resolve => { finishSlowPoll = resolve; });
+    });
+    runSlowPoll();
+    runSlowPoll();
+  `);
+  assert.equal(f.run('slowPollRuns'), 1);
+  f.run('finishSlowPoll()');
+  await flush();
+  f.run('runSlowPoll()');
+  assert.equal(f.run('slowPollRuns'), 2);
 });
 
 test('anime paging uses the shared browse loader and renders rich cards', async () => {

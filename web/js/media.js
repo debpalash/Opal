@@ -30,7 +30,7 @@ function runAnime(){
   api('/anime/search?q=' + encodeURIComponent(q)).catch(()=>{});
   clearInterval(animeWatch);
   let ticks = 0;
-  animeWatch = setInterval(async () => {
+  animeWatch = settledInterval(async () => {
     ticks++;
     try {
       const d = await api('/anime');
@@ -75,7 +75,7 @@ function loadAnimeEpisodes(idx){
   $('anime-episodes').innerHTML = '<div class="empty"><span class="spin"></span></div>';
   api('/anime/episodes?idx=' + idx).catch(()=>{});
   let tries = 0;
-  const t = setInterval(async () => {
+  const t = settledInterval(async () => {
     tries++;
     try {
       const d = await api('/anime');
@@ -109,7 +109,7 @@ function runMusic(){
   api('/music/search?q=' + encodeURIComponent(q)).catch(()=>{});
   clearInterval(muWatch);
   let ticks = 0;
-  muWatch = setInterval(async () => {
+  muWatch = settledInterval(async () => {
     ticks++;
     try {
       const d = await api('/music');
@@ -175,7 +175,7 @@ function runComics(){
 function pollComics(){
   clearInterval(cxWatch);
   let ticks = 0;
-  cxWatch = setInterval(async () => {
+  cxWatch = settledInterval(async () => {
     ticks++;
     try {
       const d = await api('/comics/results');
@@ -214,7 +214,7 @@ function openComic(url){
   $('cx-progress').innerHTML = '<span class="spin"></span> Loading pages…';
   clearInterval(cxPages);
   let ticks = 0;
-  cxPages = setInterval(async () => {
+  cxPages = settledInterval(async () => {
     ticks++;
     try {
       const d = await api('/comics');
@@ -250,7 +250,7 @@ function runNovels(){
 function pollNovels(){
   clearInterval(nvWatch);
   let ticks = 0;
-  nvWatch = setInterval(async () => {
+  nvWatch = settledInterval(async () => {
     ticks++;
     try {
       const d = await api('/novels');
@@ -283,19 +283,28 @@ function renderNovels(d){
   $('nv-text').style.display = 'none';
   const rows = d.view === 'chapters' ? (d.chapters || []) : (d.results || []);
   const kind = d.view === 'chapters' ? 'chapter' : 'open';
-  $('nv-results').innerHTML = rows.map((r, i) => `
+  const target = $('nv-results');
+  const html = rows.map((r, i) => `
     <div class="result">
       <div class="t">${esc(r.title)}</div>
       <div class="m"><button class="novel-details" data-details="${i}" data-kind="${kind}">Details</button>
         <button class="play" data-nv="${i}" data-kind="${kind}">${kind === 'open' ? 'Open' : 'Read'}</button></div>
     </div>`).join('') || '<div class="empty">Nothing here</div>';
-  $('nv-results').querySelectorAll('button[data-nv]').forEach(b => {
+  if (!setSafeHtml(target, html)) return;
+  target.querySelectorAll('button[data-nv]').forEach(b => {
     b.onclick = () => {
       const i = +b.dataset.nv;
       if (b.dataset.kind === 'open') novelIdx = i;
       api('/novels/' + (b.dataset.kind === 'open' ? 'open' : 'chapter') + '?idx=' + i).catch(()=>{});
       pollNovels();
     };
+  });
+  target.querySelectorAll('.novel-details').forEach(button => {
+    const row = rows[Number(button.dataset.details)] || {};
+    button.onclick = () => openSourceDetails('Novel', {
+      ...row, name:row.title, type:button.dataset.kind === 'chapter' ? 'Chapter' : 'Novel',
+      kind:button.dataset.kind === 'chapter' ? 'chapter' : 'novel', index:Number(button.dataset.details),
+    }, button);
   });
 }
 
@@ -328,8 +337,7 @@ function loadDrama(){
       }
     } catch { clearInterval(drWatch); }
   };
-  tick();
-  drWatch = setInterval(tick, 900);
+  drWatch = settledInterval(tick, 900, true);
 }
 function renderDrama(rows){
   const html = rows.map((r, i) => `
@@ -371,7 +379,7 @@ function runVndb(){
 function pollVndb(){
   clearInterval(vnWatch);
   let ticks = 0;
-  vnWatch = setInterval(async () => {
+  vnWatch = settledInterval(async () => {
     ticks++;
     try {
       const d = await api('/vndb');
@@ -420,8 +428,7 @@ function pollAbs(){
       if ((!d.loading && ticks > 1) || ticks > 40) clearInterval(absWatch);
     } catch { clearInterval(absWatch); }
   };
-  tick();
-  absWatch = setInterval(tick, 900);
+  absWatch = settledInterval(tick, 900, true);
 }
 function renderAbs(d){
   $('abs-login').style.display = d.connected ? 'none' : '';
@@ -437,7 +444,8 @@ function renderAbs(d){
   $('abs-crumbs').innerHTML = books ? '<button class="more" id="abs-back">‹ Libraries</button>' : '';
   if ($('abs-back')) $('abs-back').onclick = () => { apiMutation('/abs/back').catch(()=>{}); pollAbs(); };
   const rows = books ? (d.books || []) : (d.libraries || []);
-  $('abs-results').innerHTML = rows.map((r, i) => `
+  const target = $('abs-results');
+  const html = rows.map((r, i) => `
     <div class="result">
       <div class="t">${esc(r.title || r.name)}</div>
       <div class="m">
@@ -447,10 +455,11 @@ function renderAbs(d){
         ${books ? `<button class="abs-details" data-details="${i}">Details</button>` : ''}
         <button class="play" data-i="${i}">${books ? 'Play on Opal' : 'Open'}</button></div>
     </div>`).join('') || (d.connected ? '<div class="empty">Nothing here</div>' : '');
-  $('abs-results').querySelectorAll('button[data-i]').forEach(b => {
+  if (!setSafeHtml(target, html)) return;
+  target.querySelectorAll('button[data-i]').forEach(b => {
     b.onclick = () => { apiMutation('/abs/' + (books ? 'play' : 'open') + '?idx=' + b.dataset.i).catch(()=>{}); pollAbs(); };
   });
-  $('abs-results').querySelectorAll('.abs-details').forEach(button => {
+  target.querySelectorAll('.abs-details').forEach(button => {
     button.onclick = () => {
       const book = rows[Number(button.dataset.details)] || {};
       openSourceDetails('Audiobookshelf', {
@@ -476,8 +485,7 @@ function pollOpds(){
       if ((!d.loading && ticks > 1) || ticks > 40) clearInterval(opWatch);
     } catch { clearInterval(opWatch); }
   };
-  tick();
-  opWatch = setInterval(tick, 900);
+  opWatch = settledInterval(tick, 900, true);
 }
 function renderOpds(d){
   $('opds-login').style.display = d.connected ? 'none' : '';
@@ -491,7 +499,8 @@ function renderOpds(d){
     : (d.error ? esc(d.message || 'Connection failed') : (d.connected ? (d.feed || '') : 'Point this at any OPDS catalog (Komga, Kavita, Calibre-Web, LANraragi).'));
   $('opds-crumbs').innerHTML = d.depth > 0 ? '<button class="more" id="opds-back">‹ Back</button>' : '';
   if ($('opds-back')) $('opds-back').onclick = () => { apiMutation('/opds/back').catch(()=>{}); pollOpds(); };
-  $('opds-results').innerHTML = (d.entries || []).map((e, i) => `
+  const target = $('opds-results');
+  const html = (d.entries || []).map((e, i) => `
     <div class="result">
       <div class="t">${esc(e.title)}</div>
       <div class="m">
@@ -500,21 +509,15 @@ function renderOpds(d){
         <button class="opds-details" data-details="${i}">Details</button>
         <button class="play" data-i="${i}">${e.nav ? 'Open' : 'Read'}</button></div>
     </div>`).join('') || (d.connected ? '<div class="empty">Empty feed</div>' : '');
-  $('opds-results').querySelectorAll('button[data-i]').forEach(b => {
+  if (!setSafeHtml(target, html)) return;
+  target.querySelectorAll('button[data-i]').forEach(b => {
     b.onclick = () => { apiMutation('/opds/open?idx=' + b.dataset.i).catch(()=>{}); pollOpds(); };
   });
-  $('opds-results').querySelectorAll('.opds-details').forEach(button => {
+  target.querySelectorAll('.opds-details').forEach(button => {
     const entry = (d.entries || [])[Number(button.dataset.details)] || {};
     button.onclick = () => openSourceDetails('OPDS', {
       ...entry, name:entry.title, type:entry.nav ? 'Collection' : (entry.type || 'Publication'),
       meta:entry.streamable ? `${entry.pages} pages` : '', index:Number(button.dataset.details),
-    }, button);
-  });
-  $('nv-results').querySelectorAll('.novel-details').forEach(button => {
-    const row = rows[Number(button.dataset.details)] || {};
-    button.onclick = () => openSourceDetails('Novel', {
-      ...row, name:row.title, type:button.dataset.kind === 'chapter' ? 'Chapter' : 'Novel',
-      kind:button.dataset.kind === 'chapter' ? 'chapter' : 'novel', index:Number(button.dataset.details),
     }, button);
   });
 }
@@ -697,7 +700,7 @@ $('source-details').addEventListener('close', () => {
 function pollPlex(){
   clearInterval(plWatch);
   let ticks = 0;
-  plWatch = setInterval(async () => {
+  plWatch = settledInterval(async () => {
     ticks++;
     try {
       const d = await api('/plex');
@@ -724,7 +727,8 @@ function renderPlex(d){
     button.onclick = () => { apiMutation('/plex/open?idx=' + button.dataset.plexSection).catch(()=>{}); pollPlex(); };
   });
   const rows = browsing ? (d.items || []) : (d.sections || []);
-  $('plex-results').innerHTML = rows.map((r, i) => `
+  const target = $('plex-results');
+  const html = rows.map((r, i) => `
     <div class="result">
       <div class="t">${esc(r.title)}</div>
       <div class="m">
@@ -738,7 +742,8 @@ function renderPlex(d){
         <button class="play" data-i="${i}" data-id="${browsing ? esc(r.id || '') : ''}">${browsing ? (r.folder ? 'Open' : (r.progress && !r.played ? 'Resume on Opal' : 'Play on Opal')) : 'Open'}</button></div>
       ${items && r.duration && r.progress ? `<div class="plex-progress"><i style="width:${Math.min(100,Math.round(r.progress/r.duration*100))}%"></i></div>` : ''}
     </div>`).join('') || (d.connected ? '<div class="empty">Nothing here</div>' : '');
-  $('plex-results').querySelectorAll('button[data-i]').forEach(b => {
+  if (!setSafeHtml(target, html)) return;
+  target.querySelectorAll('button[data-i]').forEach(b => {
     b.onclick = () => {
       const row = rows[Number(b.dataset.i)] || {};
       const request = browsing
@@ -747,7 +752,7 @@ function renderPlex(d){
       request.catch(()=>{}); pollPlex();
     };
   });
-  $('plex-results').querySelectorAll('.plex-watched').forEach(button => {
+  target.querySelectorAll('.plex-watched').forEach(button => {
     button.onclick = async () => {
       button.disabled = true;
       try {
@@ -757,7 +762,7 @@ function renderPlex(d){
       } catch (error) { button.disabled = false; toast(error.message || 'Could not update watched state.'); }
     };
   });
-  $('plex-results').querySelectorAll('.plex-favorite').forEach(button => {
+  target.querySelectorAll('.plex-favorite').forEach(button => {
     button.onclick = async () => {
       button.disabled = true;
       try {
@@ -767,7 +772,7 @@ function renderPlex(d){
       } catch (error) { button.disabled = false; toast(error.message || 'Could not update favorite.'); }
     };
   });
-  $('plex-results').querySelectorAll('.plex-rating').forEach(select => {
+  target.querySelectorAll('.plex-rating').forEach(select => {
     select.onchange = async () => {
       select.disabled = true;
       try {
@@ -777,7 +782,7 @@ function renderPlex(d){
       } catch (error) { select.disabled = false; toast(error.message || 'Could not update rating.'); }
     };
   });
-  $('plex-results').querySelectorAll('.plex-details').forEach(button => {
+  target.querySelectorAll('.plex-details').forEach(button => {
     button.onclick = () => openSourceDetails('Plex', rows[Number(button.dataset.i)] || {}, button);
   });
 }
@@ -893,7 +898,7 @@ function runRadio(){
 function pollRadio(){
   clearInterval(raWatch);
   let ticks = 0;
-  raWatch = setInterval(async () => {
+  raWatch = settledInterval(async () => {
     ticks++;
     try {
       const d = await api('/radio');

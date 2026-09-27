@@ -17,7 +17,7 @@ function askAi(){
   api('/ai/send?q=' + encodeURIComponent(q)).catch(()=>{});
   clearInterval(aiWatch);
   let ticks = 0;
-  aiWatch = setInterval(async () => {
+  aiWatch = settledInterval(async () => {
     ticks++;
     try {
       const d = await api('/ai');
@@ -156,7 +156,7 @@ function runYt(){
   api('/youtube/search?q=' + encodeURIComponent(q)).catch(()=>{});
   clearInterval(ytWatch);
   let ticks = 0;
-  ytWatch = setInterval(async () => {
+  ytWatch = settledInterval(async () => {
     ticks++;
     try {
       const d = await api('/youtube');
@@ -226,7 +226,7 @@ function runPodcasts(){
   api('/podcasts/search?q=' + encodeURIComponent(q)).catch(()=>{});
   clearInterval(podWatch);
   let ticks = 0;
-  podWatch = setInterval(async () => {
+  podWatch = settledInterval(async () => {
     ticks++;
     try {
       const d = await api('/podcasts');
@@ -267,7 +267,7 @@ function loadPodEpisodes(idx){
   $('pod-episodes').innerHTML = '<div class="empty"><span class="spin"></span></div>';
   api('/podcasts/episodes?idx=' + idx).catch(()=>{});
   let tries = 0;
-  const t = setInterval(async () => {
+  const t = settledInterval(async () => {
     tries++;
     try {
       const d = await api('/podcasts');
@@ -334,13 +334,16 @@ function renderJellyfin(d){
 }
 function isJfAudio(t){ return t === 'Audio'; }
 function renderJfLibraries(libs){
-  $('jf-libs').innerHTML = libs.map(l => `<button data-id="${esc(l.id)}">${esc(l.name)}</button>`).join('');
-  $('jf-libs').querySelectorAll('button').forEach(b => b.onclick = () => jfBrowse(b.dataset.id));
+  const target = $('jf-libs');
+  const html = libs.map(l => `<button data-id="${esc(l.id)}">${esc(l.name)}</button>`).join('');
+  if (!setSafeHtml(target, html)) return;
+  target.querySelectorAll('button').forEach(b => b.onclick = () => jfBrowse(b.dataset.id));
 }
 function renderJfItems(items){
   // Poster cards (image + title). Items without a Primary image (it.image
   // false) fall back to the placeholder <img> tile — graceful, still labelled.
-  $('jf-items').innerHTML = items.length
+  const target = $('jf-items');
+  const html = items.length
     ? '<div class="grid">' + items.map((it, itemIndex) => {
         const meta = [it.type, it.year || '', it.runtime ? fmt(it.runtime) : ''].filter(Boolean).join(' · ');
         const progress = it.runtime > 0 && it.progress > 0 ? Math.min(100, Math.round(it.progress / it.runtime * 100)) : 0;
@@ -357,7 +360,8 @@ function renderJfItems(items){
         </div>`;
       }).join('') + '</div>'
     : '<div class="empty">Nothing here</div>';
-  $('jf-items').querySelectorAll('[data-jf-action]').forEach(button => button.onclick = async event => {
+  if (!setSafeHtml(target, html)) return;
+  target.querySelectorAll('[data-jf-action]').forEach(button => button.onclick = async event => {
     event.stopPropagation();
     const card = button.closest('.card');
     const enabled = button.dataset.enabled === 'true';
@@ -369,11 +373,11 @@ function renderJfItems(items){
       setTimeout(loadJellyfin, 1200); // reconcile a late server rejection/rollback
     } catch (error) { toast(error.message || 'Jellyfin update failed'); button.disabled = false; }
   });
-  $('jf-items').querySelectorAll('[data-jf-details]').forEach(button => button.onclick = event => {
+  target.querySelectorAll('[data-jf-details]').forEach(button => button.onclick = event => {
     event.stopPropagation();
     openSourceDetails('Jellyfin', items[Number(button.dataset.jfDetails)] || {}, button);
   });
-  $('jf-items').querySelectorAll('.card').forEach(el => {
+  target.querySelectorAll('.card').forEach(el => {
     el.onclick = () => {
       const id = el.dataset.id;
       if (el.dataset.folder === 'true') { jfBrowse(id); return; }
@@ -390,7 +394,7 @@ function renderJfItems(items){
 function jfPollItems(){
   clearInterval(jfWatch);
   let tries = 0;
-  jfWatch = setInterval(async () => {
+  jfWatch = settledInterval(async () => {
     tries++;
     try {
       const d = await api('/jellyfin');
@@ -411,7 +415,7 @@ $('jf-connect').onclick = () => {
   apiFormMutation('/jellyfin/login', {server:s, user:u, pass:p}).catch(()=>{});
   clearInterval(jfWatch);
   let tries = 0;
-  jfWatch = setInterval(async () => {
+  jfWatch = settledInterval(async () => {
     tries++;
     try {
       const d = await api('/jellyfin');
@@ -502,7 +506,7 @@ function refreshFeed(idx, btn){
   $('rss-hint').innerHTML = '<span class="spin"></span> Refreshing…';
   api('/rss/refresh?idx=' + idx).catch(()=>{});
   let tries = 0;
-  const t = setInterval(async () => {
+  const t = settledInterval(async () => {
     tries++;
     try {
       const d = await api('/rss');
