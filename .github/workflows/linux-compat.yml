@@ -17,6 +17,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
+      - name: Build and cache media foundation
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packaging/linux-compat/Dockerfile
+          target: media-deps
+          platforms: linux/amd64
+          cache-from: type=gha,scope=linux-compat-media
+          cache-to: type=gha,mode=max,scope=linux-compat-media
       # Export the native dependency cache before app/package validation. A
       # regression in the app must not force another complete media build.
       - name: Build pinned runtime on Ubuntu 20.04
@@ -26,7 +35,9 @@ jobs:
           file: packaging/linux-compat/Dockerfile
           target: runtime-deps
           platforms: linux/amd64
-          cache-from: type=gha,scope=linux-compat
+          cache-from: |
+            type=gha,scope=linux-compat-media
+            type=gha,scope=linux-compat
           cache-to: type=gha,mode=max,scope=linux-compat
       - name: Build and stage compatibility app
         uses: docker/build-push-action@v6
@@ -37,7 +48,9 @@ jobs:
           platforms: linux/amd64
           outputs: type=local,dest=compat-artifacts
           build-args: OPAL_BUILD_CACHE_KEY=${{ inputs.release && github.run_id || 'preview' }}
-          cache-from: type=gha,scope=linux-compat
+          cache-from: |
+            type=gha,scope=linux-compat-media
+            type=gha,scope=linux-compat
           cache-to: type=gha,mode=max,scope=linux-compat
           secrets: |
             opal_tmdb=${{ secrets.TMDB_API_TOKEN }}

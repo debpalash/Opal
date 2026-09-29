@@ -1,5 +1,5 @@
 # Native libraries and the app are compiled on Focal: no newer glibc ABI.
-FROM ubuntu:20.04 AS runtime-deps
+FROM ubuntu:20.04 AS media-deps
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential pkg-config curl ca-certificates xz-utils cmake python3 python3-pip \
@@ -8,6 +8,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libgl1-mesa-dev \
     && rm -rf /var/lib/apt/lists/*
 RUN python3 -m pip install --no-cache-dir meson==1.5.2
+COPY packaging/linux-compat/build-common.sh packaging/linux-compat/build-media.sh /
+RUN /build-media.sh
+FROM media-deps AS runtime-deps
 COPY packaging/linux-compat/build-runtime.sh /build-runtime.sh
 RUN /build-runtime.sh
 RUN curl -fL --retry 3 https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz -o /tmp/zig.tar.xz \
