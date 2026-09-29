@@ -20,6 +20,7 @@ const history = @import("history.zig");
 const io_global = @import("../core/io_global.zig");
 const tp = @import("transfers_pure.zig");
 const vt_pure = @import("virustotal_pure.zig");
+const visibility = @import("download_visibility.zig");
 const httpdl = @import("downloads.zig");
 const gallerydl = @import("gallerydl.zig");
 const gdl_pure = @import("gallerydl_pure.zig");
@@ -50,13 +51,24 @@ var expanded_key: [256]u8 = std.mem.zeroes([256]u8);
 var expanded_key_len: usize = 0;
 
 pub const TorrentAction = enum { pause, @"resume", recheck, priority, cancel };
-pub const DiskAction = enum { reveal, delete };
+pub const DiskAction = enum { reveal, remove, delete };
 pub const DiskActionError = error{ InvalidPath, NotFound, Io };
 
 /// Execute an explicit action against one direct child of the configured
 /// download root. Validation happens before joining the host path.
 pub fn applyDiskAction(rel: []const u8, action: DiskAction) DiskActionError!void {
     if (!tp.safeDiskRelative(rel)) return error.InvalidPath;
+    if (action == .remove) {
+        var path_buf: [2048]u8 = undefined;
+        var fallback: [512]u8 = undefined;
+        const save_root = if (state.app.save_path_len > 0) state.app.save_path_buf[0..state.app.save_path_len] else @import("../core/paths.zig").defaultSavePath(&fallback);
+        const path = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ save_root, rel }) catch return error.InvalidPath;
+        if (!visibility.setHidden(path, true)) return error.Io;
+        history.forgetDownload(rel, "");
+        rows_dirty.store(true, .release);
+        return;
+    }
+
     var root_buf: [512]u8 = undefined;
     const root = if (state.app.save_path_len > 0)
         state.app.save_path_buf[0..state.app.save_path_len]
@@ -76,6 +88,7 @@ pub fn applyDiskAction(rel: []const u8, action: DiskAction) DiskActionError!void
     var full_buf: [1024]u8 = undefined;
     const full = std.fmt.bufPrintZ(&full_buf, "{s}/{s}", .{ root, rel }) catch return error.InvalidPath;
     switch (action) {
+        .remove => unreachable,
         .reveal => openInFileManager(full),
         .delete => if (kind == .directory)
             io_global.cwdDeleteTree(full) catch return error.Io
@@ -101,8 +114,6 @@ pub fn renderTransfersContent() void {
     buildSnapshot();
 
     consumeVtHashResult();
-    // HTTP downloader housekeeping: config sync + completed→history hand-off.
-    httpdl.tick();
 
     renderControlBar();
 
@@ -228,7 +239,7 @@ fn buildSnapshot() void {
         var k: usize = 0;
         while (k < cached_files_count and fn_ < stage_f.len) : (k += 1) {
             const nm = cached_files_names[k][0..@min(cached_files_name_lens[k], MAX_NAME_LEN)];
-            if (nm.len == 0) continue;
+            if (nm.len == 0 or visibility.hiddenChild(save_path, nm)) continue;
             var r = tp.Row{
                 .origin = .file,
                 .size = cached_files_sizes[k],
@@ -295,7 +306,7 @@ fn rowKey(r: *const tp.Row) []const u8 {
 /// button) by id, and the sort order moves rows around, so a positional id
 /// would hand one row's armed state to another.
 fn rowId(r: *const tp.Row) usize {
-    return @truncate(std.hash.Wyhash.hash(0x0DA1, rowKey(r)));
+    return @truncate(tp.widgetId(r));
 }
 
 /// Resolve only the single safe root entry captured by the file scanner or
@@ -329,10 +340,10 @@ fn toggleExpanded(r: *const tp.Row) void {
 // ══════════════════════════════════════════════════════════
 
 fn renderControlBar() void {
-    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+    var row = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = dvui.Color{ .r = 18, .g = 18, .b = 26, .a = 255 },
+        .color_fill = theme.colors.bg_surface,
         .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
         .color_border = theme.colors.border_subtle,
@@ -354,8 +365,8 @@ fn renderControlBar() void {
             const sel = filter == f;
             if (dvui.button(@src(), lbl, .{}, .{
                 .id_extra = k + 90000,
-                .color_fill = if (sel) theme.colors.accent else dvui.Color{ .r = 22, .g = 22, .b = 32, .a = 255 },
-                .color_text = if (sel) dvui.Color{ .r = 10, .g = 10, .b = 15, .a = 255 } else theme.colors.text_secondary,
+                .color_fill = if (sel) theme.colors.accent else theme.colors.bg_elevated,
+                .color_text = if (sel) theme.colors.text_on_accent else theme.colors.text_secondary,
                 .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
                 .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
                 .corner_radius = dvui.Rect.all(theme.radius.pill),
@@ -372,15 +383,7 @@ fn renderControlBar() void {
     // remote API + browser interception as entry points. Reads the clipboard
     // on click; accepts http(s) URLs (magnets go to the torrent path instead). ──
     if (browse_subdir_len == 0) {
-        if (dvui.button(@src(), "＋ URL", .{}, .{
-            .id_extra = 90500,
-            .color_fill = dvui.Color{ .r = 24, .g = 30, .b = 44, .a = 255 },
-            .color_text = theme.colors.accent,
-            .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
-            .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
-            .corner_radius = dvui.Rect.all(theme.radius.pill),
-            .gravity_y = 0.5,
-        })) {
+        if (components.iconButton(@src(), icons.tvg.lucide.@"clipboard-paste", "Paste download URL", false)) {
             const clip = std.mem.trim(u8, dvui.clipboardText(), " \t\r\n");
             if (std.mem.startsWith(u8, clip, "http://") or std.mem.startsWith(u8, clip, "https://")) {
                 // Image-gallery / art / booru URLs go to gallery-dl (hundreds of
@@ -424,6 +427,11 @@ fn renderControlBar() void {
         }
     }
 
+    if (components.iconButton(@src(), icons.tvg.lucide.@"rotate-ccw", "Show removed files", false)) {
+        visibility.restoreAll();
+        rows_dirty.store(true, .release);
+    }
+
     // ── Right: download speed limit. ──
     _ = dvui.label(@src(), "Limit:", .{}, .{
         .gravity_y = 0.5,
@@ -439,8 +447,8 @@ fn renderControlBar() void {
         const active = state.app.download_rate_limit == lim;
         if (dvui.button(@src(), labels[k], .{}, .{
             .id_extra = k,
-            .color_fill = if (active) theme.colors.accent else dvui.Color{ .r = 24, .g = 24, .b = 34, .a = 255 },
-            .color_text = if (active) dvui.Color{ .r = 10, .g = 10, .b = 15, .a = 255 } else theme.colors.text_secondary,
+            .color_fill = if (active) theme.colors.accent else theme.colors.bg_elevated,
+            .color_text = if (active) theme.colors.text_on_accent else theme.colors.text_secondary,
             .color_border = if (active) theme.colors.accent else dvui.Color{ .r = 45, .g = 45, .b = 60, .a = 200 },
             .border = dvui.Rect.all(1),
             .corner_radius = dvui.Rect.all(theme.radius.pill),
@@ -517,9 +525,9 @@ fn renderRow(r: *const tp.Row, i: usize) bool {
     };
 
     const row_bg = if (i % 2 == 0)
-        dvui.Color{ .r = 18, .g = 18, .b = 26, .a = 255 }
+        theme.colors.bg_surface
     else
-        dvui.Color{ .r = 21, .g = 21, .b = 30, .a = 255 };
+        theme.colors.bg_elevated;
 
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .id_extra = rid,
@@ -528,7 +536,7 @@ fn renderRow(r: *const tp.Row, i: usize) bool {
         .color_fill = row_bg,
         .padding = .{ .x = 10, .y = 7, .w = 10, .h = 7 },
         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-        .color_border = dvui.Color{ .r = 30, .g = 30, .b = 45, .a = 140 },
+        .color_border = theme.colors.border_subtle,
     });
     defer row.deinit();
 
@@ -630,7 +638,7 @@ fn renderRow(r: *const tp.Row, i: usize) bool {
     // ── Actions: the UNION of what this row's handles allow ──
     var acts = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .id_extra = rid,
-        .min_size_content = .{ .w = 190, .h = 0 },
+        .min_size_content = .{ .w = 0, .h = 0 },
         .gravity_y = 0.5,
     });
     defer acts.deinit();
@@ -684,7 +692,7 @@ fn renderRow(r: *const tp.Row, i: usize) bool {
         if (dvui.button(@src(), "Open", .{}, .{
             .id_extra = rid,
             .color_fill = theme.colors.accent,
-            .color_text = dvui.Color{ .r = 10, .g = 10, .b = 15, .a = 255 },
+            .color_text = theme.colors.text_on_accent,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
             .margin = .{ .x = 0, .y = 0, .w = 2, .h = 0 },
@@ -775,17 +783,24 @@ fn renderRow(r: *const tp.Row, i: usize) bool {
     return false;
 }
 
-/// "remove from Opal" — drops the live torrent (and, for a history-only row,
-/// the history record). Files on disk are NEVER touched here.
+/// Remove every backing source for a row; preserve downloaded payloads.
 fn removeRow(r: *const tp.Row) void {
-    if (r.hasTorrent()) {
-        const id = r.torrent_id;
-        // Don't duplicate an existing history record for the same item.
-        if (!r.hasHistory()) history.addDownloadHistory(r.nameSlice(), "");
-        dropLiveTorrent(id);
-    } else if (r.hasHistory()) {
-        history.removeDownloadHistory(@intCast(r.hist_idx));
+    if (r.hasHistory()) {
+        const idx: usize = @intCast(r.hist_idx);
+        if (idx < state.app.dl_history_count) {
+            const name = state.app.dl_history_names[idx][0..state.app.dl_history_name_lens[idx]];
+            const link = state.app.dl_history_links[idx][0..state.app.dl_history_link_lens[idx]];
+            const pure = @import("torrent_intent_pure.zig");
+            var buf: [pure.MAX_IDENTITY]u8 = undefined;
+            const identity = pure.canonicalIdentity(link, &buf) orelse pure.canonicalIdentity(name, &buf);
+            if (identity) |key| history.forgetDownload(name, key) else history.removeDownloadHistory(idx);
+        }
     }
+    if (r.hasFile()) applyDiskAction(r.diskSlice(), .remove) catch {
+        state.showToast("Could not remove download from list");
+        return;
+    };
+    if (r.hasTorrent()) _ = removeTorrentById(r.torrent_id);
     rows_dirty.store(true, .release);
     expanded_key_len = 0;
 }
@@ -826,10 +841,24 @@ pub fn recheckTorrent(id: c_int) bool {
 pub fn removeTorrentById(id: c_int) bool {
     const ses = state.torrentSession();
     if (!liveTorrent(ses, id)) return false;
-    var name_buf: [256]u8 = std.mem.zeroes([256]u8);
+    var name_buf: [256]u8 = undefined;
     c.mpv.torrent_get_name(ses, id, &name_buf, name_buf.len);
-    const name = std.mem.sliceTo(&name_buf, 0);
-    if (name.len > 0 and !downloadHistoryHasName(name)) history.addDownloadHistory(name, "");
+    const name_len = std.mem.indexOfScalar(u8, &name_buf, 0) orelse name_buf.len;
+    var identity: [512]u8 = @splat(0);
+    _ = c.mpv.torrent_get_identity_magnet(ses, id, &identity, identity.len);
+    history.forgetDownload(name_buf[0..name_len], std.mem.sliceTo(&identity, 0));
+    // Hide actual payload paths, never infer disk names from display titles.
+    const files = c.mpv.torrent_get_file_count(ses, id);
+    var fi: c_int = 0;
+    while (fi < files) : (fi += 1) {
+        var file_buf: [1024]u8 = @splat(0);
+        c.mpv.torrent_get_file_path(ses, id, fi, &file_buf, file_buf.len);
+        const relative = std.mem.sliceTo(&file_buf, 0);
+        const first = relative[0 .. std.mem.indexOfAny(u8, relative, "/\\") orelse relative.len];
+        if (tp.safeDiskRelative(first)) applyDiskAction(first, .remove) catch {
+            state.showToast("Could not hide downloaded file");
+        };
+    }
     dropLiveTorrent(id);
     rows_dirty.store(true, .release);
     expanded_key_len = 0;
@@ -860,14 +889,6 @@ pub fn applyTorrentAction(id: c_int, action: TorrentAction, file_idx: c_int, pri
 
 fn liveTorrent(ses: c.mpv.TorrentSession, id: c_int) bool {
     return id >= 0 and id < c.mpv.torrent_count(ses) and c.mpv.torrent_is_alive(ses, id) != 0;
-}
-
-fn downloadHistoryHasName(name: []const u8) bool {
-    for (0..state.app.dl_history_count) |i| {
-        const existing = state.app.dl_history_names[i][0..state.app.dl_history_name_lens[i]];
-        if (std.mem.eql(u8, existing, name)) return true;
-    }
-    return false;
 }
 
 fn dropLiveTorrent(id: c_int) void {
@@ -1024,14 +1045,14 @@ fn renderHttpRows() usize {
 }
 
 fn renderHttpRow(s: *const httpdl.engine.Snap, i: usize) void {
-    const rid: usize = 46000 + s.idx * 32;
+    const rid: usize = @truncate(std.hash.Wyhash.hash(s.idx + 46000, std.mem.asBytes(&s.token)));
     const st = s.status;
     const active = st == .running or st == .probing;
 
     const row_bg = if (i % 2 == 0)
-        dvui.Color{ .r = 18, .g = 18, .b = 26, .a = 255 }
+        theme.colors.bg_surface
     else
-        dvui.Color{ .r = 21, .g = 21, .b = 30, .a = 255 };
+        theme.colors.bg_elevated;
 
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .id_extra = rid,
@@ -1040,7 +1061,7 @@ fn renderHttpRow(s: *const httpdl.engine.Snap, i: usize) void {
         .color_fill = row_bg,
         .padding = .{ .x = 10, .y = 7, .w = 10, .h = 7 },
         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-        .color_border = dvui.Color{ .r = 30, .g = 30, .b = 45, .a = 140 },
+        .color_border = theme.colors.border_subtle,
     });
     defer row.deinit();
 
@@ -1167,7 +1188,7 @@ fn renderHttpRow(s: *const httpdl.engine.Snap, i: usize) void {
     // ── Actions ──
     var acts = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .id_extra = rid,
-        .min_size_content = .{ .w = 190, .h = 0 },
+        .min_size_content = .{ .w = 0, .h = 0 },
         .gravity_y = 0.5,
     });
     defer acts.deinit();
@@ -1198,10 +1219,7 @@ fn renderHttpRow(s: *const httpdl.engine.Snap, i: usize) void {
     // Remove: cancel (active — deletes partial) or dismiss (finished rows;
     // keeps the completed file on disk, drops partials of paused/failed).
     if (components.confirmDangerButton(@src(), "Remove", rid)) {
-        if (active or st == .queued)
-            _ = httpdl.engine.cancel(s.idx, s.token)
-        else
-            _ = httpdl.engine.dismiss(s.idx, s.token);
+        _ = httpdl.apply(s.idx, s.token, .dismiss);
         rows_dirty.store(true, .release);
     }
 }
@@ -1424,15 +1442,16 @@ fn renderFolderBrowse() void {
     var fi: usize = 0;
     while (fi < snap_count) : (fi += 1) {
         const name = cached_files_names[fi][0..cached_files_name_lens[fi]];
+        if (visibility.hiddenChild(effective_path, name)) continue;
         const is_dir = cached_files_is_dir[fi];
         const fsize = cached_files_sizes[fi];
         const is_video = isVideoExt(name);
         const is_audio = isAudioExt(name);
 
         const row_bg = if (fi % 2 == 0)
-            dvui.Color{ .r = 18, .g = 18, .b = 26, .a = 255 }
+            theme.colors.bg_surface
         else
-            dvui.Color{ .r = 21, .g = 21, .b = 30, .a = 255 };
+            theme.colors.bg_elevated;
 
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = fi + 20000,
@@ -1441,7 +1460,7 @@ fn renderFolderBrowse() void {
             .color_fill = row_bg,
             .padding = .{ .x = 10, .y = 7, .w = 10, .h = 7 },
             .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-            .color_border = dvui.Color{ .r = 30, .g = 30, .b = 45, .a = 140 },
+            .color_border = theme.colors.border_subtle,
         });
         defer row.deinit();
 
@@ -1497,7 +1516,7 @@ fn renderFolderBrowse() void {
             if (dvui.button(@src(), "Open", .{}, .{
                 .id_extra = fi + 20400,
                 .color_fill = theme.colors.accent,
-                .color_text = dvui.Color{ .r = 10, .g = 10, .b = 15, .a = 255 },
+                .color_text = theme.colors.text_on_accent,
                 .corner_radius = theme.dims.rad_sm,
                 .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
                 .gravity_y = 0.5,
@@ -1524,6 +1543,13 @@ fn renderFolderBrowse() void {
                     }
                 } else |_| {}
             }
+        }
+
+        if (components.confirmDangerButton(@src(), "Remove", fi + 20700)) {
+            var path_buf: [2048]u8 = undefined;
+            if (std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ effective_path, name })) |path| {
+                if (!visibility.setHidden(path, true)) state.showToast("Could not remove download from list");
+            } else |_| {}
         }
 
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"trash-2", .{}, .{}, .{
@@ -1782,7 +1808,7 @@ fn bgRefreshFiles(_: void) void {
         if (cnt >= MAX_CACHED_FILES) break;
         if (entry.name.len == 0 or entry.name[0] == '.') continue;
         if (std.mem.endsWith(u8, entry.name, ".torrent")) continue;
-        if (std.mem.endsWith(u8, entry.name, ".parts")) continue;
+        if (@import("download_pure.zig").isInternalFile(entry.name)) continue;
         // In-flight HTTP downloads (data + resume sidecar) — the downloader
         // shows these as live rows; listing them as files would double them.
         if (std.mem.endsWith(u8, entry.name, ".opal-part")) continue;

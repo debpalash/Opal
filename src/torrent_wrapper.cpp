@@ -455,7 +455,15 @@ extern "C" void torrent_set_extra_trackers(TorrentSession session, const char* n
     ctx->extra_trackers.swap(parsed);
 }
 
-extern "C" int torrent_add_magnet(TorrentSession session, const char* magnet_url, const char* save_path) {
+static int add_magnet(TorrentSession, const char*, const char*, bool);
+extern "C" int torrent_add_magnet(TorrentSession session, const char* url, const char* path) {
+    return add_magnet(session, url, path, false);
+}
+extern "C" int torrent_restore_magnet(TorrentSession session, const char* url, const char* path) {
+    return add_magnet(session, url, path, true);
+}
+
+static int add_magnet(TorrentSession session, const char* magnet_url, const char* save_path, bool paused) {
     if (!session || !magnet_url || !save_path) return -1;
     SessionContext* ctx = static_cast<SessionContext*>(session);
     
@@ -509,6 +517,10 @@ extern "C" int torrent_add_magnet(TorrentSession session, const char* magnet_url
         lt::settings_pack settings;
         settings.set_bool(lt::settings_pack::close_redundant_connections, false);
         ctx->ses->apply_settings(settings);
+    }
+    if (paused) {
+        atp.flags |= lt::torrent_flags::paused;
+        atp.flags &= ~lt::torrent_flags::auto_managed;
     }
     {
         std::lock_guard<std::mutex> lk(ctx->mtx);
@@ -864,6 +876,21 @@ extern "C" int torrent_get_file_count(TorrentSession session, int torrent_id) {
         if (!ti) return 0;
         return ti->files().num_files();
     } catch(...) { return 0; }
+}
+
+extern "C" void torrent_get_file_path(TorrentSession session, int torrent_id, int file_idx, char* out, int max_len) {
+    if (!out || max_len <= 0) return;
+    out[0] = '\0';
+    if (!session) return;
+    auto node = get_node(static_cast<SessionContext*>(session), torrent_id);
+    if (!node || !node->alive || !node->handle.is_valid() || node->memory) return;
+    try {
+        auto ti = node->handle.torrent_file();
+        if (!ti || file_idx < 0 || file_idx >= ti->num_files()) return;
+        const std::string path = ti->files().file_path(lt::file_index_t(file_idx));
+        if (path.size() >= static_cast<std::size_t>(max_len)) return;
+        std::memcpy(out, path.c_str(), path.size() + 1);
+    } catch (...) {}
 }
 
 extern "C" void torrent_get_file_name(TorrentSession session, int torrent_id, int file_idx, char* out_name, int max_len) {

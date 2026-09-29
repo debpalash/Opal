@@ -126,6 +126,8 @@ fn createTables() void {
         \\)
     );
 
+    exec("CREATE TABLE IF NOT EXISTS dismissed_downloads (path TEXT PRIMARY KEY)");
+
     // Active transfer restart intent. `identity` is an info-hash-only magnet;
     // tracker URLs, web seeds, display names and passkeys are never stored.
     exec(

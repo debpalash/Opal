@@ -258,7 +258,7 @@ pub fn matchStrength(a: *const Row, b: *const Row) Match {
 pub fn statusFor(r: *const Row) Status {
     if (r.hasTorrent()) {
         if (r.poll_err) return .errored;
-        if (!r.has_metadata) return .fetching;
+        if (!r.has_metadata) return if (r.paused) .paused else .fetching;
         if (r.progress < 1.0) return if (r.paused) .paused else .downloading;
         return if (r.paused) .complete else .seeding;
     }
@@ -639,4 +639,30 @@ test "sortOrder: live work first (fastest first), then finished, then archived" 
     try std.testing.expectEqual(@as(u16, 1), order[1]);
     try std.testing.expectEqual(@as(u16, 2), order[2]);
     try std.testing.expectEqual(@as(u16, 0), order[3]);
+}
+
+test "restored torrent awaiting metadata is shown as paused" {
+    const row = Row{ .torrent_id = 1, .paused = true, .has_metadata = false };
+    try std.testing.expectEqual(Status.paused, statusFor(&row));
+}
+
+/// Widget ownership must distinguish equal labels from different backing rows.
+pub fn widgetId(row: *const Row) u64 {
+    if (row.hasTorrent()) return std.hash.Wyhash.hash(1, std.mem.asBytes(&row.torrent_id));
+    if (row.hasFile()) return std.hash.Wyhash.hash(2, row.diskSlice());
+    return std.hash.Wyhash.hash(std.hash.Wyhash.hash(3, row.nameSlice()), std.mem.asBytes(&row.hist_idx));
+}
+
+test "duplicate history labels and file rows have distinct action widgets" {
+    var first = Row{ .hist_idx = 0 };
+    setName(&first, "example movie");
+    var second = first;
+    second.hist_idx = 1;
+    var file = first;
+    setDisk(&file, "example movie");
+    try std.testing.expect(widgetId(&first) != widgetId(&second));
+    try std.testing.expect(widgetId(&first) != widgetId(&file));
+    const key = widgetId(&file);
+    file.hist_idx = 10;
+    try std.testing.expectEqual(key, widgetId(&file));
 }

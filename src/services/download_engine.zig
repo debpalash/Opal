@@ -51,6 +51,7 @@ fn isActive(s: Status) bool {
 
 const Download = struct {
     status: Status = .empty,
+    coordinator_busy: bool = false,
     /// Bumped whenever workers must stop (pause/cancel) and when the slot is
     /// re-occupied. Workers capture the value at spawn and stop when it moves.
     run_token: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
@@ -142,21 +143,30 @@ fn logf(level: []const u8, is_error: bool, comptime fmt: []const u8, args: anyty
 /// toast happen there; state arrays are not thread-safe).
 var completed_names: [8][NAME_LEN]u8 = undefined;
 var completed_lens: [8]usize = @splat(0);
+var completed_slots: [8]usize = undefined;
+var completed_tokens: [8]u32 = undefined;
 var completed_head: usize = 0;
 var completed_count: usize = 0;
 
 pub fn popCompleted(buf: *[NAME_LEN]u8) ?[]const u8 {
     mu.lock();
     defer mu.unlock();
-    if (completed_count == 0) return null;
-    const idx = (completed_head + 8 - completed_count) % 8;
-    completed_count -= 1;
-    const n = completed_lens[idx];
-    @memcpy(buf[0..n], completed_names[idx][0..n]);
-    return buf[0..n];
+    while (completed_count > 0) {
+        const idx = (completed_head + 8 - completed_count) % 8;
+        completed_count -= 1;
+        const d = &slots[completed_slots[idx]];
+        if (d.status != .done or d.run_token.load(.acquire) != completed_tokens[idx]) continue;
+        const n = completed_lens[idx];
+        @memcpy(buf[0..n], completed_names[idx][0..n]);
+        return buf[0..n];
+    }
+    return null;
 }
 
-fn pushCompletedLocked(name: []const u8) void {
+fn pushCompletedLocked(slot: usize) void {
+    const name = slots[slot].nameSlice();
+    completed_slots[completed_head] = slot;
+    completed_tokens[completed_head] = slots[slot].run_token.load(.acquire);
     const n = @min(name.len, NAME_LEN);
     @memcpy(completed_names[completed_head][0..n], name[0..n]);
     completed_lens[completed_head] = n;
@@ -179,7 +189,13 @@ pub fn start(url: []const u8, dest: []const u8) bool {
             if (free_idx == null) free_idx = i;
             continue;
         }
-        if (std.mem.eql(u8, d.destSlice(), dest) and d.status != .done and d.status != .failed) {
+        if (std.mem.eql(u8, d.destSlice(), dest)) {
+            if (d.status == .done and !d.coordinator_busy) {
+                _ = d.run_token.fetchAdd(1, .acq_rel);
+                d.status = .empty;
+                free_idx = i;
+                continue;
+            }
             mu.unlock();
             log_fn("info", "Download already tracked", false);
             return false;
@@ -226,7 +242,7 @@ fn claimSlotLocked(idx: usize, url: []const u8, dest: []const u8) void {
 }
 
 /// Restore a persisted `<dest>.opal-part.json` sidecar (called at startup).
-/// Explicitly-paused downloads come back paused; interrupted ones re-queue.
+/// Every restored download waits for an explicit Resume.
 pub fn restoreSidecar(meta: *const dp.PartMeta, dest: []const u8) bool {
     if (dest.len == 0 or dest.len > PATH_LEN) return false;
     mu.lock();
@@ -256,7 +272,7 @@ pub fn restoreSidecar(meta: *const dp.PartMeta, dest: []const u8) bool {
         d.ranges_ok = n > 1 or meta.seg_count > 1;
         for (0..n) |i| d.done[i].store(@min(meta.done[i], segs[i].len), .release);
     }
-    d.status = if (meta.paused) .paused else .queued;
+    d.status = .paused;
     mu.unlock();
     schedule();
     return true;
@@ -318,22 +334,22 @@ pub fn cancel(idx: usize, token: u32) bool {
         mu.unlock();
         return false;
     }
-    const was_active = isActive(d.status);
+    const was_active = d.coordinator_busy;
     _ = d.run_token.fetchAdd(1, .acq_rel);
-    var dest_buf: [PATH_LEN]u8 = undefined;
-    const dlen = d.dest_len;
-    @memcpy(dest_buf[0..dlen], d.dest[0..dlen]);
-    // An active coordinator must finish cleanup before the slot can be
-    // reused, so park it in .canceling; finishStopped() empties it.
-    d.status = if (was_active) .canceling else .empty;
+    // Keep ownership through cleanup: another Start for this path must not
+    // create a part file while this cancellation is deleting it.
+    if (was_active) {
+        d.status = .canceling;
+    } else {
+        removeArtifacts(d.destSlice());
+        d.status = .empty;
+    }
     mu.unlock();
-
-    if (!was_active) removeArtifacts(dest_buf[0..dlen]);
     schedule();
     return true;
 }
 
-fn removeArtifacts(dest: []const u8) void {
+pub fn removeArtifacts(dest: []const u8) void {
     var pb: [PATH_LEN + 32]u8 = undefined;
     if (std.fmt.bufPrint(&pb, "{s}.opal-part", .{dest})) |p| {
         io_global.deleteFileAbsolute(p) catch {};
@@ -346,25 +362,30 @@ fn removeArtifacts(dest: []const u8) void {
 /// Clear a finished (done/failed) row from the list. Keeps disk bytes for
 /// .done; removes partials for .failed.
 pub fn dismiss(idx: usize, token: u32) bool {
+    // Cancel owns worker cleanup as well as paused/failed removal. A paused
+    // coordinator can still be unwinding: never recycle its slot early.
     mu.lock();
     if (idx >= MAX_DOWNLOADS or slots[idx].run_token.load(.acquire) != token) {
         mu.unlock();
         return false;
     }
-    const d = &slots[idx];
-    if (d.status != .done and d.status != .failed and d.status != .paused) {
+    if (slots[idx].status == .done) {
+        _ = slots[idx].run_token.fetchAdd(1, .acq_rel);
+        slots[idx].status = if (slots[idx].coordinator_busy) .canceling else .empty;
         mu.unlock();
-        return false;
+        return true;
     }
-    const failed = d.status == .failed or d.status == .paused;
-    var dest_buf: [PATH_LEN]u8 = undefined;
-    const dlen = d.dest_len;
-    @memcpy(dest_buf[0..dlen], d.dest[0..dlen]);
-    _ = d.run_token.fetchAdd(1, .acq_rel);
-    d.status = .empty;
     mu.unlock();
-    if (failed) removeArtifacts(dest_buf[0..dlen]);
-    return true;
+    return cancel(idx, token);
+}
+
+pub fn destination(idx: usize, token: u32, out: *[PATH_LEN]u8) ?[]const u8 {
+    mu.lock();
+    defer mu.unlock();
+    if (idx >= MAX_DOWNLOADS or slots[idx].status == .empty or slots[idx].run_token.load(.acquire) != token) return null;
+    const d = &slots[idx];
+    @memcpy(out[0..d.dest_len], d.destSlice());
+    return out[0..d.dest_len];
 }
 
 /// One typed mutation seam for non-UI clients; the native UI may keep calling
@@ -474,7 +495,7 @@ fn schedule() void {
         mu.lock();
         var running: usize = 0;
         for (&slots) |*d| {
-            if (isActive(d.status)) running += 1;
+            if (d.coordinator_busy) running += 1;
         }
         const cap = @max(cfg_max_concurrent.load(.acquire), 1);
         if (running >= cap) {
@@ -484,7 +505,7 @@ fn schedule() void {
         // Oldest queued first.
         var pick: ?usize = null;
         for (&slots, 0..) |*d, i| {
-            if (d.status != .queued) continue;
+            if (d.status != .queued or d.coordinator_busy) continue;
             if (pick == null or d.seq < slots[pick.?].seq) pick = i;
         }
         const idx = pick orelse {
@@ -492,12 +513,17 @@ fn schedule() void {
             return;
         };
         slots[idx].status = .probing;
+        slots[idx].coordinator_busy = true;
         const token = slots[idx].run_token.load(.acquire);
         mu.unlock();
 
         const t = @import("../core/workers.zig").spawnLegacy(coordinate, .{ idx, token }) catch {
             mu.lock();
-            slots[idx].status = .queued;
+            slots[idx].coordinator_busy = false;
+            if (slots[idx].status == .canceling) {
+                removeArtifacts(slots[idx].destSlice());
+                slots[idx].status = .empty;
+            } else if (slots[idx].status == .probing) slots[idx].status = .queued;
             mu.unlock();
             return;
         };
@@ -618,12 +644,12 @@ fn writeSidecar(d: *Download, paused: bool) void {
 
 fn coordinate(idx: usize, token: u32) void {
     const d = &slots[idx];
+    defer finishCoordinator(idx);
 
     // ── Probe (unless a restored sidecar already told us the shape) ──
     const pr = probe(d.urlSlice());
     if (pr == null) {
         if (!alive(d, token)) {
-            finishStopped(idx, token);
             return;
         }
         setError(idx, token, "Connection failed");
@@ -636,7 +662,6 @@ fn coordinate(idx: usize, token: u32) void {
     mu.lock();
     if (d.run_token.load(.acquire) != token) {
         mu.unlock();
-        finishStopped(idx, token);
         return;
     }
     const had_resume_state = d.total > 0 and d.doneBytes() > 0;
@@ -759,7 +784,6 @@ fn coordinate(idx: usize, token: u32) void {
     }
 
     if (stopped) {
-        finishStopped(idx, token);
         return;
     }
 
@@ -804,31 +828,25 @@ fn coordinate(idx: usize, token: u32) void {
     mu.lock();
     if (d.run_token.load(.acquire) == token) {
         d.status = .done;
-        pushCompletedLocked(d.nameSlice());
+        pushCompletedLocked(idx);
     }
     mu.unlock();
     logf("info", false, "Download complete: {s}", .{d.nameSlice()});
     schedule();
 }
 
-/// A pause or cancel interrupted the coordinator. Persist or clean up
-/// according to the status the UI action left behind. The slot cannot be
-/// reclaimed while .paused/.canceling, so the un-locked reads are stable.
-fn finishStopped(idx: usize, token: u32) void {
-    _ = token;
-    const d = &slots[idx];
+/// The slot stays owned until all segment threads and final filesystem writes
+/// finish. Pause→remove and pause→resume cannot race an old coordinator.
+fn finishCoordinator(idx: usize) void {
     mu.lock();
-    const st = d.status;
-    mu.unlock();
-    if (st == .paused) {
-        if (d.total > 0) writeSidecar(d, true);
-        logf("info", false, "Paused: {s}", .{d.nameSlice()});
-    } else if (st == .canceling) {
+    const d = &slots[idx];
+    if (d.status == .paused and d.total > 0) writeSidecar(d, true);
+    if (d.status == .canceling) {
         removeArtifacts(d.destSlice());
-        mu.lock();
         d.status = .empty;
-        mu.unlock();
     }
+    d.coordinator_busy = false;
+    mu.unlock();
     schedule();
 }
 

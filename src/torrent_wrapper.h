@@ -10,6 +10,8 @@ typedef void* TorrentSession;
 TorrentSession torrent_init();
 
 // Add a torrent magnet link and start downloading. Returns a Torrent ID.
+// Restore without joining peers or auto-resuming. Resume explicitly to start.
+int torrent_restore_magnet(TorrentSession session, const char* magnet_url, const char* save_path);
 int torrent_add_magnet(TorrentSession session, const char* magnet_url, const char* save_path);
 
 // Add a torrent from a local .torrent FILE and start downloading. Returns a
@@ -56,6 +58,7 @@ int torrent_poll(TorrentSession session, int torrent_id, int target_file_idx, ch
 
 // Multi-file / Playlist support
 int torrent_get_file_count(TorrentSession session, int torrent_id);
+void torrent_get_file_path(TorrentSession session, int torrent_id, int file_idx, char* out_path, int max_len);
 void torrent_get_file_name(TorrentSession session, int torrent_id, int file_idx, char* out_name, int max_len);
 long long torrent_get_file_size(TorrentSession session, int torrent_id, int file_idx);
 

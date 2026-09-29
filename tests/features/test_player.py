@@ -889,7 +889,7 @@ def test_http_downloader():
         "positional writes": "writePositionalAll" in eng and "setLength" in eng,
         # Paste-a-URL entry point in the transfers control bar (clipboard →
         # startUrl for http(s); magnets diverted to the torrent path).
-        "paste-url affordance": ('"＋ URL"' in tr and "dvui.clipboardText()" in tr
+        "paste-url affordance": ('"Paste download URL"' in tr and "dvui.clipboardText()" in tr
                                  and "httpdl.startUrl(clip)" in tr),
     }
     missing = [k for k, v in checks.items() if not v]

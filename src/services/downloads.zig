@@ -3,14 +3,15 @@
 //! restore at startup, and the "start a download of this URL" entry point.
 //!
 //! The engine itself never touches state/dvui — everything app-flavored
-//! happens here, on the UI thread (tick() is called from the Transfers view
-//! every frame; history/toast writes are therefore race-free).
+//! happens here. The main desktop/headless loop owns startup and completion
+//! bookkeeping, even when the Downloads page is closed.
 
 const std = @import("std");
 const state = @import("../core/state.zig");
 const logs = @import("../core/logs.zig");
 const io_global = @import("../core/io_global.zig");
 const history = @import("history.zig");
+const visibility = @import("download_visibility.zig");
 pub const engine = @import("download_engine.zig");
 pub const dp = engine.dp;
 
@@ -21,9 +22,10 @@ fn engineLog(level: []const u8, text: []const u8, is_error: bool) void {
     logs.pushLog(level, "download", text, is_error);
 }
 
-/// Called every frame from the Transfers view. Cheap: syncs config knobs into
-/// the engine's atomics and drains the completed ring into download history.
+/// Called by the main desktop/headless loop: synchronize settings and notify
+/// completed transfers.
 pub fn tick() void {
+    if (!state.app.init_history_loaded) return;
     if (!initialized) {
         initialized = true;
         engine.log_fn = engineLog;
@@ -37,10 +39,11 @@ pub fn tick() void {
     engine.cfg_segments.store(std.math.clamp(state.app.http_dl_segments, 1, 8), .release);
     engine.cfg_max_concurrent.store(std.math.clamp(state.app.http_dl_max_concurrent, 1, 8), .release);
 
-    // Completions → history + toast (UI thread — state arrays are safe here).
+    // Completion notifications are consumed on the main loop.
     var nb: [engine.NAME_LEN]u8 = undefined;
     while (engine.popCompleted(&nb)) |name| {
-        history.addDownloadHistory(name, "");
+        // Completed files already appear in the file list. Avoid a duplicate
+        // history row with no usable re-download URL.
         var tb: [engine.NAME_LEN + 24]u8 = undefined;
         const msg = std.fmt.bufPrint(&tb, "Downloaded {s}", .{name}) catch "Download complete";
         state.showToast(msg);
@@ -59,11 +62,26 @@ pub fn startUrl(url: []const u8) bool {
     const name = dp.filenameFromUrl(url, &name_buf);
     var dest_buf: [engine.PATH_LEN]u8 = undefined;
     const dest = std.fmt.bufPrint(&dest_buf, "{s}/{s}", .{ save_path, name }) catch return false;
-    return engine.start(url, dest);
+    if (!engine.start(url, dest)) return false;
+    _ = visibility.setHidden(dest, false);
+    return true;
+}
+
+/// Shared removal seam for desktop and web. Only accepted actions dismiss the
+/// destination; stale tokens must not hide an unrelated/newer transfer.
+pub fn apply(idx: usize, token: u32, action: engine.Action) bool {
+    if (action != .cancel and action != .dismiss) return engine.apply(idx, token, action);
+    var dest_buf: [engine.PATH_LEN]u8 = undefined;
+    const dest = engine.destination(idx, token, &dest_buf) orelse return false;
+    if (!engine.dismiss(idx, token)) return false;
+    if (!visibility.setHidden(dest, true)) return false;
+    const name = std.fs.path.basename(dest);
+    history.forgetDownload(name, "");
+    return true;
 }
 
 /// Scan the download dir once for `*.opal-part.json` sidecars and restore them
-/// (paused ones stay paused; interrupted ones re-queue). Runs on a background
+/// (all wait for explicit Resume). Runs on a background
 /// thread — directory io must not block the UI thread.
 fn restoreSidecarsAsync() void {
     if (restore_spawned) return;
@@ -102,6 +120,10 @@ fn restoreWorker(_: void) void {
             continue;
         }
         const dest = spath[0 .. spath.len - suffix.len];
+        if (visibility.hidden(dest)) {
+            engine.removeArtifacts(dest);
+            continue;
+        }
         if (engine.restoreSidecar(&meta, dest)) {
             var lb: [320]u8 = undefined;
             const msg = std.fmt.bufPrint(&lb, "Restored download: {s}", .{

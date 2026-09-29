@@ -1220,3 +1220,23 @@ def test_memory_torrents():
     if result.returncode:
         return "fail", (result.stdout + result.stderr)[-2000:]
     return "pass", "v1/hybrid/v2: RAM cap, eviction, seek, cancellation, magnet metadata, disk toggle"
+
+
+@test("Downloads: removal, restart and worker lifecycle", "Build")
+def test_download_management_live():
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="opal-download-tests-") as prefix:
+        built = subprocess.run(
+            ["zig", "build", "-Dheadless=true", "--prefix", prefix],
+            cwd=PROJECT_DIR, capture_output=True, text=True, timeout=300,
+        )
+        if built.returncode:
+            return "fail", built.stderr[-2000:]
+        binary = os.path.join(prefix, "bin", "opal.exe" if os.name == "nt" else "opal")
+        result = subprocess.run(
+            [sys.executable, "tests/test_torrent_unload_live.py", "--binary", binary],
+            cwd=PROJECT_DIR, capture_output=True, text=True, timeout=120,
+        )
+        if result.returncode:
+            return "fail", (result.stdout + result.stderr)[-2000:]
+    return "pass", "isolated profiles: remove/restart, file preservation, HTTP resume, pause/remove worker ownership"

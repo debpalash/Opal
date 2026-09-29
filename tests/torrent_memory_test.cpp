@@ -162,11 +162,21 @@ int main(int argc, char** argv) try {
     torrent_set_memory_storage(client, 0, 256);
     int disk_id = torrent_add_file(client, metadata.c_str(), downloads.c_str());
     require(disk_id >= 0 && !torrent_is_memory_only(client, disk_id), "toggle off didn't restore disk storage");
+    char relative_path[1024];
+    torrent_get_file_path(client, disk_id, 0, relative_path, sizeof(relative_path));
+    require(std::string(relative_path).find("fixture/") == 0, "removal lost torrent root directory");
     auto disk_node = get_node(client, disk_id);
     disk_node->handle.connect_peer(peer);
     wait_for([&]{ return torrent_poll(client, disk_id, 0, path, sizeof(path), nullptr, nullptr, nullptr) == 1; }, "disk mode download failed");
     require(fs::exists(downloads / "fixture/selected.mkv"), "normal storage stopped writing files");
     torrent_remove(client, disk_id);
+    char restored_magnet[512];
+    require(torrent_get_identity_magnet(seed, sid, restored_magnet, sizeof(restored_magnet)) == 0, "restore identity missing");
+    int restored_id = torrent_restore_magnet(client, restored_magnet, downloads.c_str());
+    require(restored_id >= 0 && torrent_is_paused(client, restored_id), "restore must start paused");
+    require(!(get_node(client, restored_id)->handle.flags() & lt::torrent_flags::auto_managed), "session may auto-resume restored torrent");
+    torrent_remove(client, restored_id);
+
     // A magnet has no metadata when registered; it must still select RAM
     // storage when metadata arrives later (including v2-only identities).
     fs::remove_all(downloads);
