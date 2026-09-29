@@ -477,6 +477,7 @@ def test_linux_installer_rootless_default():
             path.chmod(0o755)
 
         fake("uname", 'case "${1:-}" in -m) echo x86_64 ;; *) echo Linux ;; esac\n')
+        fake("getconf", 'echo "glibc 2.39"\n')
         fake("sha256sum", 'printf "testhash  %s\\n" "$1"\n')
         fake("sudo", 'touch "$HOME/sudo-was-called"\nexit 99\n')
         fake("curl", r'''
@@ -535,6 +536,21 @@ printf '<svg/>\n' > "$dest/usr/share/icons/hicolor/scalable/apps/opal.svg"
             return "fail", "installed user-local launcher did not execute"
 
     return "pass", "default path calls no sudo and installs executable + nova2 under ~/.local"
+
+
+@test("Linux installer rejects incompatible glibc before downloading", "Packaging")
+def test_linux_installer_runtime_compatibility():
+    if 'libc6 (>= 2.38)' not in _src("packaging/nfpm.yaml"):
+        return "fail", ".deb is missing its glibc runtime dependency"
+    if os.name == "nt":
+        return "skip", "installer execution needs a POSIX host"
+    result = subprocess.run(
+        [sys.executable, "tests/test_linux_installer.py"], cwd=PROJECT_DIR,
+        capture_output=True, text=True, timeout=40,
+    )
+    if result.returncode:
+        return "fail", (result.stderr or result.stdout)[-1200:]
+    return "pass", "old/unknown runtimes preserve installs; supported versions install; uninstall/list remain available"
 
 
 @test("File associations + single instance", "Packaging")

@@ -436,6 +436,12 @@ actually works — and it's free.
       an install receipt, and handles `update`, `uninstall`, `list-versions`,
       and `OPAL_VERSION=vX.Y.Z` pinning. Keep it working on plain `sh` (dash).
 - [x] `SHA256SUMS.txt` is generated and published by the release job.
+- [x] Linux installer checks glibc 2.38+ before downloading a release asset or
+      changing an existing installation. All Linux formats share that ABI floor;
+      Ubuntu 20.04/22.04, Debian 12 and Mint 21 need an OS upgrade or a source
+      build with upgraded native libraries. New `.deb` packages declare
+      `libc6 (>= 2.38)`, `libmpv2` and `libtorrent-rasterbar2.0` so manual package
+      installs also enforce the runtime requirements (issue #100).
 - [x] Homebrew tap is public and synchronized by
       `packaging/homebrew-tap/push-tap.sh`; the formula installs the verified
       prebuilt `v0.7.0` asset.
