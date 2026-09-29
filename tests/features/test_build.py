@@ -1285,6 +1285,7 @@ def test_linux_compatibility_release_gate():
         "host glibc dependency declared": "libc6 (>= 2.31)" in manifest,
         "native ABI floor verified": "requires glibc newer than 2.31" in _src("packaging/linux-compat/stage.py"),
         "GCC9 float conversion dependency pinned": "230d20e4e4ac1f6a9df92c4d746c6ec536cdb0c085bc8635d4b88cead5dc22cb" in _src("packaging/linux-compat/build-runtime.sh"),
+        "disabled Vulkan stubs have pinned headers": "570f9ae1e65466dbaf5fcab667abd079dd0a61c4ab86cf535efd492bf70a5b74" in _src("packaging/linux-compat/build-runtime.sh"),
         "foundation cached before graphics": "target: media-deps" in workflow,
         "portable AV1 runtime": "dav1d-1.5.4" in (_src("packaging/linux-compat/build-media.sh") + _src("packaging/linux-compat/build-runtime.sh")) and "libdav1d0" not in manifest and "ubuntu:22.04 debian:12" in workflow,
         "account setup covered": "api/auth/register" in smoke and "protected API accepted" in smoke,
@@ -1317,3 +1318,25 @@ def test_release_version_match():
     if 'scripts/check-release-version.py "$OPAL_RELEASE_TAG"' not in _src(".github/workflows/release.yml"):
         return "fail", "release workflow bypasses version verification"
     return "pass", "publication refuses version mismatches and invalid tags"
+
+
+@test("Torrent engines support Ubuntu 20.04 Python 3.8", "Packaging")
+def test_python38_engine_imports():
+    result = subprocess.run([sys.executable, "tests/test_python38_engines.py"], cwd=PROJECT_DIR,
+                            capture_output=True, text=True, timeout=20)
+    if result.returncode:
+        return "fail", (result.stderr or result.stdout)[-1200:]
+    return "pass", "legacy builtin generic imports and SOCKS proxy casts stay compatible"
+
+
+@test("macOS media libraries allow bundle path rewrites", "Packaging")
+def test_macos_media_header_padding():
+    if "-headerpad_max_install_names" not in _src("scripts/install-macos-mpv.sh") or "-headerpad_max_install_names -I{s}/include" not in _src("build.zig") or "build.zig -nt libtorrent_wrapper.so" not in _src("build.zig"):
+        return "fail", "mpv/wrapper linker padding missing"
+    if sys.platform != "darwin":
+        return "skip", "Mach-O rewrite regression runs on macOS"
+    result = subprocess.run([sys.executable, "tests/test_macos_headerpad.py"], cwd=PROJECT_DIR,
+                            capture_output=True, text=True, timeout=20)
+    if result.returncode:
+        return "fail", (result.stderr or result.stdout)[-1200:]
+    return "pass", "production FFmpeg flags permit longer bundled dependency install names"

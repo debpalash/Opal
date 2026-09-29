@@ -20,9 +20,10 @@ match the tag exactly.
   Public Domain Torrents, Royal Road, NovelFire, Weeb Central, Comic Book Plus
   and Audius join the catalog, along with NASA, BBC and NPR podcasts. Anime,
   comics and novels have repaired discovery, reader and source handoffs.
-- **macOS builds recover from stale OpenSSL links.** CI uses a supported runner
-  and the shared dependency installer repairs the specific Homebrew link conflict
-  while preserving failures for missing or broken dependencies.
+- **macOS builds and bundles are more reliable.** CI uses a supported runner,
+  dependency setup repairs stale OpenSSL links, and bundled playback libraries
+  reserve enough space for relocated paths. Torrent search also works with
+  Ubuntu 20.04's Python 3.8.
 
 ## v0.8.7 — 2026-09-27
 

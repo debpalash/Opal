@@ -7,6 +7,11 @@ fetch libplacebo-6.338.2 https://github.com/haasn/libplacebo/archive/refs/tags/v
 fetch fast-float-2b2395f9ac836ffca6404424bcc252bff7aa80e4 https://github.com/fastfloat/fast_float/archive/2b2395f9ac836ffca6404424bcc252bff7aa80e4.tar.gz 230d20e4e4ac1f6a9df92c4d746c6ec536cdb0c085bc8635d4b88cead5dc22cb
 mkdir -p "$WORK/libplacebo-6.338.2/3rdparty/fast_float"
 cp -R "$WORK/fast_float-2b2395f9ac836ffca6404424bcc252bff7aa80e4/." "$WORK/libplacebo-6.338.2/3rdparty/fast_float/"
+# Public Vulkan types are needed by the disabled-backend stubs as well.
+fetch vulkan-headers-d732b2de303ce505169011d438178191136bfb00 https://github.com/KhronosGroup/Vulkan-Headers/archive/d732b2de303ce505169011d438178191136bfb00.tar.gz 570f9ae1e65466dbaf5fcab667abd079dd0a61c4ab86cf535efd492bf70a5b74
+mkdir -p "$WORK/libplacebo-6.338.2/3rdparty/Vulkan-Headers" "$PREFIX/include"
+cp -R "$WORK/Vulkan-Headers-d732b2de303ce505169011d438178191136bfb00/." "$WORK/libplacebo-6.338.2/3rdparty/Vulkan-Headers/"
+cp -R "$WORK/Vulkan-Headers-d732b2de303ce505169011d438178191136bfb00/include/." "$PREFIX/include/"
 meson setup "$WORK/placebo-build" "$WORK/libplacebo-6.338.2" \
     --prefix="$PREFIX" --libdir=lib --buildtype=release --wrap-mode=nodownload \
     -Dvulkan=disabled -Dopengl=disabled -Dglslang=disabled -Dshaderc=disabled \

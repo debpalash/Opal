@@ -16,6 +16,13 @@ for binary in Path('/usr/lib/opal').iterdir():
     if binary.is_file() and binary.read_bytes()[:4] == b'\x7fELF':
         linked = subprocess.run(['ldd', str(binary)], text=True, capture_output=True)
         assert linked.returncode == 0 and 'not found' not in linked.stdout, (binary, linked.stdout, linked.stderr)
+# Import the actual packaged search engines on the distribution's Python
+# (3.8 on Focal), then exercise the app's offline thread-pool seam.
+engines = subprocess.check_output(['python3', '/usr/lib/opal/engines/nova2.py', '--capabilities', '--names'], text=True)
+assert 'nekobt' in engines and 'shanaproject' in engines, 'packaged torrent engines failed to import'
+pool = subprocess.check_output(['python3', '/usr/lib/opal/engines/nova2.py', '--timeout=2', '--pool-selftest'], text=True)
+assert 'NOVA2_APP_POOL_OK' in pool, 'packaged torrent dispatcher failed'
+subprocess.run(['python3', '/usr/lib/opal/scripts/camoufox_bridge.py', '--selftest'], check=True)
 # The software build must retain AV1 decoding as well as native H.264/HEVC.
 decoders = subprocess.check_output(['/usr/lib/opal/ffmpeg', '-hide_banner', '-decoders'], text=True)
 assert 'libdav1d' in decoders, 'AV1 software decoder missing'
