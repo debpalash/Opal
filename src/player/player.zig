@@ -1370,6 +1370,7 @@ pub const MediaPlayer = struct {
         self.playback_origin = request.origin;
         self.queue_item_id = if (request.origin == .queue) request.queue_item_id else -1;
         if (request.origin != .torrent) {
+            self.releaseMemoryTorrent();
             self.current_torrent_id = -1;
             self.torrent_is_ready = false;
             self.is_torrent = false;
@@ -1546,6 +1547,9 @@ pub const MediaPlayer = struct {
     /// HTTP state, while append only configures its new playlist entry.
     pub fn commitPlayback(self: *MediaPlayer, request: LoadRequest) void {
         if (request.url.len == 0 or request.url.len > MAX_LOAD_URL) return;
+        if (c.mpv.torrent_is_memory_only(state.torrentSession(), self.current_torrent_id) != 0) {
+            _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "cache-on-disk", "no");
+        }
         var sink: MpvPlaybackSink = .{ .ctx = self.mpv_ctx };
         _ = playback_load.dispatch(&sink, request);
     }
@@ -1931,11 +1935,32 @@ pub const MediaPlayer = struct {
         _ = c.mpv.mpv_command_string(self.mpv_ctx, "cycle pause");
     }
 
-    /// Cancel an in-flight or active non-torrent load without destroying the
-    /// player. The asynchronous stop keeps a blocked network demuxer off the UI
-    /// thread; clearing the logical identity immediately makes the pane and
-    /// footer return to their idle state on this frame.
+    pub fn attachTorrent(self: *MediaPlayer, id: i32) void {
+        if (self.current_torrent_id != id) self.releaseMemoryTorrent();
+        self.current_torrent_id = id;
+    }
+
+    /// Release ephemeral torrent data when its last player closes or replaces it.
+    pub fn releaseMemoryTorrent(self: *MediaPlayer) void {
+        const id = self.current_torrent_id;
+        if (id < 0 or c.mpv.torrent_is_memory_only(state.torrentSession(), id) == 0) return;
+        if (self.proxy_handle.isValid()) {
+            @import("stream_proxy.zig").stopProxy(self.proxy_handle);
+            self.proxy_handle = @import("stream_proxy.zig").INVALID_HANDLE;
+        }
+        self.current_torrent_id = -1;
+        self.is_torrent = false;
+        // Another pane may share this torrent. Release only the last owner.
+        for (state.app.players.items) |p| {
+            if (p != self and p.current_torrent_id == id) return;
+        }
+        c.mpv.torrent_remove(state.torrentSession(), id);
+    }
+
+    /// Cancel a load without destroying the player; stop network reads before
+    /// resetting the logical identity and returning the pane to its idle state.
     pub fn cancelCurrentLoad(self: *MediaPlayer) void {
+        self.releaseMemoryTorrent();
         self.load_serial = playback_load_sequence.fetchAdd(1, .acq_rel) + 1;
         @import("../services/auto_subs.zig").cancelForMediaChange();
         if (self.proxy_handle.isValid()) {
@@ -2216,6 +2241,7 @@ pub const MediaPlayer = struct {
 
     pub fn deinit(self: *MediaPlayer, allocator: std.mem.Allocator) void {
         self.saveCurrentPositionFinal();
+        self.releaseMemoryTorrent();
         @import("../core/poster.zig").deinitPoster(&self.loading_poster_pixels, &self.loading_poster_tex);
         @import("../core/poster.zig").deinitPoster(&self.np_art_pixels, &self.np_art_tex);
         if (self.proxy_handle.isValid()) {

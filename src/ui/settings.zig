@@ -251,7 +251,7 @@ fn sectionMatchesSearch(tab: state.SettingsTab) bool {
         .Playback => &.{ "Video Processing", "Audio Equalizer", "Playback Extras", "External VLC", "Prefetch", "Passthrough", "Exclusive", "Audio Output", "Device", "Streaming", "Shortcuts", "Filters", "Capture", "Hardware", "Decode", "Deband", "Interpolation", "Brightness", "Contrast", "Saturation", "Gamma", "Screenshot", "Auto-advance", "Resume" },
         .About => &.{ "About", "Version", "Update", "Credits", "License", "Donate", "Sponsors", "Links", "TMDB" },
         .Subtitles => &.{ "OpenSubtitles", "Subdl", "Language", "Search", "API Key", "Font", "Delay", "Whisper" },
-        .Network => &.{ "Download", "Trackers", "Proxy", "Speed", "Limit", "Port", "Browser", "Engine", "Camoufox", "CloakBrowser", "Audiobookshelf", "Audiobook", "OPDS", "Reading", "Komga", "Kavita", "Calibre" },
+        .Network => &.{ "Torrent", "Memory", "RAM", "Buffer", "Streaming", "Download", "Trackers", "Proxy", "Speed", "Limit", "Port", "Browser", "Engine", "Camoufox", "CloakBrowser", "Audiobookshelf", "Audiobook", "OPDS", "Reading", "Komga", "Kavita", "Calibre" },
         .Storage => &.{ "Download Path", "Watch History", "Database", "Cache", "Clear" },
         .WebUi => &.{ "Web UI", "Web Remote", "Remote", "Access", "Password", "Sessions", "Devices", "API Token", "Token", "Port", "Bind", "LAN", "Loopback" },
         .Scripts => &.{ "SponsorBlock", "AI Backend", "Watch Party", "Scripts", "Gemma", "Apple Intelligence", "Model", "Voice" },
@@ -2118,6 +2118,30 @@ fn renderPlaybackTab() void {
 }
 
 fn renderNetworkTab() void {
+    {
+        const before = state.app.torrent_memory_only;
+        components.toggleRow(@src(), "Stream torrents in memory", "Keep torrent data in RAM. No media files or torrent caches saved. Applies to new torrents; closing a stream releases its buffer.", &state.app.torrent_memory_only);
+        if (before != state.app.torrent_memory_only) {
+            state.applyTorrentStorageIfReady();
+            state.markConfigDirty();
+        }
+        if (state.app.torrent_memory_only) {
+            settingRow("RAM buffer per torrent", 3001, @src());
+            const sizes = [_]i32{ 128, 256, 512 };
+            const names = [_][]const u8{ "128 MiB", "256 MiB", "512 MiB" };
+            var selected: usize = 1;
+            for (sizes, 0..) |size, i| {
+                if (size == state.app.torrent_memory_limit_mib) selected = i;
+            }
+            if (components.segment(@src(), &names, selected)) |i| {
+                state.app.torrent_memory_limit_mib = sizes[i];
+                state.applyTorrentStorageIfReady();
+                state.markConfigDirty();
+            }
+            _ = dvui.label(@src(), "Older data is discarded. Seeking back may buffer again. Player memory is additional; the OS may swap RAM to disk.", .{}, .{ .color_text = theme.colors.text_tertiary });
+        }
+    }
+
     // Download Speed Limit — short ramp via segment.
     settingRow("Download Speed Limit", 30, @src());
     {

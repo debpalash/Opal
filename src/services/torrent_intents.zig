@@ -21,7 +21,7 @@ fn identityForTorrent(id: c_int, out: []u8) ?[]const u8 {
 /// incognito mode. If SQLite is still starting, restoreIfReady's live scan
 /// captures it once the database is published.
 pub fn rememberTorrent(id: c_int) void {
-    if (state.app.incognito_mode or db.get() == null) return;
+    if (state.app.incognito_mode or db.get() == null or c.mpv.torrent_is_memory_only(state.torrentSession(), id) != 0) return;
     var identity_buf: [pure.MAX_IDENTITY]u8 = undefined;
     const identity = identityForTorrent(id, &identity_buf) orelse return;
     const paused: i32 = if (c.mpv.torrent_is_paused(state.torrentSession(), id) != 0) 1 else 0;
@@ -36,7 +36,7 @@ pub fn rememberTorrent(id: c_int) void {
 }
 
 pub fn setPaused(id: c_int, paused: bool) void {
-    if (state.app.incognito_mode or db.get() == null) return;
+    if (state.app.incognito_mode or db.get() == null or c.mpv.torrent_is_memory_only(state.torrentSession(), id) != 0) return;
     var identity_buf: [pure.MAX_IDENTITY]u8 = undefined;
     const identity = identityForTorrent(id, &identity_buf) orelse return;
     const stmt = db.prepare("UPDATE active_torrent_intents SET paused = ?1 WHERE identity = ?2") orelse return;
@@ -64,7 +64,7 @@ pub fn restoreIfReady() void {
     if (!state.app.init_history_loaded or state.torrentSession() == null) return;
     if (restore_state.cmpxchgStrong(0, 1, .acq_rel, .acquire) != null) return;
     defer restore_state.store(2, .release);
-    if (state.app.incognito_mode) return;
+    if (state.app.incognito_mode or state.app.torrent_memory_only) return;
 
     var restored_any = false;
     {

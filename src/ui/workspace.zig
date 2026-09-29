@@ -217,7 +217,7 @@ pub fn loadWorkspaceNamed(allocator: std.mem.Allocator, raw_name: []const u8) vo
     state.app.drawer_width_px = data.drawer_width_px;
 
     // Purge existing players safely
-    for (state.app.players.items) |p| {
+    while (state.app.players.pop()) |p| {
         p.deinit(allocator);
     }
     state.app.players.clearRetainingCapacity();
@@ -249,7 +249,7 @@ pub fn loadWorkspaceNamed(allocator: std.mem.Allocator, raw_name: []const u8) vo
                 if (wsp.is_torrent) {
                     const tid = c.mpv.torrent_add_magnet(state.torrentSession(), c_url, state.getSavePath());
                     if (tid >= 0) {
-                        p.current_torrent_id = tid;
+                        p.attachTorrent(tid);
                         p.torrent_is_ready = false;
                         p.has_metadata = false;
                         p.last_load_time = 0;

@@ -121,7 +121,7 @@ pub fn renderMetadataDialog() void {
         // Finalize state transfer to the active player
         if (state.app.pending_magnet_player_idx < state.app.players.items.len) {
             const p = state.app.players.items[state.app.pending_magnet_player_idx];
-            p.current_torrent_id = state.app.pending_magnet_tid;
+            p.attachTorrent(state.app.pending_magnet_tid);
             p.torrent_is_ready = false;
             p.has_metadata = true;
             p.last_load_time = 0;

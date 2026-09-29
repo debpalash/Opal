@@ -1209,3 +1209,14 @@ def test_native_catalog_tv():
         return "pass", "production parsing, request replay, poster ownership, parallel catalogs and cached seasons"
     except subprocess.TimeoutExpired:
         return "fail", "Native catalog/TV tests timed out (>300s)"
+
+
+@test("Memory-only torrent streaming (real loopback peers)", "Build")
+def test_memory_torrents():
+    result = subprocess.run(
+        [sys.executable, "tests/test_torrent_memory.py"], cwd=PROJECT_DIR,
+        capture_output=True, text=True, timeout=420,
+    )
+    if result.returncode:
+        return "fail", (result.stdout + result.stderr)[-2000:]
+    return "pass", "v1/hybrid/v2: RAM cap, eviction, seek, cancellation, magnet metadata, disk toggle"

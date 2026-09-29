@@ -646,7 +646,7 @@ fn renderRow(r: *const tp.Row, i: usize) bool {
         })) {
             if (state.app.active_player_idx < state.app.players.items.len) {
                 const p = state.app.players.items[state.app.active_player_idx];
-                p.current_torrent_id = r.torrent_id;
+                p.attachTorrent(r.torrent_id);
                 p.is_torrent = true;
                 p.playback_origin = .torrent;
                 p.torrent_is_ready = false;
@@ -1265,7 +1265,7 @@ fn renderExpandedFiles(torrent_id: i32) void {
         })) {
             if (state.app.active_player_idx < state.app.players.items.len) {
                 const p = state.app.players.items[state.app.active_player_idx];
-                p.current_torrent_id = torrent_id;
+                p.attachTorrent(torrent_id);
                 p.is_torrent = true;
                 p.playback_origin = .torrent;
                 p.selected_file_idx = f_idx;

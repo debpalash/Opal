@@ -450,6 +450,8 @@ pub const AppState = struct {
     // itself on. See player.zig for what each costs.
     /// `prefetch-playlist` — start the next playlist item while this one plays.
     prefetch_playlist: bool = false,
+    torrent_memory_only: bool = false,
+    torrent_memory_limit_mib: i32 = 256,
     /// `audio-spdif` — bitstream compressed audio to an AVR instead of decoding.
     audio_passthrough: bool = false,
     /// `audio-exclusive` — take exclusive control of the output device.
@@ -1386,6 +1388,11 @@ pub fn torrentSession() c.mpv.TorrentSession {
 }
 pub fn setTorrentSession(s: c.mpv.TorrentSession) void {
     app.torrent_ses.store(s, .release);
+}
+
+/// Storage changes apply only to new torrents; existing transfers keep their backend.
+pub fn applyTorrentStorageIfReady() void {
+    c.mpv.torrent_set_memory_storage(torrentSession(), if (app.torrent_memory_only) 1 else 0, app.torrent_memory_limit_mib);
 }
 
 /// Re-apply the persisted download rate limit to the torrent session, once the

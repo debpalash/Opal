@@ -121,6 +121,14 @@ playback, or **+** to queue a torrent. Install sources from
 **Settings → General → Install source plugins**; the source catalog reports
 the last operation and links to redacted Logs.
 
+For temporary torrent playback, enable **Settings → Network → Stream torrents in memory**.
+Choose a **128, 256 (default), or 512 MiB** payload buffer per torrent. New torrents
+keep media and torrent caches in RAM, download around the requested playback
+position, and discard older pieces. Closing or replacing the stream releases its
+buffer. Seeking into discarded data downloads it again. Existing transfers keep
+their storage mode; playback still needs available peers. Player/decoder memory
+is additional, and the operating system may swap RAM to disk.
+
 Deleting a playing torrent stops its stream before removing the download, and
 the empty player offers **Open file** or **Browse search**. To hand playback to
 VLC, install VLC and choose **Settings → Playback → Open in VLC** while media

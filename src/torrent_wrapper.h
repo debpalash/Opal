@@ -26,6 +26,11 @@ int torrent_add_file(TorrentSession session, const char* torrent_path, const cha
 // services/trackers_pure.zig.
 void torrent_set_extra_trackers(TorrentSession session, const char* newline_separated);
 
+// Applies only to newly added torrents. Payload budget is per torrent, 128–512 MiB.
+void torrent_set_memory_storage(TorrentSession session, int enabled, int limit_mib);
+int torrent_is_memory_only(TorrentSession session, int torrent_id);
+long long torrent_memory_used(TorrentSession session, int torrent_id);
+
 // Get the total number of registered torrents
 int torrent_count(TorrentSession session);
 // Persist modified piece/file/priority state for fast restart. Called only from
