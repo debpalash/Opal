@@ -54,10 +54,17 @@ jobs:
           tar -C compat-artifacts/sources -czf "opal-${VERSION}-linux-compat-sources.tar.gz" .
       - name: Verify ISA baseline of compatibility app
         run: python3 scripts/check-isa-baseline.py compat-artifacts/compat-root/usr/lib/opal/opal-bin
-      - name: Install and launch on clean Ubuntu 20.04
+      - name: Install and launch on clean Ubuntu 20.04, Ubuntu 22.04 and Debian 12
         run: |
-          docker build -f packaging/linux-compat/smoke.Dockerfile -t opal-compat-smoke .
-          docker run --rm -e VERSION="$VERSION" opal-compat-smoke
+          for base_image in ubuntu:20.04 ubuntu:22.04 debian:12; do
+            case "$base_image" in
+              ubuntu:20.04) expected_glibc=2.31 ;;
+              ubuntu:22.04) expected_glibc=2.35 ;;
+              debian:12) expected_glibc=2.36 ;;
+            esac
+            docker build --build-arg BASE_IMAGE="$base_image" -f packaging/linux-compat/smoke.Dockerfile -t opal-compat-smoke .
+            docker run --rm -e VERSION="$VERSION" -e EXPECTED_GLIBC="$expected_glibc" opal-compat-smoke
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: linux-compat

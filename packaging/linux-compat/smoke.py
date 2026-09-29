@@ -11,7 +11,7 @@ import urllib.request
 import urllib.parse
 import urllib.error
 
-assert subprocess.check_output(['getconf', 'GNU_LIBC_VERSION'], text=True).strip() == 'glibc 2.31'
+assert subprocess.check_output(['getconf', 'GNU_LIBC_VERSION'], text=True).strip() == 'glibc ' + os.environ.get('EXPECTED_GLIBC', '2.31')
 for binary in Path('/usr/lib/opal').iterdir():
     if binary.is_file() and binary.read_bytes()[:4] == b'\x7fELF':
         linked = subprocess.run(['ldd', str(binary)], text=True, capture_output=True)

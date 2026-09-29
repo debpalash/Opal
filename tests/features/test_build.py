@@ -1284,11 +1284,13 @@ def test_linux_compatibility_release_gate():
         "release keys cannot reuse preview binary": "ARG OPAL_BUILD_CACHE_KEY" in docker and "inputs.release && github.run_id" in workflow and "release: true" in release,
         "host glibc dependency declared": "libc6 (>= 2.31)" in manifest,
         "native ABI floor verified": "requires glibc newer than 2.31" in _src("packaging/linux-compat/stage.py"),
+        "portable AV1 runtime": "dav1d-1.5.4" in _src("packaging/linux-compat/build-runtime.sh") and "libdav1d0" not in manifest and "ubuntu:22.04 debian:12" in workflow,
         "account setup covered": "api/auth/register" in smoke and "protected API accepted" in smoke,
         "SQLite runtime supports account queries": "sqlite-3.53.4" in _src("packaging/linux-compat/build-runtime.sh"),
         "actual package install and launch": "smoke.Dockerfile" in workflow and "docker run --rm" in workflow,
         "both layouts launched": "launch('/usr/bin/opal'" in smoke and "launch('/tmp/local-opal/bin/opal'" in smoke,
         "publish waits for compatibility proof": "needs: [macos-arm64, linux-x86_64, linux-compat," in release,
+        "publish excludes Docker build records": 'pattern: "!*.dockerbuild"' in release,
         "corresponding sources published": "artifacts/opal-*-linux-compat-sources.tar.gz" in release,
     }
     bad = [name for name, ok in checks.items() if not ok]

@@ -1,4 +1,5 @@
-FROM ubuntu:20.04
+ARG BASE_IMAGE=ubuntu:20.04
+FROM ${BASE_IMAGE}
 ENV DEBIAN_FRONTEND=noninteractive
 COPY opal_*_compat_amd64.deb /tmp/opal.deb
 RUN apt-get update && apt-get install -y /tmp/opal.deb xvfb xauth \

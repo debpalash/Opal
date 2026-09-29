@@ -14,7 +14,6 @@ depends:
   - libstdc++6 (>= 9)
   - libgcc-s1
   - libass9
-  - libdav1d0
   - libluajit-5.1-2
   - libasound2
   - libpulse0

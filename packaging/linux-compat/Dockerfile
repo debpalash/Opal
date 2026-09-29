@@ -3,7 +3,7 @@ FROM ubuntu:20.04 AS runtime-deps
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential pkg-config curl ca-certificates xz-utils cmake python3 python3-pip \
-    ninja-build nasm patchelf python3-jinja2 libboost-system-dev libsqlite3-dev libass-dev libdav1d-dev \
+    ninja-build nasm patchelf python3-jinja2 libboost-system-dev libsqlite3-dev libass-dev \
     libluajit-5.1-dev libasound2-dev libpulse-dev libx11-dev libxext-dev \
     libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libgl1-mesa-dev \
     && rm -rf /var/lib/apt/lists/*
