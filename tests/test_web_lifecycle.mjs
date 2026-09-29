@@ -470,3 +470,23 @@ test('comic search responses cannot overwrite a newer query', async () => {
   await first;
   assert.doesNotMatch(f.$('cx-results').innerHTML, /Old manga/);
 });
+
+test('switching music source waits for acknowledgement before starting Audius trending', async () => {
+  const f = fixture('media.js');
+  f.run("let musicPoll; settledInterval = fn => { musicPoll = fn; return 1; }; currentPage = 'music'; $('mu-source').value = '4'; $('mu-q').value = ''; $('mu-source').onchange();");
+  assert.equal(f.requests.some(r => r.path === '/music/search?q='), false);
+  f.take('/music/source?id=4').resolve({ok:true});
+  await flush();
+  f.take('/music/search?q=').resolve({ok:true});
+  await flush();
+  assert.equal(f.run('typeof musicPoll'), 'function');
+});
+
+test('music catalog response from the previous source cannot overwrite the selection', async () => {
+  const f = fixture('media.js');
+  f.run("currentPage = 'music'; loadMusic(); ++musicGeneration; $('mu-source').value = '4';");
+  f.take('/music').resolve({source:0,songs:[{title:'Old source'}]});
+  await flush();
+  assert.equal(f.$('mu-source').value, '4');
+  assert.doesNotMatch(f.$('mu-results').innerHTML, /Old source/);
+});

@@ -726,6 +726,116 @@
       "endpoints": {
         "enabled": "1"
       }
+    },
+    {
+      "id": "nekobt",
+      "name": "NekoBT (anime releases)",
+      "type": "torrent",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://nekobt.to"
+      },
+      "note": "Public JSON release search and magnets. Requires an Opal build with this connector."
+    },
+    {
+      "id": "shanaproject",
+      "name": "Shana Project (anime releases)",
+      "type": "torrent",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://www.shanaproject.com"
+      },
+      "note": "Anime episode search and downloadable torrents; swarm counts are unknown. Requires an Opal build with this connector."
+    },
+    {
+      "id": "publicdomaintorrents",
+      "name": "Public Domain Torrents",
+      "type": "torrent",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://www.publicdomaintorrents.info"
+      },
+      "note": "Public-domain movie catalog and torrent downloads; search matches movie titles. Requires an Opal build with this connector."
+    },
+    {
+      "id": "royalroad",
+      "name": "Royal Road",
+      "type": "novels",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://www.royalroad.com"
+      },
+      "note": "Original web serial search, chapter list and native text reader. Requires an Opal build with this connector."
+    },
+    {
+      "id": "novelfire",
+      "name": "NovelFire",
+      "type": "novels",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://novelfire.net"
+      },
+      "note": "Novel search, paginated chapter directory and native text reader. Requires an Opal build with this connector."
+    },
+    {
+      "id": "weebcentral",
+      "name": "Weeb Central",
+      "type": "comics",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://weebcentral.com"
+      },
+      "note": "Manga search and image reader; opens the oldest chapter available. Requires an Opal build with this connector."
+    },
+    {
+      "id": "comicbookplus",
+      "name": "ComicBookPlus",
+      "type": "comics",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://comicbookplus.com"
+      },
+      "note": "Public-domain latest uploads and image reader. Search filters the fetched upload pages. Requires an Opal build with this connector."
+    },
+    {
+      "id": "audius",
+      "name": "Audius",
+      "type": "music",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://api.audius.co"
+      },
+      "note": "Artist-uploaded music search and public audio streams; select Audius in Music. Requires an Opal build with this connector."
+    },
+    {
+      "id": "podcast-nasa",
+      "name": "NASA: Houston We Have a Podcast",
+      "type": "podcasts",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://www.nasa.gov/feeds/podcasts/houston-we-have-a-podcast"
+      },
+      "note": "Official publisher RSS feed; appears in Podcasts after installation. Requires the installed-feed connector."
+    },
+    {
+      "id": "podcast-bbc",
+      "name": "BBC: Global News Podcast",
+      "type": "podcasts",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://podcasts.files.bbci.co.uk/p02nq0gn.rss"
+      },
+      "note": "Official publisher RSS feed; appears in Podcasts after installation. Requires the installed-feed connector."
+    },
+    {
+      "id": "podcast-npr",
+      "name": "NPR: Up First",
+      "type": "podcasts",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://feeds.npr.org/510318/podcast.xml"
+      },
+      "note": "Official publisher RSS feed; appears in Podcasts after installation. Requires the installed-feed connector."
     }
   ]
 }

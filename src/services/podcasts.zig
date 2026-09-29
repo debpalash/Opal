@@ -208,19 +208,26 @@ const POPULAR_LIMIT: usize = 30; // ≤ results[] capacity (50)
 /// searchPodcasts — which also arms it, to keep the chart from landing on top of
 /// a user's results — is reachable from the remote-API thread.
 var popular_fetched: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+var feeds_changed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
+pub fn invalidateSourceFeeds() void {
+    feeds_changed.store(true, .release);
+}
 
 pub fn loadPopularOnce() void {
-    if (popular_fetched.load(.acquire)) return;
+    const refresh = feeds_changed.load(.acquire) and state.app.podcasts.showing_popular;
+    if (!refresh and popular_fetched.load(.acquire)) return;
     // Same first-start gate as the trending/tv-calendar fetches: don't latch
     // until config has published (the poster daemon's disk cache needs the db
     // open, and a cold launch would otherwise burn the one shot on a no-op).
     if (!state.app.config_loaded.load(.acquire)) return;
     // A search already landed (remote API, or a restored session) — leave it be.
-    if (state.app.podcasts.result_count > 0) {
+    if (!refresh and state.app.podcasts.result_count > 0) {
         popular_fetched.store(true, .release);
         return;
     }
     if (state.app.podcasts.is_loading.load(.acquire)) return;
+    feeds_changed.store(false, .release);
 
     // SWR seed: paint the last Popular chart from disk NOW (empty grid only) so
     // the tab isn't blank while the revalidating fetch below runs.
@@ -257,19 +264,51 @@ fn popularWorker(my_gen: u32) void {
     defer search_request.finish(my_gen, &state.app.podcasts.is_loading);
     const rows = alloc.alloc(pure.Podcast, 50) catch return;
     defer alloc.free(rows);
-    var count: usize = 0;
+    var count: usize = installedFeeds(rows, "", my_gen);
+    if (count > 0) publishShows(my_gen, rows[0..count], false);
+    const extra = alloc.alloc(pure.Podcast, 30) catch return;
+    defer alloc.free(extra);
     // The independent directory paints first; Apple enriches it when available.
     if (fetchBody("https://gpodder.net/toplist/30.json", 512 * 1024)) |body| {
         defer alloc.free(body);
-        count = pure.parseGpodder(alloc, body, rows);
+        const found = pure.parseGpodder(alloc, body, extra);
+        count = pure.appendUnique(rows, count, extra[0..found]);
         publishShows(my_gen, rows[0..count], false);
     }
     if (!search_request.isCurrent(my_gen)) return;
-    const extra = alloc.alloc(pure.Podcast, 30) catch return;
-    defer alloc.free(extra);
     const apple_count = fetchApplePopular(extra);
     count = pure.appendUnique(rows, count, extra[0..apple_count]);
     publishShows(my_gen, rows[0..count], count == 0);
+}
+
+fn installedFeeds(rows: []pure.Podcast, query: []const u8, gen: u32) usize {
+    var count: usize = 0;
+    for ([_][]const u8{ "podcast-nasa", "podcast-bbc", "podcast-npr" }) |id| {
+        const cfg = @import("../core/source_config.zig");
+        if (cfg.get(id, "feed")) |raw| {
+            if (!search_request.isCurrent(gen)) return count;
+            var url_buf: [512]u8 = undefined;
+            if (raw.len > url_buf.len or !pure.isFeedUrl(raw)) continue;
+            @memcpy(url_buf[0..raw.len], raw);
+            const url = url_buf[0..raw.len];
+            const body = fetchBody(url, 3 * 1024 * 1024) orelse continue;
+            defer alloc.free(body);
+            const show = pure.parseFeedShow(body, url) orelse continue;
+            if (query.len > 0) {
+                const title = show.name[0..show.name_len];
+                var matches = false;
+                if (query.len <= title.len) for (0..title.len - query.len + 1) |i| {
+                    if (std.ascii.eqlIgnoreCase(title[i..][0..query.len], query)) {
+                        matches = true;
+                        break;
+                    }
+                };
+                if (!matches) continue;
+            }
+            count = pure.appendUnique(rows, count, &.{show});
+        }
+    }
+    return count;
 }
 
 fn fetchApplePopular(rows: []pure.Podcast) usize {
@@ -332,13 +371,14 @@ fn searchWorker(job: SearchJob) void {
     defer alloc.free(rows);
     const extra = alloc.alloc(pure.Podcast, 50) catch return;
     defer alloc.free(extra);
-    var count: usize = 0;
-    var succeeded = false;
+    var count: usize = installedFeeds(rows, query, job.generation);
+    var succeeded = count > 0;
     const gpodder_url = std.fmt.bufPrint(&url_buf, "https://gpodder.net/search.json?q={s}", .{encoded}) catch return;
     if (fetchBody(gpodder_url, 512 * 1024)) |body| {
         defer alloc.free(body);
-        count = pure.parseGpodder(alloc, body, rows);
-        succeeded = std.mem.startsWith(u8, std.mem.trim(u8, body, " \r\n\t"), "[");
+        const found = pure.parseGpodder(alloc, body, extra);
+        count = pure.appendUnique(rows, count, extra[0..found]);
+        succeeded = succeeded or std.mem.startsWith(u8, std.mem.trim(u8, body, " \r\n\t"), "[");
         publishShows(job.generation, rows[0..count], !succeeded);
     }
     if (!search_request.isCurrent(job.generation)) return;

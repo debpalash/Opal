@@ -28,7 +28,7 @@ pub const themesia = @import("manga_themesia_pure.zig");
 
 /// Which engine a novel came from — carried per search-result so `openNovel` /
 /// `openChapter` dispatch to the right chapter-list + chapter-text extractor.
-pub const NovelSource = enum { wikisource, madara_novel, lightnovelwp, readwn, readnovelfull, internet_archive };
+pub const NovelSource = enum { wikisource, madara_novel, lightnovelwp, readwn, readnovelfull, internet_archive, royalroad, novelfire };
 
 // ══════════════════════════════════════════════════════════
 // Chapter-TEXT container selectors (the ONE new thing per shared engine)
@@ -193,6 +193,14 @@ pub fn chapterContentHtml(html: []const u8, source: NovelSource) ?[]const u8 {
             for (READNOVELFULL_CONTENT) |sel| {
                 if (containerInner(html, sel)) |c| if (htmlHasText(c)) return c;
             }
+            return null;
+        },
+        .royalroad => {
+            if (containerInner(html, "chapter-inner chapter-content")) |c| if (htmlHasText(c)) return c;
+            return null;
+        },
+        .novelfire => {
+            if (containerInner(html, "id=\"chapter-container\"")) |c| if (htmlHasText(c)) return c;
             return null;
         },
         .wikisource, .internet_archive => return null, // handled directly by novels.zig
@@ -392,6 +400,12 @@ test "chapterContentHtml: lightnovelwp epcontent + readwn chapter-content" {
     try std.testing.expectEqualStrings("<p>RNF body.</p>", chapterContentHtml(rnf, .readnovelfull).?);
     // Wikisource is handled elsewhere → null.
     try std.testing.expect(chapterContentHtml(ln, .wikisource) == null);
+}
+
+test "Royal Road and NovelFire chapter bodies exclude the surrounding page" {
+    try std.testing.expectEqualStrings("<p>Story.</p>", chapterContentHtml("<nav>menu</nav><div class=\"chapter-inner chapter-content\"><p>Story.</p></div><footer>ads</footer>", .royalroad).?);
+    try std.testing.expectEqualStrings("<p>Novel.</p>", chapterContentHtml("<h1>header</h1><div id=\"chapter-container\" class=\"d-chapter-content\"><p>Novel.</p></div>", .novelfire).?);
+    try std.testing.expect(chapterContentHtml("<div>Access unavailable</div>", .novelfire) == null);
 }
 
 test "readwn URL builders + search body (form-encoded, injection-inert)" {

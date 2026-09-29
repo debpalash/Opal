@@ -10,6 +10,7 @@ const alloc = @import("../core/alloc.zig").allocator;
 const safeUtf8 = @import("../core/text.zig").safeUtf8;
 const workers = @import("../core/workers.zig");
 const pure = @import("comics_pure.zig");
+const expanded = @import("expanded_reading_pure.zig");
 // MangaThemesia (WPMangaThemesia) engine — pure, base-URL-driven HTML extraction
 // for the ~143 sites on that WordPress theme. comics.zig routes all its parsing
 // through this so the shipped logic IS the tested logic (see manga_themesia_pure).
@@ -461,6 +462,16 @@ fn fetchComicThread(gen: u32) void {
     workers.enter();
     defer workers.leave();
     const url = state.app.comic.url_buf[0..state.app.comic.url_len];
+
+    inline for (.{ "weebcentral", "comicbookplus" }) |id| {
+        const scheme = id ++ ":";
+        if (std.mem.startsWith(u8, url, scheme)) {
+            const ok = loadExpandedComic(id, url[scheme.len..]);
+            state.app.comic.is_loading.store(false, .release);
+            if (ok) downloadPages(gen) else logs.pushLog("error", "comics", "Reading source returned no pages", true);
+            return;
+        }
+    }
 
     // ── MangaDex cards carry a `mangadex:<uuid>` pseudo-URL ──
     // Its pages come from a 3-call JSON chain (feed → at-home → image list), not
@@ -1695,7 +1706,7 @@ pub fn searchRow(i: usize) ?SearchRow {
 //     source to search come from source_config ("suwayomi"/"base",
 //     "suwayomi"/"source"), so it is INERT until the user configures it. Cards
 //     carry a `suwayomi:<mangaId>` pseudo-URL routed by fetchComicThread.
-const Source = enum { all, readallcomics, mangadex, heancms, mangathemesia, madara, suwayomi };
+const Source = enum { all, readallcomics, mangadex, heancms, mangathemesia, madara, suwayomi, weebcentral, comicbookplus };
 var active_source: Source = .all;
 
 /// The Suwayomi server base URL + the installed-source id to search, or null
@@ -1876,6 +1887,142 @@ fn fetchSearchHtml(url: [:0]const u8, dst: []u8) usize {
 /// Fetch + merge ONE readallcomics page, writing rows from slot `start`.
 /// Returns the number of new rows (0 if the source is not installed / errored).
 /// Worker-thread only.
+fn fetchExpandedComicPage(query: []const u8, page: u32, gen: u32, start: usize, id: []const u8) usize {
+    const cfg = @import("../core/source_config.zig");
+    const raw_base = cfg.get(id, "base") orelse return 0;
+    var base_buf: [512]u8 = undefined;
+    if (raw_base.len > base_buf.len) return 0;
+    @memcpy(base_buf[0..raw_base.len], raw_base);
+    const base = base_buf[0..raw_base.len];
+    var url_buf: [1600]u8 = undefined;
+    const url = expanded.comicSearchUrl(&url_buf, base, id, query, page) orelse return 0;
+    const body = alloc.alloc(u8, 2 * 1024 * 1024) catch return 0;
+    defer alloc.free(body);
+    const n = fetchExpandedReadingHtml(id, url, body);
+    if (n == 0 or search_gen.load(.acquire) != gen) return 0;
+    const cbp = std.mem.eql(u8, id, "comicbookplus");
+    var it = expanded.html.AnchorIter{ .html = body[0..n], .path = if (cbp) "?dlid=" else "/series/" };
+    var count = start;
+    while (it.next()) |item| {
+        if (count >= MAX_SEARCH_RESULTS or search_gen.load(.acquire) != gen) break;
+        if (std.mem.startsWith(u8, item.title, "tiny ")) continue;
+        var abs_buf: [1024]u8 = undefined;
+        const abs = expanded.html.sourceUrl(&abs_buf, base, item.url) orelse continue;
+        var route_buf: [1200]u8 = undefined;
+        const route = std.fmt.bufPrint(&route_buf, "{s}:{s}", .{ id, abs }) catch continue;
+        if (route.len > sr_urls[count].len) continue;
+        var duplicate = false;
+        for (0..count) |i| {
+            if (std.mem.eql(u8, sr_urls[i][0..sr_url_lens[i]], route)) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate) continue;
+        var title_buf: [512]u8 = undefined;
+        const tn = @import("novels_pure.zig").htmlToText(item.title, &title_buf);
+        var title = std.mem.trim(u8, title_buf[0..tn], " \r\n\t");
+        if (std.mem.endsWith(u8, title, " cover")) title = title[0 .. title.len - 6];
+        if (title.len == 0) continue;
+        if (cbp and query.len > 0 and !containsIgnoreCase(title, query)) continue;
+        @memcpy(sr_urls[count][0..route.len], route);
+        sr_url_lens[count] = route.len;
+        const tlen = @min(title.len, sr_titles[count].len);
+        @memcpy(sr_titles[count][0..tlen], title[0..tlen]);
+        sr_title_lens[count] = tlen;
+        sr_cover_url_lens[count] = 0;
+        if (item.cover.len > 0) {
+            var cov_buf: [640]u8 = undefined;
+            const cov = madara.resolveUrl(base, item.cover, &cov_buf);
+            if (cov.len <= sr_cover_urls[count].len) {
+                @memcpy(sr_cover_urls[count][0..cov.len], cov);
+                sr_cover_url_lens[count] = cov.len;
+            }
+        }
+        sr_cover_gen[count] = gen;
+        sr_cover_failed[count] = false;
+        count += 1;
+    }
+    if (search_gen.load(.acquire) != gen) return 0;
+    sr_count = count;
+    return count - start;
+}
+
+fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+    if (needle.len > haystack.len) return false;
+    for (0..haystack.len - needle.len + 1) |i| {
+        if (std.ascii.eqlIgnoreCase(haystack[i..][0..needle.len], needle)) return true;
+    }
+    return false;
+}
+
+fn fetchExpandedReadingHtml(id: []const u8, url: []const u8, out: []u8) usize {
+    if (!std.mem.eql(u8, id, "comicbookplus")) return fetchMaybeUnblocked(url, out);
+    // This publisher rejects the generic browser UA but serves the named app
+    // client. Keep its status handling on the common fetch seam.
+    var headers: [2048]u8 = undefined;
+    const result = @import("reliable_fetch.zig").request(url, out, &headers, .{
+        .user_agent = @import("../core/app_meta.zig").user_agent_with_url,
+        .timeout_secs = 15,
+    });
+    return if (result.ok()) result.body.len else 0;
+}
+
+fn loadExpandedComic(id: []const u8, raw_detail: []const u8) bool {
+    const raw_base = @import("../core/source_config.zig").get(id, "base") orelse return false;
+    var base_buf: [512]u8 = undefined;
+    if (raw_base.len > base_buf.len) return false;
+    @memcpy(base_buf[0..raw_base.len], raw_base);
+    const base = base_buf[0..raw_base.len];
+    var detail_buf: [1024]u8 = undefined;
+    const detail = expanded.html.sourceUrl(&detail_buf, base, raw_detail) orelse return false;
+    const body = alloc.alloc(u8, 4 * 1024 * 1024) catch return false;
+    defer alloc.free(body);
+    var count: usize = 0;
+    if (std.mem.eql(u8, id, "comicbookplus")) {
+        const n = fetchExpandedReadingHtml(id, detail, body);
+        const viewer = expanded.comicBookViewer(body[0..n]) orelse return false;
+        for (0..@min(viewer.pages, state.app.comic.page_urls.len)) |i| {
+            const image = std.fmt.bufPrint(&state.app.comic.page_urls[i], "{s}/{s}/{d}.jpg", .{ std.mem.trimEnd(u8, base, "/"), viewer.directory, i }) catch return false;
+            state.app.comic.page_url_lens[i] = image.len;
+            count += 1;
+        }
+        if (viewer.pages > count) {
+            logs.pushLog("warn", "comics", "Comic exceeds the reader's 128-page limit", false);
+            state.showToastTyped("This issue exceeds the 128-page reader limit", .warning);
+        }
+    } else {
+        var url_buf: [1200]u8 = undefined;
+        const chapters_url = expanded.weebChapterList(&url_buf, base, detail) orelse return false;
+        const n = fetchMaybeUnblocked(chapters_url, body);
+        var it = expanded.html.AnchorIter{ .html = body[0..n], .path = "/chapters/" };
+        // Site order is newest first; start reading at its oldest chapter.
+        var chapter_buf: [1024]u8 = undefined;
+        var chapter_len: usize = 0;
+        while (it.next()) |chapter| {
+            if (chapter.url.len > chapter_buf.len) continue;
+            @memcpy(chapter_buf[0..chapter.url.len], chapter.url);
+            chapter_len = chapter.url.len;
+        }
+        if (chapter_len == 0 or workers.isQuitting()) return false;
+        const images_url = expanded.weebImages(&url_buf, base, chapter_buf[0..chapter_len]) orelse return false;
+        const pn = fetchMaybeUnblocked(images_url, body);
+        var pos: usize = 0;
+        while (std.mem.indexOfPos(u8, body[0..pn], pos, "<img")) |im| {
+            if (count >= state.app.comic.page_urls.len) break;
+            const gt = std.mem.indexOfScalarPos(u8, body[0..pn], im, '>') orelse break;
+            pos = gt + 1;
+            const src = expanded.html.attr(body[im..pos], "src") orelse continue;
+            if (!std.mem.startsWith(u8, src, "https://") or src.len >= state.app.comic.page_urls[count].len) continue;
+            @memcpy(state.app.comic.page_urls[count][0..src.len], src);
+            state.app.comic.page_url_lens[count] = src.len;
+            count += 1;
+        }
+    }
+    state.app.comic.page_count = count;
+    return count > 0;
+}
+
 fn fetchReadAllComicsPage(query: []const u8, paged: u32, gen: u32, start: usize) usize {
     var url_buf: [640]u8 = undefined;
     const url = buildSearchUrl(&url_buf, query, paged) orelse return 0; // inert (not installed)
@@ -2089,6 +2236,9 @@ fn searchWorker(gen: u32) void {
     if (sourceActive(.suwayomi)) {
         filled += fetchSuwayomiPage(query, 1, gen, filled);
     }
+    inline for (.{ Source.weebcentral, Source.comicbookplus }) |src| {
+        if (sourceActive(src) and search_gen.load(.acquire) == gen) filled += fetchExpandedComicPage(query, 1, gen, filled, @tagName(src));
+    }
 
     // Only the LAST source's page size can tell us whether more rows exist; a
     // short page from every active source means we've hit the end.
@@ -2153,6 +2303,9 @@ fn loadMoreWorker(gen: u32) void {
     if (sourceActive(.suwayomi)) {
         // Suwayomi's /source/{id}/search paginates by 1-based page number.
         added += fetchSuwayomiPage(query, next_page, gen, sr_count);
+    }
+    inline for (.{ Source.weebcentral, Source.comicbookplus }) |src| {
+        if (sourceActive(src) and search_gen.load(.acquire) == gen) added += fetchExpandedComicPage(query, next_page, gen, sr_count, @tagName(src));
     }
 
     if (added == 0 or added < RESULTS_PER_PAGE) more_available = false;
@@ -2978,6 +3131,8 @@ pub fn renderContent() void {
         renderSourceChip("All", 1, .all);
         renderSourceChip("ReadAllComics", 2, .readallcomics);
         renderSourceChip("MangaDex", 3, .mangadex);
+        if (@import("../core/source_config.zig").has("weebcentral")) renderSourceChip("Weeb Central", 8, .weebcentral);
+        if (@import("../core/source_config.zig").has("comicbookplus")) renderSourceChip("ComicBookPlus", 9, .comicbookplus);
         renderSourceChip("MangaThemesia", 4, .mangathemesia);
         // Madara engine (~332 WordPress sites) — inert until a "madara" source is
         // installed, exactly like ReadAllComics.

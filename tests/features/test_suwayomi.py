@@ -40,7 +40,7 @@ def test_suwayomi():
 
         # ── comics.zig: import + Source variant + config gate ──
         "engine imported": 'const suwayomi = @import("manga_suwayomi_pure.zig")' in svc,
-        "Source variant": "suwayomi }" in svc and "Source = enum" in svc,
+        "Source variant": ("suwayomi }" in svc or "suwayomi," in svc) and "Source = enum" in svc,
         "config gate (base+source)": 'source_config.zig").get("suwayomi", "base")' in svc
             and 'source_config.zig").get("suwayomi", "source")' in svc,
         "inert until configured": "fn suwayomiBase()" in svc and "orelse return 0" in svc,

@@ -22,3 +22,6 @@ torrentscsv: 1.8
 uindex: 1.3
 yts: 1.4
 internetarchive: 1.0
+nekobt: 1.0
+shanaproject: 1.0
+publicdomaintorrents: 1.0

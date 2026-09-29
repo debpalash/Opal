@@ -27,6 +27,7 @@ const db = @import("../core/db.zig");
 const pure = @import("novels_pure.zig");
 const nsp = @import("novel_sources_pure.zig");
 const archive = @import("archive_pure.zig");
+const expanded = @import("expanded_reading_pure.zig");
 const source_config = @import("../core/source_config.zig");
 // Anti-block fetch layer — used by the HTML-scraper engines' GETs so a
 // Cloudflare/DDoS-Guard/captcha-fronted source resolves through the anti-detect
@@ -268,6 +269,11 @@ fn searchWorker(job: SearchJob) void {
     filled += fetchInternetArchive(query, my_gen, filled, 1);
     if (!search_request.isCurrent(my_gen)) return;
 
+    inline for (.{ NovelSource.royalroad, NovelSource.novelfire }) |src| {
+        filled += fetchExpandedNovel(query, my_gen, filled, 1, src);
+        if (!search_request.isCurrent(my_gen)) return;
+    }
+
     if (madaraNovelBase() != null) {
         filled += fetchMadaraNovel(query, my_gen, filled, 1);
         if (!search_request.isCurrent(my_gen)) return;
@@ -342,6 +348,36 @@ fn copyBase(raw: []const u8, out: []u8) []const u8 {
     const n = @min(raw.len, out.len);
     @memcpy(out[0..n], raw[0..n]);
     return out[0..n];
+}
+
+fn fetchExpandedNovel(query: []const u8, gen: u32, start: usize, page: u32, src: NovelSource) usize {
+    const id = @tagName(src);
+    var base_buf: [512]u8 = undefined;
+    const base = copyBase(source_config.get(id, "base") orelse return 0, &base_buf);
+    var url_buf: [1600]u8 = undefined;
+    const url = expanded.novelSearchUrl(&url_buf, base, id, query, page) orelse return 0;
+    const body = scrapeHtml(url, 2 * 1024 * 1024) orelse return 0;
+    defer alloc.free(body);
+    if (!search_request.isCurrent(gen)) return 0;
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (!search_request.isCurrent(gen)) return 0;
+    const listing = expanded.novelListingHtml(body, id) orelse return 0;
+    var it = expanded.html.AnchorIter{ .html = listing, .path = if (src == .royalroad) "/fiction/" else "/book/" };
+    var n: usize = 0;
+    while (it.next()) |item| {
+        if (start + n >= MAX_RESULTS) break;
+        if (std.mem.indexOf(u8, item.url, "/chapter") != null or std.mem.endsWith(u8, item.url, "/random")) continue;
+        var abs_buf: [1024]u8 = undefined;
+        const abs = expanded.html.sourceUrl(&abs_buf, base, item.url) orelse continue;
+        var title_buf: [256]u8 = undefined;
+        const title = cleanTitle(item.title, &title_buf);
+        if (title.len == 0 or rowExists(src, title, abs, start + n)) continue;
+        addResult(start + n, src, title, abs);
+        n += 1;
+    }
+    nr_count = start + n;
+    return n;
 }
 
 /// Wikisource `list=search` → nr_* rows (the always-on default source). `offset`
@@ -598,6 +634,13 @@ fn loadMoreWorker(job: SearchJob, next_page: u32) void {
         start += n;
         if (n == 0) archive_more.store(false, .release);
     }
+    var expanded_more = false;
+    inline for (.{ NovelSource.royalroad, NovelSource.novelfire }) |src| {
+        const n = fetchExpandedNovel(query, my_gen, start, next_page, src);
+        if (!search_request.isCurrent(my_gen)) return;
+        start += n;
+        expanded_more = expanded_more or n > 0;
+    }
     if (madara_more.load(.acquire) and madaraNovelBase() != null and start < MAX_RESULTS) {
         const n = fetchMadaraNovel(query, my_gen, start, next_page);
         if (search_request.current() != my_gen) return;
@@ -611,7 +654,7 @@ fn loadMoreWorker(job: SearchJob, next_page: u32) void {
         if (n == 0) lnwp_more.store(false, .release);
     }
 
-    const any = wiki_more.load(.acquire) or archive_more.load(.acquire) or
+    const any = expanded_more or wiki_more.load(.acquire) or archive_more.load(.acquire) or
         (madara_more.load(.acquire) and madaraNovelBase() != null) or
         (lnwp_more.load(.acquire) and lightnovelwpBase() != null);
     more_available.store(any and start < MAX_RESULTS, .release);
@@ -665,6 +708,53 @@ fn chaptersWorker(my_gen: u32) void {
         .readwn => chaptersReadwn(my_gen),
         .readnovelfull => {}, // not shipped in v1
         .internet_archive => chaptersInternetArchive(my_gen),
+        .royalroad, .novelfire => chaptersExpanded(my_gen),
+    }
+}
+
+fn chaptersExpanded(gen: u32) void {
+    const src = open_source;
+    var base_buf: [512]u8 = undefined;
+    const base = copyBase(source_config.get(@tagName(src), "base") orelse return, &base_buf);
+    var work_buf: [1024]u8 = undefined;
+    const work = copyBase(work_url_snap[0..work_url_snap_len], &work_buf);
+    var n: usize = 0;
+    // NovelFire paginates its chapter directory; Royal Road returns it whole.
+    var page: usize = 1;
+    while (page <= 16 and n < MAX_CHAPTERS) : (page += 1) {
+        var url_buf: [1200]u8 = undefined;
+        const url = if (src == .royalroad) work else std.fmt.bufPrint(&url_buf, "{s}/chapters?page={d}", .{ std.mem.trimEnd(u8, work, "/"), page }) catch return;
+        const body = scrapeHtml(url, 4 * 1024 * 1024) orelse return;
+        defer alloc.free(body);
+        if (chapters_gen.load(.acquire) != gen) return;
+        const before = n;
+        const chapter_html = expanded.chapterListingHtml(body, @tagName(src)) orelse return;
+        var it = expanded.html.AnchorIter{ .html = chapter_html, .path = if (src == .royalroad) "/chapter/" else "/chapter-" };
+        parse_mutex.lock();
+        while (it.next()) |item| {
+            if (n >= MAX_CHAPTERS or chapters_gen.load(.acquire) != gen) break;
+            var abs_buf: [1024]u8 = undefined;
+            const abs = expanded.html.sourceUrl(&abs_buf, base, item.url) orelse continue;
+            var duplicate = false;
+            for (0..n) |i| {
+                if (std.mem.eql(u8, abs, ch_urls[i][0..ch_url_lens[i]])) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (duplicate) continue;
+            var title_buf: [256]u8 = undefined;
+            const title = cleanTitle(item.title, &title_buf);
+            if (title.len == 0) continue;
+            addChapter(n, title, abs);
+            n += 1;
+        }
+        if (chapters_gen.load(.acquire) == gen) ch_count = n;
+        parse_mutex.unlock();
+        if (src == .royalroad or before == n) break;
+        var next_buf: [40]u8 = undefined;
+        const next = std.fmt.bufPrint(&next_buf, "page={d}", .{page + 1}) catch break;
+        if (std.mem.indexOf(u8, body, next) == null) break;
     }
 }
 
@@ -1424,6 +1514,8 @@ fn novelSourceLabel(source: NovelSource) []const u8 {
     return switch (source) {
         .wikisource => "Wikisource",
         .internet_archive => "Internet Archive",
+        .royalroad => "Royal Road",
+        .novelfire => "NovelFire",
         else => "Connected source",
     };
 }
