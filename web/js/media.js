@@ -11,41 +11,46 @@ const mediaIcon = name => {
 // Server routes are async: /anime/search & /anime/episodes trigger background
 // work and return {ok:true}; poll GET /anime for {results,episodes,selected,loading}.
 let animeWatch = null;
+let animeBrowseGeneration = 0;
 let animeEpisodeWatch = null;
 let animeEpisodeGeneration = 0;
 let animePlaybackWatch = null;
-async function loadAnime(){
+async function loadAnime(generation = animeBrowseGeneration, polling = false){
   try {
     const data = await api('/anime');
+    if (generation !== animeBrowseGeneration) return data;
     renderAnime(data);
     $('anime-more').style.display = data.has_more ? '' : 'none';
+    if (data.loading && !polling) pollAnime(generation);
     return data;
-  } catch {}
+  } catch { if (generation === animeBrowseGeneration) $('anime-hint').textContent = 'Could not load anime. Try again.'; }
 }
 function renderAnime(d){ renderAnimeResults(d.results || []); renderAnimeEpisodes(d.episodes || [], d); }
 $('anime-go').onclick = () => runAnime();
 $('anime-q').addEventListener('keydown', e => { if (e.key === 'Enter') { runAnime(); $('anime-q').blur(); } });
-function runAnime(){
-  clearInterval(animeEpisodeWatch); ++animeEpisodeGeneration;
-  clearInterval(animePlaybackWatch);
+async function runAnime(){
   const q = $('anime-q').value.trim(); if (!q) return;
-  $('anime-hint').innerHTML = '<span class="spin"></span> Searching anime…';
+  const generation = ++animeBrowseGeneration;
+  clearInterval(animeEpisodeWatch); ++animeEpisodeGeneration;
+  clearInterval(animePlaybackWatch); clearInterval(animeWatch);
+  $('anime-hint').textContent = 'Searching anime…';
   $('anime-results').innerHTML = ''; lastHtml.animeResults = ''; $('anime-episodes').innerHTML = ''; lastHtml.animeEpisodes = '';
   $('anime-more').style.display = 'none';
-  api('/anime/search?q=' + encodeURIComponent(q)).catch(()=>{});
+  try {
+    await api('/anime/search?q=' + encodeURIComponent(q));
+    if (generation === animeBrowseGeneration) pollAnime(generation);
+  } catch { if (generation === animeBrowseGeneration) $('anime-hint').textContent = 'Could not search anime. Try again.'; }
+}
+function pollAnime(generation){
   clearInterval(animeWatch);
   let ticks = 0;
   animeWatch = settledInterval(async () => {
-    ticks++;
-    try {
-      const d = await api('/anime');
-      renderAnimeResults(d.results || []);
-      if ((!d.loading && ticks > 2) || ticks > 40) {
-        clearInterval(animeWatch);
-        $('anime-more').style.display = d.has_more ? '' : 'none';
-        $('anime-hint').textContent = (d.results || []).length + ' titles — tap one for episodes.';
-      }
-    } catch { clearInterval(animeWatch); }
+    const d = await loadAnime(generation, true);
+    if (generation !== animeBrowseGeneration) return;
+    if (!d?.loading || ++ticks > 60) {
+      clearInterval(animeWatch);
+      if (d) $('anime-hint').textContent = (d.results || []).length + ' titles — choose one for episodes.';
+    }
   }, 900);
 }
 function renderAnimeResults(rs){
@@ -70,13 +75,14 @@ function renderAnimeResults(rs){
     const anime = rs[Number(button.dataset.details)] || {};
     button.onclick = () => openSourceDetails('Anime', {
       ...anime, title:anime.name, type:anime.type || 'Anime', overview:anime.overview || '',
-      meta:[anime.year || '', `${anime.episodes || 0} episodes`, anime.score ? `Rating ${anime.score}` : ''].filter(Boolean).join(' · '),
+      meta:[anime.year || '', anime.episodes ? `${anime.episodes} episodes` : 'Episode count unavailable', anime.score ? `Rating ${anime.score}` : ''].filter(Boolean).join(' · '),
       artUrl:anime.poster || '',
       index:Number(button.dataset.details),
     }, button);
   });
 }
 async function loadAnimeEpisodes(idx){
+  clearInterval(animeWatch); ++animeBrowseGeneration;
   clearInterval(animeEpisodeWatch);
   clearInterval(animePlaybackWatch);
   const generation = ++animeEpisodeGeneration;
@@ -197,6 +203,7 @@ function renderMusic(songs){
 let raWatch = null;
 // Parity-tier-2 poll handles. `cxPages` is separate from `cxWatch`: the reader
 // keeps polling page progress while the search listing sits idle behind it.
+let comicGeneration = 0, comicSearchGeneration = 0, radioGeneration = 0;
 let cxWatch = null, cxPages = null, nvWatch = null, drWatch = null, vnWatch = null;
 let absWatch = null, opWatch = null, plWatch = null;
 // Which search row the open novel came from — /novels has no server-side back.
@@ -205,35 +212,46 @@ let novelIdx = 0;
 // ── Comics: search → reader ──
 // Pages come from /api/comics/page?i=N, which takes the token in the query
 // because <img> cannot send an Authorization header (same as /poster).
-function loadComics(){ pollComics(); }
-function runComics(){
-  const q = $('cx-q').value.trim(); if (!q) return;
-  $('cx-hint').innerHTML = '<span class="spin"></span> Searching…';
-  api('/comics/search?q=' + encodeURIComponent(q)).catch(()=>{});
-  pollComics();
+async function refreshComics(generation = comicSearchGeneration){
+  const d = await api('/comics/results');
+  if (generation !== comicSearchGeneration) return d;
+  renderComics(d.results || []);
+  $('cx-more').style.display = d.has_more ? '' : 'none';
+  $('cx-hint').textContent = d.loading ? 'Loading comics…' : `${(d.results || []).length} results.`;
+  return d;
 }
-function pollComics(){
+function loadComics(){ pollComics(++comicSearchGeneration); }
+async function runComics(){
+  const q = $('cx-q').value.trim(); if (!q) return;
+  const generation = ++comicSearchGeneration;
+  clearInterval(cxWatch);
+  $('cx-hint').textContent = 'Searching…';
+  try {
+    await api('/comics/search?q=' + encodeURIComponent(q));
+    if (generation === comicSearchGeneration) pollComics(generation);
+  } catch { if (generation === comicSearchGeneration) $('cx-hint').textContent = 'Could not search comics. Try again.'; }
+}
+function pollComics(generation){
   clearInterval(cxWatch);
   let ticks = 0;
   cxWatch = settledInterval(async () => {
-    ticks++;
     try {
-      const d = await api('/comics/results');
-      renderComics(d.results || []);
-      if (!d.loading || ticks > 40) {
-        clearInterval(cxWatch);
-        $('cx-hint').textContent = (d.results || []).length + ' results.';
-      }
-    } catch { clearInterval(cxWatch); }
+      const d = await refreshComics(generation);
+      if (generation !== comicSearchGeneration) return;
+      if (!d.loading || ++ticks > 60) clearInterval(cxWatch);
+    } catch { if (generation === comicSearchGeneration) { clearInterval(cxWatch); $('cx-hint').textContent = 'Could not load comics. Try again.'; } }
   }, 900);
 }
 function renderComics(rows){
   const html = rows.map((r, i) => `
-    <div class="result">
-      <div class="t">${esc(r.title)}</div>
-      <div class="m"><button class="comic-details" data-details="${i}">Details</button>
-        <button class="play" data-cx="${encodeURIComponent(r.url)}">Read</button></div>
-    </div>`).join('') || '<div class="empty">No results yet</div>';
+    <div class="card ${r.cover ? '' : 'poster-missing'}">
+      ${r.cover ? `<img src="${esc(r.cover)}" alt="" loading="lazy" decoding="async">` : ''}
+      <div class="jf-card-actions">
+        <button class="comic-details" data-details="${i}" aria-label="Details">${mediaIcon('info')}</button>
+        <button class="play" data-cx="${encodeURIComponent(r.url)}" aria-label="Read ${esc(r.title)}">Read</button>
+      </div>
+      <div class="cap" title="${esc(r.title)}">${esc(r.title)}</div>
+    </div>`).join('') || '<div class="empty">No comics found. Try another title or source.</div>';
   if (html === lastHtml.comics) return;
   lastHtml.comics = html;
   $('cx-results').innerHTML = html;
@@ -247,9 +265,15 @@ function renderComics(rows){
     }, button);
   });
 }
-function openComic(url){
-  api('/comics/load?url=' + encodeURIComponent(url)).catch(()=>{});
+async function openComic(url){
+  const generation = ++comicGeneration;
+  clearInterval(cxPages);
+  $('cx-pages').innerHTML = '';
+  try { await api('/comics/load?url=' + encodeURIComponent(url)); }
+  catch { if (generation === comicGeneration) $('cx-progress').textContent = 'Could not open comic. Try again.'; return; }
+  if (generation !== comicGeneration) return;
   $('cx-results').style.display = 'none';
+  $('cx-more').style.display = 'none';
   $('cx-reader').style.display = '';
   $('cx-progress').innerHTML = '<span class="spin"></span> Loading pages…';
   clearInterval(cxPages);
@@ -258,6 +282,7 @@ function openComic(url){
     ticks++;
     try {
       const d = await api('/comics');
+      if (generation !== comicGeneration) return;
       // `downloaded` is what says which indices answer 200 — pages arrive out of
       // order across 8 workers, so render only the contiguous prefix.
       $('cx-progress').textContent = d.pages
@@ -265,18 +290,23 @@ function openComic(url){
         : 'Loading…';
       if (d.pages) {
         $('cx-pages').innerHTML = Array.from({ length: d.downloaded }, (_, i) =>
-          `<img class="cx-page" loading="lazy" src="${BASE}/api/comics/page?i=${i}">`).join('');
+          `<img class="cx-page" loading="lazy" src="${BASE}/api/comics/page?i=${i}&reader=${generation}">`).join('');
       }
-      if ((d.pages && d.downloaded >= d.pages) || ticks > 90) clearInterval(cxPages);
+      if ((d.pages && d.downloaded >= d.pages) || (!d.loading && !d.pages) || ticks > 90) {
+        clearInterval(cxPages);
+        if (!d.pages) $('cx-progress').textContent = 'No readable pages found. Try another source or issue.';
+      }
     } catch { clearInterval(cxPages); }
   }, 1200);
 }
 function closeComic(){
+  ++comicGeneration;
   clearInterval(cxPages);
   api('/comics/close').catch(()=>{});
   $('cx-pages').innerHTML = '';
   $('cx-reader').style.display = 'none';
   $('cx-results').style.display = '';
+  refreshComics().catch(()=>{});
 }
 
 // ── Novels: search → chapters → reader (one poll drives all three views) ──
@@ -326,6 +356,7 @@ function renderNovels(d){
   const target = $('nv-results');
   const html = rows.map((r, i) => `
     <div class="result">
+      ${r.cover ? `<img class="thumb" src="${esc(r.cover)}" alt="" loading="lazy">` : ''}
       <div class="t">${esc(r.title)}</div>
       <div class="m"><button class="novel-details" data-details="${i}" data-kind="${kind}">Details</button>
         <button class="play" data-nv="${i}" data-kind="${kind}">${kind === 'open' ? 'Open' : 'Read'}</button></div>
@@ -434,6 +465,7 @@ function pollVndb(){
 function renderVndb(rows){
   const html = rows.map((r, i) => `
     <div class="result">
+      ${r.cover ? `<img class="thumb" src="${esc(r.cover)}" alt="" loading="lazy">` : ''}
       <div class="t">${esc(r.title)}</div>
       <div class="m">
         ${r.released ? `<span class="src">${esc(r.released)}</span>` : ''}
@@ -770,6 +802,7 @@ function renderPlex(d){
   const target = $('plex-results');
   const html = rows.map((r, i) => `
     <div class="result">
+      ${r.cover ? `<img class="thumb" src="${esc(r.cover)}" alt="" loading="lazy">` : ''}
       <div class="t">${esc(r.title)}</div>
       <div class="m">
         ${r.year ? `<span class="src">${esc(r.year)}</span>` : ''}
@@ -851,16 +884,6 @@ async function loadLogs(){
   } catch { $('lg-hint').textContent = 'Could not load logs.'; }
 }
 
-function loadRadio(){
-  api('/radio').then(d => {
-    renderRadio(d.stations || []);
-    if (d.loading) pollRadio();
-    else $('ra-hint').textContent = (d.stations || []).length + ' stations.';
-  }).catch(()=>{});
-}
-$('ra-go').onclick = () => runRadio();
-$('ra-q').addEventListener('keydown', e => { if (e.key === 'Enter') { runRadio(); $('ra-q').blur(); } });
-
 // ── Parity tier 2 controls ──
 const onGo = (btn, input, fn) => {
   $(btn).onclick = () => fn();
@@ -870,20 +893,23 @@ onGo('cx-go', 'cx-q', runComics);
 onGo('nv-go', 'nv-q', runNovels);
 onGo('vn-go', 'vn-q', runVndb);
 $('cx-close').onclick = () => closeComic();
-function wireInfiniteBrowse(page, buttonId, morePath, refresh){
+function wireInfiniteBrowse(page, buttonId, morePath, refresh, currentGeneration = () => 0){
   const button = $(buttonId);
   let pending = false;
   const more = async () => {
     if (pending || button.style.display === 'none' || currentPage !== page) return;
+    const generation = currentGeneration();
     pending = true; button.disabled = true; button.textContent = 'Loading…';
     try {
       await api(morePath);
       for (let attempt = 0; attempt < 30; attempt++) {
         await new Promise(resolve => setTimeout(resolve, 250));
-        const data = await refresh();
+        if (generation !== currentGeneration() || currentPage !== page) break;
+        const data = await refresh(generation);
         if (!data?.loading_more) break;
       }
     }
+    catch { toast('Could not load more. Try again.'); }
     finally { pending = false; button.disabled = false; button.textContent = 'Load more'; }
   };
   button.onclick = more;
@@ -895,7 +921,8 @@ function wireInfiniteBrowse(page, buttonId, morePath, refresh){
   }
 }
 wireInfiniteBrowse('drama', 'dr-more', '/drama/more', refreshDrama);
-wireInfiniteBrowse('anime', 'anime-more', '/anime/more', loadAnime);
+wireInfiniteBrowse('anime', 'anime-more', '/anime/more', loadAnime, () => animeBrowseGeneration);
+wireInfiniteBrowse('comics', 'cx-more', '/comics/more', refreshComics, () => comicSearchGeneration);
 $('abs-go').onclick = async () => {
   const button = $('abs-go'); button.disabled = true;
   try {
@@ -929,56 +956,3 @@ $('lg-errors').onclick = () => {
   loadLogs();
 };
 $('lg-clear').onclick = () => { api('/logs/clear').catch(()=>{}); loadLogs(); };
-function runRadio(){
-  const q = $('ra-q').value.trim(); if (!q) return;
-  $('ra-hint').innerHTML = '<span class="spin"></span> Searching stations…';
-  api('/radio/search?q=' + encodeURIComponent(q)).catch(()=>{});
-  pollRadio();
-}
-function pollRadio(){
-  clearInterval(raWatch);
-  let ticks = 0;
-  raWatch = settledInterval(async () => {
-    ticks++;
-    try {
-      const d = await api('/radio');
-      renderRadio(d.stations || []);
-      if ((!d.loading && ticks > 2) || ticks > 40) {
-        clearInterval(raWatch);
-        $('ra-hint').textContent = (d.stations || []).length + ' stations.';
-      }
-    } catch { clearInterval(raWatch); }
-  }, 900);
-}
-function renderRadio(sts){
-  const html = sts.map((s, i) => `
-    <div class="result">
-      <div class="t">${esc(s.name)}</div>
-      <div class="m">
-        ${s.country ? `<span class="src">${esc(s.country)}</span>` : ''}
-        ${s.tags ? `<span>${esc((s.tags || '').split(',').slice(0,2).join(', '))}</span>` : ''}
-        <button class="radio-details" data-details="${i}">Details</button>
-        ${s.url ? `<button class="queue-btn" data-queue="${i}">Queue</button>` : ''}
-        <button class="play" data-destination-verb="Listen" data-i="${i}" data-url="${encodeURIComponent(s.url || '')}">${destinationActionLabel('Listen')}</button></div>
-    </div>`).join('') || '<div class="empty">No stations yet</div>';
-  if (html === lastHtml.radio) return;
-  lastHtml.radio = html;
-  $('ra-results').innerHTML = html;
-  $('ra-results').querySelectorAll('.play').forEach(b => b.onclick = () => {
-    const u = decodeURIComponent(b.dataset.url || '');
-    const t = b.parentElement.parentElement.querySelector('.t').textContent;
-    if (HOSTED && u) return openStreamUrl(u, t);
-    dispatchPlay(u, t, () => { api('/radio/play?idx=' + b.dataset.i).catch(()=>{}); b.textContent = 'Sent ✓'; });
-  });
-  $('ra-results').querySelectorAll('[data-queue]').forEach(button => {
-    const station = sts[Number(button.dataset.queue)] || {};
-    button.onclick = () => queueMedia(station.url || '', station.name || '', button);
-  });
-  $('ra-results').querySelectorAll('.radio-details').forEach(button => {
-    const station = sts[Number(button.dataset.details)] || {};
-    button.onclick = () => openSourceDetails('Radio', {
-      ...station, type:'Station', meta:[station.country || '', station.tags || ''].filter(Boolean).join(' · '),
-      artUrl:station.favicon || '', index:Number(button.dataset.details),
-    }, button);
-  });
-}

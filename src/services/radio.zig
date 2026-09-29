@@ -395,7 +395,7 @@ pub fn loadMore() void {
     if (loading_more.swap(true, .acq_rel)) return; // lost the race — another append in flight
 
     const my_gen = search_request.current(); // stay within the current generation
-    const offset = state.app.radio.result_count;
+    const offset = current_offset + RADIO_PAGE_SIZE;
     const popular = state.app.radio.showing_popular;
     var job: SearchJob = .{ .generation = my_gen };
     parse_mutex.lock();
@@ -611,22 +611,33 @@ fn percentEncode(src: []const u8, dst: []u8) []const u8 {
 /// Fetch through the shared status-aware transport into a fresh heap buffer.
 /// Large buffers stay off the worker stack (macOS has a small thread stack).
 fn fetchBody(url: []const u8, cap: usize) ?[]u8 {
-    const buf = alloc.alloc(u8, cap) catch {
-        return null;
-    };
-    const body = reliable_fetch.fetch(url, buf, .{
-        .user_agent = agent,
-        .timeout_secs = 15,
-        .impersonate = false,
-    }) orelse {
-        alloc.free(buf);
-        return null;
-    };
+    const buf = alloc.alloc(u8, cap) catch return null;
+    // Mirrors share the directory schema. Keep the path and query intact,
+    // including pagination and station UUIDs, when a host is unavailable.
+    for (0..3) |attempt| {
+        var ub: [1536]u8 = undefined;
+        const endpoint = pure.mirrorUrl(url, attempt, &ub) orelse continue;
+        const body = reliable_fetch.fetch(endpoint, buf, .{
+            .user_agent = @import("../core/app_meta.zig").user_agent,
+            .timeout_secs = 8,
+            .impersonate = false,
+        }) orelse continue;
+        const trimmed = std.mem.trim(u8, body, " \t\r\n");
+        if (trimmed.len == 0 or trimmed[0] != '[') continue;
+        return alloc.realloc(buf, body.len) catch {
+            alloc.free(buf);
+            return null;
+        };
+    }
+    alloc.free(buf);
+    return null;
+}
 
-    return alloc.realloc(buf, body.len) catch {
-        alloc.free(buf);
-        return null;
-    };
+pub fn hasMoreResults() bool {
+    return more_available and resultCount() < state.app.radio.results.len;
+}
+pub fn loadingMoreResults() bool {
+    return loading_more.load(.acquire);
 }
 
 // ══════════════════════════════════════════════════════════

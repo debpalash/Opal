@@ -52,25 +52,39 @@ fn percentEncode(input: []const u8, out: []u8) usize {
 /// Request a comic load from a NON-UI thread (the remote API server). loadComic()
 /// frees page textures via dvui.textureDestroyLater, which is UI-thread-only, so
 /// the remote thread must not call it directly. Stash the URL and let the UI drain.
+var comic_command_mutex: @import("../core/sync.zig").Mutex = .{};
+
 pub fn requestLoad(url: []const u8) void {
     if (url.len == 0 or url.len >= state.app.comic.pending_load_url.len) return;
+    comic_command_mutex.lock();
+    defer comic_command_mutex.unlock();
     @memcpy(state.app.comic.pending_load_url[0..url.len], url);
     state.app.comic.pending_load_len = url.len;
+    state.app.comic.pending_close.store(false, .release);
     state.app.comic.pending_load.store(true, .release);
 }
 
-/// Thread-safe close request (remote.zig's connection threads). See `requestLoad`.
+/// Last reader command wins, including a close before the owner loop drains.
 pub fn requestClose() void {
+    comic_command_mutex.lock();
+    defer comic_command_mutex.unlock();
+    state.app.comic.pending_load.store(false, .release);
     state.app.comic.pending_close.store(true, .release);
 }
 
-/// Drain a pending remote comic-load request. UI-THREAD ONLY — call once per frame.
+/// Drain commands by value; connection threads can queue the next command
+/// without overwriting the URL while the UI thread is opening a comic.
 pub fn drainPendingLoad() void {
-    if (state.app.comic.pending_close.swap(false, .acq_rel)) closeComic();
-    if (!state.app.comic.pending_load.swap(false, .acq_rel)) return;
-    const n = state.app.comic.pending_load_len;
-    if (n == 0 or n >= state.app.comic.pending_load_url.len) return;
-    loadComic(state.app.comic.pending_load_url[0..n]);
+    drainPendingSearch();
+    var url: @TypeOf(state.app.comic.pending_load_url) = undefined;
+    comic_command_mutex.lock();
+    const close = state.app.comic.pending_close.swap(false, .acq_rel);
+    const load = state.app.comic.pending_load.swap(false, .acq_rel);
+    const n = @min(state.app.comic.pending_load_len, url.len);
+    if (load) @memcpy(url[0..n], state.app.comic.pending_load_url[0..n]);
+    comic_command_mutex.unlock();
+    if (close) closeComic();
+    if (load and n > 0 and n < url.len) loadComic(url[0..n]);
 }
 
 // Page textures freed from a NON-UI thread (the plugin manga-reload worker) must
@@ -1523,6 +1537,7 @@ var sr_count: usize = 0;
 /// both the render thread and remote.zig's connection threads poll it.
 var sr_searching_v: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var loaded_default: bool = false;
+var default_requested = std.atomic.Value(bool).init(false);
 var last_fetch_s: i64 = 0; // SWR cache timestamp
 var sr_query_buf: [256]u8 = undefined;
 var sr_query_len: usize = 0;
@@ -1546,9 +1561,9 @@ var sr_query_len: usize = 0;
 const content_cache = @import("../core/content_cache.zig");
 const ccp = @import("../core/content_cache_pure.zig");
 const COMICS_CACHE_TTL_S: i64 = @import("browse_cache.zig").TTL_S;
-const COMICS_CACHE_KEY = "comics:browse:all"; // default feed = DEFAULT_FEED_QUERY on `all`
+const COMICS_CACHE_KEY = "comics:browse:popular:v2"; // default feed = DEFAULT_FEED_QUERY on `all`
 const COMICS_BLOB_CAP: usize = 96 * 1024;
-const DEFAULT_FEED_QUERY = "spider-man";
+const DEFAULT_FEED_QUERY = "";
 
 /// SWR write — persist the default feed's text rows. Called from searchWorker
 /// (same thread that wrote sr_*, so they're stable) only for the default feed.
@@ -1634,7 +1649,7 @@ pub const SearchRow = struct {
 };
 
 pub fn searching() bool {
-    return sr_searching_v.load(.acquire) or loading_more.load(.acquire);
+    return search_pending.load(.acquire) or sr_searching_v.load(.acquire) or loading_more.load(.acquire);
 }
 
 pub fn searchCount() usize {
@@ -1773,24 +1788,55 @@ fn reclaimStaleCovers() void {
     covers_render_gen = g;
 }
 
+/// Schedule initial browsing from either desktop or the companion API.
+pub fn loadPopularOnce() void {
+    if (!state.app.config_loaded.load(.acquire) or sr_count > 0 or searching()) return;
+    if (default_requested.swap(true, .acq_rel)) return;
+    searchComics(DEFAULT_FEED_QUERY);
+}
+
+pub fn hasMoreResults() bool {
+    return more_available and sr_count < MAX_SEARCH_RESULTS;
+}
+pub fn loadingMoreResults() bool {
+    return loading_more.load(.acquire);
+}
+
+var search_command_mutex: @import("../core/sync.zig").Mutex = .{};
+var pending_query: [256]u8 = undefined;
+var pending_query_len: usize = 0;
+var search_pending = std.atomic.Value(bool).init(false);
+
+/// Coalesce rapid searches; only the owner loop starts a result writer.
 pub fn searchComics(query: []const u8) void {
-    if (sr_searching_v.load(.acquire) or query.len == 0 or query.len >= sr_query_buf.len) return;
+    if (query.len >= pending_query.len) return;
+    default_requested.store(true, .release);
+    search_command_mutex.lock();
+    defer search_command_mutex.unlock();
+    @memcpy(pending_query[0..query.len], query);
+    pending_query_len = query.len;
+    _ = search_gen.fetchAdd(1, .acq_rel);
+    search_pending.store(true, .release);
+    state.wakeUi();
+}
+
+fn drainPendingSearch() void {
+    if (!search_pending.load(.acquire) or sr_searching_v.load(.acquire) or loading_more.load(.acquire)) return;
+    search_command_mutex.lock();
+    defer search_command_mutex.unlock();
+    if (!search_pending.swap(false, .acq_rel)) return;
     sr_searching_v.store(true, .release);
-    // Fresh search → reset pagination so infinite-scroll starts at page 1 again.
+    loaded_default = true;
     sr_page = 1;
     more_available = true;
-    // Don't clear sr_count here — the parse repopulates and sets it at the end,
-    // so a stale-refresh keeps the old listing on screen until new data lands.
-    last_fetch_s = @import("browse_cache.zig").now(); // SWR stamp
-    @memcpy(sr_query_buf[0..query.len], query);
-    sr_query_len = query.len;
-    // Record the fired query so the live-search debouncer doesn't re-issue it.
-    @memcpy(last_fired_query[0..query.len], query);
-    last_fired_len = query.len;
-    const gen = search_gen.fetchAdd(1, .acq_rel) + 1;
-    workers.spawn(searchWorker, .{gen}) catch {
+    // The old worker has finished before its query buffer is reused.
+    @memcpy(sr_query_buf[0..pending_query_len], pending_query[0..pending_query_len]);
+    sr_query_len = pending_query_len;
+    @memcpy(last_fired_query[0..pending_query_len], pending_query[0..pending_query_len]);
+    last_fired_len = pending_query_len;
+    last_fetch_s = @import("browse_cache.zig").now();
+    workers.spawn(searchWorker, .{search_gen.load(.acquire)}) catch {
         sr_searching_v.store(false, .release);
-        return;
     };
 }
 
@@ -2009,9 +2055,7 @@ fn searchWorker(gen: u32) void {
     const query = sr_query_buf[0..sr_query_len];
 
     var filled: usize = 0;
-    if (sourceActive(.readallcomics)) {
-        filled += fetchReadAllComicsPage(query, 1, gen, filled);
-    }
+
     // A newer search may have landed while the first source was in flight.
     if (search_gen.load(.acquire) != gen) {
         logs.pushLog("info", "comics", "Comic search superseded (stale dropped)", false);
@@ -2019,6 +2063,9 @@ fn searchWorker(gen: u32) void {
     }
     if (sourceActive(.mangadex)) {
         filled += fetchMangadexPage(query, 0, gen, filled);
+    }
+    if (sourceActive(.readallcomics) and search_gen.load(.acquire) == gen) {
+        filled += fetchReadAllComicsPage(query, 1, gen, filled);
     }
     // A newer search may have landed while MangaDex was in flight.
     if (search_gen.load(.acquire) != gen) {
@@ -2045,6 +2092,8 @@ fn searchWorker(gen: u32) void {
 
     // Only the LAST source's page size can tell us whether more rows exist; a
     // short page from every active source means we've hit the end.
+    if (search_gen.load(.acquire) != gen) return;
+    sr_count = filled;
     if (filled < RESULTS_PER_PAGE) more_available = false;
     // SWR write: persist ONLY the default landing feed (default query on the
     // `all` source) so the next cold start seeds instantly. User searches and
@@ -2058,8 +2107,8 @@ fn searchWorker(gen: u32) void {
 /// rows onto the existing listing (dedup by URL, bounded by MAX_SEARCH_RESULTS).
 /// Runs on a detached thread; guarded by `loading_more`.
 pub fn loadMoreResults() void {
-    if (!more_available or loading_more.load(.acquire) or sr_searching_v.load(.acquire)) return;
-    if (sr_count == 0 or sr_count >= MAX_SEARCH_RESULTS or sr_query_len == 0) return;
+    if (!more_available or searching()) return;
+    if (sr_count == 0 or sr_count >= MAX_SEARCH_RESULTS) return;
     if (loading_more.swap(true, .acq_rel)) return;
     workers.spawn(loadMoreWorker, .{search_gen.load(.acquire)}) catch {
         loading_more.store(false, .release);
@@ -2845,10 +2894,10 @@ pub fn renderContent() void {
 
     // First open shows a default popular feed so the tab isn't blank (the
     // search box stays free for anything else).
-    if (!loaded_default and sr_count == 0 and !sr_searching_v.load(.acquire) and state.app.comic.search_buf[0] == 0 and state.app.comic.title_len == 0) {
+    if (!loaded_default and sr_count == 0 and !searching() and state.app.comic.search_buf[0] == 0 and state.app.comic.title_len == 0) {
         loaded_default = true;
         searchComics(DEFAULT_FEED_QUERY);
-    } else if (sr_count > 0 and !sr_searching_v.load(.acquire) and sr_query_len > 0 and state.app.comic.title_len == 0 and
+    } else if (sr_count > 0 and !searching() and state.app.comic.title_len == 0 and
         @import("browse_cache.zig").isStale(last_fetch_s))
     {
         // SWR: refresh the current listing in the background once it's stale.
@@ -3124,7 +3173,7 @@ fn renderSourceChip(label: []const u8, id: usize, src: Source) void {
         if (active_source != src) {
             active_source = src;
             // Re-run the live listing under the new source filter.
-            if (sr_query_len > 0) {
+            {
                 var q: [256]u8 = undefined;
                 @memcpy(q[0..sr_query_len], sr_query_buf[0..sr_query_len]);
                 searchComics(q[0..sr_query_len]);
@@ -4111,4 +4160,38 @@ fn findLinkWithText(html: []const u8, text: []const u8) ?[]const u8 {
         pos = abs_text + text.len;
     }
     return null;
+}
+
+test "Browse regression comic searches retain the newest request while a worker is busy" {
+    const previous_generation = search_gen.load(.acquire);
+    defer {
+        search_gen.store(previous_generation, .release);
+        search_pending.store(false, .release);
+        sr_searching_v.store(false, .release);
+        pending_query_len = 0;
+    }
+    sr_searching_v.store(true, .release);
+    searchComics("old title");
+    const first = search_gen.load(.acquire);
+    searchComics("new title");
+    try std.testing.expect(searching());
+    try std.testing.expect(search_gen.load(.acquire) != first);
+    drainPendingSearch(); // busy worker must keep the queued command intact
+    try std.testing.expect(search_pending.load(.acquire));
+    try std.testing.expectEqualStrings("new title", pending_query[0..pending_query_len]);
+}
+
+test "Browse regression closing a comic cancels a queued open" {
+    defer {
+        state.app.comic.pending_load.store(false, .release);
+        state.app.comic.pending_close.store(false, .release);
+    }
+    requestLoad("https://comic.test/old");
+    requestClose();
+    try std.testing.expect(!state.app.comic.pending_load.load(.acquire));
+    try std.testing.expect(state.app.comic.pending_close.load(.acquire));
+    requestLoad("https://comic.test/new");
+    try std.testing.expect(state.app.comic.pending_load.load(.acquire));
+    try std.testing.expect(!state.app.comic.pending_close.load(.acquire));
+    try std.testing.expectEqualStrings("https://comic.test/new", state.app.comic.pending_load_url[0..state.app.comic.pending_load_len]);
 }

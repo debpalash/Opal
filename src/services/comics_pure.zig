@@ -346,7 +346,7 @@ const CONTENT_RATING = "&contentRating%5B%5D=safe&contentRating%5B%5D=suggestive
 /// Search endpoint. `offset` paginates (the grid's infinite scroll walks it in
 /// `limit`-sized steps). Content is capped at safe+suggestive.
 pub fn buildSearchUrl(out: []u8, query: []const u8, limit: u32, offset: u32) ?[]const u8 {
-    if (query.len == 0) return null;
+    if (query.len == 0) return std.fmt.bufPrint(out, "{s}/manga?limit={d}&offset={d}" ++ INCLUDES_COVER ++ CONTENT_RATING ++ "&order%5BfollowedCount%5D=desc", .{ MD_API, limit, offset }) catch null;
     var enc: [512]u8 = undefined;
     const n = percentEncodeStrict(query, &enc);
     if (n == 0) return null;
@@ -615,9 +615,11 @@ test "regression: MangaDex hosts get the API UA, scrapers keep the browser UA" {
     try std.testing.expectEqualStrings(UA_BROWSER, userAgentFor("https://1.bp.blogspot.com/x.jpg", app_ua));
 }
 
-test "buildSearchUrl: empty query yields no request" {
+test "buildSearchUrl: empty query browses popular manga" {
     var buf: [512]u8 = undefined;
-    try std.testing.expect(buildSearchUrl(&buf, "", 20, 0) == null);
+    const url = buildSearchUrl(&buf, "", 20, 0).?;
+    try std.testing.expect(std.mem.indexOf(u8, url, "order%5BfollowedCount%5D=desc") != null);
+    try std.testing.expect(std.mem.indexOf(u8, url, "title=") == null);
 }
 
 test "buildFeedUrl / buildAtHomeUrl: valid ids only" {

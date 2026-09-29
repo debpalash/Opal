@@ -2269,6 +2269,11 @@ fn apiRadio(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) 
     const radio = @import("radio.zig");
     const alloc = @import("../core/alloc.zig").allocator;
 
+    if (std.mem.eql(u8, api_path, "/radio/more")) {
+        radio.loadMore();
+        sendJson(stream, "{\"ok\":true}");
+        return;
+    }
     if (std.mem.eql(u8, api_path, "/radio/search")) {
         if (getQueryParam(query, "q")) |raw| {
             var dec: [256]u8 = undefined;
@@ -2289,17 +2294,20 @@ fn apiRadio(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) 
     // Nothing loaded yet → seed the popular list (once per session, async).
     if (radio.resultCount() == 0) radio.loadPopularOnce();
 
-    const buf = alloc.alloc(u8, 96 * 1024) catch {
+    const buf = alloc.alloc(u8, 512 * 1024) catch {
         sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
         return;
     };
     defer alloc.free(buf);
     var w = std.Io.Writer.fixed(buf);
-    w.print("{{\"loading\":{s},\"stations\":[", .{
+    w.print("{{\"loading\":{s},\"loading_more\":{s},\"has_more\":{s},\"fetch_error\":{s},\"stations\":[", .{
         if (state.app.radio.is_loading.load(.acquire)) "true" else "false",
+        if (radio.loadingMoreResults()) "true" else "false",
+        if (radio.hasMoreResults()) "true" else "false",
+        if (state.app.radio.fetch_error) "true" else "false",
     }) catch return;
     var i: usize = 0;
-    const n = @min(radio.resultCount(), 80);
+    const n = radio.resultCount();
     while (i < n) : (i += 1) {
         const st = radio.resultRow(i) orelse continue;
         const u = if (st.url_resolved_len > 0) st.url_resolved[0..@min(st.url_resolved_len, st.url_resolved.len)] else st.url[0..@min(st.url_len, st.url.len)];
@@ -3487,6 +3495,7 @@ fn apiPodcasts(stream: std.Io.net.Stream, api_path: []const u8, query: []const u
         return;
     }
     // GET /podcasts → results + episodes for the current show.
+    podcasts_svc.loadPopularOnce();
     const view = podcasts_svc.snapshot();
     const allocator = @import("../core/alloc.zig").allocator;
     const json_buf = allocator.alloc(u8, 192 * 1024) catch {
@@ -3495,7 +3504,7 @@ fn apiPodcasts(stream: std.Io.net.Stream, api_path: []const u8, query: []const u
     };
     defer allocator.free(json_buf);
     var w = std.Io.Writer.fixed(json_buf);
-    w.print("{{\"generation\":{d},\"results\":[", .{view.generation}) catch return;
+    w.print("{{\"generation\":{d},\"fetch_error\":{s},\"episodes_failed\":{s},\"results\":[", .{ view.generation, if (view.fetch_error) "true" else "false", if (view.episodes_failed) "true" else "false" }) catch return;
     for (0..view.result_count) |ri| {
         const r = view.results[ri];
         if (r.name_len == 0) continue;
@@ -4194,6 +4203,11 @@ fn apiPartyCast(stream: std.Io.net.Stream, api_path: []const u8, query: []const 
 }
 
 fn apiComics(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
+    if (std.mem.eql(u8, api_path, "/comics/more")) {
+        @import("comics.zig").loadMoreResults();
+        sendJson(stream, "{\"ok\":true}");
+        return;
+    }
     if (std.mem.eql(u8, api_path, "/comics/load")) {
         if (getQueryParam(query, "url")) |url| {
             var decoded: [512]u8 = undefined;
@@ -4218,12 +4232,15 @@ fn apiComics(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
     }
     if (std.mem.eql(u8, api_path, "/comics/results")) {
         const comics_svc = @import("comics.zig");
+        comics_svc.loadPopularOnce();
         const a = @import("../core/alloc.zig").allocator;
         // 120 rows × (url + title + cover url) — heap, not the thread stack.
         const json_buf = a.alloc(u8, 96 * 1024) catch return;
         defer a.free(json_buf);
         var w = std.Io.Writer.fixed(json_buf);
-        w.print("{{\"loading\":{s},\"results\":[", .{
+        w.print("{{\"loading_more\":{s},\"has_more\":{s},\"loading\":{s},\"results\":[", .{
+            if (comics_svc.loadingMoreResults()) "true" else "false",
+            if (comics_svc.hasMoreResults()) "true" else "false",
             if (comics_svc.searching()) "true" else "false",
         }) catch return;
         var i: usize = 0;

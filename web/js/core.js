@@ -383,7 +383,9 @@ function stopPageWork(){
   // page (they otherwise keep hitting the server for ~36s). clearInterval on a
   // null/stale handle is a harmless no-op.
   clearInterval(searchWatch); clearInterval(animeWatch); clearInterval(podWatch); clearInterval(jfWatch); clearInterval(ytWatch); clearInterval(aiWatch); clearInterval(muWatch); clearInterval(raWatch);
-  clearInterval(animeEpisodeWatch); clearInterval(animePlaybackWatch); ++animeEpisodeGeneration;
+  clearInterval(podEpisodeWatch); ++podGeneration; ++podEpisodeGeneration;
+  ++comicGeneration; ++comicSearchGeneration; ++radioGeneration;
+  clearInterval(animeEpisodeWatch); clearInterval(animePlaybackWatch); ++animeEpisodeGeneration; ++animeBrowseGeneration;
   clearInterval(cxWatch); clearInterval(cxPages); clearInterval(nvWatch); clearInterval(drWatch);
   clearInterval(vnWatch); clearInterval(absWatch); clearInterval(opWatch); clearInterval(plWatch);
   clearInterval(browseWatch); clearTimeout(browseDebounce);

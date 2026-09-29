@@ -174,7 +174,7 @@ def test_web_ui_music_radio():
         "music exposes stream url": "s.play_url[0..@min(s.play_url_len, s.play_url.len)]" in rm,
         "radio prefers resolved url": "url_resolved_len > 0" in rm,
         # Big result arrays -> heap, not the spawned-thread stack.
-        "responses heap-allocated": rm.count("alloc.alloc(u8, 96 * 1024)") >= 2,
+        "responses heap-allocated": "alloc.alloc(u8," in _between(rm, "fn apiMusic(", "fn apiRadio(") and "alloc.alloc(u8," in _between(rm, "fn apiRadio(", "fn apiAi("),
         # Web tabs.
         "music tab": 'data-page="music"' in ui and 'id="page-music"' in ui and "function runMusic(" in ui,
         "radio tab": 'data-page="radio"' in ui and 'id="page-radio"' in ui and "function runRadio(" in ui,
@@ -946,10 +946,10 @@ def test_server_item_details_dialog():
         "comic and novel details": all(marker in media for marker in ("comic-details", "novel-details", "source === 'Comic'", "source === 'Novel'")),
         "catalog details": all(marker in media for marker in ("drama-details", "vndb-details", "sourceArtUrl")),
         "RSS details": "rss-details" in discovery and "source === 'RSS'" in media,
-        "music radio and anime details": all(marker in media for marker in (
+        "music radio and anime details": all(marker in media + discovery for marker in (
             "music-details", "radio-details", "anime-details", "source === 'Music'", "source === 'Radio'", "source === 'Anime'",
         )),
-        "music and radio queue actions": all(marker in media for marker in (
+        "music and radio queue actions": all(marker in media + discovery for marker in (
             'data-queue="${i}"', "queueMedia(song.url", "queueMedia(station.url",
         )),
         "live TV and YouTube details": all(marker in discovery for marker in (

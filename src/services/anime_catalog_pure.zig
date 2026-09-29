@@ -142,3 +142,39 @@ test "AnimePahe matches title aliases and actual episode sessions" {
     try std.testing.expectEqual(@as(usize, 2), paheRelease(eps.value, 3, 1).?.page);
     try std.testing.expect(paheRelease(eps.value, 0, 1) == null);
 }
+
+/// Official release index: require the exact title and episode, then choose
+/// the best available resolution up to 1080p. Never substitute another episode.
+pub fn subsPleaseRelease(root: std.json.Value, title: []const u8, alias: []const u8, ep: usize) ?[]const u8 {
+    if (root != .object or ep == 0) return null;
+    var it = root.object.iterator();
+    var chosen: ?[]const u8 = null;
+    var best: usize = 0;
+    while (it.next()) |entry| {
+        const row = entry.value_ptr.*;
+        const show = string(field(row, "show"));
+        if (!titleMatches(title, show) and !titleMatches(alias, show)) continue;
+        const episode_value = field(row, "episode");
+        const episode_number = if (episode_value == .string) std.fmt.parseInt(usize, episode_value.string, 10) catch continue else number(episode_value);
+        if (episode_number != ep) continue;
+        const downloads = field(row, "downloads");
+        if (downloads != .array) continue;
+        for (downloads.array.items) |download| {
+            const resolution = std.fmt.parseInt(usize, string(field(download, "res")), 10) catch continue;
+            const magnet = string(field(download, "magnet"));
+            if (resolution > 1080 or resolution <= best or !std.mem.startsWith(u8, magnet, "magnet:?xt=urn:btih:") or magnet.len > 2048) continue;
+            best = resolution;
+            chosen = magnet;
+        }
+    }
+    return chosen;
+}
+
+test "SubsPlease release selection matches exact series and episode" {
+    const doc = try std.json.parseFromSlice(std.json.Value, std.testing.allocator,
+        \\{"wrong":{"show":"Example Season 2","episode":"2","downloads":[{"res":"1080","magnet":"magnet:?xt=urn:btih:wrong"}]},"right":{"show":"Example","episode":"2","downloads":[{"res":"480","magnet":"magnet:?xt=urn:btih:low"},{"res":"1080","magnet":"magnet:?xt=urn:btih:right"}]}}
+    , .{});
+    defer doc.deinit();
+    try std.testing.expectEqualStrings("magnet:?xt=urn:btih:right", subsPleaseRelease(doc.value, "Example", "", 2).?);
+    try std.testing.expect(subsPleaseRelease(doc.value, "Example", "", 1) == null);
+}
