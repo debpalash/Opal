@@ -1314,6 +1314,19 @@ def test_linux_compat_static_helper():
     return "pass", "real static musl and dynamic glibc binaries follow the correct packaging path"
 
 
+@test("Private ELF dependencies are relocated before compatibility packaging", "Packaging")
+def test_linux_compat_private_needed():
+    if "relocate_private_libraries(binary, LIB)" not in _src("packaging/linux-compat/stage.py") or "OPAL_REQUIRE_PATCHELF=1 python3 tests/test_linux_compat_elf.py" not in _src("packaging/linux-compat/Dockerfile"):
+        return "fail", "absolute private dependencies or required native regression missing"
+    if not (os.environ.get("OPAL_TEST_PATCHELF") or shutil.which("patchelf")):
+        return "skip", "patchelf absent locally; required real ELF relocation regression runs in native compatibility CI"
+    result = subprocess.run([sys.executable, "tests/test_linux_compat_elf.py", "CompatElfTests.test_absolute_private_dependency_is_relocated_and_missing_library_rejected"], cwd=PROJECT_DIR,
+                            capture_output=True, text=True, timeout=190)
+    if result.returncode:
+        return "fail", (result.stderr or result.stdout)[-1200:]
+    return "pass", "actual ELF build-prefix dependency resolves beside the app; omitted libraries are rejected"
+
+
 @test("Compatibility Debian package preserves both launchers and nested resources", "Packaging")
 def test_linux_compat_manifest_tree():
     if "type: tree" not in _src("packaging/linux-compat/nfpm.yaml") or "tests/test_linux_compat_manifest.py" not in _src(".github/workflows/linux-compat.yml"):
