@@ -4,6 +4,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+from elf import has_dynamic_segment
 
 ROOT = Path('/compat-root')
 LIB = ROOT / 'usr/lib/opal'
@@ -27,7 +28,8 @@ for source in Path('/opt/opal-runtime/lib').glob('*.so*'):
 for binary in LIB.iterdir():
     if not binary.is_file() or binary.read_bytes()[:4] != b'\x7fELF':
         continue
-    subprocess.run(['patchelf', '--set-rpath', '$ORIGIN', str(binary)], check=True)
+    if has_dynamic_segment(binary):
+        subprocess.run(['patchelf', '--set-rpath', '$ORIGIN', str(binary)], check=True)
     versions = subprocess.check_output(['readelf', '--version-info', str(binary)], text=True)
     required = [tuple(map(int, x.split('.'))) for x in re.findall(r'\bGLIBC_(\d+\.\d+(?:\.\d+)?)', versions)]
     if any(version > (2, 31) for version in required):

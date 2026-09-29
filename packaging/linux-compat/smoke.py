@@ -10,10 +10,11 @@ import time
 import urllib.request
 import urllib.parse
 import urllib.error
+from elf import has_dynamic_segment
 
 assert subprocess.check_output(['getconf', 'GNU_LIBC_VERSION'], text=True).strip() == 'glibc ' + os.environ.get('EXPECTED_GLIBC', '2.31')
 for binary in Path('/usr/lib/opal').iterdir():
-    if binary.is_file() and binary.read_bytes()[:4] == b'\x7fELF':
+    if binary.is_file() and binary.read_bytes()[:4] == b'\x7fELF' and has_dynamic_segment(binary):
         linked = subprocess.run(['ldd', str(binary)], text=True, capture_output=True)
         assert linked.returncode == 0 and 'not found' not in linked.stdout, (binary, linked.stdout, linked.stderr)
 # Import the actual packaged search engines on the distribution's Python

@@ -1303,6 +1303,17 @@ def test_linux_compatibility_release_gate():
     return "pass", "release blocked until Focal package, decoder and both actual install layouts pass"
 
 
+@test("Compatibility packaging distinguishes static and dynamic ELF", "Packaging")
+def test_linux_compat_static_helper():
+    if "has_dynamic_segment(binary)" not in _src("packaging/linux-compat/stage.py") or "has_dynamic_segment(binary)" not in _src("packaging/linux-compat/smoke.py") or "elf.py /tmp/elf.py" not in _src("packaging/linux-compat/smoke.Dockerfile"):
+        return "fail", "static helper handling missing from staging or actual package smoke"
+    result = subprocess.run([sys.executable, "tests/test_linux_compat_elf.py"], cwd=PROJECT_DIR,
+                            capture_output=True, text=True, timeout=190)
+    if result.returncode:
+        return "fail", (result.stderr or result.stdout)[-1200:]
+    return "pass", "real static musl and dynamic glibc binaries follow the correct packaging path"
+
+
 @test("Release tag matches the actual app version", "Packaging")
 def test_release_version_match():
     from importlib.util import module_from_spec, spec_from_file_location
