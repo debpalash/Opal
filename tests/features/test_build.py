@@ -1340,6 +1340,19 @@ def test_linux_compat_manifest_tree():
     return "pass", "actual nfpm manifest retains distinct launchers, engine resources and license paths"
 
 
+@test("Compatibility CI supplies its pinned cached Zig SDK to Docker", "Packaging")
+def test_linux_compat_cached_sdk():
+    workflow = _src(".github/workflows/linux-compat.yml")
+    docker = _src("packaging/linux-compat/Dockerfile")
+    if workflow.count("build-contexts: cached_zig=${{ steps.sdk.outputs.path }}") != 2 or "FROM ${OPAL_ZIG_SOURCE} AS zig-toolchain" not in docker or 'zig version)" = 0.16.0' not in docker or "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00" not in docker:
+        return "fail", "cached SDK selection, pinned version or standalone checksum missing"
+    result = subprocess.run([sys.executable, "tests/test_linux_compat_toolchain.py"], cwd=PROJECT_DIR,
+                            capture_output=True, text=True, timeout=100)
+    if result.returncode:
+        return "fail", (result.stderr or result.stdout)[-1200:]
+    return "pass", "production SDK locator validates symlinks, version and standard library before Docker imports it"
+
+
 @test("Release tag matches the actual app version", "Packaging")
 def test_release_version_match():
     from importlib.util import module_from_spec, spec_from_file_location

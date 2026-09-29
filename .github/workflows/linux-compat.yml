@@ -16,6 +16,14 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Locate cached Linux SDK
+        id: sdk
+        run: |
+          opal_sdk_root=$(python3 scripts/linux-compat-zig-root.py)
+          echo "path=$opal_sdk_root" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@v3
       - name: Build and cache media foundation
         uses: docker/build-push-action@v6
@@ -34,6 +42,8 @@ jobs:
           context: .
           file: packaging/linux-compat/Dockerfile
           target: runtime-deps
+          build-contexts: cached_zig=${{ steps.sdk.outputs.path }}
+          build-args: OPAL_ZIG_SOURCE=cached_zig
           platforms: linux/amd64
           cache-from: |
             type=gha,scope=linux-compat-media
@@ -47,7 +57,10 @@ jobs:
           target: artifacts
           platforms: linux/amd64
           outputs: type=local,dest=compat-artifacts
-          build-args: OPAL_BUILD_CACHE_KEY=${{ inputs.release && github.run_id || 'preview' }}
+          build-contexts: cached_zig=${{ steps.sdk.outputs.path }}
+          build-args: |
+            OPAL_ZIG_SOURCE=cached_zig
+            OPAL_BUILD_CACHE_KEY=${{ inputs.release && github.run_id || 'preview' }}
           cache-from: |
             type=gha,scope=linux-compat-media
             type=gha,scope=linux-compat
