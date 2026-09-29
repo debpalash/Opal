@@ -49,6 +49,7 @@ contents:
 overrides:
   deb:
     depends:
+      - libc6 (>= 2.38)
       - libmpv2
       - libsqlite3-0
       - libsdl2-2.0-0

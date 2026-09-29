@@ -26,6 +26,10 @@
 #                          .msi installer or the portable .zip from
 #                          https://github.com/debpalash/Opal/releases
 #
+# Prebuilt Linux artifacts require glibc 2.38 or newer. Older hosts need a
+# source build with the documented native-library versions, or an OS upgrade.
+# OPAL_SYSTEM and AppImage do not bypass this runtime requirement.
+#
 # Every download is verified against the release's SHA256SUMS.txt.
 set -eu
 
@@ -264,9 +268,43 @@ install_linux_local() {
     say "run now: $bindir/opal"
 }
 
+require_linux_glibc() {
+    # All Linux release formats carry the same Ubuntu-built executable. Check
+    # before downloading or changing an existing install: .deb extraction and
+    # AppImage cannot make a newer glibc ABI work on an older host (#100).
+    have getconf || die "cannot check the Linux runtime: getconf is required (glibc 2.38 or newer)"
+    libc_info=$(getconf GNU_LIBC_VERSION 2>/dev/null) \
+        || die "prebuilt Linux releases require glibc 2.38 or newer; could not detect glibc. See https://github.com/$REPO#building-from-source"
+    case "$libc_info" in
+        'glibc '*) libc_version=${libc_info#glibc } ;;
+        *) die "prebuilt Linux releases require glibc 2.38 or newer; detected: $libc_info" ;;
+    esac
+    case "$libc_version" in
+        *.*) ;;
+        *) die "could not parse glibc version: $libc_version" ;;
+    esac
+    libc_major=${libc_version%%.*}
+    libc_minor=${libc_version#*.}
+    libc_minor=${libc_minor%%.*}
+    case "$libc_major" in
+        ''|*[!0-9]*) die "could not parse glibc version: $libc_version" ;;
+    esac
+    case "$libc_minor" in
+        ''|*[!0-9]*) die "could not parse glibc version: $libc_version" ;;
+    esac
+    if [ "$libc_major" -lt 2 ] || { [ "$libc_major" -eq 2 ] && [ "$libc_minor" -lt 38 ]; }; then
+        die "this release requires glibc 2.38 or newer; detected glibc $libc_version.
+  Ubuntu 20.04/22.04, Debian 12 and Mint 21 cannot run the prebuilt Linux artifacts.
+  Use Ubuntu 24.04+, Debian 13+, or build from source with the required native libraries:
+  https://github.com/$REPO#building-from-source
+  Changing OPAL_SYSTEM or using AppImage does not fix an incompatible runtime."
+    fi
+}
+
 install_linux() {
     arch=$(uname -m)
     [ "$arch" = "x86_64" ] || die "no prebuilt $arch Linux binaries yet — build from source: https://github.com/$REPO#get-it"
+    require_linux_glibc
 
     case "${OPAL_SYSTEM:-0}" in
         0) install_linux_local ;;

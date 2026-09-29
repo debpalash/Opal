@@ -74,6 +74,13 @@ helper, opt in explicitly (root or `sudo` is required):
 curl -fsSL https://raw.githubusercontent.com/debpalash/Opal/main/scripts/install.sh | OPAL_SYSTEM=1 sh
 ```
 
+**Linux release requirements:** all prebuilt formats require **glibc 2.38+**.
+For the `.deb`, use Ubuntu **24.04+** or Debian **13+**, with `libmpv2` and
+`libtorrent-rasterbar2.0` available in your configured repositories. Ubuntu
+20.04/22.04, Debian 12 and Mint 21 need an OS upgrade or a source build with
+the native-library versions below. User-local installation and AppImage have
+the same glibc requirement; switching formats does not add older OS support.
+
 Or pick your row — every file is on [Releases](../../releases):
 
 |  | Platform | Install |
@@ -84,7 +91,7 @@ Or pick your row — every file is on [Releases](../../releases):
 | 🎩 | **Fedora / openSUSE** | `sudo dnf install ./opal-*.x86_64.rpm` |
 | 🏹 | **Arch / Omarchy / Pacman** | `sudo pacman -U ./opal-*-x86_64.pkg.tar.zst` |
 | 📚 | **AUR** | `yay -S opal-media-player-bin` (or `opal-media-player` to build) |
-| 🐧 | **Any Linux** | `chmod +x Opal-*.AppImage` and run it |
+| 🐧 | **Linux (glibc 2.38+)** | `chmod +x Opal-*.AppImage` and run it |
 | 🪟 | **Windows** (x64) — **alpha** | run the `.msi` — or unzip the portable `.zip` |
 | 🛠 | **From source** | `git clone` → `zig build run` |
 
@@ -148,6 +155,7 @@ open local files instead. Add a free **TMDB v4 token** in **Settings**
 opt-in; nothing downloads itself. Reopen the welcome screen from
 **Settings → About**.
 
+<a id="building-from-source"></a>
 <details>
 <summary><b>🧱 Building from source</b></summary>
 
@@ -174,13 +182,17 @@ closure. Instead of `brew install mpv ffmpeg`, install
 before `zig build run`. These build shared libraries from checksum-pinned
 source with macOS 13 as the minimum deployment target.
 
-**Minimum versions (Linux):** libmpv **0.34** or newer (mpv 0.38+ recommended;
+**Minimum versions (Linux source builds):** libtorrent-rasterbar **2.0** or
+newer and libmpv **0.34** or newer (mpv 0.38+ recommended;
 Ubuntu 22.04's 0.34 works — Opal picks the `loadfile` argument shape from the
 library version at runtime), SDL **2.0.22** or newer when building against the
 system SDL via `make run` (jammy's 2.0.20 lacks `SDL_PIXELFORMAT_RGBX32`; the
 default `zig build run` bundles a new-enough SDL, X11 only), and the prebuilt
-AppImage needs **glibc 2.38** (Debian 12 / Mint 21: build from source instead). A rejected `loadfile` is now reported in the app's log and as
-a toast rather than hanging on "Opening stream".
+Linux artifacts need **glibc 2.38** (Debian 12 / Mint 21: build from source
+instead). Ubuntu 20.04's stock mpv and libtorrent are below the source-build
+minimums; those libraries also need upgrading before compiling. A rejected
+`loadfile` is now reported in the app's log and as a toast rather than hanging
+on "Opening stream".
 
 </details>
 
