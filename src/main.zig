@@ -2,6 +2,7 @@ test "Anime playback module" {
     _ = @import("services/anime.zig");
 }
 test "Browse regression modules" {
+    _ = @import("services/comics.zig");
     _ = @import("core/latest_request.zig");
     _ = @import("services/tmdb_api.zig");
     _ = @import("services/tmdb_parse.zig");

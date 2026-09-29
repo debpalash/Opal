@@ -191,10 +191,21 @@ pub fn buildPopularUrl(limit: usize, offset: usize, dst: []u8) []const u8 {
 /// small.
 pub fn buildSearchUrl(encoded: []const u8, limit: usize, offset: usize, dst: []u8) []const u8 {
     const n = std.math.clamp(limit, 1, 100);
+    var term = encoded;
+    var key: []const u8 = "name";
+    for ([_][]const u8{ "tag", "country" }) |filter| {
+        if (encoded.len > filter.len + 3 and std.ascii.eqlIgnoreCase(encoded[0..filter.len], filter) and
+            std.ascii.eqlIgnoreCase(encoded[filter.len..][0..3], "%3A"))
+        {
+            key = filter;
+            term = encoded[filter.len + 3 ..];
+            break;
+        }
+    }
     return std.fmt.bufPrint(
         dst,
-        "https://all.api.radio-browser.info/json/stations/search?name={s}&limit={d}&offset={d}&hidebroken=true&order=votes&reverse=true",
-        .{ encoded, n, offset },
+        "https://all.api.radio-browser.info/json/stations/search?{s}={s}&limit={d}&offset={d}&hidebroken=true&order=votes&reverse=true",
+        .{ key, term, n, offset },
     ) catch "";
 }
 
@@ -361,4 +372,23 @@ test "parseStations regression: malformed JSON never panics" {
     _ = parseStations("\"stationuuid\":\"y\",\"url\":\"http:\\/\\/", &out);
     _ = parseStations("\"stationuuid\":\"stationuuid\":\"stationuuid\":", &out);
     _ = parseStations("[{\"stationuuid\":\"z\",\"name\":\"n\",\"url\":\"u\",\"bitrate\":99999999999999}]", &out);
+}
+
+pub fn mirrorUrl(url: []const u8, attempt: usize, out: []u8) ?[]const u8 {
+    const base = "https://all.api.radio-browser.info";
+    const mirrors = [_][]const u8{ base, "https://de1.api.radio-browser.info", "https://de2.api.radio-browser.info" };
+    if (attempt >= mirrors.len or !std.mem.startsWith(u8, url, base ++ "/")) return null;
+    return std.fmt.bufPrint(out, "{s}{s}", .{ mirrors[attempt], url[base.len..] }) catch null;
+}
+
+test "radio directory failover preserves search and page cursor" {
+    var b: [400]u8 = undefined;
+    try std.testing.expectEqualStrings("https://de2.api.radio-browser.info/json/stations/search?name=jazz&offset=30", mirrorUrl("https://all.api.radio-browser.info/json/stations/search?name=jazz&offset=30", 2, &b).?);
+    try std.testing.expect(mirrorUrl("https://unrelated.test/path", 1, &b) == null);
+}
+
+test "radio searches genre and country without treating filters as station names" {
+    var b: [512]u8 = undefined;
+    try std.testing.expect(std.mem.indexOf(u8, buildSearchUrl("tag%3Ajazz", 30, 0, &b), "?tag=jazz&") != null);
+    try std.testing.expect(std.mem.indexOf(u8, buildSearchUrl("country%3AIndia", 30, 30, &b), "?country=India&") != null);
 }

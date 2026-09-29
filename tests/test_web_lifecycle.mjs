@@ -55,7 +55,7 @@ function fixture(...files){
   window.navigator = {};
   const context = vm.createContext({
     $, Element, BASE:'http://fixture.invalid', AUTHENTICATED:true,
-    api:request, apiMutation:request, esc:String, lastHtml:{},
+    api:request, apiMutation:request, esc:String, lastHtml:{}, destinationActionLabel:verb => verb,
     URL, URLSearchParams, console, rendered, network, performance,
     requestAnimationFrame:fn => { fn(); return 1; },
     PerformanceObserver:class {
@@ -394,4 +394,79 @@ test('authentication and online recovery invoke the owned status lifecycle', () 
   assert.equal(f.run('pageStops'), 1);
   f.window.listeners.get('online')();
   assert.equal(f.run('starts'), 1);
+});
+
+test('podcast landing keeps polling while the catalog loads', async () => {
+  const f = fixture('media.js', 'discovery.js');
+  f.run('let poll; settledInterval = callback => { poll = callback; return 1; };');
+  const loading = f.run('loadPodcasts()');
+  f.take('/podcasts').resolve({results:[], loading:true});
+  await loading;
+  assert.equal(f.run('typeof poll'), 'function');
+  const next = f.run('poll()');
+  f.take('/podcasts').resolve({results:[{name:'Science', artist:'Publisher'}], loading:false});
+  await next;
+  assert.match(f.$('pod-results').innerHTML, /Science/);
+});
+
+test('podcast episodes discard responses from a previously selected show', async () => {
+  const f = fixture('media.js', 'discovery.js');
+  f.run('let poll; settledInterval = callback => { poll = callback; return 1; };');
+  const first = f.run('loadPodEpisodes(0)');
+  f.take('/podcasts/episodes?idx=0').resolve({ok:true}); await first;
+  const stale = f.run('poll()'); const response = f.take('/podcasts');
+  const second = f.run('loadPodEpisodes(1)');
+  f.take('/podcasts/episodes?idx=1').resolve({ok:true}); await second;
+  response.resolve({selected:0, episodes:[{title:'Wrong show'}], episodes_loading:false});
+  await stale;
+  assert.doesNotMatch(f.$('pod-episodes').innerHTML, /Wrong show/);
+});
+
+test('closing the comic reader invalidates an in-flight page response', async () => {
+  const f = fixture('media.js');
+  f.run('let poll; settledInterval = callback => { poll = callback; return 1; };');
+  const opening = f.run("openComic('https://comic.test/issue')");
+  f.take('/comics/load?url=https%3A%2F%2Fcomic.test%2Fissue').resolve({ok:true}); await opening;
+  const stale = f.run('poll()'); const response = f.take('/comics');
+  f.run('closeComic()');
+  response.resolve({title:'Old comic',pages:1,downloaded:1,loading:false}); await stale;
+  assert.equal(f.$('cx-pages').innerHTML, '');
+});
+
+test('comics render bounded cover cards and keep the read action', () => {
+  const f = fixture('media.js');
+  f.run("renderComics([{title:'A manga', cover:'https://cover.test/book.jpg', url:'mangadex:fixture'}])");
+  assert.match(f.$('cx-results').innerHTML, /class="card /);
+  assert.match(f.$('cx-results').innerHTML, /loading="lazy" decoding="async"/);
+  assert.match(f.$('cx-results').innerHTML, /data-cx="mangadex%3Afixture"/);
+});
+
+test('radio responses cannot overwrite a newer search generation', async () => {
+  const f = fixture('media.js', 'discovery.js');
+  const first = f.run('loadRadio()');
+  const old = f.take('/radio');
+  f.run('++radioGeneration');
+  old.resolve({stations:[{name:'Old station'}],loading:false});
+  await first;
+  assert.doesNotMatch(f.$('ra-results').innerHTML, /Old station/);
+});
+
+test('anime responses cannot overwrite a newer browse generation', async () => {
+  const f = fixture('media.js');
+  const first = f.run('loadAnime()');
+  const old = f.take('/anime');
+  f.run('++animeBrowseGeneration');
+  old.resolve({results:[{name:'Old anime'}],loading:false});
+  await first;
+  assert.doesNotMatch(f.$('anime-results').innerHTML, /Old anime/);
+});
+
+test('comic search responses cannot overwrite a newer query', async () => {
+  const f = fixture('media.js');
+  const first = f.run('refreshComics()');
+  const old = f.take('/comics/results');
+  f.run('++comicSearchGeneration');
+  old.resolve({results:[{title:'Old manga',url:'old'}],loading:false});
+  await first;
+  assert.doesNotMatch(f.$('cx-results').innerHTML, /Old manga/);
 });

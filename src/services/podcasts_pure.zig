@@ -158,9 +158,46 @@ fn xmlTag(block: []const u8, open: []const u8, close: []const u8) ?[]const u8 {
 /// Pull an attribute value: finds `attr` (e.g. `url="`) inside `block` and reads
 /// to the next `"`. Used for `<enclosure url="…">`.
 fn xmlAttr(block: []const u8, attr: []const u8) ?[]const u8 {
-    const s = (std.mem.indexOf(u8, block, attr) orelse return null) + attr.len;
-    const e = std.mem.indexOfScalarPos(u8, block, s, '"') orelse return null;
-    return block[s..e];
+    const key = std.mem.trimEnd(u8, attr, "=\"");
+    var offset: usize = 0;
+    while (std.mem.indexOfPos(u8, block, offset, key)) |at| {
+        offset = at + key.len;
+        if (at > 0 and !std.ascii.isWhitespace(block[at - 1])) continue;
+        var rest = std.mem.trimStart(u8, block[offset..], " \t\r\n");
+        if (rest.len == 0 or rest[0] != '=') continue;
+        rest = std.mem.trimStart(u8, rest[1..], " \t\r\n");
+        if (rest.len < 2 or (rest[0] != '\'' and rest[0] != '"')) continue;
+        const end = std.mem.indexOfScalarPos(u8, rest, 1, rest[0]) orelse return null;
+        return rest[1..end];
+    }
+    return null;
+}
+
+fn xmlText(dst: []u8, src: []const u8) usize {
+    var i: usize = 0;
+    var n: usize = 0;
+    while (i < src.len and n < dst.len) {
+        if (src[i] == '&') {
+            if (std.mem.indexOfScalarPos(u8, src, i, ';')) |end| {
+                const entity = src[i + 1 .. end];
+                const code: ?u21 = if (std.mem.eql(u8, entity, "amp")) '&' else if (std.mem.eql(u8, entity, "quot")) '"' else if (std.mem.eql(u8, entity, "apos")) '\'' else if (std.mem.eql(u8, entity, "lt")) '<' else if (std.mem.eql(u8, entity, "gt")) '>' else if (std.mem.startsWith(u8, entity, "#x")) std.fmt.parseInt(u21, entity[2..], 16) catch null else if (std.mem.startsWith(u8, entity, "#")) std.fmt.parseInt(u21, entity[1..], 10) catch null else null;
+                if (code) |cp| {
+                    var bytes: [4]u8 = undefined;
+                    const len = std.unicode.utf8Encode(cp, &bytes) catch 0;
+                    if (len > 0 and n + len <= dst.len) {
+                        @memcpy(dst[n..][0..len], bytes[0..len]);
+                        n += len;
+                        i = end + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        dst[n] = src[i];
+        n += 1;
+        i += 1;
+    }
+    return n;
 }
 
 fn copyInto(dst: []u8, src: []const u8) usize {
@@ -304,16 +341,16 @@ pub fn parseRssEpisodes(xml: []const u8, out: []Episode) usize {
         if (std.mem.indexOf(u8, block, "<enclosure")) |enc_at| {
             const enc_end = std.mem.indexOfScalarPos(u8, block, enc_at, '>') orelse block.len;
             const enc = block[enc_at..@min(enc_end + 1, block.len)];
-            if (xmlAttr(enc, "url=\"")) |u| e.audio_url_len = copyInto(&e.audio_url, u);
+            if (xmlAttr(enc, "url=\"")) |u| e.audio_url_len = xmlText(&e.audio_url, u);
         }
         if (e.audio_url_len == 0) continue;
 
-        if (xmlTag(block, "<title>", "</title>")) |t| e.title_len = copyInto(&e.title, t);
+        if (xmlTag(block, "<title>", "</title>")) |t| e.title_len = xmlText(&e.title, t);
         if (e.title_len == 0) continue;
 
-        if (xmlTag(block, "<pubDate>", "</pubDate>")) |d| e.date_len = copyInto(&e.date, d);
+        if (xmlTag(block, "<pubDate>", "</pubDate>")) |d| e.date_len = xmlText(&e.date, d);
         if (xmlTag(block, "<itunes:duration>", "</itunes:duration>")) |d|
-            e.duration_len = copyInto(&e.duration, d);
+            e.duration_len = xmlText(&e.duration, d);
 
         count += 1;
     }
@@ -551,4 +588,84 @@ test "podcast deep link: an episode title containing '|' survives" {
     var buf: [1024]u8 = undefined;
     const link = formatDeepLink(&buf, "https://cdn.x/e.mp3", "", "Show", "Ep 4 | Part 2");
     try std.testing.expectEqualStrings("Ep 4 | Part 2", parseDeepLink(link).?.title);
+}
+
+/// gpodder.net is an independent, keyless directory with direct RSS URLs.
+pub fn parseGpodder(a: std.mem.Allocator, json: []const u8, out: []Podcast) usize {
+    const doc = std.json.parseFromSlice(std.json.Value, a, json, .{}) catch return 0;
+    defer doc.deinit();
+    if (doc.value != .array) return 0;
+    var n: usize = 0;
+    for (doc.value.array.items) |row| {
+        if (n == out.len) break;
+        if (row != .object) continue;
+        const title = jsonValueString(row.object.get("title"));
+        const feed = jsonValueString(row.object.get("url"));
+        if (title.len == 0 or !isFeedUrl(feed) or feed.len > out[n].feed_url.len) continue;
+        out[n] = .{};
+        out[n].name_len = copyInto(&out[n].name, title);
+        out[n].feed_url_len = copyInto(&out[n].feed_url, feed);
+        out[n].artist_len = copyInto(&out[n].artist, jsonValueString(row.object.get("author")));
+        out[n].artwork_len = copyInto(&out[n].artwork, jsonValueString(row.object.get("logo_url")));
+        n += 1;
+    }
+    return n;
+}
+
+fn jsonValueString(value: ?std.json.Value) []const u8 {
+    const v = value orelse return "";
+    return if (v == .string) v.string else "";
+}
+
+pub fn isFeedUrl(url: []const u8) bool {
+    return std.mem.startsWith(u8, url, "https://") or std.mem.startsWith(u8, url, "http://");
+}
+
+pub fn parseFeedShow(xml: []const u8, url: []const u8) ?Podcast {
+    if (!isFeedUrl(url) or url.len > 300 or std.mem.indexOf(u8, xml, "<channel") == null) return null;
+    const channel = xml[0 .. std.mem.indexOf(u8, xml, "<item") orelse xml.len];
+    const title = xmlTag(channel, "<title>", "</title>") orelse return null;
+    var show: Podcast = .{};
+    show.name_len = xmlText(&show.name, title);
+    show.feed_url_len = copyInto(&show.feed_url, url);
+    if (xmlTag(channel, "<itunes:author>", "</itunes:author>")) |author| show.artist_len = xmlText(&show.artist, author);
+    if (std.mem.indexOf(u8, channel, "<itunes:image")) |at| {
+        const end = std.mem.indexOfScalarPos(u8, channel, at, '>') orelse channel.len;
+        if (xmlAttr(channel[at..end], "href=\"")) |art| show.artwork_len = xmlText(&show.artwork, art);
+    }
+    return show;
+}
+
+/// Preserve directory order and deduplicate shows shared by multiple catalogs.
+pub fn appendUnique(out: []Podcast, start: usize, incoming: []const Podcast) usize {
+    var n = @min(start, out.len);
+    rows: for (incoming) |row| {
+        if (n == out.len) break;
+        for (out[0..n]) |old| {
+            if (std.mem.eql(u8, old.feed_url[0..old.feed_url_len], row.feed_url[0..row.feed_url_len])) continue :rows;
+        }
+        out[n] = row;
+        n += 1;
+    }
+    return n;
+}
+
+test "independent podcast directory merges by feed URL and accepts direct RSS" {
+    var rows: [3]Podcast = undefined;
+    const n = parseGpodder(std.testing.allocator,
+        \\[{"title":"Science","url":"https://example.test/rss","author":"Publisher"},{"title":"Bad","url":"file:///tmp/no"}]
+    , &rows);
+    try std.testing.expectEqual(@as(usize, 1), n);
+    try std.testing.expectEqual(@as(usize, 1), appendUnique(&rows, n, rows[0..n]));
+    const show = parseFeedShow("<rss><channel><title>Independent show</title><item><title>Episode</title></item></channel></rss>", "https://example.test/feed").?;
+    try std.testing.expectEqualStrings("Independent show", show.name[0..show.name_len]);
+    try std.testing.expectEqual(@as(usize, 2), appendUnique(&rows, n, &.{show}));
+}
+
+test "RSS enclosures decode XML entities and accept single quoted attributes" {
+    var episodes: [2]Episode = undefined;
+    const n = parseRssEpisodes("<rss><channel><item><title>Science &amp; Space</title><enclosure url='https://cdn.test/audio.mp3?a=1&amp;b=2' type='audio/mpeg'/></item></channel></rss>", &episodes);
+    try std.testing.expectEqual(@as(usize, 1), n);
+    try std.testing.expectEqualStrings("https://cdn.test/audio.mp3?a=1&b=2", episodes[0].audio_url[0..episodes[0].audio_url_len]);
+    try std.testing.expectEqualStrings("Science & Space", episodes[0].title[0..episodes[0].title_len]);
 }

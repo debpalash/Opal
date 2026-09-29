@@ -238,58 +238,51 @@ pub fn loadPopularOnce() void {
     };
 }
 
-fn popularWorker(my_gen: u32) void {
-    defer search_request.finish(my_gen, &state.app.podcasts.is_loading);
-
-    // 1. Chart → the top shows' numeric ids (no feedUrl in this payload).
-    // Same story as the search endpoint: this is a fixed top-N chart snapshot
-    // with no offset/page param, so it's a one-shot bounded fetch too.
-    var chart_url_buf: [128]u8 = undefined;
-    const chart_url = pure.buildTopChartUrl(POPULAR_LIMIT, &chart_url_buf);
-    if (chart_url.len == 0) return;
-
-    const chart = fetchBody(chart_url, 128 * 1024) orelse {
-        if (search_request.isCurrent(my_gen)) state.app.podcasts.fetch_error = true;
-        return;
-    };
-    defer alloc.free(chart);
-    if (!search_request.isCurrent(my_gen)) return; // superseded by a search
-
-    var ids_buf: [512]u8 = undefined;
-    const ids = pure.parseTopChartIds(chart, &ids_buf);
-    if (ids.len == 0) {
-        if (search_request.isCurrent(my_gen)) state.app.podcasts.fetch_error = true;
-        return;
-    }
-
-    // 2. Lookup → the full show records (feedUrl + artwork + publisher).
-    var lookup_url_buf: [640]u8 = undefined;
-    const lookup_url = pure.buildLookupUrl(ids, &lookup_url_buf);
-    if (lookup_url.len == 0) return;
-
-    const body = fetchBody(lookup_url, 512 * 1024) orelse {
-        if (search_request.isCurrent(my_gen)) state.app.podcasts.fetch_error = true;
-        return;
-    };
-    defer alloc.free(body);
-    if (!search_request.isCurrent(my_gen)) return;
-
+fn publishShows(generation: u32, rows: []const pure.Podcast, failed: bool) void {
     parse_mutex.lock();
     defer parse_mutex.unlock();
-    if (!search_request.isCurrent(my_gen)) return; // re-check under lock
-
-    const count = pure.parseItunes(body, &state.app.podcasts.results);
-    state.app.podcasts.result_count = count;
-    publication_gen +%= 1;
-    if (count == 0) {
-        state.app.podcasts.fetch_error = true;
-        logs.pushLog("info", "podcasts", "Top shows returned no rows", false);
-    } else {
-        // SWR write: persist the fresh chart (still under parse_mutex) so the
-        // next cold start seeds instantly.
-        putPopularCache();
-        logs.pushLog("info", "podcasts", "Popular podcasts loaded (Apple top shows)", false);
+    if (!search_request.isCurrent(generation)) return;
+    if (rows.len > 0 or !failed) {
+        const n = @min(rows.len, state.app.podcasts.results.len);
+        @memcpy(state.app.podcasts.results[0..n], rows[0..n]);
+        state.app.podcasts.result_count = n;
+        publication_gen +%= 1;
     }
+    state.app.podcasts.fetch_error = failed;
+    if (state.app.podcasts.showing_popular and rows.len > 0) putPopularCache();
+    state.wakeUi();
+}
+
+fn popularWorker(my_gen: u32) void {
+    defer search_request.finish(my_gen, &state.app.podcasts.is_loading);
+    const rows = alloc.alloc(pure.Podcast, 50) catch return;
+    defer alloc.free(rows);
+    var count: usize = 0;
+    // The independent directory paints first; Apple enriches it when available.
+    if (fetchBody("https://gpodder.net/toplist/30.json", 512 * 1024)) |body| {
+        defer alloc.free(body);
+        count = pure.parseGpodder(alloc, body, rows);
+        publishShows(my_gen, rows[0..count], false);
+    }
+    if (!search_request.isCurrent(my_gen)) return;
+    const extra = alloc.alloc(pure.Podcast, 30) catch return;
+    defer alloc.free(extra);
+    const apple_count = fetchApplePopular(extra);
+    count = pure.appendUnique(rows, count, extra[0..apple_count]);
+    publishShows(my_gen, rows[0..count], count == 0);
+}
+
+fn fetchApplePopular(rows: []pure.Podcast) usize {
+    var chart_url_buf: [128]u8 = undefined;
+    const chart = fetchBody(pure.buildTopChartUrl(POPULAR_LIMIT, &chart_url_buf), 128 * 1024) orelse return 0;
+    defer alloc.free(chart);
+    var ids_buf: [512]u8 = undefined;
+    const ids = pure.parseTopChartIds(chart, &ids_buf);
+    if (ids.len == 0) return 0;
+    var lookup_url_buf: [640]u8 = undefined;
+    const body = fetchBody(pure.buildLookupUrl(ids, &lookup_url_buf), 512 * 1024) orelse return 0;
+    defer alloc.free(body);
+    return pure.parseItunes(body, rows);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -315,40 +308,48 @@ pub fn searchPodcasts(query: []const u8) void {
     };
 }
 
+// Both directory searches are bounded snapshots with no offset cursor.
 fn searchWorker(job: SearchJob) void {
     defer search_request.finish(job.generation, &state.app.podcasts.is_loading);
-
-    // Percent-encode the term (space, &, =, #, ?, %, + at minimum).
-    var enc: [768]u8 = undefined;
-    const encoded = percentEncode(job.query[0..job.query_len], &enc);
-
-    // No infinite scroll here: the classic iTunes Search API takes a `limit`
-    // (max 200) but has no offset/page cursor — it always returns the same
-    // single bounded result set, so a "load more" would just refetch page one.
-    var url_buf: [900]u8 = undefined;
-    const url = std.fmt.bufPrint(
-        &url_buf,
-        "https://itunes.apple.com/search?media=podcast&limit=40&term={s}",
-        .{encoded},
-    ) catch return;
-
-    const body = fetchBody(url, 256 * 1024) orelse {
-        if (search_request.isCurrent(job.generation)) state.app.podcasts.fetch_error = true;
+    const query = job.query[0..job.query_len];
+    if (pure.isFeedUrl(query)) {
+        const body = fetchBody(query, PODCAST_FEED_CAP) orelse {
+            publishShows(job.generation, &.{}, true);
+            return;
+        };
+        defer alloc.free(body);
+        const show = pure.parseFeedShow(body, query) orelse {
+            publishShows(job.generation, &.{}, true);
+            return;
+        };
+        publishShows(job.generation, &.{show}, false);
         return;
-    };
-    defer alloc.free(body);
-
-    // Bail if superseded while curl was in flight.
+    }
+    var enc: [768]u8 = undefined;
+    const encoded = percentEncode(query, &enc);
+    var url_buf: [900]u8 = undefined;
+    const rows = alloc.alloc(pure.Podcast, 50) catch return;
+    defer alloc.free(rows);
+    const extra = alloc.alloc(pure.Podcast, 50) catch return;
+    defer alloc.free(extra);
+    var count: usize = 0;
+    var succeeded = false;
+    const gpodder_url = std.fmt.bufPrint(&url_buf, "https://gpodder.net/search.json?q={s}", .{encoded}) catch return;
+    if (fetchBody(gpodder_url, 512 * 1024)) |body| {
+        defer alloc.free(body);
+        count = pure.parseGpodder(alloc, body, rows);
+        succeeded = std.mem.startsWith(u8, std.mem.trim(u8, body, " \r\n\t"), "[");
+        publishShows(job.generation, rows[0..count], !succeeded);
+    }
     if (!search_request.isCurrent(job.generation)) return;
-
-    parse_mutex.lock();
-    defer parse_mutex.unlock();
-    if (!search_request.isCurrent(job.generation)) return; // re-check under lock
-
-    const count = pure.parseItunes(body, &state.app.podcasts.results);
-    state.app.podcasts.result_count = count;
-    publication_gen +%= 1;
-    if (count == 0) logs.pushLog("info", "podcasts", "Search returned no shows", false) else logs.pushLog("info", "podcasts", "Podcast search done (iTunes)", false);
+    const url = std.fmt.bufPrint(&url_buf, "https://itunes.apple.com/search?media=podcast&limit=40&term={s}", .{encoded}) catch return;
+    if (fetchBody(url, 512 * 1024)) |body| {
+        defer alloc.free(body);
+        const n = pure.parseItunes(body, extra);
+        count = pure.appendUnique(rows, count, extra[0..n]);
+        succeeded = succeeded or std.mem.indexOf(u8, body, "\"results\"") != null;
+    }
+    publishShows(job.generation, rows[0..count], !succeeded);
 }
 
 // ══════════════════════════════════════════════════════════

@@ -199,6 +199,16 @@
       "file": "plugins/readallcomics.json"
     },
     {
+      "id": "subsplease",
+      "name": "SubsPlease (anime releases)",
+      "type": "anime",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://subsplease.org"
+      },
+      "note": "Exact title and episode release lookup; playback uses the torrent player. Requires an Opal build with the SubsPlease connector."
+    },
+    {
       "id": "animepahe",
       "name": "AnimePahe",
       "type": "anime",

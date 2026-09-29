@@ -376,3 +376,5 @@ licenses (libtorrent BSD, dvui/ONNX MIT, SDL2 zlib, SQLite public domain).
   local AI copilot · self-hosted Stremio & Kodi alternative · for macOS and Linux (Windows alpha).
   </sub>
 </div>
+
+Browse source details, supported discovery paths, and live-check limitations: [Browse sources](docs/browse-sources.md).

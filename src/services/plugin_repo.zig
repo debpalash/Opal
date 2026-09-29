@@ -702,10 +702,10 @@ pub fn installStarterPack() usize {
     catalog_mutex.lock();
     defer catalog_mutex.unlock();
     const starter_ids = [_][]const u8{
-        "apibay",      "one337x",       "yts",      "eztv",
-        "bitsearch",   "solidtorrents", "therarbg", "torrentgalaxy",
-        "torrentscsv", "limetorrents",  "torlock",  "glotorrents",
-        "nyaa",        "torrentio",
+        "apibay",      "one337x",       "yts",        "eztv",
+        "bitsearch",   "solidtorrents", "therarbg",   "torrentgalaxy",
+        "torrentscsv", "limetorrents",  "torlock",    "glotorrents",
+        "nyaa",        "torrentio",     "subsplease",
     };
     var installed: usize = 0;
     for (plugins[0..plugin_count]) |*pl| {

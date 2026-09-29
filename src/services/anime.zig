@@ -2120,6 +2120,20 @@ fn fetchStreamThread(job: PlaybackJob) void {
         resolved = scraperPlayThread(job);
         if (resolved) return;
     } else {
+        var release: PlaybackReady = .{ .job = job };
+        if (@import("anime_provider.zig").resolveSubsPlease(job.row.name[0..job.row.name_len], job.row.name_english[0..job.row.name_english_len], job.episode, &playback_request, job.generation, &release.torrent)) |magnet| {
+            release.torrent_len = magnet.len;
+            publishPlayback(release);
+            resolved = true;
+            return;
+        }
+        if (!playback_request.isCurrent(job.generation)) return;
+        if (@import("anime_provider.zig").resolveAllAnime(job.row.name[0..job.row.name_len], job.row.name_english[0..job.row.name_english_len], job.episode, &playback_request, job.generation)) |stream| {
+            publishPlayback(.{ .job = job, .stream = stream });
+            resolved = true;
+            return;
+        }
+        if (!playback_request.isCurrent(job.generation)) return;
         // An installed direct source can start without waiting on torrent search.
         if (@import("anime_provider.zig").resolvePahe(job.row.name[0..job.row.name_len], job.row.name_english[0..job.row.name_english_len], job.episode, &playback_request, job.generation)) |stream| {
             publishPlayback(.{ .job = job, .stream = stream });

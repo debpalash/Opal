@@ -74,7 +74,7 @@ fn renderSearchBar() void {
 
     const layout_w = @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().w, state.app.ui_scale);
     const search_w = @max(150, @min(280, layout_w - 280));
-    const entered = components.toolbarSearch(@src(), &state.app.podcasts.search_buf, "Search podcasts…", search_w);
+    const entered = components.toolbarSearch(@src(), &state.app.podcasts.search_buf, "Search podcasts or paste an RSS feed URL…", search_w);
     const go = components.toolbarGo(@src(), "Search");
 
     if (entered or go) {

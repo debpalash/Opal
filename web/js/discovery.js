@@ -212,30 +212,46 @@ $('yt-embed-close').onclick = () => { $('yt-frame').src = ''; $('yt-embed').clas
 // Server routes are async: /podcasts/search & /podcasts/episodes trigger
 // background work and return {ok:true}; poll GET /podcasts for
 // {results,episodes,selected,loading,episodes_loading}.
-let podWatch = null;
+let podWatch = null, podEpisodeWatch = null;
+let podGeneration = 0, podEpisodeGeneration = 0;
 async function loadPodcasts(){
-  try { renderPodcasts(await api('/podcasts')); } catch {}
+  const generation = ++podGeneration;
+  try {
+    const data = await api('/podcasts');
+    if (generation !== podGeneration) return;
+    renderPodcasts(data);
+    if (data.loading) pollPodcasts(generation);
+  } catch { $('pod-hint').textContent = 'Could not load podcasts. Try again.'; }
 }
-function renderPodcasts(d){ renderPodResults(d.results || []); renderPodEpisodes(d.episodes || []); }
+function renderPodcasts(d){
+  renderPodResults(d.results || []);
+  renderPodEpisodes(d.episodes || [], d);
+  $('pod-hint').textContent = d.fetch_error ? 'Podcast directory unavailable. Try again or paste an RSS feed URL.'
+    : d.loading ? 'Loading podcasts…' : `${(d.results || []).length} shows — choose one for episodes.`;
+}
 $('pod-go').onclick = () => runPodcasts();
 $('pod-q').addEventListener('keydown', e => { if (e.key === 'Enter') { runPodcasts(); $('pod-q').blur(); } });
-function runPodcasts(){
+async function runPodcasts(){
   const q = $('pod-q').value.trim(); if (!q) return;
-  $('pod-hint').innerHTML = '<span class="spin"></span> Searching podcasts…';
+  const generation = ++podGeneration;
+  ++podEpisodeGeneration; clearInterval(podEpisodeWatch); clearInterval(podWatch);
+  $('pod-hint').textContent = 'Searching podcasts…';
   $('pod-results').innerHTML = ''; lastHtml.podResults = ''; $('pod-episodes').innerHTML = '';
-  api('/podcasts/search?q=' + encodeURIComponent(q)).catch(()=>{});
+  try {
+    await api('/podcasts/search?q=' + encodeURIComponent(q));
+    if (generation === podGeneration) pollPodcasts(generation);
+  } catch { if (generation === podGeneration) $('pod-hint').textContent = 'Could not search podcasts. Try again.'; }
+}
+function pollPodcasts(generation){
   clearInterval(podWatch);
   let ticks = 0;
   podWatch = settledInterval(async () => {
-    ticks++;
     try {
       const d = await api('/podcasts');
-      renderPodResults(d.results || []);
-      if ((!d.loading && ticks > 2) || ticks > 40) {
-        clearInterval(podWatch);
-        $('pod-hint').textContent = (d.results || []).length + ' shows — tap one for episodes.';
-      }
-    } catch { clearInterval(podWatch); }
+      if (generation !== podGeneration) return;
+      renderPodcasts(d);
+      if (!d.loading || ++ticks > 60) clearInterval(podWatch);
+    } catch { if (generation === podGeneration) { clearInterval(podWatch); $('pod-hint').textContent = 'Could not load podcasts. Try again.'; } }
   }, 900);
 }
 function renderPodResults(rs){
@@ -263,19 +279,25 @@ function renderPodResults(rs){
     }, button);
   });
 }
-function loadPodEpisodes(idx){
-  $('pod-episodes').innerHTML = '<div class="empty"><span class="spin"></span></div>';
-  api('/podcasts/episodes?idx=' + idx).catch(()=>{});
+async function loadPodEpisodes(idx){
+  const generation = ++podEpisodeGeneration;
+  clearInterval(podEpisodeWatch); clearInterval(podWatch); ++podGeneration;
+  $('pod-episodes').innerHTML = '<div class="empty"><span class="spin"></span> Loading episodes…</div>';
+  try { await api('/podcasts/episodes?idx=' + idx); }
+  catch { if (generation === podEpisodeGeneration) $('pod-episodes').textContent = 'Could not load episodes. Select the show to retry.'; return; }
+  if (generation !== podEpisodeGeneration) return;
   let tries = 0;
-  const t = settledInterval(async () => {
-    tries++;
+  podEpisodeWatch = settledInterval(async () => {
     try {
       const d = await api('/podcasts');
-      if ((d.episodes || []).length || tries > 20) { clearInterval(t); renderPodEpisodes(d.episodes || []); }
-    } catch { clearInterval(t); }
+      if (generation !== podEpisodeGeneration) return;
+      if (d.selected !== idx) { clearInterval(podEpisodeWatch); return; }
+      renderPodEpisodes(d.episodes || [], d);
+      if (!d.episodes_loading || ++tries > 60) clearInterval(podEpisodeWatch);
+    } catch { if (generation === podEpisodeGeneration) { clearInterval(podEpisodeWatch); $('pod-episodes').textContent = 'Could not load episodes. Select the show to retry.'; } }
   }, 700);
 }
-function renderPodEpisodes(eps){
+function renderPodEpisodes(eps, data = {}){
   $('pod-episodes').innerHTML = eps.length
     ? '<div class="sect">Episodes</div>' + eps.map((e, i) => `
       <div class="result">
@@ -285,7 +307,7 @@ function renderPodEpisodes(eps){
           <button class="queue-btn" data-pod-queue="${i}">Queue</button>
           <button class="play" data-destination-verb="Play" data-ep="${i}">${destinationActionLabel('Play')}</button></span></div>
       </div>`).join('')
-    : '<div class="empty">No episodes</div>';
+    : `<div class="empty">${data.episodes_loading ? 'Loading episodes…' : data.episodes_failed ? 'Feed unavailable. Select the show to retry.' : 'No episodes'}</div>`;
   $('pod-episodes').querySelectorAll('.play').forEach(b => b.onclick = () => {
     const episode = eps[Number(b.dataset.ep)] || {};
     dispatchPlay(episode.url || '', episode.title || '', () => api('/podcasts/play?idx=' + encodeURIComponent(b.dataset.ep)));
@@ -550,3 +572,72 @@ function renderRssItems(items, fetching){
     }, button);
   });
 }
+
+// Radio directory discovery and station actions.
+async function loadRadio(generation = radioGeneration, polling = false){
+  try {
+    const d = await api('/radio');
+    if (generation !== radioGeneration) return d;
+    renderRadio(d.stations || []);
+    $('ra-more').style.display = d.has_more ? '' : 'none';
+    if (d.loading && !polling) pollRadio(generation);
+    $('ra-hint').textContent = d.fetch_error ? 'Station directory unavailable. Try again.' : d.loading ? 'Loading stations…' : `${(d.stations || []).length} stations.`;
+    return d;
+  } catch { if (generation === radioGeneration) $('ra-hint').textContent = 'Could not load stations. Try again.'; }
+}
+$('ra-go').onclick = () => runRadio();
+$('ra-q').addEventListener('keydown', e => { if (e.key === 'Enter') { runRadio(); $('ra-q').blur(); } });
+
+async function runRadio(){
+  const q = $('ra-q').value.trim(); if (!q) return;
+  const generation = ++radioGeneration;
+  clearInterval(raWatch);
+  $('ra-hint').textContent = 'Searching stations…';
+  try {
+    await api('/radio/search?q=' + encodeURIComponent(q));
+    if (generation === radioGeneration) pollRadio(generation);
+  } catch { if (generation === radioGeneration) $('ra-hint').textContent = 'Could not search stations. Try again.'; }
+}
+function pollRadio(generation = radioGeneration){
+  clearInterval(raWatch);
+  let ticks = 0;
+  raWatch = settledInterval(async () => {
+    const d = await loadRadio(generation, true);
+    if (generation !== radioGeneration) return;
+    if (!d?.loading || ++ticks > 60) clearInterval(raWatch);
+  }, 900);
+}
+function renderRadio(sts){
+  const html = sts.map((s, i) => `
+    <div class="result">
+      <div class="t">${esc(s.name)}</div>
+      <div class="m">
+        ${s.country ? `<span class="src">${esc(s.country)}</span>` : ''}
+        ${s.tags ? `<span>${esc((s.tags || '').split(',').slice(0,2).join(', '))}</span>` : ''}
+        <button class="radio-details" data-details="${i}">Details</button>
+        ${s.url ? `<button class="queue-btn" data-queue="${i}">Queue</button>` : ''}
+        <button class="play" data-destination-verb="Listen" data-i="${i}" data-url="${encodeURIComponent(s.url || '')}">${destinationActionLabel('Listen')}</button></div>
+    </div>`).join('') || '<div class="empty">No stations yet</div>';
+  if (html === lastHtml.radio) return;
+  lastHtml.radio = html;
+  $('ra-results').innerHTML = html;
+  $('ra-results').querySelectorAll('.play').forEach(b => b.onclick = () => {
+    const u = decodeURIComponent(b.dataset.url || '');
+    const t = b.parentElement.parentElement.querySelector('.t').textContent;
+    if (HOSTED && u) return openStreamUrl(u, t);
+    dispatchPlay(u, t, () => { api('/radio/play?idx=' + b.dataset.i).catch(()=>{}); b.textContent = 'Sent ✓'; });
+  });
+  $('ra-results').querySelectorAll('[data-queue]').forEach(button => {
+    const station = sts[Number(button.dataset.queue)] || {};
+    button.onclick = () => queueMedia(station.url || '', station.name || '', button);
+  });
+  $('ra-results').querySelectorAll('.radio-details').forEach(button => {
+    const station = sts[Number(button.dataset.details)] || {};
+    button.onclick = () => openSourceDetails('Radio', {
+      ...station, type:'Station', meta:[station.country || '', station.tags || ''].filter(Boolean).join(' · '),
+      artUrl:station.favicon || '', index:Number(button.dataset.details),
+    }, button);
+  });
+}
+
+wireInfiniteBrowse('radio', 'ra-more', '/radio/more', loadRadio, () => radioGeneration);

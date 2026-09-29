@@ -191,11 +191,12 @@
 
   <section class="page" id="page-radio">
     <div class="search-row">
-      <input id="ra-q" placeholder="Search stations, genres…" autocapitalize="off">
+      <input id="ra-q" placeholder="Name, tag:jazz, country:India…" autocapitalize="off">
       <button id="ra-go">Go</button>
     </div>
     <div class="hint" id="ra-hint">Loading popular stations…</div>
     <div id="ra-results"></div>
+    <button id="ra-more" class="browse-more" style="display:none">Load more</button>
   </section>
 
   <section class="page" id="page-comics">
@@ -203,8 +204,9 @@
       <input id="cx-q" placeholder="Search comics & manga…" autocapitalize="off">
       <button id="cx-go">Go</button>
     </div>
-    <div class="hint" id="cx-hint">Search to begin.</div>
-    <div id="cx-results"></div>
+    <div class="hint" id="cx-hint">Loading popular comics &amp; manga…</div>
+    <div id="cx-results" class="grid browse-media-grid"></div>
+    <button id="cx-more" class="browse-more" style="display:none">Load more</button>
     <div id="cx-reader" style="display:none">
       <div class="search-row"><button id="cx-close">‹ Close reader</button></div>
       <div class="hint" id="cx-progress"></div>
@@ -310,7 +312,7 @@
   <!-- Podcasts -->
   <section class="page" id="page-podcasts">
     <div class="search-row">
-      <input id="pod-q" placeholder="Search podcasts…" autocapitalize="off">
+      <input id="pod-q" placeholder="Search podcasts or paste an RSS feed URL…" autocapitalize="off">
       <button id="pod-go">Go</button>
     </div>
     <div class="hint" id="pod-hint">Search podcasts — tap a show for episodes.</div>
