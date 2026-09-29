@@ -10,7 +10,7 @@ def test_tv_detail_responsive():
     checks = {
         "live and drawer width": 'tv_layout_pure.zig' in detail and 'parent_width' in detail,
         "one page scroller": detail.count('dvui.scrollArea(') == 1,
-        "stacked narrow cards": 'const card_stacked = layout.stacked and playable;' in detail,
+        "artwork-led cards": 'var ecard = dvui.box(@src(), .{ .dir = .vertical }' in detail,
         "proportional thumbnails": 'layout.thumbnail_width' in detail and 'layout.thumbnail_height' in detail,
         "wrapped title and overview": 'episode_title.addTextClick(' in detail and 'overview.addText(' in detail,
         "bounded season menu": 'dvui.floatingMenu(' in detail and 'season_label' in detail,
@@ -22,7 +22,8 @@ def test_tv_detail_responsive():
         "aligned episode actions": 'var title_row = dvui.box(@src(), .{ .dir = .horizontal }' in detail,
         "future episodes are inert": 'const playable = episode_state == .available;' in detail
             and 'if (playable) {' in detail and '"Upcoming" else "TBA"' in detail,
-        "bounded synopsis preview": 'home_pure.zig' in detail and 'clipLabel(&ov_clip_buf' in detail,
+        "bounded synopsis preview": 'tvCardPreview(ov_raw, body_font' in detail
+            and 'body_font.lineHeight() * 2' in detail,
     }
     missing = [name for name, ok in checks.items() if not ok]
     if missing:

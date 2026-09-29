@@ -3007,6 +3007,41 @@ fn retryFailedDetailFetches() void {
     }
 }
 
+/// Fit complete lines using the actual font metrics. Character-count clipping
+/// alone lets wrapped text spill into the metadata at narrow widths.
+fn tvCardPreview(text: []const u8, font: dvui.Font, width: f32, out: []u8) []const u8 {
+    var rest = std.mem.trim(u8, safeUtf8(text), " \t\r\n");
+    var written: usize = 0;
+    for (0..2) |line| {
+        if (rest.len == 0) break;
+        var end: usize = 0;
+        const suffix = if (line == 1) "…" else "";
+        const reserve = font.textSizeEx(suffix, .{}).w;
+        _ = font.textSizeEx(rest, .{ .max_width = @max(1, width - reserve), .end_idx = &end });
+        if (end == 0) break;
+        if (end < rest.len) {
+            if (std.mem.lastIndexOfScalar(u8, rest[0..end], ' ')) |space| {
+                if (space > 0) end = space;
+            }
+        }
+        const piece = std.mem.trim(u8, rest[0..end], " \t\r\n");
+        if (written + piece.len + 4 > out.len) break;
+        @memcpy(out[written..][0..piece.len], piece);
+        written += piece.len;
+        rest = std.mem.trimStart(u8, rest[end..], " \t\r\n");
+        if (rest.len > 0) {
+            if (line == 1) {
+                @memcpy(out[written..][0..3], "…");
+                written += 3;
+            } else {
+                out[written] = '\n';
+                written += 1;
+            }
+        }
+    }
+    return out[0..written];
+}
+
 fn renderTvDetail() void {
     const t = &state.app.tmdb;
     const poster = @import("../core/poster.zig");
@@ -3028,10 +3063,10 @@ fn renderTvDetail() void {
     {
         var hdr = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .horizontal,
-            .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
+            .padding = .{ .x = 16, .y = 12, .w = 16, .h = 10 },
             .background = true,
-            .color_fill = theme.colors.bg_surface,
-            .color_border = theme.colors.border_subtle,
+            .color_fill = theme.colors.bg_glass,
+            .color_border = theme.colors.border_strong,
             .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
         });
         defer hdr.deinit();
@@ -3040,33 +3075,11 @@ fn renderTvDetail() void {
         var title_line = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
         var go_back = false;
 
-        // Back — lucide chevron + label (the old "←" glyph was missing from
-        // the UI font and rendered as tofu).
-        {
-            var back = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .background = true,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                .corner_radius = theme.dims.rad_sm,
-                .padding = .{ .x = 4, .y = 3, .w = 8, .h = 3 },
-                .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
-                .gravity_y = 0.5,
-            });
-            defer back.deinit();
-            var back_hover = false;
-            const back_clicked = dvui.clicked(back.data(), .{ .hovered = &back_hover });
-            if (back_hover) back.data().options.color_fill = theme.colors.bg_hover;
-            back.drawBackground();
-            dvui.icon(@src(), "tv-back", icons.tvg.lucide.@"chevron-left", .{}, .{
-                .color_text = theme.colors.accent,
-                .min_size_content = .{ .w = 15, .h = 15 },
-                .gravity_y = 0.5,
-            });
-            _ = dvui.label(@src(), "Back", .{}, .{
-                .color_text = theme.colors.accent,
-                .gravity_y = 0.5,
-            });
-            go_back = back_clicked;
-        }
+        go_back = shared_components.iconButton(@src(), icons.tvg.lucide.@"chevron-left", "Back to shows", false);
+        var identity = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .expand = .horizontal,
+            .padding = .{ .x = 12, .y = 0, .w = 12, .h = 0 },
+        });
 
         var tvn_buf: [128]u8 = undefined;
         // The name expands, so it eats the slack and pushes the status chips to
@@ -3075,10 +3088,20 @@ fn renderTvDetail() void {
             .background = false,
             .color_text = theme.colors.text_primary,
             .expand = .horizontal,
-            .font = dvui.themeGet().font_heading,
+            .font = dvui.themeGet().font_heading.withSize(if (layout.stacked) 24 else 28),
+            .padding = dvui.Rect.all(0),
         });
         show_title.addText(safeUtf8Buf(t.tv_name[0..@min(t.tv_name_len, t.tv_name.len)], &tvn_buf), .{});
         show_title.deinit();
+        var next_buf: [96]u8 = undefined;
+        if (@import("tvmaze.zig").nextLabel(t.tv_id, &next_buf)) |next_str| {
+            tvWrappedText(@src(), next_str, .{
+                .font = dvui.themeGet().font_body.withSize(11.5),
+                .color_text = theme.colors.text_secondary,
+                .padding = .{ .x = 0, .y = 3, .w = 0, .h = 0 },
+            });
+        }
+        identity.deinit();
 
         // On desktop the title's expanding text pushes this compact segment to
         // the right. Narrow views put the same segment directly underneath.
@@ -3099,18 +3122,6 @@ fn renderTvDetail() void {
         if (go_back) {
             closeTvDetail();
             return;
-        }
-    }
-
-    // ── TVmaze "Next episode" line (keyless; fills TMDB's gap). Only shown for
-    //    currently-airing shows that have a scheduled next episode. ──
-    {
-        var next_buf: [96]u8 = undefined;
-        if (@import("tvmaze.zig").nextLabel(t.tv_id, &next_buf)) |next_str| {
-            tvWrappedText(@src(), next_str, .{
-                .color_text = theme.colors.accent,
-                .padding = .{ .x = 14, .y = 4, .w = 14, .h = 2 },
-            });
         }
     }
 
@@ -3159,9 +3170,13 @@ fn renderTvDetail() void {
         return;
     }
 
+    var controls = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
+        .expand = .horizontal,
+        .padding = .{ .x = 8, .y = 6, .w = 8, .h = 4 },
+    });
     {
         var season_toolbar = dvui.box(@src(), .{ .dir = if (layout.stacked) .vertical else .horizontal }, .{
-            .expand = .horizontal,
+            .expand = .none,
             .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
         });
         defer season_toolbar.deinit();
@@ -3174,7 +3189,7 @@ fn renderTvDetail() void {
         if (dvui.menuItemLabel(@src(), season_label, .{ .submenu = true }, .{
             .color_fill = theme.colors.bg_elevated,
             .color_text = theme.colors.text_primary,
-            .padding = dvui.Rect.all(8),
+            .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
             .corner_radius = theme.dims.rad_sm,
         })) |anchor| {
             var popup = dvui.floatingMenu(@src(), .{ .from = anchor }, .{
@@ -3221,7 +3236,7 @@ fn renderTvDetail() void {
         // consuming another full-width band below the selector.
         if (t.tv_episode_count > 0 or (t.tv_sel_season < t.tv_season_count)) {
             var sinfo = dvui.box(@src(), .{ .dir = if (layout.stacked) .vertical else .horizontal }, .{
-                .expand = .horizontal,
+                .expand = .none,
             });
             defer sinfo.deinit();
 
@@ -3243,11 +3258,6 @@ fn renderTvDetail() void {
 
             // Spacer + watched count (right-aligned)
             if (t.tv_episode_count > 0) {
-                if (!layout.stacked) {
-                    var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
-                    spacer.deinit();
-                }
-
                 const watched = tvWatchedCount();
                 const total = t.tv_episode_count;
                 var wbuf: [32]u8 = undefined;
@@ -3260,31 +3270,6 @@ fn renderTvDetail() void {
         }
     }
 
-    // Thin progress bar (watched fraction) — plain track + fill boxes. The
-    // old dvui.slider here was DRAGGABLE and took the control-blue fill
-    // instead of the theme accent (the stray blue bar in the season header).
-    if (t.tv_episode_count > 0) {
-        const watched = tvWatchedCount();
-        const total = t.tv_episode_count;
-        const frac: f32 = if (total > 0) @as(f32, @floatFromInt(watched)) / @as(f32, @floatFromInt(total)) else 0;
-        var track = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .background = true,
-            .color_fill = theme.colors.bg_elevated,
-            .min_size_content = .{ .w = 0, .h = 3 },
-            .max_size_content = .{ .w = std.math.floatMax(f32), .h = 3 },
-        });
-        const track_w = track.data().contentRectScale().r.w;
-        var fill = dvui.box(@src(), .{}, .{
-            .background = true,
-            .color_fill = theme.colors.accent,
-            .min_size_content = .{ .w = frac * track_w, .h = 3 },
-            .max_size_content = .{ .w = frac * track_w, .h = 3 },
-        });
-        fill.deinit();
-        track.deinit();
-    }
-
     // ── Resume row ──
     //
     // `tvNextUp` crosses season boundaries and is clamped to what has aired, so
@@ -3294,8 +3279,8 @@ fn renderTvDetail() void {
     // offering a Resume that would go hunting for an episode that doesn't exist.
     if (t.tv_episode_count > 0) {
         const nxt = tvNextUp();
-        var prow = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
+        var prow = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
+            .expand = .none,
             .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
             .background = false,
         });
@@ -3309,7 +3294,9 @@ fn renderTvDetail() void {
 
         // Resume — lucide play + label (the "▶" glyph rendered as tofu).
         if (nxt) |next_ep| {
-            const act = @import("tv_pure.zig").playAction(play_busy, "Resume");
+            var resume_label_buf: [48]u8 = undefined;
+            const resume_label = std.fmt.bufPrint(&resume_label_buf, "Continue · S{d:0>2} E{d:0>2}", .{ next_ep.season, next_ep.episode }) catch "Continue";
+            const act = @import("tv_pure.zig").playAction(play_busy, resume_label);
             var res = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .background = true,
                 .color_fill = if (play_busy) theme.colors.bg_elevated else theme.colors.accent,
@@ -3415,14 +3402,7 @@ fn renderTvDetail() void {
             }
         }
 
-        if (nxt) |next_ep| {
-            var ep_lbl: [32]u8 = undefined;
-            const ep_str = @import("tv_pure.zig").episodeLabel(next_ep, &ep_lbl);
-            _ = dvui.label(@src(), "{s}", .{ep_str}, .{
-                .color_text = theme.colors.text_secondary,
-                .gravity_y = 0.5,
-            });
-        } else {
+        if (nxt == null) {
             // No next episode is NOT the same as "caught up" — with no season map
             // yet we simply don't know, and saying "Caught up" hides the user's
             // next episode (Silo read "Caught up" at 0/10 watched).
@@ -3434,6 +3414,33 @@ fn renderTvDetail() void {
                 .gravity_y = 0.5,
             });
         }
+    }
+
+    controls.deinit();
+
+    // Thin progress bar (watched fraction) — plain track + fill boxes. The
+    // old dvui.slider here was DRAGGABLE and took the control-blue fill
+    // instead of the theme accent (the stray blue bar in the season header).
+    if (t.tv_episode_count > 0) {
+        const watched = tvWatchedCount();
+        const total = t.tv_episode_count;
+        const frac: f32 = if (total > 0) @as(f32, @floatFromInt(watched)) / @as(f32, @floatFromInt(total)) else 0;
+        var track = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .background = true,
+            .color_fill = theme.colors.bg_elevated,
+            .min_size_content = .{ .w = 0, .h = 3 },
+            .max_size_content = .{ .w = std.math.floatMax(f32), .h = 3 },
+        });
+        const track_w = track.data().contentRect().w;
+        var fill = dvui.box(@src(), .{}, .{
+            .background = true,
+            .color_fill = theme.colors.accent,
+            .min_size_content = .{ .w = frac * track_w, .h = 3 },
+            .max_size_content = .{ .w = frac * track_w, .h = 3 },
+        });
+        fill.deinit();
+        track.deinit();
     }
 
     // ── Episode list ──
@@ -3453,7 +3460,7 @@ fn renderTvDetail() void {
 
     var episode_catalog = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
-        .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
+        .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
     });
     defer episode_catalog.deinit();
 
@@ -3499,11 +3506,14 @@ fn renderTvDetail() void {
     const aired_frontier = detailUiSnapshot().library.last_aired;
     var episode_row: ?*dvui.BoxWidget = null;
 
-    const episode_card_h: f32 = if (layout.stacked) layout.thumbnail_height + 116 else 112;
-    const episode_gap: f32 = 6;
-    // Card height is content height; include its 6px top/bottom padding and
-    // bottom margin so virtual spacers exactly match laid-out rows.
-    const episode_row_h = episode_card_h + 12 + episode_gap;
+    const title_font = dvui.themeGet().font_heading.withSize(16);
+    const body_font = dvui.themeGet().font_body.withSize(12.5);
+    const meta_font = dvui.themeGet().font_body.withSize(11.5);
+    const info_height = title_font.lineHeight() * 2 + body_font.lineHeight() * 2 + meta_font.lineHeight() + 46;
+    const episode_card_h = layout.thumbnail_height + info_height;
+    const episode_gap: f32 = 12;
+    // The exact border + gutter extent is also used by virtual spacers.
+    const episode_row_h = episode_card_h + 2 + episode_gap;
     const total_rows = (t.tv_episode_count + layout.columns - 1) / layout.columns;
     const visible = tmdb_pure.visibleRows(total_rows, episode_row_h, tv_episode_si.viewport.y, tv_episode_si.viewport.h, 2);
 
@@ -3534,7 +3544,6 @@ fn renderTvDetail() void {
             false;
         const episode_state = tv_layout.episodeState(air, today, known_aired);
         const playable = episode_state == .available;
-        const card_stacked = layout.stacked and playable;
 
         if (ei % layout.columns == 0) {
             episode_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -3546,61 +3555,50 @@ fn renderTvDetail() void {
         // Upload still texture if pixel data arrived from the fetch worker.
         _ = poster.uploadIfReady(&e.still_pixels, e.still_w, e.still_h, &e.still_tex);
 
-        const card_fill = if (!playable)
-            theme.colors.bg_deep
-        else if (is_watched)
-            theme.colors.bg_deep
-        else if (is_next)
-            theme.colors.bg_elevated
-        else
-            theme.colors.bg_surface;
-
-        const border_color = if (is_next) theme.colors.accent else theme.colors.border_subtle;
-        const border_rect: dvui.Rect = if (is_next)
-            .{ .x = 2, .y = 0, .w = 0, .h = 1 }
-        else
-            .{ .x = 0, .y = 0, .w = 0, .h = 1 };
-
-        var ecard = dvui.box(@src(), .{ .dir = if (card_stacked) .vertical else .horizontal }, .{
+        const card_fill = theme.colors.bg_glass;
+        var ecard = dvui.box(@src(), .{ .dir = .vertical }, .{
             .id_extra = ei + 40000,
             .background = true,
             .color_fill = card_fill,
-            .color_border = border_color,
-            .border = border_rect,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = dvui.Rect.all(6),
-            .margin = .{ .x = 0, .y = 0, .w = if (layout.columns == 2 and ei % 2 == 0) 8 else 0, .h = episode_gap },
+            .color_border = if (is_next and playable) theme.colors.accent_dim else theme.colors.border_strong,
+            .border = dvui.Rect.all(1),
+            .corner_radius = dvui.Rect.all(12),
+            .padding = dvui.Rect.all(0),
+            .margin = .{ .x = 0, .y = 0, .w = if (ei % layout.columns + 1 < layout.columns) episode_gap else 0, .h = episode_gap },
             .min_size_content = .{ .w = layout.card_width, .h = episode_card_h },
             .max_size_content = .{ .w = layout.card_width, .h = episode_card_h },
         });
 
-        // ── Left: episode still thumbnail ──
+        // ── Artwork ──
         {
-            const thumb_w: f32 = if (playable) layout.thumbnail_width else 72;
-            const thumb_h: f32 = if (playable) layout.thumbnail_height else 72;
-            var still_box = dvui.box(@src(), .{ .dir = .vertical }, .{
+            const thumb_w = layout.thumbnail_width;
+            const thumb_h = layout.thumbnail_height;
+            var still_box = dvui.overlay(@src(), .{
                 .id_extra = ei + 42000,
                 .background = true,
                 .color_fill = theme.colors.bg_elevated,
                 .min_size_content = .{ .w = thumb_w, .h = thumb_h },
                 .max_size_content = .{ .w = thumb_w, .h = thumb_h },
-                .gravity_x = if (card_stacked) 0.5 else 0,
+                .gravity_x = 0.5,
                 .gravity_y = 0.5,
             });
             defer still_box.deinit();
 
-            if (playable and e.still_tex != null) {
+            if (e.still_tex != null) {
                 const tex = &e.still_tex.?;
                 _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* }, .shrink = .ratio }, .{
                     .id_extra = ei + 42100,
-                    .expand = .ratio,
+                    .expand = .both,
+                    .corner_radius = .{ .x = 11, .y = 11, .w = 0, .h = 0 },
                     .gravity_x = 0.5,
                     .gravity_y = 0.5,
                     .label = .{ .text = safeUtf8(e.name[0..@min(e.name_len, e.name.len)]) },
                 });
             } else {
-                // Upcoming/TBA entries deliberately use a small numbered tile,
-                // not an empty 16:9 poster that dominates the page.
+                if (e.still_path_len > 0 and (!e.still_attempted or e.still_fetching)) {
+                    shared_components.coverSkeleton(@src(), ei + 42150, 11);
+                }
+                // Stable image geometry also applies to upcoming episodes.
                 var ep_num_buf: [8]u8 = undefined;
                 const ep_num_str = std.fmt.bufPrint(&ep_num_buf, "{d}", .{e.episode_number}) catch "";
                 _ = dvui.label(@src(), "{s}", .{ep_num_str}, .{
@@ -3612,26 +3610,50 @@ fn renderTvDetail() void {
                     .font = dvui.themeGet().font_heading,
                 });
                 // Start the fetch if available and not yet tried
-                if (playable and still_box.data().visible() and !e.still_attempted and e.still_path_len > 0) {
+                if (still_box.data().visible() and !e.still_attempted and e.still_path_len > 0) {
                     fetchEpisodeStill(e);
+                }
+            }
+
+            if (playable) {
+                var hovered = false;
+                if (dvui.clicked(still_box.data(), .{ .hovered = &hovered })) playTvEpisode(e.episode_number);
+                if (hovered) {
+                    var shine = dvui.box(@src(), .{}, .{
+                        .expand = .both,
+                        .background = true,
+                        .color_fill = theme.colors.accent_glow,
+                        .corner_radius = .{ .x = 11, .y = 11, .w = 0, .h = 0 },
+                    });
+                    shine.deinit();
+                    _ = dvui.icon(@src(), "Play episode", icons.tvg.lucide.play, .{}, .{
+                        .color_text = theme.colors.text_primary,
+                        .gravity_x = 0.5,
+                        .gravity_y = 0.5,
+                        .min_size_content = .{ .w = 28, .h = 28 },
+                        .max_size_content = .{ .w = 28, .h = 28 },
+                    });
                 }
             }
         }
 
-        // ── Right: info column ──
+        // ── Episode information ──
         {
             var info = dvui.box(@src(), .{ .dir = .vertical }, .{
                 .id_extra = ei + 43000,
                 .expand = .horizontal,
-                .padding = .{ .x = 8, .y = 5, .w = 8, .h = 5 },
+                .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
+                .min_size_content = .{ .w = 0, .h = info_height - 16 },
+                .max_size_content = .{ .w = layout.card_width - 24, .h = info_height - 16 },
             });
             defer info.deinit();
 
-            // One aligned title/action row. The old flexbox distributed the
-            // episode number, title and buttons across unrelated screen zones.
+            // Episode badges and actions share a fixed utility row.
             {
                 var title_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
                     .id_extra = ei + 43100,
+                    .min_size_content = .{ .w = 0, .h = 24 },
+                    .max_size_content = .{ .w = layout.card_width - 24, .h = 24 },
                     .expand = .horizontal,
                 });
                 defer title_row.deinit();
@@ -3642,6 +3664,7 @@ fn renderTvDetail() void {
                     const en_str = std.fmt.bufPrint(&en_buf, "E{d}", .{e.episode_number}) catch "";
                     _ = dvui.label(@src(), "{s}", .{en_str}, .{
                         .id_extra = ei + 43110,
+                        .font = meta_font,
                         .color_text = if (is_next) theme.colors.accent else theme.colors.text_secondary,
                         .gravity_y = 0.5,
                         .padding = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
@@ -3652,6 +3675,7 @@ fn renderTvDetail() void {
                 if (is_next and playable) {
                     _ = dvui.label(@src(), "Next", .{}, .{
                         .id_extra = ei + 43115,
+                        .font = meta_font,
                         .background = true,
                         .color_fill = theme.colors.accent,
                         .color_text = theme.colors.text_on_accent,
@@ -3666,6 +3690,7 @@ fn renderTvDetail() void {
                     const availability = if (episode_state == .upcoming) "Upcoming" else "TBA";
                     _ = dvui.label(@src(), "{s}", .{availability}, .{
                         .id_extra = ei + 43116,
+                        .font = meta_font,
                         .background = true,
                         .color_fill = theme.colors.bg_elevated,
                         .color_text = theme.colors.text_secondary,
@@ -3676,32 +3701,15 @@ fn renderTvDetail() void {
                     });
                 }
 
-                var ep_name_buf: [128]u8 = undefined;
-                var episode_title = dvui.textLayout(@src(), .{}, .{
-                    .background = false,
-                    .id_extra = ei + 43120,
-                    .expand = .horizontal,
-                    .color_text = if (is_watched or !playable) theme.colors.text_secondary else theme.colors.text_primary,
-                    .font = dvui.themeGet().font_heading,
-                });
-                const ep_name = if (e.name_len > 0)
-                    safeUtf8Buf(e.name[0..@min(e.name_len, e.name.len)], &ep_name_buf)
-                else
-                    "Title to be announced";
-                if (playable) {
-                    if (episode_title.addTextClick(ep_name, .{}) != null) playTvEpisode(e.episode_number);
-                } else {
-                    episode_title.addText(ep_name, .{});
-                }
-                episode_title.deinit();
-
+                var utility_spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+                utility_spacer.deinit();
                 if (playable) {
                     if (dvui.buttonIcon(@src(), "ep-play", icons.tvg.lucide.play, .{}, .{}, .{
                         .id_extra = ei + 43130,
-                        .color_fill = theme.colors.accent,
-                        .color_text = theme.colors.text_on_accent,
+                        .color_fill = theme.colors.accent_dim,
+                        .color_text = theme.colors.accent,
                         .corner_radius = dvui.Rect.all(theme.radius.pill),
-                        .padding = .{ .x = 7, .y = 5, .w = 7, .h = 5 },
+                        .padding = dvui.Rect.all(4),
                         .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
                         .min_size_content = .{ .w = 14, .h = 14 },
                         .gravity_y = 0.5,
@@ -3712,7 +3720,7 @@ fn renderTvDetail() void {
                         .color_fill = if (is_watched) theme.colors.success else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                         .color_text = if (is_watched) dvui.Color.white else theme.colors.text_secondary,
                         .corner_radius = dvui.Rect.all(theme.radius.pill),
-                        .padding = .{ .x = 5, .y = 5, .w = 5, .h = 5 },
+                        .padding = dvui.Rect.all(4),
                         .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
                         .min_size_content = .{ .w = 14, .h = 14 },
                         .gravity_y = 0.5,
@@ -3720,18 +3728,45 @@ fn renderTvDetail() void {
                 }
             }
 
+            var ep_name_buf: [128]u8 = undefined;
+            var episode_title = dvui.textLayout(@src(), .{ .break_lines = false }, .{
+                .background = false,
+                .id_extra = ei + 43120,
+                .expand = .horizontal,
+                .color_text = if (is_watched or !playable) theme.colors.text_secondary else theme.colors.text_primary,
+                .font = title_font,
+                .padding = dvui.Rect.all(0),
+                .min_size_content = .{ .w = 0, .h = title_font.lineHeight() * 2 },
+                .max_size_content = .{ .w = layout.card_width - 24, .h = title_font.lineHeight() * 2 },
+            });
+            const ep_name = if (e.name_len > 0)
+                safeUtf8Buf(e.name[0..@min(e.name_len, e.name.len)], &ep_name_buf)
+            else
+                "Title to be announced";
+            var title_preview: [256]u8 = undefined;
+            const fitted_title = tvCardPreview(ep_name, title_font, layout.card_width - 24, &title_preview);
+            if (playable) {
+                if (episode_title.addTextClick(fitted_title, .{}) != null) playTvEpisode(e.episode_number);
+            } else {
+                episode_title.addText(fitted_title, .{});
+            }
+            episode_title.deinit();
+
             // Keep rows scan-friendly. Full synopsis remains provider data, but
             // this catalogue surface gets a bounded preview.
-            if (playable and e.overview_len > 0) {
+            {
                 const ov_raw = e.overview[0..@min(e.overview_len, e.overview.len)];
-                var ov_clip_buf: [196]u8 = undefined;
-                const ov_short = @import("../ui/home_pure.zig").clipLabel(&ov_clip_buf, ov_raw, 150);
-                var overview = dvui.textLayout(@src(), .{}, .{
+                var ov_clip_buf: [1024]u8 = undefined;
+                const ov_short = tvCardPreview(ov_raw, body_font, layout.card_width - 24, &ov_clip_buf);
+                var overview = dvui.textLayout(@src(), .{ .break_lines = false }, .{
                     .background = false,
                     .id_extra = ei + 43200,
                     .expand = .horizontal,
                     .color_text = theme.colors.text_secondary,
-                    .padding = .{ .x = 0, .y = 4, .w = 0, .h = 2 },
+                    .font = body_font,
+                    .min_size_content = .{ .w = 0, .h = body_font.lineHeight() * 2 },
+                    .max_size_content = .{ .w = layout.card_width - 24, .h = body_font.lineHeight() * 2 },
+                    .padding = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
                 });
                 overview.addText(safeUtf8(ov_short), .{});
                 overview.deinit();
@@ -3757,6 +3792,7 @@ fn renderTvDetail() void {
                 if (ms.len > 0) {
                     _ = dvui.label(@src(), "{s}", .{ms}, .{
                         .id_extra = ei + 43310,
+                        .font = meta_font,
                         .color_text = theme.colors.text_secondary,
                         .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
                         .gravity_y = 0.5,
@@ -3772,6 +3808,8 @@ fn renderTvDetail() void {
                     });
                     _ = dvui.label(@src(), "{d:.1}", .{e.vote_average}, .{
                         .id_extra = ei + 43330,
+                        .padding = dvui.Rect.all(0),
+                        .font = meta_font,
                         .color_text = theme.colors.text_secondary,
                         .gravity_y = 0.5,
                     });
