@@ -2650,7 +2650,7 @@ fn attachTorrentToPlayer(tid: c_int, source: []const u8) void {
             p.current_url_len = 0;
         }
 
-        p.current_torrent_id = tid;
+        p.attachTorrent(tid);
         p.torrent_is_ready = false;
         p.has_metadata = false;
         p.last_load_time = 0;

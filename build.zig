@@ -258,7 +258,7 @@ pub fn build(b: *std.Build) void {
     // (and --libs the matching -lssl/-lcrypto); we keep -I{prefix}/include for
     // boost and a trailing -ltorrent-rasterbar as an empty-pkg-config fallback.
     const compile_cmd = if (target.result.os.tag == .macos)
-        b.fmt("if [ ! -f libtorrent_wrapper.so ] || [ src/torrent_wrapper.cpp -nt libtorrent_wrapper.so ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -fPIC -I{s}/include $(pkg-config --cflags libtorrent-rasterbar 2>/dev/null) -L{s}/lib src/torrent_wrapper.cpp -o libtorrent_wrapper.so $(pkg-config --libs libtorrent-rasterbar 2>/dev/null) -ltorrent-rasterbar; fi", .{ brew_prefix, brew_prefix })
+        b.fmt("if [ ! -f libtorrent_wrapper.so ] || [ src/torrent_wrapper.cpp -nt libtorrent_wrapper.so ] || [ src/torrent_memory.hpp -nt libtorrent_wrapper.so ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -fPIC -I{s}/include $(pkg-config --cflags libtorrent-rasterbar 2>/dev/null) -L{s}/lib src/torrent_wrapper.cpp -o libtorrent_wrapper.so $(pkg-config --libs libtorrent-rasterbar 2>/dev/null) -ltorrent-rasterbar; fi", .{ brew_prefix, brew_prefix })
     else if (is_windows)
         // pkg-config --cflags is REQUIRED here, same as the POSIX branches:
         // MSYS2's libtorrent-rasterbar (≥2.0.13) enables TORRENT_USE_RTC in
@@ -267,7 +267,7 @@ pub fn build(b: *std.Build) void {
         // -lssl/-lcrypto/-lbcrypt/-lmswsock in --libs); the trailing
         // -ltorrent-rasterbar -lws2_32 -liphlpapi -lcrypt32 stay as a fallback
         // for an empty pkg-config.
-        b.fmt("if [ ! -f torrent_wrapper.dll ] || [ src/torrent_wrapper.cpp -nt torrent_wrapper.dll ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -I{s}/include $(pkg-config --cflags libtorrent-rasterbar 2>/dev/null) -L{s}/lib src/torrent_wrapper.cpp -o torrent_wrapper.dll $(pkg-config --libs libtorrent-rasterbar 2>/dev/null) -ltorrent-rasterbar -lws2_32 -liphlpapi -lcrypt32; fi", .{ mingw_prefix, mingw_prefix })
+        b.fmt("if [ ! -f torrent_wrapper.dll ] || [ src/torrent_wrapper.cpp -nt torrent_wrapper.dll ] || [ src/torrent_memory.hpp -nt torrent_wrapper.dll ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -I{s}/include $(pkg-config --cflags libtorrent-rasterbar 2>/dev/null) -L{s}/lib src/torrent_wrapper.cpp -o torrent_wrapper.dll $(pkg-config --libs libtorrent-rasterbar 2>/dev/null) -ltorrent-rasterbar -lws2_32 -liphlpapi -lcrypt32; fi", .{ mingw_prefix, mingw_prefix })
     else
         // -Wl,-soname is REQUIRED: without it the .so has no SONAME, so the
         // linker records the ABSOLUTE build path (/src/libtorrent_wrapper.so)
@@ -278,7 +278,7 @@ pub fn build(b: *std.Build) void {
         // wrapper's own $ORIGIN runpath also lets a rootless/private bundle put
         // libtorrent beside it; an executable RUNPATH is not transitive through
         // dependent DSOs.
-        "if [ ! -f libtorrent_wrapper.so ] || [ src/torrent_wrapper.cpp -nt libtorrent_wrapper.so ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -fPIC -Wl,-soname,libtorrent_wrapper.so -Wl,-rpath,'$ORIGIN' $(pkg-config --cflags libtorrent-rasterbar 2>/dev/null) src/torrent_wrapper.cpp -o libtorrent_wrapper.so $(pkg-config --libs libtorrent-rasterbar 2>/dev/null) -ltorrent-rasterbar; fi";
+        "if [ ! -f libtorrent_wrapper.so ] || [ src/torrent_wrapper.cpp -nt libtorrent_wrapper.so ] || [ src/torrent_memory.hpp -nt libtorrent_wrapper.so ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -fPIC -Wl,-soname,libtorrent_wrapper.so -Wl,-rpath,'$ORIGIN' $(pkg-config --cflags libtorrent-rasterbar 2>/dev/null) src/torrent_wrapper.cpp -o libtorrent_wrapper.so $(pkg-config --libs libtorrent-rasterbar 2>/dev/null) -ltorrent-rasterbar; fi";
 
     // Only invoke the host g++ when it can actually produce a wrapper for the
     // target (native builds). Cross-compiling (e.g. windows from macOS for a

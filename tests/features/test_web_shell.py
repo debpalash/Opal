@@ -399,7 +399,7 @@ def test_web_transfer_management_contract():
     transfers = _src("src/services/transfers.zig")
     checks = {
         "typed direct-download seam": "pub const Action = enum" in engine
-            and "pub fn apply(" in engine and "engine.apply(idx, token, action)" in remote,
+            and "pub fn apply(" in engine and '@import("downloads.zig").apply(idx, token, action)' in remote,
         "stale-action token": all(token in remote for token in ('\\"idx\\"', '\\"token\\"', "download changed; refresh")),
         "POST-only action routes": all(
             any(f'{name}, "{path}"' in remote for name in ("api_path", "path"))

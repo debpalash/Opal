@@ -189,6 +189,7 @@ fn playEntryOn(p: anytype, idx: usize) void {
     const pl = state.app.playlist orelse return;
     if (idx >= pl.entries.items.len) return;
     const entry = pl.entries.items[idx];
+    p.releaseMemoryTorrent();
     p.current_torrent_id = -1;
     p.is_torrent = false;
     p.load(.{ .url = entry.url, .origin = .playlist });

@@ -1,9 +1,11 @@
 #include "torrent_wrapper.h"
+#include "torrent_memory.hpp"
 #include <libtorrent/session.hpp>
 #include <libtorrent/settings_pack.hpp>
 #include <libtorrent/add_torrent_params.hpp>
 #include <libtorrent/magnet_uri.hpp>
 #include <libtorrent/torrent_handle.hpp>
+#include <libtorrent/peer_info.hpp>
 #include <libtorrent/torrent_info.hpp>
 #include <libtorrent/create_torrent.hpp>
 #include <libtorrent/bencode.hpp>
@@ -34,10 +36,16 @@
 
 struct TorrentNode {
     lt::torrent_handle handle;
-    bool ready_flag;
-    bool alive;              // false once torrent_remove() is called; slot is never reused
+    std::shared_ptr<opal::MemoryStorage> memory;
+    std::string memory_path;
+    std::mutex memory_window_mutex;
+    std::set<int> memory_priorities;
+    std::chrono::steady_clock::time_point last_memory_recheck{};
+    std::vector<lt::tcp::endpoint> memory_reconnect;
+    std::atomic<bool> ready_flag{false};
+    std::atomic<bool> alive{false};              // false once torrent_remove() is called; slot is never reused
     std::string cached_path;
-    int last_deadline_piece; // Track last piece we set deadlines for (avoid redundant calls)
+    std::atomic<int> last_deadline_piece{-1}; // Track last piece we set deadlines for (avoid redundant calls)
     // Persistent read handle for the HTTP streaming proxy (torrent_read_bytes).
     // Opened once per (node,file) and reused, instead of a fresh ifstream per chunk.
     std::ifstream read_stream;
@@ -67,6 +75,9 @@ static const char* const DEFAULT_TRACKERS[] = {
 
 struct SessionContext {
     lt::session* ses;
+    std::shared_ptr<opal::MemoryRegistry> memory_registry = std::make_shared<opal::MemoryRegistry>();
+    std::atomic<bool> memory_only{false};
+    std::atomic<int> memory_limit_mib{256};
     // Trackers injected into every torrent on add. Seeded with DEFAULT_TRACKERS
     // and replaced wholesale by torrent_set_extra_trackers(). Guarded by mtx.
     std::vector<std::string> extra_trackers;
@@ -213,7 +224,7 @@ static bool replace_file(const std::string& staged, const std::string& destinati
 
 static bool save_fastresume(const std::shared_ptr<TorrentNode>& node,
                             const lt::add_torrent_params& data) {
-    if (!node || !node->alive || !node->handle.is_valid()) return false;
+    if (!node || node->memory || !node->alive || !node->handle.is_valid()) return false;
     try {
         std::vector<char> encoded = lt::write_resume_data_buf(data);
         if (encoded.empty() || encoded.size() > 16 * 1024 * 1024) return false;
@@ -291,6 +302,79 @@ static void apply_streaming_window(lt::torrent_handle& h, int target_piece,
     }
 }
 
+// Memory windows use bytes, leaving room for startup/index probes and in-flight
+// blocks. Only selected pieces are downloaded. Previously evicted pieces must
+// be rechecked before libtorrent will request them again (public 2.x API).
+static void recover_memory_range(const std::shared_ptr<TorrentNode>& node, int first, int last) {
+    if (!node->memory) return;
+    bool missing = node->memory->needs_recheck();
+    for (int p = first; p <= last; ++p) {
+        if (!node->memory->contains(p) && node->handle.have_piece(lt::piece_index_t(p))) { missing = true; break; }
+    }
+    if (!missing) return;
+    std::lock_guard<std::mutex> lock(node->memory_window_mutex);
+    auto now = std::chrono::steady_clock::now();
+    if (now - node->last_memory_recheck < std::chrono::seconds(2)) return;
+    auto status = node->handle.status();
+    if (status.state == lt::torrent_status::checking_files || status.state == lt::torrent_status::checking_resume_data) return;
+    node->last_memory_recheck = now;
+    std::vector<lt::peer_info> peers;
+    node->handle.get_peer_info(peers);
+    for (auto const& peer : peers) node->memory_reconnect.push_back(peer.ip);
+    node->handle.force_recheck();
+}
+
+static void apply_node_window(const std::shared_ptr<TorrentNode>& node, int target, int first, int last, int count) {
+    if (!node->memory) { apply_streaming_window(node->handle, target, first, last, count); return; }
+    auto ti = node->handle.torrent_file();
+    if (!ti) return;
+    const int piece_size = ti->piece_length();
+    const int ahead = std::max(1, int(node->memory->limit / 4 / piece_size));
+    const int edge = std::max(1, int(std::min<std::size_t>(8 * 1024 * 1024, node->memory->limit / 16) / piece_size));
+    {
+        std::lock_guard<std::mutex> lock(node->memory_window_mutex);
+        std::set<int> wanted;
+        for (int p = target; p <= last && p < target + ahead; ++p) wanted.insert(p);
+        for (int p = first; p <= last && p < first + edge; ++p) wanted.insert(p);
+        for (int p = std::max(first, last - edge + 1); p <= last; ++p) wanted.insert(p);
+        {
+            std::lock_guard<std::mutex> cache_lock(node->memory->mutex);
+            for (auto const& reader : node->memory->readers) wanted.insert(reader.first);
+            node->memory->pinned = wanted;
+        }
+        std::vector<std::pair<lt::piece_index_t, lt::download_priority_t>> changes;
+        for (int p : node->memory_priorities)
+            if (!wanted.count(p)) changes.emplace_back(lt::piece_index_t(p), lt::dont_download);
+        for (int p : wanted)
+            if (!node->memory_priorities.count(p)) changes.emplace_back(lt::piece_index_t(p), lt::top_priority);
+        node->handle.clear_piece_deadlines();
+        node->handle.prioritize_pieces(changes);
+        node->memory_priorities = std::move(wanted);
+        // Limit deadline messages; the rest of the read-ahead remains wanted.
+        for (int p = target; p <= last && p < target + std::min(ahead, 32); ++p) node->handle.set_piece_deadline(lt::piece_index_t(p), (p - target) * 40);
+        for (int p = first; p <= last && p < first + std::min(edge, 4); ++p) node->handle.set_piece_deadline(lt::piece_index_t(p), 0);
+        for (int p = std::max(first, last - std::min(edge, 4) + 1); p <= last; ++p) node->handle.set_piece_deadline(lt::piece_index_t(p), 0);
+    }
+    recover_memory_range(node, target, target);
+}
+
+extern "C" void torrent_set_memory_storage(TorrentSession session, int enabled, int limit_mib) {
+    if (!session) return;
+    auto ctx = static_cast<SessionContext*>(session);
+    ctx->memory_limit_mib.store(std::max(128, std::min(512, limit_mib)));
+    ctx->memory_only.store(enabled != 0);
+}
+
+extern "C" int torrent_is_memory_only(TorrentSession session, int id) {
+    auto node = get_node(static_cast<SessionContext*>(session), id);
+    return node && node->memory ? 1 : 0;
+}
+
+extern "C" long long torrent_memory_used(TorrentSession session, int id) {
+    auto node = get_node(static_cast<SessionContext*>(session), id);
+    return node && node->memory ? static_cast<long long>(node->memory->size()) : 0;
+}
+
 extern "C" TorrentSession torrent_init() {
     SessionContext* ctx = new SessionContext();
     
@@ -335,7 +419,12 @@ extern "C" TorrentSession torrent_init() {
         "router.utorrent.com:6881,"
         "dht.aelitis.com:6881");
 
-    ctx->ses = new lt::session(pack);
+    lt::session_params params(pack);
+    params.disk_io_constructor = [registry = ctx->memory_registry](lt::io_context& io,
+        lt::settings_interface const& settings, lt::counters& counters) {
+        return std::make_unique<opal::StreamingDisk>(io, settings, counters, registry);
+    };
+    ctx->ses = new lt::session(std::move(params));
     for (const char* t : DEFAULT_TRACKERS) ctx->extra_trackers.emplace_back(t);
     return ctx;
 }
@@ -366,7 +455,15 @@ extern "C" void torrent_set_extra_trackers(TorrentSession session, const char* n
     ctx->extra_trackers.swap(parsed);
 }
 
-extern "C" int torrent_add_magnet(TorrentSession session, const char* magnet_url, const char* save_path) {
+static int add_magnet(TorrentSession, const char*, const char*, bool);
+extern "C" int torrent_add_magnet(TorrentSession session, const char* url, const char* path) {
+    return add_magnet(session, url, path, false);
+}
+extern "C" int torrent_restore_magnet(TorrentSession session, const char* url, const char* path) {
+    return add_magnet(session, url, path, true);
+}
+
+static int add_magnet(TorrentSession session, const char* magnet_url, const char* save_path, bool paused) {
     if (!session || !magnet_url || !save_path) return -1;
     SessionContext* ctx = static_cast<SessionContext*>(session);
     
@@ -380,31 +477,58 @@ extern "C" int torrent_add_magnet(TorrentSession session, const char* magnet_url
     }
     
     atp.save_path = save_path;
+    atp.flags |= lt::torrent_flags::duplicate_is_error;
 
+    const bool memory_only = ctx->memory_only.load();
     // Fast-Lane Metadata Injection: reuse cached .torrent if available
     std::ostringstream ss;
     ss << atp.info_hashes.get_best();
     std::string cached_path = std::string(save_path) + "/" + ss.str() + ".torrent";
     
-    lt::error_code ec2;
-    auto cached_ti = std::make_shared<lt::torrent_info>(cached_path, ec2);
-    if (!ec2 && cached_ti && cache_matches(atp, *cached_ti)) {
-        atp.ti = cached_ti;
-    } else if (!ec2) {
-        // A cache that parses but does not match is worse than none: add_torrent
-        // rejects the whole add, so the magnet becomes permanently unplayable.
-        // Every cache written before write_metadata_cache existed is in exactly
-        // that state, so delete it — the correct one is rewritten on the next
-        // poll, and the add proceeds as a plain magnet in the meantime.
-        std::remove(cached_path.c_str());
+    if (!memory_only) {
+        lt::error_code ec2;
+        auto cached_ti = std::make_shared<lt::torrent_info>(cached_path, ec2);
+        if (!ec2 && cached_ti && cache_matches(atp, *cached_ti)) {
+            atp.ti = cached_ti;
+        } else if (!ec2) {
+            // A cache that parses but does not match is worse than none: add_torrent
+            // rejects the whole add, so the magnet becomes permanently unplayable.
+            // Every cache written before write_metadata_cache existed is in exactly
+            // that state, so delete it — the correct one is rewritten on the next
+            // poll, and the add proceeds as a plain magnet in the meantime.
+            std::remove(cached_path.c_str());
+        }
+        const lt::info_hash_t expected_hashes = atp.info_hashes;
+        load_fastresume(resume_path_for_cache(cached_path), expected_hashes, save_path, atp);
     }
-    const lt::info_hash_t expected_hashes = atp.info_hashes;
-    load_fastresume(resume_path_for_cache(cached_path), expected_hashes, save_path, atp);
-
     auto node = std::make_shared<TorrentNode>();
+    if (memory_only) {
+        node->memory = std::make_shared<opal::MemoryStorage>(std::size_t(ctx->memory_limit_mib.load()) * 1024 * 1024);
+        atp.flags |= lt::torrent_flags::default_dont_download;
+        atp.flags &= ~lt::torrent_flags::auto_managed;
+        atp.flags &= ~lt::torrent_flags::paused;
+        if (atp.ti) atp.file_priorities.assign(atp.ti->num_files(), lt::dont_download);
+        std::lock_guard<std::mutex> lock(ctx->memory_registry->mutex);
+        atp.save_path = (std::filesystem::absolute(save_path) /
+            (".opal-memory-" + std::to_string(ctx->memory_registry->next++))).lexically_normal().generic_string();
+        node->memory_path = atp.save_path;
+        ctx->memory_registry->entries[atp.save_path] = node->memory;
+        // Finishing the current RAM window must not disconnect its seeds.
+        lt::settings_pack settings;
+        settings.set_bool(lt::settings_pack::close_redundant_connections, false);
+        ctx->ses->apply_settings(settings);
+    }
+    if (paused) {
+        atp.flags |= lt::torrent_flags::paused;
+        atp.flags &= ~lt::torrent_flags::auto_managed;
+    }
     {
         std::lock_guard<std::mutex> lk(ctx->mtx);
         node->handle = ctx->ses->add_torrent(atp, ec);
+    }
+    if (ec && node->memory) {
+        std::lock_guard<std::mutex> lock(ctx->memory_registry->mutex);
+        ctx->memory_registry->entries.erase(atp.save_path);
     }
     node->cached_path = cached_path;
     node->ready_flag = false;
@@ -425,7 +549,7 @@ extern "C" int torrent_add_magnet(TorrentSession session, const char* magnet_url
         // If we have cached metadata, immediately set up initial streaming window.
         // Keyed on atp.ti, which is set only when the cache matched the magnet.
         if (atp.ti) {
-            node->ready_flag = true;
+            node->ready_flag = !node->memory;
             // Initial deadlines will be set on first torrent_poll/ensure_streaming_buffer call
         }
     }
@@ -466,6 +590,7 @@ extern "C" int torrent_add_file(TorrentSession session, const char* torrent_path
     }
     atp.ti = ti;
     atp.save_path = save_path;
+    atp.flags |= lt::torrent_flags::duplicate_is_error;
 
     // Same metadata cache location the magnet path uses, keyed by infohash, so a
     // later magnet add for this same torrent hits the fast-lane.
@@ -473,16 +598,37 @@ extern "C" int torrent_add_file(TorrentSession session, const char* torrent_path
     ss << ti->info_hashes().get_best();
     std::string cached_path = std::string(save_path) + "/" + ss.str() + ".torrent";
     const lt::info_hash_t expected_hashes = ti->info_hashes();
-    load_fastresume(resume_path_for_cache(cached_path), expected_hashes, save_path, atp);
+    const bool memory_only = ctx->memory_only.load();
+    if (!memory_only) load_fastresume(resume_path_for_cache(cached_path), expected_hashes, save_path, atp);
 
     auto node = std::make_shared<TorrentNode>();
+    if (memory_only) {
+        node->memory = std::make_shared<opal::MemoryStorage>(std::size_t(ctx->memory_limit_mib.load()) * 1024 * 1024);
+        atp.flags |= lt::torrent_flags::default_dont_download;
+        atp.flags &= ~lt::torrent_flags::auto_managed;
+        atp.flags &= ~lt::torrent_flags::paused;
+        if (atp.ti) atp.file_priorities.assign(atp.ti->num_files(), lt::dont_download);
+        std::lock_guard<std::mutex> lock(ctx->memory_registry->mutex);
+        atp.save_path = (std::filesystem::absolute(save_path) /
+            (".opal-memory-" + std::to_string(ctx->memory_registry->next++))).lexically_normal().generic_string();
+        node->memory_path = atp.save_path;
+        ctx->memory_registry->entries[atp.save_path] = node->memory;
+        // Finishing the current RAM window must not disconnect its seeds.
+        lt::settings_pack settings;
+        settings.set_bool(lt::settings_pack::close_redundant_connections, false);
+        ctx->ses->apply_settings(settings);
+    }
     {
         std::lock_guard<std::mutex> lk(ctx->mtx);
         node->handle = ctx->ses->add_torrent(atp, ec);
     }
+    if (ec && node->memory) {
+        std::lock_guard<std::mutex> lock(ctx->memory_registry->mutex);
+        ctx->memory_registry->entries.erase(atp.save_path);
+    }
     node->cached_path = cached_path;
     // Metadata is present from the first instant — no fetch phase to wait on.
-    node->ready_flag = true;
+    node->ready_flag = !node->memory;
     node->alive = true;
     node->last_deadline_piece = -1;
 
@@ -530,7 +676,7 @@ extern "C" int torrent_checkpoint(TorrentSession session) {
     pending.reserve(snap.size());
     for (auto const& node : snap) {
         try {
-            if (!node || !node->alive || !node->handle.is_valid()
+            if (!node || node->memory || !node->alive || !node->handle.is_valid()
                 || !node->handle.need_save_resume_data()) continue;
             node->handle.save_resume_data();
             pending.push_back(node);
@@ -667,7 +813,7 @@ extern "C" int torrent_poll(TorrentSession session, int torrent_id, int target_f
         
         // Save metadata to cache if not exists
         std::ifstream test_f(node->cached_path);
-        if (!test_f.good()) {
+        if (!node->memory && !test_f.good()) {
             try {
                 write_metadata_cache(node->cached_path, *ti);
             } catch(...) {}
@@ -697,7 +843,7 @@ extern "C" int torrent_poll(TorrentSession session, int torrent_id, int target_f
             // Also re-apply if the file changed (ready_flag was reset by file_priority set)
             if (!node->ready_flag) {
                 // Set deadlines on first 40 pieces for smooth startup
-                apply_streaming_window(node->handle, first_piece, first_piece, last_piece, 40);
+                apply_node_window(node, first_piece, first_piece, last_piece, 40);
                 node->ready_flag = true;
                 node->last_deadline_piece = first_piece;
             }
@@ -709,7 +855,7 @@ extern "C" int torrent_poll(TorrentSession session, int torrent_id, int target_f
 
             // Only need the FIRST piece to start mpv — the HTTP streaming proxy
             // handles back-pressure for subsequent pieces, so mpv won't read holes.
-            bool first_piece_ready = st.pieces.get_bit(lt::piece_index_t(first_piece));
+            bool first_piece_ready = first_piece < st.pieces.size() && st.pieces.get_bit(lt::piece_index_t(first_piece)) && (!node->memory || node->memory->contains(first_piece));
             return first_piece_ready ? 1 : 0;
         }
 
@@ -730,6 +876,21 @@ extern "C" int torrent_get_file_count(TorrentSession session, int torrent_id) {
         if (!ti) return 0;
         return ti->files().num_files();
     } catch(...) { return 0; }
+}
+
+extern "C" void torrent_get_file_path(TorrentSession session, int torrent_id, int file_idx, char* out, int max_len) {
+    if (!out || max_len <= 0) return;
+    out[0] = '\0';
+    if (!session) return;
+    auto node = get_node(static_cast<SessionContext*>(session), torrent_id);
+    if (!node || !node->alive || !node->handle.is_valid() || node->memory) return;
+    try {
+        auto ti = node->handle.torrent_file();
+        if (!ti || file_idx < 0 || file_idx >= ti->num_files()) return;
+        const std::string path = ti->files().file_path(lt::file_index_t(file_idx));
+        if (path.size() >= static_cast<std::size_t>(max_len)) return;
+        std::memcpy(out, path.c_str(), path.size() + 1);
+    } catch (...) {}
 }
 
 extern "C" void torrent_get_file_name(TorrentSession session, int torrent_id, int file_idx, char* out_name, int max_len) {
@@ -783,10 +944,21 @@ extern "C" void torrent_remove(TorrentSession session, int torrent_id) {
         node->alive = false;
         if (node->read_stream.is_open()) node->read_stream.close();
         node->read_stream_file_idx = -1;
+        if (node->memory) {
+            node->memory->clear();
+            std::lock_guard<std::mutex> registry_lock(ctx->memory_registry->mutex);
+            ctx->memory_registry->entries.erase(node->memory_path);
+        }
         if (node->handle.is_valid()) {
             ctx->ses->remove_torrent(node->handle);
         }
         ctx->torrents.erase(it);
+        if (node->memory && std::none_of(ctx->torrents.begin(), ctx->torrents.end(),
+            [](auto const& item) { return bool(item.second->memory); })) {
+            lt::settings_pack settings;
+            settings.set_bool(lt::settings_pack::close_redundant_connections, true);
+            ctx->ses->apply_settings(settings);
+        }
     } catch(...) {}
 }
 
@@ -835,7 +1007,9 @@ extern "C" void torrent_set_file_priority(TorrentSession session, int torrent_id
 
     try {
         if (node->alive && node->handle.is_valid()) {
-            node->handle.file_priority(lt::file_index_t(file_idx), lt::download_priority_t(priority));
+            // RAM streams use piece windows; enabling a whole file would fill
+            // the cache with data far ahead of playback.
+            if (!node->memory) node->handle.file_priority(lt::file_index_t(file_idx), lt::download_priority_t(priority));
             // When setting max priority, reset ready_flag so torrent_poll
             // re-applies the streaming deadline window for this file
             if (priority == 7) {
@@ -970,7 +1144,7 @@ extern "C" int torrent_get_piece_map(TorrentSession session, int torrent_id, cha
             int n_out = num_pieces < cap ? num_pieces : cap;
             long long have = 0;
             for (int p = 0; p < num_pieces; ++p) {
-                if (st.pieces.get_bit(lt::piece_index_t(p))) ++have;
+                if (st.pieces.get_bit(lt::piece_index_t(p)) && (!node->memory || node->memory->contains(p))) ++have;
             }
             int ones = (int)(((long long)n_out * have + num_pieces / 2) / num_pieces); // rounded
             if (ones > n_out) ones = n_out;
@@ -1003,8 +1177,10 @@ extern "C" int torrent_ensure_streaming_buffer(TorrentSession session, int torre
         int current_piece = first_piece + std::max(0, std::min(current_piece_offset, total_pieces - 1));
 
         // Only update deadlines if playback moved to a new piece (avoid spamming libtorrent)
-        if (current_piece != node->last_deadline_piece) {
-            apply_streaming_window(node->handle, current_piece, first_piece, last_piece, 40);
+        // HTTP offsets are authoritative for RAM streams. Time percentages
+        // can point behind mpv's read-ahead or into the wrong part of VBR media.
+        if (!node->memory && current_piece != node->last_deadline_piece) {
+            apply_node_window(node, current_piece, first_piece, last_piece, 40);
             node->last_deadline_piece = current_piece;
         }
 
@@ -1012,7 +1188,8 @@ extern "C" int torrent_ensure_streaming_buffer(TorrentSession session, int torre
         lt::torrent_status st = node->handle.status();
         bool needs_buffer = false;
         for (int i = 0; i < 3 && (current_piece + i) <= last_piece; ++i) {
-            if (!st.pieces.get_bit(lt::piece_index_t(current_piece + i))) {
+            if (current_piece + i >= st.pieces.size() || !st.pieces.get_bit(lt::piece_index_t(current_piece + i))
+                || (node->memory && !node->memory->contains(current_piece + i))) {
                 needs_buffer = true;
                 break;
             }
@@ -1048,7 +1225,7 @@ extern "C" void torrent_seek_prioritize(TorrentSession session, int torrent_id, 
         int target_piece = first_piece + std::max(0, std::min(target_offset, total_pieces - 1));
 
         // Aggressive window: 30 pieces with tight deadlines
-        apply_streaming_window(node->handle, target_piece, first_piece, last_piece, 30);
+        apply_node_window(node, target_piece, first_piece, last_piece, 30);
 
         // Update tracking
         node->last_deadline_piece = target_piece;
@@ -1081,7 +1258,7 @@ extern "C" void torrent_set_seek_hint(TorrentSession session, int torrent_id, in
         // jump drops urgent requests around the old cursor immediately.
         if (target_piece == node->last_deadline_piece) return;
         node->handle.clear_piece_deadlines();
-        apply_streaming_window(node->handle, target_piece, first_piece, last_piece, 30);
+        apply_node_window(node, target_piece, first_piece, last_piece, 30);
         node->last_deadline_piece = target_piece;
     } catch (...) {}
 }
@@ -1282,6 +1459,7 @@ extern "C" int torrent_read_bytes(TorrentSession session, int torrent_id, int fi
         if (file_idx >= files.num_files()) return -1;
 
         std::int64_t file_size = files.file_size(lt::file_index_t(file_idx));
+        if (offset < 0) return -1;
         if (offset >= file_size) return 0; // EOF
 
         // Clamp read to file bounds
@@ -1297,6 +1475,13 @@ extern "C" int torrent_read_bytes(TorrentSession session, int torrent_id, int fi
         auto pm_end = files.map_file(lt::file_index_t(file_idx), offset + to_read - 1, 0);
         int first_piece = static_cast<int>(pm_start.piece);
         int last_piece = static_cast<int>(pm_end.piece);
+        opal::MemoryReadPin read_pin(node->memory, first_piece);
+        if (node->memory) {
+            to_read = std::min(to_read, piece_size - pm_start.start);
+            last_piece = first_piece;
+            torrent_set_seek_hint(session, torrent_id, file_idx, offset);
+            recover_memory_range(node, first_piece, last_piece);
+        }
 
         // Set high-priority deadlines on needed pieces
         for (int p = first_piece; p <= last_piece; ++p) {
@@ -1334,13 +1519,24 @@ extern "C" int torrent_read_bytes(TorrentSession session, int torrent_id, int fi
                 for (int p = first_piece; p <= last_piece; ++p) {
                     // have_piece() instead of status().pieces: the latter allocates
                     // the whole piece bitfield, 40x/sec, per connection.
-                    if (!node->handle.have_piece(lt::piece_index_t(p))) { all_ready = false; break; }
+                    if (!node->handle.have_piece(lt::piece_index_t(p)) || (node->memory && !node->memory->contains(p))) { all_ready = false; break; }
                 }
                 ready = all_ready;
 
                 if (!ready && attempt > 0 && (attempt % REARM_EVERY) == 0) {
                     for (int p = first_piece; p <= last_piece; ++p) {
                         node->handle.set_piece_deadline(lt::piece_index_t(p), 0);
+                    }
+                }
+            }
+            if (!ready && node->memory) {
+                recover_memory_range(node, first_piece, last_piece);
+                std::lock_guard<std::mutex> lock(node->memory_window_mutex);
+                if (!node->memory_reconnect.empty()) {
+                    auto status = node->handle.status();
+                    if (status.state != lt::torrent_status::checking_files && status.state != lt::torrent_status::checking_resume_data) {
+                        for (auto const& peer : node->memory_reconnect) node->handle.connect_peer(peer);
+                        node->memory_reconnect.clear();
                     }
                 }
             }
@@ -1351,6 +1547,10 @@ extern "C" int torrent_read_bytes(TorrentSession session, int torrent_id, int fi
         // Cancellation may race with the final readiness observation. Avoid a
         // disk read for a proxy that is already being torn down.
         if (node->read_generation.load(std::memory_order_acquire) != read_generation) return -2;
+
+        if (node->memory) {
+            return node->memory->read(first_piece, pm_start.start, to_read, out_buf, true) ? to_read : -2;
+        }
 
         // Read from disk via a persistent stream kept on the node — opened once
         // per (node,file_index) and reused across chunks instead of reopening
@@ -1433,7 +1633,7 @@ extern "C" int torrent_range_ready(TorrentSession session, int torrent_id, int f
         lt::torrent_status st = node->handle.status();
         for (int p = first_piece; p <= last_piece; ++p) {
             if (p < 0 || p >= st.pieces.size()
-                || !st.pieces.get_bit(lt::piece_index_t(p))) return 0;
+                || !st.pieces.get_bit(lt::piece_index_t(p)) || (node->memory && !node->memory->contains(p))) return 0;
         }
         return 1;
     } catch (...) {}
@@ -1461,7 +1661,7 @@ extern "C" int torrent_range_progress(TorrentSession session, int torrent_id, in
         int have = 0;
         for (int p = first_piece; p <= last_piece; ++p) {
             if (p >= 0 && p < st.pieces.size()
-                && st.pieces.get_bit(lt::piece_index_t(p))) ++have;
+                && st.pieces.get_bit(lt::piece_index_t(p)) && (!node->memory || node->memory->contains(p))) ++have;
         }
         return static_cast<int>((static_cast<long long>(have) * 100) / total);
     } catch (...) {}
@@ -1481,6 +1681,15 @@ extern "C" void torrent_prioritize_range(TorrentSession session, int torrent_id,
 
         int first_piece = 0, last_piece = 0;
         if (!map_range_to_pieces(node, file_idx, offset, len, first_piece, last_piece)) return;
+
+        if (node->memory) {
+            auto ti = node->handle.torrent_file();
+            const int max_pieces = std::max(1, int(node->memory->limit / 2 / ti->piece_length()));
+            last_piece = std::min(last_piece, first_piece + max_pieces - 1);
+            std::lock_guard<std::mutex> window_lock(node->memory_window_mutex);
+            std::lock_guard<std::mutex> cache_lock(node->memory->mutex);
+            for (int p = first_piece; p <= last_piece; ++p) { node->memory->pinned.insert(p); node->memory_priorities.insert(p); }
+        }
 
         // Priorities FIRST, then deadlines. libtorrent's prioritize_pieces() calls
         // remove_time_critical_pieces(), so setting a priority AFTER a deadline

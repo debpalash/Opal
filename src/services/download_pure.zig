@@ -215,8 +215,7 @@ pub const PartMeta = struct {
     total: u64 = 0,
     seg_count: usize = 1,
     done: [MAX_SEGMENTS]u64 = @splat(0),
-    /// True when the user paused explicitly — a restart then restores the entry
-    /// as paused instead of auto-resuming it.
+    /// Persist the previous state for compatibility. All restart restores pause.
     paused: bool = false,
 
     pub fn urlSlice(m: *const PartMeta) []const u8 {
@@ -637,4 +636,20 @@ test "filenameFromUrl" {
     try std.testing.expectEqualStrings("my file.bin", filenameFromUrl("http://x/y/my%20file.bin", &b));
     try std.testing.expectEqualStrings("download", filenameFromUrl("https://host.com/", &b));
     try std.testing.expectEqualStrings("download", filenameFromUrl("https://host.com", &b));
+}
+
+/// Internal torrent/HTTP resume artifacts are never user downloads.
+pub fn isInternalFile(name: []const u8) bool {
+    for ([_][]const u8{ ".torrent", ".fastresume", ".parts", ".opal-part", ".opal-part.json" }) |suffix| {
+        if (std.mem.endsWith(u8, name, suffix)) return true;
+    }
+    return name.len == 0 or name[0] == '.';
+}
+
+test "download list hides resume artifacts but retains ordinary files" {
+    for ([_][]const u8{ "x.torrent", "x.fastresume", "x.parts", "x.opal-part", "x.opal-part.json", ".hidden" }) |name| {
+        try std.testing.expect(isInternalFile(name));
+    }
+    try std.testing.expect(!isInternalFile("movie.mkv"));
+    try std.testing.expect(!isInternalFile("notes.json"));
 }

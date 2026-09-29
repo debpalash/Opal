@@ -366,6 +366,7 @@ async function loadDownloads(){
         <div class="transfer-actions">
           ${item.is_dir ? '' : `<button class="play" data-destination-verb="Play" data-n="${encodeURIComponent(name)}">${destinationActionLabel('Play')}</button>`}
           ${HOSTED ? '' : `<button data-file-action="reveal" data-n="${encodeURIComponent(name)}">Reveal</button>`}
+          <button data-file-action="remove" data-n="${encodeURIComponent(name)}">Remove from list</button>
           <button class="danger" data-file-action="delete" data-n="${encodeURIComponent(name)}">Delete from disk</button>
         </div></div>`;
     }).join('') + (files.length > cap
@@ -386,7 +387,7 @@ async function loadDownloads(){
       const params = new URLSearchParams({action, file:name});
       if (action === 'delete') params.set('confirm', 'DELETE');
       button.disabled = true;
-      try { await apiMutation('/downloads/file-action?' + params); toast(action === 'delete' ? 'Deleted from disk' : 'Revealed on Opal'); await loadDownloads(); }
+      try { await apiMutation('/downloads/file-action?' + params); toast(action === 'delete' ? 'Deleted from disk' : action === 'remove' ? 'Removed from list' : 'Revealed on Opal'); await loadDownloads(); }
       catch (err) { button.disabled = false; toast(err.message || 'File action failed'); }
     });
   } catch {

@@ -10,6 +10,8 @@ typedef void* TorrentSession;
 TorrentSession torrent_init();
 
 // Add a torrent magnet link and start downloading. Returns a Torrent ID.
+// Restore without joining peers or auto-resuming. Resume explicitly to start.
+int torrent_restore_magnet(TorrentSession session, const char* magnet_url, const char* save_path);
 int torrent_add_magnet(TorrentSession session, const char* magnet_url, const char* save_path);
 
 // Add a torrent from a local .torrent FILE and start downloading. Returns a
@@ -25,6 +27,11 @@ int torrent_add_file(TorrentSession session, const char* torrent_path, const cha
 // NOT validate: scheme/host/dedupe/cap are enforced (and unit-tested) in
 // services/trackers_pure.zig.
 void torrent_set_extra_trackers(TorrentSession session, const char* newline_separated);
+
+// Applies only to newly added torrents. Payload budget is per torrent, 128–512 MiB.
+void torrent_set_memory_storage(TorrentSession session, int enabled, int limit_mib);
+int torrent_is_memory_only(TorrentSession session, int torrent_id);
+long long torrent_memory_used(TorrentSession session, int torrent_id);
 
 // Get the total number of registered torrents
 int torrent_count(TorrentSession session);
@@ -51,6 +58,7 @@ int torrent_poll(TorrentSession session, int torrent_id, int target_file_idx, ch
 
 // Multi-file / Playlist support
 int torrent_get_file_count(TorrentSession session, int torrent_id);
+void torrent_get_file_path(TorrentSession session, int torrent_id, int file_idx, char* out_path, int max_len);
 void torrent_get_file_name(TorrentSession session, int torrent_id, int file_idx, char* out_name, int max_len);
 long long torrent_get_file_size(TorrentSession session, int torrent_id, int file_idx);
 

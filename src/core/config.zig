@@ -63,6 +63,8 @@ pub fn save() void {
     setKey("nsfw_filter", if (state.app.nsfw_filter_enabled) "1" else "0");
     setKey("gallerydl_enabled", if (state.app.gallerydl_enabled) "1" else "0");
     setKey("scrape_use_browser", if (state.app.scrape_use_browser) "1" else "0");
+    setKey("torrent_memory_only", if (state.app.torrent_memory_only) "1" else "0");
+    setKey("torrent_memory_limit_mib", fmtInt(&fb, @intCast(state.app.torrent_memory_limit_mib)));
     setKey("prefetch_playlist", if (state.app.prefetch_playlist) "1" else "0");
     setKey("audio_passthrough", if (state.app.audio_passthrough) "1" else "0");
     setKey("audio_exclusive", if (state.app.audio_exclusive) "1" else "0");
@@ -506,6 +508,12 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         state.app.gallerydl_enabled = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "scrape_use_browser")) {
         state.app.scrape_use_browser = std.mem.eql(u8, val, "1");
+    } else if (std.mem.eql(u8, key, "torrent_memory_only")) {
+        state.app.torrent_memory_only = std.mem.eql(u8, val, "1");
+        state.applyTorrentStorageIfReady();
+    } else if (std.mem.eql(u8, key, "torrent_memory_limit_mib")) {
+        state.app.torrent_memory_limit_mib = std.math.clamp(std.fmt.parseInt(i32, val, 10) catch 256, 128, 512);
+        state.applyTorrentStorageIfReady();
     } else if (std.mem.eql(u8, key, "prefetch_playlist")) {
         state.app.prefetch_playlist = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "audio_passthrough")) {

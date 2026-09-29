@@ -216,11 +216,20 @@ pub fn coreInit() !void {
                 io_g.sleep(25 * std.time.ns_per_ms);
             }
             if (workers.isQuitting()) return;
-            state.setTorrentSession(c.mpv.torrent_init());
+            // A saved RAM-only preference must be known before accepting the
+            // first torrent, including a magnet supplied on the command line.
+            while (!state.app.config_loaded.load(.acquire)) {
+                if (workers.isQuitting()) return;
+                io_g.sleep(10 * std.time.ns_per_ms);
+            }
+            const session = c.mpv.torrent_init();
+            c.mpv.torrent_set_memory_storage(session, if (state.app.torrent_memory_only) 1 else 0, state.app.torrent_memory_limit_mib);
+            state.setTorrentSession(session);
             // Fresh session defaults to unlimited — re-apply the persisted cap
             // if config already loaded (idempotent; config load covers the
             // reverse ordering).
             state.applyDownloadLimitIfReady();
+            state.applyTorrentStorageIfReady();
             state.applyTorrentProxyIfReady();
             logs.pushLog("info", "torrent", "Torrent session ready", false);
             // A cold-start magnet/.torrent click may be waiting for this exact
@@ -834,7 +843,7 @@ pub fn appDeinit() void {
     @import("player/media_remote.zig").clear();
 
     // Clean up players natively to prevent memory leaks
-    for (state.app.players.items) |p| {
+    while (state.app.players.pop()) |p| {
         p.deinit(@import("core/alloc.zig").allocator);
     }
     state.app.players.deinit(@import("core/alloc.zig").allocator);
@@ -1173,6 +1182,7 @@ fn appFrame() !dvui.App.Result {
     // Rejoin saved active swarms only after DB + libtorrent are both ready.
     // This intentionally does not open a player or change the current route.
     @import("services/torrent_intents.zig").restoreIfReady();
+    @import("services/downloads.zig").tick();
 
     // Swap in TMDB pages staged by fetch workers (UI thread owns `results`;
     // workers staging + this apply is what keeps the render loop's iteration

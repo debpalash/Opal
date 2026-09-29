@@ -2624,6 +2624,8 @@ fn apiDownloads(stream: std.Io.net.Stream, query: []const u8) void {
         if (entry.name.len == 0 or entry.name[0] == '.') continue;
         if (std.mem.endsWith(u8, entry.name, ".torrent")) continue;
         if (std.mem.endsWith(u8, entry.name, ".parts")) continue;
+        if (@import("download_pure.zig").isInternalFile(entry.name)) continue;
+        if (@import("download_visibility.zig").hiddenChild(browse_path, entry.name)) continue;
         if (count > 0) w.writeAll(",") catch return;
         const is_dir = entry.kind == .directory;
         var size: u64 = 0;
@@ -2670,7 +2672,7 @@ fn apiDownloadAction(stream: std.Io.net.Stream, query: []const u8) void {
         sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"destructive action requires confirm=1\"}");
         return;
     }
-    const ok = engine.apply(idx, token, action);
+    const ok = @import("downloads.zig").apply(idx, token, action);
     if (!ok) {
         sendJsonStatus(stream, "409 Conflict", "{\"error\":\"download changed; refresh and retry\"}");
         return;

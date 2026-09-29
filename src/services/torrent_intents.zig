@@ -21,7 +21,7 @@ fn identityForTorrent(id: c_int, out: []u8) ?[]const u8 {
 /// incognito mode. If SQLite is still starting, restoreIfReady's live scan
 /// captures it once the database is published.
 pub fn rememberTorrent(id: c_int) void {
-    if (state.app.incognito_mode or db.get() == null) return;
+    if (state.app.incognito_mode or db.get() == null or c.mpv.torrent_is_memory_only(state.torrentSession(), id) != 0) return;
     var identity_buf: [pure.MAX_IDENTITY]u8 = undefined;
     const identity = identityForTorrent(id, &identity_buf) orelse return;
     const paused: i32 = if (c.mpv.torrent_is_paused(state.torrentSession(), id) != 0) 1 else 0;
@@ -36,7 +36,7 @@ pub fn rememberTorrent(id: c_int) void {
 }
 
 pub fn setPaused(id: c_int, paused: bool) void {
-    if (state.app.incognito_mode or db.get() == null) return;
+    if (state.app.incognito_mode or db.get() == null or c.mpv.torrent_is_memory_only(state.torrentSession(), id) != 0) return;
     var identity_buf: [pure.MAX_IDENTITY]u8 = undefined;
     const identity = identityForTorrent(id, &identity_buf) orelse return;
     const stmt = db.prepare("UPDATE active_torrent_intents SET paused = ?1 WHERE identity = ?2") orelse return;
@@ -58,26 +58,25 @@ pub fn forgetTorrent(id: c_int) void {
     _ = db.step(stmt);
 }
 
-/// One-shot restart restore. It joins saved swarms without creating a player or
+/// One-shot restart restore. It restores paused transfers without creating a player or
 /// navigating away from Home, then records torrents accepted before DB startup.
 pub fn restoreIfReady() void {
     if (!state.app.init_history_loaded or state.torrentSession() == null) return;
     if (restore_state.cmpxchgStrong(0, 1, .acq_rel, .acquire) != null) return;
     defer restore_state.store(2, .release);
-    if (state.app.incognito_mode) return;
+    if (state.app.incognito_mode or state.app.torrent_memory_only) return;
 
     var restored_any = false;
     {
-        const stmt = db.prepare("SELECT identity, paused FROM active_torrent_intents ORDER BY added_at ASC LIMIT 128") orelse return;
+        const stmt = db.prepare("SELECT identity FROM active_torrent_intents ORDER BY added_at ASC LIMIT 128") orelse return;
         defer db.finalize(stmt);
         while (db.step(stmt) == db.c.SQLITE_ROW) {
             const stored = db.columnText(stmt, 0) orelse continue;
             var canonical_buf: [pure.MAX_IDENTITY + 1]u8 = undefined;
             const canonical = pure.canonicalIdentity(stored, canonical_buf[0..pure.MAX_IDENTITY]) orelse continue;
             canonical_buf[canonical.len] = 0;
-            const restored_id = c.mpv.torrent_add_magnet(state.torrentSession(), @ptrCast(&canonical_buf[0]), state.getSavePath());
+            const restored_id = c.mpv.torrent_restore_magnet(state.torrentSession(), @ptrCast(&canonical_buf[0]), state.getSavePath());
             if (restored_id >= 0) {
-                if (db.columnInt(stmt, 1) != 0) c.mpv.torrent_pause(state.torrentSession(), restored_id);
                 restored_any = true;
             }
         }
@@ -90,5 +89,5 @@ pub fn restoreIfReady() void {
     while (id < count) : (id += 1) {
         if (c.mpv.torrent_is_alive(state.torrentSession(), id) != 0) rememberTorrent(id);
     }
-    if (restored_any) @import("../core/logs.zig").pushLog("info", "torrent", "Restored active torrent transfers", false);
+    if (restored_any) @import("../core/logs.zig").pushLog("info", "torrent", "Restored paused torrent transfers", false);
 }

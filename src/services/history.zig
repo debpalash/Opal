@@ -246,6 +246,35 @@ pub fn removeDownloadHistory(idx: usize) void {
     loadDownloadHistory();
 }
 
+/// Remove all records for this transfer, including legacy magnet/name copies.
+/// Non-empty links must match the canonical identity, never merely the title.
+pub fn forgetDownload(name: []const u8, identity: []const u8) void {
+    const pure = @import("torrent_intent_pure.zig");
+    const scan = db.prepare("SELECT rowid,name,link FROM download_history") orelse return;
+    defer db.finalize(scan);
+    const remove = db.prepare("DELETE FROM download_history WHERE rowid=?1") orelse return;
+    defer db.finalize(remove);
+    while (db.step(scan) == db.c.SQLITE_ROW) {
+        const stored_name = db.columnText(scan, 1) orelse "";
+        const link = db.columnText(scan, 2) orelse "";
+        var matched = link.len == 0 and name.len > 0 and std.mem.eql(u8, name, stored_name);
+        if (identity.len > 0) {
+            for ([_][]const u8{ stored_name, link }) |value| {
+                var buf: [pure.MAX_IDENTITY]u8 = undefined;
+                if (pure.canonicalIdentity(value, &buf)) |canonical| {
+                    matched = matched or std.mem.eql(u8, canonical, identity);
+                }
+            }
+        }
+        if (matched) {
+            db.bindInt64(remove, 1, db.columnInt64(scan, 0));
+            _ = db.step(remove);
+            _ = db.c.sqlite3_reset(remove);
+        }
+    }
+    loadDownloadHistory();
+}
+
 pub fn loadDownloadHistory() void {
     state.app.dl_history_count = 0;
 
