@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Verify the actual GUI package and both installer layouts on Ubuntu 20.04."""
 import hashlib
+import http.cookiejar
 import json
 import os
 from pathlib import Path
 import subprocess
 import time
 import urllib.request
+import urllib.parse
+import urllib.error
 
 assert subprocess.check_output(['getconf', 'GNU_LIBC_VERSION'], text=True).strip() == 'glibc 2.31'
 for binary in Path('/usr/lib/opal').iterdir():
@@ -15,7 +18,7 @@ for binary in Path('/usr/lib/opal').iterdir():
         assert linked.returncode == 0 and 'not found' not in linked.stdout, (binary, linked.stdout, linked.stderr)
 # Exercise a decoder in the privately shipped FFmpeg, with a real output file.
 subprocess.run(['/usr/lib/opal/ffmpeg', '-hide_banner', '-loglevel', 'error',
-                '-f', 'lavfi', '-i', 'testsrc=size=96x96:rate=10', '-t', '2',
+                '-f', 'lavfi', '-i', 'testsrc=size=96x96:rate=10', '-t', '30',
                 '-c:v', 'mpeg4', '-y', '/tmp/sample.mp4'], check=True)
 subprocess.run(['/usr/lib/opal/ffmpeg', '-hide_banner', '-loglevel', 'error',
                 '-i', '/tmp/sample.mp4', '-frames:v', '1', '-f', 'null', '-'], check=True)
@@ -46,13 +49,39 @@ def launch(command, config):
                     time.sleep(.5)
             else:
                 raise AssertionError('GUI did not initialize API: ' + log.read_text())
+            client = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+            setup = (config / 'opal/setup.token').read_text().strip()
+            payload = urllib.parse.urlencode({'username': 'compat-test', 'password': 'package-test-password'}).encode()
+            request = urllib.request.Request('http://127.0.0.1:41595/api/auth/register', data=payload,
+                headers={'X-Opal-Setup-Token': setup, 'Origin': 'http://127.0.0.1:41595',
+                         'Content-Type': 'application/x-www-form-urlencoded'})
+            with client.open(request, timeout=10) as response:
+                assert json.load(response) == {'ok': True}, 'account creation failed'
+            assert not (config / 'opal/setup.token').exists(), 'setup capability was not consumed'
+            # The authenticated status must report the actual packaged player
+            # opening the video, rather than only a responsive HTTP listener.
+            for _ in range(20):
+                with client.open('http://127.0.0.1:41595/api/status', timeout=2) as response:
+                    status = json.load(response)
+                if status.get('dur', 0) > 0 and status.get('active'):
+                    assert not status.get('error'), 'media playback error'
+                    break
+                time.sleep(.5)
+            else:
+                raise AssertionError('packaged player did not open the sample video')
+            try:
+                urllib.request.urlopen('http://127.0.0.1:41595/api/status', timeout=2)
+            except urllib.error.HTTPError as error:
+                assert error.code == 401
+            else:
+                raise AssertionError('protected API accepted an unauthenticated request')
             time.sleep(3)
             assert app.poll() is None, log.read_text()
         finally:
             import signal
             os.killpg(app.pid, signal.SIGTERM)
             app.wait(timeout=10)
-    print(f'PASS: {command}: GUI + API + resource serving')
+    print(f'PASS: {command}: GUI + account + protected API + video + resources')
 
 
 launch('/usr/bin/opal', Path('/tmp/system-config'))

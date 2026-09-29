@@ -13,7 +13,6 @@ depends:
   - libc6 (>= 2.31)
   - libstdc++6 (>= 9)
   - libgcc-s1
-  - libsqlite3-0
   - libass9
   - libluajit-5.1-2
   - libasound2

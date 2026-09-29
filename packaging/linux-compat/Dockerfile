@@ -1,5 +1,5 @@
 # Native libraries and the app are compiled on Focal: no newer glibc ABI.
-FROM ubuntu:20.04 AS runtime-build
+FROM ubuntu:20.04 AS runtime-deps
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential pkg-config curl ca-certificates xz-utils cmake python3 python3-pip \
@@ -13,6 +13,7 @@ RUN /build-runtime.sh
 RUN curl -fL --retry 3 https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz -o /tmp/zig.tar.xz \
     && echo '70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  /tmp/zig.tar.xz' | sha256sum -c - \
     && tar -xJf /tmp/zig.tar.xz -C /opt && rm /tmp/zig.tar.xz
+FROM runtime-deps AS runtime-build
 ENV PATH="/opt/zig-x86_64-linux-0.16.0:/opt/opal-runtime/bin:${PATH}"
 ENV PKG_CONFIG_PATH="/opt/opal-runtime/lib/pkgconfig"
 ENV LD_LIBRARY_PATH="/opt/opal-runtime/lib"

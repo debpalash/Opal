@@ -37,12 +37,9 @@ jobs:
   validate-release:
     runs-on: ubuntu-24.04
     steps:
-      - name: Validate release tag
-        run: |
-          if [[ ! "$OPAL_RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
-            echo "Invalid release tag: $OPAL_RELEASE_TAG" >&2
-            exit 2
-          fi
+      - uses: actions/checkout@v4
+      - name: Validate release tag and app version
+        run: python3 scripts/check-release-version.py "$OPAL_RELEASE_TAG"
 
   macos-arm64:
     needs: validate-release

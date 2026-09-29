@@ -18,6 +18,15 @@ fetch() {
     tar -xf "$SOURCES/$1.tar.gz" -C "$WORK"
     printf '%s %s\n' "$1" "$2" >> "$SOURCES/SOURCES.txt"
 }
+# Account creation uses INSERT ... RETURNING (SQLite >=3.35). Focal's stock
+# SQLite 3.31 can launch the app but cannot create or log in to accounts.
+fetch sqlite-3.53.4 https://www.sqlite.org/2026/sqlite-autoconf-3530400.tar.gz 0e9483900e92cd5de8fd48d16bf9200145a61f7fd5be542a5ac81d8a9516eb9c
+(
+    cd "$WORK/sqlite-autoconf-3530400"
+    ./configure --prefix="$PREFIX" --disable-static --fts5 --disable-readline
+    make -j "$JOBS"
+    make install
+)
 fetch openssl-3.6.4 https://github.com/openssl/openssl/archive/refs/tags/openssl-3.6.4.tar.gz c6b94124bb76ac5f8aa80de121e0f922a93d3bbf1be478bd50ebc36a30dc1db1
 (
     cd "$WORK/openssl-openssl-3.6.4"

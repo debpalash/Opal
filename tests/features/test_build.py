@@ -1283,6 +1283,8 @@ def test_linux_compatibility_release_gate():
         "build uses Focal": "FROM ubuntu:20.04" in docker,
         "host glibc dependency declared": "libc6 (>= 2.31)" in manifest,
         "native ABI floor verified": "requires glibc newer than 2.31" in _src("packaging/linux-compat/stage.py"),
+        "account setup covered": "api/auth/register" in smoke and "protected API accepted" in smoke,
+        "SQLite runtime supports account queries": "sqlite-3.53.4" in _src("packaging/linux-compat/build-runtime.sh"),
         "actual package install and launch": "smoke.Dockerfile" in workflow and "docker run --rm" in workflow,
         "both layouts launched": "launch('/usr/bin/opal'" in smoke and "launch('/tmp/local-opal/bin/opal'" in smoke,
         "publish waits for compatibility proof": "needs: [macos-arm64, linux-x86_64, linux-compat," in release,
@@ -1292,3 +1294,21 @@ def test_linux_compatibility_release_gate():
     if bad:
         return "fail", ", ".join(bad)
     return "pass", "release blocked until Focal package, decoder and both actual install layouts pass"
+
+
+@test("Release tag matches the actual app version", "Packaging")
+def test_release_version_match():
+    from importlib.util import module_from_spec, spec_from_file_location
+    spec = spec_from_file_location("release_version", os.path.join(PROJECT_DIR, "scripts/check-release-version.py"))
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    for tag, version, expected in [
+        ("v0.8.8", "0.8.8", True), ("v0.8.7", "0.8.8", False),
+        ("0.8.8", "0.8.8", False), ("v0.8.8-rc1", "0.8.8-rc1", True),
+        ("vbad", "bad", False),
+    ]:
+        if module.check(tag, version) != expected:
+            return "fail", "tag/app version check failed"
+    if 'scripts/check-release-version.py "$OPAL_RELEASE_TAG"' not in _src(".github/workflows/release.yml"):
+        return "fail", "release workflow bypasses version verification"
+    return "pass", "publication refuses version mismatches and invalid tags"
