@@ -1,0 +1,31 @@
+name: opal
+arch: amd64
+platform: linux
+version: "${VERSION}"
+maintainer: "Palash <via github.com/debpalash>"
+homepage: "https://github.com/debpalash/Opal"
+license: "GPL-3.0-only"
+description: "Opal media suite — private runtime for Ubuntu 20.04 and newer."
+contents:
+  - src: compat-artifacts/compat-root/usr/
+    dst: /usr/
+depends:
+  - libc6 (>= 2.31)
+  - libstdc++6 (>= 9)
+  - libgcc-s1
+  - libsqlite3-0
+  - libass9
+  - libluajit-5.1-2
+  - libasound2
+  - libpulse0
+  - libx11-6
+  - libxext6
+  - libxrandr2
+  - libxcursor1
+  - libxi6
+  - libxfixes3
+  - libxss1
+  - libgl1
+  - curl
+  - python3
+  - ca-certificates

@@ -479,7 +479,7 @@ def test_linux_installer_rootless_default():
         fake("uname", 'case "${1:-}" in -m) echo x86_64 ;; *) echo Linux ;; esac\n')
         fake("getconf", 'echo "glibc 2.39"\n')
         fake("sha256sum", 'printf "testhash  %s\\n" "$1"\n')
-        fake("sudo", 'touch "$HOME/sudo-was-called"\nexit 99\n')
+        fake("sudo", 'touch "$TEST_ROOT/sudo-was-called"\nexit 99\n')
         fake("curl", r'''
 out=""; url=""
 while [ "$#" -gt 0 ]; do
@@ -507,7 +507,8 @@ printf '<svg/>\n' > "$dest/usr/share/icons/hicolor/scalable/apps/opal.svg"
 
         env = os.environ.copy()
         env.update({
-            "HOME": str(home),
+            "XDG_CONFIG_HOME": str(home / "config"),
+            "TEST_ROOT": str(home),
             "OPAL_PREFIX": str(prefix),
             "OPAL_VERSION": "v9.9.9",
             "PATH": str(fakebin) + os.pathsep + env.get("PATH", ""),
@@ -538,7 +539,7 @@ printf '<svg/>\n' > "$dest/usr/share/icons/hicolor/scalable/apps/opal.svg"
     return "pass", "default path calls no sudo and installs executable + nova2 under ~/.local"
 
 
-@test("Linux installer rejects incompatible glibc before downloading", "Packaging")
+@test("Linux installer selects a compatible glibc package", "Packaging")
 def test_linux_installer_runtime_compatibility():
     if 'libc6 (>= 2.38)' not in _src("packaging/nfpm.yaml"):
         return "fail", ".deb is missing its glibc runtime dependency"
@@ -546,11 +547,11 @@ def test_linux_installer_runtime_compatibility():
         return "skip", "installer execution needs a POSIX host"
     result = subprocess.run(
         [sys.executable, "tests/test_linux_installer.py"], cwd=PROJECT_DIR,
-        capture_output=True, text=True, timeout=40,
+        capture_output=True, text=True, timeout=90,
     )
     if result.returncode:
         return "fail", (result.stderr or result.stdout)[-1200:]
-    return "pass", "old/unknown runtimes preserve installs; supported versions install; uninstall/list remain available"
+    return "pass", "old tags/unknown runtimes preserve installs; new releases select compatibility packages and launch rootlessly"
 
 
 @test("File associations + single instance", "Packaging")
@@ -1256,3 +1257,38 @@ def test_download_management_live():
         if result.returncode:
             return "fail", (result.stdout + result.stderr)[-2000:]
     return "pass", "isolated profiles: remove/restart, file preservation, HTTP resume, pause/remove worker ownership"
+
+
+@test("macOS dependency installation repairs stale OpenSSL links", "Packaging")
+def test_macos_deps_link_recovery():
+    if os.name == "nt":
+        return "skip", "requires POSIX shell"
+    result = subprocess.run(
+        [sys.executable, "tests/test_macos_deps.py"], cwd=PROJECT_DIR,
+        capture_output=True, text=True, timeout=90,
+    )
+    if result.returncode:
+        return "fail", (result.stderr or result.stdout)[-1200:]
+    return "pass", "stale OpenSSL links repaired; real install/link/dependency failures propagate"
+
+
+@test("Ubuntu 20.04 release includes a verified private runtime", "Packaging")
+def test_linux_compatibility_release_gate():
+    workflow = _src(".github/workflows/linux-compat.yml")
+    release = _src(".github/workflows/release.yml")
+    docker = _src("packaging/linux-compat/Dockerfile")
+    smoke = _src("packaging/linux-compat/smoke.py")
+    manifest = _src("packaging/linux-compat/nfpm.yaml")
+    checks = {
+        "build uses Focal": "FROM ubuntu:20.04" in docker,
+        "host glibc dependency declared": "libc6 (>= 2.31)" in manifest,
+        "native ABI floor verified": "requires glibc newer than 2.31" in _src("packaging/linux-compat/stage.py"),
+        "actual package install and launch": "smoke.Dockerfile" in workflow and "docker run --rm" in workflow,
+        "both layouts launched": "launch('/usr/bin/opal'" in smoke and "launch('/tmp/local-opal/bin/opal'" in smoke,
+        "publish waits for compatibility proof": "needs: [macos-arm64, linux-x86_64, linux-compat," in release,
+        "corresponding sources published": "artifacts/opal-*-linux-compat-sources.tar.gz" in release,
+    }
+    bad = [name for name, ok in checks.items() if not ok]
+    if bad:
+        return "fail", ", ".join(bad)
+    return "pass", "release blocked until Focal package, decoder and both actual install layouts pass"

@@ -26,9 +26,9 @@
 #                          .msi installer or the portable .zip from
 #                          https://github.com/debpalash/Opal/releases
 #
-# Prebuilt Linux artifacts require glibc 2.38 or newer. Older hosts need a
-# source build with the documented native-library versions, or an OS upgrade.
-# OPAL_SYSTEM and AppImage do not bypass this runtime requirement.
+# Standard Linux artifacts require glibc 2.38+. Releases from v0.8.8 include
+# a private-runtime .deb for Debian/Ubuntu hosts with glibc 2.31–2.37.
+# The installer selects it automatically, including for user-local installs.
 #
 # Every download is verified against the release's SHA256SUMS.txt.
 set -eu
@@ -137,7 +137,7 @@ as_root() {
 
 install_linux_system() {
     if have apt-get; then
-        fetch "opal_${VER}_amd64.deb" "$TMP/opal.deb"
+        fetch "$DEB_ASSET" "$TMP/opal.deb"
         say "installing system .deb"
         as_root apt-get install -y "$TMP/opal.deb"
         receipt deb; say "done — run: opal"; return
@@ -204,7 +204,7 @@ install_linux_local_deb() {
     libdir="$prefix/lib/opal"
     icondir="$prefix/share/icons/hicolor/scalable/apps"
 
-    fetch "opal_${VER}_amd64.deb" "$TMP/opal.deb"
+    fetch "$DEB_ASSET" "$TMP/opal.deb"
     mkdir -p "$root"
     dpkg-deb -x "$TMP/opal.deb" "$root" || die "could not unpack the .deb for a user-local install"
     [ -x "$root/usr/bin/opal" ] || die "the .deb does not contain usr/bin/opal"
@@ -269,9 +269,10 @@ install_linux_local() {
 }
 
 require_linux_glibc() {
-    # All Linux release formats carry the same Ubuntu-built executable. Check
-    # before downloading or changing an existing install: .deb extraction and
-    # AppImage cannot make a newer glibc ABI work on an older host (#100).
+    # Select by the actual host ABI and the release checksum manifest. Older
+    # tags remain installable only on their supported runtime; never fall back
+    # to the modern executable on an old host or change an existing install.
+    DEB_ASSET="opal_${VER}_amd64.deb"
     have getconf || die "cannot check the Linux runtime: getconf is required (glibc 2.38 or newer)"
     libc_info=$(getconf GNU_LIBC_VERSION 2>/dev/null) \
         || die "prebuilt Linux releases require glibc 2.38 or newer; could not detect glibc. See https://github.com/$REPO#building-from-source"
@@ -292,12 +293,20 @@ require_linux_glibc() {
     case "$libc_minor" in
         ''|*[!0-9]*) die "could not parse glibc version: $libc_version" ;;
     esac
-    if [ "$libc_major" -lt 2 ] || { [ "$libc_major" -eq 2 ] && [ "$libc_minor" -lt 38 ]; }; then
-        die "this release requires glibc 2.38 or newer; detected glibc $libc_version.
-  Ubuntu 20.04/22.04, Debian 12 and Mint 21 cannot run the prebuilt Linux artifacts.
-  Use Ubuntu 24.04+, Debian 13+, or build from source with the required native libraries:
-  https://github.com/$REPO#building-from-source
-  Changing OPAL_SYSTEM or using AppImage does not fix an incompatible runtime."
+    if [ "$libc_major" -lt 2 ] || { [ "$libc_major" -eq 2 ] && [ "$libc_minor" -lt 31 ]; }; then
+        die "prebuilt Linux releases require glibc 2.31 or newer; detected glibc $libc_version"
+    fi
+    if [ "$libc_major" -eq 2 ] && [ "$libc_minor" -lt 38 ]; then
+        have dpkg-deb || die "the compatibility package requires dpkg-deb (Debian/Ubuntu); detected glibc $libc_version"
+        DEB_ASSET="opal_${VER}_compat_amd64.deb"
+        need_curl
+        if ! curl -fsSL -o "$TMP/compat-checksums" "$DL/$VERSION/SHA256SUMS.txt" \
+            || ! awk -v asset="$DEB_ASSET" '$2 == asset { found=1 } END { exit !found }' "$TMP/compat-checksums"; then
+            die "this release requires glibc 2.38 or newer; detected glibc $libc_version.
+  $VERSION has no verified compatibility package. Select v0.8.8 or newer,
+  upgrade your OS, or build from source: https://github.com/$REPO#building-from-source"
+        fi
+        say "using the private-runtime compatibility package (glibc $libc_version)"
     fi
 }
 
