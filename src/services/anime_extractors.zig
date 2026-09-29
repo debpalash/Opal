@@ -129,7 +129,7 @@ pub fn resolveEmbed(embed_url: []const u8) ?Resolved {
 /// StreamWish / Filemoon / VidHide / Mp4Upload — all packed. Fetch, unpack, then
 /// pull the `ext` URL out of the unpacked JS.
 fn resolvePacked(embed_url: []const u8, referer: []const u8, html_buf: []u8, ext: []const u8) ?Resolved {
-    const html = scrape.scrapeFetch(embed_url, html_buf) orelse return null;
+    const html = curlGet(embed_url, referer, false, html_buf) orelse return null;
 
     // Unpack in a heap buffer (the unpacked JS can exceed the packed source).
     const un_buf = alloc.alloc(u8, 1024 * 1024) catch return null;

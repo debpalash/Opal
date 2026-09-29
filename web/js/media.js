@@ -11,6 +11,9 @@ const mediaIcon = name => {
 // Server routes are async: /anime/search & /anime/episodes trigger background
 // work and return {ok:true}; poll GET /anime for {results,episodes,selected,loading}.
 let animeWatch = null;
+let animeEpisodeWatch = null;
+let animeEpisodeGeneration = 0;
+let animePlaybackWatch = null;
 async function loadAnime(){
   try {
     const data = await api('/anime');
@@ -19,13 +22,15 @@ async function loadAnime(){
     return data;
   } catch {}
 }
-function renderAnime(d){ renderAnimeResults(d.results || []); renderAnimeEpisodes(d.episodes || []); }
+function renderAnime(d){ renderAnimeResults(d.results || []); renderAnimeEpisodes(d.episodes || [], d); }
 $('anime-go').onclick = () => runAnime();
 $('anime-q').addEventListener('keydown', e => { if (e.key === 'Enter') { runAnime(); $('anime-q').blur(); } });
 function runAnime(){
+  clearInterval(animeEpisodeWatch); ++animeEpisodeGeneration;
+  clearInterval(animePlaybackWatch);
   const q = $('anime-q').value.trim(); if (!q) return;
   $('anime-hint').innerHTML = '<span class="spin"></span> Searching anime…';
-  $('anime-results').innerHTML = ''; lastHtml.animeResults = ''; $('anime-episodes').innerHTML = '';
+  $('anime-results').innerHTML = ''; lastHtml.animeResults = ''; $('anime-episodes').innerHTML = ''; lastHtml.animeEpisodes = '';
   $('anime-more').style.display = 'none';
   api('/anime/search?q=' + encodeURIComponent(q)).catch(()=>{});
   clearInterval(animeWatch);
@@ -71,26 +76,61 @@ function renderAnimeResults(rs){
     }, button);
   });
 }
-function loadAnimeEpisodes(idx){
+async function loadAnimeEpisodes(idx){
+  clearInterval(animeEpisodeWatch);
+  clearInterval(animePlaybackWatch);
+  const generation = ++animeEpisodeGeneration;
   $('anime-episodes').innerHTML = '<div class="empty"><span class="spin"></span></div>';
-  api('/anime/episodes?idx=' + idx).catch(()=>{});
+  lastHtml.animeEpisodes = '';
+  try { await api('/anime/episodes?idx=' + idx); }
+  catch { $('anime-episodes').textContent = 'Could not load episodes. Try again.'; return; }
+  if (generation !== animeEpisodeGeneration) return;
   let tries = 0;
-  const t = settledInterval(async () => {
-    tries++;
+  animeEpisodeWatch = settledInterval(async () => {
+    if (generation !== animeEpisodeGeneration) return;
     try {
       const d = await api('/anime');
-      if ((d.episodes || []).length || tries > 15) { clearInterval(t); renderAnimeEpisodes(d.episodes || []); }
-    } catch { clearInterval(t); }
+      if (generation !== animeEpisodeGeneration) return;
+      if (d.selected !== idx) { clearInterval(animeEpisodeWatch); return; }
+      renderAnimeEpisodes(d.episodes || [], d);
+      if (!d.episodes_loading || ++tries > 120) clearInterval(animeEpisodeWatch);
+    } catch { clearInterval(animeEpisodeWatch); }
   }, 700);
 }
-function renderAnimeEpisodes(eps){
-  $('anime-episodes').innerHTML = eps.length
+function renderAnimeEpisodes(eps, data = {}){
+  const status = data.episodes_loading ? '<div class="empty"><span class="spin"></span> Loading episodes…</div>'
+    : data.episodes_failed ? '<div class="empty">Episode details unavailable. Select the title to retry.</div>' : '';
+  const playback = data.stream_loading ? '<div class="empty">Finding a stream… <button id="anime-cancel">Cancel</button></div>'
+    : data.stream_failed ? '<div class="empty">No playable source found. Check installed anime sources or try Search.</div>' : '';
+  const html = status + playback + (eps.length
     ? '<div class="sect">Episodes</div><div class="ep-grid">' +
-      eps.map(e => `<button class="ep-btn" data-ep="${esc(String(e))}">${esc(String(e))}</button>`).join('') + '</div>'
-    : '';
-  $('anime-episodes').querySelectorAll('.ep-btn').forEach(b => b.onclick = () => {
-    api('/anime/play?ep=' + encodeURIComponent(b.dataset.ep)).catch(()=>{});
-    b.textContent = '▶';
+      eps.map(e => {
+        const busy = data.stream_loading && Number(e) === data.stream_episode;
+        return `<button class="ep-btn" data-ep="${esc(String(e))}"${busy ? ' disabled aria-busy="true"' : ''}>${busy ? '<span class="spin"></span> ' : ''}${esc(String(e))}</button>`;
+      }).join('') + '</div>'
+    : data.selected != null && !data.episodes_loading && !data.episodes_failed ? '<div class="empty">No episodes announced yet</div>' : '');
+  if (lastHtml.animeEpisodes === html) return;
+  lastHtml.animeEpisodes = html;
+  $('anime-episodes').innerHTML = html;
+  const cancel = $('anime-cancel');
+  if (cancel) cancel.onclick = async () => { await api('/anime/cancel'); clearInterval(animePlaybackWatch); loadAnime(); };
+  $('anime-episodes').querySelectorAll('.ep-btn').forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    b.setAttribute('aria-busy', 'true');
+    b.innerHTML = '<span class="spin"></span> ' + esc(b.dataset.ep);
+    try { await api('/anime/play?ep=' + encodeURIComponent(b.dataset.ep)); }
+    catch {
+      b.disabled = false; b.removeAttribute('aria-busy'); b.textContent = b.dataset.ep;
+      toast('Could not start this episode. Try again.');
+      return;
+    }
+    clearInterval(animePlaybackWatch);
+    let ticks = 0;
+    animePlaybackWatch = settledInterval(async () => {
+      const d = await loadAnime();
+      if ((d && !d.stream_loading) || ++ticks > 180) clearInterval(animePlaybackWatch);
+    }, 700);
+    loadAnime();
   });
 }
 

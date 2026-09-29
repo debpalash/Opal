@@ -50,12 +50,16 @@ pub const RemoteOpenEntry = struct {
     subtitle_len: usize = 0,
 };
 
+pub const MAX_ANIME_EPISODES = @import("../services/anime_catalog_pure.zig").capacity;
+
 pub const AnimeResult = struct {
     id: [64]u8 = std.mem.zeroes([64]u8),
     id_len: usize = 0,
     anilist_id: i64 = 0,
     name: [128]u8 = std.mem.zeroes([128]u8),
     name_len: usize = 0,
+    name_english: [128]u8 = std.mem.zeroes([128]u8),
+    name_english_len: usize = 0,
     episodes: u16 = 0,
 
     score: f32 = 0.0,
@@ -978,17 +982,17 @@ pub const AppState = struct {
         selected_idx: ?usize = null,
         episodes: [512]u8 = std.mem.zeroes([512]u8),
         episodes_len: usize = 0,
-        episode_list: [200][8]u8 = std.mem.zeroes([200][8]u8),
-        episode_list_lens: [200]usize = std.mem.zeroes([200]usize),
-        episode_titles: [200][80]u8 = std.mem.zeroes([200][80]u8),
-        episode_title_lens: [200]usize = std.mem.zeroes([200]usize),
-        episode_aired: [200][12]u8 = std.mem.zeroes([200][12]u8),
-        episode_aired_lens: [200]usize = std.mem.zeroes([200]usize),
-        episode_scores: [200]f32 = std.mem.zeroes([200]f32),
-        episode_filler: [200]bool = std.mem.zeroes([200]bool),
+        episode_list: [MAX_ANIME_EPISODES][8]u8 = std.mem.zeroes([MAX_ANIME_EPISODES][8]u8),
+        episode_list_lens: [MAX_ANIME_EPISODES]usize = std.mem.zeroes([MAX_ANIME_EPISODES]usize),
+        episode_titles: [MAX_ANIME_EPISODES][80]u8 = std.mem.zeroes([MAX_ANIME_EPISODES][80]u8),
+        episode_title_lens: [MAX_ANIME_EPISODES]usize = std.mem.zeroes([MAX_ANIME_EPISODES]usize),
+        episode_aired: [MAX_ANIME_EPISODES][12]u8 = std.mem.zeroes([MAX_ANIME_EPISODES][12]u8),
+        episode_aired_lens: [MAX_ANIME_EPISODES]usize = std.mem.zeroes([MAX_ANIME_EPISODES]usize),
+        episode_scores: [MAX_ANIME_EPISODES]f32 = std.mem.zeroes([MAX_ANIME_EPISODES]f32),
+        episode_filler: [MAX_ANIME_EPISODES]bool = std.mem.zeroes([MAX_ANIME_EPISODES]bool),
         episode_count: usize = 0,
-        episodes_loading: bool = false,
-        stream_loading: bool = false,
+        episodes_loading: std.atomic.Value(bool) = .init(false),
+        stream_loading: std.atomic.Value(bool) = .init(false),
 
         // ── Netflix/Apple-TV+ browse: modes, seasons, calendar, tracking ──
         // The card grid (results[]) is reused by every grid mode; each mode just
@@ -1006,7 +1010,7 @@ pub const AppState = struct {
         relations_loading: bool = false,
         // Tracking: per-episode watched flags for the selected anime (loaded
         // from db when episodes load); episode N → episode_watched[N-1].
-        episode_watched: [200]bool = std.mem.zeroes([200]bool),
+        episode_watched: [MAX_ANIME_EPISODES]bool = std.mem.zeroes([MAX_ANIME_EPISODES]bool),
         // Continue-Watching rail (My List mode), loaded from db.
         continue_items: [12]ContinueItem = std.mem.zeroes([12]ContinueItem),
         continue_count: usize = 0,

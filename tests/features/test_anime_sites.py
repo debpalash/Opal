@@ -103,8 +103,8 @@ def test_anime_site_frameworks():
     #    resolveEmbed (the extractor stack already on main).
     if "scraperPlayThread" not in anime:
         problems.append("anime.zig missing the scraper episode→play worker")
-    if "playEmbed(e)" not in anime and "playEmbed(embed" not in anime:
-        problems.append("scraper play path does not call playEmbed with the embed URL")
+    if "publishPlayback(.{ .job = job, .stream = resolved })" not in anime:
+        problems.append("scraper play path does not queue the resolved stream")
     # playEmbed itself must drive resolveEmbed (the shared extractor entrypoint).
     if "resolveEmbed" not in anime:
         problems.append("anime.zig play path does not reach resolveEmbed")

@@ -3452,8 +3452,8 @@ pub fn playResolvedItem(item: *const ResolvedItem) void {
         },
         .anime => {
             const anime = @import("anime.zig");
-            anime.playEpisode(item.url[0..item.url_len]);
-            state.gotoPlayer();
+            anime.searchAnime(item.name[0..item.name_len]);
+            state.navigateToTab(.Anime);
         },
         .comics => {
             // Load the issue and reveal the Browse › Comics reader (comics read
