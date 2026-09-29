@@ -1364,7 +1364,7 @@ def test_python38_engine_imports():
                             capture_output=True, text=True, timeout=20)
     if result.returncode:
         return "fail", (result.stderr or result.stdout)[-1200:]
-    return "pass", "legacy builtin generic imports and SOCKS proxy casts stay compatible"
+    return "pass", "legacy imports, SOCKS proxy casts and every engine's XML metadata stay compatible"
 
 
 @test("macOS media libraries allow bundle path rewrites", "Packaging")

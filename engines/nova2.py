@@ -197,7 +197,10 @@ def get_capabilities(engines: Iterable[EngineModuleName]) -> str:
                                              if key != Category.all.name))
         ET.SubElement(engine_module_element, 'categories').text = supported_categories
 
-    ET.indent(capabilities_element)
+    # ElementTree.indent was added in Python 3.9; XML consumers do not need
+    # pretty-printing on Focal's Python 3.8.
+    if hasattr(ET, 'indent'):
+        ET.indent(capabilities_element)
     return ET.tostring(capabilities_element, 'unicode')
 
 

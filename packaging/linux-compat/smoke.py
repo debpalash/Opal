@@ -10,6 +10,7 @@ import time
 import urllib.request
 import urllib.parse
 import urllib.error
+import xml.etree.ElementTree as ET
 from elf import has_dynamic_segment
 
 assert subprocess.check_output(['getconf', 'GNU_LIBC_VERSION'], text=True).strip() == 'glibc ' + os.environ.get('EXPECTED_GLIBC', '2.31')
@@ -21,6 +22,9 @@ for binary in Path('/usr/lib/opal').iterdir():
 # (3.8 on Focal), then exercise the app's offline thread-pool seam.
 engines = subprocess.check_output(['python3', '/usr/lib/opal/engines/nova2.py', '--capabilities', '--names'], text=True)
 assert 'nekobt' in engines and 'shanaproject' in engines, 'packaged torrent engines failed to import'
+capabilities = ET.fromstring(subprocess.check_output(['python3', '/usr/lib/opal/engines/nova2.py', '--capabilities'], text=True))
+assert {item.tag for item in capabilities} == set(engines.strip().split(',')), 'packaged XML engine metadata incomplete'
+assert 'anime' in capabilities.find('tokyotoshokan/categories').text.split(), 'Tokyo anime category missing'
 pool = subprocess.check_output(['python3', '/usr/lib/opal/engines/nova2.py', '--timeout=2', '--pool-selftest'], text=True)
 assert 'NOVA2_APP_POOL_OK' in pool, 'packaged torrent dispatcher failed'
 subprocess.run(['python3', '/usr/lib/opal/scripts/camoufox_bridge.py', '--selftest'], check=True)

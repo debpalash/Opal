@@ -18,7 +18,9 @@ import sys
 sys.path.insert(0, 'engines')
 class LegacyBuiltin:
     pass
-for filename in ['helpers.py', 'nova2.py']:
+import re
+re.Pattern = LegacyBuiltin
+for filename in ['novaprinter.py', 'helpers.py', 'nova2.py']:
     path = Path('engines') / filename
     ns = dict(__name__='legacy_import', __file__=str(path),
               dict=LegacyBuiltin, list=LegacyBuiltin, set=LegacyBuiltin,
@@ -32,7 +34,27 @@ for filename in ['helpers.py', 'nova2.py']:
             ns['enable_socks_proxy'](False)
             del os.environ['qbt_socks_proxy']
 '''
-        result = subprocess.run([sys.executable, '-c', probe], cwd=PROJECT,
+        result = subprocess.run([os.environ.get('OPAL_TEST_PYTHON38', sys.executable), '-c', probe], cwd=PROJECT,
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_all_engine_xml_capabilities_without_python39_indent(self):
+        probe = r'''
+import sys
+sys.path.insert(0, 'engines')
+import nova2
+import xml.etree.ElementTree as ET
+if hasattr(ET, 'indent'):
+    del ET.indent
+names = nova2.list_engines()
+root = ET.fromstring(nova2.get_capabilities(names))
+assert {item.tag for item in root} == set(names)
+for item in root:
+    assert item.find('name').text and item.find('url').text
+assert root.find('tokyotoshokan/name').text == 'Tokyo Toshokan'
+assert 'anime' in root.find('tokyotoshokan/categories').text.split()
+'''
+        result = subprocess.run([os.environ.get('OPAL_TEST_PYTHON38', sys.executable), '-c', probe], cwd=PROJECT,
                                 capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
 

@@ -16,6 +16,8 @@ from novaprinter import prettyPrinter
 from helpers import download_file, retrieve_url
 
 class tokyotoshokan(object):
+    name = 'Tokyo Toshokan'
+    supported_categories = {'all': '0', 'anime': '1', 'games': '14'}
     url = 'http://tokyotosho.info'
 
     global page_count
