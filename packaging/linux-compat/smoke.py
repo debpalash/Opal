@@ -16,6 +16,9 @@ for binary in Path('/usr/lib/opal').iterdir():
     if binary.is_file() and binary.read_bytes()[:4] == b'\x7fELF':
         linked = subprocess.run(['ldd', str(binary)], text=True, capture_output=True)
         assert linked.returncode == 0 and 'not found' not in linked.stdout, (binary, linked.stdout, linked.stderr)
+# The software build must retain AV1 decoding as well as native H.264/HEVC.
+decoders = subprocess.check_output(['/usr/lib/opal/ffmpeg', '-hide_banner', '-decoders'], text=True)
+assert 'libdav1d' in decoders, 'AV1 software decoder missing'
 # Exercise a decoder in the privately shipped FFmpeg, with a real output file.
 subprocess.run(['/usr/lib/opal/ffmpeg', '-hide_banner', '-loglevel', 'error',
                 '-f', 'lavfi', '-i', 'testsrc=size=96x96:rate=10', '-t', '30',

@@ -1,6 +1,10 @@
 name: Ubuntu 20.04 compatibility
 on:
   workflow_call:
+    inputs:
+      release:
+        type: boolean
+        default: false
     secrets:
       TMDB_API_TOKEN:
         required: false
@@ -32,6 +36,7 @@ jobs:
           target: artifacts
           platforms: linux/amd64
           outputs: type=local,dest=compat-artifacts
+          build-args: OPAL_BUILD_CACHE_KEY=${{ inputs.release && github.run_id || 'preview' }}
           cache-from: type=gha,scope=linux-compat
           cache-to: type=gha,mode=max,scope=linux-compat
           secrets: |

@@ -38,7 +38,7 @@ fetch ffmpeg-7.1.5 https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n7.1.5.tar
 (
     cd "$WORK/FFmpeg-n7.1.5"
     ./configure --prefix="$PREFIX" --enable-shared --disable-static --disable-doc \
-        --disable-autodetect --enable-openssl --enable-version3 \
+        --disable-autodetect --enable-openssl --enable-version3 --enable-libdav1d \
         --extra-cflags="-I$PREFIX/include" --extra-ldflags="-L$PREFIX/lib"
     make -j "$JOBS"
     make install

@@ -3,7 +3,7 @@ FROM ubuntu:20.04 AS runtime-deps
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential pkg-config curl ca-certificates xz-utils cmake python3 python3-pip \
-    ninja-build nasm patchelf python3-jinja2 libboost-system-dev libsqlite3-dev libass-dev \
+    ninja-build nasm patchelf python3-jinja2 libboost-system-dev libsqlite3-dev libass-dev libdav1d-dev \
     libluajit-5.1-dev libasound2-dev libpulse-dev libx11-dev libxext-dev \
     libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libgl1-mesa-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -19,6 +19,9 @@ ENV PKG_CONFIG_PATH="/opt/opal-runtime/lib/pkgconfig"
 ENV LD_LIBRARY_PATH="/opt/opal-runtime/lib"
 WORKDIR /src
 COPY . .
+# Secrets do not enter cache keys. A nonsecret release-run identifier forces
+# recompilation when release credentials differ from a cached PR build.
+ARG OPAL_BUILD_CACHE_KEY=preview
 # BuildKit keeps API keys out of image metadata and build arguments.
 RUN --mount=type=secret,id=opal_tmdb --mount=type=secret,id=opal_omdb \
     OPAL_TMDB_TOKEN="$(cat /run/secrets/opal_tmdb 2>/dev/null || true)" \

@@ -6,6 +6,7 @@ export VERSION
 # Native x86_64 builder required; Docker can emulate it on other hosts.
 docker buildx build --platform linux/amd64 --progress=plain \
     --file packaging/linux-compat/Dockerfile --target artifacts \
+    --build-arg "OPAL_BUILD_CACHE_KEY=local-$(date +%s)" \
     --secret id=opal_tmdb,env=OPAL_TMDB_TOKEN --secret id=opal_omdb,env=OPAL_OMDB_KEY \
     --output type=local,dest=compat-artifacts .
 if [ ! -x ./nfpm ]; then

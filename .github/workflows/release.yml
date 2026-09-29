@@ -748,6 +748,8 @@ jobs:
   linux-compat:
     needs: validate-release
     uses: ./.github/workflows/linux-compat.yml
+    with:
+      release: true
     secrets: inherit
 
   publish:

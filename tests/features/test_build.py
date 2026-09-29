@@ -1281,6 +1281,7 @@ def test_linux_compatibility_release_gate():
     manifest = _src("packaging/linux-compat/nfpm.yaml")
     checks = {
         "build uses Focal": "FROM ubuntu:20.04" in docker,
+        "release keys cannot reuse preview binary": "ARG OPAL_BUILD_CACHE_KEY" in docker and "inputs.release && github.run_id" in workflow and "release: true" in release,
         "host glibc dependency declared": "libc6 (>= 2.31)" in manifest,
         "native ABI floor verified": "requires glibc newer than 2.31" in _src("packaging/linux-compat/stage.py"),
         "account setup covered": "api/auth/register" in smoke and "protected API accepted" in smoke,
