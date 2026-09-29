@@ -2,7 +2,7 @@
 Byte-for-byte identical test bodies; see tests/features/harness.py for the
 shared @test decorator, helpers, and run_all()."""
 from .harness import *  # noqa: F401,F403
-import os, sys, re, subprocess, sqlite3, socket, time, json  # noqa: F401
+import os, sys, re, subprocess, sqlite3, socket, time, json, shutil  # noqa: F401
 
 def _built_binary():
     # zig names the exe `opal` on POSIX and `opal.exe` on Windows.
@@ -1312,6 +1312,19 @@ def test_linux_compat_static_helper():
     if result.returncode:
         return "fail", (result.stderr or result.stdout)[-1200:]
     return "pass", "real static musl and dynamic glibc binaries follow the correct packaging path"
+
+
+@test("Compatibility Debian package preserves both launchers and nested resources", "Packaging")
+def test_linux_compat_manifest_tree():
+    if "type: tree" not in _src("packaging/linux-compat/nfpm.yaml") or "tests/test_linux_compat_manifest.py" not in _src(".github/workflows/linux-compat.yml"):
+        return "fail", "recursive package layout or required packaging regression missing"
+    if not (os.environ.get("OPAL_TEST_NFPM") or shutil.which("nfpm")):
+        return "skip", "nfpm absent locally; required actual package regression runs in compatibility CI"
+    result = subprocess.run([sys.executable, "tests/test_linux_compat_manifest.py"], cwd=PROJECT_DIR,
+                            capture_output=True, text=True, timeout=30)
+    if result.returncode:
+        return "fail", (result.stderr or result.stdout)[-1200:]
+    return "pass", "actual nfpm manifest retains distinct launchers, engine resources and license paths"
 
 
 @test("Release tag matches the actual app version", "Packaging")

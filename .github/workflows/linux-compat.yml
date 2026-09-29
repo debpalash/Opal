@@ -61,6 +61,7 @@ jobs:
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           curl -fL --retry 3 https://github.com/goreleaser/nfpm/releases/download/v2.41.3/nfpm_2.41.3_Linux_x86_64.tar.gz -o /tmp/opal-nfpm.tar.gz
           tar -xzf /tmp/opal-nfpm.tar.gz nfpm
+          OPAL_TEST_NFPM="$PWD/nfpm" python3 tests/test_linux_compat_manifest.py
           ./nfpm package -f packaging/linux-compat/nfpm.yaml -p deb -t "opal_${VERSION}_compat_amd64.deb"
           mkdir -p compat-artifacts/sources/opal
           git archive HEAD | tar -x -C compat-artifacts/sources/opal

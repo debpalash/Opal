@@ -9,6 +9,7 @@ description: "Opal media suite — private runtime for Ubuntu 20.04 and newer."
 contents:
   - src: compat-artifacts/compat-root/usr/
     dst: /usr/
+    type: tree
 depends:
   - libc6 (>= 2.31)
   - libstdc++6 (>= 9)
