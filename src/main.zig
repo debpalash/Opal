@@ -1,3 +1,6 @@
+test "Anime playback module" {
+    _ = @import("services/anime.zig");
+}
 test "Browse regression modules" {
     _ = @import("core/latest_request.zig");
     _ = @import("services/tmdb_api.zig");
@@ -859,6 +862,7 @@ pub fn appDeinit() void {
 
     // Clean up UI arrays
     @import("services/tmdb.zig").deinitDetail();
+    @import("services/anime.zig").deinitEpisodeRequests();
     @import("services/episode_art.zig").deinit();
     @import("services/tv_library.zig").deinitPosters();
     state.app.tmdb.results.deinit(@import("core/alloc.zig").allocator);
@@ -1604,6 +1608,8 @@ fn appFrame() !dvui.App.Result {
     @import("services/jellyfin.zig").drainTranscodeRecovery();
     @import("services/tmdb.zig").checkEpisodeStartup();
     @import("services/tmdb.zig").applyPendingDetail();
+    @import("services/anime.zig").applyPendingEpisodes();
+    @import("services/anime.zig").applyPendingPlayback();
 
     // Native macOS Now Playing + hardware media keys: drain pending remote
     // commands (play/pause/seek from media keys, AirPods, Control Center)

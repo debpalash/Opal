@@ -199,6 +199,11 @@ pub fn build(b: *std.Build) void {
     }
     b.step("test-tv-detail", "Test production TV metadata and restore helpers").dependOn(&run_tv_detail_tests.step);
 
+    const anime_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Anime playback"} });
+    const run_anime_tests = b.addRunArtifact(anime_tests);
+    if (is_windows) run_anime_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
+    b.step("test-anime", "Test anime episode publication and playback lifecycle").dependOn(&run_anime_tests.step);
+
     const browse_tests = b.addTest(.{
         .root_module = exe.root_module,
         .filters = &.{"Browse regression"},
@@ -880,6 +885,12 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(test_plex_pure).step);
 
     // Anime NSFW filter: Jikan rating classification + sfw query param.
+    const test_anime_catalog = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/services/anime_catalog_pure.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    test_step.dependOn(&b.addRunArtifact(test_anime_catalog).step);
     const test_anime_pure = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/anime_pure.zig"),

@@ -161,6 +161,58 @@ test('anime paging uses the shared browse loader and renders rich cards', async 
   assert.equal(f.$('anime-more').disabled, false);
 });
 
+test('anime episode polling keeps partial pages and rejects a previous selection', async () => {
+  const f = fixture('media.js');
+  f.run(`
+    let animePoll, clearedPoll = false;
+    settledInterval = callback => { animePoll = callback; return 1; };
+    clearInterval = () => { clearedPoll = true; };
+  `);
+  const first = f.run('loadAnimeEpisodes(0)');
+  f.take('/anime/episodes?idx=0').resolve({ok:true});
+  await first;
+  const page = f.run('clearedPoll = false; animePoll()');
+  f.take('/anime').resolve({selected:0, episodes:['1'], episodes_loading:true});
+  await page;
+  assert.match(f.$('anime-episodes').innerHTML, /data-ep="1"/);
+  assert.equal(f.run('clearedPoll'), false, 'first nonempty page must not stop pagination');
+  const stale = f.run('animePoll()');
+  const staleRequest = f.take('/anime');
+  const next = f.run('loadAnimeEpisodes(1)');
+  f.take('/anime/episodes?idx=1').resolve({ok:true});
+  await next;
+  staleRequest.resolve({selected:0, episodes:['999'], episodes_loading:false});
+  await stale;
+  assert.doesNotMatch(f.$('anime-episodes').innerHTML, /999/);
+  const last = f.run('animePoll()');
+  f.take('/anime').resolve({selected:1, episodes:['1','2'], episodes_loading:false});
+  await last;
+  assert.match(f.$('anime-episodes').innerHTML, /data-ep="2"/);
+  assert.equal(f.run('clearedPoll'), true);
+});
+
+test('anime stream cancellation calls the server and refreshes the controls', async () => {
+  const f = fixture('media.js');
+  f.run("renderAnimeEpisodes(['1'], {selected:0, stream_loading:true})");
+  assert.match(f.$('anime-episodes').innerHTML, /anime-cancel/);
+  const cancel = f.$('anime-cancel').onclick();
+  f.take('/anime/cancel').resolve({ok:true});
+  await cancel;
+  f.take('/anime').resolve({selected:0, episodes:['1'], stream_loading:false});
+  await flush();
+  assert.doesNotMatch(f.$('anime-episodes').innerHTML, /anime-cancel/);
+});
+
+test('anime feedback marks only the requested episode busy and restores it on failure', () => {
+  const f = fixture('media.js');
+  f.run("renderAnimeEpisodes(['1','2'], {selected:0, stream_episode:2, stream_loading:true})");
+  assert.match(f.$('anime-episodes').innerHTML, /data-ep="2" disabled aria-busy="true"/);
+  assert.doesNotMatch(f.$('anime-episodes').innerHTML, /data-ep="1" disabled/);
+  f.run("renderAnimeEpisodes(['1','2'], {selected:0, stream_episode:2, stream_loading:false, stream_failed:true})");
+  assert.doesNotMatch(f.$('anime-episodes').innerHTML, /aria-busy/);
+  assert.match(f.$('anime-episodes').innerHTML, /No playable source/);
+});
+
 test('late show metadata cannot overwrite a different show or start its seasons', async () => {
   const f = fixture('catalog.js');
   const old = f.run("openShow(1, 'Old show', '')");

@@ -72,15 +72,15 @@ def test_anime_extractors():
         "player loadStreamWithHeaders": "pub fn loadStreamWithHeaders(" in player,
         "player sets http-header-fields": ('playback_load.dispatch' in player
                                              and '"http-header-fields"' in playback_load),
-        "anime playEmbed public": "pub fn playEmbed(" in anime,
+        "playback committed on owner loop": "pub fn applyPendingPlayback(" in anime,
         "playEmbed calls resolveEmbed": "resolveEmbed(embed)" in anime,
         "playEmbed loads with referer": "loadStreamWithHeaders(" in anime,
         # sub-add now goes through c.mpvSubAdd (argv form) — the literal
         # `sub-add "…"` command string broke on Windows paths (issue #21).
         "playEmbed attaches subs": "mpvSubAdd(" in anime,
         "playEmbed reveals player": "state.gotoPlayer()" in anime,
-        "playEmbed player-idx guard": "active_player_idx < state.app.players.items.len" in anime,
-        "playEmbed off UI thread": "workers.spawn(S.worker" in anime,
+        "playback player-idx guard": "active_player_idx >= state.app.players.items.len" in anime,
+        "extraction off UI thread": "workers.spawn(fetchStreamThread" in anime,
     }
 
     missing = [k for k, ok in checks.items() if not ok]

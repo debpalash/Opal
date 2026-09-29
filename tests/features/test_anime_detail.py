@@ -54,8 +54,8 @@ def test_anime_detail_parity():
         "header synopsis wrapped": "r.overview[0..@min(r.overview_len, r.overview.len)]" in anime,
 
         # ── Horizontal episode rows: numbered tile + info column ──
-        "episode row horizontal": "horizontal (numbered tile" in anime and "ep_i + 2000" in anime,
-        "episode numbered tile": "ep_i + 2100" in anime,
+        "episode grid virtualized": "catalog.episodeGrid(" in anime and "visibleRows(layout.rows" in anime,
+        "episode numbered tile": '"Episode {s}"' in anime,
         "episode watched toggle persists": "toggleWatched(sel_idx, ep_num)" in anime,
         "episode title plays": "playEpisode(ep_str)" in anime,
         # Empty + loading states kept.
@@ -64,5 +64,5 @@ def test_anime_detail_parity():
     }
     missing = [k for k, ok in checks.items() if not ok]
     if not missing:
-        return "pass", "anime detail view at TV parity: rich header + horizontal episode rows + type/year/airing"
+        return "pass", "anime detail view at TV parity: compact header + virtualized episode grid + type/year/airing"
     return "fail", "anime detail parity incomplete: " + ", ".join(missing)

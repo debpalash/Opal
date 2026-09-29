@@ -114,6 +114,8 @@ pub fn headlessMain() !void {
         @import("services/tmdb_api.zig").applyPendingResults();
         @import("services/tmdb.zig").checkEpisodeStartup();
         @import("services/tmdb.zig").applyPendingDetail();
+        @import("services/anime.zig").applyPendingEpisodes();
+        @import("services/anime.zig").applyPendingPlayback();
 
         const now_ms = io.milliTimestamp();
         if (now_ms - last_tick_ms >= tick_interval_ms) {

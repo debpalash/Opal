@@ -8,6 +8,11 @@ const anime = @import("anime.zig");
 const alloc = @import("../core/alloc.zig").allocator;
 
 pub fn handle(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
+    if (std.mem.eql(u8, api_path, "/anime/cancel")) {
+        anime.cancelPlayback();
+        wire.sendJson(stream, "{\"ok\":true}");
+        return;
+    }
     if (std.mem.eql(u8, api_path, "/anime/more")) {
         anime.loadMoreGrid();
         wire.sendJson(stream, "{\"ok\":true,\"action\":\"anime_more\"}");
@@ -86,8 +91,12 @@ fn sendSnapshot(stream: std.Io.net.Stream) void {
     w.writeAll(if (anime.hasMoreGrid()) "true" else "false") catch return;
     w.writeAll(",\"loading\":") catch return;
     w.writeAll(if (state.app.anime.is_loading.load(.acquire)) "true" else "false") catch return;
+    w.print(",\"episodes_loading\":{s}", .{if (state.app.anime.episodes_loading.load(.acquire)) "true" else "false"}) catch return;
+    w.print(",\"episodes_failed\":{s}", .{if (anime.episodeFetchFailed()) "true" else "false"}) catch return;
+    w.print(",\"stream_failed\":{s}", .{if (anime.playbackFailed()) "true" else "false"}) catch return;
+    w.print(",\"stream_episode\":{d}", .{anime.playbackEpisode()}) catch return;
     w.writeAll(",\"stream_loading\":") catch return;
-    w.writeAll(if (state.app.anime.stream_loading) "true" else "false") catch return;
+    w.writeAll(if (state.app.anime.stream_loading.load(.acquire)) "true" else "false") catch return;
     w.writeAll("}") catch return;
     wire.sendJson(stream, json[0..w.end]);
 }

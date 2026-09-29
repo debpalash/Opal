@@ -70,9 +70,7 @@ fn drainPendingTexFrees() void {
 
 const agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0";
 
-// NOTE: state.app.anime.is_loading.load(.acquire) / stream_loading / episodes_loading are plain
-// bools in the global state struct, shared between UI and bg threads without
-// atomics. Acceptable — worst case is one stale UI frame before the flag is seen.
+// Loading flags are atomic; request generations reject late completions.
 pub var has_loaded_trending: bool = false;
 
 // ── UI-control state (module-level, NOT in state.zig). ──
@@ -146,6 +144,8 @@ fn setMode(m: state.AnimeMode) void {
     if (state.app.anime.mode == m) return;
     state.app.anime.mode = m;
     state.app.anime.selected_idx = null;
+    cancelPlayback();
+    episode_request.cancel(&state.app.anime.episodes_loading);
     state.app.anime.episode_count = 0;
     state.app.anime.last_fetch_s = 0; // bypass SWR on explicit switch
     fetched_mode = null; // force renderContent to re-dispatch
@@ -357,7 +357,7 @@ const ANIME_CACHE_TTL_S: i64 = @import("browse_cache.zig").TTL_S;
 const ANIME_BLOB_CAP: usize = 128 * 1024;
 
 fn animeCacheKey(buf: []u8) []const u8 {
-    return std.fmt.bufPrint(buf, "anime:trending:{d}:sfw:{d}", .{
+    return std.fmt.bufPrint(buf, "anime:trending:v2:{d}:sfw:{d}", .{
         @intFromEnum(trend_filter),
         @intFromBool(state.app.nsfw_filter_enabled),
     }) catch "anime:trending";
@@ -366,6 +366,7 @@ fn animeCacheKey(buf: []u8) []const u8 {
 fn serializeAnime(w: *ccp.Writer, it: state.AnimeResult) void {
     w.blob(it.id[0..@min(it.id_len, it.id.len)]);
     w.blob(it.name[0..@min(it.name_len, it.name.len)]);
+    w.blob(it.name_english[0..it.name_english_len]);
     w.u16v(it.episodes);
     w.f32v(it.score);
     w.blob(it.overview[0..@min(it.overview_len, it.overview.len)]);
@@ -391,6 +392,7 @@ fn deserializeAnime(r: *ccp.Reader) ?state.AnimeResult {
     var it = state.AnimeResult{};
     animeCopyField(&it.id, &it.id_len, r.blob() orelse return null);
     animeCopyField(&it.name, &it.name_len, r.blob() orelse return null);
+    animeCopyField(&it.name_english, &it.name_english_len, r.blob() orelse return null);
     it.episodes = r.u16v() orelse return null;
     it.score = r.f32v() orelse return null;
     animeCopyField(&it.overview, &it.overview_len, r.blob() orelse return null);
@@ -454,6 +456,8 @@ pub fn loadTrendingAnime() void {
     // Don't clear result_count here — parseJikanData repopulates and sets the
     // count after the fetch, so a stale-refresh keeps old cards on screen.
     state.app.anime.selected_idx = null;
+    cancelPlayback();
+    episode_request.cancel(&state.app.anime.episodes_loading);
     state.app.anime.episode_count = 0;
     state.app.anime.last_fetch_s = @import("browse_cache.zig").now(); // SWR stamp
     grid_page = 1; // restart infinite-scroll pagination
@@ -756,6 +760,8 @@ fn trendingThread(my_gen: u32) void {
 
 pub fn searchAnime(query: []const u8) void {
     if (query.len == 0) return;
+    state.app.anime.mode = .search;
+    fetched_mode = .search;
     // NOTE: do NOT early-return on is_loading. Live-search supersedes an
     // in-flight fetch: we bump the generation so the older worker's results
     // are dropped, and the search_query_buf is overwritten for the new fetch.
@@ -764,6 +770,8 @@ pub fn searchAnime(query: []const u8) void {
     // Don't clear result_count — keep prior cards visible until new results
     // arrive (no flicker). The new generation guards against stale publishes.
     state.app.anime.selected_idx = null;
+    cancelPlayback();
+    episode_request.cancel(&state.app.anime.episodes_loading);
     state.app.anime.episode_count = 0;
 
     // New generation for this search; the worker captures and re-checks it.
@@ -779,6 +787,8 @@ pub fn searchAnime(query: []const u8) void {
     anime_query_mutex.unlock();
     var job: SearchJob = .{ .generation = my_gen, .query_len = safe_len };
     @memcpy(job.query[0..safe_len], query[0..safe_len]);
+    @memcpy(state.app.anime.search_buf[0..safe_len], job.query[0..safe_len]);
+    @memset(state.app.anime.search_buf[safe_len..], 0);
 
     // Site-framework source installed → search the site's own catalog instead of
     // Jikan (source_config-gated; INERT by default). See the DooPlay/AnimeStream
@@ -919,7 +929,8 @@ fn appendAniListPage(json: []const u8, my_gen: u32, start_offset: usize) usize {
         item.id_len = id.len;
         item.anilist_id = m.id;
         item.name_len = decodeJsonEscapes(title, &item.name);
-        item.episodes = if (m.episodes > 0) m.episodes else 100;
+        item.episodes = m.episodes;
+        item.name_english_len = decodeJsonEscapes(m.title_romaji, &item.name_english);
         item.score = m.score10;
         item.overview_len = decodeJsonEscapes(m.description, &item.overview);
         item.poster_url_len = decodeJsonEscapes(m.cover, &item.poster_url);
@@ -948,6 +959,8 @@ fn appendAniListPage(json: []const u8, my_gen: u32, start_offset: usize) usize {
 pub fn loadSeasonal() void {
     if (state.app.anime.is_loading.load(.acquire)) return;
     state.app.anime.selected_idx = null;
+    cancelPlayback();
+    episode_request.cancel(&state.app.anime.episodes_loading);
     state.app.anime.episode_count = 0;
     state.app.anime.last_fetch_s = @import("browse_cache.zig").now();
     grid_page = 1; // restart infinite-scroll pagination
@@ -991,6 +1004,8 @@ fn seasonalThread(my_gen: u32) void {
 pub fn loadCalendar() void {
     if (state.app.anime.is_loading.load(.acquire)) return;
     state.app.anime.selected_idx = null;
+    cancelPlayback();
+    episode_request.cancel(&state.app.anime.episodes_loading);
     state.app.anime.episode_count = 0;
     state.app.anime.last_fetch_s = @import("browse_cache.zig").now();
     grid_page = 1; // restart infinite-scroll pagination
@@ -1254,13 +1269,13 @@ fn parseJikanDataEx(json: []const u8, my_gen: u32, with_broadcast: bool, start_o
         }
 
         // Extract Episodes
-        var ep_count: u16 = 100;
+        var ep_count: u16 = 0;
         if (std.mem.indexOf(u8, obj_slice, "\"episodes\":")) |ep_idx| {
             const num_st = ep_idx + 11;
             if (num_st < obj_slice.len and obj_slice[num_st] >= '0' and obj_slice[num_st] <= '9') {
                 var ne = num_st;
                 while (ne < obj_slice.len and obj_slice[ne] >= '0' and obj_slice[ne] <= '9') : (ne += 1) {}
-                if (ne > num_st) ep_count = std.fmt.parseInt(u16, obj_slice[num_st..ne], 10) catch 100;
+                if (ne > num_st) ep_count = std.fmt.parseInt(u16, obj_slice[num_st..ne], 10) catch 0;
             }
         }
 
@@ -1329,6 +1344,12 @@ fn parseJikanDataEx(json: []const u8, my_gen: u32, with_broadcast: bool, start_o
             // Decode JSON escapes in name (\" \\ \/ \n \t \uXXXX, etc.)
             item.name_len = decodeJsonEscapes(name_str, &item.name);
             item.episodes = ep_count;
+            item.name_english_len = 0;
+            if (std.json.parseFromSlice(std.json.Value, alloc, json[obj_open..obj_end], .{})) |doc| {
+                defer doc.deinit();
+                animeCopyField(&item.name_english, &item.name_english_len, catalog.string(catalog.field(doc.value, "title_english")));
+            } else |_| {}
+
             item.score = score;
 
             // Decode JSON escapes (Jikan escapes the URL slashes as "\/", which
@@ -1476,150 +1497,180 @@ fn anilistEnrichThread(my_gen: u32) void {
     if (merged > 0) logs.pushLog("info", "anime", "AniList metadata merged", false);
 }
 
+const catalog = @import("anime_catalog_pure.zig");
+var episode_request: LatestRequest = .{};
+var episode_scroll_info: dvui.ScrollInfo = .{};
+var episode_failed = std.atomic.Value(bool).init(false);
+const EpisodeJob = struct { idx: usize, generation: u32, mal: [16]u8, mal_len: usize };
+const EpisodeDocument = struct { job: EpisodeJob, bytes: []u8 };
+var episode_documents: std.ArrayListUnmanaged(EpisodeDocument) = .empty;
+var episode_document_mutex: @import("../core/sync.zig").Mutex = .{};
+
+fn fillEpisodeSlots(total: usize) void {
+    const a = &state.app.anime;
+    const end = @min(total, a.episode_list.len);
+    for (a.episode_count..@max(a.episode_count, end)) |i| {
+        const n = std.fmt.bufPrint(&a.episode_list[i], "{d}", .{i + 1}) catch continue;
+        a.episode_list_lens[i] = n.len;
+        a.episode_title_lens[i] = 0;
+        a.episode_aired_lens[i] = 0;
+        a.episode_scores[i] = 0;
+        a.episode_filler[i] = false;
+        a.episode_watched[i] = false;
+    }
+    a.episode_count = @max(a.episode_count, end);
+}
+
 pub fn loadEpisodes(idx: usize) void {
-    if (idx >= state.app.anime.result_count) return;
-    // Scraper cards resolve episodes from the site's detail page, not Jikan.
+    const row = resultRow(idx) orelse return;
+    episode_request.cancel(&state.app.anime.episodes_loading);
+    cancelPlayback();
+    episode_failed.store(false, .release);
     if (results_are_scraper) {
         loadEpisodesScraper(idx);
         return;
     }
     state.app.anime.selected_idx = idx;
-
-    // Instantly populate numbered episode slots so UI is responsive
-    const max_eps = state.app.anime.results[idx].episodes;
-    var ep_count: usize = 0;
-
-    while (ep_count < max_eps and ep_count < 200) : (ep_count += 1) {
-        var str_buf: [8]u8 = undefined;
-        const s = std.fmt.bufPrint(&str_buf, "{d}", .{ep_count + 1}) catch "1";
-        @memcpy(state.app.anime.episode_list[ep_count][0..s.len], s);
-        state.app.anime.episode_list_lens[ep_count] = s.len;
-        state.app.anime.episode_title_lens[ep_count] = 0;
-        state.app.anime.episode_aired_lens[ep_count] = 0;
-        state.app.anime.episode_scores[ep_count] = 0;
-        state.app.anime.episode_filler[ep_count] = false;
-    }
-    state.app.anime.episode_count = ep_count;
-    // ── Tracking: zero the watched flags for the visible range, then hydrate
-    //    from the DB (animeLoadWatched only sets trues; we must clear first). ──
-    for (0..@min(ep_count, state.app.anime.episode_watched.len)) |i| state.app.anime.episode_watched[i] = false;
-    const mal_id = state.app.anime.results[idx].id[0..state.app.anime.results[idx].id_len];
-    if (mal_id.len > 0 and ep_count > 0) {
-        @import("../core/db.zig").animeLoadWatched(mal_id, state.app.anime.episode_watched[0..ep_count]);
-    }
-
-    // Detail view also shows a "Seasons & Related" rail — load relations.
+    state.app.anime.episode_count = 0;
+    fillEpisodeSlots(row.episodes);
+    if (!@import("build_options").headless) episode_scroll_info.scrollToOffset(.vertical, 0);
+    @import("../core/db.zig").animeLoadWatched(row.id[0..row.id_len], state.app.anime.episode_watched[0..state.app.anime.episode_count]);
     loadRelations(idx);
+    var job = EpisodeJob{ .idx = idx, .generation = episode_request.begin(&state.app.anime.episodes_loading), .mal = undefined, .mal_len = @min(row.id_len, 16) };
+    @memcpy(job.mal[0..job.mal_len], row.id[0..job.mal_len]);
+    workers.spawn(fetchEpisodeDataThread, .{job}) catch {
+        episode_failed.store(true, .release);
+        episode_request.finish(job.generation, &state.app.anime.episodes_loading);
+    };
+}
 
-    // Now kick off Jikan episodes enrichment in background
-    if (!state.app.anime.episodes_loading) {
-        state.app.anime.episodes_loading = true;
-        workers.spawn(fetchEpisodeDataThread, .{idx}) catch {
-            state.app.anime.episodes_loading = false;
-        };
+/// Transfer response ownership to the UI/headless main loop. Workers never
+/// write the episode arrays while a frame is reading them.
+pub fn applyPendingEpisodes() void {
+    episode_document_mutex.lock();
+    var docs = episode_documents;
+    episode_documents = .empty;
+    episode_document_mutex.unlock();
+    defer docs.deinit(alloc);
+    for (docs.items) |doc| {
+        defer alloc.free(doc.bytes);
+        if (!episode_request.isCurrent(doc.job.generation) or state.app.anime.selected_idx != doc.job.idx or results_are_scraper) continue;
+        const parsed = std.json.parseFromSlice(std.json.Value, alloc, doc.bytes, .{}) catch continue;
+        defer parsed.deinit();
+        if (catalog.anilistEpisodeCount(parsed.value)) |total| fillEpisodeSlots(total);
+        const entries = catalog.data(parsed.value) orelse &.{};
+        for (entries) |entry| {
+            const ep = catalog.episode(entry) orelse continue;
+            fillEpisodeSlots(ep.number);
+            const i = ep.number - 1;
+            const a = &state.app.anime;
+            a.episode_title_lens[i] = @min(ep.title.len, a.episode_titles[i].len);
+            @memcpy(a.episode_titles[i][0..a.episode_title_lens[i]], ep.title[0..a.episode_title_lens[i]]);
+            a.episode_aired_lens[i] = ep.aired.len;
+            @memcpy(a.episode_aired[i][0..ep.aired.len], ep.aired);
+            a.episode_scores[i] = ep.score;
+            a.episode_filler[i] = ep.filler;
+        }
+        @import("../core/db.zig").animeLoadWatched(doc.job.mal[0..doc.job.mal_len], state.app.anime.episode_watched[0..state.app.anime.episode_count]);
     }
 }
 
-fn fetchEpisodeDataThread(idx: usize) void {
-    defer state.app.anime.episodes_loading = false;
+pub fn playbackFailed() bool {
+    return playback_failed.load(.acquire);
+}
 
-    const mal_id = state.app.anime.results[idx].id[0..state.app.anime.results[idx].id_len];
+pub fn episodeFetchFailed() bool {
+    return episode_failed.load(.acquire);
+}
 
-    // Fetch up to 4 pages of episodes (100 eps per page from Jikan)
-    var page: u32 = 1;
-    var total_parsed: usize = 0;
-
-    while (page <= 4 and total_parsed < state.app.anime.episode_count) : (page += 1) {
-        var url_buf: [256]u8 = undefined;
-        const url = std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/anime/{s}/episodes?page={d}", .{ mal_id, page }) catch break;
-
-        const argv = [_][]const u8{
-            "curl", "-s", "-A", agent, "--max-time", "10", url,
-        };
-        var buf: [64 * 1024]u8 = undefined;
-        const body = boundedCurl(&argv, &buf, 12_000) orelse break;
-        if (body.len < 10) break;
-        const json = body;
-
-        // Parse each episode in the data array
-        var pos: usize = 0;
-        var found_any = false;
-
-        while (pos < json.len and total_parsed < 200) {
-            // Find next "mal_id": in episodes array
-            const id_idx = std.mem.indexOf(u8, json[pos..], "\"mal_id\":") orelse break;
-            pos += id_idx + 9;
-
-            // Extract episode number
-            var num_end: usize = 0;
-            while (num_end < json.len - pos and json[pos + num_end] >= '0' and json[pos + num_end] <= '9') : (num_end += 1) {}
-            if (num_end == 0) continue;
-            const ep_num = std.fmt.parseInt(usize, json[pos .. pos + num_end], 10) catch continue;
-            if (ep_num == 0 or ep_num > 200) {
-                pos += num_end;
-                continue;
-            }
-            const ep_idx = ep_num - 1;
-
-            // Find scope of this episode object
-            var next_ep = json.len;
-            if (std.mem.indexOf(u8, json[pos..], "\"mal_id\":")) |nidx| {
-                next_ep = pos + nidx;
-            }
-            const obj = json[pos..next_ep];
-
-            // Extract title
-            if (std.mem.indexOf(u8, obj, "\"title\":\"")) |ti| {
-                const start = ti + 9;
-                var end = start;
-                var esc = false;
-                while (end < obj.len) : (end += 1) {
-                    if (esc) {
-                        esc = false;
-                    } else if (obj[end] == '\\') {
-                        esc = true;
-                    } else if (obj[end] == '"') break;
-                }
-                if (end < obj.len) {
-                    const tlen = @min(end - start, 80);
-                    @memcpy(state.app.anime.episode_titles[ep_idx][0..tlen], obj[start .. start + tlen]);
-                    state.app.anime.episode_title_lens[ep_idx] = tlen;
-                }
-            }
-
-            // Extract aired date (just YYYY-MM-DD)
-            if (std.mem.indexOf(u8, obj, "\"aired\":\"")) |ai| {
-                const start = ai + 9;
-                const dlen = @min(10, obj.len - start);
-                @memcpy(state.app.anime.episode_aired[ep_idx][0..dlen], obj[start .. start + dlen]);
-                state.app.anime.episode_aired_lens[ep_idx] = dlen;
-            }
-
-            // Extract score
-            if (std.mem.indexOf(u8, obj, "\"score\":")) |si| {
-                const start = si + 8;
-                if (start < obj.len and ((obj[start] >= '0' and obj[start] <= '9') or obj[start] == '.')) {
-                    var end = start;
-                    while (end < obj.len and ((obj[end] >= '0' and obj[end] <= '9') or obj[end] == '.')) : (end += 1) {}
-                    state.app.anime.episode_scores[ep_idx] = std.fmt.parseFloat(f32, obj[start..end]) catch 0;
-                }
-            }
-
-            // Extract filler flag
-            if (std.mem.indexOf(u8, obj, "\"filler\":true")) |_| {
-                state.app.anime.episode_filler[ep_idx] = true;
-            }
-
-            total_parsed += 1;
-            found_any = true;
-            pos = next_ep;
+fn fetchEpisodeDataThread(job: EpisodeJob) void {
+    defer episode_request.finish(job.generation, &state.app.anime.episodes_loading);
+    const buf = alloc.alloc(u8, 256 * 1024) catch return;
+    defer alloc.free(buf);
+    var page: usize = 1;
+    // Unknown/airing totals still fetch page one. Follow provider pagination,
+    // never use the incomplete series total to decide whether to fetch.
+    while (page <= (catalog.capacity + 99) / 100 and episode_request.isCurrent(job.generation) and !workers_isQuitting()) : (page += 1) {
+        var ub: [256]u8 = undefined;
+        const url = std.fmt.bufPrint(&ub, "https://api.jikan.moe/v4/anime/{s}/episodes?page={d}", .{ job.mal[0..job.mal_len], page }) catch return;
+        var body: ?[]const u8 = null;
+        if (content_cache.get(url, buf)) |hit| {
+            // Stale cached pages remain useful if revalidation fails.
+            body = hit.bytes;
+            if (hit.staleness != .fresh) body = null;
         }
-
-        if (!found_any) break;
-
-        // Jikan rate limit: ~3 req/sec
-        @import("../core/io_global.zig").sleep(400 * std.time.ns_per_ms);
+        var attempt: usize = 0;
+        while (body == null and attempt < 3 and episode_request.isCurrent(job.generation)) : (attempt += 1) {
+            @import("../core/rate_limit.zig").acquire("jikan", 2.0);
+            if (@import("../core/http.zig").fetch(url, buf, .{ .timeout_secs = 8 })) |bytes| {
+                if (std.json.parseFromSlice(std.json.Value, alloc, bytes, .{})) |parsed| {
+                    defer parsed.deinit();
+                    if (catalog.data(parsed.value) != null) {
+                        body = bytes;
+                        content_cache.put(url, bytes, ANIME_DETAIL_CACHE_TTL_S);
+                    }
+                } else |_| {}
+            }
+            if (body == null and attempt < 2) @import("../core/io_global.zig").sleep((500 + attempt * 500) * std.time.ns_per_ms);
+        }
+        if (body == null) if (content_cache.get(url, buf)) |hit| {
+            body = hit.bytes;
+        };
+        const bytes = body orelse {
+            fetchEpisodeCountFallback(job, buf);
+            if (episode_request.isCurrent(job.generation)) episode_failed.store(true, .release);
+            return;
+        };
+        const parsed = std.json.parseFromSlice(std.json.Value, alloc, bytes, .{}) catch return;
+        defer parsed.deinit();
+        _ = catalog.data(parsed.value) orelse return;
+        const copy = alloc.dupe(u8, bytes) catch return;
+        episode_document_mutex.lock();
+        if (episode_request.isCurrent(job.generation)) {
+            episode_documents.append(alloc, .{ .job = job, .bytes = copy }) catch alloc.free(copy);
+        } else alloc.free(copy);
+        episode_document_mutex.unlock();
+        state.wakeUi();
+        if (!catalog.hasNext(parsed.value)) break;
     }
+}
+
+fn fetchEpisodeCountFallback(job: EpisodeJob, buf: []u8) void {
+    if (!episode_request.isCurrent(job.generation)) return;
+    const id = std.fmt.parseInt(u32, job.mal[0..job.mal_len], 10) catch return;
+    var kb: [80]u8 = undefined;
+    const key = std.fmt.bufPrint(&kb, "anime:episode-count:anilist:{d}", .{id}) catch return;
+    var body: ?[]const u8 = null;
+    if (content_cache.get(key, buf)) |hit| {
+        if (hit.staleness == .fresh) body = hit.bytes;
+    }
+    if (body == null) {
+        var qb: [384]u8 = undefined;
+        const query = std.fmt.bufPrint(&qb,
+            \\{{"query":"query {{ Media(idMal: {d}, type: ANIME) {{ episodes nextAiringEpisode {{ episode }} }} }}"}}
+        , .{id}) catch return;
+        body = @import("reliable_fetch.zig").fetch("https://graphql.anilist.co", buf, .{
+            .post_body = query,
+            .headers = &.{.{ .name = "Content-Type", .value = "application/json" }},
+            .timeout_secs = 8,
+        });
+        if (body) |bytes| {
+            const doc = std.json.parseFromSlice(std.json.Value, alloc, bytes, .{}) catch return;
+            defer doc.deinit();
+            if (catalog.anilistEpisodeCount(doc.value) == null) return;
+            content_cache.put(key, bytes, ANIME_DETAIL_CACHE_TTL_S);
+        } else if (content_cache.get(key, buf)) |hit| {
+            body = hit.bytes;
+        }
+    }
+    const bytes = body orelse return;
+    const copy = alloc.dupe(u8, bytes) catch return;
+    episode_document_mutex.lock();
+    defer episode_document_mutex.unlock();
+    if (episode_request.isCurrent(job.generation)) {
+        episode_documents.append(alloc, .{ .job = job, .bytes = copy }) catch alloc.free(copy);
+        state.wakeUi();
+    } else alloc.free(copy);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1774,6 +1825,8 @@ pub fn jumpToAnime(mal_id: []const u8) void {
     if (mal_id.len == 0 or mal_id.len > 15) return;
     if (jump_busy.swap(true, .acq_rel)) return;
     state.app.anime.selected_idx = null;
+    cancelPlayback();
+    episode_request.cancel(&state.app.anime.episodes_loading);
     state.app.anime.episode_count = 0;
     // New generation so any in-flight grid fetch can't clobber results[0].
     const my_gen = search_request.begin(&state.app.anime.is_loading);
@@ -1862,19 +1915,149 @@ fn nextUnwatchedEp() usize {
     return 1;
 }
 
-pub fn playEpisode(ep_no: []const u8) void {
-    if (state.app.anime.selected_idx == null) return;
-    const idx = state.app.anime.selected_idx.?;
-    if (idx >= state.app.anime.result_count) return;
+var playback_request: LatestRequest = .{};
+const PlaybackJob = struct {
+    generation: u32,
+    idx: usize,
+    row: state.AnimeResult,
+    episode: u16,
+    player_address: usize,
+    player_serial: u64,
+    scraper: AnimeScraper = .none,
+    episode_url: [256]u8 = undefined,
+    episode_url_len: usize = 0,
+};
+const PlaybackReady = struct {
+    job: PlaybackJob,
+    stream: ?@import("anime_extractors.zig").Resolved = null,
+    torrent: [2048]u8 = undefined,
+    torrent_len: usize = 0,
+};
+var playback_mutex: @import("../core/sync.zig").Mutex = .{};
+var playback_ready: ?PlaybackReady = null;
+var playback_start: ?PlaybackJob = null;
+var playback_tracking: ?PlaybackReady = null;
+var playback_failed = std.atomic.Value(bool).init(false);
+var playback_episode = std.atomic.Value(u16).init(0);
 
+pub fn playbackEpisode() u16 {
+    return playback_episode.load(.acquire);
+}
+
+pub fn cancelPlayback() void {
+    playback_request.cancel(&state.app.anime.stream_loading);
+    playback_mutex.lock();
+    playback_ready = null;
+    playback_start = null;
+    playback_mutex.unlock();
+    playback_failed.store(false, .release);
+    playback_episode.store(0, .release);
+    state.wakeUi();
+}
+
+fn failPlayback(generation: u32) void {
+    if (!playback_request.isCurrent(generation)) return;
+    playback_failed.store(true, .release);
+    playback_request.finish(generation, &state.app.anime.stream_loading);
+    state.wakeUi();
+}
+
+fn publishPlayback(ready: PlaybackReady) void {
+    playback_mutex.lock();
+    defer playback_mutex.unlock();
+    if (playback_request.isCurrent(ready.job.generation)) playback_ready = ready;
+    state.wakeUi();
+}
+
+/// Commit player loads on the owning loop, never from a detached resolver.
+pub fn applyPendingPlayback() void {
+    playback_mutex.lock();
+    const start = playback_start;
+    playback_start = null;
+    const ready = playback_ready;
+    playback_ready = null;
+    playback_mutex.unlock();
+    if (start) |request| {
+        if (playback_request.isCurrent(request.generation)) {
+            if (state.app.players.items.len == 0) {
+                const p = player.acquire(alloc) catch {
+                    failPlayback(request.generation);
+                    return;
+                };
+                state.app.players.append(alloc, p) catch {
+                    p.deinit(alloc);
+                    failPlayback(request.generation);
+                    return;
+                };
+                state.app.active_player_idx = 0;
+            }
+            if (state.app.active_player_idx >= state.app.players.items.len) {
+                failPlayback(request.generation);
+                return;
+            }
+            const p = state.app.players.items[state.app.active_player_idx];
+            if (request.player_address != 0 and (@intFromPtr(p) != request.player_address or p.load_serial != request.player_serial)) {
+                failPlayback(request.generation);
+                return;
+            }
+            var job = request;
+            job.player_address = @intFromPtr(p);
+            job.player_serial = p.load_serial;
+            workers.spawn(fetchStreamThread, .{job}) catch failPlayback(job.generation);
+        }
+    }
+    if (ready) |item| {
+        if (!playback_request.isCurrent(item.job.generation)) return;
+        if (state.app.active_player_idx >= state.app.players.items.len) {
+            failPlayback(item.job.generation);
+            return;
+        }
+        const p = state.app.players.items[state.app.active_player_idx];
+        if (@intFromPtr(p) != item.job.player_address or p.load_serial != item.job.player_serial) {
+            failPlayback(item.job.generation);
+            return;
+        }
+        if (item.stream) |stream| {
+            p.loadStreamWithHeaders(stream.streamUrl(), stream.refererStr());
+            for (stream.subs[0..stream.sub_count]) |sub| _ = @import("../core/c.zig").mpvSubAdd(p.mpv_ctx, sub.url[0..sub.url_len]);
+            state.gotoPlayer();
+        } else if (item.torrent_len > 0) {
+            @import("search.zig").loadTorrentToPlayer(item.torrent[0..item.torrent_len]);
+        }
+        var skip_name: [192]u8 = undefined;
+        const skip_title = std.fmt.bufPrint(&skip_name, "{s} Episode {d}", .{ item.job.row.name[0..item.job.row.name_len], item.job.episode }) catch "";
+        @import("anime_skip.zig").onEpisodeLoad(skip_title);
+        playback_tracking = item;
+        playback_request.finish(item.job.generation, &state.app.anime.stream_loading);
+    }
+    if (playback_tracking) |item| {
+        if (!playback_request.isCurrent(item.job.generation)) {
+            playback_tracking = null;
+            return;
+        }
+        if (state.app.active_player_idx >= state.app.players.items.len) return;
+        const p = state.app.players.items[state.app.active_player_idx];
+        if (@intFromPtr(p) != item.job.player_address) return;
+        const matches = if (item.stream) |stream|
+            std.mem.eql(u8, p.current_url[0..p.current_url_len], stream.streamUrl())
+        else
+            std.mem.eql(u8, p.source_url[0..p.source_url_len], item.torrent[0..item.torrent_len]);
+        if (matches and p.last_good_pos_secs >= 1) {
+            recordEpisodeStarted(item.job);
+            playback_tracking = null;
+        }
+    }
+}
+
+fn recordEpisodeStarted(job: PlaybackJob) void {
     // ── Tracking: mark this episode watched + upsert the Continue entry so it
     //    surfaces in My List with the next episode to resume. ──
     {
-        const ep_num = std.fmt.parseInt(u16, ep_no, 10) catch 0;
-        const r = &state.app.anime.results[idx];
+        const ep_num = job.episode;
+        const r = &job.row;
         const mal_id = r.id[0..r.id_len];
         if (ep_num >= 1 and ep_num <= state.app.anime.episode_watched.len and mal_id.len > 0) {
-            state.app.anime.episode_watched[ep_num - 1] = true;
+            if (state.app.anime.selected_idx == job.idx) state.app.anime.episode_watched[ep_num - 1] = true;
             const db = @import("../core/db.zig");
             db.animeMarkWatched(mal_id, ep_num, true);
             db.animeUpsertContinue(mal_id, r.name[0..r.name_len], r.poster_url[0..r.poster_url_len], ep_num, r.episodes);
@@ -1901,180 +2084,75 @@ pub fn playEpisode(ep_no: []const u8) void {
             state.app.anime.continue_loaded = false;
         }
     }
+}
 
-    state.app.anime.stream_loading = true;
-
-    // ── Anime-Skip: arm crowdsourced intro/recap/credits auto-skip for the
-    //    episode we're about to load. anime-skip matches on episode NAME, so
-    //    prefer the Jikan-enriched episode title when we have one; otherwise
-    //    fall back to "<show> Episode N". Best-effort — title spelling can
-    //    differ from anime-skip's DB, in which case no markers come back.
-    {
-        const ep_num = std.fmt.parseInt(u16, ep_no, 10) catch 0;
-        var name_buf: [160]u8 = undefined;
-        var name_slice: []const u8 = "";
-        if (ep_num >= 1 and ep_num <= state.app.anime.episode_title_lens.len and
-            state.app.anime.episode_title_lens[ep_num - 1] > 0)
-        {
-            const tl = state.app.anime.episode_title_lens[ep_num - 1];
-            name_slice = state.app.anime.episode_titles[ep_num - 1][0..tl];
-        } else {
-            const r = &state.app.anime.results[idx];
-            name_slice = std.fmt.bufPrint(&name_buf, "{s} Episode {s}", .{ r.name[0..r.name_len], ep_no }) catch "";
-        }
-        @import("anime_skip.zig").onEpisodeLoad(name_slice);
-    }
-
-    var ep_copy: [8]u8 = std.mem.zeroes([8]u8);
-    const ep_len = @min(ep_no.len, 7);
-    @memcpy(ep_copy[0..ep_len], ep_no[0..ep_len]);
-
-    // Scraper cards resolve the episode's EMBED URL from the site and hand it to
-    // playEmbed (→ the shared extractor stack), instead of the torrent/AnimePahe path.
+pub fn playEpisode(ep_no: []const u8) void {
+    const idx = state.app.anime.selected_idx orelse return;
+    const row = resultRow(idx) orelse return;
+    const episode = std.fmt.parseInt(u16, ep_no, 10) catch return;
+    if (episode == 0 or episode > state.app.anime.episode_count) return;
+    if (state.app.anime.stream_loading.load(.acquire) and playback_episode.load(.acquire) == episode) return;
+    const p = if (state.app.active_player_idx < state.app.players.items.len) state.app.players.items[state.app.active_player_idx] else null;
+    var job = PlaybackJob{ .generation = playback_request.begin(&state.app.anime.stream_loading), .idx = idx, .row = row, .episode = episode, .player_address = if (p) |ptr| @intFromPtr(ptr) else 0, .player_serial = if (p) |ptr| ptr.load_serial else 0 };
+    playback_episode.store(episode, .release);
+    playback_failed.store(false, .release);
     if (results_are_scraper) {
-        workers.spawn(scraperPlayThread, .{ ep_copy, ep_len }) catch {
-            state.app.anime.stream_loading = false;
-        };
-        return;
+        const i = episode - 1;
+        if (i >= scraper_ep_len.len) {
+            cancelPlayback();
+            return;
+        }
+        job.scraper = scraper_kind;
+        job.episode_url_len = scraper_ep_len[i];
+        @memcpy(job.episode_url[0..job.episode_url_len], scraper_ep_url[i][0..job.episode_url_len]);
     }
-
-    workers.spawn(fetchStreamThread, .{ ep_copy, ep_len }) catch {
-        state.app.anime.stream_loading = false;
-    };
+    playback_mutex.lock();
+    playback_start = job;
+    playback_ready = null;
+    playback_mutex.unlock();
+    state.wakeUi();
 }
 
-fn fetchStreamThread(ep_buf: [8]u8, ep_len: usize) void {
-    defer state.app.anime.stream_loading = false;
-
-    const ep_no = ep_buf[0..ep_len];
-    const sel_idx = state.app.anime.selected_idx orelse return;
-
-    var name_buf: [129]u8 = undefined;
-    const name_len = state.app.anime.results[sel_idx].name_len;
-    @memcpy(name_buf[0..name_len], state.app.anime.results[sel_idx].name[0..name_len]);
-    const name_str = name_buf[0..name_len];
-
-    var query_buf: [256]u8 = undefined;
-    const query = std.fmt.bufPrintZ(&query_buf, "{s} {s}", .{ name_str, ep_no }) catch return;
-
-    // ── Phase 1: Try torrent resolution ──
-    logs.pushLog("info", "anime", "Resolving stream via Torrents...", false);
-
-    const resolver = @import("resolver.zig");
-    const resolver_generation = resolver.resolveTracked(query, "anime");
-
-    var waited: usize = 0;
-    while (resolver.isResolving() and waited < 100) : (waited += 1) {
-        if (!resolver.generationIsCurrent(resolver_generation)) return;
-        @import("../core/io_global.zig").sleep(100 * std.time.ns_per_ms);
-    }
-
-    var chosen: ?resolver.ResolvedItem = null;
-    {
-        if (!resolver.lockResultsForGeneration(resolver_generation)) return;
+fn fetchStreamThread(job: PlaybackJob) void {
+    var resolved = false;
+    defer if (!resolved) failPlayback(job.generation);
+    if (job.scraper != .none) {
+        resolved = scraperPlayThread(job);
+        if (resolved) return;
+    } else {
+        // An installed direct source can start without waiting on torrent search.
+        if (@import("anime_provider.zig").resolvePahe(job.row.name[0..job.row.name_len], job.row.name_english[0..job.row.name_english_len], job.episode, &playback_request, job.generation)) |stream| {
+            publishPlayback(.{ .job = job, .stream = stream });
+            resolved = true;
+            return;
+        }
+        if (!playback_request.isCurrent(job.generation)) return;
+        const resolver = @import("resolver.zig");
+        var query_buf: [256]u8 = undefined;
+        const query = std.fmt.bufPrint(&query_buf, "{s} {d:0>2}", .{ job.row.name[0..job.row.name_len], job.episode }) catch return;
+        const generation = resolver.resolveTracked(query, "anime");
+        var waited: usize = 0;
+        while (resolver.isResolving() and waited < 150) : (waited += 1) {
+            if (!playback_request.isCurrent(job.generation) or !resolver.generationIsCurrent(generation)) return;
+            @import("../core/io_global.zig").sleep(100 * std.time.ns_per_ms);
+        }
+        if (!playback_request.isCurrent(job.generation) or !resolver.lockResultsForGeneration(generation)) return;
         defer resolver.unlockResultsForGeneration();
-
-        for (0..resolver.result_count) |i| {
-            const item = resolver.results[i];
-            if (item.source == .torrent or item.source == .stremio) {
-                chosen = item;
-                break;
-            }
+        for (resolver.results[0..resolver.result_count]) |item| {
+            if ((item.source != .torrent and item.source != .stremio) or item.url_len == 0 or item.url_len > 2048) continue;
+            const rank = @import("resolver_rank.zig");
+            if (rank.pickForStartup(&.{.{ .playable = true, .needs_seeds = item.source == .torrent, .match_pct = item.match_pct, .seeds = item.seeds }}, false) == null) continue;
+            var ready = PlaybackReady{ .job = job, .torrent_len = item.url_len };
+            @memcpy(ready.torrent[0..item.url_len], item.url[0..item.url_len]);
+            publishPlayback(ready);
+            resolved = true;
+            return;
         }
     }
-
-    if (chosen) |item| {
-        if (!resolver.generationIsCurrent(resolver_generation)) return;
-        const srch = @import("search.zig");
-        srch.loadTorrentToPlayer(item.url[0..item.url_len]);
-
-        var log_buf2: [128]u8 = undefined;
-        const log_msg2 = std.fmt.bufPrintZ(&log_buf2, "Playing: {s}", .{item.name[0..@min(item.name_len, 40)]}) catch "Playing";
-        logs.pushLog("info", "anime", log_msg2, false);
-        return;
+    if (playback_request.isCurrent(job.generation)) {
+        playback_failed.store(true, .release);
+        logs.pushLog("error", "anime", "No playable source found for this episode. Check installed anime sources or try Search.", true);
     }
-
-    if (!resolver.generationIsCurrent(resolver_generation)) return;
-
-    // ── Phase 2: DDL fallback via AnimePahe ──
-    logs.pushLog("info", "anime", "No torrent peers. Trying DDL fallback...", false);
-
-    if (tryAnimePaheDDL(name_str, ep_no)) return;
-
-    logs.pushLog("error", "anime", "No streams found. Try universal search.", true);
-}
-
-fn tryAnimePaheDDL(name: []const u8, ep_no: []const u8) bool {
-    // URL-encode the anime name for search
-    var enc_buf: [256]u8 = undefined;
-    var enc_len: usize = 0;
-    for (name) |ch| {
-        if (enc_len + 3 >= enc_buf.len) break;
-        if ((ch >= 'A' and ch <= 'Z') or (ch >= 'a' and ch <= 'z') or (ch >= '0' and ch <= '9') or ch == '-' or ch == '_') {
-            enc_buf[enc_len] = ch;
-            enc_len += 1;
-        } else if (ch == ' ') {
-            enc_buf[enc_len] = '+';
-            enc_len += 1;
-        } else {
-            enc_buf[enc_len] = '%';
-            enc_buf[enc_len + 1] = "0123456789ABCDEF"[ch >> 4];
-            enc_buf[enc_len + 2] = "0123456789ABCDEF"[ch & 0xF];
-            enc_len += 3;
-        }
-    }
-
-    // Endpoint migrated to opal-plugins — inert until the user installs "animepahe".
-    const base = @import("../core/source_config.zig").get("animepahe", "base") orelse return false;
-    // Search AnimePahe for the anime
-    var url_buf: [512]u8 = undefined;
-    const search_url = std.fmt.bufPrint(&url_buf, "{s}/api?m=search&q={s}", .{ base, enc_buf[0..enc_len] }) catch return false;
-    var refr_buf: [600]u8 = undefined;
-    const referer = std.fmt.bufPrint(&refr_buf, "Referer: {s}", .{base}) catch return false;
-
-    const argv_search = [_][]const u8{
-        "curl",     "-sL",                                                                                          "--max-time", "10",
-        "-H",       "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0", "-H",         referer,
-        search_url,
-    };
-    var buf: [32 * 1024]u8 = undefined;
-    const body = boundedCurl(&argv_search, &buf, 12_000) orelse return false;
-    if (body.len < 10) return false;
-    const json = body;
-
-    // Extract first matching session from search results
-    // Format: {"data":[{"session":"xxxx-xxxx","title":"...","episodes":N},...]}
-    var session: []const u8 = "";
-    if (std.mem.indexOf(u8, json, "\"session\":\"")) |si| {
-        const start = si + 11;
-        var end = start;
-        while (end < json.len and json[end] != '"') : (end += 1) {}
-        if (end < json.len) session = json[start..end];
-    }
-
-    if (session.len == 0) {
-        logs.pushLog("warn", "anime", "AnimePahe: anime not found", false);
-        return false;
-    }
-
-    // Construct the watch URL for mpv + ytdl-hook (format: {base}/play/{session}/{ep})
-    // mpv will use yt-dlp/ytdl to extract the stream. `base` (animepahe) is the
-    // opal-plugins endpoint resolved at the top of this function.
-    var watch_url_buf: [320]u8 = undefined;
-    const watch_url = std.fmt.bufPrintZ(&watch_url_buf, "{s}/play/{s}/{s}", .{ base, session, ep_no }) catch return false;
-
-    logs.pushLog("info", "anime", "DDL: Loading via AnimePahe...", false);
-
-    // Load through the typed player seam; mpv's ytdl-hook resolves this page.
-    if (state.app.players.items.len > 0 and state.app.active_player_idx < state.app.players.items.len) {
-        const p = state.app.players.items[state.app.active_player_idx];
-        // The AnimePahe fallback runs on a resolver thread, so keep its former
-        // command-only semantics rather than touching UI-owned textures here.
-        p.commitPlayback(.{ .url = watch_url, .mode = .replace });
-        return true;
-    }
-
-    return false;
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -2089,10 +2167,10 @@ fn tryAnimePaheDDL(name: []const u8, ep_no: []const u8) bool {
 //
 //   1. searchAnime(query)      → scraperSearchThread → grid parse → results[]
 //   2. loadEpisodes(idx)       → loadEpisodesScraper → episode-list parse
-//   3. playEpisode(ep)         → scraperPlayThread → EMBED URL → playEmbed()
+//   3. playEpisode(ep)         → scraperPlayThread → EMBED URL → queued playback
 //
 // The EMBED URL each framework produces is fed to the SAME extractor stack
-// (anime_extractors.resolveEmbed via playEmbed) already on main:
+// (anime_extractors.resolveEmbed) already on main:
 //   • DooPlay:     episode page → #playeroptionsul (data-post/nume/type) → POST
 //                  wp-admin/admin-ajax.php (doo_player_ajax) → {embed_url} JSON.
 //   • AnimeStream: episode page → server <option value="base64 iframe"> decode
@@ -2145,8 +2223,8 @@ fn scraperBase(src: AnimeScraper, out: []u8) ?[]const u8 {
 // them when a card / episode is opened.
 var scraper_detail_url: [100][256]u8 = undefined;
 var scraper_detail_len: [100]usize = std.mem.zeroes([100]usize);
-var scraper_ep_url: [200][256]u8 = undefined;
-var scraper_ep_len: [200]usize = std.mem.zeroes([200]usize);
+var scraper_ep_url: [catalog.capacity][256]u8 = undefined;
+var scraper_ep_len: [catalog.capacity]usize = std.mem.zeroes([catalog.capacity]usize);
 /// True when results[] currently holds scraper cards (set at publish, cleared by
 /// the Jikan/lists publishers). Routes loadEpisodes/playEpisode to the scraper.
 var results_are_scraper: bool = false;
@@ -2192,6 +2270,8 @@ fn slugOf(url: []const u8) []const u8 {
 pub fn loadScraperPopular() void {
     if (activeScraper() == .none) return;
     state.app.anime.selected_idx = null;
+    cancelPlayback();
+    episode_request.cancel(&state.app.anime.episodes_loading);
     state.app.anime.episode_count = 0;
     const my_gen = search_request.begin(&state.app.anime.is_loading);
     grid_page = 1;
@@ -2453,7 +2533,7 @@ fn publishScraperEpisodes(idx: usize, generation: u32, src: AnimeScraper, detail
         date: [12]u8 = undefined,
         date_len: usize = 0,
     };
-    const tmp = alloc.alloc(EpTmp, 200) catch return 0;
+    const tmp = alloc.alloc(EpTmp, catalog.capacity) catch return 0;
     defer alloc.free(tmp);
     var found: usize = 0;
 
@@ -2539,58 +2619,24 @@ fn publishScraperEpisodes(idx: usize, generation: u32, src: AnimeScraper, detail
 
 /// Resolve the selected episode's EMBED URL (per framework) and hand it to
 /// playEmbed. Runs on a worker thread (blocking HTTP).
-fn scraperPlayThread(ep_buf: [8]u8, ep_len: usize) void {
-    defer state.app.anime.stream_loading = false;
-    const src = scraper_kind;
-    if (src == .none) return;
-    const ep_no = ep_buf[0..ep_len];
-
-    // Map episode number → the parallel scraper_ep_url index (episode_list is 1..N,
-    // so index = number-1; fall back to a label scan for robustness).
-    var ep_idx: usize = blk: {
-        if (std.fmt.parseInt(usize, ep_no, 10)) |n| {
-            if (n >= 1 and n <= state.app.anime.episode_count) break :blk n - 1;
-        } else |_| {}
-        var i: usize = 0;
-        while (i < state.app.anime.episode_count) : (i += 1) {
-            if (std.mem.eql(u8, state.app.anime.episode_list[i][0..state.app.anime.episode_list_lens[i]], ep_no)) break :blk i;
-        }
-        break :blk 0;
-    };
-    if (ep_idx >= scraper_ep_url.len) ep_idx = 0;
-    const eurl = scraper_ep_url[ep_idx][0..scraper_ep_len[ep_idx]];
-    if (eurl.len == 0) {
-        logs.pushLog("error", "anime", "Scraper: no episode URL for this episode", true);
-        return;
-    }
-    var ep_copy: [256]u8 = undefined;
-    @memcpy(ep_copy[0..eurl.len], eurl);
-    const ep_url = ep_copy[0..eurl.len];
-
+fn scraperPlayThread(job: PlaybackJob) bool {
+    const ep_url = job.episode_url[0..job.episode_url_len];
+    if (ep_url.len == 0 or !playback_request.isCurrent(job.generation)) return false;
     var base_buf: [256]u8 = undefined;
-    const base = scraperBase(src, &base_buf) orelse "";
-
-    const html_buf = alloc.alloc(u8, 1024 * 1024) catch return;
+    const base = scraperBase(job.scraper, &base_buf) orelse return false;
+    const html_buf = alloc.alloc(u8, 1024 * 1024) catch return false;
     defer alloc.free(html_buf);
     const n = scraperGet(ep_url, html_buf);
-    if (n == 0 or workers_isQuitting()) {
-        logs.pushLog("error", "anime", "Scraper: episode page fetch failed", true);
-        return;
-    }
-    const html = html_buf[0..n];
-
+    if (n == 0 or !playback_request.isCurrent(job.generation)) return false;
     var embed_buf: [1024]u8 = undefined;
-    const embed: ?[]const u8 = switch (src) {
-        .animestream => animestream.firstEmbed(html, &embed_buf),
-        .dooplay => resolveDooplayEmbed(html, base, ep_url, &embed_buf),
+    const embed = switch (job.scraper) {
+        .animestream => animestream.firstEmbed(html_buf[0..n], &embed_buf),
+        .dooplay => resolveDooplayEmbed(html_buf[0..n], base, ep_url, &embed_buf),
         .none => null,
-    };
-    const e = embed orelse {
-        logs.pushLog("error", "anime", "Scraper: no embed found on episode page", true);
-        return;
-    };
-    logs.pushLog("info", "anime", "Scraper: embed resolved → playing", false);
-    playEmbed(e);
+    } orelse return false;
+    const resolved = @import("anime_extractors.zig").resolveEmbed(embed) orelse return false;
+    publishPlayback(.{ .job = job, .stream = resolved });
+    return true;
 }
 
 /// DooPlay embed chain: walk #playeroptionsul, POST doo_player_ajax for each
@@ -2627,61 +2673,6 @@ fn resolveDooplayEmbed(html: []const u8, base: []const u8, ep_url: []const u8, o
 /// `https://megacloud.blog/embed-2/e-1/<id>?k=1` or a StreamWish/Dood/StreamTape
 /// page, resolve it (off the UI thread — the resolve blocks on HTTP), set mpv's
 /// Referer via `http-header-fields`, loadfile the stream, attach subtitle tracks,
-/// and reveal the player. Hosts yt-dlp already handles are passed through
-/// untouched (see anime_extractors.resolveEmbed).
-pub fn playEmbed(embed_url: []const u8) void {
-    const S = struct {
-        var busy: bool = false;
-        var url_buf: [2048]u8 = undefined;
-        var url_len: usize = 0;
-
-        fn worker() void {
-            defer @This().busy = false;
-            const extractors = @import("anime_extractors.zig");
-            const embed = @This().url_buf[0..@This().url_len];
-
-            const resolved = extractors.resolveEmbed(embed) orelse {
-                logs.pushLog("error", "anime", "Embed resolve failed — no playable stream", true);
-                return;
-            };
-
-            const c = @import("../core/c.zig");
-            // Player-access guard (CLAUDE convention): never index players by a
-            // stale active_player_idx.
-            if (!(state.app.active_player_idx < state.app.players.items.len)) {
-                logs.pushLog("warn", "anime", "No active player to load the embed into", false);
-                return;
-            }
-            const p = state.app.players.items[state.app.active_player_idx];
-
-            if (resolved.delegate) {
-                // yt-dlp handles this host — hand the embed to mpv's ytdl-hook,
-                // no Referer of ours.
-                p.loadStreamWithHeaders(resolved.streamUrl(), "");
-            } else {
-                p.loadStreamWithHeaders(resolved.streamUrl(), resolved.refererStr());
-                // Attach subtitle tracks (e.g. MegaCloud caption tracks).
-                for (resolved.subs[0..resolved.sub_count]) |sub| {
-                    _ = c.mpvSubAdd(p.mpv_ctx, sub.url[0..sub.url_len]);
-                }
-                logs.pushLog("info", "anime", "Embed resolved → streaming", false);
-            }
-
-            state.gotoPlayer();
-        }
-    };
-
-    if (S.busy) return;
-    if (embed_url.len == 0 or embed_url.len > S.url_buf.len) return;
-    S.busy = true;
-    @memcpy(S.url_buf[0..embed_url.len], embed_url);
-    S.url_len = embed_url.len;
-
-    workers.spawn(S.worker, .{}) catch {
-        S.busy = false;
-    };
-}
-
 // ══════════════════════════════════════════════════════════
 // UI Rendering (Drawer)
 // ══════════════════════════════════════════════════════════
@@ -2699,6 +2690,8 @@ fn retryScraperEpisodesWhenDue(idx: usize) void {
 pub fn renderContent() void {
     // Free any poster textures queued by parse worker threads (UI-thread only).
     drainPendingTexFrees();
+    applyPendingEpisodes();
+    applyPendingPlayback();
     syncNsfwFilter();
 
     // ── Mode dispatch. Each grid mode reuses results[]/renderGallery; only the
@@ -2752,56 +2745,28 @@ pub fn renderContent() void {
         return;
     }
 
-    if (state.app.anime.stream_loading) {
-        _ = dvui.label(@src(), "Loading stream...", .{}, .{
-            .color_text = theme.colors.accent,
-            .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 },
-        });
-    }
-
     // Episode list (if anime selected)
     if (state.app.anime.selected_idx) |sel_idx| {
         if (sel_idx < state.app.anime.result_count) {
             retryScraperEpisodesWhenDue(sel_idx);
             const r = state.app.anime.results[sel_idx];
             {
-                var sel_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                var navigation = dvui.box(@src(), .{ .dir = .horizontal }, .{
                     .expand = .horizontal,
-                    .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
-                    .background = true,
-                    .color_fill = theme.colors.bg_surface,
+                    .padding = dvui.Rect.all(4),
                 });
-                defer sel_row.deinit();
-
-                if (dvui.button(@src(), "<", .{}, .{
-                    .color_fill = theme.colors.accent,
-                    .color_text = dvui.Color.white,
-                    .corner_radius = theme.dims.rad_sm,
-                    .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
-                })) {
+                defer navigation.deinit();
+                if (components.iconButton(@src(), icons.tvg.lucide.@"arrow-left", "Back to anime", false)) {
                     _ = scraper_episode_gen.fetchAdd(1, .acq_rel);
                     clearScraperEpisodeFailure();
                     state.app.anime.is_loading.store(false, .release);
                     state.app.anime.selected_idx = null;
+                    cancelPlayback();
+                    episode_request.cancel(&state.app.anime.episodes_loading);
                     state.app.anime.episode_count = 0;
+                    return;
                 }
-
-                var rn_buf: [128]u8 = undefined;
-                _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(r.name[0..r.name_len], &rn_buf)}, .{
-                    .color_text = theme.colors.text_primary,
-                    .expand = .horizontal,
-                    .padding = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
-                });
-
-                // Episode count badge
-                {
-                    var ep_info: [32]u8 = undefined;
-                    const info = std.fmt.bufPrintZ(&ep_info, "{d} ep", .{state.app.anime.episode_count}) catch "?";
-                    _ = dvui.label(@src(), "{s}", .{info}, .{
-                        .id_extra = 50,
-                        .color_text = theme.colors.text_secondary,
-                    });
-                }
+                _ = dvui.label(@src(), "Anime", .{}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
             }
 
             // ── Rich detail header: poster (left) + title / meta / synopsis
@@ -2815,21 +2780,21 @@ pub fn renderContent() void {
                     .expand = .horizontal,
                     .padding = .{ .x = 12, .y = 10, .w = 12, .h = 10 },
                     .background = true,
-                    .color_fill = theme.colors.bg_surface,
+                    .color_fill = theme.colors.bg_deep,
                     .color_border = theme.colors.border_subtle,
-                    .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
+                    .border = dvui.Rect.all(0),
                 });
                 defer head.deinit();
 
-                // Poster tile (100×150). Lazy-load exactly like the grid card.
+                // Compact poster; reuse the browse card texture.
                 {
                     var pbox = dvui.box(@src(), .{ .dir = .vertical }, .{
                         .id_extra = 71,
                         .background = true,
-                        .color_fill = dvui.Color{ .r = 20, .g = 24, .b = 34, .a = 255 },
+                        .color_fill = theme.colors.bg_elevated,
                         .corner_radius = dvui.Rect.all(6),
-                        .min_size_content = .{ .w = 100, .h = 150 },
-                        .max_size_content = .{ .w = 100, .h = 150 },
+                        .min_size_content = .{ .w = 72, .h = 108 },
+                        .max_size_content = .{ .w = 72, .h = 108 },
                     });
                     defer pbox.deinit();
 
@@ -2868,7 +2833,7 @@ pub fn renderContent() void {
                                 .id_extra = 73,
                                 .gravity_x = 0.5,
                                 .gravity_y = 0.5,
-                                .color_text = dvui.Color{ .r = 90, .g = 100, .b = 130, .a = 120 },
+                                .color_text = theme.colors.text_secondary,
                                 .expand = .both,
                             });
                     }
@@ -2943,7 +2908,7 @@ pub fn renderContent() void {
                                 .id_extra = 79,
                                 .background = true,
                                 .color_fill = theme.colors.accent,
-                                .color_text = dvui.Color.white,
+                                .color_text = theme.colors.text_on_accent,
                                 .corner_radius = theme.dims.rad_sm,
                                 .padding = .{ .x = 6, .y = 1, .w = 6, .h = 1 },
                                 .margin = .{ .x = 10, .y = 0, .w = 0, .h = 0 },
@@ -2952,92 +2917,45 @@ pub fn renderContent() void {
                         }
                     }
 
-                    // Synopsis (wrapped via expand; safeUtf8 trims mid-codepoint).
+                    // Two quiet lines keep the episode browser above the fold.
                     if (r.overview_len > 0) {
                         var ov_buf: [512]u8 = undefined;
-                        _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(r.overview[0..@min(r.overview_len, r.overview.len)], &ov_buf)}, .{
+                        var overview = dvui.textLayout(@src(), .{}, .{
+                            .background = false,
                             .id_extra = 80,
                             .expand = .horizontal,
                             .color_text = theme.colors.text_secondary,
-                            .padding = .{ .x = 0, .y = 6, .w = 0, .h = 0 },
+                            .padding = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
+                            .max_size_content = .{ .w = std.math.floatMax(f32), .h = dvui.themeGet().font_body.lineHeight() * 2 },
                         });
+                        overview.addText(safeUtf8Buf(r.overview[0..@min(r.overview_len, r.overview.len)], &ov_buf), .{});
+                        overview.deinit();
                     }
                 }
             }
 
-            // ── Tracking header: progress bar + "{watched}/{total}" + Resume ──
             if (state.app.anime.episode_count > 0) {
-                const total = state.app.anime.episode_count;
-                const watched = watchedCount();
-                var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                    .id_extra = 60,
+                var toolbar = dvui.box(@src(), .{ .dir = .horizontal }, .{
                     .expand = .horizontal,
-                    .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
+                    .padding = .{ .x = 12, .y = 8, .w = 12, .h = 10 },
                 });
-                defer hdr.deinit();
-
-                // Resume button → plays the lowest unwatched episode.
-                if (dvui.button(@src(), "Resume", .{}, .{
-                    .id_extra = 61,
-                    .color_fill = theme.colors.accent,
-                    .color_text = dvui.Color.white,
-                    .corner_radius = theme.dims.rad_sm,
-                    .padding = .{ .x = 10, .y = 3, .w = 10, .h = 3 },
-                    .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
-                    .gravity_y = 0.5,
-                })) {
+                defer toolbar.deinit();
+                var resume_buf: [48]u8 = undefined;
+                const resume_label = std.fmt.bufPrint(&resume_buf, "Play E{d}", .{nextUnwatchedEp()}) catch "Play";
+                if (components.actionButton(@src(), resume_label, .primary, 61)) {
                     var eb: [8]u8 = undefined;
-                    const es = std.fmt.bufPrint(&eb, "{d}", .{nextUnwatchedEp()}) catch "1";
-                    playEpisode(es);
+                    playEpisode(std.fmt.bufPrint(&eb, "{d}", .{nextUnwatchedEp()}) catch "1");
                 }
-
-                // "Resume E{n}" hint label.
-                {
-                    var rl: [16]u8 = undefined;
-                    const rs = std.fmt.bufPrintZ(&rl, "E{d}", .{nextUnwatchedEp()}) catch "";
-                    _ = dvui.label(@src(), "{s}", .{rs}, .{
-                        .id_extra = 62,
-                        .color_text = theme.colors.text_secondary,
-                        .gravity_y = 0.5,
-                        .padding = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
-                    });
-                }
-
-                // Progress bar (filled fraction = watched/total).
-                {
-                    const frac: f32 = if (total > 0) @as(f32, @floatFromInt(watched)) / @as(f32, @floatFromInt(total)) else 0;
-                    var track = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                        .id_extra = 63,
-                        .expand = .horizontal,
-                        .min_size_content = .{ .w = 80, .h = 8 },
-                        .background = true,
-                        .color_fill = theme.colors.bg_elevated,
-                        .corner_radius = dvui.Rect.all(4),
-                        .gravity_y = 0.5,
-                    });
-                    defer track.deinit();
-                    if (frac > 0) {
-                        var fill = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                            .id_extra = 64,
-                            .min_size_content = .{ .w = @max(4, track.data().rect.w * frac), .h = 8 },
-                            .background = true,
-                            .color_fill = theme.colors.accent,
-                            .corner_radius = dvui.Rect.all(4),
-                        });
-                        fill.deinit();
-                    }
-                }
-
-                // "{watched}/{total}" count.
-                {
-                    var cb: [24]u8 = undefined;
-                    const cs = std.fmt.bufPrintZ(&cb, "{d}/{d}", .{ watched, total }) catch "";
-                    _ = dvui.label(@src(), "{s}", .{cs}, .{
-                        .id_extra = 65,
-                        .color_text = theme.colors.text_primary,
-                        .gravity_y = 0.5,
-                        .padding = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
-                    });
+                _ = dvui.label(@src(), "{d} episodes · {d} watched", .{ state.app.anime.episode_count, watchedCount() }, .{
+                    .color_text = theme.colors.text_secondary,
+                    .gravity_y = 0.5,
+                    .expand = .horizontal,
+                    .padding = .{ .x = 12, .y = 0, .w = 0, .h = 0 },
+                });
+                if (state.app.anime.episodes_loading.load(.acquire)) {
+                    _ = dvui.label(@src(), "Loading details…", .{}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
+                } else if (episode_failed.load(.acquire)) {
+                    if (components.iconButton(@src(), icons.tvg.lucide.@"refresh-cw", "Retry episode details", false)) loadEpisodes(sel_idx);
                 }
             }
 
@@ -3048,196 +2966,12 @@ pub fn renderContent() void {
 
             // Episode cards
             if (state.app.anime.episode_count > 0) {
-                // Loading indicator for episode enrichment
-                if (state.app.anime.episodes_loading) {
-                    _ = dvui.label(@src(), "Loading episode details...", .{}, .{
-                        .color_text = theme.colors.accent,
-                        .padding = .{ .x = 12, .y = 4, .w = 0, .h = 0 },
-                    });
-                }
-
-                var scroll = dvui.scrollArea(@src(), .{}, .{
-                    .expand = .both,
-                });
-                defer scroll.deinit();
-
-                var ep_i: usize = 0;
-                while (ep_i < state.app.anime.episode_count) : (ep_i += 1) {
-                    const ep_len = state.app.anime.episode_list_lens[ep_i];
-                    if (ep_len == 0) continue;
-                    const ep_str = state.app.anime.episode_list[ep_i][0..ep_len];
-                    const has_title = state.app.anime.episode_title_lens[ep_i] > 0;
-                    const is_filler = state.app.anime.episode_filler[ep_i];
-                    const is_watched = ep_i < state.app.anime.episode_watched.len and state.app.anime.episode_watched[ep_i];
-
-                    // Episode card container — horizontal (numbered tile · info),
-                    // mirroring renderTvDetail's episode row. Watched rows dim.
-                    const fill_color = if (is_filler)
-                        dvui.Color{ .r = 60, .g = 40, .b = 40, .a = 255 }
-                    else if (is_watched)
-                        dvui.Color{ .r = 16, .g = 18, .b = 24, .a = 255 }
-                    else
-                        theme.colors.bg_surface;
-
-                    var ep_card = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                        .id_extra = ep_i + 2000,
-                        .expand = .horizontal,
-                        .background = true,
-                        .color_fill = fill_color,
-                        .color_border = theme.colors.border_subtle,
-                        .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-                        .margin = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-                    });
-                    defer ep_card.deinit();
-
-                    // ── Left: numbered tile (Jikan gives no per-episode still). ──
-                    {
-                        const tile_fill = if (is_watched)
-                            dvui.Color{ .r = 22, .g = 26, .b = 34, .a = 255 }
-                        else
-                            dvui.Color{ .r = 24, .g = 30, .b = 44, .a = 255 };
-                        var tile = dvui.box(@src(), .{ .dir = .vertical }, .{
-                            .id_extra = ep_i + 2100,
-                            .background = true,
-                            .color_fill = tile_fill,
-                            .min_size_content = .{ .w = 72, .h = 54 },
-                            .max_size_content = .{ .w = 72, .h = 54 },
-                            .gravity_y = 0.5,
-                        });
-                        defer tile.deinit();
-                        var tnum_buf: [12]u8 = undefined;
-                        const tnum = std.fmt.bufPrint(&tnum_buf, "{s}", .{ep_str}) catch "";
-                        _ = dvui.label(@src(), "{s}", .{tnum}, .{
-                            .id_extra = ep_i + 2110,
-                            .color_text = if (is_watched) theme.colors.text_secondary else theme.colors.accent,
-                            .gravity_x = 0.5,
-                            .gravity_y = 0.5,
-                            .expand = .both,
-                            .font = dvui.themeGet().font_heading,
-                        });
-                    }
-
-                    // ── Right: info column. ──
-                    {
-                        var info = dvui.box(@src(), .{ .dir = .vertical }, .{
-                            .id_extra = ep_i + 2200,
-                            .expand = .both,
-                            .padding = .{ .x = 10, .y = 8, .w = 10, .h = 8 },
-                        });
-                        defer info.deinit();
-
-                        // Title row: "Ep N" chip · FILLER · title (clickable) · toggle.
-                        {
-                            var top = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                                .id_extra = ep_i + 3000,
-                                .expand = .horizontal,
-                            });
-                            defer top.deinit();
-
-                            // Episode number chip.
-                            var ep_badge: [16]u8 = undefined;
-                            const badge = std.fmt.bufPrintZ(&ep_badge, "Ep {s}", .{ep_str}) catch "?";
-                            _ = dvui.label(@src(), "{s}", .{badge}, .{
-                                .id_extra = ep_i + 3100,
-                                .color_text = if (is_watched) theme.colors.text_secondary else theme.colors.accent,
-                                .gravity_y = 0.5,
-                                .padding = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
-                            });
-
-                            // Filler badge.
-                            if (is_filler) {
-                                _ = dvui.label(@src(), "FILLER", .{}, .{
-                                    .id_extra = ep_i + 3200,
-                                    .background = true,
-                                    .color_fill = dvui.Color{ .r = 90, .g = 40, .b = 40, .a = 255 },
-                                    .color_text = dvui.Color{ .r = 255, .g = 150, .b = 150, .a = 255 },
-                                    .corner_radius = theme.dims.rad_sm,
-                                    .padding = .{ .x = 5, .y = 1, .w = 5, .h = 1 },
-                                    .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
-                                    .gravity_y = 0.5,
-                                });
-                            }
-
-                            // Title (clickable → play), or fallback play button.
-                            if (has_title) {
-                                // Jikan-sourced + worker-written: validate a copy so a
-                                // malformed title can't panic dvui (whole-app abort).
-                                var et_buf: [256]u8 = undefined;
-                                const title = safeUtf8Buf(state.app.anime.episode_titles[ep_i][0..state.app.anime.episode_title_lens[ep_i]], &et_buf);
-                                if (dvui.button(@src(), title, .{}, .{
-                                    .id_extra = ep_i + 4000,
-                                    .expand = .horizontal,
-                                    .color_text = if (is_watched) theme.colors.text_secondary else theme.colors.text_primary,
-                                    .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                                    .padding = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
-                                    .gravity_y = 0.5,
-                                })) {
-                                    playEpisode(ep_str);
-                                }
-                            } else {
-                                if (dvui.buttonIcon(@src(), "ep-play", icons.tvg.lucide.play, .{}, .{}, .{
-                                    .id_extra = ep_i + 4000,
-                                    .expand = .horizontal,
-                                    .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                                    .color_text = theme.colors.text_primary,
-                                    .min_size_content = .{ .w = 14, .h = 14 },
-                                    .gravity_x = 0.0,
-                                    .gravity_y = 0.5,
-                                })) {
-                                    playEpisode(ep_str);
-                                }
-                            }
-
-                            // Watched toggle (right-most) — flips flag + DB persist.
-                            if (dvui.buttonIcon(@src(), "ep-watched", if (is_watched) icons.tvg.lucide.@"circle-check-big" else icons.tvg.lucide.circle, .{}, .{}, .{
-                                .id_extra = ep_i + 3050,
-                                .color_fill = if (is_watched) theme.colors.success else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                                .color_text = if (is_watched) dvui.Color.white else theme.colors.text_secondary,
-                                .corner_radius = dvui.Rect.all(theme.radius.pill),
-                                .padding = .{ .x = 5, .y = 5, .w = 5, .h = 5 },
-                                .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
-                                .min_size_content = .{ .w = 14, .h = 14 },
-                                .gravity_y = 0.5,
-                            })) {
-                                const ep_num = std.fmt.parseInt(usize, ep_str, 10) catch 0;
-                                if (ep_num > 0) toggleWatched(sel_idx, ep_num);
-                            }
-                        }
-
-                        // Meta row: aired date · score %.
-                        {
-                            var mrow = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                                .id_extra = ep_i + 5000,
-                            });
-                            defer mrow.deinit();
-
-                            const aired_len = state.app.anime.episode_aired_lens[ep_i];
-                            if (aired_len > 0) {
-                                _ = dvui.label(@src(), "{s}", .{state.app.anime.episode_aired[ep_i][0..aired_len]}, .{
-                                    .id_extra = ep_i + 5100,
-                                    .color_text = theme.colors.text_secondary,
-                                    .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
-                                    .gravity_y = 0.5,
-                                });
-                            }
-
-                            const sc = state.app.anime.episode_scores[ep_i];
-                            if (sc > 0) {
-                                var sc_buf: [12]u8 = undefined;
-                                const sc_pct = @as(u8, @intFromFloat(std.math.clamp(sc * 20.0, 0.0, 100.0)));
-                                const sc_color = if (sc_pct >= 70) theme.colors.success else if (sc_pct >= 50) theme.colors.warning else theme.colors.danger;
-                                if (std.fmt.bufPrintZ(&sc_buf, "{d}%", .{sc_pct})) |scs| {
-                                    _ = dvui.label(@src(), "{s}", .{scs}, .{
-                                        .id_extra = ep_i + 5200,
-                                        .color_text = sc_color,
-                                        .padding = .{ .x = if (aired_len > 0) 10 else 0, .y = 2, .w = 0, .h = 0 },
-                                        .gravity_y = 0.5,
-                                    });
-                                } else |_| {}
-                            }
-                        }
-                    }
-                }
+                renderEpisodeGrid(sel_idx);
+            } else if (state.app.anime.episodes_loading.load(.acquire)) {
+                _ = dvui.label(@src(), "Loading episode details...", .{}, .{ .color_text = theme.colors.accent });
+            } else if (episode_failed.load(.acquire)) {
+                _ = dvui.label(@src(), "Episode catalog unavailable", .{}, .{ .color_text = theme.colors.text_secondary });
+                if (components.actionButton(@src(), "Retry", .secondary, 706)) loadEpisodes(sel_idx);
             } else if (results_are_scraper and state.app.anime.is_loading.load(.acquire)) {
                 _ = dvui.label(@src(), "Loading episodes…", .{}, .{
                     .color_text = theme.colors.accent,
@@ -3271,6 +3005,125 @@ pub fn renderContent() void {
         renderContinueGrid();
     } else {
         renderGallery();
+    }
+}
+
+// Dense, virtualized episode tiles. Missing provider titles keep the same
+// compact footprint; play and watched are separate keyboard-focusable actions.
+fn renderEpisodeGrid(sel_idx: usize) void {
+    const a = &state.app.anime;
+    const font = dvui.themeGet().font_body;
+    const height = font.lineHeight() * 2 + 30;
+    const pitch = height + 8;
+    var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &episode_scroll_info, .horizontal = .none, .vertical_bar = .auto_overlay }, .{
+        .expand = .both,
+        .padding = .{ .x = 12, .y = 0, .w = 12, .h = 8 },
+        .border = dvui.Rect.all(0),
+        .background = false,
+    });
+    defer scroll.deinit();
+    const layout = catalog.episodeGrid(@max(1, scroll.data().contentRect().w - 8), a.episode_count);
+    const visible = @import("tmdb_pure.zig").visibleRows(layout.rows, pitch, episode_scroll_info.viewport.y, episode_scroll_info.viewport.h, 2);
+    const next = nextUnwatchedEp();
+    if (visible.first > 0) {
+        var spacer = dvui.box(@src(), .{}, .{ .min_size_content = .{ .w = 1, .h = pitch * @as(f32, @floatFromInt(visible.first)) }, .padding = dvui.Rect.all(0) });
+        spacer.deinit();
+    }
+    for (visible.first..visible.last) |row_idx| {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = row_idx,
+            .expand = .horizontal,
+            .padding = dvui.Rect.all(0),
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
+        });
+        defer row.deinit();
+        const first = row_idx * layout.columns;
+        for (first..@min(first + layout.columns, a.episode_count)) |ep_i| {
+            const ep_str = a.episode_list[ep_i][0..a.episode_list_lens[ep_i]];
+            const ep_num = ep_i + 1;
+            const watched = a.episode_watched[ep_i];
+            const is_next = ep_num == next;
+            const requested = playbackEpisode() == ep_num;
+            const busy = requested and a.stream_loading.load(.acquire);
+            const failed = requested and playback_failed.load(.acquire);
+            var card = dvui.box(@src(), .{ .dir = .vertical }, .{
+                .id_extra = ep_i,
+                .background = true,
+                .color_fill = if (busy) theme.colors.accent_dim else if (is_next) theme.colors.bg_elevated else theme.colors.bg_surface,
+                .border = dvui.Rect.all(0),
+                .corner_radius = dvui.Rect.all(8),
+                .padding = dvui.Rect.all(10),
+                .margin = .{ .x = 0, .y = 0, .w = if (ep_i + 1 < first + layout.columns) 8 else 0, .h = 0 },
+                .min_size_content = .{ .w = @max(1, layout.width - 20), .h = height - 20 },
+                .max_size_content = .{ .w = @max(1, layout.width - 20), .h = height - 20 },
+            });
+            defer card.deinit();
+            {
+                var controls = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .padding = dvui.Rect.all(0) });
+                defer controls.deinit();
+                var number_buf: [32]u8 = undefined;
+                const number = std.fmt.bufPrint(&number_buf, "Episode {s}", .{ep_str}) catch "Episode";
+                if (dvui.button(@src(), number, .{}, .{
+                    .color_fill = theme.transparent,
+                    .color_fill_hover = theme.colors.bg_hover,
+                    .color_text = if (is_next) theme.colors.accent else theme.colors.text_primary,
+                    .border = dvui.Rect.all(0),
+                    .padding = dvui.Rect.all(0),
+                    .gravity_y = 0.5,
+                })) playEpisode(ep_str);
+                var action_space = dvui.box(@src(), .{}, .{ .expand = .horizontal, .padding = dvui.Rect.all(0) });
+                action_space.deinit();
+                if (busy or failed) {
+                    if (dvui.button(@src(), if (busy) "Cancel" else "Retry", .{}, .{
+                        .background = true,
+                        .color_fill = theme.transparent,
+                        .color_fill_hover = theme.colors.bg_hover,
+                        .color_text = theme.colors.accent,
+                        .border = dvui.Rect.all(0),
+                        .corner_radius = theme.dims.rad_sm,
+                        .padding = .{ .x = 6, .y = 4, .w = 6, .h = 4 },
+                        .gravity_y = 0.5,
+                    })) {
+                        if (busy) cancelPlayback() else playEpisode(ep_str);
+                    }
+                } else if (components.iconButton(@src(), icons.tvg.lucide.play, "Play episode", is_next)) playEpisode(ep_str);
+                if (components.iconButton(@src(), if (watched) icons.tvg.lucide.@"circle-check-big" else icons.tvg.lucide.circle, if (watched) "Mark unwatched" else "Mark watched", watched)) toggleWatched(sel_idx, ep_num);
+            }
+            var title_buf: [256]u8 = undefined;
+            const title = if (busy) "Finding stream…" else if (failed) "Source unavailable" else if (a.episode_title_lens[ep_i] > 0)
+                safeUtf8Buf(a.episode_titles[ep_i][0..a.episode_title_lens[ep_i]], &title_buf)
+            else if (a.episode_aired_lens[ep_i] > 0)
+                a.episode_aired[ep_i][0..a.episode_aired_lens[ep_i]]
+            else if (is_next) "Up next" else if (watched) "Watched" else "";
+            var status_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .expand = .horizontal,
+                .padding = dvui.Rect.all(0),
+                .min_size_content = .{ .w = 0, .h = font.lineHeight() },
+            });
+            defer status_row.deinit();
+            if (busy) dvui.spinner(@src(), .{
+                .color_text = theme.colors.accent,
+                .min_size_content = .{ .w = 12, .h = 12 },
+                .max_size_content = .{ .w = 12, .h = 12 },
+                .gravity_y = 0.5,
+                .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+            });
+            var caption = dvui.textLayout(@src(), .{ .break_lines = false }, .{
+                .background = false,
+                .expand = .horizontal,
+                .padding = dvui.Rect.all(0),
+                .color_text = if (busy) theme.colors.accent else if (failed) theme.colors.warning else theme.colors.text_secondary,
+                .min_size_content = .{ .w = 0, .h = font.lineHeight() },
+                .max_size_content = .{ .w = @max(1, layout.width - 20), .h = font.lineHeight() },
+            });
+            if (!busy and !failed and a.episode_filler[ep_i]) caption.addText("Filler · ", .{ .color_text = theme.colors.accent });
+            caption.addText(title, .{});
+            caption.deinit();
+        }
+    }
+    if (visible.last < layout.rows) {
+        var spacer = dvui.box(@src(), .{}, .{ .min_size_content = .{ .w = 1, .h = pitch * @as(f32, @floatFromInt(layout.rows - visible.last)) }, .padding = dvui.Rect.all(0) });
+        spacer.deinit();
     }
 }
 
@@ -4699,4 +4552,100 @@ pub fn fetchContinuePoster(item: *state.ContinueItem) void {
     workers.spawn(S.worker, .{ url_copy, url.len, idx }) catch {
         item.poster_fetching = false;
     };
+}
+
+pub fn deinitEpisodeRequests() void {
+    episode_request.cancel(&state.app.anime.episodes_loading);
+    cancelPlayback();
+    playback_tracking = null;
+    episode_document_mutex.lock();
+    defer episode_document_mutex.unlock();
+    for (episode_documents.items) |doc| alloc.free(doc.bytes);
+    episode_documents.deinit(alloc);
+    episode_documents = .empty;
+}
+
+test "Anime playback unknown totals publish long episode lists and reject stale pages" {
+    defer deinitEpisodeRequests();
+    const a = &state.app.anime;
+    const old_selected = a.selected_idx;
+    const old_count = a.episode_count;
+    defer {
+        a.selected_idx = old_selected;
+        a.episode_count = old_count;
+    }
+    a.selected_idx = 0;
+    a.episode_count = 0;
+    const first = episode_request.begin(&a.episodes_loading);
+    var job = EpisodeJob{ .idx = 0, .generation = first, .mal = std.mem.zeroes([16]u8), .mal_len = 1 };
+    job.mal[0] = '1';
+    const json = "{\"data\":[{\"mal_id\":1200,\"title\":\"Beyond the old limit\",\"aired\":\"2026-09-01\"}]}";
+    try episode_documents.append(alloc, .{ .job = job, .bytes = try alloc.dupe(u8, json) });
+    applyPendingEpisodes();
+    try std.testing.expectEqual(@as(usize, 1200), a.episode_count);
+    try std.testing.expectEqualStrings("1200", a.episode_list[1199][0..a.episode_list_lens[1199]]);
+    try std.testing.expectEqualStrings("Beyond the old limit", a.episode_titles[1199][0..a.episode_title_lens[1199]]);
+    _ = episode_request.begin(&a.episodes_loading);
+    a.episode_count = 0;
+    try episode_documents.append(alloc, .{ .job = job, .bytes = try alloc.dupe(u8, json) });
+    applyPendingEpisodes();
+    try std.testing.expectEqual(@as(usize, 0), a.episode_count);
+    episode_request.finish(first, &a.episodes_loading);
+    try std.testing.expect(a.episodes_loading.load(.acquire));
+}
+
+test "Anime playback cancellation drops resolved streams without touching watched state" {
+    defer deinitEpisodeRequests();
+    const a = &state.app.anime;
+    a.episode_watched[0] = false;
+    const generation = playback_request.begin(&a.stream_loading);
+    const job = PlaybackJob{ .generation = generation, .idx = 0, .row = .{}, .episode = 1, .player_address = 0, .player_serial = 0 };
+    cancelPlayback();
+    publishPlayback(.{ .job = job });
+    try std.testing.expect(playback_ready == null);
+    try std.testing.expect(!a.stream_loading.load(.acquire));
+    try std.testing.expect(!a.episode_watched[0]);
+}
+
+test "Anime playback click acknowledges an episode before any player exists" {
+    defer deinitEpisodeRequests();
+    const a = &state.app.anime;
+    const old_selected = a.selected_idx;
+    const old_count = a.episode_count;
+    const old_results = a.result_count;
+    const old_row = a.results[0];
+    defer {
+        a.selected_idx = old_selected;
+        a.episode_count = old_count;
+        a.result_count = old_results;
+        a.results[0] = old_row;
+    }
+    try std.testing.expectEqual(@as(usize, 0), state.app.players.items.len);
+    a.selected_idx = 0;
+    a.episode_count = 12;
+    a.result_count = 1;
+    a.results[0] = .{};
+    playEpisode("1");
+    try std.testing.expect(a.stream_loading.load(.acquire));
+    try std.testing.expectEqual(@as(u16, 1), playbackEpisode());
+    try std.testing.expect(playback_start != null);
+    const generation = playback_request.current();
+    playEpisode("1");
+    try std.testing.expectEqual(generation, playback_request.current());
+    playEpisode("2");
+    try std.testing.expectEqual(@as(u16, 2), playbackEpisode());
+    failPlayback(generation);
+    try std.testing.expect(!playbackFailed());
+    try std.testing.expect(a.stream_loading.load(.acquire));
+    cancelPlayback();
+    try std.testing.expect(!a.stream_loading.load(.acquire));
+    try std.testing.expect(playback_start == null);
+    try std.testing.expectEqual(@as(u16, 0), playbackEpisode());
+    // Cancellation before the owner-loop drain must not initialize a player.
+    applyPendingPlayback();
+    try std.testing.expectEqual(@as(usize, 0), state.app.players.items.len);
+    playEpisode("1");
+    failPlayback(playback_request.current());
+    try std.testing.expect(playbackFailed());
+    try std.testing.expect(!a.stream_loading.load(.acquire));
 }

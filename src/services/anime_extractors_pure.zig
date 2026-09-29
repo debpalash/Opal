@@ -368,15 +368,15 @@ pub fn classifyHost(url: []const u8) Host {
     // yt-dlp handles these — delegate (checked first so a mirror can't be
     // shadowed by a broad host match below).
     if (hostContainsAny(host, &.{
-        "youtube.com", "youtu.be",       "youtube-nocookie",
-        "dailymotion.com", "dai.ly",      "ok.ru",
-        "odnoklassniki",   "vk.com",      "vkvideo",
+        "youtube.com",     "youtu.be",  "youtube-nocookie",
+        "dailymotion.com", "dai.ly",    "ok.ru",
+        "odnoklassniki",   "vk.com",    "vkvideo",
         "userapi.com",     "sibnet.ru",
     })) return .delegate_ytdlp;
 
     if (hostContainsAny(host, &.{ "megacloud", "rapid-cloud", "rabbitstream", "megaplay", "vidwish" }))
         return .megacloud;
-    if (hostContainsAny(host, &.{ "streamwish", "wishfast", "sfastwish", "swiftplayers", "hlswish", "embedwish", "wishonly", "playerwish", "wishembed", "mwish", "dwish", "awish", "obeywish", "flaswish", "cdnwish", "jwplayerhls" }))
+    if (hostContainsAny(host, &.{ "streamwish", "wishfast", "sfastwish", "swiftplayers", "hlswish", "embedwish", "wishonly", "playerwish", "wishembed", "mwish", "dwish", "awish", "obeywish", "flaswish", "cdnwish", "jwplayerhls", "kwik.cx", "kwik.si" }))
         return .streamwish;
     if (hostContainsAny(host, &.{ "filemoon", "moonplayer", "kerapoxy", "moviesm4u", "1azayf9w", "furher.in" }))
         return .filemoon;
@@ -849,4 +849,8 @@ test "schemeHostOf / refererFor" {
     try std.testing.expectEqualStrings("https://streamwish.to", schemeHostOf("https://streamwish.to/e/abc?x=1").?);
     var out: [64]u8 = undefined;
     try std.testing.expectEqualStrings("https://d000d.com/", refererFor("https://d000d.com/e/xyz", &out).?);
+}
+
+test "AnimePahe Kwik embeds reuse the packed HLS extractor" {
+    try std.testing.expectEqual(Host.streamwish, classifyHost("https://kwik.cx/e/fixture"));
 }

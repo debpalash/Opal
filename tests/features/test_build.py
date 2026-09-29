@@ -1201,7 +1201,7 @@ def test_site_compare_and_seo():
 def test_native_catalog_tv():
     try:
         result = subprocess.run(
-            ["zig", "build", "test-browse", "test-tv-detail", "-Doptimize=ReleaseFast"],
+            ["zig", "build", "test-browse", "test-tv-detail", "test-anime", "-Doptimize=ReleaseFast"],
             cwd=PROJECT_DIR, capture_output=True, text=True, timeout=300,
         )
         if result.returncode:
