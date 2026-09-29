@@ -2,6 +2,7 @@
 
 // Bounded torrent payload storage. Only libtorrent's public disk interface is
 // used; disk-backed torrents continue through its normal storage implementation.
+#include <libtorrent/version.hpp>
 #include <libtorrent/disk_interface.hpp>
 #include <libtorrent/disk_buffer_holder.hpp>
 #include <libtorrent/session.hpp>
@@ -21,6 +22,14 @@
 
 namespace opal {
 namespace lt = libtorrent;
+#if LIBTORRENT_VERSION_NUM >= 20100
+namespace disk_status = lt::disk_status;
+#else
+namespace disk_status {
+constexpr auto fatal_disk_error = lt::status_t::fatal_disk_error;
+constexpr auto need_full_check = lt::status_t::need_full_check;
+}
+#endif
 
 struct MemoryStorage {
     struct Piece {
@@ -208,6 +217,11 @@ public:
         else disk->remove_torrent(s);
     }
     void free_disk_buffer(char* b) override { delete[] b; }
+#if LIBTORRENT_VERSION_NUM >= 20100
+    void free_multiple_buffers(lt::span<char*> buffers) override {
+        for (char* b : buffers) delete[] b;
+    }
+#endif
     void async_read(lt::storage_index_t s, lt::peer_request const& r,
                     std::function<void(lt::disk_buffer_holder, lt::storage_error const&)> h, lt::disk_job_flags_t f) override {
         auto m = store(s);
@@ -215,7 +229,11 @@ public:
         auto b = std::make_unique<char[]>(r.length);
         auto ec = m->read(int(r.piece), r.start, r.length, b.get()) ? lt::storage_error{} : error(boost::system::errc::no_such_file_or_directory);
         boost::asio::post(io, [this, h=std::move(h), b=std::move(b), ec, r]() mutable {
+#if LIBTORRENT_VERSION_NUM >= 20100
+            h(lt::disk_buffer_holder(*this, b.release()), ec);
+#else
             h(lt::disk_buffer_holder(*this, b.release(), r.length), ec);
+#endif
         });
     }
     bool async_write(lt::storage_index_t s, lt::peer_request const& r, char const* b,
@@ -243,7 +261,7 @@ public:
     void async_move_storage(lt::storage_index_t s, std::string p, lt::move_flags_t f,
                             std::function<void(lt::status_t, std::string const&, lt::storage_error const&)> h) override {
         if (!store(s)) return disk->async_move_storage(s, std::move(p), f, std::move(h));
-        boost::asio::post(io, [h=std::move(h), p]{ h(lt::status_t::fatal_disk_error, p, error(boost::system::errc::operation_not_supported)); });
+        boost::asio::post(io, [h=std::move(h), p]{ h(disk_status::fatal_disk_error, p, error(boost::system::errc::operation_not_supported)); });
     }
     void async_release_files(lt::storage_index_t s, std::function<void()> h) override {
         if (!store(s)) return disk->async_release_files(s, std::move(h));
@@ -253,7 +271,7 @@ public:
                            lt::aux::vector<std::string, lt::file_index_t> links, std::function<void(lt::status_t, lt::storage_error const&)> h) override {
         auto m = store(s);
         if (!m) return disk->async_check_files(s, p, std::move(links), std::move(h));
-        const auto status = m->prepare_recheck() ? lt::status_t::need_full_check : lt::status_t::no_error;
+        const auto status = m->prepare_recheck() ? disk_status::need_full_check : lt::status_t{};
         boost::asio::post(io, [h=std::move(h), status]{ h(status, {}); });
     }
     void async_stop_torrent(lt::storage_index_t s, std::function<void()> h) override {
