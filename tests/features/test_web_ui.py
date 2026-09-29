@@ -162,19 +162,20 @@ def test_web_ui_ai():
 def test_web_ui_music_radio():
     ui = _web_app()
     rm = _remote_api()
+    music_api = _src("src/services/remote_music_api.zig")
     checks = {
         # Routes: async search + poll + play-by-index, like the other verticals.
-        "music route": "fn apiMusic(" in rm and '"/music/search"' in rm and '"/music/play"' in rm
-            and "music.searchMusic(" in rm and "music.playSong(" in rm,
+        "music route": "fn apiMusic(" in rm and '"/music/search"' in music_api and '"/music/play"' in music_api
+            and "music.searchMusic(" in music_api and "music.playSong(" in music_api,
         "radio route": "fn apiRadio(" in rm and '"/radio/search"' in rm and '"/radio/play"' in rm
             and "radio.searchRadio(" in rm and "radio.playStation(" in rm,
         # GET seeds the once-per-session popular list.
         "radio seeds popular": "radio.loadPopularOnce()" in rm,
         # Direct stream URLs so a hosted browser can play them itself.
-        "music exposes stream url": "s.play_url[0..@min(s.play_url_len, s.play_url.len)]" in rm,
+        "music exposes stream url": "s.play_url[0..@min(s.play_url_len, s.play_url.len)]" in music_api,
         "radio prefers resolved url": "url_resolved_len > 0" in rm,
         # Big result arrays -> heap, not the spawned-thread stack.
-        "responses heap-allocated": "alloc.alloc(u8," in _between(rm, "fn apiMusic(", "fn apiRadio(") and "alloc.alloc(u8," in _between(rm, "fn apiRadio(", "fn apiAi("),
+        "responses heap-allocated": "alloc.alloc(u8," in music_api and "alloc.alloc(u8," in _between(rm, "fn apiRadio(", "fn apiAi("),
         # Web tabs.
         "music tab": 'data-page="music"' in ui and 'id="page-music"' in ui and "function runMusic(" in ui,
         "radio tab": 'data-page="radio"' in ui and 'id="page-radio"' in ui and "function runRadio(" in ui,

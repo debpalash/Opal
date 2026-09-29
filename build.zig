@@ -1141,6 +1141,15 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_comics_pure).step);
 
+    inline for (.{ "expanded_reading_pure", "music_audius_pure" }) |module| {
+        const source_test = b.addTest(.{ .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/" ++ module ++ ".zig"),
+            .target = target,
+            .optimize = optimize,
+        }) });
+        test_step.dependOn(&b.addRunArtifact(source_test).step);
+    }
+
     // TV tracking engine — the single definition of "what do I watch next?".
     // Next-up must cross season boundaries, return the GAP rather than the
     // frontier, and clamp to what has actually aired (TMDB's episode_count

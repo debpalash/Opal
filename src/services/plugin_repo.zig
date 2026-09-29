@@ -576,7 +576,9 @@ fn writeSourceVersioned(id: []const u8, data: []const u8, version: []const u8) b
         }) catch data;
     }
 
-    return source_config.install(id, payload);
+    const ok = source_config.install(id, payload);
+    if (ok and std.mem.startsWith(u8, id, "podcast-")) @import("podcasts.zig").invalidateSourceFeeds();
+    return ok;
 }
 
 /// Rewrite installed sources whose manifest entry has since been corrected.
@@ -689,6 +691,7 @@ pub fn uninstall(idx: usize) void {
     const fp = sourceFilePath(&fp_buf, plugins[idx].idSlice());
     io.cwdDeleteFile(fp) catch {};
     source_config.reload();
+    if (std.mem.startsWith(u8, plugins[idx].idSlice(), "podcast-")) @import("podcasts.zig").invalidateSourceFeeds();
     state.showToastTyped("Uninstalled", .info);
 }
 

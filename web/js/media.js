@@ -145,20 +145,40 @@ function renderAnimeEpisodes(eps, data = {}){
 // Each song carries a direct stream url: hosted plays it in the browser,
 // companion hands the index to the desktop player.
 let muWatch = null;
-function loadMusic(){ api('/music').then(d => renderMusic(d.songs || [])).catch(()=>{}); }
+let musicGeneration = 0;
+function loadMusic(){
+  const gen = ++musicGeneration;
+  api('/music').then(d => {
+    if (gen !== musicGeneration || currentPage !== 'music') return;
+    $('mu-source').value = String(d.source || 0); renderMusic(d.songs || []);
+  }).catch(()=>{});
+}
+$('mu-source').onchange = async () => {
+  const gen = ++musicGeneration;
+  clearInterval(muWatch);
+  try { await api('/music/source?id=' + encodeURIComponent($('mu-source').value)); }
+  catch { $('mu-hint').textContent = 'Could not switch music source.'; return; }
+  if (gen !== musicGeneration || currentPage !== 'music') return;
+  $('mu-results').innerHTML = ''; lastHtml.music = '';
+  if ($('mu-q').value.trim() || $('mu-source').value === '4') runMusic();
+};
 $('mu-go').onclick = () => runMusic();
 $('mu-q').addEventListener('keydown', e => { if (e.key === 'Enter') { runMusic(); $('mu-q').blur(); } });
-function runMusic(){
-  const q = $('mu-q').value.trim(); if (!q) return;
+async function runMusic(){
+  const q = $('mu-q').value.trim(); if (!q && $('mu-source').value !== '4') return;
+  const gen = ++musicGeneration;
   $('mu-hint').innerHTML = '<span class="spin"></span> Searching music…';
   $('mu-results').innerHTML = ''; lastHtml.music = '';
-  api('/music/search?q=' + encodeURIComponent(q)).catch(()=>{});
   clearInterval(muWatch);
+  try { await api('/music/search?q=' + encodeURIComponent(q)); }
+  catch { $('mu-hint').textContent = 'Could not search music.'; return; }
+  if (gen !== musicGeneration || currentPage !== 'music') return;
   let ticks = 0;
   muWatch = settledInterval(async () => {
     ticks++;
     try {
       const d = await api('/music');
+      if (gen !== musicGeneration || currentPage !== 'music') return;
       renderMusic(d.songs || []);
       if ((!d.loading && ticks > 2) || ticks > 40) {
         clearInterval(muWatch);

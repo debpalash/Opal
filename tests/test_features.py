@@ -53,6 +53,7 @@ from features import harness
 # category downstream, so it is not load-bearing).
 from features import (  # noqa: F401
     test_architecture,
+    test_expanded_sources,
     test_database,
     test_build,
     test_voice,

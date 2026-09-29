@@ -19,6 +19,7 @@ const pure = @import("music_subsonic_pure.zig");
 const js_pure = @import("music_jiosaavn_pure.zig");
 const jf_pure = @import("music_jellyfin_pure.zig");
 const px_pure = @import("music_plex_pure.zig");
+const au_pure = @import("music_audius_pure.zig");
 const paths = @import("../core/paths.zig");
 const components = @import("../ui/components.zig");
 const io = @import("../core/io_global.zig");
@@ -98,6 +99,20 @@ pub const SRC_JIOSAAVN: u8 = 0;
 pub const SRC_SUBSONIC: u8 = 1;
 pub const SRC_JELLYFIN: u8 = 2;
 pub const SRC_PLEX: u8 = 3;
+pub const SRC_AUDIUS: u8 = 4;
+
+pub fn selectSource(src: u8) bool {
+    if (src > SRC_AUDIUS) return false;
+    search_request.cancel(&state.app.music.is_loading);
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    state.app.music.source = src;
+    state.app.music.result_count = 0;
+    state.app.music.fetch_error = false;
+    more_available = false;
+    loading_more.store(false, .release);
+    return true;
+}
 
 // ── Jellyfin (source 2) ──
 // Reuses the sign-in `jellyfin.zig` already performed; there is no second
@@ -182,6 +197,7 @@ fn sourceConfigured(src: u8) bool {
         SRC_SUBSONIC => configured(),
         SRC_JELLYFIN => jfCreds(&b, &t) != null,
         SRC_PLEX => plexCreds(&b, &t) != null,
+        SRC_AUDIUS => source_config.get("audius", "base") != null,
         else => false,
     };
 }
@@ -268,7 +284,7 @@ var more_available: bool = false;
 var loading_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 pub fn searchMusic(query: []const u8) void {
-    if (query.len == 0) return;
+    if (query.len == 0 and state.app.music.source != SRC_AUDIUS) return;
 
     state.app.music.fetch_error = false;
 
@@ -290,6 +306,7 @@ fn makeSearchJob(query: []const u8, generation: u32, append: bool, offset: u32) 
     var b: [256]u8 = undefined;
     var tok: [320]u8 = undefined;
     switch (job.source) {
+        SRC_AUDIUS => copyField(&job.base, &job.base_len, source_config.get("audius", "base") orelse return null),
         SRC_SUBSONIC => {
             var q: [300]u8 = undefined;
             const c = creds(&b, &q) orelse return null;
@@ -326,6 +343,7 @@ fn spawnSearchJob(job: SearchJob) bool {
         SRC_SUBSONIC => spawnWorker(subsonicWorker, job),
         SRC_JELLYFIN => spawnWorker(jellyfinMusicWorker, job),
         SRC_PLEX => spawnWorker(plexMusicWorker, job),
+        SRC_AUDIUS => spawnWorker(audiusWorker, job),
         else => false,
     };
 }
@@ -371,6 +389,37 @@ fn publishPage(job: SearchJob, added: usize, base: usize) void {
 
 /// JioSaavn search worker — public API, no auth. Fills play_url (perma_url) +
 /// a full cover URL; playback hands perma_url to mpv/yt-dlp.
+fn audiusWorker(job: SearchJob) void {
+    var published = false;
+    defer finishJob(job, published);
+    var url_buf: [1600]u8 = undefined;
+    const base_url = job.base[0..job.base_len];
+    const url = au_pure.searchUrl(&url_buf, base_url, job.query[0..job.query_len], PAGE_SIZE, job.offset) orelse return;
+    const body = fetchBody(url, 3 * 1024 * 1024, "application/json") orelse {
+        if (!job.append and search_request.isCurrent(job.generation)) state.app.music.fetch_error = true;
+        return;
+    };
+    defer alloc.free(body);
+    var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch return;
+    defer parsed.deinit();
+    if (parsed.value != .object) return;
+    const data = parsed.value.object.get("data") orelse return;
+    if (data != .array) return;
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (!search_request.isCurrent(job.generation)) return;
+    const start = if (job.append) state.app.music.result_count else 0;
+    var count: usize = 0;
+    for (data.array.items) |item| {
+        if (start + count >= RESULTS_CAP) break;
+        const row = au_pure.parseTrack(item, base_url) orelse continue;
+        state.app.music.results[start + count] = row;
+        count += 1;
+    }
+    publishPage(job, count, start);
+    published = true;
+}
+
 fn jiosaavnWorker(job: SearchJob) void {
     const my_gen = job.generation;
     var published = false;
@@ -620,7 +669,7 @@ pub fn playSong(idx: usize) void {
     var tokb: [320]u8 = undefined;
 
     switch (state.app.music.source) {
-        SRC_JIOSAAVN => {
+        SRC_JIOSAAVN, SRC_AUDIUS => {
             // Hand the perma_url to mpv; its bundled yt-dlp resolves the signed
             // CDN audio stream (no DES, no third-party instance).
             if (purl.len == 0) return;
@@ -698,6 +747,7 @@ pub fn downloadSong(idx: usize) void {
     }
     const song = state.app.music.results[idx];
     parse_mutex.unlock();
+    if (!song.download_allowed) return;
 
     // Music dir.
     var dir_buf: [512]u8 = undefined;
@@ -769,6 +819,7 @@ pub fn downloadSong(idx: usize) void {
         var tokb: [320]u8 = undefined;
         var url_buf: [1024]u8 = undefined;
         const stream = switch (state.app.music.source) {
+            SRC_AUDIUS => purl,
             SRC_SUBSONIC => blk: {
                 if (id.len == 0) return;
                 var q: [300]u8 = undefined;
@@ -862,15 +913,12 @@ pub fn renderContent() void {
             .{ .label = "Subsonic", .icon = icons.tvg.lucide.server },
             .{ .label = "Jellyfin", .icon = icons.tvg.lucide.library },
             .{ .label = "Plex", .icon = icons.tvg.lucide.play },
+            .{ .label = "Audius", .icon = icons.tvg.lucide.radio },
         };
         for (sources, 0..) |source, clicked| {
             if (components.filterChip(@src(), source.label, source.icon, clicked == state.app.music.source, clicked + 91000) and clicked != state.app.music.source) {
-                state.app.music.source = @intCast(clicked);
-                state.app.music.result_count = 0; // switching source clears the grid
-                state.app.music.fetch_error = false;
-                more_available = false;
-                loading_more.store(false, .release);
-                search_request.cancel(&state.app.music.is_loading); // drop any in-flight results
+                _ = selectSource(@intCast(clicked));
+                if (clicked == SRC_AUDIUS) searchMusic(std.mem.sliceTo(&state.app.music.search_buf, 0));
             }
         }
     }
@@ -883,6 +931,7 @@ pub fn renderContent() void {
     if (state.app.music.fetch_error) {
         const emsg: []const u8 = switch (state.app.music.source) {
             SRC_JIOSAAVN => "Couldn't reach JioSaavn — check your connection",
+            SRC_AUDIUS => "Couldn't reach Audius — check your connection",
             SRC_JELLYFIN => "Couldn't reach the Jellyfin server — check the sign-in in the Jellyfin tab",
             SRC_PLEX => "Couldn't reach the Plex server — check the sign-in in the Plex tab",
             else => "Couldn't reach the Subsonic server — check URL + credentials",
@@ -1035,7 +1084,7 @@ pub fn coverUrlFor(song: *const pure.MusicSong, url_buf: []u8) []const u8 {
     var b: [256]u8 = undefined;
     var tokb: [320]u8 = undefined;
     switch (state.app.music.source) {
-        SRC_JIOSAAVN => {
+        SRC_JIOSAAVN, SRC_AUDIUS => {
             if (cover_field.len > url_buf.len) return url_buf[0..0];
             @memcpy(url_buf[0..cover_field.len], cover_field);
             return url_buf[0..cover_field.len];

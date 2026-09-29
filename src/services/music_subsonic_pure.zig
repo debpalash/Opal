@@ -184,6 +184,7 @@ pub const Song = struct {
 /// `cover` (a full image URL). The active source (state.app.music.source) picks
 /// how each field is used.
 pub const MusicSong = struct {
+    download_allowed: bool = true,
     id: [128]u8 = std.mem.zeroes([128]u8),
     id_len: usize = 0,
     title: [160]u8 = std.mem.zeroes([160]u8),
