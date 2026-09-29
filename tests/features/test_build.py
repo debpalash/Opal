@@ -1286,6 +1286,7 @@ def test_linux_compatibility_release_gate():
         "native ABI floor verified": "requires glibc newer than 2.31" in _src("packaging/linux-compat/stage.py"),
         "GCC9 float conversion dependency pinned": "230d20e4e4ac1f6a9df92c4d746c6ec536cdb0c085bc8635d4b88cead5dc22cb" in _src("packaging/linux-compat/build-runtime.sh"),
         "disabled Vulkan stubs have pinned headers": "570f9ae1e65466dbaf5fcab667abd079dd0a61c4ab86cf535efd492bf70a5b74" in _src("packaging/linux-compat/build-runtime.sh"),
+        "libtorrent required signal submodule pinned": "6f111b0d77429a8051be4faed06cf23fb03cf6ee233967c84fdd9d8d3b42ba8e" in _src("packaging/linux-compat/build-runtime.sh") and '"$WORK/libtorrent-2.0.11/deps/try_signal/"' in _src("packaging/linux-compat/build-runtime.sh"),
         "foundation cached before graphics": "target: media-deps" in workflow,
         "portable AV1 runtime": "dav1d-1.5.4" in (_src("packaging/linux-compat/build-media.sh") + _src("packaging/linux-compat/build-runtime.sh")) and "libdav1d0" not in manifest and "ubuntu:22.04 debian:12" in workflow,
         "account setup covered": "api/auth/register" in smoke and "protected API accepted" in smoke,

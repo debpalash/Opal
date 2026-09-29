@@ -27,6 +27,10 @@ meson setup "$WORK/mpv-build" "$WORK/mpv-0.41.0" \
 meson compile -C "$WORK/mpv-build" -j "$JOBS"
 meson install -C "$WORK/mpv-build"
 fetch libtorrent-2.0.11 https://github.com/arvidn/libtorrent/archive/refs/tags/v2.0.11.tar.gz a317b4b4352bf1b846072dfacee30cd0afccf1ebc04a84273f1ecba930acb802
+# Required submodule omitted from the libtorrent tag archive.
+fetch try-signal-105cce59972f925a33aa6b1c3109e4cd3caf583d https://github.com/arvidn/try_signal/archive/105cce59972f925a33aa6b1c3109e4cd3caf583d.tar.gz 6f111b0d77429a8051be4faed06cf23fb03cf6ee233967c84fdd9d8d3b42ba8e
+mkdir -p "$WORK/libtorrent-2.0.11/deps/try_signal"
+cp -R "$WORK/try_signal-105cce59972f925a33aa6b1c3109e4cd3caf583d/." "$WORK/libtorrent-2.0.11/deps/try_signal/"
 cmake -S "$WORK/libtorrent-2.0.11" -B "$WORK/torrent-build" \
     -DCMAKE_INSTALL_PREFIX="$PREFIX" -DCMAKE_INSTALL_LIBDIR=lib \
     -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -Dpython-bindings=OFF \

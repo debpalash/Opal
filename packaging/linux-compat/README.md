@@ -21,7 +21,7 @@ The checksum-verified upstream archives, source URLs and build scripts are
 published with the release as `opal-<version>-linux-compat-sources.tar.gz`.
 Opal and mpv are distributed under GPL version 3; FFmpeg under LGPL version 3
 (the `--enable-version3` configuration uses OpenSSL under Apache 2.0).
-libplacebo is LGPL 2.1 or later, SDL is zlib, libtorrent is BSD-3-Clause, and
+libplacebo is LGPL 2.1 or later, SDL is zlib, libtorrent and try_signal are BSD-3-Clause, and
 OpenSSL is Apache 2.0, dav1d is BSD-2-Clause, fast_float offers MIT/Apache/Boost
 licenses, Vulkan headers are Apache 2.0, and SQLite is public domain. The archives include each dependency's license. Host
 system libraries are installed by apt, rather than copied into the package.
