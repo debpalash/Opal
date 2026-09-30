@@ -263,7 +263,7 @@ pub fn build(b: *std.Build) void {
     // (and --libs the matching -lssl/-lcrypto); we keep -I{prefix}/include for
     // boost and a trailing -ltorrent-rasterbar as an empty-pkg-config fallback.
     const compile_cmd = if (target.result.os.tag == .macos)
-        b.fmt("if [ ! -f libtorrent_wrapper.so ] || [ src/torrent_wrapper.cpp -nt libtorrent_wrapper.so ] || [ src/torrent_memory.hpp -nt libtorrent_wrapper.so ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -fPIC -I{s}/include $(pkg-config --cflags libtorrent-rasterbar 2>/dev/null) -L{s}/lib src/torrent_wrapper.cpp -o libtorrent_wrapper.so $(pkg-config --libs libtorrent-rasterbar 2>/dev/null) -ltorrent-rasterbar; fi", .{ brew_prefix, brew_prefix })
+        b.fmt("if [ ! -f libtorrent_wrapper.so ] || [ build.zig -nt libtorrent_wrapper.so ] || [ src/torrent_wrapper.cpp -nt libtorrent_wrapper.so ] || [ src/torrent_memory.hpp -nt libtorrent_wrapper.so ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -fPIC -Wl,-headerpad_max_install_names -I{s}/include $(pkg-config --cflags libtorrent-rasterbar 2>/dev/null) -L{s}/lib src/torrent_wrapper.cpp -o libtorrent_wrapper.so $(pkg-config --libs libtorrent-rasterbar 2>/dev/null) -ltorrent-rasterbar; fi", .{ brew_prefix, brew_prefix })
     else if (is_windows)
         // pkg-config --cflags is REQUIRED here, same as the POSIX branches:
         // MSYS2's libtorrent-rasterbar (≥2.0.13) enables TORRENT_USE_RTC in

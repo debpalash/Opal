@@ -10,6 +10,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  linux-compat:
+    uses: ./.github/workflows/linux-compat.yml
+
   # Keep this independent of `zig build`: the package graph includes the GUI
   # dependency, so a remote DVUI fetch failure must not hide a regression in
   # the Zig -> Python child-process seam used by every torrent search.
@@ -32,7 +35,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-14]
+        os: [ubuntu-24.04, macos-15]
         experimental: [false]
         include:
           # Windows is tolerated-failing (experimental → continue-on-error):
@@ -55,7 +58,7 @@ jobs:
   # Full app build on macOS arm64 — the primary supported platform.
   # build.zig links against /opt/homebrew, which matches arm64 runners.
   build-macos:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
@@ -63,9 +66,7 @@ jobs:
           version: 0.16.0
       - name: Install native dependencies
         run: |
-          brew update
-          if brew list --versions openssl@1.1 >/dev/null 2>&1; then brew unlink openssl@1.1; fi
-          brew install sqlite sdl2 libtorrent-rasterbar libass libplacebo meson ninja pkgconf
+          ./scripts/install-macos-deps.sh
           ./scripts/install-macos-ffmpeg.sh
           ./scripts/install-macos-mpv.sh
       - name: Build (ReleaseSafe)
@@ -85,7 +86,7 @@ jobs:
   # sweeps, script compilation) plus a full zig build, so it needs the same
   # native deps as build-macos. Optional components report as "skip".
   feature-suite:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
@@ -93,13 +94,20 @@ jobs:
           version: 0.16.0
       - name: Install native dependencies
         run: |
-          brew update
-          if brew list --versions openssl@1.1 >/dev/null 2>&1; then brew unlink openssl@1.1; fi
-          brew install sqlite sdl2 libtorrent-rasterbar libass libplacebo meson ninja pkgconf
+          ./scripts/install-macos-deps.sh
           ./scripts/install-macos-ffmpeg.sh
           ./scripts/install-macos-mpv.sh
+      - name: Memory-only torrent regression
+        run: python3 tests/test_torrent_memory.py
       - name: Run tests/test_features.py
         run: python3 tests/test_features.py
+      - name: Save feature diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: feature-report-${{ github.run_attempt }}
+          path: tests/results.json
+          if-no-files-found: ignore
 
   # Behavior-level browser security tier. Use Google's purpose-built headless
   # shell: desktop Chrome starts background D-Bus/GCM services on the runner

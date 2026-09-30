@@ -127,16 +127,9 @@ def test_engine_import_contract():
     return "pass", f"{len(expected)} plugins import and expose their capabilities"
 
 
-# nova2's get_capabilities() reads `name` / `url` / `supported_categories` off
-# the CLASS. tokyotoshokan assigns them on `self` in __init__ instead, so
-# `nova2.py --capabilities` dies with
-#   AttributeError: type object 'tokyotoshokan' has no attribute 'name'
-# and returns XML for NO engine at all. Opal never calls --capabilities (only
-# qBittorrent proper does), so it is latent -- but it is one engine away from
-# being the only thing standing between here and a working capabilities probe.
-# Pinned by name so the defect is tracked: fix tokyotoshokan and this test tells
-# you to delete the entry; add a second such engine and it fails.
-INSTANCE_ATTR_ONLY = {"tokyotoshokan"}
+# Capabilities read class attributes. Tokyo Toshokan now supplies them at
+# class level too; no instance-only metadata defects remain exempted.
+INSTANCE_ATTR_ONLY = set()
 
 
 @test("nova2 engine catalog: plugins declare url + name + categories", "Torrents")
@@ -188,7 +181,7 @@ def test_engine_declares_url_and_categories():
     if problems:
         return "fail", "; ".join(problems)
     return "pass", ("every plugin declares an absolute url, name and "
-                    "supported_categories; 1 known instance-attr-only engine")
+                    "supported_categories at class level")
 
 
 @test("nova2 engine catalog: no engine is orphaned by the install gate", "Torrents")
