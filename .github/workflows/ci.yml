@@ -97,8 +97,17 @@ jobs:
           ./scripts/install-macos-deps.sh
           ./scripts/install-macos-ffmpeg.sh
           ./scripts/install-macos-mpv.sh
+      - name: Memory-only torrent regression
+        run: python3 tests/test_torrent_memory.py
       - name: Run tests/test_features.py
         run: python3 tests/test_features.py
+      - name: Save feature diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: feature-report-${{ github.run_attempt }}
+          path: tests/results.json
+          if-no-files-found: ignore
 
   # Behavior-level browser security tier. Use Google's purpose-built headless
   # shell: desktop Chrome starts background D-Bus/GCM services on the runner

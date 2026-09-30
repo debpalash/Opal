@@ -1230,6 +1230,8 @@ def test_native_catalog_tv():
 
 @test("Memory-only torrent streaming (real loopback peers)", "Build")
 def test_memory_torrents():
+    if 'run: python3 tests/test_torrent_memory.py' not in _src('.github/workflows/ci.yml'):
+        return "fail", "CI must expose full native torrent diagnostics before the aggregate suite"
     result = subprocess.run(
         [sys.executable, "tests/test_torrent_memory.py"], cwd=PROJECT_DIR,
         capture_output=True, text=True, timeout=420,
