@@ -77,7 +77,7 @@ def test_motion_transitions():
 
 @test("Page Shell Immersive Hides Nav", "Page Shell")
 def test_shell_immersive_navbar():
-    # On the Player route, the page-shell top nav (and compact bottom tabs) must
+    # On the Player route, the single page-shell top nav must
     # auto-hide during immersive playback (fullscreen or idle-while-watching), so
     # the video gets the whole window. Decision reuses the unit-tested pure
     # chrome_autohide.shouldHideChrome; this checks the shell wiring.
@@ -89,11 +89,11 @@ def test_shell_immersive_navbar():
         and "nav_alpha" in sh                          # phase 4: nav fades instead of popping
         and "router.current == .player" in sh          # scoped so browsing keeps the nav
         and "fullscreen_player_idx != null" in sh
-        and "and !immersive) renderBottomTabs" in sh    # compact bottom tabs hide too
+        and "renderBottomTabs(" not in sh  # destinations stay in the one-row chooser
     )
     if not ok:
         return "fail", "shell top nav not gated on immersive playback"
-    return "pass", "top nav + bottom tabs auto-hide on immersive Player route"
+    return "pass", "single top nav auto-hides on immersive Player route"
 
 
 @test("Interaction States Render (Hover/Focus/Confirm)", "Page Shell")
@@ -174,13 +174,15 @@ def test_responsive_shell_tiers():
     checks = {
         "tiny width tier": "TINY_PT" in sc and "isTiny(" in sc,
         "short height tier": "SHORT_PT" in sc and "isShort(" in sc,
-        "compact header sheds inline search": "if (!compact) omnibox(narrow)" in sh,
+        "one omnibox in every width tier": "omnibox(narrow);" in sh and "if (!compact) omnibox" not in sh and "omnibox(true);" not in sh,
         "resize reads live window": "const window_rect = dvui.windowRect()" in sh
             and "root.data().rect.w" not in sh,
         "breakpoint swap converges": "last_tier" in sh and "dvui.refresh(null" in sh,
         "compact destinations remain reachable": all(label in sh for label in
             ('"Watching"', '"Queue"', '"History"', '"Plugins"', '"Logs"', '"Settings"')),
-        "dense bottom navigation": "renderBottomTabs(tiny or short)" in sh and "if (!dense)" in sh,
+        "single row destinations remain keyboard menus": "renderBottomTabs(" not in sh and "browseSourcePicker(compact);" in sh
+            and 'const labels = [_][]const u8{ "Home", "All content", "Watching" }' in sh
+            and "dvui.menuItemLabel(" in sh,
         "lyrics stack below narrow player": "lyrics_below" in sh and ".bottom else .side" in sh,
         "lyrics panel adapts both axes": "LyricsPanelPlacement" in ly and "panel_h" in ly and "panel_w" in ly,
         "dialogs fit the live window": "pub fn fitWindowSize(" in _src("src/ui/theme.zig")
