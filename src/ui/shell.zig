@@ -1,6 +1,6 @@
 //! Page-shell — the website-like navigation root (redesign P0–P4).
 //!
-//! Persistent top nav (brand · back/fwd · nav links · omnibox · actions) over
+//! One browsing row (destination · omnibox · filters · More) over
 //! a content region that swaps full pages by route, plus a docked mini-player
 //! so playback continues while browsing. Page bodies reuse the exact drawer
 //! content renderers via `drawer.renderTabContent`. Driven by `state.app.router`.
@@ -71,19 +71,17 @@ pub fn render() !void {
     // after resize and push More off-screen until a later repaint.
     // The OS-point compact tier also activates if a large user scale leaves
     // too few layout units for the desktop nav's minimum child widths.
-    //   compact: bottom tabs and More replace desktop links;
-    //   narrow: icon-only top links and a tighter omnibox;
-    //   tiny/short: the densest complete shell.
+    //   compact: icon-only destination and search tools;
+    //   narrow: a tighter omnibox;
+    //   tiny: the densest complete shell.
     // This shell renders inside dvui.scale(ui_scale), so convert OS window
     // dimensions before comparing either point or layout-unit thresholds.
     const scale_pure = @import("../core/scale_pure.zig");
     const window_rect = dvui.windowRect();
     const w = scale_pure.layoutUnits(window_rect.w, state.app.ui_scale);
-    const h = scale_pure.layoutUnits(window_rect.h, state.app.ui_scale);
     const compact = scale_pure.needsCompactNav(w, state.app.ui_scale);
     const narrow = scale_pure.isNarrow(w, state.app.ui_scale) or w < 1200;
     const tiny = scale_pure.isTiny(w, state.app.ui_scale);
-    const short = scale_pure.isShort(h, state.app.ui_scale);
 
     // A breakpoint swap changes the navbar's child set and therefore its
     // measured minimum size. Give dvui one explicit convergence frame so a
@@ -112,12 +110,13 @@ pub fn render() !void {
             const ap = state.app.players.items[state.app.active_player_idx];
             playing_video = ap.texture != null and !ap.cached_paused;
         }
-        const text_len = std.mem.indexOfScalar(u8, &state.app.magnet_buf, 0) orelse state.app.magnet_buf.len;
         const now_ms = @import("../core/io_global.zig").milliTimestamp();
         idle_ms = now_ms - state.app.last_mouse_move_ms;
         hide_eligible = autohide.shouldHideChrome(.{
             .playing_video = playing_video,
-            .typing = text_len > 0,
+            // Player has no query field; a retained browsing query must not
+            // prevent playback chrome from hiding.
+            .typing = false,
             .idle_ms = idle_ms,
             .threshold_ms = autohide.DEFAULT_THRESHOLD_MS,
         });
@@ -196,19 +195,8 @@ pub fn render() !void {
         }
         const prev_alpha = dvui.alpha(nav_alpha);
         renderTopNav(compact, narrow);
-        if (compact) {
-            var search_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .expand = .horizontal,
-                .padding = dvui.Rect.all(theme.spacing.xs),
-            });
-            omnibox(true);
-            search_row.deinit();
-        }
         dvui.alphaSet(prev_alpha);
     }
-
-    // Reserve bottom navigation before the page takes the remaining height.
-    if (compact and !immersive) renderBottomTabs(tiny or short);
 
     {
         // The Player route owns its full bleed (video grid); every other page
@@ -276,127 +264,54 @@ fn anyHasMedia() bool {
 
 // ── Top navigation ──
 
+/// The browsing chrome has one row at every width. Menus absorb secondary
+/// navigation; the expanding query field never moves into a second toolbar.
 fn renderTopNav(compact: bool, narrow: bool) void {
-    // Transparent title bar — the nav floats over the app background (no solid
-    // fill) for a lighter, content-focused feel; a hairline bottom border keeps
-    // it separated from the page.
     var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
-        .min_size_content = .{ .w = 0, .h = 30 },
+        .min_size_content = .{ .w = 0, .h = 36 },
         .background = true,
-        .color_fill = transparent,
-        .color_border = if (state.app.router.current == .player) transparent else theme.colors.border_subtle,
-        .border = if (state.app.router.current == .player) dvui.Rect.all(0) else .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-        .padding = .{ .x = if (compact) theme.spacing.xs else theme.spacing.md, .y = 1, .w = if (compact) theme.spacing.xs else theme.spacing.md, .h = 1 },
+        .color_fill = theme.colors.bg_app,
+        .color_border = theme.colors.border_subtle,
+        .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
+        .padding = .{ .x = theme.spacing.xs, .y = 3, .w = theme.spacing.xs, .h = 3 },
     });
     defer bar.deinit();
 
-    // Brand — clickable: always returns to the Home overview (even out of
-    // the chat transcript, which otherwise owns the Home route while a
-    // conversation exists). Suppressed when the custom title bar is active
-    // (Windows) — it already shows the Opal gem + wordmark, so a second copy in
-    // the nav row would be a duplicate.
-    if (!@import("titlebar.zig").active()) {
-        var brand = dvui.box(@src(), .{ .dir = .horizontal }, .{
+    browseSourcePicker(compact);
+    if (!compact and state.app.router.canGoBack()) {
+        if (chromeIconButton(@src(), icons.tvg.lucide.@"chevron-left", "Back", false, true)) state.app.router.goBack();
+    }
+    omnibox(narrow);
+    if (state.app.router.current == .search) search_mod.renderShellSearchControls(compact);
+    if (!compact and anyHasMedia()) {
+        if (chromeIconButton(@src(), icons.tvg.lucide.play, "Now playing", false, true)) state.app.router.navigate(.player);
+    }
+
+    var m = dvui.menu(@src(), .horizontal, .{ .gravity_y = 0.5 });
+    defer m.deinit();
+    if (dvui.menuItemIcon(@src(), "More", icons.tvg.lucide.@"ellipsis-vertical", .{ .submenu = true }, .{
+        .color_text = theme.colors.text_secondary,
+        .color_fill = transparent,
+        .color_fill_hover = theme.colors.bg_hover,
+        .corner_radius = theme.dims.rad_sm,
+        .min_size_content = theme.iconSize(.sm),
+        .padding = dvui.Rect.all(6),
+    })) |r| {
+        var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{
+            .color_fill = theme.colors.bg_surface,
+            .color_border = theme.colors.border_subtle,
+        });
+        defer fw.deinit();
+        var col = dvui.menu(@src(), .vertical, .{
             .background = true,
-            .color_fill = transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = theme.spacing.xs, .y = 2, .w = theme.spacing.xs, .h = 2 },
-            .gravity_y = 0.5,
+            .color_fill = theme.colors.bg_surface,
+            .border = dvui.Rect.all(1),
+            .color_border = theme.colors.border_subtle,
+            .corner_radius = theme.dims.rad_md,
         });
-        defer brand.deinit();
-        var hovered = false;
-        if (dvui.clicked(brand.data(), .{ .hovered = &hovered })) {
-            @import("home.zig").showOverview();
-            state.app.router.navigate(.home);
-        }
-        if (hovered) brand.data().options.color_fill = theme.colors.bg_hover;
-        brand.drawBackground();
-        // Brand mark — the real Opal gem (assets/logo.svg rendered to PNG at
-        // build time via src/ui/opal_logo_64.png), not a generic zap glyph.
-        _ = dvui.image(@src(), .{
-            .source = .{ .imageFile = .{ .bytes = @embedFile("opal_logo_64.png"), .name = "opal-brand" } },
-        }, .{
-            .min_size_content = theme.iconSize(.md),
-            .max_size_content = .{ .w = 20, .h = 20 },
-            .gravity_y = 0.5,
-        });
-        if (!compact) {
-            _ = dvui.label(@src(), "Opal", .{}, .{
-                .color_text = theme.colors.text_primary,
-                .gravity_y = 0.5,
-                .margin = .{ .x = theme.spacing.xs, .y = 0, .w = theme.spacing.xs, .h = 0 },
-            });
-        }
-    }
-
-    browseSourcePicker();
-
-    // Back / forward — disabled (dimmed, inert) when there's no history in
-    // that direction. Previously canGoBack() was passed as `active`, which
-    // painted Back as a toggled-on accent chip whenever ANY history existed —
-    // the same visual language the route buttons use for "current page".
-    if (chromeIconButton(@src(), icons.tvg.lucide.@"chevron-left", "Back", false, state.app.router.canGoBack())) {
-        state.app.router.goBack();
-    }
-
-    // Primary nav links — compact uses bottom tabs and More instead.
-    if (!compact) {
-        // Home is icon-only; Search and Watching gain labels when space allows.
-        // Browse remains in the source selector, while Search always opens the
-        // global results page regardless of the omnibox's current source.
-        navLink(.home, "Home", icons.tvg.lucide.house, 1, true);
-        navLink(.search, "Search", icons.tvg.lucide.search, 8, narrow);
-        navLink(.watching, "Watching", icons.tvg.lucide.tv, 7, narrow);
-    }
-
-    // Compact widths render the same input in a dedicated row below the nav.
-    if (!compact) omnibox(narrow);
-
-    // The search field takes available width; compact keeps actions right-aligned.
-    if (compact) {
-        var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
-        sp.deinit();
-    }
-
-    // Right-side actions stay icon-only; assistant chat is reached through the
-    // omnibox ('>' or trailing '?'), while AI & Voice configuration is in Settings.
-    if (chromeIconButton(@src(), icons.tvg.lucide.play, "Now playing", state.app.router.current == .player, true)) {
-        state.app.router.navigate(.player);
-    }
-    // Settings stays in the desktop row; compact exposes it in More.
-    if (!compact and chromeIconButton(@src(), icons.tvg.lucide.settings, "Settings", state.app.router.current == .settings, true)) {
-        state.app.router.navigate(.settings);
-    }
-
-    // Overflow (⋯) keeps secondary destinations short and groups advanced
-    // commands into two small submenus that fit laptop screens.
-    {
-        var m = dvui.menu(@src(), .horizontal, .{ .gravity_y = 0.5 });
-        defer m.deinit();
-        if (dvui.menuItemIcon(@src(), "More", icons.tvg.lucide.@"ellipsis-vertical", .{ .submenu = true }, .{
-            .color_text = theme.colors.text_secondary,
-            .color_fill = transparent,
-            .corner_radius = dvui.Rect.all(theme.radius.sm),
-            .min_size_content = theme.iconSize(.sm),
-            .padding = dvui.Rect.all(6),
-        })) |r| {
-            var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{
-                .color_fill = theme.colors.bg_surface,
-                .color_border = theme.colors.border_subtle,
-            });
-            defer fw.deinit();
-            var col = dvui.menu(@src(), .vertical, .{
-                .background = true,
-                .color_fill = theme.colors.bg_surface,
-                .border = dvui.Rect.all(1),
-                .color_border = theme.colors.border_subtle,
-                .corner_radius = dvui.Rect.all(theme.radius.md),
-            });
-            defer col.deinit();
-            renderSecondaryDestinations(compact);
-        }
+        defer col.deinit();
+        renderSecondaryDestinations(compact);
     }
 }
 
@@ -473,7 +388,28 @@ fn chromeIconButton(src: std.builtin.SourceLocation, icon: []const u8, tooltip: 
     if (state.app.router.current == .player) {
         return components.iconButtonOverlay(src, icon, tooltip, active, enabled);
     }
-    return components.iconButtonEx(src, icon, tooltip, active, enabled);
+    var data: dvui.WidgetData = undefined;
+    const opts = dvui.Options{
+        .data_out = &data,
+        .color_fill = if (active) theme.colors.bg_elevated else transparent,
+        .color_fill_hover = theme.colors.bg_hover,
+        .color_fill_press = theme.colors.bg_elevated,
+        .color_text = if (!enabled) theme.colors.text_tertiary else if (active) theme.colors.accent else theme.colors.text_secondary,
+        .border = dvui.Rect.all(0),
+        .corner_radius = theme.dims.rad_sm,
+        .min_size_content = .{ .w = 16, .h = 16 },
+        .max_size_content = .{ .w = 16, .h = 16 },
+        .margin = dvui.Rect.all(0),
+        .padding = dvui.Rect.all(5),
+        .gravity_y = 0.5,
+    };
+    if (!enabled) {
+        dvui.icon(src, tooltip, icon, .{}, opts);
+        return false;
+    }
+    const clicked = dvui.buttonIcon(src, tooltip, icon, .{}, .{}, opts);
+    components.tip(src, data, tooltip);
+    return clicked;
 }
 
 /// Nav-bar Plugins menu: a puzzle-icon dropdown listing every section of the
@@ -524,24 +460,32 @@ fn pluginsMenu() void {
     }
 }
 
-/// Compact bottom tabs already expose Home, Watching, History and Downloads.
-/// Keep More short; lengthy advanced controls belong in two small submenus.
+/// Navigation lives in the destination picker; More groups actions and tools.
 fn renderSecondaryDestinations(compact: bool) void {
     const item_opts = dvui.Options{ .expand = .horizontal, .color_text = theme.colors.text_primary };
-    if (compact) {
-        if (dvui.menuItemLabel(@src(), "Search all sources", .{}, item_opts) != null) {
-            closeOverflowMenu();
-            state.app.router.navigate(.search);
-        }
-    } else {
-        if (dvui.menuItemLabel(@src(), "Downloads", .{}, item_opts) != null) {
-            closeOverflowMenu();
-            state.app.router.navigate(.downloads);
-        }
-        if (dvui.menuItemLabel(@src(), "History", .{}, item_opts) != null) {
-            closeOverflowMenu();
-            state.app.router.navigate(.history);
-        }
+    if (compact and state.app.router.canGoBack() and dvui.menuItemLabel(@src(), "Back", .{}, item_opts) != null) {
+        closeOverflowMenu();
+        state.app.router.goBack();
+    }
+    if (state.app.router.canGoForward() and dvui.menuItemLabel(@src(), "Forward", .{}, item_opts) != null) {
+        closeOverflowMenu();
+        state.app.router.goForward();
+    }
+    if (dvui.menuItemLabel(@src(), "Now playing", .{}, item_opts) != null) {
+        closeOverflowMenu();
+        state.app.router.navigate(.player);
+    }
+    if (dvui.menuItemLabel(@src(), "Downloads", .{}, item_opts) != null) {
+        closeOverflowMenu();
+        state.app.router.navigate(.downloads);
+    }
+    if (dvui.menuItemLabel(@src(), "History", .{}, item_opts) != null) {
+        closeOverflowMenu();
+        state.app.router.navigate(.history);
+    }
+    if (dvui.menuItemLabel(@src(), "Paste link", .{}, item_opts) != null) {
+        closeOverflowMenu();
+        header.handleClipboardPaste();
     }
     // Open the longest submenu near the top so its last action remains visible
     // on 768px-high displays without depending on mouse-wheel scrolling.
@@ -563,7 +507,7 @@ fn renderSecondaryDestinations(compact: bool) void {
         closeOverflowMenu();
         state.app.router.navigate(.plugins);
     }
-    if (compact and dvui.menuItemLabel(@src(), "Settings", .{}, item_opts) != null) {
+    if (dvui.menuItemLabel(@src(), "Settings", .{}, item_opts) != null) {
         closeOverflowMenu();
         state.app.router.navigate(.settings);
     }
@@ -655,144 +599,81 @@ fn closeOverflowMenu() void {
     if (dvui.FloatingMenuWidget.currentGet()) |popup| popup.close();
 }
 
-/// A top-nav link: whole-row click target, icon + label, accent when active.
-/// Hover lifts the fill; the row takes a tab stop (Enter/Space activates) and
-/// draws dvui's focus ring when keyboard-focused.
-/// `icon_only` drops the text label. The label is still passed (and still names
-/// the icon), so it becomes a hover tooltip — an unlabelled glyph with no tooltip
-/// is a guessing game.
-fn navLink(r: Route, label: []const u8, icon: []const u8, id_extra: usize, icon_only: bool) void {
-    const active = state.app.router.current == r;
-
-    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .id_extra = id_extra,
-        .min_size_content = .{ .w = 0, .h = 24 },
-        .background = true,
-        .color_fill = if (active) theme.colors.bg_elevated else transparent,
-        .corner_radius = dvui.Rect.all(theme.radius.md),
-        .padding = .{ .x = theme.spacing.sm, .y = 2, .w = theme.spacing.sm, .h = 2 },
-        .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
-        .gravity_y = 0.5,
-    });
-    defer row.deinit();
-
-    if (navRowInteract(row)) {
-        state.app.router.navigate(r);
-    }
-
-    const fg = if (active) theme.colors.accent else theme.colors.text_secondary;
-    dvui.icon(@src(), label, icon, .{}, .{
-        .id_extra = id_extra,
-        .color_text = fg,
-        .min_size_content = theme.iconSize(.sm),
-        .gravity_y = 0.5,
-        // No label to separate from — the trailing gap would just off-center the
-        // glyph inside its pill.
-        .margin = if (icon_only)
-            dvui.Rect.all(0)
-        else
-            .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
-    });
-
-    if (icon_only) {
-        // Every navLink shares this @src(), so the tooltip needs an explicit
-        // id_extra or all of them collide on one widget id.
-        components.tipId(@src(), row.data().*, label, id_extra);
-        return;
-    }
-
-    _ = dvui.label(@src(), "{s}", .{label}, .{
-        .id_extra = id_extra,
-        .color_text = fg,
-        .gravity_y = 0.5,
-    });
-}
-
-/// Live omnibox — the universal entry point. On Enter it classifies the text:
-///   • media (magnet/url/path)        → load into player, go to Player
-///   • leading '>' or trailing '?'    → AI assistant (chat)
-///   • anything else                  → UNIFIED search across all sources
+/// One query entry, with identical routing for Enter and the Search button.
+/// Browse queries stay contextual; All content queries use the shared resolver.
 fn omnibox(narrow: bool) void {
-    // This field always routes plain text to universal search, even on Browse.
-    // Do not label it as a second Movies & TV search box.
-    const placeholder: []const u8 = if (narrow)
-        "Search all sources, ask, paste…"
+    const placeholder: []const u8 = if (state.app.router.current == .browse)
+        "Search this source or paste a link…"
+    else if (narrow)
+        "Search, ask, paste…"
     else
-        "Search all sources, ask, or paste a link…";
+        "Search everything, ask, or paste a link…";
+    var field = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .horizontal,
+        .min_size_content = .{ .w = 80, .h = 30 },
+        .background = true,
+        .color_fill = theme.colors.bg_elevated,
+        .color_border = theme.colors.border_subtle,
+        .border = dvui.Rect.all(1),
+        .corner_radius = theme.dims.rad_md,
+        .margin = .{ .x = theme.spacing.xs, .y = 0, .w = theme.spacing.xs, .h = 0 },
+        .gravity_y = 0.5,
+    });
+    defer field.deinit();
     var te = dvui.textEntry(@src(), .{
         .text = .{ .buffer = &state.app.magnet_buf },
         .placeholder = placeholder,
     }, .{
-        // Consume only the width left after navigation/actions. On compact
-        // windows this is the full second row, never a hidden search control.
         .expand = .horizontal,
-        .min_size_content = .{ .w = 80, .h = 26 },
-        .margin = .{ .x = theme.spacing.xs, .y = 0, .w = 4, .h = 0 },
-        .color_fill = if (state.app.router.current == .player) theme.playerGlass(40) else theme.colors.bg_elevated,
-        .color_border = if (state.app.router.current == .player) theme.playerGlass(76) else theme.colors.border_subtle,
-        .border = dvui.Rect.all(1),
-        .corner_radius = dvui.Rect.all(theme.radius.md),
+        .min_size_content = .{ .w = 48, .h = 18 },
+        .margin = dvui.Rect.all(0),
+        .padding = .{ .x = 8, .y = 4, .w = 0, .h = 4 },
+        .color_fill = transparent,
+        .color_border = transparent,
+        .color_text = theme.colors.text_primary,
+        .border = dvui.Rect.all(0),
+        .corner_radius = theme.dims.rad_sm,
         .gravity_y = 0.5,
     });
     const entered = te.enter_pressed;
     te.deinit();
 
     const len = std.mem.indexOfScalar(u8, &state.app.magnet_buf, 0) orelse state.app.magnet_buf.len;
+    if (len > 0 and chromeIconButton(@src(), icons.tvg.lucide.x, "Clear search", false, true)) {
+        if (state.app.router.current == .search) search_mod.clearShellSearch() else @memset(&state.app.magnet_buf, 0);
+        return;
+    }
+    const submitted = chromeIconButton(@src(), icons.tvg.lucide.search, "Search", false, len > 0);
+    if ((!entered and !submitted) or len == 0) return;
 
-    // Inline affordances next to the box: clear-✕ while text is present
-    // (mouse users had no way to empty it), paste when empty, and the voice
-    // conversation toggle (was legacy-header-only).
-    if (len > 0) {
-        if (components.iconButton(@src(), icons.tvg.lucide.x, "Clear", false)) {
-            @memset(&state.app.magnet_buf, 0);
-            return;
-        }
-    } else {
-        if (components.iconButton(@src(), icons.tvg.lucide.@"clipboard-paste", "Paste", false)) {
-            header.handleClipboardPaste();
-            return;
-        }
-    }
-    {
-        const voice = @import("../services/ai_voice.zig");
-        const voice_icon = if (voice.conv_phase == .speaking)
-            icons.tvg.lucide.@"volume-2"
-        else if (voice.conv_phase == .listening or voice.is_recording.load(.acquire))
-            icons.tvg.lucide.mic
-        else
-            icons.tvg.lucide.headphones;
-        if (chromeIconButton(@src(), voice_icon, "Voice / conversation mode", voice.conversation_active.load(.acquire), true)) {
-            voice.toggleConversation();
-        }
-    }
-    {
-        var gap = dvui.box(@src(), .{}, .{ .min_size_content = .{ .w = theme.spacing.sm, .h = 0 } });
-        gap.deinit();
-    }
-
-    if (!entered) return;
-    if (len == 0) return;
-    const text = std.mem.trim(u8, state.app.magnet_buf[0..len], " \t\r\n");
+    // Services may clear or mirror the field; never route a slice into that
+    // mutable buffer after handing it to a service.
+    var query_buf: [state.app.magnet_buf.len]u8 = undefined;
+    @memcpy(query_buf[0..len], state.app.magnet_buf[0..len]);
+    const text = std.mem.trim(u8, query_buf[0..len], " \t\r\n");
+    if (text.len == 0) return;
+    // A newer assistant/link/source query also supersedes a pending memory
+    // lookup; its late publication must not replace this field or search.
+    search_mod.cancelPendingMemorySearch();
     switch (browser_pure.classifyOmnibox(text)) {
         .empty => {},
         .memory => {
             search_mod.memorySearch(std.mem.trim(u8, text[1..], " \t"));
-            @memset(&state.app.magnet_buf, 0);
             state.app.router.navigate(.search);
         },
         .assistant => {
+            // An explicit assistant request must not inherit the legacy
+            // header's sticky memory toggle.
+            const legacy_memory_mode = search_mod.memory_mode;
+            search_mod.memory_mode = false;
+            defer search_mod.memory_mode = legacy_memory_mode;
             header.submitInput();
-            // The conversation renders on HOME (home.zig chat mode); the
-            // .assistant route hosts AI SETTINGS, not the chat.
             state.app.router.navigate(.home);
         },
         .open => openOmniboxTarget(text),
         .search => {
-            if (browser.searchCurrentBrowse(text)) {
-                @memset(&state.app.magnet_buf, 0);
-            } else {
+            if (!browser.searchCurrentBrowse(text)) {
                 search_mod.submitQuery(text);
-                @memset(&state.app.magnet_buf, 0);
                 state.app.router.navigate(.search);
             }
         },
@@ -818,8 +699,8 @@ fn openOmniboxTarget(text: []const u8) void {
     browser.loadContent(target);
 }
 
-/// Shared interaction for the box-based nav rows (top-nav links, sub-tabs,
-/// bottom tabs): click + hover lift + tab stop + Enter/Space activation +
+/// Shared interaction for box-based sub-tabs: click + hover lift + tab stop +
+/// Enter/Space activation +
 /// focus ring. Plain boxes get NONE of this from dvui (color_fill_hover is
 /// only consulted by button widgets, and boxes never register a tab index),
 /// which left the app's primary navigation mouse-only with zero feedback.
@@ -928,8 +809,8 @@ const CONNECTED_SOURCES = [_]state.DrawerTab{ .Web, .Jellyfin, .Plex };
 /// Browse is one task with a source filter, not seventeen permanent navigation
 /// tabs. Connectors remain reachable from the command palette even when their
 /// setup is incomplete; Plugins/Settings owns configuration.
-fn browseSourcePicker() void {
-    if (browseSourceSelect()) |picked| {
+fn browseSourcePicker(dense: bool) void {
+    if (browseSourceSelect(dense)) |picked| {
         state.app.browse_source = picked;
         state.app.drawer_tab = state.app.browse_source;
         state.app.router.navigate(.browse);
@@ -940,7 +821,7 @@ fn browseSourcePicker() void {
 /// integrations stay discoverable so their sign-in/recovery UI remains usable.
 /// Keep it single-level: cascading hover submenus were fragile at the window
 /// edges and could lose their anchor before a source click reached them.
-fn browseSourceSelect() ?state.DrawerTab {
+fn browseSourceSelect(dense: bool) ?state.DrawerTab {
     var picked: ?state.DrawerTab = null;
     var menu = dvui.menu(@src(), .horizontal, .{
         .color_fill = transparent,
@@ -949,7 +830,7 @@ fn browseSourceSelect() ?state.DrawerTab {
     defer menu.deinit();
 
     const selected = state.app.browse_source;
-    if (browseSourceMenuItem(selected, 8000, true, true)) |anchor| {
+    if (navigationMenuItem(selected, dense)) |anchor| {
         var popup = dvui.floatingMenu(@src(), .{ .from = anchor }, .{
             .background = true,
             .color_fill = theme.colors.bg_surface,
@@ -965,6 +846,21 @@ fn browseSourceSelect() ?state.DrawerTab {
             .corner_radius = theme.dims.rad_lg,
         });
         defer choices.deinit();
+        const routes = [_]Route{ .home, .search, .watching };
+        const labels = [_][]const u8{ "Home", "All content", "Watching" };
+        for (routes, labels, 0..) |route, label, i| {
+            if (dvui.menuItemLabel(@src(), label, .{}, .{
+                .id_extra = 8050 + i,
+                .expand = .horizontal,
+                .color_text = if (state.app.router.current == route) theme.colors.accent else theme.colors.text_primary,
+                .color_fill_hover = theme.colors.bg_hover,
+                .padding = dvui.Rect.all(theme.spacing.sm),
+            }) != null) {
+                popup.close();
+                if (route == .home) @import("home.zig").showOverview();
+                state.app.router.navigate(route);
+            }
+        }
         browseSourceSection("WATCH", &WATCH_SOURCES, 8100, &picked);
         browseSourceSection("LISTEN", &LISTEN_SOURCES, 8200, &picked);
         browseSourceSection("READ", &READ_SOURCES, 8300, &picked);
@@ -974,6 +870,61 @@ fn browseSourceSelect() ?state.DrawerTab {
         if (picked != null) popup.close();
     }
     return picked;
+}
+
+/// Names the current destination, rather than showing Movies & TV on Search.
+/// Compact widths retain the same menu behind one labelled icon and chevron.
+fn navigationMenuItem(selected: state.DrawerTab, dense: bool) ?dvui.Rect.Natural {
+    const route = state.app.router.current;
+    const label = if (route == .browse) tabLabel(selected) else switch (route) {
+        .home => "Home",
+        .search => "All content",
+        .watching => "Watching",
+        .downloads => "Downloads",
+        .queue => "Queue",
+        .history => "History",
+        .player => "Now playing",
+        .assistant => "Assistant",
+        .settings => "Settings",
+        .plugins => "Plugins",
+        .system => "Logs",
+        .browse => unreachable,
+    };
+    const icon = if (route == .browse) iconForTab(selected) else switch (route) {
+        .home => icons.tvg.lucide.house,
+        .watching => icons.tvg.lucide.tv,
+        else => icons.tvg.lucide.globe,
+    };
+    var item = dvui.menuItem(@src(), .{ .submenu = true }, .{
+        .id_extra = 8000,
+        .background = true,
+        .color_fill = transparent,
+        .color_fill_hover = theme.colors.bg_hover,
+        .color_text = theme.colors.text_secondary,
+        .corner_radius = theme.dims.rad_sm,
+        .padding = dvui.Rect.all(6),
+        .gravity_y = 0.5,
+    });
+    defer item.deinit();
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{});
+    defer row.deinit();
+    const child = item.data().options.strip().override(item.style());
+    dvui.icon(@src(), label, icon, .{}, child.override(.{
+        .min_size_content = theme.iconSize(.sm),
+        .max_size_content = .{ .w = theme.iconSize(.sm).w, .h = theme.iconSize(.sm).h },
+        .gravity_y = 0.5,
+    }));
+    if (!dense) dvui.labelNoFmt(@src(), label, .{}, child.override(.{
+        .gravity_y = 0.5,
+        .margin = .{ .x = theme.spacing.xs, .y = 0, .w = theme.spacing.xs, .h = 0 },
+    }));
+    dvui.icon(@src(), "Choose destination or source", icons.tvg.lucide.@"chevron-down", .{}, child.override(.{
+        .min_size_content = .{ .w = 12, .h = 12 },
+        .max_size_content = .{ .w = 12, .h = 12 },
+        .gravity_y = 0.5,
+    }));
+    if (dense) components.tipId(@src(), item.data().*, label, 8000);
+    return item.activeRect();
 }
 
 fn browseSourceSection(label: []const u8, sources: []const state.DrawerTab, id: usize, picked: *?state.DrawerTab) void {
@@ -987,7 +938,7 @@ fn browseSourceSection(label: []const u8, sources: []const state.DrawerTab, id: 
         .padding = .{ .x = theme.spacing.sm, .y = 5, .w = theme.spacing.sm, .h = 2 },
     });
     for (sources, 0..) |source, i| {
-        if (browseSourceMenuItem(source, id + i + 1, false, source == selected) != null) picked.* = source;
+        if (browseSourceMenuItem(source, id + i + 1, false, state.app.router.current == .browse and source == selected) != null) picked.* = source;
     }
 }
 
@@ -1184,60 +1135,4 @@ fn pluginTabIcon(t: router.PluginTab) []const u8 {
         .trakt => icons.tvg.lucide.@"refresh-cw",
         .content => icons.tvg.lucide.puzzle,
     };
-}
-
-// ── Compact bottom tab bar (mobile) ──
-
-fn renderBottomTabs(dense: bool) void {
-    var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .expand = .horizontal,
-        .gravity_y = 1,
-        .min_size_content = .{ .w = 0, .h = if (dense) 40 else 52 },
-        .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .color_border = theme.colors.border_subtle,
-        .border = .{ .x = 0, .y = 1, .w = 0, .h = 0 },
-        .padding = .{ .x = if (dense) 2 else theme.spacing.sm, .y = if (dense) 2 else theme.spacing.xs, .w = if (dense) 2 else theme.spacing.sm, .h = if (dense) 2 else theme.spacing.xs },
-    });
-    defer bar.deinit();
-
-    bottomTab(.home, "Home", icons.tvg.lucide.house, 401, dense);
-    bottomTab(.watching, "Watching", icons.tvg.lucide.tv, 402, dense);
-    bottomTab(.history, "History", icons.tvg.lucide.history, 403, dense);
-    bottomTab(.downloads, "Downloads", icons.tvg.lucide.download, 404, dense);
-    bottomTab(.player, "Player", icons.tvg.lucide.play, 405, dense);
-}
-
-fn bottomTab(r: Route, label: []const u8, icon: []const u8, id_extra: usize, dense: bool) void {
-    const active = state.app.router.current == r;
-    var col = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .id_extra = id_extra,
-        .expand = .horizontal,
-        .background = true,
-        .color_fill = if (active) theme.colors.bg_elevated else transparent,
-        .corner_radius = dvui.Rect.all(theme.radius.sm),
-        .padding = .{ .x = 2, .y = if (dense) 2 else theme.spacing.xs, .w = 2, .h = if (dense) 2 else theme.spacing.xs },
-    });
-    defer col.deinit();
-    if (navRowInteract(col)) state.app.router.navigate(r);
-
-    const fg = if (active) theme.colors.accent else theme.colors.text_secondary;
-    dvui.icon(@src(), label, icon, .{}, .{
-        .id_extra = id_extra,
-        .color_text = fg,
-        .min_size_content = theme.iconSize(.md),
-        .gravity_x = 0.5,
-    });
-    if (!dense) {
-        var f = dvui.themeGet().font_body;
-        f.size = theme.font_size.micro;
-        _ = dvui.label(@src(), "{s}", .{label}, .{
-            .id_extra = id_extra,
-            .color_text = fg,
-            .font = f,
-            .gravity_x = 0.5,
-        });
-    } else {
-        components.tipId(@src(), col.data().*, label, id_extra);
-    }
 }

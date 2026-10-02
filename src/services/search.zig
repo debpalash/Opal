@@ -847,25 +847,53 @@ fn queryEztvApi(query: []const u8, allocator: std.mem.Allocator, my_gen: u64) vo
 /// query into search_buf, switches to universal (all-source) mode, and kicks off
 /// the resolver fan-out. Mirrors the in-page universal submit at renderSearchContent.
 pub fn submitQuery(query_text: []const u8) void {
-    if (query_text.len == 0) return;
-    // Local taste engine: log the intent (buffered, flushed off-thread).
-    @import("activity.zig").record(.search, query_text, .{});
-    const resolver = @import("resolver.zig");
-    const n = @min(query_text.len, search_buf.len - 1);
-    @memset(&search_buf, 0);
-    @memcpy(search_buf[0..n], query_text[0..n]);
-    state.app.universal_search = true;
-    resolver.resolve(search_buf[0..n], "auto");
+    var owned: [1024]u8 = undefined;
+    const n = @min(query_text.len, owned.len - 1);
+    if (n == 0) return;
+    // Callers may pass search_buf, the shell buffer, or resolver query storage.
+    // Own the bytes before cancelling work or clearing either visible buffer.
+    @memcpy(owned[0..n], query_text[0..n]);
+    cancelPendingMemorySearch();
+    @import("activity.zig").record(.search, owned[0..n], .{});
+    setUniversalQuery(owned[0..n]);
+    @import("resolver.zig").resolve(owned[0..n], "auto");
 }
 
-/// Show `query_text` in the universal Search view WITHOUT re-resolving —
-/// for flows that already ran resolver.resolve and just want the picker to
-/// display the live results (smart episode play's fallback).
+/// Display an already-resolved query through the same editable shell field.
 pub fn setUniversalQuery(query_text: []const u8) void {
-    const n = @min(query_text.len, search_buf.len - 1);
+    var owned: [1024]u8 = undefined;
+    const n = @min(query_text.len, owned.len - 1);
+    @memcpy(owned[0..n], query_text[0..n]);
     @memset(&search_buf, 0);
-    @memcpy(search_buf[0..n], query_text[0..n]);
+    @memcpy(search_buf[0..n], owned[0..n]);
+    if (state.app.page_shell_enabled) {
+        @memset(&state.app.magnet_buf, 0);
+        @memcpy(state.app.magnet_buf[0..n], owned[0..n]);
+    }
     state.app.universal_search = true;
+}
+
+pub fn cancelPendingMemorySearch() void {
+    _ = memory_generation.fetchAdd(1, .acq_rel);
+    memory_publish_lock.lock();
+    memory_publish_ready.store(false, .release);
+    memory_publish_lock.unlock();
+}
+
+/// Unified Clear supersedes both searches and pending memory publication.
+pub fn clearShellSearch() void {
+    cancelPendingMemorySearch();
+    search_abort.store(true, .release);
+    _ = search_generation.fetchAdd(1, .acq_rel);
+    if (search_thread) |thread| @import("../core/workers.zig").release(thread);
+    search_thread = null;
+    is_searching.store(false, .release);
+    @memset(&search_buf, 0);
+    @memset(&state.app.magnet_buf, 0);
+    clearResults();
+    @import("resolver.zig").clearResults();
+    search_page = 0;
+    view_dirty = true;
 }
 
 /// Omnibox memory-mode flag. When set, the shell's submit path routes the
@@ -1076,7 +1104,7 @@ fn submitSearchInput(raw: []const u8) void {
 
 pub fn renderSearchContent() void {
     state.app.universal_search = true; // compatibility with saved sessions/API
-    {
+    if (!state.app.page_shell_enabled) {
         var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
             .background = true,
@@ -1116,22 +1144,65 @@ pub fn renderSearchContent() void {
             .padding = dvui.Rect.all(theme.spacing.xs),
         });
         if ((len > 0 or view_cache.query_len > 0 or view_cache.loaded > 0) and searchButton(91001, "Clear", false)) {
-            @memset(&search_buf, 0);
-            clearResults();
-            @import("resolver.zig").clearResults();
-            view_dirty = true;
+            clearShellSearch();
         }
         input_row.deinit();
         if (enter or clicked) submitSearchInput(submitted[0..len]);
-        var label_buf: [48]u8 = undefined;
-        const count = search_view.activeCount(view_filters);
-        const label = if (count > 0) std.fmt.bufPrint(&label_buf, "Filters ({d})", .{count}) catch "Filters" else "Filters";
-        if (searchButton(91002, label, filters_open)) filters_open = !filters_open;
+        renderShellSearchControls(false);
     }
     refreshSearchView();
     if (filters_open) renderSearchFilters();
     renderActiveSearchFilters();
     renderUniversalResults();
+}
+
+/// Search contributes controls to the existing single shell row, never a second
+/// query field. Dense mode uses bounded icons; popup choices remain named.
+pub fn renderShellSearchControls(dense: bool) void {
+    refreshSearchView();
+    var label_buf: [48]u8 = undefined;
+    const count = search_view.activeCount(view_filters);
+    const label = if (count > 0) std.fmt.bufPrint(&label_buf, "Filters ({d})", .{count}) catch "Filters" else "Filters";
+    var tip_buf: [64]u8 = undefined;
+    const filters_tip = std.fmt.bufPrint(&tip_buf, "Filters ({d} active)", .{count}) catch "Filters";
+    const filters_clicked = if (dense) searchIconButton(91002, icons.tvg.lucide.@"sliders-horizontal", filters_tip, filters_open or count > 0) else searchButton(91002, label, filters_open);
+    if (filters_clicked) filters_open = !filters_open;
+    if (searchSelectImpl(91300, &SORT_LABELS, @intFromEnum(view_sort), dense)) |choice| {
+        view_sort = @enumFromInt(choice);
+        view_dirty = true;
+    }
+    if (view_cache.loading) {
+        const cancel_clicked = if (dense) searchIconButton(91303, icons.tvg.lucide.x, "Cancel search", false) else searchButton(91303, "Cancel", false);
+        if (cancel_clicked) {
+            cancelPendingMemorySearch();
+            @import("resolver.zig").cancel();
+        }
+    } else if (view_cache.query_len > 0 and view_cache.loaded == 0) {
+        const retry_clicked = if (dense) searchIconButton(91304, icons.tvg.lucide.@"rotate-ccw", "Retry search", false) else searchButton(91304, "Retry", false);
+        if (retry_clicked) submitQuery(view_cache.query[0..view_cache.query_len]);
+    }
+}
+
+/// A 26-point target keeps three dense controls within 78 points before shell gaps.
+fn searchIconButton(id: usize, icon: []const u8, tooltip: []const u8, active: bool) bool {
+    var data: dvui.WidgetData = undefined;
+    const clicked = dvui.buttonIcon(@src(), tooltip, icon, .{}, .{}, .{
+        .id_extra = id,
+        .data_out = &data,
+        .color_fill = if (active) theme.colors.bg_elevated else theme.transparent,
+        .color_fill_hover = theme.colors.bg_hover,
+        .color_fill_press = theme.colors.bg_elevated,
+        .color_text = if (active) theme.colors.accent else theme.colors.text_secondary,
+        .border = dvui.Rect.all(0),
+        .margin = dvui.Rect.all(0),
+        .corner_radius = theme.dims.rad_sm,
+        .min_size_content = .{ .w = 16, .h = 16 },
+        .max_size_content = .{ .w = 16, .h = 16 },
+        .padding = dvui.Rect.all(5),
+        .gravity_y = 0.5,
+    });
+    components.tip(@src(), data, tooltip);
+    return clicked;
 }
 
 fn searchButton(id: usize, label: []const u8, active: bool) bool {
@@ -1142,6 +1213,7 @@ fn searchButton(id: usize, label: []const u8, active: bool) bool {
         .color_fill_press = theme.colors.bg_elevated,
         .color_text = if (active) theme.colors.accent else theme.colors.text_secondary,
         .border = dvui.Rect.all(0),
+        .margin = dvui.Rect.all(0),
         .corner_radius = theme.dims.rad_sm,
         .padding = .{ .x = theme.spacing.sm, .y = 6, .w = theme.spacing.sm, .h = 6 },
         .gravity_y = 0.5,
@@ -1150,9 +1222,26 @@ fn searchButton(id: usize, label: []const u8, active: bool) bool {
 
 /// Explicitly themed popup, avoiding the default dropdown menu palette.
 fn searchSelect(id: usize, labels: []const []const u8, selected: usize) ?usize {
+    return searchSelectImpl(id, labels, selected, false);
+}
+
+fn searchSelectImpl(id: usize, labels: []const []const u8, selected: usize, icon_only: bool) ?usize {
     var menu = dvui.menu(@src(), .horizontal, .{ .id_extra = id, .color_fill = theme.transparent, .gravity_y = 0.5 });
     defer menu.deinit();
-    if (dvui.menuItemLabel(@src(), labels[@min(selected, labels.len - 1)], .{ .submenu = true }, .{
+    const current_label = labels[@min(selected, labels.len - 1)];
+    var data: dvui.WidgetData = undefined;
+    const trigger = if (icon_only) dvui.menuItemIcon(@src(), current_label, icons.tvg.lucide.@"arrow-down-wide-narrow", .{ .submenu = true }, .{
+        .id_extra = id,
+        .data_out = &data,
+        .color_fill = theme.transparent,
+        .color_fill_hover = theme.colors.bg_hover,
+        .color_fill_press = theme.colors.bg_elevated,
+        .color_text = theme.colors.text_secondary,
+        .corner_radius = theme.dims.rad_sm,
+        .min_size_content = .{ .w = 16, .h = 16 },
+        .max_size_content = .{ .w = 16, .h = 16 },
+        .padding = dvui.Rect.all(5),
+    }) else dvui.menuItemLabel(@src(), current_label, .{ .submenu = true }, .{
         .id_extra = id,
         .background = true,
         .color_fill = theme.colors.bg_elevated,
@@ -1161,13 +1250,18 @@ fn searchSelect(id: usize, labels: []const []const u8, selected: usize) ?usize {
         .color_text = theme.colors.text_primary,
         .corner_radius = theme.dims.rad_sm,
         .padding = .{ .x = theme.spacing.sm, .y = 6, .w = theme.spacing.sm, .h = 6 },
-    })) |rect| {
+    });
+    if (icon_only) components.tip(@src(), data, current_label);
+    if (trigger) |rect| {
         var popup = dvui.floatingMenu(@src(), .{ .from = rect }, .{ .id_extra = id, .color_fill = theme.colors.bg_surface, .color_border = theme.colors.border_subtle });
         defer popup.deinit();
         var choices = dvui.menu(@src(), .vertical, .{ .id_extra = id, .background = true, .color_fill = theme.colors.bg_surface, .color_border = theme.colors.border_subtle, .border = dvui.Rect.all(1) });
         defer choices.deinit();
         for (labels, 0..) |label, i| {
-            if (dvui.menuItemLabel(@src(), label, .{}, .{ .id_extra = i, .expand = .horizontal, .color_text = if (i == selected) theme.colors.accent else theme.colors.text_primary, .color_fill_hover = theme.colors.bg_hover })) |_| return i;
+            if (dvui.menuItemLabel(@src(), label, .{}, .{ .id_extra = i, .expand = .horizontal, .color_text = if (i == selected) theme.colors.accent else theme.colors.text_primary, .color_fill_hover = theme.colors.bg_hover })) |_| {
+                popup.close();
+                return i;
+            }
         }
     }
     return null;
@@ -1515,23 +1609,10 @@ fn renderUniversalResults() void {
     const resolver = @import("resolver.zig");
     // Facet changes from this frame update counts and rows together.
     if (view_dirty) refreshSearchView();
-    {
-        var header = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .padding = dvui.Rect.all(theme.spacing.sm) });
-        defer header.deinit();
+    if (view_cache.query_len > 0 or view_cache.loaded > 0) {
         var count_buf: [96]u8 = undefined;
         const count = std.fmt.bufPrint(&count_buf, "{d} shown of {d} loaded{s}", .{ view_cache.count, view_cache.loaded, if (view_cache.loading) " · searching…" else "" }) catch "Results";
-        _ = dvui.label(@src(), "{s}", .{count}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
-        var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
-        spacer.deinit();
-        if (searchSelect(91300, &SORT_LABELS, @intFromEnum(view_sort))) |choice| {
-            view_sort = @enumFromInt(choice);
-            view_dirty = true;
-        }
-        if (view_cache.loading) {
-            if (searchButton(91303, "Cancel", false)) resolver.cancel();
-        } else if (view_cache.query_len > 0 and view_cache.loaded == 0) {
-            if (searchButton(91304, "Retry", false)) submitQuery(view_cache.query[0..view_cache.query_len]);
-        }
+        _ = dvui.label(@src(), "{s}", .{count}, .{ .color_text = theme.colors.text_secondary, .padding = dvui.Rect.all(theme.spacing.sm) });
     }
     if (view_cache.rows == null) {
         components.emptyState(icons.tvg.lucide.@"search-x", "Search could not allocate its result view", "Try again after closing unused players.");

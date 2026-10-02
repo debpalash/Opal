@@ -362,9 +362,9 @@ def test_nav_donate_button():
                                 and 'openExternal(DONATE_URL)' in hdr),
         # A donate chip that spawns its own child process = duplicated launcher.
         "no second launcher": "Child.init(" not in hdr,
-        # The input flexes into available space and moves to its own compact
-        # row; the optional donate chip is hidden before space gets tight.
-        "omnibox responsive": 'if (!compact) omnibox(narrow);' in shell and 'omnibox(true);' in shell,
+        # The single input flexes within the same row at every width tier.
+        "omnibox responsive": "omnibox(narrow);" in shell and "omnibox(true);" not in shell
+            and "var search_row" not in shell and "if (!compact) omnibox" not in shell,
     }
     missing = [k for k, v in checks.items() if not v]
     if missing:
