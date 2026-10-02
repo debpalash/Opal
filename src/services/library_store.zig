@@ -32,15 +32,22 @@ var continue_len: usize = 0;
 var hidden_continue: usize = 0;
 var favorite_rows: [32]pure.LibraryItem = undefined;
 var favorite_len: usize = 0;
+var pending_continue: [32]pure.LibraryItem = undefined;
+var pending_favorites: [32]pure.LibraryItem = undefined;
 
 /// Rebuild the rails if a mutator ran since the last read. Must be called with
 /// `rail_mutex` held.
 fn refreshRailsLocked() void {
     const current = version.load(.acquire);
     if (current == rail_version) return;
-    continue_len = loadContinueUncached(continue_rows[0..]);
-    hidden_continue = loadHiddenContinueCountUncached();
-    favorite_len = loadFavoritesUncached(favorite_rows[0..]);
+    const next_continue = loadContinueUncached(&pending_continue) orelse return;
+    const next_hidden = loadHiddenContinueCountUncached() orelse return;
+    const next_favorites = loadFavoritesUncached(&pending_favorites) orelse return;
+    @memcpy(continue_rows[0..next_continue], pending_continue[0..next_continue]);
+    @memcpy(favorite_rows[0..next_favorites], pending_favorites[0..next_favorites]);
+    continue_len = next_continue;
+    hidden_continue = next_hidden;
+    favorite_len = next_favorites;
     rail_version = current;
 }
 
@@ -200,18 +207,23 @@ fn copyOut(rows: []const pure.LibraryItem, out: []pure.LibraryItem) usize {
 }
 
 /// The uncached query behind `loadContinue`.
-fn loadContinueUncached(out: []pure.LibraryItem) usize {
+fn loadContinueUncached(out: []pure.LibraryItem) ?usize {
     // The band is comptime-formatted from the pure constants rather than
     // hardcoded, so the SQL filter and `pure.isContinue` can never drift apart.
     const BAND = std.fmt.comptimePrint(
         " FROM library_items WHERE percent > {d} AND percent < {d} AND home_hidden=0 ORDER BY home_pinned DESC,updated_at DESC LIMIT ?1",
         .{ pure.CONTINUE_MIN_PCT, pure.CONTINUE_MAX_PCT },
     );
-    const stmt = db.prepare("SELECT " ++ COLS ++ BAND) orelse return 0;
+    const stmt = db.prepare("SELECT " ++ COLS ++ BAND) orelse return null;
     defer db.finalize(stmt);
     db.bindInt64(stmt, 1, @intCast(out.len));
     var n: usize = 0;
-    while (n < out.len and db.step(stmt) == db.c.SQLITE_ROW) : (n += 1) readRow(stmt, &out[n]);
+    while (n < out.len) : (n += 1) {
+        const result = db.step(stmt);
+        if (result == db.c.SQLITE_DONE) break;
+        if (result != db.c.SQLITE_ROW) return null;
+        readRow(stmt, &out[n]);
+    }
     return n;
 }
 
@@ -223,7 +235,7 @@ pub fn setHomePinned(kind: []const u8, item_id: []const u8, pinned: bool) void {
     db.bindText(stmt, 1, kind);
     db.bindText(stmt, 2, item_id);
     db.bindInt(stmt, 3, if (pinned) 1 else 0);
-    _ = db.step(stmt);
+    if (db.step(stmt) == db.c.SQLITE_DONE) markDirty();
 }
 
 /// Dismiss one Home card without deleting playback progress or its source row.
@@ -233,7 +245,7 @@ pub fn setHomeHidden(kind: []const u8, item_id: []const u8, hidden: bool) void {
     db.bindText(stmt, 1, kind);
     db.bindText(stmt, 2, item_id);
     db.bindInt(stmt, 3, if (hidden) 1 else 0);
-    _ = db.step(stmt);
+    if (db.step(stmt) == db.c.SQLITE_DONE) markDirty();
 }
 
 pub fn hiddenContinueCount() usize {
@@ -244,12 +256,12 @@ pub fn hiddenContinueCount() usize {
 }
 
 /// The uncached query behind `hiddenContinueCount`.
-fn loadHiddenContinueCountUncached() usize {
-    const stmt = db.prepare("SELECT count(*) FROM library_items WHERE home_hidden=1 AND percent > ?1 AND percent < ?2") orelse return 0;
+fn loadHiddenContinueCountUncached() ?usize {
+    const stmt = db.prepare("SELECT count(*) FROM library_items WHERE home_hidden=1 AND percent > ?1 AND percent < ?2") orelse return null;
     defer db.finalize(stmt);
     db.bindDouble(stmt, 1, pure.CONTINUE_MIN_PCT);
     db.bindDouble(stmt, 2, pure.CONTINUE_MAX_PCT);
-    if (db.step(stmt) != db.c.SQLITE_ROW) return 0;
+    if (db.step(stmt) != db.c.SQLITE_ROW) return null;
     return @intCast(@max(0, db.columnInt64(stmt, 0)));
 }
 
@@ -272,11 +284,16 @@ pub fn loadFavorites(out: []pure.LibraryItem) usize {
 }
 
 /// The uncached query behind `loadFavorites`.
-fn loadFavoritesUncached(out: []pure.LibraryItem) usize {
-    const stmt = db.prepare("SELECT " ++ COLS ++ " FROM library_items WHERE is_favorite=1 ORDER BY updated_at DESC LIMIT ?1") orelse return 0;
+fn loadFavoritesUncached(out: []pure.LibraryItem) ?usize {
+    const stmt = db.prepare("SELECT " ++ COLS ++ " FROM library_items WHERE is_favorite=1 ORDER BY updated_at DESC LIMIT ?1") orelse return null;
     defer db.finalize(stmt);
     db.bindInt64(stmt, 1, @intCast(out.len));
     var n: usize = 0;
-    while (n < out.len and db.step(stmt) == db.c.SQLITE_ROW) : (n += 1) readRow(stmt, &out[n]);
+    while (n < out.len) : (n += 1) {
+        const result = db.step(stmt);
+        if (result == db.c.SQLITE_DONE) break;
+        if (result != db.c.SQLITE_ROW) return null;
+        readRow(stmt, &out[n]);
+    }
     return n;
 }

@@ -25,3 +25,4 @@ internetarchive: 1.0
 nekobt: 1.0
 shanaproject: 1.0
 publicdomaintorrents: 1.0
+animetosho: 1.0

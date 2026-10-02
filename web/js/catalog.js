@@ -94,7 +94,7 @@ function unifiedResultCount(payload){
   return text + '.';
 }
 function unifiedActionLabel(source){
-  if (source === 'comics' || source === 'novels') return 'Read';
+  if (source === 'comics' || source === 'novels' || source === 'opds') return 'Read';
   if (source === 'vndb') return 'View details';
   if (source === 'audiobooks') return 'Open audio';
   if (source === 'podcast' || source === 'anime' || source === 'tmdb') return 'Open';
@@ -108,13 +108,14 @@ function unifiedArtwork(value){
   } catch { return ''; }
 }
 function renderUnifiedResults(payload){
+  if (payload?.error || !Array.isArray(payload?.results)) throw new Error(payload?.error || 'Search returned an invalid response. Try again.');
   const shown = Array.isArray(payload.results) ? payload.results : [], generation = payload.generation || 0;
   const html = shown.map((r, i) => {
     const artwork = unifiedArtwork(r.poster_url), rating = Number(r.rating);
     return `<div class="result pod unified-result">
       ${artwork ? `<img class="thumb" src="${esc(artwork)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ''}
       <div class="body"><div class="t">${esc(r.title)}</div>
-      <div class="m"><span class="src">${esc(r.source || '')}</span>
+      <div class="m"><span class="src">${esc(r.source === 'opds' ? 'OPDS' : (r.source || ''))}</span>
         ${r.author ? `<span>${esc(r.author)}</span>` : ''}
         ${r.detail ? `<span>${esc(r.detail)}</span>` : ''}
         ${Number.isFinite(rating) && rating > 0 && rating <= 10 ? `<span>${rating.toFixed(1)}/10</span>` : ''}
@@ -219,10 +220,22 @@ async function pollTransfers(){
   await refreshTransfers();
   transferTimer = setTimeout(pollTransfers, 2000);
 }
+let torrentPageOffset = 0;
+const TORRENT_PAGE_SIZE = 96;
+let torrentLoadGeneration = 0;
 async function loadTorrents(){
+  const request = ++torrentLoadGeneration, offset = torrentPageOffset;
   try {
-    const d = await api('/torrents');
-    const ts = d.torrents || [];
+    const d = await api('/torrents?offset=' + offset + '&limit=' + TORRENT_PAGE_SIZE);
+    if (request !== torrentLoadGeneration) return;
+    if (d?.error || !Array.isArray(d?.torrents)) throw new Error(d?.error || 'Transfers returned an invalid response.');
+    const ts = d.torrents;
+    const total = Number.isFinite(d.total) ? Math.max(0, d.total) : ts.length;
+    if (offset > 0 && offset >= total) {
+      torrentPageOffset = total > 0 ? Math.floor((total - 1) / TORRENT_PAGE_SIZE) * TORRENT_PAGE_SIZE : 0;
+      return loadTorrents();
+    }
+    $('torrents-load-error')?.remove();
     const html = ts.map((t, i) => `
       <div class="tor"><div class="n">${esc(t.name)}</div>
         <div class="bar"><i style="width:${t.pct}%"></i></div>
@@ -234,11 +247,30 @@ async function loadTorrents(){
           </span></div>
         <div class="tor-filelist" id="torf-${t.id ?? i}"></div>
       </div>`).join('') || '<div class="empty">Nothing downloading</div>';
-    if (html !== lastHtml.torrents) {
-      $('torrents').innerHTML = html; lastHtml.torrents = html;
+    const pageControls = total > 0 ? `<div class="transfer-summary torrent-paging">
+      <span>Showing ${offset + 1}–${offset + ts.length} of ${total} transfers</span>
+      <button type="button" id="torrents-previous"${offset === 0 ? ' disabled' : ''}>Previous</button>
+      <button type="button" id="torrents-more"${d.has_more ? '' : ' disabled'}>More</button>
+    </div>` : '';
+    const pagedHtml = html + pageControls;
+    if (pagedHtml !== lastHtml.torrents) {
+      $('torrents').innerHTML = pagedHtml; lastHtml.torrents = pagedHtml;
       wireTorrentFiles();
+      const previous = $('torrents-previous'), more = $('torrents-more');
+      if (previous) previous.onclick = () => { torrentPageOffset = Math.max(0, torrentPageOffset - TORRENT_PAGE_SIZE); loadTorrents(); };
+      if (more) more.onclick = () => { torrentPageOffset += TORRENT_PAGE_SIZE; loadTorrents(); };
     }
-  } catch { $('torrents').innerHTML = '<div class="empty">—</div>'; lastHtml.torrents = '<div class="empty">—</div>'; }
+  } catch (error) {
+    if (request !== torrentLoadGeneration) return;
+    let hint = $('torrents-load-error');
+    if (!hint) {
+      hint = document.createElement('div'); hint.id = 'torrents-load-error'; hint.className = 'empty transfer-error';
+      hint.setAttribute('role', 'alert'); $('torrents').prepend(hint);
+    }
+    hint.textContent = (error?.message || 'Could not refresh transfers.') + (lastHtml.torrents ? ' Previously loaded transfers remain visible.' : '');
+    const retry = document.createElement('button'); retry.type = 'button'; retry.textContent = 'Retry'; retry.onclick = () => loadTorrents();
+    hint.append(' ', retry);
+  }
 }
 
 const transferMessages = {
@@ -835,18 +867,25 @@ async function loadSeason(sn){
         episode_number:+e.episode || 0, name:e.title || `Episode ${e.episode}`,
         overview:e.overview || '', air_date:(e.released || '').slice(0,10),
       }))}) : api('/tv?id=' + id + '&season=' + sn + (showImdb ? '&imdb=' + encodeURIComponent(showImdb) : '')),
-      api('/library/watched?kind=tv&id=' + id + '&season=' + sn).catch(() => ({episodes:[]})),
+      api('/library/watched?kind=tv&id=' + id + '&season=' + sn).then(data => {
+        if (data?.error === 'library item not found') return {episodes:[], tracked:false};
+        if (data?.error || !Array.isArray(data?.episodes)) throw new Error(data?.error || 'Watched state returned an invalid response.');
+        return data;
+      }).catch(error => error?.status === 404 ? {episodes:[], tracked:false} : {episodes:[], unavailable:true}),
     ]);
     if (!detailsCurrent(generation) || request !== seasonGeneration) return;
+    if (d?.error || !Array.isArray(d?.episodes)) throw new Error(d?.error || 'Episodes returned an invalid response.');
     const seen = new Set(seenData.episodes || []);
-    $('episodes').innerHTML = (d.episodes || []).map(e => `
+    const watchedUnavailable = seenData.unavailable === true;
+    $('episodes').innerHTML = (watchedUnavailable ? '<div class="empty">Watched state is unavailable. Select the season to retry.</div>' : '') + d.episodes.map(e => `
       <div class="ep"><div class="h">
         <span>E${String(e.episode_number).padStart(2,'0')} · ${esc(e.name || '')}</span>
         <div class="ep-actions">
           <button class="watched-toggle ${seen.has(e.episode_number) ? 'seen' : ''}" data-action="watched"
             data-show="${id}" data-details="${generation}"
             data-season="${sn}" data-episode="${e.episode_number}" data-value="${!seen.has(e.episode_number)}"
-            aria-pressed="${seen.has(e.episode_number)}">${seen.has(e.episode_number) ? '✓ Watched' : 'Mark watched'}</button>
+            ${watchedUnavailable ? 'disabled title="Watched state unavailable"' : ''}
+            aria-pressed="${seen.has(e.episode_number)}">${watchedUnavailable ? 'State unavailable' : seen.has(e.episode_number) ? '✓ Watched' : 'Mark watched'}</button>
           <button class="find" data-action="find" data-q="${esc(normQuery(title))} s${String(sn).padStart(2,'0')}e${String(e.episode_number).padStart(2,'0')}">Find ⭢</button>
         </div>
       </div>
@@ -880,11 +919,21 @@ $('show-back').onclick = closeDetails;
 // The coming-up rail already renders into #cal for the Playing page. Home
 // mirrors that markup rather than re-fetching /calendar and re-deriving the
 // countdown labels — two derivations of the same rail is how they drift.
+function wireCalendarRetry(container, reload){
+  container.querySelectorAll('[data-calendar-retry]').forEach(retry => {
+    retry.onclick = async () => {
+      retry.disabled = true;
+      try { await apiMutation('/library/action?action=refresh'); await reload(); }
+      catch (error) { retry.disabled = false; toast(error?.message || 'Could not refresh the calendar.'); }
+    };
+  });
+}
 async function loadCalendarInto(targetId){
   await loadCalendar();
   const src = $('cal'), dst = $(targetId);
   if (!src || !dst) return;
   dst.innerHTML = src.innerHTML;
+  wireCalendarRetry(dst, () => loadCalendarInto(targetId));
   dst.querySelectorAll('.c').forEach(c => {
     c.onclick = () => openShow(+c.dataset.id, c.dataset.n);
     wireKeyboardClick(c, `Open ${c.dataset.n}`);
@@ -893,9 +942,14 @@ async function loadCalendarInto(targetId){
 async function loadCalendar(){
   try {
     const d = await api('/calendar');
-    const es = d.entries || [];
-    $('cal-head').style.display = es.length ? 'block' : 'none';
-    $('cal').innerHTML = es.map(e => {
+    if (d?.error || !Array.isArray(d?.entries)) throw new Error(d?.error || 'Calendar returned an invalid response.');
+    const es = d.entries;
+    const hint = d.failed ? (d.stale ? 'Calendar refresh failed. Previously loaded schedules remain visible.' : 'Calendar refresh failed.')
+      : d.partial ? 'Some shows could not refresh. This calendar is incomplete.'
+      : d.loading ? 'Refreshing scheduled episodes…'
+      : d.loaded === false ? 'Schedule metadata has not loaded yet.' : '';
+    $('cal-head').style.display = es.length || hint ? 'block' : 'none';
+    $('cal').innerHTML = (hint ? `<div class="empty" role="status">${esc(hint)}${d.loading ? '' : ' <button type="button" data-calendar-retry>Retry</button>'}</div>` : '') + es.map(e => {
       const lab = e.available
         ? `S${String(e.last_season).padStart(2,'0')}E${String(e.last_episode).padStart(2,'0')} available · ${e.seeds} seeds`
         : e.next_season > 0
@@ -904,11 +958,17 @@ async function loadCalendar(){
       return `<div class="c" data-id="${e.tmdb_id}" data-n="${esc(e.name)}">
         <div class="n">${esc(e.name)}</div><div class="s ${e.available ? 'avail' : ''}">${lab}</div></div>`;
     }).join('');
+    wireCalendarRetry($('cal'), loadCalendar);
     $('cal').querySelectorAll('.c').forEach(c => {
       c.onclick = () => openShow(+c.dataset.id, c.dataset.n);
       wireKeyboardClick(c, `Open ${c.dataset.n}`);
     });
-  } catch {}
+  } catch (error) {
+    $('cal-head').style.display = 'block';
+    let hint = $('cal').querySelector('.calendar-load-error');
+    if (!hint) { hint = document.createElement('div'); hint.className = 'empty calendar-load-error'; hint.setAttribute('role', 'alert'); $('cal').prepend(hint); }
+    hint.textContent = error?.message || 'Could not load schedules. Previously loaded schedules remain visible.';
+  }
 }
 function cd(air){
   const diff = air - Math.floor(Date.now() / 1000);

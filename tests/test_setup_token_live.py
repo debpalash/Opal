@@ -11,14 +11,16 @@ Run after building the headless binary::
     zig build -Dheadless=true
     python3 tests/test_setup_token_live.py --binary zig-out/bin/opal
 
-The server currently has a fixed default port, so nothing else may be listening
-on 41595 while this test runs.  Only Python's standard library is required.
+Use --port to select an unused isolated server port (default 41595). The
+harness seeds that port into its private profile before startup and rejects an
+existing listener. Only Python's standard library is required.
 """
 
 from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import errno
 import http.client
 import json
 import os
@@ -26,6 +28,7 @@ from pathlib import Path
 import re
 import signal
 import socket
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -149,6 +152,16 @@ class IsolatedOpal:
         ):
             directory.mkdir(parents=True, exist_ok=True)
 
+        # Every launch uses its own durable port configuration. Existing
+        # fixture settings survive restart; a conflicting seed is a test bug.
+        profile = self.config_root / "opal"
+        profile.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(profile / "opal.db") as connection:
+            connection.execute("CREATE TABLE IF NOT EXISTS config(key TEXT PRIMARY KEY, value TEXT)")
+            connection.execute("INSERT OR IGNORE INTO config(key,value) VALUES ('web_port',?)", (str(PORT),))
+            actual_port = connection.execute("SELECT value FROM config WHERE key='web_port'").fetchone()[0]
+            self.testcase.assertEqual(str(actual_port), str(PORT), "isolated profile port differs from request port")
+
         env = os.environ.copy()
         env.update(
             {
@@ -253,16 +266,59 @@ class IsolatedOpal:
 
     @staticmethod
     def _require_free_port() -> None:
+        # A connect check catches wildcard listeners even on Darwin, where
+        # SO_REUSEADDR permits a distinct loopback listener on the same port.
+        # Send no bytes: this is solely an occupancy check, never an API call.
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as connection:
+            connection.settimeout(0.5)
+            result = connection.connect_ex(("127.0.0.1", PORT))
+            if result == 0:
+                raise unittest.SkipTest(
+                    f"127.0.0.1:{PORT} is already in use; refusing to test an existing server"
+                )
+            if result not in (errno.ECONNREFUSED, getattr(errno, "WSAECONNREFUSED", errno.ECONNREFUSED)):
+                raise unittest.SkipTest(
+                    f"cannot establish that 127.0.0.1:{PORT} is unused (socket error {result})"
+                )
         probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             probe.bind(("127.0.0.1", PORT))
+            # Also catch bound sockets that have not begun listening yet.
+            probe.listen(1)
         except OSError as error:
             raise unittest.SkipTest(
                 f"127.0.0.1:{PORT} is already in use; refusing to test an existing server"
             ) from error
         finally:
             probe.close()
+
+
+class PortCollisionGuardTest(unittest.TestCase):
+    def test_wildcard_listener_is_rejected_before_start(self) -> None:
+        global PORT
+        previous = PORT
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            listener.bind(("0.0.0.0", 0))
+            listener.listen(1)
+            PORT = listener.getsockname()[1]
+            try:
+                with self.assertRaises(unittest.SkipTest):
+                    IsolatedOpal._require_free_port()
+            finally:
+                PORT = previous
+
+    def test_unused_port_is_accepted(self) -> None:
+        global PORT
+        previous = PORT
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as temporary:
+            temporary.bind(("127.0.0.1", 0))
+            PORT = temporary.getsockname()[1]
+        try:
+            IsolatedOpal._require_free_port()
+        finally:
+            PORT = previous
 
 
 class SetupTokenLiveTest(unittest.TestCase):
@@ -447,15 +503,15 @@ def parse_args() -> tuple[argparse.Namespace, list[str]]:
         "--port",
         type=int,
         default=DEFAULT_PORT,
-        help="server port (currently must match the fresh-config default: 41595)",
+        help="unused port seeded into the isolated server profile (default: 41595)",
     )
     return parser.parse_known_args()
 
 
 if __name__ == "__main__":
     options, unittest_args = parse_args()
-    if options.port != DEFAULT_PORT:
-        raise SystemExit("--port must currently be 41595 (fresh Opal's fixed default)")
+    if not 1 <= options.port <= 65535:
+        raise SystemExit("--port must be between 1 and 65535")
     PORT = options.port
     if options.binary:
         BINARY = Path(options.binary).expanduser().resolve()

@@ -53,8 +53,8 @@ def test_novel_source_engines():
         "search dispatches by source": all(
             f in svc for f in ("fetchMadaraNovel", "fetchLightnovelwp", "fetchReadwn")
         ),
-        "chapters dispatch by source": "switch (open_source)" in svc and "fn chaptersMadara" in svc,
-        "reader dispatch by source": "fn textSourced" in svc and "open_source == .wikisource" in svc,
+        "chapters dispatch by source": "switch (job.source)" in svc and "fn chaptersMadara" in svc,
+        "reader dispatch by source": "fn textSourced" in svc and "job.source == .wikisource" in svc,
         # ── source_config-gated per source (inert without base) ──
         "madara_novel gated": 'source_config.get("madara_novel", "base")' in svc,
         "lightnovelwp gated": 'source_config.get("lightnovelwp", "base")' in svc,

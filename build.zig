@@ -199,14 +199,14 @@ pub fn build(b: *std.Build) void {
     }
     b.step("test-tv-detail", "Test production TV metadata and restore helpers").dependOn(&run_tv_detail_tests.step);
 
-    const anime_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Anime playback"} });
+    const anime_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{ "Anime playback", "Anime provider" } });
     const run_anime_tests = b.addRunArtifact(anime_tests);
     if (is_windows) run_anime_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     b.step("test-anime", "Test anime episode publication and playback lifecycle").dependOn(&run_anime_tests.step);
 
     const browse_tests = b.addTest(.{
         .root_module = exe.root_module,
-        .filters = &.{"Browse regression"},
+        .filters = &.{ "Browse regression", "Radio action", "Comic catalog action", "Music action" },
     });
     const run_browse_tests = b.addRunArtifact(browse_tests);
     if (is_windows) run_browse_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{
@@ -418,6 +418,45 @@ pub fn build(b: *std.Build) void {
 
     // ── Unit Tests (pure Zig modules only) ──
     const test_step = b.step("test", "Run unit tests");
+    const test_key_writer = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/core/sqlite_key_writer.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    if (is_windows) {
+        test_key_writer.root_module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{mingw_prefix}) });
+        test_key_writer.root_module.addObjectFile(.{ .cwd_relative = b.fmt("{s}/lib/libsqlite3.dll.a", .{mingw_prefix}) });
+    } else {
+        test_key_writer.root_module.linkSystemLibrary("sqlite3", .{});
+    }
+    if (target.result.os.tag == .macos) {
+        test_key_writer.root_module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{brew_prefix}) });
+        test_key_writer.root_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/lib", .{brew_prefix}) });
+    }
+    const run_key_writer = b.addRunArtifact(test_key_writer);
+    if (is_windows) run_key_writer.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
+    test_step.dependOn(&run_key_writer.step);
+    const test_library_projection = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/services/remote_library_pure.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    test_step.dependOn(&b.addRunArtifact(test_library_projection).step);
+
+    const test_catalog_projection = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/services/remote_catalog_pure.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    test_step.dependOn(&b.addRunArtifact(test_catalog_projection).step);
+
+    const test_youtube_projection = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/test_remote_youtube_projection.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    test_step.dependOn(&b.addRunArtifact(test_youtube_projection).step);
 
     // Executable torrent-search seam: nova2 must survive being launched by
     // Zig's std.Io.Threaded child runtime. This is intentionally offline; the

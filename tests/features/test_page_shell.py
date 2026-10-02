@@ -273,7 +273,7 @@ def test_podcasts_radio_default_content():
         ),
         # The chart supplies ids only; /lookup returns search's result objects,
         # so the EXISTING parser must be what fills results[] (no 2nd parser).
-        "podcast reuses parseItunes": "pure.parseItunes(" in pod,
+        "podcast reuses parseItunes": "pure.parseItunesValue(" in pod,
         "podcast one-shot latch": "popular_fetched" in pod and "pub fn loadPopularOnce" in pod,
         "podcast fetch is backgrounded": "workers.spawn(popularWorker" in pod,
         # ── Radio: RadioBrowser votes-descending window → the same parseStations.
@@ -283,7 +283,7 @@ def test_podcasts_radio_default_content():
         "radio pure builder": "pub fn buildPopularUrl" in rad_pure,
         "radio votes-ordered endpoint": "order=votes&reverse=true" in rad_pure,
         "radio routes through pure": "pure.buildPopularUrl(" in rad,
-        "radio reuses parseStations": "pure.parseStations(" in rad,
+        "radio reuses parseStations": "pure.parsePage(" in rad,
         "radio one-shot latch": "popular_fetched" in rad and "pub fn loadPopularOnce" in rad,
         "radio fetch is backgrounded": "spawnLegacy(popularWorker" in rad,
         # Both fetch helpers allocate `cap` bytes and hand back only what was read.
@@ -297,9 +297,9 @@ def test_podcasts_radio_default_content():
         ),
         # ── Cards: artwork via the shared poster daemon, existing click path ──
         "podcast cards click loadEpisodes": "if (clicked) loadEpisodes(i)" in pod_ui,
-        "radio cards click playStation": "if (clicked) playStation(i)" in rad,
+        "radio cards play immutable rendered station": "if (clicked) playCopiedStation(s.*)" in rad and "fn playCopiedStation(s: pure.Station)" in rad,
         "poster daemon reused": (
-            "poster.fetchAsync(" in pod_ui and "poster.uploadIfReady(" in pod_ui
+            "components.coverArt(" in pod_ui and "poster.fetchAsync(" in _src("src/ui/components.zig")
             and "poster.fetchAsync(" in rad and "poster.uploadIfReady(" in rad
         ),
         # Pages kick the fetch from their own render root, not a shared shell.
@@ -369,7 +369,8 @@ def test_comics_mangadex_source():
                 "mangaIdFromRoute",
                 "parseMangaEntry",
                 "parseAtHome",
-                "firstChapterId",
+                "chapterOffsetFromRoute",
+                "buildChapterRoute",
             )
         ),
         # The existing percent-encoder now delegates to the tested one (no drift).
@@ -377,7 +378,8 @@ def test_comics_mangadex_source():
         # ── Reader seam: mangadex: route dispatched before the HTML scraper ──
         "route scheme": 'pub const MD_SCHEME = "mangadex:"' in pure,
         "reader dispatch": "if (pure.mangaIdFromRoute(url)) |manga_id|" in svc,
-        "reader stages pages": "fn loadMangadexPages(manga_id: []const u8) bool" in svc,
+        "reader stages paged chapters": "fn loadMangadexPages(manga_id: []const u8, chapter_offset: u32) bool" in svc
+            and "MANGADEX_CHAPTER_WINDOW" in svc and "pure.buildChapterRoute(" in svc,
         # Reuses the shared page-download pipeline rather than a second downloader.
         "reuses downloadPages": "downloadPages(gen);" in svc,
         # ── Security: ids are interpolated into a request path → must be validated ──
@@ -550,3 +552,36 @@ def test_tmdb_live_search():
         return "fail", "live search incomplete: " + ", ".join(missing)
     return "pass", ("typing drives TMDB search after a quiet period; repaints, "
                     "1-char queries and overlapping requests all suppressed")
+
+
+@test("Comic pages decode off the owner thread with bounded ownership", "Page Shell")
+def test_comic_page_decode_workers():
+    svc = _src("src/services/comics.zig")
+    pure = _src("src/services/comics_pure.zig")
+    schedule = _between(svc, "fn decodePageTexture(", "// ═")
+    worker = _between(svc, "fn decodePageWorker(", "fn drainDecodedPages(")
+    drain = _between(svc, "fn drainDecodedPages(", "fn resetPageDecodes(")
+    reset = _between(svc, "fn resetPageDecodes(", "fn renderPagePlaceholder(")
+    checks = {
+        "frame schedules rather than decoding": "comicPage(" not in schedule
+            and "workers.spawn(decodePageWorker," in schedule,
+        "source bytes are copied and owned": "copyPage(pg, alloc)" in schedule
+            and "defer alloc.free(raw)" in worker,
+        "worker retains existing image budget": "page_image_decode.comicPage(raw)" in worker,
+        "bounded workers plus pending results": "PAGE_DECODE_LIMIT: usize = 2" in pure
+            and "page_decode_outstanding" in schedule
+            and "page_decode_outstanding -= 1" in drain,
+        "stale and shutdown completion rejected": "pure.pageDecodeCanPublish(" in worker
+            and "workers.isQuitting()" in worker,
+        "completed decoding wakes event-driven UI": "dvui.refresh(window," in worker,
+        "GPU upload stays on owner thread": "textureCreate(" not in worker
+            and "dvui.textureCreate(" in drain and "drainDecodedPages();" in svc,
+        "reset frees completed RGBA": "page.image.deinit();" in reset
+            and "resetPageDecodes();" in svc,
+        "decoding placeholders retain layout": "renderPagePlaceholder(pg, avail_w)" in svc
+            and "width * 1.5" in svc,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "comic decode lifecycle: " + ", ".join(missing)
+    return "pass", "owned compressed bytes, max 2 CPU/pending results, generation fencing, owner-only GPU upload"

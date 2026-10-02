@@ -228,6 +228,13 @@ test "local media bypasses initial cache gate" {
     try std.testing.expectEqualStrings("yes", cachePauseInitial("http://127.0.0.1/torrent", true));
 }
 
+/// Initial context policy: park on EOF but leave repeat/advance to Opal's
+/// playlist and provider owners. An implicit infinite loop would hide EOF.
+pub fn configureInitialPlayback(sink: anytype) void {
+    sink.setOption("keep-open", "always");
+    sink.setOption("loop-file", "no");
+}
+
 /// Send one request to a command sink.  The sink interface is deliberately
 /// tiny: `setOption(name, value)` and `loadFile(url, mode, file_options)`.
 /// Returning false means no command was emitted (currently only an empty URL).
@@ -452,4 +459,51 @@ test "prepared retry headers preserve sanitized identity and reject injection" {
         .prepared_header_fields = "Referer: good\r\nInjected: bad",
     }));
     try std.testing.expectEqualStrings("", sink.events[2].headerFieldsSlice());
+}
+
+test "constructor parks EOF without implicitly repeating every file" {
+    var sink: FakeSink = .{};
+    configureInitialPlayback(&sink);
+    try std.testing.expectEqual(@as(usize, 2), sink.len);
+    try std.testing.expectEqualStrings("keep-open", sink.events[0].nameSlice());
+    try std.testing.expectEqualStrings("always", sink.events[0].valueSlice());
+    try std.testing.expectEqualStrings("loop-file", sink.events[1].nameSlice());
+    try std.testing.expectEqualStrings("no", sink.events[1].valueSlice());
+}
+
+/// A provider's play intent survives an early resume seek. Only file readiness
+/// consumes it; a nullable seek position is not a playback-intent latch.
+pub const ProviderStartIntent = struct {
+    pending: bool = false,
+
+    pub fn arm(self: *ProviderStartIntent, position: ?f64) void {
+        const value = position orelse {
+            self.pending = false;
+            return;
+        };
+        // Zero means an explicit provider play from the start. It needs no
+        // seek, but still must clear the previous track's EOF pause.
+        self.pending = std.math.isFinite(value) and value >= 0 and value <= 315_576_000;
+    }
+
+    pub fn consume(self: *ProviderStartIntent) bool {
+        const pending = self.pending;
+        self.pending = false;
+        return pending;
+    }
+};
+
+test "provider start survives consumed resume and resets for restored sessions" {
+    var intent: ProviderStartIntent = .{};
+    var position = saneResumePosition(12);
+    intent.arm(position);
+    position = null; // resume may be sought before FILE_LOADED
+    try std.testing.expect(position == null);
+    try std.testing.expect(intent.consume());
+    try std.testing.expect(!intent.consume());
+    intent.arm(0);
+    try std.testing.expect(intent.consume());
+    intent.arm(12);
+    intent.arm(null); // a subsequent restored-session load must stay paused
+    try std.testing.expect(!intent.consume());
 }

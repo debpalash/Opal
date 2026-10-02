@@ -214,7 +214,9 @@ pub fn authenticate() void {
                 return;
             };
 
-            const token = pure.extractToken(resp) orelse {
+            var parsed_token: [256]u8 = undefined;
+            defer @memset(&parsed_token, 0);
+            const token = pure.parseLoginToken(alloc, resp, &parsed_token) orelse {
                 setLoginError("Auth failed — check credentials");
                 return;
             };
@@ -781,9 +783,36 @@ fn progressWorker() void {
         var response: [16384]u8 = undefined;
         if (http.fetch(url, &response, .{ .method = .PATCH, .payload = body, .content_type = "application/json", .auth_header = auth, .timeout_secs = 8 }) == null)
             logs.pushLog("info", "audiobookshelf", "Playback progress could not sync to the server", false);
-        if (request.episode_len == 0) @import("library_store.zig").upsertProgress("audiobook", job.id[0..job.id_len], job.title[0..job.title_len], "", request.position, request.duration, "", job.id[0..job.id_len]);
+        if (request.episode_len == 0) {
+            var deep_buf: [192]u8 = undefined;
+            const deep = std.fmt.bufPrint(&deep_buf, "opal://audiobookshelf/{s}", .{job.id[0..job.id_len]}) catch continue;
+            @import("library_store.zig").upsertProgress("audiobook", job.id[0..job.id_len], job.title[0..job.title_len], "", request.position, request.duration, "", deep);
+        }
     }
 }
+/// mpv may unload a completed file before `eof-reached` can be polled.
+/// Consume the authoritative EOF event while the player still owns this load;
+/// return true so generic queue/playlist advancement cannot race book tracks.
+pub fn handlePlayerEof(player: anytype) bool {
+    if (active_audio == null or !state.app.abs.connected) return false;
+    const plan = &active_audio.?;
+    const current = player.current_url[0..@min(player.current_url_len, player.current_url.len)];
+    if (!std.mem.eql(u8, current, plan.url[0..plan.url_len]) or player.is_loading or player.load_error_len > 0) return false;
+    if (plan.player_serial) |serial| if (serial != player.load_serial) return false;
+    advanceAudioTrack(plan);
+    return true;
+}
+
+fn advanceAudioTrack(plan: *ActiveAudio) void {
+    plan.last_position = active_tracks[plan.index].duration;
+    const final = !plan.complete_book or plan.index + 1 >= plan.count;
+    enqueueProgress(plan.*, final);
+    if (!final) {
+        plan.index += 1;
+        loadActiveAudio(0);
+    } else active_audio = null;
+}
+
 fn tickAudioTimeline() void {
     if (active_audio == null) return;
     const plan = &active_audio.?;
@@ -797,6 +826,7 @@ fn tickAudioTimeline() void {
     const current = player.current_url[0..@min(player.current_url_len, player.current_url.len)];
     if (!std.mem.eql(u8, current, plan.url[0..plan.url_len])) {
         if (plan.opened) {
+            logs.pushLog("info", "audiobookshelf", "Playback switched; saving outgoing book progress", false);
             enqueueProgress(plan.*, false);
             active_audio = null;
         }
@@ -804,6 +834,7 @@ fn tickAudioTimeline() void {
     }
     if (plan.player_serial) |serial| {
         if (serial != player.load_serial) {
+            logs.pushLog("info", "audiobookshelf", "Playback replaced; saving outgoing book progress", false);
             enqueueProgress(plan.*, false);
             active_audio = null;
             return;
@@ -818,13 +849,7 @@ fn tickAudioTimeline() void {
     _ = c.mpv.mpv_get_property(player.mpv_ctx, "eof-reached", c.mpv.MPV_FORMAT_FLAG, &eof);
     const now = @import("../core/io_global.zig").monotonicMilliTimestamp();
     if (pure.shouldAdvanceTrack(plan.opened, !player.is_loading, eof != 0, player.load_error_len > 0)) {
-        plan.last_position = active_tracks[plan.index].duration;
-        const final = !plan.complete_book or plan.index + 1 >= plan.count;
-        enqueueProgress(plan.*, final);
-        if (!final) {
-            plan.index += 1;
-            loadActiveAudio(0);
-        } else active_audio = null;
+        advanceAudioTrack(plan);
     } else if (plan.opened and now - plan.last_sync_ms >= 10000) {
         enqueueProgress(plan.*, false);
         plan.last_sync_ms = now;

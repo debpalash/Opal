@@ -204,7 +204,22 @@ fn kickTrendingFetch() void {
 /// "available · N seeds" badge. Click opens the show. Returns true if rendered.
 fn renderComingUpRail(card_w: f32) bool {
     const cal = @import("../services/tv_calendar.zig");
-    if (cal.count == 0) return false;
+    var upcoming: [12]cal.Entry = undefined;
+    const calendar = cal.snapshotCopy(&upcoming);
+    if (calendar.failed or calendar.partial or calendar.stale) {
+        _ = dvui.label(@src(), "{s}", .{if (calendar.count == 0)
+            "Coming up is unavailable. Retry the calendar."
+        else if (calendar.partial)
+            "Some calendar updates are unavailable."
+        else
+            "Showing the last available calendar."}, .{
+            .color_text = theme.colors.text_secondary,
+            .font = dvui.themeGet().font_body,
+        });
+        if (!calendar.loading and components.actionButton(@src(), "Retry calendar", .secondary, 52103))
+            @import("../services/tv_library.zig").resync();
+    }
+    if (calendar.count == 0) return calendar.failed;
     const text_mod = @import("../core/text.zig");
     const poster = @import("../core/poster.zig");
     const poster_h = card_w * 1.5;
@@ -251,10 +266,10 @@ fn renderComingUpRail(card_w: f32) bool {
     defer row.deinit();
 
     const now_s = @import("../core/io_global.zig").timestamp();
-    const n = @min(cal.count, STRIP_MAX);
+    const n = @min(calendar.count, STRIP_MAX);
     for (0..n) |i| {
-        const e = &cal.entries[i];
-        var it = &cal.cal_items[i];
+        const e = &upcoming[i];
+        const it = cal.posterFor(e);
 
         var card = dvui.box(@src(), .{ .dir = .vertical }, .{
             .id_extra = i + 47000,

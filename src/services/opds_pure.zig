@@ -185,6 +185,8 @@ pub fn resolveHref(base_url: []const u8, href: []const u8, buf: []u8) ?[]const u
         return std.fmt.bufPrint(buf, "{s}{s}", .{ origin, href }) catch null;
     }
 
+    if (href[0] == '?') return std.fmt.bufPrint(buf, "{s}{s}", .{ stripQuery(base_url), href }) catch null;
+
     // Document-relative "path" → base directory + href.
     const stripped = stripQuery(base_url);
     if (std.mem.indexOf(u8, stripped, "://")) |se| {
@@ -503,27 +505,21 @@ pub fn isCompleteFeed(xml: []const u8) bool {
 /// real OPDS convention, but not disallowed either) can never be mistaken for
 /// feed-level pagination.
 pub fn feedNextHref(xml: []const u8, base_url: []const u8, buf: []u8) ?[]const u8 {
-    const first_entry = std.mem.indexOf(u8, xml, "<entry");
-    var last_entry_end: usize = 0;
-    if (first_entry != null) {
-        var pos: usize = 0;
-        while (std.mem.indexOfPos(u8, xml, pos, "<entry")) |e_at| {
-            const e_end = std.mem.indexOfPos(u8, xml, e_at, "</entry>") orelse xml.len;
-            last_entry_end = if (e_end < xml.len) e_end + "</entry>".len else xml.len;
-            pos = last_entry_end;
+    var pos: usize = 0;
+    var entry_depth: usize = 0;
+    while (nextTag(xml, pos)) |token| {
+        pos = token.end;
+        if (std.mem.eql(u8, token.local, "entry")) {
+            if (token.closing) {
+                entry_depth -|= 1;
+            } else {
+                entry_depth += 1;
+            }
+            continue;
         }
-    }
-
-    var lp: usize = 0;
-    while (std.mem.indexOfPos(u8, xml, lp, "<link")) |l_at| {
-        const l_close = std.mem.indexOfScalarPos(u8, xml, l_at, '>') orelse break;
-        lp = l_close + 1;
-        if (first_entry) |fe| {
-            if (l_at >= fe and l_at < last_entry_end) continue; // entry-scoped, not feed-level
-        }
-        const tag = xml[l_at .. l_close + 1];
-        const rel = attr(tag, "rel") orelse continue;
-        if (!std.mem.eql(u8, rel, "next")) continue;
+        if (entry_depth != 0 or token.closing or !std.mem.eql(u8, token.local, "link")) continue;
+        const tag = xml[token.start..token.end];
+        if (!std.mem.eql(u8, attr(tag, "rel") orelse "", "next")) continue;
         const href = attr(tag, "href") orelse continue;
         var decoded: [1024]u8 = undefined;
         const n = decodeXmlEntities(href, &decoded);
@@ -997,4 +993,40 @@ test "parseFeed: truncated / malformed XML does not crash and yields partial" {
     // Total garbage → zero entries, no crash.
     try testing.expectEqual(@as(usize, 0), parseFeed("not xml at all <<<>>>", "http://h/o", &entries));
     try testing.expectEqual(@as(usize, 0), parseFeed("", "http://h/o", &entries));
+}
+
+test "advertised OPDS search preserves query encoding and optional template arguments" {
+    var buf: [2048]u8 = undefined;
+    const url = expandSearchTemplate("https://books.example/search?q={searchTerms}&count={count}&x={unsupported?}", "a & 日本", &buf).?;
+    try std.testing.expectEqualStrings("https://books.example/search?q=a%20%26%20%E6%97%A5%E6%9C%AC&count=12&x=", url);
+    try std.testing.expect(expandSearchTemplate("https://books.example?q={searchTerms}&x={unsupported}", "a", &buf) == null);
+    try std.testing.expect(expandSearchTemplate("https://books.example?q=static", "a", &buf) == null);
+    var tiny: [8]u8 = undefined;
+    try std.testing.expect(expandSearchTemplate("https://books.example?q={searchTerms}", "a", &tiny) == null);
+}
+
+test "OPDS only discovers feed-level advertised searches and GET Atom descriptors" {
+    const feed = "<a:feed><a:entry><a:link rel='search' type='application/atom+xml' href='/wrong?q={searchTerms}'/></a:entry><a:link rel = 'search' type='application/opensearchdescription+xml' href='/description.xml'/></a:feed>";
+    const advertised = feedSearchLink(feed, "https://books.example/opds").?;
+    try std.testing.expect(advertised.description);
+    try std.testing.expectEqualStrings("https://books.example/description.xml", advertised.url[0..advertised.url_len]);
+    var buf: [2048]u8 = undefined;
+    const descriptor = "<OpenSearchDescription><Url type='text/html' template='/wrong?q={searchTerms}'/><os:Url type='application/atom+xml;profile=opds-catalog' template='/search?q={searchTerms}&amp;count={count}'/></OpenSearchDescription>";
+    try std.testing.expectEqualStrings("https://books.example/search?q=hello%20world&count=12", openSearchUrl(descriptor, "https://books.example/description.xml", "hello world", &buf).?);
+    try std.testing.expect(openSearchUrl("<Url type='application/atom+xml' method='POST' template='/s?q={searchTerms}'/>", "https://books.example", "x", &buf) == null);
+    try std.testing.expect(feedSearchLink("<feed><entry><link rel='search' type='application/atom+xml' href='/s?q={searchTerms}'/></entry></feed>", "https://books.example") == null);
+}
+
+test "namespaced OPDS metadata and pagination preserve actual document query path" {
+    const feed = "<a:feed><a:entry><a:title>A &amp; B</a:title><a:author><a:name>Jane</a:name></a:author><a:summary>Real &lt;b&gt;summary&lt;/b&gt;</a:summary><a:link rel='http://opds-spec.org/acquisition' href='/book.epub' type='application/epub+zip'/><a:link rel='next' href='/wrong'/></a:entry><a:link rel='next' href='?page=2&amp;q=x'/></a:feed>";
+    var rows: [1]OpdsEntry = undefined;
+    try std.testing.expectEqual(@as(usize, 1), parseFeed(feed, "https://books.example/catalog.xml?page=1", &rows));
+    try std.testing.expectEqualStrings("A & B", rows[0].titleSlice());
+    try std.testing.expectEqualStrings("Jane", rows[0].author[0..rows[0].author_len]);
+    try std.testing.expectEqualStrings("Real summary", rows[0].summary[0..rows[0].summary_len]);
+    var buf: [1024]u8 = undefined;
+    try std.testing.expectEqualStrings("https://books.example/catalog.xml?page=2&q=x", feedNextHref(feed, "https://books.example/catalog.xml?page=1", &buf).?);
+    try std.testing.expect(sameOrigin("https://books.example/catalog", "https://books.example/search"));
+    try std.testing.expect(!sameOrigin("https://books.example/catalog", "https://other.example/search"));
+    try std.testing.expect(!sameOrigin("https://user:pass@books.example", "https://user:pass@books.example/search"));
 }

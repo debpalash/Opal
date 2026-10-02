@@ -5,7 +5,9 @@ const db = @import("db.zig");
 const theme = @import("../ui/theme.zig");
 const watch_history_pure = @import("../player/watch_history_pure.zig");
 const secret_store = @import("secret_store.zig");
-const sync = @import("sync.zig");
+const key_writer = @import("sqlite_key_writer.zig");
+threadlocal var key_batch: ?key_writer.Writer = null;
+var restore_opds_connected = false;
 
 var legacy_secrets_mask: u16 = 0;
 
@@ -31,7 +33,11 @@ pub fn ensureDir() void {
 
 pub fn save() void {
     const d = db.get() orelse return;
-    _ = d;
+    key_batch = key_writer.Writer.init(@ptrCast(d));
+    defer {
+        if (key_batch) |*batch| batch.deinit();
+        key_batch = null;
+    }
 
     db.exec("BEGIN");
     var fb: [64]u8 = undefined;
@@ -141,12 +147,12 @@ pub fn save() void {
     // credentials use the protected local envelope. The user/pass buffers are
     // null-terminated by the text-entry widget.
     {
-        const u_len = std.mem.indexOfScalar(u8, &state.app.opds.user_buf, 0) orelse state.app.opds.user_buf.len;
-        const p_len = std.mem.indexOfScalar(u8, &state.app.opds.pass_buf, 0) orelse state.app.opds.pass_buf.len;
-        setKey("opds_url", state.app.opds.server_url[0..state.app.opds.server_url_len]);
-        setSecretKey("opds_user", state.app.opds.user_buf[0..u_len]);
-        setSecretKey("opds_pass", state.app.opds.pass_buf[0..p_len]);
-        setKey("opds_connected", if (state.app.opds.connected) "1" else "0");
+        var connection = @import("../services/opds.zig").connectionSnapshot();
+        defer @memset(std.mem.asBytes(&connection), 0);
+        setKey("opds_url", connection.server[0..connection.server_len]);
+        setSecretKey("opds_user", connection.user[0..connection.user_len]);
+        setSecretKey("opds_pass", connection.pass[0..connection.pass_len]);
+        setKey("opds_connected", if (connection.connected) "1" else "0");
     }
 
     // Window state
@@ -338,6 +344,11 @@ pub fn saveIfDirty() void {
 pub fn load() void {
     ensureDir();
     legacy_secrets_mask = 0;
+    restore_opds_connected = false;
+    const remote = @import("../services/remote.zig");
+    const access_pure = @import("../services/access_pure.zig");
+    var restored_bind = remote.bind_mode;
+    var restored_port = remote.port;
 
     // Publish readiness even if the config table cannot be queried. Defaults
     // are a valid fallback; leaving this false forever would strand Settings
@@ -355,9 +366,25 @@ pub fn load() void {
         while (db.step(stmt) == db.c.SQLITE_ROW) {
             const key = db.columnText(stmt, 0) orelse continue;
             const val = db.columnText(stmt, 1) orelse continue;
-            applyConfig(key, val);
+            // Restore listener settings together: row order is unspecified and
+            // restarting during iteration races headless startup.
+            if (std.mem.eql(u8, key, "web_remote")) {
+                state.app.web_remote_enabled = std.mem.eql(u8, val, "1");
+            } else if (std.mem.eql(u8, key, "web_bind")) {
+                restored_bind = access_pure.bindModeFromString(val);
+            } else if (std.mem.eql(u8, key, "web_port")) {
+                if (access_pure.parsePort(val)) |p| restored_port = p;
+            } else {
+                applyConfig(key, val);
+            }
         }
     }
+
+    remote.applyBinding(restored_bind, restored_port);
+    if (state.app.web_remote_enabled and !state.app.is_headless) remote.start();
+
+    // Restore after every row: credentials can appear after the connected row.
+    @import("../services/opds.zig").setConfiguredConnected(restore_opds_connected);
 
     // Existing installs stored these rows as plaintext. Once all values have
     // been restored, replace only the credential rows with protected values.
@@ -407,37 +434,17 @@ pub fn load() void {
     // published to any thread that later loads config_loaded with .acquire.
 }
 
-// `save()` runs ~100 of these inside one transaction, on the render thread.
-// Preparing and finalizing the same INSERT each time re-parsed the SQL and re-ran
-// the query planner once per setting per save. One memoized statement, reset
-// between uses.
-//
-// The cached handle is tagged with the connection it belongs to: `db.deinit`
-// closes the connection and SQLite auto-finalizes every statement still
-// attached to it, so a statement carried across a reopen would be a dangling
-// pointer. A connection change drops the cache instead of reusing it.
-var setkey_stmt: ?*db.Stmt = null;
-var setkey_owner: ?*db.Sqlite3 = null;
-var setkey_mutex: sync.Mutex = .{};
-
+// Batch reuse is thread-local and finalized at save() scope exit. Standalone
+// writes prepare a short-lived statement, including during startup migration.
 fn setKey(key: []const u8, val: []const u8) void {
-    const sql = "INSERT OR REPLACE INTO config (key, value) VALUES (?1, ?2)";
-    const d = db.get() orelse return;
-
-    setkey_mutex.lock();
-    defer setkey_mutex.unlock();
-
-    if (setkey_owner != d) {
-        setkey_stmt = null;
-        setkey_owner = d;
+    if (key_batch) |*batch| {
+        _ = batch.put(key, val);
+        return;
     }
-    if (setkey_stmt == null) setkey_stmt = db.prepare(sql);
-    const stmt = setkey_stmt orelse return;
-    // Clears the previous setting's bindings; safe because db.bind* copies.
-    db.reset(stmt);
-    db.bindText(stmt, 1, key);
-    db.bindText(stmt, 2, val);
-    _ = db.step(stmt);
+    const connection = db.get() orelse return;
+    var writer = key_writer.Writer.init(@ptrCast(connection)) orelse return;
+    defer writer.deinit();
+    _ = writer.put(key, val);
 }
 
 fn setSecretKey(key: []const u8, val: []const u8) void {
@@ -752,7 +759,7 @@ fn applyConfig(key: []const u8, val: []const u8) void {
             if (std.mem.eql(u8, key, "opds_user")) opds.setConfiguredUser(buffer[0..restored_len]) else opds.setConfiguredPassword(buffer[0..restored_len]);
         }
     } else if (std.mem.eql(u8, key, "opds_connected")) {
-        @import("../services/opds.zig").setConfiguredConnected(std.mem.eql(u8, val, "1"));
+        restore_opds_connected = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "win_x")) {
         state.app.win_x = std.fmt.parseInt(i32, val, 10) catch 0;
         state.app.win_restore_pending = true;
@@ -836,22 +843,6 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         @import("../services/ai_server.zig").selectCloudProviderById(val);
     } else if (std.mem.eql(u8, key, "onboarded")) {
         state.app.onboarded = std.mem.eql(u8, val, "1");
-    } else if (std.mem.eql(u8, key, "web_remote")) {
-        state.app.web_remote_enabled = std.mem.eql(u8, val, "1");
-        // Config loads AFTER appInit — honor a persisted enable now.
-        if (state.app.web_remote_enabled) @import("../services/remote.zig").start();
-    } else if (std.mem.eql(u8, key, "web_bind") or std.mem.eql(u8, key, "web_port")) {
-        // applyBinding rather than a bare assignment: key order within the
-        // config is not guaranteed, so `web_remote` may already have started
-        // the server on the defaults by the time these load. applyBinding
-        // no-ops when nothing changed and restarts the listener when it did.
-        const remote = @import("../services/remote.zig");
-        const access_pure = @import("../services/access_pure.zig");
-        if (std.mem.eql(u8, key, "web_bind")) {
-            remote.applyBinding(access_pure.bindModeFromString(val), remote.port);
-        } else if (access_pure.parsePort(val)) |p| {
-            remote.applyBinding(remote.bind_mode, p);
-        }
     } else if (std.mem.eql(u8, key, "custom_titlebar")) {
         state.app.custom_titlebar = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "ai_model_id")) {

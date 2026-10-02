@@ -135,6 +135,30 @@ pub fn resultRow(idx: usize) ?pure.Station {
     return state.app.radio.results[idx];
 }
 
+pub const RESULT_CAPACITY: usize = @typeInfo(@TypeOf(state.app.radio.results)).array.len;
+pub const CatalogSnapshot = struct {
+    count: usize,
+    loading: bool,
+    loading_more: bool,
+    has_more: bool,
+    fetch_error: bool,
+};
+/// Caller-owned heap storage, copied once under the publication lock.
+pub fn copyCatalogSnapshot(out: []pure.Station) CatalogSnapshot {
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    const available = @min(state.app.radio.result_count, RESULT_CAPACITY);
+    const count = @min(available, out.len);
+    @memcpy(out[0..count], state.app.radio.results[0..count]);
+    return .{
+        .count = count,
+        .loading = state.app.radio.is_loading.load(.acquire),
+        .loading_more = loading_more.load(.acquire),
+        .has_more = more_available and available < RESULT_CAPACITY,
+        .fetch_error = state.app.radio.fetch_error,
+    };
+}
+
 /// Reads one station from `r`; null when the blob is truncated.
 fn deserializeStation(r: *ccp.Reader) ?pure.Station {
     var s = pure.Station{};
@@ -518,6 +542,22 @@ pub fn playStation(idx: usize) void {
     }
     const s = state.app.radio.results[idx];
     parse_mutex.unlock();
+    playCopiedStation(s);
+}
+
+pub fn stationForAction(uuid: []const u8) ?pure.Station {
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    return pure.stationByIdentity(state.app.radio.results[0..@min(state.app.radio.result_count, state.app.radio.results.len)], uuid);
+}
+
+pub fn playStationIdentity(uuid: []const u8) bool {
+    const station = stationForAction(uuid) orelse return false;
+    playCopiedStation(station);
+    return true;
+}
+
+fn playCopiedStation(s: pure.Station) void {
     const src = if (s.url_resolved_len > 0)
         s.url_resolved[0..s.url_resolved_len]
     else
@@ -815,7 +855,7 @@ fn renderCard(i: usize, card_w: f32, s: *const pure.Station) void {
         bw.drawFocus();
         bw.deinit();
         // Same click target as the old row's Play button.
-        if (clicked) playStation(i);
+        if (clicked) playCopiedStation(s.*);
     }
 
     // Name row: stream-health dot + title. Probing is lazy — rendering a card
@@ -975,4 +1015,45 @@ fn renderResults() void {
             state.wakeUi();
         }
     }
+}
+
+test "Radio action keeps selected identity across search publication" {
+    const r = &state.app.radio;
+    const saved_count = r.result_count;
+    const saved_a = r.results[0];
+    const saved_b = r.results[1];
+    defer {
+        r.result_count = saved_count;
+        r.results[0] = saved_a;
+        r.results[1] = saved_b;
+    }
+    var a = pure.Station{};
+    a.stationuuid[0] = 'a';
+    a.stationuuid_len = 1;
+    a.url[0] = 'A';
+    a.url_len = 1;
+    var b = pure.Station{};
+    b.stationuuid[0] = 'b';
+    b.stationuuid_len = 1;
+    b.url[0] = 'B';
+    b.url_len = 1;
+    r.result_count = 2;
+    r.results[0] = a;
+    r.results[1] = b;
+    const rendered = stationForAction("a").?;
+    const copied_rows = try std.testing.allocator.alloc(pure.Station, 2);
+    defer std.testing.allocator.free(copied_rows);
+    const snapshot = copyCatalogSnapshot(copied_rows);
+    try std.testing.expectEqual(@as(usize, 2), snapshot.count);
+
+    r.results[0] = b;
+    r.results[1] = a;
+    const selected = stationForAction("a").?;
+    try std.testing.expectEqualStrings("A", selected.url[0..selected.url_len]);
+    r.result_count = 1;
+    try std.testing.expect(stationForAction("a") == null);
+    try std.testing.expectEqual(@as(usize, 2), snapshot.count);
+    try std.testing.expectEqualStrings("a", copied_rows[0].stationuuid[0..copied_rows[0].stationuuid_len]);
+    try std.testing.expectEqualStrings("b", copied_rows[1].stationuuid[0..copied_rows[1].stationuuid_len]);
+    try std.testing.expectEqualStrings("A", rendered.url[0..rendered.url_len]);
 }

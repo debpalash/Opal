@@ -404,6 +404,7 @@ pub const MediaPlayer = struct {
     resume_seeked: bool = false,
     restore_session_position: ?f64 = null,
     provider_resume_position: ?f64 = null,
+    provider_start_intent: playback_load.ProviderStartIntent = .{},
     restore_session_paused: bool = true,
     restore_session_speed: f64 = 1,
     /// Monotonic deadline for playback-position persistence. Database writes
@@ -800,6 +801,7 @@ pub const MediaPlayer = struct {
         self.resume_seeked = false;
         self.restore_session_position = null;
         self.provider_resume_position = null;
+        self.provider_start_intent = .{};
         self.restore_session_paused = true;
         self.restore_session_speed = 1;
         self.last_position_save_ms = 0;
@@ -975,8 +977,8 @@ pub const MediaPlayer = struct {
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "demuxer-max-back-bytes", "100MiB");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "force-seekable", "no");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "hr-seek", "yes");
-        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "keep-open", "always");
-        _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "loop-file", "inf");
+        var initial_playback: MpvPlaybackSink = .{ .ctx = self.mpv_ctx };
+        playback_load.configureInitialPlayback(&initial_playback);
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "demuxer-seekable-cache", "auto");
         _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "idle", "yes");
 
@@ -1458,6 +1460,7 @@ pub const MediaPlayer = struct {
         self.youtube_quality_fallback_pending = false;
         self.resume_seeked = false;
         self.provider_resume_position = playback_load.saneResumePosition(request.resume_position_secs);
+        self.provider_start_intent.arm(request.resume_position_secs);
 
         // Anime-Skip: consume a one-shot arm from the anime play flow. Every
         // load starts non-anime; the anime episode load flow arms just before
@@ -2043,6 +2046,7 @@ pub const MediaPlayer = struct {
         self.np_subtitle_len = 0;
         self.restore_session_position = null;
         self.provider_resume_position = null;
+        self.provider_start_intent = .{};
         self.resume_seeked = false;
         self.last_good_pos_secs = 0;
         self.last_seen_pos = 0;
@@ -2836,6 +2840,7 @@ pub fn updateTorrentBackgroundTasks() void {
                 p.cached_video_height = 0;
                 p.cached_sub_text_len = 0;
             } else if (ev.*.event_id == c.mpv.MPV_EVENT_FILE_LOADED) {
+                const provider_started = p.provider_start_intent.consume();
                 p.youtube_default_retry_pending = false;
                 p.youtube_quality_fallback_pending = false;
                 p.load_error_len = 0;
@@ -2876,6 +2881,16 @@ pub fn updateTorrentBackgroundTasks() void {
                 // Trigger-to-play milestone (audio-only reports + disarms here;
                 // video reports again at its first published frame).
                 openFileLoaded(has_video);
+                // Audio and headless playback have no rendered first frame to
+                // clear the loading flag. Leave native video readiness owned
+                // by its first uploaded frame.
+                if (!has_video or state.app.is_headless) {
+                    p.is_loading = false;
+                    // A new provider play request (including the next book
+                    // track) must not inherit mpv's EOF/keep-open pause state.
+                    // Restored sessions retain their explicitly paused state.
+                    if (provider_started) _ = c.mpv.mpv_set_property_string(p.mpv_ctx, "pause", "no");
+                }
                 if (!has_sub and state.app.auto_download_subs and p.current_torrent_id < 0) {
                     // Non-torrent playback: fire the keyless subtitle engine
                     // (rest.opensubtitles.org → Gestdown) off the media title or
@@ -2992,6 +3007,7 @@ pub fn updateTorrentBackgroundTasks() void {
                     p.setLoadError(message);
                 }
                 if (ended.reason != c.mpv.MPV_END_FILE_REASON_EOF) continue;
+                if (@import("../services/audiobookshelf.zig").handlePlayerEof(p)) continue;
                 if (state.app.playing_episode.matches(p.current_url[0..p.current_url_len])) {
                     // A streaming torrent can hit a temporary EOF before its
                     // remaining pieces arrive. Only advance after a real end.

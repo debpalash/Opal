@@ -75,7 +75,12 @@ def main() -> int:
     global BINARY
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", type=Path)
+    parser.add_argument("--port", type=int, default=setup_live.DEFAULT_PORT,
+                        help="unused port seeded into each isolated profile")
     args = parser.parse_args()
+    if not 1 <= args.port <= 65535:
+        parser.error("--port must be between 1 and 65535")
+    setup_live.PORT = args.port
     env_binary = os.environ.get("OPAL_HEADLESS_BIN")
     BINARY = (args.binary or (Path(env_binary) if env_binary else None))
     if BINARY is not None:

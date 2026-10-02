@@ -65,7 +65,7 @@ def test_service_read_apis():
     rm = _remote_api()
     checks = {
         # comics: sr_* stay private (they also own cover pixels + GPU textures).
-        "comics search accessors": "pub fn searchRow(" in cm and "pub fn searchCount(" in cm
+        "comics owned snapshot": "pub fn copySearchSnapshot(" in cm and "pub const OwnedSearchRow" in cm
             and "pub fn searching()" in cm,
         # sr_searching was a plain bool written by a worker; connection threads
         # poll it now too.
@@ -75,7 +75,7 @@ def test_service_read_apis():
         "novels accessors copy under mutex": "pub fn resultRow(" in nv and "pub fn chapterRow(" in nv
             and nv.count("parse_mutex.lock();\n    defer parse_mutex.unlock();") >= 4,
         "novels rows are copies": "pub const ListRow = struct" in nv and "title_buf: [256]u8" in nv,
-        "routes use them": "comics_svc.searchRow(i)" in rm and "nov.resultRow(i)" in rm,
+        "routes use them": "comics_svc.copySearchSnapshot(rows)" in rm and "nov.copyReaderSnapshot(n)" in rm and "n.results[0..n.result_count]" in rm,
     }
     missing = [k for k, ok in checks.items() if not ok]
     if missing:
@@ -98,7 +98,7 @@ def test_server_verticals():
         "plex pin flow": '"/plex/connect"' in rm and '\\"pin\\":\\"' in rm
             and "plex.tv/link" in ui,
         # opds user_buf/pass_buf are NUL-terminated with no _len companion.
-        "opds creds nul-terminated": "o.user_buf[n] = 0;" in rm and "o.pass_buf[n] = 0;" in rm,
+        "opds credentials configured atomically": "opds.configureConnection(" in rm and "@memset(std.mem.asBytes(&connection), 0)" in rm,
         "bad index is a 404": rm.count('sendJsonStatus(stream, "404 Not Found"') >= 5,
         "tabs render sign-in": all(f'id="page-{t}"' in ui for t in ("abs", "opds", "plex"))
             and 'id="abs-login"' in ui and 'id="opds-login"' in ui,
@@ -117,9 +117,12 @@ def test_reader_tabs():
         # Page <img> must carry the token in the query — it can't set a header.
         "reader uses cookie-authenticated URL": "/api/comics/page?i=${i}" in ui
             and "encodeURIComponent(TOKEN)" not in ui,
-        # Pages land out of order across 8 download workers, so only the
-        # contiguous downloaded prefix is safe to render.
-        "renders downloaded prefix": "length: d.downloaded" in ui,
+        # Completion count is not a contiguous prefix. Actual ready indices
+        # avoid 404 images and insertBefore preserves reading order without
+        # replacing already loaded nodes on every poll.
+        "renders actual ready pages in order": "d.ready_pages" in ui
+            and "pages.insertBefore(image, following || null)" in ui
+            and "ready_pages" in rm and "comics_svc.pageReady(idx)" in rm,
         "reader closes server-side": "api('/comics/close')" in ui,
         # drama.zig has no search entry point — don't ship a box that can't work.
         "drama is browse-only": "fn apiDrama(" in rm and '"/drama/search"' not in rm
@@ -149,15 +152,15 @@ def test_opds_curl_fetch():
         # BOTH https and http, while std.http's client.request failed at connect
         # for either scheme — so OPDS could not reach a server the rest of the
         # app talks to fine. tmdb_api.zig documents the same workaround.
-        "fetches via curl": '"curl"' in op and '"-sL"' in op,
+        "fetches via curl": '"curl"' in op and '"-fsSL"' in op,
         "no std.http left": "http.fetch(" not in op and 'const http = @import("../core/http.zig")' not in op,
         # OPDS catalogs redirect constantly (Komga /opds → /opds/v1.2, http→https).
-        "follows redirects": '"-sL"' in op,
+        "follows redirects": '"-fsSL"' in op,
         "request is bounded": '"--max-time"' in op,
         # Keep the Basic credential out of argv: curl reads its authenticated
         # header through a closed stdin config pipe.
         "basic auth preserved": "pure.basicAuthHeader(user, pass, &auth_buf)" in op
-            and '"--config",   "-"' in op
+            and '"--config"' in op and '"-"' in op
             and "curl_secret.zig" in op
             and "spawnWithHeaders(&child" in op,
         "atom accept header": "Accept: application/atom+xml" in op,
@@ -165,7 +168,7 @@ def test_opds_curl_fetch():
     missing = [k for k, ok in checks.items() if not ok]
     if missing:
         return "fail", "opds fetch incomplete: " + ", ".join(missing)
-    return "pass", "OPDS over curl (-sL, bounded, Basic auth via stdin) — verified live against Gutenberg"
+    return "pass", "OPDS curl contract: redirects, bounded requests and Basic auth via stdin"
 
 
 @test("Web UI consolidated to one origin without a second build", "Web UI")

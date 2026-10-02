@@ -29,6 +29,8 @@ pub const Root = struct {
 
 pub var scanning = std.atomic.Value(bool).init(false);
 var indexed_once = std.atomic.Value(bool).init(false);
+// Scan worker is single-owner; only its private connection uses this batch.
+var batch_count: usize = 0;
 
 pub fn isMediaFile(name: []const u8) bool {
     const extensions = [_][]const u8{
@@ -60,28 +62,40 @@ fn scanWorker() void {
     var roots: [MAX_ROOTS]Root = undefined;
     const root_count = listRoots(&roots);
     const token = io.monotonicMilliTimestamp();
-    // Prepared once for the whole scan. Preparing and finalizing this INSERT per
-    // file re-parsed the SQL and re-ran the query planner up to MAX_FILES times
-    // for a single library walk.
-    const upsert = db.prepare(upsert_sql);
+    // SQLite transactions are connection scoped. A scan must never begin or
+    // commit a transaction on the connection shared with config and Home.
+    var dbpath: [512]u8 = undefined;
+    var cpath: [512]u8 = undefined;
+    const path = @import("../core/paths.zig").zigzagDbFile(&dbpath);
+    const zpath = std.fmt.bufPrintZ(&cpath, "{s}", .{path}) catch return;
+    var connection: ?*db.Sqlite3 = null;
+    if (db.c.sqlite3_open_v2(zpath.ptr, &connection, db.c.SQLITE_OPEN_READWRITE | db.c.SQLITE_OPEN_FULLMUTEX, null) != db.c.SQLITE_OK) {
+        if (connection) |handle| _ = db.c.sqlite3_close_v2(handle);
+        return;
+    }
+    defer _ = db.c.sqlite3_close_v2(connection);
+    batch_count = 0;
+    _ = db.c.sqlite3_busy_timeout(connection, 1000);
+    var upsert: ?*db.Stmt = null;
+    if (db.c.sqlite3_prepare_v2(connection, upsert_sql, -1, &upsert, null) != db.c.SQLITE_OK) return;
     defer db.finalize(upsert);
     for (roots[0..root_count]) |*entry| {
         const root_path = entry.path[0..entry.path_len];
         if (!rootAvailable(root_path)) continue;
-        // One transaction per root rather than one implicit commit per file.
-        // In WAL mode the per-file version meant an fsync per indexed file, which
-        // dominated the entire scan. Scoped to a root so the write lock is never
-        // held across a whole library. Every exit path below commits — leaving
-        // this open would wedge the shared connection for the rest of the session.
-        db.exec("BEGIN IMMEDIATE");
-        defer db.exec("COMMIT");
         var count: usize = 0;
-        scanDir(root_path, root_path, token, 0, &count, upsert);
-        // A cancelled scan commits what it indexed; the stale-row delete is
-        // skipped, so the previous generation's rows simply survive one more
-        // scan instead of being dropped.
-        if (@import("../core/workers.zig").isQuitting()) continue;
-        const stale = db.prepare("DELETE FROM local_media WHERE root=?1 AND scan_token<>?2") orelse continue;
+        var complete = true;
+        scanDir(root_path, root_path, token, 0, &count, upsert, &complete);
+        if (batch_count > 0) {
+            if (db.c.sqlite3_exec(connection, "COMMIT", null, null, null) != db.c.SQLITE_OK) {
+                _ = db.c.sqlite3_exec(connection, "ROLLBACK", null, null, null);
+                complete = false;
+            }
+            batch_count = 0;
+        }
+        // Never delete unvisited files after cancellation, I/O errors or limits.
+        if (!complete or @import("../core/workers.zig").isQuitting()) continue;
+        var stale: ?*db.Stmt = null;
+        if (db.c.sqlite3_prepare_v2(connection, "DELETE FROM local_media WHERE root=?1 AND scan_token<>?2", -1, &stale, null) != db.c.SQLITE_OK) continue;
         db.bindText(stale, 1, root_path);
         db.bindInt64(stale, 2, token);
         _ = db.step(stale);
@@ -101,38 +115,54 @@ fn rootAvailable(path: []const u8) bool {
     return true;
 }
 
-fn scanDir(root: []const u8, path: []const u8, token: i64, depth: u8, count: *usize, upsert: ?*db.Stmt) void {
-    if (depth > MAX_DEPTH or count.* >= MAX_FILES or @import("../core/workers.zig").isQuitting()) return;
+fn scanDir(root: []const u8, path: []const u8, token: i64, depth: u8, count: *usize, upsert: ?*db.Stmt, complete: *bool) void {
+    if (depth > MAX_DEPTH or count.* >= MAX_FILES or @import("../core/workers.zig").isQuitting()) {
+        complete.* = false;
+        return;
+    }
     var dir = if (absolutePath(path))
-        io.openDirAbsolute(path, .{ .iterate = true }) catch return
+        io.openDirAbsolute(path, .{ .iterate = true }) catch {
+            complete.* = false;
+            return;
+        }
     else
-        io.cwdOpenDir(path, .{ .iterate = true }) catch return;
+        io.cwdOpenDir(path, .{ .iterate = true }) catch {
+            complete.* = false;
+            return;
+        };
     defer dir.close(io.io());
     var iterator = dir.iterate();
     while (count.* < MAX_FILES) {
-        const entry = (iterator.next(io.io()) catch null) orelse break;
+        const entry = (iterator.next(io.io()) catch {
+            complete.* = false;
+            break;
+        }) orelse break;
         var child_buf: [2048]u8 = undefined;
-        const child = std.fmt.bufPrint(&child_buf, "{s}/{s}", .{ path, entry.name }) catch continue;
+        const child = std.fmt.bufPrint(&child_buf, "{s}/{s}", .{ path, entry.name }) catch {
+            complete.* = false;
+            continue;
+        };
         switch (entry.kind) {
-            .directory => scanDir(root, child, token, depth + 1, count, upsert),
+            .directory => scanDir(root, child, token, depth + 1, count, upsert, complete),
             .file => {
                 if (!isMediaFile(entry.name)) continue;
-                indexFile(root, child, entry.name, token, upsert);
+                if (!indexFile(root, child, entry.name, token, upsert)) complete.* = false;
                 count.* += 1;
             },
             else => {}, // never follow symlinks or special files
         }
     }
+    if (count.* >= MAX_FILES) complete.* = false;
 }
 
 const upsert_sql =
     "INSERT INTO local_media(path,root,title,size,mtime,fingerprint,scan_token) VALUES(?1,?2,?3,?4,?5,?6,?7) " ++
     "ON CONFLICT(path) DO UPDATE SET root=excluded.root,title=excluded.title,size=excluded.size,mtime=excluded.mtime,fingerprint=excluded.fingerprint,scan_token=excluded.scan_token";
 
-fn indexFile(root: []const u8, path: []const u8, basename: []const u8, token: i64, shared: ?*db.Stmt) void {
-    const file = if (absolutePath(path)) io.openFileAbsolute(path, .{}) catch return else io.cwdOpenFile(path, .{}) catch return;
+fn indexFile(root: []const u8, path: []const u8, basename: []const u8, token: i64, shared: ?*db.Stmt) bool {
+    const file = if (absolutePath(path)) io.openFileAbsolute(path, .{}) catch return false else io.cwdOpenFile(path, .{}) catch return false;
     defer file.close(io.io());
-    const stat = file.stat(io.io()) catch return;
+    const stat = file.stat(io.io()) catch return false;
     var title_buf: [256]u8 = undefined;
     const title = @import("../core/display_name_pure.zig").clean(&title_buf, basename);
     var fingerprint_buf: [32]u8 = undefined;
@@ -140,7 +170,7 @@ fn indexFile(root: []const u8, path: []const u8, basename: []const u8, token: i6
     // Fall back to a private statement when the scan-wide one is unavailable,
     // so a prepare failure at scan start degrades to the old behaviour instead
     // of silently indexing nothing.
-    const stmt = shared orelse (db.prepare(upsert_sql) orelse return);
+    const stmt = shared orelse (db.prepare(upsert_sql) orelse return false);
     defer if (shared == null) db.finalize(stmt);
     // Clears the previous row's bindings so every bind below lands cleanly.
     // Safe because db.bind* passes SQLITE_TRANSIENT (SQLite copies each value).
@@ -152,7 +182,22 @@ fn indexFile(root: []const u8, path: []const u8, basename: []const u8, token: i6
     db.bindInt64(stmt, 5, @intCast(@divTrunc(stat.mtime.nanoseconds, std.time.ns_per_s)));
     db.bindText(stmt, 6, fingerprint);
     db.bindInt64(stmt, 7, token);
-    _ = db.step(stmt);
+    const connection = db.c.sqlite3_db_handle(stmt);
+    if (batch_count == 0 and db.c.sqlite3_exec(connection, "BEGIN IMMEDIATE", null, null, null) != db.c.SQLITE_OK) return false;
+    if (db.step(stmt) != db.c.SQLITE_DONE) {
+        _ = db.c.sqlite3_exec(connection, "ROLLBACK", null, null, null);
+        batch_count = 0;
+        return false;
+    }
+    batch_count += 1;
+    if (batch_count == 128) {
+        batch_count = 0;
+        if (db.c.sqlite3_exec(connection, "COMMIT", null, null, null) != db.c.SQLITE_OK) {
+            _ = db.c.sqlite3_exec(connection, "ROLLBACK", null, null, null);
+            return false;
+        }
+    }
+    return true;
 }
 
 fn absolutePath(path: []const u8) bool {
@@ -211,10 +256,15 @@ fn contentFingerprint(file: std.Io.File, size: u64, out: []u8) []const u8 {
 }
 
 pub fn search(query_raw: []const u8, duplicates_only: bool, out: []Item) usize {
+    return searchPage(query_raw, duplicates_only, 0, out).count;
+}
+
+pub const SearchPage = struct { count: usize = 0, total: usize = 0, failed: bool = false };
+pub fn searchPage(query_raw: []const u8, duplicates_only: bool, offset: usize, out: []Item) SearchPage {
     const query = std.mem.trim(u8, query_raw, " \t\r\n");
-    if (query.len > 500 or out.len == 0) return 0;
+    if (query.len > 500 or out.len == 0) return .{ .failed = true };
     var pattern_buf: [520]u8 = undefined;
-    const pattern = std.fmt.bufPrint(&pattern_buf, "%{s}%", .{query}) catch return 0;
+    const pattern = std.fmt.bufPrint(&pattern_buf, "%{s}%", .{query}) catch return .{ .failed = true };
     const stmt = db.prepare(if (duplicates_only)
         // The WHERE clause used to repeat the same COUNT(*) subquery the SELECT
         // list already computes, so every candidate row paid for it twice. The
@@ -224,17 +274,21 @@ pub fn search(query_raw: []const u8, duplicates_only: bool, out: []Item) usize {
             "(SELECT COUNT(*) FROM local_media d WHERE d.fingerprint=local_media.fingerprint) " ++
             "FROM local_media WHERE fingerprint<>'' " ++
             "AND fingerprint IN (SELECT fingerprint FROM local_media WHERE fingerprint<>'' GROUP BY fingerprint HAVING COUNT(*)>1) " ++
-            "AND (title LIKE ?1 COLLATE NOCASE OR display_title LIKE ?1 COLLATE NOCASE) ORDER BY fingerprint,mtime DESC LIMIT ?2"
+            "AND (title LIKE ?1 COLLATE NOCASE OR display_title LIKE ?1 COLLATE NOCASE) ORDER BY fingerprint,mtime DESC,rowid DESC LIMIT ?2 OFFSET ?3"
     else
         "SELECT rowid,path,COALESCE(NULLIF(display_title,''),title),media_kind,size," ++
             "(SELECT COUNT(*) FROM local_media d WHERE d.fingerprint=local_media.fingerprint AND d.fingerprint<>'') " ++
             "FROM local_media WHERE title LIKE ?1 COLLATE NOCASE OR display_title LIKE ?1 COLLATE NOCASE " ++
-            "ORDER BY mtime DESC LIMIT ?2") orelse return 0;
+            "ORDER BY mtime DESC,rowid DESC LIMIT ?2 OFFSET ?3") orelse return .{ .failed = true };
     defer db.finalize(stmt);
     db.bindText(stmt, 1, pattern);
     db.bindInt64(stmt, 2, @intCast(@min(out.len, MAX_RESULTS)));
+    db.bindInt64(stmt, 3, @intCast(@min(offset, std.math.maxInt(i64))));
     var count: usize = 0;
-    while (count < out.len and db.step(stmt) == db.c.SQLITE_ROW) : (count += 1) {
+    while (count < @min(out.len, MAX_RESULTS)) : (count += 1) {
+        const result = db.step(stmt);
+        if (result == db.c.SQLITE_DONE) break;
+        if (result != db.c.SQLITE_ROW) return .{ .count = count, .failed = true };
         out[count] = .{};
         out[count].id = db.columnInt64(stmt, 0);
         db.copyColumn(stmt, 1, &out[count].path, &out[count].path_len);
@@ -244,7 +298,14 @@ pub fn search(query_raw: []const u8, duplicates_only: bool, out: []Item) usize {
         out[count].duplicate_count = @intCast(@min(@max(db.columnInt64(stmt, 5), 1), std.math.maxInt(u16)));
     }
     if (!indexed_once.load(.acquire)) scanAsync();
-    return count;
+    const total_stmt = db.prepare(if (duplicates_only)
+        "SELECT COUNT(*) FROM local_media WHERE fingerprint<>'' AND fingerprint IN (SELECT fingerprint FROM local_media WHERE fingerprint<>'' GROUP BY fingerprint HAVING COUNT(*)>1) AND (title LIKE ?1 COLLATE NOCASE OR display_title LIKE ?1 COLLATE NOCASE)"
+    else
+        "SELECT COUNT(*) FROM local_media WHERE title LIKE ?1 COLLATE NOCASE OR display_title LIKE ?1 COLLATE NOCASE") orelse return .{ .count = count, .failed = true };
+    defer db.finalize(total_stmt);
+    db.bindText(total_stmt, 1, pattern);
+    if (db.step(total_stmt) != db.c.SQLITE_ROW) return .{ .count = count, .failed = true };
+    return .{ .count = count, .total = @intCast(@max(db.columnInt64(total_stmt, 0), 0)) };
 }
 
 pub fn correct(id: i64, title: []const u8, kind: []const u8) bool {

@@ -17,16 +17,43 @@ pub fn handle(stream: std.Io.net.Stream, method: []const u8, path: []const u8, q
 
 fn list(stream: std.Io.net.Stream, query: []const u8) void {
     var query_buf: [512]u8 = undefined;
-    const text = if (wire.queryParam(query, "q")) |raw| (wire.urlDecode(raw, &query_buf) orelse "") else "";
+    const text = if (wire.queryParam(query, "q")) |raw| (if (raw.len == 0) "" else wire.urlDecode(raw, &query_buf) orelse {
+        wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"invalid library query\"}");
+        return;
+    }) else "";
+    if (text.len > 500) {
+        wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"library query too long\"}");
+        return;
+    }
     const duplicates = std.mem.eql(u8, wire.queryParam(query, "duplicates") orelse "", "1");
-    var rows: [library.MAX_RESULTS]library.Item = undefined;
-    const count = library.search(text, duplicates, &rows);
+    const offset = std.fmt.parseInt(usize, wire.queryParam(query, "offset") orelse "0", 10) catch {
+        wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"invalid library offset\"}");
+        return;
+    };
+    const limit = std.fmt.parseInt(usize, wire.queryParam(query, "limit") orelse "64", 10) catch 0;
+    if (limit == 0 or limit > library.MAX_RESULTS or offset > std.math.maxInt(i64)) {
+        wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"library page out of range\"}");
+        return;
+    }
     const alloc = @import("../core/alloc.zig").allocator;
-    const json = alloc.alloc(u8, 48 * 1024) catch return;
+    const rows = alloc.alloc(library.Item, limit) catch {
+        wire.sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
+        return;
+    };
+    defer alloc.free(rows);
+    const page = library.searchPage(text, duplicates, offset, rows);
+    if (page.failed) {
+        wire.sendJsonStatus(stream, "503 Service Unavailable", "{\"error\":\"local library index unavailable\"}");
+        return;
+    }
+    const json = alloc.alloc(u8, 256 * 1024) catch {
+        wire.sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
+        return;
+    };
     defer alloc.free(json);
     var w = std.Io.Writer.fixed(json);
-    w.print("{{\"scanning\":{s},\"items\":[", .{if (library.scanning.load(.acquire)) "true" else "false"}) catch return;
-    for (rows[0..count], 0..) |*row, index| {
+    w.print("{{\"scanning\":{s},\"total\":{d},\"offset\":{d},\"limit\":{d},\"returned\":{d},\"has_more\":{s},\"items\":[", .{ if (library.scanning.load(.acquire)) "true" else "false", page.total, offset, limit, page.count, if (offset + page.count < page.total) "true" else "false" }) catch return;
+    for (rows[0..page.count], 0..) |*row, index| {
         if (index > 0) w.writeAll(",") catch return;
         w.print("{{\"id\":{d},\"title\":\"", .{row.id}) catch return;
         wire.writeJsonString(&w, row.title[0..row.title_len]);

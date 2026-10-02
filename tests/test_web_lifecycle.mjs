@@ -79,7 +79,7 @@ function fixture(...files){
     localStorage:{getItem:() => '', removeItem(){}}, history:{},
     navigator:{onLine:true}, window,
     matchMedia:() => ({matches:false, addEventListener(){}}),
-    fetch: async () => ({json:async () => ({})}),
+    fetch: async () => ({status:200, ok:true, json:async () => ({})}),
     toast(){},
   });
   for (const file of files) vm.runInContext(source(file), context, {filename:file});
@@ -498,4 +498,264 @@ test('music catalog response from the previous source cannot overwrite the selec
   await flush();
   assert.equal(f.$('mu-source').value, '4');
   assert.doesNotMatch(f.$('mu-results').innerHTML, /Old source/);
+});
+
+test('API reads reject HTTP failures instead of reporting an empty catalog', async () => {
+  const f = fixture('core.js');
+  f.run(`fetch = async () => ({status:503, ok:false, json:async () => ({error:'Library database unavailable'})})`);
+  await assert.rejects(f.run("api('/local-library')"), error => error.status === 503 && /unavailable/.test(error.message));
+});
+
+test('API reads preserve usable feature data with a boolean provider error', async () => {
+  const f = fixture('core.js');
+  f.run(`fetch = async () => ({status:200, ok:true, json:async () => ({error:true, results:[{title:'Cached work'}]})})`);
+  assert.equal((await f.run("api('/novels')")).results[0].title, 'Cached work');
+});
+
+test('API mutations expose HTTP status and never accept malformed success JSON', async () => {
+  const f = fixture('core.js');
+  f.run(`fetch = async () => ({status:404, ok:false, json:async () => ({error:'Not tracked'})})`);
+  await assert.rejects(f.run("apiMutation('/library/action')"), error => error.status === 404);
+  f.run(`fetch = async () => ({status:200, ok:true, json:async () => {throw new SyntaxError('bad JSON')}})`);
+  await assert.rejects(f.run("api('/library')"), /invalid|malformed/i);
+});
+
+// These exercise the full production scripts and their deferred network seam.
+// The minimal Element fixture supplies only the methods these status controls use.
+function transferFixture(){
+  const f = fixture('catalog.js');
+  const hint = f.$('torrents-load-error');
+  hint.remove = () => { hint.textContent = ''; };
+  hint.append = (...children) => { hint.children = children; };
+  return f;
+}
+const transferRow = (id, name) => ({id, name, pct:20, rate:1024, seeds:3, paused:false});
+
+test('transfer pagination uses server totals and stable transfer IDs', async () => {
+  const f = transferFixture();
+  const first = f.run('loadTorrents()');
+  f.take('/torrents?offset=0&limit=96').resolve({torrents:[transferRow(104, 'First page')],total:150,has_more:true});
+  await first;
+  assert.match(f.$('torrents').innerHTML, /Showing 1–1 of 150 transfers/);
+  assert.match(f.$('torrents').innerHTML, /data-id="104"/);
+  f.$('torrents-more').onclick();
+  f.take('/torrents?offset=96&limit=96').resolve({torrents:[transferRow(205, 'Second page')],total:150,has_more:false});
+  await flush();
+  assert.match(f.$('torrents').innerHTML, /Showing 97–97 of 150 transfers/);
+  assert.match(f.$('torrents').innerHTML, /data-id="205"/);
+  assert.match(f.$('torrents').innerHTML, /id="torrents-more" disabled/);
+  f.$('torrents-previous').onclick();
+  f.take('/torrents?offset=0&limit=96').resolve({torrents:[transferRow(104, 'First page')],total:150,has_more:true});
+  await flush();
+  assert.match(f.$('torrents').innerHTML, /First page/);
+});
+
+test('failed transfer refresh preserves loaded rows and Retry requests the same page', async () => {
+  const f = transferFixture();
+  const first = f.run('loadTorrents()');
+  f.take('/torrents?offset=0&limit=96').resolve({torrents:[transferRow(104, 'Loaded transfer')],total:1,has_more:false});
+  await first;
+  const rendered = f.$('torrents').innerHTML;
+  const refresh = f.run('loadTorrents()');
+  f.take('/torrents?offset=0&limit=96').reject(new Error('Connection lost'));
+  await refresh;
+  assert.equal(f.$('torrents').innerHTML, rendered);
+  assert.match(f.$('torrents-load-error').textContent, /Previously loaded transfers remain visible/);
+  const retry = f.$('torrents-load-error').children.at(-1);
+  const retried = retry.onclick();
+  f.take('/torrents?offset=0&limit=96').resolve({torrents:[transferRow(104, 'Refreshed transfer')],total:1,has_more:false});
+  await retried;
+  assert.match(f.$('torrents').innerHTML, /Refreshed transfer/);
+});
+
+test('old transfer response cannot overwrite a later page response', async () => {
+  const f = transferFixture();
+  const old = f.run('loadTorrents()');
+  const oldRequest = f.take('/torrents?offset=0&limit=96');
+  f.run('torrentPageOffset = 96');
+  const latest = f.run('loadTorrents()');
+  f.take('/torrents?offset=96&limit=96').resolve({torrents:[transferRow(205, 'Current page')],total:150,has_more:false});
+  await latest;
+  oldRequest.resolve({torrents:[transferRow(104, 'Stale page')],total:150,has_more:true});
+  await old;
+  assert.match(f.$('torrents').innerHTML, /Current page/);
+  assert.doesNotMatch(f.$('torrents').innerHTML, /Stale page/);
+});
+
+test('removing the final transfer page requests the last remaining valid page', async () => {
+  const f = transferFixture();
+  f.run('torrentPageOffset = 96');
+  const pending = f.run('loadTorrents()');
+  f.take('/torrents?offset=96&limit=96').resolve({torrents:[],total:1,has_more:false});
+  await flush();
+  f.take('/torrents?offset=0&limit=96').resolve({torrents:[transferRow(104, 'Remaining transfer')],total:1,has_more:false});
+  await pending;
+  assert.match(f.$('torrents').innerHTML, /Showing 1–1 of 1 transfers/);
+  assert.equal(f.run('torrentPageOffset'), 0);
+});
+
+function watchingFixture(){
+  const f = fixture('integrations.js');
+  f.run("localLibrarySelection = 'already-loaded'; localLibraryLoaded = true;");
+  return f;
+}
+function takeWatching(f){
+  const request = f.requests.find(r => !r.taken && r.path.startsWith('/library?'));
+  assert.ok(request, 'Missing Watching library request');
+  request.taken = true;
+  return request;
+}
+const watchingRow = name => ({name,id:'42',kind:'tv',tmdb_id:42,status:'Watching',user_status:'watching',watched:1,total:8,pct:12,has_next:true,next_season:1,next_episode:2});
+
+test('Watching unchanged version preserves rows and totals while updating live sync status', async () => {
+  const f = watchingFixture();
+  const first = f.run('loadWatch()'), firstRequest = takeWatching(f);
+  assert.equal(new URLSearchParams(firstRequest.path.split('?')[1]).has('since'), false);
+  firstRequest.resolve({version:'7:all:all:smart:0:48',items:[watchingRow('Tracked show')],total:100,catalog_total:120,syncing:false});
+  await first;
+  const refresh = f.run('loadWatch()'), secondRequest = takeWatching(f);
+  assert.equal(new URLSearchParams(secondRequest.path.split('?')[1]).get('since'), '7:all:all:smart:0:48');
+  secondRequest.resolve({unchanged:true,version:'7:all:all:smart:0:48',syncing:true});
+  await refresh;
+  assert.match(f.$('watch-list').innerHTML, /Tracked show/);
+  assert.equal(f.run('watchTotal'), 100);
+  assert.equal(f.run('watchCatalogTotal'), 120);
+  assert.equal(f.run('watchSyncing'), true);
+});
+
+test('Watching stale data and stale errors cannot overwrite a newer request or version', async () => {
+  const f = watchingFixture();
+  const old = f.run('loadWatch()'), oldRequest = takeWatching(f);
+  const latest = f.run('loadWatch()'), newRequest = takeWatching(f);
+  newRequest.resolve({version:'new-version',items:[watchingRow('Current library')],total:1,catalog_total:1,syncing:false});
+  await latest;
+  oldRequest.resolve({version:'old-version',items:[watchingRow('Stale library')],total:200,catalog_total:200,syncing:true});
+  await old;
+  assert.equal(f.run('watchVersion'), 'new-version');
+  assert.equal(f.run('watchTotal'), 1);
+  assert.match(f.$('watch-list').innerHTML, /Current library/);
+  assert.doesNotMatch(f.$('watch-list').innerHTML, /Stale library/);
+  const staleFailure = f.run('loadWatch()'), staleRequest = takeWatching(f);
+  const newer = f.run('loadWatch()'), newerRequest = takeWatching(f);
+  newerRequest.resolve({unchanged:true,version:'new-version',syncing:false});
+  await newer;
+  const hint = f.$('watch-hint').textContent;
+  staleRequest.reject(new Error('Old offline error'));
+  await staleFailure;
+  assert.equal(f.$('watch-hint').textContent, hint);
+  assert.equal(f.run('watchVersion'), 'new-version');
+});
+
+test('Watching current request failure preserves rows and the retry version', async () => {
+  const f = watchingFixture();
+  const first = f.run('loadWatch()'), request = takeWatching(f);
+  request.resolve({version:'loaded-version',items:[watchingRow('Loaded library')],total:1,catalog_total:1,syncing:false});
+  await first;
+  const refresh = f.run('loadWatch()'), failedRequest = takeWatching(f);
+  failedRequest.reject(new Error('Service unavailable'));
+  await refresh;
+  assert.match(f.$('watch-list').innerHTML, /Loaded library/);
+  assert.match(f.$('watch-hint').textContent, /Existing items remain available/);
+  assert.equal(f.run('watchVersion'), 'loaded-version');
+});
+
+test('Watching page controls request the selected server page instead of slicing old rows', async () => {
+  const f = watchingFixture();
+  f.$('watch-list').scrollIntoView = () => {};
+  const initial = f.run('loadWatch()'), initialRequest = takeWatching(f);
+  initialRequest.resolve({version:'first-page',items:[watchingRow('Page one')],total:100,catalog_total:100,syncing:false});
+  await initial;
+  f.$('watch-next-page').listeners.get('click')();
+  const nextRequest = takeWatching(f), nextQuery = new URLSearchParams(nextRequest.path.split('?')[1]);
+  assert.equal(nextQuery.get('offset'), '48');
+  assert.equal(nextQuery.get('limit'), '48');
+  nextRequest.resolve({version:'second-page',items:[watchingRow('Page two')],total:100,catalog_total:100,syncing:false});
+  await flush();
+  assert.match(f.$('watch-list').innerHTML, /Page two/);
+  assert.doesNotMatch(f.$('watch-list').innerHTML, /Page one/);
+  f.$('watch-prev').listeners.get('click')();
+  const previousRequest = takeWatching(f);
+  assert.equal(new URLSearchParams(previousRequest.path.split('?')[1]).get('offset'), '0');
+  previousRequest.resolve({version:'first-page',items:[watchingRow('Page one')],total:100,catalog_total:100,syncing:false});
+  await flush();
+  assert.match(f.$('watch-list').innerHTML, /Page one/);
+});
+
+test('Watching selector requests supersede previous unchanged responses and reset paging', async () => {
+  const f = watchingFixture();
+  const initial = f.run('loadWatch()'), initialRequest = takeWatching(f);
+  initialRequest.resolve({version:'all-selection',items:[watchingRow('Original show')],total:100,catalog_total:100,syncing:false});
+  await initial;
+  f.run('watchPage = 2');
+  const oldRefresh = f.run('loadWatch()'), oldRequest = takeWatching(f);
+  const completed = {dataset:{f:'completed'}};
+  f.$('watch-filters').listeners.get('click')({target:{closest:() => completed}});
+  const selectedRequest = takeWatching(f), selection = new URLSearchParams(selectedRequest.path.split('?')[1]);
+  assert.equal(selection.get('filter'), 'completed');
+  assert.equal(selection.get('offset'), '0');
+  selectedRequest.resolve({version:'completed-selection',items:[watchingRow('Completed show')],total:1,catalog_total:100,syncing:false});
+  await flush();
+  oldRequest.resolve({version:'all-selection',unchanged:true,syncing:true});
+  await oldRefresh;
+  assert.match(f.$('watch-list').innerHTML, /Completed show/);
+  assert.equal(f.run('watchVersion'), 'completed-selection');
+  assert.equal(f.run('watchTotal'), 1);
+  assert.equal(f.run('watchSyncing'), false);
+});
+
+test('Watching kind, sort and page size changes request their actual server selectors', async () => {
+  for (const scenario of [
+    {control:'watch-kind-filters',event:'click',target:{closest:() => ({dataset:{f:'movie'}})},key:'kind',value:'movie'},
+    {control:'watch-sort',event:'change',target:{value:'title'},key:'sort',value:'title'},
+    {control:'watch-page-size',event:'change',target:{value:'96'},key:'limit',value:'96'},
+  ]) {
+    const f = watchingFixture();
+    f.run('watchPage = 2');
+    f.$(scenario.control).listeners.get(scenario.event)({target:scenario.target});
+    const request = takeWatching(f), query = new URLSearchParams(request.path.split('?')[1]);
+    assert.equal(query.get(scenario.key), scenario.value);
+    assert.equal(query.get('offset'), '0');
+    request.resolve({version:'selected-version',items:[watchingRow('Selected result')],total:1,catalog_total:1,syncing:false});
+    await flush();
+    assert.match(f.$('watch-list').innerHTML, /Selected result/);
+  }
+});
+
+test('sign-in reloads the active page after unauthorized startup requests', () => {
+  const f = fixture('core.js');
+  f.run(`
+    let reloadedPage = null;
+    var PLAY_HERE = true;
+    loadCalendar = () => {};
+    currentPage = 'watch';
+    loadPage = page => { reloadedPage = page; };
+    loadCalendar = () => {};
+    startStatus = () => {};
+    setPlayHere = () => {};
+    paired();
+  `);
+  assert.equal(f.run('reloadedPage'), 'watch');
+});
+
+
+test('Watching retries local landing after an unauthenticated attempt and stops redundant polls after success', async () => {
+  const f = watchingFixture();
+  f.run("localLibraryLoaded = false; let localLandingLoads = 0; loadLocalLibrary = () => { localLandingLoads++; }; ");
+  const first = f.run('loadWatch()');
+  takeWatching(f).resolve({items:[],total:0,catalog_total:0});
+  await first;
+  assert.equal(f.run('localLandingLoads'), 1);
+  f.run('localLibraryLoaded = true;');
+  const second = f.run('loadWatch()');
+  takeWatching(f).resolve({items:[],total:0,catalog_total:0});
+  await second;
+  assert.equal(f.run('localLandingLoads'), 1);
+});
+
+test('offline shell includes every script loaded by the production document', () => {
+  const worker = readFileSync(new URL('../web/service-worker.js', import.meta.url), 'utf8');
+  const shell = vm.runInNewContext(worker + '\nSHELL', {self:{addEventListener(){},location:{origin:'http://fixture.invalid'}}});
+  const html = readFileSync(new URL('../web/index.html', import.meta.url), 'utf8');
+  const scripts = [...html.matchAll(/<script\s+src="([^"]+)"/g)].map(match => '/' + match[1].replace(/^\//, ''));
+  for (const script of scripts) assert.ok(shell.includes(script), `Offline shell omitted ${script}`);
 });

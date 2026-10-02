@@ -12,22 +12,37 @@ match the tag exactly.
 
 ## Unreleased
 
-- **Every surface is measurably lighter to draw.** Home, the player transport
+- **Audio tracks finish and advance correctly.** Files no longer repeat forever
+  by default. Audiobooks support whole-book resume across files and automatic
+  track advancement, including headless playback.
+- **Browse selections keep their identity.** Radio and music actions use stable
+  provider IDs; comic actions retain the selected reader URL. Old podcast pages
+  cannot play an episode from a newer page.
+- **Feeds and libraries expose useful pages.** Podcasts show complete retained
+  feed totals, local files and transfers have page controls, and Watching polls
+  can return a small unchanged response.
+- **Loading errors preserve useful results.** Anime and calendar failures retain
+  existing cards; calendar status and retry controls explain stale or partial data.
+- **Headless startup and shutdown honor saved state.** Packaged web assets load
+  outside the repository, listener preferences restore before startup, and active
+  bounded downloads cancel during shutdown.
+
+- **Common screens do less work while drawing.** Home, the player transport
   bar and poster grids no longer re-query the database, re-read playback
   properties or re-format their clock labels on frames where nothing changed;
   list membership is a hash lookup rather than a scan of up to 1 900 items.
   Loading and stream-search states animate at a bounded 30 Hz instead of pinning
   the app at whatever the CPU will do.
 - **Library indexing finishes dramatically faster.** Scanning your local media
-  folder prepares one statement and commits once per root instead of re-parsing
-  and re-committing per file, so indexing a large library no longer performs a
-  disk sync for every single file. Local and Live TV searches are backed by
+  folder prepares one statement and commits checked batches of 128 files on a
+  separate database connection. It no longer performs a disk sync per file,
+  and interrupted scans preserve records they did not visit. Local and Live TV searches are backed by
   indexes that did not previously exist.
 - **Settings and playback progress stop getting silently lost.** The shared
   database now waits for a busy writer instead of failing instantly and
   discarding the write, and the setting save that persists ~100 values prepares
   its statement once instead of ~100 times per save.
-- **The web companion loads in one round trip.** Shell assets are read once,
+- **The web companion reuses cached assets.** Packaged shell assets are read once,
   served with an `ETag`, and answered with a cheap `304` instead of
   re-downloading the whole page on every reload. Backgrounded tabs stop polling
   entirely, and idle live-upgrade streams stop re-sending an identical status

@@ -52,7 +52,8 @@ def test_web_ui_verticals():
             missing.append(f"{name}: section {section}")
         for r in routes:
             # routes are called via the api('/...') helper
-            if f"'{r}" not in ui and f'"{r}' not in ui and f"({r}" not in ui:
+            if (f"'{r}" not in ui and f'"{r}' not in ui and f"({r}" not in ui
+                    and not (r == "/novels/open" and "(item.kind === 'chapter' ? 'chapter' : 'open')" in ui)):
                 missing.append(f"{name}: route {r}")
 
     if missing:
@@ -166,14 +167,16 @@ def test_web_ui_music_radio():
     checks = {
         # Routes: async search + poll + play-by-index, like the other verticals.
         "music route": "fn apiMusic(" in rm and '"/music/search"' in music_api and '"/music/play"' in music_api
-            and "music.searchMusic(" in music_api and "music.playSong(" in music_api,
+            and "music.searchMusic(" in music_api and "music.playSongIdentity(" in music_api and 'wire.queryParam(query, "source")' in music_api and 'wire.queryParam(query, "id")' in music_api,
         "radio route": "fn apiRadio(" in rm and '"/radio/search"' in rm and '"/radio/play"' in rm
-            and "radio.searchRadio(" in rm and "radio.playStation(" in rm,
+            and "radio.searchRadio(" in rm and "radio.playStationIdentity(" in rm and 'getQueryParam(query, "uuid")' in rm,
         # GET seeds the once-per-session popular list.
         "radio seeds popular": "radio.loadPopularOnce()" in rm,
         # Direct stream URLs so a hosted browser can play them itself.
         "music exposes stream url": "s.play_url[0..@min(s.play_url_len, s.play_url.len)]" in music_api,
-        "radio prefers resolved url": "url_resolved_len > 0" in rm,
+        "radio snapshot serializer prefers resolved url": "radio.copyCatalogSnapshot(stations)" in rm
+            and "radio_pure.writeCatalogRows(&w, rows)" in rm
+            and "if (s.url_resolved_len > 0)" in _src("src/services/radio_pure.zig"),
         # Big result arrays -> heap, not the spawned-thread stack.
         "responses heap-allocated": "alloc.alloc(u8," in music_api and "alloc.alloc(u8," in _between(rm, "fn apiRadio(", "fn apiAi("),
         # Web tabs.
@@ -183,7 +186,7 @@ def test_web_ui_music_radio():
         # playback destination (Play here vs desktop) rather than always mpv.
         "hosted vs companion play": "if (HOSTED && u) return openStreamUrl(u, t);" in ui
             and ui.count("dispatchPlay(u, t,") >= 2
-            and "/music/play?idx=" in ui and "/radio/play?idx=" in ui,
+            and "/music/play?source=" in ui and "&id=" in ui and "/radio/play?uuid=" in ui and 'data-uuid="${encodeURIComponent(s.uuid' in ui,
         "watchers cleaned": "clearInterval(muWatch)" in ui and "clearInterval(raWatch)" in ui,
     }
     missing = [k for k, ok in checks.items() if not ok]
@@ -543,8 +546,8 @@ def test_web_watching_library():
         # The filter chips need the status TAG, not the display label.
         "emits status tag": r'\"state\":\"{s}\"' in rm
             and "effectiveStatus(row.user, row.status)" in rm,
-        "server filters on tag": "model.matchesFilter(&row, filter)" in rm
-            and "model.matchesKind(&row, kind)" in rm,
+        "server filters on tag": "model.matchesFilter(&row, selection.filter)" in rm
+            and "model.matchesKind(&row, selection.kind)" in rm,
         "page + nav": 'id="page-watch"' in ui and 'data-page="watch"' in ui
             and "async function loadWatch(" in ui,
         # TV rows reuse the existing drill-down (season list + Play-latest).
@@ -553,7 +556,7 @@ def test_web_watching_library():
         "durable view state": "opal.watch.filter" in ui and "opal.watch.kind" in ui
             and "opal.watch.sort" in ui and "opal.watch.density" in ui,
         "sorting and density": 'id="watch-sort"' in ui and 'id="watch-density"' in ui
-            and "const LibrarySort = enum { smart, recent, title, progress };" in rm
+            and "pub const Sort = enum { smart, recent, title, progress };" in rm
             and "classList.toggle('compact'" in ui,
         "bounded persisted pagination": 'id="watch-page-size"' in ui
             and 'id="watch-pager"' in ui and "opal.watch.pageSize" in ui
@@ -610,7 +613,7 @@ def test_unified_details_model():
             and lib.count("tmdbApiInto(") == 1,
         # Search rows say which kind they are; the web routes on it.
         "search rows carry media kind": '\\"media\\":\\"' in rm
-            and "item.catalog_kind[0..item.catalog_kind_len]" in rm,
+            and "item.catalog_kind[0..@min(item.catalog_kind_len, item.catalog_kind.len)]" in rm,
         "shared resolver owns catalog search": "fn resolveCatalog(" in resolver
             and "searchCatalogInto(" in resolver and "pub fn searchCatalogInto(" in tmdb_api,
         "catalog independent from torrent filter": ".tmdb => null" in _src("src/services/search.zig"),
@@ -659,7 +662,7 @@ def test_keyless_web_catalog_controls():
         "TV cards open keyless episode browser": "data-imdb" in ui
             and "showCinemetaVideos" in ui and "cinemetaSeasons" in ui
             and "d.meta.videos" in ui
-            and ".catch(() => ({episodes:[]}))" in ui,
+            and "watchedUnavailable" in ui and "unavailable:true" in ui,
     }
     missing = [name for name, ok in checks.items() if not ok]
     if missing:
@@ -890,9 +893,9 @@ def test_web_ui_security_boundaries():
 @test("Self-hosted credentials never enter request URLs", "Security")
 def test_self_hosted_credentials_use_post_bodies():
     core = _src("web/js/core.js")
-    media = _src("web/js/media.js")
+    media = _src("web/js/media.js") + _src("web/js/source-details.js")
     discovery = _src("web/js/discovery.js")
-    remote = _src("src/services/remote.zig")
+    remote = _remote_api()
     checks = {
         "form mutation helper": "const apiFormMutation" in core and "new URLSearchParams(values)" in core,
         "jellyfin uses body": "apiFormMutation('/jellyfin/login'" in discovery,
@@ -919,11 +922,11 @@ def test_self_hosted_credentials_use_post_bodies():
 def test_server_item_details_dialog():
     html = _src("web/index.html")
     css = _src("web/styles/app.css")
-    media = _src("web/js/media.js")
+    media = _src("web/js/media.js") + _src("web/js/source-details.js")
     discovery = _src("web/js/discovery.js")
     plex = _src("src/services/plex.zig")
     plex_api = _src("src/services/remote_plex_api.zig")
-    remote = _src("src/services/remote.zig")
+    remote = _remote_api()
     checks = {
         "semantic modal": '<dialog id="source-details"' in html and 'aria-labelledby="source-details-title"' in html,
         "responsive glass layout": "#source-details::backdrop" in css and "backdrop-filter:blur" in css and "@media(max-width:560px)" in css,
@@ -1041,7 +1044,7 @@ def test_suwayomi_server_lifecycle():
 @test("Audiobookshelf and OPDS connections have durable web lifecycle controls", "Web UI")
 def test_reading_server_connection_lifecycle():
     remote = _remote_api()
-    media = _src("web/js/media.js")
+    media = _src("web/js/media.js") + _src("web/js/source-details.js")
     html = _src("web/index.html")
     config = _src("src/core/config.zig")
     checks = {
@@ -1073,7 +1076,7 @@ def test_reading_server_connection_lifecycle():
 @test("Direct-url cards share play-here and queue behavior", "Web UI")
 def test_direct_url_play_and_queue_actions():
     discovery = _src("web/js/discovery.js")
-    media = _src("web/js/media.js")
+    media = _src("web/js/media.js") + _src("web/js/source-details.js")
     remote = _remote_api()
     checks = {
         "AI play dispatch": "dispatchPlay(u, b.dataset.title" in discovery,

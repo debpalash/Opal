@@ -57,20 +57,30 @@ pub fn headlessMain() !void {
     // headless Opal is useless — force it on, qbittorrent-nox style. Auth is a
     // web-UI account (create it on first visit); no pairing code to fish from
     // logs. Print the URL + first-run hint to stdout for `docker logs`/journald.
+    // coreInit restores config asynchronously. Start once the complete binding
+    // is published, rather than racing per-row restoration on the defaults.
+    while (!@import("core/state.zig").app.config_loaded.load(.acquire)) {
+        if (shutdown.load(.acquire)) {
+            @import("main.zig").appDeinit();
+            return;
+        }
+        io.sleep(10 * std.time.ns_per_ms);
+    }
     @import("core/state.zig").app.web_remote_enabled = true;
     const remote = @import("services/remote.zig");
     remote.start();
     io.sleep(300 * std.time.ns_per_ms); // let the listener come up before printing
     std.debug.print(
-        "[opal] web ui:    http://localhost:41595/  (or this host's LAN / Tailscale address)\n" ++
+        "[opal] web ui:    http://localhost:{d}/  (or this host's LAN / Tailscale address)\n" ++
             "[opal] first run: open the web UI and create your admin account\n" ++
             "[opal] api token: $XDG_CONFIG_HOME/opal/api.token  (for automation / the browser extension)\n",
-        .{},
+        .{remote.port},
     );
+    var listener_log: [96]u8 = undefined;
     logs.pushLog(
         "info",
         "headless",
-        "headless: web UI + JSON API on :41595",
+        std.fmt.bufPrint(&listener_log, "headless: web UI + JSON API on :{d}", .{remote.port}) catch "headless: web UI + JSON API ready",
         false,
     );
 
@@ -103,6 +113,10 @@ pub fn headlessMain() !void {
         @import("services/torrent_intents.zig").restoreIfReady();
         @import("services/downloads.zig").tick();
         @import("services/search.zig").flushPendingTorrentOpen();
+        // Consume FILE_LOADED/END_FILE on the short poll before provider resume
+        // and track advancement. Headless has no desktop frame to do this.
+        @import("player/player.zig").updateTorrentBackgroundTasks();
+        @import("services/audiobookshelf.zig").tick();
         @import("core/state.zig").players_mutex.unlock();
         // Same class of seam: drama's fetch worker stages results under a mutex
         // and the RENDER path commits them. No render path here, so the parse
@@ -121,7 +135,6 @@ pub fn headlessMain() !void {
         if (now_ms - last_tick_ms >= tick_interval_ms) {
             last_tick_ms = now_ms;
             @import("core/config.zig").saveIfDirty();
-            @import("player/player.zig").updateTorrentBackgroundTasks();
         }
     }
 

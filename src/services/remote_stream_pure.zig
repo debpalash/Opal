@@ -210,3 +210,26 @@ test "srtToVtt: header, comma→dot, index lines dropped, text preserved" {
     try std.testing.expect(std.mem.indexOf(u8, vtt, "\n1\n") == null);
     try std.testing.expect(std.mem.indexOf(u8, vtt, "\n2\n") == null);
 }
+
+/// Encoded artwork types accepted by the web proxy.
+pub fn imageContentType(bytes: []const u8) ?[]const u8 {
+    if (std.mem.startsWith(u8, bytes, "\x89PNG\r\n\x1a\n")) return "image/png";
+    if (std.mem.startsWith(u8, bytes, "\xff\xd8\xff")) return "image/jpeg";
+    if (std.mem.startsWith(u8, bytes, "GIF87a") or std.mem.startsWith(u8, bytes, "GIF89a")) return "image/gif";
+    if (bytes.len >= 12 and std.mem.eql(u8, bytes[0..4], "RIFF") and std.mem.eql(u8, bytes[8..12], "WEBP")) return "image/webp";
+    return null;
+}
+
+test "artwork proxy serves PNG WebP GIF and JPEG with their actual type" {
+    try std.testing.expectEqualStrings("image/png", imageContentType("\x89PNG\r\n\x1a\nrest").?);
+    try std.testing.expectEqualStrings("image/webp", imageContentType("RIFFabcdWEBPrest").?);
+    try std.testing.expectEqualStrings("image/gif", imageContentType("GIF89arest").?);
+    try std.testing.expectEqualStrings("image/jpeg", imageContentType("\xff\xd8\xff\xe0rest").?);
+}
+
+test "artwork proxy rejects error HTML and truncated signatures" {
+    try std.testing.expect(imageContentType("<html>Cloudflare challenge</html>") == null);
+    try std.testing.expect(imageContentType("RIFFabcdWAVEriff") == null);
+    try std.testing.expect(imageContentType("\x89PNG") == null);
+    try std.testing.expect(imageContentType("") == null);
+}

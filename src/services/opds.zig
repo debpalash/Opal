@@ -147,8 +147,9 @@ var restored_fetch_attempted: std.atomic.Value(bool) = .init(false);
 /// credentials are set (an anonymous server) or on overflow. UI-thread only —
 /// reads the credential buffers the login form owns.
 fn opdsAuthHeader(buf: []u8) []const u8 {
-    const user = state.app.opds.user_buf[0 .. std.mem.indexOfScalar(u8, &state.app.opds.user_buf, 0) orelse state.app.opds.user_buf.len];
-    const pass = state.app.opds.pass_buf[0 .. std.mem.indexOfScalar(u8, &state.app.opds.pass_buf, 0) orelse state.app.opds.pass_buf.len];
+    const snap = connectionSnapshot();
+    const user = snap.user[0..snap.user_len];
+    const pass = snap.pass[0..snap.pass_len];
     if (user.len == 0 and pass.len == 0) return "";
     return pure.basicAuthHeader(user, pass, buf) orelse "";
 }
@@ -262,8 +263,10 @@ fn fetchCoverAsync(url: []const u8, slot: *components.CoverSlot) void {
         .fetching = &slot.fetching,
     };
     @memcpy(args.url[0..url.len], url);
-    const user = state.app.opds.user_buf[0 .. std.mem.indexOfScalar(u8, &state.app.opds.user_buf, 0) orelse state.app.opds.user_buf.len];
-    const pass = state.app.opds.pass_buf[0 .. std.mem.indexOfScalar(u8, &state.app.opds.pass_buf, 0) orelse state.app.opds.pass_buf.len];
+    const snap = connectionSnapshot();
+    const same_origin = pure.sameOrigin(snap.server[0..snap.server_len], url);
+    const user = if (same_origin) snap.user[0..snap.user_len] else "";
+    const pass = if (same_origin) snap.pass[0..snap.pass_len] else "";
     args.user_len = @min(user.len, args.user.len);
     args.pass_len = @min(pass.len, args.pass.len);
     @memcpy(args.user[0..args.user_len], user[0..args.user_len]);
@@ -418,8 +421,10 @@ fn spawnFetch(mark_connected: bool) void {
     parse_mutex.lock();
     job.url_len = @min(state.app.opds.current_url_len, job.url.len);
     @memcpy(job.url[0..job.url_len], state.app.opds.current_url[0..job.url_len]);
-    job.user = state.app.opds.user_buf;
-    job.pass = state.app.opds.pass_buf;
+    if (pure.sameOrigin(configured_connection.server[0..configured_connection.server_len], job.url[0..job.url_len])) {
+        job.user = configured_connection.user;
+        job.pass = configured_connection.pass;
+    }
     job.generation = fetch_request.begin(&state.app.opds.is_loading);
     state.app.opds.fetch_error = false;
     parse_mutex.unlock();
@@ -464,8 +469,10 @@ pub fn loadMore() void {
     var job: FeedJob = .{ .generation = fetch_request.current() };
     job.url_len = @min(next_href_len, job.url.len);
     @memcpy(job.url[0..job.url_len], next_href_buf[0..job.url_len]);
-    job.user = state.app.opds.user_buf;
-    job.pass = state.app.opds.pass_buf;
+    if (pure.sameOrigin(configured_connection.server[0..configured_connection.server_len], job.url[0..job.url_len])) {
+        job.user = configured_connection.user;
+        job.pass = configured_connection.pass;
+    }
     parse_mutex.unlock();
     if (@import("../core/workers.zig").spawnLegacy(loadMoreWorker, .{job})) |t| {
         @import("../core/workers.zig").release(t);

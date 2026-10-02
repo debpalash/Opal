@@ -126,3 +126,84 @@ test "wider leading column shrinks the title, never the actions" {
     try std.testing.expect(with_thumb + 86 + acts + 12 <= 500);
     try std.testing.expect(with_glyph + 26 + acts + 12 <= 500);
 }
+
+/// Measured-height window. Unknown rows retain a theme-scaled estimate until drawn.
+pub const RowWindow = struct { first: usize, last: usize, before: f32, after: f32 };
+pub fn measuredRows(heights: []const f32, estimate: f32, y: f32, viewport_h: f32, overscan: usize) RowWindow {
+    if (heights.len == 0) return .{ .first = 0, .last = 0, .before = 0, .after = 0 };
+    const fallback = if (std.math.isFinite(estimate) and estimate > 0) estimate else 1;
+    const top = if (std.math.isFinite(y)) @max(0, y) else 0;
+    const bottom = top + (if (std.math.isFinite(viewport_h)) @max(0, viewport_h) else 0);
+    var first: usize = heights.len - 1;
+    var last: usize = heights.len;
+    var total: f32 = 0;
+    var found = false;
+    for (heights, 0..) |height, i| {
+        const h = if (std.math.isFinite(height) and height > 0) height else fallback;
+        if (!found and total + h > top) {
+            first = i;
+            found = true;
+        }
+        if (found and total >= bottom) {
+            last = i;
+            break;
+        }
+        total += h;
+    }
+    first -|= overscan;
+    last = @min(heights.len, last +| overscan);
+    var before: f32 = 0;
+    var after: f32 = 0;
+    for (heights, 0..) |height, i| {
+        const h = if (std.math.isFinite(height) and height > 0) height else fallback;
+        if (i < first) before += h;
+        if (i >= last) after += h;
+    }
+    return .{ .first = first, .last = last, .before = before, .after = after };
+}
+test "measured queue window bounds drawing beyond 200 rows" {
+    const heights = [_]f32{60} ** 500;
+    const w = measuredRows(&heights, 60, 12000, 300, 2);
+    try std.testing.expectEqual(@as(usize, 198), w.first);
+    try std.testing.expectEqual(@as(usize, 207), w.last);
+    try std.testing.expectEqual(@as(f32, 11880), w.before);
+    try std.testing.expectEqual(@as(f32, 17580), w.after);
+}
+
+test "measured queue window handles variable heights and unknown rows" {
+    const heights = [_]f32{ 20, 100, 0, 80, 40 };
+    const w = measuredRows(&heights, 60, 125, 50, 0);
+    try std.testing.expectEqual(@as(usize, 2), w.first);
+    try std.testing.expectEqual(@as(usize, 3), w.last);
+    try std.testing.expectEqual(@as(f32, 120), w.before);
+    try std.testing.expectEqual(@as(f32, 120), w.after);
+    const bottom = measuredRows(&heights, 60, 9999, 50, 2);
+    try std.testing.expectEqual(@as(usize, 2), bottom.first);
+    try std.testing.expectEqual(@as(usize, 5), bottom.last);
+    const empty = measuredRows(&.{}, 0, 0, 0, 2);
+    try std.testing.expectEqual(@as(usize, 0), empty.last);
+}
+
+test "measured queue window preserves total height across resize and deletion" {
+    const heights = [_]f32{0} ** 300;
+    for ([_]f32{ 60, 96 }) |estimate| {
+        const w = measuredRows(&heights, estimate, 6000, 480, 2);
+        const drawn = @as(f32, @floatFromInt(w.last - w.first)) * estimate;
+        try std.testing.expectEqual(@as(f32, 300) * estimate, w.before + drawn + w.after);
+        try std.testing.expect(w.last - w.first <= 13);
+        const shrunk = measuredRows(heights[0..12], estimate, 99999, 480, 2);
+        try std.testing.expectEqual(@as(usize, 12), shrunk.last);
+        try std.testing.expect(shrunk.first < shrunk.last);
+    }
+}
+
+/// Keep all action targets registered during keyboard navigation.
+pub fn keyboardLayoutMode(previous: bool, tab_pressed: bool, pointer_pressed: bool) bool {
+    return tab_pressed or (previous and !pointer_pressed);
+}
+test "keyboard row layout retains tab targets until pointer interaction" {
+    try std.testing.expect(keyboardLayoutMode(false, true, false));
+    try std.testing.expect(keyboardLayoutMode(true, false, false));
+    try std.testing.expect(!keyboardLayoutMode(true, false, true));
+    try std.testing.expect(keyboardLayoutMode(true, true, true));
+}

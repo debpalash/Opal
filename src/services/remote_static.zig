@@ -32,8 +32,10 @@ const assets = [_]Asset{
     .{ .route = "/js/catalog.js", .bundled = "js/catalog.js", .dev = "web/js/catalog.js", .content_type = "application/javascript", .cache = .revalidate },
     .{ .route = "/js/playback.js", .bundled = "js/playback.js", .dev = "web/js/playback.js", .content_type = "application/javascript", .cache = .revalidate },
     .{ .route = "/js/integrations.js", .bundled = "js/integrations.js", .dev = "web/js/integrations.js", .content_type = "application/javascript", .cache = .revalidate },
+    .{ .route = "/js/access.js", .bundled = "js/access.js", .dev = "web/js/access.js", .content_type = "application/javascript", .cache = .revalidate },
     .{ .route = "/js/source-management.js", .bundled = "js/source-management.js", .dev = "web/js/source-management.js", .content_type = "application/javascript", .cache = .revalidate },
     .{ .route = "/js/media.js", .bundled = "js/media.js", .dev = "web/js/media.js", .content_type = "application/javascript", .cache = .revalidate },
+    .{ .route = "/js/source-details.js", .bundled = "js/source-details.js", .dev = "web/js/source-details.js", .content_type = "application/javascript", .cache = .revalidate },
     .{ .route = "/js/discovery.js", .bundled = "js/discovery.js", .dev = "web/js/discovery.js", .content_type = "application/javascript", .cache = .revalidate },
     .{ .route = "/js/boot.js", .bundled = "js/boot.js", .dev = "web/js/boot.js", .content_type = "application/javascript", .cache = .revalidate },
     .{ .route = "/icon.svg", .bundled = "icon.svg", .dev = "assets/logo.svg", .content_type = "image/svg+xml", .cache = .immutable },
@@ -121,6 +123,8 @@ fn clientHasEtag(raw: []const u8, etag: []const u8) bool {
 
 fn serveFile(stream: std.Io.net.Stream, path: []const u8, asset: Asset, index: usize, raw_request: []const u8) void {
     var body: []const u8 = undefined;
+    var owned_body: ?[]u8 = null;
+    defer if (owned_body) |bytes| alloc.free(bytes);
     var etag: []const u8 = "";
     if (memoizeAssets()) {
         const slot = loadOnce(index, path) orelse return notFound(stream);
@@ -130,7 +134,7 @@ fn serveFile(stream: std.Io.net.Stream, path: []const u8, asset: Asset, index: u
         const file = io_g.cwdOpenFile(path, .{}) catch return notFound(stream);
         defer file.close(io_g.io());
         const raw = io_g.readToEndAlloc(file, alloc, 4 * 1024 * 1024) catch return notFound(stream);
-        defer alloc.free(raw);
+        owned_body = raw;
         body = raw;
     }
 
@@ -149,16 +153,17 @@ fn serveFile(stream: std.Io.net.Stream, path: []const u8, asset: Asset, index: u
         "";
     const validator: []const u8 = if (etag.len > 0) "ETag: " else "";
     const etag_line: []const u8 = if (etag.len > 0) etag else "";
+    const etag_end: []const u8 = if (etag.len > 0) "\r\n" else "";
 
     if (etag.len > 0 and clientHasEtag(raw_request, etag)) {
         var header: [1024]u8 = undefined;
-        const h = std.fmt.bufPrint(&header, "HTTP/1.1 304 Not Modified\r\n{s}{s}{s}{s}\r\n", .{ validator, etag_line, cache_header, privacy_header }) catch return;
+        const h = std.fmt.bufPrint(&header, "HTTP/1.1 304 Not Modified\r\n{s}{s}{s}{s}{s}\r\n", .{ validator, etag_line, etag_end, cache_header, privacy_header }) catch return;
         io_g.streamWriteAll(stream, h) catch {};
         return;
     }
 
     var header: [1024]u8 = undefined;
-    const h = std.fmt.bufPrint(&header, "HTTP/1.1 200 OK\r\nContent-Type: {s}\r\nX-Content-Type-Options: nosniff\r\n{s}{s}{s}{s}Content-Length: {d}\r\n\r\n", .{ asset.content_type, validator, etag_line, cache_header, privacy_header, body.len }) catch return;
+    const h = std.fmt.bufPrint(&header, "HTTP/1.1 200 OK\r\nContent-Type: {s}\r\nX-Content-Type-Options: nosniff\r\n{s}{s}{s}{s}{s}Content-Length: {d}\r\n\r\n", .{ asset.content_type, validator, etag_line, etag_end, cache_header, privacy_header, body.len }) catch return;
     io_g.streamWriteAll(stream, h) catch return;
     io_g.streamWriteAll(stream, body) catch {};
 }

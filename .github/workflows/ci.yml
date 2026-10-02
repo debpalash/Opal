@@ -29,8 +29,8 @@ jobs:
           -Mroot=tests/nova2_spawn_test.zig
           -Mio_global=src/core/io_global.zig
 
-  # Pure-Zig unit tests — no native deps needed (build.zig's test step compiles
-  # only the *_pure.zig modules), so this runs fast on every platform.
+  # Unit tests plus the real SQLite settings-writer regression. SQLite is
+  # available on Linux/macOS runners and provisioned explicitly on Windows.
   unit-tests:
     strategy:
       fail-fast: false
@@ -39,10 +39,9 @@ jobs:
         experimental: [false]
         include:
           # Windows is tolerated-failing (experimental → continue-on-error):
-          # the *_pure.zig modules have no native deps and should compile with
-          # a stock Windows zig — no MSYS2 needed — but that's unproven on
-          # real runners. Move windows-2022 into the main `os` axis once a few
-          # runs come back green.
+          # Most modules are pure Zig; the settings-writer regression also
+          # exercises real SQLite, provisioned below. Move windows-2022 into
+          # the main `os` axis once a few runs come back green.
           - os: windows-2022
             experimental: true
     runs-on: ${{ matrix.os }}
@@ -52,8 +51,25 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
+      - name: Install SQLite for Windows integration tests
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          # The action installs under RUNNER_TEMP; the test step exports its
+          # actual native prefix for build.zig's headers, libraries and PATH.
+          msystem: MINGW64
+          path-type: inherit
+          install: mingw-w64-x86_64-sqlite3
       - name: zig build test
+        if: runner.os != 'Windows'
         run: zig build test
+      - name: zig build test (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          export MINGW_PREFIX="$(cygpath -m /mingw64)"
+          test -f "$MINGW_PREFIX/lib/libsqlite3.dll.a"
+          zig build test
 
   # Full app build on macOS arm64 — the primary supported platform.
   # build.zig links against /opt/homebrew, which matches arm64 runners.

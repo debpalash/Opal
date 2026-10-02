@@ -134,11 +134,21 @@ fn jellyfinAction(stream: std.Io.net.Stream, query: []const u8) void {
 fn calendar(stream: std.Io.net.Stream) void {
     const service = @import("tv_calendar.zig");
     service.refreshOnce();
-    var json: [8192]u8 = undefined;
-    var w = std.Io.Writer.fixed(&json);
-    w.writeAll("{\"entries\":[") catch return;
-    for (0..service.count) |i| {
-        const entry = &service.entries[i];
+    const alloc = @import("../core/alloc.zig").allocator;
+    const entries = alloc.alloc(service.Entry, 12) catch {
+        wire.sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
+        return;
+    };
+    defer alloc.free(entries);
+    const snapshot = service.snapshotCopy(entries);
+    const json = alloc.alloc(u8, 1024 + snapshot.count * ((128 + 64) * 6 + 512)) catch {
+        wire.sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
+        return;
+    };
+    defer alloc.free(json);
+    var w = std.Io.Writer.fixed(json);
+    w.print("{{\"loading\":{s},\"loaded\":{s},\"failed\":{s},\"partial\":{s},\"stale\":{s},\"entries\":[", .{ if (snapshot.loading) "true" else "false", if (snapshot.loaded) "true" else "false", if (snapshot.failed) "true" else "false", if (snapshot.partial) "true" else "false", if (snapshot.stale) "true" else "false" }) catch return;
+    for (entries[0..snapshot.count], 0..) |*entry, i| {
         if (i > 0) w.writeAll(",") catch return;
         w.writeAll("{\"name\":\"") catch return;
         wire.writeJsonString(&w, entry.name[0..entry.name_len]);
@@ -160,32 +170,15 @@ fn calendar(stream: std.Io.net.Stream) void {
     wire.sendJson(stream, json[0..w.end]);
 }
 
-const LibrarySort = enum { smart, recent, title, progress };
-
-fn rowProgress(row: *const @import("tv_pure.zig").Row) f32 {
-    if (row.prog.total > 0) return row.prog.fraction();
-    return row.pct / 100.0;
-}
-
-fn libraryLessThan(sort: LibrarySort, a: @import("tv_pure.zig").Row, b: @import("tv_pure.zig").Row) bool {
-    return switch (sort) {
-        .smart => @import("tv_pure.zig").lessThan(&a, &b),
-        .recent => if (a.updated_at != b.updated_at) a.updated_at > b.updated_at else std.mem.lessThan(u8, a.nameSlice(), b.nameSlice()),
-        .title => std.ascii.lessThanIgnoreCase(a.nameSlice(), b.nameSlice()),
-        .progress => if (rowProgress(&a) != rowProgress(&b)) rowProgress(&a) > rowProgress(&b) else std.mem.lessThan(u8, a.nameSlice(), b.nameSlice()),
-    };
-}
+const library_pure = @import("remote_library_pure.zig");
+const LibrarySort = library_pure.Sort;
+var library_projection: library_pure.Projection = .{};
+var library_projection_mutex: @import("../core/sync.zig").Mutex = .{};
 
 fn library(stream: std.Io.net.Stream, query: []const u8) void {
     const service = @import("tv_library.zig");
     const model = @import("tv_pure.zig");
     const alloc = @import("../core/alloc.zig").allocator;
-    const rows = alloc.alloc(model.Row, model.MAX_SHOWS) catch {
-        wire.sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
-        return;
-    };
-    defer alloc.free(rows);
-    const catalog_count = service.snapshotCopy(rows);
     const filter = std.meta.stringToEnum(model.Filter, wire.queryParam(query, "filter") orelse "all") orelse {
         wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"unknown library filter\"}");
         return;
@@ -207,24 +200,52 @@ fn library(stream: std.Io.net.Stream, query: []const u8) void {
         wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"library page out of range\"}");
         return;
     }
-    var count: usize = 0;
-    for (rows[0..catalog_count]) |row| {
-        if (!model.matchesFilter(&row, filter) or !model.matchesKind(&row, kind)) continue;
-        rows[count] = row;
-        count += 1;
+    const selection: library_pure.Selection = .{ .filter = filter, .kind = kind, .sort = sort };
+    library_projection_mutex.lock();
+    var projection_locked = true;
+    defer if (projection_locked) library_projection_mutex.unlock();
+    const current_revision = service.revision();
+    if (!library_projection.matches(current_revision, selection)) {
+        const snapshot = alloc.alloc(model.Row, model.MAX_SHOWS) catch {
+            wire.sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
+            return;
+        };
+        defer alloc.free(snapshot);
+        const before = service.revision();
+        const n = service.snapshotCopy(snapshot);
+        library_projection.rebuild(snapshot[0..n], before, selection);
+        // A mutation racing the snapshot is not a reusable coherent revision.
+        if (service.revision() != before) library_projection.valid = false;
     }
-    std.mem.sort(model.Row, rows[0..count], sort, libraryLessThan);
-    const json = alloc.alloc(u8, 128 * 1024) catch {
+    var version_buf: [128]u8 = undefined;
+    const version = library_pure.version(library_projection.revision, selection, offset, limit, &version_buf) orelse return;
+    var since_buf: [128]u8 = undefined;
+    const since = if (wire.queryParam(query, "since")) |raw| wire.urlDecode(raw, &since_buf) orelse "" else "";
+    if (library_projection.valid and std.mem.eql(u8, since, version)) {
+        var response: [256]u8 = undefined;
+        const body = std.fmt.bufPrint(&response, "{{\"unchanged\":true,\"version\":\"{s}\",\"syncing\":{s}}}", .{ version, if (service.isSyncing()) "true" else "false" }) catch return;
+        library_projection_mutex.unlock();
+        projection_locked = false;
+        wire.sendJson(stream, body);
+        return;
+    }
+    const rows = alloc.alloc(model.Row, limit) catch {
+        wire.sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
+        return;
+    };
+    defer alloc.free(rows);
+    const page = library_projection.page(offset, rows);
+    library_projection_mutex.unlock();
+    projection_locked = false;
+    const json = alloc.alloc(u8, library_pure.jsonCapacity(page.count)) catch {
         wire.sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
         return;
     };
     defer alloc.free(json);
     var w = std.Io.Writer.fixed(json);
 
-    const start = @min(offset, count);
-    const end = @min(start + limit, count);
-    w.print("{{\"syncing\":{s},\"total\":{d},\"catalog_total\":{d},\"offset\":{d},\"limit\":{d},\"items\":[", .{ if (service.isSyncing()) "true" else "false", count, catalog_count, start, limit }) catch return;
-    for (rows[start..end], 0..) |*row, i| {
+    w.print("{{\"version\":\"{s}\",\"unchanged\":false,\"syncing\":{s},\"total\":{d},\"catalog_total\":{d},\"offset\":{d},\"limit\":{d},\"returned\":{d},\"has_more\":{s},\"items\":[", .{ version, if (service.isSyncing()) "true" else "false", page.total, page.catalog_total, page.offset, limit, page.count, if (page.offset + page.count < page.total) "true" else "false" }) catch return;
+    for (rows[0..page.count], 0..) |*row, i| {
         if (i > 0) w.writeAll(",") catch return;
         var status_buf: [48]u8 = undefined;
         const status = model.statusLabel(row, &status_buf);

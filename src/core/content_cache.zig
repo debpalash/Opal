@@ -99,10 +99,14 @@ fn contentDir(create: bool) ?[]const u8 {
     dir_mutex.lock();
     defer dir_mutex.unlock();
     if (!create and dir_ready.load(.acquire)) return dir_path_buf[0..dir_path_len];
-    const dir = paths.cacheFile(&dir_path_buf, "content");
-    if (create) io.cwdMakePath(dir) catch return null;
-    dir_path_len = dir.len;
-    dir_ready.store(true, .release);
+    // Once published the bytes remain immutable; lock-free readers may still
+    // be using them while a writer recreates a deleted directory.
+    if (!dir_ready.load(.acquire)) {
+        const dir = paths.cacheFile(&dir_path_buf, "content");
+        dir_path_len = dir.len;
+        dir_ready.store(true, .release);
+    }
+    if (create) io.cwdMakePath(dir_path_buf[0..dir_path_len]) catch return null;
     return dir_path_buf[0..dir_path_len];
 }
 
@@ -251,6 +255,16 @@ pub fn put(key: []const u8, bytes: []const u8, ttl_s: i64) void {
 /// out_buf too small / corrupt / expired). Corrupt or expired files are
 /// deleted. Never crashes.
 pub fn get(key: []const u8, out_buf: []u8) ?Hit {
+    return readEntry(key, out_buf);
+}
+
+/// Authenticated exact-size plaintext. Caller owns `bytes` and must free it
+/// with the global allocator. Same expiry/tamper policy as `get`.
+pub fn getOwned(key: []const u8) ?Hit {
+    return readEntry(key, null);
+}
+
+fn readEntry(key: []const u8, supplied: ?[]u8) ?Hit {
     if (!active()) return null;
 
     var path_buf: [700]u8 = undefined;
@@ -271,6 +285,9 @@ pub fn get(key: []const u8, out_buf: []u8) ?Hit {
     };
 
     const plen = header.plaintext_len;
+    const out_buf = if (supplied) |buf| buf else alloc.alloc(u8, plen) catch return null;
+    var success = false;
+    defer if (supplied == null and !success) alloc.free(out_buf);
     if (out_buf.len < plen) return null; // caller buffer too small — treat as miss
 
     var aad_buf: [pure.HEADER_LEN + 32]u8 = undefined;
@@ -289,6 +306,7 @@ pub fn get(key: []const u8, out_buf: []u8) ?Hit {
         io.deleteFileAbsolute(path) catch {};
         return null;
     }
+    success = true;
     return .{ .bytes = out_buf[0..plen], .staleness = st };
 }
 

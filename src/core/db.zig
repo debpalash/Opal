@@ -91,7 +91,7 @@ pub fn init() void {
 
 pub fn deinit() void {
     if (db_handle) |d| {
-        // v2 auto-finalizes any leaked prepared statements, preventing SQLITE_BUSY
+        // v2 defers connection destruction until all outstanding statements finalize.
         _ = c.sqlite3_close_v2(d);
         db_handle = null;
     }
@@ -1769,8 +1769,13 @@ pub const TvShowRow = struct {
 /// Fill `out` with tracked shows, most-recent activity first. Untracked shows are
 /// excluded but their rows (and their watched history) remain.
 pub fn tvGetShows(out: []TvShowRow) usize {
+    return tvGetShowsChecked(out) orelse 0;
+}
+
+/// Distinguish an empty tracked library from a failed database query.
+pub fn tvGetShowsChecked(out: []TvShowRow) ?usize {
     if (out.len == 0) return 0;
-    _ = db_handle orelse return 0;
+    _ = db_handle orelse return null;
 
     const stmt = prepare(
         \\SELECT tmdb_id, name, poster_path, status,
@@ -1780,13 +1785,16 @@ pub fn tvGetShows(out: []TvShowRow) usize {
         \\LIMIT ?
     ) orelse {
         logs.pushLog("error", "tv", "tvGetShows: prepare failed", true);
-        return 0;
+        return null;
     };
     defer finalize(stmt);
     bindInt(stmt, 1, @intCast(out.len));
 
     var n: usize = 0;
-    while (n < out.len and step(stmt) == c.SQLITE_ROW) {
+    while (n < out.len) {
+        const result = step(stmt);
+        if (result == c.SQLITE_DONE) break;
+        if (result != c.SQLITE_ROW) return null;
         const row = &out[n];
         row.* = .{};
         row.tmdb_id = @intCast(columnInt(stmt, 0));

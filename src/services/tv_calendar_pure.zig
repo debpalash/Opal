@@ -24,6 +24,10 @@ pub fn dateToEpoch(date: []const u8) ?i64 {
     const m = std.fmt.parseInt(u32, date[5..7], 10) catch return null;
     const d = std.fmt.parseInt(u32, date[8..10], 10) catch return null;
     if (m < 1 or m > 12 or d < 1 or d > 31) return null;
+    const month_days = [_]u32{ 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31 };
+    const leap = @mod(y, 4) == 0 and (@mod(y, 100) != 0 or @mod(y, 400) == 0);
+    const limit = month_days[m - 1] + @as(u32, if (m == 2 and leap) 1 else 0);
+    if (d > limit) return null;
     return daysFromCivil(y, m, d) * 86400;
 }
 
@@ -54,24 +58,83 @@ pub const EpisodeToAir = struct {
     name_len: usize = 0,
 };
 
-fn jsonIntAfter(s: []const u8, key: []const u8) ?i64 {
-    const ki = std.mem.indexOf(u8, s, key) orelse return null;
-    var i = ki + key.len;
-    while (i < s.len and (s[i] == ' ' or s[i] == ':')) i += 1;
-    var v: i64 = 0;
-    var any = false;
-    while (i < s.len and s[i] >= '0' and s[i] <= '9') : (i += 1) {
-        v = v * 10 + (s[i] - '0');
-        any = true;
+fn stringEnd(doc: []const u8, start: usize) ?usize {
+    if (start >= doc.len or doc[start] != '"') return null;
+    var pos = start + 1;
+    while (pos < doc.len) {
+        if (doc[pos] == '"') return pos + 1;
+        if (doc[pos] == '\\') {
+            if (pos + 1 >= doc.len) return null;
+            pos += 2;
+        } else pos += 1;
     }
-    return if (any) v else null;
+    return null;
+}
+fn valueEnd(doc: []const u8, start: usize) ?usize {
+    if (start >= doc.len) return null;
+    if (doc[start] == '"') return stringEnd(doc, start);
+    if (doc[start] == '{' or doc[start] == '[') {
+        var depth: usize = 1;
+        var pos = start + 1;
+        while (pos < doc.len) {
+            switch (doc[pos]) {
+                '"' => {
+                    pos = stringEnd(doc, pos) orelse return null;
+                    continue;
+                },
+                '{', '[' => depth += 1,
+                '}', ']' => {
+                    depth -= 1;
+                    if (depth == 0) return pos + 1;
+                },
+                else => {},
+            }
+            pos += 1;
+        }
+        return null;
+    }
+    var pos = start;
+    while (pos < doc.len and !std.ascii.isWhitespace(doc[pos]) and doc[pos] != ',' and doc[pos] != '}' and doc[pos] != ']') : (pos += 1) {}
+    return if (pos > start) pos else null;
+}
+/// Only direct object fields are considered. Display text and nested objects
+/// cannot contribute a fake key, episode number, or seed count.
+fn field(doc: []const u8, name: []const u8) ?[]const u8 {
+    var pos: usize = 0;
+    while (pos < doc.len and std.ascii.isWhitespace(doc[pos])) : (pos += 1) {}
+    if (pos >= doc.len or doc[pos] != '{') return null;
+    pos += 1;
+    while (pos < doc.len) {
+        while (pos < doc.len and std.ascii.isWhitespace(doc[pos])) : (pos += 1) {}
+        const key_start = pos;
+        const key_end = stringEnd(doc, pos) orelse return null;
+        pos = key_end;
+        while (pos < doc.len and std.ascii.isWhitespace(doc[pos])) : (pos += 1) {}
+        if (pos >= doc.len or doc[pos] != ':') return null;
+        pos += 1;
+        while (pos < doc.len and std.ascii.isWhitespace(doc[pos])) : (pos += 1) {}
+        const end = valueEnd(doc, pos) orelse return null;
+        if (std.mem.eql(u8, doc[key_start + 1 .. key_end - 1], name)) return doc[pos..end];
+        pos = end;
+        while (pos < doc.len and std.ascii.isWhitespace(doc[pos])) : (pos += 1) {}
+        if (pos >= doc.len or doc[pos] != ',') return null;
+        pos += 1;
+    }
+    return null;
+}
+fn integer(doc: []const u8, name: []const u8) ?i64 {
+    var raw = field(doc, name) orelse return null;
+    if (raw.len >= 2 and raw[0] == '"' and raw[raw.len - 1] == '"') raw = raw[1 .. raw.len - 1];
+    return std.fmt.parseInt(i64, raw, 10) catch null;
+}
+fn jsonStrAfter(doc: []const u8, key: []const u8) ?[]const u8 {
+    const raw = field(doc, std.mem.trim(u8, key, "\" :\t\r\n")) orelse return null;
+    if (raw.len < 2 or raw[0] != '"' or raw[raw.len - 1] != '"') return null;
+    return raw[1 .. raw.len - 1];
 }
 
-fn jsonStrAfter(s: []const u8, key: []const u8) ?[]const u8 {
-    const ki = std.mem.indexOf(u8, s, key) orelse return null;
-    const vs = ki + key.len;
-    const ve = std.mem.indexOfScalarPos(u8, s, vs, '"') orelse return null;
-    return s[vs..ve];
+pub fn validShowDocument(doc: []const u8, expected_id: i32) bool {
+    return expected_id > 0 and (integer(doc, "id") orelse return false) == expected_id;
 }
 
 /// Poster fallback from the same TMDB show document used for schedule data.
@@ -87,24 +150,19 @@ pub fn posterPath(body: []const u8) ?[]const u8 {
 /// nothing scheduled). `key` must include the quotes + colon prefix, e.g.
 /// `"\"next_episode_to_air\":"`.
 pub fn parseEpisodeToAir(body: []const u8, key: []const u8) ?EpisodeToAir {
-    const ki = std.mem.indexOf(u8, body, key) orelse return null;
-    var i = ki + key.len;
-    while (i < body.len and (body[i] == ' ')) i += 1;
-    if (i >= body.len or body[i] != '{') return null; // "null" or malformed
-
-    // Bound to the matching close brace (these objects never nest).
-    const end = std.mem.indexOfScalarPos(u8, body, i, '}') orelse return null;
-    const obj = body[i .. end + 1];
+    const obj = field(body, std.mem.trim(u8, key, "\" :\t\r\n")) orelse return null;
+    if (obj.len < 2 or obj[0] != '{' or obj[obj.len - 1] != '}') return null;
 
     var out = EpisodeToAir{};
-    out.season = @intCast(jsonIntAfter(obj, "\"season_number\"") orelse return null);
-    out.episode = @intCast(jsonIntAfter(obj, "\"episode_number\"") orelse return null);
+    const season = integer(obj, "season_number") orelse return null;
+    const episode = integer(obj, "episode_number") orelse return null;
+    if (season < 0 or season > std.math.maxInt(i32) or episode <= 0 or episode > std.math.maxInt(i32)) return null;
+    out.season = @intCast(season);
+    out.episode = @intCast(episode);
     const date = jsonStrAfter(obj, "\"air_date\":\"") orelse return null;
     out.air_epoch = dateToEpoch(date) orelse return null;
     if (jsonStrAfter(obj, "\"name\":\"")) |nm| {
-        const n = @min(nm.len, out.name.len);
-        @memcpy(out.name[0..n], nm[0..n]);
-        out.name_len = n;
+        out.name_len = @import("json_pure.zig").jsonUnescape(nm, &out.name).len;
     }
     return out;
 }
@@ -126,24 +184,20 @@ pub fn imdbDigits(body: []const u8, buf: []u8) ?[]const u8 {
 /// (season/episode arrive as STRINGS: "season":"3"). Null when no torrent for
 /// that episode exists — i.e. not yet available.
 pub fn eztvEpisodeSeeds(body: []const u8, season: i32, episode: i32) ?u32 {
-    var want_s_buf: [24]u8 = undefined;
-    var want_e_buf: [24]u8 = undefined;
-    const want_s = std.fmt.bufPrint(&want_s_buf, "\"season\":\"{d}\"", .{season}) catch return null;
-    const want_e = std.fmt.bufPrint(&want_e_buf, "\"episode\":\"{d}\"", .{episode}) catch return null;
-
+    const torrents = field(body, "torrents") orelse return null;
+    if (torrents.len < 2 or torrents[0] != '[' or torrents[torrents.len - 1] != ']') return null;
     var best: ?u32 = null;
-    var pos: usize = 0;
-    while (std.mem.indexOfPos(u8, body, pos, want_s)) |si| {
-        // Same torrent object only: bound the window at the object's closing
-        // brace so episode/seeds are never paired across object boundaries.
-        // (EZTV torrent objects carry no nested braces.)
-        const win_end = std.mem.indexOfScalarPos(u8, body, si, '}') orelse body.len;
-        const win = body[si..win_end];
-        pos = si + want_s.len;
-        if (std.mem.indexOf(u8, win, want_e) == null) continue;
-        const seeds = jsonIntAfter(win, "\"seeds\"") orelse 0;
-        const s32: u32 = @intCast(@max(0, @min(seeds, std.math.maxInt(u32))));
-        if (best == null or s32 > best.?) best = s32;
+    var pos: usize = 1;
+    while (pos < torrents.len - 1) {
+        while (pos < torrents.len - 1 and (std.ascii.isWhitespace(torrents[pos]) or torrents[pos] == ',')) : (pos += 1) {}
+        if (pos >= torrents.len - 1) break;
+        const end = valueEnd(torrents, pos) orelse return null;
+        const torrent = torrents[pos..end];
+        pos = end;
+        if ((integer(torrent, "season") orelse continue) != season or (integer(torrent, "episode") orelse continue) != episode) continue;
+        const seeds = integer(torrent, "seeds") orelse continue;
+        const value: u32 = @intCast(@max(0, @min(seeds, std.math.maxInt(u32))));
+        if (best == null or value > best.?) best = value;
     }
     return best;
 }
@@ -208,4 +262,126 @@ test "eztvEpisodeSeeds: string season/episode match, max seeds, absent episode" 
     try std.testing.expect(eztvEpisodeSeeds(body, 3, 2) == null);
     // Episode "1" must not match "10" (exact string with closing quote).
     try std.testing.expect(eztvEpisodeSeeds(body, 3, 10) == null);
+}
+
+pub const CalendarEntry = struct {
+    tmdb_id: i32 = 0,
+    name: [128]u8 = .{0} ** 128,
+    name_len: usize = 0,
+    poster_path: [64]u8 = .{0} ** 64,
+    poster_path_len: usize = 0,
+    next_season: i32 = 0,
+    next_episode: i32 = 0,
+    next_air_epoch: i64 = 0,
+    next_name: [64]u8 = .{0} ** 64,
+    next_name_len: usize = 0,
+    last_season: i32 = 0,
+    last_episode: i32 = 0,
+    available: bool = false,
+    seeds: u32 = 0,
+    unseen: bool = false,
+};
+
+/// Single writer stages privately; external synchronization protects finish and
+/// copy. An incomplete refresh preserves its last coherent publication.
+pub const CalendarProjection = struct {
+    published: [12]CalendarEntry = undefined,
+    staged: [12]CalendarEntry = undefined,
+    count: usize = 0,
+    staged_count: usize = 0,
+    succeeded: usize = 0,
+    expected: ?usize = null,
+    loaded: bool = false,
+    failed: bool = false,
+    partial: bool = false,
+
+    pub fn begin(self: *CalendarProjection, expected: ?usize) void {
+        self.staged_count = 0;
+        self.succeeded = 0;
+        self.expected = expected;
+    }
+    pub fn add(self: *CalendarProjection, entry: CalendarEntry) void {
+        self.succeeded += 1;
+        // A valid caught-up show contributes to success even without a card.
+        if (entry.next_season <= 0 and !entry.unseen) return;
+        if (self.staged_count == self.staged.len) return;
+        self.staged[self.staged_count] = entry;
+        self.staged_count += 1;
+    }
+    pub fn finish(self: *CalendarProjection) void {
+        if (self.succeeded == 0 and (self.expected orelse 1) != 0) {
+            self.failed = true;
+            self.partial = false;
+            return;
+        }
+        @memcpy(self.published[0..self.staged_count], self.staged[0..self.staged_count]);
+        self.count = self.staged_count;
+        self.failed = false;
+        self.partial = if (self.expected) |expected| self.succeeded < expected else false;
+        self.loaded = true;
+    }
+    pub fn copy(self: *const CalendarProjection, out: []CalendarEntry) usize {
+        const n = @min(self.count, out.len);
+        @memcpy(out[0..n], self.published[0..n]);
+        return n;
+    }
+};
+
+test "calendar publishes whole refreshes and preserves previous rows after provider failure" {
+    var projection: CalendarProjection = .{};
+    var out: [12]CalendarEntry = undefined;
+    projection.begin(1);
+    projection.add(.{ .tmdb_id = 11, .next_season = 1, .next_episode = 2 });
+    try std.testing.expectEqual(@as(usize, 0), projection.copy(&out));
+    projection.finish();
+    try std.testing.expectEqual(@as(usize, 1), projection.copy(&out));
+    try std.testing.expectEqual(@as(i32, 11), out[0].tmdb_id);
+    projection.begin(2);
+    projection.add(.{ .tmdb_id = 22, .next_season = 2 });
+    _ = projection.copy(&out);
+    try std.testing.expectEqual(@as(i32, 11), out[0].tmdb_id);
+    projection.finish();
+    try std.testing.expect(projection.partial);
+    try std.testing.expectEqual(@as(usize, 1), projection.copy(&out));
+    try std.testing.expectEqual(@as(i32, 22), out[0].tmdb_id);
+    projection.begin(1);
+    projection.finish();
+    try std.testing.expect(projection.failed);
+    _ = projection.copy(&out);
+    try std.testing.expectEqual(@as(i32, 22), out[0].tmdb_id);
+    projection.begin(1);
+    projection.add(.{ .tmdb_id = 22 }); // valid caught-up show
+    projection.finish();
+    try std.testing.expect(!projection.failed);
+    try std.testing.expectEqual(@as(usize, 0), projection.copy(&out));
+}
+
+test "calendar empty tracked library is a successful bounded publication" {
+    var projection: CalendarProjection = .{};
+    projection.begin(0);
+    projection.finish();
+    try std.testing.expect(projection.loaded and !projection.failed);
+    projection.begin(15);
+    for (0..15) |id| projection.add(.{ .tmdb_id = @intCast(id + 1), .next_season = 1 });
+    projection.finish();
+    try std.testing.expectEqual(@as(usize, 12), projection.count);
+    try std.testing.expect(!projection.partial);
+}
+
+test "calendar metadata tolerates actual JSON formatting, escaped names and rejects overflowing identities" {
+    const doc = "{\"name\":\"ignore } text\", \"next_episode_to_air\" : { \"name\" : \"The \\\"Vault\\\"\", \"air_date\" : \"2026-07-15\", \"season_number\" : 3, \"episode_number\" : 4 }}";
+    const parsed = parseEpisodeToAir(doc, "\"next_episode_to_air\":").?;
+    try std.testing.expectEqualStrings("The \"Vault\"", parsed.name[0..parsed.name_len]);
+    try std.testing.expectEqual(@as(i32, 4), parsed.episode);
+    try std.testing.expect(parseEpisodeToAir("{\"next_episode_to_air\":{\"season_number\":999999999999999999999999999999,\"episode_number\":1,\"air_date\":\"2026-07-15\"}}", "\"next_episode_to_air\":") == null);
+    try std.testing.expect(dateToEpoch("2026-02-31") == null);
+    try std.testing.expect(dateToEpoch("2024-02-29") != null);
+    try std.testing.expectEqualStrings("/real.jpg", posterPath("{\"nested\":{\"poster_path\":\"/wrong.jpg\"}, \"poster_path\" : \"/real.jpg\"}").?);
+}
+
+test "calendar availability accepts string or integer identities, any field order and cannot cross torrent rows" {
+    const doc = "{\"torrents\":[{\"seeds\" : 9, \"episode\" : 4, \"filename\":\"quoted } text\", \"season\" : 3}, {\"season\":\"3\", \"episode\":\"4\", \"seeds\":30}]}";
+    try std.testing.expectEqual(@as(?u32, 30), eztvEpisodeSeeds(doc, 3, 4));
+    try std.testing.expect(eztvEpisodeSeeds("{\"torrents\":[{\"season\":3,\"seeds\":99},{\"episode\":4,\"seeds\":80}]}", 3, 4) == null);
+    try std.testing.expect(eztvEpisodeSeeds("{\"torrents\":[{\"season\":3,\"episode\":4,\"seeds\":999999999999999999999999999999}]}", 3, 4) == null);
 }

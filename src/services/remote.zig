@@ -2227,7 +2227,7 @@ fn apiSearch(stream: std.Io.net.Stream, query: []const u8) void {
 
 /// Music (JioSaavn / Subsonic / Jellyfin / Plex). Async search + poll:
 ///   POST /api/music/search?q=  → {"ok":true}
-///   POST /api/music/play?idx=  → play on the desktop (companion mode)
+///   POST /api/music/play?source=&id=  → play on the desktop (companion mode)
 ///   GET  /api/music            → {loading,source,songs:[{title,artist,cover,url}]}
 /// `url` is the direct stream, so a hosted browser can play it itself.
 fn apiMusic(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
@@ -2236,7 +2236,7 @@ fn apiMusic(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) 
 
 /// Internet radio (radio-browser). Same async shape as music; GET seeds the
 /// once-per-session popular list when nothing has been searched yet.
-///   POST /api/radio/search?q= · POST /api/radio/play?idx= · GET /api/radio
+///   POST /api/radio/search?q= · POST /api/radio/play?uuid= · GET /api/radio
 fn apiRadio(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
     const radio = @import("radio.zig");
     const alloc = @import("../core/alloc.zig").allocator;
@@ -2255,9 +2255,15 @@ fn apiRadio(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) 
         return;
     }
     if (std.mem.eql(u8, api_path, "/radio/play")) {
-        if (getQueryParam(query, "idx")) |v| {
-            const idx = std.fmt.parseInt(usize, v, 10) catch 0;
-            if (idx < radio.resultCount()) radio.playStation(idx);
+        var uuid_buf: [40]u8 = undefined;
+        const raw = getQueryParam(query, "uuid") orelse {
+            sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"station identity required\"}");
+            return;
+        };
+        const uuid = urlDecode(raw, &uuid_buf) orelse "";
+        if (uuid.len == 0 or !radio.playStationIdentity(uuid)) {
+            sendJsonStatus(stream, "409 Conflict", "{\"error\":\"station changed; refresh results\"}");
+            return;
         }
         sendJson(stream, "{\"ok\":true}");
         return;
@@ -2266,37 +2272,37 @@ fn apiRadio(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) 
     // Nothing loaded yet → seed the popular list (once per session, async).
     if (radio.resultCount() == 0) radio.loadPopularOnce();
 
-    const buf = alloc.alloc(u8, 512 * 1024) catch {
-        sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
+    const radio_pure = @import("radio_pure.zig");
+    const stations = alloc.alloc(radio_pure.Station, radio.RESULT_CAPACITY) catch {
+        sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"radio snapshot unavailable\"}");
+        return;
+    };
+    defer alloc.free(stations);
+    const snapshot = radio.copyCatalogSnapshot(stations);
+    const rows = stations[0..snapshot.count];
+    const buf = alloc.alloc(u8, radio_pure.catalogJsonCapacity(rows)) catch {
+        sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"radio response unavailable\"}");
         return;
     };
     defer alloc.free(buf);
     var w = std.Io.Writer.fixed(buf);
-    w.print("{{\"loading\":{s},\"loading_more\":{s},\"has_more\":{s},\"fetch_error\":{s},\"stations\":[", .{
-        if (state.app.radio.is_loading.load(.acquire)) "true" else "false",
-        if (radio.loadingMoreResults()) "true" else "false",
-        if (radio.hasMoreResults()) "true" else "false",
-        if (state.app.radio.fetch_error) "true" else "false",
-    }) catch return;
-    var i: usize = 0;
-    const n = radio.resultCount();
-    while (i < n) : (i += 1) {
-        const st = radio.resultRow(i) orelse continue;
-        const u = if (st.url_resolved_len > 0) st.url_resolved[0..@min(st.url_resolved_len, st.url_resolved.len)] else st.url[0..@min(st.url_len, st.url.len)];
-        if (i > 0) w.writeAll(",") catch return;
-        w.writeAll("{\"name\":\"") catch return;
-        escJsonWrite(&w, txt.safeUtf8(st.name[0..@min(st.name_len, st.name.len)]));
-        w.writeAll("\",\"url\":\"") catch return;
-        escJsonWrite(&w, txt.safeUtf8(u));
-        w.writeAll("\",\"favicon\":\"") catch return;
-        escJsonWrite(&w, txt.safeUtf8(st.favicon[0..@min(st.favicon_len, st.favicon.len)]));
-        w.writeAll("\",\"tags\":\"") catch return;
-        escJsonWrite(&w, txt.safeUtf8(st.tags[0..@min(st.tags_len, st.tags.len)]));
-        w.writeAll("\",\"country\":\"") catch return;
-        escJsonWrite(&w, txt.safeUtf8(st.country[0..@min(st.country_len, st.country.len)]));
-        w.writeAll("\"}") catch return;
-    }
-    w.writeAll("]}") catch return;
+    w.print("{{\"loading\":{s},\"loading_more\":{s},\"has_more\":{s},\"fetch_error\":{s},\"stations\":", .{
+        if (snapshot.loading) "true" else "false",
+        if (snapshot.loading_more) "true" else "false",
+        if (snapshot.has_more) "true" else "false",
+        if (snapshot.fetch_error) "true" else "false",
+    }) catch {
+        sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"radio serialization failed\"}");
+        return;
+    };
+    radio_pure.writeCatalogRows(&w, rows) catch {
+        sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"radio serialization failed\"}");
+        return;
+    };
+    w.writeByte('}') catch {
+        sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"radio serialization failed\"}");
+        return;
+    };
     sendJson(stream, buf[0..w.end]);
 }
 
@@ -3440,89 +3446,7 @@ fn apiSettingsToggle(query: []const u8) void {
 }
 
 fn apiPodcasts(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
-    const podcasts_svc = @import("podcasts.zig");
-    if (std.mem.eql(u8, api_path, "/podcasts/search")) {
-        if (getQueryParam(query, "q")) |q| {
-            var decoded: [256]u8 = undefined;
-            const dq = urlDecode(q, &decoded) orelse q;
-            podcasts_svc.searchPodcasts(dq);
-        }
-        sendJson(stream, "{\"ok\":true,\"action\":\"podcast_search\"}");
-        return;
-    }
-    if (std.mem.eql(u8, api_path, "/podcasts/episodes")) {
-        if (getQueryParam(query, "idx")) |idx_str| {
-            const idx = std.fmt.parseInt(usize, idx_str, 10) catch 0;
-            podcasts_svc.loadEpisodes(idx);
-        }
-        sendJson(stream, "{\"ok\":true,\"action\":\"load_episodes\"}");
-        return;
-    }
-    if (std.mem.eql(u8, api_path, "/podcasts/play")) {
-        if (getQueryParam(query, "idx")) |idx_str| {
-            const idx = std.fmt.parseInt(usize, idx_str, 10) catch 0;
-            podcasts_svc.playEpisode(idx);
-        }
-        sendJson(stream, "{\"ok\":true,\"action\":\"play_episode\"}");
-        return;
-    }
-    // GET /podcasts → results + episodes for the current show.
-    podcasts_svc.loadPopularOnce();
-    const allocator = @import("../core/alloc.zig").allocator;
-    const view = allocator.create(podcasts_svc.Snapshot) catch {
-        sendJsonStatus(stream, "503 Service Unavailable", "{\"error\":\"podcast snapshot unavailable\"}");
-        return;
-    };
-    defer allocator.destroy(view);
-    podcasts_svc.copySnapshot(view);
-    const json_buf = allocator.alloc(u8, @sizeOf(podcasts_svc.Snapshot) * 6 + 8192) catch {
-        sendJsonStatus(stream, "503 Service Unavailable", "{\"error\":\"podcast view unavailable\"}");
-        return;
-    };
-    defer allocator.free(json_buf);
-    var w = std.Io.Writer.fixed(json_buf);
-    w.print("{{\"generation\":{d},\"fetch_error\":{s},\"episodes_failed\":{s},\"results\":[", .{ view.generation, if (view.fetch_error) "true" else "false", if (view.episodes_failed) "true" else "false" }) catch return;
-    for (0..view.result_count) |ri| {
-        const r = view.results[ri];
-        if (r.name_len == 0) continue;
-        if (ri > 0) w.writeAll(",") catch return;
-        w.writeAll("{\"name\":\"") catch return;
-        escJsonWrite(&w, r.name[0..r.name_len]);
-        w.writeAll("\",\"artist\":\"") catch return;
-        escJsonWrite(&w, r.artist[0..@min(r.artist_len, r.artist.len)]);
-        // `art` tells the web client whether to request the cover proxy
-        // (/api/podcasts/poster?idx=…) or fall back to a placeholder tile.
-        w.writeAll("\",\"art\":") catch return;
-        w.writeAll(if (r.artwork_len > 0) "true" else "false") catch return;
-        w.writeAll("}") catch return;
-    }
-    w.writeAll("],\"episodes\":[") catch return;
-    for (0..view.episode_count) |ei| {
-        const e = view.episodes[ei];
-        if (e.title_len == 0) continue;
-        if (ei > 0) w.writeAll(",") catch return;
-        w.writeAll("{\"title\":\"") catch return;
-        escJsonWrite(&w, e.title[0..e.title_len]);
-        w.writeAll("\",\"date\":\"") catch return;
-        escJsonWrite(&w, e.date[0..e.date_len]);
-        w.writeAll("\",\"duration\":\"") catch return;
-        escJsonWrite(&w, e.duration[0..e.duration_len]);
-        w.writeAll("\",\"url\":\"") catch return;
-        escJsonWrite(&w, e.audio_url[0..@min(e.audio_url_len, e.audio_url.len)]);
-        w.writeAll("\"}") catch return;
-    }
-    w.writeAll("],\"selected\":") catch return;
-    if (view.selected_idx) |si| {
-        w.print("{d}", .{si}) catch return;
-    } else {
-        w.writeAll("null") catch return;
-    }
-    w.writeAll(",\"loading\":") catch return;
-    w.writeAll(if (view.loading) "true" else "false") catch return;
-    w.writeAll(",\"episodes_loading\":") catch return;
-    w.writeAll(if (view.episodes_loading) "true" else "false") catch return;
-    w.writeAll("}") catch return;
-    sendJson(stream, json_buf[0..w.end]);
+    @import("remote_audio_api.zig").apiPodcasts(stream, api_path, query);
 }
 
 /// GET /api/logs[?errors=1&limit=N] — the in-app log ring.
@@ -3536,51 +3460,7 @@ fn apiPodcasts(stream: std.Io.net.Stream, api_path: []const u8, query: []const u
 /// oldest entry's slices. So the whole serialization happens under the lock, and
 /// nothing in this loop may log.
 fn apiLogs(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
-    const a = @import("../core/alloc.zig").allocator;
-
-    if (std.mem.eql(u8, api_path, "/logs/clear")) {
-        logs.clear();
-        sendJson(stream, "{\"ok\":true,\"action\":\"logs_clear\"}");
-        return;
-    }
-
-    const errors_only = std.mem.eql(u8, getQueryParam(query, "errors") orelse "", "1");
-    // Newest-N window: the ring holds 1024 entries and a browser wants the tail.
-    const limit = std.fmt.parseInt(usize, getQueryParam(query, "limit") orelse "200", 10) catch 200;
-
-    // 1024 entries can exceed 256KB of text — heap, never the thread stack.
-    const json_buf = a.alloc(u8, 512 * 1024) catch return;
-    defer a.free(json_buf);
-    var w = std.Io.Writer.fixed(json_buf);
-    w.writeAll("{\"entries\":[") catch return;
-
-    logs.lockRead();
-    const total = logs.logCount();
-    // Walk oldest→newest but start late enough to emit at most `limit` rows.
-    var idx: usize = if (total > limit) total - limit else 0;
-    var emitted: usize = 0;
-    while (idx < total) : (idx += 1) {
-        const e = logs.getLog(idx);
-        if (errors_only and !e.is_error) continue;
-        if (emitted > 0) w.writeAll(",") catch break;
-        emitted += 1;
-        w.print("{{\"ts\":{d},\"error\":{s},\"level\":\"", .{
-            e.timestamp,
-            if (e.is_error) "true" else "false",
-        }) catch break;
-        escJsonWrite(&w, txt.safeUtf8(e.level));
-        w.writeAll("\",\"prefix\":\"") catch break;
-        escJsonWrite(&w, txt.safeUtf8(e.prefix));
-        w.writeAll("\",\"text\":\"") catch break;
-        // Log text is untrusted (mpv stderr, scraper output) — invalid UTF-8
-        // here would produce a response the browser refuses to parse.
-        escJsonWrite(&w, txt.safeUtf8(e.text));
-        w.writeAll("\"}") catch break;
-    }
-    logs.unlockRead();
-
-    w.writeAll("]}") catch return;
-    sendJson(stream, json_buf[0..w.end]);
+    @import("remote_audio_api.zig").apiLogs(stream, api_path, query);
 }
 
 /// GET /api/vndb[/search?q=] — visual-novel catalog. No play route: VNs aren't
@@ -3701,124 +3581,7 @@ fn apiDrama(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) 
 /// `/novels/chapter?idx=` → its text; `/novels/next|prev`. `GET /novels` returns
 /// whichever view is live, so one poll drives the whole flow.
 fn apiNovels(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
-    const nov = @import("novels.zig");
-    if (std.mem.eql(u8, api_path, "/novels/back")) {
-        nov.back();
-        sendJson(stream, "{\"ok\":true}");
-        return;
-    }
-    if (std.mem.eql(u8, api_path, "/novels/more")) {
-        nov.loadMore();
-        sendJson(stream, "{\"ok\":true}");
-        return;
-    }
-
-    if (std.mem.eql(u8, api_path, "/novels/search")) {
-        if (getQueryParam(query, "q")) |q| {
-            var decoded: [256]u8 = undefined;
-            nov.searchNovels(txt.safeUtf8(urlDecode(q, &decoded) orelse q));
-        }
-        sendJson(stream, "{\"ok\":true,\"action\":\"novel_search\"}");
-        return;
-    }
-    if (std.mem.eql(u8, api_path, "/novels/open")) {
-        const idx = std.fmt.parseInt(usize, getQueryParam(query, "idx") orelse "999", 10) catch 999;
-        if (idx >= nov.resultCount()) {
-            sendJsonStatus(stream, "404 Not Found", "{\"error\":\"no such novel\"}");
-            return;
-        }
-        nov.openNovel(idx);
-        sendJson(stream, "{\"ok\":true,\"action\":\"novel_open\"}");
-        return;
-    }
-    if (std.mem.eql(u8, api_path, "/novels/chapter")) {
-        const idx = std.fmt.parseInt(usize, getQueryParam(query, "idx") orelse "999", 10) catch 999;
-        if (idx >= nov.chapterCount()) {
-            sendJsonStatus(stream, "404 Not Found", "{\"error\":\"no such chapter\"}");
-            return;
-        }
-        nov.openChapter(idx);
-        sendJson(stream, "{\"ok\":true,\"action\":\"novel_chapter\"}");
-        return;
-    }
-    if (std.mem.eql(u8, api_path, "/novels/next")) {
-        nov.nextChapter();
-        sendJson(stream, "{\"ok\":true,\"action\":\"novel_next\"}");
-        return;
-    }
-    if (std.mem.eql(u8, api_path, "/novels/prev")) {
-        nov.prevChapter();
-        sendJson(stream, "{\"ok\":true,\"action\":\"novel_prev\"}");
-        return;
-    }
-
-    const a = @import("../core/alloc.zig").allocator;
-    const n = a.create(nov.ReaderSnapshot) catch return;
-    defer a.destroy(n);
-    nov.copyReaderSnapshot(n);
-    // Size from the immutable view, including worst-case JSON escapes. Large
-    // enriched catalogs must not silently cut off chapter lists or reader text.
-    var json_cap: usize = 8192 + (n.text_len + n.work_title_len + n.chapter_label_len) * 6;
-    for (n.results[0..n.result_count]) |*row| {
-        json_cap += (row.title().len + row.url().len + row.metadata.author().len +
-            row.metadata.overview().len + row.metadata.cover().len) * 6 + 128;
-    }
-    for (n.chapter_title_lens[0..n.chapter_count]) |length| json_cap += length * 6 + 32;
-    const json_buf = a.alloc(u8, json_cap) catch return;
-    defer a.free(json_buf);
-    var w = std.Io.Writer.fixed(json_buf);
-    w.print("{{\"view\":\"{s}\",\"loading\":{s},\"chapters_loading\":{s},\"text_loading\":{s},\"error\":{s},\"title\":\"", .{
-        @tagName(n.view),
-        if (n.loading) "true" else "false",
-        if (n.chapters_loading) "true" else "false",
-        if (n.text_loading) "true" else "false",
-        if (n.fetch_error) "true" else "false",
-    }) catch return;
-    escJsonWrite(&w, txt.safeUtf8(n.work_title[0..@min(n.work_title_len, n.work_title.len)]));
-    w.writeAll("\",\"chapter_label\":\"") catch return;
-    escJsonWrite(&w, txt.safeUtf8(n.chapter_label[0..@min(n.chapter_label_len, n.chapter_label.len)]));
-    w.print("\",\"current_chapter\":{d},\"truncated\":{s},\"results\":[", .{
-        n.current_chapter,
-        if (n.text_truncated) "true" else "false",
-    }) catch return;
-
-    var i: usize = 0;
-    const rn = n.result_count;
-    while (i < rn) : (i += 1) {
-        const row = &n.results[i];
-        if (i > 0) w.writeAll(",") catch return;
-        w.writeAll("{\"title\":\"") catch return;
-        escJsonWrite(&w, txt.safeUtf8(row.title()));
-        w.writeAll("\",\"url\":\"") catch return;
-        escJsonWrite(&w, row.url());
-        w.writeAll("\",\"author\":\"") catch return;
-        escJsonWrite(&w, txt.safeUtf8(row.metadata.author()));
-        w.writeAll("\",\"overview\":\"") catch return;
-        escJsonWrite(&w, txt.safeUtf8(row.metadata.overview()));
-        w.writeAll("\",\"cover\":\"") catch return;
-        escJsonWrite(&w, row.metadata.cover());
-        w.print("\",\"year\":{d},\"source\":{d}}}", .{ row.metadata.year, row.source }) catch return;
-    }
-    w.writeAll("],\"chapters\":[") catch return;
-    i = 0;
-    const cn = n.chapter_count;
-    while (i < cn) : (i += 1) {
-        const chapter_title = n.chapter_titles[i][0..n.chapter_title_lens[i]];
-        if (i > 0) w.writeAll(",") catch return;
-        w.writeAll("{\"title\":\"") catch return;
-        escJsonWrite(&w, txt.safeUtf8(chapter_title));
-        w.writeAll("\"}") catch return;
-    }
-    w.writeAll("],\"text\":\"") catch return;
-    escJsonWrite(&w, txt.safeUtf8(n.text_buf[0..@min(n.text_len, n.text_buf.len)]));
-    w.print("\",\"has_more\":{s},\"loading_more\":{s},\"search_generation\":{d},\"chapter_generation\":{d},\"text_generation\":{d}}}", .{
-        if (n.has_more) "true" else "false",
-        if (n.loading_more) "true" else "false",
-        n.search_generation,
-        n.chapter_generation,
-        n.text_generation,
-    }) catch return;
-    sendJson(stream, json_buf[0..w.end]);
+    @import("remote_novels_api.zig").apiNovels(stream, api_path, query);
 }
 
 /// GET /api/abs — Audiobookshelf: libraries → books → play.
@@ -4011,29 +3774,23 @@ fn apiOpds(stream: std.Io.net.Stream, method: []const u8, api_path: []const u8, 
 
     if (std.mem.eql(u8, api_path, "/opds/connect")) {
         if (!requireMethod(stream, method, "POST")) return;
+        var connection = opds.connectionSnapshot();
+        defer @memset(std.mem.asBytes(&connection), 0);
         var dec: [256]u8 = undefined;
         defer @memset(&dec, 0);
-        if (credParam(body, "", "server", &dec)) |v| {
-            const sv = txt.safeUtf8(v);
-            const n = @min(sv.len, o.server_url.len);
-            @memcpy(o.server_url[0..n], sv[0..n]);
-            o.server_url_len = n;
+        if (credParam(body, "", "server", &dec)) |value| {
+            connection.server_len = @min(value.len, connection.server.len);
+            @memcpy(connection.server[0..connection.server_len], value[0..connection.server_len]);
         }
-        // user_buf/pass_buf are NUL-TERMINATED with no _len companion (see
-        // config.zig) — write the terminator, don't set a length.
-        if (credParam(body, "", "user", &dec)) |v| {
-            const uv = txt.safeUtf8(v);
-            @memset(&o.user_buf, 0);
-            const n = @min(uv.len, o.user_buf.len - 1);
-            @memcpy(o.user_buf[0..n], uv[0..n]);
-            o.user_buf[n] = 0;
+        if (credParam(body, "", "user", &dec)) |value| {
+            connection.user_len = @min(value.len, connection.user.len - 1);
+            @memcpy(connection.user[0..connection.user_len], value[0..connection.user_len]);
         }
-        if (credParam(body, "", "pass", &dec)) |pv| {
-            @memset(&o.pass_buf, 0);
-            const n = @min(pv.len, o.pass_buf.len - 1);
-            @memcpy(o.pass_buf[0..n], pv[0..n]);
-            o.pass_buf[n] = 0;
+        if (credParam(body, "", "pass", &dec)) |value| {
+            connection.pass_len = @min(value.len, connection.pass.len - 1);
+            @memcpy(connection.pass[0..connection.pass_len], value[0..connection.pass_len]);
         }
+        opds.configureConnection(connection.server[0..connection.server_len], connection.user[0..connection.user_len], connection.pass[0..connection.pass_len]);
         opds.connect();
         sendJson(stream, "{\"ok\":true,\"action\":\"opds_connect\"}");
         return;
@@ -4295,30 +4052,39 @@ fn apiComics(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
     }
     if (std.mem.eql(u8, api_path, "/comics/results")) {
         const comics_svc = @import("comics.zig");
+        const comics_pure = @import("comics_pure.zig");
         comics_svc.loadPopularOnce();
         const a = @import("../core/alloc.zig").allocator;
-        // 120 rows × (url + title + cover url) — heap, not the thread stack.
-        const json_buf = a.alloc(u8, 96 * 1024) catch return;
+        const rows = a.alloc(comics_svc.OwnedSearchRow, comics_svc.MAX_SEARCH_RESULTS) catch {
+            sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"comic snapshot unavailable\"}");
+            return;
+        };
+        defer a.free(rows);
+        const count = comics_svc.copySearchSnapshot(rows);
+        var field_bytes: usize = 0;
+        for (rows[0..count]) |row| field_bytes += row.title_len + row.url_len + row.cover_len;
+        const json_buf = a.alloc(u8, comics_pure.catalogJsonCapacity(count, field_bytes)) catch {
+            sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"comic response unavailable\"}");
+            return;
+        };
         defer a.free(json_buf);
         var w = std.Io.Writer.fixed(json_buf);
-        w.print("{{\"loading_more\":{s},\"has_more\":{s},\"loading\":{s},\"results\":[", .{
+        w.print("{{\"loading_more\":{s},\"has_more\":{s},\"loading\":{s},\"results\":", .{
             if (comics_svc.loadingMoreResults()) "true" else "false",
             if (comics_svc.hasMoreResults()) "true" else "false",
             if (comics_svc.searching()) "true" else "false",
-        }) catch return;
-        var i: usize = 0;
-        while (i < comics_svc.searchCount()) : (i += 1) {
-            const row = comics_svc.searchRow(i) orelse break;
-            if (i > 0) w.writeAll(",") catch return;
-            w.writeAll("{\"title\":\"") catch return;
-            escJsonWrite(&w, txt.safeUtf8(row.title));
-            w.writeAll("\",\"url\":\"") catch return;
-            escJsonWrite(&w, row.url);
-            w.writeAll("\",\"cover\":\"") catch return;
-            escJsonWrite(&w, row.cover_url);
-            w.writeAll("\"}") catch return;
-        }
-        w.writeAll("]}") catch return;
+        }) catch {
+            sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"comic serialization failed\"}");
+            return;
+        };
+        comics_pure.writeCatalogRows(&w, rows[0..count]) catch {
+            sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"comic serialization failed\"}");
+            return;
+        };
+        w.writeByte('}') catch {
+            sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"comic serialization failed\"}");
+            return;
+        };
         sendJson(stream, json_buf[0..w.end]);
         return;
     }
@@ -4546,6 +4312,7 @@ fn apiUnifiedResolverSearch(stream: std.Io.net.Stream, query: []const u8) void {
         .{ .name = "podcast", .enabled = resolver.sourceOn(.podcast), .status = resolver.status_podcast.load(.acquire) },
         .{ .name = "novels", .enabled = resolver.sourceOn(.novels), .status = resolver.combineSourceStatuses(resolver.status_novels.load(.acquire), resolver.status_novel_archive.load(.acquire)) },
         .{ .name = "audiobooks", .enabled = resolver.sourceOn(.audiobooks), .status = resolver.status_audiobooks.load(.acquire) },
+        .{ .name = "opds", .enabled = resolver.sourceOn(.opds), .status = resolver.status_opds.load(.acquire) },
         .{ .name = "vndb", .enabled = resolver.sourceOn(.vndb), .status = resolver.status_vndb.load(.acquire) },
         .{ .name = "tmdb", .enabled = true, .status = resolver.status_catalog.load(.acquire) },
         .{ .name = "plex", .enabled = true, .status = resolver.status_plex.load(.acquire) },

@@ -308,9 +308,35 @@ function renderPodEpisodes(eps, data = {}){
           <button class="play" data-destination-verb="Play" data-ep="${i}">${destinationActionLabel('Play')}</button></span></div>
       </div>`).join('')
     : `<div class="empty">${data.episodes_loading ? 'Loading episodes…' : data.episodes_failed ? 'Feed unavailable. Select the show to retry.' : 'No episodes'}</div>`;
+  const offset = Number(data.episode_offset || 0);
+  const total = Number(data.episode_total || eps.length);
+  if (total > eps.length) {
+    const pager = document.createElement('div'); pager.className = 'actions';
+    const previous = document.createElement('button'); previous.textContent = 'Previous episodes';
+    const next = document.createElement('button'); next.textContent = 'More episodes';
+    const count = document.createElement('span'); count.textContent = `${offset + 1}–${offset + eps.length} of ${total} episodes in this feed`;
+    previous.disabled = offset === 0 || data.episodes_loading;
+    next.disabled = offset + eps.length >= total || data.episodes_loading;
+    const navigate = async forward => {
+      previous.disabled = next.disabled = true;
+      const generation = ++podEpisodeGeneration;
+      clearInterval(podEpisodeWatch);
+      try {
+        const view = await apiMutation('/podcasts/page?generation=' + encodeURIComponent(data.generation)
+          + '&direction=' + (forward ? 'next' : 'previous'));
+        if (generation === podEpisodeGeneration) renderPodEpisodes(view.episodes || [], view);
+      } catch (error) {
+        if (generation === podEpisodeGeneration) {
+          renderPodEpisodes(eps, data); toast(error.message || 'Could not change episode page.');
+        }
+      }
+    };
+    previous.onclick = () => navigate(false); next.onclick = () => navigate(true);
+    pager.append(previous, count, next); $('pod-episodes').append(pager);
+  }
   $('pod-episodes').querySelectorAll('.play').forEach(b => b.onclick = () => {
     const episode = eps[Number(b.dataset.ep)] || {};
-    dispatchPlay(episode.url || '', episode.title || '', () => api('/podcasts/play?idx=' + encodeURIComponent(b.dataset.ep)));
+    dispatchPlay(episode.url || '', episode.title || '', () => apiMutation('/podcasts/play?idx=' + encodeURIComponent(b.dataset.ep) + '&generation=' + encodeURIComponent(data.generation)));
   });
   $('pod-episodes').querySelectorAll('[data-pod-queue]').forEach(button => {
     const episode = eps[Number(button.dataset.podQueue)] || {};
@@ -616,7 +642,7 @@ function renderRadio(sts){
         ${s.tags ? `<span>${esc((s.tags || '').split(',').slice(0,2).join(', '))}</span>` : ''}
         <button class="radio-details" data-details="${i}">Details</button>
         ${s.url ? `<button class="queue-btn" data-queue="${i}">Queue</button>` : ''}
-        <button class="play" data-destination-verb="Listen" data-i="${i}" data-url="${encodeURIComponent(s.url || '')}">${destinationActionLabel('Listen')}</button></div>
+        <button class="play" data-destination-verb="Listen" data-i="${i}" data-uuid="${encodeURIComponent(s.uuid || '')}" data-url="${encodeURIComponent(s.url || '')}">${destinationActionLabel('Listen')}</button></div>
     </div>`).join('') || '<div class="empty">No stations yet</div>';
   if (html === lastHtml.radio) return;
   lastHtml.radio = html;
@@ -625,7 +651,7 @@ function renderRadio(sts){
     const u = decodeURIComponent(b.dataset.url || '');
     const t = b.parentElement.parentElement.querySelector('.t').textContent;
     if (HOSTED && u) return openStreamUrl(u, t);
-    dispatchPlay(u, t, () => { api('/radio/play?idx=' + b.dataset.i).catch(()=>{}); b.textContent = 'Sent ✓'; });
+    dispatchPlay(u, t, () => { api('/radio/play?uuid=' + b.dataset.uuid).then(() => { b.textContent = 'Sent ✓'; }).catch(() => { b.textContent = 'Refresh stations'; }); });
   });
   $('ra-results').querySelectorAll('[data-queue]').forEach(button => {
     const station = sts[Number(button.dataset.queue)] || {};

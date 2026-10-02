@@ -26,7 +26,7 @@ def test_audiobookshelf():
         # ── Pure module: parsing + URL building, tested + registered ──
         "pure registered in build.zig": "src/services/audiobookshelf_pure.zig" in build,
         "pure has tests": pure.count('test "') >= 5,
-        "pure parses login token": "pub fn extractToken(" in pure,
+        "pure parses login token": "pub fn parseLoginToken(" in pure,
         "pure parses libraries": "pub fn parseLibraries(" in pure,
         "pure parses items": "pub fn parseItems(" in pure,
         "pure builds stream url": "pub fn streamUrl(" in pure,
@@ -39,7 +39,7 @@ def test_audiobookshelf():
         "pure gates item id (injection)": "pub fn validItemId(" in pure,
         # Production routes through the tested pure fns (no drift).
         "service routes through pure": all(f in svc for f in (
-            "pure.extractToken", "pure.parseLibraries", "pure.parseItems",
+            "pure.parseLoginToken", "pure.parseLibraryPage", "pure.parseItemPage",
             "pure.streamUrl", "pure.bearerHeader")),
 
         # ── State: DrawerTab + per-tab struct ──
@@ -90,3 +90,13 @@ def test_audiobookshelf():
     if missing:
         return "fail", "audiobookshelf wiring incomplete: " + ", ".join(missing[:5])
     return "pass", "ABS client: tested pure parsers, DrawerTab wired, streams via mpv + Now Playing"
+
+@test("Headless audiobook playback pumps lifecycle and resume", "Audio")
+def test_headless_audiobook_lifecycle():
+    headless = _src("src/headless.zig")
+    begin = headless.index("players_mutex.lock();")
+    end = headless.index("players_mutex.unlock();", begin)
+    critical = headless[begin:end]
+    if 'player.zig").updateTorrentBackgroundTasks();' not in critical or 'audiobookshelf.zig").tick();' not in critical:
+        return "fail", "headless does not pump player events and audiobook resume/advance under the owner lock"
+    return "pass", "headless pumps player events before audiobook resume/advance in each short poll"

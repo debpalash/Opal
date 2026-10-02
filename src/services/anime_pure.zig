@@ -313,3 +313,53 @@ test "regression: retiring a loaded poster's texture must not latch it dead" {
     reset.failed = false;
     try std.testing.expectEqual(PosterAction.fetch, posterAction(reset));
 }
+
+/// Only complete, top-level Jikan catalogs may replace an existing grid.
+pub fn jikanCatalogBody(allocator: std.mem.Allocator, json: []const u8) ?[]const u8 {
+    if (!(std.json.validate(allocator, json) catch return null)) return null;
+    const start = @import("cinemeta_pure.zig").arrayStart(json, "\"data\":[") orelse return null;
+    return catalogArrayBody(json, start);
+}
+pub fn anilistCatalogBody(allocator: std.mem.Allocator, json: []const u8) ?[]const u8 {
+    if (!(std.json.validate(allocator, json) catch return null)) return null;
+    const fields = @import("cinemeta_pure.zig");
+    const data = fields.valueStart(json, "\"data\"") orelse return null;
+    if (json[data] != '{') return null;
+    const data_end = jsonObjectEnd(json, data) orelse return null;
+    const page = fields.valueStart(json[data..data_end], "\"Page\"") orelse return null;
+    const page_start = data + page;
+    if (json[page_start] != '{') return null;
+    const page_end = jsonObjectEnd(json, page_start) orelse return null;
+    const start = fields.arrayStart(json[page_start..page_end], "\"media\":[") orelse return null;
+    return catalogArrayBody(json, page_start + start);
+}
+fn catalogArrayBody(json: []const u8, start: usize) ?[]const u8 {
+    var depth: usize = 1;
+    var quoted = false;
+    var escaped = false;
+    for (json[start..], start..) |ch, i| {
+        if (quoted) {
+            if (escaped) escaped = false else if (ch == '\\') escaped = true else if (ch == '"') quoted = false;
+            continue;
+        }
+        if (ch == '"') quoted = true else if (ch == '[') depth += 1 else if (ch == ']') {
+            depth -= 1;
+            if (depth == 0) return json[start..i];
+        }
+    }
+    return null;
+}
+test "Jikan catalog rejects provider errors and malformed responses before clearing rows" {
+    try std.testing.expect(jikanCatalogBody(std.testing.allocator, "{\"error\":\"upstream unavailable\"}") == null);
+    try std.testing.expect(jikanCatalogBody(std.testing.allocator, "{\"data\":[{") == null);
+    try std.testing.expect(jikanCatalogBody(std.testing.allocator, "{\"nested\":{\"data\":[]}}") == null);
+    try std.testing.expectEqualStrings("", jikanCatalogBody(std.testing.allocator, "{\"data\" : []}").?);
+    try std.testing.expectEqualStrings("{\"mal_id\":42}", jikanCatalogBody(std.testing.allocator, "{\"data\":[{\"mal_id\":42}],\"pagination\":{\"mal_id\":999}}").?);
+}
+
+test "AniList fallback rejects errors and only publishes its media array" {
+    try std.testing.expect(anilistCatalogBody(std.testing.allocator, "{\"data\":null,\"errors\":[{\"id\":99}]}") == null);
+    try std.testing.expect(anilistCatalogBody(std.testing.allocator, "{\"nested\":{\"data\":{\"Page\":{\"media\":[]}}}}") == null);
+    try std.testing.expectEqualStrings("{\"id\":7,\"idMal\":42}", anilistCatalogBody(std.testing.allocator, "{\"data\":{\"Page\":{\"media\":[{\"id\":7,\"idMal\":42}]}},\"extra\":{\"id\":99}}").?);
+    try std.testing.expectEqualStrings("", anilistCatalogBody(std.testing.allocator, "{\"data\":{\"Page\":{\"media\":[]}}}").?);
+}

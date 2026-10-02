@@ -15,35 +15,46 @@ const io = @import("../core/io_global.zig");
 const alloc = @import("../core/alloc.zig").allocator;
 const pure = @import("tv_calendar_pure.zig");
 
-pub const Entry = struct {
-    tmdb_id: i32 = 0,
-    name: [128]u8 = std.mem.zeroes([128]u8),
-    name_len: usize = 0,
-    poster_path: [64]u8 = std.mem.zeroes([64]u8),
-    poster_path_len: usize = 0,
-    // Next episode to air (0 season → none scheduled).
-    next_season: i32 = 0,
-    next_episode: i32 = 0,
-    next_air_epoch: i64 = 0,
-    next_name: [64]u8 = std.mem.zeroes([64]u8),
-    next_name_len: usize = 0,
-    // Latest AIRED episode + its EZTV availability.
-    last_season: i32 = 0,
-    last_episode: i32 = 0,
-    available: bool = false, // EZTV has torrents for the latest aired episode
-    seeds: u32 = 0,
-    // True when the latest aired episode is past the user's watched position.
-    unseen: bool = false,
-};
-
-pub var entries: [12]Entry = undefined;
-/// Parallel TmdbItem per entry — carries the poster-fetch state so the Home
-/// rail can show real poster cards (like Trending) via the shared poster
-/// daemon, instead of duplicating that machinery. Index-aligned with entries.
-pub var cal_items: [12]state.TmdbItem = undefined;
-pub var count: usize = 0;
+pub const Entry = pure.CalendarEntry;
+var projection: pure.CalendarProjection = .{};
+var snapshot_mutex: @import("../core/sync.zig").Mutex = .{};
 pub var loading = std.atomic.Value(bool).init(false);
-var fetched_once: bool = false;
+
+pub const Snapshot = struct { count: usize, loading: bool, loaded: bool, failed: bool, partial: bool, stale: bool };
+
+pub fn snapshotCopy(out: []Entry) Snapshot {
+    snapshot_mutex.lock();
+    defer snapshot_mutex.unlock();
+    return .{ .count = projection.copy(out), .loading = loading.load(.acquire), .loaded = projection.loaded, .failed = projection.failed, .partial = projection.partial, .stale = projection.failed and projection.loaded };
+}
+
+// UI-owned stable identity slots. A refresh never resets a slot while an image
+// worker still owns pointers to its decoded pixel fields.
+var poster_items: [@import("tv_pure.zig").MAX_SHOWS]state.TmdbItem = std.mem.zeroes([@import("tv_pure.zig").MAX_SHOWS]state.TmdbItem);
+var no_poster: state.TmdbItem = .{};
+pub fn posterFor(entry: *const Entry) *state.TmdbItem {
+    for (&poster_items) |*item| {
+        if (item.id != entry.tmdb_id or item.id == 0) continue;
+        if (item.poster_path_len == 0 and entry.poster_path_len > 0) {
+            item.poster_path_len = @min(entry.poster_path_len, item.poster_path.len);
+            @memcpy(item.poster_path[0..item.poster_path_len], entry.poster_path[0..item.poster_path_len]);
+        }
+        return item;
+    }
+    for (&poster_items) |*item| {
+        if (item.id != 0) continue;
+        item.id = entry.tmdb_id;
+        item.title_len = @min(entry.name_len, item.title.len);
+        @memcpy(item.title[0..item.title_len], entry.name[0..item.title_len]);
+        item.poster_path_len = @min(entry.poster_path_len, item.poster_path.len);
+        @memcpy(item.poster_path[0..item.poster_path_len], entry.poster_path[0..item.poster_path_len]);
+        @memcpy(item.media_type[0..2], "tv");
+        item.media_type_len = 2;
+        return item;
+    }
+    // Exhausted slots omit artwork instead of borrowing another show's image.
+    return &no_poster;
+}
 
 /// Kick the TV metadata sync (which builds this rail as a side-effect).
 ///
@@ -62,17 +73,19 @@ fn curlInto(url: []const u8, buf: []u8) usize {
     // was likewise ignoring the user's bypass setting.
     var argv: [12][]const u8 = undefined;
     var argc: usize = 0;
-    for ([_][]const u8{ "curl", "-s", "--connect-timeout", "3", "--max-time", "8" }) |x| {
+    for ([_][]const u8{ "curl", "-fsSL", "--connect-timeout", "3", "--max-time", "8" }) |x| {
         argv[argc] = x;
         argc += 1;
     }
     if (@import("dpi_bypass.zig").proxyArgs()) |pa| {
         for (pa) |x| {
-            if (argc >= argv.len - 1) break;
+            if (argc >= argv.len - 2) break;
             argv[argc] = x;
             argc += 1;
         }
     }
+    argv[argc] = "--";
+    argc += 1;
     argv[argc] = url;
     argc += 1;
 
@@ -81,8 +94,19 @@ fn curlInto(url: []const u8, buf: []u8) usize {
     child.stderr_behavior = .Ignore;
     child.spawn() catch return 0;
     const n = if (child.stdout) |*so| io.readAll(so, buf) catch 0 else 0;
-    _ = child.wait() catch {};
-    return n;
+    if (n == buf.len) {
+        var extra: [1]u8 = undefined;
+        const extra_n = if (child.stdout) |*so| io.readAll(so, &extra) catch 1 else 1;
+        if (extra_n > 0) {
+            _ = child.kill() catch {};
+            return 0;
+        }
+    }
+    const term = child.wait() catch return 0;
+    return if (switch (term) {
+        .exited => |code| code == 0,
+        else => false,
+    }) n else 0;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -96,14 +120,17 @@ fn curlInto(url: []const u8, buf: []u8) usize {
 // rewatched, or watched out of order).
 // ══════════════════════════════════════════════════════════
 
-var built: usize = 0;
 var eztv_on: bool = false;
 var eztv_api_buf: [256]u8 = std.mem.zeroes([256]u8);
 var eztv_api_len: usize = 0;
 
 pub fn beginStage() void {
+    beginStageExpected(null);
+}
+
+pub fn beginStageExpected(expected: ?usize) void {
     const source_config = @import("../core/source_config.zig");
-    built = 0;
+    projection.begin(expected);
     loading.store(true, .release);
     eztv_on = source_config.has("eztv");
     eztv_api_len = 0;
@@ -126,14 +153,17 @@ pub fn stage(
     next_up: ?@import("tv_pure.zig").Ep,
     scratch: []u8,
 ) void {
-    if (built >= entries.len) return;
-    if (tmdb_id == 0) return;
+    if (!pure.validShowDocument(doc, tmdb_id)) return;
+    if (projection.staged_count >= projection.staged.len) {
+        projection.add(.{ .tmdb_id = tmdb_id });
+        return;
+    }
 
     const tmdb_api = @import("tmdb_api.zig");
     const key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
 
-    var e = &entries[built];
-    e.* = .{};
+    var entry: Entry = .{};
+    const e = &entry;
     e.tmdb_id = tmdb_id;
     e.name_len = @min(name.len, e.name.len);
     @memcpy(e.name[0..e.name_len], name[0..e.name_len]);
@@ -182,32 +212,21 @@ pub fn stage(
         }
     }
 
-    // Keep only rows with something to say: a scheduled next episode, or one
-    // that has aired and is still unwatched.
-    if (e.next_season > 0 or e.unseen) {
-        // Mirror into a TmdbItem for the poster-card rail (fresh state, so no
-        // stale texture/pixels carry over from a previous refresh).
-        var it = &cal_items[built];
-        it.* = .{};
-        it.id = e.tmdb_id;
-        const inl = @min(e.name_len, it.title.len);
-        @memcpy(it.title[0..inl], e.name[0..inl]);
-        it.title_len = inl;
-        const ipl = @min(e.poster_path_len, it.poster_path.len);
-        @memcpy(it.poster_path[0..ipl], e.poster_path[0..ipl]);
-        it.poster_path_len = ipl;
-        @memcpy(it.media_type[0..2], "tv");
-        it.media_type_len = 2;
-        built += 1;
-    }
+    projection.add(entry);
 }
 
 pub fn endStage() void {
-    count = built; // publish last
+    snapshot_mutex.lock();
+    projection.finish();
+    const count = projection.count;
+    const failed = projection.failed;
     loading.store(false, .release);
-    if (built > 0) {
+    snapshot_mutex.unlock();
+    if (failed) {
+        logs.pushLog("warn", "calendar", "Coming up refresh failed; preserving previously loaded entries", false);
+    } else if (count > 0) {
         var lb: [64]u8 = undefined;
-        logs.pushLog("info", "calendar", std.fmt.bufPrint(&lb, "Coming up: {d} shows", .{built}) catch "Coming up ready", false);
-        state.wakeUi();
+        logs.pushLog("info", "calendar", std.fmt.bufPrint(&lb, "Coming up: {d} shows", .{count}) catch "Coming up ready", false);
     }
+    state.wakeUi();
 }

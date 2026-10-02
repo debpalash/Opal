@@ -377,3 +377,48 @@ test "responseOk detects ok vs failed" {
     try std.testing.expect(responseOk("{\"subsonic-response\":{\"status\":\"ok\"}}"));
     try std.testing.expect(!responseOk("{\"subsonic-response\":{\"status\":\"failed\",\"error\":{\"code\":40}}}"));
 }
+
+/// Provider IDs are only unique within their source.
+pub fn songByIdentity(current_source: u8, source: u8, songs: []const MusicSong, id: []const u8) ?MusicSong {
+    if (current_source != source or id.len == 0) return null;
+    for (songs) |song| if (std.mem.eql(u8, song.id[0..@min(song.id_len, song.id.len)], id)) return song;
+    return null;
+}
+test "music action retains track identity across reorder and rejects another provider" {
+    var a = MusicSong{};
+    a.id[0] = 'a';
+    a.id_len = 1;
+    a.play_url[0] = 'A';
+    a.play_url_len = 1;
+    var b = MusicSong{};
+    b.id[0] = 'b';
+    b.id_len = 1;
+    b.play_url[0] = 'B';
+    b.play_url_len = 1;
+    const selected = songByIdentity(0, 0, &.{ b, a }, "a").?;
+    try std.testing.expectEqualStrings("A", selected.play_url[0..selected.play_url_len]);
+    try std.testing.expect(songByIdentity(1, 0, &.{ a, b }, "a") == null);
+    try std.testing.expect(songByIdentity(0, 0, &.{b}, "a") == null);
+    try std.testing.expect(songByIdentity(0, 0, &.{a}, "") == null);
+    a.play_url[0] = 'C';
+    try std.testing.expectEqualStrings("A", selected.play_url[0..selected.play_url_len]);
+}
+
+/// The shared decoder truncates; reject an oversized decoded identity first.
+pub fn identityQueryFits(raw: []const u8, capacity: usize) bool {
+    if (raw.len == 0) return false;
+    var i: usize = 0;
+    var decoded: usize = 0;
+    while (i < raw.len) {
+        if (raw[i] == '%' and i + 2 < raw.len and std.ascii.isHex(raw[i + 1]) and std.ascii.isHex(raw[i + 2])) i += 3 else i += 1;
+        decoded += 1;
+        if (decoded > capacity) return false;
+    }
+    return true;
+}
+test "music action rejects truncated identities but accepts percent encoded IDs" {
+    try std.testing.expect(!identityQueryFits(&([_]u8{'a'} ** 129), 128));
+    try std.testing.expect(identityQueryFits("a%26b", 3));
+    try std.testing.expect(!identityQueryFits("a%26b", 2));
+    try std.testing.expect(!identityQueryFits("", 128));
+}

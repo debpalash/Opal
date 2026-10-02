@@ -785,7 +785,7 @@ pub fn searchAnime(query: []const u8) void {
     @memcpy(search_query_buf[0..safe_len], query[0..safe_len]);
     search_query_len = safe_len;
     anime_query_mutex.unlock();
-    var job: SearchJob = .{ .generation = my_gen, .query_len = safe_len };
+    var job: SearchJob = .{ .generation = my_gen, .query_len = safe_len, .sfw = state.app.nsfw_filter_enabled, .page = grid_page };
     @memcpy(job.query[0..safe_len], query[0..safe_len]);
     @memcpy(state.app.anime.search_buf[0..safe_len], job.query[0..safe_len]);
     @memset(state.app.anime.search_buf[safe_len..], 0);
@@ -813,6 +813,8 @@ const SearchJob = struct {
     generation: u32,
     query: [256]u8 = undefined,
     query_len: usize = 0,
+    sfw: bool = true,
+    page: u32 = 1,
 };
 
 fn searchThread(job: SearchJob) void {
@@ -848,7 +850,7 @@ fn searchThread(job: SearchJob) void {
     }
 
     var url_buf: [512]u8 = undefined;
-    const url = std.fmt.bufPrint(&url_buf, "{s}?q={s}&limit=25&page={d}{s}", .{ jikan_api, enc_buf[0..enc_len], grid_page, anime_pure.sfwSuffix(state.app.nsfw_filter_enabled) }) catch return;
+    const url = std.fmt.bufPrint(&url_buf, "{s}?q={s}&limit=25&page={d}{s}", .{ jikan_api, enc_buf[0..enc_len], job.page, anime_pure.sfwSuffix(job.sfw) }) catch return;
 
     const buf = alloc.alloc(u8, 256 * 1024) catch return;
     defer alloc.free(buf);
@@ -871,7 +873,7 @@ fn searchThread(job: SearchJob) void {
     // report success. AniList is independent and provides the same identifiers
     // needed by our existing Jikan episode path, so use it as a bounded fallback.
     if (search_request.current() != my_gen) return;
-    const bytes = anilist.fetchSearch(query, state.app.nsfw_filter_enabled, buf);
+    const bytes = anilist.fetchSearch(query, job.sfw, buf);
     if (bytes > 0 and publishAniListSearch(buf[0..bytes], my_gen) > 0) {
         more_available.store(false, .release);
         logs.pushLog("info", "anime", "Search done (AniList fallback)", false);
@@ -888,6 +890,7 @@ fn publishAniListSearch(json: []const u8, my_gen: u32) usize {
 }
 
 fn appendAniListPage(json: []const u8, my_gen: u32, start_offset: usize) usize {
+    const media = anime_pure.anilistCatalogBody(alloc, json) orelse return 0;
     anime_parse_mutex.lock();
     defer anime_parse_mutex.unlock();
     if (search_request.current() != my_gen) return 0;
@@ -906,7 +909,7 @@ fn appendAniListPage(json: []const u8, my_gen: u32, start_offset: usize) usize {
         results_are_scraper = false;
     }
 
-    var iter = anilist_pure.Iter{ .json = json };
+    var iter = anilist_pure.Iter{ .json = media };
     var count: usize = start_offset;
     while (iter.next()) |m| {
         if (count >= state.app.anime.results.len) break;
@@ -1175,6 +1178,9 @@ pub fn resultRow(idx: usize) ?state.AnimeResult {
 }
 
 fn parseJikanDataEx(json: []const u8, my_gen: u32, with_broadcast: bool, start_offset: usize) usize {
+    // Validate before touching the cached grid. HTTP-success upstream errors
+    // and truncated bodies must leave usable rows available for fallback.
+    const data = anime_pure.jikanCatalogBody(alloc, json) orelse return 0;
     anime_parse_mutex.lock();
     defer anime_parse_mutex.unlock();
 
@@ -1207,15 +1213,15 @@ fn parseJikanDataEx(json: []const u8, my_gen: u32, with_broadcast: bool, start_o
         results_are_scraper = false;
     }
 
-    while (pos < json.len and count < state.app.anime.results.len) {
+    while (pos < data.len and count < state.app.anime.results.len) {
         // Each Jikan row starts with mal_id. Find its enclosing object end with
         // balanced JSON scanning so nested producer/genre mal_ids cannot split
         // a card before its rating or genres.
-        const id_idx = std.mem.indexOf(u8, json[pos..], "\"mal_id\":") orelse break;
+        const id_idx = std.mem.indexOf(u8, data[pos..], "\"mal_id\":") orelse break;
         pos += id_idx + 9;
-        const obj_open = std.mem.lastIndexOfScalar(u8, json[0..pos], '{') orelse break;
-        const obj_end = anime_pure.jsonObjectEnd(json, obj_open) orelse break;
-        const obj_slice = json[pos..obj_end];
+        const obj_open = std.mem.lastIndexOfScalar(u8, data[0..pos], '{') orelse break;
+        const obj_end = anime_pure.jsonObjectEnd(data, obj_open) orelse break;
+        const obj_slice = data[pos..obj_end];
         // Advance before any rejection: producer/genre objects contain their
         // own mal_id fields and must never become cards when a row is skipped.
         pos = obj_end;
@@ -1348,7 +1354,7 @@ fn parseJikanDataEx(json: []const u8, my_gen: u32, with_broadcast: bool, start_o
             item.name_len = decodeJsonEscapes(name_str, &item.name);
             item.episodes = ep_count;
             item.name_english_len = 0;
-            if (std.json.parseFromSlice(std.json.Value, alloc, json[obj_open..obj_end], .{})) |doc| {
+            if (std.json.parseFromSlice(std.json.Value, alloc, data[obj_open..obj_end], .{})) |doc| {
                 defer doc.deinit();
                 animeCopyField(&item.name_english, &item.name_english_len, catalog.string(catalog.field(doc.value, "title_english")));
             } else |_| {}
@@ -4675,4 +4681,18 @@ test "Anime playback click acknowledges an episode before any player exists" {
     failPlayback(playback_request.current());
     try std.testing.expect(playbackFailed());
     try std.testing.expect(!a.stream_loading.load(.acquire));
+}
+
+test "Anime provider errors preserve the existing browse catalog" {
+    const a = &state.app.anime;
+    const saved_count = a.result_count;
+    defer a.result_count = saved_count;
+    a.result_count = 7;
+    const generation = search_request.current();
+    try std.testing.expectEqual(@as(usize, 0), parseJikanData("{\"error\":\"upstream unavailable\"}", generation));
+    try std.testing.expectEqual(@as(usize, 7), a.result_count);
+    try std.testing.expectEqual(@as(usize, 0), parseJikanData("{\"data\":[{", generation));
+    try std.testing.expectEqual(@as(usize, 7), a.result_count);
+    try std.testing.expectEqual(@as(usize, 0), publishAniListSearch("{\"data\":null,\"errors\":[{\"message\":\"temporarily unavailable\"}]}", generation));
+    try std.testing.expectEqual(@as(usize, 7), a.result_count);
 }

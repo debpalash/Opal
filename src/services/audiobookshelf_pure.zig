@@ -178,20 +178,22 @@ fn copyInto(dst: []u8, dst_len: *usize, src: []const u8) void {
 // Response parsers
 // ══════════════════════════════════════════════════════════
 
-/// Extract the auth token from a `POST /login` response. The token lives at
-/// `user.token`; scope the lookup to the `"user":` object so an unrelated
-/// top-level `"token"` (if any) can't shadow it, with a lenient fallback.
-pub fn extractToken(login_json: []const u8) ?[]const u8 {
-    const user_key = "\"user\":";
-    if (std.mem.indexOf(u8, login_json, user_key)) |ui| {
-        if (extractString(login_json[ui..], "\"token\":\"")) |tok| {
-            if (tok.len > 0) return tok;
-        }
-    }
-    // Fallback: first "token" anywhere (older/edge response shapes).
-    const tok = extractString(login_json, "\"token\":\"") orelse return null;
-    if (tok.len == 0) return null;
-    return tok;
+/// Decode only the authenticated user's token. Caller owns the output; no
+/// parsed JSON slice survives deinit. Malformed, oversized and header-unsafe
+/// tokens fail before any credential can be published.
+pub fn parseLoginToken(a: std.mem.Allocator, login_json: []const u8, out: []u8) ?[]u8 {
+    if (login_json.len > 64 * 1024) return null;
+    var parsed = std.json.parseFromSlice(std.json.Value, a, login_json, .{}) catch return null;
+    defer parsed.deinit();
+    const root = parsed.value;
+    if (root != .object) return null;
+    const user = root.object.get("user") orelse return null;
+    if (user != .object) return null;
+    const token = user.object.get("token") orelse return null;
+    if (token != .string or token.string.len == 0 or token.string.len > out.len) return null;
+    for (token.string) |ch| if (ch <= 0x20 or ch == 0x7f) return null;
+    @memcpy(out[0..token.string.len], token.string);
+    return out[0..token.string.len];
 }
 
 /// Iterate the top-level objects of the JSON array introduced by `array_key`
@@ -583,12 +585,14 @@ const sample_progress =
     \\{"id":"li_book1","libraryItemId":"li_book1","duration":58212.5,"progress":0.42,"currentTime":24449.3,"isFinished":false,"lastUpdate":1700000000000}
 ;
 
-test "extractToken pulls user.token" {
-    try std.testing.expectEqualStrings("eyJhbGciOiJIUzI1NiJ9.sample", extractToken(sample_login).?);
-    // Missing token → null, no crash.
-    try std.testing.expect(extractToken("{\"user\":{}}") == null);
-    try std.testing.expect(extractToken("") == null);
-    try std.testing.expect(extractToken("not json at all") == null);
+test "login token is structurally scoped decoded and header safe" {
+    var out: [256]u8 = undefined;
+    const a = std.testing.allocator;
+    try std.testing.expectEqualStrings("eyJhbGciOiJIUzI1NiJ9.sample", parseLoginToken(a, sample_login, &out).?);
+    try std.testing.expectEqualStrings("valid-token", parseLoginToken(a, "{\"token\": \"wrong-root\", \"user\" : {\"other\":{\"token\":\"wrong-nested\"}, \"token\" : \"valid-\\u0074oken\"}}", &out).?);
+    for ([_][]const u8{ "{\"user\":{}}", "", "not json", "{\"token\":\"wrong\"}", "{\"user\":{\"other\":{\"token\":\"wrong\"}}}", "{\"user\":{\"token\":\"bad\\nheader\"}}", "{\"user\":{\"token\":\"bad token\"}}" }) |body|
+        try std.testing.expect(parseLoginToken(a, body, &out) == null);
+    try std.testing.expect(parseLoginToken(a, "{\"user\":{\"token\":\"oversized\"}}", out[0..2]) == null);
 }
 
 test "parseLibraries reads id/name/mediaType" {
