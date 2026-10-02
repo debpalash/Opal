@@ -66,6 +66,14 @@ pub fn init() void {
     exec("PRAGMA cache_size=-8000"); // 8MB
     exec("PRAGMA temp_store=MEMORY");
     exec("PRAGMA mmap_size=268435456"); // 256MB mmap
+    // Without a busy timeout a contended writer fails INSTANTLY with SQLITE_BUSY
+    // instead of waiting, and every `exec`/`_ = step` caller in this codebase
+    // discards that error. A UI-thread config.save() racing a worker write then
+    // silently loses the setting. Wait instead of failing.
+    _ = c.sqlite3_busy_timeout(db_handle, 5000);
+    // The schema relies on ON DELETE CASCADE (see below); without this the
+    // cascade is inert and child rows accumulate forever.
+    exec("PRAGMA foreign_keys=ON");
 
     // The DB contains service tokens, server passwords, history, and AI memory.
     // Restrict the database and SQLite sidecars even when an existing umask or
@@ -695,6 +703,31 @@ fn createTables() void {
         \\)
     );
 
+    // ── Indexes for the queries the UI runs on every frame ──
+    // The Home rails issue three of these per rendered frame (continue rows,
+    // hidden count, favorites). Each previously full-scanned library_items and
+    // sorted it before applying LIMIT.
+    // loadContinue: equality on home_hidden, already-ordered by the other two
+    // columns, so SQLite can walk the index and stop after LIMIT rows.
+    exec("CREATE INDEX IF NOT EXISTS idx_library_home ON library_items(home_hidden, home_pinned DESC, updated_at DESC)");
+    // hiddenContinueCount / restoreHiddenContinue range-scan on percent.
+    exec("CREATE INDEX IF NOT EXISTS idx_library_hidden_pct ON library_items(home_hidden, percent)");
+    // loadFavorites: equality on is_favorite, ordered by recency.
+    exec("CREATE INDEX IF NOT EXISTS idx_library_fav_at ON library_items(is_favorite, updated_at DESC)");
+    // Stale-row sweep at the end of a local-library rescan, plus the root filter.
+    exec("CREATE INDEX IF NOT EXISTS idx_local_media_root ON local_media(root, scan_token)");
+    // The Live TV filter chips COUNT a 100k-row catalog on every keystroke and
+    // every scroll-window slide, almost always with the nsfw flag applied.
+    exec("CREATE INDEX IF NOT EXISTS idx_iptv_catalog_nsfw_name ON iptv_catalog(nsfw, name_lc)");
+    // Browse history is always read as "most visited, then most recent".
+    exec("CREATE INDEX IF NOT EXISTS idx_bhist_rank ON browser_history(visits DESC, last_visit DESC)");
+    // Resume / continue lookups resolve by file identity.
+    exec("CREATE INDEX IF NOT EXISTS idx_watch_link ON watch_history(link)");
+
+    // Without this the planner has no sqlite_stat1 to work from and guesses at
+    // join order and index choice for the large catalogs (local_media, iptv).
+    exec("PRAGMA optimize");
+
     // Carry existing continue-watching shows into tv_shows, once. OR IGNORE makes
     // it idempotent and keeps a real tv_shows row from being clobbered by the
     // stale tv_continue one. No data is at risk: watched history lives in
@@ -797,8 +830,22 @@ pub fn columnBlob(stmt: ?*Stmt, col: c_int) ?[]const u8 {
     return @as([*]const u8, @ptrCast(ptr))[0..len];
 }
 
+/// Clear a prepared statement's bindings and return it to its initial state so
+/// it can be stepped again. This is the whole point of a prepared statement:
+/// preparing and finalizing per row re-parses the SQL and re-runs the planner,
+/// and inside `BEGIN`/`COMMIT` it also forces an implicit transaction per row.
+/// Safe to rebind after resetting because every `bind*` helper here passes
+/// SQLITE_TRANSIENT, so SQLite owns a copy of each bound value.
+pub fn reset(stmt: ?*Stmt) void {
+    _ = c.sqlite3_reset(stmt);
+}
+
 /// Copy a TEXT column into a fixed-size buffer + length field.
 pub fn copyColumn(stmt: ?*Stmt, col: c_int, dest: []u8, len_ptr: *usize) void {
+    // Zero the length unconditionally: a NULL or empty column used to leave the
+    // caller's length untouched, so a recycled output row carried the previous
+    // row's length alongside freshly zeroed bytes.
+    len_ptr.* = 0;
     if (columnText(stmt, col)) |txt| {
         const copy_len = @min(txt.len, dest.len - 1);
         @memcpy(dest[0..copy_len], txt[0..copy_len]);

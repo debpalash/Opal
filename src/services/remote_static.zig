@@ -8,6 +8,8 @@ const std = @import("std");
 const state = @import("../core/state.zig");
 const io_g = @import("../core/io_global.zig");
 const alloc = @import("../core/alloc.zig").allocator;
+const sync = @import("../core/sync.zig");
+const pure = @import("remote_static_pure.zig");
 
 const Cache = enum { no_store, revalidate, immutable };
 
@@ -39,24 +41,45 @@ const assets = [_]Asset{
     .{ .route = "/vendor/hls.min.js", .bundled = "vendor/hls.min.js", .dev = "web/vendor/hls.min.js", .content_type = "application/javascript", .cache = .immutable },
 };
 
+/// One asset's bytes, read at most once per process in a packaged build.
+const Loaded = struct {
+    body: []const u8 = &.{},
+    etag: [24]u8 = undefined,
+    etag_len: usize = 0,
+    filled: bool = false,
+};
+
+var loaded: [assets.len]Loaded = [_]Loaded{.{}} ** assets.len;
+var loaded_mutex: sync.Mutex = .{};
+
 /// Serve an allowlisted asset. Returns false when `route` belongs to another
 /// handler, allowing the caller to continue API/media routing.
-pub fn serve(stream: std.Io.net.Stream, route: []const u8) bool {
-    for (assets) |asset| {
+///
+/// `raw_request` is the full request head, read only for `If-None-Match`.
+pub fn serve(stream: std.Io.net.Stream, route: []const u8, raw_request: []const u8) bool {
+    for (assets, 0..) |asset, index| {
         if (!std.mem.eql(u8, route, asset.route)) continue;
-        serveAsset(stream, asset);
+        serveAsset(stream, asset, index, raw_request);
         return true;
     }
     return false;
 }
 
-fn serveAsset(stream: std.Io.net.Stream, asset: Asset) void {
+/// A packaged build serves the same immutable bytes for its whole lifetime, so
+/// each file is read once and kept. A dev checkout deliberately keeps reading
+/// from disk: `just run` has to show an edited `web/js/*.js` on reload, and a
+/// cache would hide exactly that.
+fn memoizeAssets() bool {
+    return state.resourceRoot() != null;
+}
+
+fn serveAsset(stream: std.Io.net.Stream, asset: Asset, index: usize, raw_request: []const u8) void {
     var path_buf: [800]u8 = undefined;
     if (state.resourceRoot()) |root| {
         const bundled = std.fmt.bufPrint(&path_buf, "{s}/web/{s}", .{ root, asset.bundled }) catch "";
-        if (bundled.len > 0 and exists(bundled)) return serveFile(stream, bundled, asset);
+        if (bundled.len > 0 and exists(bundled)) return serveFile(stream, bundled, asset, index, raw_request);
     }
-    serveFile(stream, asset.dev, asset);
+    serveFile(stream, asset.dev, asset, index, raw_request);
 }
 
 fn exists(path: []const u8) bool {
@@ -65,23 +88,77 @@ fn exists(path: []const u8) bool {
     return true;
 }
 
-fn serveFile(stream: std.Io.net.Stream, path: []const u8, asset: Asset) void {
-    const file = io_g.cwdOpenFile(path, .{}) catch return notFound(stream);
+/// Read `path` once and memoize it. The allocation is intentionally retained
+/// for the process lifetime; there are 17 allowlisted files totalling well
+/// under a megabyte.
+fn loadOnce(index: usize, path: []const u8) ?*const Loaded {
+    loaded_mutex.lock();
+    defer loaded_mutex.unlock();
+    const slot = &loaded[index];
+    if (slot.filled) return slot;
+    const file = io_g.cwdOpenFile(path, .{}) catch return null;
     defer file.close(io_g.io());
-    const body = io_g.readToEndAlloc(file, alloc, 4 * 1024 * 1024) catch return notFound(stream);
-    defer alloc.free(body);
+    const body = io_g.readToEndAlloc(file, alloc, 4 * 1024 * 1024) catch return null;
+    slot.body = body;
+    if (std.fmt.bufPrint(&slot.etag, "\"{x:0>16}\"", .{std.hash.Fnv1a_64.hash(body)})) |out| {
+        slot.etag_len = out.len;
+    } else |_| {
+        slot.etag_len = 0;
+    }
+    slot.filled = true;
+    return slot;
+}
 
+/// Case-insensitive `name: value` lookup over a raw request head.
+fn headerValue(raw: []const u8, name: []const u8) ?[]const u8 {
+    return pure.headerValue(raw, name);
+}
+
+/// True when the client already holds this exact body (or `*`).
+fn clientHasEtag(raw: []const u8, etag: []const u8) bool {
+    return pure.clientHasEtag(raw, etag);
+}
+
+fn serveFile(stream: std.Io.net.Stream, path: []const u8, asset: Asset, index: usize, raw_request: []const u8) void {
+    var body: []const u8 = undefined;
+    var etag: []const u8 = "";
+    if (memoizeAssets()) {
+        const slot = loadOnce(index, path) orelse return notFound(stream);
+        body = slot.body;
+        etag = slot.etag[0..slot.etag_len];
+    } else {
+        const file = io_g.cwdOpenFile(path, .{}) catch return notFound(stream);
+        defer file.close(io_g.io());
+        const raw = io_g.readToEndAlloc(file, alloc, 4 * 1024 * 1024) catch return notFound(stream);
+        defer alloc.free(raw);
+        body = raw;
+    }
+
+    // `no-cache` without a validator is worse than no header at all: it forces
+    // the browser to revalidate and then re-download the whole body, because
+    // there is nothing to compare against. With an ETag, `must-revalidate`
+    // yields a cheap 304 instead.
     const cache_header: []const u8 = switch (asset.cache) {
         .no_store => "Cache-Control: no-store\r\n",
-        .revalidate => "Cache-Control: no-cache\r\n",
+        .revalidate => "Cache-Control: max-age=0, must-revalidate\r\n",
         .immutable => "Cache-Control: public, max-age=31536000, immutable\r\n",
     };
     const privacy_header: []const u8 = if (std.mem.eql(u8, asset.content_type, "text/html"))
         "Referrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; media-src 'self' blob:; connect-src 'self'\r\n"
     else
         "";
+    const validator: []const u8 = if (etag.len > 0) "ETag: " else "";
+    const etag_line: []const u8 = if (etag.len > 0) etag else "";
+
+    if (etag.len > 0 and clientHasEtag(raw_request, etag)) {
+        var header: [1024]u8 = undefined;
+        const h = std.fmt.bufPrint(&header, "HTTP/1.1 304 Not Modified\r\n{s}{s}{s}{s}\r\n", .{ validator, etag_line, cache_header, privacy_header }) catch return;
+        io_g.streamWriteAll(stream, h) catch {};
+        return;
+    }
+
     var header: [1024]u8 = undefined;
-    const h = std.fmt.bufPrint(&header, "HTTP/1.1 200 OK\r\nContent-Type: {s}\r\nX-Content-Type-Options: nosniff\r\n{s}{s}Content-Length: {d}\r\n\r\n", .{ asset.content_type, cache_header, privacy_header, body.len }) catch return;
+    const h = std.fmt.bufPrint(&header, "HTTP/1.1 200 OK\r\nContent-Type: {s}\r\nX-Content-Type-Options: nosniff\r\n{s}{s}{s}{s}Content-Length: {d}\r\n\r\n", .{ asset.content_type, validator, etag_line, cache_header, privacy_header, body.len }) catch return;
     io_g.streamWriteAll(stream, h) catch return;
     io_g.streamWriteAll(stream, body) catch {};
 }

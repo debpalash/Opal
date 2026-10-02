@@ -241,12 +241,23 @@ pub fn fetch(client: *std.http.Client, url: []const u8, buf: []u8, opts: Options
             else => return null,
         }
 
+        // Read straight into the caller's buffer. `allocRemaining` grew a heap
+        // ArrayList to the full body, then we memcpy'd it into `buf` and freed
+        // it again — a malloc/free plus a full second copy on every outbound
+        // request, of which the resolver fans out hundreds per search.
         var transfer_buf: [16 * 1024]u8 = undefined;
         const reader = response.reader(&transfer_buf);
-        const body = reader.allocRemaining(client.allocator, .limited(@min(opts.max_response, buf.len))) catch return null;
-        defer client.allocator.free(body);
-        if (body.len < 2 or body.len > buf.len) return null;
-        @memcpy(buf[0..body.len], body);
-        return buf[0..body.len];
+        const cap = @min(opts.max_response, buf.len);
+        var filled: usize = 0;
+        // readSliceShort returns fewer bytes than asked for only at end of
+        // stream, so a 0-length read is the natural terminator.
+        while (filled < cap) {
+            const got = reader.readSliceShort(buf[filled..cap]) catch return null;
+            if (got == 0) break;
+            filled += got;
+        }
+        // Truncation at `cap` matches the previous `.limited(cap)` behavior.
+        if (filled < 2) return null;
+        return buf[0..filled];
     }
 }

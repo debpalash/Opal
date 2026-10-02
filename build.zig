@@ -640,6 +640,17 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_remote_limits_pure).step);
 
+    // Conditional-GET header parsing for the static asset cache, isolated from
+    // the socket and filesystem implementation in remote_static.zig.
+    const test_remote_static_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/remote_static_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_remote_static_pure).step);
+
     // First-admin bootstrap: IP/localhost Host allowlist and same-authority
     // Origin policy, isolated from the socket/database implementation.
     const test_setup_policy_pure = b.addTest(.{

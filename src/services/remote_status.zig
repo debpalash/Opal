@@ -29,19 +29,35 @@ pub fn build(buf: []u8) []const u8 {
 
     const player = state.app.players.items[state.app.active_player_idx];
     const playback = player.playbackSnapshot();
-    var title_prop: [*c]u8 = null;
-    _ = c.mpv.mpv_get_property(player.mpv_ctx, "media-title", c.mpv.MPV_FORMAT_STRING, @ptrCast(&title_prop));
-    defer if (title_prop != null) c.mpv.mpv_free(@ptrCast(title_prop));
-    const mpv_title = if (title_prop != null) std.mem.span(title_prop) else "No media";
 
-    var title_copy: [512]u8 = undefined;
-    const title_source = if (player.np_title_len > 0)
+    // The player already mirrors the title into np_title / loading_title from
+    // its event loop, and `title_source` only ever fell back to mpv when BOTH
+    // were empty. Fetching it unconditionally therefore cost a blocking
+    // mpv_get_property IPC inside players_mutex — a lock the render thread also
+    // takes — once per second, per connected SSE client, purely to discard the
+    // answer. Pay for the IPC only in the case that actually reads it.
+    var mpv_title_buf: [512]u8 = undefined;
+    const cached_title = if (player.np_title_len > 0)
         player.np_title[0..@min(player.np_title_len, player.np_title.len)]
     else if (player.loading_title_len > 0)
         player.loading_title[0..@min(player.loading_title_len, player.loading_title.len)]
     else
-        mpv_title;
-    const title = txt.safeUtf8Buf(title_source, &title_copy);
+        "";
+    var mpv_title: []const u8 = "No media";
+    if (cached_title.len == 0) {
+        var title_prop: [*c]u8 = null;
+        _ = c.mpv.mpv_get_property(player.mpv_ctx, "media-title", c.mpv.MPV_FORMAT_STRING, @ptrCast(&title_prop));
+        defer if (title_prop != null) c.mpv.mpv_free(@ptrCast(title_prop));
+        if (title_prop != null) {
+            const span = std.mem.span(title_prop);
+            const n = @min(span.len, mpv_title_buf.len);
+            @memcpy(mpv_title_buf[0..n], span[0..n]);
+            mpv_title = mpv_title_buf[0..n];
+        }
+    }
+
+    var title_copy: [512]u8 = undefined;
+    const title = txt.safeUtf8Buf(if (cached_title.len > 0) cached_title else mpv_title, &title_copy);
     var subtitle_copy: [192]u8 = undefined;
     const subtitle = txt.safeUtf8Buf(player.np_subtitle[0..@min(player.np_subtitle_len, player.np_subtitle.len)], &subtitle_copy);
     var overview_copy: [400]u8 = undefined;

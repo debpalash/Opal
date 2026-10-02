@@ -104,6 +104,15 @@ test('web performance budget produces a measured pass and failure', () => {
   assert.equal(f.run('webPerf.summary().within_budget'), false);
 });
 
+test('view watchers stand down while the tab is hidden and resume after', () => {
+  const f = fixture('core.js');
+  assert.equal(f.run('pageIsVisible()'), true, 'a page with no hidden state polls');
+  f.run(`document.visibilityState = 'hidden'`);
+  assert.equal(f.run('pageIsVisible()'), false);
+  f.run(`document.visibilityState = 'visible'`);
+  assert.equal(f.run('pageIsVisible()'), true);
+});
+
 test('identical safe markup does not rebuild the same DOM subtree', () => {
   const f = fixture('core.js');
   f.run(`

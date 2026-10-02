@@ -92,6 +92,7 @@ fn fontAt(size: f32) dvui.Font {
 
 var cover_skeleton_timer_armed: bool = false;
 var worker_poll_timer_armed: bool = false;
+var waiting_timer_armed: bool = false;
 
 /// Reset the call-order sequence counters used for id_extra by
 /// sectionHeader/divider/statusPill. MUST be called once at the top of every
@@ -108,6 +109,7 @@ pub fn beginFrame() void {
     statuspill_seq = 0;
     cover_skeleton_timer_armed = false;
     worker_poll_timer_armed = false;
+    waiting_timer_armed = false;
 }
 
 /// Repaint a worker-backed status at a bounded rate. Calling `dvui.refresh`
@@ -116,6 +118,18 @@ pub fn beginFrame() void {
 pub fn pollRefresh(interval_us: i32) void {
     if (worker_poll_timer_armed) return;
     worker_poll_timer_armed = true;
+    const timer_id = dvui.Id.extendId(null, @src(), 0);
+    if (dvui.timerDoneOrNone(timer_id)) dvui.timer(timer_id, @max(interval_us, 1));
+}
+
+/// Drive an animated "waiting" surface (spinner, progress, finding-stream) at a
+/// bounded rate. `dvui.refresh` on its own re-renders the whole app as fast as
+/// the CPU allows for as long as the state stays active — on a fast machine that
+/// is far past the display refresh and it starves the playback threads it shares
+/// the process with. 33 ms (30 Hz) is indistinguishable for a spinner.
+pub fn animatedRefresh(interval_us: i32) void {
+    if (waiting_timer_armed) return;
+    waiting_timer_armed = true;
     const timer_id = dvui.Id.extendId(null, @src(), 0);
     if (dvui.timerDoneOrNone(timer_id)) dvui.timer(timer_id, @max(interval_us, 1));
 }

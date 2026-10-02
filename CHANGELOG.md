@@ -10,6 +10,34 @@ Add a section BEFORE tagging; a missing one ships a release that says so.
 Headings are `## vX.Y.Z — YYYY-MM-DD`, newest first. The version token must
 match the tag exactly.
 
+## Unreleased
+
+- **Every surface is measurably lighter to draw.** Home, the player transport
+  bar and poster grids no longer re-query the database, re-read playback
+  properties or re-format their clock labels on frames where nothing changed;
+  list membership is a hash lookup rather than a scan of up to 1 900 items.
+  Loading and stream-search states animate at a bounded 30 Hz instead of pinning
+  the app at whatever the CPU will do.
+- **Library indexing finishes dramatically faster.** Scanning your local media
+  folder prepares one statement and commits once per root instead of re-parsing
+  and re-committing per file, so indexing a large library no longer performs a
+  disk sync for every single file. Local and Live TV searches are backed by
+  indexes that did not previously exist.
+- **Settings and playback progress stop getting silently lost.** The shared
+  database now waits for a busy writer instead of failing instantly and
+  discarding the write, and the setting save that persists ~100 values prepares
+  its statement once instead of ~100 times per save.
+- **The web companion loads in one round trip.** Shell assets are read once,
+  served with an `ETag`, and answered with a cheap `304` instead of
+  re-downloading the whole page on every reload. Backgrounded tabs stop polling
+  entirely, and idle live-upgrade streams stop re-sending an identical status
+  frame every second.
+- **Faster background networking.** Outbound responses are read straight into
+  their destination buffer instead of being staged through a temporary
+  allocation, anime episode pages are parsed once instead of three times, and
+  background workers are admitted in constant time rather than scanning a slot
+  table on every submission.
+
 ## v0.8.7 — 2026-09-27
 
 - **YouTube starts faster and plays at the requested quality.** Browse cards,
