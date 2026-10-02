@@ -101,6 +101,168 @@ pub const SRC_JELLYFIN: u8 = 2;
 pub const SRC_PLEX: u8 = 3;
 pub const SRC_AUDIUS: u8 = 4;
 
+pub const UniversalStatus = @import("resolver_lifecycle_pure.zig").SourceStatus;
+pub const UniversalReply = struct { count: usize = 0, status: UniversalStatus = .unavailable, connection: u64 = 0 };
+const UniversalConnection = struct {
+    base: [512]u8 = @splat(0),
+    base_len: usize = 0,
+    auth: [512]u8 = @splat(0),
+    auth_len: usize = 0,
+    identity: u64 = 0,
+};
+
+pub fn universalProviderName(source: u8) []const u8 {
+    return switch (source) {
+        SRC_JIOSAAVN => "JioSaavn",
+        SRC_SUBSONIC => "Subsonic",
+        SRC_JELLYFIN => "Jellyfin music",
+        SRC_PLEX => "Plex music",
+        SRC_AUDIUS => "Audius",
+        else => "Music",
+    };
+}
+
+/// Writer-shared snapshots only. Never read mutable Browse/settings arrays.
+fn universalConnection(source: u8) ?UniversalConnection {
+    var out: UniversalConnection = .{};
+    switch (source) {
+        SRC_JIOSAAVN => return out,
+        SRC_AUDIUS => {
+            const base = source_config.copyValue("audius", "base", &out.base) orelse return null;
+            if (!pure.isValidBase(base)) return null;
+            out.base_len = base.len;
+        },
+        SRC_SUBSONIC => {
+            var fields: [16]source_config.EntryFieldSnapshot = undefined;
+            const count = source_config.copyEntry("subsonic", &fields) orelse return null;
+            var base: []const u8 = "";
+            var user: []const u8 = "";
+            var pass: []const u8 = "";
+            defer for (fields[0..count]) |*field| @memset(&field.val, 0);
+            for (fields[0..count]) |*field| {
+                if (field.value("base")) |v| base = v;
+                if (field.value("user")) |v| user = v;
+                if (field.value("pass")) |v| pass = v;
+            }
+            if (!pure.isValidBase(base) or user.len == 0 or pass.len == 0) return null;
+            copyField(&out.base, &out.base_len, base);
+            // Owned, request-local salt; no shared lazy-initialized salt race.
+            var salt: [24]u8 = undefined;
+            const salt_text = std.fmt.bufPrint(&salt, "{x}", .{@as(u64, @bitCast(io.milliTimestamp()))}) catch return null;
+            var token: [32]u8 = undefined;
+            pure.authToken(pass, salt_text, &token);
+            const auth = pure.buildAuthQuery(user, &token, salt_text, &out.auth);
+            if (auth.len == 0) return null;
+            out.auth_len = auth.len;
+            out.identity = pure.connectionIdentity(base, user);
+        },
+        SRC_JELLYFIN => {
+            var snap = @import("jellyfin.zig").connectionSnapshot();
+            defer @memset(&snap.token, 0);
+            if (!snap.connected or snap.server_len == 0 or snap.token_len == 0) return null;
+            copyField(&out.base, &out.base_len, snap.server[0..snap.server_len]);
+            copyField(&out.auth, &out.auth_len, snap.token[0..snap.token_len]);
+            out.identity = pure.connectionIdentity(out.base[0..out.base_len], snap.user_id[0..snap.user_id_len]);
+        },
+        SRC_PLEX => {
+            var snap = @import("plex.zig").connectionSnapshot();
+            defer {
+                @memset(&snap.account_token, 0);
+                @memset(&snap.server_token, 0);
+            }
+            const token = if (snap.server_token_len > 0) snap.server_token[0..snap.server_token_len] else snap.account_token[0..snap.account_token_len];
+            if (snap.server_len == 0 or token.len == 0) return null;
+            copyField(&out.base, &out.base_len, snap.server[0..snap.server_len]);
+            copyField(&out.auth, &out.auth_len, token);
+        },
+        else => return null,
+    }
+    if (source != SRC_JIOSAAVN and !pure.isValidBase(out.base[0..out.base_len])) return null;
+    if (out.identity == 0) out.identity = pure.connectionIdentity(out.base[0..out.base_len], "");
+    return out;
+}
+
+pub fn universalConfigured(source: u8) bool {
+    var connection = universalConnection(source) orelse return false;
+    defer @memset(&connection.auth, 0);
+    return true;
+}
+
+/// Independent first-page query. Output owns all metadata and safe action URLs;
+/// Browse source, rows, paging, and request generation are never changed.
+pub fn searchInto(source: u8, query: []const u8, out: []pure.MusicSong) UniversalReply {
+    if (query.len == 0 or out.len == 0) return .{ .status = .no_results };
+    var connection = universalConnection(source) orelse return .{};
+    defer @memset(&connection.auth, 0);
+    const limit = @min(out.len, 16);
+    var url_buf: [2048]u8 = undefined;
+    const base = connection.base[0..connection.base_len];
+    const auth = connection.auth[0..connection.auth_len];
+    const url = switch (source) {
+        SRC_JIOSAAVN => js_pure.buildSearchUrl(&url_buf, query, @intCast(limit)),
+        SRC_AUDIUS => au_pure.searchUrl(&url_buf, base, query, limit, 0),
+        SRC_SUBSONIC => pure.buildSearchUrl(&url_buf, base, auth, query, @intCast(limit)),
+        SRC_JELLYFIN => jf_pure.buildSearchUrl(&url_buf, base, auth, query, @intCast(limit)),
+        SRC_PLEX => px_pure.buildSearchUrl(&url_buf, base, auth, query, @intCast(limit)),
+        else => null,
+    } orelse return .{ .status = .failed };
+    const buffer = alloc.alloc(u8, 512 * 1024) catch return .{ .status = .failed };
+    defer alloc.free(buffer);
+    const headers = [_]std.http.Header{.{ .name = "Accept", .value = "application/json" }};
+    const body = @import("../core/http.zig").fetch(url, buffer, .{ .timeout_secs = 4, .extra_headers = &headers }) orelse return .{ .status = .transport_failed };
+    var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch return .{ .status = .parse_failed };
+    defer parsed.deinit();
+    const response_kind: pure.SearchResponseKind = switch (source) {
+        SRC_JIOSAAVN => .jiosaavn,
+        SRC_SUBSONIC => .subsonic,
+        SRC_JELLYFIN => .jellyfin,
+        SRC_PLEX => .plex,
+        SRC_AUDIUS => .audius,
+        else => return .{ .status = .failed },
+    };
+    const rows = pure.pageRows(parsed.value, response_kind) orelse return .{ .status = .parse_failed };
+    var count: usize = 0;
+    for (rows) |value| {
+        if (count >= limit) break;
+        var row = switch (source) {
+            SRC_JIOSAAVN => js_pure.parseSongValue(value),
+            SRC_SUBSONIC => pure.parseSongValue(value),
+            SRC_JELLYFIN => jf_pure.parseSongValue(value),
+            SRC_PLEX => px_pure.parseSongValue(value),
+            SRC_AUDIUS => au_pure.parseTrack(value, base),
+            else => null,
+        } orelse continue;
+        if (source == SRC_SUBSONIC or source == SRC_JELLYFIN or source == SRC_PLEX) {
+            // Private artwork remains private; public search cannot expose keys.
+            row.cover_len = 0;
+        }
+        if ((source == SRC_JIOSAAVN or source == SRC_AUDIUS) and row.play_url_len == 0) continue;
+        out[count] = row;
+        count += 1;
+    }
+    return .{ .count = count, .status = if (count > 0) .done else .no_results, .connection = connection.identity };
+}
+
+/// Resolve private action against fresh credentials and searched connection.
+pub fn playUniversalRoute(route_url: []const u8, title: []const u8, artist: []const u8) bool {
+    const route = pure.parseUniversalRoute(route_url) orelse return false;
+    var connection = universalConnection(route.source) orelse return false;
+    defer @memset(&connection.auth, 0);
+    if (connection.identity != route.connection) return false;
+    const base = connection.base[0..connection.base_len];
+    const auth = connection.auth[0..connection.auth_len];
+    const id = route.id[0..route.id_len];
+    var url_buf: [2048]u8 = undefined;
+    const stream = switch (route.source) {
+        SRC_SUBSONIC => pure.buildStreamUrl(&url_buf, base, auth, id),
+        SRC_JELLYFIN => jf_pure.buildStreamUrl(&url_buf, base, auth, id, "opal"),
+        SRC_PLEX => px_pure.buildStreamUrl(&url_buf, base, auth, route.part[0..route.part_len]),
+        else => null,
+    } orelse return false;
+    @import("browser.zig").playDirect(.{ .url = stream, .history_identity = route_url, .restore_target = route_url, .title = title, .subtitle = artist });
+    return true;
+}
+
 pub fn selectSource(src: u8) bool {
     if (src > SRC_AUDIUS) return false;
     search_request.cancel(&state.app.music.is_loading);

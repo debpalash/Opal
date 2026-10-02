@@ -201,6 +201,103 @@ pub fn songIdFromRoute(url: []const u8) ?[]const u8 {
     return id;
 }
 
+/// Credential-free universal action bound to the searched server identity.
+pub const UniversalRoute = struct {
+    source: u8,
+    connection: u64,
+    id: [128]u8 = @splat(0),
+    id_len: usize = 0,
+    part: [256]u8 = @splat(0),
+    part_len: usize = 0,
+};
+pub fn providerQuota(total: usize, providers: usize, index: usize) usize {
+    if (providers == 0 or index >= providers) return 0;
+    return total / providers + @as(usize, if (index < total % providers) 1 else 0);
+}
+pub fn connectionIdentity(base: []const u8, namespace: []const u8) u64 {
+    var hash = std.hash.Wyhash.init(0x6d75736963);
+    for ([_][]const u8{ std.mem.trimEnd(u8, base, "/"), namespace }) |part| {
+        const len: u64 = @intCast(part.len);
+        hash.update(std.mem.asBytes(&len));
+        hash.update(part);
+    }
+    return hash.final();
+}
+pub fn universalRoute(out: []u8, source: u8, connection: u64, id: []const u8, part: []const u8) ?[]const u8 {
+    if (source < 1 or source > 3 or id.len == 0 or id.len > 128 or part.len > 256) return null;
+    var a: [384]u8 = undefined;
+    var b: [768]u8 = undefined;
+    const an = percentEncode(id, &a);
+    const bn = percentEncode(part, &b);
+    return std.fmt.bufPrint(out, "opal://music/{d}/{x}/{s}/{s}", .{ source, connection, a[0..an], b[0..bn] }) catch null;
+}
+fn decodeRoutePart(text: []const u8, out: []u8) ?usize {
+    var i: usize = 0;
+    var n: usize = 0;
+    while (i < text.len) {
+        if (n >= out.len) return null;
+        const ch = if (text[i] == '%') blk: {
+            if (i + 2 >= text.len) return null;
+            const value = std.fmt.parseInt(u8, text[i + 1 .. i + 3], 16) catch return null;
+            i += 3;
+            break :blk value;
+        } else blk: {
+            const value = text[i];
+            i += 1;
+            break :blk value;
+        };
+        if (ch < 32 or ch == 127) return null;
+        out[n] = ch;
+        n += 1;
+    }
+    if (!std.unicode.utf8ValidateSlice(out[0..n])) return null;
+    return n;
+}
+pub fn parseUniversalRoute(url: []const u8) ?UniversalRoute {
+    const prefix = "opal://music/";
+    if (!std.mem.startsWith(u8, url, prefix)) return null;
+    var parts = std.mem.splitScalar(u8, url[prefix.len..], '/');
+    const source = std.fmt.parseInt(u8, parts.next() orelse return null, 10) catch return null;
+    if (source < 1 or source > 3) return null;
+    const connection = std.fmt.parseInt(u64, parts.next() orelse return null, 16) catch return null;
+    var route = UniversalRoute{ .source = source, .connection = connection };
+    route.id_len = decodeRoutePart(parts.next() orelse return null, &route.id) orelse return null;
+    route.part_len = decodeRoutePart(parts.next() orelse return null, &route.part) orelse return null;
+    if (route.id_len == 0 or parts.next() != null) return null;
+    return route;
+}
+
+test "universal music identity roundtrip does not carry credentials or confuse provider" {
+    var out: [1600]u8 = undefined;
+    const url = universalRoute(&out, 3, 0x1234, "track a/b", "/library/parts/42/file.mp3").?;
+    const row = parseUniversalRoute(url).?;
+    try std.testing.expectEqual(@as(u8, 3), row.source);
+    try std.testing.expectEqual(@as(u64, 0x1234), row.connection);
+    try std.testing.expectEqualStrings("track a/b", row.id[0..row.id_len]);
+    try std.testing.expectEqualStrings("/library/parts/42/file.mp3", row.part[0..row.part_len]);
+    try std.testing.expect(parseUniversalRoute("opal://music/3/1234/%00/") == null);
+    try std.testing.expect(parseUniversalRoute("opal://music/4/1234/id/") == null);
+    try std.testing.expect(parseUniversalRoute("opal://music/1/1234/id//extra") == null);
+}
+
+test "universal music quota stays bounded and fair for all five providers" {
+    for (1..6) |providers| {
+        var total: usize = 0;
+        for (0..providers) |index| total += providerQuota(16, providers, index);
+        try std.testing.expectEqual(@as(usize, 16), total);
+        try std.testing.expect(providerQuota(16, providers, 0) - providerQuota(16, providers, providers - 1) <= 1);
+    }
+    try std.testing.expectEqual(@as(usize, 0), providerQuota(16, 0, 0));
+}
+
+test "universal music connection binding rejects another server or library namespace" {
+    const a = connectionIdentity("https://music.local/", "user");
+    try std.testing.expectEqual(a, connectionIdentity("https://music.local", "user"));
+    try std.testing.expect(a != connectionIdentity("https://other.local", "user"));
+    try std.testing.expect(a != connectionIdentity("https://music.local", "other"));
+    try std.testing.expect(connectionIdentity("https://music.local/a", "b") != connectionIdentity("https://music.local/", "ab"));
+}
+
 // ── JSON extraction ──
 
 /// Read a JSON string field `"key":"…"` from `scope` into `dst` (bytes written,

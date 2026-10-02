@@ -190,7 +190,7 @@ def test_web_discovery_and_party_workflows():
     checks = {
         "merged search": "function renderUnifiedResults(" in ui
             and "api('/unified_search?q='" in ui and "api('/unified_search')" in ui,
-        "opaque source actions": "r.key" in ui and "r.queueable" in ui
+        "opaque source actions": "r.key" in ui and ("r.queueable" in ui or "row.queueable" in ui or "variant.queueable" in ui)
             and "apiMutation('/unified_search/' + action" in ui
             and "resolver.resolve(dq" in remote
             and "resolver.lockRemoteSnapshot()" in remote

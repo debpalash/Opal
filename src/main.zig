@@ -14,6 +14,9 @@ const std = @import("std");
 test "TV detail module" {
     _ = @import("services/tmdb.zig");
 }
+test "Native Search gallery offline SDL pixel capture" {
+    if (!@import("build_options").headless) _ = @import("services/search_gallery_native_test.zig");
+}
 const builtin = @import("builtin");
 const dvui = @import("dvui");
 const c = @import("core/c.zig");
@@ -832,6 +835,7 @@ pub fn appDeinit() void {
     // allocator it may publish into are released. 800 ms is the diagnostic
     // threshold, not permission for a worker to outlive shared state.
     workers.beginShutdownAndDrain(800);
+    search.deinitGallery();
     @import("player/drop_ingest.zig").deinit();
     @import("services/queue.zig").deinit();
 
@@ -1113,11 +1117,13 @@ fn appFrame() !dvui.App.Result {
     // Apply any theme change requested off the UI thread (config.load runs
     // theme.setPreset on the background worker, which can't touch dvui directly).
     theme.reapplyIfPending();
+    if (state.app.config_loaded.load(.acquire)) @import("services/search_preview.zig").publishCredentials(state.app.tmdb.api_key[0..state.app.tmdb.api_key_len]);
 
     // Queue producers include playlist/AI/remote worker threads. Drain their
     // bounded commands here so live queue and player state stay UI-thread-owned.
     @import("services/queue.zig").drainUi();
     @import("services/resolver.zig").drainRemoteAction();
+    @import("services/search.zig").updateGalleryRoute();
     @import("services/search.zig").drainMemorySearch();
     @import("services/auto_subs.zig").pollAttach();
     @import("player/watch_history.zig").drainUi();

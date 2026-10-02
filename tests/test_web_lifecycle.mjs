@@ -871,3 +871,221 @@ test('offline shell includes every script loaded by the production document', ()
   const scripts = [...html.matchAll(/<script\s+src="([^"]+)"/g)].map(match => '/' + match[1].replace(/^\//, ''));
   for (const script of scripts) assert.ok(shell.includes(script), `Offline shell omitted ${script}`);
 });
+
+test('Search discovery never groups unrelated releases by title', () => {
+  const f = fixture('catalog.js');
+  f.run(`globalThis.visualRows = [
+    {title:'Arrival', source:'tmdb', media:'movie', id:12, key:'a'},
+    {title:'Arrival', source:'tmdb', media:'movie', id:12, key:'b'},
+    {title:'Arrival', source:'tmdb', media:'tv', id:12, key:'c'},
+    {title:'Arrival 1080p', source:'torrent', key:'d'},
+    {title:'Arrival 1080p', source:'torrent', key:'e'}];`);
+  assert.equal(f.run('groupSearchRows(visualRows).length'), 4);
+  assert.equal(f.run('groupSearchRows(visualRows)[0].rows.length'), 2);
+  assert.equal(f.run('groupSearchRows([{title:"Missing key"},{title:"Missing key"}]).length'), 2);
+});
+
+test('Search feature requires an exact title and typed catalog identity with real artwork', () => {
+  const f = fixture('catalog.js');
+  f.$('q').value = 'Arrival';
+  f.run(`globalThis.featureRows = [{title:'Arrival',source:'torrent',key:'a',poster_url:'https://images.example/poster.jpg'},
+    {title:'Arrival of spring',source:'tmdb',media:'movie',id:2,key:'b',poster_url:'https://images.example/poster.jpg'},
+    {title:'Arrival',source:'tmdb',media:'movie',id:1,key:'c',poster_url:'https://images.example/poster.jpg'}];`);
+  assert.equal(f.run('confidentSearchFeature(groupSearchRows(featureRows)).row.key'), 'c');
+  assert.equal(f.run('confidentSearchFeature(groupSearchRows(featureRows.slice(0,2)))'), null);
+  assert.equal(f.run('confidentSearchFeature(groupSearchRows([{title:"Arrival",source:"tmdb",media:"movie",id:1,key:"x"}]))'), null);
+});
+
+test('Search shelves put content artwork ahead of unmatched releases with correct aspects', () => {
+  const f = fixture('catalog.js');
+  f.run(`globalThis.fmtSize = String;renderUnifiedResults({generation:8,results:[
+    {title:'Release 1080p',source:'torrent',torrent:true,key:'r',quality:3,seeds:20},
+    {title:'Album',source:'music',content_kind:'music',key:'m',poster_url:'https://images.example/album.jpg'},
+    {title:'Film',source:'tmdb',media:'movie',id:1,content_kind:'movies',key:'f',poster_url:'https://images.example/film.jpg'},
+    {title:'Video',source:'youtube',content_kind:'video',key:'v',poster_url:'https://images.example/video.jpg'}],sources:[]});`);
+  const html = f.$('results').innerHTML;
+  assert.ok(html.indexOf('Film') < html.indexOf('Available releases'));
+  assert.match(html, /aspect-portrait/);
+  assert.match(html, /aspect-square/);
+  assert.match(html, /aspect-wide/);
+  assert.match(html, /loading="lazy"/);
+  assert.match(html, /referrerpolicy="no-referrer"/);
+  assert.match(html, /<details class="search-release-shelf">/);
+});
+
+test('Search selected title compares actual source variants with opaque actions', () => {
+  const f = fixture('catalog.js');
+  f.run(`globalThis.fmtSize=String;globalThis.detailGroup={identity:'tmdb:movie:1',kind:'movies',row:{title:'Film',summary:'Real provider summary',source:'tmdb',key:'a'},rows:[
+    {title:'Film',source:'tmdb',provider:'catalog',key:'a'},
+    {title:'Film 1080p',source:'torrent',provider:'yts',key:'b',torrent:true,quality:3,seeds:35,queueable:true}]};renderSearchDetail(detailGroup,41);`);
+  assert.equal(f.$('search-detail').hidden, false);
+  assert.match(f.$('search-detail').innerHTML, /Real provider summary/);
+  assert.match(f.$('search-detail').innerHTML, /catalog/);
+  assert.match(f.$('search-detail').innerHTML, /yts/);
+  assert.match(f.$('search-detail').innerHTML, /35 seeds/);
+  assert.match(f.$('search-detail').innerHTML, /data-detail-queue="1"/);
+  assert.equal(f.run('selectedSearchWork.generation'), 41);
+  f.run(`$('search-detail').onkeydown({key:'a'});$('search-detail').onkeydown({key:'Escape'});`);
+  assert.equal(f.$('search-detail').hidden, true);
+});
+
+test('Search selected details cannot survive a different result generation', () => {
+  const f = fixture('catalog.js');
+  f.run(`globalThis.fmtSize=String;globalThis.selectedRow={title:'Film',source:'tmdb',media:'movie',id:1,content_kind:'movies',key:'a'};
+    renderSearchDetail(groupSearchRows([selectedRow])[0],4);
+    renderUnifiedResults({generation:5,results:[selectedRow],sources:[]});`);
+  assert.equal(f.$('search-detail').hidden, true);
+  assert.equal(f.run('selectedSearchWork'), null);
+});
+
+test('Search artwork rejects credentials and executable schemes', () => {
+  const f = fixture('catalog.js');
+  for (const value of ['javascript:alert(1)', 'data:image/png;base64,a', 'https://user:secret@example.com/a', '/private-art']) {
+    assert.equal(f.run(`unifiedArtwork(${JSON.stringify(value)})`), '');
+  }
+  assert.equal(f.run('unifiedArtwork("https://images.example/a.jpg")'), 'https://images.example/a.jpg');
+});
+
+test('Search grouped facets retain catalog artwork while matching an attached torrent offer', () => {
+  const f = fixture('catalog.js');
+  f.$('search-availability').value = 'torrents';
+  f.run(`globalThis.fmtSize=String;renderUnifiedResults({generation:42,results:[
+    {title:'Authoritative title',source:'tmdb',media:'movie',id:1,content_kind:'movies',work_key:'abc',work_category:'movies',work_representative:true,key:'1',poster_url:'https://images.example/title.jpg'},
+    {title:'Authoritative title 1080p',source:'torrent',work_key:'abc',work_category:'movies',key:'2',torrent:true,quality:3,seeds:50,queueable:true}],sources:[]});`);
+  const html = f.$('results').innerHTML;
+  assert.match(html, /https:\/\/images.example\/title.jpg/);
+  assert.match(html, /2 sources/);
+  assert.match(html, /50 seeds/);
+  assert.match(html, /data-i="1" data-gen="42"/);
+  assert.match(html, /Movies/);
+});
+
+test('Search ambiguous identical catalog titles do not become a featured match', () => {
+  const f = fixture('catalog.js');
+  f.$('q').value = 'Crash';
+  assert.equal(f.run(`confidentSearchFeature(groupSearchRows([
+    {title:'Crash',source:'tmdb',media:'movie',id:1,key:'a',poster_url:'https://images.example/a.jpg'},
+    {title:'Crash',source:'tmdb',media:'movie',id:2,key:'b',poster_url:'https://images.example/b.jpg'}]))`), null);
+});
+
+test('Search stop validates the current generation and retains loaded artwork', async () => {
+  const f = fixture('catalog.js');
+  f.run(`renderUnifiedResults({generation:42,loading:true,results:[{title:'Loaded film',source:'tmdb',media:'movie',id:1,key:'a',poster_url:'https://images.example/a.jpg'}],sources:[]})`);
+  const pending = f.$('search-cancel').onclick();
+  f.take('/unified_search/cancel?generation=42').resolve({ok:true});
+  await flush();
+  f.take('/unified_search').resolve({generation:43,loading:false,results:[{title:'Loaded film',source:'tmdb',media:'movie',id:1,key:'a',poster_url:'https://images.example/a.jpg'}],sources:[]});
+  await pending;
+  assert.match(f.$('results').innerHTML, /Loaded film/);
+  assert.match(f.$('search-hint').textContent, /Search stopped/);
+  assert.equal(f.$('search-cancel').hidden, true);
+  assert.match(f.$('results').innerHTML, /data-gen="43"/);
+});
+
+test('Search official preview loads only after click with generation and opaque key', async () => {
+  const f = fixture('catalog.js');
+  f.run(`globalThis.previewRow={title:'Film',source:'tmdb',media:'movie',id:1,key:'abc'};renderSearchDetail(groupSearchRows([previewRow])[0],42);`);
+  assert.equal(f.requests.length, 0);
+  const pending = f.run('startSearchPreview(previewRow,42)');
+  f.take('/unified_search/preview?generation=42&key=abc').resolve({generation:42,key:'abc',catalog_id:1,status:'ready',title:'Film',trailer_url:'https://www.youtube.com/watch?v=Abcd123_-xy'});
+  await pending;
+  const frame = f.$('search-preview-slot').children[1];
+  assert.match(frame.attributes.get('src'), /youtube-nocookie\.com\/embed\/Abcd123_-xy/);
+  assert.match(frame.attributes.get('src'), /autoplay=1&mute=1/);
+  assert.equal(frame.attributes.get('title'), 'Official trailer for Film');
+  f.run('stopSearchPreview()');
+  assert.equal(f.$('search-preview-slot').children.length, 0);
+});
+
+test('Search preview rejects stale selection and nonofficial metadata', async () => {
+  const f = fixture('catalog.js');
+  f.run(`globalThis.previewRow={title:'Film',source:'tmdb',media:'movie',id:1,key:'abc'};renderSearchDetail(groupSearchRows([previewRow])[0],42);`);
+  const pending = f.run('startSearchPreview(previewRow,42)');
+  f.run(`renderSearchDetail(groupSearchRows([{title:'Other',source:'tmdb',media:'movie',id:2,key:'def'}])[0],42);`);
+  f.take('/unified_search/preview?generation=42&key=abc').resolve({generation:42,key:'abc',catalog_id:1,status:'ready',title:'Film',trailer_url:'https://www.youtube.com/watch?v=Abcd123_-xy'});
+  await pending;
+  assert.doesNotMatch(f.$('search-preview-slot').innerHTML, /iframe/);
+  for (const value of ['http://www.youtube.com/watch?v=Abcd123_-xy','https://evil.example/watch?v=Abcd123_-xy','https://www.youtube.com/watch?v=wrong','https://user:password@www.youtube.com/watch?v=Abcd123_-xy']) {
+    assert.equal(f.run(`verifiedPreviewEmbed(${JSON.stringify(value)})`), '');
+  }
+});
+
+test('Search preview availability failures do not create an iframe or invent a trailer', async () => {
+  const f = fixture('catalog.js');
+  f.run(`globalThis.previewRow={title:'Film',source:'tmdb',media:'movie',id:1,key:'abc'};renderSearchDetail(groupSearchRows([previewRow])[0],42);`);
+  const pending = f.run('startSearchPreview(previewRow,42)');
+  f.take('/unified_search/preview?generation=42&key=abc').resolve({generation:42,key:'abc',catalog_id:1,status:'unavailable',failure:'no_official_video'});
+  await pending;
+  assert.match(f.$('search-preview-slot').innerHTML, /No verified official trailer/);
+  assert.doesNotMatch(f.$('search-preview-slot').innerHTML, /iframe/);
+});
+
+test('Search Save loads once per selected work and persists the provider-issued work identity', async () => {
+  const f = fixture('catalog.js');
+  f.run(`globalThis.saveRow={title:'Film & title',source:'tmdb',media:'movie',id:1,key:'abc',work_key:'abc',poster_url:'https://images.example/poster.jpg'};
+    globalThis.saveGroup=groupSearchRows([saveRow])[0];renderSearchDetail(saveGroup,42);`);
+  f.take('/library/item?kind=search&id=abc').resolve({favorite:false});
+  await flush();
+  assert.equal(f.$('search-save').textContent, 'Save');
+  f.run('renderSearchDetail(saveGroup,42)');
+  assert.equal(f.requests.length, 1, '900ms publications must not refetch saved state');
+  const pending = f.run('toggleSearchSave(saveGroup,42)');
+  const request = f.requests.find(request => request.path.startsWith('/library/item/action?'));
+  assert.ok(request);
+  const query = new URLSearchParams(request.path.split('?')[1]);
+  assert.equal(query.get('id'), 'abc');
+  assert.equal(query.get('kind'), 'search');
+  assert.equal(query.get('title'), 'Film & title');
+  assert.equal(query.get('enabled'), 'true');
+  request.resolve({ok:true}); await pending;
+  assert.equal(f.$('search-save').textContent, 'Saved ✓');
+  assert.equal(f.$('search-save').attributes.get('aria-pressed'), 'true');
+});
+
+test('Search saved-state response cannot change a newly selected title', async () => {
+  const f = fixture('catalog.js');
+  f.run(`renderSearchDetail(groupSearchRows([{title:'Old',source:'tmdb',media:'movie',id:1,key:'a',work_key:'a'}])[0],42);`);
+  const old = f.take('/library/item?kind=search&id=a');
+  f.run(`renderSearchDetail(groupSearchRows([{title:'New',source:'tmdb',media:'movie',id:2,key:'b',work_key:'b'}])[0],42);`);
+  f.take('/library/item?kind=search&id=b').resolve({favorite:false}); await flush();
+  old.resolve({favorite:true}); await flush();
+  assert.equal(f.$('search-save').textContent, 'Save');
+  assert.equal(f.$('search-save').attributes.get('aria-pressed'), 'false');
+});
+
+test('Search visual metadata uses actual production text and attribute escaping', () => {
+  const f = fixture('core.js', 'catalog.js');
+  f.run(`renderUnifiedResults({generation:1,results:[{title:'<script>alert("x")</script>',summary:'<img onerror="bad">',source:'youtube',content_kind:'video',key:'a',poster_url:'https://images.example/a.jpg?x="bad"'}],sources:[]})`);
+  const markup = f.run('lastHtml.results');
+  assert.doesNotMatch(markup, /<script>/);
+  assert.match(markup, /&lt;script&gt;/);
+  assert.match(markup, /&quot;/);
+});
+
+test('Production CSP allows only the canonical verified preview frame origin', () => {
+  const staticSource = readFileSync(new URL('../src/services/remote_static.zig', import.meta.url), 'utf8');
+  const policy = staticSource.match(/Content-Security-Policy: ([^\\]+)/)?.[1];
+  assert.ok(policy, 'production response must declare CSP');
+  const directives = new Map(policy.split(';').map(part => part.trim().split(/\s+/)).map(([name,...values]) => [name,values]));
+  assert.deepEqual(directives.get('frame-src'), ["'self'", 'https://www.youtube-nocookie.com']);
+  assert.deepEqual(directives.get('script-src'), ["'self'"]);
+  assert.deepEqual(directives.get('object-src'), ["'none'"]);
+  const f = fixture('catalog.js');
+  const frameUrl = f.run("verifiedPreviewEmbed('https://www.youtube.com/watch?v=tFMo3UJ4B4g')");
+  assert.ok(directives.get('frame-src').includes(new URL(frameUrl).origin));
+  assert.equal(f.run("verifiedPreviewEmbed('https://attacker.example/watch?v=tFMo3UJ4B4g')"), '');
+});
+
+test('Selected content facet wraps category cards while All retains discovery rails', () => {
+  const f = fixture('catalog.js');
+  f.run(`globalThis.gridPayload={generation:42,loading:false,results:[{title:'Film',source:'tmdb',media:'movie',id:1,content_kind:'movies',key:'a',poster_url:'https://images.example/a.jpg'},{title:'Song',source:'music',content_kind:'music',key:'b'}],sources:[]};renderUnifiedResults(gridPayload);`);
+  assert.doesNotMatch(f.$('results').innerHTML, /search-shelf-grid/);
+  f.run(`$('search-content').value='movies';renderUnifiedResults(gridPayload);`);
+  assert.match(f.$('results').innerHTML, /search-shelf-track search-shelf-grid/);
+  assert.match(f.$('results').innerHTML, /Film/);
+  assert.doesNotMatch(f.$('results').innerHTML, /Song/);
+  assert.match(f.$('results').innerHTML, /data-gen="42"/);
+  f.run(`$('search-content').value='all';renderUnifiedResults(gridPayload);`);
+  assert.doesNotMatch(f.$('results').innerHTML, /search-shelf-grid/);
+  assert.match(f.$('results').innerHTML, /Song/);
+});

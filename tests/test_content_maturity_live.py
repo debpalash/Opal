@@ -180,6 +180,30 @@ class ContentMaturityLive(unittest.TestCase):
         rendered = json.dumps(result)
         self.assertNotIn('local-only',rendered)
         self.assertNotIn('fixture:local-only@',rendered)
+    def test_search_cancel_and_preview_bind_to_current_generation(self):
+        before = self.api('unified_search')
+        generation = before['generation']
+        self.api('unified_search/cancel?generation='+str(generation), status=405)
+        self.api('unified_search/cancel', 'POST', status=400)
+        self.api('unified_search/cancel?generation='+str(generation), 'POST')
+        after = self.api('unified_search')
+        self.assertEqual(after['generation'], (generation+1) % (2**32))
+        self.assertFalse(after['loading'])
+        self.api('unified_search/cancel?generation='+str(generation), 'POST', status=409)
+        self.assertEqual(after['generation'], self.api('unified_search')['generation'])
+        self.api('unified_search/preview', status=400)
+        self.api(f'unified_search/preview?generation={generation}&key=abc', status=409)
+        self.api(f"unified_search/preview?generation={after['generation']}&key=abc", status=404)
+        self.api(f"unified_search/preview?generation={after['generation']}&key=abc", 'POST', status=405)
+        self.assertNotIn('trailer_url', self.api('status'))
+
+    def test_saved_search_title_uses_stable_library_identity(self):
+        identity = 'search&id=fixture-work'
+        self.api('library/item/action?kind='+identity+'&action=favorite&enabled=true&title=Fixture%20work', 'POST')
+        self.assertTrue(self.api('library/item?kind='+identity)['favorite'])
+        self.api('library/item/action?kind='+identity+'&action=favorite&enabled=false', 'POST')
+        self.assertFalse(self.api('library/item?kind='+identity)['favorite'])
+
     def open_audiobook(self):
         self.api('abs/login','POST',{'server':self.fixture.base,'user':'fixture','pass':'local-only'})
         self.wait('abs',lambda d:d['connected'] and not d['loading'] and len(d['libraries'])==1)

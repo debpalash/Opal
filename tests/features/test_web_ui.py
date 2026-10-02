@@ -1146,7 +1146,7 @@ def test_torrent_files_and_hls():
         "hls feature-tested": "window.Hls" in ui and "function openHls(" in ui,
         "hls loaded from vendor": 'src="vendor/hls.min.js"' in ui,
         # 543KB inlined would swamp the page — index.html must stay small.
-        "hls not inlined": len(ui) < 400_000,
+        "hls not inlined": len(_src("web/index.html")) < 400_000,
         "vendor file present": os.path.exists(os.path.join(PROJECT_DIR, "web/vendor/hls.min.js")),
         "bundled into the app": 'cp -R "$ROOT/web/."' in _src("scripts/build-app.sh"),
         # A live shim must be torn down or it keeps fetching segments.

@@ -213,6 +213,10 @@ pub fn build(b: *std.Build) void {
         msys_path_prefix, b.graph.environ_map.get("PATH") orelse "",
     }));
     b.step("test-browse", "Test production catalog parsing and asynchronous publication").dependOn(&run_browse_tests.step);
+    const gallery_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native Search gallery offline SDL pixel capture"} });
+    const run_gallery_tests = b.addRunArtifact(gallery_tests);
+    if (is_windows) run_gallery_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
+    b.step("test-search-gallery", "Render the native search gallery in an isolated hidden SDL window").dependOn(&run_gallery_tests.step);
 
     // DPI-bypass sidecar (debpalash/zig-bypassdpi): a cross-platform userspace
     // proxy that fragments the TLS ClientHello so ISP DPI can't read the SNI.
@@ -834,6 +838,31 @@ pub fn build(b: *std.Build) void {
     // throttle, the volume ramp, the transport state machine, and the
     // width-based collapse order. All of it is wired into footer.zig — a test
     // there asserts no export goes unreachable.
+    const test_search_reading_pure = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/services/search_reading_pure.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    test_step.dependOn(&b.addRunArtifact(test_search_reading_pure).step);
+    const test_search_content_pure = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/services/search_content_pure.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    test_step.dependOn(&b.addRunArtifact(test_search_content_pure).step);
+    const test_search_preview_pure = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/services/search_preview_pure.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    test_step.dependOn(&b.addRunArtifact(test_search_preview_pure).step);
+    const test_search_gallery_pure = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/ui/search_gallery_pure.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    test_step.dependOn(&b.addRunArtifact(test_search_gallery_pure).step);
+
     const test_search_view_pure = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/services/search_view_pure.zig"),
         .target = target,

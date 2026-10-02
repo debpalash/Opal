@@ -226,3 +226,85 @@ audio advancing across two files, and whole-book resume into the second file.
 Radio actions now use stable station UUIDs, and comics actions copy the selected
 reader identity. These fixtures establish those contracts; they do not establish
 external provider uptime or configured personal-server availability.
+
+## Universal content search coverage (2026-10-03)
+
+Universal search projects content works separately from their source options.
+Positive typed catalog identities and matching IMDb identities retain their media
+kind. Movie releases attach only with an exact normalized title and matching
+positive year. Explicit `Sxx` / `SxxExx` releases can attach to a uniquely matching
+TV title without a year; known same-title remakes remain ambiguous even when a
+facet hides one. Ambiguous releases remain independently actionable.
+
+The shared wave retains at most 192 rows. At capacity, an underrepresented
+category can reclaim rows from categories containing more than eight rows;
+within represented categories, relevance selects replacements. This protects
+late catalog arrivals from torrent saturation without promising every provider
+result will fit. Searches fetch bounded first pages; universal pagination across
+all providers is not implemented.
+
+| Content | Independent universal search providers | Conditions and limits |
+| --- | --- | --- |
+| Movies and shows | TMDB or keyless Cinemeta; installed Nova2 torrent engines, YTS, EZTV, configured Torznab; configured Stremio, local files, Jellyfin and Plex | Catalog search runs independently of playable-source toggles. Release quality and swarm health rank source options, rather than substituting for content identity. Personal services require configuration. |
+| Anime | Jikan, with AniList fallback; installed AllAnime; anime torrent engines through the shared torrent search | Metadata search retains real title, cover, synopsis, year and rating. Metadata opens Anime discovery; it is not a verified playable stream. Up to twelve metadata rows are admitted per adapter. |
+| Comics and manga | Keyless MangaDex; installed ReadAllComics | MangaDex retains its real cover and stable reader identity, and opens Comics discovery. The other Comics Browse adapters are not yet universal workers. |
+| Books and novels | Wikisource, Internet Archive English DjVuTXT works, Gutenberg, public-access Open Library works, installed Royal Road and NovelFire; configured OPDS | Royal Road and NovelFire use the existing Browse listing parser with owned query/endpoint buffers and at most twelve works each. Challenge pages are parser failures, not successful empty listings. No Browse query or results are overwritten. Restricted Open Library lending items are excluded. |
+| Visual novels | VNDB | Metadata discovery only; no game download or playback claim. |
+| Audiobooks | Configured Audiobookshelf; Internet Archive audio | Audiobookshelf uses allowed libraries and real file metadata. Actual service availability depends on the configured server. |
+| Music | Public JioSaavn; installed Audius; configured Subsonic; connected Jellyfin Audio and Plex tracks | Independent queries do not replace Music Browse state. A shared **16-result** budget is divided fairly among configured providers. Requests are bounded to four seconds and 512 KiB each. Private actions retain provider IDs and bind the searched server/library namespace; playback obtains fresh credentials. Private artwork URLs are withheld. |
+| Podcasts | Apple Podcasts and gpodder; installed RSS feeds | Independent searches retain exact feed identities and share a **16-result** budget. At most four installed feeds are inspected per query, with two-second requests; additional installed feeds produce a partial-source status. The two public directories share the remaining budget, with four-second requests. Open a show in Podcasts and choose an episode to play. |
+| Radio and live TV | Radio Browser; installed/configured IPTV | Each adapter contributes up to 16 results and retains actual station/channel stream identities. |
+| Video and previews | YouTube search, Internet Archive video, NASA video, Wikimedia Commons video; explicit official TMDB trailer lookup | Preview lookup requires a current opaque result key and generation. TMDB previews require credentials and a verified official YouTube video; unavailable credentials or trailers remain explicit outcomes. Preview playback does not stand in for the full work. |
+| Images and articles | Cover/backdrop metadata only; no standalone universal image or article adapter | NASA and Commons workers currently request video. Existing RSS records expose torrent magnets, rather than an article reader contract. |
+| Installed executable plugins | Trusted installed plugin search workers | Coverage depends on each plugin's actual search contract and installation. An installed source configuration alone does not imply a universal worker exists. |
+
+Reading cards carry covers only when supplied by the actual listing/provider;
+authors and summaries are not invented for HTML listings that omit them. Other
+installed novel Browse adapters (Madara, LightNovelWP, ReadWN and ReadNovelFull)
+are not yet universal workers.
+
+Search cache identity includes schema, source mask and an opaque fingerprint of
+installed source configuration. Queries are hashed into bounded keys; endpoint
+URLs and credentials are not emitted as cache-key text. A wave captures its
+initial scope and skips cache writes when that scope changes while workers run.
+Connected personal-library configuration outside the installed-source table is
+not represented by that fingerprint. Account-bound Jellyfin, Plex, OPDS and
+Audiobookshelf results, private music identities, installed executable plugin
+results and unclassified Stremio session transports are therefore excluded from
+the persisted search cache. They remain live search results and are fetched
+afresh for each query. Public catalog/artwork and explicitly public Archive,
+NASA, Commons, JioSaavn and Audius rows remain eligible. The cache policy version
+invalidates earlier cached account rows. External provider uptime, personal
+account access and full interactive playback are separate validation requirements.
+
+### Visual search behavior and checks
+
+The desktop omnibox submits a global query from every Browse page. All-content
+results use artwork shelves; selecting a content category expands its results
+into a wrapping grid. Cards reveal contextual details, saved-title controls,
+and source comparisons. Unmatched releases remain separately actionable.
+Saved titles reopen through global search rather than an expired stream URL.
+
+Official trailer playback starts only on request, muted. Desktop uses a separate
+libmpv context; the web client uses a validated YouTube privacy-enhanced embed.
+Changing the query, selection, route, or closing the preview stops it. Trailer
+lookup requires a TMDB key. Audio samples are not fabricated when a provider
+does not supply a verified sample.
+
+Reproducible checks:
+
+```sh
+zig build test
+node --test tests/test_web_lifecycle.mjs
+zig build test-search-gallery
+python3 tests/test_features.py --database /tmp/opal-feature-fixture.sqlite --results /tmp/opal-feature-results.json
+```
+
+The optional native gallery check renders a hidden SDL window with generated
+offline artwork; `OPAL_GALLERY_ART_DIR` can supply local poster fixtures and
+`OPAL_GALLERY_CAPTURE_DIR` can retain PNG captures. It exercises shelves, filtered
+grids, and scrolling at 1360×1000 and 640×800. No provider request or playback
+occurs. Web regressions cover grouping, stale actions, filters, saving, and
+verified preview lifecycle. Isolated API cases in
+`tests/test_content_maturity_live.py` additionally cover preview/cancel generation
+validation and saved-title persistence.

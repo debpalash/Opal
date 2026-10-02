@@ -15,6 +15,7 @@ pub const ContentKind = enum {
     iptv,
     comics,
     novels,
+    search,
     other,
 
     pub fn id(self: ContentKind) []const u8 {
@@ -92,4 +93,8 @@ test "content kind keeps persisted adapters typed" {
     try std.testing.expectEqual(ContentKind.iptv, parseKind("IPTV"));
     try std.testing.expectEqual(ContentKind.other, parseKind("future-adapter"));
     try std.testing.expectEqualStrings("audiobook", ContentKind.audiobook.id());
+}
+
+test "saved search works reopen through search instead of a media URL" {
+    try std.testing.expectEqual(ContentKind.search, parseKind("search"));
 }

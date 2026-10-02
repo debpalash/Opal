@@ -951,6 +951,10 @@ fn openLibItem(item: *const library_pure.LibraryItem) void {
             state.app.router.navigate(.browse);
         },
         .novels => @import("../services/novels.zig").openDeepLink(link),
+        .search => {
+            @import("../services/search.zig").submitQuery(title);
+            state.app.router.navigate(.search);
+        },
         .comics => @import("../services/comics.zig").openDeepLink(link),
         .podcast => @import("../services/podcasts.zig").openDeepLink(link),
         else => browser.resumePlayback(link),
@@ -1086,6 +1090,7 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
                 .comics => "Comic",
                 .novels => "Read",
                 .iptv => "Live",
+                .search => "Saved title",
                 .other => "Continue",
             };
             _ = dvui.label(@src(), "{s}", .{if (revealed) kind_label else "Private"}, .{

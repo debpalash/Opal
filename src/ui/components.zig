@@ -246,6 +246,23 @@ pub fn renderCoverSlot(src: std.builtin.SourceLocation, id_extra: usize, slot: *
     });
 }
 
+/// Fixed gallery geometry with a centered crop; real covers keep their aspect
+/// ratio instead of being stretched to match a different content format.
+pub fn galleryCoverArt(src: std.builtin.SourceLocation, id: usize, slot: *CoverSlot, url: []const u8, fallback: []const u8, radius: f32, width: f32, height: f32) void {
+    syncCoverSlot(slot, url);
+    pollCoverSlot(slot);
+    if (@import("search_gallery_pure.zig").shouldFetchCover(url.len > 0, slot.failed, slot.fetching, slot.pixels != null, slot.tex != null)) {
+        poster.fetchAsync(url, &slot.pixels, &slot.w, &slot.h, &slot.fetching);
+        if (slot.fetching) slot.attempted = true;
+    }
+    if (slot.url_hash == slot.desired_url_hash) if (slot.tex) |tex| {
+        const crop = @import("search_gallery_pure.zig").coverCrop(.{ .w = @floatFromInt(slot.w), .h = @floatFromInt(slot.h) }, .{ .w = width, .h = height });
+        _ = dvui.image(src, .{ .source = .{ .texture = tex }, .uv = .{ .x = crop.x, .y = crop.y, .w = crop.w, .h = crop.h } }, .{ .id_extra = id, .min_size_content = .{ .w = width, .h = height }, .max_size_content = .{ .w = width, .h = height }, .corner_radius = dvui.Rect.all(radius) });
+        return;
+    };
+    renderCoverSlot(src, id, slot, url.len > 0, fallback, radius);
+}
+
 /// Fill the current parent with a fetched cover, an animated loading skeleton,
 /// or a quiet fallback icon. This keeps image lifecycle and failure latching
 /// identical across secondary browse pages.
@@ -253,7 +270,7 @@ pub fn coverArt(src: std.builtin.SourceLocation, id_extra: usize, slot: *CoverSl
     syncCoverSlot(slot, url);
     pollCoverSlot(slot);
 
-    if (url.len > 0 and !slot.failed and !slot.fetching) {
+    if (@import("search_gallery_pure.zig").shouldFetchCover(url.len > 0, slot.failed, slot.fetching, slot.pixels != null, slot.tex != null)) {
         poster.fetchAsync(url, &slot.pixels, &slot.w, &slot.h, &slot.fetching);
         if (slot.fetching) slot.attempted = true;
     }

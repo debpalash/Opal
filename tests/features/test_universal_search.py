@@ -50,9 +50,10 @@ def test_universal_search_fanout():
         "live tv uses tab-independent entry": "iptv.searchInto(" in res and "searchIptv(" not in res,
         "live tv carries play hints": "item.http_ua" in res and "item.http_referrer" in res,
         "play hints survive the cache": res.count("http_ua") >= 5,
-        "routes through pure parsers": all(
-            m in res for m in ("music_jiosaavn_pure.zig", "radio_pure.zig", "podcasts_pure.zig")
-        ),
+        "routes through pure parsers": all(m in res for m in ("music_subsonic.zig", "radio_pure.zig", "podcasts_pure.zig"))
+            and all(m in _src("src/services/music_subsonic.zig") for m in (
+                "music_jiosaavn_pure.zig", "js_pure.parseSongValue(", "pure.parseSongValue(",
+                "jf_pure.parseSongValue(", "px_pure.parseSongValue(", "au_pure.parseTrack(")),
         "workers spawned": all(
             f"if (sourceOn(.{b})) Spawn.go(resolve" in res for b in ("livetv", "music", "radio", "podcast")
         ),
@@ -83,12 +84,18 @@ def test_universal_search_fanout():
         ),
 
         # ── Result cap widened so late finishers aren't starved ──
-        "MAX_RESULTS constant": "pub const MAX_RESULTS: usize = 96;" in res,
+        "MAX_RESULTS constant": "pub const MAX_RESULTS: usize = content.MAX_ROWS;" in res
+            and "pub const MAX_ROWS: usize = 192;" in _src("src/services/search_content_pure.zig"),
         "no stale 64 cap": "result_count >= 64" not in res,
         "cache blob sized for fallback candidates": "SEARCH_BLOB_CAP: usize = MAX_RESULTS * @sizeOf(ResolvedItem)" in res,
 
         # ── Playback routing ──
-        "music/radio play direct": ".youtube, .stremio, .local, .music, .radio => {" in res,
+        "public video/radio play direct": ".youtube, .stremio, .local, .radio => {" in res,
+        "private music preserves connection identity": ".music => {" in res
+            and 'std.mem.startsWith(u8, url, "opal://music/")' in res
+            and "playUniversalRoute(url" in res,
+        "private music classified as library": '.music => std.mem.startsWith(u8, url, "opal://music/")' in res,
+        "podcasts resolve exact feed": "podcasts.searchPodcasts(item.url[0..item.url_len])" in res,
         "live tv replays its headers": ".livetv => {" in res and "loadContentDirectMetaHeaders(" in res and "originFromReferer(" in res,
         "podcast opens its tab": ".podcast => {" in res and "state.navigateToTab(.Podcasts)" in res,
         "plex resumes with alternate": ".plex => @import(\"plex.zig\").playSearchItem(" in res
@@ -139,7 +146,7 @@ def test_universal_search_fanout():
     missing = [k for k, ok in checks.items() if not ok]
     if missing:
         return "fail", "Fan-out incomplete: " + ", ".join(missing)
-    return "pass", "Universal search reaches Plex/live TV/music/radio/podcasts; cap 96; personal libraries rank first"
+    return "pass", "Universal search reaches Plex/live TV/music/radio/podcasts; cap 192; personal libraries rank first"
 
 
 @test("Synced lyrics (lrclib)", "Audio")

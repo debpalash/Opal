@@ -52,6 +52,9 @@ pub const ResolvedItem = struct {
     poster_url_len: usize = 0,
     summary: [512]u8 = std.mem.zeroes([512]u8),
     summary_len: usize = 0,
+    year: u16 = 0,
+    backdrop_url: [512]u8 = std.mem.zeroes([512]u8),
+    backdrop_url_len: usize = 0,
     rating: f32 = 0, // Provider rating out of ten; zero means unknown.
     author: [160]u8 = std.mem.zeroes([160]u8),
     author_len: usize = 0,
@@ -110,7 +113,8 @@ pub const ResolvedItem = struct {
 // Shared result buffer. The cap is a hard ceiling on a single search wave —
 // with the audio/live verticals fanning out alongside video, 64 starved the
 // late finishers, so it is sized to give every source room to land.
-pub const MAX_RESULTS: usize = 96;
+pub const content = @import("search_content_pure.zig");
+pub const MAX_RESULTS: usize = content.MAX_ROWS;
 pub var results: [MAX_RESULTS]ResolvedItem = std.mem.zeroes([MAX_RESULTS]ResolvedItem);
 pub var result_count: usize = 0;
 pub var results_mutex = @import("../core/sync.zig").Mutex{};
@@ -151,6 +155,9 @@ pub var status_livetv = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_music = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_radio = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_podcast = std.atomic.Value(SourceStatus).init(.idle);
+pub var status_anime_catalog = std.atomic.Value(SourceStatus).init(.idle);
+pub var status_manga_catalog = std.atomic.Value(SourceStatus).init(.idle);
+pub var status_public_books = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_catalog = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_plex = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_plugins = std.atomic.Value(SourceStatus).init(.idle);
@@ -177,6 +184,12 @@ pub const SourceBit = enum(u4) { local, torrent, jellyfin, youtube, anime, comic
 /// vertical can't silently leave its pill off (or make `all on` mis-detect).
 pub const ALL_SOURCE_BITS: u16 = @intCast((@as(u32, 1) << @typeInfo(SourceBit).@"enum".fields.len) - 1);
 pub var source_mask: std.atomic.Value(u16) = std.atomic.Value(u16).init(ALL_SOURCE_BITS);
+const CacheScope = struct { mask: u16 = ALL_SOURCE_BITS, fingerprint: u64 = 0 };
+var resolver_cache_scope: CacheScope = .{}; // lifecycle_mutex
+fn currentCacheScope() CacheScope {
+    const mask = source_mask.load(.acquire);
+    return .{ .mask = if (mask == 0) ALL_SOURCE_BITS else mask, .fingerprint = @import("../core/source_config.zig").fingerprint() };
+}
 
 pub fn sourceOn(bit: SourceBit) bool {
     const m = source_mask.load(.acquire);
@@ -397,6 +410,7 @@ pub fn resolveTracked(query: []const u8, intent: []const u8) u32 {
     // the generation orphans the in-flight wave: its pushResult calls no-op
     // (worker_gen mismatch) while this wave's workers own the fresh statuses.
     const this_run = run_gen.fetchAdd(1, .acq_rel) +% 1;
+    resolver_cache_scope = currentCacheScope();
 
     // Save query — normalize "season X episode Y" → "SXXEYY"
     var norm_buf: [256]u8 = undefined;
@@ -458,6 +472,9 @@ pub fn resolveTracked(query: []const u8, intent: []const u8) u32 {
     Pre.set(&status_podcast, .podcast);
     Pre.set(&status_novels, .novels);
     Pre.set(&status_novel_archive, .novels);
+    Pre.set(&status_anime_catalog, .anime);
+    Pre.set(&status_manga_catalog, .comics);
+    Pre.set(&status_public_books, .novels);
     Pre.set(&status_vndb, .vndb);
     Pre.set(&status_audiobooks, .audiobooks);
     Pre.set(&status_opds, .opds);
@@ -490,6 +507,9 @@ pub fn resolveTracked(query: []const u8, intent: []const u8) u32 {
         }
     };
     if (sourceOn(.local)) Spawn.go(resolveLocalFiles, &status_local); // instant — already on disk
+    if (sourceOn(.anime)) Spawn.go(resolveAnimeCatalog, &status_anime_catalog);
+    if (sourceOn(.comics)) Spawn.go(resolveMangaCatalog, &status_manga_catalog);
+    if (sourceOn(.novels)) Spawn.go(resolvePublicBooks, &status_public_books);
     Spawn.go(resolveCatalog, &status_catalog); // typed movie/show metadata, always available keylessly
     Spawn.go(resolvePlex, &status_plex); // connected personal library; unavailable is immediate
     Spawn.go(resolveInstalledPlugins, &status_plugins); // trusted executable content plugins
@@ -658,6 +678,7 @@ pub fn searchView(item: *const ResolvedItem) search_view.Item {
         .torrent = torrent,
         .library = switch (item.source) {
             .local, .jellyfin, .plex, .audiobooks, .opds => true,
+            .music => std.mem.startsWith(u8, url, "opal://music/"),
             else => false,
         },
         .quality = item.quality,
@@ -754,6 +775,15 @@ pub fn cancel() void {
 }
 
 /// Admission and invalidation share the lifecycle mutex with worker publish.
+/// Remote cancellation binds to the visible wave and cannot stop a successor.
+pub fn cancelExpected(expected: u32) bool {
+    lifecycle_mutex.lock();
+    defer lifecycle_mutex.unlock();
+    if (run_gen.load(.acquire) != expected) return false;
+    cancelLocked();
+    return true;
+}
+
 fn cancelLocked() void {
     _ = run_gen.fetchAdd(1, .acq_rel);
     is_resolving.store(false, .release);
@@ -781,6 +811,9 @@ fn resetSearchingStatuses() void {
         &status_music,
         &status_radio,
         &status_podcast,
+        &status_anime_catalog,
+        &status_manga_catalog,
+        &status_public_books,
         &status_catalog,
         &status_plex,
         &status_plugins,
@@ -851,6 +884,7 @@ threadlocal var thread_sink: ?*Sink = null;
 pub fn warmQuery(query: []const u8) void {
     if (!state.app.content_cache_enabled) return;
     if (query.len == 0 or query.len > 255) return;
+    const cache_scope = currentCacheScope();
 
     const rows = alloc.alloc(ResolvedItem, MAX_RESULTS) catch return;
     defer alloc.free(rows);
@@ -886,7 +920,9 @@ pub fn warmQuery(query: []const u8) void {
     defer alloc.free(buf);
     const blob = serializeRows(sink.items[0..sink.count], buf) orelse return;
     var key_buf: [288]u8 = undefined;
-    content_cache.put(cacheKey(&key_buf, query), blob, SEARCH_TTL_S);
+    const current_scope = currentCacheScope();
+    if (current_scope.mask != cache_scope.mask or current_scope.fingerprint != cache_scope.fingerprint) return;
+    content_cache.put(cacheKey(&key_buf, query, cache_scope), blob, SEARCH_TTL_S);
 
     var lb: [96]u8 = undefined;
     logs.pushLog("info", "resolver", std.fmt.bufPrint(
@@ -1005,8 +1041,12 @@ fn pushInto(
     // Legacy callers can reorder the live list; restore its relevance invariant
     // before selecting the worst bounded candidate or inserting a streamed row.
     std.sort.insertion(ResolvedItem, items[0..count.*], {}, relevanceBefore);
-    if (!search_view.admitTopK(count.*, items.len, .{ .score = scored_item.score, .key = actionKey(&scored_item) }, if (count.* > 0) .{ .score = items[count.* - 1].score, .key = actionKey(&items[count.* - 1]) } else .{})) return false;
-    if (count.* >= items.len) count.* -= 1;
+    if (count.* >= items.len) {
+        const victim = content.evictionIndex(items[0..count.*], scored_item) orelse return false;
+        var shift = victim;
+        while (shift + 1 < count.*) : (shift += 1) items[shift] = items[shift + 1];
+        count.* -= 1;
+    }
 
     // Insert sorted by relevance with the same stable identity tie policy.
     var insert_at: usize = count.*;
@@ -1125,10 +1165,11 @@ fn resolveCatalog(query_buf: [256]u8, qlen: usize) void {
         if (std.mem.startsWith(u8, poster, "https://") or std.mem.startsWith(u8, poster, "http://")) {
             if (poster.len <= item.poster_url.len) copyField(&item.poster_url, &item.poster_url_len, poster);
         } else if (std.mem.startsWith(u8, poster, "/")) {
-            const address = std.fmt.bufPrint(&item.poster_url, "https://image.tmdb.org/t/p/w185{s}", .{poster}) catch "";
+            const address = std.fmt.bufPrint(&item.poster_url, "https://image.tmdb.org/t/p/w342{s}", .{poster}) catch "";
             item.poster_url_len = address.len;
         }
         const year = entry.year[0..@min(entry.year_len, entry.year.len)];
+        item.year = std.fmt.parseInt(u16, year, 10) catch 0;
         const label = if (std.mem.eql(u8, kind, "tv")) "TV details" else "Movie details";
         const detail = if (year.len > 0)
             std.fmt.bufPrint(&item.detail, "{s} · {s}", .{ year, label }) catch label
@@ -1341,8 +1382,8 @@ fn attrValue(html: []const u8, name: []const u8, limit: usize) ?[]const u8 {
 // Serialization routes through content_cache_pure.Writer/Reader (tested).
 // ══════════════════════════════════════════════════════════
 
-fn cacheKey(buf: []u8, query: []const u8) []const u8 {
-    return std.fmt.bufPrint(buf, "search:v8:{s}", .{query}) catch "search:v8:";
+fn cacheKey(buf: []u8, query: []const u8, scope: CacheScope) []const u8 {
+    return content.cacheIdentity(buf, query, scope.mask, scope.fingerprint) orelse "";
 }
 
 /// Serialize the current `results` (under caller's lock) into `out`.
@@ -1356,11 +1397,15 @@ fn serializeResults(out: []u8) ?[]u8 {
 /// cache the live path reads back.
 fn serializeRows(rows: []const ResolvedItem, out: []u8) ?[]u8 {
     var w = ccp.Writer.init(out);
-    const n: u16 = @intCast(@min(rows.len, MAX_RESULTS));
+    var n: u16 = 0;
+    for (rows[0..@min(rows.len, MAX_RESULTS)]) |*row| {
+        if (content.cacheEligible(.{ .source = @tagName(row.source), .provider = row.provider.name(), .url = row.url[0..row.url_len] })) n += 1;
+    }
     w.u16v(n);
     var i: usize = 0;
-    while (i < n) : (i += 1) {
+    while (i < @min(rows.len, MAX_RESULTS)) : (i += 1) {
         const it = rows[i];
+        if (!content.cacheEligible(.{ .source = @tagName(it.source), .provider = it.provider.name(), .url = it.url[0..it.url_len] })) continue;
         w.blob(it.name[0..@min(it.name_len, it.name.len)]);
         w.blob(it.detail[0..@min(it.detail_len, it.detail.len)]);
         w.blob(it.provider.name());
@@ -1390,6 +1435,8 @@ fn serializeRows(rows: []const ResolvedItem, out: []u8) ?[]u8 {
         w.blob(it.poster_url[0..@min(it.poster_url_len, it.poster_url.len)]);
         w.blob(it.summary[0..@min(it.summary_len, it.summary.len)]);
         w.f32v(it.rating);
+        w.u16v(it.year);
+        w.blob(it.backdrop_url[0..@min(it.backdrop_url_len, it.backdrop_url.len)]);
         w.blob(it.author[0..@min(it.author_len, it.author.len)]);
         if (it.source == .opds) {
             w.blob(it.opds_entry.title[0..@min(it.opds_entry.title_len, it.opds_entry.title.len)]);
@@ -1461,6 +1508,8 @@ fn deserializeInto(bytes: []const u8) usize {
         copyField(&it.poster_url, &it.poster_url_len, r.blob() orelse break);
         copyField(&it.summary, &it.summary_len, r.blob() orelse break);
         it.rating = r.f32v() orelse break;
+        it.year = r.u16v() orelse break;
+        copyField(&it.backdrop_url, &it.backdrop_url_len, r.blob() orelse break);
         copyField(&it.author, &it.author_len, r.blob() orelse break);
         if (it.source == .opds) {
             copyField(&it.opds_entry.title, &it.opds_entry.title_len, r.blob() orelse break);
@@ -1489,7 +1538,7 @@ fn populateFromCache(query: []const u8) void {
     const buf = alloc.alloc(u8, SEARCH_BLOB_CAP) catch return;
     defer alloc.free(buf);
     var key_buf: [288]u8 = undefined;
-    const key = cacheKey(&key_buf, query);
+    const key = cacheKey(&key_buf, query, resolver_cache_scope);
     const hit = content_cache.get(key, buf) orelse return;
     results_mutex.lock();
     defer results_mutex.unlock();
@@ -1506,6 +1555,8 @@ fn populateFromCache(query: []const u8) void {
 /// cache-seeded placeholder (that would reset the TTL without a network fetch).
 fn storeToCache() void {
     if (!state.app.content_cache_enabled) return;
+    const current_scope = currentCacheScope();
+    if (current_scope.mask != resolver_cache_scope.mask or current_scope.fingerprint != resolver_cache_scope.fingerprint) return;
     results_mutex.lock();
     if (result_count == 0 or results_from_cache) {
         results_mutex.unlock();
@@ -1523,7 +1574,9 @@ fn storeToCache() void {
     results_mutex.unlock();
     if (blob) |b| {
         var key_buf: [288]u8 = undefined;
-        const key = cacheKey(&key_buf, qbuf[0..qn]);
+        // The wave retains its initial configuration scope. A reload while
+        // workers drain must not write old results under the new credentials.
+        const key = cacheKey(&key_buf, qbuf[0..qn], resolver_cache_scope);
         content_cache.put(key, b, SEARCH_TTL_S);
     }
 }
@@ -1565,6 +1618,7 @@ fn checkAllDoneLocked(run: u32) void {
         status_nasa.load(.acquire) != .searching and status_commons.load(.acquire) != .searching and
         status_music.load(.acquire) != .searching and status_radio.load(.acquire) != .searching and
         status_podcast.load(.acquire) != .searching and status_livetv.load(.acquire) != .searching and
+        status_anime_catalog.load(.acquire) != .searching and status_manga_catalog.load(.acquire) != .searching and status_public_books.load(.acquire) != .searching and
         status_catalog.load(.acquire) != .searching and status_plex.load(.acquire) != .searching and
         status_plugins.load(.acquire) != .searching and
         status_novels.load(.acquire) != .searching and status_novel_archive.load(.acquire) != .searching and
@@ -2964,8 +3018,8 @@ fn resolveArchive(query_buf: [256]u8, qlen: usize) void {
 
         var item = std.mem.zeroes(ResolvedItem);
         item.source = .stremio; // HTTP-direct stream — plays via mpv load_file
-
         const nlen = @min(raw_title.len, 255);
+        item.provider = search_view.Provider.init("archive");
         @memcpy(item.name[0..nlen], raw_title[0..nlen]);
         item.name_len = nlen;
 
@@ -3118,8 +3172,8 @@ fn resolveNasa(query_buf: [256]u8, qlen: usize) void {
 
         var item = std.mem.zeroes(ResolvedItem);
         item.source = .stremio; // HTTP-direct stream — plays via mpv load_file
-
         const nlen = @min(hit.title.len, 255);
+        item.provider = search_view.Provider.init("nasa");
         @memcpy(item.name[0..nlen], hit.title[0..nlen]);
         item.name_len = nlen;
 
@@ -3216,8 +3270,8 @@ fn resolveCommons(query_buf: [256]u8, qlen: usize) void {
 
         var item = std.mem.zeroes(ResolvedItem);
         item.source = .stremio; // HTTP-direct stream — plays via mpv load_file
-
         const nlen = @min(pg.title.len, 255);
+        item.provider = search_view.Provider.init("commons");
         @memcpy(item.name[0..nlen], pg.title[0..nlen]);
         item.name_len = nlen;
 
@@ -3482,7 +3536,7 @@ fn resolveYouTube(query_buf: [256]u8, qlen: usize) void {
 
 /// Cap per audio source — the fan-out already competes for MAX_RESULTS slots,
 /// and a music query returning 30 rows would bury every video result.
-const AUDIO_MAX: usize = 6;
+const AUDIO_MAX: usize = 16;
 
 fn resolveLiveTv(query_buf: [256]u8, qlen: usize) void {
     defer finishWorker(&status_livetv, .done);
@@ -3533,51 +3587,47 @@ fn resolveMusic(query_buf: [256]u8, qlen: usize) void {
     defer finishWorker(&status_music, .done);
     const query = query_buf[0..qlen];
     if (query.len < 2) return;
-
-    const jp = @import("music_jiosaavn_pure.zig");
-    var url_buf: [640]u8 = undefined;
-    const url = jp.buildSearchUrl(&url_buf, query, 20) orelse {
+    const music = @import("music_subsonic.zig");
+    const mp = @import("music_subsonic_pure.zig");
+    var enabled: [5]bool = @splat(false);
+    var providers: usize = 0;
+    for (&enabled, 0..) |*on, index| {
+        on.* = music.universalConfigured(@intCast(index));
+        if (on.*) providers += 1;
+    }
+    if (providers == 0) {
+        noteWorkerOutcome(.unavailable);
+        return;
+    }
+    const songs = alloc.alloc(mp.MusicSong, AUDIO_MAX) catch {
         noteWorkerOutcome(.failed);
         return;
     };
-
-    // JioSaavn search payloads run large — heap, not the worker stack.
-    const buf = alloc.alloc(u8, 512 * 1024) catch {
-        noteWorkerOutcome(.failed);
-        return;
-    };
-    defer alloc.free(buf);
-    const body = @import("../core/http.zig").fetch(url, buf, .{ .timeout_secs = 8 }) orelse {
-        noteWorkerOutcome(.transport_failed);
-        return;
-    };
-
-    var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch {
-        noteWorkerOutcome(.parse_failed);
-        return;
-    };
-    defer parsed.deinit();
-    const rows = @import("music_subsonic_pure.zig").pageRows(parsed.value, .jiosaavn) orelse {
-        noteWorkerOutcome(.parse_failed);
-        return;
-    };
-    var found: usize = 0;
-    for (rows) |obj| {
-        if (found >= AUDIO_MAX) break;
-        const song = jp.parseSongValue(obj) orelse continue;
-
-        var item = std.mem.zeroes(ResolvedItem);
-        item.source = .music;
-        copyField(&item.name, &item.name_len, song.title[0..song.title_len]);
-        copyField(&item.url, &item.url_len, song.play_url[0..song.play_url_len]);
-        copyField(&item.poster_url, &item.poster_url_len, song.cover[0..song.cover_len]);
-        var d: [128]u8 = undefined;
-        const detail = if (song.artist_len > 0)
-            std.fmt.bufPrint(&d, "Music - {s}", .{song.artist[0..song.artist_len]}) catch "Music"
-        else
-            "Music";
-        copyField(&item.detail, &item.detail_len, detail);
-        if (pushResult(item)) found += 1;
+    defer alloc.free(songs);
+    var visited: usize = 0;
+    for (enabled, 0..) |on, index| {
+        if (!on) continue;
+        if (thread_sink == null and run_gen.load(.acquire) != worker_gen) return;
+        const quota = mp.providerQuota(AUDIO_MAX, providers, visited);
+        visited += 1;
+        const source: u8 = @intCast(index);
+        const reply = music.searchInto(source, query, songs[0..quota]);
+        if (reply.status != .done and reply.status != .no_results) noteWorkerOutcome(reply.status);
+        for (songs[0..reply.count]) |song| {
+            var item: ResolvedItem = .{ .source = .music };
+            item.provider = search_view.Provider.init(music.universalProviderName(source));
+            copyField(&item.name, &item.name_len, song.title[0..song.title_len]);
+            copyField(&item.author, &item.author_len, song.artist[0..song.artist_len]);
+            copyField(&item.poster_url, &item.poster_url_len, song.cover[0..song.cover_len]);
+            if (source == music.SRC_SUBSONIC or source == music.SRC_JELLYFIN or source == music.SRC_PLEX) {
+                const route = mp.universalRoute(&item.url, source, reply.connection, song.id[0..song.id_len], if (source == music.SRC_PLEX) song.play_url[0..song.play_url_len] else "") orelse continue;
+                item.url_len = route.len;
+            } else copyField(&item.url, &item.url_len, song.play_url[0..song.play_url_len]);
+            var detail_buf: [128]u8 = undefined;
+            const detail = std.fmt.bufPrint(&detail_buf, "{s} · {s}", .{ music.universalProviderName(source), song.artist[0..song.artist_len] }) catch music.universalProviderName(source);
+            copyField(&item.detail, &item.detail_len, detail);
+            _ = pushResult(item);
+        }
     }
 }
 
@@ -3606,9 +3656,12 @@ fn resolveRadio(query_buf: [256]u8, qlen: usize) void {
         return;
     };
 
-    // Station is ~1.3KB; AUDIO_MAX of them is well under the stack budget.
-    var stations: [AUDIO_MAX]rp.Station = undefined;
-    const page = rp.parsePage(alloc, body, &stations) orelse {
+    const stations = alloc.alloc(rp.Station, AUDIO_MAX) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
+    defer alloc.free(stations);
+    const page = rp.parsePage(alloc, body, stations) orelse {
         noteWorkerOutcome(.parse_failed);
         return;
     };
@@ -3626,6 +3679,7 @@ fn resolveRadio(query_buf: [256]u8, qlen: usize) void {
 
         var item = std.mem.zeroes(ResolvedItem);
         item.source = .radio;
+        item.provider = search_view.Provider.init("Radio Browser");
         copyField(&item.name, &item.name_len, s.name[0..s.name_len]);
         copyField(&item.url, &item.url_len, stream);
         copyField(&item.poster_url, &item.poster_url_len, s.favicon[0..s.favicon_len]);
@@ -3640,77 +3694,94 @@ fn resolveRadio(query_buf: [256]u8, qlen: usize) void {
     }
 }
 
+fn publishPodcastRows(rows: []const @import("podcasts_pure.zig").Podcast, provider: []const u8) void {
+    for (rows) |show| {
+        if (show.feed_url_len == 0 or show.name_len == 0) continue;
+        var item: ResolvedItem = .{ .source = .podcast };
+        item.provider = search_view.Provider.init(provider);
+        copyField(&item.name, &item.name_len, show.name[0..show.name_len]);
+        copyField(&item.author, &item.author_len, show.artist[0..show.artist_len]);
+        copyField(&item.poster_url, &item.poster_url_len, show.artwork[0..show.artwork_len]);
+        copyField(&item.url, &item.url_len, show.feed_url[0..show.feed_url_len]);
+        var detail_buf: [128]u8 = undefined;
+        const detail = std.fmt.bufPrint(&detail_buf, "{s} · {s}", .{ provider, show.artist[0..show.artist_len] }) catch provider;
+        copyField(&item.detail, &item.detail_len, detail);
+        _ = pushResult(item);
+    }
+}
+
 fn resolvePodcasts(query_buf: [256]u8, qlen: usize) void {
     defer finishWorker(&status_podcast, .done);
     const query = query_buf[0..qlen];
     if (query.len < 2) return;
-
     const pp = @import("podcasts_pure.zig");
-    var enc_buf: [512]u8 = undefined;
-    const enc = @import("../core/http.zig").urlEncode(query, &enc_buf);
-    var url_buf: [640]u8 = undefined;
-    const url = std.fmt.bufPrint(
-        &url_buf,
-        "https://itunes.apple.com/search?media=podcast&limit=20&term={s}",
-        .{enc},
-    ) catch {
+    const cfg = @import("../core/source_config.zig");
+    const http = @import("../core/http.zig");
+    const buffer = alloc.alloc(u8, 512 * 1024) catch {
         noteWorkerOutcome(.failed);
         return;
     };
-
-    const buf = alloc.alloc(u8, 512 * 1024) catch {
-        noteWorkerOutcome(.failed);
-        return;
-    };
-    defer alloc.free(buf);
-    const body = @import("../core/http.zig").fetch(url, buf, .{ .timeout_secs = 8 }) orelse {
-        noteWorkerOutcome(.transport_failed);
-        return;
-    };
-
-    var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch {
-        noteWorkerOutcome(.parse_failed);
-        return;
-    };
-    defer parsed.deinit();
-    if (parsed.value != .object) {
-        noteWorkerOutcome(.parse_failed);
-        return;
-    }
-    const entries = parsed.value.object.get("results") orelse {
-        noteWorkerOutcome(.parse_failed);
-        return;
-    };
-    if (entries != .array) {
-        noteWorkerOutcome(.parse_failed);
-        return;
-    }
+    defer alloc.free(buffer);
     const shows = alloc.alloc(pp.Podcast, AUDIO_MAX) catch {
         noteWorkerOutcome(.failed);
         return;
     };
     defer alloc.free(shows);
-    const n = pp.parseItunesValue(parsed.value, shows) orelse {
-        noteWorkerOutcome(.parse_failed);
+    const feeds = alloc.alloc(cfg.FieldSnapshot, 256) catch {
+        noteWorkerOutcome(.failed);
         return;
     };
-    var i: usize = 0;
-    while (i < n) : (i += 1) {
-        const s = shows[i];
-        if (s.feed_url_len == 0 or s.name_len == 0) continue;
-        var item = std.mem.zeroes(ResolvedItem);
-        item.source = .podcast;
-        copyField(&item.name, &item.name_len, s.name[0..s.name_len]);
-        copyField(&item.poster_url, &item.poster_url_len, s.artwork[0..s.artwork_len]);
-        // The feed URL is the identity — playItem opens the Podcasts tab on it.
-        copyField(&item.url, &item.url_len, s.feed_url[0..s.feed_url_len]);
-        var d: [128]u8 = undefined;
-        const detail = if (s.artist_len > 0)
-            std.fmt.bufPrint(&d, "Podcast - {s}", .{s.artist[0..s.artist_len]}) catch "Podcast"
+    defer alloc.free(feeds);
+    const feed_count = cfg.copyFields("feed", feeds);
+    // Bound total network work. An explicit partial state exposes skipped
+    // installed feeds rather than reporting a complete search of every feed.
+    const feed_limit: usize = 4;
+    if (feed_count > feed_limit) noteWorkerOutcome(.partial);
+    var installed_count: usize = 0;
+    for (feeds[0..@min(feed_count, feed_limit)]) |feed| {
+        if (thread_sink == null and run_gen.load(.acquire) != worker_gen) return;
+        const url = feed.value[0..feed.value_len];
+        if (!pp.isFeedUrl(url)) continue;
+        const body = http.fetch(url, buffer, .{ .timeout_secs = 2 }) orelse {
+            noteWorkerOutcome(.transport_failed);
+            continue;
+        };
+        // General RSS/torrent feeds are not podcast directories.
+        if (std.mem.indexOf(u8, body, "itunes:") == null and std.mem.indexOf(u8, body, "type=\"audio/") == null and std.mem.indexOf(u8, body, "type='audio/") == null) continue;
+        const show = pp.parseFeedShow(body, url) orelse {
+            noteWorkerOutcome(.parse_failed);
+            continue;
+        };
+        if (std.ascii.indexOfIgnoreCase(show.name[0..show.name_len], query) == null and std.ascii.indexOfIgnoreCase(show.artist[0..show.artist_len], query) == null) continue;
+        shows[installed_count] = show;
+        installed_count += 1;
+    }
+    publishPodcastRows(shows[0..installed_count], "Installed RSS");
+    var enc_buf: [768]u8 = undefined;
+    const encoded = http.urlEncode(query, &enc_buf);
+    var url_buf: [1200]u8 = undefined;
+    // Divide remaining audio quota fairly across independent public catalogs.
+    const directory_quota = (AUDIO_MAX - installed_count) / 2;
+    for (0..2) |directory| {
+        if (thread_sink == null and run_gen.load(.acquire) != worker_gen) return;
+        const url = if (directory == 0)
+            std.fmt.bufPrint(&url_buf, "https://gpodder.net/search.json?q={s}", .{encoded}) catch continue
         else
-            "Podcast";
-        copyField(&item.detail, &item.detail_len, detail);
-        _ = pushResult(item);
+            std.fmt.bufPrint(&url_buf, "https://itunes.apple.com/search?media=podcast&limit={d}&term={s}", .{ directory_quota, encoded }) catch continue;
+        const body = http.fetch(url, buffer, .{ .timeout_secs = 4 }) orelse {
+            noteWorkerOutcome(.transport_failed);
+            continue;
+        };
+        var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch {
+            noteWorkerOutcome(.parse_failed);
+            continue;
+        };
+        defer parsed.deinit();
+        const count = (if (directory == 0) pp.parseGpodderValue(parsed.value, shows[0..directory_quota]) else pp.parseItunesValue(parsed.value, shows[0..directory_quota])) orelse {
+            noteWorkerOutcome(.parse_failed);
+            continue;
+        };
+        publishPodcastRows(shows[0..count], if (directory == 0) "gpodder" else "Apple Podcasts");
     }
 }
 
@@ -4145,7 +4216,10 @@ pub fn playResolvedItem(item: *const ResolvedItem) void {
             // Load the issue and reveal the Browse › Comics reader (comics read
             // inside the Comics tab now, not the player route).
             const comics = @import("comics.zig");
-            comics.loadComic(item.url[0..item.url_len]);
+            if (std.mem.eql(u8, item.provider.name(), "mangadex"))
+                comics.searchComics(item.name[0..item.name_len])
+            else
+                comics.loadComic(item.url[0..item.url_len]);
             state.navigateToTab(.Comics);
         },
         .tmdb => {
@@ -4158,7 +4232,17 @@ pub fn playResolvedItem(item: *const ResolvedItem) void {
                     "",
                 );
             } else {
-                @import("search.zig").submitQuery(item.name[0..item.name_len]);
+                // Movie metadata opens its real catalog page; never re-submit
+                // the same universal query in a navigation loop.
+                var address: [256]u8 = undefined;
+                const imdb_id = item.catalog_imdb[0..item.catalog_imdb_len];
+                const url: []const u8 = if (imdb_id.len > 2 and std.mem.startsWith(u8, imdb_id, "tt"))
+                    std.fmt.bufPrint(&address, "https://www.imdb.com/title/{s}/", .{imdb_id}) catch ""
+                else if (item.catalog_id > 0)
+                    std.fmt.bufPrint(&address, "https://www.themoviedb.org/movie/{d}", .{item.catalog_id}) catch ""
+                else
+                    "";
+                if (url.len > 0) @import("../ui/settings.zig").openExternal(url) else state.showToast("Catalog details unavailable");
             }
         },
         .opds => @import("opds.zig").openCatalogEntry(item.opds_entry, item.opds_connection_identity),
@@ -4176,11 +4260,10 @@ pub fn playResolvedItem(item: *const ResolvedItem) void {
                 @import("vndb.zig").openCatalogIdentity(url[prefix.len..]);
         },
         .podcast => {
-            // No open-by-feed entry point exists yet, so hand the show title to
-            // the Podcasts tab's own search and reveal it — the user lands on
-            // the show with its episode list, one click from playing.
+            // Resolve this exact feed in Podcasts rather than searching the
+            // display title, which can select a different show.
             const podcasts = @import("podcasts.zig");
-            podcasts.searchPodcasts(item.name[0..item.name_len]);
+            podcasts.searchPodcasts(item.url[0..item.url_len]);
             state.navigateToTab(.Podcasts);
         },
         .livetv => {
@@ -4208,7 +4291,14 @@ pub fn playResolvedItem(item: *const ResolvedItem) void {
                 &hdrs,
             );
         },
-        .youtube, .stremio, .local, .music, .radio => {
+        .music => {
+            const url = item.url[0..item.url_len];
+            if (std.mem.startsWith(u8, url, "opal://music/")) {
+                if (!@import("music_subsonic.zig").playUniversalRoute(url, item.name[0..item.name_len], item.author[0..item.author_len]))
+                    state.showToast("Music connection changed or track is unavailable; search again");
+            } else @import("browser.zig").playDirect(.{ .url = url, .title = item.name[0..item.name_len], .subtitle = item.author[0..item.author_len], .art_url = item.poster_url[0..item.poster_url_len] });
+        },
+        .youtube, .stremio, .local, .radio => {
             @import("browser.zig").playDirect(.{
                 .url = item.url[0..item.url_len],
                 .fallback_url = item.fallback_url[0..item.fallback_url_len],
@@ -4271,4 +4361,244 @@ fn findObjEnd(data: []const u8, start: usize) usize {
         }
     }
     return data.len;
+}
+
+// Independent metadata searches never mutate the visible Browse page state.
+fn fetchCatalogJson(url: []const u8, provider: []const u8) ?[]u8 {
+    @import("../core/rate_limit.zig").acquire(provider, 1.0);
+    const buf = alloc.alloc(u8, 1024 * 1024) catch {
+        noteWorkerOutcome(.failed);
+        return null;
+    };
+    const body = @import("../core/http.zig").fetch(url, buf, .{ .timeout_secs = 10, .user_agent = @import("../core/app_meta.zig").user_agent }) orelse {
+        alloc.free(buf);
+        noteWorkerOutcome(.transport_failed);
+        return null;
+    };
+    // Preserve the actual allocation for cleanup while returning a body-sized copy.
+    const owned = alloc.dupe(u8, body) catch {
+        alloc.free(buf);
+        noteWorkerOutcome(.failed);
+        return null;
+    };
+    alloc.free(buf);
+    return owned;
+}
+fn resolveAnimeCatalog(q: [256]u8, qlen: usize) void {
+    defer {
+        if (!worker_produced and generationIsCurrent(worker_gen)) resolveAniListCatalog(q[0..qlen]);
+        finishWorker(&status_anime_catalog, .done);
+    }
+    var enc: [1024]u8 = undefined;
+    const query = @import("../core/http.zig").urlEncode(q[0..qlen], &enc);
+    var address: [1400]u8 = undefined;
+    const url = std.fmt.bufPrint(&address, "https://api.jikan.moe/v4/anime?q={s}&limit=12{s}", .{ query, @import("anime_pure.zig").sfwSuffix(state.app.nsfw_filter_enabled) }) catch return;
+    const body = fetchCatalogJson(url, "jikan") orelse return;
+    defer alloc.free(body);
+    const parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    };
+    defer parsed.deinit();
+    if (parsed.value != .object) {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    }
+    const records = parsed.value.object.get("data") orelse {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    };
+    if (records != .array) {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    }
+    for (records.array.items) |record| {
+        if (record != .object) continue;
+        const id = record.object.get("mal_id") orelse continue;
+        if (id != .integer or id.integer <= 0 or id.integer > std.math.maxInt(i32)) continue;
+        var item: ResolvedItem = .{ .source = .anime, .catalog_id = @intCast(id.integer), .provider = search_view.Provider.init("jikan") };
+        var name = catalogString(record, "title_english");
+        if (name.len == 0) name = catalogString(record, "title");
+        if (name.len == 0) continue;
+        copyField(&item.name, &item.name_len, name);
+        copyField(&item.catalog_kind, &item.catalog_kind_len, "anime");
+        copyField(&item.summary, &item.summary_len, catalogString(record, "synopsis"));
+        copyField(&item.detail, &item.detail_len, "Anime details · MyAnimeList");
+        if (record.object.get("year")) |year| if (year == .integer and year.integer > 0 and year.integer <= 9999) {
+            item.year = @intCast(year.integer);
+        };
+        if (record.object.get("score")) |score| {
+            if (score == .float) item.rating = @floatCast(score.float) else if (score == .integer) item.rating = @floatFromInt(score.integer);
+        }
+        if (record.object.get("images")) |images| if (images == .object) {
+            if (images.object.get("jpg")) |jpg| copyField(&item.poster_url, &item.poster_url_len, catalogString(jpg, "image_url"));
+        };
+        const identity_url: []const u8 = std.fmt.bufPrint(&item.url, "opal://anime/{d}", .{item.catalog_id}) catch "";
+        item.url_len = identity_url.len;
+        _ = pushResult(item);
+    }
+}
+fn resolveMangaCatalog(q: [256]u8, qlen: usize) void {
+    defer finishWorker(&status_manga_catalog, .done);
+    const pure = @import("comics_pure.zig");
+    var address: [1400]u8 = undefined;
+    const url = pure.buildSearchUrl(&address, q[0..qlen], 12, 0) orelse return;
+    const body = fetchCatalogJson(url, "mangadex") orelse return;
+    defer alloc.free(body);
+    const data = pure.findJsonNode(body, "\"data\"") orelse {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    };
+    var iter = pure.ObjIter{ .buf = data };
+    var n: usize = 0;
+    while (iter.next()) |obj| {
+        if (n >= 12) break;
+        const manga = pure.parseMangaEntry(obj) orelse continue;
+        var item: ResolvedItem = .{ .source = .comics, .provider = search_view.Provider.init("mangadex") };
+        item.name_len = pure.jsonUnescape(manga.title, &item.name);
+        const identity_url: []const u8 = std.fmt.bufPrint(&item.url, "mangadex:{s}", .{manga.id}) catch "";
+        item.url_len = identity_url.len;
+        if (pure.buildCoverUrl(&item.poster_url, manga.id, manga.cover_file)) |cover| item.poster_url_len = cover.len;
+        copyField(&item.detail, &item.detail_len, "MangaDex · Read manga");
+        if (item.name_len > 0 and item.url_len > 0) {
+            _ = pushResult(item);
+            n += 1;
+        }
+    }
+}
+fn resolvePublicBooks(q: [256]u8, qlen: usize) void {
+    defer finishWorker(&status_public_books, .done);
+    defer {
+        if (generationIsCurrent(worker_gen)) resolveInstalledReading(q[0..qlen]);
+    }
+    const books = @import("public_books_pure.zig");
+    const novels = @import("novels_pure.zig");
+    var address: [2048]u8 = undefined;
+    if (books.openLibrarySearch(&address, q[0..qlen], 1)) |url| {
+        if (fetchCatalogJson(url, "openlibrary")) |body| {
+            defer alloc.free(body);
+            if (std.json.parseFromSlice(std.json.Value, alloc, body, .{})) |parsed| {
+                defer parsed.deinit();
+                if (parsed.value == .object) {
+                    if (parsed.value.object.get("docs")) |docs| if (docs == .array) {
+                        for (docs.array.items[0..@min(docs.array.items.len, 12)]) |doc| {
+                            const book = books.openLibraryItem(doc) orelse continue;
+                            var item: ResolvedItem = .{ .source = .novels, .year = book.year, .provider = search_view.Provider.init("openlibrary") };
+                            copyField(&item.name, &item.name_len, book.title);
+                            copyField(&item.author, &item.author_len, book.author);
+                            item.url_len = novels.formatDeepLink(&item.url, "openlibrary", book.id, book.title).len;
+                            if (books.openLibraryCover(&item.poster_url, book.cover_id)) |cover| item.poster_url_len = cover.len;
+                            copyField(&item.detail, &item.detail_len, "Open Library · Public text");
+                            if (item.url_len > 0) _ = pushResult(item);
+                        }
+                    };
+                }
+            } else |_| noteWorkerOutcome(.parse_failed);
+        }
+    }
+    if (books.gutenbergSearch(&address, q[0..qlen], 1)) |url| {
+        if (fetchCatalogJson(url, "gutenberg")) |body| {
+            defer alloc.free(body);
+            var iter = books.GutenbergIter{ .body = body };
+            var n: usize = 0;
+            while (iter.next()) |book| {
+                if (n >= 12) break;
+                var item: ResolvedItem = .{ .source = .novels, .provider = search_view.Provider.init("gutenberg") };
+                item.name_len = novels.htmlToText(book.title, &item.name);
+                item.author_len = novels.htmlToText(book.author, &item.author);
+                item.url_len = novels.formatDeepLink(&item.url, "gutenberg", book.id, book.title).len;
+                if (std.mem.startsWith(u8, book.cover, "/")) {
+                    const cover_url: []const u8 = std.fmt.bufPrint(&item.poster_url, "https://www.gutenberg.org{s}", .{book.cover}) catch "";
+                    item.poster_url_len = cover_url.len;
+                } else copyField(&item.poster_url, &item.poster_url_len, book.cover);
+                copyField(&item.detail, &item.detail_len, "Project Gutenberg · Read work");
+                if (item.url_len > 0 and item.name_len > 0) {
+                    _ = pushResult(item);
+                    n += 1;
+                }
+            }
+        }
+    }
+}
+
+/// Installed reading adapters use owned endpoint/query values and Browse's
+/// pure parsing seam, without publishing to its mutable query/list state.
+fn resolveInstalledReading(query: []const u8) void {
+    const reading = @import("search_reading_pure.zig");
+    const sc = @import("../core/source_config.zig");
+    for ([_]reading.Source{ .royalroad, .novelfire }) |source| {
+        if (!generationIsCurrent(worker_gen)) return;
+        var base_buf: [512]u8 = undefined;
+        const base = sc.copyValue(@tagName(source), "base", &base_buf) orelse continue;
+        var address: [1600]u8 = undefined;
+        const url = @import("expanded_reading_pure.zig").novelSearchUrl(&address, base, @tagName(source), query, 1) orelse continue;
+        @import("../core/rate_limit.zig").acquire(@tagName(source), 1.0);
+        const buf = alloc.alloc(u8, 2 * 1024 * 1024) catch {
+            noteWorkerOutcome(.failed);
+            continue;
+        };
+        defer alloc.free(buf);
+        const body = @import("../core/http.zig").fetch(url, buf, .{ .timeout_secs = 10, .user_agent = "Mozilla/5.0" }) orelse {
+            noteWorkerOutcome(.transport_failed);
+            continue;
+        };
+        if (!generationIsCurrent(worker_gen)) return;
+        // Twelve owned records total ~22 KiB; heap avoids adding their storage
+        // to the already substantial resolver worker stack.
+        const rows = alloc.alloc(reading.Item, reading.MAX_ITEMS) catch {
+            noteWorkerOutcome(.failed);
+            continue;
+        };
+        defer alloc.free(rows);
+        const page = reading.parseInto(body, base, source, rows);
+        if (!page.valid_listing) {
+            noteWorkerOutcome(.parse_failed);
+            continue;
+        }
+        for (rows[0..page.count]) |*row| {
+            var item: ResolvedItem = .{ .source = .novels, .provider = search_view.Provider.init(@tagName(source)) };
+            copyField(&item.name, &item.name_len, row.title[0..row.title_len]);
+            copyField(&item.poster_url, &item.poster_url_len, row.cover[0..row.cover_len]);
+            item.url_len = @import("novels_pure.zig").formatDeepLink(&item.url, @tagName(source), row.url[0..row.url_len], row.title[0..row.title_len]).len;
+            copyField(&item.detail, &item.detail_len, if (source == .royalroad) "Royal Road · Read work" else "NovelFire · Read work");
+            if (item.url_len > 0) _ = pushResult(item);
+        }
+    }
+}
+
+fn resolveAniListCatalog(query: []const u8) void {
+    const buf = alloc.alloc(u8, 512 * 1024) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
+    defer alloc.free(buf);
+    const n = @import("anilist.zig").fetchSearch(query, state.app.nsfw_filter_enabled, buf);
+    if (n == 0) {
+        noteWorkerOutcome(.transport_failed);
+        return;
+    }
+    const pure = @import("anilist_pure.zig");
+    const body = @import("anime_pure.zig").anilistCatalogBody(alloc, buf[0..n]) orelse {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    };
+    var iter = pure.Iter{ .json = body };
+    var count: usize = 0;
+    while (iter.next()) |media| {
+        if (count >= 12) break;
+        if (media.id <= 0 or media.id > std.math.maxInt(i32)) continue;
+        var item: ResolvedItem = .{ .source = .anime, .catalog_id = @intCast(media.id), .year = media.year, .rating = media.score10, .provider = search_view.Provider.init("anilist") };
+        const name = if (media.title_english.len > 0) media.title_english else media.title_romaji;
+        item.name_len = @import("comics_pure.zig").jsonUnescape(name, &item.name);
+        item.summary_len = @import("comics_pure.zig").jsonUnescape(media.description, &item.summary);
+        item.poster_url_len = @import("comics_pure.zig").jsonUnescape(media.cover, &item.poster_url);
+        copyField(&item.catalog_kind, &item.catalog_kind_len, "anilist");
+        copyField(&item.detail, &item.detail_len, "Anime details · AniList");
+        const identity_url: []const u8 = std.fmt.bufPrint(&item.url, "opal://anilist/{d}", .{media.id}) catch "";
+        item.url_len = identity_url.len;
+        if (item.name_len > 0) {
+            _ = pushResult(item);
+            count += 1;
+        }
+    }
 }

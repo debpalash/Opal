@@ -134,6 +134,7 @@ fn queryEquals(query: []const u8, wanted: []const u8, value: []const u8) bool {
 /// charged. Playback/status/media polling is intentionally absent.
 pub fn expensiveCost(path: []const u8, query: []const u8) u16 {
     if (std.mem.eql(u8, path, "/api/scrape")) return 4;
+    if (std.mem.eql(u8, path, "/api/unified_search/preview")) return 1;
     if (std.mem.eql(u8, path, "/api/search") or
         std.mem.eql(u8, path, "/api/unified_search") or
         std.mem.endsWith(u8, path, "/search")) return if (hasQueryValue(query, "q")) 1 else 0;
@@ -193,6 +194,8 @@ test "weighted scrape cost and expensive route allowlist exclude polling" {
     try std.testing.expectEqual(@as(u16, 4), expensiveCost("/api/scrape", ""));
     try std.testing.expectEqual(@as(u16, 1), expensiveCost("/api/tmdb/search", "q=opal"));
     try std.testing.expectEqual(@as(u16, 1), expensiveCost("/api/unified_search", "q=opal"));
+    try std.testing.expectEqual(@as(u16, 1), expensiveCost("/api/unified_search/preview", "generation=2&key=ab"));
+    try std.testing.expectEqual(@as(u16, 0), expensiveCost("/api/unified_search/cancel", "generation=2"));
     try std.testing.expectEqual(@as(u16, 1), expensiveCost("/api/recommendations", "refresh=1"));
     for ([_]struct { path: []const u8, query: []const u8 }{
         .{ .path = "/api/search", .query = "" },

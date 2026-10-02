@@ -672,10 +672,8 @@ fn omnibox(narrow: bool) void {
         },
         .open => openOmniboxTarget(text),
         .search => {
-            if (!browser.searchCurrentBrowse(text)) {
-                search_mod.submitQuery(text);
-                state.app.router.navigate(.search);
-            }
+            search_mod.submitQuery(text);
+            state.app.router.navigate(.search);
         },
     }
 }

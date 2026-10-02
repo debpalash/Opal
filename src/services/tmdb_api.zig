@@ -583,6 +583,10 @@ pub fn fetchPoster(item: *state.TmdbItem) void {
 pub var tmdb_https_blocked: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 fn curlOwnedOnce(url: []const u8, auth_header: []const u8, max_bytes: usize) ?[]u8 {
+    return curlOwnedPolicy(url, auth_header, max_bytes, false);
+}
+
+fn curlOwnedPolicy(url: []const u8, auth_header: []const u8, max_bytes: usize, https_only: bool) ?[]u8 {
     const io_g = @import("../core/io_global.zig");
     // --connect-timeout bounds a dead/slow host to 3s on connect instead of
     // burning the full --max-time; --max-time trimmed to 8s for interactive
@@ -602,10 +606,18 @@ fn curlOwnedOnce(url: []const u8, auth_header: []const u8, max_bytes: usize) ?[]
     // -L is required by the public Cinemeta endpoint, which currently answers
     // with a 307 to its catalog shard. Without it we read the redirect text,
     // reject it as non-JSON, and leave the keyless gallery empty.
-    var child = if (auth_header.len > 0)
-        io_g.Child.init(&.{ "curl", "-L", "-s", "--connect-timeout", "3", "--config", "-", "--max-time", "8", "-o", path, url }, alloc)
-    else
-        io_g.Child.init(&.{ "curl", "-L", "-s", "--connect-timeout", "3", "--max-time", "8", "-o", path, url }, alloc);
+    var args: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer args.deinit(alloc);
+    args.appendSlice(alloc, &.{ "curl", "-L", "-s", "--connect-timeout", "3", "--max-time", "8", "-o", path }) catch return null;
+    if (auth_header.len > 0) args.appendSlice(alloc, &.{ "--config", "-" }) catch return null;
+    var size_buf: [24]u8 = undefined;
+    if (https_only) {
+        args.appendSlice(alloc, &@import("search_preview_pure.zig").https_arguments) catch return null;
+        const size_text = std.fmt.bufPrint(&size_buf, "{d}", .{max_bytes}) catch return null;
+        args.appendSlice(alloc, &.{ "--max-filesize", size_text }) catch return null;
+    }
+    args.append(alloc, url) catch return null;
+    var child = io_g.Child.init(args.items, alloc);
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
     if (auth_header.len > 0) {
@@ -635,6 +647,20 @@ fn curlOwnedOnce(url: []const u8, auth_header: []const u8, max_bytes: usize) ?[]
         return null;
     }
     return body;
+}
+
+/// Trailer verification requires an authenticated HTTPS response. Unlike the
+/// legacy browse fallback, previews never downgrade HTTP or follow HTTP redirects.
+pub fn tmdbPreviewApiOwned(path: []const u8, key: []const u8) ?[]u8 {
+    const v4 = @import("tmdb_pure.zig").keyIsV4(key);
+    var url_buf: [768]u8 = undefined;
+    const url = if (v4)
+        std.fmt.bufPrint(&url_buf, "https://api.themoviedb.org{s}", .{path}) catch return null
+    else
+        std.fmt.bufPrint(&url_buf, "https://api.themoviedb.org{s}&api_key={s}", .{ path, key }) catch return null;
+    var auth_buf: [320]u8 = undefined;
+    const auth = if (v4) std.fmt.bufPrint(&auth_buf, "Authorization: Bearer {s}", .{key}) catch return null else "";
+    return curlOwnedPolicy(url, auth, 256 * 1024, true);
 }
 
 /// curl `url` (HTTPS) into `buf`, with an HTTPS→HTTP fallback for SNI-blocked

@@ -21,6 +21,7 @@ const MAX_LOAD_URL = 8192;
 /// drives the same two-method interface against an in-memory fake in tests.
 const MpvPlaybackSink = struct {
     ctx: *c.mpv.mpv_handle,
+    last_result: c_int = 0,
 
     fn stringNode(value: [*:0]const u8) c.mpv.mpv_node {
         return .{
@@ -119,6 +120,7 @@ const MpvPlaybackSink = struct {
             .format = c.mpv.MPV_FORMAT_NODE_ARRAY,
         };
         const rc = c.mpv.mpv_command_node(self.ctx, &command_node, null);
+        self.last_result = rc;
         if (rc < 0) {
             // A rejected load used to be silent: mpv wrote one line to stdout
             // and the UI showed "Opening stream" forever. Say what happened,
@@ -144,6 +146,16 @@ const MpvPlaybackSink = struct {
         }
     }
 };
+
+/// Reuse the typed transport boundary for an isolated preview context. This
+/// command has no MediaPlayer, navigation, progress, or playback history side
+/// effects, and cannot target a context registered as a main player.
+pub fn loadDetached(ctx: *c.mpv.mpv_handle, request: LoadRequest) bool {
+    for (state.app.players.items) |registered| if (registered.mpv_ctx == ctx) return false;
+    var sink: MpvPlaybackSink = .{ .ctx = ctx };
+    if (!playback_load.dispatch(&sink, request)) return false;
+    return sink.last_result >= 0;
+}
 
 pub const video_w = 1920;
 pub const video_h = 1080;

@@ -2690,6 +2690,10 @@ pub fn loadContentDirectMetaHeaders(
 
 /// Load content with automatic provider routing
 pub fn loadContent(url: []const u8) void {
+    if (std.mem.startsWith(u8, url, "opal://music/")) {
+        _ = @import("music_subsonic.zig").playUniversalRoute(url, "Music", "");
+        return;
+    }
     const extractors = @import("extractors.zig");
 
     // Normalize URL
@@ -2756,10 +2760,14 @@ pub fn loadContent(url: []const u8) void {
 /// launch Resume prompt are *known playback*, so this forces the player: magnets
 /// go through the torrent engine, comics to the reader, everything else into mpv.
 pub fn resumePlayback(url: []const u8) void {
+    if (std.mem.startsWith(u8, url, "opal://music/")) {
+        _ = @import("music_subsonic.zig").playUniversalRoute(url, "Music", "");
+        return;
+    }
     if (std.mem.startsWith(u8, url, "opal://search/")) {
         const query = url["opal://search/".len..];
         if (query.len > 0) {
-            @import("search.zig").triggerSearch(query);
+            @import("search.zig").submitQuery(query);
             state.app.router.navigate(.search);
         }
         return;

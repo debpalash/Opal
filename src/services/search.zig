@@ -854,6 +854,7 @@ pub fn submitQuery(query_text: []const u8) void {
     // Own the bytes before cancelling work or clearing either visible buffer.
     @memcpy(owned[0..n], query_text[0..n]);
     cancelPendingMemorySearch();
+    @import("search_preview.zig").stop();
     @import("activity.zig").record(.search, owned[0..n], .{});
     setUniversalQuery(owned[0..n]);
     @import("resolver.zig").resolve(owned[0..n], "auto");
@@ -882,6 +883,7 @@ pub fn cancelPendingMemorySearch() void {
 
 /// Unified Clear supersedes both searches and pending memory publication.
 pub fn clearShellSearch() void {
+    @import("search_preview.zig").stop();
     cancelPendingMemorySearch();
     search_abort.store(true, .release);
     _ = search_generation.fetchAdd(1, .acq_rel);
@@ -1018,6 +1020,7 @@ pub fn reapWorkers() void {
 /// first would deadlock shutdown behind a child process that has not yet been
 /// told to exit.
 pub fn shutdown() void {
+    @import("search_preview.zig").stop();
     search_abort.store(true, .release);
     _ = search_generation.fetchAdd(1, .acq_rel);
     if (nova_may_exist.load(.acquire)) reapWorkers();
@@ -1401,6 +1404,11 @@ fn renderUniversalCapabilities() void {
         .{ .icon = icons.tvg.lucide.image, .name = "Comics" },
         .{ .icon = icons.tvg.lucide.clapperboard, .name = "Stremio" },
         .{ .icon = icons.tvg.lucide.rss, .name = "RSS" },
+        .{ .icon = icons.tvg.lucide.book, .name = "Books & audiobooks" },
+        .{ .icon = icons.tvg.lucide.headphones, .name = "Music & podcasts" },
+        .{ .icon = icons.tvg.lucide.radio, .name = "Radio & live TV" },
+        .{ .icon = icons.tvg.lucide.server, .name = "Plex & connected catalogs" },
+        .{ .icon = icons.tvg.lucide.book, .name = "Visual novels" },
     };
     var flow = dvui.flexbox(@src(), .{ .justify_content = .center }, .{ .expand = .horizontal, .padding = .{ .x = 0, .y = theme.spacing.md, .w = 0, .h = 0 } });
     defer flow.deinit();
@@ -1436,15 +1444,15 @@ fn renderSourceStatusCluster() void {
         .{ .icon = icons.tvg.lucide.magnet, .name = "Torrents", .bit = .torrent, .st = combinedTorrentStatus() },
         .{ .icon = icons.tvg.lucide.server, .name = "Jellyfin", .bit = .jellyfin, .st = resolver.status_jf.load(.acquire) },
         .{ .icon = icons.tvg.lucide.youtube, .name = "YouTube", .bit = .youtube, .st = resolver.status_yt.load(.acquire) },
-        .{ .icon = icons.tvg.lucide.tv, .name = "Anime", .bit = .anime, .st = resolver.status_anime.load(.acquire) },
-        .{ .icon = icons.tvg.lucide.image, .name = "Comics", .bit = .comics, .st = resolver.status_comics.load(.acquire) },
+        .{ .icon = icons.tvg.lucide.tv, .name = "Anime", .bit = .anime, .st = resolver.combineSourceStatuses(resolver.status_anime.load(.acquire), resolver.status_anime_catalog.load(.acquire)) },
+        .{ .icon = icons.tvg.lucide.image, .name = "Comics", .bit = .comics, .st = resolver.combineSourceStatuses(resolver.status_comics.load(.acquire), resolver.status_manga_catalog.load(.acquire)) },
         .{ .icon = icons.tvg.lucide.clapperboard, .name = "Streams", .bit = .stremio, .st = combinedStreamStatus() },
         .{ .icon = icons.tvg.lucide.rss, .name = "RSS", .bit = .rss, .st = resolver.status_rss.load(.acquire) },
         .{ .icon = icons.tvg.lucide.tv, .name = "Live TV", .bit = .livetv, .st = resolver.status_livetv.load(.acquire) },
         .{ .icon = icons.tvg.lucide.music, .name = "Music", .bit = .music, .st = resolver.status_music.load(.acquire) },
         .{ .icon = icons.tvg.lucide.radio, .name = "Radio", .bit = .radio, .st = resolver.status_radio.load(.acquire) },
         .{ .icon = icons.tvg.lucide.podcast, .name = "Podcasts", .bit = .podcast, .st = resolver.status_podcast.load(.acquire) },
-        .{ .icon = icons.tvg.lucide.book, .name = "Novels", .bit = .novels, .st = resolver.combineSourceStatuses(resolver.status_novels.load(.acquire), resolver.status_novel_archive.load(.acquire)) },
+        .{ .icon = icons.tvg.lucide.book, .name = "Novels", .bit = .novels, .st = resolver.combineSourceStatuses(resolver.combineSourceStatuses(resolver.status_novels.load(.acquire), resolver.status_novel_archive.load(.acquire)), resolver.status_public_books.load(.acquire)) },
         .{ .icon = icons.tvg.lucide.book, .name = "Visual novels", .bit = .vndb, .st = resolver.status_vndb.load(.acquire) },
         .{ .icon = icons.tvg.lucide.headphones, .name = "Audiobooks", .bit = .audiobooks, .st = resolver.status_audiobooks.load(.acquire) },
         .{ .icon = icons.tvg.lucide.book, .name = "OPDS", .bit = .opds, .st = resolver.status_opds.load(.acquire) },
@@ -1609,9 +1617,17 @@ fn renderUniversalResults() void {
     const resolver = @import("resolver.zig");
     // Facet changes from this frame update counts and rows together.
     if (view_dirty) refreshSearchView();
+    if (view_cache.rows == null or view_cache.loaded == 0 or view_cache.count == 0) @import("search_preview.zig").stop();
+    if (view_cache.rows != null) ensureContentProjection();
     if (view_cache.query_len > 0 or view_cache.loaded > 0) {
-        var count_buf: [96]u8 = undefined;
-        const count = std.fmt.bufPrint(&count_buf, "{d} shown of {d} loaded{s}", .{ view_cache.count, view_cache.loaded, if (view_cache.loading) " · searching…" else "" }) catch "Results";
+        var titles: usize = 0;
+        var releases: usize = 0;
+        for (content_projection.groups[0..content_projection.count]) |*group| {
+            if (!galleryGroupVisible(group)) continue;
+            if (group.category == .releases) releases += 1 else titles += 1;
+        }
+        var count_buf: [128]u8 = undefined;
+        const count = std.fmt.bufPrint(&count_buf, "{d} titles · {d} other releases{s}", .{ titles, releases, if (view_cache.loading) " · searching…" else "" }) catch "Results";
         _ = dvui.label(@src(), "{s}", .{count}, .{ .color_text = theme.colors.text_secondary, .padding = dvui.Rect.all(theme.spacing.sm) });
     }
     if (view_cache.rows == null) {
@@ -1626,33 +1642,8 @@ fn renderUniversalResults() void {
         components.emptyState(icons.tvg.lucide.@"search-x", "No matches for these filters", "Remove a filter to see more of the loaded results.");
         return;
     }
-    if (view_dirty) refreshSearchView();
-    var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &result_scroll }, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
-    defer scroll.deinit();
-    var list = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
-    defer list.deinit();
-    var tab_pressed = false;
-    var pointer_pressed = false;
-    for (dvui.events()) |event| {
-        if (event.evt == .key and event.evt.key.code == .tab and event.evt.key.action == .down) tab_pressed = true;
-        if (event.evt == .mouse and event.evt.mouse.action == .press) pointer_pressed = true;
-    }
-    result_keyboard_layout = @import("queue_layout_pure.zig").keyboardLayoutMode(result_keyboard_layout, tab_pressed, pointer_pressed);
-    const row_height = dvui.themeGet().font_body.textHeight() * 4 + 14;
-    const range = if (result_keyboard_layout) search_view.Range{ .start = 0, .end = view_cache.count } else search_view.visibleRange(view_cache.count, result_scroll.viewport.y, result_scroll.viewport.h, row_height);
-    if (range.start > 0) {
-        var spacer = dvui.box(@src(), .{}, .{ .id_extra = 91400, .min_size_content = .{ .w = 1, .h = row_height * @as(f32, @floatFromInt(range.start)) } });
-        spacer.deinit();
-    }
     var pending: ?ResultAction = null;
-    for (range.start..range.end) |position| {
-        const idx = view_cache.order[position];
-        renderCompactRow(idx, &view_cache.rows.?[idx], &pending);
-    }
-    if (range.end < view_cache.count) {
-        var spacer = dvui.box(@src(), .{}, .{ .id_extra = 91401, .min_size_content = .{ .w = 1, .h = row_height * @as(f32, @floatFromInt(view_cache.count - range.end)) } });
-        spacer.deinit();
-    }
+    renderContentGallery(&pending);
     if (pending) |action| {
         // The selected row is owned by this frame's immutable snapshot.
         const item = &view_cache.rows.?[action.idx];
@@ -1671,6 +1662,378 @@ fn renderUniversalResults() void {
             }
         } else resolver.playResolvedItem(item);
     }
+}
+
+const search_content = @import("search_content_pure.zig");
+const gallery_layout = @import("../ui/search_gallery_pure.zig");
+var content_projection: search_content.Projection = .{};
+var gallery_selection: u64 = 0;
+var gallery_selected_manually = false;
+var gallery_generation: u32 = 0;
+var gallery_show_sources = false;
+var gallery_release_limit: usize = 12;
+const GalleryCover = struct { identity: u64 = 0, used: u64 = 0, slot: components.CoverSlot = .{} };
+// Stable addresses: poster workers publish into these slots. Never move or
+// recycle a slot while its worker is fetching.
+var gallery_covers: [196]GalleryCover = @splat(.{});
+var gallery_cover_clock: u64 = 0;
+var gallery_backdrop: components.CoverSlot = .{};
+
+fn galleryCover(identity: u64) ?*components.CoverSlot {
+    gallery_cover_clock +%= 1;
+    var oldest: ?usize = null;
+    for (&gallery_covers, 0..) |*entry, index| {
+        if (entry.identity == identity) {
+            entry.used = gallery_cover_clock;
+            return &entry.slot;
+        }
+        if (!entry.slot.fetching and (oldest == null or entry.used < gallery_covers[oldest.?].used)) oldest = index;
+    }
+    if (oldest) |index| {
+        const entry = &gallery_covers[index];
+        entry.slot.reset();
+        entry.identity = identity;
+        entry.used = gallery_cover_clock;
+        return &entry.slot;
+    }
+    return null;
+}
+
+/// Called after the owned-worker barrier, while the graphics context exists.
+pub fn deinitGallery() void {
+    for (&gallery_covers) |*entry| entry.slot.reset();
+    gallery_backdrop.reset();
+    @import("search_preview.zig").deinit();
+}
+
+pub fn updateGalleryRoute() void {
+    if (state.app.router.current != .search) @import("search_preview.zig").stop();
+}
+
+/// Native test harness only: immutable provider fixtures, no resolver network.
+pub fn setGalleryFixtureForTest(rows: []const @import("resolver.zig").ResolvedItem, query: []const u8) void {
+    if (!@import("builtin").is_test) @compileError("gallery fixture API is test-only");
+    const resolver = @import("resolver.zig");
+    if (view_cache.rows == null) view_cache.rows = @import("../core/alloc.zig").allocator.alloc(resolver.ResolvedItem, resolver.MAX_RESULTS) catch return;
+    view_cache.loaded = @min(rows.len, resolver.MAX_RESULTS);
+    view_cache.count = view_cache.loaded;
+    @memcpy(view_cache.rows.?[0..view_cache.loaded], rows[0..view_cache.loaded]);
+    for (rows[0..view_cache.loaded], 0..) |*item, index| {
+        view_cache.projected[index] = resolver.searchView(item);
+        view_cache.order[index] = index;
+    }
+    view_cache.query_len = @min(query.len, view_cache.query.len);
+    @memcpy(view_cache.query[0..view_cache.query_len], query[0..view_cache.query_len]);
+    view_cache.loading = false;
+    view_cache.nsfw = false;
+    view_cache.revision +%= 1;
+    view_cache.generation +%= 1;
+    view_filters = .{};
+    view_sort = .relevance;
+    view_dirty = false;
+    state.app.router.current = .search;
+    result_scroll.viewport.y = 0;
+}
+pub fn setGalleryTextureForTest(identity: u64, url: []const u8, texture: dvui.Texture, width: u32, height: u32) void {
+    if (!@import("builtin").is_test) @compileError("gallery texture API is test-only");
+    const slot = galleryCover(identity) orelse return;
+    components.syncCoverSlot(slot, url);
+    slot.tex = texture;
+    slot.w = width;
+    slot.h = height;
+    slot.attempted = true;
+}
+pub fn setGalleryContentFilterForTest(filter: search_view.ContentKind) void {
+    if (!@import("builtin").is_test) @compileError("gallery filter API is test-only");
+    view_filters.content = filter;
+    view_dirty = false;
+}
+pub fn renderGalleryForTest() void {
+    if (!@import("builtin").is_test) @compileError("gallery renderer API is test-only");
+    renderUniversalResults();
+}
+
+fn galleryCategoryLabel(category: search_content.Category) []const u8 {
+    return switch (category) {
+        .movies => "Movies",
+        .shows => "Shows",
+        .anime => "Anime",
+        .comics => "Comics & manga",
+        .books => "Books & audiobooks",
+        .music => "Music",
+        .podcasts => "Podcasts",
+        .radio => "Radio",
+        .live_tv => "Live TV",
+        .visual_novels => "Visual novels",
+        .videos => "Videos",
+        .releases => "Other releases",
+    };
+}
+fn galleryCategoryFilter(category: search_content.Category) search_view.ContentKind {
+    return switch (category) {
+        .movies => .movies,
+        .shows => .shows,
+        .anime => .anime,
+        .comics => .comics,
+        .books => .books,
+        .music => .music,
+        .podcasts => .podcasts,
+        .radio => .radio,
+        .live_tv => .live_tv,
+        .visual_novels => .visual_novels,
+        .videos, .releases => .video,
+    };
+}
+fn galleryShape(category: search_content.Category) gallery_layout.Shape {
+    return switch (category) {
+        .movies, .shows, .anime, .comics, .books, .visual_novels => .portrait,
+        .music, .podcasts, .radio => .square,
+        .videos, .live_tv, .releases => .landscape,
+    };
+}
+fn galleryIcon(category: search_content.Category) []const u8 {
+    return switch (category) {
+        .books, .comics, .visual_novels => icons.tvg.lucide.book,
+        .music, .podcasts => icons.tvg.lucide.headphones,
+        .radio => icons.tvg.lucide.radio,
+        .releases => icons.tvg.lucide.magnet,
+        else => icons.tvg.lucide.film,
+    };
+}
+fn galleryGroupVisible(group: *const search_content.Group) bool {
+    for (group.indexes[0..group.count]) |index| if (search_view.matches(view_cache.projected[index], view_filters)) return true;
+    return false;
+}
+
+fn ensureContentProjection() void {
+    const rows = view_cache.rows.?[0..view_cache.loaded];
+    var indexes: [@import("resolver.zig").MAX_RESULTS]usize = undefined;
+    var count: usize = 0;
+    for (rows, 0..) |item, index| {
+        if (item.name_len == 0 or (view_cache.nsfw and item.is_nsfw)) continue;
+        indexes[count] = index;
+        count += 1;
+    }
+    // Projection is rebuilt only when the immutable row revision/filter changes.
+    const ProjectionCache = struct {
+        var revision: u64 = std.math.maxInt(u64);
+        var generation: u32 = 0;
+        var nsfw = false;
+    };
+    if (ProjectionCache.revision != view_cache.revision or ProjectionCache.generation != view_cache.generation or ProjectionCache.nsfw != view_cache.nsfw) {
+        search_content.projectInto(rows, indexes[0..count], &content_projection);
+        ProjectionCache.revision = view_cache.revision;
+        ProjectionCache.generation = view_cache.generation;
+        ProjectionCache.nsfw = view_cache.nsfw;
+    }
+}
+
+fn renderContentGallery(pending: *?ResultAction) void {
+    const rows = view_cache.rows.?[0..view_cache.loaded];
+    ensureContentProjection();
+    if (gallery_generation != view_cache.generation) {
+        gallery_selection = 0;
+        gallery_selected_manually = false;
+        gallery_show_sources = false;
+        gallery_release_limit = 12;
+        gallery_generation = view_cache.generation;
+        @import("search_preview.zig").stop();
+    }
+    var visible: [search_content.MAX_ROWS]usize = undefined;
+    var identities: [search_content.MAX_ROWS]u64 = undefined;
+    var visible_count: usize = 0;
+    for (content_projection.groups[0..content_projection.count], 0..) |*group, index| {
+        if (!galleryGroupVisible(group)) continue;
+        visible[visible_count] = index;
+        identities[visible_count] = group.identity;
+        visible_count += 1;
+    }
+    std.sort.insertion(usize, visible[0..visible_count], {}, struct {
+        fn less(_: void, a: usize, b: usize) bool {
+            return search_view.lessThan(view_sort, view_cache.projected[content_projection.groups[a].representative], view_cache.projected[content_projection.groups[b].representative]);
+        }
+    }.less);
+    for (visible[0..visible_count], 0..) |index, position| identities[position] = content_projection.groups[index].identity;
+    const selected_position = gallery_layout.retainSelection(identities[0..visible_count], gallery_selection) orelse {
+        @import("search_preview.zig").stop();
+        return;
+    };
+    const selected = &content_projection.groups[visible[selected_position]];
+    gallery_selection = selected.identity;
+    var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &result_scroll }, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_app });
+    defer scroll.deinit();
+    var content = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .padding = dvui.Rect.all(theme.spacing.md) });
+    defer content.deinit();
+    const width = content.data().contentRect().w;
+    // A raw release has no dependable feature artwork. It stays in the compact
+    // source comparison until a matching catalog or library record arrives.
+    const featured_item = &rows[selected.representative];
+    if (selected.category != .releases and gallery_layout.shouldFeature(view_cache.query[0..view_cache.query_len], featured_item.name[0..featured_item.name_len], featured_item.poster_url_len > 0 or featured_item.backdrop_url_len > 0, gallery_selected_manually)) renderGalleryHero(selected, width, pending) else @import("search_preview.zig").stop();
+    if (gallery_show_sources) {
+        renderResultGroupHeading("Available sources", 94500);
+        var source_indexes: [search_content.MAX_ROWS]u16 = undefined;
+        @memcpy(source_indexes[0..selected.count], selected.indexes[0..selected.count]);
+        std.sort.insertion(u16, source_indexes[0..selected.count], {}, struct {
+            fn less(_: void, a: u16, b: u16) bool {
+                return search_view.lessThan(view_sort, view_cache.projected[a], view_cache.projected[b]);
+            }
+        }.less);
+        for (source_indexes[0..selected.count]) |index| {
+            if (rows[index].source == .tmdb and selected.count > 1) continue;
+            renderCompactRow(index, &rows[index], pending);
+        }
+    }
+    inline for (std.meta.tags(search_content.Category)) |category| {
+        var category_count: usize = 0;
+        for (visible[0..visible_count]) |index| if (content_projection.groups[index].category == category) {
+            category_count += 1;
+        };
+        if (category_count > 0) {
+            var heading = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 94600 + @as(usize, @intFromEnum(category)), .expand = .horizontal, .padding = .{ .x = 0, .y = 16, .w = 0, .h = 8 } });
+            _ = dvui.label(@src(), "{s}", .{galleryCategoryLabel(category)}, .{ .font = dvui.themeGet().font_heading, .color_text = theme.colors.text_primary, .gravity_y = 0.5 });
+            var tally: [32]u8 = undefined;
+            const tally_text = std.fmt.bufPrint(&tally, "{d}", .{category_count}) catch "";
+            _ = dvui.label(@src(), "{s}", .{tally_text}, .{ .color_text = theme.colors.text_tertiary, .gravity_y = 0.5, .margin = dvui.Rect.all(6) });
+            var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            spacer.deinit();
+            if (category != .releases and view_filters.content == .all and components.actionButton(@src(), "See all", .secondary, 94650 + @as(usize, @intFromEnum(category)))) {
+                view_filters.content = galleryCategoryFilter(category);
+                view_dirty = true;
+                result_scroll.viewport.y = 0;
+            }
+            heading.deinit();
+            if (category == .releases) {
+                var shown: usize = 0;
+                for (visible[0..visible_count]) |index| {
+                    const group = &content_projection.groups[index];
+                    if (group.category != category or shown >= gallery_release_limit) continue;
+                    renderCompactRow(group.representative, &rows[group.representative], pending);
+                    shown += 1;
+                }
+                if (shown < category_count and components.actionButton(@src(), "Show more releases", .secondary, 94700)) gallery_release_limit += 24;
+            } else {
+                const art = gallery_layout.cardSize(galleryShape(category), width);
+                if (view_filters.content != .all) {
+                    var grid = dvui.flexbox(@src(), .{ .justify_content = .start }, .{ .id_extra = 94950 + @as(usize, @intFromEnum(category)), .expand = .horizontal });
+                    for (visible[0..visible_count]) |index| {
+                        const group = &content_projection.groups[index];
+                        if (group.category == category) renderGalleryCard(group, if (rows[group.representative].source == .audiobooks) gallery_layout.cardSize(.square, width) else art);
+                    }
+                    grid.deinit();
+                } else {
+                    const rail_height = gallery_layout.shelfHeight(art.h, dvui.themeGet().font_body.textHeight());
+                    var rail = dvui.scrollArea(@src(), .{ .horizontal = .auto, .horizontal_bar = .auto_overlay, .vertical = .none }, .{ .id_extra = 94800 + @as(usize, @intFromEnum(category)), .expand = .horizontal, .min_size_content = .{ .w = 1, .h = rail_height }, .max_size_content = .{ .w = std.math.floatMax(f32), .h = rail_height }, .background = false, .color_fill = theme.transparent });
+                    var strip = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 94900 + @as(usize, @intFromEnum(category)) });
+                    for (visible[0..visible_count]) |index| {
+                        const group = &content_projection.groups[index];
+                        if (group.category == category) renderGalleryCard(group, if (rows[group.representative].source == .audiobooks) gallery_layout.cardSize(.square, width) else art);
+                    }
+                    strip.deinit();
+                    rail.deinit();
+                }
+            }
+        }
+    }
+}
+
+fn renderGalleryCard(group: *const search_content.Group, size: gallery_layout.Size) void {
+    const item = &view_cache.rows.?[group.representative];
+    const key: usize = @truncate(group.identity);
+    var card = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = key, .min_size_content = .{ .w = size.w, .h = 0 }, .max_size_content = .{ .w = size.w, .h = std.math.floatMax(f32) }, .margin = .{ .x = 0, .y = 0, .w = 12, .h = if (view_filters.content == .all) 0 else 16 }, .background = false, .color_fill = theme.transparent });
+    defer card.deinit();
+    var art = dvui.overlay(@src(), .{ .id_extra = key +% 1, .min_size_content = .{ .w = size.w, .h = size.h }, .max_size_content = .{ .w = size.w, .h = size.h }, .background = true, .color_fill = theme.colors.bg_surface, .corner_radius = dvui.Rect.all(theme.radius.md), .border = dvui.Rect.all(if (gallery_selection == group.identity) 2 else 0), .color_border = theme.colors.accent });
+    if (art.data().visible()) {
+        if (galleryCover(group.identity)) |slot| components.galleryCoverArt(@src(), key +% 2, slot, item.poster_url[0..item.poster_url_len], galleryIcon(group.category), theme.radius.md, size.w, size.h);
+    }
+    var hovered = false;
+    if (dvui.clicked(art.data(), .{ .hovered = &hovered })) {
+        gallery_selection = group.identity;
+        gallery_selected_manually = true;
+        gallery_show_sources = false;
+        result_scroll.viewport.y = 0;
+    }
+    art.deinit();
+    const body = dvui.themeGet().font_body;
+    var title: [520]u8 = undefined;
+    _ = dvui.label(@src(), "{s}", .{searchRowTitle(item.name[0..item.name_len], body, size.w, &title)}, .{ .id_extra = key +% 3, .font = body, .color_text = theme.colors.text_primary, .min_size_content = .{ .w = size.w, .h = body.textHeight() * 2 }, .max_size_content = .{ .w = size.w, .h = body.textHeight() * 2 }, .margin = .{ .x = 0, .y = 7, .w = 0, .h = 0 } });
+    var metadata: [128]u8 = undefined;
+    const line = if (group.offer_count > 0) std.fmt.bufPrint(&metadata, "{d} source{s}", .{ group.offer_count, if (group.offer_count == 1) "" else "s" }) catch "" else if (item.author_len > 0) item.author[0..item.author_len] else item.detail[0..item.detail_len];
+    searchRowLine(key +% 4, safeUtf8(line), body.withSize(theme.font_size.small), size.w, theme.colors.text_secondary);
+    if (components.actionButton(@src(), "Details", .secondary, key +% 5)) {
+        gallery_selection = group.identity;
+        gallery_selected_manually = true;
+        gallery_show_sources = false;
+        result_scroll.viewport.y = 0;
+    }
+    components.tipId(@src(), card.data().*, safeUtf8(item.name[0..item.name_len]), key);
+    renderSearchResultContext(key, card.data().borderRectScale().r, item);
+}
+
+fn renderGalleryHero(group: *const search_content.Group, width: f32, pending: *?ResultAction) void {
+    const item = &view_cache.rows.?[group.representative];
+    const key: usize = @truncate(group.identity);
+    var hero = dvui.box(@src(), .{ .dir = if (gallery_layout.stackedHero(width)) .vertical else .horizontal }, .{ .id_extra = 95000, .expand = .horizontal, .background = true, .color_fill = theme.colors.bg_surface, .corner_radius = dvui.Rect.all(theme.radius.lg), .padding = dvui.Rect.all(12), .margin = .{ .x = 0, .y = 0, .w = 0, .h = 12 } });
+    defer hero.deinit();
+    const preview = @import("search_preview.zig");
+    if (item.source == .tmdb and item.catalog_id > 0) {
+        preview.select(group.identity, if (std.mem.eql(u8, item.catalog_kind[0..item.catalog_kind_len], "tv")) .tv else .movie, item.catalog_id);
+    } else preview.stop();
+    preview.poll();
+    const preview_state = preview.snapshot();
+    const has_preview_backdrop = preview_state.identity == group.identity and preview_state.metadata.backdrop_url_len > 0;
+    const has_backdrop = item.backdrop_url_len > 0 or has_preview_backdrop;
+    const preview_active = preview_state.status == .playing or preview_state.status == .starting;
+    const art_size = gallery_layout.heroArtSize(width, has_backdrop or preview_active);
+    var art = dvui.overlay(@src(), .{ .id_extra = key +% 8, .min_size_content = .{ .w = art_size.w, .h = art_size.h }, .max_size_content = .{ .w = art_size.w, .h = art_size.h }, .color_fill = theme.colors.bg_elevated, .background = true, .corner_radius = dvui.Rect.all(theme.radius.md), .margin = .{ .x = 0, .y = 0, .w = 20, .h = 0 } });
+    if (preview_active) {
+        if (art.data().visible()) preview.render(@src(), key +% 9, art_size.w, art_size.h);
+    } else if (has_backdrop) {
+        const backdrop = if (item.backdrop_url_len > 0) item.backdrop_url[0..item.backdrop_url_len] else preview_state.metadata.backdrop_url[0..preview_state.metadata.backdrop_url_len];
+        components.galleryCoverArt(@src(), key +% 9, &gallery_backdrop, backdrop, galleryIcon(group.category), theme.radius.md, art_size.w, art_size.h);
+    } else if (galleryCover(group.identity)) |slot| components.galleryCoverArt(@src(), key +% 9, slot, item.poster_url[0..item.poster_url_len], galleryIcon(group.category), theme.radius.md, art_size.w, art_size.h);
+    art.deinit();
+    var copy = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = 95001, .expand = .horizontal, .gravity_y = gallery_layout.heroCopyGravity(width), .padding = dvui.Rect.all(4) });
+    defer copy.deinit();
+    _ = dvui.label(@src(), "{s}", .{galleryCategoryLabel(group.category)}, .{ .color_text = theme.colors.accent, .font = dvui.themeGet().font_body.withSize(theme.font_size.small) });
+    const copy_width = @max(1, copy.data().contentRect().w);
+    const heading = dvui.themeGet().font_title.withSize(if (width < 760) 26 else 34);
+    var title: [520]u8 = undefined;
+    _ = dvui.label(@src(), "{s}", .{searchRowTitle(item.name[0..item.name_len], heading, copy_width, &title)}, .{ .id_extra = 95002, .color_text = theme.colors.text_primary, .font = heading, .max_size_content = .{ .w = copy_width, .h = heading.textHeight() * 2 }, .margin = .{ .x = 0, .y = 4, .w = 0, .h = 8 } });
+    searchRowLine(95003, safeUtf8(item.detail[0..item.detail_len]), dvui.themeGet().font_body.withSize(theme.font_size.small), copy_width, theme.colors.text_secondary);
+    if (item.summary_len > 0) {
+        var summary = dvui.textLayout(@src(), .{ .break_lines = true }, .{ .id_extra = 95004, .expand = .horizontal, .background = false, .color_fill = theme.transparent, .max_size_content = .{ .w = copy_width, .h = dvui.themeGet().font_body.textHeight() * 4 }, .margin = .{ .x = 0, .y = 10, .w = 0, .h = 12 } });
+        summary.addText(safeUtf8(item.summary[0..item.summary_len]), .{ .color_text = theme.colors.text_secondary });
+        summary.deinit();
+    }
+    var actions = dvui.flexbox(@src(), .{ .justify_content = .start }, .{ .id_extra = 95005, .expand = .horizontal });
+    const television = item.source == .tmdb and std.mem.eql(u8, item.catalog_kind[0..item.catalog_kind_len], "tv");
+    if (item.source != .tmdb or television) {
+        if (components.actionButton(@src(), if (television) "Episodes" else "Open", .primary, 95006)) pending.* = .{ .idx = group.representative };
+    }
+    if (group.offer_count > 0) {
+        var source_text: [48]u8 = undefined;
+        const text = std.fmt.bufPrint(&source_text, "Sources ({d})", .{group.offer_count}) catch "Sources";
+        if (components.actionButton(@src(), text, .secondary, 95007)) gallery_show_sources = !gallery_show_sources;
+    }
+    const store = @import("library_store.zig");
+    var identity: [32]u8 = undefined;
+    const identity_text = std.fmt.bufPrint(&identity, "{x}", .{group.identity}) catch "";
+    const saved = store.isFavorite("search", identity_text);
+    if (components.actionButton(@src(), if (saved) "Saved" else "Save", .secondary, 95008)) {
+        var saved_link: [288]u8 = undefined;
+        const reopen = std.fmt.bufPrint(&saved_link, "opal://search/{s}", .{item.name[0..item.name_len]}) catch "";
+        store.setFavorite("search", identity_text, !saved, item.name[0..item.name_len], item.poster_url[0..item.poster_url_len], reopen);
+        state.showToast(if (saved) "Removed from saved content" else "Saved to your library");
+    }
+    if (preview_state.canStart()) {
+        if (components.actionButton(@src(), "Preview", .secondary, 95009)) _ = preview.start();
+    }
+    if (preview_active) {
+        if (components.actionButton(@src(), if (preview_state.muted) "Unmute" else "Mute", .secondary, 95010)) preview.setMuted(!preview_state.muted);
+        if (components.actionButton(@src(), "Close preview", .secondary, 95011)) preview.closePlayback();
+    }
+    actions.deinit();
+    if (item.source == .tmdb and preview_state.status != .idle) searchRowLine(95012, preview_state.label(), dvui.themeGet().font_body.withSize(theme.font_size.small), copy_width, theme.colors.text_tertiary);
 }
 
 fn showResult(item: *const @import("resolver.zig").ResolvedItem) bool {
@@ -1741,9 +2104,9 @@ fn renderSourceSummary(source_has: std.EnumSet(@import("resolver.zig").SourceBit
     const entries = [_]Entry{
         .{ .name = "Torrents", .src = .torrent, .rss = false, .st = combinedTorrentStatus(), .bit = .torrent },
         .{ .name = "Jellyfin", .src = .jellyfin, .rss = false, .st = resolver.status_jf.load(.acquire), .bit = .jellyfin },
-        .{ .name = "Anime", .src = .anime, .rss = false, .st = resolver.status_anime.load(.acquire), .bit = .anime },
+        .{ .name = "Anime", .src = .anime, .rss = false, .st = resolver.combineSourceStatuses(resolver.status_anime.load(.acquire), resolver.status_anime_catalog.load(.acquire)), .bit = .anime },
         .{ .name = "YouTube", .src = .youtube, .rss = false, .st = resolver.status_yt.load(.acquire), .bit = .youtube },
-        .{ .name = "Comics", .src = .comics, .rss = false, .st = resolver.status_comics.load(.acquire), .bit = .comics },
+        .{ .name = "Comics", .src = .comics, .rss = false, .st = resolver.combineSourceStatuses(resolver.status_comics.load(.acquire), resolver.status_manga_catalog.load(.acquire)), .bit = .comics },
         .{ .name = "Streams", .src = .stremio, .rss = false, .st = combinedStreamStatus(), .bit = .stremio },
         .{ .name = "RSS", .src = .torrent, .rss = true, .st = resolver.status_rss.load(.acquire), .bit = .rss },
         .{ .name = "On-disk", .src = .local, .rss = false, .st = resolver.status_local.load(.acquire), .bit = .local },
@@ -1751,7 +2114,7 @@ fn renderSourceSummary(source_has: std.EnumSet(@import("resolver.zig").SourceBit
         .{ .name = "Music", .src = .music, .rss = false, .st = resolver.status_music.load(.acquire), .bit = .music },
         .{ .name = "Radio", .src = .radio, .rss = false, .st = resolver.status_radio.load(.acquire), .bit = .radio },
         .{ .name = "Podcasts", .src = .podcast, .rss = false, .st = resolver.status_podcast.load(.acquire), .bit = .podcast },
-        .{ .name = "Novels", .src = .novels, .rss = false, .st = resolver.combineSourceStatuses(resolver.status_novels.load(.acquire), resolver.status_novel_archive.load(.acquire)), .bit = .novels },
+        .{ .name = "Novels", .src = .novels, .rss = false, .st = resolver.combineSourceStatuses(resolver.combineSourceStatuses(resolver.status_novels.load(.acquire), resolver.status_novel_archive.load(.acquire)), resolver.status_public_books.load(.acquire)), .bit = .novels },
         .{ .name = "Visual novels", .src = .vndb, .rss = false, .st = resolver.status_vndb.load(.acquire), .bit = .vndb },
         .{ .name = "Audiobooks", .src = .audiobooks, .rss = false, .st = resolver.status_audiobooks.load(.acquire), .bit = .audiobooks },
         .{ .name = "OPDS", .src = .opds, .rss = false, .st = resolver.status_opds.load(.acquire), .bit = .opds },
@@ -1933,7 +2296,7 @@ fn renderCompactRow(idx: usize, item: *const @import("resolver.zig").ResolvedIte
     };
     const body = dvui.themeGet().font_body;
     const small = body.withSize(theme.font_size.small);
-    const row_height = body.textHeight() * 4 + 14;
+    const row_height = body.textHeight() * 3 + 14 + (if (risk.risk != .ok) small.textHeight() else @as(f32, 0));
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .id_extra = row_key,
         .expand = .horizontal,
@@ -1965,7 +2328,7 @@ fn renderCompactRow(idx: usize, item: *const @import("resolver.zig").ResolvedIte
     else
         std.fmt.bufPrint(&line, "{s}{s}{s}{s}{s}", .{ chip_text, if (meta.len > 0) " · " else "", meta, if (item.detail_len > 0) " · " else "", safeUtf8(item.detail[0..item.detail_len]) }) catch chip_text;
     searchRowLine(row_key +% 2, metadata, small, text_width, theme.colors.text_secondary);
-    if (risk.risk != .ok) searchRowLine(row_key +% 3, if (risk.risk == .block) "Scam? · blocked torrent" else "Caution · check torrent details", small, text_width, if (risk.risk == .block) theme.colors.danger else theme.colors.warning) else if (item.summary_len > 0) searchRowLine(row_key +% 3, safeUtf8(item.summary[0..item.summary_len]), small, text_width, theme.colors.text_tertiary);
+    if (risk.risk != .ok) searchRowLine(row_key +% 3, if (risk.risk == .block) "Scam? · blocked torrent" else "Caution · check torrent details", small, text_width, if (risk.risk == .block) theme.colors.danger else theme.colors.warning);
     content.deinit();
     var actions = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0.5 });
     defer actions.deinit();

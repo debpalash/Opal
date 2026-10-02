@@ -45,14 +45,15 @@ def test_search_v2_resolver_projection():
         "real torrent properties retained": all(field in projection for field in (".quality", ".seeds", ".leech", ".size_bytes", ".provider")),
         "personal library sources": all(source in projection for source in (".local", ".jellyfin", ".plex")),
         "catalog and reader classifications": "search_view.kindFor(source" in projection and all(source in pure for source in (".tmdb", ".anime", ".comics", ".novels", ".opds", ".vndb", ".audiobooks")),
-        "provider metadata survives cache": "search:v8:" in resolver and "w.blob(it.provider.name())" in resolver
+        "provider metadata survives cache": "search:v10:" in _src("src/services/search_content_pure.zig")
+            and "content.cacheIdentity(" in resolver and "w.blob(it.provider.name())" in resolver
             and "search_view.Provider.init(r.blob()" in resolver,
         "actual torrent adapter providers": all(f'Provider.init("{name}")' in resolver for name in ("rss", "yts", "eztv"))
             and "Provider.init(eng_name)" in resolver and "Provider.init(src_id)" in resolver,
     }, "Owned resolver snapshots preserve stable actions, content policy and actual torrent metadata")
 
 
-@test("Search v2 native view is compact virtualized and snapshot-owned", "Search")
+@test("Search v2 native view uses artwork shelves and owned snapshots", "Search")
 def test_search_v2_native_view():
     search = _src("src/services/search.zig")
     shell = _src("src/ui/shell.zig")
@@ -87,9 +88,11 @@ def test_search_v2_native_view():
         "sort popup closes on selection": "popup.close();" in _between(search, "fn searchSelectImpl(", "const CONTENT_LABELS"),
         "compact sort popup": "searchSelectImpl(91300, &SORT_LABELS, @intFromEnum(view_sort), dense)" in controls and "&SORT_LABELS" in controls
             and "components.segment(" not in controls and "searchSelect(91300" not in renderer,
-        "filtered totals": "shown of {d} loaded" in renderer and "view_cache.count" in renderer and "view_cache.loaded" in renderer,
-        "visible range only": "search_view.visibleRange(" in renderer and "for (range.start..range.end)" in renderer,
-        "keyboard traversal retained": "keyboardLayoutMode(" in renderer and ".tab" in renderer,
+        "filtered content totals": "{d} titles · {d} other releases" in renderer and "galleryGroupVisible(group)" in renderer,
+        "visible artwork only": "art.data().visible()" in renderer and "components.galleryCoverArt(" in renderer,
+        "keyboard details action retained": 'actionButton(@src(), "Details"' in renderer,
+        "shared content grouping": "search_content.projectInto(" in renderer and "galleryGroupVisible(" in renderer,
+        "global search regardless browse route": "browser.searchCurrentBrowse(text)" not in omnibox and "search_mod.submitQuery(text)" in omnibox,
         "snapshot-owned action": "view_cache.rows.?[action.idx]" in renderer and "resolver.playResolvedItem(item)" in renderer,
         "safe torrent queue": "torrent_risk_pure.zig" in renderer and "risk.risk == .block" in renderer and "addToQueue(" in renderer,
         "stable result widget identities": "resolver.actionKey(item)" in row and ".id_extra = row_key" in row,
@@ -158,3 +161,34 @@ def test_search_shell_dense_and_query_ownership():
         "compact input avoids inherited button and field margins": ".margin = dvui.Rect.all(0)" in icons
             and ".margin = dvui.Rect.all(0)" in omnibox,
     }, "Dense icons keep named menus; query aliases are owned and Clear cancels both pipelines")
+
+
+@test("Visual search content grouping previews and stable artwork lifetimes", "Search")
+def test_visual_search_gallery():
+    search = _src("src/services/search.zig")
+    grouping = _src("src/services/search_content_pure.zig")
+    preview = _src("src/services/search_preview.zig")
+    pure_preview = _src("src/services/search_preview_pure.zig")
+    main = _src("src/main.zig")
+    build = _src("build.zig")
+    return _checked({
+        "bounded grouped content projection": "pub fn projectInto(" in grouping and "pub fn evictionIndex(" in grouping,
+        "artwork card detail and hero": all(name in search for name in ("renderGalleryCard", "renderGalleryHero", "galleryCategoryLabel", "Available sources")),
+        "stable poster worker addresses": "gallery_covers: [196]GalleryCover" in search and "!entry.slot.fetching" in search,
+        "progressive selection identity": "gallery_layout.retainSelection(" in search,
+        "explicit isolated preview": "preview.start()" in search and "preview.select(" in search and "state.app.players.append" not in preview,
+        "hidden or empty feature stops preview": 'view_cache.count == 0) @import("search_preview.zig").stop()' in search
+            and 'else @import("search_preview.zig").stop()' in search,
+        "filtered categories use wrapping native grid": "if (view_filters.content != .all)" in search
+            and "var grid = dvui.flexbox" in search,
+        "preview shares typed load transport": "loadDetached(handle" in preview and '"loadfile"' not in preview,
+        "verified embed allowed by production CSP": "frame-src 'self' https://www.youtube-nocookie.com" in _src("src/services/remote_static.zig"),
+        "preview stop before worker barrier": main.index("search.shutdown();") < main.index("workers.beginShutdownAndDrain(800)"),
+        "artwork cleanup after worker barrier": main.index("workers.beginShutdownAndDrain(800)") < main.index("search.deinitGallery();"),
+        "verified preview parser on production path": "pure.parseForId(" in preview and "pub fn parseForId(" in pure_preview,
+        "ready artwork fetch decisions use tested policy": "shouldFetchCover(" in _src("src/ui/components.zig"),
+        "saved titles reopen universal query": '.search =>' in _src("src/ui/home.zig") and 'submitQuery(query)' in _src("src/services/browser.zig"),
+        "saved native title uses portable search link": '"opal://search/{s}"' in search
+            and 'item.poster_url[0..item.poster_url_len], reopen)' in search,
+        "regressions registered": all(f'b.path("{file}")' in build for file in ("src/ui/search_gallery_pure.zig", "src/services/search_content_pure.zig", "src/services/search_preview_pure.zig")),
+    }, "Content shelves use stable artwork, explicit isolated previews and strict grouped sources")

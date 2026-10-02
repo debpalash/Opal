@@ -397,6 +397,7 @@ $('nav-scrim').onclick = () => closeMore(true);
 
 function stopPageWork(){
   closeDetails();
+  if (typeof stopSearchPreview === 'function') stopSearchPreview();
   // Leaving the current tab: stop any settle watchers still polling a now-hidden
   // page (they otherwise keep hitting the server for ~36s). clearInterval on a
   // null/stale handle is a harmless no-op.

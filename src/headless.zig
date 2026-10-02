@@ -66,6 +66,8 @@ pub fn headlessMain() !void {
         }
         io.sleep(10 * std.time.ns_per_ms);
     }
+    const app_state = &@import("core/state.zig").app;
+    @import("services/search_preview.zig").publishCredentials(app_state.tmdb.api_key[0..app_state.tmdb.api_key_len]);
     @import("core/state.zig").app.web_remote_enabled = true;
     const remote = @import("services/remote.zig");
     remote.start();

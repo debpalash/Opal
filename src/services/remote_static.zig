@@ -149,7 +149,7 @@ fn serveFile(stream: std.Io.net.Stream, path: []const u8, asset: Asset, index: u
         .immutable => "Cache-Control: public, max-age=31536000, immutable\r\n",
     };
     const privacy_header: []const u8 = if (std.mem.eql(u8, asset.content_type, "text/html"))
-        "Referrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; media-src 'self' blob:; connect-src 'self'\r\n"
+        "Referrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; media-src 'self' blob:; connect-src 'self'; frame-src 'self' https://www.youtube-nocookie.com\r\n"
     else
         "";
     const validator: []const u8 = if (etag.len > 0) "ETag: " else "";
