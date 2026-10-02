@@ -85,11 +85,39 @@ The unchanged response transferred 99.81% fewer bytes in this fixture. Every
 sample checked its items, total and version. These are warm loopback request
 measurements; they do not measure WAN latency or overall application speed.
 
+## Search v2 — 2026-10-03
+
+Native Search now has one expanding query field, Filters and compact sorting.
+Content, availability, quality, seeds, size and provider facets affect the owned
+result view; provider enablement stays a separate saved setting under Sources.
+The web view consumes the same typed metadata and retains opaque action keys.
+
+Results are copied only when their publication revision changes and drawn after
+resolver locks are released. Pointer navigation renders the visible row range;
+keyboard traversal retains the full bounded layout. Strong late results can
+replace weaker candidates within the existing 96-row limit. Sorting ties and
+row actions use stable identities. Cancel retains loaded rows; Clear cancels
+the generation and resets the query, preventing stale workers from refilling it.
+
+Unknown torrent content remains Video rather than a guessed movie/show. Reading
+and metadata rows are excluded from Playable. Torrent queue actions retain the
+risk guard. Alternate renditions require matching typed identities and preserve
+episode/edition distinctions. Retry search currently reruns the enabled sources.
+
+Full feature gate: 481 passed, 0 failed, 0 warnings, 14 optional checks skipped.
+Native and headless builds and the unit gate passed. All 3 live static asset
+socket tests passed, including the extracted Search module.
+Focused policy tests: 19 passed. Web lifecycle regressions: 55 passed. Browser
+layout checks used synthetic results at 1280 and 390 pixels: no horizontal
+overflow, a 44-pixel query toolbar, correct filtering and removable filter chips.
+These checks do not establish live provider uptime or native pixel correctness;
+macOS screen capture access was disabled during this review.
+
 ## Coverage still requiring independent evidence
 
 Actual external provider uptime; configured personal-server playback; native
 poster/GPU behavior; performance on representative low-memory devices; oversized
-metadata download scratch-file limits; and unvirtualized TV/search surfaces.
+metadata download scratch-file limits; and unvirtualized TV surfaces.
 
 ## Reproduction
 

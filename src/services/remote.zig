@@ -4352,6 +4352,16 @@ fn apiUnifiedResolverSearch(stream: std.Io.net.Stream, query: []const u8) void {
         escJsonWrite(&w, txt.safeUtf8(item.summary[0..@min(item.summary_len, item.summary.len)]));
         const rating = if (std.math.isFinite(item.rating) and item.rating > 0 and item.rating <= 10) item.rating else 0;
         w.print("\",\"rating\":{d:.1}", .{rating}) catch return;
+        // The native and web views share the same typed facet projection. Only
+        // public metadata is serialized; action keys retain private transport.
+        const view = resolver.searchView(item);
+        w.print(",\"content_kind\":\"{s}\",\"playable\":{s},\"torrent\":{s},\"library\":{s},\"quality\":{d},\"seeds\":{d},\"leech\":{d},\"size_bytes\":{d},\"score\":{d},\"provider\":\"", .{
+            @tagName(view.kind), if (view.playable) "true" else "false", if (view.torrent) "true" else "false", if (view.library) "true" else "false",
+            view.quality,        view.seeds,                             view.leech,                            view.size_bytes,
+            view.score,
+        }) catch return;
+        escJsonWrite(&w, view.provider.name());
+        w.writeAll("\"") catch return;
         if (item.source == .tmdb and item.catalog_id != 0) {
             w.writeAll(",\"media\":\"") catch return;
             escJsonWrite(&w, item.catalog_kind[0..@min(item.catalog_kind_len, item.catalog_kind.len)]);

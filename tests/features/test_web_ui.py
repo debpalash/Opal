@@ -13,7 +13,7 @@ import os
 # Each vertical: the nav data-page id, the page section id, and route fragments
 # the page must reference. Extend this as parity tabs land.
 VERTICALS = {
-    "search":   ("search",   "page-search",   ["/search", "/load"]),
+    "search":   ("search",   "page-search",   ["/unified_search", "/open"]),
     "browse":   ("browse",   "page-browse",   ["/tmdb"]),
     "anime":    ("anime",    "page-anime",    ["/anime/search", "/anime/episodes", "/anime/play"]),
     "podcasts": ("podcasts", "page-podcasts", ["/podcasts/search", "/podcasts/play"]),
@@ -867,7 +867,7 @@ def test_web_ui_security_boundaries():
     remote = _remote_api()
     static = _src("src/services/remote_static.zig")
     scripts = "\n".join(_src(f"web/js/{name}") for name in (
-        "core.js", "now-playing.js", "catalog.js", "playback.js",
+        "core.js", "now-playing.js", "search.js", "catalog.js", "playback.js",
         "integrations.js", "media.js", "discovery.js", "boot.js",
     ))
     checks = {

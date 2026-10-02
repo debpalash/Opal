@@ -834,6 +834,13 @@ pub fn build(b: *std.Build) void {
     // throttle, the volume ramp, the transport state machine, and the
     // width-based collapse order. All of it is wired into footer.zig — a test
     // there asserts no export goes unreachable.
+    const test_search_view_pure = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/services/search_view_pure.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    test_step.dependOn(&b.addRunArtifact(test_search_view_pure).step);
+
     const test_footer_pure = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/ui/footer_pure.zig"),

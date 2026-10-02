@@ -97,6 +97,7 @@ from features import (  # noqa: F401
     test_mihon,
     test_music,
     test_universal_search,
+    test_search_v2,
     test_youtube_innertube,
     test_library,
     test_web_shell,

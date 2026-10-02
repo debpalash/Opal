@@ -20,6 +20,8 @@ const lifecycle = @import("resolver_lifecycle_pure.zig");
 // Each backend runs in a thread, results merge into a unified list.
 // ══════════════════════════════════════════════════════════
 
+pub const search_view = @import("search_view_pure.zig");
+
 pub const SourceType = enum {
     jellyfin, // Local library — fastest, already on disk
     stremio, // Addon streams — HTTP direct
@@ -56,6 +58,7 @@ pub const ResolvedItem = struct {
     url: [2048]u8 = std.mem.zeroes([2048]u8), // magnet/http/jf item id
     url_len: usize = 0,
     source: SourceType = .torrent,
+    provider: search_view.Provider = .{},
     quality: u8 = 0, // 0=unknown, 1=480, 2=720, 3=1080, 4=4K
     seeds: u16 = 0,
     /// Payload size. Every torrent backend already reports this and every one of
@@ -111,6 +114,7 @@ pub const MAX_RESULTS: usize = 96;
 pub var results: [MAX_RESULTS]ResolvedItem = std.mem.zeroes([MAX_RESULTS]ResolvedItem);
 pub var result_count: usize = 0;
 pub var results_mutex = @import("../core/sync.zig").Mutex{};
+var results_revision: u64 = 1;
 
 // Encrypted-content-cache SWR state. When a query's results are seeded from
 // the on-disk cache (instant, no empty view), `results_from_cache` is true; the
@@ -205,14 +209,24 @@ pub fn sortResultsBy(mode: usize) void {
         }
     };
     std.sort.insertion(ResolvedItem, results[0..result_count], Ctx{ .m = mode }, Ctx.lt);
+    results_revision +%= 1;
 }
 
 /// Reset the universal-result list under the results lock so a concurrent
 /// worker insert can't race the UI clear-button.
 pub fn clearResults() void {
+    lifecycle_mutex.lock();
+    defer lifecycle_mutex.unlock();
+    cancelLocked();
     results_mutex.lock();
     defer results_mutex.unlock();
     result_count = 0;
+    results_from_cache = false;
+    resolver_query_len = 0;
+    resolver_intent_len = 0;
+    @memset(&resolver_query, 0);
+    @memset(&resolver_intent, 0);
+    results_revision +%= 1;
 }
 
 /// Snapshot the streamed result count without racing a worker insertion.
@@ -404,6 +418,7 @@ pub fn resolveTracked(query: []const u8, intent: []const u8) u32 {
     // Clear results
     results_mutex.lock();
     result_count = 0;
+    results_revision +%= 1;
     results_from_cache = false;
     results_mutex.unlock();
 
@@ -598,12 +613,70 @@ pub fn actionKey(item: *const ResolvedItem) u64 {
     return if (key == 0) 1 else key;
 }
 
+pub const SearchSnapshot = struct {
+    changed: bool,
+    count: usize,
+    generation: u32,
+    revision: u64,
+    query: [256]u8 = @splat(0),
+    query_len: usize = 0,
+    loading: bool,
+};
+
+pub fn copySearchSnapshot(out: []ResolvedItem, known_revision: u64) SearchSnapshot {
+    const generation = lockRemoteSnapshot();
+    defer unlockRemoteSnapshot();
+    var snapshot: SearchSnapshot = .{
+        .changed = known_revision != results_revision,
+        .count = @min(result_count, out.len),
+        .generation = generation,
+        .revision = results_revision,
+        .loading = is_resolving.load(.acquire),
+    };
+    snapshot.query_len = @min(resolver_query_len, snapshot.query.len);
+    @memcpy(snapshot.query[0..snapshot.query_len], resolver_query[0..snapshot.query_len]);
+    if (snapshot.changed) @memcpy(out[0..snapshot.count], results[0..snapshot.count]);
+    return snapshot;
+}
+
+pub fn searchView(item: *const ResolvedItem) search_view.Item {
+    const source: search_view.Source = @enumFromInt(@intFromEnum(item.source));
+    const url = item.url[0..@min(item.url_len, item.url.len)];
+    const torrent = item.source == .torrent or std.mem.startsWith(u8, url, "magnet:?");
+    const playable = !torrent and switch (item.source) {
+        .tmdb, .anime, .podcast, .vndb, .comics, .novels, .opds => false,
+        .local => search_view.localPlayable(url),
+        .jellyfin => item.jf_item_id_len > 0 and !std.ascii.eqlIgnoreCase(item.catalog_kind[0..item.catalog_kind_len], "series"),
+        .plugin => std.mem.startsWith(u8, url, "https://") or std.mem.startsWith(u8, url, "http://") or (item.plugin_id_len > 0 and item.plugin_item_id_len > 0),
+        else => url.len > 0,
+    };
+    return .{
+        .kind = if (item.source == .local) search_view.localKind(url, item.catalog_kind[0..item.catalog_kind_len]) else search_view.kindFor(source, item.catalog_kind[0..@min(item.catalog_kind_len, item.catalog_kind.len)]),
+        .source = source,
+        .provider = if (item.provider.len > 0) item.provider else search_view.Provider.init(@tagName(item.source)),
+        .playable = playable,
+        .torrent = torrent,
+        .library = switch (item.source) {
+            .local, .jellyfin, .plex, .audiobooks, .opds => true,
+            else => false,
+        },
+        .quality = item.quality,
+        .seeds = item.seeds,
+        .leech = item.leech,
+        .size_bytes = item.size_bytes,
+        .score = item.score,
+        .key = actionKey(item),
+    };
+}
+
 /// Queue playback currently carries only a URL, so header-gated live streams,
 /// catalog/navigation rows, and torrent detail pages are deliberately excluded.
+/// Safe magnets retain the torrent queue workflow.
 /// This keeps the web Queue button honest until those identities become typed.
 pub fn isRemoteQueueable(item: *const ResolvedItem) bool {
     const url = item.url[0..item.url_len];
     return switch (item.source) {
+        .torrent => search_view.torrentQueueable(url, item.name[0..@min(item.name_len, item.name.len)], item.size_bytes),
         .youtube, .local, .music, .radio => url.len > 0,
         .stremio => std.mem.startsWith(u8, url, "http://") or std.mem.startsWith(u8, url, "https://"),
         else => false,
@@ -677,8 +750,49 @@ pub fn drainRemoteAction() void {
 pub fn cancel() void {
     lifecycle_mutex.lock();
     defer lifecycle_mutex.unlock();
+    cancelLocked();
+}
+
+/// Admission and invalidation share the lifecycle mutex with worker publish.
+fn cancelLocked() void {
     _ = run_gen.fetchAdd(1, .acq_rel);
     is_resolving.store(false, .release);
+    resetSearchingStatuses();
+    state.wakeUi();
+}
+
+fn resetSearchingStatuses() void {
+    const statuses = [_]*std.atomic.Value(SourceStatus){
+        &status_jf,
+        &status_stremio,
+        &status_torrent,
+        &status_anime,
+        &status_yt,
+        &status_yts,
+        &status_local,
+        &status_rss,
+        &status_comics,
+        &status_torznab,
+        &status_eztv,
+        &status_archive,
+        &status_nasa,
+        &status_commons,
+        &status_livetv,
+        &status_music,
+        &status_radio,
+        &status_podcast,
+        &status_catalog,
+        &status_plex,
+        &status_plugins,
+        &status_novels,
+        &status_novel_archive,
+        &status_vndb,
+        &status_opds,
+        &status_audiobooks,
+    };
+    for (statuses) |status| {
+        if (status.load(.acquire) == .searching) status.store(.idle, .release);
+    }
 }
 
 /// Backends call this before returning from a known failure/configuration path.
@@ -800,7 +914,10 @@ fn pushResult(item: ResolvedItem) bool {
     results_mutex.lock();
     defer results_mutex.unlock();
     const accepted = pushInto(&results, &result_count, &results_from_cache, item, "");
-    if (accepted) worker_produced = true;
+    if (accepted) {
+        worker_produced = true;
+        results_revision +%= 1;
+    }
     return accepted;
 }
 
@@ -811,6 +928,10 @@ fn pushResult(item: ResolvedItem) bool {
 ///
 /// Caller owns the locking. `query` empty means "use the module-level query"
 /// (the live path), so the live behaviour is byte-for-byte what it was.
+fn relevanceBefore(_: void, a: ResolvedItem, b: ResolvedItem) bool {
+    return search_view.lessThan(.relevance, .{ .score = a.score, .key = actionKey(&a) }, .{ .score = b.score, .key = actionKey(&b) });
+}
+
 fn pushInto(
     items: []ResolvedItem,
     count: *usize,
@@ -818,8 +939,6 @@ fn pushInto(
     item: ResolvedItem,
     query: []const u8,
 ) bool {
-    if (count.* >= items.len) return false;
-
     // Filter out error/garbage results at the source
     const name = item.name[0..@min(item.name_len, 256)];
     if (isErrorResult(name)) return false;
@@ -833,29 +952,47 @@ fn pushInto(
     scored_item.score = score; // cache so re-inserts don't recompute (S45)
     scored_item.is_nsfw = @import("search.zig").isNsfwName(name); // S16
 
-    // Exact duplicates collapse by transport identity. Direct streams with the
-    // same semantic title additionally collapse into one ranked row while the
-    // runner-up remains armed as an automatic pre-load fallback.
+    // SWR: the first live result of a fresh wave replaces the cache-seeded
+    // placeholder, so stale cached rows never mix with the revalidated set.
+    search_view.replaceCachedRows(count, from_cache);
+
+    // Transport identity and exact typed catalog IDs identify a work. Similar
+    // display titles alone cannot establish alternate renditions of one work.
     {
         const dedup = @import("resolver_dedup_pure.zig");
         const url = scored_item.url[0..@min(scored_item.url_len, scored_item.url.len)];
         var d: usize = 0;
         while (d < count.*) : (d += 1) {
             const current_url = items[d].url[0..@min(items[d].url_len, items[d].url.len)];
-            if (dedup.sameItem(current_url, url)) return true;
+            const transport_url = std.mem.indexOf(u8, url, "://") != null or std.mem.startsWith(u8, url, "magnet:?") or std.mem.startsWith(u8, url, "/");
+            const same_namespace = items[d].source == scored_item.source and
+                (scored_item.source != .plugin or std.mem.eql(u8, items[d].plugin_id[0..items[d].plugin_id_len], scored_item.plugin_id[0..scored_item.plugin_id_len]));
+            if ((transport_url or same_namespace) and dedup.sameItem(current_url, url)) {
+                // A later backend may supply real size/artwork/seed metadata
+                // for the same transport. Publish that enrichment even when
+                // the visible result count is unchanged.
+                if (scored_item.score < items[d].score or
+                    (items[d].size_bytes == 0 and scored_item.size_bytes > 0) or
+                    (items[d].poster_url_len == 0 and scored_item.poster_url_len > 0))
+                {
+                    if (scored_item.fallback_url_len == 0 and items[d].fallback_url_len > 0)
+                        copyField(&scored_item.fallback_url, &scored_item.fallback_url_len, items[d].fallback_url[0..items[d].fallback_url_len]);
+                    if (scored_item.fallback_url_2_len == 0 and items[d].fallback_url_2_len > 0)
+                        copyField(&scored_item.fallback_url_2, &scored_item.fallback_url_2_len, items[d].fallback_url_2[0..items[d].fallback_url_2_len]);
+                    items[d] = scored_item;
+                    std.sort.insertion(ResolvedItem, items[0..count.*], {}, relevanceBefore);
+                }
+                return true;
+            }
             if (!fallbackCompatible(items[d].source, scored_item.source) or
+                !search_view.sameTypedWork(items[d].catalog_kind[0..items[d].catalog_kind_len], items[d].catalog_id, scored_item.catalog_kind[0..scored_item.catalog_kind_len], scored_item.catalog_id) or
                 !dedup.sameSemantic(items[d].name[0..items[d].name_len], name)) continue;
             if (scored_item.score < items[d].score) {
                 copyField(&scored_item.fallback_url, &scored_item.fallback_url_len, current_url);
                 if (items[d].fallback_url_len > 0)
                     copyField(&scored_item.fallback_url_2, &scored_item.fallback_url_2_len, items[d].fallback_url[0..items[d].fallback_url_len]);
                 items[d] = scored_item;
-                const ByScore = struct {
-                    fn lessThan(_: void, a: ResolvedItem, b: ResolvedItem) bool {
-                        return a.score < b.score;
-                    }
-                };
-                std.sort.insertion(ResolvedItem, items[0..count.*], {}, ByScore.lessThan);
+                std.sort.insertion(ResolvedItem, items[0..count.*], {}, relevanceBefore);
             } else if (items[d].fallback_url_len == 0) {
                 copyField(&items[d].fallback_url, &items[d].fallback_url_len, url);
             } else if (items[d].fallback_url_2_len == 0) {
@@ -865,18 +1002,17 @@ fn pushInto(
         }
     }
 
-    // SWR: the first live result of a fresh wave replaces the cache-seeded
-    // placeholder, so stale cached rows never mix with the revalidated set.
-    if (from_cache.*) {
-        count.* = 0;
-        from_cache.* = false;
-    }
+    // Legacy callers can reorder the live list; restore its relevance invariant
+    // before selecting the worst bounded candidate or inserting a streamed row.
+    std.sort.insertion(ResolvedItem, items[0..count.*], {}, relevanceBefore);
+    if (!search_view.admitTopK(count.*, items.len, .{ .score = scored_item.score, .key = actionKey(&scored_item) }, if (count.* > 0) .{ .score = items[count.* - 1].score, .key = actionKey(&items[count.* - 1]) } else .{})) return false;
+    if (count.* >= items.len) count.* -= 1;
 
-    // Insert sorted by score (lower = better) — compare cached scores, O(n)
+    // Insert sorted by relevance with the same stable identity tie policy.
     var insert_at: usize = count.*;
     var i: usize = 0;
     while (i < count.*) : (i += 1) {
-        if (items[i].score > score) {
+        if (relevanceBefore({}, scored_item, items[i])) {
             insert_at = i;
             break;
         }
@@ -932,6 +1068,8 @@ fn resolveLocalFiles(q: [256]u8, qlen: usize) void {
     const found = library.search(q[0..qlen], false, &local);
     for (local[0..found]) |*entry| {
         var item = ResolvedItem{ .source = .local };
+        copyField(&item.catalog_kind, &item.catalog_kind_len, entry.kind[0..entry.kind_len]);
+        item.size_bytes = entry.size;
         const nlen = @min(entry.title_len, item.name.len);
         @memcpy(item.name[0..nlen], entry.title[0..nlen]);
         item.name_len = nlen;
@@ -1041,6 +1179,7 @@ fn resolveRss(q: [256]u8, qlen: usize) void {
         @memcpy(item.url[0..ulen], it.magnet[0..ulen]);
         item.url_len = ulen;
         item.seeds = it.seeds;
+        item.provider = search_view.Provider.init("rss");
         const d = "RSS feed";
         @memcpy(item.detail[0..d.len], d);
         item.detail_len = d.len;
@@ -1203,7 +1342,7 @@ fn attrValue(html: []const u8, name: []const u8, limit: usize) ?[]const u8 {
 // ══════════════════════════════════════════════════════════
 
 fn cacheKey(buf: []u8, query: []const u8) []const u8 {
-    return std.fmt.bufPrint(buf, "search:v7:{s}", .{query}) catch "search:v7:";
+    return std.fmt.bufPrint(buf, "search:v8:{s}", .{query}) catch "search:v8:";
 }
 
 /// Serialize the current `results` (under caller's lock) into `out`.
@@ -1224,6 +1363,7 @@ fn serializeRows(rows: []const ResolvedItem, out: []u8) ?[]u8 {
         const it = rows[i];
         w.blob(it.name[0..@min(it.name_len, it.name.len)]);
         w.blob(it.detail[0..@min(it.detail_len, it.detail.len)]);
+        w.blob(it.provider.name());
         w.blob(it.url[0..@min(it.url_len, it.url.len)]);
         w.u8v(@intFromEnum(it.source));
         w.u8v(it.quality);
@@ -1287,6 +1427,7 @@ fn deserializeInto(bytes: []const u8) usize {
         copyField(&it.name, &it.name_len, name);
         const detail = r.blob() orelse break;
         copyField(&it.detail, &it.detail_len, detail);
+        it.provider = search_view.Provider.init(r.blob() orelse break);
         const url = r.blob() orelse break;
         copyField(&it.url, &it.url_len, url);
         const src_tag = r.u8v() orelse break;
@@ -1355,6 +1496,7 @@ fn populateFromCache(query: []const u8) void {
     const n = deserializeInto(hit.bytes);
     if (n > 0) {
         result_count = n;
+        results_revision +%= 1;
         results_from_cache = true;
     }
 }
@@ -2003,6 +2145,7 @@ fn resolveJellyfin(query_buf: [256]u8, qlen: usize) void {
         if (id.len == 0 or name.len == 0) continue;
         var item: ResolvedItem = .{ .source = .jellyfin };
         copyField(&item.jf_item_id, &item.jf_item_id_len, id);
+        copyField(&item.catalog_kind, &item.catalog_kind_len, kind);
         copyField(&item.url, &item.url_len, id);
         copyField(&item.name, &item.name_len, name);
         copyField(&item.summary, &item.summary_len, Field.string(entry, "Overview"));
@@ -2076,6 +2219,7 @@ fn resolveInstalledPlugins(query_buf: [256]u8, qlen: usize) void {
         item.detail_len = detail.len;
         copyField(&item.url, &item.url_len, entry.row.stream_url[0..entry.row.stream_url_len]);
         copyField(&item.plugin_id, &item.plugin_id_len, entry.plugin_id[0..entry.plugin_id_len]);
+        item.provider = search_view.Provider.init(item.plugin_id[0..item.plugin_id_len]);
         copyField(&item.plugin_item_id, &item.plugin_item_id_len, entry.row.id[0..entry.row.id_len]);
         _ = pushResult(item);
     }
@@ -2202,10 +2346,11 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
         if (std.mem.indexOf(u8, engine, "://")) |_| {
             var s = engine;
             if (std.mem.indexOf(u8, s, "://")) |pi| s = s[pi + 3 ..];
+            if (std.mem.lastIndexOfScalar(u8, s, '@')) |user_info| s = s[user_info + 1 ..];
             if (std.mem.startsWith(u8, s, "www.")) s = s[4..];
             var end: usize = s.len;
             for (s, 0..) |ch, j| {
-                if (ch == '.' or ch == '/') {
+                if (ch == '.' or ch == '/' or ch == '?' or ch == '#' or ch == ':') {
                     end = j;
                     break;
                 }
@@ -2215,6 +2360,7 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
             eng_name = eng_buf[0..elen];
         }
 
+        item.provider = search_view.Provider.init(eng_name);
         var det: [128]u8 = undefined;
         const dstr = std.fmt.bufPrint(&det, "Torrent · {s} · {s} seeds", .{ eng_name, seeds_str }) catch "Torrent";
         const dlen = @min(dstr.len, 127);
@@ -2341,6 +2487,8 @@ fn resolveYts(query_buf: [256]u8, qlen: usize) void {
         if (title.len > 2 and hash.len > 5) {
             var item = std.mem.zeroes(ResolvedItem);
             item.source = .torrent;
+            item.provider = search_view.Provider.init("yts");
+            copyField(&item.catalog_kind, &item.catalog_kind_len, "movie");
 
             const nlen = @min(title.len, 255);
             @memcpy(item.name[0..nlen], title[0..nlen]);
@@ -2504,6 +2652,8 @@ fn resolveEztv(query_buf: [256]u8, qlen: usize) void {
     for (items[0..n]) |it| {
         var item = std.mem.zeroes(ResolvedItem);
         item.source = .torrent;
+        item.provider = search_view.Provider.init("eztv");
+        copyField(&item.catalog_kind, &item.catalog_kind_len, "tv");
 
         const nlen = @min(it.title.len, 255);
         @memcpy(item.name[0..nlen], it.title[0..nlen]);
@@ -2647,6 +2797,7 @@ fn resolveTorznabId(src_id: []const u8, query_buf: [256]u8, qlen: usize) void {
 
         var item = std.mem.zeroes(ResolvedItem);
         item.source = .torrent;
+        item.provider = search_view.Provider.init(src_id);
 
         const nlen = @min(title.len, 255);
         @memcpy(item.name[0..nlen], title[0..nlen]);

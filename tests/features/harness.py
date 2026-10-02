@@ -231,7 +231,7 @@ def _posix_shell():
 def _web_js():
     """The ordered browser bundle as served by web/index.html."""
     names = (
-        "core.js", "now-playing.js", "catalog.js", "playback.js", "integrations.js", "access.js",
+        "core.js", "now-playing.js", "search.js", "catalog.js", "playback.js", "integrations.js", "access.js",
         "source-management.js", "media.js", "source-details.js", "discovery.js", "boot.js",
     )
     return "\n".join(_src(f"web/js/{name}") for name in names)
