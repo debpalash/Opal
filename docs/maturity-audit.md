@@ -39,8 +39,8 @@ checks; provider availability and device performance require separate measuremen
   deliberately registers the full bounded list.
 - The integrated Zig unit suite passed after fixing a real worker shutdown race.
   The worker suite also passed 50 repeated runs (64,000 worker submissions).
-- The source-contract feature inventory passed 474 checks, with zero failures,
-  one database diagnostic warning and 13 skipped checks. This inventory is not
+- The final source-contract feature inventory passed 476 checks, with zero
+  failures, zero warnings and 14 skipped checks using an isolated database. This inventory is not
   a substitute for runtime verification.
 - Native and headless builds and the combined browse/TV/anime stateful gate passed.
 - Three restart cases passed without forced shutdown; generated-audio EOF
@@ -52,6 +52,17 @@ checks; provider availability and device performance require separate measuremen
   Their short scans do not prove deterministic transaction overlap.
 - Three static-asset runtime cases passed, including all 19 files, concurrent
   requests, packaged headless resource discovery and ETag comparisons.
+- Public-provider metadata smoke checks passed in a fresh isolated instance:
+  podcast search (50 results), radio search (30 results), comics catalog
+  (20 results), and NASA RSS (200 episode audio URLs). These checks do not
+  establish uptime or media playback.
+- The live fixture port guard rejects existing wildcard listeners before
+  startup, including the macOS collision case. Tests can use an isolated
+  configured port. The port regressions pass, the five setup/auth cases pass,
+  and active-work shutdown stress passes three iterations.
+- Native process liveness was observed for eight seconds with a fresh profile.
+  Rendering was not confirmed and the isolated process required forced cleanup
+  after SIGTERM. This does not establish native UI or shutdown correctness.
 - Desktop and 390-pixel mobile Watching layouts were inspected in ego-browser.
   Sign-in reloads the current page, and a healthy empty local index is shown
   correctly. No document-wide horizontal overflow was found in that view.
@@ -92,6 +103,8 @@ python3 tests/test_content_maturity_live.py --binary /tmp/opal-maturity-headless
 python3 tests/test_static_assets_live.py --binary /tmp/opal-maturity-headless/bin/opal --port 41699
 python3 tests/test_local_library_live.py --binary /tmp/opal-maturity-headless/bin/opal --port 41700
 python3 tests/test_browse_action_identity_live.py --binary /tmp/opal-maturity-headless/bin/opal --port 41703
+python3 tests/test_shutdown_live.py --binary /tmp/opal-maturity-headless/bin/opal --port 41705
+python3 tests/test_setup_token_live.py --binary /tmp/opal-maturity-headless/bin/opal --port 41706
 python3 tests/bench_watching_live.py --binary /tmp/opal-maturity-headless/bin/opal --port 41702
 ```
 

@@ -13,6 +13,35 @@ def _built_binary():
     return None
 
 
+@test("Windows unit CI provisions the SQLite writer dependency", "Build")
+def test_windows_unit_sqlite_dependency():
+    units = _between(_src(".github/workflows/ci.yml"), "  unit-tests:", "  build-macos:")
+    sqlite_setup = units.find("- name: Install SQLite for Windows integration tests")
+    zig_tests = units.find("run: zig build test")
+    checks = (
+        0 <= sqlite_setup < zig_tests,
+        "if: runner.os == 'Windows'" in units,
+        "uses: msys2/setup-msys2@v2" in units,
+        "msystem: MINGW64" in units,
+        "install: mingw-w64-x86_64-sqlite3" in units,
+        'src/core/sqlite_key_writer.zig' in _src("build.zig"),
+    )
+    if not all(checks):
+        return "fail", "Windows unit CI must install matching SQLite before the real writer tests"
+    return "pass", "Windows installs MINGW64 SQLite before running real database regression tests"
+
+
+@test("Live fixtures reject an existing wildcard listener", "Build")
+def test_live_fixture_port_collision_guard():
+    result = subprocess.run(
+        [sys.executable, "tests/test_setup_token_live.py", "PortCollisionGuardTest"],
+        cwd=PROJECT_DIR, capture_output=True, text=True, timeout=10,
+    )
+    if result.returncode:
+        return "fail", (result.stderr or result.stdout)[-1200:]
+    return "pass", "real wildcard listener rejected; unused isolated port accepted"
+
+
 @test("Zig Build", "Build")
 def test_zig_build():
     try:
