@@ -1,4 +1,5 @@
 ---
+import ArchInstall from "../components/ArchInstall.tsx";
 import DownloadGrid from "../components/DownloadGrid.tsx";
 import InstallCommand from "../components/InstallCommand.tsx";
 import PageLayout from "../layouts/PageLayout.astro";
@@ -23,6 +24,7 @@ const page = pageFor("/download/");
       <p class="eyebrow">Latest release</p>
       <h2>All available packages</h2>
       <p class="sub">The matching package is highlighted after your browser identifies its platform. You can always choose another format.</p>
+      <ArchInstall client:visible />
       <DownloadGrid client:visible />
       <p class="metalinks"><a href={`${REPO}/releases/latest`}>Release notes</a><a href={`${REPO}/releases/latest/download/SHA256SUMS.txt`}>SHA-256 checksums</a><a href={`${REPO}/issues`}>Installation help</a></p>
     </div>
@@ -33,7 +35,7 @@ const page = pageFor("/download/");
       <p class="eyebrow">First run</p>
       <h2>Platform notes</h2>
       <h3>Linux</h3>
-      <p>Use the AppImage without a system-wide install, or install the DEB/RPM package through your package manager. The installer can place a user-local launcher when administrator access is unavailable.</p>
+      <p>Use the AppImage without a system-wide install, or install the DEB/RPM package through your package manager. On Arch, Omarchy, Manjaro and EndeavourOS, install from the AUR with <code>yay -S opal-media-player-bin</code> or add the release <code>.pkg.tar.zst</code> with <code>pacman -U</code>. The installer can place a user-local launcher when administrator access is unavailable.</p>
       <h3>macOS</h3>
       <p>Opal is not notarized. If Gatekeeper reports that the app is damaged, clear quarantine after moving it to Applications with <code>xattr -cr /Applications/Opal.app</code>.</p>
       <h3>Windows</h3>
