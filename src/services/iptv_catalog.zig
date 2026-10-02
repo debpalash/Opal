@@ -7,9 +7,8 @@
 //! text, the LIKE escaping and the adult gate come from iptv_catalog_pure.zig
 //! (tested); this module owns the DB calls and thread-safety.
 //!
-//! Ingest is idempotent per source: clearSource(id) then ingestChannels(id, …),
-//! both inside one transaction, so a re-fetch never leaves a half-updated
-//! source. The (source_id, url_hash) UNIQUE key dedupes within a playlist.
+//! replaceChannels deletes and inserts inside one transaction, so a failed
+//! refresh retains the previous source catalog. The (source_id, url_hash) UNIQUE key dedupes within a playlist.
 
 const std = @import("std");
 const db = @import("../core/db.zig");
@@ -59,17 +58,38 @@ pub fn clearSource(source_id: []const u8) void {
 /// user-declared adult playlist whose channel names/groups don't self-identify.
 /// Runs in one transaction. Returns rows actually inserted (post-dedupe).
 pub fn ingestChannels(source_id: []const u8, channels: []const pure.IptvChannel, force_adult: bool) usize {
+    return writeChannels(source_id, channels, force_adult, false);
+}
+
+/// Replace a successfully fetched source inside one transaction. A failed
+/// insert rolls back the delete, preserving the previously usable catalog.
+pub fn replaceChannels(source_id: []const u8, channels: []const pure.IptvChannel, force_adult: bool) usize {
+    return writeChannels(source_id, channels, force_adult, true);
+}
+
+fn writeChannels(source_id: []const u8, channels: []const pure.IptvChannel, force_adult: bool, replace: bool) usize {
     if (channels.len == 0) return 0;
     write_mutex.lock();
     defer write_mutex.unlock();
 
-    db.exec("BEGIN");
+    const begin = db.prepare("BEGIN IMMEDIATE") orelse return 0;
+    const begun = db.step(begin) == db.c.SQLITE_DONE;
+    db.finalize(begin);
+    if (!begun) return 0;
+    var committed = false;
+    defer if (!committed) db.exec("ROLLBACK");
+    if (replace) {
+        const deletion = db.prepare("DELETE FROM iptv_catalog WHERE source_id=?1") orelse return 0;
+        db.bindText(deletion, 1, source_id);
+        const deleted = db.step(deletion) == db.c.SQLITE_DONE;
+        db.finalize(deletion);
+        if (!deleted) return 0;
+    }
     const sql =
         "INSERT OR IGNORE INTO iptv_catalog" ++
         "(source_id,url_hash,name,name_lc,url,logo,category,country,quality,user_agent,referrer,nsfw,quality_tier)" ++
         " VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)";
     const stmt = db.prepare(sql) orelse {
-        db.exec("ROLLBACK");
         return 0;
     };
     defer db.finalize(stmt);
@@ -102,11 +122,17 @@ pub fn ingestChannels(source_id: []const u8, channels: []const pure.IptvChannel,
         db.bindText(stmt, 11, ch.referrer[0..ch.referrer_len]);
         db.bindInt(stmt, 12, if (is_adult) 1 else 0);
         db.bindInt(stmt, 13, @intCast(cpure.qualityTier(ch.quality[0..ch.quality_len])));
-        if (db.step(stmt) == db.c.SQLITE_DONE) inserted += 1;
+        if (db.step(stmt) != db.c.SQLITE_DONE) return 0;
+        if (db.get()) |handle| if (db.c.sqlite3_changes(handle) > 0) {
+            inserted += 1;
+        };
     }
 
-    db.exec("COMMIT");
-    return inserted;
+    if (replace and inserted == 0) return 0;
+    const commit = db.prepare("COMMIT") orelse return 0;
+    committed = db.step(commit) == db.c.SQLITE_DONE;
+    db.finalize(commit);
+    return if (committed) inserted else 0;
 }
 
 fn lowerInto(s: []const u8, out: []u8) []const u8 {
@@ -118,6 +144,8 @@ fn lowerInto(s: []const u8, out: []u8) []const u8 {
 /// Total channels matching `q` across the whole catalog — drives the "N
 /// channels" heading and the has-more test for infinite scroll.
 pub fn count(q: Query) usize {
+    write_mutex.lock();
+    defer write_mutex.unlock();
     var like_buf: [520]u8 = undefined;
     var sql_buf: [512]u8 = undefined;
     const sql = buildWhere("SELECT COUNT(*) FROM iptv_catalog", q, &sql_buf) orelse return 0;
@@ -131,6 +159,8 @@ pub fn count(q: Query) usize {
 /// Fill up to `out.len` channels starting at `offset`, ordered name-first.
 /// Returns the number written. This is the render path's data source.
 pub fn queryPage(out: []pure.IptvChannel, offset: usize, q: Query) usize {
+    write_mutex.lock();
+    defer write_mutex.unlock();
     if (out.len == 0) return 0;
     var like_buf: [520]u8 = undefined;
     var sql_buf: [512]u8 = undefined;

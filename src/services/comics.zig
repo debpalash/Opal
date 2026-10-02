@@ -1,4 +1,5 @@
 const std = @import("std");
+const reader_components = @import("../ui/components.zig");
 const dvui = @import("dvui");
 const state = @import("../core/state.zig");
 const theme = @import("../ui/theme.zig");
@@ -79,6 +80,12 @@ pub fn drainPendingLoad() void {
     drainPendingSearch();
     var url: @TypeOf(state.app.comic.pending_load_url) = undefined;
     comic_command_mutex.lock();
+    // Retain the last command while metadata is loading. Consuming it here
+    // would call loadComic while busy, silently dropping chapter selections.
+    if (state.app.comic.is_loading.load(.acquire)) {
+        comic_command_mutex.unlock();
+        return;
+    }
     const close = state.app.comic.pending_close.swap(false, .acq_rel);
     const load = state.app.comic.pending_load.swap(false, .acq_rel);
     const n = @min(state.app.comic.pending_load_len, url.len);
@@ -250,6 +257,8 @@ pub fn loadComic(url: []const u8) void {
     // Drop any per-chapter Referer from a previous load (a Madara load sets its
     // own before staging pages); prevents leaking one site's Referer to another.
     state.app.comic.referer_len = 0;
+    state.app.comic.prev_url_len = 0;
+    state.app.comic.next_url_len = 0;
     state.app.comic.is_loading.store(true, .release);
     state.app.comic.page_count = 0;
     state.app.comic.dl_progress.store(0, .release);
@@ -366,6 +375,13 @@ fn psePageDownloadThread(gen: u32) void {
 /// UI thread nor a download worker — today just `copyPage` (the HTTP page route).
 var pages_mutex: @import("../core/sync.zig").Mutex = .{};
 
+/// Actual page readiness, independent of completion order of download workers.
+pub fn pageReady(i: usize) bool {
+    pages_mutex.lock();
+    defer pages_mutex.unlock();
+    return i < state.app.comic.page_count and i < state.app.comic.page_pixels.len and state.app.comic.page_pixels[i] != null;
+}
+
 /// Copy page `i`'s encoded bytes for an off-UI-thread consumer. Caller frees with
 /// `a`. Null = out of range or not downloaded yet (the caller answers 404 and the
 /// client retries as `dl_progress` climbs).
@@ -479,7 +495,7 @@ fn fetchComicThread(gen: u32) void {
     // would otherwise curl a non-URL and find no images. Once page_urls are
     // staged the shared downloadPages() pipeline takes over unchanged.
     if (pure.mangaIdFromRoute(url)) |manga_id| {
-        const ok = loadMangadexPages(manga_id);
+        const ok = loadMangadexPages(manga_id, pure.chapterOffsetFromRoute(url) orelse 0);
         state.app.comic.is_loading.store(false, .release);
         if (!ok) {
             logs.pushLog("error", "comics", "MangaDex chapter failed to load", true);
@@ -645,32 +661,93 @@ fn fetchMaybeUnblocked(url: []const u8, dst: []u8) usize {
 ///   1. /manga/{id}/feed?…&order[chapter]=asc&limit=1   → the earliest chapter
 ///   2. /at-home/server/{chapterId}                     → baseUrl + hash + files
 ///   3. {baseUrl}/data/{hash}/{file}                    → one URL per page
-fn loadMangadexPages(manga_id: []const u8) bool {
-    // ── 1. Earliest English chapter ──
-    var feed_url_buf: [320]u8 = undefined;
-    const feed_url = pure.buildFeedUrl(&feed_url_buf, manga_id, 1, 0) orelse return false;
+const MANGADEX_CHAPTER_WINDOW: u32 = 100;
+pub const MangaDexChapterRow = struct {
+    route_buf: [64]u8 = std.mem.zeroes([64]u8),
+    route_len: usize = 0,
+    title_buf: [160]u8 = std.mem.zeroes([160]u8),
+    title_len: usize = 0,
+    selected: bool = false,
+    pub fn route(self: *const MangaDexChapterRow) []const u8 {
+        return self.route_buf[0..self.route_len];
+    }
+    pub fn title(self: *const MangaDexChapterRow) []const u8 {
+        return self.title_buf[0..self.title_len];
+    }
+};
+var md_chapters: [MANGADEX_CHAPTER_WINDOW]MangaDexChapterRow = [_]MangaDexChapterRow{.{}} ** MANGADEX_CHAPTER_WINDOW;
+var md_chapter_count: usize = 0;
+var md_chapter_mutex: @import("../core/sync.zig").Mutex = .{};
+var md_chapter_picker: bool = false; // owner-thread UI state
 
-    const feed_buf = alloc.alloc(u8, 128 * 1024) catch return false;
+pub fn mangaDexChapterCount() usize {
+    md_chapter_mutex.lock();
+    defer md_chapter_mutex.unlock();
+    return md_chapter_count;
+}
+pub fn mangaDexChapterRow(i: usize) ?MangaDexChapterRow {
+    md_chapter_mutex.lock();
+    defer md_chapter_mutex.unlock();
+    return if (i < md_chapter_count) md_chapters[i] else null;
+}
+
+fn loadMangadexPages(manga_id: []const u8, chapter_offset: u32) bool {
+    // Fetch a bounded chapter window, enabling direct chapter selection without
+    // loading thousands of metadata records or assuming integer chapter labels.
+    const window_offset = (chapter_offset / MANGADEX_CHAPTER_WINDOW) * MANGADEX_CHAPTER_WINDOW;
+    var feed_url_buf: [320]u8 = undefined;
+    const feed_url = pure.buildFeedUrl(&feed_url_buf, manga_id, MANGADEX_CHAPTER_WINDOW, window_offset) orelse return false;
+    const feed_buf = alloc.alloc(u8, 1024 * 1024) catch return false;
     defer alloc.free(feed_buf);
     const feed_n = fetchUrl(feed_url, feed_buf);
     if (feed_n == 0 or workers.isQuitting()) return false;
-
-    const chapter_id = pure.firstChapterId(feed_buf[0..feed_n]) orelse {
-        logs.pushLog("warn", "comics", "MangaDex: no English chapter for this title", false);
-        return false;
-    };
-    // Copy out of feed_buf before it's reused/freed.
+    const parsed = std.json.parseFromSlice(std.json.Value, alloc, feed_buf[0..feed_n], .{ .ignore_unknown_fields = true }) catch return false;
+    defer parsed.deinit();
+    if (parsed.value != .object) return false;
+    const data = parsed.value.object.get("data") orelse return false;
+    if (data != .array) return false;
+    const selected_index = chapter_offset - window_offset;
+    if (selected_index >= data.array.items.len) return false;
+    const selected = data.array.items[selected_index];
+    if (selected != .object) return false;
+    const id_value = selected.object.get("id") orelse return false;
+    if (id_value != .string or !pure.isValidId(id_value.string)) return false;
     var chap_id_buf: [64]u8 = undefined;
-    if (chapter_id.len > chap_id_buf.len) return false;
-    @memcpy(chap_id_buf[0..chapter_id.len], chapter_id);
-    const chap_id = chap_id_buf[0..chapter_id.len];
-
+    @memcpy(chap_id_buf[0..id_value.string.len], id_value.string);
+    const chap_id = chap_id_buf[0..id_value.string.len];
     var chap_no_buf: [24]u8 = undefined;
     var chap_no_len: usize = 0;
-    if (pure.firstChapterNumber(feed_buf[0..feed_n])) |no| {
-        chap_no_len = @min(no.len, chap_no_buf.len);
-        @memcpy(chap_no_buf[0..chap_no_len], no[0..chap_no_len]);
+    const attrs = selected.object.get("attributes") orelse return false;
+    if (attrs == .object) if (attrs.object.get("chapter")) |value| {
+        if (value == .string) {
+            chap_no_len = @min(value.string.len, chap_no_buf.len);
+            @memcpy(chap_no_buf[0..chap_no_len], value.string[0..chap_no_len]);
+        }
+    };
+    var chapter_rows: [MANGADEX_CHAPTER_WINDOW]MangaDexChapterRow = [_]MangaDexChapterRow{.{}} ** MANGADEX_CHAPTER_WINDOW;
+    var chapter_count: usize = 0;
+    for (data.array.items, 0..) |entry, idx| {
+        if (entry != .object or chapter_count >= chapter_rows.len) continue;
+        const attributes = entry.object.get("attributes") orelse continue;
+        if (attributes != .object) continue;
+        const no = attributes.object.get("chapter");
+        const title_value = attributes.object.get("title");
+        const no_text = if (no != null and no.? == .string) no.?.string else "Special";
+        const title_text = if (title_value != null and title_value.? == .string) title_value.?.string else "";
+        const row = &chapter_rows[chapter_count];
+        const route = pure.buildChapterRoute(&row.route_buf, manga_id, window_offset + @as(u32, @intCast(idx))) orelse continue;
+        row.route_len = route.len;
+        const label = std.fmt.bufPrint(&row.title_buf, "Ch. {s}{s}{s}", .{ no_text, if (title_text.len > 0) " · " else "", title_text[0..@min(title_text.len, 100)] }) catch no_text;
+        if (label.ptr != row.title_buf[0..].ptr) @memcpy(row.title_buf[0..@min(label.len, row.title_buf.len)], label[0..@min(label.len, row.title_buf.len)]);
+        row.title_len = @min(label.len, row.title_buf.len);
+        row.selected = idx == selected_index;
+        chapter_count += 1;
     }
+    const total_value = parsed.value.object.get("total");
+    const total: u32 = if (total_value != null and total_value.? == .integer and total_value.?.integer > 0)
+        @intCast(@min(total_value.?.integer, 10000))
+    else
+        window_offset + @as(u32, @intCast(data.array.items.len));
 
     // ── 2. The @Home node serving that chapter's images ──
     var ah_url_buf: [160]u8 = undefined;
@@ -699,6 +776,20 @@ fn loadMangadexPages(manga_id: []const u8) bool {
     }
     if (count == 0) return false;
     state.app.comic.page_count = count;
+    state.app.comic.prev_url_len = 0;
+    state.app.comic.next_url_len = 0;
+    if (chapter_offset > 0) {
+        const route = pure.buildChapterRoute(&state.app.comic.prev_url, manga_id, chapter_offset - 1) orelse "";
+        state.app.comic.prev_url_len = route.len;
+    }
+    if (chapter_offset + 1 < total) {
+        const route = pure.buildChapterRoute(&state.app.comic.next_url, manga_id, chapter_offset + 1) orelse "";
+        state.app.comic.next_url_len = route.len;
+    }
+    md_chapter_mutex.lock();
+    md_chapters = chapter_rows;
+    md_chapter_count = chapter_count;
+    md_chapter_mutex.unlock();
 
     // Title: the card click already staged the series title; append the chapter
     // number so the reader header reads "Berserk · Ch. 1". A load that didn't
@@ -706,7 +797,8 @@ fn loadMangadexPages(manga_id: []const u8) bool {
     if (chap_no_len > 0) {
         var t_buf: [256]u8 = undefined;
         const existing = state.app.comic.title[0..state.app.comic.title_len];
-        const base_title: []const u8 = if (existing.len > 0) existing else "MangaDex";
+        const title_end = std.mem.indexOf(u8, existing, " · Ch. ") orelse existing.len;
+        const base_title: []const u8 = if (title_end > 0) existing[0..title_end] else "MangaDex";
         const t = std.fmt.bufPrint(&t_buf, "{s} · Ch. {s}", .{ base_title, chap_no_buf[0..chap_no_len] }) catch base_title;
         const tl = @min(t.len, state.app.comic.title.len);
         @memcpy(state.app.comic.title[0..tl], t[0..tl]);
@@ -2244,7 +2336,7 @@ fn searchWorker(gen: u32) void {
     // short page from every active source means we've hit the end.
     if (search_gen.load(.acquire) != gen) return;
     sr_count = filled;
-    if (filled < RESULTS_PER_PAGE) more_available = false;
+    if (filled == 0 or filled >= MAX_SEARCH_RESULTS) more_available = false;
     // SWR write: persist ONLY the default landing feed (default query on the
     // `all` source) so the next cold start seeds instantly. User searches and
     // source-filtered feeds are not cached. Skip if a newer search superseded us.
@@ -2308,7 +2400,10 @@ fn loadMoreWorker(gen: u32) void {
         if (sourceActive(src) and search_gen.load(.acquire) == gen) added += fetchExpandedComicPage(query, next_page, gen, sr_count, @tagName(src));
     }
 
-    if (added == 0 or added < RESULTS_PER_PAGE) more_available = false;
+    // Sources use different page sizes (HeanCms serves 12, MangaDex 24).
+    // A short merged page therefore cannot establish exhaustion. Stop only
+    // when no source contributed a row, or the bounded listing is full.
+    if (added == 0 or sr_count >= MAX_SEARCH_RESULTS) more_available = false;
     if (added > 0) sr_page = next_page;
 }
 
@@ -3560,6 +3655,26 @@ pub fn renderPaneContent(pane_idx: usize) void {
             .expand = .both,
         });
         return;
+    }
+
+    if (pure.mangaIdFromRoute(state.app.comic.url_buf[0..state.app.comic.url_len]) != null) {
+        if (reader_components.actionButton(@src(), if (md_chapter_picker) "Hide chapters" else "Choose chapter", .secondary, 72000)) md_chapter_picker = !md_chapter_picker;
+        if (md_chapter_picker) {
+            var chapter_scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .horizontal, .min_size_content = .{ .h = 100 }, .max_size_content = .{ .w = std.math.floatMax(f32), .h = 180 } });
+            defer chapter_scroll.deinit();
+            var chapter_buttons = dvui.flexbox(@src(), .{ .justify_content = .start }, .{ .expand = .horizontal });
+            defer chapter_buttons.deinit();
+            var i: usize = 0;
+            while (mangaDexChapterRow(i)) |row| : (i += 1) {
+                var label_buf: [161]u8 = undefined;
+                const label = std.fmt.bufPrintZ(&label_buf, "{s}", .{safeUtf8(row.title())}) catch continue;
+                if (reader_components.actionButton(@src(), label, if (row.selected) .primary else .secondary, 72100 + i)) {
+                    md_chapter_picker = false;
+                    loadComic(row.route());
+                    break;
+                }
+            }
+        }
     }
 
     // Title bar + navigation + controls

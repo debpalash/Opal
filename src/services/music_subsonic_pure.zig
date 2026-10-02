@@ -23,6 +23,69 @@ pub const CLIENT = "Opal";
 /// scheme routing, though the music tab plays directly.)
 pub const SCHEME = "subsonic:";
 
+/// Provider rows consumed by a page, before filtering unavailable tracks.
+/// null distinguishes malformed/error responses from a successful empty page.
+pub const SearchResponseKind = enum { jiosaavn, subsonic, jellyfin, plex, audius };
+pub fn pageRowCount(a: std.mem.Allocator, body: []const u8, kind: SearchResponseKind) ?usize {
+    var parsed = std.json.parseFromSlice(std.json.Value, a, body, .{}) catch return null;
+    defer parsed.deinit();
+    return (pageRows(parsed.value, kind) orelse return null).len;
+}
+pub fn pageRows(root: std.json.Value, kind: SearchResponseKind) ?[]const std.json.Value {
+    if (root != .object) return null;
+    const rows = switch (kind) {
+        .jiosaavn => root.object.get("results") orelse return null,
+        .jellyfin => root.object.get("Items") orelse return null,
+        .audius => root.object.get("data") orelse return null,
+        .plex => blk: {
+            const container = root.object.get("MediaContainer") orelse return null;
+            if (container != .object) return null;
+            break :blk container.object.get("Metadata") orelse return &.{};
+        },
+        .subsonic => blk: {
+            const response = root.object.get("subsonic-response") orelse return null;
+            if (response != .object) return null;
+            const status = response.object.get("status") orelse return null;
+            if (status != .string or !std.mem.eql(u8, status.string, "ok")) return null;
+            const search = response.object.get("searchResult3") orelse return null;
+            if (search != .object) return null;
+            break :blk search.object.get("song") orelse return &.{};
+        },
+    };
+    return if (rows == .array) rows.array.items else null;
+}
+
+pub fn valueField(v: std.json.Value, key: []const u8) std.json.Value {
+    return if (v == .object) v.object.get(key) orelse .null else .null;
+}
+pub fn valueString(v: std.json.Value) []const u8 {
+    return if (v == .string) v.string else "";
+}
+pub fn copyValueText(dst: []u8, len: *usize, src: []const u8) void {
+    len.* = @min(dst.len, src.len);
+    while (len.* > 0 and !std.unicode.utf8ValidateSlice(src[0..len.*])) len.* -= 1;
+    @memcpy(dst[0..len.*], src[0..len.*]);
+}
+pub fn parseSongValue(obj: std.json.Value) ?MusicSong {
+    const id = valueString(valueField(obj, "id"));
+    const title = valueString(valueField(obj, "title"));
+    if (id.len == 0 or id.len > 128 or title.len == 0) return null;
+    var row: MusicSong = .{};
+    copyValueText(&row.id, &row.id_len, id);
+    copyValueText(&row.title, &row.title_len, title);
+    copyValueText(&row.artist, &row.artist_len, valueString(valueField(obj, "artist")));
+    const cover = valueString(valueField(obj, "coverArt"));
+    if (cover.len <= row.cover.len) copyValueText(&row.cover, &row.cover_len, cover);
+    return row;
+}
+
+pub fn sameTrack(a: *const MusicSong, b: *const MusicSong) bool {
+    if (a.id_len > 0 and b.id_len > 0)
+        return std.mem.eql(u8, a.id[0..@min(a.id_len, a.id.len)], b.id[0..@min(b.id_len, b.id.len)]);
+    return a.play_url_len > 0 and b.play_url_len > 0 and
+        std.mem.eql(u8, a.play_url[0..@min(a.play_url_len, a.play_url.len)], b.play_url[0..@min(b.play_url_len, b.play_url.len)]);
+}
+
 // ── Validation gates ──
 
 /// The server base must be a plain http(s) origin we can safely prefix onto

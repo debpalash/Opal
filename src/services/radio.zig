@@ -206,9 +206,8 @@ fn seedPopularFromCache() void {
 const POPULAR_LIMIT: usize = 30;
 
 // ── Infinite-scroll pagination ──
-// `current_offset` is the RadioBrowser `offset` last fetched (bookkeeping,
-// mirrors drama.zig's current_page); the next loadMore() window starts at the
-// current (deduped) result_count. `more_available` clears when a window comes
+// `current_offset` is the next provider offset, independent of filtered or
+// duplicate station rows in the displayed results. `more_available` clears when a window comes
 // back shorter than RADIO_PAGE_SIZE or the fixed results[] buffer fills.
 // `loading_more` serializes append fetches so a single near-bottom scroll
 // can't spawn a burst (mirrors comics/drama/youtube). All three are read on
@@ -293,7 +292,13 @@ fn popularWorker(my_gen: u32) void {
     defer parse_mutex.unlock();
     if (!search_request.isCurrent(my_gen)) return; // re-check under lock
 
-    const count = pure.parseStations(body, &state.app.radio.results);
+    const page = pure.parsePage(alloc, body, &state.app.radio.results) orelse {
+        state.app.radio.fetch_error = true;
+        return;
+    };
+    const count = page.count;
+    more_available = page.consumed >= RADIO_PAGE_SIZE;
+    current_offset = page.consumed;
     state.app.radio.result_count = count;
     if (count == 0) {
         state.app.radio.fetch_error = true;
@@ -368,7 +373,13 @@ fn searchWorker(job: SearchJob) void {
     defer parse_mutex.unlock();
     if (!search_request.isCurrent(my_gen)) return; // re-check under lock
 
-    const count = pure.parseStations(body, &state.app.radio.results);
+    const page = pure.parsePage(alloc, body, &state.app.radio.results) orelse {
+        state.app.radio.fetch_error = true;
+        return;
+    };
+    const count = page.count;
+    more_available = page.consumed >= RADIO_PAGE_SIZE;
+    current_offset = page.consumed;
     state.app.radio.result_count = count;
     if (count == 0) logs.pushLog("info", "radio", "Search returned no stations", false) else logs.pushLog("info", "radio", "Radio search done (RadioBrowser)", false);
 }
@@ -377,8 +388,7 @@ fn searchWorker(job: SearchJob) void {
 // Infinite scroll — fetch + append the NEXT window (same query/popular mode)
 // ══════════════════════════════════════════════════════════
 
-/// Fetch the next window of stations (offset = the current, already-deduped
-/// result_count) and append it onto the existing grid. Guarded by
+/// Fetch the next provider window of stations and append playable unique rows. Guarded by
 /// `loading_more` + the main `is_loading` so a near-bottom scroll can't spawn
 /// a burst; runs under the current `search_request` so a fresh search/popular
 /// reload supersedes it. No-op once `more_available` clears (a short window or
@@ -387,7 +397,7 @@ pub fn loadMore() void {
     if (!more_available) return;
     if (state.app.radio.is_loading.load(.acquire)) return;
     if (loading_more.load(.acquire)) return;
-    if (state.app.radio.result_count == 0) return;
+
     if (state.app.radio.result_count >= state.app.radio.results.len) {
         more_available = false;
         return;
@@ -395,7 +405,7 @@ pub fn loadMore() void {
     if (loading_more.swap(true, .acq_rel)) return; // lost the race — another append in flight
 
     const my_gen = search_request.current(); // stay within the current generation
-    const offset = current_offset + RADIO_PAGE_SIZE;
+    const offset = current_offset;
     const popular = state.app.radio.showing_popular;
     var job: SearchJob = .{ .generation = my_gen };
     parse_mutex.lock();
@@ -431,10 +441,14 @@ fn loadMoreWorker(job: SearchJob, offset: usize, popular: bool) void {
     // as the initial fetches.
     rate_limit.acquire("radiobrowser", 1.0);
 
-    // Best-effort: a failed append just leaves more_available as-is (retried on
-    // the next near-bottom scroll) rather than surfacing the page-level
-    // fetch_error banner over an already-populated grid.
-    const body = fetchBody(url, 512 * 1024) orelse return;
+    // Keep loaded rows on failure and surface it; do not retry every UI frame.
+    const body = fetchBody(url, 512 * 1024) orelse {
+        if (search_request.isCurrent(my_gen)) {
+            state.app.radio.fetch_error = true;
+            more_available = false;
+        }
+        return;
+    };
     defer alloc.free(body);
 
     if (!search_request.isCurrent(my_gen)) return; // superseded by a fresh search/popular reload
@@ -443,19 +457,22 @@ fn loadMoreWorker(job: SearchJob, offset: usize, popular: bool) void {
     // thread (CLAUDE.md).
     const staged = alloc.alloc(pure.Station, RADIO_PAGE_SIZE) catch return;
     defer alloc.free(staged);
-    const n = pure.parseStations(body, staged);
+    const page = pure.parsePage(alloc, body, staged) orelse {
+        if (search_request.isCurrent(my_gen)) {
+            state.app.radio.fetch_error = true;
+            more_available = false;
+        }
+        return;
+    };
+    const n = page.count;
 
     parse_mutex.lock();
     defer parse_mutex.unlock();
     if (!search_request.isCurrent(my_gen)) return; // re-check under lock
 
-    current_offset = offset;
-    // A window shorter than the page size means RadioBrowser has nothing left
-    // to page (parseStations already drops unplayable rows, so this is a
-    // conservative approximation — a window that was all-filtered would also
-    // read as "short" here, which just ends paging a little early rather than
-    // ever looping forever).
-    if (n < RADIO_PAGE_SIZE) more_available = false;
+    current_offset = offset + page.consumed;
+    more_available = page.consumed >= RADIO_PAGE_SIZE;
+    state.app.radio.fetch_error = false;
 
     const base = state.app.radio.result_count;
     var appended: usize = 0;
@@ -624,6 +641,11 @@ fn fetchBody(url: []const u8, cap: usize) ?[]u8 {
         }) orelse continue;
         const trimmed = std.mem.trim(u8, body, " \t\r\n");
         if (trimmed.len == 0 or trimmed[0] != '[') continue;
+        // A mirror returning truncated/malformed JSON is a failed host too.
+        var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch continue;
+        const valid = parsed.value == .array;
+        parsed.deinit();
+        if (!valid) continue;
         return alloc.realloc(buf, body.len) catch {
             alloc.free(buf);
             return null;
@@ -716,21 +738,16 @@ fn renderLogo(i: usize, s: *const pure.Station) void {
     const slot = &station_posters[i];
     const fav = s.favicon[0..s.favicon_len];
 
-    if (fav.len > 0) {
-        // Pin the slot to whatever station is at index i now — a re-search (or
-        // the popular list landing) can replace results[], so a URL-hash change
-        // means "different station here": free the stale texture/pixels and
-        // refetch. Only when not mid-fetch, so we never spawn a second worker
-        // onto the same slot.
-        const h = std.hash.Fnv1a_64.hash(fav);
-        if (slot.url_hash != h and !slot.fetching) {
-            poster.deinitPoster(&slot.pixels, &slot.tex);
-            slot.w = 0;
-            slot.h = 0;
-            slot.attempted = false;
-            slot.failed = false;
-            slot.url_hash = h;
-        }
+    const h = std.hash.Fnv1a_64.hash(fav);
+    if (slot.url_hash != h and !slot.fetching) {
+        poster.deinitPoster(&slot.pixels, &slot.tex);
+        slot.w = 0;
+        slot.h = 0;
+        slot.attempted = false;
+        slot.failed = false;
+        slot.url_hash = h;
+    }
+    if (fav.len > 0 and slot.url_hash == h) {
         _ = poster.uploadIfReady(&slot.pixels, slot.w, slot.h, &slot.tex);
         if (slot.fetching) slot.attempted = true else if (slot.attempted and slot.pixels == null and slot.tex == null) slot.failed = true;
         if (!slot.failed and slot.tex == null and !slot.fetching and slot.pixels == null) {
@@ -739,8 +756,9 @@ fn renderLogo(i: usize, s: *const pure.Station) void {
         }
     }
 
-    if (slot.tex) |*tex| {
-        _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
+    const visible_texture = if (fav.len > 0 and slot.url_hash == h) slot.tex else null;
+    if (visible_texture) |tex| {
+        _ = dvui.image(@src(), .{ .source = .{ .texture = tex } }, .{
             .id_extra = i + 1000,
             .expand = .both,
             .corner_radius = dvui.Rect.all(8),
@@ -871,7 +889,8 @@ fn renderResults() void {
     const count = @min(state.app.radio.result_count, state.app.radio.results.len);
     const showing_popular = state.app.radio.showing_popular;
     parse_mutex.unlock();
-    if (count == 0 and !state.app.radio.is_loading.load(.acquire)) {
+    if (count == 0 and more_available and !state.app.radio.is_loading.load(.acquire)) loadMore();
+    if (count == 0 and !state.app.radio.is_loading.load(.acquire) and !loading_more.load(.acquire)) {
         components.emptyState(icons.tvg.lucide.radio, "Find a station", "Search by station, genre, or country.");
         return;
     }

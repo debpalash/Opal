@@ -57,11 +57,10 @@ pub fn extractJsonInt(json: []const u8, key: []const u8) i32 {
     const after = json[ki..];
     var i: usize = 0;
     while (i < after.len and (after[i] == ' ')) i += 1;
-    var result: i32 = 0;
-    while (i < after.len and after[i] >= '0' and after[i] <= '9') : (i += 1) {
-        result = result * 10 + @as(i32, @intCast(after[i] - '0'));
-    }
-    return result;
+    const start = i;
+    while (i < after.len and after[i] >= '0' and after[i] <= '9') : (i += 1) {}
+    // Untrusted provider IDs/counts must not overflow in safety builds.
+    return std.fmt.parseInt(i32, after[start..i], 10) catch 0;
 }
 
 pub fn extractJsonFloat(json: []const u8, key: []const u8) f32 {
@@ -116,9 +115,7 @@ pub fn parseCinemetaResponse(body: []const u8, out: *std.ArrayListUnmanaged(stat
 }
 
 fn copyInto(dst: []u8, len: *usize, src: []const u8) void {
-    const n = @min(dst.len, src.len);
-    @memcpy(dst[0..n], src[0..n]);
-    len.* = n;
+    len.* = @import("json_pure.zig").jsonUnescape(src, dst).len;
 }
 
 fn parseCinemetaGenres(json: []const u8, item: *state.TmdbItem) void {
@@ -160,6 +157,9 @@ fn parseAndAddCinemetaItem(json: []const u8, out: *std.ArrayListUnmanaged(state.
 
     if (extractJsonString(json, "\"name\":")) |name| copyInto(&item.title, &item.title_len, name);
     if (extractJsonString(json, "\"year\":")) |year| copyInto(&item.year, &item.year_len, year);
+    if (item.year_len == 0) {
+        if (extractJsonString(json, "\"releaseInfo\":")) |year| copyInto(&item.year, &item.year_len, year);
+    }
     if (extractJsonString(json, "\"released\":")) |released| {
         if (item.year_len == 0 and released.len >= 4) copyInto(&item.year, &item.year_len, released[0..4]);
         if (released.len >= 10) {
@@ -187,18 +187,18 @@ fn parseAndAddCinemetaItem(json: []const u8, out: *std.ArrayListUnmanaged(state.
 }
 
 fn parseAndAddItem(json_obj: []const u8, out: *std.ArrayListUnmanaged(state.TmdbItem)) !void {
+    // Multi-search includes people; those are not playable catalog titles.
+    if (extractJsonString(json_obj, "\"media_type\":")) |kind| {
+        if (!std.mem.eql(u8, kind, "movie") and !std.mem.eql(u8, kind, "tv")) return;
+    }
     var item = state.TmdbItem{};
 
     item.id = extractJsonInt(json_obj, "\"id\":");
 
     if (extractJsonString(json_obj, "\"title\":")) |title| {
-        const tlen = @min(title.len, 127);
-        @memcpy(item.title[0..tlen], title[0..tlen]);
-        item.title_len = tlen;
+        copyInto(&item.title, &item.title_len, title);
     } else if (extractJsonString(json_obj, "\"name\":")) |name| {
-        const nlen = @min(name.len, 127);
-        @memcpy(item.title[0..nlen], name[0..nlen]);
-        item.title_len = nlen;
+        copyInto(&item.title, &item.title_len, name);
     }
 
     if (extractJsonString(json_obj, "\"release_date\":")) |date| {
@@ -230,9 +230,7 @@ fn parseAndAddItem(json_obj: []const u8, out: *std.ArrayListUnmanaged(state.Tmdb
     item.rating = extractJsonFloat(json_obj, "\"vote_average\":");
 
     if (extractJsonString(json_obj, "\"overview\":")) |ov| {
-        const olen = @min(ov.len, 511);
-        @memcpy(item.overview[0..olen], ov[0..olen]);
-        item.overview_len = olen;
+        copyInto(&item.overview, &item.overview_len, ov);
     }
 
     if (extractJsonString(json_obj, "\"media_type\":")) |mt| {

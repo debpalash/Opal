@@ -1890,6 +1890,9 @@ fn renderSourceStatusCluster() void {
         .{ .icon = icons.tvg.lucide.music, .name = "Music", .bit = .music, .st = resolver.status_music.load(.acquire) },
         .{ .icon = icons.tvg.lucide.radio, .name = "Radio", .bit = .radio, .st = resolver.status_radio.load(.acquire) },
         .{ .icon = icons.tvg.lucide.podcast, .name = "Podcasts", .bit = .podcast, .st = resolver.status_podcast.load(.acquire) },
+        .{ .icon = icons.tvg.lucide.book, .name = "Novels", .bit = .novels, .st = resolver.combineSourceStatuses(resolver.status_novels.load(.acquire), resolver.status_novel_archive.load(.acquire)) },
+        .{ .icon = icons.tvg.lucide.book, .name = "Visual novels", .bit = .vndb, .st = resolver.status_vndb.load(.acquire) },
+        .{ .icon = icons.tvg.lucide.headphones, .name = "Audiobooks", .bit = .audiobooks, .st = resolver.status_audiobooks.load(.acquire) },
     };
     for (rows, 0..) |r, i| {
         const enabled = resolver.sourceOn(r.bit);
@@ -2165,6 +2168,9 @@ fn sourceBitOf(item: *const @import("resolver.zig").ResolvedItem) ?@import("reso
         .music => .music,
         .radio => .radio,
         .podcast => .podcast,
+        .novels => .novels,
+        .vndb => .vndb,
+        .audiobooks => .audiobooks,
     };
 }
 
@@ -2195,6 +2201,9 @@ fn renderSourceSummary(source_has: std.EnumSet(@import("resolver.zig").SourceBit
         .{ .name = "Music", .src = .music, .rss = false, .st = resolver.status_music.load(.acquire), .bit = .music },
         .{ .name = "Radio", .src = .radio, .rss = false, .st = resolver.status_radio.load(.acquire), .bit = .radio },
         .{ .name = "Podcasts", .src = .podcast, .rss = false, .st = resolver.status_podcast.load(.acquire), .bit = .podcast },
+        .{ .name = "Novels", .src = .novels, .rss = false, .st = resolver.combineSourceStatuses(resolver.status_novels.load(.acquire), resolver.status_novel_archive.load(.acquire)), .bit = .novels },
+        .{ .name = "Visual novels", .src = .vndb, .rss = false, .st = resolver.status_vndb.load(.acquire), .bit = .vndb },
+        .{ .name = "Audiobooks", .src = .audiobooks, .rss = false, .st = resolver.status_audiobooks.load(.acquire), .bit = .audiobooks },
     };
 
     const appendName = struct {
@@ -2331,6 +2340,8 @@ fn renderCompactRow(idx: usize, item: *const @import("resolver.zig").ResolvedIte
         .music => dvui.Color{ .r = 255, .g = 170, .b = 90, .a = 255 },
         .radio => dvui.Color{ .r = 120, .g = 200, .b = 255, .a = 255 },
         .podcast => dvui.Color{ .r = 255, .g = 140, .b = 170, .a = 255 },
+        .novels, .vndb => theme.colors.accent,
+        .audiobooks => theme.colors.accent,
     };
     const chip_text = switch (item.source) {
         .jellyfin => "Jellyfin",
@@ -2347,6 +2358,9 @@ fn renderCompactRow(idx: usize, item: *const @import("resolver.zig").ResolvedIte
         .music => "Music",
         .radio => "Radio",
         .podcast => "Podcast",
+        .novels => "Novel",
+        .vndb => "Visual novel",
+        .audiobooks => "Audiobook",
     };
 
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -2430,6 +2444,22 @@ fn renderCompactRow(idx: usize, item: *const @import("resolver.zig").ResolvedIte
         if (meta.len > 0) metadata.addText(meta, .{ .color_text = theme.colors.text_secondary });
         metadata.deinit();
     }
+    if (item.summary_len > 0) {
+        // Keep search scannable; the complete provider synopsis remains in the
+        // result API and catalog details. Never substitute generated copy.
+        const n = @min(item.summary_len, 180);
+        var synopsis = dvui.textLayout(@src(), .{ .break_lines = true }, .{
+            .id_extra = idx + 9450,
+            .expand = .horizontal,
+            .min_size_content = .{ .w = 0, .h = 0 },
+            .max_size_content = dvui.Options.MaxSize.width(text_w),
+            .background = false,
+            .padding = dvui.Rect.all(0),
+        });
+        synopsis.addText(safeUtf8(item.summary[0..n]), .{ .color_text = theme.colors.text_secondary });
+        if (n < item.summary_len) synopsis.addText("...", .{ .color_text = theme.colors.text_secondary });
+        synopsis.deinit();
+    }
     content.deinit();
 
     var actions = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0.5 });
@@ -2465,7 +2495,9 @@ fn renderCompactRow(idx: usize, item: *const @import("resolver.zig").ResolvedIte
 
     // Explicit Play affordance — dimmed on blocked rows; the click still
     // routes to playItem, whose central risk guard toasts the reason.
-    if (dvui.buttonIcon(@src(), "play", icons.tvg.lucide.play, .{}, .{}, .{
+    const action_icon = if (item.source == .novels or item.source == .comics) icons.tvg.lucide.book else if (item.source == .vndb or item.source == .tmdb or item.source == .audiobooks) icons.tvg.lucide.info else icons.tvg.lucide.play;
+    const action_name = if (item.source == .novels or item.source == .comics) "read" else if (item.source == .audiobooks) "open audio" else if (item.source == .vndb or item.source == .tmdb) "details" else "play";
+    if (dvui.buttonIcon(@src(), action_name, action_icon, .{}, .{}, .{
         .id_extra = idx + 9700,
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
         .color_text = if (risk.risk == .block) theme.colors.text_tertiary else theme.colors.accent,

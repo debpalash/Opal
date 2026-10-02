@@ -223,7 +223,7 @@ function renderMusic(songs){
 let raWatch = null;
 // Parity-tier-2 poll handles. `cxPages` is separate from `cxWatch`: the reader
 // keeps polling page progress while the search listing sits idle behind it.
-let comicGeneration = 0, comicSearchGeneration = 0, radioGeneration = 0;
+let comicGeneration = 0, comicSearchGeneration = 0, radioGeneration = 0, novelGeneration = 0;
 let cxWatch = null, cxPages = null, nvWatch = null, drWatch = null, vnWatch = null;
 let absWatch = null, opWatch = null, plWatch = null;
 // Which search row the open novel came from — /novels has no server-side back.
@@ -285,10 +285,34 @@ function renderComics(rows){
     }, button);
   });
 }
+function renderComicChapters(d){
+  let controls = $('cx-chapter-controls');
+  if (!controls) {
+    controls = document.createElement('div');
+    controls.id = 'cx-chapter-controls';
+    controls.className = 'm';
+    $('cx-pages').before(controls);
+  }
+  const chapters = d.chapters || [];
+  const html = `${d.prev_url ? '<button class="more" data-comic-prev>Previous chapter</button>' : ''}
+    ${chapters.length ? `<label>Chapter <select data-comic-chapter aria-label="Choose chapter">${chapters.map(row => `<option value="${esc(row.url)}"${row.selected ? ' selected' : ''}>${esc(row.title)}</option>`).join('')}</select></label>` : ''}
+    ${d.next_url ? '<button class="more" data-comic-next>Next chapter</button>' : ''}`;
+  if (controls.dataset.signature === html) return;
+  controls.dataset.signature = html;
+  controls.innerHTML = html;
+  const previous = controls.querySelector('[data-comic-prev]');
+  const next = controls.querySelector('[data-comic-next]');
+  const select = controls.querySelector('[data-comic-chapter]');
+  if (previous) previous.onclick = () => openComic(d.prev_url);
+  if (next) next.onclick = () => openComic(d.next_url);
+  if (select) select.onchange = () => openComic(select.value);
+}
+
 async function openComic(url){
   const generation = ++comicGeneration;
   clearInterval(cxPages);
   $('cx-pages').innerHTML = '';
+  if ($('cx-chapter-controls')) { $('cx-chapter-controls').innerHTML = ''; delete $('cx-chapter-controls').dataset.signature; }
   try { await api('/comics/load?url=' + encodeURIComponent(url)); }
   catch { if (generation === comicGeneration) $('cx-progress').textContent = 'Could not open comic. Try again.'; return; }
   if (generation !== comicGeneration) return;
@@ -303,18 +327,32 @@ async function openComic(url){
     try {
       const d = await api('/comics');
       if (generation !== comicGeneration) return;
-      // `downloaded` is what says which indices answer 200 — pages arrive out of
-      // order across 8 workers, so render only the contiguous prefix.
-      $('cx-progress').textContent = d.pages
+      // Download workers finish out of order; only request actual ready pages
+      // and keep their nodes in reading order as earlier pages arrive.
+      $('cx-progress').textContent = d.loading ? 'Loading chapter…' : d.pages
         ? `${d.title || 'Reading'} — ${d.downloaded}/${d.pages} pages`
         : 'Loading…';
-      if (d.pages) {
-        $('cx-pages').innerHTML = Array.from({ length: d.downloaded }, (_, i) =>
-          `<img class="cx-page" loading="lazy" src="${BASE}/api/comics/page?i=${i}&reader=${generation}">`).join('');
+      if (!d.loading) renderComicChapters(d);
+      if (d.pages && !d.loading) {
+        // Preserve already loaded image nodes while later pages arrive.
+        const pages = $('cx-pages');
+        const ready = d.ready_pages || Array.from({length:d.downloaded}, (_, i) => i);
+        for (const i of ready) {
+          if (pages.querySelector(`[data-page="${i}"]`)) continue;
+          const image = document.createElement('img');
+          image.className = 'cx-page';
+          image.dataset.page = i;
+          image.loading = 'lazy';
+          image.alt = `Page ${i + 1}`;
+          image.src = `${BASE}/api/comics/page?i=${i}&reader=${generation}`;
+          const following = [...pages.querySelectorAll('.cx-page')].find(node => Number(node.dataset.page) > i);
+          pages.insertBefore(image, following || null);
+        }
       }
-      if ((d.pages && d.downloaded >= d.pages) || (!d.loading && !d.pages) || ticks > 90) {
+      if ((d.pages && !d.loading && d.downloaded >= d.pages) || (!d.loading && !d.pages) || ticks > 90) {
         clearInterval(cxPages);
         if (!d.pages) $('cx-progress').textContent = 'No readable pages found. Try another source or issue.';
+        else if (d.downloaded < d.pages) $('cx-progress').textContent = `${d.title || 'Reading'} — ${d.downloaded}/${d.pages} pages loaded. Some pages could not load; try reopening this chapter.`;
       }
     } catch { clearInterval(cxPages); }
   }, 1200);
@@ -334,36 +372,55 @@ function loadNovels(){ pollNovels(); }
 function runNovels(){
   const q = $('nv-q').value.trim(); if (!q) return;
   $('nv-hint').innerHTML = '<span class="spin"></span> Searching…';
-  api('/novels/search?q=' + encodeURIComponent(q)).catch(()=>{});
-  pollNovels();
+  novelAction('/novels/search?q=' + encodeURIComponent(q));
+}
+async function novelAction(path){
+  const generation = ++novelGeneration;
+  clearInterval(nvWatch);
+  try {
+    await api(path);
+    if (generation === novelGeneration) pollNovels();
+  } catch {
+    if (generation === novelGeneration) $('nv-hint').textContent = 'Could not load novels. Try again.';
+  }
 }
 function pollNovels(){
+  const generation = ++novelGeneration;
   clearInterval(nvWatch);
   let ticks = 0;
   nvWatch = settledInterval(async () => {
     ticks++;
     try {
       const d = await api('/novels');
+      if (generation !== novelGeneration) return;
       renderNovels(d);
-      const busy = d.loading || d.chapters_loading || d.text_loading;
-      if ((!busy && ticks > 1) || ticks > 60) clearInterval(nvWatch);
-    } catch { clearInterval(nvWatch); }
+      const busy = d.loading || d.chapters_loading || d.text_loading || d.loading_more;
+      if (!busy && ticks > 1) clearInterval(nvWatch);
+    } catch {
+      if (generation === novelGeneration) {
+        clearInterval(nvWatch);
+        $('nv-hint').textContent = 'Could not load novels. Try again.';
+      }
+    }
   }, 900);
 }
 function renderNovels(d){
-  const busy = d.loading || d.chapters_loading || d.text_loading;
+  const busy = d.loading || d.chapters_loading || d.text_loading || d.loading_more;
+  let more = $('nv-more');
+  if (!more) {
+    more = document.createElement('button');
+    more.id = 'nv-more'; more.className = 'more'; more.textContent = 'Load more';
+    $('nv-results').after(more);
+    more.onclick = () => novelAction('/novels/more');
+  }
+  more.hidden = d.view !== 'search' || !d.has_more;
+  more.disabled = busy;
   $('nv-hint').innerHTML = busy ? '<span class="spin"></span> Loading…'
-    : (d.error ? 'Fetch failed — try another source.' : (d.title || 'Search to begin.'));
+    : (d.error ? 'Fetch failed — try another source.' : esc(d.title || 'Search to begin.'));
   $('nv-crumbs').innerHTML = d.view === 'search' ? '' :
     `<button class="more" id="nv-back">‹ ${d.view === 'reader' ? 'Chapters' : 'Results'}</button>`;
   const back = $('nv-back');
-  if (back) back.onclick = () => {
-    // No server-side "back": re-entering the previous view is just re-issuing
-    // the call that produced it.
-    if (d.view === 'reader') api('/novels/open?idx=' + novelIdx).catch(()=>{});
-    else api('/novels/search?q=' + encodeURIComponent($('nv-q').value.trim())).catch(()=>{});
-    pollNovels();
-  };
+  if (back) back.onclick = () => novelAction('/novels/back');
   if (d.view === 'reader') {
     $('nv-results').innerHTML = '';
     $('nv-text').textContent = d.text || '';
@@ -376,8 +433,10 @@ function renderNovels(d){
   const target = $('nv-results');
   const html = rows.map((r, i) => `
     <div class="result">
-      ${r.cover ? `<img class="thumb" src="${esc(r.cover)}" alt="" loading="lazy">` : ''}
+      ${unifiedArtwork(r.cover) ? `<img class="thumb" src="${esc(unifiedArtwork(r.cover))}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ''}
       <div class="t">${esc(r.title)}</div>
+      ${r.author || r.year ? `<div class="m">${esc([r.author, r.year || ''].filter(Boolean).join(' · '))}</div>` : ''}
+      ${r.overview ? `<div class="m" title="${esc(r.overview)}">${esc(r.overview.slice(0, 180))}${r.overview.length > 180 ? '…' : ''}</div>` : ''}
       <div class="m"><button class="novel-details" data-details="${i}" data-kind="${kind}">Details</button>
         <button class="play" data-nv="${i}" data-kind="${kind}">${kind === 'open' ? 'Open' : 'Read'}</button></div>
     </div>`).join('') || '<div class="empty">Nothing here</div>';
@@ -386,14 +445,13 @@ function renderNovels(d){
     b.onclick = () => {
       const i = +b.dataset.nv;
       if (b.dataset.kind === 'open') novelIdx = i;
-      api('/novels/' + (b.dataset.kind === 'open' ? 'open' : 'chapter') + '?idx=' + i).catch(()=>{});
-      pollNovels();
+      novelAction('/novels/' + (b.dataset.kind === 'open' ? 'open' : 'chapter') + '?idx=' + i);
     };
   });
   target.querySelectorAll('.novel-details').forEach(button => {
     const row = rows[Number(button.dataset.details)] || {};
     button.onclick = () => openSourceDetails('Novel', {
-      ...row, name:row.title, type:button.dataset.kind === 'chapter' ? 'Chapter' : 'Novel',
+      ...row, name:row.title, artUrl:row.cover || '', author:row.author || '', overview:row.overview || '', year:row.year || 0, type:button.dataset.kind === 'chapter' ? 'Chapter' : 'Novel',
       kind:button.dataset.kind === 'chapter' ? 'chapter' : 'novel', index:Number(button.dataset.details),
     }, button);
   });
@@ -517,8 +575,8 @@ function pollAbs(){
     try {
       const d = await api('/abs');
       renderAbs(d);
-      if ((!d.loading && ticks > 1) || ticks > 40) clearInterval(absWatch);
-    } catch { clearInterval(absWatch); }
+      if (!d.loading && !d.loading_more && !d.audio?.loading && ticks > 1) clearInterval(absWatch);
+    } catch (error) { clearInterval(absWatch); $('abs-hint').textContent = error?.message || 'Could not refresh Audiobookshelf.'; }
   };
   absWatch = settledInterval(tick, 900, true);
 }
@@ -526,8 +584,36 @@ function renderAbs(d){
   $('abs-login').style.display = d.connected ? 'none' : '';
   $('abs-session').hidden = !d.connected;
   if (!d.connected && d.server && !$('abs-server').value) $('abs-server').value = d.server;
-  $('abs-hint').innerHTML = d.loading ? '<span class="spin"></span> Loading…'
-    : (d.error || (d.connected ? (d.library || 'Pick a library') : 'Sign in to your Audiobookshelf server.'));
+  $('abs-hint').innerHTML = d.loading || d.audio?.loading ? '<span class="spin"></span> Loading…'
+    : esc(d.error || (d.connected ? (d.library || 'Pick a library') : 'Sign in to your Audiobookshelf server.'));
+  if (d.connected && d.audio?.visible) {
+    const audio = d.audio, tracks = audio.tracks || [], target = $('abs-results');
+    $('abs-crumbs').innerHTML = '<button class="more" id="abs-audio-back">Back to library</button>';
+    $('abs-audio-back').onclick = async () => {
+      try { await apiMutation('/abs/audio/close'); pollAbs(); }
+      catch (error) { toast(error.message || 'Could not close track selection'); }
+    };
+    const html = `<div class="hint">${esc(audio.title || 'Audio files')} · ${audio.returned || 0} available of ${audio.total || 0}</div>`
+      + (audio.complete_book ? '<div class="hint">Book tracks advance automatically and resume across files.</div><button class="more" id="abs-play-book">Play book from saved position</button>' : '<div class="hint">Choose an individual audio file or podcast episode.</div>')
+      + (audio.loading ? '<div class="empty"><span class="spin"></span> Loading audio files…</div>' : tracks.map(track =>
+        `<div class="result"><div class="t">${esc(track.title)}</div><div class="m"><span class="src">${track.episode ? 'Podcast episode' : 'Audio track'}</span><button class="play" data-audio="${track.index}">Play on Opal</button></div></div>`).join('')
+        || '<div class="empty">No playable audio files found.</div>');
+    const changed = setSafeHtml(target, html);
+    if ($('abs-play-book')) $('abs-play-book').onclick = async () => {
+      try { await apiMutation('/abs/audio/book?generation=' + encodeURIComponent(audio.generation)); toast('Playing book from its saved position'); }
+      catch (error) { toast(error.message || 'Could not play the complete book'); }
+    };
+    if (changed) target.querySelectorAll('button[data-audio]').forEach(button => {
+      button.onclick = async () => {
+        button.disabled = true;
+        try {
+          await apiMutation('/abs/audio?idx=' + encodeURIComponent(button.dataset.audio) + '&generation=' + encodeURIComponent(audio.generation));
+          button.textContent = 'Sent'; toast('Playing selected audio file on Opal');
+        } catch (error) { button.disabled = false; toast(error.message || 'Could not play this audio file'); }
+      };
+    });
+    return;
+  }
   const books = d.view === 'Books';
   if (d.connected && !d.loading && !books && !(d.libraries || []).length && !absRestoreRequested) {
     absRestoreRequested = true;
@@ -537,7 +623,7 @@ function renderAbs(d){
   if ($('abs-back')) $('abs-back').onclick = () => { apiMutation('/abs/back').catch(()=>{}); pollAbs(); };
   const rows = books ? (d.books || []) : (d.libraries || []);
   const target = $('abs-results');
-  const html = rows.map((r, i) => `
+  const html = (rows.map((r, i) => `
     <div class="result">
       <div class="t">${esc(r.title || r.name)}</div>
       <div class="m">
@@ -545,11 +631,19 @@ function renderAbs(d){
         ${r.media_type ? `<span class="src">${esc(r.media_type)}</span>` : ''}
         ${r.duration ? `<span>${fmt(r.duration)}</span>` : ''}
         ${books ? `<button class="abs-details" data-details="${i}">Details</button>` : ''}
-        <button class="play" data-i="${i}">${books ? 'Play on Opal' : 'Open'}</button></div>
-    </div>`).join('') || (d.connected ? '<div class="empty">Nothing here</div>' : '');
+        <button class="play" data-i="${i}">${books ? 'Open audio' : 'Open'}</button></div>
+    </div>`).join('') || (d.connected ? '<div class="empty">Nothing here</div>' : ''))
+    + (books && d.has_more ? `<button class="more" id="abs-more"${d.loading_more ? ' disabled' : ''}>${d.loading_more ? 'Loading…' : 'Load more'}</button>` : '');
   if (!setSafeHtml(target, html)) return;
+  if ($('abs-more')) $('abs-more').onclick = async () => {
+    try { await apiMutation('/abs/more'); pollAbs(); }
+    catch (error) { toast(error.message || 'Could not load more books'); }
+  };
   target.querySelectorAll('button[data-i]').forEach(b => {
-    b.onclick = () => { apiMutation('/abs/' + (books ? 'play' : 'open') + '?idx=' + b.dataset.i).catch(()=>{}); pollAbs(); };
+    b.onclick = async () => {
+      try { await apiMutation('/abs/' + (books ? 'play' : 'open') + '?idx=' + b.dataset.i); pollAbs(); }
+      catch (error) { toast(error.message || 'Could not open this item'); }
+    };
   });
   target.querySelectorAll('.abs-details').forEach(button => {
     button.onclick = () => {

@@ -351,7 +351,7 @@ pub fn renderTmdbContent() void {
         api.fetchCurrentView(false);
     } else if (state.app.tmdb.view == .Trending and !state.app.tmdb.is_loading.load(.acquire) and
         state.app.tmdb.results.items.len > 0 and state.app.tmdb.page == 1 and
-        @import("browse_cache.zig").isStale(state.app.tmdb.last_fetch_s))
+        api.shouldRefreshBrowse())
     {
         // Cache aged past the TTL — refresh in the background (the current
         // results keep showing until the new ones arrive).
@@ -374,6 +374,15 @@ pub fn renderTmdbContent() void {
     });
     renderToolbar(list.items.len);
     toolbar_scroll.deinit();
+    if (state.app.tmdb.view == .Trending and list.items.len > 0 and api.refreshFailed() and !state.app.tmdb.is_loading.load(.acquire)) {
+        var retry_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+        _ = dvui.label(@src(), "Refresh failed. Showing previously loaded titles.", .{}, .{ .color_text = theme.colors.warning });
+        if (@import("../ui/components.zig").actionButton(@src(), "Retry", .secondary, 88001)) {
+            state.app.tmdb.page = 1;
+            api.fetchCurrentView(false);
+        }
+        retry_row.deinit();
+    }
     // Initial load (nothing to show yet) renders skeleton tiles inside the
     // gallery; a stale-refresh keeps the current results on screen — seamless.
     const show_load_more = state.app.tmdb.view == .Trending or state.app.tmdb.view == .Search;

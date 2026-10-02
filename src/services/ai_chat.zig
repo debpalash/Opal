@@ -1078,6 +1078,9 @@ pub fn renderInlineResults() void {
                 .music => "Music",
                 .radio => "Radio",
                 .podcast => "Podcast",
+                .novels => "Novels",
+                .vndb => "Visual novels",
+                .audiobooks => "Audiobooks",
             };
         }
     }.get;
@@ -1179,7 +1182,7 @@ pub fn renderInlineResults() void {
         }
 
         // Queue — borderless quiet action.
-        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.plus, .{}, .{}, .{
+        if (resolver.isRemoteQueueable(item) and dvui.buttonIcon(@src(), "", icons.tvg.lucide.plus, .{}, .{}, .{
             .id_extra = ci + 10400,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
             .color_text = theme.colors.text_secondary,
@@ -1193,8 +1196,13 @@ pub fn renderInlineResults() void {
             queueChatResult(ci);
         }
 
-        // Play — accent action.
-        if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
+        // Catalogs open details; reading results open a reader.
+        const action_icon = switch (item.source) {
+            .tmdb, .vndb, .podcast, .audiobooks => icons.tvg.lucide.info,
+            .comics, .novels => icons.tvg.lucide.@"book-open",
+            else => icons.tvg.lucide.play,
+        };
+        if (dvui.buttonIcon(@src(), "", action_icon, .{}, .{}, .{
             .id_extra = ci + 10100,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
             .color_text = theme.colors.accent,
@@ -1223,6 +1231,7 @@ pub fn playChatResult(idx: usize) void {
 fn queueChatResult(idx: usize) void {
     if (idx >= chat_result_count) return;
     const item = &chat_results[idx];
+    if (!resolver.isRemoteQueueable(item)) return;
     const name = item.name[0..item.name_len];
     const url_str = item.url[0..item.url_len];
     const src_label = switch (item.source) {
@@ -1240,6 +1249,9 @@ fn queueChatResult(idx: usize) void {
         .music => "music",
         .radio => "radio",
         .podcast => "podcast",
+        .novels => "novels",
+        .vndb => "vndb",
+        .audiobooks => "audiobooks",
     };
     @import("queue.zig").addToQueue(url_str, name, src_label);
     state.showToast("Added to queue");

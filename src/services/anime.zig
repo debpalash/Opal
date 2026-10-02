@@ -1216,6 +1216,9 @@ fn parseJikanDataEx(json: []const u8, my_gen: u32, with_broadcast: bool, start_o
         const obj_open = std.mem.lastIndexOfScalar(u8, json[0..pos], '{') orelse break;
         const obj_end = anime_pure.jsonObjectEnd(json, obj_open) orelse break;
         const obj_slice = json[pos..obj_end];
+        // Advance before any rejection: producer/genre objects contain their
+        // own mal_id fields and must never become cards when a row is skipped.
+        pos = obj_end;
 
         // NSFW filter (Settings › Behavior): drop adult ratings and explicit
         // Ecchi/Erotica/Hentai genres, including cached responses.

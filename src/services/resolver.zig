@@ -35,6 +35,9 @@ pub const SourceType = enum {
     podcast, // a podcast show — opens the Podcasts tab on that feed
     plex, // connected Plex library — credential-free deep-link playback
     plugin, // trusted installed executable plugin
+    novels, // work identity opens the built-in reader
+    vndb, // visual novel metadata, not downloadable game content
+    audiobooks, // connected Audiobookshelf item, opened through expanded audio metadata
 };
 
 pub const ResolvedItem = struct {
@@ -42,6 +45,13 @@ pub const ResolvedItem = struct {
     name_len: usize = 0,
     detail: [128]u8 = std.mem.zeroes([128]u8), // size, seeds, source addon, etc.
     detail_len: usize = 0,
+    poster_url: [512]u8 = std.mem.zeroes([512]u8),
+    poster_url_len: usize = 0,
+    summary: [512]u8 = std.mem.zeroes([512]u8),
+    summary_len: usize = 0,
+    rating: f32 = 0, // Provider rating out of ten; zero means unknown.
+    author: [160]u8 = std.mem.zeroes([160]u8),
+    author_len: usize = 0,
     url: [2048]u8 = std.mem.zeroes([2048]u8), // magnet/http/jf item id
     url_len: usize = 0,
     source: SourceType = .torrent,
@@ -102,10 +112,10 @@ pub var results_mutex = @import("../core/sync.zig").Mutex{};
 // Encrypted-content-cache SWR state. When a query's results are seeded from
 // the on-disk cache (instant, no empty view), `results_from_cache` is true; the
 // first live result of the fresh wave then replaces the placeholder (see
-// pushResult). Guarded by results_mutex. Serialized blobs cap at ~160 KB
-// (MAX_RESULTS rows × fixed buffers), so 512 KB is a safe scratch size.
+// pushResult). Guarded by results_mutex. Reserve enough for every bounded
+// result field, including descriptions, cover URLs and playback fallbacks.
 var results_from_cache: bool = false;
-const SEARCH_BLOB_CAP: usize = 768 * 1024;
+const SEARCH_BLOB_CAP: usize = MAX_RESULTS * @sizeOf(ResolvedItem);
 const SEARCH_TTL_S: i64 = @import("browse_cache.zig").TTL_S;
 
 // Search state — shared across 7 worker threads + UI; access via atomics.
@@ -137,6 +147,10 @@ pub var status_podcast = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_catalog = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_plex = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_plugins = std.atomic.Value(SourceStatus).init(.idle);
+pub var status_novels = std.atomic.Value(SourceStatus).init(.idle);
+pub var status_novel_archive = std.atomic.Value(SourceStatus).init(.idle);
+pub var status_vndb = std.atomic.Value(SourceStatus).init(.idle);
+pub var status_audiobooks = std.atomic.Value(SourceStatus).init(.idle);
 
 // Explicit u8 backing so std.atomic.Value(SourceStatus) is byte-atomic. The
 // richer terminal values make an empty source distinguishable from a network,
@@ -150,7 +164,7 @@ pub const sourceStatusIsFailure = lifecycle.isFailure;
 /// not spawned by resolve() (their status reads .idle) and their result
 /// groups are hidden. A mask of 0 is treated as "everything on" so the user
 /// can never filter themselves into a permanently empty search.
-pub const SourceBit = enum(u4) { local, torrent, jellyfin, youtube, anime, comics, stremio, rss, livetv, music, radio, podcast };
+pub const SourceBit = enum(u4) { local, torrent, jellyfin, youtube, anime, comics, stremio, rss, livetv, music, radio, podcast, novels, vndb, audiobooks };
 /// Every declared bit set. Kept in sync with SourceBit at comptime so adding a
 /// vertical can't silently leave its pill off (or make `all on` mis-detect).
 pub const ALL_SOURCE_BITS: u16 = (1 << @typeInfo(SourceBit).@"enum".fields.len) - 1;
@@ -423,6 +437,10 @@ pub fn resolveTracked(query: []const u8, intent: []const u8) u32 {
     Pre.set(&status_music, .music);
     Pre.set(&status_radio, .radio);
     Pre.set(&status_podcast, .podcast);
+    Pre.set(&status_novels, .novels);
+    Pre.set(&status_novel_archive, .novels);
+    Pre.set(&status_vndb, .vndb);
+    Pre.set(&status_audiobooks, .audiobooks);
     status_catalog.store(.searching, .release);
     status_plex.store(.searching, .release);
     status_plugins.store(.searching, .release);
@@ -480,6 +498,10 @@ pub fn resolveTracked(query: []const u8, intent: []const u8) u32 {
     if (sourceOn(.music)) Spawn.go(resolveMusic, &status_music);
     if (sourceOn(.radio)) Spawn.go(resolveRadio, &status_radio);
     if (sourceOn(.podcast)) Spawn.go(resolvePodcasts, &status_podcast);
+    if (sourceOn(.novels)) Spawn.go(resolveWikiNovels, &status_novels);
+    if (sourceOn(.novels)) Spawn.go(resolveArchiveNovels, &status_novel_archive);
+    if (sourceOn(.vndb)) Spawn.go(resolveVisualNovels, &status_vndb);
+    if (sourceOn(.audiobooks)) Spawn.go(resolveAudiobooks, &status_audiobooks);
 
     // If filtering left nothing to spawn, close the resolve immediately —
     // no worker exists to call checkAllDone().
@@ -945,10 +967,23 @@ fn resolveCatalog(query_buf: [256]u8, qlen: usize) void {
         const kind_len = @min(kind.len, item.catalog_kind.len);
         @memcpy(item.catalog_kind[0..kind_len], kind[0..kind_len]);
         item.catalog_kind_len = kind_len;
+        // Catalog entries have no playback URL yet, but need distinct transport
+        // identities: otherwise every empty URL deduplicates to the first card.
+        const identity = std.fmt.bufPrint(&item.url, "opal://catalog/{s}/{d}", .{ kind, entry.id }) catch "";
+        item.url_len = identity.len;
         const imdb_len = @min(entry.imdb_id_len, item.catalog_imdb.len);
         @memcpy(item.catalog_imdb[0..imdb_len], entry.imdb_id[0..imdb_len]);
         item.catalog_imdb_len = imdb_len;
 
+        copyField(&item.summary, &item.summary_len, entry.overview[0..@min(entry.overview_len, entry.overview.len)]);
+        item.rating = entry.rating;
+        const poster = entry.poster_path[0..@min(entry.poster_path_len, entry.poster_path.len)];
+        if (std.mem.startsWith(u8, poster, "https://") or std.mem.startsWith(u8, poster, "http://")) {
+            if (poster.len <= item.poster_url.len) copyField(&item.poster_url, &item.poster_url_len, poster);
+        } else if (std.mem.startsWith(u8, poster, "/")) {
+            const address = std.fmt.bufPrint(&item.poster_url, "https://image.tmdb.org/t/p/w185{s}", .{poster}) catch "";
+            item.poster_url_len = address.len;
+        }
         const year = entry.year[0..@min(entry.year_len, entry.year.len)];
         const label = if (std.mem.eql(u8, kind, "tv")) "TV details" else "Movie details";
         const detail = if (year.len > 0)
@@ -956,6 +991,15 @@ fn resolveCatalog(query_buf: [256]u8, qlen: usize) void {
         else
             label;
         item.detail_len = detail.len;
+        if (entry.rating > 0) {
+            const rating = std.fmt.bufPrint(item.detail[item.detail_len..], " · {d:.1}/10", .{entry.rating}) catch "";
+            item.detail_len += rating.len;
+        }
+        const genres = entry.genre_text[0..@min(entry.genre_text_len, entry.genre_text.len)];
+        if (genres.len > 0) {
+            const suffix = std.fmt.bufPrint(item.detail[item.detail_len..], " · {s}", .{genres}) catch "";
+            item.detail_len += suffix.len;
+        }
         _ = pushResult(item);
     }
 }
@@ -1153,7 +1197,7 @@ fn attrValue(html: []const u8, name: []const u8, limit: usize) ?[]const u8 {
 // ══════════════════════════════════════════════════════════
 
 fn cacheKey(buf: []u8, query: []const u8) []const u8 {
-    return std.fmt.bufPrint(buf, "search:v5:{s}", .{query}) catch "search:v5:";
+    return std.fmt.bufPrint(buf, "search:v6:{s}", .{query}) catch "search:v6:";
 }
 
 /// Serialize the current `results` (under caller's lock) into `out`.
@@ -1197,6 +1241,10 @@ fn serializeRows(rows: []const ResolvedItem, out: []u8) ?[]u8 {
         w.blob(it.plugin_id[0..@min(it.plugin_id_len, it.plugin_id.len)]);
         w.blob(it.plugin_item_id[0..@min(it.plugin_item_id_len, it.plugin_item_id.len)]);
         w.u16v(it.plugin_episodes);
+        w.blob(it.poster_url[0..@min(it.poster_url_len, it.poster_url.len)]);
+        w.blob(it.summary[0..@min(it.summary_len, it.summary.len)]);
+        w.f32v(it.rating);
+        w.blob(it.author[0..@min(it.author_len, it.author.len)]);
     }
     return w.done();
 }
@@ -1250,6 +1298,10 @@ fn deserializeInto(bytes: []const u8) usize {
         copyField(&it.plugin_id, &it.plugin_id_len, r.blob() orelse break);
         copyField(&it.plugin_item_id, &it.plugin_item_id_len, r.blob() orelse break);
         it.plugin_episodes = r.u16v() orelse break;
+        copyField(&it.poster_url, &it.poster_url_len, r.blob() orelse break);
+        copyField(&it.summary, &it.summary_len, r.blob() orelse break);
+        it.rating = r.f32v() orelse break;
+        copyField(&it.author, &it.author_len, r.blob() orelse break);
         results[count] = it;
         count += 1;
     }
@@ -1339,7 +1391,9 @@ fn checkAllDoneLocked(run: u32) void {
         status_music.load(.acquire) != .searching and status_radio.load(.acquire) != .searching and
         status_podcast.load(.acquire) != .searching and status_livetv.load(.acquire) != .searching and
         status_catalog.load(.acquire) != .searching and status_plex.load(.acquire) != .searching and
-        status_plugins.load(.acquire) != .searching)
+        status_plugins.load(.acquire) != .searching and
+        status_novels.load(.acquire) != .searching and status_novel_archive.load(.acquire) != .searching and
+        status_vndb.load(.acquire) != .searching and status_audiobooks.load(.acquire) != .searching)
     {
         // Swap so the resolving→done transition fires exactly once even if two
         // finishing workers observe "all done" concurrently — only the winner
@@ -1416,6 +1470,9 @@ fn computeMatchAgainst(item: ResolvedItem, query_override: []const u8) MatchInfo
         .music => 22,
         .podcast => 24,
         .radio => 26,
+        .novels => 23,
+        .audiobooks => 23,
+        .vndb => 29,
         .tmdb => 30, // catalog stub — not directly playable, rank last
     };
 
@@ -1458,94 +1515,443 @@ fn computeMatchAgainst(item: ResolvedItem, query_override: []const u8) MatchInfo
 // Backend: Jellyfin (local library search)
 // ══════════════════════════════════════════════════════════
 
-fn resolveJellyfin(query_buf: [256]u8, qlen: usize) void {
-    defer finishWorker(&status_jf, .done);
-
-    if (!state.app.jf.connected or state.app.jf.server_url_len == 0) {
+// Catalog lookups use caller-owned buffers and never replace the Browse tabs.
+fn resolveAudiobooks(query_buf: [256]u8, qlen: usize) void {
+    defer finishWorker(&status_audiobooks, .done);
+    const abs = @import("audiobookshelf.zig");
+    const pure = @import("audiobookshelf_pure.zig");
+    var connection = abs.connectionSnapshot();
+    if (!connection.connected or connection.server_len == 0 or connection.token_len == 0) {
         noteWorkerOutcome(.unavailable);
         return;
     }
-
-    const query = query_buf[0..qlen];
-    const server = state.app.jf.server_url[0..state.app.jf.server_url_len];
-    const uid = state.app.jf.user_id[0..state.app.jf.user_id_len];
-    const token = state.app.jf.token[0..state.app.jf.token_len];
-
-    // URL-encode query
-    var enc_buf: [512]u8 = undefined;
-    var enc_len: usize = 0;
-    for (query) |ch| {
-        if (enc_len + 3 >= enc_buf.len) break;
-        if (std.ascii.isAlphanumeric(ch) or ch == '-' or ch == '_' or ch == '.') {
-            enc_buf[enc_len] = ch;
-            enc_len += 1;
-        } else {
-            enc_buf[enc_len] = '%';
-            const hex = "0123456789ABCDEF";
-            enc_buf[enc_len + 1] = hex[ch >> 4];
-            enc_buf[enc_len + 2] = hex[ch & 0xF];
-            enc_len += 3;
+    const server = std.mem.trimEnd(u8, connection.server[0..connection.server_len], "/");
+    // A restored connection may not have loaded its library list yet. Fetch
+    // permitted libraries independently, without replacing the Browse state.
+    if (connection.library_count == 0) {
+        var url_buf: [512]u8 = undefined;
+        const url = std.fmt.bufPrint(&url_buf, "{s}/api/libraries", .{server}) catch {
+            noteWorkerOutcome(.failed);
+            return;
+        };
+        const buf = alloc.alloc(u8, 256 * 1024) catch {
+            noteWorkerOutcome(.failed);
+            return;
+        };
+        defer alloc.free(buf);
+        var code: ?std.http.Status = null;
+        const headers = [_]std.http.Header{.{ .name = "Authorization", .value = blk: {
+            break :blk std.fmt.allocPrint(alloc, "Bearer {s}", .{connection.token[0..connection.token_len]}) catch {
+                noteWorkerOutcome(.failed);
+                return;
+            };
+        } }};
+        defer alloc.free(headers[0].value);
+        const body = @import("../core/http.zig").fetch(url, buf, .{ .timeout_secs = 8, .extra_headers = &headers, .status_out = &code }) orelse {
+            noteWorkerOutcome(if (code == .unauthorized or code == .forbidden) .unavailable else .transport_failed);
+            return;
+        };
+        connection.library_count = pure.parseLibraryPage(alloc, body, &connection.libraries) orelse {
+            noteWorkerOutcome(.parse_failed);
+            return;
+        };
+    }
+    if (connection.library_count == 0) return;
+    const Page = struct {
+        rows: [6]ResolvedItem = [_]ResolvedItem{.{}} ** 6,
+        count: usize = 0,
+        status: SourceStatus = .no_results,
+    };
+    const pages = alloc.alloc(Page, connection.library_count) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
+    defer alloc.free(pages);
+    for (pages) |*page| page.* = .{};
+    var threads: [16]?std.Thread = .{null} ** 16;
+    const Fetch = struct {
+        fn run(snapshot: *const abs.ConnectionSnapshot, query: *const [256]u8, query_len: usize, library: pure.Library, page: *Page, generation: u32) void {
+            if (run_gen.load(.acquire) != generation) return;
+            if (!pure.validItemId(library.id[0..library.id_len])) {
+                page.status = .parse_failed;
+                return;
+            }
+            var encoded_buf: [768]u8 = undefined;
+            const encoded = @import("../core/http.zig").urlEncode(query[0..query_len], &encoded_buf);
+            var url_buf: [1300]u8 = undefined;
+            const url = std.fmt.bufPrint(&url_buf, "{s}/api/libraries/{s}/search?q={s}&limit=6", .{
+                std.mem.trimEnd(u8, snapshot.server[0..snapshot.server_len], "/"), library.id[0..library.id_len], encoded,
+            }) catch {
+                page.status = .failed;
+                return;
+            };
+            var auth_buf: [300]u8 = undefined;
+            const auth = std.fmt.bufPrint(&auth_buf, "Bearer {s}", .{snapshot.token[0..snapshot.token_len]}) catch {
+                page.status = .failed;
+                return;
+            };
+            const headers = [_]std.http.Header{.{ .name = "Authorization", .value = auth }};
+            const buf = alloc.alloc(u8, 512 * 1024) catch {
+                page.status = .failed;
+                return;
+            };
+            defer alloc.free(buf);
+            var code: ?std.http.Status = null;
+            const body = @import("../core/http.zig").fetch(url, buf, .{ .timeout_secs = 8, .extra_headers = &headers, .status_out = &code }) orelse {
+                page.status = if (code == .unauthorized or code == .forbidden) .unavailable else .transport_failed;
+                return;
+            };
+            var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch {
+                page.status = .parse_failed;
+                return;
+            };
+            defer parsed.deinit();
+            if (parsed.value != .object) {
+                page.status = .parse_failed;
+                return;
+            }
+            const key = if (std.mem.eql(u8, library.media_type[0..library.media_type_len], "podcast")) "podcast" else "book";
+            const records = parsed.value.object.get(key) orelse {
+                page.status = .parse_failed;
+                return;
+            };
+            if (records != .array) {
+                page.status = .parse_failed;
+                return;
+            }
+            for (records.array.items) |match| {
+                if (page.count >= page.rows.len) break;
+                if (match != .object) continue;
+                const record = match.object.get("libraryItem") orelse continue;
+                if (record != .object) continue;
+                const id = catalogString(record, "id");
+                if (!pure.validItemId(id)) continue;
+                const media = record.object.get("media") orelse continue;
+                if (media != .object) continue;
+                const metadata = media.object.get("metadata") orelse continue;
+                const title = catalogString(metadata, "title");
+                if (title.len == 0) continue;
+                var item: ResolvedItem = .{ .source = .audiobooks };
+                copyField(&item.name, &item.name_len, title);
+                copyField(&item.summary, &item.summary_len, catalogString(metadata, "description"));
+                copyField(&item.author, &item.author_len, catalogString(metadata, "authorName"));
+                if (item.author_len == 0 and metadata == .object) {
+                    if (metadata.object.get("authors")) |authors| {
+                        if (authors == .array and authors.array.items.len > 0)
+                            copyField(&item.author, &item.author_len, catalogString(authors.array.items[0], "name"));
+                    }
+                }
+                const identity: []const u8 = std.fmt.bufPrint(&item.url, "abs://item/{s}", .{id}) catch continue;
+                item.url_len = identity.len;
+                var detail_buf: [128]u8 = undefined;
+                const detail: []const u8 = std.fmt.bufPrint(&detail_buf, "Audiobookshelf · {s}", .{library.name[0..library.name_len]}) catch "Audiobookshelf";
+                copyField(&item.detail, &item.detail_len, detail);
+                if (media.object.get("duration")) |duration| item.duration_secs = switch (duration) {
+                    .float => @floatCast(@max(0, duration.float)),
+                    .integer => @floatFromInt(@max(0, duration.integer)),
+                    else => 0,
+                };
+                page.rows[page.count] = item;
+                page.count += 1;
+            }
+            page.status = if (page.count > 0) .done else .no_results;
+        }
+    };
+    for (pages, 0..) |*page, i| {
+        threads[i] = @import("../core/workers.zig").spawnLegacy(Fetch.run, .{ &connection, &query_buf, qlen, connection.libraries[i], page, worker_gen }) catch {
+            page.status = .unavailable;
+            continue;
+        };
+    }
+    // Every launched task is joined before its snapshot/result storage dies.
+    for (threads) |thread| if (thread) |running| running.join();
+    var published: usize = 0;
+    for (pages) |page| {
+        noteWorkerOutcome(page.status);
+        for (page.rows[0..page.count]) |item| {
+            if (published >= 12) break;
+            if (pushResult(item)) published += 1;
         }
     }
+}
 
-    var url_buf: [1024]u8 = undefined;
-    const url = std.fmt.bufPrint(&url_buf, "{s}/Users/{s}/Items?searchTerm={s}&Limit=10&Recursive=true&Fields=Overview&api_key={s}", .{
-        server, uid, enc_buf[0..enc_len], token,
+fn resolveVisualNovels(query_buf: [256]u8, qlen: usize) void {
+    defer finishWorker(&status_vndb, .done);
+    const pure = @import("vndb_pure.zig");
+    var request_buf: [1024]u8 = undefined;
+    const request = pure.buildSearchBody(query_buf[0..qlen], 1, &request_buf);
+    if (request.len == 0) {
+        noteWorkerOutcome(.failed);
+        return;
+    }
+    const buf = alloc.alloc(u8, 512 * 1024) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
+    defer alloc.free(buf);
+    @import("../core/rate_limit.zig").acquire("vndb", 1.0);
+    const body = @import("../core/http.zig").fetch("https://api.vndb.org/kana/vn", buf, .{
+        .timeout_secs = 8,
+        .method = .POST,
+        .content_type = "application/json",
+        .payload = request,
+    }) orelse {
+        noteWorkerOutcome(.transport_failed);
+        return;
+    };
+    var schema = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    };
+    defer schema.deinit();
+    if (schema.value != .object) {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    }
+    const provider_records = schema.value.object.get("results") orelse {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    };
+    if (provider_records != .array) {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    }
+    const records = alloc.alloc(pure.Vn, 12) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
+    defer alloc.free(records);
+    const count = pure.parseVns(body, records);
+    for (records[0..count]) |record| {
+        var item: ResolvedItem = .{ .source = .vndb };
+        copyField(&item.name, &item.name_len, record.title[0..record.title_len]);
+        copyField(&item.summary, &item.summary_len, record.description[0..record.description_len]);
+        copyField(&item.poster_url, &item.poster_url_len, record.image_url[0..record.image_url_len]);
+        if (record.rating > 0 and record.rating <= 100) item.rating = record.rating / 10;
+        const url = std.fmt.bufPrint(&item.url, "https://vndb.org/{s}", .{record.id[0..record.id_len]}) catch continue;
+        item.url_len = url.len;
+        const detail = std.fmt.bufPrint(&item.detail, "VNDB · {s} · Visual novel details", .{record.released[0..record.released_len]}) catch "VNDB";
+        item.detail_len = detail.len;
+        _ = pushResult(item);
+    }
+}
+
+fn catalogString(value: std.json.Value, key: []const u8) []const u8 {
+    if (value != .object) return "";
+    const field = value.object.get(key) orelse return "";
+    if (field == .string) return field.string;
+    if (field == .array and field.array.items.len > 0 and field.array.items[0] == .string)
+        return field.array.items[0].string;
+    return "";
+}
+
+fn resolveWikiNovels(query_buf: [256]u8, qlen: usize) void {
+    defer finishWorker(&status_novels, .done);
+    const pure = @import("novels_pure.zig");
+    var url_buf: [1400]u8 = undefined;
+    const url = pure.buildSearchUrl(&url_buf, query_buf[0..qlen], 12, 0) orelse {
+        noteWorkerOutcome(.failed);
+        return;
+    };
+    const buf = alloc.alloc(u8, 256 * 1024) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
+    defer alloc.free(buf);
+    @import("../core/rate_limit.zig").acquire("wikisource", 2.0);
+    const body = @import("../core/http.zig").fetch(url, buf, .{ .timeout_secs = 8 }) orelse {
+        noteWorkerOutcome(.transport_failed);
+        return;
+    };
+    var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    };
+    defer parsed.deinit();
+    if (parsed.value != .object) {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    }
+    const query = parsed.value.object.get("query") orelse {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    };
+    if (query != .object) {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    }
+    const records = query.object.get("search") orelse {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    };
+    if (records != .array) {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    }
+    for (records.array.items) |record| {
+        const title = catalogString(record, "title");
+        if (title.len == 0 or title.len > 256) continue;
+        var item: ResolvedItem = .{ .source = .novels };
+        copyField(&item.name, &item.name_len, title);
+        item.summary_len = pure.htmlToText(catalogString(record, "snippet"), &item.summary);
+        item.url_len = pure.formatDeepLink(&item.url, "wikisource", "", title).len;
+        copyField(&item.detail, &item.detail_len, "Wikisource · Read work");
+        if (item.url_len > 0) _ = pushResult(item);
+    }
+}
+
+fn resolveArchiveNovels(query_buf: [256]u8, qlen: usize) void {
+    defer finishWorker(&status_novel_archive, .done);
+    const pure = @import("novels_pure.zig");
+    var raw_buf: [640]u8 = undefined;
+    const query = std.fmt.bufPrint(&raw_buf, "title:({s}) AND mediatype:(texts) AND language:(eng) AND format:(DjVuTXT)", .{query_buf[0..qlen]}) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
+    var enc_buf: [2000]u8 = undefined;
+    const encoded = @import("../core/http.zig").urlEncode(query, &enc_buf);
+    var url_buf: [2400]u8 = undefined;
+    const url = std.fmt.bufPrint(&url_buf, "https://archive.org/advancedsearch.php?q={s}&fl[]=identifier&fl[]=title&fl[]=creator&fl[]=description&rows=12&page=1&output=json", .{encoded}) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
+    const buf = alloc.alloc(u8, 512 * 1024) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
+    defer alloc.free(buf);
+    @import("../core/rate_limit.zig").acquire("archive", 1.0);
+    const body = @import("../core/http.zig").fetch(url, buf, .{ .timeout_secs = 8 }) orelse {
+        noteWorkerOutcome(.transport_failed);
+        return;
+    };
+    var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    };
+    defer parsed.deinit();
+    if (parsed.value != .object) {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    }
+    const response = parsed.value.object.get("response") orelse {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    };
+    if (response != .object) {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    }
+    const records = response.object.get("docs") orelse {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    };
+    if (records != .array) {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    }
+    for (records.array.items) |record| {
+        const id = catalogString(record, "identifier");
+        const title = catalogString(record, "title");
+        if (id.len == 0 or id.len > 512 or title.len == 0 or title.len > 256) continue;
+        var item: ResolvedItem = .{ .source = .novels };
+        copyField(&item.name, &item.name_len, title);
+        item.summary_len = pure.htmlToText(catalogString(record, "description"), &item.summary);
+        item.url_len = pure.formatDeepLink(&item.url, "internet_archive", id, title).len;
+        var id_buf: [1536]u8 = undefined;
+        const encoded_id = @import("../core/http.zig").urlEncode(id, &id_buf);
+        const cover = std.fmt.bufPrint(&item.poster_url, "https://archive.org/services/img/{s}", .{encoded_id}) catch "";
+        item.poster_url_len = cover.len;
+        const author = catalogString(record, "creator");
+        var detail_buf: [128]u8 = undefined;
+        const detail = if (author.len > 0) std.fmt.bufPrint(&detail_buf, "Internet Archive · {s}", .{author}) catch "Internet Archive" else "Internet Archive · Read work";
+        copyField(&item.detail, &item.detail_len, detail);
+        if (item.url_len > 0) _ = pushResult(item);
+    }
+}
+
+fn resolveJellyfin(query_buf: [256]u8, qlen: usize) void {
+    defer finishWorker(&status_jf, .done);
+    const connection = @import("jellyfin.zig").connectionSnapshot();
+    if (!connection.connected or connection.server_len == 0 or connection.user_id_len == 0) {
+        noteWorkerOutcome(.unavailable);
+        return;
+    }
+    var enc_buf: [768]u8 = undefined;
+    const encoded = @import("../core/http.zig").urlEncode(query_buf[0..qlen], &enc_buf);
+    var url_buf: [1200]u8 = undefined;
+    const url = std.fmt.bufPrint(&url_buf, "{s}/Users/{s}/Items?searchTerm={s}&Limit=10&Recursive=true&IncludeItemTypes=Movie,Series,Episode,Audio&Fields=Overview,UserData", .{
+        std.mem.trimEnd(u8, connection.server[0..connection.server_len], "/"),
+        connection.user_id[0..connection.user_id_len],
+        encoded,
     }) catch {
         noteWorkerOutcome(.failed);
         return;
     };
-
-    var buf: [64 * 1024]u8 = undefined;
+    const headers = [_]std.http.Header{.{ .name = "X-Emby-Token", .value = connection.token[0..connection.token_len] }};
+    const buf = alloc.alloc(u8, 256 * 1024) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
+    defer alloc.free(buf);
     @import("../core/rate_limit.zig").acquire("jellyfin", 5.0);
-    const body = @import("../core/http.zig").fetch(url, &buf, .{ .timeout_secs = 5 }) orelse {
+    const body = @import("../core/http.zig").fetch(url, buf, .{ .timeout_secs = 5, .extra_headers = &headers }) orelse {
         noteWorkerOutcome(.transport_failed);
         return;
     };
-    const n = body.len;
-
-    if (n < 10) {
+    var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    };
+    defer parsed.deinit();
+    if (parsed.value != .object) {
         noteWorkerOutcome(.parse_failed);
         return;
     }
-
-    // Parse items
-    var pos: usize = 0;
-    while (pos < n) {
-        const id_key = "\"Id\":\"";
-        const next = std.mem.indexOf(u8, buf[pos..], id_key) orelse break;
-        const abs = pos + next;
-
-        // Find object boundaries
-        const obj_end = findObjEnd(buf[0..n], abs);
-        const obj = buf[abs..obj_end];
-
-        var item = std.mem.zeroes(ResolvedItem);
-        item.source = .jellyfin;
-
-        if (extractStr(obj, "\"Id\":\"")) |id| {
-            const ilen = @min(id.len, 63);
-            @memcpy(item.jf_item_id[0..ilen], id[0..ilen]);
-            item.jf_item_id_len = ilen;
-            @memcpy(item.url[0..ilen], id[0..ilen]);
-            item.url_len = ilen;
+    const entries = parsed.value.object.get("Items") orelse {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    };
+    if (entries != .array) {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    }
+    const Field = struct {
+        fn string(value: std.json.Value, key: []const u8) []const u8 {
+            if (value != .object) return "";
+            const field = value.object.get(key) orelse return "";
+            return if (field == .string) field.string else "";
         }
-        if (extractStr(obj, "\"Name\":\"")) |name| {
-            const nlen = @min(name.len, 255);
-            @memcpy(item.name[0..nlen], name[0..nlen]);
-            item.name_len = nlen;
+        fn number(value: std.json.Value, key: []const u8) f32 {
+            if (value != .object) return 0;
+            const field = value.object.get(key) orelse return 0;
+            return switch (field) {
+                .float => @floatCast(field.float),
+                .integer => @floatFromInt(field.integer),
+                else => 0,
+            };
         }
-        if (extractStr(obj, "\"Type\":\"")) |mt| {
-            const dstr = std.fmt.bufPrint(&item.detail, "Jellyfin · {s}", .{mt}) catch "";
-            item.detail_len = dstr.len;
-        } else {
-            const dstr = "Jellyfin · Local";
-            @memcpy(item.detail[0..dstr.len], dstr);
-            item.detail_len = dstr.len;
+    };
+    for (entries.array.items) |entry| {
+        const id = Field.string(entry, "Id");
+        const name = Field.string(entry, "Name");
+        const kind = Field.string(entry, "Type");
+        if (id.len == 0 or name.len == 0) continue;
+        var item: ResolvedItem = .{ .source = .jellyfin };
+        copyField(&item.jf_item_id, &item.jf_item_id_len, id);
+        copyField(&item.url, &item.url_len, id);
+        copyField(&item.name, &item.name_len, name);
+        copyField(&item.summary, &item.summary_len, Field.string(entry, "Overview"));
+        const rating = Field.number(entry, "CommunityRating");
+        if (rating > 0 and rating <= 10) item.rating = rating;
+        item.duration_secs = Field.number(entry, "RunTimeTicks") / 10_000_000;
+        if (entry == .object) {
+            if (entry.object.get("UserData")) |user_data|
+                item.resume_position_secs = Field.number(user_data, "PlaybackPositionTicks") / 10_000_000;
         }
-
-        if (item.name_len > 0) _ = pushResult(item);
-        pos = obj_end;
+        const detail = std.fmt.bufPrint(&item.detail, "Jellyfin · {s}", .{kind}) catch "Jellyfin";
+        item.detail_len = detail.len;
+        _ = pushResult(item);
     }
 }
 
@@ -1558,9 +1964,10 @@ fn resolvePlex(query_buf: [256]u8, qlen: usize) void {
     }
 
     var found: [20]plex.SearchItem = [_]plex.SearchItem{.{}} ** 20;
-    const count = plex.searchInto(query_buf[0..qlen], &found);
+    const response = plex.searchIntoResult(query_buf[0..qlen], &found);
+    const count = response.count;
     if (count == 0) {
-        noteWorkerOutcome(.no_results);
+        noteWorkerOutcome(response.status);
         return;
     }
     for (found[0..count]) |entry| {
@@ -1578,8 +1985,12 @@ fn resolvePlex(query_buf: [256]u8, qlen: usize) void {
 fn resolveInstalledPlugins(query_buf: [256]u8, qlen: usize) void {
     defer finishWorker(&status_plugins, .done);
     const plugins = @import("plugins.zig");
-    var found: [24]plugins.UniversalResult = [_]plugins.UniversalResult{.{}} ** 24;
-    const count = plugins.searchInstalledInto(query_buf[0..qlen], &found);
+    const found = alloc.alloc(plugins.UniversalResult, 24) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
+    defer alloc.free(found);
+    const count = plugins.searchInstalledInto(query_buf[0..qlen], found);
     if (count == 0) {
         noteWorkerOutcome(.no_results);
         return;
@@ -1587,6 +1998,9 @@ fn resolveInstalledPlugins(query_buf: [256]u8, qlen: usize) void {
     for (found[0..count]) |entry| {
         var item = ResolvedItem{ .source = .plugin, .plugin_episodes = entry.row.episodes };
         copyField(&item.name, &item.name_len, entry.row.title[0..entry.row.title_len]);
+        copyField(&item.poster_url, &item.poster_url_len, entry.row.poster_url[0..entry.row.poster_url_len]);
+        copyField(&item.summary, &item.summary_len, entry.row.overview[0..entry.row.overview_len]);
+        // Plugin scores are adapter-defined; do not pretend they share /10 units.
         const media_type = entry.row.media_type[0..entry.row.media_type_len];
         const year = entry.row.year[0..entry.row.year_len];
         const detail = if (year.len > 0)
@@ -2748,7 +3162,7 @@ fn resolveYouTube(query_buf: [256]u8, qlen: usize) void {
 
     const query = query_buf[0..qlen];
     var search_arg: [300]u8 = undefined;
-    const sa = std.fmt.bufPrint(&search_arg, "ytsearch5:{s}", .{query}) catch {
+    const sa = std.fmt.bufPrint(&search_arg, "ytsearch10:{s}", .{query}) catch {
         noteWorkerOutcome(.failed);
         return;
     };
@@ -2757,8 +3171,12 @@ fn resolveYouTube(query_buf: [256]u8, qlen: usize) void {
     const argv_policy = @import("ytdlp_argv_pure.zig");
     var argv_storage: argv_policy.Argv = undefined;
     const argv = argv_policy.build(ytdlp_bin, sa, .search_json, "", &argv_storage);
-    var buf: [64 * 1024]u8 = undefined;
-    const execution = @import("../core/bounded_process.zig").run(argv, &buf, .{ .timeout_ms = 20_000 });
+    const buf = alloc.alloc(u8, 256 * 1024) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
+    defer alloc.free(buf);
+    const execution = @import("../core/bounded_process.zig").run(argv, buf, .{ .timeout_ms = 20_000 });
     if (!execution.ok()) {
         noteWorkerOutcome(switch (execution.failure) {
             .spawn => .unavailable,
@@ -2775,40 +3193,61 @@ fn resolveYouTube(query_buf: [256]u8, qlen: usize) void {
         return;
     }
 
-    // Each line is a JSON object with "title", "url", "id"
+    // Structural parsing accepts compact JSON and reordered yt-dlp fields.
     var lines = std.mem.splitScalar(u8, execution.output, '\n');
     var found: usize = 0;
     while (lines.next()) |line| {
-        if (found >= 5 or line.len < 10) continue;
-
-        var item = std.mem.zeroes(ResolvedItem);
-        item.source = .youtube;
-
-        if (extractStr(line, "\"title\": \"")) |title| {
-            // yt-dlp titles carry JSON escapes (’ etc.) — decode them
-            // or the UI shows "You’ve" literally.
-            var unesc_buf: [256]u8 = undefined;
-            const clean = @import("json_pure.zig").jsonUnescape(title, &unesc_buf);
-            const tlen = @min(clean.len, 255);
-            @memcpy(item.name[0..tlen], clean[0..tlen]);
-            item.name_len = tlen;
+        if (found >= 10) break;
+        if (std.mem.trim(u8, line, " \r\t").len == 0) continue;
+        var parsed = std.json.parseFromSlice(std.json.Value, alloc, line, .{}) catch {
+            noteWorkerOutcome(.parse_failed);
+            continue;
+        };
+        defer parsed.deinit();
+        const entry = parsed.value;
+        if (entry != .object) continue;
+        var item: ResolvedItem = .{ .source = .youtube };
+        copyField(&item.name, &item.name_len, catalogString(entry, "title"));
+        copyField(&item.summary, &item.summary_len, catalogString(entry, "description"));
+        const id = catalogString(entry, "id");
+        // A flat extractor may return an ID as `url`; canonical watch URLs
+        // remain stable, while expiring media URLs do not belong in search.
+        if (id.len > 0 and id.len <= 64) {
+            const address: []const u8 = std.fmt.bufPrint(&item.url, "https://www.youtube.com/watch?v={s}", .{id}) catch "";
+            item.url_len = address.len;
+        } else {
+            const address = catalogString(entry, "webpage_url");
+            if (address.len <= item.url.len) copyField(&item.url, &item.url_len, address);
         }
-        if (extractStr(line, "\"url\": \"")) |url| {
-            const ulen = @min(url.len, 2047);
-            @memcpy(item.url[0..ulen], url[0..ulen]);
-            item.url_len = ulen;
-        } else if (extractStr(line, "\"id\": \"")) |vid_id| {
-            var yt_url: [128]u8 = undefined;
-            const yt = std.fmt.bufPrint(&yt_url, "https://www.youtube.com/watch?v={s}", .{vid_id}) catch "";
-            const ulen = @min(yt.len, 2047);
-            @memcpy(item.url[0..ulen], yt[0..ulen]);
-            item.url_len = ulen;
+        const thumbnail = catalogString(entry, "thumbnail");
+        if (thumbnail.len > 0 and thumbnail.len <= item.poster_url.len) {
+            copyField(&item.poster_url, &item.poster_url_len, thumbnail);
+        } else if (entry.object.get("thumbnails")) |images| {
+            if (images == .array) {
+                for (images.array.items) |image| {
+                    const address = catalogString(image, "url");
+                    if (address.len > 0 and address.len <= item.poster_url.len)
+                        copyField(&item.poster_url, &item.poster_url_len, address);
+                }
+            }
         }
-
+        if (entry.object.get("duration")) |duration| {
+            item.duration_secs = switch (duration) {
+                .float => @floatCast(@max(0, duration.float)),
+                .integer => @floatFromInt(@max(0, duration.integer)),
+                else => 0,
+            };
+        }
+        const channel = catalogString(entry, "channel");
+        const uploader = catalogString(entry, "uploader");
+        const author = if (channel.len > 0) channel else uploader;
+        var detail_buf: [128]u8 = undefined;
+        const detail = if (author.len > 0)
+            std.fmt.bufPrint(&detail_buf, "YouTube · {s}", .{author}) catch "YouTube"
+        else
+            "YouTube";
+        copyField(&item.detail, &item.detail_len, detail);
         if (item.name_len > 0 and item.url_len > 0) {
-            const detail = "YouTube";
-            @memcpy(item.detail[0..detail.len], detail);
-            item.detail_len = detail.len;
             _ = pushResult(item);
             found += 1;
         }
@@ -2898,23 +3337,28 @@ fn resolveMusic(query_buf: [256]u8, qlen: usize) void {
         return;
     };
 
-    var it = jp.SongIter{ .json = body };
+    var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    };
+    defer parsed.deinit();
+    const rows = @import("music_subsonic_pure.zig").pageRows(parsed.value, .jiosaavn) orelse {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    };
     var found: usize = 0;
-    while (found < AUDIO_MAX) {
-        const obj = it.next() orelse break;
-        var t: [200]u8 = undefined;
-        var a: [160]u8 = undefined;
-        var u: [512]u8 = undefined;
-        var im: [300]u8 = undefined;
-        const song = jp.parseSong(obj, &t, &a, &u, &im) orelse continue;
+    for (rows) |obj| {
+        if (found >= AUDIO_MAX) break;
+        const song = jp.parseSongValue(obj) orelse continue;
 
         var item = std.mem.zeroes(ResolvedItem);
         item.source = .music;
-        copyField(&item.name, &item.name_len, song.title);
-        copyField(&item.url, &item.url_len, song.perma_url);
+        copyField(&item.name, &item.name_len, song.title[0..song.title_len]);
+        copyField(&item.url, &item.url_len, song.play_url[0..song.play_url_len]);
+        copyField(&item.poster_url, &item.poster_url_len, song.cover[0..song.cover_len]);
         var d: [128]u8 = undefined;
-        const detail = if (song.artist.len > 0)
-            std.fmt.bufPrint(&d, "Music - {s}", .{song.artist}) catch "Music"
+        const detail = if (song.artist_len > 0)
+            std.fmt.bufPrint(&d, "Music - {s}", .{song.artist[0..song.artist_len]}) catch "Music"
         else
             "Music";
         copyField(&item.detail, &item.detail_len, detail);
@@ -2949,7 +3393,11 @@ fn resolveRadio(query_buf: [256]u8, qlen: usize) void {
 
     // Station is ~1.3KB; AUDIO_MAX of them is well under the stack budget.
     var stations: [AUDIO_MAX]rp.Station = undefined;
-    const n = rp.parseStations(body, &stations);
+    const page = rp.parsePage(alloc, body, &stations) orelse {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    };
+    const n = page.count;
     var i: usize = 0;
     while (i < n) : (i += 1) {
         const s = stations[i];
@@ -2965,6 +3413,8 @@ fn resolveRadio(query_buf: [256]u8, qlen: usize) void {
         item.source = .radio;
         copyField(&item.name, &item.name_len, s.name[0..s.name_len]);
         copyField(&item.url, &item.url_len, stream);
+        copyField(&item.poster_url, &item.poster_url_len, s.favicon[0..s.favicon_len]);
+        copyField(&item.summary, &item.summary_len, s.tags[0..s.tags_len]);
         var d: [128]u8 = undefined;
         const detail = if (s.country_len > 0)
             std.fmt.bufPrint(&d, "Radio - {s}", .{s.country[0..s.country_len]}) catch "Radio"
@@ -3003,12 +3453,32 @@ fn resolvePodcasts(query_buf: [256]u8, qlen: usize) void {
         return;
     };
 
+    var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    };
+    defer parsed.deinit();
+    if (parsed.value != .object) {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    }
+    const entries = parsed.value.object.get("results") orelse {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    };
+    if (entries != .array) {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    }
     const shows = alloc.alloc(pp.Podcast, AUDIO_MAX) catch {
         noteWorkerOutcome(.failed);
         return;
     };
     defer alloc.free(shows);
-    const n = pp.parseItunes(body, shows);
+    const n = pp.parseItunesValue(parsed.value, shows) orelse {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    };
     var i: usize = 0;
     while (i < n) : (i += 1) {
         const s = shows[i];
@@ -3016,6 +3486,7 @@ fn resolvePodcasts(query_buf: [256]u8, qlen: usize) void {
         var item = std.mem.zeroes(ResolvedItem);
         item.source = .podcast;
         copyField(&item.name, &item.name_len, s.name[0..s.name_len]);
+        copyField(&item.poster_url, &item.poster_url_len, s.artwork[0..s.artwork_len]);
         // The feed URL is the identity — playItem opens the Podcasts tab on it.
         copyField(&item.url, &item.url_len, s.feed_url[0..s.feed_url_len]);
         var d: [128]u8 = undefined;
@@ -3474,6 +3945,19 @@ pub fn playResolvedItem(item: *const ResolvedItem) void {
             } else {
                 @import("search.zig").submitQuery(item.name[0..item.name_len]);
             }
+        },
+        .novels => @import("novels.zig").openDeepLink(item.url[0..item.url_len]),
+        .audiobooks => {
+            const prefix = "abs://item/";
+            const url = item.url[0..item.url_len];
+            if (std.mem.startsWith(u8, url, prefix))
+                @import("audiobookshelf.zig").playBookById(url[prefix.len..], item.name[0..item.name_len], item.author[0..item.author_len]);
+        },
+        .vndb => {
+            const prefix = "https://vndb.org/";
+            const url = item.url[0..item.url_len];
+            if (std.mem.startsWith(u8, url, prefix))
+                @import("vndb.zig").openCatalogIdentity(url[prefix.len..]);
         },
         .podcast => {
             // No open-by-feed entry point exists yet, so hand the show title to

@@ -19,16 +19,8 @@ const loadEpisodes = podcasts.loadEpisodes;
 const playEpisode = podcasts.playEpisode;
 const closeEpisodes = podcasts.closeEpisodes;
 
-const PodPoster = struct {
-    pixels: ?[]u8 = null,
-    tex: ?dvui.Texture = null,
-    w: u32 = 0,
-    h: u32 = 0,
-    fetching: bool = false,
-    attempted: bool = false,
-    failed: bool = false,
-    url_hash: u64 = 0,
-};
+const PodPoster = components.CoverSlot;
+
 var pod_posters: [50]PodPoster = [_]PodPoster{.{}} ** 50;
 
 pub fn renderContent() void {
@@ -104,49 +96,7 @@ const CARD_FOOTER_H: f32 = 46; // title + publisher lines under the cover
 /// daemon. Falls back to the podcast glyph while loading, when the show has no
 /// artwork URL, or when the image can't be decoded. UI-thread only.
 fn renderCover(i: usize, p: *const pure.Podcast) void {
-    const slot = &pod_posters[i];
-    const art = p.artwork[0..p.artwork_len];
-
-    if (art.len > 0) {
-        // Pin the slot to whatever show is at index i now — a re-search (or the
-        // popular chart landing) can replace results[], so a URL-hash change
-        // means "different show here": free the stale texture/pixels and
-        // refetch. Only when not mid-fetch, so we never spawn a second worker
-        // onto the same slot.
-        const h = std.hash.Fnv1a_64.hash(art);
-        if (slot.url_hash != h and !slot.fetching) {
-            poster.deinitPoster(&slot.pixels, &slot.tex);
-            slot.w = 0;
-            slot.h = 0;
-            slot.attempted = false;
-            slot.failed = false;
-            slot.url_hash = h;
-        }
-        _ = poster.uploadIfReady(&slot.pixels, slot.w, slot.h, &slot.tex);
-        if (slot.fetching) slot.attempted = true else if (slot.attempted and slot.pixels == null and slot.tex == null) slot.failed = true;
-        if (!slot.failed and slot.tex == null and !slot.fetching and slot.pixels == null) {
-            poster.fetchAsync(art, &slot.pixels, &slot.w, &slot.h, &slot.fetching);
-            if (slot.fetching) slot.attempted = true;
-        }
-    }
-
-    if (slot.tex) |*tex| {
-        _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
-            .id_extra = i + 1000,
-            .expand = .both,
-            .corner_radius = dvui.Rect.all(8),
-        });
-    } else if (art.len > 0 and !slot.failed) {
-        components.coverSkeleton(@src(), i + 1000, 8);
-    } else {
-        _ = dvui.icon(@src(), "", icons.tvg.lucide.podcast, .{}, .{
-            .id_extra = i + 1000,
-            .color_text = theme.colors.text_tertiary,
-            .gravity_x = 0.5,
-            .gravity_y = 0.5,
-            .expand = .both,
-        });
-    }
+    components.coverArt(@src(), i + 1000, &pod_posters[i], p.artwork[0..p.artwork_len], icons.tvg.lucide.podcast, 8);
 }
 
 /// One show card: square cover (clickable) + title + publisher subtitle.

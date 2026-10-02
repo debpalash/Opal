@@ -145,8 +145,47 @@ fn setStatus(comptime fmt: []const u8, args: anytype) void {
     const s = std.fmt.bufPrint(&status_msg, fmt, args) catch status_msg[0..0];
     status_msg_len = s.len;
 }
+var connection_mutex: @import("../core/sync.zig").Mutex = .{};
+var connection_epoch: u64 = 1;
+
+pub const ConnectionSnapshot = struct {
+    account_token: [128]u8,
+    account_token_len: usize,
+    server: [256]u8,
+    server_len: usize,
+    server_token: [128]u8,
+    server_token_len: usize,
+    name: [128]u8,
+    name_len: usize,
+    epoch: u64,
+
+    fn accessToken(self: *const @This()) []const u8 {
+        return if (self.server_token_len > 0) self.server_token[0..self.server_token_len] else self.account_token[0..self.account_token_len];
+    }
+};
+
+pub fn connectionSnapshot() ConnectionSnapshot {
+    connection_mutex.lock();
+    defer connection_mutex.unlock();
+    var snap: ConnectionSnapshot = .{
+        .account_token = token_buf,
+        .account_token_len = @min(token_len, token_buf.len),
+        .server = server_uri,
+        .server_len = @min(server_uri_len, server_uri.len),
+        .server_token = server_token,
+        .server_token_len = @min(server_token_len, server_token.len),
+        .name = undefined,
+        .name_len = @min(server_name_len, server_name.len),
+        .epoch = connection_epoch,
+    };
+    @memset(&snap.name, 0);
+    @memcpy(snap.name[0..snap.name_len], server_name[0..snap.name_len]);
+    return snap;
+}
+
 pub fn isConnected() bool {
-    return token_len > 0;
+    const connection = connectionSnapshot();
+    return connection.account_token_len > 0;
 }
 fn token() []const u8 {
     return token_buf[0..token_len];
@@ -161,14 +200,15 @@ fn cfgPath(buf: []u8) []const u8 {
     return std.fmt.bufPrint(buf, "{s}/plex.json", .{paths.configDir(&c)}) catch "";
 }
 fn save() void {
+    const connection = connectionSnapshot();
     var protected_token: [512]u8 = undefined;
     defer @memset(&protected_token, 0);
     var protected_server_token: [512]u8 = undefined;
     defer @memset(&protected_server_token, 0);
-    const sealed_token = secret_store.seal(token(), &protected_token) orelse return;
-    const sealed_server_token = secret_store.seal(serverTok(), &protected_server_token) orelse return;
+    const sealed_token = secret_store.seal(connection.account_token[0..connection.account_token_len], &protected_token) orelse return;
+    const sealed_server_token = secret_store.seal(connection.accessToken(), &protected_server_token) orelse return;
     var b: [3072]u8 = undefined;
-    const body = std.fmt.bufPrint(&b, "{{\"token\":\"{s}\",\"server\":\"{s}\",\"server_token\":\"{s}\",\"name\":\"{s}\"}}", .{ sealed_token, server_uri[0..server_uri_len], sealed_server_token, server_name[0..server_name_len] }) catch return;
+    const body = std.fmt.bufPrint(&b, "{{\"token\":\"{s}\",\"server\":\"{s}\",\"server_token\":\"{s}\",\"name\":\"{s}\"}}", .{ sealed_token, connection.server[0..connection.server_len], sealed_server_token, connection.name[0..connection.name_len] }) catch return;
     var pb: [600]u8 = undefined;
     @import("../core/secret_file.zig").write(cfgPath(&pb), body) catch {};
 }
@@ -197,18 +237,26 @@ pub fn init() void {
     var parsed = std.json.parseFromSlice(Json, alloc, body, .{}) catch return;
     defer parsed.deinit();
     if (parsed.value != .object) return;
+    connection_mutex.lock();
     const legacy_token = loadSecretStr(parsed.value, "token", &token_buf, &token_len);
     loadStr(parsed.value, "server", &server_uri, &server_uri_len);
     const legacy_server_token = loadSecretStr(parsed.value, "server_token", &server_token, &server_token_len);
     loadStr(parsed.value, "name", &server_name, &server_name_len);
     if (token_len > 0) conn_state.store(.connected, .release);
+    connection_epoch +%= 1;
+    connection_mutex.unlock();
     if (@import("builtin").os.tag == .windows and (legacy_token or legacy_server_token)) save();
 }
 pub fn disconnect() void {
     @import("server_progress.zig").clearPlexConnection();
+    connection_mutex.lock();
+    @memset(&token_buf, 0);
+    @memset(&server_token, 0);
     token_len = 0;
     server_uri_len = 0;
     server_token_len = 0;
+    connection_epoch +%= 1;
+    connection_mutex.unlock();
     section_count = 0;
     item_count = 0;
     nav_depth = 0;
@@ -246,11 +294,24 @@ fn httpGet(url: []const u8, post: bool, tok: []const u8, buf: []u8, status_out: 
 }
 
 fn expireAuthSession() void {
-    @import("server_progress.zig").clearPlexConnection();
+    expireAuthSessionFor(null);
+}
+
+fn expireAuthSessionFor(expected_epoch: ?u64) void {
+    connection_mutex.lock();
+    if (expected_epoch) |epoch| {
+        if (connection_epoch != epoch) {
+            connection_mutex.unlock();
+            return;
+        }
+    }
     @memset(&token_buf, 0);
     token_len = 0;
     @memset(&server_token, 0);
     server_token_len = 0;
+    connection_epoch +%= 1;
+    connection_mutex.unlock();
+    @import("server_progress.zig").clearPlexConnection();
     section_count = 0;
     item_count = 0;
     current_start = 0;
@@ -274,16 +335,17 @@ pub fn connect() void {
     if (conn_state.load(.acquire) == .awaiting) return;
     conn_state.store(.awaiting, .release);
     setStatus("Requesting PIN…", .{});
-    @import("../core/workers.zig").release(@import("../core/workers.zig").spawnLegacy(pinWorker, .{}) catch {
+    @import("../core/workers.zig").release(@import("../core/workers.zig").spawnLegacy(pinWorker, .{connectionSnapshot().epoch}) catch {
         conn_state.store(.err, .release);
         return;
     });
 }
 
-fn pinWorker() void {
+fn pinWorker(start_epoch: u64) void {
     var buf: [16384]u8 = undefined;
     // Plain pin → a short 4-char code usable at plex.tv/link (strong pins are long).
     const n = httpGet("https://plex.tv/api/v2/pins", true, "", &buf, null);
+    if (connectionSnapshot().epoch != start_epoch) return;
     if (n == 0) {
         conn_state.store(.err, .release);
         setStatus("Network error", .{});
@@ -312,13 +374,21 @@ fn pinWorker() void {
     while (waited < 120) : (waited += 3) {
         io.sleep(3 * std.time.ns_per_s);
         const m = httpGet(purl, false, "", &buf, null);
+        if (connectionSnapshot().epoch != start_epoch) return;
         if (m == 0) continue;
         var pp = std.json.parseFromSlice(Json, alloc, buf[0..m], .{}) catch continue;
         defer pp.deinit();
         if (jstr(pp.value, "authToken")) |at| {
+            connection_mutex.lock();
+            if (connection_epoch != start_epoch) {
+                connection_mutex.unlock();
+                return;
+            }
             const tl = @min(at.len, token_buf.len);
             @memcpy(token_buf[0..tl], at[0..tl]);
             token_len = tl;
+            connection_epoch +%= 1;
+            connection_mutex.unlock();
             setStatus("Linked — finding servers…", .{});
             discoverServers();
             return;
@@ -329,12 +399,15 @@ fn pinWorker() void {
 }
 
 fn discoverServers() void {
-    var buf: [262144]u8 = undefined;
+    const connection = connectionSnapshot();
+    const buf = alloc.alloc(u8, 256 * 1024) catch return;
+    defer alloc.free(buf);
     var status: ?std.http.Status = null;
-    const n = httpGet("https://plex.tv/api/v2/resources?includeHttps=1&includeRelay=1", false, token(), &buf, &status);
+    const n = httpGet("https://plex.tv/api/v2/resources?includeHttps=1&includeRelay=1", false, connection.account_token[0..connection.account_token_len], buf, &status);
+    if (connectionSnapshot().epoch != connection.epoch) return;
     if (n == 0) {
         if (status) |s| if (plex_pure.authRejected(@intFromEnum(s))) {
-            expireAuthSession();
+            expireAuthSessionFor(connection.epoch);
             return;
         };
         conn_state.store(.err, .release);
@@ -370,9 +443,16 @@ fn discoverServers() void {
             if (chosen == null) chosen = uri;
         }
         const uri = chosen orelse continue;
+        connection_mutex.lock();
+        if (connection_epoch != connection.epoch) {
+            connection_mutex.unlock();
+            return;
+        }
         const ul = @min(uri.len, server_uri.len);
         @memcpy(server_uri[0..ul], uri[0..ul]);
         server_uri_len = ul;
+        @memset(&server_token, 0);
+        server_token_len = 0;
         if (jstr(res, "accessToken")) |st| {
             const sl = @min(st.len, server_token.len);
             @memcpy(server_token[0..sl], st[0..sl]);
@@ -383,6 +463,8 @@ fn discoverServers() void {
             @memcpy(server_name[0..nl], nm[0..nl]);
             server_name_len = nl;
         }
+        connection_epoch +%= 1;
+        connection_mutex.unlock();
         conn_state.store(.connected, .release);
         setStatus("Connected: {s}", .{server_name[0..server_name_len]});
         save();
@@ -690,27 +772,39 @@ fn fetchWindow(request: BrowseRequest, start: usize, gen: u64) void {
 /// Search the connected Plex server without touching the Plex tab's live
 /// section/items buffers. This makes the omnibox a real cross-library search
 /// while keeping worker ownership isolated from browse pagination.
-pub fn searchInto(query: []const u8, out: []SearchItem) usize {
-    if (query.len == 0 or out.len == 0 or !isConnected() or server_uri_len == 0 or serverTok().len == 0) return 0;
+pub const SearchResult = struct {
+    count: usize = 0,
+    status: @import("resolver_lifecycle_pure.zig").SourceStatus = .no_results,
+};
 
+pub fn searchInto(query: []const u8, out: []SearchItem) usize {
+    return searchIntoResult(query, out).count;
+}
+
+pub fn searchIntoResult(query: []const u8, out: []SearchItem) SearchResult {
+    const connection = connectionSnapshot();
+    if (query.len == 0 or out.len == 0) return .{};
+    if (connection.server_len == 0 or connection.accessToken().len == 0) return .{ .status = .unavailable };
     var enc_buf: [768]u8 = undefined;
     const encoded = @import("../core/http.zig").urlEncode(query, &enc_buf);
     var url_buf: [1200]u8 = undefined;
     const url = std.fmt.bufPrint(&url_buf, "{s}/search?query={s}&limit={d}", .{
-        server_uri[0..server_uri_len], encoded, @min(out.len, 24),
-    }) catch return 0;
-
-    const body = alloc.alloc(u8, 512 * 1024) catch return 0;
+        connection.server[0..connection.server_len], encoded, @min(out.len, 24),
+    }) catch return .{ .status = .failed };
+    const body = alloc.alloc(u8, 512 * 1024) catch return .{ .status = .failed };
     defer alloc.free(body);
     var status: ?std.http.Status = null;
     @import("../core/rate_limit.zig").acquire("plex", 5.0);
-    const n = httpGet(url, false, serverTok(), body, &status);
+    const n = httpGet(url, false, connection.accessToken(), body, &status);
     if (n == 0) {
-        if (status) |s| if (plex_pure.authRejected(@intFromEnum(s))) expireAuthSession();
-        return 0;
+        if (status) |code| if (plex_pure.authRejected(@intFromEnum(code))) {
+            expireAuthSessionFor(connection.epoch);
+            return .{ .status = .unavailable };
+        };
+        return .{ .status = .transport_failed };
     }
-
-    return plex_pure.parseSearchItems(alloc, body[0..n], out) orelse 0;
+    const count = plex_pure.parseSearchItems(alloc, body[0..n], out) orelse return .{ .status = .parse_failed };
+    return .{ .count = count, .status = if (count > 0) .done else .no_results };
 }
 
 /// Infinite-scroll appender: fetch the NEXT Container-Start/Size window for the

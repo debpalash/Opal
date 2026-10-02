@@ -7,8 +7,9 @@ const std = @import("std");
 /// (the same release from 5 trackers differs only in the appended `&tr=` list),
 /// so we key on `btih:<hash>`; otherwise the full URL. Returns a slice into `url`.
 pub fn dedupKey(url: []const u8) []const u8 {
-    if (std.mem.indexOf(u8, url, "btih:")) |at| {
-        const start = at + "btih:".len;
+    if (!std.mem.startsWith(u8, url, "magnet:?")) return url;
+    if (std.mem.indexOf(u8, url, "xt=urn:btih:")) |at| {
+        const start = at + "xt=urn:btih:".len;
         var end = start;
         while (end < url.len and url[end] != '&' and url[end] != '.' and url[end] != '/') end += 1;
         if (end > start) return url[start..end];
@@ -16,11 +17,15 @@ pub fn dedupKey(url: []const u8) []const u8 {
     return url;
 }
 
-/// Two result URLs point at the same item (case-insensitive key compare).
+/// Magnet hashes ignore case; URL paths and query values preserve case.
 pub fn sameItem(a: []const u8, b: []const u8) bool {
+    if (a.len == 0 or b.len == 0) return false;
     const ka = dedupKey(a);
     const kb = dedupKey(b);
     if (ka.len != kb.len) return false;
+    // Whole URLs include case-sensitive paths, signed tokens, and provider IDs.
+    // Only an extracted magnet infohash permits case folding.
+    if (ka.len == a.len or kb.len == b.len) return std.mem.eql(u8, a, b);
     for (ka, kb) |x, y| {
         if (std.ascii.toLower(x) != std.ascii.toLower(y)) return false;
     }
