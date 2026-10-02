@@ -140,3 +140,7 @@ site/node_modules/
 
 # wrangler local state
 .wrangler/
+
+# Linux compatibility build output
+compat-artifacts/
+nfpm

@@ -37,7 +37,48 @@ pub const Episode = struct {
     date_len: usize = 0,
     duration: [16]u8 = std.mem.zeroes([16]u8),
     duration_len: usize = 0,
+    summary: [512]u8 = std.mem.zeroes([512]u8),
+    summary_len: usize = 0,
 };
+
+/// Project decoded Apple rows without relying on key order or JSON spacing.
+/// Invalid envelopes are distinct from a valid search with no matches.
+pub fn parseItunesValue(root: std.json.Value, out: []Podcast) ?usize {
+    if (root != .object) return null;
+    const rows = root.object.get("results") orelse return null;
+    if (rows != .array) return null;
+    var count: usize = 0;
+    for (rows.array.items) |entry| {
+        if (count == out.len) break;
+        if (entry != .object) continue;
+        const feed = valueText(entry, "feedUrl");
+        if (feed.len == 0 or feed.len > 300 or (!std.mem.startsWith(u8, feed, "https://") and !std.mem.startsWith(u8, feed, "http://"))) continue;
+        var title = valueText(entry, "collectionName");
+        if (title.len == 0) title = valueText(entry, "trackName");
+        if (title.len == 0) continue;
+        var row: Podcast = .{};
+        copyValueText(title, &row.name, &row.name_len);
+        copyValueText(feed, &row.feed_url, &row.feed_url_len);
+        var art = valueText(entry, "artworkUrl600");
+        if (art.len == 0) art = valueText(entry, "artworkUrl100");
+        if (art.len <= row.artwork.len) copyValueText(art, &row.artwork, &row.artwork_len);
+        copyValueText(valueText(entry, "artistName"), &row.artist, &row.artist_len);
+        out[count] = row;
+        count += 1;
+    }
+    return count;
+}
+
+fn valueText(value: std.json.Value, key: []const u8) []const u8 {
+    const field = value.object.get(key) orelse return "";
+    return if (field == .string) field.string else "";
+}
+
+fn copyValueText(src: []const u8, out: []u8, len: *usize) void {
+    len.* = @min(src.len, out.len);
+    while (len.* > 0 and !std.unicode.utf8ValidateSlice(src[0..len.*])) len.* -= 1;
+    @memcpy(out[0..len.*], src[0..len.*]);
+}
 
 // ══════════════════════════════════════════════════════════
 // Shared helpers
@@ -326,24 +367,36 @@ pub fn buildLookupUrl(ids_csv: []const u8, dst: []u8) []const u8 {
 /// keeps rows that have both a title and an audio enclosure URL. Returns the
 /// number of episodes written (≤ out.len).
 pub fn parseRssEpisodes(xml: []const u8, out: []Episode) usize {
+    return parseRssEpisodePage(xml, out, 0).count;
+}
+
+pub const EpisodePage = struct { count: usize, total: usize };
+
+/// A bounded window over all playable enclosures in the feed. The cursor counts
+/// usable episodes, so missing enclosures do not create gaps or repeated pages.
+pub fn parseRssEpisodePage(xml: []const u8, out: []Episode, offset: usize) EpisodePage {
     var count: usize = 0;
+    var total: usize = 0;
     var pos: usize = 0;
-    while (pos < xml.len and count < out.len) {
+    while (pos < xml.len) {
         const item_start = std.mem.indexOfPos(u8, xml, pos, "<item") orelse break;
         const item_end = std.mem.indexOfPos(u8, xml, item_start, "</item>") orelse break;
         const block = xml[item_start..item_end];
         pos = item_end + "</item>".len;
 
-        var e = &out[count];
-        e.* = .{};
+        var episode: Episode = .{};
+        const e = &episode;
 
         // Audio enclosure URL is the load-bearing field.
         if (std.mem.indexOf(u8, block, "<enclosure")) |enc_at| {
             const enc_end = std.mem.indexOfScalarPos(u8, block, enc_at, '>') orelse block.len;
             const enc = block[enc_at..@min(enc_end + 1, block.len)];
-            if (xmlAttr(enc, "url=\"")) |u| e.audio_url_len = xmlText(&e.audio_url, u);
+            if (xmlAttr(enc, "url=\"")) |u| {
+                if (u.len > e.audio_url.len) continue;
+                e.audio_url_len = xmlText(&e.audio_url, u);
+            }
         }
-        if (e.audio_url_len == 0) continue;
+        if (!isFeedUrl(e.audio_url[0..e.audio_url_len])) continue;
 
         if (xmlTag(block, "<title>", "</title>")) |t| e.title_len = xmlText(&e.title, t);
         if (e.title_len == 0) continue;
@@ -351,10 +404,40 @@ pub fn parseRssEpisodes(xml: []const u8, out: []Episode) usize {
         if (xmlTag(block, "<pubDate>", "</pubDate>")) |d| e.date_len = xmlText(&e.date, d);
         if (xmlTag(block, "<itunes:duration>", "</itunes:duration>")) |d|
             e.duration_len = xmlText(&e.duration, d);
+        if (xmlTag(block, "<description>", "</description>") orelse xmlTag(block, "<itunes:summary>", "</itunes:summary>")) |description|
+            e.summary_len = plainXmlText(&e.summary, description);
+        if (total >= offset and count < out.len) {
+            out[count] = episode;
+            count += 1;
+        }
+        total += 1;
+    }
+    return .{ .count = count, .total = total };
+}
 
+fn plainXmlText(out: []u8, html: []const u8) usize {
+    var stripped: [1024]u8 = undefined;
+    var count: usize = 0;
+    var inside = false;
+    for (html) |ch| {
+        if (ch == '<') {
+            inside = true;
+            continue;
+        }
+        if (ch == '>') {
+            inside = false;
+            if (count > 0 and count < stripped.len and stripped[count - 1] != ' ') {
+                stripped[count] = ' ';
+                count += 1;
+            }
+            continue;
+        }
+        if (inside) continue;
+        if (count == stripped.len) break;
+        stripped[count] = ch;
         count += 1;
     }
-    return count;
+    return xmlText(out, std.mem.trim(u8, stripped[0..count], " \t\r\n"));
 }
 
 // ══════════════════════════════════════════════════════════

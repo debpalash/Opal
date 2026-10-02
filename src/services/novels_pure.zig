@@ -95,6 +95,20 @@ pub fn buildChapterUrl(out: []u8, page_title: []const u8) ?[]const u8 {
     ) catch null;
 }
 
+/// MediaWiki's continuation cursor counts consumed server rows, including rows
+/// the client filters or deduplicates. Absent continuation means exhausted.
+pub fn searchContinuation(json: []const u8) ?u32 {
+    const continuation = cj.findJsonNode(json, "\"continue\"") orelse return null;
+    const key = std.mem.indexOf(u8, continuation, "\"sroffset\"") orelse return null;
+    const tail = continuation[key + "\"sroffset\"".len ..];
+    const colon = std.mem.indexOfScalar(u8, tail, ':') orelse return null;
+    const number = std.mem.trimStart(u8, tail[colon + 1 ..], " \t\r\n");
+    var end: usize = 0;
+    while (end < number.len and std.ascii.isDigit(number[end])) : (end += 1) {}
+    if (end == 0) return null;
+    return std.fmt.parseInt(u32, number[0..end], 10) catch null;
+}
+
 /// The `query.search[…]` array payload of a search response, or null. Walk it
 /// with `cj.ObjIter`; each object's display title is `titleField`.
 pub fn searchArray(json: []const u8) ?[]const u8 {
@@ -208,10 +222,10 @@ fn decodeEntity(html: []const u8, i: usize, scratch: *[8]u8) ?Decoded {
 /// become a paragraph break in the extracted text.
 fn isParagraphTag(name: []const u8) bool {
     const blocks = [_][]const u8{
-        "p",  "div",    "li",  "ul",      "ol",      "blockquote",
-        "h1", "h2",     "h3",  "h4",      "h5",      "h6",
-        "tr", "table",  "hr",  "section", "article", "dd",
-        "dt", "dl",     "pre", "figure",  "header",  "footer",
+        "p",  "div",   "li",  "ul",      "ol",      "blockquote",
+        "h1", "h2",    "h3",  "h4",      "h5",      "h6",
+        "tr", "table", "hr",  "section", "article", "dd",
+        "dt", "dl",    "pre", "figure",  "header",  "footer",
     };
     for (blocks) |b| if (std.ascii.eqlIgnoreCase(name, b)) return true;
     return false;

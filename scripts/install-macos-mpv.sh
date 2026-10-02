@@ -20,6 +20,8 @@ printf '%s  %s\n' "$MPV_SHA256" "$WORK_DIR/mpv.tar.gz" | shasum -a 256 --check -
 tar -xzf "$WORK_DIR/mpv.tar.gz" -C "$WORK_DIR"
 
 export MACOSX_DEPLOYMENT_TARGET=13.0
+# The app bundle rewrites every dependency install name after compilation.
+export LDFLAGS="${LDFLAGS:-} -Wl,-headerpad_max_install_names"
 meson setup "$WORK_DIR/build" "$WORK_DIR/mpv-$MPV_VERSION" \
     --prefix="$HOMEBREW_PREFIX" --wrap-mode=nodownload --buildtype=release \
     -Dcplayer=false -Dlibmpv=true -Dvapoursynth=disabled \

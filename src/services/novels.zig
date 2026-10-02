@@ -16,6 +16,7 @@
 //!   next/prev/resume  → openChapter(current ± 1) / the persisted chapter.
 
 const std = @import("std");
+const safeUtf8 = @import("../core/text.zig").safeUtf8;
 const dvui = @import("dvui");
 const icons = @import("icons");
 const state = @import("../core/state.zig");
@@ -28,6 +29,7 @@ const pure = @import("novels_pure.zig");
 const nsp = @import("novel_sources_pure.zig");
 const archive = @import("archive_pure.zig");
 const expanded = @import("expanded_reading_pure.zig");
+const books = @import("public_books_pure.zig");
 const source_config = @import("../core/source_config.zig");
 // Anti-block fetch layer — used by the HTML-scraper engines' GETs so a
 // Cloudflare/DDoS-Guard/captcha-fronted source resolves through the anti-detect
@@ -86,6 +88,8 @@ var nr_urls: [MAX_RESULTS][512]u8 = undefined;
 var nr_url_lens: [MAX_RESULTS]usize = std.mem.zeroes([MAX_RESULTS]usize);
 var nr_source: [MAX_RESULTS]NovelSource = undefined;
 var nr_count: usize = 0;
+var nr_metadata: [MAX_RESULTS]NovelMetadata = [_]NovelMetadata{.{}} ** MAX_RESULTS;
+var novel_covers: [MAX_RESULTS]components.CoverSlot = [_]components.CoverSlot{.{}} ** MAX_RESULTS;
 
 const MAX_CHAPTERS: usize = 400;
 // For Wikisource: the full page title ("Frankenstein/Chapter 1") — the fetch key
@@ -116,12 +120,32 @@ var text_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 // never read a row mid-rewrite. Copy semantics, not slices: the caller is on
 // another thread and holds nothing once the lock drops.
 
+pub const NovelMetadata = struct {
+    author_buf: [256]u8 = std.mem.zeroes([256]u8),
+    author_len: usize = 0,
+    overview_buf: [768]u8 = std.mem.zeroes([768]u8),
+    overview_len: usize = 0,
+    cover_buf: [768]u8 = std.mem.zeroes([768]u8),
+    cover_len: usize = 0,
+    year: u16 = 0,
+    pub fn author(self: *const NovelMetadata) []const u8 {
+        return self.author_buf[0..self.author_len];
+    }
+    pub fn overview(self: *const NovelMetadata) []const u8 {
+        return self.overview_buf[0..self.overview_len];
+    }
+    pub fn cover(self: *const NovelMetadata) []const u8 {
+        return self.cover_buf[0..self.cover_len];
+    }
+};
+
 pub const ListRow = struct {
     title_buf: [256]u8 = std.mem.zeroes([256]u8),
     title_len: usize = 0,
     url_buf: [1024]u8 = std.mem.zeroes([1024]u8),
     url_len: usize = 0,
     source: u8 = 0,
+    metadata: NovelMetadata = .{},
 
     pub fn title(self: *const ListRow) []const u8 {
         return self.title_buf[0..@min(self.title_len, self.title_buf.len)];
@@ -130,6 +154,74 @@ pub const ListRow = struct {
         return self.url_buf[0..@min(self.url_len, self.url_buf.len)];
     }
 };
+
+/// A complete API read, copied under the publication mutex. Allocate this on
+/// the heap: text plus catalog/chapter rows exceed a connection-thread stack.
+pub const ReaderSnapshot = struct {
+    view: @TypeOf(state.app.novels.view),
+    loading: bool,
+    chapters_loading: bool,
+    text_loading: bool,
+    fetch_error: bool,
+    current_chapter: usize,
+    text_truncated: bool,
+    work_title: [256]u8,
+    work_title_len: usize,
+    chapter_label: [256]u8,
+    chapter_label_len: usize,
+    text_buf: [TEXT_CAP]u8,
+    text_len: usize,
+    results: [MAX_RESULTS]ListRow,
+    result_count: usize,
+    chapter_titles: [MAX_CHAPTERS][256]u8,
+    chapter_title_lens: [MAX_CHAPTERS]usize,
+    chapter_count: usize,
+    has_more: bool,
+    loading_more: bool,
+    search_generation: u32,
+    chapter_generation: u32,
+    text_generation: u32,
+};
+
+pub fn copyReaderSnapshot(out: *ReaderSnapshot) void {
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    @memset(std.mem.asBytes(out), 0);
+    const n = &state.app.novels;
+    out.view = n.view;
+    out.loading = n.is_loading.load(.acquire);
+    out.chapters_loading = n.chapters_loading.load(.acquire);
+    out.text_loading = n.text_loading.load(.acquire);
+    out.fetch_error = n.fetch_error;
+    out.current_chapter = n.current_chapter;
+    out.text_truncated = n.text_truncated;
+    out.work_title_len = @min(n.work_title_len, out.work_title.len);
+    @memcpy(out.work_title[0..out.work_title_len], n.work_title[0..out.work_title_len]);
+    out.chapter_label_len = @min(n.chapter_label_len, out.chapter_label.len);
+    @memcpy(out.chapter_label[0..out.chapter_label_len], n.chapter_label[0..out.chapter_label_len]);
+    out.text_len = @min(n.text_len, out.text_buf.len);
+    @memcpy(out.text_buf[0..out.text_len], n.text_buf[0..out.text_len]);
+    out.result_count = @min(nr_count, MAX_RESULTS);
+    for (0..out.result_count) |idx| {
+        const row = &out.results[idx];
+        row.title_len = @min(nr_title_lens[idx], row.title_buf.len);
+        @memcpy(row.title_buf[0..row.title_len], nr_titles[idx][0..row.title_len]);
+        row.url_len = @min(nr_url_lens[idx], row.url_buf.len);
+        @memcpy(row.url_buf[0..row.url_len], nr_urls[idx][0..row.url_len]);
+        row.source = @intFromEnum(nr_source[idx]);
+        row.metadata = nr_metadata[idx];
+    }
+    out.chapter_count = @min(ch_count, MAX_CHAPTERS);
+    for (0..out.chapter_count) |idx| {
+        out.chapter_title_lens[idx] = @min(ch_title_lens[idx], out.chapter_titles[idx].len);
+        @memcpy(out.chapter_titles[idx][0..out.chapter_title_lens[idx]], ch_titles[idx][0..out.chapter_title_lens[idx]]);
+    }
+    out.has_more = out.result_count > 0 and more_available.load(.acquire);
+    out.loading_more = loading_more.load(.acquire);
+    out.search_generation = search_request.current();
+    out.chapter_generation = chapters_gen.load(.acquire);
+    out.text_generation = text_gen.load(.acquire);
+}
 
 pub fn resultCount() usize {
     parse_mutex.lock();
@@ -147,6 +239,7 @@ pub fn resultRow(i: usize) ?ListRow {
     out.url_len = @min(nr_url_lens[i], out.url_buf.len);
     @memcpy(out.url_buf[0..out.url_len], nr_urls[i][0..out.url_len]);
     out.source = @intFromEnum(nr_source[i]);
+    out.metadata = nr_metadata[i];
     return out;
 }
 
@@ -181,9 +274,13 @@ pub fn chapterRow(i: usize) ?ListRow {
 var current_page: u32 = 1;
 var more_available: std.atomic.Value(bool) = std.atomic.Value(bool).init(true);
 var loading_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+var wiki_next_offset: u32 = 0; // protected by parse_mutex; API cursor, never deduplicated row count
 var wiki_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(true);
 var madara_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(true);
 var lnwp_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(true);
+var gutenberg_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(true);
+var openlibrary_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(true);
+var gutenberg_next: u32 = 1; // authoritative provider cursor, parse_mutex
 var archive_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(true);
 // readwn's search POST has no page parameter — it returns one fixed set, so it is
 // never re-fetched by loadMore (implicitly exhausted after page 1).
@@ -203,6 +300,24 @@ var chapter_snap_len: usize = 0;
 var chapter_url_snap: [1024]u8 = undefined;
 var chapter_url_snap_len: usize = 0;
 
+const ReaderJob = struct {
+    generation: u32,
+    source: NovelSource,
+    title: [256]u8 = undefined,
+    title_len: usize = 0,
+    url: [1024]u8 = undefined,
+    url_len: usize = 0,
+};
+
+fn readerJob(generation: u32, title: []const u8, url: []const u8) ReaderJob {
+    var job: ReaderJob = .{ .generation = generation, .source = open_source };
+    job.title_len = @min(title.len, job.title.len);
+    job.url_len = @min(url.len, job.url.len);
+    @memcpy(job.title[0..job.title_len], title[0..job.title_len]);
+    @memcpy(job.url[0..job.url_len], url[0..job.url_len]);
+    return job;
+}
+
 const SearchJob = struct {
     generation: u32,
     query: [256]u8 = undefined,
@@ -220,14 +335,15 @@ const TEXT_CAP: usize = 131072;
 pub fn searchNovels(query: []const u8) void {
     if (query.len == 0 or query.len >= query_snap.len) return;
 
-    state.app.novels.fetch_error = false;
-    state.app.novels.view = .search;
-
     const my_gen = search_request.begin(&state.app.novels.is_loading);
     const n = @min(query.len, query_snap.len);
     parse_mutex.lock();
+    state.app.novels.fetch_error = false;
+    state.app.novels.view = .search;
     @memcpy(query_snap[0..n], query[0..n]);
     query_snap_len = n;
+    wiki_next_offset = 0;
+    gutenberg_next = 1;
     parse_mutex.unlock();
     var job: SearchJob = .{ .generation = my_gen, .query_len = n };
     @memcpy(job.query[0..n], query[0..n]);
@@ -239,6 +355,8 @@ pub fn searchNovels(query: []const u8) void {
     madara_more.store(true, .release);
     lnwp_more.store(true, .release);
     archive_more.store(true, .release);
+    gutenberg_more.store(true, .release);
+    openlibrary_more.store(true, .release);
 
     if (@import("../core/workers.zig").spawnLegacy(searchWorker, .{job})) |t| {
         @import("../core/workers.zig").release(t);
@@ -256,11 +374,20 @@ fn searchWorker(job: SearchJob) void {
     const query = job.query[0..job.query_len];
 
     parse_mutex.lock();
+    if (!search_request.isCurrent(my_gen)) {
+        parse_mutex.unlock();
+        return;
+    }
     nr_count = 0;
     parse_mutex.unlock();
 
     var filled: usize = 0;
     filled += fetchWikisource(query, my_gen, filled, 0);
+    if (!search_request.isCurrent(my_gen)) return;
+
+    filled += fetchGutenberg(query, my_gen, filled, 1);
+    if (!search_request.isCurrent(my_gen)) return;
+    filled += fetchOpenLibrary(query, my_gen, filled, 1);
     if (!search_request.isCurrent(my_gen)) return;
 
     // A second legal, zero-configuration source. Reuse the same Internet
@@ -304,6 +431,7 @@ fn addResult(idx: usize, src: NovelSource, title: []const u8, url: []const u8) v
     @memcpy(nr_urls[idx][0..ulen], url[0..ulen]);
     nr_url_lens[idx] = ulen;
     nr_source[idx] = src;
+    nr_metadata[idx] = .{};
 }
 
 /// True when a row already present in nr_*[0..upto) matches the candidate — the
@@ -321,19 +449,6 @@ fn rowExists(src: NovelSource, title: []const u8, url: []const u8, upto: usize) 
         }
     }
     return false;
-}
-
-/// Count the Wikisource rows currently in nr_*[0..nr_count) — the `sroffset` for
-/// the next Wikisource page (how many of its results we've already consumed).
-/// Caller must hold `parse_mutex`.
-fn wikiCountLocked() u32 {
-    var c: u32 = 0;
-    var i: usize = 0;
-    const cap = @min(nr_count, MAX_RESULTS);
-    while (i < cap) : (i += 1) {
-        if (nr_source[i] == .wikisource) c += 1;
-    }
-    return c;
 }
 
 /// Decode HTML entities out of a scraped title (it carries no block tags, so
@@ -372,12 +487,37 @@ fn fetchExpandedNovel(query: []const u8, gen: u32, start: usize, page: u32, src:
         const abs = expanded.html.sourceUrl(&abs_buf, base, item.url) orelse continue;
         var title_buf: [256]u8 = undefined;
         const title = cleanTitle(item.title, &title_buf);
-        if (title.len == 0 or rowExists(src, title, abs, start + n)) continue;
+        if (title.len == 0) continue;
+        if (rowExists(src, title, abs, start + n)) {
+            // Image and title anchors for the same work are often separate.
+            // Merge a real cover from either anchor before discarding the link.
+            for (0..start + n) |existing| {
+                if (std.mem.eql(u8, nr_urls[existing][0..nr_url_lens[existing]], abs)) {
+                    setNovelCover(&nr_metadata[existing], base, item.cover);
+                    break;
+                }
+            }
+            continue;
+        }
         addResult(start + n, src, title, abs);
+        setNovelCover(&nr_metadata[start + n], base, item.cover);
         n += 1;
     }
     nr_count = start + n;
     return n;
+}
+
+fn setNovelCover(meta: *NovelMetadata, base: []const u8, raw: []const u8) void {
+    if (meta.cover_len > 0 or raw.len == 0 or std.mem.indexOfAny(u8, raw, "\r\n") != null) return;
+    // Providers use external image CDNs. Only permit network schemes; ordinary
+    // relative image links still resolve against the installed source base.
+    const cover = if (std.mem.startsWith(u8, raw, "https://") or std.mem.startsWith(u8, raw, "http://"))
+        std.fmt.bufPrint(&meta.cover_buf, "{s}", .{raw}) catch return
+    else if (std.mem.startsWith(u8, raw, "//"))
+        std.fmt.bufPrint(&meta.cover_buf, "https:{s}", .{raw}) catch return
+    else
+        expanded.html.sourceUrl(&meta.cover_buf, base, raw) orelse return;
+    meta.cover_len = cover.len;
 }
 
 /// Wikisource `list=search` → nr_* rows (the always-on default source). `offset`
@@ -397,7 +537,13 @@ fn fetchWikisource(query: []const u8, my_gen: u32, start: usize, offset: u32) us
     defer parse_mutex.unlock();
     if (search_request.current() != my_gen) return 0;
 
-    const arr = pure.searchArray(body) orelse return 0;
+    const arr = pure.searchArray(body) orelse {
+        state.app.novels.fetch_error = true;
+        return 0;
+    };
+    const next_offset = pure.searchContinuation(body);
+    wiki_next_offset = next_offset orelse offset;
+    wiki_more.store(next_offset != null and wiki_next_offset > offset, .release);
     var it = pure.cj.ObjIter{ .buf = arr };
     var n: usize = 0;
     while (it.next()) |obj| {
@@ -408,6 +554,12 @@ fn fetchWikisource(query: []const u8, my_gen: u32, start: usize, offset: u32) us
         if (dn == 0) continue;
         if (rowExists(.wikisource, dec[0..dn], "", start + n)) continue;
         addResult(start + n, .wikisource, dec[0..dn], "");
+        if (pure.cj.findJsonStr(obj, "\"snippet\":\"")) |snippet| {
+            var snippet_buf: [2048]u8 = undefined;
+            const decoded = pure.cj.jsonUnescape(snippet, &snippet_buf);
+            const meta = &nr_metadata[start + n];
+            meta.overview_len = pure.htmlToText(snippet_buf[0..decoded], &meta.overview_buf);
+        }
         n += 1;
     }
     nr_count = start + n;
@@ -425,7 +577,7 @@ fn fetchInternetArchive(query: []const u8, my_gen: u32, start: usize, page: u32)
     var url_buf: [1400]u8 = undefined;
     const url = std.fmt.bufPrint(
         &url_buf,
-        "https://archive.org/advancedsearch.php?q={s}&fl[]=identifier&fl[]=title&fl[]=year&rows={d}&page={d}&output=json",
+        "https://archive.org/advancedsearch.php?q={s}&fl[]=identifier&fl[]=title&fl[]=year&fl[]=creator&fl[]=description&rows={d}&page={d}&output=json",
         .{ encoded, PAGE_SIZE, page },
     ) catch return 0;
     @import("../core/rate_limit.zig").acquire("archive", 1.0);
@@ -437,19 +589,108 @@ fn fetchInternetArchive(query: []const u8, my_gen: u32, start: usize, page: u32)
     defer parse_mutex.unlock();
     if (!search_request.isCurrent(my_gen)) return 0;
 
-    var it = archive.iterateDocs(body);
+    const parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{ .ignore_unknown_fields = true }) catch return 0;
+    defer parsed.deinit();
+    if (parsed.value != .object) return 0;
+    const response = parsed.value.object.get("response") orelse return 0;
+    if (response != .object) return 0;
+    const docs = response.object.get("docs") orelse return 0;
+    if (docs != .array) return 0;
     var n: usize = 0;
-    while (it.next()) |doc| {
+    for (docs.array.items) |doc| {
         if (start + n >= MAX_RESULTS) break;
-        var id_buf: [512]u8 = undefined;
-        const id_len = pure.cj.jsonUnescape(doc.identifier, &id_buf);
-        if (id_len == 0) continue;
-        var title_buf: [256]u8 = undefined;
-        const title_len = if (doc.title.len > 0) pure.cj.jsonUnescape(doc.title, &title_buf) else 0;
-        const title = if (title_len > 0) title_buf[0..title_len] else id_buf[0..id_len];
-        const id = id_buf[0..id_len];
+        if (doc != .object) continue;
+        const id = metadataString(doc.object.get("identifier"));
+        if (id.len == 0 or id.len > nr_urls[0].len) continue;
+        const raw_title = metadataString(doc.object.get("title"));
+        const title = if (raw_title.len > 0) raw_title else id;
         if (rowExists(.internet_archive, title, id, start + n)) continue;
         addResult(start + n, .internet_archive, title, id);
+        const meta = &nr_metadata[start + n];
+        const author = metadataString(doc.object.get("creator"));
+        meta.author_len = pure.htmlToText(author, &meta.author_buf);
+        meta.overview_len = pure.htmlToText(metadataString(doc.object.get("description")), &meta.overview_buf);
+        const year_value = doc.object.get("year");
+        if (year_value) |value| {
+            if (value == .integer and value.integer > 0 and value.integer <= 9999) meta.year = @intCast(value.integer) else if (value == .string) meta.year = std.fmt.parseInt(u16, value.string, 10) catch 0;
+        }
+        var encoded_id: [1536]u8 = undefined;
+        const encoded_len = pure.cj.percentEncodeStrict(id, &encoded_id);
+        const cover = std.fmt.bufPrint(&meta.cover_buf, "https://archive.org/services/img/{s}", .{encoded_id[0..encoded_len]}) catch "";
+        meta.cover_len = cover.len;
+        n += 1;
+    }
+    nr_count = start + n;
+    return n;
+}
+
+/// Archive fields can be scalar strings or arrays of contributor/description
+/// values. Preserve the first actual value; absent fields stay absent.
+fn metadataString(value: ?std.json.Value) []const u8 {
+    const v = value orelse return "";
+    if (v == .string) return v.string;
+    if (v == .array) for (v.array.items) |entry| {
+        if (entry == .string and entry.string.len > 0) return entry.string;
+    };
+    return "";
+}
+
+fn fetchGutenberg(query: []const u8, gen: u32, start: usize, cursor: u32) usize {
+    var url_buf: [2048]u8 = undefined;
+    const url = books.gutenbergSearch(&url_buf, query, cursor) orelse return 0;
+    @import("../core/rate_limit.zig").acquire("gutenberg", 1.0);
+    const body = fetchBody(url, 1024 * 1024) orelse return 0;
+    defer alloc.free(body);
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (!search_request.isCurrent(gen)) return 0;
+    const next = books.gutenbergNext(body);
+    gutenberg_more.store(next != null and next.? > cursor, .release);
+    gutenberg_next = next orelse cursor;
+    var it = books.GutenbergIter{ .body = body };
+    var n: usize = 0;
+    while (it.next()) |item| {
+        if (start + n >= MAX_RESULTS) break;
+        var title_buf: [256]u8 = undefined;
+        const title = cleanTitle(item.title, &title_buf);
+        if (title.len == 0 or rowExists(.gutenberg, title, item.id, start + n)) continue;
+        addResult(start + n, .gutenberg, title, item.id);
+        const meta = &nr_metadata[start + n];
+        meta.author_len = pure.htmlToText(item.author, &meta.author_buf);
+        setNovelCover(meta, "https://www.gutenberg.org", item.cover);
+        n += 1;
+    }
+    nr_count = start + n;
+    return n;
+}
+
+fn fetchOpenLibrary(query: []const u8, gen: u32, start: usize, page: u32) usize {
+    var url_buf: [2048]u8 = undefined;
+    const url = books.openLibrarySearch(&url_buf, query, page) orelse return 0;
+    @import("../core/rate_limit.zig").acquire("openlibrary", 1.0);
+    const body = fetchBody(url, 1024 * 1024) orelse return 0;
+    defer alloc.free(body);
+    const parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{ .ignore_unknown_fields = true }) catch return 0;
+    defer parsed.deinit();
+    if (parsed.value != .object) return 0;
+    const docs = parsed.value.object.get("docs") orelse return 0;
+    if (docs != .array) return 0;
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (!search_request.isCurrent(gen)) return 0;
+    const total = parsed.value.object.get("numFound");
+    const has_more = if (total != null and total.? == .integer) total.?.integer > @as(i64, page) * 20 else docs.array.items.len == 20;
+    openlibrary_more.store(has_more, .release);
+    var n: usize = 0;
+    for (docs.array.items) |doc| {
+        if (start + n >= MAX_RESULTS) break;
+        const item = books.openLibraryItem(doc) orelse continue;
+        if (rowExists(.openlibrary, item.title, item.id, start + n)) continue;
+        addResult(start + n, .openlibrary, item.title, item.id);
+        const meta = &nr_metadata[start + n];
+        meta.author_len = pure.htmlToText(item.author, &meta.author_buf);
+        meta.year = item.year;
+        if (books.openLibraryCover(&meta.cover_buf, item.cover_id)) |cover| meta.cover_len = cover.len;
         n += 1;
     }
     nr_count = start + n;
@@ -574,6 +815,29 @@ fn fetchReadwn(query: []const u8, my_gen: u32, start: usize) usize {
 /// fresh query supersedes it. Wikisource continues by `sroffset`; the scraper
 /// engines by page number (`current_page + 1`); readwn's search can't page and is
 /// never re-fetched here.
+pub fn hasMoreResults() bool {
+    return more_available.load(.acquire);
+}
+pub fn loadingMoreResults() bool {
+    return loading_more.load(.acquire);
+}
+
+/// Return through retained reader/catalog snapshots instead of re-opening a
+/// stale search row or issuing an empty search after a universal-search open.
+pub fn back() void {
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (state.app.novels.view == .reader) {
+        _ = text_gen.fetchAdd(1, .acq_rel);
+        state.app.novels.text_loading.store(false, .release);
+        state.app.novels.view = .chapters;
+    } else {
+        _ = chapters_gen.fetchAdd(1, .acq_rel);
+        state.app.novels.chapters_loading.store(false, .release);
+        state.app.novels.view = .search;
+    }
+}
+
 pub fn loadMore() void {
     if (!more_available.load(.acquire)) return;
     if (state.app.novels.is_loading.load(.acquire)) return;
@@ -621,12 +885,27 @@ fn loadMoreWorker(job: SearchJob, next_page: u32) void {
 
     if (wiki_more.load(.acquire)) {
         parse_mutex.lock();
-        const offset = wikiCountLocked();
+        const offset = wiki_next_offset;
         parse_mutex.unlock();
         const n = fetchWikisource(query, my_gen, start, offset);
         if (search_request.current() != my_gen) return;
         start += n;
-        if (n == 0) wiki_more.store(false, .release);
+        // The server continuation determines exhaustion, even if this page
+        // contains only duplicate or unsupported rows.
+
+    }
+    if (gutenberg_more.load(.acquire) and start < MAX_RESULTS) {
+        parse_mutex.lock();
+        const cursor = gutenberg_next;
+        parse_mutex.unlock();
+        const n = fetchGutenberg(query, my_gen, start, cursor);
+        if (!search_request.isCurrent(my_gen)) return;
+        start += n;
+    }
+    if (openlibrary_more.load(.acquire) and start < MAX_RESULTS) {
+        const n = fetchOpenLibrary(query, my_gen, start, next_page);
+        if (!search_request.isCurrent(my_gen)) return;
+        start += n;
     }
     if (archive_more.load(.acquire) and start < MAX_RESULTS) {
         const n = fetchInternetArchive(query, my_gen, start, next_page);
@@ -655,6 +934,7 @@ fn loadMoreWorker(job: SearchJob, next_page: u32) void {
     }
 
     const any = expanded_more or wiki_more.load(.acquire) or archive_more.load(.acquire) or
+        gutenberg_more.load(.acquire) or openlibrary_more.load(.acquire) or
         (madara_more.load(.acquire) and madaraNovelBase() != null) or
         (lnwp_more.load(.acquire) and lightnovelwpBase() != null);
     more_available.store(any and start < MAX_RESULTS, .release);
@@ -667,6 +947,8 @@ fn loadMoreWorker(job: SearchJob, next_page: u32) void {
 
 pub fn openNovel(idx: usize) void {
     const row = resultRow(idx) orelse return;
+    parse_mutex.lock();
+    const my_gen = chapters_gen.fetchAdd(1, .acq_rel) + 1;
 
     // Snapshot the selected work (source + title + URL) BEFORE spawning — the
     // search grid can be reordered by a fresh search while chapters load.
@@ -682,16 +964,17 @@ pub fn openNovel(idx: usize) void {
     @memcpy(work_url_snap[0..ulen], row.url_buf[0..ulen]);
     work_url_snap_len = ulen;
 
+    _ = text_gen.fetchAdd(1, .acq_rel);
+    state.app.novels.text_loading.store(false, .release);
     state.app.novels.view = .chapters;
     state.app.novels.chapters_loading.store(true, .release);
     state.app.novels.fetch_error = false;
 
-    parse_mutex.lock();
     ch_count = 0;
-    parse_mutex.unlock();
 
-    const my_gen = chapters_gen.fetchAdd(1, .acq_rel) + 1;
-    if (@import("../core/workers.zig").spawnLegacy(chaptersWorker, .{my_gen})) |t| {
+    const job = readerJob(my_gen, work_snap[0..work_snap_len], work_url_snap[0..work_url_snap_len]);
+    parse_mutex.unlock();
+    if (@import("../core/workers.zig").spawnLegacy(chaptersWorker, .{job})) |t| {
         @import("../core/workers.zig").release(t);
     } else |_| {
         state.app.novels.chapters_loading.store(false, .release);
@@ -699,25 +982,37 @@ pub fn openNovel(idx: usize) void {
 }
 
 /// Dispatch the chapter-list fetch to the open novel's engine.
-fn chaptersWorker(my_gen: u32) void {
-    defer state.app.novels.chapters_loading.store(false, .release);
-    switch (open_source) {
-        .wikisource => chaptersWikisource(my_gen),
-        .madara_novel => chaptersMadara(my_gen),
-        .lightnovelwp => chaptersLightnovelwp(my_gen),
-        .readwn => chaptersReadwn(my_gen),
-        .readnovelfull => {}, // not shipped in v1
-        .internet_archive => chaptersInternetArchive(my_gen),
-        .royalroad, .novelfire => chaptersExpanded(my_gen),
+fn chaptersWorker(job: ReaderJob) void {
+    const my_gen = job.generation;
+    defer {
+        parse_mutex.lock();
+        if (chapters_gen.load(.acquire) == my_gen) state.app.novels.chapters_loading.store(false, .release);
+        parse_mutex.unlock();
     }
+    if (chapters_gen.load(.acquire) != my_gen) return;
+    switch (job.source) {
+        .wikisource => chaptersWikisource(job),
+        .madara_novel => chaptersMadara(job),
+        .lightnovelwp => chaptersLightnovelwp(job),
+        .readwn => chaptersReadwn(job),
+        .readnovelfull => {}, // not shipped in v1
+        .internet_archive, .openlibrary => chaptersInternetArchive(job),
+        .gutenberg => chaptersGutenberg(job),
+        .royalroad, .novelfire => chaptersExpanded(job),
+    }
+    parse_mutex.lock();
+    const capped = chapters_gen.load(.acquire) == my_gen and ch_count >= MAX_CHAPTERS;
+    parse_mutex.unlock();
+    if (capped) logs.pushLog("warn", "novels", "Chapter list reached the 400-chapter reader limit", false);
 }
 
-fn chaptersExpanded(gen: u32) void {
-    const src = open_source;
+fn chaptersExpanded(job: ReaderJob) void {
+    const gen = job.generation;
+    const src = job.source;
     var base_buf: [512]u8 = undefined;
     const base = copyBase(source_config.get(@tagName(src), "base") orelse return, &base_buf);
     var work_buf: [1024]u8 = undefined;
-    const work = copyBase(work_url_snap[0..work_url_snap_len], &work_buf);
+    const work = copyBase(job.url[0..job.url_len], &work_buf);
     var n: usize = 0;
     // NovelFire paginates its chapter directory; Royal Road returns it whole.
     var page: usize = 1;
@@ -785,16 +1080,17 @@ fn reverseChapters(count: usize) void {
 
 /// Wikisource: `list=allpages` subpages. When a work has none (single-page work),
 /// synthesize one chapter = the work page so the reader still opens.
-fn chaptersWikisource(my_gen: u32) void {
+fn chaptersWikisource(job: ReaderJob) void {
+    const my_gen = job.generation;
     var work: [256]u8 = undefined;
-    const wlen = @min(work_snap_len, work.len);
-    @memcpy(work[0..wlen], work_snap[0..wlen]);
+    const wlen = @min(job.title_len, work.len);
+    @memcpy(work[0..wlen], job.title[0..wlen]);
 
     var url_buf: [1024]u8 = undefined;
     const url = pure.buildSubpagesUrl(&url_buf, work[0..wlen], MAX_CHAPTERS) orelse return;
 
     const body = fetchBody(url, 512 * 1024) orelse {
-        state.app.novels.fetch_error = true;
+        if (chapters_gen.load(.acquire) == my_gen) state.app.novels.fetch_error = true;
         return;
     };
     defer alloc.free(body);
@@ -827,19 +1123,20 @@ fn chaptersWikisource(my_gen: u32) void {
 
 /// Madara-novel: REUSES the manga Madara `ChapterIter` over the details HTML, with
 /// the same admin-ajax.php / `{url}ajax/chapters` fallbacks the comics reader uses.
-fn chaptersMadara(my_gen: u32) void {
+fn chaptersMadara(job: ReaderJob) void {
+    const my_gen = job.generation;
     const base_raw = madaraNovelBase() orelse return;
     var base_buf: [256]u8 = undefined;
     const base = copyBase(base_raw, &base_buf);
 
     var murl_buf: [512]u8 = undefined;
-    const mn = @min(work_url_snap_len, murl_buf.len);
-    @memcpy(murl_buf[0..mn], work_url_snap[0..mn]);
+    const mn = @min(job.url_len, murl_buf.len);
+    @memcpy(murl_buf[0..mn], job.url[0..mn]);
     const murl = murl_buf[0..mn];
     if (murl.len == 0) return;
 
     const body = scrapeHtml(murl, 1024 * 1024) orelse {
-        state.app.novels.fetch_error = true;
+        if (chapters_gen.load(.acquire) == my_gen) state.app.novels.fetch_error = true;
         return;
     };
     defer alloc.free(body);
@@ -902,19 +1199,20 @@ fn chaptersMadara(my_gen: u32) void {
 }
 
 /// lightnovelwp: REUSES the MangaThemesia `chapterIter` over the series HTML.
-fn chaptersLightnovelwp(my_gen: u32) void {
+fn chaptersLightnovelwp(job: ReaderJob) void {
+    const my_gen = job.generation;
     const base_raw = lightnovelwpBase() orelse return;
     var base_buf: [256]u8 = undefined;
     const base = copyBase(base_raw, &base_buf);
 
     var murl_buf: [512]u8 = undefined;
-    const mn = @min(work_url_snap_len, murl_buf.len);
-    @memcpy(murl_buf[0..mn], work_url_snap[0..mn]);
+    const mn = @min(job.url_len, murl_buf.len);
+    @memcpy(murl_buf[0..mn], job.url[0..mn]);
     const murl = murl_buf[0..mn];
     if (murl.len == 0) return;
 
     const body = scrapeHtml(murl, 1024 * 1024) orelse {
-        state.app.novels.fetch_error = true;
+        if (chapters_gen.load(.acquire) == my_gen) state.app.novels.fetch_error = true;
         return;
     };
     defer alloc.free(body);
@@ -943,19 +1241,20 @@ fn chaptersLightnovelwp(my_gen: u32) void {
 
 /// readwn: the standalone `.chapter-list` iterator. readwn lists chapters
 /// ascending already, so no reversal.
-fn chaptersReadwn(my_gen: u32) void {
+fn chaptersReadwn(job: ReaderJob) void {
+    const my_gen = job.generation;
     const base_raw = readwnBase() orelse return;
     var base_buf: [256]u8 = undefined;
     const base = copyBase(base_raw, &base_buf);
 
     var murl_buf: [512]u8 = undefined;
-    const mn = @min(work_url_snap_len, murl_buf.len);
-    @memcpy(murl_buf[0..mn], work_url_snap[0..mn]);
+    const mn = @min(job.url_len, murl_buf.len);
+    @memcpy(murl_buf[0..mn], job.url[0..mn]);
     const murl = murl_buf[0..mn];
     if (murl.len == 0) return;
 
     const body = scrapeHtml(murl, 1024 * 1024) orelse {
-        state.app.novels.fetch_error = true;
+        if (chapters_gen.load(.acquire) == my_gen) state.app.novels.fetch_error = true;
         return;
     };
     defer alloc.free(body);
@@ -981,13 +1280,31 @@ fn chaptersReadwn(my_gen: u32) void {
     logs.pushLog("info", "novels", "Novel chapter list loaded (readwn)", false);
 }
 
+fn chaptersGutenberg(job: ReaderJob) void {
+    var url_buf: [512]u8 = undefined;
+    const url = books.gutenbergDetail(&url_buf, job.url[0..job.url_len]) orelse return;
+    @import("../core/rate_limit.zig").acquire("gutenberg", 1.0);
+    const body = fetchBody(url, 1024 * 1024) orelse return;
+    defer alloc.free(body);
+    if (chapters_gen.load(.acquire) != job.generation) return;
+    var text_url_buf: [1024]u8 = undefined;
+    const text_url = books.gutenbergTextUrl(&text_url_buf, body) orelse return;
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (chapters_gen.load(.acquire) != job.generation) return;
+    addChapter(0, "Full text", text_url);
+    ch_count = 1;
+    logs.pushLog("info", "novels", "Gutenberg advertised UTF-8 text resolved", false);
+}
+
 /// Internet Archive: resolve one real readable file from item metadata and
 /// expose it as a single "Full text" chapter. This keeps the existing reader,
 /// resume, and deep-link paths shared with every other novel source.
-fn chaptersInternetArchive(my_gen: u32) void {
+fn chaptersInternetArchive(job: ReaderJob) void {
+    const my_gen = job.generation;
     var id_buf: [512]u8 = undefined;
-    const id_len = @min(work_url_snap_len, id_buf.len);
-    @memcpy(id_buf[0..id_len], work_url_snap[0..id_len]);
+    const id_len = @min(job.url_len, id_buf.len);
+    @memcpy(id_buf[0..id_len], job.url[0..id_len]);
     if (id_len == 0) return;
 
     var enc_id_buf: [1536]u8 = undefined;
@@ -996,19 +1313,22 @@ fn chaptersInternetArchive(my_gen: u32) void {
     const meta_url = std.fmt.bufPrint(&meta_url_buf, "https://archive.org/metadata/{s}", .{enc_id_buf[0..enc_id_len]}) catch return;
     @import("../core/rate_limit.zig").acquire("archive", 1.0);
     const metadata = fetchBody(meta_url, 2 * 1024 * 1024) orelse {
-        state.app.novels.fetch_error = true;
+        if (chapters_gen.load(.acquire) == my_gen) state.app.novels.fetch_error = true;
         return;
     };
     defer alloc.free(metadata);
     if (chapters_gen.load(.acquire) != my_gen) return;
 
-    const raw_file = archive.pickBestTextFile(metadata) orelse {
-        state.app.novels.fetch_error = true;
+    const parsed_metadata = std.json.parseFromSlice(std.json.Value, alloc, metadata, .{ .ignore_unknown_fields = true }) catch return;
+    defer parsed_metadata.deinit();
+    const raw_file = books.publicArchiveText(parsed_metadata.value) orelse {
+        if (chapters_gen.load(.acquire) == my_gen) state.app.novels.fetch_error = true;
         logs.pushLog("info", "novels", "Archive item has no readable text file", false);
         return;
     };
     var file_buf: [512]u8 = undefined;
-    const file_len = pure.cj.jsonUnescape(raw_file, &file_buf);
+    const file_len = @min(raw_file.len, file_buf.len);
+    @memcpy(file_buf[0..file_len], raw_file[0..file_len]);
     if (file_len == 0) return;
     var enc_file_buf: [1536]u8 = undefined;
     const enc_file_len = archive.encodePathSegment(file_buf[0..file_len], &enc_file_buf);
@@ -1033,6 +1353,8 @@ fn chaptersInternetArchive(my_gen: u32) void {
 
 pub fn openChapter(idx: usize) void {
     const row = chapterRow(idx) orelse return;
+    parse_mutex.lock();
+    const my_gen = text_gen.fetchAdd(1, .acq_rel) + 1;
 
     state.app.novels.current_chapter = idx;
     state.app.novels.view = .reader;
@@ -1059,8 +1381,9 @@ pub fn openChapter(idx: usize) void {
     // Persist resume: this is now the last-read chapter for this work.
     saveResume(idx);
 
-    const my_gen = text_gen.fetchAdd(1, .acq_rel) + 1;
-    if (@import("../core/workers.zig").spawnLegacy(textWorker, .{my_gen})) |t| {
+    const job = readerJob(my_gen, chapter_snap[0..chapter_snap_len], chapter_url_snap[0..chapter_url_snap_len]);
+    parse_mutex.unlock();
+    if (@import("../core/workers.zig").spawnLegacy(textWorker, .{job})) |t| {
         @import("../core/workers.zig").release(t);
     } else |_| {
         state.app.novels.text_loading.store(false, .release);
@@ -1078,28 +1401,37 @@ pub fn prevChapter() void {
 }
 
 /// Dispatch the chapter-text fetch to the open novel's engine.
-fn textWorker(my_gen: u32) void {
-    defer state.app.novels.text_loading.store(false, .release);
-    if (open_source == .wikisource) {
-        textWikisource(my_gen);
-    } else if (open_source == .internet_archive) {
-        textInternetArchive(my_gen);
+fn textWorker(job: ReaderJob) void {
+    const my_gen = job.generation;
+    defer {
+        parse_mutex.lock();
+        if (text_gen.load(.acquire) == my_gen) state.app.novels.text_loading.store(false, .release);
+        parse_mutex.unlock();
+    }
+    if (text_gen.load(.acquire) != my_gen) return;
+    if (job.source == .wikisource) {
+        textWikisource(job);
+    } else if (job.source == .internet_archive or job.source == .openlibrary) {
+        textInternetArchive(job);
+    } else if (job.source == .gutenberg) {
+        textGutenberg(job);
     } else {
-        textSourced(my_gen);
+        textSourced(job);
     }
 }
 
 /// Wikisource: `action=parse&prop=text` → JSON `parse.text` HTML → reading text.
-fn textWikisource(my_gen: u32) void {
+fn textWikisource(job: ReaderJob) void {
+    const my_gen = job.generation;
     var page: [256]u8 = undefined;
-    const plen = @min(chapter_snap_len, page.len);
-    @memcpy(page[0..plen], chapter_snap[0..plen]);
+    const plen = @min(job.title_len, page.len);
+    @memcpy(page[0..plen], job.title[0..plen]);
 
     var url_buf: [1024]u8 = undefined;
     const url = pure.buildChapterUrl(&url_buf, page[0..plen]) orelse return;
 
     const body = fetchBody(url, 2 * 1024 * 1024) orelse {
-        state.app.novels.fetch_error = true;
+        if (text_gen.load(.acquire) == my_gen) state.app.novels.fetch_error = true;
         return;
     };
     defer alloc.free(body);
@@ -1108,13 +1440,13 @@ fn textWikisource(my_gen: u32) void {
     // Two-stage, both heap/state (never a big buffer on the worker stack):
     //   JSON parse.text → HTML (heap) → clean reading text (state.text_buf).
     const html = alloc.alloc(u8, 2 * 1024 * 1024) catch {
-        state.app.novels.fetch_error = true;
+        if (text_gen.load(.acquire) == my_gen) state.app.novels.fetch_error = true;
         return;
     };
     defer alloc.free(html);
     const html_len = pure.extractParseHtml(body, html);
     if (html_len == 0) {
-        state.app.novels.fetch_error = true;
+        if (text_gen.load(.acquire) == my_gen) state.app.novels.fetch_error = true;
         logs.pushLog("info", "novels", "Chapter had no extractable text", false);
         return;
     }
@@ -1133,18 +1465,19 @@ fn textWikisource(my_gen: u32) void {
 /// Internet Archive's selected derivative is already plain text. Run it
 /// through the common whitespace/entity normalizer so OCR reads like the other
 /// sources and remains bounded by the same fixed reader buffer.
-fn textInternetArchive(my_gen: u32) void {
+fn textInternetArchive(job: ReaderJob) void {
+    const my_gen = job.generation;
     var url_buf: [1024]u8 = undefined;
-    const url_len = @min(chapter_url_snap_len, url_buf.len);
-    @memcpy(url_buf[0..url_len], chapter_url_snap[0..url_len]);
+    const url_len = @min(job.url_len, url_buf.len);
+    @memcpy(url_buf[0..url_len], job.url[0..url_len]);
     const url = url_buf[0..url_len];
     if (url.len == 0 or !std.mem.startsWith(u8, url, "https://archive.org/download/")) {
-        state.app.novels.fetch_error = true;
+        if (text_gen.load(.acquire) == my_gen) state.app.novels.fetch_error = true;
         return;
     }
     @import("../core/rate_limit.zig").acquire("archive", 1.0);
     const body = fetchBody(url, 2 * 1024 * 1024) orelse {
-        state.app.novels.fetch_error = true;
+        if (text_gen.load(.acquire) == my_gen) state.app.novels.fetch_error = true;
         return;
     };
     defer alloc.free(body);
@@ -1156,32 +1489,51 @@ fn textInternetArchive(my_gen: u32) void {
     const n = pure.htmlToText(body, state.app.novels.text_buf[0..TEXT_CAP]);
     state.app.novels.text_len = n;
     state.app.novels.text_truncated = n >= TEXT_CAP;
-    if (n == 0) state.app.novels.fetch_error = true;
+    if (n == 0 and text_gen.load(.acquire) == my_gen) state.app.novels.fetch_error = true;
     logs.pushLog("info", "novels", "Novel full text loaded (Internet Archive)", false);
+}
+
+fn textGutenberg(job: ReaderJob) void {
+    const url = job.url[0..job.url_len];
+    if (!std.mem.startsWith(u8, url, "https://www.gutenberg.org/")) return;
+    @import("../core/rate_limit.zig").acquire("gutenberg", 1.0);
+    const body = fetchBody(url, 4 * 1024 * 1024) orelse return;
+    defer alloc.free(body);
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (text_gen.load(.acquire) != job.generation) return;
+    // A plain-text book is not HTML: preserve comparison signs, indentation
+    // and paragraph breaks rather than stripping text between '<' and '>'.
+    const text = books.plainTextPrefix(body, TEXT_CAP);
+    @memcpy(state.app.novels.text_buf[0..text.len], text);
+    state.app.novels.text_len = text.len;
+    state.app.novels.text_truncated = body.len > TEXT_CAP;
+    if (text.len == 0) state.app.novels.fetch_error = true;
 }
 
 /// Scraper engines: GET the chapter URL, extract the source's prose container
 /// (via novel_sources_pure), then HTML→clean text. The container selector is the
 /// ONLY per-engine difference; everything else is the shared reader pipeline.
-fn textSourced(my_gen: u32) void {
+fn textSourced(job: ReaderJob) void {
+    const my_gen = job.generation;
     var url_buf: [1024]u8 = undefined;
-    const un = @min(chapter_url_snap_len, url_buf.len);
-    @memcpy(url_buf[0..un], chapter_url_snap[0..un]);
+    const un = @min(job.url_len, url_buf.len);
+    @memcpy(url_buf[0..un], job.url[0..un]);
     const chapter_url = url_buf[0..un];
     if (chapter_url.len == 0 or !std.mem.startsWith(u8, chapter_url, "http")) {
-        state.app.novels.fetch_error = true;
+        if (text_gen.load(.acquire) == my_gen) state.app.novels.fetch_error = true;
         return;
     }
 
     const body = scrapeHtml(chapter_url, 2 * 1024 * 1024) orelse {
-        state.app.novels.fetch_error = true;
+        if (text_gen.load(.acquire) == my_gen) state.app.novels.fetch_error = true;
         return;
     };
     defer alloc.free(body);
     if (text_gen.load(.acquire) != my_gen) return;
 
-    const content = nsp.chapterContentHtml(body, open_source) orelse {
-        state.app.novels.fetch_error = true;
+    const content = nsp.chapterContentHtml(body, job.source) orelse {
+        if (text_gen.load(.acquire) == my_gen) state.app.novels.fetch_error = true;
         logs.pushLog("info", "novels", "Chapter had no extractable text", false);
         return;
     };
@@ -1245,32 +1597,42 @@ fn saveResume(chapter: usize) void {
 pub fn openDeepLink(link: []const u8) void {
     const parsed = pure.parseDeepLink(link) orelse return;
     const src = std.meta.stringToEnum(NovelSource, parsed.source) orelse return;
+    openCatalogResult(@intFromEnum(src), parsed.title, parsed.url);
+}
 
+/// Open an immutable universal-search identity without touching the browse
+/// query/results or relying on their mutable row indices. Owner-thread only.
+pub fn openCatalogResult(source: u8, title: []const u8, url: []const u8) void {
+    const src = std.enums.fromInt(NovelSource, source) orelse return;
+    if (title.len == 0 or title.len > work_snap.len or url.len > work_url_snap.len) return;
+    parse_mutex.lock();
+    const my_gen = chapters_gen.fetchAdd(1, .acq_rel) + 1;
     open_source = src;
 
-    const tlen = @min(parsed.title.len, state.app.novels.work_title.len);
-    @memcpy(state.app.novels.work_title[0..tlen], parsed.title[0..tlen]);
+    const tlen = @min(title.len, state.app.novels.work_title.len);
+    @memcpy(state.app.novels.work_title[0..tlen], title[0..tlen]);
     state.app.novels.work_title_len = tlen;
-    @memcpy(work_snap[0..tlen], parsed.title[0..tlen]);
+    @memcpy(work_snap[0..tlen], title[0..tlen]);
     work_snap_len = tlen;
 
-    const ulen = @min(parsed.url.len, work_url_snap.len);
-    @memcpy(work_url_snap[0..ulen], parsed.url[0..ulen]);
+    const ulen = @min(url.len, work_url_snap.len);
+    @memcpy(work_url_snap[0..ulen], url[0..ulen]);
     work_url_snap_len = ulen;
 
+    _ = text_gen.fetchAdd(1, .acq_rel);
+    state.app.novels.text_loading.store(false, .release);
     state.app.novels.view = .chapters;
     state.app.novels.chapters_loading.store(true, .release);
     state.app.novels.fetch_error = false;
 
-    parse_mutex.lock();
     ch_count = 0;
-    parse_mutex.unlock();
 
     state.app.browse_source = .Novels;
     state.app.router.navigate(.browse);
 
-    const my_gen = chapters_gen.fetchAdd(1, .acq_rel) + 1;
-    if (@import("../core/workers.zig").spawnLegacy(chaptersWorker, .{my_gen})) |t| {
+    const job = readerJob(my_gen, work_snap[0..work_snap_len], work_url_snap[0..work_url_snap_len]);
+    parse_mutex.unlock();
+    if (@import("../core/workers.zig").spawnLegacy(chaptersWorker, .{job})) |t| {
         @import("../core/workers.zig").release(t);
     } else |_| {
         state.app.novels.chapters_loading.store(false, .release);
@@ -1514,6 +1876,8 @@ fn novelSourceLabel(source: NovelSource) []const u8 {
     return switch (source) {
         .wikisource => "Wikisource",
         .internet_archive => "Internet Archive",
+        .gutenberg => "Project Gutenberg",
+        .openlibrary => "Open Library",
         .royalroad => "Royal Road",
         .novelfire => "NovelFire",
         else => "Connected source",
@@ -1560,20 +1924,14 @@ fn renderNovelCard(item: ListRow, index: usize) void {
         {
             var spine = dvui.box(@src(), .{ .dir = .vertical }, .{
                 .id_extra = 54000 + index,
-                .min_size_content = .{ .w = 48, .h = 112 },
-                .max_size_content = .{ .w = 48, .h = 112 },
+                .min_size_content = .{ .w = 76, .h = 112 },
+                .max_size_content = .{ .w = 76, .h = 112 },
                 .background = true,
                 .color_fill = theme.colors.accent.lerp(theme.colors.bg_surface, 0.35),
                 .corner_radius = .{ .x = theme.radius.md, .y = theme.radius.md, .w = 0, .h = 0 },
             });
             defer spine.deinit();
-            dvui.icon(@src(), "novel-source", novelSourceIcon(source), .{}, .{
-                .id_extra = index,
-                .color_text = theme.colors.text_on_accent,
-                .min_size_content = theme.iconSize(.lg),
-                .gravity_x = 0.5,
-                .gravity_y = 0.5,
-            });
+            components.coverArt(@src(), 54500 + index, &novel_covers[index], item.metadata.cover(), novelSourceIcon(source), theme.radius.md);
         }
 
         {
@@ -1589,6 +1947,22 @@ fn renderNovelCard(item: ListRow, index: usize) void {
                 .color_text = theme.colors.text_primary,
                 .font = dvui.themeGet().font_heading,
             });
+            if (item.metadata.author_len > 0 or item.metadata.overview_len > 0) {
+                var subtitle_buf: [256]u8 = undefined;
+                const subtitle = if (item.metadata.author_len > 0)
+                    safeUtf8(item.metadata.author())
+                else
+                    safeUtf8(item.metadata.overview()[0..@min(item.metadata.overview_len, 100)]);
+                const subtitle_text = if (item.metadata.year > 0)
+                    std.fmt.bufPrint(&subtitle_buf, "{s} · {d}", .{ subtitle, item.metadata.year }) catch subtitle
+                else
+                    subtitle;
+                _ = dvui.label(@src(), "{s}", .{subtitle_text}, .{
+                    .id_extra = 56500 + index,
+                    .expand = .horizontal,
+                    .color_text = theme.colors.text_secondary,
+                });
+            }
             {
                 var spacer = dvui.box(@src(), .{}, .{ .id_extra = 57000 + index, .expand = .vertical });
                 spacer.deinit();

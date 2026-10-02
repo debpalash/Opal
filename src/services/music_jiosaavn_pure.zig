@@ -14,6 +14,7 @@
 //!      "perma_url":"https://www.jiosaavn.com/song/kesariya/…"}, … ] }
 
 const std = @import("std");
+const music = @import("music_subsonic_pure.zig");
 
 pub const API = "https://www.jiosaavn.com/api.php";
 
@@ -154,6 +155,40 @@ pub fn parseSong(obj: []const u8, title_buf: []u8, artist_buf: []u8, url_buf: []
     const an = jsonStr(obj, "\"primary_artists\":\"", artist_buf);
     const in = jsonStr(obj, "\"image\":\"", img_buf);
     return .{ .title = title_buf[0..tn], .artist = artist_buf[0..an], .perma_url = url_buf[0..un], .image = img_buf[0..in] };
+}
+
+pub fn parseSongValue(obj: std.json.Value) ?music.MusicSong {
+    const title = music.valueString(music.valueField(obj, "song"));
+    const url = music.valueString(music.valueField(obj, "perma_url"));
+    if (title.len == 0 or !isPlayableUrl(url) or url.len > 256) return null;
+    var row: music.MusicSong = .{};
+    decodeText(title, &row.title, &row.title_len);
+    decodeText(music.valueString(music.valueField(obj, "primary_artists")), &row.artist, &row.artist_len);
+    music.copyValueText(&row.play_url, &row.play_url_len, url);
+    var buf: [400]u8 = undefined;
+    const cover = coverUpgrade(music.valueString(music.valueField(obj, "image")), &buf);
+    if (cover.len <= row.cover.len) music.copyValueText(&row.cover, &row.cover_len, cover);
+    return row;
+}
+fn decodeText(src: []const u8, dst: []u8, len: *usize) void {
+    var i: usize = 0;
+    var n: usize = 0;
+    while (i < src.len and n < dst.len) {
+        var consumed: usize = 1;
+        var ch = src[i];
+        for ([_][]const u8{ "&amp;", "&quot;", "&#39;", "&#039;" }, [_]u8{ '&', '"', 39, 39 }) |entity, replacement| {
+            if (std.mem.startsWith(u8, src[i..], entity)) {
+                consumed = entity.len;
+                ch = replacement;
+                break;
+            }
+        }
+        dst[n] = ch;
+        n += 1;
+        i += consumed;
+    }
+    while (n > 0 and !std.unicode.utf8ValidateSlice(dst[0..n])) n -= 1;
+    len.* = n;
 }
 
 // ══════════════════════════════════════════════════════════

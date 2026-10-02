@@ -201,6 +201,28 @@ pub fn parseSong(
     };
 }
 
+pub fn parseSongValue(obj: std.json.Value) ?music.MusicSong {
+    const id = music.valueString(music.valueField(obj, "ratingKey"));
+    const title = music.valueString(music.valueField(obj, "title"));
+    if (id.len == 0 or id.len > 128 or title.len == 0) return null;
+    const media = music.valueField(obj, "Media");
+    if (media != .array or media.array.items.len == 0) return null;
+    const parts = music.valueField(media.array.items[0], "Part");
+    if (parts != .array or parts.array.items.len == 0) return null;
+    const key = music.valueString(music.valueField(parts.array.items[0], "key"));
+    if (key.len == 0 or key.len > 256 or !isValidPath(key)) return null;
+    var row: music.MusicSong = .{};
+    music.copyValueText(&row.id, &row.id_len, id);
+    music.copyValueText(&row.title, &row.title_len, title);
+    music.copyValueText(&row.artist, &row.artist_len, music.valueString(music.valueField(obj, "grandparentTitle")));
+    var thumb = music.valueString(music.valueField(obj, "thumb"));
+    if (thumb.len == 0) thumb = music.valueString(music.valueField(obj, "parentThumb"));
+    if (thumb.len == 0) thumb = music.valueString(music.valueField(obj, "grandparentThumb"));
+    if (thumb.len <= row.cover.len and isValidPath(thumb)) music.copyValueText(&row.cover, &row.cover_len, thumb);
+    music.copyValueText(&row.play_url, &row.play_url_len, key);
+    return row;
+}
+
 // ══════════════════════════════════════════════════════════
 // Tests
 // ══════════════════════════════════════════════════════════

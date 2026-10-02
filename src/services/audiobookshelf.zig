@@ -33,6 +33,52 @@ const alloc = @import("../core/alloc.zig").allocator;
 // reads it each frame. is_loading (atomic) only gates re-spawns.
 var parse_mutex: @import("../core/sync.zig").Mutex = .{};
 
+pub const ConnectionSnapshot = struct {
+    connected: bool,
+    server: [256]u8,
+    server_len: usize,
+    token: [256]u8,
+    token_len: usize,
+    libraries: [16]pure.Library,
+    library_count: usize,
+};
+/// Immutable credentials/library identities for independent universal searches.
+pub fn connectionSnapshot() ConnectionSnapshot {
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    return .{ .connected = state.app.abs.connected, .server = state.app.abs.server_url, .server_len = @min(state.app.abs.server_url_len, state.app.abs.server_url.len), .token = state.app.abs.token, .token_len = @min(state.app.abs.token_len, state.app.abs.token.len), .libraries = state.app.abs.libraries, .library_count = @min(state.app.abs.library_count, state.app.abs.libraries.len) };
+}
+pub fn setServerUrl(server: []const u8) void {
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    @import("../core/text.zig").setFixedUtf8(&state.app.abs.server_url, &state.app.abs.server_url_len, server);
+}
+
+pub const CatalogSnapshot = struct {
+    connected: bool,
+    loading: bool,
+    loading_more: bool,
+    has_more: bool,
+    view: []const u8,
+    book_count: usize,
+    library_count: usize,
+    server: [256]u8,
+    server_len: usize,
+    library: [96]u8,
+    library_len: usize,
+    error_text: [128]u8,
+    error_len: usize,
+};
+pub fn catalogSnapshot(books: []pure.Book, libraries: []pure.Library) CatalogSnapshot {
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    const bn = @min(state.app.abs.book_count, @min(books.len, state.app.abs.books.len));
+    const ln = @min(state.app.abs.library_count, @min(libraries.len, state.app.abs.libraries.len));
+    @memcpy(books[0..bn], state.app.abs.books[0..bn]);
+    @memcpy(libraries[0..ln], state.app.abs.libraries[0..ln]);
+    return .{ .connected = state.app.abs.connected, .loading = state.app.abs.is_loading.load(.acquire), .loading_more = loading_more.load(.acquire), .has_more = more_available and bn < state.app.abs.books.len, .view = @tagName(state.app.abs.view), .book_count = bn, .library_count = ln, .server = state.app.abs.server_url, .server_len = @min(state.app.abs.server_url_len, state.app.abs.server_url.len), .library = state.app.abs.selected_lib_name, .library_len = @min(state.app.abs.selected_lib_name_len, state.app.abs.selected_lib_name.len), .error_text = state.app.abs.login_error, .error_len = @min(state.app.abs.login_error_len, state.app.abs.login_error.len) };
+}
+
 // ── Server-side resume state ────────────────────────────────────────────────
 // playBook() streams a book immediately, then a detached worker fetches the
 // server's saved position; tick() (frame loop, UI thread) issues the seek once
@@ -61,6 +107,7 @@ var resume_title_len: usize = 0;
 // render-time reads, which tolerate one frame of staleness like book_count —
 // stay consistent.
 var current_page: u32 = 0;
+var library_generation = std.atomic.Value(u32).init(0);
 var more_available: bool = true;
 var loading_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
@@ -172,11 +219,13 @@ pub fn authenticate() void {
                 return;
             };
 
+            parse_mutex.lock();
             const tlen = @min(token.len, state.app.abs.token.len);
             @memcpy(state.app.abs.token[0..tlen], token[0..tlen]);
             state.app.abs.token_len = tlen;
             state.app.abs.connected = true;
             state.app.abs.view = .Libraries;
+            parse_mutex.unlock();
             state.markConfigDirty();
 
             fetchLibrariesSync();
@@ -212,12 +261,19 @@ fn fetchLibrariesSync() void {
     var url_buf: [512]u8 = undefined;
     const url = std.fmt.bufPrint(&url_buf, "{s}/api/libraries", .{server}) catch return;
 
-    const body = absGet(url) orelse return;
+    const body = absGet(url) orelse {
+        if (state.app.abs.connected) setLoginError("Failed to load libraries — check your server connection");
+        return;
+    };
     defer alloc.free(body);
 
     parse_mutex.lock();
     defer parse_mutex.unlock();
-    state.app.abs.library_count = pure.parseLibraries(body, &state.app.abs.libraries);
+    state.app.abs.login_error_len = 0;
+    state.app.abs.library_count = pure.parseLibraryPage(alloc, body, &state.app.abs.libraries) orelse {
+        setLoginError("Invalid library response — check your server connection");
+        return;
+    };
     logs.pushLog("info", "audiobookshelf", "Libraries loaded", false);
 }
 
@@ -226,6 +282,8 @@ pub fn openLibrary(idx: usize) void {
     if (idx >= state.app.abs.library_count) return;
     if (state.app.abs.is_loading.load(.acquire) or !state.app.abs.connected) return;
 
+    state.app.abs.login_error_len = 0;
+    const generation = library_generation.fetchAdd(1, .acq_rel) +% 1;
     const lib = &state.app.abs.libraries[idx];
     const ilen = @min(lib.id_len, state.app.abs.selected_lib_id.len);
     @memcpy(state.app.abs.selected_lib_id[0..ilen], lib.id[0..ilen]);
@@ -243,25 +301,40 @@ pub fn openLibrary(idx: usize) void {
     more_available = true;
 
     state.app.abs.thread = @import("../core/workers.zig").spawnLegacy(struct {
-        fn worker() void {
-            defer state.app.abs.is_loading.store(false, .release);
-            const server = state.app.abs.server_url[0..state.app.abs.server_url_len];
-            const lib_id = state.app.abs.selected_lib_id[0..state.app.abs.selected_lib_id_len];
+        fn worker(gen: u32, lib_buf: [64]u8, lib_len: usize) void {
+            defer if (library_generation.load(.acquire) == gen) state.app.abs.is_loading.store(false, .release);
+            var server_buf: [256]u8 = undefined;
+            const server_len = @min(state.app.abs.server_url_len, server_buf.len);
+            @memcpy(server_buf[0..server_len], state.app.abs.server_url[0..server_len]);
+            const server = server_buf[0..server_len];
+            const lib_id = lib_buf[0..lib_len];
 
             var url_buf: [640]u8 = undefined;
             const url = pure.libraryItemsUrl(server, lib_id, ABS_PAGE_LIMIT, 0, &url_buf) orelse return;
 
-            const body = absGet(url) orelse return;
+            const body = absGet(url) orelse {
+                if (library_generation.load(.acquire) == gen and state.app.abs.connected) {
+                    setLoginError("Failed to load library — check your server connection");
+                    more_available = false;
+                }
+                return;
+            };
             defer alloc.free(body);
 
             parse_mutex.lock();
             defer parse_mutex.unlock();
-            const n = pure.parseItems(body, &state.app.abs.books);
+            if (library_generation.load(.acquire) != gen or !state.app.abs.connected or state.app.abs.view != .Books) return;
+            const page = pure.parseItemPage(alloc, body, &state.app.abs.books) orelse {
+                setLoginError("Invalid library response — retry this library");
+                more_available = false;
+                return;
+            };
+            const n = page.count;
             state.app.abs.book_count = n;
-            if (n < ABS_PAGE_LIMIT or n >= state.app.abs.books.len) more_available = false;
+            more_available = page.consumed >= ABS_PAGE_LIMIT and n < state.app.abs.books.len;
             logs.pushLog("info", "audiobookshelf", "Books loaded", false);
         }
-    }.worker, .{}) catch blk: {
+    }.worker, .{ generation, state.app.abs.selected_lib_id, state.app.abs.selected_lib_id_len }) catch blk: {
         state.app.abs.is_loading.store(false, .release);
         break :blk null;
     };
@@ -269,6 +342,10 @@ pub fn openLibrary(idx: usize) void {
 }
 
 pub fn goToLibraries() void {
+    clearAudioSelection();
+    _ = library_generation.fetchAdd(1, .acq_rel);
+    state.app.abs.is_loading.store(false, .release);
+    more_available = false;
     state.app.abs.view = .Libraries;
     state.app.abs.book_count = 0;
 }
@@ -282,7 +359,7 @@ pub fn loadMore() void {
     if (!more_available) return;
     if (state.app.abs.is_loading.load(.acquire)) return;
     if (loading_more.load(.acquire)) return;
-    if (state.app.abs.book_count == 0) return;
+
     if (state.app.abs.book_count >= state.app.abs.books.len) {
         more_available = false;
         return;
@@ -299,14 +376,14 @@ pub fn loadMore() void {
     @memcpy(lib_id_buf[0..lib_id_len], state.app.abs.selected_lib_id[0..lib_id_len]);
     const next_page = current_page + 1;
 
-    if (@import("../core/workers.zig").spawnLegacy(loadMoreWorker, .{ lib_id_buf, lib_id_len, next_page })) |t| {
+    if (@import("../core/workers.zig").spawnLegacy(loadMoreWorker, .{ lib_id_buf, lib_id_len, next_page, library_generation.load(.acquire) })) |t| {
         @import("../core/workers.zig").release(t);
     } else |_| {
         loading_more.store(false, .release);
     }
 }
 
-fn loadMoreWorker(lib_id_buf: [64]u8, lib_id_len: usize, page: u32) void {
+fn loadMoreWorker(lib_id_buf: [64]u8, lib_id_len: usize, page: u32, generation: u32) void {
     defer loading_more.store(false, .release);
 
     const lib_id = lib_id_buf[0..lib_id_len];
@@ -321,14 +398,27 @@ fn loadMoreWorker(lib_id_buf: [64]u8, lib_id_len: usize, page: u32) void {
     var url_buf: [640]u8 = undefined;
     const url = pure.libraryItemsUrl(server, lib_id, ABS_PAGE_LIMIT, page, &url_buf) orelse return;
 
-    const body = absGet(url) orelse return;
+    const body = absGet(url) orelse {
+        if (library_generation.load(.acquire) == generation and state.app.abs.connected) {
+            setLoginError("Failed to load more books — reopen the library to retry");
+            more_available = false;
+        }
+        return;
+    };
     defer alloc.free(body);
 
     // Parse into a heap staging buffer — never a big stack buffer on a
     // spawned thread (CLAUDE.md) — before publishing under the lock.
     const items = alloc.alloc(pure.Book, ABS_PAGE_LIMIT) catch return;
     defer alloc.free(items);
-    const n = pure.parseItems(body, items);
+    const parsed_page = pure.parseItemPage(alloc, body, items) orelse {
+        if (library_generation.load(.acquire) == generation) {
+            setLoginError("Invalid library page — reopen the library to retry");
+            more_available = false;
+        }
+        return;
+    };
+    const n = parsed_page.count;
 
     parse_mutex.lock();
     defer parse_mutex.unlock();
@@ -336,7 +426,8 @@ fn loadMoreWorker(lib_id_buf: [64]u8, lib_id_len: usize, page: u32) void {
     // The user may have switched (or left) the library while this page was in
     // flight — drop it rather than append a stale library's books onto
     // whatever is now shown.
-    if (state.app.abs.selected_lib_id_len != lib_id_len or
+    if (library_generation.load(.acquire) != generation or !state.app.abs.connected or state.app.abs.view != .Books or
+        state.app.abs.selected_lib_id_len != lib_id_len or
         !std.mem.eql(u8, state.app.abs.selected_lib_id[0..lib_id_len], lib_id))
     {
         return;
@@ -350,7 +441,7 @@ fn loadMoreWorker(lib_id_buf: [64]u8, lib_id_len: usize, page: u32) void {
     }
     state.app.abs.book_count = base + written;
     current_page = page;
-    if (n < ABS_PAGE_LIMIT or state.app.abs.book_count >= cap) {
+    if (parsed_page.consumed < ABS_PAGE_LIMIT or state.app.abs.book_count >= cap) {
         more_available = false;
     }
 
@@ -363,113 +454,416 @@ fn loadMoreWorker(lib_id_buf: [64]u8, lib_id_len: usize, page: u32) void {
 // Playback
 // ══════════════════════════════════════════════════════════
 
-/// Stream book `idx`'s audio into mpv. Builds the token-authed stream URL and
-/// hands it to browser.loadContentDirectMeta, which creates a player if needed,
-/// load_file's the URL, attaches now-playing metadata (title/author/cover), and
-/// gotoPlayer()s — so the macOS Now Playing card is populated automatically.
-pub fn playBook(idx: usize) void {
-    if (idx >= state.app.abs.book_count) return;
-    const server = state.app.abs.server_url[0..state.app.abs.server_url_len];
-    const token = state.app.abs.token[0..state.app.abs.token_len];
-    if (server.len == 0 or token.len == 0) return;
+const AudioJob = struct {
+    generation: u32 = 0,
+    requested_episode: [64]u8 = std.mem.zeroes([64]u8),
+    requested_episode_len: usize = 0,
+    id: [64]u8 = std.mem.zeroes([64]u8),
+    id_len: usize = 0,
+    title: [256]u8 = std.mem.zeroes([256]u8),
+    title_len: usize = 0,
+    author: [160]u8 = std.mem.zeroes([160]u8),
+    author_len: usize = 0,
+    server: [256]u8 = std.mem.zeroes([256]u8),
+    server_len: usize = 0,
+    token: [256]u8 = std.mem.zeroes([256]u8),
+    token_len: usize = 0,
+};
+const AUDIO_CAP: usize = 128;
+var audio_mutex: @import("../core/sync.zig").Mutex = .{};
+var audio_generation = std.atomic.Value(u32).init(0);
+var audio_loading = std.atomic.Value(bool).init(false);
+var audio_job: AudioJob = .{};
+var audio_tracks: [AUDIO_CAP]pure.AudioTrack = [_]pure.AudioTrack{.{}} ** AUDIO_CAP;
+var audio_count: usize = 0;
+var audio_total: usize = 0;
+var audio_visible: bool = false;
+var audio_requested: ?usize = null;
+var audio_resume: pure.TrackPosition = .{ .index = 0, .seconds = 0 };
+var audio_request_seconds: f64 = 0;
+var audio_complete_book: bool = false;
+const ActiveAudio = struct {
+    job: AudioJob,
+    count: usize,
+    index: usize,
+    complete_book: bool,
+    url: [2048]u8 = std.mem.zeroes([2048]u8),
+    url_len: usize = 0,
+    player_serial: ?u64 = null,
+    opened: bool = false,
+    last_position: f64 = 0,
+    last_sync_ms: i64 = 0,
+};
+// Frame-thread owned playback plan. Browsing/hiding a selector cannot rewrite it.
+var active_audio: ?ActiveAudio = null;
+var active_tracks: [AUDIO_CAP]pure.AudioTrack = [_]pure.AudioTrack{.{}} ** AUDIO_CAP;
 
-    // Snapshot the book's fields into locals BEFORE the play call — a concurrent
-    // refetch can overwrite books[] mid-frame.
-    const b = &state.app.abs.books[idx];
-    var id_buf: [64]u8 = undefined;
-    const idlen = @min(b.id_len, id_buf.len);
-    @memcpy(id_buf[0..idlen], b.id[0..idlen]);
-    var title_buf: [256]u8 = undefined;
-    const tlen = @min(b.title_len, title_buf.len);
-    @memcpy(title_buf[0..tlen], b.title[0..tlen]);
-    var author_buf: [160]u8 = undefined;
-    const alen = @min(b.author_len, author_buf.len);
-    @memcpy(author_buf[0..alen], b.author[0..alen]);
-
-    var url_buf: [1024]u8 = undefined;
-    const url = pure.streamUrl(server, id_buf[0..idlen], token, &url_buf) orelse {
-        state.showToast("Cannot play — invalid item id");
-        return;
-    };
-
-    var cover_buf: [1024]u8 = undefined;
-    const cover = pure.coverUrl(server, id_buf[0..idlen], token, &cover_buf) orelse "";
-
-    // ── Arm server-side resume BEFORE the load ──
-    // Record which book tick() should recognise as loaded, reset the target, and
-    // kick the async progress fetch. tick() applies the seek once mpv reports a
-    // duration (file open) — seeking earlier is a no-op. Order matters: the book
-    // id must be published before loadContentDirectMeta so the id-match gate in
-    // tick() (and the fetch worker's publish guard) sees this play, not a stale one.
-    resume_mutex.lock();
-    resume_target_secs = 0;
-    const rlen = @min(idlen, resume_item_id.len);
-    @memcpy(resume_item_id[0..rlen], id_buf[0..rlen]);
-    resume_item_id_len = rlen;
-    // Display snapshot for the unified library row. Only stable item identity
-    // is persisted; token-bearing stream/cover URLs stay in this call frame.
-    const rt = @min(tlen, resume_title.len);
-    @memcpy(resume_title[0..rt], title_buf[0..rt]);
-    resume_title_len = rt;
-    resume_mutex.unlock();
-    resume_decided.store(false, .release);
-    resume_pending.store(true, .release);
-    ResumeFetch.spawn();
-
-    var deep_buf: [128]u8 = undefined;
-    const deep = std.fmt.bufPrint(&deep_buf, "opal://audiobookshelf/{s}", .{id_buf[0..idlen]}) catch return;
-    @import("browser.zig").playDirect(.{
-        .url = url,
-        .history_identity = deep,
-        .restore_target = deep,
-        .art_url = cover,
-        .title = title_buf[0..tlen],
-        .subtitle = author_buf[0..alen],
-    });
-    logs.pushLog("info", "audiobookshelf", "Streaming audiobook", false);
+pub const AudioSnapshot = struct {
+    visible: bool,
+    complete_book: bool,
+    loading: bool,
+    count: usize,
+    total: usize,
+    generation: u32,
+    title: [256]u8,
+    title_len: usize,
+};
+/// Snapshot for presenting tracks. Callers serialize only titles/episode flags.
+pub fn audioSnapshot(out: []pure.AudioTrack) AudioSnapshot {
+    audio_mutex.lock();
+    defer audio_mutex.unlock();
+    const count = @min(audio_count, out.len);
+    @memcpy(out[0..count], audio_tracks[0..count]);
+    return .{ .visible = audio_visible, .complete_book = audio_complete_book, .loading = audio_loading.load(.acquire), .count = count, .total = audio_total, .generation = audio_job.generation, .title = audio_job.title, .title_len = audio_job.title_len };
 }
-
-/// Reopen a persisted audiobook by stable item id. The current token is added
-/// only at the playback edge and never enters the unified library database.
-pub fn playBookById(id: []const u8, title: []const u8, author: []const u8) void {
-    const server = state.app.abs.server_url[0..state.app.abs.server_url_len];
-    const token = state.app.abs.token[0..state.app.abs.token_len];
-    if (server.len == 0 or token.len == 0) {
-        state.showToast("Connect Audiobookshelf to resume");
+pub fn clearAudioSelection() void {
+    audio_mutex.lock();
+    defer audio_mutex.unlock();
+    _ = audio_generation.fetchAdd(1, .acq_rel);
+    audio_visible = false;
+    audio_count = 0;
+    audio_total = 0;
+    audio_complete_book = false;
+    audio_requested = null;
+    @memset(&audio_job.token, 0);
+    audio_job.token_len = 0;
+    audio_loading.store(false, .release);
+}
+pub fn playBook(idx: usize) void {
+    parse_mutex.lock();
+    if (idx >= state.app.abs.book_count) {
+        parse_mutex.unlock();
         return;
     }
-    var url_buf: [1024]u8 = undefined;
-    const url = pure.streamUrl(server, id, token, &url_buf) orelse {
-        state.showToast("Cannot play this audiobook");
+    const book = state.app.abs.books[idx];
+    parse_mutex.unlock();
+    playBookById(book.id[0..book.id_len], book.title[0..book.title_len], book.author[0..book.author_len]);
+}
+/// Resolve actual audio files before playback; `/download` can be a zip archive.
+pub fn playBookById(id: []const u8, title: []const u8, author: []const u8) void {
+    const connection = connectionSnapshot();
+    const slash = std.mem.indexOfScalar(u8, id, '/');
+    const item_id = if (slash) |index| id[0..index] else id;
+    const episode_id = if (slash) |index| id[index + 1 ..] else "";
+    if (!connection.connected or !pure.validItemId(item_id) or item_id.len > 64 or
+        (episode_id.len > 0 and (!pure.validItemId(episode_id) or episode_id.len > 64)))
+    {
+        state.showToast("Connect Audiobookshelf to play this item");
+        return;
+    }
+    var job: AudioJob = .{};
+    @import("../core/text.zig").setFixedUtf8(&job.id, &job.id_len, item_id);
+    @import("../core/text.zig").setFixedUtf8(&job.requested_episode, &job.requested_episode_len, episode_id);
+    @import("../core/text.zig").setFixedUtf8(&job.title, &job.title_len, title);
+    @import("../core/text.zig").setFixedUtf8(&job.author, &job.author_len, author);
+    job.server_len = connection.server_len;
+    @memcpy(job.server[0..job.server_len], connection.server[0..job.server_len]);
+    job.token_len = connection.token_len;
+    @memcpy(job.token[0..job.token_len], connection.token[0..job.token_len]);
+    if (job.server_len == 0 or job.token_len == 0) return;
+    audio_mutex.lock();
+    job.generation = audio_generation.fetchAdd(1, .acq_rel) +% 1;
+    audio_job = job;
+    audio_count = 0;
+    audio_total = 0;
+    audio_requested = null;
+    audio_visible = true;
+    audio_loading.store(true, .release);
+    audio_mutex.unlock();
+    state.navigateToTab(.Audiobooks);
+    if (@import("../core/workers.zig").spawnLegacy(loadAudioWorker, .{job})) |thread| {
+        @import("../core/workers.zig").release(thread);
+    } else |_| {
+        publishAudioFailure(job.generation, "Could not start audio lookup — select the item again");
+        finishAudioJob(job.generation);
+    }
+}
+fn finishAudioJob(generation: u32) void {
+    audio_mutex.lock();
+    defer audio_mutex.unlock();
+    if (audio_generation.load(.acquire) == generation) {
+        audio_loading.store(false, .release);
+        state.wakeUi();
+    }
+}
+fn publishAudioFailure(generation: u32, message: []const u8) void {
+    audio_mutex.lock();
+    defer audio_mutex.unlock();
+    if (audio_generation.load(.acquire) == generation) setLoginError(message);
+}
+fn loadAudioWorker(job: AudioJob) void {
+    defer finishAudioJob(job.generation);
+    var url_buf: [640]u8 = undefined;
+    const url = std.fmt.bufPrint(&url_buf, "{s}/api/items/{s}?expanded=1", .{ std.mem.trimEnd(u8, job.server[0..job.server_len], "/"), job.id[0..job.id_len] }) catch return;
+    var auth_buf: [320]u8 = undefined;
+    const auth = pure.bearerHeader(job.token[0..job.token_len], &auth_buf) orelse return;
+    const body_buf = alloc.alloc(u8, 3 * 1024 * 1024) catch return;
+    defer alloc.free(body_buf);
+    const body = http.fetch(url, body_buf, .{ .accept = "application/json", .auth_header = auth, .timeout_secs = 15, .max_response = body_buf.len }) orelse {
+        publishAudioFailure(job.generation, "Cannot load audio files — check server access");
         return;
     };
+    const staged = alloc.alloc(pure.AudioTrack, AUDIO_CAP) catch return;
+    defer alloc.free(staged);
+    const page = pure.parseAudioTracks(alloc, body, job.id[0..job.id_len], staged) orelse {
+        publishAudioFailure(job.generation, "This item has no playable audio files");
+        return;
+    };
+    const complete = pure.completeBookTimeline(staged[0..page.count], page.total);
+    var book_resume: pure.TrackPosition = .{ .index = 0, .seconds = 0 };
+    if (complete) {
+        var progress_url_buf: [640]u8 = undefined;
+        if (pure.progressUrl(job.server[0..job.server_len], job.id[0..job.id_len], "", &progress_url_buf)) |progress_url| {
+            var progress_buf: [16384]u8 = undefined;
+            if (http.fetch(progress_url, &progress_buf, .{ .accept = "application/json", .auth_header = auth, .timeout_secs = 8 })) |progress_body| {
+                const info = pure.parseProgressValue(alloc, progress_body);
+                const last = staged[page.count - 1];
+                const target = pure.resumeTarget(info.current_time, last.start_offset + last.duration, info.is_finished) orelse 0;
+                book_resume = pure.locateBookPosition(staged[0..page.count], target) orelse book_resume;
+            }
+        }
+    }
+    audio_mutex.lock();
+    defer audio_mutex.unlock();
+    if (audio_generation.load(.acquire) != job.generation or !state.app.abs.connected) return;
+    @memcpy(audio_tracks[0..page.count], staged[0..page.count]);
+    audio_count = page.count;
+    audio_total = page.total;
+    audio_complete_book = complete;
+    audio_resume = book_resume;
+    if (job.requested_episode_len > 0) {
+        for (staged[0..page.count], 0..) |track, idx| {
+            if (std.mem.eql(u8, track.episode_id[0..track.episode_id_len], job.requested_episode[0..job.requested_episode_len])) {
+                audio_requested = idx;
+                audio_request_seconds = 0;
+                break;
+            }
+        }
+    } else if (complete) {
+        audio_requested = book_resume.index;
+        audio_request_seconds = book_resume.seconds;
+    } else if (page.count == 1 and page.total == 1) {
+        audio_requested = 0;
+        audio_request_seconds = 0;
+    }
+    if (page.count == 0) setLoginError("This item has no playable audio files");
+    state.wakeUi();
+}
+/// Requests playback on the frame thread, including remote/API callers.
+pub fn playAudioTrack(idx: usize, generation: u32) bool {
+    audio_mutex.lock();
+    defer audio_mutex.unlock();
+    if (generation != audio_job.generation or idx >= audio_count) return false;
+    audio_requested = idx;
+    audio_request_seconds = 0;
+    state.wakeUi();
+    return true;
+}
+pub fn playWholeBook(generation: u32) bool {
+    audio_mutex.lock();
+    defer audio_mutex.unlock();
+    if (generation != audio_job.generation or !audio_complete_book) return false;
+    audio_requested = audio_resume.index;
+    audio_request_seconds = audio_resume.seconds;
+    state.wakeUi();
+    return true;
+}
+fn playPendingAudioTrack() void {
+    audio_mutex.lock();
+    const idx = audio_requested orelse {
+        audio_mutex.unlock();
+        return;
+    };
+    audio_requested = null;
+    if (idx >= audio_count) {
+        audio_mutex.unlock();
+        return;
+    }
+    const job = audio_job;
+    const count = audio_count;
+    const complete = audio_complete_book;
+    const seconds = audio_request_seconds;
+    if (audio_generation.load(.acquire) != job.generation or !state.app.abs.connected) {
+        audio_mutex.unlock();
+        return;
+    }
+    if (active_audio) |prior| enqueueProgress(prior, false);
+    @memcpy(active_tracks[0..count], audio_tracks[0..count]);
+    active_audio = .{ .job = job, .count = count, .index = idx, .complete_book = complete };
+    audio_mutex.unlock();
+    loadActiveAudio(seconds);
+}
+fn loadActiveAudio(seconds: f64) void {
+    if (active_audio == null) return;
+    const plan = &active_audio.?;
+    const track = active_tracks[plan.index];
+    var url_buf: [2048]u8 = undefined;
+    const job = plan.job;
+    const url = pure.audioTrackUrl(job.server[0..job.server_len], track.content_path[0..track.content_path_len], job.token[0..job.token_len], &url_buf) orelse {
+        state.showToast("This audio file URL cannot be played");
+        active_audio = null;
+        return;
+    };
+    @memcpy(plan.url[0..url.len], url);
+    plan.url_len = url.len;
+    plan.opened = false;
+    plan.player_serial = null;
+    plan.last_position = @max(0, seconds);
+    plan.last_sync_ms = @import("../core/io_global.zig").monotonicMilliTimestamp();
     var cover_buf: [1024]u8 = undefined;
-    const cover = pure.coverUrl(server, id, token, &cover_buf) orelse "";
-
-    resume_mutex.lock();
-    resume_target_secs = 0;
-    const rlen = @min(id.len, resume_item_id.len);
-    @memcpy(resume_item_id[0..rlen], id[0..rlen]);
-    resume_item_id_len = rlen;
-    const rt = @min(title.len, resume_title.len);
-    @memcpy(resume_title[0..rt], title[0..rt]);
-    resume_title_len = rt;
-    resume_mutex.unlock();
-    resume_decided.store(false, .release);
-    resume_pending.store(true, .release);
-    ResumeFetch.spawn();
-
-    var deep_buf: [128]u8 = undefined;
-    const deep = std.fmt.bufPrint(&deep_buf, "opal://audiobookshelf/{s}", .{id}) catch return;
-    @import("browser.zig").playDirect(.{
-        .url = url,
-        .history_identity = deep,
-        .restore_target = deep,
-        .art_url = cover,
-        .title = title,
-        .subtitle = author,
-    });
-    logs.pushLog("info", "audiobookshelf", "Streaming audiobook", false);
+    const cover = pure.coverUrl(job.server[0..job.server_len], job.id[0..job.id_len], job.token[0..job.token_len], &cover_buf) orelse "";
+    // Server resume was resolved to this file's local seconds before the load.
+    resume_pending.store(false, .release);
+    var deep_buf: [192]u8 = undefined;
+    const deep = if (track.episode)
+        std.fmt.bufPrint(&deep_buf, "opal://audiobookshelf/{s}/{s}", .{ job.id[0..job.id_len], track.episode_id[0..track.episode_id_len] }) catch return
+    else
+        std.fmt.bufPrint(&deep_buf, "opal://audiobookshelf/{s}", .{job.id[0..job.id_len]}) catch return;
+    @import("browser.zig").playDirect(.{ .url = url, .history_identity = deep, .restore_target = deep, .resume_position_secs = @max(0, seconds), .art_url = cover, .title = if (track.episode) track.title[0..track.title_len] else job.title[0..job.title_len], .subtitle = job.author[0..job.author_len] });
+}
+const ProgressJob = struct {
+    job: AudioJob,
+    episode: [64]u8 = std.mem.zeroes([64]u8),
+    episode_len: usize = 0,
+    position: f64,
+    duration: f64,
+    finished: bool,
+};
+var progress_mutex: @import("../core/sync.zig").Mutex = .{};
+var progress_jobs: [8]ProgressJob = undefined;
+var progress_head: usize = 0;
+var progress_count: usize = 0;
+var progress_worker: bool = false;
+fn enqueueProgress(plan: ActiveAudio, finished: bool) void {
+    const track = active_tracks[plan.index];
+    if (!plan.complete_book and !track.episode) return; // partial books cannot truthfully sync file-local time as book progress
+    const duration = if (plan.complete_book) active_tracks[plan.count - 1].start_offset + active_tracks[plan.count - 1].duration else track.duration;
+    const position = if (plan.complete_book) pure.bookPosition(track, plan.last_position) orelse return else @min(plan.last_position, duration);
+    if (duration <= 0) return;
+    var request: ProgressJob = .{ .job = plan.job, .position = position, .duration = duration, .finished = finished };
+    if (track.episode) {
+        request.episode = track.episode_id;
+        request.episode_len = track.episode_id_len;
+    }
+    progress_mutex.lock();
+    if (progress_count == progress_jobs.len) {
+        // Keep the newest checkpoint without spawning parallel PATCH writers.
+        progress_jobs[(progress_head + progress_count - 1) % progress_jobs.len] = request;
+    } else {
+        progress_jobs[(progress_head + progress_count) % progress_jobs.len] = request;
+        progress_count += 1;
+    }
+    if (!progress_worker) {
+        progress_worker = true;
+        if (@import("../core/workers.zig").spawnLegacy(progressWorker, .{})) |thread| @import("../core/workers.zig").release(thread) else |_| progress_worker = false;
+    }
+    progress_mutex.unlock();
+}
+fn progressWorker() void {
+    while (true) {
+        progress_mutex.lock();
+        if (progress_count == 0) {
+            progress_worker = false;
+            progress_mutex.unlock();
+            return;
+        }
+        const request = progress_jobs[progress_head];
+        progress_head = (progress_head + 1) % progress_jobs.len;
+        progress_count -= 1;
+        progress_mutex.unlock();
+        const job = request.job;
+        var url_buf: [768]u8 = undefined;
+        const url = pure.progressUrl(job.server[0..job.server_len], job.id[0..job.id_len], request.episode[0..request.episode_len], &url_buf) orelse continue;
+        var auth_buf: [320]u8 = undefined;
+        const auth = pure.bearerHeader(job.token[0..job.token_len], &auth_buf) orelse continue;
+        var payload: [256]u8 = undefined;
+        const body = pure.progressBody(request.position, request.duration, request.finished, &payload) orelse continue;
+        var response: [16384]u8 = undefined;
+        if (http.fetch(url, &response, .{ .method = .PATCH, .payload = body, .content_type = "application/json", .auth_header = auth, .timeout_secs = 8 }) == null)
+            logs.pushLog("info", "audiobookshelf", "Playback progress could not sync to the server", false);
+        if (request.episode_len == 0) @import("library_store.zig").upsertProgress("audiobook", job.id[0..job.id_len], job.title[0..job.title_len], "", request.position, request.duration, "", job.id[0..job.id_len]);
+    }
+}
+fn tickAudioTimeline() void {
+    if (active_audio == null) return;
+    const plan = &active_audio.?;
+    if (!state.app.abs.connected) {
+        enqueueProgress(plan.*, false);
+        active_audio = null;
+        return;
+    }
+    if (state.app.active_player_idx >= state.app.players.items.len) return;
+    const player = state.app.players.items[state.app.active_player_idx];
+    const current = player.current_url[0..@min(player.current_url_len, player.current_url.len)];
+    if (!std.mem.eql(u8, current, plan.url[0..plan.url_len])) {
+        if (plan.opened) {
+            enqueueProgress(plan.*, false);
+            active_audio = null;
+        }
+        return;
+    }
+    if (plan.player_serial) |serial| {
+        if (serial != player.load_serial) {
+            enqueueProgress(plan.*, false);
+            active_audio = null;
+            return;
+        }
+    } else plan.player_serial = player.load_serial;
+    var duration: f64 = 0;
+    if (c.mpv.mpv_get_property(player.mpv_ctx, "duration", c.mpv.MPV_FORMAT_DOUBLE, &duration) >= 0 and duration > 0) plan.opened = true;
+    var position: f64 = 0;
+    if (c.mpv.mpv_get_property(player.mpv_ctx, "time-pos", c.mpv.MPV_FORMAT_DOUBLE, &position) >= 0 and std.math.isFinite(position) and position >= 0)
+        plan.last_position = position;
+    var eof: c_int = 0;
+    _ = c.mpv.mpv_get_property(player.mpv_ctx, "eof-reached", c.mpv.MPV_FORMAT_FLAG, &eof);
+    const now = @import("../core/io_global.zig").monotonicMilliTimestamp();
+    if (pure.shouldAdvanceTrack(plan.opened, !player.is_loading, eof != 0, player.load_error_len > 0)) {
+        plan.last_position = active_tracks[plan.index].duration;
+        const final = !plan.complete_book or plan.index + 1 >= plan.count;
+        enqueueProgress(plan.*, final);
+        if (!final) {
+            plan.index += 1;
+            loadActiveAudio(0);
+        } else active_audio = null;
+    } else if (plan.opened and now - plan.last_sync_ms >= 10000) {
+        enqueueProgress(plan.*, false);
+        plan.last_sync_ms = now;
+    }
+}
+fn renderAudioSelection() bool {
+    audio_mutex.lock();
+    const visible = audio_visible;
+    const title_buf = audio_job.title;
+    const title_len = audio_job.title_len;
+    const generation = audio_job.generation;
+    const count = audio_count;
+    const total = audio_total;
+    const complete = audio_complete_book;
+    audio_mutex.unlock();
+    if (!visible) return false;
+    var column = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
+    defer column.deinit();
+    if (components.actionButton(@src(), "Back to library", .secondary, 91001)) {
+        clearAudioSelection();
+        return true;
+    }
+    _ = dvui.label(@src(), "{s}", .{title_buf[0..title_len]}, .{ .color_text = theme.colors.text_primary });
+    if (audio_loading.load(.acquire)) {
+        dvui.spinner(@src(), .{ .color_text = theme.colors.accent, .min_size_content = theme.iconSize(.md) });
+        return true;
+    }
+    _ = dvui.label(@src(), "Choose a track or episode · {d} available of {d}", .{ count, total }, .{ .color_text = theme.colors.text_secondary });
+    if (complete and components.actionButton(@src(), "Play book from saved position", .primary, 91002)) _ = playWholeBook(generation);
+    if (complete) _ = dvui.label(@src(), "Book tracks advance automatically and resume across files.", .{}, .{ .color_text = theme.colors.text_secondary });
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .color_fill = theme.colors.bg_surface, .background = true });
+    defer scroll.deinit();
+    for (0..count) |idx| {
+        audio_mutex.lock();
+        const track = audio_tracks[idx];
+        audio_mutex.unlock();
+        if (components.actionButton(@src(), track.title[0..track.title_len], .secondary, 91100 + idx)) _ = playAudioTrack(idx, generation);
+    }
+    return true;
 }
 
 // ── Resume fetch worker (struct{var}: copies inputs before spawn) ───────────
@@ -551,6 +945,8 @@ const ResumeFetch = struct {
 /// resumed book open, seek to the server-saved second exactly once. Cheap no-op
 /// unless a resume is pending. Mirrors anime_skip.tick()'s seek timing + path.
 pub fn tick() void {
+    playPendingAudioTrack();
+    tickAudioTimeline();
     if (!resume_pending.load(.acquire)) return;
     if (!resume_decided.load(.acquire)) return; // fetch still running
     if (state.app.active_player_idx >= state.app.players.items.len) return;
@@ -595,6 +991,10 @@ pub fn tick() void {
 
 /// Disconnect + clear session (keeps the server URL so reconnect is one field).
 pub fn disconnect() void {
+    clearAudioSelection();
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    _ = library_generation.fetchAdd(1, .acq_rel);
     state.app.abs.connected = false;
     @memset(&state.app.abs.token, 0);
     state.app.abs.token_len = 0;
@@ -634,11 +1034,14 @@ fn absGet(url: []const u8) ?[]u8 {
 }
 
 fn expireAuthSession() void {
+    clearAudioSelection();
     parse_mutex.lock();
     if (!state.app.abs.connected) {
         parse_mutex.unlock();
         return;
     }
+    _ = library_generation.fetchAdd(1, .acq_rel);
+    state.app.abs.is_loading.store(false, .release);
     state.app.abs.connected = false;
     @memset(&state.app.abs.token, 0);
     state.app.abs.token_len = 0;
@@ -664,6 +1067,12 @@ pub fn renderContent() void {
         renderLoginForm();
         return;
     }
+    if (state.app.abs.login_error_len > 0) {
+        var error_buf: [256]u8 = undefined;
+        const error_text = safeUtf8Buf(state.app.abs.login_error[0..@min(state.app.abs.login_error_len, state.app.abs.login_error.len)], &error_buf);
+        _ = dvui.label(@src(), "{s}", .{error_text}, .{ .color_text = theme.colors.danger, .padding = dvui.Rect.all(8) });
+    }
+    if (renderAudioSelection()) return;
     switch (state.app.abs.view) {
         .Libraries => renderLibraries(),
         .Books => renderBooks(),
@@ -831,8 +1240,9 @@ fn renderBooks() void {
         }
     }
 
+    if (state.app.abs.book_count == 0 and more_available and !state.app.abs.is_loading.load(.acquire)) loadMore();
     if (state.app.abs.book_count == 0) {
-        if (!state.app.abs.is_loading.load(.acquire)) {
+        if (!state.app.abs.is_loading.load(.acquire) and !loading_more.load(.acquire)) {
             components.emptyState(icons.tvg.lucide.@"book-audio", "No audiobooks here", "Choose another library or add books in Audiobookshelf.");
             return;
         }

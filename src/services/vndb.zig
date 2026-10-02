@@ -71,7 +71,9 @@ const CoverSlot = struct {
     failed: bool = false,
     url_hash: u64 = 0,
 };
-var cover_slots: [180]CoverSlot = [_]CoverSlot{.{}} ** 180;
+// Extra slot belongs to independent universal-search detail, not the grid.
+const DETAIL_COVER_INDEX = 180;
+var cover_slots: [181]CoverSlot = [_]CoverSlot{.{}} ** 181;
 
 // ── Thread-safety ──
 // The detached fetch worker publishes into state.app.vndb.* under `parse_mutex`,
@@ -80,6 +82,15 @@ var cover_slots: [180]CoverSlot = [_]CoverSlot{.{}} ** 180;
 // remote threads, written by the worker).
 var parse_mutex: @import("../core/sync.zig").Mutex = .{};
 var search_request: LatestRequest = .{};
+var identity_request: LatestRequest = .{};
+var identity_loading = std.atomic.Value(bool).init(false);
+var identity_mutex: @import("../core/sync.zig").Mutex = .{};
+var identity_record: pure.Vn = .{};
+var identity_error: bool = false;
+var identity_ready: bool = false;
+var identity_active: bool = false; // UI-thread owned.
+var identity_id: [16]u8 = undefined;
+var identity_id_len: usize = 0;
 
 // Query snapshot handed to the detached search worker (never read the mutable UI
 // search_buf from the thread). `is_popular` selects which request body is built.
@@ -309,12 +320,63 @@ fn fetchPage(job: SearchJob, page: u32, append: bool) void {
 
 /// Open the detail overlay for result `idx`.
 pub fn openDetail(idx: usize) void {
+    identity_active = false;
+    identity_request.cancel(&identity_loading);
     if (idx >= state.app.vndb.result_count) return;
     state.app.vndb.selected_idx = idx;
 }
 
+/// Open a canonical VNDB identity without replacing the browse query or grid.
+pub fn openCatalogIdentity(id: []const u8) void {
+    if (id.len < 2 or id.len > identity_id.len or id[0] != 'v' or id[1] == '0') return;
+    for (id[1..]) |ch| if (!std.ascii.isDigit(ch)) return;
+    const generation = identity_request.begin(&identity_loading);
+    identity_active = true;
+    identity_id_len = id.len;
+    @memcpy(identity_id[0..id.len], id);
+    identity_mutex.lock();
+    identity_record = .{};
+    identity_ready = false;
+    identity_error = false;
+    identity_mutex.unlock();
+    state.app.vndb.selected_idx = null;
+    state.navigateToTab(.Vndb);
+    const Job = struct {
+        id: [16]u8,
+        id_len: usize,
+        generation: u32,
+        fn run(job: @This()) void {
+            defer {
+                identity_request.finish(job.generation, &identity_loading);
+                state.wakeUi();
+            }
+            var request_buf: [640]u8 = undefined;
+            const request = std.fmt.bufPrint(&request_buf, "{{\"filters\":[\"id\",\"=\",\"{s}\"],\"fields\":\"{s}\",\"results\":1}}", .{ job.id[0..job.id_len], pure.FIELDS }) catch return;
+            rate_limit.acquire("vndb", 1.0);
+            const response = curlPost(API_URL, request, 128 * 1024);
+            defer if (response) |body| alloc.free(body);
+            var records: [1]pure.Vn = .{.{}};
+            const count = if (response) |body| pure.parseVns(body, &records) else 0;
+            identity_mutex.lock();
+            defer identity_mutex.unlock();
+            if (!identity_request.isCurrent(job.generation)) return;
+            identity_ready = count == 1;
+            identity_error = count != 1;
+            if (count == 1) identity_record = records[0];
+        }
+    };
+    @import("../core/workers.zig").spawn(Job.run, .{Job{ .id = identity_id, .id_len = identity_id_len, .generation = generation }}) catch {
+        identity_mutex.lock();
+        identity_error = true;
+        identity_mutex.unlock();
+        identity_request.finish(generation, &identity_loading);
+    };
+}
+
 /// Close the detail overlay, returning to the grid.
 pub fn closeDetail() void {
+    identity_active = false;
+    identity_request.cancel(&identity_loading);
     state.app.vndb.selected_idx = null;
 }
 
@@ -342,35 +404,22 @@ fn searchTorrents(idx: usize) void {
 /// SEGVs on some ISP TLS resets (see comics.zig).
 fn curlPost(url: []const u8, body: []const u8, cap: usize) ?[]u8 {
     const argv = [_][]const u8{
-        "curl", "-sL",                            "-X",         "POST",
-        "-H",   "Content-Type: application/json", "-A",         agent,
-        "-d",   body,                             "--max-time", "15",
-        url,
+        "curl", "-fsSL",                          "--connect-timeout", "3",   "--max-time", "10",
+        "-H",   "Content-Type: application/json", "-A",                agent, "--data",     body,
+        "--",   url,
     };
-    var child = io.Child.init(&argv, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    _ = child.spawn() catch return null;
-
-    const buf = alloc.alloc(u8, cap) catch {
-        _ = child.wait() catch {};
-        return null;
-    };
-    const n = if (child.stdout) |*so| io.readAll(so, buf) catch 0 else 0;
-    _ = child.wait() catch {};
-    if (n == 0) {
-        alloc.free(buf);
-        return null;
-    }
-
-    // Shrink to what was actually read. The caller frees what we hand back, and
-    // the global DebugAllocator checks the free size against the allocation size
-    // — returning buf[0..n] out of a cap-sized allocation is an INVALID FREE and
-    // aborts the process (the radio/podcasts twin of this helper does the same).
-    return alloc.realloc(buf, n) catch {
-        alloc.free(buf);
-        return null;
-    };
+    const buf = alloc.alloc(u8, cap) catch return null;
+    defer alloc.free(buf);
+    const result = @import("../core/bounded_process.zig").run(&argv, buf, .{ .timeout_ms = 11_000 });
+    if (!result.ok() or result.output.len == 0) return null;
+    // Reject HTTP/error documents and malformed schemas before latching an
+    // empty successful catalog. Valid empty result arrays remain successful.
+    var parsed = std.json.parseFromSlice(std.json.Value, alloc, result.output, .{}) catch return null;
+    defer parsed.deinit();
+    if (parsed.value != .object) return null;
+    const records = parsed.value.object.get("results") orelse return null;
+    if (records != .array) return null;
+    return alloc.dupe(u8, result.output) catch null;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -397,6 +446,24 @@ pub fn renderContent() void {
     var pageroot = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
     defer pageroot.deinit();
 
+    if (identity_active) {
+        identity_mutex.lock();
+        const record = identity_record;
+        const ready = identity_ready;
+        const failed = identity_error;
+        identity_mutex.unlock();
+        if (ready) {
+            renderDetailRecord(&record, DETAIL_COVER_INDEX);
+        } else {
+            if (components.actionButton(@src(), "Back", .secondary, 62001)) closeDetail();
+            _ = dvui.label(@src(), "{s}", .{if (identity_loading.load(.acquire)) "Loading visual novel details..." else if (failed) "Details unavailable, not found, or excluded by the cover filter." else "No details available."}, .{ .color_text = theme.colors.text_secondary });
+            if (failed and components.actionButton(@src(), "Retry", .secondary, 62002)) {
+                const id = identity_id;
+                openCatalogIdentity(id[0..identity_id_len]);
+            }
+        }
+        return;
+    }
     // Populate the page on first open (no-op after the first fetch).
     loadPopularOnce();
 
@@ -469,9 +536,28 @@ const CARD_FOOTER_H: f32 = 52; // title + rating/year lines under the cover
 fn renderCover(i: usize, v: *const pure.Vn) void {
     const slot = &cover_slots[i];
     const url = v.image_url[0..v.image_url_len];
+    if (url.len == 0) {
+        if (!slot.fetching) {
+            poster.deinitPoster(&slot.pixels, &slot.tex);
+            slot.* = .{};
+        }
+        // A delayed previous cover must never decorate a coverless record.
+        _ = dvui.icon(@src(), "", icons.tvg.lucide.@"gamepad-2", .{}, .{
+            .id_extra = i + 1000,
+            .color_text = theme.colors.text_tertiary,
+            .gravity_x = 0.5,
+            .gravity_y = 0.5,
+            .expand = .both,
+        });
+        return;
+    }
 
     if (url.len > 0) {
         const h = std.hash.Fnv1a_64.hash(url);
+        if (slot.url_hash != h and slot.fetching) {
+            components.coverSkeleton(@src(), i + 1000, 8);
+            return; // An older cover must not be painted on a different VN.
+        }
         if (slot.url_hash != h and !slot.fetching) {
             poster.deinitPoster(&slot.pixels, &slot.tex);
             slot.w = 0;
@@ -672,8 +758,10 @@ fn renderResults() void {
 
 // ── Detail overlay ──
 fn renderDetail(idx: usize) void {
-    const v = &state.app.vndb.results[idx];
+    renderDetailRecord(&state.app.vndb.results[idx], idx);
+}
 
+fn renderDetailRecord(v: *const pure.Vn, idx: usize) void {
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
@@ -768,7 +856,9 @@ fn renderDetail(idx: usize) void {
             .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
             .margin = .{ .x = 0, .y = 12, .w = 0, .h = 0 },
         })) {
-            searchTorrents(idx);
+            state.navigateToTab(.Search);
+            search.submitQuery(v.title[0..v.title_len]);
+            state.showToast("Searching all sources...");
         }
     }
 }

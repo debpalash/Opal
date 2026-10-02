@@ -23,6 +23,19 @@ const TMDB_MAX_CACHED_ITEMS: usize = 100;
 
 // UI-thread-only: coalesce changes while one worker owns the request snapshot.
 var refresh_queued: std.atomic.Value(bool) = .init(false);
+var last_refresh_attempt_s = std.atomic.Value(i64).init(0); // Separate from successful freshness.
+var refresh_failed = std.atomic.Value(bool).init(false);
+
+pub fn refreshFailed() bool {
+    return refresh_failed.load(.acquire);
+}
+
+pub fn shouldRefreshBrowse() bool {
+    const cache = @import("browse_cache.zig");
+    const attempt = last_refresh_attempt_s.load(.acquire);
+    return cache.isStale(state.app.tmdb.last_fetch_s) and
+        (attempt == 0 or cache.now() - attempt >= 30);
+}
 
 pub fn fetchCurrentView(append: bool) void {
     if (state.app.tmdb.is_loading.load(.acquire)) {
@@ -35,10 +48,10 @@ pub fn fetchCurrentView(append: bool) void {
     state.app.tmdb.pending_ready = false;
     state.app.tmdb.results_mutex.unlock();
     refresh_queued.store(false, .release);
-
-    // SWR: stamp the cache time on a fresh (non-append) load so revisits within
-    // the TTL skip the network (see browse_cache + renderTmdbContent).
-    if (!append) state.app.tmdb.last_fetch_s = @import("browse_cache.zig").now();
+    if (!append) {
+        last_refresh_attempt_s.store(@import("browse_cache.zig").now(), .release);
+        refresh_failed.store(false, .release);
+    }
 
     // Reserve once to keep scrolling/appending cheap. Poster jobs publish by
     // identity on the UI thread, so reallocating no longer invalidates workers.
@@ -164,9 +177,14 @@ pub fn searchCatalogInto(query: []const u8, out: []state.TmdbItem) usize {
         var url_buf: [512]u8 = undefined;
         const url = buildApiUrl(&url_buf, .search, query, .trending, .all, .week, 0, 0, 1) orelse return 0;
         rate_limit.acquire("tmdb", 3.0);
-        const body = httpGet(url, key) orelse return 0;
-        defer alloc.free(body);
-        parse.parseTmdbResponse(body, &staged);
+        if (httpGet(url, key)) |body| {
+            defer alloc.free(body);
+            parse.parseTmdbResponse(body, &staged);
+            if (parse.extractJsonInt(body, "\"status_code\":") != 0)
+                fetchCinemetaInto(&staged, .search, query, .trending, .all, 0, 1);
+        } else {
+            fetchCinemetaInto(&staged, .search, query, .trending, .all, 0, 1);
+        }
     } else {
         fetchCinemetaInto(&staged, .search, query, .trending, .all, 0, 1);
     }
@@ -221,6 +239,7 @@ fn fetchTmdb(mode: FetchMode, query: []const u8, append: bool) void {
     state.app.tmdb.thread = @import("../core/workers.zig").spawnLegacy(struct {
         fn worker() void {
             defer {
+                if (!S.do_append) last_refresh_attempt_s.store(@import("browse_cache.zig").now(), .release);
                 state.app.tmdb.is_loading.store(false, .release);
                 state.wakeUi();
             }
@@ -232,6 +251,7 @@ fn fetchTmdb(mode: FetchMode, query: []const u8, append: bool) void {
             // the renderCatalogRail out-of-bounds crash). The UI thread swaps
             // staged pages in at frame start via applyPendingResults().
             var staged: std.ArrayListUnmanaged(state.TmdbItem) = .empty;
+            defer staged.deinit(alloc);
             var total_pages: u32 = 100;
             var attempt: u8 = 0;
             while (true) : (attempt += 1) {
@@ -243,10 +263,19 @@ fn fetchTmdb(mode: FetchMode, query: []const u8, append: bool) void {
                     if (httpGet(url, key)) |body| {
                         total_pages = @intCast(@max(1, parse.extractJsonInt(body, "\"total_pages\":")));
                         parse.parseTmdbResponse(body, &staged);
+                        const api_failed = parse.extractJsonInt(body, "\"status_code\":") != 0;
                         alloc.free(body);
+                        if (api_failed) {
+                            fetchCinemetaInto(&staged, S.fetch_mode, S.q[0..S.q_len], S.category, S.media_filter, S.genre_idx, S.page);
+                            total_pages = if (staged.items.len == 0) S.page else S.page + 1;
+                        }
+                    } else {
+                        fetchCinemetaInto(&staged, S.fetch_mode, S.q[0..S.q_len], S.category, S.media_filter, S.genre_idx, S.page);
+                        total_pages = if (staged.items.len == 0) S.page else S.page + 1;
                     }
                 } else {
                     fetchCinemetaInto(&staged, S.fetch_mode, S.q[0..S.q_len], S.category, S.media_filter, S.genre_idx, S.page);
+                    total_pages = if (staged.items.len == 0) S.page else S.page + 1;
                 }
 
                 const retry = @import("tmdb_pure.zig").shouldRetryEmptyCatalog(
@@ -266,6 +295,7 @@ fn fetchTmdb(mode: FetchMode, query: []const u8, append: bool) void {
             // loaded catalog. With no visible cards, fall through so the normal
             // empty state and manual Retry remain available after exhaustion.
             if (S.fetch_mode == .browse and !S.do_append and staged.items.len == 0) {
+                refresh_failed.store(true, .release);
                 state.app.tmdb.results_mutex.lock();
                 const have_visible = state.app.tmdb.results.items.len > 0;
                 state.app.tmdb.results_mutex.unlock();
@@ -282,11 +312,13 @@ fn fetchTmdb(mode: FetchMode, query: []const u8, append: bool) void {
             defer state.app.tmdb.results_mutex.unlock();
             state.app.tmdb.pending_results.deinit(alloc);
             state.app.tmdb.pending_results = staged;
+            staged = .empty; // Ownership moved to the UI publication.
             state.app.tmdb.pending_append = S.do_append;
             state.app.tmdb.pending_total_pages = total_pages;
             state.app.tmdb.pending_ready = true;
         }
     }.worker, .{}) catch blk: {
+        refresh_failed.store(true, .release);
         state.app.tmdb.is_loading.store(false, .release);
         break :blk null;
     };
@@ -372,11 +404,21 @@ pub fn applyPendingResults() void {
     if (!t.pending_ready) return;
     t.pending_ready = false;
     if (!t.pending_append) {
+        if (t.pending_results.items.len > 0) t.last_fetch_s = @import("browse_cache.zig").now();
         for (t.results.items) |*item| @import("../core/poster.zig").deinitPoster(&item.poster_pixels, &item.poster_tex);
         t.results.clearRetainingCapacity();
     }
     // Poster publication does not retain pointers into this growable list.
-    t.results.appendSlice(alloc, t.pending_results.items) catch {};
+    for (t.pending_results.items) |item| {
+        var duplicate = false;
+        for (t.results.items) |existing| {
+            if (existing.id == item.id and std.mem.eql(u8, existing.media_type[0..existing.media_type_len], item.media_type[0..item.media_type_len])) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (!duplicate) t.results.append(alloc, item) catch break;
+    }
     t.pending_results.clearRetainingCapacity();
     t.total_pages = t.pending_total_pages;
     state.wakeUi();

@@ -247,6 +247,29 @@ pub fn parseLibraries(json: []const u8, out: []Library) usize {
     return forEachArrayObject(json, "\"libraries\":", &sink, LibSink.fill);
 }
 
+/// Server library metadata is JSON, not dependent on minification/key order.
+pub fn parseLibraryPage(a: std.mem.Allocator, json: []const u8, out: []Library) ?usize {
+    var parsed = std.json.parseFromSlice(std.json.Value, a, json, .{}) catch return null;
+    defer parsed.deinit();
+    const libraries = valueField(parsed.value, "libraries");
+    if (libraries != .array) return null;
+    var count: usize = 0;
+    for (libraries.array.items) |item| {
+        if (count == out.len) break;
+        const id = valueField(item, "id");
+        const name = valueField(item, "name");
+        if (id != .string or !validItemId(id.string) or id.string.len > 64 or name != .string or name.string.len == 0) continue;
+        var library: Library = .{};
+        copyJsonText(&library.id, &library.id_len, id.string);
+        copyJsonText(&library.name, &library.name_len, name.string);
+        const media_type = valueField(item, "mediaType");
+        if (media_type == .string) copyJsonText(&library.media_type, &library.media_type_len, media_type.string);
+        out[count] = library;
+        count += 1;
+    }
+    return count;
+}
+
 const BookSink = struct {
     out: []Book,
     n: usize = 0,
@@ -272,6 +295,196 @@ const BookSink = struct {
 pub fn parseItems(json: []const u8, out: []Book) usize {
     var sink = BookSink{ .out = out };
     return forEachArrayObject(json, "\"results\":", &sink, BookSink.fill);
+}
+
+/// Structured item pages preserve server row counts even when malformed or
+/// incomplete items cannot be shown. null is an invalid response, not no books.
+pub const ItemPage = struct { count: usize, consumed: usize };
+pub fn parseItemPage(a: std.mem.Allocator, json: []const u8, out: []Book) ?ItemPage {
+    var parsed = std.json.parseFromSlice(std.json.Value, a, json, .{}) catch return null;
+    defer parsed.deinit();
+    const results = valueField(parsed.value, "results");
+    if (results != .array) return null;
+    var count: usize = 0;
+    for (results.array.items) |item| {
+        if (count == out.len) break;
+        const id = valueField(item, "id");
+        const media = valueField(item, "media");
+        const metadata = valueField(media, "metadata");
+        const title = valueField(metadata, "title");
+        if (id != .string or !validItemId(id.string) or id.string.len > 64 or title != .string or title.string.len == 0) continue;
+        var book: Book = .{};
+        copyJsonText(&book.id, &book.id_len, id.string);
+        copyJsonText(&book.title, &book.title_len, title.string);
+        var author = valueField(metadata, "authorName");
+        if (author != .string) author = valueField(metadata, "author");
+        if (author == .string) copyJsonText(&book.author, &book.author_len, author.string);
+        const duration = valueField(media, "duration");
+        if (duration == .integer and duration.integer > 0) book.duration_secs = duration.integer;
+        if (duration == .float and std.math.isFinite(duration.float) and duration.float > 0 and duration.float < 9223372036854775807.0)
+            book.duration_secs = @intFromFloat(duration.float);
+        out[count] = book;
+        count += 1;
+    }
+    return .{ .count = count, .consumed = results.array.items.len };
+}
+fn valueField(value: std.json.Value, key: []const u8) std.json.Value {
+    return if (value == .object) value.object.get(key) orelse .null else .null;
+}
+fn copyJsonText(dst: []u8, len: *usize, text: []const u8) void {
+    len.* = @min(text.len, dst.len);
+    while (len.* > 0 and !std.unicode.utf8ValidateSlice(text[0..len.*])) len.* -= 1;
+    @memcpy(dst[0..len.*], text[0..len.*]);
+}
+
+pub const AudioTrack = struct {
+    title: [256]u8 = std.mem.zeroes([256]u8),
+    title_len: usize = 0,
+    content_path: [1024]u8 = std.mem.zeroes([1024]u8),
+    content_path_len: usize = 0,
+    episode: bool = false,
+    episode_id: [64]u8 = std.mem.zeroes([64]u8),
+    episode_id_len: usize = 0,
+    start_offset: f64 = 0,
+    duration: f64 = 0,
+    timing_valid: bool = false,
+};
+pub const AudioPage = struct { count: usize, total: usize };
+/// Expanded items expose actual audio files. A download archive is never audio.
+pub fn parseAudioTracks(a: std.mem.Allocator, json: []const u8, item_id: []const u8, out: []AudioTrack) ?AudioPage {
+    var parsed = std.json.parseFromSlice(std.json.Value, a, json, .{}) catch return null;
+    defer parsed.deinit();
+    const media = valueField(parsed.value, "media");
+    const media_type = valueField(parsed.value, "mediaType");
+    const podcast = media_type == .string and std.mem.eql(u8, media_type.string, "podcast");
+    const entries = valueField(media, if (podcast) "episodes" else "tracks");
+    if (entries != .array) return null;
+    var count: usize = 0;
+    for (entries.array.items) |entry| {
+        if (count == out.len) break;
+        var track: AudioTrack = .{ .episode = podcast };
+        const offset = numberField(entry, "startOffset");
+        const duration = numberField(entry, "duration") orelse numberField(valueField(entry, "audioFile"), "duration");
+        if (duration) |seconds| {
+            track.duration = seconds;
+            track.start_offset = if (podcast) 0 else offset orelse 0;
+            track.timing_valid = seconds > 0 and (podcast or offset != null);
+        }
+        if (podcast) {
+            const episode_id = valueField(entry, "id");
+            if (episode_id != .string or !validItemId(episode_id.string) or episode_id.string.len > track.episode_id.len) continue;
+            copyJsonText(&track.episode_id, &track.episode_id_len, episode_id.string);
+        }
+        const title = valueField(entry, "title");
+        if (title == .string) copyJsonText(&track.title, &track.title_len, title.string);
+        var path_buf: [1024]u8 = undefined;
+        const path = if (podcast) blk: {
+            const relative = valueField(valueField(valueField(entry, "audioFile"), "metadata"), "relPath");
+            if (relative != .string or relative.string.len == 0) continue;
+            break :blk std.fmt.bufPrint(&path_buf, "/s/item/{s}/{s}", .{ item_id, relative.string }) catch continue;
+        } else blk: {
+            const content = valueField(entry, "contentUrl");
+            if (content != .string) continue;
+            break :blk content.string;
+        };
+        var prefix_buf: [128]u8 = undefined;
+        const prefix = std.fmt.bufPrint(&prefix_buf, "/s/item/{s}/", .{item_id}) catch return null;
+        if (!std.mem.startsWith(u8, path, prefix) or path.len > track.content_path.len or std.mem.indexOf(u8, path, "..") != null) continue;
+        copyJsonText(&track.content_path, &track.content_path_len, path);
+        if (track.title_len == 0) {
+            const start = if (std.mem.lastIndexOfScalar(u8, path, '/')) |slash| slash + 1 else 0;
+            copyJsonText(&track.title, &track.title_len, path[start..]);
+        }
+        out[count] = track;
+        count += 1;
+    }
+    return .{ .count = count, .total = entries.array.items.len };
+}
+fn numberField(value: std.json.Value, key: []const u8) ?f64 {
+    const field = valueField(value, key);
+    const n = switch (field) {
+        .integer => @as(f64, @floatFromInt(field.integer)),
+        .float => field.float,
+        else => return null,
+    };
+    return if (std.math.isFinite(n) and n >= 0) n else null;
+}
+/// Complete ordered tracks are required to promise a continuous book timeline.
+pub fn completeBookTimeline(tracks: []const AudioTrack, total: usize) bool {
+    if (tracks.len == 0 or tracks.len != total) return false;
+    var end: f64 = 0;
+    for (tracks) |track| {
+        if (track.episode or !track.timing_valid or !std.math.isFinite(track.start_offset) or !std.math.isFinite(track.duration) or track.duration <= 0 or @abs(track.start_offset - end) > 0.25) return false;
+        end = track.start_offset + track.duration;
+        if (!std.math.isFinite(end)) return false;
+    }
+    return true;
+}
+pub const TrackPosition = struct { index: usize, seconds: f64 };
+pub fn locateBookPosition(tracks: []const AudioTrack, position: f64) ?TrackPosition {
+    if (!completeBookTimeline(tracks, tracks.len) or !std.math.isFinite(position) or position < 0) return null;
+    for (tracks, 0..) |track, idx| {
+        if (position < track.start_offset + track.duration or idx + 1 == tracks.len)
+            return .{ .index = idx, .seconds = std.math.clamp(position - track.start_offset, 0, @max(0, track.duration - 0.5)) };
+    }
+    return null;
+}
+pub fn bookPosition(track: AudioTrack, local_seconds: f64) ?f64 {
+    if (!track.timing_valid or !std.math.isFinite(local_seconds) or local_seconds < 0) return null;
+    return track.start_offset + @min(local_seconds, track.duration);
+}
+pub fn parseProgressValue(a: std.mem.Allocator, json: []const u8) ProgressInfo {
+    var parsed = std.json.parseFromSlice(std.json.Value, a, json, .{}) catch return .{};
+    defer parsed.deinit();
+    const finished = valueField(parsed.value, "isFinished");
+    return .{ .current_time = numberField(parsed.value, "currentTime"), .duration = numberField(parsed.value, "duration"), .is_finished = finished == .bool and finished.bool };
+}
+pub fn shouldAdvanceTrack(opened: bool, ready: bool, eof: bool, failed: bool) bool {
+    return opened and ready and eof and !failed;
+}
+
+pub fn progressUrl(server: []const u8, item: []const u8, episode: []const u8, out: []u8) ?[]const u8 {
+    if (!validItemId(item) or (episode.len > 0 and !validItemId(episode))) return null;
+    return if (episode.len > 0)
+        std.fmt.bufPrint(out, "{s}/api/me/progress/{s}/{s}", .{ std.mem.trimEnd(u8, server, "/"), item, episode }) catch null
+    else
+        std.fmt.bufPrint(out, "{s}/api/me/progress/{s}", .{ std.mem.trimEnd(u8, server, "/"), item }) catch null;
+}
+pub fn progressBody(position: f64, duration: f64, finished: bool, out: []u8) ?[]const u8 {
+    if (!std.math.isFinite(position) or position < 0 or !std.math.isFinite(duration) or duration <= 0) return null;
+    const pos = @min(position, duration);
+    return std.fmt.bufPrint(out, "{{\"currentTime\":{d:.3},\"duration\":{d:.3},\"progress\":{d:.6},\"isFinished\":{s}}}", .{ pos, duration, pos / duration, if (finished) "true" else "false" }) catch null;
+}
+
+/// Encode real server-relative audio paths, including filenames with spaces.
+pub fn audioTrackUrl(server: []const u8, content_path: []const u8, token: []const u8, out: []u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, content_path, "/s/item/") or std.mem.indexOf(u8, content_path, "..") != null) return null;
+    var path_buf: [3072]u8 = undefined;
+    var n: usize = 0;
+    const hex = "0123456789ABCDEF";
+    var i: usize = 0;
+    while (i < content_path.len) : (i += 1) {
+        const c = content_path[i];
+        if (c == '%' and i + 2 < content_path.len and std.ascii.isHex(content_path[i + 1]) and std.ascii.isHex(content_path[i + 2])) {
+            if (n + 3 > path_buf.len) return null;
+            @memcpy(path_buf[n..][0..3], content_path[i..][0..3]);
+            n += 3;
+            i += 2;
+        } else if (std.ascii.isAlphanumeric(c) or c == '/' or c == '-' or c == '_' or c == '.' or c == '~') {
+            if (n == path_buf.len) return null;
+            path_buf[n] = c;
+            n += 1;
+        } else {
+            if (n + 3 > path_buf.len) return null;
+            path_buf[n] = '%';
+            path_buf[n + 1] = hex[c >> 4];
+            path_buf[n + 2] = hex[c & 15];
+            n += 3;
+        }
+    }
+    var tok_buf: [768]u8 = undefined;
+    const encoded_token = @import("music_subsonic_pure.zig").percentEncode(token, &tok_buf);
+    return std.fmt.bufPrint(out, "{s}{s}?token={s}", .{ std.mem.trimEnd(u8, server, "/"), path_buf[0..n], tok_buf[0..encoded_token] }) catch null;
 }
 
 /// Parse `GET /api/me/progress/{id}` → the saved `currentTime` (seconds). Null
@@ -530,4 +743,55 @@ test "validItemId accepts ABS ids, rejects injection" {
     try std.testing.expect(!validItemId("id/file"));
     try std.testing.expect(!validItemId("id?token=x"));
     try std.testing.expect(!validItemId("a" ** 65));
+}
+
+test "multifile book resume selects boundary file and relative time" {
+    const tracks = [_]AudioTrack{
+        .{ .start_offset = 0, .duration = 30, .timing_valid = true },
+        .{ .start_offset = 30, .duration = 40, .timing_valid = true },
+        .{ .start_offset = 70, .duration = 50, .timing_valid = true },
+    };
+    try std.testing.expect(completeBookTimeline(&tracks, 3));
+    const boundary = locateBookPosition(&tracks, 30).?;
+    try std.testing.expectEqual(@as(usize, 1), boundary.index);
+    try std.testing.expectEqual(@as(f64, 0), boundary.seconds);
+    const middle = locateBookPosition(&tracks, 82).?;
+    try std.testing.expectEqual(@as(usize, 2), middle.index);
+    try std.testing.expectEqual(@as(f64, 12), middle.seconds);
+    try std.testing.expectEqual(@as(f64, 82), bookPosition(tracks[2], 12).?);
+    try std.testing.expect(locateBookPosition(&tracks, std.math.nan(f64)) == null);
+    try std.testing.expect(!completeBookTimeline(&tracks, 4));
+    var broken = tracks;
+    broken[1].start_offset = 35;
+    try std.testing.expect(!completeBookTimeline(&broken, 3));
+}
+test "expanded audio parses real ordered tracks and podcast episode identities" {
+    var tracks: [4]AudioTrack = undefined;
+    const page = parseAudioTracks(std.testing.allocator, "{\"mediaType\":\"book\",\"media\":{\"tracks\":[{\"startOffset\":0,\"duration\":30,\"contentUrl\":\"/s/item/book1/Part 1.mp3\"},{\"startOffset\":30,\"duration\":40,\"contentUrl\":\"/s/item/book1/Part 2.mp3\"}]}}", "book1", &tracks).?;
+    try std.testing.expectEqual(@as(usize, 2), page.count);
+    try std.testing.expect(completeBookTimeline(tracks[0..page.count], page.total));
+    try std.testing.expectEqualStrings("Part 1.mp3", tracks[0].title[0..tracks[0].title_len]);
+    const episodes = parseAudioTracks(std.testing.allocator, "{\"mediaType\":\"podcast\",\"media\":{\"episodes\":[{\"id\":\"ep_1\",\"title\":\"Episode\",\"duration\":60,\"audioFile\":{\"metadata\":{\"relPath\":\"Episode.mp3\"}}}]}}", "podcast1", &tracks).?;
+    try std.testing.expectEqual(@as(usize, 1), episodes.count);
+    try std.testing.expectEqualStrings("ep_1", tracks[0].episode_id[0..tracks[0].episode_id_len]);
+    try std.testing.expect(!completeBookTimeline(tracks[0..1], 1));
+}
+test "book progress preserves whole timeline and episode scope" {
+    var out: [512]u8 = undefined;
+    try std.testing.expectEqualStrings("https://server/api/me/progress/book1/ep_1", progressUrl("https://server/", "book1", "ep_1", &out).?);
+    const body = progressBody(82, 120, false, &out).?;
+    const parsed = parseProgressValue(std.testing.allocator, body);
+    try std.testing.expectEqual(@as(f64, 82), parsed.current_time.?);
+    try std.testing.expectEqual(@as(f64, 120), parsed.duration.?);
+    try std.testing.expect(!parsed.is_finished);
+    try std.testing.expect(progressBody(std.math.inf(f64), 120, false, &out) == null);
+    try std.testing.expect(progressUrl("https://server", "../secret", "", &out) == null);
+}
+
+test "track advance requires actual opened EOF and no player failure" {
+    try std.testing.expect(shouldAdvanceTrack(true, true, true, false));
+    try std.testing.expect(!shouldAdvanceTrack(false, true, true, false));
+    try std.testing.expect(!shouldAdvanceTrack(true, false, true, false));
+    try std.testing.expect(!shouldAdvanceTrack(true, true, false, false));
+    try std.testing.expect(!shouldAdvanceTrack(true, true, true, true));
 }

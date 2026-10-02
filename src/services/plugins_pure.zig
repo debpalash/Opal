@@ -53,6 +53,10 @@ pub const SearchRow = struct {
     media_type: [16]u8 = std.mem.zeroes([16]u8),
     media_type_len: usize = 0,
     episodes: u16 = 0,
+    poster_url: [256]u8 = std.mem.zeroes([256]u8),
+    poster_url_len: usize = 0,
+    overview: [512]u8 = std.mem.zeroes([512]u8),
+    overview_len: usize = 0,
 };
 
 fn copyJsonString(value: std.json.Value, key: []const u8, dst: []u8, len: *usize) void {
@@ -81,6 +85,8 @@ pub fn parseSearchRows(allocator: std.mem.Allocator, input: []const u8, out: []S
         copyJsonString(value, "stream_url", &row.stream_url, &row.stream_url_len);
         copyJsonString(value, "year", &row.year, &row.year_len);
         copyJsonString(value, "type", &row.media_type, &row.media_type_len);
+        copyJsonString(value, "poster", &row.poster_url, &row.poster_url_len);
+        copyJsonString(value, "overview", &row.overview, &row.overview_len);
         if (value.object.get("episodes")) |episodes| {
             if (episodes == .integer and episodes.integer > 0)
                 row.episodes = @intCast(@min(episodes.integer, std.math.maxInt(u16)));

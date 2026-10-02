@@ -211,6 +211,10 @@ pub fn resolveHref(base_url: []const u8, href: []const u8, buf: []u8) ?[]const u
 pub const OpdsEntry = struct {
     title: [256]u8 = std.mem.zeroes([256]u8),
     title_len: usize = 0,
+    author: [160]u8 = std.mem.zeroes([160]u8),
+    author_len: usize = 0,
+    summary: [512]u8 = std.mem.zeroes([512]u8),
+    summary_len: usize = 0,
     /// Primary click target, resolved to an absolute URL: the subsection feed
     /// (navigation) or the acquisition download (leaf).
     href: [512]u8 = std.mem.zeroes([512]u8),
@@ -266,30 +270,174 @@ pub fn feedTitle(xml: []const u8) []const u8 {
 /// slice into `xml`). Used for both the feed heading and each entry title.
 fn tagText(xml: []const u8, limit: usize) []const u8 {
     const hay = xml[0..@min(limit, xml.len)];
-    const open = std.mem.indexOf(u8, hay, "<title") orelse return "";
-    // Skip to the '>' that closes the opening tag (attributes tolerated).
-    const gt = std.mem.indexOfScalarPos(u8, hay, open, '>') orelse return "";
-    const start = gt + 1;
-    const close = std.mem.indexOfPos(u8, hay, start, "</title>") orelse return "";
-    if (close < start) return "";
-    return hay[start..close];
+    return contentOf(hay, "title");
 }
 
 /// Read the value of an XML attribute `name="…"` inside a single tag slice.
 fn attr(tag: []const u8, name: []const u8) ?[]const u8 {
-    var search: [64]u8 = undefined;
-    if (name.len + 1 > search.len) return null;
-    @memcpy(search[0..name.len], name);
-    search[name.len] = '=';
-    const key = search[0 .. name.len + 1];
-    const at = std.mem.indexOf(u8, tag, key) orelse return null;
-    var p = at + key.len;
-    if (p >= tag.len) return null;
-    const quote = tag[p];
-    if (quote != '"' and quote != '\'') return null;
-    p += 1;
-    const end = std.mem.indexOfScalarPos(u8, tag, p, quote) orelse return null;
-    return tag[p..end];
+    var pos: usize = 0;
+    while (std.mem.indexOfPos(u8, tag, pos, name)) |at| {
+        pos = at + name.len;
+        if (at > 0 and !std.ascii.isWhitespace(tag[at - 1])) continue;
+        var p = pos;
+        while (p < tag.len and std.ascii.isWhitespace(tag[p])) : (p += 1) {}
+        if (p >= tag.len or tag[p] != '=') continue;
+        p += 1;
+        while (p < tag.len and std.ascii.isWhitespace(tag[p])) : (p += 1) {}
+        if (p >= tag.len or (tag[p] != '\'' and tag[p] != '"')) continue;
+        const quote = tag[p];
+        p += 1;
+        const end = std.mem.indexOfScalarPos(u8, tag, p, quote) orelse return null;
+        return tag[p..end];
+    }
+    return null;
+}
+
+const XmlTag = struct { start: usize, end: usize, local: []const u8, closing: bool };
+fn nextTag(xml: []const u8, from: usize) ?XmlTag {
+    var pos = from;
+    while (std.mem.indexOfScalarPos(u8, xml, pos, '<')) |at| {
+        if (std.mem.startsWith(u8, xml[at..], "<!--")) {
+            pos = (std.mem.indexOfPos(u8, xml, at + 4, "-->") orelse return null) + 3;
+            continue;
+        }
+        if (std.mem.startsWith(u8, xml[at..], "<![CDATA[")) {
+            pos = (std.mem.indexOfPos(u8, xml, at + 9, "]]>") orelse return null) + 3;
+            continue;
+        }
+        var p = at + 1;
+        const closing = p < xml.len and xml[p] == '/';
+        if (closing) p += 1;
+        const start = p;
+        while (p < xml.len and !std.ascii.isWhitespace(xml[p]) and xml[p] != '>' and xml[p] != '/') : (p += 1) {}
+        const name = xml[start..p];
+        const local = if (std.mem.lastIndexOfScalar(u8, name, ':')) |colon| name[colon + 1 ..] else name;
+        var quote: u8 = 0;
+        while (p < xml.len) : (p += 1) {
+            const ch = xml[p];
+            if (quote != 0) {
+                if (ch == quote) quote = 0;
+            } else if (ch == '\'' or ch == '"') quote = ch else if (ch == '>') {
+                return .{ .start = at, .end = p + 1, .local = local, .closing = closing };
+            }
+        }
+        return null;
+    }
+    return null;
+}
+fn findTag(xml: []const u8, from: usize, name: []const u8, closing: bool) ?XmlTag {
+    var pos = from;
+    while (nextTag(xml, pos)) |tag| {
+        pos = tag.end;
+        if (tag.closing == closing and std.mem.eql(u8, tag.local, name)) return tag;
+    }
+    return null;
+}
+fn contentOf(xml: []const u8, name: []const u8) []const u8 {
+    const open = findTag(xml, 0, name, false) orelse return "";
+    const close = findTag(xml, open.end, name, true) orelse return "";
+    return xml[open.end..close.start];
+}
+
+pub const SearchLink = struct { url: [1024]u8 = undefined, url_len: usize = 0, description: bool = false };
+/// Only advertised feed-level search links are used; entry links are unrelated.
+pub fn feedSearchLink(xml: []const u8, base: []const u8) ?SearchLink {
+    var depth: usize = 0;
+    var pos: usize = 0;
+    while (nextTag(xml, pos)) |tag| {
+        pos = tag.end;
+        if (std.mem.eql(u8, tag.local, "entry")) {
+            if (tag.closing) depth -|= 1 else depth += 1;
+        }
+        if (depth != 0 or tag.closing or !std.mem.eql(u8, tag.local, "link")) continue;
+        const raw = xml[tag.start..tag.end];
+        const rel = attr(raw, "rel") orelse continue;
+        if (!std.mem.eql(u8, rel, "search")) continue;
+        const kind = attr(raw, "type") orelse "";
+        const description = std.mem.startsWith(u8, kind, "application/opensearchdescription+xml");
+        if (!description and !std.mem.startsWith(u8, kind, "application/atom+xml")) continue;
+        var decoded: [1024]u8 = undefined;
+        const href = attr(raw, "href") orelse continue;
+        if (href.len > decoded.len) return null;
+        const n = decodeXmlEntities(href, &decoded);
+        var result: SearchLink = .{ .description = description };
+        const address = resolveHref(base, decoded[0..n], &result.url) orelse return null;
+        result.url_len = address.len;
+        return result;
+    }
+    return null;
+}
+
+/// Expand documented OpenSearch parameters. Never invent a query endpoint.
+pub fn expandSearchTemplate(template: []const u8, query: []const u8, out: []u8) ?[]const u8 {
+    var encoded: [3072]u8 = undefined;
+    var e: usize = 0;
+    for (query) |ch| {
+        if (std.ascii.isAlphanumeric(ch) or ch == '-' or ch == '_' or ch == '.' or ch == '~') {
+            if (e == encoded.len) return null;
+            encoded[e] = ch;
+            e += 1;
+        } else {
+            if (e + 3 > encoded.len) return null;
+            encoded[e] = '%';
+            encoded[e + 1] = "0123456789ABCDEF"[ch >> 4];
+            encoded[e + 2] = "0123456789ABCDEF"[ch & 15];
+            e += 3;
+        }
+    }
+    var pos: usize = 0;
+    var written: usize = 0;
+    var searched = false;
+    while (pos < template.len) {
+        if (template[pos] != '{') {
+            if (written >= out.len) return null;
+            out[written] = template[pos];
+            written += 1;
+            pos += 1;
+            continue;
+        }
+        const end = std.mem.indexOfScalarPos(u8, template, pos, '}') orelse return null;
+        var parameter = template[pos + 1 .. end];
+        const optional = std.mem.endsWith(u8, parameter, "?");
+        if (optional) parameter = parameter[0 .. parameter.len - 1];
+        if (std.mem.startsWith(u8, parameter, "opensearch:")) parameter = parameter["opensearch:".len..];
+        const value: []const u8 = if (std.mem.eql(u8, parameter, "searchTerms")) blk: {
+            searched = true;
+            break :blk encoded[0..e];
+        } else if (std.mem.eql(u8, parameter, "count")) "12" else if (std.mem.eql(u8, parameter, "startIndex") or std.mem.eql(u8, parameter, "startPage")) "1" else if (std.mem.eql(u8, parameter, "language")) "*" else if (std.mem.eql(u8, parameter, "inputEncoding") or std.mem.eql(u8, parameter, "outputEncoding")) "UTF-8" else if (optional) "" else return null;
+        if (written + value.len > out.len) return null;
+        @memcpy(out[written..][0..value.len], value);
+        written += value.len;
+        pos = end + 1;
+    }
+    return if (searched and written > 0) out[0..written] else null;
+}
+
+pub fn openSearchUrl(xml: []const u8, base: []const u8, query: []const u8, out: []u8) ?[]const u8 {
+    var pos: usize = 0;
+    while (findTag(xml, pos, "Url", false)) |tag| {
+        pos = tag.end;
+        const raw = xml[tag.start..tag.end];
+        const kind = attr(raw, "type") orelse continue;
+        if (!std.mem.startsWith(u8, kind, "application/atom+xml")) continue;
+        const method = attr(raw, "method") orelse "GET";
+        if (!std.ascii.eqlIgnoreCase(method, "GET")) continue;
+        const template = attr(raw, "template") orelse continue;
+        var decoded: [2048]u8 = undefined;
+        if (template.len > decoded.len) continue;
+        const n = decodeXmlEntities(template, &decoded);
+        var address_buf: [2048]u8 = undefined;
+        const address = resolveHref(base, decoded[0..n], &address_buf) orelse continue;
+        if (expandSearchTemplate(address, query, out)) |expanded| return expanded;
+    }
+    return null;
+}
+
+pub fn sameOrigin(a: []const u8, b: []const u8) bool {
+    const ao = originOf(a) orelse return false;
+    const bo = originOf(b) orelse return false;
+    if (std.mem.indexOfScalar(u8, ao, '@') != null or std.mem.indexOfScalar(u8, bo, '@') != null) return false;
+    return std.ascii.eqlIgnoreCase(ao, bo);
 }
 
 /// Decode the minimal XML entity set OPDS titles use into `out`; returns the
@@ -334,6 +482,13 @@ fn decodeXmlEntities(in: []const u8, out: []u8) usize {
     return o;
 }
 
+/// Reject error documents and truncated responses before catalog publication.
+/// This is an envelope check for the unprefixed Atom feeds this parser supports.
+pub fn isCompleteFeed(xml: []const u8) bool {
+    const start = findTag(xml, 0, "feed", false) orelse return false;
+    return findTag(xml, start.end, "feed", true) != null;
+}
+
 /// Extract the feed-level `<link rel="next" href="…"/>` (Atom/OPDS pagination
 /// — RFC 5005 style paging that Komga/Kavita/Calibre-Web emit) and resolve it
 /// against `base_url` into `buf`. Returns null when the feed has no next page
@@ -370,7 +525,10 @@ pub fn feedNextHref(xml: []const u8, base_url: []const u8, buf: []u8) ?[]const u
         const rel = attr(tag, "rel") orelse continue;
         if (!std.mem.eql(u8, rel, "next")) continue;
         const href = attr(tag, "href") orelse continue;
-        return resolveHref(base_url, href, buf);
+        var decoded: [1024]u8 = undefined;
+        const n = decodeXmlEntities(href, &decoded);
+        if (n == decoded.len and href.len > decoded.len) return null;
+        return resolveHref(base_url, decoded[0..n], buf);
     }
     return null;
 }
@@ -384,11 +542,10 @@ pub fn parseFeed(xml: []const u8, base_url: []const u8, out: []OpdsEntry) usize 
     var pos: usize = 0;
 
     while (count < out.len) {
-        const e_rel = std.mem.indexOfPos(u8, xml, pos, "<entry") orelse break;
-        // Entry ends at </entry>, or (truncated feed) at end-of-buffer.
-        const e_end = std.mem.indexOfPos(u8, xml, e_rel, "</entry>") orelse xml.len;
-        const block = xml[e_rel..e_end];
-        pos = if (e_end < xml.len) e_end + "</entry>".len else xml.len;
+        const entry_tag = findTag(xml, pos, "entry", false) orelse break;
+        const close_tag = findTag(xml, entry_tag.end, "entry", true) orelse break;
+        const block = xml[entry_tag.start..close_tag.start];
+        pos = close_tag.end;
 
         var ent = OpdsEntry{};
 
@@ -398,15 +555,24 @@ pub fn parseFeed(xml: []const u8, base_url: []const u8, out: []OpdsEntry) usize 
             ent.title_len = decodeXmlEntities(raw_title, &ent.title);
         }
 
+        const author = contentOf(contentOf(block, "author"), "name");
+        ent.author_len = decodeXmlEntities(author, &ent.author);
+        const summary = contentOf(block, "summary");
+        var decoded_summary: [2048]u8 = undefined;
+        const description = if (summary.len > 0) summary else contentOf(block, "content");
+        const summary_len = decodeXmlEntities(description, &decoded_summary);
+        ent.summary_len = @import("novels_pure.zig").htmlToText(decoded_summary[0..summary_len], &ent.summary);
         // Walk every <link …> tag in the block, classifying each.
         var lp: usize = 0;
         var have_primary = false;
-        while (std.mem.indexOfPos(u8, block, lp, "<link")) |l_at| {
-            const l_close = std.mem.indexOfScalarPos(u8, block, l_at, '>') orelse break;
-            const tag = block[l_at .. l_close + 1];
-            lp = l_close + 1;
-
-            const href = attr(tag, "href") orelse continue;
+        while (findTag(block, lp, "link", false)) |link_tag| {
+            const tag = block[link_tag.start..link_tag.end];
+            lp = link_tag.end;
+            const raw_href = attr(tag, "href") orelse continue;
+            var decoded_href: [1024]u8 = undefined;
+            if (raw_href.len > decoded_href.len) continue;
+            const href_n = decodeXmlEntities(raw_href, &decoded_href);
+            const href = decoded_href[0..href_n];
             const rel = attr(tag, "rel") orelse "";
             const kind = classifyRel(rel);
 
@@ -431,9 +597,9 @@ pub fn parseFeed(xml: []const u8, base_url: []const u8, out: []OpdsEntry) usize 
                             ent.is_navigation = false;
                             have_primary = true;
                             if (attr(tag, "type")) |ty| {
-                                const n = @min(ty.len, ent.content_type.len);
-                                @memcpy(ent.content_type[0..n], ty[0..n]);
-                                ent.content_type_len = n;
+                                const type_len = @min(ty.len, ent.content_type.len);
+                                @memcpy(ent.content_type[0..type_len], ty[0..type_len]);
+                                ent.content_type_len = type_len;
                             }
                         }
                     }

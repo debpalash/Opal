@@ -759,3 +759,42 @@ header.page-hero {
   .page-cta .btn { margin: 6px 6px 0 0; }
   .page-cta .btn + .btn { margin-left: 0; }
 }
+
+/* ── Arch Linux / AUR install ──
+   Tabs over a copyable command block. Sits above the file grid because for an
+   Arch user this is the install, and the .pkg.tar.zst below is the fallback. */
+.archbox {
+  margin: 0 0 14px;
+  padding: 14px 16px 16px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+  text-align: left;
+}
+.archbox .head { display: flex; align-items: center; gap: 10px; font-size: 14.5px; font-weight: 700; }
+.archbox .head .grow { flex: 1; min-width: 0; }
+.archbox .head .meta { color: var(--muted); font-weight: 500; font-size: 12.5px; margin-left: 6px; }
+.archbox .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0; }
+.archbox .tabs button {
+  all: unset;
+  cursor: pointer;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--fg) 7%, transparent);
+}
+.archbox .tabs button:hover { color: var(--fg); }
+.archbox .tabs button.on {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--accent) 34%, transparent);
+}
+.archbox .tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.archbox .oneliner.stack { max-width: none; margin: 0 0 10px; align-items: flex-start; padding-top: 10px; }
+.archbox .lines { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.archbox .lines code { flex: none; background: none; padding: 0; }
+.archbox .prompt { color: var(--muted); user-select: none; margin-right: 4px; }
+.archbox .hint { margin: 0 0 8px; font-size: 13.5px; color: var(--muted); }
+.archbox .links { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0; font-size: 13px; color: var(--muted); }
+.archbox .links a { color: var(--fg); text-decoration: underline; text-underline-offset: 3px; }
+.archbox .links code { font-size: 12.5px; }

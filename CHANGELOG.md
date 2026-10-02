@@ -38,6 +38,21 @@ match the tag exactly.
   background workers are admitted in constant time rather than scanning a slot
   table on every submission.
 
+## v0.8.8 — 2026-09-30
+
+- **Ubuntu 20.04 and other older Debian/Ubuntu systems can install Opal.** A
+  separate package builds current media libraries against glibc 2.31 and keeps
+  them private. The installer selects it for older hosts; playback uses software
+  decoding and X11/XWayland. System libraries stay under distro control.
+- **Browse gains more torrent, reading and audio sources.** NekoBT, Shana,
+  Public Domain Torrents, Royal Road, NovelFire, Weeb Central, Comic Book Plus
+  and Audius join the catalog, along with NASA, BBC and NPR podcasts. Anime,
+  comics and novels have repaired discovery, reader and source handoffs.
+- **macOS builds and bundles are more reliable.** CI uses a supported runner,
+  dependency setup repairs stale OpenSSL links, and bundled playback libraries
+  reserve enough space for relocated paths. Torrent search also works with
+  Ubuntu 20.04's Python 3.8.
+
 ## v0.8.7 — 2026-09-27
 
 - **YouTube starts faster and plays at the requested quality.** Browse cards,

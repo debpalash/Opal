@@ -37,12 +37,9 @@ jobs:
   validate-release:
     runs-on: ubuntu-24.04
     steps:
-      - name: Validate release tag
-        run: |
-          if [[ ! "$OPAL_RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
-            echo "Invalid release tag: $OPAL_RELEASE_TAG" >&2
-            exit 2
-          fi
+      - uses: actions/checkout@v4
+      - name: Validate release tag and app version
+        run: python3 scripts/check-release-version.py "$OPAL_RELEASE_TAG"
 
   macos-arm64:
     needs: validate-release
@@ -54,12 +51,7 @@ jobs:
           version: 0.16.0
       - name: Install native dependencies
         run: |
-          brew update
-          # OCR is off in the default build; ONNX Runtime is not linked.
-          # Sonoma has no usable current FFmpeg/mpv bottle closure: Homebrew
-          # x265 fails on the runner. Build native codecs and libmpv from
-          # pinned source against the 13.0 deployment target instead.
-          brew install sqlite sdl2 libtorrent-rasterbar libass libplacebo meson ninja pkgconf create-dmg
+          ./scripts/install-macos-deps.sh create-dmg
           ./scripts/install-macos-ffmpeg.sh
           ./scripts/install-macos-mpv.sh
       - name: Build .app bundle (ReleaseFast)
@@ -753,10 +745,17 @@ jobs:
           path: extension/out/opal-connect-*.zip
           if-no-files-found: error
 
+  linux-compat:
+    needs: validate-release
+    uses: ./.github/workflows/linux-compat.yml
+    with:
+      release: true
+    secrets: inherit
+
   publish:
     # Every platform artifact (especially the fixed AppImage) and the browser
     # extension must exist before a tag can become a public GitHub release.
-    needs: [macos-arm64, linux-x86_64, windows-x86_64, extension]
+    needs: [macos-arm64, linux-x86_64, linux-compat, windows-x86_64, extension]
     runs-on: ubuntu-24.04
     steps:
       # fetch-depth: 0 — the notes generator walks from the previous tag to
@@ -768,6 +767,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+          pattern: "!*.dockerbuild"
           merge-multiple: true
       - name: Generate SHA256SUMS.txt
         # scripts/install.sh verifies every download against this manifest.
@@ -792,6 +792,7 @@ jobs:
             artifacts/Opal-*-macos-arm64.dmg
             artifacts/opal-*-macos-arm64.tar.gz
             artifacts/opal-*-linux-x86_64.tar.gz
+            artifacts/opal-*-linux-compat-sources.tar.gz
             artifacts/opal_*_amd64.deb
             artifacts/opal-*.x86_64.rpm
             artifacts/opal-*-x86_64.pkg.tar.zst

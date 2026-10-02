@@ -19,7 +19,7 @@ import {
  * Every file a release ships, grouped by platform.
  *
  * A release is not one file per platform — macOS gets a .dmg, a portable
- * .app.zip and a bare tarball; Linux gets an AppImage, a .deb, an .rpm and a
+ * .app.zip and a bare tarball; Linux gets an AppImage, a .deb, an .rpm, an Arch .pkg.tar.zst and a
  * tarball; Windows gets an installer and a portable zip. Offering only the first
  * of each sent anyone who wanted a .deb to the releases page to dig for it.
  *
@@ -102,6 +102,7 @@ export default function DownloadGrid() {
         <div className="files pkgs">
           <code>brew install debpalash/tap/opal</code>
           <code>yay -S opal-media-player-bin</code>
+          <code>sudo pacman -U ./opal-*-x86_64.pkg.tar.zst</code>
         </div>
       </div>
 

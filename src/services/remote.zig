@@ -3468,9 +3468,14 @@ fn apiPodcasts(stream: std.Io.net.Stream, api_path: []const u8, query: []const u
     }
     // GET /podcasts → results + episodes for the current show.
     podcasts_svc.loadPopularOnce();
-    const view = podcasts_svc.snapshot();
     const allocator = @import("../core/alloc.zig").allocator;
-    const json_buf = allocator.alloc(u8, 192 * 1024) catch {
+    const view = allocator.create(podcasts_svc.Snapshot) catch {
+        sendJsonStatus(stream, "503 Service Unavailable", "{\"error\":\"podcast snapshot unavailable\"}");
+        return;
+    };
+    defer allocator.destroy(view);
+    podcasts_svc.copySnapshot(view);
+    const json_buf = allocator.alloc(u8, @sizeOf(podcasts_svc.Snapshot) * 6 + 8192) catch {
         sendJsonStatus(stream, "503 Service Unavailable", "{\"error\":\"podcast view unavailable\"}");
         return;
     };
@@ -3697,7 +3702,16 @@ fn apiDrama(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) 
 /// whichever view is live, so one poll drives the whole flow.
 fn apiNovels(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
     const nov = @import("novels.zig");
-    const n = &state.app.novels;
+    if (std.mem.eql(u8, api_path, "/novels/back")) {
+        nov.back();
+        sendJson(stream, "{\"ok\":true}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/novels/more")) {
+        nov.loadMore();
+        sendJson(stream, "{\"ok\":true}");
+        return;
+    }
 
     if (std.mem.eql(u8, api_path, "/novels/search")) {
         if (getQueryParam(query, "q")) |q| {
@@ -3739,15 +3753,25 @@ fn apiNovels(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
     }
 
     const a = @import("../core/alloc.zig").allocator;
-    // text_buf alone is 128KB, and JSON escaping can nearly double it.
-    const json_buf = a.alloc(u8, 384 * 1024) catch return;
+    const n = a.create(nov.ReaderSnapshot) catch return;
+    defer a.destroy(n);
+    nov.copyReaderSnapshot(n);
+    // Size from the immutable view, including worst-case JSON escapes. Large
+    // enriched catalogs must not silently cut off chapter lists or reader text.
+    var json_cap: usize = 8192 + (n.text_len + n.work_title_len + n.chapter_label_len) * 6;
+    for (n.results[0..n.result_count]) |*row| {
+        json_cap += (row.title().len + row.url().len + row.metadata.author().len +
+            row.metadata.overview().len + row.metadata.cover().len) * 6 + 128;
+    }
+    for (n.chapter_title_lens[0..n.chapter_count]) |length| json_cap += length * 6 + 32;
+    const json_buf = a.alloc(u8, json_cap) catch return;
     defer a.free(json_buf);
     var w = std.Io.Writer.fixed(json_buf);
     w.print("{{\"view\":\"{s}\",\"loading\":{s},\"chapters_loading\":{s},\"text_loading\":{s},\"error\":{s},\"title\":\"", .{
         @tagName(n.view),
-        if (n.is_loading.load(.acquire)) "true" else "false",
-        if (n.chapters_loading.load(.acquire)) "true" else "false",
-        if (n.text_loading.load(.acquire)) "true" else "false",
+        if (n.loading) "true" else "false",
+        if (n.chapters_loading) "true" else "false",
+        if (n.text_loading) "true" else "false",
         if (n.fetch_error) "true" else "false",
     }) catch return;
     escJsonWrite(&w, txt.safeUtf8(n.work_title[0..@min(n.work_title_len, n.work_title.len)]));
@@ -3759,27 +3783,41 @@ fn apiNovels(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
     }) catch return;
 
     var i: usize = 0;
-    const rn = nov.resultCount();
+    const rn = n.result_count;
     while (i < rn) : (i += 1) {
-        const row = nov.resultRow(i) orelse break;
+        const row = &n.results[i];
         if (i > 0) w.writeAll(",") catch return;
         w.writeAll("{\"title\":\"") catch return;
         escJsonWrite(&w, txt.safeUtf8(row.title()));
-        w.print("\",\"source\":{d}}}", .{row.source}) catch return;
+        w.writeAll("\",\"url\":\"") catch return;
+        escJsonWrite(&w, row.url());
+        w.writeAll("\",\"author\":\"") catch return;
+        escJsonWrite(&w, txt.safeUtf8(row.metadata.author()));
+        w.writeAll("\",\"overview\":\"") catch return;
+        escJsonWrite(&w, txt.safeUtf8(row.metadata.overview()));
+        w.writeAll("\",\"cover\":\"") catch return;
+        escJsonWrite(&w, row.metadata.cover());
+        w.print("\",\"year\":{d},\"source\":{d}}}", .{ row.metadata.year, row.source }) catch return;
     }
     w.writeAll("],\"chapters\":[") catch return;
     i = 0;
-    const cn = nov.chapterCount();
+    const cn = n.chapter_count;
     while (i < cn) : (i += 1) {
-        const row = nov.chapterRow(i) orelse break;
+        const chapter_title = n.chapter_titles[i][0..n.chapter_title_lens[i]];
         if (i > 0) w.writeAll(",") catch return;
         w.writeAll("{\"title\":\"") catch return;
-        escJsonWrite(&w, txt.safeUtf8(row.title()));
+        escJsonWrite(&w, txt.safeUtf8(chapter_title));
         w.writeAll("\"}") catch return;
     }
     w.writeAll("],\"text\":\"") catch return;
     escJsonWrite(&w, txt.safeUtf8(n.text_buf[0..@min(n.text_len, n.text_buf.len)]));
-    w.writeAll("\"}") catch return;
+    w.print("\",\"has_more\":{s},\"loading_more\":{s},\"search_generation\":{d},\"chapter_generation\":{d},\"text_generation\":{d}}}", .{
+        if (n.has_more) "true" else "false",
+        if (n.loading_more) "true" else "false",
+        n.search_generation,
+        n.chapter_generation,
+        n.text_generation,
+    }) catch return;
     sendJson(stream, json_buf[0..w.end]);
 }
 
@@ -3800,9 +3838,7 @@ fn apiAbs(stream: std.Io.net.Stream, method: []const u8, api_path: []const u8, q
         defer @memset(&dec, 0);
         if (credParam(body, "", "server", &dec)) |v| {
             const sv = txt.safeUtf8(v);
-            const n = @min(sv.len, s.server_url.len);
-            @memcpy(s.server_url[0..n], sv[0..n]);
-            s.server_url_len = n;
+            abs.setServerUrl(sv);
         }
         if (credParam(body, "", "user", &dec)) |v| {
             const uv = txt.safeUtf8(v);
@@ -3868,46 +3904,101 @@ fn apiAbs(stream: std.Io.net.Stream, method: []const u8, api_path: []const u8, q
         return;
     }
 
+    if (std.mem.eql(u8, api_path, "/abs/audio")) {
+        if (!requireMethod(stream, method, "POST")) return;
+        const idx = std.fmt.parseInt(usize, getQueryParam(query, "idx") orelse "", 10) catch {
+            sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"invalid track index\"}");
+            return;
+        };
+        const generation = std.fmt.parseInt(u32, getQueryParam(query, "generation") orelse "", 10) catch {
+            sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"invalid audio generation\"}");
+            return;
+        };
+        if (!abs.playAudioTrack(idx, generation)) {
+            sendJsonStatus(stream, "409 Conflict", "{\"error\":\"audio selection changed; refresh and retry\"}");
+            return;
+        }
+        sendJson(stream, "{\"ok\":true,\"action\":\"abs_audio\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/abs/audio/book")) {
+        if (!requireMethod(stream, method, "POST")) return;
+        const generation = std.fmt.parseInt(u32, getQueryParam(query, "generation") orelse "", 10) catch {
+            sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"invalid audio generation\"}");
+            return;
+        };
+        if (!abs.playWholeBook(generation)) {
+            sendJsonStatus(stream, "409 Conflict", "{\"error\":\"complete book timeline is unavailable; refresh selection\"}");
+            return;
+        }
+        sendJson(stream, "{\"ok\":true}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/abs/audio/close")) {
+        if (!requireMethod(stream, method, "POST")) return;
+        abs.clearAudioSelection();
+        sendJson(stream, "{\"ok\":true}");
+        return;
+    }
+
     if (!std.mem.eql(u8, api_path, "/abs")) {
         sendJsonStatus(stream, "404 Not Found", "{\"error\":\"unknown Audiobookshelf action\"}");
         return;
     }
     if (!requireMethod(stream, method, "GET")) return;
     const a = @import("../core/alloc.zig").allocator;
-    const json_buf = a.alloc(u8, 192 * 1024) catch return;
+    const pure = @import("audiobookshelf_pure.zig");
+    const books = a.alloc(pure.Book, 320) catch return;
+    defer a.free(books);
+    var libraries: [16]pure.Library = undefined;
+    const catalog = abs.catalogSnapshot(books, &libraries);
+    const tracks = a.alloc(pure.AudioTrack, 128) catch return;
+    defer a.free(tracks);
+    const audio = abs.audioSnapshot(tracks);
+    const json_buf = a.alloc(u8, 1280 * 1024) catch return;
     defer a.free(json_buf);
     var w = std.Io.Writer.fixed(json_buf);
-    w.print("{{\"connected\":{s},\"loading\":{s},\"view\":\"{s}\",\"server\":\"", .{
-        if (s.connected) "true" else "false",
-        if (s.is_loading.load(.acquire)) "true" else "false",
-        @tagName(s.view),
+    w.print("{{\"connected\":{s},\"loading\":{s},\"loading_more\":{s},\"has_more\":{s},\"view\":\"{s}\",\"server\":\"", .{
+        if (catalog.connected) "true" else "false",    if (catalog.loading) "true" else "false",
+        if (catalog.loading_more) "true" else "false", if (catalog.has_more) "true" else "false",
+        catalog.view,
     }) catch return;
-    escJsonWrite(&w, s.server_url[0..@min(s.server_url_len, s.server_url.len)]);
+    escJsonWrite(&w, catalog.server[0..catalog.server_len]);
     w.writeAll("\",\"error\":\"") catch return;
-    escJsonWrite(&w, txt.safeUtf8(s.login_error[0..@min(s.login_error_len, s.login_error.len)]));
+    escJsonWrite(&w, txt.safeUtf8(catalog.error_text[0..catalog.error_len]));
     w.writeAll("\",\"library\":\"") catch return;
-    escJsonWrite(&w, txt.safeUtf8(s.selected_lib_name[0..@min(s.selected_lib_name_len, s.selected_lib_name.len)]));
+    escJsonWrite(&w, txt.safeUtf8(catalog.library[0..catalog.library_len]));
     w.writeAll("\",\"libraries\":[") catch return;
-    const ln = @min(s.library_count, s.libraries.len);
-    for (s.libraries[0..ln], 0..) |*l, i| {
-        if (i > 0) w.writeAll(",") catch return;
+    for (libraries[0..catalog.library_count], 0..) |*library, idx| {
+        if (idx > 0) w.writeAll(",") catch return;
         w.writeAll("{\"name\":\"") catch return;
-        escJsonWrite(&w, txt.safeUtf8(l.name[0..@min(l.name_len, l.name.len)]));
+        escJsonWrite(&w, txt.safeUtf8(library.name[0..@min(library.name_len, library.name.len)]));
         w.writeAll("\",\"media_type\":\"") catch return;
-        escJsonWrite(&w, txt.safeUtf8(l.media_type[0..@min(l.media_type_len, l.media_type.len)]));
+        escJsonWrite(&w, txt.safeUtf8(library.media_type[0..@min(library.media_type_len, library.media_type.len)]));
         w.writeAll("\"}") catch return;
     }
     w.writeAll("],\"books\":[") catch return;
-    const bn = @min(s.book_count, s.books.len);
-    for (s.books[0..bn], 0..) |*b, i| {
-        if (i > 0) w.writeAll(",") catch return;
+    for (books[0..catalog.book_count], 0..) |*book, idx| {
+        if (idx > 0) w.writeAll(",") catch return;
         w.writeAll("{\"title\":\"") catch return;
-        escJsonWrite(&w, txt.safeUtf8(b.title[0..@min(b.title_len, b.title.len)]));
+        escJsonWrite(&w, txt.safeUtf8(book.title[0..@min(book.title_len, book.title.len)]));
         w.writeAll("\",\"author\":\"") catch return;
-        escJsonWrite(&w, txt.safeUtf8(b.author[0..@min(b.author_len, b.author.len)]));
-        w.print("\",\"duration\":{d}}}", .{b.duration_secs}) catch return;
+        escJsonWrite(&w, txt.safeUtf8(book.author[0..@min(book.author_len, book.author.len)]));
+        w.print("\",\"duration\":{d}}}", .{book.duration_secs}) catch return;
     }
-    w.writeAll("]}") catch return;
+    w.print("],\"audio\":{{\"visible\":{s},\"complete_book\":{s},\"loading\":{s},\"generation\":{d},\"returned\":{d},\"total\":{d},\"truncated\":{s},\"title\":\"", .{
+        if (audio.visible) "true" else "false", if (audio.complete_book) "true" else "false", if (audio.loading) "true" else "false",             audio.generation,
+        audio.count,                            audio.total,                                  if (audio.count < audio.total) "true" else "false",
+    }) catch return;
+    escJsonWrite(&w, txt.safeUtf8(audio.title[0..audio.title_len]));
+    w.writeAll("\",\"tracks\":[") catch return;
+    for (tracks[0..audio.count], 0..) |*track, idx| {
+        if (idx > 0) w.writeAll(",") catch return;
+        w.print("{{\"index\":{d},\"episode\":{s},\"title\":\"", .{ idx, if (track.episode) "true" else "false" }) catch return;
+        escJsonWrite(&w, txt.safeUtf8(track.title[0..track.title_len]));
+        w.writeAll("\"}") catch return;
+    }
+    w.writeAll("]}}") catch return;
     sendJson(stream, json_buf[0..w.end]);
 }
 
@@ -4240,10 +4331,13 @@ fn apiComics(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
     // Return current state. `downloaded` vs `pages` is what the reader polls to
     // know which /api/comics/page?i= indices will answer 200 rather than 404.
     const cm = &state.app.comic;
-    var json_buf: [2048]u8 = undefined;
-    var w = std.Io.Writer.fixed(&json_buf);
+    const reader_loading = cm.is_loading.load(.acquire) or cm.pending_load.load(.acquire) or cm.pending_close.load(.acquire);
+    const a = @import("../core/alloc.zig").allocator;
+    const json_buf = a.alloc(u8, 96 * 1024) catch return;
+    defer a.free(json_buf);
+    var w = std.Io.Writer.fixed(json_buf);
     w.print("{{\"loading\":{s},\"pages\":{d},\"downloaded\":{d},\"current\":{d},\"has_next\":{s},\"has_prev\":{s},\"title\":\"", .{
-        if (cm.is_loading.load(.acquire)) "true" else "false",
+        if (reader_loading) "true" else "false",
         cm.page_count,
         cm.dl_progress.load(.acquire),
         cm.current_page,
@@ -4253,7 +4347,32 @@ fn apiComics(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8)
     escJsonWrite(&w, txt.safeUtf8(cm.title[0..@min(cm.title_len, cm.title.len)]));
     w.writeAll("\",\"url\":\"") catch return;
     escJsonWrite(&w, cm.url_buf[0..cm.url_len]);
-    w.writeAll("\"}") catch return;
+    w.writeAll("\",\"next_url\":\"") catch return;
+    escJsonWrite(&w, cm.next_url[0..@min(cm.next_url_len, cm.next_url.len)]);
+    w.writeAll("\",\"prev_url\":\"") catch return;
+    escJsonWrite(&w, cm.prev_url[0..@min(cm.prev_url_len, cm.prev_url.len)]);
+    w.writeAll("\",\"chapters\":[") catch return;
+    const comics_svc = @import("comics.zig");
+    if (@import("comics_pure.zig").mangaIdFromRoute(cm.url_buf[0..@min(cm.url_len, cm.url_buf.len)]) != null and !reader_loading) {
+        var i: usize = 0;
+        while (comics_svc.mangaDexChapterRow(i)) |row| : (i += 1) {
+            if (i > 0) w.writeAll(",") catch return;
+            w.writeAll("{\"title\":\"") catch return;
+            escJsonWrite(&w, txt.safeUtf8(row.title()));
+            w.writeAll("\",\"url\":\"") catch return;
+            escJsonWrite(&w, row.route());
+            w.print("\",\"selected\":{s}}}", .{if (row.selected) "true" else "false"}) catch return;
+        }
+    }
+    w.writeAll("],\"ready_pages\":[") catch return;
+    var ready_count: usize = 0;
+    for (0..@min(cm.page_count, cm.page_pixels.len)) |idx| {
+        if (!comics_svc.pageReady(idx)) continue;
+        if (ready_count > 0) w.writeAll(",") catch return;
+        w.print("{d}", .{idx}) catch return;
+        ready_count += 1;
+    }
+    w.writeAll("]}") catch return;
     sendJson(stream, json_buf[0..w.end]);
 }
 
@@ -4400,46 +4519,81 @@ fn apiUnifiedResolverSearch(stream: std.Io.net.Stream, query: []const u8) void {
         resolver.resolve(dq[0..@min(dq.len, 255)], "auto");
     }
 
-    // Snapshot under the resolver transaction, then release it before JSON
-    // encoding and socket I/O so a slow web client cannot stall search workers.
     const allocator = @import("../core/alloc.zig").allocator;
-    const snapshot = allocator.alloc(resolver.ResolvedItem, 80) catch {
+    const snapshot = allocator.alloc(resolver.ResolvedItem, resolver.MAX_RESULTS) catch {
         sendJsonStatus(stream, "503 Service Unavailable", "{\"error\":\"search snapshot unavailable\"}");
         return;
     };
     defer allocator.free(snapshot);
     const generation = resolver.lockRemoteSnapshot();
     const loading = resolver.isResolving();
-    const count = @min(resolver.result_count, snapshot.len);
+    const total = @min(resolver.result_count, resolver.results.len);
+    const count = @min(total, snapshot.len);
     @memcpy(snapshot[0..count], resolver.results[0..count]);
+    const SourceSnapshot = struct { name: []const u8, enabled: bool, status: resolver.SourceStatus };
+    const sources = [_]SourceSnapshot{
+        .{ .name = "local", .enabled = resolver.sourceOn(.local), .status = resolver.status_local.load(.acquire) },
+        .{ .name = "torrent", .enabled = resolver.sourceOn(.torrent), .status = resolver.combineManySourceStatuses(&.{ resolver.status_torrent.load(.acquire), resolver.status_yts.load(.acquire), resolver.status_torznab.load(.acquire), resolver.status_eztv.load(.acquire) }) },
+        .{ .name = "jellyfin", .enabled = resolver.sourceOn(.jellyfin), .status = resolver.status_jf.load(.acquire) },
+        .{ .name = "youtube", .enabled = resolver.sourceOn(.youtube), .status = resolver.status_yt.load(.acquire) },
+        .{ .name = "anime", .enabled = resolver.sourceOn(.anime), .status = resolver.status_anime.load(.acquire) },
+        .{ .name = "comics", .enabled = resolver.sourceOn(.comics), .status = resolver.status_comics.load(.acquire) },
+        .{ .name = "stremio", .enabled = resolver.sourceOn(.stremio), .status = resolver.combineManySourceStatuses(&.{ resolver.status_stremio.load(.acquire), resolver.status_archive.load(.acquire), resolver.status_nasa.load(.acquire), resolver.status_commons.load(.acquire) }) },
+        .{ .name = "rss", .enabled = resolver.sourceOn(.rss), .status = resolver.status_rss.load(.acquire) },
+        .{ .name = "livetv", .enabled = resolver.sourceOn(.livetv), .status = resolver.status_livetv.load(.acquire) },
+        .{ .name = "music", .enabled = resolver.sourceOn(.music), .status = resolver.status_music.load(.acquire) },
+        .{ .name = "radio", .enabled = resolver.sourceOn(.radio), .status = resolver.status_radio.load(.acquire) },
+        .{ .name = "podcast", .enabled = resolver.sourceOn(.podcast), .status = resolver.status_podcast.load(.acquire) },
+        .{ .name = "novels", .enabled = resolver.sourceOn(.novels), .status = resolver.combineSourceStatuses(resolver.status_novels.load(.acquire), resolver.status_novel_archive.load(.acquire)) },
+        .{ .name = "audiobooks", .enabled = resolver.sourceOn(.audiobooks), .status = resolver.status_audiobooks.load(.acquire) },
+        .{ .name = "vndb", .enabled = resolver.sourceOn(.vndb), .status = resolver.status_vndb.load(.acquire) },
+        .{ .name = "tmdb", .enabled = true, .status = resolver.status_catalog.load(.acquire) },
+        .{ .name = "plex", .enabled = true, .status = resolver.status_plex.load(.acquire) },
+        .{ .name = "plugin", .enabled = true, .status = resolver.status_plugins.load(.acquire) },
+    };
     resolver.unlockRemoteSnapshot();
 
-    // Opaque action keys preserve native playback semantics while keeping
-    // local paths, magnets, signed URLs and request headers out of web JSON.
-    var json_buf: [65536]u8 = undefined;
-    var w = std.Io.Writer.fixed(&json_buf);
-    w.print("{{\"loading\":{s},\"generation\":{d},\"results\":[", .{
-        if (loading) "true" else "false",
-        generation,
+    // Each bounded row fits even if every string byte becomes a six-byte JSON
+    // escape. Encoding stays off the connection stack and never drops rows.
+    const json_buf = allocator.alloc(u8, @as(usize, count) * 12000 + 8192) catch {
+        sendJsonStatus(stream, "503 Service Unavailable", "{\"error\":\"search response unavailable\"}");
+        return;
+    };
+    defer allocator.free(json_buf);
+    var w = std.Io.Writer.fixed(json_buf);
+    w.print("{{\"loading\":{s},\"generation\":{d},\"returned\":{d},\"total\":{d},\"truncated\":{s},\"sources\":[", .{
+        if (loading) "true" else "false", generation, count, total, if (count < total) "true" else "false",
     }) catch return;
+    for (sources, 0..) |source, idx| {
+        if (idx > 0) w.writeAll(",") catch return;
+        w.print("{{\"source\":\"{s}\",\"enabled\":{s},\"status\":\"{s}\"}}", .{ source.name, if (source.enabled) "true" else "false", @tagName(source.status) }) catch return;
+    }
+    w.writeAll("],\"results\":[") catch return;
     for (snapshot[0..count], 0..) |*item, idx| {
-        if (w.end + 3072 > json_buf.len) break;
         if (idx > 0) w.writeAll(",") catch return;
         w.writeAll("{\"source\":\"") catch return;
         escJsonWrite(&w, @tagName(item.source));
         w.writeAll("\",\"title\":\"") catch return;
-        escJsonWrite(&w, item.name[0..item.name_len]);
+        escJsonWrite(&w, txt.safeUtf8(item.name[0..@min(item.name_len, item.name.len)]));
         w.writeAll("\",\"detail\":\"") catch return;
-        escJsonWrite(&w, item.detail[0..item.detail_len]);
+        escJsonWrite(&w, txt.safeUtf8(item.detail[0..@min(item.detail_len, item.detail.len)]));
+        w.writeAll("\",\"author\":\"") catch return;
+        escJsonWrite(&w, txt.safeUtf8(item.author[0..@min(item.author_len, item.author.len)]));
+        w.writeAll("\",\"poster_url\":\"") catch return;
+        escJsonWrite(&w, txt.safeUtf8(item.poster_url[0..@min(item.poster_url_len, item.poster_url.len)]));
+        w.writeAll("\",\"summary\":\"") catch return;
+        escJsonWrite(&w, txt.safeUtf8(item.summary[0..@min(item.summary_len, item.summary.len)]));
+        const rating = if (std.math.isFinite(item.rating) and item.rating > 0 and item.rating <= 10) item.rating else 0;
+        w.print("\",\"rating\":{d:.1}", .{rating}) catch return;
         if (item.source == .tmdb and item.catalog_id != 0) {
-            w.writeAll("\",\"media\":\"") catch return;
-            escJsonWrite(&w, item.catalog_kind[0..item.catalog_kind_len]);
+            w.writeAll(",\"media\":\"") catch return;
+            escJsonWrite(&w, item.catalog_kind[0..@min(item.catalog_kind_len, item.catalog_kind.len)]);
             w.print("\",\"id\":{d},\"imdb\":\"", .{item.catalog_id}) catch return;
-            escJsonWrite(&w, item.catalog_imdb[0..item.catalog_imdb_len]);
+            escJsonWrite(&w, item.catalog_imdb[0..@min(item.catalog_imdb_len, item.catalog_imdb.len)]);
+            w.writeAll("\"") catch return;
         }
-        w.print("\",\"key\":\"{x}\",\"queueable\":{s}}}", .{
-            resolver.actionKey(item),
-            if (resolver.isRemoteQueueable(item)) "true" else "false",
+        w.print(",\"key\":\"{x}\",\"queueable\":{s}}}", .{
+            resolver.actionKey(item), if (resolver.isRemoteQueueable(item)) "true" else "false",
         }) catch return;
     }
     w.writeAll("]}") catch return;

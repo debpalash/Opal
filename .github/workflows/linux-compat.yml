@@ -1,0 +1,101 @@
+name: Ubuntu 20.04 compatibility
+on:
+  workflow_call:
+    inputs:
+      release:
+        type: boolean
+        default: false
+    secrets:
+      TMDB_API_TOKEN:
+        required: false
+      OMDB_API_KEY:
+        required: false
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Locate cached Linux SDK
+        id: sdk
+        run: |
+          opal_sdk_root=$(python3 scripts/linux-compat-zig-root.py)
+          echo "path=$opal_sdk_root" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - name: Build and cache media foundation
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packaging/linux-compat/Dockerfile
+          target: media-deps
+          platforms: linux/amd64
+          cache-from: type=gha,scope=linux-compat-media
+          cache-to: type=gha,mode=max,scope=linux-compat-media
+      # Export the native dependency cache before app/package validation. A
+      # regression in the app must not force another complete media build.
+      - name: Build pinned runtime on Ubuntu 20.04
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packaging/linux-compat/Dockerfile
+          target: runtime-deps
+          build-contexts: cached_zig=${{ steps.sdk.outputs.path }}
+          build-args: OPAL_ZIG_SOURCE=cached_zig
+          platforms: linux/amd64
+          cache-from: |
+            type=gha,scope=linux-compat-media
+            type=gha,scope=linux-compat
+          cache-to: type=gha,mode=max,scope=linux-compat
+      - name: Build and stage compatibility app
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packaging/linux-compat/Dockerfile
+          target: artifacts
+          platforms: linux/amd64
+          outputs: type=local,dest=compat-artifacts
+          build-contexts: cached_zig=${{ steps.sdk.outputs.path }}
+          build-args: |
+            OPAL_ZIG_SOURCE=cached_zig
+            OPAL_BUILD_CACHE_KEY=${{ inputs.release && github.run_id || 'preview' }}
+          cache-from: |
+            type=gha,scope=linux-compat-media
+            type=gha,scope=linux-compat
+          cache-to: type=gha,mode=max,scope=linux-compat
+          secrets: |
+            opal_tmdb=${{ secrets.TMDB_API_TOKEN }}
+            opal_omdb=${{ secrets.OMDB_API_KEY }}
+      - name: Package compatibility deb and corresponding sources
+        run: |
+          export VERSION=$(sed -n 's/.*\.version = "\([^"]*\)".*/\1/p' build.zig.zon | head -1)
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          curl -fL --retry 3 https://github.com/goreleaser/nfpm/releases/download/v2.41.3/nfpm_2.41.3_Linux_x86_64.tar.gz -o /tmp/opal-nfpm.tar.gz
+          tar -xzf /tmp/opal-nfpm.tar.gz nfpm
+          OPAL_TEST_NFPM="$PWD/nfpm" python3 tests/test_linux_compat_manifest.py
+          ./nfpm package -f packaging/linux-compat/nfpm.yaml -p deb -t "opal_${VERSION}_compat_amd64.deb"
+          mkdir -p compat-artifacts/sources/opal
+          git archive HEAD | tar -x -C compat-artifacts/sources/opal
+          tar -C compat-artifacts/sources -czf "opal-${VERSION}-linux-compat-sources.tar.gz" .
+      - name: Verify ISA baseline of compatibility app
+        run: python3 scripts/check-isa-baseline.py compat-artifacts/compat-root/usr/lib/opal/opal-bin
+      - name: Install and launch on clean Ubuntu 20.04, Ubuntu 22.04 and Debian 12
+        run: |
+          for base_image in ubuntu:20.04 ubuntu:22.04 debian:12; do
+            case "$base_image" in
+              ubuntu:20.04) expected_glibc=2.31 ;;
+              ubuntu:22.04) expected_glibc=2.35 ;;
+              debian:12) expected_glibc=2.36 ;;
+            esac
+            docker build --build-arg BASE_IMAGE="$base_image" -f packaging/linux-compat/smoke.Dockerfile -t opal-compat-smoke .
+            docker run --rm -e VERSION="$VERSION" -e EXPECTED_GLIBC="$expected_glibc" opal-compat-smoke
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-compat
+          path: |
+            opal_*_compat_amd64.deb
+            opal-*-linux-compat-sources.tar.gz
+          if-no-files-found: error

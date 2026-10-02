@@ -329,9 +329,30 @@ pub fn buildRouteUrl(out: []u8, manga_id: []const u8) ?[]const u8 {
 /// one, or if the id doesn't validate).
 pub fn mangaIdFromRoute(url: []const u8) ?[]const u8 {
     if (!std.mem.startsWith(u8, url, MD_SCHEME)) return null;
-    const id = url[MD_SCHEME.len..];
-    if (!isValidId(id)) return null;
+    const rest = url[MD_SCHEME.len..];
+    const end = std.mem.indexOfScalar(u8, rest, ':') orelse rest.len;
+    const id = rest[0..end];
+    if (!isValidId(id) or chapterOffsetFromRoute(url) == null) return null;
     return id;
+}
+
+/// A bounded English-feed row offset, not a chapter number (fractional chapters
+/// and multiple scanlation releases are valid). Legacy series routes start at0.
+pub fn chapterOffsetFromRoute(url: []const u8) ?u32 {
+    if (!std.mem.startsWith(u8, url, MD_SCHEME)) return null;
+    const rest = url[MD_SCHEME.len..];
+    const colon = std.mem.indexOfScalar(u8, rest, ':') orelse return if (isValidId(rest)) 0 else null;
+    if (!isValidId(rest[0..colon])) return null;
+    const number = rest[colon + 1 ..];
+    if (number.len == 0 or number.len > 5) return null;
+    for (number) |ch| if (!std.ascii.isDigit(ch)) return null;
+    const offset = std.fmt.parseInt(u32, number, 10) catch return null;
+    return if (offset < 10000) offset else null; // bounded client navigation cursor
+}
+
+pub fn buildChapterRoute(out: []u8, manga_id: []const u8, offset: u32) ?[]const u8 {
+    if (!isValidId(manga_id) or offset >= 10000) return null;
+    return std.fmt.bufPrint(out, "{s}{s}:{d}", .{ MD_SCHEME, manga_id, offset }) catch null;
 }
 
 /// MangaDex spells its array/map params `includes[]` / `order[relevance]`. Those
@@ -364,7 +385,8 @@ pub fn buildFeedUrl(out: []u8, manga_id: []const u8, limit: u32, offset: u32) ?[
     if (!isValidId(manga_id)) return null;
     return std.fmt.bufPrint(
         out,
-        "{s}/manga/{s}/feed?translatedLanguage%5B%5D=en&order%5Bchapter%5D=asc" ++
+        "{s}/manga/{s}/feed?translatedLanguage%5B%5D=en&order%5Bvolume%5D=asc&order%5Bchapter%5D=asc" ++
+            "&includeEmptyPages=0&includeFuturePublishAt=0&includeExternalUrl=0" ++
             "&limit={d}&offset={d}" ++ CONTENT_RATING,
         .{ MD_API, manga_id, limit, offset },
     ) catch null;
@@ -424,6 +446,8 @@ pub fn parseMangaEntry(obj: []const u8) ?MangaEntry {
     if (findJsonNode(obj, "\"title\"")) |tnode| {
         if (findJsonStr(tnode, "\"en\":\"")) |en| {
             title = en;
+        } else if (findJsonStr(tnode, "\"ja-ro\":\"")) |romaji| {
+            title = romaji;
         } else if (std.mem.indexOfScalar(u8, tnode, ':')) |c| {
             // First value in the title map, whatever its language key is.
             var i = c + 1;
@@ -434,11 +458,40 @@ pub fn parseMangaEntry(obj: []const u8) ?MangaEntry {
             }
         }
     }
+    // Preserve a canonical English/romaji name rather than replacing it with
+    // an abbreviated alias such as OPM. For native-script maps lacking both,
+    // an actual English alternative makes discovery readable.
+    const title_node = findJsonNode(obj, "\"title\"");
+    const canonical_english = if (title_node) |node| findJsonStr(node, "\"en\":\"") else null;
+    const canonical_romaji = if (title_node) |node| findJsonStr(node, "\"ja-ro\":\"") else null;
+    if ((canonical_english == null or canonical_english.?.len == 0) and
+        (canonical_romaji == null or canonical_romaji.?.len == 0))
+    {
+        if (findJsonNode(obj, "\"altTitles\"")) |alternatives| {
+            var titles = ObjIter{ .buf = alternatives };
+            while (titles.next()) |alternative| {
+                if (findJsonStr(alternative, "\"en\":\"")) |english| {
+                    if (english.len > 0) {
+                        title = english;
+                        break;
+                    }
+                }
+            }
+        }
+    }
     if (title.len == 0) return null;
 
     var cover: []const u8 = "";
-    if (std.mem.indexOf(u8, obj, "\"type\":\"cover_art\"")) |ca| {
-        if (findJsonStr(obj[ca..], "\"fileName\":\"")) |fn_| cover = fn_;
+    if (findJsonNode(obj, "\"relationships\"")) |relationships| {
+        var relations = ObjIter{ .buf = relationships };
+        while (relations.next()) |relation| {
+            const kind = findJsonStr(relation, "\"type\":\"") orelse continue;
+            if (!std.mem.eql(u8, kind, "cover_art")) continue;
+            // Stay inside this relationship. A missing cover filename must not
+            // borrow a filename from an unrelated subsequent relationship.
+            cover = findJsonStr(relation, "\"fileName\":\"") orelse "";
+            if (cover.len > 0) break;
+        }
     }
 
     return .{ .id = id, .title = title, .cover_file = cover };
@@ -1002,4 +1055,11 @@ test "comic page mime: short/unknown bytes fall back to jpeg, never crash" {
     try std.testing.expectEqualStrings("image/jpeg", imageMime("RIFF\x00\x00\x00\x00AVI "));
     try std.testing.expectEqualStrings("image/jpeg", imageMime("\x89PNG"));
     try std.testing.expectEqualStrings("image/jpeg", imageMime("<html><body>404"));
+}
+
+test "MangaDex English alternate enriches native script without replacing canonical romaji" {
+    const obj = "{\"id\":\"801513ba-a712-498c-8f57-cae55b38cc92\",\"attributes\":{\"title\":{\"ja\":\"東京\"},\"altTitles\":[{\"en\":\"Tokyo\"}]}}";
+    try std.testing.expectEqualStrings("Tokyo", parseMangaEntry(obj).?.title);
+    const canonical = "{\"id\":\"801513ba-a712-498c-8f57-cae55b38cc92\",\"attributes\":{\"title\":{\"en\":\"Tokyo Ghoul\"},\"altTitles\":[{\"en\":\"TG\"}]}}";
+    try std.testing.expectEqualStrings("Tokyo Ghoul", parseMangaEntry(canonical).?.title);
 }

@@ -2,7 +2,7 @@
 Byte-for-byte identical test bodies; see tests/features/harness.py for the
 shared @test decorator, helpers, and run_all()."""
 from .harness import *  # noqa: F401,F403
-import os, sys, re, subprocess, sqlite3, socket, time, json  # noqa: F401
+import os, sys, re, subprocess, sqlite3, socket, time, json, shutil  # noqa: F401
 
 def _built_binary():
     # zig names the exe `opal` on POSIX and `opal.exe` on Windows.
@@ -479,7 +479,7 @@ def test_linux_installer_rootless_default():
         fake("uname", 'case "${1:-}" in -m) echo x86_64 ;; *) echo Linux ;; esac\n')
         fake("getconf", 'echo "glibc 2.39"\n')
         fake("sha256sum", 'printf "testhash  %s\\n" "$1"\n')
-        fake("sudo", 'touch "$HOME/sudo-was-called"\nexit 99\n')
+        fake("sudo", 'touch "$TEST_ROOT/sudo-was-called"\nexit 99\n')
         fake("curl", r'''
 out=""; url=""
 while [ "$#" -gt 0 ]; do
@@ -507,7 +507,8 @@ printf '<svg/>\n' > "$dest/usr/share/icons/hicolor/scalable/apps/opal.svg"
 
         env = os.environ.copy()
         env.update({
-            "HOME": str(home),
+            "XDG_CONFIG_HOME": str(home / "config"),
+            "TEST_ROOT": str(home),
             "OPAL_PREFIX": str(prefix),
             "OPAL_VERSION": "v9.9.9",
             "PATH": str(fakebin) + os.pathsep + env.get("PATH", ""),
@@ -538,7 +539,7 @@ printf '<svg/>\n' > "$dest/usr/share/icons/hicolor/scalable/apps/opal.svg"
     return "pass", "default path calls no sudo and installs executable + nova2 under ~/.local"
 
 
-@test("Linux installer rejects incompatible glibc before downloading", "Packaging")
+@test("Linux installer selects a compatible glibc package", "Packaging")
 def test_linux_installer_runtime_compatibility():
     if 'libc6 (>= 2.38)' not in _src("packaging/nfpm.yaml"):
         return "fail", ".deb is missing its glibc runtime dependency"
@@ -546,11 +547,11 @@ def test_linux_installer_runtime_compatibility():
         return "skip", "installer execution needs a POSIX host"
     result = subprocess.run(
         [sys.executable, "tests/test_linux_installer.py"], cwd=PROJECT_DIR,
-        capture_output=True, text=True, timeout=40,
+        capture_output=True, text=True, timeout=90,
     )
     if result.returncode:
         return "fail", (result.stderr or result.stdout)[-1200:]
-    return "pass", "old/unknown runtimes preserve installs; supported versions install; uninstall/list remain available"
+    return "pass", "old tags/unknown runtimes preserve installs; new releases select compatibility packages and launch rootlessly"
 
 
 @test("File associations + single instance", "Packaging")
@@ -1229,6 +1230,8 @@ def test_native_catalog_tv():
 
 @test("Memory-only torrent streaming (real loopback peers)", "Build")
 def test_memory_torrents():
+    if 'run: python3 tests/test_torrent_memory.py' not in _src('.github/workflows/ci.yml'):
+        return "fail", "CI must expose full native torrent diagnostics before the aggregate suite"
     result = subprocess.run(
         [sys.executable, "tests/test_torrent_memory.py"], cwd=PROJECT_DIR,
         capture_output=True, text=True, timeout=420,
@@ -1256,3 +1259,137 @@ def test_download_management_live():
         if result.returncode:
             return "fail", (result.stdout + result.stderr)[-2000:]
     return "pass", "isolated profiles: remove/restart, file preservation, HTTP resume, pause/remove worker ownership"
+
+
+@test("macOS dependency installation repairs stale OpenSSL links", "Packaging")
+def test_macos_deps_link_recovery():
+    if os.name == "nt":
+        return "skip", "requires POSIX shell"
+    result = subprocess.run(
+        [sys.executable, "tests/test_macos_deps.py"], cwd=PROJECT_DIR,
+        capture_output=True, text=True, timeout=90,
+    )
+    if result.returncode:
+        return "fail", (result.stderr or result.stdout)[-1200:]
+    return "pass", "stale OpenSSL links repaired; real install/link/dependency failures propagate"
+
+
+@test("Ubuntu 20.04 release includes a verified private runtime", "Packaging")
+def test_linux_compatibility_release_gate():
+    workflow = _src(".github/workflows/linux-compat.yml")
+    release = _src(".github/workflows/release.yml")
+    docker = _src("packaging/linux-compat/Dockerfile")
+    smoke = _src("packaging/linux-compat/smoke.py")
+    manifest = _src("packaging/linux-compat/nfpm.yaml")
+    checks = {
+        "build uses Focal": "FROM ubuntu:20.04" in docker,
+        "release keys cannot reuse preview binary": "ARG OPAL_BUILD_CACHE_KEY" in docker and "inputs.release && github.run_id" in workflow and "release: true" in release,
+        "host glibc dependency declared": "libc6 (>= 2.31)" in manifest,
+        "native ABI floor verified": "requires glibc newer than 2.31" in _src("packaging/linux-compat/stage.py"),
+        "GCC9 float conversion dependency pinned": "230d20e4e4ac1f6a9df92c4d746c6ec536cdb0c085bc8635d4b88cead5dc22cb" in _src("packaging/linux-compat/build-runtime.sh"),
+        "disabled Vulkan stubs have pinned headers": "570f9ae1e65466dbaf5fcab667abd079dd0a61c4ab86cf535efd492bf70a5b74" in _src("packaging/linux-compat/build-runtime.sh"),
+        "libtorrent required signal submodule pinned": "6f111b0d77429a8051be4faed06cf23fb03cf6ee233967c84fdd9d8d3b42ba8e" in _src("packaging/linux-compat/build-runtime.sh") and '"$WORK/libtorrent-2.0.11/deps/try_signal/"' in _src("packaging/linux-compat/build-runtime.sh"),
+        "foundation cached before graphics": "target: media-deps" in workflow,
+        "portable AV1 runtime": "dav1d-1.5.4" in (_src("packaging/linux-compat/build-media.sh") + _src("packaging/linux-compat/build-runtime.sh")) and "libdav1d0" not in manifest and "ubuntu:22.04 debian:12" in workflow,
+        "account setup covered": "api/auth/register" in smoke and "protected API accepted" in smoke,
+        "SQLite runtime supports account queries": "sqlite-3.53.4" in (_src("packaging/linux-compat/build-media.sh") + _src("packaging/linux-compat/build-runtime.sh")),
+        "actual package install and launch": "smoke.Dockerfile" in workflow and "docker run --rm" in workflow,
+        "both layouts launched": "launch('/usr/bin/opal'" in smoke and "launch('/tmp/local-opal/bin/opal'" in smoke,
+        "publish waits for compatibility proof": "needs: [macos-arm64, linux-x86_64, linux-compat," in release,
+        "publish excludes Docker build records": 'pattern: "!*.dockerbuild"' in release,
+        "corresponding sources published": "artifacts/opal-*-linux-compat-sources.tar.gz" in release,
+    }
+    bad = [name for name, ok in checks.items() if not ok]
+    if bad:
+        return "fail", ", ".join(bad)
+    return "pass", "release blocked until Focal package, decoder and both actual install layouts pass"
+
+
+@test("Compatibility packaging distinguishes static and dynamic ELF", "Packaging")
+def test_linux_compat_static_helper():
+    if "has_dynamic_segment(binary)" not in _src("packaging/linux-compat/stage.py") or "has_dynamic_segment(binary)" not in _src("packaging/linux-compat/smoke.py") or "elf.py /tmp/elf.py" not in _src("packaging/linux-compat/smoke.Dockerfile"):
+        return "fail", "static helper handling missing from staging or actual package smoke"
+    result = subprocess.run([sys.executable, "tests/test_linux_compat_elf.py"], cwd=PROJECT_DIR,
+                            capture_output=True, text=True, timeout=190)
+    if result.returncode:
+        return "fail", (result.stderr or result.stdout)[-1200:]
+    return "pass", "real static musl and dynamic glibc binaries follow the correct packaging path"
+
+
+@test("Private ELF dependencies are relocated before compatibility packaging", "Packaging")
+def test_linux_compat_private_needed():
+    if "relocate_private_libraries(binary, LIB)" not in _src("packaging/linux-compat/stage.py") or "OPAL_REQUIRE_PATCHELF=1 python3 tests/test_linux_compat_elf.py" not in _src("packaging/linux-compat/Dockerfile"):
+        return "fail", "absolute private dependencies or required native regression missing"
+    if not (os.environ.get("OPAL_TEST_PATCHELF") or shutil.which("patchelf")):
+        return "skip", "patchelf absent locally; required real ELF relocation regression runs in native compatibility CI"
+    result = subprocess.run([sys.executable, "tests/test_linux_compat_elf.py", "CompatElfTests.test_absolute_private_dependency_is_relocated_and_missing_library_rejected"], cwd=PROJECT_DIR,
+                            capture_output=True, text=True, timeout=190)
+    if result.returncode:
+        return "fail", (result.stderr or result.stdout)[-1200:]
+    return "pass", "actual ELF build-prefix dependency resolves beside the app; omitted libraries are rejected"
+
+
+@test("Compatibility Debian package preserves both launchers and nested resources", "Packaging")
+def test_linux_compat_manifest_tree():
+    if "type: tree" not in _src("packaging/linux-compat/nfpm.yaml") or "tests/test_linux_compat_manifest.py" not in _src(".github/workflows/linux-compat.yml"):
+        return "fail", "recursive package layout or required packaging regression missing"
+    if not (os.environ.get("OPAL_TEST_NFPM") or shutil.which("nfpm")):
+        return "skip", "nfpm absent locally; required actual package regression runs in compatibility CI"
+    result = subprocess.run([sys.executable, "tests/test_linux_compat_manifest.py"], cwd=PROJECT_DIR,
+                            capture_output=True, text=True, timeout=30)
+    if result.returncode:
+        return "fail", (result.stderr or result.stdout)[-1200:]
+    return "pass", "actual nfpm manifest retains distinct launchers, engine resources and license paths"
+
+
+@test("Compatibility CI supplies its pinned cached Zig SDK to Docker", "Packaging")
+def test_linux_compat_cached_sdk():
+    workflow = _src(".github/workflows/linux-compat.yml")
+    docker = _src("packaging/linux-compat/Dockerfile")
+    if workflow.count("build-contexts: cached_zig=${{ steps.sdk.outputs.path }}") != 2 or "FROM ${OPAL_ZIG_SOURCE} AS zig-toolchain" not in docker or 'zig version)" = 0.16.0' not in docker or "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00" not in docker:
+        return "fail", "cached SDK selection, pinned version or standalone checksum missing"
+    result = subprocess.run([sys.executable, "tests/test_linux_compat_toolchain.py"], cwd=PROJECT_DIR,
+                            capture_output=True, text=True, timeout=100)
+    if result.returncode:
+        return "fail", (result.stderr or result.stdout)[-1200:]
+    return "pass", "production SDK locator validates symlinks, version and standard library before Docker imports it"
+
+
+@test("Release tag matches the actual app version", "Packaging")
+def test_release_version_match():
+    from importlib.util import module_from_spec, spec_from_file_location
+    spec = spec_from_file_location("release_version", os.path.join(PROJECT_DIR, "scripts/check-release-version.py"))
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    for tag, version, expected in [
+        ("v0.8.8", "0.8.8", True), ("v0.8.7", "0.8.8", False),
+        ("0.8.8", "0.8.8", False), ("v0.8.8-rc1", "0.8.8-rc1", True),
+        ("vbad", "bad", False),
+    ]:
+        if module.check(tag, version) != expected:
+            return "fail", "tag/app version check failed"
+    if 'scripts/check-release-version.py "$OPAL_RELEASE_TAG"' not in _src(".github/workflows/release.yml"):
+        return "fail", "release workflow bypasses version verification"
+    return "pass", "publication refuses version mismatches and invalid tags"
+
+
+@test("Torrent engines support Ubuntu 20.04 Python 3.8", "Packaging")
+def test_python38_engine_imports():
+    result = subprocess.run([sys.executable, "tests/test_python38_engines.py"], cwd=PROJECT_DIR,
+                            capture_output=True, text=True, timeout=20)
+    if result.returncode:
+        return "fail", (result.stderr or result.stdout)[-1200:]
+    return "pass", "legacy imports, SOCKS proxy casts and every engine's XML metadata stay compatible"
+
+
+@test("macOS media libraries allow bundle path rewrites", "Packaging")
+def test_macos_media_header_padding():
+    if "-headerpad_max_install_names" not in _src("scripts/install-macos-mpv.sh") or "-headerpad_max_install_names -I{s}/include" not in _src("build.zig") or "build.zig -nt libtorrent_wrapper.so" not in _src("build.zig"):
+        return "fail", "mpv/wrapper linker padding missing"
+    if sys.platform != "darwin":
+        return "skip", "Mach-O rewrite regression runs on macOS"
+    result = subprocess.run([sys.executable, "tests/test_macos_headerpad.py"], cwd=PROJECT_DIR,
+                            capture_output=True, text=True, timeout=20)
+    if result.returncode:
+        return "fail", (result.stderr or result.stdout)[-1200:]
+    return "pass", "production FFmpeg flags permit longer bundled dependency install names"

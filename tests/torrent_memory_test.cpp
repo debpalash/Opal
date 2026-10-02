@@ -160,7 +160,11 @@ int main(int argc, char** argv) try {
     std::cout << "PASS: pending-read cancellation and immediate RAM cleanup\n";
 
     torrent_set_memory_storage(client, 0, 256);
-    int disk_id = torrent_add_file(client, metadata.c_str(), downloads.c_str());
+    // Disk jobs and removal are asynchronous. Keep their payload separate from
+    // the directory whose emptiness proves the later magnet uses RAM storage.
+    const auto disk_downloads = root / "disk-downloads";
+    fs::create_directories(disk_downloads);
+    int disk_id = torrent_add_file(client, metadata.c_str(), disk_downloads.c_str());
     require(disk_id >= 0 && !torrent_is_memory_only(client, disk_id), "toggle off didn't restore disk storage");
     char relative_path[1024];
     torrent_get_file_path(client, disk_id, 0, relative_path, sizeof(relative_path));
@@ -168,7 +172,21 @@ int main(int argc, char** argv) try {
     auto disk_node = get_node(client, disk_id);
     disk_node->handle.connect_peer(peer);
     wait_for([&]{ return torrent_poll(client, disk_id, 0, path, sizeof(path), nullptr, nullptr, nullptr) == 1; }, "disk mode download failed");
-    require(fs::exists(downloads / "fixture/selected.mkv"), "normal storage stopped writing files");
+    // In libtorrent 2.1 a v2 piece may be verified from the write buffer before
+    // its asynchronous disk write finishes. Wait for actual, correct disk bytes
+    // rather than treating have_piece() as a synchronous filesystem barrier.
+    const auto disk_file = disk_downloads / "fixture/selected.mkv";
+    wait_for([&]{
+        std::ifstream in(disk_file, std::ios::binary);
+        std::vector<char> bytes(piece_size);
+        in.read(bytes.data(), bytes.size());
+        if (in.gcount() != piece_size) return false;
+        for (int b = 0; b < piece_size; ++b) if (bytes[b] != byte_at(b)) return false;
+        return true;
+    }, "normal storage did not write correct bytes");
+    int disk_read = torrent_read_bytes(client, disk_id, 0, 0, readbuf.data(), piece_size);
+    require(disk_read == piece_size, "normal storage stream read failed");
+    for (int b = 0; b < disk_read; ++b) require(readbuf[b] == byte_at(b), "normal storage stream bytes incorrect");
     torrent_remove(client, disk_id);
     char restored_magnet[512];
     require(torrent_get_identity_magnet(seed, sid, restored_magnet, sizeof(restored_magnet)) == 0, "restore identity missing");

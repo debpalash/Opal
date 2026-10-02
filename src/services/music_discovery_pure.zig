@@ -267,6 +267,17 @@ pub fn buildReleaseGroupUrl(out: []u8, artist_mbid: []const u8, limit: u16) ?[]c
 
 pub const CacheKind = enum { artist_mbid, similar, albums };
 
+/// An HTML gateway page or API error must never become a long-lived cache hit.
+pub fn validResponse(a: std.mem.Allocator, json: []const u8, kind: CacheKind) bool {
+    var parsed = std.json.parseFromSlice(std.json.Value, a, json, .{}) catch return false;
+    defer parsed.deinit();
+    if (kind == .similar) return parsed.value == .array;
+    if (parsed.value != .object) return false;
+    const key = if (kind == .artist_mbid) "artists" else "release-groups";
+    const rows = parsed.value.object.get(key) orelse return false;
+    return rows == .array;
+}
+
 /// Seconds an entry of this kind stays usable. Artist→MBID is essentially
 /// immutable, similarity is recomputed upstream on a slow cadence, and a
 /// discography changes only when something is released.

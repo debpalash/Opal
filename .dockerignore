@@ -31,3 +31,9 @@ docker-compose.override.yml
 
 # OS cruft
 .DS_Store
+
+compat-artifacts
+opal-*-linux-compat-sources.tar.gz
+
+site/node_modules
+extension/node_modules

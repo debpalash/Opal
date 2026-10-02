@@ -123,18 +123,19 @@ export const PLATFORMS: Platform[] = [
     icon: "🐧",
     title: "Linux",
     short: "Linux",
-    meta: "AppImage · .deb · .rpm",
+    meta: "AppImage · .deb · .rpm · Arch",
     match: [[".appimage"]],
     files: [
       { label: "AppImage", hint: "runs anywhere", needles: [".appimage"] },
       { label: ".deb", hint: "Debian · Ubuntu", needles: [".deb"] },
       { label: ".rpm", hint: "Fedora · RHEL", needles: [".rpm"] },
+      { label: ".pkg.tar.zst", hint: "Arch · pacman", needles: [".pkg.tar.zst"] },
       { label: ".tar.gz", hint: "binary only", needles: ["linux", ".tar.gz"] },
     ],
-    counts: /linux|\.appimage|\.deb|\.rpm/,
+    counts: /linux|\.appimage|\.deb|\.rpm|\.pkg\.tar\.zst/,
     next: [
       "Make it executable: `chmod +x Opal-*.AppImage`, then run it.",
-      "Wayland needs `SDL_VIDEODRIVER=wayland`; the .deb and .rpm are on the releases page if you prefer a package.",
+      "Wayland needs `SDL_VIDEODRIVER=wayland`; the .deb, .rpm and Arch .pkg.tar.zst are on the releases page, and Arch users can run `yay -S opal-media-player-bin`.",
     ],
   },
   {
