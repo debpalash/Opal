@@ -1,14 +1,13 @@
 <div align="center">
-  <img src="assets/logo.svg" alt="Opal logo" width="150" />
+  <img src="assets/readme/hero.webp" alt="Opal — Play everything. From one app. The Movies & TV browser floats over an opalescent glass backdrop." width="100%" />
 
-  # Opal
+# Opal
 
-  ### Play everything. From one app.
+### Your media, in one place.
 
-  **A free, open-source, local-first media player + browser.** Search and stream
-  movies, TV, anime, **live TV / IPTV**, YouTube, torrents, and manga — plus your
-  own **Jellyfin & Plex** — with a private, on-device **AI copilot**. One native
-  binary; no accounts, no cloud, no subscription.
+A free, open-source, local-first **media player and browser**. Movies, TV, anime,
+**live TV / IPTV**, YouTube, torrents, and manga — plus your own **Jellyfin & Plex**
+libraries and an optional **on-device AI copilot**.
 
   <p>
     <a href="../../actions/workflows/ci.yml"><img src="https://github.com/debpalash/Opal/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
@@ -21,44 +20,79 @@
   </p>
 
   <p>
-    <a href="https://opal.palash.dev"><b>opal.palash.dev</b></a>
+    <a href="#get-it"><b>Download & install</b></a> &nbsp; · &nbsp;
+    <a href="#see-it"><b>Watch the demos</b></a> &nbsp; · &nbsp;
+    <a href="https://opal.palash.dev"><b>Visit the website ↗</b></a>
   </p>
-
   <p>
-    <a href="#get-it"><b>Get it</b></a> ·
-    <a href="#see-it"><b>See it</b></a> ·
-    <a href="#why"><b>Why</b></a> ·
-    <a href="#under-the-hood"><b>Under the hood</b></a> ·
-    <a href="#support"><b>Support</b></a>
-    (<a href="https://ko-fi.com/debpalash">Ko-fi</a>, <a href="https://paypal.me/palashCoder">PayPal</a>)
+    <a href="#why">Features</a> ·
+    <a href="#building-from-source">Build from source</a> ·
+    <a href="#under-the-hood">Under the hood</a> ·
+    <a href="#support">Support the project</a>
   </p>
-
-  <img src="assets/screenshots/home.jpg" alt="Opal's Browse view — a wall of trending movie posters with source tabs, search, genre filters and per-title actions" width="100%" />
 </div>
 
-<br/>
+Opal searches your enabled providers, opens playable media and reading results,
+and remembers where you left off. Personal libraries need a configured server;
+catalog entries can lead to details or a source search. The player, browser,
+torrent streamer, and AI live in one native app built with
+[Zig](https://ziglang.org), [dvui](https://github.com/david-vanderson/dvui), and **mpv**.
 
-> [!TIP]
-> **🔮 New in [v0.5.0](../../releases/tag/v0.5.0)** — a **~40,000-channel Live TV / IPTV** catalog with instant search · **Mihon / Tachiyomi manga extensions** (Opal runs the Suwayomi server *for* you) · a refined YouTube with **AV1-safe playback**. [Full release →](../../releases/tag/v0.5.0)
-
-Opal replaces the stack you'd otherwise juggle — a player, a site for the show,
-a server front-end, a torrent client, a feed. Say what you want (a title, a
-file, a magnet); it searches supported, enabled providers, opens playable media
-and reading results, and remembers where you left off. Personal libraries need
-a configured server; catalog entries can lead to details or a source search. One native binary — [Zig](https://ziglang.org) +
-[dvui](https://github.com/david-vanderson/dvui) + **mpv** — fast and quiet.
-
-<div align="center">
-
-| 🙅 No accounts | 📡 No telemetry | ☁️ No cloud | 💳 No subscription |
+| Local history | No telemetry | Optional local AI | Free software |
 |:---:|:---:|:---:|:---:|
-| nothing to sign up for | nothing phones home | your history is a SQLite file **you own** | it's your computer |
+| A SQLite file you own | No usage tracking | Models run on your machine | No subscription |
 
-</div>
+<a id="see-it"></a>
+
+## See Opal in action
+
+### Browse without the tab overload
+
+Explore trending titles, genres, and sources from one native window.
+
+<a href="assets/media/browse.mp4"><img src="assets/readme/browse.gif" width="100%" alt="Animated Opal demo: scroll the movie poster wall, then switch to the YouTube source, inside a framed window on an opalescent backdrop." /></a>
+
+[Watch the browse recording →](assets/media/browse.mp4)
+
+### Start watching while it downloads
+
+Play a torrent result directly. The stream downloads around playback;
+available peers are required.
+
+<a href="assets/media/stream-a-torrent.mp4"><img src="assets/readme/torrent.gif" width="100%" alt="Animated Opal demo: start a Sintel torrent and watch playback while it downloads, framed against an opalescent backdrop." /></a>
+
+[Watch the streaming recording →](assets/media/stream-a-torrent.mp4) ·
+<sub>Sintel, © Blender Foundation, CC BY 3.0.</sub>
+
+### Let your own AI find the next watch
+
+An optional local model answers with playable suggestions. Models are opt-in;
+no API key or AI subscription is needed.
+
+<a href="assets/media/ask-the-ai.mp4"><img src="assets/readme/ai.gif" width="100%" alt="Animated Opal demo: a suggestion chip prompts the local AI, which responds with recommendations and a poster rail." /></a>
+
+[Watch the AI recording →](assets/media/ask-the-ai.mp4)
+
+<sub>The GIFs use existing demo recordings; the stills below show the refreshed desktop toolbar.</sub>
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <a href="assets/readme/search.webp"><img src="assets/readme/search.webp" width="100%" alt="Opal universal search with Sintel results and play or queue actions, presented in an opalescent screenshot card." /></a><br/>
+      <b>One query. Every source.</b><br/>
+      <sub>Search supported, enabled providers for files, streams, reading results, and title details. Click the image for a closer look.</sub>
+    </td>
+    <td width="50%" valign="top">
+      <a href="assets/readme/player.webp"><img src="assets/readme/player.webp" width="100%" alt="Big Buck Bunny playing in Opal, with quality, audio, subtitle, and translation controls, presented in an opalescent screenshot card." /></a><br/>
+      <b>Press play. Settle in.</b><br/>
+      <sub>Quality, audio tracks, subtitles, and live translation stay close at hand. Big Buck Bunny, © Blender Foundation, CC BY 3.0.</sub>
+    </td>
+  </tr>
+</table>
 
 <a id="get-it"></a>
 
-## 🚀 Get it
+## Get Opal
 
 One command — detects your platform, verifies checksums, doubles as the updater
 (`… -s -- update`) and version pin (`OPAL_VERSION=v0.1.0 …`). On Linux it
@@ -98,6 +132,9 @@ Or pick your row — every file is on [Releases](../../releases):
 | 🐧 | **Linux (glibc 2.38+)** | `chmod +x Opal-*.AppImage` and run it |
 | 🪟 | **Windows** (x64) — **alpha** | run the `.msi` — or unzip the portable `.zip` |
 | 🛠 | **From source** | `git clone` → `zig build run` |
+
+<details>
+<summary><b>Platform notes, first launch, and playback options</b></summary>
 
 **Arch Linux, Omarchy, Manjaro, EndeavourOS** — Opal is on the AUR as
 [`opal-media-player-bin`](https://aur.archlinux.org/packages/opal-media-player-bin)
@@ -179,6 +216,8 @@ open local files instead. Add a free **TMDB v4 token** in **Settings**
 opt-in; nothing downloads itself. Reopen the welcome screen from
 **Settings → About**.
 
+</details>
+
 <a id="building-from-source"></a>
 <details>
 <summary><b>🧱 Building from source</b></summary>
@@ -255,51 +294,9 @@ XDG-compliant:
 
 </details>
 
-<a id="see-it"></a>
-
-<details open>
-<summary><b>✨ The tour, in motion</b></summary>
-<br/>
-
-<table>
-  <tr>
-    <td width="50%" valign="top">
-      <img src="assets/media/stream-a-torrent.gif" width="100%" alt="Press play on a torrent result; playback starts while it downloads" /><br/>
-      <b>🧲 Magnets behave like files</b><br/>
-      <sub>Press play on a torrent — you're watching while it downloads. <em>(Sintel, © Blender Foundation, CC-BY 3.0)</em></sub>
-    </td>
-    <td width="50%" valign="top">
-      <img src="assets/screenshots/search.jpg" width="100%" alt="One query fanned out across every source, ranked" /><br/>
-      <b>🔭 One search, every source</b><br/>
-      <sub>Disk, torrents, Jellyfin, Plex, Stremio, anime, YouTube, live TV, TMDB, manga, novels and visual novels — one sourced list with playback, reading, or detail actions.</sub>
-    </td>
-  </tr>
-  <tr>
-    <td width="50%" valign="top">
-      <img src="assets/media/browse.gif" width="100%" alt="Scrolling the trending wall, then switching to the YouTube tab" /><br/>
-      <b>🗺️ Browse every source in one place</b><br/>
-      <sub>Trending walls, genres, and episode drill-downs across TMDB, YouTube, anime, Jellyfin, and Plex.</sub>
-    </td>
-    <td width="50%" valign="top">
-      <img src="assets/media/ask-the-ai.gif" width="100%" alt="A suggestion chip answered by the local AI with a poster rail" /><br/>
-      <b>🤖 An AI that lives on your machine</b><br/>
-      <sub>Local LLM with tool use answers with playable picks — no API key, no bill, no feed.</sub>
-    </td>
-  </tr>
-  <tr>
-    <td colspan="2" valign="top">
-      <img src="assets/screenshots/player.jpg" width="100%" alt="Big Buck Bunny playing from YouTube in Opal's player, with the seek bar, quality, audio, subtitle and translation controls along the bottom" /><br/>
-      <b>🎬 A player that gets out of the way</b><br/>
-      <sub>Quality, audio track, subtitles and live translation sit one click away, then fade. <em>(Big Buck Bunny, © Blender Foundation, CC-BY 3.0)</em></sub>
-    </td>
-  </tr>
-</table>
-
-</details>
-
 <a id="why"></a>
 
-## 🆚 Why? One app instead of ten
+## One app instead of ten
 
 | Instead of… | Opal gives you |
 |---|---|
@@ -338,7 +335,7 @@ send or queue a video, add a manga/novel site as a source, or drive playback
 from a side-panel remote.
 
 <div align="center">
-  <img src="assets/screenshots/extension-sidebar.png" alt="Opal Connect side panel — connection status, page actions, transport controls, and a live cross-source search returning YouTube results with play and queue buttons" width="100%" />
+  <a href="assets/readme/connect.webp"><img src="assets/readme/connect.webp" alt="Opal Connect browser side panel with page actions, playback controls, and cross-source search, framed over an opalescent backdrop." width="100%" /></a>
 </div>
 
 **Install** — grab the Chrome/Edge or Firefox build from the
