@@ -60,12 +60,27 @@ fn scanWorker() void {
     var roots: [MAX_ROOTS]Root = undefined;
     const root_count = listRoots(&roots);
     const token = io.monotonicMilliTimestamp();
+    // Prepared once for the whole scan. Preparing and finalizing this INSERT per
+    // file re-parsed the SQL and re-ran the query planner up to MAX_FILES times
+    // for a single library walk.
+    const upsert = db.prepare(upsert_sql);
+    defer db.finalize(upsert);
     for (roots[0..root_count]) |*entry| {
         const root_path = entry.path[0..entry.path_len];
         if (!rootAvailable(root_path)) continue;
+        // One transaction per root rather than one implicit commit per file.
+        // In WAL mode the per-file version meant an fsync per indexed file, which
+        // dominated the entire scan. Scoped to a root so the write lock is never
+        // held across a whole library. Every exit path below commits — leaving
+        // this open would wedge the shared connection for the rest of the session.
+        db.exec("BEGIN IMMEDIATE");
+        defer db.exec("COMMIT");
         var count: usize = 0;
-        scanDir(root_path, root_path, token, 0, &count);
-        if (@import("../core/workers.zig").isQuitting()) return;
+        scanDir(root_path, root_path, token, 0, &count, upsert);
+        // A cancelled scan commits what it indexed; the stale-row delete is
+        // skipped, so the previous generation's rows simply survive one more
+        // scan instead of being dropped.
+        if (@import("../core/workers.zig").isQuitting()) continue;
         const stale = db.prepare("DELETE FROM local_media WHERE root=?1 AND scan_token<>?2") orelse continue;
         db.bindText(stale, 1, root_path);
         db.bindInt64(stale, 2, token);
@@ -86,7 +101,7 @@ fn rootAvailable(path: []const u8) bool {
     return true;
 }
 
-fn scanDir(root: []const u8, path: []const u8, token: i64, depth: u8, count: *usize) void {
+fn scanDir(root: []const u8, path: []const u8, token: i64, depth: u8, count: *usize, upsert: ?*db.Stmt) void {
     if (depth > MAX_DEPTH or count.* >= MAX_FILES or @import("../core/workers.zig").isQuitting()) return;
     var dir = if (absolutePath(path))
         io.openDirAbsolute(path, .{ .iterate = true }) catch return
@@ -99,10 +114,10 @@ fn scanDir(root: []const u8, path: []const u8, token: i64, depth: u8, count: *us
         var child_buf: [2048]u8 = undefined;
         const child = std.fmt.bufPrint(&child_buf, "{s}/{s}", .{ path, entry.name }) catch continue;
         switch (entry.kind) {
-            .directory => scanDir(root, child, token, depth + 1, count),
+            .directory => scanDir(root, child, token, depth + 1, count, upsert),
             .file => {
                 if (!isMediaFile(entry.name)) continue;
-                indexFile(root, child, entry.name, token);
+                indexFile(root, child, entry.name, token, upsert);
                 count.* += 1;
             },
             else => {}, // never follow symlinks or special files
@@ -110,7 +125,11 @@ fn scanDir(root: []const u8, path: []const u8, token: i64, depth: u8, count: *us
     }
 }
 
-fn indexFile(root: []const u8, path: []const u8, basename: []const u8, token: i64) void {
+const upsert_sql =
+    "INSERT INTO local_media(path,root,title,size,mtime,fingerprint,scan_token) VALUES(?1,?2,?3,?4,?5,?6,?7) " ++
+    "ON CONFLICT(path) DO UPDATE SET root=excluded.root,title=excluded.title,size=excluded.size,mtime=excluded.mtime,fingerprint=excluded.fingerprint,scan_token=excluded.scan_token";
+
+fn indexFile(root: []const u8, path: []const u8, basename: []const u8, token: i64, shared: ?*db.Stmt) void {
     const file = if (absolutePath(path)) io.openFileAbsolute(path, .{}) catch return else io.cwdOpenFile(path, .{}) catch return;
     defer file.close(io.io());
     const stat = file.stat(io.io()) catch return;
@@ -118,11 +137,14 @@ fn indexFile(root: []const u8, path: []const u8, basename: []const u8, token: i6
     const title = @import("../core/display_name_pure.zig").clean(&title_buf, basename);
     var fingerprint_buf: [32]u8 = undefined;
     const fingerprint = contentFingerprint(file, stat.size, &fingerprint_buf);
-    const stmt = db.prepare(
-        "INSERT INTO local_media(path,root,title,size,mtime,fingerprint,scan_token) VALUES(?1,?2,?3,?4,?5,?6,?7) " ++
-            "ON CONFLICT(path) DO UPDATE SET root=excluded.root,title=excluded.title,size=excluded.size,mtime=excluded.mtime,fingerprint=excluded.fingerprint,scan_token=excluded.scan_token",
-    ) orelse return;
-    defer db.finalize(stmt);
+    // Fall back to a private statement when the scan-wide one is unavailable,
+    // so a prepare failure at scan start degrades to the old behaviour instead
+    // of silently indexing nothing.
+    const stmt = shared orelse (db.prepare(upsert_sql) orelse return);
+    defer if (shared == null) db.finalize(stmt);
+    // Clears the previous row's bindings so every bind below lands cleanly.
+    // Safe because db.bind* passes SQLITE_TRANSIENT (SQLite copies each value).
+    db.reset(stmt);
     db.bindText(stmt, 1, path);
     db.bindText(stmt, 2, root);
     db.bindText(stmt, 3, title);
@@ -194,9 +216,14 @@ pub fn search(query_raw: []const u8, duplicates_only: bool, out: []Item) usize {
     var pattern_buf: [520]u8 = undefined;
     const pattern = std.fmt.bufPrint(&pattern_buf, "%{s}%", .{query}) catch return 0;
     const stmt = db.prepare(if (duplicates_only)
+        // The WHERE clause used to repeat the same COUNT(*) subquery the SELECT
+        // list already computes, so every candidate row paid for it twice. The
+        // fingerprint index turns each lookup from a full-table scan into a
+        // B-tree probe.
         "SELECT rowid,path,COALESCE(NULLIF(display_title,''),title),media_kind,size," ++
-            "(SELECT COUNT(*) FROM local_media d WHERE d.fingerprint=local_media.fingerprint AND d.fingerprint<>'') " ++
-            "FROM local_media WHERE fingerprint<>'' AND (SELECT COUNT(*) FROM local_media d WHERE d.fingerprint=local_media.fingerprint)>1 " ++
+            "(SELECT COUNT(*) FROM local_media d WHERE d.fingerprint=local_media.fingerprint) " ++
+            "FROM local_media WHERE fingerprint<>'' " ++
+            "AND fingerprint IN (SELECT fingerprint FROM local_media WHERE fingerprint<>'' GROUP BY fingerprint HAVING COUNT(*)>1) " ++
             "AND (title LIKE ?1 COLLATE NOCASE OR display_title LIKE ?1 COLLATE NOCASE) ORDER BY fingerprint,mtime DESC LIMIT ?2"
     else
         "SELECT rowid,path,COALESCE(NULLIF(display_title,''),title),media_kind,size," ++

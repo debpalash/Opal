@@ -34,11 +34,57 @@ pub fn upsertItem(item: *const state.TmdbItem) void {
 // List Management (favorites, watchlist, watching)
 // ══════════════════════════════════════════════════════════
 
-pub fn isInList(list: *std.ArrayListUnmanaged(state.TmdbItem), id: i32) bool {
+fn scanList(list: *std.ArrayListUnmanaged(state.TmdbItem), id: i32) bool {
     for (list.items) |*entry| {
         if (entry.id == id) return true;
     }
     return false;
+}
+
+// `isInList` is called three times per visible poster card, and favorites /
+// watchlist / watching each hold up to ~1900 items. A card grid therefore turned
+// each rendered frame into O(3 × visible_cards × list_len) integer comparisons.
+// Keep an id set per list and rebuild it only when the list is actually mutated.
+//
+// Both mutation points are in this file — `toggleList` (append / orderedRemove)
+// and `loadListFromDb` (full repopulate) — so invalidation is explicit rather
+// than guessed from a length compare. Reads stay on the render thread, which is
+// the only place these are consulted.
+const IdSet = struct {
+    map: std.AutoHashMapUnmanaged(i32, void) = .empty,
+    built_len: usize = 0,
+    valid: bool = false,
+};
+
+var id_sets: [3]IdSet = .{ .{}, .{}, .{} };
+
+fn setIndexFor(list: *std.ArrayListUnmanaged(state.TmdbItem)) ?usize {
+    if (list == &state.app.tmdb.favorites) return 0;
+    if (list == &state.app.tmdb.watchlist) return 1;
+    if (list == &state.app.tmdb.watching) return 2;
+    // Any other list (the transient results list) is short-lived per search, so
+    // a set would cost more than the scan it replaces.
+    return null;
+}
+
+fn invalidateSet(list: *std.ArrayListUnmanaged(state.TmdbItem)) void {
+    if (setIndexFor(list)) |index| id_sets[index].valid = false;
+}
+
+pub fn isInList(list: *std.ArrayListUnmanaged(state.TmdbItem), id: i32) bool {
+    const index = setIndexFor(list) orelse return scanList(list, id);
+    const set = &id_sets[index];
+    // The length compare is a cheap safety net for a mutation that bypassed an
+    // explicit invalidation; it can only ever cause a needless rebuild.
+    if (!set.valid or set.built_len != list.items.len) {
+        set.map.clearRetainingCapacity();
+        for (list.items) |entry| {
+            set.map.put(alloc, entry.id, {}) catch return scanList(list, id);
+        }
+        set.built_len = list.items.len;
+        set.valid = true;
+    }
+    return set.map.contains(id);
 }
 
 pub fn toggleList(list: *std.ArrayListUnmanaged(state.TmdbItem), item: *state.TmdbItem) void {
@@ -50,6 +96,7 @@ pub fn toggleList(list: *std.ArrayListUnmanaged(state.TmdbItem), item: *state.Tm
             var removed = list.orderedRemove(i);
             @import("../core/poster.zig").deinitPoster(&removed.poster_pixels, &removed.poster_tex);
             removeFromDbList(id, list_name);
+            invalidateSet(list);
             return;
         }
     }
@@ -67,6 +114,7 @@ pub fn toggleList(list: *std.ArrayListUnmanaged(state.TmdbItem), item: *state.Tm
 
     upsertItem(item);
     addToDbList(item.id, list_name);
+    invalidateSet(list);
 }
 
 fn addToDbList(item_id: i32, list_name: []const u8) void {
@@ -119,6 +167,9 @@ fn loadListFromDb(list_name: []const u8, target: *std.ArrayListUnmanaged(state.T
     ;
     const stmt = db.prepare(sql) orelse return;
     defer db.finalize(stmt);
+    // A full repopulate replaces every id, so any set built from the previous
+    // contents is stale — and a reload can produce the same length.
+    invalidateSet(target);
     db.bindText(stmt, 1, list_name);
 
     while (db.step(stmt) == db.c.SQLITE_ROW) {

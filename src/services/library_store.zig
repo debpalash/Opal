@@ -7,6 +7,42 @@
 const std = @import("std");
 const db = @import("../core/db.zig");
 const pure = @import("library_pure.zig");
+const sync = @import("../core/sync.zig");
+
+/// Bumped by every mutator below. Readers use it to decide whether their cached
+/// rows are still current.
+var version = std.atomic.Value(u64).init(1);
+
+fn markDirty() void {
+    _ = version.fetchAdd(1, .release);
+}
+
+/// Home-rail snapshot cache.
+///
+/// The Home surface reads `loadContinue`, `hiddenContinueCount` and
+/// `loadFavorites` on every rendered frame. Each was a `prepare` + `step` +
+/// `finalize` on the shared FULLMUTEX connection — three SQLite round trips per
+/// frame, hundreds of microseconds, to return rows that almost never change
+/// between two frames. Now they re-query only when a mutator has moved the
+/// version. Same shape as iptv.zig's `fav_dirty`/`ensureFavSet`.
+var rail_mutex: sync.Mutex = .{};
+var rail_version: u64 = 0;
+var continue_rows: [32]pure.LibraryItem = undefined;
+var continue_len: usize = 0;
+var hidden_continue: usize = 0;
+var favorite_rows: [32]pure.LibraryItem = undefined;
+var favorite_len: usize = 0;
+
+/// Rebuild the rails if a mutator ran since the last read. Must be called with
+/// `rail_mutex` held.
+fn refreshRailsLocked() void {
+    const current = version.load(.acquire);
+    if (current == rail_version) return;
+    continue_len = loadContinueUncached(continue_rows[0..]);
+    hidden_continue = loadHiddenContinueCountUncached();
+    favorite_len = loadFavoritesUncached(favorite_rows[0..]);
+    rail_version = current;
+}
 
 /// Record/refresh progress for an item. Preserves an existing `is_favorite`
 /// (progress updates must not clear a star). `deep_link` is what resumes it.
@@ -40,6 +76,7 @@ pub fn upsertProgress(
     db.bindText(stmt, 8, next_label);
     db.bindText(stmt, 9, deep_link);
     _ = db.step(stmt);
+    markDirty();
 }
 
 /// Toggle/set a favorite, carrying a display snapshot so the Favorites rail can
@@ -63,6 +100,7 @@ pub fn setFavorite(kind: []const u8, item_id: []const u8, fav: bool, title: []co
     db.bindInt(stmt, 5, if (fav) 1 else 0);
     db.bindText(stmt, 6, deep_link);
     _ = db.step(stmt);
+    markDirty();
 }
 
 /// Read one source-owned favorite flag by stable identity. Source adapters use
@@ -121,6 +159,7 @@ pub fn setRating(kind: []const u8, item_id: []const u8, rating: ?f64, title: []c
     db.bindText(stmt, 4, poster);
     db.bindDouble(stmt, 5, value);
     _ = db.step(stmt);
+    markDirty();
 }
 
 fn readRow(stmt: ?*db.Stmt, out: *pure.LibraryItem) void {
@@ -143,7 +182,25 @@ fn readRow(stmt: ?*db.Stmt, out: *pure.LibraryItem) void {
 const COLS = "kind,item_id,title,poster,resume_secs,duration_secs,percent,is_favorite,user_rating,next_label,deep_link,home_hidden,home_pinned";
 
 /// Continue-watching rows (in-progress, newest first) into `out`; count filled.
+/// Served from the rail cache when no mutator has run since the last call.
 pub fn loadContinue(out: []pure.LibraryItem) usize {
+    rail_mutex.lock();
+    defer rail_mutex.unlock();
+    refreshRailsLocked();
+    return copyOut(continue_rows[0..continue_len], out);
+}
+
+/// Copy the longest prefix `out` can hold. `LibraryItem` is a fixed-size struct
+/// with no pointers, so this is a plain memcpy — orders of magnitude cheaper
+/// than re-running the query, which is the entire point of the cache.
+fn copyOut(rows: []const pure.LibraryItem, out: []pure.LibraryItem) usize {
+    const n = @min(rows.len, out.len);
+    @memcpy(out[0..n], rows[0..n]);
+    return n;
+}
+
+/// The uncached query behind `loadContinue`.
+fn loadContinueUncached(out: []pure.LibraryItem) usize {
     // The band is comptime-formatted from the pure constants rather than
     // hardcoded, so the SQL filter and `pure.isContinue` can never drift apart.
     const BAND = std.fmt.comptimePrint(
@@ -180,6 +237,14 @@ pub fn setHomeHidden(kind: []const u8, item_id: []const u8, hidden: bool) void {
 }
 
 pub fn hiddenContinueCount() usize {
+    rail_mutex.lock();
+    defer rail_mutex.unlock();
+    refreshRailsLocked();
+    return hidden_continue;
+}
+
+/// The uncached query behind `hiddenContinueCount`.
+fn loadHiddenContinueCountUncached() usize {
     const stmt = db.prepare("SELECT count(*) FROM library_items WHERE home_hidden=1 AND percent > ?1 AND percent < ?2") orelse return 0;
     defer db.finalize(stmt);
     db.bindDouble(stmt, 1, pure.CONTINUE_MIN_PCT);
@@ -194,10 +259,20 @@ pub fn restoreHiddenContinue() void {
     db.bindDouble(stmt, 1, pure.CONTINUE_MIN_PCT);
     db.bindDouble(stmt, 2, pure.CONTINUE_MAX_PCT);
     _ = db.step(stmt);
+    markDirty();
 }
 
-/// Favorites (newest first) into `out`; count filled.
+/// Favorites (newest first) into `out`; count filled. Served from the rail cache
+/// when no mutator has run since the last call.
 pub fn loadFavorites(out: []pure.LibraryItem) usize {
+    rail_mutex.lock();
+    defer rail_mutex.unlock();
+    refreshRailsLocked();
+    return copyOut(favorite_rows[0..favorite_len], out);
+}
+
+/// The uncached query behind `loadFavorites`.
+fn loadFavoritesUncached(out: []pure.LibraryItem) usize {
     const stmt = db.prepare("SELECT " ++ COLS ++ " FROM library_items WHERE is_favorite=1 ORDER BY updated_at DESC LIMIT ?1") orelse return 0;
     defer db.finalize(stmt);
     db.bindInt64(stmt, 1, @intCast(out.len));

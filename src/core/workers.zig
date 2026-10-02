@@ -15,11 +15,32 @@ const MAX_LEGACY_TASKS: i64 = 256;
 
 const Slot = struct {
     thread: ?std.Thread = null,
-    finished: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 };
 
 var slots: [MAX_OWNED_THREADS]Slot = [_]Slot{.{}} ** MAX_OWNED_THREADS;
 var slots_mutex: sync.Mutex = .{};
+
+// Slot indices whose worker finished but whose handle is not joined yet. A
+// worker appends here under slots_mutex as its last act, so admission and the
+// reap never scan the whole table to find reusable slots.
+var finished_slots: [MAX_OWNED_THREADS]u8 = undefined;
+var finished_len: usize = 0;
+
+// Slot indices with no live thread (never used, or joined and returned). LIFO,
+// so `spawn` admits in O(1) instead of probing 256 entries per submission.
+var free_slots: [MAX_OWNED_THREADS]u8 = undefined;
+var free_len: usize = 0;
+
+// init() runs before any worker exists and before every test in this file, so
+// rebuilding both index stacks there keeps the tables self-consistent.
+fn resetSlotIndex() void {
+    for (&slots) |*slot| slot.thread = null;
+    for (0..MAX_OWNED_THREADS) |i| {
+        free_slots[i] = @intCast(MAX_OWNED_THREADS - 1 - i);
+    }
+    free_len = MAX_OWNED_THREADS;
+    finished_len = 0;
+}
 
 var active: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
 var quitting: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
@@ -31,6 +52,9 @@ var legacy_admission_hook_for_test: ?*const fn () void = null;
 
 /// Initialize admission before any service is allowed to start work.
 pub fn init() void {
+    slots_mutex.lock();
+    resetSlotIndex();
+    slots_mutex.unlock();
     quitting.store(false, .release);
     shutdown_complete.store(true, .release);
 }
@@ -66,13 +90,47 @@ pub fn shutdownDeadlineReached(started_ms: i64, now_ms: i64, timeout_ms: i64) bo
     return now_ms - started_ms >= @max(timeout_ms, 1);
 }
 
-fn reapFinishedLocked() void {
-    for (&slots) |*slot| {
-        if (slot.thread != null and slot.finished.load(.acquire)) {
-            slot.thread.?.join();
-            slot.thread = null;
-            slot.finished.store(false, .release);
-        }
+fn pushFreeLocked(index: usize) void {
+    std.debug.assert(free_len < MAX_OWNED_THREADS);
+    free_slots[free_len] = @intCast(index);
+    free_len += 1;
+}
+
+/// Hand a finished worker's index back to admission. Called by the worker itself
+/// as its final act, so the handle is joined by whichever reaper drains the list.
+fn publishFinished(index: usize) void {
+    slots_mutex.lock();
+    std.debug.assert(finished_len < MAX_OWNED_THREADS);
+    finished_slots[finished_len] = @intCast(index);
+    finished_len += 1;
+    slots_mutex.unlock();
+}
+
+/// Join every worker that already returned and return its slot to admission.
+///
+/// The join deliberately happens with `slots_mutex` released: a worker needs that
+/// same lock to publish its completion, so joining under it would deadlock
+/// against the very thread being waited on.
+fn reapFinished() void {
+    var batch: [MAX_OWNED_THREADS]u8 = undefined;
+    var count: usize = 0;
+
+    slots_mutex.lock();
+    count = finished_len;
+    @memcpy(batch[0..count], finished_slots[0..count]);
+    finished_len = 0;
+    slots_mutex.unlock();
+
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        const index: usize = batch[i];
+        // Uncontended: only the reaper that claimed this index writes the slot,
+        // and the slot is absent from `free_slots` until it is returned below.
+        if (slots[index].thread) |thread| thread.join();
+        slots_mutex.lock();
+        slots[index].thread = null;
+        pushFreeLocked(index);
+        slots_mutex.unlock();
     }
 }
 
@@ -91,29 +149,32 @@ pub fn spawn(comptime function: anytype, args: anytype) !void {
             @call(.auto, function, ctx.args);
             const index = ctx.slot_index;
             std.heap.c_allocator.destroy(ctx);
-            slots[index].finished.store(true, .release);
+            publishFinished(index);
         }
     };
 
     const context = try std.heap.c_allocator.create(Context);
     errdefer std.heap.c_allocator.destroy(context);
 
+    // Reclaim finished workers before admission. This takes slots_mutex itself,
+    // so it has to happen outside the critical section below.
+    reapFinished();
+
     slots_mutex.lock();
     defer slots_mutex.unlock();
     if (isQuitting()) return error.ShuttingDown;
-    reapFinishedLocked();
+    if (free_len == 0) return error.WorkQueueFull;
+    free_len -= 1;
+    const selected: usize = free_slots[free_len];
 
-    var index: ?usize = null;
-    for (&slots, 0..) |*slot, i| {
-        if (slot.thread == null) {
-            index = i;
-            break;
-        }
-    }
-    const selected = index orelse return error.WorkQueueFull;
     context.* = .{ .args = args, .slot_index = selected };
-    slots[selected].finished.store(false, .release);
-    slots[selected].thread = try std.Thread.spawn(.{}, Context.run, .{context});
+    // Publish the handle before the worker can run: a concurrent reap only ever
+    // visits indices a worker listed as finished, and it must never observe an
+    // empty slot there, or the join would be dropped.
+    slots[selected].thread = std.Thread.spawn(.{}, Context.run, .{context}) catch |err| {
+        pushFreeLocked(selected);
+        return err;
+    };
 }
 
 /// Compatibility admission seam for code that still needs a native Thread
@@ -215,12 +276,9 @@ pub fn beginShutdownAndDrain(diagnostic_ms: i64) void {
     const started = io.milliTimestamp();
     var warned = false;
     while (true) {
+        reapFinished();
         slots_mutex.lock();
-        reapFinishedLocked();
-        var owned: usize = 0;
-        for (&slots) |*slot| if (slot.thread != null) {
-            owned += 1;
-        };
+        const owned = MAX_OWNED_THREADS - free_len - finished_len;
         slots_mutex.unlock();
         if (owned == 0 and active.load(.acquire) == 0) return;
         if (!warned and io.milliTimestamp() - started >= diagnostic_ms) {
@@ -254,6 +312,57 @@ test "owned tasks are accepted and joined before shutdown returns" {
     try spawn(T.run, .{});
     beginShutdownAndDrain(1_000);
     try std.testing.expect(T.ran.load(.acquire));
+}
+
+test "sequential spawns recycle slots instead of exhausting the table" {
+    const T = struct {
+        fn run() void {}
+    };
+    init();
+    // Far more submissions than MAX_OWNED_THREADS: every finished worker must
+    // return its slot to admission, otherwise the table drains after 256
+    // submissions and later work is silently dropped with WorkQueueFull.
+    var i: usize = 0;
+    while (i < MAX_OWNED_THREADS * 4) : (i += 1) {
+        // A full table is momentarily legitimate while the previous burst is
+        // still unreaped; the invariant under test is that it never stays full.
+        var attempts: usize = 0;
+        while (true) {
+            spawn(T.run, .{}) catch |err| {
+                try std.testing.expectEqual(error.WorkQueueFull, err);
+                attempts += 1;
+                if (attempts > 10_000) return error.TestUnexpectedResult;
+                io.sleep(std.time.ns_per_ms);
+                continue;
+            };
+            break;
+        }
+    }
+    beginShutdownAndDrain(10_000);
+    slots_mutex.lock();
+    defer slots_mutex.unlock();
+    try std.testing.expectEqual(MAX_OWNED_THREADS, free_len);
+    try std.testing.expectEqual(@as(usize, 0), finished_len);
+}
+
+test "a full slot table is reported instead of overwriting a live worker" {
+    const T = struct {
+        var gate: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+        fn run() void {
+            while (!gate.load(.acquire)) io.sleep(std.time.ns_per_ms);
+        }
+    };
+    init();
+    T.gate.store(false, .release);
+
+    var admitted: usize = 0;
+    while (admitted < MAX_OWNED_THREADS) : (admitted += 1) {
+        try spawn(T.run, .{});
+    }
+    try std.testing.expectError(error.WorkQueueFull, spawn(T.run, .{}));
+    T.gate.store(true, .release);
+    beginShutdownAndDrain(10_000);
+    try std.testing.expectEqual(@as(i64, 0), activeCount());
 }
 
 test "legacy native handles remain behind the shutdown barrier after detach" {

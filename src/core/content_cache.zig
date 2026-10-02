@@ -81,16 +81,33 @@ fn keyFilePath(buf: []u8) ?[]const u8 {
     return std.fmt.bufPrint(buf, "{s}/cache.key", .{dir}) catch null;
 }
 
-/// `~/.cache/opal/content` — the entry directory. Ensures it exists.
-fn contentDir(buf: []u8) ?[]const u8 {
-    const dir = paths.cacheFile(buf, "content");
-    io.cwdMakePath(dir) catch return null;
-    return dir;
+/// `~/.cache/opal/content` — the entry directory. The returned slice points at
+/// memoized storage and stays valid for the process.
+///
+/// `entryPath` runs on every cache read and every put. It used to issue a
+/// `mkdir -p` syscall each time, which lands squarely on the UI thread when a
+/// view seeds itself from cache. Reads now reuse the memoized path; only the
+/// rare writers and the startup sweep pay for the mkdir, so a directory removed
+/// out from under us is still recreated on the next write.
+var dir_path_buf: [512]u8 = undefined;
+var dir_path_len: usize = 0;
+var dir_ready = std.atomic.Value(bool).init(false);
+var dir_mutex: sync.Mutex = .{};
+
+fn contentDir(create: bool) ?[]const u8 {
+    if (!create and dir_ready.load(.acquire)) return dir_path_buf[0..dir_path_len];
+    dir_mutex.lock();
+    defer dir_mutex.unlock();
+    if (!create and dir_ready.load(.acquire)) return dir_path_buf[0..dir_path_len];
+    const dir = paths.cacheFile(&dir_path_buf, "content");
+    if (create) io.cwdMakePath(dir) catch return null;
+    dir_path_len = dir.len;
+    dir_ready.store(true, .release);
+    return dir_path_buf[0..dir_path_len];
 }
 
-fn entryPath(buf: []u8, key: []const u8) ?[]const u8 {
-    var dir_buf: [512]u8 = undefined;
-    const dir = contentDir(&dir_buf) orelse return null;
+fn entryPath(buf: []u8, key: []const u8, create: bool) ?[]const u8 {
+    const dir = contentDir(create) orelse return null;
     const name = pure.keyToFilename(key);
     return std.fmt.bufPrint(buf, "{s}/{s}.bin", .{ dir, name }) catch null;
 }
@@ -205,7 +222,7 @@ pub fn put(key: []const u8, bytes: []const u8, ttl_s: i64) void {
 
     // Atomic write: temp file + rename.
     var path_buf: [700]u8 = undefined;
-    const final = entryPath(&path_buf, key) orelse return;
+    const final = entryPath(&path_buf, key, true) orelse return;
     var tmp_buf: [740]u8 = undefined;
     const uniq = tmp_counter.fetchAdd(1, .monotonic);
     const tmp = std.fmt.bufPrint(&tmp_buf, "{s}.tmp{x}_{x}", .{ final, io.milliTimestamp(), uniq }) catch return;
@@ -237,7 +254,7 @@ pub fn get(key: []const u8, out_buf: []u8) ?Hit {
     if (!active()) return null;
 
     var path_buf: [700]u8 = undefined;
-    const path = entryPath(&path_buf, key) orelse return null;
+    const path = entryPath(&path_buf, key, false) orelse return null;
 
     const f = io.openFileAbsolute(path, .{}) catch return null;
     const raw = io.readToEndAlloc(f, alloc, pure.HEADER_LEN + pure.MAX_ENTRY_BYTES + pure.TAG_LEN) catch {
@@ -284,8 +301,7 @@ const EntryMeta = struct { created_ts: i64, size: u64, name_hash: [pure.FILENAME
 /// launch on a background thread.
 pub fn purgeExpired() void {
     if (!key_ok.load(.acquire)) return; // key required to read headers meaningfully
-    var dir_buf: [512]u8 = undefined;
-    const dir_path = contentDir(&dir_buf) orelse return;
+    const dir_path = contentDir(true) orelse return;
     var dir = io.openDirAbsolute(dir_path, .{ .iterate = true }) catch return;
     defer dir.close(io.io());
 

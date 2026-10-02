@@ -1597,6 +1597,14 @@ fn fetchEpisodeDataThread(job: EpisodeJob) void {
         var ub: [256]u8 = undefined;
         const url = std.fmt.bufPrint(&ub, "https://api.jikan.moe/v4/anime/{s}/episodes?page={d}", .{ job.mal[0..job.mal_len], page }) catch return;
         var body: ?[]const u8 = null;
+        // Parse once, reuse for the validation, the publish and the pagination
+        // check. This used to build the JSON DOM three times per page: once to
+        // validate the fetch, once to publish it, plus a third `catalog.data`
+        // call — on multi-hundred-KB jikan pages, and once per page of a long
+        // series.
+        var parsed_holder: ?std.json.Parsed(std.json.Value) = null;
+        defer if (parsed_holder) |*p| p.deinit();
+
         if (content_cache.get(url, buf)) |hit| {
             // Stale cached pages remain useful if revalidation fails.
             body = hit.bytes;
@@ -1607,11 +1615,11 @@ fn fetchEpisodeDataThread(job: EpisodeJob) void {
             @import("../core/rate_limit.zig").acquire("jikan", 2.0);
             if (@import("../core/http.zig").fetch(url, buf, .{ .timeout_secs = 8 })) |bytes| {
                 if (std.json.parseFromSlice(std.json.Value, alloc, bytes, .{})) |parsed| {
-                    defer parsed.deinit();
                     if (catalog.data(parsed.value) != null) {
                         body = bytes;
+                        parsed_holder = parsed;
                         content_cache.put(url, bytes, ANIME_DETAIL_CACHE_TTL_S);
-                    }
+                    } else parsed.deinit();
                 } else |_| {}
             }
             if (body == null and attempt < 2) @import("../core/io_global.zig").sleep((500 + attempt * 500) * std.time.ns_per_ms);
@@ -1624,9 +1632,11 @@ fn fetchEpisodeDataThread(job: EpisodeJob) void {
             if (episode_request.isCurrent(job.generation)) episode_failed.store(true, .release);
             return;
         };
-        const parsed = std.json.parseFromSlice(std.json.Value, alloc, bytes, .{}) catch return;
-        defer parsed.deinit();
-        _ = catalog.data(parsed.value) orelse return;
+        if (parsed_holder == null) {
+            parsed_holder = std.json.parseFromSlice(std.json.Value, alloc, bytes, .{}) catch return;
+        }
+        const parsed = &parsed_holder.?.value;
+        _ = catalog.data(parsed.*) orelse return;
         const copy = alloc.dupe(u8, bytes) catch return;
         episode_document_mutex.lock();
         if (episode_request.isCurrent(job.generation)) {
@@ -1634,7 +1644,7 @@ fn fetchEpisodeDataThread(job: EpisodeJob) void {
         } else alloc.free(copy);
         episode_document_mutex.unlock();
         state.wakeUi();
-        if (!catalog.hasNext(parsed.value)) break;
+        if (!catalog.hasNext(parsed.*)) break;
     }
 }
 

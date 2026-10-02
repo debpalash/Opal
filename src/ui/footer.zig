@@ -824,9 +824,54 @@ fn renderScrubber(
     const elapsed_w = footer_pure.timeLabelWidth(d_sec, false);
     const trailing_w = footer_pure.timeLabelWidth(d_sec, true);
 
+    // Both clocks are formatted from `t_sec`, which only changes once per second,
+    // yet the render path runs at display rate — so ~59 of every 60 frames
+    // re-derived a byte-identical string. Memoize on the inputs: the label is only
+    // rebuilt when the displayed value actually moves.
+    const ElapsedClock = struct {
+        var valid: bool = false;
+        var sec: u32 = 0;
+        var text: [16]u8 = undefined;
+        var len: usize = 0;
+
+        fn get(now_sec: u32) []const u8 {
+            if (!valid or sec != now_sec) {
+                var buf: [16]u8 = undefined;
+                const out = footer_pure.formatTime(&buf, now_sec);
+                @memcpy(text[0..out.len], out);
+                len = out.len;
+                sec = now_sec;
+                valid = true;
+            }
+            return text[0..len];
+        }
+    };
+
+    const TrailingClock = struct {
+        var valid: bool = false;
+        var last_t: u32 = 0;
+        var last_d: u32 = 0;
+        var remaining: bool = false;
+        var text: [20]u8 = undefined;
+        var len: usize = 0;
+
+        fn get(elapsed_secs: u32, total_secs: u32, show_remaining: bool) []const u8 {
+            if (!valid or last_t != elapsed_secs or last_d != total_secs or remaining != show_remaining) {
+                var buf: [20]u8 = undefined;
+                const out = footer_pure.formatTrailing(&buf, elapsed_secs, total_secs, show_remaining);
+                @memcpy(text[0..out.len], out);
+                len = out.len;
+                last_t = elapsed_secs;
+                last_d = total_secs;
+                remaining = show_remaining;
+                valid = true;
+            }
+            return text[0..len];
+        }
+    };
+
     {
-        var cur_buf: [16]u8 = undefined;
-        _ = dvui.label(@src(), "{s}", .{footer_pure.formatTime(&cur_buf, t_sec)}, .{
+        _ = dvui.label(@src(), "{s}", .{ElapsedClock.get(t_sec)}, .{
             .color_text = player_text,
             .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
             .gravity_y = 0.5,
@@ -856,13 +901,12 @@ fn renderScrubber(
         });
         if (dvui.clicked(dur_box.data(), .{})) time_show_remaining = !time_show_remaining;
         components.tip(@src(), dur_box.data().*, if (time_show_remaining) "Showing remaining — click for total" else "Click to show remaining time");
-        var dur_buf: [20]u8 = undefined;
         // Unknown duration (live/streaming, or not probed yet) reads as "--:--"
         // rather than a misleading 0:00. Routed through footer_pure so the
         // remaining-time arithmetic — including the d_sec < t_sec case, which
         // the old inline version fell through to showing the TOTAL instead of a
         // clamped "-0:00" — is the tested one.
-        const dur_str = footer_pure.formatTrailing(&dur_buf, t_sec, d_sec, time_show_remaining);
+        const dur_str = TrailingClock.get(t_sec, d_sec, time_show_remaining);
         _ = dvui.label(@src(), "{s}", .{dur_str}, .{
             .color_text = player_text_muted,
             .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
@@ -1705,12 +1749,34 @@ pub fn renderLiquidGlassOverlay() void {
             const cur = av_pure.picturePresetFromInt(state.app.picture_preset);
             // Show what Auto actually resolved to, not just "Auto" — otherwise
             // there is no way to tell whether the HDR correction is active.
-            var gbuf: [32]u8 = undefined;
-            const label = blk: {
-                if (cur != .auto) break :blk av_pure.pictureLabel(cur);
-                const g = player.colorGammaOf(active_p, &gbuf);
-                break :blk if (av_pure.isHdrVideo(g, "")) "Auto \u{00B7} HDR" else "Auto";
+            //
+            // The Auto branch reads an mpv property, and `auto` is the default,
+            // so this used to cost a blocking mpv_get_property_string (plus a
+            // libmpv-internal malloc/free) on every rendered frame, contending
+            // with the demux and render threads for the same handle. The answer
+            // only moves when the file or the grade does, so it gets the same
+            // 500 ms, ctx-keyed gate as the four sibling chips. Returned values
+            // are string literals, so caching the slice is lifetime-safe.
+            const Cache = struct {
+                var key: usize = 0;
+                var last_ms: i64 = 0;
+                var text: []const u8 = "Auto";
             };
+            const key = @intFromPtr(active_p.mpv_ctx);
+            const now = @import("../core/io_global.zig").milliTimestamp();
+            var label: []const u8 = undefined;
+            if (cur != .auto) {
+                label = av_pure.pictureLabel(cur);
+            } else if (Cache.key == key and now - Cache.last_ms < 500) {
+                label = Cache.text;
+            } else {
+                var gbuf: [32]u8 = undefined;
+                const g = player.colorGammaOf(active_p, &gbuf);
+                label = if (av_pure.isHdrVideo(g, "")) "Auto \u{00B7} HDR" else "Auto";
+                Cache.key = key;
+                Cache.last_ms = now;
+                Cache.text = label;
+            }
             if (pickerIconChip(
                 @src(),
                 710,
@@ -1971,18 +2037,25 @@ pub fn renderLiquidGlassOverlay() void {
 
         // ── Picker icon-chips: aspect, chapters, audio, subs, lang, files ──
 
-        const playing_youtube = std.ascii.indexOfIgnoreCase(active_p.current_url[0..active_p.current_url_len], "youtube.com/") != null or
-            std.ascii.indexOfIgnoreCase(active_p.current_url[0..active_p.current_url_len], "youtu.be/") != null;
+        // Both URL probes are case-insensitive substring searches over the loaded
+        // URL, and both results are only consumed by the quality chip below. Test
+        // the cheap conditions first so a shed or audio-only transport row does
+        // no scanning at all — this used to run on every rendered frame.
         const video_is_playing = !active_p.is_loading and !active_p.cached_vid_no and
             active_p.texture != null and active_p.cached_video_width > 0;
-        if (playing_youtube and video_is_playing and fit.secondary_chips) {
-            var quality_buf: [16]u8 = undefined;
-            const quality = if (active_p.youtube_active_height > 0)
-                std.fmt.bufPrint(&quality_buf, "{d}p", .{active_p.youtube_active_height}) catch "Video"
-            else
-                "Audio";
-            if (pickerIconChip(@src(), 711, icons.tvg.lucide.monitor, quality, true, "YouTube stream quality", .quality)) {
-                togglePicker(.quality);
+        if (fit.secondary_chips and video_is_playing) {
+            const url = active_p.current_url[0..active_p.current_url_len];
+            const playing_youtube = std.ascii.indexOfIgnoreCase(url, "youtube.com/") != null or
+                std.ascii.indexOfIgnoreCase(url, "youtu.be/") != null;
+            if (playing_youtube) {
+                var quality_buf: [16]u8 = undefined;
+                const quality = if (active_p.youtube_active_height > 0)
+                    std.fmt.bufPrint(&quality_buf, "{d}p", .{active_p.youtube_active_height}) catch "Video"
+                else
+                    "Audio";
+                if (pickerIconChip(@src(), 711, icons.tvg.lucide.monitor, quality, true, "YouTube stream quality", .quality)) {
+                    togglePicker(.quality);
+                }
             }
         }
 

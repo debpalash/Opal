@@ -170,10 +170,21 @@ function serialPoll(task){
     finally { active = false; }
   };
 }
+// A backgrounded tab is not being watched, but every view watcher keeps firing
+// on its interval: the callback runs, walks the DOM diff and re-queries the
+// API for a result nobody will see. Roughly twenty watchers are alive at once
+// across the app, so gating on visibility is what keeps an idle companion tab
+// genuinely idle — and the next tick after the tab is shown repaints normally.
+function pageIsVisible(){
+  return document.visibilityState !== 'hidden';
+}
 function settledInterval(task, delay, immediate = false){
   const poll = serialPoll(task);
-  if (immediate) poll();
-  return setInterval(poll, delay);
+  // Still setInterval (not a self-rescheduling setTimeout) so the returned id
+  // stays stable and the existing clearInterval(...) teardown keeps working.
+  const gated = () => { if (pageIsVisible()) poll(); };
+  if (immediate) gated();
+  return setInterval(gated, delay);
 }
 
 function setNetworkState(state){

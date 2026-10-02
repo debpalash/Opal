@@ -791,7 +791,7 @@ fn handleRequest(stream: std.Io.net.Stream, client_key: u64) !void {
 
     // Public, allowlisted shell assets contain no credentials. Account login
     // bootstraps the authenticated API after these files load.
-    if (@import("remote_static.zig").serve(stream, path)) return;
+    if (@import("remote_static.zig").serve(stream, path, request)) return;
 
     // Browser media and SSE requests authenticate through the HttpOnly session
     // cookie. Automation can still use an Authorization header; credentials
@@ -816,7 +816,10 @@ fn handleRequest(stream: std.Io.net.Stream, client_key: u64) !void {
             io_g.streamWriteAll(stream, hdr) catch return;
             var json: [4096]u8 = undefined;
             var frame: [4224]u8 = undefined;
+            var last_body: [4096]u8 = undefined;
+            var last_len: usize = 0;
             var ticks: usize = 0;
+            var since_send_ms: i64 = 0;
             while (running.load(.acquire) and ticks < 3600) : (ticks += 1) {
                 // The UI thread can free/reorder players at frame start. Build
                 // the event from one protected player snapshot, then release
@@ -824,8 +827,23 @@ fn handleRequest(stream: std.Io.net.Stream, client_key: u64) !void {
                 state.players_mutex.lock();
                 const body = @import("remote_status.zig").build(&json);
                 state.players_mutex.unlock();
-                const ev = std.fmt.bufPrint(&frame, "data: {s}\n\n", .{body}) catch break;
-                io_g.streamWriteAll(stream, ev) catch break; // client closed
+
+                // Idle playback produces a byte-identical frame every second.
+                // Sending it anyway re-serialized the status — including a
+                // blocking mpv property read — and pushed it through the same
+                // players_mutex the render thread takes, once per second per
+                // connected client. Only write on a real change, with a 5s
+                // heartbeat so proxies and the browser keep the stream open.
+                const unchanged = ticks > 0 and body.len == last_len and
+                    std.mem.eql(u8, body, last_body[0..last_len]);
+                since_send_ms += 1000;
+                if (!unchanged or since_send_ms >= 5_000) {
+                    const ev = std.fmt.bufPrint(&frame, "data: {s}\n\n", .{body}) catch break;
+                    io_g.streamWriteAll(stream, ev) catch break; // client closed
+                    @memcpy(last_body[0..body.len], body);
+                    last_len = body.len;
+                    since_send_ms = 0;
+                }
                 io_g.sleep(1 * std.time.ns_per_s);
             }
             return;

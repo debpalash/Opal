@@ -5,6 +5,7 @@ const db = @import("db.zig");
 const theme = @import("../ui/theme.zig");
 const watch_history_pure = @import("../player/watch_history_pure.zig");
 const secret_store = @import("secret_store.zig");
+const sync = @import("sync.zig");
 
 var legacy_secrets_mask: u16 = 0;
 
@@ -406,10 +407,34 @@ pub fn load() void {
     // published to any thread that later loads config_loaded with .acquire.
 }
 
+// `save()` runs ~100 of these inside one transaction, on the render thread.
+// Preparing and finalizing the same INSERT each time re-parsed the SQL and re-ran
+// the query planner once per setting per save. One memoized statement, reset
+// between uses.
+//
+// The cached handle is tagged with the connection it belongs to: `db.deinit`
+// closes the connection and SQLite auto-finalizes every statement still
+// attached to it, so a statement carried across a reopen would be a dangling
+// pointer. A connection change drops the cache instead of reusing it.
+var setkey_stmt: ?*db.Stmt = null;
+var setkey_owner: ?*db.Sqlite3 = null;
+var setkey_mutex: sync.Mutex = .{};
+
 fn setKey(key: []const u8, val: []const u8) void {
     const sql = "INSERT OR REPLACE INTO config (key, value) VALUES (?1, ?2)";
-    const stmt = db.prepare(sql) orelse return;
-    defer db.finalize(stmt);
+    const d = db.get() orelse return;
+
+    setkey_mutex.lock();
+    defer setkey_mutex.unlock();
+
+    if (setkey_owner != d) {
+        setkey_stmt = null;
+        setkey_owner = d;
+    }
+    if (setkey_stmt == null) setkey_stmt = db.prepare(sql);
+    const stmt = setkey_stmt orelse return;
+    // Clears the previous setting's bindings; safe because db.bind* copies.
+    db.reset(stmt);
     db.bindText(stmt, 1, key);
     db.bindText(stmt, 2, val);
     _ = db.step(stmt);

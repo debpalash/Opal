@@ -505,6 +505,9 @@ pub fn renderGrid() !void {
         _ = dvui.label(@src(), "Playback starts when a matching stream is ready.", .{}, .{
             .color_text = theme.colors.text_secondary,
         });
+        // Bounded, not per-frame: an unbounded refresh here pinned the whole app
+        // at max frame rate for the entire duration of a stream lookup.
+        @import("components.zig").animatedRefresh(33_000);
         dvui.refresh(null, @src(), null);
         return;
     }
@@ -1435,6 +1438,9 @@ pub fn renderGrid() !void {
                         }
                     }
                     load_overlay.deinit();
+                    // Same bound as the finding-stream overlay above: an active
+                    // load must not drive an unbounded redraw loop.
+                    @import("components.zig").animatedRefresh(33_000);
                     dvui.refresh(null, @src(), null);
                 } else {
                     var is_audio_only = false;

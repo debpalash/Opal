@@ -138,8 +138,12 @@ async function poll(generation = statusGeneration){
   const request = {generation};
   statusPollInFlight = request;
   try {
-    const status = await api('/status');
-    if (AUTHENTICATED && generation === statusGeneration && !es) applyStatus(status);
+    // Keep the timer chain alive across a hidden tab so returning to the page
+    // still gets a live status, but spend nothing on the request while nobody
+    // is looking at it. Read visibilityState directly rather than through a
+    // core.js helper so this file keeps working standalone.
+    const status = document.visibilityState === 'hidden' ? null : await api('/status');
+    if (status && AUTHENTICATED && generation === statusGeneration && !es) applyStatus(status);
   } catch {
     if (generation === statusGeneration) $('conn-dot').classList.remove('on');
   } finally {
