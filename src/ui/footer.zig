@@ -27,7 +27,7 @@ var time_show_remaining: bool = false;
 
 // Active toolbar dropdown — only one open at a time. We use stable id values
 // derived from the picker kind. -1 = none.
-pub const PickerKind = enum(i32) { none = -1, chapter = 0, aspect = 1, audio = 2, sub = 3, lang = 4, playlist = 5, ar = 6, subs = 7, audio_device = 8, quality = 9 };
+pub const PickerKind = enum(i32) { none = -1, chapter = 0, aspect = 1, audio = 2, sub = 3, lang = 4, playlist = 5, ar = 6, subs = 7, audio_device = 8, quality = 9, more = 10 };
 // NOTE: `.subs` (the Find-Subtitles panel) is NOT driven by `open_picker` —
 // its open state is `state.app.sub_picker_open`, which auto-search and the
 // keyless engine also set. It has a PickerKind purely so its chip records an
@@ -40,7 +40,7 @@ pub var open_picker: PickerKind = .none;
 /// chip is laid out. The drop-up panels anchor to this: they float ABOVE their
 /// chip with no backdrop, so they need to know where the chip actually landed.
 /// Indexed by @intFromEnum(PickerKind); .none (-1) has no slot.
-pub var picker_anchor: [10]dvui.Rect.Natural = [_]dvui.Rect.Natural{.{}} ** 10;
+pub var picker_anchor: [11]dvui.Rect.Natural = [_]dvui.Rect.Natural{.{}} ** 11;
 
 pub fn anchorFor(kind: PickerKind) dvui.Rect.Natural {
     const i = @intFromEnum(kind);
@@ -52,6 +52,19 @@ fn recordAnchor(kind: PickerKind, r: dvui.Rect.Physical) void {
     const i = @intFromEnum(kind);
     if (i < 0 or i >= picker_anchor.len) return;
     picker_anchor[@intCast(i)] = r.toNatural();
+    // Language and online search share the CC trigger. Keep their drop-ups
+    // attached while a window resize or fullscreen switch moves that trigger.
+    if (kind == .sub) {
+        picker_anchor[@intCast(@intFromEnum(PickerKind.lang))] = r.toNatural();
+        picker_anchor[@intCast(@intFromEnum(PickerKind.subs))] = r.toNatural();
+    }
+    // Secondary panels share More after their menu item disappears. Refresh
+    // those anchors each frame, without moving panels opened from CC.
+    if (kind == .more) {
+        for ([_]PickerKind{ .aspect, .chapter, .quality, .audio_device, .playlist }) |secondary| {
+            picker_anchor[@intCast(@intFromEnum(secondary))] = r.toNatural();
+        }
+    }
 }
 
 // Persist the close-button screen rect across frames so we can hover-test it
@@ -62,6 +75,7 @@ var close_button_rect: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
 // grid.zig uses it to keep video-cell click handling (pause toggle / cell
 // select) out of the control-bar band — those buttons render AFTER the grid,
 // so the grid can't rely on `handled` flags to avoid double-firing.
+var scrubber_wheel_rect: dvui.Rect.Physical = .{};
 var control_panel_rect: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
 
 /// True when a physical mouse point lies within the control panel captured
@@ -86,9 +100,16 @@ pub fn closePickers() void {
 
 /// All footer picker chips share one open slot.
 fn togglePicker(kind: PickerKind) void {
+    const from_overflow = open_picker == .more;
     const was_open = open_picker == kind and !state.app.sub_picker_open;
     closePickers();
-    if (!was_open) open_picker = kind;
+    if (!was_open) {
+        if (from_overflow and kind != .more) {
+            // Hidden secondary chips inherit the persistent overflow trigger.
+            if (kind != .audio and kind != .sub) picker_anchor[@intCast(@intFromEnum(kind))] = anchorFor(.more);
+        }
+        open_picker = kind;
+    }
 }
 
 // ── Helpers ──
@@ -916,6 +937,7 @@ fn renderScrubber(
     }
 
     const band_rect = scrub_band.data().contentRectScale().r;
+    scrubber_wheel_rect = band_rect;
     const hovered = mouseOverRect(band_rect);
     const track_h: f32 = if (hovered) 6 else 4;
 
@@ -1159,7 +1181,7 @@ fn langMatches(track_lang: []const u8, want: []const u8) bool {
 /// language matches `lang`, turn subtitles on, and set the online/AI subtitle
 /// search language — everything to one language from a single button instead of
 /// visiting each picker.
-fn applyUniversalLanguage(ctx: ?*c.mpv.mpv_handle, lang: []const u8) void {
+pub fn applyUniversalLanguage(ctx: ?*c.mpv.mpv_handle, lang: []const u8) void {
     if (ctx == null) return;
     var count: i64 = 0;
     _ = c.mpv.mpv_get_property(ctx, "track-list/count", c.mpv.MPV_FORMAT_INT64, &count);
@@ -1263,7 +1285,7 @@ fn pickerIconChip(
         .min_size_content = .{ .w = 16, .h = 16 },
         .max_size_content = .{ .w = 16, .h = 16 },
         .gravity_y = 0.5,
-        .margin = .{ .x = 0, .y = 0, .w = 5, .h = 0 },
+        .margin = .{ .x = 0, .y = 0, .w = if (chip_text.len > 0) 5 else 0, .h = 0 },
     });
 
     if (chip_text.len > 0) {
@@ -1540,15 +1562,15 @@ pub fn renderLiquidGlassOverlay() void {
     // physical edge and dissolves upward, avoiding a flat rectangular band.
     {
         var backdrop = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .gravity_y = 1.0 });
-        const edge_alphas = [_]u8{ 92, 108, 124, 140, 156, 172, 188, 202, 214 };
+        const edge_alphas = [_]u8{ 92, 124, 156, 188, 202, 214 };
         inline for (edge_alphas, 0..) |alpha, i| {
             var slice = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .id_extra = i + 9240,
                 .expand = .horizontal,
                 .background = true,
                 .color_fill = theme.playerGlass(alpha),
-                .min_size_content = .{ .w = 0, .h = 9 },
-                .max_size_content = .{ .w = 0, .h = 9 },
+                .min_size_content = .{ .w = 0, .h = footer_pure.BACKDROP_SLICE_HEIGHT },
+                .max_size_content = .{ .w = 0, .h = footer_pure.BACKDROP_SLICE_HEIGHT },
             });
             slice.deinit();
         }
@@ -1563,9 +1585,8 @@ pub fn renderLiquidGlassOverlay() void {
             .mouse => |mouse| {
                 switch (mouse.action) {
                     .wheel_y => |wy| {
-                        const panel_rect = panel.data().contentRectScale().r;
-                        const mouse_y_in_panel = mouse.p.y - panel_rect.y;
-                        if (mouse_y_in_panel >= 0 and mouse_y_in_panel < 32) {
+                        const r = scrubber_wheel_rect;
+                        if (mouse.p.x >= r.x and mouse.p.x <= r.x + r.w and mouse.p.y >= r.y and mouse.p.y <= r.y + r.h) {
                             if (wy > 0) {
                                 _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "seek 5");
                             } else {
@@ -1603,16 +1624,43 @@ pub fn renderLiquidGlassOverlay() void {
     // ═══════════════════════════════════════════════════════════════
     renderScrubber(active_p, percent_pos, time_pos, duration, now_ms);
 
+    // Name + stats were fetched every frame (torrent_get_name +
+    // torrent_poll IPC at ~30fps); cache at ~2Hz keyed on the torrent id
+    // (a torrent switch invalidates immediately).
+    const StatusCache = struct {
+        var tid: i32 = -1;
+        var last_ms: i64 = 0;
+        var name: [512]u8 = std.mem.zeroes([512]u8);
+        var name_len: usize = 0;
+        var pct: f32 = 0.0;
+        var dl_rate: c_int = 0;
+        var seeds: c_int = 0;
+    };
+    if (active_p.current_torrent_id >= 0 and (StatusCache.tid != active_p.current_torrent_id or now_ms - StatusCache.last_ms > 500)) {
+        StatusCache.tid = active_p.current_torrent_id;
+        StatusCache.last_ms = now_ms;
+        var t_name: [512]u8 = undefined;
+        c.mpv.torrent_get_name(state.torrentSession(), active_p.current_torrent_id, &t_name, t_name.len);
+        @memcpy(&StatusCache.name, &t_name);
+        StatusCache.name_len = std.mem.indexOfScalar(u8, &t_name, 0) orelse t_name.len;
+        var pct: f32 = 0.0;
+        var dl_rate: c_int = 0;
+        var seeds: c_int = 0;
+        _ = c.mpv.torrent_poll(state.torrentSession(), active_p.current_torrent_id, active_p.selected_file_idx, null, 0, &pct, &dl_rate, &seeds);
+        StatusCache.pct = pct;
+        StatusCache.dl_rate = dl_rate;
+        StatusCache.seeds = seeds;
+    }
     // ═══════════════════════════════════════════════════════════════
     // ROW 2 — Controls: transport | time | volume | pickers | close
     // ═══════════════════════════════════════════════════════════════
     {
         var ctrl_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            // DVUI adds padding outside min_size_content: 36 + 4 + 4 = 44.
-            .min_size_content = .{ .w = 0, .h = 36 },
-            .max_size_content = .{ .w = 0, .h = 36 },
-            .padding = .{ .x = theme.spacing.md, .y = 4, .w = theme.spacing.md, .h = 4 },
+            // DVUI adds padding outside min_size_content: 36 + 2 + 2 = 40.
+            .min_size_content = .{ .w = 0, .h = footer_pure.CONTROL_CONTENT_HEIGHT },
+            .max_size_content = .{ .w = 0, .h = footer_pure.CONTROL_CONTENT_HEIGHT },
+            .padding = .{ .x = theme.spacing.sm, .y = footer_pure.CONTROL_VERTICAL_PADDING, .w = theme.spacing.sm, .h = footer_pure.CONTROL_VERTICAL_PADDING },
         });
         defer ctrl_row.deinit();
 
@@ -1728,7 +1776,7 @@ pub fn renderLiquidGlassOverlay() void {
         // just be noise.
         {
             const status = footer_pure.transportLabel(transport);
-            if (status.len > 0) {
+            if (status.len > 0 and bar_pt >= 540) {
                 _ = dvui.label(@src(), "{s}", .{status}, .{
                     .color_text = if (footer_pure.transportBusy(transport)) theme.colors.accent else player_text_muted,
                     .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
@@ -1744,7 +1792,7 @@ pub fn renderLiquidGlassOverlay() void {
         // an episode at noon), and because `Auto` needs to be visible: it is the
         // only affordance that tells the user HDR material was detected and
         // corrected. The label doubles as the readout.
-        {
+        if (fit.skip_buttons) {
             const av_pure = @import("../player/av_pure.zig");
             const cur = av_pure.picturePresetFromInt(state.app.picture_preset);
             // Show what Auto actually resolved to, not just "Auto" — otherwise
@@ -1799,7 +1847,7 @@ pub fn renderLiquidGlassOverlay() void {
 
         // Fullscreen toggle. (This button used to seek +10s; seeking forward is
         // still on the right-arrow key, which is where it always was.)
-        {
+        if (bar_pt >= 540) {
             const is_fs = state.app.fullscreen_player_idx != null;
             if (playerButtonIcon(@src(), "fullscreen", if (is_fs) icons.tvg.lucide.@"minimize-2" else icons.tvg.lucide.@"maximize-2", .{}, .{}, .{
                 .data_out = &wd,
@@ -1879,7 +1927,7 @@ pub fn renderLiquidGlassOverlay() void {
         // additive: auto-skip logic and defaults are untouched. The overlay
         // already early-returns when there's no media / no active player, and
         // currentSkippable() re-guards active_player_idx < players.items.len.
-        if (anime_skip.currentSkippable()) |skp| {
+        if (bar_pt >= 1400) if (anime_skip.currentSkippable()) |skp| {
             if (dvui.button(@src(), anime_skip_pure.skipButtonLabel(skp.category), .{}, .{
                 .data_out = &wd,
                 .color_fill = theme.colors.accent,
@@ -1892,13 +1940,13 @@ pub fn renderLiquidGlassOverlay() void {
                 anime_skip.skipNow();
             }
             components.tip(@src(), wd, "Skip this segment");
-        }
+        };
 
         // ── Status badges — times moved to the scrub row (IINA layout:
         // elapsed left of the seek line, total/remaining right of it). ──
         // Purely informational text (playlist position, speed, A-B loop), so
         // it sheds before any control you can press.
-        if (fit.status_badges) {
+        if (fit.status_badges and bar_pt >= 1400) {
             var time_box = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .gravity_y = 0.5,
                 .margin = .{ .x = theme.spacing.sm, .y = 0, .w = theme.spacing.sm, .h = 0 },
@@ -2029,72 +2077,53 @@ pub fn renderLiquidGlassOverlay() void {
             }
         } // fit.volume_slider
 
-        // ── Spacer pushes pickers + close to the right edge ──
+        // The filename shares the transport strip; its bounded slot cannot
+        // force the close button off the edge or create another row.
         {
-            var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
-            spacer.deinit();
-        }
-
-        // ── Picker icon-chips: aspect, chapters, audio, subs, lang, files ──
-
-        // Both URL probes are case-insensitive substring searches over the loaded
-        // URL, and both results are only consumed by the quality chip below. Test
-        // the cheap conditions first so a shed or audio-only transport row does
-        // no scanning at all — this used to run on every rendered frame.
-        const video_is_playing = !active_p.is_loading and !active_p.cached_vid_no and
-            active_p.texture != null and active_p.cached_video_width > 0;
-        if (fit.secondary_chips and video_is_playing) {
-            const url = active_p.current_url[0..active_p.current_url_len];
-            const playing_youtube = std.ascii.indexOfIgnoreCase(url, "youtube.com/") != null or
-                std.ascii.indexOfIgnoreCase(url, "youtu.be/") != null;
-            if (playing_youtube) {
-                var quality_buf: [16]u8 = undefined;
-                const quality = if (active_p.youtube_active_height > 0)
-                    std.fmt.bufPrint(&quality_buf, "{d}p", .{active_p.youtube_active_height}) catch "Video"
-                else
-                    "Audio";
-                if (pickerIconChip(@src(), 711, icons.tvg.lucide.monitor, quality, true, "YouTube stream quality", .quality)) {
-                    togglePicker(.quality);
-                }
+            // Expand into spare width without caching the label's old width as
+            // a minimum: shrinking the window must leave the right controls room.
+            var title_host = dvui.box(@src(), .{}, .{
+                .expand = .horizontal,
+                .gravity_y = 0.5,
+                .max_size_content = .{ .w = 0, .h = footer_pure.CONTROL_CONTENT_HEIGHT },
+            });
+            const title_width = title_host.data().contentRect().w;
+            const raw_title = if (bar_pt < 540 and footer_pure.transportBusy(transport))
+                footer_pure.transportLabel(transport)
+            else if (active_p.current_torrent_id >= 0)
+                StatusCache.name[0..StatusCache.name_len]
+            else if (active_p.np_title_len > 0)
+                active_p.np_title[0..@min(active_p.np_title_len, active_p.np_title.len)]
+            else if (active_p.loading_title_len > 0)
+                active_p.loading_title[0..@min(active_p.loading_title_len, active_p.loading_title.len)]
+            else
+                footer_pure.mediaFilename(active_p.current_url[0..active_p.current_url_len]);
+            var title_copy: [512]u8 = undefined;
+            const safe_title = @import("../core/text.zig").safeUtf8Buf(raw_title, &title_copy);
+            var clipped: [515]u8 = undefined;
+            const font = dvui.themeGet().font_body;
+            var title_end: usize = safe_title.len;
+            if (font.textSizeEx(safe_title, .{}).w > title_width) {
+                const ellipsis_width = font.textSizeEx("…", .{}).w;
+                _ = font.textSizeEx(safe_title, .{ .max_width = @max(0, title_width - ellipsis_width), .end_idx = &title_end });
             }
+            const label = footer_pure.compactTitle(&clipped, safe_title, if (title_width < font.textSizeEx("…", .{}).w) 0 else title_end);
+            var title_wd: dvui.WidgetData = undefined;
+            _ = dvui.label(@src(), "{s}", .{label}, .{
+                .data_out = &title_wd,
+                .color_text = player_text_muted,
+                .gravity_y = 0.5,
+                .gravity_x = 0.5,
+            });
+            components.tip(@src(), title_wd, safe_title);
+            title_host.deinit();
         }
-
-        // Aspect — reports state rather than acting; sheds with the
-        // secondary chips before anything you press to control playback.
-        if (fit.secondary_chips) {
-            const ar_text = currentAspectChipText(active_p.mpv_ctx);
-            const ar_active = !std.mem.eql(u8, ar_text, "Auto");
-            if (pickerIconChip(@src(), 700, icons.tvg.lucide.ratio, ar_text, ar_active, "Framing & aspect", .aspect)) {
-                togglePicker(.aspect);
-            }
-        }
-
-        // Chapters — only when count > 1, and only while the picker chips fit.
-        if (fit.secondary_chips) {
-            var chp_buf: [16]u8 = undefined;
-            const chp = currentChapterChipText(active_p.mpv_ctx, &chp_buf);
-            if (chp.count > 1) {
-                if (pickerIconChip(@src(), 701, icons.tvg.lucide.bookmark, chp.text, true, "Chapters", .chapter)) {
-                    togglePicker(.chapter);
-                }
-            }
-        }
-
         // Audio.
         {
             var aud_buf: [32]u8 = undefined;
             const aud = currentTrackChipText(active_p.mpv_ctx, "audio", &aud_buf);
-            if (pickerIconChip(@src(), 702, icons.tvg.lucide.music, aud.text, aud.active, "Audio track", .audio)) {
+            if (pickerIconChip(@src(), 702, icons.tvg.lucide.music, "", aud.active, "Audio track", .audio)) {
                 togglePicker(.audio);
-            }
-        }
-
-        // Audio output device (speaker chip — highlighted when a device is
-        // pinned instead of "auto").
-        if (fit.secondary_chips) {
-            const dev_pinned = currentAudioDevicePinned(active_p.mpv_ctx);
-            if (pickerIconChip(@src(), 708, icons.tvg.lucide.speaker, "", dev_pinned, "Audio output device", .audio_device)) {
-                togglePicker(.audio_device);
             }
         }
 
@@ -2102,63 +2131,14 @@ pub fn renderLiquidGlassOverlay() void {
         {
             var sub_buf: [32]u8 = undefined;
             const sub = currentTrackChipText(active_p.mpv_ctx, "sub", &sub_buf);
-            if (pickerIconChip(@src(), 703, icons.tvg.lucide.captions, sub.text, sub.active, "Subtitle track", .sub)) {
+            if (pickerIconChip(@src(), 703, icons.tvg.lucide.captions, "", sub.active, "Subtitles: tracks, language and online search", .sub)) {
                 togglePicker(.sub);
             }
         }
 
-        // Subtitle language.
-        if (fit.secondary_chips) {
-            const cur_lang = state.app.sub_lang_buf[0..state.app.sub_lang_len];
-            const chip = if (cur_lang.len > 0) cur_lang else "eng";
-            if (pickerIconChip(@src(), 704, icons.tvg.lucide.globe, chip, cur_lang.len > 0, "Subtitle search language", .lang)) {
-                togglePicker(.lang);
-            }
+        if (pickerIconChip(@src(), 712, icons.tvg.lucide.@"ellipsis-vertical", "", open_picker == .more, "More playback and transfer options", .more)) {
+            togglePicker(.more);
         }
-
-        // Universal language — one click sets the audio track, subtitle track,
-        // and the online/AI subtitle search language all to the chosen language
-        // (defaults to English / the globe-chip selection), instead of visiting
-        // each picker. Not a drop-up (kind .none) — it acts immediately.
-        if (fit.secondary_chips) {
-            const uni_lang = if (state.app.sub_lang_len > 0) state.app.sub_lang_buf[0..state.app.sub_lang_len] else "eng";
-            if (pickerIconChip(@src(), 709, icons.tvg.lucide.languages, uni_lang, false, "Set audio + subtitles to this language", .none)) {
-                applyUniversalLanguage(active_p.mpv_ctx, uni_lang);
-            }
-        }
-
-        // Find Subtitles — direct shortcut. Opens the picker AND kicks the
-        // keyless search immediately (debounced inside the engine); the keyed
-        // opensubtitles.com search joins in only when a key is configured.
-        if (fit.secondary_chips and pickerIconChip(@src(), 705, icons.tvg.lucide.search, "Subs", state.app.sub_picker_open, "Find subtitles online", .subs)) {
-            // Toggle, like every other chip — clicking an open panel's chip closes
-            // it. It used to only ever open, so the chip could not dismiss what it
-            // had opened (harmless with a modal scrim to click through; not with a
-            // backdrop-less drop-up).
-            const opening = !state.app.sub_picker_open;
-            closePickers();
-            if (opening) {
-                state.app.sub_picker_open = true;
-                @import("../player/subtitles.zig").searchFromActivePlayer(&state.app.sub_engine);
-                if (state.app.opensub_api_key_len > 0) {
-                    const subs = @import("../services/subtitles.zig");
-                    if (!subs.is_searching.load(.acquire)) subs.autoSearchFromPlayer(false);
-                }
-            }
-        }
-
-        // Files (torrent multi-file playlist).
-        if (active_p.current_torrent_id >= 0 and fit.secondary_chips) {
-            const file_count = c.mpv.torrent_get_file_count(state.torrentSession(), active_p.current_torrent_id);
-            if (file_count > 1) {
-                var f_buf: [16]u8 = undefined;
-                const f_chip = std.fmt.bufPrint(&f_buf, "{d}", .{file_count}) catch "";
-                if (pickerIconChip(@src(), 706, icons.tvg.lucide.list, f_chip, true, "Files in torrent", .playlist)) {
-                    togglePicker(.playlist);
-                }
-            }
-        }
-
         // ── Close player — far right, semantic_error on hover ──
         // We use module-level state to carry hover across frames: read the
         // rect captured last frame, then update it after this frame's button
@@ -2190,155 +2170,212 @@ pub fn renderLiquidGlassOverlay() void {
         components.tip(@src(), wd, "Close player");
     }
 
-    // ═══════════════════════════════════════════════════════════════
-    // ROW 3 — Demoted torrent status (font_size.small, text_tertiary)
-    // ═══════════════════════════════════════════════════════════════
-    if (active_p.current_torrent_id >= 0) {
-        var info_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .min_size_content = .{ .w = 0, .h = 18 },
-            .padding = .{ .x = theme.spacing.md, .y = 2, .w = theme.spacing.md, .h = 2 },
-        });
-        defer info_row.deinit();
-
-        // Name + stats were fetched every frame (torrent_get_name +
-        // torrent_poll IPC at ~30fps); cache at ~2Hz keyed on the torrent id
-        // (a torrent switch invalidates immediately).
-        const StatusCache = struct {
-            var tid: i32 = -1;
-            var last_ms: i64 = 0;
-            var name: [64]u8 = std.mem.zeroes([64]u8);
-            var name_len: usize = 0;
-            var pct: f32 = 0.0;
-            var dl_rate: c_int = 0;
-            var seeds: c_int = 0;
-        };
-        if (StatusCache.tid != active_p.current_torrent_id or now_ms - StatusCache.last_ms > 500) {
-            StatusCache.tid = active_p.current_torrent_id;
-            StatusCache.last_ms = now_ms;
-            var t_name: [64]u8 = undefined;
-            c.mpv.torrent_get_name(state.torrentSession(), active_p.current_torrent_id, &t_name, 64);
-            @memcpy(&StatusCache.name, &t_name);
-            StatusCache.name_len = std.mem.indexOfScalar(u8, &t_name, 0) orelse t_name.len;
-            var pct: f32 = 0.0;
-            var dl_rate: c_int = 0;
-            var seeds: c_int = 0;
-            _ = c.mpv.torrent_poll(state.torrentSession(), active_p.current_torrent_id, active_p.selected_file_idx, null, 0, &pct, &dl_rate, &seeds);
-            StatusCache.pct = pct;
-            StatusCache.dl_rate = dl_rate;
-            StatusCache.seeds = seeds;
+    // Secondary controls and transfer actions live above the single strip.
+    if (open_picker == .more) {
+        var open = true;
+        var fw = pickers.beginDropUp(@src(), .more, 330, 420, &open);
+        defer fw.deinit();
+        pickers.dropUpTitle(@src(), icons.tvg.lucide.settings, "Playback options");
+        var options_scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = false });
+        defer options_scroll.deinit();
+        const tv_lib = @import("../services/tv_library.zig");
+        if (tv_lib.playingEpisode()) {
+            if (pickerIconChip(@src(), 717, icons.tvg.lucide.@"chevron-first", "Previous episode", tv_lib.neighborEpisode(-1) != null, "Previous episode", .none)) {
+                if (tv_lib.neighborEpisode(-1) != null) tv_lib.playNeighborEpisode(-1);
+            }
+            if (pickerIconChip(@src(), 718, icons.tvg.lucide.@"chevron-last", "Next episode", tv_lib.neighborEpisode(1) != null, "Next episode", .none)) {
+                if (tv_lib.neighborEpisode(1) != null) tv_lib.playNeighborEpisode(1);
+            }
         }
-        const name_slice = StatusCache.name[0..StatusCache.name_len];
-        const pct = StatusCache.pct;
-        const seeds = StatusCache.seeds;
-        const rate_mb = @as(f32, @floatFromInt(StatusCache.dl_rate)) / 1024.0 / 1024.0;
-
-        // Untrusted torrent metadata, truncated at the 64-byte buffer (possibly
-        // mid-codepoint) — validate before dvui (matches grid.zig).
-        _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8(name_slice)}, .{
-            .color_text = player_text_muted,
-            .gravity_y = 0.5,
-        });
-
-        {
-            var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
-            spacer.deinit();
+        if (playback.playlist_count > 1) {
+            if (pickerIconChip(@src(), 719, icons.tvg.lucide.@"skip-back", "Previous track", playback.playlist_pos > 0, "Previous track", .none)) _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "playlist-prev");
+            if (pickerIconChip(@src(), 720, icons.tvg.lucide.@"skip-forward", "Next track", playback.playlist_pos + 1 < playback.playlist_count, "Next track", .none)) _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "playlist-next");
+        }
+        if (anime_skip.currentSkippable()) |skp| {
+            if (pickerIconChip(@src(), 721, icons.tvg.lucide.@"skip-forward", anime_skip_pure.skipButtonLabel(skp.category), true, "Skip this segment", .none)) anime_skip.skipNow();
         }
 
-        var stat_buf: [80]u8 = undefined;
-        if (std.fmt.bufPrintZ(&stat_buf, "{d:.1}% \xC2\xB7 {d:.1} MB/s \xC2\xB7 {d} seeds", .{ pct * 100.0, rate_mb, seeds })) |st| {
-            _ = dvui.label(@src(), "{s}", .{st}, .{
-                .color_text = player_text_muted,
-                .gravity_y = 0.5,
-            });
-        } else |_| {}
+        if (pickerIconChip(@src(), 713, icons.tvg.lucide.@"maximize-2", "Fullscreen", false, "Toggle fullscreen", .none)) {
+            if (state.app.fullscreen_player_idx != null) state.app.fullscreen_player_idx = null else state.app.fullscreen_player_idx = state.app.active_player_idx;
+            closePickers();
+        }
+        const av_pure = @import("../player/av_pure.zig");
+        const current_picture = av_pure.picturePresetFromInt(state.app.picture_preset);
+        var picture_label_buf: [64]u8 = undefined;
+        const picture_label = std.fmt.bufPrint(&picture_label_buf, "Picture: {s}", .{av_pure.pictureLabel(current_picture)}) catch "Picture preset";
+        if (pickerIconChip(@src(), 714, icons.tvg.lucide.sparkles, picture_label, current_picture != .auto, "Cycle picture preset", .none)) {
+            state.app.picture_preset = (state.app.picture_preset + 1) % 6;
+            for (state.app.players.items) |p| player.applyPicturePreset(p);
+            state.markConfigDirty();
+        }
+        if (pickerIconChip(@src(), 715, icons.tvg.lucide.rewind, "Back 10 seconds", false, "Seek back", .none)) _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "seek -10");
+        if (pickerIconChip(@src(), 716, icons.tvg.lucide.@"fast-forward", "Forward 10 seconds", false, "Seek forward", .none)) _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "seek 10");
 
-        // Speed-limit cycle — also demoted.
-        {
-            const limit = state.app.download_rate_limit;
-            var lim_buf: [24]u8 = undefined;
-            const lim_label = if (limit == 0)
-                "Unlimited"
-            else blk: {
-                break :blk std.fmt.bufPrintZ(&lim_buf, "{d}MB/s", .{@divTrunc(limit, 1024 * 1024)}) catch "?";
-            };
-            if (dvui.button(@src(), lim_label, .{}, .{
-                .id_extra = 200,
-                .color_fill = playerControlFill(false),
-                .color_text = player_text_muted,
-                .border = dvui.Rect.all(0),
-                .corner_radius = dvui.Rect.all(theme.radius.sm),
-                .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
-                .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
-                .gravity_y = 0.5,
-            })) {
-                const limits = [_]i32{ 0, 1 * 1024 * 1024, 2 * 1024 * 1024, 5 * 1024 * 1024, 10 * 1024 * 1024 };
-                var next_idx: usize = 0;
-                for (limits, 0..) |l, idx| {
-                    if (l == limit and idx + 1 < limits.len) {
-                        next_idx = idx + 1;
-                        break;
-                    }
+        // Both URL probes are case-insensitive substring searches over the loaded
+        // URL, and both results are only consumed by the quality chip below. Test
+        // the cheap conditions first so a shed or audio-only transport row does
+        // no scanning at all — this used to run on every rendered frame.
+        const video_is_playing = !active_p.is_loading and !active_p.cached_vid_no and
+            active_p.texture != null and active_p.cached_video_width > 0;
+        if (video_is_playing) {
+            const url = active_p.current_url[0..active_p.current_url_len];
+            const playing_youtube = std.ascii.indexOfIgnoreCase(url, "youtube.com/") != null or
+                std.ascii.indexOfIgnoreCase(url, "youtu.be/") != null;
+            if (playing_youtube) {
+                var quality_buf: [16]u8 = undefined;
+                const quality = if (active_p.youtube_active_height > 0)
+                    std.fmt.bufPrint(&quality_buf, "{d}p", .{active_p.youtube_active_height}) catch "Video"
+                else
+                    "Audio";
+                if (pickerIconChip(@src(), 711, icons.tvg.lucide.monitor, quality, true, "YouTube stream quality", .quality)) {
+                    togglePicker(.quality);
                 }
-                state.app.download_rate_limit = limits[next_idx];
-                c.mpv.torrent_set_download_limit(state.torrentSession(), state.app.download_rate_limit);
             }
         }
 
-        // Stop + delete — two-step confirm (same component as other destructive
-        // actions in the app). The playing file's path is captured lazily INSIDE
-        // the confirm branch (torrent_poll) rather than every frame — it is only
-        // needed at teardown, and torrent_remove() invalidates it, so we grab it
-        // just before removing.
+        // Aspect — reports state rather than acting; sheds with the
+        // secondary chips before anything you press to control playback.
         {
-            if (components.confirmDangerButton(@src(), "Delete", 201)) {
-                const tid = active_p.current_torrent_id;
-                var del_path: [512]u8 = undefined;
-                var del_pct: f32 = 0;
-                var del_rate: c_int = 0;
-                var del_peers: c_int = 0;
-                const del_status = c.mpv.torrent_poll(state.torrentSession(), tid, active_p.selected_file_idx, &del_path, del_path.len, &del_pct, &del_rate, &del_peers);
-                if (transfers.deleteTorrentById(tid)) {
-                    // Stop the active player/proxy before unlinking the stream
-                    // file. Windows cannot remove a file while mpv holds it.
-                    if (del_status >= 1) {
-                        const plen = std.mem.indexOfScalar(u8, &del_path, 0) orelse del_path.len;
-                        if (plen > 0) {
-                            @import("../core/io_global.zig").deleteFileAbsolute(del_path[0..plen]) catch {
-                                @import("../core/logs.zig").pushLog("warn", "torrent", "Delete file failed", true);
-                                state.showToastTyped("Stream stopped, but file could not be deleted", .err);
-                                return;
-                            };
+            const ar_text = currentAspectChipText(active_p.mpv_ctx);
+            const ar_active = !std.mem.eql(u8, ar_text, "Auto");
+            if (pickerIconChip(@src(), 700, icons.tvg.lucide.ratio, ar_text, ar_active, "Framing & aspect", .aspect)) {
+                togglePicker(.aspect);
+            }
+        }
+
+        // Chapters — only when count > 1, and only while the picker chips fit.
+        {
+            var chp_buf: [16]u8 = undefined;
+            const chp = currentChapterChipText(active_p.mpv_ctx, &chp_buf);
+            if (chp.count > 1) {
+                if (pickerIconChip(@src(), 701, icons.tvg.lucide.bookmark, chp.text, true, "Chapters", .chapter)) {
+                    togglePicker(.chapter);
+                }
+            }
+        }
+
+        // Audio output device (speaker chip — highlighted when a device is
+        // pinned instead of "auto").
+        {
+            const dev_pinned = currentAudioDevicePinned(active_p.mpv_ctx);
+            if (pickerIconChip(@src(), 708, icons.tvg.lucide.speaker, "Output device", dev_pinned, "Audio output device", .audio_device)) {
+                togglePicker(.audio_device);
+            }
+        }
+
+        // Files (torrent multi-file playlist).
+        if (active_p.current_torrent_id >= 0) {
+            const file_count = c.mpv.torrent_get_file_count(state.torrentSession(), active_p.current_torrent_id);
+            if (file_count > 1) {
+                var f_buf: [16]u8 = undefined;
+                const f_chip = std.fmt.bufPrint(&f_buf, "{d}", .{file_count}) catch "";
+                if (pickerIconChip(@src(), 706, icons.tvg.lucide.list, f_chip, true, "Files in torrent", .playlist)) {
+                    togglePicker(.playlist);
+                }
+            }
+        }
+
+        if (active_p.current_torrent_id >= 0) {
+            var info_row = dvui.box(@src(), .{ .dir = .vertical }, .{
+                .expand = .horizontal,
+                .min_size_content = .{ .w = 0, .h = 18 },
+                .padding = .{ .x = theme.spacing.md, .y = 2, .w = theme.spacing.md, .h = 2 },
+            });
+            defer info_row.deinit();
+
+            const name_slice = StatusCache.name[0..StatusCache.name_len];
+            const pct = StatusCache.pct;
+            const seeds = StatusCache.seeds;
+            const rate_mb = @as(f32, @floatFromInt(StatusCache.dl_rate)) / 1024.0 / 1024.0;
+
+            // Untrusted torrent metadata, truncated at the 512-byte buffer (possibly
+            // mid-codepoint) — validate before dvui (matches grid.zig).
+            var info_title: [515]u8 = undefined;
+            const safe_name = @import("../core/text.zig").safeUtf8(name_slice);
+            var name_end: usize = 0;
+            _ = dvui.themeGet().font_body.textSizeEx(safe_name, .{ .max_width = 270, .end_idx = &name_end });
+            _ = dvui.label(@src(), "{s}", .{footer_pure.compactTitle(&info_title, safe_name, name_end)}, .{
+                .color_text = player_text_muted,
+                .gravity_y = 0.5,
+            });
+
+            {
+                var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+                spacer.deinit();
+            }
+
+            var stat_buf: [80]u8 = undefined;
+            if (std.fmt.bufPrintZ(&stat_buf, "{d:.1}% \xC2\xB7 {d:.1} MB/s \xC2\xB7 {d} seeds", .{ pct * 100.0, rate_mb, seeds })) |st| {
+                _ = dvui.label(@src(), "{s}", .{st}, .{
+                    .color_text = player_text_muted,
+                    .gravity_y = 0.5,
+                });
+            } else |_| {}
+
+            // Speed-limit cycle — also demoted.
+            {
+                const limit = state.app.download_rate_limit;
+                var lim_buf: [48]u8 = undefined;
+                const lim_label = if (limit == 0)
+                    "Download limit: Unlimited"
+                else blk: {
+                    break :blk std.fmt.bufPrintZ(&lim_buf, "Download limit: {d} MB/s", .{@divTrunc(limit, 1024 * 1024)}) catch "Download limit";
+                };
+                if (dvui.button(@src(), lim_label, .{}, .{
+                    .id_extra = 200,
+                    .color_fill = playerControlFill(false),
+                    .color_text = player_text_muted,
+                    .border = dvui.Rect.all(0),
+                    .corner_radius = dvui.Rect.all(theme.radius.sm),
+                    .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
+                    .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
+                    .gravity_y = 0.5,
+                })) {
+                    const limits = [_]i32{ 0, 1 * 1024 * 1024, 2 * 1024 * 1024, 5 * 1024 * 1024, 10 * 1024 * 1024 };
+                    var next_idx: usize = 0;
+                    for (limits, 0..) |l, idx| {
+                        if (l == limit and idx + 1 < limits.len) {
+                            next_idx = idx + 1;
+                            break;
                         }
                     }
-                    state.showToast("Stopped and deleted");
+                    state.app.download_rate_limit = limits[next_idx];
+                    c.mpv.torrent_set_download_limit(state.torrentSession(), state.app.download_rate_limit);
+                }
+            }
+
+            // Stop + delete — two-step confirm (same component as other destructive
+            // actions in the app). The playing file's path is captured lazily INSIDE
+            // the confirm branch (torrent_poll) rather than every frame — it is only
+            // needed at teardown, and torrent_remove() invalidates it, so we grab it
+            // just before removing.
+            {
+                if (components.confirmDangerButton(@src(), "Delete", 201)) {
+                    const tid = active_p.current_torrent_id;
+                    var del_path: [512]u8 = undefined;
+                    var del_pct: f32 = 0;
+                    var del_rate: c_int = 0;
+                    var del_peers: c_int = 0;
+                    const del_status = c.mpv.torrent_poll(state.torrentSession(), tid, active_p.selected_file_idx, &del_path, del_path.len, &del_pct, &del_rate, &del_peers);
+                    if (transfers.deleteTorrentById(tid)) {
+                        // Stop the active player/proxy before unlinking the stream
+                        // file. Windows cannot remove a file while mpv holds it.
+                        if (del_status >= 1) {
+                            const plen = std.mem.indexOfScalar(u8, &del_path, 0) orelse del_path.len;
+                            if (plen > 0) {
+                                @import("../core/io_global.zig").deleteFileAbsolute(del_path[0..plen]) catch {
+                                    @import("../core/logs.zig").pushLog("warn", "torrent", "Delete file failed", true);
+                                    state.showToastTyped("Stream stopped, but file could not be deleted", .err);
+                                    return;
+                                };
+                            }
+                        }
+                        state.showToast("Stopped and deleted");
+                    }
                 }
             }
         }
-    } else if (active_p.np_title_len > 0) {
-        // ROW 3 (non-torrent) — now-playing title + subtitle, so a podcast /
-        // music track / stream shows its name in the controls exactly like a
-        // torrent shows its file name.
-        var np_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .min_size_content = .{ .w = 0, .h = 18 },
-            .padding = .{ .x = theme.spacing.md, .y = 2, .w = theme.spacing.md, .h = 2 },
-        });
-        defer np_row.deinit();
-
-        var tbuf: [256]u8 = undefined;
-        _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(active_p.np_title[0..@min(active_p.np_title_len, active_p.np_title.len)], &tbuf)}, .{
-            .color_text = player_text_muted,
-            .gravity_y = 0.5,
-        });
-        if (active_p.np_subtitle_len > 0) {
-            var sbuf: [192]u8 = undefined;
-            _ = dvui.label(@src(), " · {s}", .{@import("../core/text.zig").safeUtf8Buf(active_p.np_subtitle[0..@min(active_p.np_subtitle_len, active_p.np_subtitle.len)], &sbuf)}, .{
-                .id_extra = 3,
-                .color_text = player_text_muted,
-                .gravity_y = 0.5,
-            });
-        }
+        if (!open) closePickers();
     }
 
     // ── Floating popovers (rendered last — they're free-positioned) ──
@@ -2695,9 +2732,14 @@ fn renderTorrentActivityStrip() void {
         var any_torrent: bool = false;
     };
     const now_ms = @import("../core/io_global.zig").milliTimestamp();
+    const active_tid: i32 = if (state.app.active_player_idx < state.app.players.items.len)
+        state.app.players.items[state.app.active_player_idx].current_torrent_id
+    else
+        -1;
+    const on_player_route = state.app.router.current == .player;
     var sig: u64 = 0;
     for (state.app.players.items) |p| {
-        if (p.is_torrent and p.current_torrent_id >= 0) {
+        if (p.is_torrent and footer_pure.showTorrentActivity(on_player_route, active_tid, p.current_torrent_id)) {
             sig = sig *% 31 +% @as(u64, @intCast(p.current_torrent_id)) +% 1;
             sig = sig *% 31 +% @as(u64, @bitCast(@as(i64, p.selected_file_idx)));
         }
@@ -2710,7 +2752,7 @@ fn renderTorrentActivityStrip() void {
         var total_active: i32 = 0;
         var any_torrent = false;
         for (state.app.players.items) |p| {
-            if (p.is_torrent and p.current_torrent_id >= 0) {
+            if (p.is_torrent and footer_pure.showTorrentActivity(on_player_route, active_tid, p.current_torrent_id)) {
                 any_torrent = true;
                 var dl_rate: i32 = 0;
                 var peers: i32 = 0;

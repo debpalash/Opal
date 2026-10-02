@@ -201,15 +201,18 @@ def test_player_dropups():
         "chip anchor recorded": "picker_anchor" in ft and "recordAnchor(" in ft,
         "panel anchors to the chip": "footer.anchorFor(" in pk,
         # One measured spine keeps every control on the same optical baseline.
-        "44px control spine": (
-            "36 + 4 + 4 = 44" in ft
-            and ".min_size_content = .{ .w = 0, .h = 36 }" in ft
-            and ".max_size_content = .{ .w = 0, .h = 36 }" in ft
+        "40pt control spine": (
+            "36 + 2 + 2 = 40" in ft
+            and ".min_size_content = .{ .w = 0, .h = footer_pure.CONTROL_CONTENT_HEIGHT }" in ft
+            and ".max_size_content = .{ .w = 0, .h = footer_pure.CONTROL_CONTENT_HEIGHT }" in ft
+            and ".y = footer_pure.CONTROL_VERTICAL_PADDING" in ft
+            and "CONTROL_CONTENT_HEIGHT: f32 = 36" in _src("src/ui/footer_pure.zig")
+            and "CONTROL_VERTICAL_PADDING: f32 = 2" in _src("src/ui/footer_pure.zig")
         ),
-        "32px icon controls": _between(ft, "var ctrl_row", "ROW 3").count(
+        "32px icon controls": _between(ft, "var ctrl_row", "// Secondary controls and transfer actions").count(
             ".min_size_content = .{ .w = 20, .h = 20 }"
         ) >= 7,
-        "transport hover feedback": _between(ft, "var ctrl_row", "ROW 3").count(
+        "transport hover feedback": _between(ft, "var ctrl_row", "// Secondary controls and transfer actions").count(
             ".color_fill_hover = playerControlHover()"
         ) >= 7,
         "bright-video contrast": (
@@ -238,7 +241,7 @@ def test_player_dropups():
                             and 'icons.tvg.lucide.@"minimize-2"' in ft),
         "fullscreen shortcut truthful": ('"Fullscreen (F F)"' in ft
                                           and '"Exit fullscreen (Esc or F F)"' in ft),
-        "fullscreen no longer seeks": '"seek 10"' not in ft,
+        "fullscreen no longer seeks": '"seek ' not in _between(ft, "// Fullscreen toggle.", "if (has_playlist)"),
         # The old Esc label promised an action Esc does not perform.
         "close tooltip truthful": '"Close player (Esc)"' not in ft,
         # Hidden fullscreen top chrome must not retain an invisible click target.

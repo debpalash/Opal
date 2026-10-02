@@ -40,10 +40,10 @@ const dropup = @import("dropup_pure.zig");
 /// Per-picker rect, kept across frames because dvui's FloatingWindowWidget wants a
 /// mutable pointer. Recomputed from the chip anchor every frame, so a panel tracks
 /// its chip if the control bar moves (e.g. entering fullscreen).
-var dropup_rects: [10]dvui.Rect = [_]dvui.Rect{.{}} ** 10;
+var dropup_rects: [11]dvui.Rect = [_]dvui.Rect{.{}} ** 11;
 /// Physical bounds from the last rendered frame. Mouse events are physical,
 /// while FloatingWindowWidget placement uses logical coordinates.
-var dropup_screen_rects: [10]dvui.Rect.Physical = [_]dvui.Rect.Physical{.{}} ** 10;
+var dropup_screen_rects: [11]dvui.Rect.Physical = [_]dvui.Rect.Physical{.{}} ** 11;
 
 pub fn renderQualityPickerPopover(active_p: *player.MediaPlayer) void {
     if (footer.open_picker != .quality) return;
@@ -63,7 +63,11 @@ pub fn renderQualityPickerPopover(active_p: *player.MediaPlayer) void {
         const selected = if (i == 3)
             active_p.youtube_active_height == 0
         else
-            active_p.youtube_active_height == @as(u16, switch (i) { 0 => 720, 1 => 1080, else => 2160 });
+            active_p.youtube_active_height == @as(u16, switch (i) {
+                0 => 720,
+                1 => 1080,
+                else => 2160,
+            });
         if (pickerOption(@src(), 9400 + i, icons.tvg.lucide.monitor, label, selected)) {
             state.app.ytdl_format_idx = i;
             state.markConfigDirty();
@@ -484,6 +488,17 @@ pub fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []con
     // Bridge to the online finder — subtitles rarely end at the embedded list.
     if (kind == .sub) {
         components.divider();
+        const lang = if (state.app.sub_lang_len > 0) state.app.sub_lang_buf[0..state.app.sub_lang_len] else "eng";
+        var lang_label: [80]u8 = undefined;
+        const label = std.fmt.bufPrint(&lang_label, "Search language: {s}", .{lang}) catch "Search language";
+        if (pickerOption(@src(), 9991, icons.tvg.lucide.globe, label, false)) {
+            footer.closePickers();
+            footer.picker_anchor[4] = footer.anchorFor(.sub);
+            footer.open_picker = .lang;
+        }
+        if (pickerOption(@src(), 9992, icons.tvg.lucide.languages, "Use this language for audio and subtitles", false)) {
+            footer.applyUniversalLanguage(active_p.mpv_ctx, lang);
+        }
         if (dvui.button(@src(), "Find subtitles online…", .{}, .{
             .id_extra = 990,
             .expand = .horizontal,
@@ -496,6 +511,7 @@ pub fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []con
         })) {
             footer.closePickers();
             state.app.sub_picker_open = true;
+            footer.picker_anchor[7] = footer.anchorFor(.sub);
             @import("../player/subtitles.zig").searchFromActivePlayer(&state.app.sub_engine);
             if (state.app.opensub_api_key_len > 0) {
                 const subs = @import("../services/subtitles.zig");

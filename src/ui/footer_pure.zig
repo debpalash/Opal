@@ -241,6 +241,10 @@ pub fn transportBusy(t: Transport) bool {
 /// fixed layout simply overflowed and clipped the close button off the end.
 /// Groups are shed widest-first so the essentials (play/pause, clock, mute,
 /// subtitles, close) always fit.
+pub const CONTROL_CONTENT_HEIGHT: f32 = 36;
+pub const CONTROL_VERTICAL_PADDING: f32 = 2;
+pub const BACKDROP_SLICE_HEIGHT: f32 = 11;
+
 pub const BarLayout = struct {
     /// The 120px volume track (the mute button always stays).
     volume_slider: bool,
@@ -253,15 +257,14 @@ pub const BarLayout = struct {
     skip_buttons: bool,
 };
 
-// Thresholds are MEASURED against the real bar, not guessed: at 1200pt the
-// full set fits with slack and the close button sits at the right edge; at
-// 700pt with every group enabled the row overflowed and clipped the close
-// button off the end — the exact failure this collapse exists to prevent. Each
-// constant is the width below which the next group must go, with margin.
+// Conservative width budgets for the single strip. Narrow cells move optional
+// groups into More rather than wrapping or clipping the close button. The
+// combined TV/playlist navigation and picture preset need extra room for the
+// measured filename, so their inline threshold is deliberately higher.
 pub const BREAK_VOLUME: f32 = 900; // 120pt track + its gap + hover readout
 pub const BREAK_CHIPS: f32 = 800; // aspect, audio-device, sub-lang, uni-lang
 pub const BREAK_BADGES: f32 = 520; // chapters, find-subtitles, torrent files
-pub const BREAK_SKIP: f32 = 320; // playlist/episode skip, rewind, fullscreen
+pub const BREAK_SKIP: f32 = 1100; // narrow cells move skips, picture and fullscreen into More
 
 pub fn barLayout(width: f32) BarLayout {
     return .{
@@ -270,6 +273,34 @@ pub fn barLayout(width: f32) BarLayout {
         .status_badges = width >= BREAK_BADGES,
         .skip_buttons = width >= BREAK_SKIP,
     };
+}
+
+/// Selected media fallback without exposing URL credentials/query parameters.
+pub fn mediaFilename(url: []const u8) []const u8 {
+    const end = std.mem.indexOfAny(u8, url, "?#") orelse url.len;
+    var path = url[0..end];
+    if (std.mem.indexOf(u8, path, "://")) |scheme| {
+        const authority_end = std.mem.indexOfScalarPos(u8, path, scheme + 3, '/') orelse return "";
+        path = path[authority_end..];
+    }
+    const start = if (std.mem.lastIndexOfAny(u8, path, "/\\")) |i| i + 1 else 0;
+    return path[start..];
+}
+
+/// The active torrent already has details in the compact playback overlay.
+pub fn showTorrentActivity(on_player_route: bool, active_tid: i32, tid: i32) bool {
+    return tid >= 0 and (!on_player_route or active_tid < 0 or tid != active_tid);
+}
+
+/// Measured text prefix, preserving UTF-8 boundaries and explicit ellipsis.
+pub fn compactTitle(out: []u8, title: []const u8, measured_end: usize) []const u8 {
+    if (measured_end == 0 or out.len < 3) return "";
+    var end = @min(@min(measured_end, title.len), out.len - 3);
+    while (end > 0 and end < title.len and (title[end] & 0xc0) == 0x80) end -= 1;
+    @memcpy(out[0..end], title[0..end]);
+    if (end == title.len) return out[0..end];
+    @memcpy(out[end..][0..3], "…");
+    return out[0 .. end + 3];
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -418,21 +449,21 @@ test "barLayout: sheds groups widest-first as the bar narrows" {
     const wide = barLayout(1400);
     try expect(wide.volume_slider and wide.secondary_chips and wide.status_badges and wide.skip_buttons);
 
-    // 700pt: the measured width at which the full set overflowed and clipped
+    // 700pt: the historical full set overflowed and clipped
     // the close button. Both the volume track and the picker chips must be
     // gone by here — with the chips still on, the row still ran off the end.
     const seven = barLayout(700);
     try expect(!seven.volume_slider and !seven.secondary_chips);
-    try expect(seven.status_badges and seven.skip_buttons);
+    try expect(seven.status_badges and !seven.skip_buttons);
 
-    // Only the volume track goes at first — the chips still fit.
+    // Volume remains compact at850pt; secondary actions use More.
     const eight_fifty = barLayout(850);
     try expect(!eight_fifty.volume_slider);
-    try expect(eight_fifty.secondary_chips and eight_fifty.status_badges and eight_fifty.skip_buttons);
+    try expect(eight_fifty.secondary_chips and eight_fifty.status_badges and !eight_fifty.skip_buttons);
 
     const narrow = barLayout(460);
     try expect(!narrow.volume_slider and !narrow.secondary_chips and !narrow.status_badges);
-    try expect(narrow.skip_buttons);
+    try expect(!narrow.skip_buttons);
 
     const tiny = barLayout(300);
     try expect(!tiny.volume_slider and !tiny.secondary_chips and !tiny.status_badges and !tiny.skip_buttons);
@@ -441,9 +472,9 @@ test "barLayout: sheds groups widest-first as the bar narrows" {
     // collapse. Everything optional is gone; the essentials still render.
     const cell = barLayout(400);
     try expect(!cell.volume_slider and !cell.secondary_chips and !cell.status_badges);
-    try expect(cell.skip_buttons);
+    try expect(!cell.skip_buttons);
 
-    // Monotonic: nothing ever comes BACK as the bar gets narrower.
+    // Monotonic: optional inline groups never return as the bar narrows.
     var w: f32 = 1400;
     var prev = barLayout(w);
     while (w > 100) : (w -= 10) {
@@ -610,4 +641,33 @@ test "fillSegment spans start..end and never inverts" {
     // Inverted input can never produce a negative-width rect.
     const inverted = fillSegment(100, 50, 400, 26, 4, 0.9, 0.1);
     try expect(inverted.w == 0);
+}
+
+test "compact title respects measured width and UTF8 boundaries" {
+    var out: [80]u8 = undefined;
+    try expectEqualStrings("", compactTitle(&out, "Runner", 0));
+    try expectEqualStrings("Runner", compactTitle(&out, "Runner", 6));
+    try expectEqualStrings("Run…", compactTitle(&out, "Runner", 3));
+    try expectEqualStrings("東…", compactTitle(&out, "東京 episode", 4));
+    try expectEqualStrings("episode.mkv", mediaFilename("https://example.test/files/episode.mkv?token=secret#x"));
+    try expectEqualStrings("film.mkv", mediaFilename("film.mkv"));
+}
+
+test "single compact control strip stays forty logical points tall" {
+    try expect(CONTROL_CONTENT_HEIGHT + 2 * CONTROL_VERTICAL_PADDING == 40);
+    // Decorative scrim must not impose the old three-row panel height.
+    try expect(6 * BACKDROP_SLICE_HEIGHT <= 26 + CONTROL_CONTENT_HEIGHT + 2 * CONTROL_VERTICAL_PADDING);
+    for ([_]f32{ 320, 400, 460 }) |width| {
+        const fit = barLayout(width);
+        try expect(!fit.volume_slider and !fit.skip_buttons);
+    }
+}
+
+test "filename fallback excludes URI authority credentials and handles Windows" {
+    try expectEqualStrings("", mediaFilename("https://user:password@example.test"));
+    try expectEqualStrings("film.mkv", mediaFilename("C:\\media\\film.mkv"));
+    try expectEqualStrings("film.mkv", mediaFilename("https://user:password@example.test/film.mkv"));
+    try expect(!showTorrentActivity(true, 7, 7));
+    try expect(showTorrentActivity(true, 7, 8));
+    try expect(showTorrentActivity(false, 7, 7));
 }
