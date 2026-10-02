@@ -14,6 +14,8 @@ fn truth(v: std.json.Value) bool {
 }
 fn copy(out: []u8, len: *usize, s: []const u8) void {
     len.* = @min(s.len, out.len);
+    // Never split a multibyte title/publisher at a fixed-buffer boundary.
+    while (len.* > 0 and !std.unicode.utf8ValidateSlice(s[0..len.*])) len.* -= 1;
     @memcpy(out[0..len.*], s[0..len.*]);
 }
 
@@ -36,7 +38,12 @@ pub fn parseTrack(item: std.json.Value, base: []const u8) ?mp.MusicSong {
     copy(&row.id, &row.id_len, id);
     copy(&row.title, &row.title_len, title);
     copy(&row.artist, &row.artist_len, string(field(field(item, "user"), "name")));
-    copy(&row.cover, &row.cover_len, string(field(field(item, "artwork"), "150x150")));
+    const artwork = field(item, "artwork");
+    var cover = string(field(artwork, "480x480"));
+    if (cover.len == 0) cover = string(field(artwork, "150x150"));
+    if (cover.len == 0) cover = string(field(artwork, "1000x1000"));
+    if (cover.len == 0) cover = string(field(field(field(item, "user"), "profile_picture"), "150x150"));
+    copy(&row.cover, &row.cover_len, cover);
     const url = std.fmt.bufPrint(&row.play_url, "{s}/v1/tracks/{s}/stream?app_name=Opal", .{ std.mem.trimEnd(u8, base, "/"), id }) catch return null;
     row.play_url_len = url.len;
     row.download_allowed = truth(field(item, "is_downloadable"));

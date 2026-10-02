@@ -106,6 +106,8 @@ pub fn selectSource(src: u8) bool {
     search_request.cancel(&state.app.music.is_loading);
     parse_mutex.lock();
     defer parse_mutex.unlock();
+    active_search = null;
+    next_offset = 0;
     state.app.music.source = src;
     state.app.music.result_count = 0;
     state.app.music.fetch_error = false;
@@ -281,6 +283,8 @@ const SearchJob = struct {
 const RESULTS_CAP: usize = 200;
 const PAGE_SIZE: usize = 40;
 var more_available: bool = false;
+var active_search: ?SearchJob = null;
+var next_offset: u32 = 0;
 var loading_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 pub fn searchMusic(query: []const u8) void {
@@ -292,7 +296,14 @@ pub fn searchMusic(query: []const u8) void {
     more_available = true;
     loading_more.store(false, .release);
     const job = makeSearchJob(query, my_gen, false, 0) orelse return abortSearch(my_gen);
-    if (!spawnSearchJob(job)) search_request.finish(my_gen, &state.app.music.is_loading);
+    parse_mutex.lock();
+    active_search = job;
+    next_offset = 0;
+    parse_mutex.unlock();
+    if (!spawnSearchJob(job)) {
+        state.app.music.fetch_error = true;
+        search_request.finish(my_gen, &state.app.music.is_loading);
+    }
 }
 
 fn makeSearchJob(query: []const u8, generation: u32, append: bool, offset: u32) ?SearchJob {
@@ -351,16 +362,20 @@ fn spawnSearchJob(job: SearchJob) bool {
 fn loadMore() void {
     if (!more_available or loading_more.load(.acquire) or state.app.music.is_loading.load(.acquire)) return;
     const count = resultCount();
-    if (count == 0 or count >= RESULTS_CAP) {
+    if (count >= RESULTS_CAP) {
         more_available = false;
         return;
     }
-    const query = std.mem.sliceTo(&state.app.music.search_buf, 0);
-    if (query.len == 0 or loading_more.swap(true, .acq_rel)) return;
-    const job = makeSearchJob(query, search_request.current(), true, @intCast(count)) orelse {
+    if (loading_more.swap(true, .acq_rel)) return;
+    parse_mutex.lock();
+    var job = active_search orelse {
+        parse_mutex.unlock();
         loading_more.store(false, .release);
         return;
     };
+    job.append = true;
+    job.offset = next_offset;
+    parse_mutex.unlock();
     if (!spawnSearchJob(job)) loading_more.store(false, .release);
 }
 
@@ -375,20 +390,27 @@ fn abortSearch(my_gen: u32) void {
 fn finishJob(job: SearchJob, published: bool) void {
     if (job.append) {
         if (search_request.isCurrent(job.generation)) {
-            if (!published) more_available = false;
+            if (!published) {
+                more_available = false;
+                state.app.music.fetch_error = true;
+            }
             loading_more.store(false, .release);
         }
-    } else search_request.finish(job.generation, &state.app.music.is_loading);
+    } else {
+        if (!published and search_request.isCurrent(job.generation)) state.app.music.fetch_error = true;
+        search_request.finish(job.generation, &state.app.music.is_loading);
+    }
 }
 
-fn publishPage(job: SearchJob, added: usize, base: usize) void {
+fn publishPage(job: SearchJob, added: usize, base: usize, consumed: usize) void {
     state.app.music.result_count = base + added;
-    more_available = added == PAGE_SIZE and state.app.music.result_count < RESULTS_CAP;
+    next_offset = job.offset +| @as(u32, @intCast(@min(consumed, std.math.maxInt(u32))));
+    more_available = consumed >= PAGE_SIZE and state.app.music.result_count < RESULTS_CAP;
+    state.app.music.fetch_error = false;
     if (added == 0 and !job.append) logs.pushLog("info", "music", "No tracks found", false);
 }
 
-/// JioSaavn search worker — public API, no auth. Fills play_url (perma_url) +
-/// a full cover URL; playback hands perma_url to mpv/yt-dlp.
+/// Audius public discovery. Unavailable or access-conditioned tracks are omitted.
 fn audiusWorker(job: SearchJob) void {
     var published = false;
     defer finishJob(job, published);
@@ -402,21 +424,21 @@ fn audiusWorker(job: SearchJob) void {
     defer alloc.free(body);
     var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch return;
     defer parsed.deinit();
-    if (parsed.value != .object) return;
-    const data = parsed.value.object.get("data") orelse return;
-    if (data != .array) return;
+    const provider_rows = pure.pageRows(parsed.value, .audius) orelse return;
+    const consumed = provider_rows.len;
     parse_mutex.lock();
     defer parse_mutex.unlock();
     if (!search_request.isCurrent(job.generation)) return;
     const start = if (job.append) state.app.music.result_count else 0;
     var count: usize = 0;
-    for (data.array.items) |item| {
+    for (provider_rows) |item| {
         if (start + count >= RESULTS_CAP) break;
         const row = au_pure.parseTrack(item, base_url) orelse continue;
         state.app.music.results[start + count] = row;
+        if (duplicateRow(start + count)) continue;
         count += 1;
     }
-    publishPage(job, count, start);
+    publishPage(job, count, start, consumed);
     published = true;
 }
 
@@ -434,32 +456,25 @@ fn jiosaavnWorker(job: SearchJob) void {
         return;
     };
     defer alloc.free(body);
+    var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch return;
+    defer parsed.deinit();
+    const provider_rows = pure.pageRows(parsed.value, .jiosaavn) orelse return;
+    const consumed = provider_rows.len;
     if (search_request.current() != my_gen) return;
 
     parse_mutex.lock();
     defer parse_mutex.unlock();
-    if (search_request.current() != my_gen) return;
-
+    if (!search_request.isCurrent(my_gen)) return;
     const base: usize = if (job.append) state.app.music.result_count else 0;
     var count: usize = 0;
-    var it = js_pure.SongIter{ .json = body };
-    while (it.next()) |obj| {
+    for (provider_rows) |obj| {
         if (count >= PAGE_SIZE or base + count >= RESULTS_CAP) break;
-        var tb: [160]u8 = undefined;
-        var ab: [128]u8 = undefined;
-        var ub: [400]u8 = undefined;
-        var ib: [400]u8 = undefined;
-        const s = js_pure.parseSong(obj, &tb, &ab, &ub, &ib) orelse continue;
-        var row = &state.app.music.results[base + count];
-        row.* = .{};
-        copyField(&row.title, &row.title_len, s.title);
-        copyField(&row.artist, &row.artist_len, s.artist);
-        copyField(&row.play_url, &row.play_url_len, s.perma_url);
-        var cov: [256]u8 = undefined;
-        copyField(&row.cover, &row.cover_len, js_pure.coverUpgrade(s.image, &cov));
+        const row = js_pure.parseSongValue(obj) orelse continue;
+        state.app.music.results[base + count] = row;
+        if (duplicateRow(base + count)) continue;
         count += 1;
     }
-    publishPage(job, count, base);
+    publishPage(job, count, base, consumed);
     published = true;
 }
 
@@ -476,39 +491,26 @@ fn subsonicWorker(job: SearchJob) void {
         return;
     };
     defer alloc.free(body);
+    var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch return;
+    defer parsed.deinit();
+    const provider_rows = pure.pageRows(parsed.value, .subsonic) orelse return;
+    const consumed = provider_rows.len;
 
     if (search_request.current() != my_gen) return; // superseded
 
-    if (!pure.responseOk(body)) {
-        if (!job.append) state.app.music.fetch_error = true;
-        logs.pushLog("info", "music", "Subsonic auth/search failed — check server URL + credentials", false);
-        return;
-    }
-
     parse_mutex.lock();
     defer parse_mutex.unlock();
-    if (search_request.current() != my_gen) return;
-
-    const scope = pure.songsScope(body);
+    if (!search_request.isCurrent(my_gen)) return;
     const base: usize = if (job.append) state.app.music.result_count else 0;
     var count: usize = 0;
-    var it = pure.SongIter{ .json = scope };
-    while (it.next()) |obj| {
+    for (provider_rows) |obj| {
         if (count >= PAGE_SIZE or base + count >= RESULTS_CAP) break;
-        var idb: [128]u8 = undefined;
-        var tb: [160]u8 = undefined;
-        var ab: [128]u8 = undefined;
-        var cb: [96]u8 = undefined;
-        const s = pure.parseSong(obj, &idb, &tb, &ab, &cb) orelse continue;
-        var row = &state.app.music.results[base + count];
-        row.* = .{};
-        copyField(&row.id, &row.id_len, s.id);
-        copyField(&row.title, &row.title_len, s.title);
-        copyField(&row.artist, &row.artist_len, s.artist);
-        copyField(&row.cover, &row.cover_len, s.cover);
+        const row = pure.parseSongValue(obj) orelse continue;
+        state.app.music.results[base + count] = row;
+        if (duplicateRow(base + count)) continue;
         count += 1;
     }
-    publishPage(job, count, base);
+    publishPage(job, count, base, consumed);
     published = true;
 }
 
@@ -528,38 +530,26 @@ fn jellyfinMusicWorker(job: SearchJob) void {
         return;
     };
     defer alloc.free(body);
+    var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch return;
+    defer parsed.deinit();
+    const provider_rows = pure.pageRows(parsed.value, .jellyfin) orelse return;
+    const consumed = provider_rows.len;
 
     if (search_request.current() != my_gen) return; // superseded
 
     parse_mutex.lock();
     defer parse_mutex.unlock();
-    if (search_request.current() != my_gen) return;
-
-    const scope = jf_pure.itemsScope(body);
-    if (scope.len == 0) {
-        if (!job.append) state.app.music.fetch_error = true;
-        logs.pushLog("info", "music", "Jellyfin search failed — check the server sign-in", false);
-        return;
-    }
-
+    if (!search_request.isCurrent(my_gen)) return;
     const base: usize = if (job.append) state.app.music.result_count else 0;
     var count: usize = 0;
-    var it = jf_pure.ItemIter{ .json = scope };
-    while (it.next()) |obj| {
+    for (provider_rows) |obj| {
         if (count >= PAGE_SIZE or base + count >= RESULTS_CAP) break;
-        var idb: [128]u8 = undefined;
-        var tb: [160]u8 = undefined;
-        var ab: [128]u8 = undefined;
-        const s = jf_pure.parseSong(obj, &idb, &tb, &ab) orelse continue;
-        var row = &state.app.music.results[base + count];
-        row.* = .{};
-        copyField(&row.id, &row.id_len, s.id);
-        copyField(&row.title, &row.title_len, s.title);
-        copyField(&row.artist, &row.artist_len, s.artist);
-        copyField(&row.cover, &row.cover_len, s.id); // Primary image is keyed by the item id
+        const row = jf_pure.parseSongValue(obj) orelse continue;
+        state.app.music.results[base + count] = row;
+        if (duplicateRow(base + count)) continue;
         count += 1;
     }
-    publishPage(job, count, base);
+    publishPage(job, count, base, consumed);
     published = true;
 }
 
@@ -581,45 +571,36 @@ fn plexMusicWorker(job: SearchJob) void {
         return;
     };
     defer alloc.free(body);
+    var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch return;
+    defer parsed.deinit();
+    const provider_rows = pure.pageRows(parsed.value, .plex) orelse return;
+    const consumed = provider_rows.len;
 
     if (search_request.current() != my_gen) return; // superseded
 
     parse_mutex.lock();
     defer parse_mutex.unlock();
-    if (search_request.current() != my_gen) return;
-
-    // Plex omits "Metadata" entirely on a zero-result search, so an empty scope
-    // is "no tracks", NOT an error — only a body that isn't a MediaContainer is.
-    const scope = px_pure.metadataScope(body);
-    if (scope.len == 0 and std.mem.indexOf(u8, body, "MediaContainer") == null) {
-        if (!job.append) state.app.music.fetch_error = true;
-        logs.pushLog("info", "music", "Plex search failed — check the server sign-in", false);
-        return;
-    }
-
+    if (!search_request.isCurrent(my_gen)) return;
     const base: usize = if (job.append) state.app.music.result_count else 0;
     var count: usize = 0;
-    var it = px_pure.TrackIter{ .json = scope };
-    while (it.next()) |obj| {
+    for (provider_rows) |obj| {
         if (count >= PAGE_SIZE or base + count >= RESULTS_CAP) break;
-        var idb: [128]u8 = undefined;
-        var tb: [160]u8 = undefined;
-        var ab: [128]u8 = undefined;
-        var cb: [200]u8 = undefined;
-        var pb: [256]u8 = undefined;
-        const s = px_pure.parseSong(obj, &idb, &tb, &ab, &cb, &pb) orelse continue;
-        if (s.part_key.len == 0) continue; // unplayable without a Part
-        var row = &state.app.music.results[base + count];
-        row.* = .{};
-        copyField(&row.id, &row.id_len, s.id);
-        copyField(&row.title, &row.title_len, s.title);
-        copyField(&row.artist, &row.artist_len, s.artist);
-        copyField(&row.cover, &row.cover_len, s.thumb);
-        copyField(&row.play_url, &row.play_url_len, s.part_key);
+        const row = px_pure.parseSongValue(obj) orelse continue;
+        state.app.music.results[base + count] = row;
+        if (duplicateRow(base + count)) continue;
         count += 1;
     }
-    publishPage(job, count, base);
+    publishPage(job, count, base, consumed);
     published = true;
+}
+
+/// Caller holds parse_mutex; compare stable provider IDs or direct play URLs.
+fn duplicateRow(index: usize) bool {
+    const row = &state.app.music.results[index];
+    for (state.app.music.results[0..index]) |*existing| {
+        if (pure.sameTrack(existing, row)) return true;
+    }
+    return false;
 }
 
 fn copyField(dst: []u8, len: *usize, src: []const u8) void {
@@ -1115,16 +1096,16 @@ fn renderCover(i: usize, song: *const pure.MusicSong) void {
     var url_buf: [1024]u8 = undefined;
     const cover_url = coverUrlFor(song, &url_buf);
 
-    if (cover_url.len > 0) {
-        const h = std.hash.Fnv1a_64.hash(cover_url);
-        if (slot.url_hash != h and !slot.fetching) {
-            poster.deinitPoster(&slot.pixels, &slot.tex);
-            slot.w = 0;
-            slot.h = 0;
-            slot.attempted = false;
-            slot.failed = false;
-            slot.url_hash = h;
-        }
+    const h = std.hash.Fnv1a_64.hash(cover_url);
+    if (slot.url_hash != h and !slot.fetching) {
+        poster.deinitPoster(&slot.pixels, &slot.tex);
+        slot.w = 0;
+        slot.h = 0;
+        slot.attempted = false;
+        slot.failed = false;
+        slot.url_hash = h;
+    }
+    if (cover_url.len > 0 and slot.url_hash == h) {
         _ = poster.uploadIfReady(&slot.pixels, slot.w, slot.h, &slot.tex);
         if (slot.fetching) slot.attempted = true else if (slot.attempted and slot.pixels == null and slot.tex == null) slot.failed = true;
         if (!slot.failed and slot.tex == null and !slot.fetching and slot.pixels == null) {
@@ -1133,8 +1114,9 @@ fn renderCover(i: usize, song: *const pure.MusicSong) void {
         }
     }
 
-    if (slot.tex) |*tex| {
-        _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
+    const visible_texture = if (cover_url.len > 0 and slot.url_hash == h) slot.tex else null;
+    if (visible_texture) |tex| {
+        _ = dvui.image(@src(), .{ .source = .{ .texture = tex } }, .{
             .id_extra = i + 1000,
             .expand = .both,
             .corner_radius = dvui.Rect.all(8),
@@ -1223,7 +1205,8 @@ fn renderResults() void {
     const total = @min(state.app.music.result_count, state.app.music.results.len);
     parse_mutex.unlock();
     const src = state.app.music.source;
-    if (total == 0 and !state.app.music.is_loading.load(.acquire)) {
+    if (total == 0 and more_available and !state.app.music.is_loading.load(.acquire)) loadMore();
+    if (total == 0 and !state.app.music.is_loading.load(.acquire) and !loading_more.load(.acquire)) {
         const hint: []const u8 = if (!sourceConfigured(src)) switch (src) {
             SRC_JELLYFIN => "Sign in to Jellyfin (Jellyfin tab) to play its music library",
             SRC_PLEX => "Sign in to Plex (Plex tab) to play its music library",

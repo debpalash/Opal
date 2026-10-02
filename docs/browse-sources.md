@@ -93,3 +93,121 @@ implemented. These remain research entries rather than working source claims.
 Validation for the expansion: native unit/browse suites and the headless build
 passed; the feature suite reported 463 passed, 0 failed, 1 warning and 11
 skipped. The web lifecycle suite reported 29 passed.
+
+## Universal search coverage
+
+Loading improvements dated 2026-10-02. The validation results above describe
+the earlier source expansion, not this set of changes.
+
+Universal search runs independent requests against the selected search sources.
+It does not call a Browse tab's search function or replace that tab's query and
+results. Source buttons show fetching, results, no matches, partial results,
+transport/parse failures, or unavailable configuration separately. Results
+already returned remain usable while slower sources finish.
+
+| Content | Universal search | Result action |
+| --- | --- | --- |
+| Movies and television | TMDB when configured, public Cinemeta otherwise; Cinemeta also backs up failed TMDB catalog requests | Show details or find playback sources; a metadata hit is not a playable stream |
+| Torrents | Installed Nova2 indexes, YTS, configured Torznab/Prowlarr/Jackett, installed EZTV, cached RSS magnets | Resolve the listed magnet or source detail page |
+| Anime | Installed anime connector plus torrent/Stremio providers | Open anime discovery; playback still requires an accessible source |
+| Comics and manga | Installed comic connector and trusted executable source plugins | Open the comics reader |
+| Novels | Independent Wikisource and Internet Archive readable-text searches, plus compatible installed executable plugins | Open the built-in reader by copied work identity |
+| Visual novels | Independent public VNDB lookup with the existing cover filter | Open VNDB details; Opal does not run or download a visual novel from a metadata result |
+| Drama | Movie/TV catalog searches include drama titles; playback uses the normal configured resolver | Catalog details or source discovery; no dedicated drama streaming scraper is built in |
+| YouTube | Independent bounded yt-dlp search | Play the canonical video URL |
+| Live television | Loaded IPTV catalog matched against the query | Play with the channel's required headers |
+| Music, radio and podcasts | Independent public provider requests | Play audio or open a podcast's episode view |
+| Personal video libraries | Connected Jellyfin and Plex server searches | Play the server item; credentials stay out of universal result URLs |
+| Local files | Configured download directory | Play the existing local file |
+| Installed source plugins | Trusted executable plugins implementing the search protocol | Open the supplied stream or resolve the plugin item |
+| OPDS and Audiobookshelf | Their configured Browse libraries remain separate from universal query fan-out | Browse the connected library page |
+| Web | URL navigation in the web browser, rather than a media catalog provider | Open a website |
+
+Catalog results retain real provider covers, descriptions, ratings and genres
+when supplied. Empty fields remain unknown. VNDB's provider rating uses a
+100-point scale; universal cards convert it to the shared ten-point scale.
+Arbitrary executable-plugin scores are not converted into ratings because their
+units are unspecified. Search caches include the enrichment and use a new
+format key so older cache rows cannot decode as new results.
+
+Wikisource, Internet Archive and VNDB queries are bounded to twelve records per
+provider; YouTube discovery requests ten records. These limits prevent a single
+catalog from occupying every universal result slot. Browse pagination remains
+the path for exploring a larger catalog.
+
+## Provider contract research for loading improvements
+
+The [Stremio catalog request contract](https://github.com/Stremio/stremio-addon-sdk/blob/master/docs/api/requests/defineCatalogHandler.md)
+distinguishes search and catalog pagination, and its
+[metadata contract](https://github.com/Stremio/stremio-addon-sdk/blob/master/docs/api/responses/meta.md)
+defines optional artwork, descriptions, release dates and IMDb ratings.
+Cinemeta responses provide those fields directly; a local HTTP inspection
+returned 49 movie records with the expected metadata. This inspection verifies
+the response shape, not playback of all listed titles.
+
+The [MediaWiki search API](https://www.mediawiki.org/wiki/API:Search) provides
+Wikisource titles and snippets without a reader-side search mutation. The
+[VNDB HTTPS API](https://api.vndb.org/kana) provides public visual-novel metadata
+and image flags. Direct request inspections returned two Wikisource search
+records and two VNDB metadata records. These inspections do not replace app
+build checks or interactive verification.
+
+Failure handling now preserves existing movie/TV cards when refresh fails,
+marks cache freshness after successful publication, and distinguishes rejected
+Plex authentication from a genuine empty server search. Independent VNDB detail
+requests preserve the Browse grid and discard superseded detail responses.
+Upstream outages, access restrictions and absent server configuration remain
+reported conditions; they cannot be repaired by adding an unverified mirror.
+
+## Loading and reader promise gaps addressed
+
+| Promise | Change | Practical limit |
+| --- | --- | --- |
+| Useful discovery results | Real covers, authors, years, snippets, summaries and ratings reach native and web views | A missing provider field stays empty |
+| Keep browsing beyond the first page | Wikisource uses the server continuation; comics and audio advance by consumed provider rows | Fixed result buffers still bound a session |
+| Read a manga series | MangaDex has a chapter picker and previous/next navigation; the web reader requests pages that actually finished downloading | 100 chapter rows per feed window, a client navigation bound of 10,000 rows, and 128 pages per chapter |
+| Read novels without losing the selected work | Reader workers copy work identity; older requests cannot replace newer text or clear its loading state | 400 chapters and bounded text per work; truncated text is labelled |
+| Reliable connected reading catalogs | OPDS checks HTTP success and complete Atom envelopes, decodes next links, deduplicates pages, and snapshots request credentials | Unprefixed OPDS 1.x Atom feeds; 300 entries and a 4 MiB response limit |
+| Retain usable television catalogs | IPTV source replacement deletes and inserts in one transaction, rolling back failed replacements | Stream reachability still depends on the broadcaster |
+| Accurate search actions | Catalog entries open details and reading entries open readers; queue actions require a usable playback identity | Metadata does not guarantee an accessible stream |
+| Correct artwork while results change | Shared cover slots suppress images from superseded rows, including rows with no artwork | Failed images use a fallback |
+
+Provider contracts used for these changes include the official
+[MangaDex OpenAPI](https://api.mangadex.org/docs/static/api.yaml),
+[Internet Archive advanced search](https://archive.org/advancedsearch.php),
+[OPDS 1.2 specification](https://github.com/opds-community/specs/blob/master/opds-1.2.md),
+[Radio Browser API](https://api.radio-browser.info/),
+[Audius API](https://docs.audius.org/api/), and
+[Audiobookshelf API](https://api.audiobookshelf.org/).
+Personal-server playback still requires verification against a configured server.
+
+
+Connected Audiobookshelf searches use the upstream
+[library search controller](https://github.com/advplyr/audiobookshelf/blob/master/server/controllers/LibraryController.js)
+and [expanded book search response](https://github.com/advplyr/audiobookshelf/blob/master/server/utils/queries/libraryItemsBookFilters.js)
+contracts: `GET /api/libraries/{id}/search?q=...&limit=6`, with `book` or
+`podcast` matches wrapping `libraryItem` metadata. Up to sixteen permitted
+libraries are searched concurrently; universal search surfaces at most twelve
+items across them. Responses and each request are bounded. Authentication stays
+in headers, and only stable item identities enter universal results.
+
+Opening an Audiobookshelf result fetches expanded file metadata rather than
+passing its download archive to the media player. Native and web views offer
+actual audio tracks or downloaded podcast episodes, with up to 128 selectable
+files and explicit returned/total/truncation information. Single-file books can
+start immediately and use book-wide server resume. Multi-file playback uses
+manual track selection; automatic track advancement and book-wide resume across
+files are not implemented. No connected personal-server search or playback was
+verified during this provider-contract research.
+
+## Checks for the 2026-10-02 loading changes
+
+- Native `zig build` passed after integration, including the refresh retry cooldown.
+- JavaScript syntax checks passed for `catalog.js`, `media.js` and `integrations.js`.
+- Zig formatting and `git diff --check` passed.
+- Regression tests and interactive playback checks were not run for these changes.
+- Personal-server search/playback has not been verified against a configured account.
+
+Remaining functional gaps include independent OPDS server search, automatic
+Audiobookshelf track advancement, and server resume across multi-file books.
+Provider outages and access restrictions remain external availability conditions.

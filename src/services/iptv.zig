@@ -470,8 +470,11 @@ fn ingestOne(id: []const u8, kind: sources.Kind, fallback_url: []const u8, force
 
     // Replace the source's rows atomically: clear then insert. ingestChannels
     // applies the adult gate (group denylist + parser flag) per channel too.
-    catalog.clearSource(id);
-    const inserted = catalog.ingestChannels(id, buf[0..n], force_adult);
+    const inserted = catalog.replaceChannels(id, buf[0..n], force_adult);
+    if (inserted == 0) {
+        logs.pushLog("error", "iptv", "Catalog refresh failed; previous channels kept", true);
+        return false;
+    }
     catalog.markIngested(id, inserted);
 
     var lb: [96]u8 = undefined;

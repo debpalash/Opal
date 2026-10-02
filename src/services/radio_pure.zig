@@ -256,6 +256,50 @@ pub fn parseStations(json: []const u8, out: []Station) usize {
     return count;
 }
 
+/// Fully validate a directory page and preserve the provider's cursor even
+/// when entries are not playable. JSON whitespace/key ordering is irrelevant.
+pub const StationPage = struct { count: usize, consumed: usize };
+pub fn parsePage(a: std.mem.Allocator, json: []const u8, out: []Station) ?StationPage {
+    var parsed = std.json.parseFromSlice(std.json.Value, a, json, .{}) catch return null;
+    defer parsed.deinit();
+    if (parsed.value != .array) return null;
+    var count: usize = 0;
+    for (parsed.value.array.items) |obj| {
+        if (count == out.len) break;
+        if (obj != .object) continue;
+        var station: Station = .{};
+        jsonCopy(obj, "name", &station.name, &station.name_len);
+        jsonCopy(obj, "url_resolved", &station.url_resolved, &station.url_resolved_len);
+        jsonCopy(obj, "url", &station.url, &station.url_len);
+        if (station.name_len == 0 or (station.url_len == 0 and station.url_resolved_len == 0)) continue;
+        jsonCopy(obj, "stationuuid", &station.stationuuid, &station.stationuuid_len);
+        jsonCopy(obj, "favicon", &station.favicon, &station.favicon_len);
+        jsonCopy(obj, "tags", &station.tags, &station.tags_len);
+        jsonCopy(obj, "country", &station.country, &station.country_len);
+        jsonCopy(obj, "codec", &station.codec, &station.codec_len);
+        station.votes = jsonNumber(obj, "votes");
+        station.bitrate = jsonNumber(obj, "bitrate");
+        out[count] = station;
+        count += 1;
+    }
+    return .{ .count = count, .consumed = parsed.value.array.items.len };
+}
+
+fn jsonCopy(obj: std.json.Value, key: []const u8, dst: []u8, len: *usize) void {
+    const value = obj.object.get(key) orelse return;
+    if (value != .string) return;
+    len.* = @min(value.string.len, dst.len);
+    while (len.* > 0 and !std.unicode.utf8ValidateSlice(value.string[0..len.*])) len.* -= 1;
+    @memcpy(dst[0..len.*], value.string[0..len.*]);
+}
+fn jsonNumber(obj: std.json.Value, key: []const u8) u32 {
+    const value = obj.object.get(key) orelse return 0;
+    if (value == .integer and value.integer > 0)
+        return @intCast(@min(value.integer, std.math.maxInt(u32)));
+    if (value == .string) return std.fmt.parseInt(u32, value.string, 10) catch 0;
+    return 0;
+}
+
 // ══════════════════════════════════════════════════════════
 // Tests
 // ══════════════════════════════════════════════════════════

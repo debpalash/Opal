@@ -162,6 +162,21 @@ pub fn parseSong(obj: []const u8, id_buf: []u8, title_buf: []u8, artist_buf: []u
     return .{ .id = id_buf[0..idn], .title = title_buf[0..tn], .artist = artist_buf[0..an] };
 }
 
+pub fn parseSongValue(obj: std.json.Value) ?music.MusicSong {
+    const id = music.valueString(music.valueField(obj, "Id"));
+    const title = music.valueString(music.valueField(obj, "Name"));
+    if (id.len == 0 or id.len > 128 or title.len == 0) return null;
+    var row: music.MusicSong = .{};
+    music.copyValueText(&row.id, &row.id_len, id);
+    music.copyValueText(&row.title, &row.title_len, title);
+    var artist = music.valueString(music.valueField(obj, "AlbumArtist"));
+    const artists = music.valueField(obj, "Artists");
+    if (artist.len == 0 and artists == .array and artists.array.items.len > 0) artist = music.valueString(artists.array.items[0]);
+    music.copyValueText(&row.artist, &row.artist_len, artist);
+    music.copyValueText(&row.cover, &row.cover_len, id);
+    return row;
+}
+
 // ══════════════════════════════════════════════════════════
 // Tests
 // ══════════════════════════════════════════════════════════

@@ -43,50 +43,92 @@ $('open-queue').onclick = async () => {
   $('open-hint').textContent = 'Added to the Opal queue.';
 };
 
-function runSearch(){
+let unifiedSearchRun = 0;
+async function runSearch(){
   const q = $('q').value.trim(); if (!q) return;
+  const request = ++unifiedSearchRun;
+  clearInterval(searchWatch);
   $('search-hint').innerHTML = '<span class="spin"></span> Searching all sources…';
   $('results').innerHTML = ''; lastHtml.results = '';
-  api('/unified_search?q=' + encodeURIComponent(q)).catch(()=>{});
-  clearInterval(searchWatch);
-  let ticks = 0;
+  let initial;
+  try {
+    initial = await api('/unified_search?q=' + encodeURIComponent(q));
+    if (request !== unifiedSearchRun) return;
+    renderUnifiedResults(initial);
+    $('search-hint').textContent = unifiedResultCount(initial);
+    if (!initial.loading) return;
+  } catch (error) {
+    if (request === unifiedSearchRun) $('search-hint').textContent = error?.message || 'Search could not start. Try again.';
+    return;
+  }
   searchWatch = settledInterval(async () => {
-    ticks++;
     try {
       const d = await api('/unified_search');
-      renderUnifiedResults(d);
-      if ((!d.loading && ticks > 2) || ticks > 40) {
+      if (request !== unifiedSearchRun) return;
+      if (d.generation !== initial.generation) {
         clearInterval(searchWatch);
-        const sources = new Set((d.results || []).map(r => r.source).filter(Boolean));
-        $('search-hint').textContent = `${(d.results || []).length} results across ${sources.size} source${sources.size === 1 ? '' : 's'}.`;
+        $('search-hint').textContent = 'Search changed in another Opal view. Search again to refresh.';
+        return;
       }
-    } catch { clearInterval(searchWatch); }
+      renderUnifiedResults(d);
+      $('search-hint').textContent = unifiedResultCount(d);
+      if (!d.loading) clearInterval(searchWatch);
+    } catch (error) {
+      if (request !== unifiedSearchRun) return;
+      clearInterval(searchWatch);
+      $('search-hint').textContent = error?.message || 'Could not refresh search. Loaded results remain available.';
+    }
   }, 900);
 }
-
+function unifiedResultCount(payload){
+  const rows = Array.isArray(payload.results) ? payload.results : [];
+  const returned = Number.isFinite(payload.returned) ? payload.returned : rows.length;
+  const total = Number.isFinite(payload.total) ? payload.total : returned;
+  const sources = new Set(rows.map(r => r.source).filter(Boolean));
+  const unavailable = (payload.sources || []).filter(s => s.enabled &&
+    ['failed', 'transport_failed', 'parse_failed', 'timed_out', 'partial', 'unavailable'].includes(s.status));
+  let text = payload.truncated || total > returned ? `Showing ${returned} of ${total} results` : `${returned} results`;
+  text += ` across ${sources.size} source${sources.size === 1 ? '' : 's'}`;
+  if (payload.loading) text += ' · Still searching';
+  if (unavailable.length) text += ' · ' + unavailable.map(s => `${s.source}: ${String(s.status).replace(/_/g, ' ')}`).join('; ');
+  return text + '.';
+}
 function unifiedActionLabel(source){
-  if (source === 'comics') return 'Read';
+  if (source === 'comics' || source === 'novels') return 'Read';
+  if (source === 'vndb') return 'View details';
+  if (source === 'audiobooks') return 'Open audio';
   if (source === 'podcast' || source === 'anime' || source === 'tmdb') return 'Open';
   return 'Play on Opal';
 }
+function unifiedArtwork(value){
+  if (typeof value !== 'string' || !value) return '';
+  try {
+    const url = new URL(value);
+    return ['https:', 'http:'].includes(url.protocol) && !url.username && !url.password ? url.href : '';
+  } catch { return ''; }
+}
 function renderUnifiedResults(payload){
-  const rs = payload.results || [], generation = payload.generation || 0;
-  const shown = rs.slice(0, 80);
+  const shown = Array.isArray(payload.results) ? payload.results : [], generation = payload.generation || 0;
   const html = shown.map((r, i) => {
-    return `<div class="result">
-      <div class="t">${esc(r.title)}</div>
+    const artwork = unifiedArtwork(r.poster_url), rating = Number(r.rating);
+    return `<div class="result pod unified-result">
+      ${artwork ? `<img class="thumb" src="${esc(artwork)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ''}
+      <div class="body"><div class="t">${esc(r.title)}</div>
       <div class="m"><span class="src">${esc(r.source || '')}</span>
+        ${r.author ? `<span>${esc(r.author)}</span>` : ''}
         ${r.detail ? `<span>${esc(r.detail)}</span>` : ''}
+        ${Number.isFinite(rating) && rating > 0 && rating <= 10 ? `<span>${rating.toFixed(1)}/10</span>` : ''}
         <span class="actions">
           ${r.queueable ? `<button class="queue-btn" data-i="${i}" data-gen="${generation}">Queue</button>` : ''}
-          <button class="play" data-i="${i}" data-gen="${generation}">${unifiedActionLabel(r.source)}</button>
+          <button class="play" data-i="${i}" data-gen="${generation}"${r.key ? '' : ' disabled'}>${unifiedActionLabel(r.source)}</button>
         </span>
-      </div>
+      </div>${r.summary ? `<div class="sub">${esc(r.summary)}</div>` : ''}</div>
     </div>`;
-  }).join('') || '<div class="empty">No results yet</div>';
+  }).join('') || `<div class="empty">${payload.loading ? 'Searching sources…' : 'No results found. Try another title or check source availability.'}</div>`;
   if (html === lastHtml.results) return;
   lastHtml.results = html;
   $('results').innerHTML = html;
+  $('results').querySelectorAll('.thumb').forEach(image => image.addEventListener('error', () => image.remove(), { once:true }));
   $('results').querySelectorAll('.play').forEach(b =>
     b.onclick = () => runUnifiedAction(shown[+b.dataset.i], +b.dataset.gen, 'play', b));
   $('results').querySelectorAll('.queue-btn').forEach(b =>
@@ -112,6 +154,7 @@ async function runUnifiedAction(r, generation, action, button){
 }
 function runStreamSearch(title){
   if (!title) return;
+  ++unifiedSearchRun;
   $('q').value = title;
   $('search-hint').innerHTML = '<span class="spin"></span> Finding playable streams…';
   $('results').innerHTML = ''; lastHtml.results = '';

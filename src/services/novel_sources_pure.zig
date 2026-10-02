@@ -28,7 +28,7 @@ pub const themesia = @import("manga_themesia_pure.zig");
 
 /// Which engine a novel came from — carried per search-result so `openNovel` /
 /// `openChapter` dispatch to the right chapter-list + chapter-text extractor.
-pub const NovelSource = enum { wikisource, madara_novel, lightnovelwp, readwn, readnovelfull, internet_archive, royalroad, novelfire };
+pub const NovelSource = enum { wikisource, madara_novel, lightnovelwp, readwn, readnovelfull, internet_archive, royalroad, novelfire, gutenberg, openlibrary };
 
 // ══════════════════════════════════════════════════════════
 // Chapter-TEXT container selectors (the ONE new thing per shared engine)
@@ -203,7 +203,7 @@ pub fn chapterContentHtml(html: []const u8, source: NovelSource) ?[]const u8 {
             if (containerInner(html, "id=\"chapter-container\"")) |c| if (htmlHasText(c)) return c;
             return null;
         },
-        .wikisource, .internet_archive => return null, // handled directly by novels.zig
+        .wikisource, .internet_archive, .gutenberg, .openlibrary => return null, // handled directly by novels.zig
     }
 }
 

@@ -532,8 +532,9 @@ pub fn searchInstalledInto(query: []const u8, out: []UniversalResult) usize {
     var query_buf: [256]u8 = std.mem.zeroes([256]u8);
     const query_len = @min(query.len, query_buf.len);
     @memcpy(query_buf[0..query_len], query[0..query_len]);
-    var slots: [UNIVERSAL_PLUGIN_CAP][UNIVERSAL_ROWS_PER_PLUGIN]UniversalResult =
-        [_][UNIVERSAL_ROWS_PER_PLUGIN]UniversalResult{[_]UniversalResult{.{}} ** UNIVERSAL_ROWS_PER_PLUGIN} ** UNIVERSAL_PLUGIN_CAP;
+    const slots = c_alloc.alloc([UNIVERSAL_ROWS_PER_PLUGIN]UniversalResult, UNIVERSAL_PLUGIN_CAP) catch return 0;
+    defer c_alloc.free(slots);
+    @memset(slots, [_]UniversalResult{.{}} ** UNIVERSAL_ROWS_PER_PLUGIN);
     var counts: [UNIVERSAL_PLUGIN_CAP]usize = [_]usize{0} ** UNIVERSAL_PLUGIN_CAP;
     var threads: [UNIVERSAL_PLUGIN_CAP]?std.Thread = [_]?std.Thread{null} ** UNIVERSAL_PLUGIN_CAP;
     const Task = struct {

@@ -61,6 +61,27 @@ class ExpandedTorrentSources(unittest.TestCase):
             rows, calls = self.run_engine(name, [], 'track', 'music')
             self.assertEqual((rows, calls), ([], []))
 
+    def test_animetosho_keeps_real_swarm_counts_and_canonical_hash(self):
+        digest = 'a' * 40
+        row = {'title': 'A &amp; B\nEpisode 4', 'info_hash': digest,
+               'magnet_uri': 'magnet:?xt=urn:btih:' + digest + '&tr=https%3A%2F%2Ftracker.test%2Fannounce',
+               'total_size': '4096', 'seeders': '3', 'leechers': None,
+               'link': 'https://animetosho.org/view/release.123', 'timestamp': 12345}
+        rows, calls = self.run_engine('animetosho', [json.dumps([row, row,
+                                     {**row, 'info_hash': 'bad'}, {**row, 'status': 'deleted'}])], 'A%26B%20dub')
+        self.assertEqual(len(rows), 1)
+        self.assertIn('q=A%26B+dub', calls[0])
+        self.assertEqual(rows[0]['name'], 'A & B Episode 4')
+        self.assertIn('xt=urn:btih:' + digest, rows[0]['link'])
+        self.assertEqual((rows[0]['size'], rows[0]['seeds'], rows[0]['leech']), (4096, 3, -1))
+        self.assertEqual(rows[0]['pub_date'], 12345)
+
+    def test_animetosho_refuses_unrelated_category_and_error_envelopes(self):
+        rows, calls = self.run_engine('animetosho', [], 'book', 'books')
+        self.assertEqual((rows, calls), ([], []))
+        rows, _ = self.run_engine('animetosho', [json.dumps({'error': 'offline'})], 'anime')
+        self.assertEqual(rows, [])
+
 
 if __name__ == '__main__':
     unittest.main()

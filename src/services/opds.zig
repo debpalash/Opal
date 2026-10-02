@@ -52,13 +52,77 @@ var entry_covers: [300]components.CoverSlot = [_]components.CoverSlot{.{}} ** 30
 // entry_count is written last so a torn read shows fewer rows, never garbage.
 var parse_mutex: @import("../core/sync.zig").Mutex = .{};
 
+pub const ConnectionSnapshot = struct {
+    connected: bool = false,
+    server: [256]u8 = .{0} ** 256,
+    server_len: usize = 0,
+    user: [128]u8 = .{0} ** 128,
+    user_len: usize = 0,
+    pass: [128]u8 = .{0} ** 128,
+    pass_len: usize = 0,
+    identity: u64 = 0,
+};
+var configured_connection: ConnectionSnapshot = .{};
+
+/// Credentials are copied from the configured record, never the live form.
+pub fn connectionSnapshot() ConnectionSnapshot {
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    var result = configured_connection;
+    result.connected = state.app.opds.connected;
+    return result;
+}
+
+pub fn configureConnection(server: []const u8, user: []const u8, pass: []const u8) void {
+    var next: ConnectionSnapshot = .{};
+    next.server_len = @min(server.len, next.server.len - 1);
+    next.user_len = @min(user.len, next.user.len - 1);
+    next.pass_len = @min(pass.len, next.pass.len - 1);
+    @memcpy(next.server[0..next.server_len], server[0..next.server_len]);
+    @memcpy(next.user[0..next.user_len], user[0..next.user_len]);
+    @memcpy(next.pass[0..next.pass_len], pass[0..next.pass_len]);
+    var hash = std.hash.Wyhash.init(0x4f504453);
+    hash.update(next.server[0..next.server_len]);
+    hash.update("\x00");
+    hash.update(next.user[0..next.user_len]);
+    hash.update("\x00");
+    hash.update(next.pass[0..next.pass_len]);
+    next.identity = hash.final();
+    parse_mutex.lock();
+    configured_connection = next;
+    state.app.opds.server_url = next.server;
+    state.app.opds.server_url_len = next.server_len;
+    state.app.opds.user_buf = next.user;
+    state.app.opds.pass_buf = next.pass;
+    state.app.opds.connected = false;
+    parse_mutex.unlock();
+    fetch_request.cancel(&state.app.opds.is_loading);
+}
+pub fn setConfiguredServer(value: []const u8) void {
+    const snap = connectionSnapshot();
+    configureConnection(value, snap.user[0..snap.user_len], snap.pass[0..snap.pass_len]);
+}
+pub fn setConfiguredUser(value: []const u8) void {
+    const snap = connectionSnapshot();
+    configureConnection(snap.server[0..snap.server_len], value, snap.pass[0..snap.pass_len]);
+}
+pub fn setConfiguredPassword(value: []const u8) void {
+    const snap = connectionSnapshot();
+    configureConnection(snap.server[0..snap.server_len], snap.user[0..snap.user_len], value);
+}
+pub fn setConfiguredConnected(value: bool) void {
+    parse_mutex.lock();
+    state.app.opds.connected = value and configured_connection.server_len > 0;
+    parse_mutex.unlock();
+}
+
 // ── Infinite-scroll pagination ──
 // OPDS/Atom feeds carry a `<link rel="next" href="…"/>` at the feed level
 // (opds_pure.feedNextHref extracts + resolves it). `more_available` and
 // `next_href_buf` are published by the SAME worker + mutex as entries/
 // entry_count above, so a UI read under parse_mutex always sees a consistent
 // triple. `loading_more` serializes append fetches so a single near-bottom
-// scroll can't spawn a burst (mirrors comics/drama/youtube). `fetch_gen` is
+// scroll can't spawn a burst (mirrors comics/drama/youtube). The request generation is
 // bumped by every fresh (replace) feed load — a load-more worker checks it
 // before publishing so a stale append can never land on top of a feed the
 // user has since navigated away from.
@@ -68,7 +132,7 @@ var loading_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 /// when the current feed has no next page. Guarded by parse_mutex.
 var next_href_buf: [512]u8 = undefined;
 var next_href_len: usize = 0;
-var fetch_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
+var fetch_request: @import("../core/latest_request.zig").Gate = .{};
 // Config restores `connected` after startup, but no connect() call occurs in
 // that path. This latch lets desktop and companion entry points safely kick
 // one root fetch without retrying a failed server on every frame/request.
@@ -100,6 +164,10 @@ fn opdsAuthHeader(buf: []u8) []const u8 {
 /// a server the rest of the app talks to fine. 43 other services already fetch
 /// through curl; this was one of the last holdouts.
 fn opdsGet(url: []const u8, user: []const u8, pass: []const u8) ?[]u8 {
+    return opdsGetBounded(url, user, pass, 4 * 1024 * 1024, "15");
+}
+
+fn opdsGetBounded(url: []const u8, user: []const u8, pass: []const u8, cap: usize, timeout: []const u8) ?[]u8 {
     var auth_buf: [512]u8 = undefined;
     // basicAuthHeader yields a full header line. Feed it through curl's stdin
     // config so the credential is not visible in the subprocess command line.
@@ -114,18 +182,20 @@ fn opdsGet(url: []const u8, user: []const u8, pass: []const u8) ?[]u8 {
     // watchdog did.
     var child = if (auth != null)
         io_g.Child.init(&.{
-            "curl",       "-sL",
-            "-H",         "Accept: application/atom+xml,application/xml",
-            "--config",   "-",
-            "--max-time", "15",
-            url,
+            "curl",              "-fsSL",
+            "-H",                "Accept: application/atom+xml,application/xml",
+            "--config",          "-",
+            "--connect-timeout", "3",
+            "--max-time",        timeout,
+            "--",                url,
         }, alloc)
     else
         io_g.Child.init(&.{
-            "curl",       "-sL",
-            "-H",         "Accept: application/atom+xml,application/xml",
-            "--max-time", "15",
-            url,
+            "curl",              "-fsSL",
+            "-H",                "Accept: application/atom+xml,application/xml",
+            "--connect-timeout", "3",
+            "--max-time",        timeout,
+            "--",                url,
         }, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
@@ -135,13 +205,25 @@ fn opdsGet(url: []const u8, user: []const u8, pass: []const u8) ?[]u8 {
         child.spawn() catch return null;
     }
 
-    const resp_buf = alloc.alloc(u8, 256 * 1024) catch {
-        _ = child.wait() catch {};
+    const resp_buf = alloc.alloc(u8, cap) catch {
+        _ = child.kill() catch {};
         return null;
     };
     defer alloc.free(resp_buf);
     const n = if (child.stdout) |*so| io_g.readAll(so, resp_buf) catch 0 else 0;
-    _ = child.wait() catch {};
+    if (n == resp_buf.len) {
+        var extra: [1]u8 = undefined;
+        const extra_n = if (child.stdout) |*so| io_g.readAll(so, &extra) catch 1 else 1;
+        if (extra_n > 0) {
+            _ = child.kill() catch {};
+            return null;
+        }
+    }
+    const term = child.wait() catch return null;
+    if (switch (term) {
+        .exited => |code| code != 0,
+        else => true,
+    }) return null;
     if (n == 0) return null;
 
     const result = alloc.alloc(u8, n) catch return null;
@@ -249,42 +331,56 @@ fn setError(msg: []const u8) void {
 /// a REPLACE fetch (fresh navigation always wins), but the gen is bumped so
 /// any in-flight load-more append from the PREVIOUS feed drops its stale
 /// publish instead of corrupting this one.
-fn fetchFeedSync(mark_connected: bool, my_gen: u32) void {
-    // Snapshot everything the UI thread might edit mid-request into worker locals.
-    var url_buf: [512]u8 = undefined;
-    const url_len = @min(state.app.opds.current_url_len, url_buf.len);
-    @memcpy(url_buf[0..url_len], state.app.opds.current_url[0..url_len]);
-    const url = url_buf[0..url_len];
+const FeedJob = struct {
+    url: [512]u8 = std.mem.zeroes([512]u8),
+    url_len: usize = 0,
+    user: [128]u8 = std.mem.zeroes([128]u8),
+    pass: [128]u8 = std.mem.zeroes([128]u8),
+    mark_connected: bool = false,
+    generation: u32 = 0,
+};
 
-    var user_buf: [128]u8 = undefined;
-    @memcpy(&user_buf, &state.app.opds.user_buf);
-    var pass_buf: [128]u8 = undefined;
-    @memcpy(&pass_buf, &state.app.opds.pass_buf);
-    const user = user_buf[0 .. std.mem.indexOfScalar(u8, &user_buf, 0) orelse user_buf.len];
-    const pass = pass_buf[0 .. std.mem.indexOfScalar(u8, &pass_buf, 0) orelse pass_buf.len];
+fn publishFetchError(gen: u32, msg: []const u8) void {
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (!fetch_request.isCurrent(gen)) return;
+    setError(msg);
+    state.wakeUi();
+}
+
+fn fetchFeedSync(job: FeedJob) void {
+    const my_gen = job.generation;
+    const mark_connected = job.mark_connected;
+    const url = job.url[0..job.url_len];
+    const user = job.user[0 .. std.mem.indexOfScalar(u8, &job.user, 0) orelse job.user.len];
+    const pass = job.pass[0 .. std.mem.indexOfScalar(u8, &job.pass, 0) orelse job.pass.len];
 
     if (url.len == 0) {
-        setError("Catalog URL is empty");
+        publishFetchError(my_gen, "Catalog URL is empty");
         state.wakeUi();
         return;
     }
 
     const body = opdsGet(url, user, pass) orelse {
-        setError("Could not reach the OPDS server — check the URL and credentials");
+        publishFetchError(my_gen, "Could not load the OPDS server — check its URL, credentials or response size");
         state.wakeUi();
         return;
     };
     defer alloc.free(body);
+    if (!pure.isCompleteFeed(body)) {
+        publishFetchError(my_gen, "The server did not return a complete OPDS 1.x Atom feed");
+        return;
+    }
 
     // A newer navigation (another connect/openFeed/goBack) superseded this
     // in-flight request — drop the stale result rather than clobber the feed
     // the user has since moved to (mirrors drama.zig's fetch_gen guard).
-    if (fetch_gen.load(.acquire) != my_gen) return;
+    if (fetch_request.current() != my_gen) return;
 
     // Publish under the mutex: title first, entries, then entry_count LAST so a
     // concurrent UI read never sees a count ahead of the data.
     parse_mutex.lock();
-    if (fetch_gen.load(.acquire) != my_gen) {
+    if (fetch_request.current() != my_gen) {
         parse_mutex.unlock();
         return;
     } // re-check under the lock
@@ -304,38 +400,40 @@ fn fetchFeedSync(mark_connected: bool, my_gen: u32) void {
         next_href_len = 0;
         more_available = false;
     }
-    parse_mutex.unlock();
-
     state.app.opds.fetch_error = false;
     if (mark_connected) {
         state.app.opds.connected = true;
         state.markConfigDirty();
     }
+    parse_mutex.unlock();
     logs.pushLog("info", "opds", "OPDS feed loaded", false);
     state.wakeUi();
 }
 
 /// Spawn the detached fetch worker for the current feed URL.
 fn spawnFetch(mark_connected: bool) void {
-    if (state.app.opds.is_loading.load(.acquire)) return;
-    state.app.opds.is_loading.store(true, .release);
+    // Snapshot before spawning: navigation and credentials may change while
+    // an older request is still waiting for its response.
+    var job: FeedJob = .{ .mark_connected = mark_connected };
+    parse_mutex.lock();
+    job.url_len = @min(state.app.opds.current_url_len, job.url.len);
+    @memcpy(job.url[0..job.url_len], state.app.opds.current_url[0..job.url_len]);
+    job.user = state.app.opds.user_buf;
+    job.pass = state.app.opds.pass_buf;
+    job.generation = fetch_request.begin(&state.app.opds.is_loading);
     state.app.opds.fetch_error = false;
-    // A fresh replace-fetch (connect/openFeed/goBack) is a new generation — an
-    // in-flight load-more append from the feed being navigated away from will
-    // see its generation is stale and drop its publish (see fetchMoreSync).
-    const my_gen = fetch_gen.fetchAdd(1, .acq_rel) + 1;
-
+    parse_mutex.unlock();
     state.app.opds.thread = @import("../core/workers.zig").spawnLegacy(struct {
-        fn worker(mc: bool, gen: u32) void {
-            defer state.app.opds.is_loading.store(false, .release);
-            fetchFeedSync(mc, gen);
+        fn worker(request: FeedJob) void {
+            defer fetch_request.finish(request.generation, &state.app.opds.is_loading);
+            fetchFeedSync(request);
+            state.wakeUi();
         }
-    }.worker, .{ mark_connected, my_gen }) catch blk: {
-        state.app.opds.is_loading.store(false, .release);
-        setError("Could not start the OPDS request");
+    }.worker, .{job}) catch blk: {
+        fetch_request.finish(job.generation, &state.app.opds.is_loading);
+        publishFetchError(job.generation, "Could not start the OPDS request");
         break :blk null;
     };
-    // Detach: the result is observed via state.app.opds, never joined.
     if (state.app.opds.thread) |t| @import("../core/workers.zig").release(t);
 }
 
@@ -347,86 +445,68 @@ fn spawnFetch(mark_connected: bool) void {
 /// merge its entries onto the existing list. Guarded by `loading_more` + the
 /// main `is_loading` atomic so a near-bottom scroll can't spawn a burst;
 /// no-op once `more_available` clears — which happens the moment a feed has
-/// no rel="next" link (set by fetchFeedSync/fetchMoreSync), a load-more fetch
-/// fails, or the fixed 300-entry buffer fills. Runs under the current
-/// fetch_gen so a fresh feed navigation (connect/openFeed/goBack) supersedes
+/// no rel="next" link (set by fetchFeedSync/fetchMoreSync), the fixed 300-entry buffer fills. Errors pause automatic paging until retry. Runs under the current
+/// request generation so a fresh feed navigation (connect/openFeed/goBack) supersedes
 /// it. Mirrors services/drama.zig's loadMore.
 pub fn loadMore() void {
-    if (!more_available) return;
-    if (state.app.opds.is_loading.load(.acquire)) return;
-    if (loading_more.load(.acquire)) return;
-    if (state.app.opds.entry_count == 0) return;
-    if (state.app.opds.entry_count >= state.app.opds.entries.len) {
-        parse_mutex.lock();
-        more_available = false;
+    parse_mutex.lock();
+    if (!more_available or state.app.opds.is_loading.load(.acquire) or
+        state.app.opds.fetch_error or state.app.opds.entry_count == 0 or
+        state.app.opds.entry_count >= state.app.opds.entries.len)
+    {
         parse_mutex.unlock();
         return;
     }
-    if (loading_more.swap(true, .acq_rel)) return; // lost the race — another append in flight
-
-    const my_gen = fetch_gen.load(.acquire); // stay within the current generation
-
-    if (@import("../core/workers.zig").spawnLegacy(loadMoreWorker, .{my_gen})) |t| {
+    if (loading_more.swap(true, .acq_rel)) {
+        parse_mutex.unlock();
+        return;
+    }
+    var job: FeedJob = .{ .generation = fetch_request.current() };
+    job.url_len = @min(next_href_len, job.url.len);
+    @memcpy(job.url[0..job.url_len], next_href_buf[0..job.url_len]);
+    job.user = state.app.opds.user_buf;
+    job.pass = state.app.opds.pass_buf;
+    parse_mutex.unlock();
+    if (@import("../core/workers.zig").spawnLegacy(loadMoreWorker, .{job})) |t| {
         @import("../core/workers.zig").release(t);
     } else |_| {
         loading_more.store(false, .release);
+        publishFetchError(job.generation, "Could not start the next OPDS page request");
     }
 }
 
-fn loadMoreWorker(my_gen: u32) void {
+fn loadMoreWorker(job: FeedJob) void {
     defer loading_more.store(false, .release);
-    fetchMoreSync(my_gen);
+    fetchMoreSync(job);
 }
 
-/// Fetch the feed's rel="next" continuation page and APPEND its entries onto
-/// state.app.opds.entries starting at the current entry_count (never clears —
-/// only fetchFeedSync's replace path does that). Uses the SAME Basic-auth
-/// header + fetch path (opdsGet) as the main feed fetch. Runs ONLY on the
-/// detached load-more worker (never the UI thread).
-fn fetchMoreSync(my_gen: u32) void {
-    var url_buf: [512]u8 = undefined;
-    parse_mutex.lock();
-    const url_len = @min(next_href_len, url_buf.len);
-    @memcpy(url_buf[0..url_len], next_href_buf[0..url_len]);
-    parse_mutex.unlock();
-    const url = url_buf[0..url_len];
-    if (url.len == 0) {
-        parse_mutex.lock();
-        more_available = false;
-        parse_mutex.unlock();
-        return;
-    }
-
-    // Same credential snapshot as fetchFeedSync — the UI thread may edit these
-    // buffers mid-request, so copy them out before the blocking fetch.
-    var user_buf: [128]u8 = undefined;
-    @memcpy(&user_buf, &state.app.opds.user_buf);
-    var pass_buf: [128]u8 = undefined;
-    @memcpy(&pass_buf, &state.app.opds.pass_buf);
-    const user = user_buf[0 .. std.mem.indexOfScalar(u8, &user_buf, 0) orelse user_buf.len];
-    const pass = pass_buf[0 .. std.mem.indexOfScalar(u8, &pass_buf, 0) orelse pass_buf.len];
+/// Append a continuation using the URL and credentials captured at launch.
+fn fetchMoreSync(job: FeedJob) void {
+    const my_gen = job.generation;
+    const url = job.url[0..job.url_len];
+    if (url.len == 0 or fetch_request.current() != my_gen) return;
+    const user = job.user[0 .. std.mem.indexOfScalar(u8, &job.user, 0) orelse job.user.len];
+    const pass = job.pass[0 .. std.mem.indexOfScalar(u8, &job.pass, 0) orelse job.pass.len];
 
     const body = opdsGet(url, user, pass) orelse {
-        // Fail closed (mirrors drama.zig treating a short/failed page as "no
-        // more") rather than retry-spamming the server on every near-bottom
-        // frame after a transient failure.
         logs.pushLog("error", "opds", "Load-more fetch failed", true);
-        if (fetch_gen.load(.acquire) == my_gen) {
-            parse_mutex.lock();
-            more_available = false;
-            parse_mutex.unlock();
-        }
+        publishFetchError(my_gen, "Could not load the next OPDS page. Retry to refresh the catalog.");
+        state.wakeUi();
         return;
     };
     defer alloc.free(body);
+    if (!pure.isCompleteFeed(body)) {
+        publishFetchError(my_gen, "The next OPDS page was incomplete or invalid. Retry to refresh.");
+        return;
+    }
 
     // A fresh feed navigation superseded this append — drop it rather than
     // append the old feed's continuation onto the new feed's entries.
-    if (fetch_gen.load(.acquire) != my_gen) return;
+    if (fetch_request.current() != my_gen) return;
 
     parse_mutex.lock();
     defer parse_mutex.unlock();
-    if (fetch_gen.load(.acquire) != my_gen) return; // re-check under the lock
+    if (fetch_request.current() != my_gen) return; // re-check under the lock
 
     const base = state.app.opds.entry_count;
     const cap = state.app.opds.entries.len;
@@ -434,12 +514,31 @@ fn fetchMoreSync(my_gen: u32) void {
         more_available = false;
         return;
     }
-    const n = pure.parseFeed(body, url, state.app.opds.entries[base..]);
-    state.app.opds.entry_count = base + n;
+    const staged = alloc.alloc(pure.OpdsEntry, cap) catch {
+        setError("Not enough memory for the next OPDS page");
+        return;
+    };
+    defer alloc.free(staged);
+    const n = pure.parseFeed(body, url, staged);
+    var count = base;
+    for (staged[0..n]) |entry| {
+        var duplicate = false;
+        for (state.app.opds.entries[0..count]) |existing| {
+            if (std.mem.eql(u8, existing.href[0..existing.href_len], entry.href[0..entry.href_len])) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate) continue;
+        if (count >= cap) break;
+        state.app.opds.entries[count] = entry;
+        count += 1;
+    }
+    state.app.opds.entry_count = count;
 
     if (pure.feedNextHref(body, url, &next_href_buf)) |next| {
         next_href_len = next.len;
-        more_available = state.app.opds.entry_count < cap;
+        more_available = state.app.opds.entry_count < cap and !std.mem.eql(u8, next, url);
     } else {
         next_href_len = 0;
         more_available = false;
@@ -456,6 +555,7 @@ fn fetchMoreSync(my_gen: u32) void {
 /// Connect to the configured catalog root (server_url) and load its feed.
 pub fn connect() void {
     if (state.app.opds.is_loading.load(.acquire)) return;
+    configureConnection(state.app.opds.server_url[0..state.app.opds.server_url_len], state.app.opds.user_buf[0 .. std.mem.indexOfScalar(u8, &state.app.opds.user_buf, 0) orelse state.app.opds.user_buf.len], state.app.opds.pass_buf[0 .. std.mem.indexOfScalar(u8, &state.app.opds.pass_buf, 0) orelse state.app.opds.pass_buf.len]);
     state.app.opds.nav_depth = 0;
     // current_url := server_url (catalog root).
     const n = @min(state.app.opds.server_url_len, state.app.opds.current_url.len);
@@ -489,6 +589,45 @@ pub fn retry() void {
     }
     restored_fetch_attempted.store(true, .release);
     spawnFetch(false);
+}
+
+pub const SearchResult = struct {
+    count: usize = 0,
+    status: @import("resolver_lifecycle_pure.zig").SourceStatus = .no_results,
+    connection_identity: u64 = 0,
+};
+
+/// Query only an advertised search facility; never filter the visible feed.
+pub fn searchInto(query: []const u8, out: []pure.OpdsEntry) SearchResult {
+    const snap = connectionSnapshot();
+    if (!snap.connected or snap.server_len == 0) return .{ .status = .unavailable };
+    if (query.len == 0 or out.len == 0) return .{};
+    const root = snap.server[0..snap.server_len];
+    const body = opdsGetBounded(root, snap.user[0..snap.user_len], snap.pass[0..snap.pass_len], 1024 * 1024, "8") orelse return .{ .status = .transport_failed };
+    defer alloc.free(body);
+    if (!pure.isCompleteFeed(body)) return .{ .status = .parse_failed };
+    const link = pure.feedSearchLink(body, root) orelse {
+        logs.pushLog("info", "opds", "This catalog does not advertise a supported OPDS search facility", false);
+        return .{ .status = .unavailable };
+    };
+    var url_buf: [3072]u8 = undefined;
+    const href = link.url[0..link.url_len];
+    var search_url: []const u8 = undefined;
+    if (link.description) {
+        const with_auth = pure.sameOrigin(root, href);
+        const description = opdsGetBounded(href, if (with_auth) snap.user[0..snap.user_len] else "", if (with_auth) snap.pass[0..snap.pass_len] else "", 128 * 1024, "8") orelse return .{ .status = .transport_failed };
+        defer alloc.free(description);
+        search_url = pure.openSearchUrl(description, href, query, &url_buf) orelse return .{ .status = .unavailable };
+    } else {
+        search_url = pure.expandSearchTemplate(href, query, &url_buf) orelse return .{ .status = .unavailable };
+    }
+    const with_auth = pure.sameOrigin(root, search_url);
+    const results = opdsGetBounded(search_url, if (with_auth) snap.user[0..snap.user_len] else "", if (with_auth) snap.pass[0..snap.pass_len] else "", 1024 * 1024, "8") orelse return .{ .status = .transport_failed };
+    defer alloc.free(results);
+    if (!pure.isCompleteFeed(results)) return .{ .status = .parse_failed };
+    if (connectionSnapshot().identity != snap.identity) return .{ .status = .unavailable };
+    const count = pure.parseFeed(results, search_url, out);
+    return .{ .count = count, .status = if (count > 0) .done else .no_results, .connection_identity = snap.identity };
 }
 
 pub fn entryCount() usize {
@@ -553,6 +692,15 @@ pub fn goBack() void {
 /// type (image/comic → in-app comics reader; EPUB/PDF → external; else toast).
 pub fn openEntry(idx: usize) void {
     const row = entryRow(idx) orelse return;
+    openCatalogEntry(row, connectionSnapshot().identity);
+}
+
+pub fn openCatalogEntry(row: pure.OpdsEntry, connection_identity: u64) void {
+    const snap = connectionSnapshot();
+    if (!snap.connected or snap.identity != connection_identity) {
+        state.showToastTyped("OPDS connection changed. Search this catalog again.", .warning);
+        return;
+    }
     const e = &row;
     const href = e.hrefSlice();
     if (href.len == 0) return;
@@ -570,15 +718,20 @@ pub fn openEntry(idx: usize) void {
                 // stored credentials and drive the comics reader with the tested
                 // page-URL template + count.
                 var auth_buf: [512]u8 = undefined;
-                const auth = opdsAuthHeader(&auth_buf);
+                const auth = if (pure.sameOrigin(snap.server[0..snap.server_len], e.pseUrlSlice()))
+                    pure.basicAuthHeader(snap.user[0..snap.user_len], snap.pass[0..snap.pass_len], &auth_buf) orelse ""
+                else
+                    "";
                 @import("comics.zig").loadPseBook(e.titleSlice(), e.pseUrlSlice(), e.pse_count, auth);
                 state.navigateToTab(.Comics);
                 state.showToast("Streaming pages…");
-            } else {
-                // Plain page-image / archive server → the existing <img> scraper.
+            } else if (std.mem.startsWith(u8, e.contentTypeSlice(), "image/")) {
                 @import("comics.zig").requestLoad(href);
                 state.navigateToTab(.Comics);
                 state.showToast("Opening in reader");
+            } else {
+                @import("../ui/settings.zig").openExternal(href);
+                state.showToast("This catalog offers an archive. Opening externally.");
             }
         },
         .external => {
@@ -593,13 +746,13 @@ pub fn openEntry(idx: usize) void {
 
 /// Disconnect: forget the connection + clear the loaded feed. UI-thread only.
 pub fn disconnect() void {
-    _ = fetch_gen.fetchAdd(1, .acq_rel); // supersede any in-flight fetch/append
+    fetch_request.cancel(&state.app.opds.is_loading); // supersede any in-flight fetch/append
     parse_mutex.lock();
     state.app.opds.entry_count = 0;
     more_available = true;
     next_href_len = 0;
-    parse_mutex.unlock();
     state.app.opds.connected = false;
+    parse_mutex.unlock();
     state.app.opds.nav_depth = 0;
     state.app.opds.feed_title_len = 0;
     state.app.opds.current_url_len = 0;
@@ -764,7 +917,7 @@ fn renderFeed() void {
             .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
             .margin = .{ .x = 16, .y = 0, .w = 0, .h = 8 },
         })) retry();
-        return;
+        if (entryCount() == 0) return;
     }
 
     var scroll = dvui.scrollArea(@src(), .{}, .{

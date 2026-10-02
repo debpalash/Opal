@@ -43,8 +43,9 @@
 
 Opal replaces the stack you'd otherwise juggle — a player, a site for the show,
 a server front-end, a torrent client, a feed. Say what you want (a title, a
-file, a magnet); it searches every source, plays anything, and remembers where
-you left off. One native binary — [Zig](https://ziglang.org) +
+file, a magnet); it searches supported, enabled providers, opens playable media
+and reading results, and remembers where you left off. Personal libraries need
+a configured server; catalog entries can lead to details or a source search. One native binary — [Zig](https://ziglang.org) +
 [dvui](https://github.com/david-vanderson/dvui) + **mpv** — fast and quiet.
 
 <div align="center">
@@ -250,7 +251,7 @@ XDG-compliant:
     <td width="50%" valign="top">
       <img src="assets/screenshots/search.png" width="100%" alt="One query fanned out across every source, ranked" /><br/>
       <b>🔭 One search, every source</b><br/>
-      <sub>Disk, torrents, Jellyfin, Plex, Stremio, anime, YouTube, live TV, TMDB, manga — one ranked, playable list.</sub>
+      <sub>Disk, torrents, Jellyfin, Plex, Stremio, anime, YouTube, live TV, TMDB, manga, novels and visual novels — one sourced list with playback, reading, or detail actions.</sub>
     </td>
   </tr>
   <tr>
@@ -275,7 +276,7 @@ XDG-compliant:
 
 | Instead of… | Opal gives you |
 |---|---|
-| **Stremio / Kodi** + a pile of add-ons | one search across every source, a play button on each row |
+| **Stremio / Kodi** + a pile of add-ons | one search across supported, enabled providers, with playback, reading, and detail actions |
 | **an IPTV / live-TV app** | ~40,000 live channels, searchable as you type |
 | **Jellyfin / Plex** web clients | your own media servers, browsed natively |
 | **Tachiyomi / Mihon** stuck on your phone | manga extensions on the desktop — server bundled, self-managed |

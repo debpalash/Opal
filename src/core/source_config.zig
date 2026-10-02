@@ -253,6 +253,28 @@ pub fn get(id: []const u8, field: []const u8) ?[]const u8 {
     return null;
 }
 
+pub const FieldSnapshot = struct {
+    id: [32]u8 = std.mem.zeroes([32]u8),
+    id_len: usize = 0,
+    value: [512]u8 = std.mem.zeroes([512]u8),
+    value_len: usize = 0,
+};
+
+/// Copy installed endpoints while holding the reload lock. Detached requests
+/// retain owned values rather than slices into a table that can be reloaded.
+pub fn copyFields(field: []const u8, out: []FieldSnapshot) usize {
+    mutex.lock();
+    defer mutex.unlock();
+    var count: usize = 0;
+    for (entries[0..entry_count]) |entry| {
+        if (!std.mem.eql(u8, entry.field[0..entry.field_len], field)) continue;
+        if (count == out.len) break;
+        out[count] = .{ .id = entry.id, .id_len = entry.id_len, .value = entry.val, .value_len = entry.val_len };
+        count += 1;
+    }
+    return count;
+}
+
 /// True if ANY source plugin is installed at all. False is the fresh-install /
 /// post-reset state (Opal ships neutral): every torrent/comics/anime engine is
 /// inert, so searches "run" but can't return source hits — surface that in the

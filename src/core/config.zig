@@ -717,23 +717,17 @@ fn applyConfig(key: []const u8, val: []const u8) void {
     } else if (std.mem.eql(u8, key, "abs_connected")) {
         state.app.abs.connected = std.mem.eql(u8, val, "1") and state.app.abs.token_len > 0;
     } else if (std.mem.eql(u8, key, "opds_url")) {
-        if (val.len > 0 and val.len < state.app.opds.server_url.len) {
-            @memcpy(state.app.opds.server_url[0..val.len], val);
-            state.app.opds.server_url_len = val.len;
-        }
-    } else if (std.mem.eql(u8, key, "opds_user")) {
+        @import("../services/opds.zig").setConfiguredServer(val);
+    } else if (std.mem.eql(u8, key, "opds_user") or std.mem.eql(u8, key, "opds_pass")) {
+        var buffer: [128]u8 = undefined;
+        defer @memset(&buffer, 0);
         var restored_len: usize = 0;
-        if (val.len > 0 and loadSecretValue(key, val, state.app.opds.user_buf[0 .. state.app.opds.user_buf.len - 1], &restored_len)) {
-            state.app.opds.user_buf[restored_len] = 0;
-        }
-    } else if (std.mem.eql(u8, key, "opds_pass")) {
-        var restored_len: usize = 0;
-        if (val.len > 0 and loadSecretValue(key, val, state.app.opds.pass_buf[0 .. state.app.opds.pass_buf.len - 1], &restored_len)) {
-            state.app.opds.pass_buf[restored_len] = 0;
+        if (val.len > 0 and loadSecretValue(key, val, buffer[0 .. buffer.len - 1], &restored_len)) {
+            const opds = @import("../services/opds.zig");
+            if (std.mem.eql(u8, key, "opds_user")) opds.setConfiguredUser(buffer[0..restored_len]) else opds.setConfiguredPassword(buffer[0..restored_len]);
         }
     } else if (std.mem.eql(u8, key, "opds_connected")) {
-        // Connected only if a catalog URL was also restored.
-        state.app.opds.connected = std.mem.eql(u8, val, "1") and state.app.opds.server_url_len > 0;
+        @import("../services/opds.zig").setConfiguredConnected(std.mem.eql(u8, val, "1"));
     } else if (std.mem.eql(u8, key, "win_x")) {
         state.app.win_x = std.fmt.parseInt(i32, val, 10) catch 0;
         state.app.win_restore_pending = true;
@@ -852,7 +846,9 @@ fn applyConfig(key: []const u8, val: []const u8) void {
     } else if (std.mem.eql(u8, key, "search_sources")) {
         const resolver = @import("../services/resolver.zig");
         const mask = std.fmt.parseInt(u16, val, 10) catch 0xFF;
-        resolver.source_mask.store(mask, .release);
+        // Legacy "all sources" predates the novel/VNDB search bits. Preserve
+        // custom filters while keeping the all-source preference inclusive.
+        resolver.source_mask.store(if (mask == 4095) resolver.ALL_SOURCE_BITS else mask, .release);
     }
 }
 

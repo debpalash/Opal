@@ -172,6 +172,7 @@ pub const CoverSlot = struct {
     attempted: bool = false,
     failed: bool = false,
     url_hash: u64 = 0,
+    desired_url_hash: u64 = 0,
 
     pub fn reset(self: *CoverSlot) void {
         if (self.fetching) return;
@@ -186,6 +187,7 @@ pub const CoverSlot = struct {
 
 pub fn syncCoverSlot(slot: *CoverSlot, key: []const u8) void {
     const hash = if (key.len > 0) std.hash.Fnv1a_64.hash(key) else 0;
+    slot.desired_url_hash = hash;
     if (slot.url_hash != hash and !slot.fetching) {
         slot.reset();
         slot.url_hash = hash;
@@ -193,6 +195,12 @@ pub fn syncCoverSlot(slot: *CoverSlot, key: []const u8) void {
 }
 
 pub fn pollCoverSlot(slot: *CoverSlot) void {
+    if (slot.url_hash != slot.desired_url_hash) {
+        if (slot.fetching) return;
+        const desired = slot.desired_url_hash;
+        slot.reset();
+        slot.url_hash = desired;
+    }
     _ = poster.uploadIfReady(&slot.pixels, slot.w, slot.h, &slot.tex);
     if (slot.fetching) {
         slot.attempted = true;
@@ -202,15 +210,15 @@ pub fn pollCoverSlot(slot: *CoverSlot) void {
 }
 
 pub fn renderCoverSlot(src: std.builtin.SourceLocation, id_extra: usize, slot: *CoverSlot, expects_art: bool, fallback_icon: []const u8, radius: f32) void {
-    if (slot.tex) |tex| {
+    if (slot.url_hash == slot.desired_url_hash) if (slot.tex) |tex| {
         _ = dvui.image(src, .{ .source = .{ .texture = tex } }, .{
             .id_extra = id_extra,
             .expand = .both,
             .corner_radius = dvui.Rect.all(radius),
         });
         return;
-    }
-    if (expects_art and !slot.failed) {
+    };
+    if (expects_art and (!slot.failed or slot.url_hash != slot.desired_url_hash)) {
         coverSkeleton(src, id_extra, radius);
         return;
     }

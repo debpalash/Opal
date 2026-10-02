@@ -274,9 +274,12 @@ fn fetchCached(kind: pure.CacheKind, id: []const u8, url: []const u8, origin_key
     const key = pure.cacheKey(kind, id, &key_buf);
     const ttl = pure.ttlFor(kind);
     if (key) |k| {
-        if (cacheGet(k, ttl, buf)) |hit| return hit;
+        if (cacheGet(k, ttl, buf)) |hit| {
+            if (pure.validResponse(alloc, hit, kind)) return hit;
+        }
     }
     const body = fetchJson(url, origin_key, rate, buf) orelse return null;
+    if (!pure.validResponse(alloc, body, kind)) return null;
     if (key) |k| cachePut(k, body);
     return body;
 }
