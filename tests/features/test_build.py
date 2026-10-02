@@ -24,6 +24,9 @@ def test_windows_unit_sqlite_dependency():
         "uses: msys2/setup-msys2@v2" in units,
         "msystem: MINGW64" in units,
         "install: mingw-w64-x86_64-sqlite3" in units,
+        "shell: msys2 {0}" in units,
+        'export MINGW_PREFIX="$(cygpath -m /mingw64)"' in units,
+        'test -f "$MINGW_PREFIX/lib/libsqlite3.dll.a"' in units,
         'src/core/sqlite_key_writer.zig' in _src("build.zig"),
     )
     if not all(checks):

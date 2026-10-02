@@ -55,13 +55,21 @@ jobs:
         if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
         with:
-          # Match build.zig's default C:/msys64/mingw64 header/import-library
-          # paths and the DLL directory added to the test executable's PATH.
+          # The action installs under RUNNER_TEMP; the test step exports its
+          # actual native prefix for build.zig's headers, libraries and PATH.
           msystem: MINGW64
           path-type: inherit
           install: mingw-w64-x86_64-sqlite3
       - name: zig build test
+        if: runner.os != 'Windows'
         run: zig build test
+      - name: zig build test (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          export MINGW_PREFIX="$(cygpath -m /mingw64)"
+          test -f "$MINGW_PREFIX/lib/libsqlite3.dll.a"
+          zig build test
 
   # Full app build on macOS arm64 — the primary supported platform.
   # build.zig links against /opt/homebrew, which matches arm64 runners.
