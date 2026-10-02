@@ -1,4 +1,4 @@
-const CACHE = 'opal-shell-v5';
+const CACHE = 'opal-shell-v6';
 const SHELL = [
   '/',
   '/index.html',
@@ -7,6 +7,7 @@ const SHELL = [
   '/styles/app.css',
   '/js/core.js',
   '/js/now-playing.js',
+  '/js/search.js',
   '/js/catalog.js',
   '/js/playback.js',
   '/js/integrations.js',

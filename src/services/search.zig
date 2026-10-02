@@ -267,8 +267,6 @@ pub fn flushPendingTorrentOpen() void {
 }
 
 // Universal-search result sort mode (Relevance / Quality / Seeds).
-const UniSort = enum(usize) { relevance = 0, quality = 1, seeds = 2 };
-var uni_sort: UniSort = .relevance;
 
 // Each search gets a monotonically-increasing generation. A worker only
 // touches shared state (search_results, is_searching, search_thread) while it
@@ -998,6 +996,8 @@ pub fn shutdown() void {
     if (search_thread) |t| t.join();
     search_thread = null;
     is_searching.store(false, .release);
+    if (view_cache.rows) |rows| @import("../core/alloc.zig").allocator.free(rows);
+    view_cache.rows = null;
 }
 
 pub fn triggerSearch(query_text: []const u8) void {
@@ -1044,754 +1044,233 @@ pub fn triggerSearch(query_text: []const u8) void {
     search_page = 0;
 }
 
-pub fn renderSearchContent() void {
-    const resolver = @import("resolver.zig");
+const search_view = @import("search_view_pure.zig");
+var view_filters: search_view.Filters = .{};
+var view_sort: search_view.Sort = .relevance;
+var filters_open = false;
+var sources_open = false;
+var view_dirty = true;
+var result_scroll: dvui.ScrollInfo = .{};
+var result_keyboard_layout = false;
 
-    // ── ONE compact toolbar: mode segment · input pill · live source status ──
-    // Previously FOUR stacked rows (mode toggle + letter dots, the input, a
-    // "Searching …" header, and a chip row) — vertical bloat the results paid
-    // for. Responsive: the input pill expands between the fixed mode segment
-    // and the icon-only status cluster, shrinking to a 160px floor on narrow
-    // windows.
+/// One search entry, shared with the shell: opening targets never depend on an
+/// existing player and query text is owned before any visible input is cleared.
+fn submitSearchInput(raw: []const u8) void {
+    const routing = @import("browser_pure.zig");
+    var input: [1024]u8 = undefined;
+    const text = std.mem.trim(u8, raw, " \t\r\n");
+    const n = @min(text.len, input.len);
+    @memcpy(input[0..n], text[0..n]);
+    const copied = input[0..n];
+    switch (routing.classifyOmnibox(copied)) {
+        .empty => {},
+        .open => {
+            var target_buf: [2048]u8 = undefined;
+            const target = routing.resolveOpenTarget(copied, &target_buf);
+            @import("browser.zig").loadContent(target);
+        },
+        .memory => memorySearch(std.mem.trimStart(u8, copied[1..], " \t")),
+        .assistant, .search => if (memory_mode) memorySearch(copied) else submitQuery(copied),
+    }
+}
+
+pub fn renderSearchContent() void {
+    state.app.universal_search = true; // compatibility with saved sessions/API
     {
         var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
-            .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
             .background = true,
             .color_fill = theme.colors.bg_surface,
+            .padding = .{ .x = theme.spacing.sm, .y = 4, .w = theme.spacing.sm, .h = 4 },
         });
         defer bar.deinit();
-
-        const uni_active = state.app.universal_search;
-        // Mode pills WITH icons — same pill grammar as the source filters.
-        {
-            var seg = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .background = true,
-                .color_fill = dvui.Color{ .r = 22, .g = 22, .b = 32, .a = 255 },
-                .color_border = dvui.Color{ .r = 42, .g = 42, .b = 58, .a = 200 },
-                .border = dvui.Rect.all(1),
-                .corner_radius = dvui.Rect.all(6),
-                .padding = dvui.Rect.all(2),
-                .gravity_y = 0.5,
-                .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
-            });
-            defer seg.deinit();
-
-            const Mode = struct { icon: []const u8, name: []const u8, universal: bool };
-            const modes = [_]Mode{
-                .{ .icon = icons.tvg.lucide.globe, .name = "Universal", .universal = true },
-                .{ .icon = icons.tvg.lucide.magnet, .name = "Torrent", .universal = false },
-            };
-            for (modes, 0..) |m, mi| {
-                const active = uni_active == m.universal;
-                var pill = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                    .id_extra = mi + 8000,
-                    .background = true,
-                    .color_fill = if (active) theme.colors.accent else theme.transparent,
-                    .corner_radius = dvui.Rect.all(4),
-                    .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
-                    .gravity_y = 0.5,
-                });
-                var hovered = false;
-                const clicked = dvui.clicked(pill.data(), .{ .hovered = &hovered });
-                if (hovered and !active) pill.data().options.color_fill = theme.colors.bg_hover;
-                pill.drawBackground();
-                const fg = if (active) theme.colors.text_on_accent else theme.colors.text_secondary;
-                dvui.icon(@src(), m.name, m.icon, .{}, .{
-                    .id_extra = mi + 8000,
-                    .color_text = fg,
-                    .min_size_content = .{ .w = 13, .h = 13 },
-                    .gravity_y = 0.5,
-                    .margin = .{ .x = 0, .y = 0, .w = 5, .h = 0 },
-                });
-                _ = dvui.label(@src(), "{s}", .{m.name}, .{
-                    .id_extra = mi + 8000,
-                    .color_text = fg,
-                    .gravity_y = 0.5,
-                });
-                pill.deinit();
-                if (clicked) state.app.universal_search = m.universal;
-            }
-        }
-
-        const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
-        // Input pill — FIXED compact width (360px, was full remaining width)
-        // so the source-filter pills get the room; a spacer after it absorbs
-        // the leftover width and keeps the pills right-aligned.
         var input_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
             .background = true,
-            .color_fill = dvui.Color{ .r = 18, .g = 18, .b = 26, .a = 255 },
-            .corner_radius = dvui.Rect.all(8),
+            .color_fill = theme.colors.bg_elevated,
+            .color_border = theme.colors.border_subtle,
             .border = dvui.Rect.all(1),
-            .color_border = dvui.Color{ .r = 40, .g = 40, .b = 55, .a = 180 },
-            .padding = .{ .x = 2, .y = 1, .w = 2, .h = 1 },
-            .min_size_content = .{ .w = 360, .h = 0 },
+            .corner_radius = theme.dims.rad_sm,
+            .max_size_content = .{ .w = 0, .h = 36 },
+            .min_size_content = .{ .w = 0, .h = 36 },
             .gravity_y = 0.5,
         });
-
-        var te_opts = theme.optInput();
-        te_opts.color_fill = transparent;
-        te_opts.color_border = transparent;
-        te_opts.border = dvui.Rect.all(0);
-        te_opts.expand = .horizontal;
-        te_opts.padding = .{ .x = 6, .y = 3, .w = 4, .h = 3 };
-
-        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &search_buf }, .placeholder = "Search movies, shows, torrents, URLs…" }, te_opts);
-        const enter_pressed = te.enter_pressed;
-        const query_text = te.textGet();
+        var opts = theme.optInput();
+        opts.color_fill = theme.transparent;
+        opts.color_border = theme.transparent;
+        opts.border = dvui.Rect.all(0);
+        opts.expand = .horizontal;
+        opts.max_size_content = .{ .w = 0, .h = 36 };
+        opts.padding = .{ .x = theme.spacing.sm, .y = 5, .w = 0, .h = 5 };
+        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &search_buf }, .placeholder = "Search media, paste a link, or ask ? from memory" }, opts);
+        const enter = te.enter_pressed;
+        var submitted: [1024]u8 = undefined;
+        const len = @min(te.textGet().len, submitted.len);
+        @memcpy(submitted[0..len], te.textGet()[0..len]);
         te.deinit();
-
-        const clicked_search = dvui.buttonIcon(@src(), "", icons.tvg.lucide.search, .{}, .{}, .{
-            .color_fill = transparent,
+        const clicked = dvui.buttonIcon(@src(), "Search", icons.tvg.lucide.search, .{}, .{}, .{
+            .color_fill = theme.transparent,
             .color_text = theme.colors.accent,
             .border = dvui.Rect.all(0),
             .gravity_y = 0.5,
-            .padding = .{ .x = 5, .y = 4, .w = 3, .h = 4 },
+            .padding = dvui.Rect.all(theme.spacing.xs),
         });
-        if (clicked_search or enter_pressed) {
-            // ── Intercept streamlink/direct URLs ──
-            const sl = @import("streamlink.zig");
-            const is_url = std.mem.startsWith(u8, query_text, "http://") or std.mem.startsWith(u8, query_text, "https://");
-            if (is_url and state.app.players.items.len > 0) {
-                const pi = @min(state.app.active_player_idx, state.app.players.items.len - 1);
-                var url_z: [1024]u8 = std.mem.zeroes([1024]u8);
-                const ulen = @min(query_text.len, url_z.len - 1);
-                @memcpy(url_z[0..ulen], query_text[0..ulen]);
-                state.app.players.items[pi].load_file(@ptrCast(&url_z));
-                if (sl.isStreamlinkUrl(query_text)) {
-                    state.showToast("Opening live stream...");
-                } else {
-                    state.showToast("Loading URL...");
-                }
-            } else if (memory_mode) {
-                // Conversational "?"-search: route the raw phrase through the
-                // taste/scene seed path (degrades silently to unified search).
-                memorySearch(query_text);
-            } else if (state.app.universal_search) {
-                resolver.resolve(query_text, "auto");
-            } else {
-                triggerSearch(query_text);
-            }
-        }
-
-        // Clear button — inline inside pill
-        const has_text = std.mem.indexOfScalar(u8, &search_buf, 0) != @as(?usize, 0);
-        if (has_text or search_results.items.len > 0 or resolver.resultCount() > 0) {
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.x, .{}, .{}, .{
-                .color_fill = transparent,
-                .color_text = theme.colors.text_secondary,
-                .border = dvui.Rect.all(0),
-                .gravity_y = 0.5,
-                .padding = .{ .x = 3, .y = 4, .w = 5, .h = 4 },
-            })) {
-                @memset(&search_buf, 0);
-                clearResults();
-                resolver.clearResults();
-            }
+        if ((len > 0 or view_cache.query_len > 0 or view_cache.loaded > 0) and searchButton(91001, "Clear", false)) {
+            @memset(&search_buf, 0);
+            clearResults();
+            @import("resolver.zig").clearResults();
+            view_dirty = true;
         }
         input_row.deinit();
-
-        // Spacer absorbs the width freed by the fixed input, pushing the
-        // filter pills to the right edge.
-        {
-            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
-            sp.deinit();
-        }
-
-        // Source FILTER pills (click to include/exclude; live status tint
-        // while resolving) + spinner/count — inline in the toolbar.
-        if (uni_active) renderSourceStatusCluster();
+        if (enter or clicked) submitSearchInput(submitted[0..len]);
+        var label_buf: [48]u8 = undefined;
+        const count = search_view.activeCount(view_filters);
+        const label = if (count > 0) std.fmt.bufPrint(&label_buf, "Filters ({d})", .{count}) catch "Filters" else "Filters";
+        if (searchButton(91002, label, filters_open)) filters_open = !filters_open;
     }
+    refreshSearchView();
+    if (filters_open) renderSearchFilters();
+    renderActiveSearchFilters();
+    renderUniversalResults();
+}
 
-    // ── Universal results (if in universal mode) ──
-    if (state.app.universal_search) {
-        renderUniversalResults();
-        return;
-    }
+fn searchButton(id: usize, label: []const u8, active: bool) bool {
+    return dvui.button(@src(), label, .{}, .{
+        .id_extra = id,
+        .color_fill = if (active) theme.colors.bg_elevated else theme.transparent,
+        .color_fill_hover = theme.colors.bg_hover,
+        .color_fill_press = theme.colors.bg_elevated,
+        .color_text = if (active) theme.colors.accent else theme.colors.text_secondary,
+        .border = dvui.Rect.all(0),
+        .corner_radius = theme.dims.rad_sm,
+        .padding = .{ .x = theme.spacing.sm, .y = 6, .w = theme.spacing.sm, .h = 6 },
+        .gravity_y = 0.5,
+    });
+}
 
-    // ── Filters row (Sort + NSFW toggle) ──
-    {
-        var filter_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .padding = .{ .x = 0, .y = 4, .w = 0, .h = 8 },
-            .background = true,
-            .color_fill = theme.colors.bg_surface,
-        });
-        defer filter_row.deinit();
-
-        _ = dvui.label(@src(), "Sort: ", .{}, .{ .gravity_y = 0.5, .color_text = theme.colors.text_secondary });
-
-        inline for (std.meta.fields(SortType)) |field| {
-            const is_active = current_sort == @field(SortType, field.name);
-            const color = if (is_active) theme.colors.accent else theme.colors.bg_elevated;
-            if (dvui.button(@src(), field.name, .{}, .{ .id_extra = field.value, .color_fill = color, .color_text = theme.colors.text_primary, .corner_radius = theme.dims.rad_sm })) {
-                current_sort = @enumFromInt(field.value);
-                search_results_mutex.lock();
-                std.sort.block(SearchResult, search_results.items, {}, sortResults);
-                search_results_mutex.unlock();
-                search_page = 0;
-            }
-        }
-
-        {
-            var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
-            spacer.deinit();
-        }
-
-        // Min seed filter toggle
-        {
-            var seed_label_buf: [16]u8 = undefined;
-            const seed_lbl = std.fmt.bufPrintZ(&seed_label_buf, "{d}+ seeds", .{min_seed_filter}) catch "0+";
-            if (dvui.button(@src(), seed_lbl, .{}, .{
-                .id_extra = 8900,
-                .color_fill = if (min_seed_filter > 0) dvui.Color{ .r = 40, .g = 80, .b = 50, .a = 255 } else theme.colors.bg_elevated,
-                .color_text = if (min_seed_filter > 0) dvui.Color{ .r = 80, .g = 220, .b = 120, .a = 255 } else theme.colors.text_secondary,
-                .corner_radius = theme.dims.rad_sm,
-                .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
-                .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
-            })) {
-                // Cycle through thresholds
-                var next_idx: usize = 0;
-                for (seed_thresholds, 0..) |t, ti| {
-                    if (t == min_seed_filter) {
-                        next_idx = ti + 1;
-                        break;
-                    }
-                }
-                if (next_idx >= seed_thresholds.len) next_idx = 0;
-                min_seed_filter = seed_thresholds[next_idx];
-            }
-        }
-
-        // NSFW is controlled from Settings only (Settings › NSFW Filter) — no
-        // per-tab toggle here; the result list still honors the global flag.
-
-        // Engine filter selector
-        if (dvui.button(@src(), engine_filter.label(), .{}, .{
-            .id_extra = 9000,
-            .color_fill = if (engine_filter != .all) theme.colors.accent else theme.colors.bg_elevated,
-            .color_text = if (engine_filter != .all) dvui.Color{ .r = 10, .g = 10, .b = 16, .a = 255 } else theme.colors.text_secondary,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
-        })) {
-            // Cycle to next engine
-            const cur = @intFromEnum(engine_filter);
-            engine_filter = @enumFromInt(if (cur >= 12) 0 else cur + 1);
+/// Explicitly themed popup, avoiding the default dropdown menu palette.
+fn searchSelect(id: usize, labels: []const []const u8, selected: usize) ?usize {
+    var menu = dvui.menu(@src(), .horizontal, .{ .id_extra = id, .color_fill = theme.transparent, .gravity_y = 0.5 });
+    defer menu.deinit();
+    if (dvui.menuItemLabel(@src(), labels[@min(selected, labels.len - 1)], .{ .submenu = true }, .{
+        .id_extra = id,
+        .background = true,
+        .color_fill = theme.colors.bg_elevated,
+        .color_fill_hover = theme.colors.bg_hover,
+        .color_fill_press = theme.colors.bg_surface,
+        .color_text = theme.colors.text_primary,
+        .corner_radius = theme.dims.rad_sm,
+        .padding = .{ .x = theme.spacing.sm, .y = 6, .w = theme.spacing.sm, .h = 6 },
+    })) |rect| {
+        var popup = dvui.floatingMenu(@src(), .{ .from = rect }, .{ .id_extra = id, .color_fill = theme.colors.bg_surface, .color_border = theme.colors.border_subtle });
+        defer popup.deinit();
+        var choices = dvui.menu(@src(), .vertical, .{ .id_extra = id, .background = true, .color_fill = theme.colors.bg_surface, .color_border = theme.colors.border_subtle, .border = dvui.Rect.all(1) });
+        defer choices.deinit();
+        for (labels, 0..) |label, i| {
+            if (dvui.menuItemLabel(@src(), label, .{}, .{ .id_extra = i, .expand = .horizontal, .color_text = if (i == selected) theme.colors.accent else theme.colors.text_primary, .color_fill_hover = theme.colors.bg_hover })) |_| return i;
         }
     }
+    return null;
+}
 
-    search_results_mutex.lock();
-    defer search_results_mutex.unlock();
+const CONTENT_LABELS = [_][]const u8{ "All content", "Video", "Movies", "Shows", "Anime", "Comics", "Books", "Music", "Podcasts", "Radio", "Live TV", "Visual novels" };
+const AVAILABILITY_LABELS = [_][]const u8{ "All availability", "Playable", "Torrents", "Library" };
+const SORT_LABELS = [_][]const u8{ "Sort: relevance", "Sort: quality", "Sort: seeds", "Sort: size", "Sort: peers", "Sort: health" };
+const QUALITY_LABELS = [_][]const u8{ "Any quality", "480p+", "720p+", "1080p+", "4K" };
+const SEED_VALUES = [_]u16{ 0, 1, 5, 10, 20, 50, 100 };
+const SEED_LABELS = [_][]const u8{ "Any seeds", "1+ seeds", "5+ seeds", "10+ seeds", "20+ seeds", "50+ seeds", "100+ seeds" };
+const SIZE_LABELS = [_][]const u8{ "Any size", "Under 1 GB", "1–5 GB", "5–20 GB", "20 GB+" };
+var size_choice: usize = 0;
 
-    // Current query (shown in the status line so it's clear what was searched).
-    const qlen0 = std.mem.indexOfScalar(u8, &search_buf, 0) orelse search_buf.len;
-    const cur_query = safeUtf8(search_buf[0..qlen0]);
-
-    // ── Status line ──
-    if (is_searching.load(.acquire)) {
-        var live_buf: [320]u8 = undefined;
-        const live_lbl = std.fmt.bufPrintZ(&live_buf, "Searching “{s}” … ({d} found)", .{ cur_query, search_results.items.len }) catch "Searching…";
-        _ = dvui.label(@src(), "{s}", .{live_lbl}, .{
-            .color_text = theme.colors.warning,
-            .padding = .{ .x = 0, .y = 2, .w = 0, .h = 4 },
-        });
-    } else if (search_results.items.len > 0) {
-        // Count visible results (after filters). Memoized on
-        // (results.len, min_seed_filter, nsfw_filter) — the parseInt-per-result
-        // scan is pointless to repeat every repaint when nothing changed.
-        // UI-thread-only statics; no atomics needed.
-        const Vc = struct {
-            var count: usize = 0;
-            var key_len: usize = std.math.maxInt(usize);
-            var key_seed: i64 = std.math.minInt(i64);
-            var key_nsfw: bool = false;
+fn renderSearchFilters() void {
+    var panel = dvui.flexbox(@src(), .{}, .{ .expand = .horizontal, .background = true, .color_fill = theme.colors.bg_surface, .padding = dvui.Rect.all(theme.spacing.sm) });
+    if (searchSelect(91100, &CONTENT_LABELS, @intFromEnum(view_filters.content))) |v| {
+        view_filters.content = @enumFromInt(v);
+        view_dirty = true;
+    }
+    if (searchSelect(91101, &AVAILABILITY_LABELS, @intFromEnum(view_filters.availability))) |v| {
+        view_filters.availability = @enumFromInt(v);
+        view_dirty = true;
+    }
+    if (searchSelect(91102, &QUALITY_LABELS, view_filters.min_quality)) |v| {
+        view_filters.min_quality = @intCast(v);
+        view_dirty = true;
+    }
+    var seeds_choice: usize = 0;
+    for (SEED_VALUES, 0..) |value, i| if (value == view_filters.min_seeds) {
+        seeds_choice = i;
+    };
+    if (searchSelect(91103, &SEED_LABELS, seeds_choice)) |v| {
+        view_filters.min_seeds = SEED_VALUES[v];
+        view_dirty = true;
+    }
+    if (searchSelect(91104, &SIZE_LABELS, size_choice)) |v| {
+        size_choice = v;
+        const gb: u64 = 1024 * 1024 * 1024;
+        view_filters.min_size_bytes = switch (v) {
+            2 => gb,
+            3 => 5 * gb,
+            4 => 20 * gb,
+            else => 0,
         };
-        if (Vc.key_len != search_results.items.len or
-            Vc.key_seed != min_seed_filter or
-            Vc.key_nsfw != state.app.nsfw_filter_enabled)
-        {
-            var vc: usize = 0;
-            for (search_results.items) |r| {
-                if (state.app.nsfw_filter_enabled and r.is_nsfw) continue;
-                const s_num_chk = std.fmt.parseInt(i64, r.seeds, 10) catch 0;
-                if (s_num_chk < min_seed_filter) continue;
-                vc += 1;
-            }
-            Vc.count = vc;
-            Vc.key_len = search_results.items.len;
-            Vc.key_seed = min_seed_filter;
-            Vc.key_nsfw = state.app.nsfw_filter_enabled;
-        }
-        const visible_count = Vc.count;
-        var count_buf: [320]u8 = undefined;
-        const count_lbl = std.fmt.bufPrintZ(&count_buf, "{d} results for “{s}” ({d} total)", .{ visible_count, cur_query, search_results.items.len }) catch "results";
-        _ = dvui.label(@src(), "{s}", .{count_lbl}, .{
-            .color_text = dvui.Color{ .r = 120, .g = 130, .b = 150, .a = 255 },
-            .padding = .{ .x = 0, .y = 2, .w = 0, .h = 4 },
-        });
+        view_filters.max_size_bytes = switch (v) {
+            1 => gb - 1,
+            2 => 5 * gb - 1,
+            3 => 20 * gb - 1,
+            else => 0,
+        };
+        view_dirty = true;
     }
+    renderProviderFacet();
+    panel.deinit();
+    if (searchButton(91301, "Sources", sources_open)) sources_open = !sources_open;
+    if (sources_open) renderSearchSources();
+}
 
-    // ── Show search history when no results ──
-    if (search_results.items.len == 0 and !is_searching.load(.acquire) and state.app.search_history_count > 0) {
-        // Header
-        {
-            var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .expand = .horizontal,
-                .padding = .{ .x = 12, .y = 10, .w = 12, .h = 4 },
-            });
-            defer hdr.deinit();
-            _ = dvui.icon(@src(), "", icons.tvg.lucide.eye, .{}, .{
-                .color_text = theme.colors.text_secondary,
-                .min_size_content = .{ .w = 14, .h = 14 },
-                .gravity_y = 0.5,
-            });
-            _ = dvui.label(@src(), " Recent Searches", .{}, .{
-                .color_text = theme.colors.text_secondary,
-                .gravity_y = 0.5,
-            });
-        }
+fn filterChip(id: usize, text: []const u8) bool {
+    var label: [120]u8 = undefined;
+    return searchButton(id, std.fmt.bufPrint(&label, "{s} ×", .{text}) catch text, true);
+}
 
-        var scroll_hist = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
-        defer scroll_hist.deinit();
-
-        var hi: usize = 0;
-        while (hi < state.app.search_history_count) : (hi += 1) {
-            const q = state.app.search_history_buf[hi][0..state.app.search_history_len[hi]];
-            var hist_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                .id_extra = hi,
-                .expand = .horizontal,
-                .background = true,
-                .color_fill = theme.colors.bg_surface,
-                .color_border = theme.colors.border_subtle,
-                .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-                .padding = .{ .x = 12, .y = 8, .w = 8, .h = 8 },
-                .margin = .{ .x = 6, .y = 0, .w = 6, .h = 2 },
-                .corner_radius = theme.dims.rad_sm,
-            });
-            defer hist_row.deinit();
-
-            // Clock icon
-            _ = dvui.icon(@src(), "", icons.tvg.lucide.search, .{}, .{
-                .id_extra = hi + 1000,
-                .color_text = theme.colors.text_secondary,
-                .min_size_content = .{ .w = 14, .h = 14 },
-                .gravity_y = 0.5,
-            });
-
-            // Query text button (clickable to re-search)
-            if (dvui.button(@src(), q, .{}, .{
-                .id_extra = hi,
-                .expand = .horizontal,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                .color_text = theme.colors.text_primary,
-                .corner_radius = theme.dims.rad_sm,
-                .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
-            })) {
-                @memset(&search_buf, 0);
-                @memcpy(search_buf[0..q.len], q);
-                triggerSearch(q);
-            }
-
-            // Delete button
-            if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.x, .{}, .{}, .{
-                .id_extra = hi,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                .color_text = theme.colors.text_secondary,
-            })) {
-                history.removeSearchHistory(hi);
-                return;
-            }
-        }
-        return;
+fn renderActiveSearchFilters() void {
+    if (search_view.activeCount(view_filters) == 0) return;
+    var chips = dvui.flexbox(@src(), .{}, .{ .expand = .horizontal, .padding = .{ .x = theme.spacing.sm, .y = 2, .w = theme.spacing.sm, .h = 2 } });
+    defer chips.deinit();
+    if (view_filters.content != .all and filterChip(91200, CONTENT_LABELS[@intFromEnum(view_filters.content)])) {
+        view_filters.content = .all;
+        view_dirty = true;
     }
-
-    // ── No-results empty state ──
-    // When the user has a query in the box but the result list is empty
-    // and nothing is in flight, show the canonical "no matches" surface
-    // rather than a blank scroll area.
-    if (search_results.items.len == 0 and !is_searching.load(.acquire)) {
-        const buf_has_text = std.mem.indexOfScalar(u8, &search_buf, 0) != @as(?usize, 0);
-        if (buf_has_text) {
-            components.emptyState(
-                icons.tvg.lucide.@"search-x",
-                "No matches",
-                "Try a broader query or check your spelling.",
-            );
-            return;
+    if (view_filters.availability != .all and filterChip(91201, AVAILABILITY_LABELS[@intFromEnum(view_filters.availability)])) {
+        view_filters.availability = .all;
+        view_dirty = true;
+    }
+    if (view_filters.min_quality > 0 and filterChip(91202, QUALITY_LABELS[view_filters.min_quality])) {
+        view_filters.min_quality = 0;
+        view_dirty = true;
+    }
+    if (view_filters.min_seeds > 0) {
+        var label: [40]u8 = undefined;
+        if (filterChip(91203, std.fmt.bufPrint(&label, "{d}+ seeds", .{view_filters.min_seeds}) catch "Seeds")) {
+            view_filters.min_seeds = 0;
+            view_dirty = true;
         }
     }
-
-    // ── Pagination Controls (inline with search bar) ──
-    const search_len = search_results.items.len;
-    const total_pages = if (search_len == 0) 1 else (search_len + SEARCH_ITEMS_PER_PAGE - 1) / SEARCH_ITEMS_PER_PAGE;
-    if (total_pages > 1) {
-        var page_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .padding = .{ .x = 8, .y = 2, .w = 8, .h = 4 },
-            .background = true,
-            .color_fill = theme.colors.bg_surface,
-        });
-        defer page_row.deinit();
-
-        // "Searching..." or result count on the left
-        if (is_searching.load(.acquire)) {
-            _ = dvui.label(@src(), "Searching…", .{}, .{
-                .color_text = theme.colors.warning,
-                .gravity_y = 0.5,
-            });
-        }
-
-        // Spacer pushes pagination to the right
-        {
-            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
-            sp.deinit();
-        }
-
-        // Prev button
-        if (dvui.buttonIcon(@src(), "prev", icons.tvg.lucide.@"chevron-left", .{}, .{}, .{
-            .color_fill = if (search_page > 0) theme.colors.bg_surface else theme.colors.bg_elevated,
-            .color_text = if (search_page > 0) theme.colors.accent else theme.colors.text_secondary,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = dvui.Rect.all(5),
-            .border = dvui.Rect.all(1),
-            .color_border = theme.colors.border_subtle,
-        })) {
-            if (search_page > 0) search_page -= 1;
-        }
-
-        // Page indicator
-        var page_label: [32]u8 = undefined;
-        const page_str = std.fmt.bufPrintZ(&page_label, "{d}/{d}", .{ search_page + 1, total_pages }) catch "?";
-        _ = dvui.label(@src(), "{s}", .{page_str}, .{
-            .gravity_y = 0.5,
-            .color_text = theme.colors.text_secondary,
-            .padding = .{ .x = 6, .y = 0, .w = 6, .h = 0 },
-        });
-
-        // Next button
-        if (dvui.buttonIcon(@src(), "next", icons.tvg.lucide.@"chevron-right", .{}, .{}, .{
-            .color_fill = if (search_page < total_pages - 1) theme.colors.bg_surface else theme.colors.bg_elevated,
-            .color_text = if (search_page < total_pages - 1) theme.colors.accent else theme.colors.text_secondary,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = dvui.Rect.all(5),
-            .border = dvui.Rect.all(1),
-            .color_border = theme.colors.border_subtle,
-        })) {
-            if (search_page < total_pages - 1) search_page += 1;
-        }
+    if (size_choice > 0 and filterChip(91204, SIZE_LABELS[size_choice])) {
+        size_choice = 0;
+        view_filters.min_size_bytes = 0;
+        view_filters.max_size_bytes = 0;
+        view_dirty = true;
     }
-
-    // ── Scrollable results list ──
-    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
-    defer scroll.deinit();
-
-    const start_idx = search_page * SEARCH_ITEMS_PER_PAGE;
-    const end_idx = @min(start_idx + SEARCH_ITEMS_PER_PAGE, search_len);
-    if (start_idx < search_len) {
-        for (search_results.items[start_idx..end_idx], start_idx..) |r, idx| {
-            // Skip NSFW when filter is on
-            if (state.app.nsfw_filter_enabled and r.is_nsfw) continue;
-            // Skip below min seed threshold
-            const s_num_filter = std.fmt.parseInt(i64, r.seeds, 10) catch 0;
-            if (s_num_filter < min_seed_filter) continue;
-
-            // Scam heuristics — the torrent tab has real byte sizes, so the
-            // implausible-size checks engage here too. Block disables
-            // play/queue on this card (copy actions stay available).
-            const risk = @import("torrent_risk_pure.zig").assess(
-                r.name,
-                std.fmt.parseFloat(f64, r.size) catch 0.0,
-            );
-
-            // ── Card container ──
-            var row = dvui.box(@src(), .{ .dir = .vertical }, .{
-                .id_extra = idx,
-                .expand = .horizontal,
-                .background = true,
-                .color_fill = theme.colors.bg_surface,
-                .color_border = if (r.is_nsfw or risk.risk == .block) theme.colors.danger else theme.colors.border_subtle,
-                .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-                .padding = .{ .x = 10, .y = 8, .w = 10, .h = 8 },
-            });
-            defer row.deinit();
-
-            // ── Row 1: Title ──
-            _ = dvui.label(@src(), "{s}", .{safeUtf8(r.name)}, .{
-                .id_extra = idx,
-                .expand = .horizontal,
-                .color_text = if (r.is_nsfw) theme.colors.warning else theme.colors.text_primary,
-            });
-
-            // ── Row 1a: Scam/caution flag with the reason spelled out ──
-            if (risk.risk != .ok) {
-                var risk_buf: [200]u8 = undefined;
-                const risk_lbl = std.fmt.bufPrint(&risk_buf, "{s} — {s}", .{
-                    if (risk.risk == .block) "Scam risk, playback disabled" else "Caution",
-                    risk.reason,
-                }) catch "Scam risk";
-                _ = dvui.label(@src(), "{s}", .{risk_lbl}, .{
-                    .id_extra = idx + 85000,
-                    .color_text = if (risk.risk == .block) theme.colors.danger else theme.colors.warning,
-                    .margin = .{ .x = 0, .y = 1, .w = 0, .h = 2 },
-                });
-            }
-
-            // ── Row 1b: Quality badge (if detected) ──
-            {
-                const quality = detectQuality(r.name);
-                if (quality > 0) {
-                    const q_text: []const u8 = switch (quality) {
-                        4 => "4K",
-                        3 => "1080p",
-                        2 => "720p",
-                        1 => "480p",
-                        else => "",
-                    };
-                    const q_color = switch (quality) {
-                        4 => dvui.Color{ .r = 255, .g = 215, .b = 0, .a = 255 },
-                        3 => dvui.Color{ .r = 100, .g = 200, .b = 255, .a = 255 },
-                        2 => dvui.Color{ .r = 180, .g = 200, .b = 140, .a = 255 },
-                        else => theme.colors.text_secondary,
-                    };
-                    _ = dvui.label(@src(), "{s}", .{q_text}, .{
-                        .id_extra = idx + 80000,
-                        .color_text = q_color,
-                        .margin = .{ .x = 0, .y = 1, .w = 0, .h = 2 },
-                    });
-                }
-            }
-
-            // ── Row 2: Meta chips ──
-            {
-                var meta = dvui.box(@src(), .{ .dir = .horizontal }, .{
-                    .id_extra = idx,
-                    .expand = .horizontal,
-                    .padding = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
-                });
-                defer meta.deinit();
-
-                const size_bytes_f = std.fmt.parseFloat(f64, r.size) catch 0.0;
-                const s_num = std.fmt.parseInt(i64, r.seeds, 10) catch 0;
-                const l_num = std.fmt.parseInt(i64, r.leech, 10) catch 0;
-
-                // Health color by seed count
-                const h_color = if (s_num >= 50) dvui.Color{ .r = 40, .g = 200, .b = 100, .a = 255 } else if (s_num >= 10) dvui.Color{ .r = 120, .g = 200, .b = 80, .a = 255 } else if (s_num >= 2) dvui.Color{ .r = 220, .g = 180, .b = 50, .a = 255 } else dvui.Color{ .r = 220, .g = 60, .b = 60, .a = 255 };
-
-                // Health dot
-                _ = dvui.label(@src(), "●", .{}, .{
-                    .id_extra = idx,
-                    .color_text = h_color,
-                    .gravity_y = 0.5,
-                    .padding = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
-                });
-
-                // Seeds (green)
-                _ = dvui.label(@src(), "{d}", .{s_num}, .{
-                    .id_extra = idx,
-                    .color_text = dvui.Color{ .r = 80, .g = 200, .b = 120, .a = 255 },
-                    .gravity_y = 0.5,
-                });
-
-                // Separator
-                _ = dvui.label(@src(), " · ", .{}, .{
-                    .id_extra = idx,
-                    .color_text = theme.colors.text_secondary,
-                    .gravity_y = 0.5,
-                });
-
-                // Leechers (red-ish)
-                _ = dvui.label(@src(), "L:{d}", .{l_num}, .{
-                    .id_extra = idx,
-                    .color_text = dvui.Color{ .r = 200, .g = 100, .b = 80, .a = 255 },
-                    .gravity_y = 0.5,
-                });
-
-                // Separator
-                _ = dvui.label(@src(), " · ", .{}, .{
-                    .id_extra = idx + 10000,
-                    .color_text = theme.colors.text_secondary,
-                    .gravity_y = 0.5,
-                });
-
-                // Size (formatted as GB/MB)
-                var size_buf: [24]u8 = undefined;
-                const size_str = if (size_bytes_f >= 1073741824.0)
-                    std.fmt.bufPrintZ(&size_buf, "{d:.1} GB", .{size_bytes_f / 1073741824.0}) catch "?"
-                else if (size_bytes_f >= 1048576.0)
-                    std.fmt.bufPrintZ(&size_buf, "{d:.0} MB", .{size_bytes_f / 1048576.0}) catch "?"
-                else if (size_bytes_f >= 1024.0)
-                    std.fmt.bufPrintZ(&size_buf, "{d:.0} KB", .{size_bytes_f / 1024.0}) catch "?"
-                else
-                    std.fmt.bufPrintZ(&size_buf, "{d:.0} B", .{size_bytes_f}) catch "?";
-
-                _ = dvui.label(@src(), "{s}", .{size_str}, .{
-                    .id_extra = idx,
-                    .color_text = dvui.Color{ .r = 160, .g = 170, .b = 190, .a = 255 },
-                    .gravity_y = 0.5,
-                });
-
-                // Spacer
-                {
-                    var sp = dvui.box(@src(), .{}, .{ .id_extra = idx, .expand = .horizontal });
-                    sp.deinit();
-                }
-
-                // Engine name badge (color-coded)
-                var eng_buf: [32]u8 = undefined;
-                const eng_name = extractEngineName(r.engine, &eng_buf);
-                const eng_color = engineColor(eng_name);
-                _ = dvui.label(@src(), "{s}", .{eng_name}, .{
-                    .id_extra = idx,
-                    .color_text = eng_color,
-                    .gravity_y = 0.5,
-                    .padding = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
-                });
-
-                // Copy magnet button
-                if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.clipboard, .{}, .{}, .{
-                    .id_extra = idx + 90000,
-                    .color_fill = dvui.Color{ .r = 30, .g = 30, .b = 45, .a = 255 },
-                    .color_text = theme.colors.text_secondary,
-                    .corner_radius = theme.dims.rad_sm,
-                    .padding = dvui.Rect.all(4),
-                    .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
-                    .min_size_content = .{ .w = 13, .h = 13 },
-                    .gravity_y = 0.5,
-                })) {
-                    dvui.clipboardTextSet(r.link);
-                    state.showToast("Magnet link copied");
-                }
-
-                // Add to queue button
-                if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.plus, .{}, .{}, .{
-                    .id_extra = idx + 70000,
-                    .color_fill = dvui.Color{ .r = 30, .g = 35, .b = 50, .a = 255 },
-                    .color_text = dvui.Color{ .r = 160, .g = 170, .b = 200, .a = 255 },
-                    .corner_radius = theme.dims.rad_sm,
-                    .padding = dvui.Rect.all(4),
-                    .margin = .{ .x = 0, .y = 0, .w = 2, .h = 0 },
-                    .min_size_content = .{ .w = 13, .h = 13 },
-                    .gravity_y = 0.5,
-                })) {
-                    if (risk.risk == .block) {
-                        var tb: [160]u8 = undefined;
-                        const msg = std.fmt.bufPrint(&tb, "Blocked scam torrent: {s}", .{risk.reason}) catch "Blocked scam torrent";
-                        state.showToastTyped(msg, .err);
-                    } else {
-                        const queue = @import("queue.zig");
-                        queue.addToQueue(r.link, r.name, r.engine);
-                        state.showToast("Added to queue");
-                    }
-                }
-
-                // Play button — dimmed and refused on scam-flagged cards.
-                if (dvui.button(@src(), "Play", .{}, .{
-                    .id_extra = idx,
-                    .color_fill = if (risk.risk == .block) theme.colors.bg_elevated else theme.colors.accent,
-                    .color_text = if (risk.risk == .block) theme.colors.text_tertiary else dvui.Color{ .r = 15, .g = 15, .b = 20, .a = 255 },
-                    .corner_radius = theme.dims.rad_sm,
-                })) {
-                    if (risk.risk == .block) {
-                        var tb: [160]u8 = undefined;
-                        const msg = std.fmt.bufPrint(&tb, "Blocked scam torrent: {s}", .{risk.reason}) catch "Blocked scam torrent";
-                        state.showToastTyped(msg, .err);
-                    } else if (r.is_nsfw) {
-                        const nl = @min(r.link.len, 4095);
-                        @memcpy(state.app.nsfw_confirm_link_buf[0..nl], r.link[0..nl]);
-                        state.app.nsfw_confirm_link_len = nl;
-                        const nn = @min(r.name.len, 255);
-                        @memcpy(state.app.nsfw_confirm_name_buf[0..nn], r.name[0..nn]);
-                        state.app.nsfw_confirm_name_len = nn;
-                        state.app.nsfw_confirm_pending = true;
-                    } else {
-                        loadTorrentToPlayer(r.link);
-                    }
-                }
-
-                // Drag & Double click logic
-                for (dvui.events()) |*e| {
-                    if (dvui.eventMatch(e, .{ .id = row.data().id, .r = row.data().borderRectScale().r })) {
-                        if (e.evt == .mouse and e.evt.mouse.action == .motion and dvui.dragging(e.evt.mouse.p, null) != null) {
-                            // Scam-flagged rows can't be drag-loaded either.
-                            if (risk.risk != .block) {
-                                const max_len = @min(r.link.len, 4095);
-                                @memcpy(state.app.dragging_magnet_buf[0..max_len], r.link[0..max_len]);
-                                state.app.dragging_magnet_len = max_len;
-                            }
-                        }
-                        if (e.evt == .mouse and e.evt.mouse.action == .release and e.evt.mouse.button == .left) {
-                            const now = @import("../core/io_global.zig").milliTimestamp();
-                            if (state.app.last_clicked_search_idx == idx and (now - state.app.last_clicked_time) < 400) {
-                                if (risk.risk == .block) {
-                                    var tb: [160]u8 = undefined;
-                                    const msg = std.fmt.bufPrint(&tb, "Blocked scam torrent: {s}", .{risk.reason}) catch "Blocked scam torrent";
-                                    state.showToastTyped(msg, .err);
-                                } else if (r.is_nsfw) {
-                                    const nl2 = @min(r.link.len, 4095);
-                                    @memcpy(state.app.nsfw_confirm_link_buf[0..nl2], r.link[0..nl2]);
-                                    state.app.nsfw_confirm_link_len = nl2;
-                                    const nn2 = @min(r.name.len, 255);
-                                    @memcpy(state.app.nsfw_confirm_name_buf[0..nn2], r.name[0..nn2]);
-                                    state.app.nsfw_confirm_name_len = nn2;
-                                    state.app.nsfw_confirm_pending = true;
-                                } else {
-                                    loadTorrentToPlayer(r.link);
-                                }
-                            }
-                            state.app.last_clicked_search_idx = idx;
-                            state.app.last_clicked_time = now;
-                        }
-                    }
-                }
-            } // End meta
-
-            // ── Right-click context menu for copy ──
-            {
-                const ctext = dvui.context(@src(), .{ .rect = row.data().borderRectScale().r }, .{ .id_extra = idx });
-                defer ctext.deinit();
-
-                if (ctext.activePoint()) |cp| {
-                    var fw = dvui.floatingMenu(@src(), .{ .from = dvui.Rect.Natural.fromPoint(cp) }, .{
-                        .id_extra = idx,
-                        .color_fill = theme.colors.bg_surface,
-                        .color_border = theme.colors.border_subtle,
-                    });
-                    defer fw.deinit();
-
-                    if ((dvui.menuItemLabel(@src(), "Copy Title", .{}, .{ .expand = .horizontal, .id_extra = idx })) != null) {
-                        dvui.clipboardTextSet(r.name);
-                        state.showToast("Title copied");
-                        fw.close();
-                    }
-                    if ((dvui.menuItemLabel(@src(), "Copy Magnet Link", .{}, .{ .expand = .horizontal, .id_extra = idx + 50000 })) != null) {
-                        dvui.clipboardTextSet(r.link);
-                        state.showToast("Magnet link copied");
-                        fw.close();
-                    }
-                    if ((dvui.menuItemLabel(@src(), "Copy Size", .{}, .{ .expand = .horizontal, .id_extra = idx + 60000 })) != null) {
-                        dvui.clipboardTextSet(r.size);
-                        state.showToast("Size copied");
-                        fw.close();
-                    }
-                    // User-triggered VirusTotal lookup: deep link only, opened
-                    // in the SYSTEM browser — the app never contacts VT itself.
-                    if ((dvui.menuItemLabel(@src(), "Check on VirusTotal", .{}, .{ .expand = .horizontal, .id_extra = idx + 70000 })) != null) {
-                        const vt = @import("virustotal_pure.zig");
-                        var hash_buf: [40]u8 = undefined;
-                        if (vt.infoHashFromMagnet(r.link, &hash_buf)) |h| {
-                            var url_buf: [128]u8 = undefined;
-                            @import("../ui/settings.zig").openExternal(vt.searchUrl(h, &url_buf));
-                            state.showToast("Opened VirusTotal");
-                        } else {
-                            state.showToast("No info-hash in this result");
-                        }
-                        fw.close();
-                    }
-                }
-            }
-        } // End for
-    } // End if
-} // End of function
+    if (view_filters.provider) |provider| if (filterChip(91205, provider.name())) {
+        view_filters.provider = null;
+        view_dirty = true;
+    };
+    if (searchButton(91206, "Clear filters", false)) {
+        view_filters = .{};
+        size_choice = 0;
+        view_dirty = true;
+    }
+}
 
 // ══════════════════════════════════════════════════════════
 // Universal Search Results Renderer
@@ -1815,8 +1294,8 @@ fn renderUniversalCapabilities() void {
         .gravity_x = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm },
     });
-    _ = dvui.label(@src(), "Universal search", .{}, .{ .color_text = theme.colors.text_primary, .font = dvui.themeGet().font_title, .gravity_x = 0.5 });
-    _ = dvui.label(@src(), "One query, every source — searched in parallel.", .{}, .{ .color_text = theme.colors.text_secondary, .gravity_x = 0.5 });
+    _ = dvui.label(@src(), "Search", .{}, .{ .color_text = theme.colors.text_primary, .font = dvui.themeGet().font_title, .gravity_x = 0.5 });
+    _ = dvui.label(@src(), "Search across your libraries and enabled sources.", .{}, .{ .color_text = theme.colors.text_secondary, .gravity_x = 0.5 });
 
     const Src = struct { icon: []const u8, name: []const u8 };
     const sources = [_]Src{
@@ -1856,26 +1335,7 @@ fn renderUniversalCapabilities() void {
 /// dimmed. A spinner + live count leads the cluster while resolving.
 fn renderSourceStatusCluster() void {
     const resolver = @import("resolver.zig");
-    const resolving = resolver.isResolving();
-
-    if (resolving) {
-        dvui.spinner(@src(), .{
-            .color_text = theme.colors.accent,
-            .min_size_content = .{ .w = 14, .h = 14 },
-            .gravity_y = 0.5,
-            .margin = .{ .x = 8, .y = 0, .w = 4, .h = 0 },
-        });
-        var cb: [16]u8 = undefined;
-        const cs = std.fmt.bufPrint(&cb, "{d}", .{resolver.resultCount()}) catch "0";
-        _ = dvui.label(@src(), "{s}", .{cs}, .{
-            .color_text = theme.colors.text_secondary,
-            .gravity_y = 0.5,
-            .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
-        });
-        // Liveness: the spinner runs on a dvui keyed animation, which keeps
-        // frames coming while resolving — status flips render with no timer.
-    }
-
+    _ = dvui.label(@src(), "Enabled sources run on your next search. Result filters only change this view.", .{}, .{ .color_text = theme.colors.text_secondary, .padding = dvui.Rect.all(theme.spacing.sm) });
     const Row = struct { icon: []const u8, name: []const u8, bit: resolver.SourceBit, st: resolver.SourceStatus };
     const rows = [_]Row{
         .{ .icon = icons.tvg.lucide.@"hard-drive", .name = "On disk", .bit = .local, .st = resolver.status_local.load(.acquire) },
@@ -1895,37 +1355,11 @@ fn renderSourceStatusCluster() void {
         .{ .icon = icons.tvg.lucide.headphones, .name = "Audiobooks", .bit = .audiobooks, .st = resolver.status_audiobooks.load(.acquire) },
         .{ .icon = icons.tvg.lucide.book, .name = "OPDS", .bit = .opds, .st = resolver.status_opds.load(.acquire) },
     };
+    var source_list = dvui.flexbox(@src(), .{}, .{ .expand = .horizontal, .padding = dvui.Rect.all(theme.spacing.sm) });
+    defer source_list.deinit();
     for (rows, 0..) |r, i| {
         const enabled = resolver.sourceOn(r.bit);
-        const tint = if (!enabled) theme.colors.text_tertiary else switch (r.st) {
-            .searching => theme.colors.accent,
-            .done => theme.colors.success,
-            .partial => theme.colors.warning,
-            .failed, .transport_failed, .parse_failed, .timed_out => theme.colors.danger,
-            .idle, .unavailable => theme.colors.text_tertiary,
-            .no_results => theme.colors.text_secondary,
-        };
-
-        var chip = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .id_extra = i + 9220,
-            .background = true,
-            .color_fill = if (enabled) theme.colors.bg_elevated else theme.transparent,
-            .corner_radius = dvui.Rect.all(theme.radius.sm),
-            .gravity_y = 0.5,
-            .padding = dvui.Rect.all(5),
-            .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
-        });
-        var hovered = false;
-        const clicked = dvui.clicked(chip.data(), .{ .hovered = &hovered });
-        if (hovered) chip.data().options.color_fill = theme.colors.bg_hover;
-        chip.drawBackground();
-        dvui.icon(@src(), r.name, r.icon, .{}, .{
-            .id_extra = i + 9221,
-            .color_text = tint,
-            .min_size_content = theme.iconSize(.sm),
-            .gravity_y = 0.5,
-        });
-        const state_name: []const u8 = if (!enabled) "excluded — click to include" else switch (r.st) {
+        const state_name: []const u8 = switch (r.st) {
             .searching => "searching",
             .done => "done",
             .no_results => "no results",
@@ -1935,18 +1369,16 @@ fn renderSourceStatusCluster() void {
             .transport_failed => "network error",
             .parse_failed => "invalid response",
             .timed_out => "timed out",
-            .idle => if (resolving) "idle" else "included — click to exclude",
+            .idle => "ready",
         };
-        var tip_buf: [64]u8 = undefined;
-        const tip_txt = std.fmt.bufPrint(&tip_buf, "{s} — {s}", .{ r.name, state_name }) catch r.name;
-        components.tipId(@src(), chip.data().*, tip_txt, i);
-        chip.deinit();
-
-        if (clicked) {
+        var label: [112]u8 = undefined;
+        const title = std.fmt.bufPrint(&label, "{s} · {s} · {s}", .{ r.name, if (enabled) "enabled" else "disabled", state_name }) catch r.name;
+        if (searchButton(9220 + i, title, enabled)) {
             resolver.toggleSource(r.bit);
-            state.markConfigDirty(); // persisted as "search_sources"
+            state.markConfigDirty();
         }
     }
+    if (searchButton(9250, "Configure sources", false)) state.navigateToTab(.Plugins);
 }
 
 /// Torrent sources span two backends (nova2, YTS) — show one chip: searching if
@@ -1983,145 +1415,180 @@ const ResultAction = struct {
     queue: bool = false,
 };
 
+const ViewCache = struct {
+    rows: ?[]@import("resolver.zig").ResolvedItem = null,
+    projected: [@import("resolver.zig").MAX_RESULTS]search_view.Item = @splat(.{}),
+    order: [@import("resolver.zig").MAX_RESULTS]usize = @splat(0),
+    count: usize = 0,
+    loaded: usize = 0,
+    revision: u64 = std.math.maxInt(u64),
+    generation: u32 = 0,
+    query: [256]u8 = @splat(0),
+    query_len: usize = 0,
+    loading: bool = false,
+    nsfw: bool = false,
+};
+var view_cache: ViewCache = .{};
+
+/// Copy once per publication revision. No network, GPU, or DVUI operations are
+/// performed while the resolver's lifecycle/results locks are held.
+fn refreshSearchView() void {
+    const resolver = @import("resolver.zig");
+    if (view_cache.rows == null) view_cache.rows = @import("../core/alloc.zig").allocator.alloc(resolver.ResolvedItem, resolver.MAX_RESULTS) catch return;
+    const snap = resolver.copySearchSnapshot(view_cache.rows.?, view_cache.revision);
+    const query_changed = !std.mem.eql(u8, view_cache.query[0..view_cache.query_len], snap.query[0..snap.query_len]);
+    view_cache.loading = snap.loading;
+    view_cache.query = snap.query;
+    view_cache.query_len = snap.query_len;
+    const generation_changed = view_cache.generation != snap.generation;
+    if (!snap.changed and !view_dirty and view_cache.nsfw == state.app.nsfw_filter_enabled and !generation_changed) return;
+    view_cache.revision = snap.revision;
+    view_cache.generation = snap.generation;
+    view_cache.loaded = snap.count;
+    view_cache.nsfw = state.app.nsfw_filter_enabled;
+    view_cache.count = 0;
+    for (view_cache.rows.?[0..snap.count], 0..) |*item, i| {
+        view_cache.projected[i] = resolver.searchView(item);
+        if (item.name_len == 0 or (view_cache.nsfw and item.is_nsfw)) continue;
+        if (!search_view.matches(view_cache.projected[i], view_filters)) continue;
+        view_cache.order[view_cache.count] = i;
+        view_cache.count += 1;
+    }
+    const Compare = struct {
+        fn less(_: void, a: usize, b: usize) bool {
+            return search_view.lessThan(view_sort, view_cache.projected[a], view_cache.projected[b]);
+        }
+    };
+    std.sort.insertion(usize, view_cache.order[0..view_cache.count], {}, Compare.less);
+    if (query_changed) result_scroll.viewport.y = 0;
+    view_dirty = false;
+}
+
+fn renderProviderFacet() void {
+    var providers: [@import("resolver.zig").MAX_RESULTS + 1]search_view.Provider = undefined;
+    var labels: [@import("resolver.zig").MAX_RESULTS + 2][]const u8 = undefined;
+    labels[0] = "All providers";
+    var count: usize = 0;
+    var selected: usize = 0;
+    for (view_cache.projected[0..view_cache.loaded]) |projected| {
+        const provider = projected.provider;
+        if (provider.len == 0) continue;
+        var duplicate = false;
+        for (providers[0..count]) |present| if (search_view.Provider.eql(present, provider)) {
+            duplicate = true;
+            break;
+        };
+        if (duplicate) continue;
+        providers[count] = provider;
+        labels[count + 1] = providers[count].name();
+        if (view_filters.provider) |current| if (search_view.Provider.eql(current, provider)) {
+            selected = count + 1;
+        };
+        count += 1;
+    }
+    if (view_filters.provider) |provider| {
+        if (selected == 0) {
+            providers[count] = provider;
+            labels[count + 1] = providers[count].name();
+            selected = count + 1;
+            count += 1;
+        }
+    }
+    if (searchSelect(91105, labels[0 .. count + 1], selected)) |choice| {
+        view_filters.provider = if (choice == 0) null else providers[choice - 1];
+        view_dirty = true;
+    }
+}
+
+fn renderSearchSources() void {
+    const resolver = @import("resolver.zig");
+    renderSourceStatusCluster();
+    var source_has = std.EnumSet(resolver.SourceBit).initEmpty();
+    if (view_cache.rows) |rows| for (rows[0..view_cache.loaded]) |*item| {
+        if (sourceBitOf(item)) |bit| source_has.insert(bit);
+    };
+    renderSourceSummary(source_has);
+    if (view_cache.query_len > 0 and searchButton(91302, "Retry search", false)) resolver.resolve(view_cache.query[0..view_cache.query_len], "auto");
+}
+
 fn renderUniversalResults() void {
     const resolver = @import("resolver.zig");
-    const visible_count = resolver.resultCount();
-
-    // The toolbar carries live progress; once any worker publishes a row the
-    // content area renders it immediately while the remaining sources finish.
-    if (visible_count > 0) {
-        // Results are streamed. Render them while slower sources are still in
-        // flight instead of covering valid torrent rows with a loading screen.
-        // The toolbar spinner continues to show that the fan-out is active.
-        var fr = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .id_extra = 9050,
-            .expand = .horizontal,
-            .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
-        });
-        defer fr.deinit();
-
-        var count_buf: [320]u8 = undefined;
-        const suffix: []const u8 = if (resolver.isResolving()) " so far" else "";
-        const clbl = std.fmt.bufPrintZ(&count_buf, "{d} results{s} for “{s}”", .{ visible_count, suffix, safeUtf8(resolver.resolver_query[0..resolver.resolver_query_len]) }) catch "Results";
-        _ = dvui.label(@src(), "{s}", .{clbl}, .{
-            .id_extra = 9001,
-            .color_text = theme.colors.text_secondary,
-            .gravity_y = 0.5,
-        });
-        {
-            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
-            sp.deinit();
+    // Facet changes from this frame update counts and rows together.
+    if (view_dirty) refreshSearchView();
+    {
+        var header = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .padding = dvui.Rect.all(theme.spacing.sm) });
+        defer header.deinit();
+        var count_buf: [96]u8 = undefined;
+        const count = std.fmt.bufPrint(&count_buf, "{d} shown of {d} loaded{s}", .{ view_cache.count, view_cache.loaded, if (view_cache.loading) " · searching…" else "" }) catch "Results";
+        _ = dvui.label(@src(), "{s}", .{count}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
+        var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+        spacer.deinit();
+        if (searchSelect(91300, &SORT_LABELS, @intFromEnum(view_sort))) |choice| {
+            view_sort = @enumFromInt(choice);
+            view_dirty = true;
         }
-        const sorts = [_][]const u8{ "Relevance", "Quality", "Seeds" };
-        if (components.segment(@src(), &sorts, @intFromEnum(uni_sort))) |clicked| {
-            uni_sort = @enumFromInt(clicked);
-            resolver.sortResultsBy(@intFromEnum(uni_sort));
+        if (view_cache.loading) {
+            if (searchButton(91303, "Cancel", false)) resolver.cancel();
+        } else if (view_cache.query_len > 0 and view_cache.loaded == 0) {
+            if (searchButton(91304, "Retry", false)) submitQuery(view_cache.query[0..view_cache.query_len]);
         }
-    } else if (resolver.isResolving()) {
-        const q = resolver.resolver_query[0..resolver.resolver_query_len];
-        var hb: [300]u8 = undefined;
-        const hs = std.fmt.bufPrint(&hb, "Searching \u{201c}{s}\u{201d} across every source\u{2026}", .{safeUtf8(q)}) catch "Searching…";
-        components.loadingState(hs);
-    } else if (!resolver.isResolving() and resolver.resolver_query_len > 0) {
-        // Canonical empty state — search-x icon + canonical copy.
-        components.emptyState(
-            icons.tvg.lucide.@"search-x",
-            "No matches",
-            "Try a broader query or check your spelling.",
-        );
-        // Retry affordance stays — wrap in a centering row.
-        var retry_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .gravity_x = 0.5,
-            .padding = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.md },
-        });
-        defer retry_row.deinit();
-        if (dvui.button(@src(), "Retry Universal Search", .{}, .{
-            .color_fill = theme.colors.accent,
-            .color_text = theme.colors.text_on_accent,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
-            .gravity_x = 0.5,
-        })) {
-            resolver.resolve(resolver.resolver_query[0..resolver.resolver_query_len], "auto");
-        }
-        return;
-    } else {
-        // No query yet — show what Universal search reaches across.
-        renderUniversalCapabilities();
+    }
+    if (view_cache.rows == null) {
+        components.emptyState(icons.tvg.lucide.@"search-x", "Search could not allocate its result view", "Try again after closing unused players.");
         return;
     }
-
-    // Results list
-    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
+    if (view_cache.loaded == 0) {
+        if (view_cache.loading) components.loadingState("Searching your enabled sources…") else if (view_cache.query_len > 0) components.emptyState(icons.tvg.lucide.@"search-x", "No matches", "Try a broader query or open Filters → Sources to check provider status.") else renderUniversalCapabilities();
+        return;
+    }
+    if (view_cache.count == 0) {
+        components.emptyState(icons.tvg.lucide.@"search-x", "No matches for these filters", "Remove a filter to see more of the loaded results.");
+        return;
+    }
+    if (view_dirty) refreshSearchView();
+    var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &result_scroll }, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
     defer scroll.deinit();
-
-    var list_layout = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .padding = .{ .x = 0, .y = 4, .w = 0, .h = 12 } });
-    defer list_layout.deinit();
-
-    // Snapshot only the activated row before releasing the results lock.
-    // Playback can start another search or acquire this same mutex, so never
-    // invoke a result action while drawing the locked list.
+    var list = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
+    defer list.deinit();
+    var tab_pressed = false;
+    var pointer_pressed = false;
+    for (dvui.events()) |event| {
+        if (event.evt == .key and event.evt.key.code == .tab and event.evt.key.action == .down) tab_pressed = true;
+        if (event.evt == .mouse and event.evt.mouse.action == .press) pointer_pressed = true;
+    }
+    result_keyboard_layout = @import("queue_layout_pure.zig").keyboardLayoutMode(result_keyboard_layout, tab_pressed, pointer_pressed);
+    const row_height = dvui.themeGet().font_body.textHeight() * 4 + 14;
+    const range = if (result_keyboard_layout) search_view.Range{ .start = 0, .end = view_cache.count } else search_view.visibleRange(view_cache.count, result_scroll.viewport.y, result_scroll.viewport.h, row_height);
+    if (range.start > 0) {
+        var spacer = dvui.box(@src(), .{}, .{ .id_extra = 91400, .min_size_content = .{ .w = 1, .h = row_height * @as(f32, @floatFromInt(range.start)) } });
+        spacer.deinit();
+    }
     var pending: ?ResultAction = null;
-    var selected: ?resolver.ResolvedItem = null;
-    {
-        resolver.results_mutex.lock();
-        defer resolver.results_mutex.unlock();
-        const snap_count = resolver.result_count;
-
-        // Keep the resolver's relevance/quality order within each section, but
-        // don't interleave YouTube promotional clips with playable movie hits.
-        // Classify only YouTube rows with explicit trailer/teaser title words.
-        var source_has = std.EnumSet(resolver.SourceBit).initEmpty();
-        var visible = [_]bool{false} ** resolver.MAX_RESULTS;
-        var preview_row = [_]bool{false} ** resolver.MAX_RESULTS;
-        var previews: usize = 0;
-        var other_results: usize = 0;
-        for (0..snap_count) |idx| {
-            const item = &resolver.results[idx];
-            if (item.name_len == 0) continue;
-            if (sourceBitOf(item)) |bit| source_has.insert(bit);
-            visible[idx] = showResult(item);
-            if (!visible[idx]) continue;
-            preview_row[idx] = isPreviewResult(item);
-            if (preview_row[idx]) {
-                previews += 1;
-            } else {
-                other_results += 1;
-            }
-        }
-        if (previews > 0 and other_results > 0) renderResultGroupHeading("Movies, shows & other results", 0);
-        for (0..snap_count) |idx| {
-            const item = &resolver.results[idx];
-            if (!visible[idx] or preview_row[idx]) continue;
-            renderCompactRow(idx, item, &pending);
-        }
-        if (previews > 0) {
-            renderResultGroupHeading("Trailers & teasers · YouTube previews", 1);
-            for (0..snap_count) |idx| {
-                const item = &resolver.results[idx];
-                if (!visible[idx] or !preview_row[idx]) continue;
-                renderCompactRow(idx, item, &pending);
-            }
-        }
-
-        renderSourceSummary(source_has);
-        if (pending) |action| selected = resolver.results[action.idx];
+    for (range.start..range.end) |position| {
+        const idx = view_cache.order[position];
+        renderCompactRow(idx, &view_cache.rows.?[idx], &pending);
+    }
+    if (range.end < view_cache.count) {
+        var spacer = dvui.box(@src(), .{}, .{ .id_extra = 91401, .min_size_content = .{ .w = 1, .h = row_height * @as(f32, @floatFromInt(view_cache.count - range.end)) } });
+        spacer.deinit();
     }
     if (pending) |action| {
-        const item = &(selected.?);
+        // The selected row is owned by this frame's immutable snapshot.
+        const item = &view_cache.rows.?[action.idx];
         if (action.queue) {
+            if (!resolver.isRemoteQueueable(item)) {
+                state.showToastTyped("This result cannot be queued. Open it to resolve a usable torrent.", .err);
+                return;
+            }
             const risk = @import("torrent_risk_pure.zig").assess(item.name[0..item.name_len], @floatFromInt(item.size_bytes));
             if (risk.risk == .block) {
-                var tb: [160]u8 = undefined;
-                state.showToastTyped(std.fmt.bufPrint(&tb, "Blocked scam torrent: {s}", .{risk.reason}) catch "Blocked scam torrent", .err);
+                var text: [160]u8 = undefined;
+                state.showToastTyped(std.fmt.bufPrint(&text, "Blocked scam torrent: {s}", .{risk.reason}) catch "Blocked scam torrent", .err);
             } else {
                 @import("queue.zig").addToQueue(item.url[0..item.url_len], item.name[0..item.name_len], "torrent");
                 state.showToast("Added to queue");
             }
-        } else {
-            resolver.playResolvedItem(item);
-        }
+        } else resolver.playResolvedItem(item);
     }
 }
 
@@ -2180,7 +1647,7 @@ fn sourceBitOf(item: *const @import("resolver.zig").ResolvedItem) ?@import("reso
 /// matches — replaces the old full-height "No results from X" sections.
 /// `source_has` is the per-source hit bitset built during the result loop
 /// (renderUniversalResults) so this doesn't re-scan the array each repaint.
-/// Caller holds results_mutex.
+/// Draws caller-owned snapshot data after the resolver locks are released.
 fn renderSourceSummary(source_has: std.EnumSet(@import("resolver.zig").SourceBit)) void {
     const resolver = @import("resolver.zig");
     const Entry = struct {
@@ -2315,43 +1782,60 @@ fn renderSourceSummary(source_has: std.EnumSet(@import("resolver.zig").SourceBit
 
 /// A result row with a wrapping title and one metadata line beside its actions.
 /// Whole row clicks to play; source, play and queue remain visible.
-/// Caller holds results_mutex.
-fn renderCompactRow(idx: usize, item: *const @import("resolver.zig").ResolvedItem, pending: *?ResultAction) void {
-    // Scam heuristics only apply to torrent listings. The size argument used to
-    // be a hardcoded 0 because ResolvedItem carried no size, which silently
-    // disabled every size-based rule in assess() — a "1080p BluRay" that is 4 MB
-    // is the classic scam and nothing could see it. The backends always had the
-    // number; it is now kept.
-    const risk_pure = @import("torrent_risk_pure.zig");
-    const risk = if (item.source == .torrent)
-        risk_pure.assess(item.name[0..item.name_len], @floatFromInt(item.size_bytes))
-    else
-        risk_pure.Assessment{};
+/// Draws caller-owned snapshot data after the resolver locks are released.
+/// Two title lines, one precise metadata line and one real synopsis preview.
+/// Every row has the same font-derived height for viewport virtualization.
+fn searchRowTitle(text: []const u8, font: dvui.Font, width: f32, out: []u8) []const u8 {
+    var normalized: [1024]u8 = undefined;
+    var rest = std.mem.trim(u8, search_view.singleLine(&normalized, text), " \t\r\n");
+    var written: usize = 0;
+    for (0..2) |line| {
+        if (rest.len == 0) break;
+        var end: usize = 0;
+        const reserve = if (line == 1) font.textSizeEx("…", .{}).w else 0;
+        _ = font.textSizeEx(rest, .{ .max_width = @max(1, width - reserve), .end_idx = &end });
+        if (end == 0) break;
+        if (end < rest.len) if (std.mem.lastIndexOfScalar(u8, rest[0..end], ' ')) |space| {
+            if (space > 0) end = space;
+        };
+        const piece = std.mem.trim(u8, rest[0..end], " \t\r\n");
+        if (written + piece.len + 4 > out.len) break;
+        @memcpy(out[written..][0..piece.len], piece);
+        written += piece.len;
+        rest = std.mem.trimStart(u8, rest[end..], " \t\r\n");
+        if (rest.len > 0) {
+            if (line == 1) {
+                @memcpy(out[written..][0..3], "…");
+                written += 3;
+            } else {
+                out[written] = '\n';
+                written += 1;
+            }
+        }
+    }
+    return out[0..written];
+}
 
-    const chip_color = switch (item.source) {
-        .jellyfin => dvui.Color{ .r = 100, .g = 180, .b = 255, .a = 255 },
-        .stremio => dvui.Color{ .r = 100, .g = 220, .b = 100, .a = 255 },
-        .torrent => dvui.Color{ .r = 255, .g = 180, .b = 80, .a = 255 },
-        .anime => dvui.Color{ .r = 255, .g = 120, .b = 180, .a = 255 },
-        .youtube => dvui.Color{ .r = 255, .g = 80, .b = 80, .a = 255 },
-        .local => dvui.Color{ .r = 130, .g = 230, .b = 200, .a = 255 },
-        .tmdb => dvui.Color{ .r = 1, .g = 180, .b = 228, .a = 255 },
-        .plex => dvui.Color{ .r = 229, .g = 160, .b = 13, .a = 255 },
-        .plugin => dvui.Color{ .r = 190, .g = 140, .b = 245, .a = 255 },
-        .comics => dvui.Color{ .r = 200, .g = 150, .b = 255, .a = 255 },
-        .livetv => dvui.Color{ .r = 150, .g = 220, .b = 150, .a = 255 },
-        .music => dvui.Color{ .r = 255, .g = 170, .b = 90, .a = 255 },
-        .radio => dvui.Color{ .r = 120, .g = 200, .b = 255, .a = 255 },
-        .podcast => dvui.Color{ .r = 255, .g = 140, .b = 170, .a = 255 },
-        .novels, .vndb => theme.colors.accent,
-        .audiobooks, .opds => theme.colors.accent,
-    };
+fn searchRowLine(id: usize, text: []const u8, font: dvui.Font, width: f32, color: dvui.Color) void {
+    var normalized: [1024]u8 = undefined;
+    const clean = search_view.singleLine(&normalized, text);
+    var end: usize = clean.len;
+    if (font.textSizeEx(clean, .{}).w > width) _ = font.textSizeEx(clean, .{ .max_width = @max(1, width - font.textSizeEx("…", .{}).w), .end_idx = &end });
+    var line: [1024]u8 = undefined;
+    const clipped = @import("../ui/footer_pure.zig").compactTitle(&line, clean, end);
+    _ = dvui.label(@src(), "{s}", .{clipped}, .{ .id_extra = id, .font = font, .color_text = color, .max_size_content = .{ .w = @max(0, width), .h = font.textHeight() } });
+}
+
+fn renderCompactRow(idx: usize, item: *const @import("resolver.zig").ResolvedItem, pending: *?ResultAction) void {
+    const resolver = @import("resolver.zig");
+    const row_key: usize = @truncate(resolver.actionKey(item));
+    const risk = if (item.source == .torrent) @import("torrent_risk_pure.zig").assess(item.name[0..item.name_len], @floatFromInt(item.size_bytes)) else @import("torrent_risk_pure.zig").Assessment{};
     const chip_text = switch (item.source) {
         .jellyfin => "Jellyfin",
         .stremio => "Stream",
         .torrent => "Torrent",
         .anime => "Anime",
-        .youtube => "YouTube",
+        .youtube => if (isPreviewResult(item)) "Trailer · YouTube" else "YouTube",
         .local => "On disk",
         .tmdb => "Catalog",
         .plex => "Plex",
@@ -2366,167 +1850,83 @@ fn renderCompactRow(idx: usize, item: *const @import("resolver.zig").ResolvedIte
         .audiobooks => "Audiobook",
         .opds => "OPDS",
     };
-
+    const body = dvui.themeGet().font_body;
+    const small = body.withSize(theme.font_size.small);
+    const row_height = body.textHeight() * 4 + 14;
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .id_extra = idx + 9100,
+        .id_extra = row_key,
         .expand = .horizontal,
         .background = true,
         .color_fill = theme.transparent,
         .color_border = theme.colors.border_subtle,
-        .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 }, // hairline separator
-        .padding = .{ .x = 12, .y = 5, .w = 8, .h = 5 },
-        .margin = .{ .x = 8, .y = 0, .w = 8, .h = 0 },
+        .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
+        .min_size_content = .{ .w = 0, .h = row_height - 13 },
+        .max_size_content = .{ .w = 0, .h = row_height - 13 },
+        .padding = .{ .x = theme.spacing.sm, .y = 6, .w = theme.spacing.sm, .h = 6 },
     });
     defer row.deinit();
-    // Plain boxes never render color_fill_hover (dvui gotcha) — set the fill
-    // manually while hovered, then draw.
-    // Leave child Play and Queue buttons first claim on mouse presses.
-    // dvui.clicked on the parent consumes the event before children see it.
-    const hovered = row.data().borderRectScale().r.contains(dvui.currentWindow().mouse_pt);
-    if (hovered) row.data().options.color_fill = theme.colors.bg_hover;
+    if (row.data().borderRectScale().r.contains(dvui.currentWindow().mouse_pt)) row.data().options.color_fill = theme.colors.bg_hover;
     row.drawBackground();
-
-    // Reserve the source badge and action targets before laying out untrusted
-    // filenames. Otherwise a long title expands the left box and pushes Play
-    // and Queue outside the scroll viewport on scaled/narrow windows.
-    const action_w: f32 = if (risk.risk != .ok) 210 else if (item.source == .torrent) 152 else 116;
-    const text_w = @max(96, row.data().contentRect().w - action_w);
-    var content = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .expand = .horizontal,
-        .min_size_content = .{ .w = 0, .h = 0 },
-        .max_size_content = dvui.Options.MaxSize.width(text_w),
-    });
-
-    // TextLayout wraps instead of ellipsizing and can break long filenames,
-    // keeping the complete title legible without hover or horizontal scrolling.
-    {
-        var title = dvui.textLayout(@src(), .{ .break_lines = true }, .{
-            .id_extra = idx + 9500,
-            .expand = .horizontal,
-            .min_size_content = .{ .w = 0, .h = 0 },
-            .max_size_content = dvui.Options.MaxSize.width(text_w),
-            .background = false,
-            .padding = dvui.Rect.all(0),
-        });
-        title.addText(safeUtf8(item.name[0..item.name_len]), .{ .color_text = theme.colors.text_primary });
-        title.deinit();
-    }
-
-    // Some torrent backends repeat the seed count and quality in their detail
-    // strings. Show only the provider here; metaLine owns those numbers.
-    const raw_detail = safeUtf8(item.detail[0..item.detail_len]);
-    var detail = raw_detail;
-    if (item.source == .torrent and std.mem.startsWith(u8, detail, "Torrent · ")) {
-        detail = detail["Torrent · ".len..];
-        if (std.mem.endsWith(u8, detail, " seeds")) {
-            if (std.mem.lastIndexOf(u8, detail, " · ")) |sep| detail = detail[0..sep];
-        } else if (std.mem.startsWith(u8, detail, "YTS · ")) {
-            detail = "YTS";
-        }
-    }
-
+    const queueable = item.source == .torrent and resolver.isRemoteQueueable(item);
+    const actions_width: f32 = if (queueable) 72 else 36;
+    const text_width = @max(0, row.data().contentRect().w - actions_width - theme.spacing.sm);
+    var content = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .max_size_content = .{ .w = 0, .h = row_height - 13 } });
+    var title_buffer: [520]u8 = undefined;
+    const title = searchRowTitle(item.name[0..item.name_len], body, text_width, &title_buffer);
+    _ = dvui.label(@src(), "{s}", .{title}, .{ .id_extra = row_key +% 1, .font = body, .color_text = theme.colors.text_primary, .max_size_content = .{ .w = text_width, .h = body.textHeight() * 2 } });
     const meta_pure = @import("search_meta_pure.zig");
-    var meta_buf: [64]u8 = undefined;
-    const meta = meta_pure.metaLine(.{
-        .quality = item.quality,
-        .size_bytes = item.size_bytes,
-        .seeds = item.seeds,
-        .leech = item.leech,
-    }, &meta_buf);
-    if ((detail.len > 0 and !std.mem.eql(u8, detail, chip_text)) or meta.len > 0) {
-        var metadata = dvui.textLayout(@src(), .{ .break_lines = true }, .{
-            .id_extra = idx + 9400,
-            .expand = .horizontal,
-            .min_size_content = .{ .w = 0, .h = 0 },
-            .max_size_content = dvui.Options.MaxSize.width(text_w),
-            .background = false,
-            .padding = dvui.Rect.all(0),
-        });
-        const show_detail = detail.len > 0 and !std.mem.eql(u8, detail, chip_text);
-        if (show_detail) metadata.addText(detail, .{ .color_text = theme.colors.text_secondary });
-        if (show_detail and meta.len > 0) metadata.addText(" · ", .{ .color_text = theme.colors.text_secondary });
-        if (meta.len > 0) metadata.addText(meta, .{ .color_text = theme.colors.text_secondary });
-        metadata.deinit();
-    }
-    if (item.summary_len > 0) {
-        // Keep search scannable; the complete provider synopsis remains in the
-        // result API and catalog details. Never substitute generated copy.
-        const n = @min(item.summary_len, 180);
-        var synopsis = dvui.textLayout(@src(), .{ .break_lines = true }, .{
-            .id_extra = idx + 9450,
-            .expand = .horizontal,
-            .min_size_content = .{ .w = 0, .h = 0 },
-            .max_size_content = dvui.Options.MaxSize.width(text_w),
-            .background = false,
-            .padding = dvui.Rect.all(0),
-        });
-        synopsis.addText(safeUtf8(item.summary[0..n]), .{ .color_text = theme.colors.text_secondary });
-        if (n < item.summary_len) synopsis.addText("...", .{ .color_text = theme.colors.text_secondary });
-        synopsis.deinit();
-    }
+    var meta_buffer: [64]u8 = undefined;
+    const meta = meta_pure.metaLine(.{ .quality = item.quality, .size_bytes = item.size_bytes, .seeds = item.seeds, .leech = item.leech }, &meta_buffer);
+    var line: [512]u8 = undefined;
+    const provider = if (item.provider.len > 0) item.provider.name() else "Provider unknown";
+    const metadata = if (item.source == .torrent)
+        std.fmt.bufPrint(&line, "{s} · {s}{s}{s}", .{ chip_text, provider, if (meta.len > 0) " · " else "", meta }) catch chip_text
+    else
+        std.fmt.bufPrint(&line, "{s}{s}{s}{s}{s}", .{ chip_text, if (meta.len > 0) " · " else "", meta, if (item.detail_len > 0) " · " else "", safeUtf8(item.detail[0..item.detail_len]) }) catch chip_text;
+    searchRowLine(row_key +% 2, metadata, small, text_width, theme.colors.text_secondary);
+    if (risk.risk != .ok) searchRowLine(row_key +% 3, if (risk.risk == .block) "Scam? · blocked torrent" else "Caution · check torrent details", small, text_width, if (risk.risk == .block) theme.colors.danger else theme.colors.warning) else if (item.summary_len > 0) searchRowLine(row_key +% 3, safeUtf8(item.summary[0..item.summary_len]), small, text_width, theme.colors.text_tertiary);
     content.deinit();
-
     var actions = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0.5 });
     defer actions.deinit();
-    // Risk flag — red "Scam?" for blocked rows, amber "Caution" for warns.
-    // Hovering the row still shows the full reason via the play/queue toast.
-    if (risk.risk != .ok) {
-        const flag_color = if (risk.risk == .block) theme.colors.danger else theme.colors.warning;
-        _ = dvui.label(@src(), "{s}", .{if (risk.risk == .block) "Scam?" else "Caution"}, .{
-            .id_extra = idx + 9900,
-            .color_text = flag_color,
-            .color_border = flag_color,
-            .border = dvui.Rect.all(1),
-            .corner_radius = dvui.Rect.all(theme.radius.pill),
-            .padding = .{ .x = 8, .y = 1, .w = 8, .h = 1 },
-            .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
-            .gravity_y = 0.5,
-        });
+    const action_icon = if (item.source == .anime or item.source == .podcast) icons.tvg.lucide.@"arrow-up-right" else if (item.source == .novels or item.source == .comics or item.source == .opds) icons.tvg.lucide.book else if (item.source == .vndb or item.source == .tmdb or item.source == .audiobooks) icons.tvg.lucide.info else icons.tvg.lucide.play;
+    const action_name = if (item.source == .anime or item.source == .podcast) "Open" else if (item.source == .novels or item.source == .comics or item.source == .opds) "read" else if (item.source == .audiobooks) "open audio" else if (item.source == .vndb or item.source == .tmdb) "details" else "play";
+    var button_data: dvui.WidgetData = undefined;
+    if (dvui.buttonIcon(@src(), action_name, action_icon, .{}, .{}, .{ .id_extra = row_key +% 4, .data_out = &button_data, .color_fill = theme.transparent, .color_fill_hover = theme.colors.bg_hover, .color_text = if (risk.risk == .block) theme.colors.text_tertiary else theme.colors.accent, .border = dvui.Rect.all(0), .padding = dvui.Rect.all(8), .min_size_content = .{ .w = 16, .h = 16 } })) pending.* = .{ .idx = idx };
+    components.tip(@src(), button_data, action_name);
+    if (queueable) {
+        if (dvui.buttonIcon(@src(), "queue", icons.tvg.lucide.plus, .{}, .{}, .{ .id_extra = row_key +% 5, .data_out = &button_data, .color_fill = theme.transparent, .color_fill_hover = theme.colors.bg_hover, .color_text = theme.colors.text_secondary, .border = dvui.Rect.all(0), .padding = dvui.Rect.all(8), .min_size_content = .{ .w = 16, .h = 16 } })) pending.* = .{ .idx = idx, .queue = true };
+        components.tip(@src(), button_data, "Add torrent to queue");
     }
+    components.tipId(@src(), row.data().*, safeUtf8(item.name[0..item.name_len]), row_key);
+    if (dvui.clicked(row.data(), .{})) pending.* = .{ .idx = idx };
+    renderSearchResultContext(row_key, row.data().borderRectScale().r, item);
+}
 
-    // Source chip — the category, fixed on the right before the actions.
-    _ = dvui.label(@src(), "{s}", .{chip_text}, .{
-        .id_extra = idx + 9300,
-        .color_text = chip_color,
-        .color_border = chip_color,
-        .border = dvui.Rect.all(1),
-        .corner_radius = dvui.Rect.all(theme.radius.pill),
-        .padding = .{ .x = 8, .y = 1, .w = 8, .h = 1 },
-        .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
-        .gravity_y = 0.5,
-        .min_size_content = .{ .w = 58, .h = 0 },
-    });
-
-    // Explicit Play affordance — dimmed on blocked rows; the click still
-    // routes to playItem, whose central risk guard toasts the reason.
-    const action_icon = if (item.source == .novels or item.source == .comics or item.source == .opds) icons.tvg.lucide.book else if (item.source == .vndb or item.source == .tmdb or item.source == .audiobooks) icons.tvg.lucide.info else icons.tvg.lucide.play;
-    const action_name = if (item.source == .novels or item.source == .comics or item.source == .opds) "read" else if (item.source == .audiobooks) "open audio" else if (item.source == .vndb or item.source == .tmdb) "details" else "play";
-    if (dvui.buttonIcon(@src(), action_name, action_icon, .{}, .{}, .{
-        .id_extra = idx + 9700,
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-        .color_text = if (risk.risk == .block) theme.colors.text_tertiary else theme.colors.accent,
-        .border = dvui.Rect.all(0),
-        .gravity_y = 0.5,
-        .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
-    })) {
-        pending.* = .{ .idx = idx };
-    }
-
-    // Torrent results can also be queued for later.
-    if (item.source == .torrent) {
-        if (dvui.buttonIcon(@src(), "queue", icons.tvg.lucide.plus, .{}, .{}, .{
-            .id_extra = idx + 9800,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = if (risk.risk == .block) theme.colors.text_tertiary else theme.colors.text_secondary,
-            .border = dvui.Rect.all(0),
-            .gravity_y = 0.5,
-            .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
-        })) {
-            pending.* = .{ .idx = idx, .queue = true };
+fn renderSearchResultContext(id: usize, rect: dvui.Rect.Physical, item: *const @import("resolver.zig").ResolvedItem) void {
+    const context = dvui.context(@src(), .{ .rect = rect }, .{ .id_extra = id });
+    defer context.deinit();
+    if (context.activePoint()) |point| {
+        var menu = dvui.floatingMenu(@src(), .{ .from = dvui.Rect.Natural.fromPoint(point) }, .{ .id_extra = id, .color_fill = theme.colors.bg_surface, .color_border = theme.colors.border_subtle });
+        defer menu.deinit();
+        if (dvui.menuItemLabel(@src(), "Copy title", .{}, .{ .color_text = theme.colors.text_primary })) |_| {
+            dvui.clipboardTextSet(safeUtf8(item.name[0..item.name_len]));
+            menu.close();
+        }
+        if (dvui.menuItemLabel(@src(), "Copy link", .{}, .{ .color_text = theme.colors.text_primary })) |_| {
+            dvui.clipboardTextSet(item.url[0..item.url_len]);
+            menu.close();
+        }
+        if (item.source == .torrent) {
+            if (dvui.menuItemLabel(@src(), "Check VirusTotal", .{}, .{ .color_text = theme.colors.text_primary })) |_| {
+                var hash: [40]u8 = undefined;
+                if (@import("virustotal_pure.zig").infoHashFromMagnet(item.url[0..item.url_len], &hash)) |value| {
+                    var target: [128]u8 = undefined;
+                    @import("../ui/settings.zig").openExternal(@import("virustotal_pure.zig").searchUrl(value, &target));
+                } else state.showToast("No info-hash in this result");
+                menu.close();
+            }
         }
     }
-
-    if (dvui.clicked(row.data(), .{})) pending.* = .{ .idx = idx };
 }
 
 pub fn loadTorrentToPlayer(magnet_link: []const u8) void {

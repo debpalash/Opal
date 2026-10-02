@@ -3,7 +3,7 @@
 Before this, a universal search only reached the video verticals — a query for
 a song, a station or a podcast returned nothing even though the app can play
 all three. The resolver now fans out to JioSaavn / RadioBrowser / iTunes as
-first-class sources, each with its own toolbar pill, status atomic and result
+first-class sources, each with source settings, a status atomic and a result
 chip. Also covered here: synced lyrics (lrclib) and the generalized mpv
 per-request header path, both of which shipped in the same change.
 
@@ -30,7 +30,7 @@ def test_universal_search_fanout():
         ),
         "plex source type": "    plex," in res,
         "plugin source type": "    plugin," in res,
-        "toolbar pills declared": all(s in res.split("pub const SourceBit", 1)[1].split(";", 1)[0] for s in ("stremio", "rss", "livetv", "music", "radio", "podcast", "novels", "vndb", "audiobooks", "opds")),
+        "provider settings bits declared": all(s in res.split("pub const SourceBit", 1)[1].split(";", 1)[0] for s in ("stremio", "rss", "livetv", "music", "radio", "podcast", "novels", "vndb", "audiobooks", "opds")),
         # The mask must be derived from the enum, not a hand-written literal —
         # a hardcoded 0xFF silently left every new pill off.
         "mask derived from enum": "ALL_SOURCE_BITS" in res and '@typeInfo(SourceBit).@"enum".fields.len' in res,
@@ -106,8 +106,8 @@ def test_universal_search_fanout():
             and ".deny =>" in plugins,
 
         # ── UI surfaces (an unhandled switch arm is a compile error, but the
-        #    pills/summary rows are data literals that silently omit) ──
-        "filter pills rendered": all(
+        #    source settings/summary rows are data literals that silently omit) ──
+        "provider settings retain audio status entries": all(
             f'.bit = .{b}, .st = resolver.status_{b}' in srch
             for b in ("livetv", "music", "radio", "podcast")
         ),

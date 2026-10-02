@@ -273,7 +273,7 @@ def local_library_index():
     return "pass", "recursive local media is indexed once, searched instantly, corrected safely, and grouped by sampled identity"
 
 
-@test("Universal results merge semantic duplicates with playback fallback", "Library")
+@test("Search merges identified alternate renditions with playback fallback", "Library")
 def semantic_result_fallbacks():
     pure = _src("src/services/resolver_dedup_pure.zig")
     resolver = _src("src/services/resolver.zig")
@@ -283,9 +283,10 @@ def semantic_result_fallbacks():
             and "pub fn sameSemantic" in pure
             and "preserves editions" in pure,
         "transport identity still wins": "dedup.sameItem(current_url, url)" in resolver,
-        "semantic merge is source bounded": "fallbackCompatible(items[d].source, scored_item.source)" in resolver,
+        "merge is source and exact identity bounded": "fallbackCompatible(items[d].source, scored_item.source)" in resolver
+            and "search_view.sameTypedWork(" in resolver,
         "best ranked candidate stays primary": "scored_item.score < items[d].score" in resolver
-            and "ByScore.lessThan" in resolver,
+            and "relevanceBefore" in resolver,
         "runner-up retained": "scored_item.fallback_url" in resolver
             and "items[d].fallback_url_len == 0" in resolver,
         "fallback reaches player": ".fallback_url = item.fallback_url" in resolver
@@ -294,7 +295,7 @@ def semantic_result_fallbacks():
     missing = [name for name, ok in checks.items() if not ok]
     if missing:
         return "fail", "semantic fallback pipeline incomplete: " + ", ".join(missing)
-    return "pass", "same-title direct streams merge; the best result plays first and the runner-up retries once"
+    return "pass", "identified alternate renditions preserve episode/edition identity and one playback fallback"
 
 
 @test("Card action row is never clipped out of its own card", "Library")

@@ -136,11 +136,47 @@
 
   <!-- Search -->
   <section class="page" id="page-search">
-    <div class="search-row">
-      <input id="q" placeholder="Search everything…" autocapitalize="off">
-      <button id="go">Go</button>
+    <div class="search-row search-toolbar" role="search">
+      <label class="sr-only" for="q">Search</label>
+      <input id="q" type="search" placeholder="Search titles, artists, episodes, or paste a link…" autocapitalize="off" autocomplete="off">
+      <button id="go" type="button">Search</button>
+      <button id="search-filters-toggle" type="button" aria-expanded="false" aria-controls="search-filters">Filters</button>
     </div>
-    <div class="hint" id="search-hint">Searches torrents, catalogs, YouTube, anime, and connected servers.</div>
+    <div id="search-filters" class="search-filter-panel" hidden>
+      <div class="search-filter-fields">
+        <label>Content<select id="search-content">
+          <option value="all">Everything</option><option value="video">Video</option><option value="movies">Movies</option><option value="shows">Shows</option>
+          <option value="anime">Anime</option><option value="comics">Comics</option><option value="books">Books &amp; audiobooks</option>
+          <option value="music">Music</option><option value="podcasts">Podcasts</option><option value="radio">Radio</option>
+          <option value="live_tv">Live TV</option><option value="visual_novels">Visual novels</option>
+        </select></label>
+        <label>Availability<select id="search-availability">
+          <option value="all">All results</option><option value="playable">Playable</option><option value="torrents">Torrents</option><option value="library">My libraries</option>
+        </select></label>
+        <label>Quality<select id="search-quality">
+          <option value="0">Any quality</option><option value="1">480p or better</option><option value="2">720p or better</option><option value="3">1080p or better</option><option value="4">4K</option>
+        </select></label>
+        <label>Minimum seeds<select id="search-seeds">
+          <option value="0">Any swarm</option><option value="1">1+</option><option value="5">5+</option><option value="10">10+</option><option value="50">50+</option><option value="100">100+</option>
+        </select></label>
+        <label>Torrent size<select id="search-size">
+          <option value="0">Any size</option><option value="1">Under 1 GB</option><option value="2">1–5 GB</option><option value="3">5–20 GB</option><option value="4">20 GB or more</option>
+        </select></label>
+        <label>Provider<select id="search-provider"><option value="">All providers</option></select></label>
+      </div>
+      <details class="search-source-details"><summary>Sources</summary>
+        <div id="search-source-status" class="search-source-status">Source status appears after a search.</div>
+        <div class="quick"><button id="search-retry" type="button">Retry search</button><button id="search-source-settings" type="button">Manage sources</button></div>
+      </details>
+    </div>
+    <div id="search-active-filters" class="search-active-filters" aria-label="Active search filters" hidden></div>
+    <div class="search-result-tools">
+      <div class="hint" id="search-hint" role="status" aria-live="polite">Search across your libraries and available sources.</div>
+      <label class="search-sort">Sort<select id="search-sort">
+        <option value="relevance">Relevance</option><option value="quality">Quality</option><option value="seeds">Seeds</option>
+        <option value="size">Size</option><option value="peers">Peers</option><option value="health">Health</option>
+      </select></label>
+    </div>
     <div id="results"></div>
     <details class="acc-group open-media" id="open-media">
       <summary>Open or queue a URL / magnet</summary>
@@ -736,6 +772,7 @@
 <script src="vendor/hls.min.js"></script>
 <script src="/js/core.js"></script>
 <script src="/js/now-playing.js"></script>
+<script src="/js/search.js"></script>
 <script src="/js/catalog.js"></script>
 <script src="/js/playback.js"></script>
 <script src="/js/integrations.js"></script>

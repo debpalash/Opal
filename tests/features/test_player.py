@@ -938,12 +938,13 @@ def test_audio_delay_device_picker():
 
 @test("Scam torrent flagging + block", "Search")
 def test_scam_torrent_flagging():
-    # Heuristics live in a TESTED pure module; both result views badge risky
-    # rows and every load path (play, double-click, queue, drag) is guarded.
+    # Shared Search badges risky rows; active play and queue paths enforce
+    # the pure risk policy in native and remote actions.
     rp = _src("src/services/torrent_risk_pure.zig")
     sz = _src("src/services/search.zig")
     rz = _src("src/services/resolver.zig")
     bz = _src("build.zig")
+    view = _src("src/services/search_view_pure.zig")
     checks = {
         "pure module unit-tested": "torrent_risk_pure.zig" in bz,
         "assess is pure + routed": ("pub fn assess" in rp
@@ -956,17 +957,16 @@ def test_scam_torrent_flagging():
         "size heuristic": "5 * 1024 * 1024" in rp,
         # Central guard: universal row clicks/play all funnel through playItem.
         "playItem central guard": "Blocked scam torrent" in rz,
-        # Torrent-tab card: play, double-click, queue, and drag all guarded.
-        "torrent tab guards": sz.count("Blocked scam torrent") >= 4,
-        "drag guarded": "risk.risk != .block" in sz,
-        # Visible flags in both views, with the reason spelled out on cards.
-        "universal flag chip": '"Scam?"' in sz,
-        "card reason label": "playback disabled" in sz,
+        "native queue guarded": "if (action.queue)" in sz and "if (risk.risk == .block)" in sz and "Blocked scam torrent" in sz,
+        "remote queue guarded": "search_view.torrentQueueable(" in rz and "kind == .queue and !isRemoteQueueable(&item)" in rz,
+        "pure queue rejects blocked risk": '@import("torrent_risk_pure.zig").assess(name, @floatFromInt(size_bytes)).risk != .block' in view,
+        "visible blocked label": "Scam? · blocked torrent" in sz,
+        "reason available in blocked action": "Blocked scam torrent: {s}" in rz and "risk.reason" in sz,
     }
     bad = [k for k, v in checks.items() if not v]
     if bad:
         return "fail", "missing: " + ", ".join(bad)
-    return "pass", "pure heuristics routed; badges + play/queue/drag blocks in both views"
+    return "pass", "pure heuristics routed; shared Search badge and native/remote play/queue guards"
 
 
 @test("VirusTotal hash lookup", "Security")
@@ -982,7 +982,7 @@ def test_virustotal_lookup():
                               and "pub fn searchUrl" in vtp
                               and "pub fn fileUrl" in vtp),
         # Torrent search context menu routes through the TESTED pure extractor.
-        "search menu item": "Check on VirusTotal" in se,
+        "search menu item": "Check VirusTotal" in se,
         "menu routes through pure fn": "infoHashFromMagnet(" in se and "searchUrl(" in se,
         "no-hash fallback toast": "No info-hash in this result" in se,
         # Downloads: user action streams the file through BOTH digests with a

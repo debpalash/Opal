@@ -15,6 +15,112 @@ const source = file => process.env.OPAL_WEB_REVISION
   : readFileSync(new URL(`../web/js/${file}`, import.meta.url), 'utf8');
 const flush = async () => { for (let i = 0; i < 12; ++i) await Promise.resolve(); };
 
+test('Search facets count matching rows and retain opaque generation actions', () => {
+  const f = fixture('catalog.js');
+  f.run(`
+    globalThis.fmtSize = size => String(size) + ' B';
+    const searchFixture = {generation:42, loading:false, returned:3, total:3, sources:[], results:[
+      {title:'Runner catalog', source:'tmdb', content_kind:'movies', playable:false, key:'a', score:1},
+      {title:'Runner release', source:'torrent', provider:'yts', content_kind:'movies', torrent:true, quality:3, seeds:25, leech:2, size_bytes:2147483648, key:'b', queueable:true, score:2},
+      {title:'Unknown size', source:'torrent', provider:'nova', torrent:true, quality:3, seeds:30, key:'c', score:3}
+    ]};
+    $('search-availability').value = 'torrents';
+    $('search-quality').value = '3';
+    $('search-seeds').value = '10';
+    $('search-size').value = '2';
+    renderUnifiedResults(searchFixture);
+  `);
+  assert.match(f.$('search-hint').textContent, /Showing 1 of 3 results/);
+  assert.match(f.$('results').innerHTML, /Runner release/);
+  assert.doesNotMatch(f.$('results').innerHTML, /Runner catalog|Unknown size/);
+  assert.match(f.$('results').innerHTML, /data-gen="42"/);
+  assert.match(f.$('results').innerHTML, /1080p/);
+  assert.match(f.$('results').innerHTML, /25 seeds/);
+  assert.match(f.$('results').innerHTML, /queue-btn/);
+  assert.equal(f.requests.length, 0, 'view filters must not change provider configuration or requery');
+});
+
+test('Search streamed sorts tie-break by stable keys without mutating published rows', () => {
+  const f = fixture('catalog.js');
+  f.run(`const tiedRows = {results:[{title:'B', key:'b', score:5, quality:3, seeds:9, leech:2, size_bytes:100}, {title:'A', key:'a', score:5, quality:3, seeds:9, leech:2, size_bytes:100}]};`);
+  for (const sort of ['relevance', 'quality', 'seeds', 'size', 'peers', 'health']) {
+    f.$('search-sort').value = sort;
+    assert.equal(f.run('unifiedResultRows(tiedRows).map(row => row.title).join(",")'), 'A,B');
+  }
+  assert.equal(f.run('tiedRows.results.map(row => row.title).join(",")'), 'B,A');
+});
+
+test('Search size ranges do not overlap and unknown sizes fail bounds', () => {
+  const f = fixture('catalog.js');
+  f.$('search-size').value = '1';
+  assert.equal(f.run('matchesSearchFilters(unifiedSearchItem({size_bytes:1073741824}), searchFilters())'), false);
+  f.$('search-size').value = '2';
+  assert.equal(f.run('matchesSearchFilters(unifiedSearchItem({size_bytes:1073741824}), searchFilters())'), true);
+  assert.equal(f.run('matchesSearchFilters(unifiedSearchItem({}), searchFilters())'), false);
+});
+
+test('Search empty facet view offers removal and preserves provider choice', () => {
+  const f = fixture('catalog.js');
+  f.$('search-provider').value = 'yts';
+  f.run(`renderUnifiedResults({generation:4, loading:false, results:[{title:'Podcast', source:'podcast', key:'c'}], sources:[]})`);
+  assert.equal(f.$('search-provider').value, 'yts');
+  assert.match(f.$('results').innerHTML, /Remove a filter/);
+  assert.match(f.$('search-active-filters').innerHTML, /yts/);
+});
+
+test('Search source setup is readable without treating unconfigured sources as failure', () => {
+  const f = fixture('catalog.js');
+  f.run(`renderUnifiedResults({generation:1, results:[], sources:[{source:'jellyfin',enabled:true,status:'unavailable'},{source:'torrent',enabled:true,status:'transport_failed'}]})`);
+  assert.match(f.$('search-source-status').innerHTML, /Jellyfin/);
+  assert.match(f.$('search-source-status').innerHTML, /Needs setup/);
+  assert.match(f.$('search-source-status').innerHTML, /Network error/);
+  assert.match(f.$('search-hint').textContent, /1 source needs? attention/);
+});
+
+test('Search filters support keyboard dismissal and ARIA expanded state', () => {
+  const f = fixture('catalog.js');
+  f.$('search-filters').hidden = true;
+  f.$('search-filters-toggle').onclick();
+  assert.equal(f.$('search-filters').hidden, false);
+  assert.equal(f.$('search-filters-toggle').attributes.get('aria-expanded'), 'true');
+  f.$('search-filters').listeners.get('keydown')({key:'Escape'});
+  assert.equal(f.$('search-filters').hidden, true);
+  assert.equal(f.$('search-filters-toggle').attributes.get('aria-expanded'), 'false');
+});
+
+test('Search rejects late initial responses from an older query', async () => {
+  const f = fixture('catalog.js');
+  f.$('q').value = 'old';
+  const old = f.run('runSearch()');
+  f.$('q').value = 'new';
+  const next = f.run('runSearch()');
+  f.take('/unified_search?q=new').resolve({generation:2, loading:false, results:[{title:'New result',key:'a'}]});
+  await next;
+  f.take('/unified_search?q=old').resolve({generation:1, loading:false, results:[{title:'Stale result',key:'b'}]});
+  await old;
+  assert.match(f.$('results').innerHTML, /New result/);
+  assert.doesNotMatch(f.$('results').innerHTML, /Stale result/);
+});
+
+test('Torrent lookup uses the unified Search with a torrent facet', async () => {
+  const f = fixture('catalog.js');
+  const pending = f.run('runStreamSearch("Runner 2026")');
+  assert.equal(f.$('search-availability').value, 'torrents');
+  f.take('/unified_search?q=Runner%202026').resolve({generation:3, loading:false, results:[]});
+  await pending;
+  assert.equal(f.requests.some(request => request.path.startsWith('/search?')), false);
+});
+
+test('Search pasted magnets open through the existing media route', async () => {
+  const f = fixture('catalog.js');
+  f.$('q').value = 'magnet:?xt=urn:btih:123';
+  const pending = f.run('runSearch()');
+  f.take('/open?url=magnet%3A%3Fxt%3Durn%3Abtih%3A123').resolve({ok:true});
+  await pending;
+  assert.match(f.$('search-hint').textContent, /Opened/);
+  assert.equal(f.requests.length, 1);
+});
+
 function fixture(...files){
   class Element {
     constructor(){
@@ -82,7 +188,13 @@ function fixture(...files){
     fetch: async () => ({status:200, ok:true, json:async () => ({})}),
     toast(){},
   });
-  for (const file of files) vm.runInContext(source(file), context, {filename:file});
+  for (const file of files) {
+    // Search was extracted from catalog; historical revisions keep it inline.
+    if (file === 'catalog.js' && !files.includes('search.js') && !source(file).includes('function runSearch(')) {
+      vm.runInContext(source('search.js'), context, {filename:'search.js'});
+    }
+    vm.runInContext(source(file), context, {filename:file});
+  }
   const run = code => vm.runInContext(code, context);
   const take = path => {
     const found = requests.find(r => !r.taken && r.path === path);
