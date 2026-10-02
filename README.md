@@ -33,7 +33,7 @@
     (<a href="https://ko-fi.com/debpalash">Ko-fi</a>, <a href="https://paypal.me/palashCoder">PayPal</a>)
   </p>
 
-  <img src="assets/screenshots/home.png" alt="Opal home screen — a time-aware greeting, an ask-anything search box, and tonight's trending row of movies and shows" width="100%" />
+  <img src="assets/screenshots/home.jpg" alt="Opal's Browse view — a wall of trending movie posters with source tabs, search, genre filters and per-title actions" width="100%" />
 </div>
 
 <br/>
@@ -90,10 +90,30 @@ Or pick your row — every file is on [Releases](../../releases):
 | 📦 | **Debian / Ubuntu** | `sudo apt install ./opal_*_amd64.deb` |
 | 🎩 | **Fedora / openSUSE** | `sudo dnf install ./opal-*.x86_64.rpm` |
 | 🏹 | **Arch / Omarchy / Pacman** | `sudo pacman -U ./opal-*-x86_64.pkg.tar.zst` |
-| 📚 | **AUR** | `yay -S opal-media-player-bin` (or `opal-media-player` to build) |
+| 📚 | **AUR** | `yay -S opal-media-player-bin` · `paru -S opal-media-player-bin` (or `opal-media-player` to build) |
 | 🐧 | **Linux (glibc 2.38+)** | `chmod +x Opal-*.AppImage` and run it |
 | 🪟 | **Windows** (x64) — **alpha** | run the `.msi` — or unzip the portable `.zip` |
 | 🛠 | **From source** | `git clone` → `zig build run` |
+
+**Arch Linux, Omarchy, Manjaro, EndeavourOS** — Opal is on the AUR as
+[`opal-media-player-bin`](https://aur.archlinux.org/packages/opal-media-player-bin)
+(the official release binary) and
+[`opal-media-player`](https://aur.archlinux.org/packages/opal-media-player)
+(builds from source with zig). The two conflict; install one.
+
+```sh
+yay -S opal-media-player-bin          # AUR helper (or: paru -S opal-media-player-bin)
+yay -S opal-media-player              # build from source instead
+
+# no AUR helper — let makepkg call pacman
+git clone https://aur.archlinux.org/opal-media-player-bin.git
+cd opal-media-player-bin && makepkg -si
+
+# straight from the release, no AUR
+sudo pacman -U ./opal-*-x86_64.pkg.tar.zst
+```
+
+Update later with `yay -Syu` or `sudo pacman -Syu`.
 
 Homebrew installs the self-contained macOS `.app` bundle; `opal` launches that
 app directly. No Homebrew mpv or FFmpeg dependency is needed to install it.
@@ -246,7 +266,7 @@ XDG-compliant:
       <sub>Press play on a torrent — you're watching while it downloads. <em>(Sintel, © Blender Foundation, CC-BY 3.0)</em></sub>
     </td>
     <td width="50%" valign="top">
-      <img src="assets/screenshots/search.png" width="100%" alt="One query fanned out across every source, ranked" /><br/>
+      <img src="assets/screenshots/search.jpg" width="100%" alt="One query fanned out across every source, ranked" /><br/>
       <b>🔭 One search, every source</b><br/>
       <sub>Disk, torrents, Jellyfin, Plex, Stremio, anime, YouTube, live TV, TMDB, manga — one ranked, playable list.</sub>
     </td>
@@ -261,6 +281,13 @@ XDG-compliant:
       <img src="assets/media/ask-the-ai.gif" width="100%" alt="A suggestion chip answered by the local AI with a poster rail" /><br/>
       <b>🤖 An AI that lives on your machine</b><br/>
       <sub>Local LLM with tool use answers with playable picks — no API key, no bill, no feed.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2" valign="top">
+      <img src="assets/screenshots/player.jpg" width="100%" alt="Big Buck Bunny playing from YouTube in Opal's player, with the seek bar, quality, audio, subtitle and translation controls along the bottom" /><br/>
+      <b>🎬 A player that gets out of the way</b><br/>
+      <sub>Quality, audio track, subtitles and live translation sit one click away, then fade. <em>(Big Buck Bunny, © Blender Foundation, CC-BY 3.0)</em></sub>
     </td>
   </tr>
 </table>

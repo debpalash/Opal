@@ -8,6 +8,7 @@
 import "../styles/tailwind.css";
 import "../styles/global.css";
 import InstallCommand from "../components/InstallCommand.tsx";
+import ArchInstall from "../components/ArchInstall.tsx";
 import DownloadGrid from "../components/DownloadGrid.tsx";
 import DownloadMenu from "../components/DownloadMenu.tsx";
 import ExtensionDownloads from "../components/ExtensionDownloads.tsx";
@@ -109,10 +110,10 @@ const jsonld = {
 
         <div class="shot">
           <img
-            src="/assets/home.png"
-            alt="Opal's home screen: a time-aware greeting, an ask-anything search box, and a trending row of movies and shows"
-            width="1600"
-            height="1032"
+            src="/assets/home.jpg"
+            alt="Opal's Browse view: a wall of trending movie posters with source tabs, search and genre filters"
+            width="2400"
+            height="1324"
             fetchpriority="high"
           />
         </div>
@@ -151,10 +152,10 @@ const jsonld = {
           </div>
           <div class="shot">
             <img
-              src="/assets/search.png"
+              src="/assets/search.jpg"
               alt="One query fanned out across every source, ranked, each row with a play button"
-              width="1600"
-              height="1032"
+              width="2400"
+              height="1324"
               loading="lazy"
               decoding="async"
             />
@@ -164,14 +165,25 @@ const jsonld = {
         <div class="split flip">
           <div class="shot">
             <img
-              src="/assets/ask-the-ai.gif"
-              alt="A suggestion chip answered by the local AI with a rail of playable posters"
-              width="840"
-              height="542"
+              src="/assets/player.jpg"
+              alt="Big Buck Bunny playing in Opal's player with seek bar, quality, audio, subtitle and translation controls"
+              width="2400"
+              height="1324"
               loading="lazy"
               decoding="async"
             />
           </div>
+          <div>
+            <p class="eyebrow">Player</p>
+            <h3>A player that gets out of the way</h3>
+            <p>
+              Quality, audio track, subtitles and live translation are one click
+              away, then they fade. Streams, torrents and files all play the same.
+            </p>
+          </div>
+        </div>
+
+        <div class="split">
           <div>
             <p class="eyebrow">Copilot</p>
             <h3>A recommendation engine you own</h3>
@@ -179,6 +191,16 @@ const jsonld = {
               It runs locally and can actually do things — search, queue, play.
               Your history is a SQLite file on your disk.
             </p>
+          </div>
+          <div class="shot">
+            <img
+              src="/assets/ask-the-ai.gif"
+              alt="A suggestion chip answered by the local AI with a rail of playable posters"
+              width="840"
+              height="542"
+              loading="lazy"
+              decoding="async"
+            />
           </div>
         </div>
 
@@ -258,6 +280,7 @@ const jsonld = {
         </p>
 
         <InstallCommand client:visible />
+        <ArchInstall client:visible />
         <DownloadGrid client:visible />
 
         <div class="note">
