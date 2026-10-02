@@ -5,9 +5,8 @@
 
 ### Your media, in one place.
 
-A free, open-source, local-first **media player and browser**. Movies, TV, anime,
-**live TV / IPTV**, YouTube, torrents, and manga — plus your own **Jellyfin & Plex**
-libraries and an optional **on-device AI copilot**.
+A free, open-source **media player and browser** for movies, live TV, YouTube,
+torrents, manga, and your **Jellyfin & Plex** libraries. Optional **AI runs locally**.
 
   <p>
     <a href="../../actions/workflows/ci.yml"><img src="https://github.com/debpalash/Opal/actions/workflows/ci.yml/badge.svg" alt="CI status" /></a>
@@ -32,11 +31,8 @@ libraries and an optional **on-device AI copilot**.
   </p>
 </div>
 
-Opal searches your enabled providers, opens playable media and reading results,
-and remembers where you left off. Personal libraries need a configured server;
-catalog entries can lead to details or a source search. The player, browser,
-torrent streamer, and AI live in one native app built with
-[Zig](https://ziglang.org), [dvui](https://github.com/david-vanderson/dvui), and **mpv**.
+Search your enabled sources, play or read a result, and resume where you left off.
+Connect a server to browse your Jellyfin or Plex library.
 
 | Local history | No telemetry | Optional local AI | Free software |
 |:---:|:---:|:---:|:---:|
@@ -46,46 +42,44 @@ torrent streamer, and AI live in one native app built with
 
 ## See Opal in action
 
-### Browse without the tab overload
+### Browse
 
-Explore trending titles, genres, and sources from one native window.
+Explore trending titles, genres, and sources.
 
 <a href="assets/media/browse.mp4"><img src="assets/readme/browse.gif" width="100%" alt="Animated Opal demo: scroll the movie poster wall, then switch to the YouTube source, inside a framed window on an opalescent backdrop." /></a>
 
 [Watch the browse recording →](assets/media/browse.mp4)
 
-### Start watching while it downloads
+### Stream torrents
 
-Play a torrent result directly. The stream downloads around playback;
-available peers are required.
+Play while a torrent downloads. Available peers are required.
 
 <a href="assets/media/stream-a-torrent.mp4"><img src="assets/readme/torrent.gif" width="100%" alt="Animated Opal demo: start a Sintel torrent and watch playback while it downloads, framed against an opalescent backdrop." /></a>
 
 [Watch the streaming recording →](assets/media/stream-a-torrent.mp4) ·
 <sub>Sintel, © Blender Foundation, CC BY 3.0.</sub>
 
-### Let your own AI find the next watch
+### Ask your local AI
 
-An optional local model answers with playable suggestions. Models are opt-in;
-no API key or AI subscription is needed.
+Get playable recommendations from an optional local model. No API key needed.
 
 <a href="assets/media/ask-the-ai.mp4"><img src="assets/readme/ai.gif" width="100%" alt="Animated Opal demo: a suggestion chip prompts the local AI, which responds with recommendations and a poster rail." /></a>
 
 [Watch the AI recording →](assets/media/ask-the-ai.mp4)
 
-<sub>The GIFs use existing demo recordings; the stills below show the refreshed desktop toolbar.</sub>
+<sub>GIFs show earlier recordings; stills show the current toolbar.</sub>
 
 <table>
   <tr>
     <td width="50%" valign="top">
       <a href="assets/readme/search.webp"><img src="assets/readme/search.webp" width="100%" alt="Opal universal search with Sintel results and play or queue actions, presented in an opalescent screenshot card." /></a><br/>
       <b>One query. Every source.</b><br/>
-      <sub>Search supported, enabled providers for files, streams, reading results, and title details. Click the image for a closer look.</sub>
+      <sub>Find files, streams, reading results, and title details. Click to enlarge.</sub>
     </td>
     <td width="50%" valign="top">
       <a href="assets/readme/player.webp"><img src="assets/readme/player.webp" width="100%" alt="Big Buck Bunny playing in Opal, with quality, audio, subtitle, and translation controls, presented in an opalescent screenshot card." /></a><br/>
       <b>Press play. Settle in.</b><br/>
-      <sub>Quality, audio tracks, subtitles, and live translation stay close at hand. Big Buck Bunny, © Blender Foundation, CC BY 3.0.</sub>
+      <sub>Quality, audio, subtitles, and translation. Big Buck Bunny, © Blender Foundation, CC BY 3.0.</sub>
     </td>
   </tr>
 </table>
@@ -94,326 +88,245 @@ no API key or AI subscription is needed.
 
 ## Get Opal
 
-One command — detects your platform, verifies checksums, doubles as the updater
-(`… -s -- update`) and version pin (`OPAL_VERSION=v0.1.0 …`). On Linux it
-installs to `~/.local` and never needs `sudo`:
+Install with one command. It detects your platform and verifies checksums;
+Linux installs to `~/.local` without `sudo`.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/debpalash/Opal/main/scripts/install.sh | sh
 ```
 
-For a system-wide Linux install through `apt`, `dnf`, `zypper`, or an AUR
-helper, opt in explicitly (root or `sudo` is required):
+Prefer a package? Download from [Releases](../../releases) or use a package manager:
+
+| Platform | Install |
+|---|---|
+| **macOS · Apple silicon** | Open the `.dmg` and drag Opal to Applications |
+| **Homebrew** | `brew install debpalash/tap/opal` |
+| **Arch / Omarchy / AUR** | `yay -S opal-media-player-bin` or `paru -S opal-media-player-bin` |
+| **Debian / Ubuntu** | `sudo apt install ./opal_<version>_amd64.deb` |
+| **Fedora** | `sudo dnf install ./opal-*.x86_64.rpm` |
+| **openSUSE** | `sudo zypper install ./opal-*.x86_64.rpm` |
+| **Linux · AppImage** | `chmod +x Opal-*.AppImage`, then run it |
+| **Windows · x64 alpha** | Install the `.msi` or extract the portable `.zip` |
+
+**Linux:** standard packages need glibc 2.38+. Ubuntu 20.04/22.04, Debian 12,
+and Mint 21 should use `_compat_amd64.deb` (glibc 2.31+). The installer selects
+it automatically. [Compatibility details](packaging/linux-compat/README.md).
+
+**Arch:** the v0.8.8 AUR binary requires libtorrent 2.0; current Arch ships 2.1.
+Use the AppImage until the binary package is updated.
+
+**Windows is alpha:** expect bugs and SmartScreen prompts.
+[Report an issue](https://github.com/debpalash/Opal/issues).
+
+### First launch
+
+Browse **Movies & TV** without a key, or choose **Home** to open a file.
+Install search sources in **Settings → General → Install source plugins**.
+A **TMDB v4 token** adds richer metadata. AI and voice models are opt-in.
+
+<details>
+<summary><b>Updates and platform notes</b></summary>
+
+**Update:** rerun the installer with `sh -s -- update`. Set `OPAL_VERSION=vX.Y.Z`
+to pin a release.
+
+**System-wide Linux install** (requires root or `sudo`):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/debpalash/Opal/main/scripts/install.sh | OPAL_SYSTEM=1 sh
 ```
 
-**Linux release requirements:** standard artifacts require **glibc 2.38+**.
-For Ubuntu **20.04/22.04**, Debian **12** and Mint **21**, v0.8.8 adds
-`opal_<version>_compat_amd64.deb` with a private media runtime and **glibc 2.31+**.
-The installer chooses it automatically; `OPAL_SYSTEM=1` installs via apt, while
-normal installation extracts it into your user prefix. Playback uses software
-decoding and X11/XWayland. No system libraries are replaced. See the
-[compatibility build](packaging/linux-compat/README.md) for details.
-The standard `.deb` requires `libmpv2` and `libtorrent-rasterbar2.0` from your
-repositories (Ubuntu **24.04+**, Debian **13+**). AppImage requires glibc 2.38+.
-
-Or pick your row — every file is on [Releases](../../releases):
-
-|  | Platform | Install |
-|---|---|---|
-| 🍎 | **macOS** (Apple silicon) | open the `.dmg`, drag, done |
-| 🍺 | **Homebrew** | `brew install debpalash/tap/opal` |
-| 📦 | **Debian / Ubuntu** | `sudo apt install ./opal_<version>_amd64.deb` (use `_compat_amd64.deb` on older hosts) |
-| 🎩 | **Fedora / openSUSE** | `sudo dnf install ./opal-*.x86_64.rpm` |
-| 🏹 | **Arch / Omarchy / Pacman** | `sudo pacman -U ./opal-*-x86_64.pkg.tar.zst` |
-| 📚 | **AUR** | `yay -S opal-media-player-bin` · `paru -S opal-media-player-bin` (or `opal-media-player` to build) |
-| 🐧 | **Linux (glibc 2.38+)** | `chmod +x Opal-*.AppImage` and run it |
-| 🪟 | **Windows** (x64) — **alpha** | run the `.msi` — or unzip the portable `.zip` |
-| 🛠 | **From source** | `git clone` → `zig build run` |
-
-<details>
-<summary><b>Platform notes, first launch, and playback options</b></summary>
-
-**Arch Linux, Omarchy, Manjaro, EndeavourOS** — Opal is on the AUR as
-[`opal-media-player-bin`](https://aur.archlinux.org/packages/opal-media-player-bin)
-(the official release binary) and
-[`opal-media-player`](https://aur.archlinux.org/packages/opal-media-player)
-(builds from source with zig). The two conflict; install one.
+**Arch:** [binary package](https://aur.archlinux.org/packages/opal-media-player-bin)
+or [source package](https://aur.archlinux.org/packages/opal-media-player); install one.
+Update AUR packages with `yay -Syu` or `paru -Syu`.
+Without a helper:
 
 ```sh
-yay -S opal-media-player-bin          # AUR helper (or: paru -S opal-media-player-bin)
-yay -S opal-media-player              # build from source instead
-
-# no AUR helper — let makepkg call pacman
 git clone https://aur.archlinux.org/opal-media-player-bin.git
 cd opal-media-player-bin && makepkg -si
-
-# straight from the release, no AUR
-sudo pacman -U ./opal-*-x86_64.pkg.tar.zst
 ```
 
-Update later with `yay -Syu` or `sudo pacman -Syu`.
+The release `.pkg.tar.zst` also installs with `sudo pacman -U ./opal-*-x86_64.pkg.tar.zst`.
 
-Homebrew installs the self-contained macOS `.app` bundle; `opal` launches that
-app directly. No Homebrew mpv or FFmpeg dependency is needed to install it.
+**macOS:** Homebrew includes the app's media libraries. If an unnotarized DMG
+shows “damaged,” use the installer or run `sudo xattr -cr /Applications/Opal.app`.
+Intel Macs require a source build with `HOMEBREW_PREFIX=/usr/local`.
 
-<sub>🍎 macOS may call the `.dmg` **"damaged"** — it isn't; we're not Apple-notarized
-yet. The one-command installer skips the dialog, or run `sudo xattr -cr
-/Applications/Opal.app` once. 🍎 Intel Macs: build from source
-(`HOMEBREW_PREFIX=/usr/local`).</sub>
+**Linux:** standard `.deb` packages need `libmpv2` and `libtorrent-rasterbar2.0`
+(Ubuntu 24.04+ / Debian 13+). Compatibility builds use software decoding and
+X11/XWayland. AppImage needs glibc 2.38+ and system OpenSSL 3
+(`libssl.so.3`, `libcrypto.so.3`).
 
-> [!WARNING]
-> **Windows support is alpha.** It is the newest port and is not yet at parity
-> with macOS and Linux — expect rough edges and bugs the other two do not have.
-> SmartScreen will also want a word. Please do
-> [file issues](https://github.com/debpalash/Opal/issues); they are what moves it
-> forward. macOS (Apple silicon) and Linux x86_64 are the supported platforms.
+</details>
 
-Start on Home with **Search all sources** or **Browse movies & TV**. The
-navigation bar's Search opens universal results from anywhere. On compact
-windows, Search is also under **More**; playback controls are under
-**More → Playback options**, and workspace, remote, theme and shortcut tools
-are under **More → More tools**.
+<details>
+<summary><b>Playback and navigation tips</b></summary>
 
-On smaller Windows displays, Opal fits its initial window inside the usable
-desktop area. The bottom Now Playing bar stays visible while media plays;
-use its **×** to stop and close it. Movies & TV keeps search and filters in one
-icon toolbar:
-hover an icon for its name, and scroll across the toolbar in a narrow window.
-Poster cards keep list actions and **Details** available without hover; selected
-lists stay highlighted. Universal search uses compact rows and groups YouTube
-trailers and teasers separately; click a result row or its Play button to start
-playback, or **+** to queue a torrent. Install sources from
-**Settings → General → Install source plugins**; the source catalog reports
-the last operation and links to redacted Logs.
+- **Search** works from any page; compact windows also offer it under **More**.
+- Hover toolbar icons for labels; scroll the toolbar in narrow windows.
+- Click a result or **Play** to watch; **+** queues a torrent. **Details** opens title info.
+- **×** on Now Playing stops playback. More controls: **More → Playback options**.
+- Install VLC, then choose **Settings → Playback → Open in VLC** to hand off playback.
+- Source installation errors include recovery steps in redacted **Logs**.
 
-For temporary torrent playback, enable **Settings → Network → Stream torrents in memory**.
-Choose a **128, 256 (default), or 512 MiB** payload buffer per torrent. New torrents
-keep media and torrent caches in RAM, download around the requested playback
-position, and discard older pieces. Closing or replacing the stream releases its
-buffer. Seeking into discarded data downloads it again. Existing transfers keep
-their storage mode; playback still needs available peers. Player/decoder memory
-is additional, and the operating system may swap RAM to disk.
+**Temporary torrents:** enable **Settings → Network → Stream torrents in memory**.
+Choose 128, 256 (default), or 512 MiB per new torrent. Seeking may redownload
+pieces; closing releases the buffer. Existing transfers keep their storage mode.
+Decoder memory is extra, and the OS may swap RAM to disk.
 
-Deleting a playing torrent stops its stream before removing the download, and
-the empty player offers **Open file** or **Browse search**. To hand playback to
-VLC, install VLC and choose **Settings → Playback → Open in VLC** while media
-is playing; VLC is optional and Opal reports if it is not installed. Source
-installation shows its current step and an error or success result; redacted
-Logs include the failed step and a recovery procedure.
-
-The Linux AppImage uses the system's OpenSSL 3 libraries alongside system
-`libcurl` (rather than bundling an older OpenSSL that conflicts on rolling
-distributions). The AppImage requires `libssl.so.3` and `libcrypto.so.3` on
-the host.
-
-**First launch:** The welcome screen offers keyless Movies & TV browsing and
-optional one-click source installation for universal search. Choose **Home** to
-open local files instead. Add a free **TMDB v4 token** in **Settings**
-(<kbd>⌘</kbd><kbd>,</kbd>) for richer metadata. Voice and AI models remain
-opt-in; nothing downloads itself. Reopen the welcome screen from
-**Settings → About**.
+Reopen onboarding in **Settings → About**.
 
 </details>
 
 <a id="building-from-source"></a>
 <details>
-<summary><b>🧱 Building from source</b></summary>
+<summary><b>Build from source</b></summary>
 
-<br/>
-
-Zig **0.16.x** plus a handful of native friends:
+Use **Zig 0.16.x**; 0.17 requires a migration. On macOS:
 
 ```sh
-brew install zig mpv sqlite onnxruntime sdl2
-# plus: libtorrent-rasterbar, g++ (torrent wrapper), ffmpeg/whisper-cpp for voice
-
+brew install mpv sqlite sdl2 libtorrent-rasterbar
+# Install Zig 0.16.x separately if your package manager offers a newer version.
 git clone https://github.com/debpalash/Opal.git
 cd Opal
-zig build run        # first build is slow; incrementals are fast
+zig build run
 ```
 
-**Linux/Wayland:** use `make run` (forces system SDL2 — the bundled one is
-X11-only). macOS builds read `HOMEBREW_PREFIX` (default `/opt/homebrew`).
+**Linux / Wayland:** run `./scripts/install-deps.sh`, then `make run` for system SDL2.
+Minimums: libmpv **0.34** (0.38+ recommended), libtorrent-rasterbar **2.0**, and
+SDL **2.0.22**. Ubuntu 20.04 needs newer mpv and libtorrent than its stock packages.
 
-On macOS 14, current Homebrew FFmpeg/mpv dependencies have no working bottle
-closure. Instead of `brew install mpv ffmpeg`, install
+**macOS 14:** if Homebrew cannot provide FFmpeg/mpv, install
 `sqlite sdl2 libtorrent-rasterbar libass libplacebo meson ninja pkgconf`, then run
-`./scripts/install-macos-ffmpeg.sh` and `./scripts/install-macos-mpv.sh`
-before `zig build run`. These build shared libraries from checksum-pinned
-source with macOS 13 as the minimum deployment target.
+`./scripts/install-macos-ffmpeg.sh` and `./scripts/install-macos-mpv.sh`.
+These target macOS 13+. `HOMEBREW_PREFIX` defaults to `/opt/homebrew`.
 
-**Minimum versions (Linux source builds):** libtorrent-rasterbar **2.0** or
-newer and libmpv **0.34** or newer (mpv 0.38+ recommended;
-Ubuntu 22.04's 0.34 works — Opal picks the `loadfile` argument shape from the
-library version at runtime), SDL **2.0.22** or newer when building against the
-system SDL via `make run` (jammy's 2.0.20 lacks `SDL_PIXELFORMAT_RGBX32`).
-Standard Linux artifacts need **glibc 2.38**; Debian 12 / Mint 21 can use the
-compatibility package or build from source. Ubuntu 20.04's stock mpv and libtorrent are below the source-build
-minimums; those libraries also need upgrading before compiling. A rejected
-`loadfile` is now reported in the app's log and as a toast rather than hanging
-on "Opening stream".
+**Optional:** ONNX Runtime with `zig build -Docr=true` for OCR;
+FFmpeg and whisper-cpp for voice.
 
 </details>
 
 <details>
-<summary><b>🔧 For hackers: dev loops, tests, and the contract</b></summary>
+<summary><b>Development and tests</b></summary>
 
-<br/>
+| Command | Purpose |
+|---|---|
+| `./dev.sh` | Hot reload; `-r` for ReleaseFast |
+| `just hot` | Native incremental rebuilds |
+| `just release` / `just app` | Release binary / macOS bundle |
+| `zig build test` | Zig unit tests |
+| `just test-all` | Full feature suite |
 
-- `./dev.sh` — hot-reload loop that survives C changes; `-r` for ReleaseFast.
-- `just hot` — native `--watch -fincremental`, millisecond rebuilds.
-- `just release` / `just app` — ReleaseFast / macOS `Opal.app` bundle.
-
-```sh
-just test-all       # the comprehensive gate — must stay 0 fail
-zig build test      # pure-Zig unit tests only (fast)
-```
-
-`fail` = real regression. `skip` = optional component not installed. That's the
-contract — every PR reports its tally (see
-[`CONTRIBUTING.md`](.github/CONTRIBUTING.md)).
+Both test suites must have **0 failures** before committing. Optional-component
+skips are allowed. Include the tally in your PR.
+[Contribution guide](.github/CONTRIBUTING.md).
 
 </details>
 
 <details>
-<summary><b>📁 Where your stuff lives</b></summary>
+<summary><b>Files and data</b></summary>
 
-<br/>
+| Path | Contents |
+|---|---|
+| `~/.config/opal/` | Config, tokens (`0600`), history and AI memory (`opal.db`) |
+| `~/.cache/opal/` | Caches |
+| `~/Downloads/opal` | Default downloads |
+| `~/.config/opal/plugins/<name>/` | Source plugins |
 
-XDG-compliant:
-
-- `~/.config/opal/` — config, tokens (`0600`), and `opal.db` (history, AI memory)
-- `~/.cache/opal/` — caches
-- `~/Downloads/opal` — default downloads
-- `~/.config/opal/plugins/<name>/` — content plugins (`manifest.json` + a
-  `search`/`resolve` executable that prints JSON; Lua runs sandboxed, native
-  binaries don't — install only what you trust)
+Plugins use `manifest.json` and JSON-emitting `search`/`resolve` executables.
+Lua is sandboxed; native binaries are not. Install trusted plugins.
 
 </details>
 
 <a id="why"></a>
 
-## One app instead of ten
+## Features
 
-| Instead of… | Opal gives you |
+| Media | What you can do |
 |---|---|
-| **Stremio / Kodi** + a pile of add-ons | one search across supported, enabled providers, with playback, reading, and detail actions |
-| **an IPTV / live-TV app** | ~40,000 live channels, searchable as you type |
-| **Jellyfin / Plex** web clients | your own media servers, browsed natively |
-| **Tachiyomi / Mihon** stuck on your phone | manga extensions on the desktop — server bundled, self-managed |
-| **a torrent client** + a player | magnet → instant streaming while it downloads |
-| **ChatGPT** for *"what do I watch?"* | a local AI copilot — no key, no bill, no feed |
-| **SponsorBlock · subtitle sites · Chromecast apps** | all built in |
+| **Movies, TV, anime & YouTube** | Browse titles and search enabled sources |
+| **Live TV / IPTV** | Search ~40,000 channels |
+| **Jellyfin & Plex** | Connect and browse your servers |
+| **Manga** | Use Mihon / Tachiyomi extensions through managed Suwayomi |
+| **Torrents** | Stream magnets while they download |
+| **Local AI** | Ask for playable recommendations |
 
-Plus a player that sweats the details — auto subtitles, watch-party, phone
-remote (`:41595`), session restore — and a drawer full of extras: OCR on video
-frames, language flashcards, RSS, incognito, seven themes, a JSON API (`:41595`).
-Where it's all going: [`ROADMAP.md`](ROADMAP.md).
+Also: subtitles, translation, SponsorBlock, casting, watch parties, session restore,
+RSS, themes, incognito, and optional OCR. [Roadmap](ROADMAP.md) ·
+[Source coverage](docs/browse-sources.md).
 
-## ⌨️ Keyboard-first, remote-friendly
+## Keyboard and phone remote
 
 | | | | |
 |---|---|---|---|
 | <kbd>S</kbd> search | <kbd>B</kbd> browser | <kbd>D</kbd> library | <kbd>H</kbd> history |
 | <kbd>F</kbd> fullscreen | <kbd>P</kbd> playlist | <kbd>G</kbd> grid layout | <kbd>Z</kbd> fit/crop |
-| <kbd>⌘</kbd><kbd>O</kbd> open file | <kbd>⌘</kbd><kbd>,</kbd> settings | <kbd>Esc</kbd> back out | <kbd>⇧</kbd><kbd>I</kbd> **cheat sheet** |
+| <kbd>⌘</kbd><kbd>O</kbd> open file | <kbd>⌘</kbd><kbd>,</kbd> settings | <kbd>Esc</kbd> back | <kbd>⇧</kbd><kbd>I</kbd> shortcuts |
 
-**📱 From your phone:** Settings › Web UI → *Enable Web UI*, set *Network* to
-**LAN**, then scan the QR code shown there (it carries the one-time setup code
-on first use). That opens `http://<your-pc-ip>:41595` in the phone's browser —
-plain HTTP on your own network, no account or cloud involved. Installing it as
-a home-screen app needs a secure context (HTTPS); see
-[docs/web-companion.md](docs/web-companion.md).
+**From your phone:** open **Settings → Web UI**, enable it, set **Network** to
+**LAN**, then scan the QR code. It includes a setup code on first use and opens
+`http://<your-pc-ip>:41595`. Home-screen installation requires HTTPS.
+[Phone setup guide](docs/web-companion.md).
 
-## 🧩 Browser extension
+## Browser extension
 
-**Opal Connect** (Chrome / Edge / Firefox) turns any tab into an Opal action —
-send or queue a video, add a manga/novel site as a source, or drive playback
-from a side-panel remote.
+**Opal Connect** for Chrome, Edge, and Firefox sends videos to Opal, adds reading
+sources, and controls playback from a side panel.
 
 <div align="center">
   <a href="assets/readme/connect.webp"><img src="assets/readme/connect.webp" alt="Opal Connect browser side panel with page actions, playback controls, and cross-source search, framed over an opalescent backdrop." width="100%" /></a>
 </div>
 
-**Install** — grab the Chrome/Edge or Firefox build from the
-[latest release](../../releases/latest) (unzip → load unpacked), or build from
-`extension/` (`npm install && npm run build`). Pair it with your Opal API token
-and every action routes to the desktop app —
-[`extension/README.md`](extension/README.md).
+Download the extension from [Releases](../../releases/latest), unzip and load it,
+then pair with your Opal API token. [Install and build instructions](extension/README.md).
 
 <a id="under-the-hood"></a>
 
-## ⚙️ Under the hood
+## Under the hood
 
 ```
 src/
-├── main.zig     # appFrame() — one function per frame, immediate mode
-├── core/        # alloc, state, config, paths, io shim, sqlite (+sqlite-vec)
-├── player/      # mpv wrapper, playlists, subtitles, watch history
-├── services/    # search, AI, torrents, jellyfin, remote API, ...
-└── ui/          # dvui widgets — theme tokens, shell, grid, player chrome
-web/             # companion web UI (its own Zig project)
-extension/       # Opal Connect — cross-browser MV3 extension
+├── main.zig     # app entry and frame loop
+├── core/        # state, config, storage, I/O
+├── player/      # mpv, playlists, subtitles
+├── services/    # search, AI, torrents, remote API
+└── ui/          # native dvui interface
+web/             # companion web UI
+extension/       # Opal Connect
 ```
 
-Player, search, torrent streamer, and AI compile to **one native binary**: a
-single leak-checked allocator, fixed-size buffers over heap churn, one
-`state.app` hub under strict thread-safety rules, and a render loop that
-repaints only on change. House rules in
-[`CONTRIBUTING.md`](.github/CONTRIBUTING.md).
+Built with **Zig, dvui, and mpv**. One native binary, shared application state,
+and a UI that repaints on change. [Architecture](docs/architecture.md).
 
-Content sources ship **off** — nothing enables itself. You install endpoints
-from the plugin registry, and un-install them just as fast
-([`CONTENT_POLICY.md`](docs/CONTENT_POLICY.md)).
+Sources start disabled. Install and manage them from the plugin registry.
+[Content policy](docs/CONTENT_POLICY.md).
 
 <a id="support"></a>
 
-## 💜 Support
+## Support
 
-No telemetry to monetize, no accounts to upsell — Opal runs on goodwill:
+[Ko-fi](https://ko-fi.com/debpalash) · [PayPal](https://paypal.me/palashCoder) ·
+[Star the repo](../../stargazers) · [Report a bug](.github/SUPPORT.md).
 
-- ☕ **[Ko-fi](https://ko-fi.com/debpalash)** or 💸 **[PayPal](https://paypal.me/palashCoder)** — keep the releases (and the coffee) coming.
-- ⭐ **Star the repo** — it's how people find it.
-- 🐛 **File good bugs** ([how](.github/SUPPORT.md)) · 🔧 **send PRs** ([how](.github/CONTRIBUTING.md)).
-- 📣 **Show someone** — the GIFs above are yours to share.
+## Contributing
 
-## 🤝 Contributing
+Read the [contribution guide](.github/CONTRIBUTING.md), run both test suites,
+and include results in your PR. [Discussions](../../discussions) ·
+[Help](.github/SUPPORT.md).
 
-Yes please — read [`CONTRIBUTING.md`](.github/CONTRIBUTING.md), run
-`just test-all`, and report the tally in your PR. Questions live in
-[Discussions](../../discussions); the help map is in
-[`SUPPORT.md`](.github/SUPPORT.md).
+## License
 
-## 📜 License
+**GPL-3.0**. [License](LICENSE) · [Dependency notices](docs/NOTICE.md).
 
-**GPL-3.0** ([`LICENSE`](LICENSE), [`NOTICE.md`](docs/NOTICE.md)) — the honest
-choice for a program linked against libmpv. Bundled dependencies keep their own
-licenses (libtorrent BSD, dvui/ONNX MIT, SDL2 zlib, SQLite public domain).
+## Content and privacy
 
-## The fine print
-
-> **Opal is a player and an aggregator — it hosts, indexes, and distributes
-> nothing.** It connects to sources *you* configure; only access media you have
-> the legal right to access in your jurisdiction
-> ([`CONTENT_POLICY.md`](docs/CONTENT_POLICY.md)). BitTorrent exposes your IP to
-> the swarm — use a VPN if that matters to you. Rights holders:
-> [`docs/DMCA.md`](docs/DMCA.md). Provided "as is", no warranty.
-
-<br/>
+Opal connects to sources you configure; it does not host or distribute media.
+Only access content you have the right to use. BitTorrent shares your IP with
+peers. [Content policy](docs/CONTENT_POLICY.md) · [Privacy](docs/PRIVACY.md) ·
+[Rights-holder contact](docs/DMCA.md). Provided as is, without warranty.
 
 <div align="center">
   <img src="assets/logo.svg" width="40" alt="" /><br/>
   <sub>Built with Zig, mpv, and dvui. Yours since first launch.</sub>
 
-  <br/><br/>
-  <sub>
-  <b>Opal</b> — open-source media player · IPTV / live TV player · torrent streaming ·
-  Jellyfin & Plex client · YouTube desktop app · manga reader (Mihon / Tachiyomi / Suwayomi) ·
-  local AI copilot · self-hosted Stremio & Kodi alternative · for macOS and Linux (Windows alpha).
-  </sub>
 </div>
-
-Browse source details, supported discovery paths, and live-check limitations: [Browse sources](docs/browse-sources.md).
