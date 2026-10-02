@@ -1261,20 +1261,20 @@ def test_control_bar_v2_wired():
         # barLayout must gate real groups, not be computed and ignored.
         "layout computed": "footer_pure.barLayout(bar_pt)" in ft,
         "gates volume": "if (fit.volume_slider)" in ft,
-        "gates chips": "if (fit.secondary_chips)" in ft,
-        "gates badges": "if (fit.status_badges)" in ft,
+        "secondary options in overflow": "if (open_picker == .more)" in ft,
+        "gates badges": "if (fit.status_badges and bar_pt >= 1400)" in ft,
         "gates skips": "fit.skip_buttons" in ft,
         # Width measured in on-screen points, same rule as the shell.
         "width in points": "layoutPoints(" in ft and "state.app.ui_scale" in ft,
         # Thresholds record the measurement that set them.
-        "thresholds measured": "clipped the close button" in fp,
+        "conservative width budget": "Conservative width budgets for the single strip" in fp,
     }
     bad = [k for k, v in checks.items() if not v]
     if bad:
         return "fail", "control bar v2 wiring incomplete: " + ", ".join(bad)
     return "pass", (f"all {len(exported)} footer_pure exports reachable from production; "
-                    "barLayout sheds volume -> chips -> badges -> skips so the close "
-                    "button survives at 460pt (verified on screen at 1200/850/700/460)")
+                    "barLayout moves optional groups to overflow so the close "
+                    "button retains its strip slot; layout and source contracts checked")
 
 
 @test("Loading screen shows art + rotating facts for every source", "Player")
@@ -1827,3 +1827,28 @@ def movie_completion_sync():
     if missing:
         return "fail", "movie history sync incomplete: " + ", ".join(missing)
     return "pass", "verified TMDB identity syncs once only after real viewing"
+
+@test("Compact single-strip native playback controls", "Player")
+def test_compact_native_playback_strip():
+    ft = _src("src/ui/footer.zig")
+    pk = _src("src/ui/pickers.zig")
+    fp = _src("src/ui/footer_pure.zig")
+    controls = ft[ft.index("// ROW 2 — Controls:"):ft.index("// Secondary controls and transfer actions")]
+    checks = {
+        "shared compact height": "footer_pure.CONTROL_CONTENT_HEIGHT" in controls and controls.count("footer_pure.CONTROL_VERTICAL_PADDING") == 2,
+        "filename shares strip": "footer_pure.compactTitle(" in controls and "textSizeEx(" in controls,
+        "filename cannot pin its old minimum width": ".max_size_content = .{ .w = 0," in _between(controls, "var title_host", "const title_width"),
+        "no separate title/status row": "np_row" not in ft and "ROW 3" not in ft,
+        "narrow navigation retained": "Previous episode" in ft and "Next episode" in ft and "Previous track" in ft and "Next track" in ft,
+        "secondary transfer options": "if (open_picker == .more)" in ft and 'confirmDangerButton(@src(), "Delete", 201)' in ft,
+        "secondary options explain their values": "Picture: {s}" in ft and '"Output device"' in ft and "Download limit: Unlimited" in ft,
+        "one subtitle trigger": '703, icons.tvg.lucide.captions' in controls and '704,' not in controls and '705,' not in controls and '709,' not in controls,
+        "subtitle actions retained": "Search language:" in pk and "Use this language for audio and subtitles" in pk and "Find subtitles online…" in pk,
+        "subtitle panels track the shared trigger": "if (kind == .sub)" in _between(ft, "fn recordAnchor", "// Persist the close-button") and "@intFromEnum(PickerKind.subs)" in _between(ft, "fn recordAnchor", "// Persist the close-button") and "@intFromEnum(PickerKind.lang)" in _between(ft, "fn recordAnchor", "// Persist the close-button"),
+        "secondary panels track More without moving CC panels": "[_]PickerKind{ .aspect, .chapter, .quality, .audio_device, .playlist }" in _between(ft, "if (kind == .more)", "// Persist the close-button") and "@intFromEnum(secondary)" in _between(ft, "if (kind == .more)", "// Persist the close-button"),
+        "wheel seek belongs to scrubber": "scrubber_wheel_rect = band_rect" in ft and "const r = scrubber_wheel_rect" in ft,
+        "keyboard focus retained": "dvui.tabIndexSet(btn_id, null)" in ft and 'matchBind("activate")' in ft,
+        "boundary regressions": "compact title respects measured width and UTF8 boundaries" in fp,
+    }
+    bad = [key for key, good in checks.items() if not good]
+    return ("fail", ", ".join(bad)) if bad else ("pass", "40pt strip shares measured filename; subtitle actions and confirmed transfer actions retained in drop-ups")

@@ -460,9 +460,19 @@ def test_sub_picker_keyless_results():
         return "fail", "keyed opensubtitles.com section is no longer gated on the key"
     if "for more results" not in picker:
         return "fail", "no-key hint one-liner missing from the picker"
-    # Footer chip kicks the keyless search when opening the picker.
-    if "searchFromActivePlayer(&state.app.sub_engine)" not in footer:
-        return "fail", "footer Subs chip no longer kicks the keyless search"
+    # One subtitle trigger opens track/language/search options; its online
+    # action must open the same result picker and start both real engines.
+    track_popup = _between(_src("src/ui/pickers.zig"), "pub fn renderTrackPickerPopover", "pub fn renderAudioDevicePickerPopover")
+    if not ('703, icons.tvg.lucide.captions' in footer
+            and 'togglePicker(.sub)' in footer
+            and 'Find subtitles online…' in track_popup
+            and 'state.app.sub_picker_open = true' in track_popup
+            and 'searchFromActivePlayer(&state.app.sub_engine)' in track_popup
+            and 'opensub_api_key_len > 0' in track_popup
+            and 'subs.autoSearchFromPlayer(false)' in track_popup
+            and '"sub-visibility"' in track_popup
+            and 'Search language:' in track_popup):
+        return "fail", "unified subtitle popup lost tracks/language or actual keyless/keyed search launch"
     # Settings list mirrors the same wiring.
     if "searchQuery(engine" not in settings and "searchQuery(&state.app.sub_engine" not in settings:
         return "fail", "Settings search no longer routes through the keyless engine"
