@@ -16,12 +16,12 @@ def test_web_remote_module_boundaries():
     remote = _src("src/services/remote.zig")
     web_modules = (
         "core.js", "now-playing.js", "catalog.js", "playback.js",
-        "integrations.js", "source-management.js", "media.js", "discovery.js", "boot.js",
+        "integrations.js", "access.js", "source-management.js", "media.js", "source-details.js", "discovery.js", "boot.js",
     )
     backend_modules = (
         "remote_http.zig", "remote_static.zig", "remote_status.zig",
         "remote_library_api.zig", "remote_transfer_api.zig", "remote_catalog_api.zig",
-        "remote_plex_api.zig",
+        "remote_plex_api.zig", "remote_audio_api.zig", "remote_novels_api.zig",
         "remote_collections_api.zig",
         "remote_local_library_api.zig",
         "remote_suwayomi_api.zig",
@@ -86,7 +86,7 @@ def test_web_now_playing_context_contract():
             and ".max_response = buf.len" in stream and 'curl' not in _between(stream, "fn serveProxied", "fn sendImage"),
         "private art bypasses PWA cache": "'/now-playing/art'" in worker,
         "status lock released before write": remote.index("players_mutex.lock();\n                const body")
-            < remote.index("players_mutex.unlock();\n                const ev"),
+            < remote.index("io_g.streamWriteAll(stream, ev)", remote.index("players_mutex.unlock();", remote.index("players_mutex.lock();\n                const body"))),
     }
     missing = [name for name, ok in checks.items() if not ok]
     if missing:
@@ -509,7 +509,7 @@ def test_web_pwa_contract():
             and "window.addEventListener('offline'" in ui,
         "static server routes": all(
             f'.route = "{path}"' in remote for path in ("/manifest.webmanifest", "/service-worker.js", "/icon.svg")
-        ) and 'remote_static.zig").serve(stream, path)' in remote,
+        ) and 'remote_static.zig").serve(stream, path, request)' in remote,
         "release assets stay together": 'cp -R "$ROOT/web/."' in mac_pack
             and "- src: web" in nfpm and release.count("cp -R web/.") >= 3,
     }

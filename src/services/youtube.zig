@@ -1256,6 +1256,17 @@ pub fn fetchThumb(item: *state.YtItem) void {
 /// Stable copies for non-UI readers such as the companion API. The result list
 /// is mutated by detached search workers, so callers must not iterate the
 /// ArrayList directly while a refresh can replace its storage.
+/// Copy one coherent list under one lock into caller-owned heap storage.
+pub fn snapshotCopy(out: []@import("remote_youtube_pure.zig").Row) @import("remote_youtube_pure.zig").Snapshot {
+    const projection = @import("remote_youtube_pure.zig");
+    yt_mutex.lock();
+    defer yt_mutex.unlock();
+    const total = state.app.yt.results.items.len;
+    const count = @min(total, out.len);
+    for (state.app.yt.results.items[0..count], out[0..count]) |item, *row| row.* = projection.Row.copy(item);
+    return .{ .count = count, .total = total, .loading = state.app.yt.is_loading.load(.acquire), .request_generation = search_request.current() };
+}
+
 pub fn resultCount() usize {
     yt_mutex.lock();
     defer yt_mutex.unlock();

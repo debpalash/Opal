@@ -252,7 +252,7 @@
     },
     {
       "id": "comet",
-      "name": "Comet \u00b7 debrid (Stremio)",
+      "name": "Comet · debrid (Stremio)",
       "type": "stremio",
       "version": "1.0.0",
       "endpoints": {
@@ -836,6 +836,16 @@
         "feed": "https://feeds.npr.org/510318/podcast.xml"
       },
       "note": "Official publisher RSS feed; appears in Podcasts after installation. Requires the installed-feed connector."
+    },
+    {
+      "id": "animetosho",
+      "name": "AnimeTosho (anime releases)",
+      "type": "torrent",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://feed.animetosho.org"
+      },
+      "note": "Public JSON release search with canonical magnets and provider size/swarm metadata. Requires an Opal build with this connector."
     }
   ]
 }

@@ -46,7 +46,7 @@ def test_vndb_catalog():
 
         # ── Service: async POST worker, thread-safety, browse-only handoff ──
         "api.vndb.org endpoint": "https://api.vndb.org/kana/vn" in svc,
-        "http POST method": '"POST"' in svc and "curlPost" in svc,
+        "http POST method": '"--data"' in svc and "curlPost" in svc and "bounded_process.zig" in svc,
         "search worker": "pub fn searchVndb" in svc and "fn fetchWorker" in svc,
         "popular one-shot": "pub fn loadPopularOnce" in svc,
         "detail view": "fn renderDetail" in svc and "pub fn openDetail" in svc,

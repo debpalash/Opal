@@ -198,27 +198,33 @@ const networkFetch = (url, options) => fetch(url, options).then(
   response => { setNetworkState(true); return response; },
   error => { setNetworkState(false); throw error; },
 );
-const api = (path) => networkFetch(BASE + '/api' + path, { credentials:'same-origin' })
-  .then(r => { if (r.status === 401) { unpair(); throw 0; } return r.json(); });
-const apiMutation = (path) => networkFetch(BASE + '/api' + path, {
-  method: 'POST', credentials:'same-origin',
-}).then(async r => {
-  if (r.status === 401) { unpair(); throw new Error('Signed out'); }
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok || data.ok === false) throw new Error(data.error || 'Request failed');
+async function decodeApiResponse(response){
+  if (response.status === 401) {
+    unpair(); const error = new Error('Signed out'); error.status = 401; throw error;
+  }
+  let data;
+  try { data = response.status === 204 ? {} : await response.json(); }
+  catch {
+    const error = new Error(response.ok ? 'Server returned invalid JSON' : `Request failed (${response.status})`);
+    error.status = response.status; throw error;
+  }
+  // Feature snapshots can include error:true alongside useful cached rows.
+  // Only transport failures and explicit command errors reject the view.
+  if (!response.ok || data?.ok === false || (typeof data?.error === 'string' && data.error)) {
+    const error = new Error(typeof data?.error === 'string' ? data.error : `Request failed (${response.status})`);
+    error.status = response.status; throw error;
+  }
   return data;
-});
+}
+const api = path => networkFetch(BASE + '/api' + path, { credentials:'same-origin' }).then(decodeApiResponse);
+const apiMutation = path => networkFetch(BASE + '/api' + path, {
+  method:'POST', credentials:'same-origin',
+}).then(decodeApiResponse);
 const apiFormMutation = (path, values) => networkFetch(BASE + '/api' + path, {
-  method: 'POST', credentials:'same-origin',
-  headers: {'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},
-  body: new URLSearchParams(values).toString(),
-}).then(async r => {
-  if (r.status === 401) { unpair(); throw new Error('Signed out'); }
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok || data.ok === false) throw new Error(data.error || 'Request failed');
-  return data;
-});
-// Per-container cache of the last innerHTML we assigned. Renderers that poll
+  method:'POST', credentials:'same-origin',
+  headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},
+  body:new URLSearchParams(values).toString(),
+}).then(decodeApiResponse);// Per-container cache of the last innerHTML we assigned. Renderers that poll
 // (search/torrents/anime/podcast/rss) build the HTML string, then only touch
 // the DOM when it actually changed — avoids re-parsing identical markup and
 // re-requesting <img> sources every tick.
@@ -275,13 +281,14 @@ function paired(){
   api('/host').then(h => {
     HOSTED = !!h.headless;
     // Hosted box has no desktop player chrome to control.
-    if (HOSTED) $('np-quick').style.display = 'none';
+    if (HOSTED) { $('np-quick').style.display = 'none'; $('dest-row').style.display = 'none'; }
   }).catch(()=>{});
   setPlayHere(PLAY_HERE);
   // Headless has no desktop player to hand off to, so the choice is moot.
   if (HOSTED) $('dest-row').style.display = 'none';
   loadCalendar();
   startStatus();
+  loadPage(currentPage);
 }
 
 // Sign out — also the 401 handler in api(). Revokes the session server-side.

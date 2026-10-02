@@ -30,7 +30,7 @@ def test_universal_search_fanout():
         ),
         "plex source type": "    plex," in res,
         "plugin source type": "    plugin," in res,
-        "toolbar pills declared": "stremio, rss, livetv, music, radio, podcast }" in res,
+        "toolbar pills declared": all(s in res.split("pub const SourceBit", 1)[1].split(";", 1)[0] for s in ("stremio", "rss", "livetv", "music", "radio", "podcast", "novels", "vndb", "audiobooks", "opds")),
         # The mask must be derived from the enum, not a hand-written literal —
         # a hardcoded 0xFF silently left every new pill off.
         "mask derived from enum": "ALL_SOURCE_BITS" in res and '@typeInfo(SourceBit).@"enum".fields.len' in res,
@@ -85,7 +85,7 @@ def test_universal_search_fanout():
         # ── Result cap widened so late finishers aren't starved ──
         "MAX_RESULTS constant": "pub const MAX_RESULTS: usize = 96;" in res,
         "no stale 64 cap": "result_count >= 64" not in res,
-        "cache blob sized for fallback candidates": "SEARCH_BLOB_CAP: usize = 768 * 1024" in res,
+        "cache blob sized for fallback candidates": "SEARCH_BLOB_CAP: usize = MAX_RESULTS * @sizeOf(ResolvedItem)" in res,
 
         # ── Playback routing ──
         "music/radio play direct": ".youtube, .stremio, .local, .music, .radio => {" in res,
@@ -257,3 +257,37 @@ def test_scene_title_match_rule():
     if missing:
         return "fail", "Scene-title rule incomplete: " + ", ".join(missing)
     return "pass", "Series title = text before SxxEyy; low-confidence picks show no art"
+
+
+@test("OPDS universal search uses advertised endpoints and bound catalog identities", "Search")
+def test_opds_universal_search():
+    res = _src("src/services/resolver.zig")
+    opds = _src("src/services/opds.zig")
+    pure = _src("src/services/opds_pure.zig")
+    start = opds.index("pub fn searchInto(")
+    end = opds.index("pub fn entryCount()", start)
+    independent = opds[start:end]
+    checks = {
+        "independent caller-owned search": "out: []pure.OpdsEntry" in independent
+            and "pure.parseFeed(results, search_url, out)" in independent
+            and "state.app.opds.entries" not in independent,
+        "advertised query contract": "pure.feedSearchLink(body, root)" in independent
+            and "pure.openSearchUrl" in independent
+            and "pure.expandSearchTemplate" in independent,
+        "bounded worker allocation": "alloc.alloc(pure.OpdsEntry, 12)" in res,
+        "registered worker and terminal status": "Spawn.go(resolveOpds, &status_opds)" in res
+            and "status_opds.load(.acquire) != .searching" in res,
+        "connection-bound cached action": "w.u32v(@truncate(it.opds_connection_identity))" in res
+            and "it.opds_connection_identity = @as(u64, lo)" in res
+            and "snap.identity != connection_identity" in opds,
+        "credential-free public identity": '"opal://opds/{x}"' in res,
+        "actual metadata": "row.author[0..row.author_len]" in res
+            and "row.summary[0..row.summary_len]" in res,
+        "cross-origin credential isolation": "pure.sameOrigin(root, search_url)" in independent,
+        "GET Atom search only": '"application/atom+xml"' in pure
+            and 'std.ascii.eqlIgnoreCase(method, "GET")' in pure,
+    }
+    missing = [name for name, passed in checks.items() if not passed]
+    if missing:
+        return "fail", ", ".join(missing)
+    return "pass", "Advertised independent OPDS queries, real metadata, origin-bound credentials and cached reader identity"

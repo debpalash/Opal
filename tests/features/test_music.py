@@ -40,7 +40,7 @@ def test_music():
         "routes through pure": all(
             f"pure.{fn}(" in svc
             for fn in ("authToken", "buildAuthQuery", "buildSearchPageUrl",
-                       "buildStreamUrl", "buildCoverUrl", "parseSong", "responseOk")
+                       "buildStreamUrl", "buildCoverUrl", "parseSongValue", "pageRows")
         ),
         "source_config gate": 'source_config' in svc and '"subsonic"' in svc,
         "inert when unconfigured": "fn configured()" in svc and "orelse return" in svc,
@@ -100,9 +100,9 @@ def test_music():
         "new sources routed through pure": all(
             f"{m}.{fn}(" in svc
             for m, fn in (("jf_pure", "buildSearchPageUrl"), ("jf_pure", "buildStreamUrl"),
-                          ("jf_pure", "buildCoverUrl"), ("jf_pure", "parseSong"),
+                          ("jf_pure", "buildCoverUrl"), ("jf_pure", "parseSongValue"),
                           ("px_pure", "buildSearchPageUrl"), ("px_pure", "buildStreamUrl"),
-                          ("px_pure", "buildCoverUrl"), ("px_pure", "parseSong"))
+                          ("px_pure", "buildCoverUrl"), ("px_pure", "parseSongValue"))
         ),
         "plex credentials decrypted at boundary": "secret_store.reveal(" in svc
             and "px_pure.isValidBase(" in svc,

@@ -296,6 +296,7 @@ fn downloadWorker() void {
         "15",      "--max-time", "120",           "-o",       stage_path,
         dl_url,
     }, &helper_output, .{ .timeout_ms = 121_000 });
+    if (workers.isQuitting() or download.failure == .cancelled) return;
     if (!download.ok()) {
         logs.pushLog("error", "ytdlp", "yt-dlp staged download failed; keeping the working version", true);
         return;
@@ -307,6 +308,7 @@ fn downloadWorker() void {
         "--proto", "=https",     "--proto-redir", "=https",       "--connect-timeout",
         "15",      "--max-time", "30",            YTDLP_SUMS_URL,
     }, &sums_buf, .{ .timeout_ms = 31_000 });
+    if (workers.isQuitting() or sums_result.failure == .cancelled) return;
     if (!sums_result.ok()) {
         logs.pushLog("error", "ytdlp", "yt-dlp checksum download failed; keeping the working version", true);
         return;

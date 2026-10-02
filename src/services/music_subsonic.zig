@@ -620,6 +620,24 @@ pub fn resultRow(idx: usize) ?pure.MusicSong {
     return state.app.music.results[idx];
 }
 
+pub fn songForAction(source: u8, id: []const u8) ?pure.MusicSong {
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    return pure.songByIdentity(state.app.music.source, source, state.app.music.results[0..@min(state.app.music.result_count, state.app.music.results.len)], id);
+}
+pub fn playSongIdentity(source: u8, id: []const u8) bool {
+    const song = songForAction(source, id) orelse return false;
+    playCopiedSong(song, source);
+    return true;
+}
+pub fn copyResultSnapshot(out: []pure.MusicSong) struct { source: u8, count: usize } {
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    const count = @min(@min(state.app.music.result_count, state.app.music.results.len), out.len);
+    @memcpy(out[0..count], state.app.music.results[0..count]);
+    return .{ .source = state.app.music.source, .count = count };
+}
+
 // ══════════════════════════════════════════════════════════
 // Play — hand the stream URL straight to mpv
 // ══════════════════════════════════════════════════════════
@@ -630,7 +648,11 @@ pub fn playSong(idx: usize) void {
         return;
     }
     const song = state.app.music.results[idx];
+    const source = state.app.music.source;
     parse_mutex.unlock();
+    playCopiedSong(song, source);
+}
+fn playCopiedSong(song: pure.MusicSong, source: u8) void {
 
     // Snapshot title/artist into locals BEFORE the mpv handoff so nothing handed
     // to the player aliases the live results[] row a re-search could rewrite.
@@ -649,7 +671,7 @@ pub fn playSong(idx: usize) void {
     var b: [256]u8 = undefined;
     var tokb: [320]u8 = undefined;
 
-    switch (state.app.music.source) {
+    switch (source) {
         SRC_JIOSAAVN, SRC_AUDIUS => {
             // Hand the perma_url to mpv; its bundled yt-dlp resolves the signed
             // CDN audio stream (no DES, no third-party instance).
@@ -688,7 +710,7 @@ pub fn playSong(idx: usize) void {
     // unusable. loading_pure.posterUrl now takes either form.
     {
         var cov_buf: [1024]u8 = undefined;
-        const cover_url = coverUrlFor(&song, &cov_buf);
+        const cover_url = coverUrlForSource(&song, source, &cov_buf);
         state.stashPendingPlayFull(
             name_buf[0..nlen],
             cover_url,
@@ -727,7 +749,11 @@ pub fn downloadSong(idx: usize) void {
         return;
     }
     const song = state.app.music.results[idx];
+    const source = state.app.music.source;
     parse_mutex.unlock();
+    downloadCopiedSong(song, source);
+}
+fn downloadCopiedSong(song: pure.MusicSong, source: u8) void {
     if (!song.download_allowed) return;
 
     // Music dir.
@@ -739,7 +765,7 @@ pub fn downloadSong(idx: usize) void {
     var name_buf: [200]u8 = undefined;
     const name = dl_pure.sanitizeName(song.artist[0..song.artist_len], song.title[0..song.title_len], &name_buf);
 
-    if (state.app.music.source == SRC_JIOSAAVN) {
+    if (source == SRC_JIOSAAVN) {
         const purl = song.play_url[0..@min(song.play_url_len, song.play_url.len)];
         if (purl.len == 0) return;
         const S = struct {
@@ -799,7 +825,7 @@ pub fn downloadSong(idx: usize) void {
         var b: [256]u8 = undefined;
         var tokb: [320]u8 = undefined;
         var url_buf: [1024]u8 = undefined;
-        const stream = switch (state.app.music.source) {
+        const stream = switch (source) {
             SRC_AUDIUS => purl,
             SRC_SUBSONIC => blk: {
                 if (id.len == 0) return;
@@ -1060,11 +1086,14 @@ fn renderSearchBar() void {
 /// Shared by the grid's cover art and the loading screen's album art; one
 /// resolver, so the two can never disagree about where the art lives.
 pub fn coverUrlFor(song: *const pure.MusicSong, url_buf: []u8) []const u8 {
+    return coverUrlForSource(song, state.app.music.source, url_buf);
+}
+fn coverUrlForSource(song: *const pure.MusicSong, source: u8, url_buf: []u8) []const u8 {
     const cover_field = song.cover[0..@min(song.cover_len, song.cover.len)];
     if (cover_field.len == 0) return url_buf[0..0];
     var b: [256]u8 = undefined;
     var tokb: [320]u8 = undefined;
-    switch (state.app.music.source) {
+    switch (source) {
         SRC_JIOSAAVN, SRC_AUDIUS => {
             if (cover_field.len > url_buf.len) return url_buf[0..0];
             @memcpy(url_buf[0..cover_field.len], cover_field);
@@ -1091,10 +1120,10 @@ pub fn coverUrlFor(song: *const pure.MusicSong, url_buf: []u8) []const u8 {
     return url_buf[0..0];
 }
 
-fn renderCover(i: usize, song: *const pure.MusicSong) void {
+fn renderCover(i: usize, song: *const pure.MusicSong, source: u8) void {
     const slot = &cover_slots[i];
     var url_buf: [1024]u8 = undefined;
-    const cover_url = coverUrlFor(song, &url_buf);
+    const cover_url = coverUrlForSource(song, source, &url_buf);
 
     const h = std.hash.Fnv1a_64.hash(cover_url);
     if (slot.url_hash != h and !slot.fetching) {
@@ -1134,7 +1163,7 @@ fn renderCover(i: usize, song: *const pure.MusicSong) void {
     }
 }
 
-fn renderCard(i: usize, card_w: f32, song: *const pure.MusicSong) void {
+fn renderCard(i: usize, card_w: f32, song: *const pure.MusicSong, source: u8) void {
     var name_buf: [160]u8 = undefined;
     const title = safeUtf8Buf(song.title[0..@min(song.title_len, song.title.len)], &name_buf);
 
@@ -1159,11 +1188,11 @@ fn renderCard(i: usize, card_w: f32, song: *const pure.MusicSong) void {
         });
         bw.processEvents();
         bw.drawBackground();
-        renderCover(i, song);
+        renderCover(i, song, source);
         const clicked = bw.clicked();
         bw.drawFocus();
         bw.deinit();
-        if (clicked) playSong(i);
+        if (clicked) playCopiedSong(song.*, source);
     }
 
     {
@@ -1186,7 +1215,7 @@ fn renderCard(i: usize, card_w: f32, song: *const pure.MusicSong) void {
             .padding = dvui.Rect.all(4),
             .gravity_y = 0.5,
         })) {
-            downloadSong(i);
+            downloadCopiedSong(song.*, source);
         }
     }
     if (song.artist_len > 0) {
@@ -1258,9 +1287,14 @@ fn renderResults() void {
         while (col < cols and r * cols + col < total) : (col += 1) {
             const idx = r * cols + col;
             parse_mutex.lock();
+            if (idx >= state.app.music.result_count) {
+                parse_mutex.unlock();
+                continue;
+            }
             const song = state.app.music.results[idx];
+            const source = state.app.music.source;
             parse_mutex.unlock();
-            renderCard(idx, card_w, &song);
+            renderCard(idx, card_w, &song, source);
         }
     }
 
@@ -1288,4 +1322,31 @@ fn renderResults() void {
             state.wakeUi();
         }
     }
+}
+
+test "Music action rejects stale provider identity after search publication" {
+    const m = &state.app.music;
+    const saved_source = m.source;
+    const saved_count = m.result_count;
+    const saved = m.results[0];
+    defer {
+        m.source = saved_source;
+        m.result_count = saved_count;
+        m.results[0] = saved;
+    }
+    m.source = SRC_JIOSAAVN;
+    m.result_count = 1;
+    var song = pure.MusicSong{};
+    song.id[0] = 'a';
+    song.id_len = 1;
+    song.play_url[0] = 'A';
+    song.play_url_len = 1;
+    m.results[0] = song;
+    const copied = songForAction(SRC_JIOSAAVN, "a").?;
+    m.results[0].id[0] = 'b';
+    try std.testing.expect(songForAction(SRC_JIOSAAVN, "a") == null);
+    m.results[0] = song;
+    m.source = SRC_SUBSONIC;
+    try std.testing.expect(songForAction(SRC_JIOSAAVN, "a") == null);
+    try std.testing.expectEqualStrings("A", copied.play_url[0..copied.play_url_len]);
 }

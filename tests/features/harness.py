@@ -231,8 +231,8 @@ def _posix_shell():
 def _web_js():
     """The ordered browser bundle as served by web/index.html."""
     names = (
-        "core.js", "now-playing.js", "catalog.js", "playback.js", "integrations.js",
-        "source-management.js", "media.js", "discovery.js", "boot.js",
+        "core.js", "now-playing.js", "catalog.js", "playback.js", "integrations.js", "access.js",
+        "source-management.js", "media.js", "source-details.js", "discovery.js", "boot.js",
     )
     return "\n".join(_src(f"web/js/{name}") for name in names)
 
@@ -245,7 +245,7 @@ def _web_app():
 def _remote_api():
     """Remote HTTP subsystem across its feature-owned modules."""
     names = (
-        "remote.zig", "remote_http.zig", "remote_static.zig",
+        "remote.zig", "remote_http.zig", "remote_static.zig", "remote_audio_api.zig", "remote_novels_api.zig", "remote_library_pure.zig", "remote_library_api.zig",
         "remote_status.zig", "remote_library_api.zig", "remote_transfer_api.zig",
         "remote_plex_api.zig",
         "remote_youtube_api.zig",

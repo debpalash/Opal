@@ -35,6 +35,13 @@ var filter: tp.Filter = .all;
 
 var rows: [tp.MAX_ROWS]tp.Row = undefined;
 var order: [tp.MAX_ROWS]u16 = undefined;
+const row_layout = @import("queue_layout_pure.zig");
+var transfers_keyboard_layout = false;
+var transfers_scroll: dvui.ScrollInfo = .{};
+var row_heights: [tp.MAX_ROWS]f32 = @splat(0);
+var height_ids: [tp.MAX_ROWS]usize = @splat(0);
+var height_scale: f32 = 0;
+
 var row_count: usize = 0;
 
 /// Set after EVERY mutating action (and by the file-scan worker) to force the
@@ -117,7 +124,7 @@ pub fn renderTransfersContent() void {
 
     renderControlBar();
 
-    var scroll = dvui.scrollArea(@src(), .{}, .{
+    var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &transfers_scroll }, .{
         .expand = .both,
         .background = true,
         .color_fill = theme.colors.bg_surface,
@@ -468,21 +475,60 @@ fn renderControlBar() void {
 
 fn renderUnifiedList() void {
     // Direct HTTP downloads first — they're what the user just started.
+    var http_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = 99010, .expand = .horizontal });
     const http_shown = renderHttpRows();
+    const http_height = http_box.data().rect.h;
+    http_box.deinit();
 
+    var tab_pressed = false;
+    var pointer_pressed = false;
+    for (dvui.events()) |event| {
+        if (event.evt == .key and event.evt.key.code == .tab and event.evt.key.action == .down) tab_pressed = true;
+        if (event.evt == .mouse and event.evt.mouse.action == .press) pointer_pressed = true;
+    }
+    transfers_keyboard_layout = row_layout.keyboardLayoutMode(transfers_keyboard_layout, tab_pressed, pointer_pressed);
+    const font_h = dvui.themeGet().font_body.textHeight();
+    if (height_scale != font_h) {
+        row_heights = @splat(0);
+        height_scale = font_h;
+    }
+    var visible: [tp.MAX_ROWS]u16 = undefined;
+    var heights: [tp.MAX_ROWS]f32 = undefined;
     var shown: usize = 0;
+    var expanded = false;
     for (order[0..row_count]) |oi| {
         const r = &rows[oi];
         if (!tp.matchesFilter(r, filter)) continue;
-
-        // renderRow returns true when it removed something — torrent ids and
-        // history indices are invalidated mid-frame, so bail out at once.
-        if (renderRow(r, shown)) return;
-        shown += 1;
-
-        if (isExpanded(r)) {
-            if (renderExpanded(r)) return;
+        const rid = rowId(r);
+        if (height_ids[oi] != rid) {
+            height_ids[oi] = rid;
+            row_heights[oi] = 0;
         }
+        visible[shown] = oi;
+        heights[shown] = row_heights[oi];
+        shown += 1;
+        expanded = expanded or isExpanded(r);
+    }
+    // Expanded file trees have changing heights and interactive controls.
+    // Keep their full layout until collapsed; normal merged rows are measured.
+    const win = if (expanded or transfers_keyboard_layout)
+        row_layout.RowWindow{ .first = 0, .last = shown, .before = 0, .after = 0 }
+    else
+        row_layout.measuredRows(heights[0..shown], font_h * 3 + 30, transfers_scroll.viewport.y - http_height, transfers_scroll.viewport.h, 2);
+    if (win.before > 0) {
+        var spacer = dvui.box(@src(), .{}, .{ .id_extra = 99011, .min_size_content = .{ .w = 1, .h = win.before } });
+        spacer.deinit();
+    }
+    var i = win.first;
+    while (i < win.last) : (i += 1) {
+        const r = &rows[visible[i]];
+        // A removal invalidates handles and stops drawing this snapshot.
+        if (renderRow(r, i, visible[i])) return;
+        if (isExpanded(r) and renderExpanded(r)) return;
+    }
+    if (win.after > 0) {
+        var spacer = dvui.box(@src(), .{}, .{ .id_extra = 99012, .min_size_content = .{ .w = 1, .h = win.after } });
+        spacer.deinit();
     }
 
     if (shown == 0 and http_shown == 0) {
@@ -513,7 +559,7 @@ fn statusColor(s: tp.Status) dvui.Color {
 
 /// Draws one merged row. Returns true if it performed a removal (the caller
 /// must stop iterating: ids/indices are now stale).
-fn renderRow(r: *const tp.Row, i: usize) bool {
+fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
     const rid = rowId(r);
     const st = tp.statusFor(r);
     const name = r.nameSlice();
@@ -538,7 +584,10 @@ fn renderRow(r: *const tp.Row, i: usize) bool {
         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
         .color_border = theme.colors.border_subtle,
     });
-    defer row.deinit();
+    defer {
+        if (row_index < row_heights.len and row.data().rect.h > 0) row_heights[row_index] = row.data().rect.h;
+        row.deinit();
+    }
 
     // Status bar (colored left edge)
     {

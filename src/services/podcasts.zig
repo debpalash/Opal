@@ -37,6 +37,13 @@ const agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/2010010
 var parse_mutex: @import("../core/sync.zig").Mutex = .{};
 var search_request: LatestRequest = .{};
 var publication_gen: u64 = 0;
+var episode_body: ?[]u8 = null;
+var episode_offset: usize = 0;
+var episode_total: usize = 0;
+var selected_feed: [300]u8 = undefined;
+var selected_feed_len: usize = 0;
+var selected_artwork: [300]u8 = undefined;
+var selected_artwork_len: usize = 0;
 var episode_request: @import("../core/latest_request.zig").Gate = .{};
 var episode_failed: std.atomic.Value(bool) = .init(false);
 var episode_retry_count: std.atomic.Value(u8) = .init(0);
@@ -51,9 +58,13 @@ pub const Snapshot = struct {
     result_count: usize,
     episodes: [200]pure.Episode,
     episode_count: usize,
+    episode_offset: usize,
+    episode_total: usize,
     selected_idx: ?usize,
     selected_name: [160]u8,
     selected_name_len: usize,
+    selected_artwork: [300]u8,
+    selected_artwork_len: usize,
     fetch_error: bool,
     showing_popular: bool,
     loading: bool,
@@ -70,14 +81,22 @@ pub fn snapshot() Snapshot {
 pub fn copySnapshot(out: *Snapshot) void {
     parse_mutex.lock();
     defer parse_mutex.unlock();
+    copySnapshotLocked(out);
+}
+
+fn copySnapshotLocked(out: *Snapshot) void {
     out.generation = publication_gen;
     out.results = state.app.podcasts.results;
     out.result_count = @min(state.app.podcasts.result_count, state.app.podcasts.results.len);
     out.episodes = state.app.podcasts.episodes;
     out.episode_count = @min(state.app.podcasts.episode_count, state.app.podcasts.episodes.len);
+    out.episode_offset = episode_offset;
+    out.episode_total = episode_total;
     out.selected_idx = state.app.podcasts.selected_idx;
     out.selected_name = state.app.podcasts.selected_name;
     out.selected_name_len = @min(state.app.podcasts.selected_name_len, state.app.podcasts.selected_name.len);
+    out.selected_artwork = selected_artwork;
+    out.selected_artwork_len = selected_artwork_len;
     out.fetch_error = state.app.podcasts.fetch_error;
     out.showing_popular = state.app.podcasts.showing_popular;
     out.loading = state.app.podcasts.is_loading.load(.acquire);
@@ -102,6 +121,10 @@ pub fn closeEpisodes() void {
     episode_failed.store(false, .release);
     episode_retry_count.store(0, .release);
     episode_retry_at_ms.store(0, .release);
+    if (episode_body) |body| alloc.free(body);
+    episode_body = null;
+    episode_offset = 0;
+    episode_total = 0;
     state.app.podcasts.selected_idx = null;
     state.app.podcasts.episode_count = 0;
     publication_gen +%= 1;
@@ -286,9 +309,13 @@ fn popularWorker(my_gen: u32) void {
 
 fn installedFeeds(rows: []pure.Podcast, query: []const u8, gen: u32) usize {
     var count: usize = 0;
-    for ([_][]const u8{ "podcast-nasa", "podcast-bbc", "podcast-npr" }) |id| {
-        const cfg = @import("../core/source_config.zig");
-        if (cfg.get(id, "feed")) |raw| {
+    const cfg = @import("../core/source_config.zig");
+    const feeds = alloc.alloc(cfg.FieldSnapshot, 256) catch return 0;
+    defer alloc.free(feeds);
+    const feed_count = cfg.copyFields("feed", feeds);
+    for (feeds[0..feed_count]) |feed| {
+        {
+            const raw = feed.value[0..feed.value_len];
             if (!search_request.isCurrent(gen)) return count;
             var url_buf: [512]u8 = undefined;
             if (raw.len > url_buf.len or !pure.isFeedUrl(raw)) continue;
@@ -453,12 +480,16 @@ pub fn loadEpisodes(idx: usize) void {
 
 fn startEpisodes(idx: usize, reset_retry: bool) void {
     parse_mutex.lock();
-    if (idx >= state.app.podcasts.result_count) {
+    if (reset_retry and idx >= state.app.podcasts.result_count) {
         parse_mutex.unlock();
         return;
     }
     state.app.podcasts.selected_idx = idx;
     if (reset_retry) {
+        if (episode_body) |body| alloc.free(body);
+        episode_body = null;
+        episode_offset = 0;
+        episode_total = 0;
         state.app.podcasts.episode_count = 0;
         state.app.podcasts.fetch_error = false;
         clearEpisodeFailure();
@@ -466,15 +497,19 @@ fn startEpisodes(idx: usize, reset_retry: bool) void {
 
     // Copy the selected show's name (episode-view header) + feed url for the
     // worker so it never reads results[] as it may be reordered by a new search.
-    const p = &state.app.podcasts.results[idx];
-    const nlen = @min(p.name_len, state.app.podcasts.selected_name.len);
-    @memcpy(state.app.podcasts.selected_name[0..nlen], p.name[0..nlen]);
-    state.app.podcasts.selected_name_len = nlen;
-
     var job = EpisodeJob{ .generation = episode_request.begin(&state.app.podcasts.episodes_loading) };
-    const flen = @min(p.feed_url_len, job.feed.len);
-    @memcpy(job.feed[0..flen], p.feed_url[0..flen]);
-    job.feed_len = flen;
+    if (reset_retry) {
+        const p = &state.app.podcasts.results[idx];
+        const nlen = @min(p.name_len, state.app.podcasts.selected_name.len);
+        @memcpy(state.app.podcasts.selected_name[0..nlen], p.name[0..nlen]);
+        state.app.podcasts.selected_name_len = nlen;
+        selected_artwork_len = @min(p.artwork_len, selected_artwork.len);
+        @memcpy(selected_artwork[0..selected_artwork_len], p.artwork[0..selected_artwork_len]);
+        selected_feed_len = @min(p.feed_url_len, selected_feed.len);
+        @memcpy(selected_feed[0..selected_feed_len], p.feed_url[0..selected_feed_len]);
+    }
+    job.feed_len = selected_feed_len;
+    @memcpy(job.feed[0..job.feed_len], selected_feed[0..job.feed_len]);
     publication_gen +%= 1;
     parse_mutex.unlock();
 
@@ -497,7 +532,9 @@ pub fn retryEpisodesIfDue() bool {
 
 fn episodeWorker(job: EpisodeJob) void {
     defer {
+        parse_mutex.lock();
         episode_request.finish(job.generation, &state.app.podcasts.episodes_loading);
+        parse_mutex.unlock();
         state.wakeUi();
     }
     const url = job.feed[0..job.feed_len];
@@ -543,16 +580,48 @@ fn publishEpisodes(generation: u32, body: []const u8) bool {
     if (episode_request.current() != generation or !rssBodyValid(body)) return false;
     const parsed = alloc.alloc(pure.Episode, state.app.podcasts.episodes.len) catch return false;
     defer alloc.free(parsed);
-    const n = pure.parseRssEpisodes(body, parsed);
+    const owned_body = alloc.dupe(u8, body) catch return false;
     parse_mutex.lock();
     defer parse_mutex.unlock();
-    if (episode_request.current() != generation or state.app.podcasts.selected_idx == null) return false;
-    @memcpy(state.app.podcasts.episodes[0..n], parsed[0..n]);
-    state.app.podcasts.episode_count = n;
+    if (episode_request.current() != generation or state.app.podcasts.selected_idx == null) {
+        alloc.free(owned_body);
+        return false;
+    }
+    var page = pure.parseRssEpisodePage(body, parsed, episode_offset);
+    if (page.count == 0 and page.total > 0) {
+        episode_offset = ((page.total - 1) / parsed.len) * parsed.len;
+        page = pure.parseRssEpisodePage(body, parsed, episode_offset);
+    }
+    if (episode_body) |old| alloc.free(old);
+    episode_body = owned_body;
+    episode_total = page.total;
+    @memcpy(state.app.podcasts.episodes[0..page.count], parsed[0..page.count]);
+    state.app.podcasts.episode_count = page.count;
     publication_gen +%= 1;
     logs.pushLog("info", "podcasts", "Episodes loaded (RSS)", false);
     state.wakeUi();
     return true;
+}
+
+/// Navigate the retained feed without network requests. A stale rendered page
+/// cannot navigate a newer selection. Total counts only playable published RSS items.
+pub fn changeEpisodePage(generation: u64, forward: bool) void {
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (generation != publication_gen) return;
+    const body = episode_body orelse return;
+    const size = state.app.podcasts.episodes.len;
+    if (forward) {
+        if (episode_offset + state.app.podcasts.episode_count >= episode_total) return;
+        episode_offset += size;
+    } else {
+        episode_offset -|= size;
+    }
+    const page = pure.parseRssEpisodePage(body, &state.app.podcasts.episodes, episode_offset);
+    state.app.podcasts.episode_count = page.count;
+    episode_total = page.total;
+    publication_gen +%= 1;
+    state.wakeUi();
 }
 
 // ══════════════════════════════════════════════════════════
@@ -563,12 +632,23 @@ fn publishEpisodes(generation: u32, body: []const u8) bool {
 /// direct audio stream, so loadContentDirect (no content-type routing) is used
 /// — creating a player if none exists and revealing the player page.
 pub fn playEpisode(idx: usize) void {
-    const view = alloc.create(Snapshot) catch return;
+    _ = playEpisodeAtGeneration(idx, null);
+}
+
+/// Validate the row identity and copy it in one critical section. The player
+/// receives owned metadata, never an index into a page that may have changed.
+pub fn playEpisodeAtGeneration(idx: usize, generation: ?u64) bool {
+    const view = alloc.create(Snapshot) catch return false;
     defer alloc.destroy(view);
-    copySnapshot(view);
-    if (idx >= view.episode_count) return;
+    parse_mutex.lock();
+    if ((generation != null and generation.? != publication_gen) or idx >= state.app.podcasts.episode_count) {
+        parse_mutex.unlock();
+        return false;
+    }
+    copySnapshotLocked(view);
+    parse_mutex.unlock();
     const e = &view.episodes[idx];
-    if (e.audio_url_len == 0) return;
+    if (e.audio_url_len == 0) return false;
 
     // Snapshot every field into locals BEFORE the play call — a concurrent
     // re-search can reorder/overwrite results[] and episodes[] mid-frame, and
@@ -588,18 +668,13 @@ pub fn playEpisode(idx: usize) void {
     @memcpy(name_buf[0..nlen], view.selected_name[0..nlen]);
 
     var art_buf: [300]u8 = undefined;
-    var alen: usize = 0;
-    if (view.selected_idx) |si| {
-        if (si < view.result_count) {
-            const show = &view.results[si];
-            alen = @min(show.artwork_len, art_buf.len);
-            @memcpy(art_buf[0..alen], show.artwork[0..alen]);
-        }
-    }
+    const alen = @min(view.selected_artwork_len, art_buf.len);
+    @memcpy(art_buf[0..alen], view.selected_artwork[0..alen]);
 
     @import("browser.zig").loadContentDirectMeta(url_buf[0..ulen], art_buf[0..alen], title_buf[0..tlen], name_buf[0..nlen]);
     armNowPlaying(url_buf[0..ulen], art_buf[0..alen], name_buf[0..nlen], title_buf[0..tlen]);
     logs.pushLog("info", "podcasts", "Streaming podcast episode", false);
+    return true;
 }
 
 // ══════════════════════════════════════════════════════════

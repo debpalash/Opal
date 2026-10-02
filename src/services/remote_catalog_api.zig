@@ -60,35 +60,29 @@ fn applyMediaFilter(media: []const u8) void {
 }
 
 fn sendSnapshot(stream: std.Io.net.Stream) void {
-    var json: [32768]u8 = undefined;
-    var w = std.Io.Writer.fixed(&json);
-    w.writeAll("{\"items\":[") catch return;
-    {
-        state.app.tmdb.results_mutex.lock();
-        defer state.app.tmdb.results_mutex.unlock();
-        for (state.app.tmdb.results.items, 0..) |item, idx| {
-            if (idx >= 30) break;
-            if (idx > 0) w.writeAll(",") catch return;
-            const rating = @as(u8, @intFromFloat(std.math.clamp(item.rating * 10.0, 0.0, 100.0)));
-            w.print("{{\"id\":{d},\"title\":\"", .{item.id}) catch return;
-            wire.writeJsonString(&w, item.title[0..item.title_len]);
-            w.writeAll("\",\"imdb\":\"") catch return;
-            wire.writeJsonString(&w, item.imdb_id[0..item.imdb_id_len]);
-            w.writeAll("\",\"year\":\"") catch return;
-            wire.writeJsonString(&w, item.year[0..item.year_len]);
-            w.print("\",\"rating\":{d},\"type\":\"", .{rating}) catch return;
-            wire.writeJsonString(&w, item.media_type[0..item.media_type_len]);
-            w.writeAll("\",\"overview\":\"") catch return;
-            wire.writeJsonString(&w, item.overview[0..@min(item.overview_len, 200)]);
-            w.writeAll("\",\"poster\":\"") catch return;
-            wire.writeJsonString(&w, item.poster_path[0..item.poster_path_len]);
-            w.writeAll("\"}") catch return;
-        }
-        w.writeAll("],\"loading\":") catch return;
-        w.writeAll(if (state.app.tmdb.is_loading.load(.acquire)) "true" else "false") catch return;
-        w.writeAll(",\"has_key\":") catch return;
-        w.writeAll(if (state.app.tmdb.api_key_len > 0) "true" else "false") catch return;
-        w.writeAll("}") catch return;
-    }
+    const projection = @import("remote_catalog_pure.zig");
+    const alloc = @import("../core/alloc.zig").allocator;
+    const rows = alloc.alloc(projection.Row, projection.LIMIT) catch {
+        wire.sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"catalog allocation failed\"}");
+        return;
+    };
+    defer alloc.free(rows);
+    state.app.tmdb.results_mutex.lock();
+    const total = state.app.tmdb.results.items.len;
+    const count = @min(total, rows.len);
+    for (state.app.tmdb.results.items[0..count], rows[0..count]) |item, *row| row.* = projection.Row.copy(item);
+    const loading = state.app.tmdb.is_loading.load(.acquire);
+    const has_key = state.app.tmdb.api_key_len > 0;
+    state.app.tmdb.results_mutex.unlock();
+    const json = alloc.alloc(u8, projection.capacity(count)) catch {
+        wire.sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"catalog allocation failed\"}");
+        return;
+    };
+    defer alloc.free(json);
+    var w = std.Io.Writer.fixed(json);
+    projection.write(&w, rows[0..count], total, loading, has_key) catch {
+        wire.sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"catalog serialization failed\"}");
+        return;
+    };
     wire.sendJson(stream, json[0..w.end]);
 }

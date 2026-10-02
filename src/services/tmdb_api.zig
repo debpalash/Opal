@@ -582,7 +582,7 @@ pub fn fetchPoster(item: *state.TmdbItem) void {
 /// HTTPS.) Shared with tmdb.zig's TV-detail fetch.
 pub var tmdb_https_blocked: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
-fn curlIntoOnce(url: []const u8, auth_header: []const u8, buf: []u8) usize {
+fn curlOwnedOnce(url: []const u8, auth_header: []const u8, max_bytes: usize) ?[]u8 {
     const io_g = @import("../core/io_global.zig");
     // --connect-timeout bounds a dead/slow host to 3s on connect instead of
     // burning the full --max-time; --max-time trimmed to 8s for interactive
@@ -594,10 +594,10 @@ fn curlIntoOnce(url: []const u8, auth_header: []const u8, buf: []u8) usize {
     // minutes at ~0 CPU despite --max-time, grid permanently empty). Files have
     // no such bound: curl writes everything, exits, then we read it back.
     const secure_temp = @import("../core/secure_temp.zig");
-    var scratch = secure_temp.Workspace.create("tmdb") catch return 0;
+    var scratch = secure_temp.Workspace.create("tmdb") catch return null;
     defer scratch.cleanup();
     var path_buf: [secure_temp.max_path_len]u8 = undefined;
-    const path = scratch.reserveFile("response.json", &path_buf) catch return 0;
+    const path = scratch.reserveFile("response.json", &path_buf) catch return null;
 
     // -L is required by the public Cinemeta endpoint, which currently answers
     // with a 307 to its catalog shard. Without it we read the redirect text,
@@ -609,18 +609,32 @@ fn curlIntoOnce(url: []const u8, auth_header: []const u8, buf: []u8) usize {
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Ignore;
     if (auth_header.len > 0) {
-        @import("../core/curl_secret.zig").spawnWithHeaders(&child, &.{auth_header}) catch return 0;
+        @import("../core/curl_secret.zig").spawnWithHeaders(&child, &.{auth_header}) catch return null;
     } else {
         child.stdin_behavior = .Ignore;
-        child.spawn() catch return 0;
+        child.spawn() catch return null;
     }
     _ = child.wait() catch {};
 
-    const body = io_g.cwdReadFileAlloc(path, alloc, buf.len) catch return 0;
-    defer alloc.free(body);
-    const n = @min(body.len, buf.len);
-    @memcpy(buf[0..n], body[0..n]);
-    return n;
+    const stat = io_g.cwdStatFile(path) catch return null;
+    const size = if (max_bytes == @import("tmdb_pure.zig").DETAIL_BODY_LIMIT)
+        @import("tmdb_pure.zig").detailBodyAllocationSize(stat.size) orelse return null
+    else if (stat.size > 0 and stat.size <= max_bytes)
+        @as(usize, @intCast(stat.size))
+    else
+        return null;
+    const file = io_g.openFileAbsolute(path, .{}) catch return null;
+    defer file.close(io_g.io());
+    const body = alloc.alloc(u8, size) catch return null;
+    const read = io_g.readAll(file, body) catch {
+        alloc.free(body);
+        return null;
+    };
+    if (read != size) {
+        alloc.free(body);
+        return null;
+    }
+    return body;
 }
 
 /// curl `url` (HTTPS) into `buf`, with an HTTPS→HTTP fallback for SNI-blocked
@@ -630,6 +644,13 @@ fn curlIntoOnce(url: []const u8, auth_header: []const u8, buf: []u8) usize {
 /// and routed every later call to the block page → all content stopped loading.
 /// The flag now self-heals: it clears whenever HTTPS returns JSON again.
 fn curlFallbackInto(url: []const u8, auth_header: []const u8, buf: []u8) usize {
+    const body = curlFallbackOwned(url, auth_header, buf.len) orelse return 0;
+    defer alloc.free(body);
+    @memcpy(buf[0..body.len], body);
+    return body.len;
+}
+
+fn curlFallbackOwned(url: []const u8, auth_header: []const u8, max_bytes: usize) ?[]u8 {
     const pure = @import("tmdb_pure.zig");
     var hb: [768]u8 = undefined;
     const http_url = pure.httpsToHttp(url, &hb);
@@ -638,25 +659,33 @@ fn curlFallbackInto(url: []const u8, auth_header: []const u8, buf: []u8) usize {
     // returns JSON (ISP now hijacks HTTP too), fall through and re-try HTTPS.
     if (tmdb_https_blocked.load(.acquire)) {
         if (http_url) |hu| {
-            const n = curlIntoOnce(hu, auth_header, buf);
-            if (n > 0 and pure.looksLikeJson(buf[0..n])) return n;
+            if (curlOwnedOnce(hu, auth_header, max_bytes)) |body| {
+                if (pure.looksLikeJson(body)) {
+                    return body;
+                }
+                alloc.free(body);
+            }
         }
     }
 
-    const n = curlIntoOnce(url, auth_header, buf); // HTTPS
-    if (n > 0 and pure.looksLikeJson(buf[0..n])) {
-        tmdb_https_blocked.store(false, .release); // HTTPS works — clear any stale block
-        return n;
+    if (curlOwnedOnce(url, auth_header, max_bytes)) |body| {
+        if (pure.looksLikeJson(body)) {
+            tmdb_https_blocked.store(false, .release);
+            return body;
+        }
+        alloc.free(body);
     }
 
     if (http_url) |hu| {
-        const m = curlIntoOnce(hu, auth_header, buf);
-        if (m > 0 and pure.looksLikeJson(buf[0..m])) {
-            tmdb_https_blocked.store(true, .release); // genuine SNI-block network
-            return m;
+        if (curlOwnedOnce(hu, auth_header, max_bytes)) |body| {
+            if (pure.looksLikeJson(body)) {
+                tmdb_https_blocked.store(true, .release); // genuine SNI-block network
+                return body;
+            }
+            alloc.free(body);
         }
     }
-    return 0;
+    return null;
 }
 
 /// Fetch a TMDB API endpoint into `buf`, picking the auth mechanism by key shape:
@@ -698,6 +727,38 @@ pub fn tmdbApiInto(path_query: []const u8, key: []const u8, buf: []u8) usize {
     return 0;
 }
 
+pub fn tmdbApiOwned(path_query: []const u8, key: []const u8, max_bytes: usize) ?[]u8 {
+    const v4 = @import("tmdb_pure.zig").keyIsV4(key);
+
+    var url_buf: [768]u8 = undefined;
+    const url = if (v4)
+        std.fmt.bufPrint(&url_buf, "https://api.themoviedb.org{s}", .{path_query}) catch return null
+    else blk: {
+        const sep: u8 = if (std.mem.indexOfScalar(u8, path_query, '?') != null) '&' else '?';
+        break :blk std.fmt.bufPrint(&url_buf, "https://api.themoviedb.org{s}{c}api_key={s}", .{ path_query, sep, key }) catch return null;
+    };
+
+    var auth_buf: [320]u8 = undefined;
+    const auth: []const u8 = if (v4)
+        (std.fmt.bufPrint(&auth_buf, "Authorization: Bearer {s}", .{key}) catch return null)
+    else
+        "";
+
+    // Bounded retry: curlFallbackInto already tries both HTTPS and HTTP, but a
+    // single transient blip (DNS hiccup, dropped connection, curl spawn
+    // stumble) still made the whole call fail with zero recourse — every
+    // caller (seasons, episodes, search, ...) just silently got nothing back.
+    // Only worth retrying on the SAME frame's worth of thread — this is
+    // always called from a background worker (curl itself already blocks up
+    // to 12s/attempt), never the UI thread.
+    var attempt: u8 = 0;
+    while (attempt < 2) : (attempt += 1) {
+        if (curlFallbackOwned(url, auth, max_bytes)) |body| return body;
+        if (attempt < 1) @import("../core/io_global.zig").sleep(250 * std.time.ns_per_ms);
+    }
+    return null;
+}
+
 /// Fetch one Cinemeta JSON document through the same bounded curl seam used by
 /// the keyless catalog. Only the fixed Cinemeta origin is accepted.
 pub fn cinemetaApiInto(path: []const u8, buf: []u8) usize {
@@ -711,6 +772,18 @@ pub fn cinemetaApiInto(path: []const u8, buf: []u8) usize {
         if (attempt < 1) @import("../core/io_global.zig").sleep(250 * std.time.ns_per_ms);
     }
     return 0;
+}
+
+pub fn cinemetaApiOwned(path: []const u8, max_bytes: usize) ?[]u8 {
+    if (path.len == 0 or path[0] != '/' or std.mem.indexOf(u8, path, "..") != null) return null;
+    var url_buf: [768]u8 = undefined;
+    const url = std.fmt.bufPrint(&url_buf, "https://v3-cinemeta.strem.io{s}", .{path}) catch return null;
+    var attempt: u8 = 0;
+    while (attempt < 2) : (attempt += 1) {
+        if (curlFallbackOwned(url, "", max_bytes)) |body| return body;
+        if (attempt < 1) @import("../core/io_global.zig").sleep(250 * std.time.ns_per_ms);
+    }
+    return null;
 }
 
 fn httpGet(url: []const u8, bearer_token: []const u8) ?[]u8 {

@@ -560,42 +560,58 @@ let watchPageSize = Number(watchSaved('opal.watch.pageSize', watchPageSizes, '48
 let watchPage = (() => { try { return Math.min(9, Math.max(1, Number.parseInt(localStorage.getItem('opal.watch.page') || '1', 10) || 1)); } catch { return 1; } })();
 let watchSyncing = false;
 let watchSyncTimer = null, watchSyncPolls = 0;
+let watchVersion = null, watchRequestGeneration = 0;
 async function loadWatch(){
-  loadLocalLibrary();
+  const generation = ++watchRequestGeneration;
+  if (!localLibraryLoaded) loadLocalLibrary();
   clearTimeout(watchSyncTimer);
   $('watch-hint').innerHTML = '<span class="spin"></span> Loading…';
   try {
     const query = new URLSearchParams({filter:watchFilter, kind:watchKind, sort:watchSort,
       offset:String((watchPage - 1) * watchPageSize), limit:String(watchPageSize)});
+    if (watchVersion) query.set('since', watchVersion);
     const d = await api('/library?' + query);
+    if (generation !== watchRequestGeneration) return;
+    watchVersion = d.version || null;
+    if (!d.unchanged) {
     watchRows = Array.isArray(d.items) ? d.items : [];
     watchTotal = Number.isSafeInteger(d.total) ? d.total : watchRows.length;
     watchCatalogTotal = Number.isSafeInteger(d.catalog_total) ? d.catalog_total : watchTotal;
     const pages = Math.max(1, Math.ceil(watchTotal / watchPageSize));
     if (!watchRows.length && watchTotal > 0 && watchPage > pages) { setWatchPage(pages); return loadWatch(); }
+    }
     watchSyncing = !!d.syncing;
     renderWatch();
     if (d.syncing && watchSyncPolls++ < 40 && $('page-watch').classList.contains('on'))
       watchSyncTimer = setTimeout(loadWatch, 1500);
     else if (!d.syncing) watchSyncPolls = 0;
-  } catch { $('watch-hint').textContent = 'Could not load the library.'; }
+  } catch { if (generation === watchRequestGeneration) $('watch-hint').textContent = 'Could not refresh the library. Existing items remain available.'; }
 }
 function chooseWatchFilter(group, button){
   group.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === button));
 }
 
-let localLibraryTimer = 0;
+let localLibraryTimer = 0, localLibraryOffset = 0, localLibrarySelection = '', localLibraryGeneration = 0, localLibraryLoaded = false;
 async function loadLocalLibrary(){
+  const generation = ++localLibraryGeneration;
   clearTimeout(localLibraryTimer);
   const query = $('local-query').value.trim();
   const duplicates = $('local-duplicates').checked;
   try {
-    const data = await api('/local-library?q=' + encodeURIComponent(query) + (duplicates ? '&duplicates=1' : ''));
+    const selection = JSON.stringify([query, duplicates]);
+    if (selection !== localLibrarySelection) { localLibraryOffset = 0; localLibrarySelection = selection; }
+    const data = await api('/local-library?q=' + encodeURIComponent(query) + (duplicates ? '&duplicates=1' : '')
+      + '&offset=' + localLibraryOffset + '&limit=64');
+    if (generation !== localLibraryGeneration) return;
     const items = data.items || [];
+    if (!items.length && localLibraryOffset > 0 && Number.isSafeInteger(data.total)) {
+      const lastOffset = Math.max(0, Math.floor((Math.max(1, data.total) - 1) / 64) * 64);
+      if (lastOffset < localLibraryOffset) { localLibraryOffset = lastOffset; return loadLocalLibrary(); }
+    }
     const roots = data.roots || [];
-    $('local-roots').innerHTML = roots.map(root => `<span>${esc(root.name)} <button type="button" data-root-remove="${root.id}" aria-label="Remove ${esc(root.name)}">Ã—</button></span>`).join('');
-    $('local-hint').textContent = data.scanning ? 'Refreshing the index in the backgroundâ€¦' :
-      `${items.length} indexed file${items.length === 1 ? '' : 's'} shown${duplicates ? ' with likely duplicates' : ''}.`;
+    $('local-roots').innerHTML = roots.map(root => `<span>${esc(root.name)} <button type="button" data-root-remove="${root.id}" aria-label="Remove ${esc(root.name)}">Remove</button></span>`).join('');
+    $('local-hint').textContent = data.scanning ? 'Refreshing the index in the background…' :
+      `${items.length} of ${data.total ?? items.length} indexed files shown${duplicates ? ' with likely duplicates' : ''}.`;
     $('local-results').innerHTML = items.map((item, index) => `<div class="file local-media-row" data-i="${index}">
       <div class="n"><input class="local-title" value="${esc(item.title)}" maxlength="255" aria-label="Corrected title">
         <div class="file-meta"><span>${fmtSize(item.size)}</span>${item.copies > 1 ? `<span>${item.copies} likely duplicates</span>` : ''}</div></div>
@@ -605,8 +621,18 @@ async function loadLocalLibrary(){
       </select><button type="button" data-local-save>Save metadata</button></div>`).join('') ||
       '<div class="empty">No indexed files match. Scan after changing the download folder.</div>';
     $('local-results')._items = items;
+    if (localLibraryOffset > 0 || data.has_more) {
+      const pager = document.createElement('div'); pager.className = 'actions';
+      const previous = document.createElement('button'); previous.textContent = 'Previous files'; previous.disabled = localLibraryOffset === 0;
+      const next = document.createElement('button'); next.textContent = 'More files'; next.disabled = !data.has_more;
+      previous.onclick = () => { localLibraryOffset = Math.max(0, localLibraryOffset - 64); loadLocalLibrary(); };
+      next.onclick = () => { localLibraryOffset += 64; loadLocalLibrary(); };
+      pager.append(previous, next); $('local-results').append(pager);
+    }
+
+    localLibraryLoaded = true;
     if (data.scanning && $('page-watch').classList.contains('on')) localLibraryTimer = setTimeout(loadLocalLibrary, 800);
-  } catch { $('local-hint').textContent = 'Local library index unavailable.'; }
+  } catch { if (generation === localLibraryGeneration) $('local-hint').textContent = 'Local library index unavailable. Existing items remain available.'; }
 }
 $('local-query').addEventListener('input', () => {
   clearTimeout(localLibraryTimer); localLibraryTimer = setTimeout(loadLocalLibrary, 180);
@@ -658,25 +684,25 @@ function restoreWatchControls(){
 restoreWatchControls();
 $('watch-filters').addEventListener('click', e => {
   const b = e.target.closest('button[data-f]'); if (!b) return;
-  chooseWatchFilter($('watch-filters'), b); watchFilter = b.dataset.f; saveWatchChoice('opal.watch.filter', watchFilter); setWatchPage(1); renderWatch();
+  chooseWatchFilter($('watch-filters'), b); watchFilter = b.dataset.f; saveWatchChoice('opal.watch.filter', watchFilter); setWatchPage(1); loadWatch();
 });
 $('watch-kind-filters').addEventListener('click', e => {
   const b = e.target.closest('button[data-f]'); if (!b) return;
-  chooseWatchFilter($('watch-kind-filters'), b); watchKind = b.dataset.f; saveWatchChoice('opal.watch.kind', watchKind); setWatchPage(1); renderWatch();
+  chooseWatchFilter($('watch-kind-filters'), b); watchKind = b.dataset.f; saveWatchChoice('opal.watch.kind', watchKind); setWatchPage(1); loadWatch();
 });
 $('watch-sort').addEventListener('change', e => {
   watchSort = watchSorts.includes(e.target.value) ? e.target.value : 'smart';
-  saveWatchChoice('opal.watch.sort', watchSort); setWatchPage(1); renderWatch();
+  saveWatchChoice('opal.watch.sort', watchSort); setWatchPage(1); loadWatch();
 });
 $('watch-page-size').addEventListener('change', e => {
   watchPageSize = Number(watchPageSizes.includes(e.target.value) ? e.target.value : '48');
-  saveWatchChoice('opal.watch.pageSize', String(watchPageSize)); setWatchPage(1); renderWatch();
+  saveWatchChoice('opal.watch.pageSize', String(watchPageSize)); setWatchPage(1); loadWatch();
 });
 function setWatchPage(page){
   watchPage = Math.min(9, Math.max(1, page)); saveWatchChoice('opal.watch.page', String(watchPage));
 }
-$('watch-prev').addEventListener('click', () => { setWatchPage(watchPage - 1); renderWatch(); $('watch-list').scrollIntoView({block:'start'}); });
-$('watch-next-page').addEventListener('click', () => { setWatchPage(watchPage + 1); renderWatch(); $('watch-list').scrollIntoView({block:'start'}); });
+$('watch-prev').addEventListener('click', () => { setWatchPage(watchPage - 1); loadWatch(); $('watch-list').scrollIntoView({block:'start'}); });
+$('watch-next-page').addEventListener('click', () => { setWatchPage(watchPage + 1); loadWatch(); $('watch-list').scrollIntoView({block:'start'}); });
 $('watch-density').addEventListener('click', () => {
   watchCompact = !watchCompact; saveWatchChoice('opal.watch.density', watchCompact ? 'compact' : 'comfortable');
   restoreWatchControls(); renderWatch();
@@ -816,179 +842,6 @@ const apiPost = (path, body) => fetch(BASE + '/api/access' + path, {
   body: body || '',
 }).then(async r => { const d = await r.json().catch(() => ({})); return { ok: r.ok, d }; });
 
-let accViaToken = false;
-let accCanManageUsers = false;
-async function loadAccess(){
-  try {
-    const d = await api('/access/status');
-    accViaToken = !!d.via_token;
-    accCanManageUsers = !!d.can_manage_users;
-    $('acc-hint').textContent = accViaToken
-      ? 'Authenticated with the machine api.token — you can reset any account.'
-      : ('Signed in as ' + (d.username || '—') + '.');
-    // Token callers have no "current password" to prove; they name a target.
-    $('acc-pw-user').style.display = accViaToken ? '' : 'none';
-    $('acc-pw-cur').style.display = accViaToken ? 'none' : '';
-    $('acc-pw-hint').textContent = accViaToken
-      ? 'Reset a forgotten password. Signs out every device.'
-      : 'Changing it signs out every other device.';
-    $('acc-sess-hint').textContent = d.sessions === 1
-      ? '1 signed-in device.' : (d.sessions || 0) + ' signed-in devices.';
-    $('acc-users-group').hidden = !accCanManageUsers;
-    $('acc-machine-token').hidden = !d.can_manage_machine;
-    $('acc-machine-network').hidden = !d.can_manage_machine;
-    if (accCanManageUsers) await loadAccessUsers();
-    $('acc-token').value = d.token_masked || '••••••••';
-    $('acc-token-show').textContent = 'Show';
-    $('acc-bind').value = d.bind || 'lan';
-    $('acc-port').value = d.port || 41595;
-    renderBindWarn(d.bind, d.lan_ip, d.port);
-  } catch { $('acc-hint').textContent = 'Could not load access settings.'; }
-}
-
-async function loadAccessUsers(){
-  const d = await api('/access/users');
-  const users = d.users || [];
-  $('acc-users').innerHTML = users.map(user => `<div class="acc-user">
-    <span><strong>${esc(user.username)}</strong>${user.is_admin ? ' · Administrator' : ''}<small>${user.sessions || 0} signed-in device${user.sessions === 1 ? '' : 's'}</small></span>
-    <button class="danger" data-user-delete="${user.id}"${user.is_self ? ' disabled title="Current account"' : ''}>Remove</button>
-  </div>`).join('') || '<div class="hint">No accounts.</div>';
-  $('acc-users').querySelectorAll('[data-user-delete]').forEach(button => button.onclick = async () => {
-    const name = button.closest('.acc-user').querySelector('strong').textContent;
-    if (!confirm('Remove account “' + name + '” and sign it out everywhere?')) return;
-    button.disabled = true;
-    const { ok, d: result } = await apiPost('/users/delete', 'id=' + encodeURIComponent(button.dataset.userDelete));
-    $('acc-users-hint').textContent = ok ? 'Account removed.' : (result.error || 'Could not remove account.');
-    await loadAccessUsers();
-  });
-}
-
-$('acc-user-form').onsubmit = async event => {
-  event.preventDefault();
-  const username = $('acc-user-name').value.trim();
-  const password = $('acc-user-password').value;
-  if (username.length < 3 || password.length < 8) {
-    $('acc-users-hint').textContent = 'Use a 3–32 character username and a password of at least 8 characters.';
-    return;
-  }
-  const button = $('acc-user-add');
-  button.disabled = true; button.textContent = 'Adding…';
-  const body = 'username=' + encodeURIComponent(username) + '&password=' + encodeURIComponent(password)
-    + '&admin=' + ($('acc-user-admin').checked ? '1' : '0');
-  const { ok, d } = await apiPost('/users/create', body);
-  button.disabled = false; button.textContent = 'Add account';
-  $('acc-users-hint').textContent = ok ? 'Account added.' : (d.error || 'Could not add account.');
-  if (ok) {
-    $('acc-user-name').value = $('acc-user-password').value = '';
-    $('acc-user-admin').checked = false;
-    await loadAccessUsers();
-  }
-};
-function renderBindWarn(bind, ip, port){
-  const w = $('acc-bind-warn');
-  if (bind === 'loopback') { w.className = 'hint'; w.textContent = 'Only this machine can reach the server.'; }
-  else { w.className = 'hint acc-warn'; w.textContent = 'Anyone on your network who can sign in can reach Opal' + (ip ? ' at http://' + ip + ':' + port : '') + '.'; }
-}
-
-$('acc-pw-save').onclick = async () => {
-  const btn = $('acc-pw-save');
-  const nw = $('acc-pw-new').value, cf = $('acc-pw-conf').value;
-  // Mirror of access_pure.checkPasswordChange so the common mistakes are
-  // caught without a round trip; the server re-checks regardless.
-  if (nw.length < 8) return void ($('acc-pw-hint').textContent = 'Password must be at least 8 characters.');
-  if (nw !== cf) return void ($('acc-pw-hint').textContent = 'New password and confirmation do not match.');
-  let body = 'password=' + encodeURIComponent(nw) + '&confirm=' + encodeURIComponent(cf);
-  body += accViaToken
-    ? '&username=' + encodeURIComponent($('acc-pw-user').value.trim())
-    : '&current=' + encodeURIComponent($('acc-pw-cur').value);
-  btn.disabled = true; btn.textContent = 'Saving…';
-  const { ok, d } = await apiPost('/password', body);
-  btn.disabled = false; btn.textContent = 'Set password';
-  const msg = ok
-    ? 'Password updated ✓ ' + (d.revoked || 0) + ' other session(s) signed out.'
-    : (d.error || 'Could not set the password.');
-  if (ok) {
-    $('acc-pw-cur').value = $('acc-pw-new').value = $('acc-pw-conf').value = '';
-    // Refresh FIRST, then write the result. loadAccess() resets this hint to
-    // its idle text, so setting the message before it ran meant a successful
-    // change flashed and vanished — indistinguishable from a dead button.
-    await loadAccess();
-  }
-  $('acc-pw-hint').textContent = msg;
-};
-
-$('acc-revoke').onclick = async () => {
-  const btn = $('acc-revoke');
-  btn.disabled = true; btn.textContent = 'Signing out…';
-  const { ok, d } = await apiPost('/revoke-all');
-  btn.disabled = false; btn.textContent = 'Sign out all other devices';
-  // Refresh before reporting, for the same reason as the password hint above.
-  await loadAccess();
-  $('acc-sess-hint').textContent = ok
-    ? (d.revoked || 0) + ' device(s) signed out ✓' : 'Could not revoke sessions.';
-};
-
-$('acc-token-show').onclick = async () => {
-  const btn = $('acc-token-show');
-  if (btn.textContent === 'Hide') return void (loadAccess());
-  try { const d = await api('/access/token'); $('acc-token').value = d.token || ''; btn.textContent = 'Hide'; }
-  catch { $('acc-token').value = 'unavailable'; }
-};
-$('acc-token-copy').onclick = async () => {
-  const btn = $('acc-token-copy');
-  try {
-    const d = await api('/access/token');
-    await navigator.clipboard.writeText(d.token || '');
-    btn.textContent = 'Copied ✓'; setTimeout(() => btn.textContent = 'Copy token', 1500);
-  } catch { btn.textContent = 'Copy failed'; setTimeout(() => btn.textContent = 'Copy token', 1500); }
-};
-$('acc-token-rotate').onclick = async () => {
-  if (!confirm('Rotate the API token? The browser extension and any scripts using the old token stop working until re-paired.')) return;
-  const btn = $('acc-token-rotate');
-  btn.disabled = true; btn.textContent = 'Rotating…';
-  const { ok, d } = await apiPost('/token/rotate');
-  btn.disabled = false; btn.textContent = 'Rotate token';
-  if (ok) { $('acc-token').value = d.token || ''; $('acc-token-show').textContent = 'Hide'; }
-  loadAccess();
-};
-
-$('acc-bind-save').onclick = async () => {
-  const mode = $('acc-bind').value, port = $('acc-port').value.trim();
-  const changingPort = String(port) !== String(location.port || 41595);
-  if (!confirm('Apply network changes? The server restarts' +
-      (changingPort ? ' on port ' + port + ' — this page will need reloading at the new address.' : ' and this page may briefly disconnect.'))) return;
-  const btn = $('acc-bind-save');
-  btn.disabled = true; btn.textContent = 'Applying…';
-  const { ok, d } = await apiPost('/bind', 'mode=' + encodeURIComponent(mode) + '&port=' + encodeURIComponent(port));
-  btn.disabled = false; btn.textContent = 'Apply';
-  if (!ok) { $('acc-bind-warn').className = 'hint acc-warn'; $('acc-bind-warn').textContent = d.error || 'Could not apply.'; return; }
-  $('acc-bind-warn').className = 'hint';
-  $('acc-bind-warn').textContent = 'Applied — server restarting on ' + d.bind + ':' + d.port + '.';
-};
-$('setup-install').onclick = async () => {
-  $('setup-install').textContent = 'Installing…'; $('setup-install').disabled = true;
-  try { const d = await api('/setup/sources'); $('setup-install').textContent = (d.installed || 0) + ' sources installed ✓'; browseLoaded = false; }
-  catch { $('setup-install').textContent = 'Failed'; $('setup-install').disabled = false; }
-};
-// ── Add a download (Activity) ──
-// Magnets go to /load (torrent session); plain URLs to the segmented HTTP
-// downloader via /download/url.
-$('dl-go').onclick = async () => {
-  const u = $('dl-url').value.trim();
-  if (!u) return;
-  $('dl-hint').textContent = 'Starting…';
-  const magnet = /^magnet:/i.test(u);
-  try {
-    const d = await apiMutation((magnet ? '/load?url=' : '/download/url?url=') + encodeURIComponent(u));
-    const ok = d && (d.ok === undefined || d.ok);
-    $('dl-hint').textContent = ok ? 'Started ✓' : (d.error || 'Could not start.');
-    if (ok) { $('dl-url').value = ''; loadActivity(); }
-  } catch { $('dl-hint').textContent = 'Failed — is the URL reachable?'; }
-};
-$('dl-url').addEventListener('keydown', e => { if (e.key === 'Enter') $('dl-go').click(); });
-
-// Sign out — revokes the session server-side and returns to the login screen.
-$('signout').onclick = () => unpair();
 $('setup-tmdb-save').onclick = async () => {
   const k = $('setup-tmdb-key').value.trim(); if (!k) return;
   try { await api('/setup/tmdb?key=' + encodeURIComponent(k)); $('setup-tmdb').textContent = 'TMDB key set ✓'; $('setup-tmdb-key').value=''; browseLoaded = false; }

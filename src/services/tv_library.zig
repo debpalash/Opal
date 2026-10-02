@@ -143,8 +143,13 @@ fn syncWorker() void {
     defer syncing.store(false, .release);
 
     var shows: [MAX_SHOWS]db.TvShowRow = undefined;
-    const n = db.tvGetShows(&shows);
-    if (n == 0) return;
+    const n = db.tvGetShowsChecked(&shows) orelse return;
+    if (n == 0) {
+        const calendar = @import("tv_calendar.zig");
+        calendar.beginStageExpected(0);
+        calendar.endStage();
+        return;
+    }
 
     const key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
 
@@ -158,7 +163,11 @@ fn syncWorker() void {
     // The Home "Coming up" rail is built from this same pass — it used to make
     // the identical /3/tv/{id} call for the identical shows.
     const cal = @import("tv_calendar.zig");
-    cal.beginStage();
+    var expected: usize = 0;
+    for (shows[0..n]) |*show| if (show.tmdb_id > 0) {
+        expected += 1;
+    };
+    cal.beginStageExpected(expected);
     defer cal.endStage();
 
     // The doc is needed after the EZTV lookup clobbers the shared scratch buffer,

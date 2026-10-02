@@ -82,6 +82,7 @@ pub const Failure = enum {
     spawn,
     watchdog_spawn,
     timeout,
+    cancelled,
     output_limit,
     read,
     nonzero_exit,
@@ -165,6 +166,7 @@ const Watchdog = struct {
     control: *KillControl,
     done: *std.atomic.Value(bool),
     timed_out: *std.atomic.Value(bool),
+    cancelled: *std.atomic.Value(bool),
     timeout_ms: i64,
     grace_ms: i64,
 
@@ -172,12 +174,13 @@ const Watchdog = struct {
         const start = io.monotonicMilliTimestamp();
         const deadline = start +| @max(self.timeout_ms, 1);
         while (!self.done.load(.acquire)) {
-            if (io.monotonicMilliTimestamp() >= deadline) {
+            const quitting = @import("workers.zig").isQuitting();
+            if (quitting or io.monotonicMilliTimestamp() >= deadline) {
                 // The lock makes the active check and first signal atomic with
                 // natural-exit cleanup. A process that won the race to finish
                 // is never mislabeled as timed out.
                 if (!self.control.signalIfActive(false)) return;
-                self.timed_out.store(true, .release);
+                if (quitting) self.cancelled.store(true, .release) else self.timed_out.store(true, .release);
 
                 const grace_deadline = io.monotonicMilliTimestamp() +| @max(self.grace_ms, 0);
                 while (!self.done.load(.acquire) and io.monotonicMilliTimestamp() < grace_deadline)
@@ -283,6 +286,8 @@ pub fn run(argv: []const []const u8, output: []u8, options: Options) Result {
     if (argv.len == 0 or argv[0].len == 0 or output.len == 0)
         return .{ .failure = .invalid_input };
 
+    if (@import("workers.zig").isQuitting()) return .{ .failure = .cancelled };
+
     var child = io.Child.init(argv, alloc);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Pipe;
@@ -299,16 +304,18 @@ pub fn run(argv: []const []const u8, output: []u8, options: Options) Result {
 
     var done = std.atomic.Value(bool).init(false);
     var timed_out = std.atomic.Value(bool).init(false);
+    var cancelled = std.atomic.Value(bool).init(false);
     var control = newKillControl(tree);
     const watchdog = spawnWatchdog(.{
         .control = &control,
         .done = &done,
         .timed_out = &timed_out,
+        .cancelled = &cancelled,
         .timeout_ms = options.timeout_ms,
         .grace_ms = options.terminate_grace_ms,
     }) catch {
         abortAndReap(&child, &control, &done);
-        return .{ .failure = .watchdog_spawn };
+        return .{ .failure = if (@import("workers.zig").isQuitting()) .cancelled else .watchdog_spawn };
     };
 
     var total: usize = 0;
@@ -356,6 +363,7 @@ pub fn run(argv: []const []const u8, output: []u8, options: Options) Result {
     watchdog.join();
 
     const base = Result{ .output = output[0..total], .truncated = truncated };
+    if (cancelled.load(.acquire)) return withFailure(base, .cancelled);
     if (timed_out.load(.acquire)) return withFailure(base, .timeout);
     if (truncated) return withFailure(base, .output_limit);
     if (read_failed) return withFailure(base, .read);
@@ -771,4 +779,29 @@ test "stream watchdog spawn failure synchronously kills and reaps tree" {
     try std.testing.expectError(error.WatchdogSpawnFailed, process.start());
     const elapsed = io.monotonicMilliTimestamp() - before;
     try std.testing.expect(elapsed < 1_500);
+}
+
+test "ordinary running child cancels on shutdown and reaps inherited writers" {
+    try requirePosix();
+    const workers = @import("workers.zig");
+    workers.init();
+    defer workers.init();
+    const Quit = struct {
+        fn trigger() void {
+            // Wait until the child and its supervising thread were admitted.
+            const deadline = io.monotonicMilliTimestamp() + 1_000;
+            while (@import("workers.zig").activeCount() == 0 and io.monotonicMilliTimestamp() < deadline)
+                io.sleep(std.time.ns_per_ms);
+            io.sleep(50 * std.time.ns_per_ms);
+            @import("workers.zig").markQuitting();
+        }
+    };
+    const trigger = try std.Thread.spawn(.{}, Quit.trigger, .{});
+    defer trigger.join();
+    var output: [32]u8 = undefined;
+    const before = io.monotonicMilliTimestamp();
+    const result = run(&.{ "/bin/sh", "-c", "printf ready; trap '' TERM; (trap '' TERM; sleep 10) & wait" }, &output, .{ .timeout_ms = 10_000, .terminate_grace_ms = 20 });
+    try std.testing.expect(io.monotonicMilliTimestamp() - before < 1_500);
+    try std.testing.expectEqualStrings("ready", result.output);
+    try std.testing.expectEqual(Failure.cancelled, result.failure);
 }

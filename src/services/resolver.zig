@@ -38,6 +38,7 @@ pub const SourceType = enum {
     novels, // work identity opens the built-in reader
     vndb, // visual novel metadata, not downloadable game content
     audiobooks, // connected Audiobookshelf item, opened through expanded audio metadata
+    opds, // advertised catalog search, connection-bound reader identity
 };
 
 pub const ResolvedItem = struct {
@@ -99,6 +100,8 @@ pub const ResolvedItem = struct {
     plugin_item_id: [128]u8 = std.mem.zeroes([128]u8),
     plugin_item_id_len: usize = 0,
     plugin_episodes: u16 = 0,
+    opds_entry: @import("opds_pure.zig").OpdsEntry = .{},
+    opds_connection_identity: u64 = 0,
 };
 
 // Shared result buffer. The cap is a hard ceiling on a single search wave —
@@ -150,6 +153,7 @@ pub var status_plugins = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_novels = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_novel_archive = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_vndb = std.atomic.Value(SourceStatus).init(.idle);
+pub var status_opds = std.atomic.Value(SourceStatus).init(.idle);
 pub var status_audiobooks = std.atomic.Value(SourceStatus).init(.idle);
 
 // Explicit u8 backing so std.atomic.Value(SourceStatus) is byte-atomic. The
@@ -164,10 +168,10 @@ pub const sourceStatusIsFailure = lifecycle.isFailure;
 /// not spawned by resolve() (their status reads .idle) and their result
 /// groups are hidden. A mask of 0 is treated as "everything on" so the user
 /// can never filter themselves into a permanently empty search.
-pub const SourceBit = enum(u4) { local, torrent, jellyfin, youtube, anime, comics, stremio, rss, livetv, music, radio, podcast, novels, vndb, audiobooks };
+pub const SourceBit = enum(u4) { local, torrent, jellyfin, youtube, anime, comics, stremio, rss, livetv, music, radio, podcast, novels, vndb, audiobooks, opds };
 /// Every declared bit set. Kept in sync with SourceBit at comptime so adding a
 /// vertical can't silently leave its pill off (or make `all on` mis-detect).
-pub const ALL_SOURCE_BITS: u16 = (1 << @typeInfo(SourceBit).@"enum".fields.len) - 1;
+pub const ALL_SOURCE_BITS: u16 = @intCast((@as(u32, 1) << @typeInfo(SourceBit).@"enum".fields.len) - 1);
 pub var source_mask: std.atomic.Value(u16) = std.atomic.Value(u16).init(ALL_SOURCE_BITS);
 
 pub fn sourceOn(bit: SourceBit) bool {
@@ -441,6 +445,7 @@ pub fn resolveTracked(query: []const u8, intent: []const u8) u32 {
     Pre.set(&status_novel_archive, .novels);
     Pre.set(&status_vndb, .vndb);
     Pre.set(&status_audiobooks, .audiobooks);
+    Pre.set(&status_opds, .opds);
     status_catalog.store(.searching, .release);
     status_plex.store(.searching, .release);
     status_plugins.store(.searching, .release);
@@ -502,6 +507,7 @@ pub fn resolveTracked(query: []const u8, intent: []const u8) u32 {
     if (sourceOn(.novels)) Spawn.go(resolveArchiveNovels, &status_novel_archive);
     if (sourceOn(.vndb)) Spawn.go(resolveVisualNovels, &status_vndb);
     if (sourceOn(.audiobooks)) Spawn.go(resolveAudiobooks, &status_audiobooks);
+    if (sourceOn(.opds)) Spawn.go(resolveOpds, &status_opds);
 
     // If filtering left nothing to spawn, close the resolve immediately —
     // no worker exists to call checkAllDone().
@@ -1197,7 +1203,7 @@ fn attrValue(html: []const u8, name: []const u8, limit: usize) ?[]const u8 {
 // ══════════════════════════════════════════════════════════
 
 fn cacheKey(buf: []u8, query: []const u8) []const u8 {
-    return std.fmt.bufPrint(buf, "search:v6:{s}", .{query}) catch "search:v6:";
+    return std.fmt.bufPrint(buf, "search:v7:{s}", .{query}) catch "search:v7:";
 }
 
 /// Serialize the current `results` (under caller's lock) into `out`.
@@ -1245,6 +1251,19 @@ fn serializeRows(rows: []const ResolvedItem, out: []u8) ?[]u8 {
         w.blob(it.summary[0..@min(it.summary_len, it.summary.len)]);
         w.f32v(it.rating);
         w.blob(it.author[0..@min(it.author_len, it.author.len)]);
+        if (it.source == .opds) {
+            w.blob(it.opds_entry.title[0..@min(it.opds_entry.title_len, it.opds_entry.title.len)]);
+            w.blob(it.opds_entry.author[0..@min(it.opds_entry.author_len, it.opds_entry.author.len)]);
+            w.blob(it.opds_entry.summary[0..@min(it.opds_entry.summary_len, it.opds_entry.summary.len)]);
+            w.blob(it.opds_entry.href[0..@min(it.opds_entry.href_len, it.opds_entry.href.len)]);
+            w.blob(it.opds_entry.content_type[0..@min(it.opds_entry.content_type_len, it.opds_entry.content_type.len)]);
+            w.blob(it.opds_entry.cover[0..@min(it.opds_entry.cover_len, it.opds_entry.cover.len)]);
+            w.blob(it.opds_entry.pse_url[0..@min(it.opds_entry.pse_url_len, it.opds_entry.pse_url.len)]);
+            w.boolv(it.opds_entry.is_navigation);
+            w.u32v(it.opds_entry.pse_count);
+            w.u32v(@truncate(it.opds_connection_identity));
+            w.u32v(@truncate(it.opds_connection_identity >> 32));
+        }
     }
     return w.done();
 }
@@ -1302,6 +1321,20 @@ fn deserializeInto(bytes: []const u8) usize {
         copyField(&it.summary, &it.summary_len, r.blob() orelse break);
         it.rating = r.f32v() orelse break;
         copyField(&it.author, &it.author_len, r.blob() orelse break);
+        if (it.source == .opds) {
+            copyField(&it.opds_entry.title, &it.opds_entry.title_len, r.blob() orelse break);
+            copyField(&it.opds_entry.author, &it.opds_entry.author_len, r.blob() orelse break);
+            copyField(&it.opds_entry.summary, &it.opds_entry.summary_len, r.blob() orelse break);
+            copyField(&it.opds_entry.href, &it.opds_entry.href_len, r.blob() orelse break);
+            copyField(&it.opds_entry.content_type, &it.opds_entry.content_type_len, r.blob() orelse break);
+            copyField(&it.opds_entry.cover, &it.opds_entry.cover_len, r.blob() orelse break);
+            copyField(&it.opds_entry.pse_url, &it.opds_entry.pse_url_len, r.blob() orelse break);
+            it.opds_entry.is_navigation = r.boolv() orelse break;
+            it.opds_entry.pse_count = r.u32v() orelse break;
+            const lo = r.u32v() orelse break;
+            const hi = r.u32v() orelse break;
+            it.opds_connection_identity = @as(u64, lo) | (@as(u64, hi) << 32);
+        }
         results[count] = it;
         count += 1;
     }
@@ -1393,7 +1426,7 @@ fn checkAllDoneLocked(run: u32) void {
         status_catalog.load(.acquire) != .searching and status_plex.load(.acquire) != .searching and
         status_plugins.load(.acquire) != .searching and
         status_novels.load(.acquire) != .searching and status_novel_archive.load(.acquire) != .searching and
-        status_vndb.load(.acquire) != .searching and status_audiobooks.load(.acquire) != .searching)
+        status_vndb.load(.acquire) != .searching and status_audiobooks.load(.acquire) != .searching and status_opds.load(.acquire) != .searching)
     {
         // Swap so the resolving→done transition fires exactly once even if two
         // finishing workers observe "all done" concurrently — only the winner
@@ -1472,6 +1505,7 @@ fn computeMatchAgainst(item: ResolvedItem, query_override: []const u8) MatchInfo
         .radio => 26,
         .novels => 23,
         .audiobooks => 23,
+        .opds => 23,
         .vndb => 29,
         .tmdb => 30, // catalog stub — not directly playable, rank last
     };
@@ -1516,6 +1550,36 @@ fn computeMatchAgainst(item: ResolvedItem, query_override: []const u8) MatchInfo
 // ══════════════════════════════════════════════════════════
 
 // Catalog lookups use caller-owned buffers and never replace the Browse tabs.
+fn resolveOpds(query_buf: [256]u8, qlen: usize) void {
+    defer finishWorker(&status_opds, .done);
+    const pure = @import("opds_pure.zig");
+    const rows = alloc.alloc(pure.OpdsEntry, 12) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
+    defer alloc.free(rows);
+    const reply = @import("opds.zig").searchInto(query_buf[0..qlen], rows);
+    noteWorkerOutcome(reply.status);
+    for (rows[0..reply.count]) |row| {
+        var item: ResolvedItem = .{ .source = .opds, .opds_entry = row, .opds_connection_identity = reply.connection_identity };
+        copyField(&item.name, &item.name_len, row.titleSlice());
+        copyField(&item.author, &item.author_len, row.author[0..row.author_len]);
+        copyField(&item.summary, &item.summary_len, row.summary[0..row.summary_len]);
+        copyField(&item.detail, &item.detail_len, if (row.isPseStreamable()) "OPDS · Page reader" else if (row.is_navigation) "OPDS · Catalog" else "OPDS · Acquisition");
+        // The public identity must not depend on credential-derived material.
+        // Connection binding remains private in opds_connection_identity.
+        var identity_hash = std.hash.Wyhash.init(0x4f5044534944);
+        identity_hash.update(row.hrefSlice());
+        identity_hash.update(row.pseUrlSlice());
+        identity_hash.update(row.titleSlice());
+        const identity: []const u8 = std.fmt.bufPrint(&item.url, "opal://opds/{x}", .{identity_hash.final()}) catch continue;
+        item.url_len = identity.len;
+        // Private catalog covers may require authentication or embed URL credentials.
+        // Retain them in the typed entry; do not publish them as a public poster URL.
+        _ = pushResult(item);
+    }
+}
+
 fn resolveAudiobooks(query_buf: [256]u8, qlen: usize) void {
     defer finishWorker(&status_audiobooks, .done);
     const abs = @import("audiobookshelf.zig");
@@ -3946,6 +4010,7 @@ pub fn playResolvedItem(item: *const ResolvedItem) void {
                 @import("search.zig").submitQuery(item.name[0..item.name_len]);
             }
         },
+        .opds => @import("opds.zig").openCatalogEntry(item.opds_entry, item.opds_connection_identity),
         .novels => @import("novels.zig").openDeepLink(item.url[0..item.url_len]),
         .audiobooks => {
             const prefix = "abs://item/";

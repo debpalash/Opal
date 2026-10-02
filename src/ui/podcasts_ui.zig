@@ -289,6 +289,17 @@ fn renderEpisodes(view: *const Snapshot) void {
         return;
     }
 
+    {
+        var paging = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+        defer paging.deinit();
+        if (view.episode_offset > 0 and components.actionButton(@src(), "Previous episodes", .secondary, 52101))
+            podcasts.changeEpisodePage(view.generation, false);
+        _ = dvui.label(@src(), "{d}–{d} of {d} published episodes", .{ view.episode_offset + 1, view.episode_offset + view.episode_count, view.episode_total }, .{});
+        if (view.episode_offset + view.episode_count < view.episode_total and components.actionButton(@src(), "Next episodes", .secondary, 52102))
+            podcasts.changeEpisodePage(view.generation, true);
+        if (view.episodes_failed) _ = dvui.label(@src(), "Refresh failed; showing saved episodes", .{}, .{ .color_text = theme.colors.danger });
+    }
+
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
@@ -360,7 +371,7 @@ fn renderEpisodes(view: *const Snapshot) void {
             .corner_radius = theme.dims.rad_sm,
             .gravity_y = 0.5,
         })) {
-            playEpisode(i);
+            _ = podcasts.playEpisodeAtGeneration(i, view.generation);
         }
     }
 

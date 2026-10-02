@@ -166,6 +166,7 @@ pub fn coreInit() !void {
     state.initPaths();
     state.loadTmdbTokenFromEnv();
     logs.logs_allocator = @import("core/alloc.zig").allocator;
+    detectResourceRoot();
 
     // mpv snapshots the yt-dlp executable while the player is initialized.
     // Resolve the bundled absolute path now so a cold YouTube launch cannot
@@ -494,8 +495,8 @@ fn detectResourceRoot() void {
     } else |_| {}
 
     // Bundled: SDL_GetBasePath() → "<App>/Contents/Resources/" (trailing slash).
-    // Headless links no SDL (build.zig Phase S1) and is never run from a .app
-    // bundle anyway — a server resolves its resources from CWD/XDG.
+    // Headless links no SDL. Its resources were already resolved from the
+    // working directory or executable-relative probes above.
     if (@import("build_options").headless) return;
     const base = c.sdl.SDL_GetBasePath();
     if (base == null) return;
@@ -666,10 +667,6 @@ fn appInit(win: *dvui.Window) !void {
     // Register SDL Event Watch for file drops (must be on main thread)
     _ = c.sdl.SDL_EventState(c.sdl.SDL_DROPFILE, c.sdl.SDL_ENABLE);
     c.sdl.SDL_AddEventWatch(sdlEventWatch, null);
-
-    // Locate bundled resources (engines/ etc.) so streaming works when launched
-    // from /Applications (CWD "/"), not just from the project dir in dev.
-    detectResourceRoot();
 }
 
 /// Second-instance forwarding: POST one file/URL argument to an already-

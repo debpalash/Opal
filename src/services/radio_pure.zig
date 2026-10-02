@@ -436,3 +436,106 @@ test "radio searches genre and country without treating filters as station names
     try std.testing.expect(std.mem.indexOf(u8, buildSearchUrl("tag%3Ajazz", 30, 0, &b), "?tag=jazz&") != null);
     try std.testing.expect(std.mem.indexOf(u8, buildSearchUrl("country%3AIndia", 30, 30, &b), "?country=India&") != null);
 }
+
+/// Select the station the user saw, even if search publication reordered rows.
+pub fn stationByIdentity(stations: []const Station, identity: []const u8) ?Station {
+    if (identity.len == 0) return null;
+    for (stations) |station| {
+        if (std.mem.eql(u8, station.stationuuid[0..@min(station.stationuuid_len, station.stationuuid.len)], identity)) return station;
+    }
+    return null;
+}
+test "radio action identity survives reordered results and rejects stale station" {
+    var a = Station{};
+    a.stationuuid[0] = 'a';
+    a.stationuuid_len = 1;
+    a.url[0] = 'A';
+    a.url_len = 1;
+    var b = Station{};
+    b.stationuuid[0] = 'b';
+    b.stationuuid_len = 1;
+    b.url[0] = 'B';
+    b.url_len = 1;
+    const selected = stationByIdentity(&.{ b, a }, "a").?;
+    try std.testing.expectEqualStrings("A", selected.url[0..selected.url_len]);
+    try std.testing.expect(stationByIdentity(&.{b}, "a") == null);
+    try std.testing.expect(stationByIdentity(&.{ a, b }, "") == null);
+    a.url[0] = 'C';
+    const refreshed = stationByIdentity(&.{ a, b }, "a").?;
+    try std.testing.expectEqualStrings("C", refreshed.url[0..refreshed.url_len]);
+    try std.testing.expectEqualStrings("A", selected.url[0..selected.url_len]);
+}
+
+/// Response capacity follows copied station fields, including worst JSON escapes.
+pub fn catalogJsonCapacity(stations: []const Station) usize {
+    var bytes: usize = 0;
+    for (stations) |s| {
+        bytes += @as(usize, @min(s.stationuuid_len, s.stationuuid.len)) + @min(s.name_len, s.name.len) +
+            (if (s.url_resolved_len > 0) @min(s.url_resolved_len, s.url_resolved.len) else @min(s.url_len, s.url.len)) +
+            @min(s.favicon_len, s.favicon.len) + @min(s.tags_len, s.tags.len) + @min(s.country_len, s.country.len);
+    }
+    return 2048 + stations.len * 128 + bytes * 6;
+}
+fn writeCatalogString(writer: *std.Io.Writer, raw: []const u8) !void {
+    var len = raw.len;
+    while (!std.unicode.utf8ValidateSlice(raw[0..len])) len -= 1;
+    try std.json.Stringify.value(raw[0..len], .{}, writer);
+}
+pub fn writeCatalogRows(writer: *std.Io.Writer, stations: []const Station) !void {
+    try writer.writeByte('[');
+    for (stations, 0..) |s, i| {
+        if (i > 0) try writer.writeByte(',');
+        try writer.writeAll("{\"uuid\":");
+        try writeCatalogString(writer, s.stationuuid[0..@min(s.stationuuid_len, s.stationuuid.len)]);
+        try writer.writeAll(",\"name\":");
+        try writeCatalogString(writer, s.name[0..@min(s.name_len, s.name.len)]);
+        try writer.writeAll(",\"url\":");
+        try writeCatalogString(writer, if (s.url_resolved_len > 0) s.url_resolved[0..@min(s.url_resolved_len, s.url_resolved.len)] else s.url[0..@min(s.url_len, s.url.len)]);
+        try writer.writeAll(",\"favicon\":");
+        try writeCatalogString(writer, s.favicon[0..@min(s.favicon_len, s.favicon.len)]);
+        try writer.writeAll(",\"tags\":");
+        try writeCatalogString(writer, s.tags[0..@min(s.tags_len, s.tags.len)]);
+        try writer.writeAll(",\"country\":");
+        try writeCatalogString(writer, s.country[0..@min(s.country_len, s.country.len)]);
+        try writer.writeByte('}');
+    }
+    try writer.writeByte(']');
+}
+test "radio catalog serializes all 180 maximally escaped copied stations" {
+    const rows = try std.testing.allocator.alloc(Station, 180);
+    defer std.testing.allocator.free(rows);
+    for (rows) |*row| row.* = .{
+        .stationuuid = @splat(1),
+        .stationuuid_len = 40,
+        .name = @splat(1),
+        .name_len = 160,
+        .url_resolved = @splat(1),
+        .url_resolved_len = 512,
+        .favicon = @splat(1),
+        .favicon_len = 300,
+        .tags = @splat(1),
+        .tags_len = 160,
+        .country = @splat(1),
+        .country_len = 64,
+    };
+    const buffer = try std.testing.allocator.alloc(u8, catalogJsonCapacity(rows));
+    defer std.testing.allocator.free(buffer);
+    var writer = std.Io.Writer.fixed(buffer);
+    try writeCatalogRows(&writer, rows);
+    try std.testing.expect(writer.buffered().len > 512 * 1024);
+    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, writer.buffered(), .{});
+    defer parsed.deinit();
+    try std.testing.expectEqual(@as(usize, 180), parsed.value.array.items.len);
+    const last = parsed.value.array.items[179].object;
+    try std.testing.expectEqualStrings(&rows[179].stationuuid, last.get("uuid").?.string);
+    try std.testing.expectEqualStrings(&rows[179].url_resolved, last.get("url").?.string);
+    try std.testing.expectEqualStrings(&rows[179].country, last.get("country").?.string);
+    writer = std.Io.Writer.fixed(buffer);
+    try writeCatalogRows(&writer, &.{});
+    try std.testing.expectEqualStrings("[]", writer.buffered());
+    writer = std.Io.Writer.fixed(buffer);
+    try writeCatalogRows(&writer, rows[0..1]);
+    const single = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, writer.buffered(), .{});
+    defer single.deinit();
+    try std.testing.expectEqual(@as(usize, 1), single.value.array.items.len);
+}

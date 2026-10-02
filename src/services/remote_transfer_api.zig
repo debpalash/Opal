@@ -7,7 +7,7 @@ const wire = @import("remote_http.zig");
 
 pub fn handle(stream: std.Io.net.Stream, method: []const u8, path: []const u8, query: []const u8) bool {
     if (std.mem.eql(u8, path, "/torrents")) {
-        if (wire.requireMethod(stream, method, "GET")) snapshot(stream);
+        if (wire.requireMethod(stream, method, "GET")) snapshot(stream, query);
         return true;
     }
     if (std.mem.eql(u8, path, "/torrents/action")) {
@@ -31,10 +31,19 @@ pub fn handle(stream: std.Io.net.Stream, method: []const u8, path: []const u8, q
 
 fn downloadHistory(stream: std.Io.net.Stream) void {
     const history = @import("history.zig");
-    var entries: [state.MAX_DL_HISTORY]history.DownloadHistoryEntry = undefined;
-    const count = history.snapshotDownloadHistory(&entries);
-    var json: [32768]u8 = undefined;
-    var w = std.Io.Writer.fixed(&json);
+    const alloc = @import("../core/alloc.zig").allocator;
+    const entries = alloc.alloc(history.DownloadHistoryEntry, state.MAX_DL_HISTORY) catch {
+        wire.sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
+        return;
+    };
+    defer alloc.free(entries);
+    const count = history.snapshotDownloadHistory(entries);
+    const json = alloc.alloc(u8, 1024 + count * (state.MAX_DL_NAME_LEN * 6 + 64)) catch {
+        wire.sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
+        return;
+    };
+    defer alloc.free(json);
+    var w = std.Io.Writer.fixed(json);
     w.writeAll("{\"items\":[") catch return;
     for (entries[0..count], 0..) |*entry, i| {
         if (i > 0) w.writeAll(",") catch return;
@@ -88,15 +97,33 @@ fn applyDiskAction(stream: std.Io.net.Stream, query: []const u8) void {
     wire.sendJson(stream, "{\"ok\":true}");
 }
 
-fn snapshot(stream: std.Io.net.Stream) void {
-    var json: [16384]u8 = undefined;
-    var w = std.Io.Writer.fixed(&json);
+fn snapshot(stream: std.Io.net.Stream, query: []const u8) void {
+    const offset = std.fmt.parseInt(usize, wire.queryParam(query, "offset") orelse "0", 10) catch {
+        wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"invalid transfer offset\"}");
+        return;
+    };
+    const limit = std.fmt.parseInt(usize, wire.queryParam(query, "limit") orelse "96", 10) catch 0;
+    if (limit == 0 or limit > 96) {
+        wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"transfer page out of range\"}");
+        return;
+    }
+    const alloc = @import("../core/alloc.zig").allocator;
+    const json = alloc.alloc(u8, 1024 + limit * (256 * 6 + 256)) catch {
+        wire.sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
+        return;
+    };
+    defer alloc.free(json);
+    var w = std.Io.Writer.fixed(json);
     w.writeAll("{\"torrents\":[") catch return;
     const count = c.mpv.torrent_count(state.torrentSession());
     var emitted: usize = 0;
+    var total: usize = 0;
     var id: c_int = 0;
     while (id < count) : (id += 1) {
         if (c.mpv.torrent_is_alive(state.torrentSession(), id) == 0) continue;
+        const position = total;
+        total += 1;
+        if (position < offset or emitted >= limit) continue;
         var name_buf: [256]u8 = undefined;
         c.mpv.torrent_get_name(state.torrentSession(), id, &name_buf, name_buf.len);
         const name_len = std.mem.indexOfScalar(u8, &name_buf, 0) orelse name_buf.len - 1;
@@ -109,14 +136,14 @@ fn snapshot(stream: std.Io.net.Stream) void {
         wire.writeJsonString(&w, name_buf[0..name_len]);
         w.print("\",\"id\":{d},\"pct\":{d:.1},\"rate\":{d},\"seeds\":{d},\"paused\":{s}}}", .{
             id,
-            std.math.clamp(progress * 100.0, 0.0, 100.0),
+            if (std.math.isFinite(progress)) std.math.clamp(progress * 100.0, 0.0, 100.0) else @as(f32, 0),
             rate,
             seeds,
             if (c.mpv.torrent_is_paused(state.torrentSession(), id) != 0) "true" else "false",
         }) catch return;
         emitted += 1;
     }
-    w.writeAll("]}") catch return;
+    w.print("],\"total\":{d},\"offset\":{d},\"limit\":{d},\"returned\":{d},\"has_more\":{s}}}", .{ total, offset, limit, emitted, if (offset < total and emitted < total - offset) "true" else "false" }) catch return;
     wire.sendJson(stream, json[0..w.end]);
 }
 

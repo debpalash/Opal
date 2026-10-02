@@ -30,7 +30,7 @@ An isolated headless instance, separate from the user's configuration, loaded:
 - 30 radio stations, then 60 after loading the next page.
 - 20 popular MangaDex results, then 40 after loading the next page.
 - NASA's *Houston We Have a Podcast* from its RSS URL, with 200 playable episode
-  entries (the current episode-list limit).
+  entries in its first episode page (subsequent pages were added in the maturity work below).
 
 Additional source probes:
 
@@ -120,7 +120,8 @@ already returned remain usable while slower sources finish.
 | Personal video libraries | Connected Jellyfin and Plex server searches | Play the server item; credentials stay out of universal result URLs |
 | Local files | Configured download directory | Play the existing local file |
 | Installed source plugins | Trusted executable plugins implementing the search protocol | Open the supplied stream or resolve the plugin item |
-| OPDS and Audiobookshelf | Their configured Browse libraries remain separate from universal query fan-out | Browse the connected library page |
+| OPDS | Independent search for configured catalogs advertising a supported Atom/OpenSearch GET template; unsupported or missing templates report unavailable | Open the connected reader item |
+| Audiobookshelf | Independent search across permitted connected libraries | Open actual audio tracks or downloaded episodes |
 | Web | URL navigation in the web browser, rather than a media catalog provider | Open a website |
 
 Catalog results retain real provider covers, descriptions, ratings and genres
@@ -196,9 +197,9 @@ passing its download archive to the media player. Native and web views offer
 actual audio tracks or downloaded podcast episodes, with up to 128 selectable
 files and explicit returned/total/truncation information. Single-file books can
 start immediately and use book-wide server resume. Multi-file playback uses
-manual track selection; automatic track advancement and book-wide resume across
-files are not implemented. No connected personal-server search or playback was
-verified during this provider-contract research.
+track selection, automatic advancement and book-wide resume across files. The
+original provider-contract research did not verify connected personal-server
+playback; isolated runtime verification is recorded below.
 
 ## Checks for the 2026-10-02 loading changes
 
@@ -208,6 +209,20 @@ verified during this provider-contract research.
 - Regression tests and interactive playback checks were not run for these changes.
 - Personal-server search/playback has not been verified against a configured account.
 
-Remaining functional gaps include independent OPDS server search, automatic
-Audiobookshelf track advancement, and server resume across multi-file books.
-Provider outages and access restrictions remain external availability conditions.
+The maturity work below adds independent advertised OPDS search and verifies
+Audiobookshelf lifecycle behavior with isolated fixtures. Provider outages and
+access restrictions remain external availability conditions.
+
+## Maturity follow-up on 2026-10-02
+
+See [the maturity audit](maturity-audit.md) for implementation details and
+reproducible checks. Podcast feeds now expose their complete retained episode
+count and 200-item pages within the existing 4 MiB feed bound. Playback actions
+validate the rendered page's generation.
+
+Six isolated runtime cases passed, including advertised authenticated OPDS search
+without replacing Browse state, structural Audiobookshelf login, actual generated
+audio advancing across two files, and whole-book resume into the second file.
+Radio actions now use stable station UUIDs, and comics actions copy the selected
+reader identity. These fixtures establish those contracts; they do not establish
+external provider uptime or configured personal-server availability.

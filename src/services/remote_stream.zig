@@ -220,15 +220,44 @@ pub fn handleNowPlayingArt(stream: std.Io.net.Stream) void {
 /// Serve `fetch_url` as an image, backed by the shared poster disk cache keyed
 /// by `cache_key`. Cache hit → serve the stored encoded bytes; miss → fetch
 /// once, store, serve. Runs on the connection thread (blocking fetch ok).
+// Requests for the same key share one fetch. Hash collisions only serialize
+// unrelated keys; they never share bytes or credentials.
+const ImageMutex = @import("../core/sync.zig").Mutex;
+var image_locks: [32]ImageMutex = [_]ImageMutex{.{}} ** 32;
+
 fn serveProxied(stream: std.Io.net.Stream, fetch_url: []const u8, cache_key: []const u8) void {
     const poster = @import("../core/poster.zig");
     // Two ownership paths, two frees: the cache hands back c_alloc bytes
     // (cacheFreeEncoded); a network fetch lives in our own app-alloc buffer.
     if (poster.cacheLoadForUrl(cache_key)) |cached| {
         defer poster.cacheFreeEncoded(cached);
-        sendImage(stream, cached);
-        return;
+        if (pure.imageContentType(cached) != null) {
+            sendImage(stream, cached);
+            return;
+        }
     }
+    const lock = &image_locks[std.hash.Fnv1a_64.hash(cache_key) % image_locks.len];
+    lock.lock();
+    defer lock.unlock();
+    // A preceding request may have filled the shared cache while we waited.
+    if (poster.cacheLoadForUrl(cache_key)) |cached| {
+        defer poster.cacheFreeEncoded(cached);
+        if (pure.imageContentType(cached) != null) {
+            sendImage(stream, cached);
+            return;
+        }
+    }
+    // Share the desktop's exact process-wide eight-fetch limit. A bounded wait
+    // avoids converting a full slot table into a permanently broken image.
+    var attempts: usize = 0;
+    while (!poster.tryClaimSlot()) : (attempts += 1) {
+        if (attempts >= 100) {
+            _ = writeAll(stream, "HTTP/1.1 503 Service Unavailable\r\nRetry-After: 1\r\nContent-Length: 0\r\n\r\n");
+            return;
+        }
+        io_g.sleep(100 * std.time.ns_per_ms);
+    }
+    defer poster.releaseSlot();
     const buf = alloc.alloc(u8, 512 * 1024) catch return send404(stream);
     defer alloc.free(buf);
     // Native HTTP keeps credential-bearing Plex/Jellyfin artwork URLs out of
@@ -239,14 +268,15 @@ fn serveProxied(stream: std.Io.net.Stream, fetch_url: []const u8, cache_key: []c
         .max_response = buf.len,
         .accept = "image/*",
     }) orelse return send404(stream);
-    if (body.len < 100) return send404(stream);
+    if (pure.imageContentType(body) == null) return send404(stream);
     poster.cacheStoreForUrl(cache_key, body, 0, 0);
     sendImage(stream, body);
 }
 
 fn sendImage(stream: std.Io.net.Stream, body: []const u8) void {
+    const mime = pure.imageContentType(body) orelse return send404(stream);
     var hdr: [256]u8 = undefined;
-    const h = std.fmt.bufPrint(&hdr, "HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\nCache-Control: max-age=86400\r\nContent-Length: {d}\r\nAccess-Control-Allow-Origin: *\r\n\r\n", .{body.len}) catch return;
+    const h = std.fmt.bufPrint(&hdr, "HTTP/1.1 200 OK\r\nContent-Type: {s}\r\nCache-Control: private, max-age=86400\r\nContent-Length: {d}\r\n\r\n", .{ mime, body.len }) catch return;
     if (writeAll(stream, h)) _ = writeAll(stream, body);
 }
 

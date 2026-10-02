@@ -54,6 +54,11 @@ pub const Action = enum {
 };
 pub var queue_items: [MAX_QUEUE]QueueItem = undefined;
 pub var queue_count: usize = 0;
+var queue_keyboard_layout = false;
+var queue_scroll: dvui.ScrollInfo = .{};
+var queue_row_heights: [MAX_QUEUE]f32 = @splat(0);
+var queue_height_scale: f32 = 0;
+
 var data_lock = @import("../core/sync.zig").Mutex{};
 var db: ?*c.sqlite.sqlite3 = null;
 // 0 waiting, 1 initializing, 2 ready, 3 closing. Release/acquire publishes
@@ -602,11 +607,32 @@ pub fn renderContent() void {
         return;
     }
 
-    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
+    var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &queue_scroll }, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
     defer scroll.deinit();
 
-    for (queue_items[0..queue_count], 0..) |*item, idx| {
-        renderQueueCard(item, idx);
+    var tab_pressed = false;
+    var pointer_pressed = false;
+    for (dvui.events()) |event| {
+        if (event.evt == .key and event.evt.key.code == .tab and event.evt.key.action == .down) tab_pressed = true;
+        if (event.evt == .mouse and event.evt.mouse.action == .press) pointer_pressed = true;
+    }
+    queue_keyboard_layout = layout.keyboardLayoutMode(queue_keyboard_layout, tab_pressed, pointer_pressed);
+    const font_h = dvui.themeGet().font_body.textHeight();
+    if (queue_height_scale != font_h) {
+        queue_row_heights = @splat(0);
+        queue_height_scale = font_h;
+    }
+    const estimate = @max(45, font_h * 2 + 12) + 13;
+    const win = if (queue_keyboard_layout) layout.RowWindow{ .first = 0, .last = queue_count, .before = 0, .after = 0 } else layout.measuredRows(queue_row_heights[0..queue_count], estimate, queue_scroll.viewport.y, queue_scroll.viewport.h, 2);
+    if (win.before > 0) {
+        var spacer = dvui.box(@src(), .{}, .{ .id_extra = 99001, .min_size_content = .{ .w = 1, .h = win.before } });
+        spacer.deinit();
+    }
+    var idx = win.first;
+    while (idx < win.last and idx < queue_count) : (idx += 1) renderQueueCard(&queue_items[idx], idx);
+    if (win.after > 0) {
+        var spacer = dvui.box(@src(), .{}, .{ .id_extra = 99002, .min_size_content = .{ .w = 1, .h = win.after } });
+        spacer.deinit();
     }
 }
 
@@ -758,7 +784,11 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
         .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
     });
-    defer card.deinit();
+    defer {
+        const height = card.data().rect.h;
+        if (height > 0) queue_row_heights[idx] = height;
+        card.deinit();
+    }
 
     // ── Thumbnail ──
     if (item.thumb_url_len > 0) {

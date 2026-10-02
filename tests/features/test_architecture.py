@@ -33,7 +33,7 @@ def test_feature_store_snapshots():
     podcasts_ui = _src("src/ui/podcasts_ui.zig")
     jellyfin = _src("src/services/jellyfin.zig")
     jellyfin_ui = _src("src/ui/jellyfin_ui.zig")
-    remote = _src("src/services/remote.zig")
+    remote = _remote_api()
     stream = _src("src/services/remote_stream.zig")
     checks = {
         "podcast generation": "publication_gen" in podcasts and "pub const Snapshot" in podcasts,
@@ -44,7 +44,7 @@ def test_feature_store_snapshots():
                 line for line in podcasts.splitlines() if line.lstrip().startswith("const ")
             )
             and '@import("podcasts_ui.zig").renderContent()' in _src("src/ui/drawer.zig"),
-        "podcast remote snapshot": "podcasts_svc.snapshot()" in remote
+        "podcast remote snapshot": "podcasts_svc.copySnapshot(view)" in remote
             and 'podcasts.zig").copyArtwork' in stream,
         "Jellyfin projection excludes pointers": "pub const RemoteItem" in jellyfin
             and "poster_pixels" not in _between(jellyfin, "pub const RemoteItem", "pub const RemoteSnapshot"),
@@ -55,8 +55,8 @@ def test_feature_store_snapshots():
             and 'jellyfin.zig").connectionSnapshot' in stream,
         "commands own credential mutation": "pub fn configureLogin(" in jellyfin
             and "jf.configureLogin(" in remote,
-        "socket writes after snapshots": remote.find("podcasts_svc.snapshot()") < remote.find(
-            "sendJson(stream, json_buf[0..w.end])", remote.find("podcasts_svc.snapshot()")
+        "socket writes after snapshots": remote.find("podcasts_svc.copySnapshot(view)") < remote.find(
+            "sendJson(stream, json_buf[0..w.end])", remote.find("podcasts_svc.copySnapshot(view)")
         ),
     }
     missing = [name for name, ok in checks.items() if not ok]

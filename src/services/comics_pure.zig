@@ -1063,3 +1063,87 @@ test "MangaDex English alternate enriches native script without replacing canoni
     const canonical = "{\"id\":\"801513ba-a712-498c-8f57-cae55b38cc92\",\"attributes\":{\"title\":{\"en\":\"Tokyo Ghoul\"},\"altTitles\":[{\"en\":\"TG\"}]}}";
     try std.testing.expectEqualStrings("Tokyo Ghoul", parseMangaEntry(canonical).?.title);
 }
+
+pub const PageDecodeAction = enum { none, worker_decode, upload };
+pub const PAGE_DECODE_LIMIT: usize = 2;
+
+/// Render scheduling policy. The native adapter owns decoded buffers and GPU
+/// textures; this decision is independent of stb, threads, and dvui windows.
+pub fn pageDecodeAction(has_bytes: bool, has_texture: bool, failed: bool, busy: bool, ready: bool, outstanding: usize) PageDecodeAction {
+    if (has_texture or failed) return .none;
+    if (ready) return .upload;
+    if (!has_bytes or busy or outstanding >= PAGE_DECODE_LIMIT) return .none;
+    return .worker_decode;
+}
+
+test "comic page decoding schedules a worker instead of blocking the render thread" {
+    try std.testing.expectEqual(PageDecodeAction.worker_decode, pageDecodeAction(true, false, false, false, false, 0));
+}
+
+test "comic page decode scheduling is bounded and does not repeat failures" {
+    try std.testing.expectEqual(PageDecodeAction.none, pageDecodeAction(true, false, false, true, false, 1));
+    try std.testing.expectEqual(PageDecodeAction.none, pageDecodeAction(true, false, false, false, false, PAGE_DECODE_LIMIT));
+    try std.testing.expectEqual(PageDecodeAction.none, pageDecodeAction(true, false, true, false, false, 0));
+    try std.testing.expectEqual(PageDecodeAction.upload, pageDecodeAction(true, false, false, false, true, PAGE_DECODE_LIMIT));
+}
+
+/// A result may publish only into the same issue generation while its worker
+/// still owns the slot. Stale completion never clears a newer slot's busy flag.
+pub fn pageDecodeCanPublish(job_generation: u32, current_generation: u32, owns_slot: bool, shutting_down: bool) bool {
+    return job_generation == current_generation and owns_slot and !shutting_down;
+}
+
+test "comic decoded pages reject stale generation and shutdown publication" {
+    try std.testing.expect(pageDecodeCanPublish(7, 7, true, false));
+    try std.testing.expect(!pageDecodeCanPublish(7, 8, true, false));
+    try std.testing.expect(!pageDecodeCanPublish(7, 7, false, false));
+    try std.testing.expect(!pageDecodeCanPublish(7, 7, true, true));
+}
+
+/// Every JSON string byte may expand to six bytes (\u0001); rows and envelope
+/// have a separate allowance. Callers pass bounded copied field lengths.
+pub fn catalogJsonCapacity(rows: usize, field_bytes: usize) usize {
+    return 2048 + rows * 64 + field_bytes * 6;
+}
+pub fn writeCatalogRows(writer: *std.Io.Writer, rows: anytype) !void {
+    try writer.writeByte('[');
+    for (rows, 0..) |row, i| {
+        if (i > 0) try writer.writeByte(',');
+        try writer.writeAll("{\"title\":");
+        const raw = row.title[0..row.title_len];
+        var title_len = raw.len;
+        while (!std.unicode.utf8ValidateSlice(raw[0..title_len])) title_len -= 1;
+        try std.json.Stringify.value(raw[0..title_len], .{}, writer);
+        try writer.writeAll(",\"url\":");
+        try std.json.Stringify.value(row.url[0..row.url_len], .{}, writer);
+        try writer.writeAll(",\"cover\":");
+        try std.json.Stringify.value(row.cover[0..row.cover_len], .{}, writer);
+        try writer.writeByte('}');
+    }
+    try writer.writeByte(']');
+}
+test "comic catalog JSON accommodates all 120 maximally escaped rows" {
+    const Row = struct {
+        title: [160]u8 = @splat(1),
+        title_len: usize = 160,
+        url: [256]u8 = @splat(1),
+        url_len: usize = 256,
+        cover: [512]u8 = @splat(1),
+        cover_len: usize = 512,
+    };
+    const rows = try std.testing.allocator.alloc(Row, 120);
+    defer std.testing.allocator.free(rows);
+    for (rows) |*row| row.* = .{};
+    const buffer = try std.testing.allocator.alloc(u8, catalogJsonCapacity(rows.len, rows.len * (160 + 256 + 512)));
+    defer std.testing.allocator.free(buffer);
+    var writer = std.Io.Writer.fixed(buffer);
+    try writeCatalogRows(&writer, rows);
+    try std.testing.expect(writer.buffered().len > 256 * 1024);
+    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, writer.buffered(), .{});
+    defer parsed.deinit();
+    try std.testing.expectEqual(@as(usize, 120), parsed.value.array.items.len);
+    const last = parsed.value.array.items[119].object;
+    try std.testing.expectEqualStrings(&rows[119].title, last.get("title").?.string);
+    try std.testing.expectEqualStrings(&rows[119].url, last.get("url").?.string);
+    try std.testing.expectEqualStrings(&rows[119].cover, last.get("cover").?.string);
+}

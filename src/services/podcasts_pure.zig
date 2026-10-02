@@ -752,3 +752,18 @@ test "RSS enclosures decode XML entities and accept single quoted attributes" {
     try std.testing.expectEqualStrings("https://cdn.test/audio.mp3?a=1&b=2", episodes[0].audio_url[0..episodes[0].audio_url_len]);
     try std.testing.expectEqualStrings("Science & Space", episodes[0].title[0..episodes[0].title_len]);
 }
+
+test "RSS pages count usable items beyond 200 and have a truthful end" {
+    const item = "<item><title>Episode</title><enclosure url='https://cdn.test/a.mp3'/></item>";
+    const invalid = "<item><title>No enclosure</title></item>";
+    const xml = "<rss><channel>" ++ (item ++ invalid) ** 205 ++ "</channel></rss>";
+    const rows = try std.testing.allocator.alloc(Episode, 200);
+    defer std.testing.allocator.free(rows);
+    const first = parseRssEpisodePage(xml, rows, 0);
+    try std.testing.expectEqual(@as(usize, 200), first.count);
+    try std.testing.expectEqual(@as(usize, 205), first.total);
+    const last = parseRssEpisodePage(xml, rows, 200);
+    try std.testing.expectEqual(@as(usize, 5), last.count);
+    try std.testing.expectEqual(@as(usize, 205), last.total);
+    try std.testing.expectEqual(@as(usize, 0), parseRssEpisodePage(xml, rows, 205).count);
+}

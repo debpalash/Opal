@@ -1081,6 +1081,7 @@ pub fn renderInlineResults() void {
                 .novels => "Novels",
                 .vndb => "Visual novels",
                 .audiobooks => "Audiobooks",
+                .opds => "OPDS",
             };
         }
     }.get;
@@ -1199,7 +1200,7 @@ pub fn renderInlineResults() void {
         // Catalogs open details; reading results open a reader.
         const action_icon = switch (item.source) {
             .tmdb, .vndb, .podcast, .audiobooks => icons.tvg.lucide.info,
-            .comics, .novels => icons.tvg.lucide.@"book-open",
+            .comics, .novels, .opds => icons.tvg.lucide.@"book-open",
             else => icons.tvg.lucide.play,
         };
         if (dvui.buttonIcon(@src(), "", action_icon, .{}, .{}, .{
@@ -1252,6 +1253,7 @@ fn queueChatResult(idx: usize) void {
         .novels => "novels",
         .vndb => "vndb",
         .audiobooks => "audiobooks",
+        .opds => "opds",
     };
     @import("queue.zig").addToQueue(url_str, name, src_label);
     state.showToast("Added to queue");

@@ -578,3 +578,16 @@ test "TV airing and upcoming catalogs stay on TV endpoints and preserve pages" {
     try std.testing.expect(std.mem.indexOf(u8, upcoming, "first_air_date.gte=2026-09-22") != null);
     try std.testing.expect(std.mem.endsWith(u8, upcoming, "page=2"));
 }
+
+/// Maximum accepted TV detail response; allocation follows the complete file size.
+pub const DETAIL_BODY_LIMIT: usize = 8 * 1024 * 1024;
+pub fn detailBodyAllocationSize(size: u64) ?usize {
+    if (size == 0 or size > DETAIL_BODY_LIMIT) return null;
+    return @intCast(size);
+}
+test "TV detail allocation proportional without lowering payload ceiling" {
+    try std.testing.expectEqual(@as(?usize, 50 * 1024), detailBodyAllocationSize(50 * 1024));
+    try std.testing.expectEqual(@as(?usize, DETAIL_BODY_LIMIT), detailBodyAllocationSize(DETAIL_BODY_LIMIT));
+    try std.testing.expectEqual(@as(?usize, null), detailBodyAllocationSize(DETAIL_BODY_LIMIT + 1));
+    try std.testing.expectEqual(@as(?usize, null), detailBodyAllocationSize(0));
+}

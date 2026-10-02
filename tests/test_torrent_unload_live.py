@@ -62,6 +62,25 @@ class TorrentUnloadLiveTest(unittest.TestCase):
             time.sleep(0.05)
         self.fail("timed out waiting for transfer state")
 
+    def test_enabled_row_before_binding_restores_listener_on_restart(self):
+        """Saved INSERT OR REPLACE order must not start a default listener."""
+        profile = self.opal.config_root / "opal"
+        with sqlite3.connect(profile / "opal.db") as conn:
+            conn.execute("DELETE FROM config WHERE key IN ('web_remote','web_port','web_bind')")
+            conn.executemany("INSERT INTO config VALUES (?, ?)",
+                             [("web_remote", "1"), ("web_bind", "loopback"),
+                              ("web_port", str(setup_live.PORT))])
+        for _ in range(2):
+            self.opal.start()
+            token = (profile / "api.token").read_text().strip()
+            self.assertEqual(self.api("GET", "/api/status", token).status, 200)
+            self.opal.stop_process()
+            with sqlite3.connect(profile / "opal.db") as conn:
+                binding = dict(conn.execute("SELECT key,value FROM config WHERE key IN ('web_port','web_bind')"))
+            self.assertEqual(binding, {"web_port": str(setup_live.PORT), "web_bind": "loopback"})
+        log = self.opal.safe_log()
+        self.assertNotIn("forcing process exit", log)
+
     def test_restart_restores_torrents_paused_and_removal_stays_removed(self):
         profile = self.opal.config_root / "opal"
         with sqlite3.connect(profile / "opal.db") as conn:

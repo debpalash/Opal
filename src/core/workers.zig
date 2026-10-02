@@ -49,6 +49,7 @@ var shutdown_complete: std.atomic.Value(bool) = std.atomic.Value(bool).init(true
 // Test-only scheduling seam: suspend a legacy caller after its optimistic
 // shutdown check, before it reserves an active task. Production builds omit it.
 var legacy_admission_hook_for_test: ?*const fn () void = null;
+var drain_after_reap_hook_for_test: ?*const fn () void = null;
 
 /// Initialize admission before any service is allowed to start work.
 pub fn init() void {
@@ -277,8 +278,14 @@ pub fn beginShutdownAndDrain(diagnostic_ms: i64) void {
     var warned = false;
     while (true) {
         reapFinished();
+        if (builtin.is_test) {
+            if (drain_after_reap_hook_for_test) |hook| hook();
+        }
         slots_mutex.lock();
-        const owned = MAX_OWNED_THREADS - free_len - finished_len;
+        // Finished-but-unjoined workers still own their slot and handle.
+        // A completion can arrive after reapFinished took its batch; excluding
+        // finished_len here would let teardown return before the next join.
+        const owned = MAX_OWNED_THREADS - free_len;
         slots_mutex.unlock();
         if (owned == 0 and active.load(.acquire) == 0) return;
         if (!warned and io.milliTimestamp() - started >= diagnostic_ms) {
@@ -457,4 +464,47 @@ test "shutdown deadline has a one millisecond floor" {
     try std.testing.expect(shutdownDeadlineReached(100, 101, 0));
     try std.testing.expect(!shutdownDeadlineReached(100, 5_099, 5_000));
     try std.testing.expect(shutdownDeadlineReached(100, 5_100, 5_000));
+}
+
+test "shutdown joins workers that finish between reap and empty observation" {
+    const T = struct {
+        var gate = std.atomic.Value(bool).init(false);
+        var invoked = false;
+        var observed = false;
+        fn run() void {
+            while (!gate.load(.acquire)) io.sleep(std.time.ns_per_ms);
+        }
+        fn finishAfterReap() void {
+            if (invoked) return;
+            invoked = true;
+            gate.store(true, .release);
+            const deadline = io.monotonicMilliTimestamp() + 2_000;
+            while (io.monotonicMilliTimestamp() < deadline) {
+                slots_mutex.lock();
+                const finished = finished_len != 0;
+                slots_mutex.unlock();
+                if (finished) {
+                    observed = true;
+                    return;
+                }
+                io.sleep(std.time.ns_per_ms);
+            }
+        }
+    };
+    init();
+    T.gate.store(false, .release);
+    T.invoked = false;
+    T.observed = false;
+    try spawn(T.run, .{});
+    drain_after_reap_hook_for_test = T.finishAfterReap;
+    defer drain_after_reap_hook_for_test = null;
+    beginShutdownAndDrain(1_000);
+    // Always clean up even when the old drain returns before joining.
+    defer reapFinished();
+    slots_mutex.lock();
+    defer slots_mutex.unlock();
+    try std.testing.expect(T.observed);
+    try std.testing.expectEqual(MAX_OWNED_THREADS, free_len);
+    for (slots) |slot| try std.testing.expect(slot.thread == null);
+    try std.testing.expectEqual(@as(usize, 0), finished_len);
 }

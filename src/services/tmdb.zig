@@ -6,7 +6,6 @@ const theme = @import("../ui/theme.zig");
 const shared_components = @import("../ui/components.zig");
 const search = @import("search.zig");
 const content_cache = @import("../core/content_cache.zig");
-const content_cache_pure = @import("../core/content_cache_pure.zig");
 const route_resilience = @import("../core/route_resilience_pure.zig");
 
 // Sub-modules
@@ -1798,7 +1797,7 @@ fn startSeasonsNetwork(tmdb_id: i32, my_gen: u32) void {
     const t = &state.app.tmdb;
     t.tv_seasons_loading = true;
     const use_cinemeta = t.api_key_len == 0;
-    if (@import("../core/workers.zig").spawnLegacy(fetchSeasonsThread, .{ tmdb_id, my_gen, use_cinemeta, t.tv_imdb_id, t.tv_imdb_id_len })) |th| {
+    if (@import("../core/workers.zig").spawnLegacy(fetchSeasonsThread, .{ tmdb_id, my_gen, use_cinemeta, t.tv_imdb_id, t.tv_imdb_id_len, t.api_key, t.api_key_len })) |th| {
         @import("../core/workers.zig").release(th);
     } else |_| {
         t.tv_seasons_loading = false;
@@ -1824,12 +1823,11 @@ fn fetchSeasonsInternal(tmdb_id: i32, reset_retry: bool) void {
     // stale hit. The encrypted cache hard-expires entries after seven days.
     // This keeps navigation instant and prevents provider outages from
     // replacing a usable catalog with an empty screen.
-    const cache_buf = alloc.alloc(u8, content_cache_pure.MAX_ENTRY_BYTES) catch null;
-    if (cache_buf) |buf| {
-        defer alloc.free(buf);
+    {
         var key_buf: [96]u8 = undefined;
         if (detailCacheKey(&key_buf, tmdb_id, use_cinemeta, null)) |key| {
-            if (content_cache.get(key, buf)) |hit| {
+            if (content_cache.getOwned(key)) |hit| {
+                defer alloc.free(hit.bytes);
                 if (detailBodyValid(hit.bytes, use_cinemeta, null)) {
                     t.tv_seasons_loading = true;
                     applySeasons(hit.bytes, tmdb_id, my_gen, use_cinemeta);
@@ -1846,21 +1844,21 @@ fn fetchSeasonsInternal(tmdb_id: i32, reset_retry: bool) void {
     startSeasonsNetwork(tmdb_id, my_gen);
 }
 
-fn fetchSeasonsThread(tmdb_id: i32, my_gen: u32, use_cinemeta: bool, imdb_id: [16]u8, imdb_id_len: usize) void {
+fn fetchSeasonsThread(tmdb_id: i32, my_gen: u32, use_cinemeta: bool, imdb_id: [16]u8, imdb_id_len: usize, api_key: [256]u8, api_key_len: usize) void {
     var url_buf: [128]u8 = undefined;
     const url = if (use_cinemeta)
         std.fmt.bufPrint(&url_buf, "/meta/series/{s}.json", .{imdb_id[0..imdb_id_len]}) catch return
     else
         std.fmt.bufPrint(&url_buf, "/3/tv/{d}", .{tmdb_id}) catch return;
 
-    const buf = alloc.alloc(u8, 8 * 1024 * 1024) catch {
+    const buf = (if (use_cinemeta)
+        api.cinemetaApiOwned(url, tmdb_pure.DETAIL_BODY_LIMIT)
+    else
+        api.tmdbApiOwned(url, api_key[0..@min(api_key_len, api_key.len)], tmdb_pure.DETAIL_BODY_LIMIT)) orelse {
         publishDetail(.{ .buffer = &.{}, .len = 0, .id = tmdb_id, .generation = my_gen, .cinemeta = use_cinemeta });
         return;
     };
-    const bytes = if (use_cinemeta)
-        api.cinemetaApiInto(url, buf)
-    else
-        api.tmdbApiInto(url, state.app.tmdb.api_key[0..state.app.tmdb.api_key_len], buf);
+    const bytes = buf.len;
     if (detailBodyValid(buf[0..bytes], use_cinemeta, null)) {
         var key_buf: [96]u8 = undefined;
         if (detailCacheKey(&key_buf, tmdb_id, use_cinemeta, null)) |key| content_cache.put(key, buf[0..bytes], DETAIL_CACHE_TTL_S);
@@ -2167,18 +2165,17 @@ fn fetchEpisodesInternal(tmdb_id: i32, season_number: i32, reset_retry: bool) vo
         }
     }
 
-    const cache_buf = alloc.alloc(u8, content_cache_pure.MAX_ENTRY_BYTES) catch null;
-    if (cache_buf) |buf| {
-        defer alloc.free(buf);
+    {
         var key_buf: [96]u8 = undefined;
         if (detailCacheKey(&key_buf, tmdb_id, use_cinemeta, season_number)) |key| {
-            if (content_cache.get(key, buf)) |hit| {
+            if (content_cache.getOwned(key)) |hit| {
+                defer alloc.free(hit.bytes);
                 if (detailBodyValid(hit.bytes, use_cinemeta, season_number)) {
                     t.tv_episodes_loading = true;
                     applyEpisodes(hit.bytes, tmdb_id, season_number, my_gen, use_cinemeta);
                     if (hit.staleness == .stale) {
                         t.tv_episodes_loading = true;
-                        if (@import("../core/workers.zig").spawnLegacy(fetchEpisodesThread, .{ tmdb_id, season_number, my_gen, use_cinemeta, imdb_id, imdb_id_len })) |th| {
+                        if (@import("../core/workers.zig").spawnLegacy(fetchEpisodesThread, .{ tmdb_id, season_number, my_gen, use_cinemeta, imdb_id, imdb_id_len, t.api_key, t.api_key_len })) |th| {
                             @import("../core/workers.zig").release(th);
                         } else |_| {
                             t.tv_episodes_loading = false;
@@ -2199,7 +2196,7 @@ fn fetchEpisodesInternal(tmdb_id: i32, season_number: i32, reset_retry: bool) vo
     }
     t.tv_episodes_loading = true;
 
-    if (@import("../core/workers.zig").spawnLegacy(fetchEpisodesThread, .{ tmdb_id, season_number, my_gen, use_cinemeta, imdb_id, imdb_id_len })) |th| {
+    if (@import("../core/workers.zig").spawnLegacy(fetchEpisodesThread, .{ tmdb_id, season_number, my_gen, use_cinemeta, imdb_id, imdb_id_len, t.api_key, t.api_key_len })) |th| {
         @import("../core/workers.zig").release(th); // never joined — detach to avoid leaking the handle
     } else |_| {
         t.tv_episodes_loading = false;
@@ -2207,21 +2204,21 @@ fn fetchEpisodesInternal(tmdb_id: i32, season_number: i32, reset_retry: bool) vo
     }
 }
 
-fn fetchEpisodesThread(tmdb_id: i32, season_number: i32, my_gen: u32, use_cinemeta: bool, imdb_id: [16]u8, imdb_id_len: usize) void {
+fn fetchEpisodesThread(tmdb_id: i32, season_number: i32, my_gen: u32, use_cinemeta: bool, imdb_id: [16]u8, imdb_id_len: usize, api_key: [256]u8, api_key_len: usize) void {
     var url_buf: [160]u8 = undefined;
     const url = if (use_cinemeta)
         std.fmt.bufPrint(&url_buf, "/meta/series/{s}.json", .{imdb_id[0..imdb_id_len]}) catch return
     else
         std.fmt.bufPrint(&url_buf, "/3/tv/{d}/season/{d}", .{ tmdb_id, season_number }) catch return;
 
-    const buf = alloc.alloc(u8, 8 * 1024 * 1024) catch {
+    const buf = (if (use_cinemeta)
+        api.cinemetaApiOwned(url, tmdb_pure.DETAIL_BODY_LIMIT)
+    else
+        api.tmdbApiOwned(url, api_key[0..@min(api_key_len, api_key.len)], tmdb_pure.DETAIL_BODY_LIMIT)) orelse {
         publishDetail(.{ .buffer = &.{}, .len = 0, .id = tmdb_id, .generation = my_gen, .cinemeta = use_cinemeta, .season = season_number });
         return;
     };
-    const bytes = if (use_cinemeta)
-        api.cinemetaApiInto(url, buf)
-    else
-        api.tmdbApiInto(url, state.app.tmdb.api_key[0..state.app.tmdb.api_key_len], buf);
+    const bytes = buf.len;
     if (detailBodyValid(buf[0..bytes], use_cinemeta, season_number)) {
         var key_buf: [96]u8 = undefined;
         if (detailCacheKey(&key_buf, tmdb_id, use_cinemeta, season_number)) |key| content_cache.put(key, buf[0..bytes], DETAIL_CACHE_TTL_S);
