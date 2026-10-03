@@ -1154,3 +1154,21 @@ test('Selecting search details honors reduced motion in the shipped scroll decis
   assert.equal(f.run('searchDetailScrollBehavior()'),'auto');
   assert.match(source('search.js'),/scrollIntoView\?\.\(\{behavior:searchDetailScrollBehavior\(\)/);
 });
+
+test('Video cards and selected details retain provider JPEG and thumbnail artwork URLs', () => {
+  const f = fixture('catalog.js');
+  const posters = [
+    'https://i.ytimg.com/vi/aqz-KE-bpKQ/hqdefault.jpg',
+    'https://archive.org/services/img/BigBuckBunny_328',
+    'https://images.metahub.space/poster/medium/tt0133093/img.jpg',
+  ];
+  for (const [index, poster] of posters.entries()) {
+    f.run(`globalThis.fmtSize=String;globalThis.artRow={title:'Provider video ${index}',source:'stremio',provider:'video provider',content_kind:'video',key:'video-${index}',poster_url:${JSON.stringify(poster)},summary:'Provider-supplied artwork'};
+      renderUnifiedResults({generation:19,loading:false,results:[artRow],sources:[]});`);
+    assert.ok(f.$('results').innerHTML.includes(`src="${poster}"`), 'video card keeps the exact provider artwork URL');
+    f.run('renderSearchDetail(groupSearchRows([artRow])[0],19)');
+    assert.ok(f.$('search-detail').innerHTML.includes(`src="${poster}"`), 'selected detail keeps the exact provider artwork URL');
+    assert.match(f.$('search-detail').innerHTML, /search-detail-art/);
+    f.run('renderSearchDetail(null)');
+  }
+});

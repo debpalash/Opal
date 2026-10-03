@@ -45,12 +45,32 @@ def test_search_v2_resolver_projection():
         "real torrent properties retained": all(field in projection for field in (".quality", ".seeds", ".leech", ".size_bytes", ".provider")),
         "personal library sources": all(source in projection for source in (".local", ".jellyfin", ".plex")),
         "catalog and reader classifications": "search_view.kindFor(source" in projection and all(source in pure for source in (".tmdb", ".anime", ".comics", ".novels", ".opds", ".vndb", ".audiobooks")),
-        "provider metadata survives cache": "search:v10:" in _src("src/services/search_content_pure.zig")
+        "provider metadata survives cache": "search:v11:" in _src("src/services/search_content_pure.zig")
             and "content.cacheIdentity(" in resolver and "w.blob(it.provider.name())" in resolver
             and "search_view.Provider.init(r.blob()" in resolver,
         "actual torrent adapter providers": all(f'Provider.init("{name}")' in resolver for name in ("rss", "yts", "eztv"))
             and "Provider.init(eng_name)" in resolver and "Provider.init(src_id)" in resolver,
     }, "Owned resolver snapshots preserve stable actions, content policy and actual torrent metadata")
+
+
+@test("Search video artwork uses provider covers and decoder compatible catalog URLs", "Search")
+def test_search_video_artwork_projection():
+    resolver = _src("src/services/resolver.zig")
+    catalog = _between(resolver, "fn resolveCatalog(", "fn resolveRss(")
+    archive = _between(resolver, "fn resolveArchive(", "fn resolveNasa(")
+    nasa = _between(resolver, "fn resolveNasa(", "fn resolveCommons(")
+    commons = _between(resolver, "fn resolveCommons(", "fn resolveAnime(")
+    return _checked({
+        "catalog uses tested JPEG projection": 'copyCatalogPoster(&item, poster)' in catalog,
+        "Archive retains identity bound item covers": 'ap.itemArtwork(doc.identifier, &item.poster_url)' in archive,
+        "YouTube uses tested JPEG thumbnails": 'searchThumbUrl(id,' in resolver,
+        "NASA advertised preview reaches search": 'hit.thumbnail' in nasa
+            and 'previewImage(block)' in _src("src/services/nasa_pure.zig"),
+        "Commons requests and retains video thumbnails": 'iiurlwidth=480' in commons
+            and 'pg.thumbnail' in commons
+            and 'thumburl' in _src("src/services/commons_pure.zig"),
+        "missing artwork cache retired": 'search:v11:' in _src("src/services/search_content_pure.zig"),
+    }, "Production search mappings retain provider artwork; codec and pixels have separate tests")
 
 
 @test("Search v2 native view uses artwork shelves and owned snapshots", "Search")

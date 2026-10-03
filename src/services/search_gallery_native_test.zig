@@ -30,6 +30,10 @@ fn fixtureRows() ![]resolver.ResolvedItem {
         field(&row.name, &row.name_len, title);
         field(&row.summary, &row.summary_len, "Explicit offline layout fixture: source comparison, artwork, and contextual actions. No provider availability or playback is asserted.");
         field(&row.poster_url, &row.poster_url_len, "fixture://offline-art");
+        if (index == 0) {
+            @import("cinemeta_pure.zig").copyCatalogPoster(row, "https://images.metahub.space/poster/small/tt2543164/img");
+            try std.testing.expectEqualStrings("https://images.metahub.space/poster/small/tt2543164/img.jpg", row.poster_url[0..row.poster_url_len]);
+        }
         row.year = 2016;
         row.score = @intCast(index);
     }
@@ -43,17 +47,32 @@ fn fixtureTexture(index: usize) !dvui.Texture {
         defer alloc.free(path);
         const bytes = try io.cwdReadFileAlloc(path, alloc, 4 * 1024 * 1024);
         defer alloc.free(bytes);
-        return try dvui.Texture.fromImageFile(path, bytes, .linear);
+        return decodedFixtureTexture(bytes);
     }
+    if (index == 0) return decodedFixtureTexture(@embedFile("testdata/gallery-cover.jpg"));
     var pixels: [64 * 96 * 4]u8 = undefined;
     for (0..64 * 96) |pixel| {
         const y = pixel / 64;
-        pixels[pixel * 4] = @intCast(35 + index * 20);
+        pixels[pixel * 4] = @intCast(35 + (index % 8) * 20);
         pixels[pixel * 4 + 1] = @intCast(50 + y);
-        pixels[pixel * 4 + 2] = @intCast(130 + index * 12);
+        pixels[pixel * 4 + 2] = @intCast(130 + (index % 8) * 12);
         pixels[pixel * 4 + 3] = 255;
     }
     return try dvui.Texture.fromImageSource(.{ .pixels = .{ .rgba = &pixels, .width = 64, .height = 96, .interpolation = .linear } });
+}
+
+fn decodedFixtureTexture(bytes: []const u8) !dvui.Texture {
+    // Exercise the same bounded decoder and GPU upload as fetched covers,
+    // rather than bypassing the poster pipeline with DVUI's image helper.
+    const decoded = @import("../core/image_decode.zig").cover(bytes) orelse return error.CoverDecodeFailed;
+    defer decoded.deinit();
+    var pixels: ?[]u8 = try std.heap.c_allocator.alloc(u8, decoded.rgba_len);
+    @memcpy(pixels.?, decoded.pixels[0..decoded.rgba_len]);
+    var texture: ?dvui.Texture = null;
+    defer if (pixels) |remaining| std.heap.c_allocator.free(remaining);
+    try std.testing.expect(@import("../core/poster.zig").uploadIfReady(&pixels, @intCast(decoded.width), @intCast(decoded.height), &texture));
+    try std.testing.expect(pixels == null);
+    return texture.?;
 }
 
 fn renderSize(width: u32, height: u32, rows: []const resolver.ResolvedItem, movies_only: bool) !void {

@@ -20,6 +20,7 @@ const std = @import("std");
 const ap = @import("archive_pure.zig");
 
 pub const Page = struct {
+    thumbnail: []const u8 = "",
     title: []const u8, // "File:" prefix already stripped — may be empty
     url: []const u8, // imageinfo[0].url (direct upload.wikimedia.org file)
     mime: []const u8, // imageinfo[0].mime — may be empty
@@ -54,6 +55,7 @@ pub const PageIter = struct {
             title = stripFilePrefix(title);
 
             return .{
+                .thumbnail = ap.stringField(block, "thumburl") orelse "",
                 .title = title,
                 .url = url,
                 .mime = ap.stringField(block, "mime") orelse "",
@@ -158,4 +160,11 @@ test "malformed JSON regression: no crash, terminates" {
     try std.testing.expect(d != null);
     try std.testing.expectEqualStrings("https://u/Ok.webm", d.?.url);
     try std.testing.expect(it2.next() == null);
+}
+
+test "Commons video preserves returned frame thumbnail separate from media URL" {
+    var it = iteratePages("{\"query\":{\"pages\":{\"1\":{\"title\":\"File:Fixture.webm\",\"imageinfo\":[{\"url\":\"https://upload.wikimedia.org/Fixture.webm\",\"thumburl\":\"https://upload.wikimedia.org/thumb/Fixture.webm/480px--Fixture.jpg\"}]}}}}");
+    const page = it.next().?;
+    try std.testing.expectEqualStrings("https://upload.wikimedia.org/thumb/Fixture.webm/480px--Fixture.jpg", page.thumbnail);
+    try std.testing.expectEqualStrings("https://upload.wikimedia.org/Fixture.webm", page.url);
 }

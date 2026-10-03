@@ -24,6 +24,7 @@ const ap = @import("archive_pure.zig");
 // ── search: items[] iteration ────────────────────────────────────────────────
 
 pub const Hit = struct {
+    thumbnail: []const u8 = "",
     /// Per-asset collection.json URL (the item's first, top-level `href`).
     href: []const u8,
     title: []const u8, // data[0].title — may be empty
@@ -91,6 +92,7 @@ pub const SearchIter = struct {
                 if (dc.len >= 4 and isAllDigits(dc[0..4])) year = dc[0..4];
             }
             return .{
+                .thumbnail = previewImage(block),
                 .href = href,
                 .title = ap.stringField(block, "title") orelse "",
                 .year = year,
@@ -99,6 +101,26 @@ pub const SearchIter = struct {
         return null;
     }
 };
+
+/// Only advertised image previews belong in artwork, never the asset JSON URL.
+fn previewImage(block: []const u8) []const u8 {
+    const links = std.mem.indexOf(u8, block, "\"links\"") orelse return "";
+    const start = std.mem.indexOfScalarPos(u8, block, links, '[') orelse return "";
+    const end = arrayEnd(block, start);
+    var pos = start + 1;
+    while (pos < end) {
+        const open = std.mem.indexOfScalarPos(u8, block[0..end], pos, '{') orelse break;
+        const close = @min(ap.objEnd(block, open), end);
+        if (close <= open) break;
+        pos = close;
+        const link = block[open..close];
+        if (!std.mem.eql(u8, ap.stringField(link, "rel") orelse "", "preview") or
+            !std.mem.eql(u8, ap.stringField(link, "render") orelse "", "image")) continue;
+        const href = ap.stringField(link, "href") orelse continue;
+        if (std.mem.startsWith(u8, href, "https://") or std.mem.startsWith(u8, href, "https:\\/\\/")) return href;
+    }
+    return "";
+}
 
 fn isAllDigits(s: []const u8) bool {
     for (s) |ch| if (!std.ascii.isDigit(ch)) return false;
@@ -263,4 +285,19 @@ test "malformed JSON regression: no crash, null/empty results" {
     try std.testing.expect(d != null);
     try std.testing.expectEqualStrings("https://x/collection.json", d.?.href);
     try std.testing.expect(it2.next() == null);
+}
+
+test "NASA search keeps advertised preview image separate from asset collection" {
+    var it = iterateItems("{\"collection\":{\"items\":[{\"href\":\"https://images-assets.nasa.gov/video/fixture/collection.json\",\"data\":[{\"title\":\"Fixture\"}],\"links\":[{\"href\":\"https://images-assets.nasa.gov/video/fixture/fixture~thumb.jpg\",\"rel\":\"preview\",\"render\":\"image\"}]}]}}");
+    const hit = it.next().?;
+    try std.testing.expectEqualStrings("https://images-assets.nasa.gov/video/fixture/fixture~thumb.jpg", hit.thumbnail);
+    try std.testing.expectEqualStrings("https://images-assets.nasa.gov/video/fixture/collection.json", hit.href);
+}
+
+test "NASA preview accepts JSON escaped HTTPS image URL for producer decoding" {
+    var it = iterateItems(
+        \\{"collection":{"items":[{"href":"https://asset.test/collection.json","data":[{"title":"Fixture"}],"links":[{"href":"https:\/\/asset.test\/preview.jpg","rel":"preview","render":"image"}]}]}}
+    );
+    const hit = it.next().?;
+    try std.testing.expectEqualStrings("https:\\/\\/asset.test\\/preview.jpg", hit.thumbnail);
 }

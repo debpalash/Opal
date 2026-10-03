@@ -1162,12 +1162,7 @@ fn resolveCatalog(query_buf: [256]u8, qlen: usize) void {
         copyField(&item.summary, &item.summary_len, entry.overview[0..@min(entry.overview_len, entry.overview.len)]);
         item.rating = entry.rating;
         const poster = entry.poster_path[0..@min(entry.poster_path_len, entry.poster_path.len)];
-        if (std.mem.startsWith(u8, poster, "https://") or std.mem.startsWith(u8, poster, "http://")) {
-            if (poster.len <= item.poster_url.len) copyField(&item.poster_url, &item.poster_url_len, poster);
-        } else if (std.mem.startsWith(u8, poster, "/")) {
-            const address = std.fmt.bufPrint(&item.poster_url, "https://image.tmdb.org/t/p/w342{s}", .{poster}) catch "";
-            item.poster_url_len = address.len;
-        }
+        @import("cinemeta_pure.zig").copyCatalogPoster(&item, poster);
         const year = entry.year[0..@min(entry.year_len, entry.year.len)];
         item.year = std.fmt.parseInt(u16, year, 10) catch 0;
         const label = if (std.mem.eql(u8, kind, "tv")) "TV details" else "Movie details";
@@ -3027,6 +3022,8 @@ fn resolveArchive(query_buf: [256]u8, qlen: usize) void {
         @memcpy(item.url[0..ulen], url_out[0..ulen]);
         item.url_len = ulen;
 
+        if (ap.itemArtwork(doc.identifier, &item.poster_url)) |cover| item.poster_url_len = cover.len;
+
         item.quality = detectQuality(raw_title);
 
         var det: [128]u8 = undefined;
@@ -3045,6 +3042,14 @@ fn resolveArchive(query_buf: [256]u8, qlen: usize) void {
     if (found > 0) {
         logs.pushLog("info", "resolver", "archive.org results found", false);
     }
+}
+
+/// JSON provider strings need slash unescaping before publishing bounded URLs.
+fn copyProviderArtwork(item: *ResolvedItem, raw: []const u8) void {
+    if (raw.len > item.poster_url.len) return;
+    var decoded: [512]u8 = undefined;
+    const n = writeSafeUrl(raw, &decoded);
+    @import("cinemeta_pure.zig").copyPublicPoster(item, decoded[0..n]);
 }
 
 /// Copy a JSON-string URL into `out`, undoing `\/` and `\\` escapes (MediaWiki's
@@ -3181,6 +3186,7 @@ fn resolveNasa(query_buf: [256]u8, qlen: usize) void {
         @memcpy(item.url[0..ulen], url_out[0..ulen]);
         item.url_len = ulen;
 
+        copyProviderArtwork(&item, hit.thumbnail);
         item.quality = detectQuality(hit.title);
 
         var det: [128]u8 = undefined;
@@ -3228,7 +3234,7 @@ fn resolveCommons(query_buf: [256]u8, qlen: usize) void {
         &url_buf,
         "https://commons.wikimedia.org/w/api.php?action=query&generator=search" ++
             "&gsrsearch=filetype:video%20{s}&gsrnamespace=6&gsrlimit=10" ++
-            "&prop=imageinfo&iiprop=url%7Csize%7Cmime&format=json",
+            "&prop=imageinfo&iiprop=url%7Csize%7Cmime&iiurlwidth=480&format=json",
         .{enc_q},
     ) catch {
         noteWorkerOutcome(.failed);
@@ -3279,6 +3285,7 @@ fn resolveCommons(query_buf: [256]u8, qlen: usize) void {
         @memcpy(item.url[0..ulen], url_out[0..ulen]);
         item.url_len = ulen;
 
+        copyProviderArtwork(&item, pg.thumbnail);
         item.quality = detectQuality(pg.title);
 
         const d = "Wikimedia Commons";
@@ -3488,18 +3495,18 @@ fn resolveYouTube(query_buf: [256]u8, qlen: usize) void {
             const address = catalogString(entry, "webpage_url");
             if (address.len <= item.url.len) copyField(&item.url, &item.url_len, address);
         }
-        const thumbnail = catalogString(entry, "thumbnail");
-        if (thumbnail.len > 0 and thumbnail.len <= item.poster_url.len) {
-            copyField(&item.poster_url, &item.poster_url_len, thumbnail);
-        } else if (entry.object.get("thumbnails")) |images| {
-            if (images == .array) {
-                for (images.array.items) |image| {
+        var thumbnail = catalogString(entry, "thumbnail");
+        if (thumbnail.len == 0) {
+            if (entry.object.get("thumbnails")) |images| {
+                if (images == .array) for (images.array.items) |image| {
                     const address = catalogString(image, "url");
-                    if (address.len > 0 and address.len <= item.poster_url.len)
-                        copyField(&item.poster_url, &item.poster_url_len, address);
-                }
+                    if (address.len > 0 and address.len <= item.poster_url.len) thumbnail = address;
+                };
             }
         }
+        var decoded_thumb: [512]u8 = undefined;
+        const decoded_len = if (thumbnail.len <= decoded_thumb.len) writeSafeUrl(thumbnail, &decoded_thumb) else 0;
+        if (@import("youtube_innertube_pure.zig").searchThumbUrl(id, decoded_thumb[0..decoded_len], &item.poster_url)) |cover| item.poster_url_len = cover.len;
         if (entry.object.get("duration")) |duration| {
             item.duration_secs = switch (duration) {
                 .float => @floatCast(@max(0, duration.float)),

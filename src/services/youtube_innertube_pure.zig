@@ -836,3 +836,19 @@ test "unescapeJson: escapes, surrogate pairs, output clamp" {
     var small: [3]u8 = undefined;
     try std.testing.expectEqual(@as(usize, 3), unescapeJson("abcdef", &small));
 }
+
+/// Search uses the same identity-bound JPEG cover as Browse. Flat extractors
+/// may otherwise return WebP, which the bundled native decoder cannot decode.
+pub fn searchThumbUrl(video_id: []const u8, provided: []const u8, out: []u8) ?[]const u8 {
+    if (video_id.len == 11 and validVideoId(video_id)) return thumbUrl(video_id, out);
+    if (provided.len == 0 or provided.len > out.len or !std.mem.startsWith(u8, provided, "https://")) return null;
+    @memcpy(out[0..provided.len], provided);
+    return out[0..provided.len];
+}
+test "Search YouTube artwork chooses canonical JPEG and retains invalid ID fallback" {
+    var out: [256]u8 = undefined;
+    try std.testing.expectEqualStrings("https://i.ytimg.com/vi/lTRiuFIWV54/mqdefault.jpg", searchThumbUrl("lTRiuFIWV54", "https://i.ytimg.com/vi_webp/lTRiuFIWV54/maxresdefault.webp", &out).?);
+    try std.testing.expectEqualStrings("https://example.test/actual.jpg", searchThumbUrl("invalid/id", "https://example.test/actual.jpg", &out).?);
+    try std.testing.expectEqualStrings("https://example.test/actual.jpg", searchThumbUrl("UC1234567890123456789012", "https://example.test/actual.jpg", &out).?);
+    try std.testing.expect(searchThumbUrl("invalid/id", "https://example.test/actual.jpg", out[0..4]) == null);
+}

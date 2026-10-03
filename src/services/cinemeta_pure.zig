@@ -159,3 +159,44 @@ test "Metahub posters force a decoder-compatible JPEG variant" {
         compatiblePosterUrl("https://example.test/poster.jpg", &out).?,
     );
 }
+
+/// Shared Search producer projection; rows own their bounded artwork URL.
+pub fn copyCatalogPoster(row: anytype, raw: []const u8) void {
+    row.poster_url_len = 0;
+    if (std.mem.startsWith(u8, raw, "https://") or std.mem.startsWith(u8, raw, "http://")) {
+        const url = compatiblePosterUrl(raw, &row.poster_url) orelse return;
+        row.poster_url_len = url.len;
+    } else if (std.mem.startsWith(u8, raw, "/")) {
+        const url: []const u8 = std.fmt.bufPrint(&row.poster_url, "https://image.tmdb.org/t/p/w342{s}", .{raw}) catch return;
+        row.poster_url_len = url.len;
+    }
+}
+test "Search catalog producer uses decoder-compatible Cinemeta artwork" {
+    var row = struct { poster_url: [512]u8 = @splat(0), poster_url_len: usize = 0 }{};
+    copyCatalogPoster(&row, "https://images.metahub.space/poster/small/tt12042730/img");
+    try std.testing.expectEqualStrings("https://images.metahub.space/poster/small/tt12042730/img.jpg", row.poster_url[0..row.poster_url_len]);
+    copyCatalogPoster(&row, "/real-tmdb-poster.jpg");
+    try std.testing.expectEqualStrings("https://image.tmdb.org/t/p/w342/real-tmdb-poster.jpg", row.poster_url[0..row.poster_url_len]);
+    copyCatalogPoster(&row, "");
+    try std.testing.expectEqual(@as(usize, 0), row.poster_url_len);
+}
+
+/// Public provider artwork is an indivisible URL: overflow means absent art.
+pub fn copyPublicPoster(row: anytype, raw: []const u8) void {
+    row.poster_url_len = 0;
+    if (raw.len > row.poster_url.len or (!std.mem.startsWith(u8, raw, "https://") and !std.mem.startsWith(u8, raw, "http://"))) return;
+    @memcpy(row.poster_url[0..raw.len], raw);
+    row.poster_url_len = raw.len;
+}
+
+test "Search artwork exact fit stays intact and overflow never truncates" {
+    var row = struct { poster_url: ["https://a.test/1".len]u8 = @splat(0), poster_url_len: usize = 0 }{};
+    copyCatalogPoster(&row, "https://a.test/1");
+    try std.testing.expectEqual(@as(usize, 16), row.poster_url_len);
+    copyCatalogPoster(&row, "https://a.test/12");
+    try std.testing.expectEqual(@as(usize, 0), row.poster_url_len);
+    copyPublicPoster(&row, "https://a.test/1");
+    try std.testing.expectEqual(@as(usize, 16), row.poster_url_len);
+    copyPublicPoster(&row, "https://a.test/12");
+    try std.testing.expectEqual(@as(usize, 0), row.poster_url_len);
+}
