@@ -286,7 +286,7 @@ pub fn build(b: *std.Build) void {
 
     // Portable in-process WebP; use static decoder so bundles need no new dylib.
     exe.root_module.addCSourceFile(.{ .file = b.path("src/core/webp_decode.c"), .flags = &.{"-O2"} });
-    exe.root_module.linkSystemLibrary("webpdecoder", .{ .preferred_link_mode = .static, .search_strategy = .no_fallback });
+    exe.root_module.linkSystemLibrary("webp", .{ .preferred_link_mode = .static, .search_strategy = .no_fallback });
 
     // SQLite Vector DB. -DSQLITE_CORE makes sqlite-vec call the linked
     // sqlite3 directly instead of going through the extension API pointer —

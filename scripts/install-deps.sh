@@ -71,7 +71,7 @@ list_missing() {
   for bin in "${RUNTIME_BINS[@]}" "${BUILD_BINS[@]}"; do
     command -v "$bin" >/dev/null 2>&1 || missing+=("$bin")
   done
-  pkg-config --exists libwebpdecoder 2>/dev/null || missing+=("libwebpdecoder development files")
+  pkg-config --exists libwebp 2>/dev/null || missing+=("libwebp development files")
   printf '%s\n' "${missing[@]}"
 }
 
