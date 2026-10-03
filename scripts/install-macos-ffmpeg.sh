@@ -23,7 +23,7 @@ export MACOSX_DEPLOYMENT_TARGET=13.0
 (
     cd "$WORK_DIR/FFmpeg-n$FFMPEG_VERSION"
     ./configure --prefix="$HOMEBREW_PREFIX" --enable-shared --disable-static \
-        --disable-programs --disable-doc --disable-autodetect \
+        --disable-ffplay --disable-ffprobe --disable-doc --disable-autodetect \
         --extra-ldflags="-Wl,-headerpad_max_install_names" \
         --enable-securetransport --enable-videotoolbox --enable-audiotoolbox
     make -j "$(sysctl -n hw.ncpu)"
@@ -31,3 +31,5 @@ export MACOSX_DEPLOYMENT_TARGET=13.0
 )
 test -f "$HOMEBREW_PREFIX/lib/libavcodec.dylib"
 test -f "$HOMEBREW_PREFIX/lib/pkgconfig/libavcodec.pc"
+# The matching CLI generates hermetic playback fixtures using native codecs.
+test -x "$HOMEBREW_PREFIX/bin/ffmpeg"

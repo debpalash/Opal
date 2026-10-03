@@ -167,10 +167,11 @@ var cont_is_browse: bool = false;
 
 /// Stash the next-page token from `json` (clearing it when the feed has no more
 /// pages, so we never re-POST a spent cursor).
-fn rememberContinuation(json: []const u8, is_browse: bool) void {
+fn rememberContinuation(json: []const u8, is_browse: bool, generation: u32) void {
     const tok = it_pure.extractContinuationToken(json);
     yt_mutex.lock();
     defer yt_mutex.unlock();
+    if (!isCurrent(generation)) return;
     cont_is_browse = is_browse;
     if (tok) |t| {
         cont_token_len = @min(t.len, cont_token.len);
@@ -711,11 +712,11 @@ fn fetchViaInnerTube(query: []const u8, gen: u32, count: usize) bool {
     const resp = alloc.alloc(u8, INNERTUBE_RESP_CAP) catch return false;
     defer alloc.free(resp);
 
-    const json = innertubePost(it_pure.SEARCH_URL, post_body, resp) orelse return false;
+    const json = innertubePost(it_pure.SEARCH_URL, post_body, resp, gen) orelse return false;
     const n = publishRows(json, gen, count, .{});
     // Remember where page 2 starts. Stored even on a partial page: the token is
     // what makes infinite scroll cheap.
-    rememberContinuation(json, false);
+    rememberContinuation(json, false, gen);
     return n > 0;
 }
 
@@ -731,9 +732,9 @@ fn fetchChannelViaInnerTube(channel_id: []const u8, chan_name: []const u8, gen: 
     const resp = alloc.alloc(u8, INNERTUBE_RESP_CAP) catch return 0;
     defer alloc.free(resp);
 
-    const json = innertubePost(it_pure.BROWSE_URL, post_body, resp) orelse return 0;
+    const json = innertubePost(it_pure.BROWSE_URL, post_body, resp, gen) orelse return 0;
     const n = publishRows(json, gen, ITEM_CAP, .{ .lockup = true, .chan_name = chan_name, .chan_id = channel_id });
-    rememberContinuation(json, true);
+    rememberContinuation(json, true, gen);
     return n;
 }
 
@@ -759,7 +760,7 @@ fn fetchContinuation(gen: u32, chan_name: []const u8, chan_id: []const u8) usize
     defer alloc.free(resp);
 
     const url = if (is_browse) it_pure.BROWSE_URL else it_pure.SEARCH_URL;
-    const json = innertubePost(url, post_body, resp) orelse return 0;
+    const json = innertubePost(url, post_body, resp, gen) orelse return 0;
     const n = publishRows(json, gen, ITEM_CAP, .{
         .lockup = is_browse,
         .chan_name = if (is_browse) chan_name else "",
@@ -767,12 +768,12 @@ fn fetchContinuation(gen: u32, chan_name: []const u8, chan_id: []const u8) usize
     });
     // Chain to page N+1. A response without a token means we hit the end of the
     // feed — clearing it stops fetchMore from re-POSTing a spent token.
-    rememberContinuation(json, is_browse);
+    rememberContinuation(json, is_browse, gen);
     return n;
 }
 
 /// One InnerTube POST. `out` must be heap-allocated (responses run ~300 KB–1 MB).
-fn innertubePost(url: []const u8, post_body: []const u8, out: []u8) ?[]const u8 {
+fn innertubePost(url: []const u8, post_body: []const u8, out: []u8, generation: u32) ?[]const u8 {
     return @import("reliable_fetch.zig").fetch(url, out, .{
         .headers = &.{
             .{ .name = "Content-Type", .value = "application/json" },
@@ -785,6 +786,7 @@ fn innertubePost(url: []const u8, post_body: []const u8, out: []u8) ?[]const u8 
         // keeps this on the lowest-latency path.
         .impersonate = false,
         .post_body = post_body,
+        .cancel_epoch = .{ .epoch32 = .{ .value = &search_request.generation, .expected = generation } },
     });
 }
 
@@ -861,29 +863,16 @@ fn fetchViaPiped(query: []const u8, gen: u32) bool {
         var url_buf: [768]u8 = undefined;
         const url = std.fmt.bufPrint(&url_buf, "https://{s}/search?q={s}&filter=videos", .{ host, encoded[0..elen] }) catch continue;
 
-        var client = @import("../core/http.zig").newClient();
-        defer client.deinit();
-
-        const uri = std.Uri.parse(url) catch continue;
-        var req = client.request(.GET, uri, .{
-            .extra_headers = &.{
-                .{ .name = "Accept", .value = "application/json" },
-                .{ .name = "User-Agent", .value = @import("../core/app_meta.zig").browser_user_agent },
-            },
-        }) catch continue;
-        defer req.deinit();
-        req.sendBodiless() catch continue;
-
-        var redirect_buf: [8192]u8 = undefined;
-        var response = req.receiveHead(&redirect_buf) catch continue;
-        if (response.head.status != .ok) continue;
-
-        var transfer_buf: [4096]u8 = undefined;
-        var decompress: std.http.Decompress = undefined;
-        var rdr = response.readerDecompressing(&transfer_buf, &decompress, &.{});
-
-        const body = rdr.allocRemaining(alloc, std.Io.Limit.limited(512 * 1024)) catch continue;
-        defer alloc.free(body);
+        const buffer = alloc.alloc(u8, 512 * 1024) catch return false;
+        defer alloc.free(buffer);
+        const body = @import("../core/http.zig").fetch(url, buffer, .{
+            .timeout_secs = 5,
+            .max_response = buffer.len,
+            .accept = "application/json",
+            .user_agent = @import("../core/app_meta.zig").browser_user_agent,
+            .cancel_epoch = .{ .epoch32 = .{ .value = &search_request.generation, .expected = gen } },
+        }) orelse continue;
+        if (!isCurrent(gen)) return false;
 
         if (body.len < 10) continue;
 
@@ -1163,20 +1152,54 @@ fn daysFromCivil(y_in: i64, m: i64, d: i64) i64 {
 // Thumbnail Fetching
 // ══════════════════════════════════════════════════════════
 
+var thumb_request_serial: std.atomic.Value(u64) = .init(0);
+const ThumbRequest = struct {
+    request_id: u64,
+    generation: u32,
+    video_id: [32]u8,
+    video_id_len: usize,
+    url: [512]u8,
+    url_len: usize,
+};
+
+/// Caller holds yt_mutex; the worker receives only an immutable copied job.
 pub fn fetchThumb(item: *state.YtItem) void {
     if (item.thumbnail_url_len == 0 or item.thumb_fetching) return;
     // Shared global poster/thumbnail fetch cap — over the cap, leave thumb_fetching
     // false so the card retries next frame (no fetch storm on a full grid).
     if (!@import("../core/poster.zig").tryClaimSlot()) return;
     item.thumb_fetching = true;
+    item.thumb_request_id = thumb_request_serial.fetchAdd(1, .acq_rel) +% 1;
+    const job: ThumbRequest = .{
+        .request_id = item.thumb_request_id,
+        .generation = search_request.current(),
+        .video_id = item.video_id,
+        .video_id_len = item.video_id_len,
+        .url = item.thumbnail_url,
+        .url_len = item.thumbnail_url_len,
+    };
 
     workers.spawn(struct {
-        fn worker(ptr: *state.YtItem) void {
-            defer ptr.thumb_fetching = false;
+        fn worker(request: ThumbRequest) void {
+            defer {
+                yt_mutex.lock();
+                defer yt_mutex.unlock();
+                for (state.app.yt.results.items) |*row| {
+                    if (yt_pure.thumbnailOwnerMatches(row.thumb_request_id, request.request_id, row.video_id[0..row.video_id_len], request.video_id[0..request.video_id_len], row.thumbnail_url[0..row.thumbnail_url_len], request.url[0..request.url_len])) {
+                        row.thumb_fetching = false;
+                        if (!isCurrent(request.generation)) {
+                            row.thumb_attempted = false;
+                            row.thumb_failed = false;
+                        }
+                        break;
+                    }
+                }
+            }
             defer @import("../core/poster.zig").releaseSlot();
 
             const poster = @import("../core/poster.zig");
-            const turl = ptr.thumbnail_url[0..ptr.thumbnail_url_len];
+            const turl = request.url[0..request.url_len];
+            if (!isCurrent(request.generation)) return;
 
             // Shared poster disk cache: a hit skips the network; a cached blob
             // that fails to decode is deleted and refetched (same policy as
@@ -1194,24 +1217,14 @@ pub fn fetchThumb(item: *state.YtItem) void {
             while (attempt < 2) : (attempt += 1) {
                 const used_cache = attempt == 0 and cached != null;
                 const body: []const u8 = if (used_cache) cached.? else blk: {
-                    var client = @import("../core/http.zig").newClient();
-                    defer client.deinit();
-
-                    const uri = std.Uri.parse(turl) catch return;
-                    var req = client.request(.GET, uri, .{ .extra_headers = &.{.{ .name = "Accept", .value = "image/jpeg, image/webp" }} }) catch return;
-                    defer req.deinit();
-                    req.sendBodiless() catch return;
-
-                    var redirect_buf: [8192]u8 = undefined;
-                    var response = req.receiveHead(&redirect_buf) catch return;
-                    if (response.head.status != .ok) return;
-
-                    var transfer_buf: [4096]u8 = undefined;
-                    var decompress: std.http.Decompress = undefined;
-                    var rdr = response.readerDecompressing(&transfer_buf, &decompress, &.{});
-
-                    const body = rdr.allocRemaining(alloc, std.Io.Limit.limited(5 * 1024 * 1024)) catch return;
-                    net_body = body;
+                    const buffer = alloc.alloc(u8, 5 * 1024 * 1024) catch return;
+                    net_body = buffer;
+                    const body = @import("../core/http.zig").fetch(turl, buffer, .{
+                        .timeout_secs = 8,
+                        .max_response = buffer.len,
+                        .accept = "image/jpeg, image/webp",
+                        .cancel_epoch = .{ .epoch32 = .{ .value = &search_request.generation, .expected = request.generation } },
+                    }) orelse return;
                     break :blk body;
                 };
 
@@ -1239,11 +1252,20 @@ pub fn fetchThumb(item: *state.YtItem) void {
                 return;
             }
 
-            ptr.thumb_w = @intCast(w);
-            ptr.thumb_h = @intCast(h);
-            ptr.thumb_pixels = p_slice;
+            yt_mutex.lock();
+            defer yt_mutex.unlock();
+            for (state.app.yt.results.items) |*row| {
+                if (yt_pure.thumbnailCanPublish(search_request.current(), request.generation, row.thumb_request_id, request.request_id, row.video_id[0..row.video_id_len], request.video_id[0..request.video_id_len], row.thumbnail_url[0..row.thumbnail_url_len], request.url[0..request.url_len])) {
+                    if (row.thumb_pixels) |old| alloc.free(old);
+                    row.thumb_w = @intCast(w);
+                    row.thumb_h = @intCast(h);
+                    row.thumb_pixels = p_slice;
+                    return;
+                }
+            }
+            alloc.free(p_slice);
         }
-    }.worker, .{item}) catch {
+    }.worker, .{job}) catch {
         item.thumb_fetching = false; // spawn failed — reset so the card isn't stuck on placeholder
         @import("../core/poster.zig").releaseSlot();
     };
@@ -1280,6 +1302,17 @@ pub fn resultRow(idx: usize) ?state.YtItem {
     return state.app.yt.results.items[idx];
 }
 
+var native_loading_fixture = false;
+pub fn setLoadingFixtureForTest(enabled: bool) void {
+    if (!@import("builtin").is_test) @compileError("Browse loading fixture is test-only");
+    native_loading_fixture = enabled;
+    state.app.yt.loaded_once = true;
+    state.app.yt.is_loading.store(enabled, .release);
+    yt_mutex.lock();
+    clearResultsLocked();
+    yt_mutex.unlock();
+}
+
 pub fn renderContent() void {
     drainYtTexFrees(); // free textures from a re-search clear (UI thread)
     var content = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .padding = dvui.Rect.all(8) });
@@ -1313,9 +1346,9 @@ pub fn renderContent() void {
     // Debounced live search: fire once the buffer has settled for DEBOUNCE_MS
     // and differs from what we last fired. Enter/button paths fire immediately
     // (renderSearchInline), this just covers as-you-type.
-    maybeFireLiveSearch();
+    if (!(@import("builtin").is_test and native_loading_fixture)) maybeFireLiveSearch();
     // Suggestions ride a shorter debounce so the dropdown feels live.
-    maybeFireSuggest();
+    if (!(@import("builtin").is_test and native_loading_fixture)) maybeFireSuggest();
 
     const total = resultLen();
 
@@ -1738,28 +1771,15 @@ fn fireSuggest(query: []const u8) void {
             var url_buf: [640]u8 = undefined;
             const url = yt_pure.suggestUrl(S.q_buf[0..S.q_len], &url_buf) orelse return;
 
-            var client = @import("../core/http.zig").newClient();
-            defer client.deinit();
-
-            const uri = std.Uri.parse(url) catch return;
-            var req = client.request(.GET, uri, .{
-                .extra_headers = &.{
-                    .{ .name = "Accept", .value = "application/json" },
-                    .{ .name = "User-Agent", .value = @import("../core/app_meta.zig").browser_user_agent },
-                },
-            }) catch return;
-            defer req.deinit();
-            req.sendBodiless() catch return;
-
-            var redirect_buf: [8192]u8 = undefined;
-            var response = req.receiveHead(&redirect_buf) catch return;
-            if (response.head.status != .ok) return;
-
-            var transfer_buf: [4096]u8 = undefined;
-            var decompress: std.http.Decompress = undefined;
-            var rdr = response.readerDecompressing(&transfer_buf, &decompress, &.{});
-            const body = rdr.allocRemaining(alloc, std.Io.Limit.limited(64 * 1024)) catch return;
-            defer alloc.free(body);
+            const buffer = alloc.alloc(u8, 64 * 1024) catch return;
+            defer alloc.free(buffer);
+            const body = @import("../core/http.zig").fetch(url, buffer, .{
+                .timeout_secs = 3,
+                .max_response = buffer.len,
+                .accept = "application/json",
+                .user_agent = @import("../core/app_meta.zig").browser_user_agent,
+                .cancel_epoch = .{ .epoch32 = .{ .value = &sugg_gen, .expected = S.gen } },
+            }) orelse return;
 
             // Parse into worker-local rows, then publish under the mutex only
             // if no newer suggestion fetch has been fired since.
@@ -2175,4 +2195,26 @@ fn sendToPlayer(item: *const state.YtItem, appendToPlaylist: bool) void {
         .subtitle = item.uploader[0..item.uploader_len],
     });
     if (appendToPlaylist) state.showToast("Video queued");
+}
+
+test "Browse regression YouTube stale response cannot replace continuation identity" {
+    const saved_loading = state.app.yt.is_loading.load(.acquire);
+    const saved_token = cont_token;
+    const saved_token_len = cont_token_len;
+    const saved_browse = cont_is_browse;
+    defer {
+        search_request.cancel(&state.app.yt.is_loading);
+        state.app.yt.is_loading.store(saved_loading, .release);
+        cont_token = saved_token;
+        cont_token_len = saved_token_len;
+        cont_is_browse = saved_browse;
+    }
+    const stale = search_request.begin(&state.app.yt.is_loading);
+    const current = search_request.begin(&state.app.yt.is_loading);
+    rememberContinuation("{\"continuationCommand\":{\"token\":\"new-cursor\"}}", false, current);
+    rememberContinuation("{\"continuationCommand\":{\"token\":\"stale-cursor\"}}", true, stale);
+    try std.testing.expectEqualStrings("new-cursor", cont_token[0..cont_token_len]);
+    try std.testing.expect(!cont_is_browse);
+    rememberContinuation("{}", true, stale);
+    try std.testing.expectEqualStrings("new-cursor", cont_token[0..cont_token_len]);
 }

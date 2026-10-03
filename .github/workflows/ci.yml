@@ -71,6 +71,63 @@ jobs:
           test -f "$MINGW_PREFIX/lib/libsqlite3.dll.a"
           zig build test
 
+  # Real hidden SDL render-target fixtures, not source/pixel-name assertions.
+  # Linux uses Xvfb + software SDL so a physical GPU/display is unnecessary.
+  native-linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Install native fixture dependencies
+        timeout-minutes: 10
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libsdl2-dev libwebp-dev libmpv-dev \
+            libsqlite3-dev libtorrent-rasterbar-dev ffmpeg xvfb xauth
+      - name: Native HTTP deadlines and cancellation
+        timeout-minutes: 10
+        run: zig build test-native-http --summary all
+      - name: Native streaming download cancellation
+        timeout-minutes: 10
+        run: zig build test-native-downloads --summary all
+      - name: Build isolated headless provider fixture binary
+        timeout-minutes: 15
+        run: zig build -Dheadless=true --prefix "$RUNNER_TEMP/opal-provider-fixtures"
+      - name: Hermetic media server and webcomic workflows
+        timeout-minutes: 10
+        env:
+          PYTHONUTF8: '1'
+          PYTHONIOENCODING: utf-8
+        run: |
+          command -v ffmpeg
+          python3 tests/test_media_servers_live.py --binary "$RUNNER_TEMP/opal-provider-fixtures/bin/opal" --port 41811
+          python3 tests/test_webcomic_sources_live.py --binary "$RUNNER_TEMP/opal-provider-fixtures/bin/opal" --port 41807
+          python3 tests/test_audio_browse_progressive_live.py --binary "$RUNNER_TEMP/opal-provider-fixtures/bin/opal" --port 41809
+          python3 tests/test_browse_parallel_live.py --binary "$RUNNER_TEMP/opal-provider-fixtures/bin/opal" --port 41819
+      - name: Native offline UI fixture suite
+        timeout-minutes: 20
+        env:
+          SDL_VIDEODRIVER: x11
+          SDL_RENDER_DRIVER: software
+          LIBGL_ALWAYS_SOFTWARE: '1'
+          OPAL_NATIVE_CAPTURE_DIR: ${{ runner.temp }}/opal-native-captures
+          OPAL_GALLERY_CAPTURE_DIR: ${{ runner.temp }}/opal-native-captures
+        run: |
+          mkdir -p "$OPAL_NATIVE_CAPTURE_DIR"
+          xvfb-run -a -s '-screen 0 1600x1200x24' zig build test-native-ui -Doptimize=ReleaseSafe --summary all
+          test -n "$(find "$OPAL_NATIVE_CAPTURE_DIR" -name '*.png' -print -quit)"
+      - name: Save native fixture captures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-ui-linux-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/opal-native-captures/*.png
+          if-no-files-found: warn
+
   # Full app build on macOS arm64 — the primary supported platform.
   # build.zig links against /opt/homebrew, which matches arm64 runners.
   build-macos:
@@ -80,15 +137,52 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
+      - name: Native HTTP deadlines and cancellation
+        timeout-minutes: 10
+        run: zig build test-native-http --summary all
+      - name: Native streaming download cancellation
+        timeout-minutes: 10
+        run: zig build test-native-downloads --summary all
       - name: Install native dependencies
         run: |
           ./scripts/install-macos-deps.sh
           ./scripts/install-macos-ffmpeg.sh
           ./scripts/install-macos-mpv.sh
+      - name: Build isolated headless provider fixture binary
+        timeout-minutes: 15
+        run: zig build -Dheadless=true --prefix "$RUNNER_TEMP/opal-provider-fixtures"
+      - name: Hermetic media server and webcomic workflows
+        timeout-minutes: 10
+        env:
+          PYTHONUTF8: '1'
+          PYTHONIOENCODING: utf-8
+        run: |
+          command -v ffmpeg
+          python3 tests/test_media_servers_live.py --binary "$RUNNER_TEMP/opal-provider-fixtures/bin/opal" --port 41811
+          python3 tests/test_webcomic_sources_live.py --binary "$RUNNER_TEMP/opal-provider-fixtures/bin/opal" --port 41807
+          python3 tests/test_audio_browse_progressive_live.py --binary "$RUNNER_TEMP/opal-provider-fixtures/bin/opal" --port 41809
+          python3 tests/test_browse_parallel_live.py --binary "$RUNNER_TEMP/opal-provider-fixtures/bin/opal" --port 41819
       - name: Build (ReleaseSafe)
         run: zig build -Doptimize=ReleaseSafe
       - name: Binary exists
         run: test -x zig-out/bin/opal
+
+      - name: Native offline UI fixture suite
+        timeout-minutes: 20
+        env:
+          OPAL_NATIVE_CAPTURE_DIR: ${{ runner.temp }}/opal-native-captures
+          OPAL_GALLERY_CAPTURE_DIR: ${{ runner.temp }}/opal-native-captures
+        run: |
+          mkdir -p "$OPAL_NATIVE_CAPTURE_DIR"
+          zig build test-native-ui -Doptimize=ReleaseSafe --summary all
+          test -n "$(find "$OPAL_NATIVE_CAPTURE_DIR" -name '*.png' -print -quit)"
+      - name: Save native fixture captures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-ui-macos-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/opal-native-captures/*.png
+          if-no-files-found: warn
 
       # Exercise the exact release bundle path before creating a tag: linking
       # the binary alone does not verify bundled FFmpeg/mpv install names or
@@ -204,16 +298,41 @@ jobs:
             mingw-w64-x86_64-ffmpeg
             mingw-w64-x86_64-libass
             mingw-w64-x86_64-meson
+            mingw-w64-x86_64-python
             mingw-w64-x86_64-sqlite3
             mingw-w64-x86_64-libtorrent-rasterbar
             mingw-w64-x86_64-pkgconf
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
+      - name: Native HTTP deadlines and cancellation
+        timeout-minutes: 10
+        run: |
+          export MINGW_PREFIX="$(cygpath -m /mingw64)"
+          zig build test-native-http --summary all
+      - name: Native streaming download cancellation
+        timeout-minutes: 10
+        run: |
+          export MINGW_PREFIX="$(cygpath -m /mingw64)"
+          zig build test-native-downloads --summary all
       - name: Build MINGW64 libmpv
         run: ./scripts/install-mingw64-mpv.sh
       - name: Build headless (ReleaseSafe)
         run: zig build -Dheadless=true -Doptimize=ReleaseSafe
+      - name: Hermetic media server and webcomic workflows
+        timeout-minutes: 10
+        env:
+          PYTHONUTF8: '1'
+          PYTHONIOENCODING: utf-8
+        run: |
+          # Preserve the MINGW64 DLL search PATH from the native build.
+          command -v python
+          command -v ffmpeg
+          cp torrent_wrapper.dll zig-out/bin/
+          python tests/test_media_servers_live.py --binary zig-out/bin/opal.exe --port 41811
+          python tests/test_webcomic_sources_live.py --binary zig-out/bin/opal.exe --port 41807
+          python tests/test_audio_browse_progressive_live.py --binary zig-out/bin/opal.exe --port 41809
+          python tests/test_browse_parallel_live.py --binary zig-out/bin/opal.exe --port 41819
       - name: Boot + smoke
         run: |
           # -x stays on permanently. This job spent six runs failing with
@@ -303,6 +422,28 @@ jobs:
       # both builds write zig-out/bin/opal.exe.
       - name: Build Windows desktop (ReleaseSafe)
         run: zig build -Doptimize=ReleaseSafe
+
+      - name: Native offline UI fixture suite
+        timeout-minutes: 20
+        env:
+          SDL_VIDEODRIVER: windows
+          SDL_RENDER_DRIVER: software
+        run: |
+          # Native Windows paths are consumed by the test exe; do not pass an
+          # MSYS /tmp path that the native std.Io filesystem cannot resolve.
+          export MINGW_PREFIX="$(cygpath -m /mingw64)"
+          export OPAL_NATIVE_CAPTURE_DIR="$(cygpath -m "$RUNNER_TEMP")/opal-native-captures"
+          export OPAL_GALLERY_CAPTURE_DIR="$OPAL_NATIVE_CAPTURE_DIR"
+          mkdir -p "$OPAL_NATIVE_CAPTURE_DIR"
+          zig build test-native-ui -Doptimize=ReleaseSafe --summary all
+          test -n "$(find "$OPAL_NATIVE_CAPTURE_DIR" -name '*.png' -print -quit)"
+      - name: Save native fixture captures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-ui-windows-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/opal-native-captures/*.png
+          if-no-files-found: warn
 
   docker-headless:
     runs-on: ubuntu-latest

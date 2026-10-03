@@ -539,3 +539,33 @@ test "radio catalog serializes all 180 maximally escaped copied stations" {
     defer single.deinit();
     try std.testing.expectEqual(@as(usize, 1), single.value.array.items.len);
 }
+
+/// Merge independent directories without replacing an earlier sibling's rows.
+pub fn appendUnique(out: []Station, initial: usize, incoming: []const Station) usize {
+    var count = @min(initial, out.len);
+    rows: for (incoming) |row| {
+        if (count == out.len) break;
+        for (out[0..count]) |existing| {
+            if (row.stationuuid_len > 0 and std.mem.eql(u8, row.stationuuid[0..row.stationuuid_len], existing.stationuuid[0..existing.stationuuid_len])) continue :rows;
+            if (row.url_len > 0 and std.mem.eql(u8, row.url[0..row.url_len], existing.url[0..existing.url_len])) continue :rows;
+        }
+        out[count] = row;
+        count += 1;
+    }
+    return count;
+}
+test "radio progressive merge preserves fast source when slow directory arrives" {
+    var out: [2]Station = undefined;
+    var soma: Station = .{};
+    @memcpy(soma.stationuuid[0..6], "soma:1");
+    soma.stationuuid_len = 6;
+    var directory: Station = .{};
+    @memcpy(directory.stationuuid[0..4], "rb:1");
+    directory.stationuuid_len = 4;
+    const first = appendUnique(&out, 0, &.{soma});
+    try std.testing.expectEqual(@as(usize, 1), first);
+    const merged = appendUnique(&out, first, &.{ directory, soma });
+    try std.testing.expectEqual(@as(usize, 2), merged);
+    try std.testing.expectEqualStrings("soma:1", out[0].stationuuid[0..out[0].stationuuid_len]);
+    try std.testing.expectEqual(@as(usize, 2), appendUnique(&out, merged, &.{directory}));
+}

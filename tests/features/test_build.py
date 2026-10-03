@@ -312,7 +312,9 @@ def test_anime_jikan_resilience():
     checks = {
         "no sfw param sent": 'return "";' in ap and "504s on the `sfw`" in ap,
         "trending falls back to unfiltered": "filtered top unavailable" in an
-            and "added == 0 and fv.len > 0" in an,
+            and "added == 0 and job.fallback_len > 0" in an
+            and "search_request.current() == my_gen" in an
+            and "jikanGet(fb, buf, my_gen)" in an,
         "anime curls bound connect time": an.count('"--connect-timeout"') >= 1,
     }
     bad = [k for k, v in checks.items() if not v]

@@ -949,6 +949,28 @@
       },
       "file": "plugins/podcast-waveform.json",
       "note": "Publisher RSS feed with full audio episodes."
+    },
+    {
+      "id": "xkcd",
+      "name": "xkcd",
+      "type": "comics",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://xkcd.com"
+      },
+      "file": "plugins/xkcd.json",
+      "note": "Official full title archive or exact comic number; real full comic image, alt text and creator metadata. Interactive comics are represented by the advertised static image."
+    },
+    {
+      "id": "smbc",
+      "name": "Saturday Morning Breakfast Cereal",
+      "type": "comics",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://www.smbc-comics.com"
+      },
+      "file": "plugins/smbc.json",
+      "note": "Publisher recent RSS title search; full main panel reader, including older saved work URLs. RSS does not cover the complete archive; bonus panels remain on the publisher site."
     }
   ]
 }

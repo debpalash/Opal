@@ -316,6 +316,7 @@ pub const YtItem = struct {
     thumbnail_url: [512]u8 = std.mem.zeroes([512]u8),
     thumbnail_url_len: usize = 0,
     thumb_fetching: bool = false,
+    thumb_request_id: u64 = 0,
     // Failure-latch: a thumb worker that ran but produced no pixels (404 /
     // undecodable) marks thumb_failed so the grid stops re-spawning a full
     // HTTP+DB worker every frame. thumb_attempted = "tried" vs "never tried".
@@ -1641,6 +1642,9 @@ pub fn stashPendingPlayFull(
     rating: f32,
     extra: []const u8,
 ) void {
+    pending_play_mutex.lock();
+    defer pending_play_mutex.unlock();
+    app.pending_play_tmdb_id = 0;
     app.pending_play_title_len = @min(title.len, app.pending_play_title.len);
     @memcpy(app.pending_play_title[0..app.pending_play_title_len], title[0..app.pending_play_title_len]);
     app.pending_play_art_len = @min(art.len, app.pending_play_art.len);
@@ -1660,7 +1664,22 @@ pub fn stashPendingPlayFull(
 /// stream we are about to play cannot be confidently tied to the title we
 /// stashed for (see resolver_rank.metadataSafeFor), the loading screen must
 /// fall back to the bare hourglass rather than wear another show's poster.
+pub fn hasPendingPlay() bool {
+    pending_play_mutex.lock();
+    defer pending_play_mutex.unlock();
+    return app.pending_play_title_len > 0 or app.pending_play_art_len > 0;
+}
+pub fn setPendingPlayCatalogId(id: i32) void {
+    pending_play_mutex.lock();
+    defer pending_play_mutex.unlock();
+    app.pending_play_tmdb_id = id;
+}
 pub fn clearPendingPlay() void {
+    pending_play_mutex.lock();
+    defer pending_play_mutex.unlock();
+    clearPendingPlayUnlocked();
+}
+fn clearPendingPlayUnlocked() void {
     app.pending_play_title_len = 0;
     app.pending_play_art_len = 0;
     app.pending_play_overview_len = 0;
@@ -1681,7 +1700,109 @@ pub fn clearPendingPlay() void {
 /// Jellyfin and every other stream plays). The copy used to exist only on the
 /// torrent path, so a stash made by a direct-play source was never consumed and
 /// its art never appeared.
+pub const PendingPlay = struct {
+    title: [128]u8 = std.mem.zeroes([128]u8),
+    title_len: usize = 0,
+    // 256, not 64: this used to hold a bare TMDB path fragment ("/abc.jpg")
+    // with the image base hard-coded at the render site, which is why no
+    // non-TMDB source could ever show art on the loading screen. It now holds
+    // either a fragment or a full URL (a Subsonic/Jellyfin/Plex cover, an
+    // anime poster) — see ui/loading_pure.posterUrl.
+    art: [256]u8 = std.mem.zeroes([256]u8),
+    art_len: usize = 0,
+    overview: [400]u8 = std.mem.zeroes([400]u8),
+    overview_len: usize = 0,
+    is_tv: bool = false,
+    /// ui/loading_pure.MediaKind as an integer (fixed-size-state convention).
+    kind: u8 = 0,
+    year: [8]u8 = std.mem.zeroes([8]u8),
+    year_len: usize = 0,
+    rating: f32 = 0,
+    /// Free-form third field on the meta line — an artist for music, "S2E4"
+    /// for an episode.
+    extra: [96]u8 = std.mem.zeroes([96]u8),
+    extra_len: usize = 0,
+    /// Stable catalog identity for account history sync. Zero means the play
+    /// did not originate from a metadata item with a verified TMDB identity.
+    tmdb_id: i32 = 0,
+};
+var pending_play_mutex: @import("sync.zig").Mutex = .{};
+var play_owner: std.atomic.Value(std.Thread.Id) = .init(0);
+const PendingPlayerMetadata = struct { player: *MediaPlayer, serial: u64, lifetime: u64, metadata: PendingPlay };
+var pending_metadata: [32]PendingPlayerMetadata = undefined;
+var pending_metadata_count: usize = 0;
+pub fn onPlayOwnerThread() bool {
+    return play_owner.load(.acquire) == std.Thread.getCurrentId();
+}
+pub fn takePendingPlay() PendingPlay {
+    pending_play_mutex.lock();
+    defer pending_play_mutex.unlock();
+    var snapshot: PendingPlay = .{};
+    snapshot.title = app.pending_play_title;
+    snapshot.title_len = app.pending_play_title_len;
+    snapshot.art = app.pending_play_art;
+    snapshot.art_len = app.pending_play_art_len;
+    snapshot.overview = app.pending_play_overview;
+    snapshot.overview_len = app.pending_play_overview_len;
+    snapshot.is_tv = app.pending_play_is_tv;
+    snapshot.kind = app.pending_play_kind;
+    snapshot.year = app.pending_play_year;
+    snapshot.year_len = app.pending_play_year_len;
+    snapshot.rating = app.pending_play_rating;
+    snapshot.extra = app.pending_play_extra;
+    snapshot.extra_len = app.pending_play_extra_len;
+    snapshot.tmdb_id = app.pending_play_tmdb_id;
+    clearPendingPlayUnlocked();
+    return snapshot;
+}
 pub fn consumePendingPlay(p: *MediaPlayer) void {
+    const metadata = takePendingPlay();
+    if (onPlayOwnerThread()) {
+        applyPendingPlay(p, metadata);
+        return;
+    }
+    pending_play_mutex.lock();
+    defer pending_play_mutex.unlock();
+    if (@import("workers.zig").isQuitting()) return;
+    // Coalesce replacement metadata for the same live player.
+    for (pending_metadata[0..pending_metadata_count]) |*entry| {
+        if (entry.player == p and entry.lifetime == p.lifetime_id) {
+            entry.* = .{ .player = p, .serial = p.load_serial, .lifetime = p.lifetime_id, .metadata = metadata };
+            wakeUi();
+            return;
+        }
+    }
+    if (pending_metadata_count < pending_metadata.len) {
+        pending_metadata[pending_metadata_count] = .{ .player = p, .serial = p.load_serial, .lifetime = p.lifetime_id, .metadata = metadata };
+        pending_metadata_count += 1;
+    }
+    wakeUi();
+}
+pub fn clearDeferredPlayMetadata() void {
+    pending_play_mutex.lock();
+    defer pending_play_mutex.unlock();
+    pending_metadata_count = 0;
+    clearPendingPlayUnlocked();
+}
+/// Owner loop only; native callers must be inside Window.begin/end.
+pub fn drainPendingPlay() void {
+    play_owner.store(std.Thread.getCurrentId(), .release);
+    var entries: [32]PendingPlayerMetadata = undefined;
+    pending_play_mutex.lock();
+    const count = pending_metadata_count;
+    @memcpy(entries[0..count], pending_metadata[0..count]);
+    pending_metadata_count = 0;
+    pending_play_mutex.unlock();
+    for (entries[0..count]) |entry| {
+        for (app.players.items) |p| {
+            if (p == entry.player and p.lifetime_id == entry.lifetime and p.load_serial == entry.serial) {
+                applyPendingPlay(p, entry.metadata);
+                break;
+            }
+        }
+    }
+}
+pub fn applyPendingPlay(p: *MediaPlayer, metadata: PendingPlay) void {
     // Free any stale poster from a previous play on this (reused) player, and
     // reset the fetch latches so this play starts its own lookups.
     @import("poster.zig").deinitPoster(&p.loading_poster_pixels, &p.loading_poster_tex);
@@ -1694,36 +1815,24 @@ pub fn consumePendingPlay(p: *MediaPlayer) void {
     p.loading_card_manual = 0;
     p.loading_card_since_ms = 0;
 
-    p.loading_title_len = app.pending_play_title_len;
-    @memcpy(p.loading_title[0..p.loading_title_len], app.pending_play_title[0..p.loading_title_len]);
-    p.loading_art_len = app.pending_play_art_len;
-    @memcpy(p.loading_art[0..p.loading_art_len], app.pending_play_art[0..p.loading_art_len]);
-    p.loading_overview_len = app.pending_play_overview_len;
-    @memcpy(p.loading_overview[0..p.loading_overview_len], app.pending_play_overview[0..p.loading_overview_len]);
-    p.loading_is_tv = app.pending_play_is_tv;
-    p.loading_kind = app.pending_play_kind;
-    p.loading_year_len = app.pending_play_year_len;
-    @memcpy(p.loading_year[0..p.loading_year_len], app.pending_play_year[0..p.loading_year_len]);
-    p.loading_rating = app.pending_play_rating;
-    p.loading_extra_len = app.pending_play_extra_len;
-    @memcpy(p.loading_extra[0..p.loading_extra_len], app.pending_play_extra[0..p.loading_extra_len]);
-    p.catalog_tmdb_id = app.pending_play_tmdb_id;
+    p.loading_title_len = metadata.title_len;
+    @memcpy(p.loading_title[0..p.loading_title_len], metadata.title[0..p.loading_title_len]);
+    p.loading_art_len = metadata.art_len;
+    @memcpy(p.loading_art[0..p.loading_art_len], metadata.art[0..p.loading_art_len]);
+    p.loading_overview_len = metadata.overview_len;
+    @memcpy(p.loading_overview[0..p.loading_overview_len], metadata.overview[0..p.loading_overview_len]);
+    p.loading_is_tv = metadata.is_tv;
+    p.loading_kind = metadata.kind;
+    p.loading_year_len = metadata.year_len;
+    @memcpy(p.loading_year[0..p.loading_year_len], metadata.year[0..p.loading_year_len]);
+    p.loading_rating = metadata.rating;
+    p.loading_extra_len = metadata.extra_len;
+    @memcpy(p.loading_extra[0..p.loading_extra_len], metadata.extra[0..p.loading_extra_len]);
+    p.catalog_tmdb_id = metadata.tmdb_id;
     p.catalog_movie_committed = false;
     p.catalog_played_seconds = 0;
     p.catalog_sample_ms = 0;
     p.catalog_sample_pos = 0;
-
-    // Clear the stash so it can't leak onto a later unrelated play (a raw
-    // drag-dropped torrent, a pasted URL).
-    app.pending_play_title_len = 0;
-    app.pending_play_art_len = 0;
-    app.pending_play_overview_len = 0;
-    app.pending_play_is_tv = false;
-    app.pending_play_kind = 0;
-    app.pending_play_year_len = 0;
-    app.pending_play_rating = 0;
-    app.pending_play_extra_len = 0;
-    app.pending_play_tmdb_id = 0;
 }
 
 /// Show a toast notification for 3 seconds.

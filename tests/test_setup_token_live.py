@@ -166,6 +166,9 @@ class IsolatedOpal:
         env.update(
             {
                 "HOME": str(self.root / "home"),
+                "USERPROFILE": str(self.root / "home"),
+                "APPDATA": str(self.config_root),
+                "LOCALAPPDATA": str(self.root / "xdg-cache"),
                 "XDG_CONFIG_HOME": str(self.config_root),
                 "XDG_CACHE_HOME": str(self.root / "xdg-cache"),
                 "XDG_DATA_HOME": str(self.root / "xdg-data"),
@@ -181,7 +184,8 @@ class IsolatedOpal:
             stdin=subprocess.DEVNULL,
             stdout=self.log,
             stderr=subprocess.STDOUT,
-            start_new_session=True,
+            start_new_session=os.name == "posix",
+            creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW) if os.name == "nt" else 0,
         )
 
         deadline = time.monotonic() + 30
@@ -255,6 +259,14 @@ class IsolatedOpal:
 
     def stop_process(self) -> None:
         if self.process is not None and self.process.poll() is None:
+            if os.name == "nt":
+                # Kill only this owned child and its descendants. Windows has
+                # no POSIX killpg; terminating the parent leaks curl sidecars.
+                subprocess.run(["taskkill", "/PID", str(self.process.pid), "/T", "/F"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=8, check=False)
+                self.process.wait(timeout=3)
+                self.process = None
+                return
             try:
                 os.killpg(self.process.pid, signal.SIGTERM)
                 self.process.wait(timeout=8)

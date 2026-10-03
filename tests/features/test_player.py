@@ -892,7 +892,10 @@ def test_http_downloader():
         "sidecar restore on launch": "restoreSidecar" in glue and "parsePartMeta" in glue,
         # Retry + stall detection.
         "per-segment retry budget": "MAX_RETRIES" in eng and "retryWait" in eng,
-        "stalled segment reconnect": "STALL_MS" in eng and "seg_kick" in eng,
+        "stalled segment reconnect": ("dp.STALL_MS" in eng and "guard.stage_ms.load" in eng
+                                      and "guard.expire()" in eng and "task.cancel(client.io)" in eng),
+        "opening probe deadline joined": ("fn probeOwned(" in eng and "task.cancel(task_io)" in eng
+                                          and "task.await(task_io)" in eng),
         # Config keys: segment count / max concurrent / shared speed limit.
         "config keys": ("http_dl_segments" in st and "http_dl_max_concurrent" in st
                         and 'setKey("http_dl_segments"' in cfg
@@ -1338,15 +1341,17 @@ def test_loading_screen_infotainment():
         # consumed on the torrent path, so a direct-play source could stash art
         # that was never picked up and never shown.
         "one stash consumer": "pub fn consumePendingPlay(" in st,
-        "torrent path consumes": "state.consumePendingPlay(p);" in _src("src/services/search.zig"),
+        "torrent path consumes": "state.applyPendingPlay(p, metadata);" in _src("src/services/search.zig")
+            and "takeTorrentMetadata()" in _src("src/services/search.zig"),
         "direct path consumes": "pub fn playDirect(" in _src("src/services/browser.zig")
-            and "state.consumePendingPlay(p);" in _src("src/services/browser.zig"),
+            and "state.applyPendingPlay(p, metadata);" in _src("src/services/browser.zig")
+            and "owned_direct_metadata orelse state.takePendingPlay()" in _src("src/services/browser.zig"),
         # Podcasts, radio, IPTV, Audiobookshelf and the browser extension all
         # already hand loadContentDirectMeta an art URL + title. Deriving the
         # loading context from those covers every one of them without editing
         # two dozen call sites; a caller that stashed richer data still wins.
-        "art falls back to now-playing": "fn stashFromNowPlaying(" in _src("src/services/browser.zig"),
-        "explicit stash wins": "if (state.app.pending_play_title_len > 0" in _src("src/services/browser.zig"),
+        "art falls back to now-playing": "metadata.art_len = @min(request.art_url.len" in _src("src/services/browser.zig"),
+        "explicit stash wins": "if (metadata.title_len == 0 and metadata.art_len == 0)" in _src("src/services/browser.zig"),
         "one cover resolver": "pub fn coverUrlFor(" in mu,
         # (b) Cards rotate and can be paged by hand.
         "deck state": "loading_card_manual" in pl and "loading_card_since_ms" in pl,
@@ -1830,9 +1835,11 @@ def movie_completion_sync():
     simkl = _src("src/services/simkl.zig")
     checks = {
         "stable id crosses resolver": "pending_play_tmdb_id" in state
-            and "catalog_tmdb_id = app.pending_play_tmdb_id" in state
-            and "pending_play_tmdb_id = if (item.id > 0)" in tmdb,
-        "unrelated loads clear identity": state.count("app.pending_play_tmdb_id = 0") >= 2,
+            and "snapshot.tmdb_id = app.pending_play_tmdb_id" in state
+            and "p.catalog_tmdb_id = metadata.tmdb_id" in state
+            and "state.setPendingPlayCatalogId(if (item.id > 0)" in tmdb,
+        "unrelated loads clear identity": "app.pending_play_tmdb_id = 0" in state
+            and "clearPendingPlayUnlocked();" in _between(state, "pub fn takePendingPlay()", "pub fn consumePendingPlay("),
         "real viewed time required": "catalog_played_seconds" in player
             and "playedDelta(" in player and "watchCommitDue(" in player,
         "one completion per load": "catalog_movie_committed" in player

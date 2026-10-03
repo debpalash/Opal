@@ -170,7 +170,7 @@ def test_sources_externalized():
         "1337x via config": "sources_dir" in eng and "def candidates_for" in eng
                             and "opal_sources" in _src("engines/nova2.py"),
         "yts via config": 'get("yts"' in rv,
-        "eztv via config": 'get("eztv"' in sr,
+        "eztv via config": 'copyValue("eztv", "api", &api_buf)' in sr,
         "readallcomics via config": 'get("readallcomics"' in rv and 'get("readallcomics"' in cm,
         # The old hardcoded URL builders must be gone (validators may remain).
         "no hardcoded 1337x search": '"https://1337x.to/search' not in rv,

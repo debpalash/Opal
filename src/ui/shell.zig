@@ -23,6 +23,24 @@ const search_mod = @import("../services/search.zig");
 const browser = @import("../services/browser.zig");
 const browser_pure = @import("../services/browser_pure.zig");
 
+const sidebar_layout = @import("shell_layout_pure.zig");
+var sidebar_collapsed = false;
+var sidebar_user_expanded: ?bool = null;
+var sidebar_fixture: ?bool = null;
+var sidebar_rect: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
+var anime_sidebar_rect: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
+pub fn sidebarAnimeBoundsForTest() dvui.Rect.Physical {
+    return anime_sidebar_rect;
+}
+var content_rect: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
+pub fn setSidebarFixtureForTest(expanded: ?bool) void {
+    if (!@import("builtin").is_test) return;
+    sidebar_fixture = expanded;
+}
+pub fn sidebarBoundsForTest() struct { sidebar: dvui.Rect.Physical, content: dvui.Rect.Physical } {
+    return .{ .sidebar = sidebar_rect, .content = content_rect };
+}
+
 const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
 
 var player_top_chrome_rect: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
@@ -202,16 +220,27 @@ pub fn render() !void {
         // The Player route owns its full bleed (video grid); every other page
         // gets a consistent gutter so content never sits flush to the window edge.
         const r = state.app.router.current;
+        const nav_layout = sidebar_layout.layout(live_width, sidebar_collapsed, sidebar_fixture orelse sidebar_user_expanded);
+        var body = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .both,
+            .min_size_content = .{ .w = live_width, .h = 0 },
+            .max_size_content = .{ .w = live_width, .h = std.math.floatMax(f32) },
+        });
+        defer body.deinit();
+        renderSidebar(nav_layout);
         // Tight gutter so content fills the window (Browse/grids especially);
         // the player still bleeds edge-to-edge.
         const gutter: f32 = if (r == .player) 0 else if (tiny) theme.spacing.xs else theme.spacing.sm;
         var content = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .both,
+            .min_size_content = .{ .w = nav_layout.content - gutter * 2, .h = 0 },
+            .max_size_content = .{ .w = @max(0, nav_layout.content - gutter * 2), .h = std.math.floatMax(f32) },
             .background = true,
             .color_fill = theme.colors.bg_deep,
             .padding = .{ .x = gutter, .y = if (r == .player) 0 else theme.spacing.xs, .w = gutter, .h = 0 },
         });
         defer content.deinit();
+        content_rect = content.data().borderRectScale().r;
         // Fade each page in on navigation. id_extra keyed on the route AND the
         // active sub-tab so the AnimateWidget gets a fresh id per destination →
         // firstFrame true → the fade re-triggers on top-nav changes and on
@@ -278,7 +307,19 @@ fn renderTopNav(compact: bool, narrow: bool) void {
     });
     defer bar.deinit();
 
-    browseSourcePicker(compact);
+    // The sidebar toggle stays in the chrome; destinations stay in the rail.
+    const sidebar_expanded = sidebar_layout.layout(
+        @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().w, state.app.ui_scale),
+        sidebar_collapsed,
+        sidebar_fixture orelse sidebar_user_expanded,
+    ).expanded;
+    if (chromeIconButton(@src(), icons.tvg.lucide.@"panel-left", if (sidebar_expanded) "Collapse sidebar" else "Expand sidebar", false, true)) {
+        sidebar_collapsed = sidebar_expanded;
+        sidebar_user_expanded = !sidebar_expanded;
+        sidebar_fixture = null;
+        dvui.refresh(null, @src(), null);
+    }
+    // Persistent navigation owns destinations; this row owns the single query.
     if (!compact and state.app.router.canGoBack()) {
         if (chromeIconButton(@src(), icons.tvg.lucide.@"chevron-left", "Back", false, true)) state.app.router.goBack();
     }
@@ -451,7 +492,7 @@ fn pluginsMenu() void {
     }
 }
 
-/// Navigation lives in the destination picker; More groups actions and tools.
+/// Navigation lives in the sidebar; More groups actions and tools.
 fn renderSecondaryDestinations(compact: bool) void {
     const item_opts = dvui.Options{ .expand = .horizontal, .color_text = theme.colors.text_primary };
     if (compact and state.app.router.canGoBack() and dvui.menuItemLabel(@src(), "Back", .{}, item_opts) != null) {
@@ -465,14 +506,6 @@ fn renderSecondaryDestinations(compact: bool) void {
     if (dvui.menuItemLabel(@src(), "Now playing", .{}, item_opts) != null) {
         closeOverflowMenu();
         state.app.router.navigate(.player);
-    }
-    if (dvui.menuItemLabel(@src(), "Downloads", .{}, item_opts) != null) {
-        closeOverflowMenu();
-        state.app.router.navigate(.downloads);
-    }
-    if (dvui.menuItemLabel(@src(), "History", .{}, item_opts) != null) {
-        closeOverflowMenu();
-        state.app.router.navigate(.history);
     }
     if (dvui.menuItemLabel(@src(), "Paste link", .{}, item_opts) != null) {
         closeOverflowMenu();
@@ -489,18 +522,6 @@ fn renderSecondaryDestinations(compact: bool) void {
         var popup = dvui.floatingMenu(@src(), .{ .from = anchor }, .{ .color_fill = theme.colors.bg_surface, .color_border = theme.colors.border_subtle });
         defer popup.deinit();
         renderPlaybackOptions();
-    }
-    if (dvui.menuItemLabel(@src(), "Queue", .{}, item_opts) != null) {
-        closeOverflowMenu();
-        state.app.router.navigate(.queue);
-    }
-    if (dvui.menuItemLabel(@src(), "Plugins", .{}, item_opts) != null) {
-        closeOverflowMenu();
-        state.app.router.navigate(.plugins);
-    }
-    if (dvui.menuItemLabel(@src(), "Settings", .{}, item_opts) != null) {
-        closeOverflowMenu();
-        state.app.router.navigate(.settings);
     }
     if (dvui.menuItemLabel(@src(), "Open file…", .{}, item_opts) != null) {
         closeOverflowMenu();
@@ -792,6 +813,124 @@ const WATCH_SOURCES = [_]state.DrawerTab{ .TMDB, .YouTube, .Anime, .Drama, .Iptv
 const LISTEN_SOURCES = [_]state.DrawerTab{ .Podcasts, .Radio, .Music, .Audiobooks };
 const READ_SOURCES = [_]state.DrawerTab{ .Comics, .Novels, .Vndb, .Opds, .RSS };
 const CONNECTED_SOURCES = [_]state.DrawerTab{ .Web, .Jellyfin, .Plex };
+
+/// Persistent grouped navigation. Ordinary buttons retain keyboard focus and
+/// activation semantics; the icon rail exposes the same labels through tips.
+fn renderSidebar(layout: sidebar_layout.Layout) void {
+    var host = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .vertical,
+        .min_size_content = .{ .w = layout.sidebar - 1, .h = 0 },
+        .max_size_content = .{ .w = layout.sidebar - 1, .h = std.math.floatMax(f32) },
+        .background = true,
+        .color_fill = theme.colors.bg_app,
+        .border = .{ .x = 0, .y = 0, .w = 1, .h = 0 },
+        .color_border = theme.colors.border_subtle,
+    });
+    defer host.deinit();
+    sidebar_rect = host.data().borderRectScale().r;
+    var scroll = dvui.scrollArea(@src(), .{ .horizontal = .none, .vertical = .auto }, .{
+        .expand = .both,
+        .background = true,
+        .color_fill = theme.colors.bg_app,
+        .color_border = theme.colors.border_subtle,
+        .border = dvui.Rect.all(0),
+        .min_size_content = .{ .w = 0, .h = 0 },
+        .max_size_content = .{ .w = layout.sidebar - 9, .h = std.math.floatMax(f32) },
+        .padding = dvui.Rect.all(4),
+    });
+    defer scroll.deinit();
+    const routes = [_]Route{ .home, .search, .watching };
+    const labels = [_][]const u8{ "Home", "All content", "Watching" };
+    const glyphs = [_][]const u8{ icons.tvg.lucide.house, icons.tvg.lucide.search, icons.tvg.lucide.tv };
+    for (routes, labels, glyphs, 0..) |route, label, glyph, i| {
+        if (sidebarButton(label, glyph, state.app.router.current == route, layout.expanded, 8610 + i)) {
+            if (route == .home) @import("home.zig").showOverview();
+            state.app.router.navigate(route);
+        }
+    }
+    sidebarSection("Watch", &WATCH_SOURCES, layout.expanded, 8700);
+    sidebarSection("Listen", &LISTEN_SOURCES, layout.expanded, 8800);
+    sidebarSection("Read", &READ_SOURCES, layout.expanded, 8900);
+    sidebarSection("Web & libraries", &CONNECTED_SOURCES, layout.expanded, 9000);
+    sidebarHeading("Manage", layout.expanded, 9100);
+    const manage_routes = [_]Route{ .downloads, .queue, .history, .assistant, .plugins, .settings, .system };
+    const manage_tabs = [_]state.DrawerTab{ .Downloads, .Queue, .History, .AI, .Plugins, .Settings, .Logs };
+    for (manage_routes, manage_tabs, 0..) |route, tab, i| {
+        if (sidebarButton(tabLabel(tab), iconForTab(tab), state.app.router.current == route, layout.expanded, 9101 + i)) state.app.router.navigate(route);
+    }
+}
+fn sidebarHeading(label: []const u8, expanded: bool, id: usize) void {
+    if (expanded) {
+        dvui.labelNoFmt(@src(), label, .{}, .{
+            .id_extra = id,
+            .color_text = theme.colors.text_tertiary,
+            .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
+            .padding = .{ .x = 8, .y = 10, .w = 0, .h = 3 },
+        });
+    } else {
+        var gap = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .id_extra = id,
+            .expand = .horizontal,
+            .min_size_content = .{ .w = 0, .h = 8 },
+            .max_size_content = .{ .w = 0, .h = 8 },
+        });
+        gap.deinit();
+    }
+}
+fn sidebarSection(label: []const u8, sources: []const state.DrawerTab, expanded: bool, id: usize) void {
+    sidebarHeading(label, expanded, id);
+    for (sources, 0..) |source, i| {
+        if (sidebarButton(tabLabel(source), iconForTab(source), state.app.router.current == .browse and state.app.browse_source == source, expanded, id + i + 1)) {
+            state.app.browse_source = source;
+            state.app.drawer_tab = source;
+            state.app.router.navigate(.browse);
+        }
+    }
+}
+fn sidebarButton(label: []const u8, glyph: []const u8, active: bool, expanded: bool, id: usize) bool {
+    var button: dvui.ButtonWidget = undefined;
+    button.init(@src(), .{}, .{
+        .id_extra = id,
+        .expand = .horizontal,
+        .min_size_content = .{ .w = 0, .h = 22 },
+        .max_size_content = .{ .w = 0, .h = 22 },
+        .background = true,
+        .color_fill = if (active) theme.colors.bg_elevated else theme.transparent,
+        .color_fill_hover = theme.colors.bg_hover,
+        .color_fill_press = theme.colors.bg_elevated,
+        .border = dvui.Rect.all(0),
+        .color_text = if (active) theme.colors.accent else theme.colors.text_secondary,
+        .corner_radius = theme.dims.rad_sm,
+        .margin = dvui.Rect.all(0),
+        .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
+    });
+    button.processEvents();
+    if (id == 8703) anime_sidebar_rect = button.data().borderRectScale().r;
+    button.drawBackground();
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .both,
+        .background = false,
+        .color_fill = theme.transparent,
+    });
+    const child = button.data().options.strip().override(button.style());
+    dvui.icon(@src(), label, glyph, .{}, child.override(.{
+        .min_size_content = .{ .w = 18, .h = 18 },
+        .max_size_content = .{ .w = 18, .h = 18 },
+        .gravity_y = 0.5,
+    }));
+    if (expanded) dvui.labelNoFmt(@src(), label, .{}, child.override(.{
+        .expand = .horizontal,
+        .font = dvui.themeGet().font_body.withSize(theme.font_size.body),
+        .gravity_y = 0.5,
+        .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
+    }));
+    row.deinit();
+    button.drawFocus();
+    if (!expanded) components.tipId(@src(), button.data().*, label, id);
+    const clicked = button.clicked();
+    button.deinit();
+    return clicked;
+}
 
 /// Browse is one task with a source filter, not seventeen permanent navigation
 /// tabs. Connectors remain reachable from the command palette even when their

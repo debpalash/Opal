@@ -14,6 +14,7 @@ const alloc = @import("alloc.zig").allocator;
 pub const Options = struct {
     timeout_ms: i64 = 30_000,
     terminate_grace_ms: i64 = 500,
+    cancel_epoch: ?CancelEpoch = null,
 };
 
 /// Optional generation token for a streaming child.  A caller starts the
@@ -44,6 +45,7 @@ pub const StreamOptions = struct {
     terminate_grace_ms: i64 = 500,
     max_output_bytes: usize = 16 * 1024 * 1024,
     cwd: ?[]const u8 = null,
+    stdin_behavior: io.Child.StdIo = .Ignore,
     stderr_behavior: io.Child.StdIo = .Ignore,
     cancel_epoch: ?CancelEpoch = null,
     cancel_flag: ?*const std.atomic.Value(bool) = null,
@@ -169,12 +171,13 @@ const Watchdog = struct {
     cancelled: *std.atomic.Value(bool),
     timeout_ms: i64,
     grace_ms: i64,
+    cancel_epoch: ?CancelEpoch,
 
     fn run(self: Watchdog) void {
         const start = io.monotonicMilliTimestamp();
         const deadline = start +| @max(self.timeout_ms, 1);
         while (!self.done.load(.acquire)) {
-            const quitting = @import("workers.zig").isQuitting();
+            const quitting = @import("workers.zig").isQuitting() or if (self.cancel_epoch) |epoch| epoch.fired() else false;
             if (quitting or io.monotonicMilliTimestamp() >= deadline) {
                 // The lock makes the active check and first signal atomic with
                 // natural-exit cleanup. A process that won the race to finish
@@ -286,7 +289,8 @@ pub fn run(argv: []const []const u8, output: []u8, options: Options) Result {
     if (argv.len == 0 or argv[0].len == 0 or output.len == 0)
         return .{ .failure = .invalid_input };
 
-    if (@import("workers.zig").isQuitting()) return .{ .failure = .cancelled };
+    if (@import("workers.zig").isQuitting() or if (options.cancel_epoch) |epoch| epoch.fired() else false)
+        return .{ .failure = .cancelled };
 
     var child = io.Child.init(argv, alloc);
     child.stdin_behavior = .Ignore;
@@ -313,6 +317,7 @@ pub fn run(argv: []const []const u8, output: []u8, options: Options) Result {
         .cancelled = &cancelled,
         .timeout_ms = options.timeout_ms,
         .grace_ms = options.terminate_grace_ms,
+        .cancel_epoch = options.cancel_epoch,
     }) catch {
         abortAndReap(&child, &control, &done);
         return .{ .failure = if (@import("workers.zig").isQuitting()) .cancelled else .watchdog_spawn };
@@ -435,7 +440,7 @@ pub const StreamProcess = struct {
             .acquire,
         ) != null) return error.InvalidInput;
 
-        self.child.stdin_behavior = .Ignore;
+        self.child.stdin_behavior = self.options.stdin_behavior;
         self.child.stdout_behavior = .Pipe;
         self.child.stderr_behavior = self.options.stderr_behavior;
         self.child.cwd = self.options.cwd;
@@ -804,4 +809,54 @@ test "ordinary running child cancels on shutdown and reaps inherited writers" {
     try std.testing.expect(io.monotonicMilliTimestamp() - before < 1_500);
     try std.testing.expectEqualStrings("ready", result.output);
     try std.testing.expectEqual(Failure.cancelled, result.failure);
+}
+
+test "bounded process generation interrupts one-shot blocked stdout" {
+    try requirePosix();
+    var epoch: std.atomic.Value(u32) = .init(1);
+    const Advance = struct {
+        fn run(value: *std.atomic.Value(u32)) void {
+            io.sleep(100 * std.time.ns_per_ms);
+            value.store(2, .release);
+        }
+    };
+    const thread = try std.Thread.spawn(.{}, Advance.run, .{&epoch});
+    defer thread.join();
+    var output: [32]u8 = undefined;
+    const started = io.monotonicMilliTimestamp();
+    const result = run(&.{ "/bin/sh", "-c", "trap '' TERM; (trap '' TERM; sleep 10) & wait" }, &output, .{
+        .timeout_ms = 5000,
+        .terminate_grace_ms = 20,
+        .cancel_epoch = .{ .epoch32 = .{ .value = &epoch, .expected = 1 } },
+    });
+    try std.testing.expectEqual(Failure.cancelled, result.failure);
+    try std.testing.expect(io.monotonicMilliTimestamp() - started < 700);
+}
+
+test "bounded streaming child preserves private stdin and observes EOF" {
+    try requirePosix();
+    var process = StreamProcess.init(&.{ "/bin/sh", "-c", "cat" }, .{
+        .stdin_behavior = .Pipe,
+        .timeout_ms = 1000,
+        .max_output_bytes = 256,
+    });
+    try process.start();
+    var finished = false;
+    defer if (!finished) {
+        process.child.closeStdin();
+        process.requestStop();
+        _ = process.finish();
+    };
+    const input = if (process.child.stdin) |*pipe| pipe else return error.MissingStdin;
+    const secret = "header = \"Authorization: Bearer original-fixture\"\n";
+    try io.writeAll(input, secret);
+    process.child.closeStdin();
+    var output: [256]u8 = undefined;
+    const n = try io.readAll(process.stdout().?, &output);
+    try std.testing.expect(process.noteOutput(n));
+    const result = process.finish();
+    finished = true;
+    try std.testing.expect(result.ok());
+    try std.testing.expectEqualStrings(secret, output[0..n]);
+    for (process.child.argv) |arg| try std.testing.expect(std.mem.indexOf(u8, arg, "original-fixture") == null);
 }

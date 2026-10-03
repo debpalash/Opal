@@ -144,31 +144,27 @@ def test_reader_tabs():
     return "pass", "Comics reader + Novels drill-down + Drama/VNDB catalogs"
 
 
-@test("OPDS fetches through curl, not std.http", "Web UI")
+@test("OPDS uses bounded native HTTP with secure authenticated curl fallback", "Web UI")
 def test_opds_curl_fetch():
     op = _src("src/services/opds.zig")
     checks = {
-        # Measured against Project Gutenberg's live catalog: curl gets 200 over
-        # BOTH https and http, while std.http's client.request failed at connect
-        # for either scheme — so OPDS could not reach a server the rest of the
-        # app talks to fine. tmdb_api.zig documents the same workaround.
-        "fetches via curl": '"curl"' in op and '"-fsSL"' in op,
-        "no std.http left": "http.fetch(" not in op and 'const http = @import("../core/http.zig")' not in op,
-        # OPDS catalogs redirect constantly (Komga /opds → /opds/v1.2, http→https).
+        "native transport first": '@import("../core/http.zig").fetch(url, buffer' in op,
+        "native basic auth": ".auth_header = auth" in op,
+        "native response cap": ".max_response = cap" in op,
+        "supervised fallback": "StreamProcess.init" in op,
         "follows redirects": '"-fsSL"' in op,
-        "request is bounded": '"--max-time"' in op,
-        # Keep the Basic credential out of argv: curl reads its authenticated
-        # header through a closed stdin config pipe.
-        "basic auth preserved": "pure.basicAuthHeader(user, pass, &auth_buf)" in op
+        "bounded timeout and output": '"--max-time"' in op and ".max_output_bytes = cap" in op,
+        "cancellable request": ".cancel_epoch = cancellation" in op,
+        "basic auth preserved privately": "pure.basicAuthHeader(user, pass, &auth_buf)" in op
             and '"--config"' in op and '"-"' in op
-            and "curl_secret.zig" in op
-            and "spawnWithHeaders(&child" in op,
+            and 'curl_secret.zig").configLine' in op
+            and ".stdin_behavior = .Pipe" in op and "process.child.closeStdin()" in op,
         "atom accept header": "Accept: application/atom+xml" in op,
     }
     missing = [k for k, ok in checks.items() if not ok]
     if missing:
         return "fail", "opds fetch incomplete: " + ", ".join(missing)
-    return "pass", "OPDS curl contract: redirects, bounded requests and Basic auth via stdin"
+    return "pass", "Native-first OPDS transport, bounded cancellable fallback and Basic auth via private stdin"
 
 
 @test("Web UI consolidated to one origin without a second build", "Web UI")

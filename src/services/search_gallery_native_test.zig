@@ -107,6 +107,7 @@ fn renderSize(width: u32, height: u32, rows: []const resolver.ResolvedItem, movi
             _ = try window.addEventMouseMotion(.{ .pt = .{ .x = @as(f32, @floatFromInt(width)), .y = @as(f32, @floatFromInt(height)) } });
             _ = try window.addEventMouseWheel(-600, .vertical);
         }
+        if (frame == 2 or frame == 3) _ = try window.addEventKey(.{ .code = .tab, .action = .down, .mod = .none });
         @import("../ui/theme.zig").setTheme();
         const rect = dvui.windowRectPixels();
         try std.testing.expect(rect.w >= @as(f32, @floatFromInt(width)));
@@ -125,6 +126,12 @@ fn renderSize(width: u32, height: u32, rows: []const resolver.ResolvedItem, movi
         if (frame == 3 or (movies_only and frame == 5)) {
             var png: std.Io.Writer.Allocating = try .initCapacity(alloc, 128 * 1024);
             defer png.deinit();
+            const compression = dvui.c.stbi_write_png_compression_level;
+            const filter = dvui.c.stbi_write_force_png_filter;
+            dvui.c.stbi_write_png_compression_level = 0;
+            dvui.c.stbi_write_force_png_filter = 0;
+            defer dvui.c.stbi_write_png_compression_level = compression;
+            defer dvui.c.stbi_write_force_png_filter = filter;
             try picture.png(&png.writer);
             const encoded = png.written();
             try std.testing.expect(encoded.len > 1000);
@@ -149,6 +156,74 @@ fn renderSize(width: u32, height: u32, rows: []const resolver.ResolvedItem, movi
             search.deinitGallery();
         }
         _ = try window.end(.{});
+        if (frame == 2 or frame == 3) try std.testing.expect(window.subwindows.focused().?.focused_widget_id != null);
+    }
+}
+
+test "Native Search performance offline warmed maximum gallery scroll frames" {
+    const rows = try alloc.alloc(resolver.ResolvedItem, resolver.MAX_RESULTS);
+    defer alloc.free(rows);
+    for (rows, 0..) |*row, index| {
+        row.* = .{ .source = .tmdb, .catalog_id = @intCast(10000 + index) };
+        field(&row.catalog_kind, &row.catalog_kind_len, "movie");
+        var title: [64]u8 = undefined;
+        field(&row.name, &row.name_len, try std.fmt.bufPrint(&title, "Owned maximum gallery fixture {d}", .{index}));
+        field(&row.poster_url, &row.poster_url_len, "fixture://offline-art");
+    }
+    const projection = try alloc.create(content.Projection);
+    defer alloc.destroy(projection);
+    var indices: [resolver.MAX_RESULTS]usize = undefined;
+    for (&indices, 0..) |*index, i| index.* = i;
+    content.projectInto(rows, &indices, projection);
+    try std.testing.expectEqual(rows.len, projection.count);
+    for ([_][2]u32{ .{ 1360, 1000 }, .{ 640, 800 } }) |size| {
+        workers.init();
+        defer workers.finishShutdown();
+        var backend = try dvui.backend.initWindow(.{ .io = io.io(), .allocator = alloc, .size = .{ .w = @floatFromInt(size[0]), .h = @floatFromInt(size[1]) }, .vsync = false, .title = "Opal owned scroll benchmark", .hidden = true });
+        defer backend.deinit();
+        var window = try dvui.Window.init(@src(), alloc, backend.backend(), .{});
+        defer window.deinit();
+        @import("../ui/theme.zig").markUiThread();
+        search.setGalleryFixtureForTest(rows, "Owned maximum gallery");
+        search.setGalleryContentFilterForTest(.movies);
+        var timings: [120]f64 = undefined;
+        for (0..timings.len + 8) |frame| {
+            const started = std.Io.Clock.awake.now(io.io()).toNanoseconds();
+            try window.begin(@as(i128, @intCast(frame + 1)) * 16_666_667);
+            errdefer {
+                workers.beginShutdownAndDrain(800);
+                search.shutdown();
+                search.deinitGallery();
+                _ = window.end(.{}) catch null;
+            }
+            if (frame == 0) for (projection.groups[0..projection.count]) |group| {
+                const texture = try fixtureTexture(group.representative);
+                search.setGalleryTextureForTest(group.identity, "fixture://offline-art", texture, texture.width, texture.height);
+            };
+            if (frame >= 8) {
+                _ = try window.addEventMouseMotion(.{ .pt = .{ .x = @as(f32, @floatFromInt(size[0])) / 2, .y = @as(f32, @floatFromInt(size[1])) / 2 } });
+                _ = try window.addEventMouseWheel(if (frame % 60 < 30) -120 else 120, .vertical);
+            }
+            @import("../ui/theme.zig").setTheme();
+            search.renderGalleryForTest();
+            window.endRendering(.{});
+            if (frame == 12) {
+                try std.testing.expect(search.galleryScrollForTest() > 0);
+                try std.testing.expect(search.galleryTextRowsForTest() > 0);
+                try std.testing.expect(search.galleryTextRowsForTest() < rows.len);
+            }
+            if (frame == timings.len + 7) {
+                workers.beginShutdownAndDrain(800);
+                search.shutdown();
+                search.deinitGallery();
+            }
+            _ = try window.end(.{});
+            if (frame >= 8) timings[frame - 8] = @as(f64, @floatFromInt(std.Io.Clock.awake.now(io.io()).toNanoseconds() - started)) / 1_000_000;
+        }
+        std.mem.sort(f64, &timings, {}, std.sort.asc(f64));
+        // Includes native renderer submission, excludes preload and PNG capture.
+        // Hidden window without vsync: not monitor presentation or an FPS claim.
+        std.debug.print("Native gallery {d}x{d}, {d} owned rows, 120 warmed frames: p50={d:.3}ms p95={d:.3}ms\n", .{ size[0], size[1], rows.len, (timings[59] + timings[60]) / 2, timings[113] });
     }
 }
 

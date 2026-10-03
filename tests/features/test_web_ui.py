@@ -1060,7 +1060,7 @@ def test_reading_server_connection_lifecycle():
         )),
         "one click disconnect": "apiMutation('/abs/logout')" in media and "apiMutation('/opds/disconnect')" in media,
         "restored content reloads": "apiMutation('/abs/libraries')" in media and "apiMutation('/opds/connect')" in media,
-        "polls immediately without overlap": media.count("settledInterval(tick, 900, true)") >= 2,
+        "polls immediately without overlap": "settledInterval(tick, 900, true)" in media and "settledInterval(tick, BROWSE_POLL_MS, true)" in media,
         "mutations use POST": all(marker in media for marker in (
             "apiMutation('/abs/back')", "apiMutation('/opds/back')", "apiMutation('/opds/open?idx='",
         )),

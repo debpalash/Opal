@@ -17,6 +17,9 @@ test "TV detail module" {
 test "Native Search gallery offline SDL pixel capture" {
     if (!@import("build_options").headless) _ = @import("services/search_gallery_native_test.zig");
 }
+test "Native Search performance" {
+    if (!@import("build_options").headless) _ = @import("services/search_gallery_native_test.zig");
+}
 test "Native WebP shared decoder and GPU upload" {
     _ = @import("core/image_decode_native_test.zig");
 }
@@ -31,6 +34,21 @@ test "Native global modals offline SDL pixel capture" {
 }
 test "Native activity offline SDL pixel capture" {
     if (!@import("build_options").headless) _ = @import("ui/activity_native_test.zig");
+}
+test "Native Browse Suwayomi test returns before delayed server and ignores stale response" {
+    try @import("services/plugins.zig").verifySuwaNonblockingForTest();
+}
+test "Native Browse Gutenberg progressive owned HTTP fixture" {
+    try @import("services/opds.zig").verifyGutenbergProgressiveForTest();
+}
+test "Native Browse loading module" {
+    _ = @import("ui/browse_loading_native_test.zig");
+}
+test "Native torrent handoff imports" {
+    _ = @import("services/torrent_handoff_native_test.zig");
+}
+test "Native Browse fanout module" {
+    _ = @import("services/browse_fanout.zig");
 }
 const builtin = @import("builtin");
 const dvui = @import("dvui");
@@ -850,6 +868,7 @@ pub fn appDeinit() void {
     // allocator it may publish into are released. 800 ms is the diagnostic
     // threshold, not permission for a worker to outlive shared state.
     workers.beginShutdownAndDrain(800);
+    @import("ui/local_library_ui.zig").deinit();
     @import("services/source_request.zig").deinit();
     search.deinitGallery();
     @import("player/drop_ingest.zig").deinit();

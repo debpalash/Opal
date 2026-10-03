@@ -1344,36 +1344,72 @@ var suwa_prefilled: bool = false;
 var suwa_test_msg: [64]u8 = std.mem.zeroes([64]u8);
 var suwa_test_len: usize = 0;
 
+var suwa_test_busy = std.atomic.Value(bool).init(false);
+var suwa_test_mutex: sync.Mutex = .{};
+var suwa_message_generation: u64 = 0;
+const SuwaTestJob = struct { base: [512]u8, len: usize, generation: u64 = 0 };
+
 fn suwaTest() void {
-    const sc = @import("../core/source_config.zig");
-    const base = sc.get("suwayomi", "base") orelse {
+    if (suwa_test_busy.swap(true, .acq_rel)) return;
+    var job: SuwaTestJob = .{ .base = undefined, .len = 0 };
+    const base = @import("../core/source_config.zig").copyValue("suwayomi", "base", &job.base) orelse {
+        suwa_test_busy.store(false, .release);
         setSuwaMsg("Save a server URL first");
         return;
     };
-    var url_buf: [320]u8 = undefined;
-    const url = std.fmt.bufPrint(&url_buf, "{s}/api/v1/extension/list", .{std.mem.trimEnd(u8, base, "/")}) catch return;
-    const argv = [_][]const u8{ "curl", "-sL", "-o", @import("../core/io_global.zig").devNull(), "-w", "%{http_code}", "--max-time", "6", url };
-    var child = @import("../core/io_global.zig").Child.init(&argv, @import("../core/alloc.zig").allocator);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    _ = child.spawn() catch {
-        setSuwaMsg("Could not reach the server");
+    job.len = base.len;
+    setSuwaMsg("Testing server…");
+    suwa_test_mutex.lock();
+    job.generation = suwa_message_generation;
+    suwa_test_mutex.unlock();
+    submitSuwaTestJob(job);
+}
+
+fn submitSuwaTestJob(job: SuwaTestJob) void {
+    if (@import("../core/workers.zig").spawnLegacy(suwaTestWorker, .{job})) |thread| {
+        @import("../core/workers.zig").release(thread);
+    } else |_| {
+        suwa_test_busy.store(false, .release);
+        setSuwaMsg("Could not start connection test");
+    }
+}
+
+fn suwaTestWorker(job: SuwaTestJob) void {
+    defer {
+        suwa_test_busy.store(false, .release);
+        state.wakeUi();
+    }
+    var url_buf: [640]u8 = undefined;
+    const url = std.fmt.bufPrint(&url_buf, "{s}/api/v1/extension/list", .{std.mem.trimEnd(u8, job.base[0..job.len], "/")}) catch {
+        publishSuwaResult(job.generation, "Server URL is too long");
         return;
     };
-    var code_buf: [16]u8 = undefined;
-    const n = if (child.stdout) |*so| @import("../core/io_global.zig").readAll(so, &code_buf) catch 0 else 0;
-    _ = child.wait() catch {};
-    const code = std.fmt.parseInt(u32, std.mem.trim(u8, code_buf[0..n], " \r\n"), 10) catch 0;
-    if (code == 200) setSuwaMsg("Connected — server reachable") else {
+    var response: [8192]u8 = undefined;
+    var status: ?std.http.Status = null;
+    _ = @import("../core/http.zig").fetch(url, &response, .{ .timeout_secs = 6, .status_out = &status });
+    const code: u32 = if (status) |value| @intFromEnum(value) else 0;
+    if (code == 200) publishSuwaResult(job.generation, "Connected — server reachable") else {
         var m: [64]u8 = undefined;
-        setSuwaMsg(std.fmt.bufPrint(&m, "No response (code {d})", .{code}) catch "No response");
+        publishSuwaResult(job.generation, std.fmt.bufPrint(&m, "No response (code {d})", .{code}) catch "No response");
     }
 }
 
 fn setSuwaMsg(msg: []const u8) void {
+    suwa_test_mutex.lock();
+    defer suwa_test_mutex.unlock();
+    suwa_message_generation +%= 1;
     const k = @min(msg.len, suwa_test_msg.len);
     @memcpy(suwa_test_msg[0..k], msg[0..k]);
     suwa_test_len = k;
+}
+
+fn publishSuwaResult(generation: u64, msg: []const u8) void {
+    suwa_test_mutex.lock();
+    defer suwa_test_mutex.unlock();
+    if (generation != suwa_message_generation) return;
+    const count = @min(msg.len, suwa_test_msg.len);
+    @memcpy(suwa_test_msg[0..count], msg[0..count]);
+    suwa_test_len = count;
 }
 
 fn renderSuwayomi() void {
@@ -1464,8 +1500,13 @@ fn renderSuwayomi() void {
             setSuwaMsg("Disconnected");
         }
     }
-    if (suwa_test_len > 0) {
-        _ = dvui.label(@src(), "{s}", .{suwa_test_msg[0..suwa_test_len]}, .{ .color_text = theme.colors.text_secondary, .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 } });
+    var test_message: [64]u8 = undefined;
+    suwa_test_mutex.lock();
+    const test_message_len = suwa_test_len;
+    @memcpy(test_message[0..test_message_len], suwa_test_msg[0..test_message_len]);
+    suwa_test_mutex.unlock();
+    if (test_message_len > 0) {
+        _ = dvui.label(@src(), "{s}", .{test_message[0..test_message_len]}, .{ .color_text = theme.colors.text_secondary, .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 } });
     }
 }
 
@@ -1966,4 +2007,56 @@ fn renderPluginCard(item: *PluginResult, idx: usize) void {
             row_start = row_end;
         }
     }
+}
+
+/// Owned localhost regression; no source installation or profile access.
+pub fn verifySuwaNonblockingForTest() !void {
+    if (!@import("builtin").is_test) @compileError("Test-only connection fixture");
+    const io = @import("../core/io_global.zig");
+    const workers = @import("../core/workers.zig");
+    workers.init();
+    defer workers.finishShutdown();
+    defer workers.beginShutdownAndDrain(800);
+    const address = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
+    var server = try address.listen(io.io(), .{ .reuse_address = true });
+    defer server.deinit(io.io());
+    var accepted: std.atomic.Value(bool) = .init(false);
+    var released: std.atomic.Value(bool) = .init(false);
+    const Fixture = struct {
+        fn run(listener: *std.Io.net.Server, seen: *std.atomic.Value(bool), release: *std.atomic.Value(bool)) void {
+            const stream = listener.accept(io.io()) catch return;
+            defer stream.close(io.io());
+            seen.store(true, .release);
+            const started = io.monotonicMilliTimestamp();
+            while (!release.load(.acquire) and io.monotonicMilliTimestamp() - started < 2000) io.sleep(std.time.ns_per_ms);
+            var buffer: [256]u8 = undefined;
+            var writer = stream.writer(io.io(), &buffer);
+            writer.interface.writeAll("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n[]") catch return;
+            writer.interface.flush() catch {};
+        }
+    };
+    var fixture = try io.io().concurrent(Fixture.run, .{ &server, &accepted, &released });
+    defer {
+        released.store(true, .release);
+        _ = fixture.cancel(io.io());
+    }
+    var job: SuwaTestJob = .{ .base = undefined, .len = 0 };
+    const base = try std.fmt.bufPrint(&job.base, "http://127.0.0.1:{d}", .{server.socket.address.getPort()});
+    job.len = base.len;
+    setSuwaMsg("Testing server…");
+    job.generation = suwa_message_generation;
+    suwa_test_busy.store(true, .release);
+    const started = io.monotonicMilliTimestamp();
+    submitSuwaTestJob(job);
+    try std.testing.expect(io.monotonicMilliTimestamp() - started < 500);
+    while (!accepted.load(.acquire) and io.monotonicMilliTimestamp() - started < 1500) io.sleep(std.time.ns_per_ms);
+    try std.testing.expect(accepted.load(.acquire));
+    try std.testing.expect(suwa_test_busy.load(.acquire));
+    setSuwaMsg("Disconnected"); // A delayed response must not overwrite newer UI state.
+    released.store(true, .release);
+    while (suwa_test_busy.load(.acquire) and io.monotonicMilliTimestamp() - started < 3000) io.sleep(std.time.ns_per_ms);
+    try std.testing.expect(!suwa_test_busy.load(.acquire));
+    suwa_test_mutex.lock();
+    defer suwa_test_mutex.unlock();
+    try std.testing.expectEqualStrings("Disconnected", suwa_test_msg[0..suwa_test_len]);
 }

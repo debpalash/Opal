@@ -33,13 +33,79 @@ pub fn setFixtureForTest(items: ?[]const library.Item, roots: ?[]const library.R
     }
 }
 
+const Snapshot = struct {
+    roots: [library.MAX_ROOTS]library.Root = undefined,
+    root_count: usize = 0,
+    items: [library.MAX_RESULTS]library.Item = undefined,
+    count: usize = 0,
+    key: layout.QueryKey = .{},
+};
+var snapshot_mutex: @import("../core/sync.zig").Mutex = .{};
+var snapshot: ?*Snapshot = null;
+var requested_key: layout.QueryKey = .{};
+var snapshot_busy = false;
+
+fn ensureSnapshot(query: []const u8) void {
+    const key = layout.QueryKey.init(query, duplicates_only, library.revision());
+    snapshot_mutex.lock();
+    defer snapshot_mutex.unlock();
+    requested_key = key;
+    if (snapshot_busy or (snapshot != null and snapshot.?.key.eql(key))) return;
+    if (@import("../core/workers.zig").isQuitting()) return;
+    snapshot_busy = true;
+    if (@import("../core/workers.zig").spawnLegacy(snapshotWorker, .{key})) |thread| {
+        @import("../core/workers.zig").release(thread);
+    } else |_| snapshot_busy = false;
+}
+
+fn snapshotWorker(key: layout.QueryKey) void {
+    const allocator = @import("../core/alloc.zig").allocator;
+    const next = allocator.create(Snapshot) catch {
+        snapshot_mutex.lock();
+        snapshot_busy = false;
+        snapshot_mutex.unlock();
+        state.wakeUi();
+        return;
+    };
+    next.* = .{ .key = key };
+    next.root_count = library.listRoots(&next.roots);
+    next.count = library.search(key.query[0..key.len], key.duplicates, &next.items);
+    snapshot_mutex.lock();
+    if (layout.acceptsSnapshot(requested_key, key, library.revision())) {
+        if (snapshot) |old| allocator.destroy(old);
+        snapshot = next;
+    } else allocator.destroy(next);
+    snapshot_busy = false;
+    snapshot_mutex.unlock();
+    state.wakeUi();
+}
+
+/// Called only after the owned-worker barrier.
+pub fn deinit() void {
+    snapshot_mutex.lock();
+    defer snapshot_mutex.unlock();
+    if (snapshot) |owned| @import("../core/alloc.zig").allocator.destroy(owned);
+    snapshot = null;
+}
+fn loadingSnapshot() bool {
+    snapshot_mutex.lock();
+    defer snapshot_mutex.unlock();
+    return snapshot_busy;
+}
+
 fn loadRoots(out: []library.Root) usize {
     if (@import("builtin").is_test) if (fixture_roots) |rows| {
         const count = @min(out.len, rows.len);
         @memcpy(out[0..count], rows[0..count]);
         return count;
     };
-    return library.listRoots(out);
+    ensureSnapshot(std.mem.sliceTo(&query_buf, 0));
+    snapshot_mutex.lock();
+    defer snapshot_mutex.unlock();
+    const cached = snapshot orelse return 0;
+    const count = @min(out.len, cached.root_count);
+    @memcpy(out[0..count], cached.roots[0..count]);
+    return count;
 }
 
 fn loadItems(query: []const u8, out: []library.Item) usize {
@@ -48,7 +114,14 @@ fn loadItems(query: []const u8, out: []library.Item) usize {
         @memcpy(out[0..count], rows[0..count]);
         return count;
     };
-    return library.search(query, duplicates_only, out);
+    ensureSnapshot(query);
+    snapshot_mutex.lock();
+    defer snapshot_mutex.unlock();
+    const cached = snapshot orelse return 0;
+    if (!cached.key.eql(requested_key)) return 0;
+    const count = @min(out.len, cached.count);
+    @memcpy(out[0..count], cached.items[0..count]);
+    return count;
 }
 
 var query_buf: [256]u8 = std.mem.zeroes([256]u8);
@@ -173,7 +246,7 @@ pub fn render() void {
         }
     }
     if (count == 0)
-        _ = dvui.labelNoFmt(@src(), layout.emptyHint(query.len, duplicates_only, root_count), .{}, .{
+        _ = dvui.labelNoFmt(@src(), if (loadingSnapshot()) "Loading indexed files…" else layout.emptyHint(query.len, duplicates_only, root_count), .{}, .{
             .expand = .horizontal,
             .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 },
             .color_text = theme.colors.text_tertiary,

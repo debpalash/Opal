@@ -428,3 +428,43 @@ test "end to end: lrclib response to active line" {
     const idx = activeLineAt(lines[0..n], 13_400).?;
     try std.testing.expectEqualStrings("Celebrate", lines[idx].slice());
 }
+
+/// LRCLIB fuzzy search is discovery, not identity. Never attach another song's lyrics.
+pub fn matchingSearchLyrics(root: std.json.Value, artist: []const u8, title: []const u8, duration: u32) ?[]const u8 {
+    if (root != .array) return null;
+    for (root.array.items) |row| {
+        if (row != .object) continue;
+        const a = row.object.get("artistName") orelse continue;
+        const t = row.object.get("trackName") orelse continue;
+        const lrc = row.object.get("syncedLyrics") orelse continue;
+        if (a != .string or t != .string or lrc != .string or lrc.string.len == 0) continue;
+        if (!std.ascii.eqlIgnoreCase(std.mem.trim(u8, a.string, " \t\r\n"), std.mem.trim(u8, artist, " \t\r\n")) or
+            !std.ascii.eqlIgnoreCase(std.mem.trim(u8, t.string, " \t\r\n"), std.mem.trim(u8, title, " \t\r\n"))) continue;
+        if (duration > 0) {
+            const d = row.object.get("duration") orelse continue;
+            const seconds: f64 = switch (d) {
+                .integer => @floatFromInt(d.integer),
+                .float => d.float,
+                else => continue,
+            };
+            if (!std.math.isFinite(seconds) or @abs(seconds - @as(f64, @floatFromInt(duration))) > 3) continue;
+        }
+        return lrc.string;
+    }
+    return null;
+}
+test "LRCLIB fuzzy fallback must not choose unrelated first synced lyrics" {
+    const json = "[{\"artistName\":\"Other\",\"trackName\":\"Song\",\"duration\":180,\"syncedLyrics\":\"[00:01]wrong\"},{\"artistName\":\"Artist\",\"trackName\":\"Song\",\"duration\":180,\"syncedLyrics\":\"[00:01]right\"}]";
+    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, json, .{});
+    defer parsed.deinit();
+    try std.testing.expectEqualStrings("[00:01]right", matchingSearchLyrics(parsed.value, " artist ", "song", 180).?);
+    try std.testing.expect(matchingSearchLyrics(parsed.value, "Artist", "Song live", 180) == null);
+    try std.testing.expect(matchingSearchLyrics(parsed.value, "Artist", "Song", 200) == null);
+}
+pub fn mayPublish(expected: u32, current: u32) bool {
+    return expected == current;
+}
+test "cleared lyric selection rejects stale worker publication" {
+    try std.testing.expect(!mayPublish(7, 8));
+    try std.testing.expect(mayPublish(8, 8));
+}

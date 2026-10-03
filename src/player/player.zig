@@ -310,7 +310,11 @@ pub fn flushPositionSavesForShutdown(timeout_ms: i64) void {
     }
 }
 
+var next_player_lifetime_id: std.atomic.Value(u64) = .init(1);
+
 pub const MediaPlayer = struct {
+    /// Distinguishes a queued action from a later allocation at the same address.
+    lifetime_id: u64 = 0,
     mpv_ctx: *c.mpv.mpv_handle,
     mpv_gl: ?*c.mpv.mpv_render_context,
     /// Front buffer: the last frame the render worker finished. Read by the
@@ -763,6 +767,7 @@ pub const MediaPlayer = struct {
 
     fn initPrepared(allocator: std.mem.Allocator, start_renderer: bool) !*MediaPlayer {
         const self = try allocator.create(MediaPlayer);
+        self.lifetime_id = next_player_lifetime_id.fetchAdd(1, .monotonic);
         self.texture = null;
         self.current_torrent_id = -1;
         self.torrent_is_ready = false;
@@ -1843,11 +1848,14 @@ pub const MediaPlayer = struct {
         // request. It neither depends on the local DB finishing its cold load
         // nor inherits "restore last session paused" semantics.
         if (self.provider_resume_position) |position| {
-            self.provider_resume_position = null;
-            self.resume_seeked = true;
             var command: [80]u8 = undefined;
             const seek = std.fmt.bufPrintZ(&command, "seek {d:.3} absolute", .{position}) catch return;
-            _ = c.mpv.mpv_command_string(self.mpv_ctx, seek.ptr);
+            // FILE_LOADED can precede seek readiness. Preserve the provider
+            // intent after rejection so the duration-ready tick can retry.
+            if (c.mpv.mpv_command_string(self.mpv_ctx, seek.ptr) >= 0) {
+                self.provider_resume_position = null;
+                self.resume_seeked = true;
+            }
             return;
         }
         // A media-first launch can beat the background DB/config load. Keep the
@@ -2341,6 +2349,7 @@ pub fn acquire(allocator: std.mem.Allocator) !*MediaPlayer {
     warm_player = null;
     warm_mutex.unlock();
     if (prepared) |p| {
+        p.lifetime_id = next_player_lifetime_id.fetchAdd(1, .monotonic);
         p.startPreparedRenderer(allocator) catch |err| {
             p.deinit(allocator);
             return err;

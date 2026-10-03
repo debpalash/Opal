@@ -423,7 +423,13 @@ fn hasKnownContentExtension(value: []const u8) bool {
 }
 
 /// Determine the correct pane provider for a given URL
+pub fn isPublicWebcomicRoute(url: []const u8) bool {
+    if (std.mem.startsWith(u8, url, "xkcd:")) return @import("webcomic_sources_pure.zig").numberFromPath(url["xkcd:".len..]) != null;
+    if (std.mem.startsWith(u8, url, "smbc:")) return @import("audio_sources_pure.zig").safeUrl(url["smbc:".len..]);
+    return false;
+}
 pub fn routeContent(url: []const u8) ContentRoute {
+    if (isPublicWebcomicRoute(url)) return .comic_viewer;
     // Torrents → the torrent engine. This MUST come before the domain-substring
     // loops below: a .torrent hosted on, say, a video domain would otherwise be
     // swallowed by the `indexOf(domain)` scan and handed to mpv. Magnets are here
@@ -703,4 +709,12 @@ test "routeContent is case-insensitive and covers common container/codec extensi
     try std.testing.expectEqual(ContentRoute.mpv, routeContent("/home/u/Music/song.opus"));
     try std.testing.expectEqual(ContentRoute.mpv, routeContent("/home/u/Music/song.mka"));
     try std.testing.expectEqual(ContentRoute.mpv, routeContent("/home/u/Music/song.wma"));
+}
+
+test "saved public webcomic identities route to reader before URL normalization" {
+    try std.testing.expectEqual(ContentRoute.comic_viewer, routeContent("xkcd:12"));
+    try std.testing.expectEqual(ContentRoute.comic_viewer, routeContent("smbc:https://www.smbc-comics.com/comic/specify"));
+    try std.testing.expect(!isPublicWebcomicRoute("xkcd:12?token=x"));
+    try std.testing.expect(!isPublicWebcomicRoute("smbc:javascript:alert(1)"));
+    try std.testing.expect(!isPublicWebcomicRoute("smbc:https://user:pass@host/comic/a"));
 }

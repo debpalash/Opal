@@ -33,6 +33,18 @@ fn boundedCurl(argv: []const []const u8, output: []u8, timeout_ms: i64) ?[]const
     return if (result.ok()) result.output else null;
 }
 
+fn boundedSearchCurl(argv: []const []const u8, output: []u8, timeout_ms: i64, generation: u32) ?[]const u8 {
+    const result = bounded_process.run(argv, output, .{
+        .timeout_ms = timeout_ms,
+        .terminate_grace_ms = 100,
+        .cancel_epoch = .{ .epoch32 = .{ .value = &search_request.generation, .expected = generation } },
+    });
+    return if (result.ok()) result.output else null;
+}
+fn searchEpoch(generation: u32) bounded_process.CancelEpoch {
+    return .{ .epoch32 = .{ .value = &search_request.generation, .expected = generation } };
+}
+
 // dvui texture ops MUST run on the UI thread (they touch current_window / the
 // frame texture-trash list). The Jikan parse WORKER threads overwrite results[]
 // and used to call dvui.textureDestroyLater directly on the old poster textures
@@ -257,17 +269,22 @@ pub fn loadMoreGrid() void {
     if (!more_available.load(.acquire) or grid_loading_more.load(.acquire) or state.app.anime.is_loading.load(.acquire)) return;
     if (state.app.anime.result_count == 0 or state.app.anime.result_count >= state.app.anime.results.len) return;
     if (grid_loading_more.swap(true, .acq_rel)) return;
-    workers.spawn(loadMoreGridWorker, .{ search_request.current(), state.app.anime.mode }) catch {
+    const job = gridJob(search_request.current(), state.app.anime.mode, grid_page + 1) orelse {
+        grid_loading_more.store(false, .release);
+        return;
+    };
+    workers.spawn(loadMoreGridWorker, .{job}) catch {
         grid_loading_more.store(false, .release);
     };
 }
 
-fn loadMoreGridWorker(my_gen: u32, mode: state.AnimeMode) void {
-    defer grid_loading_more.store(false, .release);
+fn loadMoreGridWorker(job: GridJob) void {
+    const my_gen = job.generation;
+    const mode = job.mode;
+    defer if (search_request.isCurrent(my_gen)) grid_loading_more.store(false, .release);
 
-    const next_page = grid_page + 1;
-    var url_buf: [512]u8 = undefined;
-    const url = buildGridUrl(&url_buf, mode, next_page) orelse return;
+    const next_page = job.page;
+    const url = job.url[0..job.url_len];
 
     const argv = [_][]const u8{ "curl", "-s", "--connect-timeout", "3", "-A", agent, "--max-time", "6", url };
 
@@ -275,7 +292,7 @@ fn loadMoreGridWorker(my_gen: u32, mode: state.AnimeMode) void {
     defer alloc.free(buf);
     var attempt: u8 = 0;
     while (attempt < 3) : (attempt += 1) {
-        const body = boundedCurl(&argv, buf, 8_000) orelse {
+        const body = boundedSearchCurl(&argv, buf, 8_000, my_gen) orelse {
             if (attempt < 2) @import("../core/io_global.zig").sleep((250 + @as(u64, attempt) * 350) * std.time.ns_per_ms);
             continue;
         };
@@ -290,14 +307,14 @@ fn loadMoreGridWorker(my_gen: u32, mode: state.AnimeMode) void {
         if (attempt < 2) @import("../core/io_global.zig").sleep((250 + @as(u64, attempt) * 350) * std.time.ns_per_ms);
     }
     if (mode == .trending and search_request.current() == my_gen) {
-        const kind: anilist_pure.BrowseKind = switch (trend_filter) {
+        const kind: anilist_pure.BrowseKind = switch (job.trend) {
             .airing => .airing,
             .top => .top,
             .bypopularity => .popular,
             .upcoming => .upcoming,
             .lists => return,
         };
-        const bytes = anilist.fetchBrowse(next_page, kind, state.app.nsfw_filter_enabled, buf);
+        const bytes = anilist.fetchBrowseWithCancellation(next_page, kind, job.sfw, buf, searchEpoch(my_gen));
         if (bytes > 0) {
             const added = appendAniListPage(buf[0..bytes], my_gen, state.app.anime.result_count);
             if (added > 0) {
@@ -466,8 +483,37 @@ fn seedTrendingFromCache() void {
     state.app.anime.result_count = i;
 }
 
+const GridJob = struct {
+    generation: u32,
+    page: u32,
+    mode: state.AnimeMode,
+    sfw: bool,
+    trend: TrendFilter,
+    url: [512]u8 = undefined,
+    url_len: usize = 0,
+    fallback: [256]u8 = undefined,
+    fallback_len: usize = 0,
+};
+fn gridJob(generation: u32, mode: state.AnimeMode, page: u32) ?GridJob {
+    var job = GridJob{ .generation = generation, .page = page, .mode = mode, .sfw = state.app.nsfw_filter_enabled, .trend = trend_filter };
+    const url = buildGridUrl(&job.url, mode, page) orelse return null;
+    job.url_len = url.len;
+    if (mode == .trending and trend_filter.jikan().len > 0) {
+        const fallback = std.fmt.bufPrint(&job.fallback, "https://api.jikan.moe/v4/top/anime?limit=25&page={d}{s}", .{ page, anime_pure.sfwSuffix(job.sfw) }) catch return null;
+        job.fallback_len = fallback.len;
+    }
+    return job;
+}
+fn beginCatalogRequest() u32 {
+    anime_parse_mutex.lock();
+    defer anime_parse_mutex.unlock();
+    const generation = search_request.begin(&state.app.anime.is_loading);
+    grid_loading_more.store(false, .release);
+    relations_request.cancel(&relations_busy);
+    return generation;
+}
+
 pub fn loadTrendingAnime() void {
-    if (state.app.anime.is_loading.load(.acquire)) return;
 
     // Don't clear result_count here — parseJikanData repopulates and sets the
     // count after the fetch, so a stale-refresh keeps old cards on screen.
@@ -481,7 +527,7 @@ pub fn loadTrendingAnime() void {
     has_loaded_trending = true;
     // Trending owns the global generation too, so a stale in-flight search
     // worker won't overwrite freshly-loaded trending cards.
-    const my_gen = search_request.begin(&state.app.anime.is_loading);
+    const my_gen = beginCatalogRequest();
 
     // The Lists chip swaps the source: same grid, same results[], different fetch.
     if (usesLists()) {
@@ -492,7 +538,11 @@ pub fn loadTrendingAnime() void {
         return;
     }
 
-    workers.spawn(trendingThread, .{my_gen}) catch {
+    const job = gridJob(my_gen, .trending, 1) orelse {
+        search_request.finish(my_gen, &state.app.anime.is_loading);
+        return;
+    };
+    workers.spawn(trendingThread, .{job}) catch {
         search_request.finish(my_gen, &state.app.anime.is_loading);
         return;
     };
@@ -624,7 +674,7 @@ fn listsThread(my_gen: u32) void {
     };
     defer alloc.free(buf);
     const argv = [_][]const u8{ "curl", "-sL", "-A", agent, "--max-time", "20", url };
-    const body = boundedCurl(&argv, buf, 22_000) orelse {
+    const body = boundedSearchCurl(&argv, buf, 22_000, my_gen) orelse {
         if (!have_cached) logs.pushLog("error", "anime", "Lists: bounded fetch failed", true);
         return;
     };
@@ -722,29 +772,23 @@ fn publishListsJson(json: []const u8, my_gen: u32) usize {
 /// seam drains stdout while curl runs, enforces the caller's output capacity,
 /// and terminates/reaps the whole tree if curl or an inheriting descendant
 /// wedges. This replaces the former predictable on-disk staging file.
-fn jikanGet(url: []const u8, buf: []u8) usize {
+fn jikanGet(url: []const u8, buf: []u8, my_gen: u32) usize {
     const argv = [_][]const u8{
         "curl", "-s", "--connect-timeout", "3", "--max-time", "10", "-A", agent, url,
     };
-    const body = boundedCurl(&argv, buf, 12_000) orelse return 0;
+    const body = boundedSearchCurl(&argv, buf, 12_000, my_gen) orelse return 0;
     return body.len;
 }
 
-fn trendingThread(my_gen: u32) void {
+fn trendingThread(job: GridJob) void {
+    const my_gen = job.generation;
     defer search_request.finish(my_gen, &state.app.anime.is_loading);
 
-    const jikan_api = "https://api.jikan.moe/v4/top/anime";
-    const fv = trend_filter.jikan();
-    var arg1_buf: [256]u8 = undefined;
-    const arg1 = (if (fv.len == 0)
-        std.fmt.bufPrint(&arg1_buf, "{s}?limit=25&page={d}{s}", .{ jikan_api, grid_page, anime_pure.sfwSuffix(state.app.nsfw_filter_enabled) })
-    else
-        std.fmt.bufPrint(&arg1_buf, "{s}?filter={s}&limit=25&page={d}{s}", .{ jikan_api, fv, grid_page, anime_pure.sfwSuffix(state.app.nsfw_filter_enabled) })) catch return;
-
+    const arg1 = job.url[0..job.url_len];
     const buf = alloc.alloc(u8, 256 * 1024) catch return;
     defer alloc.free(buf);
 
-    var bytes = jikanGet(arg1, buf);
+    var bytes = jikanGet(arg1, buf, my_gen);
     var added = if (bytes > 0) parseJikanData(buf[0..bytes], my_gen) else 0;
 
     // Jikan's /top/anime?filter=… frequently 504s ("failed to connect to
@@ -752,10 +796,9 @@ fn trendingThread(my_gen: u32) void {
     // left the DEFAULT (airing) trending view permanently blank. When a filtered
     // fetch yields nothing, fall back to the unfiltered top list so the grid is
     // never empty. Only fires when a filter was actually used and we're still current.
-    if (added == 0 and fv.len > 0 and search_request.current() == my_gen) {
-        var fb_buf: [256]u8 = undefined;
-        const fb = std.fmt.bufPrint(&fb_buf, "{s}?limit=25&page={d}{s}", .{ jikan_api, grid_page, anime_pure.sfwSuffix(state.app.nsfw_filter_enabled) }) catch return;
-        const fb_bytes = jikanGet(fb, buf);
+    if (added == 0 and job.fallback_len > 0 and search_request.current() == my_gen) {
+        const fb = job.fallback[0..job.fallback_len];
+        const fb_bytes = jikanGet(fb, buf, my_gen);
         if (fb_bytes > 0) {
             added = parseJikanData(buf[0..fb_bytes], my_gen);
             bytes = fb_bytes;
@@ -769,7 +812,7 @@ fn trendingThread(my_gen: u32) void {
         // SWR write: persist the fresh page-1 Trending grid so the next cold
         // start seeds instantly. Only the latest generation (still current)
         // persists — a superseded worker never poisons the cache.
-        if (grid_page == 1 and added > 0) putTrendingCache();
+        if (job.page == 1 and added > 0) putTrendingCache();
     }
     logs.pushLog("info", "anime", "Trending loaded (Jikan API)", false);
 }
@@ -791,7 +834,7 @@ pub fn searchAnime(query: []const u8) void {
     state.app.anime.episode_count = 0;
 
     // New generation for this search; the worker captures and re-checks it.
-    const my_gen = search_request.begin(&state.app.anime.is_loading);
+    const my_gen = beginCatalogRequest();
     grid_page = 1; // restart infinite-scroll pagination
     more_available.store(false, .release);
 
@@ -873,7 +916,7 @@ fn searchThread(job: SearchJob) void {
     const argv = [_][]const u8{
         "curl", "-s", "--connect-timeout", "3", "--max-time", "10", "-A", agent, url,
     };
-    if (boundedCurl(&argv, buf, 12_000)) |body| {
+    if (boundedSearchCurl(&argv, buf, 12_000, my_gen)) |body| {
         if (body.len > 0) {
             const added = parseJikanData(body, my_gen);
             if (added > 0) {
@@ -889,7 +932,7 @@ fn searchThread(job: SearchJob) void {
     // report success. AniList is independent and provides the same identifiers
     // needed by our existing Jikan episode path, so use it as a bounded fallback.
     if (search_request.current() != my_gen) return;
-    const bytes = anilist.fetchSearch(query, job.sfw, buf);
+    const bytes = anilist.fetchSearchWithCancellation(query, job.sfw, buf, searchEpoch(my_gen));
     if (bytes > 0 and publishAniListSearch(buf[0..bytes], my_gen) > 0) {
         more_available.store(false, .release);
         logs.pushLog("info", "anime", "Search done (AniList fallback)", false);
@@ -976,7 +1019,6 @@ fn appendAniListPage(json: []const u8, my_gen: u32, start_offset: usize) usize {
 /// Kick a seasonal fetch for the current season_sel / season_year. Reuses the
 /// shared results[]/generation machinery (parseJikanData publishes the cards).
 pub fn loadSeasonal() void {
-    if (state.app.anime.is_loading.load(.acquire)) return;
     state.app.anime.selected_idx = null;
     cancelPlayback();
     episode_request.cancel(&state.app.anime.episodes_loading);
@@ -984,32 +1026,28 @@ pub fn loadSeasonal() void {
     state.app.anime.last_fetch_s = @import("browse_cache.zig").now();
     grid_page = 1; // restart infinite-scroll pagination
     more_available.store(false, .release);
-    const my_gen = search_request.begin(&state.app.anime.is_loading);
+    const my_gen = beginCatalogRequest();
 
-    workers.spawn(seasonalThread, .{my_gen}) catch {
+    const job = gridJob(my_gen, .seasonal, 1) orelse {
+        search_request.finish(my_gen, &state.app.anime.is_loading);
+        return;
+    };
+    workers.spawn(seasonalThread, .{job}) catch {
         search_request.finish(my_gen, &state.app.anime.is_loading);
         return;
     };
 }
 
-fn seasonalThread(my_gen: u32) void {
+fn seasonalThread(job: GridJob) void {
+    const my_gen = job.generation;
     defer search_request.finish(my_gen, &state.app.anime.is_loading);
 
-    const sel = state.app.anime.season_sel;
-    const year = state.app.anime.season_year;
-
-    var url_buf: [256]u8 = undefined;
-    const url = switch (sel) {
-        .now => std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/seasons/now?limit=25&page={d}{s}", .{ grid_page, anime_pure.sfwSuffix(state.app.nsfw_filter_enabled) }),
-        .upcoming => std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/seasons/upcoming?limit=25&page={d}{s}", .{ grid_page, anime_pure.sfwSuffix(state.app.nsfw_filter_enabled) }),
-        else => std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/seasons/{d}/{s}?limit=25&page={d}{s}", .{ year, seasonStr(sel), grid_page, anime_pure.sfwSuffix(state.app.nsfw_filter_enabled) }),
-    } catch return;
-
+    const url = job.url[0..job.url_len];
     const argv = [_][]const u8{ "curl", "-s", "--connect-timeout", "3", "-A", agent, "--max-time", "10", url };
 
     const buf = alloc.alloc(u8, 256 * 1024) catch return;
     defer alloc.free(buf);
-    const body = boundedCurl(&argv, buf, 12_000) orelse return;
+    const body = boundedSearchCurl(&argv, buf, 12_000, my_gen) orelse return;
     if (body.len == 0) return;
     _ = parseJikanData(body, my_gen);
     if (search_request.current() == my_gen) more_available.store(parsePagination(body), .release);
@@ -1021,7 +1059,6 @@ fn seasonalThread(my_gen: u32) void {
 // ══════════════════════════════════════════════════════════
 
 pub fn loadCalendar() void {
-    if (state.app.anime.is_loading.load(.acquire)) return;
     state.app.anime.selected_idx = null;
     cancelPlayback();
     episode_request.cancel(&state.app.anime.episodes_loading);
@@ -1029,29 +1066,28 @@ pub fn loadCalendar() void {
     state.app.anime.last_fetch_s = @import("browse_cache.zig").now();
     grid_page = 1; // restart infinite-scroll pagination
     more_available.store(false, .release);
-    const my_gen = search_request.begin(&state.app.anime.is_loading);
+    const my_gen = beginCatalogRequest();
 
-    workers.spawn(calendarThread, .{my_gen}) catch {
+    const job = gridJob(my_gen, .calendar, 1) orelse {
+        search_request.finish(my_gen, &state.app.anime.is_loading);
+        return;
+    };
+    workers.spawn(calendarThread, .{job}) catch {
         search_request.finish(my_gen, &state.app.anime.is_loading);
         return;
     };
 }
 
-fn calendarThread(my_gen: u32) void {
+fn calendarThread(job: GridJob) void {
+    const my_gen = job.generation;
     defer search_request.finish(my_gen, &state.app.anime.is_loading);
 
-    const day = calDayStr(state.app.anime.cal_day);
-    var url_buf: [256]u8 = undefined;
-    const url = (if (day.len == 0)
-        std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/schedules?limit=25&page={d}{s}", .{ grid_page, anime_pure.sfwSuffix(state.app.nsfw_filter_enabled) })
-    else
-        std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/schedules?filter={s}&limit=25&page={d}{s}", .{ day, grid_page, anime_pure.sfwSuffix(state.app.nsfw_filter_enabled) })) catch return;
-
+    const url = job.url[0..job.url_len];
     const argv = [_][]const u8{ "curl", "-s", "--connect-timeout", "3", "-A", agent, "--max-time", "10", url };
 
     const buf = alloc.alloc(u8, 256 * 1024) catch return;
     defer alloc.free(buf);
-    const body = boundedCurl(&argv, buf, 12_000) orelse return;
+    const body = boundedSearchCurl(&argv, buf, 12_000, my_gen) orelse return;
     if (body.len == 0) return;
     // parseJikanData handles the cards; pass with_broadcast so it also extracts
     // each item's broadcast.string into anime.broadcast[] (aligned to index).
@@ -1490,7 +1526,7 @@ fn anilistEnrichThread(my_gen: u32) void {
     // 2) Network fetch OUTSIDE the lock (heap buffer — never a big worker stack).
     const buf = alloc.alloc(u8, 1024 * 1024) catch return;
     defer alloc.free(buf);
-    const bytes = anilist.fetchMetaByMalIds(csv_buf[0..csv_len], sfw, buf);
+    const bytes = anilist.fetchMetaByMalIdsWithCancellation(csv_buf[0..csv_len], sfw, buf, searchEpoch(my_gen));
     if (bytes == 0) return;
 
     // 3) Merge under the lock, re-checking the generation.
@@ -1712,49 +1748,62 @@ fn fetchEpisodeCountFallback(job: EpisodeJob, buf: []u8) void {
 // Relations rail (/anime/{mal_id}/relations) — Sequel/Prequel/Side Story/…
 // ══════════════════════════════════════════════════════════
 
-var relations_busy: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+var relations_busy: std.atomic.Value(bool) = .init(false);
+var relations_request: LatestRequest = .{};
+var relations_pending_mutex: @import("../core/sync.zig").Mutex = .{};
+var relations_pending: [16]state.AnimeRelation = undefined;
+var relations_pending_count: usize = 0;
+var relations_pending_generation: u32 = 0;
+var relations_pending_ready = false;
+const RelationsJob = struct { mal: [16]u8 = undefined, mal_len: usize, generation: u32 };
 
 pub fn loadRelations(idx: usize) void {
-    if (idx >= state.app.anime.result_count) return;
-    if (relations_busy.swap(true, .acq_rel)) return; // already in flight
+    const row = resultRow(idx) orelse return;
+    if (row.id_len == 0) return;
     state.app.anime.relations_loading = true;
     state.app.anime.relation_count = 0;
-
-    const S = struct {
-        var mal_id_buf: [16]u8 = undefined;
-        var mal_id_len: usize = 0;
-
-        fn worker() void {
-            defer {
-                state.app.anime.relations_loading = false;
-                relations_busy.store(false, .release);
-            }
-            const mal_id = @This().mal_id_buf[0..@This().mal_id_len];
-            if (mal_id.len == 0) return;
-
-            var url_buf: [128]u8 = undefined;
-            const url = std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/anime/{s}/relations", .{mal_id}) catch return;
-
-            const argv = [_][]const u8{ "curl", "-s", "-A", agent, "--max-time", "10", url };
-            const buf = @import("../core/alloc.zig").allocator.alloc(u8, 128 * 1024) catch {
-                return;
-            };
-            defer @import("../core/alloc.zig").allocator.free(buf);
-            const body = boundedCurl(&argv, buf, 12_000) orelse return;
-            if (body.len < 10) return;
-            parseRelations(body);
-        }
-    };
-
-    const mal = state.app.anime.results[idx].id[0..state.app.anime.results[idx].id_len];
-    const n = @min(mal.len, S.mal_id_buf.len);
-    @memcpy(S.mal_id_buf[0..n], mal[0..n]);
-    S.mal_id_len = n;
-
-    workers.spawn(S.worker, .{}) catch {
+    var job = RelationsJob{ .mal_len = @min(row.id_len, 16), .generation = relations_request.begin(&relations_busy) };
+    @memcpy(job.mal[0..job.mal_len], row.id[0..job.mal_len]);
+    workers.spawn(relationsWorker, .{job}) catch {
+        relations_request.finish(job.generation, &relations_busy);
         state.app.anime.relations_loading = false;
-        relations_busy.store(false, .release);
     };
+}
+fn relationsWorker(job: RelationsJob) void {
+    defer {
+        relations_request.finish(job.generation, &relations_busy);
+        state.wakeUi();
+    }
+    var url_buf: [128]u8 = undefined;
+    const url = std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/anime/{s}/relations", .{job.mal[0..job.mal_len]}) catch return;
+    const argv = [_][]const u8{ "curl", "-s", "--connect-timeout", "3", "-A", agent, "--max-time", "10", url };
+    const buf = alloc.alloc(u8, 128 * 1024) catch return;
+    defer alloc.free(buf);
+    const fetched = bounded_process.run(&argv, buf, .{
+        .timeout_ms = 12_000,
+        .terminate_grace_ms = 100,
+        .cancel_epoch = .{ .epoch32 = .{ .value = &relations_request.generation, .expected = job.generation } },
+    });
+    if (!fetched.ok() or !relations_request.isCurrent(job.generation)) return;
+    var records: [16]state.AnimeRelation = @splat(.{});
+    const count = parseRelations(fetched.output, &records);
+    relations_pending_mutex.lock();
+    defer relations_pending_mutex.unlock();
+    if (!relations_request.isCurrent(job.generation)) return;
+    relations_pending = records;
+    relations_pending_count = count;
+    relations_pending_generation = job.generation;
+    relations_pending_ready = true;
+}
+fn applyPendingRelations() void {
+    relations_pending_mutex.lock();
+    defer relations_pending_mutex.unlock();
+    state.app.anime.relations_loading = relations_busy.load(.acquire);
+    if (!relations_pending_ready) return;
+    relations_pending_ready = false;
+    if (!relations_request.isCurrent(relations_pending_generation)) return;
+    @memcpy(state.app.anime.relations[0..relations_pending_count], relations_pending[0..relations_pending_count]);
+    state.app.anime.relation_count = relations_pending_count;
 }
 
 /// Relation types worth surfacing in the rail (skip Character/Adaptation/Summary).
@@ -1768,11 +1817,11 @@ fn relationKept(rel: []const u8) bool {
 
 /// Parse /anime/{id}/relations → data[] of {relation, entry:[{mal_id,type,name}]}.
 /// Fills state.app.anime.relations[] with kept (meaningful) anime-type entries.
-fn parseRelations(json: []const u8) void {
+fn parseRelations(json: []const u8, out: []state.AnimeRelation) usize {
     var count: usize = 0;
     var pos: usize = 0;
 
-    while (pos < json.len and count < state.app.anime.relations.len) {
+    while (pos < json.len and count < out.len) {
         // Each data element starts with "relation":"<type>".
         const rel_idx = std.mem.indexOf(u8, json[pos..], "\"relation\":\"") orelse break;
         const rel_start = pos + rel_idx + 12;
@@ -1794,7 +1843,7 @@ fn parseRelations(json: []const u8) void {
         // Walk each entry object in this relation's entry[] array. We accept
         // only type:"anime" entries (skip manga/light-novel relations).
         var epos: usize = 0;
-        while (epos < scope.len and count < state.app.anime.relations.len) {
+        while (epos < scope.len and count < out.len) {
             const eid = std.mem.indexOf(u8, scope[epos..], "\"mal_id\":") orelse break;
             const num_st = epos + eid + 9;
             var ne = num_st;
@@ -1834,7 +1883,7 @@ fn parseRelations(json: []const u8) void {
             }
             if (name_str.len == 0) continue;
 
-            var r = &state.app.anime.relations[count];
+            var r = &out[count];
             const idl = @min(id_str.len, r.mal_id.len);
             @memcpy(r.mal_id[0..idl], id_str[0..idl]);
             r.mal_id_len = idl;
@@ -1846,7 +1895,7 @@ fn parseRelations(json: []const u8) void {
         }
     }
 
-    state.app.anime.relation_count = count;
+    return count;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1864,7 +1913,7 @@ pub fn jumpToAnime(mal_id: []const u8) void {
     episode_request.cancel(&state.app.anime.episodes_loading);
     state.app.anime.episode_count = 0;
     // New generation so any in-flight grid fetch can't clobber results[0].
-    const my_gen = search_request.begin(&state.app.anime.is_loading);
+    const my_gen = beginCatalogRequest();
     grid_page = 1; // single-anime view has no further pages
     more_available.store(false, .release);
 
@@ -2328,7 +2377,7 @@ pub fn loadScraperPopular() void {
     cancelPlayback();
     episode_request.cancel(&state.app.anime.episodes_loading);
     state.app.anime.episode_count = 0;
-    const my_gen = search_request.begin(&state.app.anime.is_loading);
+    const my_gen = beginCatalogRequest();
     grid_page = 1;
     more_available.store(false, .release);
     anime_query_mutex.lock();
@@ -2742,10 +2791,22 @@ fn retryScraperEpisodesWhenDue(idx: usize) void {
     }
 }
 
+var native_loading_fixture = false;
+pub fn setLoadingFixtureForTest(enabled: bool) void {
+    if (!@import("builtin").is_test) @compileError("Browse loading fixture is test-only");
+    native_loading_fixture = enabled;
+    state.app.anime.is_loading.store(enabled, .release);
+    state.app.anime.result_count = 0;
+    state.app.anime.selected_idx = null;
+    fetched_mode = state.app.anime.mode;
+    fetched_nsfw_filter = state.app.nsfw_filter_enabled;
+}
+
 pub fn renderContent() void {
     // Free any poster textures queued by parse worker threads (UI-thread only).
     drainPendingTexFrees();
     applyPendingEpisodes();
+    applyPendingRelations();
     applyPendingPlayback();
     syncNsfwFilter();
 
@@ -2757,7 +2818,9 @@ pub fn renderContent() void {
     // "Airing this week" is a VIEW, not a browse mode: it has its own fetch
     // (AniList airingSchedules) and content path, so it bypasses the grid-mode
     // dispatch entirely.
-    if (state.app.anime.sched_view) {
+    if (@import("builtin").is_test and native_loading_fixture) {
+        // Actual renderer fixture without provider I/O or disk cache access.
+    } else if (state.app.anime.sched_view) {
         anime_schedule.loadSchedule();
     } else if (state.app.anime.selected_idx == null) {
         // SWR seed: paint the last Trending grid from disk NOW (empty grid only)
@@ -2787,18 +2850,8 @@ pub fn renderContent() void {
         return;
     }
 
-    // Only show the spinner on an INITIAL load (nothing to show yet). During a
-    // live-search / stale refresh the current cards stay on screen — seamless.
-    if (state.app.anime.is_loading.load(.acquire) and state.app.anime.result_count == 0 and
-        state.app.anime.selected_idx == null)
-    {
-        _ = dvui.label(@src(), "Loading...", .{}, .{
-            .color_text = theme.colors.accent,
-            .gravity_x = 0.5,
-            .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 },
-        });
-        return;
-    }
+    // The real poster grid renders initial-load skeletons; useful refresh
+    // results remain visible instead of taking a full-page loading branch.
 
     // Episode list (if anime selected)
     if (state.app.anime.selected_idx) |sel_idx| {
@@ -3306,18 +3359,16 @@ fn renderScheduleView() void {
 /// also keeps its SWR auto-refresh; the other modes only refetch when their
 /// sub-selector (season/day/filter) changes or on an explicit mode switch.
 fn dispatchModeFetch() void {
-    if (state.app.anime.is_loading.load(.acquire)) {
-        // Don't stack fetches; record intent so we re-dispatch once it lands.
-        return;
-    }
-
+    // Selector changes supersede in-flight work. Only unchanged automatic
+    // trending refreshes are coalesced; epochs stop the previous transport.
+    const busy = state.app.anime.is_loading.load(.acquire);
     const m = state.app.anime.mode;
     switch (m) {
         .trending => {
             // Initial load + SWR background refresh (trending only).
             const stale = state.app.anime.result_count == 0 or
                 @import("browse_cache.zig").isStale(state.app.anime.last_fetch_s);
-            if (fetched_mode != .trending or stale) {
+            if (fetched_mode != .trending or (stale and !busy)) {
                 fetched_mode = .trending;
                 loadTrendingAnime();
             }
@@ -4731,4 +4782,51 @@ test "Anime provider errors preserve the existing browse catalog" {
     try std.testing.expectEqual(@as(usize, 7), a.result_count);
     try std.testing.expectEqual(@as(usize, 0), publishAniListSearch("{\"data\":null,\"errors\":[{\"message\":\"temporarily unavailable\"}]}", generation));
     try std.testing.expectEqual(@as(usize, 7), a.result_count);
+}
+
+test "Browse regression anime request URL snapshots survive selector changes" {
+    const a = &state.app.anime;
+    const saved_sel = a.season_sel;
+    const saved_year = a.season_year;
+    const saved_sfw = state.app.nsfw_filter_enabled;
+    defer {
+        a.season_sel = saved_sel;
+        a.season_year = saved_year;
+        state.app.nsfw_filter_enabled = saved_sfw;
+    }
+    a.season_sel = .winter;
+    a.season_year = 2023;
+    state.app.nsfw_filter_enabled = true;
+    const job = gridJob(7, .seasonal, 2).?;
+    a.season_sel = .spring;
+    a.season_year = 2026;
+    state.app.nsfw_filter_enabled = false;
+    try std.testing.expectEqualStrings("https://api.jikan.moe/v4/seasons/2023/winter?limit=25&page=2&sfw=true", job.url[0..job.url_len]);
+    try std.testing.expectEqual(@as(u32, 7), job.generation);
+    try std.testing.expect(job.sfw);
+}
+
+test "Browse regression anime relation parser publishes owned records only" {
+    const saved_count = state.app.anime.relation_count;
+    defer state.app.anime.relation_count = saved_count;
+    state.app.anime.relation_count = 7;
+    var rows: [16]state.AnimeRelation = @splat(.{});
+    const count = parseRelations("{\"data\":[{\"relation\":\"Sequel\",\"entry\":[{\"mal_id\":2,\"type\":\"anime\",\"name\":\"Next work\"}]}]}", &rows);
+    try std.testing.expectEqual(@as(usize, 1), count);
+    try std.testing.expectEqualStrings("2", rows[0].mal_id[0..rows[0].mal_id_len]);
+    try std.testing.expectEqualStrings("Next work", rows[0].name[0..rows[0].name_len]);
+    try std.testing.expectEqual(@as(usize, 7), state.app.anime.relation_count);
+}
+
+test "Browse regression anime superseding request is admitted while busy" {
+    const saved_loading = state.app.anime.is_loading.load(.acquire);
+    defer state.app.anime.is_loading.store(saved_loading, .release);
+    const first = beginCatalogRequest();
+    try std.testing.expect(state.app.anime.is_loading.load(.acquire));
+    const next = beginCatalogRequest();
+    try std.testing.expect(next != first);
+    search_request.finish(first, &state.app.anime.is_loading);
+    try std.testing.expect(state.app.anime.is_loading.load(.acquire));
+    search_request.finish(next, &state.app.anime.is_loading);
+    try std.testing.expect(!state.app.anime.is_loading.load(.acquire));
 }

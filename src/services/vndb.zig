@@ -150,6 +150,7 @@ pub fn loadPopularOnce() void {
     more_available = true;
 
     const my_gen = search_request.begin(&state.app.vndb.is_loading);
+    loading_more.store(false, .release);
     parse_mutex.lock();
     current_is_popular = true;
     query_len = 0; // empty query → popular body
@@ -182,6 +183,7 @@ pub fn searchVndb(query: []const u8) void {
     more_available = true;
 
     const my_gen = search_request.begin(&state.app.vndb.is_loading);
+    loading_more.store(false, .release);
 
     // Keep the query for pagination and hand this worker an immutable copy.
     const n = @min(query.len, query_buf.len);
@@ -239,7 +241,7 @@ fn fetchWorker(job: SearchJob) void {
 }
 
 fn loadMoreWorker(job: SearchJob, page: u32) void {
-    defer loading_more.store(false, .release);
+    defer if (search_request.isCurrent(job.generation)) loading_more.store(false, .release);
     fetchPage(job, page, true);
 }
 
@@ -266,7 +268,7 @@ fn fetchPage(job: SearchJob, page: u32, append: bool) void {
     // Be a polite API citizen (VNDB asks for reasonable rates).
     rate_limit.acquire("vndb", 1.0);
 
-    const resp = curlPost(API_URL, body, 512 * 1024) orelse {
+    const resp = curlPost(API_URL, body, 512 * 1024, .{ .epoch32 = .{ .value = &search_request.generation, .expected = my_gen } }) orelse {
         if (!append and search_request.isCurrent(my_gen)) state.app.vndb.fetch_error = true;
         return;
     };
@@ -353,7 +355,7 @@ pub fn openCatalogIdentity(id: []const u8) void {
             var request_buf: [640]u8 = undefined;
             const request = std.fmt.bufPrint(&request_buf, "{{\"filters\":[\"id\",\"=\",\"{s}\"],\"fields\":\"{s}\",\"results\":1}}", .{ job.id[0..job.id_len], pure.FIELDS }) catch return;
             rate_limit.acquire("vndb", 1.0);
-            const response = curlPost(API_URL, request, 128 * 1024);
+            const response = curlPost(API_URL, request, 128 * 1024, .{ .epoch32 = .{ .value = &identity_request.generation, .expected = job.generation } });
             defer if (response) |body| alloc.free(body);
             var records: [1]pure.Vn = .{.{}};
             const count = if (response) |body| pure.parseVns(body, &records) else 0;
@@ -402,7 +404,7 @@ fn searchTorrents(idx: usize) void {
 /// bytes. Returns the filled slice (caller frees) or null on failure/empty. Large
 /// buffers stay off the worker stack (macOS 512KB limit). curl-only — std.http
 /// SEGVs on some ISP TLS resets (see comics.zig).
-fn curlPost(url: []const u8, body: []const u8, cap: usize) ?[]u8 {
+fn curlPost(url: []const u8, body: []const u8, cap: usize, cancel_epoch: ?@import("../core/bounded_process.zig").CancelEpoch) ?[]u8 {
     const argv = [_][]const u8{
         "curl", "-fsSL",                          "--connect-timeout", "3",   "--max-time", "10",
         "-H",   "Content-Type: application/json", "-A",                agent, "--data",     body,
@@ -410,7 +412,7 @@ fn curlPost(url: []const u8, body: []const u8, cap: usize) ?[]u8 {
     };
     const buf = alloc.alloc(u8, cap) catch return null;
     defer alloc.free(buf);
-    const result = @import("../core/bounded_process.zig").run(&argv, buf, .{ .timeout_ms = 11_000 });
+    const result = @import("../core/bounded_process.zig").run(&argv, buf, .{ .timeout_ms = 11_000, .cancel_epoch = cancel_epoch });
     if (!result.ok() or result.output.len == 0) return null;
     // Reject HTTP/error documents and malformed schemas before latching an
     // empty successful catalog. Valid empty result arrays remain successful.
@@ -441,6 +443,15 @@ pub fn freeCovers() void {
 // ══════════════════════════════════════════════════════════
 // UI (Browse › Visual Novels)
 // ══════════════════════════════════════════════════════════
+
+pub fn setLoadingFixtureForTest(enabled: bool) void {
+    if (!@import("builtin").is_test) @compileError("Browse loading fixture is test-only");
+    state.app.vndb.is_loading.store(enabled, .release);
+    state.app.vndb.result_count = 0;
+    state.app.vndb.selected_idx = null;
+    popular_fetched.store(enabled, .release);
+    identity_active = false;
+}
 
 pub fn renderContent() void {
     var pageroot = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });

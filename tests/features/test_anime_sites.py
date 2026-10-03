@@ -12,14 +12,18 @@ def test_anime_process_containment():
     anime = _src("src/services/anime.zig")
     search = _between(anime, "fn searchThread", "// ═════════════════════════")
     curl_sites = anime.count('"curl"')
-    bounded_sites = anime.count("boundedCurl(") - 1  # exclude helper definition
+    bounded_sites = (anime.count("boundedCurl(") - 1
+                     + anime.count("boundedSearchCurl(") - 1
+                     + anime.count("bounded_process.run(&argv, buf,"))  # dedicated relation epoch
     checks = {
         "typed bounded seam imported": '@import("../core/bounded_process.zig")' in anime,
         "bounded seam owns lifecycle": "bounded_process.run(argv, output" in anime,
         "no raw Child lifecycle remains": "Child.init" not in anime,
         "every curl site is bounded": curl_sites > 0 and bounded_sites == curl_sites,
         "Jikan search has both deadlines": '"--connect-timeout"' in search
-            and '"--max-time"' in search and "boundedCurl(" in search,
+            and '"--max-time"' in search and "boundedSearchCurl(" in search
+            and "my_gen" in search
+            and "search_request.generation" in anime,
         "predictable Jikan temp file removed": "jikan_{d}.json" not in anime
             and "tmp_seq" not in anime and '"-o", path' not in anime,
     }

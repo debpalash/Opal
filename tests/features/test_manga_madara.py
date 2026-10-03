@@ -58,7 +58,7 @@ def test_manga_madara_engine():
         problems.append("Source.madara not present in the Source enum")
     if "fetchMadaraPage" not in comics or "parseMadaraResults" not in comics:
         problems.append("comics.zig missing Madara search fetch/parse fns")
-    if "sourceActive(.madara)" not in comics:
+    if not all(token in comics for token in ("sourceActive(src)", "Source.madara", ".madara => fetchMadaraPage(q, wave.page, gen, 0)", "runComicWave(gen, 1)", "runComicWave(gen, next_page)")):
         problems.append("searchWorker has no sourceActive(.madara) branch")
 
     # 5) source_config-gated: inert without a base (exactly like readallcomics).

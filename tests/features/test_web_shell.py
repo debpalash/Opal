@@ -16,7 +16,7 @@ def test_web_remote_module_boundaries():
     remote = _src("src/services/remote.zig")
     web_modules = (
         "core.js", "now-playing.js", "search.js", "catalog.js", "playback.js",
-        "integrations.js", "access.js", "source-management.js", "media.js", "source-details.js", "discovery.js", "boot.js",
+        "integrations.js", "access.js", "source-management.js", "browse-loading.js", "media.js", "source-details.js", "discovery.js", "boot.js",
     )
     backend_modules = (
         "remote_http.zig", "remote_static.zig", "remote_status.zig",

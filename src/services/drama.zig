@@ -72,6 +72,21 @@ const TMDB_PAGE_SIZE: usize = 20;
 // Fetch (TMDB discover/search → drama_pure.parseDiscover → pending)
 // ══════════════════════════════════════════════════════════
 
+const CatalogJob = struct { generation: u32, page: u32, key: [256]u8 = undefined, key_len: usize };
+var catalog_failed: std.atomic.Value(bool) = .init(false);
+fn catalogJob(generation: u32, page: u32) CatalogJob {
+    var job = CatalogJob{ .generation = generation, .page = page, .key_len = @min(state.app.tmdb.api_key_len, 256) };
+    @memcpy(job.key[0..job.key_len], state.app.tmdb.api_key[0..job.key_len]);
+    return job;
+}
+fn failCatalog(generation: u32) void {
+    pending_mutex.lock();
+    defer pending_mutex.unlock();
+    if (!fetch_request.isCurrent(generation)) return;
+    catalog_failed.store(true, .release);
+    state.wakeUi();
+}
+
 pub fn loadCatalog() void {
     if (state.app.tmdb.api_key_len == 0) return; // reuses the TMDB key (see tmdb.zig)
     if (state.app.drama.is_loading.load(.acquire)) return;
@@ -82,9 +97,15 @@ pub fn loadCatalog() void {
     // more_available once page 1 lands.
     current_page = 1;
     more_available.store(true, .release);
+    pending_mutex.lock();
     const my_gen = fetch_request.begin(&state.app.drama.is_loading);
+    pending_ready = false;
+    catalog_failed.store(false, .release);
+    loading_more.store(false, .release);
+    pending_mutex.unlock();
+    const job = catalogJob(my_gen, 1);
 
-    if (@import("../core/workers.zig").spawnLegacy(fetchWorker, .{my_gen})) |t| {
+    if (@import("../core/workers.zig").spawnLegacy(fetchWorker, .{job})) |t| {
         @import("../core/workers.zig").release(t); // never joined — detach to avoid leaking the handle
     } else |_| {
         fetch_request.finish(my_gen, &state.app.drama.is_loading);
@@ -109,27 +130,31 @@ pub fn loadMore() void {
     if (loading_more.swap(true, .acq_rel)) return; // lost the race — another append in flight
     const my_gen = fetch_request.current(); // stay within the current generation
     const next = current_page + 1;
-    if (@import("../core/workers.zig").spawnLegacy(loadMoreWorker, .{ my_gen, next })) |t| {
+    const job = catalogJob(my_gen, next);
+    catalog_failed.store(false, .release);
+    if (@import("../core/workers.zig").spawnLegacy(loadMoreWorker, .{job})) |t| {
         @import("../core/workers.zig").release(t);
     } else |_| {
         loading_more.store(false, .release);
     }
 }
 
-fn fetchWorker(my_gen: u32) void {
-    defer fetch_request.finish(my_gen, &state.app.drama.is_loading);
-    fetchPage(my_gen, 1, false);
+fn fetchWorker(job: CatalogJob) void {
+    defer fetch_request.finish(job.generation, &state.app.drama.is_loading);
+    fetchPage(job, false);
 }
 
-fn loadMoreWorker(my_gen: u32, page: u32) void {
-    defer loading_more.store(false, .release);
-    fetchPage(my_gen, page, true);
+fn loadMoreWorker(job: CatalogJob) void {
+    defer if (fetch_request.isCurrent(job.generation)) loading_more.store(false, .release);
+    fetchPage(job, true);
 }
 
 /// Fetch one TMDB discover page and stage it into `pending` for the UI thread.
 /// `append` decides whether applyPending() merges onto the grid or replaces it.
-fn fetchPage(my_gen: u32, page: u32, append: bool) void {
-    const key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
+fn fetchPage(job: CatalogJob, append: bool) void {
+    const my_gen = job.generation;
+    const page = job.page;
+    const key = job.key[0..job.key_len];
 
     var path_buf: [256]u8 = undefined;
     const path = drama_pure.discoverPath(page, &path_buf) orelse return;
@@ -138,7 +163,11 @@ fn fetchPage(my_gen: u32, page: u32, append: bool) void {
     const buf = alloc.alloc(u8, 256 * 1024) catch return;
     defer alloc.free(buf);
 
-    const bytes = @import("tmdb_api.zig").tmdbApiInto(path, key, buf);
+    const bytes = @import("tmdb_api.zig").tmdbApiIntoExpected(path, key, buf, .{ .epoch32 = .{ .value = &fetch_request.generation, .expected = my_gen } });
+    if (bytes == 0 or !drama_pure.catalogDocumentUsable(buf[0..bytes])) {
+        failCatalog(my_gen);
+        return; // Keep useful old rows on refresh failure, not an empty publication.
+    }
 
     // Parse into a local staging array (heap) before publishing.
     const items = alloc.alloc(drama_pure.Item, pending.len) catch return;
@@ -364,6 +393,14 @@ pub fn playUrlDirect(url: []const u8) void {
 // UI
 // ══════════════════════════════════════════════════════════
 
+pub fn setLoadingFixtureForTest(enabled: bool) void {
+    if (!@import("builtin").is_test) @compileError("Browse loading fixture is test-only");
+    state.app.drama.is_loading.store(enabled, .release);
+    state.app.drama.result_count = 0;
+    state.app.drama.selected_idx = null;
+    state.app.drama.loaded_once = true;
+}
+
 pub fn renderContent() void {
     applyPending(); // drain worker-staged results (UI thread)
 
@@ -386,6 +423,10 @@ pub fn renderContent() void {
         return;
     }
 
+    if (state.app.drama.result_count == 0 and catalog_failed.load(.acquire)) {
+        if (components.emptyStateCta(icons.tvg.lucide.clapperboard, "Drama catalog unavailable", "Check the TMDB key and connection, then retry.", "Retry")) loadCatalog();
+        return;
+    }
     if (state.app.drama.result_count == 0 and !state.app.drama.is_loading.load(.acquire)) {
         components.emptyState(icons.tvg.lucide.clapperboard, "Nothing here yet", "Check back later.");
         return;
@@ -394,6 +435,12 @@ pub fn renderContent() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
     defer scroll.deinit();
 
+    if (catalog_failed.load(.acquire)) {
+        _ = dvui.label(@src(), "Refresh unavailable — showing saved results", .{}, .{ .color_text = theme.colors.text_secondary });
+        if (components.actionButton(@src(), "Retry", .secondary, 48090)) {
+            if (state.app.drama.result_count > 0 and more_available.load(.acquire)) loadMore() else loadCatalog();
+        }
+    }
     const count = @min(state.app.drama.result_count, state.app.drama.results.len);
     const rect_w = scroll.data().rect.w;
     const avail_w: f32 = @max(CARD_W + 8, (if (rect_w > 1) rect_w else 900) - 2 * theme.spacing.md);
@@ -446,7 +493,7 @@ pub fn renderContent() void {
         const max_y = scroll.si.scrollMax(.vertical);
         const near_bottom = max_y > 0 and scroll.si.viewport.y >= max_y - 800;
         const underfilled = max_y <= 0 and state.app.drama.result_count > 0;
-        if ((near_bottom or underfilled) and !loading and !state.app.drama.is_loading.load(.acquire)) {
+        if ((near_bottom or underfilled) and !loading and !catalog_failed.load(.acquire) and !state.app.drama.is_loading.load(.acquire)) {
             loadMore();
         }
         if (loading or underfilled) {

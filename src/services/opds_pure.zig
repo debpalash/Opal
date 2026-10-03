@@ -1030,3 +1030,74 @@ test "namespaced OPDS metadata and pagination preserve actual document query pat
     try std.testing.expect(!sameOrigin("https://books.example/catalog", "https://other.example/search"));
     try std.testing.expect(!sameOrigin("https://user:pass@books.example", "https://user:pass@books.example/search"));
 }
+
+/// Exact configured publisher catalog, never title-based catalog detection.
+pub fn isGutenbergCatalogRoot(url: []const u8) bool {
+    for ([_][]const u8{ "https://www.gutenberg.org", "http://www.gutenberg.org", "https://gutenberg.org", "http://gutenberg.org" }) |origin| {
+        if (std.mem.startsWith(u8, url, origin) and std.mem.eql(u8, url[origin.len..], "/ebooks.opds/")) return true;
+    }
+    return false;
+}
+pub fn gutenbergWorkId(url: []const u8) ?[]const u8 {
+    for ([_][]const u8{ "https://www.gutenberg.org/ebooks/", "http://www.gutenberg.org/ebooks/", "https://gutenberg.org/ebooks/", "http://gutenberg.org/ebooks/" }) |prefix| {
+        if (!std.mem.startsWith(u8, url, prefix) or !std.mem.endsWith(u8, url, ".opds")) continue;
+        const id = url[prefix.len .. url.len - 5];
+        if (id.len == 0 or id.len > 10) return null;
+        for (id) |ch| if (ch < '0' or ch > '9') return null;
+        if ((std.fmt.parseInt(u32, id, 10) catch return null) == 0) return null;
+        return id;
+    }
+    return null;
+}
+pub fn gutenbergSections(xml: []const u8, root: []const u8, out: []OpdsEntry) usize {
+    if (!isGutenbergCatalogRoot(root)) return 0;
+    var entries: [8]OpdsEntry = undefined;
+    const count = parseFeed(xml, root, &entries);
+    var used: usize = 0;
+    for (entries[0..count]) |entry| {
+        if (used == @min(out.len, 3)) break;
+        if (!entry.is_navigation or !sameOrigin(root, entry.hrefSlice())) continue;
+        const url = entry.hrefSlice();
+        const at = std.mem.indexOf(u8, url, "/ebooks/search.opds/?sort_order=") orelse continue;
+        const sort = url[at + "/ebooks/search.opds/?sort_order=".len ..];
+        if (!std.mem.eql(u8, sort, "downloads") and !std.mem.eql(u8, sort, "release_date") and !std.mem.eql(u8, sort, "random")) continue;
+        out[used] = entry;
+        used += 1;
+    }
+    return used;
+}
+pub fn mergeGutenbergWorks(out: []OpdsEntry, initial: usize, incoming: []const OpdsEntry) usize {
+    var count = @min(initial, out.len);
+    rows: for (incoming) |entry| {
+        const id = gutenbergWorkId(entry.hrefSlice()) orelse continue;
+        for (out[0..count]) |old| {
+            const old_id = gutenbergWorkId(old.hrefSlice()) orelse continue;
+            if (std.mem.eql(u8, id, old_id)) continue :rows;
+        }
+        if (count == out.len) break;
+        out[count] = entry;
+        count += 1;
+    }
+    return count;
+}
+test "Gutenberg discovery selects advertised sections not unrelated folders" {
+    const xml = "<feed><title>Project Gutenberg</title><entry><title>Popular</title><link rel='subsection' href='/ebooks/search.opds/?sort_order=downloads'/></entry><entry><title>Latest</title><link rel='subsection' href='/ebooks/search.opds/?sort_order=release_date'/></entry><entry><title>Random</title><link rel='subsection' href='/ebooks/search.opds/?sort_order=random'/></entry></feed>";
+    var out: [3]OpdsEntry = undefined;
+    try std.testing.expectEqual(@as(usize, 3), gutenbergSections(xml, "https://www.gutenberg.org/ebooks.opds/", &out));
+    try std.testing.expectEqual(@as(usize, 0), gutenbergSections(xml, "https://other.test/ebooks.opds/", &out));
+    try std.testing.expect(!isGutenbergCatalogRoot("https://www.gutenberg.org.evil.test/ebooks.opds/"));
+    try std.testing.expect(!isGutenbergCatalogRoot("https://user@www.gutenberg.org/ebooks.opds/"));
+}
+test "Gutenberg discovery merges exact works and rejects foreign or malformed reader IDs" {
+    var out: [3]OpdsEntry = undefined;
+    var one: OpdsEntry = .{};
+    const href = "https://www.gutenberg.org/ebooks/84.opds";
+    @memcpy(one.href[0..href.len], href);
+    one.href_len = href.len;
+    try std.testing.expectEqual(@as(usize, 1), mergeGutenbergWorks(&out, 0, &.{one}));
+    try std.testing.expectEqual(@as(usize, 1), mergeGutenbergWorks(&out, 1, &.{one}));
+    try std.testing.expectEqualStrings("84", gutenbergWorkId(href).?);
+    try std.testing.expect(gutenbergWorkId("https://bad.test/ebooks/84.opds") == null);
+    try std.testing.expect(gutenbergWorkId("https://www.gutenberg.org/ebooks/84.opds?token=x") == null);
+    try std.testing.expect(gutenbergWorkId("https://www.gutenberg.org/ebooks/0.opds") == null);
+}

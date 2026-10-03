@@ -1175,29 +1175,50 @@ fn sendNavigate(url: []const u8) void {
 /// only emits magnet links in response to `layout=def_wlinks`, so an unblocked
 /// GET returns the rows with none of the links.
 pub fn fetchHtmlPostBlocking(url: []const u8, body: []const u8, out_buf: []u8) ?[]const u8 {
-    return scrapeCommand(url, body, out_buf);
+    return scrapeCommand(url, body, out_buf, null);
 }
 
 pub fn fetchHtmlBlocking(url: []const u8, out_buf: []u8) ?[]const u8 {
-    return scrapeCommand(url, null, out_buf);
+    return scrapeCommand(url, null, out_buf, null);
 }
 
-fn scrapeCommand(url: []const u8, post_body: ?[]const u8, out_buf: []u8) ?[]const u8 {
-    if (url.len == 0 or url.len >= 2048) return null;
+/// Cancellable admission/startup; issued scrapes drain their untagged response
+/// before releasing the dedicated page so it cannot satisfy a newer request.
+pub fn fetchHtmlWithCancellation(url: []const u8, body: ?[]const u8, out_buf: []u8, epoch: ?@import("../core/bounded_process.zig").CancelEpoch) ?[]const u8 {
+    return scrapeCommand(url, body, out_buf, epoch);
+}
+fn scrapeCancelled(epoch: ?@import("../core/bounded_process.zig").CancelEpoch) bool {
+    if (@import("../core/workers.zig").isQuitting()) return true;
+    const token = epoch orelse return false;
+    return switch (token) {
+        .epoch32 => |e| e.value.load(.acquire) != e.expected,
+        .epoch64 => |e| e.value.load(.acquire) != e.expected,
+    };
+}
+fn scrapeCommand(url: []const u8, post_body: ?[]const u8, out_buf: []u8, cancel_epoch: ?@import("../core/bounded_process.zig").CancelEpoch) ?[]const u8 {
+    if (url.len == 0 or url.len >= 2048 or scrapeCancelled(cancel_epoch)) return null;
 
     // Bring the bridge up if needed and wait (bounded ~20s) for it to be ready.
     if (!bridge_ready.load(.acquire)) {
         ensureBridge();
         var w: usize = 0;
         while (w < 200 and !bridge_ready.load(.acquire)) : (w += 1) {
+            if (scrapeCancelled(cancel_epoch)) return null;
             io_g.sleep(100 * std.time.ns_per_ms);
         }
         if (!bridge_ready.load(.acquire)) return null;
     }
 
     // Serialize scrape requests — a single dedicated scrape page on the bridge.
-    scrape_req_mutex.lock();
+    if (cancel_epoch != null) {
+        var admission_polls: usize = 0;
+        while (!scrape_req_mutex.tryLock()) : (admission_polls += 1) {
+            if (scrapeCancelled(cancel_epoch) or admission_polls >= 450) return null;
+            io_g.sleep(100 * std.time.ns_per_ms);
+        }
+    } else scrape_req_mutex.lock();
     defer scrape_req_mutex.unlock();
+    if (scrapeCancelled(cancel_epoch)) return null;
 
     scrape_ready.store(false, .release);
     scrape_lock.lock();
@@ -1223,7 +1244,7 @@ fn scrapeCommand(url: []const u8, post_body: ?[]const u8, out_buf: []u8) ?[]cons
         if (scrape_ready.load(.acquire)) break;
         io_g.sleep(100 * std.time.ns_per_ms);
     }
-    if (!scrape_ready.load(.acquire)) return null;
+    if (!scrape_ready.load(.acquire) or scrapeCancelled(cancel_epoch)) return null;
 
     scrape_lock.lock();
     defer scrape_lock.unlock();
@@ -2502,6 +2523,7 @@ const DeferredPlayback = struct {
     user_agent: FixedPlaybackField(512) = .{},
     header_fields: FixedPlaybackField(2048) = .{},
     health_kind: FixedPlaybackField(64) = .{},
+    metadata: ?state.PendingPlay = null,
     mode: player.LoadMode = .replace,
     origin: player.PlaybackOrigin = .direct,
     queue_item_id: i64 = -1,
@@ -2554,13 +2576,21 @@ const DeferredPlayback = struct {
     }
 };
 
+threadlocal var owned_direct_metadata: ?state.PendingPlay = null;
 var deferred_playback: DeferredPlayback = .{};
 var deferred_playback_pending: bool = false;
 var deferred_playback_mutex: @import("../core/sync.zig").Mutex = .{};
 
 fn deferPlayback(request: PlaybackRequest) bool {
-    const owned = DeferredPlayback.init(request) orelse return false;
+    const metadata = if (request.mode == .replace) owned_direct_metadata orelse state.takePendingPlay() else null;
+    if (request.mode == .replace) owned_direct_metadata = null;
+    var owned = DeferredPlayback.init(request) orelse return false;
+    owned.metadata = metadata;
     deferred_playback_mutex.lock();
+    if (@import("../core/workers.zig").isQuitting()) {
+        deferred_playback_mutex.unlock();
+        return false;
+    }
     deferred_playback = owned;
     deferred_playback_pending = true;
     deferred_playback_mutex.unlock();
@@ -2568,23 +2598,41 @@ fn deferPlayback(request: PlaybackRequest) bool {
     return true;
 }
 
-/// UI-frame pump for a first click that arrived during libmpv preparation.
-/// The request is handed off once and never makes the render thread wait.
-pub fn drainDeferredPlayback() void {
-    if (!state.app.player_prewarm_ready.load(.acquire) or player.warmPlayerPreparing()) return;
+pub fn clearDeferredPlayback() void {
     deferred_playback_mutex.lock();
-    if (!deferred_playback_pending) {
-        deferred_playback_mutex.unlock();
-        return;
-    }
-    const owned = deferred_playback;
+    defer deferred_playback_mutex.unlock();
+    deferred_playback = .{};
     deferred_playback_pending = false;
-    deferred_playback_mutex.unlock();
+}
+fn popDeferredPlayback() ?DeferredPlayback {
+    deferred_playback_mutex.lock();
+    defer deferred_playback_mutex.unlock();
+    if (!deferred_playback_pending) return null;
+    const owned = deferred_playback;
+    deferred_playback = .{};
+    deferred_playback_pending = false;
+    return owned;
+}
+pub fn popDeferredPlaybackForTest() ?DeferredPlayback {
+    if (!@import("builtin").is_test) @compileError("Offline fixture only");
+    return popDeferredPlayback();
+}
+/// Owner-loop pump: copied provider context survives worker return and prewarm.
+pub fn drainDeferredPlayback() void {
+    state.drainPendingPlay();
+    if (!state.app.player_prewarm_ready.load(.acquire) or player.warmPlayerPreparing()) return;
+    const owned = popDeferredPlayback() orelse return;
+    owned_direct_metadata = owned.metadata;
+    defer owned_direct_metadata = null;
     playDirect(owned.playbackRequest());
 }
 
 pub fn playDirect(request: PlaybackRequest) void {
     if (request.url.len == 0) return;
+    if (!state.onPlayOwnerThread()) {
+        if (!deferPlayback(request)) state.showToast("Could not queue playback request");
+        return;
+    }
     // Start the end-to-end clock at the shared in-app Play seam. Previously
     // MediaPlayer.load armed it only after player acquisition, so a cold click
     // deferred behind configuration/libmpv preparation looked artificially
@@ -2613,8 +2661,18 @@ pub fn playDirect(request: PlaybackRequest) void {
     p.provider = .mpv;
 
     if (request.mode == .replace) {
-        stashFromNowPlaying(request.art_url, request.title, request.subtitle);
-        state.consumePendingPlay(p);
+        var metadata = owned_direct_metadata orelse state.takePendingPlay();
+        owned_direct_metadata = null;
+        if (metadata.title_len == 0 and metadata.art_len == 0) {
+            metadata.title_len = @min(request.title.len, metadata.title.len);
+            @memcpy(metadata.title[0..metadata.title_len], request.title[0..metadata.title_len]);
+            metadata.art_len = @min(request.art_url.len, metadata.art.len);
+            @memcpy(metadata.art[0..metadata.art_len], request.art_url[0..metadata.art_len]);
+            metadata.extra_len = @min(request.subtitle.len, metadata.extra.len);
+            @memcpy(metadata.extra[0..metadata.extra_len], request.subtitle[0..metadata.extra_len]);
+            metadata.kind = @import("../ui/loading_pure.zig").MediaKind.other.toInt();
+        }
+        state.applyPendingPlay(p, metadata);
     }
 
     const link_health = @import("link_health.zig");
@@ -2669,7 +2727,7 @@ pub fn loadContentDirectMeta(url: []const u8, art_url: []const u8, title: []cons
 /// two dozen call sites. A caller that DID stash (music, TMDB) wins: its stash
 /// carries a kind, a year and a score this cannot know.
 fn stashFromNowPlaying(art_url: []const u8, title: []const u8, subtitle: []const u8) void {
-    if (state.app.pending_play_title_len > 0 or state.app.pending_play_art_len > 0) return;
+    if (state.hasPendingPlay()) return;
     if (art_url.len == 0 and title.len == 0) return;
     state.stashPendingPlayFull(title, art_url, "", .other, "", 0, subtitle);
 }
@@ -2690,6 +2748,11 @@ pub fn loadContentDirectMetaHeaders(
 
 /// Load content with automatic provider routing
 pub fn loadContent(url: []const u8) void {
+    if (@import("browser_pure.zig").isPublicWebcomicRoute(url)) {
+        @import("comics.zig").loadComic(url);
+        state.navigateToTab(.Comics);
+        return;
+    }
     if (std.mem.startsWith(u8, url, "opal://music/")) {
         _ = @import("music_subsonic.zig").playUniversalRoute(url, "Music", "");
         return;

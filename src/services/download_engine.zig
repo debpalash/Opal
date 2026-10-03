@@ -8,12 +8,16 @@
 //!     `Range: bytes=0-0` GET (more reliable than HEAD, and it yields the ETag
 //!     and total in one round-trip), plans segments via
 //!     download_pure.planSegments, preallocates `<dest>.opal-part`, spawns one
-//!     worker per segment, then monitors: stall detection (no bytes for 30s →
-//!     kick the segment to reconnect), 1Hz sidecar persistence, rolling speed
+//!     worker per segment, then monitors completion, 1Hz sidecar persistence,
+//!     rolling speed
 //!     window. On success the part file is renamed to the real name and the
 //!     sidecar removed.
 //!   - SEGMENT workers issue `Range` GETs (plus `If-Range` when an ETag is
-//!     known) and write at their own offsets with positional writes. Retries
+//!     known) and write at their own offsets with positional writes. Owned Io
+//!     tasks bound opening/blocked reads to 30s, excluding throttle/file waits;
+//!     progressive streams have no total-duration cap. Probes allow 20s.
+//!     Pause/cancel/shutdown interrupt and join the request, including DNS/TLS.
+//!     Retries
 //!     use download_pure.backoffMs (3 attempts, 1s/4s/15s); any received byte
 //!     resets the attempt counter.
 //!   - Pause/cancel bump a per-slot run token that every worker loop checks;
@@ -470,6 +474,14 @@ pub fn snapshot(out: *[MAX_DOWNLOADS]Snap) usize {
     return n;
 }
 
+/// Fixture-only observation of actual coordinator ownership, not UI visibility.
+pub fn coordinatorBusyForTest(idx: usize) bool {
+    if (!@import("builtin").is_test) @compileError("fixture-only download observation");
+    mu.lock();
+    defer mu.unlock();
+    return idx < MAX_DOWNLOADS and slots[idx].coordinator_busy;
+}
+
 pub fn activeAndQueued() struct { active: usize, queued: usize, rate: u64 } {
     mu.lock();
     defer mu.unlock();
@@ -544,9 +556,58 @@ const ProbeResult = struct {
     etag_len: usize = 0,
 };
 
-/// Probe with `Range: bytes=0-0`: a 206 proves range support AND carries the
-/// full size in Content-Range; a 200 means no ranges (Content-Length = size).
-fn probe(url: []const u8) ?ProbeResult {
+// Request and connection remain exclusively owned by the joined Io task.
+const StreamGuard = struct {
+    mutex: sync.Mutex = .{},
+    socket: ?std.Io.net.Stream = null,
+    expired: bool = false,
+    stage_ms: std.atomic.Value(i64) = .init(0),
+    done: std.atomic.Value(bool) = .init(false),
+
+    fn attach(self: *StreamGuard, stream: std.Io.net.Stream) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        self.socket = stream;
+        if (self.expired) stream.shutdown(io_global.io(), .both) catch {};
+    }
+    fn expire(self: *StreamGuard) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        self.expired = true;
+        if (self.socket) |stream| stream.shutdown(io_global.io(), .both) catch {};
+    }
+    fn release(self: *StreamGuard, req: *std.http.Client.Request) void {
+        self.mutex.lock();
+        // Never drain a partial probe, canceled stream or early range exit.
+        if (req.connection) |connection| {
+            if (self.expired or req.reader.state != .ready) connection.closing = true;
+        }
+        self.socket = null;
+        self.mutex.unlock();
+        req.deinit();
+    }
+};
+
+/// Range headers determine shape; the unread body is closed rather than drained.
+/// Ignore old soft_stop here: successful reprobe repairs a failed/resumed job.
+fn probe(d: *Download, token: u32) ?ProbeResult {
+    var guard: StreamGuard = .{};
+    const deadline = io_global.monotonicMilliTimestamp() + 20_000;
+    const task_io = @import("../core/http_transport.zig").nativeIo(io_global.io());
+    var task = task_io.concurrent(probeOwned, .{ d.urlSlice(), &guard }) catch return null;
+    while (!guard.done.load(.acquire)) {
+        if (!alive(d, token) or io_global.monotonicMilliTimestamp() >= deadline) {
+            guard.expire();
+            _ = task.cancel(task_io);
+            return null;
+        }
+        io_global.sleep(5 * std.time.ns_per_ms);
+    }
+    return task.await(task_io);
+}
+
+fn probeOwned(url: []const u8, guard: *StreamGuard) ?ProbeResult {
+    defer guard.done.store(true, .release);
     var client = @import("../core/http.zig").newClient();
     defer client.deinit();
 
@@ -558,13 +619,15 @@ fn probe(url: []const u8) ?ProbeResult {
     };
     var req = client.request(.GET, uri, .{
         .redirect_behavior = @enumFromInt(5),
+        .headers = .{ .accept_encoding = .{ .override = "identity" } },
         .extra_headers = &headers,
     }) catch return null;
-    defer req.deinit();
+    defer guard.release(&req);
     req.sendBodiless() catch return null;
 
     var redirect_buf: [16 * 1024]u8 = undefined;
     const response = req.receiveHead(&redirect_buf) catch return null;
+    if (response.head.content_encoding != .identity) return null;
 
     var out = ProbeResult{};
     switch (response.head.status) {
@@ -601,7 +664,7 @@ fn probe(url: []const u8) ?ProbeResult {
 // ══════════════════════════════════════════════════════════
 
 fn alive(d: *Download, token: u32) bool {
-    return d.run_token.load(.acquire) == token;
+    return d.run_token.load(.acquire) == token and !@import("../core/workers.zig").isQuitting();
 }
 
 /// Workers additionally wind down when the coordinator soft-stops the download
@@ -647,7 +710,7 @@ fn coordinate(idx: usize, token: u32) void {
     defer finishCoordinator(idx);
 
     // ── Probe (unless a restored sidecar already told us the shape) ──
-    const pr = probe(d.urlSlice());
+    const pr = probe(d, token);
     if (pr == null) {
         if (!alive(d, token)) {
             return;
@@ -692,6 +755,9 @@ fn coordinate(idx: usize, token: u32) void {
     for (&d.seg_failed) |*a| a.store(false, .release);
     for (&d.seg_kick) |*a| a.store(false, .release);
     d.content_changed.store(false, .release);
+    // The previous attempt's siblings are joined before reprobe. Repair/resume
+    // owns a fresh wave; do not carry its terminal soft-stop into new workers.
+    d.soft_stop.store(false, .release);
     d.speed.reset();
     const now0 = io_global.milliTimestamp();
     for (0..d.seg_count) |i| d.seg_last_ms[i].store(now0, .release);
@@ -747,12 +813,8 @@ fn coordinate(idx: usize, token: u32) void {
             }
             if (!finished) {
                 all_done = false;
-                // Stall: no bytes for STALL_MS → kick the worker to reconnect.
-                const last = d.seg_last_ms[si].load(.acquire);
-                if (now - last > dp.STALL_MS and !d.seg_kick[si].load(.acquire)) {
-                    d.seg_kick[si].store(true, .release);
-                    logf("warn", false, "Segment {d} stalled — reconnecting ({s})", .{ si, d.nameSlice() });
-                }
+                // The attempt supervisor measures blocked network operations,
+                // excluding deliberate token-bucket waits and file writes.
             }
         }
         // Unknown-size single stream: worker signals completion via seg_failed
@@ -876,126 +938,158 @@ fn segmentWorker(idx: usize, token: u32, si: usize) void {
     var client = @import("../core/http.zig").newClient();
     defer client.deinit();
 
-    const seg = d.segs[si];
-    const ranged = d.ranges_ok and d.total > 0;
     var attempts: u32 = 0;
-
-    attempt_loop: while (workerAlive(d, token)) {
-        const done0 = d.done[si].load(.acquire);
-        if (seg.len > 0 and done0 >= seg.len) return; // segment complete
-
-        // ── Connect ──
-        const uri = std.Uri.parse(d.urlSlice()) catch {
+    while (workerAlive(d, token)) {
+        const before = d.done[si].load(.acquire);
+        if (d.segs[si].len > 0 and before >= d.segs[si].len) return;
+        var guard: StreamGuard = .{};
+        guard.stage_ms.store(io_global.monotonicMilliTimestamp(), .release);
+        var task = client.io.concurrent(segmentAttempt, .{ d, token, si, &client, file, buf, &guard }) catch {
             d.seg_failed[si].store(true, .release);
             return;
         };
-        var range_buf: [96]u8 = undefined;
-        var headers_buf: [4]std.http.Header = undefined;
-        var hn: usize = 0;
-        headers_buf[hn] = .{ .name = "User-Agent", .value = UA };
-        hn += 1;
-        headers_buf[hn] = .{ .name = "Accept", .value = "*/*" };
-        hn += 1;
-        if (ranged) {
-            const range_start = seg.offset + done0;
-            const range_end = seg.offset + seg.len - 1;
-            headers_buf[hn] = .{
-                .name = "Range",
-                .value = std.fmt.bufPrint(&range_buf, "bytes={d}-{d}", .{ range_start, range_end }) catch unreachable,
-            };
-            hn += 1;
-            if (d.etag_len > 0) {
-                headers_buf[hn] = .{ .name = "If-Range", .value = d.etag[0..d.etag_len] };
-                hn += 1;
+        var expired = false;
+        while (!guard.done.load(.acquire)) {
+            const stage = guard.stage_ms.load(.acquire);
+            if (!workerAlive(d, token) or (stage != 0 and io_global.monotonicMilliTimestamp() - stage >= dp.STALL_MS)) {
+                guard.expire();
+                _ = task.cancel(client.io); // cancels AND joins borrowed request state
+                expired = true;
+                break;
             }
+            io_global.sleep(5 * std.time.ns_per_ms);
         }
-
-        var req = client.request(.GET, uri, .{
-            .redirect_behavior = @enumFromInt(5),
-            .extra_headers = headers_buf[0..hn],
-        }) catch {
-            if (!retryWait(d, token, si, &attempts)) return;
-            continue :attempt_loop;
-        };
-        defer req.deinit();
-        req.sendBodiless() catch {
-            if (!retryWait(d, token, si, &attempts)) return;
-            continue :attempt_loop;
-        };
-        var redirect_buf: [16 * 1024]u8 = undefined;
-        var response = req.receiveHead(&redirect_buf) catch {
-            if (!retryWait(d, token, si, &attempts)) return;
-            continue :attempt_loop;
-        };
-
-        const status = response.head.status;
-        if (ranged and status == .ok) {
-            // Server answered a Range request with the FULL body: either
-            // If-Range said the content changed, or ranges silently broke.
-            d.content_changed.store(true, .release);
-            return;
-        }
-        if (status != .ok and status != .partial_content) {
-            if (!retryWait(d, token, si, &attempts)) return;
-            continue :attempt_loop;
-        }
-
-        // ── Stream body → positional writes at our own offset ──
-        var transfer_buf: [16 * 1024]u8 = undefined;
-        const reader = response.reader(&transfer_buf);
-        d.seg_kick[si].store(false, .release);
-
-        while (workerAlive(d, token)) {
-            const done = d.done[si].load(.acquire);
-            const remaining: u64 = if (seg.len > 0) seg.len - done else BUF_LEN;
-            if (seg.len > 0 and remaining == 0) return;
-            if (d.seg_kick[si].load(.acquire)) {
-                // Stalled — drop this connection and reconnect immediately.
-                d.seg_kick[si].store(false, .release);
-                continue :attempt_loop;
-            }
-
-            // Global speed limit: ask the shared bucket for a quota first.
-            var want: usize = @intCast(@min(remaining, BUF_LEN));
-            const granted = takeTokens(want);
-            if (granted == 0) {
-                io_global.sleep(25 * std.time.ns_per_ms);
-                continue;
-            }
-            want = @intCast(@min(granted, want));
-
-            const n = reader.readSliceShort(buf[0..want]) catch {
-                if (!retryWait(d, token, si, &attempts)) return;
-                continue :attempt_loop;
-            };
-            if (n == 0) {
-                // EOF.
-                if (seg.len == 0) {
-                    // Unknown-size single stream finished: stamp the final size
-                    // so the coordinator knows we are done.
-                    mu.lock();
-                    if (d.run_token.load(.acquire) == token) {
-                        d.segs[si].len = @max(done, 1);
-                        d.total = done;
-                    }
-                    mu.unlock();
-                    return;
-                }
-                // Short body — server closed early; retry the remainder.
-                if (!retryWait(d, token, si, &attempts)) return;
-                continue :attempt_loop;
-            }
-
-            file.writePositionalAll(io_global.io(), buf[0..n], seg.offset + done) catch {
-                d.seg_failed[si].store(true, .release);
-                return;
-            };
-            d.done[si].store(done + n, .release);
-            d.seg_last_ms[si].store(io_global.milliTimestamp(), .release);
-            attempts = 0; // progress resets the retry budget
-        }
-        return; // token moved — pause/cancel
+        const result: AttemptResult = if (expired) .retry else task.await(client.io);
+        if (!workerAlive(d, token)) return;
+        if (result != .retry) return;
+        if (d.done[si].load(.acquire) > before) attempts = 0;
+        if (!retryWait(d, token, si, &attempts)) return;
     }
+}
+
+const AttemptResult = enum { complete, retry, fatal, stopped };
+fn segmentAttempt(d: *Download, token: u32, si: usize, client: *std.http.Client, file: std.Io.File, buf: []u8, guard: *StreamGuard) AttemptResult {
+    defer guard.done.store(true, .release);
+    const seg = d.segs[si];
+    const ranged = d.ranges_ok and d.total > 0;
+    const done0 = d.done[si].load(.acquire);
+    // ── Connect ──
+    const uri = std.Uri.parse(d.urlSlice()) catch {
+        d.seg_failed[si].store(true, .release);
+        return .fatal;
+    };
+    var range_buf: [96]u8 = undefined;
+    var headers_buf: [4]std.http.Header = undefined;
+    var hn: usize = 0;
+    headers_buf[hn] = .{ .name = "User-Agent", .value = UA };
+    hn += 1;
+    headers_buf[hn] = .{ .name = "Accept", .value = "*/*" };
+    hn += 1;
+    if (ranged) {
+        const range_start = seg.offset + done0;
+        const range_end = seg.offset + seg.len - 1;
+        headers_buf[hn] = .{
+            .name = "Range",
+            .value = std.fmt.bufPrint(&range_buf, "bytes={d}-{d}", .{ range_start, range_end }) catch unreachable,
+        };
+        hn += 1;
+        if (d.etag_len > 0) {
+            headers_buf[hn] = .{ .name = "If-Range", .value = d.etag[0..d.etag_len] };
+            hn += 1;
+        }
+    }
+
+    var req = client.request(.GET, uri, .{
+        .redirect_behavior = @enumFromInt(5),
+        .headers = .{ .accept_encoding = .{ .override = "identity" } },
+        .extra_headers = headers_buf[0..hn],
+    }) catch {
+        return .retry;
+    };
+    defer guard.release(&req);
+    req.sendBodiless() catch {
+        return .retry;
+    };
+    var redirect_buf: [16 * 1024]u8 = undefined;
+    var response = req.receiveHead(&redirect_buf) catch {
+        return .retry;
+    };
+
+    if (response.head.content_encoding != .identity) {
+        d.seg_failed[si].store(true, .release);
+        return .fatal;
+    }
+    const status = response.head.status;
+    if (ranged and status == .ok) {
+        // Server answered a Range request with the FULL body: either
+        // If-Range said the content changed, or ranges silently broke.
+        d.content_changed.store(true, .release);
+        return .fatal;
+    }
+    if (status != .ok and status != .partial_content) {
+        return .retry;
+    }
+
+    if (req.connection) |connection| guard.attach(connection.stream_reader.stream);
+    guard.stage_ms.store(0, .release);
+    // ── Stream body → positional writes at our own offset ──
+    var transfer_buf: [16 * 1024]u8 = undefined;
+    const reader = response.reader(&transfer_buf);
+    d.seg_kick[si].store(false, .release);
+
+    while (workerAlive(d, token)) {
+        const done = d.done[si].load(.acquire);
+        const remaining: u64 = if (seg.len > 0) seg.len - done else BUF_LEN;
+        if (seg.len > 0 and remaining == 0) return .complete;
+        if (d.seg_kick[si].load(.acquire)) {
+            // Stalled — drop this connection and reconnect immediately.
+            d.seg_kick[si].store(false, .release);
+            return .retry;
+        }
+
+        // Global speed limit: ask the shared bucket for a quota first.
+        var want: usize = @intCast(@min(remaining, BUF_LEN));
+        const granted = takeTokens(want);
+        if (granted == 0) {
+            io_global.sleep(25 * std.time.ns_per_ms);
+            continue;
+        }
+        want = @intCast(@min(granted, want));
+
+        guard.stage_ms.store(io_global.monotonicMilliTimestamp(), .release);
+        // A single stream operation publishes trickling progress immediately.
+        // readSliceShort waits to fill; readVec may return zero after buffering.
+        var writer = std.Io.Writer.fixed(buf[0..want]);
+        const n = reader.stream(&writer, .limited(want)) catch |err| switch (err) {
+            error.EndOfStream => 0,
+            else => return .retry,
+        };
+        guard.stage_ms.store(0, .release);
+        if (n == 0) {
+            // EOF.
+            if (seg.len == 0) {
+                // Unknown-size single stream finished: stamp the final size
+                // so the coordinator knows we are done.
+                mu.lock();
+                if (d.run_token.load(.acquire) == token) {
+                    d.segs[si].len = @max(done, 1);
+                    d.total = done;
+                }
+                mu.unlock();
+                return .complete;
+            }
+            // Short body — server closed early; retry the remainder.
+            return .retry;
+        }
+
+        file.writePositionalAll(io_global.io(), buf[0..n], seg.offset + done) catch {
+            d.seg_failed[si].store(true, .release);
+            return .fatal;
+        };
+        d.done[si].store(done + n, .release);
+        d.seg_last_ms[si].store(io_global.milliTimestamp(), .release);
+    }
+    return .stopped;
 }
 
 /// Sleep out the backoff for this attempt (checking for pause/cancel every
