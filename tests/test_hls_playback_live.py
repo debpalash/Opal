@@ -33,6 +33,7 @@ class HlsPlaybackLiveTest(unittest.TestCase):
         if ffmpeg is None: self.skipTest('ffmpeg is required to generate the local HLS fixture')
         self.opal=live.IsolatedOpal(self); self.addCleanup(self.opal.stop)
         media=self.opal.root/'generated-hls'; media.mkdir()
+        self.media=media; self.ffmpeg=ffmpeg
         subprocess.run([ffmpeg,'-v','error','-f','lavfi','-i','testsrc2=size=320x180:rate=24','-f','lavfi','-i','anullsrc=r=48000:cl=stereo','-t','16','-c:v','libx264','-preset','ultrafast','-g','48','-c:a','aac','-f','hls','-hls_time','2','-hls_list_size','0','-hls_segment_filename',str(media/'segment-%03d.ts'),str(media/'fixture.m3u8')],check=True,timeout=30)
         HlsFiles.requests=[]
         self.fixture=ThreadingHTTPServer(('127.0.0.1',0),partial(HlsFiles,directory=str(media)))
@@ -64,6 +65,38 @@ class HlsPlaybackLiveTest(unittest.TestCase):
         self.api('toggle','POST'); self.until(lambda d:d.get('paused') is True)
         self.api('seek_pct?v=50','POST'); sought=self.until(lambda d:d.get('paused') is True and 6<=d.get('pos',0)<=10)
         self.api('toggle','POST'); self.until(lambda d:d.get('paused') is False and d.get('pos',0)>sought['pos']+.2)
+
+    def test_generated_video_only_podcast_plays_in_opal(self):
+        # Repackage our own generated color bars/silence, never provider media.
+        subprocess.run([self.ffmpeg,'-v','error','-i',str(self.media/'fixture.m3u8'),
+                        '-c','copy','-movflags','+faststart',str(self.media/'podcast.mp4')],
+                       check=True,timeout=15)
+        base=f'http://127.0.0.1:{self.fixture.server_port}'
+        feed=("<rss version='2.0'><channel><title>Generated video podcast</title>"
+              "<item><title>Generated color bars and silence</title>"
+              f"<enclosure type='video/mp4' url='{base}/podcast.mp4'/></item>"
+              "</channel></rss>")
+        (self.media/'podcast.xml').write_text(feed,encoding='utf-8')
+        self.api('podcasts/search?'+urlencode({'q':base+'/podcast.xml'}))
+        def settled(predicate):
+            end=time.monotonic()+20
+            while time.monotonic()<end:
+                data=self.api('podcasts')
+                if predicate(data): return data
+                time.sleep(.1)
+            self.fail('Video podcast did not settle: '+str(data))
+        settled(lambda d:not d.get('loading') and len(d['results'])==1)
+        self.api('podcasts/episodes?idx=0')
+        episodes=settled(lambda d:not d.get('episodes_loading') and bool(d['episodes']))
+        self.assertEqual(len(episodes['episodes']),1)
+        self.assertEqual(episodes['episodes'][0]['url'],base+'/podcast.mp4')
+        self.api('podcasts/play?'+urlencode({'idx':0,'generation':episodes['generation']}),'POST')
+        playing=self.until(lambda d:d.get('active') and d.get('dur',0)>=15 and d.get('pos',0)>.25)
+        self.assertFalse(playing['paused'])
+        self.assertIn('/podcast.mp4',HlsFiles.requests)
+        advanced=self.until(lambda d:d.get('active') and not d.get('paused')
+                            and d.get('pos',0)>playing['pos']+.25)
+        self.assertGreater(advanced['pos'],playing['pos'])
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser(); parser.add_argument('--binary',required=True); parser.add_argument('--port',type=int,default=41801)

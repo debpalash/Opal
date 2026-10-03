@@ -387,20 +387,26 @@ pub fn parseRssEpisodePage(xml: []const u8, out: []Episode, offset: usize) Episo
         var episode: Episode = .{};
         const e = &episode;
 
-        // Select audio, excluding artwork/HTML attachments. Missing MIME stays
-        // compatible with older publishers, whose enclosure is the audio file.
+        // Prefer declared audio; keep video-only podcasts playable in Opal.
+        // Missing MIME remains a lower-priority compatibility fallback.
         var enclosure_pos: usize = 0;
+        var selected_priority: u8 = 0;
         while (std.mem.indexOfPos(u8, block, enclosure_pos, "<enclosure")) |enc_at| {
             const enc_end = std.mem.indexOfScalarPos(u8, block, enc_at, '>') orelse break;
             enclosure_pos = enc_end + 1;
             const enc = block[enc_at..enclosure_pos];
-            const mime = xmlAttr(enc, "type=\"") orelse "";
-            if (mime.len > 0 and !std.mem.startsWith(u8, mime, "audio/") and !std.mem.eql(u8, mime, "application/ogg")) continue;
+            const mime = std.mem.trim(u8, xmlAttr(enc, "type=\"") orelse "", " \t\r\n");
+            const priority: u8 = if (std.ascii.startsWithIgnoreCase(mime, "audio/") or std.ascii.eqlIgnoreCase(mime, "application/ogg")) 3 else if (std.ascii.startsWithIgnoreCase(mime, "video/")) 2 else if (mime.len == 0) 1 else 0;
+            if (priority <= selected_priority) continue;
             const u = xmlAttr(enc, "url=\"") orelse continue;
             if (u.len > e.audio_url.len) continue;
-            e.audio_url_len = xmlText(&e.audio_url, u);
-            if (isFeedUrl(e.audio_url[0..e.audio_url_len])) break;
-            e.audio_url_len = 0;
+            var candidate: [512]u8 = undefined;
+            const candidate_len = xmlText(&candidate, u);
+            if (!isFeedUrl(candidate[0..candidate_len])) continue;
+            @memcpy(e.audio_url[0..candidate_len], candidate[0..candidate_len]);
+            e.audio_url_len = candidate_len;
+            selected_priority = priority;
+            if (priority == 3) break;
         }
         if (!isFeedUrl(e.audio_url[0..e.audio_url_len])) continue;
 
@@ -796,4 +802,14 @@ test "RSS chooses playable audio enclosure instead of first nonaudio attachment"
     const page = parseRssEpisodePage(feed, &rows, 0);
     try std.testing.expectEqual(@as(usize, 1), page.total);
     try std.testing.expectEqualStrings("https://cdn.test/episode.mp3", rows[0].audio_url[0..rows[0].audio_url_len]);
+}
+
+test "RSS video podcasts remain playable and mixed enclosures prefer audio" {
+    var rows: [3]Episode = undefined;
+    const feed = "<rss><channel><item><title>Video</title><enclosure type='video/mp4' url='https://cdn.test/episode.mp4'/></item><item><title>Mixed</title><enclosure type='video/mp4' url='https://cdn.test/mixed.mp4'/><enclosure type='audio/ogg' url='https://cdn.test/mixed.ogg'/></item><item><title>Ogg</title><enclosure type='application/ogg' url='https://cdn.test/episode.ogg'/></item></channel></rss>";
+    const page = parseRssEpisodePage(feed, &rows, 0);
+    try std.testing.expectEqual(@as(usize, 3), page.total);
+    try std.testing.expectEqualStrings("https://cdn.test/episode.mp4", rows[0].audio_url[0..rows[0].audio_url_len]);
+    try std.testing.expectEqualStrings("https://cdn.test/mixed.ogg", rows[1].audio_url[0..rows[1].audio_url_len]);
+    try std.testing.expectEqualStrings("https://cdn.test/episode.ogg", rows[2].audio_url[0..rows[2].audio_url_len]);
 }
