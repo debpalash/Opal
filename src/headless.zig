@@ -112,6 +112,12 @@ pub fn headlessMain() !void {
         // The HTTP handler holds players_mutex while it loads a magnet; keep
         // the same owner boundary while the headless loop attaches queued ones.
         @import("core/state.zig").players_mutex.lock();
+        // Universal search accepts commands on HTTP workers. Desktop frames
+        // drain those owned commands; the headless owner must do the same or
+        // Play/Queue can return success while no reader/player action occurs.
+        @import("services/queue.zig").drainUi();
+        @import("services/resolver.zig").drainRemoteAction();
+        @import("services/browser.zig").drainDeferredPlayback();
         @import("services/torrent_intents.zig").restoreIfReady();
         @import("services/downloads.zig").tick();
         @import("services/search.zig").flushPendingTorrentOpen();

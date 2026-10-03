@@ -308,3 +308,65 @@ occurs. Web regressions cover grouping, stale actions, filters, saving, and
 verified preview lifecycle. Isolated API cases in
 `tests/test_content_maturity_live.py` additionally cover preview/cancel generation
 validation and saved-title persistence.
+
+### GitHub source expansion — 2026-10-03
+
+Seven new installed providers raise the bundled catalog to **85 entries**.
+Install the sources you want from **Sources**; these connectors remain inactive
+without their endpoint definition. Existing SubsPlease gains keyword search
+without a second provider identity. The remote endpoint catalog is synchronized
+with the app so refreshing does not discard bundled additions.
+
+| Source | Content and action | Verified provider response |
+| --- | --- | --- |
+| DMHY | Anime release magnets, built-in torrent player | 79 unique Naruto magnets |
+| ACG.RIP | Anime `.torrent` releases, built-in torrent player | 30 Naruto releases with byte sizes |
+| SubsPlease (enhanced) | Keyword release magnets and existing episode lookup | 90 Naruto quality variants |
+| Standard Ebooks | Books, author, JPEG cover, chapter reader | 7 works, 65 TOC entries, real XHTML prose |
+| WuxiaClick | Novels, summaries, chapter reader | 12 works, 56 chapters, real prose |
+| Openverse | Licensed full music with creator and license attribution | Real MP3 byte range, HTTP 206 |
+| Archive Netlabels | Music releases and individual MP3 tracks | Real MP3 byte range, HTTP 206 |
+| SomaFM | Independent live radio with station artwork | Official playlist and real MP3 stream bytes |
+
+Research uses primary repositories and independently implemented protocol
+adapters. No downloaded repository scripts were executed or copied:
+
+- [Prowlarr definitions](https://github.com/Prowlarr/Indexers/tree/ecede5c247d8e31fa156ff49a8921c78327c5b5d/definitions/v11)
+  and [Jackett definitions](https://github.com/Jackett/Jackett/tree/32d7cb94c7c9b3e38327014ad1029c04ac4b2cbc/src/Jackett.Common/Definitions): DMHY and ACG.RIP feed contracts.
+- [Standard Ebooks website](https://github.com/standardebooks/web/tree/2428ad7ac3d48bf8701a9af27326a59968807484)
+  (CC0) and [LightNovel Crawler WuxiaClick contract](https://github.com/lncrawl/lightnovel-crawler/blob/59b0382d51927953aa8120c5de62dab23ce3f731/sources/en/w/wuxiaclick.py)
+  (GPL-3.0, research only).
+- [Openverse](https://github.com/WordPress/openverse),
+  [Internet Archive client](https://github.com/jjjake/internetarchive), and
+  [SomaFM client](https://github.com/bshogol/shojey): public metadata/audio protocols.
+- [FMHY reading inventory](https://github.com/fmhy/edit/blob/25c15c4d722068ea2179fb6c05071f11662aab96/docs/reading.md)
+  and [audio inventory](https://github.com/fmhy/edit/blob/25c15c4d722068ea2179fb6c05071f11662aab96/docs/audio.md)
+  independently list the selected reading services and SomaFM.
+
+Torrent feeds do not expose trustworthy swarm counts; unknown counts remain
+unknown. ACG.RIP `.torrent` URLs play but cannot use the magnet-only queue.
+WuxiaClick advertises WebP covers: web renders these; the native decoder currently
+uses a fallback icon. Reading lists and chapters are bounded; very long novels
+load at most 400 chapter entries. Audio catalogs use bounded requests and full
+provider audio, with no fabricated previews. Provider uptime can still vary.
+NovelHall, NovelFull, ScribbleHub, ccMixter, and weak LibriVox/Deezer probes were
+excluded from this batch after blocked, timed-out, or unusable responses.
+
+The earlier supplied links remain in the sibling source repository's
+`catalog/SCAN_LOG.md` and `catalog/{anime,reading,music,torrent,ddl}-sources.json`.
+Those are research inventories; catalog presence alone does not mean a working
+Opal adapter. Torrent research provenance is in `engines/source-provenance.json`; reading and
+audio research is in `data/source-research.json`.
+
+Opt-in isolated app checks (fresh HOME/XDG; no user profile changes):
+
+```sh
+zig build -Dheadless=true --prefix /tmp/opal-sources-headless
+python3 tests/test_github_reading_live.py --binary /tmp/opal-sources-headless/bin/opal --port 41707 --live-providers
+python3 tests/test_github_audio_live.py --binary /tmp/opal-sources-headless/bin/opal --port 41709
+python3 tests/test_github_torrent_sources.py
+```
+
+The reading check contacts real providers; audio app checks use owned local
+metadata and silence fixtures. The audio byte probes above are separate live
+provider evidence. Universal reader actions preserve Browse search state.

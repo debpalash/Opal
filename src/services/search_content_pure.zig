@@ -14,7 +14,8 @@ pub fn cacheEligible(item: CacheItem) bool {
         if (std.mem.eql(u8, item.source, private)) return false;
     }
     if (std.mem.eql(u8, item.source, "music") and
-        !std.mem.eql(u8, item.provider, "jiosaavn") and !std.mem.eql(u8, item.provider, "audius")) return false;
+        !std.mem.eql(u8, item.provider, "jiosaavn") and !std.mem.eql(u8, item.provider, "audius") and
+        !std.mem.eql(u8, item.provider, "openverse") and !std.mem.eql(u8, item.provider, "netlabels")) return false;
     if (std.mem.eql(u8, item.source, "stremio") and
         !std.mem.eql(u8, item.provider, "archive") and !std.mem.eql(u8, item.provider, "nasa") and !std.mem.eql(u8, item.provider, "commons")) return false;
     // Deep links can contain an embedded HTTP URL. Conservatively avoid user
@@ -366,6 +367,8 @@ test "persisted search excludes account identities while retaining public catalo
     try std.testing.expect(!cacheEligible(.{ .source = "music", .provider = "subsonic", .url = "opal://music/subsonic/item" }));
     try std.testing.expect(!cacheEligible(.{ .source = "stremio", .url = "https://server.test/private-token/stream" }));
     try std.testing.expect(cacheEligible(.{ .source = "music", .provider = "audius", .url = "opal://music/audius/track" }));
+    try std.testing.expect(cacheEligible(.{ .source = "music", .provider = "openverse", .url = "https://audio.test/full.mp3" }));
+    try std.testing.expect(cacheEligible(.{ .source = "music", .provider = "netlabels", .url = "https://archive.org/download/release/track.mp3" }));
     try std.testing.expect(cacheEligible(.{ .source = "music", .provider = "jiosaavn", .url = "https://public.test/track" }));
     try std.testing.expect(cacheEligible(.{ .source = "stremio", .provider = "nasa", .url = "https://public.test/video" }));
     try std.testing.expect(cacheEligible(.{ .source = "tmdb", .url = "opal://catalog/tv/1" }));

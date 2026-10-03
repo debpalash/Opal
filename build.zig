@@ -1263,7 +1263,7 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_comics_pure).step);
 
-    inline for (.{ "expanded_reading_pure", "music_audius_pure" }) |module| {
+    inline for (.{ "expanded_reading_pure", "reading_provider_pure", "music_audius_pure", "audio_sources_pure" }) |module| {
         const source_test = b.addTest(.{ .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/" ++ module ++ ".zig"),
             .target = target,
