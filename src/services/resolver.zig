@@ -560,6 +560,11 @@ pub fn generationIsCurrent(generation: u32) bool {
 /// bumps it, so superseded workers publish nothing and just wind down.
 var run_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 threadlocal var worker_gen: u32 = 0;
+/// Public provider requests stop as soon as their owning search wave is superseded.
+fn workerCancellation() ?@import("../core/bounded_process.zig").CancelEpoch {
+    if (thread_sink != null) return null;
+    return .{ .epoch32 = .{ .value = &run_gen, .expected = worker_gen } };
+}
 threadlocal var worker_reported: SourceStatus = .done;
 threadlocal var worker_produced: bool = false;
 var lifecycle_mutex = @import("../core/sync.zig").Mutex{};
@@ -3606,7 +3611,7 @@ fn resolveMusic(query_buf: [256]u8, qlen: usize) void {
         const quota = mp.providerQuota(AUDIO_MAX, providers, visited);
         visited += 1;
         const source: u8 = @intCast(index);
-        const reply = music.searchInto(source, query, songs[0..quota]);
+        const reply = music.searchIntoWithCancellation(source, query, songs[0..quota], workerCancellation());
         if (reply.status != .done and reply.status != .no_results) noteWorkerOutcome(reply.status);
         for (songs[0..reply.count]) |song| {
             var item: ResolvedItem = .{ .source = .music };
@@ -3647,10 +3652,17 @@ fn resolveRadio(query_buf: [256]u8, qlen: usize) void {
         return;
     };
     defer alloc.free(buf);
-    const body = @import("../core/http.zig").fetch(url, buf, .{ .timeout_secs = 8 }) orelse {
+    var captured_headers: [4096]u8 = undefined;
+    const response = @import("reliable_fetch.zig").request(url, buf, &captured_headers, .{
+        .timeout_secs = 8,
+        .impersonate = false,
+        .cancel_epoch = workerCancellation(),
+    });
+    if (!response.ok()) {
         noteWorkerOutcome(.transport_failed);
         return;
-    };
+    }
+    const body = response.body;
 
     const stations = alloc.alloc(rp.Station, AUDIO_MAX) catch {
         noteWorkerOutcome(.failed);
@@ -3703,7 +3715,7 @@ fn resolveInstalledAudio(provider: @import("audio_sources_pure.zig").Provider, q
         return;
     };
     defer alloc.free(rows);
-    const reply = @import("audio_sources.zig").searchInto(provider, query, rows, base);
+    const reply = @import("audio_sources.zig").searchIntoWithCancellation(provider, query, rows, base, workerCancellation());
     if (!generationIsCurrent(worker_gen)) return;
     if (reply.status != .done and reply.status != .no_results) noteWorkerOutcome(reply.status);
     for (rows[0..reply.count]) |*row| {
@@ -4401,7 +4413,7 @@ fn fetchCatalogJson(url: []const u8, provider: []const u8) ?[]u8 {
         noteWorkerOutcome(.failed);
         return null;
     };
-    const body = @import("../core/http.zig").fetch(url, buf, .{ .timeout_secs = 10, .user_agent = @import("../core/app_meta.zig").user_agent }) orelse {
+    const body = @import("reliable_fetch.zig").fetch(url, buf, .{ .timeout_secs = 10, .user_agent = @import("../core/app_meta.zig").user_agent, .impersonate = false, .cancel_epoch = workerCancellation() }) orelse {
         alloc.free(buf);
         noteWorkerOutcome(.transport_failed);
         return null;
@@ -4470,7 +4482,10 @@ fn resolveAnimeCatalog(q: [256]u8, qlen: usize) void {
     }
 }
 fn resolveMangaCatalog(q: [256]u8, qlen: usize) void {
-    defer finishWorker(&status_manga_catalog, .done);
+    defer {
+        if (generationIsCurrent(worker_gen)) resolveComicFury(q[0..qlen]);
+        finishWorker(&status_manga_catalog, .done);
+    }
     const pure = @import("comics_pure.zig");
     var address: [1400]u8 = undefined;
     const url = pure.buildSearchUrl(&address, q[0..qlen], 12, 0) orelse return;
@@ -4495,6 +4510,37 @@ fn resolveMangaCatalog(q: [256]u8, qlen: usize) void {
             _ = pushResult(item);
             n += 1;
         }
+    }
+}
+fn resolveComicFury(query: []const u8) void {
+    const cf = @import("comicfury_pure.zig");
+    var base_buf: [512]u8 = undefined;
+    const base = @import("../core/source_config.zig").copyValue("comicfury", "base", &base_buf) orelse return;
+    var address: [2048]u8 = undefined;
+    const url = cf.searchUrl(&address, base, query, 1) orelse return;
+    const buf = alloc.alloc(u8, 2 * 1024 * 1024) catch return;
+    defer alloc.free(buf);
+    var headers: [4096]u8 = undefined;
+    const response = @import("source_request.zig").request("comicfury", url, buf, &headers, .{ .base = base, .ttl_ms = 30_000, .transport = .{ .timeout_secs = 8, .user_agent = "Mozilla/5.0", .cancel_epoch = workerCancellation() } });
+    if (!generationIsCurrent(worker_gen)) return;
+    if (!response.ok()) {
+        noteWorkerOutcome(.transport_failed);
+        return;
+    }
+    const rows = alloc.alloc(cf.Item, 12) catch return;
+    defer alloc.free(rows);
+    const listing = cf.parseInto(response.body, base, rows);
+    if (!listing.valid) {
+        noteWorkerOutcome(.parse_failed);
+        return;
+    }
+    for (rows[0..listing.count]) |*row| {
+        var item: ResolvedItem = .{ .source = .comics, .provider = search_view.Provider.init("comicfury") };
+        copyField(&item.name, &item.name_len, row.title[0..row.title_len]);
+        copyField(&item.url, &item.url_len, row.route[0..row.route_len]);
+        copyField(&item.poster_url, &item.poster_url_len, row.cover[0..row.cover_len]);
+        copyField(&item.detail, &item.detail_len, "ComicFury · Read comic");
+        if (item.name_len > 0 and item.url_len > 0) _ = pushResult(item);
     }
 }
 fn resolvePublicBooks(q: [256]u8, qlen: usize) void {
@@ -4554,6 +4600,22 @@ fn resolvePublicBooks(q: [256]u8, qlen: usize) void {
 
 /// Installed reading adapters use owned endpoint/query values and Browse's
 /// pure parsing seam, without publishing to its mutable query/list state.
+fn readingListingValid(comptime source: @import("search_reading_pure.zig").Source, body: []const u8) bool {
+    var rows: [0]@import("search_reading_pure.zig").Item = .{};
+    return @import("search_reading_pure.zig").parseInto(body, "https://configured.invalid", source, &rows).valid_listing;
+}
+fn validRoyalRoad(body: []const u8) bool {
+    return readingListingValid(.royalroad, body);
+}
+fn validNovelFire(body: []const u8) bool {
+    return readingListingValid(.novelfire, body);
+}
+fn validStandardEbooks(body: []const u8) bool {
+    return readingListingValid(.standardebooks, body);
+}
+fn validWuxiaClick(body: []const u8) bool {
+    return readingListingValid(.wuxiaclick, body);
+}
 fn resolveInstalledReading(query: []const u8) void {
     const reading = @import("search_reading_pure.zig");
     const sc = @import("../core/source_config.zig");
@@ -4569,10 +4631,18 @@ fn resolveInstalledReading(query: []const u8) void {
             continue;
         };
         defer alloc.free(buf);
-        const body = @import("reliable_fetch.zig").fetch(url, buf, .{ .timeout_secs = 10, .user_agent = "Mozilla/5.0", .impersonate = false }) orelse {
+        var headers: [4096]u8 = undefined;
+        const response = @import("source_request.zig").request(@tagName(source), url, buf, &headers, .{ .base = base, .ttl_ms = 30_000, .validate = switch (source) {
+            .royalroad => validRoyalRoad,
+            .novelfire => validNovelFire,
+            .standardebooks => validStandardEbooks,
+            .wuxiaclick => validWuxiaClick,
+        }, .transport = .{ .timeout_secs = 10, .user_agent = "Mozilla/5.0", .impersonate = false, .cancel_epoch = workerCancellation() } });
+        if (!response.ok()) {
             noteWorkerOutcome(.transport_failed);
             continue;
-        };
+        }
+        const body = response.body;
         if (!generationIsCurrent(worker_gen)) return;
         // Twelve owned records total ~22 KiB; heap avoids adding their storage
         // to the already substantial resolver worker stack.

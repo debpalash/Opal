@@ -916,6 +916,39 @@
         "base": "https://somafm.com"
       },
       "file": "plugins/somafm.json"
+    },
+    {
+      "id": "comicfury",
+      "name": "ComicFury",
+      "type": "comics",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://comicfury.com"
+      },
+      "file": "plugins/comicfury.json",
+      "note": "Public creator-hosted webcomics with full page images and adjacent page navigation."
+    },
+    {
+      "id": "hianime",
+      "name": "HiAnime",
+      "type": "anime",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://hianime.at"
+      },
+      "file": "plugins/hianime.json",
+      "note": "Installed direct anime provider; exact show and episode matching, supported ZokoAnime HLS embeds."
+    },
+    {
+      "id": "podcast-waveform",
+      "name": "Waveform: The MKBHD Podcast",
+      "type": "podcasts",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://feeds.megaphone.fm/STU4418364045"
+      },
+      "file": "plugins/podcast-waveform.json",
+      "note": "Publisher RSS feed with full audio episodes."
     }
   ]
 }

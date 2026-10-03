@@ -298,3 +298,27 @@ def test_opds_universal_search():
     if missing:
         return "fail", ", ".join(missing)
     return "pass", "Advertised independent OPDS queries, real metadata, origin-bound credentials and cached reader identity"
+
+
+@test("Universal public music and radio requests have supervised cancellation", "Search")
+def test_public_audio_supervised_transport():
+    resolver = _src("src/services/resolver.zig")
+    music = _src("src/services/music_subsonic.zig")
+    independent = music[music.index("pub fn searchIntoWithCancellation("):]
+    independent = independent[:independent.index("    var parsed =")]
+    radio = resolver[resolver.index("fn resolveRadio("):resolver.index("/// Public audio adapters")]
+    checks = {
+        "compatible independent music API": "return searchIntoWithCancellation(source, query, out, null);" in music,
+        "resolver supplies music epoch": "music.searchIntoWithCancellation(source, query, songs[0..quota], workerCancellation())" in resolver,
+        "public JioSaavn supervised four-second request": "if (source == SRC_JIOSAAVN)" in independent
+            and "reliable_fetch.request(" in independent and ".timeout_secs = 4" in independent
+            and ".cancel_epoch = cancel" in independent,
+        "private music retains native HTTP": 'else @import("../core/http.zig").fetch(' in independent
+            and ".extra_headers = &headers" in independent,
+        "RadioBrowser supervised eight-second epoch": '@import("reliable_fetch.zig").request(' in radio
+            and ".timeout_secs = 8" in radio and ".cancel_epoch = workerCancellation()" in radio
+            and '@import("../core/http.zig").fetch(' not in radio,
+    }
+    missing = [name for name, passed in checks.items() if not passed]
+    return ("fail", ", ".join(missing)) if missing else (
+        "pass", "Public defaults supervise DNS/connect/body and epochs; private credentials stay on native HTTP")

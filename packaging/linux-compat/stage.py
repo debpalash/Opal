@@ -48,6 +48,7 @@ exec "$OPAL_RUNTIME/opal-bin" "$@"
 (ROOT / 'usr/bin/opal').chmod(0o755)
 for source, dest in [('packaging/opal.desktop', 'usr/share/applications/opal.desktop'),
                      ('assets/logo.svg', 'usr/share/icons/hicolor/scalable/apps/opal.svg'),
+                     ('docs/licenses/libwebp.txt', 'usr/share/doc/opal/libwebp.txt'),
                      ('LICENSE', 'usr/share/doc/opal/LICENSE'),
                      ('packaging/linux-compat/README.md', 'usr/share/doc/opal/COMPATIBILITY.md')]:
     path = ROOT / dest

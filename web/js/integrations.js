@@ -16,6 +16,15 @@ function pluginGroup(kind){
   if (value === 'comics' || value === 'manga') return 'comics';
   return 'other';
 }
+function sourceHealthLabel(source){
+  if (!source.installed) return 'Available';
+  const h = source.health || {};
+  if (h.state === 'available') return h.cached ? 'Ready · cached' : h.fallback ? 'Ready · backup source' : 'Ready';
+  if (h.state === 'fetching') return 'Checking…';
+  if (h.state === 'unavailable') return 'Unavailable · retry search';
+  if (h.state === 'cancelled') return 'Search cancelled';
+  return 'Installed · not checked yet';
+}
 function renderPlugins(){
   const query = $('plug-filter').value.trim().toLowerCase();
   const installedOnly = $('plug-installed').checked;
@@ -30,7 +39,7 @@ function renderPlugins(){
         <div class="n">${esc(source.name || source.id)}
           <div class="file-meta"><span class="src">${esc(source.kind || 'source')}</span>
             ${source.version ? `<span>v${esc(source.version)}</span>` : ''}
-            <span>${source.installed ? 'Installed' : 'Available'}</span></div></div>
+            <span>${esc(sourceHealthLabel(source))}</span></div></div>
         <button type="button" class="plugin-action${source.installed ? ' remove' : ''}"
           data-action="${source.installed ? 'uninstall' : 'install'}"
           data-id="${encodeURIComponent(source.id)}">${source.installed ? 'Uninstall' : 'Install'}</button>

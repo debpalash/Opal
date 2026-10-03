@@ -32,6 +32,8 @@ rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 
 cp "$BIN_PATH" "$APP_DIR/Contents/MacOS/Opal"
+mkdir -p "$APP_DIR/Contents/Resources/licenses"
+cp "$ROOT/docs/licenses/libwebp.txt" "$APP_DIR/Contents/Resources/licenses/"
 chmod +x "$APP_DIR/Contents/MacOS/Opal"
 
 # ── 2b. Bundle runtime resources resolved relative to the resource root ────────

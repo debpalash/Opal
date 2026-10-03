@@ -23,6 +23,7 @@ playback backend).
 | libtorrent-rasterbar | BSD-3-Clause | Magnet/`.torrent` streaming, wrapped by `src/torrent_wrapper.cpp` → `libtorrent_wrapper.so` to isolate the C++ ABI. |
 | dvui | MIT | Immediate-mode GUI (debpalash/dvui fork), vendored as a git dependency in `build.zig.zon`; uses the dvui_sdl2 backend. |
 | onnxruntime | MIT | Local ML inference and the `ort/ocr_ort.c` PP-OCR pipeline via `linkSystemLibrary("onnxruntime")`. |
+| libwebp decoder | BSD-3-Clause | In-process still WebP covers, comic pages, and browser frames; statically linked. Full license: `docs/licenses/libwebp.txt`. |
 | SDL2 | zlib | Window/input/rendering backend; bundled (X11-only) on macOS, or system SDL2 (`-fsys=sdl2`) for Wayland. |
 | sqlite3 | Public Domain | Local unified database at `~/.config/opal/opal.db` (watch history, AI memory, config, caches). |
 | sqlite-vec | Apache-2.0 OR MIT (dual) | Vendored C in `src/core/sqlite/sqlite-vec.c`; `vec0` virtual table with `float[768]` embeddings for AI memory vector search. |

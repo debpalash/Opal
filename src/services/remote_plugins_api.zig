@@ -31,7 +31,11 @@ pub fn writeSources(writer: anytype, catalog: []repo.Plugin) !void {
         writeJsonString(writer, plugin.kind[0..@min(plugin.kind_len, plugin.kind.len)]);
         try writer.writeAll("\",\"version\":\"");
         writeJsonString(writer, plugin.version[0..@min(plugin.version_len, plugin.version.len)]);
-        try writer.print("\",\"installed\":{s}}}", .{if (repo.isInstalled(plugin.idSlice())) "true" else "false"});
+        const health = @import("source_request.zig").snapshot(plugin.idSlice());
+        try writer.print("\",\"installed\":{s},\"health\":{{\"state\":\"{s}\",\"status\":{d},\"latency_ms\":{d},\"cached\":{s},\"fallback\":{s}}}}}", .{
+            if (repo.isInstalled(plugin.idSlice())) "true" else "false", @tagName(health.state),                   health.status, health.latency_ms,
+            if (health.cached) "true" else "false",                      if (health.fallback) "true" else "false",
+        });
     }
 }
 

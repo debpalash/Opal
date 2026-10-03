@@ -2176,6 +2176,12 @@ fn fetchStreamThread(job: PlaybackJob) void {
             return;
         }
         if (!playback_request.isCurrent(job.generation)) return;
+        if (@import("anime_provider.zig").resolveHiAnime(job.row.name[0..job.row.name_len], job.row.name_english[0..job.row.name_english_len], job.episode, &playback_request, job.generation)) |stream| {
+            publishPlayback(.{ .job = job, .stream = stream });
+            resolved = true;
+            return;
+        }
+        if (!playback_request.isCurrent(job.generation)) return;
         const resolver = @import("resolver.zig");
         var query_buf: [256]u8 = undefined;
         const query = std.fmt.bufPrint(&query_buf, "{s} {d:0>2}", .{ job.row.name[0..job.row.name_len], job.episode }) catch return;

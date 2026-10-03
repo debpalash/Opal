@@ -57,7 +57,8 @@ def test_render_hot_paths_and_drop_ingest():
         "old frame scan removed": "scanDirForMedia" not in main and "isDirectory" not in main,
         "frame mailboxes atomic": "std.atomic.Value(bool)" in state
                                   and "dropped_file_ready.load(.acquire)" in main
-                                  and "remote_open_ready.load(.acquire)" in main,
+                                  and "remote_open_ready.load(.acquire)" in _src("src/services/forwarded_open.zig")
+                                  and '@import("services/forwarded_open.zig").drain()' in main,
         "first frame wakes UI before telemetry": (
             render_worker.find("wakeDvuiFromMpv();") >= 0
             and render_worker.find("wakeDvuiFromMpv();") < render_worker.find("openFirstFrame();")

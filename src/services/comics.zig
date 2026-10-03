@@ -12,6 +12,7 @@ const safeUtf8 = @import("../core/text.zig").safeUtf8;
 const workers = @import("../core/workers.zig");
 const pure = @import("comics_pure.zig");
 const expanded = @import("expanded_reading_pure.zig");
+const comicfury = @import("comicfury_pure.zig");
 // MangaThemesia (WPMangaThemesia) engine — pure, base-URL-driven HTML extraction
 // for the ~143 sites on that WordPress theme. comics.zig routes all its parsing
 // through this so the shipped logic IS the tested logic (see manga_themesia_pure).
@@ -479,6 +480,13 @@ fn fetchComicThread(gen: u32) void {
     defer workers.leave();
     const url = state.app.comic.url_buf[0..state.app.comic.url_len];
 
+    if (std.mem.startsWith(u8, url, "comicfury:")) {
+        const ok = loadComicFury(url["comicfury:".len..], gen);
+        if (state.app.comic.dl_gen.load(.acquire) != gen) return;
+        state.app.comic.is_loading.store(false, .release);
+        if (ok) downloadPages(gen) else logs.pushLog("error", "comics", "ComicFury returned no readable pages", true);
+        return;
+    }
     inline for (.{ "weebcentral", "comicbookplus" }) |id| {
         const scheme = id ++ ":";
         if (std.mem.startsWith(u8, url, scheme)) {
@@ -1860,7 +1868,7 @@ pub fn copySearchSnapshot(out: []OwnedSearchRow) usize {
 //     source to search come from source_config ("suwayomi"/"base",
 //     "suwayomi"/"source"), so it is INERT until the user configures it. Cards
 //     carry a `suwayomi:<mangaId>` pseudo-URL routed by fetchComicThread.
-const Source = enum { all, readallcomics, mangadex, heancms, mangathemesia, madara, suwayomi, weebcentral, comicbookplus };
+const Source = enum { all, readallcomics, mangadex, heancms, mangathemesia, madara, suwayomi, weebcentral, comicbookplus, comicfury };
 var active_source: Source = .all;
 
 /// The Suwayomi server base URL + the installed-source id to search, or null
@@ -2043,22 +2051,60 @@ fn fetchSearchHtml(url: [:0]const u8, dst: []u8) usize {
 /// Worker-thread only.
 fn fetchExpandedComicPage(query: []const u8, page: u32, gen: u32, start: usize, id: []const u8) usize {
     const cfg = @import("../core/source_config.zig");
-    const raw_base = cfg.get(id, "base") orelse return 0;
     var base_buf: [512]u8 = undefined;
-    if (raw_base.len > base_buf.len) return 0;
-    @memcpy(base_buf[0..raw_base.len], raw_base);
+    const raw_base = cfg.copyValue(id, "base", &base_buf) orelse return 0;
     const base = base_buf[0..raw_base.len];
     var url_buf: [1600]u8 = undefined;
-    const url = expanded.comicSearchUrl(&url_buf, base, id, query, page) orelse return 0;
+    const url = (if (std.mem.eql(u8, id, "comicfury")) comicfury.searchUrl(&url_buf, base, query, page) else expanded.comicSearchUrl(&url_buf, base, id, query, page)) orelse return 0;
     const body = alloc.alloc(u8, 2 * 1024 * 1024) catch return 0;
     defer alloc.free(body);
-    const n = fetchExpandedReadingHtml(id, url, body);
+    const n = if (std.mem.eql(u8, id, "comicfury")) blk: {
+        var headers: [2048]u8 = undefined;
+        const result = @import("source_request.zig").request(id, url, body, &headers, .{
+            .base = base,
+            .ttl_ms = 30_000,
+            .validate = validComicFuryListing,
+            .transport = .{ .timeout_secs = 12, .cancel_epoch = .{ .epoch32 = .{ .value = &search_gen, .expected = gen } } },
+        });
+        break :blk if (result.ok()) result.body.len else 0;
+    } else fetchExpandedReadingHtml(id, url, body);
     if (n == 0 or search_gen.load(.acquire) != gen) return 0;
+    if (std.mem.eql(u8, id, "comicfury")) {
+        const rows = alloc.alloc(comicfury.Item, MAX_SEARCH_RESULTS) catch return 0;
+        defer alloc.free(rows);
+        const result = comicfury.parseInto(body[0..n], base, rows);
+        if (!result.valid) return 0;
+        search_rows_mutex.lock();
+        defer search_rows_mutex.unlock();
+        if (search_gen.load(.acquire) != gen) return 0;
+        var count = start;
+        for (rows[0..result.count]) |row| {
+            if (count >= MAX_SEARCH_RESULTS) break;
+            if (row.route_len > sr_urls[count].len) continue;
+            var duplicate = false;
+            for (0..count) |i| if (std.mem.eql(u8, sr_urls[i][0..sr_url_lens[i]], row.route[0..row.route_len])) {
+                duplicate = true;
+            };
+            if (duplicate) continue;
+            @memcpy(sr_urls[count][0..row.route_len], row.route[0..row.route_len]);
+            sr_url_lens[count] = row.route_len;
+            const title_len = @min(row.title_len, sr_titles[count].len);
+            @memcpy(sr_titles[count][0..title_len], row.title[0..title_len]);
+            sr_title_lens[count] = title_len;
+            @memcpy(sr_cover_urls[count][0..row.cover_len], row.cover[0..row.cover_len]);
+            sr_cover_url_lens[count] = row.cover_len;
+            sr_cover_gen[count] = gen;
+            sr_cover_failed[count] = false;
+            count += 1;
+        }
+        sr_count = count;
+        return count - start;
+    }
     search_rows_mutex.lock();
     defer search_rows_mutex.unlock();
     if (search_gen.load(.acquire) != gen) return 0;
     const cbp = std.mem.eql(u8, id, "comicbookplus");
-    var it = expanded.html.AnchorIter{ .html = body[0..n], .path = if (cbp) "?dlid=" else "/series/" };
+    var it = expanded.html.AnchorIter{ .html = body[0..n], .path = if (cbp) "?dlid=" else if (std.mem.eql(u8, id, "comicfury")) "/comicprofile.php?url=" else "/series/" };
     var count = start;
     while (it.next()) |item| {
         if (count >= MAX_SEARCH_RESULTS or search_gen.load(.acquire) != gen) break;
@@ -2395,7 +2441,7 @@ fn searchWorker(gen: u32) void {
     if (sourceActive(.suwayomi)) {
         filled += fetchSuwayomiPage(query, 1, gen, filled);
     }
-    inline for (.{ Source.weebcentral, Source.comicbookplus }) |src| {
+    inline for (.{ Source.weebcentral, Source.comicbookplus, Source.comicfury }) |src| {
         if (sourceActive(src) and search_gen.load(.acquire) == gen) filled += fetchExpandedComicPage(query, 1, gen, filled, @tagName(src));
     }
 
@@ -2465,7 +2511,7 @@ fn loadMoreWorker(gen: u32) void {
         // Suwayomi's /source/{id}/search paginates by 1-based page number.
         added += fetchSuwayomiPage(query, next_page, gen, sr_count);
     }
-    inline for (.{ Source.weebcentral, Source.comicbookplus }) |src| {
+    inline for (.{ Source.weebcentral, Source.comicbookplus, Source.comicfury }) |src| {
         if (sourceActive(src) and search_gen.load(.acquire) == gen) added += fetchExpandedComicPage(query, next_page, gen, sr_count, @tagName(src));
     }
 
@@ -3309,6 +3355,7 @@ pub fn renderContent() void {
         renderSourceChip("MangaDex", 3, .mangadex);
         if (@import("../core/source_config.zig").has("weebcentral")) renderSourceChip("Weeb Central", 8, .weebcentral);
         if (@import("../core/source_config.zig").has("comicbookplus")) renderSourceChip("ComicBookPlus", 9, .comicbookplus);
+        if (@import("../core/source_config.zig").has("comicfury")) renderSourceChip("ComicFury", 10, .comicfury);
         renderSourceChip("MangaThemesia", 4, .mangathemesia);
         // Madara engine (~332 WordPress sites) — inert until a "madara" source is
         // installed, exactly like ReadAllComics.
@@ -4683,4 +4730,37 @@ test "Comic catalog action copies rendered identity before result replacement" {
     try std.testing.expectEqualStrings("Old book", rendered.title[0..rendered.title_len]);
     try std.testing.expectEqualStrings("oldurl", snapshot[0].url[0..snapshot[0].url_len]);
     try std.testing.expectEqualStrings("newurl", ownedSearchRow(0).?.url[0..6]);
+}
+
+fn loadComicFury(profile: []const u8, gen: u32) bool {
+    var base_buf: [512]u8 = undefined;
+    const configured = @import("../core/source_config.zig").copyValue("comicfury", "base", &base_buf) orelse return false;
+    const base = base_buf[0..configured.len];
+    var url_buf: [1024]u8 = undefined;
+    const page_url = comicfury.firstPageUrl(&url_buf, base, profile) orelse return false;
+    const body = alloc.alloc(u8, 2 * 1024 * 1024) catch return false;
+    defer alloc.free(body);
+    var headers: [2048]u8 = undefined;
+    const response = @import("reliable_fetch.zig").request(page_url, body, &headers, .{ .timeout_secs = 12, .cancel_epoch = .{ .epoch32 = .{ .value = &state.app.comic.dl_gen, .expected = gen } } });
+    const n = if (response.ok()) response.body.len else 0;
+    if (n == 0 or workers.isQuitting() or state.app.comic.dl_gen.load(.acquire) != gen) return false;
+    var it = comicfury.ImageIter{ .body = body[0..n] };
+    var count: usize = 0;
+    while (it.next()) |image| {
+        if (count >= state.app.comic.page_urls.len) break;
+        if (image.len > state.app.comic.page_urls[count].len) continue;
+        if (state.app.comic.dl_gen.load(.acquire) != gen) return false;
+        @memcpy(state.app.comic.page_urls[count][0..image.len], image);
+        state.app.comic.page_url_lens[count] = image.len;
+        count += 1;
+    }
+    if (state.app.comic.dl_gen.load(.acquire) != gen) return false;
+    if (comicfury.adjacentRoute(&state.app.comic.next_url, base, page_url, body[0..n], true)) |next| state.app.comic.next_url_len = next.len;
+    if (comicfury.adjacentRoute(&state.app.comic.prev_url, base, page_url, body[0..n], false)) |previous| state.app.comic.prev_url_len = previous.len;
+    state.app.comic.page_count = count;
+    return count > 0;
+}
+
+fn validComicFuryListing(body: []const u8) bool {
+    return std.mem.indexOf(u8, body, "webcomic-results") != null;
 }

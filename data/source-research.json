@@ -13,7 +13,7 @@
       "path": "www/ebooks/index.php; www/ebooks/http-router.php",
       "implementation": "Independent allocation-free schema:Book HTML parser; provider advertised JPEG, author and /text TOC; bounded XHTML main extraction",
       "live": "HTTP200 search, work detail, TOC and chapter;7 works,65 TOC entries,4612 text bytes",
-      "limits": "12 search rows/page;400 chapter rows; existing131072-byte prose cap"
+      "limits": "12 search rows/page;400-row chapter windows with previous/next navigation and exact work/chapter resume; existing131072-byte prose cap"
     },
     {
       "id": "wuxiaclick",
@@ -26,7 +26,7 @@
       "path": "sources/en/w/wuxiaclick.py",
       "implementation": "Contract research only; no repository code copied. Independent owned JSON search/directory/prose parser",
       "live": "HTTP200 search, directory and chapter API;12 works,56 chapters,8906 prose bytes",
-      "limits": "12 search rows/page;400 chapter rows; real advertised WebP cover supported by web, native stb fallback icon"
+      "limits": "12 search rows/page;400-row chapter windows with previous/next navigation and exact work/chapter resume; real advertised WebP cover decoded in native and web"
     }
   ],
   "audio": {
@@ -103,5 +103,44 @@
       "seconds": 1.74,
       "media_downloaded": false
     }
+  },
+  "categories": {
+    "comicfury": {
+      "id": "comicfury",
+      "repo": "https://github.com/keiyoushi/extensions-source",
+      "commit": "4c8cda759ae7f9948fecacb5eec2b47b011ccf51",
+      "upstream_license": "Apache-2.0",
+      "path": "src/all/comicfury/src/eu/kanade/tachiyomi/extension/all/comicfury/ComicFury.kt",
+      "contract": "public search.php combinedquery/page; profile identity; oldest /read/<slug>/comics/first; owned page images and adjacent comic IDs",
+      "live": "search+reader200; actual full PNG200792452bytes2480x3508",
+      "limits": "2MiB HTML;128images per reader batch; next/previous advertised batch identities; no account cookies; provider only installed",
+      "app_live": "Fresh HOME/XDG headless app:12 universal works; selected work opened6 oldest reader pages; /api/comics/page?i=0 HTTP200 real PNG439024bytes; Browse rows unchanged"
+    },
+    "hianime": {
+      "id": "hianime",
+      "repo": "https://github.com/pystardust/ani-cli",
+      "commit": "3ad53631ef2433b0c26e25ab011a5b149706c120",
+      "upstream_license": "GPL-3.0",
+      "path": "ani-cli",
+      "contract": "search exact title; numeric episode list; sub ZokoAnime advertised server; bounded config; actual src m3u8/mp4 only",
+      "live": "Naruto episode1 master20096bytes;800p variant20030369bytes;media segment HEAD200video/mp2t238008bytes",
+      "referer": "https://zokoanime.video/",
+      "limits": "sub only; exact title or alias; installed endpoint required; max1MiB response256KiB config;8sec each hop; cancel epoch"
+    },
+    "podcast-waveform": {
+      "id": "podcast-waveform",
+      "url": "https://feeds.megaphone.fm/STU4418364045",
+      "live": "RSS2002031538bytes; episodeaudio range206audio/mpeg1024bytesID3 fullsize150849835",
+      "contract": "existing installed podcast feed/native+web episode selector and player;4MiB cap200episodewindow",
+      "parser_enhancement": "skip image/HTML enclosures and select real audio enclosure; old absent MIME compatible",
+      "app_fixture": "Fresh HOME/XDG local synthetic RSS/audio: skipped image enclosure, selected real silence WAV, Opal player active and duration>0"
+    }
+  },
+  "native_images": {
+    "decoder": "libwebp",
+    "license": "BSD-3-Clause",
+    "implementation": "Independent GPL-3.0 shim; C malloc ownership matches existing stb release; header dimensions checked before allocation, RGBA to premultiplied GPU upload",
+    "verified": "Lossless alpha exact CPU/GPU pixels; real WuxiaClick VP8 cover; malformed/truncated/oversized rejection",
+    "limits": "Still WebP images; existing per-content dimensions and RGBA byte budgets; no animation playback"
   }
 }

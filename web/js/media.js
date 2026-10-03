@@ -422,7 +422,19 @@ function renderNovels(d){
     `<button class="more" id="nv-back">‹ ${d.view === 'reader' ? 'Chapters' : 'Results'}</button>`;
   const back = $('nv-back');
   if (back) back.onclick = () => novelAction('/novels/back');
+  const chapterAction = (path, ordinal) => novelAction('/novels/' + path + '?ordinal=' + ordinal + '&generation=' + d.chapter_generation);
+  if (d.view === 'chapters') {
+    const offset = d.chapter_offset || 0;
+    $('nv-crumbs').insertAdjacentHTML('beforeend', '<button class="more" id="nv-resume">Resume reading</button>');
+    $('nv-resume').onclick = () => novelAction('/novels/resume?generation=' + d.chapter_generation);
+    $('nv-crumbs').insertAdjacentHTML('beforeend', `${offset ? '<button class="more" id="nv-window-prev">Previous chapters</button>' : ''}<span> ${offset + 1}–${offset + (d.chapters || []).length} of ${d.chapter_total || 0}${d.chapter_has_more ? '+' : ''} </span>${d.chapter_has_more ? '<button class="more" id="nv-window-next">Next chapters</button>' : ''}`);
+    if ($('nv-window-prev')) $('nv-window-prev').onclick = () => chapterAction('window', Math.max(0, offset - 400));
+    if ($('nv-window-next')) $('nv-window-next').onclick = () => chapterAction('window', offset + 400);
+  }
   if (d.view === 'reader') {
+    $('nv-crumbs').insertAdjacentHTML('beforeend', `${d.current_chapter > 0 ? '<button class="more" id="nv-reader-prev">Previous chapter</button>' : ''}${d.current_chapter + 1 < d.chapter_total || d.chapter_has_more ? '<button class="more" id="nv-reader-next">Next chapter</button>' : ''}`);
+    if ($('nv-reader-prev')) $('nv-reader-prev').onclick = () => chapterAction('chapter', d.current_chapter - 1);
+    if ($('nv-reader-next')) $('nv-reader-next').onclick = () => chapterAction('chapter', d.current_chapter + 1);
     $('nv-results').innerHTML = '';
     $('nv-text').textContent = d.text || '';
     $('nv-text').style.display = '';
@@ -446,7 +458,8 @@ function renderNovels(d){
     b.onclick = () => {
       const i = +b.dataset.nv;
       if (b.dataset.kind === 'open') novelIdx = i;
-      novelAction('/novels/' + (b.dataset.kind === 'open' ? 'open' : 'chapter') + '?idx=' + i);
+      if (b.dataset.kind === 'open') novelAction('/novels/open?idx=' + i);
+      else chapterAction('chapter', (d.chapter_offset || 0) + i);
     };
   });
   target.querySelectorAll('.novel-details').forEach(button => {

@@ -40,6 +40,8 @@ contents:
     dst: /usr/share/applications/opal.desktop
   - src: assets/logo.svg
     dst: /usr/share/icons/hicolor/scalable/apps/opal.svg
+  - src: docs/licenses/libwebp.txt
+    dst: /usr/share/doc/opal/libwebp.txt
   - src: LICENSE
     dst: /usr/share/doc/opal/LICENSE
 

@@ -12,7 +12,7 @@ can play a title. Source availability also depends on the network and region.
 | Comics and manga | MangaDex popular titles and search; Weeb Central manga and ComicBookPlus public-domain comics; ReadAllComics, HeanCMS, MangaThemesia, Madara, and configured Suwayomi extensions | MangaDex is available by default. Other connectors need their installed endpoint or server. |
 | Podcasts | gpodder.net plus Apple charts/search, deduplicated by RSS feed URL; direct RSS feed URLs; installable NASA, BBC Global News and NPR Up First feeds | No account needed. Paste an HTTP(S) RSS URL into podcast search to add a show to the results. |
 | Radio | Radio Browser directory with alternate-host failover, station-name, genre and country search | No account needed. Search `tag:jazz` or `country:India`, or enter a station name. |
-| Novels | Wikisource, Internet Archive, Royal Road, NovelFire and installed theme adapters | Royal Road and NovelFire require installed sources. The chapter list holds up to 400 chapters. |
+| Novels | Wikisource, Internet Archive, Royal Road, NovelFire and installed theme adapters | Royal Road and NovelFire require installed sources. Chapter directories use bounded 400-row windows with previous/next traversal. |
 | Torrents and movies | Existing indexes plus NekoBT, Shana Project and Public Domain Torrents | Install the desired sources; NekoBT and Shana are anime indexes, Public Domain Torrents is a movie catalog. |
 | Music | JioSaavn, installed Audius public streams and existing personal-server clients; LRCLIB lyrics already supported | Install Audius, then select it in Music. Empty Audius search shows trending tracks. |
 | Personal libraries | Existing OPDS, Suwayomi, Jellyfin, Plex, Subsonic and Audiobookshelf clients | Configure a server/account; these are not public catalogs. |
@@ -86,8 +86,8 @@ chapter succeeded. Provider access can still vary between requests.
 Candidates still requiring work include MangaNato (HTTP 403 here), Erai-raws
 (TLS failures/HTTP 502), Project AcgnX and BT4G (HTTP 403), and AnimeParadise
 (asset/API inspection blocked with HTTP 403). WuxiaClick responded, but the
-sampled query returned a generic listing; a proper search/chapter adapter remains
-necessary. GetComics and KHInsider responded, but their download chains are not
+sampled query returned a generic listing at that time; a working installed-only search/chapter adapter is now available (see the GitHub source expansion below). Earlier candidate status remains historical.
+GetComics and KHInsider responded, but their download chains are not
 implemented. These remain research entries rather than working source claims.
 
 Validation for the expansion: native unit/browse suites and the headless build
@@ -167,7 +167,7 @@ reported conditions; they cannot be repaired by adding an unverified mirror.
 | Useful discovery results | Real covers, authors, years, snippets, summaries and ratings reach native and web views | A missing provider field stays empty |
 | Keep browsing beyond the first page | Wikisource uses the server continuation; comics and audio advance by consumed provider rows | Fixed result buffers still bound a session |
 | Read a manga series | MangaDex has a chapter picker and previous/next navigation; the web reader requests pages that actually finished downloading | 100 chapter rows per feed window, a client navigation bound of 10,000 rows, and 128 pages per chapter |
-| Read novels without losing the selected work | Reader workers copy work identity; older requests cannot replace newer text or clear its loading state | 400 chapters and bounded text per work; truncated text is labelled |
+| Read novels without losing the selected work | Reader workers copy work identity; older requests cannot replace newer text or clear its loading state | 400 rows per chapter window; absolute chapter navigation and work-scoped exact-URL resume. Whole-directory responses are bounded to 4 MiB; blocked/truncated responses report failure. Bounded text is labelled when truncated |
 | Reliable connected reading catalogs | OPDS checks HTTP success and complete Atom envelopes, decodes next links, deduplicates pages, and snapshots request credentials | Unprefixed OPDS 1.x Atom feeds; 300 entries and a 4 MiB response limit |
 | Retain usable television catalogs | IPTV source replacement deletes and inserts in one transaction, rolling back failed replacements | Stream reachability still depends on the broadcaster |
 | Accurate search actions | Catalog entries open details and reading entries open readers; queue actions require a usable playback identity | Metadata does not guarantee an accessible stream |
@@ -345,9 +345,11 @@ adapters. No downloaded repository scripts were executed or copied:
 
 Torrent feeds do not expose trustworthy swarm counts; unknown counts remain
 unknown. ACG.RIP `.torrent` URLs play but cannot use the magnet-only queue.
-WuxiaClick advertises WebP covers: web renders these; the native decoder currently
-uses a fallback icon. Reading lists and chapters are bounded; very long novels
-load at most 400 chapter entries. Audio catalogs use bounded requests and full
+WuxiaClick advertises WebP covers: native and web now render these. Native covers,
+comic pages and browser frames share bounded libwebp decoding. Reading uses
+400-chapter windows with previous/next navigation and absolute chapter identities;
+books longer than a window continue loading chapters. Resume is scoped to source
+and canonical work URL, retaining the exact chapter URL when a directory changes. Audio catalogs use bounded requests and full
 provider audio, with no fabricated previews. Provider uptime can still vary.
 NovelHall, NovelFull, ScribbleHub, ccMixter, and weak LibriVox/Deezer probes were
 excluded from this batch after blocked, timed-out, or unusable responses.
@@ -370,3 +372,78 @@ python3 tests/test_github_torrent_sources.py
 The reading check contacts real providers; audio app checks use owned local
 metadata and silence fixtures. The audio byte probes above are separate live
 provider evidence. Universal reader actions preserve Browse search state.
+
+
+### ComicFury, Waveform and HiAnime (2026-10-03)
+
+These additions require their installed source configuration. ComicFury's actual
+public search returns owned title/cover/reader identities in Browse and universal
+Search. The reader opens the oldest public batch and supports adjacent batches
+from the provider's comic IDs; each batch is capped at 128 images. A full advertised
+PNG was verified HTTP 200 (792,452 bytes, 2480×3508). Contract research:
+[ComicFury extension](https://github.com/keiyoushi/extensions-source/blob/4c8cda759ae7f9948fecacb5eec2b47b011ccf51/src/all/comicfury/src/eu/kanade/tachiyomi/extension/all/comicfury/ComicFury.kt)
+(Apache-2.0; no implementation copied).
+
+Waveform uses the publisher's [Megaphone RSS feed](https://feeds.megaphone.fm/STU4418364045)
+and the existing native/web episode selector and Opal player. The 2.03 MiB feed
+fits the 4 MiB limit; a real episode returned HTTP 206, audio/mpeg, and 1,024 ID3
+bytes. Episode windows remain capped at 200 rows with pagination. RSS parsing now
+skips image/HTML enclosures and selects audio instead; publishers without enclosure
+MIME types remain compatible.
+
+HiAnime is a direct playback fallback, not a website playback action. It matches
+an exact series title/alias and requested episode, then consumes the advertised
+subtitled ZokoAnime server and bounded video configuration. Naruto episode 1
+returned HTTP 200 for the master and 800p VOD playlists; the first media segment's
+HEAD returned HTTP 200, video/mp2t (238,008 bytes). The stream requires Referer
+`https://zokoanime.video/`. Only this verified server/sub mode is supported; missing
+servers, malformed responses, cancellations and unavailable media fall through to
+other providers. Contract research:
+[ani-cli](https://github.com/pystardust/ani-cli/blob/3ad53631ef2433b0c26e25ab011a5b149706c120/ani-cli)
+(GPL-3.0; original Opal implementation). Live HTTP evidence establishes provider
+reachability, not uninterrupted playback or future availability.
+
+Public metadata uses bounded requests, configured mirrors, brief caching and
+source health; credentialed or media responses are not cached there. These
+providers do not expose trustworthy availability/swarm counts. Detailed provenance
+and probe limits are recorded in `data/source-research.json`.
+
+### Public source reliability
+
+Public audio, ComicFury, HiAnime metadata and installed reading search use a shared
+bounded request seam. It retries only configured mirrors, preserving each request
+path; it never invents domains. Source settings show unchecked, checking, ready,
+cached, backup, unavailable and cancelled outcomes. Unchecked means no observation
+has been made, not a successful health check.
+
+The metadata cache holds at most eight entries of at most 1 MiB each, for the
+adapter's short TTL. Source configuration changes invalidate it. Credentialed,
+range and POST requests are excluded from caching and mirror forwarding. Public
+search workers attach their owning generation to supervised requests; superseding
+or cancelling a search terminates stale curl work. Shutdown terminates supervised
+requests as well. Provider schema failures are not cached by validating adapters.
+
+Deterministic checks:
+
+```sh
+zig build test-native-images
+python3 tests/test_source_reliability_live.py --binary /tmp/opal-v2-headless/bin/opal
+python3 tests/test_novel_windows_live.py --binary /tmp/opal-v2-headless/bin/opal
+```
+
+The source catalog is a set of installable choices. Provider uptime, regional
+restrictions and unsupported embed hosts can still limit any individual source;
+no installation or status label guarantees every title is available.
+
+
+Isolated category action check:
+
+```sh
+python3 tests/test_github_categories_live.py --binary /tmp/opal-v2-headless/bin/opal --port 41712 --live-providers
+```
+
+Verified 2/2: ComicFury universal Search returned 12 works, opened six oldest
+reader pages, preserved Browse results and served a real 439,024-byte PNG through
+Opal's page API. The podcast test uses owned synthetic RSS and silence WAV and
+verifies Opal's actual decoder is active with a positive duration; it proves the
+new enclosure selection without streaming the live publisher episode.

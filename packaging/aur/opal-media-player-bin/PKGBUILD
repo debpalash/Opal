@@ -42,5 +42,6 @@ package() {
     install -Dm644 manga-sources-sfw.json     "$pkgdir/usr/lib/opal/manga-sources-sfw.json"
     install -Dm644 opal.desktop               "$pkgdir/usr/share/applications/opal.desktop"
     install -Dm644 opal.svg                   "$pkgdir/usr/share/icons/hicolor/scalable/apps/opal.svg"
+    install -Dm644 licenses/libwebp.txt "$pkgdir/usr/share/licenses/$pkgname/libwebp.txt"
     install -Dm644 LICENSE                    "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

@@ -31,6 +31,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         xz-utils \
         # -dev packages the build links against:
+        libwebp-dev \
         libmpv-dev \
         libsqlite3-dev \
         libtorrent-rasterbar-dev \
@@ -104,6 +105,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # that layout under /opt/opal and run from there.
 COPY --from=builder /src/zig-out/bin/opal /usr/local/bin/opal
 COPY --from=builder /src/libtorrent_wrapper.so /usr/local/lib/
+COPY --from=builder /src/docs/licenses /opt/opal/licenses
 COPY --from=builder /src/web /opt/opal/web
 COPY --from=builder /src/data/plugins-manifest.json /opt/opal/plugins-manifest.json
 # browser.zig resolves camoufox_bridge.py from the resource root; without it

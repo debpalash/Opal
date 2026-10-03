@@ -196,7 +196,9 @@ def test_podcasts_wired():
         # transport can exit instead of leaving the worker stuck on "Loading…".
         "bounded fetch drains oversized responses": (
             "reliable_fetch.fetch(" in svc
-            and "while (true)" in _src("src/services/reliable_fetch.zig")
+            and "bounded.StreamProcess.init" in _src("src/services/reliable_fetch.zig")
+            and "process.finish()" in _src("src/services/reliable_fetch.zig")
+            and "process.requestStop()" in _src("src/services/reliable_fetch.zig")
             and "overflow = true" in _src("src/services/reliable_fetch.zig")
         ),
         # episodes[] holds 200, but a 1 MB cap only ever reached the newest 61.

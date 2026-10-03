@@ -310,8 +310,15 @@ pub fn uploadIfReady(pixels: *?[]u8, w: u32, h: u32, tex: *?dvui.Texture) bool {
     // skip this frame (prevents an out-of-bounds read / mis-sized texture).
     if (pixels.*.?.len != num_px * 4) return false;
 
-    const pma: []dvui.Color.PMA = @as([*]dvui.Color.PMA, @ptrCast(@alignCast(pixels.*.?.ptr)))[0..num_px];
-    tex.* = dvui.textureCreate(pma, w, h, .linear, .rgba_32) catch null;
+    // Decoder output is straight RGBA. DVUI converts to premultiplied alpha
+    // in a temporary copy; failed uploads leave the original retryable bytes
+    // unchanged instead of premultiplying them a second time next frame.
+    tex.* = dvui.Texture.fromImageSource(.{ .pixels = .{
+        .rgba = pixels.*.?,
+        .width = w,
+        .height = h,
+        .interpolation = .linear,
+    } }) catch null;
 
     if (tex.* != null) {
         c_alloc.free(pixels.*.?);
