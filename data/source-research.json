@@ -1,0 +1,107 @@
+{
+  "checked_at": "2026-10-03",
+  "method": "GitHub API repository and contract research; independent Opal GPL-3.0 adapters, no copied scripts",
+  "reading": [
+    {
+      "id": "standardebooks",
+      "name": "Standard Ebooks",
+      "installed_only": true,
+      "base": "https://standardebooks.org",
+      "origin_repo": "standardebooks/web",
+      "commit": "2428ad7ac3d48bf8701a9af27326a59968807484",
+      "license": "CC0-1.0",
+      "path": "www/ebooks/index.php; www/ebooks/http-router.php",
+      "implementation": "Independent allocation-free schema:Book HTML parser; provider advertised JPEG, author and /text TOC; bounded XHTML main extraction",
+      "live": "HTTP200 search, work detail, TOC and chapter;7 works,65 TOC entries,4612 text bytes",
+      "limits": "12 search rows/page;400 chapter rows; existing131072-byte prose cap"
+    },
+    {
+      "id": "wuxiaclick",
+      "name": "WuxiaClick",
+      "installed_only": true,
+      "base": "https://wuxia.click",
+      "origin_repo": "lncrawl/lightnovel-crawler",
+      "commit": "59b0382d51927953aa8120c5de62dab23ce3f731",
+      "license": "GPL-3.0",
+      "path": "sources/en/w/wuxiaclick.py",
+      "implementation": "Contract research only; no repository code copied. Independent owned JSON search/directory/prose parser",
+      "live": "HTTP200 search, directory and chapter API;12 works,56 chapters,8906 prose bytes",
+      "limits": "12 search rows/page;400 chapter rows; real advertised WebP cover supported by web, native stb fallback icon"
+    }
+  ],
+  "audio": {
+    "openverse": {
+      "repo": "WordPress/openverse",
+      "commit": "c815ba4942a3d53cb687d51121f7d44caec7b7e3",
+      "license": "MIT",
+      "paths": [
+        "api/api/docs/audio_docs.py",
+        "api/api/serializers/audio_serializers.py"
+      ],
+      "search": "https://api.openverse.org/v1/audio/?q=jazz&page_size=2",
+      "metadata_status": 200,
+      "full_audio_status": 206,
+      "full_audio_content_type": "audio/mpeg",
+      "sample_bytes": 4096
+    },
+    "netlabels": {
+      "repo": "jjjake/internetarchive",
+      "commit": "a6178c110a94d0cf80fb3a46b6ca36366b72b733",
+      "license": "AGPL-3.0 protocol reference only; no code copied",
+      "paths": [
+        "internetarchive/search.py",
+        "internetarchive/item.py"
+      ],
+      "metadata": "https://archive.org/metadata/SCL047",
+      "metadata_status": 200,
+      "full_audio": "https://archive.org/download/SCL047/01%20-%201967.mp3",
+      "full_audio_status": 206,
+      "sample_bytes": 4096
+    },
+    "somafm": {
+      "repo": "bshogol/shojey",
+      "commit": "1280bcd787fbd31d1ca0ffcd78fd73d0d27750dd",
+      "license": "MIT",
+      "paths": [
+        "bin/shojey",
+        "LICENSE"
+      ],
+      "metadata": "https://somafm.com/channels.json",
+      "metadata_status": 200,
+      "playlist": "https://api.somafm.com/beatblender.pls",
+      "stream": "https://ice2.somafm.com/beatblender-128-mp3",
+      "full_audio_status": 206,
+      "sample_bytes": 4096
+    },
+    "rejected": {
+      "ccmixter": "metadata200, actual file403",
+      "deezer": "search200 with empty data; preview-only",
+      "librivox": "direct API timed out/404; already indirectly covered by Archive"
+    }
+  },
+  "app_validation": {
+    "reading": {
+      "real_providers": true,
+      "universal_reader_actions": true,
+      "browse_state_preserved": true,
+      "standardebooks_chapters": 65,
+      "standardebooks_prose_characters": 4472,
+      "wuxiaclick_chapters_in_selected_work": 10,
+      "wuxiaclick_prose_characters": 11460
+    },
+    "audio": {
+      "isolated_fixture_cases": 2,
+      "actual_opal_playback": [
+        "Openverse Browse silence",
+        "SomaFM universal silence"
+      ],
+      "netlabels_exact_individual_track": true,
+      "license_attribution_preserved": true
+    },
+    "torrent": {
+      "actual_nova_live_rows": 199,
+      "seconds": 1.74,
+      "media_downloaded": false
+    }
+  }
+}

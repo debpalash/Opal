@@ -27,7 +27,7 @@ pub const Meta = struct {
 /// Explicit full-length labels win when a title mentions both.
 pub fn isPreviewTitle(title: []const u8) bool {
     const full_markers = [_][]const u8{
-        "full movie", "full film", "full episode", "full length",
+        "full movie",     "full film",     "full episode", "full length",
         "complete movie", "complete film", "entire movie", "entire film",
     };
     for (full_markers) |marker| {
@@ -62,7 +62,8 @@ fn hasWords(haystack: []const u8, words: []const u8) bool {
                 if (h >= haystack.len or
                     !(std.ascii.isWhitespace(haystack[h]) or haystack[h] == '-' or haystack[h] == '_')) break;
                 while (h < haystack.len and
-                    (std.ascii.isWhitespace(haystack[h]) or haystack[h] == '-' or haystack[h] == '_')) : (h += 1) {}
+                    (std.ascii.isWhitespace(haystack[h]) or haystack[h] == '-' or haystack[h] == '_')) : (h += 1)
+                {}
             } else {
                 if (h >= haystack.len or std.ascii.toLower(haystack[h]) != words[w]) break;
                 h += 1;
@@ -179,11 +180,9 @@ test "metaLine joins only the fields that are known" {
         metaLine(.{ .quality = 3, .size_bytes = 1503238553, .seeds = 42, .leech = 7 }, &b),
     );
     // No quality: no leading separator.
-    try t.expectEqualStrings("1.4 GB \u{00B7} 42 seeds",
-        metaLine(.{ .size_bytes = 1503238553, .seeds = 42 }, &b));
+    try t.expectEqualStrings("1.4 GB \u{00B7} 42 seeds", metaLine(.{ .size_bytes = 1503238553, .seeds = 42 }, &b));
     // No size: the old shape still works.
-    try t.expectEqualStrings("720p \u{00B7} 5 seeds",
-        metaLine(.{ .quality = 2, .seeds = 5 }, &b));
+    try t.expectEqualStrings("720p \u{00B7} 5 seeds", metaLine(.{ .quality = 2, .seeds = 5 }, &b));
     // Nothing known at all: empty, so the caller draws no label.
     try t.expectEqualStrings("", metaLine(.{}, &b));
     // Quality alone: no trailing separator.
@@ -195,8 +194,7 @@ test "metaLine: leech without seeds is dropped" {
     // reading "7 people have this", which is the opposite of the truth.
     var b: [64]u8 = undefined;
     try t.expectEqualStrings("1080p", metaLine(.{ .quality = 3, .leech = 7 }, &b));
-    try t.expectEqualStrings("1080p \u{00B7} 1 seeds \u{00B7} 7 leech",
-        metaLine(.{ .quality = 3, .seeds = 1, .leech = 7 }, &b));
+    try t.expectEqualStrings("1080p \u{00B7} 1 seeds \u{00B7} 7 leech", metaLine(.{ .quality = 3, .seeds = 1, .leech = 7 }, &b));
 }
 
 test "metaLine never overruns a short buffer" {
@@ -240,4 +238,41 @@ test "YouTube preview titles are standalone promotional clips, not full movies" 
     try t.expect(!isPreviewTitle("Teasertown: Full Film"));
     try t.expect(!isPreviewTitle("Some Movie - Official Trailer - Full Movie"));
     try t.expect(!isPreviewTitle("Some Movie - Full-Movie (Trailer included)"));
+}
+
+/// Nova emits an engine URL. Labels use its host, never credentials or query.
+/// Known provider identities retain meaningful names despite service subdomains.
+pub fn novaProviderLabel(engine: []const u8, out: []u8) []const u8 {
+    var host = std.mem.trim(u8, engine, " \t\r\n");
+    const is_url = std.mem.indexOf(u8, host, "://") != null;
+    if (std.mem.indexOf(u8, host, "://")) |scheme| host = host[scheme + 3 ..];
+    const authority_end = std.mem.indexOfAny(u8, host, "/?#") orelse host.len;
+    host = host[0..authority_end];
+    if (std.mem.lastIndexOfScalar(u8, host, '@')) |userinfo| {
+        if (!is_url) return "";
+        host = host[userinfo + 1 ..];
+    }
+    if (std.mem.indexOfScalar(u8, host, ':')) |port| host = host[0..port];
+    if (host.len >= 4 and std.ascii.eqlIgnoreCase(host[0..4], "www.")) host = host[4..];
+    var label: []const u8 = if (std.ascii.eqlIgnoreCase(host, "share.dmhy.org") or std.ascii.eqlIgnoreCase(host, "dmhy.org")) "DMHY" else if (std.ascii.eqlIgnoreCase(host, "acg.rip")) "ACG.RIP" else if (std.ascii.eqlIgnoreCase(host, "subsplease.org")) "SubsPlease" else host;
+    const known = std.ascii.eqlIgnoreCase(host, "share.dmhy.org") or std.ascii.eqlIgnoreCase(host, "dmhy.org") or std.ascii.eqlIgnoreCase(host, "acg.rip") or std.ascii.eqlIgnoreCase(host, "subsplease.org");
+    if (!known) if (std.mem.indexOfScalar(u8, label, '.')) |dot| {
+        label = label[0..dot];
+    };
+    const n = @min(label.len, out.len);
+    @memcpy(out[0..n], label[0..n]);
+    return out[0..n];
+}
+
+test "Nova provider labels preserve new source identities and exclude credentials" {
+    var out: [32]u8 = undefined;
+    try std.testing.expectEqualStrings("DMHY", novaProviderLabel("https://share.dmhy.org", &out));
+    try std.testing.expectEqualStrings("ACG.RIP", novaProviderLabel("https://acg.rip", &out));
+    try std.testing.expectEqualStrings("SubsPlease", novaProviderLabel("https://subsplease.org", &out));
+    try std.testing.expectEqualStrings("DMHY", novaProviderLabel("HTTPS://user:secret@SHARE.DMHY.ORG:443/feed?token=secret", &out));
+    try std.testing.expectEqualStrings("DMHY", novaProviderLabel("https://www.dmhy.org/", &out));
+    try std.testing.expectEqualStrings("example", novaProviderLabel("https://user:secret@example.test/path?key=secret", &out));
+    try std.testing.expectEqualStrings("", novaProviderLabel("user:secret@example.test", &out));
+    try std.testing.expectEqualStrings("share", novaProviderLabel("https://share.dmhy.org.evil.test/", &out));
+    try std.testing.expectEqualStrings("Jackett", novaProviderLabel("Jackett", &out));
 }

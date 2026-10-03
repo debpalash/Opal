@@ -344,6 +344,8 @@ pub const Song = struct {
 /// `cover` (a full image URL). The active source (state.app.music.source) picks
 /// how each field is used.
 pub const MusicSong = struct {
+    attribution: [768]u8 = @splat(0),
+    attribution_len: usize = 0,
     download_allowed: bool = true,
     id: [128]u8 = std.mem.zeroes([128]u8),
     id_len: usize = 0,
@@ -518,4 +520,30 @@ test "music action rejects truncated identities but accepts percent encoded IDs"
     try std.testing.expect(identityQueryFits("a%26b", 3));
     try std.testing.expect(!identityQueryFits("a%26b", 2));
     try std.testing.expect(!identityQueryFits("", 128));
+}
+
+/// Bounded Browse projection preserves exact stream/identity and source credits.
+pub fn publicAudioSong(row: @import("audio_sources_pure.zig").Item) ?MusicSong {
+    const audio = @import("audio_sources_pure.zig");
+    var song: MusicSong = .{ .download_allowed = false };
+    if (row.id_len > song.id.len or row.play_url_len > song.play_url.len) return null;
+    audio.copy(&song.id, &song.id_len, row.id[0..row.id_len]);
+    audio.copy(&song.title, &song.title_len, row.title[0..row.title_len]);
+    audio.copy(&song.artist, &song.artist_len, row.artist[0..row.artist_len]);
+    if (row.cover_len <= song.cover.len) audio.copy(&song.cover, &song.cover_len, row.cover[0..row.cover_len]);
+    audio.copy(&song.play_url, &song.play_url_len, row.play_url[0..row.play_url_len]);
+    audio.copy(&song.attribution, &song.attribution_len, row.summary[0..row.summary_len]);
+    return song;
+}
+test "public audio Browse retains attribution and never truncates a stream" {
+    const audio = @import("audio_sources_pure.zig");
+    var row: audio.Item = .{};
+    audio.copy(&row.id, &row.id_len, "track");
+    audio.copy(&row.play_url, &row.play_url_len, "https://cdn/song.mp3");
+    audio.copy(&row.summary, &row.summary_len, "CC BY artist");
+    const song = publicAudioSong(row).?;
+    try std.testing.expect(!song.download_allowed);
+    try std.testing.expectEqualStrings("CC BY artist", song.attribution[0..song.attribution_len]);
+    row.play_url_len = 300;
+    try std.testing.expect(publicAudioSong(row) == null);
 }

@@ -100,6 +100,12 @@ pub const SRC_SUBSONIC: u8 = 1;
 pub const SRC_JELLYFIN: u8 = 2;
 pub const SRC_PLEX: u8 = 3;
 pub const SRC_AUDIUS: u8 = 4;
+fn installedPublicAudio(id: []const u8) bool {
+    var base: [512]u8 = undefined;
+    return source_config.copyValue(id, "base", &base) != null;
+}
+pub const SRC_OPENVERSE: u8 = 5;
+pub const SRC_NETLABELS: u8 = 6;
 
 pub const UniversalStatus = @import("resolver_lifecycle_pure.zig").SourceStatus;
 pub const UniversalReply = struct { count: usize = 0, status: UniversalStatus = .unavailable, connection: u64 = 0 };
@@ -118,6 +124,8 @@ pub fn universalProviderName(source: u8) []const u8 {
         SRC_JELLYFIN => "Jellyfin music",
         SRC_PLEX => "Plex music",
         SRC_AUDIUS => "Audius",
+        SRC_OPENVERSE => "Openverse",
+        SRC_NETLABELS => "Archive Netlabels",
         else => "Music",
     };
 }
@@ -264,7 +272,7 @@ pub fn playUniversalRoute(route_url: []const u8, title: []const u8, artist: []co
 }
 
 pub fn selectSource(src: u8) bool {
-    if (src > SRC_AUDIUS) return false;
+    if (src > SRC_NETLABELS) return false;
     search_request.cancel(&state.app.music.is_loading);
     parse_mutex.lock();
     defer parse_mutex.unlock();
@@ -362,6 +370,8 @@ fn sourceConfigured(src: u8) bool {
         SRC_JELLYFIN => jfCreds(&b, &t) != null,
         SRC_PLEX => plexCreds(&b, &t) != null,
         SRC_AUDIUS => source_config.get("audius", "base") != null,
+        SRC_OPENVERSE => installedPublicAudio("openverse"),
+        SRC_NETLABELS => installedPublicAudio("netlabels"),
         else => false,
     };
 }
@@ -480,6 +490,12 @@ fn makeSearchJob(query: []const u8, generation: u32, append: bool, offset: u32) 
     var tok: [320]u8 = undefined;
     switch (job.source) {
         SRC_AUDIUS => copyField(&job.base, &job.base_len, source_config.get("audius", "base") orelse return null),
+        SRC_OPENVERSE, SRC_NETLABELS => {
+            const id = if (job.source == SRC_OPENVERSE) "openverse" else "netlabels";
+            if (!installedPublicAudio(id)) return null;
+            const base = source_config.copyValue(id, "base", &job.base) orelse return null;
+            job.base_len = base.len;
+        },
         SRC_SUBSONIC => {
             var q: [300]u8 = undefined;
             const c = creds(&b, &q) orelse return null;
@@ -517,6 +533,7 @@ fn spawnSearchJob(job: SearchJob) bool {
         SRC_JELLYFIN => spawnWorker(jellyfinMusicWorker, job),
         SRC_PLEX => spawnWorker(plexMusicWorker, job),
         SRC_AUDIUS => spawnWorker(audiusWorker, job),
+        SRC_OPENVERSE, SRC_NETLABELS => spawnWorker(publicAudioWorker, job),
         else => false,
     };
 }
@@ -601,6 +618,27 @@ fn audiusWorker(job: SearchJob) void {
         count += 1;
     }
     publishPage(job, count, start, consumed);
+    published = true;
+}
+
+fn publicAudioWorker(job: SearchJob) void {
+    const audio = @import("audio_sources.zig");
+    var published = false;
+    defer finishJob(job, published);
+    const rows = alloc.alloc(audio.Item, PAGE_SIZE) catch return;
+    defer alloc.free(rows);
+    const reply = audio.searchInto(if (job.source == SRC_OPENVERSE) .openverse else .netlabels, job.query[0..job.query_len], rows, job.base[0..job.base_len]);
+    if (reply.count == 0 and reply.status != .no_results) return;
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (!search_request.isCurrent(job.generation)) return;
+    var count: usize = 0;
+    for (rows[0..reply.count]) |row| {
+        const song = pure.publicAudioSong(row) orelse continue;
+        state.app.music.results[count] = song;
+        count += 1;
+    }
+    publishPage(job, count, 0, 0);
     published = true;
 }
 
@@ -834,7 +872,7 @@ fn playCopiedSong(song: pure.MusicSong, source: u8) void {
     var tokb: [320]u8 = undefined;
 
     switch (source) {
-        SRC_JIOSAAVN, SRC_AUDIUS => {
+        SRC_JIOSAAVN, SRC_AUDIUS, SRC_OPENVERSE, SRC_NETLABELS => {
             // Hand the perma_url to mpv; its bundled yt-dlp resolves the signed
             // CDN audio stream (no DES, no third-party instance).
             if (purl.len == 0) return;
@@ -988,7 +1026,7 @@ fn downloadCopiedSong(song: pure.MusicSong, source: u8) void {
         var tokb: [320]u8 = undefined;
         var url_buf: [1024]u8 = undefined;
         const stream = switch (source) {
-            SRC_AUDIUS => purl,
+            SRC_AUDIUS, SRC_OPENVERSE, SRC_NETLABELS => purl,
             SRC_SUBSONIC => blk: {
                 if (id.len == 0) return;
                 var q: [300]u8 = undefined;
@@ -1083,6 +1121,8 @@ pub fn renderContent() void {
             .{ .label = "Jellyfin", .icon = icons.tvg.lucide.library },
             .{ .label = "Plex", .icon = icons.tvg.lucide.play },
             .{ .label = "Audius", .icon = icons.tvg.lucide.radio },
+            .{ .label = "Openverse", .icon = icons.tvg.lucide.music },
+            .{ .label = "Netlabels", .icon = icons.tvg.lucide.music },
         };
         for (sources, 0..) |source, clicked| {
             if (components.filterChip(@src(), source.label, source.icon, clicked == state.app.music.source, clicked + 91000) and clicked != state.app.music.source) {
@@ -1257,7 +1297,7 @@ fn coverUrlForSource(song: *const pure.MusicSong, source: u8, url_buf: []u8) []c
     var b: [256]u8 = undefined;
     var tokb: [320]u8 = undefined;
     switch (source) {
-        SRC_JIOSAAVN, SRC_AUDIUS => {
+        SRC_JIOSAAVN, SRC_AUDIUS, SRC_OPENVERSE, SRC_NETLABELS => {
             if (cover_field.len > url_buf.len) return url_buf[0..0];
             @memcpy(url_buf[0..cover_field.len], cover_field);
             return url_buf[0..cover_field.len];
@@ -1368,7 +1408,7 @@ fn renderCard(i: usize, card_w: f32, song: *const pure.MusicSong, source: u8) vo
             .gravity_y = 0.5,
             .padding = .{ .x = 2, .y = 4, .w = 2, .h = 0 },
         });
-        if (dvui.buttonIcon(@src(), "musicdl", icons.tvg.lucide.download, .{}, .{}, .{
+        if (song.download_allowed and dvui.buttonIcon(@src(), "musicdl", icons.tvg.lucide.download, .{}, .{}, .{
             .id_extra = i + 7000,
             .color_text = theme.colors.text_tertiary,
             .color_fill = theme.transparent,
@@ -1389,6 +1429,17 @@ fn renderCard(i: usize, card_w: f32, song: *const pure.MusicSong, source: u8) vo
             .expand = .horizontal,
             .padding = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
         });
+    }
+    if (song.attribution_len > 0) {
+        var credit_wd: dvui.WidgetData = undefined;
+        _ = dvui.label(@src(), "License & attribution", .{}, .{
+            .data_out = &credit_wd,
+            .id_extra = i + 4100,
+            .color_text = theme.colors.text_tertiary,
+            .font = .{ .size = 10 },
+            .expand = .horizontal,
+        });
+        components.tipId(@src(), credit_wd, song.attribution[0..@min(song.attribution_len, song.attribution.len)], i + 4200);
     }
 }
 

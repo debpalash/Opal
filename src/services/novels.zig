@@ -29,6 +29,7 @@ const pure = @import("novels_pure.zig");
 const nsp = @import("novel_sources_pure.zig");
 const archive = @import("archive_pure.zig");
 const expanded = @import("expanded_reading_pure.zig");
+const reading_provider = @import("reading_provider_pure.zig");
 const books = @import("public_books_pure.zig");
 const source_config = @import("../core/source_config.zig");
 // Anti-block fetch layer — used by the HTML-scraper engines' GETs so a
@@ -430,6 +431,10 @@ fn searchWorker(job: SearchJob) void {
         filled += fetchExpandedNovel(query, my_gen, filled, 1, src);
         if (!search_request.isCurrent(my_gen)) return;
     }
+    inline for (.{ NovelSource.standardebooks, NovelSource.wuxiaclick }) |src| {
+        filled += fetchReadingProvider(query, my_gen, filled, 1, src);
+        if (!search_request.isCurrent(my_gen)) return;
+    }
 
     if (madaraNovelBase() != null) {
         filled += fetchMadaraNovel(query, my_gen, filled, 1);
@@ -531,6 +536,40 @@ fn fetchExpandedNovel(query: []const u8, gen: u32, start: usize, page: u32, src:
         }
         addResult(start + n, src, title, abs);
         setNovelCover(&nr_metadata[start + n], base, item.cover);
+        n += 1;
+    }
+    nr_count = start + n;
+    return n;
+}
+
+fn fetchReadingProvider(query: []const u8, gen: u32, start: usize, page: u32, src: NovelSource) usize {
+    var base_buf: [512]u8 = undefined;
+    const base = source_config.copyValue(@tagName(src), "base", &base_buf) orelse return 0;
+    const provider: reading_provider.Source = if (src == .standardebooks) .standardebooks else .wuxiaclick;
+    var url_buf: [1600]u8 = undefined;
+    const url = reading_provider.searchUrl(&url_buf, base, provider, query, page) orelse return 0;
+    const body = scrapeHtml(url, 2 * 1024 * 1024) orelse return 0;
+    defer alloc.free(body);
+    const items = alloc.alloc(reading_provider.Item, 12) catch return 0;
+    defer alloc.free(items);
+    const parsed = reading_provider.parseInto(body, base, provider, items);
+    if (!parsed.valid_listing or !search_request.isCurrent(gen)) return 0;
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (!search_request.isCurrent(gen)) return 0;
+    var n: usize = 0;
+    for (items[0..parsed.count]) |*item| {
+        if (start + n >= MAX_RESULTS) break;
+        const title = item.title[0..item.title_len];
+        const work = item.url[0..item.url_len];
+        if (work.len > nr_urls[0].len or rowExists(src, title, work, start + n)) continue;
+        addResult(start + n, src, title, work);
+        const meta = &nr_metadata[start + n];
+        @memcpy(meta.author_buf[0..item.author_len], item.author[0..item.author_len]);
+        meta.author_len = item.author_len;
+        @memcpy(meta.overview_buf[0..item.synopsis_len], item.synopsis[0..item.synopsis_len]);
+        meta.overview_len = item.synopsis_len;
+        setNovelCover(meta, base, item.cover[0..item.cover_len]);
         n += 1;
     }
     nr_count = start + n;
@@ -950,6 +989,12 @@ fn loadMoreWorker(job: SearchJob, next_page: u32) void {
         start += n;
         expanded_more = expanded_more or n > 0;
     }
+    inline for (.{ NovelSource.standardebooks, NovelSource.wuxiaclick }) |src| {
+        const n = fetchReadingProvider(query, my_gen, start, next_page, src);
+        if (!search_request.isCurrent(my_gen)) return;
+        start += n;
+        expanded_more = expanded_more or n > 0;
+    }
     if (madara_more.load(.acquire) and madaraNovelBase() != null and start < MAX_RESULTS) {
         const n = fetchMadaraNovel(query, my_gen, start, next_page);
         if (search_request.current() != my_gen) return;
@@ -1029,11 +1074,32 @@ fn chaptersWorker(job: ReaderJob) void {
         .internet_archive, .openlibrary => chaptersInternetArchive(job),
         .gutenberg => chaptersGutenberg(job),
         .royalroad, .novelfire => chaptersExpanded(job),
+        .standardebooks, .wuxiaclick => chaptersReadingProvider(job),
     }
     parse_mutex.lock();
     const capped = chapters_gen.load(.acquire) == my_gen and ch_count >= MAX_CHAPTERS;
     parse_mutex.unlock();
     if (capped) logs.pushLog("warn", "novels", "Chapter list reached the 400-chapter reader limit", false);
+}
+
+fn chaptersReadingProvider(job: ReaderJob) void {
+    var base_buf: [512]u8 = undefined;
+    const base = source_config.copyValue(@tagName(job.source), "base", &base_buf) orelse return;
+    const provider: reading_provider.Source = if (job.source == .standardebooks) .standardebooks else .wuxiaclick;
+    const work = job.url[0..job.url_len];
+    var url_buf: [1600]u8 = undefined;
+    const url = reading_provider.chapterListUrl(&url_buf, base, provider, work) orelse return;
+    const body = scrapeHtml(url, 4 * 1024 * 1024) orelse return;
+    defer alloc.free(body);
+    const rows = alloc.alloc(reading_provider.Chapter, MAX_CHAPTERS) catch return;
+    defer alloc.free(rows);
+    const n = reading_provider.chaptersInto(body, base, provider, work, rows);
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (chapters_gen.load(.acquire) != job.generation) return;
+    for (rows[0..n], 0..) |*row, i| addChapter(i, row.title[0..row.title_len], row.url[0..row.url_len]);
+    ch_count = n;
+    if (n == 0) state.app.novels.fetch_error = true;
 }
 
 fn chaptersExpanded(job: ReaderJob) void {
@@ -1445,9 +1511,29 @@ fn textWorker(job: ReaderJob) void {
         textInternetArchive(job);
     } else if (job.source == .gutenberg) {
         textGutenberg(job);
+    } else if (job.source == .standardebooks or job.source == .wuxiaclick) {
+        textReadingProvider(job);
     } else {
         textSourced(job);
     }
+}
+
+fn textReadingProvider(job: ReaderJob) void {
+    const body = scrapeHtml(job.url[0..job.url_len], 2 * 1024 * 1024) orelse {
+        parse_mutex.lock();
+        defer parse_mutex.unlock();
+        if (text_gen.load(.acquire) == job.generation) state.app.novels.fetch_error = true;
+        return;
+    };
+    defer alloc.free(body);
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (text_gen.load(.acquire) != job.generation) return;
+    const source: reading_provider.Source = if (job.source == .standardebooks) .standardebooks else .wuxiaclick;
+    const n = reading_provider.chapterText(body, source, state.app.novels.text_buf[0..TEXT_CAP]);
+    state.app.novels.text_len = n;
+    state.app.novels.text_truncated = n >= TEXT_CAP;
+    state.app.novels.fetch_error = n == 0;
 }
 
 /// Wikisource: `action=parse&prop=text` → JSON `parse.text` HTML → reading text.
@@ -1582,6 +1668,8 @@ fn textSourced(job: ReaderJob) void {
 // Resume persistence (per-novel last-read chapter)
 // ══════════════════════════════════════════════════════════
 
+// openChapter holds parse_mutex for the work identity and chapter count.
+// Reacquiring it here would deadlock before any prose worker can start.
 fn saveResume(chapter: usize) void {
     const title = state.app.novels.work_title[0..state.app.novels.work_title_len];
     if (title.len == 0) return;
@@ -1604,9 +1692,7 @@ fn saveResume(chapter: usize) void {
         title,
     );
     if (link.len == 0) return;
-    parse_mutex.lock();
     const total = ch_count;
-    parse_mutex.unlock();
     var label_buf: [48]u8 = undefined;
     const label = std.fmt.bufPrint(&label_buf, "Chapter {d}", .{chapter + 1}) catch "";
     @import("library_store.zig").upsertProgress(
@@ -1913,6 +1999,8 @@ fn novelSourceLabel(source: NovelSource) []const u8 {
         .openlibrary => "Open Library",
         .royalroad => "Royal Road",
         .novelfire => "NovelFire",
+        .standardebooks => "Standard Ebooks",
+        .wuxiaclick => "WuxiaClick",
         else => "Connected source",
     };
 }

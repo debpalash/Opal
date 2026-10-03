@@ -291,6 +291,7 @@ pub fn loadPopularOnce() void {
 
 fn popularWorker(my_gen: u32) void {
     defer search_request.finish(my_gen, &state.app.radio.is_loading);
+    defer appendSoma(my_gen, "");
 
     // buildPopularUrl (not buildTopVoteUrl) — the votes-descending search form
     // that loadMore's append windows also use, so the popular rail's paging is
@@ -369,9 +370,41 @@ pub fn searchRadio(query: []const u8) void {
     }
 }
 
+/// Installed SomaFM contributes bounded real station playlists independently
+/// of RadioBrowser availability; its identities never trigger RadioBrowser pings.
+fn appendSoma(generation: u32, query: []const u8) void {
+    if (!search_request.isCurrent(generation)) return;
+    var base: [512]u8 = undefined;
+    const endpoint = @import("../core/source_config.zig").copyValue("somafm", "base", &base) orelse return;
+    const audio = @import("audio_sources.zig");
+    const rows = alloc.alloc(audio.Item, 16) catch return;
+    defer alloc.free(rows);
+    const reply = audio.searchInto(.somafm, query, rows, endpoint);
+    if (reply.count == 0) return;
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (!search_request.isCurrent(generation)) return;
+    for (rows[0..reply.count]) |row| {
+        if (state.app.radio.result_count == state.app.radio.results.len) break;
+        var station: pure.Station = .{};
+        const id = std.fmt.bufPrint(&station.stationuuid, "somafm:{s}", .{row.id[0..row.id_len]}) catch continue;
+        station.stationuuid_len = id.len;
+        if (row.play_url_len > station.url.len) continue;
+        audio.pure.copy(&station.name, &station.name_len, row.title[0..row.title_len]);
+        audio.pure.copy(&station.url, &station.url_len, row.play_url[0..row.play_url_len]);
+        if (row.cover_len <= station.favicon.len) audio.pure.copy(&station.favicon, &station.favicon_len, row.cover[0..row.cover_len]);
+        audio.pure.copy(&station.tags, &station.tags_len, row.summary[0..row.summary_len]);
+        audio.pure.copy(&station.country, &station.country_len, "SomaFM");
+        state.app.radio.results[state.app.radio.result_count] = station;
+        state.app.radio.result_count += 1;
+    }
+    if (state.app.radio.result_count > 0) state.app.radio.fetch_error = false;
+}
+
 fn searchWorker(job: SearchJob) void {
     const my_gen = job.generation;
     defer search_request.finish(my_gen, &state.app.radio.is_loading);
+    defer appendSoma(my_gen, job.query[0..job.query_len]);
 
     // Percent-encode the term (space, &, =, #, ?, %, + at minimum).
     var enc: [768]u8 = undefined;
@@ -618,7 +651,7 @@ fn playCopiedStation(s: pure.Station) void {
 /// is copied into an owned heap buffer the worker frees, so no shared/mutable
 /// state is handed across the thread boundary.
 fn pingClick(uuid: []const u8) void {
-    if (uuid.len == 0) return;
+    if (uuid.len == 0 or std.mem.startsWith(u8, uuid, "somafm:")) return;
     const owned = alloc.dupe(u8, uuid) catch return;
     if (@import("../core/workers.zig").spawnLegacy(clickWorker, .{owned})) |t| {
         @import("../core/workers.zig").release(t);

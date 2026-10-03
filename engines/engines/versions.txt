@@ -26,3 +26,6 @@ nekobt: 1.0
 shanaproject: 1.0
 publicdomaintorrents: 1.0
 animetosho: 1.0
+acgrip: 1.0
+dmhy: 1.0
+subsplease: 1.0

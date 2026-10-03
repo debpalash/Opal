@@ -36,7 +36,7 @@ pub fn handle(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8
         var id_buf: [128]u8 = undefined;
         const raw_id = wire.queryParam(query, "id") orelse "";
         const id = wire.urlDecode(raw_id, &id_buf) orelse "";
-        if (source > music.SRC_AUDIUS or id.len == 0 or !@import("music_subsonic_pure.zig").identityQueryFits(raw_id, id_buf.len)) {
+        if (source > music.SRC_NETLABELS or id.len == 0 or !@import("music_subsonic_pure.zig").identityQueryFits(raw_id, id_buf.len)) {
             wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"valid track identity required\"}");
             return;
         }
@@ -55,7 +55,7 @@ pub fn handle(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8
     defer alloc.free(songs);
     const snapshot = music.copyResultSnapshot(songs);
     var field_bytes: usize = 0;
-    for (songs[0..snapshot.count]) |song| field_bytes += song.id_len + song.title_len + song.artist_len + song.cover_len + song.play_url_len;
+    for (songs[0..snapshot.count]) |song| field_bytes += song.id_len + song.title_len + song.artist_len + song.cover_len + song.play_url_len + song.attribution_len;
     const buf = alloc.alloc(u8, 2048 + snapshot.count * 128 + field_bytes * 6) catch {
         wire.sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
         return;
@@ -81,6 +81,8 @@ pub fn handle(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8
         wire.writeJsonString(&w, txt.safeUtf8(s.cover[0..@min(s.cover_len, s.cover.len)]));
         w.writeAll("\",\"url\":\"") catch return;
         wire.writeJsonString(&w, txt.safeUtf8(s.play_url[0..@min(s.play_url_len, s.play_url.len)]));
+        w.writeAll("\",\"attribution\":\"") catch return;
+        wire.writeJsonString(&w, txt.safeUtf8(s.attribution[0..@min(s.attribution_len, s.attribution.len)]));
         w.writeAll("\"}") catch return;
     }
     w.writeAll("]}") catch return;

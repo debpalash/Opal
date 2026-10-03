@@ -191,6 +191,7 @@ function renderMusic(songs){
   const html = songs.map((s, i) => `
     <div class="result">
       <div class="t">${esc(s.title)}</div>
+      ${s.attribution ? `<div class="m">${esc(s.attribution)}</div>` : ''}
       <div class="m"><span class="src">${esc(s.artist || '')}</span>
         <button class="music-details" data-details="${i}">Details</button>
         ${s.url ? `<button class="queue-btn" data-queue="${i}">Queue</button>` : ''}
@@ -212,7 +213,7 @@ function renderMusic(songs){
   $('mu-results').querySelectorAll('.music-details').forEach(button => {
     const song = songs[Number(button.dataset.details)] || {};
     button.onclick = () => openSourceDetails('Music', {
-      ...song, type:'Song', meta:song.artist || '', artUrl:song.cover || '',
+      ...song, type:'Song', meta:song.artist || '', artUrl:song.cover || '', overview:song.attribution || '',
       index:Number(button.dataset.details),
     }, button);
   });

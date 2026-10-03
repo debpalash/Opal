@@ -1,0 +1,128 @@
+{
+  "schema": 1,
+  "checked_at": "2026-10-03",
+  "implementation_license": "GPL-3.0 (original Opal adapters; zero upstream code copied)",
+  "sources": [
+    {
+      "id": "dmhy",
+      "new_plugin": true,
+      "implementation": "engines/engines/dmhy.py",
+      "origins": [
+        {
+          "repo": "Prowlarr/Indexers",
+          "commit": "ecede5c247d8e31fa156ff49a8921c78327c5b5d",
+          "path": "definitions/v11/dmhy.yml",
+          "license": "No standalone repository license file observed; endpoint facts only"
+        },
+        {
+          "repo": "Jackett/Jackett",
+          "commit": "32d7cb94c7c9b3e38327014ad1029c04ac4b2cbc",
+          "path": "src/Jackett.Common/Definitions/dmhy.yml",
+          "license": "GPL-2.0 (not copied)"
+        }
+      ],
+      "contract": "https://share.dmhy.org/topics/rss/rss.xml?keyword={query}",
+      "live": {
+        "query": "naruto",
+        "status": "HTTP 200; shipped adapter returned79 unique magnets",
+        "seconds": 0.95,
+        "response_bytes": 2452181,
+        "bounds": "4MiB response,first100 feed items",
+        "limitations": "Swarm counts and file size unavailable; enclosure length1 is placeholder, keptunknown."
+      }
+    },
+    {
+      "id": "acgrip",
+      "new_plugin": true,
+      "implementation": "engines/engines/acgrip.py",
+      "origins": [
+        {
+          "repo": "Prowlarr/Indexers",
+          "commit": "ecede5c247d8e31fa156ff49a8921c78327c5b5d",
+          "path": "definitions/v11/acgrip.yml",
+          "license": "No standalone repository license file observed; endpoint facts only"
+        },
+        {
+          "repo": "Jackett/Jackett",
+          "commit": "32d7cb94c7c9b3e38327014ad1029c04ac4b2cbc",
+          "path": "src/Jackett.Common/Definitions/acgrip.yml",
+          "license": "GPL-2.0 (not copied)"
+        }
+      ],
+      "contract": "https://acg.rip/.xml?term={query}",
+      "live": {
+        "query": "naruto",
+        "status": "HTTP 200; shipped adapter returned30 real .torrent enclosure URLs",
+        "seconds": 1.25,
+        "response_bytes": 27950,
+        "bounds": "4MiB response,first100 feed items",
+        "limitations": "RSS has byte sizes but no swarm counts; -1 unknown, no fake1-seeder values."
+      }
+    },
+    {
+      "id": "subsplease",
+      "new_plugin": false,
+      "implementation": "engines/engines/subsplease.py",
+      "origins": [
+        {
+          "repo": "qbittorrent/search-plugins",
+          "commit": "2cf8b9708a6b3d1bbd2ce956aebc0781ee11ffcc",
+          "path": "wiki/Unofficial-search-plugins (mutable wiki, observed2026-10-03)",
+          "license": "GPL-2.0 parent; registry link facts only"
+        },
+        {
+          "repo": "kli885/qBittorent-SubsPlease-Search-Plugin",
+          "commit": "6eb410d60d92d631b63aeafd4c9cd4f3daba5972",
+          "path": "subsplease.py",
+          "license": "No license file/header observed; no code copied"
+        }
+      ],
+      "contract": "https://subsplease.org/api/?f=search&tz=UTC&s={query}",
+      "live": {
+        "query": "naruto",
+        "status": "HTTP 200; shipped adapter returned90 real release magnets",
+        "seconds": 1.01,
+        "response_bytes": 88603,
+        "bounds": "4MiB response,max100 releases,max8 variants per release,max100 output rows",
+        "limitations": "Existing Opal plugin gets universal Nova search; not counted as a new provider. Sizes from magnet xl; swarm counts unavailable."
+      }
+    }
+  ],
+  "audited_not_added": [
+    {
+      "repo": "pystardust/ani-cli",
+      "commit": "3ad53631ef2433b0c26e25ab011a5b149706c120",
+      "path": "ani-cli",
+      "license": "GPL-3.0",
+      "reason": "AllAnime provider already integrated; no duplicate scraper or incompatible code copy."
+    },
+    {
+      "repo": "miru-project/miru-app",
+      "commit": "8599d0dbfbb1c1d86dcfa3d8d78e4c438d3fe2c0",
+      "path": "README.md",
+      "license": "AGPL-3.0",
+      "reason": "Different extension runtime, latest repository push2025-12; no verified new stable endpoint selected."
+    },
+    {
+      "repo": "hayase-app/ui",
+      "path": "repository API",
+      "live_status": "GitHub API HTTP451",
+      "reason": "Unavailable from current network; not claimed healthy or integrated."
+    }
+  ],
+  "nova_live_smoke": {
+    "command": "python3 engines/nova2.py --timeout=15 subsplease,dmhy,acgrip anime naruto",
+    "profile": "temporary isolated HOME/XDG; only3 temporary source markers",
+    "exit": 0,
+    "seconds": 1.74,
+    "rows": 199,
+    "provider_rows": {
+      "dmhy": 79,
+      "subsplease": 90,
+      "acgrip": 30
+    },
+    "transport": "8 fields per actual Nova output row",
+    "stderr_bytes": 0,
+    "content_downloaded": false
+  }
+}

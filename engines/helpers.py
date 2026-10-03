@@ -256,7 +256,7 @@ def _is_retryable(exc: Exception) -> bool:
     return True  # URLError, socket timeout, IncompleteRead
 
 
-def retrieve_url(url: str, custom_headers: Mapping[str, str] = {}, request_data: Optional[Any] = None, ssl_context: Optional[ssl.SSLContext] = None, unescape_html_entities: bool = True, attempts: int = 3) -> str:
+def retrieve_url(url: str, custom_headers: Mapping[str, str] = {}, request_data: Optional[Any] = None, ssl_context: Optional[ssl.SSLContext] = None, unescape_html_entities: bool = True, attempts: int = 3, max_bytes: Optional[int] = None) -> str:
     """
     Return the content of the url page as a string
 
@@ -270,6 +270,8 @@ def retrieve_url(url: str, custom_headers: Mapping[str, str] = {}, request_data:
     zero.
     """
 
+    if max_bytes is not None and max_bytes <= 0:
+        return ""
     request = urllib.request.Request(url, request_data, {**_headers, **custom_headers})
     response = None
     walled = False
@@ -292,20 +294,27 @@ def retrieve_url(url: str, custom_headers: Mapping[str, str] = {}, request_data:
         # response carries the rows but none of the magnet links).
         if walled:
             unblocked = _opal_scrape(url, _as_post_body(request_data))
-            if unblocked:
+            if unblocked and (max_bytes is None or len(unblocked.encode("utf-8")) <= max_bytes):
                 return html.unescape(unblocked) if unescape_html_entities else unblocked
         return ""  # Silently handle connection errors
     try:
-        data: bytes = response.read()
+        data: bytes = response.read() if max_bytes is None else response.read(max_bytes + 1)
+        if max_bytes is not None and len(data) > max_bytes:
+            return ""
     except Exception:
         # Handle IncompleteRead, chunked transfer errors, etc.
         return ""
+    finally:
+        if max_bytes is not None:
+            response.close()
 
     # Check if it is gzipped
     if data[:2] == b'\x1f\x8b':
         # Data is gzip encoded, decode it
         with io.BytesIO(data) as compressedStream, gzip.GzipFile(fileobj=compressedStream) as gzipper:
-            data = gzipper.read()
+            data = gzipper.read() if max_bytes is None else gzipper.read(max_bytes + 1)
+            if max_bytes is not None and len(data) > max_bytes:
+                return ""
 
     charset = 'utf-8'
     try:
@@ -320,7 +329,7 @@ def retrieve_url(url: str, custom_headers: Mapping[str, str] = {}, request_data:
     # like it worked. uindex does exactly this on /search.php.
     if _looks_walled(0, dataStr):
         unblocked = _opal_scrape(url, _as_post_body(request_data))
-        if unblocked:
+        if unblocked and (max_bytes is None or len(unblocked.encode("utf-8")) <= max_bytes):
             dataStr = unblocked
 
     if unescape_html_entities:

@@ -202,7 +202,7 @@
       "id": "subsplease",
       "name": "SubsPlease (anime releases)",
       "type": "anime",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "endpoints": {
         "base": "https://subsplease.org"
       },
@@ -252,7 +252,7 @@
     },
     {
       "id": "comet",
-      "name": "Comet · debrid (Stremio)",
+      "name": "Comet \u00b7 debrid (Stremio)",
       "type": "stremio",
       "version": "1.0.0",
       "endpoints": {
@@ -846,6 +846,76 @@
         "base": "https://feed.animetosho.org"
       },
       "note": "Public JSON release search with canonical magnets and provider size/swarm metadata. Requires an Opal build with this connector."
+    },
+    {
+      "id": "dmhy",
+      "name": "DMHY (anime releases)",
+      "type": "torrent",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://share.dmhy.org"
+      },
+      "file": "plugins/dmhy.json"
+    },
+    {
+      "id": "acgrip",
+      "name": "ACG.RIP (anime releases)",
+      "type": "torrent",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://acg.rip"
+      },
+      "file": "plugins/acgrip.json"
+    },
+    {
+      "id": "standardebooks",
+      "name": "Standard Ebooks",
+      "type": "novels",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://standardebooks.org"
+      },
+      "file": "plugins/standardebooks.json"
+    },
+    {
+      "id": "wuxiaclick",
+      "name": "WuxiaClick",
+      "type": "novels",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://wuxia.click"
+      },
+      "file": "plugins/wuxiaclick.json"
+    },
+    {
+      "id": "openverse",
+      "name": "Openverse (licensed music)",
+      "type": "music",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://api.openverse.org"
+      },
+      "file": "plugins/openverse.json"
+    },
+    {
+      "id": "netlabels",
+      "name": "Internet Archive Netlabels",
+      "type": "music",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://archive.org"
+      },
+      "file": "plugins/netlabels.json"
+    },
+    {
+      "id": "somafm",
+      "name": "SomaFM",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://somafm.com"
+      },
+      "file": "plugins/somafm.json"
     }
   ]
 }

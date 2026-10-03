@@ -2,17 +2,17 @@
 const std = @import("std");
 const expanded = @import("expanded_reading_pure.zig");
 const text = @import("novels_pure.zig");
-pub const Source = enum { royalroad, novelfire };
+pub const Source = enum { royalroad, novelfire, standardebooks, wuxiaclick };
 pub const MAX_ITEMS = 12;
-pub const Item = struct {
-    title: [256]u8 = @splat(0),
-    title_len: usize = 0,
-    url: [1024]u8 = @splat(0),
-    url_len: usize = 0,
-    cover: [512]u8 = @splat(0),
-    cover_len: usize = 0,
-};
+pub const Item = @import("reading_provider_pure.zig").Item;
 pub const Result = struct { count: usize = 0, valid_listing: bool = false };
+pub fn searchUrl(out: []u8, base: []const u8, source: Source, query: []const u8, page: u32) ?[]const u8 {
+    return switch (source) {
+        .royalroad, .novelfire => expanded.novelSearchUrl(out, base, @tagName(source), query, page),
+        .standardebooks => @import("reading_provider_pure.zig").searchUrl(out, base, .standardebooks, query, page),
+        .wuxiaclick => @import("reading_provider_pure.zig").searchUrl(out, base, .wuxiaclick, query, page),
+    };
+}
 fn coverUrl(out: []u8, base: []const u8, raw: []const u8) ?[]const u8 {
     const candidate = expanded.html.sourceUrl(out, base, raw) orelse raw;
     // Providers advertise real cover CDN URLs outside the listing origin.
@@ -26,6 +26,10 @@ fn coverUrl(out: []u8, base: []const u8, raw: []const u8) ?[]const u8 {
 /// Only links inside the advertised work-list container are admitted. Chapter,
 /// random-navigation, external-host, script and duplicate links are excluded.
 pub fn parseInto(body: []const u8, base: []const u8, source: Source, out: []Item) Result {
+    if (source == .standardebooks or source == .wuxiaclick) {
+        const result = @import("reading_provider_pure.zig").parseInto(body, base, if (source == .standardebooks) .standardebooks else .wuxiaclick, out[0..@min(out.len, MAX_ITEMS)]);
+        return .{ .count = result.count, .valid_listing = result.valid_listing };
+    }
     const listing = expanded.novelListingHtml(body, @tagName(source)) orelse return .{};
     var result: Result = .{ .valid_listing = true };
     var iter = expanded.html.AnchorIter{ .html = listing, .path = if (source == .royalroad) "/fiction/" else "/book/" };

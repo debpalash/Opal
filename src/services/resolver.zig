@@ -2391,23 +2391,7 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
 
         // Clean engine name from URL
         var eng_buf: [32]u8 = undefined;
-        var eng_name: []const u8 = engine;
-        if (std.mem.indexOf(u8, engine, "://")) |_| {
-            var s = engine;
-            if (std.mem.indexOf(u8, s, "://")) |pi| s = s[pi + 3 ..];
-            if (std.mem.lastIndexOfScalar(u8, s, '@')) |user_info| s = s[user_info + 1 ..];
-            if (std.mem.startsWith(u8, s, "www.")) s = s[4..];
-            var end: usize = s.len;
-            for (s, 0..) |ch, j| {
-                if (ch == '.' or ch == '/' or ch == '?' or ch == '#' or ch == ':') {
-                    end = j;
-                    break;
-                }
-            }
-            const elen = @min(end, 31);
-            @memcpy(eng_buf[0..elen], s[0..elen]);
-            eng_name = eng_buf[0..elen];
-        }
+        const eng_name = @import("search_meta_pure.zig").novaProviderLabel(engine, &eng_buf);
 
         item.provider = search_view.Provider.init(eng_name);
         var det: [128]u8 = undefined;
@@ -3594,6 +3578,10 @@ fn resolveMusic(query_buf: [256]u8, qlen: usize) void {
     defer finishWorker(&status_music, .done);
     const query = query_buf[0..qlen];
     if (query.len < 2) return;
+    defer if (generationIsCurrent(worker_gen)) {
+        resolveInstalledAudio(.openverse, query);
+        resolveInstalledAudio(.netlabels, query);
+    };
     const music = @import("music_subsonic.zig");
     const mp = @import("music_subsonic_pure.zig");
     var enabled: [5]bool = @splat(false);
@@ -3642,6 +3630,7 @@ fn resolveRadio(query_buf: [256]u8, qlen: usize) void {
     defer finishWorker(&status_radio, .done);
     const query = query_buf[0..qlen];
     if (query.len < 2) return;
+    defer if (generationIsCurrent(worker_gen)) resolveInstalledAudio(.somafm, query);
 
     const rp = @import("radio_pure.zig");
     var enc_buf: [512]u8 = undefined;
@@ -3698,6 +3687,41 @@ fn resolveRadio(query_buf: [256]u8, qlen: usize) void {
             "Radio";
         copyField(&item.detail, &item.detail_len, detail);
         _ = pushResult(item);
+    }
+}
+
+/// Public audio adapters publish owned rows without changing Browse selection.
+/// Installed endpoints are copied before I/O so source refresh cannot invalidate
+/// the worker's request. Existing catalog failures cannot skip these providers.
+fn resolveInstalledAudio(provider: @import("audio_sources_pure.zig").Provider, query: []const u8) void {
+    if (!generationIsCurrent(worker_gen)) return;
+    var base_buf: [512]u8 = undefined;
+    const base = @import("../core/source_config.zig").copyValue(@tagName(provider), "base", &base_buf) orelse return;
+    const pure = @import("audio_sources_pure.zig");
+    const rows = alloc.alloc(pure.Item, AUDIO_MAX) catch {
+        noteWorkerOutcome(.failed);
+        return;
+    };
+    defer alloc.free(rows);
+    const reply = @import("audio_sources.zig").searchInto(provider, query, rows, base);
+    if (!generationIsCurrent(worker_gen)) return;
+    if (reply.status != .done and reply.status != .no_results) noteWorkerOutcome(reply.status);
+    for (rows[0..reply.count]) |*row| {
+        var item: ResolvedItem = .{
+            .source = if (row.kind == .radio) .radio else .music,
+            .provider = search_view.Provider.init(@tagName(provider)),
+        };
+        copyField(&item.name, &item.name_len, row.title[0..row.title_len]);
+        copyField(&item.author, &item.author_len, row.artist[0..row.artist_len]);
+        copyField(&item.poster_url, &item.poster_url_len, row.cover[0..row.cover_len]);
+        copyField(&item.url, &item.url_len, row.play_url[0..row.play_url_len]);
+        copyField(&item.summary, &item.summary_len, row.summary[0..row.summary_len]);
+        copyField(&item.detail, &item.detail_len, switch (provider) {
+            .openverse => "Openverse · Licensed full audio",
+            .netlabels => "Archive Netlabels · Full track",
+            .somafm => "SomaFM · Live radio",
+        });
+        if (item.url_len > 0) _ = pushResult(item);
     }
 }
 
@@ -4533,19 +4557,19 @@ fn resolvePublicBooks(q: [256]u8, qlen: usize) void {
 fn resolveInstalledReading(query: []const u8) void {
     const reading = @import("search_reading_pure.zig");
     const sc = @import("../core/source_config.zig");
-    for ([_]reading.Source{ .royalroad, .novelfire }) |source| {
+    for (std.enums.values(reading.Source)) |source| {
         if (!generationIsCurrent(worker_gen)) return;
         var base_buf: [512]u8 = undefined;
         const base = sc.copyValue(@tagName(source), "base", &base_buf) orelse continue;
         var address: [1600]u8 = undefined;
-        const url = @import("expanded_reading_pure.zig").novelSearchUrl(&address, base, @tagName(source), query, 1) orelse continue;
+        const url = reading.searchUrl(&address, base, source, query, 1) orelse continue;
         @import("../core/rate_limit.zig").acquire(@tagName(source), 1.0);
         const buf = alloc.alloc(u8, 2 * 1024 * 1024) catch {
             noteWorkerOutcome(.failed);
             continue;
         };
         defer alloc.free(buf);
-        const body = @import("../core/http.zig").fetch(url, buf, .{ .timeout_secs = 10, .user_agent = "Mozilla/5.0" }) orelse {
+        const body = @import("reliable_fetch.zig").fetch(url, buf, .{ .timeout_secs = 10, .user_agent = "Mozilla/5.0", .impersonate = false }) orelse {
             noteWorkerOutcome(.transport_failed);
             continue;
         };
@@ -4566,8 +4590,15 @@ fn resolveInstalledReading(query: []const u8) void {
             var item: ResolvedItem = .{ .source = .novels, .provider = search_view.Provider.init(@tagName(source)) };
             copyField(&item.name, &item.name_len, row.title[0..row.title_len]);
             copyField(&item.poster_url, &item.poster_url_len, row.cover[0..row.cover_len]);
+            copyField(&item.author, &item.author_len, row.author[0..row.author_len]);
+            copyField(&item.summary, &item.summary_len, row.synopsis[0..row.synopsis_len]);
             item.url_len = @import("novels_pure.zig").formatDeepLink(&item.url, @tagName(source), row.url[0..row.url_len], row.title[0..row.title_len]).len;
-            copyField(&item.detail, &item.detail_len, if (source == .royalroad) "Royal Road · Read work" else "NovelFire · Read work");
+            copyField(&item.detail, &item.detail_len, switch (source) {
+                .royalroad => "Royal Road · Read work",
+                .novelfire => "NovelFire · Read work",
+                .standardebooks => "Standard Ebooks · Read work",
+                .wuxiaclick => "WuxiaClick · Read work",
+            });
             if (item.url_len > 0) _ = pushResult(item);
         }
     }
