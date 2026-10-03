@@ -1,69 +1,81 @@
 <!doctype html>
 <html lang="en">
 <meta charset="utf-8">
-<title>Opal · README artwork</title>
+<title>Opal · Product artwork</title>
 <style>
-  :root { color-scheme: dark; --ink: #f3f1ff; --muted: #c3c8df; --ice: #a5e3ff; }
+  :root {
+    color-scheme: dark;
+    --graphite: #181b18;
+    --bone: #eff0e9;
+    --muted: #b9beb5;
+    --mineral: #747d70;
+    --edge: #e5e9de44;
+  }
   * { box-sizing: border-box; }
-  body { margin: 0; background: #171c38; color: var(--ink); font-family: "Avenir Next", "Segoe UI", sans-serif; }
-  .stage { position: relative; width: 1600px; height: 1200px; overflow: hidden; background: #171c38 url("../../assets/readme/opalescent.webp") center / cover; }
-  .stage::before { content: ""; position: absolute; inset: 0; background: linear-gradient(110deg, #10162c55, transparent 70%); }
-  .brand { position: absolute; top: 48px; left: 82px; display: flex; align-items: center; gap: 12px; font-size: 34px; font-weight: 600; letter-spacing: -1px; }
-  .brand img { width: 54px; height: 54px; }
-  .eyebrow { position: absolute; right: 94px; top: 66px; font: 16px Menlo, Consolas, monospace; color: var(--ice); letter-spacing: 3px; text-transform: uppercase; }
-  .copy { position: absolute; left: 94px; top: 125px; }
-  h1 { margin: 0; font-size: 66px; font-weight: 600; letter-spacing: -3px; line-height: 1.12; }
-  .description { margin: 18px 0 0; font-size: 23px; color: var(--muted); line-height: 1.5; }
-  .window { position: absolute; left: 92px; top: 284px; width: 1416px; border: 2px solid #d9dcff66; border-radius: 16px; overflow: hidden; box-shadow: 0 28px 65px #03051877, 0 0 0 7px #ffffff08; background: #121522; }
-  .chrome { height: 34px; position: relative; background: #252940; border-bottom: 1px solid #ffffff15; color: #c3c8df; font-size: 12px; text-align: center; line-height: 34px; }
-  .dots { position: absolute; left: 16px; top: 12px; display: flex; gap: 7px; }
-  .dots i { width: 9px; height: 9px; border-radius: 50%; background: #b9abdb; }
-  .dots i:nth-child(2) { background: #9abfe5; }
-  .dots i:nth-child(3) { background: #8fd7cf; }
+  body { margin: 0; background: var(--graphite); color: var(--bone); font-family: "Helvetica Neue", "Segoe UI", sans-serif; }
+  .stage { position: relative; width: 1600px; height: 960px; overflow: hidden; background: var(--graphite); }
+  .backdrop { position: absolute; inset: 0; background: radial-gradient(ellipse at 18% 16%, #959d8b, transparent 65%), radial-gradient(ellipse at 94% 82%, #343e38, transparent 70%), var(--mineral); }
+  .backdrop::after { content: ""; position: absolute; inset: 0; opacity: .16; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='grain'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.72' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Cpath fill='%23fff' filter='url(%23grain)' opacity='.6' d='M0 0h220v220H0z'/%3E%3C/svg%3E"); }
+  .brand { position: absolute; top: 46px; left: 72px; display: flex; align-items: center; gap: 12px; font-size: 34px; font-weight: 500; letter-spacing: -1.2px; }
+  .brand img { width: 46px; height: 46px; }
+  .eyebrow { position: absolute; right: 72px; top: 61px; font: 17px "Helvetica Neue", sans-serif; color: var(--muted); }
+  .copy { position: absolute; left: 72px; top: 134px; }
+  h1 { margin: 0; font-size: 64px; font-weight: 500; letter-spacing: -2.4px; line-height: 1.1; }
+  .description { margin: 22px 0 0; font-size: 25px; line-height: 1.5; color: var(--muted); }
+  .window { position: absolute; left: 104px; top: 72px; width: 1392px; border: 1px solid var(--edge); border-radius: 8px; overflow: hidden; background: #151817; box-shadow: 0 22px 64px #11161144; }
+  .chrome { height: 32px; position: relative; background: #232723; border-bottom: 1px solid #ffffff0d; color: #b9beb5; font: 12px/32px "Helvetica Neue", sans-serif; text-align: center; }
+  .dots { position: absolute; left: 14px; top: 12px; display: flex; gap: 6px; }
+  .dots i { width: 8px; height: 8px; border-radius: 50%; background: #757c72; }
   .screen { display: block; width: 100%; height: auto; }
-  .footer { position: absolute; bottom: 25px; left: 94px; right: 94px; display: flex; justify-content: space-between; color: #dde2f4; font-size: 16px; }
-  .footer span:last-child { font-family: Menlo, Consolas, monospace; font-size: 13px; letter-spacing: 1px; }
-  .hero { height: 1320px; }
-  .hero .copy { top: 135px; }
-  .hero h1 { font-size: 94px; line-height: 1.04; letter-spacing: -5px; }
-  .hero .description { position: absolute; top: 40px; left: 905px; width: 475px; font-size: 26px; }
-  .hero .window { top: 384px; }
-  .hero .footer { bottom: 40px; font-size: 19px; }
-  .motion { width: 960px; height: 788px; }
-  .motion .brand { display: none; }
-  .motion .eyebrow { top: 27px; right: auto; left: 60px; font-size: 11px; letter-spacing: 2px; }
-  .motion .copy { top: 54px; left: 60px; }
-  .motion h1 { font-size: 36px; letter-spacing: -1.5px; }
-  .motion .description { margin-top: 10px; font-size: 16px; }
-  .motion .window { left: 58px; top: 156px; width: 844px; border-radius: 12px 12px 0 0; }
-  .motion .chrome { height: 34px; }
-  .motion .screen { width: 840px; height: 542px; background: #121522; }
-  .motion .footer { left: 60px; right: 60px; bottom: 16px; font-size: 13px; }
+  .footer { display: none; }
+  .still .brand, .still .eyebrow, .still .copy { display: none; }
+  .hero { height: 1200px; }
+  .hero .backdrop { top: 320px; }
+  .hero .window { left: 136px; top: 378px; width: 1328px; }
+  .compact { width: 800px; height: 1040px; }
+  .compact .brand { top: 38px; left: 44px; font-size: 35px; }
+  .compact .eyebrow { display: none; }
+  .compact .copy { left: 44px; top: 128px; right: 44px; }
+  .compact h1 { max-width: 620px; font-size: 69px; letter-spacing: -2.7px; line-height: 1.08; }
+  .compact .description { margin-top: 24px; font-size: 28px; line-height: 1.48; }
+  .compact .backdrop { top: 480px; }
+  .compact .window { top: 526px; left: 44px; width: 980px; }
+  .motion { width: 960px; height: 672px; }
+  .motion .brand, .motion .eyebrow, .motion .copy { display: none; }
+  .motion .window { left: 48px; top: 44px; width: 864px; border-radius: 6px; }
+  .motion .chrome { height: 24px; line-height: 24px; font-size: 10px; }
+  .motion .dots { top: 9px; left: 12px; gap: 5px; }
+  .motion .dots i { width: 6px; height: 6px; }
+  .motion .screen { width: 862px; height: 556px; background: #151817; }
 </style>
 <main class="stage">
+  <div class="backdrop"></div>
   <div class="brand"><img src="../../assets/logo.svg" alt="">Opal</div>
   <div class="eyebrow"></div>
   <div class="copy"><h1></h1><p class="description"></p></div>
   <div class="window"><div class="chrome"><span class="dots"><i></i><i></i><i></i></span><span id="window-title"></span></div><img class="screen" alt=""></div>
-  <div class="footer"><span id="footnote"></span><span>opal.palash.dev</span></div>
 </main>
 <script>
+const hero = { kind: "hero", tag: "macOS · Linux · Windows alpha", title: "Your media, in one place.", description: "Movies, live TV, YouTube, torrents, manga.<br>Jellyfin & Plex. Optional AI that runs locally.", image: "home.jpg", window: "Opal — Movies & TV" };
 const views = {
-  hero: { kind: "hero", tag: "Native. Open source. Yours.", title: "Play everything.<br>From one app.", description: "Movies, live TV, your libraries.<br>A local AI to help you find<br>what to watch next.", image: "home.jpg", window: "Opal / Movies & TV", footer: "macOS · Linux · Windows alpha &nbsp; / &nbsp; No accounts. No subscription." },
-  search: { tag: "Find your next watch", title: "One query. Every source.", description: "Search your enabled providers, then play, queue, read, or open details.", image: "search.jpg", window: "Opal / Universal search", footer: "Local files · Torrents · YouTube · Jellyfin · Plex · More" },
-  player: { tag: "Made for the big picture", title: "Press play. Settle in.", description: "Quality, audio tracks, subtitles, and translation. Right where you need them.", image: "player.jpg", window: "Opal / Now playing", footer: "Big Buck Bunny · © Blender Foundation · CC BY 3.0" },
-  connect: { tag: "From tab to screen", title: "Your browser, meet Opal.", description: "Send a video, queue your next watch, or control playback from the side panel.", image: "extension-sidebar.png", window: "Opal Connect / Browser extension", footer: "Chrome · Edge · Firefox" },
-  browse: { kind: "motion", tag: "Discovery / Demo", title: "Find something worth watching.", description: "Explore the poster wall, then switch sources without switching apps.", window: "Opal / Browse", footer: "Original app recording · Browse" },
-  torrent: { kind: "motion", tag: "Playback / Demo", title: "A magnet. A click. A movie.", description: "Start watching while the torrent downloads. Playback needs available peers.", window: "Opal / Torrent streaming", footer: "Sintel · © Blender Foundation · CC BY 3.0" },
-  ai: { kind: "motion", tag: "Local AI / Demo", title: "Ask for your next watch.", description: "An optional on-device copilot with suggestions you can play.", window: "Opal / Local AI", footer: "Original app recording · Optional local model" },
+  hero,
+  "hero-mobile": { ...hero, title: "Your media,<br>in one place.", compact: true },
+  search: { image: "search.jpg", window: "Opal — Search" },
+  player: { image: "player.jpg", window: "Opal — Now playing" },
+  connect: { image: "extension-sidebar.png", window: "Opal Connect" },
+  browse: { kind: "motion", window: "Opal — Browse" },
+  torrent: { kind: "motion", window: "Opal — Torrent streaming" },
+  ai: { kind: "motion", window: "Opal — Local AI" },
 };
-const view = views[new URLSearchParams(location.search).get("view") || "hero"];
+const name = new URLSearchParams(location.search).get("view") || "hero";
+const view = views[name];
+if (!view) throw new Error("Unknown artwork view: " + name);
 document.querySelector(".stage").classList.add(view.kind || "still");
-document.querySelector(".eyebrow").textContent = view.tag;
-document.querySelector("h1").innerHTML = view.title;
-document.querySelector(".description").innerHTML = view.description;
+if (view.compact) document.querySelector(".stage").classList.add("compact");
+document.querySelector(".eyebrow").textContent = view.tag || "";
+document.querySelector("h1").innerHTML = view.title || "";
+document.querySelector(".description").innerHTML = view.description || "";
 document.querySelector("#window-title").textContent = view.window;
-document.querySelector("#footnote").innerHTML = view.footer;
 const screen = document.querySelector(".screen");
 if (view.image) screen.src = "../../assets/screenshots/" + view.image;
 else { const matte = document.createElement("div"); matte.className = "screen"; screen.replaceWith(matte); }
