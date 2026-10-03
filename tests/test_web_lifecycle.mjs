@@ -1172,3 +1172,53 @@ test('Video cards and selected details retain provider JPEG and thumbnail artwor
     f.run('renderSearchDetail(null)');
   }
 });
+
+test('Installed source health distinguishes unchecked, fetching, unavailable and cancelled', () => {
+  const f=fixture('integrations.js');
+  const cases=[
+    [{installed:false,health:{state:'unavailable'}},'Available'],
+    [{installed:true},'Installed · not checked yet'],
+    [{installed:true,health:{state:'fetching'}},'Checking…'],
+    [{installed:true,health:{state:'unavailable'}},'Unavailable · retry search'],
+    [{installed:true,health:{state:'cancelled'}},'Search cancelled'],
+    [{installed:true,health:{state:'available'}},'Ready'],
+    [{installed:true,health:{state:'available',cached:true}},'Ready · cached'],
+    [{installed:true,health:{state:'available',fallback:true}},'Ready · backup source'],
+  ];
+  for(const [row,expected] of cases) assert.equal(f.run(`sourceHealthLabel(${JSON.stringify(row)})`),expected);
+});
+
+test('Plugin rows render unavailable and cancelled health without stale ready labels', () => {
+  const f=fixture('integrations.js');
+  f.run(`pluginSources=[{id:'openverse',name:'Openverse',kind:'music',installed:true,health:{state:'unavailable'}},{id:'somafm',name:'SomaFM',kind:'radio',installed:true,health:{state:'cancelled'}}];renderPlugins();`);
+  assert.match(f.$('plug-list').innerHTML,/Unavailable · retry search/);
+  assert.match(f.$('plug-list').innerHTML,/Search cancelled/);
+  assert.doesNotMatch(f.$('plug-list').innerHTML,/Ready ·|Installed · not checked yet/);
+  f.run(`pluginSources[0].health={state:'available',fallback:true};renderPlugins();`);
+  assert.match(f.$('plug-list').innerHTML,/Ready · backup source/);
+  assert.doesNotMatch(f.$('plug-list').innerHTML,/Unavailable · retry search/);
+});
+
+test('Novel windows preserve absolute chapter identity and generation in every reader action', () => {
+  const f = fixture('media.js');
+  f.run(`
+    globalThis.setSafeHtml = (target, html) => { target.innerHTML = html; return true; };
+    globalThis.unifiedArtwork = () => '';
+    const chapterButton = {dataset:{nv:'1',kind:'chapter'}};
+    $('nv-results').querySelectorAll = selector => selector === 'button[data-nv]' ? [chapterButton] : [];
+    renderNovels({view:'chapters',title:'Same title',chapter_offset:800,chapter_total:905,
+      chapter_has_more:false,chapter_generation:73,chapters:[{title:'801'},{title:'802'}]});
+    chapterButton.onclick();
+  `);
+  assert.ok(f.requests.some(r => r.path === '/novels/chapter?ordinal=801&generation=73'));
+  f.$('nv-window-prev').onclick();
+  assert.ok(f.requests.some(r => r.path === '/novels/window?ordinal=400&generation=73'));
+  f.$('nv-resume').onclick();
+  assert.ok(f.requests.some(r => r.path === '/novels/resume?generation=73'));
+  f.run(`renderNovels({view:'reader',title:'Same title',chapter_offset:0,chapter_total:905,
+    chapter_has_more:true,chapter_generation:74,current_chapter:399,text:'Chapter prose'});`);
+  f.$('nv-reader-next').onclick();
+  assert.ok(f.requests.some(r => r.path === '/novels/chapter?ordinal=400&generation=74'));
+  f.$('nv-reader-prev').onclick();
+  assert.ok(f.requests.some(r => r.path === '/novels/chapter?ordinal=398&generation=74'));
+});

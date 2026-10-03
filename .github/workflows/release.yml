@@ -95,7 +95,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential g++ pkg-config \
-            libmpv-dev libsqlite3-dev libsdl2-dev libtorrent-rasterbar-dev ffmpeg \
+            libwebp-dev libmpv-dev libsqlite3-dev libsdl2-dev libtorrent-rasterbar-dev ffmpeg \
             makeself xauth xvfb
       - name: Vendor ONNX Runtime
         run: |
@@ -135,6 +135,7 @@ jobs:
           cp zig-out/bin/opal opal-${VERSION}-linux-x86_64/
           cp libtorrent_wrapper.so opal-${VERSION}-linux-x86_64/ 2>/dev/null || true
           cp LICENSE docs/NOTICE.md README.md opal-${VERSION}-linux-x86_64/
+          cp -R docs/licenses opal-${VERSION}-linux-x86_64/
           mkdir -p opal-${VERSION}-linux-x86_64/scripts opal-${VERSION}-linux-x86_64/web
           cp -r engines opal-${VERSION}-linux-x86_64/
           cp scripts/camoufox_bridge.py opal-${VERSION}-linux-x86_64/scripts/
@@ -173,6 +174,7 @@ jobs:
           cp -R web/. AppDir/usr/lib/opal/web/
           cp assets/logo.svg AppDir/usr/lib/opal/web/icon.svg
           cp data/plugins-manifest.json data/manga-sources-sfw.json AppDir/usr/lib/opal/
+          cp -R docs/licenses AppDir/usr/lib/opal/
           cp packaging/opal.desktop AppDir/opal.desktop
           cp assets/logo.svg AppDir/opal.svg
           cp assets/logo.svg AppDir/.DirIcon
@@ -272,6 +274,7 @@ jobs:
           cp packaging/opal.desktop staging/
           cp assets/logo.svg staging/opal.svg
           cp LICENSE staging/
+          cp -R docs/licenses staging/
           cp -r engines staging/
           mkdir -p staging/scripts staging/web
           cp scripts/camoufox_bridge.py staging/scripts/
@@ -284,7 +287,7 @@ jobs:
           PREFIX="${PREFIX:-/usr/local}"
           install -Dm755 opal                  "$PREFIX/bin/opal"
           install -Dm755 libtorrent_wrapper.so "$PREFIX/lib/opal/libtorrent_wrapper.so"
-          cp -R engines scripts web "$PREFIX/lib/opal/"
+          cp -R engines scripts web licenses "$PREFIX/lib/opal/"
           install -m644 plugins-manifest.json manga-sources-sfw.json "$PREFIX/lib/opal/"
           install -Dm644 opal.desktop          "$PREFIX/share/applications/opal.desktop"
           install -Dm644 opal.svg              "$PREFIX/share/icons/hicolor/scalable/apps/opal.svg"
@@ -354,6 +357,7 @@ jobs:
             unzip
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-SDL2
+            mingw-w64-x86_64-libwebp
             mingw-w64-x86_64-ffmpeg
             mingw-w64-x86_64-libass
             mingw-w64-x86_64-meson
@@ -504,6 +508,7 @@ jobs:
           # nothing", "camoufox_bridge.py not found" and an empty Plugins tab
           # (issue #21). macOS bundles all of this via scripts/build-app.sh; this
           # is the Windows equivalent. heat -srd harvests these into the MSI too.
+          cp -R docs/licenses staging/
           cp -R engines staging/engines
           find staging/engines -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
           mkdir -p staging/scripts staging/web

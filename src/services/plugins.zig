@@ -1306,6 +1306,17 @@ fn renderSourcePlugins() void {
             var rowb = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i + 81000, .expand = .horizontal, .padding = .{ .x = theme.spacing.sm, .y = 4, .w = 0, .h = 4 } });
             defer rowb.deinit();
             _ = dvui.label(@src(), "{s}", .{p.nameSlice()}, .{ .id_extra = i + 81100, .color_text = theme.colors.text_primary, .gravity_y = 0.5 });
+            if (installed) {
+                const health = @import("source_request.zig").snapshot(p.idSlice());
+                const label = switch (health.state) {
+                    .unchecked => "Not checked yet",
+                    .fetching => "Checking",
+                    .unavailable => "Unavailable",
+                    .cancelled => "Search cancelled",
+                    .available => if (health.cached) "Ready (cached)" else if (health.fallback) "Ready (backup)" else "Ready",
+                };
+                _ = dvui.labelNoFmt(@src(), label, .{}, .{ .id_extra = i + 81200, .color_text = if (health.state == .unavailable) theme.colors.text_secondary else theme.colors.text_tertiary, .gravity_y = 0.5, .font = dvui.themeGet().font_body.withSize(11), .margin = .{ .x = theme.spacing.sm } });
+            }
             {
                 var sp = dvui.box(@src(), .{}, .{ .id_extra = i + 81300, .expand = .horizontal });
                 sp.deinit();

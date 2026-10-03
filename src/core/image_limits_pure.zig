@@ -58,3 +58,17 @@ test "browser frames and long comic pages have distinct bounded budgets" {
     try std.testing.expect(comicPageRgbaBytes(2000, 20_000) == null);
     try std.testing.expect(comicPageRgbaBytes(1000, 40_000) == null);
 }
+
+/// RIFF/WebP signature and declared-size validation before decoder dispatch.
+pub fn isWebP(data: []const u8) bool {
+    if (data.len < 12 or !std.mem.eql(u8, data[0..4], "RIFF") or !std.mem.eql(u8, data[8..12], "WEBP")) return false;
+    const declared = @as(u64, std.mem.readInt(u32, data[4..8], .little)) + 8;
+    return declared >= 12 and declared <= data.len;
+}
+test "WebP dispatcher rejects truncated RIFF and ignores misleading extension" {
+    const fixture = @embedFile("testdata/lossless-cover.webp");
+    try std.testing.expect(isWebP(fixture));
+    try std.testing.expect(!isWebP(fixture[0 .. fixture.len - 1]));
+    try std.testing.expect(!isWebP("RIFFxxxxJPEG"));
+    try std.testing.expect(!isWebP("WEBP"));
+}

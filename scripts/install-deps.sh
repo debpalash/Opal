@@ -35,31 +35,31 @@ detect_distro() {
 
 # ─── Per-distro packages ──────────────────────────────────────────────────
 # build: needed to compile; runtime: needed to run; optional: nice-to-have.
-declare_arch_build=("zig>=0.16.0" gcc git)
+declare_arch_build=("zig>=0.16.0" gcc git pkgconf libwebp)
 declare_arch_runtime=(mpv sdl2 sqlite libtorrent-rasterbar curl python python-pip ffmpeg yt-dlp)
 declare_arch_optional=(streamlink "onnxruntime-cpu: OCR (build with -Docr=true)")
 
-declare_debian_build=(zig gcc git pkg-config)
+declare_debian_build=(zig gcc git pkg-config libwebp-dev)
 declare_debian_runtime=(mpv libsdl2-2.0-0 libsqlite3-0 libtorrent-rasterbar curl python3 python3-pip ffmpeg yt-dlp)
 declare_debian_optional=(streamlink)
 
-declare_fedora_build=(zig gcc git pkg-config)
+declare_fedora_build=(zig gcc git pkg-config libwebp-devel)
 declare_fedora_runtime=(mpv SDL2 sqlite libtorrent-rasterbar curl python3 python3-pip ffmpeg yt-dlp)
 declare_fedora_optional=()
 
-declare_suse_build=(zig gcc git pkg-config)
+declare_suse_build=(zig gcc git pkg-config libwebp-devel)
 declare_suse_runtime=(mpv libSDL2-2_0-0 libsqlite3-0 libtorrent-rasterbar curl python3 python3-pip ffmpeg yt-dlp)
 declare_suse_optional=()
 
 # Distro-agnostic runtime probes (ldconfig for .so, $PATH for binaries)
-declare -A RUNTIME_LIBS=(
-  [libSDL2]="libSDL2-2.0.so.0"
-  [libmpv]="libmpv.so.2"
-  [libsqlite3]="libsqlite3.so.0"
-  [libtorrent-rasterbar]="libtorrent-rasterbar.so.2.0"
+declare -a RUNTIME_LIBS=(
+  "libSDL2-2.0.so.0"
+  "libmpv.so.2"
+  "libsqlite3.so.0"
+  "libtorrent-rasterbar.so.2.0"
 )
 declare -a RUNTIME_BINS=(mpv curl python3 pip3 ffmpeg yt-dlp)
-declare -a BUILD_BINS=(zig gcc git)
+declare -a BUILD_BINS=(zig gcc git pkg-config)
 
 list_missing() {
   local missing=()
@@ -71,6 +71,7 @@ list_missing() {
   for bin in "${RUNTIME_BINS[@]}" "${BUILD_BINS[@]}"; do
     command -v "$bin" >/dev/null 2>&1 || missing+=("$bin")
   done
+  pkg-config --exists libwebpdecoder 2>/dev/null || missing+=("libwebpdecoder development files")
   printf '%s\n' "${missing[@]}"
 }
 
@@ -144,9 +145,9 @@ case "$distro" in
   debian) install_debian ;;
   fedora) install_fedora ;;
   suse)   install_suse ;;
-  alpine) _sudo apk add zig gcc git sdl2-dev mpv-dev sqlite-dev libtorrent-rasterbar curl python3 py3-pip ffmpeg yt-dlp 2>/dev/null || true ;;
-  void)   _sudo xbps-install -Sy zig gcc git SDL2-devel mpv-devel sqlite-devel libtorrent-rasterbar curl python3 python3-pip ffmpeg yt-dlp 2>/dev/null || true ;;
-  gentoo) _sudo emerge -av dev-lang/zig sys-devel/gcc dev-vcs/git media-libs/libsdl2 media-video/mpv dev-db/sqlite net-libs/libtorrent-rasterbar net-misc/curl dev-lang/python dev-python/pip media-video/ffmpeg media-video/yt-dlp 2>/dev/null || true ;;
+  alpine) _sudo apk add zig gcc git libwebp-dev sdl2-dev mpv-dev sqlite-dev libtorrent-rasterbar curl python3 py3-pip ffmpeg yt-dlp 2>/dev/null || true ;;
+  void)   _sudo xbps-install -Sy zig gcc git libwebp-devel SDL2-devel mpv-devel sqlite-devel libtorrent-rasterbar curl python3 python3-pip ffmpeg yt-dlp 2>/dev/null || true ;;
+  gentoo) _sudo emerge -av dev-lang/zig sys-devel/gcc dev-vcs/git media-libs/libwebp media-libs/libsdl2 media-video/mpv dev-db/sqlite net-libs/libtorrent-rasterbar net-misc/curl dev-lang/python dev-python/pip media-video/ffmpeg media-video/yt-dlp 2>/dev/null || true ;;
   nixos)  echo "NixOS detected — please use the project flake/devShell" ;;
   *)      install_unknown ;;
 esac

@@ -627,7 +627,7 @@ fn publicAudioWorker(job: SearchJob) void {
     defer finishJob(job, published);
     const rows = alloc.alloc(audio.Item, PAGE_SIZE) catch return;
     defer alloc.free(rows);
-    const reply = audio.searchInto(if (job.source == SRC_OPENVERSE) .openverse else .netlabels, job.query[0..job.query_len], rows, job.base[0..job.base_len]);
+    const reply = audio.searchIntoWithCancellation(if (job.source == SRC_OPENVERSE) .openverse else .netlabels, job.query[0..job.query_len], rows, job.base[0..job.base_len], .{ .epoch32 = .{ .value = &search_request.generation, .expected = job.generation } });
     if (reply.count == 0 and reply.status != .no_results) return;
     parse_mutex.lock();
     defer parse_mutex.unlock();
@@ -1436,7 +1436,7 @@ fn renderCard(i: usize, card_w: f32, song: *const pure.MusicSong, source: u8) vo
             .data_out = &credit_wd,
             .id_extra = i + 4100,
             .color_text = theme.colors.text_tertiary,
-            .font = .{ .size = 10 },
+            .font = dvui.themeGet().font_body.withSize(10),
             .expand = .horizontal,
         });
         components.tipId(@src(), credit_wd, song.attribution[0..@min(song.attribution_len, song.attribution.len)], i + 4200);

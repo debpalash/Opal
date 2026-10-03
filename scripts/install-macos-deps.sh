@@ -13,4 +13,4 @@ if ! brew install openssl@3; then
     brew install openssl@3
 fi
 brew link --overwrite openssl@3
-brew install sqlite sdl2 libtorrent-rasterbar libass libplacebo meson ninja pkgconf "$@"
+brew install sqlite webp sdl2 libtorrent-rasterbar libass libplacebo meson ninja pkgconf "$@"

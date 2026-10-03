@@ -142,13 +142,23 @@ pub fn chapterListUrl(out: []u8, base: []const u8, source: Source, work: []const
     return std.fmt.bufPrint(out, "{s}/api/chapters/{s}/?format=json", .{ std.mem.trimEnd(u8, base, "/"), slug }) catch null;
 }
 pub const Chapter = struct { title: [256]u8 = @splat(0), title_len: usize = 0, url: [1024]u8 = @splat(0), url_len: usize = 0 };
+pub const ChapterWindow = struct { count: usize = 0, total: usize = 0, has_more: bool = false, matched_ordinal: ?usize = null };
+pub fn windowSlot(ordinal: usize, offset: usize, capacity: usize) ?usize {
+    if (ordinal < offset or ordinal - offset >= capacity) return null;
+    return ordinal - offset;
+}
 pub fn chaptersInto(body: []const u8, base: []const u8, source: Source, work: []const u8, out: []Chapter) usize {
-    var count: usize = 0;
+    return chaptersWindowInto(body, base, source, work, 0, out).count;
+}
+pub fn chaptersWindowInto(body: []const u8, base: []const u8, source: Source, work: []const u8, offset: usize, out: []Chapter) ChapterWindow {
+    return chaptersWindowTargetInto(body, base, source, work, offset, "", out);
+}
+pub fn chaptersWindowTargetInto(body: []const u8, base: []const u8, source: Source, work: []const u8, offset: usize, target: []const u8, out: []Chapter) ChapterWindow {
+    var result: ChapterWindow = .{};
     if (source == .wuxiaclick) {
-        if (body.len == 0 or body[0] != '[') return 0;
+        if (body.len == 0 or body[0] != '[') return result;
         var iter: json.ObjIter = .{ .buf = body };
         while (iter.next()) |row| {
-            if (count >= out.len) break;
             const slug = string(row, "novSlugChapSlug");
             if (!slugValid(slug)) continue;
             var chapter: Chapter = .{};
@@ -156,15 +166,19 @@ pub fn chaptersInto(body: []const u8, base: []const u8, source: Source, work: []
             const address = std.fmt.bufPrint(&chapter.url, "{s}/api/getchapter/{s}/", .{ std.mem.trimEnd(u8, base, "/"), slug }) catch continue;
             chapter.url_len = address.len;
             if (chapter.title_len == 0) continue;
-            out[count] = chapter;
-            count += 1;
+            if (target.len > 0 and std.mem.eql(u8, address, target)) result.matched_ordinal = result.total;
+            if (windowSlot(result.total, offset, out.len)) |slot| {
+                out[slot] = chapter;
+                result.count += 1;
+            }
+            result.total += 1;
         }
-        return count;
+        result.has_more = result.total > offset +| result.count;
+        return result;
     }
-    const toc = nsp.containerInner(body, "id=\"toc\"") orelse return 0;
+    const toc = nsp.containerInner(body, "id=\"toc\"") orelse return result;
     var iter: html.AnchorIter = .{ .html = toc, .path = "text/" };
     while (iter.next()) |anchor| {
-        if (count >= out.len) break;
         if (!std.mem.startsWith(u8, anchor.url, "text/") or std.mem.indexOf(u8, anchor.url, "..") != null or std.mem.indexOfAny(u8, anchor.url, "?#\\\r\n") != null) continue;
         const part = anchor.url[5..];
         if (!slugValid(part)) continue;
@@ -173,10 +187,15 @@ pub fn chaptersInto(body: []const u8, base: []const u8, source: Source, work: []
         const address = std.fmt.bufPrint(&chapter.url, "{s}/{s}", .{ std.mem.trimEnd(u8, work, "/"), anchor.url }) catch continue;
         chapter.url_len = address.len;
         if (chapter.title_len == 0) continue;
-        out[count] = chapter;
-        count += 1;
+        if (target.len > 0 and std.mem.eql(u8, address, target)) result.matched_ordinal = result.total;
+        if (windowSlot(result.total, offset, out.len)) |slot| {
+            out[slot] = chapter;
+            result.count += 1;
+        }
+        result.total += 1;
     }
-    return count;
+    result.has_more = result.total > offset +| result.count;
+    return result;
 }
 pub fn chapterText(body: []const u8, source: Source, out: []u8) usize {
     if (source == .wuxiaclick) return json.jsonUnescape(string(body, "text"), out);
@@ -231,4 +250,32 @@ test "WuxiaClick chapter identities use bounded provider API and preserve direct
     var url: [1024]u8 = undefined;
     try std.testing.expectEqualStrings("https://wuxia.click/api/chapters/dragon/?format=json", chapterListUrl(&url, "https://wuxia.click", .wuxiaclick, "https://wuxia.click/novel/dragon").?);
     try std.testing.expectEqualStrings("https://standardebooks.org/ebooks/author/book/text", chapterListUrl(&url, "https://standardebooks.org", .standardebooks, "https://standardebooks.org/ebooks/author/book").?);
+}
+
+test "chapter windows traverse more than eight hundred entries without expanding row storage" {
+    var body: [150000]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&body);
+    try writer.writeAll("[");
+    for (0..905) |i| {
+        if (i > 0) try writer.writeAll(",");
+        try writer.print("{{\"title\":\"Chapter {d}\",\"novSlugChapSlug\":\"book-{d}\"}}", .{ i + 1, i + 1 });
+    }
+    try writer.writeAll("]");
+    var rows: [400]Chapter = undefined;
+    for ([_]usize{ 0, 400, 800, 400, 0 }) |offset| {
+        const result = chaptersWindowInto(writer.buffered(), "https://wuxia.click", .wuxiaclick, "https://wuxia.click/novel/book", offset, &rows);
+        try std.testing.expectEqual(@as(usize, 905), result.total);
+        try std.testing.expectEqual(@min(@as(usize, 400), 905 - offset), result.count);
+        try std.testing.expectEqual(offset < 800, result.has_more);
+        var expected: [64]u8 = undefined;
+        try std.testing.expectEqualStrings(try std.fmt.bufPrint(&expected, "Chapter {d}", .{offset + 1}), rows[0].title[0..rows[0].title_len]);
+    }
+}
+
+test "exact resume identity found outside a bounded chapter window" {
+    const body = "[{\"title\":\"New\",\"novSlugChapSlug\":\"book-new\"},{\"title\":\"Saved\",\"novSlugChapSlug\":\"book-saved\"}]";
+    var rows: [1]Chapter = undefined;
+    const result = chaptersWindowTargetInto(body, "https://wuxia.click", .wuxiaclick, "https://wuxia.click/novel/book", 0, "https://wuxia.click/api/getchapter/book-saved/", &rows);
+    try std.testing.expectEqual(@as(?usize, 1), result.matched_ordinal);
+    try std.testing.expectEqual(@as(usize, 1), result.count);
 }

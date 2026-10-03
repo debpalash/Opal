@@ -117,6 +117,14 @@ jobs:
         run: python3 tests/test_torrent_memory.py
       - name: Run tests/test_features.py
         run: python3 tests/test_features.py
+      - name: Verify source completeness in the real app
+        run: |
+          zig build -Dheadless=true --prefix /tmp/opal-source-fixtures
+          python3 tests/test_source_reliability_live.py --binary /tmp/opal-source-fixtures/bin/opal --port 41785
+          python3 tests/test_novel_windows_live.py --binary /tmp/opal-source-fixtures/bin/opal --port 41708
+          python3 tests/test_hls_playback_live.py --binary /tmp/opal-source-fixtures/bin/opal --port 41801
+          python3 tests/test_github_audio_live.py --binary /tmp/opal-source-fixtures/bin/opal --port 41709
+          zig build test-native-images
       - name: Save feature diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -192,6 +200,7 @@ jobs:
             git
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-SDL2
+            mingw-w64-x86_64-libwebp
             mingw-w64-x86_64-ffmpeg
             mingw-w64-x86_64-libass
             mingw-w64-x86_64-meson

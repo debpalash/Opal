@@ -217,6 +217,10 @@ pub fn build(b: *std.Build) void {
     const run_gallery_tests = b.addRunArtifact(gallery_tests);
     if (is_windows) run_gallery_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     b.step("test-search-gallery", "Render the native search gallery in an isolated hidden SDL window").dependOn(&run_gallery_tests.step);
+    const image_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native WebP shared decoder and GPU upload"} });
+    const run_image_tests = b.addRunArtifact(image_tests);
+    if (is_windows) run_image_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
+    b.step("test-native-images", "Verify shared WebP decoding and native GPU pixels").dependOn(&run_image_tests.step);
     const media_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native media offline SDL fixture"} });
     const run_media_tests = b.addRunArtifact(media_tests);
     if (is_windows) run_media_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
@@ -279,6 +283,10 @@ pub fn build(b: *std.Build) void {
         exe.root_module.linkSystemLibrary("mpv", .{});
         exe.root_module.linkSystemLibrary("sqlite3", .{});
     }
+
+    // Portable in-process WebP; use static decoder so bundles need no new dylib.
+    exe.root_module.addCSourceFile(.{ .file = b.path("src/core/webp_decode.c"), .flags = &.{"-O2"} });
+    exe.root_module.linkSystemLibrary("webpdecoder", .{ .preferred_link_mode = .static, .search_strategy = .no_fallback });
 
     // SQLite Vector DB. -DSQLITE_CORE makes sqlite-vec call the linked
     // sqlite3 directly instead of going through the extension API pointer —
@@ -1263,7 +1271,7 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_comics_pure).step);
 
-    inline for (.{ "expanded_reading_pure", "reading_provider_pure", "music_audius_pure", "audio_sources_pure" }) |module| {
+    inline for (.{ "expanded_reading_pure", "reading_provider_pure", "music_audius_pure", "audio_sources_pure", "source_request_pure", "anime_hianime_pure", "comicfury_pure" }) |module| {
         const source_test = b.addTest(.{ .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/" ++ module ++ ".zig"),
             .target = target,

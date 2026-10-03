@@ -8,10 +8,9 @@ const Gate = @import("../core/latest_request.zig").Gate;
 const rf = @import("reliable_fetch.zig");
 
 pub fn resolvePahe(name: []const u8, alias: []const u8, ep: usize, gate: *const Gate, generation: u32) ?extractors.Resolved {
-    const configured = @import("../core/source_config.zig").get("animepahe", "base") orelse return null;
     var base_buf: [256]u8 = undefined;
-    if (configured.len > base_buf.len or ep == 0) return null;
-    @memcpy(base_buf[0..configured.len], configured);
+    const configured = @import("../core/source_config.zig").copyValue("animepahe", "base", &base_buf) orelse return null;
+    if (ep == 0) return null;
     return resolveAt(std.mem.trimEnd(u8, base_buf[0..configured.len], "/"), name, alias, ep, gate, generation, .{});
 }
 
@@ -46,7 +45,7 @@ fn resolveAt(base: []const u8, name: []const u8, alias: []const u8, ep: usize, g
         var encoded: [512]u8 = undefined;
         var ub: [1024]u8 = undefined;
         const url = std.fmt.bufPrint(&ub, "{s}/api?m=search&q={s}", .{ base, @import("../core/http.zig").urlEncode(query, &encoded) }) catch continue;
-        const body = transport.fetch(url, scratch, .{ .referer = base, .timeout_secs = 8 }) orelse continue;
+        const body = transport.fetch(url, scratch, .{ .referer = base, .timeout_secs = 8, .cancel_epoch = .{ .epoch32 = .{ .value = &gate.generation, .expected = generation } } }) orelse continue;
         const doc = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch continue;
         defer doc.deinit();
         const show = pure.paheShow(doc.value, name, alias) orelse continue;
@@ -67,7 +66,7 @@ fn resolveAt(base: []const u8, name: []const u8, alias: []const u8, ep: usize, g
         if (!gate.isCurrent(generation)) return null;
         var ub: [1024]u8 = undefined;
         const url = std.fmt.bufPrint(&ub, "{s}/api?m=release&id={s}&sort=episode_asc&page={d}", .{ base, show, page }) catch return null;
-        const body = transport.fetch(url, scratch, .{ .referer = base, .timeout_secs = 8 }) orelse return null;
+        const body = transport.fetch(url, scratch, .{ .referer = base, .timeout_secs = 8, .cancel_epoch = .{ .epoch32 = .{ .value = &gate.generation, .expected = generation } } }) orelse return null;
         const doc = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch return null;
         defer doc.deinit();
         const release = pure.paheRelease(doc.value, ep, page) orelse return null;
@@ -84,7 +83,7 @@ fn resolveAt(base: []const u8, name: []const u8, alias: []const u8, ep: usize, g
     if (release_len == 0 or !gate.isCurrent(generation)) return null;
     var ub: [1024]u8 = undefined;
     const url = std.fmt.bufPrint(&ub, "{s}/play/{s}/{s}", .{ base, show, release_buf[0..release_len] }) catch return null;
-    const body = transport.fetch(url, scratch, .{ .referer = base, .timeout_secs = 8 }) orelse return null;
+    const body = transport.fetch(url, scratch, .{ .referer = base, .timeout_secs = 8, .cancel_epoch = .{ .epoch32 = .{ .value = &gate.generation, .expected = generation } } }) orelse return null;
     var rest = body;
     var tried: usize = 0;
     while (std.mem.indexOf(u8, rest, "data-src=\"")) |at| {
@@ -141,19 +140,18 @@ test "Anime playback AnimePahe resolves provider sessions rather than numeric wa
 /// Resolver search rows are title records, never playable episode URLs.
 pub fn resolveAllAnime(name: []const u8, alias: []const u8, ep: usize, gate: *const Gate, generation: u32) ?extractors.Resolved {
     const sc = @import("../core/source_config.zig");
-    const configured = sc.get("allanime", "base") orelse return null;
     var base_buf: [256]u8 = undefined;
-    if (configured.len > base_buf.len) return null;
-    @memcpy(base_buf[0..configured.len], configured);
+    const configured = sc.copyValue("allanime", "base", &base_buf) orelse return null;
     const base = base_buf[0..configured.len];
     var ref_buf: [256]u8 = undefined;
-    const ref = sc.get("allanime", "referer") orelse base;
-    if (ref.len > ref_buf.len) return null;
-    @memcpy(ref_buf[0..ref.len], ref);
+    const ref = sc.copyValue("allanime", "referer", &ref_buf) orelse blk: {
+        @memcpy(ref_buf[0..base.len], base);
+        break :blk ref_buf[0..base.len];
+    };
     return resolveAllAt(base, ref_buf[0..ref.len], name, alias, ep, gate, generation, .{});
 }
 
-fn graph(base: []const u8, referer: []const u8, query: []const u8, variables: anytype, scratch: []u8, transport: Transport) ?[]const u8 {
+fn graph(base: []const u8, referer: []const u8, query: []const u8, variables: anytype, scratch: []u8, transport: Transport, gate: *const Gate, generation: u32) ?[]const u8 {
     const json = std.json.Stringify.valueAlloc(alloc, variables, .{}) catch return null;
     defer alloc.free(json);
     var vb: [4096]u8 = undefined;
@@ -161,7 +159,7 @@ fn graph(base: []const u8, referer: []const u8, query: []const u8, variables: an
     var ub: [8192]u8 = undefined;
     const encode = @import("../core/http.zig").urlEncode;
     const url = std.fmt.bufPrint(&ub, "{s}/api?variables={s}&query={s}", .{ std.mem.trimEnd(u8, base, "/"), encode(json, &vb), encode(query, &qb) }) catch return null;
-    return transport.fetch(url, scratch, .{ .referer = referer, .timeout_secs = 8 });
+    return transport.fetch(url, scratch, .{ .referer = referer, .timeout_secs = 8, .cancel_epoch = .{ .epoch32 = .{ .value = &gate.generation, .expected = generation } } });
 }
 
 fn directStream(url: []const u8, referer: []const u8) ?extractors.Resolved {
@@ -182,7 +180,7 @@ fn resolveAllAt(base: []const u8, referer: []const u8, name: []const u8, alias: 
     var id_len: usize = 0;
     for ([_][]const u8{ name, alias }) |term| {
         if (term.len == 0 or !gate.isCurrent(generation)) continue;
-        const body = graph(base, referer, "query($search:SearchInput,$limit:Int,$page:Int,$translationType:VaildTranslationTypeEnumType){shows(search:$search,limit:$limit,page:$page,translationType:$translationType){edges{_id name}}}", .{ .search = .{ .query = term, .allowAdult = false, .allowUnknown = false }, .limit = 20, .page = 1, .translationType = "sub" }, scratch, transport) orelse continue;
+        const body = graph(base, referer, "query($search:SearchInput,$limit:Int,$page:Int,$translationType:VaildTranslationTypeEnumType){shows(search:$search,limit:$limit,page:$page,translationType:$translationType){edges{_id name}}}", .{ .search = .{ .query = term, .allowAdult = false, .allowUnknown = false }, .limit = 20, .page = 1, .translationType = "sub" }, scratch, transport, gate, generation) orelse continue;
         const doc = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch continue;
         defer doc.deinit();
         const edges = pure.field(pure.field(pure.field(doc.value, "data"), "shows"), "edges");
@@ -201,7 +199,7 @@ fn resolveAllAt(base: []const u8, referer: []const u8, name: []const u8, alias: 
     if (id_len == 0 or !gate.isCurrent(generation)) return null;
     var eb: [16]u8 = undefined;
     const episode = std.fmt.bufPrint(&eb, "{d}", .{ep}) catch return null;
-    const body = graph(base, referer, "query($showId:String!,$translationType:VaildTranslationTypeEnumType!,$episodeString:String!){episode(showId:$showId,translationType:$translationType,episodeString:$episodeString){sourceUrls}}", .{ .showId = id_buf[0..id_len], .translationType = "sub", .episodeString = episode }, scratch, transport) orelse return null;
+    const body = graph(base, referer, "query($showId:String!,$translationType:VaildTranslationTypeEnumType!,$episodeString:String!){episode(showId:$showId,translationType:$translationType,episodeString:$episodeString){sourceUrls}}", .{ .showId = id_buf[0..id_len], .translationType = "sub", .episodeString = episode }, scratch, transport, gate, generation) orelse return null;
     const doc = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch return null;
     defer doc.deinit();
     const sources = pure.field(pure.field(pure.field(doc.value, "data"), "episode"), "sourceUrls");
@@ -219,7 +217,7 @@ fn resolveAllAt(base: []const u8, referer: []const u8, name: []const u8, alias: 
             if (directStream(decoded, referer)) |result| return result;
         }
         if (std.mem.indexOf(u8, decoded, "/clock.json?") != null) {
-            const detail = transport.fetch(decoded, scratch, .{ .referer = referer, .timeout_secs = 8 }) orelse continue;
+            const detail = transport.fetch(decoded, scratch, .{ .referer = referer, .timeout_secs = 8, .cancel_epoch = .{ .epoch32 = .{ .value = &gate.generation, .expected = generation } } }) orelse continue;
             const links_doc = std.json.parseFromSlice(std.json.Value, alloc, detail, .{}) catch continue;
             defer links_doc.deinit();
             const links = pure.field(links_doc.value, "links");
@@ -261,10 +259,8 @@ test "Anime playback AllAnime resolves exact show and requested episode before p
 /// An installed release index provides an exact episode magnet without relying
 /// on generic title ranking or scraping a video host's player page.
 pub fn resolveSubsPlease(name: []const u8, alias: []const u8, ep: usize, gate: *const Gate, generation: u32, out: []u8) ?[]const u8 {
-    const configured = @import("../core/source_config.zig").get("subsplease", "base") orelse return null;
     var base_buf: [256]u8 = undefined;
-    if (configured.len > base_buf.len) return null;
-    @memcpy(base_buf[0..configured.len], configured);
+    const configured = @import("../core/source_config.zig").copyValue("subsplease", "base", &base_buf) orelse return null;
     const base = std.mem.trimEnd(u8, base_buf[0..configured.len], "/");
     const scratch = alloc.alloc(u8, 4 * 1024 * 1024) catch return null;
     defer alloc.free(scratch);
@@ -274,7 +270,7 @@ pub fn resolveSubsPlease(name: []const u8, alias: []const u8, ep: usize, gate: *
         var encoded: [512]u8 = undefined;
         var ub: [1024]u8 = undefined;
         const url = std.fmt.bufPrint(&ub, "{s}/api/?f=search&tz=UTC&s={s}", .{ base, @import("../core/http.zig").urlEncode(term, &encoded) }) catch continue;
-        const body = fetchSource(url, scratch, .{ .referer = base, .timeout_secs = 8 }) orelse continue;
+        const body = fetchSource(url, scratch, .{ .referer = base, .timeout_secs = 8, .cancel_epoch = .{ .epoch32 = .{ .value = &gate.generation, .expected = generation } } }) orelse continue;
         const doc = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch continue;
         defer doc.deinit();
         const magnet = pure.subsPleaseRelease(doc.value, name, alias, ep) orelse continue;
@@ -283,4 +279,118 @@ pub fn resolveSubsPlease(name: []const u8, alias: []const u8, ep: usize, gate: *
         return out[0..magnet.len];
     }
     return null;
+}
+
+/// Installed HiAnime source: exact show, requested episode, advertised video stream.
+pub fn resolveHiAnime(name: []const u8, alias: []const u8, ep: usize, gate: *const Gate, generation: u32) ?extractors.Resolved {
+    var base_buf: [256]u8 = undefined;
+    const raw = @import("../core/source_config.zig").copyValue("hianime", "base", &base_buf) orelse return null;
+    return resolveHiAt(std.mem.trimEnd(u8, base_buf[0..raw.len], "/"), name, alias, ep, gate, generation, .{ .fetch = fetchHiSource });
+}
+
+fn resolveHiAt(base: []const u8, name: []const u8, alias: []const u8, ep: usize, gate: *const Gate, generation: u32, transport: Transport) ?extractors.Resolved {
+    const hp = @import("anime_hianime_pure.zig");
+    if (ep == 0 or !gate.isCurrent(generation)) return null;
+    const scratch = alloc.alloc(u8, 1024 * 1024) catch return null;
+    defer alloc.free(scratch);
+    var slug_buf: [160]u8 = undefined;
+    var slug_len: usize = 0;
+    var ub: [2048]u8 = undefined;
+    for ([_][]const u8{ name, alias }) |term| {
+        if (!gate.isCurrent(generation)) return null;
+        if (term.len == 0 or term.len > 256) continue;
+        var enc: [1024]u8 = undefined;
+        const url = std.fmt.bufPrint(&ub, "{s}/search?keyword={s}", .{ base, @import("../core/http.zig").urlEncode(term, &enc) }) catch continue;
+        const body = transport.fetch(url, scratch, .{ .referer = base, .timeout_secs = 8, .cancel_epoch = .{ .epoch32 = .{ .value = &gate.generation, .expected = generation } } }) orelse continue;
+        const slug = hp.showSlug(body, name, alias) orelse continue;
+        @memcpy(slug_buf[0..slug.len], slug);
+        slug_len = slug.len;
+        break;
+    }
+    if (slug_len == 0 or !gate.isCurrent(generation)) return null;
+    const slug = slug_buf[0..slug_len];
+    const dash = std.mem.lastIndexOfScalar(u8, slug, '-') orelse return null;
+    const episodes_url = std.fmt.bufPrint(&ub, "{s}/api/theme/episode/list/{s}", .{ base, slug[dash + 1 ..] }) catch return null;
+    const episode_body = transport.fetch(episodes_url, scratch, .{ .referer = base, .timeout_secs = 8, .cancel_epoch = .{ .epoch32 = .{ .value = &gate.generation, .expected = generation } } }) orelse return null;
+    if (!gate.isCurrent(generation)) return null;
+    const episode_doc = std.json.parseFromSlice(std.json.Value, alloc, episode_body, .{}) catch return null;
+    defer episode_doc.deinit();
+    const id = hp.episodeId(pure.string(pure.field(episode_doc.value, "html")), ep) orelse return null;
+    const servers_url = std.fmt.bufPrint(&ub, "{s}/api/theme/episode/servers?episodeId={s}", .{ base, id }) catch return null;
+    const server_body = transport.fetch(servers_url, scratch, .{ .referer = base, .timeout_secs = 8, .cancel_epoch = .{ .epoch32 = .{ .value = &gate.generation, .expected = generation } } }) orelse return null;
+    if (!gate.isCurrent(generation)) return null;
+    const server_doc = std.json.parseFromSlice(std.json.Value, alloc, server_body, .{}) catch return null;
+    defer server_doc.deinit();
+    var embed_buf: [1024]u8 = undefined;
+    const embed_url = hp.embed(pure.string(pure.field(server_doc.value, "html")), &embed_buf) orelse return null;
+    const embed_body = transport.fetch(embed_url, scratch, .{ .referer = base, .timeout_secs = 8, .cancel_epoch = .{ .epoch32 = .{ .value = &gate.generation, .expected = generation } } }) orelse return null;
+    if (!gate.isCurrent(generation)) return null;
+    const decoded = alloc.alloc(u8, 256 * 1024) catch return null;
+    defer alloc.free(decoded);
+    const config = hp.configJson(embed_body, decoded) orelse return null;
+    const config_doc = std.json.parseFromSlice(std.json.Value, alloc, config, .{}) catch return null;
+    defer config_doc.deinit();
+    const stream = hp.streamUrl(config_doc.value) orelse return null;
+    if (!gate.isCurrent(generation)) return null;
+    return directStream(stream, "https://zokoanime.video/");
+}
+
+fn fetchHiSource(url: []const u8, scratch: []u8, opts: rf.Opts) ?[]const u8 {
+    var base_buf: [256]u8 = undefined;
+    const raw = @import("../core/source_config.zig").copyValue("hianime", "base", &base_buf) orelse return null;
+    var same: [2048]u8 = undefined;
+    if (@import("content_html_pure.zig").sourceUrl(&same, base_buf[0..raw.len], url) == null) return fetchSource(url, scratch, opts);
+    var headers: [2048]u8 = undefined;
+    const result = @import("source_request.zig").request("hianime", url, scratch, &headers, .{ .base = base_buf[0..raw.len], .ttl_ms = 30_000, .validate = validHiMetadata, .transport = opts });
+    return if (result.ok()) result.body else null;
+}
+
+test "Anime provider HiAnime independent playback resolves real requested identity and cancels between hops" {
+    const Fixture = struct {
+        var calls: usize = 0;
+        var cancel_gate: ?*Gate = null;
+        fn fetch(url: []const u8, _: []u8, opts: rf.Opts) ?[]const u8 {
+            calls += 1;
+            const epoch = opts.cancel_epoch orelse return null;
+            switch (epoch) {
+                .epoch32 => |e| if (e.value.load(.acquire) != e.expected) return null,
+                else => return null,
+            }
+            if (cancel_gate) |gate| {
+                _ = gate.generation.fetchAdd(1, .acq_rel);
+                return "stale";
+            }
+            if (std.mem.indexOf(u8, url, "/search?") != null) return "<a href='/example-1335' title='Example'>Example</a>";
+            if (std.mem.indexOf(u8, url, "/episode/list/1335") != null) return "{\"html\":\"<a data-number='1' data-id='1'></a><a data-number='2' data-id='2'></a>\"}";
+            if (std.mem.indexOf(u8, url, "episodeId=2") != null) return "{\"html\":\"<div data-type='sub' data-server-name='ZokoAnime' data-hash='aHR0cHM6Ly96b2tvYW5pbWUudmlkZW8vc3RyZWFtL21hbC8yMC8yL3N1Yg=='></div>\"}";
+            if (std.mem.eql(u8, url, "https://zokoanime.video/stream/mal/20/2/sub")) return "window.__P=\"FFYSGRYPX08KERBdBQtAWxcCEUgKQxYAF1lZVB9GTwZGWF1PHw==\"";
+            return null;
+        }
+    };
+    const app = &@import("../core/state.zig").app;
+    const browse_count = app.anime.result_count;
+    defer app.anime.result_count = browse_count;
+    app.anime.result_count = 1;
+    var gate: Gate = .{};
+    var loading = std.atomic.Value(bool).init(false);
+    const generation = gate.begin(&loading);
+    const result = resolveHiAt("https://site.test", "Example", "", 2, &gate, generation, .{ .fetch = Fixture.fetch }) orelse return error.MissingStream;
+    try std.testing.expectEqualStrings("https://video.test/ep2.m3u8", result.streamUrl());
+    try std.testing.expectEqualStrings("https://zokoanime.video/", result.refererStr());
+    try std.testing.expectEqual(@as(usize, 4), Fixture.calls);
+    try std.testing.expectEqual(@as(usize, 1), app.anime.result_count);
+    Fixture.calls = 0;
+    Fixture.cancel_gate = &gate;
+    defer Fixture.cancel_gate = null;
+    try std.testing.expect(resolveHiAt("https://site.test", "Example", "", 2, &gate, generation, .{ .fetch = Fixture.fetch }) == null);
+    try std.testing.expectEqual(@as(usize, 1), Fixture.calls);
+    try std.testing.expectEqual(@as(usize, 1), app.anime.result_count);
+}
+
+fn validHiMetadata(body: []const u8) bool {
+    if (std.mem.indexOf(u8, body, "film-name") != null and std.mem.indexOf(u8, body, "Just a moment") == null) return true;
+    const doc = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch return false;
+    defer doc.deinit();
+    const status = pure.field(doc.value, "status");
+    return status == .bool and status.bool and pure.field(doc.value, "html") == .string;
 }

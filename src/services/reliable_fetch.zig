@@ -10,6 +10,7 @@ const alloc = @import("../core/alloc.zig").allocator;
 const state = @import("../core/state.zig");
 const sync = @import("../core/sync.zig");
 const pure = @import("reliable_fetch_pure.zig");
+const bounded = @import("../core/bounded_process.zig");
 
 pub const Header = pure.Header;
 
@@ -89,10 +90,11 @@ pub const Opts = struct {
     /// Chain through the DPI-bypass proxy when it's enabled+running.
     use_dpi_proxy: bool = true,
     post_body: ?[]const u8 = null,
+    cancel_epoch: ?bounded.CancelEpoch = null,
 };
 
 pub const Backend = enum { curl, browser_tls };
-pub const Failure = enum { none, invalid_input, spawn, transport, malformed_response, truncated, empty };
+pub const Failure = enum { none, invalid_input, spawn, transport, malformed_response, truncated, empty, cancelled, timed_out };
 
 pub const FetchResult = struct {
     body: []const u8 = "",
@@ -114,6 +116,7 @@ const write_out = "\\n" ++ meta_marker ++ "%{http_code}:%{time_total}";
 /// seam as the body. Callers own both output buffers; returned slices alias
 /// them and remain valid until the next caller mutation.
 pub fn request(url: []const u8, body_out: []u8, headers_out: []u8, opts: Opts) FetchResult {
+    if (@import("../core/workers.zig").isQuitting()) return .{ .failure = .cancelled };
     if (url.len == 0 or body_out.len == 0) return .{ .failure = .invalid_input };
     detect();
     const token = if (opts.impersonate) det_token else "";
@@ -150,33 +153,41 @@ pub fn request(url: []const u8, body_out: []u8, headers_out: []u8, opts: Opts) F
     const raw = alloc.alloc(u8, raw_cap) catch return .{ .backend = used_backend, .failure = .transport };
     defer alloc.free(raw);
 
-    var child = io.Child.init(argv, alloc);
-    child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    child.spawn() catch return .{ .backend = used_backend, .failure = .spawn };
-
+    var process = bounded.StreamProcess.init(argv, .{
+        .timeout_ms = @as(i64, opts.timeout_secs) * 1000 + 250,
+        .terminate_grace_ms = 100,
+        .max_output_bytes = raw_cap,
+        .cancel_epoch = opts.cancel_epoch,
+        .cancel_flag = @import("../core/workers.zig").quittingSignal(),
+    });
+    process.start() catch return .{ .backend = used_backend, .failure = .spawn };
     var raw_len: usize = 0;
     var overflow = false;
-    if (child.stdout) |*stdout| {
+    if (process.stdout()) |stdout| {
         while (raw_len < raw.len) {
             const n = io.read(stdout, raw[raw_len..]) catch break;
             if (n == 0) break;
             raw_len += n;
+            if (!process.noteOutput(n)) {
+                overflow = true;
+                break;
+            }
         }
-        var drain: [4096]u8 = undefined;
-        while (true) {
-            const n = io.read(stdout, &drain) catch break;
-            if (n == 0) break;
-            overflow = true;
+        if (raw_len == raw.len) {
+            var extra: [1]u8 = undefined;
+            const n = io.read(stdout, &extra) catch 0;
+            if (n > 0) {
+                _ = process.noteOutput(n);
+                overflow = true;
+                process.requestStop();
+            }
         }
     }
-    const term = child.wait() catch return .{ .backend = used_backend, .failure = .transport };
-    const exited_ok = switch (term) {
-        .exited => |code| code == 0,
-        else => false,
-    };
-    if (overflow) return .{ .backend = used_backend, .failure = .truncated };
+    const completion = process.finish();
+    if (completion.cancelled) return .{ .backend = used_backend, .failure = .cancelled };
+    if (completion.timed_out) return .{ .backend = used_backend, .failure = .timed_out };
+    if (overflow or completion.output_limited) return .{ .backend = used_backend, .failure = .truncated };
+    const exited_ok = completion.ok();
 
     const parsed = pure.parseCapturedOutput(raw[0..raw_len], meta_marker) orelse
         return .{ .backend = used_backend, .failure = if (exited_ok) .malformed_response else .transport };

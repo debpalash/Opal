@@ -387,14 +387,20 @@ pub fn parseRssEpisodePage(xml: []const u8, out: []Episode, offset: usize) Episo
         var episode: Episode = .{};
         const e = &episode;
 
-        // Audio enclosure URL is the load-bearing field.
-        if (std.mem.indexOf(u8, block, "<enclosure")) |enc_at| {
-            const enc_end = std.mem.indexOfScalarPos(u8, block, enc_at, '>') orelse block.len;
-            const enc = block[enc_at..@min(enc_end + 1, block.len)];
-            if (xmlAttr(enc, "url=\"")) |u| {
-                if (u.len > e.audio_url.len) continue;
-                e.audio_url_len = xmlText(&e.audio_url, u);
-            }
+        // Select audio, excluding artwork/HTML attachments. Missing MIME stays
+        // compatible with older publishers, whose enclosure is the audio file.
+        var enclosure_pos: usize = 0;
+        while (std.mem.indexOfPos(u8, block, enclosure_pos, "<enclosure")) |enc_at| {
+            const enc_end = std.mem.indexOfScalarPos(u8, block, enc_at, '>') orelse break;
+            enclosure_pos = enc_end + 1;
+            const enc = block[enc_at..enclosure_pos];
+            const mime = xmlAttr(enc, "type=\"") orelse "";
+            if (mime.len > 0 and !std.mem.startsWith(u8, mime, "audio/") and !std.mem.eql(u8, mime, "application/ogg")) continue;
+            const u = xmlAttr(enc, "url=\"") orelse continue;
+            if (u.len > e.audio_url.len) continue;
+            e.audio_url_len = xmlText(&e.audio_url, u);
+            if (isFeedUrl(e.audio_url[0..e.audio_url_len])) break;
+            e.audio_url_len = 0;
         }
         if (!isFeedUrl(e.audio_url[0..e.audio_url_len])) continue;
 
@@ -782,4 +788,12 @@ test "RSS pages count usable items beyond 200 and have a truthful end" {
     try std.testing.expectEqual(@as(usize, 5), last.count);
     try std.testing.expectEqual(@as(usize, 205), last.total);
     try std.testing.expectEqual(@as(usize, 0), parseRssEpisodePage(xml, rows, 205).count);
+}
+
+test "RSS chooses playable audio enclosure instead of first nonaudio attachment" {
+    var rows: [2]Episode = undefined;
+    const feed = "<rss><channel><item><title>Episode</title><enclosure url='https://cdn.test/cover.jpg' type='image/jpeg'/><enclosure url='https://cdn.test/episode.mp3' type='audio/mpeg'/></item><item><title>Not audio</title><enclosure url='https://cdn.test/page.html' type='text/html'/></item></channel></rss>";
+    const page = parseRssEpisodePage(feed, &rows, 0);
+    try std.testing.expectEqual(@as(usize, 1), page.total);
+    try std.testing.expectEqualStrings("https://cdn.test/episode.mp3", rows[0].audio_url[0..rows[0].audio_url_len]);
 }

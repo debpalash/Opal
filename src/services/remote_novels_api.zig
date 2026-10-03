@@ -10,6 +10,18 @@ const escJsonWrite = wire.writeJsonString;
 
 pub fn apiNovels(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
     const nov = @import("novels.zig");
+    if (std.mem.eql(u8, api_path, "/novels/resume")) {
+        const generation = std.fmt.parseInt(u32, getQueryParam(query, "generation") orelse "", 10) catch {
+            sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"generation required\"}");
+            return;
+        };
+        if (!nov.resumeReadingExpected(generation)) {
+            sendJsonStatus(stream, "409 Conflict", "{\"error\":\"chapter directory changed\"}");
+            return;
+        }
+        sendJson(stream, "{\"ok\":true}");
+        return;
+    }
     if (std.mem.eql(u8, api_path, "/novels/back")) {
         nov.back();
         sendJson(stream, "{\"ok\":true}");
@@ -30,6 +42,18 @@ pub fn apiNovels(stream: std.Io.net.Stream, api_path: []const u8, query: []const
         return;
     }
     if (std.mem.eql(u8, api_path, "/novels/open")) {
+        if (getQueryParam(query, "source")) |source| {
+            var title_buf: [256]u8 = undefined;
+            var url_buf: [1024]u8 = undefined;
+            const title = urlDecode(getQueryParam(query, "title") orelse "", &title_buf) orelse "";
+            const url = urlDecode(getQueryParam(query, "url") orelse "", &url_buf) orelse "";
+            if (!nov.openConfiguredWork(source, title, url)) {
+                sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"invalid configured work\"}");
+                return;
+            }
+            sendJson(stream, "{\"ok\":true}");
+            return;
+        }
         const idx = std.fmt.parseInt(usize, getQueryParam(query, "idx") orelse "999", 10) catch 999;
         if (idx >= nov.resultCount()) {
             sendJsonStatus(stream, "404 Not Found", "{\"error\":\"no such novel\"}");
@@ -37,6 +61,24 @@ pub fn apiNovels(stream: std.Io.net.Stream, api_path: []const u8, query: []const
         }
         nov.openNovel(idx);
         sendJson(stream, "{\"ok\":true,\"action\":\"novel_open\"}");
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/novels/window") or
+        (std.mem.eql(u8, api_path, "/novels/chapter") and getQueryParam(query, "ordinal") != null))
+    {
+        const generation = std.fmt.parseInt(u32, getQueryParam(query, "generation") orelse "", 10) catch {
+            sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"generation required\"}");
+            return;
+        };
+        const ordinal = std.fmt.parseInt(usize, getQueryParam(query, "ordinal") orelse "", 10) catch {
+            sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"ordinal required\"}");
+            return;
+        };
+        if (!nov.chapterActionExpected(generation, ordinal, std.mem.eql(u8, api_path, "/novels/window"))) {
+            sendJsonStatus(stream, "409 Conflict", "{\"error\":\"chapter directory changed\"}");
+            return;
+        }
+        sendJson(stream, "{\"ok\":true}");
         return;
     }
     if (std.mem.eql(u8, api_path, "/novels/chapter")) {
@@ -107,7 +149,7 @@ pub fn apiNovels(stream: std.Io.net.Stream, api_path: []const u8, query: []const
         escJsonWrite(&w, row.metadata.cover());
         w.print("\",\"year\":{d},\"source\":{d}}}", .{ row.metadata.year, row.source }) catch return;
     }
-    w.writeAll("],\"chapters\":[") catch return;
+    w.print("],\"chapter_offset\":{d},\"chapter_total\":{d},\"chapter_has_more\":{s},\"chapters\":[", .{ n.chapter_offset, n.chapter_total, if (n.chapter_has_more) "true" else "false" }) catch return;
     i = 0;
     const cn = n.chapter_count;
     while (i < cn) : (i += 1) {

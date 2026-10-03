@@ -131,6 +131,13 @@ var ch_title_lens: [MAX_CHAPTERS]usize = std.mem.zeroes([MAX_CHAPTERS]usize);
 var ch_urls: [MAX_CHAPTERS][1024]u8 = undefined;
 var ch_url_lens: [MAX_CHAPTERS]usize = std.mem.zeroes([MAX_CHAPTERS]usize);
 var ch_count: usize = 0;
+var ch_offset: usize = 0;
+var ch_total: usize = 0;
+var ch_has_more: bool = false;
+var ch_resume_target: [1024]u8 = undefined;
+var ch_resume_target_len: usize = 0;
+var ch_resume_match: ?usize = null;
+var ch_reverse_total: ?usize = null; // publication under parse_mutex
 
 // The engine of the currently-open novel — set by openNovel BEFORE spawning the
 // chapters/text workers, which dispatch on it (chapter-list markup + chapter-text
@@ -207,6 +214,9 @@ pub const ReaderSnapshot = struct {
     chapter_titles: [MAX_CHAPTERS][256]u8,
     chapter_title_lens: [MAX_CHAPTERS]usize,
     chapter_count: usize,
+    chapter_offset: usize,
+    chapter_total: usize,
+    chapter_has_more: bool,
     has_more: bool,
     loading_more: bool,
     search_generation: u32,
@@ -243,6 +253,9 @@ pub fn copyReaderSnapshot(out: *ReaderSnapshot) void {
         row.metadata = nr_metadata[idx];
     }
     out.chapter_count = @min(ch_count, MAX_CHAPTERS);
+    out.chapter_offset = ch_offset;
+    out.chapter_total = ch_total;
+    out.chapter_has_more = ch_has_more;
     for (0..out.chapter_count) |idx| {
         out.chapter_title_lens[idx] = @min(ch_title_lens[idx], out.chapter_titles[idx].len);
         @memcpy(out.chapter_titles[idx][0..out.chapter_title_lens[idx]], ch_titles[idx][0..out.chapter_title_lens[idx]]);
@@ -338,10 +351,14 @@ const ReaderJob = struct {
     title_len: usize = 0,
     url: [1024]u8 = undefined,
     url_len: usize = 0,
+    chapter_offset: usize = 0,
+    open_ordinal: ?usize = null,
+    resume_target: [1024]u8 = undefined,
+    resume_target_len: usize = 0,
 };
 
 fn readerJob(generation: u32, title: []const u8, url: []const u8) ReaderJob {
-    var job: ReaderJob = .{ .generation = generation, .source = open_source };
+    var job: ReaderJob = .{ .generation = generation, .source = open_source, .chapter_offset = ch_offset };
     job.title_len = @min(title.len, job.title.len);
     job.url_len = @min(url.len, job.url.len);
     @memcpy(job.title[0..job.title_len], title[0..job.title_len]);
@@ -1046,6 +1063,10 @@ pub fn openNovel(idx: usize) void {
     state.app.novels.fetch_error = false;
 
     ch_count = 0;
+    ch_offset = 0;
+    ch_total = 0;
+    ch_has_more = false;
+    ch_reverse_total = null;
 
     const job = readerJob(my_gen, work_snap[0..work_snap_len], work_url_snap[0..work_url_snap_len]);
     parse_mutex.unlock();
@@ -1065,6 +1086,15 @@ fn chaptersWorker(job: ReaderJob) void {
         parse_mutex.unlock();
     }
     if (chapters_gen.load(.acquire) != my_gen) return;
+    parse_mutex.lock();
+    if (chapters_gen.load(.acquire) != my_gen) {
+        parse_mutex.unlock();
+        return;
+    }
+    ch_resume_target_len = job.resume_target_len;
+    @memcpy(ch_resume_target[0..job.resume_target_len], job.resume_target[0..job.resume_target_len]);
+    ch_resume_match = null;
+    parse_mutex.unlock();
     switch (job.source) {
         .wikisource => chaptersWikisource(job),
         .madara_novel => chaptersMadara(job),
@@ -1076,10 +1106,16 @@ fn chaptersWorker(job: ReaderJob) void {
         .royalroad, .novelfire => chaptersExpanded(job),
         .standardebooks, .wuxiaclick => chaptersReadingProvider(job),
     }
-    parse_mutex.lock();
-    const capped = chapters_gen.load(.acquire) == my_gen and ch_count >= MAX_CHAPTERS;
-    parse_mutex.unlock();
-    if (capped) logs.pushLog("warn", "novels", "Chapter list reached the 400-chapter reader limit", false);
+    if (job.open_ordinal) |fallback| {
+        parse_mutex.lock();
+        const current = chapters_gen.load(.acquire) == my_gen;
+        const ordinal = ch_resume_match orelse fallback;
+        const offset = ch_offset;
+        const count = ch_count;
+        parse_mutex.unlock();
+        if (!current) return;
+        if (ordinal >= offset and ordinal - offset < count) openChapterExpected(ordinal - offset, my_gen) else loadChapterWindowInternal((ordinal / MAX_CHAPTERS) * MAX_CHAPTERS, ordinal);
+    }
 }
 
 fn chaptersReadingProvider(job: ReaderJob) void {
@@ -1089,80 +1125,108 @@ fn chaptersReadingProvider(job: ReaderJob) void {
     const work = job.url[0..job.url_len];
     var url_buf: [1600]u8 = undefined;
     const url = reading_provider.chapterListUrl(&url_buf, base, provider, work) orelse return;
-    const body = scrapeHtml(url, 4 * 1024 * 1024) orelse return;
+    const body = fetchReaderBody(url, 4 * 1024 * 1024, job.generation, false) orelse return;
     defer alloc.free(body);
     const rows = alloc.alloc(reading_provider.Chapter, MAX_CHAPTERS) catch return;
     defer alloc.free(rows);
-    const n = reading_provider.chaptersInto(body, base, provider, work, rows);
+    const window = reading_provider.chaptersWindowTargetInto(body, base, provider, work, job.chapter_offset, job.resume_target[0..job.resume_target_len], rows);
     parse_mutex.lock();
     defer parse_mutex.unlock();
     if (chapters_gen.load(.acquire) != job.generation) return;
-    for (rows[0..n], 0..) |*row, i| addChapter(i, row.title[0..row.title_len], row.url[0..row.url_len]);
-    ch_count = n;
-    if (n == 0) state.app.novels.fetch_error = true;
+    ch_resume_match = window.matched_ordinal;
+    for (rows[0..window.count], 0..) |*row, i| addChapter(job.chapter_offset + i, row.title[0..row.title_len], row.url[0..row.url_len]);
+    ch_count = window.count;
+    ch_total = window.total;
+    ch_has_more = window.has_more;
+    if (window.count == 0) state.app.novels.fetch_error = true;
 }
 
 fn chaptersExpanded(job: ReaderJob) void {
     const gen = job.generation;
     const src = job.source;
     var base_buf: [512]u8 = undefined;
-    const base = copyBase(source_config.get(@tagName(src), "base") orelse return, &base_buf);
-    var work_buf: [1024]u8 = undefined;
-    const work = copyBase(job.url[0..job.url_len], &work_buf);
-    var n: usize = 0;
-    // NovelFire paginates its chapter directory; Royal Road returns it whole.
+    const base = source_config.copyValue(@tagName(src), "base", &base_buf) orelse return;
+    const work = job.url[0..job.url_len];
+    var count: usize = 0;
     var page: usize = 1;
-    while (page <= 16 and n < MAX_CHAPTERS) : (page += 1) {
-        var url_buf: [1200]u8 = undefined;
-        const url = if (src == .royalroad) work else std.fmt.bufPrint(&url_buf, "{s}/chapters?page={d}", .{ std.mem.trimEnd(u8, work, "/"), page }) catch return;
-        const body = scrapeHtml(url, 4 * 1024 * 1024) orelse return;
-        defer alloc.free(body);
-        if (chapters_gen.load(.acquire) != gen) return;
-        const before = n;
-        const chapter_html = expanded.chapterListingHtml(body, @tagName(src)) orelse return;
-        var it = expanded.html.AnchorIter{ .html = chapter_html, .path = if (src == .royalroad) "/chapter/" else "/chapter-" };
-        parse_mutex.lock();
-        while (it.next()) |item| {
-            if (n >= MAX_CHAPTERS or chapters_gen.load(.acquire) != gen) break;
-            var abs_buf: [1024]u8 = undefined;
-            const abs = expanded.html.sourceUrl(&abs_buf, base, item.url) orelse continue;
-            var duplicate = false;
-            for (0..n) |i| {
-                if (std.mem.eql(u8, abs, ch_urls[i][0..ch_url_lens[i]])) {
-                    duplicate = true;
-                    break;
-                }
+    var last_url: [1024]u8 = undefined;
+    var last_len: usize = 0;
+    while (chapters_gen.load(.acquire) == gen) : (page += 1) {
+        var address: [1600]u8 = undefined;
+        const url = if (src == .royalroad) work else std.fmt.bufPrint(&address, "{s}/chapters?page={d}", .{ std.mem.trimEnd(u8, work, "/"), page }) catch return;
+        const body = scrapeHtml(url, 4 * 1024 * 1024) orelse {
+            parse_mutex.lock();
+            defer parse_mutex.unlock();
+            if (chapters_gen.load(.acquire) == gen) {
+                state.app.novels.fetch_error = true;
+                finishChapterWindow(count, true);
             }
-            if (duplicate) continue;
-            var title_buf: [256]u8 = undefined;
-            const title = cleanTitle(item.title, &title_buf);
-            if (title.len == 0) continue;
-            addChapter(n, title, abs);
-            n += 1;
+            return;
+        };
+        defer alloc.free(body);
+        const listing = expanded.chapterListingHtml(body, @tagName(src)) orelse {
+            parse_mutex.lock();
+            defer parse_mutex.unlock();
+            if (chapters_gen.load(.acquire) == gen) {
+                state.app.novels.fetch_error = true;
+                finishChapterWindow(count, true);
+            }
+            return;
+        };
+        var iter: expanded.html.AnchorIter = .{ .html = listing, .path = if (src == .royalroad) "/chapter/" else "/chapter-" };
+        parse_mutex.lock();
+        if (chapters_gen.load(.acquire) != gen) {
+            parse_mutex.unlock();
+            return;
         }
-        if (chapters_gen.load(.acquire) == gen) ch_count = n;
+        const before = count;
+        while (iter.next()) |anchor| {
+            var abs_buf: [1024]u8 = undefined;
+            const abs = expanded.html.sourceUrl(&abs_buf, base, anchor.url) orelse continue;
+            if (std.mem.eql(u8, abs, last_url[0..last_len])) continue;
+            var title_buf: [256]u8 = undefined;
+            const title = cleanTitle(anchor.title, &title_buf);
+            if (title.len == 0) continue;
+            @memcpy(last_url[0..abs.len], abs);
+            last_len = abs.len;
+            addChapter(count, title, abs);
+            count += 1;
+        }
+        var next_buf: [64]u8 = undefined;
+        const next = std.fmt.bufPrint(&next_buf, "page={d}", .{page + 1}) catch "";
+        const more = src != .royalroad and next.len > 0 and std.mem.indexOf(u8, body, next) != null;
+        finishChapterWindow(count, more);
+        if (more and before == count) state.app.novels.fetch_error = true;
         parse_mutex.unlock();
-        if (src == .royalroad or before == n) break;
-        var next_buf: [40]u8 = undefined;
-        const next = std.fmt.bufPrint(&next_buf, "page={d}", .{page + 1}) catch break;
-        if (std.mem.indexOf(u8, body, next) == null) break;
+        if (!more or before == count or (count > job.chapter_offset +| MAX_CHAPTERS and (job.resume_target_len == 0 or ch_resume_match != null))) break;
     }
 }
 
 /// Publish one chapter (display name + optional absolute URL) into the ch_* arrays.
 fn addChapter(idx: usize, name: []const u8, url: []const u8) void {
-    if (idx >= MAX_CHAPTERS) return;
-    const nlen = @min(name.len, ch_titles[idx].len);
-    @memcpy(ch_titles[idx][0..nlen], name[0..nlen]);
-    ch_title_lens[idx] = nlen;
-    const ulen = @min(url.len, ch_urls[idx].len);
-    @memcpy(ch_urls[idx][0..ulen], url[0..ulen]);
-    ch_url_lens[idx] = ulen;
+    const ordinal = if (ch_reverse_total) |total| if (idx < total) total - 1 - idx else return else idx;
+    const identity = if (url.len > 0) url else name;
+    if (ch_resume_target_len > 0 and std.mem.eql(u8, identity, ch_resume_target[0..ch_resume_target_len])) ch_resume_match = ordinal;
+    const slot = reading_provider.windowSlot(ordinal, ch_offset, MAX_CHAPTERS) orelse return;
+    const nlen = @min(name.len, ch_titles[slot].len);
+    @memcpy(ch_titles[slot][0..nlen], name[0..nlen]);
+    ch_title_lens[slot] = nlen;
+    const ulen = @min(url.len, ch_urls[slot].len);
+    @memcpy(ch_urls[slot][0..ulen], url[0..ulen]);
+    ch_url_lens[slot] = ulen;
+}
+
+fn finishChapterWindow(total: usize, has_more: bool) void {
+    ch_total = total;
+    ch_count = if (total > ch_offset) @min(total - ch_offset, MAX_CHAPTERS) else 0;
+    ch_has_more = has_more or total > ch_offset +| ch_count;
+    ch_reverse_total = null;
 }
 
 /// Reverse the first `count` chapters in place. The scraper engines list chapters
 /// newest→oldest; reading order is oldest→newest, so chapter 0 becomes chapter 1.
 fn reverseChapters(count: usize) void {
+    if (ch_reverse_total != null) return; // already placed by absolute ordinal
     if (count < 2) return;
     var i: usize = 0;
     while (i < count / 2) : (i += 1) {
@@ -1177,44 +1241,60 @@ fn reverseChapters(count: usize) void {
 /// Wikisource: `list=allpages` subpages. When a work has none (single-page work),
 /// synthesize one chapter = the work page so the reader still opens.
 fn chaptersWikisource(job: ReaderJob) void {
-    const my_gen = job.generation;
-    var work: [256]u8 = undefined;
-    const wlen = @min(job.title_len, work.len);
-    @memcpy(work[0..wlen], job.title[0..wlen]);
-
-    var url_buf: [1024]u8 = undefined;
-    const url = pure.buildSubpagesUrl(&url_buf, work[0..wlen], MAX_CHAPTERS) orelse return;
-
-    const body = fetchBody(url, 512 * 1024) orelse {
-        if (chapters_gen.load(.acquire) == my_gen) state.app.novels.fetch_error = true;
-        return;
-    };
-    defer alloc.free(body);
-    if (chapters_gen.load(.acquire) != my_gen) return;
-
-    parse_mutex.lock();
-    defer parse_mutex.unlock();
-    if (chapters_gen.load(.acquire) != my_gen) return;
-
+    const gen = job.generation;
+    const work = job.title[0..job.title_len];
+    var cursor: [512]u8 = undefined;
+    var cursor_len: usize = 0;
     var count: usize = 0;
-    if (pure.allpagesArray(body)) |arr| {
-        var it = pure.cj.ObjIter{ .buf = arr };
-        while (it.next()) |obj| {
-            if (count >= MAX_CHAPTERS) break;
-            const raw = pure.titleField(obj) orelse continue;
-            var dec: [256]u8 = undefined;
-            const dn = pure.cj.jsonUnescape(raw, &dec);
-            if (dn == 0) continue;
-            addChapter(count, dec[0..dn], "");
-            count += 1;
+    var more = false;
+    while (chapters_gen.load(.acquire) == gen) {
+        var address: [3072]u8 = undefined;
+        const url = pure.buildSubpagesPageUrl(&address, work, cursor[0..cursor_len]) orelse return;
+        const body = fetchBody(url, 512 * 1024) orelse {
+            parse_mutex.lock();
+            defer parse_mutex.unlock();
+            if (chapters_gen.load(.acquire) == gen) {
+                state.app.novels.fetch_error = true;
+                finishChapterWindow(count, true);
+            }
+            return;
+        };
+        defer alloc.free(body);
+        parse_mutex.lock();
+        if (chapters_gen.load(.acquire) != gen) {
+            parse_mutex.unlock();
+            return;
         }
+        if (pure.allpagesArray(body)) |array| {
+            var iter: pure.cj.ObjIter = .{ .buf = array };
+            while (iter.next()) |object| {
+                const raw = pure.titleField(object) orelse continue;
+                var decoded: [256]u8 = undefined;
+                const n = pure.cj.jsonUnescape(raw, &decoded);
+                if (n == 0) continue;
+                addChapter(count, decoded[0..n], "");
+                count += 1;
+            }
+        }
+        var next: [512]u8 = undefined;
+        const token = pure.subpagesContinuation(body, &next);
+        more = token.len > 0;
+        if (more and token.len == cursor_len and std.mem.eql(u8, token, cursor[0..cursor_len])) {
+            state.app.novels.fetch_error = true;
+            finishChapterWindow(count, true);
+            parse_mutex.unlock();
+            return;
+        }
+        if (count == 0 and !more) {
+            addChapter(0, work, "");
+            count = 1;
+        }
+        finishChapterWindow(count, more);
+        parse_mutex.unlock();
+        if (!more or (count > job.chapter_offset +| MAX_CHAPTERS and (job.resume_target_len == 0 or ch_resume_match != null))) break;
+        @memcpy(cursor[0..token.len], token);
+        cursor_len = token.len;
     }
-    if (count == 0) {
-        addChapter(0, work[0..wlen], "");
-        count = 1;
-    }
-    ch_count = count;
-    logs.pushLog("info", "novels", "Novel chapter list loaded (Wikisource)", false);
 }
 
 /// Madara-novel: REUSES the manga Madara `ChapterIter` over the details HTML, with
@@ -1278,9 +1358,16 @@ fn chaptersMadara(job: ReaderJob) void {
     if (chapters_gen.load(.acquire) != my_gen) return;
 
     var it = nsp.madara.ChapterIter{ .html = list_html };
+    var probe = it;
+    var total: usize = 0;
+    while (probe.next()) |ch| {
+        var abs_buf: [512]u8 = undefined;
+        const abs = nsp.madara.resolveUrl(base, ch.url, &abs_buf);
+        if (ch.url.len > 0 and std.mem.startsWith(u8, abs, "http")) total += 1;
+    }
+    ch_reverse_total = total;
     var n: usize = 0;
     while (it.next()) |ch| {
-        if (n >= MAX_CHAPTERS) break;
         if (ch.url.len == 0) continue;
         var abs_buf: [512]u8 = undefined;
         const abs = nsp.madara.resolveUrl(base, ch.url, &abs_buf);
@@ -1290,7 +1377,7 @@ fn chaptersMadara(job: ReaderJob) void {
         n += 1;
     }
     reverseChapters(n);
-    ch_count = n;
+    finishChapterWindow(n, false);
     logs.pushLog("info", "novels", "Novel chapter list loaded (madara)", false);
 }
 
@@ -1319,9 +1406,16 @@ fn chaptersLightnovelwp(job: ReaderJob) void {
     if (chapters_gen.load(.acquire) != my_gen) return;
 
     var it = nsp.themesia.chapterIter(body);
+    var probe = it;
+    var total: usize = 0;
+    while (probe.next()) |ch| {
+        var abs_buf: [512]u8 = undefined;
+        const abs = nsp.themesia.resolveUrl(base, ch.url, &abs_buf);
+        if (ch.url.len > 0 and std.mem.startsWith(u8, abs, "http")) total += 1;
+    }
+    ch_reverse_total = total;
     var n: usize = 0;
     while (it.next()) |ch| {
-        if (n >= MAX_CHAPTERS) break;
         if (ch.url.len == 0) continue;
         var abs_buf: [512]u8 = undefined;
         const abs = nsp.themesia.resolveUrl(base, ch.url, &abs_buf);
@@ -1331,7 +1425,7 @@ fn chaptersLightnovelwp(job: ReaderJob) void {
         n += 1;
     }
     reverseChapters(n);
-    ch_count = n;
+    finishChapterWindow(n, false);
     logs.pushLog("info", "novels", "Novel chapter list loaded (lightnovelwp)", false);
 }
 
@@ -1363,7 +1457,6 @@ fn chaptersReadwn(job: ReaderJob) void {
     var it = nsp.readwnChapters(body);
     var n: usize = 0;
     while (it.next()) |ch| {
-        if (n >= MAX_CHAPTERS) break;
         if (ch.url.len == 0) continue;
         var abs_buf: [512]u8 = undefined;
         const abs = nsp.themesia.resolveUrl(base, ch.url, &abs_buf);
@@ -1372,7 +1465,7 @@ fn chaptersReadwn(job: ReaderJob) void {
         addChapter(n, cleanTitle(ch.name, &name_buf), abs);
         n += 1;
     }
-    ch_count = n;
+    finishChapterWindow(n, false);
     logs.pushLog("info", "novels", "Novel chapter list loaded (readwn)", false);
 }
 
@@ -1389,7 +1482,7 @@ fn chaptersGutenberg(job: ReaderJob) void {
     defer parse_mutex.unlock();
     if (chapters_gen.load(.acquire) != job.generation) return;
     addChapter(0, "Full text", text_url);
-    ch_count = 1;
+    finishChapterWindow(1, false);
     logs.pushLog("info", "novels", "Gutenberg advertised UTF-8 text resolved", false);
 }
 
@@ -1439,7 +1532,7 @@ fn chaptersInternetArchive(job: ReaderJob) void {
     defer parse_mutex.unlock();
     if (chapters_gen.load(.acquire) != my_gen) return;
     addChapter(0, "Full text", direct);
-    ch_count = 1;
+    finishChapterWindow(1, false);
     logs.pushLog("info", "novels", "Novel full text resolved (Internet Archive)", false);
 }
 
@@ -1448,11 +1541,29 @@ fn chaptersInternetArchive(job: ReaderJob) void {
 // ══════════════════════════════════════════════════════════
 
 pub fn openChapter(idx: usize) void {
-    const row = chapterRow(idx) orelse return;
+    openChapterExpected(idx, null);
+}
+
+fn openChapterExpected(idx: usize, expected_generation: ?u32) void {
     parse_mutex.lock();
+    if (idx >= ch_count) {
+        parse_mutex.unlock();
+        return;
+    }
+    var row: ListRow = .{};
+    row.title_len = ch_title_lens[idx];
+    @memcpy(row.title_buf[0..row.title_len], ch_titles[idx][0..row.title_len]);
+    row.url_len = ch_url_lens[idx];
+    @memcpy(row.url_buf[0..row.url_len], ch_urls[idx][0..row.url_len]);
+    if (expected_generation) |generation| {
+        if (chapters_gen.load(.acquire) != generation) {
+            parse_mutex.unlock();
+            return;
+        }
+    }
     const my_gen = text_gen.fetchAdd(1, .acq_rel) + 1;
 
-    state.app.novels.current_chapter = idx;
+    state.app.novels.current_chapter = ch_offset + idx;
     state.app.novels.view = .reader;
     state.app.novels.text_loading.store(true, .release);
     state.app.novels.text_len = 0;
@@ -1475,7 +1586,7 @@ pub fn openChapter(idx: usize) void {
     state.app.novels.chapter_label_len = llen;
 
     // Persist resume: this is now the last-read chapter for this work.
-    saveResume(idx);
+    saveResume(ch_offset + idx);
 
     const job = readerJob(my_gen, chapter_snap[0..chapter_snap_len], chapter_url_snap[0..chapter_url_snap_len]);
     parse_mutex.unlock();
@@ -1489,11 +1600,80 @@ pub fn openChapter(idx: usize) void {
 /// Next / previous chapter, clamped. No-ops past the ends.
 pub fn nextChapter() void {
     const cur = state.app.novels.current_chapter;
-    if (cur + 1 < chapterCount()) openChapter(cur + 1);
+    parse_mutex.lock();
+    const available = cur + 1 < ch_total or ch_has_more;
+    parse_mutex.unlock();
+    if (available) openChapterOrdinal(cur + 1);
 }
 pub fn prevChapter() void {
     const cur = state.app.novels.current_chapter;
-    if (cur > 0) openChapter(cur - 1);
+    if (cur > 0) openChapterOrdinal(cur - 1);
+}
+
+pub fn openChapterOrdinal(ordinal: usize) void {
+    parse_mutex.lock();
+    const offset = ch_offset;
+    const count = ch_count;
+    const generation = chapters_gen.load(.acquire);
+    parse_mutex.unlock();
+    if (ordinal >= offset and ordinal - offset < count) openChapterExpected(ordinal - offset, generation) else loadChapterWindowInternal((ordinal / MAX_CHAPTERS) * MAX_CHAPTERS, ordinal);
+}
+
+pub fn chapterActionExpected(generation: u32, ordinal: usize, window: bool) bool {
+    parse_mutex.lock();
+    const valid = chapters_gen.load(.acquire) == generation and work_snap_len > 0 and
+        (ordinal < ch_total or (ch_has_more and ordinal <= ch_offset +| MAX_CHAPTERS));
+    const offset = ch_offset;
+    const count = ch_count;
+    parse_mutex.unlock();
+    if (!valid) return false;
+    if (!window and ordinal >= offset and ordinal - offset < count) {
+        openChapterExpected(ordinal - offset, generation);
+    } else loadChapterWindowTargetExpected(if (window) ordinal else (ordinal / MAX_CHAPTERS) * MAX_CHAPTERS, if (window) null else ordinal, "", generation);
+    return true;
+}
+
+pub fn loadChapterWindow(offset: usize) void {
+    loadChapterWindowInternal(offset, null);
+}
+fn loadChapterWindowInternal(offset: usize, open_ordinal: ?usize) void {
+    loadChapterWindowTarget(offset, open_ordinal, "");
+}
+fn loadChapterWindowTarget(offset: usize, open_ordinal: ?usize, target: []const u8) void {
+    loadChapterWindowTargetExpected(offset, open_ordinal, target, null);
+}
+fn loadChapterWindowTargetExpected(offset: usize, open_ordinal: ?usize, target: []const u8, expected: ?u32) void {
+    parse_mutex.lock();
+    if (expected) |generation| {
+        if (chapters_gen.load(.acquire) != generation) {
+            parse_mutex.unlock();
+            return;
+        }
+    }
+    if (work_snap_len == 0) {
+        parse_mutex.unlock();
+        return;
+    }
+    const generation = chapters_gen.fetchAdd(1, .acq_rel) + 1;
+    ch_offset = offset;
+    ch_count = 0;
+    ch_reverse_total = null;
+    state.app.novels.view = .chapters;
+    state.app.novels.chapters_loading.store(true, .release);
+    state.app.novels.fetch_error = false;
+    var job = readerJob(generation, work_snap[0..work_snap_len], work_url_snap[0..work_url_snap_len]);
+    job.open_ordinal = open_ordinal;
+    job.resume_target_len = @min(target.len, job.resume_target.len);
+    @memcpy(job.resume_target[0..job.resume_target_len], target[0..job.resume_target_len]);
+    parse_mutex.unlock();
+    if (@import("../core/workers.zig").spawnLegacy(chaptersWorker, .{job})) |thread| @import("../core/workers.zig").release(thread) else |_| {
+        parse_mutex.lock();
+        defer parse_mutex.unlock();
+        if (chapters_gen.load(.acquire) == generation) {
+            state.app.novels.chapters_loading.store(false, .release);
+            state.app.novels.fetch_error = true;
+        }
+    }
 }
 
 /// Dispatch the chapter-text fetch to the open novel's engine.
@@ -1519,7 +1699,7 @@ fn textWorker(job: ReaderJob) void {
 }
 
 fn textReadingProvider(job: ReaderJob) void {
-    const body = scrapeHtml(job.url[0..job.url_len], 2 * 1024 * 1024) orelse {
+    const body = fetchReaderBody(job.url[0..job.url_len], 2 * 1024 * 1024, job.generation, true) orelse {
         parse_mutex.lock();
         defer parse_mutex.unlock();
         if (text_gen.load(.acquire) == job.generation) state.app.novels.fetch_error = true;
@@ -1674,10 +1854,12 @@ fn saveResume(chapter: usize) void {
     const title = state.app.novels.work_title[0..state.app.novels.work_title_len];
     if (title.len == 0) return;
     var key_buf: [256]u8 = undefined;
-    const key = pure.resumeKey(title, &key_buf);
+    const key = pure.workResumeKey(&key_buf, @tagName(open_source), work_url_snap[0..work_url_snap_len], title);
     var val_buf: [24]u8 = undefined;
     const val = pure.formatResume(&val_buf, chapter);
     db.librarySetStatus(RESUME_KIND, key, val);
+    const identity = if (chapter_url_snap_len > 0) chapter_url_snap[0..chapter_url_snap_len] else chapter_snap[0..chapter_snap_len];
+    db.librarySetStatus("novel_resume_chapter", key, identity);
 
     // Mirror into the unified read-model so the home "Continue" rail spans the
     // reading verticals too. library_status above stays authoritative; this is
@@ -1692,7 +1874,7 @@ fn saveResume(chapter: usize) void {
         title,
     );
     if (link.len == 0) return;
-    const total = ch_count;
+    const total = ch_total;
     var label_buf: [48]u8 = undefined;
     const label = std.fmt.bufPrint(&label_buf, "Chapter {d}", .{chapter + 1}) catch "";
     @import("library_store.zig").upsertProgress(
@@ -1718,6 +1900,19 @@ pub fn openDeepLink(link: []const u8) void {
 
 /// Open an immutable universal-search identity without touching the browse
 /// query/results or relying on their mutable row indices. Owner-thread only.
+/// Stable installed-provider identity; callers cannot open arbitrary scraper URLs.
+pub fn openConfiguredWork(source: []const u8, title: []const u8, url: []const u8) bool {
+    const src = std.meta.stringToEnum(NovelSource, source) orelse return false;
+    if (title.len == 0 or title.len > 256 or url.len > 512) return false;
+    var base_buf: [512]u8 = undefined;
+    const base = source_config.copyValue(source, "base", &base_buf) orelse return false;
+    const normalized = std.mem.trimEnd(u8, base, "/");
+    if (!std.mem.startsWith(u8, url, normalized) or url.len <= normalized.len or url[normalized.len] != '/') return false;
+    if (!std.mem.startsWith(u8, normalized, "https://") or std.mem.indexOfAny(u8, url, "\r\n\x00") != null) return false;
+    openCatalogResult(@intFromEnum(src), title, url);
+    return true;
+}
+
 pub fn openCatalogResult(source: u8, title: []const u8, url: []const u8) void {
     const src = std.enums.fromInt(NovelSource, source) orelse return;
     if (title.len == 0 or title.len > work_snap.len or url.len > work_url_snap.len) return;
@@ -1742,6 +1937,10 @@ pub fn openCatalogResult(source: u8, title: []const u8, url: []const u8) void {
     state.app.novels.fetch_error = false;
 
     ch_count = 0;
+    ch_offset = 0;
+    ch_total = 0;
+    ch_has_more = false;
+    ch_reverse_total = null;
 
     state.app.browse_source = .Novels;
     state.app.router.navigate(.browse);
@@ -1755,20 +1954,79 @@ pub fn openCatalogResult(source: u8, title: []const u8, url: []const u8) void {
     }
 }
 
+pub fn resumeReading() void {
+    _ = resumeReadingExpected(null);
+}
+pub fn resumeReadingExpected(expected: ?u32) bool {
+    parse_mutex.lock();
+    const generation = chapters_gen.load(.acquire);
+    if (expected) |value| {
+        if (generation != value) {
+            parse_mutex.unlock();
+            return false;
+        }
+    }
+    const ordinal = loadResume();
+    var key_buf: [256]u8 = undefined;
+    const key = pure.workResumeKey(&key_buf, @tagName(open_source), work_url_snap[0..work_url_snap_len], work_snap[0..work_snap_len]);
+    var target_buf: [1024]u8 = undefined;
+    const target = db.libraryGetStatus("novel_resume_chapter", key, &target_buf);
+    parse_mutex.unlock();
+    loadChapterWindowTargetExpected((ordinal / MAX_CHAPTERS) * MAX_CHAPTERS, ordinal, target, generation);
+    return true;
+}
+
 /// The persisted last-read chapter for the current work (0 when none).
 fn loadResume() usize {
     const title = state.app.novels.work_title[0..state.app.novels.work_title_len];
     if (title.len == 0) return 0;
     var key_buf: [256]u8 = undefined;
-    const key = pure.resumeKey(title, &key_buf);
+    const key = pure.workResumeKey(&key_buf, @tagName(open_source), work_url_snap[0..work_url_snap_len], title);
     var val_buf: [24]u8 = undefined;
     const val = db.libraryGetStatus(RESUME_KIND, key, &val_buf);
-    return pure.parseResume(val);
+    if (val.len > 0) return pure.parseResume(val);
+    // Old title-only entries are migrated only after the saved deep link proves
+    // the same provider and work; same-title books must never share progress.
+    var legacy_buf: [256]u8 = undefined;
+    const legacy = pure.resumeKey(title, &legacy_buf);
+    var verified = open_source == .wikisource;
+    if (!verified) {
+        if (db.prepare("SELECT deep_link FROM library_items WHERE kind='novels' AND item_id=?1 LIMIT 1")) |stmt| {
+            defer db.finalize(stmt);
+            db.bindText(stmt, 1, legacy);
+            if (db.step(stmt) == db.c.SQLITE_ROW) {
+                const link = db.columnText(stmt, 0) orelse "";
+                if (pure.parseDeepLink(link)) |saved| verified = std.mem.eql(u8, saved.source, @tagName(open_source)) and
+                    std.mem.eql(u8, std.mem.trimEnd(u8, saved.url, "/"), std.mem.trimEnd(u8, work_url_snap[0..work_url_snap_len], "/"));
+            }
+        }
+    }
+    if (!verified) return 0;
+    const old = db.libraryGetStatus(RESUME_KIND, legacy, &val_buf);
+    if (old.len > 0) db.librarySetStatus(RESUME_KIND, key, old);
+    return pure.parseResume(old);
 }
 
 // ══════════════════════════════════════════════════════════
 // Networking
 // ══════════════════════════════════════════════════════════
+
+fn fetchReaderBody(url: []const u8, cap: usize, generation: u32, text: bool) ?[]u8 {
+    const buf = alloc.alloc(u8, cap) catch return null;
+    const body = reliable_fetch.fetch(url, buf, .{
+        .user_agent = agent,
+        .timeout_secs = 20,
+        .impersonate = false,
+        .cancel_epoch = .{ .epoch32 = .{ .value = if (text) &text_gen else &chapters_gen, .expected = generation } },
+    }) orelse {
+        alloc.free(buf);
+        return null;
+    };
+    return alloc.realloc(buf, body.len) catch {
+        alloc.free(buf);
+        return null;
+    };
+}
 
 /// Fetch a JSON/API response through the shared bounded transport.
 fn fetchBody(url: []const u8, cap: usize) ?[]u8 {
@@ -2153,7 +2411,7 @@ fn renderChaptersView() void {
 
     // Resume banner — jump straight to the last-read chapter.
     const resume_ch = loadResume();
-    if (resume_ch > 0 and resume_ch < count) {
+    if (resume_ch > 0) {
         var resume_buf: [64]u8 = undefined;
         const resume_label = std.fmt.bufPrint(&resume_buf, "Resume — chapter {d}", .{resume_ch + 1}) catch "Resume";
         if (dvui.button(@src(), resume_label, .{}, .{
@@ -2165,8 +2423,16 @@ fn renderChaptersView() void {
             .margin = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
             .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
         })) {
-            openChapter(resume_ch);
+            resumeReading();
         }
+    }
+
+    {
+        var paging = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+        defer paging.deinit();
+        if (ch_offset > 0 and components.actionButton(@src(), "Previous chapters", .secondary, 90002)) loadChapterWindow(ch_offset -| MAX_CHAPTERS);
+        _ = dvui.label(@src(), "Chapters {d}–{d} of {d}{s}", .{ ch_offset + 1, ch_offset + count, ch_total, if (ch_has_more) "+" else "" }, .{ .color_text = theme.colors.text_secondary });
+        if (ch_has_more and components.actionButton(@src(), "Next chapters", .secondary, 90003)) loadChapterWindow(ch_offset + MAX_CHAPTERS);
     }
 
     var scroll = dvui.scrollArea(@src(), .{}, .{
@@ -2299,7 +2565,7 @@ fn renderReaderView() void {
         }
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"chevron-right", .{}, .{}, .{
             .id_extra = 5,
-            .color_text = if (state.app.novels.current_chapter + 1 < chapterCount()) theme.colors.text_primary else theme.colors.text_tertiary,
+            .color_text = if (state.app.novels.current_chapter + 1 < ch_total or ch_has_more) theme.colors.text_primary else theme.colors.text_tertiary,
             .gravity_y = 0.5,
             .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
         })) {

@@ -80,6 +80,49 @@ pub fn buildSubpagesUrl(out: []u8, work_title: []const u8, limit: u32) ?[]const 
     ) catch null;
 }
 
+pub fn buildSubpagesPageUrl(out: []u8, title: []const u8, cursor: []const u8) ?[]const u8 {
+    var first: [1024]u8 = undefined;
+    const url = buildSubpagesUrl(&first, title, 500) orelse return null;
+    if (cursor.len == 0) return std.fmt.bufPrint(out, "{s}", .{url}) catch null;
+    var encoded: [1536]u8 = undefined;
+    const n = cj.percentEncodeStrict(cursor, &encoded);
+    if (n == 0) return null;
+    return std.fmt.bufPrint(out, "{s}&apcontinue={s}&continue=-%7C%7C", .{ url, encoded[0..n] }) catch null;
+}
+pub fn subpagesContinuation(body: []const u8, out: []u8) []const u8 {
+    const continuation = cj.findJsonNode(body, "\"continue\"") orelse return "";
+    const raw = cj.findJsonStr(continuation, "\"apcontinue\":\"") orelse return "";
+    const n = cj.jsonUnescape(raw, out);
+    return out[0..n];
+}
+
+pub fn workResumeKey(out: []u8, source: []const u8, url: []const u8, title: []const u8) []const u8 {
+    var hash = std.hash.Wyhash.init(0);
+    hash.update(source);
+    hash.update("\x00");
+    hash.update(if (url.len > 0) std.mem.trimEnd(u8, url, "/") else title);
+    return std.fmt.bufPrint(out, "resume:v2:{s}:{x}", .{ source, hash.final() }) catch "";
+}
+
+test "resume identity separates providers and same-title books while retaining canonical work URL" {
+    var a: [128]u8 = undefined;
+    var b: [128]u8 = undefined;
+    var c: [128]u8 = undefined;
+    const first = workResumeKey(&a, "wuxiaclick", "https://books.test/novel/one", "Same title");
+    try std.testing.expect(!std.mem.eql(u8, first, workResumeKey(&b, "wuxiaclick", "https://books.test/novel/two", "Same title")));
+    try std.testing.expect(!std.mem.eql(u8, first, workResumeKey(&b, "standardebooks", "https://books.test/novel/one", "Same title")));
+    try std.testing.expectEqualStrings(first, workResumeKey(&c, "wuxiaclick", "https://books.test/novel/one/", "Renamed title"));
+}
+
+test "MediaWiki chapter continuation is encoded rather than silently capped at one page" {
+    var cursor: [512]u8 = undefined;
+    const next = subpagesContinuation("{\"continue\":{\"apcontinue\":\"Book/Chapter 501\",\"continue\":\"-||\"}}", &cursor);
+    var out: [2048]u8 = undefined;
+    const address = buildSubpagesPageUrl(&out, "Book", next).?;
+    try std.testing.expect(std.mem.indexOf(u8, address, "apcontinue=Book%2FChapter%20501") != null);
+    try std.testing.expectEqualStrings("", subpagesContinuation("{\"query\":{}}", &cursor));
+}
+
 /// Render one chapter (or a single-page work) to HTML. `disable*` params trim
 /// the edit-section links, the limit report, and the table of contents so the
 /// `parse.text` payload is closer to just the prose.

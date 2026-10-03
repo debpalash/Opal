@@ -30,17 +30,18 @@ def test_novels_reader():
             for fn in ("buildSearchUrl", "buildSubpagesUrl", "buildChapterUrl", "extractParseHtml")
         ),
         "pure pagination math": "pub fn pageSlice" in pure and "pub fn pageCount" in pure,
-        "pure resume key": "pub fn formatResume" in pure and "pub fn parseResume" in pure,
+        "pure resume key": "pub fn workResumeKey" in pure and "pub fn formatResume" in pure and "pub fn parseResume" in pure,
         # Production routes through the pure fns (tested logic == shipped logic).
         "service routes through pure": all(
             f"pure.{fn}(" in svc
             for fn in (
                 "buildSearchUrl",
-                "buildSubpagesUrl",
+                "buildSubpagesPageUrl",
                 "buildChapterUrl",
                 "extractParseHtml",
                 "htmlToText",
                 "chapterLabel",
+                "workResumeKey",
                 "formatResume",
                 "parseResume",
             )

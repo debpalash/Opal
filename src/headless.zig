@@ -115,6 +115,7 @@ pub fn headlessMain() !void {
         // Universal search accepts commands on HTTP workers. Desktop frames
         // drain those owned commands; the headless owner must do the same or
         // Play/Queue can return success while no reader/player action occurs.
+        @import("services/forwarded_open.zig").drain();
         @import("services/queue.zig").drainUi();
         @import("services/resolver.zig").drainRemoteAction();
         @import("services/browser.zig").drainDeferredPlayback();

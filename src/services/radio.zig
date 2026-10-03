@@ -379,7 +379,7 @@ fn appendSoma(generation: u32, query: []const u8) void {
     const audio = @import("audio_sources.zig");
     const rows = alloc.alloc(audio.Item, 16) catch return;
     defer alloc.free(rows);
-    const reply = audio.searchInto(.somafm, query, rows, endpoint);
+    const reply = audio.searchIntoWithCancellation(.somafm, query, rows, endpoint, .{ .epoch32 = .{ .value = &search_request.generation, .expected = generation } });
     if (reply.count == 0) return;
     parse_mutex.lock();
     defer parse_mutex.unlock();
