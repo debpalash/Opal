@@ -531,3 +531,25 @@ test "isAudioIntent gates only audio kinds" {
     try std.testing.expect(!isAudioIntent("show"));
     try std.testing.expect(!isAudioIntent(""));
 }
+
+/// IA's item image endpoint; encode the entire identifier or return no URL.
+pub fn itemArtwork(identifier: []const u8, out: []u8) ?[]const u8 {
+    if (identifier.len == 0) return null;
+    const prefix = "https://archive.org/services/img/";
+    var need: usize = prefix.len;
+    for (identifier) |ch| need += if (std.ascii.isAlphanumeric(ch) or ch == '-' or ch == '_' or ch == '.' or ch == '~') @as(usize, 1) else 3;
+    if (need > out.len) return null;
+    @memcpy(out[0..prefix.len], prefix);
+    const written = encodePathSegment(identifier, out[prefix.len..]);
+    if (written != need - prefix.len) return null;
+    return out[0..need];
+}
+test "Archive video artwork encodes full identity and rejects insufficient output" {
+    var buf: [128]u8 = undefined;
+    const result = itemArtwork("A book/1", &buf).?;
+    try std.testing.expectEqualStrings("https://archive.org/services/img/A%20book%2F1", result);
+    var exact: ["https://archive.org/services/img/A%20book%2F1".len]u8 = undefined;
+    try std.testing.expectEqualStrings(result, itemArtwork("A book/1", &exact).?);
+    try std.testing.expect(itemArtwork("A book/1", exact[0 .. exact.len - 1]) == null);
+    try std.testing.expect(itemArtwork("", &buf) == null);
+}

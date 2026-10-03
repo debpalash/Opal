@@ -4,7 +4,7 @@ pub const MAX_ROWS: usize = 192;
 /// Opaque bounded cache scope includes installed endpoint/credential identity.
 /// Hashing the query avoids long-prefix overflow and exposes no source URLs.
 pub fn cacheIdentity(out: []u8, query: []const u8, mask: u16, fingerprint: u64) ?[]const u8 {
-    return std.fmt.bufPrint(out, "search:v10:{x}:{x}:{x}", .{ mask, fingerprint, std.hash.Wyhash.hash(0, query) }) catch null;
+    return std.fmt.bufPrint(out, "search:v11:{x}:{x}:{x}", .{ mask, fingerprint, std.hash.Wyhash.hash(0, query) }) catch null;
 }
 pub const CacheItem = struct { source: []const u8, provider: []const u8 = "", url: []const u8 = "" };
 /// Account-bound rows are fetched afresh each wave. Public metadata/cache art
@@ -353,6 +353,11 @@ test "cache identity separates masks configurations and long queries without pla
     try std.testing.expect(!std.mem.eql(u8, first, cacheIdentity(&b, &long_query, 65535, 2).?));
     try std.testing.expect(std.mem.indexOf(u8, first, "qqqq") == null);
     try std.testing.expect(cacheIdentity(a[0..2], &long_query, 65535, 1) == null);
+}
+test "search cover fixes do not replay rows from the missing artwork cache" {
+    var out: [80]u8 = undefined;
+    const key = cacheIdentity(&out, "video", 65535, 1).?;
+    try std.testing.expect(std.mem.startsWith(u8, key, "search:v11:"));
 }
 test "persisted search excludes account identities while retaining public catalogs and audio" {
     inline for (.{ "jellyfin", "plex", "opds", "audiobooks", "plugin", "local" }) |source| {
