@@ -220,7 +220,7 @@ def movie_preferences_persist():
         "movie detail rating": "personalRatingOptions" in web and "Rated ${rating.value} / 10" in web,
         "mutations use POST helper": "apiMutation('/library/item/action?kind=movie" in web,
         "favorite can reopen": "opal://search/{s}" in remote and '"opal://search/"' in browser
-            and "triggerSearch(query)" in browser,
+            and "submitQuery(query)" in browser,
     }
     missing = [name for name, ok in checks.items() if not ok]
     if missing:

@@ -171,6 +171,7 @@ function runYt(){
 function renderYt(items){
   const html = items.map(v => `
     <div class="result">
+      ${unifiedArtwork(v.thumbnail) ? `<img class="video-thumb" src="${esc(unifiedArtwork(v.thumbnail))}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ''}
       <div class="t">${esc(v.title)}</div>
       <div class="m">
         <span class="src">${esc(v.channel || '')}</span>
@@ -395,8 +396,8 @@ function renderJfItems(items){
     ? '<div class="grid">' + items.map((it, itemIndex) => {
         const meta = [it.type, it.year || '', it.runtime ? fmt(it.runtime) : ''].filter(Boolean).join(' · ');
         const progress = it.runtime > 0 && it.progress > 0 ? Math.min(100, Math.round(it.progress / it.runtime * 100)) : 0;
-        return `<div class="card" role="button" tabindex="0" aria-label="${it.folder ? 'Open' : 'Play on Opal'} ${esc(it.name)}" data-id="${esc(it.id)}" data-folder="${it.folder}" data-type="${esc(it.type || '')}">
-          ${it.image ? `<img loading="lazy" src="${BASE}/api/jellyfin/poster?id=${encodeURIComponent(it.id)}">` : '<img>'}
+        return `<div class="card${it.image ? '' : ' poster-missing'}" role="button" tabindex="0" aria-label="${it.folder ? 'Open' : 'Play on Opal'} ${esc(it.name)}" data-id="${esc(it.id)}" data-folder="${it.folder}" data-type="${esc(it.type || '')}">
+          ${it.image ? `<img loading="lazy" src="${BASE}/api/jellyfin/poster?id=${encodeURIComponent(it.id)}">` : ''}
           <div class="jf-card-actions">
             <button data-jf-details="${itemIndex}" aria-label="View details" title="View details">i</button>
           ${!it.folder ? `

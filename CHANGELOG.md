@@ -12,6 +12,21 @@ match the tag exactly.
 
 ## Unreleased
 
+- **Desktop and web controls fit their content.** Native Browse uses the global
+  search field; local library forms, playback menus and torrent file dialogs
+  keep their actions visible. Web artwork has bounded dimensions and useful
+  fallbacks, and compact search controls stay readable.
+- **macOS playback controls reclaim title space.** The native title bar carries
+  the media name; bottom controls focus on transport and playback options.
+- **Idle macOS windows close cleanly from the terminal.** A bounded event pump
+  lets Ctrl+C and process termination reach normal cleanup.
+- **Playback stays in Opal.** External VLC launch controls and their launch
+  service have been removed.
+- **Small text is readable in every native theme.** Captions and secondary
+  labels retain contrast on raised controls and cards.
+- **CJK media titles render correctly.** Search and playback titles select a
+  bundled CJK face when needed, preserving the regular UI typography.
+
 - **Audio tracks finish and advance correctly.** Files no longer repeat forever
   by default. Audiobooks support whole-book resume across files and automatic
   track advancement, including headless playback.
@@ -115,8 +130,7 @@ match the tag exactly.
   cancels pending reads and clears its last frame before removing downloaded
   files; the empty player offers a local file picker or universal search.
 - **Windows playback controls fit scaled displays.** The native titlebar
-  hitboxes follow DPI scaling, compact navigation stays accessible, and an
-  optional VLC handoff is available under Playback settings.
+  hitboxes follow DPI scaling and compact navigation stays accessible.
 - **Source installation explains progress and failures.** Its current stage,
   final status, redacted logs, and recovery steps are visible in the catalog.
 - **Cinemeta poster artwork loads from full image URLs.** Movies & TV no

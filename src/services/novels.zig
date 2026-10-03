@@ -90,6 +90,36 @@ var nr_source: [MAX_RESULTS]NovelSource = undefined;
 var nr_count: usize = 0;
 var nr_metadata: [MAX_RESULTS]NovelMetadata = [_]NovelMetadata{.{}} ** MAX_RESULTS;
 var novel_covers: [MAX_RESULTS]components.CoverSlot = [_]components.CoverSlot{.{}} ** MAX_RESULTS;
+var native_card_rects: [MAX_RESULTS]dvui.Rect.Physical = undefined;
+pub fn nativeCardRectsForTest() []const dvui.Rect.Physical {
+    if (!@import("builtin").is_test) @compileError("Native fixture is test-only");
+    return native_card_rects[0..nr_count];
+}
+
+pub fn setNativeFixtureForTest(textures: []const dvui.Texture) void {
+    if (!@import("builtin").is_test) @compileError("Native fixture is test-only");
+    for (&novel_covers) |*cover| cover.reset();
+    nr_count = @min(textures.len, MAX_RESULTS);
+    state.app.novels.view = .search;
+    state.app.novels.is_loading.store(false, .release);
+    state.app.novels.fetch_error = false;
+    more_available.store(false, .release);
+    const cover_url = "https://example.invalid/offline-cover.jpg";
+    const author = "Offline fixture author";
+    for (textures[0..nr_count], 0..) |art, i| {
+        addResult(i, .wikisource, "A long literary title — Journeys through Extraordinary Worlds", "");
+        nr_metadata[i] = .{};
+        @memcpy(nr_metadata[i].author_buf[0..author.len], author);
+        nr_metadata[i].author_len = author.len;
+        @memcpy(nr_metadata[i].cover_buf[0..cover_url.len], cover_url);
+        nr_metadata[i].cover_len = cover_url.len;
+        components.syncCoverSlot(&novel_covers[i], cover_url);
+        novel_covers[i].tex = art;
+        novel_covers[i].w = art.width;
+        novel_covers[i].h = art.height;
+        novel_covers[i].attempted = true;
+    }
+}
 
 const MAX_CHAPTERS: usize = 400;
 // For Wikisource: the full page title ("Frankenstein/Chapter 1") — the fetch key
@@ -1773,7 +1803,9 @@ fn renderSearchView() void {
     });
 
     const layout_w = @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().w, state.app.ui_scale);
-    const cols: usize = if (layout_w >= 1060) 4 else if (layout_w >= 760) 3 else if (layout_w >= 500) 2 else 1;
+    const viewport_width = if (scroll.data().rect.w > 1) scroll.data().rect.w else layout_w;
+    const grid = @import("../ui/browse_layout_pure.zig").readingGrid(viewport_width);
+    const cols = grid.columns;
     const rows = (count + cols - 1) / cols;
     const row_h: f32 = 126;
     const win = tmdb_pure.visibleRows(rows, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 2);
@@ -1800,7 +1832,7 @@ fn renderSearchView() void {
             const i = row_idx * cols + col;
             if (i >= count) break;
             const item = resultRow(i) orelse continue;
-            renderNovelCard(item, i);
+            renderNovelCard(item, i, grid.card_width);
         }
     }
 
@@ -1837,6 +1869,7 @@ fn renderSearchView() void {
 }
 
 fn renderSearchBar() void {
+    if (!@import("../ui/browse_layout_pure.zig").showLocalSearch(state.app.page_shell_enabled)) return;
     var row = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
         .expand = .horizontal,
         .padding = .{ .x = 10, .y = 7, .w = 10, .h = 7 },
@@ -1892,7 +1925,7 @@ fn novelSourceIcon(source: NovelSource) []const u8 {
     };
 }
 
-fn renderNovelCard(item: ListRow, index: usize) void {
+fn renderNovelCard(item: ListRow, index: usize, card_width: f32) void {
     var name_buf: [256]u8 = undefined;
     const name = safeUtf8Buf(item.title(), &name_buf);
     const source: NovelSource = @enumFromInt(item.source);
@@ -1900,9 +1933,8 @@ fn renderNovelCard(item: ListRow, index: usize) void {
     var bw: dvui.ButtonWidget = undefined;
     bw.init(@src(), .{}, .{
         .id_extra = 52000 + index,
-        .expand = .horizontal,
-        .min_size_content = .{ .w = 120, .h = 112 },
-        .max_size_content = .{ .w = std.math.floatMax(f32), .h = 112 },
+        .min_size_content = .{ .w = card_width, .h = 112 },
+        .max_size_content = .{ .w = card_width, .h = 112 },
         .background = true,
         .color_fill = theme.colors.bg_elevated,
         .color_fill_hover = theme.colors.bg_hover,
@@ -1912,11 +1944,13 @@ fn renderNovelCard(item: ListRow, index: usize) void {
     });
     bw.processEvents();
     bw.drawBackground();
+    if (@import("builtin").is_test) native_card_rects[index] = bw.data().borderRectScale().r;
 
     {
         var body = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = 53000 + index,
             .expand = .both,
+            .max_size_content = .{ .w = 0, .h = 112 },
             .padding = .{ .x = 0, .y = 0, .w = 10, .h = 0 },
         });
         defer body.deinit();
@@ -1938,6 +1972,7 @@ fn renderNovelCard(item: ListRow, index: usize) void {
             var text = dvui.box(@src(), .{ .dir = .vertical }, .{
                 .id_extra = 55000 + index,
                 .expand = .both,
+                .max_size_content = .{ .w = 0, .h = 94 },
                 .padding = .{ .x = 10, .y = 10, .w = 4, .h = 8 },
             });
             defer text.deinit();
@@ -1945,7 +1980,7 @@ fn renderNovelCard(item: ListRow, index: usize) void {
                 .id_extra = 56000 + index,
                 .expand = .horizontal,
                 .color_text = theme.colors.text_primary,
-                .font = dvui.themeGet().font_heading,
+                .font = theme.mediaTitleFont(name, dvui.themeGet().font_body),
             });
             if (item.metadata.author_len > 0 or item.metadata.overview_len > 0) {
                 var subtitle_buf: [256]u8 = undefined;

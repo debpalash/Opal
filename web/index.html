@@ -172,12 +172,14 @@
     <div id="search-active-filters" class="search-active-filters" aria-label="Active search filters" hidden></div>
     <div class="search-result-tools">
       <div class="hint" id="search-hint" role="status" aria-live="polite">Search across your libraries and available sources.</div>
+      <button id="search-cancel" type="button" hidden>Stop search</button>
       <label class="search-sort">Sort<select id="search-sort">
         <option value="relevance">Relevance</option><option value="quality">Quality</option><option value="seeds">Seeds</option>
         <option value="size">Size</option><option value="peers">Peers</option><option value="health">Health</option>
       </select></label>
     </div>
-    <div id="results"></div>
+    <section id="search-detail" class="search-detail" aria-label="Selected result details" hidden tabindex="-1"></section>
+    <div id="results" class="search-discovery"></div>
     <details class="acc-group open-media" id="open-media">
       <summary>Open or queue a URL / magnet</summary>
       <form id="open-media-form">

@@ -114,6 +114,24 @@ var stage_h: [state.MAX_DL_HISTORY]tp.Row = undefined;
 // ENTRY POINT
 // ══════════════════════════════════════════════════════════
 
+var fixture_for_test = false;
+pub var test_http_rects: [4]dvui.Rect = @splat(.{});
+pub var test_http_action_rects: [4]dvui.Rect = @splat(.{});
+pub var test_file_action_rects: [3]dvui.Rect = @splat(.{});
+var fixture_http: []const httpdl.engine.Snap = &.{};
+pub fn setRenderFixtureForTest(items: ?[]const tp.Row, http: []const httpdl.engine.Snap) void {
+    if (!@import("builtin").is_test) @compileError("Transfers fixture is test-only");
+    fixture_for_test = items != null;
+    fixture_http = http;
+    row_count = if (items) |data| @min(data.len, rows.len) else 0;
+    if (items) |data| @memcpy(rows[0..row_count], data[0..row_count]);
+    for (0..row_count) |i| order[i] = @intCast(i);
+    filter = .all;
+    transfers_scroll = .{};
+    expanded_key_len = 0;
+    row_heights = @splat(0);
+}
+
 pub fn renderTransfersContent() void {
     // Always runs (even while drilled into a subfolder) — torrent_poll is
     // side-effecting: it drives the streaming deadline window, so it must keep
@@ -147,6 +165,7 @@ pub fn renderTransfersContent() void {
 // ══════════════════════════════════════════════════════════
 
 fn buildSnapshot() void {
+    if (@import("builtin").is_test and fixture_for_test) return;
     const now = io_global.milliTimestamp();
     if (!rows_dirty.load(.acquire) and now - last_build_ms < 500) return;
     last_build_ms = now;
@@ -423,7 +442,7 @@ fn renderControlBar() void {
         if (agg.active + agg.queued > 0) {
             var tb: [64]u8 = undefined;
             var rb: [24]u8 = undefined;
-            const txt = std.fmt.bufPrintZ(&tb, "↓{s} · {d} active · {d} queued", .{
+            const txt = std.fmt.bufPrintZ(&tb, "Down {s} · {d} active · {d} queued", .{
                 httpdl.dp.fmtSpeed(agg.rate, &rb), agg.active, agg.queued,
             }) catch "";
             _ = dvui.label(@src(), "{s}", .{txt}, .{
@@ -449,7 +468,7 @@ fn renderControlBar() void {
     // Single source of truth: state.app.download_rate_limit, stored in BYTES/sec
     // (same unit as the settings + footer controls and the FFI call below).
     const limits = [_]i32{ 0, 1 * 1024 * 1024, 5 * 1024 * 1024, 20 * 1024 * 1024 };
-    const labels = [_][]const u8{ "∞", "1MB/s", "5MB/s", "20MB/s" };
+    const labels = [_][]const u8{ "Unlimited", "1MB/s", "5MB/s", "20MB/s" };
     for (limits, 0..) |lim, k| {
         const active = state.app.download_rate_limit == lim;
         if (dvui.button(@src(), labels[k], .{}, .{
@@ -560,6 +579,7 @@ fn statusColor(s: tp.Status) dvui.Color {
 /// Draws one merged row. Returns true if it performed a removal (the caller
 /// must stop iterating: ids/indices are now stale).
 fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
+    const title_cap = tp.filenameWidth(dvui.parentGet().data().contentRect().w, 220);
     const rid = rowId(r);
     const st = tp.statusFor(r);
     const name = r.nameSlice();
@@ -636,6 +656,7 @@ fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
         var blk = dvui.box(@src(), .{ .dir = .vertical }, .{
             .id_extra = rid,
             .expand = .horizontal,
+            .max_size_content = dvui.Options.MaxSize.width(title_cap),
             .gravity_y = 0.5,
         });
         defer blk.deinit();
@@ -654,6 +675,8 @@ fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
             // gravity_y (the main axis) mis-positions it and it overlaps the meta
             // line stacked beneath it — same trap documented in onboarding.zig.
             .gravity_x = 0.0,
+            .max_size_content = dvui.Options.MaxSize.width(title_cap),
+            .font = theme.mediaTitleFont(shown_name, dvui.themeGet().font_body),
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
             .color_text = if (st == .archived or st == .paused) theme.colors.text_secondary else theme.colors.text_primary,
             .padding = dvui.Rect.all(0),
@@ -690,7 +713,10 @@ fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
         .min_size_content = .{ .w = 0, .h = 0 },
         .gravity_y = 0.5,
     });
-    defer acts.deinit();
+    defer {
+        if (@import("builtin").is_test and fixture_for_test and row_index < test_file_action_rects.len) test_file_action_rects[row_index] = acts.data().rect;
+        acts.deinit();
+    }
 
     // Play / stream the torrent.
     if (r.hasTorrent() and r.has_metadata) {
@@ -1029,7 +1055,7 @@ fn metaLine(r: *const tp.Row, st: tp.Status, buf: []u8) []const u8 {
     const pct: u8 = @intFromFloat(std.math.clamp(r.progress * 100.0, 0.0, 100.0));
     var sz: [24]u8 = undefined;
     return switch (st) {
-        .downloading => std.fmt.bufPrint(buf, "↓{s} · {d}% · {d} seeds", .{ fmtRate(r.dl_rate, &sz), pct, r.seeds }) catch "Downloading",
+        .downloading => std.fmt.bufPrint(buf, "Down {s} · {d}% · {d} seeds", .{ fmtRate(r.dl_rate, &sz), pct, r.seeds }) catch "Downloading",
         .fetching => "Fetching metadata…",
         .paused => std.fmt.bufPrint(buf, "Paused · {d}%", .{pct}) catch "Paused",
         .errored => "Error",
@@ -1088,13 +1114,21 @@ fn renderHttpRows() usize {
     const S = struct {
         var snaps: [httpdl.engine.MAX_DOWNLOADS]httpdl.engine.Snap = undefined;
     };
-    const n = httpdl.engine.snapshot(&S.snaps);
+    const n = if (@import("builtin").is_test and fixture_for_test) blk: {
+        const count = @min(fixture_http.len, S.snaps.len);
+        @memcpy(S.snaps[0..count], fixture_http[0..count]);
+        break :blk count;
+    } else httpdl.engine.snapshot(&S.snaps);
     for (S.snaps[0..n], 0..) |*s, i| renderHttpRow(s, i);
     return n;
 }
 
 fn renderHttpRow(s: *const httpdl.engine.Snap, i: usize) void {
     const rid: usize = @truncate(std.hash.Wyhash.hash(s.idx + 46000, std.mem.asBytes(&s.token)));
+    // Reserve the status glyph and actual pause/resume/remove controls before
+    // measuring untrusted filenames. Horizontal boxes cannot squeeze a label.
+    const available_w = dvui.parentGet().data().contentRect().w;
+    const title_cap = tp.filenameWidth(available_w, 180);
     const st = s.status;
     const active = st == .running or st == .probing;
 
@@ -1112,7 +1146,10 @@ fn renderHttpRow(s: *const httpdl.engine.Snap, i: usize) void {
         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
         .color_border = theme.colors.border_subtle,
     });
-    defer row.deinit();
+    defer {
+        if (@import("builtin").is_test and fixture_for_test and i < test_http_rects.len) test_http_rects[i] = row.data().rect;
+        row.deinit();
+    }
 
     // Status bar (colored left edge) — same visual language as torrent rows.
     {
@@ -1142,6 +1179,7 @@ fn renderHttpRow(s: *const httpdl.engine.Snap, i: usize) void {
         var blk = dvui.box(@src(), .{ .dir = .vertical }, .{
             .id_extra = rid,
             .expand = .horizontal,
+            .max_size_content = dvui.Options.MaxSize.width(title_cap),
             .gravity_y = 0.5,
         });
         defer blk.deinit();
@@ -1151,6 +1189,8 @@ fn renderHttpRow(s: *const httpdl.engine.Snap, i: usize) void {
         _ = dvui.label(@src(), "{s}", .{if (shown_name.len > 0) shown_name else "(download)"}, .{
             .id_extra = rid,
             .gravity_x = 0.0,
+            .max_size_content = dvui.Options.MaxSize.width(title_cap),
+            .font = theme.mediaTitleFont(shown_name, dvui.themeGet().font_body),
             .color_text = if (st == .paused or st == .queued) theme.colors.text_secondary else theme.colors.text_primary,
         });
 
@@ -1214,7 +1254,7 @@ fn renderHttpRow(s: *const httpdl.engine.Snap, i: usize) void {
             .probing => "Connecting…",
             .running => blk2: {
                 const eta_txt: []const u8 = if (s.etaSecs()) |secs| httpdl.dp.fmtEta(secs, &eb) else "—";
-                break :blk2 std.fmt.bufPrint(&meta_buf, "↓{s} · {d}% · ETA {s} · {d}× conn", .{
+                break :blk2 std.fmt.bufPrint(&meta_buf, "Down {s} · {d}% · ETA {s} · {d} connections", .{
                     httpdl.dp.fmtSpeed(s.rate, &sp), pct, eta_txt, s.seg_count,
                 }) catch "Downloading";
             },
@@ -1229,6 +1269,7 @@ fn renderHttpRow(s: *const httpdl.engine.Snap, i: usize) void {
         _ = dvui.label(@src(), "{s}", .{meta}, .{
             .id_extra = rid,
             .expand = .horizontal,
+            .max_size_content = dvui.Options.MaxSize.width(title_cap),
             .color_text = if (st == .failed) theme.colors.danger else theme.colors.text_tertiary,
             .margin = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
         });
@@ -1240,7 +1281,10 @@ fn renderHttpRow(s: *const httpdl.engine.Snap, i: usize) void {
         .min_size_content = .{ .w = 0, .h = 0 },
         .gravity_y = 0.5,
     });
-    defer acts.deinit();
+    defer {
+        if (@import("builtin").is_test and fixture_for_test and i < test_http_action_rects.len) test_http_action_rects[i] = acts.data().rect;
+        acts.deinit();
+    }
 
     // Pause / resume.
     if (active or st == .queued) {

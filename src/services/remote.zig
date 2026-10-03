@@ -1527,6 +1527,16 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
         apiUnifiedResolverSearch(stream, query);
         return;
     }
+    if (std.mem.eql(u8, api_path, "/unified_search/preview")) {
+        if (!requireMethod(stream, method, "GET")) return;
+        apiUnifiedSearchPreview(stream, query);
+        return;
+    }
+    if (std.mem.eql(u8, api_path, "/unified_search/cancel")) {
+        if (!requireMethod(stream, method, "POST")) return;
+        apiUnifiedSearchCancel(stream, query);
+        return;
+    }
     if (std.mem.eql(u8, api_path, "/unified_search/play")) {
         if (!requireMethod(stream, method, "POST")) return;
         apiUnifiedSearchAction(stream, query, .play);
@@ -4302,15 +4312,15 @@ fn apiUnifiedResolverSearch(stream: std.Io.net.Stream, query: []const u8) void {
         .{ .name = "torrent", .enabled = resolver.sourceOn(.torrent), .status = resolver.combineManySourceStatuses(&.{ resolver.status_torrent.load(.acquire), resolver.status_yts.load(.acquire), resolver.status_torznab.load(.acquire), resolver.status_eztv.load(.acquire) }) },
         .{ .name = "jellyfin", .enabled = resolver.sourceOn(.jellyfin), .status = resolver.status_jf.load(.acquire) },
         .{ .name = "youtube", .enabled = resolver.sourceOn(.youtube), .status = resolver.status_yt.load(.acquire) },
-        .{ .name = "anime", .enabled = resolver.sourceOn(.anime), .status = resolver.status_anime.load(.acquire) },
-        .{ .name = "comics", .enabled = resolver.sourceOn(.comics), .status = resolver.status_comics.load(.acquire) },
+        .{ .name = "anime", .enabled = resolver.sourceOn(.anime), .status = resolver.combineSourceStatuses(resolver.status_anime.load(.acquire), resolver.status_anime_catalog.load(.acquire)) },
+        .{ .name = "comics", .enabled = resolver.sourceOn(.comics), .status = resolver.combineSourceStatuses(resolver.status_comics.load(.acquire), resolver.status_manga_catalog.load(.acquire)) },
         .{ .name = "stremio", .enabled = resolver.sourceOn(.stremio), .status = resolver.combineManySourceStatuses(&.{ resolver.status_stremio.load(.acquire), resolver.status_archive.load(.acquire), resolver.status_nasa.load(.acquire), resolver.status_commons.load(.acquire) }) },
         .{ .name = "rss", .enabled = resolver.sourceOn(.rss), .status = resolver.status_rss.load(.acquire) },
         .{ .name = "livetv", .enabled = resolver.sourceOn(.livetv), .status = resolver.status_livetv.load(.acquire) },
         .{ .name = "music", .enabled = resolver.sourceOn(.music), .status = resolver.status_music.load(.acquire) },
         .{ .name = "radio", .enabled = resolver.sourceOn(.radio), .status = resolver.status_radio.load(.acquire) },
         .{ .name = "podcast", .enabled = resolver.sourceOn(.podcast), .status = resolver.status_podcast.load(.acquire) },
-        .{ .name = "novels", .enabled = resolver.sourceOn(.novels), .status = resolver.combineSourceStatuses(resolver.status_novels.load(.acquire), resolver.status_novel_archive.load(.acquire)) },
+        .{ .name = "novels", .enabled = resolver.sourceOn(.novels), .status = resolver.combineManySourceStatuses(&.{ resolver.status_novels.load(.acquire), resolver.status_novel_archive.load(.acquire), resolver.status_public_books.load(.acquire) }) },
         .{ .name = "audiobooks", .enabled = resolver.sourceOn(.audiobooks), .status = resolver.status_audiobooks.load(.acquire) },
         .{ .name = "opds", .enabled = resolver.sourceOn(.opds), .status = resolver.status_opds.load(.acquire) },
         .{ .name = "vndb", .enabled = resolver.sourceOn(.vndb), .status = resolver.status_vndb.load(.acquire) },
@@ -4320,9 +4330,22 @@ fn apiUnifiedResolverSearch(stream: std.Io.net.Stream, query: []const u8) void {
     };
     resolver.unlockRemoteSnapshot();
 
+    const groups = allocator.create(resolver.content.Projection) catch {
+        sendJsonStatus(stream, "503 Service Unavailable", "{\"error\":\"search grouping unavailable\"}");
+        return;
+    };
+    defer allocator.destroy(groups);
+    var indexes: [resolver.MAX_RESULTS]usize = undefined;
+    for (indexes[0..count], 0..) |*index, i| index.* = i;
+    resolver.content.projectInto(snapshot[0..count], indexes[0..count], groups);
+    var membership: [resolver.MAX_RESULTS]usize = undefined;
+    for (groups.groups[0..groups.count], 0..) |group, g| {
+        for (group.indexes[0..group.count]) |index| membership[index] = g;
+    }
+
     // Each bounded row fits even if every string byte becomes a six-byte JSON
     // escape. Encoding stays off the connection stack and never drops rows.
-    const json_buf = allocator.alloc(u8, @as(usize, count) * 12000 + 8192) catch {
+    const json_buf = allocator.alloc(u8, @as(usize, count) * 16000 + 8192) catch {
         sendJsonStatus(stream, "503 Service Unavailable", "{\"error\":\"search response unavailable\"}");
         return;
     };
@@ -4348,10 +4371,14 @@ fn apiUnifiedResolverSearch(stream: std.Io.net.Stream, query: []const u8) void {
         escJsonWrite(&w, txt.safeUtf8(item.author[0..@min(item.author_len, item.author.len)]));
         w.writeAll("\",\"poster_url\":\"") catch return;
         escJsonWrite(&w, txt.safeUtf8(item.poster_url[0..@min(item.poster_url_len, item.poster_url.len)]));
+        w.writeAll("\",\"backdrop_url\":\"") catch return;
+        escJsonWrite(&w, txt.safeUtf8(item.backdrop_url[0..@min(item.backdrop_url_len, item.backdrop_url.len)]));
         w.writeAll("\",\"summary\":\"") catch return;
         escJsonWrite(&w, txt.safeUtf8(item.summary[0..@min(item.summary_len, item.summary.len)]));
         const rating = if (std.math.isFinite(item.rating) and item.rating > 0 and item.rating <= 10) item.rating else 0;
         w.print("\",\"rating\":{d:.1}", .{rating}) catch return;
+        const group = &groups.groups[membership[idx]];
+        w.print(",\"year\":{d},\"work_key\":\"{x}\",\"work_category\":\"{s}\",\"work_representative\":{s},\"offer_count\":{d},\"verified_work_match\":{s}", .{ item.year, group.identity, @tagName(group.category), if (group.representative == idx) "true" else "false", group.offer_count, if (item.source == .torrent and group.category != .releases) "true" else "false" }) catch return;
         // The native and web views share the same typed facet projection. Only
         // public metadata is serialized; action keys retain private transport.
         const view = resolver.searchView(item);
@@ -4375,6 +4402,72 @@ fn apiUnifiedResolverSearch(stream: std.Io.net.Stream, query: []const u8) void {
     }
     w.writeAll("]}") catch return;
     sendJson(stream, json_buf[0..w.end]);
+}
+
+fn apiUnifiedSearchPreview(stream: std.Io.net.Stream, query: []const u8) void {
+    const resolver = @import("resolver.zig");
+    const preview = @import("search_preview.zig");
+    const generation = std.fmt.parseInt(u32, getQueryParam(query, "generation") orelse "", 10) catch {
+        sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"invalid generation\"}");
+        return;
+    };
+    const key = std.fmt.parseInt(u64, getQueryParam(query, "key") orelse "", 16) catch {
+        sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"invalid result key\"}");
+        return;
+    };
+    var kind: preview.Kind = .movie;
+    var id: i32 = 0;
+    const current = resolver.lockRemoteSnapshot();
+    if (current != generation) {
+        resolver.unlockRemoteSnapshot();
+        sendJsonStatus(stream, "409 Conflict", "{\"error\":\"search changed; refresh and retry\"}");
+        return;
+    }
+    for (resolver.results[0..resolver.result_count]) |*row| {
+        if (resolver.actionKey(row) != key) continue;
+        const media = row.catalog_kind[0..row.catalog_kind_len];
+        if (row.source == .tmdb and row.catalog_id > 0 and
+            (std.mem.eql(u8, media, "movie") or std.mem.eql(u8, media, "tv")))
+        {
+            id = row.catalog_id;
+            kind = if (std.mem.eql(u8, media, "tv")) .tv else .movie;
+        }
+        break;
+    }
+    resolver.unlockRemoteSnapshot();
+    if (id == 0) {
+        sendJsonStatus(stream, "404 Not Found", "{\"error\":\"preview unavailable for this result\"}");
+        return;
+    }
+    const credentials = preview.copyCredentials();
+    const reply = preview.lookupMetadata(kind, id, credentials.key[0..credentials.key_len]);
+    // Fetching occurs without resolver locks. Reject a response whose search
+    // wave was superseded during the network lookup, preserving UI selection.
+    if (!resolver.generationIsCurrent(generation)) {
+        sendJsonStatus(stream, "409 Conflict", "{\"error\":\"search changed; refresh and retry\"}");
+        return;
+    }
+    var buf: [8192]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    w.print("{{\"generation\":{d},\"key\":\"{x}\",\"status\":\"{s}\",\"failure\":\"{s}\",\"title\":\"", .{ generation, key, @tagName(reply.status), @tagName(reply.failure) }) catch return;
+    escJsonWrite(&w, reply.metadata.title[0..reply.metadata.title_len]);
+    w.writeAll("\",\"trailer_url\":\"") catch return;
+    escJsonWrite(&w, reply.metadata.trailer_url[0..reply.metadata.trailer_url_len]);
+    w.writeAll("\",\"backdrop_url\":\"") catch return;
+    escJsonWrite(&w, reply.metadata.backdrop_url[0..reply.metadata.backdrop_url_len]);
+    w.print("\",\"catalog_id\":{d}}}", .{reply.metadata.catalog_id}) catch return;
+    sendJson(stream, buf[0..w.end]);
+}
+
+fn apiUnifiedSearchCancel(stream: std.Io.net.Stream, query: []const u8) void {
+    const generation = std.fmt.parseInt(u32, getQueryParam(query, "generation") orelse "", 10) catch {
+        sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"invalid generation\"}");
+        return;
+    };
+    if (@import("resolver.zig").cancelExpected(generation))
+        sendJson(stream, "{\"ok\":true}")
+    else
+        sendJsonStatus(stream, "409 Conflict", "{\"error\":\"search changed; refresh and retry\"}");
 }
 
 fn apiUnifiedSearchAction(

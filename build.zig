@@ -213,6 +213,46 @@ pub fn build(b: *std.Build) void {
         msys_path_prefix, b.graph.environ_map.get("PATH") orelse "",
     }));
     b.step("test-browse", "Test production catalog parsing and asynchronous publication").dependOn(&run_browse_tests.step);
+    const gallery_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native Search gallery offline SDL pixel capture"} });
+    const run_gallery_tests = b.addRunArtifact(gallery_tests);
+    if (is_windows) run_gallery_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
+    b.step("test-search-gallery", "Render the native search gallery in an isolated hidden SDL window").dependOn(&run_gallery_tests.step);
+    const media_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native media offline SDL fixture"} });
+    const run_media_tests = b.addRunArtifact(media_tests);
+    if (is_windows) run_media_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
+    b.step("test-native-media", "Render native playback controls in an isolated hidden SDL window").dependOn(&run_media_tests.step);
+    const shell_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native shell offline route pixel capture"} });
+    const run_shell_tests = b.addRunArtifact(shell_tests);
+    if (is_windows) run_shell_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
+    b.step("test-native-shell", "Capture native shell routes with isolated offline fixtures").dependOn(&run_shell_tests.step);
+    const modal_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native global modals offline SDL pixel capture"} });
+    const run_modal_tests = b.addRunArtifact(modal_tests);
+    if (is_windows) run_modal_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
+    b.step("test-native-modals", "Capture native onboarding and dialogs in an isolated hidden SDL window").dependOn(&run_modal_tests.step);
+    const activity_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native activity offline SDL pixel capture"} });
+    const run_activity_tests = b.addRunArtifact(activity_tests);
+    if (is_windows) run_activity_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
+    b.step("test-native-activity", "Capture native queue and transfers with isolated offline fixtures").dependOn(&run_activity_tests.step);
+    // Fixture rendering may synchronously inspect plugin/profile directories.
+    // Isolate the child process even when callers run these targets directly.
+    const native_profile_root = b.cache_root.join(b.allocator, &.{"native-fixture-profiles"}) catch @panic("native fixture profile path");
+    const native_capture_runs = [_]struct { run: *std.Build.Step.Run, name: []const u8 }{
+        .{ .run = run_gallery_tests, .name = "gallery" },
+        .{ .run = run_media_tests, .name = "media" },
+        .{ .run = run_shell_tests, .name = "shell" },
+        .{ .run = run_modal_tests, .name = "modals" },
+        .{ .run = run_activity_tests, .name = "activity" },
+    };
+    for (native_capture_runs) |fixture| {
+        const profile = std.fs.path.resolve(b.allocator, &.{ b.build_root.path orelse ".", native_profile_root, fixture.name }) catch @panic("native fixture profile path");
+        fixture.run.setEnvironmentVariable("HOME", profile);
+        fixture.run.setEnvironmentVariable("USERPROFILE", profile);
+        fixture.run.setEnvironmentVariable("XDG_CONFIG_HOME", b.fmt("{s}/config", .{profile}));
+        fixture.run.setEnvironmentVariable("XDG_CACHE_HOME", b.fmt("{s}/cache", .{profile}));
+        fixture.run.setEnvironmentVariable("XDG_DATA_HOME", b.fmt("{s}/data", .{profile}));
+        fixture.run.setEnvironmentVariable("APPDATA", b.fmt("{s}/config", .{profile}));
+        fixture.run.setEnvironmentVariable("LOCALAPPDATA", b.fmt("{s}/cache", .{profile}));
+    }
 
     // DPI-bypass sidecar (debpalash/zig-bypassdpi): a cross-platform userspace
     // proxy that fragments the TLS ClientHello so ISP DPI can't read the SNI.
@@ -834,6 +874,31 @@ pub fn build(b: *std.Build) void {
     // throttle, the volume ramp, the transport state machine, and the
     // width-based collapse order. All of it is wired into footer.zig — a test
     // there asserts no export goes unreachable.
+    const test_search_reading_pure = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/services/search_reading_pure.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    test_step.dependOn(&b.addRunArtifact(test_search_reading_pure).step);
+    const test_search_content_pure = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/services/search_content_pure.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    test_step.dependOn(&b.addRunArtifact(test_search_content_pure).step);
+    const test_search_preview_pure = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/services/search_preview_pure.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    test_step.dependOn(&b.addRunArtifact(test_search_preview_pure).step);
+    const test_search_gallery_pure = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/ui/search_gallery_pure.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    test_step.dependOn(&b.addRunArtifact(test_search_gallery_pure).step);
+
     const test_search_view_pure = b.addTest(.{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/services/search_view_pure.zig"),
         .target = target,
@@ -1400,6 +1465,15 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_scale_pure).step);
 
+    const test_event_loop_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/core/event_loop_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_event_loop_pure).step);
+
     // Windows title-bar control hitboxes must follow the scaled player
     // overlay without pushing buttons outside a laptop-sized viewport.
     const test_titlebar_geometry = b.addTest(.{
@@ -1642,6 +1716,22 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_tv_layout).step);
+    const test_local_library_layout = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/ui/local_library_layout_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_local_library_layout).step);
+    const test_browse_layout = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/ui/browse_layout_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_browse_layout).step);
     const test_episode_art = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/episode_art_pure.zig"),

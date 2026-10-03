@@ -57,6 +57,9 @@ pub const ThemeColors = struct {
 };
 
 // ── Theme Presets ──
+// Small captions share the text tiers with labels and fields. Keep each tier
+// readable on the brightest opaque surface; raised controls must not erase
+// metadata. The feature gate checks every shipped text/surface pair.
 
 const midnight_colors = ThemeColors{
     .bg_deep = .{ .r = 10, .g = 10, .b = 15, .a = 255 },
@@ -73,7 +76,7 @@ const midnight_colors = ThemeColors{
     .accent_glow = .{ .r = 93, .g = 208, .b = 255, .a = 51 },
     .text_primary = .{ .r = 250, .g = 250, .b = 250, .a = 255 },
     .text_secondary = .{ .r = 168, .g = 168, .b = 178, .a = 255 },
-    .text_tertiary = .{ .r = 110, .g = 110, .b = 120, .a = 255 },
+    .text_tertiary = .{ .r = 134, .g = 134, .b = 142, .a = 255 },
     .text_on_accent = .{ .r = 10, .g = 10, .b = 15, .a = 255 },
     .danger = .{ .r = 255, .g = 107, .b = 138, .a = 255 },
     .success = .{ .r = 93, .g = 255, .b = 161, .a = 255 },
@@ -95,7 +98,7 @@ const abyss_colors = ThemeColors{
     .accent_glow = .{ .r = 50, .g = 160, .b = 110, .a = 51 },
     .text_primary = .{ .r = 220, .g = 220, .b = 220, .a = 255 },
     .text_secondary = .{ .r = 140, .g = 140, .b = 140, .a = 255 },
-    .text_tertiary = .{ .r = 90, .g = 90, .b = 90, .a = 255 },
+    .text_tertiary = .{ .r = 126, .g = 126, .b = 126, .a = 255 },
     .text_on_accent = .{ .r = 0, .g = 0, .b = 0, .a = 255 },
     .danger = .{ .r = 175, .g = 65, .b = 65, .a = 255 },
     .success = .{ .r = 50, .g = 155, .b = 95, .a = 255 },
@@ -117,7 +120,7 @@ const phantom_colors = ThemeColors{
     .accent_glow = .{ .r = 125, .g = 110, .b = 185, .a = 51 },
     .text_primary = .{ .r = 230, .g = 226, .b = 240, .a = 255 },
     .text_secondary = .{ .r = 165, .g = 155, .b = 185, .a = 255 },
-    .text_tertiary = .{ .r = 115, .g = 105, .b = 140, .a = 255 },
+    .text_tertiary = .{ .r = 141, .g = 133, .b = 161, .a = 255 },
     .text_on_accent = .{ .r = 10, .g = 6, .b = 18, .a = 255 },
     .danger = .{ .r = 185, .g = 95, .b = 110, .a = 255 },
     .success = .{ .r = 65, .g = 165, .b = 105, .a = 255 },
@@ -138,8 +141,8 @@ const nord_colors = ThemeColors{
     .accent_dim = .{ .r = 110, .g = 150, .b = 165, .a = 64 },
     .accent_glow = .{ .r = 110, .g = 150, .b = 165, .a = 51 },
     .text_primary = .{ .r = 229, .g = 233, .b = 240, .a = 255 },
-    .text_secondary = .{ .r = 170, .g = 178, .b = 192, .a = 255 },
-    .text_tertiary = .{ .r = 130, .g = 138, .b = 150, .a = 255 },
+    .text_secondary = .{ .r = 220, .g = 224, .b = 232, .a = 255 },
+    .text_tertiary = .{ .r = 209, .g = 212, .b = 216, .a = 255 },
     .text_on_accent = .{ .r = 36, .g = 42, .b = 54, .a = 255 },
     .danger = .{ .r = 160, .g = 85, .b = 95, .a = 255 },
     .success = .{ .r = 130, .g = 155, .b = 115, .a = 255 },
@@ -161,7 +164,7 @@ const solarized_colors = ThemeColors{
     .accent_glow = .{ .r = 160, .g = 85, .b = 50, .a = 51 },
     .text_primary = .{ .r = 238, .g = 232, .b = 213, .a = 255 },
     .text_secondary = .{ .r = 165, .g = 175, .b = 175, .a = 255 },
-    .text_tertiary = .{ .r = 110, .g = 125, .b = 130, .a = 255 },
+    .text_tertiary = .{ .r = 161, .g = 171, .b = 174, .a = 255 },
     .text_on_accent = .{ .r = 0, .g = 36, .b = 46, .a = 255 },
     .danger = .{ .r = 170, .g = 65, .b = 60, .a = 255 },
     .success = .{ .r = 110, .g = 130, .b = 50, .a = 255 },
@@ -183,7 +186,7 @@ const rose_colors = ThemeColors{
     .accent_glow = .{ .r = 175, .g = 100, .b = 140, .a = 51 },
     .text_primary = .{ .r = 240, .g = 230, .b = 238, .a = 255 },
     .text_secondary = .{ .r = 170, .g = 140, .b = 158, .a = 255 },
-    .text_tertiary = .{ .r = 120, .g = 90, .b = 105, .a = 255 },
+    .text_tertiary = .{ .r = 153, .g = 130, .b = 141, .a = 255 },
     .text_on_accent = .{ .r = 12, .g = 6, .b = 12, .a = 255 },
     .danger = .{ .r = 185, .g = 75, .b = 75, .a = 255 },
     .success = .{ .r = 90, .g = 170, .b = 140, .a = 255 },
@@ -205,7 +208,7 @@ const ember_colors = ThemeColors{
     .accent_glow = .{ .r = 185, .g = 120, .b = 65, .a = 51 },
     .text_primary = .{ .r = 240, .g = 228, .b = 210, .a = 255 },
     .text_secondary = .{ .r = 175, .g = 150, .b = 120, .a = 255 },
-    .text_tertiary = .{ .r = 125, .g = 105, .b = 78, .a = 255 },
+    .text_tertiary = .{ .r = 154, .g = 139, .b = 118, .a = 255 },
     .text_on_accent = .{ .r = 14, .g = 10, .b = 6, .a = 255 },
     .danger = .{ .r = 185, .g = 95, .b = 95, .a = 255 },
     .success = .{ .r = 65, .g = 165, .b = 105, .a = 255 },
@@ -360,6 +363,7 @@ pub const font_size = struct {
 // than a synthetic weight.
 const app_font_family = "Noto Sans";
 const app_font_sources = [_]dvui.Font.Source{
+    .{ .family = dvui.Font.array("Noto Sans CJK"), .bytes = @embedFile("../assets/fonts/NotoSansKR-Regular.ttf") },
     .{
         .family = dvui.Font.array(app_font_family),
         .bytes = @embedFile("../assets/fonts/NotoSans-Regular.ttf"),
@@ -370,6 +374,12 @@ const app_font_sources = [_]dvui.Font.Source{
         .bytes = @embedFile("../assets/fonts/NotoSans-Bold.ttf"),
     },
 };
+
+/// Keep theme metrics/colors; use the lazy CJK face only for matching titles.
+pub fn mediaTitleFont(text: []const u8, base: dvui.Font) dvui.Font {
+    if (!@import("footer_pure.zig").needsCjkFont(text)) return base;
+    return base.withFamily("Noto Sans CJK").withWeight(.normal);
+}
 
 // ── Dimensions (legacy dvui.Rect helpers) ──
 

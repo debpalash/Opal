@@ -30,6 +30,57 @@ pub const MAX_ENTRIES = 512;
 pub const MAX_ID_LEN = 32;
 pub const MAX_FIELD_LEN = 24;
 pub const MAX_VAL_LEN = 512;
+pub const FieldSnapshot = struct {
+    field: [MAX_FIELD_LEN]u8 = @splat(0),
+    field_len: usize = 0,
+    val: [MAX_VAL_LEN]u8 = @splat(0),
+    val_len: usize = 0,
+    pub fn value(self: *const FieldSnapshot, name: []const u8) ?[]const u8 {
+        return if (std.mem.eql(u8, name, self.field[0..self.field_len])) self.val[0..self.val_len] else null;
+    }
+};
+/// Order independent configuration identity. Only used inside encrypted cache
+/// keys; callers must not expose the digest or source values to remote clients.
+pub fn fingerprintEntries(entries: anytype) u64 {
+    var result: u64 = 0;
+    for (entries) |entry| {
+        var hash = std.hash.Wyhash.init(0);
+        inline for (.{ entry.id[0..entry.id_len], entry.field[0..entry.field_len], entry.val[0..entry.val_len] }) |part| {
+            const length: u64 = @intCast(part.len);
+            hash.update(std.mem.asBytes(&length));
+            hash.update(part);
+        }
+        result +%= hash.final();
+    }
+    return result;
+}
+pub fn copyEntryFields(entries: anytype, id: []const u8, out: []FieldSnapshot) ?usize {
+    var count: usize = 0;
+    for (entries) |entry| {
+        if (!std.mem.eql(u8, id, entry.id[0..entry.id_len])) continue;
+        if (count >= out.len) return null; // Never publish partial credentials.
+        out[count] = .{ .field_len = entry.field_len, .val_len = entry.val_len };
+        @memcpy(out[count].field[0..entry.field_len], entry.field[0..entry.field_len]);
+        @memcpy(out[count].val[0..entry.val_len], entry.val[0..entry.val_len]);
+        count += 1;
+    }
+    return if (count > 0) count else null;
+}
+
+test "source snapshots own values and configuration identity ignores enumeration order" {
+    const Entry = struct { id: []const u8, id_len: usize, field: []const u8, field_len: usize, val: []const u8, val_len: usize };
+    var value = [_]u8{'a'};
+    const a = Entry{ .id = "source", .id_len = 6, .field = "base", .field_len = 4, .val = &value, .val_len = 1 };
+    const b = Entry{ .id = "source", .id_len = 6, .field = "user", .field_len = 4, .val = "b", .val_len = 1 };
+    var fields: [2]FieldSnapshot = undefined;
+    try std.testing.expectEqual(@as(?usize, 2), copyEntryFields(&[_]Entry{ a, b }, "source", &fields));
+    const before = fingerprintEntries(&[_]Entry{ a, b });
+    try std.testing.expectEqual(before, fingerprintEntries(&[_]Entry{ b, a }));
+    value[0] = 'c';
+    try std.testing.expectEqualStrings("a", fields[0].value("base").?);
+    try std.testing.expect(before != fingerprintEntries(&[_]Entry{ a, b }));
+    try std.testing.expectEqual(@as(?usize, null), copyEntryFields(&[_]Entry{ a, b }, "source", fields[0..1]));
+}
 
 /// Whether a source id is safe to use as a filename.
 ///

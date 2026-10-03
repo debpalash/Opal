@@ -1643,6 +1643,30 @@ var sr_searching_v: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var loaded_default: bool = false;
 var default_requested = std.atomic.Value(bool).init(false);
 var last_fetch_s: i64 = 0; // SWR cache timestamp
+
+pub fn setNativeFixtureForTest(textures: []const dvui.Texture) void {
+    if (!@import("builtin").is_test) @compileError("Native fixture is test-only");
+    freeSearchCovers();
+    sr_count = @min(textures.len, MAX_SEARCH_RESULTS);
+    loaded_default = true;
+    last_fetch_s = 9_999_999_999;
+    sr_searching_v.store(false, .release);
+    const title = "A long illustrated story — Adventures Beyond the Distant Horizon";
+    const url = "https://example.invalid/offline-comic";
+    const gen = search_gen.load(.acquire);
+    covers_render_gen = gen;
+    for (textures[0..sr_count], 0..) |art, i| {
+        @memcpy(sr_titles[i][0..title.len], title);
+        sr_title_lens[i] = title.len;
+        @memcpy(sr_urls[i][0..url.len], url);
+        sr_url_lens[i] = url.len;
+        sr_cover_url_lens[i] = 0;
+        sr_cover_tex[i] = art;
+        sr_cover_w[i] = art.width;
+        sr_cover_h[i] = art.height;
+        sr_cover_gen[i] = gen;
+    }
+}
 var sr_query_buf: [256]u8 = undefined;
 var sr_query_len: usize = 0;
 
@@ -3225,53 +3249,55 @@ pub fn renderContent() void {
         defer bar.deinit();
 
         const components = @import("../ui/components.zig");
-        const input = std.mem.sliceTo(&state.app.comic.search_buf, 0);
-        const is_url = std.mem.startsWith(u8, input, "http");
+        if (@import("../ui/browse_layout_pure.zig").showLocalSearch(state.app.page_shell_enabled)) {
+            const input = std.mem.sliceTo(&state.app.comic.search_buf, 0);
+            const is_url = std.mem.startsWith(u8, input, "http");
 
-        // Canonical compact toolbar input — fixed width instead of the old
-        // full-width bar; pasted URLs still load directly.
-        const enter_pressed = components.toolbarSearch(@src(), &state.app.comic.search_buf, "Search comics… (or URL)", 260);
+            // Canonical compact toolbar input — fixed width instead of the old
+            // full-width bar; pasted URLs still load directly.
+            const enter_pressed = components.toolbarSearch(@src(), &state.app.comic.search_buf, "Search comics… (or URL)", 260);
 
-        // Clear button (×) — visible only when there's text.
-        if (input.len > 0) {
-            if (dvui.buttonIcon(@src(), "comic-search-clear", icons.tvg.lucide.x, .{}, .{}, .{
-                .id_extra = 9100,
-                .color_fill = theme.colors.bg_elevated,
-                .color_text = theme.colors.text_secondary,
-                .corner_radius = theme.dims.rad_sm,
-                .padding = .{ .x = 5, .y = 3, .w = 5, .h = 3 },
-                .margin = .{ .x = 3, .y = 0, .w = 0, .h = 0 },
-                .gravity_y = 0.5,
-            })) {
-                state.app.comic.search_buf[0] = 0;
-                last_fired_len = 0;
-            }
-        }
-
-        const clicked = components.toolbarGo(@src(), "Search");
-
-        // Explicit submit (Enter / Search) — URLs load directly, text searches.
-        if (clicked or enter_pressed) {
+            // Clear button (×) — visible only when there's text.
             if (input.len > 0) {
-                if (is_url) loadComic(input) else searchComics(input);
+                if (dvui.buttonIcon(@src(), "comic-search-clear", icons.tvg.lucide.x, .{}, .{}, .{
+                    .id_extra = 9100,
+                    .color_fill = theme.colors.bg_elevated,
+                    .color_text = theme.colors.text_secondary,
+                    .corner_radius = theme.dims.rad_sm,
+                    .padding = .{ .x = 5, .y = 3, .w = 5, .h = 3 },
+                    .margin = .{ .x = 3, .y = 0, .w = 0, .h = 0 },
+                    .gravity_y = 0.5,
+                })) {
+                    state.app.comic.search_buf[0] = 0;
+                    last_fired_len = 0;
+                }
             }
-        } else {
-            // Live / incremental debounced search: buffer differs from the
-            // last fired query, ≥2 chars, not a URL, 400ms since last edit.
-            const now_ms = @import("../core/io_global.zig").milliTimestamp();
-            const changed = !(input.len == last_fired_len and std.mem.eql(u8, input, last_fired_query[0..last_fired_len]));
-            if (changed) last_edit_ms = now_ms;
-            if (changed and input.len >= 2 and !is_url and !sr_searching_v.load(.acquire) and
-                (now_ms - last_edit_ms) >= 400)
-            {
-                searchComics(input);
-            }
-        }
 
-        _ = dvui.label(@src(), "  •  ", .{}, .{
-            .color_text = theme.colors.border_subtle,
-            .gravity_y = 0.5,
-        });
+            const clicked = components.toolbarGo(@src(), "Search");
+
+            // Explicit submit (Enter / Search) — URLs load directly, text searches.
+            if (clicked or enter_pressed) {
+                if (input.len > 0) {
+                    if (is_url) loadComic(input) else searchComics(input);
+                }
+            } else {
+                // Live / incremental debounced search: buffer differs from the
+                // last fired query, ≥2 chars, not a URL, 400ms since last edit.
+                const now_ms = @import("../core/io_global.zig").milliTimestamp();
+                const changed = !(input.len == last_fired_len and std.mem.eql(u8, input, last_fired_query[0..last_fired_len]));
+                if (changed) last_edit_ms = now_ms;
+                if (changed and input.len >= 2 and !is_url and !sr_searching_v.load(.acquire) and
+                    (now_ms - last_edit_ms) >= 400)
+                {
+                    searchComics(input);
+                }
+            }
+
+            _ = dvui.label(@src(), "  •  ", .{}, .{
+                .color_text = theme.colors.border_subtle,
+                .gravity_y = 0.5,
+            });
+        }
 
         _ = dvui.label(@src(), "Source:", .{}, .{
             .color_text = theme.colors.text_secondary,

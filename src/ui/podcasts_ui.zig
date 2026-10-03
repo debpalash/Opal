@@ -66,12 +66,13 @@ fn renderSearchBar() void {
 
     const layout_w = @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().w, state.app.ui_scale);
     const search_w = @max(150, @min(280, layout_w - 280));
-    const entered = components.toolbarSearch(@src(), &state.app.podcasts.search_buf, "Search podcasts or paste an RSS feed URL…", search_w);
-    const go = components.toolbarGo(@src(), "Search");
+    const local_search = @import("browse_layout_pure.zig").showLocalSearch(state.app.page_shell_enabled);
+    const entered = components.toolbarSearch(@src(), &state.app.podcasts.search_buf, if (local_search) "Search podcasts or paste an RSS feed URL…" else "RSS feed URL…", search_w);
+    const go = components.toolbarGo(@src(), if (local_search) "Search" else "Add feed");
 
     if (entered or go) {
         const q = std.mem.sliceTo(&state.app.podcasts.search_buf, 0);
-        if (q.len > 0) searchPodcasts(q);
+        if (q.len > 0 and (local_search or std.mem.startsWith(u8, q, "https://") or std.mem.startsWith(u8, q, "http://"))) searchPodcasts(q);
     }
 
     if (state.app.podcasts.is_loading.load(.acquire)) {

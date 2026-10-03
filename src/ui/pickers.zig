@@ -194,7 +194,7 @@ pub fn pickerOption(
     _ = dvui.label(@src(), "{s}", .{label}, .{
         .id_extra = id_extra,
         .color_text = theme.colors.text_primary,
-        .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
+        .font = theme.mediaTitleFont(label, dvui.themeGet().font_body.withSize(theme.font_size.small)),
         .gravity_y = 0.5,
     });
     {
@@ -632,10 +632,99 @@ pub fn renderLangPickerPopover() void {
     if (!open) footer.open_picker = .none;
 }
 
+const PlaylistEntry = struct { id: i64 = -1, label: [256]u8 = @splat(0), len: usize = 0 };
+var playlist_entries: [128]PlaylistEntry = @splat(.{});
+var playlist_len: usize = 0;
+var playlist_ctx: ?*c.mpv.mpv_handle = null;
+var playlist_updated: i64 = 0;
+var playlist_load_serial: u64 = 0;
+
+pub fn clearPlaylistSnapshot() void {
+    playlist_ctx = null;
+    playlist_len = 0;
+    playlist_load_serial = 0;
+}
+
+fn refreshPlaylist(ctx: *c.mpv.mpv_handle) void {
+    playlist_ctx = ctx;
+    playlist_updated = @import("../core/io_global.zig").monotonicMilliTimestamp();
+    playlist_len = 0;
+    var count: i64 = 0;
+    if (c.mpv.mpv_get_property(ctx, "playlist-count", c.mpv.MPV_FORMAT_INT64, &count) < 0 or count > 1024) return;
+    var node: c.mpv.mpv_node = undefined;
+    if (c.mpv.mpv_get_property(ctx, "playlist", c.mpv.MPV_FORMAT_NODE, &node) < 0) return;
+    defer c.mpv.mpv_free_node_contents(&node);
+    if (node.format != c.mpv.MPV_FORMAT_NODE_ARRAY or node.u.list == null) return;
+    const list = node.u.list.*;
+    for (list.values[0..@intCast(@max(0, list.num))]) |entry| {
+        if (playlist_len == playlist_entries.len) break;
+        if (entry.format != c.mpv.MPV_FORMAT_NODE_MAP or entry.u.list == null) continue;
+        var row: PlaylistEntry = .{};
+        var filename: []const u8 = "Audio track";
+        var title: []const u8 = "";
+        const map = entry.u.list.*;
+        for (0..@intCast(@max(0, map.num))) |i| {
+            const key = std.mem.span(map.keys[i]);
+            const value = map.values[i];
+            if (std.mem.eql(u8, key, "id") and value.format == c.mpv.MPV_FORMAT_INT64) row.id = value.u.int64;
+            if (value.format == c.mpv.MPV_FORMAT_STRING and value.u.string != null) {
+                if (std.mem.eql(u8, key, "filename")) filename = std.mem.span(value.u.string);
+                if (std.mem.eql(u8, key, "title")) title = std.mem.span(value.u.string);
+            }
+        }
+        const label = if (title.len > 0) title else @import("footer_pure.zig").mediaFilename(filename);
+        const safe = @import("footer_pure.zig").compactTitle(&row.label, label, @min(label.len, row.label.len - 4));
+        row.len = safe.len;
+        playlist_entries[playlist_len] = row;
+        playlist_len += 1;
+    }
+}
+
+pub fn playPlaylistEntry(ctx: *c.mpv.mpv_handle, id: i64) bool {
+    refreshPlaylist(ctx);
+    var ids: [128]i64 = undefined;
+    for (playlist_entries[0..playlist_len], 0..) |entry, i| ids[i] = entry.id;
+    const index = @import("footer_pure.zig").playlistIndexForId(ids[0..playlist_len], id) orelse return false;
+    var position: i64 = @intCast(index);
+    return c.mpv.mpv_set_property(ctx, "playlist-pos", c.mpv.MPV_FORMAT_INT64, &position) >= 0;
+}
+
+fn renderMpvPlaylist(p: *player.MediaPlayer) void {
+    const playback = p.playbackSnapshot();
+    const now = @import("../core/io_global.zig").monotonicMilliTimestamp();
+    if (playlist_ctx != p.mpv_ctx or playlist_load_serial != p.load_serial or now - playlist_updated > 400) {
+        refreshPlaylist(p.mpv_ctx);
+        playlist_load_serial = p.load_serial;
+    }
+    var open = true;
+    var fw = beginDropUp(@src(), .playlist, 460, 342, &open);
+    defer fw.deinit();
+    dropUpTitle(@src(), icons.tvg.lucide.list, "Playlist");
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = false });
+    defer scroll.deinit();
+    if (playlist_len == 0) _ = dvui.label(@src(), "Playlist unavailable or exceeds 1024 tracks", .{}, .{ .color_text = theme.colors.text_secondary, .font = dvui.themeGet().font_body.withSize(theme.font_size.small) });
+    for (playlist_entries[0..playlist_len], 0..) |entry, i| {
+        const widget_key = @import("footer_pure.zig").playlistWidgetKey(entry.id) orelse continue;
+        const title = entry.label[0..entry.len];
+        const font = theme.mediaTitleFont(title, dvui.themeGet().font_body.withSize(theme.font_size.small));
+        var end: usize = title.len;
+        _ = font.textSizeEx(title, .{ .max_width = 370 - font.textSizeEx("…", .{}).w, .end_idx = &end });
+        var clipped: [256]u8 = undefined;
+        const label = @import("footer_pure.zig").compactTitle(&clipped, title, end);
+        if (pickerOption(@src(), widget_key, icons.tvg.lucide.music, label, @as(i64, @intCast(i)) == playback.playlist_pos)) {
+            _ = playPlaylistEntry(p.mpv_ctx, entry.id);
+            footer.closePickers();
+            break;
+        }
+    }
+    if (playback.playlist_count > 128) _ = dvui.label(@src(), "Showing first 128 tracks", .{}, .{ .color_text = theme.colors.text_secondary, .font = dvui.themeGet().font_body.withSize(theme.font_size.small) });
+    if (!open) footer.closePickers();
+}
+
 pub fn renderPlaylistPickerPopover(active_p: *player.MediaPlayer) void {
     if (footer.open_picker != .playlist) return;
     if (active_p.current_torrent_id < 0) {
-        footer.open_picker = .none;
+        renderMpvPlaylist(active_p);
         return;
     }
     const file_count = c.mpv.torrent_get_file_count(state.torrentSession(), active_p.current_torrent_id);

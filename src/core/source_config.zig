@@ -35,6 +35,33 @@ const Entry = struct {
 var entries: [MAX_ENTRIES]Entry = undefined;
 var entry_count: usize = 0;
 var mutex: @import("sync.zig").Mutex = .{};
+pub const EntryFieldSnapshot = pure.FieldSnapshot;
+
+/// Owned atomic multi-field source view. Null means absent or insufficient
+/// output capacity; callers must never use partially copied credentials.
+pub fn copyEntry(id: []const u8, out: []EntryFieldSnapshot) ?usize {
+    mutex.lock();
+    defer mutex.unlock();
+    return pure.copyEntryFields(entries[0..entry_count], id, out);
+}
+
+pub fn copyValue(id: []const u8, field: []const u8, out: []u8) ?[]const u8 {
+    mutex.lock();
+    defer mutex.unlock();
+    for (entries[0..entry_count]) |entry| {
+        if (!std.mem.eql(u8, entry.id[0..entry.id_len], id) or !std.mem.eql(u8, entry.field[0..entry.field_len], field)) continue;
+        if (entry.val_len > out.len) return null;
+        @memcpy(out[0..entry.val_len], entry.val[0..entry.val_len]);
+        return out[0..entry.val_len];
+    }
+    return null;
+}
+
+pub fn fingerprint() u64 {
+    mutex.lock();
+    defer mutex.unlock();
+    return pure.fingerprintEntries(entries[0..entry_count]);
+}
 
 const Protection = union(enum) {
     unchanged,

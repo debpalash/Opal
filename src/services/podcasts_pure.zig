@@ -677,9 +677,15 @@ test "podcast deep link: an episode title containing '|' survives" {
 pub fn parseGpodder(a: std.mem.Allocator, json: []const u8, out: []Podcast) usize {
     const doc = std.json.parseFromSlice(std.json.Value, a, json, .{}) catch return 0;
     defer doc.deinit();
-    if (doc.value != .array) return 0;
+    return parseGpodderValue(doc.value, out) orelse 0;
+}
+
+/// Independent directory adapter distinguishes a valid empty page from an
+/// error/malformed top-level response, matching the Apple parser contract.
+pub fn parseGpodderValue(root: std.json.Value, out: []Podcast) ?usize {
+    if (root != .array) return null;
     var n: usize = 0;
-    for (doc.value.array.items) |row| {
+    for (root.array.items) |row| {
         if (n == out.len) break;
         if (row != .object) continue;
         const title = jsonValueString(row.object.get("title"));
@@ -693,6 +699,16 @@ pub fn parseGpodder(a: std.mem.Allocator, json: []const u8, out: []Podcast) usiz
         n += 1;
     }
     return n;
+}
+
+test "gpodder universal search distinguishes empty directory from error JSON" {
+    var rows: [2]Podcast = undefined;
+    const empty = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, "[]", .{});
+    defer empty.deinit();
+    try std.testing.expectEqual(@as(?usize, 0), parseGpodderValue(empty.value, &rows));
+    const failure = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, "{\"error\":\"unavailable\"}", .{});
+    defer failure.deinit();
+    try std.testing.expect(parseGpodderValue(failure.value, &rows) == null);
 }
 
 fn jsonValueString(value: ?std.json.Value) []const u8 {

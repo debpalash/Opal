@@ -719,7 +719,8 @@ def test_resolver_sink():
         "sink carries a query": "query: []const u8 = \"\"," in rv,
         # Real consumer — the sink is not a speculative abstraction.
         "warm exists": "pub fn warmQuery(" in rv,
-        "warm writes to the cache": "content_cache.put(cacheKey(&key_buf, query)" in rv,
+        "warm writes to the scoped cache": "content_cache.put(cacheKey(&key_buf, query, cache_scope)" in rv
+            and "current_scope.fingerprint != cache_scope.fingerprint" in rv,
         # Narrow on purpose: speculative work must not cost a full search.
         "warm is narrow": "resolveEztv(qbuf, query.len)" in rv and "resolveTorznab(qbuf" in rv,
         # Superseded-wave guard applies to the live path only; a warm has no wave.

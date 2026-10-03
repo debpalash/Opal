@@ -4,6 +4,7 @@ const icons = @import("icons");
 const theme = @import("theme.zig");
 const components = @import("components.zig");
 const jf = @import("../services/jellyfin.zig");
+const state = @import("../core/state.zig");
 const safeUtf8 = @import("../core/text.zig").safeUtf8;
 const poster_util = @import("../core/poster.zig");
 
@@ -731,29 +732,31 @@ fn renderSearch() void {
             jf.goToLibraries();
         }
 
-        var te = dvui.textEntry(@src(), .{
-            .text = .{ .buffer = &search_buf },
-        }, .{
-            .expand = .horizontal,
-            .background = true,
-            .color_fill = theme.colors.bg_surface,
-            .color_border = theme.colors.border_subtle,
-            .border = dvui.Rect.all(1),
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
-            .margin = .{ .x = 8, .y = 0, .w = 8, .h = 0 },
-        });
-        const search_enter = te.enter_pressed;
-        te.deinit();
+        if (@import("browse_layout_pure.zig").showLocalSearch(state.app.page_shell_enabled)) {
+            var te = dvui.textEntry(@src(), .{
+                .text = .{ .buffer = &search_buf },
+            }, .{
+                .expand = .horizontal,
+                .background = true,
+                .color_fill = theme.colors.bg_surface,
+                .color_border = theme.colors.border_subtle,
+                .border = dvui.Rect.all(1),
+                .corner_radius = theme.dims.rad_sm,
+                .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
+                .margin = .{ .x = 8, .y = 0, .w = 8, .h = 0 },
+            });
+            const search_enter = te.enter_pressed;
+            te.deinit();
 
-        const clicked_search = dvui.buttonIcon(@src(), "search", icons.tvg.lucide.search, .{}, .{}, .{
-            .color_fill = theme.colors.accent,
-            .color_text = theme.colors.text_on_accent,
-            .padding = dvui.Rect.all(theme.radius.md),
-            .corner_radius = theme.dims.rad_sm,
-        });
-        if (clicked_search or search_enter) {
-            jf.searchFor(std.mem.sliceTo(&search_buf, 0));
+            const clicked_search = dvui.buttonIcon(@src(), "search", icons.tvg.lucide.search, .{}, .{}, .{
+                .color_fill = theme.colors.accent,
+                .color_text = theme.colors.text_on_accent,
+                .padding = dvui.Rect.all(theme.radius.md),
+                .corner_radius = theme.dims.rad_sm,
+            });
+            if (clicked_search or search_enter) {
+                jf.searchFor(std.mem.sliceTo(&search_buf, 0));
+            }
         }
     }
 

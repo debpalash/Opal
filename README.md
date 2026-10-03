@@ -209,8 +209,7 @@ Hover toolbar icons for labels, or scroll the toolbar in narrow windows.
 Click a result or **Play** to watch; **+** queues a torrent and **Details** opens title info.
 **×** on Now Playing stops playback. Find controls in **More → Playback options**.
 
-Install VLC to use **Settings → Playback → Open in VLC**. Source installation
-errors include recovery steps in redacted **Logs**.
+Source installation errors include recovery steps in redacted **Logs**.
 
 For temporary torrents, enable **Settings → Network → Stream torrents in memory**.
 Choose 128, 256 (default), or 512 MiB per new torrent. Seeking may redownload pieces;

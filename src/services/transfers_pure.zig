@@ -666,3 +666,19 @@ test "duplicate history labels and file rows have distinct action widgets" {
     file.hist_idx = 10;
     try std.testing.expectEqual(key, widgetId(&file));
 }
+
+/// A horizontal row must reserve its action strip before filename measurement.
+/// Labels otherwise report their entire minimum width and starve later controls.
+pub fn filenameWidth(row_width: f32, action_budget: f32) f32 {
+    const width = if (std.math.isFinite(row_width) and row_width > 0) row_width else 640;
+    const budget = if (std.math.isFinite(action_budget) and action_budget >= 0) action_budget else 220;
+    return @max(80, width - budget);
+}
+
+test "transfer filename budget preserves action space and bounds invalid geometry" {
+    try std.testing.expectEqual(@as(f32, 460), filenameWidth(640, 180));
+    try std.testing.expectEqual(@as(f32, 420), filenameWidth(640, 220));
+    try std.testing.expectEqual(@as(f32, 1140), filenameWidth(1360, 220));
+    try std.testing.expectEqual(@as(f32, 80), filenameWidth(200, 220));
+    try std.testing.expectEqual(@as(f32, 420), filenameWidth(std.math.nan(f32), std.math.inf(f32)));
+}

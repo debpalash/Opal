@@ -35,6 +35,21 @@ pub const PickerKind = enum(i32) { none = -1, chapter = 0, aspect = 1, audio = 2
 /// pub so input.zig's staged-Escape chain can peel an open picker popover
 /// (audio/sub/chapter/aspect/lang/playlist) before touching bigger surfaces.
 pub var open_picker: PickerKind = .none;
+pub const MediaLayoutForTest = struct {
+    menu_count: usize = 0,
+    menu: [32]dvui.Rect.Physical = @splat(.{}),
+    dock_close: dvui.Rect.Physical = .{},
+    dock_play: dvui.Rect.Physical = .{},
+    player_close: dvui.Rect.Physical = .{},
+    torrent: [4]dvui.Rect.Physical = @splat(.{}),
+};
+var media_layout_for_test: MediaLayoutForTest = .{};
+pub fn mediaLayoutForTest() MediaLayoutForTest {
+    if (!@import("builtin").is_test) @compileError("Media layout capture is test-only");
+    var snapshot = media_layout_for_test;
+    snapshot.player_close = close_button_rect;
+    return snapshot;
+}
 
 /// On-screen rect of each picker's chip, in dvui NATURAL units, recorded as the
 /// chip is laid out. The drop-up panels anchor to this: they float ABOVE their
@@ -95,6 +110,7 @@ pub fn pickerOpen() bool {
 /// whose open flag lives in AppState because its workers outlive this module.
 pub fn closePickers() void {
     open_picker = .none;
+    pickers.clearPlaylistSnapshot();
     state.app.sub_picker_open = false;
 }
 
@@ -1246,6 +1262,31 @@ fn pickerIconChip(
     tooltip: []const u8,
     kind: PickerKind,
 ) bool {
+    return pickerChipAtGravity(src, id_extra, icon, chip_text, is_active, tooltip, kind, 0.5);
+}
+
+fn pickerMenuChip(
+    src: std.builtin.SourceLocation,
+    id_extra: usize,
+    icon: []const u8,
+    chip_text: []const u8,
+    is_active: bool,
+    tooltip: []const u8,
+    kind: PickerKind,
+) bool {
+    return pickerChipAtGravity(src, id_extra, icon, chip_text, is_active, tooltip, kind, 0);
+}
+
+fn pickerChipAtGravity(
+    src: std.builtin.SourceLocation,
+    id_extra: usize,
+    icon: []const u8,
+    chip_text: []const u8,
+    is_active: bool,
+    tooltip: []const u8,
+    kind: PickerKind,
+    gravity_y: f32,
+) bool {
     var btn = dvui.box(src, .{ .dir = .horizontal }, .{
         .id_extra = id_extra,
         .background = true,
@@ -1255,10 +1296,14 @@ fn pickerIconChip(
         .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
         .min_size_content = .{ .w = 0, .h = 30 },
         .max_size_content = .{ .w = std.math.floatMax(f32), .h = 30 },
-        .gravity_y = 0.5,
+        .gravity_y = gravity_y,
     });
 
     const btn_rect = btn.data().borderRectScale().r;
+    if (@import("builtin").is_test and gravity_y == 0 and media_layout_for_test.menu_count < media_layout_for_test.menu.len) {
+        media_layout_for_test.menu[media_layout_for_test.menu_count] = btn_rect;
+        media_layout_for_test.menu_count += 1;
+    }
     // The drop-up panel floats above this chip, so remember where it landed.
     if (kind != .none) recordAnchor(kind, btn_rect);
     var hovered_signal: bool = false;
@@ -1480,9 +1525,33 @@ fn currentChapterChipText(ctx: *c.mpv.mpv_handle, out_buf: []u8) struct { text: 
     return .{ .text = s, .count = Cache.count };
 }
 
+const TorrentStatusCache = struct {
+    var fixture_active: bool = false;
+    var tid: i32 = -1;
+    var last_ms: i64 = 0;
+    var name: [512]u8 = std.mem.zeroes([512]u8);
+    var name_len: usize = 0;
+    var pct: f32 = 0.0;
+    var dl_rate: c_int = 0;
+    var seeds: c_int = 0;
+};
+pub fn setTorrentFixtureForTest(name: ?[]const u8) void {
+    if (!@import("builtin").is_test) @compileError("Torrent fixture is test-only");
+    TorrentStatusCache.fixture_active = name != null;
+    if (name) |title| {
+        TorrentStatusCache.tid = 42;
+        TorrentStatusCache.name_len = @min(title.len, TorrentStatusCache.name.len);
+        @memcpy(TorrentStatusCache.name[0..TorrentStatusCache.name_len], title[0..TorrentStatusCache.name_len]);
+        TorrentStatusCache.pct = 0.375;
+        TorrentStatusCache.dl_rate = 3670016;
+        TorrentStatusCache.seeds = 128;
+    } else TorrentStatusCache.tid = -1;
+}
+
 pub fn renderLiquidGlassOverlay() void {
     if (!state.app.show_cell_overlay or state.app.players.items.len <= state.app.active_player_idx) return;
 
+    const show_media_title = footer_pure.showMediaTitleInControls(@import("builtin").os.tag == .macos);
     const active_p = state.app.players.items[state.app.active_player_idx];
     if (active_p.provider != .mpv) return;
 
@@ -1627,19 +1696,11 @@ pub fn renderLiquidGlassOverlay() void {
     // Name + stats were fetched every frame (torrent_get_name +
     // torrent_poll IPC at ~30fps); cache at ~2Hz keyed on the torrent id
     // (a torrent switch invalidates immediately).
-    const StatusCache = struct {
-        var tid: i32 = -1;
-        var last_ms: i64 = 0;
-        var name: [512]u8 = std.mem.zeroes([512]u8);
-        var name_len: usize = 0;
-        var pct: f32 = 0.0;
-        var dl_rate: c_int = 0;
-        var seeds: c_int = 0;
-    };
-    if (active_p.current_torrent_id >= 0 and (StatusCache.tid != active_p.current_torrent_id or now_ms - StatusCache.last_ms > 500)) {
+    const StatusCache = TorrentStatusCache;
+    if (!(@import("builtin").is_test and StatusCache.fixture_active) and active_p.current_torrent_id >= 0 and (StatusCache.tid != active_p.current_torrent_id or now_ms - StatusCache.last_ms > 500)) {
         StatusCache.tid = active_p.current_torrent_id;
         StatusCache.last_ms = now_ms;
-        var t_name: [512]u8 = undefined;
+        var t_name: [512]u8 = @splat(0);
         c.mpv.torrent_get_name(state.torrentSession(), active_p.current_torrent_id, &t_name, t_name.len);
         @memcpy(&StatusCache.name, &t_name);
         StatusCache.name_len = std.mem.indexOfScalar(u8, &t_name, 0) orelse t_name.len;
@@ -2077,9 +2138,9 @@ pub fn renderLiquidGlassOverlay() void {
             }
         } // fit.volume_slider
 
-        // The filename shares the transport strip; its bounded slot cannot
-        // force the close button off the edge or create another row.
-        {
+        // Native macOS titlebar owns the filename. Retain only useful busy
+        // status here; other desktops keep a measured title in this same strip.
+        if (show_media_title or footer_pure.transportBusy(transport)) {
             // Expand into spare width without caching the label's old width as
             // a minimum: shrinking the window must leave the right controls room.
             var title_host = dvui.box(@src(), .{}, .{
@@ -2088,7 +2149,7 @@ pub fn renderLiquidGlassOverlay() void {
                 .max_size_content = .{ .w = 0, .h = footer_pure.CONTROL_CONTENT_HEIGHT },
             });
             const title_width = title_host.data().contentRect().w;
-            const raw_title = if (bar_pt < 540 and footer_pure.transportBusy(transport))
+            const raw_title = if (!show_media_title or (bar_pt < 540 and footer_pure.transportBusy(transport)))
                 footer_pure.transportLabel(transport)
             else if (active_p.current_torrent_id >= 0)
                 StatusCache.name[0..StatusCache.name_len]
@@ -2101,7 +2162,7 @@ pub fn renderLiquidGlassOverlay() void {
             var title_copy: [512]u8 = undefined;
             const safe_title = @import("../core/text.zig").safeUtf8Buf(raw_title, &title_copy);
             var clipped: [515]u8 = undefined;
-            const font = dvui.themeGet().font_body;
+            const font = theme.mediaTitleFont(safe_title, dvui.themeGet().font_body);
             var title_end: usize = safe_title.len;
             if (font.textSizeEx(safe_title, .{}).w > title_width) {
                 const ellipsis_width = font.textSizeEx("…", .{}).w;
@@ -2111,12 +2172,16 @@ pub fn renderLiquidGlassOverlay() void {
             var title_wd: dvui.WidgetData = undefined;
             _ = dvui.label(@src(), "{s}", .{label}, .{
                 .data_out = &title_wd,
+                .font = font,
                 .color_text = player_text_muted,
                 .gravity_y = 0.5,
                 .gravity_x = 0.5,
             });
             components.tip(@src(), title_wd, safe_title);
             title_host.deinit();
+        } else {
+            var space = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+            space.deinit();
         }
         // Audio.
         {
@@ -2172,6 +2237,7 @@ pub fn renderLiquidGlassOverlay() void {
 
     // Secondary controls and transfer actions live above the single strip.
     if (open_picker == .more) {
+        if (@import("builtin").is_test) media_layout_for_test.menu_count = 0;
         var open = true;
         var fw = pickers.beginDropUp(@src(), .more, 330, 420, &open);
         defer fw.deinit();
@@ -2180,22 +2246,22 @@ pub fn renderLiquidGlassOverlay() void {
         defer options_scroll.deinit();
         const tv_lib = @import("../services/tv_library.zig");
         if (tv_lib.playingEpisode()) {
-            if (pickerIconChip(@src(), 717, icons.tvg.lucide.@"chevron-first", "Previous episode", tv_lib.neighborEpisode(-1) != null, "Previous episode", .none)) {
+            if (pickerMenuChip(@src(), 717, icons.tvg.lucide.@"chevron-first", "Previous episode", tv_lib.neighborEpisode(-1) != null, "Previous episode", .none)) {
                 if (tv_lib.neighborEpisode(-1) != null) tv_lib.playNeighborEpisode(-1);
             }
-            if (pickerIconChip(@src(), 718, icons.tvg.lucide.@"chevron-last", "Next episode", tv_lib.neighborEpisode(1) != null, "Next episode", .none)) {
+            if (pickerMenuChip(@src(), 718, icons.tvg.lucide.@"chevron-last", "Next episode", tv_lib.neighborEpisode(1) != null, "Next episode", .none)) {
                 if (tv_lib.neighborEpisode(1) != null) tv_lib.playNeighborEpisode(1);
             }
         }
         if (playback.playlist_count > 1) {
-            if (pickerIconChip(@src(), 719, icons.tvg.lucide.@"skip-back", "Previous track", playback.playlist_pos > 0, "Previous track", .none)) _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "playlist-prev");
-            if (pickerIconChip(@src(), 720, icons.tvg.lucide.@"skip-forward", "Next track", playback.playlist_pos + 1 < playback.playlist_count, "Next track", .none)) _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "playlist-next");
+            if (pickerMenuChip(@src(), 719, icons.tvg.lucide.@"skip-back", "Previous track", playback.playlist_pos > 0, "Previous track", .none)) _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "playlist-prev");
+            if (pickerMenuChip(@src(), 720, icons.tvg.lucide.@"skip-forward", "Next track", playback.playlist_pos + 1 < playback.playlist_count, "Next track", .none)) _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "playlist-next");
         }
         if (anime_skip.currentSkippable()) |skp| {
-            if (pickerIconChip(@src(), 721, icons.tvg.lucide.@"skip-forward", anime_skip_pure.skipButtonLabel(skp.category), true, "Skip this segment", .none)) anime_skip.skipNow();
+            if (pickerMenuChip(@src(), 721, icons.tvg.lucide.@"skip-forward", anime_skip_pure.skipButtonLabel(skp.category), true, "Skip this segment", .none)) anime_skip.skipNow();
         }
 
-        if (pickerIconChip(@src(), 713, icons.tvg.lucide.@"maximize-2", "Fullscreen", false, "Toggle fullscreen", .none)) {
+        if (pickerMenuChip(@src(), 713, icons.tvg.lucide.@"maximize-2", "Fullscreen", false, "Toggle fullscreen", .none)) {
             if (state.app.fullscreen_player_idx != null) state.app.fullscreen_player_idx = null else state.app.fullscreen_player_idx = state.app.active_player_idx;
             closePickers();
         }
@@ -2203,13 +2269,13 @@ pub fn renderLiquidGlassOverlay() void {
         const current_picture = av_pure.picturePresetFromInt(state.app.picture_preset);
         var picture_label_buf: [64]u8 = undefined;
         const picture_label = std.fmt.bufPrint(&picture_label_buf, "Picture: {s}", .{av_pure.pictureLabel(current_picture)}) catch "Picture preset";
-        if (pickerIconChip(@src(), 714, icons.tvg.lucide.sparkles, picture_label, current_picture != .auto, "Cycle picture preset", .none)) {
+        if (pickerMenuChip(@src(), 714, icons.tvg.lucide.sparkles, picture_label, current_picture != .auto, "Cycle picture preset", .none)) {
             state.app.picture_preset = (state.app.picture_preset + 1) % 6;
             for (state.app.players.items) |p| player.applyPicturePreset(p);
             state.markConfigDirty();
         }
-        if (pickerIconChip(@src(), 715, icons.tvg.lucide.rewind, "Back 10 seconds", false, "Seek back", .none)) _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "seek -10");
-        if (pickerIconChip(@src(), 716, icons.tvg.lucide.@"fast-forward", "Forward 10 seconds", false, "Seek forward", .none)) _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "seek 10");
+        if (pickerMenuChip(@src(), 715, icons.tvg.lucide.rewind, "Back 10 seconds", false, "Seek back", .none)) _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "seek -10");
+        if (pickerMenuChip(@src(), 716, icons.tvg.lucide.@"fast-forward", "Forward 10 seconds", false, "Seek forward", .none)) _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "seek 10");
 
         // Both URL probes are case-insensitive substring searches over the loaded
         // URL, and both results are only consumed by the quality chip below. Test
@@ -2227,7 +2293,7 @@ pub fn renderLiquidGlassOverlay() void {
                     std.fmt.bufPrint(&quality_buf, "{d}p", .{active_p.youtube_active_height}) catch "Video"
                 else
                     "Audio";
-                if (pickerIconChip(@src(), 711, icons.tvg.lucide.monitor, quality, true, "YouTube stream quality", .quality)) {
+                if (pickerMenuChip(@src(), 711, icons.tvg.lucide.monitor, quality, true, "YouTube stream quality", .quality)) {
                     togglePicker(.quality);
                 }
             }
@@ -2238,7 +2304,7 @@ pub fn renderLiquidGlassOverlay() void {
         {
             const ar_text = currentAspectChipText(active_p.mpv_ctx);
             const ar_active = !std.mem.eql(u8, ar_text, "Auto");
-            if (pickerIconChip(@src(), 700, icons.tvg.lucide.ratio, ar_text, ar_active, "Framing & aspect", .aspect)) {
+            if (pickerMenuChip(@src(), 700, icons.tvg.lucide.ratio, ar_text, ar_active, "Framing & aspect", .aspect)) {
                 togglePicker(.aspect);
             }
         }
@@ -2248,7 +2314,7 @@ pub fn renderLiquidGlassOverlay() void {
             var chp_buf: [16]u8 = undefined;
             const chp = currentChapterChipText(active_p.mpv_ctx, &chp_buf);
             if (chp.count > 1) {
-                if (pickerIconChip(@src(), 701, icons.tvg.lucide.bookmark, chp.text, true, "Chapters", .chapter)) {
+                if (pickerMenuChip(@src(), 701, icons.tvg.lucide.bookmark, chp.text, true, "Chapters", .chapter)) {
                     togglePicker(.chapter);
                 }
             }
@@ -2258,9 +2324,13 @@ pub fn renderLiquidGlassOverlay() void {
         // pinned instead of "auto").
         {
             const dev_pinned = currentAudioDevicePinned(active_p.mpv_ctx);
-            if (pickerIconChip(@src(), 708, icons.tvg.lucide.speaker, "Output device", dev_pinned, "Audio output device", .audio_device)) {
+            if (pickerMenuChip(@src(), 708, icons.tvg.lucide.speaker, "Output device", dev_pinned, "Audio output device", .audio_device)) {
                 togglePicker(.audio_device);
             }
+        }
+
+        if (active_p.current_torrent_id < 0 and playback.playlist_count > 1) {
+            if (pickerMenuChip(@src(), 707, icons.tvg.lucide.list, "Playlist", true, "Choose a queued track", .playlist)) togglePicker(.playlist);
         }
 
         // Files (torrent multi-file playlist).
@@ -2269,7 +2339,7 @@ pub fn renderLiquidGlassOverlay() void {
             if (file_count > 1) {
                 var f_buf: [16]u8 = undefined;
                 const f_chip = std.fmt.bufPrint(&f_buf, "{d}", .{file_count}) catch "";
-                if (pickerIconChip(@src(), 706, icons.tvg.lucide.list, f_chip, true, "Files in torrent", .playlist)) {
+                if (pickerMenuChip(@src(), 706, icons.tvg.lucide.list, f_chip, true, "Files in torrent", .playlist)) {
                     togglePicker(.playlist);
                 }
             }
@@ -2292,28 +2362,32 @@ pub fn renderLiquidGlassOverlay() void {
             // mid-codepoint) — validate before dvui (matches grid.zig).
             var info_title: [515]u8 = undefined;
             const safe_name = @import("../core/text.zig").safeUtf8(name_slice);
+            const info_font = theme.mediaTitleFont(safe_name, dvui.themeGet().font_body);
+            var info_wd: dvui.WidgetData = undefined;
             var name_end: usize = 0;
-            _ = dvui.themeGet().font_body.textSizeEx(safe_name, .{ .max_width = 270, .end_idx = &name_end });
+            _ = info_font.textSizeEx(safe_name, .{ .max_width = 270, .end_idx = &name_end });
             _ = dvui.label(@src(), "{s}", .{footer_pure.compactTitle(&info_title, safe_name, name_end)}, .{
+                .data_out = &info_wd,
+                .font = info_font,
                 .color_text = player_text_muted,
-                .gravity_y = 0.5,
+                .gravity_y = 0,
             });
-
-            {
-                var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
-                spacer.deinit();
-            }
+            if (@import("builtin").is_test) media_layout_for_test.torrent[0] = info_wd.borderRectScale().r;
 
             var stat_buf: [80]u8 = undefined;
             if (std.fmt.bufPrintZ(&stat_buf, "{d:.1}% \xC2\xB7 {d:.1} MB/s \xC2\xB7 {d} seeds", .{ pct * 100.0, rate_mb, seeds })) |st| {
                 _ = dvui.label(@src(), "{s}", .{st}, .{
+                    .data_out = &info_wd,
                     .color_text = player_text_muted,
-                    .gravity_y = 0.5,
+                    .gravity_y = 0,
                 });
+                if (@import("builtin").is_test) media_layout_for_test.torrent[1] = info_wd.borderRectScale().r;
             } else |_| {}
 
             // Speed-limit cycle — also demoted.
             {
+                var action = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .min_size_content = .{ .w = 0, .h = 26 } });
+                defer action.deinit();
                 const limit = state.app.download_rate_limit;
                 var lim_buf: [48]u8 = undefined;
                 const lim_label = if (limit == 0)
@@ -2323,6 +2397,7 @@ pub fn renderLiquidGlassOverlay() void {
                 };
                 if (dvui.button(@src(), lim_label, .{}, .{
                     .id_extra = 200,
+                    .data_out = &info_wd,
                     .color_fill = playerControlFill(false),
                     .color_text = player_text_muted,
                     .border = dvui.Rect.all(0),
@@ -2342,6 +2417,7 @@ pub fn renderLiquidGlassOverlay() void {
                     state.app.download_rate_limit = limits[next_idx];
                     c.mpv.torrent_set_download_limit(state.torrentSession(), state.app.download_rate_limit);
                 }
+                if (@import("builtin").is_test) media_layout_for_test.torrent[2] = action.data().borderRectScale().r;
             }
 
             // Stop + delete — two-step confirm (same component as other destructive
@@ -2350,6 +2426,9 @@ pub fn renderLiquidGlassOverlay() void {
             // needed at teardown, and torrent_remove() invalidates it, so we grab it
             // just before removing.
             {
+                var action = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .min_size_content = .{ .w = 0, .h = 26 } });
+                defer action.deinit();
+                if (@import("builtin").is_test) media_layout_for_test.torrent[3] = action.data().borderRectScale().r;
                 if (components.confirmDangerButton(@src(), "Delete", 201)) {
                     const tid = active_p.current_torrent_id;
                     var del_path: [512]u8 = undefined;
@@ -2419,6 +2498,7 @@ fn activeMediaPlayer() ?*player.MediaPlayer {
 
 /// The ~100px now-playing bar. Caller guarantees `p` is the active mpv player.
 fn renderNowPlayingBar(p: *player.MediaPlayer) void {
+    const show_media_title = footer_pure.showMediaTitleInControls(@import("builtin").os.tag == .macos);
     const text = @import("../core/text.zig");
     const queue = @import("../services/queue.zig");
     const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
@@ -2441,8 +2521,8 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
         .color_fill = theme.colors.bg_elevated,
         .color_border = theme.colors.border_subtle,
         .border = .{ .x = 0, .y = 1, .w = 0, .h = 0 },
-        .min_size_content = .{ .w = 0, .h = 78 },
-        .max_size_content = .{ .w = 0, .h = 78 },
+        .min_size_content = .{ .w = 0, .h = 86 },
+        .max_size_content = .{ .w = 0, .h = 86 },
     });
     defer bar.deinit();
 
@@ -2471,12 +2551,12 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
 
     var wd: dvui.WidgetData = undefined;
 
-    // ── Left: glyph + now-playing title (ellipsized, capped width) ──
-    {
+    // ── Other desktops retain context; macOS uses the native titlebar. ──
+    if (show_media_title) {
         var left = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .gravity_y = 0.5,
             .min_size_content = .{ .w = side_w, .h = 0 },
-            .max_size_content = .{ .w = side_w, .h = 0 },
+            .max_size_content = .{ .w = side_w, .h = 48 },
             .corner_radius = dvui.Rect.all(theme.radius.sm),
         });
         defer left.deinit();
@@ -2532,10 +2612,16 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
         // mutated bytes mid-frame. Snapshot a stable copy first.
         var nt_buf: [128]u8 = undefined;
         var title = text.safeUtf8Buf(raw_title, &nt_buf);
-        if (title.len > 42) title = text.safeUtf8(title[0..42]); // re-trim to a codepoint boundary (on the copy)
+        const title_width = @max(@as(f32, 0), side_w - 42);
+        const font = theme.mediaTitleFont(title, dvui.themeGet().font_body);
+        var end: usize = title.len;
+        _ = font.textSizeEx(title, .{ .max_width = @max(0, title_width - font.textSizeEx("…", .{}).w), .end_idx = &end });
+        var clipped: [128]u8 = undefined;
+        title = footer_pure.compactTitle(&clipped, title, end);
         _ = dvui.label(@src(), "{s}", .{title}, .{
+            .font = font,
             .color_text = theme.colors.text_primary,
-            .gravity_y = 0.5,
+            .gravity_y = 0,
         });
 
         // Subtitle (show name / station codec·bitrate·country) — secondary tone,
@@ -2543,11 +2629,15 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
         if (p.np_subtitle_len > 0) {
             var st_buf: [192]u8 = undefined;
             var sub = text.safeUtf8Buf(p.np_subtitle[0..p.np_subtitle_len], &st_buf);
-            if (sub.len > 46) sub = text.safeUtf8(sub[0..46]);
+            const sub_font = theme.mediaTitleFont(sub, dvui.themeGet().font_body.withSize(11));
+            var sub_end: usize = sub.len;
+            _ = sub_font.textSizeEx(sub, .{ .max_width = @max(0, title_width - sub_font.textSizeEx("…", .{}).w), .end_idx = &sub_end });
+            var sub_clip: [192]u8 = undefined;
+            sub = footer_pure.compactTitle(&sub_clip, sub, sub_end);
             _ = dvui.label(@src(), "{s}", .{sub}, .{
                 .color_text = theme.colors.text_secondary,
-                .font = dvui.themeGet().font_body.withSize(11),
-                .gravity_y = 0.5,
+                .font = sub_font,
+                .gravity_y = 0,
             });
         }
     }
@@ -2556,12 +2646,12 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
     {
         var center = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .gravity_y = 0.5,
-            .gravity_x = 0.5,
-            .expand = .horizontal,
+            .gravity_x = 0,
+            .expand = if (show_media_title) .horizontal else .none,
         });
         defer center.deinit();
 
-        {
+        if (show_media_title) {
             var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
             sp.deinit();
         }
@@ -2594,7 +2684,7 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
             .border = dvui.Rect.all(0),
             .corner_radius = dvui.Rect.all(theme.radius.pill),
             .gravity_y = 0.5,
-            .padding = .{ .x = 10, .y = 10, .w = 10, .h = 10 },
+            .padding = .{ .x = 6, .y = 4, .w = 6, .h = 4 },
             .min_size_content = .{ .w = 40, .h = 40 },
             .max_size_content = .{ .w = 40, .h = 40 },
             .margin = .{ .x = theme.spacing.sm, .y = 0, .w = theme.spacing.sm, .h = 0 },
@@ -2602,6 +2692,7 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
             p.togglePause();
         }
         components.tip(@src(), wd, "Play/Pause");
+        if (@import("builtin").is_test) media_layout_for_test.dock_play = wd.borderRectScale().r;
 
         if (show_skip) {
             // Next — plays the next unplayed queue item.
@@ -2621,7 +2712,7 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
             components.tip(@src(), wd, "Next (from queue)");
         }
 
-        {
+        if (show_media_title) {
             var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
             sp.deinit();
         }
@@ -2629,10 +2720,15 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
 
     // ── Right: volume, queue, open-player, close. Matches the left zone width
     // so the transport remains centered in the whole window. ──
+    const dock_transport = footer_pure.transportState(p.is_loading, playback.paused, playback.paused_for_cache);
+    if (!show_media_title and footer_pure.transportBusy(dock_transport)) {
+        _ = dvui.label(@src(), "{s}", .{footer_pure.transportLabel(dock_transport)}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
+    }
     var right = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .gravity_y = 0.5,
-        .min_size_content = .{ .w = side_w, .h = 0 },
-        .max_size_content = .{ .w = side_w, .h = 0 },
+        .expand = if (show_media_title) .none else .horizontal,
+        .min_size_content = .{ .w = if (show_media_title) side_w else 0, .h = 0 },
+        .max_size_content = .{ .w = if (show_media_title) side_w else std.math.floatMax(f32), .h = 48 },
     });
     defer right.deinit();
     {
@@ -2709,6 +2805,7 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
         state.app.pending_remove_player_idx = @as(i32, @intCast(state.app.active_player_idx));
     }
     components.tip(@src(), wd, "Stop and close player");
+    if (@import("builtin").is_test) media_layout_for_test.dock_close = wd.borderRectScale().r;
 }
 
 /// The thin torrent-activity strip — unchanged from the original tray. Rendered

@@ -3,6 +3,36 @@ Byte-for-byte identical test bodies; see tests/features/harness.py for the
 shared @test decorator, helpers, and run_all()."""
 from .harness import *  # noqa: F401,F403
 import os, sys, subprocess, sqlite3, socket, time, json  # noqa: F401
+import re
+
+
+@test("Small theme text stays readable on raised surfaces", "Theming")
+def test_theme_caption_contrast():
+    # Check the shipped tokens directly: captions use these opaque colors, so
+    # testing a second copied palette would miss future theme regressions.
+    with open(os.path.join(PROJECT_DIR, "src/ui/theme.zig")) as f:
+        content = f.read()
+
+    def luminance(rgb):
+        def linear(value):
+            value /= 255
+            return value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4
+        return sum(linear(v) * weight for v, weight in zip(rgb, (0.2126, 0.7152, 0.0722)))
+
+    palettes = re.findall(r"const (\w+)_colors = ThemeColors\{(.*?)\n\};", content, re.S)
+    if len(palettes) != 7:
+        return "fail", f"Expected seven shipped palettes, found {len(palettes)}"
+    failures = []
+    for name, body in palettes:
+        colors = {key: tuple(map(int, values)) for key, *values in re.findall(
+            r"\.(\w+) = \.\{ \.r = (\d+), \.g = (\d+), \.b = (\d+)", body)}
+        for text in ("text_primary", "text_secondary", "text_tertiary"):
+            for background in ("bg_app", "bg_surface", "bg_hover", "bg_elevated"):
+                foreground_lum, background_lum = luminance(colors[text]), luminance(colors[background])
+                ratio = (max(foreground_lum, background_lum) + 0.05) / (min(foreground_lum, background_lum) + 0.05)
+                if ratio < 4.5:
+                    failures.append(f"{name}.{text}/{background}: {ratio:.2f}:1")
+    return ("fail", "; ".join(failures)) if failures else ("pass", "84 shipped text/surface pairs meet 4.5:1")
 
 @test("Theme Presets Defined", "Theming")
 def test_theme_presets():
