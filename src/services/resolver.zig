@@ -3611,7 +3611,7 @@ fn resolveMusic(query_buf: [256]u8, qlen: usize) void {
         const quota = mp.providerQuota(AUDIO_MAX, providers, visited);
         visited += 1;
         const source: u8 = @intCast(index);
-        const reply = music.searchInto(source, query, songs[0..quota]);
+        const reply = music.searchIntoWithCancellation(source, query, songs[0..quota], workerCancellation());
         if (reply.status != .done and reply.status != .no_results) noteWorkerOutcome(reply.status);
         for (songs[0..reply.count]) |song| {
             var item: ResolvedItem = .{ .source = .music };
@@ -3652,10 +3652,17 @@ fn resolveRadio(query_buf: [256]u8, qlen: usize) void {
         return;
     };
     defer alloc.free(buf);
-    const body = @import("../core/http.zig").fetch(url, buf, .{ .timeout_secs = 8 }) orelse {
+    var captured_headers: [4096]u8 = undefined;
+    const response = @import("reliable_fetch.zig").request(url, buf, &captured_headers, .{
+        .timeout_secs = 8,
+        .impersonate = false,
+        .cancel_epoch = workerCancellation(),
+    });
+    if (!response.ok()) {
         noteWorkerOutcome(.transport_failed);
         return;
-    };
+    }
+    const body = response.body;
 
     const stations = alloc.alloc(rp.Station, AUDIO_MAX) catch {
         noteWorkerOutcome(.failed);

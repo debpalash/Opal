@@ -199,6 +199,10 @@ pub fn universalConfigured(source: u8) bool {
 /// Independent first-page query. Output owns all metadata and safe action URLs;
 /// Browse source, rows, paging, and request generation are never changed.
 pub fn searchInto(source: u8, query: []const u8, out: []pure.MusicSong) UniversalReply {
+    return searchIntoWithCancellation(source, query, out, null);
+}
+
+pub fn searchIntoWithCancellation(source: u8, query: []const u8, out: []pure.MusicSong, cancel: ?@import("../core/bounded_process.zig").CancelEpoch) UniversalReply {
     if (query.len == 0 or out.len == 0) return .{ .status = .no_results };
     var connection = universalConnection(source) orelse return .{};
     defer @memset(&connection.auth, 0);
@@ -217,7 +221,17 @@ pub fn searchInto(source: u8, query: []const u8, out: []pure.MusicSong) Universa
     const buffer = alloc.alloc(u8, 512 * 1024) catch return .{ .status = .failed };
     defer alloc.free(buffer);
     const headers = [_]std.http.Header{.{ .name = "Accept", .value = "application/json" }};
-    const body = @import("../core/http.zig").fetch(url, buffer, .{ .timeout_secs = 4, .extra_headers = &headers }) orelse return .{ .status = .transport_failed };
+    const body = if (source == SRC_JIOSAAVN) blk: {
+        var captured_headers: [4096]u8 = undefined;
+        const response = reliable_fetch.request(url, buffer, &captured_headers, .{
+            .timeout_secs = 4,
+            .impersonate = false,
+            .cancel_epoch = cancel,
+            .headers = &.{.{ .name = "Accept", .value = "application/json" }},
+        });
+        if (!response.ok()) return .{ .status = .transport_failed };
+        break :blk response.body;
+    } else @import("../core/http.zig").fetch(url, buffer, .{ .timeout_secs = 4, .extra_headers = &headers }) orelse return .{ .status = .transport_failed };
     var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch return .{ .status = .parse_failed };
     defer parsed.deinit();
     const response_kind: pure.SearchResponseKind = switch (source) {

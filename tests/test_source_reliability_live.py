@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Owned local providers exercise cancellation, public cache and configured failover."""
-import argparse, json, sqlite3, threading, time, unittest
+import argparse, json, os, sqlite3, threading, time, unittest
+from unittest.mock import patch
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
@@ -8,6 +9,12 @@ import test_setup_token_live as live
 
 class Provider(BaseHTTPRequestHandler):
     def log_message(self, *_): pass
+    def do_CONNECT(self):
+        # Reject external HTTPS before DNS/TLS. Local fixture requests bypass us.
+        self.server.connects.append(self.path)
+        self.send_response(503)
+        self.send_header('Content-Length', '0')
+        self.end_headers()
     def do_GET(self):
         path=urlsplit(self.path)
         if path.path == '/v1/audio/' and parse_qs(path.query).get('q') == ['slow']:
@@ -32,7 +39,7 @@ class SourceReliabilityTest(unittest.TestCase):
     def setUp(self):
         self.servers=[]
         for fail in (False,True):
-            s=ThreadingHTTPServer(('127.0.0.1',0),Provider); s.fail=fail; s.hits=0
+            s=ThreadingHTTPServer(('127.0.0.1',0),Provider); s.fail=fail; s.hits=0; s.connects=[]
             s.started=threading.Event(); s.closed=threading.Event(); s.base='http://127.0.0.1:'+str(s.server_port)
             threading.Thread(target=s.serve_forever,daemon=True).start(); self.servers.append(s)
             self.addCleanup(s.server_close); self.addCleanup(s.shutdown)
@@ -44,7 +51,12 @@ class SourceReliabilityTest(unittest.TestCase):
         with sqlite3.connect(profile/'opal.db') as db:
             db.execute("CREATE TABLE config(key TEXT PRIMARY KEY,value TEXT NOT NULL DEFAULT '')")
             db.executemany('INSERT INTO config VALUES(?,?)',[('web_port',str(live.PORT)),('web_bind','loopback'),('search_sources',str((1<<9)|(1<<10))),('auto_download_subs','0'),('content_cache_enabled','0')])
-        token=self.opal.start(); account=live.register('reliability-fixture',host=self.opal.loopback_authority,setup_token=token)
+        proxy_env={'HTTPS_PROXY':self.good.base, 'https_proxy':self.good.base,
+                   'NO_PROXY':'localhost,127.0.0.1,::1', 'no_proxy':'localhost,127.0.0.1,::1',
+                   'ALL_PROXY':'', 'all_proxy':''}
+        with patch.dict(os.environ,proxy_env):
+            token=self.opal.start()
+        account=live.register('reliability-fixture',host=self.opal.loopback_authority,setup_token=token)
         self.assertEqual(account.status,200); self.headers=(('Cookie',account.session_cookie()),)
     def api(self,path,method='GET'):
         r=live.request(method,'/api/'+path,host=self.opal.loopback_authority,extra_headers=self.headers)
@@ -56,7 +68,13 @@ class SourceReliabilityTest(unittest.TestCase):
             d=self.api('unified_search')
             if not d['loading']: return d
             time.sleep(.05)
-        self.fail('search did not settle')
+        health = {source['id']: source.get('health') for source in self.api('plugins')['sources']
+                  if source['id'] in ('openverse', 'somafm')}
+        self.fail('search did not settle: ' + json.dumps({
+            'sources': d.get('sources'), 'generation': d.get('generation'),
+            'provider_health': health, 'good_hits': self.good.hits,
+            'bad_hits': self.bad.hits,
+        }, sort_keys=True))
     def test_cancel_stops_provider_socket(self):
         self.api('unified_search?q=slow'); self.assertTrue(self.good.started.wait(10))
         d=self.api('unified_search'); self.api('unified_search/cancel?generation='+str(d['generation']),'POST')
@@ -88,6 +106,11 @@ class SourceReliabilityTest(unittest.TestCase):
         self.assertTrue(any(r.get('provider')=='somafm' for r in d['results']),d)
         source=next(s for s in self.api('plugins')['sources'] if s['id']=='somafm')
         self.assertEqual(source['health']['state'],'available'); self.assertTrue(source['health']['fallback'])
+        for authority in ('www.jiosaavn.com:443', 'all.api.radio-browser.info:443'):
+            self.assertIn(authority,self.good.connects,
+                          'public default bypassed the rejecting fixture proxy')
+        self.assertGreater(self.bad.hits,0,'configured primary was not attempted')
+        self.assertGreater(self.good.hits,0,'configured mirror did not receive local requests')
 
 if __name__=='__main__':
     p=argparse.ArgumentParser(); p.add_argument('--binary',required=True); p.add_argument('--port',type=int,default=41785)
