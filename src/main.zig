@@ -14,6 +14,10 @@ const std = @import("std");
 test "TV detail module" {
     _ = @import("services/tmdb.zig");
 }
+
+test "Native TV episodes module" {
+    if (!@import("build_options").headless) _ = @import("services/tmdb.zig");
+}
 test "Native Search gallery offline SDL pixel capture" {
     if (!@import("build_options").headless) _ = @import("services/search_gallery_native_test.zig");
 }
@@ -1405,11 +1409,6 @@ fn appFrame() !dvui.App.Result {
     // frees textures via dvui, which is UI-thread-only).
     @import("services/comics.zig").drainPendingLoad();
 
-    // Keep an in-progress podcast episode mirrored into library_items (its
-    // position is already persisted by the mpv path; this gives it a real
-    // `podcast` row). Self-throttled — cheap to call every frame.
-    @import("services/podcasts.zig").tickNowPlaying();
-
     // Process deferred player removal (safe: before any rendering)
     if (state.app.pending_remove_player_idx >= 0) {
         const idx = @as(usize, @intCast(state.app.pending_remove_player_idx));
@@ -1575,16 +1574,7 @@ fn appFrame() !dvui.App.Result {
         }
     }
 
-    // Apply live-stream resolver publications on the UI thread before pumping
-    // mpv. Resolver workers never retain or dereference player pointers.
-    @import("services/streamlink.zig").drainResolved();
-    @import("services/youtube_player.zig").drainResolved();
-    player.updateTorrentBackgroundTasks();
-    @import("services/jellyfin.zig").drainTranscodeRecovery();
-    @import("services/tmdb.zig").checkEpisodeStartup();
-    @import("services/tmdb.zig").applyPendingDetail();
-    @import("services/anime.zig").applyPendingEpisodes();
-    @import("services/anime.zig").applyPendingPlayback();
+    @import("application/playback_update.zig").tick();
 
     // Native macOS Now Playing + hardware media keys: drain pending remote
     // commands (play/pause/seek from media keys, AirPods, Control Center)
@@ -1592,15 +1582,6 @@ fn appFrame() !dvui.App.Result {
     // Compiles to a no-op on non-macOS.
     @import("player/media_remote.zig").frameTick();
     @import("macos/app_menu.zig").frameTick();
-
-    // Anime-Skip: auto-skip crowdsourced intro/recap/credits segments on the
-    // active anime player (no-op unless anime-skip is enabled + markers loaded
-    // + the active player is anime-sourced).
-    @import("services/anime_skip.zig").tick();
-
-    // Audiobookshelf: seek a freshly-opened book to its server-saved position
-    // (no-op unless a resume is pending + the fetch resolved + mpv has the file).
-    @import("services/audiobookshelf.zig").tick();
 
     // Live public tracker list: load the cache on the first tick, re-fetch once
     // a day on a worker. What gets injected into every magnet/.torrent on add,

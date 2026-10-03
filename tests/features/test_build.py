@@ -187,13 +187,12 @@ def test_headless_mode():
         "pub fn headlessMain" in hl and "shutdown" in hl and "sigaction" in hl,
         "pub fn detect" in det,
         "is_headless" in st,
-        # T6 bind. The literal moved into access_pure.BindMode when the bind
-        # address became configurable; headless still defaults to LAN.
-        "bind_mode.address()" in rem and "is_headless" in rem,
+        # Headless and desktop share explicit secure deployment policy.
+        "effectiveBindMode().address()" in rem and "OPAL_HTTPS_PROXY" in rem,
         '"headless"' in bld,                                    # -Dheadless option
     ]
     if all(checks):
-        return "pass", "compile-time headless entry + coreInit/headlessMain + 0.0.0.0 bind + -Dheadless"
+        return "pass", "compile-time headless entry + coreInit/headlessMain + explicit listener policy + -Dheadless"
     return "fail", f"headless wiring incomplete: {checks}"
 
 

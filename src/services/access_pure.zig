@@ -29,13 +29,16 @@ pub const Capability = enum {
     rotate_machine_token,
     change_binding,
     manage_users,
+    administer_host,
+    approve_executable,
 };
 
 pub fn allows(principal: Principal, capability: Capability) bool {
     return switch (capability) {
         .view_access, .revoke_sessions => true,
         .change_own_password => principal != .machine,
-        .manage_users => principal == .machine or principal == .admin_session,
+        .manage_users, .administer_host => principal == .machine or principal == .admin_session,
+        .approve_executable,
         .reset_any_password,
         .reveal_machine_token,
         .rotate_machine_token,
@@ -50,12 +53,7 @@ pub fn isSession(principal: Principal) bool {
 
 // ── Bind mode ──────────────────────────────────────────────────────────────
 
-/// Which interfaces the web server listens on.
-///
-/// `lan` (0.0.0.0) is the historical, and still default, behaviour — the whole
-/// point of Web Remote is reaching Opal from a phone. `loopback` (127.0.0.1)
-/// is for people who only ever drive it from the same machine and do not want
-/// the JSON API answering on their network at all.
+/// Loopback is the safe default. LAN HTTP requires an explicit configuration.
 pub const BindMode = enum {
     lan,
     loopback,
@@ -72,12 +70,10 @@ pub const BindMode = enum {
     }
 };
 
-/// Parse a bind mode from an API/config string. Unknown values fall back to
-/// `.lan` rather than erroring: a corrupt config must not silently make the
-/// server unreachable from the phone it was set up for.
+/// Invalid or missing configuration fails closed to loopback.
 pub fn bindModeFromString(s: []const u8) BindMode {
-    if (std.mem.eql(u8, s, "loopback")) return .loopback;
-    return .lan;
+    if (std.mem.eql(u8, s, "lan")) return .lan;
+    return .loopback;
 }
 
 /// Ports Opal will bind. Below 1024 needs root on POSIX and would fail at
@@ -143,13 +139,13 @@ test "bindMode: address mapping" {
     try std.testing.expectEqualStrings("127.0.0.1", BindMode.loopback.address());
 }
 
-test "bindModeFromString: known values, and unknown falls back to lan" {
+test "bindModeFromString: known values, and unknown fails closed to loopback" {
     try std.testing.expectEqual(BindMode.loopback, bindModeFromString("loopback"));
     try std.testing.expectEqual(BindMode.lan, bindModeFromString("lan"));
-    // A corrupt/legacy config must not strand the phone that uses this.
-    try std.testing.expectEqual(BindMode.lan, bindModeFromString(""));
-    try std.testing.expectEqual(BindMode.lan, bindModeFromString("LOOPBACK"));
-    try std.testing.expectEqual(BindMode.lan, bindModeFromString("garbage"));
+    // Missing or invalid configuration must not expose a network listener.
+    try std.testing.expectEqual(BindMode.loopback, bindModeFromString(""));
+    try std.testing.expectEqual(BindMode.loopback, bindModeFromString("LOOPBACK"));
+    try std.testing.expectEqual(BindMode.loopback, bindModeFromString("garbage"));
 }
 
 test "validPort: privileged and out-of-range rejected" {
@@ -240,4 +236,42 @@ test "machine credential carries only the intended recovery capabilities" {
     try std.testing.expect(allows(.machine, .revoke_sessions));
     try std.testing.expect(allows(.machine, .manage_users));
     try std.testing.expect(!allows(.machine, .change_own_password));
+}
+
+/// Central authorization before feature dispatch. Parameters are decoded by
+/// the HTTP adapter; handlers never decide privilege from a confirmation flag.
+pub fn routeCapability(path: []const u8, method: []const u8, action: []const u8) ?Capability {
+    if (std.mem.eql(u8, path, "/plugins") and !std.mem.eql(u8, method, "GET")) {
+        if (std.mem.eql(u8, action, "approve-exec") or std.mem.eql(u8, action, "revoke-exec")) return .approve_executable;
+        return .administer_host;
+    }
+    const host_routes = [_][]const u8{
+        "/setup/sources",        "/setup/tmdb",     "/settings",            "/settings/toggle",
+        "/source/add",           "/source/config",  "/livetv/sources",      "/rss/manage",
+        "/local-library/action", "/jellyfin/login", "/jellyfin/disconnect", "/abs/login",
+        "/abs/logout",           "/opds/connect",   "/opds/disconnect",     "/plex/connect",
+        "/plex/disconnect",      "/suwayomi",       "/sync-accounts",       "/trakt",
+        "/webui",                "/logs/clear",
+    };
+    for (host_routes) |route| if (std.mem.eql(u8, path, route)) return .administer_host;
+    return null;
+}
+
+pub fn allowsRoute(principal: Principal, path: []const u8, method: []const u8, action: []const u8) bool {
+    const capability = routeCapability(path, method, action) orelse return true;
+    return allows(principal, capability);
+}
+
+test "route privilege matrix protects host administration and executable trust" {
+    for ([_]Principal{ .machine, .admin_session, .session }) |principal| {
+        try std.testing.expectEqual(principal == .machine, allowsRoute(principal, "/plugins", "POST", "approve-exec"));
+        try std.testing.expectEqual(principal == .machine, allowsRoute(principal, "/plugins", "POST", "revoke-exec"));
+        try std.testing.expectEqual(principal != .session, allowsRoute(principal, "/plugins", "POST", "install"));
+        try std.testing.expectEqual(principal != .session, allowsRoute(principal, "/local-library/action", "POST", "add-root"));
+        try std.testing.expectEqual(principal != .session, allowsRoute(principal, "/jellyfin/login", "POST", ""));
+        try std.testing.expectEqual(principal != .session, allowsRoute(principal, "/setup/tmdb", "GET", ""));
+        try std.testing.expect(allowsRoute(principal, "/plugins", "GET", ""));
+        try std.testing.expect(allowsRoute(principal, "/status", "GET", ""));
+        try std.testing.expect(allowsRoute(principal, "/jellyfin/play", "POST", ""));
+    }
 }

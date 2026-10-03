@@ -193,7 +193,7 @@ def test_podcast_resume():
         "now-playing state": "np_url" in st and "np_active" in st,
         # The mirror runs on a path that actually executes every frame.
         "armed on play": "armNowPlaying(" in podcasts,
-        "ticked from appFrame": "tickNowPlaying()" in main,
+        "ticked from appFrame": 'application/playback_update.zig").tick();' in main and "tickNowPlaying()" in _src("src/application/playback_update.zig"),
         "throttled": "NP_INTERVAL_MS" in podcasts,
         # Reopen from home.
         "deep link opener": "pub fn openDeepLink" in podcasts,

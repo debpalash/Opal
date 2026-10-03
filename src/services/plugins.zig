@@ -367,7 +367,8 @@ const LUA_SANDBOX_PRELUDE: []const u8 =
     \\os.execute=nil os.remove=nil os.rename=nil os.exit=nil os.tmpname=nil os.getenv=nil
     \\io.popen=nil io.open=nil io.input=nil io.output=nil io.lines=nil
     \\if package then package.loadlib=nil package.path="" package.cpath="" package.preload={} end
-    \\debug=nil
+    \\if package then package.searchers=nil package.loaders=nil package.loaded={} end
+    \\package=nil debug=nil
     \\dofile=nil loadfile=nil loadstring=nil load=nil
     \\require=function(m) error("require denied: "..tostring(m)) end
     \\
@@ -422,9 +423,9 @@ fn logUntrustedNative(p: *const Plugin) void {
     var buf: [1100]u8 = undefined;
     const msg = std.fmt.bufPrintZ(
         &buf,
-        "Blocked untrusted native plugin: {s}. Review it, then create {s} to approve this exact version.",
+        "Blocked unapproved executable plugin: {s}. Review it, then create {s} to approve this exact version.",
         .{ p.name[0..p.name_len], marker },
-    ) catch "Blocked untrusted native plugin";
+    ) catch "Blocked unapproved executable plugin";
     logs.pushLog("error", "plugins", msg, true);
 }
 

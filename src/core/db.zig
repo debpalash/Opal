@@ -98,6 +98,13 @@ pub fn deinit() void {
     initialized = false;
 }
 
+pub const Transaction = @import("sqlite_transaction.zig").Transaction;
+
+pub fn beginTransaction() !Transaction {
+    const connection = db_handle orelse return error.DatabaseUnavailable;
+    return Transaction.begin(@ptrCast(connection));
+}
+
 pub fn get() ?*Sqlite3 {
     return db_handle;
 }
@@ -754,6 +761,11 @@ pub fn tableExists(name: []const u8) bool {
     return step(stmt) == c.SQLITE_ROW;
 }
 
+pub fn execChecked(sql: [*:0]const u8) !void {
+    const connection = db_handle orelse return error.DatabaseUnavailable;
+    if (c.sqlite3_exec(connection, sql, null, null, null) != c.SQLITE_OK) return error.SqlFailed;
+}
+
 pub fn exec(sql: [*:0]const u8) void {
     const d = db_handle orelse return;
     _ = c.sqlite3_exec(d, sql, null, null, null);
@@ -854,10 +866,11 @@ pub fn copyColumn(stmt: ?*Stmt, col: c_int, dest: []u8, len_ptr: *usize) void {
 }
 
 pub fn insertMemory(role: []const u8, content: []const u8, context_type: []const u8, media_title: []const u8, embed: []const f32) void {
-    const d = db_handle orelse return;
+    var transaction = beginTransaction() catch return;
+    defer transaction.deinit();
 
     // 1. Insert Text Memory
-    const stmt = prepare("INSERT INTO aimemory(role, content, context_type, media_title) VALUES(?, ?, ?, ?)");
+    const stmt = prepare("INSERT INTO aimemory(role, content, context_type, media_title) VALUES(?, ?, ?, ?) RETURNING rowid");
     if (stmt == null) return;
     defer finalize(stmt);
 
@@ -866,9 +879,9 @@ pub fn insertMemory(role: []const u8, content: []const u8, context_type: []const
     bindText(stmt, 3, context_type);
     bindText(stmt, 4, media_title);
 
+    if (step(stmt) != c.SQLITE_ROW) return;
+    const rowid = columnInt64(stmt, 0);
     if (step(stmt) != c.SQLITE_DONE) return;
-
-    const rowid = c.sqlite3_last_insert_rowid(d);
 
     // 2. Insert Vector Memory
     const vec_stmt = prepare("INSERT INTO vec_aimemory(rowid, embedding) VALUES(?, ?)");
@@ -881,7 +894,8 @@ pub fn insertMemory(role: []const u8, content: []const u8, context_type: []const
     const embed_bytes = std.mem.sliceAsBytes(embed);
     bindBlob(vec_stmt, 2, embed_bytes);
 
-    _ = step(vec_stmt);
+    if (step(vec_stmt) != c.SQLITE_DONE) return;
+    transaction.commit() catch return;
 }
 
 pub fn retrieveMemory(allocator: std.mem.Allocator, embed: []const f32, limit: i32) ?[]u8 {
@@ -954,10 +968,11 @@ pub const SceneHit = struct {
 /// (rowid-linked) for cosine recall; when null the aimemory row is still
 /// inserted so the keyword/LIKE fallback in retrieveScene can find it.
 pub fn insertSceneMemory(title: []const u8, content: []const u8, position_secs: f64, embed: ?[]const f32) void {
-    const d = db_handle orelse return;
+    var transaction = beginTransaction() catch return;
+    defer transaction.deinit();
 
     // 1. Insert text memory (always — this is what FTS/keyword fallback hits).
-    const stmt = prepare("INSERT INTO aimemory(role, content, context_type, media_title, position_secs) VALUES(?, ?, ?, ?, ?)");
+    const stmt = prepare("INSERT INTO aimemory(role, content, context_type, media_title, position_secs) VALUES(?, ?, ?, ?, ?) RETURNING rowid");
     if (stmt == null) return;
     defer finalize(stmt);
 
@@ -967,13 +982,19 @@ pub fn insertSceneMemory(title: []const u8, content: []const u8, position_secs: 
     bindText(stmt, 4, title);
     bindDouble(stmt, 5, position_secs);
 
+    if (step(stmt) != c.SQLITE_ROW) return;
+    const rowid = columnInt64(stmt, 0);
     if (step(stmt) != c.SQLITE_DONE) return;
 
-    const rowid = c.sqlite3_last_insert_rowid(d);
-
     // 2. Insert vector memory only when an embedding was supplied.
-    const e = embed orelse return;
-    if (e.len == 0) return;
+    const e = embed orelse {
+        transaction.commit() catch return;
+        return;
+    };
+    if (e.len == 0) {
+        transaction.commit() catch return;
+        return;
+    }
 
     const vec_stmt = prepare("INSERT INTO vec_aimemory(rowid, embedding) VALUES(?, ?)");
     if (vec_stmt == null) return;
@@ -983,7 +1004,8 @@ pub fn insertSceneMemory(title: []const u8, content: []const u8, position_secs: 
     const embed_bytes = std.mem.sliceAsBytes(e);
     bindBlob(vec_stmt, 2, embed_bytes);
 
-    _ = step(vec_stmt);
+    if (step(vec_stmt) != c.SQLITE_DONE) return;
+    transaction.commit() catch return;
 }
 
 /// Vector (or keyword) search over scene memories with a spoiler clamp:

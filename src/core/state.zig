@@ -701,13 +701,13 @@ pub const AppState = struct {
     // with the image base hard-coded at the render site, which is why no
     // non-TMDB source could ever show art on the loading screen. It now holds
     // either a fragment or a full URL (a Subsonic/Jellyfin/Plex cover, an
-    // anime poster) — see ui/loading_pure.posterUrl.
+    // anime poster) — see core/loading_pure.posterUrl.
     pending_play_art: [256]u8 = std.mem.zeroes([256]u8),
     pending_play_art_len: usize = 0,
     pending_play_overview: [400]u8 = std.mem.zeroes([400]u8),
     pending_play_overview_len: usize = 0,
     pending_play_is_tv: bool = false,
-    /// ui/loading_pure.MediaKind as an integer (fixed-size-state convention).
+    /// core/loading_pure.MediaKind as an integer (fixed-size-state convention).
     pending_play_kind: u8 = 0,
     pending_play_year: [8]u8 = std.mem.zeroes([8]u8),
     pending_play_year_len: usize = 0,
@@ -1637,7 +1637,7 @@ pub fn stashPendingPlayFull(
     title: []const u8,
     art: []const u8,
     overview: []const u8,
-    kind: @import("../ui/loading_pure.zig").MediaKind,
+    kind: @import("loading_pure.zig").MediaKind,
     year: []const u8,
     rating: f32,
     extra: []const u8,
@@ -1707,13 +1707,13 @@ pub const PendingPlay = struct {
     // with the image base hard-coded at the render site, which is why no
     // non-TMDB source could ever show art on the loading screen. It now holds
     // either a fragment or a full URL (a Subsonic/Jellyfin/Plex cover, an
-    // anime poster) — see ui/loading_pure.posterUrl.
+    // anime poster) — see core/loading_pure.posterUrl.
     art: [256]u8 = std.mem.zeroes([256]u8),
     art_len: usize = 0,
     overview: [400]u8 = std.mem.zeroes([400]u8),
     overview_len: usize = 0,
     is_tv: bool = false,
-    /// ui/loading_pure.MediaKind as an integer (fixed-size-state convention).
+    /// core/loading_pure.MediaKind as an integer (fixed-size-state convention).
     kind: u8 = 0,
     year: [8]u8 = std.mem.zeroes([8]u8),
     year_len: usize = 0,

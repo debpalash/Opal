@@ -208,7 +208,8 @@ pub fn migrateFromTsv() void {
     const n = @import("../core/io_global.zig").readAll(file, &read_buf) catch return;
     if (n == 0) return;
 
-    db.exec("BEGIN");
+    var transaction = db.beginTransaction() catch return;
+    defer transaction.deinit();
 
     var lines = std.mem.splitScalar(u8, read_buf[0..n], '\n');
     while (lines.next()) |line| {
@@ -241,7 +242,7 @@ pub fn migrateFromTsv() void {
         addToDbList(id, list_name);
     }
 
-    db.exec("COMMIT");
+    transaction.commit() catch return;
 
     var old_buf: [512]u8 = undefined;
     const old_path = std.fmt.bufPrint(&old_buf, "{s}/tmdb_lists.tsv.migrated", .{home}) catch return;

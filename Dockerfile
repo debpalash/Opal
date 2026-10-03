@@ -121,7 +121,8 @@ RUN mkdir -p /config /cache /media
 ENV XDG_CONFIG_HOME=/config \
     XDG_CACHE_HOME=/cache \
     HOME=/config \
-    OPAL_HEADLESS=1
+    OPAL_HEADLESS=1 \
+    OPAL_WEB_BIND=lan
 
 # One port: web UI + JSON API, served by opal itself. First-admin creation also
 # requires the one-time, owner-only /config/opal/setup.token credential. The

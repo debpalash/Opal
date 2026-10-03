@@ -93,7 +93,12 @@ def request(
             ]
         )
 
-    conn = http.client.HTTPConnection("127.0.0.1", PORT, timeout=4)
+    # bcrypt in a Debug binary can exceed four seconds on a busy CI host.
+    # This is a test-client deadline; production authentication is unchanged.
+    auth_request = path.split("?", 1)[0] in (
+        "/api/auth/register", "/api/auth/login", "/api/access/users/create",
+    )
+    conn = http.client.HTTPConnection("127.0.0.1", PORT, timeout=15 if auth_request else 4)
     try:
         conn.putrequest(method, path, skip_host=True, skip_accept_encoding=True)
         for key, value in headers:
@@ -141,7 +146,7 @@ class IsolatedOpal:
         if os.name == "posix":
             self.setup_path.chmod(0o600)
 
-    def start(self, *, require_setup: bool = True) -> str:
+    def start(self, *, require_setup: bool = True, https_proxy: bool = False) -> str:
         assert BINARY is not None
         self._require_free_port()
         for directory in (
@@ -175,6 +180,8 @@ class IsolatedOpal:
                 "OPAL_HEADLESS": "1",
             }
         )
+        env.pop("OPAL_WEB_BIND", None)
+        env["OPAL_HTTPS_PROXY"] = "1" if https_proxy else "0"
         env.pop("DISPLAY", None)
         env.pop("WAYLAND_DISPLAY", None)
         self.process = subprocess.Popen(
@@ -459,7 +466,7 @@ class SetupTokenLiveTest(unittest.TestCase):
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
             futures = [pool.submit(contender, "racer-a"), pool.submit(contender, "racer-b")]
             barrier.wait(timeout=5)
-            responses = [future.result(timeout=15) for future in futures]
+            responses = [future.result(timeout=20) for future in futures]
 
         self.assertEqual(sorted(response.status for response in responses), [200, 403])
         winners = [response for response in responses if response.status == 200]

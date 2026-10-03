@@ -2670,7 +2670,7 @@ pub fn playDirect(request: PlaybackRequest) void {
             @memcpy(metadata.art[0..metadata.art_len], request.art_url[0..metadata.art_len]);
             metadata.extra_len = @min(request.subtitle.len, metadata.extra.len);
             @memcpy(metadata.extra[0..metadata.extra_len], request.subtitle[0..metadata.extra_len]);
-            metadata.kind = @import("../ui/loading_pure.zig").MediaKind.other.toInt();
+            metadata.kind = @import("../core/loading_pure.zig").MediaKind.other.toInt();
         }
         state.applyPendingPlay(p, metadata);
     }

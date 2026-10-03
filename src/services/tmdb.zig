@@ -67,6 +67,8 @@ test "TV detail restore rearms the exact episode without resolving or autoplay" 
 }
 
 test "TV detail transport failure is retrying rather than an empty catalog" {
+    logs.logs_allocator = alloc;
+    defer logs.deinit();
     const t = &state.app.tmdb;
     defer {
         t.tv_episodes_loading = false;
@@ -3071,8 +3073,8 @@ fn renderTvDetail() void {
             .expand = .horizontal,
             .padding = .{ .x = 16, .y = 12, .w = 16, .h = 10 },
             .background = true,
-            .color_fill = theme.colors.bg_glass,
-            .color_border = theme.colors.border_strong,
+            .color_fill = theme.colors.bg_deep,
+            .color_border = theme.colors.border_subtle,
             .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
         });
         defer hdr.deinit();
@@ -3090,14 +3092,17 @@ fn renderTvDetail() void {
         var tvn_buf: [128]u8 = undefined;
         // The name expands, so it eats the slack and pushes the status chips to
         // the right edge of the header.
-        var show_title = dvui.textLayout(@src(), .{}, .{
+        const heading_font = dvui.themeGet().font_heading.withSize(if (layout.stacked) 22 else 28);
+        var show_title = dvui.textLayout(@src(), .{ .break_lines = false }, .{
             .background = false,
             .color_text = theme.colors.text_primary,
             .expand = .horizontal,
-            .font = dvui.themeGet().font_heading.withSize(if (layout.stacked) 24 else 28),
+            .font = heading_font,
             .padding = dvui.Rect.all(0),
         });
-        show_title.addText(safeUtf8Buf(t.tv_name[0..@min(t.tv_name_len, t.tv_name.len)], &tvn_buf), .{});
+        var heading_preview: [256]u8 = undefined;
+        const heading = safeUtf8Buf(t.tv_name[0..@min(t.tv_name_len, t.tv_name.len)], &tvn_buf);
+        show_title.addText(tvCardPreview(heading, heading_font, @max(80, identity.data().contentRect().w), &heading_preview), .{});
         show_title.deinit();
         var next_buf: [96]u8 = undefined;
         if (@import("tvmaze.zig").nextLabel(t.tv_id, &next_buf)) |next_str| {
@@ -3176,7 +3181,7 @@ fn renderTvDetail() void {
         return;
     }
 
-    var controls = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
+    var controls = dvui.box(@src(), .{ .dir = if (layout.width < 1000) .vertical else .horizontal }, .{
         .expand = .horizontal,
         .padding = .{ .x = 8, .y = 6, .w = 8, .h = 4 },
     });
@@ -3241,7 +3246,7 @@ fn renderTvDetail() void {
         // Season identity and progress sit in this same toolbar instead of
         // consuming another full-width band below the selector.
         if (t.tv_episode_count > 0 or (t.tv_sel_season < t.tv_season_count)) {
-            var sinfo = dvui.box(@src(), .{ .dir = if (layout.stacked) .vertical else .horizontal }, .{
+            var sinfo = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .expand = .none,
             });
             defer sinfo.deinit();
@@ -3269,6 +3274,7 @@ fn renderTvDetail() void {
                 var wbuf: [32]u8 = undefined;
                 const ws = std.fmt.bufPrint(&wbuf, "{d}/{d} watched", .{ watched, total }) catch "";
                 _ = dvui.label(@src(), "{s}", .{ws}, .{
+                    .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
                     .color_text = theme.colors.text_secondary,
                     .gravity_y = if (layout.stacked) 0 else 0.5,
                 });
@@ -3285,8 +3291,8 @@ fn renderTvDetail() void {
     // offering a Resume that would go hunting for an episode that doesn't exist.
     if (t.tv_episode_count > 0) {
         const nxt = tvNextUp();
-        var prow = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
-            .expand = .none,
+        var prow = dvui.box(@src(), .{ .dir = if (layout.stacked) .vertical else .horizontal }, .{
+            .expand = if (layout.stacked) .horizontal else .none,
             .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
             .background = false,
         });
@@ -3301,17 +3307,19 @@ fn renderTvDetail() void {
         // Resume — lucide play + label (the "▶" glyph rendered as tofu).
         if (nxt) |next_ep| {
             var resume_label_buf: [48]u8 = undefined;
-            const resume_label = std.fmt.bufPrint(&resume_label_buf, "Continue · S{d:0>2} E{d:0>2}", .{ next_ep.season, next_ep.episode }) catch "Continue";
+            var episode_label_buf: [16]u8 = undefined;
+            const resume_label = std.fmt.bufPrint(&resume_label_buf, "Continue · {s}", .{@import("tv_pure.zig").episodeLabel(next_ep, &episode_label_buf)}) catch "Continue";
             const act = @import("tv_pure.zig").playAction(play_busy, resume_label);
             var res = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .background = true,
                 .color_fill = if (play_busy) theme.colors.bg_elevated else theme.colors.accent,
                 .corner_radius = theme.dims.rad_sm,
                 .padding = .{ .x = 12, .y = 5, .w = 14, .h = 5 },
-                .margin = .{ .x = 0, .y = 0, .w = 12, .h = 0 },
-                .gravity_y = 0.5,
+                .margin = .{ .x = 0, .y = 0, .w = if (layout.stacked) 0 else 12, .h = if (layout.stacked) 6 else 0 },
+                .gravity_y = if (layout.stacked) 0 else 0.5,
             });
             defer res.deinit();
+            if (@import("builtin").is_test) @import("tmdb_native_test.zig").action(0, res.data().borderRect());
             var res_hover = false;
             const res_clicked = dvui.clicked(res.data(), .{ .hovered = &res_hover });
             res.drawBackground();
@@ -3362,10 +3370,11 @@ fn renderTvDetail() void {
                 .color_fill = theme.colors.bg_elevated,
                 .corner_radius = theme.dims.rad_sm,
                 .padding = .{ .x = 12, .y = 5, .w = 14, .h = 5 },
-                .margin = .{ .x = 0, .y = 0, .w = 12, .h = 0 },
-                .gravity_y = 0.5,
+                .margin = .{ .x = 0, .y = 0, .w = if (layout.stacked) 0 else 12, .h = if (layout.stacked) 6 else 0 },
+                .gravity_y = if (layout.stacked) 0 else 0.5,
             });
             defer lat.deinit();
+            if (@import("builtin").is_test) @import("tmdb_native_test.zig").action(1, lat.data().borderRect());
             var lat_hover = false;
             const lat_clicked = dvui.clicked(lat.data(), .{ .hovered = &lat_hover });
             if (lat_hover and !play_busy) lat.data().options.color_fill = theme.colors.bg_hover;
@@ -3466,7 +3475,7 @@ fn renderTvDetail() void {
 
     var episode_catalog = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
-        .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
+        .padding = .{ .x = 12, .y = 16, .w = 12, .h = 16 },
     });
     defer episode_catalog.deinit();
 
@@ -3513,9 +3522,9 @@ fn renderTvDetail() void {
     var episode_row: ?*dvui.BoxWidget = null;
 
     const title_font = dvui.themeGet().font_heading.withSize(16);
-    const body_font = dvui.themeGet().font_body.withSize(12.5);
+    const body_font = dvui.themeGet().font_body.withSize(13);
     const meta_font = dvui.themeGet().font_body.withSize(11.5);
-    const info_height = title_font.lineHeight() * 2 + body_font.lineHeight() * 2 + meta_font.lineHeight() + 46;
+    const info_height = title_font.lineHeight() * 2 + body_font.lineHeight() * 2 + meta_font.lineHeight() + 64;
     const episode_card_h = layout.thumbnail_height + info_height;
     const episode_gap: f32 = 12;
     // The exact border + gutter extent is also used by virtual spacers.
@@ -3561,12 +3570,12 @@ fn renderTvDetail() void {
         // Upload still texture if pixel data arrived from the fetch worker.
         _ = poster.uploadIfReady(&e.still_pixels, e.still_w, e.still_h, &e.still_tex);
 
-        const card_fill = theme.colors.bg_glass;
+        const card_fill = theme.colors.bg_surface;
         var ecard = dvui.box(@src(), .{ .dir = .vertical }, .{
             .id_extra = ei + 40000,
             .background = true,
             .color_fill = card_fill,
-            .color_border = if (is_next and playable) theme.colors.accent_dim else theme.colors.border_strong,
+            .color_border = if (is_next and playable) theme.colors.accent_dim else theme.colors.border_subtle,
             .border = dvui.Rect.all(1),
             .corner_radius = dvui.Rect.all(12),
             .padding = dvui.Rect.all(0),
@@ -3581,14 +3590,16 @@ fn renderTvDetail() void {
             const thumb_h = layout.thumbnail_height;
             var still_box = dvui.overlay(@src(), .{
                 .id_extra = ei + 42000,
+                .corner_radius = .{ .x = 11, .y = 11, .w = 0, .h = 0 },
                 .background = true,
                 .color_fill = theme.colors.bg_elevated,
                 .min_size_content = .{ .w = thumb_w, .h = thumb_h },
                 .max_size_content = .{ .w = thumb_w, .h = thumb_h },
                 .gravity_x = 0.5,
-                .gravity_y = 0.5,
+                .gravity_y = 0,
             });
             defer still_box.deinit();
+            if (@import("builtin").is_test) @import("tmdb_native_test.zig").artwork(ei, still_box.data().borderRect());
 
             if (e.still_tex != null) {
                 const tex = &e.still_tex.?;
@@ -3612,7 +3623,7 @@ fn renderTvDetail() void {
                     .color_text = theme.colors.text_secondary,
                     .gravity_x = 0.5,
                     .gravity_y = 0.5,
-                    .expand = .both,
+                    .expand = .none,
                     .font = dvui.themeGet().font_heading,
                 });
                 // Start the fetch if available and not yet tried
@@ -3648,18 +3659,22 @@ fn renderTvDetail() void {
             var info = dvui.box(@src(), .{ .dir = .vertical }, .{
                 .id_extra = ei + 43000,
                 .expand = .horizontal,
-                .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
-                .min_size_content = .{ .w = 0, .h = info_height - 16 },
-                .max_size_content = .{ .w = layout.card_width - 24, .h = info_height - 16 },
+                .background = true,
+                .color_fill = theme.colors.bg_surface,
+                .corner_radius = .{ .x = 0, .y = 0, .w = 11, .h = 11 },
+                .padding = .{ .x = 16, .y = 16, .w = 16, .h = 16 },
+                .min_size_content = .{ .w = 0, .h = info_height - 32 },
+                .max_size_content = .{ .w = layout.card_width - 32, .h = info_height - 32 },
             });
             defer info.deinit();
+            if (@import("builtin").is_test) @import("tmdb_native_test.zig").information(ei, info.data().borderRect());
 
             // Episode badges and actions share a fixed utility row.
             {
                 var title_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
                     .id_extra = ei + 43100,
                     .min_size_content = .{ .w = 0, .h = 24 },
-                    .max_size_content = .{ .w = layout.card_width - 24, .h = 24 },
+                    .max_size_content = .{ .w = layout.card_width - 32, .h = 24 },
                     .expand = .horizontal,
                 });
                 defer title_row.deinit();
@@ -3679,12 +3694,12 @@ fn renderTvDetail() void {
 
                 // "Next" badge for the next unwatched episode
                 if (is_next and playable) {
-                    _ = dvui.label(@src(), "Next", .{}, .{
+                    _ = dvui.label(@src(), "Up next", .{}, .{
                         .id_extra = ei + 43115,
                         .font = meta_font,
                         .background = true,
-                        .color_fill = theme.colors.accent,
-                        .color_text = theme.colors.text_on_accent,
+                        .color_fill = theme.colors.accent_dim,
+                        .color_text = theme.colors.accent,
                         .corner_radius = theme.dims.rad_sm,
                         .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
                         .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
@@ -3710,7 +3725,7 @@ fn renderTvDetail() void {
                 var utility_spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
                 utility_spacer.deinit();
                 if (playable) {
-                    if (dvui.buttonIcon(@src(), "ep-play", icons.tvg.lucide.play, .{}, .{}, .{
+                    if (dvui.buttonIcon(@src(), "Play episode", icons.tvg.lucide.play, .{}, .{}, .{
                         .id_extra = ei + 43130,
                         .color_fill = theme.colors.accent_dim,
                         .color_text = theme.colors.accent,
@@ -3721,7 +3736,7 @@ fn renderTvDetail() void {
                         .gravity_y = 0.5,
                     })) playTvEpisode(e.episode_number);
 
-                    if (dvui.buttonIcon(@src(), "ep-watched", if (is_watched) icons.tvg.lucide.@"circle-check-big" else icons.tvg.lucide.circle, .{}, .{}, .{
+                    if (dvui.buttonIcon(@src(), if (is_watched) "Mark unwatched" else "Mark watched", if (is_watched) icons.tvg.lucide.@"circle-check-big" else icons.tvg.lucide.circle, .{}, .{}, .{
                         .id_extra = ei + 43140,
                         .color_fill = if (is_watched) theme.colors.success else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
                         .color_text = if (is_watched) dvui.Color.white else theme.colors.text_secondary,
@@ -3743,14 +3758,14 @@ fn renderTvDetail() void {
                 .font = title_font,
                 .padding = dvui.Rect.all(0),
                 .min_size_content = .{ .w = 0, .h = title_font.lineHeight() * 2 },
-                .max_size_content = .{ .w = layout.card_width - 24, .h = title_font.lineHeight() * 2 },
+                .max_size_content = .{ .w = layout.card_width - 32, .h = title_font.lineHeight() * 2 },
             });
             const ep_name = if (e.name_len > 0)
                 safeUtf8Buf(e.name[0..@min(e.name_len, e.name.len)], &ep_name_buf)
             else
                 "Title to be announced";
             var title_preview: [256]u8 = undefined;
-            const fitted_title = tvCardPreview(ep_name, title_font, layout.card_width - 24, &title_preview);
+            const fitted_title = tvCardPreview(ep_name, title_font, layout.card_width - 32, &title_preview);
             if (playable) {
                 if (episode_title.addTextClick(fitted_title, .{}) != null) playTvEpisode(e.episode_number);
             } else {
@@ -3763,7 +3778,7 @@ fn renderTvDetail() void {
             {
                 const ov_raw = e.overview[0..@min(e.overview_len, e.overview.len)];
                 var ov_clip_buf: [1024]u8 = undefined;
-                const ov_short = tvCardPreview(ov_raw, body_font, layout.card_width - 24, &ov_clip_buf);
+                const ov_short = tvCardPreview(ov_raw, body_font, layout.card_width - 32, &ov_clip_buf);
                 var overview = dvui.textLayout(@src(), .{ .break_lines = false }, .{
                     .background = false,
                     .id_extra = ei + 43200,
@@ -3771,7 +3786,7 @@ fn renderTvDetail() void {
                     .color_text = theme.colors.text_secondary,
                     .font = body_font,
                     .min_size_content = .{ .w = 0, .h = body_font.lineHeight() * 2 },
-                    .max_size_content = .{ .w = layout.card_width - 24, .h = body_font.lineHeight() * 2 },
+                    .max_size_content = .{ .w = layout.card_width - 32, .h = body_font.lineHeight() * 2 },
                     .padding = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
                 });
                 overview.addText(safeUtf8(ov_short), .{});
@@ -3851,6 +3866,8 @@ test "TV detail formatted series metadata keeps seasons and episode titles" {
 }
 
 test "TV detail season switches reuse the published series document without a worker" {
+    logs.logs_allocator = alloc;
+    defer logs.deinit();
     defer deinitDetail();
     const t = &state.app.tmdb;
     const old_imdb_len = t.tv_imdb_id_len;
@@ -3867,4 +3884,21 @@ test "TV detail season switches reuse the published series document without a wo
     try std.testing.expectEqual(@as(usize, 1), t.tv_episode_count);
     try std.testing.expectEqual(@as(i32, 3), t.tv_episodes[0].episode_number);
     try std.testing.expectEqualStrings("Second", t.tv_episodes[0].name[0..t.tv_episodes[0].name_len]);
+}
+
+test "Native TV episodes keep artwork above readable information" {
+    defer invalidateDetailUiSnapshot();
+    try @import("tmdb_native_test.zig").run(struct {
+        fn draw() void {
+            state.app.tmdb.tv_id = 42;
+            detail_ui_snapshot_id = 42;
+            detail_ui_snapshot_seen_epoch = detail_ui_snapshot_epoch.load(.acquire);
+            detail_ui_snapshot_seen_library_revision = @import("tv_library.zig").revision();
+            detail_ui_snapshot = .{ .library = .{
+                .next = .{ .season = 1, .episode = 2 },
+                .last_aired = .{ .season = 1, .episode = 4 },
+            } };
+            renderTvDetail();
+        }
+    }.draw);
 }

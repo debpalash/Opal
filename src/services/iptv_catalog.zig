@@ -72,12 +72,8 @@ fn writeChannels(source_id: []const u8, channels: []const pure.IptvChannel, forc
     write_mutex.lock();
     defer write_mutex.unlock();
 
-    const begin = db.prepare("BEGIN IMMEDIATE") orelse return 0;
-    const begun = db.step(begin) == db.c.SQLITE_DONE;
-    db.finalize(begin);
-    if (!begun) return 0;
-    var committed = false;
-    defer if (!committed) db.exec("ROLLBACK");
+    var transaction = db.beginTransaction() catch return 0;
+    defer transaction.deinit();
     if (replace) {
         const deletion = db.prepare("DELETE FROM iptv_catalog WHERE source_id=?1") orelse return 0;
         db.bindText(deletion, 1, source_id);
@@ -129,10 +125,8 @@ fn writeChannels(source_id: []const u8, channels: []const pure.IptvChannel, forc
     }
 
     if (replace and inserted == 0) return 0;
-    const commit = db.prepare("COMMIT") orelse return 0;
-    committed = db.step(commit) == db.c.SQLITE_DONE;
-    db.finalize(commit);
-    return if (committed) inserted else 0;
+    transaction.commit() catch return 0;
+    return inserted;
 }
 
 fn lowerInto(s: []const u8, out: []u8) []const u8 {

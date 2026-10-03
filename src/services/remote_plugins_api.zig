@@ -47,7 +47,7 @@ pub fn writeExecutables(writer: anytype) !void {
         const native = plugins.hasNativeEntrypoint(plugin);
         const trusted = plugin.user_trusted;
         const runnable = plugin.has_search or plugin.has_resolve or plugin.has_trending;
-        const mode = if (!runnable) "invalid" else if (native and !trusted) "blocked" else if (trusted and (native or plugin.allow_unsafe)) "full-access" else "lua-sandbox";
+        const mode = if (!runnable) "invalid" else if (!trusted) "blocked" else if (trusted and (native or plugin.allow_unsafe)) "full-access" else "lua-sandbox";
         try writer.writeAll("{\"id\":\"");
         writeJsonString(writer, plugin.id[0..plugin.id_len]);
         try writer.writeAll("\",\"name\":\"");

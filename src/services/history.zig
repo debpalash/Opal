@@ -407,17 +407,19 @@ pub fn migrateSearchHistory() void {
         var buf: [8192]u8 = undefined;
         const n = @import("../core/io_global.zig").readAll(file, &buf) catch continue;
 
-        db.exec("BEGIN");
+        var transaction = db.beginTransaction() catch return;
+        defer transaction.deinit();
         var lines = std.mem.splitScalar(u8, buf[0..n], '\n');
         while (lines.next()) |line| {
             if (line.len == 0 or line.len >= state.MAX_QUERY_LEN) continue;
             const sql = "INSERT OR IGNORE INTO search_history (query) VALUES (?1)";
-            const stmt = db.prepare(sql) orelse continue;
+            const stmt = db.prepare(sql) orelse return;
             db.bindText(stmt, 1, line);
-            _ = db.step(stmt);
+            const wrote = db.step(stmt) == db.c.SQLITE_DONE;
             db.finalize(stmt);
+            if (!wrote) return;
         }
-        db.exec("COMMIT");
+        transaction.commit() catch return;
 
         @import("../core/io_global.zig").cwdDeleteFile(old_path) catch {};
     }
@@ -435,7 +437,8 @@ pub fn migrateDownloadHistory() void {
         var buf: [65536]u8 = undefined;
         const n = @import("../core/io_global.zig").readAll(file, &buf) catch continue;
 
-        db.exec("BEGIN");
+        var transaction = db.beginTransaction() catch return;
+        defer transaction.deinit();
         var lines = std.mem.splitScalar(u8, buf[0..n], '\n');
         while (lines.next()) |line| {
             if (line.len == 0) continue;
@@ -445,13 +448,14 @@ pub fn migrateDownloadHistory() void {
             if (name.len >= state.MAX_DL_NAME_LEN) continue;
 
             const sql = "INSERT INTO download_history (name, link) VALUES (?1, ?2)";
-            const stmt = db.prepare(sql) orelse continue;
+            const stmt = db.prepare(sql) orelse return;
             db.bindText(stmt, 1, name);
             db.bindText(stmt, 2, link);
-            _ = db.step(stmt);
+            const wrote = db.step(stmt) == db.c.SQLITE_DONE;
             db.finalize(stmt);
+            if (!wrote) return;
         }
-        db.exec("COMMIT");
+        transaction.commit() catch return;
 
         @import("../core/io_global.zig").cwdDeleteFile(old_path) catch {};
     }

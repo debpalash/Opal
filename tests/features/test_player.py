@@ -341,11 +341,10 @@ def test_web_companion():
             and "pairingCode" not in rm and "MAX_PAIR_FAILS" not in rm,
         "no token injection": "replaceOwned" not in rm,
         # The bind address is now selectable (web UI › Setup › Access), so the
-        # literal no longer lives in serverLoop — but LAN must stay the DEFAULT,
-        # since reaching Opal from a phone is the whole point of Web Remote.
-        # Assert that via the enum's default rather than a hardcoded string.
-        "lan bind": 'bind_mode: access_pure.BindMode = .lan' in rm
-            and "bind_mode.address()" in _between(rm, "fn serverLoop", "std.debug.print")
+        # safe default is loopback; deployment policy can explicitly select LAN.
+        "explicit LAN bind with loopback default": 'bind_mode: access_pure.BindMode = .loopback' in rm
+            and 'OPAL_WEB_BIND' in rm and "effectiveBindMode().address()" in rm
+            and "effectiveBindMode().address()" in _between(rm, "fn serverLoop", "std.debug.print")
             and '.lan => "0.0.0.0"' in open(os.path.join(PROJECT_DIR, "src/services/access_pure.zig")).read(),
         "bundled serving": "resourceRoot" in rm and "web/index.html" in rm,
         # Was: a hint telling you to go create an account in a browser. The
@@ -1074,7 +1073,7 @@ def test_anime_skip():
         "settings toggles": ("&state.app.anime_skip_enabled" in setg
                             and "&state.app.anime_skip_intro" in setg),
         # tick() wired into the frame loop.
-        "tick wired in main loop": "anime_skip.zig\").tick()" in mn,
+        "tick wired in main loop": "anime_skip.zig\").tick()" in _src("src/application/playback_update.zig") and 'application/playback_update.zig").tick();' in mn,
         # Anime-only gating: per-player arm consumed on file load, set by anime.
         "per-player gating flag": "anime_skip_active" in pl,
         "arm consumed on load": "onFileLoad(self)" in pl,
@@ -1313,7 +1312,7 @@ def test_loading_screen_infotainment():
       (c) Nothing on the screen identified WHAT was loading beyond the title —
           no year, no score, no episode code, no artist."""
     gr = _src("src/ui/grid.zig")
-    lp = _src("src/ui/loading_pure.zig")
+    lp = _src("src/core/loading_pure.zig")
     st = _src("src/core/state.zig")
     pl = _src("src/player/player.zig")
     tm = _src("src/services/tmdb.zig")
@@ -1390,7 +1389,7 @@ def test_loading_screen_progress():
     Every layout/format decision behind the fix lives in loading_pure with
     tests; the dvui draw calls themselves are GUI-only and are not covered."""
     gr = _src("src/ui/grid.zig")
-    lp = _src("src/ui/loading_pure.zig")
+    lp = _src("src/core/loading_pure.zig")
 
     checks = {
         # (a) Art is contained at native scale, never stretched to the cell.
@@ -1751,7 +1750,7 @@ def fullscreen_reaches_the_window():
     cannot fall out of step the way five scattered SDL calls would.
     """
     mn = _src("src/main.zig")
-    block = _between(mn, "Put the OS WINDOW into fullscreen", "player.updateTorrentBackgroundTasks();")
+    block = _between(mn, "Put the OS WINDOW into fullscreen", '@import("application/playback_update.zig").tick();')
     checks = {
         "the SDL call exists at all": "SDL_SetWindowFullscreen" in mn,
         "driven by the shared state flag": "state.app.fullscreen_player_idx != null" in block,
@@ -1803,7 +1802,7 @@ def self_hosted_playback_version_fallback():
             and ".fallback_url = fallback" in jf_play,
         "Jellyfin negotiates only after direct failure": "requestTranscodeRecovery" in player
             and "PlaybackInfo?UserId=" in jf and '"EnableDirectPlay":false' in jf,
-        "negotiated result returns on UI thread": "drainTranscodeRecovery();" in main
+        "negotiated result returns on UI thread": "drainTranscodeRecovery();" in _src("src/application/playback_update.zig") and 'application/playback_update.zig").tick();' in main
             and "applyServerRecovery" in jf,
         "generated URL drops legacy query token": "stripApiKey" in jfp
             and "transcodingUrl" in jfp,

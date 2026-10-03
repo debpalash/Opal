@@ -778,7 +778,8 @@ def test_web_executable_plugin_permissions():
         "full tree fails closed": "digestTree" in trust and "UnsupportedFileType" in trust
             and "PathSetChanged" in trust,
         "web review": 'id="plug-exec-list"' in ui and "renderExecutablePlugins" in ui
-            and "file and network access" in ui and "files change" in ui,
+            and "Browser accounts cannot grant executable access" in ui
+            and "access_pure.allows(principal, .approve_executable)" in rm,
         "no executable path leak": '\\"path\\\"' not in projection,
     }
     missing = [k for k, ok in checks.items() if not ok]
@@ -1144,7 +1145,7 @@ def test_torrent_files_and_hls():
         "warns on partial": "playback may stall" in ui,
         # hls.js: vendored as a SEPARATE file and feature-tested.
         "hls feature-tested": "window.Hls" in ui and "function openHls(" in ui,
-        "hls loaded from vendor": 'src="vendor/hls.min.js"' in ui,
+        "hls loaded from vendor": 'src="/vendor/hls.min.js?v=' in ui,
         # 543KB inlined would swamp the page — index.html must stay small.
         "hls not inlined": len(_src("web/index.html")) < 400_000,
         "vendor file present": os.path.exists(os.path.join(PROJECT_DIR, "web/vendor/hls.min.js")),

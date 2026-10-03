@@ -244,8 +244,12 @@ pub fn build(b: *std.Build) void {
     const run_activity_tests = b.addRunArtifact(activity_tests);
     if (is_windows) run_activity_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     b.step("test-native-activity", "Capture native queue and transfers with isolated offline fixtures").dependOn(&run_activity_tests.step);
+    const episode_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native TV episodes"} });
+    const run_episode_tests = b.addRunArtifact(episode_tests);
+    if (is_windows) run_episode_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
+    b.step("test-native-episodes", "Verify native episode cards and responsive playback controls").dependOn(&run_episode_tests.step);
     const native_suite = b.addTest(.{ .root_module = exe.root_module, .filters = &.{
-        "Native Search", "Native WebP", "Native media offline", "Native shell offline", "Native global modals", "Native activity offline", "Native Browse", "Browse fanout", "Native torrent handoff",
+        "Native Search", "Native WebP", "Native media offline", "Native shell offline", "Native global modals", "Native activity offline", "Native Browse", "Browse fanout", "Native torrent handoff", "Native TV episodes",
     } });
     const run_native_suite = b.addRunArtifact(native_suite);
     if (is_windows) run_native_suite.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
@@ -290,6 +294,7 @@ pub fn build(b: *std.Build) void {
     // Isolate the child process even when callers run these targets directly.
     const native_profile_root = b.cache_root.join(b.allocator, &.{"native-fixture-profiles"}) catch @panic("native fixture profile path");
     const native_capture_runs = [_]struct { run: *std.Build.Step.Run, name: []const u8 }{
+        .{ .run = run_episode_tests, .name = "episodes" },
         .{ .run = run_gallery_tests, .name = "gallery" },
         .{ .run = run_performance_tests, .name = "performance" },
         .{ .run = run_media_tests, .name = "media" },
@@ -981,7 +986,7 @@ pub fn build(b: *std.Build) void {
     // rotating fact cards, which card is showing, and the meta line.
     const test_loading_pure = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/ui/loading_pure.zig"),
+            .root_source_file = b.path("src/core/loading_pure.zig"),
             .target = target,
             .optimize = optimize,
         }),

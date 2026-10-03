@@ -74,7 +74,7 @@ def test_audiobookshelf():
         "resume issues absolute seek": "seek {d:.1} absolute" in svc,
         "resume tick wired into frame loop": (
             "pub fn tick() void" in svc
-            and "audiobookshelf.zig\").tick()" in _src("src/main.zig")),
+            and "audiobookshelf.zig\").tick()" in _src("src/application/playback_update.zig")),
 
         # ── Threading: atomic loading flag + detached worker + mutex publish ──
         "atomic loading flag": "is_loading.load(.acquire)" in svc and "is_loading.store(true, .release)" in svc,
@@ -94,9 +94,11 @@ def test_audiobookshelf():
 @test("Headless audiobook playback pumps lifecycle and resume", "Audio")
 def test_headless_audiobook_lifecycle():
     headless = _src("src/headless.zig")
-    begin = headless.index("players_mutex.lock();")
-    end = headless.index("players_mutex.unlock();", begin)
-    critical = headless[begin:end]
+    if '@import("application/playback_update.zig").tick();' not in headless:
+        return "fail", "headless does not call the shared playback owner"
+    pump = _src("src/application/playback_update.zig")
+    begin = pump.index("players_mutex.lock();")
+    critical = pump[begin:]
     if 'player.zig").updateTorrentBackgroundTasks();' not in critical or 'audiobookshelf.zig").tick();' not in critical:
         return "fail", "headless does not pump player events and audiobook resume/advance under the owner lock"
     return "pass", "headless pumps player events before audiobook resume/advance in each short poll"

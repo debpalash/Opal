@@ -73,7 +73,7 @@ pub fn headlessMain() !void {
     remote.start();
     io.sleep(300 * std.time.ns_per_ms); // let the listener come up before printing
     std.debug.print(
-        "[opal] web ui:    http://localhost:{d}/  (or this host's LAN / Tailscale address)\n" ++
+        "[opal] web ui:    http://localhost:{d}/  (remote access: docs/secure-remote.md)\n" ++
             "[opal] first run: open the web UI and create your admin account\n" ++
             "[opal] api token: $XDG_CONFIG_HOME/opal/api.token  (for automation / the browser extension)\n",
         .{remote.port},
@@ -122,10 +122,6 @@ pub fn headlessMain() !void {
         @import("services/torrent_intents.zig").restoreIfReady();
         @import("services/downloads.zig").tick();
         @import("services/search.zig").flushPendingTorrentOpen();
-        // Consume FILE_LOADED/END_FILE on the short poll before provider resume
-        // and track advancement. Headless has no desktop frame to do this.
-        @import("player/player.zig").updateTorrentBackgroundTasks();
-        @import("services/audiobookshelf.zig").tick();
         @import("core/state.zig").players_mutex.unlock();
         // Same class of seam: drama's fetch worker stages results under a mutex
         // and the RENDER path commits them. No render path here, so the parse
@@ -135,10 +131,7 @@ pub fn headlessMain() !void {
         // them in on desktop). Without this pump, /api/tmdb and the unified
         // search's TMDB rows stayed empty forever on a headless box.
         @import("services/tmdb_api.zig").applyPendingResults();
-        @import("services/tmdb.zig").checkEpisodeStartup();
-        @import("services/tmdb.zig").applyPendingDetail();
-        @import("services/anime.zig").applyPendingEpisodes();
-        @import("services/anime.zig").applyPendingPlayback();
+        @import("application/playback_update.zig").tick();
 
         const now_ms = io.milliTimestamp();
         if (now_ms - last_tick_ms >= tick_interval_ms) {

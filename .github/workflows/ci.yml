@@ -87,7 +87,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config libsdl2-dev libwebp-dev libmpv-dev \
-            libsqlite3-dev libtorrent-rasterbar-dev ffmpeg xvfb xauth
+            libsqlite3-dev libtorrent-rasterbar-dev ffmpeg xvfb xauth lua5.4
       - name: Native HTTP deadlines and cancellation
         timeout-minutes: 10
         run: zig build test-native-http --summary all
@@ -108,6 +108,10 @@ jobs:
           python3 tests/test_webcomic_sources_live.py --binary "$RUNNER_TEMP/opal-provider-fixtures/bin/opal" --port 41807
           python3 tests/test_audio_browse_progressive_live.py --binary "$RUNNER_TEMP/opal-provider-fixtures/bin/opal" --port 41809
           python3 tests/test_browse_parallel_live.py --binary "$RUNNER_TEMP/opal-provider-fixtures/bin/opal" --port 41819
+          python3 tests/test_remote_privileges_live.py --binary "$RUNNER_TEMP/opal-provider-fixtures/bin/opal" --port 41823
+          python3 tests/test_static_assets_live.py --binary "$RUNNER_TEMP/opal-provider-fixtures/bin/opal" --port 41821
+          python3 tests/test_headless_playback_live.py --binary "$RUNNER_TEMP/opal-provider-fixtures/bin/opal" --port 41825
+          python3 tests/test_lua_execution_policy.py
       - name: Native offline UI fixture suite
         timeout-minutes: 20
         env:
@@ -162,6 +166,10 @@ jobs:
           python3 tests/test_webcomic_sources_live.py --binary "$RUNNER_TEMP/opal-provider-fixtures/bin/opal" --port 41807
           python3 tests/test_audio_browse_progressive_live.py --binary "$RUNNER_TEMP/opal-provider-fixtures/bin/opal" --port 41809
           python3 tests/test_browse_parallel_live.py --binary "$RUNNER_TEMP/opal-provider-fixtures/bin/opal" --port 41819
+          python3 tests/test_remote_privileges_live.py --binary "$RUNNER_TEMP/opal-provider-fixtures/bin/opal" --port 41823
+          python3 tests/test_static_assets_live.py --binary "$RUNNER_TEMP/opal-provider-fixtures/bin/opal" --port 41821
+          python3 tests/test_headless_playback_live.py --binary "$RUNNER_TEMP/opal-provider-fixtures/bin/opal" --port 41825
+          python3 tests/test_lua_execution_policy.py
       - name: Build (ReleaseSafe)
         run: zig build -Doptimize=ReleaseSafe
       - name: Binary exists

@@ -353,6 +353,18 @@ fn extractCredential(request: []const u8) ?[]const u8 {
 }
 
 const SESSION_COOKIE_SET = "Set-Cookie: opal_session={s}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Strict\r\n";
+const SESSION_COOKIE_SECURE = "Set-Cookie: opal_session={s}; Path=/; Max-Age=2592000; HttpOnly; SameSite=Strict; Secure\r\n";
+
+/// Explicit deployment policy, never inferred from client-controlled headers.
+fn httpsProxyMode() bool {
+    return std.mem.eql(u8, io_g.getenv("OPAL_HTTPS_PROXY") orelse "", "1");
+}
+
+fn effectiveBindMode() access_pure.BindMode {
+    if (httpsProxyMode()) return .loopback;
+    return if (io_g.getenv("OPAL_WEB_BIND")) |mode| access_pure.bindModeFromString(mode) else bind_mode;
+}
+
 const SESSION_COOKIE_CLEAR = "Set-Cookie: opal_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict\r\n";
 
 const HeaderError = error{ DuplicateHeader, MalformedHeader };
@@ -627,7 +639,7 @@ pub fn isListening() bool {
 
 /// Which interfaces serverLoop binds. Persisted as `web_bind` (see config.zig);
 /// changed from the web UI's Access page, which calls restart() after.
-pub var bind_mode: access_pure.BindMode = .lan;
+pub var bind_mode: access_pure.BindMode = .loopback;
 
 /// Apply a new bind mode / port. No-op when nothing changed. When the server is
 /// live it is stopped and restarted so the new socket takes effect immediately
@@ -667,12 +679,11 @@ pub fn rotateToken() bool {
 }
 
 fn serverLoop() void {
-    // Default binds all interfaces: the server itself is OPT-IN (Settings ›
-    // Web Remote / the header globe, off by default) and its whole point is
-    // reaching Opal from a phone on the LAN. Users who only drive it from this
-    // machine can switch to loopback in the web UI's Access page.
+    // Loopback by default. Explicit HTTPS proxy mode pins the listener to
+    // loopback even when an older profile saved a LAN bind. The trusted local
+    // proxy owns TLS; request headers cannot enable this deployment policy.
     // Auth: bearer token from account login (/api/auth) or the api.token file.
-    const ip = bind_mode.address();
+    const ip = effectiveBindMode().address();
     const addr = std.Io.net.IpAddress.parseIp4(ip, port) catch return;
     var server = addr.listen(io_g.io(), .{ .reuse_address = true }) catch return;
     defer server.deinit(io_g.io());
@@ -995,7 +1006,10 @@ fn handleRequest(stream: std.Io.net.Stream, client_key: u64) !void {
                 return;
             }
             var cookie_buf: [256]u8 = undefined;
-            const cookie = std.fmt.bufPrint(&cookie_buf, SESSION_COOKIE_SET, .{tok[0..]}) catch return;
+            const cookie = if (httpsProxyMode())
+                std.fmt.bufPrint(&cookie_buf, SESSION_COOKIE_SECURE, .{tok[0..]}) catch return
+            else
+                std.fmt.bufPrint(&cookie_buf, SESSION_COOKIE_SET, .{tok[0..]}) catch return;
             remote_http.sendJsonExtra(stream, "200 OK", "{\"ok\":true}", cookie);
             return;
         }
@@ -1046,7 +1060,7 @@ fn handleRequest(stream: std.Io.net.Stream, client_key: u64) !void {
     }
 
     if (std.mem.startsWith(u8, path, "/api/")) {
-        handleApi(stream, path[4..], query, request);
+        handleApi(stream, path[4..], query, request, principal);
     } else {
         const resp = "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nNot Found";
         _ = io_g.streamWriteAll(stream, resp) catch {};
@@ -1114,13 +1128,16 @@ fn handleOpenQuery(query: []const u8) void {
     }
 }
 
-fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8, request: []const u8) void {
+fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8, request: []const u8, principal: access_pure.Principal) void {
     // The POST body, for the routes that take credentials. credParam() reads it
     // ahead of the query string so a debrid key or a GitHub token can be sent
     // where it will not be logged as part of a URL.
     const body = requestBody(request);
     const method_end = std.mem.indexOfScalar(u8, request, ' ') orelse 0;
     const method = request[0..method_end];
+    var action_buf: [64]u8 = undefined;
+    const action = credParam(body, query, "action", &action_buf) orelse "";
+    if (!access_pure.allowsRoute(principal, api_path, method, action)) return sendForbidden(stream);
     if (@import("remote_transfer_api.zig").handle(stream, method, api_path, query)) return;
     if (@import("remote_library_api.zig").handle(stream, method, api_path, query)) return;
     if (@import("remote_collections_api.zig").handle(stream, method, api_path, query)) return;
@@ -1259,7 +1276,7 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
     }
     // Installed source plugins + the debrid / repo integration config.
     if (std.mem.eql(u8, api_path, "/plugins")) {
-        apiPlugins(stream, method, query, body);
+        apiPlugins(stream, method, query, body, principal);
         return;
     }
     // Settings › Web UI. Read-mostly on purpose: the only write is the kill
@@ -1957,7 +1974,7 @@ fn handleAccess(
             if (access_pure.allows(principal, .manage_users)) "true" else "false",
             sessions,
             masked,
-            bind_mode.id(),
+            effectiveBindMode().id(),
             port,
             lanIp(),
             if (isRunning()) "true" else "false",
@@ -2168,6 +2185,14 @@ fn handleAccess(
             access_pure.bindModeFromString(m)
         else
             bind_mode;
+        if (httpsProxyMode() and mode != .loopback) {
+            sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"HTTPS proxy mode requires loopback binding\"}");
+            return;
+        }
+        if (io_g.getenv("OPAL_WEB_BIND") != null and mode != effectiveBindMode()) {
+            sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"binding is controlled by the service environment\"}");
+            return;
+        }
         const new_port: u16 = if (credParam(body, "", "port", &port_buf)) |p|
             (access_pure.parsePort(p) orelse {
                 sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"port must be 1024-65535\"}");
@@ -3019,7 +3044,7 @@ fn apiTrakt(stream: std.Io.net.Stream, method: []const u8, query: []const u8, bo
     sendJson(stream, out[0..w.end]);
 }
 
-fn apiPlugins(stream: std.Io.net.Stream, method: []const u8, query: []const u8, body: []const u8) void {
+fn apiPlugins(stream: std.Io.net.Stream, method: []const u8, query: []const u8, body: []const u8, principal: access_pure.Principal) void {
     const repo = @import("plugin_repo.zig");
     repo.loadLocalManifest();
 
@@ -3071,6 +3096,7 @@ fn apiPlugins(stream: std.Io.net.Stream, method: []const u8, query: []const u8, 
             return sendJson(stream, "{\"ok\":true}");
         }
         if (std.mem.eql(u8, action_name, "approve-exec") or std.mem.eql(u8, action_name, "revoke-exec")) {
+            if (!access_pure.allows(principal, .approve_executable)) return sendForbidden(stream);
             var id_buf: [64]u8 = undefined;
             const id = credParam(body, query, "id", &id_buf) orelse {
                 sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"plugin id required\"}");

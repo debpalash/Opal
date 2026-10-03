@@ -74,7 +74,7 @@ pub fn build(buf: []u8) []const u8 {
     const art_key = if (art_source.len > 0) std.hash.Wyhash.hash(0, art_source) else 0;
     const has_context = player.loading_title_len > 0 or player.loading_art_len > 0 or player.loading_overview_len > 0;
     const kind = if (has_context)
-        @tagName(@import("../ui/loading_pure.zig").MediaKind.fromInt(player.loading_kind))
+        @tagName(@import("../core/loading_pure.zig").MediaKind.fromInt(player.loading_kind))
     else
         "";
 

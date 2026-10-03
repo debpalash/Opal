@@ -488,7 +488,7 @@ pub const MediaPlayer = struct {
     loading_title: [128]u8 = std.mem.zeroes([128]u8),
     loading_title_len: usize = 0,
     /// TMDB path fragment OR a full cover URL — resolved by
-    /// ui/loading_pure.posterUrl so every source can show art here.
+    /// core/loading_pure.posterUrl so every source can show art here.
     loading_art: [256]u8 = std.mem.zeroes([256]u8),
     loading_art_len: usize = 0,
     loading_kind: u8 = 0,
@@ -3227,7 +3227,7 @@ pub fn updateTorrentBackgroundTasks() void {
                             // episodes: credits position alone is insufficient;
                             // at least 90% must have advanced during real play.
                             if (p.catalog_tmdb_id > 0 and
-                                p.loading_kind == @import("../ui/loading_pure.zig").MediaKind.movie.toInt() and
+                                p.loading_kind == @import("../core/loading_pure.zig").MediaKind.movie.toInt() and
                                 !p.catalog_movie_committed)
                             {
                                 if (p.catalog_sample_ms != 0 and !p.cached_paused and !p.cached_paused_for_cache) {

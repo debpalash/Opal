@@ -371,7 +371,7 @@ def test_named_queue_collections():
     native = _src("src/services/queue.zig")
     checks = {
         "normalized schema": "media_collections" in db and "media_collection_items" in db,
-        "coherent queue snapshot": "queue.snapshotItems" in service and "BEGIN IMMEDIATE" in service,
+        "coherent queue snapshot": "queue.snapshotItems" in service and "db.beginTransaction()" in service and "transaction.commit()" in service,
         "ordered restore": "ORDER BY position" in service and "addToQueueWithThumb" in service,
         "replace waits for UI owner": "queue.requestAction(.clear" in service and "queue.waitAction" in service,
         "typed POST routes": '"/collections"' in remote and '"/collections/action"' in remote
@@ -537,7 +537,7 @@ def test_web_plugin_lifecycle_contract():
             and "std.meta.stringToEnum(repo.Action, action_name)" in remote,
         "accurate catalog state": 'w.writeAll("{\\"sources\\":[")' in remote
             and '\\"installed\\":{s}' in remote and 'd.sources' in ui,
-        "method and confirmation boundary": 'apiPlugins(stream, method, query, body)' in remote
+        "method and confirmation boundary": 'apiPlugins(stream, method, query, body, principal)' in remote
             and 'requireMethod(stream, method, "GET")' in remote
             and "uninstall requires confirm=1" in remote
             and "params.set('confirm', '1')" in ui,

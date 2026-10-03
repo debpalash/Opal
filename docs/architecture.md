@@ -43,3 +43,27 @@ Podcasts are the reference migration vertical. Its domain records live in
 `podcasts_pure.zig`; networking/parsing and the feature store live in
 `podcasts.zig`; desktop and remote presentations must consume snapshot helpers
 instead of `state.app.podcasts` buffers directly.
+
+## Enforced migration boundary
+
+`python3 scripts/check_architecture.py` checks actual imports in core, services,
+and application modules. Existing presentation imports are recorded as exact
+edges in `architecture-exceptions.json`; new edges fail, and resolved exceptions
+must be removed. The feature gate exercises this checker. The backlog is not a
+claim that every existing service is already UI-free. Extract rendering feature
+by feature, following Podcasts, rather than adding new dependencies to the list.
+
+Desktop and headless execution share `application/playback_update.zig`. Worker
+completion and playback recovery belong there, never solely in a widget or
+desktop frame. Both hosts retain their own presentation and input handling.
+
+Shared SQLite transactions use `db.beginTransaction()`. Its guard owns SQLite's
+recursive connection mutex through checked commit or rollback, excluding even
+raw SQLite callers. Acquire feature snapshots first; never acquire a feature
+lock, await a worker, or perform network/process work inside a transaction.
+Finish/finalize statements before releasing the guard. Dedicated scan/queue
+connections retain their own transaction ownership.
+
+Shared playback metadata and loading decisions live in `src/core/loading_pure.zig`.
+The native loading screen and remote services consume the same pure module;
+services do not import the UI to identify media kinds or resolve poster URLs.
