@@ -1204,6 +1204,7 @@ pub fn renderLyricsPanel(placement: LyricsPanelPlacement) void {
 const pure_lyric_text_cap = 256;
 
 fn renderSearchBar() void {
+    if (!@import("../ui/browse_layout_pure.zig").showLocalSearch(state.app.page_shell_enabled)) return;
     var row = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
         .expand = .horizontal,
         .padding = .{ .x = 10, .y = 7, .w = 10, .h = 7 },

@@ -358,15 +358,6 @@ fn renderPlayerTopNav() void {
     spacer.deinit();
     if (state.app.active_player_idx < state.app.players.items.len) {
         const p = state.app.players.items[state.app.active_player_idx];
-        const external = @import("../services/external_player.zig");
-        const url = p.current_url[0..p.current_url_len];
-        if (external.playable(url) and components.iconButtonOverlay(@src(), icons.tvg.lucide.@"external-link", "Open in VLC", false, true)) {
-            if (external.launch(url)) {
-                state.showToast("Opening in VLC…");
-            } else {
-                state.showToastTyped("Could not open in VLC · see Logs", .err);
-            }
-        }
         // The transport footer is intentionally absent before the first frame,
         // so its normal Close action does not exist while a URL is resolving.
         // Keep cancellation in the player chrome where it remains visible and
@@ -600,11 +591,9 @@ fn closeOverflowMenu() void {
 }
 
 /// One query entry, with identical routing for Enter and the Search button.
-/// Browse queries stay contextual; All content queries use the shared resolver.
+/// Every ordinary query uses the shared all-content resolver.
 fn omnibox(narrow: bool) void {
-    const placeholder: []const u8 = if (state.app.router.current == .browse)
-        "Search this source or paste a link…"
-    else if (narrow)
+    const placeholder: []const u8 = if (narrow)
         "Search, ask, paste…"
     else
         "Search everything, ask, or paste a link…";

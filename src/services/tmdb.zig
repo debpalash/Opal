@@ -422,7 +422,7 @@ fn renderToolbar(count: usize) void {
     // Destinations stay visible even on narrow windows. Tooltips give each
     // icon its full name; the highlighted pill identifies the current view.
     renderSubTab(0, .Trending, "Browse", icons.tvg.lucide.compass);
-    renderSubTab(1, .Search, "Search", icons.tvg.lucide.search);
+    if (@import("../ui/browse_layout_pure.zig").showLocalSearch(state.app.page_shell_enabled)) renderSubTab(1, .Search, "Search", icons.tvg.lucide.search);
     renderSubTab(2, .Favorites, "Favorites", icons.tvg.lucide.star);
     renderSubTab(3, .Watchlist, "Watchlist", icons.tvg.lucide.bookmark);
     renderSubTab(4, .Watching, "Watching", icons.tvg.lucide.eye);
@@ -431,8 +431,8 @@ fn renderToolbar(count: usize) void {
     // instead of hidden behind the Search tab. Typing auto-switches to the
     // .Search view via renderSearchInline's live-search path; clearing the
     // box restores Trending.
-    toolbarDivider(900);
-    renderSearchInline();
+    if (@import("../ui/browse_layout_pure.zig").showLocalSearch(state.app.page_shell_enabled)) toolbarDivider(900);
+    if (@import("../ui/browse_layout_pure.zig").showLocalSearch(state.app.page_shell_enabled)) renderSearchInline();
 
     // Contextual controls.
     switch (state.app.tmdb.view) {

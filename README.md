@@ -166,7 +166,6 @@ X11/XWayland. AppImage needs glibc 2.38+ and system OpenSSL 3
 - Hover toolbar icons for labels; scroll the toolbar in narrow windows.
 - Click a result or **Play** to watch; **+** queues a torrent. **Details** opens title info.
 - **×** on Now Playing stops playback. More controls: **More → Playback options**.
-- Install VLC, then choose **Settings → Playback → Open in VLC** to hand off playback.
 - Source installation errors include recovery steps in redacted **Logs**.
 
 **Temporary torrents:** enable **Settings → Network → Stream torrents in memory**.

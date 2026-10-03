@@ -5,6 +5,24 @@ from .harness import *  # noqa: F401,F403
 import os, sys, subprocess, sqlite3, socket, time, json  # noqa: F401
 
 
+@test("macOS idle desktop pumps pending close signals", "Stability")
+def test_native_idle_signal_pump():
+    main = _src("src/main.zig")
+    frame = _between(main, "fn appFrame()", "fn renderHudOverlay()")
+    pure = _src("src/core/event_loop_pure.zig")
+    checks = {
+        "shipped bounded policy": "nativeSignalPumpMicros(builtin.os.tag)" in frame,
+        "frame timer rearms only when due": "dvui.timerDoneOrNone(signal_tick)" in frame
+            and "dvui.timer(signal_tick, interval)" in frame,
+        "macOS only, one second": "os == .macos" in pure and "1_000_000 else null" in pure,
+        "unit gate registration": 'b.path("src/core/event_loop_pure.zig")' in _src("build.zig"),
+        "actual isolated signal regression": "os.kill(owned[0], signal.SIGTERM)" in
+            _src("tests/test_native_shutdown_live.py"),
+    }
+    missing = [name for name, good in checks.items() if not good]
+    return ("fail", ", ".join(missing)) if missing else ("pass", "idle macOS event wait is bounded; native live shutdown test provided")
+
+
 @test("Render hot paths are event-fed; dropped paths are backgrounded", "Stability")
 def test_render_hot_paths_and_drop_ingest():
     player = _src("src/player/player.zig")
@@ -267,7 +285,9 @@ def test_smoothness_repaint():
         return "fail", "display-rate playback timer still duplicates frame callbacks"
     if "dvui.refresh(null" in settings or "dvui.refresh(null" in fileassoc:
         return "fail", "settings worker status still drives an unbounded repaint loop"
-    if settings.count("components.pollRefresh(") < 13 or "components.pollRefresh(" not in fileassoc:
+    # Twelve remaining status paths use bounded polling. The former thirteenth
+    # path belonged to the removed external-player launch service.
+    if settings.count("components.pollRefresh(") < 12 or "components.pollRefresh(" not in fileassoc:
         return "fail", "settings worker status is not covered by bounded polling"
     if "dvui_win" not in ps or "dvui.refresh(win" not in ps:
         return "fail", "poster worker does not wake the UI after decode"
@@ -649,3 +669,30 @@ def test_keyboard_close_uses_normal_teardown_and_unmaps_first():
     if missing:
         return "fail", "keyboard close regression: " + ", ".join(missing)
     return "pass", "Ctrl+W/Ctrl+Q use normal teardown; native surface unmaps first"
+
+
+@test("Native capture targets isolate every fixture profile", "Stability")
+def test_native_capture_profile_isolation():
+    build = _src("build.zig")
+    start = build.find("const native_capture_runs =")
+    end = build.find('\n    }', build.find("for (native_capture_runs)", start))
+    scope = build[start:end] if start >= 0 and end > start else ""
+    runs = ("run_gallery_tests", "run_media_tests", "run_shell_tests",
+            "run_modal_tests", "run_activity_tests")
+    fields = ("HOME", "USERPROFILE", "XDG_CONFIG_HOME", "XDG_CACHE_HOME",
+              "XDG_DATA_HOME", "APPDATA", "LOCALAPPDATA")
+    checks = {
+        "all native fixture runners covered": all(f".run = {run}" in scope for run in runs),
+        "private cache profiles": "native-fixture-profiles" in build and
+        "std.fs.path.resolve" in scope and "fixture.name" in scope,
+        "profile environment assigned": all(
+            f'fixture.run.setEnvironmentVariable("{field}"' in scope for field in fields),
+        "network worker admission disabled": all(
+            "beginShutdownAndDrain" in _src(path) for path in (
+                "src/ui/shell_native_test.zig", "src/ui/modals_native_test.zig",
+                "src/ui/activity_native_test.zig")),
+    }
+    missing = [label for label, okay in checks.items() if not okay]
+    if missing:
+        return "fail", "native fixture isolation: " + ", ".join(missing)
+    return "pass", "all five native capture runners use private cache HOME/XDG profiles"

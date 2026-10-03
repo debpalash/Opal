@@ -377,18 +377,31 @@ function confidentSearchFeature(groups){
   });
   return candidates.length === 1 ? candidates[0] : null;
 }
+function searchDetailScrollBehavior(){
+  return matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+}
+function searchCardDetail(row){
+  const rating = Number(row.rating), year = String(row.year || '');
+  return String(row.detail || '').split(/\s*[·|]\s*/).filter(part => {
+    const value = part.trim();
+    if (!value || (row.year > 1800 && row.year < 2200 && value === year)) return false;
+    if (/^(?:movie|tv|show) details$/i.test(value)) return false;
+    if (Number.isFinite(rating) && rating > 0 && /^(?:★\s*)?\d+(?:\.\d+)?(?:\s*\/\s*10)?$/.test(value) && Math.abs(parseFloat(value.replace('★','').trim()) - rating) < .051) return false;
+    return true;
+  }).join(' · ');
+}
 function searchCard(group, index, generation, rows){
   const row = group.row, artwork = unifiedArtwork(row.poster_url), rating = Number(row.rating);
   const actionRow = group.actionRow || row;
-  const actionIndex = rows.indexOf(actionRow), release = searchReleaseMetadata(actionRow);
+  const actionIndex = rows.indexOf(actionRow), release = searchReleaseMetadata(actionRow), detail = searchCardDetail(row);
   return `<article class="search-media-card aspect-${searchAspect(group.kind)}">
     <button class="search-card-art" data-work="${index}" aria-label="Explore ${esc(row.title || 'result')}">
-      ${artwork ? `<img src="${esc(artwork)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : `<span class="search-art-placeholder"><span>${esc(searchContentLabels[group.kind] || 'Media')}</span><strong>${esc(row.title || 'Untitled')}</strong></span>`}
+      <span class="search-art-placeholder"><span>${esc(searchContentLabels[group.kind] || 'Media')}</span><strong>${esc(row.title || 'Untitled')}</strong></span>${artwork ? `<img src="${esc(artwork)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ''}
       ${group.rows.length > 1 ? `<span class="search-source-count">${group.rows.length} sources</span>` : ''}
     </button>
     <div class="search-card-copy"><button class="search-card-title" data-work="${index}">${esc(row.title)}</button>
       <div class="search-card-meta">${esc([row.year > 1800 && row.year < 2200 ? row.year : '', row.author || row.provider || row.source || ''].filter(Boolean).join(' · '))}${Number.isFinite(rating) && rating > 0 && rating <= 10 ? ` · ${rating.toFixed(1)}/10` : ''}</div>
-      ${release || row.detail ? `<div class="search-card-release">${esc(release || row.detail)}</div>` : ''}
+      ${release || detail ? `<div class="search-card-release">${esc(release || detail)}</div>` : ''}
       ${searchRowActions(actionRow, generation, actionIndex)}</div>
   </article>`;
 }
@@ -452,7 +465,7 @@ function renderUnifiedResults(payload){
   $('results').querySelectorAll('[data-work]').forEach(button => button.onclick = () => {
     renderSearchDetail(groups[Number(button.dataset.work)], generation);
     renderUnifiedResults(payload);
-    $('search-detail').scrollIntoView?.({behavior:'smooth', block:'nearest'});
+    $('search-detail').scrollIntoView?.({behavior:searchDetailScrollBehavior(), block:'nearest'});
     $('search-detail-close').focus();
   });
   $('results').querySelectorAll('.play').forEach(button => button.onclick = () => runUnifiedAction(shown[Number(button.dataset.i)], Number(button.dataset.gen), 'play', button));

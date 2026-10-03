@@ -17,6 +17,18 @@ test "TV detail module" {
 test "Native Search gallery offline SDL pixel capture" {
     if (!@import("build_options").headless) _ = @import("services/search_gallery_native_test.zig");
 }
+test "Native media offline SDL fixture" {
+    if (!@import("build_options").headless) _ = @import("ui/media_native_test.zig");
+}
+test "Native shell offline route pixel capture" {
+    if (!@import("build_options").headless) _ = @import("ui/shell_native_test.zig");
+}
+test "Native global modals offline SDL pixel capture" {
+    if (!@import("build_options").headless) _ = @import("ui/modals_native_test.zig");
+}
+test "Native activity offline SDL pixel capture" {
+    if (!@import("build_options").headless) _ = @import("ui/activity_native_test.zig");
+}
 const builtin = @import("builtin");
 const dvui = @import("dvui");
 const c = @import("core/c.zig");
@@ -1083,6 +1095,13 @@ fn renderSlashMenu() void {
 }
 
 fn appFrame() !dvui.App.Result {
+    // SDL2 defers SIGINT/SIGTERM until its next event pump. Cocoa's native
+    // wait may sleep indefinitely when no media or widgets request frames.
+    // Keep that wait bounded so Ctrl+C reaches the normal close/cleanup path.
+    if (@import("core/event_loop_pure.zig").nativeSignalPumpMicros(builtin.os.tag)) |interval| {
+        const signal_tick = dvui.Id.extendId(null, @src(), 0);
+        if (dvui.timerDoneOrNone(signal_tick)) dvui.timer(signal_tick, interval);
+    }
     // Suppress dvui's debug widget outline (red 1px rect) — shows when
     // debug.widget_id matches a rendered widget. Can get stuck if user
     // accidentally toggles dvui debug panel.

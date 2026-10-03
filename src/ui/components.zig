@@ -455,6 +455,17 @@ pub fn divider() void {
 /// stop so keyboard users can reach and flip it (Enter/Space).
 /// Toggle: pill, accent_primary when on, bg_elevated when off, with a knob
 /// that slides between the ends on theme.motion.fast.
+pub const ToggleBounds = struct { row: dvui.Rect.Physical, pill: dvui.Rect.Physical };
+var native_toggle_bounds: [64]ToggleBounds = undefined;
+var native_toggle_count: usize = 0;
+pub fn clearToggleBoundsForTest() void {
+    if (!builtin.is_test) @compileError("Native toggle bounds are test-only");
+    native_toggle_count = 0;
+}
+pub fn toggleBoundsForTest() []const ToggleBounds {
+    if (!builtin.is_test) @compileError("Native toggle bounds are test-only");
+    return native_toggle_bounds[0..native_toggle_count];
+}
 pub fn toggleRow(
     src: std.builtin.SourceLocation,
     label: []const u8,
@@ -504,29 +515,33 @@ pub fn toggleRow(
     // Left: label + optional hint stacked vertically.
     {
         var text_col = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .expand = .horizontal,
+            // Long help text must not publish an intrinsic minimum that
+            // pushes the independent switch outside the available row.
+            .max_size_content = .{ .w = 0, .h = std.math.floatMax(f32) },
+            .margin = .{ .w = tk.sp_md },
             .gravity_y = 0.5,
         });
         defer text_col.deinit();
 
         _ = dvui.label(@src(), "{s}", .{label}, .{
+            .expand = .horizontal,
             .color_text = tk.text_primary(),
             .font = fontAt(tk.fs_body),
         });
         if (hint) |h| {
             if (h.len > 0) {
-                _ = dvui.label(@src(), "{s}", .{h}, .{
+                var help = dvui.textLayout(@src(), .{ .break_lines = true }, .{
+                    .expand = .horizontal,
+                    .background = false,
                     .color_text = tk.text_tertiary(),
                     .font = fontAt(tk.fs_small),
                     .margin = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
                 });
+                help.addText(h, .{});
+                help.deinit();
             }
         }
-    }
-
-    // Spacer to push the toggle to the right edge.
-    {
-        var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
-        spacer.deinit();
     }
 
     // Right: pill toggle. The knob's position (and the pill's fill) animate
@@ -549,6 +564,10 @@ pub fn toggleRow(
             .padding = .{ .x = 3, .y = 3, .w = 3, .h = 3 },
         });
         defer pill.deinit();
+        if (builtin.is_test and native_toggle_count < native_toggle_bounds.len) {
+            native_toggle_bounds[native_toggle_count] = .{ .row = row.data().borderRectScale().r, .pill = pill.data().borderRectScale().r };
+            native_toggle_count += 1;
+        }
 
         // Kick a slide animation whenever the value changed since last frame;
         // if a slide is still in flight, start from its current position.

@@ -464,8 +464,20 @@ pub fn playNextUnplayed(player: anytype) void {
 // UI Rendering (called from drawer.zig)
 // ══════════════════════════════════════════════════════════
 
+var fixture_for_test = false;
+pub var test_row_rects: [8]dvui.Rect = @splat(.{});
+pub fn setRenderFixtureForTest(items: ?[]const QueueItem) void {
+    if (!@import("builtin").is_test) @compileError("Queue fixture is test-only");
+    fixture_for_test = items != null;
+    queue_count = if (items) |data| @min(data.len, MAX_QUEUE) else 0;
+    if (items) |data| @memcpy(queue_items[0..queue_count], data[0..queue_count]);
+    thumb_backfill_done.store(true, .release);
+    queue_scroll = .{};
+    queue_row_heights = @splat(0);
+}
+
 pub fn renderContent() void {
-    if (!isReady()) {
+    if (!isReady() and !(@import("builtin").is_test and fixture_for_test)) {
         _ = dvui.label(@src(), "Loading queue…", .{}, .{
             .color_text = theme.colors.text_secondary,
             .gravity_x = 0.5,
@@ -516,7 +528,7 @@ pub fn renderContent() void {
 
         if (dvui.button(@src(), if (thumb_backfill_active.load(.acquire)) "Stop Fetch" else "Fetch Thumbs", .{}, .{
             .color_fill = if (thumb_backfill_active.load(.acquire)) dvui.Color{ .r = 80, .g = 30, .b = 30, .a = 200 } else theme.colors.accent,
-            .color_text = if (thumb_backfill_active.load(.acquire)) theme.colors.danger else dvui.Color.white,
+            .color_text = if (thumb_backfill_active.load(.acquire)) theme.colors.danger else theme.colors.text_on_accent,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
             .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
@@ -785,6 +797,7 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
         .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
     });
     defer {
+        if (@import("builtin").is_test and fixture_for_test and idx < test_row_rects.len) test_row_rects[idx] = card.data().rect;
         const height = card.data().rect.h;
         if (height > 0) queue_row_heights[idx] = height;
         card.deinit();
@@ -881,7 +894,7 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
 
         _ = dvui.label(@src(), "{s}", .{source}, .{
             .id_extra = idx + 720,
-            .color_text = theme.colors.border_subtle,
+            .color_text = theme.colors.text_tertiary,
             .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
             .max_size_content = .{ .w = title_w, .h = std.math.floatMax(f32) },
         });

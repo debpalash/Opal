@@ -4,6 +4,25 @@ shared @test decorator, helpers, and run_all()."""
 from .harness import *  # noqa: F401,F403
 import os, sys, subprocess, sqlite3, socket, time, json  # noqa: F401
 
+@test("Playback stays in Opal without external player handoffs", "Player")
+def test_no_external_player_handoff():
+    obsolete = os.path.join(PROJECT_DIR, "src/services/external_player.zig")
+    if os.path.exists(obsolete):
+        return "fail", "External player launch service must not be shipped"
+    offenders = []
+    forbidden = ("Open in VLC", "Open current media in VLC", "External VLC",
+                 "external_player.zig", "vlc://", "Open in IINA", "iina://")
+    for directory in ("src", "web"):
+        for root, _, files in os.walk(os.path.join(PROJECT_DIR, directory)):
+            for name in files:
+                if not name.endswith((".zig", ".js", ".html")):
+                    continue
+                path = os.path.join(root, name)
+                text = open(path, encoding="utf-8").read()
+                if any(marker.lower() in text.lower() for marker in forbidden):
+                    offenders.append(os.path.relpath(path, PROJECT_DIR))
+    return ("fail", ", ".join(offenders)) if offenders else ("pass", "Native and web playback have no external-player launch path")
+
 @test("Typed Playback Load Seam", "Player")
 def test_typed_playback_load_seam():
     player = _src("src/player/player.zig")
@@ -1836,7 +1855,10 @@ def test_compact_native_playback_strip():
     controls = ft[ft.index("// ROW 2 — Controls:"):ft.index("// Secondary controls and transfer actions")]
     checks = {
         "shared compact height": "footer_pure.CONTROL_CONTENT_HEIGHT" in controls and controls.count("footer_pure.CONTROL_VERTICAL_PADDING") == 2,
-        "filename shares strip": "footer_pure.compactTitle(" in controls and "textSizeEx(" in controls,
+        "native title policy used": "showMediaTitleInControls(@import(\"builtin\").os.tag == .macos)" in ft and "if (show_media_title or footer_pure.transportBusy(transport))" in controls,
+        "busy status preserved": "footer_pure.transportLabel(transport)" in controls and "dock_transport" in ft,
+        "macOS title policy regression": "macOS controls omit duplicate window title" in fp,
+        "other desktops retain measured title": "footer_pure.compactTitle(" in controls and "textSizeEx(" in controls,
         "filename cannot pin its old minimum width": ".max_size_content = .{ .w = 0," in _between(controls, "var title_host", "const title_width"),
         "no separate title/status row": "np_row" not in ft and "ROW 3" not in ft,
         "narrow navigation retained": "Previous episode" in ft and "Next episode" in ft and "Previous track" in ft and "Next track" in ft,
@@ -1851,4 +1873,4 @@ def test_compact_native_playback_strip():
         "boundary regressions": "compact title respects measured width and UTF8 boundaries" in fp,
     }
     bad = [key for key, good in checks.items() if not good]
-    return ("fail", ", ".join(bad)) if bad else ("pass", "40pt strip shares measured filename; subtitle actions and confirmed transfer actions retained in drop-ups")
+    return ("fail", ", ".join(bad)) if bad else ("pass", "40pt strip omits duplicate macOS title while retaining busy status, subtitle options and confirmed transfer actions")

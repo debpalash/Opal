@@ -303,6 +303,19 @@ pub fn compactTitle(out: []u8, title: []const u8, measured_end: usize) []const u
     return out[0 .. end + 3];
 }
 
+pub fn playlistIndexForId(ids: []const i64, wanted: i64) ?usize {
+    if (wanted < 0) return null;
+    for (ids, 0..) |id, index| if (id == wanted) return index;
+    return null;
+}
+
+test "playlist action follows stable entry identity after reorder and rejects replacement" {
+    try std.testing.expectEqual(@as(?usize, 1), playlistIndexForId(&.{ 12, 41, 73 }, 41));
+    try std.testing.expectEqual(@as(?usize, 0), playlistIndexForId(&.{ 41, 73, 12 }, 41));
+    try std.testing.expect(playlistIndexForId(&.{ 12, 99, 73 }, 41) == null);
+    try std.testing.expect(playlistIndexForId(&.{ -1, 0 }, -1) == null);
+}
+
 // ══════════════════════════════════════════════════════════════════
 // Tests
 // ══════════════════════════════════════════════════════════════════
@@ -670,4 +683,52 @@ test "filename fallback excludes URI authority credentials and handles Windows" 
     try expect(!showTorrentActivity(true, 7, 7));
     try expect(showTorrentActivity(true, 7, 8));
     try expect(showTorrentActivity(false, 7, 7));
+}
+
+/// Select a CJK-capable face for Han, kana and Hangul media metadata.
+/// Invalid UTF-8 is rejected; callers sanitize worker-owned text first.
+pub fn needsCjkFont(text: []const u8) bool {
+    const view = std.unicode.Utf8View.init(text) catch return false;
+    var it = view.iterator();
+    while (it.nextCodepoint()) |cp| {
+        if ((cp >= 0x2e80 and cp <= 0x9fff) or
+            (cp >= 0xac00 and cp <= 0xd7af) or
+            (cp >= 0xf900 and cp <= 0xfaff) or
+            (cp >= 0xff00 and cp <= 0xffef) or
+            (cp >= 0x1100 and cp <= 0x11ff) or
+            (cp >= 0x20000 and cp <= 0x3134f)) return true;
+    }
+    return false;
+}
+test "media CJK font selection preserves Latin typography and covers Han kana Hangul" {
+    try std.testing.expect(!needsCjkFont("A long English title — café"));
+    try std.testing.expect(!needsCjkFont("Привет κόσμος"));
+    try std.testing.expect(needsCjkFont("A mixed title 日本語"));
+    try std.testing.expect(needsCjkFont("カタカナ ひらがな"));
+    try std.testing.expect(needsCjkFont("한국어"));
+    try std.testing.expect(needsCjkFont("漢字"));
+    try std.testing.expect(!needsCjkFont("\xff"));
+}
+
+/// DVUI row identity follows the mpv entry rather than its current position.
+pub fn playlistWidgetKey(id: i64) ?usize {
+    if (id < 0) return null;
+    return @truncate(@as(u64, @intCast(id)));
+}
+test "playlist widget keys retain entry identity including zero and reject missing IDs" {
+    try std.testing.expectEqual(@as(?usize, 0), playlistWidgetKey(0));
+    try std.testing.expectEqual(@as(?usize, 41), playlistWidgetKey(41));
+    try std.testing.expect(playlistWidgetKey(-1) == null);
+    const before = [_]i64{ 12, 41, 73 };
+    const after = [_]i64{ 41, 73, 12 };
+    try std.testing.expectEqual(playlistWidgetKey(before[1]), playlistWidgetKey(after[0]));
+}
+
+/// macOS already presents the loaded title in its native window titlebar.
+pub fn showMediaTitleInControls(is_macos: bool) bool {
+    return !is_macos;
+}
+test "macOS controls omit duplicate window title and other desktops retain context" {
+    try std.testing.expect(!showMediaTitleInControls(true));
+    try std.testing.expect(showMediaTitleInControls(false));
 }

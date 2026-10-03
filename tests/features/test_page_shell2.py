@@ -547,7 +547,8 @@ def test_auto_scale_floor_and_persistence():
         ),
         "both values persist": 'setKey("ui_scale",' in cfg
             and 'setKey("ui_scale_auto",' in cfg,
-        "Auto is segment zero": '"Auto ≥1.0x"' in sg
+        # The ASCII label avoids a missing comparison glyph in the UI font.
+        "Auto is segment zero": 'const scale_labels = [_][]const u8{ "Auto (1.0x+)"' in sg
             and "if (clicked == 0)" in sg,
         "manual indices are offset": "sel = idx + 1" in sg
             and "scales[clicked - 1]" in sg,

@@ -635,7 +635,7 @@ pub const MediaPlayer = struct {
     pub fn getMediaTitle(self: *MediaPlayer, out_buf: []u8) usize {
         // 1. If torrent, get torrent name
         if (self.current_torrent_id >= 0) {
-            var t_name: [256]u8 = undefined;
+            var t_name: [256]u8 = @splat(0);
             c.mpv.torrent_get_name(state.torrentSession(), self.current_torrent_id, &t_name, 256);
             const tn_len = std.mem.indexOfScalar(u8, &t_name, 0) orelse 0;
             if (tn_len > 0) {

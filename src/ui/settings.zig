@@ -248,7 +248,7 @@ fn sectionMatchesSearch(tab: state.SettingsTab) bool {
     if (search_len == 0) return true;
     const sections: []const []const u8 = switch (tab) {
         .General => &.{ "Interface", "Behavior", "TMDB", "Theme", "Scale", "Grid", "NSFW", "Seek Sync", "API Key", "Plugins", "Sources", "Content plugins" },
-        .Playback => &.{ "Video Processing", "Audio Equalizer", "Playback Extras", "External VLC", "Prefetch", "Passthrough", "Exclusive", "Audio Output", "Device", "Streaming", "Shortcuts", "Filters", "Capture", "Hardware", "Decode", "Deband", "Interpolation", "Brightness", "Contrast", "Saturation", "Gamma", "Screenshot", "Auto-advance", "Resume" },
+        .Playback => &.{ "Video Processing", "Audio Equalizer", "Playback Extras", "Prefetch", "Passthrough", "Exclusive", "Audio Output", "Device", "Streaming", "Shortcuts", "Filters", "Capture", "Hardware", "Decode", "Deband", "Interpolation", "Brightness", "Contrast", "Saturation", "Gamma", "Screenshot", "Auto-advance", "Resume" },
         .About => &.{ "About", "Version", "Update", "Credits", "License", "Donate", "Sponsors", "Links", "TMDB" },
         .Subtitles => &.{ "OpenSubtitles", "Subdl", "Language", "Search", "API Key", "Font", "Delay", "Whisper" },
         .Network => &.{ "Torrent", "Memory", "RAM", "Buffer", "Streaming", "Download", "Trackers", "Proxy", "Speed", "Limit", "Port", "Browser", "Engine", "Camoufox", "CloakBrowser", "Audiobookshelf", "Audiobook", "OPDS", "Reading", "Komga", "Kavita", "Calibre" },
@@ -1192,7 +1192,7 @@ fn renderGeneralTab() void {
     settingRow("UI Scale", 100, @src());
     {
         const scales = [_]f32{ 0.6, 0.7, 0.8, 0.9, 1.0, 1.2, 1.4, 1.6, 2.0 };
-        const scale_labels = [_][]const u8{ "Auto ≥1.0x", "0.6x", "0.7x", "0.8x", "0.9x", "1.0x", "1.2x", "1.4x", "1.6x", "2.0x" };
+        const scale_labels = [_][]const u8{ "Auto (1.0x+)", "0.6x", "0.7x", "0.8x", "0.9x", "1.0x", "1.2x", "1.4x", "1.6x", "2.0x" };
         // Index 0 = Auto; manual values are offset by one.
         var sel: usize = 0;
         if (!state.app.ui_scale_auto) {
@@ -1718,38 +1718,6 @@ fn renderPlaybackTab() void {
             state.showToast("Applies to the next file you open");
         }
     }
-    // External VLC is an opt-in handoff; embedded playback stays untouched.
-    sectionHeader("External VLC", "Open the current file or direct stream in a separate VLC window", 251, @src());
-    {
-        const external = @import("../services/external_player.zig");
-        const has_player = state.app.active_player_idx < state.app.players.items.len;
-        const media = if (has_player) state.app.players.items[state.app.active_player_idx] else null;
-        const url = if (media) |p| p.current_url[0..p.current_url_len] else "";
-        if (external.playable(url)) {
-            if (dvui.button(@src(), "Open current media in VLC", .{}, .{
-                .color_fill = theme.colors.bg_elevated,
-                .color_text = theme.colors.accent,
-                .corner_radius = theme.dims.rad_sm,
-                .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
-            })) {
-                if (!external.launch(url)) state.showToastTyped("Could not queue VLC launch · see Logs", .err);
-            }
-        } else {
-            _ = dvui.label(@src(), "Play a file or direct stream to open it in VLC; internal Opal sources cannot be handed off.", .{}, .{ .color_text = theme.colors.text_secondary });
-        }
-        const outcome = external.status();
-        if (outcome != .idle) {
-            _ = dvui.label(@src(), "VLC: {s}", .{switch (outcome) {
-                .launching => "Starting…",
-                .opened => "Opened externally",
-                .failed => "Could not open · see Logs",
-                .idle => unreachable,
-            }}, .{ .color_text = if (outcome == .failed) theme.colors.danger else theme.colors.text_secondary });
-            if (outcome == .launching) components.pollRefresh(100_000);
-        }
-        _ = dvui.label(@src(), "Requires VLC installed (standard Windows, macOS or Linux location, or on PATH). Direct URLs and files only; streams requiring Opal's private headers cannot be transferred. Local torrent streams require Opal to remain open.", .{}, .{ .color_text = theme.colors.text_tertiary });
-    }
-
     // ── Audio Output ──
     sectionHeader("Audio Output", "Route sound to a specific output device", 26, @src());
     {

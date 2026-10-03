@@ -1540,7 +1540,7 @@ fn renderToolbar() void {
         });
     }
 
-    renderSearchInline();
+    if (@import("../ui/browse_layout_pure.zig").showLocalSearch(state.app.page_shell_enabled)) renderSearchInline();
 
     if (state.app.yt.is_loading.load(.acquire)) {
         dvui.spinner(@src(), .{ .color_text = theme.colors.accent, .min_size_content = theme.iconSize(.sm), .gravity_y = 0.5 });

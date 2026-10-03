@@ -1089,3 +1089,68 @@ test('Selected content facet wraps category cards while All retains discovery ra
   assert.doesNotMatch(f.$('results').innerHTML, /search-shelf-grid/);
   assert.match(f.$('results').innerHTML, /Song/);
 });
+
+test('Search card secondary metadata keeps genres without repeating year rating or detail action', () => {
+  const f = fixture('catalog.js');
+  assert.equal(f.run("searchCardDetail({year:2016,rating:7.6,detail:'2016 · Movie details · 7.6/10 · Drama · Mystery'})"), 'Drama · Mystery');
+  assert.equal(f.run("searchCardDetail({year:2016,rating:7.6,detail:'1080p · 52 seeds'})"), '1080p · 52 seeds');
+  f.run(`renderUnifiedResults({generation:42,results:[{title:'Film',source:'tmdb',media:'movie',id:1,key:'a',year:2016,rating:7.6,detail:'2016 · Movie details · 7.6/10 · Drama',poster_url:'https://images.example/film.jpg'}],sources:[]})`);
+  const markup=f.$('results').innerHTML;
+  assert.match(markup,/search-art-placeholder/);
+  assert.match(markup,/search-card-release">Drama</);
+});
+
+test('Provider poster failure retains card fallback without hiding title and actions', () => {
+  const f = fixture('media.js');
+  assert.equal(f.run(`(()=>{const classes=new Set();const card={classList:{add:value=>classes.add(value)}};const image={tagName:'IMG',hidden:false,closest:selector=>selector==='.card'?card:null};handlePosterFailure(image);return image.hidden&&classes.has('poster-missing')})()`),true);
+});
+
+test('Web playback stays in the browser or Opal without VLC or IINA handoff', () => {
+  const playbackSource = ['search.js','discovery.js','now-playing.js','playback.js','media.js'].map(source).join('\n');
+  assert.doesNotMatch(playbackSource, /(?:vlc|iina):\/\/|open[_-]?in[_-]?(?:vlc|iina)|Open in (?:VLC|IINA)/i);
+  assert.match(playbackSource, /remoteOpenUrl|playMediaUrl|openStreamUrl/);
+  const markup=readFileSync(new URL('../web/index.html',import.meta.url),'utf8');
+  assert.doesNotMatch(markup, /Open in (?:VLC|IINA)|(?:vlc|iina):\/\//i);
+});
+
+test('Web secondary metadata has readable contrast on every midnight surface', () => {
+  const css=readFileSync(new URL('../web/styles/app.css',import.meta.url),'utf8');
+  const tokens=Object.fromEntries([...css.matchAll(/--([\w-]+):\s*(#[0-9a-f]{6})/gi)].map(m=>[m[1],m[2]]));
+  const luminance=hex=>{const channels=[1,3,5].map(i=>parseInt(hex.slice(i,i+2),16)/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4);return .2126*channels[0]+.7152*channels[1]+.0722*channels[2]};
+  for(const foreground of ['text-1','text-2','text-3'])for(const background of ['bg-app','bg-surface','bg-elevated','bg-hover']){
+    const fg=luminance(tokens[foreground]),bg=luminance(tokens[background]);
+    assert.ok((Math.max(fg,bg)+.05)/(Math.min(fg,bg)+.05)>=4.5,`${foreground} on ${background}`);
+  }
+});
+
+test('YouTube list uses real provider thumbnail safely and library missing covers have fallback', () => {
+  const f=fixture('search.js','media.js','discovery.js');
+  f.run(`renderYt([{id:'fixture',title:'Video',thumbnail:'https://images.example/a.jpg',channel:'Fixture'}]);`);
+  assert.match(f.$('yt-results').innerHTML,/class="video-thumb"/);
+  f.run(`renderYt([{id:'fixture',title:'Video',thumbnail:'javascript:alert(1)',channel:'Fixture'}]);`);
+  assert.doesNotMatch(f.$('yt-results').innerHTML,/video-thumb|javascript:/);
+  f.run(`globalThis.setSafeHtml=(target,html)=>{target.innerHTML=html;return true};renderJfItems([{id:'fixture',name:'Missing poster',image:false,type:'Movie'}]);`);
+  assert.match(f.$('jf-items').innerHTML,/poster-missing/);
+});
+
+test('Failed podcast artwork becomes a sized audio placeholder', () => {
+  const f=fixture('media.js');
+  assert.equal(f.run(`(()=>{let replacement;const image={tagName:'IMG',closest:selector=>selector==='.result.pod'?{}:null,replaceWith:value=>replacement=value};handlePosterFailure(image);return replacement.className==='thumb poster-placeholder'&&replacement.textContent==='♪'&&replacement.attributes.get('aria-label')==='Artwork unavailable'})()`),true);
+});
+
+test('List cover sizing and dialog centering are explicit CSS contracts', () => {
+  const css=readFileSync(new URL('../web/styles/app.css',import.meta.url),'utf8');
+  assert.match(css,/\.result>\.poster\{[^}]*width:76px;[^}]*height:108px/);
+  assert.match(css,/\.result:not\(\.pod\)>\.thumb\{[^}]*width:68px;[^}]*height:96px/);
+  assert.match(css,/#source-details\{margin:auto\}/);
+  assert.match(css,/#search-cancel,\.search-sort\{[^}]*flex:none;white-space:nowrap/);
+  assert.match(css,/#browse-search button\{[^}]*flex:none;white-space:nowrap/);
+});
+
+test('Selecting search details honors reduced motion in the shipped scroll decision', () => {
+  const f=fixture('search.js');
+  assert.equal(f.run('searchDetailScrollBehavior()'),'smooth');
+  f.run(`globalThis.matchMedia=query=>({matches:query==='(prefers-reduced-motion: reduce)'});`);
+  assert.equal(f.run('searchDetailScrollBehavior()'),'auto');
+  assert.match(source('search.js'),/scrollIntoView\?\.\(\{behavior:searchDetailScrollBehavior\(\)/);
+});

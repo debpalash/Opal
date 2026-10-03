@@ -1953,7 +1953,7 @@ fn renderGalleryCard(group: *const search_content.Group, size: gallery_layout.Si
         result_scroll.viewport.y = 0;
     }
     art.deinit();
-    const body = dvui.themeGet().font_body;
+    const body = theme.mediaTitleFont(item.name[0..item.name_len], dvui.themeGet().font_body);
     var title: [520]u8 = undefined;
     _ = dvui.label(@src(), "{s}", .{searchRowTitle(item.name[0..item.name_len], body, size.w, &title)}, .{ .id_extra = key +% 3, .font = body, .color_text = theme.colors.text_primary, .min_size_content = .{ .w = size.w, .h = body.textHeight() * 2 }, .max_size_content = .{ .w = size.w, .h = body.textHeight() * 2 }, .margin = .{ .x = 0, .y = 7, .w = 0, .h = 0 } });
     var metadata: [128]u8 = undefined;
@@ -1996,7 +1996,7 @@ fn renderGalleryHero(group: *const search_content.Group, width: f32, pending: *?
     defer copy.deinit();
     _ = dvui.label(@src(), "{s}", .{galleryCategoryLabel(group.category)}, .{ .color_text = theme.colors.accent, .font = dvui.themeGet().font_body.withSize(theme.font_size.small) });
     const copy_width = @max(1, copy.data().contentRect().w);
-    const heading = dvui.themeGet().font_title.withSize(if (width < 760) 26 else 34);
+    const heading = theme.mediaTitleFont(item.name[0..item.name_len], dvui.themeGet().font_title.withSize(if (width < 760) 26 else 34));
     var title: [520]u8 = undefined;
     _ = dvui.label(@src(), "{s}", .{searchRowTitle(item.name[0..item.name_len], heading, copy_width, &title)}, .{ .id_extra = 95002, .color_text = theme.colors.text_primary, .font = heading, .max_size_content = .{ .w = copy_width, .h = heading.textHeight() * 2 }, .margin = .{ .x = 0, .y = 4, .w = 0, .h = 8 } });
     searchRowLine(95003, safeUtf8(item.detail[0..item.detail_len]), dvui.themeGet().font_body.withSize(theme.font_size.small), copy_width, theme.colors.text_secondary);
@@ -2294,7 +2294,7 @@ fn renderCompactRow(idx: usize, item: *const @import("resolver.zig").ResolvedIte
         .audiobooks => "Audiobook",
         .opds => "OPDS",
     };
-    const body = dvui.themeGet().font_body;
+    const body = theme.mediaTitleFont(item.name[0..item.name_len], dvui.themeGet().font_body);
     const small = body.withSize(theme.font_size.small);
     const row_height = body.textHeight() * 3 + 14 + (if (risk.risk != .ok) small.textHeight() else @as(f32, 0));
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{

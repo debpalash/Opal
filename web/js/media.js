@@ -905,3 +905,21 @@ $('lg-errors').onclick = () => {
   loadLogs();
 };
 $('lg-clear').onclick = () => { api('/logs/clear').catch(()=>{}); loadLogs(); };
+
+// Broken provider artwork retains a visible, sized fallback and its title/actions.
+function handlePosterFailure(image){
+  if (!image || image.tagName !== 'IMG') return;
+  if (image.closest('.result.pod')) {
+    const placeholder = document.createElement('div');
+    placeholder.className = 'thumb poster-placeholder';
+    placeholder.textContent = '♪';
+    placeholder.setAttribute('aria-label', 'Artwork unavailable');
+    image.replaceWith(placeholder);
+    return;
+  }
+  const card = image.closest('.card');
+  if (!card) return;
+  image.hidden = true;
+  card.classList.add('poster-missing');
+}
+document.addEventListener('error', event => handlePosterFailure(event.target), true);

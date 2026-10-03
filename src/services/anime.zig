@@ -134,6 +134,22 @@ var fetched_cal_day: u8 = 255;
 var fetched_nsfw_filter: bool = true;
 var clear_for_safe_refresh: bool = false;
 
+/// Offline pixel fixture uses the real grid without admitting provider work.
+pub fn setNativeFixtureForTest(rows: []const state.AnimeResult) void {
+    if (!@import("builtin").is_test) @compileError("Native fixture is test-only");
+    const a = &state.app.anime;
+    a.result_count = @min(rows.len, a.results.len);
+    @memcpy(a.results[0..a.result_count], rows[0..a.result_count]);
+    a.mode = .trending;
+    a.selected_idx = null;
+    a.last_fetch_s = 9_999_999_999;
+    a.is_loading.store(false, .release);
+    fetched_mode = .trending;
+    fetched_nsfw_filter = state.app.nsfw_filter_enabled;
+    clear_for_safe_refresh = false;
+    results_are_scraper = false;
+}
+
 /// Switch the active browse mode. Resets the SWR stamp so the explicit switch
 /// always refetches, bumps the generation (drops any in-flight worker), and
 /// clears the selection so we land on the grid. The actual fetch is kicked by
@@ -3367,10 +3383,23 @@ fn syncNsfwFilter() void {
 // Mode toolbar (Trending | Seasonal | Calendar | Search | My List)
 // ══════════════════════════════════════════════════════════
 
+var native_toolbar_rect: dvui.Rect.Physical = undefined;
+pub fn nativeToolbarRectForTest() dvui.Rect.Physical {
+    if (!@import("builtin").is_test) @compileError("Native fixture is test-only");
+    return native_toolbar_rect;
+}
 fn renderModeToolbar(count: usize) void {
-    // ONE wrapping flexbox holding the mode tabs, the per-mode chips, the result
-    // count and the card-size controls — all on a single row (wraps if narrow).
-    var bar = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
+    // Keep controls in one scrollable row; narrow windows retain the gallery.
+    const height = @import("../ui/browse_layout_pure.zig").toolbarHeight(dvui.themeGet().font_body.size);
+    var scroll = dvui.scrollArea(@src(), .{ .horizontal = .auto, .horizontal_bar = .auto_overlay, .vertical = .none }, .{
+        .expand = .horizontal,
+        .min_size_content = .{ .w = 0, .h = height },
+        .max_size_content = dvui.Options.MaxSize.height(height),
+        .background = false,
+    });
+    defer scroll.deinit();
+    if (@import("builtin").is_test) native_toolbar_rect = scroll.data().borderRectScale().r;
+    var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
         .padding = .{ .x = 8, .y = 8, .w = 8, .h = 6 },
         .background = true,
@@ -3381,7 +3410,7 @@ fn renderModeToolbar(count: usize) void {
     renderModeTab(0, .trending, "Trending");
     renderModeTab(1, .seasonal, "Seasonal");
     renderModeTab(2, .calendar, "Calendar");
-    renderModeTab(3, .search, "Search");
+    if (@import("../ui/browse_layout_pure.zig").showLocalSearch(state.app.page_shell_enabled)) renderModeTab(3, .search, "Search");
     renderModeTab(4, .mylist, "My List");
 
     // ── "Airing this week" view toggle (AniList schedule) — a VIEW, not a mode,
@@ -3834,6 +3863,7 @@ fn renderRelationsRail() void {
 /// Search box with LIVE / incremental search-as-you-type (350ms debounce) plus
 /// the explicit Enter / button path. Empty query → trending.
 fn renderSearchBar() void {
+    if (!@import("../ui/browse_layout_pure.zig").showLocalSearch(state.app.page_shell_enabled)) return;
     const io = @import("../core/io_global.zig");
 
     var search_row = dvui.box(@src(), .{ .dir = .horizontal }, .{

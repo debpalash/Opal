@@ -943,6 +943,8 @@ fn codeIndex(codes: []const []const u8, current: []const u8) usize {
 // [Working][Test]. The search entry expands to eat the slack, so it stays roomy
 // while the controls pack to the right — one line instead of three.
 fn renderToolbar() void {
+    const local_search = @import("../ui/browse_layout_pure.zig").showLocalSearch(state.app.page_shell_enabled);
+    if (!local_search and iptvBase() == null) return;
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
         .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
@@ -961,43 +963,45 @@ fn renderToolbar() void {
         .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
     });
 
-    var te = dvui.textEntry(@src(), .{
-        .text = .{ .buffer = &state.app.iptv.search_buf },
-        .placeholder = "Search channels...",
-    }, .{
-        .expand = .horizontal,
-        .padding = .{ .x = 6, .y = 4, .w = 6, .h = 4 },
-        .color_fill = theme.colors.bg_elevated,
-        .color_text = theme.colors.text_primary,
-        .corner_radius = theme.dims.rad_sm,
-        .gravity_y = 0.5,
-    });
-    const entered = te.enter_pressed;
-    te.deinit();
-
-    // Clear (×) — only when there's text. Zeroing the buffer lets pollLiveSearch
-    // restore the full directory on the next frame, so "remove the filter" is a
-    // dynamic update, not a stuck search.
-    if (std.mem.sliceTo(&state.app.iptv.search_buf, 0).len > 0) {
-        if (dvui.buttonIcon(@src(), "iptvclear", icons.tvg.lucide.x, .{}, .{}, .{
-            .color_text = theme.colors.text_secondary,
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .border = dvui.Rect.all(0),
-            .min_size_content = theme.iconSize(.sm),
-            .margin = .{ .x = 4, .y = 0, .w = 4, .h = 0 },
+    if (local_search) {
+        var te = dvui.textEntry(@src(), .{
+            .text = .{ .buffer = &state.app.iptv.search_buf },
+            .placeholder = "Search channels...",
+        }, .{
+            .expand = .horizontal,
+            .padding = .{ .x = 6, .y = 4, .w = 6, .h = 4 },
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = theme.colors.text_primary,
+            .corner_radius = theme.dims.rad_sm,
             .gravity_y = 0.5,
-        })) {
-            @memset(&state.app.iptv.search_buf, 0);
-        }
-    }
+        });
+        const entered = te.enter_pressed;
+        te.deinit();
 
-    // Live incremental search: results track the text as it's typed or cleared.
-    // Enter still submits explicitly (a no-op if the live poll already applied it).
-    pollLiveSearch();
-    if (entered) {
-        const q = std.mem.sliceTo(&state.app.iptv.search_buf, 0);
-        if (q.len > 0) searchIptv(q);
+        // Clear (×) — only when there's text. Zeroing the buffer lets pollLiveSearch
+        // restore the full directory on the next frame, so "remove the filter" is a
+        // dynamic update, not a stuck search.
+        if (std.mem.sliceTo(&state.app.iptv.search_buf, 0).len > 0) {
+            if (dvui.buttonIcon(@src(), "iptvclear", icons.tvg.lucide.x, .{}, .{}, .{
+                .color_text = theme.colors.text_secondary,
+                .color_fill = theme.transparent,
+                .color_fill_hover = theme.colors.bg_hover,
+                .border = dvui.Rect.all(0),
+                .min_size_content = theme.iconSize(.sm),
+                .margin = .{ .x = 4, .y = 0, .w = 4, .h = 0 },
+                .gravity_y = 0.5,
+            })) {
+                @memset(&state.app.iptv.search_buf, 0);
+            }
+        }
+
+        // Live incremental search: results track the text as it's typed or cleared.
+        // Enter still submits explicitly (a no-op if the live poll already applied it).
+        pollLiveSearch();
+        if (entered) {
+            const q = std.mem.sliceTo(&state.app.iptv.search_buf, 0);
+            if (q.len > 0) searchIptv(q);
+        }
     }
 
     // Controls only when the plugin is installed (an inert tab shows just search).

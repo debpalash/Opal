@@ -1,7 +1,7 @@
 /* Opal Anywhere — theme tokens ported from src/ui/theme.zig (midnight) */
 :root{
   --bg-app:#0c0c11; --bg-surface:#14141c; --bg-elevated:#1c1c26; --bg-hover:#232330;
-  --border:#2a2a38; --text-1:#e8e8f0; --text-2:#a0a0b4; --text-3:#6c6c80;
+  --border:#2a2a38; --text-1:#e8e8f0; --text-2:#a0a0b4; --text-3:#8f8fa0;
   --accent:#8ab4ff; --accent-dim:#3a4a6a; --success:#7dd87d; --danger:#ff7a7a;
   --rad:10px; --rad-sm:6px; --nav-w:248px;
 }
@@ -716,3 +716,30 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
 .search-shelf-track.search-shelf-grid{grid-auto-flow:row;grid-auto-columns:auto;grid-template-columns:repeat(auto-fill,minmax(145px,1fr));overflow-x:visible;scroll-snap-type:none;padding-bottom:3px}
 .search-shelf:has(.aspect-wide) .search-shelf-track.search-shelf-grid{grid-auto-columns:auto;grid-template-columns:repeat(auto-fill,minmax(min(240px,100%),1fr))}
 @media(min-width:900px){.search-shelf-track.search-shelf-grid{grid-template-columns:repeat(auto-fill,minmax(170px,1fr))}}
+
+/* Keep actionable controls intact while live status text grows. */
+.search-result-tools{flex-wrap:wrap}
+.search-result-tools .hint{flex:1 1 250px}
+#search-cancel,.search-sort{flex:none;white-space:nowrap}
+#browse-search button{flex:none;white-space:nowrap}
+.search-card-art .search-art-placeholder{position:absolute;inset:0}
+.search-card-art img{position:absolute;inset:0}
+@media(max-width:599px){.search-result-tools .hint{flex-basis:100%}.search-sort{margin-left:auto}}
+.card img[hidden],.search-card-art img[hidden]{display:none}
+
+/* Cover metadata in list results must not expand to provider-native image size. */
+.result:not(.pod):has(>.thumb),.result:has(>.video-thumb){display:flow-root}
+.result:not(.pod)>.thumb{float:left;width:68px;height:96px;object-fit:cover;border-radius:7px;margin:0 14px 8px 0}
+.result>.video-thumb{float:left;width:160px;aspect-ratio:16/9;object-fit:cover;border-radius:7px;margin:0 14px 8px 0}
+@media(max-width:599px){.result>.video-thumb{width:120px}}
+.result:has(>.poster){display:flow-root}
+.result>.poster{float:left;width:76px;height:108px;object-fit:cover;border-radius:7px;margin:0 14px 8px 0}
+.watch-actions{clear:both}
+.result.pod .poster-placeholder{display:grid;place-items:center;background:var(--bg-elevated);color:var(--text-2);font-size:24px;flex:none}
+/* The global margin reset must not override native dialog centering. */
+#source-details{margin:auto}
+/* Keep the music query, provider, and submit together on compact screens. */
+#page-music .search-row{flex-wrap:nowrap;align-items:stretch}
+#page-music .search-row>input{min-width:0;flex:1 1 0}
+#page-music .search-row>select{flex:none;max-width:120px}
+#mu-go{flex:none;min-width:40px;min-height:40px;padding:6px 10px;border:1px solid var(--border);border-radius:var(--rad-sm);background:var(--bg-elevated)}
