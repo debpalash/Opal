@@ -1,6 +1,6 @@
-//! A child process on a pseudo-terminal (POSIX). Windows has no pty here yet;
-//! `supported` is false there and `spawn` fails, so callers fall back to the
-//! external-terminal launcher.
+//! A child process on a pseudo-terminal. POSIX uses `forkpty` (below); Windows
+//! uses ConPTY (pty_windows.zig). `Pty` and `spawn` are the same to callers on
+//! both; the one difference is `argv` on Windows, documented at `spawn`.
 //!
 //! `forkpty` does the openpty/fork/setsid/controlling-terminal dance. The child
 //! only calls `execve` (arguments and environment are built before the fork,
@@ -9,9 +9,13 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const io_g = @import("../core/io_global.zig");
+const win = @import("pty_windows.zig");
+const sync = @import("../core/sync.zig");
+
+const is_windows = builtin.os.tag == .windows;
 
 pub const supported = switch (builtin.os.tag) {
-    .linux, .macos, .freebsd, .netbsd, .openbsd => true,
+    .linux, .macos, .freebsd, .netbsd, .openbsd, .windows => true,
     else => false,
 };
 
@@ -24,13 +28,21 @@ const c = struct {
     extern "c" fn read(fd: c_int, buf: [*]u8, n: usize) isize;
     extern "c" fn write(fd: c_int, buf: [*]const u8, n: usize) isize;
     extern "c" fn close(fd: c_int) c_int;
+    // Variadic on purpose: Apple arm64 passes variadic arguments on the stack and
+    // libSystem's ioctl/fcntl read them there, so a fixed-arity declaration would
+    // put the pointer in a register the callee never looks at.
     extern "c" fn ioctl(fd: c_int, request: c_ulong, ...) c_int;
+    extern "c" fn _NSGetEnviron() *[*:null]?[*:0]u8;
     extern "c" fn kill(pid: c_int, sig: c_int) c_int;
     extern "c" fn waitpid(pid: c_int, status: ?*c_int, options: c_int) c_int;
-    extern "c" fn poll(fds: [*]PollFd, nfds: c_ulong, timeout: c_int) c_int;
+    extern "c" fn poll(fds: [*]PollFd, nfds: c_nfds, timeout: c_int) c_int;
     extern "c" fn fcntl(fd: c_int, cmd: c_int, ...) c_int;
+    extern "c" fn signal(sig: c_int, handler: ?*const anyopaque) ?*const anyopaque;
+    extern "c" fn getdtablesize() c_int;
 };
 
+/// nfds_t is unsigned long on Linux and unsigned int on the BSDs and macOS.
+const c_nfds = if (builtin.os.tag == .linux) c_ulong else c_uint;
 const PollFd = extern struct { fd: c_int, events: i16, revents: i16 };
 const POLLIN: i16 = 0x001;
 const POLLOUT: i16 = 0x004;
@@ -47,19 +59,26 @@ const SIGHUP: c_int = 1;
 const SIGKILL: c_int = 9;
 const F_GETFL: c_int = 3;
 const F_SETFL: c_int = 4;
+const F_SETFD: c_int = 2;
+const FD_CLOEXEC: c_int = 1;
+const SIGPIPE: c_int = 13;
 const O_NONBLOCK: c_int = switch (builtin.os.tag) {
     .linux => 0o4000,
     else => 0x0004,
 };
 
-pub const Pty = struct {
+pub const Pty = if (is_windows) win.Pty else PosixPty;
+
+const PosixPty = struct {
     master: c_int = -1,
     pid: c_int = 0,
+    /// Guards `pid` between the reader thread (`alive`) and the UI thread.
+    pid_lock: sync.Mutex = .{},
 
     pub const ReadResult = union(enum) { data: usize, idle, closed };
 
     /// Wait up to `timeout_ms` for output. `closed` means the child side hung up.
-    pub fn readTimeout(self: *const Pty, buf: []u8, timeout_ms: c_int) ReadResult {
+    pub fn readTimeout(self: *const PosixPty, buf: []u8, timeout_ms: c_int) ReadResult {
         var fds = [_]PollFd{.{ .fd = self.master, .events = POLLIN, .revents = 0 }};
         const ready = c.poll(&fds, 1, timeout_ms);
         if (ready < 0) return .closed;
@@ -80,7 +99,7 @@ pub const Pty = struct {
 
     /// Write all of `data`, waiting briefly when the child is not reading. Gives
     /// up after about 250 ms of no progress so a stuck child cannot freeze the UI.
-    pub fn writeAll(self: *const Pty, data: []const u8) bool {
+    pub fn writeAll(self: *const PosixPty, data: []const u8) bool {
         var off: usize = 0;
         var stalled: u8 = 0;
         while (off < data.len) {
@@ -100,39 +119,53 @@ pub const Pty = struct {
         return true;
     }
 
-    pub fn resize(self: *const Pty, cols: u16, rows: u16, cell_w: u16, cell_h: u16) void {
+    pub fn resize(self: *const PosixPty, cols: u16, rows: u16, cell_w: u16, cell_h: u16) void {
         const ws = Winsize{ .ws_row = rows, .ws_col = cols, .ws_xpixel = cols *| cell_w, .ws_ypixel = rows *| cell_h };
         _ = c.ioctl(self.master, TIOCSWINSZ, &ws);
     }
 
     /// True while the child has not exited. Collects its exit status once it has.
-    pub fn alive(self: *Pty) bool {
-        if (self.pid <= 0) return false;
+    pub fn alive(self: *PosixPty) bool {
+        return !self.reap(false);
+    }
+
+    /// Ask the child to hang up without waiting for it. `deinit` calls this before
+    /// joining the reader, so the child is usually gone by the time `close` runs.
+    pub fn hangup(self: *PosixPty) void {
+        self.pid_lock.lock();
+        defer self.pid_lock.unlock();
+        if (self.pid > 0) _ = c.kill(self.pid, SIGHUP);
+    }
+
+    /// Reap the child if it has exited (or, with `block`, wait for it). True when
+    /// there is no child left. Reaping and signalling share `pid_lock`, so a pid is
+    /// never signalled after it has been reaped and could have been recycled.
+    fn reap(self: *PosixPty, block: bool) bool {
+        self.pid_lock.lock();
+        defer self.pid_lock.unlock();
+        if (self.pid <= 0) return true;
         var status: c_int = 0;
-        const r = c.waitpid(self.pid, &status, WNOHANG);
-        if (r == 0) return true;
+        const r = c.waitpid(self.pid, &status, if (block) 0 else WNOHANG);
+        if (r == 0) return false;
         self.pid = 0;
-        return false;
+        return true;
     }
 
     /// Hang up, then force-kill if the child ignores it, and release the master.
-    pub fn close(self: *Pty) void {
-        if (self.pid > 0) {
-            _ = c.kill(self.pid, SIGHUP);
-            var waited: u32 = 0;
-            var status: c_int = 0;
-            while (waited < 40) : (waited += 1) {
-                if (c.waitpid(self.pid, &status, WNOHANG) != 0) {
-                    self.pid = 0;
-                    break;
-                }
-                io_g.sleep(25 * std.time.ns_per_ms);
-            }
-            if (self.pid > 0) {
-                _ = c.kill(self.pid, SIGKILL);
-                _ = c.waitpid(self.pid, &status, 0);
-                self.pid = 0;
-            }
+    /// Call after the reader thread has stopped.
+    pub fn close(self: *PosixPty) void {
+        self.hangup();
+        var waited: u32 = 0;
+        var gone = self.reap(false);
+        while (!gone and waited < 40) : (waited += 1) {
+            io_g.sleep(25 * std.time.ns_per_ms);
+            gone = self.reap(false);
+        }
+        if (!gone) {
+            self.pid_lock.lock();
+            if (self.pid > 0) _ = c.kill(self.pid, SIGKILL);
+            self.pid_lock.unlock();
+            _ = self.reap(true);
         }
         if (self.master >= 0) _ = c.close(self.master);
         self.master = -1;
@@ -141,9 +174,27 @@ pub const Pty = struct {
 
 pub const SpawnError = error{ Unsupported, ForkFailed, OutOfMemory, BadArgument };
 
-/// `argv[0]` must be an absolute path (no PATH search happens in the child).
-/// `extra_env` entries are `NAME=value`; they replace same-named inherited ones.
+/// POSIX: `argv[0]` must be an absolute path (no PATH search happens in the
+/// child). Windows: a single element is the complete command line, already
+/// quoted for the shell it starts (see `agent_launch_pure.windowsAgentCommand`);
+/// several are quoted and joined, and the program is searched for as
+/// CreateProcess does. `extra_env` entries are `NAME=value` on both; they replace
+/// same-named inherited ones.
 pub fn spawn(
+    allocator: std.mem.Allocator,
+    argv: []const []const u8,
+    extra_env: []const []const u8,
+    cols: u16,
+    rows: u16,
+) SpawnError!Pty {
+    if (comptime is_windows) {
+        return win.spawn(allocator, argv, extra_env, cols, rows);
+    } else {
+        return spawnPosix(allocator, argv, extra_env, cols, rows);
+    }
+}
+
+fn spawnPosix(
     allocator: std.mem.Allocator,
     argv: []const []const u8,
     extra_env: []const []const u8,
@@ -164,7 +215,8 @@ pub fn spawn(
     }
 
     var env: std.ArrayList(?[*:0]const u8) = .empty;
-    var inherited = std.c.environ;
+    // Shared libraries cannot link `environ` on macOS; the accessor works everywhere there.
+    var inherited = if (builtin.os.tag == .macos) c._NSGetEnviron().* else std.c.environ;
     while (inherited[0]) |entry| : (inherited += 1) {
         const text = std.mem.span(entry);
         var replaced = false;
@@ -181,9 +233,12 @@ pub fn spawn(
     const exe = c_argv[0].?;
     const ws = Winsize{ .ws_row = rows, .ws_col = cols, .ws_xpixel = 0, .ws_ypixel = 0 };
     var master: c_int = -1;
+    // Looked up before the fork: only async-signal-safe calls may run in the child.
+    const fd_limit: c_int = @min(c.getdtablesize(), 4096);
     const pid = c.forkpty(&master, null, null, &ws);
     if (pid < 0) return error.ForkFailed;
     if (pid == 0) {
+        childPrepare(fd_limit);
         _ = c.execve(exe, @ptrCast(c_argv.ptr), c_env);
         c._exit(127);
     }
@@ -192,11 +247,33 @@ pub fn spawn(
     // handle EAGAIN themselves.
     const flags = c.fcntl(master, F_GETFL);
     if (flags >= 0) _ = c.fcntl(master, F_SETFL, flags | O_NONBLOCK);
+    // Opal's other children (scheduled agent runs, mpv, ...) must not inherit the
+    // master: they could read the terminal or type into it.
+    _ = c.fcntl(master, F_SETFD, FD_CLOEXEC);
     return .{ .master = master, .pid = pid };
 }
 
+/// Runs in the forked child just before `execve`; async-signal-safe calls only.
+/// Closes every inherited descriptor (libtorrent, libmpv, sockets...) and puts
+/// SIGPIPE back to its default: Zig's I/O layer ignores it, and an ignored
+/// disposition survives `execve`, which would make shell pipelines fail with EPIPE.
+fn childPrepare(fd_limit: c_int) void {
+    _ = c.signal(SIGPIPE, null);
+    if (builtin.os.tag == .linux) {
+        // close_range(3, ~0, 0); kernels before 5.9 answer ENOSYS, so loop then.
+        const rc = std.os.linux.syscall3(.close_range, 3, std.math.maxInt(u32), 0);
+        if (std.os.linux.errno(rc) == .SUCCESS) return;
+    }
+    var fd: c_int = 3;
+    while (fd < fd_limit) : (fd += 1) _ = c.close(fd);
+}
+
+test {
+    _ = win;
+}
+
 test "a child on a pty produces output and exits" {
-    if (!supported) return error.SkipZigTest;
+    if (!supported or is_windows) return error.SkipZigTest;
     var pty = try spawn(std.testing.allocator, &.{ "/bin/sh", "-c", "printf 'hello from pty'" }, &.{"TERM=xterm-256color"}, 80, 24);
     defer pty.close();
     var out: [256]u8 = undefined;
@@ -213,8 +290,50 @@ test "a child on a pty produces output and exits" {
     try std.testing.expect(std.mem.indexOf(u8, out[0..len], "hello from pty") != null);
 }
 
+fn collect(pty: *Pty, out: []u8, needle: []const u8) []const u8 {
+    var len: usize = 0;
+    var spins: u32 = 0;
+    while (spins < 50) : (spins += 1) {
+        switch (pty.readTimeout(out[len..], 100)) {
+            .data => |n| len += n,
+            .idle => {},
+            .closed => break,
+        }
+        if (std.mem.indexOf(u8, out[0..len], needle) != null) break;
+    }
+    return out[0..len];
+}
+
+test "the child inherits no stray descriptors and a default SIGPIPE" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+    // A descriptor without CLOEXEC, standing in for libtorrent's or mpv's.
+    const leak = c.fcntl(2, 0, @as(c_int, 50)); // F_DUPFD at 50 or above, clear of the shell's own
+    try std.testing.expect(leak >= 50);
+    defer _ = c.close(leak);
+    // The Zig runtime ignores SIGPIPE; the child must not inherit that.
+    const old = c.signal(SIGPIPE, @ptrFromInt(1));
+    defer _ = c.signal(SIGPIPE, old);
+
+    var pty = try spawn(std.testing.allocator, &.{ "/bin/sh", "-c", "for f in /proc/self/fd/*; do echo fd:${f##*/}; done; grep SigIgn /proc/self/status; echo end" }, &.{}, 80, 24);
+    defer pty.close();
+    var out: [1024]u8 = undefined;
+    const text = collect(&pty, &out, "end");
+    var needle: [32]u8 = undefined;
+    try std.testing.expect(std.mem.indexOf(u8, text, try std.fmt.bufPrint(&needle, "fd:{d}\r", .{leak})) == null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "fd:0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "SigIgn:\t0000000000000000") != null);
+}
+
+test "the master is not inherited by other children" {
+    if (!supported or is_windows) return error.SkipZigTest;
+    var pty = try spawn(std.testing.allocator, &.{ "/bin/sh", "-c", "sleep 1" }, &.{}, 80, 24);
+    defer pty.close();
+    const flags = c.fcntl(pty.master, 1); // F_GETFD
+    try std.testing.expect(flags >= 0 and flags & FD_CLOEXEC != 0);
+}
+
 test "input written to the pty reaches the child" {
-    if (!supported) return error.SkipZigTest;
+    if (!supported or is_windows) return error.SkipZigTest;
     var pty = try spawn(std.testing.allocator, &.{ "/bin/sh", "-c", "read line; printf 'got:%s' \"$line\"" }, &.{}, 80, 24);
     defer pty.close();
     try std.testing.expect(pty.writeAll("ping\n"));
