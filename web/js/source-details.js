@@ -30,7 +30,8 @@ function openSourceDetails(source, item, trigger){
   $('source-details-title').textContent = item.name || item.title || 'Untitled';
   const runtime = Number(item.runtime || item.duration || 0);
   $('source-details-meta').textContent = item.meta || [item.type || '', item.year || '', runtime ? fmt(runtime) : ''].filter(Boolean).join(' · ');
-  $('source-details-overview').textContent = item.overview || '';
+  const overviewBox = $('source-details-overview');
+  overviewBox.textContent = item.overview || ''; overviewBox.removeAttribute('style'); delete overviewBox.dataset.base;
   const art = $('source-details-art');
   const artUrl = sourceArtUrl(item.artUrl || (source === 'Jellyfin' && item.image
     ? `${BASE}/api/jellyfin/poster?id=${encodeURIComponent(item.id)}` : ''));
@@ -147,6 +148,11 @@ function openSourceDetails(source, item, trigger){
     actions.append(detailAction('Find streams', async () => {
       await api('/drama/play?idx=' + encodeURIComponent(item.index)); closeSourceDetails();
     }, true));
+    if (item.episodes) {
+      const overview = $('source-details-overview');
+      overview.dataset.base = item.overview || '';
+      actions.append(detailAction('Episodes', async () => { await showDramaEpisodes(item.index, overview); }));
+    }
   } else if (source === 'RSS') {
     actions.append(detailAction('Play on Opal', async () => {
       await apiMutation('/load?url=' + encodeURIComponent(item.url)); closeSourceDetails();

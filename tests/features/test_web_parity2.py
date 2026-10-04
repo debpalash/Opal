@@ -124,12 +124,12 @@ def test_reader_tabs():
             and "pages.insertBefore(image, following || null)" in ui
             and "ready_pages" in rm and "comics_svc.pageReady(idx)" in rm,
         "reader closes server-side": "api('/comics/close')" in ui,
-        # drama.zig has no search entry point — don't ship a box that can't work.
-        "drama is browse-only": "fn apiDrama(" in rm and '"/drama/search"' not in rm
-            and 'id="dr-q"' not in ui,
-        # Every drama entry point no-ops without a TMDB key; say so.
-        "drama explains a missing key": '\\"needs_tmdb_key\\":true' in rm
-            and "needs_tmdb_key" in ui,
+        # The drama page is keyless (TVmaze) and has a title search + episode list.
+        "drama is searchable": "fn apiDrama(" in rm and '"/drama/search"' in rm
+            and '"/drama/episodes"' in rm and 'id="dr-q"' in ui,
+        # No key gate: the route never answers needs_tmdb_key:true, the page never asks for a key.
+        "drama needs no key": '\\"needs_tmdb_key\\":true' not in rm
+            and "d.needs_tmdb_key" not in ui and "TMDB API key in Setup" not in ui,
         # playSelected() takes no index.
         "drama play sets selected_idx": "d.selected_idx = idx;" in rm,
         # VNs aren't launchable — catalog only, no play route.

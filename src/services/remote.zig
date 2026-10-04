@@ -3656,8 +3656,10 @@ fn apiVndb(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) v
     sendJson(stream, json_buf[0..w.end]);
 }
 
-/// GET /api/drama[/play?idx=] — the Asian-drama catalog (TMDB /discover/tv).
-/// Browse-only: drama.zig has no search entry point, so neither does this.
+/// GET /api/drama[/play?idx=|/search?q=|/episodes?idx=] — the Asian-drama catalog.
+/// Keyless by default (TVmaze on-air feed, title search, episode lists); with a
+/// TMDB key the landing grid uses TMDB /discover/tv instead. `needs_tmdb_key` is
+/// kept in the document for older clients and is always false.
 fn apiDrama(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
     const drama = @import("drama.zig");
     const d = &state.app.drama;
@@ -3679,24 +3681,63 @@ fn apiDrama(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) 
         sendJson(stream, "{\"ok\":true,\"action\":\"drama_more\"}");
         return;
     }
-
-    // Every drama entry point no-ops without a TMDB key — say so rather than
-    // returning a permanently empty list the client can't explain.
-    if (state.app.tmdb.api_key_len == 0) {
-        sendJson(stream, "{\"loading\":false,\"needs_tmdb_key\":true,\"results\":[]}");
+    if (std.mem.eql(u8, api_path, "/drama/search")) {
+        // Empty q returns to the on-air feed.
+        var qbuf: [256]u8 = undefined;
+        const raw = getQueryParam(query, "q") orelse "";
+        drama.searchTitle(txt.safeUtf8(urlDecode(raw, &qbuf) orelse raw));
+        sendJson(stream, "{\"ok\":true,\"action\":\"drama_search\"}");
         return;
     }
+    if (std.mem.eql(u8, api_path, "/drama/episodes")) {
+        const idx = std.fmt.parseInt(usize, getQueryParam(query, "idx") orelse "999", 10) catch 999;
+        const row = drama.resultRow(idx) orelse {
+            sendJsonStatus(stream, "404 Not Found", "{\"error\":\"no such drama\"}");
+            return;
+        };
+        const show_id = row.id[0..@min(row.id_len, row.id.len)];
+        drama.requestEpisodes(show_id);
+        const st = drama.episodeStatus(show_id);
+        const ea = @import("../core/alloc.zig").allocator;
+        const ebuf = ea.alloc(u8, 256 * 1024) catch return;
+        defer ea.free(ebuf);
+        var ew = std.Io.Writer.fixed(ebuf);
+        ew.print("{{\"source\":\"{s}\",\"state\":\"{s}\",\"count\":{d},\"results\":[", .{ drama.sourceName(), st.state, st.count }) catch return;
+        var first = true;
+        var i: usize = 0;
+        while (i < st.count) : (i += 1) {
+            const ep = drama.episodeAt(show_id, i) orelse break;
+            // Leave room for one more row plus the closing brackets.
+            if (ew.end + 400 > ebuf.len) break;
+            if (!first) ew.writeAll(",") catch return;
+            first = false;
+            ew.print("{{\"season\":{d},\"number\":{d},\"runtime\":{d},\"airdate\":\"", .{ ep.season, ep.number, ep.runtime }) catch return;
+            escJsonWrite(&ew, ep.airdate[0..ep.airdate_len]);
+            ew.writeAll("\",\"name\":\"") catch return;
+            escJsonWrite(&ew, txt.safeUtf8(ep.name[0..ep.name_len]));
+            ew.writeAll("\"}") catch return;
+        }
+        ew.writeAll("]}") catch return;
+        sendJson(stream, ebuf[0..ew.end]);
+        return;
+    }
+
+    // No key needed: the first view kicks off the keyless on-air feed (or TMDB
+    // discover when a key is configured).
     if (!d.loaded_once and !d.is_loading.load(.acquire)) drama.loadCatalog();
 
     const a = @import("../core/alloc.zig").allocator;
     const json_buf = a.alloc(u8, 320 * 1024) catch return;
     defer a.free(json_buf);
     var w = std.Io.Writer.fixed(json_buf);
-    w.print("{{\"loading\":{s},\"loading_more\":{s},\"has_more\":{s},\"streaming\":{s},\"needs_tmdb_key\":false,\"results\":[", .{
+    w.print("{{\"loading\":{s},\"loading_more\":{s},\"has_more\":{s},\"streaming\":{s},\"needs_tmdb_key\":false,\"source\":\"{s}\",\"search\":{s},\"failed\":{s},\"results\":[", .{
         if (d.is_loading.load(.acquire)) "true" else "false",
         if (drama.isLoadingMore()) "true" else "false",
         if (drama.hasMore()) "true" else "false",
         if (d.stream_loading.load(.acquire)) "true" else "false",
+        drama.sourceName(),
+        if (drama.isSearchResults()) "true" else "false",
+        if (drama.catalogFailed()) "true" else "false",
     }) catch return;
     const n = drama.resultCount();
     var emitted: usize = 0;
@@ -3710,7 +3751,8 @@ fn apiDrama(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) 
         escJsonWrite(&w, txt.safeUtf8(r.name[0..@min(r.name_len, r.name.len)]));
         w.writeAll("\",\"year\":\"") catch return;
         escJsonWrite(&w, txt.safeUtf8(r.year[0..@min(r.year_len, r.year.len)]));
-        // A TMDB path like "/abc.jpg"; the client prefixes an image base.
+        // A TMDB path like "/abc.jpg" (the client prefixes an image base) or,
+        // for the keyless TVmaze feed, a full https image URL.
         w.writeAll("\",\"poster_path\":\"") catch return;
         escJsonWrite(&w, r.poster_path[0..@min(r.poster_path_len, r.poster_path.len)]);
         w.writeAll("\",\"overview\":\"") catch return;
