@@ -79,7 +79,14 @@ fn ensureTable() bool {
             "UNIQUE(kind, title, year, season, episode))",
     );
     // Tables created before alternate titles existed get the column added.
-    db.exec("ALTER TABLE wanted_items ADD COLUMN extra_titles TEXT NOT NULL DEFAULT ''");
+    // Only when the column is missing: an ALTER that fails for another reason (the
+    // database busy) must not be mistaken for "already there".
+    if (db.prepare("SELECT extra_titles FROM wanted_items LIMIT 0")) |probe| {
+        db.finalize(probe);
+    } else {
+        db.exec("ALTER TABLE wanted_items ADD COLUMN extra_titles TEXT NOT NULL DEFAULT ''");
+        if (db.prepare("SELECT extra_titles FROM wanted_items LIMIT 0")) |probe| db.finalize(probe) else return false;
+    }
     table_ready.store(true, .release);
     return true;
 }

@@ -90,6 +90,7 @@ pub const Snapshot = struct {
 pub const Session = struct {
     allocator: std.mem.Allocator,
     mutex: sync.Mutex = .{},
+    pty_lock: sync.Mutex = .{},
     term: c.GhosttyTerminal = null,
     render: c.GhosttyRenderState = null,
     row_iter: c.GhosttyRenderStateRowIterator = null,
@@ -138,8 +139,8 @@ pub const Session = struct {
         if (c.ghostty_key_event_new(null, &self.key_event) != c.GHOSTTY_SUCCESS) return error.TerminalFailed;
         errdefer c.ghostty_key_event_free(self.key_event);
 
+        errdefer self.freePointer(); // safe on partly created state
         try self.initPointer();
-        errdefer self.freePointer();
 
         _ = c.ghostty_terminal_set(self.term, c.GHOSTTY_TERMINAL_OPT_USERDATA, self);
         _ = c.ghostty_terminal_set(self.term, c.GHOSTTY_TERMINAL_OPT_WRITE_PTY, @as(c.GhosttyTerminalWritePtyFn, onWritePty));
@@ -213,9 +214,18 @@ pub const Session = struct {
         return @ptrCast(@alignCast(userdata orelse return null));
     }
 
+    /// One writer at a time: a terminal reply (from the reader thread) must not land in
+    /// the middle of a paste or key sequence the UI thread is writing. A leaf lock,
+    /// always taken last.
+    fn ptyWrite(self: *Session, bytes: []const u8) bool {
+        self.pty_lock.lock();
+        defer self.pty_lock.unlock();
+        return self.pty.writeAll(bytes);
+    }
+
     fn onWritePty(_: c.GhosttyTerminal, userdata: ?*anyopaque, data: [*c]const u8, len: usize) callconv(.c) void {
         const self = fromUserdata(userdata) orelse return;
-        _ = self.pty.writeAll(data[0..len]);
+        _ = self.ptyWrite(data[0..len]);
     }
 
     fn onBell(_: c.GhosttyTerminal, userdata: ?*anyopaque) callconv(.c) void {
@@ -236,7 +246,7 @@ pub const Session = struct {
 
     pub fn write(self: *Session, bytes: []const u8) void {
         if (bytes.len == 0 or self.isExited()) return;
-        _ = self.pty.writeAll(bytes);
+        _ = self.ptyWrite(bytes);
     }
 
     pub const KeyAction = enum { press, repeat, release };
@@ -260,7 +270,7 @@ pub const Session = struct {
         var written: usize = 0;
         if (c.ghostty_key_encoder_encode(self.encoder, self.key_event, &out, out.len, &written) != c.GHOSTTY_SUCCESS) return false;
         if (written == 0) return false;
-        _ = self.pty.writeAll(out[0..written]);
+        _ = self.ptyWrite(out[0..written]);
         return true;
     }
 
@@ -288,11 +298,11 @@ pub const Session = struct {
 
         var written: usize = 0;
         if (c.ghostty_paste_encode(data.ptr, data.len, have_mode and cfg.value, out.ptr, out.len, &written) != c.GHOSTTY_SUCCESS) return .failed;
-        if (self.pty.writeAll(out[0..written])) return .sent;
+        if (self.ptyWrite(out[0..written])) return .sent;
         // The write gave up part way. Try to close the bracket anyway so the
         // program does not stay in paste mode.
         const tail = bracketTail(out[0..written]);
-        if (tail.len > 0) _ = self.pty.writeAll(tail);
+        if (tail.len > 0) _ = self.ptyWrite(tail);
         return .failed;
     }
 
@@ -406,7 +416,7 @@ pub const Session = struct {
         var out: [128]u8 = undefined;
         const n = self.mouseBytes(&out, action, button, mods, hit, any_pressed);
         if (n == 0) return false;
-        _ = self.pty.writeAll(out[0..n]);
+        _ = self.ptyWrite(out[0..n]);
         return true;
     }
 
@@ -446,7 +456,7 @@ pub const Session = struct {
         if (self.isExited()) return;
         var out: [8]u8 = undefined;
         const n = self.focusBytes(&out, gained);
-        if (n > 0) _ = self.pty.writeAll(out[0..n]);
+        if (n > 0) _ = self.ptyWrite(out[0..n]);
     }
 
     fn focusBytes(self: *Session, out: []u8, gained: bool) usize {

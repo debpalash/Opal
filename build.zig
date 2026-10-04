@@ -742,7 +742,10 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    test_step.dependOn(&b.addRunArtifact(test_wanted_pure).step);
+    test_wanted_pure.use_llvm = true; // the self-hosted backend hits a linker error here
+    const run_test_wanted = b.addRunArtifact(test_wanted_pure);
+    test_step.dependOn(&run_test_wanted.step);
+    b.step("test-wanted", "Test the wanted list's matching, scoring and retry policy").dependOn(&run_test_wanted.step);
 
     const test_ops_pure = b.addTest(.{
         .root_module = b.createModule(.{
