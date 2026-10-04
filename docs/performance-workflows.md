@@ -125,9 +125,21 @@ repetitions, including reconnection. Those runs did not establish the exact caus
 of the earlier intermittent failure; the rejected-seek regression independently
 verifies the retry behavior.
 
+Linux CI also exposed audio-only Streamlink playback stalling near zero despite
+successful loading. With the same binary, generated WAV and null outputs, three
+Bars visualizer runs stalled while three Off runs advanced. Raw mpv IPC confirmed
+the clock was stalled, rather than the API reporting an old position; engine
+warnings reported a seek failure after installing the visualization graph.
+Headless playback now skips all visualization styles before accessing theme data
+or building a synthetic video stream. The live regression explicitly selects
+Bars and requires progress past one second followed by further clock movement.
+Private null audio/video outputs isolate CI hardware; they alone did not resolve
+the stall.
+
 ```sh
 zig build test-native-torrent-handoff
 python3 tests/test_media_servers_live.py --binary /path/to/opal
+python3 tests/test_headless_playback_live.py --binary /path/to/headless/opal
 ```
 
 ## Browse threading audit

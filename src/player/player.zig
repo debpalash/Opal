@@ -3653,8 +3653,7 @@ pub var vis_style: vis.Style = .bars;
 /// Setting the graph GIVES mpv a video track, so "vid" fires again with a real
 /// value; without the vis_applied latch this would re-set the graph forever.
 fn applyVisualizer(p: *MediaPlayer) void {
-    if (p.vis_applied) return;
-    if (vis_style == .off) return;
+    if (!vis.shouldApply(vis_style, state.app.is_headless, p.vis_applied)) return;
 
     // The accent tints the gradient. It reaches ffmpeg as three DECIMAL NUMBERS,
     // not a string — a u8 can only render as 0-255, so a theme colour has no way to

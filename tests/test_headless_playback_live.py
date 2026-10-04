@@ -56,6 +56,12 @@ class HeadlessPlaybackTests(unittest.TestCase):
         self.addCleanup(self.server.shutdown)
         self.opal = harness.IsolatedOpal(self)
         self.addCleanup(self.opal.stop)
+        # The default visualizer must not synthesize video on a headless host.
+        profile = self.opal.config_root / 'opal'
+        profile.mkdir(parents=True, exist_ok=True)
+        with harness.database(profile / 'opal.db') as database:
+            database.execute('CREATE TABLE config(key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+            database.execute('INSERT INTO config VALUES(?, ?)', ('audio_vis', 'Bars'))
 
     def test_streamlink_completion_loads_local_media_without_window(self):
         url = f'http://127.0.0.1:{self.server.server_port}/silence.wav'
@@ -78,14 +84,19 @@ class HeadlessPlaybackTests(unittest.TestCase):
         self.assertEqual(loaded.status, 200, loaded.body)
         deadline = time.monotonic() + 15
         last = None
+        first_progress = None
         while time.monotonic() < deadline:
             result = harness.request('GET', '/api/status', host=self.opal.loopback_authority, extra_headers=headers)
             self.assertEqual(result.status, 200, result.body)
             last = result.json()
             if (marker.exists() and last.get('dur', 0) >= 29
-                    and last.get('pos', 0) > 0 and not last.get('loading')):
+                    and last.get('pos', 0) >= 1 and not last.get('loading')):
                 self.assertFalse(last.get('error'), last)
-                return
+                self.assertFalse(last.get('paused'), last)
+                if first_progress is None:
+                    first_progress = last['pos']
+                elif last['pos'] >= first_progress + .2:
+                    return
             time.sleep(.1)
         # Keep playback failures diagnosable on runners without a display.
         # Only include engine warnings from this isolated, local-media fixture;

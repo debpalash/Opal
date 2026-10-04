@@ -58,6 +58,12 @@ pub const Style = enum {
     }
 };
 
+/// Headless playback has no surface for synthesized video. Keep its audio
+/// decoder independent of a visualization graph and its video clock.
+pub fn shouldApply(style: Style, headless: bool, already_applied: bool) bool {
+    return !headless and !already_applied and style != .off;
+}
+
 /// The gradient's far end (violet). The near end is the theme accent, so the bars
 /// run accent → violet across the spectrum.
 pub const END_R: u8 = 131;
@@ -216,4 +222,14 @@ test "style labels round-trip (settings persistence)" {
     }
     // An unknown label (hand-edited or older config) falls back, never crashes.
     try t.expectEqual(Style.bars, Style.fromLabel("bogus"));
+}
+
+test "headless audio skips every visualization style" {
+    inline for (@typeInfo(Style).@"enum".fields) |field| {
+        const style: Style = @enumFromInt(field.value);
+        try std.testing.expect(!shouldApply(style, true, false));
+        try std.testing.expect(!shouldApply(style, true, true));
+        try std.testing.expect(!shouldApply(style, false, true));
+        try std.testing.expectEqual(style != .off, shouldApply(style, false, false));
+    }
 }
