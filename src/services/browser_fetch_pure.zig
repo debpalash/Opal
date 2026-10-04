@@ -28,7 +28,7 @@ pub const MAX_FINAL_URL: usize = 2048;
 /// Longest a browser may hold one poll open.
 pub const POLL_MAX_WAIT_S: i64 = 25;
 /// A browser that polled this recently is "connected" for fetching.
-pub const CONNECTED_WINDOW_S: i64 = 45;
+pub const CONNECTED_WINDOW_S: i64 = 12;
 /// How long a job may live when the user might have to decide (agent calls).
 pub const PROMPT_TIMEOUT_S: i64 = 90;
 /// Jobs that never ask the user (internal scraper fallback) fail fast.
