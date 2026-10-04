@@ -529,7 +529,9 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    b.installArtifact(mcp_exe);
+    const install_mcp = b.addInstallArtifact(mcp_exe, .{});
+    b.getInstallStep().dependOn(&install_mcp.step);
+    b.step("opal-mcp", "Build only the opal-mcp bridge (no GUI dependencies)").dependOn(&install_mcp.step);
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());

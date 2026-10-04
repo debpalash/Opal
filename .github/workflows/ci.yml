@@ -63,6 +63,11 @@ jobs:
       - name: zig build test
         if: runner.os != 'Windows'
         run: zig build test
+      # Already part of `zig build test`; rerun by name (cached, so cheap) so a
+      # failure in the agent-native suites is reported on its own step.
+      - name: zig build test-agentic
+        if: runner.os != 'Windows'
+        run: zig build test-agentic --summary all
       - name: zig build test (Windows)
         if: runner.os == 'Windows'
         shell: msys2 {0}
@@ -70,6 +75,50 @@ jobs:
           export MINGW_PREFIX="$(cygpath -m /mingw64)"
           test -f "$MINGW_PREFIX/lib/libsqlite3.dll.a"
           zig build test
+      - name: zig build test-agentic (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          export MINGW_PREFIX="$(cygpath -m /mingw64)"
+          zig build test-agentic --summary all
+
+  # The opal-mcp bridge is std-only, so this needs no native libraries. It
+  # builds the real binary, checks the --version/--openapi entry points and
+  # fails when docs/openapi.json no longer matches the tool registry.
+  openapi-drift:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Build opal-mcp
+        run: zig build opal-mcp -Doptimize=ReleaseSafe --prefix "$RUNNER_TEMP/opal-mcp"
+      - name: opal-mcp runs
+        run: |
+          test -x "$RUNNER_TEMP/opal-mcp/bin/opal-mcp"
+          "$RUNNER_TEMP/opal-mcp/bin/opal-mcp" --version
+      - name: docs/openapi.json is current
+        run: |
+          "$RUNNER_TEMP/opal-mcp/bin/opal-mcp" --openapi | diff -u docs/openapi.json - \
+            || { echo "::error::docs/openapi.json is stale: regenerate with 'opal-mcp --openapi > docs/openapi.json'"; exit 1; }
+
+  # Browser extension: the page-media sniffer tests are plain `node --test`
+  # (no browser, no secrets); install without lifecycle scripts.
+  extension-tests:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: extension
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+      - run: npm ci --ignore-scripts
+      - run: npm test
 
   # Real hidden SDL render-target fixtures, not source/pixel-name assertions.
   # Linux uses Xvfb + software SDL so a physical GPU/display is unnecessary.
