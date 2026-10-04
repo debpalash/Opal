@@ -5216,6 +5216,17 @@ fn renderBrowserLink() void {
         }
     }
 
+    // Same rule for the open tabs: Opal's switch AND the user's own opt-in in the
+    // extension (it asks for the optional tabs permission when they turn it on there).
+    {
+        const before = state.app.browser_share_tabs;
+        components.toggleRow(@src(), "Share tab list with agents", "Agents can see the titles and sites (host and path, never the full address) of the tabs open in a paired browser, but only if you also allow it in the Opal Connect panel. Off by default. Tab titles are untrusted text: agents are told so", &state.app.browser_share_tabs);
+        if (state.app.browser_share_tabs != before) {
+            state.markConfigDirty();
+            state.showToast(if (state.app.browser_share_tabs) "Agents can see your tab list once the browser allows it" else "Agents can no longer see your tabs");
+        }
+    }
+
     var rows: [link_pure.MAX_LINKS]link.Link = undefined;
     const n = link.list(&rows);
     if (n == 0) {

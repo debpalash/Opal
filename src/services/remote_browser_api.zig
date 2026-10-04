@@ -4,9 +4,11 @@
 //!   GET  /api/browser/links    host only: the paired browsers
 //!   POST /api/browser/revoke   host: ?id=N removes one; a browser token unpairs itself
 //!   GET  /api/browser/me       browser only: who this token is (also a cheap validity check)
-//!   POST /api/browser/media    browser only: {page_url,title,art,candidates[],action} -> plays or queues
+//!   POST /api/browser/media    browser only: {page_url,title,art,candidates[],action} -> plays or queues, or
+//!                              (action add_to_wanted, no candidates) adds the user-edited title to Wanted
 //!   POST /api/browser/page     browser only: the page the user chose to share (kept in memory, last one only)
-//!   GET  /api/browser/context  host only (machine token, admin session): ?view=status|page|candidates, what
+//!   POST /api/browser/tabs     browser only: the open tabs; refused with the user's switch off, nothing stored
+//!   GET  /api/browser/context  host only (machine token, admin session): ?view=status|page|candidates|tabs, what
 //!                              agents may see; content views are empty unless the user allowed agents twice
 //!   POST /api/browser/play     host only: ?page=&id=&action=play|queue, a candidate of the shared page by id
 //!   POST /api/browser/fetch    host only: ?url= fetched through the user's browser with their cookies, for an
@@ -25,8 +27,12 @@ const pure = @import("browser_link_pure.zig");
 const access = @import("access_pure.zig");
 const forwarded_open = @import("forwarded_open.zig");
 const shared_page = @import("browser_page.zig");
+const tabs_store = @import("browser_tabs.zig");
+const tabs_pure = @import("browser_tabs_pure.zig");
 const fetcher = @import("browser_fetch.zig");
 const fetch_pure = @import("browser_fetch_pure.zig");
+const wanted = @import("wanted.zig");
+const wanted_pure = @import("wanted_pure.zig");
 const alloc = @import("../core/alloc.zig").allocator;
 const logs = @import("../core/logs.zig");
 const io_g = @import("../core/io_global.zig");
@@ -151,6 +157,15 @@ pub fn handle(
             return true;
         }
         sharePage(stream, body, presented);
+        return true;
+    }
+    if (std.mem.eql(u8, path, "/browser/tabs")) {
+        if (!wire.requireMethod(stream, method, "POST")) return true;
+        if (principal != .browser) {
+            err(stream, "403 Forbidden", "insufficient capability");
+            return true;
+        }
+        tabsReport(stream, body);
         return true;
     }
     if (std.mem.eql(u8, path, "/browser/context")) {
@@ -304,9 +319,27 @@ fn sharePage(stream: std.Io.net.Stream, body: []const u8, presented: []const u8)
     wire.sendJson(stream, json);
 }
 
+/// The browser's tab list. With the user's switch off nothing is read, stored or
+/// kept: the answer says so and the extension stops reporting.
+fn tabsReport(stream: std.Io.net.Stream, body: []const u8) void {
+    tabs_store.report(body) catch |e| switch (e) {
+        error.SwitchOff => return err(stream, "403 Forbidden", "tab sharing is off in Opal (Settings > Agent Access > Share tab list with agents)"),
+        error.BadJson => return err(stream, "400 Bad Request", tabs_pure.parseErrorMessage(error.BadJson)),
+        error.TooManyTabs => return err(stream, "400 Bad Request", tabs_pure.parseErrorMessage(error.TooManyTabs)),
+        error.Empty => return err(stream, "400 Bad Request", tabs_pure.parseErrorMessage(error.Empty)),
+    };
+    wire.sendJson(stream, "{\"ok\":true}");
+}
+
 fn context(stream: std.Io.net.Stream, query: []const u8) void {
     var vb: [16]u8 = undefined;
     const name = wire.formParam("", query, "view", &vb) orelse "status";
+    if (std.mem.eql(u8, name, "tabs")) {
+        var tabs_out: std.Io.Writer.Allocating = .init(alloc);
+        defer tabs_out.deinit();
+        tabs_store.writeContext(&tabs_out.writer) catch return err(stream, "500 Internal Server Error", "server error");
+        return wire.sendJson(stream, tabs_out.written());
+    }
     const view: shared_page.View = if (std.mem.eql(u8, name, "status"))
         .status
     else if (std.mem.eql(u8, name, "page"))
@@ -314,7 +347,7 @@ fn context(stream: std.Io.net.Stream, query: []const u8) void {
     else if (std.mem.eql(u8, name, "candidates"))
         .candidates
     else
-        return err(stream, "400 Bad Request", "view must be status, page or candidates");
+        return err(stream, "400 Bad Request", "view must be status, page, candidates or tabs");
     var out: std.Io.Writer.Allocating = .init(alloc);
     defer out.deinit();
     shared_page.writeContext(&out.writer, view) catch return err(stream, "500 Internal Server Error", "server error");
@@ -339,11 +372,10 @@ fn playCandidate(stream: std.Io.net.Stream, query: []const u8, body: []const u8)
         error.busy => return err(stream, "503 Service Unavailable", "Opal is busy opening other media, try again"),
     };
     var out: [192]u8 = undefined;
-    const json = std.fmt.bufPrint(&out, "{{\"ok\":true,\"action\":\"{s}\",\"kind\":\"{s}\",\"referer_sent\":{s},\"queued_without_headers\":{s}}}", .{
+    const json = std.fmt.bufPrint(&out, "{{\"ok\":true,\"action\":\"{s}\",\"kind\":\"{s}\",\"referer_sent\":{s}}}", .{
         if (queue_only) "queue" else "play",
         @tagName(played.kind),
         if (played.referer_sent) "true" else "false",
-        if (played.queued_without_headers) "true" else "false",
     }) catch return err(stream, "500 Internal Server Error", "server error");
     wire.sendJson(stream, json);
 }
@@ -395,7 +427,7 @@ fn me(stream: std.Io.net.Stream, presented: []const u8) void {
     if (!link.linkById(id, &row)) return err(stream, "401 Unauthorized", "not paired");
     var buf: [256]u8 = undefined;
     var w = std.Io.Writer.fixed(&buf);
-    w.print("{{\"ok\":true,\"id\":{d},\"label\":\"", .{id}) catch return;
+    w.print("{{\"ok\":true,\"id\":{d},\"share_tabs\":{s},\"label\":\"", .{ id, if (tabs_store.switchOn()) "true" else "false" }) catch return;
     wire.writeJsonString(&w, row.labelSlice());
     w.writeAll("\"}") catch return;
     wire.sendJson(stream, w.buffered());
@@ -406,6 +438,7 @@ fn media(stream: std.Io.net.Stream, body: []const u8) void {
     defer arena.deinit();
     const m = pure.parseMedia(arena.allocator(), body) catch |e|
         return err(stream, "400 Bad Request", pure.parseErrorMessage(e));
+    if (m.action == .add_to_wanted) return addToWanted(stream, m.title);
     const pick = pure.best(m.candidates) orelse return err(stream, "400 Bad Request", "at least one candidate is required");
 
     const queue_only = m.action == .queue;
@@ -424,15 +457,37 @@ fn media(stream: std.Io.net.Stream, body: []const u8) void {
     if (!forwarded_open.pushBrowser(queue_only, pick.url, m.title, m.art, referer, origin, pick.ua))
         return err(stream, "503 Service Unavailable", "Opal is busy opening other media, try again");
 
-    // The queue stores a bare URL, so a queued stream plays later without the
-    // Referer/User-Agent it was found with. Say so rather than imply otherwise.
-    const dropped = queue_only and (referer.len > 0 or origin.len > 0 or pick.ua.len > 0);
+    // A queued stream keeps the Referer, Origin and User-Agent it was found with
+    // (queue.rememberHttpIdentity, keyed by URL) and plays with them later.
+    const keeps = queue_only and (referer.len > 0 or origin.len > 0 or pick.ua.len > 0);
     var out: [192]u8 = undefined;
-    const json = std.fmt.bufPrint(&out, "{{\"ok\":true,\"action\":\"{s}\",\"kind\":\"{s}\",\"referer_sent\":{s},\"queued_without_headers\":{s}}}", .{
+    const json = std.fmt.bufPrint(&out, "{{\"ok\":true,\"action\":\"{s}\",\"kind\":\"{s}\",\"referer_sent\":{s},\"headers_kept\":{s}}}", .{
         @tagName(m.action),
         @tagName(pick.kind),
         if (referer.len > 0 and !queue_only) "true" else "false",
-        if (dropped) "true" else "false",
+        if (keeps) "true" else "false",
     }) catch return err(stream, "500 Internal Server Error", "server error");
     wire.sendJson(stream, json);
+}
+
+/// `action: add_to_wanted`. The title is whatever the user typed or edited in the
+/// extension (a page title is rarely a clean "Dune 2021"); the same parser as the
+/// Wanted box in the app turns it into a movie or an episode.
+fn addToWanted(stream: std.Io.net.Stream, title: []const u8) void {
+    const parsed = wanted_pure.parseRequest(title) orelse
+        return err(stream, "400 Bad Request", "type a title first, for example Dune 2021 or Severance S02E03");
+    var out: [320]u8 = undefined;
+    var w = std.Io.Writer.fixed(&out);
+    const result: []const u8 = switch (wanted.add(.{ .kind = parsed.kind, .title = parsed.title, .year = parsed.year, .season = parsed.season, .episode = parsed.episode })) {
+        .added => "added",
+        .exists => "exists",
+        .invalid => |why| return err(stream, "400 Bad Request", why),
+        .full => return err(stream, "409 Conflict", "the Wanted list is full"),
+        .unavailable => return err(stream, "503 Service Unavailable", "the Wanted list is not available right now"),
+    };
+    w.print("{{\"ok\":true,\"action\":\"add_to_wanted\",\"result\":\"{s}\",\"kind\":\"{s}\",\"title\":\"", .{ result, @tagName(parsed.kind) }) catch return;
+    wire.writeJsonString(&w, parsed.title);
+    w.writeAll("\"}") catch return;
+    if (std.mem.eql(u8, result, "added")) logs.pushLog("info", "browser", "A title was added to Wanted from the paired browser", false);
+    wire.sendJson(stream, w.buffered());
 }

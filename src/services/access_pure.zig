@@ -285,6 +285,7 @@ pub fn routeCapability(path: []const u8, method: []const u8, action: []const u8)
 ///   /browser/me       who am I (label), a token check that moves nothing
 ///   /browser/media    hand a detected stream to the player or the queue
 ///   /browser/page     share the page the user is on (the user pressed the button)
+///   /browser/tabs     report the open tabs (refused unless the user's switch in Opal is on)
 ///   /browser/revoke   unpair this browser (itself only; the handler ignores any id)
 ///   GET  /browser/jobs        long-poll for a page Opal wants fetched (see `browserRouteAllowed`)
 ///   POST /browser/jobs/<id>   answer that job (digits only; the job must be this browser's)
@@ -294,6 +295,7 @@ pub const browser_routes = [_]struct { path: []const u8, method: []const u8 }{
     .{ .path = "/browser/me", .method = "GET" },
     .{ .path = "/browser/media", .method = "POST" },
     .{ .path = "/browser/page", .method = "POST" },
+    .{ .path = "/browser/tabs", .method = "POST" },
     .{ .path = "/browser/revoke", .method = "POST" },
 };
 
@@ -322,7 +324,7 @@ pub fn browserRouteAllowed(path: []const u8, method: []const u8) bool {
 /// browser", so they are refused rather than treated as unlisted-means-open.
 fn browserOnlyRoute(path: []const u8) bool {
     return std.mem.eql(u8, path, "/browser/media") or std.mem.eql(u8, path, "/browser/me") or std.mem.eql(u8, path, "/browser/page") or
-        std.mem.eql(u8, path, "/browser/jobs") or browserJobResultId(path) != null;
+        std.mem.eql(u8, path, "/browser/tabs") or std.mem.eql(u8, path, "/browser/jobs") or browserJobResultId(path) != null;
 }
 
 pub fn allowsRoute(principal: Principal, path: []const u8, method: []const u8, action: []const u8) bool {
@@ -361,8 +363,11 @@ test "a paired browser holds no capability" {
     try std.testing.expect(!isSession(.browser));
 }
 
-test "browser allowlist is exactly the five documented routes" {
-    try std.testing.expectEqual(@as(usize, 5), browser_routes.len);
+test "browser allowlist is exactly the six documented routes" {
+    try std.testing.expectEqual(@as(usize, 6), browser_routes.len);
+    try std.testing.expect(allowsRoute(.browser, "/browser/tabs", "POST", ""));
+    try std.testing.expect(!allowsRoute(.browser, "/browser/tabs", "GET", ""));
+    for ([_]Principal{ .machine, .admin_session, .session }) |p| try std.testing.expect(!allowsRoute(p, "/browser/tabs", "POST", ""));
     try std.testing.expect(allowsRoute(.browser, "/browser/page", "POST", ""));
     try std.testing.expect(!allowsRoute(.browser, "/browser/page", "GET", ""));
     try std.testing.expect(allowsRoute(.browser, "/status", "GET", ""));

@@ -9,6 +9,8 @@ import {
   addCandidate,
   buildMediaPayload,
   buildSharePayload,
+  buildWantedPayload,
+  suggestWantedTitle,
   clipBytes,
   wireCandidate,
   candidateId,
@@ -285,4 +287,21 @@ test("clipBytes never splits a character; wireCandidate rejects bad URLs", () =>
   assert.equal(clipBytes("ééé", 5), "éé");
   assert.equal(clipBytes("abc", 10), "abc");
   assert.equal(wireCandidate({ ...cand("https://cdn.example/a.mp4", "mp4"), url: "data:text/html,x" }), null);
+});
+
+test("buildWantedPayload: bounded, control characters out, empty refused, bad page url dropped", () => {
+  assert.equal(buildWantedPayload("   ", "https://e.org/"), null);
+  assert.equal(buildWantedPayload("\n\t", "https://e.org/"), null);
+  const p = buildWantedPayload("  Dune\n 2021  ", "https://e.org/watch?v=1");
+  assert.deepEqual(p, { action: "add_to_wanted", title: "Dune 2021", page_url: "https://e.org/watch?v=1" });
+  assert.equal(buildWantedPayload("x", "javascript:alert(1)").page_url, "");
+  assert.equal(buildWantedPayload("x".repeat(400), "").title.length, 150);
+});
+
+test("suggestWantedTitle: keeps the first segment and turns (2021) into 2021", () => {
+  assert.equal(suggestWantedTitle("Dune (2021) - Watch Online | SomeSite"), "Dune 2021");
+  assert.equal(suggestWantedTitle("Severance S02E03 - Apple TV+"), "Severance S02E03");
+  assert.equal(suggestWantedTitle("Plain title"), "Plain title");
+  assert.equal(suggestWantedTitle("  Spaced   out  "), "Spaced out");
+  assert.equal(suggestWantedTitle(""), "");
 });

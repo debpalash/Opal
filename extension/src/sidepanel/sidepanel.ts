@@ -11,7 +11,7 @@
  * All Opal traffic is delegated to the background worker via messages.
  */
 
-import { SNIFFER_PERMISSIONS, describeCandidate, type Candidate } from "../sniffer";
+import { SNIFFER_PERMISSIONS, describeCandidate, suggestWantedTitle, type Candidate } from "../sniffer";
 import type {
   Detection,
   OpalFile,
@@ -671,17 +671,13 @@ function renderStreams(tabId: number | null, list: Candidate[], paired: boolean)
       b.disabled = !paired || tabId === null;
       b.addEventListener("click", async () => {
         b.disabled = true;
-        const res = await browserMsg<{ ok: boolean; error?: string; queuedWithoutHeaders?: boolean }>({
+        const res = await browserMsg<{ ok: boolean; error?: string }>({
           op: "send",
           tabId,
           id: c.id,
           action,
         });
-        if (res.ok && res.queuedWithoutHeaders) {
-          logRecent("Queued, but a queued stream plays without its Referer", true);
-        } else {
-          logRecent(res.ok ? (action === "play" ? "Playing detected stream" : "Queued detected stream") : (res.error ?? "Send failed"), res.ok);
-        }
+        logRecent(res.ok ? (action === "play" ? "Playing detected stream" : "Queued detected stream (it keeps the headers it was found with)") : (res.error ?? "Send failed"), res.ok);
         b.disabled = !paired;
         if (!res.ok) loadStreams();
       });
@@ -760,6 +756,49 @@ fetchAskOnce.addEventListener("click", () => void answerFetchAsk("once"));
 fetchAskAlways.addEventListener("click", () => void answerFetchAsk("always"));
 fetchAskDeny.addEventListener("click", () => void answerFetchAsk("deny"));
 
+// ── Add to Wanted ─────────────────────────────────────────────────────────────
+
+const wantedTitle = $<HTMLInputElement>("wanted-title");
+const wantedBtn = $<HTMLButtonElement>("wanted-btn");
+const wantedNote = $<HTMLElement>("wanted-note");
+let wantedFilledFor = "";
+
+/** Fill the editable title from the active tab once per page, never over what
+ *  the user is typing. */
+async function fillWantedTitle(): Promise<void> {
+  if (document.activeElement === wantedTitle) return;
+  const tabId = await activeTabId();
+  if (tabId === null) return;
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  const key = `${tabId}|${tab?.title ?? ""}`;
+  if (!tab || key === wantedFilledFor) return;
+  wantedFilledFor = key;
+  wantedTitle.value = suggestWantedTitle(tab.title ?? "");
+  wantedNote.textContent = "";
+}
+
+wantedBtn.addEventListener("click", async () => {
+  const tabId = await activeTabId();
+  wantedBtn.disabled = true;
+  const res = await browserMsg<{ ok: boolean; error?: string; result?: string; kind?: string; wantedTitle?: string }>({
+    op: "wanted",
+    title: wantedTitle.value,
+    tabId: tabId ?? -1,
+  });
+  wantedBtn.disabled = false;
+  if (res.ok) {
+    wantedNote.textContent =
+      res.result === "exists" ? "Already on Opal's Wanted list." : `Added "${res.wantedTitle ?? wantedTitle.value}" (${res.kind ?? "title"}). Opal will search and download it.`;
+    logRecent(res.result === "exists" ? "Already in Wanted" : "Added to Wanted", true);
+  } else {
+    wantedNote.textContent = res.error ?? "Could not add it.";
+    logRecent(res.error ?? "Add to Wanted failed", false);
+  }
+});
+wantedTitle.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") wantedBtn.click();
+});
+
 // ── Share this page with Opal ─────────────────────────────────────────────────
 
 const shareBtn = $<HTMLButtonElement>("share-btn");
@@ -804,6 +843,7 @@ let ticks = 0;
 async function poll(): Promise<void> {
   loadStreams().catch(() => {});
   loadFetchAsk().catch(() => {});
+  fillWantedTitle().catch(() => {});
   const res = await send({ kind: "opal", action: "status" });
   if (res.ok) {
     statusDot.className = "dot ok";

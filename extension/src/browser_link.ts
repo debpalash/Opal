@@ -35,6 +35,7 @@ import {
   isNoiseUrl,
   makeCandidate,
   buildSharePayload,
+  buildWantedPayload,
   sortCandidates,
   type Candidate,
   type PageFacts,
@@ -345,7 +346,7 @@ export async function sendCandidate(
   tabId: number,
   id: string,
   action: "play" | "queue",
-): Promise<BrowserResult & { queuedWithoutHeaders?: boolean }> {
+): Promise<BrowserResult> {
   await ensureLoaded();
   const link = await readLink();
   if (!link) return { ok: false, error: "Pair this browser with Opal first (extension Settings)." };
@@ -378,8 +379,29 @@ export async function sendCandidate(
     await chrome.storage.local.remove("browserLink");
     return { ...res, error: "Opal no longer knows this browser: pair it again." };
   }
-  const queuedWithoutHeaders = (res.data as { queued_without_headers?: boolean } | undefined)?.queued_without_headers;
-  return { ...res, queuedWithoutHeaders };
+  return res;
+}
+
+/** "Add to Wanted": the title is whatever the user typed in the panel, and one
+ *  click is one request. Opal parses it and adds it to the Wanted list. */
+export async function addToWanted(title: string, tabId: number): Promise<BrowserResult & { result?: string; kind?: string; wantedTitle?: string }> {
+  const link = await readLink();
+  if (!link) return { ok: false, error: "Pair this browser with Opal first (extension Settings)." };
+  let pageUrl = "";
+  try {
+    pageUrl = (await chrome.tabs.get(tabId)).url ?? "";
+  } catch {
+    // the tab closed: the title is what matters
+  }
+  const payload = buildWantedPayload(title, pageUrl);
+  if (!payload) return { ok: false, error: "Type a title first, for example Dune 2021 or Severance S02E03." };
+  const res = await jsonFetch("/api/browser/media", "POST", payload, link.token);
+  if (res.status === 401) {
+    await chrome.storage.local.remove("browserLink");
+    return { ...res, error: "Opal no longer knows this browser: pair it again." };
+  }
+  const d = res.data as { result?: string; kind?: string; title?: string } | undefined;
+  return { ...res, result: d?.result, kind: d?.kind, wantedTitle: d?.title };
 }
 
 // ── Sharing the page with Opal ──────────────────────────────────────────────
@@ -485,6 +507,7 @@ export interface BrowserMessage {
     | "send"
     | "enable"
     | "share"
+    | "wanted"
     | "fetch-state"
     | "fetch-decide"
     | "fetch-add"
@@ -496,6 +519,7 @@ export interface BrowserMessage {
   id?: string;
   action?: "play" | "queue";
   agents?: boolean;
+  title?: string;
   /** fetch-decide: the pending request; fetch-add / fetch-remove: the site. */
   jobId?: number;
   decision?: "once" | "always" | "deny";
@@ -522,6 +546,8 @@ export async function handleBrowserMessage(msg: BrowserMessage): Promise<unknown
       return sendCandidate(msg.tabId ?? -1, msg.id ?? "", msg.action === "queue" ? "queue" : "play");
     case "share":
       return sharePage(msg.tabId ?? -1, msg.agents === true);
+    case "wanted":
+      return addToWanted(msg.title ?? "", msg.tabId ?? -1);
     case "fetch-state":
       return { ok: true, enabled: await fetchEnabled(), allow: await getAllow(), pending: await listPending() };
     case "fetch-decide":

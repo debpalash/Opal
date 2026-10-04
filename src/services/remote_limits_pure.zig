@@ -138,7 +138,7 @@ pub fn expensiveCost(path: []const u8, query: []const u8) u16 {
     // flood is a stuck loop in the extension.
     if (std.mem.eql(u8, path, "/api/browser/media")) return 1;
     // A share copies up to 64 KB into memory; playing by id starts a stream.
-    if (std.mem.eql(u8, path, "/api/browser/page") or std.mem.eql(u8, path, "/api/browser/play")) return 1;
+    if (std.mem.eql(u8, path, "/api/browser/page") or std.mem.eql(u8, path, "/api/browser/play") or std.mem.eql(u8, path, "/api/browser/tabs")) return 1;
     // A fetch borrows the user's browser and holds a connection thread for up to 90 s.
     if (std.mem.eql(u8, path, "/api/browser/fetch")) return 2;
     if (std.mem.eql(u8, path, "/api/unified_search/preview")) return 1;
@@ -205,6 +205,7 @@ test "weighted scrape cost and expensive route allowlist exclude polling" {
     try std.testing.expectEqual(@as(u16, 1), expensiveCost("/api/browser/play", "page=1&id=1"));
     try std.testing.expectEqual(@as(u16, 0), expensiveCost("/api/browser/context", "view=status"));
     try std.testing.expectEqual(@as(u16, 0), expensiveCost("/api/browser/me", ""));
+    try std.testing.expectEqual(@as(u16, 1), expensiveCost("/api/browser/tabs", ""));
     try std.testing.expectEqual(@as(u16, 2), expensiveCost("/api/browser/fetch", "url=https%3A%2F%2Fexample.org"));
     try std.testing.expectEqual(@as(u16, 0), expensiveCost("/api/browser/jobs", "wait=20"));
     try std.testing.expectEqual(@as(u16, 0), expensiveCost("/api/browser/jobs/3", ""));

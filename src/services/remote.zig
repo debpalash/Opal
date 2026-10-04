@@ -792,7 +792,7 @@ fn browserBodyGate(head: []const u8) usize {
         const principal = principalForBearer(bearer) orelse return 0;
         return if (principal == .browser) remote_body_pure.GROW_MAX_RESULT else 0;
     }
-    const route = for ([_][]const u8{ "POST /api/browser/media", "POST /api/browser/page" }) |r| {
+    const route = for ([_][]const u8{ "POST /api/browser/media", "POST /api/browser/page", "POST /api/browser/tabs" }) |r| {
         if (std.mem.startsWith(u8, head, r)) break r;
     } else return 0;
     if (head.len == route.len or (head[route.len] != ' ' and head[route.len] != '?')) return 0;

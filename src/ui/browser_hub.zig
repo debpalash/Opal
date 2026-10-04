@@ -132,7 +132,7 @@ fn findSources() void {
 }
 
 fn playCandidate(c: *const shared.UiCand, queue_only: bool) void {
-    const played = shared.playFromUi(page.page_id, c.id, queue_only) catch |e| {
+    _ = shared.playFromUi(page.page_id, c.id, queue_only) catch |e| {
         state.showToastTyped(switch (e) {
             error.stale, error.not_shared => "That page was replaced: share it again",
             error.missing => "That stream is not available",
@@ -141,7 +141,7 @@ fn playCandidate(c: *const shared.UiCand, queue_only: bool) void {
         return;
     };
     if (queue_only) {
-        state.showToastTyped(if (played.queued_without_headers) "Queued, but a queued stream plays without its Referer" else "Queued", .success);
+        state.showToastTyped("Queued", .success);
     } else {
         state.showToastTyped("Playing", .success);
     }
