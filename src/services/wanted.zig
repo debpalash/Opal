@@ -246,6 +246,54 @@ pub fn checkNow(id: i64) bool {
     return true;
 }
 
+/// One row for the UI. Fixed buffers so a snapshot needs no allocation.
+pub const Row = struct {
+    id: i64 = 0,
+    kind: pure.Kind = .movie,
+    status: pure.Status = .wanted,
+    title: [96]u8 = std.mem.zeroes([96]u8),
+    title_len: usize = 0,
+    year: u16 = 0,
+    season: u16 = 0,
+    episode: u16 = 0,
+    attempts: u32 = 0,
+    next_check_ms: i64 = 0,
+    picked: [80]u8 = std.mem.zeroes([80]u8),
+    picked_len: usize = 0,
+};
+
+pub fn snapshot(out: []Row) usize {
+    if (out.len == 0 or !ensureTable()) return 0;
+    const stmt = db.prepare("SELECT id, kind, title, year, season, episode, status, attempts, next_check_ms, picked FROM wanted_items ORDER BY id DESC LIMIT ?1") orelse return 0;
+    defer db.finalize(stmt);
+    db.bindInt(stmt, 1, @intCast(@min(out.len, 200)));
+    var n: usize = 0;
+    while (n < out.len and db.step(stmt) == db.c.SQLITE_ROW) {
+        var r = Row{};
+        r.id = db.columnInt64(stmt, 0);
+        r.kind = pure.Kind.parse(db.columnText(stmt, 1) orelse "") orelse continue;
+        const title = db.columnText(stmt, 2) orelse "";
+        r.title_len = @min(title.len, r.title.len);
+        @memcpy(r.title[0..r.title_len], title[0..r.title_len]);
+        r.year = @intCast(std.math.clamp(db.columnInt(stmt, 3), 0, 9999));
+        r.season = @intCast(std.math.clamp(db.columnInt(stmt, 4), 0, 9999));
+        r.episode = @intCast(std.math.clamp(db.columnInt(stmt, 5), 0, 9999));
+        r.status = pure.Status.parse(db.columnText(stmt, 6) orelse "") orelse .wanted;
+        r.attempts = @intCast(@max(0, db.columnInt(stmt, 7)));
+        r.next_check_ms = db.columnInt64(stmt, 8);
+        const picked = db.columnText(stmt, 9) orelse "";
+        r.picked_len = @min(picked.len, r.picked.len);
+        @memcpy(r.picked[0..r.picked_len], picked[0..r.picked_len]);
+        out[n] = r;
+        n += 1;
+    }
+    return n;
+}
+
+pub fn isSearching() bool {
+    return busy.load(.acquire);
+}
+
 /// Write `{"items":[...],"searching":bool,"follow_tv":bool}`.
 pub fn writeListJson(w: *std.Io.Writer) !void {
     var s = std.json.Stringify{ .writer = w };
@@ -522,8 +570,8 @@ fn reconcileDownloads() void {
     const ses = state.torrentSession();
     if (ses == null) return;
 
-    const Row = struct { id: i64, hash: [96]u8, len: usize };
-    var rows: [16]Row = undefined;
+    const DlRow = struct { id: i64, hash: [96]u8, len: usize };
+    var rows: [16]DlRow = undefined;
     var n: usize = 0;
     {
         const stmt = db.prepare("SELECT id, infohash FROM wanted_items WHERE status='downloading' AND infohash<>'' LIMIT 16") orelse return;

@@ -123,9 +123,9 @@ Branch `v2/agent-os` is stacked on PR #119 (browse, episode redesign, remote har
 
 ### Wanted list (the CouchPotato core)
 
-`src/services/wanted.zig` plus `wanted_pure.zig` (scoring, backoff). Add a movie or episode once; Opal searches on a private channel that never disturbs on-screen results, filters cams, screeners, fan edits and trailers, scores by quality, seeders and size, starts the best torrent on the owner thread, retries with backoff (30 min doubling to a day) and marks the item fulfilled when the download completes. "Follow tracked shows" queues the newest aired episode of each tracked show. Verified live against EZTV. Exposed as `/api/wanted/*` and `wanted_*` tools.
+`src/services/wanted.zig` plus `wanted_pure.zig` (scoring, backoff). Add a movie or episode once; Opal searches on a private channel that never disturbs on-screen results, filters cams, screeners, fan edits and trailers, scores by quality, seeders and size, starts the best torrent on the owner thread, retries with backoff (30 min doubling to a day) and marks the item fulfilled when the download completes. "Follow tracked shows" queues the newest aired episode of each tracked show. Verified live against EZTV. Exposed as `/api/wanted/*` and `wanted_*` tools, and as a Wanted section at the top of the Downloads page (add by typing `Dune 2021` or `Severance S02E03`; find, pause, resume, remove).
 
-Next up: a native Wanted screen, scheduled agent tasks, plugin scaffolding tools, OpenAPI from the registry, and an embedded terminal once libghostty exposes a terminal API.
+Next up: scheduled agent tasks, plugin scaffolding tools, OpenAPI from the registry, and an embedded terminal once libghostty exposes a terminal API.
 
 ## Phases
 

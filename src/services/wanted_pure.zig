@@ -142,6 +142,47 @@ fn tokenize(s: []const u8, scratch: []u8, out: *Tokens) void {
     };
 }
 
+/// What a user typed into the "want it" box: a movie ("Dune 2021", "Dune") or
+/// one episode ("Severance S02E03").
+pub const Parsed = struct {
+    kind: Kind,
+    title: []const u8,
+    year: u16 = 0,
+    season: u16 = 0,
+    episode: u16 = 0,
+};
+
+pub fn parseRequest(text: []const u8) ?Parsed {
+    var t = std.mem.trim(u8, text, " \t\r\n");
+    if (t.len == 0) return null;
+
+    // Trailing SxxExx makes it an episode.
+    if (std.mem.lastIndexOfScalar(u8, t, ' ')) |sp| {
+        const tok = t[sp + 1 ..];
+        if (tok.len >= 4 and (tok[0] == 'S' or tok[0] == 's')) {
+            if (std.mem.indexOfAny(u8, tok, "Ee")) |e| {
+                const season = std.fmt.parseInt(u16, tok[1..e], 10) catch 0;
+                const episode = std.fmt.parseInt(u16, tok[e + 1 ..], 10) catch 0;
+                const title = std.mem.trim(u8, t[0..sp], " ");
+                if (season > 0 and episode > 0 and title.len > 0)
+                    return .{ .kind = .episode, .title = title, .season = season, .episode = episode };
+            }
+        }
+        // Trailing year, bare or in parentheses, makes it a dated movie.
+        var ytok = tok;
+        if (ytok.len == 6 and ytok[0] == '(' and ytok[5] == ')') ytok = ytok[1..5];
+        if (ytok.len == 4) {
+            if (std.fmt.parseInt(u16, ytok, 10)) |year| {
+                const title = std.mem.trim(u8, t[0..sp], " ");
+                if (year >= 1888 and year <= 2200 and title.len > 0)
+                    return .{ .kind = .movie, .title = title, .year = year };
+            } else |_| {}
+        }
+    }
+    t = std.mem.trim(u8, t, " ");
+    return .{ .kind = .movie, .title = t };
+}
+
 /// Release-name words that mean a low-quality capture or a preview.
 const junk = [_][]const u8{
     "cam",     "hdcam",    "camrip", "ts",     "hdts",    "telesync", "tc",
@@ -435,4 +476,36 @@ test "only wanted items past their time are due" {
     try testing.expect(!isDue(.paused, 0, 100));
     try testing.expect(!isDue(.downloading, 0, 100));
     try testing.expect(!isDue(.fulfilled, 0, 100));
+}
+
+test "request text parses into movies and episodes" {
+    const m = parseRequest("  Dune  ").?;
+    try testing.expectEqual(Kind.movie, m.kind);
+    try testing.expectEqualStrings("Dune", m.title);
+    try testing.expectEqual(@as(u16, 0), m.year);
+
+    const y = parseRequest("Dune 2021").?;
+    try testing.expectEqualStrings("Dune", y.title);
+    try testing.expectEqual(@as(u16, 2021), y.year);
+    try testing.expectEqual(@as(u16, 2008), parseRequest("Big Buck Bunny (2008)").?.year);
+
+    const e = parseRequest("Severance S02E03").?;
+    try testing.expectEqual(Kind.episode, e.kind);
+    try testing.expectEqualStrings("Severance", e.title);
+    try testing.expectEqual(@as(u16, 2), e.season);
+    try testing.expectEqual(@as(u16, 3), e.episode);
+    try testing.expectEqual(@as(u16, 12), parseRequest("the show s1e12").?.episode);
+}
+
+test "request text keeps numeric titles and rejects empties" {
+    try testing.expect(parseRequest("   ") == null);
+    // A lone number is a title, not a year, and "1917" alone must not vanish.
+    const lone = parseRequest("1917").?;
+    try testing.expectEqualStrings("1917", lone.title);
+    try testing.expectEqual(@as(u16, 0), lone.year);
+    // A year-like number that is out of range stays part of the title.
+    try testing.expectEqualStrings("Apollo 9999", parseRequest("Apollo 9999").?.title);
+    // S00E00 and half-formed tokens are not episodes.
+    try testing.expectEqual(Kind.movie, parseRequest("Show S00E01").?.kind);
+    try testing.expectEqual(Kind.movie, parseRequest("Season Sale").?.kind);
 }

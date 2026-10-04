@@ -244,6 +244,7 @@ pub fn build(b: *std.Build) void {
     if (is_windows) run_modal_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     b.step("test-native-modals", "Capture native onboarding and dialogs in an isolated hidden SDL window").dependOn(&run_modal_tests.step);
     const activity_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native activity offline SDL pixel capture"} });
+    activity_tests.use_llvm = true;
     const run_activity_tests = b.addRunArtifact(activity_tests);
     if (is_windows) run_activity_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     b.step("test-native-activity", "Capture native queue and transfers with isolated offline fixtures").dependOn(&run_activity_tests.step);

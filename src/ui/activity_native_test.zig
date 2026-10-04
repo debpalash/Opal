@@ -11,6 +11,7 @@ var queue_case = true;
 var items: [8]queue.QueueItem = @splat(.{});
 var download_rows: [3]tp.Row = @splat(.{});
 var http_rows: [4]engine.Snap = @splat(.{});
+var wanted_fixture: [3]@import("../services/wanted.zig").Row = @splat(.{});
 fn setup() !void {
     const state = @import("../core/state.zig");
     state.app.page_shell_enabled = true;
@@ -50,6 +51,20 @@ fn setup() !void {
             if (i != 2) tp.setDisk(row, name);
         }
         transfers.setRenderFixtureForTest(&download_rows, &http_rows);
+        const wanted = @import("../services/wanted.zig");
+        const wanted_titles = [_][]const u8{ "Dune", "Severance", "A very long wanted title that must not push the row buttons out of view" };
+        for (&wanted_fixture, 0..) |*row, i| {
+            row.* = .{ .id = @intCast(i + 1), .kind = if (i == 1) .episode else .movie, .status = ([_]@import("../services/wanted_pure.zig").Status{ .wanted, .downloading, .paused })[i], .year = 2021, .season = 2, .episode = 3, .attempts = 2 };
+            @memcpy(row.title[0..wanted_titles[i].len], wanted_titles[i]);
+            row.title_len = wanted_titles[i].len;
+            if (i == 1) {
+                const picked = "Severance.S02E03.1080p.WEB.x265";
+                @memcpy(row.picked[0..picked.len], picked);
+                row.picked_len = picked.len;
+            }
+        }
+        @import("../services/wanted_ui.zig").setRenderFixtureForTest(&wanted_fixture);
+        _ = wanted;
     }
 }
 fn draw() !void {
@@ -58,6 +73,7 @@ fn draw() !void {
 fn cleanup() void {
     queue.setRenderFixtureForTest(null);
     transfers.setRenderFixtureForTest(null, &.{});
+    @import("../services/wanted_ui.zig").setRenderFixtureForTest(null);
 }
 test "Native activity offline SDL pixel capture" {
     const logs = @import("../core/logs.zig");
