@@ -33,6 +33,7 @@ const Drag = enum { none, select, report, scrollbar };
 var drag: Drag = .none;
 var pressed_button: ?pointer.Button = null;
 var was_focused: bool = false;
+var frame_guard: pointer.FrameGuard = .{};
 /// While dragging the scrollbar: where in the thumb it was grabbed, and the
 /// offset last asked for (the snapshot lags a frame behind).
 var sb_grab: f32 = 0;
@@ -88,6 +89,9 @@ pub fn shutdown() void {
 /// leave keys alone then, or Ctrl+W (delete word) would close the window.
 pub fn capturesKeyboard() bool {
     const id = term_id orelse return false;
+    // dvui keeps focus on a widget that stopped rendering (the agent opened the
+    // player, say); only a terminal that is still on screen owns the keys.
+    if (!frame_guard.alive(dvui.frameTimeNS())) return false;
     return session != null and dvui.focusedWidgetId() == id;
 }
 
@@ -191,7 +195,11 @@ fn renderToolbar() void {
             .gravity_y = 0.5,
             .margin = .{ .x = 12, .y = 0, .w = 0, .h = 0 },
         });
-        if (components.actionButton(@src(), if (s.isExited()) "Close" else "Stop", .secondary, 9510)) stop();
+        if (components.actionButton(@src(), if (s.isExited()) "Close" else "Stop", .secondary, 9510)) {
+            // stop() frees the session: nothing below may touch `s`.
+            stop();
+            return;
+        }
         if (s.takeBell()) state.showToast("Terminal bell");
     } else if (note_len > 0) {
         _ = dvui.label(@src(), "{s}", .{note_buf[0..note_len]}, .{
@@ -218,6 +226,11 @@ fn renderEmpty() void {
     _ = dvui.label(@src(), "Opens in Opal's workspace with the opal tools already connected.", .{}, .{
         .color_text = theme.colors.text_secondary,
         .gravity_x = 0.5,
+    });
+    _ = dvui.label(@src(), "While a terminal has focus it gets every key. Press Ctrl+Shift+Esc to give the keyboard back to Opal.", .{}, .{
+        .color_text = theme.colors.text_secondary,
+        .gravity_x = 0.5,
+        .margin = .{ .x = 0, .y = 6, .w = 0, .h = 0 },
     });
     if (!session_mod.supported) {
         _ = dvui.label(@src(), "The embedded terminal is not available on this platform yet. Use Settings > Agent Access to open an agent in your own terminal.", .{}, .{
@@ -261,6 +274,7 @@ fn renderTerminal(s: *Session) void {
     defer area.deinit();
     const wd = area.data();
     term_id = wd.id;
+    frame_guard.markRendered(dvui.frameTimeNS());
     if (want_focus) {
         want_focus = false;
         drag = .none;
@@ -491,7 +505,7 @@ fn clipboardCopy(s: *Session) void {
 }
 
 fn handleEvents(s: *Session, wd: *dvui.WidgetData, content: dvui.Rect.Physical, cw: f32, ch: f32) void {
-    var typed_this_frame = false;
+    var text_guard = keymap.TextGuard{};
     for (dvui.events()) |*e| {
         if (!dvui.eventMatchSimple(e, wd)) continue;
         switch (e.evt) {
@@ -602,14 +616,16 @@ fn handleEvents(s: *Session, wd: *dvui.WidgetData, content: dvui.Rect.Physical, 
             },
             .key => |ke| {
                 const name = @tagName(ke.code);
-                const m = keymap.Mods{
-                    .shift = ke.mod.shift(),
-                    .ctrl = ke.mod.control(),
-                    .alt = ke.mod.alt(),
-                    .super = ke.mod.command(),
-                };
+                const m = modsOf(ke.mod);
                 if (ke.action == .up) {
                     e.handle(@src(), wd);
+                    continue;
+                }
+                // The way out: gives the keyboard back to Opal's shortcuts.
+                if (keymap.isReleaseChord(name, m)) {
+                    e.handle(@src(), wd);
+                    dvui.focusWidget(null, null, null);
+                    state.wakeUi();
                     continue;
                 }
                 // Copy and paste: Cmd+C/V on macOS, Ctrl+Shift+C/V elsewhere.
@@ -617,7 +633,11 @@ fn handleEvents(s: *Session, wd: *dvui.WidgetData, content: dvui.Rect.Physical, 
                 const clip_mod = if (mac) (m.super and !m.ctrl and !m.alt) else (m.ctrl and m.shift and !m.alt);
                 if (clip_mod and ke.code == .v) {
                     e.handle(@src(), wd);
-                    s.paste(dvui.clipboardText());
+                    switch (s.paste(dvui.clipboardText())) {
+                        .too_large => state.showToast("Paste is too large for the terminal (limit 512 KB)"),
+                        .failed => state.showToast("The terminal did not accept the whole paste"),
+                        else => {},
+                    }
                     s.scrollToBottom();
                     continue;
                 }
@@ -627,6 +647,7 @@ fn handleEvents(s: *Session, wd: *dvui.WidgetData, content: dvui.Rect.Physical, 
                     continue;
                 }
                 const entry = keymap.find(name);
+                text_guard.onKey(entry, m);
                 switch (keymap.plan(entry, m)) {
                     .ignore => {},
                     .wait_for_text => {},
@@ -638,17 +659,16 @@ fn handleEvents(s: *Session, wd: *dvui.WidgetData, content: dvui.Rect.Physical, 
                         if (s.sendKey(entry.?.key, keymap.mods(m), press, utf8)) {
                             s.clearSelection();
                             s.scrollToBottom();
-                            typed_this_frame = true;
                         }
                     },
                 }
             },
             .text => |te| {
-                // A key already encoded this frame (Alt+letter) must not also type.
-                if (typed_this_frame) continue;
                 switch (te.action) {
                     .value => |v| {
                         e.handle(@src(), wd);
+                        // The echo of an Alt/Ctrl-encoded key must not also type.
+                        if (text_guard.drops(v.txt)) continue;
                         s.write(v.txt);
                         s.clearSelection();
                         s.scrollToBottom();

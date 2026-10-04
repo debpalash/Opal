@@ -262,11 +262,18 @@ pub const Session = struct {
 
     /// Paste text. libghostty-vt scrubs control bytes and, when the program
     /// asked for bracketed paste, wraps the text in the bracket sequences.
-    pub fn paste(self: *Session, text: []const u8) void {
-        if (text.len == 0 or text.len > 4 * 1024 * 1024 or self.isExited()) return;
-        const data = self.allocator.dupe(u8, text) catch return;
+    pub const PasteResult = enum { sent, empty, too_large, failed };
+
+    /// Bigger pastes are refused: the pty drains at the child's pace and a write
+    /// that gives up half way would leave it inside a bracketed paste.
+    pub const max_paste_bytes: usize = 512 * 1024;
+
+    pub fn paste(self: *Session, text: []const u8) PasteResult {
+        if (text.len == 0 or self.isExited()) return .empty;
+        if (text.len > max_paste_bytes) return .too_large;
+        const data = self.allocator.dupe(u8, text) catch return .failed;
         defer self.allocator.free(data);
-        const out = self.allocator.alloc(u8, text.len + 32) catch return;
+        const out = self.allocator.alloc(u8, text.len + 32) catch return .failed;
         defer self.allocator.free(out);
 
         var cfg = std.mem.zeroes(c.GhosttyTerminalModeConfig);
@@ -276,8 +283,20 @@ pub const Session = struct {
         self.mutex.unlock();
 
         var written: usize = 0;
-        if (c.ghostty_paste_encode(data.ptr, data.len, have_mode and cfg.value, out.ptr, out.len, &written) != c.GHOSTTY_SUCCESS) return;
-        self.write(out[0..written]);
+        if (c.ghostty_paste_encode(data.ptr, data.len, have_mode and cfg.value, out.ptr, out.len, &written) != c.GHOSTTY_SUCCESS) return .failed;
+        if (self.pty.writeAll(out[0..written])) return .sent;
+        // The write gave up part way. Try to close the bracket anyway so the
+        // program does not stay in paste mode.
+        const tail = bracketTail(out[0..written]);
+        if (tail.len > 0) _ = self.pty.writeAll(tail);
+        return .failed;
+    }
+
+    /// The closing bracketed-paste sequence if `encoded` ends with one.
+    fn bracketTail(encoded: []const u8) []const u8 {
+        const close = "\x1b[201~";
+        if (std.mem.endsWith(u8, encoded, close)) return encoded[encoded.len - close.len ..];
+        return &.{};
     }
 
     pub fn resize(self: *Session, cols: u16, rows: u16, cell_w: u16, cell_h: u16) void {
@@ -736,6 +755,13 @@ pub const Session = struct {
         cell.selected = selected;
     }
 };
+
+test "bracket tail is found only on bracketed pastes" {
+    try std.testing.expectEqualStrings("\x1b[201~", Session.bracketTail("\x1b[200~hi\x1b[201~"));
+    try std.testing.expectEqual(@as(usize, 0), Session.bracketTail("plain text").len);
+    try std.testing.expectEqual(@as(usize, 0), Session.bracketTail("").len);
+    try std.testing.expect(Session.max_paste_bytes == 512 * 1024);
+}
 
 test "snapshot flattens a styled screen" {
     var term: c.GhosttyTerminal = null;

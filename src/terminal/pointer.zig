@@ -80,6 +80,44 @@ pub fn offsetForThumbTop(total: u64, len: u64, track_h: f32, thumb_h: f32, top: 
     return @intFromFloat(@round(frac * max_off));
 }
 
+/// Tells whether the terminal widget really rendered recently. The toolkit keeps
+/// keyboard focus on a widget that stopped being drawn, which would leave the
+/// app's shortcuts swallowed. The terminal calls `markRendered` when drawn and
+/// the keyboard check calls `alive`, each once per frame at most; a widget that
+/// missed a whole frame is no longer alive.
+pub const FrameGuard = struct {
+    rendered: i128 = 0,
+    last: i128 = 0,
+    prev: i128 = 0,
+
+    pub fn markRendered(self: *FrameGuard, now: i128) void {
+        self.rendered = now;
+    }
+
+    pub fn alive(self: *FrameGuard, now: i128) bool {
+        if (now != self.last) {
+            self.prev = self.last;
+            self.last = now;
+        }
+        return self.rendered != 0 and self.rendered >= self.prev;
+    }
+};
+
+test "a widget that stops rendering stops owning the keyboard" {
+    var g = FrameGuard{};
+    try std.testing.expect(!g.alive(10)); // never rendered
+    g.markRendered(10);
+    try std.testing.expect(g.alive(20)); // drawn last frame
+    g.markRendered(20);
+    try std.testing.expect(g.alive(30));
+    // Frame 30 draws nothing (the page changed): the next check sees it.
+    try std.testing.expect(!g.alive(40));
+    try std.testing.expect(!g.alive(50));
+    // Comes back.
+    g.markRendered(50);
+    try std.testing.expect(g.alive(60));
+}
+
 test "cellAt maps pixels to cells and clamps outside the grid" {
     const h = cellAt(25, 41, 5, 1, 10, 20, 80, 24);
     try std.testing.expectEqual(@as(u16, 2), h.col);
