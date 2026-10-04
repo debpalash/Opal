@@ -725,6 +725,17 @@ pub fn build(b: *std.Build) void {
     const run_test_overview = b.addRunArtifact(test_overview_pure);
     test_step.dependOn(&run_test_overview.step);
     b.step("test-overview", "Test the Agents Overview wording and activity-feed merge").dependOn(&run_test_overview.step);
+    const test_ask_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/ask_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_ask_pure.use_llvm = true;
+    const run_test_ask = b.addRunArtifact(test_ask_pure);
+    test_step.dependOn(&run_test_ask.step);
+    b.step("test-ask", "Test Ask Opal (policy, argv, prompt, answer and action validation)").dependOn(&run_test_ask.step);
 
     const test_agent_tasks_pure = b.addTest(.{
         .root_module = b.createModule(.{
@@ -1730,8 +1741,8 @@ pub fn build(b: *std.Build) void {
     keyless_test_step.dependOn(&run_test_cinemeta_meta_pure.step);
 
     // One command for the agent-native suites (CI runs this).
-    const agentic_test_step = b.step("test-agentic", "Run the agent-native suites: operator, agent, ops, terminal, wanted, browser, keyless");
-    for ([_][]const u8{ "test-operator", "test-agent", "test-ops", "test-terminal", "test-wanted", "test-browser" }) |name| {
+    const agentic_test_step = b.step("test-agentic", "Run the agent-native suites: operator, agent, ops, terminal, wanted, browser, ask, keyless");
+    for ([_][]const u8{ "test-operator", "test-agent", "test-ops", "test-terminal", "test-wanted", "test-browser", "test-ask", "test-overview" }) |name| {
         agentic_test_step.dependOn(&b.top_level_steps.get(name).?.step);
     }
     agentic_test_step.dependOn(keyless_test_step);

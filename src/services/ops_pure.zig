@@ -55,6 +55,8 @@ pub const Policy = struct {
     /// run (the full set is ~14K tokens), so an agent that needs a dozen tools
     /// should only be shown a dozen. `all` shows everything.
     preset: Preset = .all,
+    /// More deny prefixes (`--deny-prefix` may repeat). Same meaning as `deny_prefix`.
+    deny_prefixes: []const []const u8 = &.{},
 };
 
 pub const Preset = enum {
@@ -132,7 +134,16 @@ pub fn validDenyPrefix(prefix: []const u8) bool {
 /// True when the policy's deny list covers `op`.
 pub fn isDenied(policy: Policy, op: *const Op) bool {
     if (!presetAllows(policy.preset, op.name)) return true;
-    return policy.deny_prefix.len > 0 and std.mem.startsWith(u8, op.name, policy.deny_prefix);
+    return deniedBy(policy, op) != null;
+}
+
+/// The deny prefix that covers `op`, for the refusal message.
+pub fn deniedBy(policy: Policy, op: *const Op) ?[]const u8 {
+    if (policy.deny_prefix.len > 0 and std.mem.startsWith(u8, op.name, policy.deny_prefix)) return policy.deny_prefix;
+    for (policy.deny_prefixes) |prefix| {
+        if (prefix.len > 0 and std.mem.startsWith(u8, op.name, prefix)) return prefix;
+    }
+    return null;
 }
 
 pub fn check(policy: Policy, op: *const Op, is_confirmed: bool) Verdict {
@@ -2051,6 +2062,23 @@ test "deny prefix leaves every other tool alone, and an empty prefix denies noth
     const wide = Policy{ .deny_prefix = "queue_", .allow_destructive = true };
     try testing.expectEqual(Verdict.denied, check(wide, findOp("queue_clear").?, true));
     try testing.expectEqual(Verdict.allow, check(wide, findOp("player_toggle").?, false));
+}
+
+test "several deny prefixes combine and name the one that matched" {
+    const more = [_][]const u8{ "operator", "browser" };
+    const p = Policy{ .deny_prefix = "agent_task", .deny_prefixes = &more };
+    try testing.expect(isDenied(p, findOp("agent_task_add").?));
+    try testing.expect(isDenied(p, findOp("browser_page").?));
+    try testing.expect(isDenied(p, findOp("operator_jobs_list").?));
+    try testing.expect(!isDenied(p, findOp("search").?));
+    try testing.expectEqualStrings("browser", deniedBy(p, findOp("browser_status").?).?);
+    try testing.expectEqualStrings("agent_task", deniedBy(p, findOp("agent_tasks_list").?).?);
+    try testing.expect(deniedBy(p, findOp("status").?) == null);
+    // The list alone works too, and empty entries deny nothing.
+    const only = [_][]const u8{ "", "plugin" };
+    const q = Policy{ .deny_prefixes = &only };
+    try testing.expect(isDenied(q, findOp("plugins_list").?));
+    try testing.expect(!isDenied(q, findOp("status").?));
 }
 
 test "deny prefix argument must look like a tool name prefix" {

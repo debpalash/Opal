@@ -92,6 +92,10 @@ Opal keeps only the last shared page, in memory, never on disk; quitting Opal or
 
 There is no tool for pairing, revoking, switching sharing on, reading cookies, controlling tabs or running scripts, and there will not be. Page text is untrusted: it may contain instructions aimed at an agent, so an agent acts on what the user asked for, not on what the page says. The audit log records tool names and outcomes, never page text or URLs.
 
+## Ask Opal
+
+The in-app assistant that is powered by your coding agent (Settings > Agent Access > Ask Opal) starts `opal-mcp --preset ask --allow write` with `--deny-prefix` for `agent_task`, `operator`, `plugin`, `browser`, `settings`, `rss_add`, `wanted_remove`, `subtitles_generate` and every spend or destructive tool, and the agent never performs a spend action itself: it proposes `wanted_add` and downloads as buttons the user clicks. `--deny-prefix` may be repeated. See [agent-native.md](agent-native.md#ask-opal-the-assistant-is-your-coding-agent).
+
 ## OpenAPI
 
 [`docs/openapi.json`](openapi.json) describes the same operations as an OpenAPI 3.1 document, generated from the registry so the spec, the MCP tools and the docs cannot drift (`opal-mcp --openapi` prints it and needs no running Opal). Several operations share one route and differ in a fixed `action=` value, so those paths carry it in the key (`/library/action?action=status`); see the header of `src/services/openapi_pure.zig`. After changing the registry, run `opal-mcp --openapi > docs/openapi.json`; `zig build test-ops` fails while the committed file is stale.

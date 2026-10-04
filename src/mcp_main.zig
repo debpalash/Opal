@@ -8,7 +8,7 @@
 //!
 //! stdout carries protocol messages only; diagnostics go to stderr.
 //!
-//!   opal-mcp [--allow TIER] [--read-only] [--deny-prefix NAME] [--port N]
+//!   opal-mcp [--allow TIER] [--read-only] [--deny-prefix NAME]... [--port N]
 //!
 //! TIER is one of read, playback, write, spend (default), destructive. Naming
 //! `destructive` still requires each call to pass `confirm: true`. `--deny-prefix`
@@ -20,6 +20,7 @@ const builtin = @import("builtin");
 const ops = @import("services/ops_pure.zig");
 
 const version = "2.0.0-dev";
+const max_deny_prefixes: usize = 31;
 
 const Bridge = struct {
     io: std.Io,
@@ -92,6 +93,8 @@ pub fn main(init: std.process.Init) !void {
     const env = init.environ_map;
 
     var policy = ops.Policy{};
+    var extra_prefixes: [max_deny_prefixes][]const u8 = undefined;
+    var extra_count: usize = 0;
     var port: u16 = 41595;
     if (env.get("OPAL_PORT")) |p| port = std.fmt.parseInt(u16, p, 10) catch fail("OPAL_PORT is not a port number", .{});
 
@@ -113,7 +116,15 @@ pub fn main(init: std.process.Init) !void {
         } else if (std.mem.eql(u8, arg, "--deny-prefix")) {
             const v = args.next() orelse fail("--deny-prefix needs a tool name prefix", .{});
             if (!ops.validDenyPrefix(v)) fail("bad --deny-prefix '{s}': use 1-64 characters of a-z, 0-9 and _", .{v});
-            policy.deny_prefix = try gpa.dupe(u8, v);
+            // The flag may repeat: the first goes in `deny_prefix`, the rest in the list.
+            const owned = try gpa.dupe(u8, v);
+            if (policy.deny_prefix.len == 0) {
+                policy.deny_prefix = owned;
+            } else {
+                if (extra_count >= max_deny_prefixes) fail("at most {d} --deny-prefix flags", .{max_deny_prefixes + 1});
+                extra_prefixes[extra_count] = owned;
+                extra_count += 1;
+            }
         } else if (std.mem.eql(u8, arg, "--port")) {
             const v = args.next() orelse fail("--port needs a number", .{});
             port = std.fmt.parseInt(u16, v, 10) catch fail("bad port '{s}'", .{v});
@@ -136,7 +147,7 @@ pub fn main(init: std.process.Init) !void {
                     "  --allow TIER   highest tier to run: read, playback, write, spend (default), destructive\n" ++
                     "  --read-only    same as --allow read\n" ++
                     "  --preset NAME   show only a named subset of tools (ask, tasks, digest): far fewer tokens per agent run\n" ++
-                    "  --deny-prefix NAME  hide and refuse every tool whose name starts with NAME (e.g. agent_task)\n" ++
+                    "  --deny-prefix NAME  hide and refuse every tool whose name starts with NAME (e.g. agent_task); may repeat\n" ++
                     "  --port N       Opal API port (default 41595, or OPAL_PORT)\n" ++
                     "  --openapi      print the OpenAPI description of the agent API and exit\n\n" ++
                     "Token: OPAL_API_TOKEN, else OPAL_API_TOKEN_FILE, else <config>/opal/api.token.\n" ++
@@ -146,6 +157,8 @@ pub fn main(init: std.process.Init) !void {
             return;
         } else fail("unknown argument '{s}' (try --help)", .{arg});
     }
+
+    policy.deny_prefixes = extra_prefixes[0..extra_count];
 
     const cfg = configDir(gpa, env) catch fail("cannot locate the config directory; set OPAL_API_TOKEN", .{});
     defer gpa.free(cfg);
