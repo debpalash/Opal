@@ -305,4 +305,62 @@ revealBtn.addEventListener("click", () => {
   revealBtn.textContent = revealed ? "Show" : "Hide";
 });
 
+// ── Browser link: pair this browser with Opal ───────────────────────────────
+
+const linkUnpaired = $<HTMLElement>("link-unpaired");
+const linkPaired = $<HTMLElement>("link-paired");
+const linkPairedLabel = $<HTMLElement>("link-paired-label");
+const linkCode = $<HTMLInputElement>("link-code");
+const linkLabel = $<HTMLInputElement>("link-label");
+const linkPairBtn = $<HTMLButtonElement>("link-pair");
+const linkUnpairBtn = $<HTMLButtonElement>("link-unpair");
+const linkResult = $<HTMLDivElement>("link-result");
+
+function browserMsg<T>(msg: Record<string, unknown>): Promise<T> {
+  return chrome.runtime.sendMessage({ kind: "browser", ...msg }) as Promise<T>;
+}
+
+async function refreshLink(): Promise<void> {
+  const st = await browserMsg<{ paired: boolean; label: string }>({ op: "status" });
+  linkUnpaired.hidden = st.paired;
+  linkPaired.hidden = !st.paired;
+  linkPairedLabel.textContent = st.paired ? `Paired as "${st.label}". Streams you press Play on in the side panel go to Opal.` : "";
+  if (st.paired) {
+    // A revoke done in Opal leaves a dead token here; find out now, not at the first Play.
+    const v = await browserMsg<{ ok: boolean; error?: string }>({ op: "verify" });
+    if (!v.ok && v.error?.includes("pair it again")) {
+      show(linkResult, "err", v.error);
+      linkUnpaired.hidden = false;
+      linkPaired.hidden = true;
+    }
+  }
+}
+
+linkPairBtn.addEventListener("click", async () => {
+  linkPairBtn.disabled = true;
+  show(linkResult, "ok", "Pairing…");
+  const res = await browserMsg<{ ok: boolean; error?: string }>({
+    op: "pair",
+    code: linkCode.value,
+    label: linkLabel.value,
+  });
+  linkPairBtn.disabled = false;
+  if (res.ok) {
+    linkCode.value = "";
+    show(linkResult, "ok", "Paired. Open the side panel on a page that plays video and turn on Detect media.");
+    refreshLink();
+  } else {
+    show(linkResult, "err", res.error ?? "Pairing failed.");
+  }
+});
+linkCode.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") linkPairBtn.click();
+});
+linkUnpairBtn.addEventListener("click", async () => {
+  const res = await browserMsg<{ ok: boolean; error?: string }>({ op: "unpair" });
+  show(linkResult, res.error ? "err" : "ok", res.error ?? "Unpaired.");
+  refreshLink();
+});
+
 load();
+refreshLink();

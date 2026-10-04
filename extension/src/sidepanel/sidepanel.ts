@@ -11,6 +11,7 @@
  * All Opal traffic is delegated to the background worker via messages.
  */
 
+import { SNIFFER_PERMISSIONS, describeCandidate, type Candidate } from "../sniffer";
 import type {
   Detection,
   OpalFile,
@@ -74,6 +75,13 @@ const setupCard = $<HTMLElement>("setup-card");
 const setupOpen = $<HTMLButtonElement>("setup-open");
 const recent = $<HTMLUListElement>("recent");
 const optionsLink = $<HTMLAnchorElement>("options");
+const streamsOff = $<HTMLElement>("streams-off");
+const streamsUnpaired = $<HTMLElement>("streams-unpaired");
+const streamsList = $<HTMLUListElement>("streams-list");
+const streamsCount = $<HTMLElement>("streams-count");
+const streamsEnable = $<HTMLButtonElement>("streams-enable");
+const streamsDisable = $<HTMLButtonElement>("streams-disable");
+const streamsPair = $<HTMLButtonElement>("streams-pair");
 
 let detection: Detection | null = null;
 let seeking = false;
@@ -582,6 +590,122 @@ async function loadPartyStatus(): Promise<void> {
     `${st.role}${st.connected ? " · connected" : " · waiting"} · ${peers} peer${peers === 1 ? "" : "s"}${where}`;
 }
 
+// ── Detected streams (browser link) ───────────────────────────────────────────
+
+interface LinkStatus {
+  paired: boolean;
+  label: string;
+  sniffer: boolean;
+}
+
+function browserMsg<T>(msg: Record<string, unknown>): Promise<T> {
+  return chrome.runtime.sendMessage({ kind: "browser", ...msg }) as Promise<T>;
+}
+
+async function activeTabId(): Promise<number | null> {
+  // `sidebar/index.html?tab=<id>` pins the list to one tab. That lets the panel
+  // be opened as an ordinary tab (where "the active tab" would be the panel
+  // itself), which is how the automated live check drives it.
+  const pinned = Number(new URLSearchParams(location.search).get("tab"));
+  if (Number.isInteger(pinned) && pinned >= 0 && new URLSearchParams(location.search).has("tab")) return pinned;
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tab?.id ?? null;
+}
+
+/** Re-read what the sniffer found for the active tab. Cheap (a message to the
+ *  worker, which answers from memory), so it rides along with the status poll. */
+async function loadStreams(): Promise<void> {
+  const status = await browserMsg<LinkStatus>({ op: "status" });
+  streamsOff.hidden = status.sniffer;
+  streamsDisable.hidden = !status.sniffer;
+  streamsUnpaired.hidden = !status.sniffer || status.paired;
+  if (!status.sniffer) {
+    streamsList.textContent = "";
+    streamsCount.textContent = "";
+    lastStreamsKey = "";
+    return;
+  }
+  const tabId = await activeTabId();
+  const res = tabId === null ? { candidates: [] as Candidate[] } : await browserMsg<{ candidates: Candidate[] }>({ op: "list", tabId });
+  renderStreams(tabId, res.candidates ?? [], status.paired);
+}
+
+let lastStreamsKey = "";
+
+function renderStreams(tabId: number | null, list: Candidate[], paired: boolean): void {
+  // The poll calls this every second or so; rebuilding identical rows would
+  // swallow a click that lands mid-rebuild.
+  const key = JSON.stringify([tabId, paired, list.map((c) => [c.id, c.referer])]);
+  if (key === lastStreamsKey) return;
+  lastStreamsKey = key;
+  streamsCount.textContent = list.length ? String(list.length) : "";
+  streamsList.textContent = "";
+  if (!list.length) {
+    const li = document.createElement("li");
+    li.className = "results-empty";
+    li.textContent = "Nothing found yet. Press play on the page.";
+    streamsList.append(li);
+    return;
+  }
+  for (const c of list) {
+    const { host, name } = describeCandidate(c);
+    const li = document.createElement("li");
+    li.className = "result";
+    const meta = document.createElement("div");
+    meta.className = "result-meta";
+    meta.innerHTML =
+      `<span class="badge">${escapeHtml(c.kind)}</span>` +
+      `<span class="result-title">${escapeHtml(name)}</span>` +
+      `<span class="result-detail">${escapeHtml(host)}${c.referer ? " · Referer sent" : ""}</span>`;
+    li.append(meta);
+    const btns = document.createElement("div");
+    btns.className = "result-btns";
+    for (const [action, glyph, title] of [
+      ["play", "▶", "Play in Opal"],
+      ["queue", "＋", "Queue in Opal"],
+    ] as const) {
+      const b = document.createElement("button");
+      b.className = action === "play" ? "mini-btn primary" : "mini-btn";
+      b.textContent = glyph;
+      b.title = title;
+      b.disabled = !paired || tabId === null;
+      b.addEventListener("click", async () => {
+        b.disabled = true;
+        const res = await browserMsg<{ ok: boolean; error?: string; queuedWithoutHeaders?: boolean }>({
+          op: "send",
+          tabId,
+          id: c.id,
+          action,
+        });
+        if (res.ok && res.queuedWithoutHeaders) {
+          logRecent("Queued, but a queued stream plays without its Referer", true);
+        } else {
+          logRecent(res.ok ? (action === "play" ? "Playing detected stream" : "Queued detected stream") : (res.error ?? "Send failed"), res.ok);
+        }
+        b.disabled = !paired;
+        if (!res.ok) loadStreams();
+      });
+      btns.append(b);
+    }
+    li.append(btns);
+    streamsList.append(li);
+  }
+}
+
+// chrome.permissions.request has to run in a user gesture, so it is called here
+// (not in the worker) and the worker is told afterwards.
+streamsEnable.addEventListener("click", async () => {
+  const granted = await chrome.permissions.request(SNIFFER_PERMISSIONS as chrome.permissions.Permissions);
+  if (granted) await browserMsg({ op: "enable" });
+  else logRecent("Detection needs that permission", false);
+  loadStreams();
+});
+streamsDisable.addEventListener("click", async () => {
+  await chrome.permissions.remove(SNIFFER_PERMISSIONS as chrome.permissions.Permissions);
+  loadStreams();
+});
+streamsPair.addEventListener("click", () => chrome.runtime.openOptionsPage());
+
 // ── Status polling ────────────────────────────────────────────────────────────
 
 let pollTimer: number | undefined;
@@ -589,6 +713,7 @@ let pollTimer: number | undefined;
 let ticks = 0;
 
 async function poll(): Promise<void> {
+  loadStreams().catch(() => {});
   const res = await send({ kind: "opal", action: "status" });
   if (res.ok) {
     statusDot.className = "dot ok";

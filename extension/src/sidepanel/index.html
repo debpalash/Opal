@@ -63,6 +63,33 @@
       </div>
     </section>
 
+    <!-- Streams found behind this page (browser link, milestone 1).
+         Detection is off until the user grants the optional webRequest
+         permission here; Play/Queue talk to Opal with the browser's own token,
+         which can only hand streams to the player. -->
+    <section id="streams-card" class="card">
+      <div class="card-head between">
+        <div class="card-title small">Detected streams</div>
+        <span id="streams-count" class="card-sub"></span>
+      </div>
+      <div id="streams-off">
+        <p class="card-body">
+          Find the real stream behind a page and play it in Opal with the right
+          Referer. This needs permission to watch this browser's media requests.
+          Nothing is sent anywhere until you press Play.
+        </p>
+        <button id="streams-enable" class="btn primary full">Detect media</button>
+      </div>
+      <div id="streams-unpaired" hidden>
+        <p class="card-body">Pair this browser with Opal to send streams to it.</p>
+        <button id="streams-pair" class="btn primary full">Pair with Opal</button>
+      </div>
+      <ul id="streams-list" class="results"></ul>
+      <div class="btn-row">
+        <button id="streams-disable" class="link-btn" hidden>Turn off detection</button>
+      </div>
+    </section>
+
     <!-- Now-playing mini remote -->
     <section id="remote" class="card">
       <div class="np-title" id="np-title">Nothing playing</div>

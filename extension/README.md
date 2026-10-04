@@ -96,7 +96,7 @@ npx tsc --noEmit   # typecheck only
 Then load it:
 
 - **Chrome / Edge**: `chrome://extensions` → *Developer mode* → *Load unpacked* →
-  pick `extension/dist/chrome`. Click the toolbar icon to open the side panel.
+  pick `extension/dist/chromium`. Click the toolbar icon to open the side panel.
 - **Firefox**: `about:debugging` → *This Firefox* → *Load Temporary Add-on* →
   pick `manifest.json` in the Firefox bundle. The panel opens as a sidebar.
 
@@ -124,13 +124,52 @@ map lives in `src/shared.ts` (`OpalAction`).
 `framework` for `/api/source/add` is one of
 `madara｜mangathemesia｜heancms｜madara_novel｜lightnovelwp｜readwn`.
 
+## Browser link: detect streams and play them in Opal
+
+Pages often hide the real stream: an iframe player that `fetch`es a tokenized
+`master.m3u8`, a `<video>` pointing at an `.mp4`. Handing Opal the *page* URL
+leaves mpv with nothing it can play. The browser link finds the stream the page
+actually requests and sends it with the Referer, Origin and User-Agent your
+browser used, so mpv plays it the way the page would.
+
+1. **Pair** (once). In Opal open *Settings → Agent Access → Browser* and press
+   *Pair a browser* (the Web Remote switch above it must be on). Opal shows a
+   six digit code for two minutes. Enter it under *Browser link* on this
+   extension's setup page. Five wrong codes cancel it. The browser gets its own
+   token (stored in `chrome.storage.local`, hashed in Opal) that can only send
+   streams to the player: it cannot touch settings, downloads, sources or agents.
+   Revoke it in Opal at any time.
+2. **Detect media** (once). In the side panel, press *Detect media* and accept the
+   all-sites access prompt. Until then nothing is observed.
+3. Open a page that plays video. Candidates appear under *Detected streams*
+   with **Play** and **Queue**. The list is per tab and clears when the tab
+   navigates.
+
+How it works: `webRequest` observers in the service worker record m3u8, mpd, mp4,
+webm, mkv, audio and (until a playlist shows up) ts requests, and also
+extension-less ones by `Content-Type`. They are de-duplicated, capped at 24 per
+tab and ranked (manifests over files over segments, masters over variants).
+`Cookie` and `Authorization` headers are never read into a candidate. The pure
+part (classification, dedupe, payload) is `src/sniffer.ts`; the worker side is
+`src/browser_link.ts`.
+
+Limits in this milestone: a *queued* stream plays later without its Referer (the
+queue stores only a URL); streams that need your cookies will not play; DRM
+streams cannot be played by mpv.
+
+Tests: `npm test` runs the pure parts under node (no dependencies, node >= 22.18).
+`npm run typecheck` runs `tsc`.
+
 ## Files
 
 ```
 extension/
 ├── manifest.json          MV3 manifest (side_panel + sidebar_action, no popup)
+├── tests/                 node tests for the sniffer's pure logic (npm test)
 ├── src/
 │   ├── background.ts       service worker — the only place that talks to Opal
+│   ├── browser_link.ts     pairing + media sniffer (webRequest) + Play/Queue
+│   ├── sniffer.ts          pure: classify, dedupe, rank, build /api/browser/media body
 │   ├── content.ts          framework detection + page classify + shadow-DOM button
 │   ├── shared.ts           settings + types shared across contexts
 │   ├── sidepanel/          persistent panel: remote + send + add-source + recent

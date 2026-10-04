@@ -118,6 +118,43 @@
         <div id="result" class="result" hidden></div>
       </section>
 
+      <!-- ── Browser link ────────────────────────────────────────────────────
+           Pairs THIS browser with Opal so the side panel can hand it the real
+           streams behind a page. A separate, narrow credential from the
+           connection above: it can only send streams to the player. -->
+      <section class="group" id="link-group">
+        <div class="group-head">
+          <h2>Browser link</h2>
+          <p id="link-sub">
+            In Opal, open Settings &gt; Agent Access &gt; Browser and press
+            <em>Pair a browser</em>, then enter the six digit code here. A paired
+            browser can send streams to Opal's player and nothing else.
+          </p>
+        </div>
+        <div id="link-unpaired">
+          <div class="fields">
+            <label class="field">
+              <span class="field-label">Code from Opal</span>
+              <input id="link-code" type="text" inputmode="numeric" maxlength="7" autocomplete="off" placeholder="123456" />
+            </label>
+            <label class="field">
+              <span class="field-label">Name for this browser</span>
+              <input id="link-label" type="text" maxlength="60" autocomplete="off" placeholder="chrome on Linux" />
+            </label>
+          </div>
+          <div class="actions">
+            <button type="button" id="link-pair" class="btn primary">Pair with Opal</button>
+          </div>
+        </div>
+        <div id="link-paired" hidden>
+          <p id="link-paired-label" class="help"></p>
+          <div class="actions">
+            <button type="button" id="link-unpair" class="btn ghost">Unpair this browser</button>
+          </div>
+        </div>
+        <div id="link-result" class="result" hidden></div>
+      </section>
+
       <!-- ── Behavior ────────────────────────────────────────────────────── -->
       <section class="group">
         <div class="group-head">
