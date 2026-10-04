@@ -5015,6 +5015,84 @@ fn renderPhoneQr() void {
     }
 }
 
+/// Connect coding agents (Claude Code, Codex, Gemini CLI, ...) to Opal's MCP
+/// server. Agents reach Opal through the same loopback Web API as everything
+/// else, so "agent access" is that switch plus copy-paste setup for the client;
+/// `opal-mcp` itself enforces the tier policy and writes the audit log.
+fn renderAgentAccess() void {
+    const remote = @import("../services/remote.zig");
+    const setup = @import("../services/agent_setup_pure.zig");
+    const io_g = @import("../core/io_global.zig");
+
+    _ = dvui.label(@src(), "Let coding agents search, play and manage downloads through Opal. Agents connect with the opal-mcp program; it only talks to this machine unless the Web UI is shared on your network.", .{}, .{
+        .color_text = theme.colors.text_secondary,
+        .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
+    });
+
+    const before = state.app.web_remote_enabled;
+    const hint: []const u8 = if (!state.app.web_remote_enabled)
+        "Off"
+    else if (remote.bind_mode == .lan)
+        "On, but the API is also reachable on your network"
+    else
+        "On, this computer only";
+    components.toggleRow(@src(), "Allow coding agents", hint, &state.app.web_remote_enabled);
+    if (state.app.web_remote_enabled != before) {
+        state.markConfigDirty();
+        if (state.app.web_remote_enabled) {
+            remote.start();
+            state.showToast("Agent access on");
+        } else {
+            remote.stop();
+            state.showToast("Agent access off");
+        }
+    }
+
+    var exe_buf: [512]u8 = undefined;
+    var path_buf: [600]u8 = undefined;
+    const exe_dir = io_g.selfExeDirPath(&exe_buf) catch "";
+    const is_win = @import("builtin").os.tag == .windows;
+    const mcp_path = setup.mcpBinaryPath(&path_buf, exe_dir, is_win) orelse "opal-mcp";
+
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .horizontal,
+        .margin = .{ .x = 0, .y = 4, .w = 0, .h = 6 },
+    });
+    defer row.deinit();
+    var text_buf: [768]u8 = undefined;
+    if (components.actionButton(@src(), "Copy Claude Code command", .primary, 9301)) {
+        if (setup.claudeCommand(&text_buf, mcp_path)) |t| {
+            dvui.clipboardTextSet(t);
+            state.showToast("Run it in a terminal to add Opal to Claude Code");
+        } else state.showToast("Install path has a quote; use the JSON config");
+    }
+    if (components.actionButton(@src(), "Copy Codex config", .secondary, 9302)) {
+        if (setup.codexToml(&text_buf, mcp_path)) |t| {
+            dvui.clipboardTextSet(t);
+            state.showToast("Paste into ~/.codex/config.toml");
+        }
+    }
+    if (components.actionButton(@src(), "Copy JSON config", .secondary, 9303)) {
+        if (setup.jsonConfig(&text_buf, mcp_path)) |t| {
+            dvui.clipboardTextSet(t);
+            state.showToast("MCP config copied");
+        }
+    }
+
+    var cfg_buf: [512]u8 = undefined;
+    var audit_buf: [640]u8 = undefined;
+    if (setup.auditLogPath(&audit_buf, paths.configDir(&cfg_buf))) |audit| {
+        _ = dvui.label(@src(), "Every agent call is logged to {s}", .{audit}, .{
+            .color_text = theme.colors.text_secondary,
+            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
+        });
+        if (components.actionButton(@src(), "Copy log path", .secondary, 9304)) {
+            dvui.clipboardTextSet(audit);
+            state.showToast("Audit log path copied");
+        }
+    }
+}
+
 fn renderWebUiTab() void {
     const remote = @import("../services/remote.zig");
     const access = @import("../services/access_pure.zig");
@@ -5210,6 +5288,10 @@ fn renderWebUiTab() void {
             } else state.showToast("No entropy source — token unchanged");
         }
     }
+
+    // ── Agent access ──
+    settingRow("Agent Access", 95, @src());
+    renderAgentAccess();
 
     // ── Network ──
     settingRow("Network", 93, @src());
