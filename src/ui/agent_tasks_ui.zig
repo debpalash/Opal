@@ -144,6 +144,7 @@ fn runNow(id: i64) void {
         .no_such_task => state.showToastTyped("That task no longer exists", .warning),
         .switch_off => state.showToastTyped("Turn on scheduled tasks first", .warning),
         .capped => state.showToastTyped("Daily run limit reached for this task", .warning),
+        .paused => state.showToastTyped("This task is paused: resume it first", .warning),
         .unavailable => state.showToastTyped("Not available right now", .warning),
     }
     dirty = true;
