@@ -235,7 +235,7 @@ then scan the QR code. It includes a setup code on first use and opens
 ## Let an AI agent run it
 
 Opal ships `opal-mcp`, an [MCP](https://modelcontextprotocol.io) server that gives
-Claude Code, Codex, Gemini CLI or any MCP client more than 70 typed tools: search and
+Claude Code, Codex, Gemini CLI or any MCP client more than 100 typed tools: search and
 play, queue, downloads, library, collections, discovery, and a **Wanted list** that
 finds and downloads releases on its own. Turn on **Settings → Agent Access**, then
 copy the one-line setup for your agent, or press **Launch** to open one already

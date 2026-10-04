@@ -8,10 +8,11 @@
 //!
 //! stdout carries protocol messages only; diagnostics go to stderr.
 //!
-//!   opal-mcp [--allow TIER] [--read-only] [--port N]
+//!   opal-mcp [--allow TIER] [--read-only] [--deny-prefix NAME] [--port N]
 //!
 //! TIER is one of read, playback, write, spend (default), destructive. Naming
-//! `destructive` still requires each call to pass `confirm: true`.
+//! `destructive` still requires each call to pass `confirm: true`. `--deny-prefix`
+//! hides every tool whose name starts with NAME and refuses calls to it.
 //! Environment: OPAL_API_TOKEN, OPAL_API_TOKEN_FILE, OPAL_PORT, OPAL_MCP_AUDIT=0.
 
 const std = @import("std");
@@ -106,6 +107,10 @@ pub fn main(init: std.process.Init) !void {
             } else policy.max_tier = tierFromName(v) orelse fail("unknown tier '{s}'", .{v});
         } else if (std.mem.eql(u8, arg, "--read-only")) {
             policy.max_tier = .read;
+        } else if (std.mem.eql(u8, arg, "--deny-prefix")) {
+            const v = args.next() orelse fail("--deny-prefix needs a tool name prefix", .{});
+            if (!ops.validDenyPrefix(v)) fail("bad --deny-prefix '{s}': use 1-64 characters of a-z, 0-9 and _", .{v});
+            policy.deny_prefix = try gpa.dupe(u8, v);
         } else if (std.mem.eql(u8, arg, "--port")) {
             const v = args.next() orelse fail("--port needs a number", .{});
             port = std.fmt.parseInt(u16, v, 10) catch fail("bad port '{s}'", .{v});
@@ -127,6 +132,7 @@ pub fn main(init: std.process.Init) !void {
                 "opal-mcp {s}: MCP server for a running Opal\n\n" ++
                     "  --allow TIER   highest tier to run: read, playback, write, spend (default), destructive\n" ++
                     "  --read-only    same as --allow read\n" ++
+                    "  --deny-prefix NAME  hide and refuse every tool whose name starts with NAME (e.g. agent_task)\n" ++
                     "  --port N       Opal API port (default 41595, or OPAL_PORT)\n" ++
                     "  --openapi      print the OpenAPI description of the agent API and exit\n\n" ++
                     "Token: OPAL_API_TOKEN, else OPAL_API_TOKEN_FILE, else <config>/opal/api.token.\n" ++

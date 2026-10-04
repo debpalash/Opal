@@ -25,9 +25,19 @@ A `409` or "stale" error means a newer search replaced the results; search again
 
 `downloads_list` gives each item an `idx` and `token`; pass both to `downloads_pause` / `downloads_resume`. Starting a download (`downloads_add_url`, or `play_url` with a magnet) uses bandwidth and disk, so say what you are about to start when the user did not ask for a download explicitly.
 
+## More tools: when to use which
+
+- **"What should I watch?"** `home_summary` first (counts and what to continue), then `library_list` or `calendar_list` for detail.
+- **Tracks and sync.** `player_info` lists audio and subtitle track ids and the current delay. Switch with `player_audio_track` / `player_subtitle_track` (an id or `off`); fix out-of-sync subtitles with `subtitles_delay` (seconds, positive shows them later).
+- **Cast to a TV.** `cast_scan`, wait a few seconds, `cast_devices`, then `cast_start` with the device position while something is playing. `cast_stop` ends it. It needs `catt` installed; say so if the scan finds nothing.
+- **Torrents.** `downloads_list` is direct downloads; `torrents_list` is live torrents. `torrent_files` shows what a pack has so far. `torrent_pause` / `torrent_resume` are safe; `torrent_cancel` is destructive. `download_history_*` only edits the list of past downloads, never files.
+- **Jellyfin.** If `jellyfin_results` says `connected: false`, tell the user to sign in in the app (you cannot). Otherwise `jellyfin_libraries` or `jellyfin_search`, wait, read `jellyfin_results` again, then `jellyfin_browse` into a folder or `jellyfin_play` an item id. Prefer plain `search` when the user does not care where it comes from.
+- **Feeds.** `rss_add` (http(s) URL), `rss_refresh`, `rss_list`. `rss_remove` is destructive. Do not repeat a feed URL that looks like it carries a key back to the user.
+- Anything that says "read X a moment later" starts a background load: call the matching results tool again until it fills in. `history_list` is search history, not what was watched.
+
 ## Wanted list (automation)
 
-When the user wants something that is not out yet or should just arrive on its own, `wanted_add` it instead of searching by hand: a movie by `title` and `year`, an episode by `title`, `season`, `episode`. Opal searches, picks the best release by quality and seeders, downloads it and marks it fulfilled. Check progress with `wanted_list` (`status`, `attempts`, `picked`); `wanted_check` forces a search now. Use `wanted_pause` / `wanted_remove` to stop. Do not add duplicates; list first.
+When the user wants something that is not out yet or should just arrive on its own, `wanted_add` it (it starts automatic downloads, so make sure the user wants that) instead of searching by hand: a movie by `title` and `year`, an episode by `title`, `season`, `episode`. Opal searches, picks the best release by quality and seeders, downloads it and marks it fulfilled. Check progress with `wanted_list` (`status`, `attempts`, `picked`); `wanted_check` forces a search now. Use `wanted_pause` / `wanted_remove` to stop. Do not add duplicates; list first.
 
 ## Extending Opal with a plugin
 
@@ -35,10 +45,10 @@ To add a source Opal does not have, `plugin_scaffold` an id, then edit `<config>
 
 ## Scheduled agent tasks
 
-`agent_task_add` saves a prompt a coding agent runs unattended on a timer (`interval_min`, 15 to 10080; `max_runs_per_day` caps cost). Use it for chores the user wants repeated, such as "each morning check the wanted list and report what is stuck". Write the prompt so it works with nobody to answer questions. Nothing runs until the user turns on **Settings → Agent Access → Run scheduled agent tasks**; you cannot turn it on, so tell the user when a task is waiting for it (`agent_tasks_list` shows `enabled`, `last_outcome` and a one-line `last_summary`). `agent_task_run` runs one on the next tick and counts toward its cap. Do not schedule a task that schedules more tasks.
+`agent_task_add` saves a prompt a coding agent runs unattended on a timer (`interval_min`, 15 to 10080; `max_runs_per_day` caps cost). Use it for chores the user wants repeated, such as "each morning check the wanted list and report what is stuck". Write the prompt so it works with nobody to answer questions. Nothing runs until the user turns on **Settings → Agent Access → Run scheduled agent tasks**; you cannot turn it on, so tell the user when a task is waiting for it (`agent_tasks_list` shows `enabled`, `last_outcome` and a one-line `last_summary`). `agent_task_run` runs one on the next tick and counts toward its cap. You can add and remove tasks but not pause or resume them; the user does that in the UI. Inside a scheduled run these tools are not available at all. Do not schedule a task that schedules more tasks.
 
 ## Rules
 
 - Never pass a local file path to a URL tool; they accept only http(s) and magnet links.
-- `queue_clear` and `downloads_cancel` are destructive and off by default. Ask the user before asking them to enable it, and pass `confirm: true` only after they agree.
+- `queue_clear`, `downloads_cancel`, `torrent_cancel`, `rss_remove` and the `download_history_*` removals are destructive and off by default. Ask the user before asking them to enable it, and pass `confirm: true` only after they agree.
 - If a tool says Opal is not reachable, tell the user to start Opal and enable Web Remote (loopback).
