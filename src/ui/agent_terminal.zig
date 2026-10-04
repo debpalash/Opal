@@ -29,8 +29,9 @@ var term_id: ?dvui.Id = null;
 /// Set when a session starts: the next frame hands the terminal keyboard focus.
 var want_focus: bool = false;
 /// What the left button is doing since it went down inside the terminal.
-const Drag = enum { none, select };
+const Drag = enum { none, select, report };
 var drag: Drag = .none;
+var pressed_button: ?pointer.Button = null;
 var launched: ?Kind = null;
 var note_buf: [128]u8 = undefined;
 var note_len: usize = 0;
@@ -256,6 +257,7 @@ fn renderTerminal(s: *Session) void {
     if (want_focus) {
         want_focus = false;
         drag = .none;
+        pressed_button = null;
         dvui.focusWidget(wd.id, null, null);
     }
 
@@ -422,6 +424,24 @@ fn drawCursor(rs: dvui.RectScale, cw: f32, ch: f32, focused: bool) void {
 
 // ── Input ──
 
+fn mapButton(b: dvui.enums.Button) ?pointer.Button {
+    return switch (b) {
+        .left => .left,
+        .right => .right,
+        .middle => .middle,
+        .four => .four,
+        .five => .five,
+        .six => .six,
+        .seven => .seven,
+        .eight => .eight,
+        else => null,
+    };
+}
+
+fn modsOf(mod: dvui.enums.Mod) keymap.Mods {
+    return .{ .shift = mod.shift(), .ctrl = mod.control(), .alt = mod.alt(), .super = mod.command() };
+}
+
 fn clipboardCopy(s: *Session) void {
     const text = s.copySelection(alloc) orelse return;
     defer alloc.free(text);
@@ -433,42 +453,86 @@ fn handleEvents(s: *Session, wd: *dvui.WidgetData, content: dvui.Rect.Physical, 
     for (dvui.events()) |*e| {
         if (!dvui.eventMatchSimple(e, wd)) continue;
         switch (e.evt) {
-            .mouse => |me| switch (me.action) {
-                .focus => {
-                    e.handle(@src(), wd);
-                    dvui.focusWidget(wd.id, null, e.num);
-                },
-                .press => if (me.button == .left) {
-                    e.handle(@src(), wd);
-                    dvui.captureMouse(wd, e.num);
-                    drag = .select;
-                    const hit = pointer.cellAt(me.p.x, me.p.y, content.x, content.y, cw, ch, snap.cols, snap.rows);
-                    s.selectPress(hit, @intCast(@max(0, dvui.frameTimeNS())));
-                    state.wakeUi();
-                },
-                .motion => if (drag == .select) {
-                    e.handle(@src(), wd);
-                    const hit = pointer.cellAt(me.p.x, me.p.y, content.x, content.y, cw, ch, snap.cols, snap.rows);
-                    // Dragging past the top or bottom edge walks through scrollback.
-                    if (me.p.y < content.y) s.scroll(-1) else if (me.p.y > content.y + content.h) s.scroll(1);
-                    s.selectDrag(hit, me.mod.alt());
-                    state.wakeUi();
-                },
-                .release => if (me.button == .left and drag == .select) {
-                    e.handle(@src(), wd);
-                    dvui.captureMouse(null, e.num);
-                    drag = .none;
-                    s.selectRelease(pointer.cellAt(me.p.x, me.p.y, content.x, content.y, cw, ch, snap.cols, snap.rows));
-                    state.wakeUi();
-                },
-                .position => dvui.cursorSet(.ibeam),
-                .wheel_y => |dy| {
-                    e.handle(@src(), wd);
-                    const rows: isize = @intFromFloat(@round(-dy * SCROLL_ROWS_PER_NOTCH));
-                    s.scroll(if (rows == 0) (if (dy > 0) -1 else 1) else rows);
-                    state.wakeUi();
-                },
-                else => {},
+            .mouse => |me| {
+                const hit = pointer.cellAt(me.p.x, me.p.y, content.x, content.y, cw, ch, snap.cols, snap.rows);
+                const mods = keymap.mods(modsOf(me.mod));
+                // Shift always means "select, whatever the program asked for".
+                const bypass = me.mod.shift();
+                switch (me.action) {
+                    .focus => {
+                        e.handle(@src(), wd);
+                        dvui.focusWidget(wd.id, null, e.num);
+                    },
+                    .press => {
+                        const btn = mapButton(me.button) orelse continue;
+                        const report = !bypass and s.modes().mouse_tracking;
+                        if (!report and btn != .left) continue;
+                        e.handle(@src(), wd);
+                        dvui.captureMouse(wd, e.num);
+                        if (report) {
+                            drag = .report;
+                            pressed_button = btn;
+                            s.clearSelection();
+                            _ = s.mouseReport(.press, btn, mods, hit, true);
+                        } else {
+                            drag = .select;
+                            s.selectPress(hit, @intCast(@max(0, dvui.frameTimeNS())));
+                        }
+                        state.wakeUi();
+                    },
+                    .motion => switch (drag) {
+                        .select => {
+                            e.handle(@src(), wd);
+                            // Dragging past the top or bottom edge walks through scrollback.
+                            if (me.p.y < content.y) s.scroll(-1) else if (me.p.y > content.y + content.h) s.scroll(1);
+                            s.selectDrag(hit, me.mod.alt());
+                            state.wakeUi();
+                        },
+                        .report => {
+                            e.handle(@src(), wd);
+                            _ = s.mouseReport(.motion, pressed_button, mods, hit, true);
+                        },
+                        .none => if (!bypass and hit.inside and s.modes().mouse_tracking) {
+                            _ = s.mouseReport(.motion, null, mods, hit, false);
+                        },
+                    },
+                    .release => {
+                        const btn = mapButton(me.button) orelse continue;
+                        if (drag == .report and pressed_button == btn) {
+                            e.handle(@src(), wd);
+                            dvui.captureMouse(null, e.num);
+                            drag = .none;
+                            pressed_button = null;
+                            _ = s.mouseReport(.release, btn, mods, hit, false);
+                        } else if (drag == .select and btn == .left) {
+                            e.handle(@src(), wd);
+                            dvui.captureMouse(null, e.num);
+                            drag = .none;
+                            s.selectRelease(hit);
+                            state.wakeUi();
+                        }
+                    },
+                    .position => dvui.cursorSet(.ibeam),
+                    .wheel_y => |dy| {
+                        e.handle(@src(), wd);
+                        const modes = s.modes();
+                        if (!bypass and modes.mouse_tracking) {
+                            // Wheel notches are buttons four (up) and five (down).
+                            const notches: usize = @max(1, @as(usize, @intFromFloat(@round(@abs(dy)))));
+                            const btn: pointer.Button = if (dy > 0) .four else .five;
+                            for (0..@min(notches, 10)) |_| _ = s.mouseReport(.press, btn, mods, hit, false);
+                        } else if (modes.alt_screen and modes.alt_scroll) {
+                            // Full-screen programs without mouse support (less, man) get arrows.
+                            const n: usize = @abs(pointer.wheelRows(dy, SCROLL_ROWS_PER_NOTCH));
+                            const key: session_mod.c.GhosttyKey = @intCast(if (dy > 0) session_mod.c.GHOSTTY_KEY_ARROW_UP else session_mod.c.GHOSTTY_KEY_ARROW_DOWN);
+                            for (0..@min(n, 30)) |_| _ = s.sendKey(key, 0, .press, "");
+                        } else {
+                            s.scroll(pointer.wheelRows(dy, SCROLL_ROWS_PER_NOTCH));
+                        }
+                        state.wakeUi();
+                    },
+                    else => {},
+                }
             },
             .key => |ke| {
                 const name = @tagName(ke.code);
