@@ -425,3 +425,59 @@ pub fn writeListJson(w: *std.Io.Writer) !void {
     try s.endArray();
     try s.endObject();
 }
+
+/// One job for the UI. Fixed buffers so a snapshot needs no allocation. Neither
+/// the context nor the stored answer is copied: the list shows what happened and
+/// what is proposed (the summary), never the raw data sent to the agent.
+pub const Row = struct {
+    id: i64 = 0,
+    kind: Kind = .match_help,
+    state: pure.State = .queued,
+    key: [64]u8 = std.mem.zeroes([64]u8),
+    key_len: usize = 0,
+    summary: [240]u8 = std.mem.zeroes([240]u8),
+    summary_len: usize = 0,
+    agent: [16]u8 = std.mem.zeroes([16]u8),
+    agent_len: usize = 0,
+    cost_cents: u32 = 0,
+    created_ms: i64 = 0,
+    finished_ms: i64 = 0,
+
+    pub fn title(self: *const Row) []const u8 {
+        return pure.spec(self.kind).title;
+    }
+};
+
+fn copyInto(dst: []u8, text: []const u8) usize {
+    const n = @min(text.len, dst.len);
+    @memcpy(dst[0..n], text[0..n]);
+    return n;
+}
+
+/// The jobs waiting for the user first, then the rest, newest first, up to
+/// `out.len`. Returns how many rows were written.
+pub fn snapshot(out: []Row) usize {
+    if (out.len == 0 or !ensureTable()) return 0;
+    const stmt = db.prepare(
+        "SELECT id, kind, key, state, summary, agent, cost_cents, created_ms, finished_ms FROM operator_jobs " ++
+            "ORDER BY (state='proposed') DESC, id DESC LIMIT ?1",
+    ) orelse return 0;
+    defer db.finalize(stmt);
+    db.bindInt(stmt, 1, @intCast(@min(out.len, 200)));
+    var n: usize = 0;
+    while (n < out.len and db.step(stmt) == db.c.SQLITE_ROW) {
+        var r = Row{};
+        r.id = db.columnInt64(stmt, 0);
+        r.kind = Kind.parse(db.columnText(stmt, 1) orelse "") orelse continue;
+        r.key_len = copyInto(&r.key, db.columnText(stmt, 2) orelse "");
+        r.state = pure.State.parse(db.columnText(stmt, 3) orelse "") orelse continue;
+        r.summary_len = copyInto(&r.summary, db.columnText(stmt, 4) orelse "");
+        r.agent_len = copyInto(&r.agent, db.columnText(stmt, 5) orelse "");
+        r.cost_cents = @intCast(@max(0, db.columnInt(stmt, 6)));
+        r.created_ms = db.columnInt64(stmt, 7);
+        r.finished_ms = db.columnInt64(stmt, 8);
+        out[n] = r;
+        n += 1;
+    }
+    return n;
+}

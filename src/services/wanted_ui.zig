@@ -118,48 +118,66 @@ pub fn render() void {
     var i: usize = 0;
     while (i < row_count) : (i += 1) {
         const r = &rows[i];
-        var line = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 91100 + i, .expand = .horizontal, .padding = .{ .x = 0, .y = 3, .w = 0, .h = 3 } });
-        defer line.deinit();
+        // One item: the main line, then (when the operator found other titles) a
+        // quiet second line naming what else is being searched.
+        var item = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = 91050 + i, .expand = .horizontal });
+        defer item.deinit();
+        {
+            var line = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 91100 + i, .expand = .horizontal, .padding = .{ .x = 0, .y = 3, .w = 0, .h = 3 } });
+            defer line.deinit();
 
-        var name: [160]u8 = undefined;
-        const title_shown = r.title[0..@min(r.title_len, 40)];
-        const label = switch (r.kind) {
-            .episode => std.fmt.bufPrint(&name, "{s} S{d:0>2}E{d:0>2}", .{ title_shown, r.season, r.episode }) catch title_shown,
-            .movie => if (r.year > 0)
-                std.fmt.bufPrint(&name, "{s} ({d})", .{ title_shown, r.year }) catch title_shown
-            else
-                title_shown,
-        };
-        _ = dvui.label(@src(), "{s}", .{label}, .{ .id_extra = 91200 + i, .color_text = theme.colors.text_primary, .gravity_y = 0.5 });
+            var name: [160]u8 = undefined;
+            const title_shown = r.title[0..@min(r.title_len, 40)];
+            const label = switch (r.kind) {
+                .episode => std.fmt.bufPrint(&name, "{s} S{d:0>2}E{d:0>2}", .{ title_shown, r.season, r.episode }) catch title_shown,
+                .movie => if (r.year > 0)
+                    std.fmt.bufPrint(&name, "{s} ({d})", .{ title_shown, r.year }) catch title_shown
+                else
+                    title_shown,
+            };
+            _ = dvui.label(@src(), "{s}", .{label}, .{ .id_extra = 91200 + i, .color_text = theme.colors.text_primary, .gravity_y = 0.5 });
 
-        var detail: [160]u8 = undefined;
-        const text = switch (r.status) {
-            .wanted => if (r.attempts == 0) "  waiting for first search" else std.fmt.bufPrint(&detail, "  not found yet, tried {d}x", .{r.attempts}) catch "  searching",
-            .downloading => blk: {
-                const picked = r.picked[0..@min(r.picked_len, 18)];
-                const more: []const u8 = if (r.picked_len > 18) "…" else "";
-                break :blk std.fmt.bufPrint(&detail, "  downloading {s}{s}", .{ picked, more }) catch "  downloading";
-            },
-            .fulfilled => "  done",
-            .paused => "  paused",
-        };
-        _ = dvui.label(@src(), "{s}", .{text}, .{ .id_extra = 91300 + i, .color_text = statusColor(r.status), .gravity_y = 0.5, .margin = .{ .x = 0, .y = 0, .w = 16, .h = 0 } });
+            var detail: [160]u8 = undefined;
+            const text = switch (r.status) {
+                .wanted => if (r.attempts == 0) "  waiting for first search" else std.fmt.bufPrint(&detail, "  not found yet, tried {d}x", .{r.attempts}) catch "  searching",
+                .downloading => blk: {
+                    const picked = r.picked[0..@min(r.picked_len, 18)];
+                    const more: []const u8 = if (r.picked_len > 18) "…" else "";
+                    break :blk std.fmt.bufPrint(&detail, "  downloading {s}{s}", .{ picked, more }) catch "  downloading";
+                },
+                .fulfilled => "  done",
+                .paused => "  paused",
+            };
+            _ = dvui.label(@src(), "{s}", .{text}, .{ .id_extra = 91300 + i, .color_text = statusColor(r.status), .gravity_y = 0.5, .margin = .{ .x = 0, .y = 0, .w = 16, .h = 0 } });
 
-        if (r.status == .wanted and components.actionButton(@src(), "Find", .secondary, 91500 + i)) {
-            _ = wanted.checkNow(r.id);
-            dirty = true;
+            if (r.status == .wanted and components.actionButton(@src(), "Find", .secondary, 91500 + i)) {
+                _ = wanted.checkNow(r.id);
+                dirty = true;
+            }
+            if (r.status == .wanted and components.actionButton(@src(), "Pause", .secondary, 91600 + i)) {
+                _ = wanted.pause(r.id);
+                dirty = true;
+            }
+            if (r.status == .paused and components.actionButton(@src(), "Resume", .secondary, 91700 + i)) {
+                _ = wanted.resume_(r.id);
+                dirty = true;
+            }
+            if (components.actionButton(@src(), "Remove", .secondary, 91800 + i)) {
+                _ = wanted.remove(r.id);
+                dirty = true;
+            }
         }
-        if (r.status == .wanted and components.actionButton(@src(), "Pause", .secondary, 91600 + i)) {
-            _ = wanted.pause(r.id);
-            dirty = true;
-        }
-        if (r.status == .paused and components.actionButton(@src(), "Resume", .secondary, 91700 + i)) {
-            _ = wanted.resume_(r.id);
-            dirty = true;
-        }
-        if (components.actionButton(@src(), "Remove", .secondary, 91800 + i)) {
-            _ = wanted.remove(r.id);
-            dirty = true;
+        var extra_buf: [200]u8 = undefined;
+        const extra = pure.alsoSearchingText(&extra_buf, r.extra_titles[0..@min(r.extra_titles_len, r.extra_titles.len)]);
+        if (extra.len > 0) {
+            var small = dvui.themeGet().font_body;
+            small.size = theme.font_size.small;
+            _ = dvui.label(@src(), "{s}", .{extra}, .{
+                .id_extra = 91900 + i,
+                .color_text = theme.colors.text_secondary,
+                .font = small,
+                .margin = .{ .x = 0, .y = 0, .w = 0, .h = 3 },
+            });
         }
     }
 }

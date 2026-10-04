@@ -306,11 +306,14 @@ pub const Row = struct {
     next_check_ms: i64 = 0,
     picked: [80]u8 = std.mem.zeroes([80]u8),
     picked_len: usize = 0,
+    /// Alternate titles the operator found, newline separated (see setExtraTitles).
+    extra_titles: [480]u8 = std.mem.zeroes([480]u8),
+    extra_titles_len: usize = 0,
 };
 
 pub fn snapshot(out: []Row) usize {
     if (out.len == 0 or !ensureTable()) return 0;
-    const stmt = db.prepare("SELECT id, kind, title, year, season, episode, status, attempts, next_check_ms, picked FROM wanted_items ORDER BY id DESC LIMIT ?1") orelse return 0;
+    const stmt = db.prepare("SELECT id, kind, title, year, season, episode, status, attempts, next_check_ms, picked, extra_titles FROM wanted_items ORDER BY id DESC LIMIT ?1") orelse return 0;
     defer db.finalize(stmt);
     db.bindInt(stmt, 1, @intCast(@min(out.len, 200)));
     var n: usize = 0;
@@ -330,6 +333,9 @@ pub fn snapshot(out: []Row) usize {
         const picked = db.columnText(stmt, 9) orelse "";
         r.picked_len = @min(picked.len, r.picked.len);
         @memcpy(r.picked[0..r.picked_len], picked[0..r.picked_len]);
+        const extra = db.columnText(stmt, 10) orelse "";
+        r.extra_titles_len = @min(extra.len, r.extra_titles.len);
+        @memcpy(r.extra_titles[0..r.extra_titles_len], extra[0..r.extra_titles_len]);
         out[n] = r;
         n += 1;
     }
@@ -349,7 +355,7 @@ pub fn writeListJson(w: *std.Io.Writer) !void {
     if (ensureTable()) {
         const stmt = db.prepare(
             "SELECT id, kind, title, year, season, episode, min_quality, prefer_quality, max_quality, " ++
-                "status, added_ms, last_check_ms, next_check_ms, attempts, picked FROM wanted_items ORDER BY id DESC LIMIT 200",
+                "status, added_ms, last_check_ms, next_check_ms, attempts, picked, extra_titles FROM wanted_items ORDER BY id DESC LIMIT 200",
         );
         if (stmt) |st| {
             defer db.finalize(st);
@@ -385,6 +391,8 @@ pub fn writeListJson(w: *std.Io.Writer) !void {
                 try s.write(db.columnInt(st, 13));
                 try s.objectField("picked");
                 try s.write(db.columnText(st, 14) orelse "");
+                try s.objectField("extra_titles");
+                try s.write(db.columnText(st, 15) orelse "");
                 try s.endObject();
             }
         }

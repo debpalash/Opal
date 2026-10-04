@@ -19,6 +19,8 @@ const keymap = @import("../terminal/keymap.zig");
 const launch = @import("../services/agent_launch.zig");
 const launch_pure = @import("../services/agent_launch_pure.zig");
 const tasks_ui = @import("agent_tasks_ui.zig");
+const operator_ui = @import("operator_ui.zig");
+const operator_view = @import("../services/operator_view_pure.zig");
 
 const Session = session_mod.Session;
 const FONT_SIZE: f32 = 13;
@@ -42,7 +44,7 @@ var sb_offset: i64 = 0;
 const SB_WIDTH: f32 = 6;
 const SB_HIT: f32 = 14;
 var launched: ?Kind = null;
-var tab: enum { terminal, tasks } = .terminal;
+var tab: enum { terminal, tasks, activity } = .terminal;
 var note_buf: [128]u8 = undefined;
 var note_len: usize = 0;
 
@@ -166,9 +168,16 @@ pub fn render() void {
 
     renderToolbar();
 
-    if (tab == .tasks) {
-        tasks_ui.render();
-        return;
+    switch (tab) {
+        .tasks => {
+            tasks_ui.render();
+            return;
+        },
+        .activity => {
+            operator_ui.render();
+            return;
+        },
+        .terminal => {},
     }
     if (session == null) {
         renderEmpty();
@@ -194,8 +203,10 @@ fn renderToolbar() void {
         .margin = .{ .x = 0, .y = 0, .w = 12, .h = 0 },
     });
 
-    if (tasks_ui.tabSwitch(@intFromEnum(tab))) |i| tab = @enumFromInt(i);
-    if (tab == .tasks) return;
+    var tab_label: [24]u8 = undefined;
+    const activity_label = operator_view.tabLabel(&tab_label, operator_ui.pendingCount());
+    if (tasks_ui.tabSwitch(@intFromEnum(tab), activity_label)) |i| tab = @enumFromInt(i);
+    if (tab != .terminal) return;
 
     const kinds = [_]Kind{ .claude, .codex, .gemini, .shell };
     inline for (kinds, 0..) |kind, i| {
