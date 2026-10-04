@@ -114,7 +114,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # The extension's unit tests import TypeScript sources directly, which needs
+          # Node's built-in type stripping (22.6 or newer).
+          node-version: 22
           cache: npm
           cache-dependency-path: extension/package-lock.json
       - run: npm ci --ignore-scripts
