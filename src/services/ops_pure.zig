@@ -552,7 +552,7 @@ pub const ops = [_]Op{
     .{ .name = "agent_tasks_list", .summary = "Scheduled agent tasks: prompts a coding agent runs on a timer, with each task's schedule, daily cap, budget, last outcome and a one-line report. Includes whether the user has switched unattended runs on (they do that in Settings; tasks never run while it is off).", .tier = .read, .method = .GET, .path = "/agent/tasks" },
     .{
         .name = "agent_task_add",
-        .summary = "Schedule a recurring task for a coding agent: a prompt it runs unattended with the opal tools, e.g. \"Check the wanted list and queue anything stuck\". Nothing runs until the user enables scheduled tasks in Settings. Each task has a daily run cap, a ten minute timeout and, for claude, a dollar budget per run.",
+        .summary = "Schedule a recurring task for a coding agent: a prompt it runs unattended with the opal tools, e.g. \"Check the wanted list and queue anything stuck\". The task is created PAUSED: tell the user to review and enable it in the Agents page (Tasks); nothing runs until they do and have switched scheduled tasks on in Settings. Unattended runs cannot use the scheduling tools. Each task has a daily run cap, a ten minute timeout and, for claude, a dollar budget per run.",
         .tier = .spend,
         .method = .POST,
         .path = "/agent/tasks/add",
