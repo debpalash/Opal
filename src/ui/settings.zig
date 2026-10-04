@@ -5048,6 +5048,15 @@ fn renderAgentAccess() void {
         }
     }
 
+    {
+        const follow_before = state.app.wanted_follow_tv;
+        components.toggleRow(@src(), "Follow tracked shows", "Download the newest aired episode of each show you track, automatically", &state.app.wanted_follow_tv);
+        if (state.app.wanted_follow_tv != follow_before) {
+            @import("../services/wanted.zig").setFollowTv(state.app.wanted_follow_tv);
+            state.showToast(if (state.app.wanted_follow_tv) "Following tracked shows" else "Stopped following shows");
+        }
+    }
+
     var exe_buf: [512]u8 = undefined;
     var path_buf: [600]u8 = undefined;
     const exe_dir = io_g.selfExeDirPath(&exe_buf) catch "";

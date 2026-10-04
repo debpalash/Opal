@@ -32,6 +32,8 @@ const TICK_INTERVAL_MS: i64 = 30 * 1000;
 var table_ready = std.atomic.Value(bool).init(false);
 var busy = std.atomic.Value(bool).init(false);
 var last_tick_ms: i64 = 0;
+var last_follow_ms: i64 = 0;
+const FOLLOW_INTERVAL_MS: i64 = 60 * 60 * 1000;
 /// Set by `checkNow`: search this item on the next tick regardless of its backoff.
 var force_id = std.atomic.Value(i64).init(0);
 
@@ -225,6 +227,13 @@ fn setStatus(id: i64, status: pure.Status, comptime guard: []const u8) bool {
 
 /// Search this item on the next tick, ignoring its retry backoff. False when
 /// the item is missing or not in the `wanted` state.
+/// Turn "queue the newest episode of every tracked show" on or off.
+pub fn setFollowTv(on: bool) void {
+    state.app.wanted_follow_tv = on;
+    last_follow_ms = 0;
+    state.markConfigDirty();
+}
+
 pub fn checkNow(id: i64) bool {
     if (!ensureTable()) return false;
     const stmt = db.prepare("UPDATE wanted_items SET next_check_ms=0 WHERE id=?1 AND status='wanted'") orelse return false;
@@ -237,7 +246,7 @@ pub fn checkNow(id: i64) bool {
     return true;
 }
 
-/// Write `{"items":[...],"searching":bool}`.
+/// Write `{"items":[...],"searching":bool,"follow_tv":bool}`.
 pub fn writeListJson(w: *std.Io.Writer) !void {
     var s = std.json.Stringify{ .writer = w };
     try s.beginObject();
@@ -289,6 +298,8 @@ pub fn writeListJson(w: *std.Io.Writer) !void {
     try s.endArray();
     try s.objectField("searching");
     try s.write(busy.load(.acquire));
+    try s.objectField("follow_tv");
+    try s.write(state.app.wanted_follow_tv);
     try s.endObject();
 }
 
@@ -305,6 +316,10 @@ pub fn tick() void {
     if (state.app.incognito_mode or state.torrentSession() == null or !ensureTable()) return;
 
     reconcileDownloads();
+    if (state.app.wanted_follow_tv and now - last_follow_ms >= FOLLOW_INTERVAL_MS) {
+        last_follow_ms = now;
+        followTrackedShows();
+    }
 
     if (busy.load(.acquire)) return;
     const item = nextDue(now) orelse return;
@@ -314,6 +329,53 @@ pub fn tick() void {
         return;
     };
     workers.release(th);
+}
+
+/// Queue the newest aired episode of every tracked show, once. Only the newest:
+/// enabling this must not drag in a show's whole back catalogue. A marker table
+/// remembers what was queued, so removing an item from the list stays removed,
+/// and anything the user already watched (or watched past) is skipped.
+fn followTrackedShows() void {
+    const shows = alloc.alloc(db.TvShowRow, 64) catch return;
+    defer alloc.free(shows);
+    const n = db.tvGetShows(shows);
+    db.exec("CREATE TABLE IF NOT EXISTS wanted_followed (tmdb_id INTEGER NOT NULL, season INTEGER NOT NULL, episode INTEGER NOT NULL, PRIMARY KEY (tmdb_id, season, episode))");
+    for (shows[0..n]) |*show| {
+        const s = show.last_aired.season;
+        const e = show.last_aired.episode;
+        if (s <= 0 or e <= 0 or show.name_len == 0) continue;
+        if (alreadyFollowedOrWatched(show.tmdb_id, s, e)) continue;
+        const res = add(.{ .kind = .episode, .title = show.name[0..show.name_len], .season = @intCast(s), .episode = @intCast(e) });
+        switch (res) {
+            .added, .exists => markFollowed(show.tmdb_id, s, e),
+            .full, .unavailable => return,
+            .invalid => markFollowed(show.tmdb_id, s, e),
+        }
+    }
+}
+
+fn alreadyFollowedOrWatched(tmdb_id: i32, season: i32, episode: i32) bool {
+    const f = db.prepare("SELECT 1 FROM wanted_followed WHERE tmdb_id=?1 AND season=?2 AND episode=?3") orelse return true;
+    defer db.finalize(f);
+    db.bindInt(f, 1, tmdb_id);
+    db.bindInt(f, 2, season);
+    db.bindInt(f, 3, episode);
+    if (db.step(f) == db.c.SQLITE_ROW) return true;
+    const w = db.prepare("SELECT 1 FROM tv_watched WHERE tmdb_id=?1 AND watched=1 AND (season>?2 OR (season=?2 AND episode>=?3)) LIMIT 1") orelse return true;
+    defer db.finalize(w);
+    db.bindInt(w, 1, tmdb_id);
+    db.bindInt(w, 2, season);
+    db.bindInt(w, 3, episode);
+    return db.step(w) == db.c.SQLITE_ROW;
+}
+
+fn markFollowed(tmdb_id: i32, season: i32, episode: i32) void {
+    const stmt = db.prepare("INSERT OR IGNORE INTO wanted_followed(tmdb_id,season,episode) VALUES(?1,?2,?3)") orelse return;
+    defer db.finalize(stmt);
+    db.bindInt(stmt, 1, tmdb_id);
+    db.bindInt(stmt, 2, season);
+    db.bindInt(stmt, 3, episode);
+    _ = db.step(stmt);
 }
 
 fn nextDue(now: i64) ?Item {

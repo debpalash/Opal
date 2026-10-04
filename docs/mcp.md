@@ -37,7 +37,7 @@ Every tool has a tier. The server refuses anything above the ceiling you give it
 | --- | --- | --- |
 | `read` | observe, search | `status`, `search`, `search_results`, `queue_list`, `downloads_list`, `history_list`, `recommendations`, `wanted_list` |
 | `playback` | control what plays now | `search_play`, `search_queue`, `player_toggle`, `player_seek`, `player_speed`, `player_volume`, `player_next`, `player_previous`, `subtitles_search`, `subtitles_download`, `queue_action` |
-| `write` | change persistent state | `subtitles_generate`, `downloads_pause`, `downloads_resume`, `wanted_add`, `wanted_pause`, `wanted_resume`, `wanted_remove` |
+| `write` | change persistent state | `subtitles_generate`, `downloads_pause`, `downloads_resume`, `wanted_add`, `wanted_follow`, `wanted_pause`, `wanted_resume`, `wanted_remove` |
 | `spend` | use bandwidth, disk or compute | `play_url`, `downloads_add_url` (a magnet starts a torrent), `wanted_check` (searches now and may start a download) |
 | `destructive` | remove data | `queue_clear`, `downloads_cancel` |
 
@@ -53,7 +53,7 @@ Arguments are typed and bounded. Unknown arguments are rejected, `play_url` and 
 
 ## Wanted list
 
-Tell Opal what you want and it fetches it. `wanted_add` takes a movie (`title`, optional `year`) or an episode (`title`, `season`, `episode`) plus optional quality bounds, minimum seeds and a size cap. Opal then searches in the background, scores the candidates, starts the best torrent and marks the item fulfilled when it finishes. Failed searches retry with backoff (30 minutes, doubling to a day). `wanted_list` shows status, attempts and what was picked; `wanted_check` forces a search now. Searches run on a private channel, so they never disturb the results on screen.
+Tell Opal what you want and it fetches it. `wanted_add` takes a movie (`title`, optional `year`) or an episode (`title`, `season`, `episode`) plus optional quality bounds, minimum seeds and a size cap. Opal then searches in the background, scores the candidates, starts the best torrent and marks the item fulfilled when it finishes. Failed searches retry with backoff (30 minutes, doubling to a day). `wanted_list` shows status, attempts and what was picked; `wanted_check` forces a search now. `wanted_follow` (also **Settings → Agent Access → Follow tracked shows**) queues the newest aired episode of every show you track, never the back catalogue, skipping anything you have already watched. Searches run on a private channel, so they never disturb the results on screen.
 
 ## Audit log
 

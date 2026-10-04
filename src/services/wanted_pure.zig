@@ -146,7 +146,7 @@ fn tokenize(s: []const u8, scratch: []u8, out: *Tokens) void {
 const junk = [_][]const u8{
     "cam",     "hdcam",    "camrip", "ts",     "hdts",    "telesync", "tc",
     "telecine", "scr",     "screener", "dvdscr", "r5",    "workprint", "sample",
-    "hdtc",    "pdvd",     "predvd",
+    "hdtc",    "pdvd",     "predvd",   "reconstructed", "fanedit", "fanedition", "trailer", "teaser",
 };
 
 fn isJunk(tok: []const u8) bool {
@@ -334,6 +334,11 @@ test "episodes need the exact SxxExx" {
     try testing.expect(!matches(t, "Severance.S02E06.1080p"));
     try testing.expect(!matches(t, "Severance.S01E05.1080p"));
     try testing.expect(!matches(t, "Severance.S02.COMPLETE.1080p"));
+}
+
+test "fan edits and previews never match" {
+    try testing.expect(!matches(matrix, "The.Matrix.1999.Reconstructed.1080p.x264"));
+    try testing.expect(!matches(matrix, "The.Matrix.1999.Trailer.1080p"));
 }
 
 test "cam and screener captures never match" {

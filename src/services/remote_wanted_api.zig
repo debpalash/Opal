@@ -3,6 +3,7 @@
 //!   GET  /wanted                               the items and whether a check is running
 //!   POST /wanted/add?kind=movie|episode&title=&year=&season=&episode=&min_quality=&prefer_quality=&max_quality=
 //!   POST /wanted/pause?id=   POST /wanted/resume?id=   POST /wanted/remove?id=
+//!   POST /wanted/follow?enabled=0|1            queue each tracked show's newest aired episode
 //!   POST /wanted/check?id=                     search now, ignoring the retry backoff
 //!
 //! Qualities are 1 (480p) to 4 (2160p). The public `handle` is the only seam the
@@ -22,6 +23,10 @@ pub fn handle(stream: std.Io.net.Stream, method: []const u8, path: []const u8, q
     }
     if (std.mem.eql(u8, path, "/wanted/add")) {
         if (wire.requireMethod(stream, method, "POST")) add(stream, query);
+        return true;
+    }
+    if (std.mem.eql(u8, path, "/wanted/follow")) {
+        if (wire.requireMethod(stream, method, "POST")) follow(stream, query);
         return true;
     }
     inline for (.{ "pause", "resume", "remove", "check" }) |verb| {
@@ -83,6 +88,17 @@ fn add(stream: std.Io.net.Stream, query: []const u8) void {
         .full => wire.sendJsonStatus(stream, "409 Conflict", "{\"error\":\"wanted list is full\"}"),
         .unavailable => wire.sendJsonStatus(stream, "503 Service Unavailable", "{\"error\":\"database not ready\"}"),
     }
+}
+
+fn follow(stream: std.Io.net.Stream, query: []const u8) void {
+    const raw = wire.queryParam(query, "enabled") orelse "";
+    const on = std.mem.eql(u8, raw, "1") or std.mem.eql(u8, raw, "true");
+    if (!on and !std.mem.eql(u8, raw, "0") and !std.mem.eql(u8, raw, "false")) {
+        wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"enabled must be 0 or 1\"}");
+        return;
+    }
+    wanted.setFollowTv(on);
+    wire.sendJson(stream, if (on) "{\"ok\":true,\"follow_tv\":true}" else "{\"ok\":true,\"follow_tv\":false}");
 }
 
 fn bad(stream: std.Io.net.Stream) void {
