@@ -574,6 +574,7 @@ pub fn build(b: *std.Build) void {
         test_key_writer.root_module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{brew_prefix}) });
         test_key_writer.root_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/lib", .{brew_prefix}) });
     }
+    test_key_writer.use_llvm = true; // the self-hosted backend hits a linker error here
     const run_key_writer = b.addRunArtifact(test_key_writer);
     if (is_windows) run_key_writer.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     test_step.dependOn(&run_key_writer.step);
@@ -1710,6 +1711,13 @@ pub fn build(b: *std.Build) void {
     const keyless_test_step = b.step("test-keyless", "Test keyless Movies & TV detail shaping, catalog mapping, tracking and the keyless Asian drama feed");
     keyless_test_step.dependOn(&run_test_cinemeta_meta_pure.step);
 
+    // One command for the agent-native suites (CI runs this).
+    const agentic_test_step = b.step("test-agentic", "Run the agent-native suites: operator, agent, ops, terminal, wanted, browser, keyless");
+    for ([_][]const u8{ "test-operator", "test-agent", "test-ops", "test-terminal", "test-wanted", "test-browser" }) |name| {
+        agentic_test_step.dependOn(&b.top_level_steps.get(name).?.step);
+    }
+    agentic_test_step.dependOn(keyless_test_step);
+
     // Keyless Asian Drama page: TVmaze schedule/search/episodes parsing and
     // mapping onto the drama grid rows (fixtures are trimmed live captures).
     const test_drama_tvmaze_pure = b.addTest(.{
@@ -2229,6 +2237,7 @@ pub fn build(b: *std.Build) void {
         test_secret_store.root_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/lib", .{mingw_prefix}) });
         test_secret_store.root_module.linkSystemLibrary("crypt32", .{});
     }
+    test_secret_store.use_llvm = true; // the self-hosted backend hits a linker error here
     test_step.dependOn(&b.addRunArtifact(test_secret_store).step);
 
     // Playlist advance engine — nextIndex/prevIndex across repeat modes
