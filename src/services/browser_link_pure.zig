@@ -152,10 +152,13 @@ pub const Kind = enum {
 pub const Action = enum {
     play,
     queue,
+    /// Add the (user-edited) title to the Wanted list. No stream is involved.
+    add_to_wanted,
 
     pub fn parse(s: []const u8) ?Action {
         if (std.mem.eql(u8, s, "play")) return .play;
         if (std.mem.eql(u8, s, "queue")) return .queue;
+        if (std.mem.eql(u8, s, "add_to_wanted")) return .add_to_wanted;
         return null;
     }
 };
@@ -195,7 +198,7 @@ pub const ParseError = error{
 pub fn parseErrorMessage(err: ParseError) []const u8 {
     return switch (err) {
         error.BadJson => "body must be a JSON object",
-        error.BadAction => "action must be play or queue",
+        error.BadAction => "action must be play, queue or add_to_wanted",
         error.NoCandidates => "at least one candidate is required",
         error.TooManyCandidates => "too many candidates",
         error.BadPageUrl => "page_url must be an http(s) URL without credentials",
@@ -237,7 +240,9 @@ pub fn parseMedia(arena: std.mem.Allocator, body: []const u8) ParseError!Media {
     }) catch |err| return if (err == error.OutOfMemory) error.OutOfMemory else error.BadJson;
 
     const action = Action.parse(wire.action) orelse return error.BadAction;
-    if (wire.candidates.len == 0) return error.NoCandidates;
+    // A stream is needed to play or queue one. Adding a title to Wanted involves
+    // no stream, so candidates are optional there (and validated if present).
+    if (wire.candidates.len == 0 and action != .add_to_wanted) return error.NoCandidates;
     if (wire.candidates.len > MAX_CANDIDATES) return error.TooManyCandidates;
 
     // The page URL is optional context (it is the Referer fallback), so an
@@ -649,7 +654,7 @@ test "parseMedia rejects bad shapes" {
     try testing.expectError(error.BadJson, parseMedia(a, "{not json"));
     try testing.expectError(error.NoCandidates, parseMedia(a, "{\"candidates\":[]}"));
     try testing.expectError(error.NoCandidates, parseMedia(a, "{}"));
-    try testing.expectError(error.BadAction, parseMedia(a, "{\"action\":\"add_to_wanted\",\"candidates\":[{\"url\":\"http://h/a.mp4\",\"kind\":\"mp4\"}]}"));
+    try testing.expectError(error.BadAction, parseMedia(a, "{\"action\":\"download\",\"candidates\":[{\"url\":\"http://h/a.mp4\",\"kind\":\"mp4\"}]}"));
     try testing.expectError(error.BadKind, parseMedia(a, "{\"candidates\":[{\"url\":\"http://h/a.mp4\",\"kind\":\"exe\"}]}"));
 }
 
@@ -897,4 +902,19 @@ test "pairOriginAllowed: extensions and native clients, never web pages" {
     try testing.expect(!pairOriginAllowed("null"));
     try testing.expect(!pairOriginAllowed(""));
     try testing.expect(!pairOriginAllowed("https://chrome-extension://x"));
+}
+
+test "add_to_wanted needs no candidate, play and queue still do, a present candidate is still validated" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const w = try parseMedia(a, "{\"action\":\"add_to_wanted\",\"title\":\"  Dune 2021 \"}");
+    try std.testing.expectEqual(Action.add_to_wanted, w.action);
+    try std.testing.expectEqualStrings("Dune 2021", w.title);
+    try std.testing.expectEqual(@as(usize, 0), w.candidates.len);
+    try std.testing.expectError(error.NoCandidates, parseMedia(a, "{\"action\":\"play\",\"title\":\"x\"}"));
+    try std.testing.expectError(error.NoCandidates, parseMedia(a, "{\"action\":\"queue\",\"title\":\"x\"}"));
+    try std.testing.expectError(error.BadCandidateUrl, parseMedia(a, "{\"action\":\"add_to_wanted\",\"title\":\"x\",\"candidates\":[{\"url\":\"file:///etc/passwd\",\"kind\":\"mp4\"}]}"));
+    try std.testing.expectError(error.BadAction, parseMedia(a, "{\"action\":\"download\",\"title\":\"x\"}"));
+    try std.testing.expectEqual(@as(?Action, .add_to_wanted), Action.parse("add_to_wanted"));
 }

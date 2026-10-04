@@ -7,6 +7,7 @@ const c = @import("../core/c.zig");
 const layout = @import("queue_layout_pure.zig");
 const playback = @import("../player/queue_playback_pure.zig");
 const playlist_pure = @import("../player/playlist_pure.zig");
+const HttpHeader = @import("../player/http_headers_pure.zig").HttpHeader;
 
 const alloc = @import("../core/alloc.zig").allocator;
 
@@ -130,6 +131,13 @@ pub fn initDb() void {
         "position INTEGER NOT NULL DEFAULT 0" ++
         ");";
     _ = c.sqlite.sqlite3_exec(db.?, sql, null, null, null);
+
+    // The Referer, Origin and User-Agent a paired browser found a queued stream
+    // with, keyed by its URL, so the item plays later with them (the queue row
+    // itself stays a bare URL). Bounded: see `rememberHttpIdentity`.
+    _ = c.sqlite.sqlite3_exec(db.?, "CREATE TABLE IF NOT EXISTS queue_http (" ++
+        "url TEXT PRIMARY KEY, referer TEXT NOT NULL DEFAULT '', origin TEXT NOT NULL DEFAULT ''," ++
+        "ua TEXT NOT NULL DEFAULT '', added_at INTEGER NOT NULL DEFAULT 0);", null, null, null);
 
     // Migration: add thumb_url column if missing
     const migrate_sql = "ALTER TABLE queue ADD COLUMN thumb_url TEXT DEFAULT '';";
@@ -269,6 +277,77 @@ fn loadFromDb() void {
 
 pub fn addToQueue(url: []const u8, title: []const u8, source: []const u8) void {
     addToQueueWithThumb(url, title, source, "");
+}
+
+/// Per-file HTTP identity of a queued stream (what mpv needs to be let in).
+pub const HttpIdentity = struct {
+    referer: [2048]u8 = undefined,
+    referer_len: usize = 0,
+    origin: [256]u8 = undefined,
+    origin_len: usize = 0,
+    ua: [512]u8 = undefined,
+    ua_len: usize = 0,
+    headers: [2]HttpHeader = undefined,
+    header_count: usize = 0,
+
+    /// Headers in the form the player takes. Valid while `self` is.
+    pub fn headerSlice(self: *HttpIdentity) []const HttpHeader {
+        self.header_count = 0;
+        if (self.referer_len > 0) {
+            self.headers[self.header_count] = .{ .name = "Referer", .value = self.referer[0..self.referer_len] };
+            self.header_count += 1;
+        }
+        if (self.origin_len > 0) {
+            self.headers[self.header_count] = .{ .name = "Origin", .value = self.origin[0..self.origin_len] };
+            self.header_count += 1;
+        }
+        return self.headers[0..self.header_count];
+    }
+    pub fn userAgent(self: *const HttpIdentity) []const u8 {
+        return self.ua[0..self.ua_len];
+    }
+};
+
+const IDENTITY_KEEP: usize = 200;
+
+/// Remember the identity a browser-found stream was queued with. Values were
+/// validated by browser_link_pure (no control characters, bounded). Oldest rows
+/// beyond `IDENTITY_KEEP` are dropped so the table cannot grow without bound.
+pub fn rememberHttpIdentity(url: []const u8, referer: []const u8, origin: []const u8, ua: []const u8) void {
+    if (db == null or url.len == 0 or url.len >= 2048) return;
+    if (referer.len == 0 and origin.len == 0 and ua.len == 0) return;
+    var stmt: ?*c.sqlite.sqlite3_stmt = null;
+    if (c.sqlite.sqlite3_prepare_v2(db.?, "INSERT OR REPLACE INTO queue_http (url, referer, origin, ua, added_at) VALUES (?1, ?2, ?3, ?4, ?5);", -1, &stmt, null) != c.sqlite.SQLITE_OK) return;
+    defer _ = c.sqlite.sqlite3_finalize(stmt);
+    _ = c.sqlite.sqlite3_bind_text(stmt, 1, url.ptr, @intCast(url.len), getTransient());
+    _ = c.sqlite.sqlite3_bind_text(stmt, 2, referer.ptr, @intCast(referer.len), getTransient());
+    _ = c.sqlite.sqlite3_bind_text(stmt, 3, origin.ptr, @intCast(origin.len), getTransient());
+    _ = c.sqlite.sqlite3_bind_text(stmt, 4, ua.ptr, @intCast(ua.len), getTransient());
+    _ = c.sqlite.sqlite3_bind_int64(stmt, 5, @import("../core/io_global.zig").timestamp());
+    if (c.sqlite.sqlite3_step(stmt) != c.sqlite.SQLITE_DONE) return;
+    _ = c.sqlite.sqlite3_exec(db.?, "DELETE FROM queue_http WHERE rowid NOT IN (SELECT rowid FROM queue_http ORDER BY added_at DESC, rowid DESC LIMIT 200);", null, null, null);
+}
+
+/// The identity stored for `url`, if any.
+pub fn httpIdentityFor(url: []const u8, out: *HttpIdentity) bool {
+    if (db == null or url.len == 0) return false;
+    var stmt: ?*c.sqlite.sqlite3_stmt = null;
+    if (c.sqlite.sqlite3_prepare_v2(db.?, "SELECT referer, origin, ua FROM queue_http WHERE url = ?1;", -1, &stmt, null) != c.sqlite.SQLITE_OK) return false;
+    defer _ = c.sqlite.sqlite3_finalize(stmt);
+    _ = c.sqlite.sqlite3_bind_text(stmt, 1, url.ptr, @intCast(url.len), getTransient());
+    if (c.sqlite.sqlite3_step(stmt) != c.sqlite.SQLITE_ROW) return false;
+    out.referer_len = copyColumn(stmt, 0, &out.referer);
+    out.origin_len = copyColumn(stmt, 1, &out.origin);
+    out.ua_len = copyColumn(stmt, 2, &out.ua);
+    return true;
+}
+
+fn copyColumn(stmt: ?*c.sqlite.sqlite3_stmt, col: c_int, dst: []u8) usize {
+    const ptr: ?[*]const u8 = @ptrCast(c.sqlite.sqlite3_column_text(stmt, col));
+    const p = ptr orelse return 0;
+    const n: usize = @min(@as(usize, @intCast(c.sqlite.sqlite3_column_bytes(stmt, col))), dst.len);
+    @memcpy(dst[0..n], p[0..n]);
+    return n;
 }
 
 fn getTransient() c.sqlite.sqlite3_destructor_type {
@@ -419,6 +498,7 @@ pub fn clearAll() void {
     defer data_lock.unlock();
     if (db == null) return;
     _ = c.sqlite.sqlite3_exec(db.?, "DELETE FROM queue;", null, null, null);
+    _ = c.sqlite.sqlite3_exec(db.?, "DELETE FROM queue_http;", null, null, null);
     loadFromDb();
 }
 
@@ -960,11 +1040,15 @@ fn playQueueItem(item: *QueueItem) void {
     // direct-play seam in that case so it can acquire/prewarm libmpv without
     // making the first Queue click a silent no-op.
     if (state.app.active_player_idx >= state.app.players.items.len) {
+        var identity: HttpIdentity = .{};
+        const has_identity = httpIdentityFor(item.url[0..item.url_len], &identity);
         @import("browser.zig").playDirect(.{
             .url = item.url[0..item.url_len],
             .title = item.title[0..item.title_len],
             .origin = .queue,
             .queue_item_id = item.id,
+            .user_agent = if (has_identity) identity.userAgent() else "",
+            .headers = if (has_identity) identity.headerSlice() else &.{},
         });
         markPlayed(item.id);
         state.showToast("Playing from queue");
@@ -986,7 +1070,17 @@ fn playQueueItemOn(ap: anytype, item: *QueueItem) void {
     var norm_buf: [2048]u8 = undefined;
     const norm_url = extractors.normalizeUrl(raw_url, &norm_buf);
 
-    ap.load(.{ .url = norm_url, .origin = .queue, .queue_item_id = item.id });
+    // A stream a paired browser found plays with the Referer, Origin and
+    // User-Agent it was found with (a CDN that checks them would refuse mpv).
+    var identity: HttpIdentity = .{};
+    const has_identity = httpIdentityFor(raw_url, &identity);
+    ap.load(.{
+        .url = norm_url,
+        .origin = .queue,
+        .queue_item_id = item.id,
+        .user_agent = if (has_identity) identity.userAgent() else "",
+        .headers = if (has_identity) identity.headerSlice() else &.{},
+    });
     markPlayed(item.id);
     state.showToast("Playing from queue");
 }

@@ -271,6 +271,9 @@ pub fn routeCapability(path: []const u8, method: []const u8, action: []const u8)
         // Host administration (machine token, admin session); a paired browser holds
         // neither, and a plain web session is not the host.
         "/browser/context",      "/browser/play",
+        // Fetching a page through the user's browser spends their cookies' reach;
+        // the extension's per-origin allow list is the second gate.
+        "/browser/fetch",
     };
     for (host_routes) |route| if (std.mem.eql(u8, path, route)) return .administer_host;
     return null;
@@ -282,20 +285,37 @@ pub fn routeCapability(path: []const u8, method: []const u8, action: []const u8)
 ///   /browser/me       who am I (label), a token check that moves nothing
 ///   /browser/media    hand a detected stream to the player or the queue
 ///   /browser/page     share the page the user is on (the user pressed the button)
+///   /browser/tabs     report the open tabs (refused unless the user's switch in Opal is on)
 ///   /browser/revoke   unpair this browser (itself only; the handler ignores any id)
+///   GET  /browser/jobs        long-poll for a page Opal wants fetched (see `browserRouteAllowed`)
+///   POST /browser/jobs/<id>   answer that job (digits only; the job must be this browser's)
 /// `/browser/pair` is unauthenticated and never reaches this check.
 pub const browser_routes = [_]struct { path: []const u8, method: []const u8 }{
     .{ .path = "/status", .method = "GET" },
     .{ .path = "/browser/me", .method = "GET" },
     .{ .path = "/browser/media", .method = "POST" },
     .{ .path = "/browser/page", .method = "POST" },
+    .{ .path = "/browser/tabs", .method = "POST" },
     .{ .path = "/browser/revoke", .method = "POST" },
 };
+
+/// `/browser/jobs/<id>`: a decimal job id and nothing else (no sign, no slash,
+/// no query, at most ten digits), so the prefix opens exactly one route.
+pub fn browserJobResultId(path: []const u8) ?u32 {
+    const prefix = "/browser/jobs/";
+    if (!std.mem.startsWith(u8, path, prefix)) return null;
+    const rest = path[prefix.len..];
+    if (rest.len == 0 or rest.len > 10) return null;
+    for (rest) |ch| if (ch < '0' or ch > '9') return null;
+    return std.fmt.parseInt(u32, rest, 10) catch null;
+}
 
 pub fn browserRouteAllowed(path: []const u8, method: []const u8) bool {
     for (browser_routes) |r| {
         if (std.mem.eql(u8, path, r.path) and std.mem.eql(u8, method, r.method)) return true;
     }
+    if (std.mem.eql(u8, path, "/browser/jobs")) return std.mem.eql(u8, method, "GET");
+    if (browserJobResultId(path) != null) return std.mem.eql(u8, method, "POST");
     return false;
 }
 
@@ -303,7 +323,8 @@ pub fn browserRouteAllowed(path: []const u8, method: []const u8) bool {
 /// (the machine token, a web session) has no business posting "media from my
 /// browser", so they are refused rather than treated as unlisted-means-open.
 fn browserOnlyRoute(path: []const u8) bool {
-    return std.mem.eql(u8, path, "/browser/media") or std.mem.eql(u8, path, "/browser/me") or std.mem.eql(u8, path, "/browser/page");
+    return std.mem.eql(u8, path, "/browser/media") or std.mem.eql(u8, path, "/browser/me") or std.mem.eql(u8, path, "/browser/page") or
+        std.mem.eql(u8, path, "/browser/tabs") or std.mem.eql(u8, path, "/browser/jobs") or browserJobResultId(path) != null;
 }
 
 pub fn allowsRoute(principal: Principal, path: []const u8, method: []const u8, action: []const u8) bool {
@@ -342,8 +363,11 @@ test "a paired browser holds no capability" {
     try std.testing.expect(!isSession(.browser));
 }
 
-test "browser allowlist is exactly the five documented routes" {
-    try std.testing.expectEqual(@as(usize, 5), browser_routes.len);
+test "browser allowlist is exactly the six documented routes" {
+    try std.testing.expectEqual(@as(usize, 6), browser_routes.len);
+    try std.testing.expect(allowsRoute(.browser, "/browser/tabs", "POST", ""));
+    try std.testing.expect(!allowsRoute(.browser, "/browser/tabs", "GET", ""));
+    for ([_]Principal{ .machine, .admin_session, .session }) |p| try std.testing.expect(!allowsRoute(p, "/browser/tabs", "POST", ""));
     try std.testing.expect(allowsRoute(.browser, "/browser/page", "POST", ""));
     try std.testing.expect(!allowsRoute(.browser, "/browser/page", "GET", ""));
     try std.testing.expect(allowsRoute(.browser, "/status", "GET", ""));
@@ -385,6 +409,28 @@ test "the page share is the browser's alone; what agents read is the host's alon
         try std.testing.expect(!allowsRoute(.browser, route, "GET", ""));
         try std.testing.expect(!allowsRoute(.browser, route, "POST", ""));
     }
+}
+
+test "the job queue routes are the browser's alone, and the id route opens digits only" {
+    try std.testing.expect(allowsRoute(.browser, "/browser/jobs", "GET", ""));
+    try std.testing.expect(!allowsRoute(.browser, "/browser/jobs", "POST", ""));
+    try std.testing.expect(allowsRoute(.browser, "/browser/jobs/12", "POST", ""));
+    try std.testing.expect(!allowsRoute(.browser, "/browser/jobs/12", "GET", ""));
+    try std.testing.expect(!allowsRoute(.browser, "/browser/jobs/12", "DELETE", ""));
+    for ([_][]const u8{ "/browser/jobs/", "/browser/jobs/abc", "/browser/jobs/-1", "/browser/jobs/1/x", "/browser/jobs/1?x=1", "/browser/jobs/../fetch", "/browser/jobs/99999999999", "/browser/jobs/1 ", "/browser/jobsx", "/browser/jobs/0x10" }) |bad| {
+        try std.testing.expect(!allowsRoute(.browser, bad, "POST", ""));
+        try std.testing.expect(!allowsRoute(.browser, bad, "GET", ""));
+    }
+    // Nobody else answers a browser's job or polls for one.
+    for ([_]Principal{ .machine, .admin_session, .session }) |p| {
+        try std.testing.expect(!allowsRoute(p, "/browser/jobs", "GET", ""));
+        try std.testing.expect(!allowsRoute(p, "/browser/jobs/12", "POST", ""));
+    }
+    // Queuing a fetch is the host's; a browser can never queue work for itself.
+    for ([_]Principal{ .machine, .admin_session }) |p| try std.testing.expect(allowsRoute(p, "/browser/fetch", "POST", ""));
+    try std.testing.expect(!allowsRoute(.session, "/browser/fetch", "POST", ""));
+    try std.testing.expect(!allowsRoute(.browser, "/browser/fetch", "POST", ""));
+    try std.testing.expect(!allowsRoute(.browser, "/browser/fetch", "GET", ""));
 }
 
 test "every other route is denied to a paired browser, by name" {

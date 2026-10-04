@@ -101,7 +101,6 @@ pub const PlayError = error{ not_shared, stale, missing, busy };
 pub const Played = struct {
     kind: link_pure.Kind,
     referer_sent: bool,
-    queued_without_headers: bool,
 };
 
 fn playLocked(p: *const pure.Page, page_id: u32, id: u32, queue_only: bool) PlayError!Played {
@@ -124,7 +123,6 @@ fn playLocked(p: *const pure.Page, page_id: u32, id: u32, queue_only: bool) Play
     return .{
         .kind = c.kind,
         .referer_sent = referer.len > 0 and !queue_only,
-        .queued_without_headers = queue_only and (referer.len > 0 or origin.len > 0 or c.ua.len > 0),
     };
 }
 

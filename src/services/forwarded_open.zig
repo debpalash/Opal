@@ -97,8 +97,12 @@ pub fn drain() void {
         // takes the generic "first plays, the rest queue" path below.
         if (std.mem.eql(u8, kind, "browser_queue")) {
             const title = if (title_len > 0) title_buf[0..title_len] else url;
-            // The queue stores a bare URL (no headers) and holds under 2 KB.
-            @import("queue.zig").addToQueue(url, title, "browser");
+            // The queue row is a bare URL under 2 KB; the Referer, Origin and
+            // User-Agent it was found with are kept beside it, keyed by the URL,
+            // and handed to the player when the item is played.
+            const q = @import("queue.zig");
+            q.rememberHttpIdentity(url, ref_buf[0..ref_len], origin_buf[0..origin_len], ua_buf[0..ua_len]);
+            q.addToQueue(url, title, "browser");
             logs.pushLog("info", "queue", "Queued from paired browser", false);
             state.showToast("Queued in Opal");
             continue;

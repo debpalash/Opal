@@ -870,6 +870,10 @@ pub const AppState = struct {
     /// detected streams) only while this is on. Off by default. Only the UI flips
     /// it: no HTTP route and no tool reaches this field.
     browser_share_agents: bool = false,
+    /// Agents may see the titles and hosts of the user's open tabs (reported by a
+    /// paired browser that the user also allowed to) only while this is on. Off by
+    /// default; only the UI flips it.
+    browser_share_tabs: bool = false,
     /// The background operator (jobs handed to a coding agent behind the scenes) runs only while on.
     operator_enabled: bool = false,
     /// Spend ceiling per UTC day for operator jobs, in cents.

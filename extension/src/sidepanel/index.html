@@ -30,6 +30,28 @@
       <button id="setup-open" class="btn primary full">Set up in a few clicks</button>
     </section>
 
+    <!-- Opal (or an agent working for the user) asked to fetch a page through this
+         browser, with the user's own logins. Nothing runs until the user answers;
+         no answer in 80 seconds is a denial. -->
+    <section id="fetch-ask-card" class="card accent" hidden>
+      <div class="card-title">Opal wants to fetch a page</div>
+      <p class="card-body">
+        Opal asked this browser to load a page from
+        <strong id="fetch-ask-origin"></strong>
+        using your logins and cookies for that site, and read its text.
+      </p>
+      <p id="fetch-ask-private" class="card-body" hidden>
+        This is an address on your own computer or network, not a public website.
+        Only allow it if you know what it is.
+      </p>
+      <div class="btn-row">
+        <button id="fetch-ask-once" class="btn primary">Allow once</button>
+        <button id="fetch-ask-always" class="btn">Always allow this site</button>
+        <button id="fetch-ask-deny" class="btn ghost">Deny</button>
+      </div>
+      <p id="fetch-ask-left" class="card-sub"></p>
+    </section>
+
     <!-- Add-this-site-as-a-source (shown only on recognised manga/novel sites) -->
     <section id="source-card" class="card accent" hidden>
       <div class="card-head">
@@ -60,6 +82,32 @@
       <div class="btn-row">
         <button id="download" class="btn ghost">⬇ Download</button>
         <button id="read" class="btn ghost">📖 Read</button>
+      </div>
+    </section>
+
+    <!-- Add the title to Opal's Wanted list: the text is editable because a page
+         title is rarely a clean "Dune 2021". One click is one request. -->
+    <section id="wanted-card" class="card">
+      <div class="card-title small">Add to Wanted</div>
+      <div class="search-row">
+        <input id="wanted-title" class="text-input" type="text" maxlength="150" placeholder="Dune 2021, or Severance S02E03" autocomplete="off" />
+        <button id="wanted-btn" class="btn compact">Add to Wanted</button>
+      </div>
+      <p id="wanted-note" class="card-sub"></p>
+    </section>
+
+    <!-- Share the list of open tabs with Opal's agents. Off until the user turns it
+         on here (this click asks the browser for the optional tabs permission) AND
+         has Opal's own switch on. Titles and sites only, never full addresses. -->
+    <section id="tabs-card" class="card">
+      <div class="card-title small">Tab list for agents</div>
+      <p id="tabs-note" class="card-body">
+        Let Opal's agents see the titles and sites of your open tabs (not the full addresses).
+        Needs your OK here and the switch in Opal under Settings, Agent Access.
+      </p>
+      <div class="btn-row">
+        <button id="tabs-enable" class="btn">Allow tab titles</button>
+        <button id="tabs-disable" class="btn ghost" hidden>Stop sharing tabs</button>
       </div>
     </section>
 

@@ -10,6 +10,7 @@ const sync = @import("../core/sync.zig");
 const io_g = @import("../core/io_global.zig");
 const txt = @import("../core/text.zig");
 const access_pure = @import("access_pure.zig");
+const remote_body_pure = @import("remote_body_pure.zig");
 const sap = @import("settings_api_pure.zig");
 const scale_pure = @import("../core/scale_pure.zig");
 const login_rate = @import("login_rate_pure.zig");
@@ -779,14 +780,24 @@ fn clientKey(address: std.Io.net.IpAddress) u64 {
 /// of text, metadata and the streams found on it). Runs on the already-read head only when the
 /// declared request would not fit, and requires the browser token, so an
 /// anonymous or differently-privileged caller never makes the server allocate.
-fn browserBodyGate(head: []const u8) bool {
-    const route = for ([_][]const u8{ "POST /api/browser/media", "POST /api/browser/page" }) |r| {
+fn browserBodyGate(head: []const u8) usize {
+    const bearer = extractBearer(head) orelse return 0;
+    // The browser's answer to a fetch job is the one route that may carry a page
+    // (up to 2 MB of text); the id after the slash is digits only (access_pure).
+    const jobs = "POST /api/browser/jobs/";
+    if (std.mem.startsWith(u8, head, jobs)) {
+        const rest = head[jobs.len..];
+        const end = std.mem.indexOfAny(u8, rest, " ?") orelse return 0;
+        if (access_pure.browserJobResultId(head["POST /api".len .. jobs.len + end]) == null) return 0;
+        const principal = principalForBearer(bearer) orelse return 0;
+        return if (principal == .browser) remote_body_pure.GROW_MAX_RESULT else 0;
+    }
+    const route = for ([_][]const u8{ "POST /api/browser/media", "POST /api/browser/page", "POST /api/browser/tabs" }) |r| {
         if (std.mem.startsWith(u8, head, r)) break r;
-    } else return false;
-    if (head.len == route.len or (head[route.len] != ' ' and head[route.len] != '?')) return false;
-    const bearer = extractBearer(head) orelse return false;
-    const principal = principalForBearer(bearer) orelse return false;
-    return principal == .browser;
+    } else return 0;
+    if (head.len == route.len or (head[route.len] != ' ' and head[route.len] != '?')) return 0;
+    const principal = principalForBearer(bearer) orelse return 0;
+    return if (principal == .browser) remote_body_pure.GROW_MAX_BODY else 0;
 }
 
 /// True for the loopback interface, including an IPv4 peer seen over a

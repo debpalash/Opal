@@ -219,9 +219,10 @@ pub const Grow = struct {
     allocator: std.mem.Allocator,
     /// Called only when the declared request would not fit, with the head that
     /// was already read (request line and headers, through the blank line). It
-    /// must authenticate the caller as well as match the route: returning true
-    /// makes the server allocate up to `remote_body_pure.GROW_MAX_BODY`.
-    gate: *const fn (head: []const u8) bool,
+    /// must authenticate the caller as well as match the route. It returns the
+    /// largest body it accepts (`remote_body_pure.GROW_MAX_BODY` for most routes,
+    /// `GROW_MAX_RESULT` for the browser's fetch answer) or 0 to refuse.
+    gate: *const fn (head: []const u8) usize,
 };
 
 /// `readRequest` plus an opt-in for one route to send up to 64 KB. The head must
@@ -239,8 +240,8 @@ fn readRequestImpl(stream: std.Io.net.Stream, buf: []u8, grow: ?Grow) !?Request 
     const head_len = header.header_end + 4;
     const required = std.math.add(usize, head_len, body_len) catch
         return error.RequestTooLarge;
-    const gate_ok = if (grow) |g| required > buf.len and g.gate(buf[0..head_len]) else false;
-    switch (body_pure.plan(buf.len, header.header_end, body_len, gate_ok)) {
+    const gate_max: usize = if (grow) |g| (if (required > buf.len) g.gate(buf[0..head_len]) else 0) else 0;
+    switch (body_pure.plan(buf.len, header.header_end, body_len, gate_max)) {
         .too_large => return error.RequestTooLarge,
         .fits => {
             // Critically, equality is valid. The old loop returned RequestTooLarge

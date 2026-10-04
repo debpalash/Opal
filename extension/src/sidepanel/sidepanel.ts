@@ -11,7 +11,7 @@
  * All Opal traffic is delegated to the background worker via messages.
  */
 
-import { SNIFFER_PERMISSIONS, describeCandidate, type Candidate } from "../sniffer";
+import { SNIFFER_PERMISSIONS, describeCandidate, suggestWantedTitle, type Candidate } from "../sniffer";
 import type {
   Detection,
   OpalFile,
@@ -671,17 +671,13 @@ function renderStreams(tabId: number | null, list: Candidate[], paired: boolean)
       b.disabled = !paired || tabId === null;
       b.addEventListener("click", async () => {
         b.disabled = true;
-        const res = await browserMsg<{ ok: boolean; error?: string; queuedWithoutHeaders?: boolean }>({
+        const res = await browserMsg<{ ok: boolean; error?: string }>({
           op: "send",
           tabId,
           id: c.id,
           action,
         });
-        if (res.ok && res.queuedWithoutHeaders) {
-          logRecent("Queued, but a queued stream plays without its Referer", true);
-        } else {
-          logRecent(res.ok ? (action === "play" ? "Playing detected stream" : "Queued detected stream") : (res.error ?? "Send failed"), res.ok);
-        }
+        logRecent(res.ok ? (action === "play" ? "Playing detected stream" : "Queued detected stream (it keeps the headers it was found with)") : (res.error ?? "Send failed"), res.ok);
         b.disabled = !paired;
         if (!res.ok) loadStreams();
       });
@@ -705,6 +701,144 @@ streamsDisable.addEventListener("click", async () => {
   loadStreams();
 });
 streamsPair.addEventListener("click", () => chrome.runtime.openOptionsPage());
+
+// ── Opal asks to fetch a page through this browser ────────────────────────────
+
+interface FetchPending {
+  job: { id: number };
+  origin: string;
+  private: boolean;
+  deadline: number;
+}
+
+const fetchAskCard = $<HTMLElement>("fetch-ask-card");
+const fetchAskOrigin = $<HTMLElement>("fetch-ask-origin");
+const fetchAskPrivate = $<HTMLElement>("fetch-ask-private");
+const fetchAskLeft = $<HTMLElement>("fetch-ask-left");
+const fetchAskOnce = $<HTMLButtonElement>("fetch-ask-once");
+const fetchAskAlways = $<HTMLButtonElement>("fetch-ask-always");
+const fetchAskDeny = $<HTMLButtonElement>("fetch-ask-deny");
+let fetchAskCurrent: FetchPending | null = null;
+
+/** Show the oldest request waiting for the user, if any. */
+async function loadFetchAsk(): Promise<void> {
+  const st = await browserMsg<{ pending?: FetchPending[] }>({ op: "fetch-state" });
+  const p = st.pending?.[0] ?? null;
+  fetchAskCurrent = p;
+  fetchAskCard.hidden = !p;
+  if (!p) return;
+  fetchAskOrigin.textContent = p.origin;
+  fetchAskPrivate.hidden = !p.private;
+  fetchAskLeft.textContent = `${Math.max(0, Math.round((p.deadline - Date.now()) / 1000))} s left. No answer counts as Deny.`;
+}
+
+async function answerFetchAsk(decision: "once" | "always" | "deny"): Promise<void> {
+  const p = fetchAskCurrent;
+  if (!p) return;
+  fetchAskCard.hidden = true;
+  if (decision !== "deny") {
+    // The browser's own all-sites or per-site grant is what lets the page be
+    // read; asked here because it needs this click.
+    try {
+      await chrome.permissions.request({ origins: [`${p.origin}/*`] });
+    } catch {
+      // the fetch will report if it could not read the page
+    }
+  }
+  const res = await browserMsg<{ ok: boolean; error?: string }>({ op: "fetch-decide", jobId: p.job.id, decision });
+  logRecent(
+    res.ok ? (decision === "deny" ? `Denied ${p.origin}` : `Allowed ${p.origin}${decision === "always" ? " from now on" : " once"}`) : (res.error ?? "Could not answer"),
+    res.ok,
+  );
+  loadFetchAsk();
+}
+fetchAskOnce.addEventListener("click", () => void answerFetchAsk("once"));
+fetchAskAlways.addEventListener("click", () => void answerFetchAsk("always"));
+fetchAskDeny.addEventListener("click", () => void answerFetchAsk("deny"));
+
+// ── Add to Wanted ─────────────────────────────────────────────────────────────
+
+const wantedTitle = $<HTMLInputElement>("wanted-title");
+const wantedBtn = $<HTMLButtonElement>("wanted-btn");
+const wantedNote = $<HTMLElement>("wanted-note");
+let wantedFilledFor = "";
+
+/** Fill the editable title from the active tab once per page, never over what
+ *  the user is typing. */
+async function fillWantedTitle(): Promise<void> {
+  if (document.activeElement === wantedTitle) return;
+  const tabId = await activeTabId();
+  if (tabId === null) return;
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  const key = `${tabId}|${tab?.title ?? ""}`;
+  if (!tab || key === wantedFilledFor) return;
+  wantedFilledFor = key;
+  wantedTitle.value = suggestWantedTitle(tab.title ?? "");
+  wantedNote.textContent = "";
+}
+
+wantedBtn.addEventListener("click", async () => {
+  const tabId = await activeTabId();
+  wantedBtn.disabled = true;
+  const res = await browserMsg<{ ok: boolean; error?: string; result?: string; kind?: string; wantedTitle?: string }>({
+    op: "wanted",
+    title: wantedTitle.value,
+    tabId: tabId ?? -1,
+  });
+  wantedBtn.disabled = false;
+  if (res.ok) {
+    wantedNote.textContent =
+      res.result === "exists" ? "Already on Opal's Wanted list." : `Added "${res.wantedTitle ?? wantedTitle.value}" (${res.kind ?? "title"}). Opal will search and download it.`;
+    logRecent(res.result === "exists" ? "Already in Wanted" : "Added to Wanted", true);
+  } else {
+    wantedNote.textContent = res.error ?? "Could not add it.";
+    logRecent(res.error ?? "Add to Wanted failed", false);
+  }
+});
+wantedTitle.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") wantedBtn.click();
+});
+
+// ── Tab list for agents ───────────────────────────────────────────────────────
+
+const tabsNote = $<HTMLElement>("tabs-note");
+const tabsEnableBtn = $<HTMLButtonElement>("tabs-enable");
+const tabsDisableBtn = $<HTMLButtonElement>("tabs-disable");
+
+async function loadTabsCard(): Promise<void> {
+  const st = await browserMsg<{ enabled: boolean; granted: boolean; opalOn: boolean }>({ op: "tabs-state" });
+  const on = st.enabled && st.granted;
+  tabsEnableBtn.hidden = on;
+  tabsDisableBtn.hidden = !on;
+  tabsNote.textContent = on
+    ? st.opalOn
+      ? "Sharing the titles and sites of your open tabs with Opal's agents. Private windows are never included."
+      : "Allowed here, but the switch in Opal (Settings, Agent Access, Share tab list with agents) is off, so nothing is sent."
+    : "Let Opal's agents see the titles and sites of your open tabs (not the full addresses). Needs your OK here and the switch in Opal under Settings, Agent Access.";
+}
+
+// chrome.permissions.request has to run in a user gesture, so it is called here
+// (not in the worker) and the worker is told afterwards.
+tabsEnableBtn.addEventListener("click", async () => {
+  let granted = false;
+  try {
+    granted = await chrome.permissions.request({ permissions: ["tabs"] });
+  } catch {
+    granted = false;
+  }
+  if (granted) await browserMsg({ op: "tabs-enable" });
+  else logRecent("Sharing tab titles needs that permission", false);
+  loadTabsCard();
+});
+tabsDisableBtn.addEventListener("click", async () => {
+  await browserMsg({ op: "tabs-disable" });
+  try {
+    await chrome.permissions.remove({ permissions: ["tabs"] });
+  } catch {
+    // already gone
+  }
+  loadTabsCard();
+});
 
 // ── Share this page with Opal ─────────────────────────────────────────────────
 
@@ -749,6 +883,9 @@ let ticks = 0;
 
 async function poll(): Promise<void> {
   loadStreams().catch(() => {});
+  loadFetchAsk().catch(() => {});
+  fillWantedTitle().catch(() => {});
+  if (ticks % 4 === 0) loadTabsCard().catch(() => {});
   const res = await send({ kind: "opal", action: "status" });
   if (res.ok) {
     statusDot.className = "dot ok";

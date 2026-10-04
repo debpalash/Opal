@@ -319,6 +319,30 @@ export function buildMediaPayload(
   };
 }
 
+// ── Add to Wanted ───────────────────────────────────────────────────────────
+
+/** Body for `POST /api/browser/media` with `action: "add_to_wanted"`: the title
+ *  the user typed or edited, and the page it came from for context. Opal parses
+ *  the title ("Dune 2021", "Severance S02E03") with the same rules as the Wanted
+ *  box in the app; this side only bounds it. null for an empty title. */
+export function buildWantedPayload(title: string, pageUrl: string): { action: "add_to_wanted"; title: string; page_url: string } | null {
+  // eslint-disable-next-line no-control-regex
+  const t = title.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 150);
+  if (!t) return null;
+  return { action: "add_to_wanted", title: t, page_url: pageUrl && parse(pageUrl) && pageUrl.length <= 2048 ? pageUrl : "" };
+}
+
+/** A starting point for the editable title: a tab title usually carries the site
+ *  name after a separator ("Dune (2021) - Watch Online | SomeSite"). The first
+ *  segment is kept, "(2021)" loses its brackets, and the user edits the rest. */
+export function suggestWantedTitle(tabTitle: string): string {
+  let t = tabTitle.replace(/\s+/g, " ").trim();
+  const seg = t.split(/\s+[-|\u2013\u2014\u00b7]\s+/)[0] ?? t;
+  if (seg.length >= 2) t = seg;
+  t = t.replace(/\((\d{4})\)\s*$/, "$1").replace(/\s*\((\d{4})\)\s*/, " $1 ");
+  return t.replace(/\s+/g, " ").trim().slice(0, 150);
+}
+
 // ── Sharing a page with Opal ────────────────────────────────────────────────
 
 /** Matches the server's bounds (src/services/browser_page_pure.zig). */

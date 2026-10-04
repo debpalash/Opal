@@ -155,6 +155,45 @@
         <div id="link-result" class="result" hidden></div>
       </section>
 
+      <!-- ── Fetch through this browser ──────────────────────────────────── -->
+      <section class="group" id="fetch-group">
+        <div class="group-head">
+          <h2>Fetch through this browser</h2>
+          <p>
+            Opal, or an agent you gave Opal to, can ask this browser to load a page with your own
+            logins and cookies, for sites that block a plain download. It only ever happens for a
+            site on this list. The first request for a new site is shown in the side panel and you
+            choose; nothing here can be changed by Opal or by an agent.
+          </p>
+        </div>
+        <div class="fields">
+          <label class="field wide">
+            <span class="field-label">Answer Opal's fetch requests</span>
+            <select id="fetch-enabled">
+              <option value="on">On (ask me about each new site)</option>
+              <option value="off">Off (Opal sees this browser as unavailable for fetching)</option>
+            </select>
+          </label>
+        </div>
+        <ul id="fetch-allow-list" class="shortcuts"></ul>
+        <div class="fields">
+          <label class="field wide">
+            <span class="field-label">Allow a site</span>
+            <input id="fetch-allow-input" type="text" autocomplete="off" placeholder="example.org or http://nas.local:8096" />
+            <small class="help">
+              A site is an exact address: <code>https://example.org</code>, <code>http://example.org</code>
+              and <code>https://www.example.org</code> are three different sites. An address on your own
+              network (a NAS, a router, <code>localhost</code>) is only fetched if you add it here or approve
+              it in the panel. A site you have not used for 30 days drops off the list.
+            </small>
+          </label>
+        </div>
+        <div class="actions">
+          <button type="button" id="fetch-allow-add" class="btn primary">Allow this site</button>
+        </div>
+        <div id="fetch-result" class="result" hidden></div>
+      </section>
+
       <!-- ── Behavior ────────────────────────────────────────────────────── -->
       <section class="group">
         <div class="group-head">

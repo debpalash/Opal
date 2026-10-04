@@ -15,7 +15,18 @@
  * Nothing leaves the browser until the user presses Play or Queue.
  */
 
-import { baseUrl, getSettings } from "./shared";
+import {
+  addOrigin,
+  decidePending,
+  ensureLoop,
+  fetchEnabled,
+  getAllow,
+  listPending,
+  removeOrigin,
+  setFetchEnabled,
+} from "./fetch_jobs";
+import { disableTabs, enableTabs, reportTabs, tabsState } from "./tabs_share";
+import { jsonFetch, readLink, type BrowserResult, type StoredLink } from "./link_api";
 import {
   SNIFFER_PERMISSIONS,
   addCandidate,
@@ -25,6 +36,7 @@ import {
   isNoiseUrl,
   makeCandidate,
   buildSharePayload,
+  buildWantedPayload,
   sortCandidates,
   type Candidate,
   type PageFacts,
@@ -32,63 +44,12 @@ import {
 
 // ── Link state ──────────────────────────────────────────────────────────────
 
-interface StoredLink {
-  token: string;
-  id: number;
-  label: string;
-}
+export type { BrowserResult } from "./link_api";
 
 export interface LinkStatus {
   paired: boolean;
   label: string;
   sniffer: boolean;
-}
-
-export interface BrowserResult {
-  ok: boolean;
-  status?: number;
-  error?: string;
-  data?: unknown;
-}
-
-async function readLink(): Promise<StoredLink | null> {
-  const got = await chrome.storage.local.get("browserLink");
-  const l = got.browserLink as StoredLink | undefined;
-  return l && typeof l.token === "string" && l.token ? l : null;
-}
-
-async function jsonFetch(
-  path: string,
-  method: "GET" | "POST",
-  body: unknown,
-  token: string,
-): Promise<BrowserResult> {
-  const s = await getSettings();
-  const headers: Record<string, string> = {};
-  if (token) headers.Authorization = `Bearer ${token}`;
-  if (body !== undefined) headers["Content-Type"] = "application/json";
-  try {
-    const res = await fetch(`${baseUrl(s)}${path}`, {
-      method,
-      headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(8000),
-    });
-    const text = await res.text();
-    let data: unknown = undefined;
-    try {
-      data = text ? JSON.parse(text) : undefined;
-    } catch {
-      data = text;
-    }
-    const err = (data as { error?: string } | undefined)?.error;
-    return { ok: res.ok, status: res.status, data, error: res.ok ? undefined : err ?? `HTTP ${res.status}` };
-  } catch {
-    return {
-      ok: false,
-      error: "Opal is not reachable. Is the app running with \"Allow coding agents\" on in Settings?",
-    };
-  }
 }
 
 function browserName(): string {
@@ -124,6 +85,7 @@ export async function pair(code: string, label: string): Promise<BrowserResult> 
   await chrome.storage.local.set({
     browserLink: { token: d.token, id: d.id, label: label.trim() || defaultLabel() } satisfies StoredLink,
   });
+  ensureLoop();
   return { ok: true };
 }
 
@@ -385,7 +347,7 @@ export async function sendCandidate(
   tabId: number,
   id: string,
   action: "play" | "queue",
-): Promise<BrowserResult & { queuedWithoutHeaders?: boolean }> {
+): Promise<BrowserResult> {
   await ensureLoaded();
   const link = await readLink();
   if (!link) return { ok: false, error: "Pair this browser with Opal first (extension Settings)." };
@@ -418,8 +380,29 @@ export async function sendCandidate(
     await chrome.storage.local.remove("browserLink");
     return { ...res, error: "Opal no longer knows this browser: pair it again." };
   }
-  const queuedWithoutHeaders = (res.data as { queued_without_headers?: boolean } | undefined)?.queued_without_headers;
-  return { ...res, queuedWithoutHeaders };
+  return res;
+}
+
+/** "Add to Wanted": the title is whatever the user typed in the panel, and one
+ *  click is one request. Opal parses it and adds it to the Wanted list. */
+export async function addToWanted(title: string, tabId: number): Promise<BrowserResult & { result?: string; kind?: string; wantedTitle?: string }> {
+  const link = await readLink();
+  if (!link) return { ok: false, error: "Pair this browser with Opal first (extension Settings)." };
+  let pageUrl = "";
+  try {
+    pageUrl = (await chrome.tabs.get(tabId)).url ?? "";
+  } catch {
+    // the tab closed: the title is what matters
+  }
+  const payload = buildWantedPayload(title, pageUrl);
+  if (!payload) return { ok: false, error: "Type a title first, for example Dune 2021 or Severance S02E03." };
+  const res = await jsonFetch("/api/browser/media", "POST", payload, link.token);
+  if (res.status === 401) {
+    await chrome.storage.local.remove("browserLink");
+    return { ...res, error: "Opal no longer knows this browser: pair it again." };
+  }
+  const d = res.data as { result?: string; kind?: string; title?: string } | undefined;
+  return { ...res, result: d?.result, kind: d?.kind, wantedTitle: d?.title };
 }
 
 // ── Sharing the page with Opal ──────────────────────────────────────────────
@@ -502,7 +485,13 @@ export async function sharePage(tabId: number, agents: boolean): Promise<ShareRe
 try {
   chrome.alarms?.create("opal-link", { periodInMinutes: 1 });
   chrome.alarms?.onAlarm.addListener((a) => {
-    if (a.name === "opal-link") void readLink().then((l) => l && jsonFetch("/api/browser/me", "GET", undefined, l.token));
+    if (a.name === "opal-link") {
+      void readLink().then((l) => l && jsonFetch("/api/browser/me", "GET", undefined, l.token));
+      // A worker that was shut down is not polling for fetch jobs: start again.
+      ensureLoop();
+      // And a once-a-minute tab list, only if the user opted in and Opal's switch is on.
+      void reportTabs();
+    }
   });
 } catch {
   // no alarms API: the panel's own checks still count
@@ -512,13 +501,36 @@ try {
 
 export interface BrowserMessage {
   kind: "browser";
-  op: "status" | "pair" | "unpair" | "verify" | "list" | "send" | "enable" | "share";
+  op:
+    | "status"
+    | "pair"
+    | "unpair"
+    | "verify"
+    | "list"
+    | "send"
+    | "enable"
+    | "share"
+    | "wanted"
+    | "tabs-state"
+    | "tabs-enable"
+    | "tabs-disable"
+    | "fetch-state"
+    | "fetch-decide"
+    | "fetch-add"
+    | "fetch-remove"
+    | "fetch-enable";
   code?: string;
   label?: string;
   tabId?: number;
   id?: string;
   action?: "play" | "queue";
   agents?: boolean;
+  title?: string;
+  /** fetch-decide: the pending request; fetch-add / fetch-remove: the site. */
+  jobId?: number;
+  decision?: "once" | "always" | "deny";
+  origin?: string;
+  on?: boolean;
 }
 
 export async function handleBrowserMessage(msg: BrowserMessage): Promise<unknown> {
@@ -540,7 +552,30 @@ export async function handleBrowserMessage(msg: BrowserMessage): Promise<unknown
       return sendCandidate(msg.tabId ?? -1, msg.id ?? "", msg.action === "queue" ? "queue" : "play");
     case "share":
       return sharePage(msg.tabId ?? -1, msg.agents === true);
+    case "tabs-state":
+      return { ok: true, ...(await tabsState()) };
+    case "tabs-enable":
+      return { ok: true, ...(await enableTabs()) };
+    case "tabs-disable":
+      return { ok: true, ...(await disableTabs()) };
+    case "wanted":
+      return addToWanted(msg.title ?? "", msg.tabId ?? -1);
+    case "fetch-state":
+      return { ok: true, enabled: await fetchEnabled(), allow: await getAllow(), pending: await listPending() };
+    case "fetch-decide":
+      return decidePending(msg.jobId ?? -1, msg.decision === "once" || msg.decision === "always" ? msg.decision : "deny");
+    case "fetch-add":
+      return addOrigin(msg.origin ?? "");
+    case "fetch-remove":
+      await removeOrigin(msg.origin ?? "");
+      return { ok: true };
+    case "fetch-enable":
+      await setFetchEnabled(msg.on !== false);
+      return { ok: true };
     default:
       return { ok: false, error: "unknown operation" };
   }
 }
+
+// Poll for fetch jobs whenever this worker is up and the browser is paired.
+ensureLoop();
