@@ -325,6 +325,8 @@ pub fn coreInit() !void {
             const auth_store = @import("services/auth_store.zig");
             auth_store.ensureTables();
             auth_store.pruneExpired();
+            // Paired browsers (Opal Connect) keep their hashed tokens beside accounts.
+            @import("services/browser_link.zig").ensureTables();
 
             // Restore starred AI chat messages before anything else touches
             // the message array.

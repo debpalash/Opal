@@ -38,8 +38,18 @@ pub const MAX_DL_LINK_LEN: usize = 4096;
 /// at container level: struct fields cannot be interleaved with declarations.
 pub const REMOTE_OPEN_QUEUE_CAP: usize = 8;
 pub const RemoteOpenEntry = struct {
-    path: [2048]u8 = std.mem.zeroes([2048]u8),
+    /// 4096, not 2048: a paired browser hands over signed CDN playlist URLs
+    /// whose query alone can pass 2 KB (`browser_link_pure.MAX_URL`).
+    path: [4096]u8 = std.mem.zeroes([4096]u8),
     path_len: usize = 0,
+    /// HTTP identity for a stream a paired browser found (kind "browser").
+    /// Empty for every other producer.
+    referer: [2048]u8 = std.mem.zeroes([2048]u8),
+    referer_len: usize = 0,
+    origin: [256]u8 = std.mem.zeroes([256]u8),
+    origin_len: usize = 0,
+    user_agent: [512]u8 = std.mem.zeroes([512]u8),
+    user_agent_len: usize = 0,
     kind: [16]u8 = std.mem.zeroes([16]u8),
     kind_len: usize = 0,
     art: [1024]u8 = std.mem.zeroes([1024]u8),

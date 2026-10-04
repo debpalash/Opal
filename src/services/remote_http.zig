@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const io_g = @import("../core/io_global.zig");
+const body_pure = @import("remote_body_pure.zig");
 
 const RESPONSE_WRITE_TIMEOUT_S: i64 = 5;
 
@@ -201,18 +202,64 @@ fn readBodyTimed(reader: *std.Io.net.Stream.Reader, buf: []u8, used: usize, requ
 /// the header and declared body. A slow drip cannot reset either clock and
 /// occupy one of the fixed connection slots indefinitely.
 pub fn readRequest(stream: std.Io.net.Stream, buf: []u8) !?[]const u8 {
+    const req = (try readRequestImpl(stream, buf, null)) orelse return null;
+    return req.bytes;
+}
+
+/// A request read by `readRequestGrow`. `bytes` is the whole request (head and
+/// body). When the body did not fit the caller's buffer it lives on the heap in
+/// `owned`; the caller frees it with the allocator it passed in.
+pub const Request = struct {
+    bytes: []const u8,
+    owned: ?[]u8 = null,
+};
+
+/// Lets one route accept a body larger than the fixed buffer.
+pub const Grow = struct {
+    allocator: std.mem.Allocator,
+    /// Called only when the declared request would not fit, with the head that
+    /// was already read (request line and headers, through the blank line). It
+    /// must authenticate the caller as well as match the route: returning true
+    /// makes the server allocate up to `remote_body_pure.GROW_MAX_BODY`.
+    gate: *const fn (head: []const u8) bool,
+};
+
+/// `readRequest` plus an opt-in for one route to send up to 64 KB. The head must
+/// still fit `buf`; only the body can spill to the heap, and only when
+/// `grow.gate` approves the head. Everything else still gets RequestTooLarge.
+pub fn readRequestGrow(stream: std.Io.net.Stream, buf: []u8, grow: Grow) !?Request {
+    return readRequestImpl(stream, buf, grow);
+}
+
+fn readRequestImpl(stream: std.Io.net.Stream, buf: []u8, grow: ?Grow) !?Request {
     var reader_buf: [1024]u8 = undefined;
     var reader = stream.reader(io_g.io(), &reader_buf);
     const header = (try readHeaderTimed(&reader, buf)) orelse return null;
     const body_len = try requestContentLength(buf[0..header.header_end]);
-    const required = std.math.add(usize, header.header_end + 4, body_len) catch
+    const head_len = header.header_end + 4;
+    const required = std.math.add(usize, head_len, body_len) catch
         return error.RequestTooLarge;
-    if (required > buf.len) return error.RequestTooLarge;
-    // Critically, equality is valid. The old loop returned RequestTooLarge
-    // whenever a correctly framed request occupied the entire 4096-byte cap.
-    if (header.used >= required) return buf[0..required];
-    const complete = (try readBodyTimed(&reader, buf, header.used, required)) orelse return null;
-    return buf[0..complete];
+    const gate_ok = if (grow) |g| required > buf.len and g.gate(buf[0..head_len]) else false;
+    switch (body_pure.plan(buf.len, header.header_end, body_len, gate_ok)) {
+        .too_large => return error.RequestTooLarge,
+        .fits => {
+            // Critically, equality is valid. The old loop returned RequestTooLarge
+            // whenever a correctly framed request occupied the entire 4096-byte cap.
+            if (header.used >= required) return .{ .bytes = buf[0..required] };
+            const complete = (try readBodyTimed(&reader, buf, header.used, required)) orelse return null;
+            return .{ .bytes = buf[0..complete] };
+        },
+        .grow => {
+            const heap = try grow.?.allocator.alloc(u8, required);
+            errdefer grow.?.allocator.free(heap);
+            @memcpy(heap[0..header.used], buf[0..header.used]);
+            const complete = (try readBodyTimed(&reader, heap, header.used, required)) orelse {
+                grow.?.allocator.free(heap);
+                return null;
+            };
+            return .{ .bytes = heap[0..complete], .owned = heap };
+        },
+    }
 }
 
 pub fn requireMethod(stream: std.Io.net.Stream, actual: []const u8, expected: []const u8) bool {

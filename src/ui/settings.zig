@@ -5077,6 +5077,10 @@ fn renderAgentAccess() void {
         }
     }
 
+    // Before the horizontal button row below, which stays the parent until the
+    // end of this function and would lay anything after it out to its right.
+    renderBrowserLink();
+
     var exe_buf: [512]u8 = undefined;
     var path_buf: [600]u8 = undefined;
     const exe_dir = io_g.selfExeDirPath(&exe_buf) catch "";
@@ -5139,6 +5143,109 @@ fn renderAgentAccess() void {
             dvui.clipboardTextSet(audit);
             state.showToast("Audit log path copied");
         }
+    }
+}
+
+/// "Browser" card: pair the Opal Connect extension, list paired browsers,
+/// revoke one. The pairing code is minted here, by a click, and never leaves
+/// this process except by being typed into the extension: there is no HTTP route
+/// that starts pairing, so an agent cannot do it.
+fn renderBrowserLink() void {
+    const link = @import("../services/browser_link.zig");
+    const link_pure = @import("../services/browser_link_pure.zig");
+    const io_g = @import("../core/io_global.zig");
+
+    var card = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .horizontal,
+        .margin = .{ .x = 0, .y = theme.spacing.md, .w = 0, .h = theme.spacing.sm },
+    });
+    defer card.deinit();
+
+    components.sectionHeader("Browser");
+    _ = dvui.label(@src(), "Pair your own browser with the Opal Connect extension. It finds the real stream behind a page and plays it here with the right Referer. A paired browser can only send streams to Opal; it cannot change settings, downloads or sources.", .{}, .{
+        .color_text = theme.colors.text_secondary,
+        .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
+    });
+    if (!state.app.web_remote_enabled) {
+        _ = dvui.label(@src(), "The extension reaches Opal through its local API: turn on \"Allow coding agents\" above first.", .{}, .{
+            .color_text = theme.colors.warning,
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
+        });
+    }
+
+    const view = link.pairingView();
+    if (view.active) {
+        // Re-arm once a second so the countdown moves under the gated frame loop.
+        const tick_id = card.data().id;
+        if (dvui.timerDoneOrNone(tick_id)) dvui.timer(tick_id, 1_000_000);
+
+        var big = dvui.themeGet().font_body;
+        big.size = theme.font_size.title * 1.6;
+        _ = dvui.label(@src(), "{s}", .{view.code[0..]}, .{
+            .color_text = theme.colors.text_primary,
+            .font = big,
+            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
+        });
+        _ = dvui.label(@src(), "Enter this code in the extension's setup page. Expires in {d}:{d:0>2}. Five wrong tries cancel it.", .{ @as(u32, @intCast(@divTrunc(view.remaining, 60))), @as(u32, @intCast(@mod(view.remaining, 60))) }, .{
+            .color_text = theme.colors.text_secondary,
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
+        });
+    }
+
+    {
+        var prow = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
+        });
+        defer prow.deinit();
+        if (components.actionButton(@src(), if (view.active) "New code" else "Pair a browser", .primary, 9330)) {
+            if (!link.startPairing()) state.showToast("No entropy source: could not make a code");
+        }
+        if (view.active and components.actionButton(@src(), "Cancel", .secondary, 9331)) link.cancelPairing();
+    }
+
+    var rows: [link_pure.MAX_LINKS]link.Link = undefined;
+    const n = link.list(&rows);
+    if (n == 0) {
+        _ = dvui.label(@src(), "No paired browsers.", .{}, .{
+            .color_text = theme.colors.text_tertiary,
+            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 4 },
+        });
+        return;
+    }
+    _ = dvui.label(@src(), "Paired browsers", .{}, .{
+        .color_text = theme.colors.text_secondary,
+        .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
+    });
+    const now = io_g.timestamp();
+    for (rows[0..n], 0..) |*row, i| {
+        var line = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = i,
+            .expand = .horizontal,
+            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
+        });
+        defer line.deinit();
+        var seen_buf: [48]u8 = undefined;
+        const ago = now - row.last_seen;
+        const seen: []const u8 = if (ago < 90)
+            "active now"
+        else if (ago < 3600)
+            std.fmt.bufPrint(&seen_buf, "seen {d} min ago", .{@divTrunc(ago, 60)}) catch ""
+        else if (ago < 86400)
+            std.fmt.bufPrint(&seen_buf, "seen {d} h ago", .{@divTrunc(ago, 3600)}) catch ""
+        else
+            std.fmt.bufPrint(&seen_buf, "seen {d} d ago", .{@divTrunc(ago, 86400)}) catch "";
+        // Button first: a label that expands to the row's width would push it
+        // out of view in a narrow window.
+        if (components.actionButton(@src(), "Revoke", .danger, 9340 + i)) {
+            if (link.revoke(row.id)) state.showToast("Browser revoked: it can no longer reach Opal");
+        }
+        _ = dvui.label(@src(), "{s} ({s}), {s}", .{ row.labelSlice(), row.browserSlice(), seen }, .{
+            .id_extra = i,
+            .color_text = theme.colors.text_primary,
+            .gravity_y = 0.5,
+            .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
+        });
     }
 }
 

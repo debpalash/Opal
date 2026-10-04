@@ -583,6 +583,12 @@ fn handleLocalRequest(stream: std.Io.net.Stream) void {
         sendUnauthorized(stream);
         return;
     };
+    // This listener is always on, and only the host's own credentials belong
+    // on it: a paired browser has /api/browser/* on the main server and nothing here.
+    if (principal == .browser) {
+        sendForbidden(stream);
+        return;
+    }
     if (std.mem.eql(u8, path, "/api/open")) {
         // Single-instance handoff from a second `opal <file>` launch. Same
         // query shape as the main server's /api/open (path= alias url=, plus
@@ -767,15 +773,46 @@ fn clientKey(address: std.Io.net.IpAddress) u64 {
     }
 }
 
+/// Lets exactly one route send a body past the 4096-byte request buffer: a paired
+/// browser posting `/api/browser/media`, whose signed stream URLs plus Referer
+/// can exceed 4 KB by themselves. Runs on the already-read head only when the
+/// declared request would not fit, and requires the browser token, so an
+/// anonymous or differently-privileged caller never makes the server allocate.
+fn browserBodyGate(head: []const u8) bool {
+    const route = "POST /api/browser/media";
+    if (!std.mem.startsWith(u8, head, route)) return false;
+    if (head.len == route.len or (head[route.len] != ' ' and head[route.len] != '?')) return false;
+    const bearer = extractBearer(head) orelse return false;
+    const principal = principalForBearer(bearer) orelse return false;
+    return principal == .browser;
+}
+
+/// True for the loopback interface, including an IPv4 peer seen over a
+/// dual-stack socket as ::ffff:127.x.
+fn peerIsLoopback(address: std.Io.net.IpAddress) bool {
+    switch (address) {
+        .ip4 => |ip4| return ip4.bytes[0] == 127,
+        .ip6 => |ip6| {
+            if (std.Io.net.Ip4Address.fromIp6(ip6)) |ip4| return ip4.bytes[0] == 127;
+            return std.mem.eql(u8, &ip6.bytes, &[_]u8{0} ** 15 ++ [_]u8{1});
+        },
+    }
+}
+
 fn handleRequest(stream: std.Io.net.Stream, client_key: u64) !void {
     var buf: [4096]u8 = undefined;
-    const request = remote_http.readRequest(stream, &buf) catch |err| {
+    const read = remote_http.readRequestGrow(stream, &buf, .{
+        .allocator = @import("../core/alloc.zig").allocator,
+        .gate = browserBodyGate,
+    }) catch |err| {
         if (err == error.RequestTimeout)
             sendJsonStatus(stream, "408 Request Timeout", "{\"error\":\"request timeout\"}")
         else
             sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"malformed or oversized request\"}");
         return;
     } orelse return;
+    defer if (read.owned) |heap| @import("../core/alloc.zig").allocator.free(heap);
+    const request = read.bytes;
 
     // NOTE: no DNS-rebinding Host gate here anymore. It existed to protect the
     // token-INJECTED page; the token is no longer injected anywhere (the browser
@@ -890,6 +927,29 @@ fn handleRequest(stream: std.Io.net.Stream, client_key: u64) !void {
             const pp = urlDecode(getQueryParam(query, "path") orelse "", &dec_buf) orelse "";
             rs.handlePoster(stream, pp);
         }
+        return;
+    }
+
+    // Browser pairing is the other unauthenticated data route: it is how an
+    // extension obtains its token. Code-gated, loopback-only, and rate limited
+    // inside the handler (see remote_browser_api.handlePair).
+    if (std.mem.eql(u8, path, "/api/browser/pair")) {
+        const host = requestHeader(request, "host") catch null;
+        const origin = requestHeader(request, "origin") catch {
+            sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"malformed Origin header\"}");
+            return;
+        };
+        @import("remote_browser_api.zig").handlePair(
+            stream,
+            method,
+            requestBody(request),
+            host,
+            origin,
+            peerIsLoopback(stream.socket.address),
+            port,
+            client_key,
+            consumeAuthBudget,
+        );
         return;
     }
 
@@ -1029,6 +1089,17 @@ fn handleRequest(stream: std.Io.net.Stream, client_key: u64) !void {
         return;
     };
 
+    // A paired browser reaches only its allowlist. Checked here, before the
+    // /api/access, /api/scrape and handleApi branches, so no later route can be
+    // reached by accident; handleApi checks again.
+    if (principal == .browser) {
+        const rel = if (std.mem.startsWith(u8, path, "/api/")) path["/api".len..] else "";
+        if (!access_pure.browserRouteAllowed(rel, method)) {
+            sendForbidden(stream);
+            return;
+        }
+    }
+
     if (remote_limits.expensiveCost(path, query) > 0) {
         if (consumeExpensiveBudget(presented, principal, path, query)) |wait| {
             sendRateLimit(stream, wait);
@@ -1060,7 +1131,7 @@ fn handleRequest(stream: std.Io.net.Stream, client_key: u64) !void {
     }
 
     if (std.mem.startsWith(u8, path, "/api/")) {
-        handleApi(stream, path[4..], query, request, principal);
+        handleApi(stream, path[4..], query, request, principal, presented);
     } else {
         const resp = "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nNot Found";
         _ = io_g.streamWriteAll(stream, resp) catch {};
@@ -1093,6 +1164,10 @@ fn stashRemoteOpen(url: []const u8, kind: []const u8, title: []const u8, art: []
     const n = @min(url.len, slot.path.len);
     @memcpy(slot.path[0..n], url[0..n]);
     slot.path_len = n;
+    // The HTTP identity fields belong to browser-link entries only.
+    slot.referer_len = 0;
+    slot.origin_len = 0;
+    slot.user_agent_len = 0;
     const kn = @min(kind.len, slot.kind.len);
     @memcpy(slot.kind[0..kn], kind[0..kn]);
     slot.kind_len = kn;
@@ -1128,7 +1203,7 @@ fn handleOpenQuery(query: []const u8) void {
     }
 }
 
-fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8, request: []const u8, principal: access_pure.Principal) void {
+fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8, request: []const u8, principal: access_pure.Principal, presented: []const u8) void {
     // The POST body, for the routes that take credentials. credParam() reads it
     // ahead of the query string so a debrid key or a GitHub token can be sent
     // where it will not be logged as part of a URL.
@@ -1138,6 +1213,7 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
     var action_buf: [64]u8 = undefined;
     const action = credParam(body, query, "action", &action_buf) orelse "";
     if (!access_pure.allowsRoute(principal, api_path, method, action)) return sendForbidden(stream);
+    if (@import("remote_browser_api.zig").handle(stream, method, api_path, query, body, principal, presented)) return;
     if (@import("remote_transfer_api.zig").handle(stream, method, api_path, query)) return;
     if (@import("remote_library_api.zig").handle(stream, method, api_path, query)) return;
     if (@import("remote_collections_api.zig").handle(stream, method, api_path, query)) return;
@@ -1821,13 +1897,20 @@ fn principalForBearer(token: []const u8) ?access_pure.Principal {
     const auth_store = @import("auth_store.zig");
     if (auth_store.validSession(token))
         return if (auth_store.sessionIsAdmin(token)) .admin_session else .session;
+    // Last, and shape-checked first: only a token that looks like a paired
+    // browser's costs a database lookup.
+    if (@import("browser_link.zig").validToken(token) != null) return .browser;
     return null;
 }
 
 /// General API routes accept either caller class. Sensitive routes must use
-/// `principalForBearer` and check an explicit capability instead.
+/// `principalForBearer` and check an explicit capability instead. A paired
+/// browser is deliberately NOT general-purpose: it reaches its allowlist only
+/// (access_pure.browser_routes), so the media, stream and event routes that
+/// call this refuse it.
 fn isAuthorized(token: []const u8) bool {
-    return principalForBearer(token) != null;
+    const principal = principalForBearer(token) orelse return false;
+    return principal != .browser;
 }
 
 /// Bytes after the HTTP header terminator (the request body), or "".
@@ -1881,6 +1964,7 @@ fn consumeExpensiveBudget(bearer: []const u8, principal: access_pure.Principal, 
     var identity: [9]u8 = undefined;
     const key = switch (principal) {
         .machine => remote_limits.keyOf("machine-credential"),
+        .browser => remote_limits.keyOf(bearer),
         .session, .admin_session => blk: {
             const uid = @import("auth_store.zig").userIdForSession(bearer) orelse
                 break :blk remote_limits.keyOf(bearer);

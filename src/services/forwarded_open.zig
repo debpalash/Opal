@@ -3,12 +3,54 @@ const std = @import("std");
 const state = @import("../core/state.zig");
 const logs = @import("../core/logs.zig");
 
+fn setField(dst: []u8, len: *usize, src: []const u8) void {
+    const n = @min(src.len, dst.len);
+    @memcpy(dst[0..n], src[0..n]);
+    len.* = n;
+}
+
+/// Hand a stream a paired browser found to the owner thread: play it (replacing
+/// what is playing) or add it to the queue. Unlike `/api/open` this carries the
+/// HTTP identity the browser used, so the CDN sees the same Referer/Origin/UA.
+/// Strings must already be validated (browser_link_pure). False when the FIFO
+/// is full; the newest request is the one dropped, as for every other producer.
+pub fn pushBrowser(queue_only: bool, url: []const u8, title: []const u8, art: []const u8, referer: []const u8, origin: []const u8, user_agent: []const u8) bool {
+    if (url.len == 0) return false;
+    const player = @import("../player/player.zig");
+    if (!queue_only and !player.openTriggerArmed()) player.openTriggerNow();
+    state.app.remote_open_lock.lock();
+    defer state.app.remote_open_lock.unlock();
+    if (state.app.remote_open_count >= state.REMOTE_OPEN_QUEUE_CAP) {
+        logs.pushLog("warn", "open", "Remote open queue full — dropping newest request", false);
+        return false;
+    }
+    const slot = &state.app.remote_open_queue[(state.app.remote_open_head + state.app.remote_open_count) % state.REMOTE_OPEN_QUEUE_CAP];
+    setField(&slot.path, &slot.path_len, url);
+    setField(&slot.kind, &slot.kind_len, if (queue_only) "browser_queue" else "browser");
+    setField(&slot.title, &slot.title_len, title);
+    setField(&slot.art, &slot.art_len, art);
+    setField(&slot.referer, &slot.referer_len, referer);
+    setField(&slot.origin, &slot.origin_len, origin);
+    setField(&slot.user_agent, &slot.user_agent_len, user_agent);
+    slot.subtitle_len = 0;
+    state.app.remote_open_count += 1;
+    state.app.remote_open_ready.store(true, .release);
+    state.wakeUi();
+    return true;
+}
+
 /// Call under the player's owner boundary; snapshot the FIFO before dispatch.
 pub fn drain() void {
     var first = true;
     while (true) {
-        var fwd_buf: [2048]u8 = undefined;
+        var fwd_buf: [4096]u8 = undefined;
         var fwd_len: usize = 0;
+        var ref_buf: [2048]u8 = undefined;
+        var ref_len: usize = 0;
+        var origin_buf: [256]u8 = undefined;
+        var origin_len: usize = 0;
+        var ua_buf: [512]u8 = undefined;
+        var ua_len: usize = 0;
         var type_buf: [16]u8 = undefined;
         var type_len: usize = 0;
         var title_buf: [512]u8 = undefined;
@@ -31,6 +73,12 @@ pub fn drain() void {
                 @memcpy(art_buf[0..art_len], e.art[0..art_len]);
                 sub_len = e.subtitle_len;
                 @memcpy(sub_buf[0..sub_len], e.subtitle[0..sub_len]);
+                ref_len = e.referer_len;
+                @memcpy(ref_buf[0..ref_len], e.referer[0..ref_len]);
+                origin_len = e.origin_len;
+                @memcpy(origin_buf[0..origin_len], e.origin[0..origin_len]);
+                ua_len = e.user_agent_len;
+                @memcpy(ua_buf[0..ua_len], e.user_agent[0..ua_len]);
                 state.app.remote_open_head = (state.app.remote_open_head + 1) % state.REMOTE_OPEN_QUEUE_CAP;
                 state.app.remote_open_count -= 1;
                 state.app.remote_open_ready.store(state.app.remote_open_count > 0, .release);
@@ -45,6 +93,34 @@ pub fn drain() void {
         state.app.resume_prompt_active = false;
         const url = fwd_buf[0..fwd_len];
         const kind = type_buf[0..type_len];
+        // A paired browser's stream keeps its own HTTP identity, so it never
+        // takes the generic "first plays, the rest queue" path below.
+        if (std.mem.eql(u8, kind, "browser_queue")) {
+            const title = if (title_len > 0) title_buf[0..title_len] else url;
+            // The queue stores a bare URL (no headers) and holds under 2 KB.
+            @import("queue.zig").addToQueue(url, title, "browser");
+            logs.pushLog("info", "queue", "Queued from paired browser", false);
+            state.showToast("Queued in Opal");
+            continue;
+        }
+        if (std.mem.eql(u8, kind, "browser")) {
+            const player = @import("../player/player.zig");
+            var headers: [2]player.HttpHeader = undefined;
+            var header_count: usize = 0;
+            if (ref_len > 0) {
+                headers[header_count] = .{ .name = "Referer", .value = ref_buf[0..ref_len] };
+                header_count += 1;
+            }
+            if (origin_len > 0) {
+                headers[header_count] = .{ .name = "Origin", .value = origin_buf[0..origin_len] };
+                header_count += 1;
+            }
+            @import("browser.zig").loadContentDirectMetaHeaders(url, art_buf[0..art_len], title_buf[0..title_len], "", ua_buf[0..ua_len], headers[0..header_count]);
+            logs.pushLog("info", "open", "Playing stream from paired browser", false);
+            state.showToast("Playing in Opal");
+            first = false;
+            continue;
+        }
         if (!first) {
             const title = if (title_len > 0) title_buf[0..title_len] else url;
             @import("queue.zig").addToQueue(url, title, "file-open");
