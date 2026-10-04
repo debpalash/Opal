@@ -95,7 +95,7 @@ fn say(text: []const u8) void {
     @memcpy(message_buf[0..message_len], text[0..message_len]);
 }
 
-fn applyExample(e: view.Example) void {
+pub fn applyExample(e: view.Example) void {
     resetForm();
     setField(&name_buf, e.name);
     setField(&prompt_buf, e.prompt);
@@ -201,13 +201,21 @@ pub fn compactSegment(src: std.builtin.SourceLocation, options: []const []const 
     return clicked_index;
 }
 
-/// The Terminal | Tasks | Activity switch for the Agents toolbar. `activity_label`
-/// carries the count of proposals waiting ("Activity 1"). Returns the index clicked.
+/// The Overview | Terminal | Tasks | Activity switch for the Agents toolbar.
+/// `activity_label` carries the count of proposals waiting ("Activity 1").
+/// Returns the index clicked.
 pub fn tabSwitch(selected: usize, activity_label: []const u8) ?usize {
     // The toolbar is a horizontal box, where centring vertically is safe.
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0.5 });
     defer row.deinit();
-    return compactSegment(@src(), &.{ "Terminal", "Tasks", activity_label }, selected);
+    return compactSegment(@src(), &.{ "Overview", "Terminal", "Tasks", activity_label }, selected);
+}
+
+/// Open the Add form (blank), for links elsewhere that lead to "add a task".
+/// Nothing is created: the user still presses "Add task".
+pub fn openNewForm() void {
+    if (!form_ready) resetForm();
+    form_open = true;
 }
 
 fn entry(src: std.builtin.SourceLocation, buf: []u8, placeholder: []const u8, width: f32) void {

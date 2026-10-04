@@ -302,6 +302,18 @@ pub fn copyFields(field: []const u8, out: []FieldSnapshot) usize {
     return count;
 }
 
+/// How many installed sources define `field` (for "base": how many have an
+/// address the operator could repair). Counts only; copies nothing.
+pub fn countField(field: []const u8) usize {
+    mutex.lock();
+    defer mutex.unlock();
+    var count: usize = 0;
+    for (entries[0..entry_count]) |entry| {
+        if (std.mem.eql(u8, entry.field[0..entry.field_len], field)) count += 1;
+    }
+    return count;
+}
+
 /// True if ANY source plugin is installed at all. False is the fresh-install /
 /// post-reset state (Opal ships neutral): every torrent/comics/anime engine is
 /// inert, so searches "run" but can't return source hits — surface that in the

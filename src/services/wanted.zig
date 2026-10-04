@@ -316,11 +316,14 @@ pub const Row = struct {
     /// Alternate titles the operator found, newline separated (see setExtraTitles).
     extra_titles: [480]u8 = std.mem.zeroes([480]u8),
     extra_titles_len: usize = 0,
+    added_ms: i64 = 0,
+    /// 0 until the first search.
+    last_check_ms: i64 = 0,
 };
 
 pub fn snapshot(out: []Row) usize {
     if (out.len == 0 or !ensureTable()) return 0;
-    const stmt = db.prepare("SELECT id, kind, title, year, season, episode, status, attempts, next_check_ms, picked, extra_titles FROM wanted_items ORDER BY id DESC LIMIT ?1") orelse return 0;
+    const stmt = db.prepare("SELECT id, kind, title, year, season, episode, status, attempts, next_check_ms, picked, extra_titles, added_ms, last_check_ms FROM wanted_items ORDER BY id DESC LIMIT ?1") orelse return 0;
     defer db.finalize(stmt);
     db.bindInt(stmt, 1, @intCast(@min(out.len, 200)));
     var n: usize = 0;
@@ -343,6 +346,8 @@ pub fn snapshot(out: []Row) usize {
         const extra = db.columnText(stmt, 10) orelse "";
         r.extra_titles_len = @min(extra.len, r.extra_titles.len);
         @memcpy(r.extra_titles[0..r.extra_titles_len], extra[0..r.extra_titles_len]);
+        r.added_ms = db.columnInt64(stmt, 11);
+        r.last_check_ms = db.columnInt64(stmt, 12);
         out[n] = r;
         n += 1;
     }

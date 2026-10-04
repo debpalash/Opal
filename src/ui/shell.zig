@@ -840,6 +840,8 @@ fn renderSidebar(layout: sidebar_layout.Layout) void {
         .padding = dvui.Rect.all(4),
     });
     defer scroll.deinit();
+    // Agents is the front door: automations and personalised content first.
+    if (sidebarButton("Agents", icons.tvg.lucide.bot, state.app.router.current == .agents, layout.expanded, 8600)) state.app.router.navigate(.agents);
     const routes = [_]Route{ .home, .search, .watching };
     const labels = [_][]const u8{ "Home", "All content", "Watching" };
     const glyphs = [_][]const u8{ icons.tvg.lucide.house, icons.tvg.lucide.search, icons.tvg.lucide.tv };
@@ -859,7 +861,6 @@ fn renderSidebar(layout: sidebar_layout.Layout) void {
     for (manage_routes, manage_tabs, 0..) |route, tab, i| {
         if (sidebarButton(tabLabel(tab), iconForTab(tab), state.app.router.current == route, layout.expanded, 9101 + i)) state.app.router.navigate(route);
     }
-    if (sidebarButton("Agents", icons.tvg.lucide.terminal, state.app.router.current == .agents, layout.expanded, 9150)) state.app.router.navigate(.agents);
 }
 fn sidebarHeading(label: []const u8, expanded: bool, id: usize) void {
     if (expanded) {
@@ -974,8 +975,8 @@ fn browseSourceSelect(dense: bool) ?state.DrawerTab {
             .corner_radius = theme.dims.rad_lg,
         });
         defer choices.deinit();
-        const routes = [_]Route{ .home, .search, .watching };
-        const labels = [_][]const u8{ "Home", "All content", "Watching" };
+        const routes = [_]Route{ .agents, .home, .search, .watching };
+        const labels = [_][]const u8{ "Agents", "Home", "All content", "Watching" };
         for (routes, labels, 0..) |route, label, i| {
             if (dvui.menuItemLabel(@src(), label, .{}, .{
                 .id_extra = 8050 + i,
@@ -1022,7 +1023,7 @@ fn navigationMenuItem(selected: state.DrawerTab, dense: bool) ?dvui.Rect.Natural
     const icon = if (route == .browse) iconForTab(selected) else switch (route) {
         .home => icons.tvg.lucide.house,
         .watching => icons.tvg.lucide.tv,
-        .agents => icons.tvg.lucide.terminal,
+        .agents => icons.tvg.lucide.bot,
         else => icons.tvg.lucide.globe,
     };
     var item = dvui.menuItem(@src(), .{ .submenu = true }, .{

@@ -275,8 +275,21 @@ pub fn repairStatus(buf: []u8, operator_on: bool, c: RepairCounts) []const u8 {
     }
     if (c.sources == 0) return "On. No sources installed to watch.";
     if (c.proposed > 0) return std.fmt.bufPrint(buf, "Watching {d} {s}. {d} new {s} to review", .{ c.sources, if (c.sources == 1) "source" else "sources", c.proposed, if (c.proposed == 1) "address" else "addresses" }) catch "";
-    if (c.applied > 0) return std.fmt.bufPrint(buf, "Watching {d} {s}. {d} {s} repaired so far", .{ c.sources, if (c.sources == 1) "source" else "sources", c.applied, if (c.applied == 1) "address" else "addresses" }) catch "";
+    if (c.applied > 0) return std.fmt.bufPrint(buf, "Watching {d} {s}. {d} {s} repaired recently", .{ c.sources, if (c.sources == 1) "source" else "sources", c.applied, if (c.applied == 1) "address" else "addresses" }) catch "";
     return std.fmt.bufPrint(buf, "Watching {d} {s}. Nothing needed fixing", .{ c.sources, if (c.sources == 1) "source" else "sources" }) catch "";
+}
+
+/// "3 of 5 automations on".
+pub fn onSummary(buf: []u8, on: usize, total: usize) []const u8 {
+    return std.fmt.bufPrint(buf, "{d} of {d} automations on", .{ on, total }) catch "";
+}
+
+/// "Dune (2021)", "Severance S02E03", or just the title.
+pub fn wantedLabel(buf: []u8, kind: wanted.Kind, title: []const u8, year: u16, season: u16, episode: u16) []const u8 {
+    return switch (kind) {
+        .episode => std.fmt.bufPrint(buf, "{s} S{d:0>2}E{d:0>2}", .{ title, season, episode }) catch title,
+        .movie => if (year > 0) std.fmt.bufPrint(buf, "{s} ({d})", .{ title, year }) catch title else title,
+    };
 }
 
 /// The one line shown under a switch that spends the user's agent credit.
@@ -374,6 +387,14 @@ test "wanted status line" {
     try testing.expectEqualStrings("1 done, 2 paused", wantedStatus(&b, c));
 }
 
+test "summary and wanted labels" {
+    var b: [96]u8 = undefined;
+    try testing.expectEqualStrings("2 of 5 automations on", onSummary(&b, 2, 5));
+    try testing.expectEqualStrings("Dune (2021)", wantedLabel(&b, .movie, "Dune", 2021, 0, 0));
+    try testing.expectEqualStrings("Dune", wantedLabel(&b, .movie, "Dune", 0, 0, 0));
+    try testing.expectEqualStrings("Severance S02E03", wantedLabel(&b, .episode, "Severance", 0, 2, 3));
+}
+
 test "follow and subtitle status" {
     var b: [96]u8 = undefined;
     try testing.expectEqualStrings("On. 3 tracked shows", followStatus(&b, true, 3));
@@ -402,7 +423,7 @@ test "operator and repair status lines" {
     try testing.expectEqualStrings("On. 12\u{a2} of 100\u{a2} today, 1 proposal waiting", operatorStatus(&b, true, 12, 100, 1));
     try testing.expectEqualStrings("Needs the background operator.", repairStatus(&b, false, .{ .sources = 4 }));
     try testing.expectEqualStrings("Watching 4 sources. Nothing needed fixing", repairStatus(&b, true, .{ .sources = 4 }));
-    try testing.expectEqualStrings("Watching 1 source. 2 addresses repaired so far", repairStatus(&b, true, .{ .sources = 1, .applied = 2 }));
+    try testing.expectEqualStrings("Watching 1 source. 2 addresses repaired recently", repairStatus(&b, true, .{ .sources = 1, .applied = 2 }));
     try testing.expectEqualStrings("Watching 4 sources. 1 new address to review", repairStatus(&b, true, .{ .sources = 4, .proposed = 1, .applied = 9 }));
     try testing.expect(std.mem.indexOf(u8, repairStatus(&b, true, .{}), "No sources") != null);
 }

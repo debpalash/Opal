@@ -201,7 +201,7 @@ fn kickTrendingFetch() void {
 /// "Coming up" — poster cards (matching Trending tonight) for shows the user
 /// watches: poster, show name, then an air-date countdown or an EZTV
 /// "available · N seeds" badge. Click opens the show. Returns true if rendered.
-fn renderComingUpRail(card_w: f32) bool {
+pub fn renderComingUpRail(card_w: f32) bool {
     const cal = @import("../services/tv_calendar.zig");
     var upcoming: [12]cal.Entry = undefined;
     const calendar = cal.snapshotCopy(&upcoming);
@@ -961,7 +961,7 @@ fn openLibItem(item: *const library_pure.LibraryItem) void {
 
 /// Returns true if the rail rendered (has favorites). Cross-vertical — surfaces
 /// IPTV/music/etc. favorites the TMDB rails can't.
-fn renderLibraryContinueRail(card_w: f32) bool {
+pub fn renderLibraryContinueRail(card_w: f32) bool {
     var items: [24]library_pure.LibraryItem = undefined;
     const n = library_store.loadContinue(items[0..]);
     const hidden = library_store.hiddenContinueCount();

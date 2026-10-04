@@ -21,6 +21,7 @@ const launch_pure = @import("../services/agent_launch_pure.zig");
 const tasks_ui = @import("agent_tasks_ui.zig");
 const operator_ui = @import("operator_ui.zig");
 const operator_view = @import("../services/operator_view_pure.zig");
+const overview = @import("agents_overview.zig");
 
 const tabs = @import("../terminal/tabs_pure.zig");
 
@@ -73,7 +74,8 @@ var sb_grab: f32 = 0;
 var sb_offset: i64 = 0;
 const SB_WIDTH: f32 = 6;
 const SB_HIT: f32 = 14;
-var view: enum { terminal, tasks, activity } = .terminal;
+// Order matches the labels in `tasks_ui.tabSwitch`.
+var view: enum { overview, terminal, tasks, activity } = .overview;
 var note_buf: [128]u8 = undefined;
 var note_len: usize = 0;
 
@@ -241,9 +243,18 @@ pub fn render() void {
     });
     defer page.deinit();
 
+    // A link on the Overview asked for another tab.
+    if (overview.takeGoto()) |g| view = switch (g) {
+        .tasks => .tasks,
+        .activity => .activity,
+    };
     renderToolbar();
 
     switch (view) {
+        .overview => {
+            overview.render();
+            return;
+        },
         .tasks => {
             tasks_ui.render();
             return;

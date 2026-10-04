@@ -69,7 +69,7 @@ fn draw() !void {
         var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 } });
         defer bar.deinit();
         var buf: [24]u8 = undefined;
-        _ = tasks_ui.tabSwitch(2, @import("../services/operator_view_pure.zig").tabLabel(&buf, if (current == .populated) 2 else 0));
+        _ = tasks_ui.tabSwitch(3, @import("../services/operator_view_pure.zig").tabLabel(&buf, if (current == .populated) 2 else 0));
     }
     ui.render();
 }

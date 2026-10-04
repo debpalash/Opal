@@ -24,6 +24,9 @@ fn actToggleTheme() void {
     theme.cycleTheme();
     state.showToast(theme.presetName(theme.active_preset));
 }
+fn actAgents() void {
+    state.app.router.navigate(.agents);
+}
 fn actShortcuts() void {
     state.app.cheatsheet_open = true;
 }
@@ -31,6 +34,7 @@ fn actShortcuts() void {
 fn commands() []const Command {
     const C = struct {
         const list = [_]Command{
+            .{ .label = "Go: Agents", .icon = icons.tvg.lucide.@"bot", .action = actAgents },
             .{ .label = "Go: Search", .icon = icons.tvg.lucide.@"search", .tab = .Search },
             .{ .label = "Go: Downloads", .icon = icons.tvg.lucide.@"download", .tab = .Downloads },
             .{ .label = "Go: Queue", .icon = icons.tvg.lucide.@"list", .tab = .Queue },

@@ -80,6 +80,21 @@ fn statusColor(s: pure.Status) dvui.Color {
     };
 }
 
+/// The "Add a title" box (entry, Add button, last result line), shared with the
+/// Agents Overview so both add through the same parser and `wanted.add`.
+/// `width` is the entry's width in logical pixels.
+pub fn renderAddBox(width: f32) void {
+    {
+        var add_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = 4, .w = 0, .h = 4 } });
+        defer add_row.deinit();
+        const entered = components.toolbarSearch(@src(), &input_buf, "Movie or show: Dune 2021, Severance S02E03", width);
+        if (components.toolbarGo(@src(), "Add") or entered) submit();
+    }
+    if (message_len > 0) {
+        _ = dvui.label(@src(), "{s}", .{message_buf[0..message_len]}, .{ .color_text = theme.colors.text_secondary });
+    }
+}
+
 /// Draw the section. Safe to call every frame.
 pub fn render() void {
     refresh();
@@ -105,15 +120,7 @@ pub fn render() void {
     const title = std.fmt.bufPrint(&head, "Wanted ({d}){s}", .{ row_count, if (wanted.isSearching()) "  searching…" else "" }) catch "Wanted";
     _ = dvui.label(@src(), "{s}", .{title}, .{ .color_text = theme.colors.text_primary });
 
-    {
-        var add_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = 4, .w = 0, .h = 4 } });
-        defer add_row.deinit();
-        const entered = components.toolbarSearch(@src(), &input_buf, "Movie or show: Dune 2021, Severance S02E03", 360);
-        if (components.toolbarGo(@src(), "Add") or entered) submit();
-    }
-    if (message_len > 0) {
-        _ = dvui.label(@src(), "{s}", .{message_buf[0..message_len]}, .{ .color_text = theme.colors.text_secondary });
-    }
+    renderAddBox(360);
 
     var i: usize = 0;
     while (i < row_count) : (i += 1) {
