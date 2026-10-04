@@ -29,10 +29,16 @@ var term_id: ?dvui.Id = null;
 /// Set when a session starts: the next frame hands the terminal keyboard focus.
 var want_focus: bool = false;
 /// What the left button is doing since it went down inside the terminal.
-const Drag = enum { none, select, report };
+const Drag = enum { none, select, report, scrollbar };
 var drag: Drag = .none;
 var pressed_button: ?pointer.Button = null;
 var was_focused: bool = false;
+/// While dragging the scrollbar: where in the thumb it was grabbed, and the
+/// offset last asked for (the snapshot lags a frame behind).
+var sb_grab: f32 = 0;
+var sb_offset: i64 = 0;
+const SB_WIDTH: f32 = 6;
+const SB_HIT: f32 = 14;
 var launched: ?Kind = null;
 var note_buf: [128]u8 = undefined;
 var note_len: usize = 0;
@@ -291,6 +297,7 @@ fn renderTerminal(s: *Session) void {
         const prev_clip = dvui.clip(rs.r);
         defer dvui.clipSet(prev_clip);
         drawGrid(rs, cw, ch, focused);
+        drawScrollbar(rs.r, rs.s, drag == .scrollbar);
     }
     if (focused) drawFocusRing(wd.borderRectScale());
 }
@@ -432,6 +439,33 @@ fn drawCursor(rs: dvui.RectScale, cw: f32, ch: f32, focused: bool) void {
 
 // ── Input ──
 
+fn scrollThumb(content: dvui.Rect.Physical, scale: f32) ?pointer.Thumb {
+    return pointer.thumb(snap.scroll_total, snap.scroll_offset, snap.scroll_len, content.h, 24 * scale);
+}
+
+fn inScrollbarZone(content: dvui.Rect.Physical, scale: f32, p: dvui.Point.Physical) bool {
+    return p.x >= content.x + content.w - SB_HIT * scale and p.x <= content.x + content.w and p.y >= content.y and p.y <= content.y + content.h;
+}
+
+/// Scroll so the thumb's grabbed point follows the pointer at `py`.
+fn scrollbarTo(s: *Session, content: dvui.Rect.Physical, scale: f32, py: f32) void {
+    const th = scrollThumb(content, scale) orelse return;
+    const target: i64 = @intCast(pointer.offsetForThumbTop(snap.scroll_total, snap.scroll_len, content.h, th.h, py - content.y - sb_grab));
+    if (target == sb_offset) return;
+    s.scroll(@intCast(target - sb_offset));
+    sb_offset = target;
+}
+
+fn drawScrollbar(content: dvui.Rect.Physical, scale: f32, active: bool) void {
+    const th = scrollThumb(content, scale) orelse return;
+    const hover = inScrollbarZone(content, scale, dvui.currentWindow().mouse_pt);
+    const w = SB_WIDTH * scale;
+    const c = toColor(snap.default_fg);
+    const alpha: u8 = if (active) 170 else if (hover) 120 else 60;
+    const r = dvui.Rect.Physical{ .x = content.x + content.w - w - 2 * scale, .y = content.y + th.y, .w = w, .h = th.h };
+    r.fill(dvui.Rect.Physical.all(w / 2), .{ .color = .{ .r = c.r, .g = c.g, .b = c.b, .a = alpha } });
+}
+
 fn mapButton(b: dvui.enums.Button) ?pointer.Button {
     return switch (b) {
         .left => .left,
@@ -473,6 +507,20 @@ fn handleEvents(s: *Session, wd: *dvui.WidgetData, content: dvui.Rect.Physical, 
                     },
                     .press => {
                         const btn = mapButton(me.button) orelse continue;
+                        const scale = wd.contentRectScale().s;
+                        if (btn == .left and inScrollbarZone(content, scale, me.p)) {
+                            if (scrollThumb(content, scale)) |th| {
+                                e.handle(@src(), wd);
+                                dvui.captureMouse(wd, e.num);
+                                drag = .scrollbar;
+                                const top = content.y + th.y;
+                                sb_grab = if (me.p.y >= top and me.p.y <= top + th.h) me.p.y - top else th.h / 2;
+                                sb_offset = @intCast(snap.scroll_offset);
+                                scrollbarTo(s, content, scale, me.p.y);
+                                state.wakeUi();
+                                continue;
+                            }
+                        }
                         const report = !bypass and s.modes().mouse_tracking;
                         if (!report and btn != .left) continue;
                         e.handle(@src(), wd);
@@ -500,6 +548,11 @@ fn handleEvents(s: *Session, wd: *dvui.WidgetData, content: dvui.Rect.Physical, 
                             e.handle(@src(), wd);
                             _ = s.mouseReport(.motion, pressed_button, mods, hit, true);
                         },
+                        .scrollbar => {
+                            e.handle(@src(), wd);
+                            scrollbarTo(s, content, wd.contentRectScale().s, me.p.y);
+                            state.wakeUi();
+                        },
                         .none => if (!bypass and hit.inside and s.modes().mouse_tracking) {
                             _ = s.mouseReport(.motion, null, mods, hit, false);
                         },
@@ -512,6 +565,11 @@ fn handleEvents(s: *Session, wd: *dvui.WidgetData, content: dvui.Rect.Physical, 
                             drag = .none;
                             pressed_button = null;
                             _ = s.mouseReport(.release, btn, mods, hit, false);
+                        } else if (drag == .scrollbar and btn == .left) {
+                            e.handle(@src(), wd);
+                            dvui.captureMouse(null, e.num);
+                            drag = .none;
+                            state.wakeUi();
                         } else if (drag == .select and btn == .left) {
                             e.handle(@src(), wd);
                             dvui.captureMouse(null, e.num);
