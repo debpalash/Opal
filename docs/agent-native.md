@@ -117,9 +117,13 @@ Branch `v2/agent-os` is stacked on PR #119 (browse, episode redesign, remote har
 | 1. Registry | Done for the observe, playback, download, queue, library and wanted surface: more than 70 tools with typed parameters, tiers and API bindings (`src/services/ops_pure.zig`). OpenAPI is generated from it (`docs/openapi.json`, `opal-mcp --openapi`) and checked for drift in `zig build test-ops`. The in-app copilot keeps its own compact tool list on purpose: a small local model cannot carry 70-plus schemas. |
 | 2. MCP server | Done: `opal-mcp` (stdio), tools and resources, policy ceiling, destructive confirm, URL guard, JSON audit log, shipped in every package. Verified live. See [mcp.md](mcp.md). |
 | 3. Skills | `skills/opal-media` (watch, control, downloads, wanted list), installed into the agent workspace. |
-| 4. Terminal | libghostty-vt today exposes only key, OSC, SGR and paste APIs, not a screen-state terminal, so an embedded terminal is deferred. Shipped instead: **Settings → Agent Access** launches Claude Code, Codex or Gemini CLI in the user's own terminal inside a pre-wired workspace (Linux). |
+| 4. Terminal | Done on Linux/macOS: the **Agents** page runs Claude Code, Codex, Gemini CLI or a shell on a pty inside Opal, parsed by libghostty-vt and drawn with dvui (below). **Settings → Agent Access** still launches them in the user's own terminal. Windows (ConPTY) is not wired up. |
 | 5. Extension loop | Not started. |
 | 6. Autonomy | Wanted list engine done (below). Scheduled agent tasks done (below). |
+
+### Embedded terminal
+
+libghostty-vt on ghostty `main` now exposes a terminal and render-state C API (the 0.1.0 package we first tried did not), and `main` requires the Zig version Opal already uses, so Opal depends on a pinned ghostty commit (`build.zig.zon`) and links its static `ghostty-vt-static` (ReleaseFast, SIMD off). `src/terminal/pty.zig` wraps `forkpty` (the child only calls `execve`; arguments and environment are built before the fork), `session.zig` runs one reader thread that feeds the pty into the terminal under a mutex and flattens the render state into plain cells for the UI, and `keymap.zig` maps dvui keys onto the libghostty key encoder (cursor-key mode, kitty protocol and so on; plain typing is left to the text event so nothing is sent twice). `src/ui/agent_terminal.zig` is the page: it starts the agent in the same workspace as the launcher, draws backgrounds and text runs per row (non-ASCII cell by cell so columns stay put) in the bundled Hack font, and takes over the keyboard while focused (`input.zig` skips Opal's shortcuts then; click outside to get them back). Verified on screen with a real shell: colours, bold, underline, inverse, prompt. Pty, snapshot and key encoding have unit tests (`zig build test-terminal`).
 
 ### Scheduled agent tasks
 
@@ -129,7 +133,7 @@ Branch `v2/agent-os` is stacked on PR #119 (browse, episode redesign, remote har
 
 `src/services/wanted.zig` plus `wanted_pure.zig` (scoring, backoff). Add a movie or episode once; Opal searches on a private channel that never disturbs on-screen results, filters cams, screeners, fan edits and trailers, scores by quality, seeders and size, starts the best torrent on the owner thread, retries with backoff (30 min doubling to a day) and marks the item fulfilled when the download completes. "Follow tracked shows" queues the newest aired episode of each tracked show. Verified live against EZTV. Exposed as `/api/wanted/*` and `wanted_*` tools, and as a Wanted section at the top of the Downloads page (add by typing `Dune 2021` or `Severance S02E03`; find, pause, resume, remove).
 
-Next up: scheduled agent tasks, plugin scaffolding tools, OpenAPI from the registry, and an embedded terminal once libghostty exposes a terminal API.
+Next up: more discovery and library tools, and the Windows terminal.
 
 ## Phases
 
