@@ -2397,6 +2397,8 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
             process.requestStop();
             break;
         }
+        // Per-source health reports share the pipe with the result rows.
+        if (@import("source_request.zig").noteHealthLine(line)) continue;
         // Keep consuming the pipe to EOF after the UI has enough rows; this
         // lets nova2 wind down cleanly while process.finish owns final reaping.
         if (found >= 25 or line.len < 10) continue;
@@ -2514,13 +2516,21 @@ fn resolveYts(query_buf: [256]u8, qlen: usize) void {
 
     var buf: [64 * 1024]u8 = undefined;
     @import("../core/rate_limit.zig").acquire("yts", 1.0);
+    var yts_status: ?std.http.Status = null;
+    const yts_started = io_glob.monotonicMilliTimestamp();
     const body = @import("../core/http.zig").fetch(url, &buf, .{
         .timeout_secs = 6,
         .user_agent = @import("../core/app_meta.zig").user_agent,
+        .status_out = &yts_status,
     }) orelse {
+        // Counts toward the same failure streak the operator watches (only when
+        // the installed source has a `base` to repair).
+        const failed = @import("source_request.zig").fetchedOutcome(false, yts_status, yts_started, 6, null);
+        @import("source_request.zig").noteIndex("yts", failed.failure, failed.status);
         noteWorkerOutcome(.transport_failed);
         return;
     };
+    @import("source_request.zig").noteIndex("yts", .none, 200);
     const n = body.len;
 
     if (n < 50) {

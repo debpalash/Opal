@@ -73,7 +73,45 @@ fn complete(id: []const u8, token: u64, result: fetch.FetchResult, cached: bool,
 /// when the streak is long enough, ask the background operator where it moved.
 fn noteOutcome(id: []const u8, base: []const u8, result: fetch.FetchResult) void {
     const failure = std.meta.stringToEnum(repair.Failure, @tagName(result.failure)) orelse return;
-    const outcome = repair.classify(failure, result.status);
+    noteRaw(id, base, failure, result.status);
+}
+
+/// Same streak, for index fetchers that do not go through `request` (the Python
+/// torrent engines, core/mirrors.zig, the YTS API). The base address is read
+/// from the installed source's configuration, so a source that was never
+/// configured (or has no `base`) is never counted. Thresholds, cancellation,
+/// offline and rate-limit handling are `operator_endpoint_pure`'s, unchanged.
+pub fn noteIndex(id: []const u8, failure: repair.Failure, status: u16) void {
+    var base_buf: [512]u8 = undefined;
+    const base = config.copyValue(id, "base", &base_buf) orelse return;
+    if (base.len == 0) return;
+    noteRaw(id, base, failure, status);
+}
+
+/// A line from the Python torrent engines' stdout. True when it was a health
+/// report (consumed here); false for an ordinary result row.
+pub fn noteHealthLine(line: []const u8) bool {
+    if (!repair.isHealthLine(line)) return false;
+    if (repair.parseHealthLine(line)) |h| noteIndex(h.id, h.failure, h.status);
+    return true;
+}
+
+/// Classify one finished `core/http.zig` GET (which only returns a body or
+/// null, plus an optional status) for `noteIndex`. Quitting or a superseded
+/// search is a cancellation; no status after the timeout is a timeout.
+pub fn fetchedOutcome(got_body: bool, status: ?std.http.Status, started_ms: i64, timeout_secs: u8, epoch: ?@import("../core/bounded_process.zig").CancelEpoch) repair.Fetched {
+    const tripped = if (epoch) |e| switch (e) {
+        .epoch32 => |t| t.value.load(.acquire) != t.expected,
+        .epoch64 => |t| t.value.load(.acquire) != t.expected,
+    } else false;
+    const gone = tripped or @import("../core/workers.zig").isQuitting();
+    const budget_ms = @as(i64, @import("../core/http.zig").effectiveTimeoutSecs(timeout_secs)) * 1000;
+    const timed_out = io.monotonicMilliTimestamp() - started_ms + 250 >= budget_ms;
+    return repair.fetchOutcome(got_body, if (status) |st| @intFromEnum(st) else 0, gone, timed_out);
+}
+
+fn noteRaw(id: []const u8, base: []const u8, failure: repair.Failure, status: u16) void {
+    const outcome = repair.classify(failure, status);
     if (outcome == .ignore) return;
     const now = io.monotonicMilliTimestamp();
     var ask: ?repair.Streak = null;
@@ -82,7 +120,7 @@ fn noteOutcome(id: []const u8, base: []const u8, result: fetch.FetchResult) void
         defer mutex.unlock();
         const record = recordLocked(id) orelse return;
         if (outcome == .success) net_ok_ms = now;
-        ask = repair.record(&record.streak, outcome, failure, result.status, now, net_ok_ms);
+        ask = repair.record(&record.streak, outcome, failure, status, now, net_ok_ms);
     }
     if (ask) |streak| @import("operator_endpoint.zig").requestRepair(id, base, streak);
 }

@@ -84,6 +84,62 @@ fn asks(s: *Streak, outcome: Outcome, failure: Failure, status: u16, now_ms: i64
     return record(s, outcome, failure, status, now_ms, net_ok_ms) != null;
 }
 
+// ── Reports from index fetchers that are not reliable_fetch ─────────────
+
+/// What one finished HTTP GET says about a source, for fetchers that only
+/// return a body or null (core/http.zig) plus an optional status. Cancellation
+/// and shutdown say nothing about the address; a body-less answer with a 2xx or
+/// 3xx status is a local problem (oversized, broken stream) and is ignored by
+/// `classify`; no status at all is a connection failure or a timeout.
+pub const Fetched = struct { failure: Failure, status: u16 };
+
+pub fn fetchOutcome(got_body: bool, status: u16, cancelled: bool, timed_out: bool) Fetched {
+    if (cancelled) return .{ .failure = .cancelled, .status = 0 };
+    if (got_body) return .{ .failure = .none, .status = if (status == 0) 200 else status };
+    if (status == 0) return .{ .failure = if (timed_out) .timed_out else .transport, .status = 0 };
+    if (status >= 400) return .{ .failure = .none, .status = status };
+    return .{ .failure = .malformed_response, .status = status };
+}
+
+/// One line a Python index engine prints on stdout next to its result rows (they
+/// have no `|`, so the row parsers skip them):
+///   #opal-health<TAB><source id><TAB>ok|http|transport|timeout<TAB><status>
+pub const HEALTH_PREFIX = "#opal-health\t";
+
+pub const Health = struct { id: []const u8, failure: Failure, status: u16 };
+
+pub fn isHealthLine(line: []const u8) bool {
+    return std.mem.startsWith(u8, line, HEALTH_PREFIX);
+}
+
+/// The same shape `source_config_pure.validId` accepts (kept local so this file
+/// stays importable on its own): a file-name stem of at most 32 bytes.
+fn plainId(id: []const u8) bool {
+    if (id.len == 0 or id.len > 32) return false;
+    for (id) |ch| {
+        if (ch == '/' or ch == '\\' or ch == '.' or ch <= 0x20 or ch == 0x7f) return false;
+    }
+    return true;
+}
+
+pub fn parseHealthLine(line_raw: []const u8) ?Health {
+    const line = std.mem.trimEnd(u8, line_raw, "\r");
+    if (!isHealthLine(line)) return null;
+    var it = std.mem.splitScalar(u8, line[HEALTH_PREFIX.len..], '\t');
+    const id = it.next() orelse return null;
+    const kind = it.next() orelse return null;
+    const status_text = it.next() orelse return null;
+    if (it.next() != null) return null;
+    if (!plainId(id)) return null;
+    const status = std.fmt.parseInt(u16, status_text, 10) catch return null;
+    if (std.mem.eql(u8, kind, "transport")) return .{ .id = id, .failure = .transport, .status = 0 };
+    if (std.mem.eql(u8, kind, "timeout")) return .{ .id = id, .failure = .timed_out, .status = 0 };
+    if (std.mem.eql(u8, kind, "ok")) return .{ .id = id, .failure = .none, .status = if (status < 200 or status >= 400) 200 else status };
+    if (status < 100 or status > 599) return null;
+    if (std.mem.eql(u8, kind, "http")) return .{ .id = id, .failure = .none, .status = status };
+    return null;
+}
+
 // ── Context for the agent ───────────────────────────────────────────────
 
 /// Scheme and host (and an explicit port) of `url`; credentials, path, query and
@@ -392,6 +448,76 @@ test "the context built from a config with secrets does not contain them" {
     try T.expect(std.mem.indexOf(u8, ctx, "torrent index") != null);
     try T.expect(std.mem.indexOf(u8, ctx, "HTTP status 503") != null);
     try T.expect(std.mem.indexOf(u8, ctx, "7 minutes") != null);
+}
+
+test "fetchOutcome: cancellation is ignored, body is success, errors count" {
+    try T.expectEqual(Outcome.ignore, classify(fetchOutcome(false, 0, true, false).failure, 0));
+    try T.expectEqual(Outcome.ignore, classify(fetchOutcome(true, 0, true, false).failure, 200));
+    const ok = fetchOutcome(true, 0, false, false);
+    try T.expectEqual(Outcome.success, classify(ok.failure, ok.status));
+    const dead = fetchOutcome(false, 0, false, false);
+    try T.expectEqual(Failure.transport, dead.failure);
+    try T.expectEqual(Outcome.failure, classify(dead.failure, dead.status));
+    try T.expectEqual(Failure.timed_out, fetchOutcome(false, 0, false, true).failure);
+    const gone = fetchOutcome(false, 404, false, false);
+    try T.expectEqual(Outcome.failure, classify(gone.failure, gone.status));
+    const limited = fetchOutcome(false, 429, false, false);
+    try T.expectEqual(Outcome.ignore, classify(limited.failure, limited.status));
+    // A 200 whose body could not be read is a local problem, not a dead address.
+    const broken = fetchOutcome(false, 200, false, false);
+    try T.expectEqual(Outcome.ignore, classify(broken.failure, broken.status));
+    // A redirect chain that ran out is not evidence either.
+    const loop = fetchOutcome(false, 302, false, false);
+    try T.expectEqual(Outcome.ignore, classify(loop.failure, loop.status));
+}
+
+test "health lines from index engines parse strictly" {
+    const dead = parseHealthLine("#opal-health\tone337x\ttransport\t0").?;
+    try T.expectEqualStrings("one337x", dead.id);
+    try T.expectEqual(Outcome.failure, classify(dead.failure, dead.status));
+    const slow = parseHealthLine("#opal-health\tapibay\ttimeout\t0\r").?;
+    try T.expectEqual(Failure.timed_out, slow.failure);
+    const http = parseHealthLine("#opal-health\tnyaa\thttp\t503").?;
+    try T.expectEqual(@as(u16, 503), http.status);
+    try T.expectEqual(Outcome.failure, classify(http.failure, http.status));
+    const ok = parseHealthLine("#opal-health\tnyaa\tok\t200").?;
+    try T.expectEqual(Outcome.success, classify(ok.failure, ok.status));
+    const bare = parseHealthLine("#opal-health\tx\tok\t0").?;
+    try T.expectEqual(Outcome.success, classify(bare.failure, bare.status));
+    // Rate limiting parses but is ignored by classify.
+    const limited = parseHealthLine("#opal-health\tnyaa\thttp\t429").?;
+    try T.expectEqual(Outcome.ignore, classify(limited.failure, limited.status));
+    // Malformed lines and rows are rejected; a real result row is never a health line.
+    try T.expect(parseHealthLine("magnet:?xt=urn:btih:abc|Name|1|2|3|https://x.example") == null);
+    try T.expect(parseHealthLine("#opal-health\t\tok\t200") == null);
+    try T.expect(parseHealthLine("#opal-health\t../etc\tok\t200") == null);
+    try T.expect(parseHealthLine("#opal-health\tx\tweird\t200") == null);
+    try T.expect(parseHealthLine("#opal-health\tx\thttp\tabc") == null);
+    try T.expect(parseHealthLine("#opal-health\tx\thttp\t99") == null);
+    try T.expect(parseHealthLine("#opal-health\tx\thttp\t503\textra") == null);
+    try T.expect(parseHealthLine("#opal-health\tx\thttp") == null);
+    try T.expect(isHealthLine("#opal-health\tx") and !isHealthLine("# opal-health"));
+}
+
+test "a torrent index config with a token never reaches the context" {
+    // The shape of a Torznab-style index: key in the config and in the base path.
+    const fields = [_]Field{
+        .{ .name = "base", .value = "http://jackett.lan:9117/api/v2.0/indexers/all/results/torznab/KEY-IN-PATH?apikey=URLKEY" },
+        .{ .name = "apikey", .value = "INDEX-API-KEY" },
+        .{ .name = "token", .value = "INDEX-TOKEN" },
+        .{ .name = "cookie", .value = "cf_clearance=CLEARANCE" },
+        .{ .name = "indexer", .value = "private-tracker-name" },
+        .{ .name = "mirrors", .value = "https://m.example/MIRRORKEY" },
+    };
+    const report = parseHealthLine("#opal-health\ttorznab\thttp\t502").?;
+    var buf: [1024]u8 = undefined;
+    const ctx = buildContext(&buf, .{ .id = report.id, .kind = "torrent", .status = report.status, .count = 5, .span_ms = 10 * 60_000 }, &fields).?;
+    for ([_][]const u8{ "KEY-IN-PATH", "URLKEY", "INDEX-API-KEY", "INDEX-TOKEN", "CLEARANCE", "private-tracker", "MIRRORKEY", "/api/v2.0", "apikey" }) |needle| {
+        try T.expect(std.mem.indexOf(u8, ctx, needle) == null);
+    }
+    try T.expect(std.mem.indexOf(u8, ctx, "http://jackett.lan:9117\n") != null);
+    try T.expect(std.mem.indexOf(u8, ctx, "HTTP status 502") != null);
+    try T.expect(std.mem.indexOf(u8, ctx, "torrent index") != null);
 }
 
 test "context needs a usable base and sanitises ids" {

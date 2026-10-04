@@ -39,6 +39,7 @@ import ssl
 import sys
 import time
 import tempfile
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -192,6 +193,42 @@ def _as_post_body(request_data: Optional[Any]) -> Optional[bytes]:
     return None  # file-like / iterable bodies cannot be replayed
 
 
+# ── Source health (Opal) ─────────────────────────────────────────────────────
+#
+# Each engine runs on its own thread. `retrieve_url` notes how every fetch
+# ended, so opal_sources can tell "this host answers" from "this host is gone"
+# without the engines knowing. Only outcomes that say something about the
+# address are recorded: a challenge page served under 200 that could not be
+# unblocked, a read that broke halfway and an oversized body record nothing.
+
+_health = threading.local()
+
+
+def health_reset() -> None:
+    _health.events = []
+
+
+def health_events() -> list:
+    """(kind, status) per fetch since `health_reset`; kind is ok|http|transport|timeout."""
+    return list(getattr(_health, 'events', []))
+
+
+def _health_note(kind: str, status: int = 0) -> None:
+    events = getattr(_health, 'events', None)
+    if events is not None:
+        events.append((kind, status))
+
+
+def _failure_kind(exc: Exception) -> tuple:
+    """How a failed urlopen reads for health purposes."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return ('http', int(exc.code))
+    reason = getattr(exc, 'reason', exc)
+    if isinstance(exc, (socket.timeout, TimeoutError)) or isinstance(reason, (socket.timeout, TimeoutError)):
+        return ('timeout', 0)
+    return ('transport', 0)
+
+
 def _opal_api_token() -> Optional[str]:
     """Opal's static API token, or None when the app has never written one."""
     try:
@@ -275,6 +312,7 @@ def retrieve_url(url: str, custom_headers: Mapping[str, str] = {}, request_data:
     request = urllib.request.Request(url, request_data, {**_headers, **custom_headers})
     response = None
     walled = False
+    failure = ('transport', 0)
     for attempt in range(max(1, attempts)):
         try:
             response = urllib.request.urlopen(request, timeout=_FETCH_TIMEOUT, context=ssl_context)
@@ -282,6 +320,7 @@ def retrieve_url(url: str, custom_headers: Mapping[str, str] = {}, request_data:
         except Exception as exc:  # URLError, HTTPError, socket.timeout
             if not isinstance(exc, (urllib.error.URLError, OSError)):
                 raise
+            failure = _failure_kind(exc)
             if isinstance(exc, urllib.error.HTTPError) and _looks_walled(exc.code, ""):
                 walled = True
             if attempt == attempts - 1 or not _is_retryable(exc):
@@ -295,7 +334,9 @@ def retrieve_url(url: str, custom_headers: Mapping[str, str] = {}, request_data:
         if walled:
             unblocked = _opal_scrape(url, _as_post_body(request_data))
             if unblocked and (max_bytes is None or len(unblocked.encode("utf-8")) <= max_bytes):
+                _health_note('ok', 200)  # the wall was passed: the address is alive
                 return html.unescape(unblocked) if unescape_html_entities else unblocked
+        _health_note(*failure)
         return ""  # Silently handle connection errors
     try:
         data: bytes = response.read() if max_bytes is None else response.read(max_bytes + 1)
@@ -331,6 +372,10 @@ def retrieve_url(url: str, custom_headers: Mapping[str, str] = {}, request_data:
         unblocked = _opal_scrape(url, _as_post_body(request_data))
         if unblocked and (max_bytes is None or len(unblocked.encode("utf-8")) <= max_bytes):
             dataStr = unblocked
+            _health_note('ok', 200)
+        # else: an interstitial says nothing about the address; record nothing.
+    else:
+        _health_note('ok', 200)
 
     if unescape_html_entities:
         dataStr = html.unescape(dataStr)

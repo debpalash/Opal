@@ -303,6 +303,7 @@ if __name__ == "__main__":
                 print(f"Invalid timeout: {argv[0]}", file=sys.stderr)
                 return ExitCode.ArgError.value
             argv = argv[1:]
+            opal_sources.ENABLE_HEALTH = True  # Opal's own mode: see opal_sources
 
         # Offline executable regression seam. This deliberately runs through
         # the same deadline-mode dispatcher as a real Opal search, so spawning

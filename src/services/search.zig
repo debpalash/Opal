@@ -578,6 +578,8 @@ pub fn asyncSearchTask(query: []const u8, my_gen: u64) void {
         }
 
         if (line.len == 0) continue;
+        // Per-source health reports share the pipe with the result rows.
+        if (@import("source_request.zig").noteHealthLine(line)) continue;
         var it = std.mem.splitScalar(u8, line, '|');
 
         const link = it.next() orelse continue;
