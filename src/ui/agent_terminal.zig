@@ -17,6 +17,7 @@ const session_mod = @import("../terminal/session.zig");
 const keymap = @import("../terminal/keymap.zig");
 const launch = @import("../services/agent_launch.zig");
 const launch_pure = @import("../services/agent_launch_pure.zig");
+const tasks_ui = @import("agent_tasks_ui.zig");
 
 const Session = session_mod.Session;
 const FONT_SIZE: f32 = 13;
@@ -26,6 +27,7 @@ var session: ?*Session = null;
 var snap: session_mod.Snapshot = .{};
 var term_id: ?dvui.Id = null;
 var launched: ?Kind = null;
+var tab: enum { terminal, tasks } = .terminal;
 var note_buf: [128]u8 = undefined;
 var note_len: usize = 0;
 
@@ -135,6 +137,10 @@ pub fn render() void {
 
     renderToolbar();
 
+    if (tab == .tasks) {
+        tasks_ui.render();
+        return;
+    }
     if (session == null) {
         renderEmpty();
         return;
@@ -158,6 +164,9 @@ fn renderToolbar() void {
         .gravity_y = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = 12, .h = 0 },
     });
+
+    if (tasks_ui.tabSwitch(@intFromEnum(tab))) |i| tab = @enumFromInt(i);
+    if (tab == .tasks) return;
 
     const kinds = [_]Kind{ .claude, .codex, .gemini, .shell };
     inline for (kinds, 0..) |kind, i| {

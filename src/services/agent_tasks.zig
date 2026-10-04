@@ -246,6 +246,70 @@ pub fn writeListJson(w: *std.Io.Writer) !void {
     try s.endObject();
 }
 
+/// One task for the UI. Fixed buffers so a snapshot needs no allocation; the
+/// prompt is not copied (it can be 2000 bytes and the list never shows it).
+pub const Row = struct {
+    id: i64 = 0,
+    name: [pure.NAME_MAX + 4]u8 = std.mem.zeroes([pure.NAME_MAX + 4]u8),
+    name_len: usize = 0,
+    agent: Agent = .claude,
+    enabled: bool = true,
+    running: bool = false,
+    interval_min: u32 = 0,
+    max_runs_per_day: u32 = 0,
+    /// Already zero when the counter belongs to an earlier day.
+    runs_today: u32 = 0,
+    budget_cents: u32 = 0,
+    total_runs: u32 = 0,
+    last_run_ms: i64 = 0,
+    /// 0 when the task is paused.
+    next_run_ms: i64 = 0,
+    outcome: [16]u8 = std.mem.zeroes([16]u8),
+    outcome_len: usize = 0,
+    summary: [SUMMARY_MAX]u8 = std.mem.zeroes([SUMMARY_MAX]u8),
+    summary_len: usize = 0,
+};
+
+pub fn snapshot(out: []Row) usize {
+    if (out.len == 0 or !ensureTable()) return 0;
+    const now = io_g.milliTimestamp();
+    const running = running_id.load(.acquire);
+    const stmt = db.prepare(
+        "SELECT id, name, agent, enabled, interval_min, max_runs_per_day, last_run_ms, day, runs_today, " ++
+            "budget_cents, total_runs, last_outcome, last_summary FROM agent_tasks ORDER BY id LIMIT ?1",
+    ) orelse return 0;
+    defer db.finalize(stmt);
+    db.bindInt(stmt, 1, @intCast(@min(out.len, pure.MAX_TASKS * 4)));
+    var n: usize = 0;
+    while (n < out.len and db.step(stmt) == db.c.SQLITE_ROW) {
+        var r = Row{};
+        r.id = db.columnInt64(stmt, 0);
+        r.name_len = copyText(&r.name, db.columnText(stmt, 1) orelse "");
+        r.agent = Agent.parse(db.columnText(stmt, 2) orelse "") orelse .claude;
+        const sched = readSchedule(stmt, 3);
+        r.enabled = sched.enabled;
+        r.interval_min = sched.interval_min;
+        r.max_runs_per_day = sched.max_runs_per_day;
+        r.last_run_ms = sched.last_run_ms;
+        r.runs_today = if (sched.day == pure.dayIndex(now)) sched.runs_today else 0;
+        r.next_run_ms = pure.nextRunMs(sched, now);
+        r.budget_cents = @intCast(@max(0, db.columnInt(stmt, 9)));
+        r.total_runs = @intCast(@max(0, db.columnInt(stmt, 10)));
+        r.outcome_len = copyText(&r.outcome, db.columnText(stmt, 11) orelse "");
+        r.summary_len = copyText(&r.summary, db.columnText(stmt, 12) orelse "");
+        r.running = r.id == running;
+        out[n] = r;
+        n += 1;
+    }
+    return n;
+}
+
+fn copyText(dst: []u8, text: []const u8) usize {
+    const n = @min(text.len, dst.len);
+    @memcpy(dst[0..n], text[0..n]);
+    return n;
+}
+
 // ── Scheduler ───────────────────────────────────────────────────────────
 
 const Job = struct {
