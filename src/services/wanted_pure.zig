@@ -591,3 +591,40 @@ test "alternate titles lose year and episode markers" {
     try std.testing.expect(cleanAltTitle("x") == null);
     try std.testing.expect(cleanAltTitle("   ") == null);
 }
+
+/// The secondary line under a wanted row that has operator-found alternate titles
+/// (`extra`: newline separated): "also searching: A, B +2". At most two titles are
+/// named, each cut to 36 bytes on a character boundary. Empty when there are none.
+pub fn alsoSearchingText(buf: []u8, extra: []const u8) []const u8 {
+    var w = std.Io.Writer.fixed(buf);
+    var shown: usize = 0;
+    var total: usize = 0;
+    var it = std.mem.splitScalar(u8, extra, '\n');
+    while (it.next()) |raw| {
+        const t = std.mem.trim(u8, raw, " \t\r");
+        if (t.len == 0) continue;
+        total += 1;
+        if (shown >= 2) continue;
+        w.writeAll(if (shown == 0) "also searching: " else ", ") catch return w.buffered();
+        var end = @min(t.len, 36);
+        while (end < t.len and end > 0 and (t[end] & 0xC0) == 0x80) end -= 1;
+        w.writeAll(t[0..end]) catch return w.buffered();
+        if (end < t.len) w.writeAll("...") catch return w.buffered();
+        shown += 1;
+    }
+    if (total > shown) w.print(" +{d}", .{total - shown}) catch {};
+    return w.buffered();
+}
+
+test "also-searching line names at most two titles then a count" {
+    var b: [200]u8 = undefined;
+    try std.testing.expectEqualStrings("", alsoSearchingText(&b, ""));
+    try std.testing.expectEqualStrings("", alsoSearchingText(&b, "\n \n"));
+    try std.testing.expectEqualStrings("also searching: Sen to Chihiro", alsoSearchingText(&b, "Sen to Chihiro"));
+    try std.testing.expectEqualStrings("also searching: A one, B two", alsoSearchingText(&b, "A one\nB two"));
+    try std.testing.expectEqualStrings("also searching: A one, B two +2", alsoSearchingText(&b, "A one\nB two\nC\nD"));
+    try std.testing.expectEqualStrings("also searching: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...", alsoSearchingText(&b, "a" ** 50));
+    // A multibyte character is never cut in half.
+    const cut = alsoSearchingText(&b, "a" ** 35 ++ "\u{e9}\u{e9}");
+    try std.testing.expect(std.unicode.utf8ValidateSlice(cut));
+}

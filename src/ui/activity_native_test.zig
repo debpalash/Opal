@@ -57,6 +57,12 @@ fn setup() !void {
             row.* = .{ .id = @intCast(i + 1), .kind = if (i == 1) .episode else .movie, .status = ([_]@import("../services/wanted_pure.zig").Status{ .wanted, .downloading, .paused })[i], .year = 2021, .season = 2, .episode = 3, .attempts = 2 };
             @memcpy(row.title[0..wanted_titles[i].len], wanted_titles[i]);
             row.title_len = wanted_titles[i].len;
+            if (i == 0 or i == 2) {
+                // Alternate titles the operator found: two named, the rest counted.
+                const extra = if (i == 0) "Dune: Part One\nDuna\nDyuna" else "Sen to Chihiro no Kamikakushi";
+                @memcpy(row.extra_titles[0..extra.len], extra);
+                row.extra_titles_len = extra.len;
+            }
             if (i == 1) {
                 const picked = "Severance.S02E03.1080p.WEB.x265";
                 @memcpy(row.picked[0..picked.len], picked);

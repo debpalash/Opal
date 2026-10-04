@@ -81,7 +81,7 @@ fn draw() !void {
         // The real toolbar is a horizontal box.
         var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 } });
         defer bar.deinit();
-        _ = ui.tabSwitch(1);
+        _ = ui.tabSwitch(1, "Activity");
     }
     ui.render();
 }

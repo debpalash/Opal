@@ -86,7 +86,7 @@ A terminal panel inside Opal that hosts coding agents with Opal's MCP server pre
 
 - Use libghostty (the embeddable terminal core from Ghostty) for VT parsing and screen state, and render the cell grid in a dvui custom widget. The `ghostling` reference project is the model for a minimal host. Confirm the library's current API and Zig 0.16 build compatibility before committing to a version; spike this first.
 - Add a pty layer next to `bounded_process.zig` (`openpty`/`forkpty` on Linux and macOS; ConPTY on Windows later). `StreamProcess` stays for non-interactive work.
-- An "Agents" launcher detects installed CLIs (`claude`, `codex`, `gemini`, others), starts the chosen one in a pty with `OPAL_MCP` env and an MCP config pointing at `opal mcp`, and keeps one terminal tab per agent session.
+- An "Agents" launcher detects installed CLIs (`claude`, `codex`, `gemini`, others), starts the chosen one in a pty with `OPAL_MCP` env and an MCP config pointing at `opal mcp`, and keeps one terminal tab per agent session. The page also has a **Tasks** tab (scheduled prompts) and an **Activity** tab for the background operator: its switch and daily limit, the proposals waiting for your OK (marked with a count on the tab), and the recent jobs with their outcome and cost.
 - The panel is optional. The MCP server must work with agents the user launches in their own terminal.
 
 ### 5. Agents extending the app

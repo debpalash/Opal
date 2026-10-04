@@ -163,7 +163,7 @@ fn toneColor(tone: view.OutcomeKind.Tone) dvui.Color {
 
 /// A compact two-or-three way switch that sizes to its labels (the shared
 /// `components.segment` is a flexbox that fills its row). Returns the index clicked.
-fn compactSegment(src: std.builtin.SourceLocation, options: []const []const u8, selected: usize) ?usize {
+pub fn compactSegment(src: std.builtin.SourceLocation, options: []const []const u8, selected: usize) ?usize {
     var clicked_index: ?usize = null;
     var bar = dvui.box(src, .{ .dir = .horizontal }, .{
         .background = true,
@@ -197,12 +197,13 @@ fn compactSegment(src: std.builtin.SourceLocation, options: []const []const u8, 
     return clicked_index;
 }
 
-/// The Terminal | Tasks switch for the Agents toolbar. Returns the index clicked.
-pub fn tabSwitch(selected: usize) ?usize {
+/// The Terminal | Tasks | Activity switch for the Agents toolbar. `activity_label`
+/// carries the count of proposals waiting ("Activity 1"). Returns the index clicked.
+pub fn tabSwitch(selected: usize, activity_label: []const u8) ?usize {
     // The toolbar is a horizontal box, where centring vertically is safe.
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0.5 });
     defer row.deinit();
-    return compactSegment(@src(), &.{ "Terminal", "Tasks" }, selected);
+    return compactSegment(@src(), &.{ "Terminal", "Tasks", activity_label }, selected);
 }
 
 fn entry(src: std.builtin.SourceLocation, buf: []u8, placeholder: []const u8, width: f32) void {
