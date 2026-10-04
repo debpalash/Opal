@@ -330,7 +330,14 @@ pub fn uploadIfReady(pixels: *?[]u8, w: u32, h: u32, tex: *?dvui.Texture) bool {
 /// Free a poster texture and associated memory.
 pub fn deinitPoster(pixels: *?[]u8, tex: *?dvui.Texture) void {
     if (tex.*) |t| {
-        dvui.textureDestroyLater(t);
+        // textureDestroyLater needs a frame in progress. Shutdown teardown
+        // (search.deinitGallery) runs after the last frame, when dvui has no
+        // current window and would panic; destroy through the backend instead.
+        if (dvui.current_window != null) {
+            dvui.textureDestroyLater(t);
+        } else if (comptime !@import("build_options").headless) {
+            if (@import("state.zig").app.dvui_win) |win| win.backend.textureDestroy(t);
+        }
         tex.* = null;
     }
     if (pixels.*) |p| {

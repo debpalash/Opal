@@ -12,6 +12,13 @@ match the tag exactly.
 
 ## Unreleased
 
+- **Quitting after a search no longer crashes.** Closing Opal (or sending it
+  SIGTERM) while search covers were on screen aborted the process in teardown
+  and raised the desktop's "Process crashed" alert; cover textures are now
+  released through the window backend once no frame is in progress.
+- **The first-run Welcome dialog fits its content.** The "Add search sources"
+  card is no longer clipped behind a scrollbar, and the Home shortcut is a
+  labelled button ("Skip to Home") instead of bare text.
 - **Desktop and web controls fit their content.** Native Browse uses the global
   search field; local library forms, playback menus and torrent file dialogs
   keep their actions visible. Web artwork has bounded dimensions and useful

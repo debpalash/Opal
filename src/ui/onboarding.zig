@@ -23,7 +23,7 @@ pub fn render() void {
     if (!replay_active and state.app.onboarded) return;
 
     const has_sources = source_config.anyInstalled();
-    const dialog_size = theme.fitWindowSize(.{ .w = 400, .h = if (has_sources) 170 else 300 }, .{ .w = 240, .h = if (has_sources) 150 else 190 });
+    const dialog_size = theme.fitWindowSize(.{ .w = 400, .h = if (has_sources) 170 else 350 }, .{ .w = 240, .h = if (has_sources) 150 else 190 });
     var open = true;
     var win = dvui.floatingWindow(@src(), .{
         .modal = true,
@@ -117,10 +117,12 @@ pub fn render() void {
         state.app.router.navigate(.browse);
         finish();
     }
-    if (dvui.button(@src(), "Home", .{}, .{
+    if (dvui.button(@src(), "Skip to Home", .{}, .{
         .color_fill = theme.colors.bg_surface,
         .color_text = theme.colors.text_secondary,
-        .border = dvui.Rect.all(0),
+        .border = dvui.Rect.all(1),
+        .color_border = theme.colors.border_subtle,
+        .corner_radius = dvui.Rect.all(theme.radius.md),
         .padding = dvui.Rect.all(theme.spacing.sm),
         .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
     })) {
