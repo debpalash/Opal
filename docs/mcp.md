@@ -39,10 +39,10 @@ Every tool has a tier. The server refuses anything above the ceiling you give it
 
 | Tier | Meaning | Examples |
 | --- | --- | --- |
-| `read` | observe, search | `status`, `search`, `search_results`, `queue_list`, `downloads_list`, `history_list`, `recommendations`, `library_list`, `library_watched`, `calendar_list`, `tmdb_browse`, `tmdb_search`, `tmdb_results`, `anime_search`, `anime_results`, `anime_episodes`, `podcast_search`, `podcast_results`, `podcast_episodes`, `music_search`, `music_results`, `youtube_search`, `youtube_results`, `rss_list`, `livetv_list`, `collections_list`, `settings_list`, `wanted_list`, `agent_tasks_list`, `home_summary`, `player_info`, `cast_scan`, `cast_devices`, `torrents_list`, `torrent_files`, `download_history_list`, `jellyfin_results`, `jellyfin_libraries`, `jellyfin_browse`, `jellyfin_search` |
+| `read` | observe, search | `status`, `search`, `search_results`, `queue_list`, `downloads_list`, `history_list`, `recommendations`, `library_list`, `library_watched`, `calendar_list`, `tmdb_browse`, `tmdb_search`, `tmdb_results`, `anime_search`, `anime_results`, `anime_episodes`, `podcast_search`, `podcast_results`, `podcast_episodes`, `music_search`, `music_results`, `youtube_search`, `youtube_results`, `rss_list`, `livetv_list`, `collections_list`, `settings_list`, `wanted_list`, `agent_tasks_list`, `home_summary`, `player_info`, `cast_scan`, `cast_devices`, `torrents_list`, `torrent_files`, `download_history_list`, `jellyfin_results`, `jellyfin_libraries`, `jellyfin_browse`, `jellyfin_search`, `browser_status`, `browser_page`, `browser_media_candidates` |
 | `playback` | control what plays now | `search_play`, `search_queue`, `player_toggle`, `player_seek`, `player_speed`, `player_volume`, `player_next`, `anime_play`, `podcast_play`, `music_play`, `player_previous`, `subtitles_search`, `subtitles_download`, `queue_action`, `player_audio_track`, `player_subtitle_track`, `subtitles_delay`, `cast_start`, `cast_stop`, `jellyfin_play` |
 | `write` | change persistent state | `subtitles_generate`, `downloads_pause`, `downloads_resume`, `settings_set`, `library_set_status`, `library_mark_watched`, `library_refresh`, `rss_refresh`, `library_favorite`, `library_rate`, `collection_save_queue`, `wanted_pause`, `wanted_resume`, `wanted_remove`, `agent_task_remove`, `torrent_pause`, `torrent_resume`, `rss_add` |
-| `spend` | use bandwidth, disk or compute | `play_url`, `downloads_add_url` (a magnet starts a torrent), `wanted_add` and `wanted_follow` (start automatic downloads), `wanted_check` (searches now and may start a download), `agent_task_add`, `agent_task_run` (paid agent runs) |
+| `spend` | use bandwidth, disk or compute | `play_url`, `downloads_add_url` (a magnet starts a torrent), `wanted_add` and `wanted_follow` (start automatic downloads), `wanted_check` (searches now and may start a download), `agent_task_add`, `agent_task_run` (paid agent runs), `browser_play_candidate` (streams a video the user's browser found) |
 | `destructive` | remove data | `queue_clear`, `downloads_cancel`, `library_remove`, `collection_remove`, `torrent_cancel`, `rss_remove`, `download_history_remove`, `download_history_clear` |
 
 The default ceiling is `spend`. Destructive tools are off until you opt in, and even then each call must carry `confirm: true`.
@@ -74,6 +74,23 @@ Arguments are typed and bounded. Unknown arguments are rejected, `play_url` and 
 ## Plugins
 
 `plugins_list` shows catalogue sources and installed executable plugins; `plugin_install`, `plugin_update` and `plugins_refresh` manage source plugins (endpoint config only; the app holds the connector code). To extend Opal, an agent calls `plugin_scaffold`, which creates `<config>/plugins/<id>/` with a `manifest.json` and a Lua `search` script, edits that script with its own file tools, then asks you to review and approve it in Settings → Plugins. Nothing executes before that: approval is stored outside the plugin folder against a digest of its exact bytes, no tool can grant it, and any edit revokes it. After approval `plugin_test` dry-runs the search through the production path (Lua sandbox, eight second limit, strict JSON) and returns the outcome and rows, so the agent can iterate. `plugin_uninstall` is destructive.
+
+## Browser
+
+With the Opal Connect extension paired (Settings → Agent Access → Browser), the user can share the page they are on and let an agent help with it. Four tools, all under the `browser` prefix, so `--deny-prefix browser` removes the whole family.
+
+| Tool | Tier | What it returns |
+| --- | --- | --- |
+| `browser_status` | `read` | Paired browsers with `connected` (seen in the last 150 seconds), whether a page is shared, whether it was shared with agents, and the state of the Agent Access switch. Never page content. |
+| `browser_page` | `read` | The shared page: title, address without its query string, Open Graph fields, JSON-LD, up to 8 KB of text, `page_id`. Everything under `untrusted_page` was copied from a web page and the response says so; the text sits between `BEGIN UNTRUSTED PAGE TEXT` and `END UNTRUSTED PAGE TEXT` markers, and a copy of the marker inside the text is defused. |
+| `browser_media_candidates` | `read` | Streams the browser found on the page: `id`, `kind`, `host`, `path` and `duration` only (no query string, no Referer, no User-Agent), plus the `page_id`. |
+| `browser_play_candidate` | `spend` | Plays or queues one candidate by `page_id` and `id`. Never by URL. Opal sends the Referer, Origin and User-Agent the browser used. |
+
+Two consents, both the user's, neither reachable by an agent. The extension's **Share this page with Opal** button is per page, user initiated, and its "Also let coding agents read this page" box starts unticked. **Settings → Agent Access → Let agents read shared pages** is a second, global switch, off by default; only that screen changes it (no route and no tool, and it is not in `settings_set`). When either is missing, `browser_page`, `browser_media_candidates` and `browser_play_candidate` answer as if nothing were shared ("Nothing is shared with agents" with a hint, or `403` for play), without revealing whether a page exists.
+
+Opal keeps only the last shared page, in memory, never on disk; quitting Opal or pressing Dismiss in the Browser hub forgets it. A new share replaces it and changes `page_id`, so an id read from an earlier page fails with `409`. The routes behind the tools are `GET /api/browser/context?view=status|page|candidates` and `POST /api/browser/play?page=&id=&action=play|queue`, available to the machine token and web admins only; a paired browser's own token cannot call them (it holds a short allowlist: status, its own check, media, page share, unpair itself).
+
+There is no tool for pairing, revoking, switching sharing on, reading cookies, controlling tabs or running scripts, and there will not be. Page text is untrusted: it may contain instructions aimed at an agent, so an agent acts on what the user asked for, not on what the page says. The audit log records tool names and outcomes, never page text or URLs.
 
 ## OpenAPI
 
