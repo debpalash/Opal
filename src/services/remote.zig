@@ -1173,7 +1173,7 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
         return;
     }
     if (std.mem.eql(u8, api_path, "/rss")) {
-        apiRssList(stream);
+        apiRssList(stream, query);
         return;
     }
     if (std.mem.eql(u8, api_path, "/rss/manage")) {
@@ -2496,18 +2496,35 @@ fn apiHistory(stream: std.Io.net.Stream) void {
     sendJson(stream, json_buf[0..w.end]);
 }
 
-fn apiRssList(stream: std.Io.net.Stream) void {
+/// `/rss`. With `redact=1` (what the agent tools send) feed URLs are cut to
+/// scheme and host, because feeds often carry a passkey in the query string, and
+/// magnet links are left out. The body is built with a growing writer: a fixed
+/// buffer silently sent nothing once a few hundred items filled it.
+fn apiRssList(stream: std.Io.net.Stream, query: []const u8) void {
     const rss = @import("rss.zig");
-    var json_buf: [32768]u8 = undefined;
-    var w = std.Io.Writer.fixed(&json_buf);
-    w.writeAll("{\"feeds\":[") catch return;
+    const redact = std.mem.eql(u8, getQueryParam(query, "redact") orelse "", "1");
+    const allocator = @import("../core/alloc.zig").allocator;
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    defer out.deinit();
+    const w = &out.writer;
+    w.writeAll("{\"feeds\":[") catch return sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
     for (0..rss.feed_count) |fi| {
         const f = &rss.feeds[fi];
         if (fi > 0) w.writeAll(",") catch return;
         w.writeAll("{\"name\":\"") catch return;
-        escJsonWrite(&w, f.name[0..f.name_len]);
+        escJsonWrite(w, f.name[0..f.name_len]);
         w.writeAll("\",\"url\":\"") catch return;
-        escJsonWrite(&w, f.url[0..f.url_len]);
+        var url: []const u8 = f.url[0..f.url_len];
+        if (redact) {
+            // scheme://host only
+            const scheme_end = std.mem.indexOf(u8, url, "://");
+            const host_start = if (scheme_end) |e| e + 3 else 0;
+            const host_end = std.mem.indexOfAnyPos(u8, url, host_start, "/?#") orelse url.len;
+            url = url[0..host_end];
+            // Credentials in the authority (user:pass@host): show nothing.
+            if (std.mem.indexOfScalar(u8, url[host_start..], '@') != null) url = "(redacted)";
+        }
+        escJsonWrite(w, url);
         w.print("\",\"enabled\":{s}}}", .{if (f.enabled) "true" else "false"}) catch return;
     }
     w.writeAll("],\"items\":[") catch return;
@@ -2515,17 +2532,19 @@ fn apiRssList(stream: std.Io.net.Stream) void {
         const item = &rss.items[ri];
         if (ri > 0) w.writeAll(",") catch return;
         w.writeAll("{\"title\":\"") catch return;
-        escJsonWrite(&w, item.title[0..item.title_len]);
-        w.print("\",\"seeds\":{d},\"peers\":{d},\"size\":{d},\"magnet\":\"", .{
-            item.seeds, item.peers, item.size_bytes,
-        }) catch return;
-        escJsonWrite(&w, item.magnet[0..item.magnet_len]);
-        w.writeAll("\"}") catch return;
+        escJsonWrite(w, item.title[0..item.title_len]);
+        w.print("\",\"seeds\":{d},\"peers\":{d},\"size\":{d}", .{ item.seeds, item.peers, item.size_bytes }) catch return;
+        if (!redact) {
+            w.writeAll(",\"magnet\":\"") catch return;
+            escJsonWrite(w, item.magnet[0..item.magnet_len]);
+            w.writeAll("\"") catch return;
+        }
+        w.writeAll("}") catch return;
     }
     w.writeAll("],\"fetching\":") catch return;
     w.writeAll(if (rss.is_fetching) "true" else "false") catch return;
     w.writeAll("}") catch return;
-    sendJson(stream, json_buf[0..w.end]);
+    sendJson(stream, out.written());
 }
 
 fn apiRssManage(stream: std.Io.net.Stream, query: []const u8, body: []const u8) void {

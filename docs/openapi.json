@@ -787,14 +787,17 @@
         }
       }
     },
-    "/rss": {
+    "/rss?redact=1": {
       "get": {
         "operationId": "rss_list",
-        "summary": "The user's RSS feeds and their latest items.",
+        "summary": "The user's RSS feeds (host only: feed URLs can carry a passkey) and the titles, seeds and sizes of their latest items. Magnet links are not included; use search to act on one.",
         "tags": [
           "read"
         ],
         "x-opal-tier": "read",
+        "x-opal-fixed": {
+          "redact": "1"
+        },
         "parameters": [],
         "responses": {
           "200": {

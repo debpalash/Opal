@@ -445,9 +445,9 @@ test "invalid, unsure or unchanged answers never reach the probe" {
 
 test "a long address still yields a summary within the limit" {
     var json_buf: [400]u8 = undefined;
-    const long_host = "a" ++ "bcdefghij" ** 18 ++ ".example.org";
+    const long_host = "a" ** 50 ++ "." ++ "b" ** 50 ++ "." ++ "c" ** 50 ++ ".example.org";
     const json = std.fmt.bufPrint(&json_buf, "{{\"base\":\"https://{s}\",\"evidence\":\"e\",\"confidence\":1}}", .{long_host}) catch unreachable;
-    const h = decide(T.allocator, "https://" ++ "x" ** 120 ++ ".example", json, probeOk);
+    const h = decide(T.allocator, "https://" ++ "x" ** 50 ++ ".old-host.org", json, probeOk);
     try T.expectEqual(op.State.proposed, h.state);
     try T.expect(h.text().len > 0 and h.text().len <= op.SUMMARY_MAX);
     try T.expect(std.mem.endsWith(u8, h.text(), "(checked: reachable)"));

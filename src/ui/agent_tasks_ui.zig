@@ -430,7 +430,10 @@ fn renderRow(i: usize, now: i64) void {
             _ = tasks.setEnabled(r.id, !r.enabled);
             dirty = true;
         }
-        if (components.confirmDangerButton(@src(), "Delete", 10000 + i)) {
+        // Keyed by the task id, not the row position: after another row is deleted the
+        // list shifts, and a position-keyed "click again to confirm" would land on a
+        // different task.
+        if (components.confirmDangerButton(@src(), "Delete", 10000 + @as(usize, @intCast(@mod(r.id, 1_000_000))))) {
             _ = tasks.remove(r.id);
             state.showToast("Task deleted");
             dirty = true;
@@ -464,7 +467,21 @@ fn renderRow(i: usize, now: i64) void {
         });
     }
 
-    // Line 3: the last outcome, coloured, and the agent's closing line.
+    // Line 3: what the task will do, in full, so it can be reviewed.
+    if (r.prompt_len > 0) {
+        var tl = dvui.textLayout(@src(), .{ .break_lines = true }, .{
+            .expand = .horizontal,
+            .background = false,
+            .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
+            .padding = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
+        });
+        defer tl.deinit();
+        tl.addText("Prompt: ", .{ .color_text = theme.colors.text_secondary });
+        var shown_prompt: [tasks.Row.prompt_capacity + 8]u8 = undefined;
+        tl.addText(@import("../core/text.zig").safeUtf8Buf(r.prompt[0..@min(r.prompt_len, r.prompt.len)], &shown_prompt), .{ .color_text = theme.colors.text_primary });
+    }
+
+    // Line 4: the last outcome, coloured, and the agent's closing line.
     {
         const outcome = view.OutcomeKind.parse(r.outcome[0..@min(r.outcome_len, r.outcome.len)]);
         var sbuf: [SUMMARY_SHOWN]u8 = undefined;

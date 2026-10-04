@@ -51,6 +51,9 @@ fn ensureTable() bool {
             "last_outcome TEXT NOT NULL DEFAULT ''," ++
             "last_summary TEXT NOT NULL DEFAULT '')",
     );
+    // Run counts per day live apart from the tasks: deleting and re-adding a task
+    // must not reset the global daily ceiling.
+    db.exec("CREATE TABLE IF NOT EXISTS agent_runs_day(day INTEGER PRIMARY KEY, runs INTEGER NOT NULL DEFAULT 0)");
     table_ready.store(true, .release);
     return true;
 }
@@ -179,7 +182,7 @@ pub fn setMasterEnabled(on: bool) void {
 /// Runs started today across every task, so many small caps cannot add up to an
 /// unbounded bill (tasks can be re-created, each with a fresh per-task count).
 fn runsTodayAll(now: i64) u32 {
-    const stmt = db.prepare("SELECT COALESCE(SUM(runs_today),0) FROM agent_tasks WHERE day=?1") orelse return 0;
+    const stmt = db.prepare("SELECT COALESCE(SUM(runs),0) FROM agent_runs_day WHERE day=?1") orelse return 0;
     defer db.finalize(stmt);
     db.bindInt64(stmt, 1, pure.dayIndex(now));
     if (db.step(stmt) == db.c.SQLITE_ROW) return @intCast(@max(0, db.columnInt(stmt, 0)));
@@ -284,6 +287,12 @@ pub const Row = struct {
     outcome_len: usize = 0,
     summary: [SUMMARY_MAX]u8 = std.mem.zeroes([SUMMARY_MAX]u8),
     summary_len: usize = 0,
+    /// The whole prompt: what an unattended run will do must be readable before
+    /// the task is enabled, especially one an agent added.
+    prompt: [pure.PROMPT_MAX]u8 = std.mem.zeroes([pure.PROMPT_MAX]u8),
+    prompt_len: usize = 0,
+
+    pub const prompt_capacity = pure.PROMPT_MAX;
 };
 
 pub fn snapshot(out: []Row) usize {
@@ -292,7 +301,7 @@ pub fn snapshot(out: []Row) usize {
     const running = running_id.load(.acquire);
     const stmt = db.prepare(
         "SELECT id, name, agent, enabled, interval_min, max_runs_per_day, last_run_ms, day, runs_today, " ++
-            "budget_cents, total_runs, last_outcome, last_summary FROM agent_tasks ORDER BY id LIMIT ?1",
+            "budget_cents, total_runs, last_outcome, last_summary, prompt FROM agent_tasks ORDER BY id LIMIT ?1",
     ) orelse return 0;
     defer db.finalize(stmt);
     db.bindInt(stmt, 1, @intCast(@min(out.len, pure.MAX_TASKS * 4)));
@@ -313,6 +322,7 @@ pub fn snapshot(out: []Row) usize {
         r.total_runs = @intCast(@max(0, db.columnInt(stmt, 10)));
         r.outcome_len = copyText(&r.outcome, db.columnText(stmt, 11) orelse "");
         r.summary_len = copyText(&r.summary, db.columnText(stmt, 12) orelse "");
+        r.prompt_len = copyText(&r.prompt, db.columnText(stmt, 13) orelse "");
         r.running = r.id == running;
         out[n] = r;
         n += 1;
@@ -377,6 +387,11 @@ fn nextDue(now: i64) ?Job {
 /// Count the run before it starts, so a crash or a failing agent still spends
 /// the daily allowance instead of retrying every 30 seconds.
 fn markStarted(id: i64, now: i64) void {
+    if (db.prepare("INSERT INTO agent_runs_day(day, runs) VALUES(?1, 1) ON CONFLICT(day) DO UPDATE SET runs=runs+1")) |st| {
+        defer db.finalize(st);
+        db.bindInt64(st, 1, pure.dayIndex(now));
+        _ = db.step(st);
+    }
     const stmt = db.prepare(
         "UPDATE agent_tasks SET last_run_ms=?1, runs_today=CASE WHEN day=?2 THEN runs_today+1 ELSE 1 END, " ++
             "day=?2, total_runs=total_runs+1, last_outcome='running', last_summary='' WHERE id=?3",
@@ -430,7 +445,7 @@ fn execute(job: *const Job, summary: *[SUMMARY_MAX]u8, summary_len: *usize) pure
         return .failed;
     };
     var cfg_json: [900]u8 = undefined;
-    const cfg_body = setup.jsonConfigWithArgs(&cfg_json, ws.mcpPath(), &.{ "--deny-prefix", "agent_task" }) orelse {
+    const cfg_body = setup.jsonConfigWithArgs(&cfg_json, ws.mcpPath(), &.{ "--allow", "write", "--deny-prefix", "agent_task" }) orelse {
         summary_len.* = copyInto(summary, "Could not prepare the agent workspace.");
         return .failed;
     };

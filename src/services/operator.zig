@@ -56,6 +56,9 @@ fn ensureTable() bool {
             "day INTEGER NOT NULL DEFAULT 0)",
     );
     db.exec("CREATE INDEX IF NOT EXISTS operator_jobs_key ON operator_jobs(kind, key, created_ms)");
+    // A job left `running` by a crash or a hard quit would count against the queue
+    // forever. Its reserved cost stays charged: it may have spent money.
+    db.exec("UPDATE operator_jobs SET state='failed', summary='Interrupted', finished_ms=0 WHERE state='running'");
     table_ready.store(true, .release);
     return true;
 }
@@ -114,13 +117,16 @@ pub fn request(kind: Kind, key: []const u8, context: []const u8) RequestResult {
         .over_budget => return .over_budget,
     }
 
-    const stmt = db.prepare("INSERT INTO operator_jobs(kind,key,context,created_ms,day) VALUES(?1,?2,?3,?4,?5)") orelse return .unavailable;
+    const stmt = db.prepare("INSERT INTO operator_jobs(kind,key,context,created_ms,day,cost_cents) VALUES(?1,?2,?3,?4,?5,?6)") orelse return .unavailable;
     defer db.finalize(stmt);
     db.bindText(stmt, 1, kind.id());
     db.bindText(stmt, 2, key);
     db.bindText(stmt, 3, context);
     db.bindInt64(stmt, 4, now);
     db.bindInt64(stmt, 5, pure_day(now));
+    // The whole budget is reserved up front, so queued and running jobs count
+    // against the daily limit. The final cost replaces it when the job ends.
+    db.bindInt(stmt, 6, @intCast(pure.spec(kind).budget_cents));
     if (db.step(stmt) != db.c.SQLITE_DONE) return .unavailable;
     last_tick_ms = 0;
     state.wakeUi();
@@ -211,6 +217,11 @@ fn pickAgent(kind: Kind) ?pure.Agent {
     return null;
 }
 
+/// End a job that never reached the agent: nothing was spent.
+fn bail(job: Job, agent: []const u8, why: []const u8) void {
+    finish(job.id, .failed, why, "", agent, 0);
+}
+
 fn runJob(job: Job) void {
     defer busy.store(false, .release);
     running_id.store(job.id, .release);
@@ -231,15 +242,15 @@ fn runJob(job: Job) void {
     // Scratch directory: the agent runs here, not in the user's data.
     var cfg_buf: [512]u8 = undefined;
     var dir_buf: [600]u8 = undefined;
-    const dir = std.fmt.bufPrint(&dir_buf, "{s}/operator", .{paths.configDir(&cfg_buf)}) catch return;
+    const dir = std.fmt.bufPrint(&dir_buf, "{s}/operator", .{paths.configDir(&cfg_buf)}) catch return bail(job, agent.binary(), "The configuration path is too long");
     io_g.cwdMakePath(dir) catch {
         finish(job.id, .failed, "Could not create the scratch directory", "", agent.binary(), 0);
         return;
     };
     var schema_path: [700]u8 = undefined;
     var out_path: [700]u8 = undefined;
-    const schema_file = std.fmt.bufPrint(&schema_path, "{s}/schema-{d}.json", .{ dir, job.id }) catch return;
-    const out_file = std.fmt.bufPrint(&out_path, "{s}/out-{d}.txt", .{ dir, job.id }) catch return;
+    const schema_file = std.fmt.bufPrint(&schema_path, "{s}/schema-{d}.json", .{ dir, job.id }) catch return bail(job, agent.binary(), "The configuration path is too long");
+    const out_file = std.fmt.bufPrint(&out_path, "{s}/out-{d}.txt", .{ dir, job.id }) catch return bail(job, agent.binary(), "The configuration path is too long");
     if (agent == .codex) io_g.cwdWriteFile(.{ .sub_path = schema_file, .data = pure.spec(job.kind).schema }) catch {
         finish(job.id, .failed, "Could not write the schema file", "", agent.binary(), 0);
         return;
@@ -255,7 +266,7 @@ fn runJob(job: Job) void {
         return;
     };
 
-    const output = alloc.alloc(u8, MAX_OUTPUT) catch return;
+    const output = alloc.alloc(u8, MAX_OUTPUT) catch return bail(job, agent.binary(), "Out of memory");
     defer alloc.free(output);
     var got: usize = 0;
     var process = bounded.StreamProcess.init(cmd, .{
@@ -282,11 +293,11 @@ fn runJob(job: Job) void {
     }
     const result = process.finish();
     if (result.timed_out) {
-        finish(job.id, .failed, "The agent took too long", "", agent.binary(), 0);
+        finish(job.id, .failed, "The agent took too long", "", agent.binary(), pure.spec(job.kind).budget_cents);
         return;
     }
     if (!result.ok()) {
-        finish(job.id, .failed, "The agent did not finish (not signed in, out of credit, or an error)", "", agent.binary(), 0);
+        finish(job.id, .failed, "The agent did not finish (not signed in, out of credit, or an error)", "", agent.binary(), pure.spec(job.kind).budget_cents);
         return;
     }
 
@@ -303,7 +314,7 @@ fn runJob(job: Job) void {
         },
     }
     const answer = reply orelse {
-        finish(job.id, .failed, "The agent's answer was not valid", "", agent.binary(), 0);
+        finish(job.id, .failed, "The agent's answer was not valid", "", agent.binary(), pure.spec(job.kind).budget_cents);
         return;
     };
     defer alloc.free(answer.json);
@@ -314,7 +325,9 @@ fn runJob(job: Job) void {
         .endpoint_repair => endpoint.handle(key, answer.json),
         .local_names => local_names.handle(key, answer.json),
     };
-    finish(job.id, handled.state, handled.text(), answer.json, agent.binary(), answer.cost_cents);
+    // Claude reports what it spent; Codex does not, so it is charged the full budget.
+    const cost = if (agent == .claude and answer.cost_cents > 0) answer.cost_cents else pure.spec(job.kind).budget_cents;
+    finish(job.id, handled.state, handled.text(), answer.json, agent.binary(), cost);
     logs.pushLog(if (handled.state == .failed) "warn" else "info", "operator", if (handled.state == .failed) "A background job could not be used" else "A background job finished", false);
 }
 

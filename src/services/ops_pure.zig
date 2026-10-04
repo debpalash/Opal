@@ -253,7 +253,7 @@ pub const ops = [_]Op{
     },
     .{ .name = "youtube_search", .summary = "Search YouTube. Read youtube_results a moment later; play a result by passing https://www.youtube.com/watch?v=<id> to play_url.", .tier = .read, .method = .GET, .path = "/youtube/search", .params = &.{q_param} },
     .{ .name = "youtube_results", .summary = "Current YouTube results: id, title, channel, duration and views. Play one with play_url using https://www.youtube.com/watch?v=<id>.", .tier = .read, .method = .GET, .path = "/youtube" },
-    .{ .name = "rss_list", .summary = "The user's RSS feeds and their latest items.", .tier = .read, .method = .GET, .path = "/rss" },
+    .{ .name = "rss_list", .summary = "The user's RSS feeds (host only: feed URLs can carry a passkey) and the titles, seeds and sizes of their latest items. Magnet links are not included; use search to act on one.", .tier = .read, .method = .GET, .path = "/rss", .fixed = &.{.{ .key = "redact", .value = "1" }} },
     .{ .name = "rss_refresh", .summary = "Fetch the newest items of one RSS feed from rss_list.", .tier = .write, .method = .POST, .path = "/rss/refresh", .params = &.{list_index} },
     .{
         .name = "livetv_list",

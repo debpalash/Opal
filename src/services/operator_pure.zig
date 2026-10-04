@@ -319,52 +319,45 @@ pub fn parseMatchHelp(allocator: std.mem.Allocator, json: []const u8) ?MatchHelp
     return if (out.count == 0) null else out;
 }
 
-/// Hosts an agent-supplied address may never point at: this machine, private
-/// networks, link-local, and local-only names. The app fetches what it accepts.
+/// Hosts an agent-supplied address may be: plain DNS names only. IP literals in
+/// any notation (dotted, shorthand like 127.1, octal, hex, decimal, IPv6),
+/// percent-encoding, ports-in-host tricks and local-only names are refused, so
+/// the app never fetches something that points back at this machine or the LAN.
+/// A name that merely RESOLVES to a private address (nip.io style) cannot be told
+/// apart here; proposals are probed with redirects off and approved by a person.
 pub fn publicHost(host: []const u8) bool {
-    if (host.len == 0 or host.len > 253) return false;
+    var h = host;
+    // One trailing dot is the same name ("example.org."); more is garbage.
+    if (h.len > 0 and h[h.len - 1] == '.') h = h[0 .. h.len - 1];
+    if (h.len < 4 or h.len > 253) return false;
     var lower: [256]u8 = undefined;
-    for (host, 0..) |ch, i| lower[i] = std.ascii.toLower(ch);
-    const h = lower[0..host.len];
-    if (std.mem.eql(u8, h, "localhost") or std.mem.endsWith(u8, h, ".localhost")) return false;
-    for ([_][]const u8{ ".local", ".internal", ".lan", ".home", ".intranet", ".corp", ".localdomain" }) |suffix| {
-        if (std.mem.endsWith(u8, h, suffix)) return false;
+    for (h, 0..) |ch, i| {
+        const l = std.ascii.toLower(ch);
+        const ok = (l >= 'a' and l <= 'z') or (l >= '0' and l <= '9') or l == '-' or l == '.';
+        if (!ok) return false;
+        lower[i] = l;
     }
-    if (h[0] == '[') return false; // no IPv6 literals
-    // IPv4 literal?
-    var parts: [4]u32 = undefined;
-    var n: usize = 0;
-    var it = std.mem.splitScalar(u8, h, '.');
-    var all_numeric = true;
-    while (it.next()) |p| {
-        if (n >= 4) {
-            all_numeric = false;
-            break;
-        }
-        parts[n] = std.fmt.parseInt(u32, p, 10) catch {
-            all_numeric = false;
-            break;
-        };
-        n += 1;
+    const name = lower[0..h.len];
+    if (std.mem.eql(u8, name, "localhost") or std.mem.endsWith(u8, name, ".localhost")) return false;
+    for ([_][]const u8{ ".local", ".internal", ".lan", ".home", ".intranet", ".corp", ".localdomain", ".arpa" }) |suffix| {
+        if (std.mem.endsWith(u8, name, suffix)) return false;
     }
-    if (all_numeric and n == 4) {
-        for (parts) |p| if (p > 255) return false;
-        const a = parts[0];
-        const b = parts[1];
-        if (a == 0 or a == 10 or a == 127 or a >= 224) return false;
-        if (a == 169 and b == 254) return false;
-        if (a == 172 and b >= 16 and b <= 31) return false;
-        if (a == 192 and b == 168) return false;
-        if (a == 100 and b >= 64 and b <= 127) return false;
-        return true; // a public literal is allowed but unusual
+    var labels: usize = 0;
+    var last: []const u8 = "";
+    var it = std.mem.splitScalar(u8, name, '.');
+    while (it.next()) |label| {
+        if (label.len == 0 or label.len > 63) return false;
+        if (label[0] == '-' or label[label.len - 1] == '-') return false;
+        // 0x7f, 0177 style labels are numbers in disguise.
+        if (std.mem.startsWith(u8, label, "0x")) return false;
+        labels += 1;
+        last = label;
     }
-    // A bare numeric/hex host (e.g. "2130706433") is an IP in disguise.
-    var digits_only = true;
-    for (h) |ch| if (!std.ascii.isDigit(ch)) {
-        digits_only = false;
-    };
-    if (digits_only) return false;
-    return std.mem.indexOfScalar(u8, h, '.') != null;
+    if (labels < 2) return false;
+    // A real top-level domain has a letter; an all-digit last label means an IPv4
+    // literal in some notation.
+    for (last) |ch| if (ch >= 'a' and ch <= 'z') return true;
+    return false;
 }
 
 pub const Endpoint = struct {
@@ -568,11 +561,17 @@ test "match help keeps only plain, distinct, bounded queries" {
     try std.testing.expect(!validQuery("x" ** 81));
 }
 
-test "hosts that point inward are refused" {
-    for ([_][]const u8{ "localhost", "127.0.0.1", "10.0.0.5", "192.168.1.1", "172.20.0.9", "169.254.169.254", "0.0.0.0", "100.64.1.1", "printer.local", "nas.lan", "svc.internal", "2130706433", "[::1]", "224.0.0.1", "foo" }) |h| {
+test "hosts that point inward or are not plain names are refused" {
+    for ([_][]const u8{
+        "localhost",       "localhost.",     "127.0.0.1",   "127.0.0.1.",  "127.1",         "10.1",         "192.168.1",
+        "0x7f.0.0.1",      "0177.0.0.1",     "2130706433",  "10.0.0.5",    "192.168.1.1",   "172.20.0.9",   "169.254.169.254",
+        "0.0.0.0",         "100.64.1.1",     "224.0.0.1",   "93.184.216.34", "printer.local", "nas.lan",      "svc.internal",
+        "x.internal.",     "[::1]",          "foo",         "a..b.org",    "-bad.example.org", "bad-.org", "host%2e.org",
+        "host:80.org",     "exa mple.org",   "名前.jp",      "x.arpa",
+    }) |h| {
         try std.testing.expect(!publicHost(h));
     }
-    for ([_][]const u8{ "thepiratebay.org", "eztvx.to", "api.example.com", "93.184.216.34" }) |h| {
+    for ([_][]const u8{ "thepiratebay.org", "eztvx.to", "api.example.com", "mirror-1.some-site.co.uk", "EZTV.re", "example.org." }) |h| {
         try std.testing.expect(publicHost(h));
     }
 }
@@ -587,6 +586,8 @@ test "base addresses must be bare http(s) hosts" {
     try std.testing.expect(normalizeBase("https://example.org/deep/link", &b) == null);
     try std.testing.expect(normalizeBase("https://localhost", &b) == null);
     try std.testing.expect(normalizeBase("https://192.168.0.1", &b) == null);
+    try std.testing.expect(normalizeBase("https://127.1", &b) == null);
+    try std.testing.expect(normalizeBase("https://localhost.", &b) == null);
     try std.testing.expect(normalizeBase("javascript:alert(1)", &b) == null);
     try std.testing.expect(normalizeBase("https://exa mple.org", &b) == null);
 }

@@ -103,7 +103,7 @@ pub const preamble =
 
 /// Fixed storage an argv slices into, so building one never allocates.
 pub const Argv = struct {
-    items: [16][]const u8 = undefined,
+    items: [20][]const u8 = undefined,
     len: usize = 0,
     prompt: [PROMPT_MAX + preamble.len + 8]u8 = undefined,
     budget: [16]u8 = undefined,
@@ -144,6 +144,12 @@ pub fn buildArgv(out: *Argv, agent: Agent, prompt: []const u8, mcp_path: []const
             out.push("--mcp-config");
             out.push(scheduled_mcp_config);
             out.push("--strict-mcp-config");
+            // No built-in tools (no shell, no file access): the agent gets only the
+            // opal tools above, and anything not pre-approved is denied, never asked.
+            out.push("--tools");
+            out.push("");
+            out.push("--permission-mode");
+            out.push("dontAsk");
             out.push("--no-session-persistence");
         },
         .codex => {
@@ -259,7 +265,11 @@ test "claude argv carries the prompt as one element with a budget cap" {
     try std.testing.expectEqualStrings("--mcp-config", argv[7]);
     try std.testing.expectEqualStrings("/c/.mcp-scheduled.json", argv[8]);
     try std.testing.expectEqualStrings("--strict-mcp-config", argv[9]);
-    try std.testing.expectEqual(@as(usize, 11), argv.len);
+    try std.testing.expectEqualStrings("--tools", argv[10]);
+    try std.testing.expectEqualStrings("", argv[11]);
+    try std.testing.expectEqualStrings("--permission-mode", argv[12]);
+    try std.testing.expectEqualStrings("dontAsk", argv[13]);
+    try std.testing.expectEqual(@as(usize, 15), argv.len);
     const b = buildArgv(&a, .claude, "x", "/x", "/t", "/s.json", 1000).?;
     try std.testing.expectEqualStrings("10.00", b[6]);
     const c = buildArgv(&a, .claude, "x", "/x", "/t", "/s.json", 305).?;
