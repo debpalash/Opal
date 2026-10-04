@@ -25,6 +25,8 @@ const SCROLL_ROWS_PER_NOTCH: f32 = 3;
 var session: ?*Session = null;
 var snap: session_mod.Snapshot = .{};
 var term_id: ?dvui.Id = null;
+/// Set when a session starts: the next frame hands the terminal keyboard focus.
+var want_focus: bool = false;
 var launched: ?Kind = null;
 var note_buf: [128]u8 = undefined;
 var note_len: usize = 0;
@@ -115,6 +117,7 @@ fn start(kind: Kind) void {
     };
     launched = kind;
     note_len = 0;
+    want_focus = true;
     snap.deinit(alloc);
     state.wakeUi();
 }
@@ -246,6 +249,10 @@ fn renderTerminal(s: *Session) void {
     defer area.deinit();
     const wd = area.data();
     term_id = wd.id;
+    if (want_focus) {
+        want_focus = false;
+        dvui.focusWidget(wd.id, null, null);
+    }
 
     const rs = wd.contentRectScale();
     const base = font(false, false);
@@ -265,10 +272,24 @@ fn renderTerminal(s: *Session) void {
     const focused = dvui.focusedWidgetId() == wd.id;
     if (focused) dvui.wantTextInput(.{ .x = 0, .y = 0, .w = 0, .h = 0 });
 
-    const prev_clip = dvui.clip(rs.r);
-    defer dvui.clipSet(prev_clip);
+    {
+        const prev_clip = dvui.clip(rs.r);
+        defer dvui.clipSet(prev_clip);
+        drawGrid(rs, cw, ch, focused);
+    }
+    if (focused) drawFocusRing(wd.borderRectScale());
+}
 
-    drawGrid(rs, cw, ch, focused);
+/// A 1px accent outline just inside the terminal's edge while it has focus.
+fn drawFocusRing(brs: dvui.RectScale) void {
+    const none = dvui.Rect.Physical.all(0);
+    const t = @max(1, @round(brs.s));
+    const r = brs.r;
+    const color = theme.colors.accent;
+    (dvui.Rect.Physical{ .x = r.x, .y = r.y, .w = r.w, .h = t }).fill(none, .{ .color = color });
+    (dvui.Rect.Physical{ .x = r.x, .y = r.y + r.h - t, .w = r.w, .h = t }).fill(none, .{ .color = color });
+    (dvui.Rect.Physical{ .x = r.x, .y = r.y, .w = t, .h = r.h }).fill(none, .{ .color = color });
+    (dvui.Rect.Physical{ .x = r.x + r.w - t, .y = r.y, .w = t, .h = r.h }).fill(none, .{ .color = color });
 }
 
 fn rect(rs: dvui.RectScale, x: f32, y: f32, w: f32, h: f32) dvui.Rect.Physical {
