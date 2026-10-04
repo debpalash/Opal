@@ -152,6 +152,10 @@ Windows (ConPTY, `pty_windows.zig`) is written but has only been cross-compiled,
 
 Next up: more discovery and library tools, and the Windows terminal.
 
+## Running the tests
+
+`zig build test` runs every unit suite (it needs the ghostty package and libsqlite3; on Linux the test artifacts that the self-hosted backend cannot link set `use_llvm = true`). `zig build test-agentic` runs only the agent-native suites in one command: `test-operator`, `test-agent`, `test-ops` (includes the OpenAPI drift check), `test-terminal`, `test-wanted`, `test-browser` and `test-keyless`. The browser extension has its own tests: `cd extension && npm ci --ignore-scripts && npm test`.
+
 ## Phases
 
 1. **Registry and schemas.** Define the registry, port search, playback, queue, library, downloads and status. Generate the copilot tool list from it. Keep the HTTP routes working. Tests for schema validation and tier enforcement.

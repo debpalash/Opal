@@ -431,7 +431,7 @@ All against the isolated profile `XDG_CONFIG_HOME=/tmp/opal-dbg-B` (save path se
 - A worker restart in the middle of a page (the candidate list persists in `storage.session`; it was not tested across a 30 second idle).
 - The performance gate in section 10: there is no content script in M1, and the `webRequest` handler cost was not traced.
 - Headless pairing, MCP tools (`browser_status` and the rest), `add_to_wanted`, headers on queued items, cookies.
-- `zig build test` as a whole: 3323 of 3325 tests pass; the two failures are linker errors (`crt1.o .sframe R_X86_64_PC64`) in the `secret_store.zig` and `sqlite_key_writer.zig` test binaries, files this change does not touch. The required steps (`test-ops test-agent test-operator test-terminal test-browser`) pass: 276 passed, 2 skipped.
+- `zig build test` as a whole: at the time of milestone 1 two test binaries (`secret_store.zig`, `sqlite_key_writer.zig`) failed to link on Linux with the self-hosted backend (`crt1.o .sframe R_X86_64_PC64`). Fixed on `v2/build-health` by setting `use_llvm = true` on both; the full suite now passes (see [verification.md](verification.md)). The required steps (`test-ops test-agent test-operator test-terminal test-browser`) passed: 276 passed, 2 skipped.
 
 ### 12.8 Reproducing the live check
 
