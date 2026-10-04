@@ -28,15 +28,21 @@ const c = struct {
     extern "c" fn read(fd: c_int, buf: [*]u8, n: usize) isize;
     extern "c" fn write(fd: c_int, buf: [*]const u8, n: usize) isize;
     extern "c" fn close(fd: c_int) c_int;
+    // Variadic on purpose: Apple arm64 passes variadic arguments on the stack and
+    // libSystem's ioctl/fcntl read them there, so a fixed-arity declaration would
+    // put the pointer in a register the callee never looks at.
     extern "c" fn ioctl(fd: c_int, request: c_ulong, ...) c_int;
+    extern "c" fn _NSGetEnviron() *[*:null]?[*:0]u8;
     extern "c" fn kill(pid: c_int, sig: c_int) c_int;
     extern "c" fn waitpid(pid: c_int, status: ?*c_int, options: c_int) c_int;
-    extern "c" fn poll(fds: [*]PollFd, nfds: c_ulong, timeout: c_int) c_int;
+    extern "c" fn poll(fds: [*]PollFd, nfds: c_nfds, timeout: c_int) c_int;
     extern "c" fn fcntl(fd: c_int, cmd: c_int, ...) c_int;
     extern "c" fn signal(sig: c_int, handler: ?*const anyopaque) ?*const anyopaque;
     extern "c" fn getdtablesize() c_int;
 };
 
+/// nfds_t is unsigned long on Linux and unsigned int on the BSDs and macOS.
+const c_nfds = if (builtin.os.tag == .linux) c_ulong else c_uint;
 const PollFd = extern struct { fd: c_int, events: i16, revents: i16 };
 const POLLIN: i16 = 0x001;
 const POLLOUT: i16 = 0x004;
@@ -209,7 +215,8 @@ fn spawnPosix(
     }
 
     var env: std.ArrayList(?[*:0]const u8) = .empty;
-    var inherited = std.c.environ;
+    // Shared libraries cannot link `environ` on macOS; the accessor works everywhere there.
+    var inherited = if (builtin.os.tag == .macos) c._NSGetEnviron().* else std.c.environ;
     while (inherited[0]) |entry| : (inherited += 1) {
         const text = std.mem.span(entry);
         var replaced = false;
