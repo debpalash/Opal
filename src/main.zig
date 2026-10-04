@@ -45,6 +45,9 @@ test "Native agent tasks offline SDL pixel capture" {
 test "Native operator activity offline SDL pixel capture" {
     if (!@import("build_options").headless) _ = @import("ui/operator_native_test.zig");
 }
+test "Native browser hub offline SDL pixel capture" {
+    if (!@import("build_options").headless) _ = @import("ui/browser_hub_native_test.zig");
+}
 test "Native Browse Suwayomi test returns before delayed server and ignores stale response" {
     try @import("services/plugins.zig").verifySuwaNonblockingForTest();
 }

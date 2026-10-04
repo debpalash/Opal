@@ -487,3 +487,15 @@ body {
   color: var(--muted);
   padding: 6px 2px 0;
 }
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 8px;
+  font-size: 12px;
+  color: var(--text-dim, inherit);
+}
+.check-row input {
+  margin: 0;
+}

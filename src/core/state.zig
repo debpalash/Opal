@@ -866,6 +866,10 @@ pub const AppState = struct {
     wanted_follow_tv: bool = false,
     /// Scheduled agent tasks run only while this is on (they spend the user's agent credit).
     agent_tasks_enabled: bool = false,
+    /// Agents may read the page the user shared from their browser (and play its
+    /// detected streams) only while this is on. Off by default. Only the UI flips
+    /// it: no HTTP route and no tool reaches this field.
+    browser_share_agents: bool = false,
     /// The background operator (jobs handed to a coding agent behind the scenes) runs only while on.
     operator_enabled: bool = false,
     /// Spend ceiling per UTC day for operator jobs, in cents.

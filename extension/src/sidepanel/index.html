@@ -63,6 +63,26 @@
       </div>
     </section>
 
+    <!-- Share this page with Opal (browser link, milestone 2). One page, one
+         click, never automatic. The box below is per page and starts unticked;
+         Opal has its own switch that decides whether agents ever see it. -->
+    <section id="share-card" class="card">
+      <div class="card-head between">
+        <div class="card-title small">Share this page with Opal</div>
+      </div>
+      <p class="card-body">
+        Sends this page's title, address, description and the start of its text
+        to Opal, with any streams found on it. Opal keeps only the last page, in
+        memory, and you can dismiss it there.
+      </p>
+      <label class="check-row">
+        <input id="share-agents" type="checkbox" />
+        <span>Also let coding agents read this page</span>
+      </label>
+      <button id="share-btn" class="btn primary full">Share this page with Opal</button>
+      <p id="share-note" class="card-sub"></p>
+    </section>
+
     <!-- Streams found behind this page (browser link, milestone 1).
          Detection is off until the user grants the optional webRequest
          permission here; Play/Queue talk to Opal with the browser's own token,

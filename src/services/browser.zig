@@ -822,6 +822,9 @@ fn escapeJsonString(input: []const u8, buf: *[4096]u8) []const u8 {
 pub fn navigate(url: []const u8) void {
     const b = &state.app.browser;
     if (url.len == 0 or url.len >= 2048) return;
+    // Browse > Web is the Browser hub now; a page somebody asked for belongs in
+    // the built-in browser behind it, so keep the hub from covering it.
+    @import("../ui/browser_hub.zig").showBridge();
 
     // Store URL. `url` may be a slice INTO url_buf at a nonzero offset — the
     // smart address bar trims whitespace, so scheme'd input with a leading

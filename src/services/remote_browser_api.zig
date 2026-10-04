@@ -5,6 +5,10 @@
 //!   POST /api/browser/revoke   host: ?id=N removes one; a browser token unpairs itself
 //!   GET  /api/browser/me       browser only: who this token is (also a cheap validity check)
 //!   POST /api/browser/media    browser only: {page_url,title,art,candidates[],action} -> plays or queues
+//!   POST /api/browser/page     browser only: the page the user chose to share (kept in memory, last one only)
+//!   GET  /api/browser/context  host only (machine token, admin session): ?view=status|page|candidates, what
+//!                              agents may see; content views are empty unless the user allowed agents twice
+//!   POST /api/browser/play     host only: ?page=&id=&action=play|queue, a candidate of the shared page by id
 //!
 //! Who may call what is decided in access_pure.zig (`browser_routes` for the
 //! browser principal, `routeCapability` for the rest); the checks here repeat
@@ -16,6 +20,7 @@ const link = @import("browser_link.zig");
 const pure = @import("browser_link_pure.zig");
 const access = @import("access_pure.zig");
 const forwarded_open = @import("forwarded_open.zig");
+const shared_page = @import("browser_page.zig");
 const alloc = @import("../core/alloc.zig").allocator;
 const logs = @import("../core/logs.zig");
 
@@ -132,7 +137,89 @@ pub fn handle(
         media(stream, body);
         return true;
     }
+    if (std.mem.eql(u8, path, "/browser/page")) {
+        if (!wire.requireMethod(stream, method, "POST")) return true;
+        if (principal != .browser) {
+            err(stream, "403 Forbidden", "insufficient capability");
+            return true;
+        }
+        sharePage(stream, body, presented);
+        return true;
+    }
+    if (std.mem.eql(u8, path, "/browser/context")) {
+        if (!wire.requireMethod(stream, method, "GET")) return true;
+        if (principal != .machine and principal != .admin_session) {
+            err(stream, "403 Forbidden", "insufficient capability");
+            return true;
+        }
+        context(stream, query);
+        return true;
+    }
+    if (std.mem.eql(u8, path, "/browser/play")) {
+        if (!wire.requireMethod(stream, method, "POST")) return true;
+        if (principal != .machine and principal != .admin_session) {
+            err(stream, "403 Forbidden", "insufficient capability");
+            return true;
+        }
+        playCandidate(stream, query, body);
+        return true;
+    }
     return false;
+}
+
+fn sharePage(stream: std.Io.net.Stream, body: []const u8, presented: []const u8) void {
+    const link_id = link.validToken(presented) orelse return err(stream, "401 Unauthorized", "not paired");
+    const id = shared_page.share(body, link_id) catch |e|
+        return err(stream, "400 Bad Request", @import("browser_page_pure.zig").parseErrorMessage(e));
+    shared_page.logShared();
+    var out: [64]u8 = undefined;
+    const json = std.fmt.bufPrint(&out, "{{\"ok\":true,\"page_id\":{d}}}", .{id}) catch
+        return err(stream, "500 Internal Server Error", "server error");
+    wire.sendJson(stream, json);
+}
+
+fn context(stream: std.Io.net.Stream, query: []const u8) void {
+    var vb: [16]u8 = undefined;
+    const name = wire.formParam("", query, "view", &vb) orelse "status";
+    const view: shared_page.View = if (std.mem.eql(u8, name, "status"))
+        .status
+    else if (std.mem.eql(u8, name, "page"))
+        .page
+    else if (std.mem.eql(u8, name, "candidates"))
+        .candidates
+    else
+        return err(stream, "400 Bad Request", "view must be status, page or candidates");
+    var out: std.Io.Writer.Allocating = .init(alloc);
+    defer out.deinit();
+    shared_page.writeContext(&out.writer, view) catch return err(stream, "500 Internal Server Error", "server error");
+    wire.sendJson(stream, out.written());
+}
+
+fn playCandidate(stream: std.Io.net.Stream, query: []const u8, body: []const u8) void {
+    var pb: [16]u8 = undefined;
+    var ib: [16]u8 = undefined;
+    var ab: [8]u8 = undefined;
+    const page_id = std.fmt.parseInt(u32, wire.formParam(body, query, "page", &pb) orelse "", 10) catch
+        return err(stream, "400 Bad Request", "page required: the page_id from browser_media_candidates");
+    const id = std.fmt.parseInt(u32, wire.formParam(body, query, "id", &ib) orelse "", 10) catch
+        return err(stream, "400 Bad Request", "id required: a candidate id from browser_media_candidates");
+    const action = wire.formParam(body, query, "action", &ab) orelse "play";
+    const queue_only = if (std.mem.eql(u8, action, "queue")) true else if (std.mem.eql(u8, action, "play")) false else
+        return err(stream, "400 Bad Request", "action must be play or queue");
+    const played = shared_page.playForAgent(page_id, id, queue_only) catch |e| switch (e) {
+        error.not_shared => return err(stream, "403 Forbidden", "no page is shared with agents (the user decides in the Opal Connect panel and Settings > Agent Access)"),
+        error.stale => return err(stream, "409 Conflict", "the shared page changed: read browser_media_candidates again"),
+        error.missing => return err(stream, "404 Not Found", "no such candidate on the shared page"),
+        error.busy => return err(stream, "503 Service Unavailable", "Opal is busy opening other media, try again"),
+    };
+    var out: [192]u8 = undefined;
+    const json = std.fmt.bufPrint(&out, "{{\"ok\":true,\"action\":\"{s}\",\"kind\":\"{s}\",\"referer_sent\":{s},\"queued_without_headers\":{s}}}", .{
+        if (queue_only) "queue" else "play",
+        @tagName(played.kind),
+        if (played.referer_sent) "true" else "false",
+        if (played.queued_without_headers) "true" else "false",
+    }) catch return err(stream, "500 Internal Server Error", "server error");
+    wire.sendJson(stream, json);
 }
 
 fn links(stream: std.Io.net.Stream) void {

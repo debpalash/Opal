@@ -706,6 +706,41 @@ streamsDisable.addEventListener("click", async () => {
 });
 streamsPair.addEventListener("click", () => chrome.runtime.openOptionsPage());
 
+// ── Share this page with Opal ─────────────────────────────────────────────────
+
+const shareBtn = $<HTMLButtonElement>("share-btn");
+const shareAgents = $<HTMLInputElement>("share-agents");
+const shareNote = $<HTMLElement>("share-note");
+
+// A user-initiated, per-page action: the click is the consent. Nothing here
+// runs on a timer or on navigation, and the agents box resets after each share
+// so it is never inherited by the next page.
+shareBtn.addEventListener("click", async () => {
+  const tabId = await activeTabId();
+  if (tabId === null) {
+    shareNote.textContent = "No page to share.";
+    return;
+  }
+  shareBtn.disabled = true;
+  shareNote.textContent = "Sharing…";
+  const res = await browserMsg<{ ok: boolean; error?: string; pageRead?: boolean; streams?: number }>({
+    op: "share",
+    tabId,
+    agents: shareAgents.checked,
+  });
+  shareBtn.disabled = false;
+  if (res.ok) {
+    const parts = [res.pageRead ? "Shared with Opal" : "Shared the title and address only (this extension has no access to the page text here)"];
+    if (res.streams) parts.push(`${res.streams} stream${res.streams === 1 ? "" : "s"} included`);
+    shareNote.textContent = parts.join(" · ") + ".";
+    shareAgents.checked = false;
+    logRecent("Page shared with Opal", true);
+  } else {
+    shareNote.textContent = res.error ?? "Could not share.";
+    logRecent(res.error ?? "Share failed", false);
+  }
+});
+
 // ── Status polling ────────────────────────────────────────────────────────────
 
 let pollTimer: number | undefined;

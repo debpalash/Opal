@@ -8,6 +8,9 @@ import {
   MAX_TS_WITHOUT_MANIFEST,
   addCandidate,
   buildMediaPayload,
+  buildSharePayload,
+  clipBytes,
+  wireCandidate,
   candidateId,
   classifyContentType,
   classifyUrl,
@@ -224,4 +227,62 @@ test("buildMediaPayload drops bad optional fields and refuses a bad URL", () => 
 test("describeCandidate: host and file name", () => {
   const d = describeCandidate(cand("https://cdn.example:8443/dir/master.m3u8?t=1", "hls"));
   assert.deepEqual(d, { host: "cdn.example:8443", name: "master.m3u8" });
+});
+
+const facts = (extra = {}) => ({
+  url: "https://example.com/watch?v=1",
+  title: "Dune (2021)",
+  og: { "og:title": "Dune", "og:image": "https://example.com/p.jpg" },
+  jsonld: ['{"@type":"Movie"}'],
+  text: "Some page text",
+  ...extra,
+});
+
+test("buildSharePayload: not shared with agents unless asked, only set fields", () => {
+  const m = cand("https://cdn.example/m.m3u8?t=1", "hls", {
+    headers: [{ name: "Referer", value: "https://embed.example/p/1" }],
+  });
+  const p = buildSharePayload(facts(), [m], false);
+  assert.equal(p.shared_with_agents, false);
+  assert.equal(p.url, "https://example.com/watch?v=1");
+  assert.deepEqual(p.candidates, [{ url: "https://cdn.example/m.m3u8?t=1", kind: "hls", referer: "https://embed.example/p/1" }]);
+  assert.equal(buildSharePayload(facts(), [], true).shared_with_agents, true);
+  // Anything that is not literally true stays false.
+  assert.equal(buildSharePayload(facts(), [], "yes").shared_with_agents, false);
+});
+
+test("buildSharePayload: refuses a page address that cannot be sent", () => {
+  assert.equal(buildSharePayload(facts({ url: "javascript:alert(1)" }), [], false), null);
+  assert.equal(buildSharePayload(facts({ url: "file:///etc/passwd" }), [], false), null);
+  assert.equal(buildSharePayload(facts({ url: "https://e.com/" + "a".repeat(3000) }), [], false), null);
+});
+
+test("buildSharePayload: text capped at 8 KB bytes, og and jsonld bounded, no extra fields", () => {
+  const og = {};
+  for (let i = 0; i < 40; i++) og["k" + i] = "v".repeat(1000);
+  const p = buildSharePayload(
+    facts({ text: "é".repeat(9000), og, jsonld: ["a", "b", "c", "d", "x".repeat(5000)] }),
+    [],
+    false,
+  );
+  assert.ok(new TextEncoder().encode(p.text).length <= 8192);
+  assert.equal(Object.keys(p.og).length, 12);
+  assert.ok(Object.values(p.og).every((v) => v.length <= 300));
+  assert.equal(p.jsonld.length, 3);
+  assert.deepEqual(Object.keys(p).sort(), ["candidates", "jsonld", "og", "shared_with_agents", "text", "title", "url"]);
+});
+
+test("buildSharePayload: at most eight candidates and bad ones are dropped", () => {
+  const list = [];
+  for (let i = 0; i < 12; i++) list.push(cand(`https://cdn.example/v${i}.mp4`, "mp4"));
+  list.unshift({ ...cand("https://cdn.example/x.mp4", "mp4"), url: "file:///etc/passwd" });
+  const p = buildSharePayload(facts(), list, false);
+  assert.equal(p.candidates.length, 8);
+  assert.ok(p.candidates.every((c) => c.url.startsWith("https://")));
+});
+
+test("clipBytes never splits a character; wireCandidate rejects bad URLs", () => {
+  assert.equal(clipBytes("ééé", 5), "éé");
+  assert.equal(clipBytes("abc", 10), "abc");
+  assert.equal(wireCandidate({ ...cand("https://cdn.example/a.mp4", "mp4"), url: "data:text/html,x" }), null);
 });
