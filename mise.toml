@@ -1,0 +1,3 @@
+# Opal builds with Zig 0.16.x (build.zig.zon minimum_zig_version). Zig 0.17 changed the build API.
+[tools]
+zig = "0.16.0"

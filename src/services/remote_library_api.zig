@@ -86,13 +86,15 @@ fn libraryItemAction(stream: std.Io.net.Stream, query: []const u8) void {
     const store = @import("library_store.zig");
     if (std.mem.eql(u8, action, "favorite")) {
         const enabled = wire.queryParam(query, "enabled") orelse "";
-        if (!std.mem.eql(u8, enabled, "true") and !std.mem.eql(u8, enabled, "false")) {
+        const is_on = std.mem.eql(u8, enabled, "true") or std.mem.eql(u8, enabled, "1");
+        const is_off = std.mem.eql(u8, enabled, "false") or std.mem.eql(u8, enabled, "0");
+        if (!is_on and !is_off) {
             wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"invalid favorite value\"}");
             return;
         }
         var link_buf: [544]u8 = undefined;
         const deep_link = std.fmt.bufPrint(&link_buf, "opal://search/{s}", .{title}) catch "";
-        store.setFavorite(identity.kind, identity.id, std.mem.eql(u8, enabled, "true"), title, poster, deep_link);
+        store.setFavorite(identity.kind, identity.id, is_on, title, poster, deep_link);
     } else if (std.mem.eql(u8, action, "rating")) {
         const raw = wire.queryParam(query, "value") orelse "";
         const rating: ?f64 = if (std.mem.eql(u8, raw, "clear")) null else std.fmt.parseFloat(f64, raw) catch {

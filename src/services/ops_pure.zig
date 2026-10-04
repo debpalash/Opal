@@ -114,6 +114,11 @@ const task_id = Param{ .name = "id", .kind = .integer, .desc = "Task id from age
 
 const library_filters = [_][]const u8{ "all", "watching", "caught_up", "unstarted", "completed", "dropped" };
 const library_kinds = [_][]const u8{ "all", "tv", "anime", "movie" };
+const title_kinds = [_][]const u8{ "tv", "anime", "movie" };
+const user_statuses = [_][]const u8{ "none", "plan", "watching", "completed", "dropped" };
+const lib_kind = Param{ .name = "kind", .kind = .choice, .desc = "Kind of title, as in library_list.", .required = true, .choices = &title_kinds };
+const lib_id = Param{ .name = "id", .kind = .string, .desc = "The item's id from library_list.", .required = true, .max_len = 128 };
+const collection_id = Param{ .name = "id", .kind = .integer, .desc = "Collection id from collections_list.", .required = true, .min = 1, .max = 9007199254740991 };
 const library_sorts = [_][]const u8{ "smart", "recent", "title", "progress" };
 
 /// Settings an agent may change. Deliberately omits proxy_url (reroutes all
@@ -154,8 +159,16 @@ pub const ops = [_]Op{
             .{ .name = "kind", .kind = .choice, .desc = "Kind of title. Default all.", .choices = &library_kinds },
             .{ .name = "sort", .kind = .choice, .desc = "Order. Default smart (what to watch next first).", .choices = &library_sorts },
             .{ .name = "offset", .kind = .integer, .desc = "Skip this many items.", .min = 0, .max = 100000 },
-            .{ .name = "limit", .kind = .integer, .desc = "Items to return, 1-200. Default 48.", .min = 1, .max = 200 },
+            .{ .name = "limit", .kind = .integer, .desc = "Items to return, 1-96. Default 48.", .min = 1, .max = 96 },
         },
+    },
+    .{
+        .name = "library_watched",
+        .summary = "Which episodes of one season of a library show or anime are marked watched.",
+        .tier = .read,
+        .method = .GET,
+        .path = "/library/watched",
+        .params = &.{ lib_kind, lib_id, .{ .name = "season", .kind = .integer, .desc = "Season number.", .required = true, .min = 0, .max = 999 } },
     },
     .{ .name = "settings_list", .summary = "Every app setting an agent can see, with its type, range and current value.", .tier = .read, .method = .GET, .path = "/settings" },
     .{ .name = "calendar_list", .summary = "Coming up: the next episode and air date of each tracked show, and whether the latest one is available to stream.", .tier = .read, .method = .GET, .path = "/calendar" },
@@ -283,6 +296,76 @@ pub const ops = [_]Op{
         },
     },
     .{
+        .name = "library_set_status",
+        .summary = "Set how the user tracks a show, anime or movie: none (untracked), plan, watching, completed or dropped.",
+        .tier = .write,
+        .method = .POST,
+        .path = "/library/action",
+        .fixed = &.{.{ .key = "action", .value = "status" }},
+        .params = &.{ lib_kind, lib_id, .{ .name = "status", .kind = .choice, .desc = "New tracking status.", .required = true, .wire = "value", .choices = &user_statuses } },
+    },
+    .{
+        .name = "library_mark_watched",
+        .summary = "Mark one episode of a library show or anime watched or unwatched.",
+        .tier = .write,
+        .method = .POST,
+        .path = "/library/action",
+        .fixed = &.{.{ .key = "action", .value = "watched" }},
+        .params = &.{
+            lib_kind,
+            lib_id,
+            .{ .name = "season", .kind = .integer, .desc = "Season number.", .required = true, .min = 0, .max = 999 },
+            .{ .name = "episode", .kind = .integer, .desc = "Episode number.", .required = true, .min = 1, .max = 9999 },
+            .{ .name = "watched", .kind = .boolean, .desc = "true to mark watched, false to clear.", .required = true, .wire = "value" },
+        },
+    },
+    .{ .name = "library_refresh", .summary = "Re-sync the tracked library from its sources (new episodes, air dates).", .tier = .write, .method = .POST, .path = "/library/action", .fixed = &.{.{ .key = "action", .value = "refresh" }} },
+    .{
+        .name = "library_favorite",
+        .summary = "Favorite or unfavorite a title.",
+        .tier = .write,
+        .method = .POST,
+        .path = "/library/item/action",
+        .fixed = &.{.{ .key = "action", .value = "favorite" }},
+        .params = &.{ lib_kind, lib_id, .{ .name = "title", .kind = .string, .desc = "The title's name, kept with the favorite.", .required = true, .max_len = 255 }, .{ .name = "favorite", .kind = .boolean, .desc = "true to favorite, false to remove.", .required = true, .wire = "enabled" } },
+    },
+    .{
+        .name = "library_rate",
+        .summary = "Rate a title from 0 to 10 in half steps, or pass clear to remove the rating.",
+        .tier = .write,
+        .method = .POST,
+        .path = "/library/item/action",
+        .fixed = &.{.{ .key = "action", .value = "rating" }},
+        .params = &.{ lib_kind, lib_id, .{ .name = "title", .kind = .string, .desc = "The title's name, kept with the rating.", .required = true, .max_len = 255 }, .{ .name = "rating", .kind = .string, .desc = "0 to 10 in steps of 0.5, or the word clear.", .required = true, .wire = "value", .max_len = 8 } },
+    },
+    .{
+        .name = "collection_save_queue",
+        .summary = "Save the current playback queue as a new named collection.",
+        .tier = .write,
+        .method = .POST,
+        .path = "/collections/action",
+        .fixed = &.{.{ .key = "action", .value = "save" }},
+        .params = &.{.{ .name = "name", .kind = .string, .desc = "Collection name.", .required = true, .max_len = 150 }},
+    },
+    .{
+        .name = "collection_append",
+        .summary = "Add a collection's items to the end of the playback queue.",
+        .tier = .playback,
+        .method = .POST,
+        .path = "/collections/action",
+        .fixed = &.{.{ .key = "action", .value = "append" }},
+        .params = &.{collection_id},
+    },
+    .{
+        .name = "collection_replace",
+        .summary = "Replace the playback queue with a collection's items.",
+        .tier = .playback,
+        .method = .POST,
+        .path = "/collections/action",
+        .fixed = &.{.{ .key = "action", .value = "replace" }},
+        .params = &.{collection_id},
+    },
+    .{
         .name = "settings_set",
         .summary = "Change one app setting listed by settings_list (playback, subtitles, language, theme, privacy). Network proxy and download folder cannot be changed by agents.",
         .tier = .write,
@@ -353,6 +436,24 @@ pub const ops = [_]Op{
 
     // ── Destructive: policy opt-in AND confirm:true ──
     .{ .name = "queue_clear", .summary = "Empty the playback queue.", .tier = .destructive, .method = .POST, .path = "/queue/action", .fixed = &.{ .{ .key = "action", .value = "clear" }, .{ .key = "confirm", .value = "1" } } },
+    .{
+        .name = "library_remove",
+        .summary = "Remove a title from the Watching library: stops tracking a show, or drops an anime or movie from continue-watching. Files on disk are not touched.",
+        .tier = .destructive,
+        .method = .POST,
+        .path = "/library/action",
+        .fixed = &.{ .{ .key = "action", .value = "remove" }, .{ .key = "confirm", .value = "1" } },
+        .params = &.{ lib_kind, lib_id },
+    },
+    .{
+        .name = "collection_remove",
+        .summary = "Delete a saved collection. The media it listed is not touched.",
+        .tier = .destructive,
+        .method = .POST,
+        .path = "/collections/action",
+        .fixed = &.{ .{ .key = "action", .value = "remove" }, .{ .key = "confirm", .value = "1" } },
+        .params = &.{collection_id},
+    },
     .{
         .name = "downloads_cancel",
         .summary = "Cancel a download and discard its partial data. Pass the index and token from downloads_list.",
@@ -1057,6 +1158,34 @@ test "validate rejects missing, unknown, mistyped and out-of-range arguments" {
     var p8 = try parseArgs(a, "{\"action\":\"rm -rf\"}");
     defer p8.deinit();
     try testing.expectError(error.InvalidArgument, validate(findOp("queue_action").?, p8.value.object, &diag));
+}
+
+test "library write tools map onto the library routes with the right tiers" {
+    const a = testing.allocator;
+    var buf: [512]u8 = undefined;
+    var diag = Diag{};
+
+    const mark = findOp("library_mark_watched").?;
+    var args = try parseArgs(a, "{\"kind\":\"tv\",\"id\":\"tmdb:1396\",\"season\":2,\"episode\":3,\"watched\":true}");
+    defer args.deinit();
+    try validate(mark, args.value.object, &diag);
+    var w = Writer.fixed(&buf);
+    try writeTarget(mark, args.value.object, &w);
+    try testing.expectEqualStrings("/api/library/action?action=watched&kind=tv&id=tmdb%3A1396&season=2&episode=3&value=1", w.buffered());
+
+    const status = findOp("library_set_status").?;
+    var bad = try parseArgs(a, "{\"kind\":\"tv\",\"id\":\"1\",\"status\":\"finished\"}");
+    defer bad.deinit();
+    try testing.expectError(error.InvalidArgument, validate(status, bad.value.object, &diag));
+    var no_kind = try parseArgs(a, "{\"kind\":\"album\",\"id\":\"1\",\"status\":\"plan\"}");
+    defer no_kind.deinit();
+    try testing.expectError(error.InvalidArgument, validate(status, no_kind.value.object, &diag));
+
+    try testing.expectEqual(Tier.destructive, findOp("library_remove").?.tier);
+    try testing.expectEqual(Tier.destructive, findOp("collection_remove").?.tier);
+    try testing.expectEqual(Tier.playback, findOp("collection_replace").?.tier);
+    try testing.expectEqual(Tier.write, findOp("library_favorite").?.tier);
+    try testing.expectEqual(Tier.read, findOp("library_watched").?.tier);
 }
 
 test "agent_task_add maps to the task route, bounds its limits and is a spend op" {
