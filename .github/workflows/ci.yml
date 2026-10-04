@@ -337,7 +337,7 @@ jobs:
           command -v python
           command -v ffmpeg
           cp torrent_wrapper.dll zig-out/bin/
-          python tests/test_setup_token_live.py PortCollisionGuardTest FixtureDatabaseTest
+          python tests/test_setup_token_live.py PortCollisionGuardTest FixtureDatabaseTest FixtureEnvironmentTest
           python tests/test_media_servers_live.py --binary zig-out/bin/opal.exe --port 41811
           python tests/test_webcomic_sources_live.py --binary zig-out/bin/opal.exe --port 41807
           python tests/test_audio_browse_progressive_live.py --binary zig-out/bin/opal.exe --port 41809

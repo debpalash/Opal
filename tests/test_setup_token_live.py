@@ -37,6 +37,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 import urllib.parse
 
 
@@ -196,7 +197,7 @@ class IsolatedOpal:
                 "OPAL_HEADLESS": "1",
                 # CI has no audio device. Exercise real decoding and playback
                 # through null output, independent of host mpv overrides.
-                "OPAL_MPV_OPTS": "ao=null",
+                "OPAL_MPV_OPTS": "ao=null;vo=null",
             }
         )
         env.pop("OPAL_WEB_BIND", None)
@@ -388,6 +389,25 @@ class FixtureDatabaseTest(unittest.TestCase):
             with database(path) as reader:
                 self.assertEqual(reader.execute('SELECT value FROM fixture').fetchone(), (7,))
             path.unlink()
+
+
+class FixtureEnvironmentTest(unittest.TestCase):
+    def test_null_outputs_override_only_owned_child_environment(self):
+        global BINARY
+        previous = BINARY
+        BINARY = Path(sys.executable)
+        self.addCleanup(setattr, sys.modules[__name__], "BINARY", previous)
+        owned = IsolatedOpal(self)
+        self.addCleanup(owned.stop)
+        class AdmissionStopped(Exception):
+            pass
+        with mock.patch.dict(os.environ, {"OPAL_MPV_OPTS": "fixture-parent-value"}), \
+             mock.patch.object(IsolatedOpal, "_require_free_port"), \
+             mock.patch.object(subprocess, "Popen", side_effect=AdmissionStopped) as launch:
+            with self.assertRaises(AdmissionStopped):
+                owned.start()
+            self.assertEqual(launch.call_args.kwargs["env"]["OPAL_MPV_OPTS"], "ao=null;vo=null")
+            self.assertEqual(os.environ["OPAL_MPV_OPTS"], "fixture-parent-value")
 
 
 class SetupTokenLiveTest(unittest.TestCase):

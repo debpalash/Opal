@@ -37,7 +37,7 @@ def test_windows_unit_sqlite_dependency():
 @test("Live fixtures reject an existing wildcard listener", "Build")
 def test_live_fixture_port_collision_guard():
     result = subprocess.run(
-        [sys.executable, "tests/test_setup_token_live.py", "PortCollisionGuardTest"],
+        [sys.executable, "tests/test_setup_token_live.py", "PortCollisionGuardTest", "FixtureDatabaseTest", "FixtureEnvironmentTest"],
         cwd=PROJECT_DIR, capture_output=True, text=True, timeout=10,
     )
     if result.returncode:
