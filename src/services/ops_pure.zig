@@ -110,6 +110,10 @@ const idx_param = Param{ .name = "index", .kind = .integer, .desc = "Zero-based 
 const wanted_id = Param{ .name = "id", .kind = .integer, .desc = "Item id from wanted_list.", .required = true, .min = 1, .max = 9007199254740991 };
 const wanted_kinds = [_][]const u8{ "movie", "episode" };
 
+const library_filters = [_][]const u8{ "all", "watching", "caught_up", "unstarted", "completed", "dropped" };
+const library_kinds = [_][]const u8{ "all", "tv", "anime", "movie" };
+const library_sorts = [_][]const u8{ "smart", "recent", "title", "progress" };
+
 const queue_actions = [_][]const u8{ "play", "remove", "move-up", "move-down", "previous", "next", "toggle-shuffle", "cycle-repeat", "clear-played" };
 
 /// The whole agent-visible surface. Names are MCP tool names (a-z, 0-9, _).
@@ -128,6 +132,22 @@ pub const ops = [_]Op{
     .{ .name = "queue_list", .summary = "The playback queue with item indexes.", .tier = .read, .method = .GET, .path = "/queue" },
     .{ .name = "downloads_list", .summary = "Active and finished downloads with the index and token that download actions need.", .tier = .read, .method = .GET, .path = "/downloads" },
     .{ .name = "history_list", .summary = "Recently watched items.", .tier = .read, .method = .GET, .path = "/history" },
+    .{
+        .name = "library_list",
+        .summary = "The user's tracked shows, anime and movies with watch progress. Filter by status or kind; page with offset and limit.",
+        .tier = .read,
+        .method = .GET,
+        .path = "/library",
+        .params = &.{
+            .{ .name = "filter", .kind = .choice, .desc = "Watch status. Default all.", .choices = &library_filters },
+            .{ .name = "kind", .kind = .choice, .desc = "Kind of title. Default all.", .choices = &library_kinds },
+            .{ .name = "sort", .kind = .choice, .desc = "Order. Default smart (what to watch next first).", .choices = &library_sorts },
+            .{ .name = "offset", .kind = .integer, .desc = "Skip this many items.", .min = 0, .max = 100000 },
+            .{ .name = "limit", .kind = .integer, .desc = "Items to return, 1-200. Default 48.", .min = 1, .max = 200 },
+        },
+    },
+    .{ .name = "calendar_list", .summary = "Coming up: the next episode and air date of each tracked show, and whether the latest one is available to stream.", .tier = .read, .method = .GET, .path = "/calendar" },
+    .{ .name = "collections_list", .summary = "The user's named collections (playlists) with item counts.", .tier = .read, .method = .GET, .path = "/collections" },
     .{ .name = "recommendations", .summary = "Personalised recommendations from the viewing history.", .tier = .read, .method = .GET, .path = "/recommendations" },
 
     // ── Playback ──
