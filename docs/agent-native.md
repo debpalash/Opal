@@ -151,6 +151,16 @@ Windows (ConPTY, `pty_windows.zig`) is written but has only been cross-compiled,
 
 `src/services/wanted.zig` plus `wanted_pure.zig` (scoring, backoff). Add a movie or episode once; Opal searches on a private channel that never disturbs on-screen results, filters cams, screeners, fan edits and trailers, scores by quality, seeders and size, starts the best torrent on the owner thread, retries with backoff (30 min doubling to a day) and marks the item fulfilled when the download completes. "Follow tracked shows" queues the newest aired episode of each tracked show. Verified live against EZTV. Exposed as `/api/wanted/*` and `wanted_*` tools, and as a Wanted section at the top of the Downloads page (add by typing `Dune 2021` or `Severance S02E03`; find, pause, resume, remove).
 
+### Agents home
+
+Agents is the first destination in the sidebar (expanded and collapsed rail, the compact navigation menu and the command palette's "Go: Agents"), above Home. What a returning user lands on at startup is unchanged. The page opens on **Overview**, then Terminal, Tasks and Activity.
+
+Overview (`src/ui/agents_overview.zig`, wording and the feed merge in `src/services/agents_overview_pure.zig`, tests in `zig build test-overview` and `test-native-overview`) only surfaces what exists; it adds no automation engine:
+
+- **Automations**: Wanted list (counts, an Add a title box that is the Downloads page's own add flow, Manage opens Downloads), Follow tracked shows, Scheduled agent tasks (master switch, next run, three example tasks that only prefill the Add form on the Tasks tab, never create a task), Background operator (today's spend against the limit, proposals waiting with a button to Activity), Auto subtitles and Source repair (read-only: sources watched, repairs proposed or applied, from the operator's `endpoint_repair` jobs). Switches that spend the user's agent credit say so in one line. Each card links to where it is managed.
+- **For you**: Continue and Coming up use Home's own poster rails. `renderPicks()` in `agents_overview.zig` is the extension point for the operator's "Picked for you" rail: it returns false until that exists.
+- **What your agents did lately**: operator jobs applied, proposed or failed, scheduled task runs and wanted items fulfilled or downloading, merged newest first (12 at most); a click opens the owning tab. `renderAskSlot()` at the top of the page is an empty slot for an "Ask Opal" box.
+
 ### Background operator
 
 `src/services/operator*.zig`: Opal hands a problem to a headless coding agent that has no Opal tools and only a context text in its prompt, and gets back schema-validated JSON. Off until the user enables it.

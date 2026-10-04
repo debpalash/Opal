@@ -214,7 +214,7 @@ fn derive(now: i64) void {
 const MIN_CARD_W: f32 = 300;
 const CARD_MARGIN: f32 = 6;
 const CARD_PAD: f32 = 12;
-var card_min_h: f32 = 150;
+const card_min_h: f32 = 120;
 const FEED_ROW_H: f32 = 30;
 
 fn smallFont() dvui.Font {
@@ -271,6 +271,7 @@ fn sectionHeader(id: usize, glyph: []const u8, title: []const u8, sub: []const u
 fn cardBox(src: std.builtin.SourceLocation, id: usize, w: f32) *dvui.BoxWidget {
     return dvui.box(src, .{ .dir = .vertical }, .{
         .id_extra = id,
+        .expand = .vertical, // cards in one row share the tallest card's height
         .min_size_content = .{ .w = w - CARD_PAD * 2 - 2, .h = card_min_h },
         .max_size_content = .{ .w = w - CARD_PAD * 2 - 2, .h = std.math.floatMax(f32) },
         .background = true,
@@ -311,7 +312,7 @@ fn wantedCard(w: f32, inner: f32) void {
     plainHeader("Wanted list", pure.wantedStatus(&sb, counts));
     // The offline capture backend blanks everything drawn after a text entry
     // (the Tasks form capture shows the same), so the fixture can hide it.
-    if (!(builtin.is_test and fixture_for_test != null and fixture_for_test.?.hide_entry)) wanted_ui.renderAddBox(@max(120, inner - 70));
+    if (!(builtin.is_test and fixture_for_test != null and fixture_for_test.?.hide_entry)) wanted_ui.renderAddBox(@max(120, inner - 110));
     var foot = footerBegin();
     defer foot.deinit();
     if (components.actionButton(@src(), "Manage", .secondary, 30001)) open(.downloads);
@@ -457,8 +458,6 @@ fn renderAutomations(avail_w: f32) void {
     var i: usize = 0;
     var r: usize = 0;
     while (i < card_count) : (r += 1) {
-        // Cards in a row share a height when there is more than one column.
-        card_min_h = if (per_row > 1) (if (r == 0) 268 else 224) else 150;
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = r, .expand = .horizontal });
         defer row.deinit();
         var k: usize = 0;
