@@ -14,6 +14,7 @@
 const std = @import("std");
 const ops = @import("ops_pure.zig");
 const operator = @import("operator_pure.zig");
+const routing = @import("browser_pure.zig");
 
 // ── Limits ──────────────────────────────────────────────────────────────
 
@@ -114,6 +115,9 @@ const fixed_deny = [_][]const u8{
     "subtitles_generate",
 };
 
+/// The compact tool list `opal-mcp --preset` offers an Ask run.
+pub const preset_name = "ask";
+
 const MAX_DENY: usize = 31; // opal-mcp accepts one --deny-prefix plus 31 more
 
 /// `fixed_deny` plus, derived from the registry, every spend and destructive
@@ -153,7 +157,7 @@ pub fn policy() ops.Policy {
 
 /// Command-line arguments for `opal-mcp` (after the program name).
 pub const McpArgs = struct {
-    items: [4 + 2 * MAX_DENY + 4][]const u8 = undefined,
+    items: [6 + 2 * MAX_DENY + 4][]const u8 = undefined,
     len: usize = 0,
     port: [8]u8 = undefined,
 
@@ -167,8 +171,14 @@ pub const McpArgs = struct {
     }
 };
 
-pub fn mcpArgs(out: *McpArgs, port: u16) []const []const u8 {
+pub fn mcpArgs(out: *McpArgs, port: u16, preset: bool) []const []const u8 {
     out.len = 0;
+    // The compact `ask` tool list (about 30 tools instead of 100+) keeps every run's
+    // context small. Only passed when this opal-mcp knows the flag.
+    if (preset) {
+        out.push("--preset");
+        out.push(preset_name);
+    }
     out.push("--allow");
     out.push(mcp_tier);
     for (deny_prefixes) |p| {
@@ -182,9 +192,9 @@ pub fn mcpArgs(out: *McpArgs, port: u16) []const []const u8 {
 
 /// `--mcp-config` file for Claude Code: starts `opal-mcp` with the Ask policy.
 /// The token travels as a FILE PATH in the environment, never as its contents.
-pub fn mcpConfigJson(buf: []u8, mcp_path: []const u8, port: u16, token_file: []const u8) ?[]const u8 {
+pub fn mcpConfigJson(buf: []u8, mcp_path: []const u8, port: u16, token_file: []const u8, preset: bool) ?[]const u8 {
     var a: McpArgs = .{};
-    const args = mcpArgs(&a, port);
+    const args = mcpArgs(&a, port, preset);
     var w = std.Io.Writer.fixed(buf);
     var s = std.json.Stringify{ .writer = &w };
     s.beginObject() catch return null;
@@ -340,6 +350,10 @@ pub const Paths = struct {
     /// Codex: the output schema file and the file it writes its answer to.
     schema_file: []const u8 = "",
     out_file: []const u8 = "",
+    /// This `opal-mcp` understands `--preset` (see `mcpArgs`).
+    preset: bool = false,
+    /// Claude: answer with the small fast model (`haiku`) instead of `sonnet`.
+    fast: bool = false,
 };
 
 pub const Argv = struct {
@@ -382,6 +396,8 @@ pub fn buildArgv(out: *Argv, agent: Agent, question: []const u8, today: []const 
             const budget = std.fmt.bufPrint(&out.budget, "{d}.{d:0>2}", .{ BUDGET_CENTS / 100, BUDGET_CENTS % 100 }) catch return null;
             out.push("-p");
             out.push(full);
+            out.push("--model");
+            out.push(if (paths.fast) "haiku" else "sonnet");
             out.push("--output-format");
             out.push("json");
             out.push("--json-schema");
@@ -407,7 +423,7 @@ pub fn buildArgv(out: *Argv, agent: Agent, question: []const u8, today: []const 
             const cmd = std.fmt.bufPrint(&out.cmd_override, "mcp_servers.opal.command=\"{s}\"", .{paths.mcp_bin}) catch return null;
             const token = std.fmt.bufPrint(&out.token_override, "mcp_servers.opal.env.OPAL_API_TOKEN_FILE=\"{s}\"", .{paths.token_file}) catch return null;
             var a: McpArgs = .{};
-            const args = mcpArgs(&a, port);
+            const args = mcpArgs(&a, port, paths.preset);
             var w = std.Io.Writer.fixed(&out.args_override);
             w.writeAll("mcp_servers.opal.args=[") catch return null;
             for (args, 0..) |arg, i| {
@@ -632,6 +648,8 @@ pub fn parseAction(v: std.json.Value) ?Action {
         },
         .open => {
             if (!validHttpUrl(url_raw)) return null;
+            // Opening must never start a torrent: that is what Download is for.
+            if (routing.routeContent(url_raw) == .torrent) return null;
             act.url.set(url_raw);
         },
         .wanted_add => {
@@ -651,6 +669,21 @@ pub fn parseAction(v: std.json.Value) ?Action {
         },
     }
     return act;
+}
+
+/// The checks above, again, on a stored action. The UI calls this right before
+/// it executes a click, so nothing that was not validated can ever run.
+pub fn stillValid(act: *const Action) bool {
+    switch (act.kind) {
+        .play, .queue => return validText(act.text.slice()),
+        .open => return validHttpUrl(act.url.slice()) and routing.routeContent(act.url.slice()) != .torrent,
+        .wanted_add => {
+            if (!validText(act.text.slice())) return false;
+            if (act.year != 0 and (act.year < 1888 or act.year > 2200)) return false;
+            return (act.season == 0) == (act.episode == 0);
+        },
+        .download => return validHttpUrl(act.url.slice()) or validMagnet(act.url.slice()),
+    }
 }
 
 fn sameAction(a: *const Action, b: *const Action) bool {
@@ -758,6 +791,13 @@ pub const Problem = enum {
 pub const Parsed = struct {
     problem: Problem = .none,
     cost_cents: u32 = 0,
+    /// The envelope carried `total_cost_usd` (even 0), so the cost is known.
+    cost_known: bool = false,
+    /// Token counts from the envelope's `usage` block (zero when absent).
+    input_tokens: u32 = 0,
+    cache_read_tokens: u32 = 0,
+    cache_write_tokens: u32 = 0,
+    output_tokens: u32 = 0,
     /// Short plain note for `agent_error` (what the CLI said), already cleaned.
     note: Text(200) = .{},
 };
@@ -771,6 +811,20 @@ fn centsFrom(v: ?std.json.Value) u32 {
     };
     if (!std.math.isFinite(dollars) or dollars < 0) return 0;
     return @intFromFloat(@min(@ceil(dollars * 100), 100000));
+}
+
+fn tokenField(obj: std.json.ObjectMap, key: []const u8) u32 {
+    const v = obj.get(key) orelse return 0;
+    return switch (v) {
+        .integer => |i| if (i < 0) 0 else @intCast(@min(i, std.math.maxInt(u32))),
+        else => 0,
+    };
+}
+
+/// `in 123 / cache 4567 / out 89 tokens`, for the ledger summary and the logs.
+pub fn usageText(buf: []u8, p: *const Parsed) []const u8 {
+    if (p.input_tokens + p.cache_read_tokens + p.cache_write_tokens + p.output_tokens == 0) return "answered";
+    return std.fmt.bufPrint(buf, "answered; tokens in {d}, cache read {d}, cache write {d}, out {d}", .{ p.input_tokens, p.cache_read_tokens, p.cache_write_tokens, p.output_tokens }) catch "answered";
 }
 
 fn setNote(p: *Parsed, text: []const u8) void {
@@ -807,6 +861,13 @@ pub fn parseClaude(allocator: std.mem.Allocator, stdout: []const u8, out: *Answe
     }
     const obj = env.object;
     res.cost_cents = centsFrom(obj.get("total_cost_usd"));
+    if (obj.get("usage")) |u| if (u == .object) {
+        res.input_tokens = tokenField(u.object, "input_tokens");
+        res.cache_read_tokens = tokenField(u.object, "cache_read_input_tokens");
+        res.cache_write_tokens = tokenField(u.object, "cache_creation_input_tokens");
+        res.output_tokens = tokenField(u.object, "output_tokens");
+    };
+    res.cost_known = if (obj.get("total_cost_usd")) |c| (c == .float or c == .integer) else false;
     const result_text: ?[]const u8 = if (obj.get("result")) |r| (if (r == .string) r.string else null) else null;
     if (obj.get("is_error")) |e| if (e == .bool and e.bool) {
         res.problem = .agent_error;
@@ -862,12 +923,12 @@ pub fn gate(spent_cents: u32, daily_cents: u32) Gate {
     return if (spent_cents + BUDGET_CENTS > daily_cents) .over_budget else .ok;
 }
 
-/// What a finished ask is charged. Claude reports its cost; if it reports none
-/// the whole budget is charged, and Codex (no report) is always charged the
-/// whole budget.
-pub fn chargeCents(agent: Agent, reported_cents: u32) u32 {
+/// What a finished ask is charged. Claude reports its cost; when the reply
+/// carried none (cost unknown) the whole budget is charged, and Codex (no
+/// report) is always charged the whole budget.
+pub fn chargeCents(agent: Agent, reported_cents: u32, cost_known: bool) u32 {
     return switch (agent) {
-        .claude => if (reported_cents > 0) reported_cents else BUDGET_CENTS,
+        .claude => if (cost_known) reported_cents else BUDGET_CENTS,
         .codex => BUDGET_CENTS,
     };
 }
@@ -941,11 +1002,62 @@ pub fn detail(buf: []u8, act: *const Action) []const u8 {
     };
 }
 
+/// The cost line under an answer. Claude reports what it spent; Codex does not,
+/// so it is counted at the cap and says so.
+pub fn costLine(buf: []u8, agent: Agent, cents: u32) []const u8 {
+    var c: [16]u8 = undefined;
+    return switch (agent) {
+        .claude => std.fmt.bufPrint(buf, "Cost {s} (Claude Code, counted against today's agent budget)", .{costText(&c, cents)}) catch "",
+        .codex => std.fmt.bufPrint(buf, "Counted as {s} (Codex does not report its cost)", .{costText(&c, cents)}) catch "",
+    };
+}
+
+/// Light markdown for a plain text label: emphasis markers and backticks are
+/// dropped and list dashes become bullets. Text that does not fit is cut.
+pub fn plainMarkdown(out: []u8, text: []const u8) []const u8 {
+    var n: usize = 0;
+    var i: usize = 0;
+    var line_start = true;
+    while (i < text.len) {
+        const ch = text[i];
+        if (line_start and i + 1 < text.len and (ch == '-' or ch == '*') and text[i + 1] == ' ') {
+            const bullet = "\xe2\x80\xa2";
+            if (n + bullet.len > out.len) break;
+            @memcpy(out[n..][0..bullet.len], bullet);
+            n += bullet.len;
+            i += 1;
+            line_start = false;
+            continue;
+        }
+        if (ch == '`' or (ch == '*' and i + 1 < text.len and text[i + 1] == '*') or (ch == '_' and i + 1 < text.len and text[i + 1] == '_')) {
+            i += if (ch == '`') 1 else 2;
+            continue;
+        }
+        if (n >= out.len) break;
+        out[n] = ch;
+        n += 1;
+        line_start = ch == '\n';
+        i += 1;
+    }
+    // Do not end inside a multi-byte character.
+    while (n > 0 and !std.unicode.utf8ValidateSlice(out[0..n])) n -= 1;
+    return out[0..n];
+}
+
 /// Where a Settings row can say how much is left today.
 pub fn remainingText(buf: []u8, spent_cents: u32, daily_cents: u32) []const u8 {
     var a: [16]u8 = undefined;
     var b: [16]u8 = undefined;
     return std.fmt.bufPrint(buf, "{s} of {s} used today (shared with the background operator)", .{ costText(&a, spent_cents), costText(&b, daily_cents) }) catch "";
+}
+
+/// `YYYY-MM-DD` (UTC) for the prompt, from a wall clock in milliseconds.
+pub fn dateText(buf: []u8, ms: i64) []const u8 {
+    const secs: u64 = if (ms < 0) 0 else @intCast(@divFloor(ms, 1000));
+    const es = std.time.epoch.EpochSeconds{ .secs = secs };
+    const yd = es.getEpochDay().calculateYearDay();
+    const md = yd.calculateMonthDay();
+    return std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2}", .{ yd.year, md.month.numeric(), md.day_index + 1 }) catch "";
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────
@@ -1013,7 +1125,7 @@ test "deny list fits what opal-mcp accepts and every entry is a valid prefix" {
     try testing.expect(deny_prefixes.len <= MAX_DENY + 1);
     for (deny_prefixes) |d| try testing.expect(ops.validDenyPrefix(d));
     var a: McpArgs = .{};
-    const args = mcpArgs(&a, 41616);
+    const args = mcpArgs(&a, 41616, false);
     try testing.expectEqualStrings("--allow", args[0]);
     try testing.expectEqualStrings("write", args[1]);
     try testing.expectEqualStrings("--port", args[args.len - 2]);
@@ -1028,7 +1140,7 @@ test "deny list fits what opal-mcp accepts and every entry is a valid prefix" {
 
 test "mcp config carries the policy and a token FILE path, never a token" {
     var buf: [4096]u8 = undefined;
-    const cfg = mcpConfigJson(&buf, "/opt/Opal App/opal-mcp", 41595, "/home/u/.config/opal/api.token").?;
+    const cfg = mcpConfigJson(&buf, "/opt/Opal App/opal-mcp", 41595, "/home/u/.config/opal/api.token", false).?;
     var parsed = try parseJsonValue(testing.allocator, cfg);
     defer parsed.deinit();
     const server = parsed.value.object.get("mcpServers").?.object.get("opal").?.object;
@@ -1044,11 +1156,11 @@ test "mcp config carries the policy and a token FILE path, never a token" {
     try testing.expectEqualStrings("/home/u/.config/opal/api.token", server.get("env").?.object.get("OPAL_API_TOKEN_FILE").?.string);
     try testing.expect(std.mem.indexOf(u8, cfg, "OPAL_API_TOKEN\"") == null);
     // Quotes in a path are escaped, not rejected.
-    const quoted = mcpConfigJson(&buf, "/a \"b\"/opal-mcp", 1, "/t").?;
+    const quoted = mcpConfigJson(&buf, "/a \"b\"/opal-mcp", 1, "/t", false).?;
     var again = try parseJsonValue(testing.allocator, quoted);
     defer again.deinit();
     var tiny: [32]u8 = undefined;
-    try testing.expect(mcpConfigJson(&tiny, "/x", 1, "/t") == null);
+    try testing.expect(mcpConfigJson(&tiny, "/x", 1, "/t", false) == null);
 }
 
 test "question is cleaned, bounded and stripped of the > prefix" {
@@ -1115,6 +1227,7 @@ test "claude argv: one prompt element, no built-in tools, opal tools only, budge
         .{ "--allowedTools", "mcp__opal" },
         .{ "--permission-mode", "dontAsk" },
         .{ "--max-budget-usd", "0.25" },
+        .{ "--model", "sonnet" },
     };
     for (want) |pair| {
         var found = false;
@@ -1229,6 +1342,7 @@ test "hostile actions are dropped one by one, never offered" {
         "{\"kind\":\"open\",\"label\":\"x\",\"url\":\"https://user:pw@example.org/\"}",
         "{\"kind\":\"open\",\"label\":\"x\",\"url\":\"https://exa mple.org/\"}",
         "{\"kind\":\"open\",\"label\":\"x\",\"url\":\"magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567\"}",
+        "{\"kind\":\"open\",\"label\":\"x\",\"url\":\"https://example.org/files/Some.Release.torrent\"}",
         "{\"kind\":\"download\",\"label\":\"x\",\"url\":\"magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567&xs=http://127.0.0.1/x.torrent\"}",
         "{\"kind\":\"download\",\"label\":\"x\",\"url\":\"magnet:?xt=urn:btih:nothex\"}",
         "{\"kind\":\"download\",\"label\":\"x\",\"url\":\"magnet:?dn=NoHash\"}",
@@ -1325,11 +1439,15 @@ test "claude envelope: structured answer, cost, errors, plain fallback, event ar
     const al = testing.allocator;
     var a: Answer = undefined;
     const ok =
-        \\{"type":"result","is_error":false,"total_cost_usd":0.0432,"result":"x","structured_output":{"answer":"Nothing is playing.","actions":[],"cards":[]}}
+        \\{"type":"result","is_error":false,"total_cost_usd":0.0432,"usage":{"input_tokens":12,"cache_read_input_tokens":3400,"cache_creation_input_tokens":500,"output_tokens":210},"result":"x","structured_output":{"answer":"Nothing is playing.","actions":[],"cards":[]}}
     ;
     var p = parseClaude(al, ok, &a);
     try testing.expectEqual(Problem.none, p.problem);
     try testing.expectEqual(@as(u32, 5), p.cost_cents);
+    try testing.expect(p.cost_known);
+    try testing.expectEqual(@as(u32, 3400), p.cache_read_tokens);
+    var ub: [160]u8 = undefined;
+    try testing.expect(std.mem.indexOf(u8, usageText(&ub, &p), "out 210") != null);
     try testing.expectEqualStrings("Nothing is playing.", a.text.slice());
     try testing.expect(!a.plain);
 
@@ -1384,9 +1502,10 @@ test "the daily limit is shared and a run is charged what it spent" {
     try testing.expectEqual(Gate.over_budget, gate(76, 100));
     try testing.expectEqual(Gate.over_budget, gate(100, 100));
     try testing.expectEqual(Gate.over_budget, gate(0, 20));
-    try testing.expectEqual(@as(u32, 7), chargeCents(.claude, 7));
-    try testing.expectEqual(BUDGET_CENTS, chargeCents(.claude, 0));
-    try testing.expectEqual(BUDGET_CENTS, chargeCents(.codex, 3));
+    try testing.expectEqual(@as(u32, 7), chargeCents(.claude, 7, true));
+    try testing.expectEqual(@as(u32, 0), chargeCents(.claude, 0, true));
+    try testing.expectEqual(BUDGET_CENTS, chargeCents(.claude, 0, false));
+    try testing.expectEqual(BUDGET_CENTS, chargeCents(.codex, 3, true));
 }
 
 test "spend buttons are captioned from validated fields, not the agent's label" {
@@ -1426,4 +1545,76 @@ test "cost and budget wording" {
     try testing.expectEqualStrings("$0.25", costText(&b, BUDGET_CENTS));
     var r: [128]u8 = undefined;
     try testing.expect(std.mem.indexOf(u8, remainingText(&r, 30, 100), "$0.30 of $1.00") != null);
+}
+
+test "stored actions are re-checked before they run" {
+    var good = Action{ .kind = .wanted_add, .year = 2021 };
+    good.text.set("Dune");
+    try testing.expect(stillValid(&good));
+    var bad = good;
+    bad.year = 1000;
+    try testing.expect(!stillValid(&bad));
+    var dl = Action{ .kind = .download };
+    dl.url.set("http://127.0.0.1/x");
+    try testing.expect(!stillValid(&dl));
+    dl.url.set("https://files.example.org/a.mkv");
+    try testing.expect(stillValid(&dl));
+    var open = Action{ .kind = .open };
+    open.url.set("https://example.org/a.torrent");
+    try testing.expect(!stillValid(&open));
+    open.url.set("https://example.org/page");
+    try testing.expect(stillValid(&open));
+}
+
+test "no tool and no setting key can switch Ask Opal on" {
+    const op = ops.findOp("settings_set").?;
+    for (op.params) |param| {
+        for (param.choices) |choice| {
+            try testing.expect(!std.mem.eql(u8, choice, "ask_enabled"));
+            try testing.expect(!std.mem.startsWith(u8, choice, "ask"));
+        }
+    }
+}
+
+test "the date for the prompt is UTC and zero padded" {
+    var b: [16]u8 = undefined;
+    try testing.expectEqualStrings("2026-10-05", dateText(&b, 1791158400000));
+    try testing.expectEqualStrings("1970-01-01", dateText(&b, 0));
+    try testing.expectEqualStrings("1970-01-01", dateText(&b, -5));
+}
+
+test "light markdown becomes plain text" {
+    var b: [128]u8 = undefined;
+    try testing.expectEqualStrings("Dune is not here", plainMarkdown(&b, "Dune is **not** here"));
+    try testing.expectEqualStrings("\xe2\x80\xa2 one\n\xe2\x80\xa2 two x", plainMarkdown(&b, "- one\n* two `x`"));
+    var tiny: [4]u8 = undefined;
+    try testing.expect(std.unicode.utf8ValidateSlice(plainMarkdown(&tiny, "\xc3\xa9\xc3\xa9\xc3\xa9")));
+}
+
+test "cost line says what the number means" {
+    var b: [128]u8 = undefined;
+    try testing.expect(std.mem.indexOf(u8, costLine(&b, .claude, 5), "$0.05") != null);
+    try testing.expect(std.mem.indexOf(u8, costLine(&b, .codex, 25), "does not report") != null);
+}
+
+test "the compact preset and the fast model are opt-in and shown in the command lines" {
+    var a: McpArgs = .{};
+    const with = mcpArgs(&a, 1, true);
+    try testing.expectEqualStrings("--preset", with[0]);
+    try testing.expectEqualStrings("ask", with[1]);
+    try testing.expectEqualStrings("--allow", with[2]);
+    var argv_store: Argv = .{};
+    const fast = buildArgv(&argv_store, .claude, "hi", "2026-10-05", .{ .mcp_bin = "/x", .mcp_config = "/c.json", .token_file = "/t", .fast = true, .preset = true }, 1).?;
+    var model_ok = false;
+    for (fast, 0..) |arg, i| if (std.mem.eql(u8, arg, "--model")) {
+        model_ok = std.mem.eql(u8, fast[i + 1], "haiku");
+    };
+    try testing.expect(model_ok);
+    var cfg: [4096]u8 = undefined;
+    const json = mcpConfigJson(&cfg, "/x", 1, "/t", true).?;
+    try testing.expect(std.mem.indexOf(u8, json, "\"--preset\",\"ask\"") != null);
+    const codex = buildArgv(&argv_store, .codex, "hi", "d", .{ .mcp_bin = "/x", .token_file = "/t", .schema_file = "/s", .out_file = "/o", .preset = true }, 1).?;
+    try testing.expect(std.mem.indexOf(u8, codex[15], "\"--preset\",\"ask\"") != null);
+    // Codex has no model flag here; it keeps the user's own default.
+    for (codex) |arg| try testing.expect(!std.mem.eql(u8, arg, "--model"));
 }

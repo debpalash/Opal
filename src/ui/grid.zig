@@ -35,6 +35,11 @@ pub fn renderChatMessages() void {
     while (mi < ai_chat.message_count) : (mi += 1) {
         const m = ai_chat.messages[mi];
         if (m.role == .system) continue; // tool-response internals, not shown to user
+        // Ask Opal (the user's coding agent) draws its own message, actions and cards.
+        if (m.role == .assistant and m.via != 0) {
+            @import("ask_ui.zig").renderMessage(mi);
+            continue;
+        }
         // Keep the in-flight assistant bubble visible (shows the thinking
         // spinner) so a reply-in-progress never looks like a blank/dead
         // bubble; older empty messages are still skipped.

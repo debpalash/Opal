@@ -654,6 +654,17 @@ fn omnibox(narrow: bool) void {
         return;
     }
     const submitted = chromeIconButton(@src(), icons.tvg.lucide.search, "Search", false, len > 0);
+    // Ask Opal: hand what is typed to the user's coding agent (Ctrl+Enter does the same).
+    const ask_clicked = len > 0 and chromeIconButton(@src(), icons.tvg.lucide.sparkles, "Ask Opal (Ctrl+Enter)", state.app.ask_enabled, true);
+    if (len > 0 and (ask_clicked or (entered and askChordHeld()))) {
+        var ask_buf: [state.app.magnet_buf.len]u8 = undefined;
+        @memcpy(ask_buf[0..len], state.app.magnet_buf[0..len]);
+        search_mod.cancelPendingMemorySearch();
+        @import("../services/ask.zig").askButton(ask_buf[0..len]);
+        @memset(&state.app.magnet_buf, 0);
+        if (state.app.ask_enabled) state.app.router.navigate(.home);
+        return;
+    }
     if ((!entered and !submitted) or len == 0) return;
 
     // Services may clear or mirror the field; never route a slice into that
@@ -686,6 +697,16 @@ fn omnibox(narrow: bool) void {
             state.app.router.navigate(.search);
         },
     }
+}
+
+/// Ctrl/Cmd+Enter was pressed this frame (the text entry already took the Enter).
+fn askChordHeld() bool {
+    for (dvui.events()) |*e| {
+        if (e.evt != .key) continue;
+        const ke = e.evt.key;
+        if (ke.code == .enter and ke.action == .down and (ke.mod.control() or ke.mod.command())) return true;
+    }
+    return false;
 }
 
 fn openOmniboxTarget(text: []const u8) void {

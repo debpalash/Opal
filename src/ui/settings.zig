@@ -5060,6 +5060,27 @@ fn renderAgentAccess() void {
     }
 
     {
+        const ask_before = state.app.ask_enabled;
+        const ask_agent = @import("../services/ask.zig").installedAgent();
+        const ask_hint: []const u8 = if (ask_agent == null)
+            "Needs Claude Code or Codex on your PATH. Questions typed with > or ending in ? are answered by your coding agent using Opal's tools; downloads only start when you click a button. Uses your agent credit, up to 25 cents per question, within the operator's daily limit"
+        else if (ask_agent.? == .codex)
+            "Questions typed with > or ending in ? are answered by Codex using Opal's tools; downloads only start when you click a button. Counted at 25 cents per question against the operator's daily limit"
+        else
+            "Questions typed with > or ending in ? are answered by Claude Code using Opal's tools; downloads only start when you click a button. Uses your agent credit, up to 25 cents per question, within the operator's daily limit";
+        components.toggleRow(@src(), "Ask Opal (uses your coding agent)", ask_hint, &state.app.ask_enabled);
+        if (state.app.ask_enabled != ask_before) {
+            state.markConfigDirty();
+            state.showToast(if (state.app.ask_enabled) "Ask Opal on" else "Ask Opal off");
+        }
+        if (state.app.ask_enabled) {
+            const fast_before = state.app.ask_fast;
+            components.toggleRow(@src(), "Fast answers (Claude Haiku)", "Cheaper and quicker, a little less careful with tools. Off uses Claude Sonnet. Codex uses its own default model", &state.app.ask_fast);
+            if (state.app.ask_fast != fast_before) state.markConfigDirty();
+        }
+    }
+
+    {
         const op_before = state.app.operator_enabled;
         components.toggleRow(@src(), "Background operator", "Lets Opal quietly ask a coding agent to fix problems it cannot solve alone: other titles for a wanted item, a moved source address. Uses your agent credit within a daily limit; changes to sources wait for your approval", &state.app.operator_enabled);
         if (state.app.operator_enabled != op_before) {

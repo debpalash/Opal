@@ -874,6 +874,12 @@ pub const AppState = struct {
     operator_enabled: bool = false,
     /// Spend ceiling per UTC day for operator jobs, in cents.
     operator_daily_cents: u32 = 100,
+    /// Ask Opal: assistant-style omnibox inputs go to the user's coding agent (headless,
+    /// Opal's tools under a restricted policy) instead of the local model. Only the UI
+    /// flips it: no HTTP route and no tool reaches this field.
+    ask_enabled: bool = false,
+    /// Ask Opal answers with the small fast model (Claude Haiku) instead of Sonnet.
+    ask_fast: bool = false,
     sub_search_buf: [256]u8 = std.mem.zeroes([256]u8),
 
     // ── MPV Scripts ──
