@@ -143,9 +143,11 @@ pub const Session = struct {
 
     /// Stops the reader, terminates the child and frees everything.
     pub fn deinit(self: *Session) void {
+        // The reader notices `stop` within one poll; join it before the pty is
+        // closed so no handle is released while a read is still using it.
         self.stop.store(true, .release);
-        self.pty.close();
         if (self.thread) |t| t.join();
+        self.pty.close();
         c.ghostty_key_event_free(self.key_event);
         c.ghostty_key_encoder_free(self.encoder);
         c.ghostty_render_state_row_cells_free(self.row_cells);

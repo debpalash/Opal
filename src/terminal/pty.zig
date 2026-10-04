@@ -1,6 +1,6 @@
-//! A child process on a pseudo-terminal (POSIX). Windows has no pty here yet;
-//! `supported` is false there and `spawn` fails, so callers fall back to the
-//! external-terminal launcher.
+//! A child process on a pseudo-terminal. POSIX uses `forkpty` (below); Windows
+//! uses ConPTY (pty_windows.zig). `Pty` and `spawn` are the same to callers on
+//! both; the one difference is `argv` on Windows, documented at `spawn`.
 //!
 //! `forkpty` does the openpty/fork/setsid/controlling-terminal dance. The child
 //! only calls `execve` (arguments and environment are built before the fork,
@@ -9,9 +9,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const io_g = @import("../core/io_global.zig");
+const win = @import("pty_windows.zig");
+
+const is_windows = builtin.os.tag == .windows;
 
 pub const supported = switch (builtin.os.tag) {
-    .linux, .macos, .freebsd, .netbsd, .openbsd => true,
+    .linux, .macos, .freebsd, .netbsd, .openbsd, .windows => true,
     else => false,
 };
 
@@ -52,7 +55,9 @@ const O_NONBLOCK: c_int = switch (builtin.os.tag) {
     else => 0x0004,
 };
 
-pub const Pty = struct {
+pub const Pty = if (is_windows) win.Pty else PosixPty;
+
+const PosixPty = struct {
     master: c_int = -1,
     pid: c_int = 0,
 
@@ -141,9 +146,27 @@ pub const Pty = struct {
 
 pub const SpawnError = error{ Unsupported, ForkFailed, OutOfMemory, BadArgument };
 
-/// `argv[0]` must be an absolute path (no PATH search happens in the child).
-/// `extra_env` entries are `NAME=value`; they replace same-named inherited ones.
+/// POSIX: `argv[0]` must be an absolute path (no PATH search happens in the
+/// child). Windows: a single element is the complete command line, already
+/// quoted for the shell it starts (see `agent_launch_pure.windowsAgentCommand`);
+/// several are quoted and joined, and the program is searched for as
+/// CreateProcess does. `extra_env` entries are `NAME=value` on both; they replace
+/// same-named inherited ones.
 pub fn spawn(
+    allocator: std.mem.Allocator,
+    argv: []const []const u8,
+    extra_env: []const []const u8,
+    cols: u16,
+    rows: u16,
+) SpawnError!Pty {
+    if (comptime is_windows) {
+        return win.spawn(allocator, argv, extra_env, cols, rows);
+    } else {
+        return spawnPosix(allocator, argv, extra_env, cols, rows);
+    }
+}
+
+fn spawnPosix(
     allocator: std.mem.Allocator,
     argv: []const []const u8,
     extra_env: []const []const u8,
@@ -195,8 +218,12 @@ pub fn spawn(
     return .{ .master = master, .pid = pid };
 }
 
+test {
+    _ = win;
+}
+
 test "a child on a pty produces output and exits" {
-    if (!supported) return error.SkipZigTest;
+    if (!supported or is_windows) return error.SkipZigTest;
     var pty = try spawn(std.testing.allocator, &.{ "/bin/sh", "-c", "printf 'hello from pty'" }, &.{"TERM=xterm-256color"}, 80, 24);
     defer pty.close();
     var out: [256]u8 = undefined;
@@ -214,7 +241,7 @@ test "a child on a pty produces output and exits" {
 }
 
 test "input written to the pty reaches the child" {
-    if (!supported) return error.SkipZigTest;
+    if (!supported or is_windows) return error.SkipZigTest;
     var pty = try spawn(std.testing.allocator, &.{ "/bin/sh", "-c", "read line; printf 'got:%s' \"$line\"" }, &.{}, 80, 24);
     defer pty.close();
     try std.testing.expect(pty.writeAll("ping\n"));

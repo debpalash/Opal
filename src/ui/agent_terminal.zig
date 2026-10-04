@@ -93,9 +93,18 @@ fn start(kind: Kind) void {
         say("Could not create the agent workspace");
         return;
     }
-    var script_buf: [2048]u8 = undefined;
+    // POSIX: `sh -c <script>`. Windows: one raw command line (no /bin/sh); agents
+    // go through cmd.exe, which runs npm's .cmd shims, and the plain shell is
+    // PowerShell.
+    const is_windows = @import("builtin").os.tag == .windows;
+    var script_buf: [8192]u8 = undefined;
     const script = (if (agentOf(kind)) |agent|
-        launch_pure.agentScript(&script_buf, agent, ws.path(), ws.mcpPath(), ws.tokenFile())
+        (if (is_windows)
+            launch_pure.windowsAgentCommand(&script_buf, .cmd, agent, ws.path(), ws.mcpPath(), ws.tokenFile())
+        else
+            launch_pure.agentScript(&script_buf, agent, ws.path(), ws.mcpPath(), ws.tokenFile()))
+    else if (is_windows)
+        launch_pure.windowsShellCommand(&script_buf, .powershell, ws.path())
     else
         launch_pure.shellScript(&script_buf, ws.path())) orelse {
         say("A path contains a character that cannot be quoted safely");
@@ -106,7 +115,8 @@ fn start(kind: Kind) void {
     installWake();
     const cols: u16 = if (snap.cols > 0) snap.cols else 100;
     const rows: u16 = if (snap.rows > 0) snap.rows else 30;
-    session = Session.start(alloc, &.{ "/bin/sh", "-c", script }, cols, rows) catch |err| {
+    const argv: []const []const u8 = if (is_windows) &.{script} else &.{ "/bin/sh", "-c", script };
+    session = Session.start(alloc, argv, cols, rows) catch |err| {
         say(switch (err) {
             error.Unsupported => "The embedded terminal is not available on this platform yet",
             else => "Could not start the terminal",
