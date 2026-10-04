@@ -671,9 +671,20 @@ pub fn build(b: *std.Build) void {
     test_operator_endpoint_pure.use_llvm = true;
     const run_test_operator_endpoint = b.addRunArtifact(test_operator_endpoint_pure);
     test_step.dependOn(&run_test_operator_endpoint.step);
+    const test_operator_names = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/operator_names_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_operator_names.use_llvm = true;
+    const run_test_operator_names = b.addRunArtifact(test_operator_names);
+    test_step.dependOn(&run_test_operator_names.step);
     const test_operator_step = b.step("test-operator", "Test the background operator (jobs, validation, gating)");
     test_operator_step.dependOn(&run_test_operator.step);
     test_operator_step.dependOn(&run_test_operator_endpoint.step);
+    test_operator_step.dependOn(&run_test_operator_names.step);
 
     const test_agent_tasks_pure = b.addTest(.{
         .root_module = b.createModule(.{

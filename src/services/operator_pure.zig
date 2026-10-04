@@ -19,6 +19,9 @@ pub const Kind = enum {
     match_help,
     /// A source stopped answering: ask where it lives now.
     endpoint_repair,
+    /// Local files whose cleaned title still looks like a release name: ask for a
+    /// human title and kind, in batches.
+    local_names,
 
     pub fn id(self: Kind) []const u8 {
         return @tagName(self);
@@ -92,6 +95,20 @@ pub fn spec(kind: Kind) Spec {
                 "for example a new domain after a takedown or a working official mirror. Prefer sources that confirm it " ++
                 "(the project's own site, status pages, reputable mirror lists). If you cannot find a trustworthy one, " ++
                 "answer with the old address and confidence 0. Give a one-sentence evidence note.",
+        },
+        .local_names => .{
+            .title = "Tidy messy file names",
+            .schema = "{\"type\":\"object\",\"properties\":{\"items\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":20,\"items\":{\"type\":\"object\",\"properties\":{\"index\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":19},\"title\":{\"type\":\"string\",\"maxLength\":120},\"kind\":{\"type\":\"string\",\"enum\":[\"movie\",\"tv\",\"music\",\"audiobook\",\"other\"]},\"year\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":2200}},\"required\":[\"index\",\"title\",\"kind\",\"year\"],\"additionalProperties\":false}},\"reason\":{\"type\":\"string\",\"maxLength\":200}},\"required\":[\"items\",\"reason\"],\"additionalProperties\":false}",
+            .budget_cents = 25,
+            .cooldown_ms = 6 * hour_ms,
+            .auto_apply = true,
+            .web = false,
+            .task = "A media app lists local video and audio files whose names look like release names. Each line of the data is " ++
+                "`index<TAB>filename`. For each file you can identify from its name alone, give the human-readable title as it would " ++
+                "appear in a media library: the original title in Latin script when the filename is a romanisation, without release " ++
+                "group, quality, codec, source, season or episode markers, and without the year (put the year in `year`, 0 if the name " ++
+                "does not show one). Give `kind`: movie, tv, music, audiobook or other. Never invent a title the filename does not " ++
+                "evidence; leave out any file you cannot decide. Give a one-sentence reason.",
         },
     };
 }
@@ -603,9 +620,12 @@ test "specs are consistent" {
         const s = spec(k);
         try std.testing.expect(s.schema.len > 0 and s.title.len > 0 and s.task.len > 0);
         try std.testing.expect(s.budget_cents >= 5 and s.budget_cents <= 100);
-        // Only wording may apply itself; anything that changes an address or
-        // setting waits for a person.
-        if (s.auto_apply) try std.testing.expect(k == .match_help);
+        // Only these kinds may apply themselves; anything that changes an address or
+        // setting waits for a person. match_help adds search wording. local_names
+        // changes display text only (a title and kind shown for the user's own
+        // files), through validators that bound length and characters, and never
+        // over a title the user set. Adding to this list is a deliberate decision.
+        if (s.auto_apply) try std.testing.expect(k == .match_help or k == .local_names);
         var schema = std.json.parseFromSlice(std.json.Value, std.testing.allocator, s.schema, .{}) catch return error.BadSchema;
         schema.deinit();
     }
