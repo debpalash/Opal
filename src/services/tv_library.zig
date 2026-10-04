@@ -118,8 +118,8 @@ pub fn syncOnce() void {
     // Same first-start race the trending fetch has: don't latch until the config
     // worker has published the API key (acquire), or a cold launch arms the latch
     // before the key exists and the sync never fires again this session.
+    // No key is fine: shows with an IMDb identity sync through Cinemeta/TVmaze.
     if (!state.app.config_loaded.load(.acquire)) return;
-    if (state.app.tmdb.api_key_len == 0) return;
     synced_once = true;
     if (syncing.swap(true, .acq_rel)) return;
     @import("../core/workers.zig").release(@import("../core/workers.zig").spawnLegacy(syncWorker, .{}) catch {
@@ -131,12 +131,126 @@ pub fn syncOnce() void {
 /// Force a refresh (Settings / manual retry). Ignores the once-per-session latch
 /// but still refuses to run two syncs at a time.
 pub fn resync() void {
-    if (state.app.tmdb.api_key_len == 0) return;
     if (syncing.swap(true, .acq_rel)) return;
     @import("../core/workers.zig").release(@import("../core/workers.zig").spawnLegacy(syncWorker, .{}) catch {
         syncing.store(false, .release);
         return;
     });
+}
+
+const kl = @import("keyless_tv_pure.zig");
+const content_cache = @import("../core/content_cache.zig");
+const KEYLESS_TTL_S: i64 = 6 * 60 * 60;
+const TVMAZE_TTL_S: i64 = 3 * 60 * 60;
+/// Cinemeta series documents with hundreds of episodes reach a few MB.
+const SERIES_DOC_MAX: usize = 8 * 1024 * 1024;
+
+/// Cinemeta `meta/series/{imdb}.json`, shared with the TV detail page's cache
+/// entry (same key) so opening a show and syncing it cost one fetch. Caller
+/// frees the result.
+fn keylessSeriesDoc(id: i32, imdb: []const u8) ?[]u8 {
+    var key_buf: [96]u8 = undefined;
+    const cache_key = std.fmt.bufPrint(&key_buf, "catalog:tv-detail:v2:cinemeta:{d}:all", .{id}) catch null;
+    if (cache_key) |k| {
+        if (content_cache.getOwned(k)) |hit| {
+            if (hit.staleness == .fresh) return hit.bytes;
+            alloc.free(hit.bytes);
+        }
+    }
+    var path_buf: [64]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buf, "/meta/series/{s}.json", .{imdb}) catch return null;
+    @import("../core/rate_limit.zig").acquire("cinemeta", 4.0);
+    const body = tmdb_api.cinemetaApiOwned(path, SERIES_DOC_MAX) orelse return null;
+    if (cache_key) |k| content_cache.put(k, body, KEYLESS_TTL_S);
+    return body;
+}
+
+/// TVmaze status + scheduled next episode for an IMDb id, cached as a compact
+/// summary. Failure leaves `facts` as Cinemeta reported it.
+fn overlayTvmaze(imdb: []const u8, facts: *kl.Facts, now_s: i64) void {
+    const tvm = @import("tvmaze.zig");
+    const tvm_pure = @import("tvmaze_pure.zig");
+    var key_buf: [64]u8 = undefined;
+    const cache_key = std.fmt.bufPrint(&key_buf, "tvmaze:v1:next:{s}", .{imdb}) catch return;
+    var sum_buf: [512]u8 = undefined;
+    if (content_cache.get(cache_key, &sum_buf)) |hit| {
+        if (hit.staleness == .fresh) {
+            kl.applyTvmazeShow(facts, hit.bytes);
+            if (tvm_pure.parseNextEpisode(hit.bytes)) |ne| kl.applyTvmazeNext(facts, ne, now_s);
+            return;
+        }
+    }
+
+    const buf = alloc.alloc(u8, 256 * 1024) catch return;
+    defer alloc.free(buf);
+    var url_buf: [96]u8 = undefined;
+    const rl = @import("../core/rate_limit.zig");
+    rl.acquire("tvmaze", 2.0);
+    const lookup = std.fmt.bufPrint(&url_buf, "https://api.tvmaze.com/lookup/shows?imdb={s}", .{imdb}) catch return;
+    var n = tvm.curlInto(lookup, buf);
+    if (n == 0) return;
+    const show_id = tvm_pure.parseShowId(buf[0..n]) orelse return;
+    var ended = kl.tvmazeEnded(buf[0..n]);
+    var next: ?tvm_pure.NextEp = null;
+    if (!ended) {
+        rl.acquire("tvmaze", 2.0);
+        const embed = std.fmt.bufPrint(&url_buf, "https://api.tvmaze.com/shows/{d}?embed=nextepisode", .{show_id}) catch return;
+        n = tvm.curlInto(embed, buf);
+        if (n == 0) return;
+        ended = kl.tvmazeEnded(buf[0..n]);
+        next = tvm_pure.parseNextEpisode(buf[0..n]);
+    }
+    if (kl.tvmazeSummary(ended, next, &sum_buf)) |summary| {
+        content_cache.put(cache_key, summary, TVMAZE_TTL_S);
+        kl.applyTvmazeShow(facts, summary);
+        if (next) |ne| kl.applyTvmazeNext(facts, ne, now_s);
+    }
+}
+
+/// Look an IMDb id up by name for a tracked show that has none, accepting only
+/// a catalog entry whose identity is exactly this library id (never "the first
+/// show with a similar name"). `body` is scratch.
+fn resolveImdb(sh: *const db.TvShowRow, body: []u8, out: []u8) []const u8 {
+    var enc: [512]u8 = undefined;
+    const q = @import("../core/http.zig").urlEncode(sh.name[0..sh.name_len], &enc);
+    var path_buf: [640]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buf, "/catalog/series/top/search={s}.json", .{q}) catch return "";
+    const n = tmdb_api.cinemetaApiInto(path, body);
+    if (n == 0) return "";
+    return @import("episode_art_pure.zig").findImdb(alloc, body[0..n], sh.tmdb_id, out) catch "";
+}
+
+/// Sync one show through Cinemeta (+TVmaze). True when facts were published.
+fn syncKeyless(sh: *const db.TvShowRow, imdb: []const u8, now_s: i64, scratch: []u8) bool {
+    const cal = @import("tv_calendar.zig");
+    const doc = keylessSeriesDoc(sh.tmdb_id, imdb) orelse return false;
+    defer alloc.free(doc);
+    var facts = kl.parseCinemetaSeries(alloc, doc, now_s) catch return false;
+    // Cinemeta only lists episodes a database already knows; TVmaze schedules the
+    // next one. Ended shows have nothing to schedule.
+    if (!facts.ended and facts.next.season == 0) overlayTvmaze(imdb, &facts, now_s);
+
+    // Keep the stored artwork when there is one; otherwise adopt Cinemeta's.
+    const art = if (sh.poster_path_len > 0) sh.poster_path[0..sh.poster_path_len] else facts.posterSlice();
+
+    db.tvUpsertShow(
+        sh.tmdb_id,
+        sh.name[0..sh.name_len],
+        art,
+        if (facts.ended) "Ended" else "Returning Series",
+        facts.last,
+        facts.next,
+        facts.next_air_epoch,
+        facts.nextName(),
+    );
+    if (facts.season_count > 0) db.tvUpsertSeasons(sh.tmdb_id, facts.seasonSlice());
+
+    const watched = db.tvWatchedList(alloc, sh.tmdb_id) catch return true;
+    defer alloc.free(watched);
+    const la: ?tp.Ep = if (facts.last.season > 0) facts.last else null;
+    const nxt = tp.nextUp(facts.seasonSlice(), watched, la);
+    cal.stageFacts(sh.tmdb_id, sh.name[0..sh.name_len], art, imdb, facts.last, facts.next, facts.next_air_epoch, facts.nextName(), nxt, scratch);
+    return true;
 }
 
 fn syncWorker() void {
@@ -175,8 +289,30 @@ fn syncWorker() void {
     const scratch = alloc.alloc(u8, 256 * 1024) catch return;
     defer alloc.free(scratch);
 
+    const now_s = io.timestamp();
     for (shows[0..n]) |*sh| {
         if (sh.tmdb_id == 0) continue;
+
+        // Which provider answers for this show. A keyless catalog id is a hash
+        // of the IMDb id, never a TMDB id: it is always answered keylessly.
+        var imdb_buf: [16]u8 = undefined;
+        var imdb = db.tvImdbId(sh.tmdb_id, &imdb_buf);
+        var source = kl.chooseSource(sh.tmdb_id, imdb, key.len > 0);
+        if (source == .none) {
+            imdb = resolveImdb(sh, body, &imdb_buf);
+            if (imdb.len > 0) {
+                db.tvRememberImdb(sh.tmdb_id, imdb);
+                source = kl.chooseSource(sh.tmdb_id, imdb, key.len > 0);
+            }
+        }
+        switch (source) {
+            .none => continue,
+            .cinemeta => {
+                if (syncKeyless(sh, imdb, now_s, scratch)) updated += 1;
+                continue;
+            },
+            .tmdb => {},
+        }
 
         var url_buf: [64]u8 = undefined;
         const url = std.fmt.bufPrint(&url_buf, "/3/tv/{d}", .{sh.tmdb_id}) catch continue;
@@ -426,12 +562,16 @@ pub const MAX_EPISODES_PER_SEASON: usize = @intCast(tp.MAX_EPISODES_PER_SEASON);
 pub fn setEpisodeWatched(tmdb_id: i32, season: u32, episode: u32, watched: bool) void {
     if (tmdb_id <= 0 or episode == 0) return;
     db.tvMarkWatched(tmdb_id, season, episode, watched);
+    // The remembered IMDb id lets a keyless (hashed) show be reported by IMDb
+    // rather than as an unrelated TMDB id.
+    var imdb_buf: [16]u8 = undefined;
+    const imdb = db.tvImdbId(tmdb_id, &imdb_buf);
     if (watched) {
-        @import("trakt.zig").markWatchedEpisode(tmdb_id, @intCast(season), @intCast(episode));
-        @import("simkl.zig").markWatchedEpisode(tmdb_id, @intCast(season), @intCast(episode));
+        @import("trakt.zig").markWatchedEpisode(tmdb_id, imdb, @intCast(season), @intCast(episode));
+        @import("simkl.zig").markWatchedEpisode(tmdb_id, imdb, @intCast(season), @intCast(episode));
     } else {
-        @import("trakt.zig").markUnwatchedEpisode(tmdb_id, @intCast(season), @intCast(episode));
-        @import("simkl.zig").markUnwatchedEpisode(tmdb_id, @intCast(season), @intCast(episode));
+        @import("trakt.zig").markUnwatchedEpisode(tmdb_id, imdb, @intCast(season), @intCast(episode));
+        @import("simkl.zig").markUnwatchedEpisode(tmdb_id, imdb, @intCast(season), @intCast(episode));
     }
     markDirty();
 }
@@ -443,6 +583,37 @@ fn itemExistsLocked(item: ItemRef) bool {
         if (r.kind == item.kind and std.mem.eql(u8, r.idSlice(), item.id)) return true;
     }
     return false;
+}
+
+/// Track the catalog show `item.id` names, taking its title, artwork and IMDb
+/// identity from the browse results it came from. False when the id is not in
+/// the current catalog (stale card): nothing is created then.
+fn trackFromCatalog(item: ItemRef) bool {
+    const id = tvId(item) catch return false;
+    if (id <= 0) return false;
+    var found: ?state.TmdbItem = null;
+    {
+        const t = &state.app.tmdb;
+        t.results_mutex.lock();
+        defer t.results_mutex.unlock();
+        const lists = [_][]const state.TmdbItem{ t.results.items, t.pending_results.items };
+        outer: for (lists) |list| {
+            for (list) |*it| {
+                if (it.id != id) continue;
+                const kind = it.media_type[0..@min(it.media_type_len, it.media_type.len)];
+                if (!std.mem.eql(u8, kind, "tv")) continue;
+                found = it.*;
+                found.?.poster_pixels = null;
+                found.?.poster_tex = null;
+                break :outer;
+            }
+        }
+    }
+    const it = found orelse return false;
+    if (it.imdb_id_len > 0) db.tvRememberImdb(id, it.imdb_id[0..it.imdb_id_len]);
+    db.tvTouchShow(id, it.title[0..it.title_len], it.poster_path[0..it.poster_path_len]);
+    db.tvSetTracked(id, true);
+    return true;
 }
 
 fn tvId(item: ItemRef) CommandError!i32 {
@@ -479,9 +650,16 @@ pub fn apply(command: Command) CommandError!void {
         .status => |cmd| {
             snapshot_mutex.lock();
             defer snapshot_mutex.unlock();
-            if (!itemExistsLocked(cmd.item)) return error.ItemNotFound;
+            if (!itemExistsLocked(cmd.item)) {
+                // A show picked from the catalog (keyless or not) has no library
+                // row until it is tracked; the native detail buttons create it,
+                // so the same action here creates it from the catalog item the
+                // client was looking at.
+                if (cmd.item.kind != .tv or cmd.value == .none or !trackFromCatalog(cmd.item)) return error.ItemNotFound;
+            }
             db.librarySetStatus(@tagName(cmd.item.kind), cmd.item.id, tp.userStatusToStr(cmd.value));
             markDirty();
+            if (cmd.item.kind == .tv and cmd.value != .none) resync();
         },
         .remove => |item| {
             snapshot_mutex.lock();
@@ -572,8 +750,12 @@ fn addTvRows() void {
         var idb: [24]u8 = undefined;
         r.setId(std.fmt.bufPrint(&idb, "{d}", .{sh.tmdb_id}) catch "");
 
-        var ub: [160]u8 = undefined;
-        r.setPosterUrl(std.fmt.bufPrint(&ub, "https://image.tmdb.org/t/p/w185{s}", .{r.posterSlice()}) catch "");
+        // A TMDB relative path, an absolute catalog URL (keyless), or the IMDb
+        // poster when nothing was stored.
+        var ub: [320]u8 = undefined;
+        var imdb_buf: [16]u8 = undefined;
+        const imdb = db.tvImdbId(sh.tmdb_id, &imdb_buf);
+        r.setPosterUrl(kl.posterUrl(r.posterSlice(), imdb, &ub));
 
         r.user = userStatusOf("tv", r.idSlice());
         r.status = tp.effectiveStatus(r.user, tp.statusOf(prog, nxt, sh.ended));

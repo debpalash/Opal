@@ -142,9 +142,10 @@ pub fn beginStageExpected(expected: ?usize) void {
     }
 }
 
-/// Stage one show. `doc` is the /3/tv/{id} body the sync worker just fetched;
-/// `next_up` is tv_pure's next episode for this show (null = caught up).
-/// `scratch` is a large heap buffer we may clobber for the EZTV lookup.
+/// Stage one show from a TMDB document. `doc` is the /3/tv/{id} body the sync
+/// worker just fetched; `next_up` is tv_pure's next episode for this show (null
+/// = caught up). `scratch` is a large heap buffer we may clobber for the EZTV
+/// lookup.
 pub fn stage(
     tmdb_id: i32,
     name: []const u8,
@@ -159,17 +160,10 @@ pub fn stage(
         return;
     }
 
-    const tmdb_api = @import("tmdb_api.zig");
-    const key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
-
     var entry: Entry = .{};
     const e = &entry;
     e.tmdb_id = tmdb_id;
-    e.name_len = @min(name.len, e.name.len);
-    @memcpy(e.name[0..e.name_len], name[0..e.name_len]);
-    const resolved_poster = if (poster_path.len > 0) poster_path else pure.posterPath(doc) orelse "";
-    e.poster_path_len = @min(resolved_poster.len, e.poster_path.len);
-    @memcpy(e.poster_path[0..e.poster_path_len], resolved_poster[0..e.poster_path_len]);
+    setNamePoster(e, name, if (poster_path.len > 0) poster_path else pure.posterPath(doc) orelse "");
 
     if (pure.parseEpisodeToAir(doc, "\"next_episode_to_air\":")) |next| {
         e.next_season = next.season;
@@ -179,40 +173,98 @@ pub fn stage(
         @memcpy(e.next_name[0..next.name_len], next.name[0..next.name_len]);
     }
 
+    var have_last = false;
     if (pure.parseEpisodeToAir(doc, "\"last_episode_to_air\":")) |last| {
         e.last_season = last.season;
         e.last_episode = last.episode;
-
-        // "Something to watch right now" is exactly tv_pure's answer — no local
-        // re-derivation, which is how this rail and the detail page used to
-        // disagree about the same show.
-        e.unseen = next_up != null;
-
-        // EZTV availability for the latest aired episode.
-        if (e.unseen and eztv_on and eztv_api_len > 0) {
-            var ext_url_buf: [160]u8 = undefined;
-            if (std.fmt.bufPrint(&ext_url_buf, "/3/tv/{d}/external_ids", .{tmdb_id})) |ext_url| {
-                const en = tmdb_api.tmdbApiInto(ext_url, key, scratch);
-                var digits_buf: [12]u8 = undefined;
-                if (en > 0) {
-                    if (pure.imdbDigits(scratch[0..en], &digits_buf)) |digits| {
-                        var ez_url_buf: [320]u8 = undefined;
-                        if (std.fmt.bufPrint(&ez_url_buf, "{s}?imdb_id={s}&limit=100", .{ eztv_api_buf[0..eztv_api_len], digits })) |ez_url| {
-                            const zn = curlInto(ez_url, scratch);
-                            if (zn > 0) {
-                                if (pure.eztvEpisodeSeeds(scratch[0..zn], last.season, last.episode)) |seeds| {
-                                    e.available = true;
-                                    e.seeds = seeds;
-                                }
-                            }
-                        } else |_| {}
-                    }
-                }
-            } else |_| {}
-        }
+        have_last = true;
     }
-
+    completeStage(e, have_last, next_up != null, "", scratch);
     projection.add(entry);
+}
+
+/// Stage one show from keyless facts (Cinemeta/TVmaze): same projection and the
+/// same "something to watch" answer as the TMDB path. `imdb` is the show's IMDb id.
+pub fn stageFacts(
+    id: i32,
+    name: []const u8,
+    poster_path: []const u8,
+    imdb: []const u8,
+    last: @import("tv_pure.zig").Ep,
+    next: @import("tv_pure.zig").Ep,
+    next_air_epoch: i64,
+    next_name: []const u8,
+    next_up: ?@import("tv_pure.zig").Ep,
+    scratch: []u8,
+) void {
+    if (id <= 0) return;
+    if (projection.staged_count >= projection.staged.len) {
+        projection.add(.{ .tmdb_id = id });
+        return;
+    }
+    var entry: Entry = .{};
+    const e = &entry;
+    e.tmdb_id = id;
+    setNamePoster(e, name, poster_path);
+    if (next.season > 0 and next_air_epoch > 0) {
+        e.next_season = next.season;
+        e.next_episode = next.episode;
+        e.next_air_epoch = next_air_epoch;
+        e.next_name_len = @min(next_name.len, e.next_name.len);
+        @memcpy(e.next_name[0..e.next_name_len], next_name[0..e.next_name_len]);
+    }
+    if (last.season > 0) {
+        e.last_season = last.season;
+        e.last_episode = last.episode;
+    }
+    completeStage(e, last.season > 0, next_up != null, imdb, scratch);
+    projection.add(entry);
+}
+
+fn setNamePoster(e: *Entry, name: []const u8, poster: []const u8) void {
+    e.name_len = @min(name.len, e.name.len);
+    @memcpy(e.name[0..e.name_len], name[0..e.name_len]);
+    e.poster_path_len = @min(poster.len, e.poster_path.len);
+    @memcpy(e.poster_path[0..e.poster_path_len], poster[0..e.poster_path_len]);
+}
+
+/// Shared tail: the "unseen" flag and EZTV availability of the latest aired
+/// episode. `imdb_in` may be empty; then the remembered id (or, with a key, TMDB
+/// external_ids) supplies it.
+fn completeStage(e: *Entry, have_last: bool, has_next_up: bool, imdb_in: []const u8, scratch: []u8) void {
+    if (!have_last) return;
+
+    // "Something to watch right now" is exactly tv_pure's answer, with no local
+    // re-derivation (that is how this rail and the detail page used to disagree).
+    e.unseen = has_next_up;
+
+    // EZTV availability for the latest aired episode.
+    if (!(e.unseen and eztv_on and eztv_api_len > 0)) return;
+
+    var imdb_buf: [16]u8 = undefined;
+    var imdb = imdb_in;
+    if (imdb.len == 0) imdb = @import("../core/db.zig").tvImdbId(e.tmdb_id, &imdb_buf);
+    var num_buf: [12]u8 = undefined;
+    var num: ?[]const u8 = null;
+    if (imdb.len > 2) {
+        if (pure.imdbNumber(imdb, &num_buf)) |v| num = v;
+    } else {
+        const key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
+        if (key.len == 0) return;
+        var ext_url_buf: [160]u8 = undefined;
+        const ext_url = std.fmt.bufPrint(&ext_url_buf, "/3/tv/{d}/external_ids", .{e.tmdb_id}) catch return;
+        const en = @import("tmdb_api.zig").tmdbApiInto(ext_url, key, scratch);
+        if (en > 0) num = pure.imdbDigits(scratch[0..en], &num_buf);
+    }
+    const d = num orelse return;
+    var ez_url_buf: [320]u8 = undefined;
+    const ez_url = std.fmt.bufPrint(&ez_url_buf, "{s}?imdb_id={s}&limit=100", .{ eztv_api_buf[0..eztv_api_len], d }) catch return;
+    const zn = curlInto(ez_url, scratch);
+    if (zn == 0) return;
+    if (pure.eztvEpisodeSeeds(scratch[0..zn], e.last_season, e.last_episode)) |seeds| {
+        e.available = true;
+        e.seeds = seeds;
+    }
 }
 
 pub fn endStage() void {

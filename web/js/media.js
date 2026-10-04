@@ -506,7 +506,7 @@ async function refreshDrama(generation = dramaGeneration){
   const d = await api('/drama');
   if (generation !== dramaGeneration) return d;
   if (d.needs_tmdb_key) {
-    $('dr-hint').textContent = 'Add a TMDB API key in Setup — the drama catalog is TMDB-backed.';
+    $('dr-hint').textContent = 'The drama catalog is TMDB-backed, so it needs the optional TMDB key (Setup, advanced). Everything else works without it.';
     $('dr-more').style.display = 'none';
     return d;
   }

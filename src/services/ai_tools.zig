@@ -414,11 +414,7 @@ fn executeBrowseTmdb(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
     const query = extractStringArg(tc.args_json[0..tc.args_len], "query") orelse
         return std.fmt.allocPrint(alloc, "Error: missing 'query' argument", .{}) catch null;
 
-    if (state.app.tmdb.api_key_len == 0) {
-        return std.fmt.allocPrint(alloc, "TMDB API key not configured. Add it in Settings > General.", .{}) catch null;
-    }
-
-    // Navigate to the Movies & TV (TMDB) page and trigger search
+    // Navigate to the Movies & TV page and trigger search (keyless: Cinemeta)
     state.navigateToTab(.TMDB);
     state.app.tmdb.view = .Search;
 
@@ -431,11 +427,11 @@ fn executeBrowseTmdb(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
     state.app.tmdb.page = 1;
     const tmdb_api = @import("tmdb_api.zig");
     tmdb_api.fetchCurrentView(false);
-    state.showToast("Searching TMDB...");
+    state.showToast("Searching Movies & TV...");
 
     return std.fmt.allocPrint(
         alloc,
-        "I've opened the TMDB browser with results for '{s}'. You can view them in the tab.",
+        "I've opened Movies & TV with results for '{s}'. You can view them in the tab.",
         .{query},
     ) catch null;
 }
@@ -444,120 +440,29 @@ fn executeTmdbLookup(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
     const query = extractStringArg(tc.args_json[0..tc.args_len], "query") orelse
         return std.fmt.allocPrint(alloc, "Error: missing 'query' argument", .{}) catch null;
 
-    if (state.app.tmdb.api_key_len == 0) {
-        return std.fmt.allocPrint(alloc, "Error: TMDB API key not configured in Settings.", .{}) catch null;
-    }
+    // Catalog search that works with or without a TMDB key (Cinemeta when there
+    // is none). Copies results into caller-owned storage, no UI state touched.
+    const items = alloc.alloc(state.TmdbItem, 8) catch return null;
+    defer alloc.free(items);
+    const found = @import("tmdb_api.zig").searchCatalogInto(query, items);
 
-    // Synchronously curl TMDB search to return data to LLM
-    var url_buf: [512]u8 = undefined;
-    var escaped_query: [256]u8 = undefined;
-    var eq_len: usize = 0;
-    for (query) |c| {
-        if (eq_len >= 253) break;
-        switch (c) {
-            ' ' => {
-                escaped_query[eq_len] = '+';
-                eq_len += 1;
-            },
-            '&' => {
-                escaped_query[eq_len] = '%';
-                escaped_query[eq_len + 1] = '2';
-                escaped_query[eq_len + 2] = '6';
-                eq_len += 3;
-            },
-            '=' => {
-                escaped_query[eq_len] = '%';
-                escaped_query[eq_len + 1] = '3';
-                escaped_query[eq_len + 2] = 'D';
-                eq_len += 3;
-            },
-            '#' => {
-                escaped_query[eq_len] = '%';
-                escaped_query[eq_len + 1] = '2';
-                escaped_query[eq_len + 2] = '3';
-                eq_len += 3;
-            },
-            '?' => {
-                escaped_query[eq_len] = '%';
-                escaped_query[eq_len + 1] = '3';
-                escaped_query[eq_len + 2] = 'F';
-                eq_len += 3;
-            },
-            '%' => {
-                escaped_query[eq_len] = '%';
-                escaped_query[eq_len + 1] = '2';
-                escaped_query[eq_len + 2] = '5';
-                eq_len += 3;
-            },
-            else => {
-                escaped_query[eq_len] = c;
-                eq_len += 1;
-            },
-        }
-    }
-
-    const api_key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
-    const url = std.fmt.bufPrint(&url_buf, "/3/search/multi?query={s}&page=1", .{escaped_query[0..eq_len]}) catch return null;
-
-    // curl + HTTPS→HTTP fallback; tmdbApiInto picks Bearer (v4 JWT) vs ?api_key=
-    // (v3) by key shape and rejects ISP HTML block pages.
-    var result_buf: [8192]u8 = undefined;
-    const n = @import("tmdb_api.zig").tmdbApiInto(url, api_key, &result_buf);
-
-    if (n == 0) return std.fmt.allocPrint(alloc, "Error: Failed to fetch TMDB", .{}) catch null;
-
-    // We don't have a JSON parser, so we use string matching to extract the first 3 titles and release dates
     var out_buf: [2048]u8 = undefined;
     var out_fbs = std.Io.Writer.fixed(&out_buf);
     const writer = &out_fbs;
+    writer.print("Top results for '{s}':\n", .{query}) catch {};
 
-    writer.print("Top 3 TMDB Results for '{s}':\n", .{query}) catch {};
-
-    const json_str = result_buf[0..n];
-    var search_start: usize = 0;
-    var count: usize = 0;
-
-    while (count < 3) : (count += 1) {
-        // Find "original_title" or "original_name"
-        const name_idx = std.mem.indexOf(u8, json_str[search_start..], "\"title\":\"") orelse
-            std.mem.indexOf(u8, json_str[search_start..], "\"name\":\"");
-        if (name_idx == null) break;
-
-        // Key lengths: '"title":"' = 10, '"name":"' = 8
-        const key_len: usize = if (std.mem.indexOf(u8, json_str[search_start..], "\"title\":\"") != null) 10 else 8;
-        search_start += name_idx.? + key_len;
-        const name_end = std.mem.indexOfScalarPos(u8, json_str, search_start, '"') orelse break;
-        const title = json_str[search_start..name_end];
-
-        // Find release_date or first_air_date
-        var date: []const u8 = "Unknown";
-        const date_idx = std.mem.indexOf(u8, json_str[search_start..], "\"release_date\":\"") orelse
-            std.mem.indexOf(u8, json_str[search_start..], "\"first_air_date\":\"");
-
-        if (date_idx != null) {
-            const d_start = search_start + date_idx.? + 16;
-            if (std.mem.indexOfScalarPos(u8, json_str, d_start, '"')) |d_end| {
-                date = json_str[d_start..d_end];
-            }
-        }
-
-        // Find overview summary (just first 100 chars)
-        var overview: []const u8 = "";
-        if (std.mem.indexOf(u8, json_str[search_start..], "\"overview\":\"")) |o_idx| {
-            const o_start = search_start + o_idx + 12;
-            if (std.mem.indexOfScalarPos(u8, json_str, o_start, '"')) |o_end| {
-                const max_olen = @min(o_end - o_start, 100);
-                overview = json_str[o_start .. o_start + max_olen];
-            }
-        }
-
-        writer.print("{d}. {s} ({s}) - {s}...\n", .{ count + 1, title, date, overview }) catch {};
-        search_start = name_end;
+    const shown = @min(found, 3);
+    for (items[0..shown], 0..) |*it, i| {
+        const overview = it.overview[0..@min(it.overview_len, 100)];
+        const date: []const u8 = if (it.release_date_len > 0)
+            it.release_date[0..it.release_date_len]
+        else if (it.year_len > 0)
+            it.year[0..it.year_len]
+        else
+            "Unknown";
+        writer.print("{d}. {s} ({s}) - {s}...\n", .{ i + 1, it.title[0..it.title_len], date, overview }) catch {};
     }
-
-    if (count == 0) {
-        writer.print("No results found.", .{}) catch {};
-    }
+    if (shown == 0) writer.print("No results found.", .{}) catch {};
 
     return alloc.dupe(u8, out_fbs.buffered()) catch null;
 }

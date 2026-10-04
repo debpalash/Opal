@@ -395,11 +395,11 @@ pub const Row = struct {
 
     name: [128]u8 = std.mem.zeroes([128]u8),
     name_len: usize = 0,
-    poster_path: [64]u8 = std.mem.zeroes([64]u8),
+    poster_path: [256]u8 = std.mem.zeroes([256]u8),
     poster_path_len: usize = 0,
     /// Fully-qualified artwork URL. TV builds it from poster_path; anime already
     /// stores one. One field means one poster code path for every kind.
-    poster_url: [160]u8 = std.mem.zeroes([160]u8),
+    poster_url: [320]u8 = std.mem.zeroes([320]u8),
     poster_url_len: usize = 0,
 
     /// What the user set by hand. Wins over `status` when not `.none`.

@@ -1895,6 +1895,18 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_tvmaze_pure).step);
 
+    // Keyless TV tracking: Cinemeta series facts (season map, aired frontier,
+    // next episode), TVmaze overlay, synthetic-identity rules, IMDb-by-title
+    // picking, poster URLs and scrobble external ids.
+    const test_keyless_tv_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/keyless_tv_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_keyless_tv_pure).step);
+
     // OMDb ratings enrichment: real IMDb / RT / Metacritic parse from the OMDb
     // body (Ratings[] source matching, Metacritic "88/100" → "88", N/A → absent),
     // IMDb-id extraction + normalization, scores/details formatting, and a

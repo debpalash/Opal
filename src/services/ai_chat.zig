@@ -281,7 +281,7 @@ pub var catalog_rail_active: bool = false;
 var rail_retry_done: bool = false; // one-shot; re-armed by each kick
 
 pub fn kickCatalogRail(query: []const u8) void {
-    if (state.app.tmdb.api_key_len == 0) return;
+    // No key needed: the catalog layer falls back to Cinemeta.
     rail_retry_done = false;
     const tmdb_api = @import("tmdb_api.zig");
     var lower_buf: [256]u8 = undefined;

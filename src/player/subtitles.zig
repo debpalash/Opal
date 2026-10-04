@@ -350,23 +350,95 @@ fn gestdownAppend(engine: *SubtitleEngine, base: usize) usize {
     return base + filled;
 }
 
-/// Keyless provider #3: Stremio's OpenSubtitles-v3 addon
-/// (opensubtitles-v3.strem.io). It is IMDB-id-keyed, so we first resolve one via
-/// a single TMDB search + external_ids lookup (mirrors resolver.zig's pattern),
-/// then append up to MAX_STREMIO plain-SRT matches after `base`. The addon
-/// returns every language, so we filter client-side against the search language.
-/// Skips gracefully when there is no TMDB key or no resolvable IMDB id. Runs on
-/// the search thread. Returns the new result count.
-fn stremioOsAppend(engine: *SubtitleEngine, base: usize) usize {
-    if (base >= engine.results.len) return base;
+/// IMDb id for the title a subtitle search is about, in order of trust:
+///   1. the id remembered for the show/episode currently playing (exact);
+///   2. TMDB search + external_ids when the user supplied a key;
+///   3. Cinemeta catalog search, accepting only an exact title (and year) match.
+/// `buf` is scratch. Returns a slice of `out`, or null when nothing is certain.
+fn resolveSubtitleImdb(
+    is_series: bool,
+    season: u16,
+    episode: u16,
+    search_type: []const u8,
+    search_term: []const u8,
+    buf: []u8,
+    out: []u8,
+) ?[]const u8 {
     const sp = @import("../services/subtitles_pure.zig");
+    const kl = @import("../services/keyless_tv_pure.zig");
     const tmdb = @import("../services/tmdb_api.zig");
     const http = @import("../core/http.zig");
     const alloc = @import("../core/alloc.zig").allocator;
 
-    // IMDB resolution rides on TMDB — a keyless chain step, but no key ⇒ skip.
+    // 1) The episode being played is already identified.
+    const pe = &state.app.playing_episode;
+    if (is_series and pe.active and pe.tmdb_id > 0 and pe.season == season and pe.episode == episode) {
+        const known = @import("../core/db.zig").tvImdbId(pe.tmdb_id, out);
+        if (known.len > 0) return known;
+    }
+
+    // 2) TMDB, only with a key.
     const api_key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
-    if (api_key.len == 0) return base;
+    if (api_key.len > 0) tmdb_path: {
+        var enc: [512]u8 = undefined;
+        const encoded = http.urlEncode(search_term, &enc);
+        var url1: [768]u8 = undefined;
+        const surl = std.fmt.bufPrint(&url1, "/3/search/{s}?query={s}&page=1", .{ search_type, encoded }) catch break :tmdb_path;
+        @import("../core/rate_limit.zig").acquire("tmdb", 3.0);
+        const sn = tmdb.tmdbApiInto(surl, api_key, buf);
+        if (sn < 20) break :tmdb_path;
+        var id_buf: [16]u8 = undefined;
+        const id_src = sp.firstTmdbId(buf[0..sn]) orelse break :tmdb_path;
+        const idl = @min(id_src.len, id_buf.len);
+        @memcpy(id_buf[0..idl], id_src[0..idl]);
+
+        var url2: [256]u8 = undefined;
+        const eurl = std.fmt.bufPrint(&url2, "/3/{s}/{s}/external_ids", .{ search_type, id_buf[0..idl] }) catch break :tmdb_path;
+        @import("../core/rate_limit.zig").acquire("tmdb", 3.0);
+        const en = tmdb.tmdbApiInto(eurl, api_key, buf);
+        if (en < 10) break :tmdb_path;
+        const imdb_src = sp.imdbFromExternalIds(buf[0..en]) orelse break :tmdb_path;
+        if (imdb_src.len > out.len) break :tmdb_path;
+        @memcpy(out[0..imdb_src.len], imdb_src);
+        return out[0..imdb_src.len];
+    }
+
+    // 3) Cinemeta, keyless. First the whole query as a title ("Blade Runner
+    // 2049" is a title), then, when it ends in a year, the title with that year
+    // as a filter ("Avengers Endgame" + 2019).
+    const kind: []const u8 = if (std.mem.eql(u8, search_type, "tv")) "series" else "movie";
+    const split = kl.splitTitleYear(search_term);
+    const attempts = [_]kl.TitleYear{
+        .{ .title = std.mem.trim(u8, search_term, " ") },
+        .{ .title = split.title, .year = if (is_series) 0 else split.year },
+    };
+    for (attempts, 0..) |att, i| {
+        if (i == 1 and (att.year == 0 or std.mem.eql(u8, att.title, attempts[0].title))) break;
+        var enc2: [512]u8 = undefined;
+        const encoded2 = http.urlEncode(att.title, &enc2);
+        var path_buf: [640]u8 = undefined;
+        const path = std.fmt.bufPrint(&path_buf, "/catalog/{s}/top/search={s}.json", .{ kind, encoded2 }) catch return null;
+        @import("../core/rate_limit.zig").acquire("cinemeta", 4.0);
+        const n = tmdb.cinemetaApiInto(path, buf);
+        if (n == 0) continue;
+        const picked = kl.pickImdb(alloc, buf[0..n], att.title, att.year, out) catch continue;
+        if (picked.len > 0) return picked;
+    }
+    return null;
+}
+
+/// Keyless provider #3: Stremio's OpenSubtitles-v3 addon
+/// (opensubtitles-v3.strem.io). It is IMDB-id-keyed, so we first resolve one
+/// (`resolveSubtitleImdb`: the playing episode's remembered id, TMDB when the
+/// user has a key, otherwise Cinemeta), then append up to MAX_STREMIO plain-SRT
+/// matches after `base`. The addon returns every language, so we filter
+/// client-side against the search language. Skips gracefully when no IMDB id can
+/// be established with certainty. Runs on the search thread. Returns the new
+/// result count.
+fn stremioOsAppend(engine: *SubtitleEngine, base: usize) usize {
+    if (base >= engine.results.len) return base;
+    const sp = @import("../services/subtitles_pure.zig");
+    const alloc = @import("../core/alloc.zig").allocator;
 
     // Snapshot the search language (stable during a search, but copy anyway —
     // this runs off the UI thread).
@@ -385,36 +457,15 @@ fn stremioOsAppend(engine: *SubtitleEngine, base: usize) usize {
     const search_term = if (p.is_tv and p.show.len > 0) p.show else p.query;
     if (search_term.len == 0) return base;
 
-    // One heap buffer, reused for all three responses sequentially (keeps the
+    // One heap buffer, reused for all responses sequentially (keeps the
     // search-worker stack small — see the >64KB stack rule).
     const buf = alloc.alloc(u8, 96 * 1024) catch return base;
     defer alloc.free(buf);
 
-    // 1) TMDB text search → first result's TMDB id.
-    var enc: [512]u8 = undefined;
-    const encoded = http.urlEncode(search_term, &enc);
-    var url1: [768]u8 = undefined;
-    const surl = std.fmt.bufPrint(&url1, "/3/search/{s}?query={s}&page=1", .{ search_type, encoded }) catch return base;
-    @import("../core/rate_limit.zig").acquire("tmdb", 3.0);
-    const sn = tmdb.tmdbApiInto(surl, api_key, buf);
-    if (sn < 20) return base;
-    var id_buf: [16]u8 = undefined;
-    const id_src = sp.firstTmdbId(buf[0..sn]) orelse return base;
-    const idl = @min(id_src.len, id_buf.len);
-    @memcpy(id_buf[0..idl], id_src[0..idl]);
-    const tmdb_id = id_buf[0..idl];
-
-    // 2) external_ids → imdb id (kept with its "tt" prefix).
-    var url2: [256]u8 = undefined;
-    const eurl = std.fmt.bufPrint(&url2, "/3/{s}/{s}/external_ids", .{ search_type, tmdb_id }) catch return base;
-    @import("../core/rate_limit.zig").acquire("tmdb", 3.0);
-    const en = tmdb.tmdbApiInto(eurl, api_key, buf);
-    if (en < 10) return base;
+    // IMDb id: the remembered one for the episode being played, else TMDB when a
+    // key exists, else Cinemeta. No key never skips this step.
     var imdb_buf: [16]u8 = undefined;
-    const imdb_src = sp.imdbFromExternalIds(buf[0..en]) orelse return base;
-    const iml = @min(imdb_src.len, imdb_buf.len);
-    @memcpy(imdb_buf[0..iml], imdb_src[0..iml]);
-    const imdb_id = imdb_buf[0..iml];
+    const imdb_id = resolveSubtitleImdb(is_series, p.season, p.episode, search_type, search_term, buf, &imdb_buf) orelse return base;
 
     // 3) Stremio OpenSubtitles-v3 addon → plain-SRT subtitle list.
     var url3: [768]u8 = undefined;

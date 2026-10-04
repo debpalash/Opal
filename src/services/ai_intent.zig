@@ -50,9 +50,10 @@ fn recommendationWorker(assistant_idx: usize) void {
         chat.is_generating.store(false, .release);
     }
 
-    // Strategy 1: Use TMDB trending if API key is configured
-    if (state.app.tmdb.api_key_len > 0) {
-        // Navigate to the Movies & TV (TMDB) page, trending view
+    // Strategy 1: the Movies & TV trending list. Needs no key: with none, the
+    // catalog layer answers from Cinemeta.
+    {
+        // Navigate to the Movies & TV page, trending view
         state.navigateToTab(.TMDB);
         state.app.tmdb.view = .Trending;
         state.app.tmdb.category = .trending;
@@ -89,9 +90,9 @@ fn recommendationWorker(assistant_idx: usize) void {
             var resp_buf: [1024]u8 = undefined;
             const resp = std.fmt.bufPrint(
                 &resp_buf,
-                "Here are trending movies right now! I've opened the TMDB tab so you can browse them with posters and ratings. Pick any title and say \"play <title>\" to start watching.",
+                "Here are trending movies right now! I've opened the Movies & TV tab so you can browse them with posters and ratings. Pick any title and say \"play <title>\" to start watching.",
                 .{},
-            ) catch "Check the TMDB tab for trending movies!";
+            ) catch "Check the Movies & TV tab for trending movies!";
 
             if (assistant_idx < chat.MAX_MESSAGES) {
                 chat.messages[assistant_idx].text_len = @min(resp.len, chat.MAX_MSG_LEN);
@@ -136,7 +137,7 @@ fn recommendationWorker(assistant_idx: usize) void {
         }
     }
 
-    // Strategy 2: No TMDB key — use recommendations engine
+    // Strategy 2: the catalog had nothing — use the recommendations engine
     const recs = @import("recommendations.zig");
     recs.generateRecommendations();
 
@@ -153,7 +154,7 @@ fn recommendationWorker(assistant_idx: usize) void {
             @memcpy(chat.messages[assistant_idx].text[0..msg.len], msg);
         }
     } else {
-        const msg = "I don't have enough watch history to make recommendations yet. Try browsing TMDB trending, or tell me a specific title to search for!";
+        const msg = "I don't have enough watch history to make recommendations yet. Try browsing trending titles, or tell me a specific title to search for!";
         if (assistant_idx < chat.MAX_MESSAGES) {
             chat.messages[assistant_idx].text_len = @min(msg.len, chat.MAX_MSG_LEN);
             @memcpy(chat.messages[assistant_idx].text[0..chat.messages[assistant_idx].text_len], msg[0..chat.messages[assistant_idx].text_len]);
@@ -186,13 +187,8 @@ pub fn handleGenreBrowse(raw_input: []const u8) bool {
     @memset(&chat.input_buf, 0);
     chat.input_len = 0;
 
-    // Require TMDB key — else surface clear error instead of silent torrent search
-    if (state.app.tmdb.api_key_len == 0) {
-        const msg = "Set a TMDB API key in settings to browse by genre.";
-        chat.messages[assistant_idx].text_len = msg.len;
-        @memcpy(chat.messages[assistant_idx].text[0..msg.len], msg);
-        return true;
-    }
+    // No key required: genre browse routes through the catalog layer, which
+    // answers from Cinemeta when there is no TMDB key.
 
     // Map genre name to TMDB genre ID for /discover/movie endpoint
     const genre_id = genreNameToId(genre);

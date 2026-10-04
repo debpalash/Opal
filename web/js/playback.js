@@ -30,7 +30,7 @@ async function loadSetup(){
     $('setup-sources').textContent = d.has_sources ? 'Sources installed ✓' : 'No sources — search returns nothing until you install some.';
     $('setup-install').disabled = !!d.has_sources;
     $('setup-install').textContent = d.has_sources ? 'Starter sources installed' : 'Install starter sources';
-    $('setup-tmdb').textContent = d.has_tmdb ? 'TMDB key set ✓' : 'Powers posters, seasons, trending.';
+    $('setup-tmdb').textContent = d.has_tmdb ? 'TMDB key set ✓' : 'Optional. Only adds richer metadata; everything works without it.';
   } catch {}
   loadSources();
   loadSettings();

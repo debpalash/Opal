@@ -1780,7 +1780,8 @@ pub const TvShowRow = struct {
     tmdb_id: i32 = 0,
     name: [128]u8 = std.mem.zeroes([128]u8),
     name_len: usize = 0,
-    poster_path: [64]u8 = std.mem.zeroes([64]u8),
+    // 256: keyless catalog posters are absolute URLs (Amazon ones exceed 64).
+    poster_path: [256]u8 = std.mem.zeroes([256]u8),
     poster_path_len: usize = 0,
     ended: bool = false,
     last_aired: tv_pure.Ep = .{},
@@ -1992,9 +1993,20 @@ pub fn tvRememberSeason(id: i32, season: i32) void {
     _ = step(stmt);
 }
 
+/// Remember the IMDb identity of a library id. The FIRST claim on an id wins:
+/// if a different IMDb id later claims the same integer (a keyless catalog hash
+/// colliding with a real TMDB id), the claim is refused and logged instead of
+/// merging two different shows' history.
 pub fn tvRememberImdb(id: i32, imdb: []const u8) void {
     if (!@import("../services/cinemeta_pure.zig").validImdbId(imdb)) return;
-    const stmt = prepare("INSERT INTO tv_external_ids VALUES(?,?) ON CONFLICT(tmdb_id) DO UPDATE SET imdb_id=excluded.imdb_id") orelse return;
+    var existing: [16]u8 = undefined;
+    const stored = tvImdbId(id, &existing);
+    if (stored.len > 0) {
+        if (@import("../services/keyless_tv_pure.zig").identityConflict(stored, imdb))
+            logs.pushLog("warn", "tv", "Two different shows claim one library id; keeping the first", true);
+        return;
+    }
+    const stmt = prepare("INSERT OR IGNORE INTO tv_external_ids VALUES(?,?)") orelse return;
     defer finalize(stmt);
     bindInt(stmt, 1, id);
     bindText(stmt, 2, imdb);

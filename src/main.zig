@@ -500,7 +500,15 @@ fn scheduleDeferredNetworkWarmups(media_first_launch: bool) void {
             }
             if (workers.isQuitting()) return;
 
-            if (!skip_browse and state.app.config_loaded.load(.acquire) and !state.app.tmdb.loaded_once) {
+            // No key needed: with none, the catalog layer answers from Cinemeta.
+            // Wait (bounded) for the config worker so a user WITH a key does not
+            // get the keyless first page by racing it.
+            var cfg_wait_ms: u16 = 0;
+            while (!state.app.config_loaded.load(.acquire) and cfg_wait_ms < 5000) : (cfg_wait_ms += 50) {
+                if (workers.isQuitting()) return;
+                io_g.sleep(50 * std.time.ns_per_ms);
+            }
+            if (!skip_browse and !state.app.tmdb.loaded_once) {
                 state.app.tmdb.loaded_once = true;
                 @import("services/tmdb_api.zig").fetchCurrentView(false);
             }

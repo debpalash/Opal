@@ -414,7 +414,7 @@ pub fn renderContent() void {
     defer page.deinit();
 
     if (state.app.tmdb.api_key_len == 0) {
-        components.emptyState(icons.tvg.lucide.clapperboard, "TMDB key required", "Add a TMDB API key in Settings to browse Asian dramas.");
+        components.emptyState(icons.tvg.lucide.clapperboard, "Asian Drama catalog unavailable", "This catalog is built from TMDB, which needs the optional key (Settings, Advanced). Movies, TV, anime and the rest work without it.");
         return;
     }
 
@@ -424,7 +424,7 @@ pub fn renderContent() void {
     }
 
     if (state.app.drama.result_count == 0 and catalog_failed.load(.acquire)) {
-        if (components.emptyStateCta(icons.tvg.lucide.clapperboard, "Drama catalog unavailable", "Check the TMDB key and connection, then retry.", "Retry")) loadCatalog();
+        if (components.emptyStateCta(icons.tvg.lucide.clapperboard, "Drama catalog unavailable", "Check your connection, then retry.", "Retry")) loadCatalog();
         return;
     }
     if (state.app.drama.result_count == 0 and !state.app.drama.is_loading.load(.acquire)) {

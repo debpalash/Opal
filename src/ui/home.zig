@@ -169,7 +169,8 @@ pub fn render() void {
     // No saved media or history and no TMDB rail to populate the hub yet.
     const everything_empty = !has_continue and watchlist.items.len == 0 and
         favorites.items.len == 0 and watching.items.len == 0;
-    if (everything_empty and state.app.tmdb.api_key_len == 0) renderEmptyState();
+    // The trending rail (keyless via Cinemeta) populates the hub when it loads.
+    if (everything_empty and state.app.tmdb.results.items.len == 0) renderEmptyState();
 }
 
 /// "Trending tonight" — the discovery rail that makes the idle console feel
@@ -183,16 +184,14 @@ fn kickTrendingFetch() void {
     const Once = struct {
         var kicked: bool = false;
     };
-    // Gate via the tested pure predicate so the fetch can't arm until the config
-    // worker has published the key (config_loaded, acquire) — fixes the
-    // first-start "Nothing loaded" race. No key -> returns false -> empty state.
-    if (@import("../services/tmdb_pure.zig").shouldKickTrending(
-        state.app.config_loaded.load(.acquire),
-        t.api_key_len,
-        t.results.items.len,
-        t.is_loading.load(.acquire),
-        Once.kicked,
-    )) {
+    // The fetch can't arm until the config worker has published the key
+    // (config_loaded, acquire) — fixes the first-start "Nothing loaded" race.
+    // A key is NOT required: with none, the catalog layer answers from Cinemeta.
+    if (state.app.config_loaded.load(.acquire) and
+        t.results.items.len == 0 and
+        !t.is_loading.load(.acquire) and
+        !Once.kicked)
+    {
         Once.kicked = true;
         t.loaded_once = true; // Browse must not immediately refetch over this
         @import("../services/tmdb_api.zig").fetchCurrentView(false);
@@ -364,7 +363,6 @@ fn renderComingUpRail(card_w: f32) bool {
 
 fn renderTrendingRail(card_w: f32) bool {
     const t = &state.app.tmdb;
-    if (t.api_key_len == 0) return false;
     if (t.view != .Trending or t.genre_idx != 0) return false;
     if (t.results.items.len == 0) return false;
 

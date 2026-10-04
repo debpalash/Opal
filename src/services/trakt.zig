@@ -168,18 +168,22 @@ pub fn disconnect() void {
 
 /// Mark a TV episode watched in the user's Trakt history (id-based — reliable,
 /// unlike the title-only scrobble). Called when an episode is played.
-pub fn markWatchedEpisode(show_tmdb: i32, season: i32, episode: i32) void {
-    setEpisodeWatched(show_tmdb, season, episode, true);
+/// `imdb` is the show's remembered IMDb id ("" when unknown). A keyless catalog
+/// id is a hash of it, not a TMDB id, so such a show is identified by IMDb.
+pub fn markWatchedEpisode(show_tmdb: i32, imdb: []const u8, season: i32, episode: i32) void {
+    setEpisodeWatched(show_tmdb, imdb, season, episode, true);
 }
 
-pub fn markUnwatchedEpisode(show_tmdb: i32, season: i32, episode: i32) void {
-    setEpisodeWatched(show_tmdb, season, episode, false);
+pub fn markUnwatchedEpisode(show_tmdb: i32, imdb: []const u8, season: i32, episode: i32) void {
+    setEpisodeWatched(show_tmdb, imdb, season, episode, false);
 }
 
-fn setEpisodeWatched(show_tmdb: i32, season: i32, episode: i32, watched: bool) void {
+fn setEpisodeWatched(show_tmdb: i32, imdb: []const u8, season: i32, episode: i32, watched: bool) void {
     if (!isConnected()) return;
-    var body: [256]u8 = undefined;
-    const payload = std.fmt.bufPrint(&body, "{{\"shows\":[{{\"ids\":{{\"tmdb\":{d}}},\"seasons\":[{{\"number\":{d},\"episodes\":[{{\"number\":{d}}}]}}]}}]}}", .{ show_tmdb, season, episode }) catch return;
+    var ids_buf: [48]u8 = undefined;
+    const ids = @import("keyless_tv_pure.zig").externalIds(show_tmdb, imdb, false, &ids_buf) orelse return;
+    var body: [320]u8 = undefined;
+    const payload = std.fmt.bufPrint(&body, "{{\"shows\":[{{\"ids\":{{{s}}},\"seasons\":[{{\"number\":{d},\"episodes\":[{{\"number\":{d}}}]}}]}}]}}", .{ ids, season, episode }) catch return;
     var key_buf: [64]u8 = undefined;
     const key = std.fmt.bufPrint(&key_buf, "show:{d}:{d}:{d}", .{ show_tmdb, season, episode }) catch return;
     const operation = if (watched) "history" else "history_remove";

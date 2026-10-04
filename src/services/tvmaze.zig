@@ -40,8 +40,8 @@ var busy: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 /// curl `url` into `buf`, returning bytes read (0 on failure). TVmaze is a
 /// plain keyless HTTPS JSON API — no auth, no SNI-block dance needed.
-fn curlInto(url: []const u8, buf: []u8) usize {
-    var child = io.Child.init(&.{ "curl", "-s", "--connect-timeout", "3", "--max-time", "8", url }, alloc);
+pub fn curlInto(url: []const u8, buf: []u8) usize {
+    var child = io.Child.init(&.{ "curl", "-fsL", "--connect-timeout", "3", "--max-time", "8", "--", url }, alloc);
     child.stdout_behavior = .Pipe;
     child.stderr_behavior = .Ignore;
     child.spawn() catch return 0;
@@ -103,7 +103,14 @@ fn worker(tmdb_id: i32, my_gen: u32, title: []const u8) void {
     var enc_buf: [512]u8 = undefined;
     const enc = http.urlEncode(title, &enc_buf); // percent-encodes query params
     var url_buf: [640]u8 = undefined;
-    const search_url = std.fmt.bufPrint(&url_buf, "https://api.tvmaze.com/singlesearch/shows?q={s}", .{enc}) catch return;
+    // An IMDb id is an exact identity; a title search can land on a similarly
+    // named show. Use the remembered IMDb id when there is one.
+    var imdb_buf: [16]u8 = undefined;
+    const imdb = @import("../core/db.zig").tvImdbId(tmdb_id, &imdb_buf);
+    const search_url = (if (imdb.len > 0)
+        std.fmt.bufPrint(&url_buf, "https://api.tvmaze.com/lookup/shows?imdb={s}", .{imdb})
+    else
+        std.fmt.bufPrint(&url_buf, "https://api.tvmaze.com/singlesearch/shows?q={s}", .{enc})) catch return;
     var n = curlInto(search_url, buf);
     if (n == 0) return;
     if (gen.load(.acquire) != my_gen) return; // superseded

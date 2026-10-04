@@ -1326,11 +1326,11 @@ fn renderGeneralTab() void {
     }
 
     // ── TMDB Integration ──
-    sectionHeader("TMDB Integration", "Optional: add richer season and episode metadata", 14, @src());
+    sectionHeader("TMDB (Advanced, optional)", "Not needed: Opal loads movies, TV, calendars and subtitles without it", 14, @src());
 
-    settingRow("API Key", 140, @src());
+    settingRow("TMDB key", 140, @src());
     {
-        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.tmdb.api_key }, .placeholder = "Paste API key from themoviedb.org", .password_char = "•" }, .{
+        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.tmdb.api_key }, .placeholder = "Optional: your own themoviedb.org token", .password_char = "•" }, .{
             .id_extra = 142,
             .expand = .horizontal,
             .min_size_content = .{ .w = 300, .h = 20 },
@@ -1353,7 +1353,7 @@ fn renderGeneralTab() void {
         _ = dvui.label(@src(), "{s}", .{if (tmdb_was_default and !tmdb_changed)
             "Using Opal's built-in key — paste your own to override."
         else
-            "Optional — movie and TV feeds work without a key"}, .{
+            "Advanced, optional. Only adds richer metadata (cast, extra artwork, trailers). Everything works without it."}, .{
             .id_extra = 143,
             .color_text = theme.colors.text_tertiary,
             .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
