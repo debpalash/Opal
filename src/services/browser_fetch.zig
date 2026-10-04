@@ -109,25 +109,21 @@ pub fn fetch(spec: pure.Spec, cancel_epoch: ?bounded_process.CancelEpoch) Result
     }
 }
 
-/// A polling browser asks for work. Holds the request open up to `wait_s`
-/// (capped), returns a copy of the oldest pending job or null.
-pub fn poll(browser_id: i64, wait_s: i64, out: *pure.Job) bool {
-    const wait = std.math.clamp(wait_s, 0, pure.POLL_MAX_WAIT_S);
-    const started = io.timestamp();
-    while (true) {
-        {
-            mutex.lock();
-            defer mutex.unlock();
-            const now = io.timestamp();
-            pure.noteSeen(&queue, now);
-            if (pure.claim(&queue, now, browser_id)) |job| {
-                out.* = job.*;
-                return true;
-            }
-        }
-        if (io.timestamp() - started >= wait) return false;
-        io.sleep(100 * std.time.ns_per_ms);
+/// A polling browser asks for work: one attempt. Marks the browser as seen
+/// (that is what "connected" means) and, if a job is pending, claims it and
+/// returns a copy. The route loops this up to the wait the browser asked for,
+/// checking the client is still there before each attempt, so a job is never
+/// claimed for a connection that has already gone.
+pub fn pollOnce(browser_id: i64, out: *pure.Job) bool {
+    mutex.lock();
+    defer mutex.unlock();
+    const now = io.timestamp();
+    pure.noteSeen(&queue, now);
+    if (pure.claim(&queue, now, browser_id)) |job| {
+        out.* = job.*;
+        return true;
     }
+    return false;
 }
 
 pub const CompleteResult = union(enum) {
@@ -204,12 +200,12 @@ fn rememberDenied(url: []const u8) void {
 
 /// Ask the paired browser for `url` on behalf of a scraper, without ever
 /// prompting the user: a host the user has not allowed answers "origin not
-/// allowed" at once and the caller falls back to the old bridge. Private-network
-/// targets are never sent. Returns null for every kind of failure.
+/// allowed" at once and the caller falls back to the old bridge. A private-network
+/// target is refused by the extension the same way unless the user named it.
+/// Returns null for every kind of failure.
 pub fn fetchText(url: []const u8, post_body: ?[]const u8, out_buf: []u8, cancel_epoch: ?bounded_process.CancelEpoch) ?Text {
     if (!connected()) return null;
     pure.validateTarget(url) catch return null;
-    if (pure.isPrivateTarget(url)) return null;
     if (recentlyDenied(url)) return null;
     const spec: pure.Spec = .{
         .url = url,

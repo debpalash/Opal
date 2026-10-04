@@ -706,6 +706,60 @@ streamsDisable.addEventListener("click", async () => {
 });
 streamsPair.addEventListener("click", () => chrome.runtime.openOptionsPage());
 
+// ── Opal asks to fetch a page through this browser ────────────────────────────
+
+interface FetchPending {
+  job: { id: number };
+  origin: string;
+  private: boolean;
+  deadline: number;
+}
+
+const fetchAskCard = $<HTMLElement>("fetch-ask-card");
+const fetchAskOrigin = $<HTMLElement>("fetch-ask-origin");
+const fetchAskPrivate = $<HTMLElement>("fetch-ask-private");
+const fetchAskLeft = $<HTMLElement>("fetch-ask-left");
+const fetchAskOnce = $<HTMLButtonElement>("fetch-ask-once");
+const fetchAskAlways = $<HTMLButtonElement>("fetch-ask-always");
+const fetchAskDeny = $<HTMLButtonElement>("fetch-ask-deny");
+let fetchAskCurrent: FetchPending | null = null;
+
+/** Show the oldest request waiting for the user, if any. */
+async function loadFetchAsk(): Promise<void> {
+  const st = await browserMsg<{ pending?: FetchPending[] }>({ op: "fetch-state" });
+  const p = st.pending?.[0] ?? null;
+  fetchAskCurrent = p;
+  fetchAskCard.hidden = !p;
+  if (!p) return;
+  fetchAskOrigin.textContent = p.origin;
+  fetchAskPrivate.hidden = !p.private;
+  fetchAskLeft.textContent = `${Math.max(0, Math.round((p.deadline - Date.now()) / 1000))} s left. No answer counts as Deny.`;
+}
+
+async function answerFetchAsk(decision: "once" | "always" | "deny"): Promise<void> {
+  const p = fetchAskCurrent;
+  if (!p) return;
+  fetchAskCard.hidden = true;
+  if (decision !== "deny") {
+    // The browser's own all-sites or per-site grant is what lets the page be
+    // read; asked here because it needs this click.
+    try {
+      await chrome.permissions.request({ origins: [`${p.origin}/*`] });
+    } catch {
+      // the fetch will report if it could not read the page
+    }
+  }
+  const res = await browserMsg<{ ok: boolean; error?: string }>({ op: "fetch-decide", jobId: p.job.id, decision });
+  logRecent(
+    res.ok ? (decision === "deny" ? `Denied ${p.origin}` : `Allowed ${p.origin}${decision === "always" ? " from now on" : " once"}`) : (res.error ?? "Could not answer"),
+    res.ok,
+  );
+  loadFetchAsk();
+}
+fetchAskOnce.addEventListener("click", () => void answerFetchAsk("once"));
+fetchAskAlways.addEventListener("click", () => void answerFetchAsk("always"));
+fetchAskDeny.addEventListener("click", () => void answerFetchAsk("deny"));
+
 // ── Share this page with Opal ─────────────────────────────────────────────────
 
 const shareBtn = $<HTMLButtonElement>("share-btn");
@@ -749,6 +803,7 @@ let ticks = 0;
 
 async function poll(): Promise<void> {
   loadStreams().catch(() => {});
+  loadFetchAsk().catch(() => {});
   const res = await send({ kind: "opal", action: "status" });
   if (res.ok) {
     statusDot.className = "dot ok";

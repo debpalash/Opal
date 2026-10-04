@@ -133,7 +133,8 @@ fn scrapeFetchBody(url: []const u8, post_body: ?[]const u8, out_buf: []u8, cance
     // Blocked. First ask the user's own paired browser: it has their cookies
     // and a real fingerprint, and needs no Python or engine download. It never
     // prompts from here (an origin the user has not allowed answers "not
-    // allowed" at once) and never gets a private-network target. A page that is
+    // allowed" at once; a private-network target is refused the same way unless the
+    // user named it). A page that is
     // still a challenge, or an error status, falls through to the bridge.
     if (cancelled(cancel_epoch)) return null;
     if (browser_fetch.fetchText(url, post_body, out_buf, cancel_epoch)) |t| {

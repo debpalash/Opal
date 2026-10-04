@@ -30,6 +30,28 @@
       <button id="setup-open" class="btn primary full">Set up in a few clicks</button>
     </section>
 
+    <!-- Opal (or an agent working for the user) asked to fetch a page through this
+         browser, with the user's own logins. Nothing runs until the user answers;
+         no answer in 80 seconds is a denial. -->
+    <section id="fetch-ask-card" class="card accent" hidden>
+      <div class="card-title">Opal wants to fetch a page</div>
+      <p class="card-body">
+        Opal asked this browser to load a page from
+        <strong id="fetch-ask-origin"></strong>
+        using your logins and cookies for that site, and read its text.
+      </p>
+      <p id="fetch-ask-private" class="card-body" hidden>
+        This is an address on your own computer or network, not a public website.
+        Only allow it if you know what it is.
+      </p>
+      <div class="btn-row">
+        <button id="fetch-ask-once" class="btn primary">Allow once</button>
+        <button id="fetch-ask-always" class="btn">Always allow this site</button>
+        <button id="fetch-ask-deny" class="btn ghost">Deny</button>
+      </div>
+      <p id="fetch-ask-left" class="card-sub"></p>
+    </section>
+
     <!-- Add-this-site-as-a-source (shown only on recognised manga/novel sites) -->
     <section id="source-card" class="card accent" hidden>
       <div class="card-head">

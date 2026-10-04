@@ -29,6 +29,7 @@ const fetcher = @import("browser_fetch.zig");
 const fetch_pure = @import("browser_fetch_pure.zig");
 const alloc = @import("../core/alloc.zig").allocator;
 const logs = @import("../core/logs.zig");
+const io_g = @import("../core/io_global.zig");
 
 fn err(stream: std.Io.net.Stream, status: []const u8, why: []const u8) void {
     var buf: [384]u8 = undefined;
@@ -220,7 +221,10 @@ fn fetchRoute(stream: std.Io.net.Stream, query: []const u8, body: []const u8) vo
             defer out.deinit();
             fetch_pure.writeAgentJson(alloc, &out.writer, &f.outcome, f.body) catch
                 return err(stream, "500 Internal Server Error", "server error");
-            logs.pushLog("info", "browser", "A page was fetched through the paired browser", false);
+            logs.pushLog("info", "browser", if (fetch_pure.isPrivateTarget(url))
+                "A page on the private network was fetched through the paired browser"
+            else
+                "A page was fetched through the paired browser", false);
             wire.sendJson(stream, out.written());
         },
         .failed => |code| err(stream, code.httpStatus(), code.message()),
@@ -231,12 +235,31 @@ fn fetchRoute(stream: std.Io.net.Stream, query: []const u8, body: []const u8) vo
     }
 }
 
+/// True when the client of an idle request has closed its end. A GET that is
+/// waiting for an answer sends nothing more, so readable means end of stream
+/// (or an error); anything else is unexpected and also ends the wait.
+fn peerClosed(stream: std.Io.net.Stream) bool {
+    if (@import("builtin").os.tag == .windows) return false;
+    var pfd = [_]std.posix.pollfd{.{ .fd = stream.socket.handle, .events = std.posix.POLL.IN, .revents = 0 }};
+    const ready = std.posix.poll(&pfd, 0) catch return false;
+    return ready > 0;
+}
+
 fn jobsRoute(stream: std.Io.net.Stream, query: []const u8, presented: []const u8) void {
     const browser_id = link.validToken(presented) orelse return err(stream, "401 Unauthorized", "not paired");
     var wb: [8]u8 = undefined;
     const wait = std.fmt.parseInt(i64, wire.formParam("", query, "wait", &wb) orelse "0", 10) catch 0;
     var job: fetch_pure.Job = undefined;
-    if (!fetcher.poll(browser_id, wait, &job)) return wire.sendJson(stream, "{\"job\":null}");
+    const wait_s = std.math.clamp(wait, 0, fetch_pure.POLL_MAX_WAIT_S);
+    const started = io_g.timestamp();
+    while (true) {
+        // Never claim a job for a browser that already hung up (it would sit
+        // claimed until its deadline): look at the socket before each attempt.
+        if (peerClosed(stream)) return;
+        if (fetcher.pollOnce(browser_id, &job)) break;
+        if (io_g.timestamp() - started >= wait_s) return wire.sendJson(stream, "{\"job\":null}");
+        io_g.sleep(100 * std.time.ns_per_ms);
+    }
     var out: std.Io.Writer.Allocating = .init(alloc);
     defer out.deinit();
     const w = &out.writer;
