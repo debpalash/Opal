@@ -5059,6 +5059,15 @@ fn renderAgentAccess() void {
         }
     }
 
+    {
+        const tasks_before = state.app.agent_tasks_enabled;
+        components.toggleRow(@src(), "Run scheduled agent tasks", "Lets saved prompts run a coding agent on a timer, unattended. Uses your agent credit; each task has a daily cap", &state.app.agent_tasks_enabled);
+        if (state.app.agent_tasks_enabled != tasks_before) {
+            @import("../services/agent_tasks.zig").setMasterEnabled(state.app.agent_tasks_enabled);
+            state.showToast(if (state.app.agent_tasks_enabled) "Scheduled agent tasks on" else "Scheduled agent tasks off");
+        }
+    }
+
     var exe_buf: [512]u8 = undefined;
     var path_buf: [600]u8 = undefined;
     const exe_dir = io_g.selfExeDirPath(&exe_buf) catch "";

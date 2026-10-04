@@ -627,9 +627,22 @@ pub fn build(b: *std.Build) void {
         }),
     });
     addAgentAssets(b, test_agent_launch_pure.root_module);
+    test_agent_launch_pure.use_llvm = true; // the self-hosted backend hits a linker error here
     const run_test_agent_launch = b.addRunArtifact(test_agent_launch_pure);
     test_step.dependOn(&run_test_agent_launch.step);
-    b.step("test-agent", "Test agent launching and setup text").dependOn(&run_test_agent_launch.step);
+    const test_agent_tasks_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/agent_tasks_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_agent_tasks_pure.use_llvm = true; // the self-hosted backend hits a linker error here
+    const run_test_agent_tasks = b.addRunArtifact(test_agent_tasks_pure);
+    test_step.dependOn(&run_test_agent_tasks.step);
+    const test_agent_step = b.step("test-agent", "Test agent launching, setup text and scheduled tasks");
+    test_agent_step.dependOn(&run_test_agent_launch.step);
+    test_agent_step.dependOn(&run_test_agent_tasks.step);
     const test_agent_setup_pure = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/agent_setup_pure.zig"),

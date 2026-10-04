@@ -44,7 +44,7 @@ pub fn shellQuote(buf: []u8, s: []const u8) ?[]const u8 {
 
 /// `cd <workspace> && exec <agent>`. Codex has no project MCP file, so the
 /// server is passed as a config override on its command line.
-pub fn agentScript(buf: []u8, agent: Agent, workspace: []const u8, mcp_path: []const u8) ?[]const u8 {
+pub fn agentScript(buf: []u8, agent: Agent, workspace: []const u8, mcp_path: []const u8, token_file: []const u8) ?[]const u8 {
     var ws: [700]u8 = undefined;
     const qws = shellQuote(&ws, workspace) orelse return null;
     switch (agent) {
@@ -52,9 +52,15 @@ pub fn agentScript(buf: []u8, agent: Agent, workspace: []const u8, mcp_path: []c
             var toml: [700]u8 = undefined;
             const override = std.fmt.bufPrint(&toml, "mcp_servers.opal.command=\"{s}\"", .{mcp_path}) catch return null;
             if (std.mem.indexOfAny(u8, mcp_path, "\"\\") != null) return null;
+            if (std.mem.indexOfAny(u8, token_file, "\"\\") != null) return null;
             var q: [800]u8 = undefined;
             const qo = shellQuote(&q, override) orelse return null;
-            return std.fmt.bufPrint(buf, "cd {s} && exec codex -c {s}", .{ qws, qo }) catch null;
+            // Codex gives MCP servers a trimmed environment, so say where the token is.
+            var tbuf: [700]u8 = undefined;
+            const env = std.fmt.bufPrint(&tbuf, "mcp_servers.opal.env.OPAL_API_TOKEN_FILE=\"{s}\"", .{token_file}) catch return null;
+            var tq: [800]u8 = undefined;
+            const qt = shellQuote(&tq, env) orelse return null;
+            return std.fmt.bufPrint(buf, "cd {s} && exec codex -c {s} -c {s}", .{ qws, qo, qt }) catch null;
         },
         else => return std.fmt.bufPrint(buf, "cd {s} && exec {s}", .{ qws, agent.binary() }) catch null,
     }
@@ -112,21 +118,21 @@ test "shellQuote wraps and refuses single quotes and newlines" {
 
 test "scripts change into the workspace and exec the agent" {
     var b: [512]u8 = undefined;
-    try std.testing.expectEqualStrings("cd '/w s' && exec claude", agentScript(&b, .claude, "/w s", "/x/opal-mcp").?);
-    try std.testing.expectEqualStrings("cd '/w' && exec gemini", agentScript(&b, .gemini, "/w", "/x/opal-mcp").?);
+    try std.testing.expectEqualStrings("cd '/w s' && exec claude", agentScript(&b, .claude, "/w s", "/x/opal-mcp", "/t").?);
+    try std.testing.expectEqualStrings("cd '/w' && exec gemini", agentScript(&b, .gemini, "/w", "/x/opal-mcp", "/t").?);
 }
 
 test "codex gets the MCP server as a quoted config override" {
     var b: [512]u8 = undefined;
-    const s = agentScript(&b, .codex, "/w", "/opt/Opal App/opal-mcp").?;
-    try std.testing.expectEqualStrings("cd '/w' && exec codex -c 'mcp_servers.opal.command=\"/opt/Opal App/opal-mcp\"'", s);
+    const s = agentScript(&b, .codex, "/w", "/opt/Opal App/opal-mcp", "/h/.config/opal/api.token").?;
+    try std.testing.expectEqualStrings("cd '/w' && exec codex -c 'mcp_servers.opal.command=\"/opt/Opal App/opal-mcp\"' -c 'mcp_servers.opal.env.OPAL_API_TOKEN_FILE=\"/h/.config/opal/api.token\"'", s);
 }
 
 test "paths that could break out of quoting are refused" {
     var b: [512]u8 = undefined;
-    try std.testing.expect(agentScript(&b, .claude, "/it's", "/x") == null);
-    try std.testing.expect(agentScript(&b, .codex, "/w", "/x\"; rm -rf ~; \"") == null);
-    try std.testing.expect(agentScript(&b, .codex, "/w", "/x'y") == null);
+    try std.testing.expect(agentScript(&b, .claude, "/it's", "/x", "/t") == null);
+    try std.testing.expect(agentScript(&b, .codex, "/w", "/x\"; rm -rf ~; \"", "/t") == null);
+    try std.testing.expect(agentScript(&b, .codex, "/w", "/x'y", "/t") == null);
 }
 
 test "terminal argv places the script after sh -c" {

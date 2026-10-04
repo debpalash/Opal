@@ -854,6 +854,8 @@ pub const AppState = struct {
     auto_download_subs: bool = true,
     /// Wanted list: queue each tracked show's newest aired episode automatically.
     wanted_follow_tv: bool = false,
+    /// Scheduled agent tasks run only while this is on (they spend the user's agent credit).
+    agent_tasks_enabled: bool = false,
     sub_search_buf: [256]u8 = std.mem.zeroes([256]u8),
 
     // ── MPV Scripts ──

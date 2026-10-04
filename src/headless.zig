@@ -122,6 +122,7 @@ pub fn headlessMain() !void {
         @import("services/torrent_intents.zig").restoreIfReady();
         @import("services/downloads.zig").tick();
         @import("services/wanted.zig").tick();
+        @import("services/agent_tasks.zig").tick();
         @import("services/search.zig").flushPendingTorrentOpen();
         @import("core/state.zig").players_mutex.unlock();
         // Same class of seam: drama's fetch worker stages results under a mutex

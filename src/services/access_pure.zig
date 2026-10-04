@@ -252,6 +252,9 @@ pub fn routeCapability(path: []const u8, method: []const u8, action: []const u8)
         "/abs/logout",           "/opds/connect",   "/opds/disconnect",     "/plex/connect",
         "/plex/disconnect",      "/suwayomi",       "/sync-accounts",       "/trakt",
         "/webui",                "/logs/clear",
+        // Scheduled agent runs spend the host's agent credit and act on its behalf.
+        "/agent/tasks",          "/agent/tasks/add", "/agent/tasks/enable", "/agent/tasks/remove",
+        "/agent/tasks/run",
     };
     for (host_routes) |route| if (std.mem.eql(u8, path, route)) return .administer_host;
     return null;
@@ -270,6 +273,9 @@ test "route privilege matrix protects host administration and executable trust" 
         try std.testing.expectEqual(principal != .session, allowsRoute(principal, "/local-library/action", "POST", "add-root"));
         try std.testing.expectEqual(principal != .session, allowsRoute(principal, "/jellyfin/login", "POST", ""));
         try std.testing.expectEqual(principal != .session, allowsRoute(principal, "/setup/tmdb", "GET", ""));
+        for ([_][]const u8{ "/agent/tasks", "/agent/tasks/add", "/agent/tasks/enable", "/agent/tasks/remove", "/agent/tasks/run" }) |route| {
+            try std.testing.expectEqual(principal != .session, allowsRoute(principal, route, "POST", ""));
+        }
         try std.testing.expect(allowsRoute(principal, "/plugins", "GET", ""));
         try std.testing.expect(allowsRoute(principal, "/status", "GET", ""));
         try std.testing.expect(allowsRoute(principal, "/jellyfin/play", "POST", ""));

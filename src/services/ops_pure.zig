@@ -109,6 +109,8 @@ const idx_param = Param{ .name = "index", .kind = .integer, .desc = "Zero-based 
 
 const wanted_id = Param{ .name = "id", .kind = .integer, .desc = "Item id from wanted_list.", .required = true, .min = 1, .max = 9007199254740991 };
 const wanted_kinds = [_][]const u8{ "movie", "episode" };
+const task_agents = [_][]const u8{ "claude", "codex" };
+const task_id = Param{ .name = "id", .kind = .integer, .desc = "Task id from agent_tasks_list.", .required = true, .min = 1, .max = 9007199254740991 };
 
 const library_filters = [_][]const u8{ "all", "watching", "caught_up", "unstarted", "completed", "dropped" };
 const library_kinds = [_][]const u8{ "all", "tv", "anime", "movie" };
@@ -291,6 +293,32 @@ pub const ops = [_]Op{
             .{ .name = "value", .kind = .string, .desc = "New value: 0 or 1 for switches, a number for numeric settings, text otherwise.", .required = true, .max_len = 64 },
         },
     },
+    .{ .name = "agent_tasks_list", .summary = "Scheduled agent tasks: prompts a coding agent runs on a timer, with each task's schedule, daily cap, budget, last outcome and a one-line report. Includes whether the user has switched unattended runs on (they do that in Settings; tasks never run while it is off).", .tier = .read, .method = .GET, .path = "/agent/tasks" },
+    .{
+        .name = "agent_task_add",
+        .summary = "Schedule a recurring task for a coding agent: a prompt it runs unattended with the opal tools, e.g. \"Check the wanted list and queue anything stuck\". Nothing runs until the user enables scheduled tasks in Settings. Each task has a daily run cap, a ten minute timeout and, for claude, a dollar budget per run.",
+        .tier = .spend,
+        .method = .POST,
+        .path = "/agent/tasks/add",
+        .params = &.{
+            .{ .name = "name", .kind = .string, .desc = "Short unique name.", .required = true, .max_len = 60 },
+            .{ .name = "prompt", .kind = .string, .desc = "What the agent should do each run. Be specific and self-contained; nobody can answer questions.", .required = true, .max_len = 1000 },
+            .{ .name = "agent", .kind = .choice, .desc = "Which agent runs it. Default claude.", .choices = &task_agents },
+            .{ .name = "interval_min", .kind = .integer, .desc = "Minutes between runs, 15 to 10080. Default 1440 (daily).", .min = 15, .max = 10080 },
+            .{ .name = "max_runs_per_day", .kind = .integer, .desc = "Hard cap on runs per UTC day, 1 to 24. Default 2.", .min = 1, .max = 24 },
+            .{ .name = "budget_cents", .kind = .integer, .desc = "Dollar cap per run in cents (claude only), 5 to 1000. Default 50.", .min = 5, .max = 1000 },
+        },
+    },
+    .{
+        .name = "agent_task_enable",
+        .summary = "Pause or resume one scheduled agent task.",
+        .tier = .write,
+        .method = .POST,
+        .path = "/agent/tasks/enable",
+        .params = &.{ task_id, .{ .name = "enabled", .kind = .boolean, .desc = "true to resume, false to pause.", .required = true } },
+    },
+    .{ .name = "agent_task_remove", .summary = "Delete a scheduled agent task.", .tier = .write, .method = .POST, .path = "/agent/tasks/remove", .params = &.{task_id} },
+    .{ .name = "agent_task_run", .summary = "Run a scheduled task on the next tick instead of waiting for its schedule. Counts toward its daily cap and needs scheduled tasks switched on in Settings.", .tier = .spend, .method = .POST, .path = "/agent/tasks/run", .params = &.{task_id} },
     .{
         .name = "wanted_follow",
         .summary = "Turn on or off automatic downloads of the newest aired episode of every tracked TV show. Only the newest episode per show is queued, never the back catalogue.",
@@ -344,6 +372,7 @@ pub const resources = [_]Resource{
     .{ .uri = "opal://queue", .name = "Queue", .desc = "The playback queue.", .path = "/queue" },
     .{ .uri = "opal://downloads", .name = "Downloads", .desc = "Active and finished downloads.", .path = "/downloads" },
     .{ .uri = "opal://history", .name = "Watch history", .desc = "Recently watched items.", .path = "/history" },
+    .{ .uri = "opal://agent-tasks", .name = "Scheduled agent tasks", .desc = "Recurring prompts coding agents run unattended, and how the last runs went.", .path = "/agent/tasks" },
     .{ .uri = "opal://wanted", .name = "Wanted list", .desc = "What Opal is searching for and downloading automatically.", .path = "/wanted" },
 };
 
@@ -1028,6 +1057,34 @@ test "validate rejects missing, unknown, mistyped and out-of-range arguments" {
     var p8 = try parseArgs(a, "{\"action\":\"rm -rf\"}");
     defer p8.deinit();
     try testing.expectError(error.InvalidArgument, validate(findOp("queue_action").?, p8.value.object, &diag));
+}
+
+test "agent_task_add maps to the task route, bounds its limits and is a spend op" {
+    const a = testing.allocator;
+    var buf: [512]u8 = undefined;
+    var diag = Diag{};
+    const op = findOp("agent_task_add").?;
+
+    var ok = try parseArgs(a, "{\"name\":\"Digest\",\"prompt\":\"Check the queue.\",\"agent\":\"codex\",\"interval_min\":60}");
+    defer ok.deinit();
+    try validate(op, ok.value.object, &diag);
+    var w = Writer.fixed(&buf);
+    try writeTarget(op, ok.value.object, &w);
+    try testing.expectEqualStrings("/api/agent/tasks/add?name=Digest&prompt=Check%20the%20queue.&agent=codex&interval_min=60", w.buffered());
+
+    var fast = try parseArgs(a, "{\"name\":\"x\",\"prompt\":\"y\",\"interval_min\":1}");
+    defer fast.deinit();
+    try testing.expectError(error.InvalidArgument, validate(op, fast.value.object, &diag));
+    var rich = try parseArgs(a, "{\"name\":\"x\",\"prompt\":\"y\",\"budget_cents\":100000}");
+    defer rich.deinit();
+    try testing.expectError(error.InvalidArgument, validate(op, rich.value.object, &diag));
+    var gem = try parseArgs(a, "{\"name\":\"x\",\"prompt\":\"y\",\"agent\":\"gemini\"}");
+    defer gem.deinit();
+    try testing.expectError(error.InvalidArgument, validate(op, gem.value.object, &diag));
+
+    try testing.expectEqual(Tier.spend, op.tier);
+    try testing.expectEqual(Tier.spend, findOp("agent_task_run").?.tier);
+    try testing.expectEqual(Tier.read, findOp("agent_tasks_list").?.tier);
 }
 
 test "wanted_add maps to the wanted route and validates ranges" {

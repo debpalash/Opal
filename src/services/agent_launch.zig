@@ -39,7 +39,7 @@ pub const Result = enum {
     }
 };
 
-fn onPath(name: []const u8) bool {
+pub fn onPath(name: []const u8) bool {
     if (builtin.os.tag == .windows) return false;
     const path = io_g.getenv("PATH") orelse return false;
     var it = std.mem.splitScalar(u8, path, ':');
@@ -84,22 +84,56 @@ fn reapTerminal(child: *io_g.Child) void {
     std.heap.page_allocator.destroy(child);
 }
 
+pub const Workspace = struct {
+    path_buf: [600]u8 = undefined,
+    path_len: usize = 0,
+    mcp_buf: [600]u8 = undefined,
+    mcp_len: usize = 0,
+    token_buf: [600]u8 = undefined,
+    token_len: usize = 0,
+
+    pub fn path(self: *const Workspace) []const u8 {
+        return self.path_buf[0..self.path_len];
+    }
+
+    pub fn mcpPath(self: *const Workspace) []const u8 {
+        return self.mcp_buf[0..self.mcp_len];
+    }
+
+    pub fn tokenFile(self: *const Workspace) []const u8 {
+        return self.token_buf[0..self.token_len];
+    }
+};
+
+/// Create or refresh the workspace and locate `opal-mcp`. Shared by the terminal
+/// launcher and the scheduled tasks, so both start an agent that knows Opal.
+pub fn prepareWorkspace(out: *Workspace) Result {
+    var exe_buf: [512]u8 = undefined;
+    const exe_dir = io_g.selfExeDirPath(&exe_buf) catch return .workspace_failed;
+    const mcp_path = setup.mcpBinaryPath(&out.mcp_buf, exe_dir, false) orelse return .bad_path;
+    out.mcp_len = mcp_path.len;
+
+    var cfg_buf: [512]u8 = undefined;
+    const workspace = std.fmt.bufPrint(&out.path_buf, "{s}/agent-workspace", .{paths.configDir(&cfg_buf)}) catch return .bad_path;
+    out.path_len = workspace.len;
+    const token = std.fmt.bufPrint(&out.token_buf, "{s}/api.token", .{paths.configDir(&cfg_buf)}) catch return .bad_path;
+    out.token_len = token.len;
+    if (!ensureWorkspace(workspace, mcp_path)) return .workspace_failed;
+    return .started;
+}
+
 pub fn launch(agent: Agent) Result {
     if (builtin.os.tag != .linux) return .unsupported_platform;
     if (!installed(agent)) return .not_installed;
 
-    var exe_buf: [512]u8 = undefined;
-    var mcp_buf: [600]u8 = undefined;
-    const exe_dir = io_g.selfExeDirPath(&exe_buf) catch return .workspace_failed;
-    const mcp_path = setup.mcpBinaryPath(&mcp_buf, exe_dir, false) orelse return .bad_path;
-
-    var cfg_buf: [512]u8 = undefined;
-    var ws_buf: [600]u8 = undefined;
-    const workspace = std.fmt.bufPrint(&ws_buf, "{s}/agent-workspace", .{paths.configDir(&cfg_buf)}) catch return .bad_path;
-    if (!ensureWorkspace(workspace, mcp_path)) return .workspace_failed;
+    var ws: Workspace = .{};
+    const prep = prepareWorkspace(&ws);
+    if (prep != .started) return prep;
+    const workspace = ws.path();
+    const mcp_path = ws.mcpPath();
 
     var script_buf: [2048]u8 = undefined;
-    const script = pure.agentScript(&script_buf, agent, workspace, mcp_path) orelse return .bad_path;
+    const script = pure.agentScript(&script_buf, agent, workspace, mcp_path, ws.tokenFile()) orelse return .bad_path;
 
     for (pure.terminals) |term| {
         if (!onPath(term.exe)) continue;

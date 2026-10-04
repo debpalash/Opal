@@ -39,10 +39,10 @@ Every tool has a tier. The server refuses anything above the ceiling you give it
 
 | Tier | Meaning | Examples |
 | --- | --- | --- |
-| `read` | observe, search | `status`, `search`, `search_results`, `queue_list`, `downloads_list`, `history_list`, `recommendations`, `library_list`, `calendar_list`, `collections_list`, `settings_list`, `wanted_list` |
+| `read` | observe, search | `status`, `search`, `search_results`, `queue_list`, `downloads_list`, `history_list`, `recommendations`, `library_list`, `calendar_list`, `collections_list`, `settings_list`, `wanted_list`, `agent_tasks_list` |
 | `playback` | control what plays now | `search_play`, `search_queue`, `player_toggle`, `player_seek`, `player_speed`, `player_volume`, `player_next`, `player_previous`, `subtitles_search`, `subtitles_download`, `queue_action` |
-| `write` | change persistent state | `subtitles_generate`, `downloads_pause`, `downloads_resume`, `settings_set`, `wanted_add`, `wanted_follow`, `wanted_pause`, `wanted_resume`, `wanted_remove` |
-| `spend` | use bandwidth, disk or compute | `play_url`, `downloads_add_url` (a magnet starts a torrent), `wanted_check` (searches now and may start a download) |
+| `write` | change persistent state | `subtitles_generate`, `downloads_pause`, `downloads_resume`, `settings_set`, `wanted_add`, `wanted_follow`, `wanted_pause`, `wanted_resume`, `wanted_remove`, `agent_task_enable`, `agent_task_remove` |
+| `spend` | use bandwidth, disk or compute | `play_url`, `downloads_add_url` (a magnet starts a torrent), `wanted_check` (searches now and may start a download), `agent_task_add`, `agent_task_run` |
 | `destructive` | remove data | `queue_clear`, `downloads_cancel` |
 
 The default ceiling is `spend`. Destructive tools are off until you opt in, and even then each call must carry `confirm: true`.
@@ -55,6 +55,12 @@ opal-mcp --allow destructive      # everything; destructive calls still need con
 
 Arguments are typed and bounded. Unknown arguments are rejected, `play_url` and `downloads_add_url` accept only `http(s)` URLs and magnet links (never local paths), and no tool exposes raw player commands, shell options, provider secrets or file paths.
 
+## Scheduled agent tasks
+
+A task is a prompt a coding agent runs unattended on a timer: `agent_task_add` takes a `name`, a `prompt`, an `agent` (`claude` or `codex`), `interval_min` (15 to 10080), `max_runs_per_day` (1 to 24) and, for Claude Code, `budget_cents` per run (passed as `--max-budget-usd`). Each run starts in the same workspace as the terminal launcher, with the same `opal-mcp` and the same policy, so it can do no more than a chat could. Claude Code runs with only the `opal` tools allowed; Codex runs in a read-only sandbox. A run is stopped after ten minutes, and the last line of its output is kept as `last_summary`.
+
+Running an agent spends your own subscription or API credit, so nothing runs until you switch on **Settings → Agent Access → Run scheduled agent tasks**. Agents cannot flip that switch, and the task routes are host-admin only for web-remote user accounts. A run counts against the daily cap when it starts, so a failing agent cannot retry in a loop. `agent_task_run` runs a task now and counts toward the same cap.
+
 ## Wanted list
 
 Tell Opal what you want and it fetches it. `wanted_add` takes a movie (`title`, optional `year`) or an episode (`title`, `season`, `episode`) plus optional quality bounds, minimum seeds and a size cap. Opal then searches in the background, scores the candidates, starts the best torrent and marks the item fulfilled when it finishes. Failed searches retry with backoff (30 minutes, doubling to a day). `wanted_list` shows status, attempts and what was picked; `wanted_check` forces a search now. `wanted_follow` (also **Settings → Agent Access → Follow tracked shows**) queues the newest aired episode of every show you track, never the back catalogue, skipping anything you have already watched. Searches run on a private channel, so they never disturb the results on screen.
@@ -65,7 +71,7 @@ Each call appends one JSON line to `~/.config/opal/mcp-audit.jsonl`: time, tool,
 
 ## Resources
 
-Read-only snapshots clients can attach as context: `opal://status`, `opal://queue`, `opal://downloads`, `opal://history`, `opal://wanted`.
+Read-only snapshots clients can attach as context: `opal://status`, `opal://queue`, `opal://downloads`, `opal://history`, `opal://wanted`, `opal://agent-tasks`.
 
 ## Configuration
 

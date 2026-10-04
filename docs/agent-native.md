@@ -114,12 +114,16 @@ Branch `v2/agent-os` is stacked on PR #119 (browse, episode redesign, remote har
 
 | Phase | State |
 | --- | --- |
-| 1. Registry | Done for the observe, playback, download, queue, library and wanted surface: 36 tools with typed parameters, tiers and API bindings (`src/services/ops_pure.zig`). Not yet generating an OpenAPI document. The in-app copilot keeps its own compact tool list on purpose: a small local model cannot carry 36 schemas. |
+| 1. Registry | Done for the observe, playback, download, queue, library and wanted surface: more than 40 tools with typed parameters, tiers and API bindings (`src/services/ops_pure.zig`). Not yet generating an OpenAPI document. The in-app copilot keeps its own compact tool list on purpose: a small local model cannot carry 40-plus schemas. |
 | 2. MCP server | Done: `opal-mcp` (stdio), tools and resources, policy ceiling, destructive confirm, URL guard, JSON audit log, shipped in every package. Verified live. See [mcp.md](mcp.md). |
 | 3. Skills | `skills/opal-media` (watch, control, downloads, wanted list), installed into the agent workspace. |
 | 4. Terminal | libghostty-vt today exposes only key, OSC, SGR and paste APIs, not a screen-state terminal, so an embedded terminal is deferred. Shipped instead: **Settings → Agent Access** launches Claude Code, Codex or Gemini CLI in the user's own terminal inside a pre-wired workspace (Linux). |
 | 5. Extension loop | Not started. |
-| 6. Autonomy | Wanted list engine done (below). Scheduled agent tasks not started. |
+| 6. Autonomy | Wanted list engine done (below). Scheduled agent tasks done (below). |
+
+### Scheduled agent tasks
+
+`src/services/agent_tasks.zig` plus `agent_tasks_pure.zig` (limits, schedule, headless argv). Saved prompts run `claude -p` (only the `opal` tools allowed, `--max-budget-usd` cap) or `codex exec` (read-only sandbox) on a timer, one at a time, inside the agent workspace. Opt-in through a master switch only the user can flip; a daily run cap counted at run start, a ten minute timeout and a host-admin-only API bound the cost. The prompt travels as one argv element via `sh -c 'exec "$@" 2>&1'`, never through shell parsing. Exposed as `/api/agent/tasks/*` and `agent_task*` tools. Gemini CLI is not schedulable yet: its unattended MCP approval has not been verified.
 
 ### Wanted list (the CouchPotato core)
 
