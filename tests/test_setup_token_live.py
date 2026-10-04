@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+from contextlib import contextmanager
 import errno
 import http.client
 import json
@@ -45,6 +46,21 @@ TOKEN_RE = re.compile(r"\A[0-9a-f]{64}\Z")
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BINARY: Path | None = None
 PORT = DEFAULT_PORT
+
+
+@contextmanager
+def database(path):
+    """Commit/roll back and close a fixture DB before process start or cleanup.
+
+    sqlite3's own context manager ends the transaction but retains the handle,
+    which prevents deleting the isolated profile on Windows.
+    """
+    connection = sqlite3.connect(path)
+    try:
+        with connection:
+            yield connection
+    finally:
+        connection.close()
 
 
 class Response:
@@ -161,7 +177,7 @@ class IsolatedOpal:
         # fixture settings survive restart; a conflicting seed is a test bug.
         profile = self.config_root / "opal"
         profile.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(profile / "opal.db") as connection:
+        with database(profile / "opal.db") as connection:
             connection.execute("CREATE TABLE IF NOT EXISTS config(key TEXT PRIMARY KEY, value TEXT)")
             connection.execute("INSERT OR IGNORE INTO config(key,value) VALUES ('web_port',?)", (str(PORT),))
             actual_port = connection.execute("SELECT value FROM config WHERE key='web_port'").fetchone()[0]
@@ -178,6 +194,9 @@ class IsolatedOpal:
                 "XDG_CACHE_HOME": str(self.root / "xdg-cache"),
                 "XDG_DATA_HOME": str(self.root / "xdg-data"),
                 "OPAL_HEADLESS": "1",
+                # CI has no audio device. Exercise real decoding and playback
+                # through null output, independent of host mpv overrides.
+                "OPAL_MPV_OPTS": "ao=null",
             }
         )
         env.pop("OPAL_WEB_BIND", None)
@@ -288,20 +307,25 @@ class IsolatedOpal:
         # A connect check catches wildcard listeners even on Darwin, where
         # SO_REUSEADDR permits a distinct loopback listener on the same port.
         # Send no bytes: this is solely an occupancy check, never an API call.
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as connection:
-            connection.settimeout(0.5)
-            result = connection.connect_ex(("127.0.0.1", PORT))
-            if result == 0:
-                raise unittest.SkipTest(
-                    f"127.0.0.1:{PORT} is already in use; refusing to test an existing server"
-                )
-            if result not in (errno.ECONNREFUSED, getattr(errno, "WSAECONNREFUSED", errno.ECONNREFUSED)):
-                raise unittest.SkipTest(
-                    f"cannot establish that 127.0.0.1:{PORT} is unused (socket error {result})"
-                )
+        exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+        if exclusive is None:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as connection:
+                connection.settimeout(0.5)
+                result = connection.connect_ex(("127.0.0.1", PORT))
+                if result == 0:
+                    raise unittest.SkipTest(
+                        f"127.0.0.1:{PORT} is already in use; refusing to test an existing server"
+                    )
+                if result != errno.ECONNREFUSED:
+                    raise unittest.SkipTest(
+                        f"cannot establish that 127.0.0.1:{PORT} is unused (socket error {result})"
+                    )
         probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            # Windows' timeout connect_ex can report WSAEWOULDBLOCK even for
+            # an unused port. Exclusive bind checks ownership directly and
+            # rejects wildcard listeners without waiting for TCP retries.
+            probe.setsockopt(socket.SOL_SOCKET, exclusive if exclusive is not None else socket.SO_REUSEADDR, 1)
             probe.bind(("127.0.0.1", PORT))
             # Also catch bound sockets that have not begun listening yet.
             probe.listen(1)
@@ -314,6 +338,18 @@ class IsolatedOpal:
 
 
 class PortCollisionGuardTest(unittest.TestCase):
+    def test_bound_non_listening_port_is_rejected(self) -> None:
+        global PORT
+        previous = PORT
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as bound:
+            bound.bind(("127.0.0.1", 0))
+            PORT = bound.getsockname()[1]
+            try:
+                with self.assertRaises(unittest.SkipTest):
+                    IsolatedOpal._require_free_port()
+            finally:
+                PORT = previous
+
     def test_wildcard_listener_is_rejected_before_start(self) -> None:
         global PORT
         previous = PORT
@@ -338,6 +374,20 @@ class PortCollisionGuardTest(unittest.TestCase):
             IsolatedOpal._require_free_port()
         finally:
             PORT = previous
+
+
+class FixtureDatabaseTest(unittest.TestCase):
+    def test_database_commits_and_closes_before_profile_cleanup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'fixture.db'
+            with database(path) as connection:
+                connection.execute('CREATE TABLE fixture(value)')
+                connection.execute('INSERT INTO fixture VALUES(7)')
+            with self.assertRaises(sqlite3.ProgrammingError):
+                connection.execute('SELECT 1')
+            with database(path) as reader:
+                self.assertEqual(reader.execute('SELECT value FROM fixture').fetchone(), (7,))
+            path.unlink()
 
 
 class SetupTokenLiveTest(unittest.TestCase):

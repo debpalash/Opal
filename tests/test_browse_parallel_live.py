@@ -10,7 +10,6 @@ import os
 from pathlib import Path
 import select
 import socket
-import sqlite3
 import threading
 import time
 import unittest
@@ -88,7 +87,7 @@ class ParallelBrowse(unittest.TestCase):
         sources.mkdir(parents=True)
         for provider in ('comicfury', 'weebcentral', 'royalroad', 'novelfire'):
             (sources/(provider+'.json')).write_text(json.dumps({'base': self.base+'/'+provider, '_v': '1.0.0'}), encoding='utf-8')
-        with sqlite3.connect(profile/'opal.db') as db:
+        with live.database(profile/'opal.db') as db:
             db.execute("CREATE TABLE config(key TEXT PRIMARY KEY,value TEXT NOT NULL DEFAULT '')")
             db.executemany('INSERT INTO config VALUES(?,?)', [('web_port', str(live.PORT)), ('web_bind', 'loopback'), ('content_cache_enabled', '0'), ('search_sources', '0'), ('scrape_use_browser', '0')])
         env = {'HTTPS_PROXY': self.base, 'https_proxy': self.base, 'NO_PROXY': 'localhost,127.0.0.1,::1', 'no_proxy': 'localhost,127.0.0.1,::1', 'ALL_PROXY': '', 'all_proxy': ''}

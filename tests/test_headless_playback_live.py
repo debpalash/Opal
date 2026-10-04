@@ -82,7 +82,9 @@ class HeadlessPlaybackTests(unittest.TestCase):
             result = harness.request('GET', '/api/status', host=self.opal.loopback_authority, extra_headers=headers)
             self.assertEqual(result.status, 200, result.body)
             last = result.json()
-            if marker.exists() and last.get('dur', 0) >= 29 and not last.get('loading'):
+            if (marker.exists() and last.get('dur', 0) >= 29
+                    and last.get('pos', 0) > 0 and not last.get('loading')):
+                self.assertFalse(last.get('error'), last)
                 return
             time.sleep(.1)
         self.fail(f'resolver publication never reached mpv: helper={marker.exists()}, status={last}')

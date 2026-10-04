@@ -4,7 +4,6 @@ import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
-import sqlite3
 import struct
 import threading
 import time
@@ -42,7 +41,7 @@ class WebcomicSources(unittest.TestCase):
         self.opal=live.IsolatedOpal(self);self.addCleanup(self.opal.stop)
         profile=self.opal.config_root/'opal';sources=profile/'plugins'/'sources';sources.mkdir(parents=True)
         for provider in ('xkcd','smbc'):(sources/(provider+'.json')).write_text(json.dumps({'base':self.fixture.base,'_v':'1.0.0'}))
-        with sqlite3.connect(profile/'opal.db') as db:
+        with live.database(profile/'opal.db') as db:
             db.execute("CREATE TABLE config(key TEXT PRIMARY KEY,value TEXT NOT NULL DEFAULT '')")
             db.executemany('INSERT INTO config VALUES(?,?)',[('web_port',str(live.PORT)),('web_bind','loopback'),('search_sources','32'),('auto_download_subs','0'),('content_cache_enabled','0')])
         token=self.opal.start();account=live.register('comic-fixture',host=self.opal.loopback_authority,setup_token=token)

@@ -5,7 +5,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import shutil
-import sqlite3
 import subprocess
 import tempfile
 import threading
@@ -79,7 +78,7 @@ class MediaServersLive(unittest.TestCase):
         self.base=f'http://127.0.0.1:{self.server.server_port}'
         profile=self.opal.config_root/'opal';profile.mkdir(parents=True)
         (profile/'plex.json').write_text(json.dumps({'token':'fixture-plex-account','server_token':'fixture-plex-server','server':self.base,'name':'Isolated fixture'}))
-        with sqlite3.connect(profile/'opal.db') as db:
+        with live.database(profile/'opal.db') as db:
             db.execute("CREATE TABLE config(key TEXT PRIMARY KEY,value TEXT NOT NULL DEFAULT '')")
             db.executemany('INSERT INTO config VALUES(?,?)',[('web_port',str(live.PORT)),('web_bind','loopback'),('auto_download_subs','0'),('playback_volume','0')])
         token=self.opal.start();account=live.register('media-server-fixture',host=self.opal.loopback_authority,setup_token=token)
@@ -140,7 +139,7 @@ class MediaServersLive(unittest.TestCase):
         deadline=time.monotonic()+7
         rows=[]
         while time.monotonic()<deadline:
-            with sqlite3.connect(self.opal.config_root/'opal'/'opal.db') as db:
+            with live.database(self.opal.config_root/'opal'/'opal.db') as db:
                 rows=db.execute('SELECT link FROM watch_history WHERE position_secs>=55').fetchall()
             if rows:break
             time.sleep(.1)

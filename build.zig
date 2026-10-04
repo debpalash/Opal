@@ -72,6 +72,9 @@ pub fn build(b: *std.Build) void {
     const dvui_dep = b.dependency("dvui", .{
         .target = target,
         .optimize = optimize,
+        // Opal uses SDL2. The default builds every backend and fetches unused
+        // SDL3/Codeberg packages even for headless and system-SDL2 builds.
+        .backend = .sdl2,
     });
 
     // Homebrew prefix for macOS lib/include paths. Apple Silicon installs to

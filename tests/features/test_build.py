@@ -65,6 +65,19 @@ def test_zig_build():
         return "fail", "Build timed out (>300s)"
 
 
+@test("Build graph excludes unused SDL3 dependencies", "Build")
+def test_dvui_backend_isolation():
+    result = subprocess.run(
+        [sys.executable, "tests/test_dvui_backend.py"], cwd=PROJECT_DIR,
+        capture_output=True, text=True, timeout=150,
+    )
+    if result.returncode:
+        return "fail", (result.stderr or result.stdout)[-1600:]
+    if "skipped=" in result.stderr:
+        return "skip", result.stderr[-400:]
+    return "pass", "real build graph succeeds offline without the SDL3 package"
+
+
 @test("Binary Exists", "Build")
 def test_binary_exists():
     binary = _built_binary()
