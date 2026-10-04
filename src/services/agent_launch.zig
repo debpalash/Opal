@@ -12,6 +12,7 @@ const io_g = @import("../core/io_global.zig");
 const paths = @import("../core/paths.zig");
 const logs = @import("../core/logs.zig");
 const workers = @import("../core/workers.zig");
+const bounded = @import("../core/bounded_process.zig");
 const pure = @import("agent_launch_pure.zig");
 const setup = @import("agent_setup_pure.zig");
 
@@ -50,10 +51,29 @@ fn existsOnDisk(path: []const u8) bool {
 /// installs the agent CLIs as `.cmd` shims); the current directory is not
 /// searched. The search itself is `agent_launch_pure.searchPath`.
 pub fn onPath(name: []const u8) bool {
-    const path = io_g.getenv("PATH") orelse return false;
     var buf: [1024]u8 = undefined;
-    if (builtin.os.tag == .windows) return pure.searchPath(&buf, path, name, ';', '\\', &pure.windows_exts, existsOnDisk) != null;
-    return pure.searchPath(&buf, path, name, ':', '/', &.{""}, existsOnDisk) != null;
+    return findOnPath(&buf, name) != null;
+}
+
+/// The full path `name` runs from, written into `buf`; null when it is not on
+/// PATH. Windows prefers `name.exe` over the npm `.cmd` shim in the same folder.
+/// A scheduled run starts this path, never the bare name, so the current
+/// directory and the app's own folder are never searched.
+pub fn findOnPath(buf: []u8, name: []const u8) ?[]const u8 {
+    const path = io_g.getenv("PATH") orelse return null;
+    if (builtin.os.tag == .windows) return pure.searchPath(buf, path, name, ';', '\\', &pure.windows_exts, existsOnDisk);
+    return pure.searchPath(buf, path, name, ':', '/', &.{""}, existsOnDisk);
+}
+
+/// Write `prompt` to a started process's standard input and close it, so the
+/// agent reads the prompt from there instead of the command line. Pipe buffers are
+/// small and the agent reads its whole input before it answers, so this blocks
+/// only until it has; if it exits early the write fails and the caller stops it.
+pub fn feedPrompt(process: *bounded.StreamProcess, prompt: []const u8) bool {
+    defer process.child.closeStdin();
+    const stdin = process.child.stdin orelse return false;
+    io_g.writeAll(stdin, prompt) catch return false;
+    return true;
 }
 
 pub fn installed(agent: Agent) bool {
