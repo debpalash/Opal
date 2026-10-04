@@ -56,6 +56,22 @@ pub fn jsonConfig(buf: []u8, mcp_path: []const u8) ?[]const u8 {
     return w.buffered();
 }
 
+/// `mcpServers` JSON that starts `opal-mcp` with extra arguments (each a plain
+/// token, no quotes or backslashes). Used for unattended runs.
+pub fn jsonConfigWithArgs(buf: []u8, mcp_path: []const u8, args: []const []const u8) ?[]const u8 {
+    var w = std.Io.Writer.fixed(buf);
+    w.writeAll("{\"mcpServers\":{\"opal\":{\"command\":\"") catch return null;
+    writeEscaped(&w, mcp_path, '"') catch return null;
+    w.writeAll("\",\"args\":[") catch return null;
+    for (args, 0..) |arg, i| {
+        if (std.mem.indexOfAny(u8, arg, "\"\\\n") != null) return null;
+        if (i > 0) w.writeAll(",") catch return null;
+        w.print("\"{s}\"", .{arg}) catch return null;
+    }
+    w.writeAll("]}}}") catch return null;
+    return w.buffered();
+}
+
 /// Where `opal-mcp` appends its audit log.
 pub fn auditLogPath(buf: []u8, config_dir: []const u8) ?[]const u8 {
     return std.fmt.bufPrint(buf, "{s}/mcp-audit.jsonl", .{config_dir}) catch null;
@@ -90,4 +106,13 @@ test "codex and json escape backslashes and quotes" {
 test "audit path" {
     var b: [64]u8 = undefined;
     try std.testing.expectEqualStrings("/home/u/.config/opal/mcp-audit.jsonl", auditLogPath(&b, "/home/u/.config/opal").?);
+}
+
+test "json config with args lists them and refuses quotes" {
+    var b: [256]u8 = undefined;
+    try std.testing.expectEqualStrings(
+        "{\"mcpServers\":{\"opal\":{\"command\":\"/x/opal-mcp\",\"args\":[\"--deny-prefix\",\"agent_task\"]}}}",
+        jsonConfigWithArgs(&b, "/x/opal-mcp", &.{ "--deny-prefix", "agent_task" }).?,
+    );
+    try std.testing.expect(jsonConfigWithArgs(&b, "/x", &.{"a\"b"}) == null);
 }

@@ -34,6 +34,8 @@ var busy = std.atomic.Value(bool).init(false);
 var last_tick_ms: i64 = 0;
 var last_follow_ms: i64 = 0;
 const FOLLOW_INTERVAL_MS: i64 = 60 * 60 * 1000;
+/// A picked torrent that is no longer in the session after this long is re-searched.
+const DEAD_DOWNLOAD_MS: i64 = 3 * 24 * 60 * 60 * 1000;
 /// Set by `checkNow`: search this item on the next tick regardless of its backoff.
 var force_id = std.atomic.Value(i64).init(0);
 
@@ -570,15 +572,17 @@ fn reconcileDownloads() void {
     const ses = state.torrentSession();
     if (ses == null) return;
 
-    const DlRow = struct { id: i64, hash: [96]u8, len: usize };
-    var rows: [16]DlRow = undefined;
+    const DlRow = struct { id: i64, hash: [96]u8, len: usize, picked_ms: i64 = 0, seen: bool = false };
+    var rows: [64]DlRow = undefined;
     var n: usize = 0;
     {
-        const stmt = db.prepare("SELECT id, infohash FROM wanted_items WHERE status='downloading' AND infohash<>'' LIMIT 16") orelse return;
+        const stmt = db.prepare("SELECT id, infohash, last_check_ms FROM wanted_items WHERE status='downloading' AND infohash<>'' ORDER BY id LIMIT 64") orelse return;
         defer db.finalize(stmt);
         while (n < rows.len and db.step(stmt) == db.c.SQLITE_ROW) {
             const h = db.columnText(stmt, 1) orelse continue;
             rows[n].id = db.columnInt64(stmt, 0);
+            rows[n].picked_ms = db.columnInt64(stmt, 2);
+            rows[n].seen = false;
             rows[n].len = @min(h.len, rows[n].hash.len);
             @memcpy(rows[n].hash[0..rows[n].len], h[0..rows[n].len]);
             n += 1;
@@ -593,8 +597,9 @@ fn reconcileDownloads() void {
         var hb: [96]u8 = std.mem.zeroes([96]u8);
         _ = c.mpv.torrent_get_infohash(ses, id, &hb, hb.len);
         const hl = std.mem.indexOfScalar(u8, &hb, 0) orelse hb.len;
-        for (rows[0..n]) |row| {
+        for (rows[0..n]) |*row| {
             if (!std.ascii.eqlIgnoreCase(hb[0..hl], row.hash[0..row.len])) continue;
+            row.seen = true;
             var progress: f32 = 0;
             var rate: c_int = 0;
             var seeds: c_int = 0;
@@ -608,5 +613,17 @@ fn reconcileDownloads() void {
                 state.showToast("Wanted: download finished");
             }
         }
+    }
+
+    // A torrent that vanished (deleted by the user, lost across a restart) would
+    // leave its item "downloading" forever. After a grace period, search again.
+    const now = io_g.milliTimestamp();
+    for (rows[0..n]) |row| {
+        if (row.seen or now - row.picked_ms < DEAD_DOWNLOAD_MS) continue;
+        const stmt = db.prepare("UPDATE wanted_items SET status='wanted', attempts=0, next_check_ms=0, infohash='', picked='' WHERE id=?1 AND status='downloading'") orelse continue;
+        defer db.finalize(stmt);
+        db.bindInt64(stmt, 1, row.id);
+        _ = db.step(stmt);
+        logs.pushLog("info", "wanted", "A wanted download disappeared; searching again", false);
     }
 }

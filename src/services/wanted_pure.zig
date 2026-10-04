@@ -123,7 +123,9 @@ fn tokenize(s: []const u8, scratch: []u8, out: *Tokens) void {
     var w: usize = 0;
     var start: ?usize = null;
     for (s) |ch| {
-        if (std.ascii.isAlphanumeric(ch)) {
+        // Bytes >= 0x80 are parts of UTF-8 letters: keeping them lets titles
+        // that are not ASCII (accented or other scripts) tokenize at all.
+        if (std.ascii.isAlphanumeric(ch) or ch >= 0x80) {
             if (w >= scratch.len) break;
             if (start == null) start = w;
             scratch[w] = std.ascii.toLower(ch);
@@ -222,8 +224,6 @@ pub fn matches(t: Target, release: []const u8) bool {
     tokenize(release, &scratch_rel, &rel);
     if (title.n == 0 or rel.n < title.n) return false;
 
-    for (rel.items[0..rel.n]) |tok| if (isJunk(tok)) return false;
-
     // Find the title as a consecutive run within the first few tokens, which
     // tolerates a leading "[YTS]" / "www site com -" style tag.
     const lead = @min(rel.n - title.n, 6);
@@ -245,6 +245,11 @@ pub fn matches(t: Target, release: []const u8) bool {
     const start = at orelse return false;
     const after = rel.items[start + title.n .. rel.n];
 
+    // Junk words mark a cam or screener capture, but a title that is itself such a
+    // word ("Cam", "Sample") must still be findable: skip the matched span.
+    for (rel.items[0..start]) |tok| if (isJunk(tok)) return false;
+    for (after) |tok| if (isJunk(tok)) return false;
+
     switch (t.kind) {
         .movie => {
             if (t.year == 0) return true;
@@ -257,20 +262,22 @@ pub fn matches(t: Target, release: []const u8) bool {
             return false;
         },
         .episode => {
-            for (after) |tok| {
-                if (parseSxxExx(tok)) |se| {
-                    if (se.s == t.season and se.e == t.episode) return true;
-                }
-            }
-            // "1x02" appears as tokens "1" "x02"? tokenization yields "1x02".
-            for (after) |tok| {
-                const x = std.mem.indexOfScalar(u8, tok, 'x') orelse continue;
-                if (x == 0) continue;
-                const s = parseUint(tok[0..x]) orelse continue;
-                const e = parseUint(tok[x + 1 ..]) orelse continue;
-                if (s == t.season and e == t.episode) return true;
-            }
-            return false;
+            // The episode marker must follow the title directly, after at most a
+            // release year. Anything else in between ("UK", "Australia") means a
+            // different show that merely starts with the same words.
+            var rest = after;
+            if (rest.len > 0) if (parseUint(rest[0])) |n| {
+                if (rest[0].len == 4 and n >= 1888 and n <= 2200) rest = rest[1..];
+            };
+            if (rest.len == 0) return false;
+            const tok = rest[0];
+            if (parseSxxExx(tok)) |se| return se.s == t.season and se.e == t.episode;
+            // "1x02" tokenizes to a single "1x02".
+            const x = std.mem.indexOfScalar(u8, tok, 'x') orelse return false;
+            if (x == 0) return false;
+            const s = parseUint(tok[0..x]) orelse return false;
+            const e = parseUint(tok[x + 1 ..]) orelse return false;
+            return s == t.season and e == t.episode;
         },
     }
 }
@@ -286,14 +293,16 @@ pub fn score(p: Profile, t: Target, c: Candidate) ?i64 {
 
     var total: i64 = 0;
     if (c.quality == Q_UNKNOWN) {
-        if (!p.allow_unknown_quality) return null;
+        // An untagged release cannot satisfy a profile that demands 1080p or better.
+        if (!p.allow_unknown_quality or p.min_quality > 2) return null;
         total += 1000;
     } else {
         if (c.quality < p.min_quality or c.quality > p.max_quality) return null;
         const gap: i64 = @intCast(if (c.quality > p.prefer_quality) c.quality - p.prefer_quality else p.prefer_quality - c.quality);
         total += 4000 - gap * 800;
     }
-    total += @as(i64, @min(c.seeds, 200)) * 5;
+    // Health breaks ties but must never outweigh a quality step (800).
+    total += @as(i64, @min(c.seeds, 140)) * 5;
     return total;
 }
 
@@ -508,4 +517,38 @@ test "request text keeps numeric titles and rejects empties" {
     // S00E00 and half-formed tokens are not episodes.
     try testing.expectEqual(Kind.movie, parseRequest("Show S00E01").?.kind);
     try testing.expectEqual(Kind.movie, parseRequest("Season Sale").?.kind);
+}
+
+test "a show that merely starts with the same words is not the wanted show" {
+    const t = Target{ .kind = .episode, .title = "The Office", .season = 2, .episode = 3 };
+    try std.testing.expect(matches(t, "The.Office.S02E03.720p.WEB"));
+    try std.testing.expect(matches(t, "The Office 2005 S02E03 1080p"));
+    try std.testing.expect(!matches(t, "The.Office.UK.S02E03.720p"));
+    try std.testing.expect(!matches(t, "The Office Australia S02E03"));
+    try std.testing.expect(!matches(t, "The.Office.S02E04.720p"));
+    try std.testing.expect(matches(t, "The Office 2x03 HDTV"));
+}
+
+test "a title that is itself a junk word can still match" {
+    const t = Target{ .kind = .movie, .title = "Sample", .year = 2020 };
+    try std.testing.expect(matches(t, "Sample 2020 1080p BluRay"));
+    try std.testing.expect(!matches(t, "Sample 2020 CAM"));
+}
+
+test "non-ASCII titles tokenize and match" {
+    const t = Target{ .kind = .movie, .title = "Pokémon", .year = 1999 };
+    try std.testing.expect(matches(t, "Pokémon 1999 1080p"));
+    try std.testing.expect(!matches(t, "Pokemon 1999 1080p"));
+    const jp = Target{ .kind = .movie, .title = "千と千尋の神隠し", .year = 2001 };
+    try std.testing.expect(matches(jp, "千と千尋の神隠し 2001 BluRay"));
+}
+
+test "health never outweighs a quality step and unknown quality respects the minimum" {
+    const t = Target{ .kind = .movie, .title = "Dune", .year = 2021 };
+    const p = Profile{ .min_quality = 2, .prefer_quality = 3, .max_quality = 4 };
+    const crowded_720 = score(p, t, .{ .name = "Dune 2021 720p", .quality = 2, .seeds = 5000, .size_bytes = 0, .is_magnet = true }).?;
+    const thin_1080 = score(p, t, .{ .name = "Dune 2021 1080p", .quality = 3, .seeds = 3, .size_bytes = 0, .is_magnet = true }).?;
+    try std.testing.expect(thin_1080 > crowded_720);
+    const strict = Profile{ .min_quality = 3, .prefer_quality = 3, .max_quality = 4 };
+    try std.testing.expect(score(strict, t, .{ .name = "Dune 2021", .quality = Q_UNKNOWN, .seeds = 50, .size_bytes = 0, .is_magnet = true }) == null);
 }

@@ -77,10 +77,12 @@ fn add(stream: std.Io.net.Stream, query: []const u8, body: []const u8) void {
         .interval_min = uintParam(body, query, "interval_min", 1440) orelse return bad(stream, "invalid interval_min"),
         .max_runs_per_day = uintParam(body, query, "max_runs_per_day", 2) orelse return bad(stream, "invalid max_runs_per_day"),
         .budget_cents = uintParam(body, query, "budget_cents", 50) orelse return bad(stream, "invalid budget_cents"),
+        // Over HTTP a task starts paused; the user enables it in the Agents page.
+        .enabled = false,
     };
     var buf: [192]u8 = undefined;
     switch (tasks.add(req)) {
-        .added => |id| wire.sendJson(stream, std.fmt.bufPrint(&buf, "{{\"ok\":true,\"id\":{d}}}", .{id}) catch "{\"ok\":true}"),
+        .added => |id| wire.sendJson(stream, std.fmt.bufPrint(&buf, "{{\"ok\":true,\"id\":{d},\"paused\":true,\"next\":\"Ask the user to review and enable it in the Agents page (Tasks).\"}}", .{id}) catch "{\"ok\":true}"),
         .exists => |id| wire.sendJsonStatus(stream, "409 Conflict", std.fmt.bufPrint(&buf, "{{\"error\":\"a task with that name exists\",\"id\":{d}}}", .{id}) catch "{\"error\":\"exists\"}"),
         .invalid => |why| bad(stream, why),
         .full => wire.sendJsonStatus(stream, "409 Conflict", "{\"error\":\"too many tasks\"}"),
@@ -100,6 +102,7 @@ fn byId(stream: std.Io.net.Stream, query: []const u8, body: []const u8, comptime
             .no_such_task => wire.sendJsonStatus(stream, "404 Not Found", "{\"error\":\"no such task\"}"),
             .switch_off => wire.sendJsonStatus(stream, "409 Conflict", "{\"error\":\"scheduled agent tasks are switched off; the user enables them in Settings > Agent Access\"}"),
             .capped => wire.sendJsonStatus(stream, "429 Too Many Requests", "{\"error\":\"the task reached its daily run cap\"}"),
+            .paused => wire.sendJsonStatus(stream, "409 Conflict", "{\"error\":\"the task is paused; the user enables it in the Agents page\"}"),
             .unavailable => wire.sendJsonStatus(stream, "503 Service Unavailable", "{\"error\":\"database not ready\"}"),
         }
         return;

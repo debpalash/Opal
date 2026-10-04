@@ -19,6 +19,7 @@ const workers = @import("../core/workers.zig");
 const bounded = @import("../core/bounded_process.zig");
 const launch = @import("agent_launch.zig");
 const pure = @import("agent_tasks_pure.zig");
+const setup = @import("agent_setup_pure.zig");
 
 pub const Agent = pure.Agent;
 const TICK_INTERVAL_MS: i64 = 30 * 1000;
@@ -63,6 +64,9 @@ pub const AddRequest = struct {
     interval_min: u32 = 1440,
     max_runs_per_day: u32 = 2,
     budget_cents: u32 = 50,
+    /// Tasks added over the HTTP API (agents, web remote) start paused: a person
+    /// reviews and enables them in the UI. The UI itself adds enabled ones.
+    enabled: bool = true,
 };
 
 pub const AddResult = union(enum) {
@@ -86,7 +90,7 @@ pub fn add(req: AddRequest) AddResult {
     if (countTasks() >= pure.MAX_TASKS) return .full;
 
     const stmt = db.prepare(
-        "INSERT INTO agent_tasks(name,prompt,agent,interval_min,max_runs_per_day,budget_cents,created_ms) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+        "INSERT INTO agent_tasks(name,prompt,agent,interval_min,max_runs_per_day,budget_cents,created_ms,enabled) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
     ) orelse return .unavailable;
     defer db.finalize(stmt);
     db.bindText(stmt, 1, name);
@@ -96,6 +100,7 @@ pub fn add(req: AddRequest) AddResult {
     db.bindInt(stmt, 5, @intCast(req.max_runs_per_day));
     db.bindInt(stmt, 6, @intCast(req.budget_cents));
     db.bindInt64(stmt, 7, io_g.milliTimestamp());
+    db.bindInt(stmt, 8, if (req.enabled) 1 else 0);
     if (db.step(stmt) != db.c.SQLITE_DONE) return .unavailable;
     const id: i64 = db.c.sqlite3_last_insert_rowid(db.get());
     logs.pushLog("info", "agents", "Added a scheduled agent task", false);
@@ -142,7 +147,7 @@ pub fn setEnabled(id: i64, on: bool) bool {
     return ok;
 }
 
-pub const RunNowResult = enum { queued, no_such_task, switch_off, capped, unavailable };
+pub const RunNowResult = enum { queued, no_such_task, switch_off, capped, paused, unavailable };
 
 /// Make the task due on the next tick. A manual run still counts against the
 /// daily cap, so a script or agent cannot loop it into a bill.
@@ -151,11 +156,12 @@ pub fn runNow(id: i64) RunNowResult {
     if (!ensureTable()) return .unavailable;
     const sched = loadSchedule(id) orelse return .no_such_task;
     const now = io_g.milliTimestamp();
+    // A paused task stays paused: running it is not a way to re-enable it.
+    if (!sched.enabled) return .paused;
     var probe = sched;
-    probe.enabled = true;
     probe.last_run_ms = 0;
-    if (!pure.isDue(probe, now)) return .capped;
-    const stmt = db.prepare("UPDATE agent_tasks SET last_run_ms=0, enabled=1 WHERE id=?1") orelse return .unavailable;
+    if (!pure.isDue(probe, now) or runsTodayAll(now) >= pure.GLOBAL_RUNS_PER_DAY) return .capped;
+    const stmt = db.prepare("UPDATE agent_tasks SET last_run_ms=0 WHERE id=?1") orelse return .unavailable;
     defer db.finalize(stmt);
     db.bindInt64(stmt, 1, id);
     if (db.step(stmt) != db.c.SQLITE_DONE) return .unavailable;
@@ -168,6 +174,16 @@ pub fn setMasterEnabled(on: bool) void {
     state.app.agent_tasks_enabled = on;
     last_tick_ms = 0;
     state.markConfigDirty();
+}
+
+/// Runs started today across every task, so many small caps cannot add up to an
+/// unbounded bill (tasks can be re-created, each with a fresh per-task count).
+fn runsTodayAll(now: i64) u32 {
+    const stmt = db.prepare("SELECT COALESCE(SUM(runs_today),0) FROM agent_tasks WHERE day=?1") orelse return 0;
+    defer db.finalize(stmt);
+    db.bindInt64(stmt, 1, pure.dayIndex(now));
+    if (db.step(stmt) == db.c.SQLITE_ROW) return @intCast(@max(0, db.columnInt(stmt, 0)));
+    return 0;
 }
 
 fn loadSchedule(id: i64) ?pure.Schedule {
@@ -264,6 +280,7 @@ pub fn tick() void {
     last_tick_ms = now;
     if (state.app.incognito_mode or busy.load(.acquire) or !ensureTable()) return;
 
+    if (runsTodayAll(now) >= pure.GLOBAL_RUNS_PER_DAY) return;
     const job = nextDue(now) orelse return;
     if (busy.swap(true, .acq_rel)) return;
     const th = workers.spawnLegacy(runJob, .{job}) catch {
@@ -341,8 +358,25 @@ fn execute(job: *const Job, summary: *[SUMMARY_MAX]u8, summary_len: *usize) pure
         return .failed;
     }
 
+    // Unattended runs get a config that starts opal-mcp without the scheduling
+    // tools, so a prompt-injected run cannot create, run or remove tasks.
+    var cfg_buf: [700]u8 = undefined;
+    const cfg_path = std.fmt.bufPrint(&cfg_buf, "{s}/.mcp-scheduled.json", .{ws.path()}) catch {
+        summary_len.* = copyInto(summary, "Could not prepare the agent workspace.");
+        return .failed;
+    };
+    var cfg_json: [900]u8 = undefined;
+    const cfg_body = setup.jsonConfigWithArgs(&cfg_json, ws.mcpPath(), &.{ "--deny-prefix", "agent_task" }) orelse {
+        summary_len.* = copyInto(summary, "Could not prepare the agent workspace.");
+        return .failed;
+    };
+    io_g.cwdWriteFile(.{ .sub_path = cfg_path, .data = cfg_body }) catch {
+        summary_len.* = copyInto(summary, "Could not prepare the agent workspace.");
+        return .failed;
+    };
+
     var built: pure.Argv = .{};
-    const agent_argv = pure.buildArgv(&built, job.agent, job.prompt[0..job.prompt_len], ws.mcpPath(), ws.tokenFile(), job.budget_cents) orelse {
+    const agent_argv = pure.buildArgv(&built, job.agent, job.prompt[0..job.prompt_len], ws.mcpPath(), ws.tokenFile(), cfg_path, job.budget_cents) orelse {
         summary_len.* = copyInto(summary, "The task could not be turned into a command.");
         return .failed;
     };
