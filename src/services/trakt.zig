@@ -190,19 +190,21 @@ fn setEpisodeWatched(show_tmdb: i32, imdb: []const u8, season: i32, episode: i32
     if (outbox.enqueueState("trakt", operation, key, payload)) kickOutbox();
 }
 
-/// Mark a movie watched in the user's Trakt history.
-pub fn markWatchedMovie(tmdb_id: i32) void {
-    setMovieWatched(tmdb_id, true);
+/// Mark a movie watched in the user's Trakt history. `imdb` is the movie's
+/// remembered IMDb id ("" when unknown): a keyless catalog id is a hash of it,
+/// not a TMDB id, so such a movie is identified by IMDb.
+pub fn markWatchedMovie(tmdb_id: i32, imdb: []const u8) void {
+    setMovieWatched(tmdb_id, imdb, true);
 }
 
-pub fn markUnwatchedMovie(tmdb_id: i32) void {
-    setMovieWatched(tmdb_id, false);
+pub fn markUnwatchedMovie(tmdb_id: i32, imdb: []const u8) void {
+    setMovieWatched(tmdb_id, imdb, false);
 }
 
-fn setMovieWatched(tmdb_id: i32, watched: bool) void {
+fn setMovieWatched(tmdb_id: i32, imdb: []const u8, watched: bool) void {
     if (!isConnected()) return;
     var body: [128]u8 = undefined;
-    const payload = std.fmt.bufPrint(&body, "{{\"movies\":[{{\"ids\":{{\"tmdb\":{d}}}}}]}}", .{tmdb_id}) catch return;
+    const payload = @import("keyless_tv_pure.zig").movieScrobblePayload(tmdb_id, imdb, false, &body) orelse return;
     var key_buf: [32]u8 = undefined;
     const key = std.fmt.bufPrint(&key_buf, "movie:{d}", .{tmdb_id}) catch return;
     const operation = if (watched) "history" else "history_remove";

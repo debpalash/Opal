@@ -501,9 +501,19 @@ fn fetchCinemetaIntoUsing(comptime fetchType: anytype, out: *std.ArrayListUnmana
                 fetchType(out, "series", mode, query, cat, genre_idx, page);
                 return;
             };
+            const base = out.items.len;
             fetchType(out, "movie", mode, query, cat, genre_idx, page);
             worker.join();
-            out.appendSlice(alloc, series.items) catch {};
+            // Alternate the two catalogs so a window over the mixed grid (the web
+            // companion shows the first 30 rows) is not all movies.
+            var mixed: std.ArrayListUnmanaged(state.TmdbItem) = .empty;
+            defer mixed.deinit(alloc);
+            keyless.interleave(state.TmdbItem, alloc, out.items[base..], series.items, &mixed) catch {
+                out.appendSlice(alloc, series.items) catch {};
+                return;
+            };
+            out.shrinkRetainingCapacity(base);
+            out.appendSlice(alloc, mixed.items) catch {};
         },
     }
 }

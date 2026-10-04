@@ -522,3 +522,24 @@ Thinner than the TMDB version, honestly:
 - Search returns only titles TVmaze knows, with no regional fuzzy matching.
 - No per-episode play yet. Play still hands the title to the universal resolver.
 - TVmaze allows about 20 calls per 10 seconds per IP. The feed uses 20 calls in four waves.
+
+### Keyless identities after a key is added (2026-10-05)
+
+A show tracked while Opal had no TMDB key is stored under a catalog id that is a
+hash of its IMDb id; the same show tracked after adding a key uses the real TMDB
+id. Both rows remember the IMDb id, and at startup and after a library sync Opal
+merges such a pair into the TMDB-keyed row (`tv_merge_pure.zig` plans, `tv_merge.zig`
+executes). Only a hash row folds into a real row with exactly the same IMDb id;
+rows with different or unknown IMDb ids, and ambiguous cases, are never touched.
+Watched episodes are unioned, the resume position comes from the more recently
+updated row, the more recently set library status wins, and every affected row is
+first copied to the `tv_*_bak` and `library_status_bak` tables with a `tv_merge_log`
+entry, inside one transaction per pair. A keyed show that has no remembered IMDb
+id is asked once (`/3/tv/{id}/external_ids`) during sync so it can be matched.
+
+Movie scrobbles to Trakt and Simkl use the IMDb id for keyless movies (remembered
+per catalog id in `movie_external_ids`) and keep TMDB ids for keyed ones.
+
+Stream addons and the EZTV source resolve the IMDb id of a search through
+Cinemeta (exact title, year when given, episode token ignored) when there is no
+TMDB key.

@@ -270,6 +270,36 @@ pub fn sameTitle(a: []const u8, b: []const u8) bool {
     }
 }
 
+/// The title part of a stream-search query like "Neagley s01e03": everything
+/// before a standalone `sNNeNN` token (trimmed). A query without one is returned
+/// trimmed. Only a token that is a whole word counts.
+pub fn queryTitle(query: []const u8) []const u8 {
+    const trimmed = std.mem.trim(u8, query, " ");
+    var i: usize = 0;
+    while (i < trimmed.len) : (i += 1) {
+        if (std.ascii.toLower(trimmed[i]) != 's') continue;
+        if (i > 0 and trimmed[i - 1] != ' ') continue;
+        var j = i + 1;
+        while (j < trimmed.len and std.ascii.isDigit(trimmed[j])) j += 1;
+        if (j == i + 1 or j >= trimmed.len or std.ascii.toLower(trimmed[j]) != 'e') continue;
+        var k = j + 1;
+        while (k < trimmed.len and std.ascii.isDigit(trimmed[k])) k += 1;
+        if (k == j + 1) continue;
+        if (k < trimmed.len and std.ascii.isAlphanumeric(trimmed[k])) continue;
+        return std.mem.trim(u8, trimmed[0..i], " ");
+    }
+    return trimmed;
+}
+
+test "queryTitle drops a trailing episode token only" {
+    try t.expectEqualStrings("Neagley", queryTitle("Neagley s01e03"));
+    try t.expectEqualStrings("Neagley", queryTitle("  Neagley S1E10 "));
+    try t.expectEqualStrings("Dune 2021", queryTitle("Dune 2021"));
+    try t.expectEqualStrings("Sea Patrol", queryTitle("Sea Patrol"));
+    try t.expectEqualStrings("Shes1e2x", queryTitle("Shes1e2x"));
+    try t.expectEqualStrings("", queryTitle("s01e02"));
+}
+
 pub const TitleYear = struct { title: []const u8, year: u16 = 0 };
 
 /// Split a trailing release year off a cleaned query ("Avengers Endgame 2019"
@@ -386,6 +416,16 @@ pub fn externalIds(id: i32, imdb: []const u8, quote_tmdb: bool, out: []u8) ?[]co
         std.fmt.bufPrint(out, "\"tmdb\":\"{d}\"", .{id})
     else
         std.fmt.bufPrint(out, "\"tmdb\":{d}", .{id})) catch null;
+}
+
+/// The whole `{"movies":[...]}` scrobble body for one movie. A keyless movie
+/// (synthetic catalog id) goes out by IMDb id; a real TMDB id keeps going as
+/// `tmdb`. Null when neither identity is usable, so nothing is ever sent for a
+/// wrong or unknown title.
+pub fn movieScrobblePayload(id: i32, imdb: []const u8, quote_tmdb: bool, out: []u8) ?[]const u8 {
+    var ids_buf: [48]u8 = undefined;
+    const ids = externalIds(id, imdb, quote_tmdb, &ids_buf) orelse return null;
+    return std.fmt.bufPrint(out, "{{\"movies\":[{{\"ids\":{{{s}}}}}]}}", .{ids}) catch null;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -549,4 +589,16 @@ test "external ids: synthetic goes as imdb, real as tmdb" {
     try t.expectEqualStrings("\"tmdb\":1396", externalIds(1396, imdb, false, &b).?);
     try t.expectEqualStrings("\"tmdb\":\"1396\"", externalIds(1396, "", true, &b).?);
     try t.expect(externalIds(0, "", false, &b) == null);
+}
+
+test "movie scrobble: keyless movie sends its IMDb id, keyed movie keeps tmdb" {
+    var b: [128]u8 = undefined;
+    const imdb = "tt0111161";
+    const synth = cm.stableId(imdb);
+    try t.expectEqualStrings("{\"movies\":[{\"ids\":{\"imdb\":\"tt0111161\"}}]}", movieScrobblePayload(synth, imdb, false, &b).?);
+    try t.expectEqualStrings("{\"movies\":[{\"ids\":{\"imdb\":\"tt0111161\"}}]}", movieScrobblePayload(synth, imdb, true, &b).?);
+    // keyed item: real TMDB id (IMDb remembered or not) stays a tmdb id
+    try t.expectEqualStrings("{\"movies\":[{\"ids\":{\"tmdb\":278}}]}", movieScrobblePayload(278, imdb, false, &b).?);
+    try t.expectEqualStrings("{\"movies\":[{\"ids\":{\"tmdb\":\"278\"}}]}", movieScrobblePayload(278, "", true, &b).?);
+    try t.expect(movieScrobblePayload(0, "", false, &b) == null);
 }

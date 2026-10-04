@@ -2680,11 +2680,8 @@ fn resolveEztv(query_buf: [256]u8, qlen: usize) void {
         return;
     }
 
+    // No TMDB key is fine: resolveImdbId then asks Cinemeta for the IMDb id.
     const api_key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
-    if (api_key.len == 0) {
-        noteWorkerOutcome(.unavailable);
-        return; // no TMDB key -> no IMDb id -> nothing to ask
-    }
 
     var imdb_buf: [16]u8 = undefined;
     var is_series = false;
@@ -3903,6 +3900,61 @@ fn parseSxxEyy(query: []const u8, out_season: *i32, out_episode: *i32) void {
     }
 }
 
+/// The keyless twin of resolveImdbId: Cinemeta's catalog search, accepting only
+/// an exact title (and year, when the query has one). An episode token is not
+/// part of the title. Never "the first result": a wrong IMDb id would query
+/// stream addons for another title.
+fn resolveImdbKeyless(
+    query: []const u8,
+    out_imdb: []u8,
+    out_is_series: *bool,
+    out_outcome: *SourceStatus,
+) usize {
+    const kl = @import("keyless_tv_pure.zig");
+    const intent = resolver_intent[0..resolver_intent_len];
+    out_outcome.* = .no_results;
+
+    // The keyless TV detail page already knows the show's IMDb id.
+    const t = &state.app.tmdb;
+    if (std.mem.eql(u8, intent, "tv") and t.tv_id > 0 and t.tv_imdb_id_len > 0 and t.tv_imdb_id_len <= out_imdb.len) {
+        @memcpy(out_imdb[0..t.tv_imdb_id_len], t.tv_imdb_id[0..t.tv_imdb_id_len]);
+        out_is_series.* = true;
+        out_outcome.* = .done;
+        return t.tv_imdb_id_len;
+    }
+
+    var season: i32 = 0;
+    var episode: i32 = 0;
+    parseSxxEyy(query, &season, &episode);
+    const split = kl.splitTitleYear(kl.queryTitle(query));
+    if (split.title.len == 0) return 0;
+
+    const only_series = episode > 0 or std.mem.eql(u8, intent, "tv");
+    const only_movie = !only_series and std.mem.eql(u8, intent, "movie");
+    const kinds = [_][]const u8{ "movie", "series" };
+    var enc: [512]u8 = undefined;
+    const q = @import("../core/http.zig").urlEncode(split.title, &enc);
+    var any_response = false;
+    for (kinds) |kind| {
+        const is_series = std.mem.eql(u8, kind, "series");
+        if (is_series and only_movie) continue;
+        if (!is_series and only_series) continue;
+        var path_buf: [640]u8 = undefined;
+        const path = std.fmt.bufPrint(&path_buf, "/catalog/{s}/top/search={s}.json", .{ kind, q }) catch continue;
+        const body = @import("tmdb_api.zig").cinemetaApiOwned(path, 1024 * 1024) orelse continue;
+        defer alloc.free(body);
+        any_response = true;
+        const found = kl.pickImdb(alloc, body, split.title, split.year, out_imdb) catch "";
+        if (found.len > 0) {
+            out_is_series.* = is_series;
+            out_outcome.* = .done;
+            return found.len;
+        }
+    }
+    if (!any_response) out_outcome.* = .transport_failed;
+    return 0;
+}
+
 /// Resolve a free-text query to an IMDb id via TMDB, writing it into `out_imdb`
 /// and returning its length (0 = could not resolve). `out_is_series` reports
 /// whether TMDB classified the match as a TV show.
@@ -3917,6 +3969,7 @@ fn resolveImdbId(
     out_is_series: *bool,
     out_outcome: *SourceStatus,
 ) usize {
+    if (api_key.len == 0) return resolveImdbKeyless(query, out_imdb, out_is_series, out_outcome);
     var imdb_len: usize = 0;
     out_outcome.* = .no_results;
     const intent = resolver_intent[0..resolver_intent_len];
@@ -4073,11 +4126,8 @@ fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
     }
 
     const query = query_buf[0..qlen];
+    // No TMDB key is fine: resolveImdbId then asks Cinemeta for the IMDb id.
     const api_key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
-    if (api_key.len == 0) {
-        noteWorkerOutcome(.unavailable);
-        return;
-    }
 
     // Parse season/episode from query (e.g. "from s01e05" → season=1, episode=5)
     var ep_season: i32 = 0;

@@ -593,6 +593,38 @@ async function openShow(id, title, imdb){
   if (detailsCurrent(generation)) loadLatest(id, generation);
 }
 
+// Track / Tracking button on a show page. Tracking an item that came from the
+// catalog works with or without a TMDB key (the server identifies a keyless
+// show by IMDb id). Shown only while the show is untracked; once tracked, the
+// Watching page owns status changes.
+function renderTrackAction(id, title, tracked, generation){
+  if (!detailsCurrent(generation) || id !== showId) return;
+  const actions = $('show-actions');
+  let button = $('show-track');
+  if (!button) {
+    button = document.createElement('button');
+    button.type = 'button'; button.id = 'show-track';
+    actions.prepend(button);
+  }
+  const paint = on => {
+    button.textContent = on ? '✓ In Watching' : '＋ Track show';
+    button.setAttribute('aria-pressed', on ? 'true' : 'false');
+    button.disabled = on;
+  };
+  paint(tracked);
+  button.onclick = async () => {
+    button.disabled = true;
+    try {
+      await apiMutation('/library/action?action=status&kind=tv&id=' + id + '&value=watching');
+      if (detailsCurrent(generation)) paint(true);
+      toast('Added ' + title + ' to Watching');
+    } catch (error) {
+      if (detailsCurrent(generation)) button.disabled = false;
+      toast(error.message || 'Could not track this show.');
+    }
+  };
+}
+
 function cinemetaSeasons(videos){
   const counts = new Map();
   (videos || []).forEach(e => {
@@ -665,6 +697,7 @@ async function loadSeason(sn){
     if (!detailsCurrent(generation) || request !== seasonGeneration) return;
     if (d?.error || !Array.isArray(d?.episodes)) throw new Error(d?.error || 'Episodes returned an invalid response.');
     const seen = new Set(seenData.episodes || []);
+    if (typeof seenData.tracked === 'boolean') renderTrackAction(id, title, seenData.tracked, generation);
     const watchedUnavailable = seenData.unavailable === true;
     $('episodes').innerHTML = (watchedUnavailable ? '<div class="empty">Watched state is unavailable. Select the season to retry.</div>' : '') + d.episodes.map(e => `
       <div class="ep"><div class="h">

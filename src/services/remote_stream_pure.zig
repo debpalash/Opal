@@ -96,9 +96,17 @@ pub fn catalogPosterUrl(raw: []const u8, out: []u8) ?[]const u8 {
         return std.fmt.bufPrint(out, "https://image.tmdb.org/t/p/w185{s}", .{raw}) catch null;
     }
 
-    const metahub = "https://images.metahub.space/";
-    if (!std.mem.startsWith(u8, raw, metahub)) return null;
-    if (std.mem.indexOfAny(u8, raw[metahub.len..], "?#") != null) return null;
+    // Cinemeta search results (the keyless "search movies & TV" path) carry
+    // IMDb artwork on Amazon's image CDN instead of Metahub. Only that host's
+    // /images/ tree is allowed, exact host match, https, no query or fragment.
+    const hosts = [_][]const u8{ "https://images.metahub.space/", "https://m.media-amazon.com/images/" };
+    var prefix_len: usize = 0;
+    for (hosts) |host| if (std.mem.startsWith(u8, raw, host)) {
+        prefix_len = host.len;
+    };
+    if (prefix_len == 0) return null;
+    if (std.mem.indexOfAny(u8, raw[prefix_len..], "?#") != null) return null;
+    if (std.mem.indexOf(u8, raw, "..") != null) return null;
     if (out.len < raw.len) return null;
     @memcpy(out[0..raw.len], raw);
     return out[0..raw.len];
@@ -189,6 +197,14 @@ test "catalogPosterUrl accepts catalog artwork without enabling SSRF" {
         "https://images.metahub.space/poster/small/tt123/img",
         catalogPosterUrl("https://images.metahub.space/poster/small/tt123/img", &out).?,
     );
+    try std.testing.expectEqualStrings(
+        "https://m.media-amazon.com/images/M/MV5BOTI3.jpg",
+        catalogPosterUrl("https://m.media-amazon.com/images/M/MV5BOTI3.jpg", &out).?,
+    );
+    try std.testing.expect(catalogPosterUrl("https://m.media-amazon.com/other/x.jpg", &out) == null);
+    try std.testing.expect(catalogPosterUrl("https://m.media-amazon.com.evil.test/images/x.jpg", &out) == null);
+    try std.testing.expect(catalogPosterUrl("https://m.media-amazon.com/images/../x.jpg", &out) == null);
+    try std.testing.expect(catalogPosterUrl("https://m.media-amazon.com/images/x.jpg?a=b", &out) == null);
     try std.testing.expect(catalogPosterUrl("http://images.metahub.space/poster/a", &out) == null);
     try std.testing.expect(catalogPosterUrl("https://images.metahub.space.evil.test/a", &out) == null);
     try std.testing.expect(catalogPosterUrl("https://127.0.0.1/private", &out) == null);
