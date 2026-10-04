@@ -710,6 +710,18 @@ pub fn build(b: *std.Build) void {
     test_operator_step.dependOn(&run_test_operator_names.step);
     test_operator_step.dependOn(&run_test_operator_view.step);
 
+    const test_ask_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/ask_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_ask_pure.use_llvm = true;
+    const run_test_ask = b.addRunArtifact(test_ask_pure);
+    test_step.dependOn(&run_test_ask.step);
+    b.step("test-ask", "Test Ask Opal (policy, argv, prompt, answer and action validation)").dependOn(&run_test_ask.step);
+
     const test_agent_tasks_pure = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/agent_tasks_pure.zig"),
