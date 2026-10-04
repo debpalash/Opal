@@ -799,6 +799,47 @@ wantedTitle.addEventListener("keydown", (e) => {
   if (e.key === "Enter") wantedBtn.click();
 });
 
+// ── Tab list for agents ───────────────────────────────────────────────────────
+
+const tabsNote = $<HTMLElement>("tabs-note");
+const tabsEnableBtn = $<HTMLButtonElement>("tabs-enable");
+const tabsDisableBtn = $<HTMLButtonElement>("tabs-disable");
+
+async function loadTabsCard(): Promise<void> {
+  const st = await browserMsg<{ enabled: boolean; granted: boolean; opalOn: boolean }>({ op: "tabs-state" });
+  const on = st.enabled && st.granted;
+  tabsEnableBtn.hidden = on;
+  tabsDisableBtn.hidden = !on;
+  tabsNote.textContent = on
+    ? st.opalOn
+      ? "Sharing the titles and sites of your open tabs with Opal's agents. Private windows are never included."
+      : "Allowed here, but the switch in Opal (Settings, Agent Access, Share tab list with agents) is off, so nothing is sent."
+    : "Let Opal's agents see the titles and sites of your open tabs (not the full addresses). Needs your OK here and the switch in Opal under Settings, Agent Access.";
+}
+
+// chrome.permissions.request has to run in a user gesture, so it is called here
+// (not in the worker) and the worker is told afterwards.
+tabsEnableBtn.addEventListener("click", async () => {
+  let granted = false;
+  try {
+    granted = await chrome.permissions.request({ permissions: ["tabs"] });
+  } catch {
+    granted = false;
+  }
+  if (granted) await browserMsg({ op: "tabs-enable" });
+  else logRecent("Sharing tab titles needs that permission", false);
+  loadTabsCard();
+});
+tabsDisableBtn.addEventListener("click", async () => {
+  await browserMsg({ op: "tabs-disable" });
+  try {
+    await chrome.permissions.remove({ permissions: ["tabs"] });
+  } catch {
+    // already gone
+  }
+  loadTabsCard();
+});
+
 // ── Share this page with Opal ─────────────────────────────────────────────────
 
 const shareBtn = $<HTMLButtonElement>("share-btn");
@@ -844,6 +885,7 @@ async function poll(): Promise<void> {
   loadStreams().catch(() => {});
   loadFetchAsk().catch(() => {});
   fillWantedTitle().catch(() => {});
+  if (ticks % 4 === 0) loadTabsCard().catch(() => {});
   const res = await send({ kind: "opal", action: "status" });
   if (res.ok) {
     statusDot.className = "dot ok";

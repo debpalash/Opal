@@ -96,6 +96,21 @@
       <p id="wanted-note" class="card-sub"></p>
     </section>
 
+    <!-- Share the list of open tabs with Opal's agents. Off until the user turns it
+         on here (this click asks the browser for the optional tabs permission) AND
+         has Opal's own switch on. Titles and sites only, never full addresses. -->
+    <section id="tabs-card" class="card">
+      <div class="card-title small">Tab list for agents</div>
+      <p id="tabs-note" class="card-body">
+        Let Opal's agents see the titles and sites of your open tabs (not the full addresses).
+        Needs your OK here and the switch in Opal under Settings, Agent Access.
+      </p>
+      <div class="btn-row">
+        <button id="tabs-enable" class="btn">Allow tab titles</button>
+        <button id="tabs-disable" class="btn ghost" hidden>Stop sharing tabs</button>
+      </div>
+    </section>
+
     <!-- Share this page with Opal (browser link, milestone 2). One page, one
          click, never automatic. The box below is per page and starts unticked;
          Opal has its own switch that decides whether agents ever see it. -->

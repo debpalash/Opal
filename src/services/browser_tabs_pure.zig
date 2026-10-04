@@ -90,11 +90,26 @@ pub fn parseReport(a: std.mem.Allocator, body: []const u8, now: i64, out: *List)
         if (host.len == 0) continue;
         const path = link.sanitizeText(parts.path, &tab.path);
         tab.path_len = path.len;
-        const title = link.sanitizeText(t.title, &tab.title);
+        const title = cutAddressSecrets(link.sanitizeText(t.title, &tab.title), host);
         tab.title_len = title.len;
         out.tabs[out.len] = tab;
         out.len += 1;
     }
+}
+
+/// A tab with no <title> is titled with its own address by the browser, query
+/// string and all, so the title can carry what the address would. Where the
+/// title contains the tab's host, everything from the next `?` or `#` is cut.
+fn cutAddressSecrets(title: []const u8, host: []const u8) []const u8 {
+    if (host.len == 0 or title.len < host.len) return title;
+    var i: usize = 0;
+    while (i + host.len <= title.len) : (i += 1) {
+        if (!std.ascii.eqlIgnoreCase(title[i .. i + host.len], host)) continue;
+        const rest = title[i + host.len ..];
+        if (std.mem.indexOfAny(u8, rest, "?#")) |q| return std.mem.trimEnd(u8, title[0 .. i + host.len + q], " ");
+        return title;
+    }
+    return title;
 }
 
 const Split = struct { host: []const u8, path: []const u8 };
@@ -273,4 +288,17 @@ test "the empty answer says how to turn it on and carries no tabs" {
     try testing.expectEqual(@as(usize, 0), parsed.value.object.get("tabs").?.array.items.len);
     try testing.expect(!parsed.value.object.get("sharing").?.bool);
     try testing.expect(parsed.value.object.get("hint") != null);
+}
+
+test "a title that is the address loses its query string and fragment" {
+    const l = try parse(
+        \\{"tabs":[
+        \\ {"title":"127.0.0.1:8812/echo?token=ABC","url":"http://127.0.0.1:8812/echo?token=ABC"},
+        \\ {"title":"https://Example.org/a/b?x=SECRET#frag","url":"https://example.org/a/b?x=SECRET"},
+        \\ {"title":"Is this a question? Yes #1","url":"https://example.org/q"}
+        \\]}
+    , 1);
+    try testing.expectEqualStrings("127.0.0.1:8812/echo", l.tabs[0].titleSlice());
+    try testing.expectEqualStrings("https://Example.org/a/b", l.tabs[1].titleSlice());
+    try testing.expectEqualStrings("Is this a question? Yes #1", l.tabs[2].titleSlice());
 }

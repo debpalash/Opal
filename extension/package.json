@@ -9,7 +9,7 @@
     "start": "extension start",
     "build": "extension build",
     "preview": "extension preview",
-    "test": "node --test tests/sniffer.test.mjs tests/fetch_policy.test.mjs",
+    "test": "node --test tests/sniffer.test.mjs tests/fetch_policy.test.mjs tests/tabs_payload.test.mjs",
     "typecheck": "tsc --noEmit -p ."
   },
   "devDependencies": {

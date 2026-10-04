@@ -25,6 +25,7 @@ import {
   removeOrigin,
   setFetchEnabled,
 } from "./fetch_jobs";
+import { disableTabs, enableTabs, reportTabs, tabsState } from "./tabs_share";
 import { jsonFetch, readLink, type BrowserResult, type StoredLink } from "./link_api";
 import {
   SNIFFER_PERMISSIONS,
@@ -488,6 +489,8 @@ try {
       void readLink().then((l) => l && jsonFetch("/api/browser/me", "GET", undefined, l.token));
       // A worker that was shut down is not polling for fetch jobs: start again.
       ensureLoop();
+      // And a once-a-minute tab list, only if the user opted in and Opal's switch is on.
+      void reportTabs();
     }
   });
 } catch {
@@ -508,6 +511,9 @@ export interface BrowserMessage {
     | "enable"
     | "share"
     | "wanted"
+    | "tabs-state"
+    | "tabs-enable"
+    | "tabs-disable"
     | "fetch-state"
     | "fetch-decide"
     | "fetch-add"
@@ -546,6 +552,12 @@ export async function handleBrowserMessage(msg: BrowserMessage): Promise<unknown
       return sendCandidate(msg.tabId ?? -1, msg.id ?? "", msg.action === "queue" ? "queue" : "play");
     case "share":
       return sharePage(msg.tabId ?? -1, msg.agents === true);
+    case "tabs-state":
+      return { ok: true, ...(await tabsState()) };
+    case "tabs-enable":
+      return { ok: true, ...(await enableTabs()) };
+    case "tabs-disable":
+      return { ok: true, ...(await disableTabs()) };
     case "wanted":
       return addToWanted(msg.title ?? "", msg.tabId ?? -1);
     case "fetch-state":
