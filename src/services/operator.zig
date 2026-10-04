@@ -11,6 +11,7 @@
 //! it as a proposal for the user. Policy and parsing are in `operator_pure.zig`.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const db = @import("../core/db.zig");
 const state = @import("../core/state.zig");
 const logs = @import("../core/logs.zig");
@@ -20,6 +21,7 @@ const workers = @import("../core/workers.zig");
 const bounded = @import("../core/bounded_process.zig");
 const alloc = @import("../core/alloc.zig").allocator;
 const launch = @import("agent_launch.zig");
+const exec_pure = @import("agent_exec_pure.zig");
 const pure = @import("operator_pure.zig");
 const match_help = @import("operator_match_help.zig");
 const endpoint = @import("operator_endpoint.zig");
@@ -266,10 +268,24 @@ fn runJob(job: Job) void {
         return;
     };
 
+    // Windows: start the agent from the path PATH search found (never the bare name,
+    // which would also search the working directory), and give a `.cmd` shim its
+    // prompt on standard input; see `agent_exec_pure.zig`. A run that cannot be made
+    // safe is refused with the reason. Elsewhere the argv runs as built.
+    var plan: exec_pure.Plan = .{};
+    var exe_buf: [1024]u8 = undefined;
+    var run_cmd: []const []const u8 = cmd;
+    if (builtin.os.tag == .windows) {
+        const exe = launch.findOnPath(&exe_buf, agent.binary()) orelse return bail(job, agent.binary(), "The agent is not installed (not on PATH)");
+        if (exec_pure.windowsPlan(&plan, exe, cmd)) |why| return bail(job, agent.binary(), why.message());
+        run_cmd = plan.argv();
+    }
+
     const output = alloc.alloc(u8, MAX_OUTPUT) catch return bail(job, agent.binary(), "Out of memory");
     defer alloc.free(output);
     var got: usize = 0;
-    var process = bounded.StreamProcess.init(cmd, .{
+    var process = bounded.StreamProcess.init(run_cmd, .{
+        .stdin_behavior = if (plan.stdin != null) .Pipe else .Ignore,
         .timeout_ms = TIMEOUT_MS,
         .terminate_grace_ms = 2000,
         .max_output_bytes = MAX_OUTPUT,
@@ -280,6 +296,9 @@ fn runJob(job: Job) void {
         finish(job.id, .failed, "Could not start the agent", "", agent.binary(), 0);
         return;
     };
+    if (plan.stdin) |text| {
+        if (!launch.feedPrompt(&process, text)) process.requestStop();
+    }
     if (process.stdout()) |stdout| {
         while (got < output.len) {
             const n = io_g.read(stdout, output[got..]) catch {

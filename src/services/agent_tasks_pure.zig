@@ -6,6 +6,11 @@
 //! shell, so it cannot inject commands.
 
 const std = @import("std");
+const builtin = @import("builtin");
+
+test {
+    _ = @import("agent_exec_pure.zig");
+}
 
 /// Only agents whose headless mode Opal has verified are schedulable.
 pub const Agent = enum {
@@ -146,6 +151,14 @@ pub const Argv = struct {
 /// server a trimmed environment, so it also gets the token file explicitly. Null on bad input or
 /// a path that would break the TOML string.
 pub fn buildArgv(out: *Argv, agent: Agent, prompt: []const u8, mcp_path: []const u8, token_file: []const u8, scheduled_mcp_config: []const u8, budget_cents: u32, model: Model) ?[]const []const u8 {
+    return buildArgvFor(out, builtin.os.tag == .windows, agent, prompt, mcp_path, token_file, scheduled_mcp_config, budget_cents, model);
+}
+
+/// `buildArgv` for a given OS. On Windows the Codex overrides are TOML literal
+/// strings ('...'): a Windows path is full of backslashes that a basic string
+/// would need doubled, and a literal string carries no double quote, which
+/// cmd.exe cannot be trusted with (see `agent_exec_pure.zig`).
+pub fn buildArgvFor(out: *Argv, windows: bool, agent: Agent, prompt: []const u8, mcp_path: []const u8, token_file: []const u8, scheduled_mcp_config: []const u8, budget_cents: u32, model: Model) ?[]const []const u8 {
     if (!validPrompt(prompt) or !validBudget(budget_cents)) return null;
     out.len = 0;
     const full = std.fmt.bufPrint(&out.prompt, "{s}{s}", .{ preamble, prompt }) catch return null;
@@ -177,11 +190,20 @@ pub fn buildArgv(out: *Argv, agent: Agent, prompt: []const u8, mcp_path: []const
             out.push("--no-session-persistence");
         },
         .codex => {
-            if (std.mem.indexOfAny(u8, mcp_path, "\"\\\n") != null) return null;
-            if (std.mem.indexOfAny(u8, token_file, "\"\\\n") != null) return null;
-            const override = std.fmt.bufPrint(&out.override, "mcp_servers.opal.command=\"{s}\"", .{mcp_path}) catch return null;
-            const deny_override = "mcp_servers.opal.args=[\"--deny-prefix\",\"agent_task\"]";
-            const token_override = std.fmt.bufPrint(&out.token_override, "mcp_servers.opal.env.OPAL_API_TOKEN_FILE=\"{s}\"", .{token_file}) catch return null;
+            // A TOML basic string cannot hold a quote, a backslash or a line break; a
+            // literal string cannot hold an apostrophe or a line break.
+            const q: u8 = if (windows) '\'' else '"';
+            const bad: []const u8 = if (windows) "'\"\n\r" else "\"\\\n";
+            if (std.mem.indexOfAny(u8, mcp_path, bad) != null) return null;
+            if (std.mem.indexOfAny(u8, token_file, bad) != null) return null;
+            const override = std.fmt.bufPrint(&out.override, "mcp_servers.opal.command={c}{s}{c}", .{ q, mcp_path, q }) catch return null;
+            // The same server arguments Claude gets from the scheduled config file (see
+            // agent_tasks.zig): write tier, the compact tasks tool set, no scheduling tools.
+            const deny_override = if (windows)
+                "mcp_servers.opal.args=['--allow','write','--preset','tasks','--deny-prefix','agent_task']"
+            else
+                "mcp_servers.opal.args=[\"--allow\",\"write\",\"--preset\",\"tasks\",\"--deny-prefix\",\"agent_task\"]";
+            const token_override = std.fmt.bufPrint(&out.token_override, "mcp_servers.opal.env.OPAL_API_TOKEN_FILE={c}{s}{c}", .{ q, token_file, q }) catch return null;
             out.push("exec");
             out.push("--skip-git-repo-check");
             out.push("--ephemeral");
@@ -314,8 +336,24 @@ test "codex argv is read-only with the server override" {
     try std.testing.expectEqualStrings("-c", argv[8]);
     try std.testing.expectEqualStrings("mcp_servers.opal.env.OPAL_API_TOKEN_FILE=\"/home/u/.config/opal/api.token\"", argv[9]);
     try std.testing.expectEqualStrings("-c", argv[10]);
-    try std.testing.expectEqualStrings("mcp_servers.opal.args=[\"--deny-prefix\",\"agent_task\"]", argv[11]);
+    try std.testing.expectEqualStrings("mcp_servers.opal.args=[\"--allow\",\"write\",\"--preset\",\"tasks\",\"--deny-prefix\",\"agent_task\"]", argv[11]);
     try std.testing.expect(std.mem.endsWith(u8, argv[12], "Check the queue"));
+}
+
+test "windows codex argv uses TOML literal strings, so backslashes and no quotes" {
+    var a: Argv = .{};
+    const argv = buildArgvFor(&a, true, .codex, "Check the queue", "C:\\Program Files\\Opal\\opal-mcp.exe", "C:\\Users\\u\\AppData\\Roaming\\opal\\api.token", "C:\\s.json", 50, .haiku).?;
+    try std.testing.expectEqualStrings("mcp_servers.opal.command='C:\\Program Files\\Opal\\opal-mcp.exe'", argv[7]);
+    try std.testing.expectEqualStrings("mcp_servers.opal.env.OPAL_API_TOKEN_FILE='C:\\Users\\u\\AppData\\Roaming\\opal\\api.token'", argv[9]);
+    try std.testing.expectEqualStrings("mcp_servers.opal.args=['--allow','write','--preset','tasks','--deny-prefix','agent_task']", argv[11]);
+    // Only the prompt may hold a quote: nothing else on the line does.
+    for (argv[0..12]) |arg| try std.testing.expect(std.mem.indexOfScalar(u8, arg, '"') == null);
+    // The POSIX form still refuses a backslash, the Windows form an apostrophe.
+    try std.testing.expect(buildArgvFor(&a, false, .codex, "x", "C:\\x", "/t", "/s.json", 50, .haiku) == null);
+    try std.testing.expect(buildArgvFor(&a, true, .codex, "x", "C:\\it's\\mcp.exe", "C:\\t", "C:\\s.json", 50, .haiku) == null);
+    // Claude is the same on both.
+    const c = buildArgvFor(&a, true, .claude, "x", "C:\\m.exe", "C:\\t", "C:\\s.json", 50, .haiku).?;
+    try std.testing.expectEqualStrings("--mcp-config", c[7]);
 }
 
 test "bad input yields no argv" {

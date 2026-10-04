@@ -22,20 +22,50 @@ const tasks_ui = @import("agent_tasks_ui.zig");
 const operator_ui = @import("operator_ui.zig");
 const operator_view = @import("../services/operator_view_pure.zig");
 
+const tabs = @import("../terminal/tabs_pure.zig");
+
 const Session = session_mod.Session;
 const FONT_SIZE: f32 = 13;
 const SCROLL_ROWS_PER_NOTCH: f32 = 3;
 
-var session: ?*Session = null;
-var snap: session_mod.Snapshot = .{};
+pub const Kind = tabs.Kind;
+
+/// One terminal session and what the page remembers about it. Only the active
+/// tab is drawn and gets input; the others keep running in the background.
+const Tab = struct {
+    session: *Session,
+    snap: session_mod.Snapshot = .{},
+    kind: Kind,
+    /// Which "Shell 2" this is among the open tabs of its kind.
+    ordinal: u8,
+    /// Never reused: keeps the widget ids of two tabs apart.
+    serial: usize,
+    marker: tabs.Marker = .none,
+    title_hash: u64 = 0,
+    exit_seen: bool = false,
+    /// Set when the tab becomes active: the next frame hands it keyboard focus.
+    want_focus: bool = true,
+};
+
+var tab_list: [tabs.MAX_TABS]Tab = undefined;
+var tab_count: usize = 0;
+var cur: usize = 0;
+var next_serial: usize = 1;
+
+/// The active tab's snapshot while it is drawn (see `renderTerminal`); the
+/// drawing and input code below reads it as `snap`.
+var empty_snap: session_mod.Snapshot = .{};
+var snap: *session_mod.Snapshot = &empty_snap;
+/// The size of the last drawn terminal, so a new tab starts at about the right size.
+var last_cols: u16 = 0;
+var last_rows: u16 = 0;
 var term_id: ?dvui.Id = null;
-/// Set when a session starts: the next frame hands the terminal keyboard focus.
-var want_focus: bool = false;
 /// What the left button is doing since it went down inside the terminal.
 const Drag = enum { none, select, report, scrollbar };
 var drag: Drag = .none;
 var pressed_button: ?pointer.Button = null;
 var was_focused: bool = false;
+var ime: keymap.ImeGuard = .{};
 var frame_guard: pointer.FrameGuard = .{};
 /// While dragging the scrollbar: where in the thumb it was grabbed, and the
 /// offset last asked for (the snapshot lags a frame behind).
@@ -43,25 +73,13 @@ var sb_grab: f32 = 0;
 var sb_offset: i64 = 0;
 const SB_WIDTH: f32 = 6;
 const SB_HIT: f32 = 14;
-var launched: ?Kind = null;
-var tab: enum { terminal, tasks, activity } = .terminal;
+var view: enum { terminal, tasks, activity } = .terminal;
 var note_buf: [128]u8 = undefined;
 var note_len: usize = 0;
-
-pub const Kind = enum { claude, codex, gemini, shell };
 
 fn say(text: []const u8) void {
     note_len = @min(text.len, note_buf.len);
     @memcpy(note_buf[0..note_len], text[0..note_len]);
-}
-
-fn kindTitle(kind: Kind) []const u8 {
-    return switch (kind) {
-        .claude => "Claude Code",
-        .codex => "Codex",
-        .gemini => "Gemini CLI",
-        .shell => "Shell",
-    };
 }
 
 fn agentOf(kind: Kind) ?launch.Agent {
@@ -82,26 +100,35 @@ fn installWake() void {
     }.wake;
 }
 
+/// End every session (the app is quitting).
 pub fn shutdown() void {
-    if (session) |s| s.deinit();
-    session = null;
-    snap.deinit(alloc);
+    for (tab_list[0..tab_count]) |*t| {
+        t.session.deinit();
+        t.snap.deinit(alloc);
+    }
+    tab_count = 0;
+    cur = 0;
+    snap = &empty_snap;
     term_id = null;
 }
 
-/// True while the terminal has keyboard focus. Opal's global shortcuts must
-/// leave keys alone then, or Ctrl+W (delete word) would close the window.
+/// True while the active terminal has keyboard focus. Opal's global shortcuts
+/// must leave keys alone then, or Ctrl+W (delete word) would close the window.
 pub fn capturesKeyboard() bool {
     const id = term_id orelse return false;
     // dvui keeps focus on a widget that stopped rendering (the agent opened the
     // player, say); only a terminal that is still on screen owns the keys.
     if (!frame_guard.alive(dvui.frameTimeNS())) return false;
-    return session != null and dvui.focusedWidgetId() == id;
+    return tab_count > 0 and dvui.focusedWidgetId() == id;
 }
 
 fn start(kind: Kind) void {
     if (!session_mod.supported) {
         say("The embedded terminal is not available on this platform yet");
+        return;
+    }
+    if (!tabs.canAdd(tab_count)) {
+        say("At most 6 terminals can be open at once. Close one first.");
         return;
     }
     if (agentOf(kind)) |agent| {
@@ -133,29 +160,77 @@ fn start(kind: Kind) void {
         return;
     };
 
-    stop();
     installWake();
-    const cols: u16 = if (snap.cols > 0) snap.cols else 100;
-    const rows: u16 = if (snap.rows > 0) snap.rows else 30;
+    const cols: u16 = if (last_cols > 0) last_cols else 100;
+    const rows: u16 = if (last_rows > 0) last_rows else 30;
     const argv: []const []const u8 = if (is_windows) &.{script} else &.{ "/bin/sh", "-c", script };
-    session = Session.start(alloc, argv, cols, rows) catch |err| {
+    const session = Session.start(alloc, argv, cols, rows) catch |err| {
         say(switch (err) {
             error.Unsupported => "The embedded terminal is not available on this platform yet",
             else => "Could not start the terminal",
         });
         return;
     };
-    launched = kind;
+    var open: [tabs.MAX_TABS]tabs.Named = undefined;
+    for (tab_list[0..tab_count], 0..) |t, i| open[i] = .{ .kind = t.kind, .ordinal = t.ordinal };
+    tab_list[tab_count] = .{
+        .session = session,
+        .kind = kind,
+        .ordinal = tabs.nextOrdinal(open[0..tab_count], kind),
+        .serial = next_serial,
+    };
+    next_serial += 1;
+    tab_count += 1;
+    activate(tab_count - 1);
     note_len = 0;
-    want_focus = true;
-    snap.deinit(alloc);
     state.wakeUi();
 }
 
-fn stop() void {
-    if (session) |s| s.deinit();
-    session = null;
-    launched = null;
+/// Show tab `i`. The tab left behind keeps running; a program that asked for
+/// focus reports hears that it lost focus.
+fn activate(i: usize) void {
+    if (i >= tab_count) return;
+    if (i != cur and cur < tab_count and was_focused) {
+        tab_list[cur].session.sendFocus(false);
+    }
+    was_focused = false;
+    ime.reset();
+    drag = .none;
+    pressed_button = null;
+    cur = i;
+    tab_list[i].marker = .none;
+    tab_list[i].want_focus = true;
+    state.wakeUi();
+}
+
+/// Close tab `i`: the session ends and its tab goes away.
+fn closeTab(i: usize) void {
+    if (i >= tab_count) return;
+    const was_active = i == cur;
+    tab_list[i].session.deinit();
+    tab_list[i].snap.deinit(alloc);
+    var k = i;
+    while (k + 1 < tab_count) : (k += 1) tab_list[k] = tab_list[k + 1];
+    const before = tab_count;
+    tab_count -= 1;
+    // `snap` may have pointed into the moved array: renderTerminal sets it again.
+    snap = &empty_snap;
+    ime.reset();
+    drag = .none;
+    pressed_button = null;
+    if (tab_count == 0) {
+        cur = 0;
+        term_id = null;
+        was_focused = false;
+    } else {
+        cur = tabs.activeAfterClose(before, i, cur) orelse 0;
+        if (was_active) {
+            was_focused = false;
+            tab_list[cur].want_focus = true;
+            tab_list[cur].marker = .none;
+        }
+    }
+    state.wakeUi();
 }
 
 pub fn render() void {
@@ -168,7 +243,7 @@ pub fn render() void {
 
     renderToolbar();
 
-    switch (tab) {
+    switch (view) {
         .tasks => {
             tasks_ui.render();
             return;
@@ -179,11 +254,17 @@ pub fn render() void {
         },
         .terminal => {},
     }
-    if (session == null) {
+    if (tab_count == 0) {
         renderEmpty();
         return;
     }
-    renderTerminal(session.?);
+    pollTabs();
+    renderTabStrip();
+    if (tab_count == 0) {
+        renderEmpty();
+        return;
+    }
+    renderTerminal(&tab_list[cur]);
 }
 
 fn renderToolbar() void {
@@ -205,38 +286,168 @@ fn renderToolbar() void {
 
     var tab_label: [24]u8 = undefined;
     const activity_label = operator_view.tabLabel(&tab_label, operator_ui.pendingCount());
-    if (tasks_ui.tabSwitch(@intFromEnum(tab), activity_label)) |i| tab = @enumFromInt(i);
-    if (tab != .terminal) return;
+    if (tasks_ui.tabSwitch(@intFromEnum(view), activity_label)) |i| view = @enumFromInt(i);
+    if (view != .terminal) return;
 
-    const kinds = [_]Kind{ .claude, .codex, .gemini, .shell };
-    inline for (kinds, 0..) |kind, i| {
-        const active = launched != null and launched.? == kind and session != null;
-        if (components.actionButton(@src(), kindTitle(kind), if (active) .primary else .secondary, 9500 + i)) start(kind);
-    }
-
-    if (session) |s| {
-        var title_buf: [128]u8 = undefined;
-        const raw = s.titleSlice();
-        const n = @min(raw.len, title_buf.len);
-        @memcpy(title_buf[0..n], raw[0..n]);
-        const label: []const u8 = if (s.isExited()) "process exited" else title_buf[0..n];
-        _ = dvui.label(@src(), "{s}", .{label}, .{
-            .color_text = theme.colors.text_secondary,
-            .gravity_y = 0.5,
-            .margin = .{ .x = 12, .y = 0, .w = 0, .h = 0 },
-        });
-        if (components.actionButton(@src(), if (s.isExited()) "Close" else "Stop", .secondary, 9510)) {
-            // stop() frees the session: nothing below may touch `s`.
-            stop();
-            return;
-        }
-        if (s.takeBell()) state.showToast("Terminal bell");
-    } else if (note_len > 0) {
+    if (note_len > 0) {
         _ = dvui.label(@src(), "{s}", .{note_buf[0..note_len]}, .{
             .color_text = theme.colors.text_secondary,
             .gravity_y = 0.5,
             .margin = .{ .x = 12, .y = 0, .w = 0, .h = 0 },
         });
+    }
+}
+
+/// Once a frame: bells and titles of every tab, so a bell in a background tab or
+/// a program that changed its title shows up on the tab.
+fn pollTabs() void {
+    for (tab_list[0..tab_count], 0..) |*t, i| {
+        const bell = t.session.takeBell();
+        var title_buf: [128]u8 = undefined;
+        const raw = t.session.titleSlice();
+        const n = @min(raw.len, title_buf.len);
+        @memcpy(title_buf[0..n], raw[0..n]);
+        const h = std.hash.Wyhash.hash(0, title_buf[0..n]);
+        const exited = t.session.isExited();
+        const changed = h != t.title_hash or (exited and !t.exit_seen);
+        t.title_hash = h;
+        t.exit_seen = exited;
+        if (i == cur and bell) state.showToast("Terminal bell");
+        t.marker = tabs.markerAfter(t.marker, i == cur, bell, changed);
+    }
+}
+
+/// Width of the tab strip last frame, in natural units (0 before the first).
+var strip_avail: f32 = 0;
+
+const transparent: dvui.Color = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
+
+fn renderTabStrip() void {
+    var strip = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .horizontal,
+        .background = true,
+        .color_fill = theme.colors.bg_deep,
+        .padding = .{ .x = 6, .y = 4, .w = 6, .h = 0 },
+        .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
+        .color_border = theme.colors.border_subtle,
+    });
+    defer strip.deinit();
+
+    var select: ?usize = null;
+    var close: ?usize = null;
+    const budget = tabs.labelMaxFit(tab_count, strip_avail, dvui.Font.theme(.body).textSize("n").w);
+    strip_avail = strip.data().contentRect().w;
+
+    // First, so it stays reachable when the tabs run out of room.
+    if (tabs.canAdd(tab_count)) {
+        var m = dvui.menu(@src(), .horizontal, .{ .gravity_y = 0.5 });
+        defer m.deinit();
+        if (dvui.menuItemLabel(@src(), "+", .{ .submenu = true }, .{
+            .color_text = theme.colors.text_secondary,
+            .color_fill = transparent,
+            .color_fill_hover = theme.colors.bg_hover,
+            .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
+        })) |r| {
+            var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
+            defer fw.deinit();
+            var menu = dvui.menu(@src(), .vertical, .{
+                .background = true,
+                .color_fill = theme.colors.bg_surface,
+                .border = dvui.Rect.all(1),
+                .color_border = theme.colors.border_subtle,
+            });
+            defer menu.deinit();
+            for (tabs.kinds, 0..) |kind, k| {
+                var buf: [48]u8 = undefined;
+                const missing = if (agentOf(kind)) |agent| !launch.installed(agent) else false;
+                const text = std.fmt.bufPrint(&buf, "{s}{s}", .{ tabs.kindTitle(kind), if (missing) " (not installed)" else "" }) catch tabs.kindTitle(kind);
+                if (dvui.menuItemLabel(@src(), text, .{}, .{
+                    .id_extra = k,
+                    .expand = .horizontal,
+                    .color_text = if (missing) theme.colors.text_tertiary else theme.colors.text_primary,
+                })) |_| {
+                    start(kind);
+                    // start() activated the new tab; the indices above are stale.
+                    return;
+                }
+            }
+        }
+    } else {
+        _ = dvui.label(@src(), "6 of 6", .{}, .{
+            .color_text = theme.colors.text_tertiary,
+            .gravity_y = 0.5,
+            .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
+        });
+    }
+
+    for (tab_list[0..tab_count], 0..) |*t, i| {
+        const is_active = i == cur;
+        var cell = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = t.serial,
+            .background = true,
+            .color_fill = if (is_active) theme.colors.bg_app else transparent,
+            .corner_radius = .{ .x = 6, .y = 6, .w = 0, .h = 0 },
+            .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
+            .border = if (is_active) .{ .x = 0, .y = 2, .w = 0, .h = 0 } else dvui.Rect.all(0),
+            .color_border = theme.colors.accent,
+        });
+        defer cell.deinit();
+
+        switch (t.marker) {
+            .none => {},
+            .title, .bell => {
+                var dot = dvui.box(@src(), .{}, .{
+                    .id_extra = t.serial,
+                    .min_size_content = .{ .w = 7, .h = 7 },
+                    .max_size_content = .{ .w = 7, .h = 7 },
+                    .background = true,
+                    .color_fill = if (t.marker == .bell) theme.colors.accent else theme.colors.text_tertiary,
+                    .corner_radius = dvui.Rect.all(4),
+                    .gravity_y = 0.5,
+                    .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
+                });
+                dot.deinit();
+            },
+        }
+
+        var base_buf: [32]u8 = undefined;
+        var title_buf: [128]u8 = undefined;
+        var label_buf: [64]u8 = undefined;
+        const raw = t.session.titleSlice();
+        const n = @min(raw.len, title_buf.len);
+        @memcpy(title_buf[0..n], raw[0..n]);
+        const text = tabs.label(&label_buf, tabs.baseName(&base_buf, t.kind, t.ordinal), title_buf[0..n], t.session.isExited(), budget);
+        if (dvui.button(@src(), text, .{}, .{
+            .id_extra = t.serial,
+            .color_fill = transparent,
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_surface,
+            .color_text = if (is_active) theme.colors.text_primary else theme.colors.text_secondary,
+            .border = dvui.Rect.all(0),
+            .corner_radius = dvui.Rect.all(0),
+            .padding = .{ .x = 10, .y = 5, .w = 4, .h = 5 },
+            .margin = dvui.Rect.all(0),
+            .gravity_y = 0.5,
+        })) select = i;
+        if (dvui.button(@src(), "x", .{}, .{
+            .id_extra = t.serial,
+            .color_fill = transparent,
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_surface,
+            .color_text = theme.colors.text_secondary,
+            .border = dvui.Rect.all(0),
+            .corner_radius = dvui.Rect.all(0),
+            .padding = .{ .x = 6, .y = 5, .w = 8, .h = 5 },
+            .margin = dvui.Rect.all(0),
+            .gravity_y = 0.5,
+        })) close = i;
+    }
+
+    // Applied after the strip is built, so the loop above never sees a tab vanish.
+    if (close) |i| {
+        closeTab(i);
+    } else if (select) |i| {
+        if (i != cur) activate(i);
     }
 }
 
@@ -260,7 +471,19 @@ fn renderEmpty() void {
     _ = dvui.label(@src(), "While a terminal has focus it gets every key. Press Ctrl+Shift+Esc to give the keyboard back to Opal.", .{}, .{
         .color_text = theme.colors.text_secondary,
         .gravity_x = 0.5,
-        .margin = .{ .x = 0, .y = 6, .w = 0, .h = 0 },
+        .margin = .{ .x = 0, .y = 6, .w = 0, .h = 16 },
+    });
+    {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_x = 0.5 });
+        defer row.deinit();
+        inline for (tabs.kinds, 0..) |kind, i| {
+            if (components.actionButton(@src(), tabs.kindTitle(kind), if (kind == .claude) .primary else .secondary, 9500 + i)) start(kind);
+        }
+    }
+    _ = dvui.label(@src(), "Open up to six at once and switch between them with the tabs.", .{}, .{
+        .color_text = theme.colors.text_tertiary,
+        .gravity_x = 0.5,
+        .margin = .{ .x = 0, .y = 10, .w = 0, .h = 0 },
     });
     if (!session_mod.supported) {
         _ = dvui.label(@src(), "The embedded terminal is not available on this platform yet. Use Settings > Agent Access to open an agent in your own terminal.", .{}, .{
@@ -294,8 +517,11 @@ fn isAscii(cell: *const session_mod.Cell) bool {
     return cell.len == 1 and cell.utf8[0] >= 0x20 and cell.utf8[0] < 0x7f;
 }
 
-fn renderTerminal(s: *Session) void {
+fn renderTerminal(t: *Tab) void {
+    const s = t.session;
+    snap = &t.snap;
     var area = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .id_extra = t.serial,
         .expand = .both,
         .background = true,
         .color_fill = toColor(snap.default_bg),
@@ -305,8 +531,8 @@ fn renderTerminal(s: *Session) void {
     const wd = area.data();
     term_id = wd.id;
     frame_guard.markRendered(dvui.frameTimeNS());
-    if (want_focus) {
-        want_focus = false;
+    if (t.want_focus) {
+        t.want_focus = false;
         drag = .none;
         pressed_button = null;
         was_focused = false;
@@ -322,6 +548,8 @@ fn renderTerminal(s: *Session) void {
     const cols: u16 = @intFromFloat(std.math.clamp(@floor(rs.r.w / cw), 10, 400));
     const rows: u16 = @intFromFloat(std.math.clamp(@floor(rs.r.h / ch), 3, 200));
     s.resize(cols, rows, @intFromFloat(cw), @intFromFloat(ch));
+    last_cols = cols;
+    last_rows = rows;
 
     handleEvents(s, wd, rs.r, cw, ch);
 
@@ -329,13 +557,18 @@ fn renderTerminal(s: *Session) void {
     const focused = dvui.focusedWidgetId() == wd.id;
     if (focused != was_focused) {
         was_focused = focused;
+        if (!focused) ime.reset();
         s.sendFocus(focused);
     }
 
-    _ = s.snapshot(&snap);
+    _ = s.snapshot(snap);
     if (snap.cols == 0 or snap.cells.len == 0) return;
 
-    if (focused) dvui.wantTextInput(.{ .x = 0, .y = 0, .w = 0, .h = 0 });
+    // The input method puts its candidate window by this rectangle: the cursor cell.
+    if (focused) {
+        const cur_r = rect(rs, @as(f32, @floatFromInt(snap.cursor_x)) * cw, @as(f32, @floatFromInt(snap.cursor_y)) * ch, cw, ch);
+        dvui.wantTextInput(cur_r.toNatural());
+    }
 
     {
         const prev_clip = dvui.clip(rs.r);
@@ -534,6 +767,27 @@ fn clipboardCopy(s: *Session) void {
     dvui.clipboardTextSet(text);
 }
 
+/// A vertical wheel turn: to a program that tracks the mouse, as arrows on the
+/// alternate screen for one that does not, otherwise through the scrollback.
+/// `bypass` (Shift) skips the mouse report, like selecting does.
+fn wheelVertical(s: *Session, dy: f32, bypass: bool, mods: session_mod.c.GhosttyMods, hit: pointer.Hit) void {
+    const modes = s.modes();
+    if (!bypass and modes.mouse_tracking) {
+        // Wheel notches are buttons four (up) and five (down).
+        const notches: usize = @max(1, @as(usize, @intFromFloat(@round(@abs(dy)))));
+        const btn: pointer.Button = if (dy > 0) .four else .five;
+        for (0..@min(notches, 10)) |_| _ = s.mouseReport(.press, btn, mods, hit, false);
+    } else if (modes.alt_screen and modes.alt_scroll) {
+        // Full-screen programs without mouse support (less, man) get arrows.
+        const n: usize = @abs(pointer.wheelRows(dy, SCROLL_ROWS_PER_NOTCH));
+        const key: session_mod.c.GhosttyKey = @intCast(if (dy > 0) session_mod.c.GHOSTTY_KEY_ARROW_UP else session_mod.c.GHOSTTY_KEY_ARROW_DOWN);
+        for (0..@min(n, 30)) |_| _ = s.sendKey(key, 0, .press, "");
+    } else {
+        s.scroll(pointer.wheelRows(dy, SCROLL_ROWS_PER_NOTCH));
+    }
+    state.wakeUi();
+}
+
 fn handleEvents(s: *Session, wd: *dvui.WidgetData, content: dvui.Rect.Physical, cw: f32, ch: f32) void {
     var text_guard = keymap.TextGuard{};
     for (dvui.events()) |*e| {
@@ -625,23 +879,24 @@ fn handleEvents(s: *Session, wd: *dvui.WidgetData, content: dvui.Rect.Physical, 
                     .position => dvui.cursorSet(.ibeam),
                     .wheel_y => |dy| {
                         e.handle(@src(), wd);
-                        const modes = s.modes();
-                        if (!bypass and modes.mouse_tracking) {
-                            // Wheel notches are buttons four (up) and five (down).
-                            const notches: usize = @max(1, @as(usize, @intFromFloat(@round(@abs(dy)))));
-                            const btn: pointer.Button = if (dy > 0) .four else .five;
-                            for (0..@min(notches, 10)) |_| _ = s.mouseReport(.press, btn, mods, hit, false);
-                        } else if (modes.alt_screen and modes.alt_scroll) {
-                            // Full-screen programs without mouse support (less, man) get arrows.
-                            const n: usize = @abs(pointer.wheelRows(dy, SCROLL_ROWS_PER_NOTCH));
-                            const key: session_mod.c.GhosttyKey = @intCast(if (dy > 0) session_mod.c.GHOSTTY_KEY_ARROW_UP else session_mod.c.GHOSTTY_KEY_ARROW_DOWN);
-                            for (0..@min(n, 30)) |_| _ = s.sendKey(key, 0, .press, "");
-                        } else {
-                            s.scroll(pointer.wheelRows(dy, SCROLL_ROWS_PER_NOTCH));
-                        }
-                        state.wakeUi();
+                        wheelVertical(s, dy, bypass, mods, hit);
                     },
-                    else => {},
+                    .wheel_x => |dx| switch (pointer.horizontalWheel(s.modes().mouse_tracking, bypass)) {
+                        // Nothing to scroll sideways: leave the event alone.
+                        .ignore => {},
+                        .report => {
+                            e.handle(@src(), wd);
+                            const notches: usize = @max(1, @as(usize, @intFromFloat(@round(@abs(dx)))));
+                            const btn = pointer.hwheelButton(dx);
+                            for (0..@min(notches, 10)) |_| _ = s.mouseReport(.press, btn, mods, hit, false);
+                            state.wakeUi();
+                        },
+                        // Shift+wheel: the toolkit rotated a vertical wheel.
+                        .vertical => {
+                            e.handle(@src(), wd);
+                            wheelVertical(s, -dx, true, mods, hit);
+                        },
+                    },
                 }
             },
             .key => |ke| {
@@ -658,22 +913,29 @@ fn handleEvents(s: *Session, wd: *dvui.WidgetData, content: dvui.Rect.Physical, 
                     state.wakeUi();
                     continue;
                 }
-                // Copy and paste: Cmd+C/V on macOS, Ctrl+Shift+C/V elsewhere.
-                const mac = @import("builtin").os.tag == .macos;
-                const clip_mod = if (mac) (m.super and !m.ctrl and !m.alt) else (m.ctrl and m.shift and !m.alt);
-                if (clip_mod and ke.code == .v) {
-                    e.handle(@src(), wd);
-                    switch (s.paste(dvui.clipboardText())) {
-                        .too_large => state.showToast("Paste is too large for the terminal (limit 512 KB)"),
-                        .failed => state.showToast("The terminal did not accept the whole paste"),
-                        else => {},
-                    }
-                    s.scrollToBottom();
-                    continue;
+                // Copy and paste: Cmd+C/V on macOS, Ctrl+Shift+C/V (and Ctrl/Shift+Insert) elsewhere.
+                switch (keymap.clipboardChord(@import("builtin").os.tag == .macos, name, m)) {
+                    .paste => {
+                        e.handle(@src(), wd);
+                        switch (s.paste(dvui.clipboardText())) {
+                            .too_large => state.showToast("Paste is too large for the terminal (limit 512 KB)"),
+                            .failed => state.showToast("The terminal did not accept the whole paste"),
+                            else => {},
+                        }
+                        s.scrollToBottom();
+                        continue;
+                    },
+                    .copy => {
+                        e.handle(@src(), wd);
+                        clipboardCopy(s);
+                        continue;
+                    },
+                    .none => {},
                 }
-                if (clip_mod and ke.code == .c) {
+                // Enter, Backspace and the arrows that edit or confirm an input
+                // method composition are the input method's, not the program's.
+                if (ime.swallowsKey(m, dvui.frameTimeNS())) {
                     e.handle(@src(), wd);
-                    clipboardCopy(s);
                     continue;
                 }
                 const entry = keymap.find(name);
@@ -697,6 +959,8 @@ fn handleEvents(s: *Session, wd: *dvui.WidgetData, content: dvui.Rect.Physical, 
                 switch (te.action) {
                     .value => |v| {
                         e.handle(@src(), wd);
+                        // Text still being composed is not typed; the finished text arrives next.
+                        if (!ime.onText(v.txt.len, v.selected, dvui.frameTimeNS())) continue;
                         // The echo of an Alt/Ctrl-encoded key must not also type.
                         if (text_guard.drops(v.txt)) continue;
                         s.write(v.txt);

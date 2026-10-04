@@ -167,6 +167,73 @@ pub fn isReleaseChord(name: []const u8, m: Mods) bool {
     return std.mem.eql(u8, name, "escape") and m.ctrl and m.shift and !m.alt and !m.super;
 }
 
+/// Clipboard chords. macOS: Cmd+C / Cmd+V (Shift allowed, never with Ctrl or
+/// Alt). Elsewhere: Ctrl+Shift+C / Ctrl+Shift+V, and the classic Ctrl+Insert
+/// (copy) and Shift+Insert (paste). Plain Ctrl+C and Ctrl+V are never taken: they
+/// belong to the program (interrupt, quoted insert).
+pub const Clip = enum { none, copy, paste };
+
+pub fn clipboardChord(mac: bool, name: []const u8, m: Mods) Clip {
+    const copy = std.mem.eql(u8, name, "c");
+    const paste = std.mem.eql(u8, name, "v");
+    if (mac) {
+        if (!m.super or m.ctrl or m.alt) return .none;
+        return if (copy) .copy else if (paste) .paste else .none;
+    }
+    if (m.alt or m.super) return .none;
+    if (m.ctrl and m.shift) return if (copy) .copy else if (paste) .paste else .none;
+    if (std.mem.eql(u8, name, "insert")) {
+        if (m.ctrl and !m.shift) return .copy;
+        if (m.shift and !m.ctrl) return .paste;
+    }
+    return .none;
+}
+
+/// Input method composition. The toolkit reports the text being composed
+/// (preedit) as a text event flagged `selected`, and the finished text as a plain
+/// one. Only the plain one is typed; the preedit must not reach the program (it
+/// would arrive twice), and keys the input method uses to edit or confirm the
+/// composition (Enter, Backspace, arrows) must not reach it either, or a stray
+/// carriage return follows every confirmed word. Times are nanoseconds on any
+/// monotonic clock (the frame time).
+pub const ImeGuard = struct {
+    composing: bool = false,
+    last_ns: i128 = 0,
+    ended_ns: i128 = 0,
+
+    /// A composition that sent nothing for this long is taken as abandoned, so a
+    /// lost "preedit cleared" event cannot leave the keyboard dead.
+    pub const stale_ns: i128 = 10 * std.time.ns_per_s;
+    /// The key that confirmed a composition can arrive just after its text.
+    pub const grace_ns: i128 = 30 * std.time.ns_per_ms;
+
+    /// A text event: `selected` is the toolkit's flag for composing text. Returns
+    /// whether the text should be typed.
+    pub fn onText(self: *ImeGuard, txt_len: usize, selected: bool, now: i128) bool {
+        if (selected) {
+            if (self.composing and txt_len == 0) self.ended_ns = now;
+            self.composing = txt_len > 0;
+            self.last_ns = now;
+            return false;
+        }
+        if (self.composing) self.ended_ns = now;
+        self.composing = false;
+        return true;
+    }
+
+    /// Whether a key press belongs to the input method. Ctrl, Alt and Super
+    /// chords never do.
+    pub fn swallowsKey(self: *const ImeGuard, m: Mods, now: i128) bool {
+        if (m.ctrl or m.alt or m.super) return false;
+        if (self.composing and now - self.last_ns < stale_ns) return true;
+        return self.ended_ns != 0 and now - self.ended_ns <= grace_ns;
+    }
+
+    pub fn reset(self: *ImeGuard) void {
+        self.* = .{};
+    }
+};
+
 /// Some toolkits report Alt+x or Ctrl+x as a key and as a text event too. The key
 /// is already encoded, so the text that directly follows it with the same
 /// character must be dropped, and nothing else: Enter then `x` in one frame
@@ -195,6 +262,73 @@ test "only the release chord releases the keyboard" {
     try std.testing.expect(!isReleaseChord("escape", .{ .ctrl = true }));
     try std.testing.expect(!isReleaseChord("q", .{ .ctrl = true, .shift = true }));
     try std.testing.expect(!isReleaseChord("escape", .{ .ctrl = true, .shift = true, .alt = true }));
+}
+
+test "clipboard chords: Cmd on macOS, Ctrl+Shift elsewhere, never plain Ctrl" {
+    try std.testing.expectEqual(Clip.copy, clipboardChord(true, "c", .{ .super = true }));
+    try std.testing.expectEqual(Clip.paste, clipboardChord(true, "v", .{ .super = true }));
+    try std.testing.expectEqual(Clip.paste, clipboardChord(true, "v", .{ .super = true, .shift = true }));
+    // On macOS Ctrl+C is the interrupt, and Ctrl+Shift+C is not a chord.
+    try std.testing.expectEqual(Clip.none, clipboardChord(true, "c", .{ .ctrl = true }));
+    try std.testing.expectEqual(Clip.none, clipboardChord(true, "c", .{ .ctrl = true, .shift = true }));
+    try std.testing.expectEqual(Clip.none, clipboardChord(true, "c", .{ .super = true, .alt = true }));
+    try std.testing.expectEqual(Clip.none, clipboardChord(true, "c", .{ .super = true, .ctrl = true }));
+    try std.testing.expectEqual(Clip.none, clipboardChord(true, "x", .{ .super = true }));
+    try std.testing.expectEqual(Clip.none, clipboardChord(true, "c", .{}));
+
+    try std.testing.expectEqual(Clip.copy, clipboardChord(false, "c", .{ .ctrl = true, .shift = true }));
+    try std.testing.expectEqual(Clip.paste, clipboardChord(false, "v", .{ .ctrl = true, .shift = true }));
+    try std.testing.expectEqual(Clip.none, clipboardChord(false, "c", .{ .ctrl = true }));
+    try std.testing.expectEqual(Clip.none, clipboardChord(false, "v", .{ .ctrl = true }));
+    try std.testing.expectEqual(Clip.none, clipboardChord(false, "c", .{ .super = true }));
+    try std.testing.expectEqual(Clip.none, clipboardChord(false, "c", .{ .ctrl = true, .shift = true, .alt = true }));
+    try std.testing.expectEqual(Clip.none, clipboardChord(false, "c", .{ .ctrl = true, .shift = true, .super = true }));
+    try std.testing.expectEqual(Clip.copy, clipboardChord(false, "insert", .{ .ctrl = true }));
+    try std.testing.expectEqual(Clip.paste, clipboardChord(false, "insert", .{ .shift = true }));
+    try std.testing.expectEqual(Clip.none, clipboardChord(false, "insert", .{}));
+    try std.testing.expectEqual(Clip.none, clipboardChord(true, "insert", .{ .shift = true }));
+}
+
+test "composing text is not typed, only the committed text is" {
+    var g = ImeGuard{};
+    const t0: i128 = 1_000_000_000;
+    try std.testing.expect(!g.onText(3, true, t0)); // preedit "ni"
+    try std.testing.expect(!g.onText(6, true, t0 + 1)); // preedit grows
+    try std.testing.expect(g.composing);
+    try std.testing.expect(!g.onText(0, true, t0 + 2)); // preedit cleared...
+    try std.testing.expect(g.onText(6, false, t0 + 2)); // ...and the commit types
+    try std.testing.expect(!g.composing);
+    // Ordinary typing is plain text and never composing.
+    try std.testing.expect(g.onText(1, false, t0 + 100_000_000));
+}
+
+test "the key that confirms a composition is swallowed, later keys are not" {
+    var g = ImeGuard{};
+    const t0: i128 = 5 * std.time.ns_per_s;
+    _ = g.onText(3, true, t0);
+    // Enter while composing belongs to the input method.
+    try std.testing.expect(g.swallowsKey(.{}, t0 + 1));
+    // Ctrl+C still reaches the program.
+    try std.testing.expect(!g.swallowsKey(.{ .ctrl = true }, t0 + 1));
+    // Commit, then Enter in the same frame (or just after) is the confirming key.
+    _ = g.onText(3, false, t0 + 2);
+    try std.testing.expect(g.swallowsKey(.{}, t0 + 2));
+    try std.testing.expect(g.swallowsKey(.{}, t0 + 2 + ImeGuard.grace_ns));
+    // A real Enter a moment later goes through.
+    try std.testing.expect(!g.swallowsKey(.{}, t0 + 2 + ImeGuard.grace_ns + 1));
+    // Typing without composition never swallows anything.
+    var h = ImeGuard{};
+    _ = h.onText(1, false, t0);
+    try std.testing.expect(!h.swallowsKey(.{}, t0));
+}
+
+test "a composition that never ends does not lock the keyboard" {
+    var g = ImeGuard{};
+    _ = g.onText(3, true, 1_000);
+    try std.testing.expect(g.swallowsKey(.{}, 1_000 + ImeGuard.stale_ns - 1));
+    try std.testing.expect(!g.swallowsKey(.{}, 1_000 + ImeGuard.stale_ns));
+    g.reset();
+    try std.testing.expect(!g.composing);
 }
 
 test "text after Enter in the same frame is kept, the echo of Alt+x is dropped" {

@@ -11,6 +11,7 @@
 //! headless argv live in `agent_tasks_pure.zig`.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const db = @import("../core/db.zig");
 const state = @import("../core/state.zig");
 const logs = @import("../core/logs.zig");
@@ -19,6 +20,7 @@ const workers = @import("../core/workers.zig");
 const bounded = @import("../core/bounded_process.zig");
 const launch = @import("agent_launch.zig");
 const pure = @import("agent_tasks_pure.zig");
+const exec_pure = @import("agent_exec_pure.zig");
 const setup = @import("agent_setup_pure.zig");
 
 pub const Agent = pure.Agent;
@@ -478,16 +480,37 @@ fn execute(job: *const Job, summary: *[SUMMARY_MAX]u8, summary_len: *usize) pure
         return .failed;
     };
 
-    // `sh -c 'exec "$@" 2>&1'` runs the agent with stderr merged into stdout so a
-    // failure reason (not logged in, out of credit) reaches the summary. The
+    // POSIX: `sh -c 'exec "$@" 2>&1'` runs the agent with stderr merged into stdout
+    // so a failure reason (not logged in, out of credit) reaches the summary. The
     // agent's argv rides in "$@", never through shell parsing.
+    //
+    // Windows has no sh: the agent is started directly from the path PATH search
+    // found, and a `.cmd` shim gets its prompt on standard input (see
+    // `agent_exec_pure.zig`). Standard error is not merged there, so a failure
+    // reason that the agent prints to it is not in the summary.
     var argv: [24][]const u8 = undefined;
-    const head = [_][]const u8{ "sh", "-c", "exec \"$@\" 2>&1", "sh" };
-    @memcpy(argv[0..head.len], &head);
-    @memcpy(argv[head.len .. head.len + agent_argv.len], agent_argv);
-    const total = head.len + agent_argv.len;
+    var exe_buf: [1024]u8 = undefined;
+    var plan: exec_pure.Plan = .{};
+    var run_argv: []const []const u8 = undefined;
+    if (builtin.os.tag == .windows) {
+        const exe = launch.findOnPath(&exe_buf, job.agent.binary()) orelse {
+            summary_len.* = copyInto(summary, "The agent is not installed (not on PATH).");
+            return .not_installed;
+        };
+        if (exec_pure.windowsPlan(&plan, exe, agent_argv)) |why| {
+            summary_len.* = copyInto(summary, why.message());
+            return .failed;
+        }
+        run_argv = plan.argv();
+    } else {
+        const head = [_][]const u8{ "sh", "-c", "exec \"$@\" 2>&1", "sh" };
+        @memcpy(argv[0..head.len], &head);
+        @memcpy(argv[head.len .. head.len + agent_argv.len], agent_argv);
+        run_argv = argv[0 .. head.len + agent_argv.len];
+    }
 
-    var process = bounded.StreamProcess.init(argv[0..total], .{
+    var process = bounded.StreamProcess.init(run_argv, .{
+        .stdin_behavior = if (plan.stdin != null) .Pipe else .Ignore,
         .timeout_ms = pure.TIMEOUT_MS,
         .terminate_grace_ms = 2000,
         .max_output_bytes = 8 * 1024 * 1024,
@@ -498,6 +521,9 @@ fn execute(job: *const Job, summary: *[SUMMARY_MAX]u8, summary_len: *usize) pure
         summary_len.* = copyInto(summary, "Could not start the agent.");
         return .failed;
     };
+    if (plan.stdin) |text| {
+        if (!launch.feedPrompt(&process, text)) process.requestStop();
+    }
 
     // Keep only the last few KB of output; the closing line is the report.
     var window: [4096]u8 = undefined;
