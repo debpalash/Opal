@@ -201,6 +201,12 @@ pub const Pty = struct {
         return self.processRunning();
     }
 
+    /// Start ending the child without waiting; `close` finishes the job.
+    pub fn hangup(self: *Pty) void {
+        const p = self.process orelse return;
+        if (self.processRunning()) _ = k32.TerminateProcess(p, 1);
+    }
+
     /// Terminate the child tree and release every handle. Safe to call twice.
     /// Call it only once no other thread is reading or writing this `Pty`.
     pub fn close(self: *Pty) void {
