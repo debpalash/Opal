@@ -4483,7 +4483,10 @@ fn resolveAnimeCatalog(q: [256]u8, qlen: usize) void {
 }
 fn resolveMangaCatalog(q: [256]u8, qlen: usize) void {
     defer {
-        if (generationIsCurrent(worker_gen)) resolveComicFury(q[0..qlen]);
+        if (generationIsCurrent(worker_gen)) {
+            resolveComicFury(q[0..qlen]);
+            if (generationIsCurrent(worker_gen)) resolveInstalledWebcomics(q[0..qlen]);
+        }
         finishWorker(&status_manga_catalog, .done);
     }
     const pure = @import("comics_pure.zig");
@@ -4509,6 +4512,30 @@ fn resolveMangaCatalog(q: [256]u8, qlen: usize) void {
         if (item.name_len > 0 and item.url_len > 0) {
             _ = pushResult(item);
             n += 1;
+        }
+    }
+}
+fn resolveInstalledWebcomics(query: []const u8) void {
+    const comics = @import("webcomic_sources.zig");
+    const rows = alloc.alloc(comics.Item, 6) catch return;
+    defer alloc.free(rows);
+    for ([_]comics.Provider{ .xkcd, .smbc }) |provider| {
+        if (!generationIsCurrent(worker_gen)) return;
+        var base_buf: [512]u8 = undefined;
+        const base = @import("../core/source_config.zig").copyValue(@tagName(provider), "base", &base_buf) orelse continue;
+        const reply = comics.searchInto(provider, base, query, rows, workerCancellation());
+        if (!generationIsCurrent(worker_gen)) return;
+        noteWorkerOutcome(reply.status);
+        for (rows[0..reply.count]) |row| {
+            var item: ResolvedItem = .{ .source = .comics, .provider = search_view.Provider.init(@tagName(provider)) };
+            var display: [256]u8 = undefined;
+            copyField(&item.name, &item.name_len, if (provider == .xkcd) comics.pure.numberedTitle(&display, row.title[0..row.title_len], row.number) else row.title[0..row.title_len]);
+            copyField(&item.url, &item.url_len, row.route[0..row.route_len]);
+            copyField(&item.poster_url, &item.poster_url_len, row.image[0..row.image_len]);
+            copyField(&item.summary, &item.summary_len, row.summary[0..row.summary_len]);
+            copyField(&item.author, &item.author_len, if (provider == .xkcd) "Randall Munroe" else "Zach Weinersmith");
+            copyField(&item.detail, &item.detail_len, if (provider == .xkcd) "xkcd · Read full comic" else "SMBC · Recent publisher comics");
+            _ = pushResult(item);
         }
     }
 }

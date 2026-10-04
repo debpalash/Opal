@@ -59,7 +59,7 @@ def test_novels_reader():
         "render dispatch": '.Novels => @import("../services/novels.zig").renderContent()' in drawer,
         "rail nav entry": "renderRailTab(.Novels" in drawer,
         "shell label+icon": '.Novels => "Novels"' in shell and "book-marked" in shell,
-        "browse source picker": ".Novels" in shell and "browseSourcePicker(compact)" in shell,
+        "browse sidebar navigation": all(token in shell for token in ("renderSidebar(nav_layout)", "const READ_SOURCES", ".Novels", "sidebarSection(\"Read\", &READ_SOURCES", "state.app.browse_source = source", "state.app.router.navigate(.browse)")),
         # ── Service: async workers, chapter nav, resume ──
         "search worker": "pub fn searchNovels" in svc and "fn searchWorker" in svc,
         "chapter-list worker": "pub fn openNovel" in svc and "fn chaptersWorker" in svc,

@@ -23,9 +23,9 @@ async function loadAnime(generation = animeBrowseGeneration, polling = false){
     $('anime-more').style.display = data.has_more ? '' : 'none';
     if (data.loading && !polling) pollAnime(generation);
     return data;
-  } catch { if (generation === animeBrowseGeneration) $('anime-hint').textContent = 'Could not load anime. Try again.'; }
+  } catch { if (generation === animeBrowseGeneration) failBrowse('anime-results', 'anime-hint', 'Could not load anime. Try again.'); }
 }
-function renderAnime(d){ renderAnimeResults(d.results || []); renderAnimeEpisodes(d.episodes || [], d); }
+function renderAnime(d){ renderAnimeResults(d.results || [], d.loading); renderAnimeEpisodes(d.episodes || [], d); }
 $('anime-go').onclick = () => runAnime();
 $('anime-q').addEventListener('keydown', e => { if (e.key === 'Enter') { runAnime(); $('anime-q').blur(); } });
 async function runAnime(){
@@ -34,12 +34,12 @@ async function runAnime(){
   clearInterval(animeEpisodeWatch); ++animeEpisodeGeneration;
   clearInterval(animePlaybackWatch); clearInterval(animeWatch);
   $('anime-hint').textContent = 'Searching anime…';
-  $('anime-results').innerHTML = ''; lastHtml.animeResults = ''; $('anime-episodes').innerHTML = ''; lastHtml.animeEpisodes = '';
+  renderAnimeResults([], true); $('anime-episodes').innerHTML = ''; lastHtml.animeEpisodes = '';
   $('anime-more').style.display = 'none';
   try {
     await api('/anime/search?q=' + encodeURIComponent(q));
     if (generation === animeBrowseGeneration) pollAnime(generation);
-  } catch { if (generation === animeBrowseGeneration) $('anime-hint').textContent = 'Could not search anime. Try again.'; }
+  } catch { if (generation === animeBrowseGeneration) failBrowse('anime-results', 'anime-hint', 'Could not search anime. Try again.'); }
 }
 function pollAnime(generation){
   clearInterval(animeWatch);
@@ -47,13 +47,15 @@ function pollAnime(generation){
   animeWatch = settledInterval(async () => {
     const d = await loadAnime(generation, true);
     if (generation !== animeBrowseGeneration) return;
-    if (!d?.loading || ++ticks > 60) {
+    if (!d?.loading || ++ticks > BROWSE_POLL_LIMIT) {
       clearInterval(animeWatch);
-      if (d) $('anime-hint').textContent = (d.results || []).length + ' titles — choose one for episodes.';
+      if (d?.loading) failBrowse('anime-results', 'anime-hint', 'Still loading. Search again to retry.');
+      else if (d) $('anime-hint').textContent = (d.results || []).length + ' titles — choose one for episodes.';
     }
-  }, 900);
+  }, BROWSE_POLL_MS, true);
 }
-function renderAnimeResults(rs){
+function renderAnimeResults(rs, loading = false){
+  setBrowseBusy('anime-results', loading);
   const html = rs.map((r, i) => `
     <div class="card ${r.poster ? '' : 'poster-missing'}">
       ${r.poster ? `<img src="${esc(r.poster)}" alt="" loading="lazy" decoding="async">` : ''}
@@ -66,7 +68,7 @@ function renderAnimeResults(rs){
         <span>${esc([r.type, r.year || ''].filter(Boolean).join(' · '))}</span>
         ${r.score ? `<span class="rt">★ ${Number(r.score).toFixed(1)}</span>` : ''}
       </div>
-    </div>`).join('') || '<div class="empty">No results yet</div>';
+    </div>`).join('') || (loading ? browseLoadingHtml('poster') : '<div class="empty">No results yet</div>');
   if (html === lastHtml.animeResults) return;
   lastHtml.animeResults = html;
   $('anime-results').innerHTML = html;
@@ -150,7 +152,8 @@ function loadMusic(){
   const gen = ++musicGeneration;
   api('/music').then(d => {
     if (gen !== musicGeneration || currentPage !== 'music') return;
-    $('mu-source').value = String(d.source || 0); renderMusic(d.songs || []);
+    $('mu-source').value = String(d.source || 0); renderMusic(d.songs || [], d.loading);
+    if (d.loading) pollMusic(gen);
   }).catch(()=>{});
 }
 $('mu-source').onchange = async () => {
@@ -168,26 +171,32 @@ async function runMusic(){
   const q = $('mu-q').value.trim(); if (!q && $('mu-source').value !== '4') return;
   const gen = ++musicGeneration;
   $('mu-hint').innerHTML = '<span class="spin"></span> Searching music…';
-  $('mu-results').innerHTML = ''; lastHtml.music = '';
+  renderMusic([], true);
   clearInterval(muWatch);
   try { await api('/music/search?q=' + encodeURIComponent(q)); }
-  catch { $('mu-hint').textContent = 'Could not search music.'; return; }
+  catch { if (gen === musicGeneration) failBrowse('mu-results', 'mu-hint', 'Could not search music. Try again.'); return; }
   if (gen !== musicGeneration || currentPage !== 'music') return;
+  pollMusic(gen);
+}
+function pollMusic(gen){
+  clearInterval(muWatch);
   let ticks = 0;
   muWatch = settledInterval(async () => {
     ticks++;
     try {
       const d = await api('/music');
       if (gen !== musicGeneration || currentPage !== 'music') return;
-      renderMusic(d.songs || []);
-      if ((!d.loading && ticks > 2) || ticks > 40) {
+      renderMusic(d.songs || [], d.loading);
+      if (!d.loading || ticks > 120) {
         clearInterval(muWatch);
-        $('mu-hint').textContent = (d.songs || []).length + ' songs.';
+        if (d.loading) failBrowse('mu-results', 'mu-hint', 'Still loading. Search again to retry.');
+        else $('mu-hint').textContent = (d.songs || []).length + ' songs.';
       }
-    } catch { clearInterval(muWatch); }
-  }, 900);
+    } catch { if (gen === musicGeneration) { clearInterval(muWatch); failBrowse('mu-results', 'mu-hint', 'Could not load music. Try again.'); } }
+  }, BROWSE_POLL_MS, true);
 }
-function renderMusic(songs){
+function renderMusic(songs, loading = false){
+  setBrowseBusy('mu-results', loading);
   const html = songs.map((s, i) => `
     <div class="result">
       <div class="t">${esc(s.title)}</div>
@@ -196,7 +205,7 @@ function renderMusic(songs){
         <button class="music-details" data-details="${i}">Details</button>
         ${s.url ? `<button class="queue-btn" data-queue="${i}">Queue</button>` : ''}
         <button class="play" data-destination-verb="Play" data-i="${i}" data-track-id="${encodeURIComponent(s.id || '')}" data-source="${Number(s.source)}" data-url="${encodeURIComponent(s.url || '')}">${destinationActionLabel('Play')}</button></div>
-    </div>`).join('') || '<div class="empty">No songs yet</div>';
+    </div>`).join('') || (loading ? browseLoadingHtml('row') : '<div class="empty">No songs yet</div>');
   if (html === lastHtml.music) return;
   lastHtml.music = html;
   $('mu-results').innerHTML = html;
@@ -233,24 +242,38 @@ let novelIdx = 0;
 // ── Comics: search → reader ──
 // Pages come from /api/comics/page?i=N, which takes the token in the query
 // because <img> cannot send an Authorization header (same as /poster).
+function renderComicSources(d){
+  const picker = $('cx-source'); if (!picker) return;
+  const rows = [{id:'all',name:'All sources'}];
+  if (d.xkcd_installed) rows.push({id:'xkcd',name:'xkcd · archive / number'});
+  if (d.smbc_installed) rows.push({id:'smbc',name:'SMBC · recent comics'});
+  const markup = rows.map(r => `<option value="${r.id}">${esc(r.name)}</option>`).join('');
+  if (picker.innerHTML !== markup) picker.innerHTML = markup;
+  picker.value = rows.some(r => r.id === d.source) ? d.source : 'all';
+  picker.hidden = rows.length === 1;
+}
 async function refreshComics(generation = comicSearchGeneration){
   const d = await api('/comics/results');
   if (generation !== comicSearchGeneration) return d;
-  renderComics(d.results || []);
+  renderComicSources(d);
+  renderComics(d.results || [], d.loading);
   $('cx-more').style.display = d.has_more ? '' : 'none';
   $('cx-hint').textContent = d.loading ? 'Loading comics…' : `${(d.results || []).length} results.`;
   return d;
 }
 function loadComics(){ pollComics(++comicSearchGeneration); }
 async function runComics(){
-  const q = $('cx-q').value.trim(); if (!q) return;
+  const q = $('cx-q').value.trim();
+  const source = $('cx-source')?.value || 'all';
+  if (!q && source === 'all') return;
   const generation = ++comicSearchGeneration;
   clearInterval(cxWatch);
   $('cx-hint').textContent = 'Searching…';
+  renderComics([], true);
   try {
-    await api('/comics/search?q=' + encodeURIComponent(q));
+    await api('/comics/search?q=' + encodeURIComponent(q) + '&source=' + encodeURIComponent(source));
     if (generation === comicSearchGeneration) pollComics(generation);
-  } catch { if (generation === comicSearchGeneration) $('cx-hint').textContent = 'Could not search comics. Try again.'; }
+  } catch { if (generation === comicSearchGeneration) failBrowse('cx-results', 'cx-hint', 'Could not search comics. Try again.'); }
 }
 function pollComics(generation){
   clearInterval(cxWatch);
@@ -259,11 +282,15 @@ function pollComics(generation){
     try {
       const d = await refreshComics(generation);
       if (generation !== comicSearchGeneration) return;
-      if (!d.loading || ++ticks > 60) clearInterval(cxWatch);
+      if (!d.loading || ++ticks > BROWSE_POLL_LIMIT) {
+        clearInterval(cxWatch);
+        if (d.loading) failBrowse('cx-results', 'cx-hint', 'Still loading. Search again to retry.');
+      }
     } catch { if (generation === comicSearchGeneration) { clearInterval(cxWatch); $('cx-hint').textContent = 'Could not load comics. Try again.'; } }
-  }, 900);
+  }, BROWSE_POLL_MS, true);
 }
-function renderComics(rows){
+function renderComics(rows, loading = false){
+  setBrowseBusy('cx-results', loading);
   const html = rows.map((r, i) => `
     <div class="card ${r.cover ? '' : 'poster-missing'}">
       ${r.cover ? `<img src="${esc(r.cover)}" alt="" loading="lazy" decoding="async">` : ''}
@@ -272,7 +299,7 @@ function renderComics(rows){
         <button class="play" data-cx="${encodeURIComponent(r.url)}" aria-label="Read ${esc(r.title)}">Read</button>
       </div>
       <div class="cap" title="${esc(r.title)}">${esc(r.title)}</div>
-    </div>`).join('') || '<div class="empty">No comics found. Try another title or source.</div>';
+    </div>`).join('') || (loading ? browseLoadingHtml('poster') : '<div class="empty">No comics found. Try another title or source.</div>');
   if (html === lastHtml.comics) return;
   lastHtml.comics = html;
   $('cx-results').innerHTML = html;
@@ -372,7 +399,8 @@ function closeComic(){
 function loadNovels(){ pollNovels(); }
 function runNovels(){
   const q = $('nv-q').value.trim(); if (!q) return;
-  $('nv-hint').innerHTML = '<span class="spin"></span> Searching…';
+  $('nv-hint').textContent = 'Searching…';
+  renderNovels({view:'search', results:[], loading:true});
   novelAction('/novels/search?q=' + encodeURIComponent(q));
 }
 async function novelAction(path){
@@ -396,17 +424,18 @@ function pollNovels(){
       if (generation !== novelGeneration) return;
       renderNovels(d);
       const busy = d.loading || d.chapters_loading || d.text_loading || d.loading_more;
-      if (!busy && ticks > 1) clearInterval(nvWatch);
+      if (!busy || ticks > BROWSE_POLL_LIMIT) { clearInterval(nvWatch); if (busy) failBrowse('nv-results', 'nv-hint', 'Still loading. Try again.'); }
     } catch {
       if (generation === novelGeneration) {
         clearInterval(nvWatch);
         $('nv-hint').textContent = 'Could not load novels. Try again.';
       }
     }
-  }, 900);
+  }, BROWSE_POLL_MS, true);
 }
 function renderNovels(d){
   const busy = d.loading || d.chapters_loading || d.text_loading || d.loading_more;
+  setBrowseBusy('nv-results', busy);
   let more = $('nv-more');
   if (!more) {
     more = document.createElement('button');
@@ -452,7 +481,7 @@ function renderNovels(d){
       ${r.overview ? `<div class="m" title="${esc(r.overview)}">${esc(r.overview.slice(0, 180))}${r.overview.length > 180 ? '…' : ''}</div>` : ''}
       <div class="m"><button class="novel-details" data-details="${i}" data-kind="${kind}">Details</button>
         <button class="play" data-nv="${i}" data-kind="${kind}">${kind === 'open' ? 'Open' : 'Read'}</button></div>
-    </div>`).join('') || '<div class="empty">Nothing here</div>';
+    </div>`).join('') || (busy ? browseLoadingHtml('row') : '<div class="empty">Nothing here</div>');
   if (!setSafeHtml(target, html)) return;
   target.querySelectorAll('button[data-nv]').forEach(b => {
     b.onclick = () => {
@@ -472,37 +501,43 @@ function renderNovels(d){
 }
 
 // ── Drama (browse-only: drama.zig has no search entry point) ──
-async function refreshDrama(){
+let dramaGeneration = 0;
+async function refreshDrama(generation = dramaGeneration){
   const d = await api('/drama');
+  if (generation !== dramaGeneration) return d;
   if (d.needs_tmdb_key) {
     $('dr-hint').textContent = 'Add a TMDB API key in Setup — the drama catalog is TMDB-backed.';
     $('dr-more').style.display = 'none';
     return d;
   }
-  renderDrama(d.results || []);
+  renderDrama(d.results || [], d.loading);
   $('dr-more').style.display = d.has_more ? '' : 'none';
   return d;
 }
 function loadDrama(){
+  const generation = ++dramaGeneration;
   clearInterval(drWatch);
   let ticks = 0;
   const tick = async () => {
     ticks++;
     try {
-      const d = await refreshDrama();
+      const d = await refreshDrama(generation);
+      if (generation !== dramaGeneration) return;
       if (d.needs_tmdb_key) {
         clearInterval(drWatch);
         return;
       }
-      if ((!d.loading && ticks > 1) || ticks > 40) {
+      if (!d.loading || ticks > 120) {
         clearInterval(drWatch);
-        $('dr-hint').textContent = (d.results || []).length + ' titles.';
+        if (d.loading) failBrowse('dr-results', 'dr-hint', 'Still loading. Try again.');
+        else $('dr-hint').textContent = (d.results || []).length + ' titles.';
       }
-    } catch { clearInterval(drWatch); }
+    } catch { if (generation === dramaGeneration) { clearInterval(drWatch); failBrowse('dr-results', 'dr-hint', 'Could not load Asian dramas. Try again.'); } }
   };
-  drWatch = settledInterval(tick, 900, true);
+  drWatch = settledInterval(tick, BROWSE_POLL_MS, true);
 }
-function renderDrama(rows){
+function renderDrama(rows, loading = false){
+  setBrowseBusy('dr-results', loading);
   const html = rows.map((r, i) => `
     <div class="card ${r.poster_path ? '' : 'poster-missing'}">
       ${r.poster_path ? `<img src="https://image.tmdb.org/t/p/w342${esc(r.poster_path)}" alt="" loading="lazy" decoding="async">` : ''}
@@ -515,7 +550,7 @@ function renderDrama(rows){
         <span>${esc(r.year || 'TV series')}</span>
         ${r.vote ? `<span class="rt">★ ${Number(r.vote).toFixed(1)}</span>` : ''}
       </div>
-    </div>`).join('') || '<div class="empty">No titles yet</div>';
+    </div>`).join('') || (loading ? browseLoadingHtml('poster') : '<div class="empty">No titles yet</div>');
   if (html === lastHtml.drama) return;
   lastHtml.drama = html;
   $('dr-results').innerHTML = html;
@@ -532,29 +567,37 @@ function renderDrama(rows){
 }
 
 // ── VNDB (catalog only — visual novels aren't launchable) ──
-function loadVndb(){ pollVndb(); }
-function runVndb(){
+let vndbGeneration = 0;
+function loadVndb(){ pollVndb(++vndbGeneration); }
+async function runVndb(){
   const q = $('vn-q').value.trim(); if (!q) return;
-  $('vn-hint').innerHTML = '<span class="spin"></span> Searching…';
-  api('/vndb/search?q=' + encodeURIComponent(q)).catch(()=>{});
-  pollVndb();
+  const generation = ++vndbGeneration;
+  clearInterval(vnWatch);
+  $('vn-hint').textContent = 'Searching…';
+  renderVndb([], true);
+  try {
+    await api('/vndb/search?q=' + encodeURIComponent(q));
+    if (generation === vndbGeneration) pollVndb(generation);
+  } catch { if (generation === vndbGeneration) failBrowse('vn-results', 'vn-hint', 'Could not search visual novels. Try again.'); }
 }
-function pollVndb(){
+function pollVndb(generation = vndbGeneration){
   clearInterval(vnWatch);
   let ticks = 0;
   vnWatch = settledInterval(async () => {
-    ticks++;
     try {
       const d = await api('/vndb');
-      renderVndb(d.results || []);
-      if ((!d.loading && ticks > 1) || ticks > 40) {
+      if (generation !== vndbGeneration) return;
+      renderVndb(d.results || [], d.loading);
+      if (!d.loading || ++ticks > 120) {
         clearInterval(vnWatch);
-        $('vn-hint').textContent = (d.results || []).length + (d.popular ? ' popular' : '') + ' titles.';
+        if (d.loading) failBrowse('vn-results', 'vn-hint', 'Still loading. Search again to retry.');
+        else $('vn-hint').textContent = (d.results || []).length + (d.popular ? ' popular' : '') + ' titles.';
       }
-    } catch { clearInterval(vnWatch); }
-  }, 900);
+    } catch { if (generation === vndbGeneration) { clearInterval(vnWatch); failBrowse('vn-results', 'vn-hint', 'Could not load visual novels. Try again.'); } }
+  }, BROWSE_POLL_MS, true);
 }
-function renderVndb(rows){
+function renderVndb(rows, loading = false){
+  setBrowseBusy('vn-results', loading);
   const html = rows.map((r, i) => `
     <div class="result">
       ${r.cover ? `<img class="thumb" src="${esc(r.cover)}" alt="" loading="lazy">` : ''}
@@ -565,7 +608,7 @@ function renderVndb(rows){
         <button class="vndb-details" data-details="${i}">Details</button>
       </div>
       <div class="sub">${esc((r.description || '').slice(0, 220))}</div>
-    </div>`).join('') || '<div class="empty">No titles yet</div>';
+    </div>`).join('') || (loading ? browseLoadingHtml('row') : '<div class="empty">No titles yet</div>');
   if (html === lastHtml.vndb) return;
   lastHtml.vndb = html;
   $('vn-results').innerHTML = html;
@@ -682,12 +725,13 @@ function pollOpds(){
     try {
       const d = await api('/opds');
       renderOpds(d);
-      if ((!d.loading && ticks > 1) || ticks > 40) clearInterval(opWatch);
+      if (!d.loading || ticks > 120) clearInterval(opWatch);
     } catch { clearInterval(opWatch); }
   };
-  opWatch = settledInterval(tick, 900, true);
+  opWatch = settledInterval(tick, BROWSE_POLL_MS, true);
 }
 function renderOpds(d){
+  setBrowseBusy('opds-results', d.loading);
   $('opds-login').style.display = d.connected ? 'none' : '';
   $('opds-session').hidden = !d.connected;
   if (!d.connected && d.server && !$('opds-server').value) $('opds-server').value = d.server;
@@ -697,26 +741,38 @@ function renderOpds(d){
   }
   $('opds-hint').innerHTML = d.loading ? '<span class="spin"></span> Loading…'
     : (d.error ? esc(d.message || 'Connection failed') : (d.connected ? (d.feed || '') : 'Point this at any OPDS catalog (Komga, Kavita, Calibre-Web, LANraragi).'));
-  $('opds-crumbs').innerHTML = d.depth > 0 ? '<button class="more" id="opds-back">‹ Back</button>' : '';
+  $('opds-crumbs').innerHTML = d.depth > 0 ? '<button class="more" id="opds-back">‹ Back</button>' : d.discovery ? `<span class="src">Discover</span>${(d.categories || []).map(c => `<button class="more" data-opds-category="${Number(c.index)}">${esc(c.title)}</button>`).join('')}` : '';
+  $('opds-crumbs').querySelectorAll('[data-opds-category]').forEach(button => button.onclick = async () => {
+    try { await apiMutation('/opds/category?idx=' + button.dataset.opdsCategory); pollOpds(); }
+    catch { $('opds-hint').textContent = 'Could not load this collection. Try again.'; }
+  });
   if ($('opds-back')) $('opds-back').onclick = () => { apiMutation('/opds/back').catch(()=>{}); pollOpds(); };
   const target = $('opds-results');
   const html = (d.entries || []).map((e, i) => `
     <div class="result">
+      ${unifiedArtwork(e.cover) ? `<img class="thumb" src="${esc(unifiedArtwork(e.cover))}" alt="" loading="lazy" decoding="async">` : ''}
       <div class="t">${esc(e.title)}</div>
+      ${e.author ? `<div class="m">${esc(e.author)}</div>` : ''}
       <div class="m">
-        ${e.nav ? '<span class="src">folder</span>' : ''}
+        ${e.gutenberg ? '<span class="src">Project Gutenberg</span>' : e.nav ? '<span class="src">folder</span>' : ''}
         ${e.streamable ? `<span class="src">${e.pages} pages</span>` : ''}
         <button class="opds-details" data-details="${i}">Details</button>
-        <button class="play" data-i="${i}">${e.nav ? 'Open' : 'Read'}</button></div>
-    </div>`).join('') || (d.connected ? '<div class="empty">Empty feed</div>' : '');
+        <button class="play" data-i="${i}">${e.gutenberg || !e.nav ? 'Read' : 'Open'}</button></div>
+    </div>`).join('') || (d.loading ? browseLoadingHtml('row') : d.connected ? '<div class="empty">Empty feed</div>' : '');
   if (!setSafeHtml(target, html)) return;
   target.querySelectorAll('button[data-i]').forEach(b => {
-    b.onclick = () => { apiMutation('/opds/open?idx=' + b.dataset.i).catch(()=>{}); pollOpds(); };
+    b.onclick = async () => {
+      try {
+        await apiMutation('/opds/open?idx=' + b.dataset.i + (Number.isSafeInteger(d.generation) ? '&generation=' + d.generation : ''));
+        if ((d.entries || [])[Number(b.dataset.i)]?.gutenberg) openPage('novels');
+        else pollOpds();
+      } catch { $('opds-hint').textContent = 'Could not open this book. Try again.'; }
+    };
   });
   target.querySelectorAll('.opds-details').forEach(button => {
     const entry = (d.entries || [])[Number(button.dataset.details)] || {};
     button.onclick = () => openSourceDetails('OPDS', {
-      ...entry, name:entry.title, type:entry.nav ? 'Collection' : (entry.type || 'Publication'),
+      ...entry, name:entry.title, type:entry.gutenberg ? 'Book' : entry.nav ? 'Collection' : (entry.type || 'Publication'),
       meta:entry.streamable ? `${entry.pages} pages` : '', index:Number(button.dataset.details),
     }, button);
   });
@@ -756,10 +812,10 @@ function renderPlex(d){
   const browsing = (d.depth || 0) > 0 || items;
   $('plex-crumbs').innerHTML = (d.depth || 0) > 0
     ? '<button class="more" id="plex-back">‹ Back</button>'
-    : (d.sections || []).map((section, i) => `<button class="more${i === d.active_section ? ' on' : ''}" data-plex-section="${i}">${esc(section.title)}</button>`).join('');
+    : (d.sections || []).map((section, i) => `<button class="more${i === d.active_section ? ' on' : ''}" data-plex-section="${esc(section.key || '')}">${esc(section.title)}</button>`).join('');
   if ($('plex-back')) $('plex-back').onclick = () => { apiMutation('/plex/back').catch(()=>{}); pollPlex(); };
   $('plex-crumbs').querySelectorAll('[data-plex-section]').forEach(button => {
-    button.onclick = () => { apiMutation('/plex/open?idx=' + button.dataset.plexSection).catch(()=>{}); pollPlex(); };
+    button.onclick = () => { apiMutation('/plex/open?key=' + encodeURIComponent(button.dataset.plexSection)).catch(()=>{}); pollPlex(); };
   });
   const rows = browsing ? (d.items || []) : (d.sections || []);
   const target = $('plex-results');
@@ -784,7 +840,7 @@ function renderPlex(d){
       const row = rows[Number(b.dataset.i)] || {};
       const request = browsing
         ? apiMutation('/plex/' + (row.folder ? 'open_item' : 'play') + '?id=' + encodeURIComponent(b.dataset.id))
-        : apiMutation('/plex/open?idx=' + b.dataset.i);
+        : apiMutation('/plex/open?key=' + encodeURIComponent(row.key || ''));
       request.catch(()=>{}); pollPlex();
     };
   });
@@ -937,3 +993,5 @@ function handlePosterFailure(image){
   card.classList.add('poster-missing');
 }
 document.addEventListener('error', event => handlePosterFailure(event.target), true);
+
+if ($('cx-source')) $('cx-source').onchange = () => { runComics(); };

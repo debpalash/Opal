@@ -18,8 +18,9 @@ services:
     image: opal:headless
     restart: unless-stopped
     environment:
-      # Triggers state.app.is_headless -> JSON API binds 0.0.0.0 (see T6).
+      # Explicit container binding; host publication stays loopback.
       OPAL_HEADLESS: "1"
+      OPAL_WEB_BIND: "lan"
     ports:
       # Host-loopback by default. Put Caddy/Tailscale in front for remote use.
       - "127.0.0.1:41595:41595" # web UI + JSON API (single port)

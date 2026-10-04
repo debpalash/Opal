@@ -190,12 +190,13 @@ def test_deploy_profiles():
     doc = rd("docs/headless-deploy.md")
     checks = {
         "caddy compose": "caddy:2" in tls and "opal" in tls and "443:443" in tls,
-        "caddyfile proxies opal": "reverse_proxy opal:41595" in caddy and "{$DOMAIN}" in caddy,
+        "caddyfile proxies opal": "reverse_proxy 127.0.0.1:41595" in caddy and "{$DOMAIN}" in caddy,
         "tailscale sidecar": "tailscale/tailscale" in ts and "network_mode: service:tailscale" in ts
             and "TS_AUTHKEY" in ts,
         "tailscale serve → opal": "127.0.0.1:41595" in serve and "TS_CERT_DOMAIN" in serve,
         # Opal not directly published in the TLS profile (Caddy is the face).
-        "opal internal in tls": "expose:" in tls,
+        "opal shares TLS proxy loopback": "network_mode: service:caddy" in tls
+            and 'OPAL_HTTPS_PROXY: "1"' in tls and 'OPAL_HTTPS_PROXY: "1"' in ts,
         "docs cover access": "docker-compose.tls.yml" in doc and "docker-compose.tailscale.yml" in doc
             and "First-admin bootstrap" in doc and "X-Opal-Setup-Token" in doc,
         "proxy profiles require local bootstrap": (

@@ -4,11 +4,14 @@ These checks are deliberately labelled as source-wiring tests. Runtime and
 socket behavior belongs to the opt-in live test tier.
 """
 import os
+import subprocess
+import sys
+from pathlib import Path
 
 from .harness import *  # noqa: F401,F403
 
 
-@test("Architecture boundaries are documented and enforced", "Architecture")
+@test("Architecture documentation and presentation import boundaries", "Architecture")
 def test_architecture_boundaries():
     doc = _src("docs/architecture.md")
     checks = {
@@ -22,7 +25,13 @@ def test_architecture_boundaries():
     missing = [name for name, ok in checks.items() if not ok]
     if missing:
         return "fail", "architecture documentation missing: " + ", ".join(missing)
-    return "pass", "dependency direction, headless seam, reference vertical, and lock order documented"
+    result = subprocess.run([sys.executable, "scripts/check_architecture.py"], cwd=PROJECT_DIR, capture_output=True, text=True)
+    if result.returncode:
+        return "fail", result.stdout + result.stderr
+    tests = subprocess.run([sys.executable, "tests/test_architecture_boundaries.py"], cwd=PROJECT_DIR, capture_output=True, text=True)
+    if tests.returncode:
+        return "fail", tests.stdout + tests.stderr
+    return "pass", "actual imports checked against explicit migration exceptions; gate regression tests pass"
 
 
 
@@ -63,3 +72,28 @@ def test_feature_store_snapshots():
     if missing:
         return "fail", "feature snapshot regression(s): " + ", ".join(missing)
     return "pass", "generation-tagged Podcast/Jellyfin projections isolate UI and HTTP readers"
+
+
+@test("Playback completion has a shared desktop and headless owner", "Architecture")
+def test_playback_owner():
+    call = '@import("application/playback_update.zig").tick();'
+    for path in ("src/main.zig", "src/headless.zig"):
+        if _src(path).count(call) != 1:
+            return "fail", f"{path} must invoke the common playback owner exactly once"
+    pump = _src("src/application/playback_update.zig")
+    for operation in ("drainResolved", "drainTranscodeRecovery", "tickNowPlaying"):
+        if operation not in pump:
+            return "fail", "missing playback completion: " + operation
+    return "pass", "both composition roots share playback completion and recovery"
+
+
+@test("HLS upgrades escape old immutable browser caches", "Architecture")
+def test_hls_cache_upgrade():
+    import hashlib
+    version = hashlib.sha256(Path(PROJECT_DIR, "web/vendor/hls.min.js").read_bytes()).hexdigest()[:12]
+    asset = "/vendor/hls.min.js?v=" + version
+    if asset not in _src("web/index.html") or asset not in _src("web/service-worker.js"):
+        return "fail", "shell and offline cache must reference the current HLS content fingerprint"
+    if ".cache = .immutable" in _src("src/services/remote_static.zig"):
+        return "fail", "unversioned asset routes must revalidate"
+    return "pass", "HLS content version changes its browser cache key; stable routes revalidate"

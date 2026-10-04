@@ -178,20 +178,20 @@ def test_responsive_shell_tiers():
         "resize reads live window": "const window_rect = dvui.windowRect()" in sh
             and "root.data().rect.w" not in sh,
         "breakpoint swap converges": "last_tier" in sh and "dvui.refresh(null" in sh,
-        "compact destinations remain reachable": all(label in sh for label in
-            ('"Watching"', '"Queue"', '"History"', '"Plugins"', '"Logs"', '"Settings"')),
-        "single row destinations remain keyboard menus": "renderBottomTabs(" not in sh and "browseSourcePicker(compact);" in sh
+        "compact destinations remain reachable": all(route in sh for route in
+            (".watching", ".queue", ".history", ".plugins", ".system", ".settings")),
+        "sidebar destinations remain keyboard buttons": "renderBottomTabs(" not in sh and "renderSidebar(nav_layout);" in sh
             and 'const labels = [_][]const u8{ "Home", "All content", "Watching" }' in sh
-            and "dvui.menuItemLabel(" in sh,
+            and "button.processEvents()" in sh and "button.drawFocus()" in sh,
         "lyrics stack below narrow player": "lyrics_below" in sh and ".bottom else .side" in sh,
         "lyrics panel adapts both axes": "LyricsPanelPlacement" in ly and "panel_h" in ly and "panel_w" in ly,
         "dialogs fit the live window": "pub fn fitWindowSize(" in _src("src/ui/theme.zig")
             and "fitWindowSize(" in _src("src/ui/command_palette.zig")
             and "fitWindowSize(" in _src("src/ui/metadata_dialog.zig"),
-        "source popup follows theme": "fn browseSourceSelect(" in sh
-            and "dvui.floatingMenu(" in sh
-            and "color_fill = theme.colors.bg_surface" in sh
-            and "dvui.dropdown(@src(), labels" not in sh,
+        "sidebar follows theme and bounded layout": "sidebar_layout.layout(live_width" in sh
+            and "fn renderSidebar(" in sh and "color_fill = theme.colors.bg_app" in sh
+            and "color_fill = if (active) theme.colors.bg_elevated" in sh,
+
     }
     missing = [name for name, ok in checks.items() if not ok]
     if missing:
@@ -489,19 +489,23 @@ def test_sub_picker_keyless_results():
 @test("Anime Tab Honors NSFW Filter", "Page Shell")
 def test_anime_nsfw_filter():
     # Settings › NSFW toggle must govern anime browsing, not just search:
-    # every Jikan grid URL carries sfw=true and the parser drops Rx/R+ rated
-    # entries (anime_pure.jikanRatingIsAdult, unit-tested).
+    # Grid and fallback URL builders use the shared SFW transport policy;
+    # the parser independently drops Rx/R+ rated entries under the flag.
     anime = open(os.path.join(PROJECT_DIR, "src/services/anime.zig")).read()
     if "sfwSuffix(state.app.nsfw_filter_enabled)" not in anime:
         return "fail", "Jikan URLs no longer append the sfw param from the NSFW toggle"
-    if anime.count("sfwSuffix(state.app.nsfw_filter_enabled)") < 15:
-        return "fail", "some Jikan grid URL sites lost the sfw param (expected 15+)"
+    urls = _between(anime, "fn buildGridUrl(", "fn loadMoreGrid(")
+    for endpoint in ("/seasons/now", "/seasons/upcoming", "/schedules", "sfwSuffix(state.app.nsfw_filter_enabled)"):
+        if endpoint not in urls:
+            return "fail", "owned grid URL lost NSFW policy: " + endpoint
+    if "sfwSuffix(job.sfw)" not in anime or "sfw: bool" not in anime:
+        return "fail", "worker fallback lost copied NSFW policy"
     if "jikanRatingIsAdult(obj_slice)" not in anime:
         return "fail", "parser no longer drops Rx/R+ entries when the filter is on"
     build = open(os.path.join(PROJECT_DIR, "build.zig")).read()
     if "anime_pure.zig" not in build:
         return "fail", "anime_pure tests unregistered from zig build test"
-    return "pass", "sfw=true on all Jikan URLs + Rx/R+ parser drop, gated on the toggle"
+    return "pass", "Shared SFW URL policy and copied fallback flag; Rx/R+ parser drop remains setting-gated"
 
 
 @test("NSFW Control Is Settings-Only", "Page Shell")
@@ -518,7 +522,9 @@ def test_nsfw_settings_only():
     offenders = []
     for rel in ("src/services/search.zig", "src/services/anime.zig",
                 "src/services/vndb.zig", "src/services/iptv.zig"):
-        if flip in open(os.path.join(PROJECT_DIR, rel)).read():
+        # Stateful regression fixtures may temporarily set and restore the flag.
+        production = open(os.path.join(PROJECT_DIR, rel)).read().split('\ntest "', 1)[0]
+        if flip in production:
             offenders.append(rel)
     if offenders:
         return "fail", "browse tab still flips the NSFW flag (settings-only): " + ", ".join(offenders)

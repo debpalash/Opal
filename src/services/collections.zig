@@ -67,9 +67,8 @@ pub fn saveQueue(name_raw: []const u8) bool {
     if (!validName(name)) return false;
     var items: [MAX_ITEMS]queue.QueueItem = undefined;
     const count = queue.snapshotItems(&items);
-    db.exec("BEGIN IMMEDIATE");
-    var committed = false;
-    defer if (!committed) db.exec("ROLLBACK");
+    var transaction = db.beginTransaction() catch return false;
+    defer transaction.deinit();
     const upsert = db.prepare(
         "INSERT INTO media_collections(name,updated_at) VALUES(?1,strftime('%s','now')) " ++
             "ON CONFLICT(name) DO UPDATE SET updated_at=excluded.updated_at",
@@ -95,8 +94,7 @@ pub fn saveQueue(name_raw: []const u8) bool {
         db.bindText(stmt, 6, item.thumb_url[0..item.thumb_url_len]);
         if (db.step(stmt) != db.c.SQLITE_DONE) return false;
     }
-    db.exec("COMMIT");
-    committed = true;
+    transaction.commit() catch return false;
     return true;
 }
 

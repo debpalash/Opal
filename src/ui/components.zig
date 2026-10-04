@@ -91,6 +91,11 @@ fn fontAt(size: f32) dvui.Font {
 // ══════════════════════════════════════════════════════════════════════
 
 var cover_skeleton_timer_armed: bool = false;
+var skeleton_count_for_test: usize = 0;
+pub fn skeletonStateForTest() struct { count: usize, animated: bool } {
+    if (!@import("builtin").is_test) @compileError("Skeleton observation is test-only");
+    return .{ .count = skeleton_count_for_test, .animated = cover_skeleton_timer_armed };
+}
 var worker_poll_timer_armed: bool = false;
 var waiting_timer_armed: bool = false;
 
@@ -108,6 +113,7 @@ pub fn beginFrame() void {
     divider_seq = 0;
     statuspill_seq = 0;
     cover_skeleton_timer_armed = false;
+    if (@import("builtin").is_test) skeleton_count_for_test = 0;
     worker_poll_timer_armed = false;
     waiting_timer_armed = false;
 }
@@ -137,11 +143,11 @@ pub fn animatedRefresh(interval_us: i32) void {
 /// Animated cover placeholder shared by every browse surface. One timer drives
 /// all visible cards, keeping large grids smooth without one timer per tile.
 pub fn coverSkeleton(src: std.builtin.SourceLocation, id_extra: usize, radius: f32) void {
+    if (@import("builtin").is_test) skeleton_count_for_test += 1;
     const now_ms: i64 = @intCast(@divFloor(dvui.frameTimeNS(), std.time.ns_per_ms));
-    const phase = @as(f32, @floatFromInt(@mod(now_ms, 1400))) / 1400.0;
-    const glow = @import("theme_pure.zig").pulse(@floatFromInt(@mod(now_ms, 1400)), 1400);
+    const motion = @import("theme_pure.zig").skeletonMotion(now_ms, @import("../core/state.zig").app.reduce_motion);
 
-    if (!cover_skeleton_timer_armed) {
+    if (motion.animate and !cover_skeleton_timer_armed) {
         cover_skeleton_timer_armed = true;
         const timer_id = dvui.Id.extendId(null, @src(), 0);
         if (dvui.timerDoneOrNone(timer_id)) dvui.timer(timer_id, 40_000);
@@ -154,7 +160,7 @@ pub fn coverSkeleton(src: std.builtin.SourceLocation, id_extra: usize, radius: f
         .id_extra = id_extra,
         .expand = .both,
         .background = true,
-        .color_fill = mixColor(theme.colors.bg_elevated, theme.colors.bg_hover, 0.18 + glow * 0.18),
+        .color_fill = mixColor(theme.colors.bg_elevated, theme.colors.bg_hover, 0.18 + motion.glow * 0.18),
         .corner_radius = dvui.Rect.all(radius),
     });
     base.deinit();
@@ -169,7 +175,7 @@ pub fn coverSkeleton(src: std.builtin.SourceLocation, id_extra: usize, radius: f
         .corner_radius = dvui.Rect.all(radius),
         .min_size_content = .{ .w = 34, .h = 1 },
         .max_size_content = .{ .w = 34, .h = std.math.floatMax(f32) },
-        .gravity_x = phase,
+        .gravity_x = motion.phase,
     });
     band.deinit();
 }

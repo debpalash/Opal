@@ -11,7 +11,7 @@ const alloc = @import("../core/alloc.zig").allocator;
 const sync = @import("../core/sync.zig");
 const pure = @import("remote_static_pure.zig");
 
-const Cache = enum { no_store, revalidate, immutable };
+const Cache = enum { no_store, revalidate };
 
 const Asset = struct {
     route: []const u8,
@@ -35,13 +35,14 @@ const assets = [_]Asset{
     .{ .route = "/js/integrations.js", .bundled = "js/integrations.js", .dev = "web/js/integrations.js", .content_type = "application/javascript", .cache = .revalidate },
     .{ .route = "/js/access.js", .bundled = "js/access.js", .dev = "web/js/access.js", .content_type = "application/javascript", .cache = .revalidate },
     .{ .route = "/js/source-management.js", .bundled = "js/source-management.js", .dev = "web/js/source-management.js", .content_type = "application/javascript", .cache = .revalidate },
+    .{ .route = "/js/browse-loading.js", .bundled = "js/browse-loading.js", .dev = "web/js/browse-loading.js", .content_type = "application/javascript", .cache = .revalidate },
     .{ .route = "/js/media.js", .bundled = "js/media.js", .dev = "web/js/media.js", .content_type = "application/javascript", .cache = .revalidate },
     .{ .route = "/js/source-details.js", .bundled = "js/source-details.js", .dev = "web/js/source-details.js", .content_type = "application/javascript", .cache = .revalidate },
     .{ .route = "/js/discovery.js", .bundled = "js/discovery.js", .dev = "web/js/discovery.js", .content_type = "application/javascript", .cache = .revalidate },
     .{ .route = "/js/boot.js", .bundled = "js/boot.js", .dev = "web/js/boot.js", .content_type = "application/javascript", .cache = .revalidate },
-    .{ .route = "/icon.svg", .bundled = "icon.svg", .dev = "assets/logo.svg", .content_type = "image/svg+xml", .cache = .immutable },
-    .{ .route = "/favicon.ico", .bundled = "icon.svg", .dev = "assets/logo.svg", .content_type = "image/svg+xml", .cache = .immutable },
-    .{ .route = "/vendor/hls.min.js", .bundled = "vendor/hls.min.js", .dev = "web/vendor/hls.min.js", .content_type = "application/javascript", .cache = .immutable },
+    .{ .route = "/icon.svg", .bundled = "icon.svg", .dev = "assets/logo.svg", .content_type = "image/svg+xml", .cache = .revalidate },
+    .{ .route = "/favicon.ico", .bundled = "icon.svg", .dev = "assets/logo.svg", .content_type = "image/svg+xml", .cache = .revalidate },
+    .{ .route = "/vendor/hls.min.js", .bundled = "vendor/hls.min.js", .dev = "web/vendor/hls.min.js", .content_type = "application/javascript", .cache = .revalidate },
 };
 
 /// One asset's bytes, read at most once per process in a packaged build.
@@ -146,7 +147,6 @@ fn serveFile(stream: std.Io.net.Stream, path: []const u8, asset: Asset, index: u
     const cache_header: []const u8 = switch (asset.cache) {
         .no_store => "Cache-Control: no-store\r\n",
         .revalidate => "Cache-Control: max-age=0, must-revalidate\r\n",
-        .immutable => "Cache-Control: public, max-age=31536000, immutable\r\n",
     };
     const privacy_header: []const u8 = if (std.mem.eql(u8, asset.content_type, "text/html"))
         "Referrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; media-src 'self' blob:; connect-src 'self'; frame-src 'self' https://www.youtube-nocookie.com\r\n"

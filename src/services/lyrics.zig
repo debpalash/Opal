@@ -31,6 +31,7 @@ var mutex: sync.Mutex = .{};
 var lines: [MAX_LINES]pure.LyricLine = undefined;
 var line_count: usize = 0;
 
+var generation = std.atomic.Value(u32).init(0);
 var fetching: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 /// "artist\x1ftitle" of the track whose fetch has been issued — guards against
@@ -58,6 +59,7 @@ pub fn requestFor(artist: []const u8, title: []const u8, album: []const u8, dura
 
     mutex.lock();
     const same = std.mem.eql(u8, key, loaded_key[0..loaded_key_len]);
+    const expected = generation.load(.acquire);
     mutex.unlock();
     if (same) return;
 
@@ -69,6 +71,7 @@ pub fn requestFor(artist: []const u8, title: []const u8, album: []const u8, dura
         var album_buf: [160]u8 = undefined;
         var album_len: usize = 0;
         var duration: u32 = 0;
+        var expected_generation: u32 = 0;
 
         fn worker() void {
             const Self = @This();
@@ -88,6 +91,7 @@ pub fn requestFor(artist: []const u8, title: []const u8, album: []const u8, dura
             var body: ?[]const u8 = rf.fetch(url, body_buf, .{
                 .user_agent = agent,
                 .timeout_secs = 12,
+                .cancel_epoch = .{ .epoch32 = .{ .value = &generation, .expected = Self.expected_generation } },
                 .impersonate = false, // plain JSON API, not fingerprint-walled
             });
 
@@ -113,13 +117,19 @@ pub fn requestFor(artist: []const u8, title: []const u8, album: []const u8, dura
                             .user_agent = agent,
                             .timeout_secs = 12,
                             .impersonate = false,
+                            .cancel_epoch = .{ .epoch32 = .{ .value = &generation, .expected = Self.expected_generation } },
                         });
-                        // The search returns an array; the first object carrying a
-                        // non-null syncedLyrics is the best available match.
                         if (body) |b| {
-                            if (pure.extractSyncedLyrics(b, lrc_buf)) |s| {
-                                lrc = s;
-                                have_synced = true;
+                            const search = std.json.parseFromSlice(std.json.Value, alloc, b, .{}) catch null;
+                            if (search) |parsed_search| {
+                                defer parsed_search.deinit();
+                                if (pure.matchingSearchLyrics(parsed_search.value, a, t, Self.duration)) |matched| {
+                                    if (matched.len <= lrc_buf.len) {
+                                        @memcpy(lrc_buf[0..matched.len], matched);
+                                        lrc = lrc_buf[0..matched.len];
+                                        have_synced = true;
+                                    }
+                                }
                             }
                         }
                     }
@@ -127,10 +137,15 @@ pub fn requestFor(artist: []const u8, title: []const u8, album: []const u8, dura
             }
 
             var parsed: usize = 0;
-            var scratch: [MAX_LINES]pure.LyricLine = undefined;
-            if (have_synced and lrc.len > 0) parsed = pure.parseLrc(lrc, &scratch);
+            const scratch = alloc.alloc(pure.LyricLine, MAX_LINES) catch return;
+            defer alloc.free(scratch);
+            if (have_synced and lrc.len > 0) parsed = pure.parseLrc(lrc, scratch);
 
             mutex.lock();
+            if (!pure.mayPublish(Self.expected_generation, generation.load(.acquire))) {
+                mutex.unlock();
+                return;
+            }
             var i: usize = 0;
             while (i < parsed) : (i += 1) lines[i] = scratch[i];
             line_count = parsed;
@@ -158,6 +173,7 @@ pub fn requestFor(artist: []const u8, title: []const u8, album: []const u8, dura
     S.album_len = @min(album.len, S.album_buf.len);
     @memcpy(S.album_buf[0..S.album_len], album[0..S.album_len]);
     S.duration = duration_secs;
+    S.expected_generation = expected;
 
     fetching.store(true, .release);
     if (@import("../core/workers.zig").spawnLegacy(S.worker, .{})) |th| {
@@ -188,6 +204,7 @@ pub fn snapshot(out: []pure.LyricLine) usize {
 pub fn clear() void {
     mutex.lock();
     defer mutex.unlock();
+    _ = generation.fetchAdd(1, .acq_rel);
     line_count = 0;
     loaded_key_len = 0;
 }

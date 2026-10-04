@@ -211,7 +211,7 @@ pub fn handleNowPlayingArt(stream: std.Io.net.Stream) void {
     if (raw_len == 0) return send404(stream);
 
     var url_buf: [640]u8 = undefined;
-    const url = @import("../ui/loading_pure.zig").posterUrl(raw_buf[0..raw_len], &url_buf);
+    const url = @import("../core/loading_pure.zig").posterUrl(raw_buf[0..raw_len], &url_buf);
     if (!(std.mem.startsWith(u8, url, "https://") or std.mem.startsWith(u8, url, "http://")))
         return send404(stream);
     serveProxied(stream, url, url);

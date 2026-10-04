@@ -813,3 +813,40 @@ test "RSS video podcasts remain playable and mixed enclosures prefer audio" {
     try std.testing.expectEqualStrings("https://cdn.test/mixed.ogg", rows[1].audio_url[0..rows[1].audio_url_len]);
     try std.testing.expectEqualStrings("https://cdn.test/episode.ogg", rows[2].audio_url[0..rows[2].audio_url_len]);
 }
+
+/// A refresh keeps old rows until a provider supplies fresh rows; one slow
+/// provider cannot delay publication or turn a successful sibling into failure.
+pub const ProgressivePublication = struct {
+    published: bool = false,
+    succeeded: bool = false,
+    pub fn accept(self: *ProgressivePublication, count: usize, ok: bool) bool {
+        self.succeeded = self.succeeded or ok;
+        const first = count > 0 and !self.published;
+        self.published = self.published or count > 0;
+        return first;
+    }
+    pub fn clearOnFinish(self: ProgressivePublication) bool {
+        return self.succeeded and !self.published;
+    }
+};
+pub fn titleMatches(title: []const u8, query: []const u8) bool {
+    if (query.len == 0) return true;
+    if (query.len > title.len) return false;
+    for (0..title.len - query.len + 1) |index| {
+        if (std.ascii.eqlIgnoreCase(title[index..][0..query.len], query)) return true;
+    }
+    return false;
+}
+test "progressive podcast publication paints fast sibling before slow completion" {
+    var progress: ProgressivePublication = .{};
+    try std.testing.expect(!progress.accept(0, false));
+    try std.testing.expect(progress.accept(2, true));
+    try std.testing.expect(!progress.accept(3, true));
+    try std.testing.expect(!progress.clearOnFinish());
+    var empty: ProgressivePublication = .{};
+    _ = empty.accept(0, true);
+    try std.testing.expect(empty.clearOnFinish());
+    try std.testing.expect(!ProgressivePublication.clearOnFinish(.{}));
+    try std.testing.expect(titleMatches("Independent science", "SCIENCE"));
+    try std.testing.expect(!titleMatches("Science", "Drama"));
+}

@@ -14,7 +14,7 @@ const workers = @import("workers.zig");
 // - Connection reuse: one process-global keep-alive client, so warm hosts
 //   skip the TCP+TLS handshake (previously a fresh Client was built AND
 //   destroyed on EVERY call — the "reuse" was a lie).
-// - ~100x less overhead for small requests
+// - No child process for native requests
 // - Proxy support via std.http.Client config
 //
 // The shared client is safe to use CONCURRENTLY from many worker threads:
@@ -22,7 +22,7 @@ const workers = @import("workers.zig");
 // so requests are pooled without being serialized. Do NOT wrap it in an
 // external mutex — that would serialize the parallel resolver/poster fetches.
 //
-// Every fetch is bounded by a stall watchdog (see Watchdog) so a source that
+// Every fetch owns a cancellable Io task with a request deadline, so a source that
 // accepts TCP then goes silent can't hang a worker forever (which used to leave
 // the caller's in-flight latch stuck and the route permanently empty).
 // ══════════════════════════════════════════════════════════
@@ -98,7 +98,7 @@ fn prewarmTls(client: *std.http.Client) void {
 /// instead of `std.http.Client{ .allocator = …, .io = … }`** — see prewarmTls
 /// for why a bare literal crashes on http→https redirects (issue #21).
 pub fn newClient() std.http.Client {
-    var client: std.http.Client = .{ .allocator = alloc.allocator, .io = io_global.io() };
+    var client: std.http.Client = .{ .allocator = alloc.allocator, .io = transport.nativeIo(io_global.io()) };
     prewarmTls(&client);
     return client;
 }
@@ -112,7 +112,7 @@ fn sharedClient() *std.http.Client {
     defer client_init_lock.unlock();
     if (client_ready.load(.acquire)) return &g_client; // lost the race — already built
     const io = io_global.io();
-    g_client = .{ .allocator = alloc.allocator, .io = io };
+    g_client = .{ .allocator = alloc.allocator, .io = transport.nativeIo(io) };
     // Load the CA bundle and stamp `now` together — setting `now` alone made
     // std skip the bundle rescan and broke every https fetch. See prewarmTls.
     prewarmTls(&g_client);

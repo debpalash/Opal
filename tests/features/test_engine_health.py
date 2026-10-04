@@ -764,11 +764,17 @@ def retrieve_url_routes_walls_to_the_browser():
         return "fail", "handleScrape does not route through scrape_fetch"
     # POST support all the way down: endpoint -> scrape_fetch -> browser bridge.
     for sym, where in (("scrapeFetchPost(url, p, buf)", "remote.zig"),
-                       ("fetchHtmlPostBlocking", "scrape_fetch.zig")):
+                       ("browser.fetchHtmlWithCancellation(url, post_body, out_buf, cancel_epoch)", "scrape_fetch.zig")):
         src = rm if where == "remote.zig" else open(
             os.path.join(PROJECT_DIR, "src/services/scrape_fetch.zig"), encoding="utf-8").read()
         if sym not in src:
             return "fail", f"{where} lacks the POST path ({sym})"
+    scrape = _src("src/services/scrape_fetch.zig")
+    browser = _src("src/services/browser.zig")
+    if "scrapeFetchBody(url, post_body, out_buf, null)" not in scrape or "return scrapeCommand(url, body, out_buf, epoch);" not in browser:
+        return "fail", "POST body is not preserved through cancellable scrape wrappers"
+    if "const cmd = if (post_body) |b|" not in browser or '\\"cmd\\":\\"fetchpost' not in browser:
+        return "fail", "browser scrape does not select the real POST bridge command"
     bridge = open(os.path.join(PROJECT_DIR, "scripts/camoufox_bridge.py"),
                   encoding="utf-8").read()
     if '"fetchpost"' not in bridge:

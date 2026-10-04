@@ -27,6 +27,15 @@ pub const Root = struct {
     path_len: usize = 0,
 };
 
+var data_revision = std.atomic.Value(u64).init(1);
+pub fn revision() u64 {
+    return data_revision.load(.acquire);
+}
+fn changed() void {
+    _ = data_revision.fetchAdd(1, .acq_rel);
+    state.wakeUi();
+}
+
 pub var scanning = std.atomic.Value(bool).init(false);
 var indexed_once = std.atomic.Value(bool).init(false);
 // Scan worker is single-owner; only its private connection uses this batch.
@@ -52,7 +61,10 @@ pub fn scanAsync() void {
 
 fn scanWorker() void {
     if (scanning.swap(true, .acq_rel)) return;
-    defer scanning.store(false, .release);
+    defer {
+        scanning.store(false, .release);
+        changed();
+    }
     var default_buf: [1024]u8 = undefined;
     const root = if (state.app.save_path_len > 0)
         state.app.save_path_buf[0..state.app.save_path_len]
@@ -197,6 +209,7 @@ fn indexFile(root: []const u8, path: []const u8, basename: []const u8, token: i6
             return false;
         }
     }
+    if (batch_count == 0) changed();
     return true;
 }
 
@@ -213,7 +226,9 @@ pub fn addRoot(path_raw: []const u8) bool {
     const stmt = db.prepare("INSERT OR IGNORE INTO local_library_roots(path) VALUES(?1)") orelse return false;
     defer db.finalize(stmt);
     db.bindText(stmt, 1, path);
-    return db.step(stmt) == db.c.SQLITE_DONE;
+    const ok = db.step(stmt) == db.c.SQLITE_DONE;
+    if (ok) changed();
+    return ok;
 }
 
 pub fn listRoots(out: []Root) usize {
@@ -235,10 +250,13 @@ pub fn removeRoot(id: i64) bool {
     const cleared = db.step(media) == db.c.SQLITE_DONE;
     db.finalize(media);
     if (!cleared) return false;
+    changed(); // Media deletion committed even if the following root deletion fails.
     const root = db.prepare("DELETE FROM local_library_roots WHERE rowid=?1") orelse return false;
     defer db.finalize(root);
     db.bindInt64(root, 1, id);
-    return db.step(root) == db.c.SQLITE_DONE;
+    const ok = db.step(root) == db.c.SQLITE_DONE;
+    if (ok) changed();
+    return ok;
 }
 
 fn contentFingerprint(file: std.Io.File, size: u64, out: []u8) []const u8 {
@@ -323,7 +341,9 @@ pub fn correct(id: i64, title: []const u8, kind: []const u8) bool {
     db.bindText(stmt, 1, std.mem.trim(u8, title, " \t\r\n"));
     db.bindText(stmt, 2, kind);
     db.bindInt64(stmt, 3, id);
-    return db.step(stmt) == db.c.SQLITE_DONE;
+    const ok = db.step(stmt) == db.c.SQLITE_DONE;
+    if (ok) changed();
+    return ok;
 }
 
 test "local library recognizes the complete player media set" {

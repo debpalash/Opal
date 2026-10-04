@@ -66,7 +66,7 @@ def test_logs_compacted():
                     "source prefix, routed through logs_pure, windowing preserved")
 
 
-@test("Plugins has a dedicated route and clean overflow entry", "UI Standards")
+@test("Plugins has a dedicated route and sidebar destination", "UI Standards")
 def test_plugins_navbar_menu():
     """Plugins keeps a first-class route/sub-tabs without crowding primary chrome."""
     sh = _src("src/ui/shell.zig")
@@ -87,7 +87,8 @@ def test_plugins_navbar_menu():
         # State holds the sub-tab.
         "plugin_tab state": "plugin_tab: @import(\"router.zig\").PluginTab" in st,
         "drawer tab routes to it": ".Plugins => app.router.navigate(.plugins)" in st,
-        "overflow entry": 'menuItemLabel(@src(), "Plugins"' in sh,
+        "sidebar entry": "const manage_routes" in sh and ".plugins" in sh
+            and "sidebarButton(tabLabel(tab), iconForTab(tab)" in sh,
         "not mounted in primary nav": "    pluginsMenu();" not in sh,
         # The old combined button is gone; Logs stands alone. (Match the call
         # site, not the string — the comment above it still names the old page.)
@@ -105,8 +106,8 @@ def test_plugins_navbar_menu():
     }
     missing = [k for k, v in checks.items() if not v]
     if missing:
-        return "fail", "plugins nav-bar menu incomplete: " + ", ".join(missing)
-    return "pass", "Plugins and Logs have separate overflow entries; Plugins keeps its in-page tabs"
+        return "fail", "plugins sidebar route incomplete: " + ", ".join(missing)
+    return "pass", "Plugins and Logs have sidebar destinations; Plugins keeps its in-page tabs"
 
 
 @test("Installed sources are not silently dropped by a full table", "UI Standards")

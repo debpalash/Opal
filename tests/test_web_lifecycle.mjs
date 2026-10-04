@@ -189,6 +189,11 @@ function fixture(...files){
     toast(){},
   });
   for (const file of files) {
+    // Browse bundles share the same loading dependency as the production page.
+    if (file === 'media.js' && !files.includes('browse-loading.js')) {
+      try { vm.runInContext(source('browse-loading.js'), context, {filename:'browse-loading.js'}); }
+      catch (error) { if (!process.env.OPAL_WEB_REVISION) throw error; }
+    }
     // Search was extracted from catalog; historical revisions keep it inline.
     if (file === 'catalog.js' && !files.includes('search.js') && !source(file).includes('function runSearch(')) {
       vm.runInContext(source('search.js'), context, {filename:'search.js'});
@@ -1221,4 +1226,92 @@ test('Novel windows preserve absolute chapter identity and generation in every r
   assert.ok(f.requests.some(r => r.path === '/novels/chapter?ordinal=400&generation=74'));
   f.$('nv-reader-prev').onclick();
   assert.ok(f.requests.some(r => r.path === '/novels/chapter?ordinal=398&generation=74'));
+});
+
+test('Plex library buttons retain stable section keys across provider ordering', () => {
+  const f = fixture('media.js');
+  f.run(`
+    globalThis.setSafeHtml = (target, html) => { target.innerHTML = html; return true; };
+    pollPlex = () => {};
+    const libraryButton = {dataset:{plexSection:'17'}};
+    $('plex-crumbs').querySelectorAll = () => [libraryButton];
+    renderPlex({connected:true,active_section:0,sections:[{key:'22',title:'Other library'},{key:'17',title:'Selected library'}],items:[]});
+    libraryButton.onclick();
+  `);
+  assert.match(f.$('plex-crumbs').innerHTML, /data-plex-section="17"/);
+  assert.ok(f.requests.some(r => r.path === '/plex/open?key=17'));
+  assert.equal(f.requests.some(r => r.path.startsWith('/plex/open?idx=')), false);
+});
+
+for (const [render, target, kind] of [
+  ['renderAnimeResults', 'anime-results', 'poster'], ['renderComics', 'cx-results', 'poster'],
+  ['renderDrama', 'dr-results', 'poster'], ['renderMusic', 'mu-results', 'row'],
+  ['renderVndb', 'vn-results', 'row'], ['renderYt', 'yt-results', 'video'],
+  ['renderPodResults', 'pod-results', 'square'], ['renderRadio', 'ra-results', 'row'],
+]) test(`${render} paints bounded skeletons only while empty and loading`, () => {
+  const f = fixture('media.js', 'discovery.js');
+  f.run(`${render}([], true)`);
+  assert.match(f.$(target).innerHTML, /browse-skeleton/);
+  assert.match(f.$(target).innerHTML, new RegExp(`browse-skeleton-${kind}`));
+  assert.match(f.$(target).innerHTML, /role="status"/);
+  assert.doesNotMatch(f.$(target).innerHTML, /No .*yet|No comics|<button|<img/);
+  assert.equal(f.$(target).attributes.get('aria-busy'), 'true');
+  assert.equal(f.requests.length, 0);
+  f.run(`${render}([], false)`);
+  assert.doesNotMatch(f.$(target).innerHTML, /browse-skeleton/);
+  assert.equal(f.$(target).attributes.get('aria-busy'), 'false');
+});
+
+test('Novel search loading uses skeletons, with no fake chapter actions', () => {
+  const f = fixture('media.js');
+  f.run(`globalThis.setSafeHtml = (el, html) => { el.innerHTML = html; return true; }; renderNovels({view:'search', results:[], loading:true})`);
+  assert.match(f.$('nv-results').innerHTML, /browse-skeleton/);
+  assert.doesNotMatch(f.$('nv-results').innerHTML, /<button|Nothing here/);
+  f.run(`renderNovels({view:'search', results:[], loading:false})`);
+  assert.doesNotMatch(f.$('nv-results').innerHTML, /browse-skeleton/);
+});
+
+test('Progressive browse keeps useful cards visible while other sources load', () => {
+  const f = fixture('media.js');
+  f.run(`renderComics([{title:'First useful comic', url:'/comic'}], true)`);
+  assert.match(f.$('cx-results').innerHTML, /First useful comic/);
+  assert.doesNotMatch(f.$('cx-results').innerHTML, /browse-skeleton/);
+  assert.equal(f.$('cx-results').attributes.get('aria-busy'), 'true');
+});
+
+for (const [run, query, endpoint, results, initial] of [
+  ['runYt', 'yt-q', '/youtube', 'yt-results', 'items'],
+  ['runVndb', 'vn-q', '/vndb', 'vn-results', 'results'],
+]) test(`${run} waits for search admission, paints immediately and rejects stale responses`, async () => {
+  const f = fixture('media.js', 'discovery.js');
+  f.run(`globalThis.unifiedArtwork = () => ''; globalThis.settledInterval = (fn, delay, immediate) => { globalThis.poll = fn; globalThis.pollDelay = delay; globalThis.pollImmediate = immediate; return 1; };`);
+  f.$(query).value = 'old';
+  const old = f.run(`${run}()`);
+  assert.match(f.$(results).innerHTML, /browse-skeleton/);
+  assert.equal(f.requests.filter(r => r.path === endpoint).length, 0);
+  f.take(`${endpoint}/search?q=old`).resolve({ok:true}); await old;
+  assert.equal(f.run('pollDelay'), 300); assert.equal(f.run('pollImmediate'), true);
+  const oldPoll = f.run('poll()');
+  f.$(query).value = 'new'; const next = f.run(`${run}()`);
+  f.take(`${endpoint}/search?q=new`).resolve({ok:true}); await next;
+  f.take(endpoint).resolve({loading:false,[initial]:[{title:'Stale result',id:'old'}]}); await oldPoll;
+  assert.doesNotMatch(f.$(results).innerHTML, /Stale result/);
+  const newPoll = f.run('poll()');
+  f.take(endpoint).resolve({loading:false,[initial]:[{title:'Useful result',id:'new'}]}); await newPoll;
+  assert.match(f.$(results).innerHTML, /Useful result/);
+  assert.equal(f.$(results).attributes.get('aria-busy'), 'false');
+});
+
+test('Gutenberg discovery presents one feed with optional collections and in-app reading', () => {
+  const f = fixture('media.js');
+  f.run(`globalThis.unifiedArtwork = () => ''; globalThis.setSafeHtml = (el,html) => {el.innerHTML = html;return true;}; renderOpds({connected:true,loading:true,discovery:true,feed:'Discover',categories:[{index:0,title:'Popular'},{index:1,title:'Latest'},{index:2,title:'Random'}],entries:[{title:'Pride and Prejudice',author:'Jane Austen',gutenberg:true,nav:true}]})`);
+  assert.match(f.$('opds-crumbs').innerHTML, /Discover/);
+  for (const label of ['Popular','Latest','Random']) assert.match(f.$('opds-crumbs').innerHTML, new RegExp(label));
+  assert.match(f.$('opds-results').innerHTML, /Jane Austen|Project Gutenberg/);
+  assert.match(f.$('opds-results').innerHTML, />Read<\/button>/);
+  assert.doesNotMatch(f.$('opds-results').innerHTML, /browse-skeleton|>Open<\/button>/);
+  assert.equal(f.$('opds-results').attributes.get('aria-busy'), 'true');
+  assert.equal(f.requests.length,0);
+  f.run(`renderOpds({connected:true,loading:true,discovery:true,entries:[]})`);
+  assert.match(f.$('opds-results').innerHTML, /browse-skeleton/);
 });

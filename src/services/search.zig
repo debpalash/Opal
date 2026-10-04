@@ -73,6 +73,15 @@ const torrent_open_queue = @import("torrent_open_queue.zig");
 var pending_torrent_lock: @import("../core/sync.zig").Mutex = .{};
 var pending_torrent_ready = std.atomic.Value(bool).init(false);
 var pending_torrents: torrent_open_queue.Queue = .{};
+var pending_torrent_metadata: [torrent_open_queue.CAPACITY]state.PendingPlay = undefined;
+threadlocal var owned_torrent_metadata: ?state.PendingPlay = null;
+fn takeTorrentMetadata() state.PendingPlay {
+    if (owned_torrent_metadata) |metadata| {
+        owned_torrent_metadata = null;
+        return metadata;
+    }
+    return state.takePendingPlay();
+}
 
 const DetailResolveStatus = enum { success, fetch_failed, no_magnet };
 const DetailResolveRequest = struct {
@@ -81,6 +90,8 @@ const DetailResolveRequest = struct {
     generation: u64 = 0,
     player_address: usize = 0,
     load_serial: u64 = 0,
+    lifetime: u64 = 0,
+    metadata: state.PendingPlay = .{},
 };
 const DetailResolvePublication = struct {
     magnet: [4096]u8 = std.mem.zeroes([4096]u8),
@@ -88,6 +99,8 @@ const DetailResolvePublication = struct {
     generation: u64 = 0,
     player_address: usize = 0,
     load_serial: u64 = 0,
+    lifetime: u64 = 0,
+    metadata: state.PendingPlay = .{},
     status: DetailResolveStatus = .fetch_failed,
 };
 var detail_resolve_generation = std.atomic.Value(u64).init(0);
@@ -104,6 +117,8 @@ fn publishDetailResolve(request: DetailResolveRequest, status: DetailResolveStat
         .generation = request.generation,
         .player_address = request.player_address,
         .load_serial = request.load_serial,
+        .lifetime = request.lifetime,
+        .metadata = request.metadata,
         .status = status,
     };
     publication.magnet_len = @min(magnet.len, publication.magnet.len);
@@ -220,8 +235,10 @@ pub fn drainResolvedTorrentDetail() void {
     if (publication.generation != detail_resolve_generation.load(.acquire)) return;
     if (state.app.active_player_idx >= state.app.players.items.len) return;
     const current = state.app.players.items[state.app.active_player_idx];
-    if (@intFromPtr(current) != publication.player_address or current.load_serial != publication.load_serial) return;
+    if (@intFromPtr(current) != publication.player_address or current.load_serial != publication.load_serial or current.lifetime_id != publication.lifetime) return;
     if (publication.status == .success) {
+        owned_torrent_metadata = publication.metadata;
+        defer owned_torrent_metadata = null;
         addMagnetToEngine(publication.magnet[0..publication.magnet_len]);
         return;
     }
@@ -236,34 +253,47 @@ pub fn drainResolvedTorrentDetail() void {
 
 fn deferTorrentOpen(kind: torrent_open_queue.Kind, source: []const u8) bool {
     pending_torrent_lock.lock();
-    const accepted = pending_torrents.push(kind, source);
-    if (accepted) pending_torrent_ready.store(true, .release);
+    const accepted = !@import("../core/workers.zig").isQuitting() and pending_torrents.push(kind, source);
+    if (accepted) {
+        const slot = (pending_torrents.head + pending_torrents.count - 1) % torrent_open_queue.CAPACITY;
+        pending_torrent_metadata[slot] = takeTorrentMetadata();
+        pending_torrent_ready.store(true, .release);
+    }
     pending_torrent_lock.unlock();
     if (!accepted) return false;
     state.wakeUi();
     return true;
 }
 
-/// Called from the UI frame after the background torrent session publishes.
-/// A bounded FIFO retains every ordinary cold-start action. One item is handled
-/// per frame so player/list mutation remains serialized without a long frame.
-pub fn flushPendingTorrentOpen() void {
-    if (state.torrentSession() == null or !pending_torrent_ready.load(.acquire)) return;
-
-    var entry: ?torrent_open_queue.Entry = null;
-    var more = false;
+const PendingTorrentOpen = struct { entry: torrent_open_queue.Entry, metadata: state.PendingPlay };
+fn popPendingTorrentOpen() ?PendingTorrentOpen {
     pending_torrent_lock.lock();
-    entry = pending_torrents.pop();
-    more = pending_torrents.count > 0;
-    pending_torrent_ready.store(more, .release);
-    pending_torrent_lock.unlock();
-    const pending = entry orelse return;
-
-    switch (pending.kind) {
-        .magnet => addMagnetToEngine(pending.slice()),
-        .torrent_file => addTorrentFileToEngine(pending.slice()),
+    defer pending_torrent_lock.unlock();
+    if (pending_torrents.count == 0) return null;
+    const slot = pending_torrents.head;
+    const metadata = pending_torrent_metadata[slot];
+    const entry = pending_torrents.pop().?;
+    pending_torrent_metadata[slot] = .{};
+    pending_torrent_ready.store(pending_torrents.count > 0, .release);
+    return .{ .entry = entry, .metadata = metadata };
+}
+/// Test-only access to the same owner FIFO pop; never invokes torrent/mpv APIs.
+pub fn popPendingTorrentForTest() ?PendingTorrentOpen {
+    if (!@import("builtin").is_test) @compileError("Offline fixture only");
+    return popPendingTorrentOpen();
+}
+/// Owner-frame pump: worker requests are admitted before any player traversal.
+pub fn flushPendingTorrentOpen() void {
+    state.drainPendingPlay();
+    if (state.torrentSession() == null or !pending_torrent_ready.load(.acquire)) return;
+    const pending = popPendingTorrentOpen() orelse return;
+    owned_torrent_metadata = pending.metadata;
+    defer owned_torrent_metadata = null;
+    switch (pending.entry.kind) {
+        .magnet => loadTorrentToPlayer(pending.entry.slice()),
+        .torrent_file => addTorrentFileToEngine(pending.entry.slice()),
     }
-    if (more) state.wakeUi();
+    if (pending_torrent_ready.load(.acquire)) state.wakeUi();
 }
 
 // Universal-search result sort mode (Relevance / Quality / Seeds).
@@ -695,31 +725,20 @@ fn queryEztvApi(query: []const u8, allocator: std.mem.Allocator, my_gen: u64) vo
     // The EZTV API lists all/recent torrents (no name search); we filter
     // client-side and supplement the Python-engine results.
     // Endpoint migrated to opal-plugins — inert until the user installs "eztv".
-    const api = @import("../core/source_config.zig").get("eztv", "api") orelse return;
-    var url_buf: [512]u8 = undefined;
+    var api_buf: [512]u8 = undefined;
+    const api = @import("../core/source_config.zig").copyValue("eztv", "api", &api_buf) orelse return;
+    var url_buf: [768]u8 = undefined;
     const api_url = std.fmt.bufPrint(&url_buf, "{s}?limit=100&page=1", .{api}) catch return;
-
-    var client = @import("../core/http.zig").newClient();
-    defer client.deinit();
-
-    const uri = std.Uri.parse(api_url) catch return;
-    var req = client.request(.GET, uri, .{ .extra_headers = &.{
-        .{ .name = "Accept", .value = "application/json" },
-        .{ .name = "User-Agent", .value = @import("../core/app_meta.zig").user_agent },
-    } }) catch return;
-    defer req.deinit();
-    req.sendBodiless() catch return;
-
-    var redirect_buf: [8192]u8 = undefined;
-    var response = req.receiveHead(&redirect_buf) catch return;
-    if (response.head.status != .ok) return;
-
-    var transfer_buf: [4096]u8 = undefined;
-    var decompress: std.http.Decompress = undefined;
-    var rdr = response.readerDecompressing(&transfer_buf, &decompress, &.{});
-
-    const body = rdr.allocRemaining(allocator, std.Io.Limit.limited(512 * 1024)) catch return;
-    defer allocator.free(body);
+    const buffer = allocator.alloc(u8, 512 * 1024) catch return;
+    defer allocator.free(buffer);
+    const body = @import("../core/http.zig").fetch(api_url, buffer, .{
+        .timeout_secs = 5,
+        .max_response = buffer.len,
+        .accept = "application/json",
+        .user_agent = @import("../core/app_meta.zig").user_agent,
+        .cancel_epoch = .{ .epoch64 = .{ .value = &search_generation, .expected = my_gen } },
+    }) orelse return;
+    if (search_generation.load(.acquire) != my_gen) return;
 
     // Parse EZTV JSON results — look for torrents matching query
     var lower_query: [256]u8 = undefined;
@@ -1020,6 +1039,13 @@ pub fn reapWorkers() void {
 /// first would deadlock shutdown behind a child process that has not yet been
 /// told to exit.
 pub fn shutdown() void {
+    @import("browser.zig").clearDeferredPlayback();
+    state.clearDeferredPlayMetadata();
+    pending_torrent_lock.lock();
+    pending_torrents = .{};
+    pending_torrent_ready.store(false, .release);
+    @memset(&pending_torrent_metadata, .{});
+    pending_torrent_lock.unlock();
     @import("search_preview.zig").stop();
     search_abort.store(true, .release);
     _ = search_generation.fetchAdd(1, .acq_rel);
@@ -1750,7 +1776,17 @@ pub fn setGalleryContentFilterForTest(filter: search_view.ContentKind) void {
 }
 pub fn renderGalleryForTest() void {
     if (!@import("builtin").is_test) @compileError("gallery renderer API is test-only");
+    gallery_text_rows_for_test = 0;
     renderUniversalResults();
+}
+var gallery_text_rows_for_test: usize = 0;
+pub fn galleryTextRowsForTest() usize {
+    if (!@import("builtin").is_test) @compileError("gallery text counter is test-only");
+    return gallery_text_rows_for_test;
+}
+pub fn galleryScrollForTest() f32 {
+    if (!@import("builtin").is_test) @compileError("gallery viewport API is test-only");
+    return result_scroll.viewport.y;
 }
 
 fn galleryCategoryLabel(category: search_content.Category) []const u8 {
@@ -1954,11 +1990,19 @@ fn renderGalleryCard(group: *const search_content.Group, size: gallery_layout.Si
     }
     art.deinit();
     const body = theme.mediaTitleFont(item.name[0..item.name_len], dvui.themeGet().font_body);
-    var title: [520]u8 = undefined;
-    _ = dvui.label(@src(), "{s}", .{searchRowTitle(item.name[0..item.name_len], body, size.w, &title)}, .{ .id_extra = key +% 3, .font = body, .color_text = theme.colors.text_primary, .min_size_content = .{ .w = size.w, .h = body.textHeight() * 2 }, .max_size_content = .{ .w = size.w, .h = body.textHeight() * 2 }, .margin = .{ .x = 0, .y = 7, .w = 0, .h = 0 } });
     var metadata: [128]u8 = undefined;
     const line = if (group.offer_count > 0) std.fmt.bufPrint(&metadata, "{d} source{s}", .{ group.offer_count, if (group.offer_count == 1) "" else "s" }) catch "" else if (item.author_len > 0) item.author[0..item.author_len] else item.detail[0..item.detail_len];
-    searchRowLine(key +% 4, safeUtf8(line), body.withSize(theme.font_size.small), size.w, theme.colors.text_secondary);
+    if (card.data().visible()) {
+        if (@import("builtin").is_test) gallery_text_rows_for_test += 1;
+        var title: [520]u8 = undefined;
+        _ = dvui.label(@src(), "{s}", .{searchRowTitle(item.name[0..item.name_len], body, size.w, &title)}, .{ .id_extra = key +% 3, .font = body, .color_text = theme.colors.text_primary, .min_size_content = .{ .w = size.w, .h = body.textHeight() * 2 }, .max_size_content = .{ .w = size.w, .h = body.textHeight() * 2 }, .margin = .{ .x = 0, .y = 7, .w = 0, .h = 0 } });
+        searchRowLine(key +% 4, safeUtf8(line), body.withSize(theme.font_size.small), size.w, theme.colors.text_secondary);
+    } else {
+        // Retain exact row geometry and every Details tab stop while avoiding
+        // title clipping, shaping and text widget work outside the viewport.
+        _ = dvui.spacer(@src(), .{ .id_extra = key +% 3, .min_size_content = .{ .w = size.w, .h = body.textHeight() * 2 }, .margin = .{ .x = 0, .y = 7, .w = 0, .h = 0 } });
+        _ = dvui.spacer(@src(), .{ .id_extra = key +% 4, .min_size_content = .{ .w = size.w, .h = body.withSize(theme.font_size.small).textHeight() } });
+    }
     if (components.actionButton(@src(), "Details", .secondary, key +% 5)) {
         gallery_selection = group.identity;
         gallery_selected_manually = true;
@@ -2374,6 +2418,10 @@ fn renderSearchResultContext(id: usize, rect: dvui.Rect.Physical, item: *const @
 }
 
 pub fn loadTorrentToPlayer(magnet_link: []const u8) void {
+    if (!state.onPlayOwnerThread()) {
+        if (!deferTorrentOpen(.magnet, magnet_link)) state.showToast("Could not queue torrent playback");
+        return;
+    }
     const logs = @import("../core/logs.zig");
     const playermod = @import("../player/player.zig");
 
@@ -2434,6 +2482,8 @@ pub fn loadTorrentToPlayer(magnet_link: []const u8) void {
             .generation = action_generation,
             .player_address = @intFromPtr(current),
             .load_serial = current.load_serial,
+            .lifetime = current.lifetime_id,
+            .metadata = takeTorrentMetadata(),
         };
         const ulen = @min(magnet_link.len, 4095);
         @memcpy(request.url[0..ulen], magnet_link[0..ulen]);
@@ -2456,6 +2506,10 @@ fn hexVal(ch: u8) ?u4 {
 }
 
 fn addMagnetToEngine(magnet_link: []const u8) void {
+    if (!state.onPlayOwnerThread()) {
+        _ = deferTorrentOpen(.magnet, magnet_link);
+        return;
+    }
     const playermod = @import("../player/player.zig");
 
     // A cold-start magnet can live in the pending FIFO without a player;
@@ -2508,6 +2562,11 @@ fn addMagnetToEngine(magnet_link: []const u8) void {
 ///
 /// Callers must have already ensured a valid active player exists.
 fn attachTorrentToPlayer(tid: c_int, source: []const u8) void {
+    // Both engine admission paths are owner-only before any player access.
+    if (!state.onPlayOwnerThread()) return;
+    attachTorrentToPlayerOwned(tid, source, takeTorrentMetadata());
+}
+fn attachTorrentToPlayerOwned(tid: c_int, source: []const u8, metadata: state.PendingPlay) void {
     const logs = @import("../core/logs.zig");
 
     if (state.app.active_player_idx >= state.app.players.items.len) return;
@@ -2548,7 +2607,7 @@ fn attachTorrentToPlayer(tid: c_int, source: []const u8) void {
         // Loading-screen context (art, meta line, trivia). One shared
         // consumer — the direct-URL path uses it too, so music and streams get
         // the same screen instead of a bare hourglass.
-        state.consumePendingPlay(p);
+        state.applyPendingPlay(p, metadata);
 
         // Store URL for workspace persistence
         const url_len = @min(source.len, 2048);
@@ -2586,6 +2645,10 @@ fn attachTorrentToPlayer(tid: c_int, source: []const u8) void {
 /// browser.loadContent's .torrent route — i.e. `opal foo.torrent`, drag-drop,
 /// and the Open dialog.
 pub fn addTorrentFileToEngine(path: []const u8) void {
+    if (!state.onPlayOwnerThread()) {
+        if (!deferTorrentOpen(.torrent_file, path)) state.showToast("Could not queue torrent playback");
+        return;
+    }
     const logs = @import("../core/logs.zig");
     const playermod = @import("../player/player.zig");
 

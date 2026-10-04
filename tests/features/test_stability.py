@@ -170,7 +170,7 @@ def test_sources_externalized():
         "1337x via config": "sources_dir" in eng and "def candidates_for" in eng
                             and "opal_sources" in _src("engines/nova2.py"),
         "yts via config": 'get("yts"' in rv,
-        "eztv via config": 'get("eztv"' in sr,
+        "eztv via config": 'copyValue("eztv", "api", &api_buf)' in sr,
         "readallcomics via config": 'get("readallcomics"' in rv and 'get("readallcomics"' in cm,
         # The old hardcoded URL builders must be gone (validators may remain).
         "no hardcoded 1337x search": '"https://1337x.to/search' not in rv,
@@ -249,13 +249,13 @@ def test_plugin_sandbox_hardened():
         and "pluginDigest(" in pg
         and "runMode(" in pg
         and ".deny =>" in pg
-        and "if (!is_lua and !user_trusted) return .deny" in pgp
+        and "if (!user_trusted) return .deny" in pgp
     )
     # Pure decision + regression tests present.
     pure_ok = (
         "pub fn runMode(" in pgp
         and "deny" in pgp
-        and 'test "runMode sandboxes Lua' in pgp
+        and 'test "runMode requires explicit approval' in pgp
     )
     if not prelude_hardened:
         return "fail", "Lua prelude missing debug/getenv/package hardening"
@@ -471,7 +471,7 @@ def test_windows_port_invariants():
     if "spawn(resolveWorker" not in sl or "spawnLegacy(S.worker" in sl:
         return "fail", "streamlink resolver must use an owned worker and never mutate a player from that worker"
     main = _src("src/main.zig")
-    if 'services/streamlink.zig").drainResolved();' not in main:
+    if 'application/playback_update.zig").tick();' not in main or 'services/streamlink.zig").drainResolved();' not in _src('src/application/playback_update.zig'):
         return "fail", "streamlink resolver publications are not drained on the UI thread"
     return "pass", "MINGW_PREFIX + dll.a link + win arms in io_global/sync/paths intact"
 
@@ -697,3 +697,16 @@ def test_native_capture_profile_isolation():
     if missing:
         return "fail", "native fixture isolation: " + ", ".join(missing)
     return "pass", "all five native capture runners use private cache HOME/XDG profiles"
+
+
+@test("Lua restriction runs in a real interpreter", "Stability")
+def test_lua_prelude_runtime():
+    import shutil
+    from pathlib import Path
+    if not (shutil.which("lua") or shutil.which("luajit")):
+        return "skip", "Lua runtime unavailable; execution approval policy runs in Zig unit gate"
+    result = subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / "test_lua_execution_policy.py")],
+                            capture_output=True, text=True, timeout=10)
+    if result.returncode != 0:
+        return "fail", result.stderr[-1200:]
+    return "pass", "shipped prelude denies package/debug/native loader recovery in real Lua runtime"

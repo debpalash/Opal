@@ -56,8 +56,8 @@ def test_suwayomi():
         "search parse": "fn parseSuwayomiResults(" in svc,
         "reader resolve": "fn loadSuwayomiPages(" in svc,
         "dispatch in thread": "suwayomi.mangaIdFromRoute(url)" in svc,
-        "wired into searchWorker": "fetchSuwayomiPage(query, 1, gen, filled)" in svc,
-        "wired into pagination": "fetchSuwayomiPage(query, next_page, gen, sr_count)" in svc,
+        "wired into searchWorker": all(token in svc for token in ("sourceActive(src)", "Source.suwayomi", ".suwayomi => fetchSuwayomiPage(q, wave.page, gen, 0)", "runComicWave(gen, 1)")),
+        "wired into pagination": "runComicWave(gen, next_page)" in svc and "beginAppendWave(search_gen.load(.acquire), gen, &comic_wave_generation, &comic_published_generation)" in svc,
 
         # ── Pure module registered in the zig-build-test step ──
         "test registered": 'b.path("src/services/manga_suwayomi_pure.zig")' in build,

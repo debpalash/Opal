@@ -52,7 +52,8 @@ def test_drama_module():
         "rail nav entry": "renderRailTab(.Drama" in drawer,
         "shell label": '.Drama => "Asian Drama"' in shell,
         "shell icon (exists in pack)": ".Drama => icons.tvg.lucide." in shell and "clapperboard" in shell,
-        "browse source picker": ".Drama" in shell and "browseSourcePicker(compact)" in shell,
+        "grouped sidebar source": ".Drama" in shell and "sidebarSection(" in shell
+            and "state.app.browse_source = source" in shell,
         # ── Tokusatsu lane fully removed (drama-only tab) ──
         "no tokusatsu residue": no_toku,
         # ── Play routes through load_file + gotoPlayer (guarded) ──

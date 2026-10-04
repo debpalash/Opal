@@ -341,11 +341,10 @@ def test_web_companion():
             and "pairingCode" not in rm and "MAX_PAIR_FAILS" not in rm,
         "no token injection": "replaceOwned" not in rm,
         # The bind address is now selectable (web UI › Setup › Access), so the
-        # literal no longer lives in serverLoop — but LAN must stay the DEFAULT,
-        # since reaching Opal from a phone is the whole point of Web Remote.
-        # Assert that via the enum's default rather than a hardcoded string.
-        "lan bind": 'bind_mode: access_pure.BindMode = .lan' in rm
-            and "bind_mode.address()" in _between(rm, "fn serverLoop", "std.debug.print")
+        # safe default is loopback; deployment policy can explicitly select LAN.
+        "explicit LAN bind with loopback default": 'bind_mode: access_pure.BindMode = .loopback' in rm
+            and 'OPAL_WEB_BIND' in rm and "effectiveBindMode().address()" in rm
+            and "effectiveBindMode().address()" in _between(rm, "fn serverLoop", "std.debug.print")
             and '.lan => "0.0.0.0"' in open(os.path.join(PROJECT_DIR, "src/services/access_pure.zig")).read(),
         "bundled serving": "resourceRoot" in rm and "web/index.html" in rm,
         # Was: a hint telling you to go create an account in a browser. The
@@ -892,7 +891,10 @@ def test_http_downloader():
         "sidecar restore on launch": "restoreSidecar" in glue and "parsePartMeta" in glue,
         # Retry + stall detection.
         "per-segment retry budget": "MAX_RETRIES" in eng and "retryWait" in eng,
-        "stalled segment reconnect": "STALL_MS" in eng and "seg_kick" in eng,
+        "stalled segment reconnect": ("dp.STALL_MS" in eng and "guard.stage_ms.load" in eng
+                                      and "guard.expire()" in eng and "task.cancel(client.io)" in eng),
+        "opening probe deadline joined": ("fn probeOwned(" in eng and "task.cancel(task_io)" in eng
+                                          and "task.await(task_io)" in eng),
         # Config keys: segment count / max concurrent / shared speed limit.
         "config keys": ("http_dl_segments" in st and "http_dl_max_concurrent" in st
                         and 'setKey("http_dl_segments"' in cfg
@@ -1071,7 +1073,7 @@ def test_anime_skip():
         "settings toggles": ("&state.app.anime_skip_enabled" in setg
                             and "&state.app.anime_skip_intro" in setg),
         # tick() wired into the frame loop.
-        "tick wired in main loop": "anime_skip.zig\").tick()" in mn,
+        "tick wired in main loop": "anime_skip.zig\").tick()" in _src("src/application/playback_update.zig") and 'application/playback_update.zig").tick();' in mn,
         # Anime-only gating: per-player arm consumed on file load, set by anime.
         "per-player gating flag": "anime_skip_active" in pl,
         "arm consumed on load": "onFileLoad(self)" in pl,
@@ -1310,7 +1312,7 @@ def test_loading_screen_infotainment():
       (c) Nothing on the screen identified WHAT was loading beyond the title —
           no year, no score, no episode code, no artist."""
     gr = _src("src/ui/grid.zig")
-    lp = _src("src/ui/loading_pure.zig")
+    lp = _src("src/core/loading_pure.zig")
     st = _src("src/core/state.zig")
     pl = _src("src/player/player.zig")
     tm = _src("src/services/tmdb.zig")
@@ -1338,15 +1340,17 @@ def test_loading_screen_infotainment():
         # consumed on the torrent path, so a direct-play source could stash art
         # that was never picked up and never shown.
         "one stash consumer": "pub fn consumePendingPlay(" in st,
-        "torrent path consumes": "state.consumePendingPlay(p);" in _src("src/services/search.zig"),
+        "torrent path consumes": "state.applyPendingPlay(p, metadata);" in _src("src/services/search.zig")
+            and "takeTorrentMetadata()" in _src("src/services/search.zig"),
         "direct path consumes": "pub fn playDirect(" in _src("src/services/browser.zig")
-            and "state.consumePendingPlay(p);" in _src("src/services/browser.zig"),
+            and "state.applyPendingPlay(p, metadata);" in _src("src/services/browser.zig")
+            and "owned_direct_metadata orelse state.takePendingPlay()" in _src("src/services/browser.zig"),
         # Podcasts, radio, IPTV, Audiobookshelf and the browser extension all
         # already hand loadContentDirectMeta an art URL + title. Deriving the
         # loading context from those covers every one of them without editing
         # two dozen call sites; a caller that stashed richer data still wins.
-        "art falls back to now-playing": "fn stashFromNowPlaying(" in _src("src/services/browser.zig"),
-        "explicit stash wins": "if (state.app.pending_play_title_len > 0" in _src("src/services/browser.zig"),
+        "art falls back to now-playing": "metadata.art_len = @min(request.art_url.len" in _src("src/services/browser.zig"),
+        "explicit stash wins": "if (metadata.title_len == 0 and metadata.art_len == 0)" in _src("src/services/browser.zig"),
         "one cover resolver": "pub fn coverUrlFor(" in mu,
         # (b) Cards rotate and can be paged by hand.
         "deck state": "loading_card_manual" in pl and "loading_card_since_ms" in pl,
@@ -1385,7 +1389,7 @@ def test_loading_screen_progress():
     Every layout/format decision behind the fix lives in loading_pure with
     tests; the dvui draw calls themselves are GUI-only and are not covered."""
     gr = _src("src/ui/grid.zig")
-    lp = _src("src/ui/loading_pure.zig")
+    lp = _src("src/core/loading_pure.zig")
 
     checks = {
         # (a) Art is contained at native scale, never stretched to the cell.
@@ -1746,7 +1750,7 @@ def fullscreen_reaches_the_window():
     cannot fall out of step the way five scattered SDL calls would.
     """
     mn = _src("src/main.zig")
-    block = _between(mn, "Put the OS WINDOW into fullscreen", "player.updateTorrentBackgroundTasks();")
+    block = _between(mn, "Put the OS WINDOW into fullscreen", '@import("application/playback_update.zig").tick();')
     checks = {
         "the SDL call exists at all": "SDL_SetWindowFullscreen" in mn,
         "driven by the shared state flag": "state.app.fullscreen_player_idx != null" in block,
@@ -1798,7 +1802,7 @@ def self_hosted_playback_version_fallback():
             and ".fallback_url = fallback" in jf_play,
         "Jellyfin negotiates only after direct failure": "requestTranscodeRecovery" in player
             and "PlaybackInfo?UserId=" in jf and '"EnableDirectPlay":false' in jf,
-        "negotiated result returns on UI thread": "drainTranscodeRecovery();" in main
+        "negotiated result returns on UI thread": "drainTranscodeRecovery();" in _src("src/application/playback_update.zig") and 'application/playback_update.zig").tick();' in main
             and "applyServerRecovery" in jf,
         "generated URL drops legacy query token": "stripApiKey" in jfp
             and "transcodingUrl" in jfp,
@@ -1830,9 +1834,11 @@ def movie_completion_sync():
     simkl = _src("src/services/simkl.zig")
     checks = {
         "stable id crosses resolver": "pending_play_tmdb_id" in state
-            and "catalog_tmdb_id = app.pending_play_tmdb_id" in state
-            and "pending_play_tmdb_id = if (item.id > 0)" in tmdb,
-        "unrelated loads clear identity": state.count("app.pending_play_tmdb_id = 0") >= 2,
+            and "snapshot.tmdb_id = app.pending_play_tmdb_id" in state
+            and "p.catalog_tmdb_id = metadata.tmdb_id" in state
+            and "state.setPendingPlayCatalogId(if (item.id > 0)" in tmdb,
+        "unrelated loads clear identity": "app.pending_play_tmdb_id = 0" in state
+            and "clearPendingPlayUnlocked();" in _between(state, "pub fn takePendingPlay()", "pub fn consumePendingPlay("),
         "real viewed time required": "catalog_played_seconds" in player
             and "playedDelta(" in player and "watchCommitDue(" in player,
         "one completion per load": "catalog_movie_committed" in player

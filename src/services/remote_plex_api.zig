@@ -14,6 +14,13 @@ pub fn handle(stream: std.Io.net.Stream, method: []const u8, path: []const u8, q
     if (std.mem.eql(u8, path, "/plex/connect")) plex.connect() else if (std.mem.eql(u8, path, "/plex/disconnect")) plex.disconnect() else if (std.mem.eql(u8, path, "/plex/sections")) plex.fetchSections() else if (std.mem.eql(u8, path, "/plex/more")) plex.loadMore() else if (std.mem.eql(u8, path, "/plex/back")) {
         if (!plex.browseBack()) return conflict(stream, "already at sections");
     } else if (std.mem.eql(u8, path, "/plex/open")) {
+        if (wire.queryParam(query, "key")) |raw| {
+            var decoded: [32]u8 = undefined;
+            const key = wire.urlDecode(raw, &decoded) orelse return badRequest(stream, "invalid section key");
+            if (!plex.fetchItemsByKey(key)) return conflict(stream, "section unavailable");
+            wire.sendJson(stream, "{\"ok\":true}");
+            return true;
+        }
         const idx = std.fmt.parseInt(usize, wire.queryParam(query, "idx") orelse "", 10) catch return badRequest(stream, "invalid section");
         if (idx >= plex.section_count) return conflict(stream, "section unavailable");
         plex.fetchItems(idx);
@@ -84,9 +91,13 @@ fn status(stream: std.Io.net.Stream) void {
     w.writeAll("\",\"status\":\"") catch return;
     wire.writeJsonString(&w, txt.safeUtf8(plex.status_msg[0..@min(plex.status_msg_len, plex.status_msg.len)]));
     w.writeAll("\",\"sections\":[") catch return;
-    for (plex.sections[0..@min(plex.section_count, plex.sections.len)], 0..) |*section, i| {
+    var owned_sections: [32]plex.Section = undefined;
+    const section_count = plex.copySections(&owned_sections);
+    for (owned_sections[0..section_count], 0..) |*section, i| {
         if (i > 0) w.writeAll(",") catch return;
-        w.writeAll("{\"title\":\"") catch return;
+        w.writeAll("{\"key\":\"") catch return;
+        wire.writeJsonString(&w, section.key[0..section.key_len]);
+        w.writeAll("\",\"title\":\"") catch return;
         wire.writeJsonString(&w, txt.safeUtf8(section.title[0..@min(section.title_len, section.title.len)]));
         w.writeAll("\"}") catch return;
     }

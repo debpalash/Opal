@@ -171,6 +171,23 @@ class StaticAssetsLiveTest(unittest.TestCase):
         self.assertEqual(response.body, self.expected["/js/access.js"])
         self.assert_alive()
 
+    def test_hls_upgrade_changes_cache_key_and_revalidates(self) -> None:
+        import hashlib
+        self.start(packaged=True)
+        body = self.expected["/vendor/hls.min.js"]
+        fingerprint = hashlib.sha256(body).hexdigest()[:12]
+        route = "/vendor/hls.min.js?v=" + fingerprint
+        self.assertIn(route.encode(), self.get("/").body)
+        self.assertIn(route.encode(), self.get("/service-worker.js").body)
+        response = self.get(route)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.body, body)
+        self.assertIn("must-revalidate", response.header_values("cache-control")[0])
+        self.assertNotIn("immutable", response.header_values("cache-control")[0])
+        etag = response.header_values("etag")[0]
+        self.assertEqual(self.get(route, extra_headers=(("If-None-Match", etag),)).status, 304)
+        self.assertEqual(self.get(route, extra_headers=(("If-None-Match", '"previous-release"'),)).status, 200)
+
     def test_parallel_development_asset_reads_do_not_free_inflight_bodies(self) -> None:
         self.start()
         routes = [entry[0] for entry in self.assets] * 2

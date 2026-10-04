@@ -174,20 +174,62 @@ class TorrentUnloadLiveTest(unittest.TestCase):
 
     def test_pause_remove_does_not_reuse_a_live_worker_slot(self):
         entered, release = threading.Event(), threading.Event()
+        old_closed, old_finished = threading.Event(), threading.Event()
+        new_entered, new_release = threading.Event(), threading.Event()
+        payload = b"owned-new-download" * 1024
         class Handler(http.server.BaseHTTPRequestHandler):
             def log_message(self, *_): pass
             def do_GET(self):
-                entered.set()
-                release.wait(8)
-                self.send_response(503)
-                self.send_header("Content-Length", "0")
-                self.end_headers()
+                if self.path == "/old.mp4":
+                    entered.set()
+                    self.connection.settimeout(0.05)
+                    deadline = time.monotonic() + 8
+                    while not release.is_set() and time.monotonic() < deadline:
+                        try:
+                            if self.connection.recv(1, socket.MSG_PEEK) == b"":
+                                old_closed.set()
+                                release.wait(max(0, deadline - time.monotonic()))
+                                break
+                        except socket.timeout:
+                            continue
+                        except OSError:
+                            old_closed.set()
+                            release.wait(max(0, deadline - time.monotonic()))
+                            break
+                    try:
+                        self.send_response(503)
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+                    except OSError:
+                        pass  # Joined cancellation legitimately closed the socket.
+                    finally:
+                        old_finished.set()
+                    return
+                new_entered.set()
+                new_release.wait(8)
+                begin, end = 0, len(payload) - 1
+                header = self.headers.get("Range")
+                if header:
+                    lo, hi = header.removeprefix("bytes=").split("-", 1)
+                    begin, end = int(lo), int(hi) if hi else end
+                try:
+                    self.send_response(206 if header else 200)
+                    if header:
+                        self.send_header("Content-Range", f"bytes {begin}-{end}/{len(payload)}")
+                    self.send_header("Content-Length", str(end - begin + 1))
+                    self.send_header("ETag", '"new-job"')
+                    self.end_headers()
+                    self.wfile.write(payload[begin:end+1])
+                except OSError:
+                    pass
         server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
         self.addCleanup(release.set)
+        self.addCleanup(new_release.set)
         threading.Thread(target=server.serve_forever, daemon=True).start()
-        (self.opal.root / "downloads").mkdir()
+        dest = self.opal.root / "downloads"
+        dest.mkdir()
         self.opal.start()
         token = (self.opal.config_root / "opal" / "api.token").read_text().strip()
         def jobs(): return self.api("GET", "/api/downloads", token).json()["jobs"]
@@ -199,20 +241,41 @@ class TorrentUnloadLiveTest(unittest.TestCase):
             self.assertEqual(response.status, 200, response.body)
         start("old.mp4")
         self.assertTrue(entered.wait(5))
-        old = jobs()[0]
-        action(old, "pause")
+        original = jobs()[0]
+        action(original, "pause")
         old = jobs()[0]
         action(old, "dismiss")
         self.assertEqual(jobs(), [])
         start("new.mp4")
+        self.assertTrue(new_entered.wait(5))
         new = jobs()[0]
-        self.assertNotEqual(new["idx"], old["idx"], "old coordinator still owns its slot")
+        self.assertEqual(new["name"], "new.mp4")
+        if new["idx"] == old["idx"]:
+            # The pending SERVER handler is not a live Opal worker. Reuse is
+            # legitimate once cancellation closes and joins that request.
+            self.assertTrue(old_closed.wait(1), "slot reused before old connection closed")
+            self.assertNotEqual(new["token"], old["token"])
+        for stale in (original, old):
+            response = self.api("POST", f"/api/downloads/action?action=cancel&idx={stale['idx']}&token={stale['token']}&confirm=1", token)
+            self.assertEqual(response.status, 409, response.body)
+        # Deliberately deliver the old response after the new identity exists.
+        # It must neither publish an error nor remove the new job's artifacts.
         release.set()
-        failed = self.wait_for(lambda: next((j for j in jobs() if j["status"] == "failed"), None))
-        self.assertEqual(failed["name"], "new.mp4")
-        action(failed, "dismiss")
+        self.assertTrue(old_finished.wait(2))
+        time.sleep(0.1)
+        current = jobs()
+        self.assertEqual(len(current), 1, current)
+        self.assertEqual((current[0]["name"], current[0]["idx"], current[0]["token"]),
+                         ("new.mp4", new["idx"], new["token"]))
+        self.assertEqual(current[0]["status"], "probing", current)
+        new_release.set()
+        completed = self.wait_for(lambda: next((j for j in jobs() if j["status"] == "done"), None))
+        self.assertEqual((completed["idx"], completed["token"]), (new["idx"], new["token"]))
+        self.assertEqual((dest / "new.mp4").read_bytes(), payload)
+        self.assertFalse((dest / "old.mp4").exists())
+        action(completed, "dismiss")
         self.assertEqual(jobs(), [])
-        self.assertFalse(list((self.opal.root / "downloads").glob("*.opal-part*")))
+        self.assertFalse(list(dest.glob("*.opal-part*")))
 
     def api(self, method: str, path: str, cookie: str, *, form: dict[str, str] | None = None) -> setup_live.Response:
         return setup_live.request(

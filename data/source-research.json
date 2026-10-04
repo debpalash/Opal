@@ -1,5 +1,5 @@
 {
-  "checked_at": "2026-10-03",
+  "checked_at": "2026-10-04",
   "method": "GitHub API repository and contract research; independent Opal GPL-3.0 adapters, no copied scripts",
   "reading": [
     {
@@ -142,5 +142,59 @@
     "implementation": "Independent GPL-3.0 shim; C malloc ownership matches existing stb release; header dimensions checked before allocation, RGBA to premultiplied GPU upload",
     "verified": "Lossless alpha exact CPU/GPU pixels; real WuxiaClick VP8 cover; malformed/truncated/oversized rejection",
     "limits": "Still WebP images; existing per-content dimensions and RGBA byte budgets; no animation playback"
-  }
+  },
+  "webcomics": [
+    {
+      "id": "xkcd",
+      "name": "xkcd",
+      "origin_repo": "keiyoushi/extensions-source",
+      "commit": "ce0c3b46989df8224bbf8bff72b76b07ba957648",
+      "license": "Apache-2.0 protocol reference only; no code copied",
+      "path": "src/all/xkcd/src/eu/kanade/tachiyomi/extension/all/xkcd/Xkcd.kt",
+      "implementation": "Original official title archive + exact numeric JSON discovery; publisher image, alt and Randall Munroe metadata; full main image Opal reader",
+      "live": "archive HTTP200207480bytes; latestJSON HTTP200386bytes; advertised image HTTP200image/png first1024bytes only",
+      "limits": "Six search rows and at most six metadata calls within8s; title substring across published archive or exactnumber; static image only, interactive comics stay on publisher site"
+    },
+    {
+      "id": "smbc",
+      "name": "Saturday Morning Breakfast Cereal",
+      "origin_repo": "keiyoushi/extensions-source",
+      "commit": "ce0c3b46989df8224bbf8bff72b76b07ba957648",
+      "license": "Apache-2.0 protocol reference only; no code copied",
+      "path": "src/en/saturdaymorningbreakfastcomics/src/eu/kanade/tachiyomi/extension/en/saturdaymorningbreakfastcomics/SaturdayMorningBreakfastComics.kt",
+      "implementation": "Original official recentRSS titlequery + direct #cc-comic mainimage reader; existingolderURL survivesfeedrotation",
+      "live": "RSS HTTP20014189bytes; workHTML HTTP20021393bytes; advertised image HTTP206 image/png first1024bytes only",
+      "limits": "Recent publisherRSS only, six results; full main panel only; bonus panel and fullarchive browsing unsupported"
+    }
+  ],
+  "rejected_candidates_2026_10_04": [
+    {
+      "id": "khinsider",
+      "reason": "original link search200 but two albumdetailpaths403; no verified playback addition"
+    },
+    {
+      "id": "manganato",
+      "reason": "original searchlink403"
+    },
+    {
+      "id": "animeparadise",
+      "reason": "original API origin404; no confirmed contract"
+    },
+    {
+      "id": "scribblehub",
+      "reason": "search403"
+    },
+    {
+      "id": "novelupdates",
+      "reason": "search403"
+    },
+    {
+      "id": "librivox",
+      "reason": "API404 or timeout; existingArchiveLibriVox already covered"
+    },
+    {
+      "id": "lrclib",
+      "reason": "originallinkAPI200; already implemented exact/fuzzylyrics enrichment, not a new playbacksource"
+    }
+  ]
 }

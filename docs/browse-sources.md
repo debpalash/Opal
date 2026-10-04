@@ -447,3 +447,44 @@ reader pages, preserved Browse results and served a real 439,024-byte PNG throug
 Opal's page API. The podcast test uses owned synthetic RSS and silence WAV and
 verifies Opal's actual decoder is active with a positive duration; it proves the
 new enclosure selection without streaming the live publisher episode.
+
+
+### Verified public webcomics (2026-10-04)
+
+Install **xkcd** or **Saturday Morning Breakfast Cereal** to enable their native
+Comics source chips, web Comics source selector and independent universal Search
+adapters. Both actions open
+Opal's existing native/web comic reader with the publisher's complete main image;
+searching does not replace Comics Browse results. Universal cards retain real
+artwork, creator and hover text where supplied. Neither is an audio/video source.
+
+| Source | Actual search scope | Reader | Bound |
+| --- | --- | --- | --- |
+| xkcd | Official title archive substring or exact comic number | Official numbered JSON advertises full static image | Six search rows; eight-second metadata budget |
+| SMBC | Titles in the publisher's recent RSS feed | Direct work HTML `img#cc-comic`, including older saved URLs | Six search rows; recent feed reported partial |
+
+The filtered native Browse chips expose the same bounded discovery. There is no
+invented Load More for these providers. Refine the query for additional matches.
+xkcd interactive comics are represented by their advertised static image; SMBC
+bonus panels remain on the publisher website. Source presence does not guarantee
+provider uptime.
+
+Primary contracts: [xkcd official JSON](https://xkcd.com/json.html),
+[xkcd archive](https://xkcd.com/archive/), and
+[SMBC publisher RSS](https://www.smbc-comics.com/comic/rss). Maintained GitHub
+references are pinned in `data/source-research.json` (Keiyoushi, Apache-2.0,
+contract research only; independent Opal implementation).
+
+Both metadata and advertised image paths returned success in bounded live probes.
+The retained integration fixture uses original generated PNG pixels, verifies
+universal search to opaque action to Opal reader, exact served image bytes and
+unchanged Browse results:
+
+```sh
+python3 tests/test_webcomic_sources_live.py --binary /path/to/opal --port 41807
+```
+
+Rechecking earlier user links also found KHInsider search reachable while two album
+pages returned 403, Manganato search 403, and AnimeParadise without a verified API
+route. These were not added as working sources. LRCLIB is already a lyrics
+adapter, so its reachable API does not count as an additional playback source.

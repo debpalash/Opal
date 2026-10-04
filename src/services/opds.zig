@@ -51,6 +51,12 @@ var entry_covers: [300]components.CoverSlot = [_]components.CoverSlot{.{}} ** 30
 // state.app.opds.* under this mutex. The UI reads entry_count then entries —
 // entry_count is written last so a torn read shows fewer rows, never garbage.
 var parse_mutex: @import("../core/sync.zig").Mutex = .{};
+var catalog_revision: u32 = 1;
+pub fn catalogGeneration() u32 {
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    return catalog_revision;
+}
 
 pub const ConnectionSnapshot = struct {
     connected: bool = false,
@@ -89,6 +95,7 @@ pub fn configureConnection(server: []const u8, user: []const u8, pass: []const u
     hash.update(next.pass[0..next.pass_len]);
     next.identity = hash.final();
     parse_mutex.lock();
+    catalog_revision +%= 1;
     configured_connection = next;
     state.app.opds.server_url = next.server;
     state.app.opds.server_url_len = next.server_len;
@@ -138,6 +145,141 @@ var fetch_request: @import("../core/latest_request.zig").Gate = .{};
 // one root fetch without retrying a failed server on every frame/request.
 var restored_fetch_attempted: std.atomic.Value(bool) = .init(false);
 
+pub const DiscoverySnapshot = struct {
+    active: bool = false,
+    count: usize = 0,
+    categories: [3]pure.OpdsEntry = undefined,
+};
+var discovery: DiscoverySnapshot = .{};
+var discovery_next: [3][512]u8 = undefined;
+var discovery_next_len: [3]usize = @splat(0);
+var loading_fixture_for_test = false;
+pub fn setLoadingFixtureForTest(enabled: bool) void {
+    if (!@import("builtin").is_test) @compileError("Native OPDS fixture is test-only");
+    loading_fixture_for_test = enabled;
+    state.app.opds.connected = enabled;
+    state.app.opds.entry_count = 0;
+    state.app.opds.fetch_error = false;
+    state.app.opds.is_loading.store(enabled, .release);
+}
+pub fn discoverySnapshot() DiscoverySnapshot {
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    return discovery;
+}
+pub fn openDiscoveryCategory(index: usize) bool {
+    const snapshot = discoverySnapshot();
+    if (!snapshot.active or index >= snapshot.count) return false;
+    const category = snapshot.categories[index];
+    openFeed(category.hrefSlice(), category.titleSlice());
+    return true;
+}
+const DiscoveryGroup = struct {
+    job: FeedJob,
+    categories: [3]pure.OpdsEntry = undefined,
+    count: usize = 0,
+    append: bool = false,
+    published: bool = false,
+    succeeded: bool = false,
+    next: [3][512]u8 = undefined,
+    next_len: [3]usize = @splat(0),
+};
+fn runGutenbergDiscovery(job: FeedJob, categories: []const pure.OpdsEntry, append: bool) void {
+    const group = alloc.create(DiscoveryGroup) catch return;
+    defer alloc.destroy(group);
+    group.* = .{ .job = job, .count = @min(categories.len, 3), .append = append };
+    @memcpy(group.categories[0..group.count], categories[0..group.count]);
+    if (append) for (categories[0..group.count], 0..) |category, index| {
+        group.next_len[index] = category.href_len;
+        @memcpy(group.next[index][0..category.href_len], category.hrefSlice());
+    };
+    const indexes = [_]usize{ 0, 1, 2 };
+    @import("browse_fanout.zig").run(usize, indexes[0..group.count], group, fetchGutenbergSection, .{
+        .limit = 3,
+        .cancel_epoch = .{ .epoch32 = .{ .value = &fetch_request.generation, .expected = job.generation } },
+    });
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (!fetch_request.isCurrent(job.generation)) return;
+    if (!group.succeeded) {
+        setError("Could not load Gutenberg discovery. Retry the catalog.");
+        return;
+    }
+    if (!group.published and !append) {
+        state.app.opds.entry_count = 0;
+        catalog_revision +%= 1;
+    }
+    discovery.active = true;
+    if (!append) {
+        discovery.count = group.count;
+        discovery.categories = group.categories;
+    }
+    discovery_next = group.next;
+    discovery_next_len = group.next_len;
+    more_available = state.app.opds.entry_count < state.app.opds.entries.len and anyDiscoveryNext();
+    state.app.opds.fetch_error = false;
+    state.wakeUi();
+}
+fn anyDiscoveryNext() bool {
+    for (discovery_next_len) |length| if (length > 0) return true;
+    return false;
+}
+fn fetchGutenbergSection(group: *DiscoveryGroup, index: usize) void {
+    const url = group.categories[index].hrefSlice();
+    if (url.len == 0) return;
+    const generation = group.job.generation;
+    const body = opdsGetCancelled(url, "", "", 2 * 1024 * 1024, "8", .{ .epoch32 = .{ .value = &fetch_request.generation, .expected = generation } }) orelse return;
+    defer alloc.free(body);
+    if (!pure.isCompleteFeed(body)) return;
+    const rows = alloc.alloc(pure.OpdsEntry, state.app.opds.entries.len) catch return;
+    defer alloc.free(rows);
+    const count = pure.parseFeed(body, url, rows);
+    var verified_work = false;
+    for (rows[0..count]) |row| if (pure.gutenbergWorkId(row.hrefSlice()) != null) {
+        verified_work = true;
+        break;
+    };
+    if (count > 0 and !verified_work) return;
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (!fetch_request.isCurrent(generation)) return;
+    group.succeeded = true;
+    group.next_len[index] = 0;
+    if (pure.feedNextHref(body, url, &group.next[index])) |next| {
+        if (pure.sameOrigin(url, next)) group.next_len[index] = next.len;
+    }
+    if (count == 0) return;
+    if (!group.published and !group.append) {
+        state.app.opds.entry_count = 0;
+        catalog_revision +%= 1;
+    }
+    const merged = pure.mergeGutenbergWorks(&state.app.opds.entries, state.app.opds.entry_count, rows[0..count]);
+    if (merged == state.app.opds.entry_count) return;
+    state.app.opds.entry_count = merged;
+    group.published = true;
+    discovery.active = true;
+    if (!group.append) {
+        discovery.count = group.count;
+        discovery.categories = group.categories;
+    }
+    const title = "Project Gutenberg · Discover";
+    @memcpy(state.app.opds.feed_title[0..title.len], title);
+    state.app.opds.feed_title_len = title.len;
+    state.app.opds.fetch_error = false;
+    if (group.job.mark_connected) {
+        state.app.opds.connected = true;
+        state.markConfigDirty();
+    }
+    state.wakeUi();
+}
+fn discoveryMoreWorker(job: FeedJob, categories: [3]pure.OpdsEntry, count: usize) void {
+    defer {
+        if (fetch_request.isCurrent(job.generation)) loading_more.store(false, .release);
+        state.wakeUi();
+    }
+    runGutenbergDiscovery(job, categories[0..count], true);
+}
+
 // ══════════════════════════════════════════════════════════
 // HTTP
 // ══════════════════════════════════════════════════════════
@@ -154,82 +296,83 @@ fn opdsAuthHeader(buf: []u8) []const u8 {
     return pure.basicAuthHeader(user, pass, buf) orelse "";
 }
 
-/// GET an OPDS feed with HTTP Basic auth into a fresh heap buffer (caller frees).
-/// Returns null on connect/parse failure or an empty body.
-///
-/// curl, NOT http.fetch/std.http — the same call this module used to make, and
-/// the same reason tmdb_api.zig gives for its own curl path. Measured against
-/// Project Gutenberg's live catalog (a plain, reachable OPDS feed): curl gets
-/// 200 over both https AND http, while std.http's `client.request` fails at
-/// connect for either scheme. Since that is the first hop, OPDS could not reach
-/// a server the rest of the app talks to fine. 43 other services already fetch
-/// through curl; this was one of the last holdouts.
+/// Bounded native HTTP with a supervised curl fallback for catalogs whose TLS
+/// remains incompatible. Basic auth stays in-process or private stdin, never argv.
 fn opdsGet(url: []const u8, user: []const u8, pass: []const u8) ?[]u8 {
     return opdsGetBounded(url, user, pass, 4 * 1024 * 1024, "15");
 }
-
 fn opdsGetBounded(url: []const u8, user: []const u8, pass: []const u8, cap: usize, timeout: []const u8) ?[]u8 {
+    return opdsGetCancelled(url, user, pass, cap, timeout, null);
+}
+fn opdsGetCancelled(url: []const u8, user: []const u8, pass: []const u8, cap: usize, timeout: []const u8, cancellation: ?@import("../core/bounded_process.zig").CancelEpoch) ?[]u8 {
     var auth_buf: [512]u8 = undefined;
-    // basicAuthHeader yields a full header line. Feed it through curl's stdin
-    // config so the credential is not visible in the subprocess command line.
-    const auth: ?[]const u8 = if (user.len > 0 or pass.len > 0)
-        pure.basicAuthHeader(user, pass, &auth_buf)
-    else
-        null;
-
-    const io_g = @import("../core/io_global.zig");
-    // -L: OPDS catalogs routinely redirect (Komga /opds → /opds/v1.2, trailing
-    // slashes, http→https). --max-time bounds the whole request the way the old
-    // watchdog did.
-    var child = if (auth != null)
-        io_g.Child.init(&.{
-            "curl",              "-fsSL",
-            "-H",                "Accept: application/atom+xml,application/xml",
-            "--config",          "-",
-            "--connect-timeout", "3",
-            "--max-time",        timeout,
-            "--",                url,
-        }, alloc)
-    else
-        io_g.Child.init(&.{
-            "curl",              "-fsSL",
-            "-H",                "Accept: application/atom+xml,application/xml",
-            "--connect-timeout", "3",
-            "--max-time",        timeout,
-            "--",                url,
-        }, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    if (auth) |a| {
-        @import("../core/curl_secret.zig").spawnWithHeaders(&child, &.{a}) catch return null;
-    } else {
-        child.spawn() catch return null;
+    const auth: ?[]const u8 = if (user.len > 0 or pass.len > 0) (pure.basicAuthHeader(user, pass, &auth_buf) orelse return null) else null;
+    const seconds = std.fmt.parseInt(u8, timeout, 10) catch 8;
+    const buffer = alloc.alloc(u8, cap) catch return null;
+    var owned = false;
+    defer if (!owned) alloc.free(buffer);
+    if (@import("../core/http.zig").fetch(url, buffer, .{
+        .timeout_secs = seconds,
+        .max_response = cap,
+        .cancel_epoch = cancellation,
+        .accept = "application/atom+xml,application/xml",
+        .auth_header = auth,
+    })) |body| {
+        if (body.len == 0) return null;
+        const exact = alloc.realloc(buffer, body.len) catch return null;
+        owned = true;
+        return exact;
     }
-
-    const resp_buf = alloc.alloc(u8, cap) catch {
-        _ = child.kill() catch {};
-        return null;
-    };
-    defer alloc.free(resp_buf);
-    const n = if (child.stdout) |*so| io_g.readAll(so, resp_buf) catch 0 else 0;
-    if (n == resp_buf.len) {
+    if (@import("../core/workers.zig").isQuitting() or @import("browse_fanout.zig").cancelled(cancellation)) return null;
+    const bounded = @import("../core/bounded_process.zig");
+    const io = @import("../core/io_global.zig");
+    var process = bounded.StreamProcess.init(&.{
+        "curl",       "-fsSL", "-H",                "Accept: application/atom+xml,application/xml",
+        "--config",   "-",     "--connect-timeout", "3",
+        "--max-time", timeout, "--",                url,
+    }, .{ .timeout_ms = @as(i64, seconds) * 1000, .max_output_bytes = cap, .cancel_epoch = cancellation, .stdin_behavior = .Pipe });
+    process.start() catch return null;
+    defer _ = process.finish();
+    if (auth) |line| {
+        var escaped: [2048]u8 = undefined;
+        const config_line = @import("../core/curl_secret.zig").configLine(line, &escaped) catch {
+            process.requestStop();
+            return null;
+        };
+        const stdin = if (process.child.stdin) |*pipe| pipe else {
+            process.requestStop();
+            return null;
+        };
+        io.writeAll(stdin, config_line) catch {
+            process.requestStop();
+            return null;
+        };
+    }
+    process.child.closeStdin();
+    const stdout = process.stdout() orelse return null;
+    var length: usize = 0;
+    while (length < buffer.len) {
+        const count = io.read(stdout, buffer[length..]) catch {
+            process.requestStop();
+            return null;
+        };
+        if (count == 0) break;
+        if (!process.noteOutput(count)) return null;
+        length += count;
+    }
+    if (length == buffer.len) {
         var extra: [1]u8 = undefined;
-        const extra_n = if (child.stdout) |*so| io_g.readAll(so, &extra) catch 1 else 1;
-        if (extra_n > 0) {
-            _ = child.kill() catch {};
+        const count = io.read(stdout, &extra) catch 1;
+        if (count != 0) {
+            _ = process.noteOutput(count);
+            process.requestStop();
             return null;
         }
     }
-    const term = child.wait() catch return null;
-    if (switch (term) {
-        .exited => |code| code != 0,
-        else => true,
-    }) return null;
-    if (n == 0) return null;
-
-    const result = alloc.alloc(u8, n) catch return null;
-    @memcpy(result, resp_buf[0..n]);
-    return result;
+    if (!process.finish().ok() or length == 0) return null;
+    const exact = alloc.realloc(buffer, length) catch return null;
+    owned = true;
+    return exact;
 }
 
 const CoverFetchArgs = struct {
@@ -364,7 +507,7 @@ fn fetchFeedSync(job: FeedJob) void {
         return;
     }
 
-    const body = opdsGet(url, user, pass) orelse {
+    const body = opdsGetCancelled(url, user, pass, 4 * 1024 * 1024, "10", .{ .epoch32 = .{ .value = &fetch_request.generation, .expected = my_gen } }) orelse {
         publishFetchError(my_gen, "Could not load the OPDS server — check its URL, credentials or response size");
         state.wakeUi();
         return;
@@ -372,6 +515,14 @@ fn fetchFeedSync(job: FeedJob) void {
     defer alloc.free(body);
     if (!pure.isCompleteFeed(body)) {
         publishFetchError(my_gen, "The server did not return a complete OPDS 1.x Atom feed");
+        return;
+    }
+
+    const sections = alloc.alloc(pure.OpdsEntry, 3) catch return;
+    defer alloc.free(sections);
+    const section_count = pure.gutenbergSections(body, url, sections);
+    if (section_count > 0) {
+        runGutenbergDiscovery(job, sections[0..section_count], false);
         return;
     }
 
@@ -393,6 +544,8 @@ fn fetchFeedSync(job: FeedJob) void {
     state.app.opds.feed_title_len = tl;
     const n = pure.parseFeed(body, url, &state.app.opds.entries);
     state.app.opds.entry_count = n;
+    catalog_revision +%= 1;
+    discovery.active = false;
     // A fresh (replace) feed load ALWAYS resets the append cursor: capture
     // this feed's own rel="next" link, or clear more_available when it has
     // none — loadMore() becomes a no-op for feeds with no pagination.
@@ -415,6 +568,7 @@ fn fetchFeedSync(job: FeedJob) void {
 
 /// Spawn the detached fetch worker for the current feed URL.
 fn spawnFetch(mark_connected: bool) void {
+    if (@import("builtin").is_test and loading_fixture_for_test) return;
     // Snapshot before spawning: navigation and credentials may change while
     // an older request is still waiting for its response.
     var job: FeedJob = .{ .mark_connected = mark_connected };
@@ -427,6 +581,8 @@ fn spawnFetch(mark_connected: bool) void {
     }
     job.generation = fetch_request.begin(&state.app.opds.is_loading);
     state.app.opds.fetch_error = false;
+    discovery.active = false;
+    loading_more.store(false, .release);
     parse_mutex.unlock();
     state.app.opds.thread = @import("../core/workers.zig").spawnLegacy(struct {
         fn worker(request: FeedJob) void {
@@ -466,6 +622,20 @@ pub fn loadMore() void {
         parse_mutex.unlock();
         return;
     }
+    if (discovery.active) {
+        const job: FeedJob = .{ .generation = fetch_request.current() };
+        var categories = discovery.categories;
+        for (categories[0..discovery.count], 0..) |*category, index| {
+            category.href_len = discovery_next_len[index];
+            @memcpy(category.href[0..category.href_len], discovery_next[index][0..category.href_len]);
+        }
+        const count = discovery.count;
+        parse_mutex.unlock();
+        if (@import("../core/workers.zig").spawnLegacy(discoveryMoreWorker, .{ job, categories, count })) |thread| {
+            @import("../core/workers.zig").release(thread);
+        } else |_| loading_more.store(false, .release);
+        return;
+    }
     var job: FeedJob = .{ .generation = fetch_request.current() };
     job.url_len = @min(next_href_len, job.url.len);
     @memcpy(job.url[0..job.url_len], next_href_buf[0..job.url_len]);
@@ -495,7 +665,7 @@ fn fetchMoreSync(job: FeedJob) void {
     const user = job.user[0 .. std.mem.indexOfScalar(u8, &job.user, 0) orelse job.user.len];
     const pass = job.pass[0 .. std.mem.indexOfScalar(u8, &job.pass, 0) orelse job.pass.len];
 
-    const body = opdsGet(url, user, pass) orelse {
+    const body = opdsGetCancelled(url, user, pass, 4 * 1024 * 1024, "10", .{ .epoch32 = .{ .value = &fetch_request.generation, .expected = my_gen } }) orelse {
         logs.pushLog("error", "opds", "Load-more fetch failed", true);
         publishFetchError(my_gen, "Could not load the next OPDS page. Retry to refresh the catalog.");
         state.wakeUi();
@@ -576,6 +746,7 @@ pub fn connect() void {
 /// Start the root feed after a persisted connected session is restored. Safe
 /// to call from every desktop frame and companion GET; only one caller wins.
 pub fn ensureLoadedOnce() void {
+    if (@import("builtin").is_test and loading_fixture_for_test) return;
     if (!state.app.opds.connected or state.app.opds.server_url_len == 0) return;
     if (entryCount() > 0 or state.app.opds.is_loading.load(.acquire)) return;
     if (restored_fetch_attempted.swap(true, .acq_rel)) return;
@@ -697,9 +868,22 @@ pub fn goBack() void {
 
 /// Open one entry: drill into a subsection, or route an acquisition by content
 /// type (image/comic → in-app comics reader; EPUB/PDF → external; else toast).
-pub fn openEntry(idx: usize) void {
-    const row = entryRow(idx) orelse return;
-    openCatalogEntry(row, connectionSnapshot().identity);
+const EntryAction = struct { row: pure.OpdsEntry, connection_identity: u64 };
+fn copiedEntryAction(index: usize, expected: ?u32) ?EntryAction {
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (expected) |generation| if (generation != catalog_revision) return null;
+    if (index >= state.app.opds.entry_count or index >= state.app.opds.entries.len) return null;
+    return .{ .row = state.app.opds.entries[index], .connection_identity = configured_connection.identity };
+}
+pub fn openEntryExpected(index: usize, expected: u32) bool {
+    const action = copiedEntryAction(index, expected) orelse return false;
+    openCatalogEntry(action.row, action.connection_identity);
+    return true;
+}
+pub fn openEntry(index: usize) void {
+    const action = copiedEntryAction(index, null) orelse return;
+    openCatalogEntry(action.row, action.connection_identity);
 }
 
 pub fn openCatalogEntry(row: pure.OpdsEntry, connection_identity: u64) void {
@@ -712,6 +896,11 @@ pub fn openCatalogEntry(row: pure.OpdsEntry, connection_identity: u64) void {
     const href = e.hrefSlice();
     if (href.len == 0) return;
 
+    if (pure.gutenbergWorkId(href)) |id| {
+        @import("novels.zig").openCatalogResult(@intFromEnum(@import("novel_sources_pure.zig").NovelSource.gutenberg), e.titleSlice(), id);
+        state.navigateToTab(.Novels);
+        return;
+    }
     if (e.is_navigation) {
         openFeed(href, e.titleSlice());
         return;
@@ -756,6 +945,8 @@ pub fn disconnect() void {
     fetch_request.cancel(&state.app.opds.is_loading); // supersede any in-flight fetch/append
     parse_mutex.lock();
     state.app.opds.entry_count = 0;
+    catalog_revision +%= 1;
+    discovery.active = false;
     more_available = true;
     next_href_len = 0;
     state.app.opds.connected = false;
@@ -902,6 +1093,16 @@ fn renderFeed() void {
         if (components.iconButton(@src(), icons.tvg.lucide.@"log-out", "Disconnect reading server", false)) disconnect();
     }
 
+    const categories = discoverySnapshot();
+    if (categories.active) {
+        var row = dvui.flexbox(@src(), .{ .justify_content = .start }, .{ .expand = .horizontal, .padding = dvui.Rect.all(8) });
+        defer row.deinit();
+        _ = dvui.label(@src(), "Discover", .{}, .{ .color_text = theme.colors.accent, .gravity_y = 0.5 });
+        for (categories.categories[0..categories.count], 0..) |category, index| {
+            if (dvui.button(@src(), category.titleSlice(), .{}, .{ .id_extra = index, .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.text_secondary })) _ = openDiscoveryCategory(index);
+        }
+    }
+
     if (state.app.opds.is_loading.load(.acquire)) {
         dvui.spinner(@src(), .{
             .color_text = theme.colors.accent,
@@ -1009,9 +1210,10 @@ fn renderFeed() void {
 }
 
 fn renderEntryCard(idx: usize, card_w: f32, poster_h: f32) void {
-    const row_data = entryRow(idx) orelse return;
-    const e = &row_data;
-    const fallback = if (e.is_navigation) icons.tvg.lucide.folder else icons.tvg.lucide.@"book-open";
+    const action = copiedEntryAction(idx, null) orelse return;
+    const e = &action.row;
+    const gutenberg = pure.gutenbergWorkId(e.hrefSlice()) != null;
+    const fallback = if (e.is_navigation and !gutenberg) icons.tvg.lucide.folder else icons.tvg.lucide.@"book-open";
     var card = dvui.box(@src(), .{ .dir = .vertical }, .{
         .id_extra = idx + 90000,
         .min_size_content = .{ .w = card_w, .h = poster_h + OPDS_CARD_FOOTER_H },
@@ -1046,7 +1248,7 @@ fn renderEntryCard(idx: usize, card_w: f32, poster_h: f32) void {
     const clicked = bw.clicked();
     bw.drawFocus();
     bw.deinit();
-    if (clicked) openEntry(idx);
+    if (clicked) openCatalogEntry(action.row, action.connection_identity);
 
     _ = dvui.label(@src(), "{s}", .{safeUtf8(e.titleSlice())}, .{
         .id_extra = idx + 90300,
@@ -1056,7 +1258,9 @@ fn renderEntryCard(idx: usize, card_w: f32, poster_h: f32) void {
         .max_size_content = .{ .w = card_w, .h = 22 },
         .padding = .{ .x = 5, .y = 5, .w = 5, .h = 0 },
     });
-    const subtitle: []const u8 = if (e.is_navigation)
+    const subtitle: []const u8 = if (gutenberg)
+        (if (e.author_len > 0) e.author[0..e.author_len] else "Project Gutenberg")
+    else if (e.is_navigation)
         "Collection"
     else switch (pure.readerRoute(e.contentTypeSlice())) {
         .comics => "Comic / manga",
@@ -1066,6 +1270,99 @@ fn renderEntryCard(idx: usize, card_w: f32, poster_h: f32) void {
     var meta = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = idx + 90400, .expand = .horizontal, .padding = .{ .x = 5, .y = 0, .w = 3, .h = 3 } });
     defer meta.deinit();
     _ = dvui.label(@src(), "{s}", .{subtitle}, .{ .id_extra = idx + 90500, .color_text = theme.colors.text_tertiary, .expand = .horizontal, .gravity_y = 0.5 });
-    if (components.iconButton(@src(), if (e.is_navigation) icons.tvg.lucide.@"folder-open" else icons.tvg.lucide.@"book-open", if (e.is_navigation) "Open" else "Read", true))
-        openEntry(idx);
+    if (components.iconButton(@src(), if (e.is_navigation and !gutenberg) icons.tvg.lucide.@"folder-open" else icons.tvg.lucide.@"book-open", if (e.is_navigation and !gutenberg) "Open" else "Read", true))
+        openCatalogEntry(action.row, action.connection_identity);
+}
+
+/// Real local HTTP fixture exercises production fanout/publication without
+/// contacting the publisher or installing any profile configuration.
+pub fn verifyGutenbergProgressiveForTest() !void {
+    if (!@import("builtin").is_test) @compileError("Native Gutenberg fixture is test-only");
+    const io = @import("../core/io_global.zig");
+    const workers = @import("../core/workers.zig");
+    workers.init();
+    defer workers.finishShutdown();
+    defer workers.beginShutdownAndDrain(800);
+    const address = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
+    var server = try address.listen(io.io(), .{ .reuse_address = true });
+    defer server.deinit(io.io());
+    var release: std.atomic.Value(bool) = .init(false);
+    var seen: std.atomic.Value(u32) = .init(0);
+    const Fixture = struct {
+        fn response(listener: *std.Io.net.Server, gate: *std.atomic.Value(bool), count: *std.atomic.Value(u32)) void {
+            const stream = listener.accept(io.io()) catch return;
+            defer stream.close(io.io());
+            var read_buffer: [2048]u8 = undefined;
+            var reader = stream.reader(io.io(), &read_buffer);
+            const line = reader.interface.takeDelimiterInclusive('\n') catch return;
+            const slow = std.mem.indexOf(u8, line, "/slow ") != null;
+            const duplicate = std.mem.indexOf(u8, line, "/duplicate ") != null;
+            while (true) {
+                const header = reader.interface.takeDelimiterInclusive('\n') catch return;
+                if (std.mem.eql(u8, header, "\r\n")) break;
+            }
+            _ = count.fetchAdd(1, .acq_rel);
+            const start = io.monotonicMilliTimestamp();
+            while (slow and !gate.load(.acquire) and io.monotonicMilliTimestamp() - start < 4000) io.sleep(std.time.ns_per_ms);
+            const body = if (slow)
+                "<feed><entry><title>Slow work</title><link rel='subsection' href='https://www.gutenberg.org/ebooks/11.opds'/></entry></feed>"
+            else if (duplicate)
+                "<feed><entry><title>Shared work</title><link rel='subsection' href='https://www.gutenberg.org/ebooks/84.opds'/></entry></feed>"
+            else
+                "<feed><entry><title>Fast work</title><link rel='subsection' href='https://www.gutenberg.org/ebooks/84.opds'/></entry></feed>";
+            var output: [2048]u8 = undefined;
+            var writer = stream.writer(io.io(), &output);
+            writer.interface.print("HTTP/1.1 200 OK\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}", .{ body.len, body }) catch return;
+            writer.interface.flush() catch {};
+        }
+        fn run(job: FeedJob, sections: [3]pure.OpdsEntry, done: *std.atomic.Value(bool)) void {
+            runGutenbergDiscovery(job, &sections, false);
+            done.store(true, .release);
+        }
+    };
+    var requests: [3]?std.Io.Future(void) = .{ null, null, null };
+    defer {
+        release.store(true, .release);
+        for (&requests) |*request| if (request.*) |*owned| {
+            _ = owned.cancel(io.io());
+        };
+    }
+    for (&requests) |*request| request.* = try io.io().concurrent(Fixture.response, .{ &server, &release, &seen });
+    var sections: [3]pure.OpdsEntry = undefined;
+    for ([_][]const u8{ "fast", "slow", "duplicate" }, 0..) |path, index| {
+        sections[index] = .{};
+        const url = try std.fmt.bufPrint(&sections[index].href, "http://127.0.0.1:{d}/{s}", .{ server.socket.address.getPort(), path });
+        sections[index].href_len = url.len;
+    }
+    const generation = fetch_request.begin(&state.app.opds.is_loading);
+    defer fetch_request.cancel(&state.app.opds.is_loading);
+    var done: std.atomic.Value(bool) = .init(false);
+    const job: FeedJob = .{ .generation = generation };
+    const coordinator = try std.Thread.spawn(.{}, Fixture.run, .{ job, sections, &done });
+    defer {
+        release.store(true, .release);
+        coordinator.join();
+    }
+    const start = io.monotonicMilliTimestamp();
+    while ((seen.load(.acquire) < 3 or entryCount() == 0) and io.monotonicMilliTimestamp() - start < 3000) io.sleep(std.time.ns_per_ms);
+    try std.testing.expectEqual(@as(u32, 3), seen.load(.acquire));
+    try std.testing.expectEqual(@as(usize, 1), entryCount());
+    try std.testing.expect(!done.load(.acquire));
+    try std.testing.expect(state.app.opds.is_loading.load(.acquire));
+    release.store(true, .release);
+    while (!done.load(.acquire) and io.monotonicMilliTimestamp() - start < 4000) io.sleep(std.time.ns_per_ms);
+    try std.testing.expect(done.load(.acquire));
+    try std.testing.expectEqual(@as(usize, 2), entryCount());
+    try std.testing.expect(discoverySnapshot().active);
+    const version = catalogGeneration();
+    try std.testing.expect(copiedEntryAction(0, version) != null);
+    try std.testing.expect(!openEntryExpected(0, version +% 1));
+    parse_mutex.lock();
+    catalog_revision +%= 1; // Replacement publication, even within the same fetch epoch.
+    parse_mutex.unlock();
+    try std.testing.expect(!openEntryExpected(0, version));
+    parse_mutex.lock();
+    state.app.opds.entry_count = 0;
+    discovery = .{};
+    parse_mutex.unlock();
 }

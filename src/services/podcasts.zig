@@ -25,6 +25,17 @@ const workers = @import("../core/workers.zig");
 const LatestRequest = @import("../core/latest_request.zig").Gate;
 const route_resilience = @import("../core/route_resilience_pure.zig");
 
+var loading_fixture_for_test = false;
+pub fn setLoadingFixtureForTest(enabled: bool) void {
+    if (!@import("builtin").is_test) @compileError("Native loading fixture is test-only");
+    loading_fixture_for_test = enabled;
+    state.app.podcasts.result_count = 0;
+    state.app.podcasts.fetch_error = false;
+    state.app.podcasts.selected_idx = null;
+    state.app.podcasts.episode_count = 0;
+    state.app.podcasts.is_loading.store(enabled, .release);
+}
+
 const alloc = @import("../core/alloc.zig").allocator;
 
 const agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0";
@@ -178,28 +189,29 @@ fn deserializePodcast(r: *ccp.Reader) ?pure.Podcast {
 }
 
 /// SWR write — persist the fresh Popular chart. Called from popularWorker while
-/// it already holds parse_mutex, so results[]/result_count are stable.
-fn putPopularCache() void {
+/// Serializes a short owned snapshot under parse_mutex; writes disk after unlock.
+fn putPopularCache(generation: u32) void {
     if (!state.app.content_cache_enabled) return;
-    const count = state.app.podcasts.result_count;
-    if (count == 0) return;
-    const buf = alloc.alloc(u8, PODCASTS_BLOB_CAP) catch return;
-    defer alloc.free(buf);
-    var w = ccp.Writer.init(buf);
-    const n: u16 = @intCast(@min(count, state.app.podcasts.results.len));
-    w.u16v(n);
-    var i: usize = 0;
-    while (i < n) : (i += 1) serializePodcast(&w, state.app.podcasts.results[i]);
-    const blob = w.done() orelse return;
+    const buffer = alloc.alloc(u8, PODCASTS_BLOB_CAP) catch return;
+    defer alloc.free(buffer);
+    var writer = ccp.Writer.init(buffer);
+    {
+        parse_mutex.lock();
+        defer parse_mutex.unlock();
+        if (!search_request.isCurrent(generation) or !state.app.podcasts.showing_popular or state.app.podcasts.result_count == 0) return;
+        const count: u16 = @intCast(@min(state.app.podcasts.result_count, state.app.podcasts.results.len));
+        writer.u16v(count);
+        for (state.app.podcasts.results[0..count]) |row| serializePodcast(&writer, row);
+    }
+    const blob = writer.done() orelse return;
     content_cache.put(PODCASTS_CACHE_KEY, blob, PODCASTS_CACHE_TTL_S);
 }
 
 /// SWR read — seed the Popular grid from disk so it paints instantly on cold
-/// start. UI-thread only (from loadPopularOnce), and ONLY when results[] is
+/// start. Popular worker only (from popularWorker), and ONLY when results[] is
 /// empty. results[] is a fixed array, so no capacity reservation is needed.
-fn seedPopularFromCache() void {
+fn seedPopularFromCache(generation: u32) void {
     if (!state.app.content_cache_enabled) return;
-    if (state.app.podcasts.result_count != 0) return;
     const buf = alloc.alloc(u8, PODCASTS_BLOB_CAP) catch return;
     defer alloc.free(buf);
     const hit = content_cache.get(PODCASTS_CACHE_KEY, buf) orelse return;
@@ -207,7 +219,7 @@ fn seedPopularFromCache() void {
     const n = r.u16v() orelse return;
     parse_mutex.lock();
     defer parse_mutex.unlock();
-    if (state.app.podcasts.result_count != 0) return; // a fetch beat us under the lock
+    if (!search_request.isCurrent(generation) or state.app.podcasts.result_count != 0) return; // a fetch beat us under the lock
     var i: usize = 0;
     while (i < n and i < state.app.podcasts.results.len) : (i += 1) {
         state.app.podcasts.results[i] = deserializePodcast(&r) orelse break;
@@ -215,6 +227,7 @@ fn seedPopularFromCache() void {
     state.app.podcasts.result_count = i;
     if (i > 0) state.app.podcasts.showing_popular = true;
     publication_gen +%= 1;
+    if (i > 0) state.wakeUi();
 }
 
 // ══════════════════════════════════════════════════════════
@@ -241,6 +254,7 @@ pub fn invalidateSourceFeeds() void {
 }
 
 pub fn loadPopularOnce() void {
+    if (@import("builtin").is_test and loading_fixture_for_test) return;
     const refresh = feeds_changed.load(.acquire) and state.app.podcasts.showing_popular;
     if (!refresh and popular_fetched.load(.acquire)) return;
     // Same first-start gate as the trending/tv-calendar fetches: don't latch
@@ -255,16 +269,20 @@ pub fn loadPopularOnce() void {
     if (state.app.podcasts.is_loading.load(.acquire)) return;
     feeds_changed.store(false, .release);
 
-    // SWR seed: paint the last Popular chart from disk NOW (empty grid only) so
-    // the tab isn't blank while the revalidating fetch below runs.
-    seedPopularFromCache();
+    // The worker seeds cached rows before its independent provider requests.
 
+    parse_mutex.lock();
+    if (state.app.podcasts.is_loading.load(.acquire) or (!refresh and popular_fetched.load(.acquire))) {
+        parse_mutex.unlock();
+        return;
+    }
     popular_fetched.store(true, .release);
     state.app.podcasts.showing_popular = true;
     state.app.podcasts.fetch_error = false;
     // Take a generation like a search does, so a user search fired while the
     // chart is in flight supersedes it instead of racing it into results[].
     const my_gen = search_request.begin(&state.app.podcasts.is_loading);
+    parse_mutex.unlock();
 
     workers.spawn(popularWorker, .{my_gen}) catch {
         search_request.finish(my_gen, &state.app.podcasts.is_loading);
@@ -282,74 +300,130 @@ fn publishShows(generation: u32, rows: []const pure.Podcast, failed: bool) void 
         publication_gen +%= 1;
     }
     state.app.podcasts.fetch_error = failed;
-    if (state.app.podcasts.showing_popular and rows.len > 0) putPopularCache();
     state.wakeUi();
 }
 
 fn popularWorker(my_gen: u32) void {
-    defer search_request.finish(my_gen, &state.app.podcasts.is_loading);
+    seedPopularFromCache(my_gen);
+    startDirectoryGroup(.{ .generation = my_gen, .query = undefined, .query_len = 0 });
+}
+
+const DirectoryGroup = struct {
+    job: SearchJob,
+    next_feed: std.atomic.Value(usize) = .init(0),
+    feeds: [256]@import("../core/source_config.zig").FieldSnapshot = undefined,
+    feed_count: usize = 0,
+    rows: [50]pure.Podcast = undefined,
+    count: usize = 0,
+    progress: pure.ProgressivePublication = .{},
+};
+
+fn startDirectoryGroup(job: SearchJob) void {
+    const group = alloc.create(DirectoryGroup) catch {
+        search_request.finish(job.generation, &state.app.podcasts.is_loading);
+        return;
+    };
+    group.* = .{ .job = job };
+    group.feed_count = @import("../core/source_config.zig").copyFields("feed", &group.feeds);
+    defer finishDirectoryPart(group);
+    const jobs: [6]usize = .{ 0, 1, 2, 2, 2, 2 };
+    const count = 2 + @min(group.feed_count, 4);
+    @import("browse_fanout.zig").run(usize, jobs[0..count], group, performDirectoryPart, .{
+        .limit = 4,
+        .cancel_epoch = .{ .epoch32 = .{ .value = &search_request.generation, .expected = job.generation } },
+    });
+}
+
+fn finishDirectoryPart(group: *DirectoryGroup) void {
+    var cache = false;
+    parse_mutex.lock();
+    if (search_request.isCurrent(group.job.generation)) {
+        if (group.progress.clearOnFinish()) {
+            state.app.podcasts.result_count = 0;
+            publication_gen +%= 1;
+        }
+        state.app.podcasts.fetch_error = !group.progress.succeeded;
+        search_request.finish(group.job.generation, &state.app.podcasts.is_loading);
+        cache = state.app.podcasts.showing_popular and group.count > 0;
+    }
+    parse_mutex.unlock();
+    if (cache) putPopularCache(group.job.generation);
+    alloc.destroy(group);
+    state.wakeUi();
+}
+
+fn publishDirectoryPart(group: *DirectoryGroup, rows: []const pure.Podcast, succeeded: bool) void {
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (!search_request.isCurrent(group.job.generation)) return;
+    _ = group.progress.accept(rows.len, succeeded);
+    if (rows.len == 0) return;
+    group.count = pure.appendUnique(&group.rows, group.count, rows);
+    @memcpy(state.app.podcasts.results[0..group.count], group.rows[0..group.count]);
+    state.app.podcasts.result_count = group.count;
+    state.app.podcasts.fetch_error = false;
+    publication_gen +%= 1;
+    state.wakeUi();
+}
+
+fn performDirectoryPart(group: *DirectoryGroup, job: usize) void {
+    if (job < 2) directoryPartWorker(group, job) else feedLaneWorker(group);
+}
+
+fn directoryPartWorker(group: *DirectoryGroup, directory: usize) void {
+    if (!search_request.isCurrent(group.job.generation)) return;
     const rows = alloc.alloc(pure.Podcast, 50) catch return;
     defer alloc.free(rows);
-    var count: usize = installedFeeds(rows, "", my_gen);
-    if (count > 0) publishShows(my_gen, rows[0..count], false);
-    const extra = alloc.alloc(pure.Podcast, 30) catch return;
-    defer alloc.free(extra);
-    // The independent directory paints first; Apple enriches it when available.
-    if (fetchBody("https://gpodder.net/toplist/30.json", 512 * 1024)) |body| {
+    const query = group.job.query[0..group.job.query_len];
+    if (directory == 1 and query.len == 0) {
+        const count = fetchApplePopular(rows, group.job.generation);
+        publishDirectoryPart(group, rows[0..count], count > 0);
+        return;
+    }
+    var enc: [768]u8 = undefined;
+    const encoded = percentEncode(query, &enc);
+    var url_buf: [1024]u8 = undefined;
+    const url = if (directory == 0)
+        (if (query.len == 0) "https://gpodder.net/toplist/30.json" else std.fmt.bufPrint(&url_buf, "https://gpodder.net/search.json?q={s}", .{encoded}) catch return)
+    else
+        std.fmt.bufPrint(&url_buf, "https://itunes.apple.com/search?media=podcast&limit=40&term={s}", .{encoded}) catch return;
+    const body = fetchSearchBody(url, 512 * 1024, group.job.generation) orelse return;
+    defer alloc.free(body);
+    if (directory == 0) {
+        const parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch return;
+        defer parsed.deinit();
+        const count = pure.parseGpodderValue(parsed.value, rows) orelse return;
+        publishDirectoryPart(group, rows[0..count], true);
+    } else if (parseItunesBody(body, rows)) |count| publishDirectoryPart(group, rows[0..count], true);
+}
+
+fn feedLaneWorker(group: *DirectoryGroup) void {
+    while (search_request.isCurrent(group.job.generation)) {
+        const index = group.next_feed.fetchAdd(1, .acq_rel);
+        if (index >= group.feed_count) return;
+        const feed = group.feeds[index];
+        const url = feed.value[0..feed.value_len];
+        if (!pure.isFeedUrl(url)) continue;
+        const body = fetchSearchBody(url, 3 * 1024 * 1024, group.job.generation) orelse continue;
         defer alloc.free(body);
-        const found = pure.parseGpodder(alloc, body, extra);
-        count = pure.appendUnique(rows, count, extra[0..found]);
-        publishShows(my_gen, rows[0..count], false);
-    }
-    if (!search_request.isCurrent(my_gen)) return;
-    const apple_count = fetchApplePopular(extra);
-    count = pure.appendUnique(rows, count, extra[0..apple_count]);
-    publishShows(my_gen, rows[0..count], count == 0);
-}
-
-fn installedFeeds(rows: []pure.Podcast, query: []const u8, gen: u32) usize {
-    var count: usize = 0;
-    const cfg = @import("../core/source_config.zig");
-    const feeds = alloc.alloc(cfg.FieldSnapshot, 256) catch return 0;
-    defer alloc.free(feeds);
-    const feed_count = cfg.copyFields("feed", feeds);
-    for (feeds[0..feed_count]) |feed| {
-        {
-            const raw = feed.value[0..feed.value_len];
-            if (!search_request.isCurrent(gen)) return count;
-            var url_buf: [512]u8 = undefined;
-            if (raw.len > url_buf.len or !pure.isFeedUrl(raw)) continue;
-            @memcpy(url_buf[0..raw.len], raw);
-            const url = url_buf[0..raw.len];
-            const body = fetchBody(url, 3 * 1024 * 1024) orelse continue;
-            defer alloc.free(body);
-            const show = pure.parseFeedShow(body, url) orelse continue;
-            if (query.len > 0) {
-                const title = show.name[0..show.name_len];
-                var matches = false;
-                if (query.len <= title.len) for (0..title.len - query.len + 1) |i| {
-                    if (std.ascii.eqlIgnoreCase(title[i..][0..query.len], query)) {
-                        matches = true;
-                        break;
-                    }
-                };
-                if (!matches) continue;
-            }
-            count = pure.appendUnique(rows, count, &.{show});
+        const show = pure.parseFeedShow(body, url) orelse continue;
+        if (!pure.titleMatches(show.name[0..show.name_len], group.job.query[0..group.job.query_len])) {
+            publishDirectoryPart(group, &.{}, true);
+            continue;
         }
+        publishDirectoryPart(group, &.{show}, true);
     }
-    return count;
 }
 
-fn fetchApplePopular(rows: []pure.Podcast) usize {
+fn fetchApplePopular(rows: []pure.Podcast, generation: u32) usize {
     var chart_url_buf: [128]u8 = undefined;
-    const chart = fetchBody(pure.buildTopChartUrl(POPULAR_LIMIT, &chart_url_buf), 128 * 1024) orelse return 0;
+    const chart = fetchSearchBody(pure.buildTopChartUrl(POPULAR_LIMIT, &chart_url_buf), 128 * 1024, generation) orelse return 0;
     defer alloc.free(chart);
     var ids_buf: [512]u8 = undefined;
     const ids = pure.parseTopChartIds(chart, &ids_buf);
     if (ids.len == 0) return 0;
     var lookup_url_buf: [640]u8 = undefined;
-    const body = fetchBody(pure.buildLookupUrl(ids, &lookup_url_buf), 512 * 1024) orelse return 0;
+    const body = fetchSearchBody(pure.buildLookupUrl(ids, &lookup_url_buf), 512 * 1024, generation) orelse return 0;
     defer alloc.free(body);
     return parseItunesBody(body, rows) orelse 0;
 }
@@ -359,16 +433,19 @@ fn fetchApplePopular(rows: []pure.Podcast) usize {
 // ══════════════════════════════════════════════════════════
 
 pub fn searchPodcasts(query: []const u8) void {
+    if (@import("builtin").is_test and loading_fixture_for_test) return;
     if (query.len == 0) return;
 
+    closeEpisodes();
+    parse_mutex.lock();
     state.app.podcasts.fetch_error = false;
     state.app.podcasts.showing_popular = false;
     // A search satisfies the "page opens with content" job — never let the
     // one-shot chart fetch land on top of the user's results afterwards.
     popular_fetched.store(true, .release);
-    closeEpisodes();
 
     const my_gen = search_request.begin(&state.app.podcasts.is_loading);
+    parse_mutex.unlock();
     var job: SearchJob = .{ .generation = my_gen, .query = undefined, .query_len = @min(query.len, 256) };
     @memcpy(job.query[0..job.query_len], query[0..job.query_len]);
 
@@ -379,10 +456,10 @@ pub fn searchPodcasts(query: []const u8) void {
 
 // Both directory searches are bounded snapshots with no offset cursor.
 fn searchWorker(job: SearchJob) void {
-    defer search_request.finish(job.generation, &state.app.podcasts.is_loading);
     const query = job.query[0..job.query_len];
     if (pure.isFeedUrl(query)) {
-        const body = fetchBody(query, PODCAST_FEED_CAP) orelse {
+        defer search_request.finish(job.generation, &state.app.podcasts.is_loading);
+        const body = fetchSearchBody(query, PODCAST_FEED_CAP, job.generation) orelse {
             publishShows(job.generation, &.{}, true);
             return;
         };
@@ -394,33 +471,7 @@ fn searchWorker(job: SearchJob) void {
         publishShows(job.generation, &.{show}, false);
         return;
     }
-    var enc: [768]u8 = undefined;
-    const encoded = percentEncode(query, &enc);
-    var url_buf: [900]u8 = undefined;
-    const rows = alloc.alloc(pure.Podcast, 50) catch return;
-    defer alloc.free(rows);
-    const extra = alloc.alloc(pure.Podcast, 50) catch return;
-    defer alloc.free(extra);
-    var count: usize = installedFeeds(rows, query, job.generation);
-    var succeeded = count > 0;
-    const gpodder_url = std.fmt.bufPrint(&url_buf, "https://gpodder.net/search.json?q={s}", .{encoded}) catch return;
-    if (fetchBody(gpodder_url, 512 * 1024)) |body| {
-        defer alloc.free(body);
-        const found = pure.parseGpodder(alloc, body, extra);
-        count = pure.appendUnique(rows, count, extra[0..found]);
-        succeeded = succeeded or std.mem.startsWith(u8, std.mem.trim(u8, body, " \r\n\t"), "[");
-        publishShows(job.generation, rows[0..count], !succeeded);
-    }
-    if (!search_request.isCurrent(job.generation)) return;
-    const url = std.fmt.bufPrint(&url_buf, "https://itunes.apple.com/search?media=podcast&limit=40&term={s}", .{encoded}) catch return;
-    if (fetchBody(url, 512 * 1024)) |body| {
-        defer alloc.free(body);
-        if (parseItunesBody(body, extra)) |n| {
-            count = pure.appendUnique(rows, count, extra[0..n]);
-            succeeded = true;
-        }
-    }
-    publishShows(job.generation, rows[0..count], !succeeded);
+    startDirectoryGroup(job);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -475,6 +526,7 @@ fn markEpisodeFailure(generation: u32) void {
 }
 
 pub fn loadEpisodes(idx: usize) void {
+    if (@import("builtin").is_test and loading_fixture_for_test) return;
     startEpisodes(idx, true);
 }
 
@@ -807,6 +859,22 @@ fn percentEncode(src: []const u8, dst: []u8) []const u8 {
 /// Fetch through the shared status-aware transport into a bounded heap buffer.
 /// The transport drains oversized responses, so a large RSS feed cannot wedge
 /// the worker while its child process is blocked on a full stdout pipe.
+fn fetchSearchBody(url: []const u8, cap: usize, generation: u32) ?[]u8 {
+    const buffer = alloc.alloc(u8, cap) catch return null;
+    const body = reliable_fetch.fetch(url, buffer, .{
+        .user_agent = agent,
+        .timeout_secs = 10,
+        .cancel_epoch = .{ .epoch32 = .{ .value = &search_request.generation, .expected = generation } },
+    }) orelse {
+        alloc.free(buffer);
+        return null;
+    };
+    return alloc.realloc(buffer, body.len) catch {
+        alloc.free(buffer);
+        return null;
+    };
+}
+
 fn fetchBody(url: []const u8, cap: usize) ?[]u8 {
     const buf = alloc.alloc(u8, cap) catch return null;
     const body = reliable_fetch.fetch(url, buf, .{

@@ -245,7 +245,7 @@ def _web_app():
 def _remote_api():
     """Remote HTTP subsystem across its feature-owned modules."""
     names = (
-        "remote.zig", "remote_http.zig", "remote_static.zig", "remote_audio_api.zig", "remote_novels_api.zig", "remote_library_pure.zig", "remote_library_api.zig",
+        "remote.zig", "remote_http.zig", "remote_static.zig", "remote_audio_api.zig", "remote_novels_api.zig", "remote_comics_api.zig", "remote_library_pure.zig", "remote_library_api.zig",
         "remote_status.zig", "remote_library_api.zig", "remote_transfer_api.zig",
         "remote_plex_api.zig",
         "remote_youtube_api.zig",

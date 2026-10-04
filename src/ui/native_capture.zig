@@ -42,8 +42,11 @@ pub fn capture(width: u32, height: u32, name: []const u8, setup: ?Draw, draw: Dr
             // Screenshots are review artifacts; avoid expensive compression
             // across the complete route matrix while preserving exact pixels.
             const compression = dvui.c.stbi_write_png_compression_level;
+            const filter = dvui.c.stbi_write_force_png_filter;
             dvui.c.stbi_write_png_compression_level = 0;
+            dvui.c.stbi_write_force_png_filter = 0;
             defer dvui.c.stbi_write_png_compression_level = compression;
+            defer dvui.c.stbi_write_force_png_filter = filter;
             try picture.png(&png.writer);
             const encoded = png.written();
             try std.testing.expect(encoded.len > 1000);

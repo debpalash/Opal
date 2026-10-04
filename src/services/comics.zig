@@ -1,4 +1,5 @@
 const std = @import("std");
+const components = @import("../ui/components.zig");
 const reader_components = @import("../ui/components.zig");
 const dvui = @import("dvui");
 const state = @import("../core/state.zig");
@@ -458,7 +459,11 @@ pub fn freeComicPages() void {
 /// search-result state; declared here as a thin forwarder for call sites near
 /// the comic lifecycle.
 pub fn freeSearchCovers() void {
-    for (0..MAX_SEARCH_RESULTS) |i| freeCoverSlot(i);
+    for (0..MAX_SEARCH_RESULTS) |i| {
+        freeCoverSlot(i);
+        cover_render_hash[i] = 0;
+        cover_pixel_hash[i] = 0;
+    }
 }
 
 /// Close the current comic and return to the browse/search view.
@@ -480,6 +485,16 @@ fn fetchComicThread(gen: u32) void {
     defer workers.leave();
     const url = state.app.comic.url_buf[0..state.app.comic.url_len];
 
+    inline for (.{ @import("webcomic_sources.zig").Provider.xkcd, @import("webcomic_sources.zig").Provider.smbc }) |provider| {
+        const scheme = @tagName(provider) ++ ":";
+        if (std.mem.startsWith(u8, url, scheme)) {
+            const ok = loadPublicWebcomic(provider, url[scheme.len..], gen);
+            if (state.app.comic.dl_gen.load(.acquire) != gen) return;
+            state.app.comic.is_loading.store(false, .release);
+            if (ok) downloadPages(gen) else logs.pushLog("error", "comics", "Publisher comic could not be loaded", true);
+            return;
+        }
+    }
     if (std.mem.startsWith(u8, url, "comicfury:")) {
         const ok = loadComicFury(url["comicfury:".len..], gen);
         if (state.app.comic.dl_gen.load(.acquire) != gen) return;
@@ -622,23 +637,18 @@ fn fetchComicThread(gen: u32) void {
 /// (no sentinel needed) — shared by the MangaDex JSON chain and the search
 /// fetchers. std.http is deliberately avoided project-wide: it SEGVs on some
 /// ISP TLS resets (see tmdb_api.zig).
+threadlocal var browse_generation: ?u32 = null;
+fn browseEpoch() ?@import("../core/bounded_process.zig").CancelEpoch {
+    const gen = browse_generation orelse return null;
+    return .{ .epoch32 = .{ .value = &search_gen, .expected = gen } };
+}
 fn fetchUrl(url: []const u8, dst: []u8) usize {
-    // Per-host UA: MangaDex 400s a spoofed browser UA (see pure.userAgentFor).
-    var ua_buf: [200]u8 = undefined;
-    const ua = std.fmt.bufPrint(&ua_buf, "User-Agent: {s}", .{pure.userAgentFor(url, @import("../core/app_meta.zig").user_agent_with_url)}) catch return 0;
-    const argv = [_][]const u8{
-        "curl",       "-sL",
-        "-H",         ua,
-        "--max-time", "15",
-        url,
-    };
-    var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    _ = child.spawn() catch return 0;
-    const n = if (child.stdout) |*so| @import("../core/io_global.zig").readAll(so, dst) catch 0 else 0;
-    _ = child.wait() catch {};
-    return n;
+    const body = @import("reliable_fetch.zig").fetch(url, dst, .{
+        .user_agent = pure.userAgentFor(url, @import("../core/app_meta.zig").user_agent_with_url),
+        .timeout_secs = 15,
+        .cancel_epoch = browseEpoch(),
+    }) orelse return 0;
+    return body.len;
 }
 
 /// HTML-scraper framework fetch that transparently defeats Cloudflare / DDoS-Guard
@@ -654,7 +664,7 @@ fn fetchUrl(url: []const u8, dst: []u8) usize {
 /// challenged, so they stay on `fetchUrl`. POST endpoints (Madara admin-ajax)
 /// stay on `fetchPost` — scrapeFetch is GET-only.
 fn fetchMaybeUnblocked(url: []const u8, dst: []u8) usize {
-    const body = scrape.scrapeFetch(url, dst) orelse return 0;
+    const body = scrape.scrapeFetchWithCancellation(url, dst, browseEpoch()) orelse return 0;
     return body.len;
 }
 
@@ -1580,7 +1590,7 @@ fn downloadSinglePage(i: usize, gen: u32) void {
     // nothing will free.
     if (workers.isQuitting()) return;
 
-    if (total > 100) {
+    if (pure.acceptsPageBody(tmp_buf[0..total])) {
         const pixels = alloc.dupe(u8, tmp_buf[0..total]) catch return;
         // Re-check the generation IMMEDIATELY before publishing. If the comic was
         // switched, this buffer belongs to no one — free it and bail rather than
@@ -1643,6 +1653,8 @@ const MAX_COVER_CONCURRENT: u32 = 8;
 // double-free on the pixel buffers entirely.
 var sr_cover_gen: [MAX_SEARCH_RESULTS]u32 = std.mem.zeroes([MAX_SEARCH_RESULTS]u32);
 var covers_render_gen: u32 = 0;
+var cover_render_hash: [MAX_SEARCH_RESULTS]u64 = @splat(0);
+var cover_pixel_hash: [MAX_SEARCH_RESULTS]u64 = @splat(0);
 
 var sr_count: usize = 0;
 /// True while a search worker is in flight. Atomic: the worker clears it, and
@@ -1651,6 +1663,18 @@ var sr_searching_v: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var loaded_default: bool = false;
 var default_requested = std.atomic.Value(bool).init(false);
 var last_fetch_s: i64 = 0; // SWR cache timestamp
+
+pub fn setLoadingFixtureForTest(enabled: bool) void {
+    if (!@import("builtin").is_test) @compileError("Native fixture is test-only");
+    sr_count = 0;
+    loaded_default = true;
+    default_requested.store(true, .release);
+    search_pending.store(false, .release);
+    sr_searching_v.store(enabled, .release);
+    loading_more.store(false, .release);
+    state.app.comic.is_loading.store(false, .release);
+    state.app.comic.page_count = 0;
+}
 
 pub fn setNativeFixtureForTest(textures: []const dvui.Texture) void {
     if (!@import("builtin").is_test) @compileError("Native fixture is test-only");
@@ -1704,38 +1728,37 @@ const DEFAULT_FEED_QUERY = "";
 /// SWR write — persist the default feed's text rows. Called from searchWorker
 /// (same thread that wrote sr_*, so they're stable) only for the default feed.
 fn putDefaultCache() void {
-    search_rows_mutex.lock();
-    defer search_rows_mutex.unlock();
     if (!state.app.content_cache_enabled) return;
-    if (sr_count == 0) return;
     const buf = alloc.alloc(u8, COMICS_BLOB_CAP) catch return;
     defer alloc.free(buf);
     var w = ccp.Writer.init(buf);
-    const n: u16 = @intCast(@min(sr_count, MAX_SEARCH_RESULTS));
-    w.u16v(n);
-    var i: usize = 0;
-    while (i < n) : (i += 1) {
-        w.blob(sr_titles[i][0..@min(sr_title_lens[i], sr_titles[i].len)]);
-        w.blob(sr_urls[i][0..@min(sr_url_lens[i], sr_urls[i].len)]);
+    {
+        search_rows_mutex.lock();
+        defer search_rows_mutex.unlock();
+        if (sr_count == 0) return;
+        const n: u16 = @intCast(@min(sr_count, MAX_SEARCH_RESULTS));
+        w.u16v(n);
+        var i: usize = 0;
+        while (i < n) : (i += 1) {
+            w.blob(sr_titles[i][0..@min(sr_title_lens[i], sr_titles[i].len)]);
+            w.blob(sr_urls[i][0..@min(sr_url_lens[i], sr_urls[i].len)]);
+        }
     }
     const blob = w.done() orelse return;
     content_cache.put(COMICS_CACHE_KEY, blob, COMICS_CACHE_TTL_S);
 }
 
-/// SWR read — seed the default grid from disk so it paints instantly on cold
-/// start. UI-thread only (from renderContent), ONLY before the default feed has
-/// loaded and while the grid is empty. Seeds TEXT rows only (see the section
-/// header); marks the feed loaded + stale so the existing SWR branch fires the
-/// revalidating fetch this same frame.
-fn seedDefaultFromCache() void {
-    search_rows_mutex.lock();
-    defer search_rows_mutex.unlock();
+/// Worker-only cache seed, outside the row lock. Current-wave providers replace
+/// these retained text cards on their first useful publication.
+fn seedDefaultFromCache(gen: u32) void {
     if (!state.app.content_cache_enabled) return;
-    if (loaded_default or sr_count != 0 or sr_searching_v.load(.acquire)) return;
-    if (state.app.comic.search_buf[0] != 0 or state.app.comic.title_len != 0) return;
+
     const buf = alloc.alloc(u8, COMICS_BLOB_CAP) catch return;
     defer alloc.free(buf);
     const hit = content_cache.get(COMICS_CACHE_KEY, buf) orelse return;
+    search_rows_mutex.lock();
+    defer search_rows_mutex.unlock();
+    if (search_gen.load(.acquire) != gen or sr_count != 0) return;
     var r = ccp.Reader.init(hit.bytes);
     const n = r.u16v() orelse return;
     var i: usize = 0;
@@ -1752,12 +1775,7 @@ fn seedDefaultFromCache() void {
     }
     if (i == 0) return;
     sr_count = i;
-    // Adopt the default query + a STALE stamp so renderContent's SWR branch fires
-    // the revalidating fetch (which also re-stores the cache) this frame.
-    @memcpy(sr_query_buf[0..DEFAULT_FEED_QUERY.len], DEFAULT_FEED_QUERY);
-    sr_query_len = DEFAULT_FEED_QUERY.len;
-    loaded_default = true;
-    last_fetch_s = 0;
+    state.wakeUi();
 }
 
 // ── Live / incremental (debounced) search ──
@@ -1793,6 +1811,8 @@ pub fn searching() bool {
 }
 
 pub fn searchCount() usize {
+    search_rows_mutex.lock();
+    defer search_rows_mutex.unlock();
     return @min(sr_count, MAX_SEARCH_RESULTS);
 }
 
@@ -1868,8 +1888,8 @@ pub fn copySearchSnapshot(out: []OwnedSearchRow) usize {
 //     source to search come from source_config ("suwayomi"/"base",
 //     "suwayomi"/"source"), so it is INERT until the user configures it. Cards
 //     carry a `suwayomi:<mangaId>` pseudo-URL routed by fetchComicThread.
-const Source = enum { all, readallcomics, mangadex, heancms, mangathemesia, madara, suwayomi, weebcentral, comicbookplus, comicfury };
-var active_source: Source = .all;
+const Source = enum(u8) { all, readallcomics, mangadex, heancms, mangathemesia, madara, suwayomi, weebcentral, comicbookplus, comicfury, xkcd, smbc };
+var active_source = std.atomic.Value(Source).init(.all);
 
 /// The Suwayomi server base URL + the installed-source id to search, or null
 /// when either is unconfigured (→ the engine stays inert). Both read fresh from
@@ -1897,14 +1917,13 @@ pub fn browseSuwayomiSource(source_id: []const u8) void {
         _ = sc.install("suwayomi", b);
     } else |_| return;
     mihon.close();
-    active_source = .suwayomi;
     // Kick a default listing for the newly selected source.
-    searchComics(DEFAULT_FEED_QUERY);
+    queueComicSearch(DEFAULT_FEED_QUERY, .suwayomi);
 }
 
 /// Does this source participate in the current selection?
 fn sourceActive(src: Source) bool {
-    return active_source == .all or active_source == src;
+    return active_source.load(.acquire) == .all or active_source.load(.acquire) == src;
 }
 
 /// The configured Madara base URL, or null when no Madara source is installed
@@ -1950,15 +1969,33 @@ fn freeCoverSlot(i: usize) void {
 /// generation, drop the textures/pixels left over from the previous search.
 /// Runs at the top of the grid render each frame; cheap when nothing changed.
 fn reclaimStaleCovers() void {
-    const g = search_gen.load(.acquire);
-    if (g == covers_render_gen) return;
+    search_rows_mutex.lock();
+    defer search_rows_mutex.unlock();
     for (0..MAX_SEARCH_RESULTS) |i| {
-        // A slot belonging to an older generation (or a now-empty slot beyond
-        // sr_count) holds stale art — reclaim it. Slots stamped with the live
-        // generation keep their freshly-fetched covers.
-        if (sr_cover_gen[i] != g) freeCoverSlot(i);
+        const hash = if (i < sr_count) coverUrlHash(sr_cover_urls[i][0..sr_cover_url_lens[i]]) else 0;
+        if (hash != cover_render_hash[i]) {
+            if (sr_cover_tex[i]) |tex| {
+                dvui.textureDestroyLater(tex);
+                sr_cover_tex[i] = null;
+            }
+            sr_cover_failed[i] = false;
+        }
+        if (hash != cover_pixel_hash[i]) {
+            if (sr_cover_pixels[i]) |pixels| alloc.free(pixels);
+            sr_cover_pixels[i] = null;
+            cover_pixel_hash[i] = 0;
+        }
+        cover_render_hash[i] = hash;
     }
-    covers_render_gen = g;
+    covers_render_gen = search_gen.load(.acquire);
+}
+fn coverUrlHash(url: []const u8) u64 {
+    return if (url.len == 0) 0 else std.hash.Wyhash.hash(0, url);
+}
+const CoverJob = struct { index: usize, generation: u32, url: [512]u8 = undefined, url_len: usize };
+fn coverJobCurrent(job: CoverJob) bool {
+    if (job.index >= sr_count) return false;
+    return @import("browse_fanout.zig").coverIdentityMatches(search_gen.load(.acquire), job.generation, sr_cover_urls[job.index][0..sr_cover_url_lens[job.index]], job.url[0..job.url_len]);
 }
 
 /// Schedule initial browsing from either desktop or the companion API.
@@ -1969,7 +2006,7 @@ pub fn loadPopularOnce() void {
 }
 
 pub fn hasMoreResults() bool {
-    return more_available and sr_count < MAX_SEARCH_RESULTS;
+    return more_available and searchCount() < MAX_SEARCH_RESULTS;
 }
 pub fn loadingMoreResults() bool {
     return loading_more.load(.acquire);
@@ -1982,13 +2019,30 @@ var search_pending = std.atomic.Value(bool).init(false);
 
 /// Coalesce rapid searches; only the owner loop starts a result writer.
 pub fn searchComics(query: []const u8) void {
+    queueComicSearch(query, null);
+}
+pub fn selectedSourceName() []const u8 {
+    return @tagName(active_source.load(.acquire));
+}
+/// Remote public providers share the same generation-owned Browse command queue.
+pub fn searchComicsFrom(query: []const u8, source: []const u8) bool {
+    if (query.len >= pending_query.len) return false;
+    const src: Source = if (std.mem.eql(u8, source, "all")) .all else if (std.mem.eql(u8, source, "xkcd")) .xkcd else if (std.mem.eql(u8, source, "smbc")) .smbc else return false;
+    if (src != .all and !@import("../core/source_config.zig").has(source)) return false;
+    queueComicSearch(query, src);
+    return true;
+}
+fn queueComicSearch(query: []const u8, source: ?Source) void {
     if (query.len >= pending_query.len) return;
     default_requested.store(true, .release);
     search_command_mutex.lock();
     defer search_command_mutex.unlock();
     @memcpy(pending_query[0..query.len], query);
     pending_query_len = query.len;
+    search_rows_mutex.lock();
     _ = search_gen.fetchAdd(1, .acq_rel);
+    search_rows_mutex.unlock();
+    if (source) |src| active_source.store(src, .release);
     search_pending.store(true, .release);
     state.wakeUi();
 }
@@ -2018,7 +2072,8 @@ fn drainPendingSearch() void {
 /// single source-specific URL seam — adding a source means adding one builder.
 fn buildSearchUrl(out: []u8, query: []const u8, paged: u32) ?[:0]const u8 {
     // Endpoint migrated to opal-plugins — null until the user installs "readallcomics".
-    const base = @import("../core/source_config.zig").get("readallcomics", "base") orelse return null;
+    var base_buf: [512]u8 = undefined;
+    const base = @import("../core/source_config.zig").copyValue("readallcomics", "base", &base_buf) orelse return null;
     var encoded_query: [512]u8 = undefined;
     const enc_len = percentEncode(query, &encoded_query);
     const eq = encoded_query[0..enc_len];
@@ -2031,25 +2086,13 @@ fn buildSearchUrl(out: []u8, query: []const u8, paged: u32) ?[:0]const u8 {
 /// curl a search-results page into `dst`; returns bytes read (0 on failure).
 /// Shared by the initial search and the infinite-scroll appender.
 fn fetchSearchHtml(url: [:0]const u8, dst: []u8) usize {
-    const argv = [_][]const u8{
-        "curl",       "-sL",
-        "-H",         "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "--max-time", "15",
-        url,
-    };
-    var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    _ = child.spawn() catch return 0;
-    const n = if (child.stdout) |*so| @import("../core/io_global.zig").readAll(so, dst) catch 0 else 0;
-    _ = child.wait() catch {};
-    return n;
+    return fetchMaybeUnblocked(url, dst);
 }
 
 /// Fetch + merge ONE readallcomics page, writing rows from slot `start`.
 /// Returns the number of new rows (0 if the source is not installed / errored).
 /// Worker-thread only.
-fn fetchExpandedComicPage(query: []const u8, page: u32, gen: u32, start: usize, id: []const u8) usize {
+fn fetchExpandedComicPage(query: []const u8, page: u32, gen: u32, start_hint: usize, id: []const u8) usize {
     const cfg = @import("../core/source_config.zig");
     var base_buf: [512]u8 = undefined;
     const raw_base = cfg.copyValue(id, "base", &base_buf) orelse return 0;
@@ -2077,9 +2120,11 @@ fn fetchExpandedComicPage(query: []const u8, page: u32, gen: u32, start: usize, 
         search_rows_mutex.lock();
         defer search_rows_mutex.unlock();
         if (search_gen.load(.acquire) != gen) return 0;
+        const start = comicAppendStart(gen, start_hint);
+        if (search_gen.load(.acquire) != gen) return 0;
         var count = start;
         for (rows[0..result.count]) |row| {
-            if (count >= MAX_SEARCH_RESULTS) break;
+            if (count >= @min(MAX_SEARCH_RESULTS, start + RESULTS_PER_PAGE)) break;
             if (row.route_len > sr_urls[count].len) continue;
             var duplicate = false;
             for (0..count) |i| if (std.mem.eql(u8, sr_urls[i][0..sr_url_lens[i]], row.route[0..row.route_len])) {
@@ -2097,17 +2142,19 @@ fn fetchExpandedComicPage(query: []const u8, page: u32, gen: u32, start: usize, 
             sr_cover_failed[count] = false;
             count += 1;
         }
-        sr_count = count;
+        commitComicRows(gen, start, count);
         return count - start;
     }
     search_rows_mutex.lock();
     defer search_rows_mutex.unlock();
     if (search_gen.load(.acquire) != gen) return 0;
+    const start = comicAppendStart(gen, start_hint);
+    if (search_gen.load(.acquire) != gen) return 0;
     const cbp = std.mem.eql(u8, id, "comicbookplus");
     var it = expanded.html.AnchorIter{ .html = body[0..n], .path = if (cbp) "?dlid=" else if (std.mem.eql(u8, id, "comicfury")) "/comicprofile.php?url=" else "/series/" };
     var count = start;
     while (it.next()) |item| {
-        if (count >= MAX_SEARCH_RESULTS or search_gen.load(.acquire) != gen) break;
+        if (count >= @min(MAX_SEARCH_RESULTS, start + RESULTS_PER_PAGE) or search_gen.load(.acquire) != gen) break;
         if (std.mem.startsWith(u8, item.title, "tiny ")) continue;
         var abs_buf: [1024]u8 = undefined;
         const abs = expanded.html.sourceUrl(&abs_buf, base, item.url) orelse continue;
@@ -2147,7 +2194,7 @@ fn fetchExpandedComicPage(query: []const u8, page: u32, gen: u32, start: usize, 
         count += 1;
     }
     if (search_gen.load(.acquire) != gen) return 0;
-    sr_count = count;
+    commitComicRows(gen, start, count);
     return count - start;
 }
 
@@ -2167,6 +2214,7 @@ fn fetchExpandedReadingHtml(id: []const u8, url: []const u8, out: []u8) usize {
     const result = @import("reliable_fetch.zig").request(url, out, &headers, .{
         .user_agent = @import("../core/app_meta.zig").user_agent_with_url,
         .timeout_secs = 15,
+        .cancel_epoch = browseEpoch(),
     });
     return if (result.ok()) result.body.len else 0;
 }
@@ -2283,9 +2331,11 @@ fn fetchHeancmsPage(query: []const u8, page: u32, gen: u32, start: usize) usize 
 ///
 /// Cards store a `heancms:<series_slug>` pseudo-URL; fetchComicThread routes on
 /// that prefix into the JSON reader chain (loadHeancmsPages) not the scraper.
-fn parseHeancmsResults(json: []const u8, gen: u32, start: usize) usize {
+fn parseHeancmsResults(json: []const u8, gen: u32, start_hint: usize) usize {
     search_rows_mutex.lock();
     defer search_rows_mutex.unlock();
+    if (search_gen.load(.acquire) != gen) return 0;
+    const start = comicAppendStart(gen, start_hint);
     const data = heancms.findJsonNode(json, "\"data\"") orelse return 0;
     if (data.len == 0 or data[0] != '[') return 0;
 
@@ -2296,7 +2346,7 @@ fn parseHeancmsResults(json: []const u8, gen: u32, start: usize) usize {
     var count: usize = start;
     var it = heancms.ObjIter{ .buf = data };
     while (it.next()) |obj| {
-        if (count >= MAX_SEARCH_RESULTS) break;
+        if (count >= @min(MAX_SEARCH_RESULTS, start + RESULTS_PER_PAGE)) break;
         const entry = heancms.parseSeriesEntry(obj) orelse continue;
 
         var url_buf: [160]u8 = undefined;
@@ -2351,7 +2401,7 @@ fn parseHeancmsResults(json: []const u8, gen: u32, start: usize) usize {
     }
 
     if (search_gen.load(.acquire) != gen) return 0;
-    sr_count = count;
+    commitComicRows(gen, start, count);
     return count - start;
 }
 /// Fetch + merge ONE MangaThemesia browse page, writing rows from slot `start`.
@@ -2402,70 +2452,97 @@ fn fetchMadaraPage(query: []const u8, page: u32, gen: u32, start: usize) usize {
 /// readallcomics goes first (when installed) so an existing user's listing is
 /// unchanged; MangaDex fills the rest — and is the whole listing on a fresh
 /// install, where readallcomics is inert.
+// These fields are protected by search_rows_mutex. Old cards remain visible
+// until a provider contributes useful rows to the new wave.
+var comic_wave_generation: u32 = 0;
+var comic_published_generation: u32 = 0;
+fn comicAppendStart(gen: u32, hint: usize) usize {
+    return @import("browse_fanout.zig").appendPosition(comic_wave_generation, comic_published_generation, gen, sr_count, hint);
+}
+fn commitComicRows(gen: u32, start: usize, count: usize) void {
+    if (!@import("browse_fanout.zig").usefulPublication(search_gen.load(.acquire), gen, start, count)) return;
+    sr_count = count;
+    comic_published_generation = gen;
+    state.wakeUi();
+}
+const ComicWave = struct {
+    generation: u32,
+    query: [256]u8 = undefined,
+    query_len: usize = 0,
+    page: u32,
+    added: std.atomic.Value(usize) = .init(0),
+};
+fn comicProvider(wave: *ComicWave, src: Source) void {
+    browse_generation = wave.generation;
+    defer browse_generation = null;
+    const q = wave.query[0..wave.query_len];
+    const gen = wave.generation;
+    if (search_gen.load(.acquire) != gen) return;
+    const n = switch (src) {
+        .all => 0,
+        .mangadex => fetchMangadexPage(q, (wave.page - 1) * RESULTS_PER_PAGE, gen, 0),
+        .readallcomics => fetchReadAllComicsPage(q, wave.page, gen, 0),
+        .heancms => fetchHeancmsPage(q, wave.page, gen, 0),
+        .mangathemesia => fetchThemesiaPage(q, wave.page, gen, 0),
+        .madara => fetchMadaraPage(q, wave.page, gen, 0),
+        .suwayomi => fetchSuwayomiPage(q, wave.page, gen, 0),
+        .weebcentral => fetchExpandedComicPage(q, wave.page, gen, 0, "weebcentral"),
+        .comicbookplus => fetchExpandedComicPage(q, wave.page, gen, 0, "comicbookplus"),
+        .comicfury => fetchExpandedComicPage(q, wave.page, gen, 0, "comicfury"),
+        .xkcd => fetchPublicWebcomicSearch(q, gen, 0, .xkcd),
+        .smbc => fetchPublicWebcomicSearch(q, gen, 0, .smbc),
+    };
+    _ = wave.added.fetchAdd(n, .acq_rel);
+}
+fn runComicWave(gen: u32, page: u32) usize {
+    var wave: ComicWave = .{ .generation = gen, .page = page };
+    wave.query_len = @min(sr_query_len, wave.query.len);
+    @memcpy(wave.query[0..wave.query_len], sr_query_buf[0..wave.query_len]);
+    var jobs: [11]Source = undefined;
+    var count: usize = 0;
+    inline for (.{ Source.mangadex, Source.readallcomics, Source.heancms, Source.mangathemesia, Source.madara, Source.suwayomi, Source.weebcentral, Source.comicbookplus, Source.comicfury, Source.xkcd, Source.smbc }) |src| {
+        const installed = switch (src) {
+            .mangadex => true,
+            .madara => madaraBase() != null,
+            else => @import("../core/source_config.zig").has(@tagName(src)),
+        };
+        if (installed and sourceActive(src) and (page == 1 or (src != .xkcd and src != .smbc))) {
+            jobs[count] = src;
+            count += 1;
+        }
+    }
+    @import("browse_fanout.zig").run(Source, jobs[0..count], &wave, comicProvider, .{
+        .cancel_epoch = .{ .epoch32 = .{ .value = &search_gen, .expected = gen } },
+    });
+    return wave.added.load(.acquire);
+}
 fn searchWorker(gen: u32) void {
     defer sr_searching_v.store(false, .release);
-    const query = sr_query_buf[0..sr_query_len];
-
-    var filled: usize = 0;
-
-    // A newer search may have landed while the first source was in flight.
-    if (search_gen.load(.acquire) != gen) {
-        logs.pushLog("info", "comics", "Comic search superseded (stale dropped)", false);
-        return;
-    }
-    if (sourceActive(.mangadex)) {
-        filled += fetchMangadexPage(query, 0, gen, filled);
-    }
-    if (sourceActive(.readallcomics) and search_gen.load(.acquire) == gen) {
-        filled += fetchReadAllComicsPage(query, 1, gen, filled);
-    }
-    // A newer search may have landed while MangaDex was in flight.
-    if (search_gen.load(.acquire) != gen) {
-        logs.pushLog("info", "comics", "Comic search superseded (stale dropped)", false);
-        return;
-    }
-    if (sourceActive(.heancms)) {
-        filled += fetchHeancmsPage(query, 1, gen, filled);
-    }
-    if (sourceActive(.mangathemesia)) {
-        filled += fetchThemesiaPage(query, 1, gen, filled);
-    }
-    if (search_gen.load(.acquire) != gen) return;
-    // Madara (~332 WordPress sites) — inert until a "madara" source is installed.
-    if (sourceActive(.madara) and madaraBase() != null) {
-        filled += fetchMadaraPage(query, 1, gen, filled);
-    }
-    if (search_gen.load(.acquire) != gen) return;
-    // Suwayomi — inert until the server base + a source id are configured. Gives
-    // access to whichever installed Mihon/Aniyomi extension the user pointed at.
-    if (sourceActive(.suwayomi)) {
-        filled += fetchSuwayomiPage(query, 1, gen, filled);
-    }
-    inline for (.{ Source.weebcentral, Source.comicbookplus, Source.comicfury }) |src| {
-        if (sourceActive(src) and search_gen.load(.acquire) == gen) filled += fetchExpandedComicPage(query, 1, gen, filled, @tagName(src));
-    }
-
-    // Only the LAST source's page size can tell us whether more rows exist; a
-    // short page from every active source means we've hit the end.
+    search_rows_mutex.lock();
+    comic_wave_generation = gen;
+    search_rows_mutex.unlock();
+    if (active_source.load(.acquire) == .all and std.mem.eql(u8, sr_query_buf[0..sr_query_len], DEFAULT_FEED_QUERY)) seedDefaultFromCache(gen);
+    const added = runComicWave(gen, 1);
     if (search_gen.load(.acquire) != gen) return;
     search_rows_mutex.lock();
-    if (search_gen.load(.acquire) == gen) sr_count = filled;
+    const full = sr_count >= MAX_SEARCH_RESULTS;
     search_rows_mutex.unlock();
-    if (filled == 0 or filled >= MAX_SEARCH_RESULTS) more_available = false;
-    // SWR write: persist ONLY the default landing feed (default query on the
-    // `all` source) so the next cold start seeds instantly. User searches and
-    // source-filtered feeds are not cached. Skip if a newer search superseded us.
-    if (search_gen.load(.acquire) == gen and active_source == .all and
-        std.mem.eql(u8, query, DEFAULT_FEED_QUERY)) putDefaultCache();
-    logs.pushLog("info", "comics", "Comic search results parsed", false);
+    if (added == 0 or full or active_source.load(.acquire) == .xkcd or active_source.load(.acquire) == .smbc) more_available = false;
+    if (added > 0 and active_source.load(.acquire) == .all and
+        std.mem.eql(u8, sr_query_buf[0..sr_query_len], DEFAULT_FEED_QUERY)) putDefaultCache();
 }
 
 /// Infinite-scroll appender: fetch the next readallcomics page and merge new
 /// rows onto the existing listing (dedup by URL, bounded by MAX_SEARCH_RESULTS).
 /// Runs on a detached thread; guarded by `loading_more`.
 pub fn loadMoreResults() void {
+    // Admission shares the query command lock; pending queries cannot pair a
+    // new epoch with the old query buffer.
+    search_command_mutex.lock();
+    defer search_command_mutex.unlock();
     if (!more_available or searching()) return;
-    if (sr_count == 0 or sr_count >= MAX_SEARCH_RESULTS) return;
+    const count = searchCount();
+    if (count == 0 or count >= MAX_SEARCH_RESULTS) return;
     if (loading_more.swap(true, .acq_rel)) return;
     workers.spawn(loadMoreWorker, .{search_gen.load(.acquire)}) catch {
         loading_more.store(false, .release);
@@ -2475,50 +2552,24 @@ pub fn loadMoreResults() void {
 
 fn loadMoreWorker(gen: u32) void {
     defer loading_more.store(false, .release);
-    const query = sr_query_buf[0..sr_query_len];
-    const next_page = sr_page + 1;
-
-    // Each source appends at the CURRENT end of the listing — the parsers commit
-    // sr_count as they go, so reading it again between sources is what keeps the
-    // second source from overwriting the first one's freshly-appended rows.
-    var added: usize = 0;
-    if (sourceActive(.readallcomics)) {
-        added += fetchReadAllComicsPage(query, next_page, gen, sr_count);
-    }
-    // A fresh search may have landed mid-fetch — its page 1 owns the listing now;
-    // appending our older page would corrupt/duplicate it.
     if (search_gen.load(.acquire) != gen) return;
-    if (sourceActive(.mangadex)) {
-        // MangaDex paginates by row offset, not page number: page N starts at
-        // (N-1)*RESULTS_PER_PAGE.
-        added += fetchMangadexPage(query, (next_page - 1) * RESULTS_PER_PAGE, gen, sr_count);
+    search_rows_mutex.lock();
+    if (!@import("browse_fanout.zig").beginAppendWave(search_gen.load(.acquire), gen, &comic_wave_generation, &comic_published_generation)) {
+        search_rows_mutex.unlock();
+        return;
     }
+    const next_page = std.math.add(u32, sr_page, 1) catch {
+        search_rows_mutex.unlock();
+        return;
+    };
+    search_rows_mutex.unlock();
+    const added = runComicWave(gen, next_page);
     if (search_gen.load(.acquire) != gen) return;
-    if (sourceActive(.heancms)) {
-        // HeanCms paginates by 1-based page number (its /query perPage=12).
-        added += fetchHeancmsPage(query, next_page, gen, sr_count);
-    }
-    if (sourceActive(.mangathemesia)) {
-        // MangaThemesia paginates by page number (1-based), like readallcomics.
-        added += fetchThemesiaPage(query, next_page, gen, sr_count);
-    }
-    if (sourceActive(.madara) and madaraBase() != null) {
-        // Madara paginates by WordPress page number (1-based) like readallcomics.
-        added += fetchMadaraPage(query, next_page, gen, sr_count);
-    }
+    search_rows_mutex.lock();
+    defer search_rows_mutex.unlock();
     if (search_gen.load(.acquire) != gen) return;
-    if (sourceActive(.suwayomi)) {
-        // Suwayomi's /source/{id}/search paginates by 1-based page number.
-        added += fetchSuwayomiPage(query, next_page, gen, sr_count);
-    }
-    inline for (.{ Source.weebcentral, Source.comicbookplus, Source.comicfury }) |src| {
-        if (sourceActive(src) and search_gen.load(.acquire) == gen) added += fetchExpandedComicPage(query, next_page, gen, sr_count, @tagName(src));
-    }
-
-    // Sources use different page sizes (HeanCms serves 12, MangaDex 24).
-    // A short merged page therefore cannot establish exhaustion. Stop only
-    // when no source contributed a row, or the bounded listing is full.
-    if (added == 0 or sr_count >= MAX_SEARCH_RESULTS) more_available = false;
+    const full = sr_count >= MAX_SEARCH_RESULTS;
+    if (added == 0 or full) more_available = false;
     if (added > 0) sr_page = next_page;
 }
 
@@ -2584,9 +2635,11 @@ fn attrValue(html: []const u8, name: []const u8, limit: usize) ?[]const u8 {
 /// Parse a search page, writing results into sr_* starting at slot `start`.
 /// Returns the number of NEW rows appended. With start==0 it (re)populates the
 /// listing; with start==sr_count it appends a paginated page (deduped by URL).
-fn parseSearchResults(html: []const u8, gen: u32, start: usize) usize {
+fn parseSearchResults(html: []const u8, gen: u32, start_hint: usize) usize {
     search_rows_mutex.lock();
     defer search_rows_mutex.unlock();
+    if (search_gen.load(.acquire) != gen) return 0;
+    const start = comicAppendStart(gen, start_hint);
     // NOTE: we do NOT free textures/pixels here (worker thread). We only stamp
     // each result slot with `gen` and write its cover URL; the render thread's
     // reclaimStaleCovers() drops the previous search's art. This keeps the
@@ -2595,7 +2648,7 @@ fn parseSearchResults(html: []const u8, gen: u32, start: usize) usize {
     var pos: usize = 0;
     const block_needle = "class=\"book-link\"";
 
-    while (pos < html.len and count < MAX_SEARCH_RESULTS) {
+    while (pos < html.len and count < @min(MAX_SEARCH_RESULTS, start + RESULTS_PER_PAGE)) {
         const b = findSubstring(html[pos..], block_needle) orelse break;
         const block_at = pos + b;
         // The book-link anchor opens before the class attr — back up to find the
@@ -2704,7 +2757,7 @@ fn parseSearchResults(html: []const u8, gen: u32, start: usize) usize {
     // so the render thread reclaims whatever we wrote; nothing leaks.)
     if (search_gen.load(.acquire) != gen) return 0;
 
-    sr_count = count;
+    commitComicRows(gen, start, count);
     return count - start;
 }
 
@@ -2716,15 +2769,17 @@ fn parseSearchResults(html: []const u8, gen: u32, start: usize) usize {
 ///
 /// Cards store a `mangadex:<uuid>` pseudo-URL; fetchComicThread routes on that
 /// prefix into the JSON reader chain (loadMangadexPages) instead of the scraper.
-fn parseMangadexResults(json: []const u8, gen: u32, start: usize) usize {
+fn parseMangadexResults(json: []const u8, gen: u32, start_hint: usize) usize {
     search_rows_mutex.lock();
     defer search_rows_mutex.unlock();
+    if (search_gen.load(.acquire) != gen) return 0;
+    const start = comicAppendStart(gen, start_hint);
     const data = pure.findJsonNode(json, "\"data\"") orelse return 0;
 
     var count: usize = start;
     var it = pure.ObjIter{ .buf = data };
     while (it.next()) |obj| {
-        if (count >= MAX_SEARCH_RESULTS) break;
+        if (count >= @min(MAX_SEARCH_RESULTS, start + RESULTS_PER_PAGE)) break;
         const entry = pure.parseMangaEntry(obj) orelse continue;
 
         var url_buf: [64]u8 = undefined;
@@ -2777,7 +2832,7 @@ fn parseMangadexResults(json: []const u8, gen: u32, start: usize) usize {
     }
 
     if (search_gen.load(.acquire) != gen) return 0;
-    sr_count = count;
+    commitComicRows(gen, start, count);
     return count - start;
 }
 
@@ -2814,13 +2869,15 @@ fn fetchSuwayomiPage(query: []const u8, page: u32, gen: u32, start: usize) usize
 /// number of NEW rows appended. Mirrors parseMangadexResults: worker-thread
 /// only, never frees textures/pixels (stamps `gen` + writes the cover URL,
 /// leaving reclaimStaleCovers the sole owner). Cards store `suwayomi:<mangaId>`.
-fn parseSuwayomiResults(json: []const u8, base: []const u8, gen: u32, start: usize) usize {
+fn parseSuwayomiResults(json: []const u8, base: []const u8, gen: u32, start_hint: usize) usize {
     search_rows_mutex.lock();
     defer search_rows_mutex.unlock();
+    if (search_gen.load(.acquire) != gen) return 0;
+    const start = comicAppendStart(gen, start_hint);
     var count: usize = start;
     var it = suwayomi.MangaIter{ .json = json };
     while (it.next()) |obj| {
-        if (count >= MAX_SEARCH_RESULTS) break;
+        if (count >= @min(MAX_SEARCH_RESULTS, start + RESULTS_PER_PAGE)) break;
         var id_buf: [24]u8 = undefined;
         var title_buf: [256]u8 = undefined;
         var thumb_buf: [512]u8 = undefined;
@@ -2870,7 +2927,7 @@ fn parseSuwayomiResults(json: []const u8, base: []const u8, gen: u32, start: usi
         count += 1;
     }
     if (search_gen.load(.acquire) != gen) return 0;
-    sr_count = count;
+    commitComicRows(gen, start, count);
     return count - start;
 }
 
@@ -2942,13 +2999,15 @@ fn loadSuwayomiPages(manga_id: []const u8) bool {
 /// Cards store a `themesia:<manga-detail-url>` pseudo-URL; fetchComicThread routes
 /// on that prefix into loadThemesiaPages (details→chapters→pages) instead of the
 /// generic scraper. All parsing goes through the tested manga_themesia_pure.
-fn parseThemesiaResults(html: []const u8, base: []const u8, gen: u32, start: usize) usize {
+fn parseThemesiaResults(html: []const u8, base: []const u8, gen: u32, start_hint: usize) usize {
     search_rows_mutex.lock();
     defer search_rows_mutex.unlock();
+    if (search_gen.load(.acquire) != gen) return 0;
+    const start = comicAppendStart(gen, start_hint);
     var count: usize = start;
     var it = mt.SearchIter{ .html = html };
     while (it.next()) |item| {
-        if (count >= MAX_SEARCH_RESULTS) break;
+        if (count >= @min(MAX_SEARCH_RESULTS, start + RESULTS_PER_PAGE)) break;
 
         // Absolute manga-detail URL, wrapped in the `themesia:` scheme so the card
         // routes to loadThemesiaPages rather than the generic HTML scraper.
@@ -3014,7 +3073,7 @@ fn parseThemesiaResults(html: []const u8, base: []const u8, gen: u32, start: usi
     }
 
     if (search_gen.load(.acquire) != gen) return 0;
-    sr_count = count;
+    commitComicRows(gen, start, count);
     return count - start;
 }
 
@@ -3027,9 +3086,11 @@ fn parseThemesiaResults(html: []const u8, base: []const u8, gen: u32, start: usi
 /// Cards store a `madara:<absolute mangaUrl>` pseudo-URL; fetchComicThread routes
 /// on that prefix into the Madara reader chain (loadMadaraPages) instead of the
 /// generic scraper. ALL parsing goes through the tested `manga_madara_pure`.
-fn parseMadaraResults(html: []const u8, gen: u32, start: usize) usize {
+fn parseMadaraResults(html: []const u8, gen: u32, start_hint: usize) usize {
     search_rows_mutex.lock();
     defer search_rows_mutex.unlock();
+    if (search_gen.load(.acquire) != gen) return 0;
+    const start = comicAppendStart(gen, start_hint);
     const base = madaraBase() orelse return 0;
     var base_buf: [256]u8 = undefined;
     if (base.len > base_buf.len) return 0;
@@ -3039,7 +3100,7 @@ fn parseMadaraResults(html: []const u8, gen: u32, start: usize) usize {
     var count: usize = start;
     var it = madara.SearchIter{ .html = html };
     while (it.next()) |item| {
-        if (count >= MAX_SEARCH_RESULTS) break;
+        if (count >= @min(MAX_SEARCH_RESULTS, start + RESULTS_PER_PAGE)) break;
 
         // Resolve the manga URL to absolute, then wrap it in the madara: route.
         var murl_buf: [512]u8 = undefined;
@@ -3093,7 +3154,7 @@ fn parseMadaraResults(html: []const u8, gen: u32, start: usize) usize {
     }
 
     if (search_gen.load(.acquire) != gen) return 0;
-    sr_count = count;
+    commitComicRows(gen, start, count);
     return count - start;
 }
 
@@ -3102,24 +3163,21 @@ fn parseMadaraResults(html: []const u8, gen: u32, start: usize) usize {
 /// texture on the render thread, which then frees the pixels).
 /// Guarded by sr_cover_fetching[idx] so a card render can't double-spawn.
 fn fetchCover(idx: usize) void {
-    if (idx >= MAX_SEARCH_RESULTS) return;
-    if (sr_cover_url_lens[idx] == 0) return;
+    search_rows_mutex.lock();
+    defer search_rows_mutex.unlock();
+    if (idx >= sr_count or sr_cover_url_lens[idx] == 0) return;
     if (sr_cover_pixels[idx] != null or sr_cover_tex[idx] != null) return;
-    // Atomically claim the slot.
-    if (sr_cover_fetching[idx].swap(true, .acq_rel)) return; // already in flight
-
-    // Over the global cap: release the slot claim and let the card retry on a
-    // later frame once an in-flight slot frees.
+    if (sr_cover_fetching[idx].swap(true, .acq_rel)) return;
     if (cover_in_flight.load(.acquire) >= MAX_COVER_CONCURRENT) {
         sr_cover_fetching[idx].store(false, .release);
         return;
     }
+    var job: CoverJob = .{ .index = idx, .generation = search_gen.load(.acquire), .url_len = sr_cover_url_lens[idx] };
+    @memcpy(job.url[0..job.url_len], sr_cover_urls[idx][0..job.url_len]);
     _ = cover_in_flight.fetchAdd(1, .acq_rel);
-
-    workers.spawn(coverWorker, .{idx}) catch {
+    workers.spawn(coverWorker, .{job}) catch {
         _ = cover_in_flight.fetchSub(1, .acq_rel);
         sr_cover_fetching[idx].store(false, .release);
-        return;
     };
 }
 
@@ -3158,82 +3216,40 @@ fn thumbnailize(url: []const u8, out: []u8) []const u8 {
     return url;
 }
 
-fn coverWorker(idx: usize) void {
-    workers.enter();
-    defer workers.leave();
-    defer sr_cover_fetching[idx].store(false, .release);
-    defer _ = cover_in_flight.fetchSub(1, .acq_rel); // release the global slot
-
-    // Failure latch: any exit before we publish pixels means this cover produced
-    // nothing (404 / undecodable / truncated). Latch it so renderCoverCard stops
-    // re-spawning a curl worker every frame. Declared after the defers above so
-    // it runs FIRST (LIFO) — while the slot's URL/quit state is still meaningful.
-    // Skip the shutdown/repurpose exits (url cleared or quitting): those aren't
-    // a real cover failure and the reset paths clear the latch anyway.
+fn coverWorker(job: CoverJob) void {
+    const idx = job.index;
     var produced = false;
-    defer if (!produced and !workers.isQuitting() and sr_cover_url_lens[idx] != 0) {
-        sr_cover_failed[idx] = true;
-    };
-
-    const raw_url = sr_cover_urls[idx][0..sr_cover_url_lens[idx]];
-    if (raw_url.len == 0) return;
-    var url_buf: [560]u8 = undefined;
-    const url = thumbnailize(raw_url, &url_buf);
-
-    // Per-host UA: MangaDex cover art (uploads.mangadex.org) 400s a spoofed
-    // browser UA — every cover would render as a blank placeholder. The scrapers'
-    // blogspot CDN still gets the browser UA. See pure.userAgentFor.
-    var ua_buf: [200]u8 = undefined;
-    const ua = std.fmt.bufPrint(&ua_buf, "User-Agent: {s}", .{pure.userAgentFor(url, @import("../core/app_meta.zig").user_agent_with_url)}) catch return;
-    const argv = [_][]const u8{
-        "curl",       "-sL",
-        "-H",         ua,
-        "--max-time", "10",
-        url,
-    };
-    var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    _ = child.spawn() catch return;
-
-    // Heap buffer — never on the thread stack. 4MB covers full-res fallbacks for
-    // hosts that ignore the size hint (e.g. raw .jpg with no size token).
-    const max_img = 4 * 1024 * 1024;
-    const tmp_buf = alloc.alloc(u8, max_img) catch {
-        _ = child.wait() catch {};
-        return;
-    };
-    defer alloc.free(tmp_buf);
-
-    var total: usize = 0;
-    if (child.stdout) |*so| {
-        while (total < max_img) {
-            if (workers.isQuitting()) return; // bail mid-download; defer frees tmp_buf
-            const n = @import("../core/io_global.zig").read(so, tmp_buf[total..]) catch break;
-            if (n == 0) break;
-            total += n;
-        }
+    defer {
+        search_rows_mutex.lock();
+        if (!produced and coverJobCurrent(job) and !workers.isQuitting()) sr_cover_failed[idx] = true;
+        sr_cover_fetching[idx].store(false, .release);
+        search_rows_mutex.unlock();
+        _ = cover_in_flight.fetchSub(1, .acq_rel);
     }
-    _ = child.wait() catch {};
-    if (total < 100) return;
-
-    // Decode → RGBA pixels.
-    const decoded = @import("../core/image_decode.zig").cover(tmp_buf[0..total]) orelse return;
+    var url_buf: [560]u8 = undefined;
+    const url = thumbnailize(job.url[0..job.url_len], &url_buf);
+    const tmp = alloc.alloc(u8, 4 * 1024 * 1024) catch return;
+    defer alloc.free(tmp);
+    const bytes = @import("reliable_fetch.zig").fetch(url, tmp, .{
+        .timeout_secs = 10,
+        .user_agent = pure.userAgentFor(url, @import("../core/app_meta.zig").user_agent_with_url),
+        .cancel_epoch = .{ .epoch32 = .{ .value = &search_gen, .expected = job.generation } },
+    }) orelse return;
+    const decoded = @import("../core/image_decode.zig").cover(bytes) orelse return;
     defer decoded.deinit();
-    const p_slice = alloc.alloc(u8, decoded.rgba_len) catch return;
-    @memcpy(p_slice, decoded.pixels[0..decoded.rgba_len]);
-
-    // Publish only if this result slot is still alive (a newer search could have
-    // freed/repurposed it) and we're not shutting down (freeSearchCovers may
-    // already have run). The render thread uploads + frees the pixels.
-    if (sr_cover_url_lens[idx] == 0 or workers.isQuitting()) {
-        alloc.free(p_slice);
+    const pixels = alloc.dupe(u8, decoded.pixels[0..decoded.rgba_len]) catch return;
+    search_rows_mutex.lock();
+    defer search_rows_mutex.unlock();
+    if (!coverJobCurrent(job) or workers.isQuitting() or sr_cover_pixels[idx] != null) {
+        alloc.free(pixels);
         return;
     }
     sr_cover_w[idx] = @intCast(decoded.width);
     sr_cover_h[idx] = @intCast(decoded.height);
-    sr_cover_pixels[idx] = p_slice;
-    produced = true; // real pixels published → don't latch failure
+    sr_cover_pixels[idx] = pixels;
+    cover_pixel_hash[idx] = coverUrlHash(job.url[0..job.url_len]);
+    produced = true;
+    state.wakeUi();
 }
 
 // ══════════════════════════════════════════════════════════
@@ -3261,16 +3277,16 @@ pub fn renderContent() void {
         return;
     }
 
-    // SWR seed: paint the last default feed from disk NOW (empty grid only), then
-    // let the branch below fire the revalidating fetch (seed marks it stale).
-    seedDefaultFromCache();
+    const visible_count = searchCount();
+
+    // Cache seeding is owned by the search worker; the first frame stays fast.
 
     // First open shows a default popular feed so the tab isn't blank (the
     // search box stays free for anything else).
-    if (!loaded_default and sr_count == 0 and !searching() and state.app.comic.search_buf[0] == 0 and state.app.comic.title_len == 0) {
+    if (!loaded_default and visible_count == 0 and !searching() and state.app.comic.search_buf[0] == 0 and state.app.comic.title_len == 0) {
         loaded_default = true;
         searchComics(DEFAULT_FEED_QUERY);
-    } else if (sr_count > 0 and !searching() and state.app.comic.title_len == 0 and
+    } else if (visible_count > 0 and !searching() and state.app.comic.title_len == 0 and
         @import("browse_cache.zig").isStale(last_fetch_s))
     {
         // SWR: refresh the current listing in the background once it's stale.
@@ -3294,7 +3310,6 @@ pub fn renderContent() void {
         });
         defer bar.deinit();
 
-        const components = @import("../ui/components.zig");
         if (@import("../ui/browse_layout_pure.zig").showLocalSearch(state.app.page_shell_enabled)) {
             const input = std.mem.sliceTo(&state.app.comic.search_buf, 0);
             const is_url = std.mem.startsWith(u8, input, "http");
@@ -3356,6 +3371,8 @@ pub fn renderContent() void {
         if (@import("../core/source_config.zig").has("weebcentral")) renderSourceChip("Weeb Central", 8, .weebcentral);
         if (@import("../core/source_config.zig").has("comicbookplus")) renderSourceChip("ComicBookPlus", 9, .comicbookplus);
         if (@import("../core/source_config.zig").has("comicfury")) renderSourceChip("ComicFury", 10, .comicfury);
+        if (@import("../core/source_config.zig").has("xkcd")) renderSourceChip("xkcd archive", 11, .xkcd);
+        if (@import("../core/source_config.zig").has("smbc")) renderSourceChip("SMBC recent", 12, .smbc);
         renderSourceChip("MangaThemesia", 4, .mangathemesia);
         // Madara engine (~332 WordPress sites) — inert until a "madara" source is
         // installed, exactly like ReadAllComics.
@@ -3390,12 +3407,12 @@ pub fn renderContent() void {
         // Result count (or live status).
         {
             var cb: [48]u8 = undefined;
-            const cs = if (sr_searching_v.load(.acquire) and sr_count == 0)
+            const cs = if (sr_searching_v.load(.acquire) and visible_count == 0)
                 @as([]const u8, "Searching…")
             else
-                std.fmt.bufPrint(&cb, "{d} results", .{sr_count}) catch "";
+                std.fmt.bufPrint(&cb, "{d} results", .{visible_count}) catch "";
             _ = dvui.label(@src(), "{s}", .{cs}, .{
-                .color_text = if (sr_searching_v.load(.acquire) and sr_count == 0) theme.colors.accent else theme.colors.text_secondary,
+                .color_text = if (sr_searching_v.load(.acquire) and visible_count == 0) theme.colors.accent else theme.colors.text_secondary,
                 .gravity_y = 0.5,
                 .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
             });
@@ -3429,16 +3446,22 @@ pub fn renderContent() void {
         }
     }
 
-    // ── Cover-grid discovery ──
-    if (sr_count == 0 and sr_searching_v.load(.acquire)) {
-        _ = dvui.label(@src(), "Searching…", .{}, .{
-            .color_text = theme.colors.accent,
-            .gravity_x = 0.5,
-            .margin = dvui.Rect.all(24),
+    if (active_source.load(.acquire) == .xkcd or active_source.load(.acquire) == .smbc) {
+        _ = dvui.label(@src(), "{s}", .{if (active_source.load(.acquire) == .xkcd) "Title archive or exact number; up to 6 matches. Refine the query for more." else "Recent publisher RSS; up to 6 matching main panels."}, .{
+            .color_text = theme.colors.text_secondary,
+            .font = dvui.themeGet().font_body.withSize(11),
+            .margin = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
         });
+    }
+
+    // ── Cover-grid discovery ──
+    if (visible_count == 0 and searching()) {
+        const width = @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().w, state.app.ui_scale);
+        const columns: usize = @intFromFloat(@max(1, @floor(width / (card_w + 12))));
+        components.coverSkeletonGrid(@src(), 97000, columns, card_w, card_w * 1.5, CARD_FOOTER_H, 2);
         return;
     }
-    if (sr_count == 0) {
+    if (visible_count == 0) {
         _ = dvui.label(@src(), "No comics found. Try another title.", .{}, .{
             .color_text = theme.colors.text_secondary,
             .gravity_x = 0.5,
@@ -3467,7 +3490,7 @@ pub fn renderContent() void {
     // viewport (±2 overscan) collapse into two spacer boxes, so the grid lays
     // out a handful of rows per frame instead of all ~120 card widget trees.
     const row_h: f32 = cover_h + CARD_FOOTER_H + 6;
-    const total_rows = (sr_count + cols - 1) / cols;
+    const total_rows = (visible_count + cols - 1) / cols;
     const win = @import("tmdb_pure.zig").visibleRows(total_rows, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 2);
 
     if (win.first > 0) {
@@ -3484,7 +3507,7 @@ pub fn renderContent() void {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = base + 50000, .expand = .horizontal });
         defer row.deinit();
         var col: usize = 0;
-        while (col < cols and base + col < sr_count) : (col += 1) {
+        while (col < cols and base + col < visible_count) : (col += 1) {
             renderCoverCard(base + col, cw, cover_h);
         }
     }
@@ -3500,7 +3523,7 @@ pub fn renderContent() void {
     // ── Infinite scroll: a status row at the grid's tail. When it scrolls into
     // view (viewport bottom within one viewport-height of content end) we kick
     // the next-page appender. The row also doubles as a tap-to-load affordance.
-    if (more_available and sr_count > 0 and sr_count < MAX_SEARCH_RESULTS) {
+    if (more_available and visible_count > 0 and visible_count < MAX_SEARCH_RESULTS) {
         const busy = loading_more.load(.acquire);
         const lbl = if (busy) "Loading more…" else "▾ Load more";
         if (dvui.button(@src(), lbl, .{}, .{
@@ -3523,7 +3546,7 @@ pub fn renderContent() void {
         if (max_scroll > 0 and si.viewport.y >= max_scroll - si.viewport.h * 1.5) {
             loadMoreResults();
         }
-    } else if (!more_available and sr_count > RESULTS_PER_PAGE) {
+    } else if (!more_available and visible_count > RESULTS_PER_PAGE) {
         _ = dvui.label(@src(), "— end of results —", .{}, .{
             .id_extra = 60002,
             .expand = .horizontal,
@@ -3538,7 +3561,7 @@ pub fn renderContent() void {
 /// current query against that source. Today only readallcomics returns rows, so
 /// "All" and "ReadAllComics" behave identically — but the seam is ready for more.
 fn renderSourceChip(label: []const u8, id: usize, src: Source) void {
-    const active = active_source == src;
+    const active = active_source.load(.acquire) == src;
     if (dvui.button(@src(), label, .{}, .{
         .id_extra = id + 72000,
         .color_fill = if (active) theme.colors.accent else theme.colors.bg_elevated,
@@ -3548,13 +3571,12 @@ fn renderSourceChip(label: []const u8, id: usize, src: Source) void {
         .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
         .gravity_y = 0.5,
     })) {
-        if (active_source != src) {
-            active_source = src;
+        if (active_source.load(.acquire) != src) {
             // Re-run the live listing under the new source filter.
             {
                 var q: [256]u8 = undefined;
                 @memcpy(q[0..sr_query_len], sr_query_buf[0..sr_query_len]);
-                searchComics(q[0..sr_query_len]);
+                queueComicSearch(q[0..sr_query_len], src);
             }
         }
     }
@@ -3627,6 +3649,9 @@ fn renderChip(label: []const u8, id: usize, path: []const u8) void {
 /// load the issue. Hover reveals the full title over a dimmed scrim.
 fn renderCoverCard(idx: usize, cw: f32, cover_h: f32) void {
     const identity = ownedSearchRow(idx) orelse return;
+    search_rows_mutex.lock();
+    const cover_failed = sr_cover_failed[idx];
+    search_rows_mutex.unlock();
     var title_buf: [256]u8 = undefined;
     const title = @import("../core/text.zig").safeUtf8Buf(identity.title[0..identity.title_len], &title_buf);
     // Deterministic gradient from a title hash (placeholder + glyph tint).
@@ -3665,14 +3690,21 @@ fn renderCoverCard(idx: usize, cw: f32, cover_h: f32) void {
         bw.processEvents();
         bw.drawBackground();
 
-        // Upload pixels → texture on the render thread, then free the pixels.
-        if (sr_cover_tex[idx] == null and sr_cover_pixels[idx] != null) {
-            const np: usize = @as(usize, sr_cover_w[idx]) * @as(usize, sr_cover_h[idx]);
-            const pma: []dvui.Color.PMA = @as([*]dvui.Color.PMA, @ptrCast(@alignCast(sr_cover_pixels[idx].?.ptr)))[0..np];
-            sr_cover_tex[idx] = dvui.textureCreate(pma, sr_cover_w[idx], sr_cover_h[idx], .linear, .rgba_32) catch null;
-            if (sr_cover_tex[idx] != null) {
-                alloc.free(sr_cover_pixels[idx].?);
-                sr_cover_pixels[idx] = null;
+        // Transfer the worker-owned pixels under the mutex. GPU work is UI-only
+        // and outside the publication lock.
+        if (sr_cover_tex[idx] == null) {
+            search_rows_mutex.lock();
+            const pixels = sr_cover_pixels[idx];
+            const width = sr_cover_w[idx];
+            const height = sr_cover_h[idx];
+            sr_cover_pixels[idx] = null;
+            cover_pixel_hash[idx] = 0;
+            search_rows_mutex.unlock();
+            if (pixels) |px| {
+                const np: usize = @as(usize, width) * @as(usize, height);
+                const pma: []dvui.Color.PMA = @as([*]dvui.Color.PMA, @ptrCast(@alignCast(px.ptr)))[0..np];
+                sr_cover_tex[idx] = dvui.textureCreate(pma, width, height, .linear, .rgba_32) catch null;
+                alloc.free(px);
             }
         }
 
@@ -3690,8 +3722,8 @@ fn renderCoverCard(idx: usize, cw: f32, cover_h: f32) void {
                 // Lazy-trigger fetch; meanwhile show a glyph placeholder. Skip a
                 // slot whose cover already failed (404/undecodable) so it can't
                 // re-spawn a curl worker every frame.
-                if (sr_cover_url_lens[idx] > 0 and !sr_cover_failed[idx]) fetchCover(idx);
-                if (sr_cover_url_lens[idx] > 0 and !sr_cover_failed[idx])
+                if (identity.cover_len > 0 and !cover_failed) fetchCover(idx);
+                if (identity.cover_len > 0 and !cover_failed)
                     shared_components.coverSkeleton(@src(), idx + 150, 8)
                 else
                     dvui.icon(@src(), "", icons.tvg.lucide.@"book-open", .{}, .{
@@ -4763,4 +4795,54 @@ fn loadComicFury(profile: []const u8, gen: u32) bool {
 
 fn validComicFuryListing(body: []const u8) bool {
     return std.mem.indexOf(u8, body, "webcomic-results") != null;
+}
+
+fn loadPublicWebcomic(provider: @import("webcomic_sources.zig").Provider, route: []const u8, gen: u32) bool {
+    var base_buf: [512]u8 = undefined;
+    const base = @import("../core/source_config.zig").copyValue(@tagName(provider), "base", &base_buf) orelse return false;
+    const row = @import("webcomic_sources.zig").load(provider, base, route, .{ .epoch32 = .{ .value = &state.app.comic.dl_gen, .expected = gen } }) orelse return false;
+    if (workers.isQuitting() or state.app.comic.dl_gen.load(.acquire) != gen) return false;
+    @memcpy(state.app.comic.page_urls[0][0..row.image_len], row.image[0..row.image_len]);
+    state.app.comic.page_url_lens[0] = row.image_len;
+    state.app.comic.page_count = 1;
+    const title_len = @min(row.title_len, state.app.comic.title.len);
+    @memcpy(state.app.comic.title[0..title_len], row.title[0..title_len]);
+    state.app.comic.title_len = title_len;
+    return true;
+}
+
+fn fetchPublicWebcomicSearch(query: []const u8, gen: u32, start_hint: usize, provider: @import("webcomic_sources.zig").Provider) usize {
+    const module = @import("webcomic_sources.zig");
+    var base_buf: [512]u8 = undefined;
+    const base = @import("../core/source_config.zig").copyValue(@tagName(provider), "base", &base_buf) orelse return 0;
+    const rows = alloc.alloc(module.Item, 6) catch return 0;
+    defer alloc.free(rows);
+    const result = module.searchInto(provider, base, query, rows, .{ .epoch32 = .{ .value = &search_gen, .expected = gen } });
+    search_rows_mutex.lock();
+    defer search_rows_mutex.unlock();
+    if (search_gen.load(.acquire) != gen) return 0;
+    const start = comicAppendStart(gen, start_hint);
+    if (search_gen.load(.acquire) != gen) return 0;
+    var count = start;
+    for (rows[0..result.count]) |row| {
+        if (count >= @min(MAX_SEARCH_RESULTS, start + RESULTS_PER_PAGE)) break;
+        if (row.route_len > sr_urls[count].len or row.image_len > sr_cover_urls[count].len) continue;
+        var duplicate = false;
+        for (0..count) |i| if (std.mem.eql(u8, sr_urls[i][0..sr_url_lens[i]], row.route[0..row.route_len])) {
+            duplicate = true;
+        };
+        if (duplicate) continue;
+        @memcpy(sr_urls[count][0..row.route_len], row.route[0..row.route_len]);
+        sr_url_lens[count] = row.route_len;
+        const title_len = @min(row.title_len, sr_titles[count].len);
+        @memcpy(sr_titles[count][0..title_len], row.title[0..title_len]);
+        sr_title_lens[count] = title_len;
+        @memcpy(sr_cover_urls[count][0..row.image_len], row.image[0..row.image_len]);
+        sr_cover_url_lens[count] = row.image_len;
+        sr_cover_gen[count] = gen;
+        sr_cover_failed[count] = false;
+        count += 1;
+    }
+    commitComicRows(gen, start, count);
+    return count - start;
 }

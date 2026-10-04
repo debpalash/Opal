@@ -779,7 +779,8 @@ pub fn migrateFromTsv() void {
     const bytes_read = @import("../core/io_global.zig").readAll(file, &buf) catch return;
     if (bytes_read == 0) return;
 
-    db.exec("BEGIN");
+    var transaction = db.beginTransaction() catch return;
+    defer transaction.deinit();
 
     var lines = std.mem.splitScalar(u8, buf[0..bytes_read], '\n');
     while (lines.next()) |line| {
@@ -794,15 +795,16 @@ pub fn migrateFromTsv() void {
         if (pct < 0.5) continue;
 
         const sql = "INSERT OR REPLACE INTO watch_history (name, percent, link) VALUES (?1, ?2, ?3)";
-        const stmt = db.prepare(sql) orelse continue;
+        const stmt = db.prepare(sql) orelse return;
         db.bindText(stmt, 1, name);
         db.bindDouble(stmt, 2, pct);
         db.bindText(stmt, 3, link);
-        _ = db.step(stmt);
+        const wrote = db.step(stmt) == db.c.SQLITE_DONE;
         db.finalize(stmt);
+        if (!wrote) return;
     }
 
-    db.exec("COMMIT");
+    transaction.commit() catch return;
 
     // Rename old file
     var new_buf: [512]u8 = undefined;

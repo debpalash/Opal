@@ -34,7 +34,7 @@ var server_token_len: usize = 0;
 pub var server_name: [64]u8 = std.mem.zeroes([64]u8);
 pub var server_name_len: usize = 0;
 
-const Section = struct {
+pub const Section = struct {
     key: [16]u8 = std.mem.zeroes([16]u8),
     key_len: usize = 0,
     title: [64]u8 = std.mem.zeroes([64]u8),
@@ -42,6 +42,7 @@ const Section = struct {
 };
 pub var sections: [32]Section = undefined;
 pub var section_count: usize = 0;
+var sections_mutex: @import("../core/sync.zig").Mutex = .{};
 pub var active_section: usize = 0;
 
 const Item = struct {
@@ -110,6 +111,8 @@ pub var nav_depth: usize = 0;
 
 const BrowseRequest = struct {
     section_idx: usize = 0,
+    section_key: [16]u8 = std.mem.zeroes([16]u8),
+    section_key_len: usize = 0,
     child_key: [32]u8 = std.mem.zeroes([32]u8),
     child_key_len: usize = 0,
 
@@ -118,8 +121,26 @@ const BrowseRequest = struct {
     }
 };
 
+pub fn copySections(out: *[32]Section) usize {
+    sections_mutex.lock();
+    defer sections_mutex.unlock();
+    const count = @min(section_count, sections.len);
+    @memcpy(out[0..count], sections[0..count]);
+    return count;
+}
+fn sectionRequest(index: usize) BrowseRequest {
+    sections_mutex.lock();
+    defer sections_mutex.unlock();
+    var request: BrowseRequest = .{ .section_idx = index };
+    if (index < section_count) {
+        request.section_key = sections[index].key;
+        request.section_key_len = sections[index].key_len;
+    }
+    return request;
+}
+
 fn currentBrowseRequest() BrowseRequest {
-    var request: BrowseRequest = .{ .section_idx = active_section };
+    var request = sectionRequest(active_section);
     if (nav_depth > 0) {
         request.child_key = nav_keys[nav_depth - 1];
         request.child_key_len = nav_key_lens[nav_depth - 1];
@@ -257,7 +278,9 @@ pub fn disconnect() void {
     server_token_len = 0;
     connection_epoch +%= 1;
     connection_mutex.unlock();
+    sections_mutex.lock();
     section_count = 0;
+    sections_mutex.unlock();
     item_count = 0;
     nav_depth = 0;
     current_start = 0;
@@ -312,7 +335,9 @@ fn expireAuthSessionFor(expected_epoch: ?u64) void {
     connection_epoch +%= 1;
     connection_mutex.unlock();
     @import("server_progress.zig").clearPlexConnection();
+    sections_mutex.lock();
     section_count = 0;
+    sections_mutex.unlock();
     item_count = 0;
     current_start = 0;
     more_available = false;
@@ -520,6 +545,7 @@ fn fetchSectionsSync() void {
     if (dirs != .array) return;
     // Past parsing — whatever the count, this fetch succeeded.
     sections_loaded_once.store(true, .release);
+    sections_mutex.lock();
     section_count = 0;
     for (dirs.array.items) |d| {
         if (section_count >= sections.len or d != .object) continue;
@@ -535,7 +561,9 @@ fn fetchSectionsSync() void {
         s.title_len = tl;
         section_count += 1;
     }
-    if (section_count > 0) {
+    const published_count = section_count;
+    sections_mutex.unlock();
+    if (published_count > 0) {
         active_section = 0;
         fetchItemsSync(0, view_gen.fetchAdd(1, .acq_rel) + 1);
     }
@@ -551,8 +579,25 @@ fn beginSectionLoad() void {
     more_available = true;
 }
 
+pub fn fetchItemsByKey(key: []const u8) bool {
+    if (!isConnected() or key.len > 16 or !plex_pure.validRatingKey(key)) return false;
+    var owned_sections: [32]Section = undefined;
+    const count = copySections(&owned_sections);
+    for (owned_sections[0..count], 0..) |section, index| {
+        if (!std.mem.eql(u8, section.key[0..section.key_len], key)) continue;
+        var request: BrowseRequest = .{ .section_idx = index, .section_key_len = key.len };
+        @memcpy(request.section_key[0..key.len], key);
+        fetchSectionRequest(request);
+        return true;
+    }
+    return false;
+}
 pub fn fetchItems(section_idx: usize) void {
     if (!isConnected() or section_idx >= section_count) return;
+    fetchSectionRequest(sectionRequest(section_idx));
+}
+fn fetchSectionRequest(request: BrowseRequest) void {
+    const section_idx = request.section_idx;
     active_section = section_idx;
     nav_depth = 0;
     // Supersede every in-flight worker: re-opening the SAME section still yields
@@ -568,7 +613,7 @@ pub fn fetchItems(section_idx: usize) void {
     // stranded at 150). The generation guard can't catch that: loadMore reads
     // view_gen after this bump, so its stale append carries the CURRENT gen.
     beginSectionLoad();
-    @import("../core/workers.zig").spawn(runBrowseRequest, .{ BrowseRequest{ .section_idx = section_idx }, new_gen }) catch {
+    @import("../core/workers.zig").spawn(runBrowseRequest, .{ request, new_gen }) catch {
         is_loading.store(false, .release); // never strand the tab "loading"
     };
 }
@@ -624,7 +669,7 @@ fn fetchItemsSync(section_idx: usize, gen: u64) void {
     if (section_idx >= section_count) return;
     beginSectionLoad();
     defer is_loading.store(false, .release);
-    fetchWindow(.{ .section_idx = section_idx }, 0, gen);
+    fetchWindow(sectionRequest(section_idx), 0, gen);
 }
 
 /// Fetch one X-Plex-Container-Start/Size window for `section_idx` and append
@@ -640,8 +685,8 @@ fn fetchWindow(request: BrowseRequest, start: usize, gen: u64) void {
     const u = if (request.isChild())
         std.fmt.bufPrint(&url, "{s}/library/metadata/{s}/children?X-Plex-Container-Start={d}&X-Plex-Container-Size={d}", .{ server_uri[0..server_uri_len], request.child_key[0..request.child_key_len], start, PLEX_PAGE_SIZE }) catch return
     else blk: {
-        const sec = &sections[request.section_idx];
-        break :blk std.fmt.bufPrint(&url, "{s}/library/sections/{s}/all?X-Plex-Container-Start={d}&X-Plex-Container-Size={d}", .{ server_uri[0..server_uri_len], sec.key[0..sec.key_len], start, PLEX_PAGE_SIZE }) catch return;
+        if (request.section_key_len == 0) return;
+        break :blk std.fmt.bufPrint(&url, "{s}/library/sections/{s}/all?X-Plex-Container-Start={d}&X-Plex-Container-Size={d}", .{ server_uri[0..server_uri_len], request.section_key[0..request.section_key_len], start, PLEX_PAGE_SIZE }) catch return;
     };
     // Heap buffer — never a big stack buffer on a spawned thread (CLAUDE.md).
     const buf = alloc.alloc(u8, 524288) catch return;
@@ -1222,11 +1267,12 @@ pub fn renderContent() void {
     {
         var tabs = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 } });
         defer tabs.deinit();
-        for (0..section_count) |i| {
-            const sec = &sections[i];
+        var owned_sections: [32]Section = undefined;
+        const count = copySections(&owned_sections);
+        for (owned_sections[0..count], 0..) |*sec, i| {
             const active = i == active_section;
             if (components.filterChip(@src(), sec.title[0..sec.title_len], icons.tvg.lucide.library, active, i + 90000)) {
-                fetchItems(i);
+                _ = fetchItemsByKey(sec.key[0..sec.key_len]);
             }
         }
     }

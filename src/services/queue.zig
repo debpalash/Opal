@@ -1329,20 +1329,13 @@ fn thumbWorker(job: ThumbJob) void {
         return;
     }
 
-    var client = @import("../core/http.zig").newClient();
-    defer client.deinit();
-    const uri = std.Uri.parse(url) catch return;
-    var req = client.request(.GET, uri, .{ .extra_headers = &.{.{ .name = "Accept", .value = "image/jpeg, image/webp" }} }) catch return;
-    defer req.deinit();
-    req.sendBodiless() catch return;
-    var redirect_buf: [8192]u8 = undefined;
-    var response = req.receiveHead(&redirect_buf) catch return;
-    if (response.head.status != .ok) return;
-    var transfer_buf: [4096]u8 = undefined;
-    var decompress: std.http.Decompress = undefined;
-    var rdr = response.readerDecompressing(&transfer_buf, &decompress, &.{});
-    const body = rdr.allocRemaining(alloc, std.Io.Limit.limited(2 * 1024 * 1024)) catch return;
-    defer alloc.free(body);
+    const buffer = alloc.alloc(u8, 2 * 1024 * 1024) catch return;
+    defer alloc.free(buffer);
+    const body = @import("../core/http.zig").fetch(url, buffer, .{
+        .timeout_secs = 8,
+        .max_response = buffer.len,
+        .accept = "image/jpeg, image/webp",
+    }) orelse return;
     if (body.len < 100) return;
 
     var tdir_buf: [512]u8 = undefined;
