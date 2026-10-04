@@ -1707,7 +1707,22 @@ pub fn build(b: *std.Build) void {
     });
     const run_test_cinemeta_meta_pure = b.addRunArtifact(test_cinemeta_meta_pure);
     test_step.dependOn(&run_test_cinemeta_meta_pure.step);
-    b.step("test-keyless", "Test keyless Movies & TV detail shaping and catalog mapping").dependOn(&run_test_cinemeta_meta_pure.step);
+    const keyless_step = b.step("test-keyless", "Test keyless Movies & TV detail shaping, catalog mapping and the keyless Asian drama feed");
+    keyless_step.dependOn(&run_test_cinemeta_meta_pure.step);
+
+    // Keyless Asian Drama page: TVmaze schedule/search/episodes parsing and
+    // mapping onto the drama grid rows (fixtures are trimmed live captures).
+    const test_drama_tvmaze_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/drama_tvmaze_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_drama_tvmaze_pure.use_llvm = true;
+    const run_test_drama_tvmaze_pure = b.addRunArtifact(test_drama_tvmaze_pure);
+    test_step.dependOn(&run_test_drama_tvmaze_pure.step);
+    keyless_step.dependOn(&run_test_drama_tvmaze_pure.step);
 
     // Internet Archive JSON parsing: advancedsearch docs[] iteration
     // (order-independent id/title/year) + metadata files[] best-video pick +

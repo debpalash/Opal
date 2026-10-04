@@ -1,15 +1,20 @@
 //! Live-action Asian drama browse module.
 //!
 //! Structural sibling of services/anime.zig: a card GRID → DETAIL → PLAY drill.
-//! The catalog comes from TMDB (the stable, public API Opal already speaks in
-//! tmdb*.zig); all parsing + origin classification lives in the tested
-//! drama_pure.zig, so the shipped logic is the tested logic. Playback hands the
-//! title to the universal resolver (services/resolver.zig), which routes a
-//! torrent / stremio stream into mpv — the same handoff anime.playEpisode uses.
+//! The catalog needs NO key. By default it comes from TVmaze (free, keyless):
+//! the grid is the scripted Korean/Japanese/Chinese/Thai/Taiwanese shows on air
+//! this week, a title search, and a per-show episode list in the detail view.
+//! All TVmaze parsing and mapping lives in the tested drama_tvmaze_pure.zig.
+//! When a TMDB key IS present the grid keeps using TMDB `/discover/tv` (richer
+//! popularity ranking and deeper paging) through the tested drama_pure.zig; the
+//! key is an optional extra, never a requirement. Playback hands the title to
+//! the universal resolver (services/resolver.zig), which routes a torrent /
+//! stremio stream into mpv — the same handoff anime.playEpisode uses.
 //!
 //! SOURCES (documented):
-//!   • TMDB /discover/tv + /search/tv  — STABLE. Discovery/metadata only.
-//!   • Universal resolver              — BEST-EFFORT. Whatever indexers are live.
+//!   • TVmaze schedule / search / episodes — STABLE, keyless. Metadata only.
+//!   • TMDB /discover/tv                    — STABLE, only with a user key.
+//!   • Universal resolver                   — BEST-EFFORT. Whatever indexers are live.
 //! Dedicated drama stream scrapers (Kisskh / Asiaflix / GoPlay / Cineby) are NOT
 //! compiled in (source neutrality); a scraper can be slotted behind the same seam.
 
@@ -17,6 +22,7 @@ const std = @import("std");
 const dvui = @import("dvui");
 const state = @import("../core/state.zig");
 const drama_pure = @import("drama_pure.zig");
+const tvmaze = @import("drama_tvmaze_pure.zig");
 const theme = @import("../ui/theme.zig");
 const components = @import("../ui/components.zig");
 const icons = @import("icons");
@@ -40,7 +46,9 @@ const CATALOG_TTL_S: i64 = 30 * 60;
 // TMDB texture ops MUST run on the UI thread, so the fetch worker never touches
 // results[]/textures directly. It parses into `pending` under `pending_mutex`;
 // the UI thread drains it in applyPending() (frees old textures there, safe).
-var pending: [80]drama_pure.Item = undefined;
+// The slot holds one batch at a time: a worker stages the next batch only after
+// the UI thread has drained the previous one (see publishBatch).
+var pending: [120]drama_pure.Item = undefined;
 var pending_count: usize = 0;
 var pending_ready: bool = false;
 var pending_mutex: sync.Mutex = .{};
@@ -49,34 +57,63 @@ var pending_mutex: sync.Mutex = .{};
 /// worker can never clear the busy state of a newer catalog fetch.
 var fetch_request: LatestRequest = .{};
 
-// ── Infinite-scroll pagination ──
+/// Where the rows in results[] came from. Written by applyPending (the pump
+/// thread), read by the UI and the web route, hence atomic.
+const Source = enum(u8) { tvmaze, tmdb };
+var rows_source: std.atomic.Value(u8) = .init(@intFromEnum(Source.tvmaze));
+fn rowsAreTvmaze() bool {
+    return rows_source.load(.acquire) == @intFromEnum(Source.tvmaze);
+}
+/// True while results[] holds a title search rather than the on-air feed.
+var rows_are_search: std.atomic.Value(bool) = .init(false);
+var search_text: [96]u8 = std.mem.zeroes([96]u8); // the query the visible search rows answer
+var search_text_len: usize = 0; // guarded by pending_mutex
+
+// ── Infinite-scroll pagination (TMDB source only) ──
 // `current_page` is the highest TMDB discover page merged into results[];
 // `more_available` clears when a page returns short or the fixed buffer fills.
 // `loading_more` serializes append fetches so a single near-bottom scroll can't
 // spawn a burst (mirrors comics/youtube). All read on the UI thread; the append
 // worker runs under the same fetch_request guard so a fresh search drops it.
+// The keyless TVmaze feed is one finite on-air window, so it never pages.
 var current_page: u32 = 1;
 var more_available: std.atomic.Value(bool) = .init(true);
 var loading_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 /// Set by the worker under pending_mutex: true → applyPending() APPENDS onto
-/// results[] (load-more); false → replaces from index 0 (fresh fetch).
+/// results[] (load-more, or later waves of the keyless feed); false → replaces
+/// from index 0 (fresh fetch).
 var pending_append: bool = false;
 /// The TMDB page the staged `pending` items came from (UI thread reads it in
 /// applyPending to advance `current_page`).
 var pending_page: u32 = 1;
+var pending_source: Source = .tvmaze;
+var pending_search: bool = false;
 
 /// TMDB `/discover/tv` returns 20 rows per page; a short page means the end.
 const TMDB_PAGE_SIZE: usize = 20;
 
 // ══════════════════════════════════════════════════════════
-// Fetch (TMDB discover/search → drama_pure.parseDiscover → pending)
+// Fetch (keyless: TVmaze feed/search; keyed: TMDB discover)
 // ══════════════════════════════════════════════════════════
 
-const CatalogJob = struct { generation: u32, page: u32, key: [256]u8 = undefined, key_len: usize };
+const Kind = enum { feed, search };
+const CatalogJob = struct {
+    generation: u32,
+    page: u32,
+    kind: Kind = .feed,
+    source: Source = .tvmaze,
+    key: [256]u8 = undefined,
+    key_len: usize = 0,
+    query: [96]u8 = undefined,
+    query_len: usize = 0,
+};
 var catalog_failed: std.atomic.Value(bool) = .init(false);
 fn catalogJob(generation: u32, page: u32) CatalogJob {
     var job = CatalogJob{ .generation = generation, .page = page, .key_len = @min(state.app.tmdb.api_key_len, 256) };
     @memcpy(job.key[0..job.key_len], state.app.tmdb.api_key[0..job.key_len]);
+    // The key is optional extra richness: with one the grid uses TMDB discover,
+    // without one it uses the keyless TVmaze feed.
+    job.source = if (job.key_len > 0) .tmdb else .tvmaze;
     return job;
 }
 fn failCatalog(generation: u32) void {
@@ -87,23 +124,47 @@ fn failCatalog(generation: u32) void {
     state.wakeUi();
 }
 
+/// Load the landing grid. Needs no key: TVmaze on-air feed, or TMDB discover when
+/// a key is configured.
 pub fn loadCatalog() void {
-    if (state.app.tmdb.api_key_len == 0) return; // reuses the TMDB key (see tmdb.zig)
     if (state.app.drama.is_loading.load(.acquire)) return;
+    startFetch(.feed, "");
+}
+
+/// Title search (TVmaze, keyless; scripted Asian-language shows only). An empty
+/// query returns to the landing grid. Supersedes any fetch in flight.
+pub fn searchTitle(query: []const u8) void {
+    const q = std.mem.trim(u8, query, " \t\r\n");
+    if (q.len == 0) {
+        state.app.drama.is_loading.store(false, .release);
+        startFetch(.feed, "");
+        return;
+    }
+    startFetch(.search, q);
+}
+
+fn startFetch(kind: Kind, query: []const u8) void {
     state.app.drama.selected_idx = null;
     state.app.drama.last_fetch_s = @import("browse_cache.zig").now();
     state.app.drama.loaded_once = true;
     // Fresh landing feed resets pagination; applyPending() re-derives
     // more_available once page 1 lands.
     current_page = 1;
-    more_available.store(true, .release);
+    more_available.store(kind == .feed, .release);
     pending_mutex.lock();
     const my_gen = fetch_request.begin(&state.app.drama.is_loading);
     pending_ready = false;
     catalog_failed.store(false, .release);
     loading_more.store(false, .release);
+    const ql = @min(query.len, search_text.len);
+    @memcpy(search_text[0..ql], query[0..ql]);
+    search_text_len = if (kind == .search) ql else 0;
     pending_mutex.unlock();
-    const job = catalogJob(my_gen, 1);
+    var job = catalogJob(my_gen, 1);
+    job.kind = kind;
+    if (kind == .search) job.source = .tvmaze;
+    job.query_len = ql;
+    @memcpy(job.query[0..ql], query[0..ql]);
 
     if (@import("../core/workers.zig").spawnLegacy(fetchWorker, .{job})) |t| {
         @import("../core/workers.zig").release(t); // never joined — detach to avoid leaking the handle
@@ -116,10 +177,11 @@ pub fn loadCatalog() void {
 /// the existing grid. Guarded by `loading_more` + the main `is_loading` so a
 /// near-bottom scroll can't spawn a burst; runs under the current fetch_request so a
 /// fresh landing feed supersedes it. No-op once `more_available` clears (short
-/// page or the fixed buffer filled). Mirrors comics.loadMoreResults.
+/// page or the fixed buffer filled) and always a no-op for the keyless feed.
+/// Mirrors comics.loadMoreResults.
 pub fn loadMore() void {
     if (!more_available.load(.acquire)) return;
-    if (state.app.tmdb.api_key_len == 0) return;
+    if (state.app.tmdb.api_key_len == 0 or rowsAreTvmaze()) return;
     if (state.app.drama.is_loading.load(.acquire)) return;
     if (loading_more.load(.acquire)) return;
     if (state.app.drama.result_count == 0) return;
@@ -141,12 +203,45 @@ pub fn loadMore() void {
 
 fn fetchWorker(job: CatalogJob) void {
     defer fetch_request.finish(job.generation, &state.app.drama.is_loading);
-    fetchPage(job, false);
+    switch (job.kind) {
+        .search => fetchSearch(job),
+        .feed => if (job.source == .tmdb) fetchPage(job, false) else fetchFeed(job),
+    }
 }
 
 fn loadMoreWorker(job: CatalogJob) void {
     defer if (fetch_request.isCurrent(job.generation)) loading_more.store(false, .release);
     fetchPage(job, true);
+}
+
+/// Stage one batch for the UI thread. Waits (bounded) for the UI to drain the
+/// previous batch, then stages under the lock, re-checking the generation.
+/// Returns false when superseded or when the batch could not be staged.
+fn publishBatch(job: CatalogJob, items: []const drama_pure.Item, append: bool, page: u32) bool {
+    var waited: usize = 0;
+    while (true) : (waited += 1) {
+        pending_mutex.lock();
+        if (!fetch_request.isCurrent(job.generation)) {
+            pending_mutex.unlock();
+            return false;
+        }
+        if (!pending_ready) break; // lock still held
+        pending_mutex.unlock();
+        if (waited >= 100) return false; // the UI never drained it; drop rather than stall
+        state.wakeUi();
+        io_g.sleep(50 * std.time.ns_per_ms);
+    }
+    defer pending_mutex.unlock();
+    const n = @min(items.len, pending.len);
+    @memcpy(pending[0..n], items[0..n]);
+    pending_count = n;
+    pending_page = page;
+    pending_append = append;
+    pending_source = job.source;
+    pending_search = job.kind == .search;
+    pending_ready = true;
+    state.wakeUi();
+    return true;
 }
 
 /// Fetch one TMDB discover page and stage it into `pending` for the UI thread.
@@ -175,22 +270,232 @@ fn fetchPage(job: CatalogJob, append: bool) void {
     const n = if (bytes > 0) drama_pure.parseDiscover(buf[0..bytes], items) else 0;
 
     if (!fetch_request.isCurrent(my_gen)) return; // superseded by a newer fetch
-
-    pending_mutex.lock();
-    if (!fetch_request.isCurrent(my_gen)) {
-        pending_mutex.unlock();
-        return;
-    } // re-check under the lock
-    @memcpy(pending[0..n], items[0..n]);
-    pending_count = n;
-    pending_page = page;
-    pending_append = append;
-    pending_ready = true;
-    pending_mutex.unlock();
+    if (!publishBatch(job, items[0..n], append, page)) return;
 
     var lb: [64]u8 = undefined;
     logs.pushLog("info", "drama", std.fmt.bufPrint(&lb, "Loaded {d} titles (TMDB p{d})", .{ n, page }) catch "Loaded", false);
+}
+
+// ── Keyless TVmaze ──
+
+const MAX_PARALLEL = 8;
+
+/// GET each url concurrently (separate curl children) into its own buffer.
+/// `lens[i]` is the body length, 0 on failure. Plain keyless HTTPS JSON; the
+/// responses are gzip on the wire, so `--compressed`.
+fn getMany(urls: []const []const u8, bufs: []const []u8, lens: []usize) void {
+    std.debug.assert(urls.len <= MAX_PARALLEL);
+    var argvs: [MAX_PARALLEL][11][]const u8 = undefined;
+    var children: [MAX_PARALLEL]io_g.Child = undefined;
+    var spawned: [MAX_PARALLEL]bool = .{false} ** MAX_PARALLEL;
+    for (urls, 0..) |url, i| {
+        lens[i] = 0;
+        argvs[i] = .{ "curl", "-s", "-L", "--compressed", "--connect-timeout", "4", "--max-time", "12", "-A", "Opal", url };
+        children[i] = io_g.Child.init(&argvs[i], alloc);
+        children[i].stdin_behavior = .Ignore;
+        children[i].stdout_behavior = .Pipe;
+        children[i].stderr_behavior = .Ignore;
+        children[i].spawn() catch continue;
+        spawned[i] = true;
+    }
+    for (urls, 0..) |_, i| {
+        if (!spawned[i]) continue;
+        const n = if (children[i].stdout) |*so| io_g.readAll(so, bufs[i]) catch 0 else 0;
+        lens[i] = n;
+        // A body that filled the buffer was truncated and the child may be
+        // blocked writing to the pipe: stop it instead of waiting forever.
+        if (n >= bufs[i].len) {
+            _ = children[i].kill() catch {};
+            lens[i] = 0;
+        } else {
+            _ = children[i].wait() catch {};
+        }
+    }
+}
+
+const COUNTRY_BUF: usize = 384 * 1024;
+const WEB_BUF: usize = 2 * 1024 * 1024;
+
+/// Keyless landing feed: scripted Asian-language shows from the TVmaze broadcast
+/// schedules (KR/JP/CN/TH) and the global web schedule over a four-day window.
+/// Today is staged first so the grid appears fast; each later day appends only
+/// the shows not already shown. Within a batch the shows are ranked by TVmaze's
+/// popularity weight.
+fn fetchFeed(job: CatalogJob) void {
+    const my_gen = job.generation;
+    const col_buf = alloc.alloc(tvmaze.Entry, 160) catch return;
+    defer alloc.free(col_buf);
+    var col = tvmaze.Collector{ .entries = col_buf };
+    const stage = alloc.alloc(drama_pure.Item, pending.len) catch return;
+    defer alloc.free(stage);
+
+    // One buffer per request slot: four country schedules, then the web schedule.
+    const n_req = tvmaze.SCHEDULE_COUNTRIES.len + 1;
+    var bufs: [MAX_PARALLEL][]u8 = undefined;
+    var allocated: usize = 0;
+    defer for (bufs[0..allocated]) |b| alloc.free(b);
+    for (0..n_req) |i| {
+        const size = if (i < tvmaze.SCHEDULE_COUNTRIES.len) COUNTRY_BUF else WEB_BUF;
+        bufs[i] = alloc.alloc(u8, size) catch return;
+        allocated += 1;
+    }
+
+    const now_s = @import("browse_cache.zig").now();
+    var published: usize = 0;
+    var any_ok = false;
+    for (tvmaze.FEED_DAY_OFFSETS) |off| {
+        if (!fetch_request.isCurrent(my_gen)) return;
+        var date_buf: [16]u8 = undefined;
+        const date = tvmaze.dateString(now_s, off, &date_buf) orelse continue;
+        var url_store: [MAX_PARALLEL][160]u8 = undefined;
+        var urls: [MAX_PARALLEL][]const u8 = undefined;
+        var count: usize = 0;
+        for (tvmaze.SCHEDULE_COUNTRIES) |cc| {
+            urls[count] = tvmaze.countryScheduleUrl(cc, date, &url_store[count]) orelse continue;
+            count += 1;
+        }
+        urls[count] = tvmaze.webScheduleUrl(date, &url_store[count]) orelse continue;
+        count += 1;
+        if (count != n_req) continue;
+        var lens: [MAX_PARALLEL]usize = undefined;
+        getMany(urls[0..count], bufs[0..count], lens[0..count]);
+        if (!fetch_request.isCurrent(my_gen)) return;
+
+        for (0..count) |i| {
+            if (lens[i] == 0) continue;
+            const body = bufs[i][0..lens[i]];
+            if (!tvmaze.isArrayDoc(alloc, body)) continue;
+            any_ok = true;
+            _ = tvmaze.parseSchedule(alloc, body, &col);
+        }
+
+        if (col.count > published) {
+            const fresh = col.entries[published..col.count];
+            tvmaze.sortByWeight(fresh);
+            const take = @min(fresh.len, stage.len);
+            for (fresh[0..take], 0..) |e, k| stage[k] = e.item;
+            if (!publishBatch(job, stage[0..take], published > 0, 1)) return;
+            published = col.count;
+        }
+    }
+    if (!any_ok) {
+        failCatalog(my_gen);
+        return;
+    }
+    var lb: [80]u8 = undefined;
+    logs.pushLog("info", "drama", std.fmt.bufPrint(&lb, "Loaded {d} titles (TVmaze on air)", .{published}) catch "Loaded", false);
+}
+
+fn fetchSearch(job: CatalogJob) void {
+    const my_gen = job.generation;
+    var enc_buf: [320]u8 = undefined;
+    const enc = @import("../core/http.zig").urlEncode(job.query[0..job.query_len], &enc_buf);
+    var url_buf: [400]u8 = undefined;
+    const url = tvmaze.searchUrl(enc, &url_buf) orelse return;
+
+    const buf = alloc.alloc(u8, COUNTRY_BUF) catch return;
+    defer alloc.free(buf);
+    var lens = [1]usize{0};
+    getMany(&.{url}, &.{buf}, &lens);
+    if (!fetch_request.isCurrent(my_gen)) return;
+    if (lens[0] == 0 or !tvmaze.isArrayDoc(alloc, buf[0..lens[0]])) {
+        failCatalog(my_gen);
+        return;
+    }
+    const col_buf = alloc.alloc(tvmaze.Entry, pending.len) catch return;
+    defer alloc.free(col_buf);
+    var col = tvmaze.Collector{ .entries = col_buf };
+    _ = tvmaze.parseSearch(alloc, buf[0..lens[0]], &col);
+    const stage = alloc.alloc(drama_pure.Item, pending.len) catch return;
+    defer alloc.free(stage);
+    for (col.entries[0..col.count], 0..) |e, k| stage[k] = e.item;
+    if (!publishBatch(job, stage[0..col.count], false, 1)) return;
+
+    var lb: [80]u8 = undefined;
+    logs.pushLog("info", "drama", std.fmt.bufPrint(&lb, "Search found {d} titles (TVmaze)", .{col.count}) catch "Search done", false);
+}
+
+// ── Episodes for the open title (TVmaze only) ──
+
+const EP_CAP = 400;
+var ep_mutex: sync.Mutex = .{};
+var ep_id: [12]u8 = std.mem.zeroes([12]u8);
+var ep_id_len: usize = 0;
+var ep_items: [EP_CAP]tvmaze.Episode = undefined;
+var ep_count: usize = 0;
+const EpState = enum(u8) { idle, loading, ready, failed };
+var ep_state: std.atomic.Value(u8) = .init(@intFromEnum(EpState.idle));
+var ep_gen: std.atomic.Value(u32) = .init(0);
+
+pub const EpisodeStatus = struct { state: []const u8, count: usize };
+
+/// Snapshot of the episode list for `show_id` ("idle" when it is not the loaded one).
+pub fn episodeStatus(show_id: []const u8) EpisodeStatus {
+    ep_mutex.lock();
+    defer ep_mutex.unlock();
+    if (!std.mem.eql(u8, ep_id[0..ep_id_len], show_id)) return .{ .state = "idle", .count = 0 };
+    const st: EpState = @enumFromInt(ep_state.load(.acquire));
+    return .{ .state = @tagName(st), .count = ep_count };
+}
+
+pub fn episodeAt(show_id: []const u8, idx: usize) ?tvmaze.Episode {
+    ep_mutex.lock();
+    defer ep_mutex.unlock();
+    if (!std.mem.eql(u8, ep_id[0..ep_id_len], show_id) or idx >= ep_count) return null;
+    return ep_items[idx];
+}
+
+fn failEpisodes(g: u32) void {
+    ep_mutex.lock();
+    defer ep_mutex.unlock();
+    if (ep_gen.load(.acquire) != g) return;
+    ep_state.store(@intFromEnum(EpState.failed), .release);
     state.wakeUi();
+}
+
+fn episodeWorker(g: u32, id: [12]u8, id_len: usize) void {
+    const buf = alloc.alloc(u8, 2 * 1024 * 1024) catch return failEpisodes(g);
+    defer alloc.free(buf);
+    var ub: [96]u8 = undefined;
+    const url = tvmaze.episodesUrl(id[0..id_len], &ub) orelse return failEpisodes(g);
+    var lens = [1]usize{0};
+    getMany(&.{url}, &.{buf}, &lens);
+    if (lens[0] == 0 or !tvmaze.isArrayDoc(alloc, buf[0..lens[0]])) return failEpisodes(g);
+    const eps = alloc.alloc(tvmaze.Episode, EP_CAP) catch return failEpisodes(g);
+    defer alloc.free(eps);
+    const n = tvmaze.parseEpisodes(alloc, buf[0..lens[0]], eps);
+    ep_mutex.lock();
+    defer ep_mutex.unlock();
+    if (ep_gen.load(.acquire) != g) return;
+    @memcpy(ep_items[0..n], eps[0..n]);
+    ep_count = n;
+    ep_state.store(@intFromEnum(EpState.ready), .release);
+    state.wakeUi();
+}
+
+/// Start (or retry after a failure) the episode fetch for a TVmaze row. No-op for
+/// TMDB rows and when this show is already loaded or loading.
+pub fn requestEpisodes(show_id: []const u8) void {
+    if (!rowsAreTvmaze() or show_id.len == 0 or show_id.len > ep_id.len) return;
+    ep_mutex.lock();
+    const same = std.mem.eql(u8, ep_id[0..ep_id_len], show_id);
+    const st: EpState = @enumFromInt(ep_state.load(.acquire));
+    if (same and st != .failed) {
+        ep_mutex.unlock();
+        return;
+    }
+    @memcpy(ep_id[0..show_id.len], show_id);
+    ep_id_len = show_id.len;
+    ep_count = 0;
+    ep_state.store(@intFromEnum(EpState.loading), .release);
+    const my_gen = ep_gen.fetchAdd(1, .acq_rel) +% 1;
+    ep_mutex.unlock();
+
+    var id_copy: [12]u8 = std.mem.zeroes([12]u8);
+    @memcpy(id_copy[0..show_id.len], show_id);
+    if (@import("../core/workers.zig").spawnLegacy(episodeWorker, .{ my_gen, id_copy, show_id.len })) |t| {
+        @import("../core/workers.zig").release(t);
+    } else |_| failEpisodes(my_gen);
 }
 
 /// Drain worker-staged results into the live grid from a non-render caller.
@@ -220,6 +525,19 @@ pub fn isLoadingMore() bool {
     return loading_more.load(.acquire);
 }
 
+/// "tvmaze" or "tmdb": which catalog the visible rows came from.
+pub fn sourceName() []const u8 {
+    return if (rowsAreTvmaze()) "tvmaze" else "tmdb";
+}
+
+pub fn isSearchResults() bool {
+    return rows_are_search.load(.acquire);
+}
+
+pub fn catalogFailed() bool {
+    return catalog_failed.load(.acquire);
+}
+
 pub fn resultRow(idx: usize) ?state.DramaResult {
     pending_mutex.lock();
     defer pending_mutex.unlock();
@@ -247,6 +565,8 @@ fn applyPending() void {
             poster.deinitPoster(&r.poster_pixels, &r.poster_tex);
         }
     }
+    rows_source.store(@intFromEnum(pending_source), .release);
+    rows_are_search.store(pending_search, .release);
 
     var written: usize = 0;
     while (written < pending_count and base + written < cap) : (written += 1) {
@@ -268,13 +588,17 @@ fn applyPending() void {
     }
     state.app.drama.result_count = base + written;
 
-    // Pagination bookkeeping: a short page (< a full TMDB page) or a filled
-    // buffer means there's nothing more to pull.
-    current_page = pending_page;
-    if (pending_count < TMDB_PAGE_SIZE or state.app.drama.result_count >= cap) {
+    // Pagination bookkeeping: only the TMDB feed pages. A short page (< a full
+    // TMDB page) or a filled buffer means there's nothing more to pull.
+    if (pending_source == .tvmaze) {
         more_available.store(false, .release);
-    } else if (!append) {
-        more_available.store(true, .release);
+    } else {
+        current_page = pending_page;
+        if (pending_count < TMDB_PAGE_SIZE or state.app.drama.result_count >= cap) {
+            more_available.store(false, .release);
+        } else if (!append) {
+            more_available.store(true, .release);
+        }
     }
     state.wakeUi();
 }
@@ -401,34 +725,87 @@ pub fn setLoadingFixtureForTest(enabled: bool) void {
     state.app.drama.loaded_once = true;
 }
 
+/// Search box for the keyless TVmaze title search (Enter or the Search button).
+/// Returns true when it started a search or went back to the landing grid.
+var ui_search_buf: [96]u8 = std.mem.zeroes([96]u8);
+fn renderSearchRow() void {
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .horizontal,
+        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
+    });
+    defer row.deinit();
+
+    var te = dvui.textEntry(@src(), .{
+        .text = .{ .buffer = &ui_search_buf },
+        .placeholder = "Search Asian dramas…",
+    }, .{
+        .expand = .horizontal,
+        .min_size_content = .{ .w = 200, .h = 20 },
+        .color_fill = theme.colors.bg_elevated,
+        .color_border = theme.colors.border_subtle,
+        .color_text = theme.colors.text_primary,
+        .border = dvui.Rect.all(1),
+        .corner_radius = dvui.Rect.all(theme.radius.md),
+    });
+    const enter_pressed = te.enter_pressed;
+    te.deinit();
+
+    const clicked = dvui.button(@src(), "Search", .{}, .{
+        .color_fill = theme.colors.accent,
+        .color_text = theme.colors.text_on_accent,
+        .corner_radius = dvui.Rect.all(theme.radius.md),
+        .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+        .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
+    });
+    if (clicked or enter_pressed) {
+        searchTitle(std.mem.sliceTo(&ui_search_buf, 0));
+        return;
+    }
+    if (isSearchResults()) {
+        if (dvui.button(@src(), "Clear", .{}, .{
+            .color_text = theme.colors.text_secondary,
+            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
+        })) {
+            @memset(&ui_search_buf, 0);
+            searchTitle("");
+        }
+    }
+}
+
 pub fn renderContent() void {
     applyPending(); // drain worker-staged results (UI thread)
 
-    // Fetch once on first visit, plus SWR refresh when the cache goes stale.
+    // Fetch once on first visit, plus SWR refresh when the cache goes stale
+    // (the on-air feed only; a search keeps its rows until the user clears it).
     if (!state.app.drama.is_loading.load(.acquire)) {
         const stale = (@import("browse_cache.zig").now() - state.app.drama.last_fetch_s) >= CATALOG_TTL_S;
-        if (!state.app.drama.loaded_once or stale) loadCatalog();
+        if (!state.app.drama.loaded_once or (stale and !isSearchResults())) loadCatalog();
     }
 
     var page = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
     defer page.deinit();
-
-    if (state.app.tmdb.api_key_len == 0) {
-        components.emptyState(icons.tvg.lucide.clapperboard, "TMDB key required", "Add a TMDB API key in Settings to browse Asian dramas.");
-        return;
-    }
 
     if (state.app.drama.selected_idx) |sidx| {
         renderDetail(sidx);
         return;
     }
 
+    renderSearchRow();
+
     if (state.app.drama.result_count == 0 and catalog_failed.load(.acquire)) {
-        if (components.emptyStateCta(icons.tvg.lucide.clapperboard, "Drama catalog unavailable", "Check the TMDB key and connection, then retry.", "Retry")) loadCatalog();
+        const hint = if (rowsAreTvmaze() or state.app.tmdb.api_key_len == 0) "Check your connection, then retry." else "Check the TMDB key and connection, then retry.";
+        if (components.emptyStateCta(icons.tvg.lucide.clapperboard, "Drama catalog unavailable", hint, "Retry")) {
+            if (isSearchResults()) searchTitle(std.mem.sliceTo(&ui_search_buf, 0)) else loadCatalog();
+        }
         return;
     }
     if (state.app.drama.result_count == 0 and !state.app.drama.is_loading.load(.acquire)) {
-        components.emptyState(icons.tvg.lucide.clapperboard, "Nothing here yet", "Check back later.");
+        if (isSearchResults()) {
+            components.emptyState(icons.tvg.lucide.clapperboard, "No matching dramas", "No Korean, Japanese, Chinese or Thai drama matches that title.");
+        } else {
+            components.emptyState(icons.tvg.lucide.clapperboard, "Nothing here yet", "Check back later.");
+        }
         return;
     }
 
@@ -438,7 +815,7 @@ pub fn renderContent() void {
     if (catalog_failed.load(.acquire)) {
         _ = dvui.label(@src(), "Refresh unavailable — showing saved results", .{}, .{ .color_text = theme.colors.text_secondary });
         if (components.actionButton(@src(), "Retry", .secondary, 48090)) {
-            if (state.app.drama.result_count > 0 and more_available.load(.acquire)) loadMore() else loadCatalog();
+            if (state.app.drama.result_count > 0 and more_available.load(.acquire)) loadMore() else if (isSearchResults()) searchTitle(std.mem.sliceTo(&ui_search_buf, 0)) else loadCatalog();
         }
     }
     const count = @min(state.app.drama.result_count, state.app.drama.results.len);
@@ -603,7 +980,7 @@ fn ensurePoster(item: *state.DramaResult) void {
     }
     if (!item.poster_failed and item.poster_pixels == null and item.poster_path_len > 0) {
         var url_buf: [160]u8 = undefined;
-        const url = std.fmt.bufPrint(&url_buf, "{s}{s}", .{ drama_pure.POSTER_BASE, item.poster_path[0..item.poster_path_len] }) catch return;
+        const url = tvmaze.posterUrl(item.poster_path[0..item.poster_path_len], &url_buf) orelse return;
         poster.fetchAsync(url, &item.poster_pixels, &item.poster_w, &item.poster_h, &item.poster_fetching);
         if (item.poster_fetching) item.poster_attempted = true;
     }
@@ -670,5 +1047,55 @@ fn renderDetail(idx: usize) void {
             .expand = .horizontal,
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.md },
         });
+    }
+
+    renderEpisodes(item.id[0..item.id_len]);
+}
+
+/// Episode list for the open TVmaze title (S1 E03, title, air date). TMDB rows
+/// have no episode source here, so nothing is drawn for them.
+fn renderEpisodes(show_id: []const u8) void {
+    if (!rowsAreTvmaze()) return;
+    requestEpisodes(show_id);
+    const st = episodeStatus(show_id);
+
+    var hb: [48]u8 = undefined;
+    const heading = if (std.mem.eql(u8, st.state, "ready"))
+        (std.fmt.bufPrint(&hb, "Episodes ({d})", .{st.count}) catch "Episodes")
+    else
+        "Episodes";
+    components.sectionHeader(heading);
+
+    if (std.mem.eql(u8, st.state, "loading") or std.mem.eql(u8, st.state, "idle")) {
+        _ = dvui.label(@src(), "Loading episodes…", .{}, .{ .color_text = theme.colors.text_secondary });
+        state.wakeUi();
+        return;
+    }
+    if (std.mem.eql(u8, st.state, "failed")) {
+        _ = dvui.label(@src(), "Could not load the episode list.", .{}, .{ .color_text = theme.colors.text_secondary });
+        if (components.actionButton(@src(), "Retry", .secondary, 48091)) requestEpisodes(show_id);
+        return;
+    }
+    if (st.count == 0) {
+        _ = dvui.label(@src(), "No episodes listed yet.", .{}, .{ .color_text = theme.colors.text_secondary });
+        return;
+    }
+
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
+    defer scroll.deinit();
+    var i: usize = 0;
+    while (i < st.count) : (i += 1) {
+        const ep = episodeAt(show_id, i) orelse break;
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = i + 70000,
+            .expand = .horizontal,
+            .padding = .{ .x = theme.spacing.sm, .y = 2, .w = theme.spacing.sm, .h = 2 },
+        });
+        defer row.deinit();
+        var lb: [24]u8 = undefined;
+        _ = dvui.label(@src(), "{s}", .{tvmaze.episodeLabel(ep, &lb)}, .{ .id_extra = i + 70000, .color_text = theme.colors.accent, .min_size_content = .{ .w = 70, .h = 0 } });
+        var nb: [100]u8 = undefined;
+        _ = dvui.labelNoFmt(@src(), safeUtf8Buf(ep.name[0..ep.name_len], &nb), .{}, .{ .id_extra = i + 70000, .expand = .horizontal, .color_text = theme.colors.text_primary });
+        if (ep.airdate_len > 0) _ = dvui.label(@src(), "{s}", .{ep.airdate[0..ep.airdate_len]}, .{ .id_extra = i + 70000, .color_text = theme.colors.text_tertiary });
     }
 }

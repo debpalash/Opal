@@ -500,22 +500,24 @@ function renderNovels(d){
   });
 }
 
-// ── Drama (browse-only: drama.zig has no search entry point) ──
+// ── Drama (keyless: TVmaze on-air feed + title search; TMDB discover when a key is set) ──
 let dramaGeneration = 0;
+let dramaSource = 'tvmaze';
+// TMDB rows carry a "/abc.jpg" path, TVmaze rows a full https image URL.
+function dramaPoster(path, size){
+  if (!path) return '';
+  return /^https:\/\//.test(path) ? path : `https://image.tmdb.org/t/p/${size}${path}`;
+}
 async function refreshDrama(generation = dramaGeneration){
   const d = await api('/drama');
   if (generation !== dramaGeneration) return d;
-  if (d.needs_tmdb_key) {
-    $('dr-hint').textContent = 'Add a TMDB API key in Setup — the drama catalog is TMDB-backed.';
-    $('dr-more').style.display = 'none';
-    return d;
-  }
+  dramaSource = d.source || 'tvmaze';
   renderDrama(d.results || [], d.loading);
   $('dr-more').style.display = d.has_more ? '' : 'none';
   return d;
 }
-function loadDrama(){
-  const generation = ++dramaGeneration;
+function loadDrama(){ pollDrama(++dramaGeneration); }
+function pollDrama(generation){
   clearInterval(drWatch);
   let ticks = 0;
   const tick = async () => {
@@ -523,24 +525,51 @@ function loadDrama(){
     try {
       const d = await refreshDrama(generation);
       if (generation !== dramaGeneration) return;
-      if (d.needs_tmdb_key) {
-        clearInterval(drWatch);
-        return;
-      }
       if (!d.loading || ticks > 120) {
         clearInterval(drWatch);
+        const n = (d.results || []).length;
         if (d.loading) failBrowse('dr-results', 'dr-hint', 'Still loading. Try again.');
-        else $('dr-hint').textContent = (d.results || []).length + ' titles.';
+        else if (d.failed && !n) failBrowse('dr-results', 'dr-hint', 'Could not load Asian dramas. Check your connection and try again.');
+        else if (d.search) $('dr-hint').textContent = n ? n + ' matching titles.' : 'No Korean, Japanese, Chinese or Thai drama matches that title.';
+        else $('dr-hint').textContent = n + (d.source === 'tvmaze' ? ' titles on air this week.' : ' titles.');
       }
     } catch { if (generation === dramaGeneration) { clearInterval(drWatch); failBrowse('dr-results', 'dr-hint', 'Could not load Asian dramas. Try again.'); } }
   };
   drWatch = settledInterval(tick, BROWSE_POLL_MS, true);
 }
+async function runDrama(){
+  const q = $('dr-q').value.trim();
+  const generation = ++dramaGeneration;
+  clearInterval(drWatch);
+  $('dr-hint').textContent = q ? 'Searching…' : 'Loading…';
+  lastHtml.drama = '';
+  renderDrama([], true);
+  try {
+    await api('/drama/search?q=' + encodeURIComponent(q));
+    if (generation === dramaGeneration) pollDrama(generation);
+  } catch { if (generation === dramaGeneration) failBrowse('dr-results', 'dr-hint', 'Could not search Asian dramas. Try again.'); }
+}
+async function showDramaEpisodes(index, target){
+  target.style.whiteSpace = 'pre-line'; target.style.maxHeight = '40vh'; target.style.overflow = 'auto';
+  const base = target.dataset.base || '';
+  for (let tick = 0; tick < 40; tick++) {
+    const d = await api('/drama/episodes?idx=' + encodeURIComponent(index));
+    if (d.state === 'ready') {
+      target.textContent = (base ? base + '\n\n' : '') + (d.results.length
+        ? d.results.map(e => `S${e.season} ${e.number ? 'E' + String(e.number).padStart(2, '0') : 'Special'}  ${e.name}${e.airdate ? '  (' + e.airdate + ')' : ''}`).join('\n')
+        : 'No episodes listed yet.');
+      return;
+    }
+    if (d.state === 'failed') { target.textContent = (base ? base + '\n\n' : '') + 'Could not load the episode list.'; return; }
+    target.textContent = (base ? base + '\n\n' : '') + 'Loading episodes…';
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+}
 function renderDrama(rows, loading = false){
   setBrowseBusy('dr-results', loading);
   const html = rows.map((r, i) => `
     <div class="card ${r.poster_path ? '' : 'poster-missing'}">
-      ${r.poster_path ? `<img src="https://image.tmdb.org/t/p/w342${esc(r.poster_path)}" alt="" loading="lazy" decoding="async">` : ''}
+      ${r.poster_path ? `<img src="${esc(dramaPoster(r.poster_path, 'w342'))}" alt="" loading="lazy" decoding="async">` : ''}
       <div class="jf-card-actions">
         <button class="drama-details" data-details="${i}" aria-label="Details">${mediaIcon('info')}</button>
         <button class="play" data-i="${i}" aria-label="Play on Opal" title="Play on Opal">${mediaIcon('play')}</button>
@@ -561,7 +590,7 @@ function renderDrama(rows, loading = false){
     const drama = rows[Number(button.dataset.details)] || {};
     button.onclick = () => openSourceDetails('Drama', {
       ...drama, type:'TV series', meta:[drama.year, drama.vote ? `Rating ${drama.vote}` : ''].filter(Boolean).join(' · '),
-      artUrl:drama.poster_path ? `https://image.tmdb.org/t/p/w500${drama.poster_path}` : '', index:Number(button.dataset.details),
+      artUrl:dramaPoster(drama.poster_path, 'w500'), index:Number(button.dataset.details), episodes:dramaSource === 'tvmaze',
     }, button);
   });
 }
@@ -911,6 +940,7 @@ const onGo = (btn, input, fn) => {
 onGo('cx-go', 'cx-q', runComics);
 onGo('nv-go', 'nv-q', runNovels);
 onGo('vn-go', 'vn-q', runVndb);
+onGo('dr-go', 'dr-q', runDrama);
 $('cx-close').onclick = () => closeComic();
 function wireInfiniteBrowse(page, buttonId, morePath, refresh, currentGeneration = () => 0){
   const button = $(buttonId);
