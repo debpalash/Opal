@@ -256,6 +256,10 @@ pub fn build(b: *std.Build) void {
     operator_ui_tests.use_llvm = true;
     const run_operator_ui_tests = b.addRunArtifact(operator_ui_tests);
     b.step("test-native-operator", "Capture the Agents page Activity tab with isolated offline fixtures").dependOn(&run_operator_ui_tests.step);
+    const overview_ui_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native agents overview offline"} });
+    overview_ui_tests.use_llvm = true;
+    const run_overview_ui_tests = b.addRunArtifact(overview_ui_tests);
+    b.step("test-native-overview", "Capture the Agents page Overview with isolated offline fixtures").dependOn(&run_overview_ui_tests.step);
     const browser_hub_ui_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native browser hub offline"} });
     browser_hub_ui_tests.use_llvm = true;
     const run_browser_hub_ui_tests = b.addRunArtifact(browser_hub_ui_tests);
@@ -265,7 +269,7 @@ pub fn build(b: *std.Build) void {
     if (is_windows) run_episode_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     b.step("test-native-episodes", "Verify native episode cards and responsive playback controls").dependOn(&run_episode_tests.step);
     const native_suite = b.addTest(.{ .root_module = exe.root_module, .filters = &.{
-        "Native Search", "Native WebP", "Native media offline", "Native shell offline", "Native global modals", "Native activity offline", "Native agent tasks offline", "Native operator activity offline", "Native browser hub offline", "Native Browse", "Browse fanout", "Native torrent handoff", "Native TV episodes",
+        "Native Search", "Native WebP", "Native media offline", "Native shell offline", "Native global modals", "Native activity offline", "Native agent tasks offline", "Native operator activity offline", "Native agents overview offline", "Native browser hub offline", "Native Browse", "Browse fanout", "Native torrent handoff", "Native TV episodes",
     } });
     const run_native_suite = b.addRunArtifact(native_suite);
     if (is_windows) run_native_suite.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
@@ -709,6 +713,18 @@ pub fn build(b: *std.Build) void {
     test_operator_step.dependOn(&run_test_operator_endpoint_pure.step);
     test_operator_step.dependOn(&run_test_operator_names.step);
     test_operator_step.dependOn(&run_test_operator_view.step);
+
+    const test_overview_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/agents_overview_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_overview_pure.use_llvm = true;
+    const run_test_overview = b.addRunArtifact(test_overview_pure);
+    test_step.dependOn(&run_test_overview.step);
+    b.step("test-overview", "Test the Agents Overview wording and activity-feed merge").dependOn(&run_test_overview.step);
 
     const test_agent_tasks_pure = b.addTest(.{
         .root_module = b.createModule(.{
