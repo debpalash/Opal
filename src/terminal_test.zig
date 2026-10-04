@@ -4,4 +4,5 @@ test {
     _ = @import("terminal/pty.zig");
     _ = @import("terminal/session.zig");
     _ = @import("terminal/keymap.zig");
+    _ = @import("terminal/pointer.zig");
 }

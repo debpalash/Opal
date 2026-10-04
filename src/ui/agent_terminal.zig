@@ -14,6 +14,7 @@ const theme = @import("theme.zig");
 const components = @import("components.zig");
 const alloc = @import("../core/alloc.zig").allocator;
 const session_mod = @import("../terminal/session.zig");
+const pointer = @import("../terminal/pointer.zig");
 const keymap = @import("../terminal/keymap.zig");
 const launch = @import("../services/agent_launch.zig");
 const launch_pure = @import("../services/agent_launch_pure.zig");
@@ -26,6 +27,20 @@ const SCROLL_ROWS_PER_NOTCH: f32 = 3;
 var session: ?*Session = null;
 var snap: session_mod.Snapshot = .{};
 var term_id: ?dvui.Id = null;
+/// Set when a session starts: the next frame hands the terminal keyboard focus.
+var want_focus: bool = false;
+/// What the left button is doing since it went down inside the terminal.
+const Drag = enum { none, select, report, scrollbar };
+var drag: Drag = .none;
+var pressed_button: ?pointer.Button = null;
+var was_focused: bool = false;
+var frame_guard: pointer.FrameGuard = .{};
+/// While dragging the scrollbar: where in the thumb it was grabbed, and the
+/// offset last asked for (the snapshot lags a frame behind).
+var sb_grab: f32 = 0;
+var sb_offset: i64 = 0;
+const SB_WIDTH: f32 = 6;
+const SB_HIT: f32 = 14;
 var launched: ?Kind = null;
 var tab: enum { terminal, tasks } = .terminal;
 var note_buf: [128]u8 = undefined;
@@ -76,6 +91,9 @@ pub fn shutdown() void {
 /// leave keys alone then, or Ctrl+W (delete word) would close the window.
 pub fn capturesKeyboard() bool {
     const id = term_id orelse return false;
+    // dvui keeps focus on a widget that stopped rendering (the agent opened the
+    // player, say); only a terminal that is still on screen owns the keys.
+    if (!frame_guard.alive(dvui.frameTimeNS())) return false;
     return session != null and dvui.focusedWidgetId() == id;
 }
 
@@ -127,6 +145,7 @@ fn start(kind: Kind) void {
     };
     launched = kind;
     note_len = 0;
+    want_focus = true;
     snap.deinit(alloc);
     state.wakeUi();
 }
@@ -195,7 +214,11 @@ fn renderToolbar() void {
             .gravity_y = 0.5,
             .margin = .{ .x = 12, .y = 0, .w = 0, .h = 0 },
         });
-        if (components.actionButton(@src(), if (s.isExited()) "Close" else "Stop", .secondary, 9510)) stop();
+        if (components.actionButton(@src(), if (s.isExited()) "Close" else "Stop", .secondary, 9510)) {
+            // stop() frees the session: nothing below may touch `s`.
+            stop();
+            return;
+        }
         if (s.takeBell()) state.showToast("Terminal bell");
     } else if (note_len > 0) {
         _ = dvui.label(@src(), "{s}", .{note_buf[0..note_len]}, .{
@@ -222,6 +245,11 @@ fn renderEmpty() void {
     _ = dvui.label(@src(), "Opens in Opal's workspace with the opal tools already connected.", .{}, .{
         .color_text = theme.colors.text_secondary,
         .gravity_x = 0.5,
+    });
+    _ = dvui.label(@src(), "While a terminal has focus it gets every key. Press Ctrl+Shift+Esc to give the keyboard back to Opal.", .{}, .{
+        .color_text = theme.colors.text_secondary,
+        .gravity_x = 0.5,
+        .margin = .{ .x = 0, .y = 6, .w = 0, .h = 0 },
     });
     if (!session_mod.supported) {
         _ = dvui.label(@src(), "The embedded terminal is not available on this platform yet. Use Settings > Agent Access to open an agent in your own terminal.", .{}, .{
@@ -265,6 +293,14 @@ fn renderTerminal(s: *Session) void {
     defer area.deinit();
     const wd = area.data();
     term_id = wd.id;
+    frame_guard.markRendered(dvui.frameTimeNS());
+    if (want_focus) {
+        want_focus = false;
+        drag = .none;
+        pressed_button = null;
+        was_focused = false;
+        dvui.focusWidget(wd.id, null, null);
+    }
 
     const rs = wd.contentRectScale();
     const base = font(false, false);
@@ -276,18 +312,39 @@ fn renderTerminal(s: *Session) void {
     const rows: u16 = @intFromFloat(std.math.clamp(@floor(rs.r.h / ch), 3, 200));
     s.resize(cols, rows, @intFromFloat(cw), @intFromFloat(ch));
 
-    handleEvents(s, wd, rs.r);
+    handleEvents(s, wd, rs.r, cw, ch);
+
+    // Programs that asked for focus reports (DEC 1004) hear about gains and losses.
+    const focused = dvui.focusedWidgetId() == wd.id;
+    if (focused != was_focused) {
+        was_focused = focused;
+        s.sendFocus(focused);
+    }
 
     _ = s.snapshot(&snap);
     if (snap.cols == 0 or snap.cells.len == 0) return;
 
-    const focused = dvui.focusedWidgetId() == wd.id;
     if (focused) dvui.wantTextInput(.{ .x = 0, .y = 0, .w = 0, .h = 0 });
 
-    const prev_clip = dvui.clip(rs.r);
-    defer dvui.clipSet(prev_clip);
+    {
+        const prev_clip = dvui.clip(rs.r);
+        defer dvui.clipSet(prev_clip);
+        drawGrid(rs, cw, ch, focused);
+        drawScrollbar(rs.r, rs.s, drag == .scrollbar);
+    }
+    if (focused) drawFocusRing(wd.borderRectScale());
+}
 
-    drawGrid(rs, cw, ch, focused);
+/// A 1px accent outline just inside the terminal's edge while it has focus.
+fn drawFocusRing(brs: dvui.RectScale) void {
+    const none = dvui.Rect.Physical.all(0);
+    const t = @max(1, @round(brs.s));
+    const r = brs.r;
+    const color = theme.colors.accent;
+    (dvui.Rect.Physical{ .x = r.x, .y = r.y, .w = r.w, .h = t }).fill(none, .{ .color = color });
+    (dvui.Rect.Physical{ .x = r.x, .y = r.y + r.h - t, .w = r.w, .h = t }).fill(none, .{ .color = color });
+    (dvui.Rect.Physical{ .x = r.x, .y = r.y, .w = t, .h = r.h }).fill(none, .{ .color = color });
+    (dvui.Rect.Physical{ .x = r.x + r.w - t, .y = r.y, .w = t, .h = r.h }).fill(none, .{ .color = color });
 }
 
 fn rect(rs: dvui.RectScale, x: f32, y: f32, w: f32, h: f32) dvui.Rect.Physical {
@@ -415,35 +472,179 @@ fn drawCursor(rs: dvui.RectScale, cw: f32, ch: f32, focused: bool) void {
 
 // ── Input ──
 
-fn handleEvents(s: *Session, wd: *dvui.WidgetData, content: dvui.Rect.Physical) void {
-    _ = content;
-    var typed_this_frame = false;
+fn scrollThumb(content: dvui.Rect.Physical, scale: f32) ?pointer.Thumb {
+    return pointer.thumb(snap.scroll_total, snap.scroll_offset, snap.scroll_len, content.h, 24 * scale);
+}
+
+fn inScrollbarZone(content: dvui.Rect.Physical, scale: f32, p: dvui.Point.Physical) bool {
+    return p.x >= content.x + content.w - SB_HIT * scale and p.x <= content.x + content.w and p.y >= content.y and p.y <= content.y + content.h;
+}
+
+/// Scroll so the thumb's grabbed point follows the pointer at `py`.
+fn scrollbarTo(s: *Session, content: dvui.Rect.Physical, scale: f32, py: f32) void {
+    const th = scrollThumb(content, scale) orelse return;
+    const target: i64 = @intCast(pointer.offsetForThumbTop(snap.scroll_total, snap.scroll_len, content.h, th.h, py - content.y - sb_grab));
+    if (target == sb_offset) return;
+    s.scroll(@intCast(target - sb_offset));
+    sb_offset = target;
+}
+
+fn drawScrollbar(content: dvui.Rect.Physical, scale: f32, active: bool) void {
+    const th = scrollThumb(content, scale) orelse return;
+    const hover = inScrollbarZone(content, scale, dvui.currentWindow().mouse_pt);
+    const w = SB_WIDTH * scale;
+    const c = toColor(snap.default_fg);
+    const alpha: u8 = if (active) 170 else if (hover) 120 else 60;
+    const r = dvui.Rect.Physical{ .x = content.x + content.w - w - 2 * scale, .y = content.y + th.y, .w = w, .h = th.h };
+    r.fill(dvui.Rect.Physical.all(w / 2), .{ .color = .{ .r = c.r, .g = c.g, .b = c.b, .a = alpha } });
+}
+
+fn mapButton(b: dvui.enums.Button) ?pointer.Button {
+    return switch (b) {
+        .left => .left,
+        .right => .right,
+        .middle => .middle,
+        .four => .four,
+        .five => .five,
+        .six => .six,
+        .seven => .seven,
+        .eight => .eight,
+        else => null,
+    };
+}
+
+fn modsOf(mod: dvui.enums.Mod) keymap.Mods {
+    return .{ .shift = mod.shift(), .ctrl = mod.control(), .alt = mod.alt(), .super = mod.command() };
+}
+
+fn clipboardCopy(s: *Session) void {
+    const text = s.copySelection(alloc) orelse return;
+    defer alloc.free(text);
+    dvui.clipboardTextSet(text);
+}
+
+fn handleEvents(s: *Session, wd: *dvui.WidgetData, content: dvui.Rect.Physical, cw: f32, ch: f32) void {
+    var text_guard = keymap.TextGuard{};
     for (dvui.events()) |*e| {
         if (!dvui.eventMatchSimple(e, wd)) continue;
         switch (e.evt) {
-            .mouse => |me| switch (me.action) {
-                .focus => {
-                    e.handle(@src(), wd);
-                    dvui.focusWidget(wd.id, null, e.num);
-                },
-                .wheel_y => |dy| {
-                    e.handle(@src(), wd);
-                    const rows: isize = @intFromFloat(@round(-dy * SCROLL_ROWS_PER_NOTCH));
-                    s.scroll(if (rows == 0) (if (dy > 0) -1 else 1) else rows);
-                    state.wakeUi();
-                },
-                else => {},
+            .mouse => |me| {
+                const hit = pointer.cellAt(me.p.x, me.p.y, content.x, content.y, cw, ch, snap.cols, snap.rows);
+                const mods = keymap.mods(modsOf(me.mod));
+                // Shift always means "select, whatever the program asked for".
+                const bypass = me.mod.shift();
+                switch (me.action) {
+                    .focus => {
+                        e.handle(@src(), wd);
+                        dvui.focusWidget(wd.id, null, e.num);
+                    },
+                    .press => {
+                        const btn = mapButton(me.button) orelse continue;
+                        const scale = wd.contentRectScale().s;
+                        if (btn == .left and inScrollbarZone(content, scale, me.p)) {
+                            if (scrollThumb(content, scale)) |th| {
+                                e.handle(@src(), wd);
+                                dvui.captureMouse(wd, e.num);
+                                drag = .scrollbar;
+                                const top = content.y + th.y;
+                                sb_grab = if (me.p.y >= top and me.p.y <= top + th.h) me.p.y - top else th.h / 2;
+                                sb_offset = @intCast(snap.scroll_offset);
+                                scrollbarTo(s, content, scale, me.p.y);
+                                state.wakeUi();
+                                continue;
+                            }
+                        }
+                        const report = !bypass and s.modes().mouse_tracking;
+                        if (!report and btn != .left) continue;
+                        e.handle(@src(), wd);
+                        dvui.captureMouse(wd, e.num);
+                        if (report) {
+                            drag = .report;
+                            pressed_button = btn;
+                            s.clearSelection();
+                            _ = s.mouseReport(.press, btn, mods, hit, true);
+                        } else {
+                            drag = .select;
+                            s.selectPress(hit, @intCast(@max(0, dvui.frameTimeNS())));
+                        }
+                        state.wakeUi();
+                    },
+                    .motion => switch (drag) {
+                        .select => {
+                            e.handle(@src(), wd);
+                            // Dragging past the top or bottom edge walks through scrollback.
+                            if (me.p.y < content.y) s.scroll(-1) else if (me.p.y > content.y + content.h) s.scroll(1);
+                            s.selectDrag(hit, me.mod.alt());
+                            state.wakeUi();
+                        },
+                        .report => {
+                            e.handle(@src(), wd);
+                            _ = s.mouseReport(.motion, pressed_button, mods, hit, true);
+                        },
+                        .scrollbar => {
+                            e.handle(@src(), wd);
+                            scrollbarTo(s, content, wd.contentRectScale().s, me.p.y);
+                            state.wakeUi();
+                        },
+                        .none => if (!bypass and hit.inside and s.modes().mouse_tracking) {
+                            _ = s.mouseReport(.motion, null, mods, hit, false);
+                        },
+                    },
+                    .release => {
+                        const btn = mapButton(me.button) orelse continue;
+                        if (drag == .report and pressed_button == btn) {
+                            e.handle(@src(), wd);
+                            dvui.captureMouse(null, e.num);
+                            drag = .none;
+                            pressed_button = null;
+                            _ = s.mouseReport(.release, btn, mods, hit, false);
+                        } else if (drag == .scrollbar and btn == .left) {
+                            e.handle(@src(), wd);
+                            dvui.captureMouse(null, e.num);
+                            drag = .none;
+                            state.wakeUi();
+                        } else if (drag == .select and btn == .left) {
+                            e.handle(@src(), wd);
+                            dvui.captureMouse(null, e.num);
+                            drag = .none;
+                            s.selectRelease(hit);
+                            state.wakeUi();
+                        }
+                    },
+                    .position => dvui.cursorSet(.ibeam),
+                    .wheel_y => |dy| {
+                        e.handle(@src(), wd);
+                        const modes = s.modes();
+                        if (!bypass and modes.mouse_tracking) {
+                            // Wheel notches are buttons four (up) and five (down).
+                            const notches: usize = @max(1, @as(usize, @intFromFloat(@round(@abs(dy)))));
+                            const btn: pointer.Button = if (dy > 0) .four else .five;
+                            for (0..@min(notches, 10)) |_| _ = s.mouseReport(.press, btn, mods, hit, false);
+                        } else if (modes.alt_screen and modes.alt_scroll) {
+                            // Full-screen programs without mouse support (less, man) get arrows.
+                            const n: usize = @abs(pointer.wheelRows(dy, SCROLL_ROWS_PER_NOTCH));
+                            const key: session_mod.c.GhosttyKey = @intCast(if (dy > 0) session_mod.c.GHOSTTY_KEY_ARROW_UP else session_mod.c.GHOSTTY_KEY_ARROW_DOWN);
+                            for (0..@min(n, 30)) |_| _ = s.sendKey(key, 0, .press, "");
+                        } else {
+                            s.scroll(pointer.wheelRows(dy, SCROLL_ROWS_PER_NOTCH));
+                        }
+                        state.wakeUi();
+                    },
+                    else => {},
+                }
             },
             .key => |ke| {
                 const name = @tagName(ke.code);
-                const m = keymap.Mods{
-                    .shift = ke.mod.shift(),
-                    .ctrl = ke.mod.control(),
-                    .alt = ke.mod.alt(),
-                    .super = ke.mod.command(),
-                };
+                const m = modsOf(ke.mod);
                 if (ke.action == .up) {
                     e.handle(@src(), wd);
+                    continue;
+                }
+                // The way out: gives the keyboard back to Opal's shortcuts.
+                if (keymap.isReleaseChord(name, m)) {
+                    e.handle(@src(), wd);
+                    dvui.focusWidget(null, null, null);
+                    state.wakeUi();
                     continue;
                 }
                 // Copy and paste: Cmd+C/V on macOS, Ctrl+Shift+C/V elsewhere.
@@ -451,15 +652,21 @@ fn handleEvents(s: *Session, wd: *dvui.WidgetData, content: dvui.Rect.Physical) 
                 const clip_mod = if (mac) (m.super and !m.ctrl and !m.alt) else (m.ctrl and m.shift and !m.alt);
                 if (clip_mod and ke.code == .v) {
                     e.handle(@src(), wd);
-                    s.paste(dvui.clipboardText());
+                    switch (s.paste(dvui.clipboardText())) {
+                        .too_large => state.showToast("Paste is too large for the terminal (limit 512 KB)"),
+                        .failed => state.showToast("The terminal did not accept the whole paste"),
+                        else => {},
+                    }
                     s.scrollToBottom();
                     continue;
                 }
                 if (clip_mod and ke.code == .c) {
                     e.handle(@src(), wd);
+                    clipboardCopy(s);
                     continue;
                 }
                 const entry = keymap.find(name);
+                text_guard.onKey(entry, m);
                 switch (keymap.plan(entry, m)) {
                     .ignore => {},
                     .wait_for_text => {},
@@ -469,19 +676,20 @@ fn handleEvents(s: *Session, wd: *dvui.WidgetData, content: dvui.Rect.Physical) 
                         const utf8: []const u8 = if (entry.?.ch != 0) &ch_buf else "";
                         const press: Session.KeyAction = if (ke.action == .repeat) .repeat else .press;
                         if (s.sendKey(entry.?.key, keymap.mods(m), press, utf8)) {
+                            s.clearSelection();
                             s.scrollToBottom();
-                            typed_this_frame = true;
                         }
                     },
                 }
             },
             .text => |te| {
-                // A key already encoded this frame (Alt+letter) must not also type.
-                if (typed_this_frame) continue;
                 switch (te.action) {
                     .value => |v| {
                         e.handle(@src(), wd);
+                        // The echo of an Alt/Ctrl-encoded key must not also type.
+                        if (text_guard.drops(v.txt)) continue;
                         s.write(v.txt);
+                        s.clearSelection();
                         s.scrollToBottom();
                     },
                     else => {},

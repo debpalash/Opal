@@ -160,6 +160,65 @@ pub fn plan(entry: ?*const Entry, m: Mods) Plan {
     return .wait_for_text;
 }
 
+/// The one chord that always hands the keyboard back to Opal: while the
+/// terminal has focus every other key (Tab, Escape, Ctrl+Q) belongs to the
+/// program in it.
+pub fn isReleaseChord(name: []const u8, m: Mods) bool {
+    return std.mem.eql(u8, name, "escape") and m.ctrl and m.shift and !m.alt and !m.super;
+}
+
+/// Some toolkits report Alt+x or Ctrl+x as a key and as a text event too. The key
+/// is already encoded, so the text that directly follows it with the same
+/// character must be dropped, and nothing else: Enter then `x` in one frame
+/// types both. Create one per frame.
+pub const TextGuard = struct {
+    skip: u8 = 0,
+
+    /// Call for every key press, in order.
+    pub fn onKey(self: *TextGuard, entry: ?*const Entry, m: Mods) void {
+        self.skip = 0;
+        const e = entry orelse return;
+        if (e.text and e.ch != 0 and (m.ctrl or m.alt or m.super)) self.skip = e.ch;
+    }
+
+    /// Whether the text event just seen is the echo of an encoded key.
+    pub fn drops(self: *TextGuard, text: []const u8) bool {
+        const hit = self.skip != 0 and text.len == 1 and std.ascii.toLower(text[0]) == self.skip;
+        self.skip = 0;
+        return hit;
+    }
+};
+
+test "only the release chord releases the keyboard" {
+    try std.testing.expect(isReleaseChord("escape", .{ .ctrl = true, .shift = true }));
+    try std.testing.expect(!isReleaseChord("escape", .{}));
+    try std.testing.expect(!isReleaseChord("escape", .{ .ctrl = true }));
+    try std.testing.expect(!isReleaseChord("q", .{ .ctrl = true, .shift = true }));
+    try std.testing.expect(!isReleaseChord("escape", .{ .ctrl = true, .shift = true, .alt = true }));
+}
+
+test "text after Enter in the same frame is kept, the echo of Alt+x is dropped" {
+    var g = TextGuard{};
+    g.onKey(find("enter"), .{});
+    try std.testing.expect(!g.drops("x"));
+
+    g.onKey(find("x"), .{ .alt = true });
+    try std.testing.expect(g.drops("x"));
+    // The drop is one-shot: a second x types.
+    try std.testing.expect(!g.drops("x"));
+
+    // A different character after Alt+x is real typing.
+    g.onKey(find("x"), .{ .alt = true });
+    try std.testing.expect(!g.drops("y"));
+
+    // Shifted echo still matches; a later key clears the pending drop.
+    g.onKey(find("a"), .{ .alt = true, .shift = true });
+    try std.testing.expect(g.drops("A"));
+    g.onKey(find("a"), .{ .ctrl = true });
+    g.onKey(find("enter"), .{});
+    try std.testing.expect(!g.drops("a"));
+}
+
 test "letters, digits and named keys resolve" {
     try std.testing.expect(find("a").?.key == c.GHOSTTY_KEY_A);
     try std.testing.expect(find("z").?.key == c.GHOSTTY_KEY_Z);
