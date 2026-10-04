@@ -114,12 +114,18 @@ Branch `v2/agent-os` is stacked on PR #119 (browse, episode redesign, remote har
 
 | Phase | State |
 | --- | --- |
-| 1. Registry | Done for the observe, playback, download and queue surface: 28 tools with typed parameters, tiers and API bindings (`src/services/ops_pure.zig`). Not yet generating the in-app copilot tool list or an OpenAPI document. |
-| 2. MCP server | Done: `opal-mcp` (stdio), tools and resources, policy ceiling, destructive confirm, URL guard, JSON audit log. Verified live: search, play, status, pause against a running Opal. See [mcp.md](mcp.md). |
-| 3. Skills | First skill, `skills/opal-media`. |
-| 4-6 | Not started. |
+| 1. Registry | Done for the observe, playback, download, queue, library and wanted surface: 36 tools with typed parameters, tiers and API bindings (`src/services/ops_pure.zig`). Not yet generating an OpenAPI document. The in-app copilot keeps its own compact tool list on purpose: a small local model cannot carry 36 schemas. |
+| 2. MCP server | Done: `opal-mcp` (stdio), tools and resources, policy ceiling, destructive confirm, URL guard, JSON audit log, shipped in every package. Verified live. See [mcp.md](mcp.md). |
+| 3. Skills | `skills/opal-media` (watch, control, downloads, wanted list), installed into the agent workspace. |
+| 4. Terminal | libghostty-vt today exposes only key, OSC, SGR and paste APIs, not a screen-state terminal, so an embedded terminal is deferred. Shipped instead: **Settings → Agent Access** launches Claude Code, Codex or Gemini CLI in the user's own terminal inside a pre-wired workspace (Linux). |
+| 5. Extension loop | Not started. |
+| 6. Autonomy | Wanted list engine done (below). Scheduled agent tasks not started. |
 
-Next up, in order: an in-app "Agent access" switch that enables the loopback API and shows the audit log; library, collections, sources and settings tools; the copilot reading the registry.
+### Wanted list (the CouchPotato core)
+
+`src/services/wanted.zig` plus `wanted_pure.zig` (scoring, backoff). Add a movie or episode once; Opal searches on a private channel that never disturbs on-screen results, filters cams, screeners, fan edits and trailers, scores by quality, seeders and size, starts the best torrent on the owner thread, retries with backoff (30 min doubling to a day) and marks the item fulfilled when the download completes. "Follow tracked shows" queues the newest aired episode of each tracked show. Verified live against EZTV. Exposed as `/api/wanted/*` and `wanted_*` tools.
+
+Next up: a native Wanted screen, scheduled agent tasks, plugin scaffolding tools, OpenAPI from the registry, and an embedded terminal once libghostty exposes a terminal API.
 
 ## Phases
 
