@@ -41,8 +41,8 @@ Every tool has a tier. The server refuses anything above the ceiling you give it
 | --- | --- | --- |
 | `read` | observe, search | `status`, `search`, `search_results`, `queue_list`, `downloads_list`, `history_list`, `recommendations`, `library_list`, `library_watched`, `calendar_list`, `tmdb_browse`, `tmdb_search`, `tmdb_results`, `anime_search`, `anime_results`, `anime_episodes`, `podcast_search`, `podcast_results`, `podcast_episodes`, `music_search`, `music_results`, `youtube_search`, `youtube_results`, `rss_list`, `livetv_list`, `collections_list`, `settings_list`, `wanted_list`, `agent_tasks_list`, `home_summary`, `player_info`, `cast_scan`, `cast_devices`, `torrents_list`, `torrent_files`, `download_history_list`, `jellyfin_results`, `jellyfin_libraries`, `jellyfin_browse`, `jellyfin_search` |
 | `playback` | control what plays now | `search_play`, `search_queue`, `player_toggle`, `player_seek`, `player_speed`, `player_volume`, `player_next`, `anime_play`, `podcast_play`, `music_play`, `player_previous`, `subtitles_search`, `subtitles_download`, `queue_action`, `player_audio_track`, `player_subtitle_track`, `subtitles_delay`, `cast_start`, `cast_stop`, `jellyfin_play` |
-| `write` | change persistent state | `subtitles_generate`, `downloads_pause`, `downloads_resume`, `settings_set`, `library_set_status`, `library_mark_watched`, `library_refresh`, `rss_refresh`, `library_favorite`, `library_rate`, `collection_save_queue`, `wanted_add`, `wanted_follow`, `wanted_pause`, `wanted_resume`, `wanted_remove`, `agent_task_enable`, `agent_task_remove`, `torrent_pause`, `torrent_resume`, `rss_add` |
-| `spend` | use bandwidth, disk or compute | `play_url`, `downloads_add_url` (a magnet starts a torrent), `wanted_check` (searches now and may start a download), `agent_task_add`, `agent_task_run` |
+| `write` | change persistent state | `subtitles_generate`, `downloads_pause`, `downloads_resume`, `settings_set`, `library_set_status`, `library_mark_watched`, `library_refresh`, `rss_refresh`, `library_favorite`, `library_rate`, `collection_save_queue`, `wanted_pause`, `wanted_resume`, `wanted_remove`, `agent_task_remove`, `torrent_pause`, `torrent_resume`, `rss_add` |
+| `spend` | use bandwidth, disk or compute | `play_url`, `downloads_add_url` (a magnet starts a torrent), `wanted_add` and `wanted_follow` (start automatic downloads), `wanted_check` (searches now and may start a download), `agent_task_add`, `agent_task_run` (paid agent runs) |
 | `destructive` | remove data | `queue_clear`, `downloads_cancel`, `library_remove`, `collection_remove`, `torrent_cancel`, `rss_remove`, `download_history_remove`, `download_history_clear` |
 
 The default ceiling is `spend`. Destructive tools are off until you opt in, and even then each call must carry `confirm: true`.
@@ -51,7 +51,10 @@ The default ceiling is `spend`. Destructive tools are off until you opt in, and 
 opal-mcp --read-only              # observe and search only
 opal-mcp --allow playback         # control playback, no downloads
 opal-mcp --allow destructive      # everything; destructive calls still need confirm=true
+opal-mcp --deny-prefix agent_task # hide and refuse every tool whose name starts with agent_task
 ```
+
+`--deny-prefix NAME` removes matching tools from `tools/list` and refuses calls to them with a clear message, whatever the tier ceiling. Scheduled agent runs start `opal-mcp` with `--deny-prefix agent_task`, so an unattended agent can never create, run or remove scheduled tasks.
 
 Discovery tools (`tmdb_*`, `anime_*`, `podcast_*`, `music_*`, `youtube_*`, `jellyfin_*`, and `cast_scan` / `cast_devices`) work in two steps because the sources answer in the background: start a search or browse, then read the matching `*_results` tool a moment later. They drive the same screens the app shows, so a search an agent starts also appears in the app. Search endpoints share a request budget; a "too many requests" reply carries a `retry_after` in seconds.
 
@@ -80,7 +83,7 @@ Arguments are typed and bounded. Unknown arguments are rejected, `play_url` and 
 
 A task is a prompt a coding agent runs unattended on a timer: `agent_task_add` takes a `name`, a `prompt`, an `agent` (`claude` or `codex`), `interval_min` (15 to 10080), `max_runs_per_day` (1 to 24) and, for Claude Code, `budget_cents` per run (passed as `--max-budget-usd`). Each run starts in the same workspace as the terminal launcher, with the same `opal-mcp` and the same policy, so it can do no more than a chat could. Claude Code runs with only the `opal` tools allowed; Codex runs in a read-only sandbox. A run is stopped after ten minutes, and the last line of its output is kept as `last_summary`.
 
-Running an agent spends your own subscription or API credit, so nothing runs until you switch on **Settings → Agent Access → Run scheduled agent tasks**. Agents cannot flip that switch, and the task routes are host-admin only for web-remote user accounts. A run counts against the daily cap when it starts, so a failing agent cannot retry in a loop. `agent_task_run` runs a task now and counts toward the same cap.
+Running an agent spends your own subscription or API credit, so nothing runs until you switch on **Settings → Agent Access → Run scheduled agent tasks**. Agents cannot flip that switch, and there is no tool to pause or resume a task: only you do that, in the UI (the `/api/agent/tasks/enable` route exists for the UI and web admins). The task routes are host-admin only for web-remote user accounts. A run counts against the daily cap when it starts, so a failing agent cannot retry in a loop. `agent_task_run` runs a task now and counts toward the same cap.
 
 ## Wanted list
 

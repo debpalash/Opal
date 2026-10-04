@@ -967,7 +967,6 @@
                 "ui_scale_auto",
                 "ui_scale",
                 "taste_enabled",
-                "nsfw_filter",
                 "incognito"
               ]
             }
@@ -1983,9 +1982,9 @@
         "operationId": "wanted_add",
         "summary": "Add a movie or one episode to the wanted list. Opal searches the torrent sources on a backoff schedule (30 minutes, doubling to daily) and downloads the best release that fits the quality range, then marks it fulfilled. Qualities: 1=480p, 2=720p, 3=1080p, 4=2160p.",
         "tags": [
-          "write"
+          "spend"
         ],
-        "x-opal-tier": "write",
+        "x-opal-tier": "spend",
         "parameters": [
           {
             "name": "kind",
@@ -2770,50 +2769,6 @@
         }
       }
     },
-    "/agent/tasks/enable": {
-      "post": {
-        "operationId": "agent_task_enable",
-        "summary": "Pause or resume one scheduled agent task.",
-        "tags": [
-          "write"
-        ],
-        "x-opal-tier": "write",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "query",
-            "required": true,
-            "description": "Task id from agent_tasks_list.",
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 9007199254740991
-            }
-          },
-          {
-            "name": "enabled",
-            "in": "query",
-            "required": true,
-            "description": "true to resume, false to pause.",
-            "schema": {
-              "type": "string",
-              "enum": [
-                "1",
-                "0"
-              ]
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "JSON result"
-          },
-          "401": {
-            "description": "Missing or wrong bearer token"
-          }
-        }
-      }
-    },
     "/agent/tasks/remove": {
       "post": {
         "operationId": "agent_task_remove",
@@ -2992,9 +2947,9 @@
         "operationId": "wanted_follow",
         "summary": "Turn on or off automatic downloads of the newest aired episode of every tracked TV show. Only the newest episode per show is queued, never the back catalogue.",
         "tags": [
-          "write"
+          "spend"
         ],
-        "x-opal-tier": "write",
+        "x-opal-tier": "spend",
         "parameters": [
           {
             "name": "enabled",

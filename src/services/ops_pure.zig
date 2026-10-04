@@ -47,17 +47,36 @@ pub const Policy = struct {
     /// additionally require `allow_destructive`.
     max_tier: Tier = .spend,
     allow_destructive: bool = false,
+    /// Operations whose name starts with this are hidden from tools/list and
+    /// refused on call (`opal-mcp --deny-prefix agent_task` for unattended runs).
+    /// Empty denies nothing.
+    deny_prefix: []const u8 = "",
 };
 
 pub const Verdict = enum {
     allow,
     /// Tier above the policy ceiling; the user must widen the policy.
     tier_blocked,
+    /// The operation's name matches the policy's deny prefix.
+    denied,
     /// Destructive and the call did not pass `confirm: true`.
     needs_confirm,
 };
 
+/// A deny prefix is 1-64 characters of a-z, 0-9 and underscore, like tool names.
+pub fn validDenyPrefix(prefix: []const u8) bool {
+    if (prefix.len == 0 or prefix.len > 64) return false;
+    for (prefix) |ch| if (!std.ascii.isLower(ch) and !std.ascii.isDigit(ch) and ch != '_') return false;
+    return true;
+}
+
+/// True when the policy's deny list covers `op`.
+pub fn isDenied(policy: Policy, op: *const Op) bool {
+    return policy.deny_prefix.len > 0 and std.mem.startsWith(u8, op.name, policy.deny_prefix);
+}
+
 pub fn check(policy: Policy, op: *const Op, is_confirmed: bool) Verdict {
+    if (isDenied(policy, op)) return .denied;
     if (op.tier == .destructive) {
         if (!policy.allow_destructive) return .tier_blocked;
         if (!is_confirmed) return .needs_confirm;
@@ -141,7 +160,7 @@ const library_sorts = [_][]const u8{ "smart", "recent", "title", "progress" };
 const agent_settings = [_][]const u8{
     "hwdec",               "auto_advance",  "seek_sync", "sponsorblock",  "auto_download_subs", "sub_lang",
     "download_rate_limit", "tts_voice",     "tts_speed", "lang_learn",    "translate",          "translate_lang",
-    "theme",               "ui_scale_auto", "ui_scale",  "taste_enabled", "nsfw_filter",        "incognito",
+    "theme",               "ui_scale_auto", "ui_scale",  "taste_enabled", "incognito",
 };
 
 const queue_actions = [_][]const u8{ "play", "remove", "move-up", "move-down", "previous", "next", "toggle-shuffle", "cycle-repeat", "clear-played" };
@@ -410,7 +429,7 @@ pub const ops = [_]Op{
     .{
         .name = "wanted_add",
         .summary = "Add a movie or one episode to the wanted list. Opal searches the torrent sources on a backoff schedule (30 minutes, doubling to daily) and downloads the best release that fits the quality range, then marks it fulfilled. Qualities: 1=480p, 2=720p, 3=1080p, 4=2160p.",
-        .tier = .write,
+        .tier = .spend,
         .method = .POST,
         .path = "/wanted/add",
         .params = &.{
@@ -546,14 +565,6 @@ pub const ops = [_]Op{
             .{ .name = "budget_cents", .kind = .integer, .desc = "Dollar cap per run in cents (claude only), 5 to 1000. Default 50.", .min = 5, .max = 1000 },
         },
     },
-    .{
-        .name = "agent_task_enable",
-        .summary = "Pause or resume one scheduled agent task.",
-        .tier = .write,
-        .method = .POST,
-        .path = "/agent/tasks/enable",
-        .params = &.{ task_id, .{ .name = "enabled", .kind = .boolean, .desc = "true to resume, false to pause.", .required = true } },
-    },
     .{ .name = "agent_task_remove", .summary = "Delete a scheduled agent task.", .tier = .write, .method = .POST, .path = "/agent/tasks/remove", .params = &.{task_id} },
     .{ .name = "agent_task_run", .summary = "Run a scheduled task on the next tick instead of waiting for its schedule. Counts toward its daily cap and needs scheduled tasks switched on in Settings.", .tier = .spend, .method = .POST, .path = "/agent/tasks/run", .params = &.{task_id} },
     .{ .name = "torrent_pause", .summary = "Pause a live torrent by the id from torrents_list.", .tier = .write, .method = .POST, .path = "/torrents/action", .fixed = &.{.{ .key = "action", .value = "pause" }}, .params = &.{torrent_id} },
@@ -573,7 +584,7 @@ pub const ops = [_]Op{
     .{
         .name = "wanted_follow",
         .summary = "Turn on or off automatic downloads of the newest aired episode of every tracked TV show. Only the newest episode per show is queued, never the back catalogue.",
-        .tier = .write,
+        .tier = .spend,
         .method = .POST,
         .path = "/wanted/follow",
         .params = &.{.{ .name = "enabled", .kind = .boolean, .desc = "true to follow tracked shows, false to stop.", .required = true }},
@@ -1039,7 +1050,7 @@ pub const Server = struct {
 
         if (std.mem.eql(u8, method, "initialize")) return self.initialize(id, params, out);
         if (std.mem.eql(u8, method, "ping")) return writeResult(out, id, "{}");
-        if (std.mem.eql(u8, method, "tools/list")) return listTools(a, id, out);
+        if (std.mem.eql(u8, method, "tools/list")) return listTools(self, a, id, out);
         if (std.mem.eql(u8, method, "tools/call")) return self.callTool(a, id, params, out);
         if (std.mem.eql(u8, method, "resources/list")) return listResources(a, id, out);
         if (std.mem.eql(u8, method, "resources/read")) return self.readResource(a, id, params, out);
@@ -1103,6 +1114,12 @@ pub const Server = struct {
         };
         switch (check(self.policy, op, hasConfirm(args))) {
             .allow => {},
+            .denied => {
+                self.record(op, .blocked, args);
+                var buf: [256]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "{s} is disabled on this server (denied prefix '{s}'). It is not available to this agent.", .{ op.name, self.policy.deny_prefix }) catch "disabled on this server";
+                return writeToolText(out, id, msg, true);
+            },
             .tier_blocked => {
                 self.record(op, .blocked, args);
                 var buf: [256]u8 = undefined;
@@ -1169,14 +1186,17 @@ pub const Server = struct {
     }
 };
 
-fn listTools(a: Allocator, id: ?std.json.Value, out: *Writer) !void {
+fn listTools(self: *const Server, a: Allocator, id: ?std.json.Value, out: *Writer) !void {
     _ = a;
     try beginResult(out, id);
     var s = std.json.Stringify{ .writer = out };
     try s.beginObject();
     try s.objectField("tools");
     try s.beginArray();
-    for (&ops) |*op| try writeTool(&s, op);
+    for (&ops) |*op| {
+        if (isDenied(self.policy, op)) continue;
+        try writeTool(&s, op);
+    }
     try s.endArray();
     try s.endObject();
     try endResult(out);
@@ -1490,7 +1510,7 @@ test "wanted_add maps to the wanted route and validates ranges" {
     defer bad_q.deinit();
     try testing.expectError(error.InvalidArgument, validate(op, bad_q.value.object, &diag));
 
-    try testing.expectEqual(Tier.write, op.tier);
+    try testing.expectEqual(Tier.spend, op.tier);
     try testing.expectEqual(Tier.spend, findOp("wanted_check").?.tier);
 }
 
@@ -1833,4 +1853,93 @@ test "ident params reject anything but letters, digits and dashes" {
     try testing.expect(!isIdent("a&b=1"));
     try testing.expect(!isIdent("a%2e"));
     try testing.expect(!isIdent("a.b"));
+}
+
+test "automatic downloads and agent runs are spend; scheduling stays with the user" {
+    try testing.expectEqual(Tier.spend, findOp("wanted_add").?.tier);
+    try testing.expectEqual(Tier.spend, findOp("wanted_follow").?.tier);
+    try testing.expectEqual(Tier.spend, findOp("agent_task_add").?.tier);
+    try testing.expectEqual(Tier.spend, findOp("agent_task_run").?.tier);
+    try testing.expectEqual(Tier.write, findOp("agent_task_remove").?.tier);
+    // No tool can switch a task on or off: only the user does, in the UI.
+    try testing.expect(findOp("agent_task_enable") == null);
+    for (ops) |op| try testing.expect(std.mem.indexOf(u8, op.path, "/agent/tasks/enable") == null);
+    // spend sits at the default ceiling, so these still run by default but not under --allow write.
+    try testing.expectEqual(Verdict.allow, check(Policy{}, findOp("wanted_add").?, false));
+    try testing.expectEqual(Verdict.tier_blocked, check(Policy{ .max_tier = .write }, findOp("wanted_follow").?, false));
+}
+
+test "settings_set cannot switch the content filter off" {
+    for (agent_settings) |k| try testing.expect(!std.mem.eql(u8, k, "nsfw_filter"));
+    var diag = Diag{};
+    var bad = try parseArgs(testing.allocator, "{\"key\":\"nsfw_filter\",\"value\":\"0\"}");
+    defer bad.deinit();
+    try testing.expectError(error.InvalidArgument, validate(findOp("settings_set").?, bad.value.object, &diag));
+    var ok = try parseArgs(testing.allocator, "{\"key\":\"incognito\",\"value\":\"1\"}");
+    defer ok.deinit();
+    try validate(findOp("settings_set").?, ok.value.object, &diag);
+}
+
+test "deny prefix: matching tools are hidden from tools/list and refused on call" {
+    var api = FakeApi{};
+    var server = Server{ .caller = api.caller(), .policy = .{ .deny_prefix = "agent_task" } };
+    const buf = try testing.allocator.alloc(u8, 64 * 1024);
+    defer testing.allocator.free(buf);
+
+    const list = try rpc(&server, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}", buf);
+    var parsed = try parseArgs(testing.allocator, list);
+    defer parsed.deinit();
+    const tools = parsed.value.object.get("result").?.object.get("tools").?.array;
+    var denied_ops: usize = 0;
+    for (ops) |op| {
+        if (std.mem.startsWith(u8, op.name, "agent_task")) denied_ops += 1;
+    }
+    try testing.expect(denied_ops >= 4); // agent_tasks_list, _add, _remove, _run
+    try testing.expectEqual(ops.len - denied_ops, tools.items.len);
+    for (tools.items) |t| try testing.expect(!std.mem.startsWith(u8, t.object.get("name").?.string, "agent_task"));
+
+    // Calling a hidden tool never reaches the API, even with valid arguments.
+    var cbuf: [1024]u8 = undefined;
+    const out = try rpc(&server, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"agent_task_run\",\"arguments\":{\"id\":1}}}", &cbuf);
+    try testing.expectEqual(@as(usize, 0), api.calls);
+    try testing.expect(std.mem.indexOf(u8, out, "\"isError\":true") != null);
+    try testing.expect(std.mem.indexOf(u8, out, "agent_task") != null);
+    try testing.expect(std.mem.indexOf(u8, out, "disabled") != null);
+    const add = try rpc(&server, "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"agent_task_add\",\"arguments\":{\"name\":\"x\",\"prompt\":\"y\"}}}", &cbuf);
+    try testing.expectEqual(@as(usize, 0), api.calls);
+    try testing.expect(std.mem.indexOf(u8, add, "\"isError\":true") != null);
+}
+
+test "deny prefix leaves every other tool alone, and an empty prefix denies nothing" {
+    var api = FakeApi{ .body = "{\"results\":[]}" };
+    var server = Server{ .caller = api.caller(), .policy = .{ .deny_prefix = "agent_task" } };
+    var buf: [1024]u8 = undefined;
+    const out = try rpc(&server, "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"search\",\"arguments\":{\"query\":\"dune\"}}}", &buf);
+    try testing.expectEqualStrings("/api/unified_search?q=dune", api.lastTarget());
+    try testing.expect(std.mem.indexOf(u8, out, "\"isError\":false") != null);
+
+    const p = Policy{};
+    for (&ops) |*op| try testing.expect(!isDenied(p, op));
+    const q = Policy{ .deny_prefix = "agent_task" };
+    try testing.expect(isDenied(q, findOp("agent_task_add").?));
+    try testing.expect(isDenied(q, findOp("agent_tasks_list").?));
+    try testing.expect(!isDenied(q, findOp("status").?));
+    try testing.expect(!isDenied(q, findOp("wanted_add").?));
+    try testing.expectEqual(Verdict.denied, check(q, findOp("agent_task_run").?, true));
+    // Denial wins over every other verdict, including a widened policy.
+    const wide = Policy{ .deny_prefix = "queue_", .allow_destructive = true };
+    try testing.expectEqual(Verdict.denied, check(wide, findOp("queue_clear").?, true));
+    try testing.expectEqual(Verdict.allow, check(wide, findOp("player_toggle").?, false));
+}
+
+test "deny prefix argument must look like a tool name prefix" {
+    try testing.expect(validDenyPrefix("agent_task"));
+    try testing.expect(validDenyPrefix("a"));
+    try testing.expect(!validDenyPrefix(""));
+    try testing.expect(!validDenyPrefix("Agent"));
+    try testing.expect(!validDenyPrefix("agent task"));
+    try testing.expect(!validDenyPrefix("agent-task"));
+    var long: [65]u8 = undefined;
+    @memset(&long, 'a');
+    try testing.expect(!validDenyPrefix(&long));
 }
