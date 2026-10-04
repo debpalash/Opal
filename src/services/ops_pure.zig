@@ -114,6 +114,15 @@ const library_filters = [_][]const u8{ "all", "watching", "caught_up", "unstarte
 const library_kinds = [_][]const u8{ "all", "tv", "anime", "movie" };
 const library_sorts = [_][]const u8{ "smart", "recent", "title", "progress" };
 
+/// Settings an agent may change. Deliberately omits proxy_url (reroutes all
+/// traffic) and save_path (decides where downloads are written); those stay a
+/// human decision in Settings.
+const agent_settings = [_][]const u8{
+    "hwdec",               "auto_advance",  "seek_sync", "sponsorblock",  "auto_download_subs", "sub_lang",
+    "download_rate_limit", "tts_voice",     "tts_speed", "lang_learn",    "translate",          "translate_lang",
+    "theme",               "ui_scale_auto", "ui_scale",  "taste_enabled", "nsfw_filter",        "incognito",
+};
+
 const queue_actions = [_][]const u8{ "play", "remove", "move-up", "move-down", "previous", "next", "toggle-shuffle", "cycle-repeat", "clear-played" };
 
 /// The whole agent-visible surface. Names are MCP tool names (a-z, 0-9, _).
@@ -146,6 +155,7 @@ pub const ops = [_]Op{
             .{ .name = "limit", .kind = .integer, .desc = "Items to return, 1-200. Default 48.", .min = 1, .max = 200 },
         },
     },
+    .{ .name = "settings_list", .summary = "Every app setting an agent can see, with its type, range and current value.", .tier = .read, .method = .GET, .path = "/settings" },
     .{ .name = "calendar_list", .summary = "Coming up: the next episode and air date of each tracked show, and whether the latest one is available to stream.", .tier = .read, .method = .GET, .path = "/calendar" },
     .{ .name = "collections_list", .summary = "The user's named collections (playlists) with item counts.", .tier = .read, .method = .GET, .path = "/collections" },
     .{ .name = "recommendations", .summary = "Personalised recommendations from the viewing history.", .tier = .read, .method = .GET, .path = "/recommendations" },
@@ -268,6 +278,17 @@ pub const ops = [_]Op{
             .{ .name = "min_quality", .kind = .integer, .desc = "Lowest acceptable quality, 1-4. Default 2.", .min = 1, .max = 4 },
             .{ .name = "prefer_quality", .kind = .integer, .desc = "Quality to aim for, within min and max. Default 3.", .min = 1, .max = 4 },
             .{ .name = "max_quality", .kind = .integer, .desc = "Highest acceptable quality, 1-4. Default 4.", .min = 1, .max = 4 },
+        },
+    },
+    .{
+        .name = "settings_set",
+        .summary = "Change one app setting listed by settings_list (playback, subtitles, language, theme, privacy). Network proxy and download folder cannot be changed by agents.",
+        .tier = .write,
+        .method = .POST,
+        .path = "/settings",
+        .params = &.{
+            .{ .name = "key", .kind = .choice, .desc = "Setting name from settings_list.", .required = true, .choices = &agent_settings },
+            .{ .name = "value", .kind = .string, .desc = "New value: 0 or 1 for switches, a number for numeric settings, text otherwise.", .required = true, .max_len = 64 },
         },
     },
     .{
@@ -1216,4 +1237,22 @@ test "audit line records the call and strips URL queries" {
     try testing.expect(std.mem.indexOf(u8, line, "\"tier\":\"spend\"") != null);
     try testing.expect(std.mem.indexOf(u8, line, "SECRET") == null);
     try testing.expect(std.mem.indexOf(u8, line, "https://x.com/f.mkv") != null);
+}
+
+test "settings_set refuses keys that reroute traffic or choose where files go" {
+    var buf: [256]u8 = undefined;
+    var diag = Diag{};
+    const op = findOp("settings_set").?;
+    const ok = try std.json.parseFromSlice(std.json.Value, testing.allocator, "{\"key\":\"ui_scale\",\"value\":\"110\"}", .{});
+    defer ok.deinit();
+    var w = Writer.fixed(&buf);
+    try writeTarget(op, ok.value.object, &w);
+    try testing.expectEqualStrings("/api/settings?key=ui_scale&value=110", w.buffered());
+    for ([_][]const u8{ "proxy_url", "save_path" }) |k| {
+        var json: [96]u8 = undefined;
+        const text = try std.fmt.bufPrint(&json, "{{\"key\":\"{s}\",\"value\":\"x\"}}", .{k});
+        const bad = try std.json.parseFromSlice(std.json.Value, testing.allocator, text, .{});
+        defer bad.deinit();
+        try testing.expectError(error.InvalidArgument, validate(op, bad.value.object, &diag));
+    }
 }

@@ -39,9 +39,9 @@ Every tool has a tier. The server refuses anything above the ceiling you give it
 
 | Tier | Meaning | Examples |
 | --- | --- | --- |
-| `read` | observe, search | `status`, `search`, `search_results`, `queue_list`, `downloads_list`, `history_list`, `recommendations`, `library_list`, `calendar_list`, `collections_list`, `wanted_list` |
+| `read` | observe, search | `status`, `search`, `search_results`, `queue_list`, `downloads_list`, `history_list`, `recommendations`, `library_list`, `calendar_list`, `collections_list`, `settings_list`, `wanted_list` |
 | `playback` | control what plays now | `search_play`, `search_queue`, `player_toggle`, `player_seek`, `player_speed`, `player_volume`, `player_next`, `player_previous`, `subtitles_search`, `subtitles_download`, `queue_action` |
-| `write` | change persistent state | `subtitles_generate`, `downloads_pause`, `downloads_resume`, `wanted_add`, `wanted_follow`, `wanted_pause`, `wanted_resume`, `wanted_remove` |
+| `write` | change persistent state | `subtitles_generate`, `downloads_pause`, `downloads_resume`, `settings_set`, `wanted_add`, `wanted_follow`, `wanted_pause`, `wanted_resume`, `wanted_remove` |
 | `spend` | use bandwidth, disk or compute | `play_url`, `downloads_add_url` (a magnet starts a torrent), `wanted_check` (searches now and may start a download) |
 | `destructive` | remove data | `queue_clear`, `downloads_cancel` |
 
