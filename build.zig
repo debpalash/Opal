@@ -439,6 +439,19 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
+    // opal-mcp: the Model Context Protocol server agents launch over stdio. It
+    // is std-only on purpose (no GUI, no libmpv/libtorrent), so it starts
+    // instantly and cannot become a second player. See docs/agent-native.md.
+    const mcp_exe = b.addExecutable(.{
+        .name = "opal-mcp",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/mcp_main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    b.installArtifact(mcp_exe);
+
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
     // opal.exe imports libmpv-2.dll / libsqlite3-0.dll, and torrent_wrapper.dll
@@ -542,6 +555,17 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_playback_snapshot_pure).step);
+
+    const test_ops_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/ops_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_test_ops_pure = b.addRunArtifact(test_ops_pure);
+    test_step.dependOn(&run_test_ops_pure.step);
+    b.step("test-ops", "Test the agent operation registry and MCP server core").dependOn(&run_test_ops_pure.step);
 
     const test_auto_subs_pure = b.addTest(.{
         .root_module = b.createModule(.{

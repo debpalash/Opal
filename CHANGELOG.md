@@ -11,6 +11,7 @@ Headings are `## vX.Y.Z — YYYY-MM-DD`, newest first. The version token must
 match the tag exactly.
 
 ## Unreleased
+- Agent-native groundwork: `opal-mcp`, a std-only Model Context Protocol server (stdio) that lets coding agents search, play, queue, control playback and manage downloads on a running Opal. Tools come from a single typed registry (`src/services/ops_pure.zig`) with permission tiers, argument validation, a URL guard (http(s)/magnet only), a destructive-action confirm and a JSON audit log. See `docs/mcp.md`. Ships an `opal-media` agent skill in `skills/`.
 
 - **Quitting after a search no longer crashes.** Closing Opal (or sending it
   SIGTERM) while search covers were on screen aborted the process in teardown
