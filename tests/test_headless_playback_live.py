@@ -87,7 +87,17 @@ class HeadlessPlaybackTests(unittest.TestCase):
                 self.assertFalse(last.get('error'), last)
                 return
             time.sleep(.1)
-        self.fail(f'resolver publication never reached mpv: helper={marker.exists()}, status={last}')
+        # Keep playback failures diagnosable on runners without a display.
+        # Only include engine warnings from this isolated, local-media fixture;
+        # authentication and setup logs must never enter CI output.
+        logs = harness.request('GET', '/api/logs?limit=200',
+                               host=self.opal.loopback_authority, extra_headers=headers)
+        engine_logs = [entry for entry in logs.json().get('entries', [])
+                       if entry.get('prefix', '').split('/')[0] in
+                       {'mpv', 'cplayer', 'ao', 'vo', 'ad', 'vd', 'af', 'vf',
+                        'lavfi', 'ffmpeg', 'demux', 'demuxer', 'lavf'}]
+        self.fail(f'playback never advanced: helper={marker.exists()}, '
+                  f'status={last}, engine_logs={engine_logs}')
 
 
 if __name__ == '__main__':
