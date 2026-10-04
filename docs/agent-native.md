@@ -58,7 +58,7 @@ Existing `remote_*_api.zig` handlers are wrapped, not rewritten. Move them behin
 
 ### 2. MCP server
 
-Ship `opal mcp` as a subcommand: an stdio MCP server that talks to a running Opal over the loopback API with the machine token, and starts a headless core if none is running. Streamable HTTP is a later transport. Because it is generated from the registry, new app features become agent tools with no extra work.
+Shipped as `opal-mcp`, a separate std-only binary: a stdio MCP server that talks to a running Opal over the loopback API with the machine token. It is separate from `opal` so it starts instantly, links no GUI, libmpv or libtorrent, and can never become a second player. Streamable HTTP is a later transport. Because it is generated from the registry, new app features become agent tools with no extra work.
 
 Expose three MCP primitives:
 
@@ -108,10 +108,23 @@ Once operations are typed tools, the intelligent behavior is composition, which 
 
 The in-app copilot becomes one more registry client, so it gains every new operation for free.
 
+## Status
+
+Branch `v2/agent-os` is stacked on PR #119 (browse, episode redesign, remote hardening), which sits on `main`.
+
+| Phase | State |
+| --- | --- |
+| 1. Registry | Done for the observe, playback, download and queue surface: 22 tools with typed parameters, tiers and API bindings (`src/services/ops_pure.zig`). Not yet generating the in-app copilot tool list or an OpenAPI document. |
+| 2. MCP server | Done: `opal-mcp` (stdio), tools and resources, policy ceiling, destructive confirm, URL guard, JSON audit log. Verified live: search, play, status, pause against a running Opal. See [mcp.md](mcp.md). |
+| 3. Skills | First skill, `skills/opal-media`. |
+| 4-6 | Not started. |
+
+Next up, in order: an in-app "Agent access" switch that enables the loopback API and shows the audit log; library, collections, sources and settings tools; the copilot reading the registry.
+
 ## Phases
 
 1. **Registry and schemas.** Define the registry, port search, playback, queue, library, downloads and status. Generate the copilot tool list from it. Keep the HTTP routes working. Tests for schema validation and tier enforcement.
-2. **MCP server.** `opal mcp` over stdio, tools and resources, audit log, tier confirmation. Docs and a Claude Code / Codex config snippet. Site page.
+2. **MCP server.** `opal-mcp` over stdio, tools and resources, audit log, tier confirmation. Docs and a Claude Code / Codex config snippet. Site page.
 3. **Skills.** A first set of `SKILL.md` workflows shipped in the repo and installable from the app.
 4. **Terminal spike, then panel.** Prove libghostty builds and renders in dvui; then pty plumbing, the Agents launcher, one-click MCP wiring.
 5. **Extension loop.** Plugin scaffold/test/install tools and hot-reloaded skills.
@@ -122,6 +135,7 @@ Each phase is independently shippable; phase 2 is the first user-visible milesto
 ## Open decisions
 
 - **Transport default.** stdio bridge (simple, works with every agent) versus built-in streamable HTTP on the existing server. Proposed: stdio first.
-- **Language of the bridge.** Part of the Zig binary (`opal mcp`) versus a separate small program. Proposed: in the binary, so there is nothing extra to install.
+- **Bridge packaging.** Decided: a separate `opal-mcp` binary built by the same `zig build`. Packages (AUR, AppImage, Homebrew, Windows zip) must ship it next to `opal`.
+- **Enabling the API.** Web Remote is off by default in the windowed app, so agents get "not reachable" until the user turns it on. Proposed: an "Agent access" switch in Settings that starts the loopback API and writes the token, with the audit log beside it.
 - **Confirmation UX in headless mode.** Web UI approval queue versus fail closed. Proposed: approval queue, fail closed when nobody is attached.
 - **Windows terminal support** (ConPTY) in phase 4 or deferred.
