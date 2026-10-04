@@ -5,6 +5,7 @@
 //! needs; serialization and mutation validation stay feature-local.
 
 const std = @import("std");
+const keyless = @import("cinemeta_meta_pure.zig");
 const state = @import("../core/state.zig");
 const wire = @import("remote_http.zig");
 
@@ -420,36 +421,58 @@ fn tvDetails(stream: std.Io.net.Stream, query: []const u8) void {
         wire.sendJson(stream, "{\"error\":\"bad id\"}");
         return;
     };
+    const season: ?i32 = if (wire.queryParam(query, "season")) |raw| (std.fmt.parseInt(i32, raw, 10) catch 0) else null;
     if (state.app.tmdb.api_key_len == 0) {
-        var imdb_buf: [32]u8 = undefined;
-        const imdb = if (wire.queryParam(query, "imdb")) |raw| (wire.urlDecode(raw, &imdb_buf) orelse "") else "";
-        if (!@import("cinemeta_pure.zig").validImdbId(imdb)) {
-            wire.sendJson(stream, "{\"error\":\"keyless TV metadata unavailable\"}");
-            return;
-        }
-        sendCinemetaMeta(stream, "series", imdb);
+        sendKeyless(stream, query, .series, id, season);
         return;
     }
     var path_buf: [96]u8 = undefined;
-    const path = if (wire.queryParam(query, "season")) |raw| blk: {
-        const season = std.fmt.parseInt(i32, raw, 10) catch 0;
-        break :blk std.fmt.bufPrint(&path_buf, "/3/tv/{d}/season/{d}", .{ id, season }) catch return;
-    } else std.fmt.bufPrint(&path_buf, "/3/tv/{d}", .{id}) catch return;
+    const path = if (season) |sn|
+        std.fmt.bufPrint(&path_buf, "/3/tv/{d}/season/{d}", .{ id, sn }) catch return
+    else
+        std.fmt.bufPrint(&path_buf, "/3/tv/{d}", .{id}) catch return;
     sendTmdbJson(stream, path);
 }
 
-fn sendCinemetaMeta(stream: std.Io.net.Stream, kind: []const u8, imdb: []const u8) void {
-    const alloc = @import("../core/alloc.zig").allocator;
-    const body = alloc.alloc(u8, 1024 * 1024) catch return;
-    defer alloc.free(body);
-    var path_buf: [64]u8 = undefined;
-    const path = std.fmt.bufPrint(&path_buf, "/meta/{s}/{s}.json", .{ kind, imdb }) catch return;
-    const len = @import("tmdb_api.zig").cinemetaApiInto(path, body);
-    if (len == 0) {
-        wire.sendJson(stream, "{\"error\":\"cinemeta fetch failed\"}");
+/// No TMDB key: answer from Cinemeta in the TMDB document shape. The id is
+/// either a TMDB id or a synthetic catalog id; either way the IMDb identity
+/// comes from the `imdb` parameter or from the listing that produced the id.
+fn sendKeyless(stream: std.Io.net.Stream, query: []const u8, kind: keyless.Kind, id: i32, season: ?i32) void {
+    const api = @import("tmdb_api.zig");
+    var imdb_buf: [32]u8 = undefined;
+    var found: [16]u8 = undefined;
+    var imdb: []const u8 = if (wire.queryParam(query, "imdb")) |raw| (wire.urlDecode(raw, &imdb_buf) orelse "") else "";
+    if (imdb.len != 0 and !@import("cinemeta_pure.zig").validImdbId(imdb)) {
+        wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"bad imdb id\"}");
         return;
     }
-    wire.sendJson(stream, body[0..len]);
+    if (imdb.len == 0) {
+        var title_buf: [256]u8 = undefined;
+        const title = if (wire.queryParam(query, "title")) |raw| (wire.urlDecode(raw, &title_buf) orelse "") else "";
+        imdb = api.resolveImdb(kind, id, title, &found);
+    }
+    if (imdb.len == 0) {
+        wire.sendJsonStatus(stream, "404 Not Found", "{\"error\":\"unknown title: browse or search for it first, or pass imdb=tt...\"}");
+        return;
+    }
+    api.rememberIdentity(kind, id, imdb);
+    if (kind == .series) @import("../core/db.zig").tvRememberImdb(id, imdb);
+    const body = api.cinemetaMetaOwned(kind, imdb) orelse {
+        wire.sendJsonStatus(stream, "502 Bad Gateway", "{\"error\":\"cinemeta fetch failed\"}");
+        return;
+    };
+    const alloc = @import("../core/alloc.zig").allocator;
+    defer alloc.free(body);
+    var out: std.Io.Writer.Allocating = .init(alloc);
+    defer out.deinit();
+    (if (season) |sn|
+        keyless.writeSeason(&out.writer, alloc, body, sn)
+    else
+        keyless.writeTitle(&out.writer, alloc, body, kind, id)) catch {
+        wire.sendJsonStatus(stream, "502 Bad Gateway", "{\"error\":\"cinemeta returned an unusable document\"}");
+        return;
+    };
+    wire.sendJson(stream, out.written());
 }
 
 fn movieDetails(stream: std.Io.net.Stream, query: []const u8) void {
@@ -458,13 +481,7 @@ fn movieDetails(stream: std.Io.net.Stream, query: []const u8) void {
         return;
     };
     if (state.app.tmdb.api_key_len == 0) {
-        var imdb_buf: [32]u8 = undefined;
-        const imdb = if (wire.queryParam(query, "imdb")) |raw| (wire.urlDecode(raw, &imdb_buf) orelse "") else "";
-        if (!@import("cinemeta_pure.zig").validImdbId(imdb)) {
-            wire.sendJson(stream, "{\"error\":\"keyless movie metadata unavailable\"}");
-            return;
-        }
-        sendCinemetaMeta(stream, "movie", imdb);
+        sendKeyless(stream, query, .movie, id, null);
         return;
     }
     var path_buf: [96]u8 = undefined;

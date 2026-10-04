@@ -8,6 +8,119 @@ const ccp = @import("../core/content_cache_pure.zig");
 const rate_limit = @import("../core/rate_limit.zig");
 
 const alloc = parse.alloc;
+const keyless = @import("cinemeta_meta_pure.zig");
+const sync = @import("../core/sync.zig");
+
+// ══════════════════════════════════════════════════════════
+// Keyless identity: catalog id -> IMDb id
+// ══════════════════════════════════════════════════════════
+
+var identity_mutex: sync.Mutex = .{};
+var identity_table: keyless.IdentityTable = .{};
+
+/// Movie and TV ids come from different TMDB namespaces, so the table key is
+/// signed by kind.
+fn identityKey(kind: keyless.Kind, id: i32) i32 {
+    return if (kind == .series) -id else id;
+}
+
+pub fn rememberIdentity(kind: keyless.Kind, id: i32, imdb: []const u8) void {
+    identity_mutex.lock();
+    defer identity_mutex.unlock();
+    identity_table.record(identityKey(kind, id), imdb);
+}
+
+fn rememberItems(items: []const state.TmdbItem, kind: keyless.Kind) void {
+    identity_mutex.lock();
+    defer identity_mutex.unlock();
+    for (items) |it| {
+        if (it.imdb_id_len == 0 or it.imdb_id_len > it.imdb_id.len) continue;
+        identity_table.record(identityKey(kind, it.id), it.imdb_id[0..it.imdb_id_len]);
+    }
+}
+
+fn mediaKind(it: *const state.TmdbItem) keyless.Kind {
+    return if (std.mem.eql(u8, it.media_type[0..@min(it.media_type_len, it.media_type.len)], "tv")) .series else .movie;
+}
+
+/// Local-only lookup (no network): the identity table, then every list the UI
+/// holds. Returns a slice of `out`, or "" when the id was never listed.
+pub fn knownImdb(kind: keyless.Kind, id: i32, out: []u8) []const u8 {
+    {
+        identity_mutex.lock();
+        defer identity_mutex.unlock();
+        const hit = identity_table.lookup(identityKey(kind, id), out);
+        if (hit.len > 0) return hit;
+    }
+    const t = &state.app.tmdb;
+    t.results_mutex.lock();
+    defer t.results_mutex.unlock();
+    const lists = [_][]const state.TmdbItem{ t.results.items, t.pending_results.items, t.favorites.items, t.watchlist.items, t.watching.items };
+    for (lists) |list| {
+        for (list) |*it| {
+            if (it.id != id or it.imdb_id_len == 0 or mediaKind(it) != kind) continue;
+            const n = @min(it.imdb_id_len, out.len);
+            @memcpy(out[0..n], it.imdb_id[0..n]);
+            return out[0..n];
+        }
+    }
+    return "";
+}
+
+/// Resolve a catalog id to an IMDb id. Local first; with a title, an exact-id
+/// match in Cinemeta's search (same rule the episode previews use) as a last
+/// resort. Blocking network: call from a worker thread only.
+pub fn resolveImdb(kind: keyless.Kind, id: i32, title: []const u8, out: *[16]u8) []const u8 {
+    const known = knownImdb(kind, id, out);
+    if (known.len > 0) return known;
+    if (kind == .series) {
+        const remembered = @import("../core/db.zig").tvImdbId(id, out);
+        if (remembered.len > 0) return remembered;
+    }
+    if (title.len == 0) return "";
+    var enc: [512]u8 = undefined;
+    const q = http.urlEncode(title, &enc);
+    var path_buf: [640]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buf, "/catalog/{s}/top/search={s}.json", .{ keyless.kindName(kind), q }) catch return "";
+    const body = cinemetaApiOwned(path, 1024 * 1024) orelse return "";
+    defer alloc.free(body);
+    const found = @import("episode_art_pure.zig").findImdb(alloc, body, id, out) catch return "";
+    if (found.len > 0) rememberIdentity(kind, id, found);
+    return found;
+}
+
+const META_TTL_S: i64 = 6 * 60 * 60;
+
+/// Cinemeta `meta` document for an IMDb id, through the encrypted content cache
+/// (fresh hit: no network; stale hit: refetch, falling back to the stale copy
+/// when the provider is down). Caller frees with the shared allocator.
+pub fn cinemetaMetaOwned(kind: keyless.Kind, imdb: []const u8) ?[]u8 {
+    if (!@import("cinemeta_pure.zig").validImdbId(imdb)) return null;
+    var key_buf: [64]u8 = undefined;
+    const key = std.fmt.bufPrint(&key_buf, "catalog:meta:v1:cinemeta:{s}:{s}", .{ keyless.kindName(kind), imdb }) catch return null;
+    var stale: ?[]u8 = null;
+    if (content_cache.getOwned(key)) |hit| {
+        if (metaBodyValid(hit.bytes)) {
+            if (hit.staleness != .stale) return hit.bytes;
+            stale = hit.bytes;
+        } else alloc.free(hit.bytes);
+    }
+    var path_buf: [64]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buf, "/meta/{s}/{s}.json", .{ keyless.kindName(kind), imdb }) catch return stale;
+    if (cinemetaApiOwned(path, @import("tmdb_pure.zig").DETAIL_BODY_LIMIT)) |body| {
+        if (metaBodyValid(body)) {
+            content_cache.put(key, body, META_TTL_S);
+            if (stale) |old| alloc.free(old);
+            return body;
+        }
+        alloc.free(body);
+    }
+    return stale;
+}
+
+fn metaBodyValid(body: []const u8) bool {
+    return @import("cinemeta_pure.zig").valueStart(body, "\"meta\"") != null;
+}
 
 // Encrypted-content-cache SWR for the default browse grid: cache page-1 browse
 // rows to disk so the Home/Browse grid is not blank on cold start. Serialization
@@ -159,6 +272,7 @@ pub fn seedBrowseFromCache() void {
     while (i < n and t.results.items.len < TMDB_MAX_CACHED_ITEMS) : (i += 1) {
         const it = deserializeItem(&r) orelse break;
         t.results.append(alloc, it) catch break;
+        if (it.imdb_id_len > 0 and it.imdb_id_len <= it.imdb_id.len) rememberIdentity(mediaKind(&it), it.id, it.imdb_id[0..it.imdb_id_len]);
     }
 }
 
@@ -181,12 +295,12 @@ pub fn searchCatalogInto(query: []const u8, out: []state.TmdbItem) usize {
             defer alloc.free(body);
             parse.parseTmdbResponse(body, &staged);
             if (parse.extractJsonInt(body, "\"status_code\":") != 0)
-                fetchCinemetaInto(&staged, .search, query, .trending, .all, 0, 1);
+                fetchCinemetaInto(&staged, .search, query, .trending, .all, 0, 0, 1);
         } else {
-            fetchCinemetaInto(&staged, .search, query, .trending, .all, 0, 1);
+            fetchCinemetaInto(&staged, .search, query, .trending, .all, 0, 0, 1);
         }
     } else {
-        fetchCinemetaInto(&staged, .search, query, .trending, .all, 0, 1);
+        fetchCinemetaInto(&staged, .search, query, .trending, .all, 0, 0, 1);
     }
 
     var written: usize = 0;
@@ -266,15 +380,15 @@ fn fetchTmdb(mode: FetchMode, query: []const u8, append: bool) void {
                         const api_failed = parse.extractJsonInt(body, "\"status_code\":") != 0;
                         alloc.free(body);
                         if (api_failed) {
-                            fetchCinemetaInto(&staged, S.fetch_mode, S.q[0..S.q_len], S.category, S.media_filter, S.genre_idx, S.page);
+                            fetchCinemetaInto(&staged, S.fetch_mode, S.q[0..S.q_len], S.category, S.media_filter, S.genre_idx, S.discover_sort, S.page);
                             total_pages = if (staged.items.len == 0) S.page else S.page + 1;
                         }
                     } else {
-                        fetchCinemetaInto(&staged, S.fetch_mode, S.q[0..S.q_len], S.category, S.media_filter, S.genre_idx, S.page);
+                        fetchCinemetaInto(&staged, S.fetch_mode, S.q[0..S.q_len], S.category, S.media_filter, S.genre_idx, S.discover_sort, S.page);
                         total_pages = if (staged.items.len == 0) S.page else S.page + 1;
                     }
                 } else {
-                    fetchCinemetaInto(&staged, S.fetch_mode, S.q[0..S.q_len], S.category, S.media_filter, S.genre_idx, S.page);
+                    fetchCinemetaInto(&staged, S.fetch_mode, S.q[0..S.q_len], S.category, S.media_filter, S.genre_idx, S.discover_sort, S.page);
                     total_pages = if (staged.items.len == 0) S.page else S.page + 1;
                 }
 
@@ -326,11 +440,12 @@ fn fetchTmdb(mode: FetchMode, query: []const u8, append: bool) void {
 }
 
 fn buildCinemetaUrl(buf: *[512]u8, content_type: []const u8, mode: FetchMode, query: []const u8, cat: state.TmdbCategory, genre_idx: usize, page: u32) ?[]const u8 {
-    const catalog = if (mode == .search or genre_idx != 0) "top" else switch (cat) {
-        .top_rated => "imdbRating",
-        .now_playing, .upcoming => "year",
-        else => "top",
-    };
+    // A genre Cinemeta cannot filter on (the app's "Music") yields no rows
+    // rather than an unfiltered list that pretends to be that genre.
+    if (mode == .browse and genre_idx != 0 and
+        (genre_idx >= @import("tmdb_pure.zig").GENRE_NAMES.len or !keyless.genreSupported(@import("tmdb_pure.zig").GENRE_NAMES[genre_idx]))) return null;
+    const cat_e = std.meta.stringToEnum(keyless.Category, @tagName(cat)) orelse .trending;
+    const catalog = keyless.catalogName(keyless.catalogFor(cat_e, genre_idx != 0, mode == .search));
     var value_buf: [256]u8 = undefined;
     const value = if (mode == .search)
         http.urlEncode(query, &value_buf)
@@ -354,11 +469,17 @@ fn fetchCinemetaType(out: *std.ArrayListUnmanaged(state.TmdbItem), content_type:
     const url = buildCinemetaUrl(&url_buf, content_type, mode, query, cat, genre_idx, page) orelse return;
     const body = httpGet(url, "") orelse return;
     defer alloc.free(body);
+    const before = out.items.len;
     parse.parseCinemetaResponse(body, out);
+    rememberItems(out.items[before..], if (std.mem.eql(u8, content_type, "series")) .series else .movie);
 }
 
-fn fetchCinemetaInto(out: *std.ArrayListUnmanaged(state.TmdbItem), mode: FetchMode, query: []const u8, cat: state.TmdbCategory, mf: state.TmdbMediaFilter, genre_idx: usize, page: u32) void {
-    fetchCinemetaIntoUsing(fetchCinemetaType, out, mode, query, cat, mf, genre_idx, page);
+fn fetchCinemetaInto(out: *std.ArrayListUnmanaged(state.TmdbItem), mode: FetchMode, query: []const u8, cat: state.TmdbCategory, mf: state.TmdbMediaFilter, genre_idx: usize, discover_sort: u8, page: u32) void {
+    // With a genre active the toolbar shows sort chips, not category chips.
+    const cat_e = std.meta.stringToEnum(keyless.Category, @tagName(cat)) orelse .trending;
+    const eff = keyless.effectiveCategory(cat_e, genre_idx != 0, discover_sort);
+    const eff_cat = std.meta.stringToEnum(state.TmdbCategory, @tagName(eff)) orelse cat;
+    fetchCinemetaIntoUsing(fetchCinemetaType, out, mode, query, eff_cat, mf, genre_idx, page);
 }
 
 fn fetchCinemetaIntoUsing(comptime fetchType: anytype, out: *std.ArrayListUnmanaged(state.TmdbItem), mode: FetchMode, query: []const u8, cat: state.TmdbCategory, mf: state.TmdbMediaFilter, genre_idx: usize, page: u32) void {
@@ -948,4 +1069,22 @@ test "Browse regression movie and series network waits overlap and retain both c
     try std.testing.expectEqual(@as(usize, 2), rows.items.len);
     try std.testing.expectEqual(@as(i32, 1), rows.items[0].id);
     try std.testing.expectEqual(@as(i32, 2), rows.items[1].id);
+}
+
+test "keyless catalog URLs: real equivalents, honest genre handling, kind-signed identities" {
+    var buf: [512]u8 = undefined;
+    try std.testing.expectEqualStrings("https://v3-cinemeta.strem.io/catalog/movie/top.json", buildCinemetaUrl(&buf, "movie", .browse, "", .popular, 0, 1).?);
+    try std.testing.expectEqualStrings("https://v3-cinemeta.strem.io/catalog/series/imdbRating.json", buildCinemetaUrl(&buf, "series", .browse, "", .top_rated, 0, 1).?);
+    try std.testing.expectEqualStrings("https://v3-cinemeta.strem.io/catalog/movie/year/skip=50.json", buildCinemetaUrl(&buf, "movie", .browse, "", .now_playing, 0, 2).?);
+    // Genre + top rated uses the imdbRating catalog (year cannot take a genre).
+    try std.testing.expectEqualStrings("https://v3-cinemeta.strem.io/catalog/movie/imdbRating/genre=Action.json", buildCinemetaUrl(&buf, "movie", .browse, "", .top_rated, 1, 1).?);
+    // "Music" (index 12) has no Cinemeta genre: no URL, not an unfiltered list.
+    try std.testing.expect(buildCinemetaUrl(&buf, "movie", .browse, "", .trending, 12, 1) == null);
+    try std.testing.expectEqualStrings("https://v3-cinemeta.strem.io/catalog/movie/top/search=dune.json", buildCinemetaUrl(&buf, "movie", .search, "dune", .top_rated, 0, 1).?);
+
+    rememberIdentity(.movie, 4242, "tt0000001");
+    rememberIdentity(.series, 4242, "tt0000002");
+    var out: [16]u8 = undefined;
+    try std.testing.expectEqualStrings("tt0000001", knownImdb(.movie, 4242, &out));
+    try std.testing.expectEqualStrings("tt0000002", knownImdb(.series, 4242, &out));
 }

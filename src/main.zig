@@ -500,7 +500,7 @@ fn scheduleDeferredNetworkWarmups(media_first_launch: bool) void {
             }
             if (workers.isQuitting()) return;
 
-            if (!skip_browse and state.app.tmdb.api_key_len > 0 and !state.app.tmdb.loaded_once) {
+            if (!skip_browse and state.app.config_loaded.load(.acquire) and !state.app.tmdb.loaded_once) {
                 state.app.tmdb.loaded_once = true;
                 @import("services/tmdb_api.zig").fetchCurrentView(false);
             }

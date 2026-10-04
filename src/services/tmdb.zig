@@ -6,6 +6,7 @@ const theme = @import("../ui/theme.zig");
 const shared_components = @import("../ui/components.zig");
 const search = @import("search.zig");
 const content_cache = @import("../core/content_cache.zig");
+const keyless_meta = @import("cinemeta_meta_pure.zig");
 const route_resilience = @import("../core/route_resilience_pure.zig");
 
 // Sub-modules
@@ -123,6 +124,78 @@ fn detailCacheKey(out: []u8, tmdb_id: i32, use_cinemeta: bool, season: ?i32) ?[]
     return std.fmt.bufPrint(out, "catalog:tv-detail:v2:tmdb:{d}:seasons", .{tmdb_id}) catch null;
 }
 
+// ── Keyless TV identity ──
+// Keyless detail pages are keyed by IMDb id. Cards from Browse carry one; rows
+// that arrive by other routes (Home rails, Watching, Watchlist) carry only the
+// integer id. Resolve locally first, then by an exact-id Cinemeta title search
+// on a worker, so such a show opens instead of retrying forever.
+const ImdbResolution = struct { id: i32, imdb: [16]u8 = std.mem.zeroes([16]u8), len: usize = 0 };
+var imdb_resolve_busy: std.atomic.Value(bool) = .init(false);
+var resolved_imdb: ?ImdbResolution = null; // detail_mutex
+
+const ImdbState = enum { ready, pending, failed };
+
+fn ensureTvImdb(tmdb_id: i32) ImdbState {
+    const t = &state.app.tmdb;
+    if (t.tv_imdb_id_len > 0) return .ready;
+    var buf: [16]u8 = undefined;
+    var found = api.knownImdb(.series, tmdb_id, &buf);
+    if (found.len == 0) found = db.tvImdbId(tmdb_id, &buf);
+    if (found.len > 0) {
+        @memcpy(t.tv_imdb_id[0..found.len], found);
+        t.tv_imdb_id_len = found.len;
+        return .ready;
+    }
+    if (imdb_resolve_busy.swap(true, .acq_rel)) return .pending;
+    var name: [128]u8 = undefined;
+    const nlen = @min(t.tv_name_len, name.len);
+    @memcpy(name[0..nlen], t.tv_name[0..nlen]);
+    @import("../core/workers.zig").spawn(resolveImdbWorker, .{ tmdb_id, name, nlen }) catch {
+        imdb_resolve_busy.store(false, .release);
+        return .failed;
+    };
+    return .pending;
+}
+
+fn resolveImdbWorker(tmdb_id: i32, name: [128]u8, name_len: usize) void {
+    defer {
+        imdb_resolve_busy.store(false, .release);
+        state.wakeUi();
+    }
+    var out: [16]u8 = undefined;
+    const found = api.resolveImdb(.series, tmdb_id, name[0..name_len], &out);
+    detail_mutex.lock();
+    defer detail_mutex.unlock();
+    var r = ImdbResolution{ .id = tmdb_id };
+    if (found.len > 0 and found.len <= r.imdb.len) {
+        @memcpy(r.imdb[0..found.len], found);
+        r.len = found.len;
+    }
+    resolved_imdb = r;
+}
+
+/// UI thread, once per frame (from applyPendingDetail).
+fn applyResolvedImdb() void {
+    detail_mutex.lock();
+    const r = resolved_imdb;
+    resolved_imdb = null;
+    detail_mutex.unlock();
+    const res = r orelse return;
+    const t = &state.app.tmdb;
+    if (!t.tv_detail_open or t.tv_id != res.id or t.tv_imdb_id_len > 0) return;
+    if (res.len == 0) {
+        t.tv_seasons_loading = false;
+        t.tv_episodes_loading = false;
+        scheduleSeasonsRetry();
+        return;
+    }
+    @memcpy(t.tv_imdb_id[0..res.len], res.imdb[0..res.len]);
+    t.tv_imdb_id_len = res.len;
+    db.tvRememberImdb(res.id, res.imdb[0..res.len]);
+    t.tv_seasons_loading = false;
+    fetchSeasonsInternal(res.id, true);
+}
+
 fn scheduleSeasonsRetry() void {
     const t = &state.app.tmdb;
     t.tv_seasons_failed = true;
@@ -150,6 +223,7 @@ fn publishDetail(doc: DetailDocument) void {
 }
 
 pub fn applyPendingDetail() void {
+    applyResolvedImdb();
     detail_mutex.lock();
     const document = detail_document;
     detail_document = null;
@@ -441,15 +515,22 @@ fn renderToolbar(count: usize) void {
         .Search => {},
         .Trending => {
             toolbarDivider(901);
-            renderCatChip(0, .trending, "Trending", icons.tvg.lucide.flame);
-            renderCatChip(1, .popular, "Popular", icons.tvg.lucide.@"trending-up");
-            renderCatChip(2, .top_rated, "Top Rated", icons.tvg.lucide.trophy);
             if (state.app.tmdb.api_key_len > 0) {
+                renderCatChip(0, .trending, "Trending", icons.tvg.lucide.flame);
+                renderCatChip(1, .popular, "Popular", icons.tvg.lucide.@"trending-up");
+                renderCatChip(2, .top_rated, "Top Rated", icons.tvg.lucide.trophy);
                 renderCatChip(3, .now_playing, if (state.app.tmdb.media_filter == .tv) "On Air" else "In Cinemas", icons.tvg.lucide.clapperboard);
                 renderCatChip(4, .upcoming, "Upcoming", icons.tvg.lucide.@"calendar-days");
             } else {
-                // Cinemeta exposes a newest-by-year catalog, but does not make
-                // theatrical-window claims. Keep the zero-key label honest.
+                // Keyless (Cinemeta) has three real lists: popularity, IMDb
+                // rating, and newest by year. Trending and Popular would be the
+                // same list, so one chip is shown; Cinemeta makes no theatrical
+                // window claims, so the third is "New". A category chosen
+                // earlier with a key (or over the API) folds onto a shown chip.
+                const folded = keyless_meta.foldKeylessCategory(@enumFromInt(@intFromEnum(state.app.tmdb.category)));
+                state.app.tmdb.category = @enumFromInt(@intFromEnum(folded));
+                renderCatChip(0, .trending, "Popular", icons.tvg.lucide.flame);
+                renderCatChip(2, .top_rated, "Top Rated", icons.tvg.lucide.trophy);
                 renderCatChip(3, .now_playing, "New", icons.tvg.lucide.sparkles);
             }
             toolbarDivider(902);
@@ -463,11 +544,12 @@ fn renderToolbar(count: usize) void {
             }
             toolbarDivider(904);
             renderGenreDropdown();
-            if (state.app.tmdb.api_key_len > 0 and state.app.tmdb.genre_idx != 0) {
+            if (state.app.tmdb.genre_idx != 0) {
                 toolbarDivider(905);
                 renderSortChip(30, 0, "Popular");
                 renderSortChip(31, 1, "Top rated");
-                renderSortChip(32, 2, "Newest");
+                // Cinemeta's newest-first list cannot be filtered by genre.
+                if (state.app.tmdb.api_key_len > 0) renderSortChip(32, 2, "Newest");
             }
         },
         else => {},
@@ -508,16 +590,56 @@ fn renderToolbar(count: usize) void {
 /// Genre selector — drives /discover?with_genres browsing (paginated like any
 /// category). Selecting a genre overrides the category chips; picking a
 /// category chip resets back to "All genres".
+/// Dropdown rows Cinemeta can filter on, and the GENRES index each row means.
+const KEYLESS_GENRE_COUNT = blk: {
+    var n: usize = 0;
+    for (tmdb_pure.GENRE_NAMES, 0..) |name, i| {
+        if (i == 0 or keyless_meta.genreSupported(name)) n += 1;
+    }
+    break :blk n;
+};
+const KEYLESS_GENRE_NAMES: [KEYLESS_GENRE_COUNT][]const u8 = blk: {
+    var names: [KEYLESS_GENRE_COUNT][]const u8 = undefined;
+    var n: usize = 0;
+    for (tmdb_pure.GENRE_NAMES, 0..) |name, i| {
+        if (i == 0 or keyless_meta.genreSupported(name)) {
+            names[n] = name;
+            n += 1;
+        }
+    }
+    break :blk names;
+};
+const KEYLESS_GENRE_IDX: [KEYLESS_GENRE_COUNT]usize = blk: {
+    var idx: [KEYLESS_GENRE_COUNT]usize = undefined;
+    var n: usize = 0;
+    for (tmdb_pure.GENRE_NAMES, 0..) |name, i| {
+        if (i == 0 or keyless_meta.genreSupported(name)) {
+            idx[n] = i;
+            n += 1;
+        }
+    }
+    break :blk idx;
+};
+
 fn renderGenreDropdown() void {
+    const keyless_mode = state.app.tmdb.api_key_len == 0;
     var sel: usize = state.app.tmdb.genre_idx;
-    const active = sel != 0;
-    if (dvui.dropdown(@src(), &tmdb_pure.GENRE_NAMES, .{ .choice = &sel }, .{}, .{
+    if (keyless_mode) {
+        sel = 0;
+        for (KEYLESS_GENRE_IDX, 0..) |gi, row| if (gi == state.app.tmdb.genre_idx) {
+            sel = row;
+        };
+    }
+    const active = state.app.tmdb.genre_idx != 0;
+    const names: []const []const u8 = if (keyless_mode) &KEYLESS_GENRE_NAMES else &tmdb_pure.GENRE_NAMES;
+    if (dvui.dropdown(@src(), names, .{ .choice = &sel }, .{}, .{
         .color_fill = if (active) theme.colors.accent else theme.colors.bg_surface,
         .color_text = if (active) dvui.Color.white else theme.colors.text_secondary,
         .corner_radius = theme.dims.rad_sm,
         .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
         .gravity_y = 0.5,
     })) {
+        if (keyless_mode and sel < KEYLESS_GENRE_IDX.len) sel = KEYLESS_GENRE_IDX[sel];
         if (sel != state.app.tmdb.genre_idx) {
             state.app.tmdb.genre_idx = sel;
             // /discover has no "multi" endpoint — with the filter on All, a
@@ -1815,10 +1937,17 @@ fn fetchSeasonsInternal(tmdb_id: i32, reset_retry: bool) void {
         t.tv_season_retry_count = 0;
         t.tv_season_retry_at_ms = 0;
     }
-    if (use_cinemeta and t.tv_imdb_id_len == 0) {
-        scheduleSeasonsRetry();
-        return;
-    }
+    if (use_cinemeta) switch (ensureTvImdb(tmdb_id)) {
+        .ready => {},
+        .pending => {
+            t.tv_seasons_loading = true;
+            return;
+        },
+        .failed => {
+            scheduleSeasonsRetry();
+            return;
+        },
+    };
     const my_gen = tv_gen.load(.acquire);
 
     // Route cache is authoritative enough to render immediately, including a
@@ -2148,10 +2277,17 @@ fn fetchEpisodesInternal(tmdb_id: i32, season_number: i32, reset_retry: bool) vo
         t.tv_episode_retry_count = 0;
         t.tv_episode_retry_at_ms = 0;
     }
-    if (use_cinemeta and t.tv_imdb_id_len == 0) {
-        scheduleEpisodesRetry();
-        return;
-    }
+    if (use_cinemeta) switch (ensureTvImdb(tmdb_id)) {
+        .ready => {},
+        .pending => {
+            t.tv_episodes_loading = true;
+            return;
+        },
+        .failed => {
+            scheduleEpisodesRetry();
+            return;
+        },
+    };
     const my_gen = tv_gen.fetchAdd(1, .acq_rel) + 1;
     const imdb_id = t.tv_imdb_id;
     const imdb_id_len = t.tv_imdb_id_len;

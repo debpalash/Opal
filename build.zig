@@ -1696,6 +1696,19 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_cinemeta_pure).step);
 
+    // Keyless Movies & TV: Cinemeta meta -> TMDB-shaped detail documents,
+    // category/genre mapping, id -> IMDb identity table.
+    const test_cinemeta_meta_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/cinemeta_meta_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_test_cinemeta_meta_pure = b.addRunArtifact(test_cinemeta_meta_pure);
+    test_step.dependOn(&run_test_cinemeta_meta_pure.step);
+    b.step("test-keyless", "Test keyless Movies & TV detail shaping and catalog mapping").dependOn(&run_test_cinemeta_meta_pure.step);
+
     // Internet Archive JSON parsing: advancedsearch docs[] iteration
     // (order-independent id/title/year) + metadata files[] best-video pick +
     // a malformed-JSON regression case.
