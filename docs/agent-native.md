@@ -133,6 +133,17 @@ libghostty-vt on ghostty `main` now exposes a terminal and render-state C API (t
 
 `src/services/wanted.zig` plus `wanted_pure.zig` (scoring, backoff). Add a movie or episode once; Opal searches on a private channel that never disturbs on-screen results, filters cams, screeners, fan edits and trailers, scores by quality, seeders and size, starts the best torrent on the owner thread, retries with backoff (30 min doubling to a day) and marks the item fulfilled when the download completes. "Follow tracked shows" queues the newest aired episode of each tracked show. Verified live against EZTV. Exposed as `/api/wanted/*` and `wanted_*` tools, and as a Wanted section at the top of the Downloads page (add by typing `Dune 2021` or `Severance S02E03`; find, pause, resume, remove).
 
+### Background operator
+
+`src/services/operator*.zig`: Opal hands a problem to a headless coding agent that has no Opal tools and only a context text in its prompt, and gets back schema-validated JSON. Off until the user enables it.
+
+**endpoint_repair** (`operator_endpoint.zig`, logic in `operator_endpoint_pure.zig`). When an installed source keeps failing, the agent (with web search) says where it lives now.
+- *Trigger.* `source_request.zig` counts consecutive failures per source. Five failures spanning at least two minutes ask the operator (once per 24 hours per source). Only connection failures, timeouts and real HTTP error statuses count; cancellations, local errors, rate limits (429), 401 and body-validation failures neither count nor reset, and any success resets. Connect-only streaks with no success from any source since they began are treated as the user being offline. Sources not installed are never asked about.
+- *Context.* Source id, manifest type, the base address reduced to scheme and host, the last status or failure kind and the streak length. No other configuration field is ever read, so keys, tokens, debrid keys, cookies and user names cannot leave the app.
+- *Probe.* The answer must be a bare public http(s) address, confidence 0.5 or more, and different from the current one. Opal then does one GET of it: 8 second timeout, no credentials or cookies, redirects not followed (a 3xx counts only when it does not point at a private host), size bounded, status 200 to 399. Only then is the job `proposed`, with a summary like "bxx.example may have moved to https://new.example (checked: reachable)".
+- *Approval.* Never automatic and human-only: the Agents page or `POST /api/operator/approve`. No agent tool can approve. On approval the stored answer is validated again and only the `base` field of the source file is rewritten; every other field (mirrors, sealed credentials) is kept, secrets are protected by `source_config.install`, and the change is live at once. If the source was uninstalled meanwhile the approval fails.
+- *Scope.* Only sources fetched through `source_request` are watched (anime, comics, audio, webcomic providers); other connectors do not report failures yet.
+
 Next up: more discovery and library tools, and the Windows terminal.
 
 ## Phases

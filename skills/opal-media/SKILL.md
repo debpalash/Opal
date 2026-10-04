@@ -47,6 +47,10 @@ To add a source Opal does not have, `plugin_scaffold` an id, then edit `<config>
 
 `agent_task_add` saves a prompt a coding agent runs unattended on a timer (`interval_min`, 15 to 10080; `max_runs_per_day` caps cost). Use it for chores the user wants repeated, such as "each morning check the wanted list and report what is stuck". Write the prompt so it works with nobody to answer questions. Nothing runs until the user turns on **Settings → Agent Access → Run scheduled agent tasks**; you cannot turn it on, so tell the user when a task is waiting for it (`agent_tasks_list` shows `enabled`, `last_outcome` and a one-line `last_summary`). `agent_task_run` runs one on the next tick and counts toward its cap. You can add and remove tasks but not pause or resume them; the user does that in the UI. Inside a scheduled run these tools are not available at all. Do not schedule a task that schedules more tasks.
 
+## Background operator proposals
+
+`operator_jobs_list` shows problems Opal handed to a headless coding agent. A job in state `proposed` (for example `endpoint_repair`: "bxx.example may have moved to https://new.example") changes a source address only after the user approves it in the Agents page. You cannot approve or reject it; if the user asks why a source is dead, check the list and tell them a proposal is waiting.
+
 ## Rules
 
 - Never pass a local file path to a URL tool; they accept only http(s) and magnet links.
