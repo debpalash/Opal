@@ -708,11 +708,33 @@ pub fn build(b: *std.Build) void {
     test_operator_view.use_llvm = true;
     const run_test_operator_view = b.addRunArtifact(test_operator_view);
     test_step.dependOn(&run_test_operator_view.step);
+    const test_operator_search_help = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/operator_search_help_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_operator_search_help.use_llvm = true;
+    const run_test_operator_search_help = b.addRunArtifact(test_operator_search_help);
+    test_step.dependOn(&run_test_operator_search_help.step);
+    const test_operator_picks = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/operator_picks_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_operator_picks.use_llvm = true;
+    const run_test_operator_picks = b.addRunArtifact(test_operator_picks);
+    test_step.dependOn(&run_test_operator_picks.step);
     const test_operator_step = b.step("test-operator", "Test the background operator (jobs, validation, gating, names, Activity wording)");
     test_operator_step.dependOn(&run_test_operator.step);
     test_operator_step.dependOn(&run_test_operator_endpoint_pure.step);
     test_operator_step.dependOn(&run_test_operator_names.step);
     test_operator_step.dependOn(&run_test_operator_view.step);
+    test_operator_step.dependOn(&run_test_operator_search_help.step);
+    test_operator_step.dependOn(&run_test_operator_picks.step);
 
     const test_overview_pure = b.addTest(.{
         .root_module = b.createModule(.{

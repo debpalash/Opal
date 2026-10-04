@@ -100,6 +100,7 @@ fn saveChecked() !void {
     setKey("operator_daily_cents", fmtInt(&fb, @intCast(state.app.operator_daily_cents)));
     setKey("ask_enabled", if (state.app.ask_enabled) "1" else "0");
     setKey("ask_fast", if (state.app.ask_fast) "1" else "0");
+    setKey("operator_picks", if (state.app.operator_picks_enabled) "1" else "0");
     setKey("save_path", state.app.save_path_buf[0..state.app.save_path_len]);
     setKey("sub_lang", state.app.sub_lang_buf[0..state.app.sub_lang_len]);
     setKey("subtitles_enabled", if (state.app.subtitles_enabled) "1" else "0");
@@ -612,6 +613,8 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         state.app.ask_enabled = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "ask_fast")) {
         state.app.ask_fast = std.mem.eql(u8, val, "1");
+    } else if (std.mem.eql(u8, key, "operator_picks")) {
+        state.app.operator_picks_enabled = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "operator_daily_cents")) {
         state.app.operator_daily_cents = std.math.clamp(std.fmt.parseInt(u32, val, 10) catch 100, 5, 5000);
     } else if (std.mem.eql(u8, key, "auto_download_subs")) {

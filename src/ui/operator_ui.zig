@@ -159,6 +159,21 @@ fn renderControls() void {
         dirty = true;
     }
 
+    if (state.app.operator_enabled) {
+        const picks_before = state.app.operator_picks_enabled;
+        components.toggleRow(
+            @src(),
+            "Use my watch history for picks",
+            "Sends the titles (never file paths) of what you recently watched, favourited or follow to your agent, once a day, for the Home row \"Picked for you\". Each recommendation is checked against a real catalogue first. Off by default.",
+            &state.app.operator_picks_enabled,
+        );
+        if (state.app.operator_picks_enabled != picks_before) {
+            state.markConfigDirty();
+            state.showToast(if (state.app.operator_picks_enabled) "Picks will use your watch history" else "Picks no longer use your watch history");
+            dirty = true;
+        }
+    }
+
     var spend_buf: [48]u8 = undefined;
     {
         var line = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = 10, .w = 0, .h = 4 } });

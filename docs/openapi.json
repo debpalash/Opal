@@ -2897,9 +2897,12 @@
         "operationId": "agent_task_remove",
         "summary": "Delete a scheduled agent task.",
         "tags": [
-          "write"
+          "destructive"
         ],
-        "x-opal-tier": "write",
+        "x-opal-tier": "destructive",
+        "x-opal-fixed": {
+          "confirm": "1"
+        },
         "parameters": [
           {
             "name": "id",
@@ -3165,9 +3168,12 @@
         "operationId": "wanted_remove",
         "summary": "Remove an item from the wanted list. Files already downloaded are kept.",
         "tags": [
-          "write"
+          "destructive"
         ],
-        "x-opal-tier": "write",
+        "x-opal-tier": "destructive",
+        "x-opal-fixed": {
+          "confirm": "1"
+        },
         "parameters": [
           {
             "name": "id",

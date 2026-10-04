@@ -5087,6 +5087,14 @@ fn renderAgentAccess() void {
             @import("../services/operator.zig").setEnabled(state.app.operator_enabled);
             state.showToast(if (state.app.operator_enabled) "Background operator on" else "Background operator off");
         }
+        if (state.app.operator_enabled) {
+            const picks_before = state.app.operator_picks_enabled;
+            components.toggleRow(@src(), "Use my watch history for picks", "Sends the titles (never file paths) of what you recently watched, favourited or follow to your coding agent, once a day, to fill the Home row \"Picked for you\". Every recommendation is checked against a real catalogue before it is shown. Off by default", &state.app.operator_picks_enabled);
+            if (state.app.operator_picks_enabled != picks_before) {
+                state.markConfigDirty();
+                state.showToast(if (state.app.operator_picks_enabled) "Picks will use your watch history" else "Picks no longer use your watch history");
+            }
+        }
     }
 
     {

@@ -884,6 +884,11 @@ pub const AppState = struct {
     ask_enabled: bool = false,
     /// Ask Opal answers with the small fast model (Claude Haiku) instead of Sonnet.
     ask_fast: bool = false,
+    /// "Use my watch history for picks": lets the operator send the titles of recent
+    /// watched items, favourites and tracked shows (never file paths) to the agent
+    /// to build the Home "Picked for you" rail. Off by default and flipped only by the
+    /// UI: no route and no tool reaches this field.
+    operator_picks_enabled: bool = false,
     sub_search_buf: [256]u8 = std.mem.zeroes([256]u8),
 
     // ── MPV Scripts ──

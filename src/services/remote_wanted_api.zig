@@ -2,7 +2,7 @@
 //!
 //!   GET  /wanted                               the items and whether a check is running
 //!   POST /wanted/add?kind=movie|episode&title=&year=&season=&episode=&min_quality=&prefer_quality=&max_quality=
-//!   POST /wanted/pause?id=   POST /wanted/resume?id=   POST /wanted/remove?id=
+//!   POST /wanted/pause?id=   POST /wanted/resume?id=   POST /wanted/remove?id=&confirm=1
 //!   POST /wanted/follow?enabled=0|1            queue each tracked show's newest aired episode
 //!   POST /wanted/check?id=                     search now, ignoring the retry backoff
 //!
@@ -110,6 +110,13 @@ fn byId(stream: std.Io.net.Stream, query: []const u8, comptime verb: []const u8)
         wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"id required\"}");
         return;
     };
+    // Removing deletes the user's standing request: like every destructive route it needs an explicit confirm.
+    if (comptime std.mem.eql(u8, verb, "remove")) {
+        if (!std.mem.eql(u8, wire.queryParam(query, "confirm") orelse "", "1")) {
+            wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"removing a wanted item needs confirm=1\"}");
+            return;
+        }
+    }
     const ok = if (comptime std.mem.eql(u8, verb, "pause"))
         wanted.pause(id)
     else if (comptime std.mem.eql(u8, verb, "resume"))

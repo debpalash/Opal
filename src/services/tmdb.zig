@@ -1906,7 +1906,7 @@ fn closeTvDetail() void {
 /// Click action for a TMDB card: open the TV season/episode detail for TV
 /// shows, otherwise run a universal search. Used by BOTH the poster and the
 /// title so clicking either part of a TV card shows its episodes.
-fn openOrSearch(item: *state.TmdbItem) void {
+pub fn openOrSearch(item: *state.TmdbItem) void {
     const mt = item.media_type[0..@min(item.media_type_len, item.media_type.len)];
     if (std.mem.eql(u8, mt, "tv"))
         openTvDetail(item)
