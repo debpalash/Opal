@@ -124,6 +124,9 @@ pub fn render() void {
     // window meant trending never fetched at all this session).
     kickTrendingFetch();
 
+    // "Picked for you": a daily operator job, only with both operator switches on.
+    @import("../services/operator_picks.zig").onHomeOpened();
+
     // TV calendar ("Coming up") — one refresh per session, after the DB init
     // worker has run so tv_continue is readable.
     if (state.app.init_history_loaded) @import("../services/tv_calendar.zig").refreshOnce();
@@ -154,6 +157,7 @@ pub fn render() void {
     // "Coming up" — poster cards (like Trending) with next-episode countdowns
     // + EZTV availability for the shows the user watches.
     _ = renderComingUpRail(card_w);
+    _ = renderPicksRail(card_w);
     if (state.app.taste_enabled and @import("../services/recommendations.zig").rec_count > 0) {
         @import("discovery_ui.zig").renderForYouRail();
     }
@@ -360,6 +364,102 @@ fn renderComingUpRail(card_w: f32) bool {
     }
     return true;
 }
+
+/// "Picked for you" — the background operator's recommendations, each already
+/// resolved to a real catalogue title. Same poster card as every other rail, plus the
+/// agent's one-line reason, Details and Dismiss. Nothing is drawn unless the operator
+/// and the watch-history switch are on and a pick is stored.
+fn renderPicksRail(card_w: f32) bool {
+    const picks = @import("../services/operator_picks.zig");
+    const items = picks.railItems();
+    if (items.len == 0) return false;
+    const poster_h = card_w * 1.5;
+    const reason_h: f32 = 66;
+    const action_h: f32 = 30;
+
+    {
+        var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .padding = .{ .x = theme.spacing.xs, .y = theme.spacing.sm, .w = theme.spacing.xs, .h = theme.spacing.xs },
+        });
+        defer hdr.deinit();
+        dvui.icon(@src(), "picks", icons.tvg.lucide.sparkles, .{}, .{
+            .color_text = theme.colors.accent,
+            .min_size_content = theme.iconSize(.sm),
+            .gravity_y = 0.5,
+            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
+        });
+        _ = dvui.label(@src(), "Picked for you", .{}, .{
+            .color_text = theme.colors.text_primary,
+            .font = dvui.themeGet().font_heading,
+            .gravity_y = 0.5,
+        });
+    }
+
+    const strip_h = poster_h + STRIP_CHROME + reason_h + action_h;
+    var user_scroll: dvui.Point = .{};
+    var strip = dvui.scrollArea(@src(), .{
+        .horizontal = .auto,
+        .vertical = .none,
+        .horizontal_bar = scrollbarMode(14),
+        .user_scroll = &user_scroll,
+    }, .{
+        .expand = .horizontal,
+        .background = false,
+        .min_size_content = .{ .w = 10, .h = strip_h },
+        .max_size_content = .{ .w = std.math.floatMax(f32), .h = strip_h },
+        .padding = .{ .x = theme.spacing.xs, .y = 0, .w = theme.spacing.xs, .h = theme.spacing.xs },
+    });
+    const scroll_id = strip.data().id;
+    defer {
+        strip.deinit();
+        noteUserScroll(14, user_scroll, scroll_id);
+    }
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{});
+    defer row.deinit();
+
+    var dismissed: ?usize = null;
+    const n = @min(items.len, STRIP_MAX);
+    for (0..n) |i| {
+        var col = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .id_extra = i + 48000,
+            .min_size_content = .{ .w = card_w, .h = strip_h },
+            .max_size_content = .{ .w = card_w, .h = strip_h },
+        });
+        defer col.deinit();
+
+        var reason_buf: [REASON_SHOWN]u8 = undefined;
+        const reason = @import("../core/text.zig").safeUtf8Buf(picks.reasonOf(i), &reason_buf);
+        {
+            var why = dvui.textLayout(@src(), .{ .break_lines = true }, .{
+                .id_extra = i + 48100,
+                .background = false,
+                .min_size_content = .{ .w = card_w - 4, .h = reason_h },
+                .max_size_content = .{ .w = card_w - 4, .h = reason_h },
+                .padding = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
+            });
+            why.addText(reason, .{ .color_text = theme.colors.text_secondary, .font = dvui.themeGet().font_body.withSize(theme.font_size.small) });
+            why.deinit();
+        }
+        {
+            var acts = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .id_extra = i + 48200,
+                .min_size_content = .{ .w = card_w, .h = action_h },
+                .max_size_content = .{ .w = card_w, .h = action_h },
+            });
+            defer acts.deinit();
+            const small = dvui.themeGet().font_body.withSize(theme.font_size.small);
+            const pad: dvui.Rect = .{ .x = 6, .y = 3, .w = 6, .h = 3 };
+            if (dvui.button(@src(), "Details", .{}, .{ .id_extra = 48300 + i, .font = small, .padding = pad, .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.text_primary })) tmdb.openOrSearch(&items[i]);
+            if (dvui.button(@src(), "Dismiss", .{}, .{ .id_extra = 48400 + i, .font = small, .padding = pad, .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.text_secondary })) dismissed = i;
+        }
+        tmdb.renderPosterCard(&items[i], i, card_w, poster_h);
+    }
+    if (dismissed) |i| picks.dismiss(i);
+    return true;
+}
+
+const REASON_SHOWN: usize = 128;
 
 fn renderTrendingRail(card_w: f32) bool {
     const t = &state.app.tmdb;

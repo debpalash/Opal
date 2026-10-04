@@ -874,6 +874,11 @@ pub const AppState = struct {
     operator_enabled: bool = false,
     /// Spend ceiling per UTC day for operator jobs, in cents.
     operator_daily_cents: u32 = 100,
+    /// "Use my watch history for picks": lets the operator send the titles of recent
+    /// watched items, favourites and tracked shows (never file paths) to the agent
+    /// to build the Home "Picked for you" rail. Off by default and flipped only by the
+    /// UI: no route and no tool reaches this field.
+    operator_picks_enabled: bool = false,
     sub_search_buf: [256]u8 = std.mem.zeroes([256]u8),
 
     // ── MPV Scripts ──

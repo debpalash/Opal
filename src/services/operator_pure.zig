@@ -22,6 +22,12 @@ pub const Kind = enum {
     /// Local files whose cleaned title still looks like a release name: ask for a
     /// human title and kind, in batches.
     local_names,
+    /// A search the user typed found nothing: ask for other wording (typo fixes,
+    /// alternate titles, transliterations) to offer as "Did you mean" chips.
+    search_help,
+    /// A daily, opt-in "Picked for you" rail: recommendations from a compact
+    /// summary of the user's taste, each checked against a real catalog.
+    picks,
 
     pub fn id(self: Kind) []const u8 {
         return @tagName(self);
@@ -116,6 +122,33 @@ pub fn spec(kind: Kind) Spec {
                 "group, quality, codec, source, season or episode markers, and without the year (put the year in `year`, 0 if the name " ++
                 "does not show one). Give `kind`: movie, tv, music, audiobook or other. Never invent a title the filename does not " ++
                 "evidence; leave out any file you cannot decide. Give a one-sentence reason.",
+        },
+        .search_help => .{
+            .title = "Suggest other wording",
+            .schema = "{\"type\":\"object\",\"properties\":{\"queries\":{\"type\":\"array\",\"items\":{\"type\":\"string\",\"maxLength\":80},\"minItems\":0,\"maxItems\":3},\"reason\":{\"type\":\"string\",\"maxLength\":200}},\"required\":[\"queries\",\"reason\"],\"additionalProperties\":false}",
+            .budget_cents = 6,
+            .model = "haiku",
+            .cooldown_ms = 24 * hour_ms,
+            .auto_apply = true,
+            .web = false,
+            .task = "A media app search for the query below returned no results. Suggest up to three other ways the user may have " ++
+                "meant to search: fix typos, give the usual spelling, the original-language or international title, or a " ++
+                "transliteration. Plain words only, no operators, quotes or site names, and nothing that repeats the query. If the " ++
+                "query already looks right and you have no better wording, return an empty list. Give a one-sentence reason.",
+        },
+        .picks => .{
+            .title = "Picked for you",
+            .schema = "{\"type\":\"object\",\"properties\":{\"items\":{\"type\":\"array\",\"minItems\":0,\"maxItems\":12,\"items\":{\"type\":\"object\",\"properties\":{\"title\":{\"type\":\"string\",\"maxLength\":100},\"year\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":2200},\"kind\":{\"type\":\"string\",\"enum\":[\"movie\",\"tv\"]},\"reason\":{\"type\":\"string\",\"maxLength\":100}},\"required\":[\"title\",\"year\",\"kind\",\"reason\"],\"additionalProperties\":false}}},\"required\":[\"items\"],\"additionalProperties\":false}",
+            .budget_cents = 12,
+            .model = "haiku",
+            .cooldown_ms = 20 * hour_ms,
+            .auto_apply = true,
+            .web = false,
+            .task = "The data lists titles a person recently watched, favourited or follows in their media app, one per line, each " ++
+                "prefixed with where it came from. Recommend up to 12 other movies or TV series they would likely enjoy. Only real, " ++
+                "released titles you are certain exist, each with its release year and kind (movie or tv); never repeat a title from " ++
+                "the list. Give each a reason of at most 100 characters that refers to their taste. Do not guess: leave out anything " ++
+                "you are unsure of.",
         },
     };
 }
@@ -658,8 +691,15 @@ test "specs are consistent" {
         // setting waits for a person. match_help adds search wording. local_names
         // changes display text only (a title and kind shown for the user's own
         // files), through validators that bound length and characters, and never
-        // over a title the user set. Adding to this list is a deliberate decision.
-        if (s.auto_apply) try std.testing.expect(k == .match_help or k == .local_names);
+        // over a title the user set. search_help only produces "Did you mean" chips of
+        // plain words that the user must click; it never runs a search itself. picks
+        // only stores a title after the app resolved it to a real catalog entry, and the
+        // result is a rail the user can ignore or dismiss; it changes no setting.
+        // Adding to this list is a deliberate decision.
+        if (s.auto_apply) try std.testing.expect(k == .match_help or k == .local_names or k == .search_help or k == .picks);
+        // The reverse matters as much: nothing that touches an address, a setting or
+        // spending money may ever apply itself.
+        if (k == .endpoint_repair) try std.testing.expect(!s.auto_apply);
         var schema = std.json.parseFromSlice(std.json.Value, std.testing.allocator, s.schema, .{}) catch return error.BadSchema;
         schema.deinit();
     }

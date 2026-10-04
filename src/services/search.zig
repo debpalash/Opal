@@ -1641,6 +1641,33 @@ fn renderSearchSources() void {
     if (view_cache.query_len > 0 and searchButton(91302, "Retry search", false)) resolver.resolve(view_cache.query[0..view_cache.query_len], "auto");
 }
 
+/// "Did you mean" chips from the background operator. A click re-runs the search with
+/// that wording; nothing is ever searched without a click.
+fn renderDidYouMean(typed: []const u8) void {
+    const help = @import("operator_search_help.zig");
+    const suggestions = help.suggestionsFor(typed);
+    if (suggestions.count == 0) return;
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .horizontal,
+        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = 0 },
+    });
+    defer row.deinit();
+    _ = dvui.label(@src(), "Did you mean", .{}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
+    var picked: [128]u8 = undefined;
+    var picked_len: usize = 0;
+    for (0..suggestions.count) |i| {
+        const text = suggestions.get(i);
+        if (searchButton(91400 + i, text, true)) {
+            picked_len = @min(text.len, picked.len);
+            @memcpy(picked[0..picked_len], text[0..picked_len]);
+        }
+    }
+    if (picked_len > 0) {
+        help.noteChipClick(picked[0..picked_len]);
+        submitQuery(picked[0..picked_len]);
+    }
+}
+
 fn renderUniversalResults() void {
     const resolver = @import("resolver.zig");
     // Facet changes from this frame update counts and rows together.
@@ -1663,7 +1690,15 @@ fn renderUniversalResults() void {
         return;
     }
     if (view_cache.loaded == 0) {
-        if (view_cache.loading) components.loadingState("Searching your enabled sources…") else if (view_cache.query_len > 0) components.emptyState(icons.tvg.lucide.@"search-x", "No matches", "Try a broader query or open Filters → Sources to check provider status.") else renderUniversalCapabilities();
+        if (view_cache.loading) {
+            components.loadingState("Searching your enabled sources…");
+        } else if (view_cache.query_len > 0) {
+            // The background operator may know another way to word it. Free when it is off.
+            const typed = view_cache.query[0..view_cache.query_len];
+            @import("operator_search_help.zig").onEmptyResults(typed);
+            renderDidYouMean(typed);
+            components.emptyState(icons.tvg.lucide.@"search-x", "No matches", "Try a broader query or open Filters → Sources to check provider status.");
+        } else renderUniversalCapabilities();
         return;
     }
     if (view_cache.count == 0) {

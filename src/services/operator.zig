@@ -24,6 +24,8 @@ const pure = @import("operator_pure.zig");
 const match_help = @import("operator_match_help.zig");
 const endpoint = @import("operator_endpoint.zig");
 const local_names = @import("operator_local_names.zig");
+const search_help = @import("operator_search_help.zig");
+const picks = @import("operator_picks.zig");
 
 pub const Kind = pure.Kind;
 const TICK_INTERVAL_MS: i64 = 15 * 1000;
@@ -345,6 +347,8 @@ fn runJob(job: Job) void {
         .match_help => match_help.handle(key, answer.json),
         .endpoint_repair => endpoint.handle(key, answer.json),
         .local_names => local_names.handle(key, answer.json),
+        .search_help => search_help.handle(key, answer.json),
+        .picks => picks.handle(key, answer.json),
     };
     // Claude reports what it spent; Codex does not, so it is charged the full budget.
     const cost = if (agent == .claude and answer.cost_cents > 0) answer.cost_cents else pure.spec(job.kind).budget_cents;
@@ -376,6 +380,8 @@ pub fn approve(id: i64) DecideResult {
     const ok = switch (kind) {
         .match_help => false, // applies itself, never proposed
         .local_names => false, // applies itself, never proposed
+        .search_help => false, // stored as chips, never proposed
+        .picks => false, // stored as a rail, never proposed
         .endpoint_repair => endpoint.approve(key_buf[0..key.len], res_buf[0..res.len]),
     };
     if (!ok) return .failed;
