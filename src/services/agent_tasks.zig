@@ -42,6 +42,7 @@ fn ensureTable() bool {
             "interval_min INTEGER NOT NULL DEFAULT 1440," ++
             "max_runs_per_day INTEGER NOT NULL DEFAULT 2," ++
             "budget_cents INTEGER NOT NULL DEFAULT 50," ++
+            "model TEXT NOT NULL DEFAULT 'haiku'," ++
             "enabled INTEGER NOT NULL DEFAULT 1," ++
             "created_ms INTEGER NOT NULL DEFAULT 0," ++
             "last_run_ms INTEGER NOT NULL DEFAULT 0," ++
@@ -51,6 +52,14 @@ fn ensureTable() bool {
             "last_outcome TEXT NOT NULL DEFAULT ''," ++
             "last_summary TEXT NOT NULL DEFAULT '')",
     );
+    // Tables created before the model choice existed get the column added, but only
+    // when it is really missing (a busy database must not be mistaken for "present").
+    if (db.prepare("SELECT model FROM agent_tasks LIMIT 0")) |probe| {
+        db.finalize(probe);
+    } else {
+        db.exec("ALTER TABLE agent_tasks ADD COLUMN model TEXT NOT NULL DEFAULT 'haiku'");
+        if (db.prepare("SELECT model FROM agent_tasks LIMIT 0")) |probe| db.finalize(probe) else return false;
+    }
     // Run counts per day live apart from the tasks: deleting and re-adding a task
     // must not reset the global daily ceiling.
     db.exec("CREATE TABLE IF NOT EXISTS agent_runs_day(day INTEGER PRIMARY KEY, runs INTEGER NOT NULL DEFAULT 0)");
@@ -67,6 +76,8 @@ pub const AddRequest = struct {
     interval_min: u32 = 1440,
     max_runs_per_day: u32 = 2,
     budget_cents: u32 = 50,
+    /// Claude model: haiku (cheap, default) or sonnet.
+    model: pure.Model = .haiku,
     /// Tasks added over the HTTP API (agents, web remote) start paused: a person
     /// reviews and enables them in the UI. The UI itself adds enabled ones.
     enabled: bool = true,
@@ -93,7 +104,7 @@ pub fn add(req: AddRequest) AddResult {
     if (countTasks() >= pure.MAX_TASKS) return .full;
 
     const stmt = db.prepare(
-        "INSERT INTO agent_tasks(name,prompt,agent,interval_min,max_runs_per_day,budget_cents,created_ms,enabled) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+        "INSERT INTO agent_tasks(name,prompt,agent,interval_min,max_runs_per_day,budget_cents,created_ms,enabled,model) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
     ) orelse return .unavailable;
     defer db.finalize(stmt);
     db.bindText(stmt, 1, name);
@@ -104,6 +115,7 @@ pub fn add(req: AddRequest) AddResult {
     db.bindInt(stmt, 6, @intCast(req.budget_cents));
     db.bindInt64(stmt, 7, io_g.milliTimestamp());
     db.bindInt(stmt, 8, if (req.enabled) 1 else 0);
+    db.bindText(stmt, 9, @tagName(req.model));
     if (db.step(stmt) != db.c.SQLITE_DONE) return .unavailable;
     const id: i64 = db.c.sqlite3_last_insert_rowid(db.get());
     logs.pushLog("info", "agents", "Added a scheduled agent task", false);
@@ -222,7 +234,7 @@ pub fn writeListJson(w: *std.Io.Writer) !void {
     if (ensureTable()) {
         const stmt = db.prepare(
             "SELECT id, name, prompt, agent, enabled, interval_min, max_runs_per_day, last_run_ms, day, runs_today, " ++
-                "budget_cents, total_runs, last_outcome, last_summary FROM agent_tasks ORDER BY id",
+                "budget_cents, total_runs, last_outcome, last_summary, model FROM agent_tasks ORDER BY id",
         );
         if (stmt) |st| {
             defer db.finalize(st);
@@ -243,6 +255,8 @@ pub fn writeListJson(w: *std.Io.Writer) !void {
                 try s.write(sched.interval_min);
                 try s.objectField("max_runs_per_day");
                 try s.write(sched.max_runs_per_day);
+                try s.objectField("model");
+                try s.write(db.columnText(st, 14) orelse "haiku");
                 try s.objectField("budget_cents");
                 try s.write(db.columnInt(st, 10));
                 try s.objectField("runs_today");
@@ -279,6 +293,7 @@ pub const Row = struct {
     /// Already zero when the counter belongs to an earlier day.
     runs_today: u32 = 0,
     budget_cents: u32 = 0,
+    model: pure.Model = .haiku,
     total_runs: u32 = 0,
     last_run_ms: i64 = 0,
     /// 0 when the task is paused.
@@ -301,7 +316,7 @@ pub fn snapshot(out: []Row) usize {
     const running = running_id.load(.acquire);
     const stmt = db.prepare(
         "SELECT id, name, agent, enabled, interval_min, max_runs_per_day, last_run_ms, day, runs_today, " ++
-            "budget_cents, total_runs, last_outcome, last_summary, prompt FROM agent_tasks ORDER BY id LIMIT ?1",
+            "budget_cents, total_runs, last_outcome, last_summary, prompt, model FROM agent_tasks ORDER BY id LIMIT ?1",
     ) orelse return 0;
     defer db.finalize(stmt);
     db.bindInt(stmt, 1, @intCast(@min(out.len, pure.MAX_TASKS * 4)));
@@ -319,6 +334,7 @@ pub fn snapshot(out: []Row) usize {
         r.runs_today = if (sched.day == pure.dayIndex(now)) sched.runs_today else 0;
         r.next_run_ms = pure.nextRunMs(sched, now);
         r.budget_cents = @intCast(@max(0, db.columnInt(stmt, 9)));
+        r.model = pure.Model.parse(db.columnText(stmt, 14) orelse "") orelse .haiku;
         r.total_runs = @intCast(@max(0, db.columnInt(stmt, 10)));
         r.outcome_len = copyText(&r.outcome, db.columnText(stmt, 11) orelse "");
         r.summary_len = copyText(&r.summary, db.columnText(stmt, 12) orelse "");
@@ -342,6 +358,7 @@ const Job = struct {
     id: i64 = 0,
     agent: Agent = .claude,
     budget_cents: u32 = 50,
+    model: pure.Model = .haiku,
     prompt: [pure.PROMPT_MAX]u8 = undefined,
     prompt_len: usize = 0,
 };
@@ -366,7 +383,7 @@ pub fn tick() void {
 
 fn nextDue(now: i64) ?Job {
     const stmt = db.prepare(
-        "SELECT enabled, interval_min, max_runs_per_day, last_run_ms, day, runs_today, id, agent, budget_cents, prompt " ++
+        "SELECT enabled, interval_min, max_runs_per_day, last_run_ms, day, runs_today, id, agent, budget_cents, prompt, model " ++
             "FROM agent_tasks WHERE enabled=1 ORDER BY last_run_ms, id",
     ) orelse return null;
     defer db.finalize(stmt);
@@ -375,6 +392,7 @@ fn nextDue(now: i64) ?Job {
         var job = Job{ .id = db.columnInt64(stmt, 6) };
         job.agent = Agent.parse(db.columnText(stmt, 7) orelse "") orelse continue;
         job.budget_cents = @intCast(@max(0, db.columnInt(stmt, 8)));
+        job.model = pure.Model.parse(db.columnText(stmt, 10) orelse "") orelse .haiku;
         const prompt = db.columnText(stmt, 9) orelse continue;
         if (prompt.len > job.prompt.len) continue;
         @memcpy(job.prompt[0..prompt.len], prompt);
@@ -445,7 +463,7 @@ fn execute(job: *const Job, summary: *[SUMMARY_MAX]u8, summary_len: *usize) pure
         return .failed;
     };
     var cfg_json: [900]u8 = undefined;
-    const cfg_body = setup.jsonConfigWithArgs(&cfg_json, ws.mcpPath(), &.{ "--allow", "write", "--deny-prefix", "agent_task" }) orelse {
+    const cfg_body = setup.jsonConfigWithArgs(&cfg_json, ws.mcpPath(), &.{ "--allow", "write", "--preset", "tasks", "--deny-prefix", "agent_task" }) orelse {
         summary_len.* = copyInto(summary, "Could not prepare the agent workspace.");
         return .failed;
     };
@@ -455,7 +473,7 @@ fn execute(job: *const Job, summary: *[SUMMARY_MAX]u8, summary_len: *usize) pure
     };
 
     var built: pure.Argv = .{};
-    const agent_argv = pure.buildArgv(&built, job.agent, job.prompt[0..job.prompt_len], ws.mcpPath(), ws.tokenFile(), cfg_path, job.budget_cents) orelse {
+    const agent_argv = pure.buildArgv(&built, job.agent, job.prompt[0..job.prompt_len], ws.mcpPath(), ws.tokenFile(), cfg_path, job.budget_cents, job.model) orelse {
         summary_len.* = copyInto(summary, "The task could not be turned into a command.");
         return .failed;
     };

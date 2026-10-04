@@ -51,7 +51,66 @@ pub const Policy = struct {
     /// refused on call (`opal-mcp --deny-prefix agent_task` for unattended runs).
     /// Empty denies nothing.
     deny_prefix: []const u8 = "",
+    /// A named subset of tools. Every tool's schema is sent to the agent on every
+    /// run (the full set is ~14K tokens), so an agent that needs a dozen tools
+    /// should only be shown a dozen. `all` shows everything.
+    preset: Preset = .all,
 };
+
+pub const Preset = enum {
+    all,
+    /// Ask Opal: look things up, control playback, queue.
+    ask,
+    /// Unattended scheduled runs: read the app, manage wanted/downloads/library.
+    tasks,
+    /// Read-only digests.
+    digest,
+
+    pub fn parse(s: []const u8) ?Preset {
+        return std.meta.stringToEnum(Preset, s);
+    }
+};
+
+const ask_tools = [_][]const u8{
+    "status",          "search",          "search_results",  "queue_list",     "downloads_list",  "history_list",
+    "library_list",    "library_watched", "calendar_list",   "collections_list", "settings_list", "wanted_list",
+    "recommendations", "home_summary",    "player_info",     "tmdb_browse",    "tmdb_search",     "tmdb_results",
+    "anime_search",    "anime_results",   "youtube_search",  "youtube_results", "podcast_search",  "podcast_results",
+    "music_search",    "music_results",   "livetv_list",     "rss_list",       "player_toggle",   "player_seek",
+    "player_volume",   "player_next",     "player_previous", "search_play",    "search_queue",    "queue_action",
+    "torrents_list",   "download_history_list",
+};
+
+const tasks_tools = [_][]const u8{
+    "status",          "queue_list",      "downloads_list",  "history_list",   "library_list",    "library_watched",
+    "calendar_list",   "collections_list", "settings_list",  "wanted_list",    "wanted_add",      "wanted_check",
+    "wanted_pause",    "wanted_resume",   "recommendations", "home_summary",   "torrents_list",   "download_history_list",
+    "rss_list",        "search",          "search_results",  "tmdb_browse",    "tmdb_search",     "tmdb_results",
+    "operator_jobs_list", "library_set_status", "library_mark_watched", "library_favorite", "library_rate", "collection_save_queue",
+    "downloads_pause", "downloads_resume", "torrent_pause",  "torrent_resume",
+};
+
+const digest_tools = [_][]const u8{
+    "status",         "queue_list",   "downloads_list", "history_list", "library_list",        "calendar_list",
+    "wanted_list",    "home_summary", "torrents_list",  "recommendations", "download_history_list", "operator_jobs_list",
+    "agent_tasks_list",
+};
+
+pub fn presetNames(p: Preset) []const []const u8 {
+    return switch (p) {
+        .all => &.{},
+        .ask => &ask_tools,
+        .tasks => &tasks_tools,
+        .digest => &digest_tools,
+    };
+}
+
+/// True when the preset shows `name` (always for `all`).
+pub fn presetAllows(p: Preset, name: []const u8) bool {
+    if (p == .all) return true;
+    for (presetNames(p)) |n| if (std.mem.eql(u8, n, name)) return true;
+    return false;
+}
 
 pub const Verdict = enum {
     allow,
@@ -72,6 +131,7 @@ pub fn validDenyPrefix(prefix: []const u8) bool {
 
 /// True when the policy's deny list covers `op`.
 pub fn isDenied(policy: Policy, op: *const Op) bool {
+    if (!presetAllows(policy.preset, op.name)) return true;
     return policy.deny_prefix.len > 0 and std.mem.startsWith(u8, op.name, policy.deny_prefix);
 }
 
@@ -139,6 +199,7 @@ const tmdb_types = [_][]const u8{ "all", "movie", "tv" };
 const q_param = Param{ .name = "query", .kind = .string, .desc = "What to search for.", .required = true, .wire = "q", .max_len = 255 };
 const list_index = Param{ .name = "index", .kind = .integer, .desc = "Zero-based position in the latest results.", .required = true, .wire = "idx", .min = 0, .max = 9999 };
 const task_agents = [_][]const u8{ "claude", "codex" };
+const task_models = [_][]const u8{ "haiku", "sonnet" };
 const task_id = Param{ .name = "id", .kind = .integer, .desc = "Task id from agent_tasks_list.", .required = true, .min = 1, .max = 9007199254740991 };
 
 const browser_actions = [_][]const u8{ "play", "queue" };
@@ -566,6 +627,7 @@ pub const ops = [_]Op{
             .{ .name = "name", .kind = .string, .desc = "Short unique name.", .required = true, .max_len = 60 },
             .{ .name = "prompt", .kind = .string, .desc = "What the agent should do each run. Be specific and self-contained; nobody can answer questions.", .required = true, .max_len = 1000 },
             .{ .name = "agent", .kind = .choice, .desc = "Which agent runs it. Default claude.", .choices = &task_agents },
+            .{ .name = "model", .kind = .choice, .desc = "Claude model: haiku (default, several times cheaper; right for look-and-report tasks) or sonnet (judgement). Ignored for codex.", .choices = &task_models },
             .{ .name = "interval_min", .kind = .integer, .desc = "Minutes between runs, 15 to 10080. Default 1440 (daily).", .min = 15, .max = 10080 },
             .{ .name = "max_runs_per_day", .kind = .integer, .desc = "Hard cap on runs per UTC day, 1 to 24. Default 2.", .min = 1, .max = 24 },
             .{ .name = "budget_cents", .kind = .integer, .desc = "Dollar cap per run in cents (claude only), 5 to 1000. Default 50.", .min = 5, .max = 1000 },
@@ -1136,7 +1198,7 @@ pub const Server = struct {
             .denied => {
                 self.record(op, .blocked, args);
                 var buf: [256]u8 = undefined;
-                const msg = std.fmt.bufPrint(&buf, "{s} is disabled on this server (denied prefix '{s}'). It is not available to this agent.", .{ op.name, self.policy.deny_prefix }) catch "disabled on this server";
+                const msg = std.fmt.bufPrint(&buf, "{s} is not available to this agent (disabled on this server).", .{op.name}) catch "disabled on this server";
                 return writeToolText(out, id, msg, true);
             },
             .tier_blocked => {
@@ -1478,6 +1540,46 @@ test "plugin tools cannot approve executables and keep trust with the user" {
     try writeTarget(op, args.value.object, &w);
     try testing.expectEqualStrings("/api/plugins?action=scaffold&id=my-source&name=My%20Source", w.buffered());
     try testing.expectEqual(Tier.destructive, findOp("plugin_uninstall").?.tier);
+}
+
+test "presets only name real tools, stay small and keep the dangerous families out" {
+    for ([_]Preset{ .ask, .tasks, .digest }) |preset| {
+        for (presetNames(preset)) |name| {
+            try testing.expect(findOp(name) != null);
+            // An unattended or conversational agent never gets these.
+            for ([_][]const u8{ "plugin_", "browser_", "settings_set", "agent_task_add", "agent_task_run", "agent_task_remove", "queue_clear", "library_remove" }) |bad| {
+                try testing.expect(!std.mem.startsWith(u8, name, bad));
+            }
+        }
+        // No duplicates.
+        const names = presetNames(preset);
+        for (names, 0..) |a, i| for (names[i + 1 ..]) |b| try testing.expect(!std.mem.eql(u8, a, b));
+    }
+    try testing.expect(presetNames(.ask).len <= 40 and presetNames(.tasks).len <= 40 and presetNames(.digest).len <= 15);
+    try testing.expect(presetAllows(.all, "plugin_install"));
+    try testing.expect(!presetAllows(.ask, "plugin_install"));
+    try testing.expect(presetAllows(.ask, "status"));
+    try testing.expectEqual(Preset.tasks, Preset.parse("tasks").?);
+    try testing.expect(Preset.parse("everything") == null);
+    // A tool outside the preset is denied and hidden.
+    const p = Policy{ .preset = .digest };
+    try testing.expect(isDenied(p, findOp("play_url").?));
+    try testing.expect(!isDenied(p, findOp("status").?));
+    try testing.expectEqual(Verdict.denied, check(p, findOp("play_url").?, false));
+}
+
+test "a preset shrinks tools/list to a fraction of the full size" {
+    const a = testing.allocator;
+    var api = FakeApi{};
+    var full = Server{ .caller = api.caller(), .policy = .{} };
+    var small = Server{ .caller = api.caller(), .policy = .{ .preset = .tasks } };
+    var out_full: std.Io.Writer.Allocating = .init(a);
+    defer out_full.deinit();
+    var out_small: std.Io.Writer.Allocating = .init(a);
+    defer out_small.deinit();
+    try full.handleLine(a, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}", &out_full.writer);
+    try small.handleLine(a, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}", &out_small.writer);
+    try testing.expect(out_small.written().len * 2 < out_full.written().len);
 }
 
 test "agent_task_add maps to the task route, bounds its limits and is a spend op" {

@@ -71,6 +71,10 @@ fn add(stream: std.Io.net.Stream, query: []const u8, body: []const u8) void {
     const agent_raw = wire.formParam(body, query, "agent", &agent_buf) orelse "claude";
     const agent = pure.Agent.parse(agent_raw) orelse return bad(stream, "agent must be claude or codex");
 
+    var model_buf: [16]u8 = undefined;
+    const model_raw = wire.formParam(body, query, "model", &model_buf) orelse "haiku";
+    const model = pure.Model.parse(model_raw) orelse return bad(stream, "model must be haiku or sonnet");
+
     const req = tasks.AddRequest{
         .name = name,
         .prompt = prompt,
@@ -78,6 +82,7 @@ fn add(stream: std.Io.net.Stream, query: []const u8, body: []const u8) void {
         .interval_min = uintParam(body, query, "interval_min", 1440) orelse return bad(stream, "invalid interval_min"),
         .max_runs_per_day = uintParam(body, query, "max_runs_per_day", 2) orelse return bad(stream, "invalid max_runs_per_day"),
         .budget_cents = uintParam(body, query, "budget_cents", 50) orelse return bad(stream, "invalid budget_cents"),
+        .model = model,
         // Over HTTP a task starts paused; the user enables it in the Agents page.
         .enabled = false,
     };

@@ -38,6 +38,8 @@ var message_buf: [200]u8 = undefined;
 var message_len: usize = 0;
 
 const agent_labels = [_][]const u8{ "Claude Code", "Codex" };
+const model_labels = [_][]const u8{ "Haiku (cheap)", "Sonnet" };
+var model_index: usize = 0;
 const agent_values = [_]tasks.Agent{ .claude, .codex };
 
 /// Offline pixel tests render fixed rows instead of reading the database.
@@ -83,6 +85,7 @@ fn resetForm() void {
     setNumber(&runs_buf, 2);
     setNumber(&budget_buf, 50);
     agent_index = 0;
+    model_index = 0;
     message_len = 0;
     form_ready = true;
 }
@@ -122,6 +125,7 @@ fn submit() void {
         .interval_min = interval,
         .max_runs_per_day = runs,
         .budget_cents = budget,
+        .model = if (model_index == 1) .sonnet else .haiku,
     });
     switch (res) {
         .added => {
@@ -348,6 +352,12 @@ fn renderForm() void {
         defer r.deinit();
         fieldLabel(@src(), "Agent");
         if (compactSegment(@src(), &agent_labels, agent_index)) |i| agent_index = i;
+    }
+    if (agent_index == 0) {
+        var r = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 } });
+        defer r.deinit();
+        fieldLabel(@src(), "Model");
+        if (compactSegment(@src(), &model_labels, model_index)) |i| model_index = i;
     }
     {
         var r = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 } });

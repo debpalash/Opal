@@ -107,6 +107,9 @@ pub fn main(init: std.process.Init) !void {
             } else policy.max_tier = tierFromName(v) orelse fail("unknown tier '{s}'", .{v});
         } else if (std.mem.eql(u8, arg, "--read-only")) {
             policy.max_tier = .read;
+        } else if (std.mem.eql(u8, arg, "--preset")) {
+            const v = args.next() orelse fail("--preset needs a name (ask, tasks, digest, all)", .{});
+            policy.preset = ops.Preset.parse(v) orelse fail("unknown --preset '{s}' (ask, tasks, digest, all)", .{v});
         } else if (std.mem.eql(u8, arg, "--deny-prefix")) {
             const v = args.next() orelse fail("--deny-prefix needs a tool name prefix", .{});
             if (!ops.validDenyPrefix(v)) fail("bad --deny-prefix '{s}': use 1-64 characters of a-z, 0-9 and _", .{v});
@@ -132,6 +135,7 @@ pub fn main(init: std.process.Init) !void {
                 "opal-mcp {s}: MCP server for a running Opal\n\n" ++
                     "  --allow TIER   highest tier to run: read, playback, write, spend (default), destructive\n" ++
                     "  --read-only    same as --allow read\n" ++
+                    "  --preset NAME   show only a named subset of tools (ask, tasks, digest): far fewer tokens per agent run\n" ++
                     "  --deny-prefix NAME  hide and refuse every tool whose name starts with NAME (e.g. agent_task)\n" ++
                     "  --port N       Opal API port (default 41595, or OPAL_PORT)\n" ++
                     "  --openapi      print the OpenAPI description of the agent API and exit\n\n" ++

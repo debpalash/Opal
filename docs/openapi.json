@@ -2814,6 +2814,19 @@
             }
           },
           {
+            "name": "model",
+            "in": "query",
+            "required": false,
+            "description": "Claude model: haiku (default, several times cheaper; right for look-and-report tasks) or sonnet (judgement). Ignored for codex.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "haiku",
+                "sonnet"
+              ]
+            }
+          },
+          {
             "name": "interval_min",
             "in": "query",
             "required": false,
