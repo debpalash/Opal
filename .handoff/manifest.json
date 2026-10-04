@@ -1,0 +1,36 @@
+{
+  "format": 1,
+  "snapshots": [
+    {
+      "name": "architecture-fixes",
+      "base_commit": "23ab45505f02e043ff7e6d00836c9d313596fedb",
+      "archive": "architecture-fixes.tar.gz",
+      "changed_paths": 155,
+      "verified_restore": true,
+      "sha256": "ddb9e87a3f65fd4350bd77551919bedc82d5892a039cbb6bb10aba079d73c2a7"
+    },
+    {
+      "name": "ci-deps-e3",
+      "base_commit": "a5e61b81c6ad11978e240c99a847b2fd2fd80f4a",
+      "archive": "ci-deps-e3.tar.gz",
+      "changed_paths": 11,
+      "verified_restore": true,
+      "sha256": "7607109cab5cb8016e7a9fc0870ca104c0db69c78cd6e17a2a9ee3a3e984269a"
+    }
+  ],
+  "restore": [
+    "Extract the chosen archive into an empty directory.",
+    "Create a worktree at metadata.json base_commit.",
+    "Apply staged.patch with git apply --index; then apply unstaged.patch with git apply.",
+    "Copy the untracked directory contents into that worktree, preserving modes and symlinks."
+  ],
+  "trial_history": {
+    "remote_branch": "backup/trial-history-20261004",
+    "commit_copies": {
+      "39c648026bc4ffa84e2ae8e4afd148032d1bb6bb": "5d9cbe74d7b2c0ef804ea4454afcdde97e1139ca",
+      "8d6be36fd406293aaa6c65c210c2ef44e12908b7": "cc05606b2be56613f43b75dd737a02a11efe7659"
+    },
+    "trees_identical": true,
+    "email_metadata": "Configured public GitHub noreply address; originals retained locally"
+  }
+}
