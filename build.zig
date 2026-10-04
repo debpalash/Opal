@@ -346,6 +346,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // Portable in-process WebP; use static decoder so bundles need no new dylib.
+    addAgentAssets(b, exe.root_module);
     exe.root_module.addCSourceFile(.{ .file = b.path("src/core/webp_decode.c"), .flags = &.{"-O2"} });
     exe.root_module.linkSystemLibrary("webp", .{ .preferred_link_mode = .static, .search_strategy = .no_fallback });
 
@@ -617,6 +618,17 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_playback_snapshot_pure).step);
 
+    const test_agent_launch_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/agent_launch_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    addAgentAssets(b, test_agent_launch_pure.root_module);
+    const run_test_agent_launch = b.addRunArtifact(test_agent_launch_pure);
+    test_step.dependOn(&run_test_agent_launch.step);
+    b.step("test-agent", "Test agent launching and setup text").dependOn(&run_test_agent_launch.step);
     const test_agent_setup_pure = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/agent_setup_pure.zig"),
@@ -2527,4 +2539,12 @@ fn envFileValue(body: []const u8, name: []const u8) ?[]const u8 {
         return val;
     }
     return null;
+}
+
+/// The agent workspace ships the repo's skill and instructions inside the
+/// binary. They live in `skills/` (where agent tooling expects them), outside
+/// `src/`, so they are imported by name rather than by relative path.
+fn addAgentAssets(b: *std.Build, module: *std.Build.Module) void {
+    module.addAnonymousImport("skill_md", .{ .root_source_file = b.path("skills/opal-media/SKILL.md") });
+    module.addAnonymousImport("agent_workspace_md", .{ .root_source_file = b.path("skills/opal-media/AGENT_WORKSPACE.md") });
 }

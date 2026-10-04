@@ -12,6 +12,7 @@ match the tag exactly.
 
 ## Unreleased
 - Agent-native groundwork: `opal-mcp`, a std-only Model Context Protocol server (stdio) that lets coding agents search, play, queue, control playback and manage downloads on a running Opal. Tools come from a single typed registry (`src/services/ops_pure.zig`) with permission tiers, argument validation, a URL guard (http(s)/magnet only), a destructive-action confirm and a JSON audit log. See `docs/mcp.md`. Ships an `opal-media` agent skill in `skills/`.
+- **Launch coding agents from Settings (Linux).** One click opens Claude Code, Codex or Gemini CLI in your terminal, in an Opal workspace with the instructions, skill and MCP wiring already in place.
 - **Wanted list.** Ask for a movie or episode once and Opal searches in the background, scores releases by quality, seeders and size, starts the best torrent, retries with backoff, and marks it fulfilled when it finishes (`/api/wanted/*` and `wanted_*` agent tools).
 
 - **Quitting after a search no longer crashes.** Closing Opal (or sending it

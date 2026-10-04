@@ -5019,6 +5019,8 @@ fn renderPhoneQr() void {
 /// server. Agents reach Opal through the same loopback Web API as everything
 /// else, so "agent access" is that switch plus copy-paste setup for the client;
 /// `opal-mcp` itself enforces the tier policy and writes the audit log.
+const builtin_os_linux = @import("builtin").os.tag == .linux;
+
 fn renderAgentAccess() void {
     const remote = @import("../services/remote.zig");
     const setup = @import("../services/agent_setup_pure.zig");
@@ -5085,6 +5087,26 @@ fn renderAgentAccess() void {
         if (setup.jsonConfig(&text_buf, mcp_path)) |t| {
             dvui.clipboardTextSet(t);
             state.showToast("MCP config copied");
+        }
+    }
+
+    if (builtin_os_linux) {
+        _ = dvui.label(@src(), "Open an agent in your terminal, already connected to Opal:", .{}, .{
+            .color_text = theme.colors.text_secondary,
+            .margin = .{ .x = 0, .y = 4, .w = 0, .h = 2 },
+        });
+        var launch_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
+        });
+        defer launch_row.deinit();
+        const launcher = @import("../services/agent_launch.zig");
+        inline for (.{ launcher.Agent.claude, launcher.Agent.codex, launcher.Agent.gemini }, 0..) |agent, i| {
+            var label_buf: [48]u8 = undefined;
+            const label = std.fmt.bufPrint(&label_buf, "Launch {s}", .{agent.title()}) catch "Launch";
+            if (components.actionButton(@src(), label, .secondary, 9310 + i)) {
+                state.showToast(launcher.launch(agent).message());
+            }
         }
     }
 

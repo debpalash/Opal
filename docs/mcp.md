@@ -29,6 +29,10 @@ Any other client, as JSON:
 
 Then ask the agent: "find Big Buck Bunny and play it", "what's in my queue?", "pause", "download this magnet link".
 
+## Launch an agent from Opal (Linux)
+
+**Settings → Agent Access** has *Launch Claude Code / Codex / Gemini CLI* buttons. Each opens your own terminal (ghostty, kitty, alacritty, wezterm, foot, gnome-terminal, konsole, xfce4-terminal or xterm, first found) in `~/.config/opal/agent-workspace`, running the agent with Opal already connected. Opal rewrites these files in the workspace on every launch: `CLAUDE.md` / `AGENTS.md` / `GEMINI.md` (instructions), `.mcp.json` and `.gemini/settings.json` (the `opal-mcp` wiring), and `.claude/skills/opal-media/SKILL.md`. Codex gets the server through a `-c mcp_servers.opal.command=...` override. Agents that are not on your `PATH` report that instead of failing silently.
+
 ## Permissions
 
 Every tool has a tier. The server refuses anything above the ceiling you give it.
