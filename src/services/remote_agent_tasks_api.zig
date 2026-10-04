@@ -2,12 +2,13 @@
 //!
 //!   GET  /agent/tasks                           the tasks, the master switch and what is running
 //!   POST /agent/tasks/add?name=&prompt=&agent=claude|codex&interval_min=&max_runs_per_day=&budget_cents=
-//!   POST /agent/tasks/enable?id=&enabled=0|1    pause or resume one task
 //!   POST /agent/tasks/remove?id=
 //!   POST /agent/tasks/run?id=                   run on the next tick (counts toward the daily cap)
 //!
 //! The master switch is deliberately NOT exposed here: only the user, in
-//! Settings, can allow unattended agent runs. Parameters may come in the query
+//! Settings, can allow unattended agent runs. Neither is there a route to enable
+//! or resume a task: the token any agent with a shell can read would let it
+//! switch on what it just added; enabling happens in the desktop UI. Parameters may come in the query
 //! or a form body, so a long prompt is not limited by the request line.
 
 const std = @import("std");
@@ -26,7 +27,7 @@ pub fn handle(stream: std.Io.net.Stream, method: []const u8, path: []const u8, q
         if (wire.requireMethod(stream, method, "POST")) add(stream, query, body);
         return true;
     }
-    inline for (.{ "enable", "remove", "run" }) |verb| {
+    inline for (.{ "remove", "run" }) |verb| {
         if (std.mem.eql(u8, path, "/agent/tasks/" ++ verb)) {
             if (wire.requireMethod(stream, method, "POST")) byId(stream, query, body, verb);
             return true;
@@ -107,14 +108,8 @@ fn byId(stream: std.Io.net.Stream, query: []const u8, body: []const u8, comptime
         }
         return;
     }
-    const ok = if (comptime std.mem.eql(u8, verb, "remove")) tasks.remove(id) else blk: {
-        var flag_buf: [8]u8 = undefined;
-        const raw = wire.formParam(body, query, "enabled", &flag_buf) orelse "";
-        const on = std.mem.eql(u8, raw, "1") or std.mem.eql(u8, raw, "true");
-        if (!on and !std.mem.eql(u8, raw, "0") and !std.mem.eql(u8, raw, "false")) return bad(stream, "enabled must be 0 or 1");
-        break :blk tasks.setEnabled(id, on);
-    };
-    if (ok) {
+    // Only `remove` is left here.
+    if (tasks.remove(id)) {
         wire.sendJson(stream, "{\"ok\":true}");
     } else {
         wire.sendJsonStatus(stream, "404 Not Found", "{\"error\":\"no such task\"}");

@@ -6,7 +6,7 @@
 //! `requestRepair` once a streak is long enough. The agent answers with a new
 //! base address; `handle` validates it, probes it (a bounded GET with no
 //! credentials and no redirects followed) and stores a proposal. `approve`,
-//! reached only from a human decision (the UI or POST /api/operator/approve),
+//! reached only from a human decision (the desktop UI, in-process),
 //! writes the address into the source configuration and keeps every other field.
 //! The decision logic is in operator_endpoint_pure.zig and unit tested there.
 
