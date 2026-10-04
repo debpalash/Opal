@@ -799,6 +799,7 @@ fn renderPage(r: Route) !void {
             pluginSubTabs();
             @import("../services/plugins.zig").renderSection(state.app.plugin_tab);
         },
+        .agents => @import("agent_terminal.zig").render(),
         .system => {
             // Logs only — Plugins moved to its own nav-bar menu/route. A
             // one-entry tab strip would be pure chrome, so it's dropped.
@@ -858,6 +859,7 @@ fn renderSidebar(layout: sidebar_layout.Layout) void {
     for (manage_routes, manage_tabs, 0..) |route, tab, i| {
         if (sidebarButton(tabLabel(tab), iconForTab(tab), state.app.router.current == route, layout.expanded, 9101 + i)) state.app.router.navigate(route);
     }
+    if (sidebarButton("Agents", icons.tvg.lucide.terminal, state.app.router.current == .agents, layout.expanded, 9150)) state.app.router.navigate(.agents);
 }
 fn sidebarHeading(label: []const u8, expanded: bool, id: usize) void {
     if (expanded) {
@@ -1014,11 +1016,13 @@ fn navigationMenuItem(selected: state.DrawerTab, dense: bool) ?dvui.Rect.Natural
         .settings => "Settings",
         .plugins => "Plugins",
         .system => "Logs",
+        .agents => "Agents",
         .browse => unreachable,
     };
     const icon = if (route == .browse) iconForTab(selected) else switch (route) {
         .home => icons.tvg.lucide.house,
         .watching => icons.tvg.lucide.tv,
+        .agents => icons.tvg.lucide.terminal,
         else => icons.tvg.lucide.globe,
     };
     var item = dvui.menuItem(@src(), .{ .submenu = true }, .{

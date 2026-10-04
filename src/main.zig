@@ -818,6 +818,10 @@ pub fn appDeinit() void {
     // stop them now or the drain waits out its deadline on every close.
     for (state.app.players.items) |p| p.stopRenderWorker();
 
+    // End any embedded terminal session first: its reader thread is a drained
+    // worker, and its child process (an agent) must not outlive the window.
+    if (comptime !@import("build_options").headless) @import("ui/agent_terminal.zig").shutdown();
+
     // Remove the native surface immediately. Teardown can include third-party
     // media/network destructors; keeping the surface mapped while they finish
     // makes the compositor report a closing application as unresponsive.

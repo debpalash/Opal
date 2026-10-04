@@ -362,6 +362,8 @@ pub const font_size = struct {
 // Regular + bold are distinct sources so headings use real outlines rather
 // than a synthetic weight.
 const app_font_family = "Noto Sans";
+/// Family of the terminal font (Hack). Used by the embedded terminal.
+pub const mono_font_family = "Hack";
 const app_font_sources = [_]dvui.Font.Source{
     .{ .family = dvui.Font.array("Noto Sans CJK"), .bytes = @embedFile("../assets/fonts/NotoSansKR-Regular.ttf") },
     .{
@@ -373,6 +375,12 @@ const app_font_sources = [_]dvui.Font.Source{
         .weight = .bold,
         .bytes = @embedFile("../assets/fonts/NotoSans-Bold.ttf"),
     },
+    // Monospace faces for the embedded terminal (box drawing and block
+    // elements that terminal UIs rely on).
+    .{ .family = dvui.Font.array(mono_font_family), .bytes = @embedFile("../assets/fonts/Hack-Regular.ttf") },
+    .{ .family = dvui.Font.array(mono_font_family), .weight = .bold, .bytes = @embedFile("../assets/fonts/Hack-Bold.ttf") },
+    .{ .family = dvui.Font.array(mono_font_family), .style = .italic, .bytes = @embedFile("../assets/fonts/Hack-Italic.ttf") },
+    .{ .family = dvui.Font.array(mono_font_family), .weight = .bold, .style = .italic, .bytes = @embedFile("../assets/fonts/Hack-BoldItalic.ttf") },
 };
 
 /// Keep theme metrics/colors; use the lazy CJK face only for matching titles.

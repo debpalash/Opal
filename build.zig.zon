@@ -14,6 +14,10 @@
             .url = "git+https://github.com/debpalash/zig-bypassdpi#4fad7f6b340c89ffdcee4845850e39d04766b628",
             .hash = "zig_bypassdpi-0.1.0-B1zpWLK3AAB8dEz0DqoVx8yGkR2IwlRsk2WD-wyrqcbF",
         },
+        .ghostty = .{
+            .url = "https://github.com/ghostty-org/ghostty/archive/5dc28bb8eebaf57a6c793a406bfea8c632d4fa94.tar.gz",
+            .hash = "ghostty-1.3.2-dev-5UdBC1TZeAVqaxNT2HwRRz7Zvl2JywwJ-XYOAa5yKQ7j",
+        },
     },
     // build.zig and the pinned DVUI revision use the Zig 0.16 Build API
     // (including Build.Graph.environ_map). Keeping this at 0.15.2 let an

@@ -66,6 +66,14 @@ pub fn agentScript(buf: []u8, agent: Agent, workspace: []const u8, mcp_path: []c
     }
 }
 
+/// `cd <workspace> && exec $SHELL`: a plain shell in the Opal workspace, for the
+/// embedded terminal.
+pub fn shellScript(buf: []u8, workspace: []const u8) ?[]const u8 {
+    var ws: [700]u8 = undefined;
+    const qws = shellQuote(&ws, workspace) orelse return null;
+    return std.fmt.bufPrint(buf, "cd {s} && exec \"${{SHELL:-/bin/sh}}\"", .{qws}) catch null;
+}
+
 pub const Terminal = struct {
     exe: []const u8,
     /// Arguments placed before the `sh -c <script>` the terminal should run.
@@ -126,6 +134,12 @@ test "codex gets the MCP server as a quoted config override" {
     var b: [512]u8 = undefined;
     const s = agentScript(&b, .codex, "/w", "/opt/Opal App/opal-mcp", "/h/.config/opal/api.token").?;
     try std.testing.expectEqualStrings("cd '/w' && exec codex -c 'mcp_servers.opal.command=\"/opt/Opal App/opal-mcp\"' -c 'mcp_servers.opal.env.OPAL_API_TOKEN_FILE=\"/h/.config/opal/api.token\"'", s);
+}
+
+test "shell script keeps the workspace quoted and falls back to sh" {
+    var b: [256]u8 = undefined;
+    try std.testing.expectEqualStrings("cd '/w s' && exec \"${SHELL:-/bin/sh}\"", shellScript(&b, "/w s").?);
+    try std.testing.expect(shellScript(&b, "/it's") == null);
 }
 
 test "paths that could break out of quoting are refused" {

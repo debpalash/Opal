@@ -348,6 +348,7 @@ pub fn build(b: *std.Build) void {
 
     // Portable in-process WebP; use static decoder so bundles need no new dylib.
     addAgentAssets(b, exe.root_module);
+    if (!headless) addGhosttyVt(b, exe.root_module, target);
     exe.root_module.addCSourceFile(.{ .file = b.path("src/core/webp_decode.c"), .flags = &.{"-O2"} });
     exe.root_module.linkSystemLibrary("webp", .{ .preferred_link_mode = .static, .search_strategy = .no_fallback });
 
@@ -630,6 +631,21 @@ pub fn build(b: *std.Build) void {
     test_agent_launch_pure.use_llvm = true; // the self-hosted backend hits a linker error here
     const run_test_agent_launch = b.addRunArtifact(test_agent_launch_pure);
     test_step.dependOn(&run_test_agent_launch.step);
+    // Embedded terminal: libghostty-vt snapshotting and the pty.
+    const test_terminal = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/terminal_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    addGhosttyVt(b, test_terminal.root_module, target);
+    test_terminal.use_llvm = true;
+    const run_test_terminal = b.addRunArtifact(test_terminal);
+    test_step.dependOn(&run_test_terminal.step);
+    b.step("test-terminal", "Test the embedded terminal (libghostty-vt and pty)").dependOn(&run_test_terminal.step);
+
     const test_agent_tasks_pure = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/agent_tasks_pure.zig"),
@@ -2571,6 +2587,21 @@ fn envFileValue(body: []const u8, name: []const u8) ?[]const u8 {
 /// The agent workspace ships the repo's skill and instructions inside the
 /// binary. They live in `skills/` (where agent tooling expects them), outside
 /// `src/`, so they are imported by name rather than by relative path.
+/// libghostty-vt (terminal emulation core) for the embedded agent terminal.
+/// Built from the pinned `ghostty` package as a static library; SIMD is off so
+/// no C++ runtime is needed, and it is always optimised because a Debug
+/// terminal parser is too slow to type into.
+fn addGhosttyVt(b: *std.Build, module: *std.Build.Module, target: std.Build.ResolvedTarget) void {
+    const dep = b.dependency("ghostty", .{
+        .target = target,
+        .optimize = .ReleaseFast,
+        .@"emit-lib-vt" = true,
+        .simd = false,
+    });
+    module.linkLibrary(dep.artifact("ghostty-vt-static"));
+    module.addIncludePath(dep.path("include"));
+}
+
 fn addAgentAssets(b: *std.Build, module: *std.Build.Module) void {
     module.addAnonymousImport("skill_md", .{ .root_source_file = b.path("skills/opal-media/SKILL.md") });
     module.addAnonymousImport("agent_workspace_md", .{ .root_source_file = b.path("skills/opal-media/AGENT_WORKSPACE.md") });
