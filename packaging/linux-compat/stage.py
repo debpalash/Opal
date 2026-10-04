@@ -47,6 +47,10 @@ exec "$OPAL_RUNTIME/opal-bin" "$@"
 (ROOT / 'usr/bin').mkdir(parents=True)
 (ROOT / 'usr/bin/opal').write_text('#!/bin/sh\nexec /usr/lib/opal/opal "$@"\n')
 (ROOT / 'usr/bin/opal').chmod(0o755)
+# MCP bridge on PATH for agent configs; the app itself finds the real binary
+# next to opal-bin in /usr/lib/opal.
+(ROOT / 'usr/bin/opal-mcp').write_text('#!/bin/sh\nexec /usr/lib/opal/opal-mcp "$@"\n')
+(ROOT / 'usr/bin/opal-mcp').chmod(0o755)
 for source, dest in [('packaging/opal.desktop', 'usr/share/applications/opal.desktop'),
                      ('assets/logo.svg', 'usr/share/icons/hicolor/scalable/apps/opal.svg'),
                      ('docs/licenses/libwebp.txt', 'usr/share/doc/opal/libwebp.txt'),
