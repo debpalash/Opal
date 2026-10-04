@@ -256,12 +256,16 @@ pub fn build(b: *std.Build) void {
     operator_ui_tests.use_llvm = true;
     const run_operator_ui_tests = b.addRunArtifact(operator_ui_tests);
     b.step("test-native-operator", "Capture the Agents page Activity tab with isolated offline fixtures").dependOn(&run_operator_ui_tests.step);
+    const browser_hub_ui_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native browser hub offline"} });
+    browser_hub_ui_tests.use_llvm = true;
+    const run_browser_hub_ui_tests = b.addRunArtifact(browser_hub_ui_tests);
+    b.step("test-native-browser-hub", "Capture the Browse > Web browser hub with isolated offline fixtures").dependOn(&run_browser_hub_ui_tests.step);
     const episode_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native TV episodes"} });
     const run_episode_tests = b.addRunArtifact(episode_tests);
     if (is_windows) run_episode_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     b.step("test-native-episodes", "Verify native episode cards and responsive playback controls").dependOn(&run_episode_tests.step);
     const native_suite = b.addTest(.{ .root_module = exe.root_module, .filters = &.{
-        "Native Search", "Native WebP", "Native media offline", "Native shell offline", "Native global modals", "Native activity offline", "Native agent tasks offline", "Native operator activity offline", "Native Browse", "Browse fanout", "Native torrent handoff", "Native TV episodes",
+        "Native Search", "Native WebP", "Native media offline", "Native shell offline", "Native global modals", "Native activity offline", "Native agent tasks offline", "Native operator activity offline", "Native browser hub offline", "Native Browse", "Browse fanout", "Native torrent handoff", "Native TV episodes",
     } });
     const run_native_suite = b.addRunArtifact(native_suite);
     if (is_windows) run_native_suite.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
@@ -315,6 +319,7 @@ pub fn build(b: *std.Build) void {
         .{ .run = run_activity_tests, .name = "activity" },
         .{ .run = run_agent_tasks_ui_tests, .name = "agent-tasks" },
         .{ .run = run_operator_ui_tests, .name = "operator" },
+        .{ .run = run_browser_hub_ui_tests, .name = "browser-hub" },
         .{ .run = run_image_tests, .name = "images" },
         .{ .run = run_native_suite, .name = "suite" },
         .{ .run = run_torrent_handoff_tests, .name = "torrent-handoff" },
@@ -935,9 +940,19 @@ pub fn build(b: *std.Build) void {
     });
     const run_test_browser_page = b.addRunArtifact(test_browser_page_pure);
     test_step.dependOn(&run_test_browser_page.step);
+    const test_browser_hub_view = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/browser_hub_view_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_test_browser_hub_view = b.addRunArtifact(test_browser_hub_view);
+    test_step.dependOn(&run_test_browser_hub_view.step);
     const test_browser_step = b.step("test-browser", "Test the browser link (pairing, tokens, candidates, route allowlist)");
     test_browser_step.dependOn(&run_test_browser_link.step);
     test_browser_step.dependOn(&run_test_browser_page.step);
+    test_browser_step.dependOn(&run_test_browser_hub_view.step);
     test_browser_step.dependOn(&run_test_remote_body.step);
     test_browser_step.dependOn(&run_test_access.step);
 

@@ -45,6 +45,7 @@ pub fn share(body: []const u8, link_id: i64) pure.ParseError!u32 {
     if (next_id == 0) next_id = 1;
     page = .{ .id = next_id, .shared_at = io.timestamp(), .link_id = link_id, .share = parsed };
     fresh = true;
+    state.wakeUi();
     return next_id;
 }
 
