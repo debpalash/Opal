@@ -940,6 +940,15 @@ pub fn build(b: *std.Build) void {
     });
     const run_test_browser_page = b.addRunArtifact(test_browser_page_pure);
     test_step.dependOn(&run_test_browser_page.step);
+    const test_browser_fetch_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/browser_fetch_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_test_browser_fetch = b.addRunArtifact(test_browser_fetch_pure);
+    test_step.dependOn(&run_test_browser_fetch.step);
     const test_browser_hub_view = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/browser_hub_view_pure.zig"),
@@ -952,6 +961,7 @@ pub fn build(b: *std.Build) void {
     const test_browser_step = b.step("test-browser", "Test the browser link (pairing, tokens, candidates, route allowlist)");
     test_browser_step.dependOn(&run_test_browser_link.step);
     test_browser_step.dependOn(&run_test_browser_page.step);
+    test_browser_step.dependOn(&run_test_browser_fetch.step);
     test_browser_step.dependOn(&run_test_browser_hub_view.step);
     test_browser_step.dependOn(&run_test_remote_body.step);
     test_browser_step.dependOn(&run_test_access.step);

@@ -4,6 +4,7 @@ const state = @import("../core/state.zig");
 const browser = @import("browser.zig");
 const pure = @import("scrape_fetch_pure.zig");
 const reliable_fetch = @import("reliable_fetch.zig");
+const browser_fetch = @import("browser_fetch.zig");
 
 // ══════════════════════════════════════════════════════════
 // Anti-block scrape fetch — the "never blocked" fetch layer
@@ -129,7 +130,22 @@ fn scrapeFetchBody(url: []const u8, post_body: ?[]const u8, out_buf: []u8, cance
         return if (plain_succeeded) body else null;
     }
 
-    // Blocked. Fall back to the anti-detect browser if it is available.
+    // Blocked. First ask the user's own paired browser: it has their cookies
+    // and a real fingerprint, and needs no Python or engine download. It never
+    // prompts from here (an origin the user has not allowed answers "not
+    // allowed" at once) and never gets a private-network target. A page that is
+    // still a challenge, or an error status, falls through to the bridge.
+    if (cancelled(cancel_epoch)) return null;
+    if (browser_fetch.fetchText(url, post_body, out_buf, cancel_epoch)) |t| {
+        if (cancelled(cancel_epoch)) return null;
+        const head = t.body[0..@min(t.body.len, 16 * 1024)];
+        if (t.status < 400 and t.body.len > 0 and !pure.needsBrowser(t.status, "", head)) {
+            logs.pushLog("info", "scrape", "Blocked: fetched through the paired browser", true);
+            return t.body;
+        }
+    }
+
+    // Then the anti-detect browser, if it is available.
     if (cancelled(cancel_epoch)) return null;
     if (!browserFallbackAvailable()) {
         logs.pushLog("warn", "scrape", "Blocked page and browser fallback is off/unavailable", false);

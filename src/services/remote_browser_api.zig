@@ -9,6 +9,10 @@
 //!   GET  /api/browser/context  host only (machine token, admin session): ?view=status|page|candidates, what
 //!                              agents may see; content views are empty unless the user allowed agents twice
 //!   POST /api/browser/play     host only: ?page=&id=&action=play|queue, a candidate of the shared page by id
+//!   POST /api/browser/fetch    host only: ?url= fetched through the user's browser with their cookies, for an
+//!                              origin the user allowed in the extension; blocks until answered (403 if not allowed)
+//!   GET  /api/browser/jobs     browser only: long poll (?wait=seconds) for a page Opal wants fetched
+//!   POST /api/browser/jobs/<id> browser only: the answer, metadata in the query and the page text as the raw body
 //!
 //! Who may call what is decided in access_pure.zig (`browser_routes` for the
 //! browser principal, `routeCapability` for the rest); the checks here repeat
@@ -21,6 +25,8 @@ const pure = @import("browser_link_pure.zig");
 const access = @import("access_pure.zig");
 const forwarded_open = @import("forwarded_open.zig");
 const shared_page = @import("browser_page.zig");
+const fetcher = @import("browser_fetch.zig");
+const fetch_pure = @import("browser_fetch_pure.zig");
 const alloc = @import("../core/alloc.zig").allocator;
 const logs = @import("../core/logs.zig");
 
@@ -164,7 +170,104 @@ pub fn handle(
         playCandidate(stream, query, body);
         return true;
     }
+    if (std.mem.eql(u8, path, "/browser/fetch")) {
+        if (!wire.requireMethod(stream, method, "POST")) return true;
+        if (principal != .machine and principal != .admin_session) {
+            err(stream, "403 Forbidden", "insufficient capability");
+            return true;
+        }
+        fetchRoute(stream, query, body);
+        return true;
+    }
+    if (std.mem.eql(u8, path, "/browser/jobs")) {
+        if (!wire.requireMethod(stream, method, "GET")) return true;
+        if (principal != .browser) {
+            err(stream, "403 Forbidden", "insufficient capability");
+            return true;
+        }
+        jobsRoute(stream, query, presented);
+        return true;
+    }
+    if (access.browserJobResultId(path)) |id| {
+        if (!wire.requireMethod(stream, method, "POST")) return true;
+        if (principal != .browser) {
+            err(stream, "403 Forbidden", "insufficient capability");
+            return true;
+        }
+        jobResultRoute(stream, id, query, body, presented);
+        return true;
+    }
     return false;
+}
+
+// ── Fetch through the user's browser ───────────────────────────────────────
+
+/// `POST /api/browser/fetch?url=`. GET only on this route: a POST through the
+/// user's logged-in session is an action, not a read, and no agent tool offers
+/// one (the scraper's form POST uses the internal call, not this route).
+fn fetchRoute(stream: std.Io.net.Stream, query: []const u8, body: []const u8) void {
+    var url_buf: [fetch_pure.MAX_URL + 1]u8 = undefined;
+    const url = wire.formParam(body, query, "url", &url_buf) orelse
+        return err(stream, "400 Bad Request", "url is required");
+    fetch_pure.validateTarget(url) catch |e|
+        return err(stream, "400 Bad Request", fetch_pure.targetErrorMessage(e));
+
+    const result = fetcher.fetch(.{ .url = url, .method = .get, .prompt = true }, null);
+    switch (result) {
+        .ok => |f| {
+            defer fetcher.freeBody(f.body);
+            var out: std.Io.Writer.Allocating = .init(alloc);
+            defer out.deinit();
+            fetch_pure.writeAgentJson(alloc, &out.writer, &f.outcome, f.body) catch
+                return err(stream, "500 Internal Server Error", "server error");
+            logs.pushLog("info", "browser", "A page was fetched through the paired browser", false);
+            wire.sendJson(stream, out.written());
+        },
+        .failed => |code| err(stream, code.httpStatus(), code.message()),
+        .no_browser => err(stream, "503 Service Unavailable", "no paired browser is connected: open the browser with Opal Connect paired"),
+        .busy => err(stream, "429 Too Many Requests", "too many fetches are waiting, try again shortly"),
+        .bad_request => err(stream, "400 Bad Request", "this request cannot be fetched"),
+        .cancelled => err(stream, "503 Service Unavailable", "cancelled"),
+    }
+}
+
+fn jobsRoute(stream: std.Io.net.Stream, query: []const u8, presented: []const u8) void {
+    const browser_id = link.validToken(presented) orelse return err(stream, "401 Unauthorized", "not paired");
+    var wb: [8]u8 = undefined;
+    const wait = std.fmt.parseInt(i64, wire.formParam("", query, "wait", &wb) orelse "0", 10) catch 0;
+    var job: fetch_pure.Job = undefined;
+    if (!fetcher.poll(browser_id, wait, &job)) return wire.sendJson(stream, "{\"job\":null}");
+    var out: std.Io.Writer.Allocating = .init(alloc);
+    defer out.deinit();
+    const w = &out.writer;
+    w.print("{{\"job\":{{\"id\":{d},\"method\":\"{s}\",\"prompt\":{s},\"url\":\"", .{
+        job.id,
+        if (job.method == .post) "POST" else "GET",
+        if (job.prompt) "true" else "false",
+    }) catch return err(stream, "500 Internal Server Error", "server error");
+    wire.writeJsonString(w, job.urlSlice());
+    w.writeAll("\",\"body\":\"") catch return;
+    wire.writeJsonString(w, job.bodySlice());
+    w.writeAll("\"}}") catch return;
+    wire.sendJson(stream, out.written());
+}
+
+/// The head was split from the body by the caller: `body` is the page text.
+fn jobResultRoute(stream: std.Io.net.Stream, id: u32, query: []const u8, body: []const u8, presented: []const u8) void {
+    const browser_id = link.validToken(presented) orelse return err(stream, "401 Unauthorized", "not paired");
+    switch (fetcher.complete(browser_id, id, query, body)) {
+        .ok => wire.sendJson(stream, "{\"ok\":true}"),
+        .bad_result => |e| err(stream, "400 Bad Request", switch (e) {
+            error.Malformed => "malformed result",
+            error.NotText => "only text, JSON and HTML are accepted",
+            error.BinaryBody => "the body is not text",
+            error.TooLarge => "the body is over 2 MB",
+        }),
+        .no_such_job => err(stream, "404 Not Found", "no such job"),
+        .not_yours => err(stream, "403 Forbidden", "that job belongs to another browser"),
+        .expired => err(stream, "410 Gone", "the job expired"),
+        .unavailable => err(stream, "503 Service Unavailable", "server busy"),
+    }
 }
 
 fn sharePage(stream: std.Io.net.Stream, body: []const u8, presented: []const u8) void {
