@@ -23,11 +23,12 @@ const launch = @import("agent_launch.zig");
 const pure = @import("operator_pure.zig");
 const match_help = @import("operator_match_help.zig");
 const endpoint = @import("operator_endpoint.zig");
+const local_names = @import("operator_local_names.zig");
 
 pub const Kind = pure.Kind;
 const TICK_INTERVAL_MS: i64 = 15 * 1000;
 const TIMEOUT_MS: i64 = 5 * 60 * 1000;
-const MAX_CONTEXT = 3000;
+pub const MAX_CONTEXT = 3000;
 const MAX_OUTPUT = 256 * 1024;
 const MAX_RESULT_STORED = 4000;
 
@@ -311,6 +312,7 @@ fn runJob(job: Job) void {
     const handled = switch (job.kind) {
         .match_help => match_help.handle(key, answer.json),
         .endpoint_repair => endpoint.handle(key, answer.json),
+        .local_names => local_names.handle(key, answer.json),
     };
     finish(job.id, handled.state, handled.text(), answer.json, agent.binary(), answer.cost_cents);
     logs.pushLog(if (handled.state == .failed) "warn" else "info", "operator", if (handled.state == .failed) "A background job could not be used" else "A background job finished", false);
@@ -339,6 +341,7 @@ pub fn approve(id: i64) DecideResult {
     @memcpy(res_buf[0..res.len], res);
     const ok = switch (kind) {
         .match_help => false, // applies itself, never proposed
+        .local_names => false, // applies itself, never proposed
         .endpoint_repair => endpoint.approve(key_buf[0..key.len], res_buf[0..res.len]),
     };
     if (!ok) return .failed;
