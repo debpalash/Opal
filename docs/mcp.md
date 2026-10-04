@@ -57,6 +57,10 @@ Discovery tools (`tmdb_*`, `anime_*`, `podcast_*`, `music_*`, `youtube_*`) work 
 
 Arguments are typed and bounded. Unknown arguments are rejected, `play_url` and `downloads_add_url` accept only `http(s)` URLs and magnet links (never local paths), and no tool exposes raw player commands, shell options, provider secrets or file paths.
 
+## Plugins
+
+`plugins_list` shows catalogue sources and installed executable plugins; `plugin_install`, `plugin_update` and `plugins_refresh` manage source plugins (endpoint config only; the app holds the connector code). To extend Opal, an agent calls `plugin_scaffold`, which creates `<config>/plugins/<id>/` with a `manifest.json` and a Lua `search` script, edits that script with its own file tools, then asks you to review and approve it in Settings → Plugins. Nothing executes before that: approval is stored outside the plugin folder against a digest of its exact bytes, no tool can grant it, and any edit revokes it. After approval `plugin_test` dry-runs the search through the production path (Lua sandbox, eight second limit, strict JSON) and returns the outcome and rows, so the agent can iterate. `plugin_uninstall` is destructive.
+
 ## OpenAPI
 
 [`docs/openapi.json`](openapi.json) describes the same operations as an OpenAPI 3.1 document, generated from the registry so the spec, the MCP tools and the docs cannot drift (`opal-mcp --openapi` prints it and needs no running Opal). Several operations share one route and differ in a fixed `action=` value, so those paths carry it in the key (`/library/action?action=status`); see the header of `src/services/openapi_pure.zig`. After changing the registry, run `opal-mcp --openapi > docs/openapi.json`; `zig build test-ops` fails while the committed file is stale.

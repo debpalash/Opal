@@ -20,6 +20,63 @@ pub fn changeTrust(action: []const u8, id: []const u8) TrustResponse {
     };
 }
 
+/// `scaffold` creates an inert plugin skeleton; `test` dry-runs an approved plugin's
+/// `search`. Neither can approve anything: trust stays a user decision.
+pub fn authoring(stream: std.Io.net.Stream, action: []const u8, body: []const u8, query: []const u8) void {
+    const wire = @import("remote_http.zig");
+    var id_buf: [64]u8 = undefined;
+    const id = wire.formParam(body, query, "id", &id_buf) orelse {
+        wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"plugin id required\"}");
+        return;
+    };
+    if (std.mem.eql(u8, action, "scaffold")) {
+        var name_buf: [64]u8 = undefined;
+        var desc_buf: [160]u8 = undefined;
+        const name = wire.formParam(body, query, "name", &name_buf) orelse id;
+        const description = wire.formParam(body, query, "description", &desc_buf) orelse "";
+        switch (plugins.scaffold(id, name, description)) {
+            .created => wire.sendJson(stream, "{\"ok\":true,\"result\":\"created\",\"next\":\"Edit the search script in the plugin folder, then ask the user to review and approve it in Settings > Plugins. It does not run until approved.\"}"),
+            .invalid_id => wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"invalid id, name or description\"}"),
+            .exists => wire.sendJsonStatus(stream, "409 Conflict", "{\"error\":\"a plugin with that id already exists\"}"),
+            .failed => wire.sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"could not create the plugin\"}"),
+        }
+        return;
+    }
+    var query_buf: [256]u8 = undefined;
+    const search = wire.formParam(body, query, "query", &query_buf) orelse {
+        wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"query required\"}");
+        return;
+    };
+    const alloc = @import("../core/alloc.zig").allocator;
+    const report = alloc.create(plugins.TestReport) catch {
+        wire.sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
+        return;
+    };
+    defer alloc.destroy(report);
+    plugins.testSearch(id, search, report);
+    var out: std.Io.Writer.Allocating = .init(alloc);
+    defer out.deinit();
+    var s = std.json.Stringify{ .writer = &out.writer };
+    s.beginObject() catch return;
+    s.objectField("outcome") catch return;
+    s.write(@tagName(report.outcome)) catch return;
+    s.objectField("count") catch return;
+    s.write(report.count) catch return;
+    s.objectField("rows") catch return;
+    s.beginArray() catch return;
+    for (report.rows[0..report.count]) |*row| {
+        s.beginObject() catch return;
+        inline for (.{ .{ "id", "id" }, .{ "title", "title" }, .{ "stream_url", "stream_url" }, .{ "year", "year" }, .{ "type", "media_type" } }) |f| {
+            s.objectField(f[0]) catch return;
+            s.write(@field(row, f[1])[0..@field(row, f[1] ++ "_len")]) catch return;
+        }
+        s.endObject() catch return;
+    }
+    s.endArray() catch return;
+    s.endObject() catch return;
+    wire.sendJson(stream, out.written());
+}
+
 pub fn writeSources(writer: anytype, catalog: []repo.Plugin) !void {
     for (catalog, 0..) |*plugin, i| {
         if (i > 0) try writer.writeAll(",");

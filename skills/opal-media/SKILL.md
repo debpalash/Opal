@@ -29,6 +29,10 @@ A `409` or "stale" error means a newer search replaced the results; search again
 
 When the user wants something that is not out yet or should just arrive on its own, `wanted_add` it instead of searching by hand: a movie by `title` and `year`, an episode by `title`, `season`, `episode`. Opal searches, picks the best release by quality and seeders, downloads it and marks it fulfilled. Check progress with `wanted_list` (`status`, `attempts`, `picked`); `wanted_check` forces a search now. Use `wanted_pause` / `wanted_remove` to stop. Do not add duplicates; list first.
 
+## Extending Opal with a plugin
+
+To add a source Opal does not have, `plugin_scaffold` an id, then edit `<config>/plugins/<id>/search` (a Lua script: the query is `arg[1]`; print a JSON array of rows with `id` or `stream_url`, plus optional `title`, `year`, `type`, `poster`, `overview`, `episodes`). It will not run until the user approves it in Settings → Plugins, and you cannot approve it: say so and wait. Once approved, `plugin_test` shows the outcome and the rows; fix `malformed` or `run_failed` and test again. Editing the script after approval revokes it. The Lua sandbox has no `io`, `os` or `require`, so fetch nothing and read nothing from disk; a plugin that needs the network must be a native executable, which gets the same review.
+
 ## Scheduled agent tasks
 
 `agent_task_add` saves a prompt a coding agent runs unattended on a timer (`interval_min`, 15 to 10080; `max_runs_per_day` caps cost). Use it for chores the user wants repeated, such as "each morning check the wanted list and report what is stuck". Write the prompt so it works with nobody to answer questions. Nothing runs until the user turns on **Settings → Agent Access → Run scheduled agent tasks**; you cannot turn it on, so tell the user when a task is waiting for it (`agent_tasks_list` shows `enabled`, `last_outcome` and a one-line `last_summary`). `agent_task_run` runs one on the next tick and counts toward its cap. Do not schedule a task that schedules more tasks.

@@ -898,6 +898,25 @@
         }
       }
     },
+    "/plugins": {
+      "get": {
+        "operationId": "plugins_list",
+        "summary": "Plugins: source endpoints from the plugin catalogue (with installed state and health) and installed executable plugins (with whether the user has approved them). Credentials are reported only as present or absent.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
     "/settings": {
       "get": {
         "operationId": "settings_list",
@@ -2027,6 +2046,179 @@
         }
       }
     },
+    "/plugins?action=refresh": {
+      "post": {
+        "operationId": "plugins_refresh",
+        "summary": "Re-download the plugin catalogue.",
+        "tags": [
+          "write"
+        ],
+        "x-opal-tier": "write",
+        "x-opal-fixed": {
+          "action": "refresh"
+        },
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/plugins?action=install": {
+      "post": {
+        "operationId": "plugin_install",
+        "summary": "Install a source plugin from the catalogue (writes its endpoint config; the app already holds the connector code). Executable plugins are never installed this way.",
+        "tags": [
+          "write"
+        ],
+        "x-opal-tier": "write",
+        "x-opal-fixed": {
+          "action": "install"
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "Source id from plugins_list.sources.",
+            "schema": {
+              "type": "string",
+              "maxLength": 32
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/plugins?action=update": {
+      "post": {
+        "operationId": "plugin_update",
+        "summary": "Update the installed source plugins to the catalogue's latest versions.",
+        "tags": [
+          "write"
+        ],
+        "x-opal-tier": "write",
+        "x-opal-fixed": {
+          "action": "update"
+        },
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/plugins?action=scaffold": {
+      "post": {
+        "operationId": "plugin_scaffold",
+        "summary": "Create the skeleton of a new executable plugin (manifest.json and a Lua search script) in Opal's plugins folder so you can edit it with your file tools. It does nothing until the user reviews and approves it in Settings > Plugins; you cannot approve it. The search script receives the query as its first argument and prints a JSON array of rows (id or stream_url, title, year, type, poster, overview, episodes).",
+        "tags": [
+          "write"
+        ],
+        "x-opal-tier": "write",
+        "x-opal-fixed": {
+          "action": "scaffold"
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "Plugin folder name: letters, digits, dashes; no dots or slashes.",
+            "schema": {
+              "type": "string",
+              "maxLength": 48
+            }
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "required": false,
+            "description": "Display name. No quotes or backslashes.",
+            "schema": {
+              "type": "string",
+              "maxLength": 60
+            }
+          },
+          {
+            "name": "description",
+            "in": "query",
+            "required": false,
+            "description": "One line about what it searches. No quotes or backslashes.",
+            "schema": {
+              "type": "string",
+              "maxLength": 150
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/plugins?action=test": {
+      "post": {
+        "operationId": "plugin_test",
+        "summary": "Dry-run an installed executable plugin's search and report the outcome (ok, not_approved, malformed, run_failed, no_search, not_found) and the rows Opal would show. A plugin the user has not approved reports not_approved without running.",
+        "tags": [
+          "spend"
+        ],
+        "x-opal-tier": "spend",
+        "x-opal-fixed": {
+          "action": "test"
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "Plugin folder name: letters, digits, dashes; no dots or slashes.",
+            "schema": {
+              "type": "string",
+              "maxLength": 48
+            }
+          },
+          {
+            "name": "query",
+            "in": "query",
+            "required": true,
+            "description": "Search text to try.",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
     "/agent/tasks": {
       "get": {
         "operationId": "agent_tasks_list",
@@ -2548,6 +2740,40 @@
               "type": "integer",
               "minimum": 1,
               "maximum": 9007199254740991
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/plugins?action=uninstall": {
+      "post": {
+        "operationId": "plugin_uninstall",
+        "summary": "Uninstall a source plugin. Its endpoint config is deleted.",
+        "tags": [
+          "destructive"
+        ],
+        "x-opal-tier": "destructive",
+        "x-opal-fixed": {
+          "action": "uninstall",
+          "confirm": "1"
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "Source id from plugins_list.sources.",
+            "schema": {
+              "type": "string",
+              "maxLength": 32
             }
           }
         ],

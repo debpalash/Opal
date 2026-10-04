@@ -109,6 +109,8 @@ const idx_param = Param{ .name = "index", .kind = .integer, .desc = "Zero-based 
 
 const wanted_id = Param{ .name = "id", .kind = .integer, .desc = "Item id from wanted_list.", .required = true, .min = 1, .max = 9007199254740991 };
 const wanted_kinds = [_][]const u8{ "movie", "episode" };
+const plugin_source_id = Param{ .name = "id", .kind = .string, .desc = "Source id from plugins_list.sources.", .required = true, .max_len = 32 };
+const plugin_dir_id = Param{ .name = "id", .kind = .string, .desc = "Plugin folder name: letters, digits, dashes; no dots or slashes.", .required = true, .max_len = 48 };
 const tmdb_categories = [_][]const u8{ "trending", "popular", "top_rated", "new" };
 const tmdb_types = [_][]const u8{ "all", "movie", "tv" };
 const q_param = Param{ .name = "query", .kind = .string, .desc = "What to search for.", .required = true, .wire = "q", .max_len = 255 };
@@ -239,6 +241,7 @@ pub const ops = [_]Op{
             .{ .name = "offset", .kind = .integer, .desc = "Skip this many channels.", .min = 0, .max = 100000 },
         },
     },
+    .{ .name = "plugins_list", .summary = "Plugins: source endpoints from the plugin catalogue (with installed state and health) and installed executable plugins (with whether the user has approved them). Credentials are reported only as present or absent.", .tier = .read, .method = .GET, .path = "/plugins" },
     .{ .name = "settings_list", .summary = "Every app setting an agent can see, with its type, range and current value.", .tier = .read, .method = .GET, .path = "/settings" },
     .{ .name = "calendar_list", .summary = "Coming up: the next episode and air date of each tracked show, and whether the latest one is available to stream.", .tier = .read, .method = .GET, .path = "/calendar" },
     .{ .name = "collections_list", .summary = "The user's named collections (playlists) with item counts.", .tier = .read, .method = .GET, .path = "/collections" },
@@ -434,6 +437,31 @@ pub const ops = [_]Op{
         .fixed = &.{.{ .key = "action", .value = "replace" }},
         .params = &.{collection_id},
     },
+    .{ .name = "plugins_refresh", .summary = "Re-download the plugin catalogue.", .tier = .write, .method = .POST, .path = "/plugins", .fixed = &.{.{ .key = "action", .value = "refresh" }} },
+    .{ .name = "plugin_install", .summary = "Install a source plugin from the catalogue (writes its endpoint config; the app already holds the connector code). Executable plugins are never installed this way.", .tier = .write, .method = .POST, .path = "/plugins", .fixed = &.{.{ .key = "action", .value = "install" }}, .params = &.{plugin_source_id} },
+    .{ .name = "plugin_update", .summary = "Update the installed source plugins to the catalogue's latest versions.", .tier = .write, .method = .POST, .path = "/plugins", .fixed = &.{.{ .key = "action", .value = "update" }} },
+    .{
+        .name = "plugin_scaffold",
+        .summary = "Create the skeleton of a new executable plugin (manifest.json and a Lua search script) in Opal's plugins folder so you can edit it with your file tools. It does nothing until the user reviews and approves it in Settings > Plugins; you cannot approve it. The search script receives the query as its first argument and prints a JSON array of rows (id or stream_url, title, year, type, poster, overview, episodes).",
+        .tier = .write,
+        .method = .POST,
+        .path = "/plugins",
+        .fixed = &.{.{ .key = "action", .value = "scaffold" }},
+        .params = &.{
+            plugin_dir_id,
+            .{ .name = "name", .kind = .string, .desc = "Display name. No quotes or backslashes.", .max_len = 60 },
+            .{ .name = "description", .kind = .string, .desc = "One line about what it searches. No quotes or backslashes.", .max_len = 150 },
+        },
+    },
+    .{
+        .name = "plugin_test",
+        .summary = "Dry-run an installed executable plugin's search and report the outcome (ok, not_approved, malformed, run_failed, no_search, not_found) and the rows Opal would show. A plugin the user has not approved reports not_approved without running.",
+        .tier = .spend,
+        .method = .POST,
+        .path = "/plugins",
+        .fixed = &.{.{ .key = "action", .value = "test" }},
+        .params = &.{ plugin_dir_id, .{ .name = "query", .kind = .string, .desc = "Search text to try.", .required = true, .max_len = 200 } },
+    },
     .{
         .name = "settings_set",
         .summary = "Change one app setting listed by settings_list (playback, subtitles, language, theme, privacy). Network proxy and download folder cannot be changed by agents.",
@@ -522,6 +550,15 @@ pub const ops = [_]Op{
         .path = "/collections/action",
         .fixed = &.{ .{ .key = "action", .value = "remove" }, .{ .key = "confirm", .value = "1" } },
         .params = &.{collection_id},
+    },
+    .{
+        .name = "plugin_uninstall",
+        .summary = "Uninstall a source plugin. Its endpoint config is deleted.",
+        .tier = .destructive,
+        .method = .POST,
+        .path = "/plugins",
+        .fixed = &.{ .{ .key = "action", .value = "uninstall" }, .{ .key = "confirm", .value = "1" } },
+        .params = &.{plugin_source_id},
     },
     .{
         .name = "downloads_cancel",
@@ -1256,6 +1293,28 @@ test "library write tools map onto the library routes with the right tiers" {
     try testing.expectEqual(Tier.playback, findOp("collection_replace").?.tier);
     try testing.expectEqual(Tier.write, findOp("library_favorite").?.tier);
     try testing.expectEqual(Tier.read, findOp("library_watched").?.tier);
+}
+
+test "plugin tools cannot approve executables and keep trust with the user" {
+    for (ops) |op| {
+        try testing.expect(std.mem.indexOf(u8, op.name, "approve") == null);
+        for (op.fixed) |f| {
+            try testing.expect(!std.mem.eql(u8, f.value, "approve-exec"));
+            try testing.expect(!std.mem.eql(u8, f.value, "revoke-exec"));
+        }
+        for (op.params) |param| try testing.expect(!std.mem.eql(u8, param.name, "confirm"));
+    }
+    const a = testing.allocator;
+    var buf: [512]u8 = undefined;
+    var diag = Diag{};
+    const op = findOp("plugin_scaffold").?;
+    var args = try parseArgs(a, "{\"id\":\"my-source\",\"name\":\"My Source\"}");
+    defer args.deinit();
+    try validate(op, args.value.object, &diag);
+    var w = Writer.fixed(&buf);
+    try writeTarget(op, args.value.object, &w);
+    try testing.expectEqualStrings("/api/plugins?action=scaffold&id=my-source&name=My%20Source", w.buffered());
+    try testing.expectEqual(Tier.destructive, findOp("plugin_uninstall").?.tier);
 }
 
 test "agent_task_add maps to the task route, bounds its limits and is a spend op" {

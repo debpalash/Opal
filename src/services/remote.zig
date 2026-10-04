@@ -3113,6 +3113,9 @@ fn apiPlugins(stream: std.Io.net.Stream, method: []const u8, query: []const u8, 
             if (response.status) |status| sendJsonStatus(stream, status, response.json) else sendJson(stream, response.json);
             return;
         }
+        if (std.mem.eql(u8, action_name, "scaffold") or std.mem.eql(u8, action_name, "test")) {
+            return @import("remote_plugins_api.zig").authoring(stream, action_name, body, query);
+        }
         const action = std.meta.stringToEnum(repo.Action, action_name) orelse {
             sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"unknown plugin action\"}");
             return;
