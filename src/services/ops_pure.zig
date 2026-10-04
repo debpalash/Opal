@@ -109,6 +109,10 @@ const idx_param = Param{ .name = "index", .kind = .integer, .desc = "Zero-based 
 
 const wanted_id = Param{ .name = "id", .kind = .integer, .desc = "Item id from wanted_list.", .required = true, .min = 1, .max = 9007199254740991 };
 const wanted_kinds = [_][]const u8{ "movie", "episode" };
+const tmdb_categories = [_][]const u8{ "trending", "popular", "top_rated", "new" };
+const tmdb_types = [_][]const u8{ "all", "movie", "tv" };
+const q_param = Param{ .name = "query", .kind = .string, .desc = "What to search for.", .required = true, .wire = "q", .max_len = 255 };
+const list_index = Param{ .name = "index", .kind = .integer, .desc = "Zero-based position in the latest results.", .required = true, .wire = "idx", .min = 0, .max = 9999 };
 const task_agents = [_][]const u8{ "claude", "codex" };
 const task_id = Param{ .name = "id", .kind = .integer, .desc = "Task id from agent_tasks_list.", .required = true, .min = 1, .max = 9007199254740991 };
 
@@ -169,6 +173,71 @@ pub const ops = [_]Op{
         .method = .GET,
         .path = "/library/watched",
         .params = &.{ lib_kind, lib_id, .{ .name = "season", .kind = .integer, .desc = "Season number.", .required = true, .min = 0, .max = 999 } },
+    },
+
+    // ── Discover: each search starts in the background; read the matching *_results tool a moment later ──
+    .{
+        .name = "tmdb_browse",
+        .summary = "Browse the Movies and TV catalogue (trending, popular, top rated, new). Starts loading; read tmdb_results a moment later. Works without a TMDB key.",
+        .tier = .read,
+        .method = .GET,
+        .path = "/tmdb/trending",
+        .params = &.{
+            .{ .name = "category", .kind = .choice, .desc = "Default trending.", .choices = &tmdb_categories },
+            .{ .name = "type", .kind = .choice, .desc = "Default all.", .choices = &tmdb_types },
+            .{ .name = "genre", .kind = .integer, .desc = "Genre index; 0 is all genres.", .min = 0, .max = 40 },
+        },
+    },
+    .{ .name = "tmdb_search", .summary = "Search the Movies and TV catalogue by title. Read tmdb_results a moment later.", .tier = .read, .method = .GET, .path = "/tmdb/search", .params = &.{ q_param, .{ .name = "type", .kind = .choice, .desc = "Default all.", .choices = &tmdb_types } } },
+    .{ .name = "tmdb_results", .summary = "The current Movies and TV catalogue results: titles, years, ratings, overviews.", .tier = .read, .method = .GET, .path = "/tmdb" },
+    .{ .name = "anime_search", .summary = "Search anime by title. Read anime_results a moment later.", .tier = .read, .method = .GET, .path = "/anime/search", .params = &.{q_param} },
+    .{ .name = "anime_results", .summary = "Current anime results with ids, scores and airing state, plus the episode list of the selected show once anime_episodes has run.", .tier = .read, .method = .GET, .path = "/anime" },
+    .{ .name = "anime_episodes", .summary = "Load the episode list of one anime from anime_results. Read anime_results again for the episodes.", .tier = .read, .method = .GET, .path = "/anime/episodes", .params = &.{list_index} },
+    .{
+        .name = "anime_play",
+        .summary = "Play one episode of the anime selected with anime_episodes. Pass an episode value exactly as listed in anime_results.episodes.",
+        .tier = .playback,
+        .method = .GET,
+        .path = "/anime/play",
+        .params = &.{.{ .name = "episode", .kind = .string, .desc = "Episode value from anime_results.episodes.", .required = true, .wire = "ep", .max_len = 16 }},
+    },
+    .{ .name = "podcast_search", .summary = "Search podcasts. Read podcast_results a moment later.", .tier = .read, .method = .GET, .path = "/podcasts/search", .params = &.{q_param} },
+    .{ .name = "podcast_results", .summary = "Current podcast results (popular shows when nothing was searched) and the episodes of the selected show, with the generation number podcast_play needs.", .tier = .read, .method = .GET, .path = "/podcasts" },
+    .{ .name = "podcast_episodes", .summary = "Load the episodes of one podcast from podcast_results. Read podcast_results again for them.", .tier = .read, .method = .GET, .path = "/podcasts/episodes", .params = &.{list_index} },
+    .{
+        .name = "podcast_play",
+        .summary = "Play one podcast episode. Pass the index and generation from podcast_results; a changed selection is refused.",
+        .tier = .playback,
+        .method = .GET,
+        .path = "/podcasts/play",
+        .params = &.{ list_index, .{ .name = "generation", .kind = .integer, .desc = "generation from podcast_results.", .required = true, .min = 0, .max = 9007199254740991 } },
+    },
+    .{ .name = "music_search", .summary = "Search music across the connected music sources. Read music_results a moment later.", .tier = .read, .method = .GET, .path = "/music/search", .params = &.{q_param} },
+    .{ .name = "music_results", .summary = "Current music results with the source number and id music_play needs.", .tier = .read, .method = .GET, .path = "/music" },
+    .{
+        .name = "music_play",
+        .summary = "Play a track from music_results. Pass its source and id unchanged.",
+        .tier = .playback,
+        .method = .GET,
+        .path = "/music/play",
+        .params = &.{ .{ .name = "source", .kind = .integer, .desc = "source from music_results.", .required = true, .min = 0, .max = 6 }, .{ .name = "id", .kind = .string, .desc = "id from music_results.", .required = true, .max_len = 128 } },
+    },
+    .{ .name = "youtube_search", .summary = "Search YouTube. Read youtube_results a moment later; play a result by passing https://www.youtube.com/watch?v=<id> to play_url.", .tier = .read, .method = .GET, .path = "/youtube/search", .params = &.{q_param} },
+    .{ .name = "youtube_results", .summary = "Current YouTube results: id, title, channel, duration and views. Play one with play_url using https://www.youtube.com/watch?v=<id>.", .tier = .read, .method = .GET, .path = "/youtube" },
+    .{ .name = "rss_list", .summary = "The user's RSS feeds and their latest items.", .tier = .read, .method = .GET, .path = "/rss" },
+    .{ .name = "rss_refresh", .summary = "Fetch the newest items of one RSS feed from rss_list.", .tier = .write, .method = .POST, .path = "/rss/refresh", .params = &.{list_index} },
+    .{
+        .name = "livetv_list",
+        .summary = "Search the live TV channel catalogue (IPTV). Returns up to 50 channels per page, with the stream URL to pass to play_url. The catalogue may be empty until live TV sources have loaded.",
+        .tier = .read,
+        .method = .GET,
+        .path = "/livetv",
+        .params = &.{
+            .{ .name = "query", .kind = .string, .desc = "Channel name to search for.", .wire = "q", .max_len = 100 },
+            .{ .name = "country", .kind = .string, .desc = "Country code or name filter.", .max_len = 60 },
+            .{ .name = "category", .kind = .string, .desc = "Category filter, e.g. news or sports.", .max_len = 60 },
+            .{ .name = "offset", .kind = .integer, .desc = "Skip this many channels.", .min = 0, .max = 100000 },
+        },
     },
     .{ .name = "settings_list", .summary = "Every app setting an agent can see, with its type, range and current value.", .tier = .read, .method = .GET, .path = "/settings" },
     .{ .name = "calendar_list", .summary = "Coming up: the next episode and air date of each tracked show, and whether the latest one is available to stream.", .tier = .read, .method = .GET, .path = "/calendar" },
@@ -474,6 +543,7 @@ pub const resources = [_]Resource{
     .{ .uri = "opal://downloads", .name = "Downloads", .desc = "Active and finished downloads.", .path = "/downloads" },
     .{ .uri = "opal://history", .name = "Watch history", .desc = "Recently watched items.", .path = "/history" },
     .{ .uri = "opal://agent-tasks", .name = "Scheduled agent tasks", .desc = "Recurring prompts coding agents run unattended, and how the last runs went.", .path = "/agent/tasks" },
+    .{ .uri = "opal://library", .name = "Library", .desc = "Tracked shows, anime and movies with watch progress.", .path = "/library" },
     .{ .uri = "opal://wanted", .name = "Wanted list", .desc = "What Opal is searching for and downloading automatically.", .path = "/wanted" },
 };
 

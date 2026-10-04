@@ -39,11 +39,11 @@ Every tool has a tier. The server refuses anything above the ceiling you give it
 
 | Tier | Meaning | Examples |
 | --- | --- | --- |
-| `read` | observe, search | `status`, `search`, `search_results`, `queue_list`, `downloads_list`, `history_list`, `recommendations`, `library_list`, `library_watched`, `calendar_list`, `collections_list`, `settings_list`, `wanted_list`, `agent_tasks_list` |
-| `playback` | control what plays now | `search_play`, `search_queue`, `player_toggle`, `player_seek`, `player_speed`, `player_volume`, `player_next`, `player_previous`, `subtitles_search`, `subtitles_download`, `queue_action` |
-| `write` | change persistent state | `subtitles_generate`, `downloads_pause`, `downloads_resume`, `settings_set`, `library_set_status`, `library_mark_watched`, `library_refresh`, `library_favorite`, `library_rate`, `collection_save_queue`, `wanted_add`, `wanted_follow`, `wanted_pause`, `wanted_resume`, `wanted_remove`, `agent_task_enable`, `agent_task_remove` |
+| `read` | observe, search | `status`, `search`, `search_results`, `queue_list`, `downloads_list`, `history_list`, `recommendations`, `library_list`, `library_watched`, `calendar_list`, `tmdb_browse`, `tmdb_search`, `tmdb_results`, `anime_search`, `anime_results`, `anime_episodes`, `podcast_search`, `podcast_results`, `podcast_episodes`, `music_search`, `music_results`, `youtube_search`, `youtube_results`, `rss_list`, `livetv_list`, `collections_list`, `settings_list`, `wanted_list`, `agent_tasks_list` |
+| `playback` | control what plays now | `search_play`, `search_queue`, `player_toggle`, `player_seek`, `player_speed`, `player_volume`, `player_next`, `anime_play`, `podcast_play`, `music_play`, `player_previous`, `subtitles_search`, `subtitles_download`, `queue_action` |
+| `write` | change persistent state | `subtitles_generate`, `downloads_pause`, `downloads_resume`, `settings_set`, `library_set_status`, `library_mark_watched`, `library_refresh`, `rss_refresh`, `library_favorite`, `library_rate`, `collection_save_queue`, `wanted_add`, `wanted_follow`, `wanted_pause`, `wanted_resume`, `wanted_remove`, `agent_task_enable`, `agent_task_remove` |
 | `spend` | use bandwidth, disk or compute | `play_url`, `downloads_add_url` (a magnet starts a torrent), `wanted_check` (searches now and may start a download), `agent_task_add`, `agent_task_run` |
-| `destructive` | remove data | `queue_clear`, `downloads_cancel` |
+| `destructive` | remove data | `queue_clear`, `downloads_cancel`, `library_remove`, `collection_remove` |
 
 The default ceiling is `spend`. Destructive tools are off until you opt in, and even then each call must carry `confirm: true`.
 
@@ -52,6 +52,8 @@ opal-mcp --read-only              # observe and search only
 opal-mcp --allow playback         # control playback, no downloads
 opal-mcp --allow destructive      # everything; destructive calls still need confirm=true
 ```
+
+Discovery tools (`tmdb_*`, `anime_*`, `podcast_*`, `music_*`, `youtube_*`) work in two steps because the sources answer in the background: start a search or browse, then read the matching `*_results` tool a moment later. They drive the same screens the app shows, so a search an agent starts also appears in the app. Search endpoints share a request budget; a "too many requests" reply carries a `retry_after` in seconds.
 
 Arguments are typed and bounded. Unknown arguments are rejected, `play_url` and `downloads_add_url` accept only `http(s)` URLs and magnet links (never local paths), and no tool exposes raw player commands, shell options, provider secrets or file paths.
 
@@ -71,7 +73,7 @@ Each call appends one JSON line to `~/.config/opal/mcp-audit.jsonl`: time, tool,
 
 ## Resources
 
-Read-only snapshots clients can attach as context: `opal://status`, `opal://queue`, `opal://downloads`, `opal://history`, `opal://wanted`, `opal://agent-tasks`.
+Read-only snapshots clients can attach as context: `opal://status`, `opal://queue`, `opal://downloads`, `opal://history`, `opal://library`, `opal://wanted`, `opal://agent-tasks`.
 
 ## Configuration
 
