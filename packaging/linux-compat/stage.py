@@ -17,6 +17,7 @@ for name in ['plugins-manifest.json', 'manga-sources-sfw.json']:
     shutil.copy2(Path('data') / name, LIB / name)
 shutil.copy2('assets/logo.svg', LIB / 'web/icon.svg')
 for source, dest in [('zig-out/bin/opal', 'opal-bin'),
+                     ('zig-out/bin/opal-mcp', 'opal-mcp'),
                      ('zig-out/bin/zig-bypassdpi', 'zig-bypassdpi'),
                      ('libtorrent_wrapper.so', 'libtorrent_wrapper.so'),
                      ('/opt/opal-runtime/bin/ffmpeg', 'ffmpeg'),

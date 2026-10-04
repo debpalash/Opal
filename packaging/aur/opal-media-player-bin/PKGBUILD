@@ -34,6 +34,7 @@ package() {
     # The binary's rpath includes $ORIGIN/../lib/opal, so the wrapper lib
     # resolves from /usr/lib/opal without ldconfig fiddling.
     install -Dm755 opal                       "$pkgdir/usr/bin/opal"
+    install -Dm755 opal-mcp                   "$pkgdir/usr/bin/opal-mcp"
     install -Dm755 libtorrent_wrapper.so      "$pkgdir/usr/lib/opal/libtorrent_wrapper.so"
     cp -r engines                             "$pkgdir/usr/lib/opal/engines"
     install -Dm755 scripts/camoufox_bridge.py "$pkgdir/usr/lib/opal/scripts/camoufox_bridge.py"

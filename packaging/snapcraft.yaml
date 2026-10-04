@@ -146,6 +146,7 @@ parts:
       # ── 5. Install into the snap ──────────────────────────────────────────
       install -Dm644 docs/licenses/libwebp.txt "${CRAFT_PART_INSTALL}/usr/share/doc/opal/libwebp.txt"
       install -Dm755 zig-out/bin/opal        "${CRAFT_PART_INSTALL}/usr/bin/opal.bin"
+      install -Dm755 zig-out/bin/opal-mcp    "${CRAFT_PART_INSTALL}/usr/bin/opal-mcp"
       install -Dm755 libtorrent_wrapper.so   "${CRAFT_PART_INSTALL}/usr/lib/opal/libtorrent_wrapper.so"
       install -Dm755 scripts/camoufox_bridge.py "${CRAFT_PART_INSTALL}/usr/lib/opal/camoufox_bridge.py"
       install -Dm644 assets/logo.svg \

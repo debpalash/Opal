@@ -66,7 +66,7 @@ jobs:
         run: |
           VERSION="${OPAL_RELEASE_TAG#v}"
           ditto -c -k --keepParent dist/Opal.app "Opal-${VERSION}-macos-arm64.app.zip"
-          tar -C zig-out/bin -czf "opal-${VERSION}-macos-arm64.tar.gz" opal
+          tar -C zig-out/bin -czf "opal-${VERSION}-macos-arm64.tar.gz" opal opal-mcp
           # build-app.sh also emits dist/Opal-<ver>.dmg when create-dmg is present
           if ls dist/Opal-*.dmg >/dev/null 2>&1; then
             mv dist/Opal-*.dmg "Opal-${VERSION}-macos-arm64.dmg"
@@ -132,7 +132,7 @@ jobs:
         run: |
           VERSION="${OPAL_RELEASE_TAG#v}"
           mkdir -p opal-${VERSION}-linux-x86_64
-          cp zig-out/bin/opal opal-${VERSION}-linux-x86_64/
+          cp zig-out/bin/opal zig-out/bin/opal-mcp opal-${VERSION}-linux-x86_64/
           cp libtorrent_wrapper.so opal-${VERSION}-linux-x86_64/ 2>/dev/null || true
           cp LICENSE docs/NOTICE.md README.md opal-${VERSION}-linux-x86_64/
           cp -R docs/licenses opal-${VERSION}-linux-x86_64/
@@ -208,7 +208,7 @@ jobs:
 
           # Add Opal after dependency deployment so linuxdeploy cannot rewrite
           # its runpath or recursively bundle the host's media stack.
-          cp zig-out/bin/opal AppDir/usr/lib/opal/
+          cp zig-out/bin/opal zig-out/bin/opal-mcp AppDir/usr/lib/opal/
 
           # Test the bundle itself. A launch on this runner is not enough
           # because apt installed the same library into the host filesystem.
@@ -269,7 +269,7 @@ jobs:
           # Staging dir is the self-extracting payload; install.sh runs from
           # inside it after extraction and copies into /usr/local (needs sudo).
           mkdir -p staging
-          cp zig-out/bin/opal staging/
+          cp zig-out/bin/opal zig-out/bin/opal-mcp staging/
           cp libtorrent_wrapper.so staging/
           cp packaging/opal.desktop staging/
           cp assets/logo.svg staging/opal.svg
@@ -286,6 +286,7 @@ jobs:
           set -e
           PREFIX="${PREFIX:-/usr/local}"
           install -Dm755 opal                  "$PREFIX/bin/opal"
+          install -Dm755 opal-mcp              "$PREFIX/bin/opal-mcp"
           install -Dm755 libtorrent_wrapper.so "$PREFIX/lib/opal/libtorrent_wrapper.so"
           cp -R engines scripts web licenses "$PREFIX/lib/opal/"
           install -m644 plugins-manifest.json manga-sources-sfw.json "$PREFIX/lib/opal/"
@@ -406,7 +407,7 @@ jobs:
           VERSION="${OPAL_RELEASE_TAG#v}"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           mkdir -p staging
-          cp zig-out/bin/opal.exe staging/
+          cp zig-out/bin/opal.exe zig-out/bin/opal-mcp.exe staging/
           # Browser setup must work on a clean Windows install, where neither
           # python nor python3 is present. Bundle checksum-pinned uv; it creates
           # an isolated venv and downloads its own managed Python on demand.

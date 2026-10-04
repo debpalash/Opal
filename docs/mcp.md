@@ -65,7 +65,7 @@ Each call appends one JSON line to `~/.config/opal/mcp-audit.jsonl`: time, tool,
 
 ## Resources
 
-Read-only snapshots clients can attach as context: `opal://status`, `opal://queue`, `opal://downloads`, `opal://history`.
+Read-only snapshots clients can attach as context: `opal://status`, `opal://queue`, `opal://downloads`, `opal://history`, `opal://wanted`.
 
 ## Configuration
 

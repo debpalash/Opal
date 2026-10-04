@@ -323,6 +323,7 @@ pub const resources = [_]Resource{
     .{ .uri = "opal://queue", .name = "Queue", .desc = "The playback queue.", .path = "/queue" },
     .{ .uri = "opal://downloads", .name = "Downloads", .desc = "Active and finished downloads.", .path = "/downloads" },
     .{ .uri = "opal://history", .name = "Watch history", .desc = "Recently watched items.", .path = "/history" },
+    .{ .uri = "opal://wanted", .name = "Wanted list", .desc = "What Opal is searching for and downloading automatically.", .path = "/wanted" },
 };
 
 pub fn findOp(name: []const u8) ?*const Op {
