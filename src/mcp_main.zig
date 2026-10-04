@@ -109,6 +109,16 @@ pub fn main(init: std.process.Init) !void {
         } else if (std.mem.eql(u8, arg, "--port")) {
             const v = args.next() orelse fail("--port needs a number", .{});
             port = std.fmt.parseInt(u16, v, 10) catch fail("bad port '{s}'", .{v});
+        } else if (std.mem.eql(u8, arg, "--openapi")) {
+            // Print the OpenAPI document for the agent API. Needs no running Opal.
+            var out: std.Io.Writer.Allocating = .init(gpa);
+            defer out.deinit();
+            @import("services/openapi_pure.zig").write(gpa, &out.writer) catch |err| fail("could not build the OpenAPI document: {s}", .{@errorName(err)});
+            var stdout_buf: [4096]u8 = undefined;
+            var stdout = std.Io.File.stdout().writer(init.io, &stdout_buf);
+            stdout.interface.writeAll(out.written()) catch {};
+            stdout.interface.flush() catch {};
+            return;
         } else if (std.mem.eql(u8, arg, "--version")) {
             std.debug.print("opal-mcp {s}\n", .{version});
             return;
@@ -117,7 +127,8 @@ pub fn main(init: std.process.Init) !void {
                 "opal-mcp {s}: MCP server for a running Opal\n\n" ++
                     "  --allow TIER   highest tier to run: read, playback, write, spend (default), destructive\n" ++
                     "  --read-only    same as --allow read\n" ++
-                    "  --port N       Opal API port (default 41595, or OPAL_PORT)\n\n" ++
+                    "  --port N       Opal API port (default 41595, or OPAL_PORT)\n" ++
+                    "  --openapi      print the OpenAPI description of the agent API and exit\n\n" ++
                     "Token: OPAL_API_TOKEN, else OPAL_API_TOKEN_FILE, else <config>/opal/api.token.\n" ++
                     "Audit log: <config>/opal/mcp-audit.jsonl (disable with OPAL_MCP_AUDIT=0).\n",
                 .{version},

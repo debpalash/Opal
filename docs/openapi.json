@@ -1,0 +1,2611 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Opal local API (agent surface)",
+    "version": "1",
+    "description": "The operations Opal exposes to coding agents. Generated from the operation registry; each operation is also an MCP tool in opal-mcp. Every route is under /api on the loopback port and needs the bearer token in <config>/opal/api.token."
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:41595/api"
+    }
+  ],
+  "security": [
+    {
+      "bearer": []
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    }
+  },
+  "paths": {
+    "/status": {
+      "get": {
+        "operationId": "status",
+        "summary": "What is playing now: title, position, duration, pause state, volume.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/unified_search": {
+      "get": {
+        "operationId": "search",
+        "summary": "Search every enabled source (torrents, YouTube, anime, comics, Jellyfin, live TV, music, ...). Results arrive asynchronously: call search_results next, repeating until it reports loading=false. The response has a top-level generation, and each result has a key; pass both to search_play / search_queue. Results marked playable=false or queueable=false cannot be used with those.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "description": "What to look for: a title, a person, a topic.",
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/unified_search#search_results": {
+      "get": {
+        "operationId": "search_results",
+        "summary": "Current unified search results and per-source status, without starting a new search.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/queue": {
+      "get": {
+        "operationId": "queue_list",
+        "summary": "The playback queue with item indexes.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/downloads": {
+      "get": {
+        "operationId": "downloads_list",
+        "summary": "Active and finished downloads with the index and token that download actions need.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/history": {
+      "get": {
+        "operationId": "history_list",
+        "summary": "Recently watched items.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/library": {
+      "get": {
+        "operationId": "library_list",
+        "summary": "The user's tracked shows, anime and movies with watch progress. Filter by status or kind; page with offset and limit.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [
+          {
+            "name": "filter",
+            "in": "query",
+            "required": false,
+            "description": "Watch status. Default all.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "all",
+                "watching",
+                "caught_up",
+                "unstarted",
+                "completed",
+                "dropped"
+              ]
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "description": "Kind of title. Default all.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "all",
+                "tv",
+                "anime",
+                "movie"
+              ]
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "description": "Order. Default smart (what to watch next first).",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "smart",
+                "recent",
+                "title",
+                "progress"
+              ]
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "Skip this many items.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Items to return, 1-96. Default 48.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 96
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/library/watched": {
+      "get": {
+        "operationId": "library_watched",
+        "summary": "Which episodes of one season of a library show or anime are marked watched.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "required": true,
+            "description": "Kind of title, as in library_list.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "tv",
+                "anime",
+                "movie"
+              ]
+            }
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "The item's id from library_list.",
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "season",
+            "in": "query",
+            "required": true,
+            "description": "Season number.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 999
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/tmdb/trending": {
+      "get": {
+        "operationId": "tmdb_browse",
+        "summary": "Browse the Movies and TV catalogue (trending, popular, top rated, new). Starts loading; read tmdb_results a moment later. Works without a TMDB key.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "description": "Default trending.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "trending",
+                "popular",
+                "top_rated",
+                "new"
+              ]
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "description": "Default all.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "all",
+                "movie",
+                "tv"
+              ]
+            }
+          },
+          {
+            "name": "genre",
+            "in": "query",
+            "required": false,
+            "description": "Genre index; 0 is all genres.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 40
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/tmdb/search": {
+      "get": {
+        "operationId": "tmdb_search",
+        "summary": "Search the Movies and TV catalogue by title. Read tmdb_results a moment later.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "description": "What to search for.",
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "description": "Default all.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "all",
+                "movie",
+                "tv"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/tmdb": {
+      "get": {
+        "operationId": "tmdb_results",
+        "summary": "The current Movies and TV catalogue results: titles, years, ratings, overviews.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/anime/search": {
+      "get": {
+        "operationId": "anime_search",
+        "summary": "Search anime by title. Read anime_results a moment later.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "description": "What to search for.",
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/anime": {
+      "get": {
+        "operationId": "anime_results",
+        "summary": "Current anime results with ids, scores and airing state, plus the episode list of the selected show once anime_episodes has run.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/anime/episodes": {
+      "get": {
+        "operationId": "anime_episodes",
+        "summary": "Load the episode list of one anime from anime_results. Read anime_results again for the episodes.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [
+          {
+            "name": "idx",
+            "in": "query",
+            "required": true,
+            "description": "Zero-based position in the latest results.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9999
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/anime/play": {
+      "get": {
+        "operationId": "anime_play",
+        "summary": "Play one episode of the anime selected with anime_episodes. Pass an episode value exactly as listed in anime_results.episodes.",
+        "tags": [
+          "playback"
+        ],
+        "x-opal-tier": "playback",
+        "parameters": [
+          {
+            "name": "ep",
+            "in": "query",
+            "required": true,
+            "description": "Episode value from anime_results.episodes.",
+            "schema": {
+              "type": "string",
+              "maxLength": 16
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/podcasts/search": {
+      "get": {
+        "operationId": "podcast_search",
+        "summary": "Search podcasts. Read podcast_results a moment later.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "description": "What to search for.",
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/podcasts": {
+      "get": {
+        "operationId": "podcast_results",
+        "summary": "Current podcast results (popular shows when nothing was searched) and the episodes of the selected show, with the generation number podcast_play needs.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/podcasts/episodes": {
+      "get": {
+        "operationId": "podcast_episodes",
+        "summary": "Load the episodes of one podcast from podcast_results. Read podcast_results again for them.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [
+          {
+            "name": "idx",
+            "in": "query",
+            "required": true,
+            "description": "Zero-based position in the latest results.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9999
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/podcasts/play": {
+      "get": {
+        "operationId": "podcast_play",
+        "summary": "Play one podcast episode. Pass the index and generation from podcast_results; a changed selection is refused.",
+        "tags": [
+          "playback"
+        ],
+        "x-opal-tier": "playback",
+        "parameters": [
+          {
+            "name": "idx",
+            "in": "query",
+            "required": true,
+            "description": "Zero-based position in the latest results.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9999
+            }
+          },
+          {
+            "name": "generation",
+            "in": "query",
+            "required": true,
+            "description": "generation from podcast_results.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/music/search": {
+      "get": {
+        "operationId": "music_search",
+        "summary": "Search music across the connected music sources. Read music_results a moment later.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "description": "What to search for.",
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/music": {
+      "get": {
+        "operationId": "music_results",
+        "summary": "Current music results with the source number and id music_play needs.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/music/play": {
+      "get": {
+        "operationId": "music_play",
+        "summary": "Play a track from music_results. Pass its source and id unchanged.",
+        "tags": [
+          "playback"
+        ],
+        "x-opal-tier": "playback",
+        "parameters": [
+          {
+            "name": "source",
+            "in": "query",
+            "required": true,
+            "description": "source from music_results.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 6
+            }
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "id from music_results.",
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/youtube/search": {
+      "get": {
+        "operationId": "youtube_search",
+        "summary": "Search YouTube. Read youtube_results a moment later; play a result by passing https://www.youtube.com/watch?v=<id> to play_url.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "description": "What to search for.",
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/youtube": {
+      "get": {
+        "operationId": "youtube_results",
+        "summary": "Current YouTube results: id, title, channel, duration and views. Play one with play_url using https://www.youtube.com/watch?v=<id>.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/rss": {
+      "get": {
+        "operationId": "rss_list",
+        "summary": "The user's RSS feeds and their latest items.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/rss/refresh": {
+      "post": {
+        "operationId": "rss_refresh",
+        "summary": "Fetch the newest items of one RSS feed from rss_list.",
+        "tags": [
+          "write"
+        ],
+        "x-opal-tier": "write",
+        "parameters": [
+          {
+            "name": "idx",
+            "in": "query",
+            "required": true,
+            "description": "Zero-based position in the latest results.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9999
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/livetv": {
+      "get": {
+        "operationId": "livetv_list",
+        "summary": "Search the live TV channel catalogue (IPTV). Returns up to 50 channels per page, with the stream URL to pass to play_url. The catalogue may be empty until live TV sources have loaded.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Channel name to search for.",
+            "schema": {
+              "type": "string",
+              "maxLength": 100
+            }
+          },
+          {
+            "name": "country",
+            "in": "query",
+            "required": false,
+            "description": "Country code or name filter.",
+            "schema": {
+              "type": "string",
+              "maxLength": 60
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "description": "Category filter, e.g. news or sports.",
+            "schema": {
+              "type": "string",
+              "maxLength": 60
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "Skip this many channels.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/settings": {
+      "get": {
+        "operationId": "settings_list",
+        "summary": "Every app setting an agent can see, with its type, range and current value.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      },
+      "post": {
+        "operationId": "settings_set",
+        "summary": "Change one app setting listed by settings_list (playback, subtitles, language, theme, privacy). Network proxy and download folder cannot be changed by agents.",
+        "tags": [
+          "write"
+        ],
+        "x-opal-tier": "write",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "query",
+            "required": true,
+            "description": "Setting name from settings_list.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "hwdec",
+                "auto_advance",
+                "seek_sync",
+                "sponsorblock",
+                "auto_download_subs",
+                "sub_lang",
+                "download_rate_limit",
+                "tts_voice",
+                "tts_speed",
+                "lang_learn",
+                "translate",
+                "translate_lang",
+                "theme",
+                "ui_scale_auto",
+                "ui_scale",
+                "taste_enabled",
+                "nsfw_filter",
+                "incognito"
+              ]
+            }
+          },
+          {
+            "name": "value",
+            "in": "query",
+            "required": true,
+            "description": "New value: 0 or 1 for switches, a number for numeric settings, text otherwise.",
+            "schema": {
+              "type": "string",
+              "maxLength": 64
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/calendar": {
+      "get": {
+        "operationId": "calendar_list",
+        "summary": "Coming up: the next episode and air date of each tracked show, and whether the latest one is available to stream.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/collections": {
+      "get": {
+        "operationId": "collections_list",
+        "summary": "The user's named collections (playlists) with item counts.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/recommendations": {
+      "get": {
+        "operationId": "recommendations",
+        "summary": "Personalised recommendations from the viewing history.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/unified_search/play": {
+      "post": {
+        "operationId": "search_play",
+        "summary": "Play a result from the latest search. Use the generation and key exactly as search_results returned them; a stale generation is rejected.",
+        "tags": [
+          "playback"
+        ],
+        "x-opal-tier": "playback",
+        "parameters": [
+          {
+            "name": "generation",
+            "in": "query",
+            "required": true,
+            "description": "Search generation from search_results.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967295
+            }
+          },
+          {
+            "name": "key",
+            "in": "query",
+            "required": true,
+            "description": "Result key (hex) from search_results.",
+            "schema": {
+              "type": "string",
+              "maxLength": 16
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/unified_search/queue": {
+      "post": {
+        "operationId": "search_queue",
+        "summary": "Add a result from the latest search to the queue.",
+        "tags": [
+          "playback"
+        ],
+        "x-opal-tier": "playback",
+        "parameters": [
+          {
+            "name": "generation",
+            "in": "query",
+            "required": true,
+            "description": "Search generation from search_results.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967295
+            }
+          },
+          {
+            "name": "key",
+            "in": "query",
+            "required": true,
+            "description": "Result key (hex) from search_results.",
+            "schema": {
+              "type": "string",
+              "maxLength": 16
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/toggle": {
+      "post": {
+        "operationId": "player_toggle",
+        "summary": "Pause or resume the active player.",
+        "tags": [
+          "playback"
+        ],
+        "x-opal-tier": "playback",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/player/action?action=seek": {
+      "post": {
+        "operationId": "player_seek",
+        "summary": "Seek the active player to an absolute position.",
+        "tags": [
+          "playback"
+        ],
+        "x-opal-tier": "playback",
+        "x-opal-fixed": {
+          "action": "seek"
+        },
+        "parameters": [
+          {
+            "name": "value",
+            "in": "query",
+            "required": true,
+            "description": "Position in seconds.",
+            "schema": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 2592000
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/player/action?action=speed": {
+      "post": {
+        "operationId": "player_speed",
+        "summary": "Set playback speed.",
+        "tags": [
+          "playback"
+        ],
+        "x-opal-tier": "playback",
+        "x-opal-fixed": {
+          "action": "speed"
+        },
+        "parameters": [
+          {
+            "name": "value",
+            "in": "query",
+            "required": true,
+            "description": "Multiplier, 0.25 to 4.",
+            "schema": {
+              "type": "number",
+              "minimum": 0.25,
+              "maximum": 4
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/volume": {
+      "post": {
+        "operationId": "player_volume",
+        "summary": "Set volume.",
+        "tags": [
+          "playback"
+        ],
+        "x-opal-tier": "playback",
+        "parameters": [
+          {
+            "name": "v",
+            "in": "query",
+            "required": true,
+            "description": "Percent, 0 to 150.",
+            "schema": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 150
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/player/action?action=playlist-next": {
+      "post": {
+        "operationId": "player_next",
+        "summary": "Skip to the next playlist item.",
+        "tags": [
+          "playback"
+        ],
+        "x-opal-tier": "playback",
+        "x-opal-fixed": {
+          "action": "playlist-next"
+        },
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/player/action?action=playlist-previous": {
+      "post": {
+        "operationId": "player_previous",
+        "summary": "Go back to the previous playlist item.",
+        "tags": [
+          "playback"
+        ],
+        "x-opal-tier": "playback",
+        "x-opal-fixed": {
+          "action": "playlist-previous"
+        },
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/player/action?action=subtitle-search": {
+      "post": {
+        "operationId": "subtitles_search",
+        "summary": "Search subtitles for the current video. Then call subtitles_download.",
+        "tags": [
+          "playback"
+        ],
+        "x-opal-tier": "playback",
+        "x-opal-fixed": {
+          "action": "subtitle-search"
+        },
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/player/action?action=subtitle-download": {
+      "post": {
+        "operationId": "subtitles_download",
+        "summary": "Download and apply a subtitle found by subtitles_search.",
+        "tags": [
+          "playback"
+        ],
+        "x-opal-tier": "playback",
+        "x-opal-fixed": {
+          "action": "subtitle-download"
+        },
+        "parameters": [
+          {
+            "name": "value",
+            "in": "query",
+            "required": true,
+            "description": "Result index from the subtitle search.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 14
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/queue/action": {
+      "post": {
+        "operationId": "queue_action",
+        "summary": "Act on the playback queue. play, remove, move-up and move-down need an index from queue_list.",
+        "tags": [
+          "playback"
+        ],
+        "x-opal-tier": "playback",
+        "parameters": [
+          {
+            "name": "action",
+            "in": "query",
+            "required": true,
+            "description": "What to do.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "play",
+                "remove",
+                "move-up",
+                "move-down",
+                "previous",
+                "next",
+                "toggle-shuffle",
+                "cycle-repeat",
+                "clear-played"
+              ]
+            }
+          },
+          {
+            "name": "idx",
+            "in": "query",
+            "required": false,
+            "description": "Queue item index, for item actions.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9999
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/player/action?action=subtitle-generate": {
+      "post": {
+        "operationId": "subtitles_generate",
+        "summary": "Generate subtitles for the current video with the local speech model (slow, uses CPU).",
+        "tags": [
+          "write"
+        ],
+        "x-opal-tier": "write",
+        "x-opal-fixed": {
+          "action": "subtitle-generate"
+        },
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/downloads/action?action=pause": {
+      "post": {
+        "operationId": "downloads_pause",
+        "summary": "Pause a download. Pass the index and token from downloads_list.",
+        "tags": [
+          "write"
+        ],
+        "x-opal-tier": "write",
+        "x-opal-fixed": {
+          "action": "pause"
+        },
+        "parameters": [
+          {
+            "name": "idx",
+            "in": "query",
+            "required": true,
+            "description": "Zero-based position, as listed.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9999
+            }
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "description": "Token from downloads_list; guards against a changed list.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967295
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/downloads/action?action=resume": {
+      "post": {
+        "operationId": "downloads_resume",
+        "summary": "Resume a paused download. Pass the index and token from downloads_list.",
+        "tags": [
+          "write"
+        ],
+        "x-opal-tier": "write",
+        "x-opal-fixed": {
+          "action": "resume"
+        },
+        "parameters": [
+          {
+            "name": "idx",
+            "in": "query",
+            "required": true,
+            "description": "Zero-based position, as listed.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9999
+            }
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "description": "Token from downloads_list; guards against a changed list.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967295
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/wanted": {
+      "get": {
+        "operationId": "wanted_list",
+        "summary": "The wanted list: titles Opal keeps searching for and downloads automatically, with each item's status (wanted, downloading, fulfilled, paused), attempts and next check time.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/wanted/add": {
+      "post": {
+        "operationId": "wanted_add",
+        "summary": "Add a movie or one episode to the wanted list. Opal searches the torrent sources on a backoff schedule (30 minutes, doubling to daily) and downloads the best release that fits the quality range, then marks it fulfilled. Qualities: 1=480p, 2=720p, 3=1080p, 4=2160p.",
+        "tags": [
+          "write"
+        ],
+        "x-opal-tier": "write",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "required": true,
+            "description": "movie, or episode for a single TV episode.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "movie",
+                "episode"
+              ]
+            }
+          },
+          {
+            "name": "title",
+            "in": "query",
+            "required": true,
+            "description": "The title, e.g. \"The Matrix\" or \"Severance\".",
+            "schema": {
+              "type": "string",
+              "maxLength": 150
+            }
+          },
+          {
+            "name": "year",
+            "in": "query",
+            "required": false,
+            "description": "Release year for movies; strongly recommended to avoid sequels and remakes.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1888,
+              "maximum": 2200
+            }
+          },
+          {
+            "name": "season",
+            "in": "query",
+            "required": false,
+            "description": "Season number (episodes).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 999
+            }
+          },
+          {
+            "name": "episode",
+            "in": "query",
+            "required": false,
+            "description": "Episode number (episodes).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9999
+            }
+          },
+          {
+            "name": "min_quality",
+            "in": "query",
+            "required": false,
+            "description": "Lowest acceptable quality, 1-4. Default 2.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4
+            }
+          },
+          {
+            "name": "prefer_quality",
+            "in": "query",
+            "required": false,
+            "description": "Quality to aim for, within min and max. Default 3.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4
+            }
+          },
+          {
+            "name": "max_quality",
+            "in": "query",
+            "required": false,
+            "description": "Highest acceptable quality, 1-4. Default 4.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/library/action?action=status": {
+      "post": {
+        "operationId": "library_set_status",
+        "summary": "Set how the user tracks a show, anime or movie: none (untracked), plan, watching, completed or dropped.",
+        "tags": [
+          "write"
+        ],
+        "x-opal-tier": "write",
+        "x-opal-fixed": {
+          "action": "status"
+        },
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "required": true,
+            "description": "Kind of title, as in library_list.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "tv",
+                "anime",
+                "movie"
+              ]
+            }
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "The item's id from library_list.",
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "value",
+            "in": "query",
+            "required": true,
+            "description": "New tracking status.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "none",
+                "plan",
+                "watching",
+                "completed",
+                "dropped"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/library/action?action=watched": {
+      "post": {
+        "operationId": "library_mark_watched",
+        "summary": "Mark one episode of a library show or anime watched or unwatched.",
+        "tags": [
+          "write"
+        ],
+        "x-opal-tier": "write",
+        "x-opal-fixed": {
+          "action": "watched"
+        },
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "required": true,
+            "description": "Kind of title, as in library_list.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "tv",
+                "anime",
+                "movie"
+              ]
+            }
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "The item's id from library_list.",
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "season",
+            "in": "query",
+            "required": true,
+            "description": "Season number.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 999
+            }
+          },
+          {
+            "name": "episode",
+            "in": "query",
+            "required": true,
+            "description": "Episode number.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9999
+            }
+          },
+          {
+            "name": "value",
+            "in": "query",
+            "required": true,
+            "description": "true to mark watched, false to clear.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1",
+                "0"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/library/action?action=refresh": {
+      "post": {
+        "operationId": "library_refresh",
+        "summary": "Re-sync the tracked library from its sources (new episodes, air dates).",
+        "tags": [
+          "write"
+        ],
+        "x-opal-tier": "write",
+        "x-opal-fixed": {
+          "action": "refresh"
+        },
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/library/item/action?action=favorite": {
+      "post": {
+        "operationId": "library_favorite",
+        "summary": "Favorite or unfavorite a title.",
+        "tags": [
+          "write"
+        ],
+        "x-opal-tier": "write",
+        "x-opal-fixed": {
+          "action": "favorite"
+        },
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "required": true,
+            "description": "Kind of title, as in library_list.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "tv",
+                "anime",
+                "movie"
+              ]
+            }
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "The item's id from library_list.",
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "title",
+            "in": "query",
+            "required": true,
+            "description": "The title's name, kept with the favorite.",
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            }
+          },
+          {
+            "name": "enabled",
+            "in": "query",
+            "required": true,
+            "description": "true to favorite, false to remove.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1",
+                "0"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/library/item/action?action=rating": {
+      "post": {
+        "operationId": "library_rate",
+        "summary": "Rate a title from 0 to 10 in half steps, or pass clear to remove the rating.",
+        "tags": [
+          "write"
+        ],
+        "x-opal-tier": "write",
+        "x-opal-fixed": {
+          "action": "rating"
+        },
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "required": true,
+            "description": "Kind of title, as in library_list.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "tv",
+                "anime",
+                "movie"
+              ]
+            }
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "The item's id from library_list.",
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "title",
+            "in": "query",
+            "required": true,
+            "description": "The title's name, kept with the rating.",
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            }
+          },
+          {
+            "name": "value",
+            "in": "query",
+            "required": true,
+            "description": "0 to 10 in steps of 0.5, or the word clear.",
+            "schema": {
+              "type": "string",
+              "maxLength": 8
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/collections/action?action=save": {
+      "post": {
+        "operationId": "collection_save_queue",
+        "summary": "Save the current playback queue as a new named collection.",
+        "tags": [
+          "write"
+        ],
+        "x-opal-tier": "write",
+        "x-opal-fixed": {
+          "action": "save"
+        },
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": true,
+            "description": "Collection name.",
+            "schema": {
+              "type": "string",
+              "maxLength": 150
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/collections/action?action=append": {
+      "post": {
+        "operationId": "collection_append",
+        "summary": "Add a collection's items to the end of the playback queue.",
+        "tags": [
+          "playback"
+        ],
+        "x-opal-tier": "playback",
+        "x-opal-fixed": {
+          "action": "append"
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "Collection id from collections_list.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/collections/action?action=replace": {
+      "post": {
+        "operationId": "collection_replace",
+        "summary": "Replace the playback queue with a collection's items.",
+        "tags": [
+          "playback"
+        ],
+        "x-opal-tier": "playback",
+        "x-opal-fixed": {
+          "action": "replace"
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "Collection id from collections_list.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/agent/tasks": {
+      "get": {
+        "operationId": "agent_tasks_list",
+        "summary": "Scheduled agent tasks: prompts a coding agent runs on a timer, with each task's schedule, daily cap, budget, last outcome and a one-line report. Includes whether the user has switched unattended runs on (they do that in Settings; tasks never run while it is off).",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/agent/tasks/add": {
+      "post": {
+        "operationId": "agent_task_add",
+        "summary": "Schedule a recurring task for a coding agent: a prompt it runs unattended with the opal tools, e.g. \"Check the wanted list and queue anything stuck\". Nothing runs until the user enables scheduled tasks in Settings. Each task has a daily run cap, a ten minute timeout and, for claude, a dollar budget per run.",
+        "tags": [
+          "spend"
+        ],
+        "x-opal-tier": "spend",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": true,
+            "description": "Short unique name.",
+            "schema": {
+              "type": "string",
+              "maxLength": 60
+            }
+          },
+          {
+            "name": "prompt",
+            "in": "query",
+            "required": true,
+            "description": "What the agent should do each run. Be specific and self-contained; nobody can answer questions.",
+            "schema": {
+              "type": "string",
+              "maxLength": 1000
+            }
+          },
+          {
+            "name": "agent",
+            "in": "query",
+            "required": false,
+            "description": "Which agent runs it. Default claude.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "claude",
+                "codex"
+              ]
+            }
+          },
+          {
+            "name": "interval_min",
+            "in": "query",
+            "required": false,
+            "description": "Minutes between runs, 15 to 10080. Default 1440 (daily).",
+            "schema": {
+              "type": "integer",
+              "minimum": 15,
+              "maximum": 10080
+            }
+          },
+          {
+            "name": "max_runs_per_day",
+            "in": "query",
+            "required": false,
+            "description": "Hard cap on runs per UTC day, 1 to 24. Default 2.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 24
+            }
+          },
+          {
+            "name": "budget_cents",
+            "in": "query",
+            "required": false,
+            "description": "Dollar cap per run in cents (claude only), 5 to 1000. Default 50.",
+            "schema": {
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 1000
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/agent/tasks/enable": {
+      "post": {
+        "operationId": "agent_task_enable",
+        "summary": "Pause or resume one scheduled agent task.",
+        "tags": [
+          "write"
+        ],
+        "x-opal-tier": "write",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "Task id from agent_tasks_list.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          {
+            "name": "enabled",
+            "in": "query",
+            "required": true,
+            "description": "true to resume, false to pause.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1",
+                "0"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/agent/tasks/remove": {
+      "post": {
+        "operationId": "agent_task_remove",
+        "summary": "Delete a scheduled agent task.",
+        "tags": [
+          "write"
+        ],
+        "x-opal-tier": "write",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "Task id from agent_tasks_list.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/agent/tasks/run": {
+      "post": {
+        "operationId": "agent_task_run",
+        "summary": "Run a scheduled task on the next tick instead of waiting for its schedule. Counts toward its daily cap and needs scheduled tasks switched on in Settings.",
+        "tags": [
+          "spend"
+        ],
+        "x-opal-tier": "spend",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "Task id from agent_tasks_list.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/wanted/follow": {
+      "post": {
+        "operationId": "wanted_follow",
+        "summary": "Turn on or off automatic downloads of the newest aired episode of every tracked TV show. Only the newest episode per show is queued, never the back catalogue.",
+        "tags": [
+          "write"
+        ],
+        "x-opal-tier": "write",
+        "parameters": [
+          {
+            "name": "enabled",
+            "in": "query",
+            "required": true,
+            "description": "true to follow tracked shows, false to stop.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1",
+                "0"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/wanted/pause": {
+      "post": {
+        "operationId": "wanted_pause",
+        "summary": "Stop searching for a wanted item until it is resumed.",
+        "tags": [
+          "write"
+        ],
+        "x-opal-tier": "write",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "Item id from wanted_list.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/wanted/resume": {
+      "post": {
+        "operationId": "wanted_resume",
+        "summary": "Resume a paused wanted item, or re-arm one whose download was removed so it searches again.",
+        "tags": [
+          "write"
+        ],
+        "x-opal-tier": "write",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "Item id from wanted_list.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/wanted/remove": {
+      "post": {
+        "operationId": "wanted_remove",
+        "summary": "Remove an item from the wanted list. Files already downloaded are kept.",
+        "tags": [
+          "write"
+        ],
+        "x-opal-tier": "write",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "Item id from wanted_list.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/load": {
+      "post": {
+        "operationId": "play_url",
+        "summary": "Open an http(s) URL or magnet link in the player. A magnet starts a torrent download. Local file paths are refused.",
+        "tags": [
+          "spend"
+        ],
+        "x-opal-tier": "spend",
+        "parameters": [
+          {
+            "name": "url",
+            "in": "query",
+            "required": true,
+            "description": "http(s) URL or magnet link.",
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/download/url": {
+      "post": {
+        "operationId": "downloads_add_url",
+        "summary": "Download an http(s) URL into the download folder.",
+        "tags": [
+          "spend"
+        ],
+        "x-opal-tier": "spend",
+        "parameters": [
+          {
+            "name": "url",
+            "in": "query",
+            "required": true,
+            "description": "http(s) URL of the file.",
+            "schema": {
+              "type": "string",
+              "maxLength": 2048
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/wanted/check": {
+      "post": {
+        "operationId": "wanted_check",
+        "summary": "Search for a wanted item right now instead of waiting for its schedule. If a release fits, it starts downloading.",
+        "tags": [
+          "spend"
+        ],
+        "x-opal-tier": "spend",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "Item id from wanted_list.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/queue/action?action=clear": {
+      "post": {
+        "operationId": "queue_clear",
+        "summary": "Empty the playback queue.",
+        "tags": [
+          "destructive"
+        ],
+        "x-opal-tier": "destructive",
+        "x-opal-fixed": {
+          "action": "clear",
+          "confirm": "1"
+        },
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/library/action?action=remove": {
+      "post": {
+        "operationId": "library_remove",
+        "summary": "Remove a title from the Watching library: stops tracking a show, or drops an anime or movie from continue-watching. Files on disk are not touched.",
+        "tags": [
+          "destructive"
+        ],
+        "x-opal-tier": "destructive",
+        "x-opal-fixed": {
+          "action": "remove",
+          "confirm": "1"
+        },
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "required": true,
+            "description": "Kind of title, as in library_list.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "tv",
+                "anime",
+                "movie"
+              ]
+            }
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "The item's id from library_list.",
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/collections/action?action=remove": {
+      "post": {
+        "operationId": "collection_remove",
+        "summary": "Delete a saved collection. The media it listed is not touched.",
+        "tags": [
+          "destructive"
+        ],
+        "x-opal-tier": "destructive",
+        "x-opal-fixed": {
+          "action": "remove",
+          "confirm": "1"
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "Collection id from collections_list.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/downloads/action?action=cancel": {
+      "post": {
+        "operationId": "downloads_cancel",
+        "summary": "Cancel a download and discard its partial data. Pass the index and token from downloads_list.",
+        "tags": [
+          "destructive"
+        ],
+        "x-opal-tier": "destructive",
+        "x-opal-fixed": {
+          "action": "cancel",
+          "confirm": "1"
+        },
+        "parameters": [
+          {
+            "name": "idx",
+            "in": "query",
+            "required": true,
+            "description": "Zero-based position, as listed.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9999
+            }
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "description": "Token from downloads_list; guards against a changed list.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967295
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    }
+  }
+}

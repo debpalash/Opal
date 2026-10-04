@@ -114,7 +114,7 @@ Branch `v2/agent-os` is stacked on PR #119 (browse, episode redesign, remote har
 
 | Phase | State |
 | --- | --- |
-| 1. Registry | Done for the observe, playback, download, queue, library and wanted surface: more than 40 tools with typed parameters, tiers and API bindings (`src/services/ops_pure.zig`). Not yet generating an OpenAPI document. The in-app copilot keeps its own compact tool list on purpose: a small local model cannot carry 40-plus schemas. |
+| 1. Registry | Done for the observe, playback, download, queue, library and wanted surface: more than 40 tools with typed parameters, tiers and API bindings (`src/services/ops_pure.zig`). OpenAPI is generated from it (`docs/openapi.json`, `opal-mcp --openapi`) and checked for drift in `zig build test-ops`. The in-app copilot keeps its own compact tool list on purpose: a small local model cannot carry 40-plus schemas. |
 | 2. MCP server | Done: `opal-mcp` (stdio), tools and resources, policy ceiling, destructive confirm, URL guard, JSON audit log, shipped in every package. Verified live. See [mcp.md](mcp.md). |
 | 3. Skills | `skills/opal-media` (watch, control, downloads, wanted list), installed into the agent workspace. |
 | 4. Terminal | libghostty-vt today exposes only key, OSC, SGR and paste APIs, not a screen-state terminal, so an embedded terminal is deferred. Shipped instead: **Settings → Agent Access** launches Claude Code, Codex or Gemini CLI in the user's own terminal inside a pre-wired workspace (Linux). |

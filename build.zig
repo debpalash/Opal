@@ -670,7 +670,20 @@ pub fn build(b: *std.Build) void {
     });
     const run_test_ops_pure = b.addRunArtifact(test_ops_pure);
     test_step.dependOn(&run_test_ops_pure.step);
-    b.step("test-ops", "Test the agent operation registry and MCP server core").dependOn(&run_test_ops_pure.step);
+    const test_openapi_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/openapi_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_openapi_pure.root_module.addAnonymousImport("openapi_json", .{ .root_source_file = b.path("docs/openapi.json") });
+    test_openapi_pure.use_llvm = true; // the self-hosted backend hits a linker error here
+    const run_test_openapi_pure = b.addRunArtifact(test_openapi_pure);
+    test_step.dependOn(&run_test_openapi_pure.step);
+    const test_ops_step = b.step("test-ops", "Test the agent operation registry, MCP server core and OpenAPI spec");
+    test_ops_step.dependOn(&run_test_ops_pure.step);
+    test_ops_step.dependOn(&run_test_openapi_pure.step);
 
     const test_auto_subs_pure = b.addTest(.{
         .root_module = b.createModule(.{

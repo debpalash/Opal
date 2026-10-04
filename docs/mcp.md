@@ -57,6 +57,10 @@ Discovery tools (`tmdb_*`, `anime_*`, `podcast_*`, `music_*`, `youtube_*`) work 
 
 Arguments are typed and bounded. Unknown arguments are rejected, `play_url` and `downloads_add_url` accept only `http(s)` URLs and magnet links (never local paths), and no tool exposes raw player commands, shell options, provider secrets or file paths.
 
+## OpenAPI
+
+[`docs/openapi.json`](openapi.json) describes the same operations as an OpenAPI 3.1 document, generated from the registry so the spec, the MCP tools and the docs cannot drift (`opal-mcp --openapi` prints it and needs no running Opal). Several operations share one route and differ in a fixed `action=` value, so those paths carry it in the key (`/library/action?action=status`); see the header of `src/services/openapi_pure.zig`. After changing the registry, run `opal-mcp --openapi > docs/openapi.json`; `zig build test-ops` fails while the committed file is stale.
+
 ## Scheduled agent tasks
 
 A task is a prompt a coding agent runs unattended on a timer: `agent_task_add` takes a `name`, a `prompt`, an `agent` (`claude` or `codex`), `interval_min` (15 to 10080), `max_runs_per_day` (1 to 24) and, for Claude Code, `budget_cents` per run (passed as `--max-budget-usd`). Each run starts in the same workspace as the terminal launcher, with the same `opal-mcp` and the same policy, so it can do no more than a chat could. Claude Code runs with only the `opal` tools allowed; Codex runs in a read-only sandbox. A run is stopped after ten minutes, and the last line of its output is kept as `last_summary`.

@@ -87,7 +87,7 @@ pub const Param = struct {
     /// The value must be an http(s) URL or a magnet link, never a path.
     url: bool = false,
 
-    fn key(self: Param) []const u8 {
+    pub fn key(self: Param) []const u8 {
         return self.wire orelse self.name;
     }
 };
@@ -726,7 +726,7 @@ pub fn writeTarget(op: *const Op, args: ?std.json.ObjectMap, w: *Writer) Writer.
 
 // ── MCP tool descriptors ────────────────────────────────────────────────
 
-fn kindName(k: Kind) []const u8 {
+pub fn kindName(k: Kind) []const u8 {
     return switch (k) {
         .string, .choice => "string",
         .integer => "integer",
@@ -735,7 +735,7 @@ fn kindName(k: Kind) []const u8 {
     };
 }
 
-fn writeBoundNumber(s: *std.json.Stringify, n: f64) !void {
+pub fn writeBoundNumber(s: *std.json.Stringify, n: f64) !void {
     if (n == @trunc(n) and @abs(n) < 1e15) {
         try s.write(@as(i64, @intFromFloat(n)));
     } else {
