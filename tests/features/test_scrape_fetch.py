@@ -56,7 +56,10 @@ def test_scrape_fetch():
         "public scrapeFetch api": "pub fn scrapeFetch(" in svc,
         "browser fallback gated on config": "state.app.scrape_use_browser" in svc,
         "browser fallback gated on engine": "browser.engineReady(" in svc,
-        "calls browser fetchHtmlBlocking": "browser.fetchHtmlBlocking(" in svc,
+        "calls cancellable browser fallback": "browser.fetchHtmlWithCancellation(url, post_body, out_buf, cancel_epoch)" in svc,
+        "compatible GET and POST wrappers": "scrapeFetchBody(url, null, out_buf, null)" in svc and "scrapeFetchBody(url, post_body, out_buf, null)" in svc,
+        "supervised plain request cancellation": ".cancel_epoch = cancel_epoch" in svc,
+        "cancellable bridge admission and safe drain": "scrape_req_mutex.tryLock()" in brow and "scrapeCancelled(cancel_epoch)" in brow and "pub fn fetchHtmlWithCancellation" in brow,
         "one-time ready log": "Anti-block fetch ready" in svc,
 
         # ── Bridge: fetchhtml command on a DEDICATED page ──
@@ -128,7 +131,7 @@ def test_scrapers_routed_through_scrapefetch():
         # ── comics.zig: framework fetches routed; MangaDex/HeanCms JSON left ──
         "comics imports scrape_fetch": 'const scrape = @import("scrape_fetch.zig")' in comics,
         "comics wrapper present": "fn fetchMaybeUnblocked(" in comics,
-        "comics wrapper calls scrapeFetch": "scrape.scrapeFetch(" in comics,
+        "comics wrapper calls cancellable scrapeFetch": "scrape.scrapeFetchWithCancellation(url, dst, browseEpoch())" in comics,
         "themesia detail routed": "fetchMaybeUnblocked(detail_url, detail_html)" in comics,
         "themesia chapter routed": "fetchMaybeUnblocked(chap_url, chap_html)" in comics,
         "madara details routed": "fetchMaybeUnblocked(manga_url, details_buf)" in comics,
@@ -152,7 +155,7 @@ def test_scrapers_routed_through_scrapefetch():
         # ── novels.zig: scraper HTML GETs routed; Wikisource/POST left ──
         "novels imports scrape_fetch": 'const scrape = @import("scrape_fetch.zig")' in novels,
         "novels wrapper present": "fn scrapeHtml(" in novels,
-        "novels wrapper calls scrapeFetch": "scrape.scrapeFetch(" in novels,
+        "novels wrapper calls cancellable scrapeFetch": "scrape.scrapeFetchWithCancellation(url, buf, browseEpoch())" in novels,
         "novels search routed": "scrapeHtml(url, 512 * 1024)" in novels,
         "novels chapters routed": "scrapeHtml(murl, 1024 * 1024)" in novels,
         "novels text routed": "scrapeHtml(chapter_url, 2 * 1024 * 1024)" in novels,

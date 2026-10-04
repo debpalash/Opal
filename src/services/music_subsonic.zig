@@ -31,6 +31,15 @@ const LatestRequest = @import("../core/latest_request.zig").Gate;
 const tmdb_pure = @import("tmdb_pure.zig");
 const lyrics = @import("lyrics.zig");
 const mpvc = @import("../core/c.zig");
+var loading_fixture_for_test = false;
+pub fn setLoadingFixtureForTest(enabled: bool) void {
+    if (!@import("builtin").is_test) @compileError("Native loading fixture is test-only");
+    loading_fixture_for_test = enabled;
+    state.app.music.result_count = 0;
+    state.app.music.fetch_error = false;
+    state.app.music.is_loading.store(enabled, .release);
+}
+
 const alloc = @import("../core/alloc.zig").allocator;
 const secret_store = @import("../core/secret_store.zig");
 
@@ -474,6 +483,7 @@ var next_offset: u32 = 0;
 var loading_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 pub fn searchMusic(query: []const u8) void {
+    if (@import("builtin").is_test and loading_fixture_for_test) return;
     if (query.len == 0 and state.app.music.source != SRC_AUDIUS) return;
 
     state.app.music.fetch_error = false;

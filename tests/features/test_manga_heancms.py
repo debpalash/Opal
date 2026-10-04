@@ -60,9 +60,9 @@ def test_manga_heancms_engine():
             problems.append(f"comics.zig does not route through {call}")
 
     # 8) Source.heancms added at the END of the enum + searchWorker branch.
-    if "const Source = enum {" not in comics or "heancms" not in comics:
+    if not _re.search(r"const\s+Source\s*=\s*enum(?:\s*\([^)]*\))?\s*\{[^}]*\bheancms\b", comics):
         problems.append("Source.heancms not added to the enum")
-    if "sourceActive(.heancms)" not in comics or "fetchHeancmsPage" not in comics:
+    if not all(token in comics for token in ("sourceActive(src)", "Source.heancms", ".heancms => fetchHeancmsPage(q, wave.page, gen, 0)", "runComicWave(gen, 1)", "runComicWave(gen, next_page)")) or "fetchHeancmsPage" not in comics:
         problems.append("searchWorker HeanCms branch (sourceActive(.heancms) → fetchHeancmsPage) missing")
 
     # 9) source_config-gated — inert until a plugin installs the "heancms" base.

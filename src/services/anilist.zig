@@ -224,64 +224,49 @@ fn postMutation(payload: []const u8) Delivery {
 /// `isAdult: false`, so AniList itself drops adult entries — the same intent as
 /// the anime tab's Jikan `sfw=true` param (see anime_pure.sfwSuffix). Runs on
 /// the caller's (worker) thread; does no allocation of its own beyond curl.
-pub fn fetchMetaByMalIds(ids_csv: []const u8, sfw: bool, out: []u8) usize {
-    if (ids_csv.len == 0) return 0;
-    const alloc = @import("../core/alloc.zig").allocator;
+const CancelEpoch = @import("../core/bounded_process.zig").CancelEpoch;
 
+fn fetchPublicPayload(payload: []const u8, out: []u8, cancel_epoch: ?CancelEpoch) usize {
+    const body = @import("reliable_fetch.zig").fetch(ANILIST_API, out, .{
+        .headers = &.{ .{ .name = "Content-Type", .value = "application/json" }, .{ .name = "Accept", .value = "application/json" } },
+        .post_body = payload,
+        .timeout_secs = 10,
+        .impersonate = false,
+        .cancel_epoch = cancel_epoch,
+    }) orelse return 0;
+    return body.len;
+}
+
+pub fn fetchMetaByMalIds(ids_csv: []const u8, sfw: bool, out: []u8) usize {
+    return fetchMetaByMalIdsWithCancellation(ids_csv, sfw, out, null);
+}
+pub fn fetchMetaByMalIdsWithCancellation(ids_csv: []const u8, sfw: bool, out: []u8, cancel_epoch: ?CancelEpoch) usize {
+    if (ids_csv.len == 0) return 0;
     var gql_buf: [2048]u8 = undefined;
-    const gql = std.fmt.bufPrintZ(&gql_buf,
+    const gql = std.fmt.bufPrint(&gql_buf,
         \\{{"query":"query {{ Page(perPage: 50) {{ media(idMal_in: [{s}], type: ANIME{s}) {{ id idMal averageScore title {{ romaji english }} coverImage {{ large }} episodes seasonYear description(asHtml: false) }} }} }}"}}
     , .{ ids_csv, anilist_pure.adultGate(sfw) }) catch return 0;
-
-    var child = io_global.Child.init(&.{
-        "curl", "-s",                             "-X", "POST",                     ANILIST_API,
-        "-H",   "Content-Type: application/json", "-H", "Accept: application/json", "-d",
-        gql,
-    }, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    child.spawn() catch return 0;
-
-    const n = if (child.stdout) |*s| io_global.readAll(s, out) catch 0 else 0;
-    _ = child.wait() catch {};
-    return n;
+    return fetchPublicPayload(gql, out, cancel_epoch);
 }
 
-/// Search AniList's public catalog. Used as a resilient fallback when Jikan's
-/// dependency on MyAnimeList returns an error payload with no rows.
+/// Public search remains compatible with existing independent resolver callers.
 pub fn fetchSearch(title: []const u8, sfw: bool, out: []u8) usize {
+    return fetchSearchWithCancellation(title, sfw, out, null);
+}
+pub fn fetchSearchWithCancellation(title: []const u8, sfw: bool, out: []u8, cancel_epoch: ?CancelEpoch) usize {
     if (title.len == 0) return 0;
-    const alloc = @import("../core/alloc.zig").allocator;
     var payload_buf: [2048]u8 = undefined;
     const payload = anilist_pure.searchPayload(&payload_buf, title, sfw) orelse return 0;
-
-    var child = io_global.Child.init(&.{
-        "curl", "-s",                             "--connect-timeout", "3",                        "--max-time", "10",    "-X", "POST", ANILIST_API,
-        "-H",   "Content-Type: application/json", "-H",                "Accept: application/json", "-d",         payload,
-    }, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    child.spawn() catch return 0;
-    const n = if (child.stdout) |*s| io_global.readAll(s, out) catch 0 else 0;
-    _ = child.wait() catch {};
-    return n;
+    return fetchPublicPayload(payload, out, cancel_epoch);
 }
 
-/// Fetch a keyless AniList browse page as an independent fallback for Jikan.
 pub fn fetchBrowse(page: u32, kind: anilist_pure.BrowseKind, sfw: bool, out: []u8) usize {
-    const alloc = @import("../core/alloc.zig").allocator;
+    return fetchBrowseWithCancellation(page, kind, sfw, out, null);
+}
+pub fn fetchBrowseWithCancellation(page: u32, kind: anilist_pure.BrowseKind, sfw: bool, out: []u8, cancel_epoch: ?CancelEpoch) usize {
     var payload_buf: [2048]u8 = undefined;
     const payload = anilist_pure.browsePayload(&payload_buf, page, kind, sfw) orelse return 0;
-    var child = io_global.Child.init(&.{
-        "curl", "-s",                             "--connect-timeout", "3",                        "--max-time", "10",    "-X", "POST", ANILIST_API,
-        "-H",   "Content-Type: application/json", "-H",                "Accept: application/json", "-d",         payload,
-    }, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    child.spawn() catch return 0;
-    const n = if (child.stdout) |*s| io_global.readAll(s, out) catch 0 else 0;
-    _ = child.wait() catch {};
-    return n;
+    return fetchPublicPayload(payload, out, cancel_epoch);
 }
 
 /// Search AniList for an anime by title, return media ID.

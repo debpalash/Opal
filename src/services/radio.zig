@@ -33,6 +33,15 @@ const safeUtf8Buf = @import("../core/text.zig").safeUtf8Buf;
 const LatestRequest = @import("../core/latest_request.zig").Gate;
 const tmdb_pure = @import("tmdb_pure.zig");
 
+var loading_fixture_for_test = false;
+pub fn setLoadingFixtureForTest(enabled: bool) void {
+    if (!@import("builtin").is_test) @compileError("Native loading fixture is test-only");
+    loading_fixture_for_test = enabled;
+    state.app.radio.result_count = 0;
+    state.app.radio.fetch_error = false;
+    state.app.radio.is_loading.store(enabled, .release);
+}
+
 const alloc = @import("../core/alloc.zig").allocator;
 
 const agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0";
@@ -176,28 +185,29 @@ fn deserializeStation(r: *ccp.Reader) ?pure.Station {
 }
 
 /// SWR write — persist the fresh most-voted list. Called from popularWorker
-/// while it already holds parse_mutex, so results[]/result_count are stable.
-fn putPopularCache() void {
+/// Takes a short owned snapshot; writes disk after releasing parse_mutex.
+fn putPopularCache(generation: u32) void {
     if (!state.app.content_cache_enabled) return;
-    const count = state.app.radio.result_count;
-    if (count == 0) return;
-    const buf = alloc.alloc(u8, RADIO_BLOB_CAP) catch return;
-    defer alloc.free(buf);
-    var w = ccp.Writer.init(buf);
-    const n: u16 = @intCast(@min(count, state.app.radio.results.len));
-    w.u16v(n);
-    var i: usize = 0;
-    while (i < n) : (i += 1) serializeStation(&w, state.app.radio.results[i]);
-    const blob = w.done() orelse return;
+    const buffer = alloc.alloc(u8, RADIO_BLOB_CAP) catch return;
+    defer alloc.free(buffer);
+    var writer = ccp.Writer.init(buffer);
+    {
+        parse_mutex.lock();
+        defer parse_mutex.unlock();
+        if (!search_request.isCurrent(generation) or !state.app.radio.showing_popular or state.app.radio.result_count == 0) return;
+        const count: u16 = @intCast(@min(state.app.radio.result_count, state.app.radio.results.len));
+        writer.u16v(count);
+        for (state.app.radio.results[0..count]) |row| serializeStation(&writer, row);
+    }
+    const blob = writer.done() orelse return;
     content_cache.put(RADIO_CACHE_KEY, blob, RADIO_CACHE_TTL_S);
 }
 
 /// SWR read — seed the popular grid from disk so it paints instantly on cold
-/// start. UI-thread only (from loadPopularOnce), ONLY when results[] is empty.
+/// start. Popular worker only (from popularWorker), ONLY when results[] is empty.
 /// results[] is a fixed array, so no capacity reservation is needed.
-fn seedPopularFromCache() void {
+fn seedPopularFromCache(generation: u32) void {
     if (!state.app.content_cache_enabled) return;
-    if (state.app.radio.result_count != 0) return;
     const buf = alloc.alloc(u8, RADIO_BLOB_CAP) catch return;
     defer alloc.free(buf);
     const hit = content_cache.get(RADIO_CACHE_KEY, buf) orelse return;
@@ -205,13 +215,16 @@ fn seedPopularFromCache() void {
     const n = r.u16v() orelse return;
     parse_mutex.lock();
     defer parse_mutex.unlock();
-    if (state.app.radio.result_count != 0) return; // a fetch beat us under the lock
+    if (!search_request.isCurrent(generation) or state.app.radio.result_count != 0) return; // a fetch beat us under the lock
     var i: usize = 0;
     while (i < n and i < state.app.radio.results.len) : (i += 1) {
         state.app.radio.results[i] = deserializeStation(&r) orelse break;
     }
     state.app.radio.result_count = i;
-    if (i > 0) state.app.radio.showing_popular = true;
+    if (i > 0) {
+        state.app.radio.showing_popular = true;
+        state.wakeUi();
+    }
 }
 
 // ══════════════════════════════════════════════════════════
@@ -254,6 +267,7 @@ const RADIO_PAGE_SIZE: usize = POPULAR_LIMIT;
 var popular_fetched: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
 pub fn loadPopularOnce() void {
+    if (@import("builtin").is_test and loading_fixture_for_test) return;
     if (popular_fetched.load(.acquire)) return;
     // Same first-start gate as the other one-shot loaders: don't latch until
     // config has published (the poster daemon's disk cache needs the db open).
@@ -265,10 +279,13 @@ pub fn loadPopularOnce() void {
     }
     if (state.app.radio.is_loading.load(.acquire)) return;
 
-    // SWR seed: paint the last most-voted list from disk NOW (empty grid only)
-    // so the tab isn't blank while the revalidating fetch below runs.
-    seedPopularFromCache();
+    // The worker seeds cached rows before its independent directory requests.
 
+    parse_mutex.lock();
+    if (state.app.radio.is_loading.load(.acquire) or popular_fetched.load(.acquire)) {
+        parse_mutex.unlock();
+        return;
+    }
     popular_fetched.store(true, .release);
     state.app.radio.showing_popular = true;
     state.app.radio.fetch_error = false;
@@ -281,6 +298,7 @@ pub fn loadPopularOnce() void {
     // popular fetch is in flight supersedes it instead of racing it into
     // results[].
     const my_gen = search_request.begin(&state.app.radio.is_loading);
+    parse_mutex.unlock();
 
     if (@import("../core/workers.zig").spawnLegacy(popularWorker, .{my_gen})) |t| {
         @import("../core/workers.zig").release(t); // never joined — detach to avoid leaking the handle
@@ -290,49 +308,66 @@ pub fn loadPopularOnce() void {
 }
 
 fn popularWorker(my_gen: u32) void {
-    defer search_request.finish(my_gen, &state.app.radio.is_loading);
-    defer appendSoma(my_gen, "");
+    seedPopularFromCache(my_gen);
+    runRadioGroup(.{ .generation = my_gen, .query_len = 0 }, true);
+}
 
-    // buildPopularUrl (not buildTopVoteUrl) — the votes-descending search form
-    // that loadMore's append windows also use, so the popular rail's paging is
-    // one consistent ordering/offset sequence rather than switching endpoint
-    // shapes between the landing fetch and appends.
-    var url_buf: [160]u8 = undefined;
-    const url = pure.buildPopularUrl(RADIO_PAGE_SIZE, 0, &url_buf);
-    if (url.len == 0) return;
-
-    // Shared public directory — be a polite citizen (≤ 1 req/sec), same bucket
-    // as the search worker.
-    rate_limit.acquire("radiobrowser", 1.0);
-
-    const body = fetchBody(url, 512 * 1024) orelse {
-        if (search_request.isCurrent(my_gen)) state.app.radio.fetch_error = true;
+const RadioGroup = struct {
+    job: SearchJob,
+    popular: bool,
+    published: bool = false,
+    succeeded: bool = false,
+    directory_succeeded: bool = false,
+};
+fn runRadioGroup(job: SearchJob, popular: bool) void {
+    var group: RadioGroup = .{ .job = job, .popular = popular };
+    const jobs = [_]bool{ false, true };
+    @import("browse_fanout.zig").run(bool, &jobs, &group, radioPartWorker, .{
+        .limit = 2,
+        .cancel_epoch = .{ .epoch32 = .{ .value = &search_request.generation, .expected = job.generation } },
+    });
+    var cache = false;
+    parse_mutex.lock();
+    if (search_request.isCurrent(job.generation)) {
+        if (!group.published and group.succeeded) state.app.radio.result_count = 0;
+        state.app.radio.fetch_error = !group.succeeded;
+        if (!group.directory_succeeded) more_available = false;
+        search_request.finish(job.generation, &state.app.radio.is_loading);
+        cache = popular and group.published;
+    }
+    parse_mutex.unlock();
+    if (cache) putPopularCache(job.generation);
+    state.wakeUi();
+}
+fn radioPartWorker(group: *RadioGroup, soma: bool) void {
+    if (soma) {
+        appendSoma(group);
         return;
-    };
+    }
+    const generation = group.job.generation;
+    var enc: [768]u8 = undefined;
+    var url_buf: [1024]u8 = undefined;
+    const url = if (group.popular) pure.buildPopularUrl(RADIO_PAGE_SIZE, 0, &url_buf) else pure.buildSearchUrl(percentEncode(group.job.query[0..group.job.query_len], &enc), RADIO_PAGE_SIZE, 0, &url_buf);
+    if (url.len == 0) return;
+    rate_limit.acquire("radiobrowser", 1.0);
+    const body = fetchBodyForGeneration(url, 512 * 1024, generation) orelse return;
     defer alloc.free(body);
-
-    if (!search_request.isCurrent(my_gen)) return; // superseded by a search
-
+    const rows = alloc.alloc(pure.Station, RADIO_PAGE_SIZE) catch return;
+    defer alloc.free(rows);
+    const page = pure.parsePage(alloc, body, rows) orelse return;
     parse_mutex.lock();
     defer parse_mutex.unlock();
-    if (!search_request.isCurrent(my_gen)) return; // re-check under lock
-
-    const page = pure.parsePage(alloc, body, &state.app.radio.results) orelse {
-        state.app.radio.fetch_error = true;
-        return;
-    };
-    const count = page.count;
+    if (!search_request.isCurrent(generation)) return;
+    group.succeeded = true;
+    group.directory_succeeded = true;
     more_available = page.consumed >= RADIO_PAGE_SIZE;
     current_offset = page.consumed;
-    state.app.radio.result_count = count;
-    if (count == 0) {
-        state.app.radio.fetch_error = true;
-        logs.pushLog("info", "radio", "Top stations returned no rows", false);
-    } else {
-        // SWR write: persist the fresh list (still under parse_mutex) so the
-        // next cold start seeds instantly.
-        putPopularCache();
-        logs.pushLog("info", "radio", "Popular stations loaded (RadioBrowser topvote)", false);
+    if (page.count > 0) {
+        if (!group.published) state.app.radio.result_count = 0;
+        group.published = true;
+        state.app.radio.result_count = pure.appendUnique(&state.app.radio.results, state.app.radio.result_count, rows[0..page.count]);
+        state.app.radio.fetch_error = false;
+        state.wakeUi();
     }
 }
 
@@ -341,8 +376,10 @@ fn popularWorker(my_gen: u32) void {
 // ══════════════════════════════════════════════════════════
 
 pub fn searchRadio(query: []const u8) void {
+    if (@import("builtin").is_test and loading_fixture_for_test) return;
     if (query.len == 0) return;
 
+    parse_mutex.lock();
     state.app.radio.fetch_error = false;
     state.app.radio.showing_popular = false;
     // A search satisfies the "page opens with content" job — never let the
@@ -356,7 +393,6 @@ pub fn searchRadio(query: []const u8) void {
 
     // Keep the query for pagination and hand this worker an immutable copy.
     const n = @min(query.len, query_buf.len);
-    parse_mutex.lock();
     @memcpy(query_buf[0..n], query[0..n]);
     query_len = n;
     parse_mutex.unlock();
@@ -372,7 +408,9 @@ pub fn searchRadio(query: []const u8) void {
 
 /// Installed SomaFM contributes bounded real station playlists independently
 /// of RadioBrowser availability; its identities never trigger RadioBrowser pings.
-fn appendSoma(generation: u32, query: []const u8) void {
+fn appendSoma(group: *RadioGroup) void {
+    const generation = group.job.generation;
+    const query = group.job.query[0..group.job.query_len];
     if (!search_request.isCurrent(generation)) return;
     var base: [512]u8 = undefined;
     const endpoint = @import("../core/source_config.zig").copyValue("somafm", "base", &base) orelse return;
@@ -380,10 +418,13 @@ fn appendSoma(generation: u32, query: []const u8) void {
     const rows = alloc.alloc(audio.Item, 16) catch return;
     defer alloc.free(rows);
     const reply = audio.searchIntoWithCancellation(.somafm, query, rows, endpoint, .{ .epoch32 = .{ .value = &search_request.generation, .expected = generation } });
-    if (reply.count == 0) return;
     parse_mutex.lock();
     defer parse_mutex.unlock();
     if (!search_request.isCurrent(generation)) return;
+    if (reply.status == .done or reply.status == .no_results) group.succeeded = true;
+    if (reply.count == 0) return;
+    if (!group.published) state.app.radio.result_count = 0;
+    group.published = true;
     for (rows[0..reply.count]) |row| {
         if (state.app.radio.result_count == state.app.radio.results.len) break;
         var station: pure.Station = .{};
@@ -395,50 +436,14 @@ fn appendSoma(generation: u32, query: []const u8) void {
         if (row.cover_len <= station.favicon.len) audio.pure.copy(&station.favicon, &station.favicon_len, row.cover[0..row.cover_len]);
         audio.pure.copy(&station.tags, &station.tags_len, row.summary[0..row.summary_len]);
         audio.pure.copy(&station.country, &station.country_len, "SomaFM");
-        state.app.radio.results[state.app.radio.result_count] = station;
-        state.app.radio.result_count += 1;
+        state.app.radio.result_count = pure.appendUnique(&state.app.radio.results, state.app.radio.result_count, &.{station});
     }
     if (state.app.radio.result_count > 0) state.app.radio.fetch_error = false;
+    state.wakeUi();
 }
 
 fn searchWorker(job: SearchJob) void {
-    const my_gen = job.generation;
-    defer search_request.finish(my_gen, &state.app.radio.is_loading);
-    defer appendSoma(my_gen, job.query[0..job.query_len]);
-
-    // Percent-encode the term (space, &, =, #, ?, %, + at minimum).
-    var enc: [768]u8 = undefined;
-    const encoded = percentEncode(job.query[0..job.query_len], &enc);
-
-    var url_buf: [1024]u8 = undefined;
-    const url = pure.buildSearchUrl(encoded, RADIO_PAGE_SIZE, 0, &url_buf);
-    if (url.len == 0) return;
-
-    // Shared public directory — be a polite citizen (≤ 1 req/sec).
-    rate_limit.acquire("radiobrowser", 1.0);
-
-    const body = fetchBody(url, 512 * 1024) orelse {
-        if (search_request.isCurrent(my_gen)) state.app.radio.fetch_error = true;
-        return;
-    };
-    defer alloc.free(body);
-
-    // Bail if superseded while curl was in flight.
-    if (!search_request.isCurrent(my_gen)) return;
-
-    parse_mutex.lock();
-    defer parse_mutex.unlock();
-    if (!search_request.isCurrent(my_gen)) return; // re-check under lock
-
-    const page = pure.parsePage(alloc, body, &state.app.radio.results) orelse {
-        state.app.radio.fetch_error = true;
-        return;
-    };
-    const count = page.count;
-    more_available = page.consumed >= RADIO_PAGE_SIZE;
-    current_offset = page.consumed;
-    state.app.radio.result_count = count;
-    if (count == 0) logs.pushLog("info", "radio", "Search returned no stations", false) else logs.pushLog("info", "radio", "Radio search done (RadioBrowser)", false);
+    runRadioGroup(job, false);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -451,6 +456,7 @@ fn searchWorker(job: SearchJob) void {
 /// reload supersedes it. No-op once `more_available` clears (a short window or
 /// the fixed results[] buffer filled). Mirrors drama.zig's loadMore().
 pub fn loadMore() void {
+    if (@import("builtin").is_test and loading_fixture_for_test) return;
     if (!more_available) return;
     if (state.app.radio.is_loading.load(.acquire)) return;
     if (loading_more.load(.acquire)) return;
@@ -701,16 +707,21 @@ fn percentEncode(src: []const u8, dst: []u8) []const u8 {
 /// Fetch through the shared status-aware transport into a fresh heap buffer.
 /// Large buffers stay off the worker stack (macOS has a small thread stack).
 fn fetchBody(url: []const u8, cap: usize) ?[]u8 {
+    return fetchBodyForGeneration(url, cap, search_request.current());
+}
+fn fetchBodyForGeneration(url: []const u8, cap: usize, generation: u32) ?[]u8 {
     const buf = alloc.alloc(u8, cap) catch return null;
     // Mirrors share the directory schema. Keep the path and query intact,
     // including pagination and station UUIDs, when a host is unavailable.
     for (0..3) |attempt| {
+        if (!search_request.isCurrent(generation)) break;
         var ub: [1536]u8 = undefined;
         const endpoint = pure.mirrorUrl(url, attempt, &ub) orelse continue;
         const body = reliable_fetch.fetch(endpoint, buf, .{
             .user_agent = @import("../core/app_meta.zig").user_agent,
             .timeout_secs = 8,
             .impersonate = false,
+            .cancel_epoch = .{ .epoch32 = .{ .value = &search_request.generation, .expected = generation } },
         }) orelse continue;
         const trimmed = std.mem.trim(u8, body, " \t\r\n");
         if (trimmed.len == 0 or trimmed[0] != '[') continue;

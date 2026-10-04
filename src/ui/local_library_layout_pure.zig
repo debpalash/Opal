@@ -27,3 +27,37 @@ test "Local library empty states give the next useful action" {
     try std.testing.expectEqualStrings("Add a media folder, then scan to see your files here.", emptyHint(0, false, 0));
     try std.testing.expectEqualStrings("No files indexed yet. Scan your media folders to refresh.", emptyHint(0, false, 1));
 }
+
+/// Exact view identity, independent of frame count and presentation width.
+pub const QueryKey = struct {
+    query: [256]u8 = @splat(0),
+    len: usize = 0,
+    duplicates: bool = false,
+    revision: u64 = 0,
+    pub fn init(query: []const u8, duplicates: bool, revision: u64) QueryKey {
+        var key: QueryKey = .{ .len = @min(query.len, 256), .duplicates = duplicates, .revision = revision };
+        @memcpy(key.query[0..key.len], query[0..key.len]);
+        return key;
+    }
+    pub fn eql(a: QueryKey, b: QueryKey) bool {
+        return a.revision == b.revision and a.duplicates == b.duplicates and std.mem.eql(u8, a.query[0..a.len], b.query[0..b.len]);
+    }
+};
+test "local snapshot unchanged frames retain cache; query and commit invalidate" {
+    const key = QueryKey.init("Film", false, 4);
+    for (0..120) |_| try std.testing.expect(key.eql(QueryKey.init("Film", false, 4)));
+    try std.testing.expect(!key.eql(QueryKey.init("film", false, 4)));
+    try std.testing.expect(!key.eql(QueryKey.init("Film", true, 4)));
+    try std.testing.expect(!key.eql(QueryKey.init("Film", false, 5)));
+}
+
+pub fn acceptsSnapshot(requested: QueryKey, completed: QueryKey, current_revision: u64) bool {
+    return requested.eql(completed) and current_revision == completed.revision;
+}
+test "local snapshot rejects stale worker and mid-query database commit" {
+    const old = QueryKey.init("old", false, 7);
+    const current = QueryKey.init("new", false, 7);
+    try std.testing.expect(!acceptsSnapshot(current, old, 7));
+    try std.testing.expect(!acceptsSnapshot(old, old, 8));
+    try std.testing.expect(acceptsSnapshot(current, current, 7));
+}

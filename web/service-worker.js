@@ -1,4 +1,4 @@
-const CACHE = 'opal-shell-v6';
+const CACHE = 'opal-shell-v8';
 const SHELL = [
   '/',
   '/index.html',
@@ -13,11 +13,12 @@ const SHELL = [
   '/js/integrations.js',
   '/js/access.js',
   '/js/source-management.js',
+  '/js/browse-loading.js',
   '/js/media.js',
   '/js/source-details.js',
   '/js/discovery.js',
   '/js/boot.js',
-  '/vendor/hls.min.js',
+  '/vendor/hls.min.js?v=442f599c34f1',
 ];
 
 self.addEventListener('install', event => {
@@ -56,7 +57,7 @@ self.addEventListener('fetch', event => {
     return;
   }
 
-  if (!SHELL.includes(url.pathname)) return;
+  if (!SHELL.includes(url.pathname + url.search)) return;
   event.respondWith(
     fetch(request).then(async response => {
       if (response.ok) await (await caches.open(CACHE)).put(request, response.clone());

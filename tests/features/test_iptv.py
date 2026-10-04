@@ -145,7 +145,8 @@ def test_iptv_tab():
         "rail nav entry": "renderRailTab(.Iptv" in drawer,
         "shell label": '.Iptv => "Live TV"' in shell,
         "shell icon (exists in pack)": '.Iptv => icons.tvg.lucide.@"monitor-play"' in shell,
-        "browse source picker": ".Iptv" in shell and "browseSourcePicker(compact)" in shell,
+        "grouped sidebar source": ".Iptv" in shell and "sidebarSection(" in shell
+            and "state.app.browse_source = source" in shell,
 
         # ── Pure module registered in the `zig build test` step ──
         "test registered": 'b.path("src/services/iptv_pure.zig")' in build,

@@ -241,6 +241,7 @@
   <section class="page" id="page-comics">
     <div class="search-row">
       <input id="cx-q" placeholder="Search comics & manga…" autocapitalize="off">
+      <select id="cx-source" aria-label="Comic source" hidden><option value="all">All sources</option></select>
       <button id="cx-go">Go</button>
     </div>
     <div class="hint" id="cx-hint">Loading popular comics &amp; manga…</div>
@@ -771,7 +772,7 @@
      file. Only Chrome/Firefox need it (Safari plays HLS natively), and
      openHls() feature-tests window.Hls, so removing the file degrades
      gracefully instead of breaking the page. -->
-<script src="vendor/hls.min.js"></script>
+<script src="/vendor/hls.min.js?v=442f599c34f1"></script>
 <script src="/js/core.js"></script>
 <script src="/js/now-playing.js"></script>
 <script src="/js/search.js"></script>
@@ -780,6 +781,7 @@
 <script src="/js/integrations.js"></script>
 <script src="/js/access.js"></script>
 <script src="/js/source-management.js"></script>
+<script src="/js/browse-loading.js"></script>
 <script src="/js/media.js"></script>
 <script src="/js/source-details.js"></script>
 <script src="/js/discovery.js"></script>

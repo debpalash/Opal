@@ -23,6 +23,26 @@ pub fn pulse(t_ms: f32, period_ms: f32) f32 {
     return 1 - @abs(2 * phase - 1);
 }
 
+pub const SkeletonMotion = struct { phase: f32, glow: f32, animate: bool };
+pub fn skeletonMotion(now_ms: i64, reduced: bool) SkeletonMotion {
+    if (reduced) return .{ .phase = 0.5, .glow = 0.25, .animate = false };
+    const cycle: f32 = @floatFromInt(@mod(now_ms, 1400));
+    return .{ .phase = cycle / 1400, .glow = pulse(cycle, 1400), .animate = true };
+}
+
+test "Skeleton reduced motion stays stable without requesting animation frames" {
+    const first = skeletonMotion(0, true);
+    const later = skeletonMotion(9876, true);
+    try std.testing.expectEqual(first, later);
+    try std.testing.expect(!first.animate);
+    for ([_]i64{ -1, 0, 700, 1400, 9876 }) |now| {
+        const motion = skeletonMotion(now, false);
+        try std.testing.expect(motion.animate);
+        try std.testing.expect(motion.phase >= 0 and motion.phase <= 1);
+        try std.testing.expect(motion.glow >= 0 and motion.glow <= 1);
+    }
+}
+
 /// Line-height in pixels for a font size + ratio (e.g. 1.4).
 pub fn lineHeightPx(size_px: f32, ratio: f32) f32 {
     return size_px * ratio;

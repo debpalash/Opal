@@ -404,7 +404,7 @@ function stopPageWork(){
   clearInterval(searchWatch); clearInterval(animeWatch); clearInterval(podWatch); clearInterval(jfWatch); clearInterval(ytWatch); clearInterval(aiWatch); clearInterval(muWatch); clearInterval(raWatch);
   clearInterval(podEpisodeWatch); ++podGeneration; ++podEpisodeGeneration;
   ++comicGeneration; ++comicSearchGeneration; ++radioGeneration;
-  ++musicGeneration;
+  ++musicGeneration; ++ytGeneration; ++vndbGeneration; ++dramaGeneration; ++novelGeneration;
   clearInterval(animeEpisodeWatch); clearInterval(animePlaybackWatch); ++animeEpisodeGeneration; ++animeBrowseGeneration;
   clearInterval(cxWatch); clearInterval(cxPages); clearInterval(nvWatch); clearInterval(drWatch);
   clearInterval(vnWatch); clearInterval(absWatch); clearInterval(opWatch); clearInterval(plWatch);

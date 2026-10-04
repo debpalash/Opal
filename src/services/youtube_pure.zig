@@ -342,3 +342,23 @@ test "parseSuggestions: malformed input returns 0, never garbage" {
     try std.testing.expectEqual(@as(usize, 0), parseSuggestions("[\"only-query\"]", &t.rows, &t.lens));
     try std.testing.expectEqual(@as(usize, 0), parseSuggestions("[\"q\",[]]", &t.rows, &t.lens));
 }
+
+/// Match the owner of an in-flight thumbnail before resetting or publishing.
+/// A unique request ID distinguishes a replaced same-video row in one wave.
+pub fn thumbnailOwnerMatches(row_request: u64, request: u64, row_id: []const u8, id: []const u8, row_url: []const u8, url: []const u8) bool {
+    return request != 0 and row_request == request and std.mem.eql(u8, row_id, id) and std.mem.eql(u8, row_url, url);
+}
+
+pub fn thumbnailCanPublish(current_generation: u32, generation: u32, row_request: u64, request: u64, row_id: []const u8, id: []const u8, row_url: []const u8, url: []const u8) bool {
+    return current_generation == generation and thumbnailOwnerMatches(row_request, request, row_id, id, row_url, url);
+}
+
+test "thumbnail publication requires generation request identity and exact artwork URL" {
+    const t = std.testing;
+    try t.expect(thumbnailCanPublish(7, 7, 42, 42, "video", "video", "https://image/a.jpg", "https://image/a.jpg"));
+    try t.expect(!thumbnailCanPublish(8, 7, 42, 42, "video", "video", "https://image/a.jpg", "https://image/a.jpg"));
+    try t.expect(!thumbnailCanPublish(7, 7, 43, 42, "video", "video", "https://image/a.jpg", "https://image/a.jpg"));
+    try t.expect(!thumbnailCanPublish(7, 7, 42, 42, "new-video", "video", "https://image/a.jpg", "https://image/a.jpg"));
+    try t.expect(!thumbnailCanPublish(7, 7, 42, 42, "video", "video", "https://image/b.jpg", "https://image/a.jpg"));
+    try t.expect(!thumbnailOwnerMatches(0, 0, "video", "video", "url", "url"));
+}

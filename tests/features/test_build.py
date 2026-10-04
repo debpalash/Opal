@@ -37,7 +37,7 @@ def test_windows_unit_sqlite_dependency():
 @test("Live fixtures reject an existing wildcard listener", "Build")
 def test_live_fixture_port_collision_guard():
     result = subprocess.run(
-        [sys.executable, "tests/test_setup_token_live.py", "PortCollisionGuardTest"],
+        [sys.executable, "tests/test_setup_token_live.py", "PortCollisionGuardTest", "FixtureDatabaseTest", "FixtureEnvironmentTest"],
         cwd=PROJECT_DIR, capture_output=True, text=True, timeout=10,
     )
     if result.returncode:
@@ -63,6 +63,19 @@ def test_zig_build():
         return "fail", result.stderr[:200]
     except subprocess.TimeoutExpired:
         return "fail", "Build timed out (>300s)"
+
+
+@test("Build graph excludes unused SDL3 dependencies", "Build")
+def test_dvui_backend_isolation():
+    result = subprocess.run(
+        [sys.executable, "tests/test_dvui_backend.py"], cwd=PROJECT_DIR,
+        capture_output=True, text=True, timeout=150,
+    )
+    if result.returncode:
+        return "fail", (result.stderr or result.stdout)[-1600:]
+    if "skipped=" in result.stderr:
+        return "skip", result.stderr[-400:]
+    return "pass", "real build graph succeeds offline without the SDL3 package"
 
 
 @test("Binary Exists", "Build")
@@ -187,13 +200,12 @@ def test_headless_mode():
         "pub fn headlessMain" in hl and "shutdown" in hl and "sigaction" in hl,
         "pub fn detect" in det,
         "is_headless" in st,
-        # T6 bind. The literal moved into access_pure.BindMode when the bind
-        # address became configurable; headless still defaults to LAN.
-        "bind_mode.address()" in rem and "is_headless" in rem,
+        # Headless and desktop share explicit secure deployment policy.
+        "effectiveBindMode().address()" in rem and "OPAL_HTTPS_PROXY" in rem,
         '"headless"' in bld,                                    # -Dheadless option
     ]
     if all(checks):
-        return "pass", "compile-time headless entry + coreInit/headlessMain + 0.0.0.0 bind + -Dheadless"
+        return "pass", "compile-time headless entry + coreInit/headlessMain + explicit listener policy + -Dheadless"
     return "fail", f"headless wiring incomplete: {checks}"
 
 
@@ -312,7 +324,9 @@ def test_anime_jikan_resilience():
     checks = {
         "no sfw param sent": 'return "";' in ap and "504s on the `sfw`" in ap,
         "trending falls back to unfiltered": "filtered top unavailable" in an
-            and "added == 0 and fv.len > 0" in an,
+            and "added == 0 and job.fallback_len > 0" in an
+            and "search_request.current() == my_gen" in an
+            and "jikanGet(fb, buf, my_gen)" in an,
         "anime curls bound connect time": an.count('"--connect-timeout"') >= 1,
     }
     bad = [k for k, v in checks.items() if not v]

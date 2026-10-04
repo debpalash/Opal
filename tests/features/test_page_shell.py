@@ -336,7 +336,7 @@ def test_comics_mangadex_source():
         # ── Source registered in the selector ──
         # `mangadex` is present in the Source enum (later engine variants may be
         # appended after it — assert membership, not the exact closing brace).
-        "source enum variant": ("const Source = enum {" in svc
+        "source enum variant": (bool(_re.search(r"const\s+Source\s*=\s*enum(?:\s*\([^)]*\))?\s*\{", svc))
                                 and "all, readallcomics, mangadex" in svc),
         "source chip": 'renderSourceChip("MangaDex", 3, .mangadex)' in svc,
         # ── Keyless: the endpoint is a constant, NOT a source_config lookup ──

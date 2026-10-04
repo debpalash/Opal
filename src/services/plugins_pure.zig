@@ -142,16 +142,17 @@ pub fn validResponse(allocator: std.mem.Allocator, input: []const u8, kind: Resp
 /// until the user approves the exact plugin content through the app-owned trust
 /// store. A manifest flag is never an execution capability.
 pub fn runMode(is_lua: bool, manifest_allow_unsafe: bool, user_trusted: bool) RunMode {
-    if (is_lua and !(manifest_allow_unsafe and user_trusted)) return .sandbox_lua;
-    if (!is_lua and !user_trusted) return .deny;
+    // Lua preludes are defense in depth, never an execution trust boundary.
+    if (!user_trusted) return .deny;
+    if (is_lua and !manifest_allow_unsafe) return .sandbox_lua;
     return .direct;
 }
 
-test "runMode sandboxes Lua unless user-trusted + manifest allow_unsafe" {
-    // Plain Lua → sandbox.
-    try std.testing.expectEqual(RunMode.sandbox_lua, runMode(true, false, false));
-    // allow_unsafe alone (plugin self-declared) must NOT escape the sandbox.
-    try std.testing.expectEqual(RunMode.sandbox_lua, runMode(true, true, false));
+test "runMode requires explicit approval for every executable" {
+    // Plain Lua must be approved too.
+    try std.testing.expectEqual(RunMode.deny, runMode(true, false, false));
+    // Self-declared allow_unsafe never authorizes execution.
+    try std.testing.expectEqual(RunMode.deny, runMode(true, true, false));
     // User trust alone (no manifest opt-in) still sandboxes.
     try std.testing.expectEqual(RunMode.sandbox_lua, runMode(true, false, true));
     // Both → direct (the only escape).

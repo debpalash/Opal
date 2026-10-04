@@ -33,3 +33,35 @@ def test_jellyfin_user_state():
     if missing:
         return "fail", "Jellyfin user-state parity incomplete: " + ", ".join(missing)
     return "pass", "Jellyfin resume/favorite/watched state is visible and safely mutable"
+
+
+@test("Personal-server playback workflows retain cancellation and stable library identities", "Integrations")
+def test_personal_server_workflow_guards():
+    jellyfin = _src("src/services/jellyfin.zig")
+    plex = _src("src/services/plex.zig")
+    remote = _src("src/services/remote.zig")
+    plex_api = _src("src/services/remote_plex_api.zig")
+    web = _src("web/js/media.js")
+    fixture = _src("tests/test_media_servers_live.py")
+    auth = jellyfin.split("pub fn authenticate()", 1)[1].split("// Library / Item Fetching", 1)[0]
+    publish = auth.split("// Store credentials", 1)[1]
+    assert publish.index("store_mutex.lock()") < publish.index("auth_request.isCurrent(my_gen)") < publish.index("state.app.jf.token_len = tlen")
+    assert "auth_request.finish(my_gen" in auth and ".cancel_epoch" in auth
+    disconnect = jellyfin.split("pub fn disconnect()", 1)[1].split("\n}", 1)[0]
+    assert "auth_request.cancel(" in disconnect
+    assert "pub fn fetchItemsByKey(" in plex and "request.section_key[0..request.section_key_len]" in plex
+    assert "copySections(&owned_sections)" in plex_api
+    assert "wire.queryParam(query, \"key\")" in plex_api
+    render = web.split("function renderPlex(", 1)[1].split("\nfunction ", 1)[0]
+    assert "/plex/open?key=" in render and "/plex/open?idx=" not in render
+    snapshot = remote.split("fn apiPlayerSnapshot(", 1)[1].split("fn setPlayerDouble", 1)[0]
+    assert "ap.np_title" in snapshot and "ap.loading_title" in snapshot
+    discovery = remote.split("fn writeSubtitleDiscovery(", 1)[1].split("\n}", 1)[0]
+    assert 'w.writeAll("\\\"}}")' in discovery and 'w.writeAll("\\\"}}}")' not in discovery
+    for case in ("test_jellyfin_disconnect_cancels_inflight_login_publication",
+                 "test_jellyfin_login_library_play_resume_tracks_expiry_reconnect",
+                 "test_plex_restore_library_play_resume_tracks_expiry",
+                 "test_plex_stable_section_identity_survives_reordered_libraries"):
+        assert case in fixture
+    assert "live.IsolatedOpal" in fixture and "anullsrc" in fixture and "await_new_stream" in fixture
+    return "pass", "Owned generated-media fixtures cover cancel, stable libraries, resume, subtitles, progress and reconnect"

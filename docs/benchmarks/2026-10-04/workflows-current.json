@@ -1,0 +1,67 @@
+{
+  "platform": "macOS-26.4.1-arm64-arm-64bit",
+  "binary": "Debug headless; performance workflows change",
+  "method": {
+    "media": "generated 16s color bars/silent audio; 32x32 synthetic lossless WebP",
+    "network": "loopback fixtures; external HTTPS rejected by owned proxy",
+    "poll_interval_ms": 5,
+    "startup_poll_interval_ms": 100,
+    "cold_start": "fresh profile, OS cache retained",
+    "playback": "duration validated and position advancing; not first visible frame",
+    "artwork": "encoded bytes through actual Opal proxy/cache; native GPU is measured separately"
+  },
+  "timings": {
+    "fresh_profile_health": {
+      "samples": 5,
+      "p50_ms": 214.2,
+      "p95_ms": 216.181
+    },
+    "existing_profile_health": {
+      "samples": 5,
+      "p50_ms": 114.402,
+      "p95_ms": 224.358
+    },
+    "first_owned_search_result": {
+      "samples": 20,
+      "p50_ms": 48.826,
+      "p95_ms": 66.77
+    },
+    "open_to_advancing_playback": {
+      "samples": 20,
+      "p50_ms": 220.056,
+      "p95_ms": 226.97
+    },
+    "first_cover_proxy_bytes": {
+      "samples": 20,
+      "p50_ms": 8.307,
+      "p95_ms": 8.511
+    },
+    "repeat_cover_proxy_bytes": {
+      "samples": 20,
+      "p50_ms": 0.459,
+      "p95_ms": 0.605
+    },
+    "paused_seek_acknowledgment": {
+      "samples": 20,
+      "p50_ms": 104.862,
+      "p95_ms": 112.797
+    }
+  },
+  "resident_memory_kib": {
+    "ready": {
+      "samples": 5,
+      "median": 53776,
+      "max": 54048
+    },
+    "after_search": {
+      "samples": 1,
+      "median": 76992,
+      "max": 76992
+    },
+    "after_media": {
+      "samples": 1,
+      "median": 111104,
+      "max": 111104
+    }
+  }
+}

@@ -1147,3 +1147,21 @@ test "comic catalog JSON accommodates all 120 maximally escaped rows" {
     try std.testing.expectEqualStrings(&rows[119].url, last.get("url").?.string);
     try std.testing.expectEqualStrings(&rows[119].cover, last.get("cover").?.string);
 }
+
+/// A valid small comic image need not exceed an arbitrary 100-byte threshold.
+/// The bounded downstream decoder validates complete format/dimensions before GPU allocation.
+pub fn acceptsPageBody(bytes: []const u8) bool {
+    if (bytes.len >= 33 and std.mem.eql(u8, bytes[0..8], "\x89PNG\r\n\x1a\n")) return true;
+    if (bytes.len >= 4 and bytes[0] == 0xff and bytes[1] == 0xd8 and bytes[2] == 0xff) return true;
+    if (bytes.len >= 13 and (std.mem.eql(u8, bytes[0..6], "GIF87a") or std.mem.eql(u8, bytes[0..6], "GIF89a"))) return true;
+    if (bytes.len >= 20 and std.mem.eql(u8, bytes[0..4], "RIFF") and std.mem.eql(u8, bytes[8..12], "WEBP")) return true;
+    if (bytes.len >= 16 and std.mem.eql(u8, bytes[4..8], "ftyp") and (std.mem.eql(u8, bytes[8..12], "avif") or std.mem.eql(u8, bytes[8..12], "avis"))) return true;
+    return bytes.len >= 26 and std.mem.startsWith(u8, bytes, "BM");
+}
+test "comic download accepts a valid PNG smaller than100bytes and rejects HTML or short signatures" {
+    const image = "\x89PNG\r\n\x1a\n" ++ "\x00" ** 40;
+    try std.testing.expect(image.len < 100);
+    try std.testing.expect(acceptsPageBody(image));
+    try std.testing.expect(!acceptsPageBody("<html>error</html>"));
+    try std.testing.expect(!acceptsPageBody("\x89PNG\r\n\x1a\n"));
+}

@@ -229,12 +229,36 @@ fn decodeEscapes(src: []const u8, dst: []u8) usize {
             continue;
         }
         switch (src[i + 1]) {
-            '"' => { dst[out] = '"'; out += 1; i += 2; },
-            '\\' => { dst[out] = '\\'; out += 1; i += 2; },
-            '/' => { dst[out] = '/'; out += 1; i += 2; },
-            'n' => { dst[out] = '\n'; out += 1; i += 2; },
-            'r' => { dst[out] = '\r'; out += 1; i += 2; },
-            't' => { dst[out] = '\t'; out += 1; i += 2; },
+            '"' => {
+                dst[out] = '"';
+                out += 1;
+                i += 2;
+            },
+            '\\' => {
+                dst[out] = '\\';
+                out += 1;
+                i += 2;
+            },
+            '/' => {
+                dst[out] = '/';
+                out += 1;
+                i += 2;
+            },
+            'n' => {
+                dst[out] = '\n';
+                out += 1;
+                i += 2;
+            },
+            'r' => {
+                dst[out] = '\r';
+                out += 1;
+                i += 2;
+            },
+            't' => {
+                dst[out] = '\t';
+                out += 1;
+                i += 2;
+            },
             'u' => {
                 if (i + 6 <= src.len) {
                     if (std.fmt.parseInt(u21, src[i + 2 .. i + 6], 16)) |cp| {
@@ -245,10 +269,22 @@ fn decodeEscapes(src: []const u8, dst: []u8) usize {
                             out += n;
                         }
                         i += 6;
-                    } else |_| { dst[out] = '\\'; out += 1; i += 1; }
-                } else { dst[out] = '\\'; out += 1; i += 1; }
+                    } else |_| {
+                        dst[out] = '\\';
+                        out += 1;
+                        i += 1;
+                    }
+                } else {
+                    dst[out] = '\\';
+                    out += 1;
+                    i += 1;
+                }
             },
-            else => { dst[out] = '\\'; out += 1; i += 1; },
+            else => {
+                dst[out] = '\\';
+                out += 1;
+                i += 1;
+            },
         }
     }
     return out;
@@ -333,4 +369,20 @@ test "decodeEscapes handles quotes, slashes, unicode" {
     var dst: [64]u8 = undefined;
     const n = decodeEscapes("a\\/b\\\"c\\u00e9", &dst);
     try std.testing.expectEqualStrings("a/b\"cé", dst[0..n]);
+}
+
+/// Error pages must not replace a useful catalog with a fabricated empty page.
+pub fn catalogDocumentUsable(json: []const u8) bool {
+    var parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, json, .{}) catch return false;
+    defer parsed.deinit();
+    if (parsed.value != .object) return false;
+    const results = parsed.value.object.get("results") orelse return false;
+    return results == .array;
+}
+test "catalog document distinguishes a valid empty page from refresh failures" {
+    try std.testing.expect(catalogDocumentUsable("{\"results\":[]}"));
+    try std.testing.expect(!catalogDocumentUsable(""));
+    try std.testing.expect(!catalogDocumentUsable("{\"success\":false,\"status_message\":\"invalid key\"}"));
+    try std.testing.expect(!catalogDocumentUsable("<html>unavailable</html>"));
+    try std.testing.expect(!catalogDocumentUsable("{\"results\":{}}"));
 }

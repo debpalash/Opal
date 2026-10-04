@@ -743,3 +743,19 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;heigh
 #page-music .search-row>input{min-width:0;flex:1 1 0}
 #page-music .search-row>select{flex:none;max-width:120px}
 #mu-go{flex:none;min-width:40px;min-height:40px;padding:6px 10px;border:1px solid var(--border);border-radius:var(--rad-sm);background:var(--bg-elevated)}
+
+/* Match catalog geometry while metadata arrives; no empty-to-card layout jump. */
+.browse-loading-status { position: absolute; width: 1px; height: 1px; overflow: hidden; }
+.browse-skeleton { pointer-events: none; overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius, 10px); background: var(--bg-elevated); }
+.browse-skeleton-art, .browse-skeleton-copy i { position: relative; overflow: hidden; background: var(--border); }
+.browse-skeleton-art::after, .browse-skeleton-copy i::after { content: ''; position: absolute; inset: 0; background: linear-gradient(100deg, transparent 20%, var(--bg-elevated) 50%, transparent 80%); transform: translateX(-100%); animation: browse-shimmer 1.4s ease-in-out infinite; }
+.browse-skeleton-poster .browse-skeleton-art { aspect-ratio: 2 / 3; }
+.browse-skeleton-copy { padding: 12px; display: flex; flex-direction: column; gap: 9px; }
+.browse-skeleton-copy i { display: block; height: 10px; width: 82%; border-radius: 4px; }
+.browse-skeleton-copy i + i { width: 54%; height: 8px; }
+.browse-skeleton-row, .browse-skeleton-square, .browse-skeleton-video { display: flex; gap: 8px; min-height: 82px; margin-bottom: 8px; padding: 10px; }
+.browse-skeleton-row .browse-skeleton-art, .browse-skeleton-square .browse-skeleton-art { width: 64px; height: 64px; border-radius: 6px; flex: none; }
+.browse-skeleton-video .browse-skeleton-art { width: 144px; aspect-ratio: 16 / 9; border-radius: 6px; flex: none; }
+.browse-skeleton-row .browse-skeleton-copy, .browse-skeleton-square .browse-skeleton-copy, .browse-skeleton-video .browse-skeleton-copy { flex: 1; justify-content: center; }
+@keyframes browse-shimmer { to { transform: translateX(100%); } }
+@media (prefers-reduced-motion: reduce) { .browse-skeleton-art::after, .browse-skeleton-copy i::after { animation: none; transform: none; opacity: .25; } }

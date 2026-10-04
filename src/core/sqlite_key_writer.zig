@@ -1,6 +1,8 @@
 //! One reusable statement per settings batch; ownership ends with the batch.
 const std = @import("std");
-pub const c = @cImport({ @cInclude("sqlite3.h"); });
+pub const c = @cImport({
+    @cInclude("sqlite3.h");
+});
 
 pub const Writer = struct {
     stmt: ?*c.sqlite3_stmt = null,
@@ -46,7 +48,9 @@ test "settings batch finalizes its only statement before database close" {
     writer.deinit();
     const remaining = c.sqlite3_next_stmt(connection, null);
     // Clean up the red fixture too, so the feedback loop never leaks.
-    defer if (remaining != null) { _ = c.sqlite3_finalize(remaining); };
+    defer if (remaining != null) {
+        _ = c.sqlite3_finalize(remaining);
+    };
     try std.testing.expect(remaining == null);
     writer.deinit();
     try std.testing.expect(!writer.put("closed", "ignored"));
@@ -68,4 +72,8 @@ test "independent settings batches do not retain connection pointers" {
         }
         try std.testing.expectEqual(c.SQLITE_OK, result);
     }
+}
+
+test {
+    _ = @import("sqlite_transaction.zig");
 }

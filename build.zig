@@ -72,6 +72,9 @@ pub fn build(b: *std.Build) void {
     const dvui_dep = b.dependency("dvui", .{
         .target = target,
         .optimize = optimize,
+        // Opal uses SDL2. The default builds every backend and fetches unused
+        // SDL3/Codeberg packages even for headless and system-SDL2 builds.
+        .backend = .sdl2,
     });
 
     // Homebrew prefix for macOS lib/include paths. Apple Silicon installs to
@@ -93,6 +96,9 @@ pub fn build(b: *std.Build) void {
     const is_windows = target.result.os.tag == .windows;
 
     if (target.result.os.tag == .macos) {
+        // Cancellable native DNS is shared by desktop and headless clients.
+        exe.root_module.linkFramework("CoreFoundation", .{});
+        exe.root_module.linkFramework("CFNetwork", .{});
         exe.root_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/lib", .{brew_prefix}) });
         exe.root_module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{brew_prefix}) });
         // Native Now Playing card + hardware media keys (MPNowPlayingInfoCenter
@@ -217,6 +223,10 @@ pub fn build(b: *std.Build) void {
     const run_gallery_tests = b.addRunArtifact(gallery_tests);
     if (is_windows) run_gallery_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     b.step("test-search-gallery", "Render the native search gallery in an isolated hidden SDL window").dependOn(&run_gallery_tests.step);
+    const performance_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native Search performance"} });
+    const run_performance_tests = b.addRunArtifact(performance_tests);
+    if (is_windows) run_performance_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
+    b.step("test-search-performance", "Measure warmed native gallery scroll frames with owned maximum results").dependOn(&run_performance_tests.step);
     const image_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native WebP shared decoder and GPU upload"} });
     const run_image_tests = b.addRunArtifact(image_tests);
     if (is_windows) run_image_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
@@ -237,15 +247,66 @@ pub fn build(b: *std.Build) void {
     const run_activity_tests = b.addRunArtifact(activity_tests);
     if (is_windows) run_activity_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     b.step("test-native-activity", "Capture native queue and transfers with isolated offline fixtures").dependOn(&run_activity_tests.step);
+    const episode_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native TV episodes"} });
+    const run_episode_tests = b.addRunArtifact(episode_tests);
+    if (is_windows) run_episode_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
+    b.step("test-native-episodes", "Verify native episode cards and responsive playback controls").dependOn(&run_episode_tests.step);
+    const native_suite = b.addTest(.{ .root_module = exe.root_module, .filters = &.{
+        "Native Search", "Native WebP", "Native media offline", "Native shell offline", "Native global modals", "Native activity offline", "Native Browse", "Browse fanout", "Native torrent handoff", "Native TV episodes",
+    } });
+    const run_native_suite = b.addRunArtifact(native_suite);
+    if (is_windows) run_native_suite.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
+    b.step("test-native-ui", "Verify all native desktop fixtures with one compilation").dependOn(&run_native_suite.step);
+    const torrent_handoff_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native torrent handoff"} });
+    const run_torrent_handoff_tests = b.addRunArtifact(torrent_handoff_tests);
+    if (is_windows) run_torrent_handoff_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
+    b.step("test-native-torrent-handoff", "Verify worker playback metadata does not destroy UI-owned textures").dependOn(&run_torrent_handoff_tests.step);
+    const native_http_tests = b.addTest(.{ .filters = &.{"Native HTTP"}, .root_module = b.createModule(.{
+        .root_source_file = b.path("src/core/http_connection_native_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    if (target.result.os.tag == .macos) {
+        native_http_tests.root_module.linkFramework("CoreFoundation", .{});
+        native_http_tests.root_module.linkFramework("CFNetwork", .{});
+    } else if (is_windows) native_http_tests.root_module.linkSystemLibrary("ws2_32", .{});
+    const run_native_http_tests = b.addRunArtifact(native_http_tests);
+    b.step("test-native-http", "Verify native TLS, DNS, body deadlines and cancellation").dependOn(&run_native_http_tests.step);
+    const download_native_tests = b.addTest(.{ .filters = &.{"Native download"}, .root_module = b.createModule(.{
+        .root_source_file = b.path("src/download_engine_native_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    if (target.result.os.tag == .macos) {
+        download_native_tests.root_module.linkFramework("CoreFoundation", .{});
+        download_native_tests.root_module.linkFramework("CFNetwork", .{});
+    } else if (is_windows) download_native_tests.root_module.linkSystemLibrary("ws2_32", .{});
+    const run_download_native_tests = b.addRunArtifact(download_native_tests);
+    b.step("test-native-downloads", "Verify streaming download cancellation and ownership on loopback").dependOn(&run_download_native_tests.step);
+    const browse_fanout_tests = b.addTest(.{ .filters = &.{"Browse fanout"}, .root_module = b.createModule(.{
+        .root_source_file = b.path("src/browse_fanout_native_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    const run_browse_fanout_tests = b.addRunArtifact(browse_fanout_tests);
+    b.step("test-browse-fanout", "Verify bounded parallel Browse provider work and stale publication").dependOn(&run_browse_fanout_tests.step);
     // Fixture rendering may synchronously inspect plugin/profile directories.
     // Isolate the child process even when callers run these targets directly.
     const native_profile_root = b.cache_root.join(b.allocator, &.{"native-fixture-profiles"}) catch @panic("native fixture profile path");
     const native_capture_runs = [_]struct { run: *std.Build.Step.Run, name: []const u8 }{
+        .{ .run = run_episode_tests, .name = "episodes" },
         .{ .run = run_gallery_tests, .name = "gallery" },
+        .{ .run = run_performance_tests, .name = "performance" },
         .{ .run = run_media_tests, .name = "media" },
         .{ .run = run_shell_tests, .name = "shell" },
         .{ .run = run_modal_tests, .name = "modals" },
         .{ .run = run_activity_tests, .name = "activity" },
+        .{ .run = run_image_tests, .name = "images" },
+        .{ .run = run_native_suite, .name = "suite" },
+        .{ .run = run_torrent_handoff_tests, .name = "torrent-handoff" },
     };
     for (native_capture_runs) |fixture| {
         const profile = std.fs.path.resolve(b.allocator, &.{ b.build_root.path orelse ".", native_profile_root, fixture.name }) catch @panic("native fixture profile path");
@@ -952,7 +1013,7 @@ pub fn build(b: *std.Build) void {
     // rotating fact cards, which card is showing, and the meta line.
     const test_loading_pure = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/ui/loading_pure.zig"),
+            .root_source_file = b.path("src/core/loading_pure.zig"),
             .target = target,
             .optimize = optimize,
         }),
@@ -1295,7 +1356,7 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_comics_pure).step);
 
-    inline for (.{ "expanded_reading_pure", "reading_provider_pure", "music_audius_pure", "audio_sources_pure", "source_request_pure", "anime_hianime_pure", "comicfury_pure" }) |module| {
+    inline for (.{ "expanded_reading_pure", "reading_provider_pure", "music_audius_pure", "audio_sources_pure", "source_request_pure", "anime_hianime_pure", "comicfury_pure", "webcomic_sources_pure" }) |module| {
         const source_test = b.addTest(.{ .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/" ++ module ++ ".zig"),
             .target = target,
@@ -1764,6 +1825,12 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_browse_layout).step);
+    const test_shell_layout = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/ui/shell_layout_pure.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    test_step.dependOn(&b.addRunArtifact(test_shell_layout).step);
     const test_episode_art = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/episode_art_pure.zig"),

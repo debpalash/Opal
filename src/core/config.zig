@@ -7,6 +7,7 @@ const watch_history_pure = @import("../player/watch_history_pure.zig");
 const secret_store = @import("secret_store.zig");
 const key_writer = @import("sqlite_key_writer.zig");
 threadlocal var key_batch: ?key_writer.Writer = null;
+threadlocal var write_failed = false;
 var restore_opds_connected = false;
 
 var legacy_secrets_mask: u16 = 0;
@@ -32,14 +33,27 @@ pub fn ensureDir() void {
 }
 
 pub fn save() void {
-    const d = db.get() orelse return;
-    key_batch = key_writer.Writer.init(@ptrCast(d));
+    saveChecked() catch |err| {
+        state.app.config_dirty = true;
+        std.log.err("settings save failed: {s}", .{@errorName(err)});
+    };
+}
+
+fn saveChecked() !void {
+    // Feature lock precedes the connection lock; workers can persist while
+    // holding their feature lock. Never invert that order during a save.
+    var opds_connection = @import("../services/opds.zig").connectionSnapshot();
+    defer @memset(std.mem.asBytes(&opds_connection), 0);
+    const d = db.get() orelse return error.DatabaseUnavailable;
+    var transaction = try db.beginTransaction();
+    defer transaction.deinit();
+    write_failed = false;
+    key_batch = key_writer.Writer.init(@ptrCast(d)) orelse return error.PrepareFailed;
     defer {
         if (key_batch) |*batch| batch.deinit();
         key_batch = null;
     }
 
-    db.exec("BEGIN");
     var fb: [64]u8 = undefined;
 
     // Accrue in-app usage time since the last save into the lifetime counter.
@@ -147,8 +161,7 @@ pub fn save() void {
     // credentials use the protected local envelope. The user/pass buffers are
     // null-terminated by the text-entry widget.
     {
-        var connection = @import("../services/opds.zig").connectionSnapshot();
-        defer @memset(std.mem.asBytes(&connection), 0);
+        const connection = opds_connection;
         setKey("opds_url", connection.server[0..connection.server_len]);
         setSecretKey("opds_user", connection.user[0..connection.user_len]);
         setSecretKey("opds_pass", connection.pass[0..connection.pass_len]);
@@ -198,7 +211,8 @@ pub fn save() void {
 
     saveSessionUrls();
 
-    db.exec("COMMIT");
+    if (write_failed) return error.SettingsWriteFailed;
+    try transaction.commit();
 }
 
 /// Add the seconds elapsed since the last accrual to the lifetime usage
@@ -221,7 +235,10 @@ fn saveSessionUrls() void {
     if (!state.app.session_close_captured and state.app.session_saved and
         (!state.app.resume_prompt_checked or state.app.resume_prompt_active)) return;
     if (state.app.session_close_captured) {
-        db.exec("DELETE FROM config WHERE key LIKE 'session_url_%'");
+        db.execChecked("DELETE FROM config WHERE key LIKE 'session_url_%'") catch {
+            write_failed = true;
+            return;
+        };
         setKey("session_saved", if (state.app.incognito_mode) "0" else "1");
         if (state.app.incognito_mode) return;
         var buf: [64]u8 = undefined;
@@ -248,9 +265,12 @@ fn saveSessionUrls() void {
     }
     {
         const del_sql = "DELETE FROM config WHERE key LIKE 'session_url_%'";
-        const del_stmt = db.prepare(del_sql) orelse return;
+        const del_stmt = db.prepare(del_sql) orelse {
+            write_failed = true;
+            return;
+        };
         defer db.finalize(del_stmt);
-        _ = db.step(del_stmt);
+        if (db.step(del_stmt) != db.c.SQLITE_DONE) write_failed = true;
     }
     if (!state.app.session_saved) setKey("session_saved", "0");
     if (state.app.incognito_mode) return;
@@ -336,7 +356,11 @@ pub fn saveIfDirty() void {
     if (!state.app.config_loaded.load(.acquire) or db.get() == null) return;
     const now = @import("io_global.zig").timestamp();
     if (now - state.app.last_config_save < 2) return; // debounce
-    save();
+    saveChecked() catch |err| {
+        state.app.last_config_save = now;
+        std.log.err("settings save failed; retrying: {s}", .{@errorName(err)});
+        return;
+    };
     state.app.config_dirty = false;
     state.app.last_config_save = now;
 }
@@ -438,13 +462,19 @@ pub fn load() void {
 // writes prepare a short-lived statement, including during startup migration.
 fn setKey(key: []const u8, val: []const u8) void {
     if (key_batch) |*batch| {
-        _ = batch.put(key, val);
+        if (!batch.put(key, val)) write_failed = true;
         return;
     }
-    const connection = db.get() orelse return;
-    var writer = key_writer.Writer.init(@ptrCast(connection)) orelse return;
+    const connection = db.get() orelse {
+        write_failed = true;
+        return;
+    };
+    var writer = key_writer.Writer.init(@ptrCast(connection)) orelse {
+        write_failed = true;
+        return;
+    };
     defer writer.deinit();
-    _ = writer.put(key, val);
+    if (!writer.put(key, val)) write_failed = true;
 }
 
 fn setSecretKey(key: []const u8, val: []const u8) void {
@@ -455,6 +485,7 @@ fn setSecretKey(key: []const u8, val: []const u8) void {
     var protected: [1024]u8 = undefined;
     defer @memset(&protected, 0);
     const sealed = secret_store.seal(val, &protected) orelse {
+        write_failed = true;
         std.log.warn("could not protect config credential '{s}'; keeping previous value", .{key});
         return;
     };
@@ -478,7 +509,9 @@ fn migrateLoadedSecrets() void {
     // REPLACE deletes the old SQLite cell; secure_delete zeroes that payload,
     // and truncating the WAL prevents a plaintext copy surviving migration.
     db.exec("PRAGMA secure_delete=ON");
-    db.exec("BEGIN");
+    var transaction = db.beginTransaction() catch return;
+    defer transaction.deinit();
+    write_failed = false;
     if (mask & secretBit("proxy_url") != 0) setSecretKey("proxy_url", state.app.proxy_url[0..state.app.proxy_url_len]);
     if (mask & secretBit("tmdb_api_key") != 0) setSecretKey("tmdb_api_key", if (state.app.tmdb.api_key_is_default) "" else state.app.tmdb.api_key[0..state.app.tmdb.api_key_len]);
     if (mask & secretBit("opensub_api_key") != 0) setSecretKey("opensub_api_key", state.app.opensub_api_key[0..state.app.opensub_api_key_len]);
@@ -490,7 +523,8 @@ fn migrateLoadedSecrets() void {
     const pass_len = std.mem.indexOfScalar(u8, &state.app.opds.pass_buf, 0) orelse state.app.opds.pass_buf.len;
     if (mask & secretBit("opds_user") != 0) setSecretKey("opds_user", state.app.opds.user_buf[0..user_len]);
     if (mask & secretBit("opds_pass") != 0) setSecretKey("opds_pass", state.app.opds.pass_buf[0..pass_len]);
-    db.exec("COMMIT");
+    if (write_failed) return;
+    transaction.commit() catch return;
     db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
     legacy_secrets_mask = 0;
 }
@@ -884,7 +918,9 @@ pub fn migrateFromTsv() void {
     const bytes_read = file.readPositionalAll(io, &buf, 0) catch return;
     if (bytes_read == 0) return;
 
-    db.exec("BEGIN");
+    var transaction = db.beginTransaction() catch return;
+    defer transaction.deinit();
+    write_failed = false;
 
     var lines = std.mem.splitScalar(u8, buf[0..bytes_read], '\n');
     while (lines.next()) |line| {
@@ -896,7 +932,8 @@ pub fn migrateFromTsv() void {
         }
     }
 
-    db.exec("COMMIT");
+    if (write_failed) return;
+    transaction.commit() catch return;
 
     // Rename old file
     var new_buf: [512]u8 = undefined;

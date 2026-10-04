@@ -923,7 +923,7 @@ pub fn renderGrid() !void {
                     // appear at a given cell size, how text is truncated, and how
                     // the numbers are formatted all come from loading_pure.
                     const text_mod = @import("../core/text.zig");
-                    const lpure = @import("loading_pure.zig");
+                    const lpure = @import("../core/loading_pure.zig");
                     // Bar geometry (fillBar / fillSegment) is shared with the
                     // control bar rather than re-derived here — one tested copy.
                     const fpure = @import("footer_pure.zig");

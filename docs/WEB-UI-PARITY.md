@@ -128,7 +128,8 @@ commands, non-finite numbers, out-of-range values, and unknown actions.
       bounded refresh, version update, install/remove, and integration config
 - [x] Source health, permission review, diagnostics, and executable-plugin
       lifecycle in the web client. Native/unsafe execution is blocked until an
-      explicit, plugin-ID-and-content-addressed approval; updates revoke trust.
+      explicit, plugin-ID-and-content-addressed host approval; updates revoke trust.
+      Browser accounts can inspect execution status but cannot grant approval.
 - [x] Trakt/AniList/SIMKL authorization, sync state, conflicts, and retry queue
       (write-only encrypted credentials, reconnect-required state, latest-state
       coalescing, durable backoff queues, explicit retry/disconnect controls)

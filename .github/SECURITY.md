@@ -26,8 +26,6 @@ Report privately through either channel:
   **Security → Report a vulnerability** tab
   (<https://github.com/debpalash/Opal/security/advisories/new>). This keeps the
   discussion private until a fix is available.
-- **Email:** `security@example.com` *(placeholder — replace with the project's
-  real security contact)*.
 
 When reporting, please include where practical:
 
@@ -55,10 +53,15 @@ scope and worth focusing on:
 
 ### Local remote JSON API (`:41595`)
 
-- The JSON remote-control API is intended to bind to **loopback
-  (`127.0.0.1:41595`)** by default and is protected by **bearer-token auth**
-  (constant-time comparison) plus **Host-header / loopback validation** to
-  mitigate DNS-rebinding and cross-origin abuse.
+- Web Remote is off until enabled and defaults to loopback
+  (`127.0.0.1:41595`). Explicitly saved LAN settings remain supported.
+- API requests require an owner-only machine token or an authenticated session.
+  First-admin registration requires the owner-only setup credential and strict
+  Host/Origin validation. General routes do not rely on a DNS-rebinding Host gate.
+- Browser sessions cannot authorize executable plugins. Host administration is
+  capability-gated; ordinary accounts retain browsing and playback access.
+- Use [HTTPS deployment](../docs/secure-remote.md) for network clients. Plain LAN
+  HTTP exposes passwords and cookies to anyone able to intercept that traffic.
 - Token-bypass, auth weaknesses, Host-header check bypass, request smuggling,
   path traversal, SSRF, or local privilege issues against this API are in scope.
 
@@ -72,7 +75,7 @@ scope and worth focusing on:
 
 ### Also in scope
 
-- The companion web UI (`:3000`) and local AI/voice servers
+- The companion web UI (served on the same `:41595` listener) and local AI/voice servers
   (llama-server, embeddings, lang server, voice backend, stream proxy).
 - The `read_webpage` AI tool and other URL-fetching paths (SSRF).
 - Memory-safety / parsing bugs in scrapers, the torrent wrapper, OCR, or media
@@ -80,10 +83,11 @@ scope and worth focusing on:
 
 ### Out of scope
 
-- The **third-party plugin system**: plugins are user-installed and can run
-  arbitrary native binaries **without sandboxing** by design. Compromise via a
-  plugin the user chose to install is expected behavior, not a vulnerability in
-  Opal itself. (Per-spawn OS sandboxing and consent prompts are known TODOs.)
+- A plugin whose exact contents the host owner explicitly approved can run
+  native code with that user's authority. Every executable, including Lua,
+  requires approval. Restricted Lua is defense in depth, not OS isolation.
+  Approval bypasses and unintended execution remain in scope; malicious behavior
+  within deliberately granted native execution authority is not isolation failure.
 - Risks inherent to **BitTorrent** participation (joining the public DHT/swarm
   exposes the user's IP) and to user-supplied content sources.
 - The always-on launch update check and one-time `yt-dlp` download (documented;

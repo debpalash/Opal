@@ -58,6 +58,7 @@ fn plainFetch(
     hdr_len: *usize,
     status: *u16,
     succeeded: *bool,
+    cancel_epoch: ?@import("../core/bounded_process.zig").CancelEpoch,
 ) ?[]const u8 {
     hdr_len.* = 0;
     status.* = 0;
@@ -68,6 +69,7 @@ fn plainFetch(
         .headers = if (post_body != null) &form_headers else &.{},
         .post_body = post_body,
         .timeout_secs = 20,
+        .cancel_epoch = cancel_epoch,
     });
     hdr_len.* = result.headers.len;
     status.* = result.status;
@@ -81,7 +83,7 @@ fn plainFetch(
 /// Returns the (possibly browser-unblocked) body, or null if nothing could be
 /// fetched. SYNCHRONOUS — worker-thread only.
 pub fn scrapeFetch(url: []const u8, out_buf: []u8) ?[]const u8 {
-    return scrapeFetchBody(url, null, out_buf);
+    return scrapeFetchBody(url, null, out_buf, null);
 }
 
 /// POST variant. `post_body` is sent as `application/x-www-form-urlencoded` on
@@ -90,18 +92,32 @@ pub fn scrapeFetch(url: []const u8, out_buf: []u8) ?[]const u8 {
 /// which is what gates its magnet links) is reachable through the unblock path
 /// rather than only over GET.
 pub fn scrapeFetchPost(url: []const u8, post_body: []const u8, out_buf: []u8) ?[]const u8 {
-    return scrapeFetchBody(url, post_body, out_buf);
+    return scrapeFetchBody(url, post_body, out_buf, null);
 }
 
-fn scrapeFetchBody(url: []const u8, post_body: ?[]const u8, out_buf: []u8) ?[]const u8 {
+/// Compatibility-preserving Browse worker cancellation. The supervised plain
+/// request is cancelled physically. An already-issued browser scrape must drain
+/// its shared response before another scrape can safely acquire the single page.
+pub fn scrapeFetchWithCancellation(url: []const u8, out_buf: []u8, epoch: ?@import("../core/bounded_process.zig").CancelEpoch) ?[]const u8 {
+    return scrapeFetchBody(url, null, out_buf, epoch);
+}
+fn cancelled(epoch: ?@import("../core/bounded_process.zig").CancelEpoch) bool {
+    const token = epoch orelse return false;
+    return switch (token) {
+        .epoch32 => |e| e.value.load(.acquire) != e.expected,
+        .epoch64 => |e| e.value.load(.acquire) != e.expected,
+    };
+}
+fn scrapeFetchBody(url: []const u8, post_body: ?[]const u8, out_buf: []u8, cancel_epoch: ?@import("../core/bounded_process.zig").CancelEpoch) ?[]const u8 {
     announceReady();
-    if (url.len == 0 or out_buf.len == 0) return null;
+    if (url.len == 0 or out_buf.len == 0 or cancelled(cancel_epoch)) return null;
 
     var hdr_buf: [16 * 1024]u8 = undefined;
     var hdr_len: usize = 0;
     var status: u16 = 0;
     var plain_succeeded = false;
-    const body = plainFetch(url, post_body, out_buf, &hdr_buf, &hdr_len, &status, &plain_succeeded);
+    const body = plainFetch(url, post_body, out_buf, &hdr_buf, &hdr_len, &status, &plain_succeeded, cancel_epoch);
+    if (cancelled(cancel_epoch)) return null;
 
     const body_head = if (body) |b| b[0..@min(b.len, 16 * 1024)] else "";
     const headers = hdr_buf[0..hdr_len];
@@ -114,16 +130,15 @@ fn scrapeFetchBody(url: []const u8, post_body: ?[]const u8, out_buf: []u8) ?[]co
     }
 
     // Blocked. Fall back to the anti-detect browser if it is available.
+    if (cancelled(cancel_epoch)) return null;
     if (!browserFallbackAvailable()) {
         logs.pushLog("warn", "scrape", "Blocked page and browser fallback is off/unavailable", false);
         return null;
     }
 
     logs.pushLog("info", "scrape", "Blocked — retrying through the anti-detect browser", true);
-    const unblocked = if (post_body) |b|
-        browser.fetchHtmlPostBlocking(url, b, out_buf)
-    else
-        browser.fetchHtmlBlocking(url, out_buf);
+    const unblocked = browser.fetchHtmlWithCancellation(url, post_body, out_buf, cancel_epoch);
+    if (cancelled(cancel_epoch)) return null;
     if (unblocked) |html| return html;
 
     // Browser path failed/timed out. Never hand the original challenge/error

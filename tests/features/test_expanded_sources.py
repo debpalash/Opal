@@ -3,7 +3,7 @@ import subprocess
 import sys
 import json
 from pathlib import Path
-from .harness import PROJECT_DIR, test
+from .harness import PROJECT_DIR, test, _remote_api
 PROJECT_DIR = Path(PROJECT_DIR)
 
 
@@ -63,7 +63,8 @@ def test_public_audio_browse_contract():
     music = (PROJECT_DIR / 'src/services/music_subsonic.zig').read_text()
     radio = (PROJECT_DIR / 'src/services/radio.zig').read_text()
     assert 'pure.publicAudioSong(row)' in music
-    assert 'defer appendSoma(my_gen' in radio
+    assert 'browse_fanout.zig").run' in radio and '.limit = 2' in radio
+    assert 'appendSoma(group)' in radio and 'pure.appendUnique(&state.app.radio.results' in radio
     headless = (PROJECT_DIR / 'src/headless.zig').read_text()
     for pump in ('queue.zig").drainUi()', 'resolver.zig").drainRemoteAction()', 'browser.zig").drainDeferredPlayback()'):
         assert pump in headless, 'headless must execute accepted actions: ' + pump
@@ -120,3 +121,42 @@ def test_webp_dependency_probe():
     if result.returncode:
         return 'fail', (result.stderr or result.stdout)[-1200:]
     return 'pass', 'Installed/missing decoder development files are detected by the production script'
+
+
+@test("Verified public webcomics install, search and open full main panels", "Sources")
+def test_verified_webcomic_sources():
+    entries = json.loads((PROJECT_DIR / 'data/plugins-manifest.json').read_text())['plugins']
+    ids = [row['id'] for row in entries]
+    assert len(ids) == len(set(ids)) == 90
+    rows = {row['id']: row for row in entries}
+    for provider in ('xkcd', 'smbc'):
+        assert rows[provider]['type'] == 'comics'
+        assert rows[provider]['endpoints']['base'].startswith('https://')
+    resolver = (PROJECT_DIR / 'src/services/resolver.zig').read_text()
+    adapter = (PROJECT_DIR / 'src/services/webcomic_sources.zig').read_text()
+    reader = (PROJECT_DIR / 'src/services/comics.zig').read_text()
+    browser = (PROJECT_DIR / 'src/services/browser.zig').read_text()
+    assert 'resolveInstalledWebcomics(q[0..qlen])' in resolver
+    helper = resolver.split('fn resolveInstalledWebcomics(', 1)[1].split('fn resolveComicFury(', 1)[0]
+    assert 'copyValue(@tagName(provider), "base", &base_buf) orelse continue' in helper
+    assert 'workerCancellation()' in helper and 'numberedTitle(' in helper
+    assert 'loadPublicWebcomic(provider, url[scheme.len..], gen)' in reader
+    assert '.xkcd => fetchPublicWebcomicSearch(q, gen, 0, .xkcd)' in reader
+    assert '.smbc => fetchPublicWebcomicSearch(q, gen, 0, .smbc)' in reader
+    assert 'Source.xkcd, Source.smbc' in reader and 'sourceActive(src)' in reader
+    assert '@import("browse_fanout.zig").run(Source, jobs[0..count]' in reader
+    assert 'search_gen.load(.acquire) != gen' in reader and 'comicAppendStart(gen, start_hint)' in reader
+    assert 'SMBC recent' in reader and 'up to 6' in reader
+    assert 'pure.acceptsPageBody(tmp_buf[0..total])' in reader
+    assert 'isPublicWebcomicRoute(url)' in browser
+    remote = _remote_api()
+    web = (PROJECT_DIR / 'web/js/media.js').read_text()
+    assert 'searchComicsFrom(term, source)' in remote
+    assert 'selectedSourceName()' in remote and 'xkcd_installed' in remote and 'smbc_installed' in remote
+    assert 'renderComicSources(d)' in web and 'SMBC · recent comics' in web and 'xkcd · archive / number' in web
+    assert 'cx-source' in (PROJECT_DIR / 'web/index.html').read_text()
+    assert '"/archive/"' in adapter and '"/comic/rss"' in adapter
+    assert 'if (provider == .smbc)' in adapter and 'else .partial' in adapter
+    assert '"webcomic_sources_pure"' in (PROJECT_DIR / 'build.zig').read_text()
+    assert (PROJECT_DIR / 'tests/test_webcomic_sources_live.py').exists()
+    return 'pass', '90 unique definitions; installed xkcd archive/number and SMBC recent discovery to bounded full-image reader'

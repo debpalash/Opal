@@ -149,26 +149,33 @@ let ytWatch = null;
 const fmtViews = n => { n = +n || 0; return n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? Math.round(n/1e3)+'K' : String(n); };
 $('yt-go').onclick = () => runYt();
 $('yt-q').addEventListener('keydown', e => { if (e.key === 'Enter') { runYt(); $('yt-q').blur(); } });
-function runYt(){
+let ytGeneration = 0;
+async function runYt(){
   const q = $('yt-q').value.trim(); if (!q) return;
-  $('yt-hint').innerHTML = '<span class="spin"></span> Searching YouTube…';
-  $('yt-results').innerHTML = ''; lastHtml.yt = '';
-  api('/youtube/search?q=' + encodeURIComponent(q)).catch(()=>{});
+  const generation = ++ytGeneration;
   clearInterval(ytWatch);
+  $('yt-hint').textContent = 'Searching YouTube…';
+  renderYt([], true);
+  try {
+    await api('/youtube/search?q=' + encodeURIComponent(q));
+    if (generation !== ytGeneration) return;
+  } catch { if (generation === ytGeneration) failBrowse('yt-results', 'yt-hint', 'Could not search YouTube. Try again.'); return; }
   let ticks = 0;
   ytWatch = settledInterval(async () => {
-    ticks++;
     try {
       const d = await api('/youtube');
-      renderYt(d.items || []);
-      if ((!d.loading && ticks > 2) || ticks > 40) {
+      if (generation !== ytGeneration) return;
+      renderYt(d.items || [], d.loading);
+      if (!d.loading || ++ticks > 120) {
         clearInterval(ytWatch);
-        $('yt-hint').textContent = (d.items || []).length + ' videos.';
+        if (d.loading) failBrowse('yt-results', 'yt-hint', 'Still loading. Search again to retry.');
+        else $('yt-hint').textContent = (d.items || []).length + ' videos.';
       }
-    } catch { clearInterval(ytWatch); }
-  }, 900);
+    } catch { if (generation === ytGeneration) { clearInterval(ytWatch); failBrowse('yt-results', 'yt-hint', 'Could not load YouTube. Try again.'); } }
+  }, BROWSE_POLL_MS, true);
 }
-function renderYt(items){
+function renderYt(items, loading = false){
+  setBrowseBusy('yt-results', loading);
   const html = items.map(v => `
     <div class="result">
       ${unifiedArtwork(v.thumbnail) ? `<img class="video-thumb" src="${esc(unifiedArtwork(v.thumbnail))}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ''}
@@ -181,7 +188,7 @@ function renderYt(items){
         <button class="queue-btn" data-queue="${esc(v.id)}">Queue</button>
         <button class="play" data-destination-verb="Play" data-id="${esc(v.id)}" data-title="${esc(v.title)}">${destinationActionLabel('Play')}</button>
       </div>
-    </div>`).join('') || '<div class="empty">No results yet</div>';
+    </div>`).join('') || (loading ? browseLoadingHtml('video') : '<div class="empty">No results yet</div>');
   if (html === lastHtml.yt) return;
   lastHtml.yt = html;
   $('yt-results').innerHTML = html;
@@ -225,7 +232,7 @@ async function loadPodcasts(){
   } catch { $('pod-hint').textContent = 'Could not load podcasts. Try again.'; }
 }
 function renderPodcasts(d){
-  renderPodResults(d.results || []);
+  renderPodResults(d.results || [], d.loading);
   renderPodEpisodes(d.episodes || [], d);
   $('pod-hint').textContent = d.fetch_error ? 'Podcast directory unavailable. Try again or paste an RSS feed URL.'
     : d.loading ? 'Loading podcasts…' : `${(d.results || []).length} shows — choose one for episodes.`;
@@ -237,11 +244,11 @@ async function runPodcasts(){
   const generation = ++podGeneration;
   ++podEpisodeGeneration; clearInterval(podEpisodeWatch); clearInterval(podWatch);
   $('pod-hint').textContent = 'Searching podcasts…';
-  $('pod-results').innerHTML = ''; lastHtml.podResults = ''; $('pod-episodes').innerHTML = '';
+  renderPodResults([], true); $('pod-episodes').innerHTML = '';
   try {
     await api('/podcasts/search?q=' + encodeURIComponent(q));
     if (generation === podGeneration) pollPodcasts(generation);
-  } catch { if (generation === podGeneration) $('pod-hint').textContent = 'Could not search podcasts. Try again.'; }
+  } catch { if (generation === podGeneration) failBrowse('pod-results', 'pod-hint', 'Could not search podcasts. Try again.'); }
 }
 function pollPodcasts(generation){
   clearInterval(podWatch);
@@ -251,11 +258,15 @@ function pollPodcasts(generation){
       const d = await api('/podcasts');
       if (generation !== podGeneration) return;
       renderPodcasts(d);
-      if (!d.loading || ++ticks > 60) clearInterval(podWatch);
+      if (!d.loading || ++ticks > BROWSE_POLL_LIMIT) {
+        clearInterval(podWatch);
+        if (d.loading) failBrowse('pod-results', 'pod-hint', 'Still loading. Search again to retry.');
+      }
     } catch { if (generation === podGeneration) { clearInterval(podWatch); $('pod-hint').textContent = 'Could not load podcasts. Try again.'; } }
-  }, 900);
+  }, BROWSE_POLL_MS, true);
 }
-function renderPodResults(rs){
+function renderPodResults(rs, loading = false){
+  setBrowseBusy('pod-results', loading);
   const html = rs.map((r, i) => `
     <div class="result pod">
       ${r.art
@@ -267,7 +278,7 @@ function renderPodResults(rs){
           <button class="pod-details" data-details="${i}">Details</button>
           <button class="play" data-idx="${i}">Episodes ⭢</button></div>
       </div>
-    </div>`).join('') || '<div class="empty">No results yet</div>';
+    </div>`).join('') || (loading ? browseLoadingHtml('square') : '<div class="empty">No results yet</div>');
   if (html === lastHtml.podResults) return;
   lastHtml.podResults = html;
   $('pod-results').innerHTML = html;
@@ -605,12 +616,12 @@ async function loadRadio(generation = radioGeneration, polling = false){
   try {
     const d = await api('/radio');
     if (generation !== radioGeneration) return d;
-    renderRadio(d.stations || []);
+    renderRadio(d.stations || [], d.loading);
     $('ra-more').style.display = d.has_more ? '' : 'none';
     if (d.loading && !polling) pollRadio(generation);
     $('ra-hint').textContent = d.fetch_error ? 'Station directory unavailable. Try again.' : d.loading ? 'Loading stations…' : `${(d.stations || []).length} stations.`;
     return d;
-  } catch { if (generation === radioGeneration) $('ra-hint').textContent = 'Could not load stations. Try again.'; }
+  } catch { if (generation === radioGeneration) failBrowse('ra-results', 'ra-hint', 'Could not load stations. Try again.'); }
 }
 $('ra-go').onclick = () => runRadio();
 $('ra-q').addEventListener('keydown', e => { if (e.key === 'Enter') { runRadio(); $('ra-q').blur(); } });
@@ -620,10 +631,11 @@ async function runRadio(){
   const generation = ++radioGeneration;
   clearInterval(raWatch);
   $('ra-hint').textContent = 'Searching stations…';
+  renderRadio([], true);
   try {
     await api('/radio/search?q=' + encodeURIComponent(q));
     if (generation === radioGeneration) pollRadio(generation);
-  } catch { if (generation === radioGeneration) $('ra-hint').textContent = 'Could not search stations. Try again.'; }
+  } catch { if (generation === radioGeneration) failBrowse('ra-results', 'ra-hint', 'Could not search stations. Try again.'); }
 }
 function pollRadio(generation = radioGeneration){
   clearInterval(raWatch);
@@ -631,10 +643,14 @@ function pollRadio(generation = radioGeneration){
   raWatch = settledInterval(async () => {
     const d = await loadRadio(generation, true);
     if (generation !== radioGeneration) return;
-    if (!d?.loading || ++ticks > 60) clearInterval(raWatch);
-  }, 900);
+    if (!d?.loading || ++ticks > BROWSE_POLL_LIMIT) {
+      clearInterval(raWatch);
+      if (d?.loading) failBrowse('ra-results', 'ra-hint', 'Still loading. Search again to retry.');
+    }
+  }, BROWSE_POLL_MS, true);
 }
-function renderRadio(sts){
+function renderRadio(sts, loading = false){
+  setBrowseBusy('ra-results', loading);
   const html = sts.map((s, i) => `
     <div class="result">
       <div class="t">${esc(s.name)}</div>
@@ -644,7 +660,7 @@ function renderRadio(sts){
         <button class="radio-details" data-details="${i}">Details</button>
         ${s.url ? `<button class="queue-btn" data-queue="${i}">Queue</button>` : ''}
         <button class="play" data-destination-verb="Listen" data-i="${i}" data-uuid="${encodeURIComponent(s.uuid || '')}" data-url="${encodeURIComponent(s.url || '')}">${destinationActionLabel('Listen')}</button></div>
-    </div>`).join('') || '<div class="empty">No stations yet</div>';
+    </div>`).join('') || (loading ? browseLoadingHtml('row') : '<div class="empty">No stations yet</div>');
   if (html === lastHtml.radio) return;
   lastHtml.radio = html;
   $('ra-results').innerHTML = html;

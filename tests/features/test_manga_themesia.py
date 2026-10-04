@@ -54,7 +54,7 @@ def test_manga_themesia_engine():
             problems.append("mangathemesia not in the Source enum")
     else:
         problems.append("Source enum not found in comics.zig")
-    if "sourceActive(.mangathemesia)" not in comics:
+    if not all(token in comics for token in ("sourceActive(src)", "Source.mangathemesia", ".mangathemesia => fetchThemesiaPage(q, wave.page, gen, 0)", "runComicWave(gen, 1)", "runComicWave(gen, next_page)")):
         problems.append("searchWorker missing the sourceActive(.mangathemesia) branch")
     if "fetchThemesiaPage" not in comics or "parseThemesiaResults" not in comics:
         problems.append("comics.zig missing themesia fetch/parse workers")

@@ -8,6 +8,7 @@ const alloc = @import("../core/alloc.zig").allocator;
 
 var store_mutex: @import("../core/sync.zig").Mutex = .{};
 var publication_gen: u64 = 0;
+var auth_request: @import("../core/latest_request.zig").Gate = .{};
 
 const RecoveryRequest = struct {
     item_id: [64]u8 = std.mem.zeroes([64]u8),
@@ -302,6 +303,7 @@ fn escapeJsonStr(input: []const u8, out: *[256]u8) []const u8 {
 
 pub fn configureLogin(server: []const u8, username: []const u8, password: []const u8) void {
     store_mutex.lock();
+    auth_request.cancel(&state.app.jf.is_loading);
     defer store_mutex.unlock();
     const slen = @min(server.len, state.app.jf.server_url.len);
     @memcpy(state.app.jf.server_url[0..slen], server[0..slen]);
@@ -316,13 +318,13 @@ pub fn configureLogin(server: []const u8, username: []const u8, password: []cons
 
 pub fn authenticate() void {
     if (state.app.jf.is_loading.load(.acquire)) return;
-    state.app.jf.is_loading.store(true, .release);
+    const generation = auth_request.begin(&state.app.jf.is_loading);
     state.app.jf.login_error_len = 0;
 
     workers.spawn(struct {
-        fn worker() void {
+        fn worker(my_gen: u32) void {
             defer {
-                state.app.jf.is_loading.store(false, .release);
+                auth_request.finish(my_gen, &state.app.jf.is_loading);
             }
 
             // Snapshot the server URL + credentials into worker-local buffers
@@ -334,6 +336,10 @@ pub fn authenticate() void {
             // local copies for the rest of the request.
             var server_buf: [256]u8 = undefined;
             store_mutex.lock();
+            if (!auth_request.isCurrent(my_gen)) {
+                store_mutex.unlock();
+                return;
+            }
             const server_len = @min(state.app.jf.server_url_len, server_buf.len);
             @memcpy(server_buf[0..server_len], state.app.jf.server_url[0..server_len]);
             var user_buf_local: [128]u8 = undefined;
@@ -346,7 +352,7 @@ pub fn authenticate() void {
             const server = server_buf[0..server_len];
 
             if (server.len == 0) {
-                setLoginError("Server URL is empty");
+                setLoginErrorExpected(my_gen, "Server URL is empty");
                 return;
             }
 
@@ -361,7 +367,7 @@ pub fn authenticate() void {
             };
 
             if (user.len == 0) {
-                setLoginError("Username is empty");
+                setLoginErrorExpected(my_gen, "Username is empty");
                 return;
             }
 
@@ -372,7 +378,7 @@ pub fn authenticate() void {
             const sp = escapeJsonStr(pass, &safe_pass);
             var body_buf: [512]u8 = undefined;
             const body = std.fmt.bufPrint(&body_buf, "{{\"Username\":\"{s}\",\"Pw\":\"{s}\"}}", .{ su, sp }) catch {
-                setLoginError("Failed to build request");
+                setLoginErrorExpected(my_gen, "Failed to build request");
                 return;
             };
 
@@ -391,21 +397,22 @@ pub fn authenticate() void {
                 .content_type = "application/json",
                 .auth_header = auth_val,
                 .timeout_secs = 10,
+                .cancel_epoch = .{ .epoch32 = .{ .value = &auth_request.generation, .expected = my_gen } },
                 .status_out = &response_status,
             }) orelse {
                 if (response_status) |status| {
                     if (@import("jellyfin_pure.zig").authRejected(@intFromEnum(status))) {
-                        setLoginError("Sign-in rejected — check credentials");
+                        setLoginErrorExpected(my_gen, "Sign-in rejected — check credentials");
                         return;
                     }
                 }
-                setLoginError("Server unavailable — check address and network");
+                setLoginErrorExpected(my_gen, "Server unavailable — check address and network");
                 return;
             };
 
             // Extract AccessToken
             const token = extractJsonString(resp, "\"AccessToken\":\"") orelse {
-                setLoginError("Auth failed — check credentials");
+                setLoginErrorExpected(my_gen, "Auth failed — check credentials");
                 return;
             };
 
@@ -416,18 +423,22 @@ pub fn authenticate() void {
                 const user_idx = std.mem.indexOf(u8, resp, user_key) orelse {
                     // Fallback: try first "Id" if no "User" found
                     break :blk extractJsonString(resp, "\"Id\":\"") orelse {
-                        setLoginError("Could not parse user ID");
+                        setLoginErrorExpected(my_gen, "Could not parse user ID");
                         return;
                     };
                 };
                 break :blk extractJsonString(resp[user_idx..], "\"Id\":\"") orelse {
-                    setLoginError("Could not parse user ID");
+                    setLoginErrorExpected(my_gen, "Could not parse user ID");
                     return;
                 };
             };
 
             // Store credentials
             store_mutex.lock();
+            if (!auth_request.isCurrent(my_gen)) {
+                store_mutex.unlock();
+                return;
+            }
             const tlen = @min(token.len, state.app.jf.token.len);
             @memcpy(state.app.jf.token[0..tlen], token[0..tlen]);
             state.app.jf.token_len = tlen;
@@ -444,8 +455,8 @@ pub fn authenticate() void {
             // Immediately fetch libraries
             fetchLibrariesSync();
         }
-    }.worker, .{}) catch {
-        state.app.jf.is_loading.store(false, .release);
+    }.worker, .{generation}) catch {
+        auth_request.finish(generation, &state.app.jf.is_loading);
     };
 }
 
@@ -975,6 +986,7 @@ fn cachedItemResume(item_id: []const u8) ?f64 {
 /// Disconnect from Jellyfin
 pub fn disconnect() void {
     store_mutex.lock();
+    auth_request.cancel(&state.app.jf.is_loading);
     // Free poster textures/pixels before clearing — item_count=0 alone leaks them.
     for (state.app.jf.items[0..state.app.jf.item_count]) |*old| freeItemPoster(old);
     state.app.jf.connected = false;
@@ -1537,6 +1549,16 @@ pub fn loadMore() void {
     workers.spawn(S.worker, .{}) catch {
         loading_more.store(false, .release);
     };
+}
+
+fn setLoginErrorExpected(generation: u32, msg: []const u8) void {
+    store_mutex.lock();
+    defer store_mutex.unlock();
+    if (!auth_request.isCurrent(generation)) return;
+    const len = @min(msg.len, state.app.jf.login_error.len);
+    @memcpy(state.app.jf.login_error[0..len], msg[0..len]);
+    state.app.jf.login_error_len = len;
+    publication_gen +%= 1;
 }
 
 fn setLoginError(msg: []const u8) void {

@@ -8,7 +8,7 @@ const alloc = @import("../core/alloc.zig").allocator;
 const search = @import("../services/search.zig");
 const resolver = @import("../services/resolver.zig");
 const capture = @import("native_capture.zig");
-const Case = struct { name: []const u8, route: router.Route, tab: state.DrawerTab = .TMDB, settings: state.SettingsTab = .General, plugin: router.PluginTab = .sources };
+const Case = struct { name: []const u8, route: router.Route, tab: state.DrawerTab = .TMDB, settings: state.SettingsTab = .General, plugin: router.PluginTab = .sources, sidebar: ?bool = null, navigate_anime: bool = false };
 var current: Case = undefined;
 var first_frame = true;
 var preset: theme.ThemePreset = .midnight;
@@ -37,6 +37,7 @@ fn field(buffer: []u8, len: *usize, value: []const u8) void {
     @memcpy(buffer[0..len.*], value[0..len.*]);
 }
 fn setup() !void {
+    @import("shell.zig").setSidebarFixtureForTest(current.sidebar);
     theme.active_preset = preset;
     state.app.page_shell_enabled = true;
     state.app.ui_scale = 1;
@@ -50,6 +51,7 @@ fn setup() !void {
 
     first_frame = true;
     frames = 0;
+    if (current.navigate_anime) @import("../services/anime.zig").setLoadingFixtureForTest(true);
     if (current.route == .watching) {
         for (&local_items, 0..) |*item, i| {
             item.* = .{ .id = @intCast(i + 1), .size = 2_400_000_000 };
@@ -106,6 +108,16 @@ fn texture(index: usize) !dvui.Texture {
 }
 fn draw() !void {
     @import("components.zig").clearToggleBoundsForTest();
+    if (current.navigate_anime and frames == 4) {
+        const bounds = @import("shell.zig").sidebarAnimeBoundsForTest();
+        try std.testing.expect(bounds.w > 0 and bounds.h > 0);
+        const window = dvui.currentWindow();
+        _ = try window.addEventMouseMotion(.{ .pt = bounds.center() });
+        _ = try window.addEventMouseButton(.left, .press);
+        _ = try window.addEventMouseButton(.left, .release);
+    }
+    if (current.navigate_anime and frames == 5) _ = try dvui.currentWindow().addEventKey(.{ .code = .tab, .action = .down, .mod = .none });
+
     if (first_frame and current.route == .browse and current.tab == .Anime) {
         var items: [8]state.AnimeResult = undefined;
         for (&items, 0..) |*item, i| {
@@ -158,6 +170,23 @@ fn draw() !void {
     first_frame = false;
     try @import("shell.zig").render();
     frames += 1;
+    if (current.navigate_anime and frames >= 5) {
+        try std.testing.expectEqual(router.Route.browse, state.app.router.current);
+        try std.testing.expectEqual(state.DrawerTab.Anime, state.app.browse_source);
+        try std.testing.expect(dvui.focusedWidgetId() != null);
+    }
+    if (frames >= 4 and current.route != .player) {
+        const bounds = @import("shell.zig").sidebarBoundsForTest();
+        const viewport = dvui.windowRectPixels();
+        try std.testing.expect(bounds.sidebar.w > 0 and bounds.content.w > 0);
+        try std.testing.expect(bounds.sidebar.x >= viewport.x);
+        try std.testing.expect(bounds.sidebar.x + bounds.sidebar.w <= bounds.content.x + 1);
+        try std.testing.expect(bounds.content.x + bounds.content.w <= viewport.x + viewport.w + 1);
+        if (current.sidebar) |expanded| {
+            const expected: f32 = if (expanded) 208 else 48;
+            try std.testing.expect(@abs(bounds.sidebar.w - expected * dvui.windowNaturalScale()) <= 1);
+        }
+    }
     if (current.route == .settings and frames >= 4) {
         try std.testing.expect(state.app.config_loaded.load(.acquire));
         const toggles = @import("components.zig").toggleBoundsForTest();
@@ -189,6 +218,8 @@ fn draw() !void {
     }
 }
 fn cleanup() void {
+    @import("shell.zig").setSidebarFixtureForTest(null);
+    if (current.navigate_anime) @import("../services/anime.zig").setLoadingFixtureForTest(false);
     search.shutdown();
     search.deinitGallery();
     if (fixture_rows) |rows| alloc.free(rows);
@@ -238,6 +269,12 @@ test "Native shell offline route pixel capture" {
         preset = .midnight;
         for (cases) |item| {
             current = item;
+            try captureCase(size);
+        }
+        for ([_]bool{ true, false }) |expanded| {
+            current = .{ .name = if (expanded) "sidebar-expanded" else "sidebar-rail", .route = .search, .sidebar = expanded };
+            try captureCase(size);
+            current = .{ .name = if (expanded) "sidebar-navigate-expanded" else "sidebar-navigate-rail", .route = .search, .sidebar = expanded, .navigate_anime = true };
             try captureCase(size);
         }
         for (browse) |tab| {

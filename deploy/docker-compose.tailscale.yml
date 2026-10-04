@@ -42,6 +42,7 @@ services:
     restart: unless-stopped
     environment:
       OPAL_HEADLESS: "1"
+      OPAL_HTTPS_PROXY: "1"
     # Share the tailscale netns so `tailscale serve` proxies to localhost:41595.
     network_mode: service:tailscale
     volumes:

@@ -378,28 +378,25 @@ fn worker(my_gen: u32) void {
         const ranked = pure.rankSimilar(w.similar[0..parsed], seed);
         const take = @min(ranked, SIMILAR_PER_SEED);
 
-        // 3. each similar artist → its STUDIO albums
-        for (0..take) |ai| {
-            if (run_gen.load(.acquire) != my_gen or !enabled()) return;
-            if (total >= w.albums.len) break :seeds;
-            const sim = w.similar[ai];
-
-            var reason_buf: [96]u8 = undefined;
-            const reason = std.fmt.bufPrint(&reason_buf, "Because you played {s}", .{seed}) catch "Similar artist";
-
-            const rg_url = pure.buildReleaseGroupUrl(&url_buf, sim.mbidSlice(), 100) orelse continue;
-            const rg_json = fetchCached(.albums, sim.mbidSlice(), rg_url, "musicbrainz", pure.MB_RATE_PER_SEC, &w.body) orelse {
-                any_fetch_failed = true;
-                continue;
+        // Independent similar artists fetch concurrently; the shared rate
+        // limiter still enforces MusicBrainz's public API request budget.
+        var tasks: [SIMILAR_PER_SEED]AlbumTask = undefined;
+        for (0..take) |index| {
+            tasks[index] = .{ .similar = w.similar[index] };
+            const reason = std.fmt.bufPrint(&tasks[index].reason, "Because you played {s}", .{seed}) catch fallback: {
+                const text = "Similar artist";
+                @memcpy(tasks[index].reason[0..text.len], text);
+                break :fallback tasks[index].reason[0..text.len];
             };
-            const got = pure.parseStudioAlbums(rg_json, sim.nameSlice(), reason, sim.score, &w.per_artist);
-            const keep = @min(got, pure.ALBUMS_PER_ARTIST);
-            for (0..keep) |k| {
-                if (total >= w.albums.len) break :seeds;
-                w.albums[total] = w.per_artist[k];
-                total += 1;
-            }
+            tasks[index].reason_len = reason.len;
         }
+        var context: AlbumContext = .{ .work = w, .total = &total, .generation = my_gen };
+        @import("browse_fanout.zig").run(AlbumTask, tasks[0..take], &context, fetchArtistAlbums, .{
+            .limit = 4,
+            .cancel_epoch = .{ .epoch32 = .{ .value = &run_gen, .expected = my_gen } },
+        });
+        any_fetch_failed = any_fetch_failed or context.failed.load(.acquire);
+        if (total >= w.albums.len) break :seeds;
     }
 
     if (run_gen.load(.acquire) != my_gen) return;
@@ -408,6 +405,16 @@ fn worker(my_gen: u32) void {
     const final = pure.dedupeAlbums(w.albums[0..total]);
 
     pub_mutex.lock();
+    if (run_gen.load(.acquire) != my_gen) {
+        pub_mutex.unlock();
+        return;
+    }
+    if (any_fetch_failed and final == 0) {
+        pub_mutex.unlock();
+        fetch_error.store(true, .release);
+        state.wakeUi();
+        return;
+    }
     @memcpy(pub_albums[0..final], w.albums[0..final]);
     pub_count = final;
     pub_mutex.unlock();
@@ -416,6 +423,47 @@ fn worker(my_gen: u32) void {
     fetch_error.store(any_fetch_failed and final == 0, .release);
     var lb: [96]u8 = undefined;
     logs.pushLog("info", "discovery", std.fmt.bufPrint(&lb, "{d} album(s) from {d} seed artist(s)", .{ final, w_seed_count }) catch "discovery done", false);
+}
+
+const AlbumTask = struct {
+    similar: pure.SimilarArtist,
+    reason: [96]u8 = undefined,
+    reason_len: usize = 0,
+};
+const AlbumContext = struct {
+    work: *Work,
+    total: *usize,
+    generation: u32,
+    failed: std.atomic.Value(bool) = .init(false),
+};
+fn fetchArtistAlbums(context: *AlbumContext, task: AlbumTask) void {
+    if (run_gen.load(.acquire) != context.generation or !enabled()) return;
+    const AlbumWork = struct { body: [MAX_BODY]u8 = undefined, per_artist: [24]pure.Album = undefined };
+    const local = alloc.create(AlbumWork) catch return;
+    defer alloc.destroy(local);
+    var url_buf: [1024]u8 = undefined;
+    const url = pure.buildReleaseGroupUrl(&url_buf, task.similar.mbidSlice(), 100) orelse return;
+    const body = fetchCached(.albums, task.similar.mbidSlice(), url, "musicbrainz", pure.MB_RATE_PER_SEC, &local.body) orelse {
+        context.failed.store(true, .release);
+        return;
+    };
+    const got = pure.parseStudioAlbums(body, task.similar.nameSlice(), task.reason[0..task.reason_len], task.similar.score, &local.per_artist);
+    const keep = @min(got, pure.ALBUMS_PER_ARTIST);
+    pub_mutex.lock();
+    defer pub_mutex.unlock();
+    if (run_gen.load(.acquire) != context.generation or !enabled()) return;
+    for (local.per_artist[0..keep]) |album| {
+        if (context.total.* == context.work.albums.len) break;
+        context.work.albums[context.total.*] = album;
+        context.total.* += 1;
+    }
+    if (context.total.* == 0) return;
+    pure.sortAlbums(context.work.albums[0..context.total.*]);
+    context.total.* = pure.dedupeAlbums(context.work.albums[0..context.total.*]);
+    @memcpy(pub_albums[0..context.total.*], context.work.albums[0..context.total.*]);
+    pub_count = context.total.*;
+    _ = pub_gen.fetchAdd(1, .acq_rel);
+    state.wakeUi();
 }
 
 // ══════════════════════════════════════════════════════════

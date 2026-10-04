@@ -47,27 +47,20 @@ docker run -d \
   opal:headless
 ```
 
-## The 0.0.0.0 bind (T6)
+## Listener and transport
 
-In **windowed desktop** mode the JSON API binds **`127.0.0.1`** (loopback only)
-for security — this is unchanged and byte-identical.
+Native and headless binaries default to `127.0.0.1`. Explicit `web_bind=lan`
+profiles still bind all interfaces. The Docker image sets `OPAL_WEB_BIND=lan`
+so its basic Compose profile can publish the container port on host loopback.
 
-In **headless** mode (`state.app.is_headless == true`, set from `OPAL_HEADLESS=1`)
-`serverLoop` binds **`0.0.0.0`** so the container is reachable from outside:
+The Caddy and Tailscale profiles set `OPAL_HTTPS_PROXY=1`. Opal shares the proxy's
+network namespace, forces its listener to loopback, and emits Secure cookies.
+Only the proxy accepts network traffic. Forwarded headers cannot enable this
+mode. Complete first-admin setup with the basic local profile before switching.
 
-```zig
-const ip = if (state.app.is_headless) "0.0.0.0" else "127.0.0.1";
-const addr = std.Io.net.IpAddress.parseIp4(ip, port) catch return;
-```
-
-The `stop()` accept-wakeup connect always uses `127.0.0.1` (connecting to
-loopback works regardless of bind address) — that is intentional and untouched.
-
-The service binds all container interfaces in headless mode, but the basic
-compose and `docker run` examples publish it on host loopback only. Keep
-`api.token`, account sessions, and the one-time `setup.token` secret, and put
-the container behind a firewall / reverse proxy for remote access. Do not
-publish `41595` to the internet without TLS and access control in front.
+See [secure remote access](secure-remote.md) for non-container deployment,
+account privileges, and the exact trust boundary. Do not publish plain HTTP to
+network clients: passwords and session cookies would be unencrypted.
 
 ## Required volume mounts
 
@@ -157,7 +150,8 @@ DOMAIN=opal.example.com docker compose -f deploy/docker-compose.tls.yml up --bui
 # Sign in at https://opal.example.com
 ```
 
-Caddy terminates TLS and proxies to `opal:41595`; Opal binds no public port.
+Caddy terminates TLS and proxies to `127.0.0.1:41595` in its shared network
+namespace. Opal binds no public port and sends Secure cookies.
 
 **Tailscale** (private tailnet, `*.ts.net` HTTPS, no domain/ports/certs to
 manage):

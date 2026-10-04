@@ -720,6 +720,31 @@ fn curlFallbackOwned(url: []const u8, auth_header: []const u8, max_bytes: usize)
 /// e.g. "/3/search/multi?query=batman&page=1". Returns bytes written (0 on fail).
 /// Use this (not http.fetch/std.http) for api.themoviedb.org — std.http
 /// SEGV-crashes on the TLS reset that SNI-blocked networks return.
+/// Immutable worker credentials and native deadline/cancellation ownership.
+/// Existing callers retain the original compatibility helper below.
+pub fn tmdbApiIntoExpected(path_query: []const u8, key: []const u8, buf: []u8, epoch: @import("../core/bounded_process.zig").CancelEpoch) usize {
+    const pure = @import("tmdb_pure.zig");
+    const v4 = pure.keyIsV4(key);
+    var url_buf: [768]u8 = undefined;
+    const url = if (v4)
+        std.fmt.bufPrint(&url_buf, "https://api.themoviedb.org{s}", .{path_query}) catch return 0
+    else blk: {
+        const sep: u8 = if (std.mem.indexOfScalar(u8, path_query, '?') != null) '&' else '?';
+        break :blk std.fmt.bufPrint(&url_buf, "https://api.themoviedb.org{s}{c}api_key={s}", .{ path_query, sep, key }) catch return 0;
+    };
+    var auth_buf: [320]u8 = undefined;
+    const auth: []const u8 = if (v4) (std.fmt.bufPrint(&auth_buf, "Authorization: Bearer {s}", .{key}) catch return 0) else "";
+    var fallback_buf: [768]u8 = undefined;
+    const fallback = pure.httpsToHttp(url, &fallback_buf);
+    const urls: [2]?[]const u8 = if (tmdb_https_blocked.load(.acquire)) .{ fallback, url } else .{ url, fallback };
+    for (urls) |candidate| {
+        const target = candidate orelse continue;
+        const body = http.fetch(target, buf, .{ .timeout_secs = 8, .max_response = buf.len, .accept = "application/json", .auth_header = if (auth.len > 0) auth else null, .cancel_epoch = epoch }) orelse continue;
+        if (pure.looksLikeJson(body)) return body.len;
+    }
+    return 0;
+}
+
 pub fn tmdbApiInto(path_query: []const u8, key: []const u8, buf: []u8) usize {
     const v4 = @import("tmdb_pure.zig").keyIsV4(key);
 
