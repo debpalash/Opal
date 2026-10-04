@@ -5,6 +5,7 @@
 //! part of starting a shell command, are unit tested without spawning anything.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const setup = @import("agent_setup_pure.zig");
 const win = @import("win_cmdline_pure.zig");
 
@@ -162,17 +163,65 @@ fn winCodexArgs(out: []u8, shell: WinShell, mcp_path: []const u8, token_file: []
     }
 }
 
+/// Where Windows keeps `cmd.exe` and PowerShell. Both are started by full path:
+/// a bare `cmd.exe` is looked up in the application's own directory and then the
+/// current directory before System32, so a planted `cmd.exe` would win.
+pub const FALLBACK_SYSTEM32 = "C:\\Windows\\System32";
+
+/// `<SystemRoot>\System32` built from the value of %SystemRoot%, or the
+/// fallback when it is missing or does not look like a plain absolute drive
+/// path (UNC, relative, quotes, `%`, shell operators, control or non-ASCII
+/// bytes, too long for `out`). The result never ends with a separator.
+pub fn system32Dir(out: []u8, system_root: ?[]const u8) []const u8 {
+    const raw = system_root orelse return FALLBACK_SYSTEM32;
+    const root = std.mem.trimEnd(u8, raw, "\\/");
+    if (root.len < 3 or root.len > 200) return FALLBACK_SYSTEM32;
+    if (!std.ascii.isAlphabetic(root[0]) or root[1] != ':' or (root[2] != '\\' and root[2] != '/')) return FALLBACK_SYSTEM32;
+    const tail = "\\System32";
+    if (root.len + tail.len > out.len) return FALLBACK_SYSTEM32;
+    for (root, 0..) |ch, i| {
+        if (ch < 0x20 or ch >= 0x7f or std.mem.indexOfScalar(u8, "\"%^&|<>!*?", ch) != null) return FALLBACK_SYSTEM32;
+        out[i] = if (ch == '/') '\\' else ch;
+    }
+    @memcpy(out[root.len..][0..tail.len], tail);
+    return out[0 .. root.len + tail.len];
+}
+
+/// %SystemRoot% as the process sees it; null off Windows or when unset. Goes
+/// straight to kernel32, so it needs no libc.
+fn systemRootEnv(out: []u8) ?[]const u8 {
+    if (builtin.os.tag != .windows) return null;
+    const k32 = struct {
+        extern "kernel32" fn GetEnvironmentVariableA(name: [*:0]const u8, buf: ?[*]u8, size: u32) callconv(.winapi) u32;
+    };
+    const n = k32.GetEnvironmentVariableA("SystemRoot", out.ptr, @intCast(out.len));
+    if (n == 0 or n >= out.len) return null;
+    return out[0..n];
+}
+
+/// This machine's System32 directory (see `system32Dir`).
+pub fn systemDir(out: []u8) []const u8 {
+    var env: [260]u8 = undefined;
+    return system32Dir(out, systemRootEnv(&env));
+}
+
 /// The whole command line that runs `agent` inside `workspace` under `shell`.
 /// Path separators are normalised to `\`; paths that cannot be quoted safely
-/// give null.
+/// give null. The shell is started from this machine's System32.
 pub fn windowsAgentCommand(buf: []u8, shell: WinShell, agent: Agent, workspace: []const u8, mcp_path: []const u8, token_file: []const u8) ?[]const u8 {
+    var dir: [260]u8 = undefined;
+    return windowsAgentCommandIn(buf, systemDir(&dir), shell, agent, workspace, mcp_path, token_file);
+}
+
+/// `windowsAgentCommand` with the System32 directory given.
+pub fn windowsAgentCommandIn(buf: []u8, system32: []const u8, shell: WinShell, agent: Agent, workspace: []const u8, mcp_path: []const u8, token_file: []const u8) ?[]const u8 {
     var wsb: [700]u8 = undefined;
     const ws = winClean(&wsb, workspace, shell) orelse return null;
     var args_buf: [3600]u8 = undefined;
     const args: []const u8 = if (agent == .codex) winCodexArgs(&args_buf, shell, mcp_path, token_file) orelse return null else "";
     switch (shell) {
         // /s makes cmd strip exactly the outer quotes and run the rest verbatim.
-        .cmd => return std.fmt.bufPrint(buf, "cmd.exe /d /s /c \"cd /d \"{s}\" && {s}{s}\"", .{ ws, agent.binary(), args }) catch null,
+        .cmd => return std.fmt.bufPrint(buf, "\"{s}\\cmd.exe\" /d /s /c \"cd /d \"{s}\" && {s}{s}\"", .{ system32, ws, agent.binary(), args }) catch null,
         .powershell => {
             var q: [1500]u8 = undefined;
             var script: [3600]u8 = undefined;
@@ -180,7 +229,7 @@ pub fn windowsAgentCommand(buf: []u8, shell: WinShell, agent: Agent, workspace: 
             const text = std.fmt.bufPrint(&script, "Set-Location -LiteralPath {s}; & {s}{s}", .{ quoted, agent.binary(), args }) catch return null;
             var arg: [7300]u8 = undefined;
             const wrapped = win.argQuote(&arg, text) orelse return null;
-            return std.fmt.bufPrint(buf, "powershell.exe -NoLogo -NoProfile -Command {s}", .{wrapped}) catch null;
+            return std.fmt.bufPrint(buf, "\"{s}\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoLogo -NoProfile -Command {s}", .{ system32, wrapped }) catch null;
         },
     }
 }
@@ -188,10 +237,16 @@ pub fn windowsAgentCommand(buf: []u8, shell: WinShell, agent: Agent, workspace: 
 /// An interactive shell in `workspace`: the command line the embedded terminal
 /// runs when no agent is chosen. It stays open after the `cd`.
 pub fn windowsShellCommand(buf: []u8, shell: WinShell, workspace: []const u8) ?[]const u8 {
+    var dir: [260]u8 = undefined;
+    return windowsShellCommandIn(buf, systemDir(&dir), shell, workspace);
+}
+
+/// `windowsShellCommand` with the System32 directory given.
+pub fn windowsShellCommandIn(buf: []u8, system32: []const u8, shell: WinShell, workspace: []const u8) ?[]const u8 {
     var wsb: [700]u8 = undefined;
     const ws = winClean(&wsb, workspace, shell) orelse return null;
     switch (shell) {
-        .cmd => return std.fmt.bufPrint(buf, "cmd.exe /d /s /k \"cd /d \"{s}\"\"", .{ws}) catch null,
+        .cmd => return std.fmt.bufPrint(buf, "\"{s}\\cmd.exe\" /d /s /k \"cd /d \"{s}\"\"", .{ system32, ws }) catch null,
         .powershell => {
             var q: [1500]u8 = undefined;
             var script: [1600]u8 = undefined;
@@ -199,9 +254,61 @@ pub fn windowsShellCommand(buf: []u8, shell: WinShell, workspace: []const u8) ?[
             const text = std.fmt.bufPrint(&script, "Set-Location -LiteralPath {s}", .{quoted}) catch return null;
             var arg: [3300]u8 = undefined;
             const wrapped = win.argQuote(&arg, text) orelse return null;
-            return std.fmt.bufPrint(buf, "powershell.exe -NoLogo -NoExit -Command {s}", .{wrapped}) catch null;
+            return std.fmt.bufPrint(buf, "\"{s}\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoLogo -NoExit -Command {s}", .{ system32, wrapped }) catch null;
         },
     }
+}
+
+// ── Finding a program on PATH ───────────────────────────────────────────
+
+/// Extensions tried after the bare name on Windows: native programs and the
+/// `.cmd` shims npm installs for agent CLIs.
+pub const windows_exts = [_][]const u8{ ".exe", ".cmd", ".bat" };
+
+fn endsWithFold(s: []const u8, suffix: []const u8) bool {
+    return s.len >= suffix.len and std.ascii.eqlIgnoreCase(s[s.len - suffix.len ..], suffix);
+}
+
+/// First existing `<dir><dir_sep><name><ext>` over the `list_sep` separated
+/// `path_env`, written into `buf`; null when nothing exists. Directories are
+/// tried in order and, within one, `exts` in order (`&.{""}` means the bare name
+/// only). A name that already ends in one of `exts` is tried as written first.
+/// Empty and relative entries are skipped (the current directory is never
+/// searched, so a planted file there cannot be picked up), quotes around an
+/// entry are removed, and `name` must be a bare file name. `exists` is injected
+/// so this runs without a file system.
+pub fn searchPath(
+    buf: []u8,
+    path_env: []const u8,
+    name: []const u8,
+    list_sep: u8,
+    dir_sep: u8,
+    exts: []const []const u8,
+    comptime exists: fn ([]const u8) bool,
+) ?[]const u8 {
+    if (name.len == 0 or std.mem.indexOfAny(u8, name, "/\\:\"\x00") != null) return null;
+    var asis = false;
+    for (exts) |ext| {
+        if (ext.len > 0 and endsWithFold(name, ext)) asis = true;
+    }
+    var it = std.mem.splitScalar(u8, path_env, list_sep);
+    while (it.next()) |raw| {
+        var dir = std.mem.trim(u8, raw, " \t");
+        if (dir.len >= 2 and dir[0] == '"' and dir[dir.len - 1] == '"') dir = dir[1 .. dir.len - 1];
+        dir = std.mem.trimEnd(u8, dir, if (dir_sep == '\\') "\\/" else "/");
+        if (dir.len == 0) continue;
+        if (dir_sep == '\\' and !(dir.len >= 2 and std.ascii.isAlphabetic(dir[0]) and dir[1] == ':') and !std.mem.startsWith(u8, dir, "\\\\")) continue;
+        if (asis) if (candidate(buf, dir, dir_sep, name, "", exists)) |found| return found;
+        for (exts) |ext| {
+            if (candidate(buf, dir, dir_sep, name, ext, exists)) |found| return found;
+        }
+    }
+    return null;
+}
+
+fn candidate(buf: []u8, dir: []const u8, dir_sep: u8, name: []const u8, ext: []const u8, comptime exists: fn ([]const u8) bool) ?[]const u8 {
+    const full = std.fmt.bufPrint(buf, "{s}{c}{s}{s}", .{ dir, dir_sep, name, ext }) catch return null;
+    return if (exists(full)) full else null;
 }
 
 pub const Terminal = struct {
@@ -297,23 +404,25 @@ test "agent names round-trip" {
     try std.testing.expectEqualStrings("Claude Code", Agent.claude.title());
 }
 
+const SYS = "C:\\Windows\\System32";
+
 test "windows cmd agent line cds with /d and quotes a path with spaces" {
     var b: [512]u8 = undefined;
     try std.testing.expectEqualStrings(
-        "cmd.exe /d /s /c \"cd /d \"C:\\Users\\a b\\opal\\agent-workspace\" && claude\"",
-        windowsAgentCommand(&b, .cmd, .claude, "C:\\Users\\a b\\opal/agent-workspace", "C:\\x\\opal-mcp.exe", "C:\\t").?,
+        "\"C:\\Windows\\System32\\cmd.exe\" /d /s /c \"cd /d \"C:\\Users\\a b\\opal\\agent-workspace\" && claude\"",
+        windowsAgentCommandIn(&b, SYS, .cmd, .claude, "C:\\Users\\a b\\opal/agent-workspace", "C:\\x\\opal-mcp.exe", "C:\\t").?,
     );
     try std.testing.expectEqualStrings(
-        "cmd.exe /d /s /c \"cd /d \"D:\\w\" && gemini\"",
-        windowsAgentCommand(&b, .cmd, .gemini, "D:\\w", "x", "y").?,
+        "\"C:\\Windows\\System32\\cmd.exe\" /d /s /c \"cd /d \"D:\\w\" && gemini\"",
+        windowsAgentCommandIn(&b, SYS, .cmd, .gemini, "D:\\w", "x", "y").?,
     );
 }
 
 test "windows cmd codex line passes TOML literal overrides" {
     var b: [1024]u8 = undefined;
-    const s = windowsAgentCommand(&b, .cmd, .codex, "C:\\w s", "C:\\Program Files\\Opal\\opal-mcp.exe", "C:\\Users\\a\\opal\\api.token").?;
+    const s = windowsAgentCommandIn(&b, SYS, .cmd, .codex, "C:\\w s", "C:\\Program Files\\Opal\\opal-mcp.exe", "C:\\Users\\a\\opal\\api.token").?;
     try std.testing.expectEqualStrings(
-        "cmd.exe /d /s /c \"cd /d \"C:\\w s\" && codex -c \"mcp_servers.opal.command='C:\\Program Files\\Opal\\opal-mcp.exe'\" -c \"mcp_servers.opal.env.OPAL_API_TOKEN_FILE='C:\\Users\\a\\opal\\api.token'\"\"",
+        "\"C:\\Windows\\System32\\cmd.exe\" /d /s /c \"cd /d \"C:\\w s\" && codex -c \"mcp_servers.opal.command='C:\\Program Files\\Opal\\opal-mcp.exe'\" -c \"mcp_servers.opal.env.OPAL_API_TOKEN_FILE='C:\\Users\\a\\opal\\api.token'\"\"",
         s,
     );
 }
@@ -321,37 +430,120 @@ test "windows cmd codex line passes TOML literal overrides" {
 test "windows powershell agent line uses a literal path and survives apostrophes" {
     var b: [1024]u8 = undefined;
     try std.testing.expectEqualStrings(
-        "powershell.exe -NoLogo -NoProfile -Command \"Set-Location -LiteralPath 'C:\\Users\\O''Brien\\ws'; & claude\"",
-        windowsAgentCommand(&b, .powershell, .claude, "C:/Users/O'Brien/ws", "x", "y").?,
+        "\"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoLogo -NoProfile -Command \"Set-Location -LiteralPath 'C:\\Users\\O''Brien\\ws'; & claude\"",
+        windowsAgentCommandIn(&b, SYS, .powershell, .claude, "C:/Users/O'Brien/ws", "x", "y").?,
     );
-    const codex = windowsAgentCommand(&b, .powershell, .codex, "C:\\w", "C:\\a b\\opal-mcp.exe", "C:\\t").?;
+    const codex = windowsAgentCommandIn(&b, SYS, .powershell, .codex, "C:\\w", "C:\\a b\\opal-mcp.exe", "C:\\t").?;
     try std.testing.expectEqualStrings(
-        "powershell.exe -NoLogo -NoProfile -Command \"Set-Location -LiteralPath 'C:\\w'; & codex -c 'mcp_servers.opal.command=''C:\\a b\\opal-mcp.exe''' -c 'mcp_servers.opal.env.OPAL_API_TOKEN_FILE=''C:\\t'''\"",
+        "\"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoLogo -NoProfile -Command \"Set-Location -LiteralPath 'C:\\w'; & codex -c 'mcp_servers.opal.command=''C:\\a b\\opal-mcp.exe''' -c 'mcp_servers.opal.env.OPAL_API_TOKEN_FILE=''C:\\t'''\"",
         codex,
     );
 }
 
 test "windows shell lines stay open after the cd" {
     var b: [512]u8 = undefined;
-    try std.testing.expectEqualStrings("cmd.exe /d /s /k \"cd /d \"C:\\w s\"\"", windowsShellCommand(&b, .cmd, "C:/w s").?);
+    try std.testing.expectEqualStrings("\"C:\\Windows\\System32\\cmd.exe\" /d /s /k \"cd /d \"C:\\w s\"\"", windowsShellCommandIn(&b, SYS, .cmd, "C:/w s").?);
     try std.testing.expectEqualStrings(
-        "powershell.exe -NoLogo -NoExit -Command \"Set-Location -LiteralPath 'C:\\w s'\"",
-        windowsShellCommand(&b, .powershell, "C:\\w s").?,
+        "\"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoLogo -NoExit -Command \"Set-Location -LiteralPath 'C:\\w s'\"",
+        windowsShellCommandIn(&b, SYS, .powershell, "C:\\w s").?,
     );
 }
 
 test "windows paths that could break out of quoting are refused" {
     var b: [1024]u8 = undefined;
     // cmd expands %VAR% and treats & | ^ < > ! as operators even next to quotes.
-    try std.testing.expect(windowsAgentCommand(&b, .cmd, .claude, "C:\\%PATH%", "x", "y") == null);
-    try std.testing.expect(windowsAgentCommand(&b, .cmd, .claude, "C:\\a&calc", "x", "y") == null);
-    try std.testing.expect(windowsShellCommand(&b, .cmd, "C:\\a\"b") == null);
-    try std.testing.expect(windowsShellCommand(&b, .powershell, "C:\\a\nb") == null);
+    try std.testing.expect(windowsAgentCommandIn(&b, SYS, .cmd, .claude, "C:\\%PATH%", "x", "y") == null);
+    try std.testing.expect(windowsAgentCommandIn(&b, SYS, .cmd, .claude, "C:\\a&calc", "x", "y") == null);
+    try std.testing.expect(windowsShellCommandIn(&b, SYS, .cmd, "C:\\a\"b") == null);
+    try std.testing.expect(windowsShellCommandIn(&b, SYS, .powershell, "C:\\a\nb") == null);
     // PowerShell takes curly apostrophes as quotes.
-    try std.testing.expect(windowsShellCommand(&b, .powershell, "C:\\it\xe2\x80\x99s") == null);
+    try std.testing.expect(windowsShellCommandIn(&b, SYS, .powershell, "C:\\it\xe2\x80\x99s") == null);
     // Codex overrides are TOML literals, which cannot hold an apostrophe.
-    try std.testing.expect(windowsAgentCommand(&b, .cmd, .codex, "C:\\w", "C:\\it's\\opal-mcp.exe", "C:\\t") == null);
-    try std.testing.expect(windowsAgentCommand(&b, .cmd, .claude, "", "x", "y") == null);
+    try std.testing.expect(windowsAgentCommandIn(&b, SYS, .cmd, .codex, "C:\\w", "C:\\it's\\opal-mcp.exe", "C:\\t") == null);
+    try std.testing.expect(windowsAgentCommandIn(&b, SYS, .cmd, .claude, "", "x", "y") == null);
     var tiny: [20]u8 = undefined;
-    try std.testing.expect(windowsAgentCommand(&tiny, .cmd, .claude, "C:\\w", "x", "y") == null);
+    try std.testing.expect(windowsAgentCommandIn(&tiny, SYS, .cmd, .claude, "C:\\w", "x", "y") == null);
+}
+
+test "the windows shells are started from System32 by full path" {
+    var b: [1024]u8 = undefined;
+    const cmd = windowsAgentCommandIn(&b, "D:\\Win dows\\System32", .cmd, .claude, "C:\\w", "x", "y").?;
+    try std.testing.expect(std.mem.startsWith(u8, cmd, "\"D:\\Win dows\\System32\\cmd.exe\" /d /s /c "));
+    var c: [1024]u8 = undefined;
+    const ps = windowsShellCommandIn(&c, SYS, .powershell, "C:\\w").?;
+    try std.testing.expect(std.mem.startsWith(u8, ps, "\"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" "));
+    // The unqualified wrappers (no SystemRoot off Windows) use the fallback and
+    // never emit a bare program name.
+    const plain = windowsAgentCommand(&b, .cmd, .claude, "C:\\w", "x", "y").?;
+    try std.testing.expect(std.mem.startsWith(u8, plain, "\"C:\\Windows\\System32\\cmd.exe\" "));
+    const sh = windowsShellCommand(&c, .powershell, "C:\\w").?;
+    try std.testing.expect(sh[0] == '"');
+}
+
+test "system32Dir builds from SystemRoot and falls back safely" {
+    var o: [260]u8 = undefined;
+    try std.testing.expectEqualStrings("C:\\Windows\\System32", system32Dir(&o, "C:\\Windows"));
+    try std.testing.expectEqualStrings("D:\\WINNT\\System32", system32Dir(&o, "D:\\WINNT\\"));
+    try std.testing.expectEqualStrings("E:\\Win dows\\System32", system32Dir(&o, "E:/Win dows"));
+    // Missing, relative, UNC, or anything that could escape the quoting.
+    for ([_]?[]const u8{ null, "", "C:", "Windows", "\\Windows", "\\\\srv\\share\\Windows", "C:\\Win\"dows", "C:\\%X%", "C:\\a&b", "C:\\a|b", "C:\\a^b", "C:\\a\nb", "C:\\W\xc3\xa9", "1:\\Windows" }) |root| {
+        try std.testing.expectEqualStrings(FALLBACK_SYSTEM32, system32Dir(&o, root));
+    }
+    var tiny: [12]u8 = undefined;
+    try std.testing.expectEqualStrings(FALLBACK_SYSTEM32, system32Dir(&tiny, "C:\\Windows"));
+}
+
+const fake_files = [_][]const u8{
+    "C:\\tools\\codex.cmd",
+    "C:\\Program Files\\nodejs\\claude.cmd",
+    "D:\\bin\\claude.exe",
+    "D:\\bin\\both.bat",
+    "D:\\bin\\both.cmd",
+    "/usr/bin/claude",
+};
+
+fn fakeExists(path: []const u8) bool {
+    for (fake_files) |f| if (std.mem.eql(u8, f, path)) return true;
+    return false;
+}
+
+test "searchPath finds .exe and npm .cmd shims on a Windows PATH" {
+    var b: [260]u8 = undefined;
+    const path = "C:\\Windows;C:\\tools\\;\"C:\\Program Files\\nodejs\";D:\\bin";
+    try std.testing.expectEqualStrings("C:\\tools\\codex.cmd", searchPath(&b, path, "codex", ';', '\\', &windows_exts, fakeExists).?);
+    // Quoted entries with spaces work; directory order wins over extension order.
+    try std.testing.expectEqualStrings("C:\\Program Files\\nodejs\\claude.cmd", searchPath(&b, path, "claude", ';', '\\', &windows_exts, fakeExists).?);
+    // Within one directory .cmd comes before .bat.
+    try std.testing.expectEqualStrings("D:\\bin\\both.cmd", searchPath(&b, path, "both", ';', '\\', &windows_exts, fakeExists).?);
+    // A name that already has an extension is tried as written.
+    try std.testing.expectEqualStrings("D:\\bin\\claude.exe", searchPath(&b, "D:\\bin", "claude.exe", ';', '\\', &windows_exts, fakeExists).?);
+    try std.testing.expect(searchPath(&b, path, "gemini", ';', '\\', &windows_exts, fakeExists) == null);
+}
+
+test "searchPath ignores empty, relative and hostile entries and names" {
+    var b: [260]u8 = undefined;
+    // An empty entry, "." and a relative directory never search the cwd.
+    try std.testing.expect(searchPath(&b, ";.;bin;;", "claude", ';', '\\', &windows_exts, fakeExists) == null);
+    try std.testing.expect(searchPath(&b, "", "claude", ';', '\\', &windows_exts, fakeExists) == null);
+    try std.testing.expect(searchPath(&b, "D:\\bin", "", ';', '\\', &windows_exts, fakeExists) == null);
+    // The name must be a bare file name.
+    try std.testing.expect(searchPath(&b, "D:\\bin", "..\\bin\\claude", ';', '\\', &windows_exts, fakeExists) == null);
+    try std.testing.expect(searchPath(&b, "D:\\bin", "D:claude", ';', '\\', &windows_exts, fakeExists) == null);
+    try std.testing.expect(searchPath(&b, "D:\\bin", "a/b", ';', '\\', &windows_exts, fakeExists) == null);
+    // A buffer too small for the candidate finds nothing instead of overflowing.
+    var tiny: [8]u8 = undefined;
+    try std.testing.expect(searchPath(&tiny, "D:\\bin", "claude", ';', '\\', &windows_exts, fakeExists) == null);
+    // UNC entries are allowed; a trailing separator does not double up.
+    const unc = struct {
+        fn ok(p: []const u8) bool {
+            return std.mem.eql(u8, p, "\\\\srv\\share\\claude.exe");
+        }
+    }.ok;
+    try std.testing.expectEqualStrings("\\\\srv\\share\\claude.exe", searchPath(&b, "\\\\srv\\share\\", "claude", ';', '\\', &windows_exts, unc).?);
+}
+
+test "searchPath serves POSIX PATHs with the bare name only" {
+    var b: [260]u8 = undefined;
+    try std.testing.expectEqualStrings("/usr/bin/claude", searchPath(&b, "/opt/x::/usr/bin", "claude", ':', '/', &.{""}, fakeExists).?);
+    try std.testing.expect(searchPath(&b, "/opt/x", "claude", ':', '/', &.{""}, fakeExists) == null);
 }

@@ -39,40 +39,24 @@ pub const Result = enum {
     }
 };
 
-pub fn onPath(name: []const u8) bool {
-    if (builtin.os.tag == .windows) return false;
-    const path = io_g.getenv("PATH") orelse return false;
-    var it = std.mem.splitScalar(u8, path, ':');
-    var buf: [1024]u8 = undefined;
-    while (it.next()) |dir| {
-        if (dir.len == 0) continue;
-        const full = std.fmt.bufPrint(&buf, "{s}/{s}", .{ dir, name }) catch continue;
-        io_g.cwdAccess(full, .{ .execute = true }) catch continue;
-        return true;
-    }
-    return false;
+fn existsOnDisk(path: []const u8) bool {
+    // Windows has no execute bit to ask for; a file with a launchable extension is enough.
+    io_g.cwdAccess(path, .{ .execute = builtin.os.tag != .windows }) catch return false;
+    return true;
 }
 
-/// Windows flavour of `onPath` for the embedded terminal: `;` separated, and the
-/// program may be a native `.exe` or an npm `.cmd` shim. (`onPath` stays false
-/// there because scheduled tasks still need `sh`.)
-fn onWindowsPath(name: []const u8) bool {
+/// Whether `name` is a program on PATH. POSIX: an executable file of that name.
+/// Windows: `;` separated, trying `name.exe`, `name.cmd` and `name.bat` (npm
+/// installs the agent CLIs as `.cmd` shims); the current directory is not
+/// searched. The search itself is `agent_launch_pure.searchPath`.
+pub fn onPath(name: []const u8) bool {
     const path = io_g.getenv("PATH") orelse return false;
-    var it = std.mem.splitScalar(u8, path, ';');
     var buf: [1024]u8 = undefined;
-    while (it.next()) |dir| {
-        if (dir.len == 0) continue;
-        for ([_][]const u8{ ".exe", ".cmd", ".bat" }) |ext| {
-            const full = std.fmt.bufPrint(&buf, "{s}\\{s}{s}", .{ dir, name, ext }) catch continue;
-            io_g.cwdAccess(full, .{}) catch continue;
-            return true;
-        }
-    }
-    return false;
+    if (builtin.os.tag == .windows) return pure.searchPath(&buf, path, name, ';', '\\', &pure.windows_exts, existsOnDisk) != null;
+    return pure.searchPath(&buf, path, name, ':', '/', &.{""}, existsOnDisk) != null;
 }
 
 pub fn installed(agent: Agent) bool {
-    if (builtin.os.tag == .windows) return onWindowsPath(agent.binary());
     return onPath(agent.binary());
 }
 

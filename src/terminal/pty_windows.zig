@@ -99,6 +99,7 @@ const WAIT_TIMEOUT: u32 = 0x102;
 const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION: c_int = 9;
 const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x2000;
 const pipe_size: u32 = 64 * 1024;
+const PIPE_NOWAIT: u32 = 0x00000001;
 
 const k32 = if (is_windows) struct {
     extern "kernel32" fn CreatePipe(read: *?Handle, write: *?Handle, attrs: ?*anyopaque, size: u32) callconv(.winapi) c_int;
@@ -121,6 +122,8 @@ const k32 = if (is_windows) struct {
     extern "kernel32" fn AssignProcessToJobObject(job: Handle, process: Handle) callconv(.winapi) c_int;
     extern "kernel32" fn GetEnvironmentStringsW() callconv(.winapi) ?[*]u16;
     extern "kernel32" fn FreeEnvironmentStringsW(block: [*]u16) callconv(.winapi) c_int;
+    extern "kernel32" fn SetNamedPipeHandleState(pipe: Handle, mode: ?*u32, max_collection: ?*u32, timeout: ?*u32) callconv(.winapi) c_int;
+    extern "kernel32" fn GetLastError() callconv(.winapi) u32;
     extern "kernel32" fn Sleep(ms: u32) callconv(.winapi) void;
     extern "kernel32" fn GetTickCount64() callconv(.winapi) u64;
 } else struct {};
@@ -128,6 +131,72 @@ const k32 = if (is_windows) struct {
 fn closeHandle(h: ?Handle) void {
     if (h) |handle| _ = k32.CloseHandle(handle);
 }
+
+// ── Bounded writes ──
+
+/// Waits between attempts, and how many in a row may make no progress, before a
+/// write gives up: about 250 ms, the same bound as the POSIX pty.
+pub const stall_wait_ms: u32 = 50;
+pub const stall_limit: u8 = 5;
+/// Largest piece offered to the pipe at once. A non-blocking pipe may take all of
+/// a request or none of it, so pieces stay far below the 64 KiB buffer.
+const write_chunk: usize = 4096;
+
+/// One attempt to hand bytes to the pipe.
+const Attempt = union(enum) {
+    /// This many bytes were accepted (at least one).
+    wrote: usize,
+    /// The pipe took nothing: it is full.
+    full,
+    /// The pipe is gone or broken.
+    failed,
+};
+
+/// Write all of `data` through `sink` (`attempt(chunk) Attempt`, `wait()`),
+/// giving up after `stall_limit` consecutive attempts without progress. Progress
+/// resets the count. Generic so the bound is unit tested without a pipe.
+fn writeBounded(sink: anytype, data: []const u8) bool {
+    var off: usize = 0;
+    var stalled: u8 = 0;
+    while (off < data.len) {
+        const chunk = data[off..][0..@min(data.len - off, write_chunk)];
+        switch (sink.attempt(chunk)) {
+            .wrote => |n| {
+                off += @min(n, chunk.len);
+                stalled = 0;
+            },
+            .full => {
+                stalled += 1;
+                if (stalled >= stall_limit) return false;
+                sink.wait();
+            },
+            .failed => return false,
+        }
+    }
+    return true;
+}
+
+const ERROR_NO_DATA: u32 = 232;
+
+const PipeSink = struct {
+    handle: Handle,
+
+    fn attempt(self: *PipeSink, chunk: []const u8) Attempt {
+        var written: u32 = 0;
+        if (k32.WriteFile(self.handle, chunk.ptr, @intCast(chunk.len), &written, null) == 0) {
+            // A full non-blocking pipe reports ERROR_NO_DATA on some Windows
+            // versions and success with zero bytes on others; anything else is
+            // a broken pipe. (A closed pipe also says NO_DATA: it just takes the
+            // full stall bound to give up.)
+            return if (k32.GetLastError() == ERROR_NO_DATA) .full else .failed;
+        }
+        return if (written == 0) .full else .{ .wrote = written };
+    }
+
+    fn wait(_: *PipeSink) void {
+        k32.Sleep(stall_wait_ms);
+    }
+};
 
 pub const Pty = struct {
     process: ?Handle = null,
@@ -170,17 +239,15 @@ pub const Pty = struct {
     }
 
     /// Write all of `data` to the child's input. The pipe holds 64 KiB and conhost
-    /// drains it independently of the child, so this does not block in practice.
+    /// drains it independently of the child, so this normally does not wait. Like
+    /// the POSIX pty it gives up (false) after about 250 ms without progress, so a
+    /// child that stopped reading cannot hang the caller. That needs the write end
+    /// in non-blocking mode (set in `spawn`); if that call failed, a stuck child
+    /// still blocks in WriteFile as it did before.
     pub fn writeAll(self: *const Pty, data: []const u8) bool {
         const in = self.input orelse return false;
-        var off: usize = 0;
-        while (off < data.len) {
-            const n: u32 = @intCast(@min(data.len - off, std.math.maxInt(u32)));
-            var written: u32 = 0;
-            if (k32.WriteFile(in, data[off..].ptr, n, &written, null) == 0 or written == 0) return false;
-            off += written;
-        }
-        return true;
+        var sink: PipeSink = .{ .handle = in };
+        return writeBounded(&sink, data);
     }
 
     /// Pixel sizes are unused: ConPTY only knows cells.
@@ -323,6 +390,13 @@ pub fn spawn(
     if (k32.CreatePipe(&in_read, &in_write, null, pipe_size) == 0) return error.ForkFailed;
     defer closeHandle(in_read);
     errdefer closeHandle(in_write);
+    // Our write end must never block: `writeAll` bounds its own waiting. This is
+    // a per-handle mode, so conhost's end of the pipe is unaffected. If it fails
+    // the end stays blocking, which only loses the stall bound.
+    if (in_write) |w| {
+        var mode: u32 = PIPE_NOWAIT;
+        _ = k32.SetNamedPipeHandleState(w, &mode, null, null);
+    }
     if (k32.CreatePipe(&out_read, &out_write, null, pipe_size) == 0) return error.ForkFailed;
     defer closeHandle(out_write);
     errdefer closeHandle(out_read);
@@ -523,4 +597,67 @@ test "input written to the pseudo console reaches the child" {
     try drain(&pty, "got:Windows_NT");
     pty.resize(100, 30, 8, 16);
     try std.testing.expect(pty.alive());
+}
+
+const FakeSink = struct {
+    script: []const Attempt,
+    pos: usize = 0,
+    waits: u32 = 0,
+    taken: usize = 0,
+    biggest: usize = 0,
+
+    fn attempt(self: *FakeSink, chunk: []const u8) Attempt {
+        self.biggest = @max(self.biggest, chunk.len);
+        // Past the end of the script the pipe stays full.
+        const next: Attempt = if (self.pos < self.script.len) self.script[self.pos] else .full;
+        self.pos += 1;
+        switch (next) {
+            .wrote => |n| self.taken += @min(n, chunk.len),
+            else => {},
+        }
+        return next;
+    }
+
+    fn wait(self: *FakeSink) void {
+        self.waits += 1;
+    }
+};
+
+test "a bounded write completes in chunks and never waits when the pipe takes everything" {
+    var data: [10_000]u8 = undefined;
+    @memset(&data, 'x');
+    var sink: FakeSink = .{ .script = &.{ .{ .wrote = 4096 }, .{ .wrote = 4096 }, .{ .wrote = 4096 } } };
+    try std.testing.expect(writeBounded(&sink, &data));
+    try std.testing.expectEqual(@as(usize, 10_000), sink.taken);
+    try std.testing.expectEqual(@as(u32, 0), sink.waits);
+    try std.testing.expect(sink.biggest <= write_chunk);
+}
+
+test "a pipe that stays full is given up on after the stall limit" {
+    var sink: FakeSink = .{ .script = &.{} };
+    try std.testing.expect(!writeBounded(&sink, "hello"));
+    // Five attempts, a wait between each (about 250 ms in total), none after the last.
+    try std.testing.expectEqual(@as(usize, stall_limit), sink.pos);
+    try std.testing.expectEqual(@as(u32, stall_limit - 1), sink.waits);
+    try std.testing.expectEqual(@as(usize, 0), sink.taken);
+    try std.testing.expectEqual(@as(u32, 250), stall_wait_ms * stall_limit);
+}
+
+test "progress resets the stall count and a partial write continues" {
+    // Four stalls, a partial write, four more stalls: under the limit each time.
+    var data: [10]u8 = undefined;
+    @memset(&data, 'y');
+    var sink: FakeSink = .{ .script = &.{
+        .full, .full, .full, .full, .{ .wrote = 3 },
+        .full, .full, .full, .full, .{ .wrote = 7 },
+    } };
+    try std.testing.expect(writeBounded(&sink, &data));
+    try std.testing.expectEqual(@as(usize, 10), sink.taken);
+}
+
+test "a broken pipe fails at once without waiting" {
+    var sink: FakeSink = .{ .script = &.{ .{ .wrote = 2 }, .failed } };
+    try std.testing.expect(!writeBounded(&sink, "abcdef"));
+    try std.testing.expectEqual(@as(u32, 0), sink.waits);
+    try std.testing.expect(writeBounded(&sink, ""));
 }
