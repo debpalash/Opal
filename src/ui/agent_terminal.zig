@@ -314,6 +314,9 @@ fn pollTabs() void {
     }
 }
 
+/// Width of the tab strip last frame, in natural units (0 before the first).
+var strip_avail: f32 = 0;
+
 const transparent: dvui.Color = .{ .r = 0, .g = 0, .b = 0, .a = 0 };
 
 fn renderTabStrip() void {
@@ -329,7 +332,51 @@ fn renderTabStrip() void {
 
     var select: ?usize = null;
     var close: ?usize = null;
-    const budget = tabs.labelMax(tab_count);
+    const budget = tabs.labelMaxFit(tab_count, strip_avail, dvui.Font.theme(.body).textSize("n").w);
+    strip_avail = strip.data().contentRect().w;
+
+    // First, so it stays reachable when the tabs run out of room.
+    if (tabs.canAdd(tab_count)) {
+        var m = dvui.menu(@src(), .horizontal, .{ .gravity_y = 0.5 });
+        defer m.deinit();
+        if (dvui.menuItemLabel(@src(), "+", .{ .submenu = true }, .{
+            .color_text = theme.colors.text_secondary,
+            .color_fill = transparent,
+            .color_fill_hover = theme.colors.bg_hover,
+            .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
+        })) |r| {
+            var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
+            defer fw.deinit();
+            var menu = dvui.menu(@src(), .vertical, .{
+                .background = true,
+                .color_fill = theme.colors.bg_surface,
+                .border = dvui.Rect.all(1),
+                .color_border = theme.colors.border_subtle,
+            });
+            defer menu.deinit();
+            for (tabs.kinds, 0..) |kind, k| {
+                var buf: [48]u8 = undefined;
+                const missing = if (agentOf(kind)) |agent| !launch.installed(agent) else false;
+                const text = std.fmt.bufPrint(&buf, "{s}{s}", .{ tabs.kindTitle(kind), if (missing) " (not installed)" else "" }) catch tabs.kindTitle(kind);
+                if (dvui.menuItemLabel(@src(), text, .{}, .{
+                    .id_extra = k,
+                    .expand = .horizontal,
+                    .color_text = if (missing) theme.colors.text_tertiary else theme.colors.text_primary,
+                })) |_| {
+                    start(kind);
+                    // start() activated the new tab; the indices above are stale.
+                    return;
+                }
+            }
+        }
+    } else {
+        _ = dvui.label(@src(), "6 of 6", .{}, .{
+            .color_text = theme.colors.text_tertiary,
+            .gravity_y = 0.5,
+            .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
+        });
+    }
+
     for (tab_list[0..tab_count], 0..) |*t, i| {
         const is_active = i == cur;
         var cell = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -391,47 +438,6 @@ fn renderTabStrip() void {
             .margin = dvui.Rect.all(0),
             .gravity_y = 0.5,
         })) close = i;
-    }
-
-    if (tabs.canAdd(tab_count)) {
-        var m = dvui.menu(@src(), .horizontal, .{ .gravity_y = 0.5 });
-        defer m.deinit();
-        if (dvui.menuItemLabel(@src(), "+", .{ .submenu = true }, .{
-            .color_text = theme.colors.text_secondary,
-            .color_fill = transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
-        })) |r| {
-            var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
-            defer fw.deinit();
-            var menu = dvui.menu(@src(), .vertical, .{
-                .background = true,
-                .color_fill = theme.colors.bg_surface,
-                .border = dvui.Rect.all(1),
-                .color_border = theme.colors.border_subtle,
-            });
-            defer menu.deinit();
-            for (tabs.kinds, 0..) |kind, k| {
-                var buf: [48]u8 = undefined;
-                const missing = if (agentOf(kind)) |agent| !launch.installed(agent) else false;
-                const text = std.fmt.bufPrint(&buf, "{s}{s}", .{ tabs.kindTitle(kind), if (missing) " (not installed)" else "" }) catch tabs.kindTitle(kind);
-                if (dvui.menuItemLabel(@src(), text, .{}, .{
-                    .id_extra = k,
-                    .expand = .horizontal,
-                    .color_text = if (missing) theme.colors.text_tertiary else theme.colors.text_primary,
-                })) |_| {
-                    start(kind);
-                    // start() activated the new tab; the indices above are stale.
-                    return;
-                }
-            }
-        }
-    } else {
-        _ = dvui.label(@src(), "6 of 6", .{}, .{
-            .color_text = theme.colors.text_tertiary,
-            .gravity_y = 0.5,
-            .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
-        });
     }
 
     // Applied after the strip is built, so the loop above never sees a tab vanish.

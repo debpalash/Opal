@@ -55,7 +55,25 @@ pub fn baseName(buf: []u8, kind: Kind, ordinal: u8) []const u8 {
 /// Longest tab label in bytes before the title is cut with an ellipsis, by how
 /// many tabs share the strip: few tabs get room, six must all fit a small window.
 pub fn labelMax(count: usize) usize {
-    return if (count <= 2) 40 else if (count <= 4) 28 else 20;
+    return switch (count) {
+        0...2 => 40,
+        3 => 26,
+        4 => 20,
+        5 => 15,
+        else => 12,
+    };
+}
+
+/// Like `labelMax`, but from the room the strip really has: `avail` and `char_px`
+/// are in the same unit; each tab also spends about 56 of it on padding, the dot
+/// and its x, and the "+" about 48. Never more than the fixed budget.
+pub fn labelMaxFit(count: usize, avail: f32, char_px: f32) usize {
+    const fixed = labelMax(count);
+    if (count == 0 or avail <= 0 or char_px <= 0) return fixed;
+    const per_tab = (avail - 48) / @as(f32, @floatFromInt(count)) - 56;
+    if (per_tab <= 0) return 0;
+    const chars: usize = @intFromFloat(@min(per_tab / char_px, 200));
+    return @min(chars, fixed);
 }
 
 /// The longest prefix of `s` of at most `max` bytes that ends on a character
@@ -80,6 +98,8 @@ pub fn label(buf: []u8, base: []const u8, title: []const u8, exited: bool, max: 
     }
     const t = std.mem.trim(u8, title, " \t\r\n");
     if (t.len == 0 or std.mem.eql(u8, t, base)) return buf[0..n];
+    // Not even a few characters of room: the name alone, the marker says it changed.
+    if (max -| (n + 4) < 3) return buf[0..n];
     appendBytes(buf, &n, " \xc2\xb7 "); // middle dot
     const room = max -| n;
     const clipped = clipUtf8(t, room);
@@ -125,6 +145,16 @@ test "tabs are capped at six" {
     try std.testing.expect(canAdd(5));
     try std.testing.expect(!canAdd(6));
     try std.testing.expect(!canAdd(7));
+}
+
+test "the label budget shrinks with the room the strip has" {
+    // Plenty of room: the fixed budget rules.
+    try std.testing.expectEqual(labelMax(3), labelMaxFit(3, 2000, 8));
+    // 600 wide, 6 tabs: (600-48)/6 - 56 = 36 px = 4 chars.
+    try std.testing.expectEqual(@as(usize, 4), labelMaxFit(6, 600, 8));
+    try std.testing.expectEqual(@as(usize, 0), labelMaxFit(6, 100, 8));
+    // Unknown size (first frame): the fixed budget.
+    try std.testing.expectEqual(labelMax(2), labelMaxFit(2, 0, 8));
 }
 
 test "a new tab takes the lowest free ordinal of its kind" {
@@ -174,6 +204,8 @@ test "a long or hostile title is clipped on a character boundary and cleaned" {
     // A tiny buffer gives a prefix rather than overflowing.
     var tiny: [4]u8 = undefined;
     try std.testing.expectEqualStrings("Code", label(&tiny, "Codex", "abc", false, 40));
+    // No room for a title next to a long name: the name only, never a bare ellipsis.
+    try std.testing.expectEqualStrings("Claude Code", label(&b, "Claude Code", long, false, labelMax(6)));
 }
 
 test "closing a tab picks a neighbour" {
