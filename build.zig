@@ -1707,7 +1707,8 @@ pub fn build(b: *std.Build) void {
     });
     const run_test_cinemeta_meta_pure = b.addRunArtifact(test_cinemeta_meta_pure);
     test_step.dependOn(&run_test_cinemeta_meta_pure.step);
-    b.step("test-keyless", "Test keyless Movies & TV detail shaping and catalog mapping").dependOn(&run_test_cinemeta_meta_pure.step);
+    const keyless_test_step = b.step("test-keyless", "Test keyless Movies & TV detail shaping, catalog mapping and tracking");
+    keyless_test_step.dependOn(&run_test_cinemeta_meta_pure.step);
 
     // Internet Archive JSON parsing: advancedsearch docs[] iteration
     // (order-independent id/title/year) + metadata files[] best-video pick +
@@ -1905,7 +1906,10 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    test_step.dependOn(&b.addRunArtifact(test_keyless_tv_pure).step);
+    test_keyless_tv_pure.use_llvm = true; // the self-hosted backend hits a linker error here
+    const run_test_keyless_tv = b.addRunArtifact(test_keyless_tv_pure);
+    test_step.dependOn(&run_test_keyless_tv.step);
+    keyless_test_step.dependOn(&run_test_keyless_tv.step);
 
     // OMDb ratings enrichment: real IMDb / RT / Metacritic parse from the OMDb
     // body (Ratings[] source matching, Metacritic "88/100" → "88", N/A → absent),
