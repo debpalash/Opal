@@ -32,6 +32,7 @@ var want_focus: bool = false;
 const Drag = enum { none, select, report };
 var drag: Drag = .none;
 var pressed_button: ?pointer.Button = null;
+var was_focused: bool = false;
 var launched: ?Kind = null;
 var note_buf: [128]u8 = undefined;
 var note_len: usize = 0;
@@ -258,6 +259,7 @@ fn renderTerminal(s: *Session) void {
         want_focus = false;
         drag = .none;
         pressed_button = null;
+        was_focused = false;
         dvui.focusWidget(wd.id, null, null);
     }
 
@@ -273,10 +275,16 @@ fn renderTerminal(s: *Session) void {
 
     handleEvents(s, wd, rs.r, cw, ch);
 
+    // Programs that asked for focus reports (DEC 1004) hear about gains and losses.
+    const focused = dvui.focusedWidgetId() == wd.id;
+    if (focused != was_focused) {
+        was_focused = focused;
+        s.sendFocus(focused);
+    }
+
     _ = s.snapshot(&snap);
     if (snap.cols == 0 or snap.cells.len == 0) return;
 
-    const focused = dvui.focusedWidgetId() == wd.id;
     if (focused) dvui.wantTextInput(.{ .x = 0, .y = 0, .w = 0, .h = 0 });
 
     {
