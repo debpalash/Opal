@@ -56,6 +56,23 @@ pub fn wheelRows(delta: f32, rows_per_notch: f32) isize {
     return if (delta > 0) -1 else 1;
 }
 
+/// What a horizontal wheel event does. Shift turns a vertical wheel into a
+/// horizontal one in the toolkit, so with Shift held it is really a vertical
+/// scroll (negate the delta). Otherwise it is reported to a program that tracks
+/// the mouse (buttons six and seven) and ignored by one that does not: there is
+/// nothing to scroll sideways.
+pub const HWheel = enum { ignore, report, vertical };
+
+pub fn horizontalWheel(tracking: bool, shift: bool) HWheel {
+    if (shift) return .vertical;
+    return if (tracking) .report else .ignore;
+}
+
+/// xterm's wheel buttons: six is left, seven is right. Positive means right.
+pub fn hwheelButton(dx: f32) Button {
+    return if (dx > 0) .seven else .six;
+}
+
 /// Where the overlay scrollbar's thumb sits within a track of `track_h`.
 pub const Thumb = struct { y: f32, h: f32 };
 
@@ -151,6 +168,16 @@ test "wheelRows keeps direction and moves at least one row" {
     try std.testing.expectEqual(@as(isize, -1), wheelRows(0.1, 3));
     try std.testing.expectEqual(@as(isize, 1), wheelRows(-0.1, 3));
     try std.testing.expectEqual(@as(isize, 0), wheelRows(0, 3));
+}
+
+test "horizontal wheel is reported to mouse programs, ignored otherwise" {
+    try std.testing.expectEqual(HWheel.report, horizontalWheel(true, false));
+    try std.testing.expectEqual(HWheel.ignore, horizontalWheel(false, false));
+    // Shift+wheel is a vertical scroll the toolkit rotated.
+    try std.testing.expectEqual(HWheel.vertical, horizontalWheel(true, true));
+    try std.testing.expectEqual(HWheel.vertical, horizontalWheel(false, true));
+    try std.testing.expectEqual(Button.seven, hwheelButton(1));
+    try std.testing.expectEqual(Button.six, hwheelButton(-0.3));
 }
 
 test "thumb geometry follows the viewport" {

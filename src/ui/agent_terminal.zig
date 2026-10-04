@@ -65,6 +65,7 @@ const Drag = enum { none, select, report, scrollbar };
 var drag: Drag = .none;
 var pressed_button: ?pointer.Button = null;
 var was_focused: bool = false;
+var ime: keymap.ImeGuard = .{};
 var frame_guard: pointer.FrameGuard = .{};
 /// While dragging the scrollbar: where in the thumb it was grabbed, and the
 /// offset last asked for (the snapshot lags a frame behind).
@@ -193,6 +194,7 @@ fn activate(i: usize) void {
         tab_list[cur].session.sendFocus(false);
     }
     was_focused = false;
+    ime.reset();
     drag = .none;
     pressed_button = null;
     cur = i;
@@ -213,6 +215,7 @@ fn closeTab(i: usize) void {
     tab_count -= 1;
     // `snap` may have pointed into the moved array: renderTerminal sets it again.
     snap = &empty_snap;
+    ime.reset();
     drag = .none;
     pressed_button = null;
     if (tab_count == 0) {
@@ -554,13 +557,18 @@ fn renderTerminal(t: *Tab) void {
     const focused = dvui.focusedWidgetId() == wd.id;
     if (focused != was_focused) {
         was_focused = focused;
+        if (!focused) ime.reset();
         s.sendFocus(focused);
     }
 
     _ = s.snapshot(snap);
     if (snap.cols == 0 or snap.cells.len == 0) return;
 
-    if (focused) dvui.wantTextInput(.{ .x = 0, .y = 0, .w = 0, .h = 0 });
+    // The input method puts its candidate window by this rectangle: the cursor cell.
+    if (focused) {
+        const cur_r = rect(rs, @as(f32, @floatFromInt(snap.cursor_x)) * cw, @as(f32, @floatFromInt(snap.cursor_y)) * ch, cw, ch);
+        dvui.wantTextInput(cur_r.toNatural());
+    }
 
     {
         const prev_clip = dvui.clip(rs.r);
@@ -759,6 +767,27 @@ fn clipboardCopy(s: *Session) void {
     dvui.clipboardTextSet(text);
 }
 
+/// A vertical wheel turn: to a program that tracks the mouse, as arrows on the
+/// alternate screen for one that does not, otherwise through the scrollback.
+/// `bypass` (Shift) skips the mouse report, like selecting does.
+fn wheelVertical(s: *Session, dy: f32, bypass: bool, mods: session_mod.c.GhosttyMods, hit: pointer.Hit) void {
+    const modes = s.modes();
+    if (!bypass and modes.mouse_tracking) {
+        // Wheel notches are buttons four (up) and five (down).
+        const notches: usize = @max(1, @as(usize, @intFromFloat(@round(@abs(dy)))));
+        const btn: pointer.Button = if (dy > 0) .four else .five;
+        for (0..@min(notches, 10)) |_| _ = s.mouseReport(.press, btn, mods, hit, false);
+    } else if (modes.alt_screen and modes.alt_scroll) {
+        // Full-screen programs without mouse support (less, man) get arrows.
+        const n: usize = @abs(pointer.wheelRows(dy, SCROLL_ROWS_PER_NOTCH));
+        const key: session_mod.c.GhosttyKey = @intCast(if (dy > 0) session_mod.c.GHOSTTY_KEY_ARROW_UP else session_mod.c.GHOSTTY_KEY_ARROW_DOWN);
+        for (0..@min(n, 30)) |_| _ = s.sendKey(key, 0, .press, "");
+    } else {
+        s.scroll(pointer.wheelRows(dy, SCROLL_ROWS_PER_NOTCH));
+    }
+    state.wakeUi();
+}
+
 fn handleEvents(s: *Session, wd: *dvui.WidgetData, content: dvui.Rect.Physical, cw: f32, ch: f32) void {
     var text_guard = keymap.TextGuard{};
     for (dvui.events()) |*e| {
@@ -850,23 +879,24 @@ fn handleEvents(s: *Session, wd: *dvui.WidgetData, content: dvui.Rect.Physical, 
                     .position => dvui.cursorSet(.ibeam),
                     .wheel_y => |dy| {
                         e.handle(@src(), wd);
-                        const modes = s.modes();
-                        if (!bypass and modes.mouse_tracking) {
-                            // Wheel notches are buttons four (up) and five (down).
-                            const notches: usize = @max(1, @as(usize, @intFromFloat(@round(@abs(dy)))));
-                            const btn: pointer.Button = if (dy > 0) .four else .five;
-                            for (0..@min(notches, 10)) |_| _ = s.mouseReport(.press, btn, mods, hit, false);
-                        } else if (modes.alt_screen and modes.alt_scroll) {
-                            // Full-screen programs without mouse support (less, man) get arrows.
-                            const n: usize = @abs(pointer.wheelRows(dy, SCROLL_ROWS_PER_NOTCH));
-                            const key: session_mod.c.GhosttyKey = @intCast(if (dy > 0) session_mod.c.GHOSTTY_KEY_ARROW_UP else session_mod.c.GHOSTTY_KEY_ARROW_DOWN);
-                            for (0..@min(n, 30)) |_| _ = s.sendKey(key, 0, .press, "");
-                        } else {
-                            s.scroll(pointer.wheelRows(dy, SCROLL_ROWS_PER_NOTCH));
-                        }
-                        state.wakeUi();
+                        wheelVertical(s, dy, bypass, mods, hit);
                     },
-                    else => {},
+                    .wheel_x => |dx| switch (pointer.horizontalWheel(s.modes().mouse_tracking, bypass)) {
+                        // Nothing to scroll sideways: leave the event alone.
+                        .ignore => {},
+                        .report => {
+                            e.handle(@src(), wd);
+                            const notches: usize = @max(1, @as(usize, @intFromFloat(@round(@abs(dx)))));
+                            const btn = pointer.hwheelButton(dx);
+                            for (0..@min(notches, 10)) |_| _ = s.mouseReport(.press, btn, mods, hit, false);
+                            state.wakeUi();
+                        },
+                        // Shift+wheel: the toolkit rotated a vertical wheel.
+                        .vertical => {
+                            e.handle(@src(), wd);
+                            wheelVertical(s, -dx, true, mods, hit);
+                        },
+                    },
                 }
             },
             .key => |ke| {
@@ -883,22 +913,29 @@ fn handleEvents(s: *Session, wd: *dvui.WidgetData, content: dvui.Rect.Physical, 
                     state.wakeUi();
                     continue;
                 }
-                // Copy and paste: Cmd+C/V on macOS, Ctrl+Shift+C/V elsewhere.
-                const mac = @import("builtin").os.tag == .macos;
-                const clip_mod = if (mac) (m.super and !m.ctrl and !m.alt) else (m.ctrl and m.shift and !m.alt);
-                if (clip_mod and ke.code == .v) {
-                    e.handle(@src(), wd);
-                    switch (s.paste(dvui.clipboardText())) {
-                        .too_large => state.showToast("Paste is too large for the terminal (limit 512 KB)"),
-                        .failed => state.showToast("The terminal did not accept the whole paste"),
-                        else => {},
-                    }
-                    s.scrollToBottom();
-                    continue;
+                // Copy and paste: Cmd+C/V on macOS, Ctrl+Shift+C/V (and Ctrl/Shift+Insert) elsewhere.
+                switch (keymap.clipboardChord(@import("builtin").os.tag == .macos, name, m)) {
+                    .paste => {
+                        e.handle(@src(), wd);
+                        switch (s.paste(dvui.clipboardText())) {
+                            .too_large => state.showToast("Paste is too large for the terminal (limit 512 KB)"),
+                            .failed => state.showToast("The terminal did not accept the whole paste"),
+                            else => {},
+                        }
+                        s.scrollToBottom();
+                        continue;
+                    },
+                    .copy => {
+                        e.handle(@src(), wd);
+                        clipboardCopy(s);
+                        continue;
+                    },
+                    .none => {},
                 }
-                if (clip_mod and ke.code == .c) {
+                // Enter, Backspace and the arrows that edit or confirm an input
+                // method composition are the input method's, not the program's.
+                if (ime.swallowsKey(m, dvui.frameTimeNS())) {
                     e.handle(@src(), wd);
-                    clipboardCopy(s);
                     continue;
                 }
                 const entry = keymap.find(name);
@@ -922,6 +959,8 @@ fn handleEvents(s: *Session, wd: *dvui.WidgetData, content: dvui.Rect.Physical, 
                 switch (te.action) {
                     .value => |v| {
                         e.handle(@src(), wd);
+                        // Text still being composed is not typed; the finished text arrives next.
+                        if (!ime.onText(v.txt.len, v.selected, dvui.frameTimeNS())) continue;
                         // The echo of an Alt/Ctrl-encoded key must not also type.
                         if (text_guard.drops(v.txt)) continue;
                         s.write(v.txt);
