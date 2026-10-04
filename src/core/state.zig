@@ -856,6 +856,10 @@ pub const AppState = struct {
     wanted_follow_tv: bool = false,
     /// Scheduled agent tasks run only while this is on (they spend the user's agent credit).
     agent_tasks_enabled: bool = false,
+    /// The background operator (jobs handed to a coding agent behind the scenes) runs only while on.
+    operator_enabled: bool = false,
+    /// Spend ceiling per UTC day for operator jobs, in cents.
+    operator_daily_cents: u32 = 100,
     sub_search_buf: [256]u8 = std.mem.zeroes([256]u8),
 
     // ── MPV Scripts ──

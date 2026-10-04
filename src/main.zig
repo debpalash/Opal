@@ -1246,6 +1246,7 @@ fn appFrame() !dvui.App.Result {
     @import("services/downloads.zig").tick();
     @import("services/wanted.zig").tick();
     @import("services/agent_tasks.zig").tick();
+    @import("services/operator.zig").tick();
 
     // Swap in TMDB pages staged by fetch workers (UI thread owns `results`;
     // workers staging + this apply is what keeps the render loop's iteration

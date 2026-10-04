@@ -5060,6 +5060,15 @@ fn renderAgentAccess() void {
     }
 
     {
+        const op_before = state.app.operator_enabled;
+        components.toggleRow(@src(), "Background operator", "Lets Opal quietly ask a coding agent to fix problems it cannot solve alone: other titles for a wanted item, a moved source address. Uses your agent credit within a daily limit; changes to sources wait for your approval", &state.app.operator_enabled);
+        if (state.app.operator_enabled != op_before) {
+            @import("../services/operator.zig").setEnabled(state.app.operator_enabled);
+            state.showToast(if (state.app.operator_enabled) "Background operator on" else "Background operator off");
+        }
+    }
+
+    {
         const tasks_before = state.app.agent_tasks_enabled;
         components.toggleRow(@src(), "Run scheduled agent tasks", "Lets saved prompts run a coding agent on a timer, unattended. Uses your agent credit; each task has a daily cap", &state.app.agent_tasks_enabled);
         if (state.app.agent_tasks_enabled != tasks_before) {

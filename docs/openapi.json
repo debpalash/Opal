@@ -2664,6 +2664,25 @@
         }
       }
     },
+    "/operator": {
+      "get": {
+        "operationId": "operator_jobs_list",
+        "summary": "Background operator jobs: problems Opal handed to a coding agent behind the scenes (alternate titles for wanted items, moved source addresses), with their state, one-line summary and cost today. Proposals wait for the user to approve them in the Agents page; no tool can approve them.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
     "/agent/tasks": {
       "get": {
         "operationId": "agent_tasks_list",

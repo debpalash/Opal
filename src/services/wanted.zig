@@ -34,6 +34,8 @@ var busy = std.atomic.Value(bool).init(false);
 var last_tick_ms: i64 = 0;
 var last_follow_ms: i64 = 0;
 const FOLLOW_INTERVAL_MS: i64 = 60 * 60 * 1000;
+/// Misses before the operator is asked for alternate titles.
+const OPERATOR_AFTER_MISSES: u32 = 3;
 /// A picked torrent that is no longer in the session after this long is re-searched.
 const DEAD_DOWNLOAD_MS: i64 = 3 * 24 * 60 * 60 * 1000;
 /// Set by `checkNow`: search this item on the next tick regardless of its backoff.
@@ -73,8 +75,11 @@ fn ensureTable() bool {
             "attempts INTEGER NOT NULL DEFAULT 0," ++
             "infohash TEXT NOT NULL DEFAULT ''," ++
             "picked TEXT NOT NULL DEFAULT ''," ++
+            "extra_titles TEXT NOT NULL DEFAULT ''," ++
             "UNIQUE(kind, title, year, season, episode))",
     );
+    // Tables created before alternate titles existed get the column added.
+    db.exec("ALTER TABLE wanted_items ADD COLUMN extra_titles TEXT NOT NULL DEFAULT ''");
     table_ready.store(true, .release);
     return true;
 }
@@ -89,13 +94,22 @@ const Item = struct {
     episode: u16 = 0,
     profile: pure.Profile = .{},
     attempts: u32 = 0,
+    /// Alternate titles the operator found, newline separated.
+    alts: [480]u8 = undefined,
+    alts_len: usize = 0,
 
     fn target(self: *const Item) pure.Target {
         return .{ .kind = self.kind, .title = self.title[0..self.title_len], .year = self.year, .season = self.season, .episode = self.episode };
     }
+
+    fn targetFor(self: *const Item, title: []const u8) pure.Target {
+        var t = self.target();
+        t.title = title;
+        return t;
+    }
 };
 
-const select_cols = "id, kind, title, year, season, episode, min_quality, prefer_quality, max_quality, attempts";
+const select_cols = "id, kind, title, year, season, episode, min_quality, prefer_quality, max_quality, attempts, extra_titles";
 
 fn readItem(stmt: ?*db.Stmt) ?Item {
     var it = Item{};
@@ -111,6 +125,9 @@ fn readItem(stmt: ?*db.Stmt) ?Item {
     it.profile.prefer_quality = @intCast(std.math.clamp(db.columnInt(stmt, 7), 0, pure.Q_MAX));
     it.profile.max_quality = @intCast(std.math.clamp(db.columnInt(stmt, 8), 0, pure.Q_MAX));
     it.attempts = @intCast(@max(0, db.columnInt(stmt, 9)));
+    const alts = db.columnText(stmt, 10) orelse "";
+    it.alts_len = @min(alts.len, it.alts.len);
+    @memcpy(it.alts[0..it.alts_len], alts[0..it.alts_len]);
     return it;
 }
 
@@ -234,6 +251,33 @@ pub fn setFollowTv(on: bool) void {
     state.app.wanted_follow_tv = on;
     last_follow_ms = 0;
     state.markConfigDirty();
+}
+
+/// Alternate titles for an item (from the background operator): replaced
+/// wholesale, and the item is searched again soon with the new wording.
+pub fn setExtraTitles(id: i64, titles: []const []const u8) bool {
+    if (!ensureTable()) return false;
+    var joined: [480]u8 = undefined;
+    var n: usize = 0;
+    for (titles) |raw| {
+        const t = pure.cleanAltTitle(raw) orelse continue;
+        if (n + t.len + 1 > joined.len) break;
+        if (n > 0) {
+            joined[n] = '\n';
+            n += 1;
+        }
+        @memcpy(joined[n .. n + t.len], t);
+        n += t.len;
+    }
+    if (n == 0) return false;
+    const stmt = db.prepare("UPDATE wanted_items SET extra_titles=?1, next_check_ms=0 WHERE id=?2 AND status='wanted'") orelse return false;
+    defer db.finalize(stmt);
+    db.bindText(stmt, 1, joined[0..n]);
+    db.bindInt64(stmt, 2, id);
+    if (db.step(stmt) != db.c.SQLITE_DONE or db.c.sqlite3_changes(db.get()) == 0) return false;
+    last_tick_ms = 0;
+    state.wakeUi();
+    return true;
 }
 
 pub fn checkNow(id: i64) bool {
@@ -456,12 +500,6 @@ fn searchWorker(item: Item) void {
     defer busy.store(false, .release);
     const now = io_g.milliTimestamp();
 
-    var qbuf: [256]u8 = undefined;
-    const query = pure.searchQuery(&qbuf, item.target()) orelse {
-        recordMiss(item, now);
-        return;
-    };
-
     // Heap, never the worker's stack: ResolvedItem is several KB and the sink
     // holds MAX_RESULTS of them.
     const rows = alloc.alloc(resolver.ResolvedItem, resolver.MAX_RESULTS) catch {
@@ -469,45 +507,76 @@ fn searchWorker(item: Item) void {
         return;
     };
     defer alloc.free(rows);
-    const n = resolver.searchTorrentsPrivate(query, rows);
-    if (workers.isQuitting()) return;
 
-    const cands = alloc.alloc(pure.Candidate, n) catch {
-        recordMiss(item, now);
+    // The wanted title first, then each alternate title the operator found; stop at
+    // the first one that yields an acceptable release.
+    var searched: usize = 0;
+    var total_candidates: usize = 0;
+    var titles = std.mem.splitScalar(u8, item.alts[0..item.alts_len], '\n');
+    var primary_done = false;
+    while (true) {
+        const title: []const u8 = if (!primary_done) blk: {
+            primary_done = true;
+            break :blk item.title[0..item.title_len];
+        } else titles.next() orelse break;
+        if (title.len == 0) continue;
+        const target = item.targetFor(title);
+
+        var qbuf: [256]u8 = undefined;
+        const query = pure.searchQuery(&qbuf, target) orelse continue;
+        const n = resolver.searchTorrentsPrivate(query, rows);
+        if (workers.isQuitting()) return;
+        searched += 1;
+        total_candidates += n;
+
+        const cands = alloc.alloc(pure.Candidate, n) catch continue;
+        defer alloc.free(cands);
+        for (rows[0..n], 0..) |*r, i| {
+            const name = r.name[0..r.name_len];
+            cands[i] = .{
+                .name = name,
+                .quality = r.quality,
+                .seeds = r.seeds,
+                .size_bytes = r.size_bytes,
+                .is_magnet = r.source == .torrent and std.ascii.startsWithIgnoreCase(r.url[0..r.url_len], "magnet:?"),
+                .blocked = risk.assess(name, @floatFromInt(r.size_bytes)).risk == .block,
+            };
+        }
+        const pick = pure.pickBest(item.profile, target, cands) orelse continue;
+
+        pending_lock.lock();
+        defer pending_lock.unlock();
+        if (pending_ready) return; // owner thread has not consumed the last pick yet; retry next time
+        const r = &rows[pick];
+        pending.id = item.id;
+        pending.magnet_len = @min(r.url_len, pending.magnet.len - 1);
+        @memcpy(pending.magnet[0..pending.magnet_len], r.url[0..pending.magnet_len]);
+        pending.magnet[pending.magnet_len] = 0;
+        pending.name_len = @min(r.name_len, pending.name.len);
+        @memcpy(pending.name[0..pending.name_len], r.name[0..pending.name_len]);
+        pending_ready = true;
+        state.wakeUi();
         return;
-    };
-    defer alloc.free(cands);
-    for (rows[0..n], 0..) |*r, i| {
-        const name = r.name[0..r.name_len];
-        cands[i] = .{
-            .name = name,
-            .quality = r.quality,
-            .seeds = r.seeds,
-            .size_bytes = r.size_bytes,
-            .is_magnet = r.source == .torrent and std.ascii.startsWithIgnoreCase(r.url[0..r.url_len], "magnet:?"),
-            .blocked = risk.assess(name, @floatFromInt(r.size_bytes)).risk == .block,
-        };
     }
 
-    const pick = pure.pickBest(item.profile, item.target(), cands) orelse {
-        recordMiss(item, now);
-        var lb: [160]u8 = undefined;
-        logs.pushLog("info", "wanted", std.fmt.bufPrint(&lb, "No release yet for \"{s}\" ({d} candidates)", .{ item.title[0..item.title_len], n }) catch "No release yet", false);
-        return;
-    };
+    recordMiss(item, now);
+    var lb: [160]u8 = undefined;
+    logs.pushLog("info", "wanted", std.fmt.bufPrint(&lb, "No release yet for \"{s}\" ({d} candidates over {d} searches)", .{ item.title[0..item.title_len], total_candidates, searched }) catch "No release yet", false);
+    askOperator(item);
+}
 
-    pending_lock.lock();
-    defer pending_lock.unlock();
-    if (pending_ready) return; // owner thread has not consumed the last pick yet; retry next time
-    const r = &rows[pick];
-    pending.id = item.id;
-    pending.magnet_len = @min(r.url_len, pending.magnet.len - 1);
-    @memcpy(pending.magnet[0..pending.magnet_len], r.url[0..pending.magnet_len]);
-    pending.magnet[pending.magnet_len] = 0;
-    pending.name_len = @min(r.name_len, pending.name.len);
-    @memcpy(pending.name[0..pending.name_len], r.name[0..pending.name_len]);
-    pending_ready = true;
-    state.wakeUi();
+/// After repeated misses, and only once, ask the background operator for other
+/// ways the title is named. The operator checks its own switch, cooldown and budget.
+fn askOperator(item: Item) void {
+    if (item.attempts + 1 < OPERATOR_AFTER_MISSES or item.alts_len > 0) return;
+    var key: [24]u8 = undefined;
+    const k = std.fmt.bufPrint(&key, "{d}", .{item.id}) catch return;
+    var ctx: [512]u8 = undefined;
+    const text = switch (item.kind) {
+        .movie => std.fmt.bufPrint(&ctx, "Kind: movie\nTitle: {s}\nYear: {d}\nSearches without an acceptable release: {d}", .{ item.title[0..item.title_len], item.year, item.attempts + 1 }),
+        .episode => std.fmt.bufPrint(&ctx, "Kind: TV episode\nShow: {s}\nSeason {d}, episode {d}\nSearches without an acceptable release: {d}", .{ item.title[0..item.title_len], item.season, item.episode, item.attempts + 1 }),
+    } catch return;
+    _ = @import("operator.zig").request(.match_help, k, text);
 }
 
 /// Owner thread: start the chosen torrent and record it.

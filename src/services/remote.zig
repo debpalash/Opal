@@ -1145,6 +1145,7 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
     if (@import("remote_plex_api.zig").handle(stream, method, api_path, query)) return;
     if (@import("remote_wanted_api.zig").handle(stream, method, api_path, query)) return;
     if (@import("remote_agent_tasks_api.zig").handle(stream, method, api_path, query, body)) return;
+    if (@import("remote_operator_api.zig").handle(stream, method, api_path, query, body)) return;
     // ── Non-player endpoints checked first ──
     // Search
     if (std.mem.eql(u8, api_path, "/search")) {

@@ -185,6 +185,34 @@ pub fn parseRequest(text: []const u8) ?Parsed {
     return .{ .kind = .movie, .title = t };
 }
 
+/// An alternate title as the operator suggests it, reduced to the title words:
+/// a trailing year or season/episode marker is dropped (the engine adds those
+/// itself). Null when nothing usable is left.
+pub fn cleanAltTitle(raw: []const u8) ?[]const u8 {
+    var t = std.mem.trim(u8, raw, " \t");
+    // At most one of each: "Blade Runner 2049 2017" keeps its 2049.
+    var dropped_year = false;
+    var dropped_marker = false;
+    while (true) {
+        const sp = std.mem.lastIndexOfScalar(u8, t, ' ') orelse break;
+        var tok = t[sp + 1 ..];
+        if (tok.len == 6 and tok[0] == '(' and tok[5] == ')') tok = tok[1..5];
+        const is_year = tok.len == 4 and (if (std.fmt.parseInt(u16, tok, 10)) |y| y >= 1888 and y <= 2200 else |_| false);
+        var lower: [16]u8 = undefined;
+        const is_marker = tok.len <= lower.len and blk: {
+            for (tok, 0..) |ch, i| lower[i] = std.ascii.toLower(ch);
+            break :blk parseSxxExx(lower[0..tok.len]) != null;
+        };
+        if (is_year and !dropped_year) {
+            dropped_year = true;
+        } else if (is_marker and !dropped_marker) {
+            dropped_marker = true;
+        } else break;
+        t = std.mem.trim(u8, t[0..sp], " \t");
+    }
+    return if (t.len >= 2) t else null;
+}
+
 /// Release-name words that mean a low-quality capture or a preview.
 const junk = [_][]const u8{
     "cam",     "hdcam",    "camrip", "ts",     "hdts",    "telesync", "tc",
@@ -551,4 +579,15 @@ test "health never outweighs a quality step and unknown quality respects the min
     try std.testing.expect(thin_1080 > crowded_720);
     const strict = Profile{ .min_quality = 3, .prefer_quality = 3, .max_quality = 4 };
     try std.testing.expect(score(strict, t, .{ .name = "Dune 2021", .quality = Q_UNKNOWN, .seeds = 50, .size_bytes = 0, .is_magnet = true }) == null);
+}
+
+test "alternate titles lose year and episode markers" {
+    try std.testing.expectEqualStrings("Sen to Chihiro", cleanAltTitle("Sen to Chihiro 2001").?);
+    try std.testing.expectEqualStrings("Sen to Chihiro", cleanAltTitle("Sen to Chihiro (2001)").?);
+    try std.testing.expectEqualStrings("Shingeki no Kyojin", cleanAltTitle("Shingeki no Kyojin S04E28").?);
+    try std.testing.expectEqualStrings("Shingeki no Kyojin", cleanAltTitle("Shingeki no Kyojin 2021 S04E28").?);
+    try std.testing.expectEqualStrings("2012", cleanAltTitle("2012").?);
+    try std.testing.expectEqualStrings("Blade Runner 2049", cleanAltTitle("Blade Runner 2049 2017").?);
+    try std.testing.expect(cleanAltTitle("x") == null);
+    try std.testing.expect(cleanAltTitle("   ") == null);
 }

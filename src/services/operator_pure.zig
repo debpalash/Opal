@@ -76,10 +76,9 @@ pub fn spec(kind: Kind) Spec {
             .auto_apply = true,
             .web = false,
             .task = "A media app keeps searching torrent and release indexes for a title and finds nothing. " ++
-                "List up to five alternative search strings that release groups and indexers are likely to use for it: " ++
-                "the original-language or international title, common abbreviations, scene-style names without punctuation, " ++
-                "an alternate season/episode notation. Plain words only, no site names, no operators, no quotes. " ++
-                "Give a one-sentence reason.",
+                "List up to five alternative TITLES the work is known by in release names: the original-language or " ++
+                "international title, romanisations, common abbreviations, regional titles. Titles only, without year, " ++
+                "season or episode markers, no site names, no operators, no quotes. Give a one-sentence reason.",
         },
         .endpoint_repair => .{
             .title = "Find where a source moved",

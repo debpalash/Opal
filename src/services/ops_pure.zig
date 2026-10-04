@@ -549,6 +549,7 @@ pub const ops = [_]Op{
             .{ .name = "value", .kind = .string, .desc = "New value: 0 or 1 for switches, a number for numeric settings, text otherwise.", .required = true, .max_len = 64 },
         },
     },
+    .{ .name = "operator_jobs_list", .summary = "Background operator jobs: problems Opal handed to a coding agent behind the scenes (alternate titles for wanted items, moved source addresses), with their state, one-line summary and cost today. Proposals wait for the user to approve them in the Agents page; no tool can approve them.", .tier = .read, .method = .GET, .path = "/operator" },
     .{ .name = "agent_tasks_list", .summary = "Scheduled agent tasks: prompts a coding agent runs on a timer, with each task's schedule, daily cap, budget, last outcome and a one-line report. Includes whether the user has switched unattended runs on (they do that in Settings; tasks never run while it is off).", .tier = .read, .method = .GET, .path = "/agent/tasks" },
     .{
         .name = "agent_task_add",
