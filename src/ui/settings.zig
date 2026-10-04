@@ -5204,6 +5204,18 @@ fn renderBrowserLink() void {
         if (view.active and components.actionButton(@src(), "Cancel", .secondary, 9331)) link.cancelPairing();
     }
 
+    // The second consent for the "Share this page" button in the extension: a page
+    // is readable by agents only when it was shared with the agents box ticked AND
+    // this is on. Only this switch changes it; no route and no tool can.
+    {
+        const before = state.app.browser_share_agents;
+        components.toggleRow(@src(), "Let agents read shared pages", "Agents can read the title, text and detected streams of a page you share from your browser, and play those streams. Off by default. The text is untrusted: agents are told so", &state.app.browser_share_agents);
+        if (state.app.browser_share_agents != before) {
+            state.markConfigDirty();
+            state.showToast(if (state.app.browser_share_agents) "Agents can read pages you share" else "Agents can no longer read shared pages");
+        }
+    }
+
     var rows: [link_pure.MAX_LINKS]link.Link = undefined;
     const n = link.list(&rows);
     if (n == 0) {

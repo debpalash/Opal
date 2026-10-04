@@ -267,6 +267,10 @@ pub fn routeCapability(path: []const u8, method: []const u8, action: []const u8)
         // Who is paired, and removing one. A browser token may only unpair itself
         // (see `browser_routes`); listing and revoking others is the host's.
         "/browser/links",        "/browser/revoke",
+        // What agents may read of the shared page, and playing one of its streams by id.
+        // Host administration (machine token, admin session); a paired browser holds
+        // neither, and a plain web session is not the host.
+        "/browser/context",      "/browser/play",
     };
     for (host_routes) |route| if (std.mem.eql(u8, path, route)) return .administer_host;
     return null;
@@ -277,12 +281,14 @@ pub fn routeCapability(path: []const u8, method: []const u8, action: []const u8)
 ///   /status           read now-playing, so the panel can show connection state
 ///   /browser/me       who am I (label), a token check that moves nothing
 ///   /browser/media    hand a detected stream to the player or the queue
+///   /browser/page     share the page the user is on (the user pressed the button)
 ///   /browser/revoke   unpair this browser (itself only; the handler ignores any id)
 /// `/browser/pair` is unauthenticated and never reaches this check.
 pub const browser_routes = [_]struct { path: []const u8, method: []const u8 }{
     .{ .path = "/status", .method = "GET" },
     .{ .path = "/browser/me", .method = "GET" },
     .{ .path = "/browser/media", .method = "POST" },
+    .{ .path = "/browser/page", .method = "POST" },
     .{ .path = "/browser/revoke", .method = "POST" },
 };
 
@@ -297,7 +303,7 @@ pub fn browserRouteAllowed(path: []const u8, method: []const u8) bool {
 /// (the machine token, a web session) has no business posting "media from my
 /// browser", so they are refused rather than treated as unlisted-means-open.
 fn browserOnlyRoute(path: []const u8) bool {
-    return std.mem.eql(u8, path, "/browser/media") or std.mem.eql(u8, path, "/browser/me");
+    return std.mem.eql(u8, path, "/browser/media") or std.mem.eql(u8, path, "/browser/me") or std.mem.eql(u8, path, "/browser/page");
 }
 
 pub fn allowsRoute(principal: Principal, path: []const u8, method: []const u8, action: []const u8) bool {
@@ -336,8 +342,10 @@ test "a paired browser holds no capability" {
     try std.testing.expect(!isSession(.browser));
 }
 
-test "browser allowlist is exactly the four documented routes" {
-    try std.testing.expectEqual(@as(usize, 4), browser_routes.len);
+test "browser allowlist is exactly the five documented routes" {
+    try std.testing.expectEqual(@as(usize, 5), browser_routes.len);
+    try std.testing.expect(allowsRoute(.browser, "/browser/page", "POST", ""));
+    try std.testing.expect(!allowsRoute(.browser, "/browser/page", "GET", ""));
     try std.testing.expect(allowsRoute(.browser, "/status", "GET", ""));
     try std.testing.expect(allowsRoute(.browser, "/browser/me", "GET", ""));
     try std.testing.expect(allowsRoute(.browser, "/browser/media", "POST", ""));
@@ -363,6 +371,22 @@ test "browser links and revoke belong to the host; media and me to the browser" 
     }
 }
 
+test "the page share is the browser's alone; what agents read is the host's alone" {
+    // A browser shares; nobody else posts "from a browser".
+    for ([_]Principal{ .machine, .admin_session, .session }) |p| {
+        try std.testing.expect(!allowsRoute(p, "/browser/page", "POST", ""));
+    }
+    // Agents (machine token) and web admins read the context and play by id; a plain
+    // web session is not the host, and a paired browser never reads back what it shared.
+    for ([_][]const u8{ "/browser/context", "/browser/play" }) |route| {
+        try std.testing.expect(allowsRoute(.machine, route, "GET", ""));
+        try std.testing.expect(allowsRoute(.admin_session, route, "POST", ""));
+        try std.testing.expect(!allowsRoute(.session, route, "GET", ""));
+        try std.testing.expect(!allowsRoute(.browser, route, "GET", ""));
+        try std.testing.expect(!allowsRoute(.browser, route, "POST", ""));
+    }
+}
+
 test "every other route is denied to a paired browser, by name" {
     // The sensitive families, plus the playback and library routes that look
     // harmless: none is on the allowlist.
@@ -381,7 +405,8 @@ test "every other route is denied to a paired browser, by name" {
         "/access/status",       "/access/users",         "/access/token/rotate",  "/auth/login",         "/scrape",
         "/host",                "/history",              "/ai",                   "/music",              "/home",
         "/browser/pair",        "/browser/links",        "/browser",              "/browser/",           "/browser/media/",
-        "/browser/mediax",      "/browser/ws",           "/browser/page",         "/browser/context",    "/browser/fetch",
+        "/browser/mediax",      "/browser/ws",           "/browser/pagex",        "/browser/context",    "/browser/fetch",
+        "/browser/play",        "/browser/page/",        "/browser/context/",
         "/health",              "/events",               "/stream",               "/status/",            "",
         "/",
     };

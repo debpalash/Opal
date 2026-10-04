@@ -274,6 +274,17 @@ export function describeCandidate(c: Candidate): { host: string; name: string } 
   return { host: u.host, name: last.length > 60 ? last.slice(0, 57) + "..." : last };
 }
 
+/** One candidate in the wire shape Opal's browser routes take: only the fields
+ *  that are set. Null when the URL could not be accepted, so it is never sent. */
+export function wireCandidate(c: Candidate): MediaPayload["candidates"][number] | null {
+  if (!parse(c.url) || c.url.length > MAX_URL) return null;
+  const cand: MediaPayload["candidates"][number] = { url: c.url, kind: c.kind };
+  if (c.referer && parse(c.referer)) cand.referer = c.referer;
+  if (c.origin && parse(c.origin)) cand.origin = c.origin;
+  if (c.ua && c.ua.length <= 512 && !/[\u0000-\u001f\u007f]/.test(c.ua)) cand.ua = c.ua;
+  return cand;
+}
+
 export interface MediaPayload {
   page_url: string;
   title: string;
@@ -296,11 +307,8 @@ export function buildMediaPayload(
   action: "play" | "queue",
   page: { url?: string; title?: string; art?: string } = {},
 ): MediaPayload | null {
-  if (!parse(c.url) || c.url.length > MAX_URL) return null;
-  const cand: MediaPayload["candidates"][number] = { url: c.url, kind: c.kind };
-  if (c.referer && parse(c.referer)) cand.referer = c.referer;
-  if (c.origin && parse(c.origin)) cand.origin = c.origin;
-  if (c.ua && c.ua.length <= 512 && !/[\u0000-\u001f\u007f]/.test(c.ua)) cand.ua = c.ua;
+  const cand = wireCandidate(c);
+  if (!cand) return null;
   const pageUrl = page.url || c.pageUrl;
   return {
     page_url: pageUrl && parse(pageUrl) && pageUrl.length <= 2048 ? pageUrl : "",
@@ -308,5 +316,88 @@ export function buildMediaPayload(
     art: page.art && parse(page.art) ? page.art : "",
     action,
     candidates: [cand],
+  };
+}
+
+// ── Sharing a page with Opal ────────────────────────────────────────────────
+
+/** Matches the server's bounds (src/services/browser_page_pure.zig). */
+export const SHARE_MAX_TEXT = 8 * 1024;
+export const SHARE_MAX_OG = 12;
+export const SHARE_MAX_JSONLD = 3;
+export const SHARE_MAX_JSONLD_LEN = 2048;
+export const SHARE_MAX_CANDIDATES = 8;
+
+/** What the page-reading step collects in the tab. Every field is page-controlled. */
+export interface PageFacts {
+  url: string;
+  title: string;
+  og: Record<string, string>;
+  jsonld: string[];
+  text: string;
+}
+
+export interface SharePayload {
+  url: string;
+  title: string;
+  og: Record<string, string>;
+  jsonld: string[];
+  text: string;
+  /** The "also let agents read this page" box. False unless the user ticked it. */
+  shared_with_agents: boolean;
+  candidates: MediaPayload["candidates"];
+}
+
+/** Cut to at most `max` UTF-8 bytes without splitting a character. */
+export function clipBytes(s: string, max: number): string {
+  const enc = new TextEncoder();
+  if (enc.encode(s).length <= max) return s;
+  let out = "";
+  let used = 0;
+  for (const ch of s) {
+    const n = enc.encode(ch).length;
+    if (used + n > max) break;
+    out += ch;
+    used += n;
+  }
+  return out;
+}
+
+/** The body for `POST /api/browser/page`. Built only when the user presses
+ *  "Share this page with Opal"; never from a background event. Returns null when
+ *  the page address itself cannot be sent. Candidates come from the tab's own
+ *  sniffer list, best first, at most eight. */
+export function buildSharePayload(
+  facts: PageFacts,
+  candidates: Candidate[],
+  agents: boolean,
+): SharePayload | null {
+  if (!parse(facts.url) || facts.url.length > 2048) return null;
+  const og: Record<string, string> = {};
+  let n = 0;
+  for (const [k, v] of Object.entries(facts.og ?? {})) {
+    if (n >= SHARE_MAX_OG) break;
+    if (typeof k !== "string" || typeof v !== "string" || !k || !v) continue;
+    og[clipBytes(k, 40)] = clipBytes(v, 300);
+    n++;
+  }
+  const jsonld = (facts.jsonld ?? [])
+    .filter((x) => typeof x === "string" && x.trim())
+    .slice(0, SHARE_MAX_JSONLD)
+    .map((x) => clipBytes(x, SHARE_MAX_JSONLD_LEN));
+  const wire: MediaPayload["candidates"] = [];
+  for (const c of candidates) {
+    if (wire.length >= SHARE_MAX_CANDIDATES) break;
+    const w = wireCandidate(c);
+    if (w) wire.push(w);
+  }
+  return {
+    url: facts.url,
+    title: clipBytes(facts.title ?? "", 256),
+    og,
+    jsonld,
+    text: clipBytes((facts.text ?? "").replace(/\n{3,}/g, "\n\n"), SHARE_MAX_TEXT),
+    shared_with_agents: agents === true,
+    candidates: wire,
   };
 }

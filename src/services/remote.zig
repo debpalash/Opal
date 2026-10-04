@@ -773,14 +773,16 @@ fn clientKey(address: std.Io.net.IpAddress) u64 {
     }
 }
 
-/// Lets exactly one route send a body past the 4096-byte request buffer: a paired
-/// browser posting `/api/browser/media`, whose signed stream URLs plus Referer
-/// can exceed 4 KB by themselves. Runs on the already-read head only when the
+/// Lets exactly two routes send a body past the 4096-byte request buffer: a paired
+/// browser posting `/api/browser/media` (signed stream URLs plus Referer can exceed
+/// 4 KB by themselves) and `/api/browser/page` (the page the user shared: up to 8 KB
+/// of text, metadata and the streams found on it). Runs on the already-read head only when the
 /// declared request would not fit, and requires the browser token, so an
 /// anonymous or differently-privileged caller never makes the server allocate.
 fn browserBodyGate(head: []const u8) bool {
-    const route = "POST /api/browser/media";
-    if (!std.mem.startsWith(u8, head, route)) return false;
+    const route = for ([_][]const u8{ "POST /api/browser/media", "POST /api/browser/page" }) |r| {
+        if (std.mem.startsWith(u8, head, r)) break r;
+    } else return false;
     if (head.len == route.len or (head[route.len] != ' ' and head[route.len] != '?')) return false;
     const bearer = extractBearer(head) orelse return false;
     const principal = principalForBearer(bearer) orelse return false;

@@ -24,8 +24,10 @@ import {
   classifyUrl,
   isNoiseUrl,
   makeCandidate,
+  buildSharePayload,
   sortCandidates,
   type Candidate,
+  type PageFacts,
 } from "./sniffer";
 
 // ── Link state ──────────────────────────────────────────────────────────────
@@ -420,16 +422,103 @@ export async function sendCandidate(
   return { ...res, queuedWithoutHeaders };
 }
 
+// ── Sharing the page with Opal ──────────────────────────────────────────────
+
+/** Read what the page itself says about itself, in the tab, when the user asks.
+ *  Needs access to the page (activeTab after the user's click, or all-sites
+ *  access); without it only the tab's own title and address are shared. */
+async function readPageFacts(tabId: number): Promise<{ facts: PageFacts; read: boolean } | null> {
+  let tab: chrome.tabs.Tab;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch {
+    return null;
+  }
+  const facts: PageFacts = { url: tab.url ?? "", title: tab.title ?? "", og: {}, jsonld: [], text: "" };
+  let read = false;
+  try {
+    const [r] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        const og: Record<string, string> = {};
+        for (const m of Array.from(document.querySelectorAll<HTMLMetaElement>('meta[property^="og:"], meta[name^="twitter:"]'))) {
+          const k = m.getAttribute("property") || m.getAttribute("name") || "";
+          if (k && m.content && !(k in og)) og[k] = m.content;
+          if (Object.keys(og).length >= 12) break;
+        }
+        const jsonld: string[] = [];
+        for (const sc of Array.from(document.querySelectorAll('script[type="application/ld+json"]'))) {
+          if (sc.textContent) jsonld.push(sc.textContent.slice(0, 4000));
+          if (jsonld.length >= 3) break;
+        }
+        return { title: document.title, og, jsonld, text: (document.body?.innerText ?? "").slice(0, 20000) };
+      },
+    });
+    const v = r?.result as { title?: string; og?: Record<string, string>; jsonld?: string[]; text?: string } | undefined;
+    if (v) {
+      facts.title = v.title || facts.title;
+      facts.og = v.og ?? {};
+      facts.jsonld = v.jsonld ?? [];
+      facts.text = v.text ?? "";
+      read = true;
+    }
+  } catch {
+    // not injectable (a browser page, or no access to this site): share title and address only
+  }
+  return { facts, read };
+}
+
+export interface ShareResult extends BrowserResult {
+  /** The page text and metadata were read; false when only title and address went. */
+  pageRead?: boolean;
+  streams?: number;
+}
+
+/** "Share this page with Opal": one page, one user click, nothing in the
+ *  background. `agents` is the box the user ticked for this page and defaults to
+ *  false; Opal also has its own switch, which this extension cannot see or change. */
+export async function sharePage(tabId: number, agents: boolean): Promise<ShareResult> {
+  await ensureLoaded();
+  const link = await readLink();
+  if (!link) return { ok: false, error: "Pair this browser with Opal first (extension Settings)." };
+  const got = await readPageFacts(tabId);
+  if (!got) return { ok: false, error: "That tab is gone." };
+  const streams = sortCandidates(tabs.get(tabId) ?? []);
+  const payload = buildSharePayload(got.facts, streams, agents === true);
+  if (!payload) return { ok: false, error: "This page's address cannot be shared (only http and https pages)." };
+  const res = await jsonFetch("/api/browser/page", "POST", payload, link.token);
+  if (res.status === 401) {
+    await chrome.storage.local.remove("browserLink");
+    return { ...res, error: "Opal no longer knows this browser: pair it again." };
+  }
+  return { ...res, pageRead: got.read, streams: payload.candidates.length };
+}
+
+// ── Link heartbeat ──────────────────────────────────────────────────────────
+
+// Opal calls a browser "connected" when it was seen in the last couple of
+// minutes, and there is no open socket yet, so the worker checks in once a
+// minute while paired. The call is the same token check the panel uses.
+try {
+  chrome.alarms?.create("opal-link", { periodInMinutes: 1 });
+  chrome.alarms?.onAlarm.addListener((a) => {
+    if (a.name === "opal-link") void readLink().then((l) => l && jsonFetch("/api/browser/me", "GET", undefined, l.token));
+  });
+} catch {
+  // no alarms API: the panel's own checks still count
+}
+
 // ── Message entry point ─────────────────────────────────────────────────────
 
 export interface BrowserMessage {
   kind: "browser";
-  op: "status" | "pair" | "unpair" | "verify" | "list" | "send" | "enable";
+  op: "status" | "pair" | "unpair" | "verify" | "list" | "send" | "enable" | "share";
   code?: string;
   label?: string;
   tabId?: number;
   id?: string;
   action?: "play" | "queue";
+  agents?: boolean;
 }
 
 export async function handleBrowserMessage(msg: BrowserMessage): Promise<unknown> {
@@ -449,6 +538,8 @@ export async function handleBrowserMessage(msg: BrowserMessage): Promise<unknown
       return { ok: true, candidates: await listCandidates(msg.tabId ?? -1) };
     case "send":
       return sendCandidate(msg.tabId ?? -1, msg.id ?? "", msg.action === "queue" ? "queue" : "play");
+    case "share":
+      return sharePage(msg.tabId ?? -1, msg.agents === true);
     default:
       return { ok: false, error: "unknown operation" };
   }
