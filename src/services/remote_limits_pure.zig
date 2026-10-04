@@ -134,6 +134,9 @@ fn queryEquals(query: []const u8, wanted: []const u8, value: []const u8) bool {
 /// charged. Playback/status/media polling is intentionally absent.
 pub fn expensiveCost(path: []const u8, query: []const u8) u16 {
     if (std.mem.eql(u8, path, "/api/scrape")) return 4;
+    // A paired browser hands streams to the player; a few a minute is use, a
+    // flood is a stuck loop in the extension.
+    if (std.mem.eql(u8, path, "/api/browser/media")) return 1;
     if (std.mem.eql(u8, path, "/api/unified_search/preview")) return 1;
     if (std.mem.eql(u8, path, "/api/search") or
         std.mem.eql(u8, path, "/api/unified_search") or
@@ -193,6 +196,8 @@ test "overflow aggregates unseen identities instead of failing open" {
 
 test "weighted scrape cost and expensive route allowlist exclude polling" {
     try std.testing.expectEqual(@as(u16, 4), expensiveCost("/api/scrape", ""));
+    try std.testing.expectEqual(@as(u16, 1), expensiveCost("/api/browser/media", ""));
+    try std.testing.expectEqual(@as(u16, 0), expensiveCost("/api/browser/me", ""));
     try std.testing.expectEqual(@as(u16, 1), expensiveCost("/api/tmdb/search", "q=opal"));
     try std.testing.expectEqual(@as(u16, 1), expensiveCost("/api/unified_search", "q=opal"));
     try std.testing.expectEqual(@as(u16, 1), expensiveCost("/api/unified_search/preview", "generation=2&key=ab"));

@@ -901,7 +901,35 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    test_step.dependOn(&b.addRunArtifact(test_access_pure).step);
+    // The browser-principal test walks every route in the committed OpenAPI spec.
+    test_access_pure.root_module.addAnonymousImport("openapi_json", .{ .root_source_file = b.path("docs/openapi.json") });
+    const run_test_access = b.addRunArtifact(test_access_pure);
+    test_step.dependOn(&run_test_access.step);
+
+    // Direct browser link: pairing code state machine, token rules, candidate
+    // validation and body sizing, plus the paired-browser route allowlist.
+    const test_browser_link_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/browser_link_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_test_browser_link = b.addRunArtifact(test_browser_link_pure);
+    test_step.dependOn(&run_test_browser_link.step);
+    const test_remote_body_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/remote_body_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_test_remote_body = b.addRunArtifact(test_remote_body_pure);
+    test_step.dependOn(&run_test_remote_body.step);
+    const test_browser_step = b.step("test-browser", "Test the browser link (pairing, tokens, candidates, route allowlist)");
+    test_browser_step.dependOn(&run_test_browser_link.step);
+    test_browser_step.dependOn(&run_test_remote_body.step);
+    test_browser_step.dependOn(&run_test_access.step);
 
     // Web settings API: key registry + value validation.
     const test_settings_api_pure = b.addTest(.{

@@ -18,6 +18,10 @@ pub const Principal = enum {
     machine,
     admin_session,
     session,
+    /// A paired browser (Opal Connect). It holds a token that can do almost
+    /// nothing: see `browser_routes`. Unlike the others it is allowlisted, not
+    /// denylisted, so a route added later is closed to it until someone lists it.
+    browser,
 };
 
 pub const Capability = enum {
@@ -34,6 +38,9 @@ pub const Capability = enum {
 };
 
 pub fn allows(principal: Principal, capability: Capability) bool {
+    // A paired browser holds no capability at all; its few routes are matched
+    // by `browserRouteAllowed`, never by this table.
+    if (principal == .browser) return false;
     return switch (capability) {
         .view_access, .revoke_sessions => true,
         .change_own_password => principal != .machine,
@@ -257,12 +264,45 @@ pub fn routeCapability(path: []const u8, method: []const u8, action: []const u8)
         "/agent/tasks/run",
         // The operator's jobs and the decisions on its proposals belong to the host user.
         "/operator",             "/operator/approve",  "/operator/reject",
+        // Who is paired, and removing one. A browser token may only unpair itself
+        // (see `browser_routes`); listing and revoking others is the host's.
+        "/browser/links",        "/browser/revoke",
     };
     for (host_routes) |route| if (std.mem.eql(u8, path, route)) return .administer_host;
     return null;
 }
 
+/// Everything a paired browser may call, by `/api`-relative path and method.
+/// This list IS the browser principal's whole authority.
+///   /status           read now-playing, so the panel can show connection state
+///   /browser/me       who am I (label), a token check that moves nothing
+///   /browser/media    hand a detected stream to the player or the queue
+///   /browser/revoke   unpair this browser (itself only; the handler ignores any id)
+/// `/browser/pair` is unauthenticated and never reaches this check.
+pub const browser_routes = [_]struct { path: []const u8, method: []const u8 }{
+    .{ .path = "/status", .method = "GET" },
+    .{ .path = "/browser/me", .method = "GET" },
+    .{ .path = "/browser/media", .method = "POST" },
+    .{ .path = "/browser/revoke", .method = "POST" },
+};
+
+pub fn browserRouteAllowed(path: []const u8, method: []const u8) bool {
+    for (browser_routes) |r| {
+        if (std.mem.eql(u8, path, r.path) and std.mem.eql(u8, method, r.method)) return true;
+    }
+    return false;
+}
+
+/// Routes that exist only for a paired browser's own token. Another caller
+/// (the machine token, a web session) has no business posting "media from my
+/// browser", so they are refused rather than treated as unlisted-means-open.
+fn browserOnlyRoute(path: []const u8) bool {
+    return std.mem.eql(u8, path, "/browser/media") or std.mem.eql(u8, path, "/browser/me");
+}
+
 pub fn allowsRoute(principal: Principal, path: []const u8, method: []const u8, action: []const u8) bool {
+    if (principal == .browser) return browserRouteAllowed(path, method);
+    if (browserOnlyRoute(path)) return false;
     const capability = routeCapability(path, method, action) orelse return true;
     return allows(principal, capability);
 }
@@ -285,4 +325,92 @@ test "route privilege matrix protects host administration and executable trust" 
         try std.testing.expect(allowsRoute(principal, "/status", "GET", ""));
         try std.testing.expect(allowsRoute(principal, "/jellyfin/play", "POST", ""));
     }
+}
+
+// ── Paired browser principal ───────────────────────────────────────────────
+
+test "a paired browser holds no capability" {
+    inline for (@typeInfo(Capability).@"enum".fields) |f| {
+        try std.testing.expect(!allows(.browser, @field(Capability, f.name)));
+    }
+    try std.testing.expect(!isSession(.browser));
+}
+
+test "browser allowlist is exactly the four documented routes" {
+    try std.testing.expectEqual(@as(usize, 4), browser_routes.len);
+    try std.testing.expect(allowsRoute(.browser, "/status", "GET", ""));
+    try std.testing.expect(allowsRoute(.browser, "/browser/me", "GET", ""));
+    try std.testing.expect(allowsRoute(.browser, "/browser/media", "POST", ""));
+    try std.testing.expect(allowsRoute(.browser, "/browser/revoke", "POST", ""));
+    // The method is part of the grant.
+    try std.testing.expect(!allowsRoute(.browser, "/status", "POST", ""));
+    try std.testing.expect(!allowsRoute(.browser, "/browser/media", "GET", ""));
+    try std.testing.expect(!allowsRoute(.browser, "/browser/me", "POST", ""));
+    try std.testing.expect(!allowsRoute(.browser, "/browser/revoke", "GET", ""));
+}
+
+test "browser links and revoke belong to the host; media and me to the browser" {
+    for ([_]Principal{ .machine, .admin_session }) |p| {
+        try std.testing.expect(allowsRoute(p, "/browser/links", "GET", ""));
+        try std.testing.expect(allowsRoute(p, "/browser/revoke", "POST", ""));
+    }
+    try std.testing.expect(!allowsRoute(.session, "/browser/links", "GET", ""));
+    try std.testing.expect(!allowsRoute(.session, "/browser/revoke", "POST", ""));
+    // Not even the machine token posts media "from a browser".
+    for ([_]Principal{ .machine, .admin_session, .session }) |p| {
+        try std.testing.expect(!allowsRoute(p, "/browser/media", "POST", ""));
+        try std.testing.expect(!allowsRoute(p, "/browser/me", "GET", ""));
+    }
+}
+
+test "every other route is denied to a paired browser, by name" {
+    // The sensitive families, plus the playback and library routes that look
+    // harmless: none is on the allowlist.
+    const denied = [_][]const u8{
+        "/settings",            "/settings/toggle",      "/setup",                "/setup/sources",      "/setup/tmdb",
+        "/plugins",             "/plugins/install",      "/downloads",            "/downloads/action",   "/downloads/play",
+        "/download/url",        "/wanted",               "/wanted/add",           "/wanted/check",       "/agent/tasks",
+        "/agent/tasks/add",     "/agent/tasks/enable",   "/agent/tasks/remove",   "/agent/tasks/run",    "/operator",
+        "/operator/approve",    "/operator/reject",      "/open",                 "/ingest",             "/load",
+        "/player",              "/player/action",        "/queue",                "/queue/action",       "/unified_search",
+        "/unified_search/play", "/unified_search/queue", "/search",               "/library",            "/library/action",
+        "/collections",         "/torrents",             "/torrent/files",        "/cast/start",         "/cast/scan",
+        "/party",               "/source/add",           "/source/config",        "/rss",                "/rss/manage",
+        "/livetv",              "/livetv/sources",       "/local-library/action", "/jellyfin/login",     "/plex/connect",
+        "/sync-accounts",       "/trakt",                "/webui",                "/logs",               "/logs/clear",
+        "/access/status",       "/access/users",         "/access/token/rotate",  "/auth/login",         "/scrape",
+        "/host",                "/history",              "/ai",                   "/music",              "/home",
+        "/browser/pair",        "/browser/links",        "/browser",              "/browser/",           "/browser/media/",
+        "/browser/mediax",      "/browser/ws",           "/browser/page",         "/browser/context",    "/browser/fetch",
+        "/health",              "/events",               "/stream",               "/status/",            "",
+        "/",
+    };
+    for (denied) |path| {
+        for ([_][]const u8{ "GET", "POST", "PUT", "DELETE", "" }) |method| {
+            try std.testing.expect(!allowsRoute(.browser, path, method, ""));
+            try std.testing.expect(!allowsRoute(.browser, path, method, "approve-exec"));
+        }
+    }
+}
+
+test "every documented agent route is denied to a paired browser except GET /status" {
+    const alloc = std.testing.allocator;
+    var parsed = try std.json.parseFromSlice(std.json.Value, alloc, @embedFile("openapi_json"), .{});
+    defer parsed.deinit();
+    const paths = parsed.value.object.get("paths").?.object;
+    var checked: usize = 0;
+    var it = paths.iterator();
+    while (it.next()) |entry| {
+        // Keys carry query/fragment decorations such as "/plugins?action=install".
+        const key = entry.key_ptr.*;
+        const end = std.mem.indexOfAny(u8, key, "?#") orelse key.len;
+        const route = key[0..end];
+        for ([_][]const u8{ "GET", "POST" }) |method| {
+            const expected = std.mem.eql(u8, route, "/status") and std.mem.eql(u8, method, "GET");
+            try std.testing.expectEqual(expected, allowsRoute(.browser, route, method, ""));
+        }
+        checked += 1;
+    }
+    // Guards against the test silently iterating nothing.
+    try std.testing.expect(checked > 50);
 }
