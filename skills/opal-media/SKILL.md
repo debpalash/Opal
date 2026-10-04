@@ -25,6 +25,10 @@ A `409` or "stale" error means a newer search replaced the results; search again
 
 `downloads_list` gives each item an `idx` and `token`; pass both to `downloads_pause` / `downloads_resume`. Starting a download (`downloads_add_url`, or `play_url` with a magnet) uses bandwidth and disk, so say what you are about to start when the user did not ask for a download explicitly.
 
+## Wanted list (automation)
+
+When the user wants something that is not out yet or should just arrive on its own, `wanted_add` it instead of searching by hand: a movie by `title` and `year`, an episode by `title`, `season`, `episode`. Opal searches, picks the best release by quality and seeders, downloads it and marks it fulfilled. Check progress with `wanted_list` (`status`, `attempts`, `picked`); `wanted_check` forces a search now. Use `wanted_pause` / `wanted_remove` to stop. Do not add duplicates; list first.
+
 ## Rules
 
 - Never pass a local file path to a URL tool; they accept only http(s) and magnet links.
