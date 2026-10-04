@@ -152,6 +152,8 @@ pub fn policy() ops.Policy {
         .max_tier = .write,
         .deny_prefix = deny_prefixes[0],
         .deny_prefixes = deny_prefixes[1..],
+        // The compact tool list: read and playback tools only at the time of writing.
+        .preset = .ask,
     };
 }
 
@@ -228,8 +230,8 @@ pub const system_prompt =
     "podcasts and downloads. You operate the app ONLY through the opal tools. Use them instead of guessing " ++
     "what is playing, queued, downloading, tracked or available: call status, queue_list, library_list, " ++
     "home_summary and the search tools as needed. Search tools work in two steps: start a search, then read " ++
-    "the matching results tool until loading is false. When the user asks you to play, queue, pause, seek or " ++
-    "change volume or subtitles, do it with the tools, then say what you did. Never claim an action you did " ++
+    "the matching results tool until loading is false. When the user asks you to play, queue, pause, seek " ++
+    "or change volume, do it with the tools, then say what you did. Never claim an action you did " ++
     "not perform with a tool call.\n\n" ++
     "You can NOT start downloads, add to the wanted list or open magnet links; those tools are not available " ++
     "to you. When the user wants one of those, put it in `actions` (kind wanted_add with title, year and, for " ++
@@ -1080,7 +1082,9 @@ test "one input goes to exactly one assistant" {
 }
 
 test "ask policy: write ceiling, spend and destructive refused, families hidden" {
-    const p = policy();
+    // The tier and deny layers on their own: the preset is checked separately below.
+    var p = policy();
+    p.preset = .all;
     // Every registry tool gets a verdict that matches its tier and family.
     for (&ops.ops) |*op| {
         const v = ops.check(p, op, true);
@@ -1617,4 +1621,24 @@ test "the compact preset and the fast model are opt-in and shown in the command 
     try testing.expect(std.mem.indexOf(u8, codex[15], "\"--preset\",\"ask\"") != null);
     // Codex has no model flag here; it keeps the user's own default.
     for (codex) |arg| try testing.expect(!std.mem.eql(u8, arg, "--model"));
+}
+
+test "with the compact preset the agent sees only read and playback tools, and none the deny list hides" {
+    const p = policy();
+    var shown: usize = 0;
+    for (&ops.ops) |*op| {
+        if (ops.isDenied(p, op)) continue;
+        shown += 1;
+        try testing.expect(@intFromEnum(op.tier) <= @intFromEnum(ops.Tier.playback));
+        try testing.expectEqual(ops.Verdict.allow, ops.check(p, op, false));
+    }
+    try testing.expect(shown >= 10 and shown < 45);
+    // The tools the brief names are out whatever the preset grows into.
+    for ([_][]const u8{ "wanted_add", "play_url", "downloads_add_url", "settings_set", "agent_task_add", "browser_page", "plugin_install", "queue_clear" }) |name| {
+        try testing.expect(ops.isDenied(p, ops.findOp(name).?));
+    }
+    // The config handed to the agent selects that preset.
+    var cfg: [4096]u8 = undefined;
+    const json = mcpConfigJson(&cfg, "/x", 1, "/t", true).?;
+    try testing.expect(std.mem.indexOf(u8, json, "\"--preset\",\"ask\"") != null);
 }

@@ -284,25 +284,6 @@ fn settle(id: i64, ok: bool, cents: u32, summary: []const u8) void {
     _ = db.step(stmt);
 }
 
-// ── opal-mcp capabilities ───────────────────────────────────────────────
-
-var preset_checked = std.atomic.Value(bool).init(false);
-var preset_ok = std.atomic.Value(bool).init(false);
-
-/// Does this `opal-mcp` know `--preset`? Older builds exit on an unknown flag, which
-/// would leave the agent with no tools, so the flag is only passed when `--help`
-/// mentions it. Asked once per run of the app.
-fn presetSupported(mcp_bin: []const u8) bool {
-    if (preset_checked.load(.acquire)) return preset_ok.load(.acquire);
-    var out: [4096]u8 = undefined;
-    const argv = [_][]const u8{ "sh", "-c", "exec \"$0\" --help 2>&1", mcp_bin };
-    const result = bounded.run(&argv, &out, .{ .timeout_ms = 3000 });
-    const text = result.output;
-    preset_ok.store(std.mem.indexOf(u8, text, "--preset") != null, .release);
-    preset_checked.store(true, .release);
-    return preset_ok.load(.acquire);
-}
-
 // ── The run ─────────────────────────────────────────────────────────────
 
 fn finishTurn(ctx: *const Ctx, status: Status, answer: ?*const pure.Answer, note: []const u8, cost_cents: u32) void {
@@ -379,7 +360,7 @@ fn run(ctx: Ctx) void {
     switch (ctx.agent) {
         .claude => {
             var json_buf: [4096]u8 = undefined;
-            const body = pure.mcpConfigJson(&json_buf, mcp_bin, ctx.port, token_file, presetSupported(mcp_bin)) orelse return fail(&ctx, .setup, 0);
+            const body = pure.mcpConfigJson(&json_buf, mcp_bin, ctx.port, token_file, true) orelse return fail(&ctx, .setup, 0);
             io_g.cwdWriteFile(.{ .sub_path = mcp_config, .data = body }) catch return fail(&ctx, .setup, 0);
         },
         .codex => io_g.cwdWriteFile(.{ .sub_path = schema_file, .data = pure.schema }) catch return fail(&ctx, .setup, 0),
@@ -395,7 +376,7 @@ fn run(ctx: Ctx) void {
         .token_file = token_file,
         .schema_file = schema_file,
         .out_file = out_file,
-        .preset = presetSupported(mcp_bin),
+        .preset = true,
         .fast = ctx.fast,
     }, ctx.port) orelse return fail(&ctx, .setup, 0);
 
