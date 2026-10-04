@@ -20,6 +20,7 @@ import {
   type OpalRequest,
   type OpalResponse,
 } from "./shared";
+import { handleBrowserMessage, type BrowserMessage } from "./browser_link";
 
 // ── Core: talk to Opal ──────────────────────────────────────────────────────
 
@@ -589,6 +590,12 @@ chrome.commands?.onCommand.addListener(async (command) => {
 // ── Messages from content script / side panel ───────────────────────────────
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  // Browser link: pairing, the media sniffer's lists, Play/Queue of a detected
+  // stream. Uses its own credential (browser_link.ts), not the token above.
+  if (msg && msg.kind === "browser") {
+    handleBrowserMessage(msg as BrowserMessage).then(sendResponse);
+    return true;
+  }
   if (msg && msg.kind === "opal") {
     sendToOpal(msg as OpalRequest).then((res) => {
       if (msg.notify) {

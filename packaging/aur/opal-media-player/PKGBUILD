@@ -51,7 +51,17 @@ package() {
     cd "Opal-$pkgver"
 
     install -Dm755 zig-out/bin/opal          "$pkgdir/usr/bin/opal"
+    install -Dm755 zig-out/bin/opal-mcp      "$pkgdir/usr/bin/opal-mcp"
     install -Dm755 libtorrent_wrapper.so     "$pkgdir/usr/lib/opal/libtorrent_wrapper.so"
+    # Runtime resources: main.zig's detectResourceRoot roots them at /usr/lib/opal
+    # (torrent search, browser scraper, Plugins page, Web Remote). Same layout as
+    # the -bin package and packaging/nfpm.yaml.
+    cp -r engines                            "$pkgdir/usr/lib/opal/engines"
+    install -Dm755 scripts/camoufox_bridge.py "$pkgdir/usr/lib/opal/scripts/camoufox_bridge.py"
+    cp -r web                                "$pkgdir/usr/lib/opal/web"
+    install -Dm644 assets/logo.svg           "$pkgdir/usr/lib/opal/web/icon.svg"
+    install -Dm644 data/plugins-manifest.json  "$pkgdir/usr/lib/opal/plugins-manifest.json"
+    install -Dm644 data/manga-sources-sfw.json "$pkgdir/usr/lib/opal/manga-sources-sfw.json"
     install -Dm644 packaging/opal.desktop    "$pkgdir/usr/share/applications/opal.desktop"
     install -Dm644 assets/logo.svg           "$pkgdir/usr/share/icons/hicolor/scalable/apps/opal.svg"
     install -Dm644 docs/licenses/libwebp.txt "$pkgdir/usr/share/licenses/$pkgname/libwebp.txt"

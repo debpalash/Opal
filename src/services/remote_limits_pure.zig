@@ -134,6 +134,13 @@ fn queryEquals(query: []const u8, wanted: []const u8, value: []const u8) bool {
 /// charged. Playback/status/media polling is intentionally absent.
 pub fn expensiveCost(path: []const u8, query: []const u8) u16 {
     if (std.mem.eql(u8, path, "/api/scrape")) return 4;
+    // A paired browser hands streams to the player; a few a minute is use, a
+    // flood is a stuck loop in the extension.
+    if (std.mem.eql(u8, path, "/api/browser/media")) return 1;
+    // A share copies up to 64 KB into memory; playing by id starts a stream.
+    if (std.mem.eql(u8, path, "/api/browser/page") or std.mem.eql(u8, path, "/api/browser/play") or std.mem.eql(u8, path, "/api/browser/tabs")) return 1;
+    // A fetch borrows the user's browser and holds a connection thread for up to 90 s.
+    if (std.mem.eql(u8, path, "/api/browser/fetch")) return 2;
     if (std.mem.eql(u8, path, "/api/unified_search/preview")) return 1;
     if (std.mem.eql(u8, path, "/api/search") or
         std.mem.eql(u8, path, "/api/unified_search") or
@@ -144,6 +151,7 @@ pub fn expensiveCost(path: []const u8, query: []const u8) u16 {
         std.mem.eql(u8, path, "/api/rss/refresh") or
         std.mem.eql(u8, path, "/api/setup/sources") or
         std.mem.eql(u8, path, "/api/cast/scan") or
+        std.mem.eql(u8, path, "/api/wanted/check") or
         std.mem.eql(u8, path, "/api/tmdb/trending") or
         std.mem.endsWith(u8, path, "/episodes") or
         std.mem.endsWith(u8, path, "/more")) return 1;
@@ -192,6 +200,15 @@ test "overflow aggregates unseen identities instead of failing open" {
 
 test "weighted scrape cost and expensive route allowlist exclude polling" {
     try std.testing.expectEqual(@as(u16, 4), expensiveCost("/api/scrape", ""));
+    try std.testing.expectEqual(@as(u16, 1), expensiveCost("/api/browser/media", ""));
+    try std.testing.expectEqual(@as(u16, 1), expensiveCost("/api/browser/page", ""));
+    try std.testing.expectEqual(@as(u16, 1), expensiveCost("/api/browser/play", "page=1&id=1"));
+    try std.testing.expectEqual(@as(u16, 0), expensiveCost("/api/browser/context", "view=status"));
+    try std.testing.expectEqual(@as(u16, 0), expensiveCost("/api/browser/me", ""));
+    try std.testing.expectEqual(@as(u16, 1), expensiveCost("/api/browser/tabs", ""));
+    try std.testing.expectEqual(@as(u16, 2), expensiveCost("/api/browser/fetch", "url=https%3A%2F%2Fexample.org"));
+    try std.testing.expectEqual(@as(u16, 0), expensiveCost("/api/browser/jobs", "wait=20"));
+    try std.testing.expectEqual(@as(u16, 0), expensiveCost("/api/browser/jobs/3", ""));
     try std.testing.expectEqual(@as(u16, 1), expensiveCost("/api/tmdb/search", "q=opal"));
     try std.testing.expectEqual(@as(u16, 1), expensiveCost("/api/unified_search", "q=opal"));
     try std.testing.expectEqual(@as(u16, 1), expensiveCost("/api/unified_search/preview", "generation=2&key=ab"));

@@ -32,6 +32,11 @@ rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 
 cp "$BIN_PATH" "$APP_DIR/Contents/MacOS/Opal"
+# MCP server for coding agents; Opal looks for it next to its own executable.
+if [ -f "$ROOT/zig-out/bin/opal-mcp" ]; then
+    cp "$ROOT/zig-out/bin/opal-mcp" "$APP_DIR/Contents/MacOS/opal-mcp"
+    chmod +x "$APP_DIR/Contents/MacOS/opal-mcp"
+fi
 mkdir -p "$APP_DIR/Contents/Resources/licenses"
 cp "$ROOT/docs/licenses/libwebp.txt" "$APP_DIR/Contents/Resources/licenses/"
 chmod +x "$APP_DIR/Contents/MacOS/Opal"

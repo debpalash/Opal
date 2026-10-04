@@ -244,15 +244,32 @@ pub fn build(b: *std.Build) void {
     if (is_windows) run_modal_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     b.step("test-native-modals", "Capture native onboarding and dialogs in an isolated hidden SDL window").dependOn(&run_modal_tests.step);
     const activity_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native activity offline SDL pixel capture"} });
+    activity_tests.use_llvm = true;
     const run_activity_tests = b.addRunArtifact(activity_tests);
     if (is_windows) run_activity_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     b.step("test-native-activity", "Capture native queue and transfers with isolated offline fixtures").dependOn(&run_activity_tests.step);
+    const agent_tasks_ui_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native agent tasks offline"} });
+    agent_tasks_ui_tests.use_llvm = true;
+    const run_agent_tasks_ui_tests = b.addRunArtifact(agent_tasks_ui_tests);
+    b.step("test-native-agent-tasks", "Capture the Agents page Tasks panel with isolated offline fixtures").dependOn(&run_agent_tasks_ui_tests.step);
+    const operator_ui_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native operator activity offline"} });
+    operator_ui_tests.use_llvm = true;
+    const run_operator_ui_tests = b.addRunArtifact(operator_ui_tests);
+    b.step("test-native-operator", "Capture the Agents page Activity tab with isolated offline fixtures").dependOn(&run_operator_ui_tests.step);
+    const overview_ui_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native agents overview offline"} });
+    overview_ui_tests.use_llvm = true;
+    const run_overview_ui_tests = b.addRunArtifact(overview_ui_tests);
+    b.step("test-native-overview", "Capture the Agents page Overview with isolated offline fixtures").dependOn(&run_overview_ui_tests.step);
+    const browser_hub_ui_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native browser hub offline"} });
+    browser_hub_ui_tests.use_llvm = true;
+    const run_browser_hub_ui_tests = b.addRunArtifact(browser_hub_ui_tests);
+    b.step("test-native-browser-hub", "Capture the Browse > Web browser hub with isolated offline fixtures").dependOn(&run_browser_hub_ui_tests.step);
     const episode_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native TV episodes"} });
     const run_episode_tests = b.addRunArtifact(episode_tests);
     if (is_windows) run_episode_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     b.step("test-native-episodes", "Verify native episode cards and responsive playback controls").dependOn(&run_episode_tests.step);
     const native_suite = b.addTest(.{ .root_module = exe.root_module, .filters = &.{
-        "Native Search", "Native WebP", "Native media offline", "Native shell offline", "Native global modals", "Native activity offline", "Native Browse", "Browse fanout", "Native torrent handoff", "Native TV episodes",
+        "Native Search", "Native WebP", "Native media offline", "Native shell offline", "Native global modals", "Native activity offline", "Native agent tasks offline", "Native operator activity offline", "Native agents overview offline", "Native browser hub offline", "Native Browse", "Browse fanout", "Native torrent handoff", "Native TV episodes",
     } });
     const run_native_suite = b.addRunArtifact(native_suite);
     if (is_windows) run_native_suite.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
@@ -304,6 +321,9 @@ pub fn build(b: *std.Build) void {
         .{ .run = run_shell_tests, .name = "shell" },
         .{ .run = run_modal_tests, .name = "modals" },
         .{ .run = run_activity_tests, .name = "activity" },
+        .{ .run = run_agent_tasks_ui_tests, .name = "agent-tasks" },
+        .{ .run = run_operator_ui_tests, .name = "operator" },
+        .{ .run = run_browser_hub_ui_tests, .name = "browser-hub" },
         .{ .run = run_image_tests, .name = "images" },
         .{ .run = run_native_suite, .name = "suite" },
         .{ .run = run_torrent_handoff_tests, .name = "torrent-handoff" },
@@ -346,6 +366,8 @@ pub fn build(b: *std.Build) void {
     }
 
     // Portable in-process WebP; use static decoder so bundles need no new dylib.
+    addAgentAssets(b, exe.root_module);
+    if (!headless) addGhosttyVt(b, exe.root_module, target);
     exe.root_module.addCSourceFile(.{ .file = b.path("src/core/webp_decode.c"), .flags = &.{"-O2"} });
     exe.root_module.linkSystemLibrary("webp", .{ .preferred_link_mode = .static, .search_strategy = .no_fallback });
 
@@ -500,6 +522,21 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
+    // opal-mcp: the Model Context Protocol server agents launch over stdio. It
+    // is std-only on purpose (no GUI, no libmpv/libtorrent), so it starts
+    // instantly and cannot become a second player. See docs/agent-native.md.
+    const mcp_exe = b.addExecutable(.{
+        .name = "opal-mcp",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/mcp_main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const install_mcp = b.addInstallArtifact(mcp_exe, .{});
+    b.getInstallStep().dependOn(&install_mcp.step);
+    b.step("opal-mcp", "Build only the opal-mcp bridge (no GUI dependencies)").dependOn(&install_mcp.step);
+
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
     // opal.exe imports libmpv-2.dll / libsqlite3-0.dll, and torrent_wrapper.dll
@@ -543,6 +580,7 @@ pub fn build(b: *std.Build) void {
         test_key_writer.root_module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{brew_prefix}) });
         test_key_writer.root_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/lib", .{brew_prefix}) });
     }
+    test_key_writer.use_llvm = true; // the self-hosted backend hits a linker error here
     const run_key_writer = b.addRunArtifact(test_key_writer);
     if (is_windows) run_key_writer.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     test_step.dependOn(&run_key_writer.step);
@@ -603,6 +641,192 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_playback_snapshot_pure).step);
+
+    const test_agent_launch_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/agent_launch_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    addAgentAssets(b, test_agent_launch_pure.root_module);
+    test_agent_launch_pure.use_llvm = true; // the self-hosted backend hits a linker error here
+    const run_test_agent_launch = b.addRunArtifact(test_agent_launch_pure);
+    test_step.dependOn(&run_test_agent_launch.step);
+    // Embedded terminal: libghostty-vt snapshotting and the pty.
+    const test_terminal = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/terminal_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    addGhosttyVt(b, test_terminal.root_module, target);
+    test_terminal.use_llvm = true;
+    const run_test_terminal = b.addRunArtifact(test_terminal);
+    test_step.dependOn(&run_test_terminal.step);
+    b.step("test-terminal", "Test the embedded terminal (libghostty-vt and pty)").dependOn(&run_test_terminal.step);
+
+    const test_operator_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/operator_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_operator_pure.use_llvm = true; // the self-hosted backend hits a linker error here
+    const run_test_operator = b.addRunArtifact(test_operator_pure);
+    test_step.dependOn(&run_test_operator.step);
+    const test_operator_endpoint_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/operator_endpoint_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_operator_endpoint_pure.use_llvm = true;
+    const run_test_operator_endpoint_pure = b.addRunArtifact(test_operator_endpoint_pure);
+    test_step.dependOn(&run_test_operator_endpoint_pure.step);
+    const test_operator_names = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/operator_names_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_operator_names.use_llvm = true;
+    const run_test_operator_names = b.addRunArtifact(test_operator_names);
+    test_step.dependOn(&run_test_operator_names.step);
+    const test_operator_view = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/operator_view_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_operator_view.use_llvm = true;
+    const run_test_operator_view = b.addRunArtifact(test_operator_view);
+    test_step.dependOn(&run_test_operator_view.step);
+    const test_operator_search_help = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/operator_search_help_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_operator_search_help.use_llvm = true;
+    const run_test_operator_search_help = b.addRunArtifact(test_operator_search_help);
+    test_step.dependOn(&run_test_operator_search_help.step);
+    const test_operator_picks = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/operator_picks_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_operator_picks.use_llvm = true;
+    const run_test_operator_picks = b.addRunArtifact(test_operator_picks);
+    test_step.dependOn(&run_test_operator_picks.step);
+    const test_operator_step = b.step("test-operator", "Test the background operator (jobs, validation, gating, names, Activity wording)");
+    test_operator_step.dependOn(&run_test_operator.step);
+    test_operator_step.dependOn(&run_test_operator_endpoint_pure.step);
+    test_operator_step.dependOn(&run_test_operator_names.step);
+    test_operator_step.dependOn(&run_test_operator_view.step);
+    test_operator_step.dependOn(&run_test_operator_search_help.step);
+    test_operator_step.dependOn(&run_test_operator_picks.step);
+
+    const test_overview_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/agents_overview_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_overview_pure.use_llvm = true;
+    const run_test_overview = b.addRunArtifact(test_overview_pure);
+    test_step.dependOn(&run_test_overview.step);
+    b.step("test-overview", "Test the Agents Overview wording and activity-feed merge").dependOn(&run_test_overview.step);
+    const test_ask_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/ask_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_ask_pure.use_llvm = true;
+    const run_test_ask = b.addRunArtifact(test_ask_pure);
+    test_step.dependOn(&run_test_ask.step);
+    b.step("test-ask", "Test Ask Opal (policy, argv, prompt, answer and action validation)").dependOn(&run_test_ask.step);
+
+    const test_agent_tasks_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/agent_tasks_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_agent_tasks_pure.use_llvm = true; // the self-hosted backend hits a linker error here
+    const run_test_agent_tasks = b.addRunArtifact(test_agent_tasks_pure);
+    test_step.dependOn(&run_test_agent_tasks.step);
+    const test_agent_tasks_view = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/agent_tasks_view_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_agent_tasks_view.use_llvm = true;
+    const run_test_agent_tasks_view = b.addRunArtifact(test_agent_tasks_view);
+    test_step.dependOn(&run_test_agent_tasks_view.step);
+    const test_agent_step = b.step("test-agent", "Test agent launching, setup text and scheduled tasks");
+    test_agent_step.dependOn(&run_test_agent_launch.step);
+    test_agent_step.dependOn(&run_test_agent_tasks.step);
+    test_agent_step.dependOn(&run_test_agent_tasks_view.step);
+    const test_agent_setup_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/agent_setup_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_agent_setup_pure).step);
+
+    const test_wanted_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/wanted_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_wanted_pure.use_llvm = true; // the self-hosted backend hits a linker error here
+    const run_test_wanted = b.addRunArtifact(test_wanted_pure);
+    test_step.dependOn(&run_test_wanted.step);
+    b.step("test-wanted", "Test the wanted list's matching, scoring and retry policy").dependOn(&run_test_wanted.step);
+
+    const test_ops_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/ops_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_test_ops_pure = b.addRunArtifact(test_ops_pure);
+    test_step.dependOn(&run_test_ops_pure.step);
+    const test_openapi_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/openapi_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_openapi_pure.root_module.addAnonymousImport("openapi_json", .{ .root_source_file = b.path("docs/openapi.json") });
+    test_openapi_pure.use_llvm = true; // the self-hosted backend hits a linker error here
+    const run_test_openapi_pure = b.addRunArtifact(test_openapi_pure);
+    test_step.dependOn(&run_test_openapi_pure.step);
+    const test_ops_step = b.step("test-ops", "Test the agent operation registry, MCP server core and OpenAPI spec");
+    test_ops_step.dependOn(&run_test_ops_pure.step);
+    test_ops_step.dependOn(&run_test_openapi_pure.step);
 
     const test_auto_subs_pure = b.addTest(.{
         .root_module = b.createModule(.{
@@ -734,7 +958,75 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    test_step.dependOn(&b.addRunArtifact(test_access_pure).step);
+    // The browser-principal test walks every route in the committed OpenAPI spec.
+    test_access_pure.root_module.addAnonymousImport("openapi_json", .{ .root_source_file = b.path("docs/openapi.json") });
+    const run_test_access = b.addRunArtifact(test_access_pure);
+    test_step.dependOn(&run_test_access.step);
+
+    // Direct browser link: pairing code state machine, token rules, candidate
+    // validation and body sizing, plus the paired-browser route allowlist.
+    const test_browser_link_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/browser_link_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_test_browser_link = b.addRunArtifact(test_browser_link_pure);
+    test_step.dependOn(&run_test_browser_link.step);
+    const test_remote_body_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/remote_body_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_test_remote_body = b.addRunArtifact(test_remote_body_pure);
+    test_step.dependOn(&run_test_remote_body.step);
+    const test_browser_page_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/browser_page_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_test_browser_page = b.addRunArtifact(test_browser_page_pure);
+    test_step.dependOn(&run_test_browser_page.step);
+    const test_browser_fetch_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/browser_fetch_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_test_browser_fetch = b.addRunArtifact(test_browser_fetch_pure);
+    test_step.dependOn(&run_test_browser_fetch.step);
+    const test_browser_tabs_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/browser_tabs_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_test_browser_tabs = b.addRunArtifact(test_browser_tabs_pure);
+    test_step.dependOn(&run_test_browser_tabs.step);
+    const test_browser_hub_view = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/browser_hub_view_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_test_browser_hub_view = b.addRunArtifact(test_browser_hub_view);
+    test_step.dependOn(&run_test_browser_hub_view.step);
+    const test_browser_step = b.step("test-browser", "Test the browser link (pairing, tokens, candidates, route allowlist)");
+    test_browser_step.dependOn(&run_test_browser_link.step);
+    test_browser_step.dependOn(&run_test_browser_page.step);
+    test_browser_step.dependOn(&run_test_browser_fetch.step);
+    test_browser_step.dependOn(&run_test_browser_tabs.step);
+    test_browser_step.dependOn(&run_test_browser_hub_view.step);
+    test_browser_step.dependOn(&run_test_remote_body.step);
+    test_browser_step.dependOn(&run_test_access.step);
 
     // Web settings API: key registry + value validation.
     const test_settings_api_pure = b.addTest(.{
@@ -1476,6 +1768,41 @@ pub fn build(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_cinemeta_pure).step);
 
+    // Keyless Movies & TV: Cinemeta meta -> TMDB-shaped detail documents,
+    // category/genre mapping, id -> IMDb identity table.
+    const test_cinemeta_meta_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/cinemeta_meta_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_test_cinemeta_meta_pure = b.addRunArtifact(test_cinemeta_meta_pure);
+    test_step.dependOn(&run_test_cinemeta_meta_pure.step);
+    const keyless_test_step = b.step("test-keyless", "Test keyless Movies & TV detail shaping, catalog mapping, tracking and the keyless Asian drama feed");
+    keyless_test_step.dependOn(&run_test_cinemeta_meta_pure.step);
+
+    // One command for the agent-native suites (CI runs this).
+    const agentic_test_step = b.step("test-agentic", "Run the agent-native suites: operator, agent, ops, terminal, wanted, browser, ask, keyless");
+    for ([_][]const u8{ "test-operator", "test-agent", "test-ops", "test-terminal", "test-wanted", "test-browser", "test-ask", "test-overview" }) |name| {
+        agentic_test_step.dependOn(&b.top_level_steps.get(name).?.step);
+    }
+    agentic_test_step.dependOn(keyless_test_step);
+
+    // Keyless Asian Drama page: TVmaze schedule/search/episodes parsing and
+    // mapping onto the drama grid rows (fixtures are trimmed live captures).
+    const test_drama_tvmaze_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/drama_tvmaze_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_drama_tvmaze_pure.use_llvm = true;
+    const run_test_drama_tvmaze_pure = b.addRunArtifact(test_drama_tvmaze_pure);
+    test_step.dependOn(&run_test_drama_tvmaze_pure.step);
+    keyless_test_step.dependOn(&run_test_drama_tvmaze_pure.step);
+
     // Internet Archive JSON parsing: advancedsearch docs[] iteration
     // (order-independent id/title/year) + metadata files[] best-video pick +
     // a malformed-JSON regression case.
@@ -1586,7 +1913,9 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    test_step.dependOn(&b.addRunArtifact(test_remote_stream_pure).step);
+    const run_test_remote_stream_pure = b.addRunArtifact(test_remote_stream_pure);
+    test_step.dependOn(&run_test_remote_stream_pure.step);
+    keyless_test_step.dependOn(&run_test_remote_stream_pure.step);
 
     // Download-root confinement: component-by-component no-follow opens and
     // regular-file enforcement for stream/subtitle/transcode endpoints.
@@ -1661,6 +1990,58 @@ pub fn build(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_tvmaze_pure).step);
+
+    // Keyless TV tracking: Cinemeta series facts (season map, aired frontier,
+    // next episode), TVmaze overlay, synthetic-identity rules, IMDb-by-title
+    // picking, poster URLs and scrobble external ids.
+    const test_keyless_tv_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/keyless_tv_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_keyless_tv_pure.use_llvm = true; // the self-hosted backend hits a linker error here
+    const run_test_keyless_tv = b.addRunArtifact(test_keyless_tv_pure);
+    test_step.dependOn(&run_test_keyless_tv.step);
+    keyless_test_step.dependOn(&run_test_keyless_tv.step);
+
+    // Duplicate-show merge (a show tracked keyless, later re-tracked with a TMDB
+    // key): the pure planner, and the executor against an in-memory SQLite.
+    const test_tv_merge_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/tv_merge_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_tv_merge_pure.use_llvm = true;
+    const run_test_tv_merge_pure = b.addRunArtifact(test_tv_merge_pure);
+    test_step.dependOn(&run_test_tv_merge_pure.step);
+    keyless_test_step.dependOn(&run_test_tv_merge_pure.step);
+    const test_tv_merge = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/tv_merge.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    test_tv_merge.use_llvm = true;
+    if (is_windows) {
+        test_tv_merge.root_module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{mingw_prefix}) });
+        test_tv_merge.root_module.addObjectFile(.{ .cwd_relative = b.fmt("{s}/lib/libsqlite3.dll.a", .{mingw_prefix}) });
+    } else {
+        test_tv_merge.root_module.linkSystemLibrary("sqlite3", .{});
+    }
+    if (target.result.os.tag == .macos) {
+        test_tv_merge.root_module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{brew_prefix}) });
+        test_tv_merge.root_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/lib", .{brew_prefix}) });
+    }
+    const run_test_tv_merge = b.addRunArtifact(test_tv_merge);
+    if (is_windows) run_test_tv_merge.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
+    test_step.dependOn(&run_test_tv_merge.step);
+    keyless_test_step.dependOn(&run_test_tv_merge.step);
 
     // OMDb ratings enrichment: real IMDb / RT / Metacritic parse from the OMDb
     // body (Ratings[] source matching, Metacritic "88/100" → "88", N/A → absent),
@@ -1966,6 +2347,7 @@ pub fn build(b: *std.Build) void {
         test_secret_store.root_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/lib", .{mingw_prefix}) });
         test_secret_store.root_module.linkSystemLibrary("crypt32", .{});
     }
+    test_secret_store.use_llvm = true; // the self-hosted backend hits a linker error here
     test_step.dependOn(&b.addRunArtifact(test_secret_store).step);
 
     // Playlist advance engine — nextIndex/prevIndex across repeat modes
@@ -2485,4 +2867,27 @@ fn envFileValue(body: []const u8, name: []const u8) ?[]const u8 {
         return val;
     }
     return null;
+}
+
+/// The agent workspace ships the repo's skill and instructions inside the
+/// binary. They live in `skills/` (where agent tooling expects them), outside
+/// `src/`, so they are imported by name rather than by relative path.
+/// libghostty-vt (terminal emulation core) for the embedded agent terminal.
+/// Built from the pinned `ghostty` package as a static library; SIMD is off so
+/// no C++ runtime is needed, and it is always optimised because a Debug
+/// terminal parser is too slow to type into.
+fn addGhosttyVt(b: *std.Build, module: *std.Build.Module, target: std.Build.ResolvedTarget) void {
+    const dep = b.dependency("ghostty", .{
+        .target = target,
+        .optimize = .ReleaseFast,
+        .@"emit-lib-vt" = true,
+        .simd = false,
+    });
+    module.linkLibrary(dep.artifact("ghostty-vt-static"));
+    module.addIncludePath(dep.path("include"));
+}
+
+fn addAgentAssets(b: *std.Build, module: *std.Build.Module) void {
+    module.addAnonymousImport("skill_md", .{ .root_source_file = b.path("skills/opal-media/SKILL.md") });
+    module.addAnonymousImport("agent_workspace_md", .{ .root_source_file = b.path("skills/opal-media/AGENT_WORKSPACE.md") });
 }

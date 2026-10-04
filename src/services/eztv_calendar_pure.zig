@@ -747,7 +747,8 @@ pub fn encodeQuery(s: []const u8, buf: []u8) []const u8 {
 
 pub const TvHit = struct {
     tmdb_id: i32 = 0,
-    poster_path: [64]u8 = std.mem.zeroes([64]u8),
+    // 256: a keyless hit carries an absolute catalog URL.
+    poster_path: [256]u8 = std.mem.zeroes([256]u8),
     poster_path_len: usize = 0,
 
     pub fn posterSlice(self: *const TvHit) []const u8 {

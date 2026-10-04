@@ -474,9 +474,14 @@ fn discoverSearchPlugins(out: []Plugin) usize {
     return count;
 }
 
-fn searchPluginInto(plugin: Plugin, query: []const u8, out: []UniversalResult) usize {
+pub const SearchOutcome = enum { ok, not_approved, run_failed, malformed };
+pub const SearchRun = struct { outcome: SearchOutcome, count: usize = 0 };
+
+/// Run one plugin's `search` under the production trust rules: approved content
+/// only, Lua in the sandbox, eight second deadline, strict JSON envelope.
+fn runSearch(plugin: Plugin, query: []const u8, rows: []@import("plugins_pure.zig").SearchRow) SearchRun {
     var exec_buf: [600]u8 = undefined;
-    const exec = std.fmt.bufPrint(&exec_buf, "{s}/search", .{plugin.path[0..plugin.path_len]}) catch return 0;
+    const exec = std.fmt.bufPrint(&exec_buf, "{s}/search", .{plugin.path[0..plugin.path_len]}) catch return .{ .outcome = .run_failed };
     const pp = @import("plugins_pure.zig");
     const is_lua = detectLuaScript(exec);
     const trusted_now = pluginContentApproved(&plugin);
@@ -494,7 +499,7 @@ fn searchPluginInto(plugin: Plugin, query: []const u8, out: []UniversalResult) u
         },
         .deny => {
             logUntrustedNative(&plugin);
-            return 0;
+            return .{ .outcome = .not_approved };
         },
     };
 
@@ -502,14 +507,21 @@ fn searchPluginInto(plugin: Plugin, query: []const u8, out: []UniversalResult) u
     const run = bounded_process.run(argv, &response, .{ .timeout_ms = 8_000 });
     if (!run.ok()) {
         logPluginProcessFailure(plugin.name[0..plugin.name_len], run);
-        return 0;
+        return .{ .outcome = .run_failed };
     }
-    var rows: [UNIVERSAL_ROWS_PER_PLUGIN]pp.SearchRow = [_]pp.SearchRow{.{}} ** UNIVERSAL_ROWS_PER_PLUGIN;
-    const count = pp.parseSearchRows(c_alloc, run.output, &rows) orelse {
+    const count = pp.parseSearchRows(c_alloc, run.output, rows) orelse {
         logs.pushLog("error", "plugin", "Universal search plugin returned malformed JSON", false);
-        return 0;
+        return .{ .outcome = .malformed };
     };
-    const n = @min(count, out.len);
+    return .{ .outcome = .ok, .count = count };
+}
+
+fn searchPluginInto(plugin: Plugin, query: []const u8, out: []UniversalResult) usize {
+    const pp = @import("plugins_pure.zig");
+    var rows: [UNIVERSAL_ROWS_PER_PLUGIN]pp.SearchRow = [_]pp.SearchRow{.{}} ** UNIVERSAL_ROWS_PER_PLUGIN;
+    const run = runSearch(plugin, query, &rows);
+    if (run.outcome != .ok) return 0;
+    const n = @min(run.count, out.len);
     for (rows[0..n], 0..) |row, i| {
         var result: UniversalResult = .{ .row = row };
         result.plugin_id_len = @min(plugin.id_len, result.plugin_id.len);
@@ -519,6 +531,79 @@ fn searchPluginInto(plugin: Plugin, query: []const u8, out: []UniversalResult) u
         out[i] = result;
     }
     return n;
+}
+
+pub const TestOutcome = enum { ok, not_found, no_search, not_approved, run_failed, malformed };
+
+pub const TestReport = struct {
+    outcome: TestOutcome = .not_found,
+    rows: [UNIVERSAL_ROWS_PER_PLUGIN]@import("plugins_pure.zig").SearchRow = [_]@import("plugins_pure.zig").SearchRow{.{}} ** UNIVERSAL_ROWS_PER_PLUGIN,
+    count: usize = 0,
+};
+
+/// Dry-run an installed plugin's `search` and report what the app would see.
+/// An agent-written plugin is never executed until the user approves it, so a
+/// fresh scaffold reports `not_approved`.
+pub fn testSearch(id: []const u8, query: []const u8, report: *TestReport) void {
+    report.* = .{};
+    var dir_buf: [512]u8 = undefined;
+    const plugin_dir = getPluginDir(&dir_buf);
+    if (plugin_dir.len == 0) return;
+    const plugin = loadPluginAt(plugin_dir, id) orelse return;
+    if (!plugin.has_search) {
+        report.outcome = .no_search;
+        return;
+    }
+    const run = runSearch(plugin, query, &report.rows);
+    report.count = run.count;
+    report.outcome = switch (run.outcome) {
+        .ok => .ok,
+        .not_approved => .not_approved,
+        .run_failed => .run_failed,
+        .malformed => .malformed,
+    };
+}
+
+pub const ScaffoldResult = enum { created, invalid_id, exists, failed };
+
+const scaffold_search =
+    \\#!/usr/bin/env lua
+    \\-- Opal executable plugin: search <query>.
+    \\-- Print a JSON array of results to stdout. Each row needs an "id" or a
+    \\-- "stream_url"; "title", "year", "type", "poster", "overview" and "episodes"
+    \\-- are optional. Opal runs this inside a Lua sandbox (no io, os or require),
+    \\-- and only after you approve the plugin in Settings.
+    \\local query = arg and arg[1] or ""
+    \\print('[{"id":"example","title":"Example result for ' .. query:gsub('[^%w ]', '') .. '","type":"movie"}]')
+    \\
+;
+
+/// Create `<config>/plugins/<id>/` with a manifest and a Lua `search` stub. It is
+/// inert until the user reviews and approves it; an existing plugin is never
+/// overwritten.
+pub fn scaffold(id: []const u8, name: []const u8, description: []const u8) ScaffoldResult {
+    const io = @import("../core/io_global.zig");
+    if (!@import("../core/source_config_pure.zig").validId(id)) return .invalid_id;
+    for ([_][]const u8{ name, description }) |text| {
+        for (text) |ch| if (ch < 0x20 or ch == 0x7f or ch == '"' or ch == '\\') return .invalid_id;
+    }
+    var dir_buf: [512]u8 = undefined;
+    const plugin_dir = getPluginDir(&dir_buf);
+    if (plugin_dir.len == 0) return .failed;
+    var path_buf: [640]u8 = undefined;
+    const dir = std.fmt.bufPrint(&path_buf, "{s}/{s}", .{ plugin_dir, id }) catch return .failed;
+    if (io.cwdAccess(dir, .{})) |_| return .exists else |_| {}
+    io.cwdMakePath(dir) catch return .failed;
+
+    var manifest: [1024]u8 = undefined;
+    const manifest_json = std.fmt.bufPrint(&manifest, "{{\n  \"name\": \"{s}\",\n  \"version\": \"0.1.0\",\n  \"description\": \"{s}\",\n  \"author\": \"agent scaffold\"\n}}\n", .{ name, description }) catch return .failed;
+    var file_buf: [680]u8 = undefined;
+    const manifest_path = std.fmt.bufPrint(&file_buf, "{s}/manifest.json", .{dir}) catch return .failed;
+    io.cwdWriteFile(.{ .sub_path = manifest_path, .data = manifest_json }) catch return .failed;
+    const search_path = std.fmt.bufPrint(&file_buf, "{s}/search", .{dir}) catch return .failed;
+    io.cwdWriteFile(.{ .sub_path = search_path, .data = scaffold_search }) catch return .failed;
+    logs.pushLog("info", "plugin", "Scaffolded an executable plugin (needs approval)", false);
+    return .created;
 }
 
 /// Search every installed executable plugin in parallel, with isolated output

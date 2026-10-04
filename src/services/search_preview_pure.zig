@@ -104,6 +104,73 @@ pub fn parse(allocator: std.mem.Allocator, body: []const u8) !Metadata {
     return result;
 }
 
+/// Keyless preview metadata from Cinemeta's `meta/{movie|series}/{imdb}.json`.
+/// Same rules as `parse`: only a well-formed YouTube trailer id is playable and
+/// only Cinemeta's own https artwork is kept. `catalog_id` is the id the caller
+/// selected (Cinemeta has no TMDB id for every title).
+pub fn parseCinemeta(allocator: std.mem.Allocator, body: []const u8, catalog_id: i32) !Metadata {
+    if (body.len > 2 * 1024 * 1024) return error.Oversized;
+    if (catalog_id <= 0) return error.InvalidResponse;
+    var doc = try std.json.parseFromSlice(std.json.Value, allocator, body, .{});
+    defer doc.deinit();
+    if (doc.value != .object) return error.InvalidResponse;
+    const meta = doc.value.object.get("meta") orelse return error.InvalidResponse;
+    if (meta != .object) return error.InvalidResponse;
+    var result: Metadata = .{};
+    result.catalog_id = catalog_id;
+    const bg = string(meta, "background");
+    if (std.mem.startsWith(u8, bg, "https://") and bg.len <= result.backdrop_url.len) {
+        @memcpy(result.backdrop_url[0..bg.len], bg);
+        result.backdrop_url_len = bg.len;
+    }
+    var key: []const u8 = "";
+    if (meta.object.get("trailers")) |rows| if (rows == .array) {
+        for (rows.array.items) |row| {
+            if (std.mem.eql(u8, string(row, "type"), "Trailer") and validVideoKey(string(row, "source"))) {
+                key = string(row, "source");
+                break;
+            }
+        }
+    };
+    if (key.len == 0) if (meta.object.get("trailerStreams")) |rows| if (rows == .array) {
+        for (rows.array.items) |row| if (validVideoKey(string(row, "ytId"))) {
+            key = string(row, "ytId");
+            break;
+        };
+    };
+    if (key.len > 0) {
+        const url = try std.fmt.bufPrint(&result.trailer_url, "https://www.youtube.com/watch?v={s}", .{key});
+        result.trailer_url_len = url.len;
+        var n = @min(string(meta, "name").len, result.title.len);
+        const title = string(meta, "name");
+        while (n > 0 and !std.unicode.utf8ValidateSlice(title[0..n])) n -= 1;
+        for (title[0..n], 0..) |ch, i| result.title[i] = if (ch < 32 or ch == 127) ' ' else ch;
+        result.title_len = n;
+    }
+    return result;
+}
+
+test "keyless preview takes only a well-formed YouTube trailer and https artwork" {
+    const a = std.testing.allocator;
+    const body =
+        \\{"meta":{"name":"Toy\nStory","background":"https://images.metahub.space/background/medium/tt1/img",
+        \\"trailers":[{"source":"bad","type":"Trailer"},{"source":"QftAW9TTmuQ","type":"Trailer"}]}}
+    ;
+    const m = try parseCinemeta(a, body, 7);
+    try std.testing.expectEqual(@as(i32, 7), m.catalog_id);
+    try std.testing.expectEqualStrings("https://www.youtube.com/watch?v=QftAW9TTmuQ", m.trailer_url[0..m.trailer_url_len]);
+    try std.testing.expectEqualStrings("Toy Story", m.title[0..m.title_len]);
+    try std.testing.expect(m.backdrop_url_len > 0);
+
+    const none = try parseCinemeta(a, "{\"meta\":{\"name\":\"x\",\"background\":\"http://x/y\",\"trailers\":[]}}", 7);
+    try std.testing.expectEqual(@as(usize, 0), none.trailer_url_len);
+    try std.testing.expectEqual(@as(usize, 0), none.backdrop_url_len);
+    const streams = try parseCinemeta(a, "{\"meta\":{\"trailerStreams\":[{\"ytId\":\"aaaaaaaaaaa\"}]}}", 7);
+    try std.testing.expect(streams.trailer_url_len > 0);
+    try std.testing.expectError(error.InvalidResponse, parseCinemeta(a, body, 0));
+    try std.testing.expectError(error.InvalidResponse, parseCinemeta(a, "{\"metas\":[]}", 7));
+}
+
 pub fn parseForId(allocator: std.mem.Allocator, body: []const u8, expected_id: i32) !Metadata {
     const meta = try parse(allocator, body);
     if (expected_id <= 0 or meta.catalog_id != expected_id) return error.InvalidResponse;

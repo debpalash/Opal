@@ -262,6 +262,75 @@ def test_source_mirrors():
     return "pass", "ordered failover + last-good memory, both layers"
 
 
+@test("Index engines report failures to the background operator", "Sources")
+def test_index_engine_health_reports():
+    problems = []
+    r = _run_py("""
+        import io, json, os
+        import helpers, opal_sources, novaprinter
+
+        # Pure verdicts.
+        S = opal_sources.summarize_health
+        assert S([[("http", 503)], [("transport", 0)]]) == ("transport", 0)
+        assert S([[("http", 503)], [("ok", 200)]]) == ("ok", 200)
+        assert S([[("http", 503)], []]) is None          # unknown host: no verdict
+        assert S([[]]) is None and S([]) is None
+        assert S([[("timeout", 0), ("http", 404)]]) == ("http", 404)
+        assert opal_sources.format_health("nyaa", ("http", 503)) == "#opal-health\\tnyaa\\thttp\\t503"
+
+        # retrieve_url records how a refused connection ended (local port, no network).
+        helpers.health_reset()
+        assert helpers.retrieve_url("http://127.0.0.1:1/", attempts=1) == ""
+        assert helpers.health_events() == [("transport", 0)], helpers.health_events()
+
+        sd = opal_sources.sources_dir()
+        os.makedirs(sd, exist_ok=True)
+        json.dump({"base": "https://dead.example", "token": "SECRET-TOKEN"},
+                  open(os.path.join(sd, "deadidx.json"), "w"))
+        json.dump({"mirrors": ["https://m.example"]}, open(os.path.join(sd, "nobase.json"), "w"))
+
+        def run(source_id, behave):
+            class eng:
+                url = "https://hardcoded.example"
+                name = "Stub"
+                def search(self, what):
+                    behave(self)
+            lines = []
+            opal_sources._emit_health = lambda sid, v: lines.append(opal_sources.format_health(sid, v))
+            opal_sources.search_with_failover(eng(), source_id, "q", "", novaprinter.printed_count)
+            return lines
+
+        def dead(self):
+            helpers._health_note("http", 502)
+        opal_sources.ENABLE_HEALTH = False
+        assert run("deadidx", dead) == []                  # off outside Opal's mode
+        opal_sources.ENABLE_HEALTH = True
+        assert run("deadidx", dead) == ["#opal-health\\tdeadidx\\thttp\\t502"]
+        assert run("nobase", dead) == []                   # no base: nothing to repair
+        assert run("notinstalled", dead) == []             # never configured
+        def alive(self):
+            helpers._health_note("ok", 200)
+        assert run("deadidx", alive) == ["#opal-health\\tdeadidx\\tok\\t200"]
+        def silent(self):
+            pass                                           # no fetch happened: no verdict
+        assert run("deadidx", silent) == []
+        for line in run("deadidx", dead):
+            assert "SECRET" not in line and "|" not in line
+        print("OK")
+    """)
+    if "OK" not in r.stdout:
+        problems.append("health reporting failed: " + (r.stderr or r.stdout)[-600:])
+    nova = _src("engines/nova2.py")
+    if "ENABLE_HEALTH = True" not in nova:
+        problems.append("nova2 does not enable health lines in Opal mode")
+    for path in ("src/services/search.zig", "src/services/resolver.zig"):
+        if "noteHealthLine(line)" not in _src(path):
+            problems.append(path + " does not consume health lines")
+    if problems:
+        return "fail", "; ".join(problems)
+    return "pass", "engines print per-source health lines; Zig feeds the shared failure streak"
+
+
 @test("Installed sources are migrated when the manifest corrects an endpoint", "Sources")
 def test_source_version_migration():
     """A source installed once kept its endpoints forever.

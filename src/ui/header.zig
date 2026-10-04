@@ -773,6 +773,12 @@ pub fn submitInput() void {
                     return;
                 },
                 .assistant => {
+                    // Ask Opal (the user's coding agent) takes it when switched on and installed;
+                    // otherwise the local assistant below does. Never both.
+                    if (@import("../services/ask.zig").tryRoute(trimmed)) {
+                        @memset(&state.app.magnet_buf, 0);
+                        return;
+                    }
                     const prompt = if (trimmed[0] == '>') std.mem.trim(u8, trimmed[1..], " \t") else trimmed;
                     const ai_chat = @import("../services/ai_chat.zig");
                     const copy_len = @min(prompt.len, ai_chat.input_buf.len - 1);

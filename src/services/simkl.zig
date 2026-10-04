@@ -224,36 +224,40 @@ fn extractJsonInt(json: []const u8, key: []const u8) ?i64 {
     return std.fmt.parseInt(i64, json[start..end], 10) catch null;
 }
 
-pub fn markWatchedEpisode(tmdb_id: i32, season: i32, episode: i32) void {
-    setEpisodeWatched(tmdb_id, season, episode, true);
+/// `imdb` is the show's remembered IMDb id ("" when unknown); see trakt.zig.
+pub fn markWatchedEpisode(tmdb_id: i32, imdb: []const u8, season: i32, episode: i32) void {
+    setEpisodeWatched(tmdb_id, imdb, season, episode, true);
 }
 
-pub fn markUnwatchedEpisode(tmdb_id: i32, season: i32, episode: i32) void {
-    setEpisodeWatched(tmdb_id, season, episode, false);
+pub fn markUnwatchedEpisode(tmdb_id: i32, imdb: []const u8, season: i32, episode: i32) void {
+    setEpisodeWatched(tmdb_id, imdb, season, episode, false);
 }
 
-fn setEpisodeWatched(tmdb_id: i32, season: i32, episode: i32, watched: bool) void {
+fn setEpisodeWatched(tmdb_id: i32, imdb: []const u8, season: i32, episode: i32, watched: bool) void {
     if (!enabled.load(.acquire) or tmdb_id <= 0) return;
-    var payload_buf: [320]u8 = undefined;
-    const payload = std.fmt.bufPrint(&payload_buf, "{{\"shows\":[{{\"ids\":{{\"tmdb\":\"{d}\"}},\"seasons\":[{{\"number\":{d},\"episodes\":[{{\"number\":{d}}}]}}]}}]}}", .{ tmdb_id, season, episode }) catch return;
+    var ids_buf: [48]u8 = undefined;
+    const ids = @import("keyless_tv_pure.zig").externalIds(tmdb_id, imdb, true, &ids_buf) orelse return;
+    var payload_buf: [360]u8 = undefined;
+    const payload = std.fmt.bufPrint(&payload_buf, "{{\"shows\":[{{\"ids\":{{{s}}},\"seasons\":[{{\"number\":{d},\"episodes\":[{{\"number\":{d}}}]}}]}}]}}", .{ ids, season, episode }) catch return;
     var key_buf: [64]u8 = undefined;
     const key = std.fmt.bufPrint(&key_buf, "show:{d}:{d}:{d}", .{ tmdb_id, season, episode }) catch return;
     const operation = if (watched) "history" else "history_remove";
     if (outbox.enqueueState("simkl", operation, key, payload)) kickOutbox();
 }
 
-pub fn markWatchedMovie(tmdb_id: i32) void {
-    setMovieWatched(tmdb_id, true);
+/// `imdb` is the movie's remembered IMDb id ("" when unknown); see trakt.zig.
+pub fn markWatchedMovie(tmdb_id: i32, imdb: []const u8) void {
+    setMovieWatched(tmdb_id, imdb, true);
 }
 
-pub fn markUnwatchedMovie(tmdb_id: i32) void {
-    setMovieWatched(tmdb_id, false);
+pub fn markUnwatchedMovie(tmdb_id: i32, imdb: []const u8) void {
+    setMovieWatched(tmdb_id, imdb, false);
 }
 
-fn setMovieWatched(tmdb_id: i32, watched: bool) void {
+fn setMovieWatched(tmdb_id: i32, imdb: []const u8, watched: bool) void {
     if (!enabled.load(.acquire) or tmdb_id <= 0) return;
     var body: [160]u8 = undefined;
-    const payload = std.fmt.bufPrint(&body, "{{\"movies\":[{{\"ids\":{{\"tmdb\":\"{d}\"}}}}]}}", .{tmdb_id}) catch return;
+    const payload = @import("keyless_tv_pure.zig").movieScrobblePayload(tmdb_id, imdb, true, &body) orelse return;
     var key_buf: [40]u8 = undefined;
     const key = std.fmt.bufPrint(&key_buf, "movie:{d}", .{tmdb_id}) catch return;
     const operation = if (watched) "history" else "history_remove";

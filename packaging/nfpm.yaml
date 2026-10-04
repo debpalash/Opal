@@ -15,6 +15,9 @@ description: "Play everything — media player, universal search, torrent stream
 contents:
   - src: zig-out/bin/opal
     dst: /usr/bin/opal
+  # MCP server for coding agents; Opal finds it next to its own binary.
+  - src: zig-out/bin/opal-mcp
+    dst: /usr/bin/opal-mcp
   # C++ ABI isolation wrapper for libtorrent — built beside the binary by
   # build.zig; shipped in a private libdir so it never shadows system libs.
   - src: libtorrent_wrapper.so

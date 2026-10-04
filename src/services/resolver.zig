@@ -937,6 +937,45 @@ pub fn warmQuery(query: []const u8) void {
     ) catch "warmed search cache", false);
 }
 
+/// Torrent-only search for automation (the Wanted list). Like `warmQuery` it
+/// writes into a private sink, so a background check never replaces the results
+/// the user (or an agent) is looking at and never invalidates their search
+/// generation. Unlike a warm it returns the rows, and it runs every torrent
+/// backend: YTS (movies), EZTV and Torznab (episodes), then the nova2 engines.
+///
+/// Runs the backends one after another on the CALLER's thread, so call it from
+/// a worker, never the UI thread. Returns how many rows were written to `out`.
+pub fn searchTorrentsPrivate(query: []const u8, out: []ResolvedItem) usize {
+    if (query.len == 0 or query.len > 255 or out.len == 0) return 0;
+    if (!sourceOn(.torrent)) return 0;
+
+    var sink = Sink{ .items = out, .query = query };
+    var qbuf: [256]u8 = std.mem.zeroes([256]u8);
+    @memcpy(qbuf[0..query.len], query);
+
+    const prev_sink = thread_sink;
+    const prev_gen = worker_gen;
+    const prev_reported = worker_reported;
+    const prev_produced = worker_produced;
+    defer {
+        thread_sink = prev_sink;
+        worker_gen = prev_gen;
+        worker_reported = prev_reported;
+        worker_produced = prev_produced;
+    }
+    thread_sink = &sink;
+    worker_gen = 0;
+    worker_reported = .done;
+    worker_produced = false;
+    const workers_mod = @import("../core/workers.zig");
+    const backends = [_]*const fn ([256]u8, usize) void{ resolveYts, resolveEztv, resolveTorznab, resolveTorrentsNova2 };
+    for (backends) |backend| {
+        if (workers_mod.isQuitting()) break;
+        backend(qbuf, query.len);
+    }
+    return sink.count;
+}
+
 fn pushResult(item: ResolvedItem) bool {
     if (thread_sink) |s| {
         // Private buffer, single owner: no lock, and no contention with the UI
@@ -2358,6 +2397,8 @@ fn resolveTorrentsNova2(query_buf: [256]u8, qlen: usize) void {
             process.requestStop();
             break;
         }
+        // Per-source health reports share the pipe with the result rows.
+        if (@import("source_request.zig").noteHealthLine(line)) continue;
         // Keep consuming the pipe to EOF after the UI has enough rows; this
         // lets nova2 wind down cleanly while process.finish owns final reaping.
         if (found >= 25 or line.len < 10) continue;
@@ -2475,13 +2516,21 @@ fn resolveYts(query_buf: [256]u8, qlen: usize) void {
 
     var buf: [64 * 1024]u8 = undefined;
     @import("../core/rate_limit.zig").acquire("yts", 1.0);
+    var yts_status: ?std.http.Status = null;
+    const yts_started = io_glob.monotonicMilliTimestamp();
     const body = @import("../core/http.zig").fetch(url, &buf, .{
         .timeout_secs = 6,
         .user_agent = @import("../core/app_meta.zig").user_agent,
+        .status_out = &yts_status,
     }) orelse {
+        // Counts toward the same failure streak the operator watches (only when
+        // the installed source has a `base` to repair).
+        const failed = @import("source_request.zig").fetchedOutcome(false, yts_status, yts_started, 6, null);
+        @import("source_request.zig").noteIndex("yts", failed.failure, failed.status);
         noteWorkerOutcome(.transport_failed);
         return;
     };
+    @import("source_request.zig").noteIndex("yts", .none, 200);
     const n = body.len;
 
     if (n < 50) {
@@ -2631,11 +2680,8 @@ fn resolveEztv(query_buf: [256]u8, qlen: usize) void {
         return;
     }
 
+    // No TMDB key is fine: resolveImdbId then asks Cinemeta for the IMDb id.
     const api_key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
-    if (api_key.len == 0) {
-        noteWorkerOutcome(.unavailable);
-        return; // no TMDB key -> no IMDb id -> nothing to ask
-    }
 
     var imdb_buf: [16]u8 = undefined;
     var is_series = false;
@@ -3854,6 +3900,61 @@ fn parseSxxEyy(query: []const u8, out_season: *i32, out_episode: *i32) void {
     }
 }
 
+/// The keyless twin of resolveImdbId: Cinemeta's catalog search, accepting only
+/// an exact title (and year, when the query has one). An episode token is not
+/// part of the title. Never "the first result": a wrong IMDb id would query
+/// stream addons for another title.
+fn resolveImdbKeyless(
+    query: []const u8,
+    out_imdb: []u8,
+    out_is_series: *bool,
+    out_outcome: *SourceStatus,
+) usize {
+    const kl = @import("keyless_tv_pure.zig");
+    const intent = resolver_intent[0..resolver_intent_len];
+    out_outcome.* = .no_results;
+
+    // The keyless TV detail page already knows the show's IMDb id.
+    const t = &state.app.tmdb;
+    if (std.mem.eql(u8, intent, "tv") and t.tv_id > 0 and t.tv_imdb_id_len > 0 and t.tv_imdb_id_len <= out_imdb.len) {
+        @memcpy(out_imdb[0..t.tv_imdb_id_len], t.tv_imdb_id[0..t.tv_imdb_id_len]);
+        out_is_series.* = true;
+        out_outcome.* = .done;
+        return t.tv_imdb_id_len;
+    }
+
+    var season: i32 = 0;
+    var episode: i32 = 0;
+    parseSxxEyy(query, &season, &episode);
+    const split = kl.splitTitleYear(kl.queryTitle(query));
+    if (split.title.len == 0) return 0;
+
+    const only_series = episode > 0 or std.mem.eql(u8, intent, "tv");
+    const only_movie = !only_series and std.mem.eql(u8, intent, "movie");
+    const kinds = [_][]const u8{ "movie", "series" };
+    var enc: [512]u8 = undefined;
+    const q = @import("../core/http.zig").urlEncode(split.title, &enc);
+    var any_response = false;
+    for (kinds) |kind| {
+        const is_series = std.mem.eql(u8, kind, "series");
+        if (is_series and only_movie) continue;
+        if (!is_series and only_series) continue;
+        var path_buf: [640]u8 = undefined;
+        const path = std.fmt.bufPrint(&path_buf, "/catalog/{s}/top/search={s}.json", .{ kind, q }) catch continue;
+        const body = @import("tmdb_api.zig").cinemetaApiOwned(path, 1024 * 1024) orelse continue;
+        defer alloc.free(body);
+        any_response = true;
+        const found = kl.pickImdb(alloc, body, split.title, split.year, out_imdb) catch "";
+        if (found.len > 0) {
+            out_is_series.* = is_series;
+            out_outcome.* = .done;
+            return found.len;
+        }
+    }
+    if (!any_response) out_outcome.* = .transport_failed;
+    return 0;
+}
+
 /// Resolve a free-text query to an IMDb id via TMDB, writing it into `out_imdb`
 /// and returning its length (0 = could not resolve). `out_is_series` reports
 /// whether TMDB classified the match as a TV show.
@@ -3868,6 +3969,7 @@ fn resolveImdbId(
     out_is_series: *bool,
     out_outcome: *SourceStatus,
 ) usize {
+    if (api_key.len == 0) return resolveImdbKeyless(query, out_imdb, out_is_series, out_outcome);
     var imdb_len: usize = 0;
     out_outcome.* = .no_results;
     const intent = resolver_intent[0..resolver_intent_len];
@@ -4024,11 +4126,8 @@ fn resolveStremio(query_buf: [256]u8, qlen: usize) void {
     }
 
     const query = query_buf[0..qlen];
+    // No TMDB key is fine: resolveImdbId then asks Cinemeta for the IMDb id.
     const api_key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
-    if (api_key.len == 0) {
-        noteWorkerOutcome(.unavailable);
-        return;
-    }
 
     // Parse season/episode from query (e.g. "from s01e05" → season=1, episode=5)
     var ep_season: i32 = 0;

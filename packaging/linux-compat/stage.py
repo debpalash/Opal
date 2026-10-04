@@ -17,6 +17,7 @@ for name in ['plugins-manifest.json', 'manga-sources-sfw.json']:
     shutil.copy2(Path('data') / name, LIB / name)
 shutil.copy2('assets/logo.svg', LIB / 'web/icon.svg')
 for source, dest in [('zig-out/bin/opal', 'opal-bin'),
+                     ('zig-out/bin/opal-mcp', 'opal-mcp'),
                      ('zig-out/bin/zig-bypassdpi', 'zig-bypassdpi'),
                      ('libtorrent_wrapper.so', 'libtorrent_wrapper.so'),
                      ('/opt/opal-runtime/bin/ffmpeg', 'ffmpeg'),
@@ -46,6 +47,10 @@ exec "$OPAL_RUNTIME/opal-bin" "$@"
 (ROOT / 'usr/bin').mkdir(parents=True)
 (ROOT / 'usr/bin/opal').write_text('#!/bin/sh\nexec /usr/lib/opal/opal "$@"\n')
 (ROOT / 'usr/bin/opal').chmod(0o755)
+# MCP bridge on PATH for agent configs; the app itself finds the real binary
+# next to opal-bin in /usr/lib/opal.
+(ROOT / 'usr/bin/opal-mcp').write_text('#!/bin/sh\nexec /usr/lib/opal/opal-mcp "$@"\n')
+(ROOT / 'usr/bin/opal-mcp').chmod(0o755)
 for source, dest in [('packaging/opal.desktop', 'usr/share/applications/opal.desktop'),
                      ('assets/logo.svg', 'usr/share/icons/hicolor/scalable/apps/opal.svg'),
                      ('docs/licenses/libwebp.txt', 'usr/share/doc/opal/libwebp.txt'),

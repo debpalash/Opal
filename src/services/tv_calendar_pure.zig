@@ -178,6 +178,23 @@ pub fn imdbDigits(body: []const u8, buf: []u8) ?[]const u8 {
     return buf[0..digits.len];
 }
 
+/// "tt0417299" (an IMDb id we already hold) -> "0417299". Null when malformed.
+pub fn imdbNumber(imdb: []const u8, buf: []u8) ?[]const u8 {
+    if (!std.mem.startsWith(u8, imdb, "tt") or imdb.len <= 2 or imdb.len - 2 > buf.len) return null;
+    for (imdb[2..]) |ch| if (ch < '0' or ch > '9') return null;
+    @memcpy(buf[0 .. imdb.len - 2], imdb[2..]);
+    return buf[0 .. imdb.len - 2];
+}
+
+test "imdbNumber strips tt and validates" {
+    var b: [12]u8 = undefined;
+    try std.testing.expectEqualStrings("0417299", imdbNumber("tt0417299", &b).?);
+    try std.testing.expect(imdbNumber("tt", &b) == null);
+    try std.testing.expect(imdbNumber("nm123", &b) == null);
+    try std.testing.expect(imdbNumber("tt12ab", &b) == null);
+    try std.testing.expect(imdbNumber("tt12345678901234", &b) == null);
+}
+
 // ── EZTV get-torrents availability ──
 
 /// Max seeds across torrents matching SxxEyy in an eztvx.to get-torrents body
@@ -268,7 +285,7 @@ pub const CalendarEntry = struct {
     tmdb_id: i32 = 0,
     name: [128]u8 = .{0} ** 128,
     name_len: usize = 0,
-    poster_path: [64]u8 = .{0} ** 64,
+    poster_path: [256]u8 = .{0} ** 256,
     poster_path_len: usize = 0,
     next_season: i32 = 0,
     next_episode: i32 = 0,

@@ -39,6 +39,18 @@ test "Native global modals offline SDL pixel capture" {
 test "Native activity offline SDL pixel capture" {
     if (!@import("build_options").headless) _ = @import("ui/activity_native_test.zig");
 }
+test "Native agent tasks offline SDL pixel capture" {
+    if (!@import("build_options").headless) _ = @import("ui/agent_tasks_native_test.zig");
+}
+test "Native operator activity offline SDL pixel capture" {
+    if (!@import("build_options").headless) _ = @import("ui/operator_native_test.zig");
+}
+test "Native agents overview offline SDL pixel capture" {
+    if (!@import("build_options").headless) _ = @import("ui/agents_overview_native_test.zig");
+}
+test "Native browser hub offline SDL pixel capture" {
+    if (!@import("build_options").headless) _ = @import("ui/browser_hub_native_test.zig");
+}
 test "Native Browse Suwayomi test returns before delayed server and ignores stale response" {
     try @import("services/plugins.zig").verifySuwaNonblockingForTest();
 }
@@ -319,6 +331,8 @@ pub fn coreInit() !void {
             const auth_store = @import("services/auth_store.zig");
             auth_store.ensureTables();
             auth_store.pruneExpired();
+            // Paired browsers (Opal Connect) keep their hashed tokens beside accounts.
+            @import("services/browser_link.zig").ensureTables();
 
             // Restore starred AI chat messages before anything else touches
             // the message array.
@@ -489,7 +503,15 @@ fn scheduleDeferredNetworkWarmups(media_first_launch: bool) void {
             }
             if (workers.isQuitting()) return;
 
-            if (!skip_browse and state.app.tmdb.api_key_len > 0 and !state.app.tmdb.loaded_once) {
+            // No key needed: with none, the catalog layer answers from Cinemeta.
+            // Wait (bounded) for the config worker so a user WITH a key does not
+            // get the keyless first page by racing it.
+            var cfg_wait_ms: u16 = 0;
+            while (!state.app.config_loaded.load(.acquire) and cfg_wait_ms < 5000) : (cfg_wait_ms += 50) {
+                if (workers.isQuitting()) return;
+                io_g.sleep(50 * std.time.ns_per_ms);
+            }
+            if (!skip_browse and !state.app.tmdb.loaded_once) {
                 state.app.tmdb.loaded_once = true;
                 @import("services/tmdb_api.zig").fetchCurrentView(false);
             }
@@ -817,6 +839,10 @@ pub fn appDeinit() void {
     // exit when told to; players are destroyed after the drain below, so
     // stop them now or the drain waits out its deadline on every close.
     for (state.app.players.items) |p| p.stopRenderWorker();
+
+    // End any embedded terminal session first: its reader thread is a drained
+    // worker, and its child process (an agent) must not outlive the window.
+    if (comptime !@import("build_options").headless) @import("ui/agent_terminal.zig").shutdown();
 
     // Remove the native surface immediately. Teardown can include third-party
     // media/network destructors; keeping the surface mapped while they finish
@@ -1237,6 +1263,9 @@ fn appFrame() !dvui.App.Result {
     // This intentionally does not open a player or change the current route.
     @import("services/torrent_intents.zig").restoreIfReady();
     @import("services/downloads.zig").tick();
+    @import("services/wanted.zig").tick();
+    @import("services/agent_tasks.zig").tick();
+    @import("services/operator.zig").tick();
 
     // Swap in TMDB pages staged by fetch workers (UI thread owns `results`;
     // workers staging + this apply is what keeps the render loop's iteration

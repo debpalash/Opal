@@ -10,6 +10,7 @@ const sync = @import("../core/sync.zig");
 const io_g = @import("../core/io_global.zig");
 const txt = @import("../core/text.zig");
 const access_pure = @import("access_pure.zig");
+const remote_body_pure = @import("remote_body_pure.zig");
 const sap = @import("settings_api_pure.zig");
 const scale_pure = @import("../core/scale_pure.zig");
 const login_rate = @import("login_rate_pure.zig");
@@ -583,6 +584,12 @@ fn handleLocalRequest(stream: std.Io.net.Stream) void {
         sendUnauthorized(stream);
         return;
     };
+    // This listener is always on, and only the host's own credentials belong
+    // on it: a paired browser has /api/browser/* on the main server and nothing here.
+    if (principal == .browser) {
+        sendForbidden(stream);
+        return;
+    }
     if (std.mem.eql(u8, path, "/api/open")) {
         // Single-instance handoff from a second `opal <file>` launch. Same
         // query shape as the main server's /api/open (path= alias url=, plus
@@ -767,15 +774,58 @@ fn clientKey(address: std.Io.net.IpAddress) u64 {
     }
 }
 
+/// Lets exactly two routes send a body past the 4096-byte request buffer: a paired
+/// browser posting `/api/browser/media` (signed stream URLs plus Referer can exceed
+/// 4 KB by themselves) and `/api/browser/page` (the page the user shared: up to 8 KB
+/// of text, metadata and the streams found on it). Runs on the already-read head only when the
+/// declared request would not fit, and requires the browser token, so an
+/// anonymous or differently-privileged caller never makes the server allocate.
+fn browserBodyGate(head: []const u8) usize {
+    const bearer = extractBearer(head) orelse return 0;
+    // The browser's answer to a fetch job is the one route that may carry a page
+    // (up to 2 MB of text); the id after the slash is digits only (access_pure).
+    const jobs = "POST /api/browser/jobs/";
+    if (std.mem.startsWith(u8, head, jobs)) {
+        const rest = head[jobs.len..];
+        const end = std.mem.indexOfAny(u8, rest, " ?") orelse return 0;
+        if (access_pure.browserJobResultId(head["POST /api".len .. jobs.len + end]) == null) return 0;
+        const principal = principalForBearer(bearer) orelse return 0;
+        return if (principal == .browser) remote_body_pure.GROW_MAX_RESULT else 0;
+    }
+    const route = for ([_][]const u8{ "POST /api/browser/media", "POST /api/browser/page", "POST /api/browser/tabs" }) |r| {
+        if (std.mem.startsWith(u8, head, r)) break r;
+    } else return 0;
+    if (head.len == route.len or (head[route.len] != ' ' and head[route.len] != '?')) return 0;
+    const principal = principalForBearer(bearer) orelse return 0;
+    return if (principal == .browser) remote_body_pure.GROW_MAX_BODY else 0;
+}
+
+/// True for the loopback interface, including an IPv4 peer seen over a
+/// dual-stack socket as ::ffff:127.x.
+fn peerIsLoopback(address: std.Io.net.IpAddress) bool {
+    switch (address) {
+        .ip4 => |ip4| return ip4.bytes[0] == 127,
+        .ip6 => |ip6| {
+            if (std.Io.net.Ip4Address.fromIp6(ip6)) |ip4| return ip4.bytes[0] == 127;
+            return std.mem.eql(u8, &ip6.bytes, &[_]u8{0} ** 15 ++ [_]u8{1});
+        },
+    }
+}
+
 fn handleRequest(stream: std.Io.net.Stream, client_key: u64) !void {
     var buf: [4096]u8 = undefined;
-    const request = remote_http.readRequest(stream, &buf) catch |err| {
+    const read = remote_http.readRequestGrow(stream, &buf, .{
+        .allocator = @import("../core/alloc.zig").allocator,
+        .gate = browserBodyGate,
+    }) catch |err| {
         if (err == error.RequestTimeout)
             sendJsonStatus(stream, "408 Request Timeout", "{\"error\":\"request timeout\"}")
         else
             sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"malformed or oversized request\"}");
         return;
     } orelse return;
+    defer if (read.owned) |heap| @import("../core/alloc.zig").allocator.free(heap);
+    const request = read.bytes;
 
     // NOTE: no DNS-rebinding Host gate here anymore. It existed to protect the
     // token-INJECTED page; the token is no longer injected anywhere (the browser
@@ -890,6 +940,29 @@ fn handleRequest(stream: std.Io.net.Stream, client_key: u64) !void {
             const pp = urlDecode(getQueryParam(query, "path") orelse "", &dec_buf) orelse "";
             rs.handlePoster(stream, pp);
         }
+        return;
+    }
+
+    // Browser pairing is the other unauthenticated data route: it is how an
+    // extension obtains its token. Code-gated, loopback-only, and rate limited
+    // inside the handler (see remote_browser_api.handlePair).
+    if (std.mem.eql(u8, path, "/api/browser/pair")) {
+        const host = requestHeader(request, "host") catch null;
+        const origin = requestHeader(request, "origin") catch {
+            sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"malformed Origin header\"}");
+            return;
+        };
+        @import("remote_browser_api.zig").handlePair(
+            stream,
+            method,
+            requestBody(request),
+            host,
+            origin,
+            peerIsLoopback(stream.socket.address),
+            port,
+            client_key,
+            consumeAuthBudget,
+        );
         return;
     }
 
@@ -1029,6 +1102,17 @@ fn handleRequest(stream: std.Io.net.Stream, client_key: u64) !void {
         return;
     };
 
+    // A paired browser reaches only its allowlist. Checked here, before the
+    // /api/access, /api/scrape and handleApi branches, so no later route can be
+    // reached by accident; handleApi checks again.
+    if (principal == .browser) {
+        const rel = if (std.mem.startsWith(u8, path, "/api/")) path["/api".len..] else "";
+        if (!access_pure.browserRouteAllowed(rel, method)) {
+            sendForbidden(stream);
+            return;
+        }
+    }
+
     if (remote_limits.expensiveCost(path, query) > 0) {
         if (consumeExpensiveBudget(presented, principal, path, query)) |wait| {
             sendRateLimit(stream, wait);
@@ -1060,7 +1144,7 @@ fn handleRequest(stream: std.Io.net.Stream, client_key: u64) !void {
     }
 
     if (std.mem.startsWith(u8, path, "/api/")) {
-        handleApi(stream, path[4..], query, request, principal);
+        handleApi(stream, path[4..], query, request, principal, presented);
     } else {
         const resp = "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nNot Found";
         _ = io_g.streamWriteAll(stream, resp) catch {};
@@ -1093,6 +1177,10 @@ fn stashRemoteOpen(url: []const u8, kind: []const u8, title: []const u8, art: []
     const n = @min(url.len, slot.path.len);
     @memcpy(slot.path[0..n], url[0..n]);
     slot.path_len = n;
+    // The HTTP identity fields belong to browser-link entries only.
+    slot.referer_len = 0;
+    slot.origin_len = 0;
+    slot.user_agent_len = 0;
     const kn = @min(kind.len, slot.kind.len);
     @memcpy(slot.kind[0..kn], kind[0..kn]);
     slot.kind_len = kn;
@@ -1128,7 +1216,7 @@ fn handleOpenQuery(query: []const u8) void {
     }
 }
 
-fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8, request: []const u8, principal: access_pure.Principal) void {
+fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8, request: []const u8, principal: access_pure.Principal, presented: []const u8) void {
     // The POST body, for the routes that take credentials. credParam() reads it
     // ahead of the query string so a debrid key or a GitHub token can be sent
     // where it will not be logged as part of a URL.
@@ -1138,11 +1226,15 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
     var action_buf: [64]u8 = undefined;
     const action = credParam(body, query, "action", &action_buf) orelse "";
     if (!access_pure.allowsRoute(principal, api_path, method, action)) return sendForbidden(stream);
+    if (@import("remote_browser_api.zig").handle(stream, method, api_path, query, body, principal, presented)) return;
     if (@import("remote_transfer_api.zig").handle(stream, method, api_path, query)) return;
     if (@import("remote_library_api.zig").handle(stream, method, api_path, query)) return;
     if (@import("remote_collections_api.zig").handle(stream, method, api_path, query)) return;
     if (@import("remote_local_library_api.zig").handle(stream, method, api_path, query, body)) return;
     if (@import("remote_plex_api.zig").handle(stream, method, api_path, query)) return;
+    if (@import("remote_wanted_api.zig").handle(stream, method, api_path, query)) return;
+    if (@import("remote_agent_tasks_api.zig").handle(stream, method, api_path, query, body)) return;
+    if (@import("remote_operator_api.zig").handle(stream, method, api_path, query, body)) return;
     // ── Non-player endpoints checked first ──
     // Search
     if (std.mem.eql(u8, api_path, "/search")) {
@@ -1170,7 +1262,7 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
         return;
     }
     if (std.mem.eql(u8, api_path, "/rss")) {
-        apiRssList(stream);
+        apiRssList(stream, query);
         return;
     }
     if (std.mem.eql(u8, api_path, "/rss/manage")) {
@@ -1818,13 +1910,20 @@ fn principalForBearer(token: []const u8) ?access_pure.Principal {
     const auth_store = @import("auth_store.zig");
     if (auth_store.validSession(token))
         return if (auth_store.sessionIsAdmin(token)) .admin_session else .session;
+    // Last, and shape-checked first: only a token that looks like a paired
+    // browser's costs a database lookup.
+    if (@import("browser_link.zig").validToken(token) != null) return .browser;
     return null;
 }
 
 /// General API routes accept either caller class. Sensitive routes must use
-/// `principalForBearer` and check an explicit capability instead.
+/// `principalForBearer` and check an explicit capability instead. A paired
+/// browser is deliberately NOT general-purpose: it reaches its allowlist only
+/// (access_pure.browser_routes), so the media, stream and event routes that
+/// call this refuse it.
 fn isAuthorized(token: []const u8) bool {
-    return principalForBearer(token) != null;
+    const principal = principalForBearer(token) orelse return false;
+    return principal != .browser;
 }
 
 /// Bytes after the HTTP header terminator (the request body), or "".
@@ -1878,6 +1977,7 @@ fn consumeExpensiveBudget(bearer: []const u8, principal: access_pure.Principal, 
     var identity: [9]u8 = undefined;
     const key = switch (principal) {
         .machine => remote_limits.keyOf("machine-credential"),
+        .browser => remote_limits.keyOf(bearer),
         .session, .admin_session => blk: {
             const uid = @import("auth_store.zig").userIdForSession(bearer) orelse
                 break :blk remote_limits.keyOf(bearer);
@@ -2493,18 +2593,35 @@ fn apiHistory(stream: std.Io.net.Stream) void {
     sendJson(stream, json_buf[0..w.end]);
 }
 
-fn apiRssList(stream: std.Io.net.Stream) void {
+/// `/rss`. With `redact=1` (what the agent tools send) feed URLs are cut to
+/// scheme and host, because feeds often carry a passkey in the query string, and
+/// magnet links are left out. The body is built with a growing writer: a fixed
+/// buffer silently sent nothing once a few hundred items filled it.
+fn apiRssList(stream: std.Io.net.Stream, query: []const u8) void {
     const rss = @import("rss.zig");
-    var json_buf: [32768]u8 = undefined;
-    var w = std.Io.Writer.fixed(&json_buf);
-    w.writeAll("{\"feeds\":[") catch return;
+    const redact = std.mem.eql(u8, getQueryParam(query, "redact") orelse "", "1");
+    const allocator = @import("../core/alloc.zig").allocator;
+    var out: std.Io.Writer.Allocating = .init(allocator);
+    defer out.deinit();
+    const w = &out.writer;
+    w.writeAll("{\"feeds\":[") catch return sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
     for (0..rss.feed_count) |fi| {
         const f = &rss.feeds[fi];
         if (fi > 0) w.writeAll(",") catch return;
         w.writeAll("{\"name\":\"") catch return;
-        escJsonWrite(&w, f.name[0..f.name_len]);
+        escJsonWrite(w, f.name[0..f.name_len]);
         w.writeAll("\",\"url\":\"") catch return;
-        escJsonWrite(&w, f.url[0..f.url_len]);
+        var url: []const u8 = f.url[0..f.url_len];
+        if (redact) {
+            // scheme://host only
+            const scheme_end = std.mem.indexOf(u8, url, "://");
+            const host_start = if (scheme_end) |e| e + 3 else 0;
+            const host_end = std.mem.indexOfAnyPos(u8, url, host_start, "/?#") orelse url.len;
+            url = url[0..host_end];
+            // Credentials in the authority (user:pass@host): show nothing.
+            if (std.mem.indexOfScalar(u8, url[host_start..], '@') != null) url = "(redacted)";
+        }
+        escJsonWrite(w, url);
         w.print("\",\"enabled\":{s}}}", .{if (f.enabled) "true" else "false"}) catch return;
     }
     w.writeAll("],\"items\":[") catch return;
@@ -2512,17 +2629,19 @@ fn apiRssList(stream: std.Io.net.Stream) void {
         const item = &rss.items[ri];
         if (ri > 0) w.writeAll(",") catch return;
         w.writeAll("{\"title\":\"") catch return;
-        escJsonWrite(&w, item.title[0..item.title_len]);
-        w.print("\",\"seeds\":{d},\"peers\":{d},\"size\":{d},\"magnet\":\"", .{
-            item.seeds, item.peers, item.size_bytes,
-        }) catch return;
-        escJsonWrite(&w, item.magnet[0..item.magnet_len]);
-        w.writeAll("\"}") catch return;
+        escJsonWrite(w, item.title[0..item.title_len]);
+        w.print("\",\"seeds\":{d},\"peers\":{d},\"size\":{d}", .{ item.seeds, item.peers, item.size_bytes }) catch return;
+        if (!redact) {
+            w.writeAll(",\"magnet\":\"") catch return;
+            escJsonWrite(w, item.magnet[0..item.magnet_len]);
+            w.writeAll("\"") catch return;
+        }
+        w.writeAll("}") catch return;
     }
     w.writeAll("],\"fetching\":") catch return;
     w.writeAll(if (rss.is_fetching) "true" else "false") catch return;
     w.writeAll("}") catch return;
-    sendJson(stream, json_buf[0..w.end]);
+    sendJson(stream, out.written());
 }
 
 fn apiRssManage(stream: std.Io.net.Stream, query: []const u8, body: []const u8) void {
@@ -3111,6 +3230,9 @@ fn apiPlugins(stream: std.Io.net.Stream, method: []const u8, query: []const u8, 
             if (response.status) |status| sendJsonStatus(stream, status, response.json) else sendJson(stream, response.json);
             return;
         }
+        if (std.mem.eql(u8, action_name, "scaffold") or std.mem.eql(u8, action_name, "test")) {
+            return @import("remote_plugins_api.zig").authoring(stream, action_name, body, query);
+        }
         const action = std.meta.stringToEnum(repo.Action, action_name) orelse {
             sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"unknown plugin action\"}");
             return;
@@ -3545,8 +3667,10 @@ fn apiVndb(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) v
     sendJson(stream, json_buf[0..w.end]);
 }
 
-/// GET /api/drama[/play?idx=] — the Asian-drama catalog (TMDB /discover/tv).
-/// Browse-only: drama.zig has no search entry point, so neither does this.
+/// GET /api/drama[/play?idx=|/search?q=|/episodes?idx=] — the Asian-drama catalog.
+/// Keyless by default (TVmaze on-air feed, title search, episode lists); with a
+/// TMDB key the landing grid uses TMDB /discover/tv instead. `needs_tmdb_key` is
+/// kept in the document for older clients and is always false.
 fn apiDrama(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) void {
     const drama = @import("drama.zig");
     const d = &state.app.drama;
@@ -3568,24 +3692,63 @@ fn apiDrama(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) 
         sendJson(stream, "{\"ok\":true,\"action\":\"drama_more\"}");
         return;
     }
-
-    // Every drama entry point no-ops without a TMDB key — say so rather than
-    // returning a permanently empty list the client can't explain.
-    if (state.app.tmdb.api_key_len == 0) {
-        sendJson(stream, "{\"loading\":false,\"needs_tmdb_key\":true,\"results\":[]}");
+    if (std.mem.eql(u8, api_path, "/drama/search")) {
+        // Empty q returns to the on-air feed.
+        var qbuf: [256]u8 = undefined;
+        const raw = getQueryParam(query, "q") orelse "";
+        drama.searchTitle(txt.safeUtf8(urlDecode(raw, &qbuf) orelse raw));
+        sendJson(stream, "{\"ok\":true,\"action\":\"drama_search\"}");
         return;
     }
+    if (std.mem.eql(u8, api_path, "/drama/episodes")) {
+        const idx = std.fmt.parseInt(usize, getQueryParam(query, "idx") orelse "999", 10) catch 999;
+        const row = drama.resultRow(idx) orelse {
+            sendJsonStatus(stream, "404 Not Found", "{\"error\":\"no such drama\"}");
+            return;
+        };
+        const show_id = row.id[0..@min(row.id_len, row.id.len)];
+        drama.requestEpisodes(show_id);
+        const st = drama.episodeStatus(show_id);
+        const ea = @import("../core/alloc.zig").allocator;
+        const ebuf = ea.alloc(u8, 256 * 1024) catch return;
+        defer ea.free(ebuf);
+        var ew = std.Io.Writer.fixed(ebuf);
+        ew.print("{{\"source\":\"{s}\",\"state\":\"{s}\",\"count\":{d},\"results\":[", .{ drama.sourceName(), st.state, st.count }) catch return;
+        var first = true;
+        var i: usize = 0;
+        while (i < st.count) : (i += 1) {
+            const ep = drama.episodeAt(show_id, i) orelse break;
+            // Leave room for one more row plus the closing brackets.
+            if (ew.end + 400 > ebuf.len) break;
+            if (!first) ew.writeAll(",") catch return;
+            first = false;
+            ew.print("{{\"season\":{d},\"number\":{d},\"runtime\":{d},\"airdate\":\"", .{ ep.season, ep.number, ep.runtime }) catch return;
+            escJsonWrite(&ew, ep.airdate[0..ep.airdate_len]);
+            ew.writeAll("\",\"name\":\"") catch return;
+            escJsonWrite(&ew, txt.safeUtf8(ep.name[0..ep.name_len]));
+            ew.writeAll("\"}") catch return;
+        }
+        ew.writeAll("]}") catch return;
+        sendJson(stream, ebuf[0..ew.end]);
+        return;
+    }
+
+    // No key needed: the first view kicks off the keyless on-air feed (or TMDB
+    // discover when a key is configured).
     if (!d.loaded_once and !d.is_loading.load(.acquire)) drama.loadCatalog();
 
     const a = @import("../core/alloc.zig").allocator;
     const json_buf = a.alloc(u8, 320 * 1024) catch return;
     defer a.free(json_buf);
     var w = std.Io.Writer.fixed(json_buf);
-    w.print("{{\"loading\":{s},\"loading_more\":{s},\"has_more\":{s},\"streaming\":{s},\"needs_tmdb_key\":false,\"results\":[", .{
+    w.print("{{\"loading\":{s},\"loading_more\":{s},\"has_more\":{s},\"streaming\":{s},\"needs_tmdb_key\":false,\"source\":\"{s}\",\"search\":{s},\"failed\":{s},\"results\":[", .{
         if (d.is_loading.load(.acquire)) "true" else "false",
         if (drama.isLoadingMore()) "true" else "false",
         if (drama.hasMore()) "true" else "false",
         if (d.stream_loading.load(.acquire)) "true" else "false",
+        drama.sourceName(),
+        if (drama.isSearchResults()) "true" else "false",
+        if (drama.catalogFailed()) "true" else "false",
     }) catch return;
     const n = drama.resultCount();
     var emitted: usize = 0;
@@ -3599,7 +3762,8 @@ fn apiDrama(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8) 
         escJsonWrite(&w, txt.safeUtf8(r.name[0..@min(r.name_len, r.name.len)]));
         w.writeAll("\",\"year\":\"") catch return;
         escJsonWrite(&w, txt.safeUtf8(r.year[0..@min(r.year_len, r.year.len)]));
-        // A TMDB path like "/abc.jpg"; the client prefixes an image base.
+        // A TMDB path like "/abc.jpg" (the client prefixes an image base) or,
+        // for the keyless TVmaze feed, a full https image URL.
         w.writeAll("\",\"poster_path\":\"") catch return;
         escJsonWrite(&w, r.poster_path[0..@min(r.poster_path_len, r.poster_path.len)]);
         w.writeAll("\",\"overview\":\"") catch return;

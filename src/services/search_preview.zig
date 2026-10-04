@@ -42,7 +42,7 @@ pub const Snapshot = struct {
             .starting => "Loading trailer…",
             .playing => "Trailer preview",
             .ended => "Trailer ended",
-            .unavailable => if (self.failure == .no_credentials) "Add a TMDB key to enable trailers" else "No official trailer available",
+            .unavailable => "No official trailer available",
             .failed => if (self.failure == .playback) "Trailer could not play — open its verified link" else "Trailer metadata could not load",
         };
     }
@@ -113,9 +113,6 @@ pub fn select(identity: u64, kind: Kind, id: i32) void {
     if (id <= 0) {
         current.status = .unavailable;
         current.failure = .no_official_video;
-    } else if (credentials.key_len == 0) {
-        current.status = .unavailable;
-        current.failure = .no_credentials;
     } else {
         var job = Job{ .generation = generation, .kind = kind, .id = id, .key_len = credentials.key_len };
         @memcpy(job.key[0..job.key_len], credentials.key[0..job.key_len]);
@@ -161,14 +158,31 @@ fn fetchMetadata(job: Job) void {
 /// key; neither selected native work nor preview playback is touched here.
 pub fn lookupMetadata(kind: Kind, id: i32, key: []const u8) Lookup {
     if (id <= 0) return .{ .failure = .invalid_response };
-    if (key.len == 0 or key.len > 256) return .{ .status = .unavailable, .failure = .no_credentials };
-    for (key) |ch| if (ch <= 32 or ch == 127) return .{ .status = .unavailable, .failure = .no_credentials };
+    // No key (or an unusable one) is not an error: Cinemeta carries the same
+    // official trailer ids for the keyless catalog.
+    const usable = key.len > 0 and key.len <= 256 and for (key) |ch| {
+        if (ch <= 32 or ch == 127) break false;
+    } else true;
+    if (!usable) return lookupCinemeta(kind, id);
     if (workers.isQuitting()) return .{};
     var path_buf: [96]u8 = undefined;
     const path = std.fmt.bufPrint(&path_buf, "/3/{s}/{d}?append_to_response=videos", .{ @tagName(kind), id }) catch return .{};
     const body = @import("tmdb_api.zig").tmdbPreviewApiOwned(path, key) orelse return .{};
     defer allocator.free(body);
     const meta = pure.parseForId(allocator, body, id) catch return .{ .failure = .invalid_response };
+    return .{ .metadata = meta, .status = if (meta.trailer_url_len > 0) .ready else .unavailable, .failure = if (meta.trailer_url_len > 0) .none else .no_official_video };
+}
+
+fn lookupCinemeta(kind: Kind, id: i32) Lookup {
+    if (workers.isQuitting()) return .{};
+    const api = @import("tmdb_api.zig");
+    const meta_kind: @import("cinemeta_meta_pure.zig").Kind = if (kind == .tv) .series else .movie;
+    var imdb_buf: [16]u8 = undefined;
+    const imdb = api.knownImdb(meta_kind, id, &imdb_buf);
+    if (imdb.len == 0) return .{ .status = .unavailable, .failure = .no_official_video };
+    const body = api.cinemetaMetaOwned(meta_kind, imdb) orelse return .{};
+    defer allocator.free(body);
+    const meta = pure.parseCinemeta(allocator, body, id) catch return .{ .failure = .invalid_response };
     return .{ .metadata = meta, .status = if (meta.trailer_url_len > 0) .ready else .unavailable, .failure = if (meta.trailer_url_len > 0) .none else .no_official_video };
 }
 

@@ -164,6 +164,52 @@ def remember(source_id, url):
         pass
 
 
+# ── Health reports for Opal's background operator ────────────────────────────
+#
+# When a source keeps failing, Opal can ask where it lives now (endpoint_repair).
+# The Zig side cannot see these HTTP requests, so the verdict for each engine is
+# printed next to its result rows, as one line the row parsers skip (no `|`):
+#
+#     #opal-health<TAB><source id><TAB>ok|http|transport|timeout<TAB><status>
+#
+# Only in Opal's own mode (nova2 `--timeout=`); qBittorrent-style callers get the
+# plain row stream they always did.
+
+ENABLE_HEALTH = False
+
+
+def summarize_health(per_host):
+    """One verdict for a source from the verdicts of the hosts it tried.
+
+    `per_host` has one entry per host: a list of (kind, status) fetch events.
+    Any successful fetch means the source is alive. Otherwise the source is
+    failing only if every host produced a failure event; a host with no events
+    (nothing fetched, or only a challenge page) leaves the verdict unknown.
+    Returns (kind, status) or None."""
+    last = None
+    for events in per_host:
+        if any(kind == 'ok' for kind, _ in events):
+            return ('ok', 200)
+        if not events:
+            return None
+        last = events[-1]
+    return last
+
+
+def format_health(source_id, verdict):
+    kind, status = verdict
+    return '#opal-health\t{0}\t{1}\t{2}'.format(source_id, kind, int(status))
+
+
+def _emit_health(source_id, verdict):
+    try:
+        # fd 1 is stdout, exactly as novaprinter writes rows.
+        with open(1, 'w', encoding='utf-8', closefd=False) as out:
+            print(format_health(source_id, verdict), file=out)
+    except Exception:
+        pass
+
+
 # ── The bit nova2 calls ──────────────────────────────────────────────────────
 
 def candidates_for(source_id, default_url):
@@ -194,10 +240,18 @@ def search_with_failover(engine, source_id, what, cat, result_counter):
         hosts = ['']
 
     ok = True
+    report = ENABLE_HEALTH and bool(load(source_id).get('base'))
+    per_host = []
     for host in hosts:
         if host:
             engine.url = host
         before = result_counter()
+        if report:
+            try:
+                import helpers
+                helpers.health_reset()
+            except Exception:
+                report = False
         try:
             if hasattr(engine, 'supported_categories') and cat:
                 engine.search(what, cat)
@@ -207,8 +261,16 @@ def search_with_failover(engine, source_id, what, cat, result_counter):
             # stderr, never stdout — Opal parses stdout as result rows.
             traceback.print_exc()
             ok = False
+        if report:
+            per_host.append(helpers.health_events())
         if result_counter() > before:
             if host:
                 remember(source_id, host)
+            if report:
+                _emit_health(source_id, ('ok', 200))
             return True
+    if report:
+        verdict = summarize_health(per_host)
+        if verdict:
+            _emit_health(source_id, verdict)
     return ok

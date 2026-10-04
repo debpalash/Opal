@@ -3247,8 +3247,10 @@ pub fn updateTorrentBackgroundTasks() void {
                                     else
                                         p.current_url[0..p.current_url_len];
                                     @import("watch_history.zig").bindCatalogMovie(history_identity, p.catalog_tmdb_id);
-                                    @import("../services/trakt.zig").markWatchedMovie(p.catalog_tmdb_id);
-                                    @import("../services/simkl.zig").markWatchedMovie(p.catalog_tmdb_id);
+                                    var movie_imdb_buf: [16]u8 = undefined;
+                                    const movie_imdb = @import("../core/db.zig").movieImdbId(p.catalog_tmdb_id, &movie_imdb_buf);
+                                    @import("../services/trakt.zig").markWatchedMovie(p.catalog_tmdb_id, movie_imdb);
+                                    @import("../services/simkl.zig").markWatchedMovie(p.catalog_tmdb_id, movie_imdb);
                                 }
                             }
                         }

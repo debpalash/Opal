@@ -1326,11 +1326,11 @@ fn renderGeneralTab() void {
     }
 
     // ── TMDB Integration ──
-    sectionHeader("TMDB Integration", "Optional: add richer season and episode metadata", 14, @src());
+    sectionHeader("TMDB (Advanced, optional)", "Not needed: Opal loads movies, TV, calendars and subtitles without it", 14, @src());
 
-    settingRow("API Key", 140, @src());
+    settingRow("TMDB key", 140, @src());
     {
-        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.tmdb.api_key }, .placeholder = "Paste API key from themoviedb.org", .password_char = "•" }, .{
+        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.tmdb.api_key }, .placeholder = "Optional: your own themoviedb.org token", .password_char = "•" }, .{
             .id_extra = 142,
             .expand = .horizontal,
             .min_size_content = .{ .w = 300, .h = 20 },
@@ -1353,7 +1353,7 @@ fn renderGeneralTab() void {
         _ = dvui.label(@src(), "{s}", .{if (tmdb_was_default and !tmdb_changed)
             "Using Opal's built-in key — paste your own to override."
         else
-            "Optional — movie and TV feeds work without a key"}, .{
+            "Advanced, optional. Only adds richer metadata (cast, extra artwork, trailers). Everything works without it."}, .{
             .id_extra = 143,
             .color_text = theme.colors.text_tertiary,
             .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
@@ -5015,6 +5015,292 @@ fn renderPhoneQr() void {
     }
 }
 
+/// Connect coding agents (Claude Code, Codex, Gemini CLI, ...) to Opal's MCP
+/// server. Agents reach Opal through the same loopback Web API as everything
+/// else, so "agent access" is that switch plus copy-paste setup for the client;
+/// `opal-mcp` itself enforces the tier policy and writes the audit log.
+const builtin_os_linux = @import("builtin").os.tag == .linux;
+
+fn renderAgentAccess() void {
+    const remote = @import("../services/remote.zig");
+    const setup = @import("../services/agent_setup_pure.zig");
+    const io_g = @import("../core/io_global.zig");
+
+    _ = dvui.label(@src(), "Let coding agents search, play and manage downloads through Opal. Agents connect with the opal-mcp program; it only talks to this machine unless the Web UI is shared on your network.", .{}, .{
+        .color_text = theme.colors.text_secondary,
+        .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
+    });
+
+    const before = state.app.web_remote_enabled;
+    const hint: []const u8 = if (!state.app.web_remote_enabled)
+        "Off"
+    else if (remote.bind_mode == .lan)
+        "On, but the API is also reachable on your network"
+    else
+        "On, this computer only";
+    components.toggleRow(@src(), "Allow coding agents", hint, &state.app.web_remote_enabled);
+    if (state.app.web_remote_enabled != before) {
+        state.markConfigDirty();
+        if (state.app.web_remote_enabled) {
+            remote.start();
+            state.showToast("Agent access on");
+        } else {
+            remote.stop();
+            state.showToast("Agent access off");
+        }
+    }
+
+    {
+        const follow_before = state.app.wanted_follow_tv;
+        components.toggleRow(@src(), "Follow tracked shows", "Download the newest aired episode of each show you track, automatically", &state.app.wanted_follow_tv);
+        if (state.app.wanted_follow_tv != follow_before) {
+            @import("../services/wanted.zig").setFollowTv(state.app.wanted_follow_tv);
+            state.showToast(if (state.app.wanted_follow_tv) "Following tracked shows" else "Stopped following shows");
+        }
+    }
+
+    {
+        const ask_before = state.app.ask_enabled;
+        const ask_agent = @import("../services/ask.zig").installedAgent();
+        const ask_hint: []const u8 = if (ask_agent == null)
+            "Needs Claude Code or Codex on your PATH. Questions typed with > or ending in ? are answered by your coding agent using Opal's tools; downloads only start when you click a button. Uses your agent credit, up to 25 cents per question, within the operator's daily limit"
+        else if (ask_agent.? == .codex)
+            "Questions typed with > or ending in ? are answered by Codex using Opal's tools; downloads only start when you click a button. Counted at 25 cents per question against the operator's daily limit"
+        else
+            "Questions typed with > or ending in ? are answered by Claude Code using Opal's tools; downloads only start when you click a button. Uses your agent credit, up to 25 cents per question, within the operator's daily limit";
+        components.toggleRow(@src(), "Ask Opal (uses your coding agent)", ask_hint, &state.app.ask_enabled);
+        if (state.app.ask_enabled != ask_before) {
+            state.markConfigDirty();
+            state.showToast(if (state.app.ask_enabled) "Ask Opal on" else "Ask Opal off");
+        }
+        if (state.app.ask_enabled) {
+            const fast_before = state.app.ask_fast;
+            components.toggleRow(@src(), "Fast answers (Claude Haiku)", "Cheaper and quicker, a little less careful with tools. Off uses Claude Sonnet. Codex uses its own default model", &state.app.ask_fast);
+            if (state.app.ask_fast != fast_before) state.markConfigDirty();
+        }
+    }
+
+    {
+        const op_before = state.app.operator_enabled;
+        components.toggleRow(@src(), "Background operator", "Lets Opal quietly ask a coding agent to fix problems it cannot solve alone: other titles for a wanted item, a moved source address. Uses your agent credit within a daily limit; changes to sources wait for your approval", &state.app.operator_enabled);
+        if (state.app.operator_enabled != op_before) {
+            @import("../services/operator.zig").setEnabled(state.app.operator_enabled);
+            state.showToast(if (state.app.operator_enabled) "Background operator on" else "Background operator off");
+        }
+        if (state.app.operator_enabled) {
+            const picks_before = state.app.operator_picks_enabled;
+            components.toggleRow(@src(), "Use my watch history for picks", "Sends the titles (never file paths) of what you recently watched, favourited or follow to your coding agent, once a day, to fill the Home row \"Picked for you\". Every recommendation is checked against a real catalogue before it is shown. Off by default", &state.app.operator_picks_enabled);
+            if (state.app.operator_picks_enabled != picks_before) {
+                state.markConfigDirty();
+                state.showToast(if (state.app.operator_picks_enabled) "Picks will use your watch history" else "Picks no longer use your watch history");
+            }
+        }
+    }
+
+    {
+        const tasks_before = state.app.agent_tasks_enabled;
+        components.toggleRow(@src(), "Run scheduled agent tasks", "Lets saved prompts run a coding agent on a timer, unattended. Uses your agent credit; each task has a daily cap", &state.app.agent_tasks_enabled);
+        if (state.app.agent_tasks_enabled != tasks_before) {
+            @import("../services/agent_tasks.zig").setMasterEnabled(state.app.agent_tasks_enabled);
+            state.showToast(if (state.app.agent_tasks_enabled) "Scheduled agent tasks on" else "Scheduled agent tasks off");
+        }
+    }
+
+    // Before the horizontal button row below, which stays the parent until the
+    // end of this function and would lay anything after it out to its right.
+    renderBrowserLink();
+
+    var exe_buf: [512]u8 = undefined;
+    var path_buf: [600]u8 = undefined;
+    const exe_dir = io_g.selfExeDirPath(&exe_buf) catch "";
+    const is_win = @import("builtin").os.tag == .windows;
+    const mcp_path = setup.mcpBinaryPath(&path_buf, exe_dir, is_win) orelse "opal-mcp";
+
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .horizontal,
+        .margin = .{ .x = 0, .y = 4, .w = 0, .h = 6 },
+    });
+    defer row.deinit();
+    var text_buf: [768]u8 = undefined;
+    if (components.actionButton(@src(), "Copy Claude Code command", .primary, 9301)) {
+        if (setup.claudeCommand(&text_buf, mcp_path)) |t| {
+            dvui.clipboardTextSet(t);
+            state.showToast("Run it in a terminal to add Opal to Claude Code");
+        } else state.showToast("Install path has a quote; use the JSON config");
+    }
+    if (components.actionButton(@src(), "Copy Codex config", .secondary, 9302)) {
+        if (setup.codexToml(&text_buf, mcp_path)) |t| {
+            dvui.clipboardTextSet(t);
+            state.showToast("Paste into ~/.codex/config.toml");
+        }
+    }
+    if (components.actionButton(@src(), "Copy JSON config", .secondary, 9303)) {
+        if (setup.jsonConfig(&text_buf, mcp_path)) |t| {
+            dvui.clipboardTextSet(t);
+            state.showToast("MCP config copied");
+        }
+    }
+
+    if (builtin_os_linux) {
+        _ = dvui.label(@src(), "Open an agent in your terminal, already connected to Opal:", .{}, .{
+            .color_text = theme.colors.text_secondary,
+            .margin = .{ .x = 0, .y = 4, .w = 0, .h = 2 },
+        });
+        var launch_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
+        });
+        defer launch_row.deinit();
+        const launcher = @import("../services/agent_launch.zig");
+        inline for (.{ launcher.Agent.claude, launcher.Agent.codex, launcher.Agent.gemini }, 0..) |agent, i| {
+            var label_buf: [48]u8 = undefined;
+            const label = std.fmt.bufPrint(&label_buf, "Launch {s}", .{agent.title()}) catch "Launch";
+            if (components.actionButton(@src(), label, .secondary, 9310 + i)) {
+                state.showToast(launcher.launch(agent).message());
+            }
+        }
+    }
+
+    var cfg_buf: [512]u8 = undefined;
+    var audit_buf: [640]u8 = undefined;
+    if (setup.auditLogPath(&audit_buf, paths.configDir(&cfg_buf))) |audit| {
+        _ = dvui.label(@src(), "Every agent call is logged to {s}", .{audit}, .{
+            .color_text = theme.colors.text_secondary,
+            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
+        });
+        if (components.actionButton(@src(), "Copy log path", .secondary, 9304)) {
+            dvui.clipboardTextSet(audit);
+            state.showToast("Audit log path copied");
+        }
+    }
+}
+
+/// "Browser" card: pair the Opal Connect extension, list paired browsers,
+/// revoke one. The pairing code is minted here, by a click, and never leaves
+/// this process except by being typed into the extension: there is no HTTP route
+/// that starts pairing, so an agent cannot do it.
+fn renderBrowserLink() void {
+    const link = @import("../services/browser_link.zig");
+    const link_pure = @import("../services/browser_link_pure.zig");
+    const io_g = @import("../core/io_global.zig");
+
+    var card = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .horizontal,
+        .margin = .{ .x = 0, .y = theme.spacing.md, .w = 0, .h = theme.spacing.sm },
+    });
+    defer card.deinit();
+
+    components.sectionHeader("Browser");
+    _ = dvui.label(@src(), "Pair your own browser with the Opal Connect extension. It finds the real stream behind a page and plays it here with the right Referer. A paired browser can only send streams to Opal; it cannot change settings, downloads or sources.", .{}, .{
+        .color_text = theme.colors.text_secondary,
+        .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
+    });
+    if (!state.app.web_remote_enabled) {
+        _ = dvui.label(@src(), "The extension reaches Opal through its local API: turn on \"Allow coding agents\" above first.", .{}, .{
+            .color_text = theme.colors.warning,
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
+        });
+    }
+
+    const view = link.pairingView();
+    if (view.active) {
+        // Re-arm once a second so the countdown moves under the gated frame loop.
+        const tick_id = card.data().id;
+        if (dvui.timerDoneOrNone(tick_id)) dvui.timer(tick_id, 1_000_000);
+
+        var big = dvui.themeGet().font_body;
+        big.size = theme.font_size.title * 1.6;
+        _ = dvui.label(@src(), "{s}", .{view.code[0..]}, .{
+            .color_text = theme.colors.text_primary,
+            .font = big,
+            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
+        });
+        _ = dvui.label(@src(), "Enter this code in the extension's setup page. Expires in {d}:{d:0>2}. Five wrong tries cancel it.", .{ @as(u32, @intCast(@divTrunc(view.remaining, 60))), @as(u32, @intCast(@mod(view.remaining, 60))) }, .{
+            .color_text = theme.colors.text_secondary,
+            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
+        });
+    }
+
+    {
+        var prow = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .expand = .horizontal,
+            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
+        });
+        defer prow.deinit();
+        if (components.actionButton(@src(), if (view.active) "New code" else "Pair a browser", .primary, 9330)) {
+            if (!link.startPairing()) state.showToast("No entropy source: could not make a code");
+        }
+        if (view.active and components.actionButton(@src(), "Cancel", .secondary, 9331)) link.cancelPairing();
+    }
+
+    // The second consent for the "Share this page" button in the extension: a page
+    // is readable by agents only when it was shared with the agents box ticked AND
+    // this is on. Only this switch changes it; no route and no tool can.
+    {
+        const before = state.app.browser_share_agents;
+        components.toggleRow(@src(), "Let agents read shared pages", "Agents can read the title, text and detected streams of a page you share from your browser, and play those streams. Off by default. The text is untrusted: agents are told so", &state.app.browser_share_agents);
+        if (state.app.browser_share_agents != before) {
+            state.markConfigDirty();
+            state.showToast(if (state.app.browser_share_agents) "Agents can read pages you share" else "Agents can no longer read shared pages");
+        }
+    }
+
+    // Same rule for the open tabs: Opal's switch AND the user's own opt-in in the
+    // extension (it asks for the optional tabs permission when they turn it on there).
+    {
+        const before = state.app.browser_share_tabs;
+        components.toggleRow(@src(), "Share tab list with agents", "Agents can see the titles and sites (host and path, never the full address) of the tabs open in a paired browser, but only if you also allow it in the Opal Connect panel. Off by default. Tab titles are untrusted text: agents are told so", &state.app.browser_share_tabs);
+        if (state.app.browser_share_tabs != before) {
+            state.markConfigDirty();
+            state.showToast(if (state.app.browser_share_tabs) "Agents can see your tab list once the browser allows it" else "Agents can no longer see your tabs");
+        }
+    }
+
+    var rows: [link_pure.MAX_LINKS]link.Link = undefined;
+    const n = link.list(&rows);
+    if (n == 0) {
+        _ = dvui.label(@src(), "No paired browsers.", .{}, .{
+            .color_text = theme.colors.text_tertiary,
+            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 4 },
+        });
+        return;
+    }
+    _ = dvui.label(@src(), "Paired browsers", .{}, .{
+        .color_text = theme.colors.text_secondary,
+        .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
+    });
+    const now = io_g.timestamp();
+    for (rows[0..n], 0..) |*row, i| {
+        var line = dvui.box(@src(), .{ .dir = .horizontal }, .{
+            .id_extra = i,
+            .expand = .horizontal,
+            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
+        });
+        defer line.deinit();
+        var seen_buf: [48]u8 = undefined;
+        const ago = now - row.last_seen;
+        const seen: []const u8 = if (ago < 90)
+            "active now"
+        else if (ago < 3600)
+            std.fmt.bufPrint(&seen_buf, "seen {d} min ago", .{@divTrunc(ago, 60)}) catch ""
+        else if (ago < 86400)
+            std.fmt.bufPrint(&seen_buf, "seen {d} h ago", .{@divTrunc(ago, 3600)}) catch ""
+        else
+            std.fmt.bufPrint(&seen_buf, "seen {d} d ago", .{@divTrunc(ago, 86400)}) catch "";
+        // Button first: a label that expands to the row's width would push it
+        // out of view in a narrow window.
+        if (components.actionButton(@src(), "Revoke", .danger, 9340 + i)) {
+            if (link.revoke(row.id)) state.showToast("Browser revoked: it can no longer reach Opal");
+        }
+        _ = dvui.label(@src(), "{s} ({s}), {s}", .{ row.labelSlice(), row.browserSlice(), seen }, .{
+            .id_extra = i,
+            .color_text = theme.colors.text_primary,
+            .gravity_y = 0.5,
+            .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
+        });
+    }
+}
+
 fn renderWebUiTab() void {
     const remote = @import("../services/remote.zig");
     const access = @import("../services/access_pure.zig");
@@ -5210,6 +5496,10 @@ fn renderWebUiTab() void {
             } else state.showToast("No entropy source — token unchanged");
         }
     }
+
+    // ── Agent access ──
+    settingRow("Agent Access", 95, @src());
+    renderAgentAccess();
 
     // ── Network ──
     settingRow("Network", 93, @src());

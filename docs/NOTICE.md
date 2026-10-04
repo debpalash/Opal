@@ -27,6 +27,8 @@ playback backend).
 | SDL2 | zlib | Window/input/rendering backend; bundled (X11-only) on macOS, or system SDL2 (`-fsys=sdl2`) for Wayland. |
 | sqlite3 | Public Domain | Local unified database at `~/.config/opal/opal.db` (watch history, AI memory, config, caches). |
 | sqlite-vec | Apache-2.0 OR MIT (dual) | Vendored C in `src/core/sqlite/sqlite-vec.c`; `vec0` virtual table with `float[768]` embeddings for AI memory vector search. |
+| libghostty-vt (Ghostty) | MIT | Terminal emulation core for the Agents page: VT parsing, screen state, key and paste encoding. Pinned `ghostty` package in `build.zig.zon`, built as a static library without SIMD. |
+| Hack font | MIT, Bitstream Vera terms | Monospace face for the embedded terminal, bundled from the dvui dependency (`src/assets/fonts/LICENSE-HACK.txt`). |
 | zig-lib-icons (TVG icons) | MIT | UI icons, git dependency (nat3github/zig-lib-icons) in `build.zig.zon`. |
 | whisper.cpp (ggml) | MIT | STT via `whisper-cli` + ggml models, downloaded from HuggingFace at runtime (not vendored). |
 | sherpa-onnx (k2-fsa) | Apache-2.0 | Optional STT/TTS models (Whisper-tiny, Piper-VITS, Kokoro, streaming Zipformer), downloaded on demand from GitHub releases. |

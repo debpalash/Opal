@@ -426,7 +426,7 @@ pub fn renderTabContent(tab: state.DrawerTab) void {
         .Comics => comics.renderContent(),
         .Novels => @import("../services/novels.zig").renderContent(),
         .Vndb => @import("../services/vndb.zig").renderContent(),
-        .Web => @import("../services/browser.zig").renderContent(),
+        .Web => @import("browser_hub.zig").render(),
         .Anime => anime.renderContent(),
         .Drama => @import("../services/drama.zig").renderContent(),
         .Podcasts => @import("podcasts_ui.zig").renderContent(),

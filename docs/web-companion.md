@@ -73,3 +73,36 @@ invariants. Long media streams and static assets bypass that lock. Pollers are
 bounded and stopped when their page is hidden; playback status prefers SSE and
 falls back to polling. The UI exposes loading, empty, error, offline, and
 reconnecting states rather than treating a rendered page as proof of parity.
+
+## Keyless verification (2026-10-05)
+
+The web client was run for real with no TMDB key: a fresh profile (no `.env`, no
+`TMDB_API_TOKEN`), the first admin registered with the setup token, then a
+headless Chromium driven over the DevTools protocol (session cookie injected,
+pages opened by hash route, DOM text read and screenshots taken, console errors
+and HTTP >= 400 responses collected).
+
+Checked and working without a key: Browse (Movies & TV, TV only, search, filters),
+movie details (favorite and rating controls), show details with seasons and
+episodes, mark an episode watched, Watching (rows, status, reopening a row's
+details), Home (Continue, Coming up), the Playing page's calendar, Asian Drama
+(on-air grid, title search, details, episode list), and Setup (the TMDB field is
+labelled optional).
+
+Mismatches found and fixed:
+
+| Finding | Cause | Fix |
+| --- | --- | --- |
+| "Movies & TV" showed movies only | The keyless merge appended all series after all movies and the web grid shows the first 30 rows | The two catalogs are interleaved (`cinemeta_meta_pure.interleave`) |
+| Posters of search results were missing (404 from `/poster`) | Cinemeta search returns IMDb artwork on `m.media-amazon.com`, which the poster proxy rejected | The proxy allows exactly that host's `/images/` tree (https, no query), same SSRF rules, tested |
+| A show could not be added to Watching from the web | The show page had no Track action; only the desktop did | Show pages offer "Track show" (hidden once tracked); `/api/library/watched` now reports `tracked` for TV |
+| A keyless show opened from Watching after a key was added would query TMDB with a hash id | The detail routes chose TMDB whenever a key existed | `/api/tv` and `/api/movie` (and the desktop detail view) answer from Cinemeta when the id is the catalog hash of a known IMDb id |
+
+Not a defect: `needs_tmdb_key` is still present in `/api/drama` for older
+clients and is always `false`.
+
+Limits: tracking from a show page needs the show to be in the current Browse
+results (the server reads title and artwork from there); from elsewhere the
+server answers "library changed; refresh and retry". Stream addons and EZTV were
+not exercised live (none installed in the test profile); their keyless IMDb
+lookup is covered by unit tests of the title and episode-token parsing.

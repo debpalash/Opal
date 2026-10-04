@@ -8,7 +8,9 @@
     "dev": "extension dev",
     "start": "extension start",
     "build": "extension build",
-    "preview": "extension preview"
+    "preview": "extension preview",
+    "test": "node --test tests/sniffer.test.mjs tests/fetch_policy.test.mjs tests/tabs_payload.test.mjs",
+    "typecheck": "tsc --noEmit -p ."
   },
   "devDependencies": {
     "extension": "^3.0.0",

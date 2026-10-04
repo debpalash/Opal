@@ -305,4 +305,148 @@ revealBtn.addEventListener("click", () => {
   revealBtn.textContent = revealed ? "Show" : "Hide";
 });
 
+// ── Browser link: pair this browser with Opal ───────────────────────────────
+
+const linkUnpaired = $<HTMLElement>("link-unpaired");
+const linkPaired = $<HTMLElement>("link-paired");
+const linkPairedLabel = $<HTMLElement>("link-paired-label");
+const linkCode = $<HTMLInputElement>("link-code");
+const linkLabel = $<HTMLInputElement>("link-label");
+const linkPairBtn = $<HTMLButtonElement>("link-pair");
+const linkUnpairBtn = $<HTMLButtonElement>("link-unpair");
+const linkResult = $<HTMLDivElement>("link-result");
+
+function browserMsg<T>(msg: Record<string, unknown>): Promise<T> {
+  return chrome.runtime.sendMessage({ kind: "browser", ...msg }) as Promise<T>;
+}
+
+async function refreshLink(): Promise<void> {
+  const st = await browserMsg<{ paired: boolean; label: string }>({ op: "status" });
+  linkUnpaired.hidden = st.paired;
+  linkPaired.hidden = !st.paired;
+  linkPairedLabel.textContent = st.paired ? `Paired as "${st.label}". Streams you press Play on in the side panel go to Opal.` : "";
+  if (st.paired) {
+    // A revoke done in Opal leaves a dead token here; find out now, not at the first Play.
+    const v = await browserMsg<{ ok: boolean; error?: string }>({ op: "verify" });
+    if (!v.ok && v.error?.includes("pair it again")) {
+      show(linkResult, "err", v.error);
+      linkUnpaired.hidden = false;
+      linkPaired.hidden = true;
+    }
+  }
+}
+
+linkPairBtn.addEventListener("click", async () => {
+  linkPairBtn.disabled = true;
+  show(linkResult, "ok", "Pairing…");
+  const res = await browserMsg<{ ok: boolean; error?: string }>({
+    op: "pair",
+    code: linkCode.value,
+    label: linkLabel.value,
+  });
+  linkPairBtn.disabled = false;
+  if (res.ok) {
+    linkCode.value = "";
+    show(linkResult, "ok", "Paired. Open the side panel on a page that plays video and turn on Detect media.");
+    refreshLink();
+  } else {
+    show(linkResult, "err", res.error ?? "Pairing failed.");
+  }
+});
+linkCode.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") linkPairBtn.click();
+});
+linkUnpairBtn.addEventListener("click", async () => {
+  const res = await browserMsg<{ ok: boolean; error?: string }>({ op: "unpair" });
+  show(linkResult, res.error ? "err" : "ok", res.error ?? "Unpaired.");
+  refreshLink();
+});
+
+// ── Fetch through this browser: the allow list ──────────────────────────────
+
+interface FetchAllowEntry {
+  origin: string;
+  addedAt: number;
+  lastUsed: number;
+  private: boolean;
+}
+
+const fetchEnabledEl = $<HTMLSelectElement>("fetch-enabled");
+const fetchAllowListEl = $<HTMLElement>("fetch-allow-list");
+const fetchAllowInput = $<HTMLInputElement>("fetch-allow-input");
+const fetchAllowAddBtn = $<HTMLButtonElement>("fetch-allow-add");
+const fetchResult = $<HTMLDivElement>("fetch-result");
+
+async function refreshFetch(): Promise<void> {
+  const st = await browserMsg<{ enabled: boolean; allow: FetchAllowEntry[] }>({ op: "fetch-state" });
+  fetchEnabledEl.value = st.enabled ? "on" : "off";
+  fetchAllowListEl.textContent = "";
+  if (!st.allow.length) {
+    const li = document.createElement("li");
+    const note = document.createElement("span");
+    note.textContent = "No sites allowed yet. Opal asks in the side panel the first time.";
+    li.append(note);
+    fetchAllowListEl.append(li);
+    return;
+  }
+  for (const e of st.allow) {
+    const li = document.createElement("li");
+    const name = document.createElement("strong");
+    name.textContent = e.origin;
+    const meta = document.createElement("span");
+    meta.textContent = `${e.private ? "private network, " : ""}last used ${new Date(e.lastUsed).toLocaleDateString()}`;
+    const rm = document.createElement("button");
+    rm.type = "button";
+    rm.className = "btn ghost";
+    rm.textContent = "Remove";
+    rm.addEventListener("click", async () => {
+      await browserMsg({ op: "fetch-remove", origin: e.origin });
+      // Take the browser's own access back too when nothing else needs it.
+      try {
+        await chrome.permissions.remove({ origins: [`${e.origin}/*`] });
+      } catch {
+        // an all-sites grant stays until the user turns Detect media off
+      }
+      refreshFetch();
+    });
+    li.append(name, meta, rm);
+    fetchAllowListEl.append(li);
+  }
+}
+
+fetchEnabledEl.addEventListener("change", async () => {
+  await browserMsg({ op: "fetch-enable", on: fetchEnabledEl.value === "on" });
+  show(fetchResult, "ok", fetchEnabledEl.value === "on" ? "Opal can ask this browser to fetch pages." : "Opal can no longer fetch through this browser.");
+});
+
+fetchAllowAddBtn.addEventListener("click", async () => {
+  const typed = fetchAllowInput.value;
+  const res = await browserMsg<{ ok: boolean; error?: string; origin?: string }>({ op: "fetch-add", origin: typed });
+  if (!res.ok || !res.origin) {
+    show(fetchResult, "err", res.error ?? "Could not add that site.");
+    return;
+  }
+  // The browser's own per-site grant lets the page be read; asked here, in this click.
+  let granted = false;
+  try {
+    granted = await chrome.permissions.request({ origins: [`${res.origin}/*`] });
+  } catch {
+    granted = false;
+  }
+  fetchAllowInput.value = "";
+  show(
+    fetchResult,
+    granted ? "ok" : "err",
+    granted
+      ? `${res.origin} is allowed.`
+      : `${res.origin} is on the list, but the browser did not give this extension access to it, so fetches will fail until you grant it.`,
+  );
+  refreshFetch();
+});
+fetchAllowInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") fetchAllowAddBtn.click();
+});
+
 load();
+refreshLink();
+refreshFetch();

@@ -282,19 +282,25 @@ const Fetch = struct {
         // Resolve artwork. The feed has none, so each show is looked up once. A
         // failed lookup leaves the card with an empty poster frame rather than
         // dropping it — a card with no picture beats no card.
+        // With a TMDB key that is TMDB search; without one (or when TMDB finds
+        // nothing) it is a Cinemeta search accepting only an exact title match.
         const key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
-        if (key.len > 0) {
-            const tmdb_api = @import("tmdb_api.zig");
-            for (card_bufs[back][0..cards], 0..) |*cd, i| {
-                card_hits[back][i] = .{};
+        const tmdb_api = @import("tmdb_api.zig");
+        for (card_bufs[back][0..cards], 0..) |*cd, i| {
+            card_hits[back][i] = .{};
+            if (key.len > 0) {
                 var qbuf: [192]u8 = undefined;
                 const q = pure.encodeQuery(cd.nameSlice(), &qbuf);
                 var url_buf: [256]u8 = undefined;
-                const path = std.fmt.bufPrint(&url_buf, "/3/search/tv?query={s}", .{q}) catch continue;
-                const rn = tmdb_api.tmdbApiInto(path, key, body);
-                if (rn == 0) continue;
-                if (pure.firstTvResult(body[0..rn])) |hit| card_hits[back][i] = hit;
+                if (std.fmt.bufPrint(&url_buf, "/3/search/tv?query={s}", .{q})) |path| {
+                    const rn = tmdb_api.tmdbApiInto(path, key, body);
+                    if (rn > 0) {
+                        if (pure.firstTvResult(body[0..rn])) |hit| card_hits[back][i] = hit;
+                    }
+                } else |_| {}
+                if (card_hits[back][i].tmdb_id != 0) continue;
             }
+            card_hits[back][i] = keylessHit(cd.nameSlice(), body);
         }
         card_counts[back] = cards;
 
@@ -306,6 +312,32 @@ const Fetch = struct {
         state.wakeUi();
     }
 };
+
+/// Cinemeta lookup of one show by exact title. The hit's id is the same keyless
+/// catalog id the browse pages use (and its IMDb id is remembered), so opening
+/// the card lands on the matching show. Empty hit when nothing matches exactly.
+fn keylessHit(name: []const u8, body: []u8) pure.TvHit {
+    const kl = @import("keyless_tv_pure.zig");
+    const hit_alloc = @import("../core/alloc.zig").allocator;
+    if (name.len == 0) return .{};
+    var enc: [384]u8 = undefined;
+    const q = @import("../core/http.zig").urlEncode(name, &enc);
+    var path_buf: [448]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buf, "/catalog/series/top/search={s}.json", .{q}) catch return .{};
+    @import("../core/rate_limit.zig").acquire("cinemeta", 4.0);
+    const rn = @import("tmdb_api.zig").cinemetaApiInto(path, body);
+    if (rn == 0) return .{};
+    var imdb_buf: [16]u8 = undefined;
+    const imdb = kl.pickImdb(hit_alloc, body[0..rn], name, 0, &imdb_buf) catch return .{};
+    if (imdb.len == 0) return .{};
+    var hit = pure.TvHit{ .tmdb_id = @import("cinemeta_pure.zig").stableId(imdb) };
+    var poster_buf: [256]u8 = undefined;
+    const poster = kl.catalogPoster(hit_alloc, body[0..rn], imdb, &poster_buf) catch "";
+    hit.poster_path_len = @min(poster.len, hit.poster_path.len);
+    @memcpy(hit.poster_path[0..hit.poster_path_len], poster[0..hit.poster_path_len]);
+    db.tvRememberImdb(hit.tmdb_id, imdb);
+    return hit;
+}
 
 /// Cheap; call every frame from a render site. Kicks a background refresh when
 /// the data is stale. No-op when the eztv source plugin isn't installed.
@@ -479,10 +511,10 @@ fn renderReleaseCard(cd: *pure.ShowCard, hit: *pure.TvHit, idx: usize, now_s: i6
 
     // TMDB poster path -> absolute URL, so the shared card has one image path
     // for every source.
-    var url_buf: [160]u8 = undefined;
+    var url_buf: [320]u8 = undefined;
     var poster_url: []const u8 = "";
     if (hit.poster_path_len > 0) {
-        poster_url = std.fmt.bufPrint(&url_buf, "https://image.tmdb.org/t/p/w185{s}", .{hit.posterSlice()}) catch "";
+        poster_url = @import("keyless_tv_pure.zig").posterUrl(hit.posterSlice(), "", &url_buf);
     }
 
     // "S09E08 · 2h ago"

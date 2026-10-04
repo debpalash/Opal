@@ -91,6 +91,8 @@ pub const Opts = struct {
     use_dpi_proxy: bool = true,
     post_body: ?[]const u8 = null,
     cancel_epoch: ?bounded.CancelEpoch = null,
+    /// Follow HTTP redirects (curl -L). Probes of unvetted addresses turn it off.
+    follow_redirects: bool = true,
 };
 
 pub const Backend = enum { curl, browser_tls };
@@ -140,6 +142,7 @@ pub fn request(url: []const u8, body_out: []u8, headers_out: []u8, opts: Opts) F
         .headers = opts.headers,
         .range = opts.range,
         .timeout_secs = opts.timeout_secs,
+        .follow_redirects = opts.follow_redirects,
         .method_post_body = opts.post_body,
         .capture_headers = true,
         .write_out = write_out,

@@ -488,3 +488,58 @@ Rechecking earlier user links also found KHInsider search reachable while two al
 pages returned 403, Manganato search 403, and AnimeParadise without a verified API
 route. These were not added as working sources. LRCLIB is already a lyrics
 adapter, so its reachable API does not count as an additional playback source.
+
+### Asian Drama is keyless (2026-10-05)
+
+The Asian Drama page no longer asks for a TMDB key. Source: TVmaze
+(`api.tvmaze.com`), free, no key, no account. Cinemeta has no country or
+language filter, AniList and Kitsu are anime only, so TVmaze was the only keyless
+source that carries poster, year, language, overview and episode lists for
+Korean, Japanese, Chinese and Thai live-action shows. Verified with curl on
+2026-10-05.
+
+- **Grid**: scripted shows from `schedule?country=KR|JP|CN|TH&date=` and the global
+  `schedule/web?date=` over a four-day window (today, tomorrow, yesterday, +2), kept
+  when the language is Korean, Japanese, Chinese or Thai and the type is
+  Scripted (anime, variety and reality are dropped). Today's batch is ranked by
+  TVmaze's popularity `weight`, later days are appended without reordering.
+- **Search**: `search/shows?q=`, filtered the same way. Desktop search box, web search box,
+  `GET /api/drama/search?q=` (empty q returns to the feed).
+- **Detail**: `shows/{id}/episodes` as an episode list (season, number, title, air date) in
+  the desktop detail view, the web Details dialog and `GET /api/drama/episodes?idx=`.
+- **With a TMDB key** the landing grid still uses TMDB `discover/tv`, with its paging. Search and
+  episodes always use TVmaze. `needs_tmdb_key` stays in `/api/drama` for old clients and is always false.
+
+Thinner than the TMDB version, honestly:
+
+- No "popular of all time" ranking. The keyless grid is what is on air this week
+  (about 45 titles), not the most popular Asian dramas. There is no infinite scroll.
+- Ratings are mostly empty for new shows, so most cards show no score.
+- TVmaze's Korean broadcast coverage is small (a handful of dramas on air). Chinese and
+  Japanese coverage is good. Taiwan has no broadcast schedule, those shows only appear through the web schedule and search.
+- Long-running Japanese tokusatsu (Kamen Rider, Ultraman) are scripted and Japanese,
+  so they appear. TVmaze does not mark them differently.
+- Search returns only titles TVmaze knows, with no regional fuzzy matching.
+- No per-episode play yet. Play still hands the title to the universal resolver.
+- TVmaze allows about 20 calls per 10 seconds per IP. The feed uses 20 calls in four waves.
+
+### Keyless identities after a key is added (2026-10-05)
+
+A show tracked while Opal had no TMDB key is stored under a catalog id that is a
+hash of its IMDb id; the same show tracked after adding a key uses the real TMDB
+id. Both rows remember the IMDb id, and at startup and after a library sync Opal
+merges such a pair into the TMDB-keyed row (`tv_merge_pure.zig` plans, `tv_merge.zig`
+executes). Only a hash row folds into a real row with exactly the same IMDb id;
+rows with different or unknown IMDb ids, and ambiguous cases, are never touched.
+Watched episodes are unioned, the resume position comes from the more recently
+updated row, the more recently set library status wins, and every affected row is
+first copied to the `tv_*_bak` and `library_status_bak` tables with a `tv_merge_log`
+entry, inside one transaction per pair. A keyed show that has no remembered IMDb
+id is asked once (`/3/tv/{id}/external_ids`) during sync so it can be matched.
+
+Movie scrobbles to Trakt and Simkl use the IMDb id for keyless movies (remembered
+per catalog id in `movie_external_ids`) and keep TMDB ids for keyed ones.
+
+Stream addons and the EZTV source resolve the IMDb id of a search through
+Cinemeta (exact title, year when given, episode token ignored) when there is no
+TMDB key.

@@ -35,7 +35,14 @@ fn closePlayerOrApp() void {
 }
 
 pub fn processGlobalInputs() void {
+    // While the embedded terminal has focus every key belongs to the program in
+    // it (Escape for vim and agents, Ctrl+W to delete a word). Only Cmd chords
+    // stay global, which a terminal never uses. Clicking outside gives the
+    // shortcuts back; so does Ctrl+Shift+Esc, which the terminal reserves as its
+    // way out.
+    const terminal_owns_keys = @import("agent_terminal.zig").capturesKeyboard();
     for (dvui.events()) |*e| {
+        if (terminal_owns_keys and e.evt == .key and !e.evt.key.mod.command()) continue;
         if (e.evt == .key and e.evt.key.action == .down) {
             const key = e.evt.key.code;
             const mod = e.evt.key.mod;

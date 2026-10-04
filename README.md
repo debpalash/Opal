@@ -232,6 +232,23 @@ then scan the QR code. It includes a setup code on first use and opens
 `http://<your-pc-ip>:41595`. Home-screen installation requires HTTPS.
 [Phone setup guide](docs/web-companion.md).
 
+## Let an AI agent run it
+
+Opal ships `opal-mcp`, an [MCP](https://modelcontextprotocol.io) server that gives
+Claude Code, Codex, Gemini CLI or any MCP client more than 100 typed tools: search and
+play, queue, downloads, library, collections, discovery, and a **Wanted list** that
+finds and downloads releases on its own. Turn on **Settings → Agent Access**, then
+copy the one-line setup for your agent, or press **Launch** to open one already
+connected.
+
+- Safe by default: tools carry a permission tier, destructive ones are off until you
+  opt in, and an agent cannot change your proxy, download folder or plugin approvals.
+- Optional **scheduled agent tasks** run a prompt on a timer, with a daily cap and a
+  spending limit, and stay off until you enable them.
+- Everything is also an [OpenAPI](docs/openapi.json) description of the local API.
+
+[Agent guide](docs/mcp.md) · [How it fits together](docs/agent-native.md)
+
 <details>
 <summary><b>Keyboard shortcuts</b></summary>
 

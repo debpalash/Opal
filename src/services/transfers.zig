@@ -493,6 +493,13 @@ fn renderControlBar() void {
 // ══════════════════════════════════════════════════════════
 
 fn renderUnifiedList() void {
+    // The automated Wanted list sits above everything; its height shifts the
+    // measured-row window below exactly like the HTTP block does.
+    var wanted_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = 99009, .expand = .horizontal });
+    @import("wanted_ui.zig").render();
+    const wanted_height = wanted_box.data().rect.h;
+    wanted_box.deinit();
+
     // Direct HTTP downloads first — they're what the user just started.
     var http_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = 99010, .expand = .horizontal });
     const http_shown = renderHttpRows();
@@ -533,7 +540,7 @@ fn renderUnifiedList() void {
     const win = if (expanded or transfers_keyboard_layout)
         row_layout.RowWindow{ .first = 0, .last = shown, .before = 0, .after = 0 }
     else
-        row_layout.measuredRows(heights[0..shown], font_h * 3 + 30, transfers_scroll.viewport.y - http_height, transfers_scroll.viewport.h, 2);
+        row_layout.measuredRows(heights[0..shown], font_h * 3 + 30, transfers_scroll.viewport.y - http_height - wanted_height, transfers_scroll.viewport.h, 2);
     if (win.before > 0) {
         var spacer = dvui.box(@src(), .{}, .{ .id_extra = 99011, .min_size_content = .{ .w = 1, .h = win.before } });
         spacer.deinit();

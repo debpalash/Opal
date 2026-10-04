@@ -472,8 +472,10 @@ pub fn remove(idx: usize) void {
     _ = db.step(stmt);
 
     if (catalog_tmdb_id > 0) {
-        @import("../services/trakt.zig").markUnwatchedMovie(catalog_tmdb_id);
-        @import("../services/simkl.zig").markUnwatchedMovie(catalog_tmdb_id);
+        var movie_imdb_buf: [16]u8 = undefined;
+        const movie_imdb = db.movieImdbId(catalog_tmdb_id, &movie_imdb_buf);
+        @import("../services/trakt.zig").markUnwatchedMovie(catalog_tmdb_id, movie_imdb);
+        @import("../services/simkl.zig").markUnwatchedMovie(catalog_tmdb_id, movie_imdb);
     }
 
     // Remove from cache

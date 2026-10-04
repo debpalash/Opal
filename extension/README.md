@@ -96,7 +96,7 @@ npx tsc --noEmit   # typecheck only
 Then load it:
 
 - **Chrome / Edge**: `chrome://extensions` → *Developer mode* → *Load unpacked* →
-  pick `extension/dist/chrome`. Click the toolbar icon to open the side panel.
+  pick `extension/dist/chromium`. Click the toolbar icon to open the side panel.
 - **Firefox**: `about:debugging` → *This Firefox* → *Load Temporary Add-on* →
   pick `manifest.json` in the Firefox bundle. The panel opens as a sidebar.
 
@@ -124,13 +124,124 @@ map lives in `src/shared.ts` (`OpalAction`).
 `framework` for `/api/source/add` is one of
 `madara｜mangathemesia｜heancms｜madara_novel｜lightnovelwp｜readwn`.
 
+## Browser link: detect streams and play them in Opal
+
+Pages often hide the real stream: an iframe player that `fetch`es a tokenized
+`master.m3u8`, a `<video>` pointing at an `.mp4`. Handing Opal the *page* URL
+leaves mpv with nothing it can play. The browser link finds the stream the page
+actually requests and sends it with the Referer, Origin and User-Agent your
+browser used, so mpv plays it the way the page would.
+
+1. **Pair** (once). In Opal open *Settings → Agent Access → Browser* and press
+   *Pair a browser* (the Web Remote switch above it must be on). Opal shows a
+   six digit code for two minutes. Enter it under *Browser link* on this
+   extension's setup page. Five wrong codes cancel it. The browser gets its own
+   token (stored in `chrome.storage.local`, hashed in Opal) that can only send
+   streams to the player: it cannot touch settings, downloads, sources or agents.
+   Revoke it in Opal at any time.
+2. **Detect media** (once). In the side panel, press *Detect media* and accept the
+   all-sites access prompt. Until then nothing is observed.
+3. Open a page that plays video. Candidates appear under *Detected streams*
+   with **Play** and **Queue**. The list is per tab and clears when the tab
+   navigates.
+
+How it works: `webRequest` observers in the service worker record m3u8, mpd, mp4,
+webm, mkv, audio and (until a playlist shows up) ts requests, and also
+extension-less ones by `Content-Type`. They are de-duplicated, capped at 24 per
+tab and ranked (manifests over files over segments, masters over variants).
+`Cookie` and `Authorization` headers are never read into a candidate. The pure
+part (classification, dedupe, payload) is `src/sniffer.ts`; the worker side is
+`src/browser_link.ts`.
+
+A *queued* stream keeps the Referer, Origin and User-Agent it was found with
+(Opal stores them beside the queue row, keyed by the URL) and plays with them
+later. Streams that need your cookies will not play (cookie handoff to Opal is
+designed but not built, see `docs/browser-integration.md` section 14.6); DRM
+streams cannot be played by mpv. The extension talks to the port set under
+*Settings* on the setup page (default 41595), so a second Opal on another port
+works.
+
+### Add to Wanted
+
+*Add to Wanted* in the side panel sends a title to Opal's Wanted list. The field
+starts from the tab's title (site name and brackets trimmed) and is yours to edit:
+`Dune 2021` is a movie, `Severance S02E03` an episode. One click is one request,
+parsed by Opal with the same rules as the Wanted box in the app.
+
+### Fetch through this browser
+
+Opal, or an agent you gave Opal's tools to, can ask this browser to load a page
+with your own logins and cookies, for sites that block a plain download. It is
+**off for every site until you allow it**:
+
+- The first request for a new site shows up in the side panel (and as a
+  notification and a `?` badge): the site, and *Allow once*, *Always allow this
+  site* or *Deny*. No answer in 80 seconds is a Deny, and Opal's caller gets
+  `403 origin not allowed`.
+- *Options > Fetch through this browser* lists the allowed sites, lets you remove
+  one, add one by hand, or turn the whole feature off (the extension then does not
+  answer at all). A site you have not used for 30 days drops off the list.
+- A site is an exact origin: `https://example.org`, `http://example.org` and
+  `https://www.example.org` are three sites. A page that redirects to another
+  site is returned only if that site is allowed too.
+- An address on your own computer or network (`127.0.0.1`, `192.168.x.x`,
+  `localhost`, `*.local`, any IP literal) is refused unless *you* name it, in the
+  options page or by approving it in the panel, which shows a stronger warning.
+- It reads: GET, plus the form POST Opal's own scrapers need for sources you have
+  already allowed. Text, JSON and HTML only, 2 MB at most, never binary. Nothing
+  from Opal can add to the allow list.
+
+How it works: the service worker long-polls `GET /api/browser/jobs?wait=20` while
+paired (a WebSocket would also work; see `docs/browser-integration.md` section
+14.1 for why a long poll), decides with `src/fetch_policy.ts` (pure, tested),
+runs `fetch(url, {credentials: "include"})` and posts the text to
+`POST /api/browser/jobs/<id>`. The browser's per-site grant (`optional_host_permissions`)
+is requested in the click that allows a site.
+
+### Tab list for agents
+
+*Tab list for agents* in the side panel: *Allow tab titles* asks the browser for
+the optional `tabs` permission. Titles and sites (host and path only; no query
+string, no fragment, no private windows) are then sent to Opal, but only while
+Opal's own switch *Settings > Agent Access > Share tab list with agents* is on
+(this extension learns that from Opal's answer, and Opal refuses and discards
+anything sent while it is off). Opal keeps the list in memory for agents'
+`browser_tabs` tool only.
+
+### Share this page with Opal
+
+*Share this page with Opal* in the side panel sends the page you are on to Opal:
+its title, address, Open Graph description, JSON-LD, the first 8 KB of its text
+and the streams detected on it. It runs only when you press the button, once per
+page, and never in the background. Opal keeps the last shared page in memory (not
+on disk) and shows it in Browse > Web, where you can add it to Wanted, search for
+it or dismiss it. If this extension has no access to the page (a browser page, or
+a site you have not granted), only the title and address are sent.
+
+The box *Also let coding agents read this page* starts unticked and resets after
+each share. A coding agent sees the page only when that box was ticked **and**
+you switched on *Settings > Agent Access > Let agents read shared pages* in Opal,
+a switch this extension cannot see or change. What an agent sees is labelled as
+untrusted text from a web page.
+
+Tests: `npm test` runs the pure parts under node (no dependencies, node >= 22.18).
+`npm run typecheck` runs `tsc`.
+
 ## Files
 
 ```
 extension/
 ├── manifest.json          MV3 manifest (side_panel + sidebar_action, no popup)
+├── tests/                 node tests for the pure logic: sniffer, fetch policy, tab payload (npm test)
 ├── src/
 │   ├── background.ts       service worker — the only place that talks to Opal
+│   ├── browser_link.ts     pairing + media sniffer (webRequest) + Play/Queue
+│   ├── sniffer.ts          pure: classify, dedupe, rank, build /api/browser/media body
+│   ├── link_api.ts         the paired browser's calls to Opal (token, base URL)
+│   ├── fetch_policy.ts     pure: allow list, private-target rules, decision, answers
+│   ├── fetch_jobs.ts       long-poll worker: runs allowed fetches, asks the panel
+│   ├── tabs_payload.ts     pure: the tab list as sent (trimmed)
+│   ├── tabs_share.ts       reports the tab list when all three consents are present
 │   ├── content.ts          framework detection + page classify + shadow-DOM button
 │   ├── shared.ts           settings + types shared across contexts
 │   ├── sidepanel/          persistent panel: remote + send + add-source + recent

@@ -5,6 +5,7 @@
 //! needs; serialization and mutation validation stay feature-local.
 
 const std = @import("std");
+const keyless = @import("cinemeta_meta_pure.zig");
 const state = @import("../core/state.zig");
 const wire = @import("remote_http.zig");
 
@@ -86,13 +87,15 @@ fn libraryItemAction(stream: std.Io.net.Stream, query: []const u8) void {
     const store = @import("library_store.zig");
     if (std.mem.eql(u8, action, "favorite")) {
         const enabled = wire.queryParam(query, "enabled") orelse "";
-        if (!std.mem.eql(u8, enabled, "true") and !std.mem.eql(u8, enabled, "false")) {
+        const is_on = std.mem.eql(u8, enabled, "true") or std.mem.eql(u8, enabled, "1");
+        const is_off = std.mem.eql(u8, enabled, "false") or std.mem.eql(u8, enabled, "0");
+        if (!is_on and !is_off) {
             wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"invalid favorite value\"}");
             return;
         }
         var link_buf: [544]u8 = undefined;
         const deep_link = std.fmt.bufPrint(&link_buf, "opal://search/{s}", .{title}) catch "";
-        store.setFavorite(identity.kind, identity.id, std.mem.eql(u8, enabled, "true"), title, poster, deep_link);
+        store.setFavorite(identity.kind, identity.id, is_on, title, poster, deep_link);
     } else if (std.mem.eql(u8, action, "rating")) {
         const raw = wire.queryParam(query, "value") orelse "";
         const rating: ?f64 = if (std.mem.eql(u8, raw, "clear")) null else std.fmt.parseFloat(f64, raw) catch {
@@ -305,7 +308,7 @@ fn watchedEpisodes(stream: std.Io.net.Stream, query: []const u8) void {
         wire.sendJsonStatus(stream, status, body);
         return;
     };
-    const json = alloc.alloc(u8, 32 + count * 7) catch {
+    const json = alloc.alloc(u8, 64 + count * 7) catch {
         wire.sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
         return;
     };
@@ -316,7 +319,14 @@ fn watchedEpisodes(stream: std.Io.net.Stream, query: []const u8) void {
         if (i > 0) w.writeAll(",") catch return;
         w.print("{d}", .{episode}) catch return;
     }
-    w.writeAll("]}") catch return;
+    // `tracked` lets the web details page offer Track only for shows that are
+    // not already in Watching (tracking would reset their chosen status).
+    if (kind == .tv) {
+        const id_num = std.fmt.parseInt(i32, id, 10) catch 0;
+        w.print("],\"tracked\":{s}}}", .{if (id_num != 0 and @import("../core/db.zig").tvIsTracked(id_num)) "true" else "false"}) catch return;
+    } else {
+        w.writeAll("]}") catch return;
+    }
     wire.sendJson(stream, json[0..w.end]);
 }
 
@@ -413,41 +423,78 @@ fn recentEpisode(stream: std.Io.net.Stream, query: []const u8) void {
     wire.sendJson(stream, body);
 }
 
+/// Cinemeta answers when there is no TMDB key, and also when the id is a keyless
+/// catalog hash of a known IMDb id even though a key exists now (a Watching row
+/// or stale card from before the key was added): TMDB would answer that integer
+/// with some other title entirely.
+fn useKeyless(query: []const u8, kind: keyless.Kind, id: i32) bool {
+    if (state.app.tmdb.api_key_len == 0) return true;
+    const db = @import("../core/db.zig");
+    var from_query: [32]u8 = undefined;
+    var remembered: [16]u8 = undefined;
+    const given: []const u8 = if (wire.queryParam(query, "imdb")) |raw| (wire.urlDecode(raw, &from_query) orelse "") else "";
+    const stored = if (kind == .series) db.tvImdbId(id, &remembered) else db.movieImdbId(id, &remembered);
+    const kl = @import("keyless_tv_pure.zig");
+    return kl.isSynthetic(id, given) or kl.isSynthetic(id, stored);
+}
+
 fn tvDetails(stream: std.Io.net.Stream, query: []const u8) void {
     const id = std.fmt.parseInt(i32, wire.queryParam(query, "id") orelse "", 10) catch {
         wire.sendJson(stream, "{\"error\":\"bad id\"}");
         return;
     };
-    if (state.app.tmdb.api_key_len == 0) {
-        var imdb_buf: [32]u8 = undefined;
-        const imdb = if (wire.queryParam(query, "imdb")) |raw| (wire.urlDecode(raw, &imdb_buf) orelse "") else "";
-        if (!@import("cinemeta_pure.zig").validImdbId(imdb)) {
-            wire.sendJson(stream, "{\"error\":\"keyless TV metadata unavailable\"}");
-            return;
-        }
-        sendCinemetaMeta(stream, "series", imdb);
+    const season: ?i32 = if (wire.queryParam(query, "season")) |raw| (std.fmt.parseInt(i32, raw, 10) catch 0) else null;
+    if (useKeyless(query, .series, id)) {
+        sendKeyless(stream, query, .series, id, season);
         return;
     }
     var path_buf: [96]u8 = undefined;
-    const path = if (wire.queryParam(query, "season")) |raw| blk: {
-        const season = std.fmt.parseInt(i32, raw, 10) catch 0;
-        break :blk std.fmt.bufPrint(&path_buf, "/3/tv/{d}/season/{d}", .{ id, season }) catch return;
-    } else std.fmt.bufPrint(&path_buf, "/3/tv/{d}", .{id}) catch return;
+    const path = if (season) |sn|
+        std.fmt.bufPrint(&path_buf, "/3/tv/{d}/season/{d}", .{ id, sn }) catch return
+    else
+        std.fmt.bufPrint(&path_buf, "/3/tv/{d}", .{id}) catch return;
     sendTmdbJson(stream, path);
 }
 
-fn sendCinemetaMeta(stream: std.Io.net.Stream, kind: []const u8, imdb: []const u8) void {
-    const alloc = @import("../core/alloc.zig").allocator;
-    const body = alloc.alloc(u8, 1024 * 1024) catch return;
-    defer alloc.free(body);
-    var path_buf: [64]u8 = undefined;
-    const path = std.fmt.bufPrint(&path_buf, "/meta/{s}/{s}.json", .{ kind, imdb }) catch return;
-    const len = @import("tmdb_api.zig").cinemetaApiInto(path, body);
-    if (len == 0) {
-        wire.sendJson(stream, "{\"error\":\"cinemeta fetch failed\"}");
+/// No TMDB key: answer from Cinemeta in the TMDB document shape. The id is
+/// either a TMDB id or a synthetic catalog id; either way the IMDb identity
+/// comes from the `imdb` parameter or from the listing that produced the id.
+fn sendKeyless(stream: std.Io.net.Stream, query: []const u8, kind: keyless.Kind, id: i32, season: ?i32) void {
+    const api = @import("tmdb_api.zig");
+    var imdb_buf: [32]u8 = undefined;
+    var found: [16]u8 = undefined;
+    var imdb: []const u8 = if (wire.queryParam(query, "imdb")) |raw| (wire.urlDecode(raw, &imdb_buf) orelse "") else "";
+    if (imdb.len != 0 and !@import("cinemeta_pure.zig").validImdbId(imdb)) {
+        wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"bad imdb id\"}");
         return;
     }
-    wire.sendJson(stream, body[0..len]);
+    if (imdb.len == 0) {
+        var title_buf: [256]u8 = undefined;
+        const title = if (wire.queryParam(query, "title")) |raw| (wire.urlDecode(raw, &title_buf) orelse "") else "";
+        imdb = api.resolveImdb(kind, id, title, &found);
+    }
+    if (imdb.len == 0) {
+        wire.sendJsonStatus(stream, "404 Not Found", "{\"error\":\"unknown title: browse or search for it first, or pass imdb=tt...\"}");
+        return;
+    }
+    api.rememberIdentity(kind, id, imdb);
+    if (kind == .series) @import("../core/db.zig").tvRememberImdb(id, imdb) else @import("../core/db.zig").movieRememberImdb(id, imdb);
+    const body = api.cinemetaMetaOwned(kind, imdb) orelse {
+        wire.sendJsonStatus(stream, "502 Bad Gateway", "{\"error\":\"cinemeta fetch failed\"}");
+        return;
+    };
+    const alloc = @import("../core/alloc.zig").allocator;
+    defer alloc.free(body);
+    var out: std.Io.Writer.Allocating = .init(alloc);
+    defer out.deinit();
+    (if (season) |sn|
+        keyless.writeSeason(&out.writer, alloc, body, sn)
+    else
+        keyless.writeTitle(&out.writer, alloc, body, kind, id)) catch {
+        wire.sendJsonStatus(stream, "502 Bad Gateway", "{\"error\":\"cinemeta returned an unusable document\"}");
+        return;
+    };
+    wire.sendJson(stream, out.written());
 }
 
 fn movieDetails(stream: std.Io.net.Stream, query: []const u8) void {
@@ -455,14 +502,8 @@ fn movieDetails(stream: std.Io.net.Stream, query: []const u8) void {
         wire.sendJson(stream, "{\"error\":\"bad id\"}");
         return;
     };
-    if (state.app.tmdb.api_key_len == 0) {
-        var imdb_buf: [32]u8 = undefined;
-        const imdb = if (wire.queryParam(query, "imdb")) |raw| (wire.urlDecode(raw, &imdb_buf) orelse "") else "";
-        if (!@import("cinemeta_pure.zig").validImdbId(imdb)) {
-            wire.sendJson(stream, "{\"error\":\"keyless movie metadata unavailable\"}");
-            return;
-        }
-        sendCinemetaMeta(stream, "movie", imdb);
+    if (useKeyless(query, .movie, id)) {
+        sendKeyless(stream, query, .movie, id, null);
         return;
     }
     var path_buf: [96]u8 = undefined;

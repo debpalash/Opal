@@ -38,8 +38,18 @@ pub const MAX_DL_LINK_LEN: usize = 4096;
 /// at container level: struct fields cannot be interleaved with declarations.
 pub const REMOTE_OPEN_QUEUE_CAP: usize = 8;
 pub const RemoteOpenEntry = struct {
-    path: [2048]u8 = std.mem.zeroes([2048]u8),
+    /// 4096, not 2048: a paired browser hands over signed CDN playlist URLs
+    /// whose query alone can pass 2 KB (`browser_link_pure.MAX_URL`).
+    path: [4096]u8 = std.mem.zeroes([4096]u8),
     path_len: usize = 0,
+    /// HTTP identity for a stream a paired browser found (kind "browser").
+    /// Empty for every other producer.
+    referer: [2048]u8 = std.mem.zeroes([2048]u8),
+    referer_len: usize = 0,
+    origin: [256]u8 = std.mem.zeroes([256]u8),
+    origin_len: usize = 0,
+    user_agent: [512]u8 = std.mem.zeroes([512]u8),
+    user_agent_len: usize = 0,
     kind: [16]u8 = std.mem.zeroes([16]u8),
     kind_len: usize = 0,
     art: [1024]u8 = std.mem.zeroes([1024]u8),
@@ -609,7 +619,7 @@ pub const AppState = struct {
     // It defaulted true — i.e. off — because the wizard was once a macOS/brew
     // dependency checklist that just nagged on Windows. That is no longer what
     // it is: page 0 now offers to install the starter sources (without which
-    // search and "click a movie" return nothing at all), takes a TMDB key, and
+    // search and "click a movie" return nothing at all), and
     // points at the AI settings; the rest is a feature tour. Leaving it off
     // meant every new user landed on the full UI with no orientation and no
     // sources — reported as "TMDB shows no output when I click on any movie"
@@ -852,6 +862,33 @@ pub const AppState = struct {
     // Auto-download subtitles when a video starts and none are present
     // (embedded or sidecar). Needs opensub_api_key; no-ops silently without it.
     auto_download_subs: bool = true,
+    /// Wanted list: queue each tracked show's newest aired episode automatically.
+    wanted_follow_tv: bool = false,
+    /// Scheduled agent tasks run only while this is on (they spend the user's agent credit).
+    agent_tasks_enabled: bool = false,
+    /// Agents may read the page the user shared from their browser (and play its
+    /// detected streams) only while this is on. Off by default. Only the UI flips
+    /// it: no HTTP route and no tool reaches this field.
+    browser_share_agents: bool = false,
+    /// Agents may see the titles and hosts of the user's open tabs (reported by a
+    /// paired browser that the user also allowed to) only while this is on. Off by
+    /// default; only the UI flips it.
+    browser_share_tabs: bool = false,
+    /// The background operator (jobs handed to a coding agent behind the scenes) runs only while on.
+    operator_enabled: bool = false,
+    /// Spend ceiling per UTC day for operator jobs, in cents.
+    operator_daily_cents: u32 = 100,
+    /// Ask Opal: assistant-style omnibox inputs go to the user's coding agent (headless,
+    /// Opal's tools under a restricted policy) instead of the local model. Only the UI
+    /// flips it: no HTTP route and no tool reaches this field.
+    ask_enabled: bool = false,
+    /// Ask Opal answers with the small fast model (Claude Haiku) instead of Sonnet.
+    ask_fast: bool = false,
+    /// "Use my watch history for picks": lets the operator send the titles of recent
+    /// watched items, favourites and tracked shows (never file paths) to the agent
+    /// to build the Home "Picked for you" rail. Off by default and flipped only by the
+    /// UI: no route and no tool reaches this field.
+    operator_picks_enabled: bool = false,
     sub_search_buf: [256]u8 = std.mem.zeroes([256]u8),
 
     // ── MPV Scripts ──

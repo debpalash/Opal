@@ -16,6 +16,9 @@ const http = @import("http.zig");
 const logs = @import("logs.zig");
 const source_config = @import("source_config.zig");
 const pure = @import("mirrors_pure.zig");
+const io = @import("io_global.zig");
+const source_request = @import("../services/source_request.zig");
+const repair = @import("../services/operator_endpoint_pure.zig");
 
 /// Last-good host index per source id, for this process only.
 const Slot = struct {
@@ -84,15 +87,30 @@ pub fn fetch(
     if (n == 0) return null;
 
     const start = lastGood(id);
+    // One report per call, not per host: the source is failing only when every
+    // host failed. Any answer, even from a mirror, means the source is alive; a
+    // challenge page (HTTP 200) is neither, so it leaves the streak alone.
+    var report: ?repair.Fetched = null;
     var attempt: usize = 0;
     while (attempt < n) : (attempt += 1) {
         const i = pure.attemptIndex(n, start, attempt);
         var url_buf: [1024]u8 = undefined;
         const url = buildUrl(ctx, hosts[i], &url_buf) orelse continue;
-        const body = http.fetch(url, buf, opts);
+        var status: ?std.http.Status = null;
+        var tracked = opts;
+        tracked.status_out = &status;
+        const started = io.monotonicMilliTimestamp();
+        const body = http.fetch(url, buf, tracked);
+        if (opts.status_out) |out| out.* = status;
         if (!pure.shouldFailover(body)) {
             markGood(id, i);
+            source_request.noteIndex(id, .none, 200);
             return body;
+        }
+        if (body != null) {
+            report = .{ .failure = .malformed_response, .status = 200 };
+        } else if (report == null or report.?.failure != .malformed_response) {
+            report = source_request.fetchedOutcome(false, status, started, opts.timeout_secs, opts.cancel_epoch);
         }
         if (n > 1 and attempt + 1 < n) {
             var lb: [160]u8 = undefined;
@@ -103,5 +121,6 @@ pub fn fetch(
             ) catch "source host unreachable — trying the next mirror", false);
         }
     }
+    if (report) |r| source_request.noteIndex(id, r.failure, r.status);
     return null;
 }
