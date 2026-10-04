@@ -14,6 +14,7 @@ const theme = @import("theme.zig");
 const components = @import("components.zig");
 const alloc = @import("../core/alloc.zig").allocator;
 const session_mod = @import("../terminal/session.zig");
+const pointer = @import("../terminal/pointer.zig");
 const keymap = @import("../terminal/keymap.zig");
 const launch = @import("../services/agent_launch.zig");
 const launch_pure = @import("../services/agent_launch_pure.zig");
@@ -27,6 +28,9 @@ var snap: session_mod.Snapshot = .{};
 var term_id: ?dvui.Id = null;
 /// Set when a session starts: the next frame hands the terminal keyboard focus.
 var want_focus: bool = false;
+/// What the left button is doing since it went down inside the terminal.
+const Drag = enum { none, select };
+var drag: Drag = .none;
 var launched: ?Kind = null;
 var note_buf: [128]u8 = undefined;
 var note_len: usize = 0;
@@ -251,6 +255,7 @@ fn renderTerminal(s: *Session) void {
     term_id = wd.id;
     if (want_focus) {
         want_focus = false;
+        drag = .none;
         dvui.focusWidget(wd.id, null, null);
     }
 
@@ -264,7 +269,7 @@ fn renderTerminal(s: *Session) void {
     const rows: u16 = @intFromFloat(std.math.clamp(@floor(rs.r.h / ch), 3, 200));
     s.resize(cols, rows, @intFromFloat(cw), @intFromFloat(ch));
 
-    handleEvents(s, wd, rs.r);
+    handleEvents(s, wd, rs.r, cw, ch);
 
     _ = s.snapshot(&snap);
     if (snap.cols == 0 or snap.cells.len == 0) return;
@@ -417,8 +422,13 @@ fn drawCursor(rs: dvui.RectScale, cw: f32, ch: f32, focused: bool) void {
 
 // ── Input ──
 
-fn handleEvents(s: *Session, wd: *dvui.WidgetData, content: dvui.Rect.Physical) void {
-    _ = content;
+fn clipboardCopy(s: *Session) void {
+    const text = s.copySelection(alloc) orelse return;
+    defer alloc.free(text);
+    dvui.clipboardTextSet(text);
+}
+
+fn handleEvents(s: *Session, wd: *dvui.WidgetData, content: dvui.Rect.Physical, cw: f32, ch: f32) void {
     var typed_this_frame = false;
     for (dvui.events()) |*e| {
         if (!dvui.eventMatchSimple(e, wd)) continue;
@@ -428,6 +438,30 @@ fn handleEvents(s: *Session, wd: *dvui.WidgetData, content: dvui.Rect.Physical) 
                     e.handle(@src(), wd);
                     dvui.focusWidget(wd.id, null, e.num);
                 },
+                .press => if (me.button == .left) {
+                    e.handle(@src(), wd);
+                    dvui.captureMouse(wd, e.num);
+                    drag = .select;
+                    const hit = pointer.cellAt(me.p.x, me.p.y, content.x, content.y, cw, ch, snap.cols, snap.rows);
+                    s.selectPress(hit, @intCast(@max(0, dvui.frameTimeNS())));
+                    state.wakeUi();
+                },
+                .motion => if (drag == .select) {
+                    e.handle(@src(), wd);
+                    const hit = pointer.cellAt(me.p.x, me.p.y, content.x, content.y, cw, ch, snap.cols, snap.rows);
+                    // Dragging past the top or bottom edge walks through scrollback.
+                    if (me.p.y < content.y) s.scroll(-1) else if (me.p.y > content.y + content.h) s.scroll(1);
+                    s.selectDrag(hit, me.mod.alt());
+                    state.wakeUi();
+                },
+                .release => if (me.button == .left and drag == .select) {
+                    e.handle(@src(), wd);
+                    dvui.captureMouse(null, e.num);
+                    drag = .none;
+                    s.selectRelease(pointer.cellAt(me.p.x, me.p.y, content.x, content.y, cw, ch, snap.cols, snap.rows));
+                    state.wakeUi();
+                },
+                .position => dvui.cursorSet(.ibeam),
                 .wheel_y => |dy| {
                     e.handle(@src(), wd);
                     const rows: isize = @intFromFloat(@round(-dy * SCROLL_ROWS_PER_NOTCH));
@@ -459,6 +493,7 @@ fn handleEvents(s: *Session, wd: *dvui.WidgetData, content: dvui.Rect.Physical) 
                 }
                 if (clip_mod and ke.code == .c) {
                     e.handle(@src(), wd);
+                    clipboardCopy(s);
                     continue;
                 }
                 const entry = keymap.find(name);
@@ -471,6 +506,7 @@ fn handleEvents(s: *Session, wd: *dvui.WidgetData, content: dvui.Rect.Physical) 
                         const utf8: []const u8 = if (entry.?.ch != 0) &ch_buf else "";
                         const press: Session.KeyAction = if (ke.action == .repeat) .repeat else .press;
                         if (s.sendKey(entry.?.key, keymap.mods(m), press, utf8)) {
+                            s.clearSelection();
                             s.scrollToBottom();
                             typed_this_frame = true;
                         }
@@ -484,6 +520,7 @@ fn handleEvents(s: *Session, wd: *dvui.WidgetData, content: dvui.Rect.Physical) 
                     .value => |v| {
                         e.handle(@src(), wd);
                         s.write(v.txt);
+                        s.clearSelection();
                         s.scrollToBottom();
                     },
                     else => {},
