@@ -107,6 +107,9 @@ pub const Op = struct {
 
 const idx_param = Param{ .name = "index", .kind = .integer, .desc = "Zero-based position, as listed.", .required = true, .wire = "idx", .min = 0, .max = 9999 };
 
+const wanted_id = Param{ .name = "id", .kind = .integer, .desc = "Item id from wanted_list.", .required = true, .min = 1, .max = 9007199254740991 };
+const wanted_kinds = [_][]const u8{ "movie", "episode" };
+
 const queue_actions = [_][]const u8{ "play", "remove", "move-up", "move-down", "previous", "next", "toggle-shuffle", "cycle-repeat", "clear-played" };
 
 /// The whole agent-visible surface. Names are MCP tool names (a-z, 0-9, _).
@@ -229,6 +232,28 @@ pub const ops = [_]Op{
         .params = &.{ idx_param, .{ .name = "token", .kind = .integer, .desc = "Token from downloads_list; guards against a changed list.", .required = true, .min = 0, .max = 4294967295 } },
     },
 
+    .{ .name = "wanted_list", .summary = "The wanted list: titles Opal keeps searching for and downloads automatically, with each item's status (wanted, downloading, fulfilled, paused), attempts and next check time.", .tier = .read, .method = .GET, .path = "/wanted" },
+    .{
+        .name = "wanted_add",
+        .summary = "Add a movie or one episode to the wanted list. Opal searches the torrent sources on a backoff schedule (30 minutes, doubling to daily) and downloads the best release that fits the quality range, then marks it fulfilled. Qualities: 1=480p, 2=720p, 3=1080p, 4=2160p.",
+        .tier = .write,
+        .method = .POST,
+        .path = "/wanted/add",
+        .params = &.{
+            .{ .name = "kind", .kind = .choice, .desc = "movie, or episode for a single TV episode.", .required = true, .choices = &wanted_kinds },
+            .{ .name = "title", .kind = .string, .desc = "The title, e.g. \"The Matrix\" or \"Severance\".", .required = true, .max_len = 150 },
+            .{ .name = "year", .kind = .integer, .desc = "Release year for movies; strongly recommended to avoid sequels and remakes.", .min = 1888, .max = 2200 },
+            .{ .name = "season", .kind = .integer, .desc = "Season number (episodes).", .min = 1, .max = 999 },
+            .{ .name = "episode", .kind = .integer, .desc = "Episode number (episodes).", .min = 1, .max = 9999 },
+            .{ .name = "min_quality", .kind = .integer, .desc = "Lowest acceptable quality, 1-4. Default 2.", .min = 1, .max = 4 },
+            .{ .name = "prefer_quality", .kind = .integer, .desc = "Quality to aim for, within min and max. Default 3.", .min = 1, .max = 4 },
+            .{ .name = "max_quality", .kind = .integer, .desc = "Highest acceptable quality, 1-4. Default 4.", .min = 1, .max = 4 },
+        },
+    },
+    .{ .name = "wanted_pause", .summary = "Stop searching for a wanted item until it is resumed.", .tier = .write, .method = .POST, .path = "/wanted/pause", .params = &.{wanted_id} },
+    .{ .name = "wanted_resume", .summary = "Resume a paused wanted item, or re-arm one whose download was removed so it searches again.", .tier = .write, .method = .POST, .path = "/wanted/resume", .params = &.{wanted_id} },
+    .{ .name = "wanted_remove", .summary = "Remove an item from the wanted list. Files already downloaded are kept.", .tier = .write, .method = .POST, .path = "/wanted/remove", .params = &.{wanted_id} },
+
     // ── Spends bandwidth, disk or compute ──
     .{
         .name = "play_url",
@@ -246,6 +271,8 @@ pub const ops = [_]Op{
         .path = "/download/url",
         .params = &.{.{ .name = "url", .kind = .string, .desc = "http(s) URL of the file.", .required = true, .max_len = 2048, .url = true }},
     },
+
+    .{ .name = "wanted_check", .summary = "Search for a wanted item right now instead of waiting for its schedule. If a release fits, it starts downloading.", .tier = .spend, .method = .POST, .path = "/wanted/check", .params = &.{wanted_id} },
 
     // ── Destructive: policy opt-in AND confirm:true ──
     .{ .name = "queue_clear", .summary = "Empty the playback queue.", .tier = .destructive, .method = .POST, .path = "/queue/action", .fixed = &.{ .{ .key = "action", .value = "clear" }, .{ .key = "confirm", .value = "1" } } },
@@ -951,6 +978,31 @@ test "validate rejects missing, unknown, mistyped and out-of-range arguments" {
     var p8 = try parseArgs(a, "{\"action\":\"rm -rf\"}");
     defer p8.deinit();
     try testing.expectError(error.InvalidArgument, validate(findOp("queue_action").?, p8.value.object, &diag));
+}
+
+test "wanted_add maps to the wanted route and validates ranges" {
+    const a = testing.allocator;
+    var buf: [512]u8 = undefined;
+    var diag = Diag{};
+    const op = findOp("wanted_add").?;
+
+    var ok = try parseArgs(a, "{\"kind\":\"movie\",\"title\":\"The Matrix\",\"year\":1999,\"min_quality\":2}");
+    defer ok.deinit();
+    try validate(op, ok.value.object, &diag);
+    var w = Writer.fixed(&buf);
+    try writeTarget(op, ok.value.object, &w);
+    try testing.expectEqualStrings("/api/wanted/add?kind=movie&title=The%20Matrix&year=1999&min_quality=2", w.buffered());
+
+    var bad_kind = try parseArgs(a, "{\"kind\":\"album\",\"title\":\"x\"}");
+    defer bad_kind.deinit();
+    try testing.expectError(error.InvalidArgument, validate(op, bad_kind.value.object, &diag));
+
+    var bad_q = try parseArgs(a, "{\"kind\":\"movie\",\"title\":\"x\",\"max_quality\":9}");
+    defer bad_q.deinit();
+    try testing.expectError(error.InvalidArgument, validate(op, bad_q.value.object, &diag));
+
+    try testing.expectEqual(Tier.write, op.tier);
+    try testing.expectEqual(Tier.spend, findOp("wanted_check").?.tier);
 }
 
 test "writeTarget maps wire names, fixed pairs and percent-encodes" {

@@ -144,6 +144,7 @@ pub fn expensiveCost(path: []const u8, query: []const u8) u16 {
         std.mem.eql(u8, path, "/api/rss/refresh") or
         std.mem.eql(u8, path, "/api/setup/sources") or
         std.mem.eql(u8, path, "/api/cast/scan") or
+        std.mem.eql(u8, path, "/api/wanted/check") or
         std.mem.eql(u8, path, "/api/tmdb/trending") or
         std.mem.endsWith(u8, path, "/episodes") or
         std.mem.endsWith(u8, path, "/more")) return 1;

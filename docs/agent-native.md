@@ -114,7 +114,7 @@ Branch `v2/agent-os` is stacked on PR #119 (browse, episode redesign, remote har
 
 | Phase | State |
 | --- | --- |
-| 1. Registry | Done for the observe, playback, download and queue surface: 22 tools with typed parameters, tiers and API bindings (`src/services/ops_pure.zig`). Not yet generating the in-app copilot tool list or an OpenAPI document. |
+| 1. Registry | Done for the observe, playback, download and queue surface: 28 tools with typed parameters, tiers and API bindings (`src/services/ops_pure.zig`). Not yet generating the in-app copilot tool list or an OpenAPI document. |
 | 2. MCP server | Done: `opal-mcp` (stdio), tools and resources, policy ceiling, destructive confirm, URL guard, JSON audit log. Verified live: search, play, status, pause against a running Opal. See [mcp.md](mcp.md). |
 | 3. Skills | First skill, `skills/opal-media`. |
 | 4-6 | Not started. |

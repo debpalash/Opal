@@ -937,6 +937,45 @@ pub fn warmQuery(query: []const u8) void {
     ) catch "warmed search cache", false);
 }
 
+/// Torrent-only search for automation (the Wanted list). Like `warmQuery` it
+/// writes into a private sink, so a background check never replaces the results
+/// the user (or an agent) is looking at and never invalidates their search
+/// generation. Unlike a warm it returns the rows, and it runs every torrent
+/// backend: YTS (movies), EZTV and Torznab (episodes), then the nova2 engines.
+///
+/// Runs the backends one after another on the CALLER's thread, so call it from
+/// a worker, never the UI thread. Returns how many rows were written to `out`.
+pub fn searchTorrentsPrivate(query: []const u8, out: []ResolvedItem) usize {
+    if (query.len == 0 or query.len > 255 or out.len == 0) return 0;
+    if (!sourceOn(.torrent)) return 0;
+
+    var sink = Sink{ .items = out, .query = query };
+    var qbuf: [256]u8 = std.mem.zeroes([256]u8);
+    @memcpy(qbuf[0..query.len], query);
+
+    const prev_sink = thread_sink;
+    const prev_gen = worker_gen;
+    const prev_reported = worker_reported;
+    const prev_produced = worker_produced;
+    defer {
+        thread_sink = prev_sink;
+        worker_gen = prev_gen;
+        worker_reported = prev_reported;
+        worker_produced = prev_produced;
+    }
+    thread_sink = &sink;
+    worker_gen = 0;
+    worker_reported = .done;
+    worker_produced = false;
+    const workers_mod = @import("../core/workers.zig");
+    const backends = [_]*const fn ([256]u8, usize) void{ resolveYts, resolveEztv, resolveTorznab, resolveTorrentsNova2 };
+    for (backends) |backend| {
+        if (workers_mod.isQuitting()) break;
+        backend(qbuf, query.len);
+    }
+    return sink.count;
+}
+
 fn pushResult(item: ResolvedItem) bool {
     if (thread_sink) |s| {
         // Private buffer, single owner: no lock, and no contention with the UI

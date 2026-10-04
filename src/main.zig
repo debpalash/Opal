@@ -1237,6 +1237,7 @@ fn appFrame() !dvui.App.Result {
     // This intentionally does not open a player or change the current route.
     @import("services/torrent_intents.zig").restoreIfReady();
     @import("services/downloads.zig").tick();
+    @import("services/wanted.zig").tick();
 
     // Swap in TMDB pages staged by fetch workers (UI thread owns `results`;
     // workers staging + this apply is what keeps the render loop's iteration
