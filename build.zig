@@ -1834,7 +1834,9 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    test_step.dependOn(&b.addRunArtifact(test_remote_stream_pure).step);
+    const run_test_remote_stream_pure = b.addRunArtifact(test_remote_stream_pure);
+    test_step.dependOn(&run_test_remote_stream_pure.step);
+    keyless_test_step.dependOn(&run_test_remote_stream_pure.step);
 
     // Download-root confinement: component-by-component no-follow opens and
     // regular-file enforcement for stream/subtitle/transcode endpoints.
@@ -1924,6 +1926,43 @@ pub fn build(b: *std.Build) void {
     const run_test_keyless_tv = b.addRunArtifact(test_keyless_tv_pure);
     test_step.dependOn(&run_test_keyless_tv.step);
     keyless_test_step.dependOn(&run_test_keyless_tv.step);
+
+    // Duplicate-show merge (a show tracked keyless, later re-tracked with a TMDB
+    // key): the pure planner, and the executor against an in-memory SQLite.
+    const test_tv_merge_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/tv_merge_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_tv_merge_pure.use_llvm = true;
+    const run_test_tv_merge_pure = b.addRunArtifact(test_tv_merge_pure);
+    test_step.dependOn(&run_test_tv_merge_pure.step);
+    keyless_test_step.dependOn(&run_test_tv_merge_pure.step);
+    const test_tv_merge = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/tv_merge.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    test_tv_merge.use_llvm = true;
+    if (is_windows) {
+        test_tv_merge.root_module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{mingw_prefix}) });
+        test_tv_merge.root_module.addObjectFile(.{ .cwd_relative = b.fmt("{s}/lib/libsqlite3.dll.a", .{mingw_prefix}) });
+    } else {
+        test_tv_merge.root_module.linkSystemLibrary("sqlite3", .{});
+    }
+    if (target.result.os.tag == .macos) {
+        test_tv_merge.root_module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{brew_prefix}) });
+        test_tv_merge.root_module.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/lib", .{brew_prefix}) });
+    }
+    const run_test_tv_merge = b.addRunArtifact(test_tv_merge);
+    if (is_windows) run_test_tv_merge.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
+    test_step.dependOn(&run_test_tv_merge.step);
+    keyless_test_step.dependOn(&run_test_tv_merge.step);
 
     // OMDb ratings enrichment: real IMDb / RT / Metacritic parse from the OMDb
     // body (Ratings[] source matching, Metacritic "88/100" → "88", N/A → absent),

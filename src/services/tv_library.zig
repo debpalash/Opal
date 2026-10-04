@@ -289,6 +289,7 @@ fn syncWorker() void {
     const scratch = alloc.alloc(u8, 256 * 1024) catch return;
     defer alloc.free(scratch);
 
+    var learned_imdb = false;
     const now_s = io.timestamp();
     for (shows[0..n]) |*sh| {
         if (sh.tmdb_id == 0) continue;
@@ -311,7 +312,24 @@ fn syncWorker() void {
                 if (syncKeyless(sh, imdb, now_s, scratch)) updated += 1;
                 continue;
             },
-            .tmdb => {},
+            .tmdb => {
+                // A keyed row has no IMDb identity until asked once. Remembering it
+                // is what lets a keyless twin of this show be recognised and merged.
+                if (imdb.len == 0) {
+                    var ext_url: [64]u8 = undefined;
+                    if (std.fmt.bufPrint(&ext_url, "/3/tv/{d}/external_ids", .{sh.tmdb_id})) |eu| {
+                        const en = tmdb_api.tmdbApiInto(eu, key, scratch);
+                        if (en > 0) {
+                            if (@import("subtitles_pure.zig").imdbFromExternalIds(scratch[0..en])) |found| {
+                                if (found.len <= 16) {
+                                    db.tvRememberImdb(sh.tmdb_id, found);
+                                    learned_imdb = true;
+                                }
+                            }
+                        }
+                    } else |_| {}
+                }
+            },
         }
 
         var url_buf: [64]u8 = undefined;
@@ -369,6 +387,14 @@ fn syncWorker() void {
         );
 
         updated += 1;
+    }
+
+    if (learned_imdb) {
+        // Two library rows for one show (tracked keyless, then again with a key)
+        // become visible only now that the keyed row knows its IMDb id.
+        db.tvMergeDuplicates();
+        markDirty();
+        state.wakeUi();
     }
 
     if (updated > 0) {

@@ -619,7 +619,7 @@ pub const AppState = struct {
     // It defaulted true — i.e. off — because the wizard was once a macOS/brew
     // dependency checklist that just nagged on Windows. That is no longer what
     // it is: page 0 now offers to install the starter sources (without which
-    // search and "click a movie" return nothing at all), takes a TMDB key, and
+    // search and "click a movie" return nothing at all), and
     // points at the AI settings; the rest is a feature tour. Leaving it off
     // meant every new user landed on the full UI with no orientation and no
     // sources — reported as "TMDB shows no output when I click on any movie"

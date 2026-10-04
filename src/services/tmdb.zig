@@ -1761,6 +1761,7 @@ fn sendToSearch(item: *state.TmdbItem) void {
         safeUtf8(item.genre_text[0..@min(item.genre_text_len, item.genre_text.len)]),
     );
     state.setPendingPlayCatalogId(if (item.id > 0) item.id else 0);
+    if (item.id > 0 and item.imdb_id_len > 0) db.movieRememberImdb(item.id, item.imdb_id[0..@min(item.imdb_id_len, item.imdb_id.len)]);
     state.navigateToTab(.Search);
     // Universal (all-source) search — populates resolver.results, which is what
     // the Search tab's universal view renders. triggerSearch() only fills the
@@ -1917,10 +1918,22 @@ fn fetchSeasons(tmdb_id: i32) void {
     fetchSeasonsInternal(tmdb_id, true);
 }
 
+/// Cinemeta answers a show's seasons/episodes when there is no TMDB key, and also
+/// for a keyless catalog id (a hash of its IMDb id) once a key exists: asking
+/// TMDB about that integer would return some other show.
+fn cinemetaFor(id: i32) bool {
+    const t = &state.app.tmdb;
+    if (t.api_key_len == 0) return true;
+    const kl = @import("keyless_tv_pure.zig");
+    if (kl.isSynthetic(id, t.tv_imdb_id[0..@min(t.tv_imdb_id_len, t.tv_imdb_id.len)])) return true;
+    var buf: [16]u8 = undefined;
+    return kl.isSynthetic(id, db.tvImdbId(id, &buf));
+}
+
 fn startSeasonsNetwork(tmdb_id: i32, my_gen: u32) void {
     const t = &state.app.tmdb;
     t.tv_seasons_loading = true;
-    const use_cinemeta = t.api_key_len == 0;
+    const use_cinemeta = cinemetaFor(tmdb_id);
     if (@import("../core/workers.zig").spawnLegacy(fetchSeasonsThread, .{ tmdb_id, my_gen, use_cinemeta, t.tv_imdb_id, t.tv_imdb_id_len, t.api_key, t.api_key_len })) |th| {
         @import("../core/workers.zig").release(th);
     } else |_| {
@@ -1930,7 +1943,7 @@ fn startSeasonsNetwork(tmdb_id: i32, my_gen: u32) void {
 }
 
 fn fetchSeasonsInternal(tmdb_id: i32, reset_retry: bool) void {
-    const use_cinemeta = state.app.tmdb.api_key_len == 0;
+    const use_cinemeta = cinemetaFor(tmdb_id);
     const t = &state.app.tmdb;
     if (reset_retry) {
         t.tv_seasons_failed = false;
@@ -2270,7 +2283,7 @@ fn fetchEpisodes(tmdb_id: i32, season_number: i32) void {
 
 fn fetchEpisodesInternal(tmdb_id: i32, season_number: i32, reset_retry: bool) void {
     db.tvRememberSeason(tmdb_id, season_number);
-    const use_cinemeta = state.app.tmdb.api_key_len == 0;
+    const use_cinemeta = cinemetaFor(tmdb_id);
     const t = &state.app.tmdb;
     if (reset_retry) {
         t.tv_episodes_failed = false;

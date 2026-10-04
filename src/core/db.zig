@@ -455,6 +455,9 @@ fn createTables() void {
     exec("ALTER TABLE tv_watched ADD COLUMN played_secs REAL DEFAULT 0");
     exec("CREATE TABLE IF NOT EXISTS tv_browse (tmdb_id INTEGER PRIMARY KEY, season INTEGER NOT NULL)");
     exec("CREATE TABLE IF NOT EXISTS tv_external_ids (tmdb_id INTEGER PRIMARY KEY, imdb_id TEXT NOT NULL)");
+    // Movies have their own table: a movie id and a show id are different TMDB
+    // namespaces, and a keyless movie's catalog id is only a hash of its IMDb id.
+    exec("CREATE TABLE IF NOT EXISTS movie_external_ids (tmdb_id INTEGER PRIMARY KEY, imdb_id TEXT NOT NULL)");
 
     // One row per tracked show. `tracked` is the explicit Track/Untrack flag;
     // untracking never deletes tv_watched rows, so re-tracking restores progress.
@@ -746,6 +749,19 @@ fn createTables() void {
 
     // Watch-history v1→v2 (seconds + file-identity key), gated on user_version.
     @import("../player/watch_history.zig").migrateSchema();
+
+    // A show tracked keyless and later re-tracked under its TMDB id is one show.
+    tvMergeDuplicates();
+}
+
+/// Fold a keyless (hash id) show row into the TMDB-keyed row of the same IMDb id.
+/// Non-destructive: affected rows are copied to `*_bak` side tables first. Runs
+/// at startup and after a library sync (when a keyed row learns its IMDb id).
+pub fn tvMergeDuplicates() void {
+    const handle = db_handle orelse return;
+    const report = @import("../services/tv_merge.zig").run(handle, io_global.milliTimestamp());
+    if (report.merged > 0) logs.pushLog("info", "tv", "Merged duplicate tracked shows (backup kept in tv_*_bak)", false);
+    if (report.failed > 0) logs.pushLog("warn", "tv", "Duplicate show merge failed and was rolled back", true);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -2015,6 +2031,28 @@ pub fn tvRememberImdb(id: i32, imdb: []const u8) void {
 
 pub fn tvImdbId(id: i32, out: []u8) []const u8 {
     const stmt = prepare("SELECT imdb_id FROM tv_external_ids WHERE tmdb_id=?") orelse return "";
+    defer finalize(stmt);
+    bindInt(stmt, 1, id);
+    if (step(stmt) != c.SQLITE_ROW) return "";
+    const value = columnText(stmt, 0) orelse return "";
+    if (value.len > out.len) return "";
+    @memcpy(out[0..value.len], value);
+    return out[0..value.len];
+}
+
+/// Remember a movie's IMDb id next to its catalog id (first claim wins), so a
+/// keyless movie can be scrobbled by IMDb id long after the catalog list is gone.
+pub fn movieRememberImdb(id: i32, imdb: []const u8) void {
+    if (id <= 0 or !@import("../services/cinemeta_pure.zig").validImdbId(imdb)) return;
+    const stmt = prepare("INSERT OR IGNORE INTO movie_external_ids VALUES(?,?)") orelse return;
+    defer finalize(stmt);
+    bindInt(stmt, 1, id);
+    bindText(stmt, 2, imdb);
+    _ = step(stmt);
+}
+
+pub fn movieImdbId(id: i32, out: []u8) []const u8 {
+    const stmt = prepare("SELECT imdb_id FROM movie_external_ids WHERE tmdb_id=?") orelse return "";
     defer finalize(stmt);
     bindInt(stmt, 1, id);
     if (step(stmt) != c.SQLITE_ROW) return "";

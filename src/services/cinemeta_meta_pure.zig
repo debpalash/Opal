@@ -607,3 +607,30 @@ test "identity table remembers, updates in place and evicts oldest" {
     try std.testing.expectEqualStrings("", t.lookup(42, &buf));
     try std.testing.expectEqualStrings("tt1234567", t.lookup(1000 + IdentityTable.CAP, &buf));
 }
+
+/// Alternate two lists (a0, b0, a1, b1, ...), then append whatever is left of
+/// the longer one. The mixed "Movies & TV" grid must show both kinds in its
+/// first screenful: a window of the first N rows used to be movies only.
+pub fn interleave(comptime T: type, allocator: std.mem.Allocator, a: []const T, b: []const T, out: *std.ArrayListUnmanaged(T)) !void {
+    try out.ensureUnusedCapacity(allocator, a.len + b.len);
+    var i: usize = 0;
+    while (i < a.len or i < b.len) : (i += 1) {
+        if (i < a.len) out.appendAssumeCapacity(a[i]);
+        if (i < b.len) out.appendAssumeCapacity(b[i]);
+    }
+}
+
+test "interleave mixes both lists and keeps the longer tail" {
+    const a = [_]u8{ 1, 2, 3, 4 };
+    const b = [_]u8{ 10, 20 };
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    defer out.deinit(std.testing.allocator);
+    try interleave(u8, std.testing.allocator, &a, &b, &out);
+    try std.testing.expectEqualSlices(u8, &.{ 1, 10, 2, 20, 3, 4 }, out.items);
+    out.clearRetainingCapacity();
+    try interleave(u8, std.testing.allocator, &.{}, &b, &out);
+    try std.testing.expectEqualSlices(u8, &b, out.items);
+    out.clearRetainingCapacity();
+    try interleave(u8, std.testing.allocator, &.{}, &.{}, &out);
+    try std.testing.expectEqual(@as(usize, 0), out.items.len);
+}
