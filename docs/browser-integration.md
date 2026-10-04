@@ -1,6 +1,6 @@
 # Direct browser integration: design
 
-Status: sections 1 to 11 are the proposal, written against `v2/agent-os` at dd5f393. **Milestone 1 is implemented on branch `v2/browser-m1`; section 12 records what was built, every deviation from this design with its reason, and what was measured.** Where section 12 and an earlier section disagree, section 12 is current. Phases 2 to 4 are not implemented. Facts are marked **verified** (read in this tree, measured on this machine, or confirmed against a cited source) or **unverified** (recalled, or depends on a platform I could not test here). Section 11 lists every unverified item.
+Status: sections 1 to 11 are the proposal, written against `v2/agent-os` at dd5f393. **Milestone 1 is implemented on branch `v2/browser-m1`; section 12 records what was built, every deviation from this design with its reason, and what was measured.** Where section 12 and an earlier section disagree, section 12 is current. **Milestone 2 (section 13) adds page sharing, the agent tools and the Browser hub.** The fetch backend, cookie handoff, the WebSocket channel and phases 3 and 4 are not implemented. Facts are marked **verified** (read in this tree, measured on this machine, or confirmed against a cited source) or **unverified** (recalled, or depends on a platform I could not test here). Section 11 lists every unverified item.
 
 ## 1. Summary
 
@@ -439,3 +439,52 @@ All against the isolated profile `XDG_CONFIG_HOME=/tmp/opal-dbg-B` (save path se
 2. Isolated profile: run Opal once with `XDG_CONFIG_HOME` and `XDG_CACHE_HOME` under `/tmp`, quit, then set `save_path` to a temp directory and `web_remote` to `1` in the `config` table of `$XDG_CONFIG_HOME/opal/opal.db`.
 3. Test origin: any server with an iframe on a second port that `fetch`es an HLS playlist and returns 403 unless the Referer matches.
 4. Load `extension/dist/chromium` with `--load-extension` (unbranded Chromium honours it), pair with the code from Settings > Agent Access > Browser, open the page, press Play in the side panel. A temporary hook that wrote the pairing code to a file and scrolled Settings was used for the automated run; it was never committed.
+
+## 13. Milestone 2: sharing a page, agent tools, the Browser hub
+
+Branch `v2/browser-m2`, on top of milestone 1. **Live** means run on this machine against the real Opal GUI (isolated profile `XDG_CONFIG_HOME=/tmp/opal-dbg-M2`, save path in `/tmp`), headless Chromium 152 with the built extension loaded through `--load-extension` (driven over CDP), and local test servers (an ffmpeg HLS test pattern and an `.mp4`; the "embed" server answers 403 unless the iframe's Referer is sent). **Unit** means tests only.
+
+### 13.1 What exists
+
+| Piece | Where | Status |
+| --- | --- | --- |
+| Share this page: panel button, per page, never automatic, "also let agents read" box (unticked, reset after each share) | `extension/src/browser_link.ts` (`sharePage`), `sidepanel/`, pure payload in `sniffer.ts` (`buildSharePayload`) | live; 5 node tests |
+| `POST /api/browser/page` (browser token only; 64 KB body like `/media`), bounded parse: text cut to 8 KB on a character boundary, at most 12 og fields, 3 JSON-LD blobs of 2 KB, 8 candidates, URLs validated exactly as for `/media` | `browser_page_pure.zig`, `remote_browser_api.zig`, `browserBodyGate` | live; unit |
+| Last page only, memory only; a new share replaces it and changes `page_id`; Dismiss clears it | `browser_page.zig` | live (restart of Opal forgot it) |
+| Per-page agents flag AND the global switch `state.app.browser_share_agents` (Settings > Agent Access > Let agents read shared pages, off by default). Not in the settings registry, not in `settings_set`, no route or tool writes it | `config.zig`, `settings.zig`, `settings_api_pure` untouched | live: `/api/settings?key=browser_share_agents` is "unknown setting"; the browser token gets 403 on every settings route |
+| `GET /api/browser/context?view=status\|page\|candidates` and `POST /api/browser/play?page=&id=&action=` | `remote_browser_api.zig`; `access_pure.zig` (`host_routes`; the browser principal still holds five routes: status, me, media, page, revoke) | live; unit (the openapi walk and the named deny list still pass) |
+| Tools `browser_status`, `browser_page`, `browser_media_candidates` (read), `browser_play_candidate` (spend) | `ops_pure.zig`, `docs/openapi.json`, `docs/mcp.md` (Browser), `skills/opal-media/SKILL.md` | live through `opal-mcp`; unit for mapping, tiers, argument bounds, `--deny-prefix browser`, and "no tool pairs, revokes, shares, enables, lists links or touches cookies and tabs" |
+| Browse > Web hub: browsers (paired, last seen, connected), Pair a browser with the code shown in place, shared page card with an editable title (Add to Wanted via `wanted_pure.parseRequest`, Find sources via `search.submitQuery`, Dismiss), Detected streams with Play and Queue, install guidance, the old pixel browser behind "Advanced: built-in browser" | `src/ui/browser_hub.zig`, `browser_hub_view_pure.zig`, hook in `drawer.zig` and `browser.navigate` | live (window captured with `grim -T`; Play, Queue, Add to Wanted, Find sources, Dismiss and the Advanced button were not clicked: there is no input tooling); render test `zig build test-native-browser-hub` |
+| Link heartbeat | extension alarm `opal-link` calls `/api/browser/me` once a minute | live (shows "connected") |
+
+### 13.2 What an agent can and cannot see
+
+- `browser_status`: browsers, `connected`, whether a page is shared, whether it was shared with agents, the switch state. No content.
+- `browser_page` and `browser_media_candidates`: only when a page exists, was shared with the box ticked and the switch is on; otherwise the same empty answer ("Nothing is shared with agents" plus a hint), which does not reveal whether a page exists. Page content is under `untrusted_page`, with a notice, and the text sits between `BEGIN/END UNTRUSTED PAGE TEXT` markers (a copy of the marker inside the text is defused). The page address is returned without its query string. Candidates are host and path only (no query string, Referer, Origin or User-Agent), plus an id.
+- `browser_play_candidate`: by `page_id` and `id` only (integers; no URL parameter exists). A newer page makes old ids fail with 409. The headers the browser used are applied server side. Same gate as above.
+- Never: cookies, pairing, revocation, enabling sharing, tab control, script evaluation, the token, candidate query strings.
+
+Live check, in order: page shared with agents ticked and the switch off gave `agents_can_read_page:false`, empty page and candidates, and 403 on play; with the switch on (set in the database and Opal restarted, because the click was not automated) the page came back wrapped (the planted "IGNORE ALL PREVIOUS INSTRUCTIONS" line inside the markers), candidates were host and path, `play page=1 id=1` played the HLS stream (the embed server saw mpv's requests with the iframe Referer, `?token=abc123` intact, and the 403 never happened), a wrong page id gave 409, an unknown id 404, and `opal-mcp` returned the same through MCP; `queue` of the mp4 answered `queued_without_headers:true`. With the browser's own token: `/browser/context`, `/browser/play`, `/browser/links`, `/api/settings`, `/api/wanted` and the settings toggle all 403; `/api/status` and `/browser/me` 200. The machine token is refused `/browser/page` and `/browser/me`.
+
+### 13.3 Deviations and decisions
+
+1. **Detected streams reach Opal only with a share.** The design lists "Detected streams" in the hub without saying how the extension reports them. Reporting every tab's streams automatically would send browsing activity to Opal without a click, so the streams travel inside "Share this page" and the hub lists the candidates of the shared page. Consequence: the hub shows nothing for a page until it is shared. The panel's own Play still works without sharing.
+2. **Page URL for agents has no query string** (design: "URL"); candidates host and path only, as designed.
+3. **`POST /api/browser/play` is a separate route** (the brief named only the GET context route); it is host principals only and is the one place a candidate becomes a player load.
+4. **`--read-only` does not hide `browser_play_candidate`**: like every other tool above the ceiling it is listed and refused on call with the tier message (that is how `opal-mcp` has always worked); `--deny-prefix browser` does hide all four.
+5. **"Connected" means seen in the last 150 seconds**, because there is no socket yet. The extension checks in once a minute.
+6. **The share box is per page and the global switch is separate**, as asked; a page shared without the box can never be read by an agent, even with the switch on.
+7. **Opal's hub title field** is filled from the shared title once per share; edits stick until the next share.
+8. **Native render test**: the offscreen capture harness loses the whole frame behind a text entry that sits in a scrolling column (it is fine in the app, seen live), so the fixtures draw that box as a label. Typing is therefore not covered by the render test. Capture sizes are 1000x780 and 640x780 (taller windows were resized by the compositor and came out wrong); the populated case therefore shows the page scrolled.
+9. **`remote_limits_pure`**: `/browser/page` and `/browser/play` cost one unit of the expensive budget each, like `/browser/media`.
+
+### 13.4 Not done: the WebSocket command channel (priority 4)
+
+`GET /api/browser/ws` with our own handshake and framing was not built. Reasons: the server handles one request per thread and returns after the response, with a fixed 4096-byte request buffer and no hook for taking a socket over; a safe channel needs the upgrade handled before the generic path, the `Origin` and loopback `Host` checks from section 9, the token in the first frame (not the URL), masked-frame parsing with size and fragment limits, ping and pong timers, a per-connection thread that Opal's shutdown path joins, and tests for every malformed frame. That is more than the time left after the three items above could cover safely, and nothing in M2 needs it: sharing, tools and the hub run on plain requests. The pure pieces (handshake accept key, frame parser) are the right first step when it is picked up.
+
+### 13.5 Still unverified
+
+- Headed Chrome, Firefox and Edge; the real optional-permission prompt for Detect media (the live run used a copy of the built extension with all-sites access in `host_permissions`, never committed).
+- Clicking Play, Queue, Add to Wanted, Find sources, Dismiss and the Settings switch in the GUI (no input tooling was allowed): their code paths are small and call the same functions the routes and tools use, but a human click was not exercised.
+- `executeScript` on a page the extension has no access to falls back to title and address; that branch was not run.
+- `zig build test` as a whole (the two linker failures of milestone 1 are in files this change does not touch).

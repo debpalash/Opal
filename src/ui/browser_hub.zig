@@ -224,16 +224,10 @@ fn renderBrowsers() void {
         const live = std.mem.eql(u8, seen, "connected");
         var name_buf: [96]u8 = undefined;
         const name = view_pure.clip(&name_buf, row.labelSlice(), 40);
-        _ = dvui.label(@src(), "{s}", .{if (live) "\xe2\x97\x8f" else "\xe2\x97\x8b"}, .{
-            .id_extra = i,
-            .color_text = if (live) theme.colors.success else theme.colors.text_tertiary,
-            .gravity_y = 0.5,
-            .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
-        });
         _ = dvui.label(@src(), "{s}", .{name}, .{ .id_extra = i, .color_text = theme.colors.text_primary, .gravity_y = 0.5 });
         _ = dvui.label(@src(), "{s}, {s}", .{ row.browserSlice(), seen }, .{
             .id_extra = i,
-            .color_text = theme.colors.text_secondary,
+            .color_text = if (live) theme.colors.success else theme.colors.text_secondary,
             .gravity_y = 0.5,
             .margin = .{ .x = 10, .y = 0, .w = 0, .h = 0 },
         });

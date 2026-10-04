@@ -157,6 +157,22 @@ Limits in this milestone: a *queued* stream plays later without its Referer (the
 queue stores only a URL); streams that need your cookies will not play; DRM
 streams cannot be played by mpv.
 
+### Share this page with Opal
+
+*Share this page with Opal* in the side panel sends the page you are on to Opal:
+its title, address, Open Graph description, JSON-LD, the first 8 KB of its text
+and the streams detected on it. It runs only when you press the button, once per
+page, and never in the background. Opal keeps the last shared page in memory (not
+on disk) and shows it in Browse > Web, where you can add it to Wanted, search for
+it or dismiss it. If this extension has no access to the page (a browser page, or
+a site you have not granted), only the title and address are sent.
+
+The box *Also let coding agents read this page* starts unticked and resets after
+each share. A coding agent sees the page only when that box was ticked **and**
+you switched on *Settings > Agent Access > Let agents read shared pages* in Opal,
+a switch this extension cannot see or change. What an agent sees is labelled as
+untrusted text from a web page.
+
 Tests: `npm test` runs the pure parts under node (no dependencies, node >= 22.18).
 `npm run typecheck` runs `tsc`.
 
