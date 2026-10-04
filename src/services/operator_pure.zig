@@ -98,7 +98,7 @@ pub fn spec(kind: Kind) Spec {
         },
         .local_names => .{
             .title = "Tidy messy file names",
-            .schema = "{\"type\":\"object\",\"properties\":{\"items\":{\"type\":\"array\",\"minItems\":1,\"maxItems\":20,\"items\":{\"type\":\"object\",\"properties\":{\"index\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":19},\"title\":{\"type\":\"string\",\"maxLength\":120},\"kind\":{\"type\":\"string\",\"enum\":[\"movie\",\"tv\",\"music\",\"audiobook\",\"other\"]},\"year\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":2200}},\"required\":[\"index\",\"title\",\"kind\",\"year\"],\"additionalProperties\":false}},\"reason\":{\"type\":\"string\",\"maxLength\":200}},\"required\":[\"items\",\"reason\"],\"additionalProperties\":false}",
+            .schema = "{\"type\":\"object\",\"properties\":{\"items\":{\"type\":\"array\",\"minItems\":0,\"maxItems\":20,\"items\":{\"type\":\"object\",\"properties\":{\"index\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":19},\"title\":{\"type\":\"string\",\"maxLength\":120},\"kind\":{\"type\":\"string\",\"enum\":[\"movie\",\"tv\",\"music\",\"audiobook\",\"other\"]},\"year\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":2200}},\"required\":[\"index\",\"title\",\"kind\",\"year\"],\"additionalProperties\":false}},\"reason\":{\"type\":\"string\",\"maxLength\":200}},\"required\":[\"items\",\"reason\"],\"additionalProperties\":false}",
             .budget_cents = 25,
             .cooldown_ms = 6 * hour_ms,
             .auto_apply = true,

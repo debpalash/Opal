@@ -37,7 +37,7 @@ A `409` or "stale" error means a newer search replaced the results; search again
 
 ## Wanted list (automation)
 
-When the user wants something that is not out yet or should just arrive on its own, `wanted_add` it (it starts automatic downloads, so make sure the user wants that) instead of searching by hand: a movie by `title` and `year`, an episode by `title`, `season`, `episode`. Opal searches, picks the best release by quality and seeders, downloads it and marks it fulfilled. Check progress with `wanted_list` (`status`, `attempts`, `picked`); `wanted_check` forces a search now. Use `wanted_pause` / `wanted_remove` to stop. Do not add duplicates; list first.
+When the user wants something that is not out yet or should just arrive on its own, `wanted_add` it (it starts automatic downloads, so make sure the user wants that) instead of searching by hand: a movie by `title` and `year`, an episode by `title`, `season`, `episode`. Opal searches, picks the best release by quality and seeders, downloads it and marks it fulfilled. Check progress with `wanted_list` (`status`, `attempts`, `picked`); `wanted_check` forces a search now. Use `wanted_pause` to stop for now; `wanted_remove` deletes the item and is a destructive tool (the user must have allowed destructive tools, and the call needs `confirm: true`), so prefer pausing and ask before removing. Do not add duplicates; list first.
 
 ## Extending Opal with a plugin
 

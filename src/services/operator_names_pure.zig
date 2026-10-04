@@ -302,9 +302,33 @@ pub fn applyNames(names: *const Names, rowids: []const i64, target: anytype) Tal
     return tally;
 }
 
+/// True when the answer is a well formed `{"items":[]}`: the agent looked and could
+/// not identify any file. That is an honest answer (the prompt tells it to leave out
+/// what it cannot decide), not a failure, so the schema allows it.
+pub fn declinedAll(allocator: std.mem.Allocator, json: []const u8) bool {
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, json, .{}) catch return false;
+    defer parsed.deinit();
+    if (parsed.value != .object) return false;
+    const list = parsed.value.object.get("items") orelse return false;
+    return list == .array and list.array.items.len == 0;
+}
+
+/// When a job that asked about a batch failed (agent error, unusable answer,
+/// interruption), the files are marked as asked again only after this long instead
+/// of the full re-ask window: a missing sign-in must not lock them out for weeks,
+/// but a broken agent must not be paid for on every scan either.
+pub const RETRY_AFTER_FAILURE_MS: i64 = 24 * 60 * 60 * 1000;
+
+/// The `asked_ms` to store so that a file counts as asked until `now + retry_ms`,
+/// given that files are skipped while `asked_ms > now' - reask_ms`.
+pub fn retryMarker(now_ms: i64, reask_ms: i64, retry_ms: i64) i64 {
+    return now_ms - reask_ms + retry_ms;
+}
+
 /// Parse, apply and describe. `rowids[i]` is the row asked about as index i (<= 0
 /// when unknown).
 pub fn handleAnswer(allocator: std.mem.Allocator, result_json: []const u8, rowids: []const i64, target: anytype) op.Handled {
+    if (declinedAll(allocator, result_json)) return op.Handled.make(.applied, "The agent could not identify any of these files", .{});
     const names = parseLocalNames(allocator, result_json, rowids.len) orelse
         return op.Handled.make(.failed, "No usable file names", .{});
     const tally = applyNames(&names, rowids, target);
@@ -553,4 +577,33 @@ test "handler fails on an unusable answer and says so when nothing changed" {
     t.refuse = false;
     const one = handleAnswer(a, "{\"items\":[{\"index\":0,\"title\":\"Fine\",\"kind\":\"movie\"}]}", &rowids, &t);
     try std.testing.expectEqualStrings("Cleaned 1 file name", one.text());
+}
+
+test "an empty answer is a decline, not a failure" {
+    const a = std.testing.allocator;
+    const rows = [_]FakeRow{.{ .id = 1, .display_empty = true, .title = "A b", .asked = "A b" }};
+    var t = FakeTarget{ .rows = &rows };
+    const rowids = [_]i64{1};
+    const none = handleAnswer(a, "{\"items\":[],\"reason\":\"cannot tell\"}", &rowids, &t);
+    try std.testing.expectEqual(op.State.applied, none.state);
+    try std.testing.expectEqual(@as(usize, 0), t.applied);
+    try std.testing.expect(!declinedAll(a, "{\"items\":[{\"index\":0}]}"));
+    try std.testing.expect(!declinedAll(a, "{\"items\":5}"));
+    try std.testing.expect(!declinedAll(a, "not json"));
+    // Every item invalid is still a failure.
+    try std.testing.expectEqual(op.State.failed, handleAnswer(a, "{\"items\":[{\"index\":9,\"title\":\"x\",\"kind\":\"movie\"}]}", &rowids, &t).state);
+}
+
+test "a failed batch is asked again after a day, not after two weeks" {
+    const reask: i64 = 14 * 24 * 60 * 60 * 1000;
+    const now: i64 = 50 * 24 * 60 * 60 * 1000;
+    const marker = retryMarker(now, reask, RETRY_AFTER_FAILURE_MS);
+    // The scan skips a row while asked_ms > t - reask.
+    const skipped = struct {
+        fn at(m: i64, t: i64) bool {
+            return m > t - 14 * 24 * 60 * 60 * 1000;
+        }
+    }.at;
+    try std.testing.expect(skipped(marker, now + RETRY_AFTER_FAILURE_MS - 1000));
+    try std.testing.expect(!skipped(marker, now + RETRY_AFTER_FAILURE_MS + 1000));
 }

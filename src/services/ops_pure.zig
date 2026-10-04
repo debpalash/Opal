@@ -571,7 +571,7 @@ pub const ops = [_]Op{
             .{ .name = "budget_cents", .kind = .integer, .desc = "Dollar cap per run in cents (claude only), 5 to 1000. Default 50.", .min = 5, .max = 1000 },
         },
     },
-    .{ .name = "agent_task_remove", .summary = "Delete a scheduled agent task.", .tier = .write, .method = .POST, .path = "/agent/tasks/remove", .params = &.{task_id} },
+    .{ .name = "agent_task_remove", .summary = "Delete a scheduled agent task.", .tier = .destructive, .method = .POST, .path = "/agent/tasks/remove", .fixed = &.{.{ .key = "confirm", .value = "1" }}, .params = &.{task_id} },
     .{ .name = "agent_task_run", .summary = "Run a scheduled task on the next tick instead of waiting for its schedule. Counts toward its daily cap and needs scheduled tasks switched on in Settings.", .tier = .spend, .method = .POST, .path = "/agent/tasks/run", .params = &.{task_id} },
     .{ .name = "torrent_pause", .summary = "Pause a live torrent by the id from torrents_list.", .tier = .write, .method = .POST, .path = "/torrents/action", .fixed = &.{.{ .key = "action", .value = "pause" }}, .params = &.{torrent_id} },
     .{ .name = "torrent_resume", .summary = "Resume a paused torrent by the id from torrents_list.", .tier = .write, .method = .POST, .path = "/torrents/action", .fixed = &.{.{ .key = "action", .value = "resume" }}, .params = &.{torrent_id} },
@@ -597,7 +597,7 @@ pub const ops = [_]Op{
     },
     .{ .name = "wanted_pause", .summary = "Stop searching for a wanted item until it is resumed.", .tier = .write, .method = .POST, .path = "/wanted/pause", .params = &.{wanted_id} },
     .{ .name = "wanted_resume", .summary = "Resume a paused wanted item, or re-arm one whose download was removed so it searches again.", .tier = .write, .method = .POST, .path = "/wanted/resume", .params = &.{wanted_id} },
-    .{ .name = "wanted_remove", .summary = "Remove an item from the wanted list. Files already downloaded are kept.", .tier = .write, .method = .POST, .path = "/wanted/remove", .params = &.{wanted_id} },
+    .{ .name = "wanted_remove", .summary = "Remove an item from the wanted list. Files already downloaded are kept.", .tier = .destructive, .method = .POST, .path = "/wanted/remove", .fixed = &.{.{ .key = "confirm", .value = "1" }}, .params = &.{wanted_id} },
 
     // ── Spends bandwidth, disk or compute ──
     .{
@@ -1879,7 +1879,12 @@ test "automatic downloads and agent runs are spend; scheduling stays with the us
     try testing.expectEqual(Tier.spend, findOp("wanted_follow").?.tier);
     try testing.expectEqual(Tier.spend, findOp("agent_task_add").?.tier);
     try testing.expectEqual(Tier.spend, findOp("agent_task_run").?.tier);
-    try testing.expectEqual(Tier.write, findOp("agent_task_remove").?.tier);
+    // Removing a task or a wanted item deletes the user's own configuration (a prompt, a schedule,
+    // a standing request), so both need the destructive opt-in and confirm:true.
+    try testing.expectEqual(Tier.destructive, findOp("agent_task_remove").?.tier);
+    try testing.expectEqual(Tier.destructive, findOp("wanted_remove").?.tier);
+    try testing.expectEqual(Verdict.tier_blocked, check(Policy{}, findOp("wanted_remove").?, true));
+    try testing.expectEqual(Verdict.needs_confirm, check(Policy{ .allow_destructive = true }, findOp("agent_task_remove").?, false));
     // No tool can switch a task on or off: only the user does, in the UI.
     try testing.expect(findOp("agent_task_enable") == null);
     for (ops) |op| try testing.expect(std.mem.indexOf(u8, op.path, "/agent/tasks/enable") == null);

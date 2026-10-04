@@ -79,6 +79,29 @@ pub fn afterScan() void {
     if (operator.request(.local_names, key, batch.text()) != .queued) forgetBatch(key);
 }
 
+/// A job for this batch failed: ask about its files again after a day instead of
+/// leaving them marked as asked for the full re-ask window.
+pub fn retryLater(key: []const u8) void {
+    if (!ensureTable()) return;
+    const stmt = db.prepare("UPDATE operator_names_batch SET asked_ms=?1 WHERE batch=?2") orelse return;
+    defer db.finalize(stmt);
+    db.bindInt64(stmt, 1, pure.retryMarker(io_g.milliTimestamp(), REASK_MS, pure.RETRY_AFTER_FAILURE_MS));
+    db.bindText(stmt, 2, key);
+    _ = db.step(stmt);
+}
+
+/// Startup recovery: jobs still `running` were cut short, so their batches get the
+/// same treatment as a failed job. Called before those jobs are marked failed.
+pub fn retryInterruptedLater() void {
+    if (!ensureTable()) return;
+    const stmt = db.prepare(
+        "UPDATE operator_names_batch SET asked_ms=?1 WHERE batch IN (SELECT key FROM operator_jobs WHERE kind='local_names' AND state='running')",
+    ) orelse return;
+    defer db.finalize(stmt);
+    db.bindInt64(stmt, 1, pure.retryMarker(io_g.milliTimestamp(), REASK_MS, pure.RETRY_AFTER_FAILURE_MS));
+    _ = db.step(stmt);
+}
+
 fn storeBatch(key: []const u8, batch: *const pure.Batch, now: i64) bool {
     forgetBatch(key);
     const stmt = db.prepare("INSERT OR REPLACE INTO operator_names_batch(row_id,batch,idx,title_hash,asked_ms) VALUES(?1,?2,?3,?4,?5)") orelse return false;

@@ -58,6 +58,7 @@ fn ensureTable() bool {
     db.exec("CREATE INDEX IF NOT EXISTS operator_jobs_key ON operator_jobs(kind, key, created_ms)");
     // A job left `running` by a crash or a hard quit would count against the queue
     // forever. Its reserved cost stays charged: it may have spent money.
+    local_names.retryInterruptedLater();
     db.exec("UPDATE operator_jobs SET state='failed', summary='Interrupted', finished_ms=0 WHERE state='running'");
     table_ready.store(true, .release);
     return true;
@@ -206,6 +207,26 @@ fn finish(id: i64, st: pure.State, summary: []const u8, result: []const u8, agen
     db.bindInt64(stmt, 7, id);
     _ = db.step(stmt);
     state.wakeUi();
+    if (st == .failed) afterFailure(id);
+}
+
+/// Every failed job is logged once, here, and kinds that remember what they asked
+/// about are told so they can ask again later (see `local_names.retryLater`).
+fn afterFailure(id: i64) void {
+    logs.pushLog("warn", "operator", "A background job failed", false);
+    const stmt = db.prepare("SELECT kind, key FROM operator_jobs WHERE id=?1") orelse return;
+    defer db.finalize(stmt);
+    db.bindInt64(stmt, 1, id);
+    if (db.step(stmt) != db.c.SQLITE_ROW) return;
+    const kind = Kind.parse(db.columnText(stmt, 0) orelse "") orelse return;
+    var key_buf: [64]u8 = undefined;
+    const key = db.columnText(stmt, 1) orelse "";
+    if (key.len > key_buf.len) return;
+    @memcpy(key_buf[0..key.len], key);
+    switch (kind) {
+        .local_names => local_names.retryLater(key_buf[0..key.len]),
+        else => {},
+    }
 }
 
 fn pickAgent(kind: Kind) ?pure.Agent {
@@ -328,7 +349,7 @@ fn runJob(job: Job) void {
     // Claude reports what it spent; Codex does not, so it is charged the full budget.
     const cost = if (agent == .claude and answer.cost_cents > 0) answer.cost_cents else pure.spec(job.kind).budget_cents;
     finish(job.id, handled.state, handled.text(), answer.json, agent.binary(), cost);
-    logs.pushLog(if (handled.state == .failed) "warn" else "info", "operator", if (handled.state == .failed) "A background job could not be used" else "A background job finished", false);
+    if (handled.state != .failed) logs.pushLog("info", "operator", "A background job finished", false);
 }
 
 // ── User decisions on proposals ─────────────────────────────────────────
