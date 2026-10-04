@@ -133,7 +133,7 @@
     "/history": {
       "get": {
         "operationId": "history_list",
-        "summary": "Recently watched items.",
+        "summary": "Recent search queries, plus the queue's shuffle and repeat state. (Watch progress lives in library_list and status.)",
         "tags": [
           "read"
         ],
@@ -1050,6 +1050,272 @@
         }
       }
     },
+    "/home": {
+      "get": {
+        "operationId": "home_summary",
+        "summary": "At a glance: how many shows are tracked, watching, caught up or unstarted, how many torrents are live, and up to 12 titles to continue with their next episode.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/player": {
+      "get": {
+        "operationId": "player_info",
+        "summary": "Full state of the active player: position, volume, speed, subtitle delay, chapters, audio and subtitle tracks (ids for player_audio_track and player_subtitle_track), subtitle search results and audio outputs. Answers 'no player' when nothing is loaded.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/cast/scan": {
+      "get": {
+        "operationId": "cast_scan",
+        "summary": "Scan the local network for Chromecast devices (needs the catt tool). Takes a few seconds; read cast_devices afterwards.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/cast/devices": {
+      "get": {
+        "operationId": "cast_devices",
+        "summary": "Cast devices found so far (name, ip), whether a scan is running and whether something is casting. Starts a scan when none are known yet.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/torrents": {
+      "get": {
+        "operationId": "torrents_list",
+        "summary": "Live torrents with id, name, progress percent, rate, seeds and paused state. Page with offset and limit.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "Skip this many torrents.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100000
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Torrents to return, 1-96. Default 96.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 96
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/torrent/files": {
+      "get": {
+        "operationId": "torrent_files",
+        "summary": "The files inside one torrent with progress and size, so you can see which episode of a season pack has arrived.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "Torrent id from torrents_list.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/downloads/history": {
+      "get": {
+        "operationId": "download_history_list",
+        "summary": "Names of past downloads Opal remembers (finished or removed), with the id download_history_remove needs.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/jellyfin": {
+      "get": {
+        "operationId": "jellyfin_results",
+        "summary": "The Jellyfin view: whether the user's server is connected, its libraries, and the items of the last browse or search with ids, types, years, runtime and watched state. The user logs in to Jellyfin in the app.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/jellyfin/libraries": {
+      "get": {
+        "operationId": "jellyfin_libraries",
+        "summary": "Load the Jellyfin libraries. Read jellyfin_results a moment later.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/jellyfin/browse": {
+      "get": {
+        "operationId": "jellyfin_browse",
+        "summary": "Open a Jellyfin library or folder by id and load its items. Read jellyfin_results a moment later.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "Library or item id from jellyfin_results.",
+            "schema": {
+              "type": "string",
+              "maxLength": 64
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/jellyfin/search": {
+      "get": {
+        "operationId": "jellyfin_search",
+        "summary": "Search the user's Jellyfin server by title. Read jellyfin_results a moment later.",
+        "tags": [
+          "read"
+        ],
+        "x-opal-tier": "read",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "description": "What to search for.",
+            "schema": {
+              "type": "string",
+              "maxLength": 255
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
     "/unified_search/play": {
       "post": {
         "operationId": "search_play",
@@ -1388,6 +1654,186 @@
               "type": "integer",
               "minimum": 0,
               "maximum": 9999
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/player/action?action=audio-track": {
+      "post": {
+        "operationId": "player_audio_track",
+        "summary": "Select the audio track of the current video by the id shown in player_info, or off.",
+        "tags": [
+          "playback"
+        ],
+        "x-opal-tier": "playback",
+        "x-opal-fixed": {
+          "action": "audio-track"
+        },
+        "parameters": [
+          {
+            "name": "value",
+            "in": "query",
+            "required": true,
+            "description": "Track id from player_info, or off.",
+            "schema": {
+              "type": "string",
+              "maxLength": 5
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/player/action?action=subtitle-track": {
+      "post": {
+        "operationId": "player_subtitle_track",
+        "summary": "Select the subtitle track of the current video by the id shown in player_info, or off.",
+        "tags": [
+          "playback"
+        ],
+        "x-opal-tier": "playback",
+        "x-opal-fixed": {
+          "action": "subtitle-track"
+        },
+        "parameters": [
+          {
+            "name": "value",
+            "in": "query",
+            "required": true,
+            "description": "Track id from player_info, or off.",
+            "schema": {
+              "type": "string",
+              "maxLength": 5
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/player/action?action=subtitle-delay": {
+      "post": {
+        "operationId": "subtitles_delay",
+        "summary": "Shift the subtitles relative to the video, in seconds: positive shows them later. 0 resets.",
+        "tags": [
+          "playback"
+        ],
+        "x-opal-tier": "playback",
+        "x-opal-fixed": {
+          "action": "subtitle-delay"
+        },
+        "parameters": [
+          {
+            "name": "value",
+            "in": "query",
+            "required": true,
+            "description": "Delay in seconds, -30 to 30.",
+            "schema": {
+              "type": "number",
+              "minimum": -30,
+              "maximum": 30
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/cast/start": {
+      "post": {
+        "operationId": "cast_start",
+        "summary": "Cast what is playing now to a Chromecast from cast_devices. Local playback keeps going; stop with cast_stop.",
+        "tags": [
+          "playback"
+        ],
+        "x-opal-tier": "playback",
+        "parameters": [
+          {
+            "name": "idx",
+            "in": "query",
+            "required": true,
+            "description": "Zero-based position in cast_devices.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 15
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/cast/stop": {
+      "post": {
+        "operationId": "cast_stop",
+        "summary": "Stop casting to the Chromecast.",
+        "tags": [
+          "playback"
+        ],
+        "x-opal-tier": "playback",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/jellyfin/play": {
+      "post": {
+        "operationId": "jellyfin_play",
+        "summary": "Play a movie, episode or video from the Jellyfin items in jellyfin_results, by id. Streams from the user's own server.",
+        "tags": [
+          "playback"
+        ],
+        "x-opal-tier": "playback",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "Library or item id from jellyfin_results.",
+            "schema": {
+              "type": "string",
+              "maxLength": 64
             }
           }
         ],
@@ -2430,6 +2876,117 @@
         }
       }
     },
+    "/torrents/action?action=pause": {
+      "post": {
+        "operationId": "torrent_pause",
+        "summary": "Pause a live torrent by the id from torrents_list.",
+        "tags": [
+          "write"
+        ],
+        "x-opal-tier": "write",
+        "x-opal-fixed": {
+          "action": "pause"
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "Torrent id from torrents_list.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/torrents/action?action=resume": {
+      "post": {
+        "operationId": "torrent_resume",
+        "summary": "Resume a paused torrent by the id from torrents_list.",
+        "tags": [
+          "write"
+        ],
+        "x-opal-tier": "write",
+        "x-opal-fixed": {
+          "action": "resume"
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "Torrent id from torrents_list.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/rss/manage?action=add": {
+      "post": {
+        "operationId": "rss_add",
+        "summary": "Add an RSS feed (an http(s) URL) to the user's feeds; at most 8. Then rss_refresh it and read rss_list for the items.",
+        "tags": [
+          "write"
+        ],
+        "x-opal-tier": "write",
+        "x-opal-fixed": {
+          "action": "add"
+        },
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "required": true,
+            "description": "Short display name.",
+            "schema": {
+              "type": "string",
+              "maxLength": 63
+            }
+          },
+          {
+            "name": "url",
+            "in": "query",
+            "required": true,
+            "description": "http(s) URL of the feed.",
+            "schema": {
+              "type": "string",
+              "maxLength": 511
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
     "/wanted/follow": {
       "post": {
         "operationId": "wanted_follow",
@@ -2823,6 +3380,134 @@
             }
           }
         ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/torrents/action?action=cancel": {
+      "post": {
+        "operationId": "torrent_cancel",
+        "summary": "Remove a live torrent and hide what it downloaded from Opal. Pass the id from torrents_list.",
+        "tags": [
+          "destructive"
+        ],
+        "x-opal-tier": "destructive",
+        "x-opal-fixed": {
+          "action": "cancel",
+          "confirm": "1"
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "Torrent id from torrents_list.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/rss/manage?action=remove": {
+      "post": {
+        "operationId": "rss_remove",
+        "summary": "Delete an RSS feed. Pass the index from rss_list.",
+        "tags": [
+          "destructive"
+        ],
+        "x-opal-tier": "destructive",
+        "x-opal-fixed": {
+          "action": "remove",
+          "confirm": "1"
+        },
+        "parameters": [
+          {
+            "name": "idx",
+            "in": "query",
+            "required": true,
+            "description": "Zero-based position, as listed.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9999
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/downloads/history/action?action=remove": {
+      "post": {
+        "operationId": "download_history_remove",
+        "summary": "Forget one past download in the download history. Files on disk are not touched. Pass the id from download_history_list.",
+        "tags": [
+          "destructive"
+        ],
+        "x-opal-tier": "destructive",
+        "x-opal-fixed": {
+          "action": "remove",
+          "confirm": "1"
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "description": "History id from download_history_list.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON result"
+          },
+          "401": {
+            "description": "Missing or wrong bearer token"
+          }
+        }
+      }
+    },
+    "/downloads/history/action?action=clear": {
+      "post": {
+        "operationId": "download_history_clear",
+        "summary": "Clear the whole download history. Files on disk are not touched.",
+        "tags": [
+          "destructive"
+        ],
+        "x-opal-tier": "destructive",
+        "x-opal-fixed": {
+          "action": "clear",
+          "confirm": "1"
+        },
+        "parameters": [],
         "responses": {
           "200": {
             "description": "JSON result"

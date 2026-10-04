@@ -86,6 +86,10 @@ pub const Param = struct {
     max_len: usize = 512,
     /// The value must be an http(s) URL or a magnet link, never a path.
     url: bool = false,
+    /// The value is an opaque server id: letters, digits and dashes only, so it
+    /// cannot smuggle extra query parameters into a request Opal makes to a
+    /// media server on the agent's behalf.
+    ident: bool = false,
 
     pub fn key(self: Param) []const u8 {
         return self.wire orelse self.name;
@@ -117,6 +121,10 @@ const q_param = Param{ .name = "query", .kind = .string, .desc = "What to search
 const list_index = Param{ .name = "index", .kind = .integer, .desc = "Zero-based position in the latest results.", .required = true, .wire = "idx", .min = 0, .max = 9999 };
 const task_agents = [_][]const u8{ "claude", "codex" };
 const task_id = Param{ .name = "id", .kind = .integer, .desc = "Task id from agent_tasks_list.", .required = true, .min = 1, .max = 9007199254740991 };
+
+const torrent_id = Param{ .name = "id", .kind = .integer, .desc = "Torrent id from torrents_list.", .required = true, .min = 0, .max = 1000000 };
+const jf_id = Param{ .name = "id", .kind = .string, .desc = "Library or item id from jellyfin_results.", .required = true, .max_len = 64, .ident = true };
+const track_param = Param{ .name = "track", .kind = .string, .desc = "Track id from player_info, or off.", .required = true, .wire = "value", .max_len = 5 };
 
 const library_filters = [_][]const u8{ "all", "watching", "caught_up", "unstarted", "completed", "dropped" };
 const library_kinds = [_][]const u8{ "all", "tv", "anime", "movie" };
@@ -153,7 +161,7 @@ pub const ops = [_]Op{
     .{ .name = "search_results", .summary = "Current unified search results and per-source status, without starting a new search.", .tier = .read, .method = .GET, .path = "/unified_search" },
     .{ .name = "queue_list", .summary = "The playback queue with item indexes.", .tier = .read, .method = .GET, .path = "/queue" },
     .{ .name = "downloads_list", .summary = "Active and finished downloads with the index and token that download actions need.", .tier = .read, .method = .GET, .path = "/downloads" },
-    .{ .name = "history_list", .summary = "Recently watched items.", .tier = .read, .method = .GET, .path = "/history" },
+    .{ .name = "history_list", .summary = "Recent search queries, plus the queue's shuffle and repeat state. (Watch progress lives in library_list and status.)", .tier = .read, .method = .GET, .path = "/history" },
     .{
         .name = "library_list",
         .summary = "The user's tracked shows, anime and movies with watch progress. Filter by status or kind; page with offset and limit.",
@@ -246,6 +254,33 @@ pub const ops = [_]Op{
     .{ .name = "calendar_list", .summary = "Coming up: the next episode and air date of each tracked show, and whether the latest one is available to stream.", .tier = .read, .method = .GET, .path = "/calendar" },
     .{ .name = "collections_list", .summary = "The user's named collections (playlists) with item counts.", .tier = .read, .method = .GET, .path = "/collections" },
     .{ .name = "recommendations", .summary = "Personalised recommendations from the viewing history.", .tier = .read, .method = .GET, .path = "/recommendations" },
+    .{ .name = "home_summary", .summary = "At a glance: how many shows are tracked, watching, caught up or unstarted, how many torrents are live, and up to 12 titles to continue with their next episode.", .tier = .read, .method = .GET, .path = "/home" },
+    .{ .name = "player_info", .summary = "Full state of the active player: position, volume, speed, subtitle delay, chapters, audio and subtitle tracks (ids for player_audio_track and player_subtitle_track), subtitle search results and audio outputs. Answers 'no player' when nothing is loaded.", .tier = .read, .method = .GET, .path = "/player" },
+
+    // ── Cast: scanning is a background job, then read the devices ──
+    .{ .name = "cast_scan", .summary = "Scan the local network for Chromecast devices (needs the catt tool). Takes a few seconds; read cast_devices afterwards.", .tier = .read, .method = .GET, .path = "/cast/scan" },
+    .{ .name = "cast_devices", .summary = "Cast devices found so far (name, ip), whether a scan is running and whether something is casting. Starts a scan when none are known yet.", .tier = .read, .method = .GET, .path = "/cast/devices" },
+
+    // ── Live torrents (downloads_list covers direct downloads; these are the torrent sessions) ──
+    .{
+        .name = "torrents_list",
+        .summary = "Live torrents with id, name, progress percent, rate, seeds and paused state. Page with offset and limit.",
+        .tier = .read,
+        .method = .GET,
+        .path = "/torrents",
+        .params = &.{
+            .{ .name = "offset", .kind = .integer, .desc = "Skip this many torrents.", .min = 0, .max = 100000 },
+            .{ .name = "limit", .kind = .integer, .desc = "Torrents to return, 1-96. Default 96.", .min = 1, .max = 96 },
+        },
+    },
+    .{ .name = "torrent_files", .summary = "The files inside one torrent with progress and size, so you can see which episode of a season pack has arrived.", .tier = .read, .method = .GET, .path = "/torrent/files", .params = &.{torrent_id} },
+    .{ .name = "download_history_list", .summary = "Names of past downloads Opal remembers (finished or removed), with the id download_history_remove needs.", .tier = .read, .method = .GET, .path = "/downloads/history" },
+
+    // ── Jellyfin browse: each call starts loading in the background; read jellyfin_results a moment later ──
+    .{ .name = "jellyfin_results", .summary = "The Jellyfin view: whether the user's server is connected, its libraries, and the items of the last browse or search with ids, types, years, runtime and watched state. The user logs in to Jellyfin in the app.", .tier = .read, .method = .GET, .path = "/jellyfin" },
+    .{ .name = "jellyfin_libraries", .summary = "Load the Jellyfin libraries. Read jellyfin_results a moment later.", .tier = .read, .method = .GET, .path = "/jellyfin/libraries" },
+    .{ .name = "jellyfin_browse", .summary = "Open a Jellyfin library or folder by id and load its items. Read jellyfin_results a moment later.", .tier = .read, .method = .GET, .path = "/jellyfin/browse", .params = &.{jf_id} },
+    .{ .name = "jellyfin_search", .summary = "Search the user's Jellyfin server by title. Read jellyfin_results a moment later.", .tier = .read, .method = .GET, .path = "/jellyfin/search", .params = &.{q_param} },
 
     // ── Playback ──
     .{
@@ -320,6 +355,28 @@ pub const ops = [_]Op{
             .{ .name = "index", .kind = .integer, .desc = "Queue item index, for item actions.", .wire = "idx", .min = 0, .max = 9999 },
         },
     },
+
+    .{ .name = "player_audio_track", .summary = "Select the audio track of the current video by the id shown in player_info, or off.", .tier = .playback, .method = .POST, .path = "/player/action", .fixed = &.{.{ .key = "action", .value = "audio-track" }}, .params = &.{track_param} },
+    .{ .name = "player_subtitle_track", .summary = "Select the subtitle track of the current video by the id shown in player_info, or off.", .tier = .playback, .method = .POST, .path = "/player/action", .fixed = &.{.{ .key = "action", .value = "subtitle-track" }}, .params = &.{track_param} },
+    .{
+        .name = "subtitles_delay",
+        .summary = "Shift the subtitles relative to the video, in seconds: positive shows them later. 0 resets.",
+        .tier = .playback,
+        .method = .POST,
+        .path = "/player/action",
+        .fixed = &.{.{ .key = "action", .value = "subtitle-delay" }},
+        .params = &.{.{ .name = "seconds", .kind = .number, .desc = "Delay in seconds, -30 to 30.", .required = true, .wire = "value", .min = -30, .max = 30 }},
+    },
+    .{
+        .name = "cast_start",
+        .summary = "Cast what is playing now to a Chromecast from cast_devices. Local playback keeps going; stop with cast_stop.",
+        .tier = .playback,
+        .method = .POST,
+        .path = "/cast/start",
+        .params = &.{.{ .name = "device", .kind = .integer, .desc = "Zero-based position in cast_devices.", .required = true, .wire = "idx", .min = 0, .max = 15 }},
+    },
+    .{ .name = "cast_stop", .summary = "Stop casting to the Chromecast.", .tier = .playback, .method = .POST, .path = "/cast/stop" },
+    .{ .name = "jellyfin_play", .summary = "Play a movie, episode or video from the Jellyfin items in jellyfin_results, by id. Streams from the user's own server.", .tier = .playback, .method = .POST, .path = "/jellyfin/play", .params = &.{jf_id} },
 
     // ── Persistent changes ──
     .{
@@ -499,6 +556,20 @@ pub const ops = [_]Op{
     },
     .{ .name = "agent_task_remove", .summary = "Delete a scheduled agent task.", .tier = .write, .method = .POST, .path = "/agent/tasks/remove", .params = &.{task_id} },
     .{ .name = "agent_task_run", .summary = "Run a scheduled task on the next tick instead of waiting for its schedule. Counts toward its daily cap and needs scheduled tasks switched on in Settings.", .tier = .spend, .method = .POST, .path = "/agent/tasks/run", .params = &.{task_id} },
+    .{ .name = "torrent_pause", .summary = "Pause a live torrent by the id from torrents_list.", .tier = .write, .method = .POST, .path = "/torrents/action", .fixed = &.{.{ .key = "action", .value = "pause" }}, .params = &.{torrent_id} },
+    .{ .name = "torrent_resume", .summary = "Resume a paused torrent by the id from torrents_list.", .tier = .write, .method = .POST, .path = "/torrents/action", .fixed = &.{.{ .key = "action", .value = "resume" }}, .params = &.{torrent_id} },
+    .{
+        .name = "rss_add",
+        .summary = "Add an RSS feed (an http(s) URL) to the user's feeds; at most 8. Then rss_refresh it and read rss_list for the items.",
+        .tier = .write,
+        .method = .POST,
+        .path = "/rss/manage",
+        .fixed = &.{.{ .key = "action", .value = "add" }},
+        .params = &.{
+            .{ .name = "name", .kind = .string, .desc = "Short display name.", .required = true, .max_len = 63 },
+            .{ .name = "url", .kind = .string, .desc = "http(s) URL of the feed.", .required = true, .max_len = 511, .url = true },
+        },
+    },
     .{
         .name = "wanted_follow",
         .summary = "Turn on or off automatic downloads of the newest aired episode of every tracked TV show. Only the newest episode per show is queued, never the back catalogue.",
@@ -569,6 +640,41 @@ pub const ops = [_]Op{
         .fixed = &.{ .{ .key = "action", .value = "cancel" }, .{ .key = "confirm", .value = "1" } },
         .params = &.{ idx_param, .{ .name = "token", .kind = .integer, .desc = "Token from downloads_list; guards against a changed list.", .required = true, .min = 0, .max = 4294967295 } },
     },
+    .{
+        .name = "torrent_cancel",
+        .summary = "Remove a live torrent and hide what it downloaded from Opal. Pass the id from torrents_list.",
+        .tier = .destructive,
+        .method = .POST,
+        .path = "/torrents/action",
+        .fixed = &.{ .{ .key = "action", .value = "cancel" }, .{ .key = "confirm", .value = "1" } },
+        .params = &.{torrent_id},
+    },
+    .{
+        .name = "rss_remove",
+        .summary = "Delete an RSS feed. Pass the index from rss_list.",
+        .tier = .destructive,
+        .method = .POST,
+        .path = "/rss/manage",
+        .fixed = &.{ .{ .key = "action", .value = "remove" }, .{ .key = "confirm", .value = "1" } },
+        .params = &.{idx_param},
+    },
+    .{
+        .name = "download_history_remove",
+        .summary = "Forget one past download in the download history. Files on disk are not touched. Pass the id from download_history_list.",
+        .tier = .destructive,
+        .method = .POST,
+        .path = "/downloads/history/action",
+        .fixed = &.{ .{ .key = "action", .value = "remove" }, .{ .key = "confirm", .value = "1" } },
+        .params = &.{.{ .name = "id", .kind = .integer, .desc = "History id from download_history_list.", .required = true, .min = 1, .max = 9007199254740991 }},
+    },
+    .{
+        .name = "download_history_clear",
+        .summary = "Clear the whole download history. Files on disk are not touched.",
+        .tier = .destructive,
+        .method = .POST,
+        .path = "/downloads/history/action",
+        .fixed = &.{ .{ .key = "action", .value = "clear" }, .{ .key = "confirm", .value = "1" } },
+    },
 };
 
 /// Read-only state exposed as MCP resources (subscribe-friendly snapshots).
@@ -578,7 +684,7 @@ pub const resources = [_]Resource{
     .{ .uri = "opal://status", .name = "Now playing", .desc = "Current playback state.", .path = "/status" },
     .{ .uri = "opal://queue", .name = "Queue", .desc = "The playback queue.", .path = "/queue" },
     .{ .uri = "opal://downloads", .name = "Downloads", .desc = "Active and finished downloads.", .path = "/downloads" },
-    .{ .uri = "opal://history", .name = "Watch history", .desc = "Recently watched items.", .path = "/history" },
+    .{ .uri = "opal://history", .name = "Search history", .desc = "Recent search queries and queue shuffle/repeat state.", .path = "/history" },
     .{ .uri = "opal://agent-tasks", .name = "Scheduled agent tasks", .desc = "Recurring prompts coding agents run unattended, and how the last runs went.", .path = "/agent/tasks" },
     .{ .uri = "opal://library", .name = "Library", .desc = "Tracked shows, anime and movies with watch progress.", .path = "/library" },
     .{ .uri = "opal://wanted", .name = "Wanted list", .desc = "What Opal is searching for and downloading automatically.", .path = "/wanted" },
@@ -620,6 +726,13 @@ pub fn isSafeUrl(s: []const u8) bool {
         std.ascii.startsWithIgnoreCase(s, "magnet:?");
     if (!ok_scheme) return false;
     for (s) |ch| if (ch <= 0x20 or ch == 0x7f) return false;
+    return true;
+}
+
+/// Letters, digits and dashes: the shape of Jellyfin ids (hex GUIDs).
+pub fn isIdent(s: []const u8) bool {
+    if (s.len == 0) return false;
+    for (s) |ch| if (!std.ascii.isAlphanumeric(ch) and ch != '-') return false;
     return true;
 }
 
@@ -695,6 +808,10 @@ pub fn validate(op: *const Op, args: ?std.json.ObjectMap, diag: *Diag) ArgError!
                     diag.set("'{s}' must be an http(s) URL or magnet link", .{p.name});
                     return error.InvalidArgument;
                 }
+                if (p.ident and !isIdent(v.string)) {
+                    diag.set("'{s}' must be an id: letters, digits and dashes only", .{p.name});
+                    return error.InvalidArgument;
+                }
                 for (v.string) |ch| {
                     if (ch < 0x20 or ch == 0x7f) {
                         diag.set("'{s}' contains control characters", .{p.name});
@@ -763,6 +880,9 @@ pub fn writeTarget(op: *const Op, args: ?std.json.ObjectMap, w: *Writer) Writer.
 
 // ── MCP tool descriptors ────────────────────────────────────────────────
 
+/// JSON Schema pattern for `Param.ident` values.
+pub const ident_pattern = "^[A-Za-z0-9-]+$";
+
 pub fn kindName(k: Kind) []const u8 {
     return switch (k) {
         .string, .choice => "string",
@@ -823,6 +943,10 @@ fn writeTool(s: *std.json.Stringify, op: *const Op) !void {
         if (p.kind == .string) {
             try s.objectField("maxLength");
             try s.write(p.max_len);
+            if (p.ident) {
+                try s.objectField("pattern");
+                try s.write(ident_pattern);
+            }
         }
         try s.endObject();
     }
@@ -1570,4 +1694,143 @@ test "settings_set refuses keys that reroute traffic or choose where files go" {
         defer bad.deinit();
         try testing.expectError(error.InvalidArgument, validate(op, bad.value.object, &diag));
     }
+}
+
+/// Validate `json` for `name` and return the request target in `buf`.
+fn targetFor(name: []const u8, json: []const u8, buf: []u8) ![]const u8 {
+    var diag = Diag{};
+    const op = findOp(name).?;
+    var parsed = try parseArgs(testing.allocator, json);
+    defer parsed.deinit();
+    try validate(op, parsed.value.object, &diag);
+    var w = Writer.fixed(buf);
+    try writeTarget(op, parsed.value.object, &w);
+    return w.buffered();
+}
+
+fn rejects(name: []const u8, json: []const u8) !void {
+    var diag = Diag{};
+    var parsed = try parseArgs(testing.allocator, json);
+    defer parsed.deinit();
+    try testing.expectError(error.InvalidArgument, validate(findOp(name).?, parsed.value.object, &diag));
+}
+
+test "player, cast and home tools map to the exact routes with the right tiers" {
+    var buf: [512]u8 = undefined;
+    try testing.expectEqualStrings("/api/home", try targetFor("home_summary", "{}", &buf));
+    try testing.expectEqualStrings("/api/player", try targetFor("player_info", "{}", &buf));
+    try testing.expectEqualStrings("/api/player/action?action=audio-track&value=2", try targetFor("player_audio_track", "{\"track\":\"2\"}", &buf));
+    try testing.expectEqualStrings("/api/player/action?action=subtitle-track&value=off", try targetFor("player_subtitle_track", "{\"track\":\"off\"}", &buf));
+    try testing.expectEqualStrings("/api/player/action?action=subtitle-delay&value=-1.5", try targetFor("subtitles_delay", "{\"seconds\":-1.5}", &buf));
+    try testing.expectEqualStrings("/api/cast/scan", try targetFor("cast_scan", "{}", &buf));
+    try testing.expectEqualStrings("/api/cast/devices", try targetFor("cast_devices", "{}", &buf));
+    try testing.expectEqualStrings("/api/cast/start?idx=3", try targetFor("cast_start", "{\"device\":3}", &buf));
+    try testing.expectEqualStrings("/api/cast/stop", try targetFor("cast_stop", "{}", &buf));
+
+    // bounds: subtitle delay, cast slots (the app holds 16), track ids
+    try rejects("subtitles_delay", "{\"seconds\":31}");
+    try rejects("subtitles_delay", "{\"seconds\":-31}");
+    try rejects("cast_start", "{\"device\":16}");
+    try rejects("cast_start", "{\"device\":-1}");
+    try rejects("player_audio_track", "{\"track\":\"1234567\"}");
+
+    for ([_][]const u8{ "home_summary", "player_info", "cast_scan", "cast_devices" }) |n| try testing.expectEqual(Tier.read, findOp(n).?.tier);
+    for ([_][]const u8{ "player_audio_track", "player_subtitle_track", "subtitles_delay", "cast_start", "cast_stop" }) |n| try testing.expectEqual(Tier.playback, findOp(n).?.tier);
+}
+
+test "torrent tools map to the torrent routes and cancel is destructive" {
+    var buf: [512]u8 = undefined;
+    try testing.expectEqualStrings("/api/torrents?offset=10&limit=20", try targetFor("torrents_list", "{\"offset\":10,\"limit\":20}", &buf));
+    try testing.expectEqualStrings("/api/torrents", try targetFor("torrents_list", "{}", &buf));
+    try testing.expectEqualStrings("/api/torrent/files?id=4", try targetFor("torrent_files", "{\"id\":4}", &buf));
+    try testing.expectEqualStrings("/api/torrents/action?action=pause&id=4", try targetFor("torrent_pause", "{\"id\":4}", &buf));
+    try testing.expectEqualStrings("/api/torrents/action?action=resume&id=4", try targetFor("torrent_resume", "{\"id\":4}", &buf));
+    try testing.expectEqualStrings("/api/torrents/action?action=cancel&confirm=1&id=4", try targetFor("torrent_cancel", "{\"id\":4}", &buf));
+
+    try rejects("torrents_list", "{\"limit\":97}");
+    try rejects("torrents_list", "{\"limit\":0}");
+    try rejects("torrent_pause", "{\"id\":-1}");
+    try rejects("torrent_files", "{\"id\":1.5}");
+
+    try testing.expectEqual(Tier.read, findOp("torrents_list").?.tier);
+    try testing.expectEqual(Tier.read, findOp("torrent_files").?.tier);
+    try testing.expectEqual(Tier.write, findOp("torrent_pause").?.tier);
+    try testing.expectEqual(Tier.write, findOp("torrent_resume").?.tier);
+    try testing.expectEqual(Tier.destructive, findOp("torrent_cancel").?.tier);
+}
+
+test "history and feed management: clears and removals are destructive, adds take only http(s)" {
+    var buf: [512]u8 = undefined;
+    try testing.expectEqualStrings("/api/downloads/history", try targetFor("download_history_list", "{}", &buf));
+    try testing.expectEqualStrings("/api/downloads/history/action?action=remove&confirm=1&id=12", try targetFor("download_history_remove", "{\"id\":12}", &buf));
+    try testing.expectEqualStrings("/api/downloads/history/action?action=clear&confirm=1", try targetFor("download_history_clear", "{}", &buf));
+    try testing.expectEqualStrings("/api/rss/manage?action=add&name=Releases&url=https%3A%2F%2Fexample.com%2Ffeed.xml", try targetFor("rss_add", "{\"name\":\"Releases\",\"url\":\"https://example.com/feed.xml\"}", &buf));
+    try testing.expectEqualStrings("/api/rss/manage?action=remove&confirm=1&idx=2", try targetFor("rss_remove", "{\"index\":2}", &buf));
+
+    try rejects("download_history_remove", "{\"id\":0}");
+    try rejects("rss_add", "{\"name\":\"x\",\"url\":\"/etc/passwd\"}");
+    try rejects("rss_add", "{\"name\":\"x\",\"url\":\"file:///etc/passwd\"}");
+    var long_name: [80]u8 = undefined;
+    @memset(&long_name, 'a');
+    var json: [160]u8 = undefined;
+    const text = try std.fmt.bufPrint(&json, "{{\"name\":\"{s}\",\"url\":\"https://example.com/f\"}}", .{long_name});
+    try rejects("rss_add", text);
+
+    try testing.expectEqual(Tier.read, findOp("download_history_list").?.tier);
+    try testing.expectEqual(Tier.write, findOp("rss_add").?.tier);
+    try testing.expectEqual(Tier.destructive, findOp("rss_remove").?.tier);
+    try testing.expectEqual(Tier.destructive, findOp("download_history_remove").?.tier);
+    try testing.expectEqual(Tier.destructive, findOp("download_history_clear").?.tier);
+}
+
+test "jellyfin tools map to the browse routes and take only plain ids" {
+    var buf: [512]u8 = undefined;
+    try testing.expectEqualStrings("/api/jellyfin", try targetFor("jellyfin_results", "{}", &buf));
+    try testing.expectEqualStrings("/api/jellyfin/libraries", try targetFor("jellyfin_libraries", "{}", &buf));
+    try testing.expectEqualStrings("/api/jellyfin/browse?id=a1b2c3d4-0000", try targetFor("jellyfin_browse", "{\"id\":\"a1b2c3d4-0000\"}", &buf));
+    try testing.expectEqualStrings("/api/jellyfin/search?q=the%20matrix", try targetFor("jellyfin_search", "{\"query\":\"the matrix\"}", &buf));
+    try testing.expectEqualStrings("/api/jellyfin/play?id=0123abcd", try targetFor("jellyfin_play", "{\"id\":\"0123abcd\"}", &buf));
+
+    // /api/jellyfin/browse pastes its id into a query to the user's server, so
+    // anything that is not a plain id is refused here.
+    try rejects("jellyfin_browse", "{\"id\":\"x&IncludeItemTypes=Movie\"}");
+    try rejects("jellyfin_browse", "{\"id\":\"../Users\"}");
+    try rejects("jellyfin_play", "{\"id\":\"a/b\"}");
+    try rejects("jellyfin_play", "{\"id\":\"\"}");
+    var long_id: [65]u8 = undefined;
+    @memset(&long_id, 'a');
+    var json: [128]u8 = undefined;
+    try rejects("jellyfin_browse", try std.fmt.bufPrint(&json, "{{\"id\":\"{s}\"}}", .{long_id}));
+
+    for ([_][]const u8{ "jellyfin_results", "jellyfin_libraries", "jellyfin_browse", "jellyfin_search" }) |n| try testing.expectEqual(Tier.read, findOp(n).?.tier);
+    try testing.expectEqual(Tier.playback, findOp("jellyfin_play").?.tier);
+}
+
+test "media-server credentials and account linking stay out of the registry" {
+    for (ops) |op| {
+        for ([_][]const u8{ "login", "logout", "connect", "disconnect", "token", "password" }) |bad| {
+            try testing.expect(std.mem.indexOf(u8, op.name, bad) == null);
+        }
+        try testing.expect(std.mem.indexOf(u8, op.path, "/login") == null);
+        for (op.params) |p| {
+            for ([_][]const u8{ "pass", "secret", "user", "server" }) |bad| {
+                try testing.expect(std.mem.indexOf(u8, p.name, bad) == null);
+            }
+        }
+    }
+}
+
+test "history_list describes search history, which is what /api/history returns" {
+    const op = findOp("history_list").?;
+    try testing.expect(std.mem.indexOf(u8, op.summary, "search queries") != null);
+    try testing.expect(std.mem.indexOf(u8, op.summary, "Recently watched") == null);
+}
+
+test "ident params reject anything but letters, digits and dashes" {
+    try testing.expect(isIdent("abc-123"));
+    try testing.expect(!isIdent(""));
+    try testing.expect(!isIdent("a b"));
+    try testing.expect(!isIdent("a&b=1"));
+    try testing.expect(!isIdent("a%2e"));
+    try testing.expect(!isIdent("a.b"));
 }
