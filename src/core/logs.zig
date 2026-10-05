@@ -136,7 +136,7 @@ pub fn pushLog(level: []const u8, prefix: []const u8, text: []const u8, is_error
     // mpv, curl, yt-dlp and plugin stderr are untrusted and frequently echo
     // full signed URLs or request headers. Redact once at the ring seam so UI,
     // journald-facing diagnostics, and `/api/logs` all see the same safe text.
-    const redacted_buf = logs_allocator.alloc(u8, clean_text.len) catch return;
+    const redacted_buf = logs_allocator.alloc(u8, @import("log_redact_pure.zig").max_output_len(clean_text.len)) catch return;
     defer logs_allocator.free(redacted_buf);
     const redacted_text = @import("log_redact_pure.zig").redactInto(clean_text, redacted_buf);
 

@@ -1592,6 +1592,23 @@ pub const MediaPlayer = struct {
         };
     }
 
+    fn isYoutubeSource(self: *const MediaPlayer) bool {
+        if (self.current_url_len == 0) return false;
+        const url = self.current_url[0..self.current_url_len];
+        return std.ascii.indexOfIgnoreCase(url, "youtube.com/") != null or
+            std.ascii.indexOfIgnoreCase(url, "youtu.be/") != null;
+    }
+
+    /// What the quality picker and the remote API may offer. Resolved streams
+    /// are authoritative; without them (the extractor failed, a proxy error
+    /// reset the load, or a fast 360p stream is playing) every tier stays
+    /// selectable and the switch re-resolves, so the control never goes blank.
+    pub fn youtubeQualitySelectable(self: *const MediaPlayer, idx: usize) bool {
+        if (idx > 3) return false;
+        if (self.youtube_proxy_handle.valid()) return self.youtubeQualityAvailable(idx);
+        return self.isYoutubeSource();
+    }
+
     pub fn commitYoutubeStreams(self: *MediaPlayer, streams: @import("../services/youtube_player_pure.zig").Streams) void {
         const proxy = @import("youtube_range_proxy.zig");
         if (self.youtube_proxy_handle.valid()) proxy.stop(self.youtube_proxy_handle);
@@ -1650,14 +1667,24 @@ pub const MediaPlayer = struct {
     pub fn reloadYoutubeAtQuality(self: *MediaPlayer) void {
         if (self.current_url_len == 0) return;
         const url = self.current_url[0..self.current_url_len];
-        if (std.ascii.indexOfIgnoreCase(url, "youtube.com/") == null and
-            std.ascii.indexOfIgnoreCase(url, "youtu.be/") == null) return;
+        if (!self.isYoutubeSource()) return;
         if (self.youtube_proxy_handle.valid()) {
             self.playYoutubeQuality(state.app.ytdl_format_idx, true);
             return;
         }
         const snap = self.playbackSnapshot();
         self.provider_resume_position = playback_load.saneResumePosition(snap.time_pos);
+        // No resolved streams to switch between: resolve again. The result
+        // lands in commitYoutubeStreams, which honours the chosen tier and
+        // the resume position; a failed resolve takes the usual fallback.
+        if (@import("../services/youtube_player.zig").resolveAsync(url, self, self.load_serial)) {
+            self.youtube_fast_active = false;
+            self.youtube_quality_fallback_pending = false;
+            self.youtube_default_retry_pending = true;
+            self.is_loading = true;
+            self.load_error_len = 0;
+            return;
+        }
         self.youtube_fast_active = false;
         self.youtube_default_retry_pending = false;
         self.youtube_quality_fallback_pending = true;

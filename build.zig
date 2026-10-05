@@ -369,6 +369,15 @@ pub fn build(b: *std.Build) void {
     addAgentAssets(b, exe.root_module);
     if (!headless) addGhosttyVt(b, exe.root_module, target);
     exe.root_module.addCSourceFile(.{ .file = b.path("src/core/webp_decode.c"), .flags = &.{"-O2"} });
+    // Distros often ship no libwebp.a. Look in -Dwebp-prefix, $OPAL_WEBP_PREFIX,
+    // then ~/.local/opal-webp (a harmless no-op when the directory is absent).
+    if (b.option([]const u8, "webp-prefix", "Prefix holding lib/libwebp.a and include/webp")) |p| {
+        b.addSearchPrefix(p);
+    } else if (b.graph.environ_map.get("OPAL_WEBP_PREFIX")) |p| {
+        b.addSearchPrefix(p);
+    } else if (b.graph.environ_map.get("HOME")) |home| {
+        b.addSearchPrefix(b.fmt("{s}/.local/opal-webp", .{home}));
+    }
     exe.root_module.linkSystemLibrary("webp", .{ .preferred_link_mode = .static, .search_strategy = .no_fallback });
 
     // SQLite Vector DB. -DSQLITE_CORE makes sqlite-vec call the linked
