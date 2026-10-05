@@ -283,15 +283,24 @@ fn fetchChunk(selected: *const pure.Stream, start_byte: u64, end_byte: u64, buf:
     var url_buf: [pure.MAX_URL + 64]u8 = undefined;
     const separator: u8 = if (std.mem.indexOfScalar(u8, selected.slice(), '?') == null) '?' else '&';
     const ranged_url = std.fmt.bufPrint(&url_buf, "{s}{c}range={d}-{d}", .{ selected.slice(), separator, start_byte, end_byte }) catch return null;
+    var range_buf: [96]u8 = undefined;
+    const range_value = std.fmt.bufPrint(&range_buf, "bytes={d}-{d}", .{ start_byte, end_byte }) catch return null;
+    const range_header = [_]std.http.Header{.{ .name = "Range", .value = range_value }};
     var attempt: usize = 0;
     while (attempt < UPSTREAM_ATTEMPTS) : (attempt += 1) {
         var upstream_status: ?std.http.Status = null;
-        const body = @import("../core/http.zig").fetchDirect(ranged_url, buf, .{
+        // Some CDN frontends refuse one range contract while accepting the
+        // other, so a failed attempt retries with the alternate: the `range=`
+        // query first, then a `Range:` header on the untouched URL.
+        const use_header = attempt % 2 == 1;
+        const body = @import("../core/http.zig").fetchDirect(if (use_header) selected.slice() else ranged_url, buf, .{
             .timeout_secs = 12,
             .user_agent = pure.VR_USER_AGENT,
             .accept = "*/*",
             .max_response = length + 1,
             .status_out = &upstream_status,
+            .extra_headers = if (use_header) &range_header else &.{},
+            .preserve_range_on_redirect = use_header,
         }) orelse continue;
         if (body.len == length and
             (upstream_status == .ok or upstream_status == .partial_content)) return body;

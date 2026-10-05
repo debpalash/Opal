@@ -5059,7 +5059,7 @@ fn apiPlayerAction(stream: std.Io.net.Stream, ap: *player.MediaPlayer, query: []
             state.markConfigDirty();
         },
         .quality => |v| {
-            if (!ap.youtubeQualityAvailable(v)) {
+            if (!ap.youtubeQualitySelectable(v)) {
                 if (players_locked.*) {
                     players_locked.* = false;
                     state.players_mutex.unlock();

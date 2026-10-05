@@ -59,8 +59,10 @@ pub fn renderQualityPickerPopover(active_p: *player.MediaPlayer) void {
     });
     defer pad.deinit();
     for (labels, 0..) |label, i| {
-        if (!active_p.youtubeQualityAvailable(i)) continue;
-        const selected = if (i == 3)
+        if (!active_p.youtubeQualitySelectable(i)) continue;
+        const selected = if (!active_p.youtube_proxy_handle.valid())
+            i == state.app.ytdl_format_idx
+        else if (i == 3)
             active_p.youtube_active_height == 0
         else
             active_p.youtube_active_height == @as(u16, switch (i) {

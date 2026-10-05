@@ -1,6 +1,7 @@
 //! Bounded, allocation-free secret redaction for process/network log text.
-//! Returned output is never longer than the input, so callers can allocate one
-//! exact-sized buffer and expose only the returned prefix.
+//! A short value is replaced by "[redacted]", so the output can be longer than
+//! the input; `max_output_len` is the size that always holds it. Smaller
+//! buffers are safe too: the output is cut short instead of overrunning.
 
 const std = @import("std");
 
@@ -17,6 +18,11 @@ fn isValueEnd(ch: u8) bool {
 fn isUrlEnd(ch: u8) bool {
     return ch == ' ' or ch == '\t' or ch == '\r' or ch == '\n' or
         ch == '"' or ch == '\'' or ch == '<' or ch == '>';
+}
+
+/// Worst case is a bare marker such as `token=` (6 bytes) becoming 16.
+pub fn max_output_len(input_len: usize) usize {
+    return input_len * 4 + 16;
 }
 
 fn write(out: []u8, at: *usize, bytes: []const u8) void {
@@ -73,9 +79,8 @@ const secret_markers = [_][]const u8{
 };
 
 /// Redact URL credentials/query strings, magnet tracker parameters, bearer
-/// headers, and common token parameters. `out.len` must be at least input.len.
+/// headers, and common token parameters. Size `out` with `max_output_len`.
 pub fn redactInto(input: []const u8, out: []u8) []const u8 {
-    if (out.len < input.len) return out[0..0];
     var i: usize = 0;
     var w: usize = 0;
     while (i < input.len) {
@@ -120,8 +125,7 @@ pub fn redactInto(input: []const u8, out: []u8) []const u8 {
             continue;
         }
 
-        out[w] = input[i];
-        w += 1;
+        write(out, &w, input[i .. i + 1]);
         i += 1;
     }
     return out[0..w];
@@ -158,4 +162,15 @@ test "plain text is unchanged" {
     const input = "resolver finished with 8 rows";
     var out: [input.len]u8 = undefined;
     try std.testing.expectEqualStrings(input, redactInto(input, &out));
+}
+
+test "short secret values never overrun the output buffer" {
+    const input = "yt-dlp: token= x token=1 http://h/? magnet:?a&b authorization:";
+    var big: [max_output_len(input.len)]u8 = undefined;
+    const full = redactInto(input, &big);
+    try std.testing.expect(std.mem.indexOf(u8, full, "[redacted]") != null);
+    // An input-sized buffer used to index out of bounds; it now truncates.
+    var tight: [input.len]u8 = undefined;
+    const cut = redactInto(input, &tight);
+    try std.testing.expect(cut.len <= tight.len);
 }
