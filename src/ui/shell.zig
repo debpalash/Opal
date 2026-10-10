@@ -307,6 +307,27 @@ fn renderTopNav(compact: bool, narrow: bool) void {
     });
     defer bar.deinit();
 
+    // Keep the product identity beside the sidebar control, including when the
+    // rail is collapsed. The compact wordmark still leaves the query room to
+    // shrink on narrow windows.
+    var brand = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .gravity_y = 0.5,
+        .padding = .{ .x = theme.spacing.xs, .y = 0, .w = theme.spacing.sm, .h = 0 },
+    });
+    _ = dvui.image(@src(), .{
+        .source = .{ .imageFile = .{ .bytes = @embedFile("opal_logo_64.png"), .name = "opal-shell-brand" } },
+    }, .{
+        .min_size_content = .{ .w = 18, .h = 18 },
+        .max_size_content = .{ .w = 18, .h = 18 },
+        .gravity_y = 0.5,
+    });
+    _ = dvui.label(@src(), "Opal", .{}, .{
+        .color_text = theme.colors.text_primary,
+        .gravity_y = 0.5,
+        .margin = .{ .x = theme.spacing.xs, .y = 0, .w = 0, .h = 0 },
+    });
+    brand.deinit();
+
     // The sidebar toggle stays in the chrome; destinations stay in the rail.
     const sidebar_expanded = sidebar_layout.layout(
         @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().w, state.app.ui_scale),

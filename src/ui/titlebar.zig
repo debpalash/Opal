@@ -170,9 +170,9 @@ pub fn render() void {
         .min_size_content = .{ .w = 0, .h = HEIGHT },
     });
 
-    // Left: Opal gem + wordmark. The nav bar's own brand is suppressed while the
-    // custom title bar is active (see shell.zig) so this is the only copy.
-    {
+    // The page shell keeps its brand beside the sidebar toggle. Only the
+    // legacy chrome and full-screen player need a brand in this title strip.
+    if (!state.app.page_shell_enabled or state.app.router.current == .player) {
         var left = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .gravity_x = 0.0,
             .gravity_y = 0.5,
