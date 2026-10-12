@@ -781,4 +781,16 @@ button:disabled{cursor:not-allowed}
   .card .jf-card-actions button,.result .m button,.result .actions button,.result .play,.result .queue-btn{min-height:40px;min-width:40px}
   .search-sort select,.browse-filters select,.browse-filters summary,.chips button,.chips .chip,.season-chips button{min-height:40px}
   .sect.fold,.open-media summary,.source-manager summary,.search-source-details summary{min-height:40px;display:flex;align-items:center}
+  /* Measured at 375/390: watch-card Find/Remove/select 36px, Sort/Per page/Compact 34px,
+     open-media Play/Queue 37px, RSS add fields 35px, sliders 26px, Mute 35px wide.
+     :where() keeps specificity zero so bespoke sizes elsewhere still win. */
+  :where(button,select,input:not([type=range],[type=checkbox],[type=radio]),.skip-link){min-height:40px}
+  input[type=range]{height:40px}
+  .watch-actions select,.watch-actions button,.watched-toggle,.watch-view-controls select,.watch-view-controls button,
+  .watch-pager button,.transfer-actions button{min-height:40px}
+  .queue-actions button{min-height:40px;min-width:40px}
+  :where(.vol-row button){min-width:40px}
+  #watch-page-size{min-width:64px}
+  .watch-view-controls{flex-wrap:wrap}.watch-view-controls label{white-space:nowrap}
+  .plugin-toggle{min-height:40px}
 }

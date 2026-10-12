@@ -483,10 +483,14 @@ def test_web_search_row_tap_targets():
         return "fail", "no phone/touch tap-target @media block"
     need = [".card .jf-card-actions button", ".result .m button", ".search-sort select",
             ".browse-filters select", ".chips button", ".sect.fold", ".open-media summary",
-            ".source-manager summary"]
+            ".source-manager summary",
+            # measured 34-37px at 375/390 before the phone override (watch cards/toolbar, queue rows)
+            ".watch-actions button", ".watch-actions select", ".watch-view-controls select",
+            ".watch-view-controls button", ".queue-actions button", ".transfer-actions button",
+            "input[type=range]"]
     rules = re.findall(r"([^{}]+)\{([^}]*)\}", blk.group(1))
     missing = [sel for sel in need if not any(sel in [x.strip() for x in sels.split(",")]
-               and re.search(r"min-height:(4\d|[5-9]\d)px", body) for sels, body in rules)]
+               and re.search(r"(min-height|height):(4\d|[5-9]\d)px", body) for sels, body in rules)]
     if missing:
         return "fail", "phone tap targets < 40px: " + ", ".join(missing)
     return "pass", ".search-row + card/select/chip/fold/summary tap targets >= 40px on touch"
