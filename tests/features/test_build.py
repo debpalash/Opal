@@ -1480,3 +1480,27 @@ def test_macos_media_header_padding():
     if result.returncode:
         return "fail", (result.stderr or result.stdout)[-1200:]
     return "pass", "production FFmpeg flags permit longer bundled dependency install names"
+
+
+@test("Shutdown: web listener cannot share its port; id caches freed; leak dump not cut off", "Stability")
+def test_shutdown_port_and_leaks():
+    # std's reuse_address also sets SO_REUSEPORT: a second Opal bound :41595
+    # silently, stop()'s wake-up connect landed on the other process, accept()
+    # never returned and the 5s deadline force-exited mid leak report. The
+    # report itself showed tmdb_store's per-list id-set HashMaps never freed.
+    remote = _src("src/services/remote.zig")
+    loop = remote.split("fn serverLoop() void {", 1)[1]
+    main = _src("src/main.zig")
+    deinit = main.split("workers.armShutdownDeadline(", 1)[1]
+    store = _src("src/services/tmdb_store.zig")
+    checks = {
+        "probe before listen": "portAlreadyServed()" in loop
+            and loop.index("portAlreadyServed()") < loop.index(".listen("),
+        "probe hits loopback": '"127.0.0.1", port' in remote.split("fn portAlreadyServed(", 1)[1].split("\n}", 1)[0],
+        "id sets freed": "set.map.deinit(alloc)" in store and "tmdb_store.zig\").deinitIdSets()" in deinit,
+        "deadline disarmed before leak dump": deinit.index("workers.finishShutdown()") < deinit.index("alloc.zig\").deinit()"),
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "shutdown regression: " + ", ".join(missing)
+    return "pass", "second instance skips the busy port; id caches freed; leak report runs after the deadline is disarmed"

@@ -71,6 +71,14 @@ fn invalidateSet(list: *std.ArrayListUnmanaged(state.TmdbItem)) void {
     if (setIndexFor(list)) |index| id_sets[index].valid = false;
 }
 
+/// Shutdown: release the id caches (render-thread owned; workers are drained).
+pub fn deinitIdSets() void {
+    for (&id_sets) |*set| {
+        set.map.deinit(alloc);
+        set.* = .{};
+    }
+}
+
 pub fn isInList(list: *std.ArrayListUnmanaged(state.TmdbItem), id: i32) bool {
     const index = setIndexFor(list) orelse return scanList(list, id);
     const set = &id_sets[index];

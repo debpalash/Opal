@@ -685,6 +685,13 @@ pub fn rotateToken() bool {
     return true;
 }
 
+fn portAlreadyServed() bool {
+    const probe = std.Io.net.IpAddress.parseIp4("127.0.0.1", port) catch return false;
+    var conn = probe.connect(io_g.io(), .{ .mode = .stream }) catch return false;
+    conn.close(io_g.io());
+    return true;
+}
+
 fn serverLoop() void {
     // Loopback by default. Explicit HTTPS proxy mode pins the listener to
     // loopback even when an older profile saved a LAN bind. The trusted local
@@ -692,6 +699,16 @@ fn serverLoop() void {
     // Auth: bearer token from account login (/api/auth) or the api.token file.
     const ip = effectiveBindMode().address();
     const addr = std.Io.net.IpAddress.parseIp4(ip, port) catch return;
+    // std's reuse_address also sets SO_REUSEPORT, so a second Opal would bind
+    // this port silently and the kernel would split requests between the two.
+    // Worse, stop()'s wake-up connect could land on the other process and leave
+    // this accept() blocked until the 5s shutdown deadline force-exits. Both
+    // bind modes answer on loopback, so probe there first.
+    if (portAlreadyServed()) {
+        logs.pushLog("error", "remote", "Web UI port is already in use (another Opal running?) — web UI and API disabled for this instance", true);
+        running.store(false, .release);
+        return;
+    }
     var server = addr.listen(io_g.io(), .{ .reuse_address = true }) catch return;
     defer server.deinit(io_g.io());
     // Account tables initialize on the background startup worker. Do not

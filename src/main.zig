@@ -929,6 +929,7 @@ pub fn appDeinit() void {
 
     // Clean up UI arrays
     @import("services/tmdb.zig").deinitDetail();
+    @import("services/tmdb_store.zig").deinitIdSets();
     @import("services/anime.zig").deinitEpisodeRequests();
     @import("services/episode_art.zig").deinit();
     @import("services/tv_library.zig").deinitPosters();
@@ -987,9 +988,11 @@ pub fn appDeinit() void {
     // Free log entries to prevent GPA leak reports
     logs.deinit();
 
+    // Teardown is done; disarm the deadline before the leak dump, whose stack
+    // symbolization can take seconds and was being cut off mid-report.
+    workers.finishShutdown();
     // Trigger GeneralPurposeAllocator leak dump on exit
     @import("core/alloc.zig").deinit();
-    workers.finishShutdown();
 }
 
 fn sdlEventWatch(_: ?*anyopaque, event: [*c]c.sdl.SDL_Event) callconv(.c) c_int {
