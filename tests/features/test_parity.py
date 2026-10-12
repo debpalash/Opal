@@ -91,7 +91,9 @@ COVERED = {
 # either list before — the two lists were hand-maintained and nothing checked
 # them against router.zig / state.zig, so a desktop tab could exist with no web
 # equivalent and no entry here, and parity still read 98%. It was really 83%.
-GAPS = {}
+GAPS = {
+    "agents dashboard": "The desktop Agents overview, tasks, and activity panels have no corresponding web page or remote workflow yet.",
+}
 
 # Desktop capabilities a browser cannot have, by nature — counted separately so
 # the parity percentage measures *closable* distance rather than being pinned
@@ -113,7 +115,7 @@ DESKTOP_SURFACES = {
         "watching": "watching library", "downloads": "downloads", "queue": "queue",
         "history": "history", "player": "now playing", "assistant": "assistant (AI)",
         "settings": "playback settings", "plugins": "plugins manager",
-        "system": "logs (system)",
+        "system": "logs (system)", "agents": "agents dashboard",
     },
     # src/core/state.zig :: SettingsTab
     "SettingsTab": {
