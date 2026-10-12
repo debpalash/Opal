@@ -381,14 +381,10 @@ def test_transparent_buttons_hover():
     import re
     call = re.compile(r"dvui\.(button|buttonIcon)\(@src\(\)")
     transparent = re.compile(r"\.color_fill = (?:dvui\.Color\{ \.r = 0, \.g = 0, \.b = 0, \.a = 0 \}|theme\.transparent|transparent|invisible|dvui\.Color\.transparent)\s*,")
-    # browser.zig was mid-refactor in a parallel change when this gate landed;
-    # its one remaining site (the reader-mode close button) is tracked
-    # separately — remove this allowance once it sets color_fill_hover.
-    pending = ("browser.zig",)
     offenders = []
     for root, _dirs, files in os.walk(os.path.join(PROJECT_DIR, "src")):
         for f in files:
-            if not f.endswith(".zig") or "_test" in f or f in pending:
+            if not f.endswith(".zig") or "_test" in f:
                 continue
             path = os.path.join(root, f)
             src = open(path, encoding="utf-8", errors="replace").read()
