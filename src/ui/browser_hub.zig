@@ -259,11 +259,13 @@ fn renderBrowsers() void {
         }
     }
 
-    if (link_count == 0) {
-        note(@src(), "No browser is paired yet. Opal Connect is the extension that links your own browser to Opal. Install it from the extension folder of your Opal checkout (build steps in extension/README.md): on Chrome or Edge open chrome://extensions, turn on Developer mode and choose Load unpacked; on Firefox open about:debugging and Load Temporary Add-on. Then press Pair a browser below and type the code on the extension's setup page.", theme.colors.text_secondary);
-    }
-
     const view = pairingNow();
+    if (link_count == 0) {
+        note(@src(), if (view.active)
+            "No browser paired yet. Install Opal Connect (extension/README.md), then enter this code on its setup page."
+        else
+            "No browser paired yet. Install Opal Connect (extension/README.md), then press Pair a browser.", theme.colors.text_secondary);
+    }
     if (view.active) {
         if (!@import("builtin").is_test) {
             // Re-arm once a second so the countdown moves under the gated frame loop.
@@ -277,7 +279,7 @@ fn renderBrowsers() void {
             .font = big,
             .margin = .{ .x = 0, .y = 4, .w = 0, .h = 2 },
         });
-        note(@src(), "Type this code on the extension's setup page. It expires in a couple of minutes and five wrong tries cancel it.", theme.colors.text_secondary);
+        note(@src(), "Expires in a couple of minutes; five wrong tries cancel it.", theme.colors.text_secondary);
     }
     {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 } });
@@ -286,6 +288,9 @@ fn renderBrowsers() void {
             if (!link.startPairing()) state.showToast("No entropy source: could not make a code");
         }
         if (view.active and components.actionButton(@src(), "Cancel", .secondary, 31001)) link.cancelPairing();
+    }
+    if (link_count == 0) {
+        note(@src(), "Install steps: In Chrome or Edge, open chrome://extensions, enable Developer mode, then Load unpacked. In Firefox, open about:debugging and Load Temporary Add-on. Pair on the extension's setup page.", theme.colors.text_secondary);
     }
 }
 
