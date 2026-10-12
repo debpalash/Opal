@@ -865,7 +865,7 @@ fn renderDetailRecord(v: *const pure.Vn, idx: usize) void {
         // Browse-only handoff: search all sources for this title.
         if (dvui.button(@src(), "Search all sources", .{}, .{
             .color_fill = theme.colors.accent,
-            .color_text = dvui.Color.white,
+            .color_text = theme.colors.text_on_accent,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
             .margin = .{ .x = 0, .y = 12, .w = 0, .h = 0 },

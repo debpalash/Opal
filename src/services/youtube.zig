@@ -1567,7 +1567,7 @@ fn renderToolbar() void {
         _ = dvui.label(@src(), "{s}", .{safeUtf8(channel_name_buf[0..channel_name_len])}, .{
             .background = true,
             .color_fill = theme.colors.accent,
-            .color_text = dvui.Color.white,
+            .color_text = theme.colors.text_on_accent,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
             .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },

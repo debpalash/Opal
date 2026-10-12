@@ -462,7 +462,7 @@ pub fn renderContent() void {
 
         const clicked_add = dvui.button(@src(), "Add", .{}, .{
             .color_fill = theme.colors.accent,
-            .color_text = dvui.Color.white,
+            .color_text = theme.colors.text_on_accent,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
         });
@@ -623,7 +623,7 @@ pub fn renderContent() void {
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
                 .id_extra = i + 6000,
                 .color_fill = theme.colors.accent,
-                .color_text = dvui.Color.white,
+                .color_text = theme.colors.text_on_accent,
                 .gravity_y = 0.5,
             })) {
                 // Route magnet through torrent engine (not mpv directly!)

@@ -638,7 +638,7 @@ fn renderGenreDropdown() void {
     const names: []const []const u8 = if (keyless_mode) &KEYLESS_GENRE_NAMES else &tmdb_pure.GENRE_NAMES;
     if (dvui.dropdown(@src(), names, .{ .choice = &sel }, .{}, .{
         .color_fill = if (active) theme.colors.accent else theme.colors.bg_surface,
-        .color_text = if (active) dvui.Color.white else theme.colors.text_secondary,
+        .color_text = if (active) theme.colors.text_on_accent else theme.colors.text_secondary,
         .corner_radius = theme.dims.rad_sm,
         .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
         .gravity_y = 0.5,
@@ -864,7 +864,7 @@ fn renderFilterChip(idx: usize, filter: state.TmdbMediaFilter, label: []const u8
         .id_extra = idx + 3000,
         .data_out = &wd,
         .color_fill = if (active) theme.colors.accent else theme.colors.bg_surface,
-        .color_text = if (active) dvui.Color.white else theme.colors.text_secondary,
+        .color_text = if (active) theme.colors.text_on_accent else theme.colors.text_secondary,
         .corner_radius = theme.dims.rad_sm,
         .min_size_content = theme.iconSize(.sm),
         .padding = dvui.Rect.all(6),

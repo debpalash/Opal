@@ -416,6 +416,29 @@ def test_transparent_buttons_hover():
     return "pass", "every transparent-fill button sets an explicit hover fill"
 
 
+@test("Labels on accent fills use text_on_accent, not white", "Theming")
+def test_accent_text_contrast():
+    """Every preset pairs its accent with a dark text_on_accent. Hardcoded
+    dvui.Color.white on an accent fill (Plugins Install, Comics/Anime/TMDB
+    active chips, RSS/VNDB/Plex primary buttons…) was low-contrast and
+    inconsistent with actionButton(.primary)."""
+    import re
+    opt = re.compile(r"\.color_fill = (if \(([^)]*)\) )?theme\.colors\.accent\b[^\n]*\n\s*(?:\.color_fill_\w+ = [^\n]*\n\s*)*\.color_text = (if \(([^)]*)\) )?dvui\.Color\.white")
+    offenders = []
+    for root, _dirs, files in os.walk(os.path.join(PROJECT_DIR, "src")):
+        for f in files:
+            if not f.endswith(".zig") or "_test" in f or f in ("browser.zig", "wanted_ui.zig"):
+                continue
+            path = os.path.join(root, f)
+            src = open(path, encoding="utf-8", errors="replace").read()
+            for m in opt.finditer(src):
+                if (m.group(2) or "") == (m.group(4) or ""):
+                    offenders.append(f"{os.path.relpath(path, PROJECT_DIR)}:{src.count(chr(10), 0, m.start()) + 1}")
+    if offenders:
+        return "fail", "white text on accent fill (use theme.colors.text_on_accent): " + ", ".join(offenders[:8])
+    return "pass", "accent fills carry text_on_accent"
+
+
 @test("dvui style palettes map onto the active preset", "Theming")
 def test_dvui_styles_follow_preset():
     """theme.applyToDvui must override dvui's per-style palettes. Left at the

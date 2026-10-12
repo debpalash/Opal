@@ -635,9 +635,13 @@ pub fn renderContent() void {
 
         if (dvui.button(@src(), "Clear Played", .{}, .{
             .color_fill = theme.colors.bg_elevated,
+            .color_fill_hover = theme.colors.bg_elevated.lighten(6),
             .color_text = theme.colors.text_secondary,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+            // Same zero vertical margin as its siblings: the ButtonWidget
+            // default margin sat this one 4px lower than Fetch/Clear All.
+            .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
         })) {
             clearPlayed();
         }

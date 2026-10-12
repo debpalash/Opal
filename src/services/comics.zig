@@ -3565,7 +3565,7 @@ fn renderSourceChip(label: []const u8, id: usize, src: Source) void {
     if (dvui.button(@src(), label, .{}, .{
         .id_extra = id + 72000,
         .color_fill = if (active) theme.colors.accent else theme.colors.bg_elevated,
-        .color_text = if (active) dvui.Color.white else theme.colors.text_primary,
+        .color_text = if (active) theme.colors.text_on_accent else theme.colors.text_primary,
         .corner_radius = theme.dims.rad_md,
         .padding = .{ .x = 10, .y = 3, .w = 10, .h = 3 },
         .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
@@ -3851,7 +3851,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
         if (state.app.comic.prev_url_len > 0) {
             if (dvui.button(@src(), "«", .{}, .{
                 .color_fill = theme.colors.accent,
-                .color_text = dvui.Color.white,
+                .color_text = theme.colors.text_on_accent,
                 .corner_radius = theme.dims.rad_sm,
                 .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
             })) {
@@ -3929,7 +3929,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
             if (dvui.button(@src(), "»", .{}, .{
                 .id_extra = 1,
                 .color_fill = theme.colors.accent,
-                .color_text = dvui.Color.white,
+                .color_text = theme.colors.text_on_accent,
                 .corner_radius = theme.dims.rad_sm,
                 .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
                 .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
@@ -3948,7 +3948,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
         if (dvui.buttonIcon(@src(), "comic-ocr", icons.tvg.lucide.@"scan-text", .{}, .{}, .{
             .id_extra = 20,
             .color_fill = if (state.app.comic.show_ocr_overlay) theme.colors.accent else theme.colors.bg_elevated,
-            .color_text = if (state.app.comic.show_ocr_overlay) dvui.Color.white else theme.colors.text_primary,
+            .color_text = if (state.app.comic.show_ocr_overlay) theme.colors.text_on_accent else theme.colors.text_primary,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 5, .y = 2, .w = 5, .h = 2 },
             .margin = .{ .x = 1, .y = 0, .w = 0, .h = 0 },
@@ -3960,7 +3960,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
         if (dvui.buttonIcon(@src(), "comic-narrate", if (state.app.comic.narrating) icons.tvg.lucide.@"circle-stop" else icons.tvg.lucide.@"volume-2", .{}, .{}, .{
             .id_extra = 21,
             .color_fill = if (state.app.comic.narrating) theme.colors.accent else theme.colors.bg_elevated,
-            .color_text = if (state.app.comic.narrating) dvui.Color.white else theme.colors.text_primary,
+            .color_text = if (state.app.comic.narrating) theme.colors.text_on_accent else theme.colors.text_primary,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 5, .y = 2, .w = 5, .h = 2 },
             .margin = .{ .x = 1, .y = 0, .w = 0, .h = 0 },

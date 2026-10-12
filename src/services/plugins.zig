@@ -1349,7 +1349,7 @@ fn renderSourcePlugins() void {
         te.deinit();
         if (dvui.button(@src(), "Installed only", .{}, .{
             .color_fill = if (src_installed_only) theme.colors.accent else theme.colors.bg_elevated,
-            .color_text = if (src_installed_only) dvui.Color.white else theme.colors.text_secondary,
+            .color_text = if (src_installed_only) theme.colors.text_on_accent else theme.colors.text_secondary,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
             .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
@@ -1408,7 +1408,7 @@ fn renderSourcePlugins() void {
                 sp.deinit();
             }
             if (!(operation.stage == .fetching or operation.stage == .writing)) {
-                if (dvui.button(@src(), if (installed) "Uninstall" else "Install", .{}, .{ .id_extra = i + 81400, .color_fill = if (installed) theme.colors.bg_elevated else theme.colors.accent, .color_text = if (installed) theme.colors.text_secondary else dvui.Color.white, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 }, .gravity_y = 0.5 })) {
+                if (dvui.button(@src(), if (installed) "Uninstall" else "Install", .{}, .{ .id_extra = i + 81400, .color_fill = if (installed) theme.colors.bg_elevated else theme.colors.accent, .color_text = if (installed) theme.colors.text_secondary else theme.colors.text_on_accent, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 }, .gravity_y = 0.5 })) {
                     _ = pr.apply(if (installed) .uninstall else .install, p.idSlice());
                 }
             }
@@ -1537,7 +1537,7 @@ fn renderSuwayomi() void {
                 srv.stopEmbedded();
             }
         } else if (!busy_now) {
-            if (dvui.button(@src(), "Start server", .{}, .{ .color_fill = theme.colors.accent, .color_text = dvui.Color.white, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 }, .gravity_y = 0.5 })) {
+            if (dvui.button(@src(), "Start server", .{}, .{ .color_fill = theme.colors.accent, .color_text = theme.colors.text_on_accent, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 }, .gravity_y = 0.5 })) {
                 srv.startEmbedded();
             }
         }
@@ -1679,7 +1679,7 @@ fn renderTrakt() void {
     }
 
     const label_txt = if (account.pending) "Waiting" else "Connect";
-    if (dvui.button(@src(), label_txt, .{}, .{ .color_fill = theme.colors.accent, .color_text = dvui.Color.white, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 7, .w = 12, .h = 7 }, .gravity_y = 0.5 })) {
+    if (dvui.button(@src(), label_txt, .{}, .{ .color_fill = theme.colors.accent, .color_text = theme.colors.text_on_accent, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 7, .w = 12, .h = 7 }, .gravity_y = 0.5 })) {
         if (id_len > 0) _ = tr.setCredential("client_id", Draft.client_id[0..id_len]);
         if (secret_len > 0) _ = tr.setCredential("client_secret", Draft.client_secret[0..secret_len]);
         @memset(&Draft.client_id, 0);
@@ -1786,7 +1786,7 @@ fn renderContentPlugins() void {
                 if (dvui.button(@src(), @import("../core/text.zig").safeUtf8(name), .{}, .{
                     .id_extra = pi + 8000,
                     .color_fill = if (is_active) theme.colors.accent else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-                    .color_text = if (is_active) dvui.Color.white else theme.colors.text_secondary,
+                    .color_text = if (is_active) theme.colors.text_on_accent else theme.colors.text_secondary,
                     .corner_radius = dvui.Rect.all(theme.radius.pill),
                     .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
                     .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
@@ -1825,7 +1825,7 @@ fn renderContentPlugins() void {
 
             const clicked = dvui.button(@src(), "Search", .{}, .{
                 .color_fill = theme.colors.accent,
-                .color_text = dvui.Color.white,
+                .color_text = theme.colors.text_on_accent,
                 .corner_radius = theme.dims.rad_sm,
                 .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
                 .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
