@@ -133,7 +133,8 @@ def test_tv_tracking():
         # One fetch, one truth: the calendar no longer makes its own /3/tv/{id}
         # call, and no longer derives its own idea of what is unseen.
         "calendar consumes, not fetches": ("fn worker() void" not in cal
-                                           and "e.unseen = next_up != null" in cal),
+                                           and "e.unseen = has_next_up" in cal
+                                           and "completeStage(e, last.season > 0, next_up != null" in cal),
         "calendar fed by the sync": "cal.stage(" in lib,
         # The page.
         "watching route": "watching," in rt and ".watching =>" in sh,

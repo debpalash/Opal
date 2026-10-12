@@ -664,7 +664,13 @@ def test_no_hardcoded_config_path():
         return "fail", ("hand-built config path (bypasses %APPDATA% and "
                         "XDG_CONFIG_HOME): " + ", ".join(offenders)
                         + " — use paths.configDir()")
-    return "pass", "every config path is built from paths.configDir()"
+    paths = _read("src/core/paths.zig")
+    mcp = _read("src/mcp_main.zig")
+    pure = _read("src/core/config_path_pure.zig")
+    if not ("config_path.resolve(" in paths and "config_path.resolve(" in mcp
+            and '"AppData/Roaming/opal"' in pure and '".config/opal"' in pure):
+        return "fail", "desktop and standalone MCP config paths do not share one policy"
+    return "pass", "desktop and standalone MCP resolve the same config directory policy"
 
 
 @test("lanIp: absolute paths, no cached failure, non-macOS arm", "Windows")
@@ -724,3 +730,22 @@ def test_no_raw_posix_signals():
                         + ", ".join(offenders)
                         + " — use io_global.terminateProcess()/killProcess()")
     return "pass", "signal delivery routes through the portable helpers"
+
+
+@test("portability: Windows child spawns are serialized", "Windows")
+def test_windows_spawn_serialized():
+    # std's Windows spawn makes the child's pipe ends inheritable and calls
+    # CreateProcessW(bInheritHandles=TRUE). Two threads spawning at once leak
+    # each other's stdout write end, so a fast curl's output never reaches EOF
+    # until a slow sibling exits — parallel Browse providers (comics/novels)
+    # stalled behind the slowest one on smoke-windows. io_global.Child.spawn
+    # must hold a process-wide lock around std.process.spawn.
+    text = _strip_comments(_read("src/core/io_global.zig"))
+    m = _re.search(r"pub fn spawn\(self: \*Child\)[\s\S]*?std\.process\.spawn\(", text)
+    if not m or "spawn_mutex.lock()" not in m.group(0):
+        return "fail", "io_global.Child.spawn calls std.process.spawn without spawn_mutex held on Windows"
+    offenders = [rel for rel, t in _zig_sources()
+                 if not rel.endswith("core/io_global.zig") and "std.process.spawn(" in _strip_comments(t)]
+    if offenders:
+        return "fail", "std.process.spawn outside io_global (bypasses the Windows spawn lock): " + ", ".join(offenders)
+    return "pass", "all child spawns go through io_global's Windows spawn lock"

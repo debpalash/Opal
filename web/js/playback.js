@@ -1,8 +1,22 @@
 'use strict';
 
 // ── Hosted inline player ──
+// A single video element hosts direct files, HLS and restarted transcodes.
+// Retire the previous transport before every handoff: otherwise hls.js can
+// keep downloading in the background and a later seek can restart an old
+// transcode over the newly selected item.
+function resetPlayerSource(){
+  const v = $('video');
+  v._tcRel = ''; v._tcTitle = ''; v._tcBase = 0;
+  v.onerror = null;
+  try { if (v._hls) v._hls.destroy(); } catch {} finally { v._hls = null; }
+  v.pause();
+  v.removeAttribute('src');
+  v.load();
+}
 function openPlayer(rel){
   const v = $('video');
+  resetPlayerSource();
   $('player-title').textContent = rel.split('/').pop();
   v.src = `${BASE}/stream?file=${encodeURIComponent(rel)}`;
   // Sidecar subs: same name, .srt/.vtt
@@ -15,11 +29,7 @@ function openPlayer(rel){
   $('player').classList.add('on');
 }
 $('player-close').onclick = () => {
-  const v = $('video');
-  // Tear down the HLS shim if one is attached, or it keeps fetching segments
-  // in the background after the player is closed.
-  try { if (v._hls) { v._hls.destroy(); v._hls = null; } } catch {}
-  v.pause(); v.removeAttribute('src'); v.load();
+  resetPlayerSource();
   $('player').classList.remove('on');
 };
 
@@ -142,10 +152,10 @@ function transcodeUrl(rel, startSecs){
 /// and refuses to move.
 function openTranscode(rel, title, startSecs){
   const v = $('video');
+  resetPlayerSource();
   const base = Math.max(0, Math.floor(startSecs || 0));
   $('player-title').textContent = (title || '') + ' — transcoding';
   [...v.querySelectorAll('track')].forEach(tr => tr.remove());
-  try { if (v._hls) { v._hls.destroy(); v._hls = null; } } catch {}
   v._tcRel = rel; v._tcTitle = title || ''; v._tcBase = base;
   v.src = transcodeUrl(rel, base);
   $('player').classList.add('on');
@@ -182,9 +192,9 @@ function openTranscode(rel, title, startSecs){
 function openHls(url, title){
   if (NATIVE_HLS) return openStreamUrl(url, title);
   const v = $('video');
+  resetPlayerSource();
   $('player-title').textContent = title || '';
   [...v.querySelectorAll('track')].forEach(tr => tr.remove());
-  try { if (v._hls) { v._hls.destroy(); v._hls = null; } } catch {}
   const h = new window.Hls({ enableWorker: true });
   v._hls = h;
   h.on(window.Hls.Events.ERROR, (_e, data) => {

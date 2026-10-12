@@ -25,6 +25,25 @@ comptime {
 // ══════════════════════════════════════════════════════════
 
 const BRIDGE_SCRIPT = "camoufox_bridge.py";
+// A requested URL should open the built-in browser view, but the service must
+// not mutate presentation state directly. The UI consumes this one-shot flag.
+var bridge_view_requested: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
+pub fn takeBridgeViewRequest() bool {
+    return bridge_view_requested.swap(false, .acq_rel);
+}
+
+pub fn requestBridgeView() void {
+    bridge_view_requested.store(true, .release);
+}
+
+test "Browser regression bridge view request is consumed once" {
+    bridge_view_requested.store(false, .release);
+    try std.testing.expect(!takeBridgeViewRequest());
+    bridge_view_requested.store(true, .release);
+    try std.testing.expect(takeBridgeViewRequest());
+    try std.testing.expect(!takeBridgeViewRequest());
+}
 
 // Selected engine — persisted as config key "browser_engine" (config.zig).
 // UI thread writes it (settings picker); the bridge-start thread reads it.
@@ -822,9 +841,6 @@ fn escapeJsonString(input: []const u8, buf: *[4096]u8) []const u8 {
 pub fn navigate(url: []const u8) void {
     const b = &state.app.browser;
     if (url.len == 0 or url.len >= 2048) return;
-    // Browse > Web is the Browser hub now; a page somebody asked for belongs in
-    // the built-in browser behind it, so keep the hub from covering it.
-    @import("../ui/browser_hub.zig").showBridge();
 
     // Store URL. `url` may be a slice INTO url_buf at a nonzero offset — the
     // smart address bar trims whitespace, so scheme'd input with a leading
@@ -871,6 +887,11 @@ pub fn navigate(url: []const u8) void {
             b.history_pos = b.history_count;
         }
     }
+
+    // Do this after publishing the URL but before starting the bridge: the
+    // user's first frame should acknowledge the destination immediately.
+    requestBridgeView();
+    state.wakeUi();
 
     if (bridge_ready.load(.acquire)) {
         sendNavigate(b.url_buf[0..url.len]);

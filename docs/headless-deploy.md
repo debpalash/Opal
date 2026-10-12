@@ -167,6 +167,16 @@ TS_AUTHKEY=tskey-auth-xxxx docker compose -f deploy/docker-compose.tailscale.yml
 
 A `tailscale/tailscale` sidecar joins the tailnet and `tailscale serve`s Opal
 over HTTPS with a Tailscale-issued cert. Use Tailscale Funnel to make it public.
+The sidecar persists its node identity in `data/tailscale` and uses
+`TS_AUTH_ONCE=true`, so a routine restart does not try to consume the auth key
+again. It explicitly uses kernel networking (`TS_USERSPACE=false`) with
+`/dev/net/tun` and `NET_ADMIN`; the image otherwise defaults to slower userspace
+networking. The host must provide `/dev/net/tun`. On the deployment host, check
+`docker compose -f deploy/docker-compose.tailscale.yml exec tailscale tailscale status`
+after startup, then test both an authenticated HTTPS request and a media stream
+from another tailnet device. These runtime checks have not been performed by
+the repository's static tests. Restrict who can read `data/tailscale`, since it
+contains the node identity, and do not put `TS_AUTHKEY` in committed files.
 
 Either way, keep the base HTTP server on `127.0.0.1`/the internal network and
 let the proxy handle TLS + exposure.

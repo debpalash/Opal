@@ -16,6 +16,7 @@ pub fn capture(width: u32, height: u32, name: []const u8, setup: ?Draw, draw: Dr
     defer if (!cleaned) {
         if (cleanup) |done| done();
     };
+    var previous_picture: ?dvui.Picture = null;
     for (0..8) |frame| {
         try window.begin(@as(i128, @intCast(frame + 1)) * 16_666_667);
         errdefer _ = window.end(.{}) catch null;
@@ -25,7 +26,13 @@ pub fn capture(width: u32, height: u32, name: []const u8, setup: ?Draw, draw: Dr
         };
         @import("theme.zig").setTheme();
         const rect = dvui.windowRectPixels();
-        var picture = dvui.Picture.start(rect) orelse return error.CaptureUnavailable;
+        // Preserve painted pixels across warm-up frames: DVUI may draw only
+        // invalidated widgets on a later frame, leaving a fresh final-frame
+        // texture with holes even though the actual window is complete.
+        var picture = if (previous_picture) |prior| blk: {
+            const target = dvui.renderTarget(.{ .texture = prior.texture, .offset = rect.topLeft() });
+            break :blk dvui.Picture{ .r = prior.r, .texture = prior.texture, .target = target };
+        } else dvui.Picture.start(rect) orelse return error.CaptureUnavailable;
         var recording = true;
         var picture_alive = true;
         errdefer if (picture_alive) {
@@ -62,7 +69,7 @@ pub fn capture(width: u32, height: u32, name: []const u8, setup: ?Draw, draw: Dr
                 try io.cwdWriteFile(.{ .sub_path = path, .data = encoded });
             }
         }
-        picture.deinit();
+        if (frame == 7) picture.deinit() else previous_picture = picture;
         picture_alive = false;
         if (frame == 7) {
             // GPU textures belong to the active DVUI frame, not just the

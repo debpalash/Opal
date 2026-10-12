@@ -489,7 +489,10 @@ fn runNovelWave(job: SearchJob, page: u32) usize {
     parse_mutex.unlock();
     var jobs: [11]NovelSource = undefined;
     var count: usize = 0;
-    inline for (.{ NovelSource.wikisource, NovelSource.gutenberg, NovelSource.openlibrary, NovelSource.internet_archive, NovelSource.royalroad, NovelSource.novelfire, NovelSource.standardebooks, NovelSource.wuxiaclick, NovelSource.madara_novel, NovelSource.lightnovelwp, NovelSource.readwn }) |src| {
+    // Installed providers get the first fan-out lanes. Default public catalogs
+    // can be slow or unavailable, especially behind a proxy; they must not
+    // delay the user's configured source from publishing its first rows.
+    inline for (.{ NovelSource.royalroad, NovelSource.novelfire, NovelSource.standardebooks, NovelSource.wuxiaclick, NovelSource.madara_novel, NovelSource.lightnovelwp, NovelSource.readwn, NovelSource.wikisource, NovelSource.gutenberg, NovelSource.openlibrary, NovelSource.internet_archive }) |src| {
         const active = switch (src) {
             .wikisource => page == 1 or wiki_more.load(.acquire),
             .gutenberg => page == 1 or gutenberg_more.load(.acquire),

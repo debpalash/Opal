@@ -37,6 +37,7 @@ var title_buf: [link_pure.MAX_TITLE + 1]u8 = std.mem.zeroes([link_pure.MAX_TITLE
 var message_buf: [160]u8 = undefined;
 var message_len: usize = 0;
 var show_bridge = false;
+pub var test_title_entry_rect: dvui.Rect.Physical = .{};
 
 /// Offline pixel tests render fixed data instead of reading the database and
 /// the shared-page store.
@@ -54,12 +55,6 @@ pub fn setRenderFixtureForTest(fixture: ?Fixture) void {
     message_len = 0;
     show_bridge = false;
     last_load_ms = 0;
-}
-
-/// A navigation that must land in the pixel bridge (a typed web address, "B")
-/// calls this, so the hub never hides a page the user asked for.
-pub fn showBridge() void {
-    show_bridge = true;
 }
 
 fn say(text: []const u8) void {
@@ -131,6 +126,13 @@ fn findSources() void {
     state.showToast("Searching all sources...");
 }
 
+fn dismissPage() void {
+    shared.dismiss();
+    page = .{};
+    seen_page_id = 0;
+    message_len = 0;
+}
+
 fn playCandidate(c: *const shared.UiCand, queue_only: bool) void {
     _ = shared.playFromUi(page.page_id, c.id, queue_only) catch |e| {
         state.showToastTyped(switch (e) {
@@ -153,6 +155,20 @@ fn smallFont() dvui.Font {
     var f = dvui.themeGet().font_body;
     f.size = theme.font_size.small;
     return f;
+}
+
+fn availableWidth() f32 {
+    const parent_width = dvui.parentGet().data().contentRect().w;
+    if (parent_width > 0) return parent_width;
+    return @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().w, state.app.ui_scale) - 60;
+}
+
+fn compactLayout() bool {
+    return availableWidth() < 420;
+}
+
+fn narrowLayout() bool {
+    return availableWidth() < 300;
 }
 
 fn cardBox(src: std.builtin.SourceLocation, id_extra: usize) *dvui.BoxWidget {
@@ -211,33 +227,45 @@ fn renderBrowsers() void {
     }
 
     const now = nowSeconds();
+    const compact = compactLayout();
     for (links[0..link_count], 0..) |*row, i| {
-        var line = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        var line = dvui.box(@src(), .{ .dir = if (compact) .vertical else .horizontal }, .{
             .id_extra = i,
             .expand = .horizontal,
-            .min_size_content = .{ .w = 0, .h = ROW_H },
-            .max_size_content = .{ .w = 100000, .h = ROW_H },
+            .min_size_content = .{ .w = 0, .h = if (compact) ROW_H * 1.5 else ROW_H },
+            .max_size_content = .{ .w = 100000, .h = if (compact) 100000 else ROW_H },
         });
         defer line.deinit();
         var seen_buf: [48]u8 = undefined;
         const seen = view_pure.seenText(&seen_buf, now, row.last_seen);
         const live = std.mem.eql(u8, seen, "connected");
         var name_buf: [96]u8 = undefined;
-        const name = view_pure.clip(&name_buf, row.labelSlice(), 40);
-        _ = dvui.label(@src(), "{s}", .{name}, .{ .id_extra = i, .color_text = theme.colors.text_primary, .gravity_y = 0.5 });
-        _ = dvui.label(@src(), "{s}, {s}", .{ row.browserSlice(), seen }, .{
-            .id_extra = i,
-            .color_text = if (live) theme.colors.success else theme.colors.text_secondary,
-            .gravity_y = 0.5,
-            .margin = .{ .x = 10, .y = 0, .w = 0, .h = 0 },
-        });
-    }
-
-    if (link_count == 0) {
-        note(@src(), "No browser is paired yet. Opal Connect is the extension that links your own browser to Opal. Install it from the extension folder of your Opal checkout (build steps in extension/README.md): on Chrome or Edge open chrome://extensions, turn on Developer mode and choose Load unpacked; on Firefox open about:debugging and Load Temporary Add-on. Then press Pair a browser below and type the code on the extension's setup page.", theme.colors.text_secondary);
+        const name = view_pure.clip(&name_buf, row.labelSlice(), if (compact) 24 else 40);
+        _ = dvui.label(@src(), "{s}", .{name}, .{ .id_extra = i, .color_text = theme.colors.text_primary, .gravity_y = if (compact) 0 else 0.5 });
+        var browser_buf: [48]u8 = undefined;
+        const browser = if (compact) view_pure.clip(&browser_buf, row.browserSlice(), 14) else row.browserSlice();
+        if (compact) {
+            _ = dvui.label(@src(), "{s} · {s}", .{ seen, browser }, .{
+                .id_extra = i,
+                .color_text = if (live) theme.colors.success else theme.colors.text_secondary,
+            });
+        } else {
+            _ = dvui.label(@src(), "{s}, {s}", .{ browser, seen }, .{
+                .id_extra = i,
+                .color_text = if (live) theme.colors.success else theme.colors.text_secondary,
+                .gravity_y = 0.5,
+                .margin = .{ .x = 10, .y = 0, .w = 0, .h = 0 },
+            });
+        }
     }
 
     const view = pairingNow();
+    if (link_count == 0) {
+        note(@src(), if (view.active)
+            "No browser paired yet. Install Opal Connect (extension/README.md), then enter this code on its setup page."
+        else
+            "No browser paired yet. Install Opal Connect (extension/README.md), then press Pair a browser.", theme.colors.text_secondary);
+    }
     if (view.active) {
         if (!@import("builtin").is_test) {
             // Re-arm once a second so the countdown moves under the gated frame loop.
@@ -251,7 +279,7 @@ fn renderBrowsers() void {
             .font = big,
             .margin = .{ .x = 0, .y = 4, .w = 0, .h = 2 },
         });
-        note(@src(), "Type this code on the extension's setup page. It expires in a couple of minutes and five wrong tries cancel it.", theme.colors.text_secondary);
+        note(@src(), "Expires in a couple of minutes; five wrong tries cancel it.", theme.colors.text_secondary);
     }
     {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 } });
@@ -261,11 +289,16 @@ fn renderBrowsers() void {
         }
         if (view.active and components.actionButton(@src(), "Cancel", .secondary, 31001)) link.cancelPairing();
     }
+    if (link_count == 0) {
+        note(@src(), "Install steps: In Chrome or Edge, open chrome://extensions, enable Developer mode, then Load unpacked. In Firefox, open about:debugging and Load Temporary Add-on. Pair on the extension's setup page.", theme.colors.text_secondary);
+    }
 }
 
 fn renderSharedPage() void {
     var card = cardBox(@src(), 1);
     defer card.deinit();
+    const compact = compactLayout();
+    const narrow = narrowLayout();
     cardTitle(@src(), "Shared page");
 
     if (!page.present) {
@@ -292,27 +325,32 @@ fn renderSharedPage() void {
         .font = smallFont(),
     });
     {
-        // Fixed size, inside a row, like the other single-line inputs: an
-        // expanding text entry in a scrolling column takes the whole column.
+        // The editor fills the card's available width. A fixed 420px entry
+        // pushed the card sideways on compact windows.
         var erow = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
         defer erow.deinit();
         if (@import("builtin").is_test and fixture_for_test != null) {
             // The offscreen capture harness loses the rest of the frame behind a
             // text entry here (it is fine in the app), so fixtures draw the same
             // box as a label. Typing is exercised live, not in this test.
-            _ = dvui.label(@src(), "{s}", .{if (title_buf[0] == 0) "Movie or show: Dune 2021, Severance S02E03" else std.mem.sliceTo(&title_buf, 0)}, .{
-                .min_size_content = .{ .w = 420, .h = components.TOOLBAR_INPUT_H },
-                .max_size_content = .{ .w = 420, .h = components.TOOLBAR_INPUT_H },
+            var placeholder = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .expand = .horizontal,
+                .min_size_content = .{ .w = 0, .h = components.TOOLBAR_INPUT_H },
                 .color_fill = theme.colors.bg_elevated,
                 .background = true,
-                .color_text = theme.colors.text_secondary,
                 .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
                 .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
             });
+            _ = dvui.label(@src(), "{s}", .{view_pure.clip(&clip_buf, std.mem.sliceTo(&title_buf, 0), 34)}, .{
+                .color_text = theme.colors.text_secondary,
+                .gravity_y = 0.5,
+            });
+            test_title_entry_rect = placeholder.data().borderRectScale().r;
+            placeholder.deinit();
         } else {
             var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &title_buf }, .placeholder = "Movie or show: Dune 2021, Severance S02E03" }, .{
-                .min_size_content = .{ .w = 420, .h = components.TOOLBAR_INPUT_H },
-                .max_size_content = .{ .w = 420, .h = components.TOOLBAR_INPUT_H },
+                .expand = .horizontal,
+                .min_size_content = .{ .w = 0, .h = components.TOOLBAR_INPUT_H },
                 .gravity_y = 0.5,
                 .color_fill = theme.colors.bg_elevated,
                 .color_border = theme.colors.border_subtle,
@@ -325,18 +363,17 @@ fn renderSharedPage() void {
             te.deinit();
         }
     }
-    {
+    if (!narrow) {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
         defer row.deinit();
         if (components.actionButton(@src(), "Add to Wanted", .primary, 31010)) addToWanted();
         if (components.actionButton(@src(), "Find sources", .secondary, 31011)) findSources();
-        if (components.actionButton(@src(), "Dismiss", .secondary, 31012)) {
-            shared.dismiss();
-            page = .{};
-            seen_page_id = 0;
-            message_len = 0;
-        }
+        if (!compact and components.actionButton(@src(), "Dismiss", .secondary, 31012)) dismissPage();
+    } else {
+        if (components.actionButton(@src(), "Add to Wanted", .primary, 31010)) addToWanted();
+        if (components.actionButton(@src(), "Find sources", .secondary, 31011)) findSources();
     }
+    if (compact and components.actionButton(@src(), "Dismiss", .secondary, 31012)) dismissPage();
     if (message_len > 0) note(@src(), message_buf[0..message_len], theme.colors.text_secondary);
 }
 
@@ -353,27 +390,30 @@ fn renderStreams() void {
             "Streams the extension found on the page you share show up here, with Play and Queue.", theme.colors.text_secondary);
         return;
     }
+    const compact = compactLayout();
     for (page.cands[0..page.cand_count], 0..) |*c, i| {
-        var line = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        var line = dvui.box(@src(), .{ .dir = if (compact) .vertical else .horizontal }, .{
             .id_extra = i,
             .expand = .horizontal,
-            .min_size_content = .{ .w = 0, .h = ROW_H },
-            .max_size_content = .{ .w = 100000, .h = ROW_H },
+            .min_size_content = .{ .w = 0, .h = if (compact) ROW_H * 2 else ROW_H },
+            .max_size_content = .{ .w = 100000, .h = if (compact) 100000 else ROW_H },
         });
         defer line.deinit();
+        var info = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
         _ = dvui.label(@src(), "{s}", .{@tagName(c.kind)}, .{
             .id_extra = i,
             .color_text = theme.colors.accent,
-            .gravity_y = 0.5,
+            .gravity_y = if (compact) 0 else 0.5,
             .min_size_content = .{ .w = 44, .h = 0 },
         });
         var label_buf: [200]u8 = undefined;
-        _ = dvui.label(@src(), "{s}", .{view_pure.clip(&label_buf, c.labelSlice(), 34)}, .{
+        _ = dvui.label(@src(), "{s}", .{view_pure.clip(&label_buf, c.labelSlice(), if (compact) 23 else 34)}, .{
             .id_extra = i,
             .color_text = theme.colors.text_primary,
-            .gravity_y = 0.5,
+            .gravity_y = if (compact) 0 else 0.5,
         });
-        var acts = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i, .gravity_x = 1.0, .gravity_y = 0.5 });
+        info.deinit();
+        var acts = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i, .gravity_x = 1.0, .gravity_y = if (compact) 0 else 0.5 });
         defer acts.deinit();
         if (components.actionButton(@src(), "Play", .primary, 31100 + i)) playCandidate(c, false);
         if (components.actionButton(@src(), "Queue", .secondary, 31200 + i)) playCandidate(c, true);
@@ -430,6 +470,24 @@ fn renderBridge() void {
 }
 
 /// Draw the Browse > Web page. Safe to call every frame.
+fn adoptBridgeRequest() void {
+    // Consume navigation intent at the presentation boundary. A typed URL
+    // must not land behind the browser hub's informational overview.
+    if (@import("../services/browser.zig").takeBridgeViewRequest()) show_bridge = true;
+}
+
+test "Native browser hub reveals a service-requested destination once" {
+    const browser = @import("../services/browser.zig");
+    show_bridge = false;
+    _ = browser.takeBridgeViewRequest();
+    browser.requestBridgeView();
+    adoptBridgeRequest();
+    try std.testing.expect(show_bridge);
+    try std.testing.expect(!browser.takeBridgeViewRequest());
+    show_bridge = false;
+}
+
 pub fn render() void {
+    adoptBridgeRequest();
     if (show_bridge) renderBridge() else renderHub();
 }

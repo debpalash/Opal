@@ -1,4 +1,5 @@
 const std = @import("std");
+const config_path = @import("config_path_pure.zig");
 
 /// XDG-compliant path resolution for Opal (Windows: Known-Folder style —
 /// %APPDATA%\opal for config, %LOCALAPPDATA%\opal\cache for cache).
@@ -47,15 +48,15 @@ fn winCacheBase(buf: []u8) []const u8 {
 
 /// ~/.config/opal  (or $XDG_CONFIG_HOME/opal; %APPDATA%/opal on Windows)
 pub fn configDir(buf: []u8) []const u8 {
-    if (is_windows) {
-        var base_buf: [512]u8 = undefined;
-        return std.fmt.bufPrint(buf, "{s}/opal", .{winConfigBase(&base_buf)}) catch "C:/Temp/opal";
-    }
-    if (getenv("XDG_CONFIG_HOME")) |xdg| {
-        return std.fmt.bufPrint(buf, "{s}/opal", .{xdg}) catch "/tmp/opal";
-    }
-    const home = getHome();
-    return std.fmt.bufPrint(buf, "{s}/.config/opal", .{home}) catch "/tmp/opal";
+    const parts = config_path.resolve(
+        is_windows,
+        getenv("APPDATA"),
+        if (is_windows) getHome() else null,
+        getenv("XDG_CONFIG_HOME"),
+        if (is_windows) null else getHome(),
+    ) orelse return if (is_windows) "C:/Temp/opal" else "/tmp/opal";
+    return std.fmt.bufPrint(buf, "{s}/{s}", .{ parts.base, parts.suffix }) catch
+        (if (is_windows) "C:/Temp/opal" else "/tmp/opal");
 }
 
 /// ~/.config/opal/config.tsv

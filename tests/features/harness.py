@@ -232,7 +232,7 @@ def _web_js():
     """The ordered browser bundle as served by web/index.html."""
     names = (
         "core.js", "now-playing.js", "search.js", "catalog.js", "playback.js", "integrations.js", "access.js",
-        "source-management.js", "media.js", "source-details.js", "discovery.js", "boot.js",
+        "source-management.js", "media.js", "drama-vndb.js", "source-details.js", "discovery.js", "boot.js",
     )
     return "\n".join(_src(f"web/js/{name}") for name in names)
 
@@ -251,6 +251,8 @@ def _remote_api():
         "remote_youtube_api.zig",
         "remote_anime_api.zig",
         "remote_custom_sources_api.zig",
+        "remote_books_api.zig",
+        "remote_details_api.zig",
     )
     return "\n".join(_src(f"src/services/{name}") for name in names)
 

@@ -22,8 +22,13 @@ services:
     restart: unless-stopped
     environment:
       TS_AUTHKEY: ${TS_AUTHKEY:?get a reusable key from the Tailscale admin console}
+      # State is persisted below; do not re-authenticate on every restart.
+      TS_AUTH_ONCE: "true"
       TS_STATE_DIR: /var/lib/tailscale
       TS_SERVE_CONFIG: /config/serve.json
+      # The TUN device and NET_ADMIN below are for kernel networking. Without
+      # this setting the image defaults to slower userspace networking.
+      TS_USERSPACE: "false"
       TS_EXTRA_ARGS: --accept-dns=false
     volumes:
       - ../data/tailscale:/var/lib/tailscale
@@ -32,7 +37,6 @@ services:
       - /dev/net/tun
     cap_add:
       - net_admin
-      - sys_module
 
   opal:
     build:
