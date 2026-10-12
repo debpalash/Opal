@@ -24,6 +24,7 @@ const browser = @import("../services/browser.zig");
 const browser_pure = @import("../services/browser_pure.zig");
 
 const sidebar_layout = @import("shell_layout_pure.zig");
+const shell_tabs = @import("shell_tabs_pure.zig");
 var sidebar_collapsed = false;
 var sidebar_user_expanded: ?bool = null;
 var sidebar_fixture: ?bool = null;
@@ -1219,6 +1220,8 @@ pub fn iconForTab(t: state.DrawerTab) []const u8 {
 }
 
 /// Horizontal segment of sub-tabs (icon + label); updates `sel` on click.
+/// Labels collapse to icons (with tooltips) when the strip is too narrow —
+/// see `shell_tabs_pure.fitMode`.
 /// Rendered inside a HORIZONTAL scroll strip with an explicit row height
 /// (the posterStrip pattern): a plain box clipped trailing tabs off-screen on
 /// narrow windows, and flexbox wrapping reported a collapsed min height here,
@@ -1256,6 +1259,24 @@ fn subTabsOf(
     });
     defer strip.deinit();
 
+    // Narrow windows: drop inactive labels (then all labels) rather than let
+    // the scroll strip silently clip trailing tabs. Hidden labels get a tooltip.
+    var label_w: [16]f32 = undefined;
+    const n = @min(tabs.len, label_w.len);
+    var active_idx: usize = tabs.len;
+    const font = dvui.Font.theme(.body);
+    for (tabs[0..n], 0..) |t, i| {
+        label_w[i] = font.textSize(labelFn(t)).w;
+        if (sel.* == t) active_idx = i;
+    }
+    const tab_chrome: f32 = 2 + 2 + theme.spacing.sm * 2 + theme.iconSize(.sm).w;
+    // A label costs its text, dvui's default label padding, and the icon gap.
+    const lpad = dvui.LabelWidget.defaults.padding orelse dvui.Rect{};
+    const label_gap = theme.spacing.xs + lpad.x + lpad.w;
+    // Icon-only tabs keep the labelled height so icons stay vertically centred.
+    const row_h = @max(22, font.textSize("M").h + lpad.y + lpad.h);
+    const mode = shell_tabs.fitMode(strip.data().contentRect().w, theme.spacing.xs * 2, tab_chrome, label_gap, label_w[0..n], active_idx);
+
     var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .id_extra = id_extra,
         .padding = .{ .x = theme.spacing.xs, .y = 2, .w = theme.spacing.xs, .h = 2 },
@@ -1270,7 +1291,7 @@ fn subTabsOf(
         const fg = if (active) theme.colors.accent else theme.colors.text_secondary;
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = id_extra + i + 1,
-            .min_size_content = .{ .w = 0, .h = 22 },
+            .min_size_content = .{ .w = 0, .h = row_h },
             .background = true,
             .color_fill = if (active) theme.colors.bg_elevated else transparent,
             .corner_radius = dvui.Rect.all(theme.radius.md),
@@ -1279,18 +1300,23 @@ fn subTabsOf(
         });
         defer row.deinit();
         if (navRowInteract(row)) sel.* = t;
+        const with_label = shell_tabs.showLabel(mode, i, active_idx);
         dvui.icon(@src(), "tab", iconFn(t), .{}, .{
             .id_extra = id_extra + i + 1,
             .color_text = fg,
             .min_size_content = theme.iconSize(.sm),
             .gravity_y = 0.5,
-            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
+            .margin = .{ .x = 0, .y = 0, .w = if (with_label) theme.spacing.xs else 0, .h = 0 },
         });
-        _ = dvui.label(@src(), "{s}", .{labelFn(t)}, .{
-            .id_extra = id_extra + i + 1,
-            .color_text = fg,
-            .gravity_y = 0.5,
-        });
+        if (with_label) {
+            _ = dvui.label(@src(), "{s}", .{labelFn(t)}, .{
+                .id_extra = id_extra + i + 1,
+                .color_text = fg,
+                .gravity_y = 0.5,
+            });
+        } else {
+            components.tipId(@src(), row.data().*, labelFn(t), id_extra + i + 1);
+        }
     }
 }
 

@@ -2252,6 +2252,12 @@ fn buildSupported(b: *std.Build) void {
         .optimize = optimize,
     }) });
     test_step.dependOn(&b.addRunArtifact(test_shell_layout).step);
+    const test_shell_tabs = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/ui/shell_tabs_pure.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    test_step.dependOn(&b.addRunArtifact(test_shell_tabs).step);
     const test_episode_art = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/episode_art_pure.zig"),
