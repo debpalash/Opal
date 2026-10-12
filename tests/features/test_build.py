@@ -116,7 +116,7 @@ def test_dvui_backend_isolation():
         return "fail", (result.stderr or result.stdout)[-1600:]
     if "skipped=" in result.stderr:
         return "skip", result.stderr[-400:]
-    return "pass", "real build graph succeeds offline without the SDL3 package"
+    return "pass", "configured build graph declares no sdl3 integration (SDL3 package never requested)"
 
 
 @test("Binary Exists", "Build")
