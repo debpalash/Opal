@@ -2892,7 +2892,12 @@ fn addGhosttyVt(b: *std.Build, module: *std.Build.Module, target: std.Build.Reso
         .@"emit-lib-vt" = true,
         .simd = false,
     });
-    module.linkLibrary(dep.artifact("ghostty-vt-static"));
+    const vt = dep.artifact("ghostty-vt-static");
+    // The terminal's Wuffs import otherwise emits weak calloc/free stubs for
+    // no-libc builds. In a libc-linked Opal executable those stubs can satisfy
+    // libwebp's allocation calls and make every WebP cover decode fail.
+    vt.root_module.link_libc = true;
+    module.linkLibrary(vt);
     module.addIncludePath(dep.path("include"));
 }
 
