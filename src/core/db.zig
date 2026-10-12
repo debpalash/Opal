@@ -87,9 +87,77 @@ pub fn init() void {
     // ── Create all tables ──
     createTables();
     initialized = true;
+    readers_ready.store(true, .release);
+}
+
+// ── Read-only side connections ──
+// The shared connection is FULLMUTEX, so every statement on it is serialized.
+// Concurrent blob readers (up to 8 poster workers decoding cached covers) then
+// queue behind each other — and every UI-thread query queues behind them. WAL
+// lets independent read-only connections run in parallel with each other and
+// with the writer. Each slot is used by one thread at a time (claimed with an
+// atomic swap), opened lazily, and closed in deinit after workers are drained.
+const READER_SLOTS = 8;
+var readers: [READER_SLOTS]?*Sqlite3 = .{null} ** READER_SLOTS;
+var reader_claimed: [READER_SLOTS]std.atomic.Value(bool) = .{std.atomic.Value(bool).init(false)} ** READER_SLOTS;
+var readers_ready = std.atomic.Value(bool).init(false);
+
+pub const Reader = struct { slot: usize, handle: *Sqlite3 };
+
+/// Claim a read-only connection, or null (schema not ready, all slots busy, open
+/// failed) — callers then fall back to the shared connection.
+pub fn acquireReader() ?Reader {
+    if (!readers_ready.load(.acquire)) return null;
+    for (0..READER_SLOTS) |i| {
+        if (reader_claimed[i].swap(true, .acq_rel)) continue;
+        if (readers[i] == null) readers[i] = openReader();
+        const handle = readers[i] orelse {
+            reader_claimed[i].store(false, .release);
+            return null;
+        };
+        return .{ .slot = i, .handle = handle };
+    }
+    return null;
+}
+
+pub fn releaseReader(r: Reader) void {
+    reader_claimed[r.slot].store(false, .release);
+}
+
+fn openReader() ?*Sqlite3 {
+    var path_buf: [512]u8 = undefined;
+    const db_path = paths.zigzagDbFile(&path_buf);
+    var cpath_buf: [512]u8 = undefined;
+    const cpath = std.fmt.bufPrintZ(&cpath_buf, "{s}", .{db_path}) catch return null;
+    var handle: ?*Sqlite3 = null;
+    // NOMUTEX: a slot is only ever used by the thread that claimed it.
+    const flags = c.SQLITE_OPEN_READONLY | c.SQLITE_OPEN_NOMUTEX;
+    if (c.sqlite3_open_v2(cpath.ptr, &handle, flags, null) != c.SQLITE_OK) {
+        if (handle) |h| _ = c.sqlite3_close_v2(h);
+        return null;
+    }
+    const h = handle orelse return null;
+    _ = c.sqlite3_busy_timeout(h, 5000);
+    _ = c.sqlite3_exec(h, "PRAGMA mmap_size=268435456", null, null, null);
+    return h;
+}
+
+/// Prepare `sql` on a claimed reader. Finalize with `finalize`.
+pub fn prepareOn(r: Reader, sql: []const u8) ?*Stmt {
+    var stmt: ?*Stmt = null;
+    if (c.sqlite3_prepare_v2(r.handle, sql.ptr, @intCast(sql.len), &stmt, null) != c.SQLITE_OK) {
+        if (stmt) |s| _ = c.sqlite3_finalize(s);
+        return null;
+    }
+    return stmt;
 }
 
 pub fn deinit() void {
+    readers_ready.store(false, .release);
+    for (&readers) |*r| {
+        if (r.*) |h| _ = c.sqlite3_close_v2(h);
+        r.* = null;
+    }
     if (db_handle) |d| {
         // v2 defers connection destruction until all outstanding statements finalize.
         _ = c.sqlite3_close_v2(d);

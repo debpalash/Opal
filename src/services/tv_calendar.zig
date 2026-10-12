@@ -112,8 +112,8 @@ fn curlInto(url: []const u8, buf: []u8) usize {
 // ══════════════════════════════════════════════════════════
 // Staging — driven by tv_library's sync worker
 //
-// The sync worker already holds the /3/tv/{id} document and a scratch buffer for
-// each tracked show, so it hands them straight here rather than refetching. It
+// The sync worker already holds the /3/tv/{id} document for each tracked show,
+// so it hands it straight here rather than refetching. It
 // also hands us tv_pure's answer for "is there anything to watch", which replaces
 // the bad heuristic this module used to compute (it compared TMDB's last-aired
 // episode against the LAST WATCHED one, which is wrong for anyone who skipped,
@@ -142,26 +142,31 @@ pub fn beginStageExpected(expected: ?usize) void {
     }
 }
 
+/// One show's card, built without touching the shared projection. The sync
+/// worker prepares shows concurrently (each is several sequential HTTP calls),
+/// then `commitOrdered` adds them in library order, so which shows win the 12
+/// rail slots and their order are exactly what a sequential pass produced.
+pub const Prepared = struct {
+    entry: Entry = .{},
+    have_last: bool = false,
+    imdb: [16]u8 = undefined,
+    imdb_len: usize = 0,
+};
+
 /// Stage one show from a TMDB document. `doc` is the /3/tv/{id} body the sync
 /// worker just fetched; `next_up` is tv_pure's next episode for this show (null
-/// = caught up). `scratch` is a large heap buffer we may clobber for the EZTV
-/// lookup.
+/// = caught up). Null when the document is not this show (not a success).
 pub fn stage(
     tmdb_id: i32,
     name: []const u8,
     poster_path: []const u8,
     doc: []const u8,
     next_up: ?@import("tv_pure.zig").Ep,
-    scratch: []u8,
-) void {
-    if (!pure.validShowDocument(doc, tmdb_id)) return;
-    if (projection.staged_count >= projection.staged.len) {
-        projection.add(.{ .tmdb_id = tmdb_id });
-        return;
-    }
+) ?Prepared {
+    if (!pure.validShowDocument(doc, tmdb_id)) return null;
 
-    var entry: Entry = .{};
-    const e = &entry;
+    var p: Prepared = .{};
+    const e = &p.entry;
     e.tmdb_id = tmdb_id;
     setNamePoster(e, name, if (poster_path.len > 0) poster_path else pure.posterPath(doc) orelse "");
 
@@ -173,14 +178,13 @@ pub fn stage(
         @memcpy(e.next_name[0..next.name_len], next.name[0..next.name_len]);
     }
 
-    var have_last = false;
     if (pure.parseEpisodeToAir(doc, "\"last_episode_to_air\":")) |last| {
         e.last_season = last.season;
         e.last_episode = last.episode;
-        have_last = true;
+        p.have_last = true;
     }
-    completeStage(e, have_last, next_up != null, "", scratch);
-    projection.add(entry);
+    markUnseen(&p, next_up != null);
+    return p;
 }
 
 /// Stage one show from keyless facts (Cinemeta/TVmaze): same projection and the
@@ -195,15 +199,10 @@ pub fn stageFacts(
     next_air_epoch: i64,
     next_name: []const u8,
     next_up: ?@import("tv_pure.zig").Ep,
-    scratch: []u8,
-) void {
-    if (id <= 0) return;
-    if (projection.staged_count >= projection.staged.len) {
-        projection.add(.{ .tmdb_id = id });
-        return;
-    }
-    var entry: Entry = .{};
-    const e = &entry;
+) ?Prepared {
+    if (id <= 0) return null;
+    var p: Prepared = .{};
+    const e = &p.entry;
     e.tmdb_id = id;
     setNamePoster(e, name, poster_path);
     if (next.season > 0 and next_air_epoch > 0) {
@@ -216,9 +215,14 @@ pub fn stageFacts(
     if (last.season > 0) {
         e.last_season = last.season;
         e.last_episode = last.episode;
+        p.have_last = true;
     }
-    completeStage(e, last.season > 0, next_up != null, imdb, scratch);
-    projection.add(entry);
+    if (imdb.len <= p.imdb.len) {
+        @memcpy(p.imdb[0..imdb.len], imdb);
+        p.imdb_len = imdb.len;
+    }
+    markUnseen(&p, next_up != null);
+    return p;
 }
 
 fn setNamePoster(e: *Entry, name: []const u8, poster: []const u8) void {
@@ -228,19 +232,44 @@ fn setNamePoster(e: *Entry, name: []const u8, poster: []const u8) void {
     @memcpy(e.poster_path[0..e.poster_path_len], poster[0..e.poster_path_len]);
 }
 
-/// Shared tail: the "unseen" flag and EZTV availability of the latest aired
-/// episode. `imdb_in` may be empty; then the remembered id (or, with a key, TMDB
-/// external_ids) supplies it.
-fn completeStage(e: *Entry, have_last: bool, has_next_up: bool, imdb_in: []const u8, scratch: []u8) void {
-    if (!have_last) return;
+/// "Something to watch right now" is exactly tv_pure's answer, with no local
+/// re-derivation (that is how this rail and the detail page used to disagree).
+fn markUnseen(p: *Prepared, has_next_up: bool) void {
+    if (p.have_last) p.entry.unseen = has_next_up;
+}
 
-    // "Something to watch right now" is exactly tv_pure's answer, with no local
-    // re-derivation (that is how this rail and the detail page used to disagree).
-    e.unseen = has_next_up;
+const EztvJob = struct { slot: usize, imdb: [16]u8, imdb_len: usize };
 
-    // EZTV availability for the latest aired episode.
-    if (!(e.unseen and eztv_on and eztv_api_len > 0)) return;
+/// Add prepared shows to the staged projection in `items` order (null = that
+/// show failed), then look up EZTV availability for the cards that took a rail
+/// slot. Single caller (the sync worker), after every show is prepared.
+pub fn commitOrdered(items: []const ?Prepared) void {
+    var jobs: [12]EztvJob = undefined;
+    var nj: usize = 0;
+    for (items) |maybe| {
+        const p = maybe orelse continue;
+        const before = projection.staged_count;
+        projection.add(p.entry);
+        if (projection.staged_count == before) continue; // caught up, or rail full
+        if (!(p.have_last and p.entry.unseen and eztv_on and eztv_api_len > 0)) continue;
+        if (nj == jobs.len) continue;
+        jobs[nj] = .{ .slot = before, .imdb = p.imdb, .imdb_len = p.imdb_len };
+        nj += 1;
+    }
+    // Each job writes only its own staged slot; `finish` publishes after the
+    // fan-out has joined every lane.
+    @import("browse_fanout.zig").run(EztvJob, jobs[0..nj], @as(void, {}), eztvJob, .{});
+}
 
+fn eztvJob(_: void, job: EztvJob) void {
+    const scratch = alloc.alloc(u8, 256 * 1024) catch return;
+    defer alloc.free(scratch);
+    eztvAvailability(&projection.staged[job.slot], job.imdb[0..job.imdb_len], scratch);
+}
+
+/// EZTV availability for the latest aired episode. `imdb_in` may be empty; then
+/// the remembered id (or, with a key, TMDB external_ids) supplies it.
+fn eztvAvailability(e: *Entry, imdb_in: []const u8, scratch: []u8) void {
     var imdb_buf: [16]u8 = undefined;
     var imdb = imdb_in;
     if (imdb.len == 0) imdb = @import("../core/db.zig").tvImdbId(e.tmdb_id, &imdb_buf);

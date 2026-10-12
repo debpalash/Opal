@@ -65,9 +65,22 @@ fn cacheKey(url: []const u8) i64 {
 
 /// Returns a c_alloc'd copy of the cached encoded image, or null. Caller frees.
 fn cacheLoad(key: i64) ?[]u8 {
+    // Reads go through a read-only side connection so the up-to-8 poster
+    // workers decode-from-cache in parallel instead of queueing on cache_lock
+    // (and the shared connection the UI thread also uses). Profiled cold start:
+    // poster workers spent ~4x longer waiting for this lock than reading.
+    if (db.acquireReader()) |reader| {
+        defer db.releaseReader(reader);
+        return cacheSelect(db.prepareOn(reader, CACHE_SELECT) orelse return null, key);
+    }
     cache_lock.lock();
     defer cache_lock.unlock();
-    const stmt = db.prepare("SELECT jpeg_data FROM poster_cache WHERE item_id = ?1") orelse return null;
+    return cacheSelect(db.prepare(CACHE_SELECT) orelse return null, key);
+}
+
+const CACHE_SELECT = "SELECT jpeg_data FROM poster_cache WHERE item_id = ?1";
+
+fn cacheSelect(stmt: *db.Stmt, key: i64) ?[]u8 {
     defer db.finalize(stmt);
     db.bindInt64(stmt, 1, key);
     if (db.step(stmt) == db.c.SQLITE_ROW) {
