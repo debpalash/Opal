@@ -5,12 +5,12 @@
 
 const std = @import("std");
 const dvui = @import("dvui");
-const theme = @import("../ui/theme.zig");
-const components = @import("../ui/components.zig");
+const theme = @import("theme.zig");
+const components = @import("components.zig");
 const state = @import("../core/state.zig");
 const io_global = @import("../core/io_global.zig");
-const wanted = @import("wanted.zig");
-const pure = @import("wanted_pure.zig");
+const wanted = @import("../services/wanted.zig");
+const pure = @import("../services/wanted_pure.zig");
 
 const MAX_ROWS = 24;
 var rows: [MAX_ROWS]wanted.Row = undefined;

@@ -56,12 +56,6 @@ pub fn setRenderFixtureForTest(fixture: ?Fixture) void {
     last_load_ms = 0;
 }
 
-/// A navigation that must land in the pixel bridge (a typed web address, "B")
-/// calls this, so the hub never hides a page the user asked for.
-pub fn showBridge() void {
-    show_bridge = true;
-}
-
 fn say(text: []const u8) void {
     message_len = @min(text.len, message_buf.len);
     @memcpy(message_buf[0..message_len], text[0..message_len]);
@@ -430,6 +424,24 @@ fn renderBridge() void {
 }
 
 /// Draw the Browse > Web page. Safe to call every frame.
+fn adoptBridgeRequest() void {
+    // Consume navigation intent at the presentation boundary. A typed URL
+    // must not land behind the browser hub's informational overview.
+    if (@import("../services/browser.zig").takeBridgeViewRequest()) show_bridge = true;
+}
+
+test "Native browser hub reveals a service-requested destination once" {
+    const browser = @import("../services/browser.zig");
+    show_bridge = false;
+    _ = browser.takeBridgeViewRequest();
+    browser.requestBridgeView();
+    adoptBridgeRequest();
+    try std.testing.expect(show_bridge);
+    try std.testing.expect(!browser.takeBridgeViewRequest());
+    show_bridge = false;
+}
+
 pub fn render() void {
+    adoptBridgeRequest();
     if (show_bridge) renderBridge() else renderHub();
 }

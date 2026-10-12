@@ -309,6 +309,10 @@ class IsolatedOpal:
         # SO_REUSEADDR permits a distinct loopback listener on the same port.
         # Send no bytes: this is solely an occupancy check, never an API call.
         exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+        if exclusive is None and os.name == "nt":
+            # MinGW Python can omit the name even though Winsock supports it.
+            # winsock2.h defines this as the bitwise complement of SO_REUSEADDR.
+            exclusive = ~socket.SO_REUSEADDR
         if exclusive is None:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as connection:
                 connection.settimeout(0.5)
@@ -321,21 +325,19 @@ class IsolatedOpal:
                     raise unittest.SkipTest(
                         f"cannot establish that 127.0.0.1:{PORT} is unused (socket error {result})"
                     )
-        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            # Windows' timeout connect_ex can report WSAEWOULDBLOCK even for
-            # an unused port. Exclusive bind checks ownership directly and
-            # rejects wildcard listeners without waiting for TCP retries.
-            probe.setsockopt(socket.SOL_SOCKET, exclusive if exclusive is not None else socket.SO_REUSEADDR, 1)
-            probe.bind(("127.0.0.1", PORT))
-            # Also catch bound sockets that have not begun listening yet.
-            probe.listen(1)
-        except OSError as error:
-            raise unittest.SkipTest(
-                f"127.0.0.1:{PORT} is already in use; refusing to test an existing server"
-            ) from error
-        finally:
-            probe.close()
+        # Windows may allow a specific-address bind alongside a wildcard
+        # listener that enabled SO_REUSEADDR. Check both scopes separately:
+        # the second probe also catches wildcard sockets not yet listening.
+        for address in ("127.0.0.1", "0.0.0.0"):
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                try:
+                    probe.setsockopt(socket.SOL_SOCKET, exclusive if exclusive is not None else socket.SO_REUSEADDR, 1)
+                    probe.bind((address, PORT))
+                    probe.listen(1)
+                except OSError as error:
+                    raise unittest.SkipTest(
+                        f"port {PORT} is already in use; refusing to test an existing server"
+                    ) from error
 
 
 class PortCollisionGuardTest(unittest.TestCase):
