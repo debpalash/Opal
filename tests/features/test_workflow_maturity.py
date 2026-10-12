@@ -233,11 +233,13 @@ def test_tv_sync_fanout():
             and worker.index(run) < worker.index("cal.commitOrdered(cards"),
         "heap rows, not thread stack": "alloc.alloc(db.TvShowRow, MAX_SHOWS)" in worker,
         "atomic tallies": "updated.fetchAdd" in lib and "learned_imdb.store(true, .release)" in lib,
-        # stage/stageFacts build a card; only commitOrdered touches the projection.
+        # stage/stageFacts build a card; only commitOrdered touches the projection,
+        # through the unit-tested CalendarProjection.stageOrdered (order, slots,
+        # EZTV selection are covered in tv_calendar_pure.zig).
         "cards built off the projection": "pub fn stage(" in cal and "pub fn stageFacts(" in cal
-            and cal.count("projection.add(") == 1
-            and "projection.add(" in cal.split("pub fn commitOrdered(", 1)[1],
-        "eztv only for slotted cards": "projection.staged_count == before" in cal,
+            and "projection.add(" not in cal
+            and "projection.stageOrdered(" in cal.split("pub fn commitOrdered(", 1)[1],
+        "eztv only for slotted cards": "pub fn stageOrdered(" in _src("src/services/tv_calendar_pure.zig"),
     }
     missing = [k for k, v in checks.items() if not v]
     if missing:
