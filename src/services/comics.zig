@@ -2500,7 +2500,9 @@ fn runComicWave(gen: u32, page: u32) usize {
     @memcpy(wave.query[0..wave.query_len], sr_query_buf[0..wave.query_len]);
     var jobs: [11]Source = undefined;
     var count: usize = 0;
-    inline for (.{ Source.mangadex, Source.readallcomics, Source.heancms, Source.mangathemesia, Source.madara, Source.suwayomi, Source.weebcentral, Source.comicbookplus, Source.comicfury, Source.xkcd, Source.smbc }) |src| {
+    // Give installed sources the first lanes, so slow public catalogs cannot
+    // hold up a fast local/user-configured provider's first visible cards.
+    inline for (.{ Source.weebcentral, Source.comicfury, Source.readallcomics, Source.heancms, Source.mangathemesia, Source.madara, Source.suwayomi, Source.comicbookplus, Source.xkcd, Source.smbc, Source.mangadex }) |src| {
         const installed = switch (src) {
             .mangadex => true,
             .madara => madaraBase() != null,

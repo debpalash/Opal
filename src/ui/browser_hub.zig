@@ -37,6 +37,7 @@ var title_buf: [link_pure.MAX_TITLE + 1]u8 = std.mem.zeroes([link_pure.MAX_TITLE
 var message_buf: [160]u8 = undefined;
 var message_len: usize = 0;
 var show_bridge = false;
+pub var test_title_entry_rect: dvui.Rect.Physical = .{};
 
 /// Offline pixel tests render fixed data instead of reading the database and
 /// the shared-page store.
@@ -286,27 +287,32 @@ fn renderSharedPage() void {
         .font = smallFont(),
     });
     {
-        // Fixed size, inside a row, like the other single-line inputs: an
-        // expanding text entry in a scrolling column takes the whole column.
+        // The editor fills the card's available width. A fixed 420px entry
+        // pushed the card sideways on compact windows.
         var erow = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
         defer erow.deinit();
         if (@import("builtin").is_test and fixture_for_test != null) {
             // The offscreen capture harness loses the rest of the frame behind a
             // text entry here (it is fine in the app), so fixtures draw the same
             // box as a label. Typing is exercised live, not in this test.
-            _ = dvui.label(@src(), "{s}", .{if (title_buf[0] == 0) "Movie or show: Dune 2021, Severance S02E03" else std.mem.sliceTo(&title_buf, 0)}, .{
-                .min_size_content = .{ .w = 420, .h = components.TOOLBAR_INPUT_H },
-                .max_size_content = .{ .w = 420, .h = components.TOOLBAR_INPUT_H },
+            var placeholder = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .expand = .horizontal,
+                .min_size_content = .{ .w = 0, .h = components.TOOLBAR_INPUT_H },
                 .color_fill = theme.colors.bg_elevated,
                 .background = true,
-                .color_text = theme.colors.text_secondary,
                 .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
                 .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
             });
+            _ = dvui.label(@src(), "{s}", .{view_pure.clip(&clip_buf, std.mem.sliceTo(&title_buf, 0), 34)}, .{
+                .color_text = theme.colors.text_secondary,
+                .gravity_y = 0.5,
+            });
+            test_title_entry_rect = placeholder.data().borderRectScale().r;
+            placeholder.deinit();
         } else {
             var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &title_buf }, .placeholder = "Movie or show: Dune 2021, Severance S02E03" }, .{
-                .min_size_content = .{ .w = 420, .h = components.TOOLBAR_INPUT_H },
-                .max_size_content = .{ .w = 420, .h = components.TOOLBAR_INPUT_H },
+                .expand = .horizontal,
+                .min_size_content = .{ .w = 0, .h = components.TOOLBAR_INPUT_H },
                 .gravity_y = 0.5,
                 .color_fill = theme.colors.bg_elevated,
                 .color_border = theme.colors.border_subtle,

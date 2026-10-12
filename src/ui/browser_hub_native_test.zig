@@ -15,6 +15,7 @@ const theme = @import("theme.zig");
 
 const Case = enum { populated, first_run, no_streams };
 var current: Case = .populated;
+var viewport_width: f32 = 0;
 var links_fixture: [3]link.Link = @splat(.{});
 const NOW: i64 = 1_800_000_000;
 
@@ -67,6 +68,7 @@ fn draw() !void {
     var page = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_app });
     defer page.deinit();
     ui.render();
+    viewport_width = dvui.windowRectPixels().w;
 }
 
 fn cleanup() void {
@@ -83,8 +85,14 @@ test "Native browser hub offline SDL pixel capture" {
     const names = [_][]const u8{ "browser-hub-populated", "browser-hub-first-run", "browser-hub-no-streams" };
     inline for (std.meta.fields(Case), 0..) |f, i| {
         current = @field(Case, f.name);
-        for ([_][2]u32{ .{ 1000, 780 }, .{ 640, 780 } }) |size| {
+        for ([_][2]u32{ .{ 1000, 780 }, .{ 640, 780 }, .{ 375, 780 } }) |size| {
             try capture.capture(size[0], size[1], names[i], setup, draw, cleanup);
+            if (current == .populated) {
+                const entry = ui.test_title_entry_rect;
+                try std.testing.expect(entry.w > 0);
+                try std.testing.expect(entry.x >= 0);
+                try std.testing.expect(entry.x + entry.w <= viewport_width);
+            }
         }
     }
 }

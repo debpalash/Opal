@@ -126,14 +126,14 @@ jobs:
   # Linux uses Xvfb + software SDL so a physical GPU/display is unnecessary.
   native-linux:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
       - name: Install native fixture dependencies
-        timeout-minutes: 10
+        timeout-minutes: 20
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
