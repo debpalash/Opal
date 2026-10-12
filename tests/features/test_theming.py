@@ -464,6 +464,23 @@ def test_dvui_styles_follow_preset():
     return "pass", "control/window/highlight/err styles + action button fills follow the preset"
 
 
+@test("Web search-row buttons are 40px tap targets", "Theming")
+def test_web_search_row_tap_targets():
+    """Regression: bare buttons in .search-row (Go/Ask/Add, Logs Refresh/Clear,
+    Plex sign-in) were unstyled text, measured 20x40 / 22px tall at 375px."""
+    import re
+    css = open(os.path.join(PROJECT_DIR, "web/styles/app.css"), encoding="utf-8").read()
+    m = re.search(r"\.search-row>button\{([^}]*)\}", css)
+    if not m:
+        return "fail", "no .search-row>button rule in web/styles/app.css"
+    body = m.group(1)
+    h = re.search(r"min-height:(\d+)px", body)
+    w = re.search(r"min-width:(\d+)px", body)
+    if not h or int(h.group(1)) < 40 or not w or int(w.group(1)) < 40:
+        return "fail", ".search-row>button must set min-width/min-height >= 40px"
+    return "pass", ".search-row buttons have >= 40px tap targets"
+
+
 @test("Web CSS only references defined custom properties", "Theming")
 def test_web_css_vars_defined():
     """An undefined var() silently falls back (inherit / transparent). Regression:

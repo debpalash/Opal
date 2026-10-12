@@ -769,3 +769,10 @@ button:disabled{cursor:not-allowed}
 .browse-skeleton-row .browse-skeleton-copy, .browse-skeleton-square .browse-skeleton-copy, .browse-skeleton-video .browse-skeleton-copy { flex: 1; justify-content: center; }
 @keyframes browse-shimmer { to { transform: translateX(100%); } }
 @media (prefers-reduced-motion: reduce) { .browse-skeleton-art::after, .browse-skeleton-copy i::after { animation: none; transform: none; opacity: .25; } }
+/* Bare buttons in a search row (Go/Ask/Add/Refresh/Sign in…) were unstyled
+   text: "Go" measured 20x40 and the Logs/Plex row 22px tall on phones. Give
+   every one a 40px tap target with the same chrome as #mu-go. */
+.search-row>button{flex:none;min-width:44px;min-height:40px;padding:6px 12px;border:1px solid var(--border);
+  border-radius:var(--rad-sm);background:var(--bg-elevated);color:var(--text-1)}
+.search-row>button:hover{background:var(--bg-hover)}
+.text-btn{min-height:40px}
