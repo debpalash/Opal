@@ -27,6 +27,14 @@ class HlsFiles(SimpleHTTPRequestHandler):
         if path.endswith('.ts'): return 'video/mp2t'
         return super().guess_type(path)
 
+def video_codec_args(ffmpeg):
+    """libx264 when this ffmpeg has it; Homebrew's current bottle on CI ships
+    without it ('Unrecognized option preset'), so fall back to the built-in
+    MPEG-2 encoder, which HLS/TS and MP4 both carry."""
+    encoders=subprocess.run([ffmpeg,'-hide_banner','-encoders'],capture_output=True,text=True,timeout=15).stdout
+    if ' libx264 ' in encoders: return ['-c:v','libx264','-preset','ultrafast']
+    return ['-c:v','mpeg2video','-q:v','5']
+
 class HlsPlaybackLiveTest(unittest.TestCase):
     def setUp(self):
         ffmpeg=shutil.which('ffmpeg')
@@ -34,7 +42,7 @@ class HlsPlaybackLiveTest(unittest.TestCase):
         self.opal=live.IsolatedOpal(self); self.addCleanup(self.opal.stop)
         media=self.opal.root/'generated-hls'; media.mkdir()
         self.media=media; self.ffmpeg=ffmpeg
-        subprocess.run([ffmpeg,'-v','error','-f','lavfi','-i','testsrc2=size=320x180:rate=24','-f','lavfi','-i','anullsrc=r=48000:cl=stereo','-t','16','-c:v','libx264','-preset','ultrafast','-g','48','-c:a','aac','-f','hls','-hls_time','2','-hls_list_size','0','-hls_segment_filename',str(media/'segment-%03d.ts'),str(media/'fixture.m3u8')],check=True,timeout=30)
+        subprocess.run([ffmpeg,'-v','error','-f','lavfi','-i','testsrc2=size=320x180:rate=24','-f','lavfi','-i','anullsrc=r=48000:cl=stereo','-t','16',*video_codec_args(ffmpeg),'-g','48','-c:a','aac','-f','hls','-hls_time','2','-hls_list_size','0','-hls_segment_filename',str(media/'segment-%03d.ts'),str(media/'fixture.m3u8')],check=True,timeout=30)
         HlsFiles.requests=[]
         self.fixture=ThreadingHTTPServer(('127.0.0.1',0),partial(HlsFiles,directory=str(media)))
         threading.Thread(target=self.fixture.serve_forever,daemon=True).start()
