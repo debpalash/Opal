@@ -140,6 +140,7 @@ function fixture(...files){
     get innerHTML(){ return this._html; }
     set innerHTML(value){ this._html = value; this.textContent = ''; }
     addEventListener(name, fn){ this.listeners.set(name, fn); }
+    canPlayType(){ return ''; }
     querySelectorAll(){ return []; }
     querySelector(){ return new Element(); }
     setAttribute(name, value){ this.attributes.set(name, value); }
@@ -162,6 +163,7 @@ function fixture(...files){
   const context = vm.createContext({
     $, Element, BASE:'http://fixture.invalid', AUTHENTICATED:true,
     api:request, apiMutation:request, esc:String, lastHtml:{}, destinationActionLabel:verb => verb,
+    wireInfiniteBrowse(){},
     URL, URLSearchParams, console, rendered, network, performance,
     requestAnimationFrame:fn => { fn(); return 1; },
     PerformanceObserver:class {
@@ -208,6 +210,38 @@ function fixture(...files){
   };
   return {$, run, take, requests, timers, sources, rendered, network, observers, window};
 }
+
+test('web player handoffs retire HLS and stale transcode seek state', () => {
+  const f = fixture('playback.js', 'discovery.js');
+  const video = f.$('video');
+  let pauses = 0, loads = 0, destroys = 0;
+  video.pause = () => { pauses++; };
+  video.load = () => { loads++; };
+  video.play = () => Promise.resolve();
+  video.appendChild = child => { video.track = child; };
+  video.removeAttribute = name => { if (name === 'src') video.src = ''; };
+  video.buffered = {length:0};
+
+  f.run("openTranscode('show/old.mkv', 'Old episode')");
+  assert.equal(video._tcRel, 'show/old.mkv');
+  f.run("openStreamUrl('https://example.invalid/new.mp4', 'New episode')");
+  assert.equal(video._tcRel, '', 'a direct stream must not inherit the prior transcode seek target');
+  assert.equal(video.src, 'https://example.invalid/new.mp4');
+  assert.equal(typeof video.onerror, 'function');
+
+  video._hls = {destroy(){ destroys++; }};
+  f.run("openPlayer('library/movie.mp4')");
+  assert.equal(destroys, 1, 'switching to a library file must stop HLS segment requests');
+  assert.equal(video._hls, null);
+  assert.equal(video._tcRel, '');
+  assert.match(video.src, /\/stream\?file=library%2Fmovie\.mp4$/);
+
+  f.run("openTranscode('show/latest.mkv', 'Latest episode')");
+  f.$('player-close').onclick();
+  assert.equal(video._tcRel, '', 'closing must retire the transcode seek target');
+  assert.equal(video.src, '');
+  assert.ok(pauses >= 4 && loads >= 4, 'each handoff releases its prior media resource');
+});
 
 test('web performance budget produces a measured pass and failure', () => {
   const f = fixture('core.js');

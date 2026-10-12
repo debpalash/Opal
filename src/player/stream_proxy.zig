@@ -4,6 +4,7 @@ const state = @import("../core/state.zig");
 const logs = @import("../core/logs.zig");
 const sync = @import("../core/sync.zig");
 const io_g = @import("../core/io_global.zig");
+const range_parser = @import("stream_proxy_range_pure.zig");
 
 // ══════════════════════════════════════════════════════════
 // Opal v2 — Multi-tenant Torrent HTTP Streaming Proxy
@@ -394,35 +395,22 @@ fn handleConnection(args: ConnArgs) !void {
         return;
     }
 
-    // Parse Range header.
+    // Parse a single byte range. Suffix ranges are important here: demuxers
+    // request the tail to find container indexes before the first frame.
     var range_start: i64 = 0;
     var range_end: i64 = file_size - 1;
     var has_range = false;
-
-    if (std.mem.indexOf(u8, request, "Range: bytes=")) |range_idx| {
-        has_range = true;
-        const range_line_start = range_idx + "Range: bytes=".len;
-        var range_line_end = range_line_start;
-        while (range_line_end < request.len and request[range_line_end] != '\r' and request[range_line_end] != '\n') : (range_line_end += 1) {}
-        const range_str = request[range_line_start..range_line_end];
-
-        if (std.mem.indexOf(u8, range_str, "-")) |dash_idx| {
-            const start_str = range_str[0..dash_idx];
-            range_start = std.fmt.parseInt(i64, start_str, 10) catch 0;
-            if (dash_idx + 1 < range_str.len) {
-                const end_str = range_str[dash_idx + 1 ..];
-                if (end_str.len > 0) {
-                    range_end = std.fmt.parseInt(i64, end_str, 10) catch (file_size - 1);
-                }
-            }
-        }
-    }
-
-    if (range_start < 0) range_start = 0;
-    if (range_end >= file_size) range_end = file_size - 1;
-    if (range_start > range_end) {
-        writeStatus(args.conn, "416 Range Not Satisfiable");
-        return;
+    switch (range_parser.parse(request, file_size)) {
+        .full => {},
+        .partial => |range| {
+            has_range = true;
+            range_start = range.start;
+            range_end = range.end;
+        },
+        .invalid => {
+            writeStatus(args.conn, "416 Range Not Satisfiable");
+            return;
+        },
     }
 
     // The proxy sees every mpv seek path, including keyboard, chapter and

@@ -132,6 +132,7 @@ function appendTv(chans){
 // openPlayer(), which streams a local downloaded file via /stream.
 function openStreamUrl(url, title){
   const v = $('video');
+  resetPlayerSource();
   $('player-title').textContent = title || '';
   [...v.querySelectorAll('track')].forEach(tr => tr.remove());
   v.src = url;

@@ -193,6 +193,12 @@ def test_deploy_profiles():
         "caddyfile proxies opal": "reverse_proxy 127.0.0.1:41595" in caddy and "{$DOMAIN}" in caddy,
         "tailscale sidecar": "tailscale/tailscale" in ts and "network_mode: service:tailscale" in ts
             and "TS_AUTHKEY" in ts,
+        "tailscale persisted login and kernel networking": (
+            'TS_AUTH_ONCE: "true"' in ts and 'TS_USERSPACE: "false"' in ts
+            and "../data/tailscale:/var/lib/tailscale" in ts
+            and "- /dev/net/tun" in ts and "- net_admin" in ts
+            and "- sys_module" not in ts
+        ),
         "tailscale serve → opal": "127.0.0.1:41595" in serve and "TS_CERT_DOMAIN" in serve,
         # Opal not directly published in the TLS profile (Caddy is the face).
         "opal shares TLS proxy loopback": "network_mode: service:caddy" in tls
