@@ -238,27 +238,30 @@ fn markUnseen(p: *Prepared, has_next_up: bool) void {
     if (p.have_last) p.entry.unseen = has_next_up;
 }
 
+fn preparedEntry(p: *const Prepared) Entry {
+    return p.entry;
+}
+fn wantsEztv(p: *const Prepared) bool {
+    return p.have_last and p.entry.unseen and eztv_on and eztv_api_len > 0;
+}
+
 const EztvJob = struct { slot: usize, imdb: [16]u8, imdb_len: usize };
 
 /// Add prepared shows to the staged projection in `items` order (null = that
 /// show failed), then look up EZTV availability for the cards that took a rail
 /// slot. Single caller (the sync worker), after every show is prepared.
 pub fn commitOrdered(items: []const ?Prepared) void {
+    var slots: [12]usize = undefined;
+    var indexes: [12]usize = undefined;
+    const n = projection.stageOrdered(Prepared, items, preparedEntry, wantsEztv, &slots, &indexes);
     var jobs: [12]EztvJob = undefined;
-    var nj: usize = 0;
-    for (items) |maybe| {
-        const p = maybe orelse continue;
-        const before = projection.staged_count;
-        projection.add(p.entry);
-        if (projection.staged_count == before) continue; // caught up, or rail full
-        if (!(p.have_last and p.entry.unseen and eztv_on and eztv_api_len > 0)) continue;
-        if (nj == jobs.len) continue;
-        jobs[nj] = .{ .slot = before, .imdb = p.imdb, .imdb_len = p.imdb_len };
-        nj += 1;
+    for (jobs[0..n], slots[0..n], indexes[0..n]) |*job, slot, i| {
+        const p = &items[i].?;
+        job.* = .{ .slot = slot, .imdb = p.imdb, .imdb_len = p.imdb_len };
     }
     // Each job writes only its own staged slot; `finish` publishes after the
     // fan-out has joined every lane.
-    @import("browse_fanout.zig").run(EztvJob, jobs[0..nj], @as(void, {}), eztvJob, .{});
+    @import("browse_fanout.zig").run(EztvJob, jobs[0..n], @as(void, {}), eztvJob, .{});
 }
 
 fn eztvJob(_: void, job: EztvJob) void {

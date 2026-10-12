@@ -325,6 +325,24 @@ pub const CalendarProjection = struct {
         self.staged[self.staged_count] = entry;
         self.staged_count += 1;
     }
+    /// Stage `items` in order (null = that show failed) and report which
+    /// newly-slotted items want an EZTV lookup: `slots[i]`/`indexes[i]` pair the
+    /// staged slot with its item. Library order decides which shows win the 12
+    /// rail slots, whatever order the fan-out finished them in.
+    pub fn stageOrdered(self: *CalendarProjection, comptime T: type, items: []const ?T, entryOf: fn (*const T) CalendarEntry, wantsLookup: fn (*const T) bool, slots: []usize, indexes: []usize) usize {
+        var n: usize = 0;
+        for (items, 0..) |*maybe, i| {
+            const item = if (maybe.*) |*v| v else continue;
+            const before = self.staged_count;
+            self.add(entryOf(item));
+            if (self.staged_count == before) continue; // caught up, or rail full
+            if (!wantsLookup(item) or n == @min(slots.len, indexes.len)) continue;
+            slots[n] = before;
+            indexes[n] = i;
+            n += 1;
+        }
+        return n;
+    }
     pub fn finish(self: *CalendarProjection) void {
         if (self.succeeded == 0 and (self.expected orelse 1) != 0) {
             self.failed = true;
@@ -401,4 +419,38 @@ test "calendar availability accepts string or integer identities, any field orde
     try std.testing.expectEqual(@as(?u32, 30), eztvEpisodeSeeds(doc, 3, 4));
     try std.testing.expect(eztvEpisodeSeeds("{\"torrents\":[{\"season\":3,\"seeds\":99},{\"episode\":4,\"seeds\":80}]}", 3, 4) == null);
     try std.testing.expect(eztvEpisodeSeeds("{\"torrents\":[{\"season\":3,\"episode\":4,\"seeds\":999999999999999999999999999999}]}", 3, 4) == null);
+}
+
+test "calendar stages shows in library order and looks up only slotted unseen cards" {
+    const Show = struct {
+        entry: CalendarEntry,
+        lookup: bool,
+        fn entryOf(s: *const @This()) CalendarEntry {
+            return s.entry;
+        }
+        fn wants(s: *const @This()) bool {
+            return s.lookup;
+        }
+    };
+    var items: [16]?Show = undefined;
+    // id 1: failed (null); id 2: caught up (no card); 3..16: upcoming, even ids want EZTV.
+    items[0] = null;
+    items[1] = .{ .entry = .{ .tmdb_id = 2 }, .lookup = true };
+    for (2..16) |i| items[i] = .{ .entry = .{ .tmdb_id = @intCast(i + 1), .next_season = 1 }, .lookup = (i + 1) % 2 == 0 };
+    var projection: CalendarProjection = .{};
+    projection.begin(items.len);
+    var slots: [12]usize = undefined;
+    var indexes: [12]usize = undefined;
+    const n = projection.stageOrdered(Show, &items, Show.entryOf, Show.wants, &slots, &indexes);
+    // Rail takes ids 3..14 in library order; 15 and 16 lose to the full rail.
+    try std.testing.expectEqual(@as(usize, 12), projection.staged_count);
+    for (projection.staged[0..12], 0..) |e, i| try std.testing.expectEqual(@as(i32, @intCast(i + 3)), e.tmdb_id);
+    // Caught-up and rail-full shows still count as succeeded; the failed one does not.
+    try std.testing.expectEqual(@as(usize, 15), projection.succeeded);
+    // Lookups: slotted even ids 4,6,..,14 — never the caught-up id 2 or the unslotted 16.
+    try std.testing.expectEqual(@as(usize, 6), n);
+    for (0..n) |j| {
+        try std.testing.expectEqual(@as(i32, @intCast(4 + 2 * j)), projection.staged[slots[j]].tmdb_id);
+        try std.testing.expectEqual(@as(i32, @intCast(4 + 2 * j)), items[indexes[j]].?.entry.tmdb_id);
+    }
 }
