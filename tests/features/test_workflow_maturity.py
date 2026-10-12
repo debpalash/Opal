@@ -233,8 +233,10 @@ def test_tv_sync_fanout():
             and worker.index(run) < worker.index("cal.commitOrdered(cards"),
         "heap rows, not thread stack": "alloc.alloc(db.TvShowRow, MAX_SHOWS)" in worker,
         "atomic tallies": "updated.fetchAdd" in lib and "learned_imdb.store(true, .release)" in lib,
-        "cards prepared off the projection": "pub fn prepare(" in cal and "pub fn prepareFacts(" in cal,
-        "no unordered staging": "pub fn stage(" not in cal and "pub fn stageFacts(" not in cal,
+        # stage/stageFacts build a card; only commitOrdered touches the projection.
+        "cards built off the projection": "pub fn stage(" in cal and "pub fn stageFacts(" in cal
+            and cal.count("projection.add(") == 1
+            and "projection.add(" in cal.split("pub fn commitOrdered(", 1)[1],
         "eztv only for slotted cards": "projection.staged_count == before" in cal,
     }
     missing = [k for k, v in checks.items() if not v]

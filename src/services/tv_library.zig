@@ -250,7 +250,7 @@ fn syncKeyless(sh: *const db.TvShowRow, imdb: []const u8, now_s: i64, card: *?@i
     defer alloc.free(watched);
     const la: ?tp.Ep = if (facts.last.season > 0) facts.last else null;
     const nxt = tp.nextUp(facts.seasonSlice(), watched, la);
-    card.* = cal.prepareFacts(sh.tmdb_id, sh.name[0..sh.name_len], art, imdb, facts.last, facts.next, facts.next_air_epoch, facts.nextName(), nxt);
+    card.* = cal.stageFacts(sh.tmdb_id, sh.name[0..sh.name_len], art, imdb, facts.last, facts.next, facts.next_air_epoch, facts.nextName(), nxt);
     return true;
 }
 
@@ -422,7 +422,7 @@ fn syncShow(ctx: *SyncCtx, job: SyncJob) void {
     const nw = watched.len;
     const la: ?tp.Ep = if (last_ep.season > 0) last_ep else null;
     const nxt = tp.nextUp(seasons[0..ns], watched[0..nw], la);
-    job.card.* = cal.prepare(
+    job.card.* = cal.stage(
         sh.tmdb_id,
         sh.name[0..sh.name_len],
         sh.poster_path[0..sh.poster_path_len],

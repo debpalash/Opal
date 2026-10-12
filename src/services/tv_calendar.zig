@@ -153,10 +153,10 @@ pub const Prepared = struct {
     imdb_len: usize = 0,
 };
 
-/// Prepare one show from a TMDB document. `doc` is the /3/tv/{id} body the sync
+/// Stage one show from a TMDB document. `doc` is the /3/tv/{id} body the sync
 /// worker just fetched; `next_up` is tv_pure's next episode for this show (null
 /// = caught up). Null when the document is not this show (not a success).
-pub fn prepare(
+pub fn stage(
     tmdb_id: i32,
     name: []const u8,
     poster_path: []const u8,
@@ -187,9 +187,9 @@ pub fn prepare(
     return p;
 }
 
-/// Prepare one show from keyless facts (Cinemeta/TVmaze): same projection and the
+/// Stage one show from keyless facts (Cinemeta/TVmaze): same projection and the
 /// same "something to watch" answer as the TMDB path. `imdb` is the show's IMDb id.
-pub fn prepareFacts(
+pub fn stageFacts(
     id: i32,
     name: []const u8,
     poster_path: []const u8,
