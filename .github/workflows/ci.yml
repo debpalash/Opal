@@ -487,7 +487,9 @@ jobs:
         timeout-minutes: 20
         env:
           SDL_VIDEODRIVER: windows
-          SDL_RENDER_DRIVER: software
+          # SDL's software renderer rejects dvui's premultiplied-alpha custom
+          # blend mode (SDL_SetRenderDrawBlendMode in initWindow); runners
+          # provide Direct3D through WARP, so keep the default renderer.
         run: |
           # Native Windows paths are consumed by the test exe; do not pass an
           # MSYS /tmp path that the native std.Io filesystem cannot resolve.
