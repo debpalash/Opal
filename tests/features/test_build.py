@@ -65,6 +65,47 @@ def test_zig_build():
         return "fail", "Build timed out (>300s)"
 
 
+@test("WebP prefix auto-detects Homebrew without OPAL_WEBP_PREFIX", "Build")
+def test_webp_prefix_homebrew_fallback():
+    # A stock macOS dev box (`brew install webp`, no ~/.local/opal-webp, no
+    # env var) must build. build.zig used to addSearchPrefix the absent
+    # ~/.local/opal-webp unconditionally -> "unable to open prefix directory".
+    import tempfile
+    if sys.platform != "darwin":
+        return "skip", "Homebrew webp fallback is macOS-only"
+    zig = shutil.which("zig")
+    if not zig:
+        return "skip", "zig not on PATH"
+    brew = [p for p in (os.environ.get("HOMEBREW_PREFIX"), "/opt/homebrew", "/usr/local")
+            if p and os.path.exists(os.path.join(p, "lib", "libwebp.a"))]
+    if not brew:
+        return "skip", "no Homebrew libwebp.a (brew install webp)"
+    try:
+        info = subprocess.run([zig, "env"], capture_output=True, text=True, timeout=30).stdout
+        m = re.search(r'global_cache_dir\s*=\s*"([^"]+)"', info) or re.search(r'"global_cache_dir"\s*:\s*"([^"]+)"', info)
+        with tempfile.TemporaryDirectory() as home:
+            env = {k: v for k, v in os.environ.items() if k != "OPAL_WEBP_PREFIX"}
+            # Fresh HOME guarantees ~/.local/opal-webp is absent; keep the
+            # real zig package cache so the build stays offline and warm.
+            env["HOME"] = home
+            if m:
+                env["ZIG_GLOBAL_CACHE_DIR"] = m.group(1)
+            # Control: a missing prefix really is fatal, so the pass below
+            # proves the absent ~/.local/opal-webp was skipped, not tolerated.
+            bad = dict(env, OPAL_WEBP_PREFIX=os.path.join(home, "missing-webp"))
+            neg = subprocess.run([zig, "build"], cwd=PROJECT_DIR, env=bad,
+                                 capture_output=True, text=True, timeout=300)
+            if neg.returncode == 0 or "prefix directory" not in neg.stderr:
+                return "fail", "control: a missing OPAL_WEBP_PREFIX should fail with 'unable to open prefix directory'"
+            pos = subprocess.run([zig, "build"], cwd=PROJECT_DIR, env=env,
+                                 capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        return "fail", "build timed out (>300s)"
+    if pos.returncode != 0:
+        return "fail", pos.stderr[-600:]
+    return "pass", f"built with no env var and no ~/.local/opal-webp via {brew[0]}"
+
+
 @test("Build graph excludes unused SDL3 dependencies", "Build")
 def test_dvui_backend_isolation():
     result = subprocess.run(

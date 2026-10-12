@@ -379,18 +379,29 @@ fn buildSupported(b: *std.Build) void {
     addAgentAssets(b, exe.root_module);
     if (!headless) addGhosttyVt(b, exe.root_module, target);
     exe.root_module.addCSourceFile(.{ .file = b.path("src/core/webp_decode.c"), .flags = &.{"-O2"} });
-    // Distros often ship no libwebp.a. Look in -Dwebp-prefix, $OPAL_WEBP_PREFIX,
-    // then ~/.local/opal-webp (a harmless no-op when the directory is absent).
+    // Distros often ship no libwebp.a. An explicit -Dwebp-prefix or
+    // $OPAL_WEBP_PREFIX wins. Otherwise auto-detect the first prefix that
+    // really holds lib/libwebp.a: ~/.local/opal-webp, then Homebrew
+    // ($HOMEBREW_PREFIX, /opt/homebrew, /usr/local). Never add a missing
+    // prefix: addSearchPrefix on an absent dir fails the build with
+    // "unable to open prefix directory".
     if (b.option([]const u8, "webp-prefix", "Prefix holding lib/libwebp.a and include/webp")) |p| {
         b.addSearchPrefix(p);
     } else if (b.graph.environ_map.get("OPAL_WEBP_PREFIX")) |p| {
         b.addSearchPrefix(p);
-    } else if (b.graph.environ_map.get("HOME")) |home| {
-        const prefix = b.fmt("{s}/.local/opal-webp", .{home});
-        if (std.Io.Dir.cwd().openDir(b.graph.io, prefix, .{})) |dir| {
-            dir.close(b.graph.io);
+    } else {
+        const local_webp: ?[]const u8 = if (b.graph.environ_map.get("HOME")) |home|
+            b.fmt("{s}/.local/opal-webp", .{home})
+        else
+            null;
+        const webp_candidates = [_]?[]const u8{ local_webp, brew_prefix, "/opt/homebrew", "/usr/local" };
+        for (webp_candidates) |maybe_prefix| {
+            const prefix = maybe_prefix orelse continue;
+            const lib_a = b.fmt("{s}/lib/libwebp.a", .{prefix});
+            std.Io.Dir.cwd().access(b.graph.io, lib_a, .{}) catch continue;
             b.addSearchPrefix(prefix);
-        } else |_| {}
+            break;
+        }
     }
     exe.root_module.linkSystemLibrary("webp", .{ .preferred_link_mode = .static, .search_strategy = .no_fallback });
 
