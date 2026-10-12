@@ -475,7 +475,7 @@ fn renderControlBar() void {
             .id_extra = k,
             .color_fill = if (active) theme.colors.accent else theme.colors.bg_elevated,
             .color_text = if (active) theme.colors.text_on_accent else theme.colors.text_secondary,
-            .color_border = if (active) theme.colors.accent else dvui.Color{ .r = 45, .g = 45, .b = 60, .a = 200 },
+            .color_border = if (active) theme.colors.accent else theme.colors.border_subtle,
             .border = dvui.Rect.all(1),
             .corner_radius = dvui.Rect.all(theme.radius.pill),
             .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
@@ -578,7 +578,7 @@ fn statusColor(s: tp.Status) dvui.Color {
         .paused => theme.colors.text_tertiary,
         .errored => theme.colors.danger,
         .seeding, .complete => theme.colors.success,
-        .on_disk => dvui.Color{ .r = 100, .g = 170, .b = 255, .a = 255 },
+        .on_disk => theme.colors.text_secondary,
         .archived => theme.colors.text_tertiary,
     };
 }
@@ -642,11 +642,11 @@ fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
         else
             icons.tvg.lucide.file;
         const icol = if (r.is_dir)
-            dvui.Color{ .r = 100, .g = 170, .b = 255, .a = 255 }
+            theme.colors.accent
         else if (is_video)
-            dvui.Color{ .r = 100, .g = 220, .b = 120, .a = 255 }
+            theme.colors.success
         else if (is_audio)
-            dvui.Color{ .r = 255, .g = 180, .b = 80, .a = 255 }
+            theme.colors.warning
         else
             theme.colors.text_tertiary;
         _ = dvui.icon(@src(), "", ico, .{}, .{
@@ -685,6 +685,8 @@ fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
             .max_size_content = dvui.Options.MaxSize.width(title_cap),
             .font = theme.mediaTitleFont(shown_name, dvui.themeGet().font_body),
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .color_text = if (st == .archived or st == .paused) theme.colors.text_secondary else theme.colors.text_primary,
             .padding = dvui.Rect.all(0),
         })) {
@@ -697,7 +699,7 @@ fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
                 .id_extra = rid,
                 .expand = .horizontal,
                 .min_size_content = .{ .w = 10, .h = 4 },
-                .color_fill = dvui.Color{ .r = 35, .g = 35, .b = 50, .a = 255 },
+                .color_fill = theme.colors.bg_elevated,
                 .color_text = statusColor(st),
                 .corner_radius = dvui.Rect.all(2),
                 .margin = .{ .x = 0, .y = 3, .w = 0, .h = 0 },
@@ -730,6 +732,8 @@ fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
             .id_extra = rid,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .color_text = theme.colors.success,
             .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
             .gravity_y = 0.5,
@@ -751,6 +755,8 @@ fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
             .id_extra = rid,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .color_text = theme.colors.success,
             .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
             .gravity_y = 0.5,
@@ -796,6 +802,8 @@ fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
         if (dvui.buttonIcon(@src(), "", pic, .{}, .{}, .{
             .id_extra = rid,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .color_text = pcol,
             .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
             .gravity_y = 0.5,
@@ -816,6 +824,8 @@ fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"rotate-cw", .{}, .{}, .{
             .id_extra = rid,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .color_text = theme.colors.accent,
             .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
             .gravity_y = 0.5,
@@ -829,6 +839,8 @@ fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.download, .{}, .{}, .{
                 .id_extra = rid,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill_hover = theme.colors.bg_hover,
+                .color_fill_press = theme.colors.bg_elevated,
                 .color_text = theme.colors.accent,
                 .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
                 .gravity_y = 0.5,
@@ -844,6 +856,8 @@ fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"folder-open", .{}, .{}, .{
             .id_extra = rid,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .color_text = theme.colors.text_tertiary,
             .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
             .gravity_y = 0.5,
@@ -996,7 +1010,7 @@ fn renderExpanded(r: *const tp.Row) bool {
             .id_extra = rowId(r),
             .expand = .horizontal,
             .background = true,
-            .color_fill = dvui.Color{ .r = 15, .g = 15, .b = 22, .a = 255 },
+            .color_fill = theme.colors.bg_surface,
             .padding = .{ .x = 18, .y = 6, .w = 10, .h = 6 },
             .border = .{ .x = 3, .y = 0, .w = 0, .h = 1 },
             .color_border = theme.colors.accent,
@@ -1017,6 +1031,8 @@ fn renderExpanded(r: *const tp.Row) bool {
             if (dvui.button(@src(), if (hashing) "Hashing…" else "Verify on VirusTotal", .{}, .{
                 .id_extra = rowId(r),
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill_hover = theme.colors.bg_hover,
+                .color_fill_press = theme.colors.bg_elevated,
                 .color_text = if (hashing) theme.colors.text_tertiary else theme.colors.text_secondary,
                 .corner_radius = theme.dims.rad_sm,
                 .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
@@ -1212,7 +1228,7 @@ fn renderHttpRow(s: *const httpdl.engine.Snap, i: usize) void {
                 .id_extra = rid,
                 .expand = .horizontal,
                 .min_size_content = .{ .w = 10, .h = 4 },
-                .color_fill = dvui.Color{ .r = 35, .g = 35, .b = 50, .a = 255 },
+                .color_fill = theme.colors.bg_elevated,
                 .color_text = httpStatusColor(st),
                 .corner_radius = dvui.Rect.all(2),
                 .margin = .{ .x = 0, .y = 3, .w = 0, .h = 0 },
@@ -1230,7 +1246,7 @@ fn renderHttpRow(s: *const httpdl.engine.Snap, i: usize) void {
                         .id_extra = rid + 2 + k,
                         .min_size_content = .{ .w = 26, .h = 3 },
                         .background = true,
-                        .color_fill = dvui.Color{ .r = 35, .g = 35, .b = 50, .a = 255 },
+                        .color_fill = theme.colors.bg_elevated,
                         .corner_radius = dvui.Rect.all(1),
                         .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
                     });
@@ -1298,6 +1314,8 @@ fn renderHttpRow(s: *const httpdl.engine.Snap, i: usize) void {
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.pause, .{}, .{}, .{
             .id_extra = rid,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .color_text = theme.colors.text_secondary,
             .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
             .gravity_y = 0.5,
@@ -1308,6 +1326,8 @@ fn renderHttpRow(s: *const httpdl.engine.Snap, i: usize) void {
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
             .id_extra = rid,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .color_text = theme.colors.accent,
             .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
             .gravity_y = 0.5,
@@ -1338,7 +1358,7 @@ fn renderExpandedFiles(torrent_id: i32) void {
         var xhdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
             .background = true,
-            .color_fill = dvui.Color{ .r = 14, .g = 14, .b = 22, .a = 255 },
+            .color_fill = theme.colors.bg_surface,
             .padding = .{ .x = 18, .y = 4, .w = 10, .h = 4 },
             .border = .{ .x = 3, .y = 0, .w = 0, .h = 1 },
             .color_border = theme.colors.accent,
@@ -1365,7 +1385,7 @@ fn renderExpandedFiles(torrent_id: i32) void {
             .id_extra = cid,
             .expand = .horizontal,
             .background = true,
-            .color_fill = dvui.Color{ .r = 15, .g = 15, .b = 22, .a = 255 },
+            .color_fill = theme.colors.bg_surface,
             .padding = .{ .x = 18, .y = 6, .w = 10, .h = 6 },
             .border = .{ .x = 3, .y = 0, .w = 0, .h = 1 },
             .color_border = theme.colors.accent,
@@ -1377,6 +1397,8 @@ fn renderExpandedFiles(torrent_id: i32) void {
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
             .id_extra = cid + 100,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .color_text = theme.colors.success,
             .padding = .{ .x = 3, .y = 3, .w = 6, .h = 3 },
             .gravity_y = 0.5,
@@ -1425,7 +1447,7 @@ fn renderExpandedFiles(torrent_id: i32) void {
             _ = dvui.slider(@src(), .{ .fraction = &pct }, .{
                 .id_extra = cid + 400,
                 .min_size_content = .{ .w = 80, .h = 5 },
-                .color_fill = dvui.Color{ .r = 30, .g = 30, .b = 45, .a = 255 },
+                .color_fill = theme.colors.bg_elevated,
                 .color_text = theme.colors.accent,
                 .corner_radius = dvui.Rect.all(2),
                 .gravity_y = 0.5,
@@ -1435,8 +1457,8 @@ fn renderExpandedFiles(torrent_id: i32) void {
         // Priority
         if (dvui.button(@src(), "Skip", .{}, .{
             .id_extra = cid + 500,
-            .color_fill = dvui.Color{ .r = 50, .g = 20, .b = 20, .a = 255 },
-            .color_text = theme.colors.text_secondary,
+            .color_fill = theme.colors.bg_elevated,
+            .color_text = theme.colors.danger,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
             .margin = .{ .x = 4, .y = 0, .w = 2, .h = 0 },
@@ -1447,7 +1469,7 @@ fn renderExpandedFiles(torrent_id: i32) void {
 
         if (dvui.button(@src(), "High", .{}, .{
             .id_extra = cid + 600,
-            .color_fill = dvui.Color{ .r = 20, .g = 45, .b = 20, .a = 255 },
+            .color_fill = theme.colors.bg_elevated,
             .color_text = theme.colors.success,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
@@ -1488,7 +1510,7 @@ fn renderFolderBrowse() void {
         var prow = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
             .background = true,
-            .color_fill = dvui.Color{ .r = 16, .g = 16, .b = 24, .a = 255 },
+            .color_fill = theme.colors.bg_surface,
             .padding = .{ .x = 6, .y = 4, .w = 10, .h = 4 },
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = 2 },
         });
@@ -1500,6 +1522,8 @@ fn renderFolderBrowse() void {
         if (dvui.button(@src(), safeUtf8Buf(lbl, &lsafe), .{}, .{
             .expand = .horizontal,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .color_text = theme.colors.text_secondary,
             .border = dvui.Rect.all(0),
             .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
@@ -1507,13 +1531,7 @@ fn renderFolderBrowse() void {
         })) {
             openInFileManager(effective_path);
         }
-        if (dvui.button(@src(), "← Up", .{}, .{
-            .color_fill = dvui.Color{ .r = 35, .g = 35, .b = 50, .a = 255 },
-            .color_text = theme.colors.accent,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
-            .gravity_y = 0.5,
-        })) {
+        if (components.iconActionButton(@src(), icons.tvg.lucide.@"arrow-up", "Up", .secondary, 0)) {
             if (std.mem.lastIndexOfScalar(u8, browse_subdir_buf[0..browse_subdir_len], '/')) |pos| {
                 browse_subdir_len = pos;
             } else {
@@ -1566,7 +1584,7 @@ fn renderFolderBrowse() void {
 
         // Icon
         const ficon = if (is_dir) icons.tvg.lucide.folder else if (is_video) icons.tvg.lucide.film else if (is_audio) icons.tvg.lucide.music else icons.tvg.lucide.file;
-        const icol = if (is_dir) dvui.Color{ .r = 100, .g = 170, .b = 255, .a = 255 } else if (is_video) dvui.Color{ .r = 100, .g = 220, .b = 120, .a = 255 } else if (is_audio) dvui.Color{ .r = 255, .g = 180, .b = 80, .a = 255 } else theme.colors.text_tertiary;
+        const icol = if (is_dir) theme.colors.accent else if (is_video) theme.colors.success else if (is_audio) theme.colors.warning else theme.colors.text_tertiary;
         _ = dvui.icon(@src(), "", ficon, .{}, .{
             .id_extra = fi + 20100,
             .color_text = icol,
@@ -1593,7 +1611,7 @@ fn renderFolderBrowse() void {
             .background = true,
             .color_fill = row_bg,
             .border = .{ .x = 1, .y = 0, .w = 0, .h = 0 },
-            .color_border = dvui.Color{ .r = 80, .g = 60, .b = 100, .a = 80 },
+            .color_border = theme.colors.border_subtle,
             .padding = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
             .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
             .gravity_y = 0.5,
@@ -1630,6 +1648,8 @@ fn renderFolderBrowse() void {
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
                 .id_extra = fi + 20500,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill_hover = theme.colors.bg_hover,
+                .color_fill_press = theme.colors.bg_elevated,
                 .color_text = theme.colors.success,
                 .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
                 .gravity_y = 0.5,
@@ -1654,8 +1674,10 @@ fn renderFolderBrowse() void {
 
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"trash-2", .{}, .{}, .{
             .id_extra = fi + 20600,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-            .color_text = dvui.Color{ .r = 160, .g = 60, .b = 60, .a = 200 },
+            .color_fill = theme.transparent,
+            .color_fill_hover = theme.colors.danger.opacity(0.15),
+            .color_fill_press = theme.colors.danger.opacity(0.28),
+            .color_text = theme.colors.danger,
             .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
             .gravity_y = 0.5,
         })) {

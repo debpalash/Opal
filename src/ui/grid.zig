@@ -821,6 +821,8 @@ pub fn renderGrid() !void {
                             _ = dvui.label(@src(), "No peers found after 15 seconds.", .{}, .{ .color_text = theme.colors.text_secondary, .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 } });
                             if (dvui.button(@src(), "Close Stream", .{}, .{
                                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                                .color_fill_hover = theme.colors.bg_hover,
+                                .color_fill_press = theme.colors.bg_elevated,
                                 .color_text = theme.colors.danger,
                                 .border = dvui.Rect.all(0),
                                 .corner_radius = theme.dims.rad_sm,
@@ -1399,6 +1401,8 @@ pub fn renderGrid() !void {
                                 if (dvui.buttonIcon(@src(), "fact-prev", icons.tvg.lucide.@"chevron-left", .{}, .{}, .{
                                     .id_extra = i + 3171,
                                     .color_fill = theme.transparent,
+                                    .color_fill_hover = theme.colors.bg_hover,
+                                    .color_fill_press = theme.colors.bg_elevated,
                                     .color_text = theme.colors.text_tertiary,
                                     .border = dvui.Rect.all(0),
                                     .min_size_content = .{ .w = 18, .h = 18 },
@@ -1430,6 +1434,8 @@ pub fn renderGrid() !void {
                                 if (dvui.buttonIcon(@src(), "fact-next", icons.tvg.lucide.@"chevron-right", .{}, .{}, .{
                                     .id_extra = i + 3172,
                                     .color_fill = theme.transparent,
+                                    .color_fill_hover = theme.colors.bg_hover,
+                                    .color_fill_press = theme.colors.bg_elevated,
                                     .color_text = theme.colors.text_tertiary,
                                     .border = dvui.Rect.all(0),
                                     .min_size_content = .{ .w = 18, .h = 18 },
@@ -1689,6 +1695,8 @@ fn renderContinueWatching() void {
             const resume_clicked = dvui.button(@src(), "Resume", .{}, .{
                 .id_extra = si + 43400,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill_hover = theme.colors.bg_hover,
+                .color_fill_press = theme.colors.bg_elevated,
                 .color_text = theme.colors.text_secondary,
                 .border = dvui.Rect.all(0),
                 .corner_radius = theme.dims.rad_sm,
@@ -1709,7 +1717,7 @@ fn renderContinueWatching() void {
                 // this was fixed) means there's nothing safe to resume into.
                 if (e.link_len > 0) {
                     browser.resumePlayback(e.link[0..e.link_len]);
-                    state.showToast("Resuming...");
+                    state.showToast("Resuming…");
                 } else {
                     state.showToast("Can't resume — no saved link for this item");
                 }

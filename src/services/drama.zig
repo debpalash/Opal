@@ -765,6 +765,8 @@ fn renderSearchRow() void {
         if (dvui.button(@src(), "Clear", .{}, .{
             .color_text = theme.colors.text_secondary,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
         })) {
             @memset(&ui_search_buf, 0);
@@ -952,6 +954,8 @@ fn renderCard(item: *state.DramaResult, idx: usize) void {
         .expand = .horizontal,
         .color_text = theme.colors.text_primary,
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill_hover = theme.colors.bg_hover,
+        .color_fill_press = theme.colors.bg_elevated,
         .padding = .{ .x = 4, .y = 2, .w = 4, .h = 0 },
     })) {
         state.app.drama.selected_idx = idx;
@@ -1000,11 +1004,7 @@ fn renderDetail(idx: usize) void {
     defer col.deinit();
 
     // Back.
-    if (dvui.button(@src(), "← Back", .{}, .{
-        .color_text = theme.colors.text_secondary,
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-        .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm },
-    })) {
+    if (components.iconButton(@src(), icons.tvg.lucide.@"arrow-left", "Back", false)) {
         state.app.drama.selected_idx = null;
         return;
     }
@@ -1028,13 +1028,7 @@ fn renderDetail(idx: usize) void {
     // Play button → universal resolver.
     {
         const loading = state.app.drama.stream_loading.load(.acquire);
-        if (dvui.button(@src(), if (loading) "Finding stream…" else "▶ Play", .{}, .{
-            .color_text = theme.colors.text_on_accent,
-            .color_fill = theme.colors.accent,
-            .corner_radius = dvui.Rect.all(theme.radius.md),
-            .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm },
-            .padding = .{ .x = theme.spacing.lg, .y = theme.spacing.sm, .w = theme.spacing.lg, .h = theme.spacing.sm },
-        })) {
+        if (components.iconActionButton(@src(), if (loading) icons.tvg.lucide.@"loader-circle" else icons.tvg.lucide.play, if (loading) "Finding stream…" else "Play", .primary, 0)) {
             if (!loading) playSelected();
         }
     }

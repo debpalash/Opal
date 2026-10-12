@@ -108,7 +108,11 @@ pub fn render() void {
     if (dvui.button(@src(), "Browse movies & TV", .{}, .{
         .expand = .horizontal,
         .color_fill = theme.colors.accent,
+        .color_fill_hover = theme.colors.accent.lighten(8),
         .color_text = theme.colors.text_on_accent,
+        // 1px accent border matches Skip's bordered height so the pair aligns.
+        .border = dvui.Rect.all(1),
+        .color_border = theme.colors.accent,
         .corner_radius = dvui.Rect.all(theme.radius.md),
         .padding = dvui.Rect.all(theme.spacing.sm),
         .margin = dvui.Rect.all(0),
@@ -119,6 +123,7 @@ pub fn render() void {
     }
     if (dvui.button(@src(), "Skip to Home", .{}, .{
         .color_fill = theme.colors.bg_surface,
+        .color_fill_hover = theme.colors.bg_hover,
         .color_text = theme.colors.text_secondary,
         .border = dvui.Rect.all(1),
         .color_border = theme.colors.border_subtle,

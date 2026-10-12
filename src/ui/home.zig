@@ -20,7 +20,7 @@ const components = @import("components.zig");
 const db = @import("../core/db.zig");
 const io_global = @import("../core/io_global.zig");
 
-const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
+const transparent = theme.transparent;
 
 const STRIP_MAX: usize = 24; // cap cards per strip (perf)
 const STRIP_CHROME: f32 = 78; // compact title/status/tools below each poster

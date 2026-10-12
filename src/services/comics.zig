@@ -3525,7 +3525,7 @@ pub fn renderContent() void {
     // the next-page appender. The row also doubles as a tap-to-load affordance.
     if (more_available and visible_count > 0 and visible_count < MAX_SEARCH_RESULTS) {
         const busy = loading_more.load(.acquire);
-        const lbl = if (busy) "Loading more…" else "▾ Load more";
+        const lbl = if (busy) "Loading more…" else "Load more";
         if (dvui.button(@src(), lbl, .{}, .{
             .id_extra = 60001,
             .expand = .horizontal,
@@ -3565,7 +3565,7 @@ fn renderSourceChip(label: []const u8, id: usize, src: Source) void {
     if (dvui.button(@src(), label, .{}, .{
         .id_extra = id + 72000,
         .color_fill = if (active) theme.colors.accent else theme.colors.bg_elevated,
-        .color_text = if (active) dvui.Color.white else theme.colors.text_primary,
+        .color_text = if (active) theme.colors.text_on_accent else theme.colors.text_primary,
         .corner_radius = theme.dims.rad_md,
         .padding = .{ .x = 10, .y = 3, .w = 10, .h = 3 },
         .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
@@ -3751,7 +3751,7 @@ fn renderCoverCard(idx: usize, cw: f32, cover_h: f32) void {
                     .id_extra = idx + 160,
                     .expand = .both,
                     .background = true,
-                    .color_fill = dvui.Color{ .r = 8, .g = 10, .b = 16, .a = 224 },
+                    .color_fill = theme.playerGlass(224),
                     .corner_radius = dvui.Rect.all(8),
                     .padding = dvui.Rect.all(8),
                 });
@@ -3843,7 +3843,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
             .expand = .horizontal,
             .padding = .{ .x = 6, .y = 3, .w = 6, .h = 3 },
             .background = true,
-            .color_fill = dvui.Color{ .r = 18, .g = 18, .b = 22, .a = 245 },
+            .color_fill = theme.colors.bg_surface,
         });
         defer nav_row.deinit();
 
@@ -3851,7 +3851,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
         if (state.app.comic.prev_url_len > 0) {
             if (dvui.button(@src(), "«", .{}, .{
                 .color_fill = theme.colors.accent,
-                .color_text = dvui.Color.white,
+                .color_text = theme.colors.text_on_accent,
                 .corner_radius = theme.dims.rad_sm,
                 .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
             })) {
@@ -3874,7 +3874,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
             const info = if (state.app.comic.view_mode == .single_page)
                 std.fmt.bufPrintZ(&info_buf, "{d}/{d}", .{ state.app.comic.current_page + 1, state.app.comic.page_count }) catch "?"
             else
-                std.fmt.bufPrintZ(&info_buf, "{d}pp {d}↓", .{ state.app.comic.page_count, state.app.comic.dl_progress.load(.acquire) }) catch "?";
+                std.fmt.bufPrintZ(&info_buf, "{d}/{d} loaded", .{ state.app.comic.dl_progress.load(.acquire), state.app.comic.page_count }) catch "?";
             _ = dvui.label(@src(), "{s}", .{info}, .{
                 .color_text = theme.colors.text_secondary,
                 .padding = .{ .x = 4, .y = 0, .w = 2, .h = 0 },
@@ -3929,7 +3929,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
             if (dvui.button(@src(), "»", .{}, .{
                 .id_extra = 1,
                 .color_fill = theme.colors.accent,
-                .color_text = dvui.Color.white,
+                .color_text = theme.colors.text_on_accent,
                 .corner_radius = theme.dims.rad_sm,
                 .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
                 .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
@@ -3948,7 +3948,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
         if (dvui.buttonIcon(@src(), "comic-ocr", icons.tvg.lucide.@"scan-text", .{}, .{}, .{
             .id_extra = 20,
             .color_fill = if (state.app.comic.show_ocr_overlay) theme.colors.accent else theme.colors.bg_elevated,
-            .color_text = if (state.app.comic.show_ocr_overlay) dvui.Color.white else theme.colors.text_primary,
+            .color_text = if (state.app.comic.show_ocr_overlay) theme.colors.text_on_accent else theme.colors.text_primary,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 5, .y = 2, .w = 5, .h = 2 },
             .margin = .{ .x = 1, .y = 0, .w = 0, .h = 0 },
@@ -3960,7 +3960,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
         if (dvui.buttonIcon(@src(), "comic-narrate", if (state.app.comic.narrating) icons.tvg.lucide.@"circle-stop" else icons.tvg.lucide.@"volume-2", .{}, .{}, .{
             .id_extra = 21,
             .color_fill = if (state.app.comic.narrating) theme.colors.accent else theme.colors.bg_elevated,
-            .color_text = if (state.app.comic.narrating) dvui.Color.white else theme.colors.text_primary,
+            .color_text = if (state.app.comic.narrating) theme.colors.text_on_accent else theme.colors.text_primary,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 5, .y = 2, .w = 5, .h = 2 },
             .margin = .{ .x = 1, .y = 0, .w = 0, .h = 0 },
@@ -3971,7 +3971,8 @@ pub fn renderPaneContent(pane_idx: usize) void {
         // Close the reader → back to the comics browse/search view.
         if (dvui.buttonIcon(@src(), "comic-close", icons.tvg.lucide.x, .{}, .{}, .{
             .id_extra = 2,
-            .color_fill = dvui.Color{ .r = 60, .g = 20, .b = 20, .a = 200 },
+            .color_fill = theme.colors.danger.opacity(0.15),
+            .color_fill_hover = theme.colors.danger.opacity(0.28),
             .color_text = theme.colors.danger,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 5, .y = 2, .w = 5, .h = 2 },
@@ -4113,7 +4114,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
             var ocr_panel = dvui.box(@src(), .{ .dir = .vertical }, .{
                 .expand = .horizontal,
                 .background = true,
-                .color_fill = dvui.Color{ .r = 10, .g = 10, .b = 14, .a = 230 },
+                .color_fill = theme.playerGlass(230),
                 .color_border = theme.colors.accent,
                 .border = .{ .x = 0, .y = 1, .w = 0, .h = 0 },
                 .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 },
@@ -4148,7 +4149,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
                 });
             }
         } else if (pg < 128 and !state.app.comic.ocr_done[pg]) {
-            _ = dvui.label(@src(), "Running OCR...", .{}, .{
+            _ = dvui.label(@src(), "Running OCR…", .{}, .{
                 .id_extra = 30002,
                 .color_text = theme.colors.accent,
                 .padding = .{ .x = 10, .y = 4, .w = 0, .h = 4 },
@@ -4158,12 +4159,12 @@ pub fn renderPaneContent(pane_idx: usize) void {
 
     // Narration indicator
     if (state.app.comic.narrating) {
-        _ = dvui.label(@src(), "Narrating...", .{}, .{
+        _ = dvui.label(@src(), "Narrating…", .{}, .{
             .id_extra = 30010,
             .color_text = theme.colors.accent,
             .padding = .{ .x = 10, .y = 3, .w = 0, .h = 3 },
             .background = true,
-            .color_fill = dvui.Color{ .r = 10, .g = 10, .b = 14, .a = 200 },
+            .color_fill = theme.playerGlass(200),
         });
     }
 }
@@ -4273,7 +4274,7 @@ fn renderPagePlaceholder(pg: usize, available_width: f32) void {
     page_decode_mutex.unlock();
     const status = if (failed) "could not be decoded" else if (pageReady(pg)) "preparing..." else "downloading...";
     var label_buf: [80]u8 = undefined;
-    const label = std.fmt.bufPrintZ(&label_buf, "Page {d} {s}", .{ pg + 1, status }) catch "Preparing page...";
+    const label = std.fmt.bufPrintZ(&label_buf, "Page {d} {s}", .{ pg + 1, status }) catch "Preparing page…";
     const width = @max(available_width - 4, 10);
     var placeholder = dvui.box(@src(), .{ .dir = .vertical }, .{
         .id_extra = pg + 12000,

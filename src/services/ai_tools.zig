@@ -427,7 +427,7 @@ fn executeBrowseTmdb(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
     state.app.tmdb.page = 1;
     const tmdb_api = @import("tmdb_api.zig");
     tmdb_api.fetchCurrentView(false);
-    state.showToast("Searching Movies & TV...");
+    state.showToast("Searching Movies & TV…");
 
     return std.fmt.allocPrint(
         alloc,

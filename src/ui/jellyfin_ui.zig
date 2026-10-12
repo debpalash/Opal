@@ -181,7 +181,7 @@ fn renderLoginForm() void {
                 @memset(&login_pass, 0);
             }
         } else {
-            _ = dvui.label(@src(), "Connecting...", .{}, .{
+            _ = dvui.label(@src(), "Connecting…", .{}, .{
                 .expand = .horizontal,
                 .color_text = theme.colors.text_secondary,
                 .gravity_x = 0.5,
@@ -322,6 +322,8 @@ fn renderLibraries() void {
             .expand = .horizontal,
             .gravity_y = 0.5,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .color_text = theme.colors.text_primary,
             .padding = dvui.Rect.all(0),
         })) {
@@ -377,7 +379,7 @@ fn renderItems() void {
         }
 
         if (frame_view.loading) {
-            _ = dvui.label(@src(), "Loading...", .{}, .{
+            _ = dvui.label(@src(), "Loading…", .{}, .{
                 .color_text = theme.colors.text_secondary,
                 .gravity_y = 0.5,
             });
@@ -641,6 +643,8 @@ fn renderPosterCard(item: *const jf.PresentationItem, slot_idx: usize, idx: usiz
                 .gravity_x = 0.5,
                 .gravity_y = 0.5,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill_hover = theme.colors.bg_hover,
+                .color_fill_press = theme.colors.bg_elevated,
                 .color_text = theme.colors.accent,
             })) activateItem(item);
         }
@@ -693,6 +697,8 @@ fn renderPosterCard(item: *const jf.PresentationItem, slot_idx: usize, idx: usiz
         if (dvui.buttonIcon(@src(), "favorite", icons.tvg.lucide.star, .{}, .{}, .{
             .id_extra = idx + 92,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .color_text = if (item.is_favorite) theme.colors.warning else theme.colors.text_secondary,
             .min_size_content = .{ .w = 14, .h = 14 },
             .padding = dvui.Rect.all(4),
@@ -701,6 +707,8 @@ fn renderPosterCard(item: *const jf.PresentationItem, slot_idx: usize, idx: usiz
         if (dvui.buttonIcon(@src(), "watched", if (item.is_played) icons.tvg.lucide.@"circle-check-big" else icons.tvg.lucide.circle, .{}, .{}, .{
             .id_extra = idx + 93,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .color_text = if (item.is_played) theme.colors.success else theme.colors.text_secondary,
             .min_size_content = .{ .w = 14, .h = 14 },
             .padding = dvui.Rect.all(4),

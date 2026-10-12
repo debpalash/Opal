@@ -41,7 +41,7 @@ pub fn sidebarBoundsForTest() struct { sidebar: dvui.Rect.Physical, content: dvu
     return .{ .sidebar = sidebar_rect, .content = content_rect };
 }
 
-const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
+const transparent = theme.transparent;
 
 var player_top_chrome_rect: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
 

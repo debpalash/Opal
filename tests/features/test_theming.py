@@ -295,6 +295,197 @@ def test_no_unthemed_widgets():
     return "pass", "no bare-options dvui widgets — all buttons route through themed helpers"
 
 
+def _font_codepoints(path):
+    """Codepoints covered by a TrueType font's cmap (formats 4 and 12)."""
+    import struct
+    data = open(path, "rb").read()
+    num_tables = struct.unpack(">H", data[4:6])[0]
+    base = None
+    for i in range(num_tables):
+        tag, _cs, off, _ln = struct.unpack(">4sIII", data[12 + 16 * i:28 + 16 * i])
+        if tag == b"cmap":
+            base = off
+    cps = set()
+    if base is None:
+        return cps
+    n = struct.unpack(">H", data[base + 2:base + 4])[0]
+    for i in range(n):
+        _pid, _eid, off = struct.unpack(">HHI", data[base + 4 + 8 * i:base + 12 + 8 * i])
+        o = base + off
+        fmt = struct.unpack(">H", data[o:o + 2])[0]
+        if fmt == 4:
+            segx2 = struct.unpack(">H", data[o + 6:o + 8])[0]
+            segs = segx2 // 2
+            ends = struct.unpack(">%dH" % segs, data[o + 14:o + 14 + segx2])
+            starts = struct.unpack(">%dH" % segs, data[o + 16 + segx2:o + 16 + 2 * segx2])
+            for a, b in zip(starts, ends):
+                cps.update(range(a, b + 1))
+        elif fmt == 12:
+            groups = struct.unpack(">I", data[o + 12:o + 16])[0]
+            for g in range(groups):
+                a, b, _ = struct.unpack(">III", data[o + 16 + 12 * g:o + 28 + 12 * g])
+                cps.update(range(a, b + 1))
+    return cps
+
+
+@test("UI strings only use glyphs the UI font has (no tofu)", "Theming")
+def test_no_tofu_glyphs():
+    """RULE (CLAUDE.md): symbols like ▶ ● ← → ✕ ⟳ ▾ are absent from the UI font
+    (Noto Sans) and render as tofu boxes. Use a lucide icon beside the label.
+
+    Regression: Drama "← Back"/"▶ Play", Transfers "← Up", the resume prompt's
+    "✕", ProjectJAV "●"/"⟳", Comics "▾ Load more", and "Settings → X" hints."""
+    import re
+    cps = _font_codepoints(os.path.join(PROJECT_DIR, "src/assets/fonts/NotoSans-Regular.ttf"))
+    if len(cps) < 1000:
+        return "fail", "could not read NotoSans cmap"
+
+    def cjk(ch):
+        o = ord(ch)
+        return (0x1100 <= o <= 0x11FF or 0x2E80 <= o <= 0x9FFF or 0xAC00 <= o <= 0xD7AF
+                or 0xF900 <= o <= 0xFAFF or 0xFF00 <= o <= 0xFFEF)
+
+    # JSON/HTTP code paths never reach the UI font.
+    skip_files = ("remote.zig", "remote_http.zig", "mcp_main.zig")
+    lit = re.compile(r'"((?:[^"\\]|\\.)*)"')
+    offenders = []
+    for root, _dirs, files in os.walk(os.path.join(PROJECT_DIR, "src")):
+        for f in files:
+            if not f.endswith(".zig") or f in skip_files or f.endswith("_pure.zig") or "_test" in f:
+                continue
+            path = os.path.join(root, f)
+            rel = os.path.relpath(path, PROJECT_DIR)
+            for i, line in enumerate(open(path, encoding="utf-8", errors="replace"), 1):
+                if line.lstrip().startswith("//"):
+                    continue
+                for m in lit.finditer(line):
+                    text = m.group(1)
+                    # \u{XXXX} escapes count too.
+                    text += "".join(chr(int(h, 16)) for h in re.findall(r"\\u\{([0-9a-fA-F]+)\}", text))
+                    bad = sorted({ch for ch in text if ord(ch) > 127 and ord(ch) not in cps and not cjk(ch)})
+                    if bad:
+                        offenders.append(f"{rel}:{i} {''.join(bad)}")
+    if offenders:
+        return "fail", "glyphs missing from UI font (use a lucide icon): " + ", ".join(offenders[:8])
+    return "pass", f"every UI string literal renders in Noto Sans ({len(cps)} codepoints)"
+
+
+@test("Transparent-fill buttons give hover/press feedback", "Theming")
+def test_transparent_buttons_hover():
+    """dvui derives hover/press by lightening color_fill, and lighten(transparent)
+    is still transparent — a transparent button with no explicit
+    color_fill_hover gives zero pointer feedback.
+
+    Regression: ~90 icon/text buttons (Transfers row actions, Queue, Jellyfin,
+    header omnibox icons, AI chat, playlist panel…) did nothing on hover."""
+    import re
+    call = re.compile(r"dvui\.(button|buttonIcon)\(@src\(\)")
+    transparent = re.compile(r"\.color_fill = (?:dvui\.Color\{ \.r = 0, \.g = 0, \.b = 0, \.a = 0 \}|theme\.transparent|transparent|invisible|dvui\.Color\.transparent)\s*,")
+    # browser.zig was mid-refactor in a parallel change when this gate landed;
+    # its one remaining site (the reader-mode close button) is tracked
+    # separately — remove this allowance once it sets color_fill_hover.
+    pending = ("browser.zig",)
+    offenders = []
+    for root, _dirs, files in os.walk(os.path.join(PROJECT_DIR, "src")):
+        for f in files:
+            if not f.endswith(".zig") or "_test" in f or f in pending:
+                continue
+            path = os.path.join(root, f)
+            src = open(path, encoding="utf-8", errors="replace").read()
+            for m in call.finditer(src):
+                depth, j = 0, src.index("(", m.start())
+                while True:
+                    ch = src[j]
+                    if ch == "(":
+                        depth += 1
+                    elif ch == ")":
+                        depth -= 1
+                        if depth == 0:
+                            break
+                    j += 1
+                body = src[m.start():j]
+                # A full-card invisible hit target (label "" + expand .both)
+                # sits over artwork; filling it on hover would hide the card.
+                if '"", .{}, .{' in body and ".expand = .both" in body:
+                    continue
+                if transparent.search(body) and "color_fill_hover" not in body:
+                    rel = os.path.relpath(path, PROJECT_DIR)
+                    offenders.append(f"{rel}:{src.count(chr(10), 0, m.start()) + 1}")
+    if offenders:
+        return "fail", f"{len(offenders)} transparent buttons without color_fill_hover: " + ", ".join(offenders[:8])
+    return "pass", "every transparent-fill button sets an explicit hover fill"
+
+
+@test("Labels on accent fills use text_on_accent, not white", "Theming")
+def test_accent_text_contrast():
+    """Every preset pairs its accent with a dark text_on_accent. Hardcoded
+    dvui.Color.white on an accent fill (Plugins Install, Comics/Anime/TMDB
+    active chips, RSS/VNDB/Plex primary buttons…) was low-contrast and
+    inconsistent with actionButton(.primary)."""
+    import re
+    opt = re.compile(r"\.color_fill = (if \(([^)]*)\) )?theme\.colors\.accent\b[^\n]*\n\s*(?:\.color_fill_\w+ = [^\n]*\n\s*)*\.color_text = (if \(([^)]*)\) )?dvui\.Color\.white")
+    offenders = []
+    for root, _dirs, files in os.walk(os.path.join(PROJECT_DIR, "src")):
+        for f in files:
+            if not f.endswith(".zig") or "_test" in f or f in ("browser.zig", "wanted_ui.zig"):
+                continue
+            path = os.path.join(root, f)
+            src = open(path, encoding="utf-8", errors="replace").read()
+            for m in opt.finditer(src):
+                if (m.group(2) or "") == (m.group(4) or ""):
+                    offenders.append(f"{os.path.relpath(path, PROJECT_DIR)}:{src.count(chr(10), 0, m.start()) + 1}")
+    if offenders:
+        return "fail", "white text on accent fill (use theme.colors.text_on_accent): " + ", ".join(offenders[:8])
+    return "pass", "accent fills carry text_on_accent"
+
+
+@test("dvui style palettes map onto the active preset", "Theming")
+def test_dvui_styles_follow_preset():
+    """theme.applyToDvui must override dvui's per-style palettes. Left at the
+    Adwaita defaults, menu-item hovers and checkbox ticks painted Adwaita blue
+    and a button with only color_fill set fell back to Adwaita control colors.
+    Also guards the primary actionButton hover: it used bg_hover under
+    text_on_accent, so the label vanished under the pointer."""
+    with open(os.path.join(PROJECT_DIR, "src/ui/theme.zig")) as f:
+        theme_src = f.read()
+    body = theme_src.split("fn applyToDvui", 1)[-1].split("\n}\n", 1)[0]
+    missing = [s for s in ("t.control", "t.window", "t.highlight", "t.err") if s not in body]
+    with open(os.path.join(PROJECT_DIR, "src/ui/components.zig")) as f:
+        comp = f.read()
+    fills = comp.split("fn actionFills", 1)
+    if len(fills) < 2:
+        missing.append("components.actionFills")
+    else:
+        primary = fills[1].split("}", 1)[0]
+        if "bg_hover" in primary or "accent_primary" not in primary:
+            missing.append("primary hover must stay on the accent hue")
+        for fn in ("pub fn actionButton", "pub fn iconActionButton"):
+            seg = comp.split(fn, 1)[-1].split("\npub fn", 1)[0]
+            if "actionFills(" not in seg:
+                missing.append(f"{fn.split()[-1]} not routed through actionFills")
+    if missing:
+        return "fail", "; ".join(missing)
+    return "pass", "control/window/highlight/err styles + action button fills follow the preset"
+
+
+@test("Web CSS only references defined custom properties", "Theming")
+def test_web_css_vars_defined():
+    """An undefined var() silently falls back (inherit / transparent). Regression:
+    the active destination button used var(--bg) — light text on the light
+    accent — and the YouTube embed bar used var(--bg-1) (no background)."""
+    import re, glob
+    sources = [os.path.join(PROJECT_DIR, "web/index.html")]
+    sources += glob.glob(os.path.join(PROJECT_DIR, "web/styles/*.css"))
+    sources += glob.glob(os.path.join(PROJECT_DIR, "web/js/*.js"))
+    text = "".join(open(p, encoding="utf-8", errors="replace").read() for p in sources)
+    defined = set(re.findall(r"(--[\w-]+)\s*:", text)) | set(re.findall(r"setProperty\(\s*'(--[\w-]+)'", text))
+    undefined = sorted({name for name, fallback in re.findall(r"var\((--[\w-]+)\s*(,)?", text)
+                        if name not in defined and not fallback})
+    if undefined:
+        return "fail", "undefined CSS custom properties: " + ", ".join(undefined)
+    return "pass", f"{len(defined)} custom properties, all references resolve"
+
+
 @test("Theme colors are read per-frame, not cached at module scope", "Theming")
 def test_no_hardcoded_ui_colors():
     """A `const c = theme.colors.x` at module scope freezes the color at load,

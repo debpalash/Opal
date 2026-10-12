@@ -129,5 +129,5 @@ pub fn clickSlot(idx: usize) void {
     if (title_len == 0) return;
     state.navigateToTab(.Search);
     @import("search.zig").submitQuery(title_buf[0..title_len]);
-    state.showToast("Searching all sources...");
+    state.showToast("Searching all sources…");
 }

@@ -2662,6 +2662,8 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
             if (dvui.buttonIcon(@src(), "np-prev", icons.tvg.lucide.@"skip-back", .{}, .{}, .{
                 .data_out = &wd,
                 .color_fill = transparent,
+                .color_fill_hover = theme.colors.bg_hover,
+                .color_fill_press = theme.colors.bg_elevated,
                 .color_text = theme.colors.text_primary,
                 .border = dvui.Rect.all(0),
                 .corner_radius = dvui.Rect.all(theme.radius.sm),
@@ -2699,6 +2701,8 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
             if (dvui.buttonIcon(@src(), "np-next", icons.tvg.lucide.@"skip-forward", .{}, .{}, .{
                 .data_out = &wd,
                 .color_fill = transparent,
+                .color_fill_hover = theme.colors.bg_hover,
+                .color_fill_press = theme.colors.bg_elevated,
                 .color_text = theme.colors.text_primary,
                 .border = dvui.Rect.all(0),
                 .corner_radius = dvui.Rect.all(theme.radius.sm),
@@ -2795,6 +2799,8 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
     if (dvui.buttonIcon(@src(), "np-close", icons.tvg.lucide.x, .{}, .{}, .{
         .data_out = &wd,
         .color_fill = transparent,
+        .color_fill_hover = theme.colors.bg_hover,
+        .color_fill_press = theme.colors.bg_elevated,
         .color_text = theme.colors.text_secondary,
         .border = dvui.Rect.all(0),
         .corner_radius = dvui.Rect.all(theme.radius.sm),
@@ -2811,7 +2817,6 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
 /// The thin torrent-activity strip — unchanged from the original tray. Rendered
 /// below the now-playing bar (or alone, when nothing is playing).
 fn renderTorrentActivityStrip() void {
-    const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
 
     // Tally first — the strip only earns its space when a torrent is actually
     // present. Otherwise it sat at the bottom forever reading "0 Active / 0 Peers".
@@ -2882,12 +2887,15 @@ fn renderTorrentActivityStrip() void {
     });
     defer b.deinit();
 
+    // Status glyphs are plain icons, not buttons: they were no-op buttonIcons
+    // that showed a hand cursor and took focus without doing anything.
     // Single accent — the leading "Active" indicator. Everything else reads
     // on the neutral text ramp (rate brightens to text_primary when live).
-    _ = dvui.buttonIcon(@src(), "", icons.tvg.lucide.activity, .{}, .{}, .{
+    dvui.icon(@src(), "", icons.tvg.lucide.activity, .{}, .{
         .gravity_y = 0.5,
-        .color_fill = transparent,
         .color_text = theme.colors.accent,
+        .min_size_content = theme.iconSize(.sm),
+        .margin = dvui.Rect.all(4),
         .padding = dvui.Rect.all(2),
     });
     _ = dvui.label(@src(), "{d} Active", .{total_active}, .{ .color_text = theme.colors.text_primary, .gravity_y = 0.5 });
@@ -2899,10 +2907,11 @@ fn renderTorrentActivityStrip() void {
 
     const mb_s = total_dl / (1024.0 * 1024.0);
     const rate_color = if (mb_s > 0.1) theme.colors.text_primary else theme.colors.text_tertiary;
-    _ = dvui.buttonIcon(@src(), "", icons.tvg.lucide.download, .{}, .{}, .{
+    dvui.icon(@src(), "", icons.tvg.lucide.download, .{}, .{
         .gravity_y = 0.5,
-        .color_fill = transparent,
         .color_text = rate_color,
+        .min_size_content = theme.iconSize(.sm),
+        .margin = dvui.Rect.all(4),
         .padding = dvui.Rect.all(2),
     });
     var mb_str: [32]u8 = undefined;
@@ -2914,10 +2923,11 @@ fn renderTorrentActivityStrip() void {
         });
     } else |_| {}
 
-    _ = dvui.buttonIcon(@src(), "", icons.tvg.lucide.users, .{}, .{}, .{
+    dvui.icon(@src(), "", icons.tvg.lucide.users, .{}, .{
         .gravity_y = 0.5,
-        .color_fill = transparent,
         .color_text = theme.colors.text_tertiary,
+        .min_size_content = theme.iconSize(.sm),
+        .margin = dvui.Rect.all(4),
         .padding = dvui.Rect.all(2),
     });
     _ = dvui.label(@src(), "{d} Peers", .{total_peers}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
@@ -3035,13 +3045,21 @@ pub fn renderResumePrompt() void {
         state.app.resume_prompt_active = false;
     }
 
-    if (dvui.button(@src(), if (state.app.resume_prompt_session) "Start Fresh" else "\u{2715}", .{}, .{
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
-        .color_text = theme.colors.text_tertiary,
-        .border = dvui.Rect.all(0),
-        .corner_radius = theme.dims.rad_sm,
-        .gravity_y = 0.5,
-    })) {
+    // "\u{2715}" (✕) is not in the UI font and rendered as tofu — the
+    // dismiss affordance is a lucide x icon button instead.
+    const dismissed = if (state.app.resume_prompt_session)
+        dvui.button(@src(), "Start Fresh", .{}, .{
+            .color_fill = theme.transparent,
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
+            .color_text = theme.colors.text_tertiary,
+            .border = dvui.Rect.all(0),
+            .corner_radius = theme.dims.rad_sm,
+            .gravity_y = 0.5,
+        })
+    else
+        components.iconButton(@src(), icons.tvg.lucide.x, "Dismiss", false);
+    if (dismissed) {
         if (state.app.resume_prompt_session) {
             state.app.session_saved = false;
             state.app.session_restore_count = 0;

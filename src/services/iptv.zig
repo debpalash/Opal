@@ -966,7 +966,7 @@ fn renderToolbar() void {
     if (local_search) {
         var te = dvui.textEntry(@src(), .{
             .text = .{ .buffer = &state.app.iptv.search_buf },
-            .placeholder = "Search channels...",
+            .placeholder = "Search channels…",
         }, .{
             .expand = .horizontal,
             .padding = .{ .x = 6, .y = 4, .w = 6, .h = 4 },

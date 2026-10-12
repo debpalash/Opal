@@ -20,7 +20,7 @@ const theme = @import("theme.zig");
 const recommendations = @import("../services/recommendations.zig");
 const search = @import("../services/search.zig");
 
-const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
+const transparent = theme.transparent;
 
 const CARD_W: f32 = 220;
 const CARD_H: f32 = 132;
