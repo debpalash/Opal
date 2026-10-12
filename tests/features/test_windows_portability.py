@@ -664,7 +664,13 @@ def test_no_hardcoded_config_path():
         return "fail", ("hand-built config path (bypasses %APPDATA% and "
                         "XDG_CONFIG_HOME): " + ", ".join(offenders)
                         + " — use paths.configDir()")
-    return "pass", "every config path is built from paths.configDir()"
+    paths = _read("src/core/paths.zig")
+    mcp = _read("src/mcp_main.zig")
+    pure = _read("src/core/config_path_pure.zig")
+    if not ("config_path.resolve(" in paths and "config_path.resolve(" in mcp
+            and '"AppData/Roaming/opal"' in pure and '".config/opal"' in pure):
+        return "fail", "desktop and standalone MCP config paths do not share one policy"
+    return "pass", "desktop and standalone MCP resolve the same config directory policy"
 
 
 @test("lanIp: absolute paths, no cached failure, non-macOS arm", "Windows")

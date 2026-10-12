@@ -58,7 +58,8 @@ def test_browse_loading_and_failure_retention():
     content = section(anime, "pub fn renderContent()", "\n}\n")
     assert 'dvui.label(@src(), "Loading..."' not in content
     page = section(drama, "fn fetchPage(", "/// Drain worker-staged results")
-    assert page.index("catalogDocumentUsable") < page.index("pending_count = n")
+    assert page.index("catalogDocumentUsable") < page.index("publishBatch(job, items[0..n]")
+    assert "pending_count = n" in section(drama, "fn publishBatch(", "/// Fetch one TMDB discover page")
     assert "Keep useful old rows" in page
     assert "Drama catalog unavailable" in drama and "Refresh unavailable" in drama
     keyless = section(anilist, "const CancelEpoch", "/// Search AniList for an anime by title")

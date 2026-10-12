@@ -258,7 +258,8 @@ def test_plugin_credentials():
     ui = _web_app()
     checks = {
         "handleApi receives the request":
-            "fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8, request: []const u8, principal: access_pure.Principal)" in rm,
+            "fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8, request: []const u8, principal: access_pure.Principal, presented: []const u8)" in rm
+            and "handleApi(stream, path[4..], query, request, principal, presented)" in rm,
         "body extracted for credential routes": "const body = requestBody(request);" in rm,
         "apiPlugins reads the body first": 'credParam(body, query, "key"' in rm,
         "debrid writes persist": "repo.saveDebrid()" in rm,

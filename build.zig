@@ -218,6 +218,19 @@ pub fn build(b: *std.Build) void {
     if (is_windows) run_browse_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{
         msys_path_prefix, b.graph.environ_map.get("PATH") orelse "",
     }));
+    // Production links the private torrent wrapper beside the installed app.
+    // Native test executables instead run from .zig-cache, so their $ORIGIN
+    // cannot find the wrapper unless the test runner names the build root.
+    if (target.result.os.tag == .linux) {
+        const private_lib_path = b.pathFromRoot(".");
+        const test_lib_path = if (b.graph.environ_map.get("LD_LIBRARY_PATH")) |inherited|
+            b.fmt("{s}:{s}", .{ private_lib_path, inherited })
+        else
+            private_lib_path;
+        for ([_]*std.Build.Step.Run{ run_tv_detail_tests, run_anime_tests, run_browse_tests }) |run_step| {
+            run_step.setEnvironmentVariable("LD_LIBRARY_PATH", test_lib_path);
+        }
+    }
     b.step("test-browse", "Test production catalog parsing and asynchronous publication").dependOn(&run_browse_tests.step);
     const gallery_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native Search gallery offline SDL pixel capture"} });
     const run_gallery_tests = b.addRunArtifact(gallery_tests);
