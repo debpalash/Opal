@@ -37,7 +37,7 @@ class CompatElfTests(unittest.TestCase):
                 [str(main), str(library), '-o', str(binary)],
             ]:
                 result = subprocess.run([shutil.which('zig') or 'zig', 'cc', '-target', 'x86_64-linux-gnu',
-                                         *arguments], capture_output=True, text=True, timeout=90)
+                                         *arguments], capture_output=True, text=True, timeout=300)
                 self.assertEqual(result.returncode, 0, result.stderr)
             def needed():
                 return subprocess.check_output([PATCHELF, '--print-needed', str(binary)], text=True).splitlines()
@@ -64,7 +64,7 @@ class CompatElfTests(unittest.TestCase):
                 binary = root / name
                 result = subprocess.run([shutil.which('zig') or 'zig', 'cc', '-target', target,
                                          *flags, str(source), '-o', str(binary)],
-                                        capture_output=True, text=True, timeout=90)
+                                        capture_output=True, text=True, timeout=300)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(elf.has_dynamic_segment(binary), expected)
 
