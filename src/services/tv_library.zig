@@ -220,8 +220,9 @@ fn resolveImdb(sh: *const db.TvShowRow, body: []u8, out: []u8) []const u8 {
     return @import("episode_art_pure.zig").findImdb(alloc, body[0..n], sh.tmdb_id, out) catch "";
 }
 
-/// Sync one show through Cinemeta (+TVmaze). True when facts were published.
-fn syncKeyless(sh: *const db.TvShowRow, imdb: []const u8, now_s: i64, scratch: []u8) bool {
+/// Sync one show through Cinemeta (+TVmaze). True when facts were published;
+/// `card` receives the show's Coming-up card.
+fn syncKeyless(sh: *const db.TvShowRow, imdb: []const u8, now_s: i64, card: *?@import("tv_calendar.zig").Prepared) bool {
     const cal = @import("tv_calendar.zig");
     const doc = keylessSeriesDoc(sh.tmdb_id, imdb) orelse return false;
     defer alloc.free(doc);
@@ -249,15 +250,34 @@ fn syncKeyless(sh: *const db.TvShowRow, imdb: []const u8, now_s: i64, scratch: [
     defer alloc.free(watched);
     const la: ?tp.Ep = if (facts.last.season > 0) facts.last else null;
     const nxt = tp.nextUp(facts.seasonSlice(), watched, la);
-    cal.stageFacts(sh.tmdb_id, sh.name[0..sh.name_len], art, imdb, facts.last, facts.next, facts.next_air_epoch, facts.nextName(), nxt, scratch);
+    card.* = cal.prepareFacts(sh.tmdb_id, sh.name[0..sh.name_len], art, imdb, facts.last, facts.next, facts.next_air_epoch, facts.nextName(), nxt);
     return true;
 }
+
+/// Concurrent show syncs. Each show is 1-4 sequential HTTP calls (curl spawn +
+/// TLS + RTT, ~0.4-1.5s); a 36-show library took ~33s to publish Coming up when
+/// they ran one after another. The rate limiters still pace Cinemeta/TVmaze.
+const SYNC_LANES: u8 = 4;
+
+const SyncCtx = struct {
+    key: []const u8,
+    now_s: i64,
+    updated: std.atomic.Value(usize) = .init(0),
+    learned_imdb: std.atomic.Value(bool) = .init(false),
+};
+
+const SyncJob = struct {
+    show: *const db.TvShowRow,
+    card: *?@import("tv_calendar.zig").Prepared,
+};
 
 fn syncWorker() void {
     defer syncing.store(false, .release);
 
-    var shows: [MAX_SHOWS]db.TvShowRow = undefined;
-    const n = db.tvGetShowsChecked(&shows) orelse return;
+    // Heap, not the thread stack (CLAUDE.md: >64KB never on a spawned stack).
+    const shows = alloc.alloc(db.TvShowRow, MAX_SHOWS) catch return;
+    defer alloc.free(shows);
+    const n = db.tvGetShowsChecked(shows) orelse return;
     if (n == 0) {
         const calendar = @import("tv_calendar.zig");
         calendar.beginStageExpected(0);
@@ -265,131 +285,31 @@ fn syncWorker() void {
         return;
     }
 
-    const key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len];
-
-    // 256KB — heap, not the thread stack. macOS spawned threads get 512KB, and
-    // a buffer this size on the stack is a guaranteed overflow.
-    const body = alloc.alloc(u8, 256 * 1024) catch return;
-    defer alloc.free(body);
-
-    var updated: usize = 0;
-
     // The Home "Coming up" rail is built from this same pass — it used to make
     // the identical /3/tv/{id} call for the identical shows.
     const cal = @import("tv_calendar.zig");
+    var jobs: [MAX_SHOWS]SyncJob = undefined;
+    const cards = alloc.alloc(?cal.Prepared, MAX_SHOWS) catch return;
+    defer alloc.free(cards);
     var expected: usize = 0;
     for (shows[0..n]) |*show| if (show.tmdb_id > 0) {
+        cards[expected] = null;
+        jobs[expected] = .{ .show = show, .card = &cards[expected] };
         expected += 1;
     };
     cal.beginStageExpected(expected);
     defer cal.endStage();
 
-    // The doc is needed after the EZTV lookup clobbers the shared scratch buffer,
-    // so the calendar gets its own buffer to scribble in.
-    const scratch = alloc.alloc(u8, 256 * 1024) catch return;
-    defer alloc.free(scratch);
+    var ctx: SyncCtx = .{
+        .key = state.app.tmdb.api_key[0..state.app.tmdb.api_key_len],
+        .now_s = io.timestamp(),
+    };
+    // Joins every lane before returning; cards commit in library order so the
+    // rail picks the same shows a sequential pass did.
+    @import("browse_fanout.zig").run(SyncJob, jobs[0..expected], &ctx, syncShow, .{ .limit = SYNC_LANES });
+    cal.commitOrdered(cards[0..expected]);
 
-    var learned_imdb = false;
-    const now_s = io.timestamp();
-    for (shows[0..n]) |*sh| {
-        if (sh.tmdb_id == 0) continue;
-
-        // Which provider answers for this show. A keyless catalog id is a hash
-        // of the IMDb id, never a TMDB id: it is always answered keylessly.
-        var imdb_buf: [16]u8 = undefined;
-        var imdb = db.tvImdbId(sh.tmdb_id, &imdb_buf);
-        var source = kl.chooseSource(sh.tmdb_id, imdb, key.len > 0);
-        if (source == .none) {
-            imdb = resolveImdb(sh, body, &imdb_buf);
-            if (imdb.len > 0) {
-                db.tvRememberImdb(sh.tmdb_id, imdb);
-                source = kl.chooseSource(sh.tmdb_id, imdb, key.len > 0);
-            }
-        }
-        switch (source) {
-            .none => continue,
-            .cinemeta => {
-                if (syncKeyless(sh, imdb, now_s, scratch)) updated += 1;
-                continue;
-            },
-            .tmdb => {
-                // A keyed row has no IMDb identity until asked once. Remembering it
-                // is what lets a keyless twin of this show be recognised and merged.
-                if (imdb.len == 0) {
-                    var ext_url: [64]u8 = undefined;
-                    if (std.fmt.bufPrint(&ext_url, "/3/tv/{d}/external_ids", .{sh.tmdb_id})) |eu| {
-                        const en = tmdb_api.tmdbApiInto(eu, key, scratch);
-                        if (en > 0) {
-                            if (@import("subtitles_pure.zig").imdbFromExternalIds(scratch[0..en])) |found| {
-                                if (found.len <= 16) {
-                                    db.tvRememberImdb(sh.tmdb_id, found);
-                                    learned_imdb = true;
-                                }
-                            }
-                        }
-                    } else |_| {}
-                }
-            },
-        }
-
-        var url_buf: [64]u8 = undefined;
-        const url = std.fmt.bufPrint(&url_buf, "/3/tv/{d}", .{sh.tmdb_id}) catch continue;
-        const got = tmdb_api.tmdbApiInto(url, key, body);
-        if (got == 0) continue;
-        const doc = body[0..got];
-
-        const last = cal_pure.parseEpisodeToAir(doc, "\"last_episode_to_air\":");
-        const next = cal_pure.parseEpisodeToAir(doc, "\"next_episode_to_air\":");
-
-        const last_ep = tp.Ep{
-            .season = if (last) |l| l.season else 0,
-            .episode = if (last) |l| l.episode else 0,
-        };
-        const next_ep = tp.Ep{
-            .season = if (next) |x| x.season else 0,
-            .episode = if (next) |x| x.episode else 0,
-        };
-        const next_air: i64 = if (next) |x| x.air_epoch else 0;
-        const next_name: []const u8 = if (next) |*x| x.name[0..x.name_len] else "";
-
-        const status: []const u8 = if (tp.parseEnded(doc)) "Ended" else "Returning Series";
-
-        db.tvUpsertShow(
-            sh.tmdb_id,
-            sh.name[0..sh.name_len],
-            sh.poster_path[0..sh.poster_path_len],
-            status,
-            last_ep,
-            next_ep,
-            next_air,
-            next_name,
-        );
-
-        const seasons = alloc.alloc(tp.Season, std.mem.count(u8, doc, "\"season_number\"")) catch continue;
-        defer alloc.free(seasons);
-        const ns = tp.parseSeasonMap(doc, seasons);
-        if (ns > 0) db.tvUpsertSeasons(sh.tmdb_id, seasons[0..ns]);
-
-        // Stage the Coming-up rail from the SAME document + the SAME next-up
-        // answer the library uses, so the two surfaces can never disagree.
-        const watched = db.tvWatchedList(alloc, sh.tmdb_id) catch continue;
-        defer alloc.free(watched);
-        const nw = watched.len;
-        const la: ?tp.Ep = if (last_ep.season > 0) last_ep else null;
-        const nxt = tp.nextUp(seasons[0..ns], watched[0..nw], la);
-        cal.stage(
-            sh.tmdb_id,
-            sh.name[0..sh.name_len],
-            sh.poster_path[0..sh.poster_path_len],
-            doc,
-            nxt,
-            scratch,
-        );
-
-        updated += 1;
-    }
-
-    if (learned_imdb) {
+    if (ctx.learned_imdb.load(.acquire)) {
         // Two library rows for one show (tracked keyless, then again with a key)
         // become visible only now that the keyed row knows its IMDb id.
         db.tvMergeDuplicates();
@@ -397,6 +317,7 @@ fn syncWorker() void {
         state.wakeUi();
     }
 
+    const updated = ctx.updated.load(.acquire);
     if (updated > 0) {
         markDirty();
         var msg: [64]u8 = undefined;
@@ -404,6 +325,112 @@ fn syncWorker() void {
         logs.pushLog("info", "tv", m, false);
         state.wakeUi();
     }
+}
+
+/// Sync one tracked show: refresh its DB rows and prepare its Coming-up card.
+/// Runs on a fan-out lane; touches only this show's rows and `job.card`.
+fn syncShow(ctx: *SyncCtx, job: SyncJob) void {
+    const sh = job.show;
+    const key = ctx.key;
+    const cal = @import("tv_calendar.zig");
+
+    // 256KB — heap, not the thread stack. macOS spawned threads get 512KB, and
+    // a buffer this size on the stack is a guaranteed overflow.
+    const body = alloc.alloc(u8, 256 * 1024) catch return;
+    defer alloc.free(body);
+
+    // Which provider answers for this show. A keyless catalog id is a hash
+    // of the IMDb id, never a TMDB id: it is always answered keylessly.
+    var imdb_buf: [16]u8 = undefined;
+    var imdb = db.tvImdbId(sh.tmdb_id, &imdb_buf);
+    var source = kl.chooseSource(sh.tmdb_id, imdb, key.len > 0);
+    if (source == .none) {
+        imdb = resolveImdb(sh, body, &imdb_buf);
+        if (imdb.len > 0) {
+            db.tvRememberImdb(sh.tmdb_id, imdb);
+            source = kl.chooseSource(sh.tmdb_id, imdb, key.len > 0);
+        }
+    }
+    switch (source) {
+        .none => return,
+        .cinemeta => {
+            if (syncKeyless(sh, imdb, ctx.now_s, job.card)) _ = ctx.updated.fetchAdd(1, .acq_rel);
+            return;
+        },
+        .tmdb => {
+            // A keyed row has no IMDb identity until asked once. Remembering it
+            // is what lets a keyless twin of this show be recognised and merged.
+            if (imdb.len == 0) {
+                var ext_url: [64]u8 = undefined;
+                if (std.fmt.bufPrint(&ext_url, "/3/tv/{d}/external_ids", .{sh.tmdb_id})) |eu| {
+                    const en = tmdb_api.tmdbApiInto(eu, key, body);
+                    if (en > 0) {
+                        if (@import("subtitles_pure.zig").imdbFromExternalIds(body[0..en])) |found| {
+                            if (found.len <= 16) {
+                                db.tvRememberImdb(sh.tmdb_id, found);
+                                ctx.learned_imdb.store(true, .release);
+                            }
+                        }
+                    }
+                } else |_| {}
+            }
+        },
+    }
+
+    var url_buf: [64]u8 = undefined;
+    const url = std.fmt.bufPrint(&url_buf, "/3/tv/{d}", .{sh.tmdb_id}) catch return;
+    const got = tmdb_api.tmdbApiInto(url, key, body);
+    if (got == 0) return;
+    const doc = body[0..got];
+
+    const last = cal_pure.parseEpisodeToAir(doc, "\"last_episode_to_air\":");
+    const next = cal_pure.parseEpisodeToAir(doc, "\"next_episode_to_air\":");
+
+    const last_ep = tp.Ep{
+        .season = if (last) |l| l.season else 0,
+        .episode = if (last) |l| l.episode else 0,
+    };
+    const next_ep = tp.Ep{
+        .season = if (next) |x| x.season else 0,
+        .episode = if (next) |x| x.episode else 0,
+    };
+    const next_air: i64 = if (next) |x| x.air_epoch else 0;
+    const next_name: []const u8 = if (next) |*x| x.name[0..x.name_len] else "";
+
+    const status: []const u8 = if (tp.parseEnded(doc)) "Ended" else "Returning Series";
+
+    db.tvUpsertShow(
+        sh.tmdb_id,
+        sh.name[0..sh.name_len],
+        sh.poster_path[0..sh.poster_path_len],
+        status,
+        last_ep,
+        next_ep,
+        next_air,
+        next_name,
+    );
+
+    const seasons = alloc.alloc(tp.Season, std.mem.count(u8, doc, "\"season_number\"")) catch return;
+    defer alloc.free(seasons);
+    const ns = tp.parseSeasonMap(doc, seasons);
+    if (ns > 0) db.tvUpsertSeasons(sh.tmdb_id, seasons[0..ns]);
+
+    // Stage the Coming-up rail from the SAME document + the SAME next-up
+    // answer the library uses, so the two surfaces can never disagree.
+    const watched = db.tvWatchedList(alloc, sh.tmdb_id) catch return;
+    defer alloc.free(watched);
+    const nw = watched.len;
+    const la: ?tp.Ep = if (last_ep.season > 0) last_ep else null;
+    const nxt = tp.nextUp(seasons[0..ns], watched[0..nw], la);
+    job.card.* = cal.prepare(
+        sh.tmdb_id,
+        sh.name[0..sh.name_len],
+        sh.poster_path[0..sh.poster_path_len],
+        doc,
+        nxt,
+    );
+
+    _ = ctx.updated.fetchAdd(1, .acq_rel);
 }
 
 // ══════════════════════════════════════════════════════════

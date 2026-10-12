@@ -215,3 +215,29 @@ def test_torrent_gpu_owner_handoff():
     for token in ("textureCreate", "std.Thread.spawn", "fixture.load_serial += 1", "fixture.lifetime_id += 1", "https://fixture.invalid/poster.jpg"):
         assert token in fixture, token
     return "pass", "Real GPU worker regression; queued immutable metadata with lifetime/serial validation and owner drain"
+
+
+@test("Coming-up sync fans out per show and commits cards in library order", "Performance")
+def test_tv_sync_fanout():
+    # The /3/tv/{id} pass ran one show at a time: 36 tracked shows took ~35s
+    # before Home's Coming-up rail published. Shows now sync on bounded lanes,
+    # but cards still commit in tvGetShows order so the 12 rail slots go to the
+    # same shows a sequential pass picked.
+    lib = _src("src/services/tv_library.zig")
+    cal = _src("src/services/tv_calendar.zig")
+    worker = lib.split("fn syncWorker() void {", 1)[1].split("fn syncShow(", 1)[0]
+    run = 'browse_fanout.zig").run(SyncJob'
+    checks = {
+        "bounded fan-out": run in worker and "SYNC_LANES" in worker,
+        "ordered commit after join": run in worker and "cal.commitOrdered(cards" in worker
+            and worker.index(run) < worker.index("cal.commitOrdered(cards"),
+        "heap rows, not thread stack": "alloc.alloc(db.TvShowRow, MAX_SHOWS)" in worker,
+        "atomic tallies": "updated.fetchAdd" in lib and "learned_imdb.store(true, .release)" in lib,
+        "cards prepared off the projection": "pub fn prepare(" in cal and "pub fn prepareFacts(" in cal,
+        "no unordered staging": "pub fn stage(" not in cal and "pub fn stageFacts(" not in cal,
+        "eztv only for slotted cards": "projection.staged_count == before" in cal,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "tv sync fan-out incomplete: " + ", ".join(missing)
+    return "pass", "shows sync on 4 lanes; cards commit in library order; EZTV only for rail slots"
