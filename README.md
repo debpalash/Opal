@@ -279,9 +279,16 @@ Use **Zig 0.16.x**; 0.17 requires a migration. On macOS:
 
 ```sh
 brew install mpv sqlite sdl2 libtorrent-rasterbar
-# Install Zig 0.16.x separately if your package manager offers a newer version.
 git clone https://github.com/debpalash/Opal.git
 cd Opal
+brew install mise
+mise install
+mise exec -- zig build run
+```
+
+`mise.toml` pins Zig 0.16.0. If you already have Zig 0.16.x on `PATH`, run:
+
+```sh
 zig build run
 ```
 

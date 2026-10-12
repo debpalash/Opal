@@ -1,6 +1,16 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
+    const version = @import("builtin").zig_version;
+    if (comptime version.major == 0 and version.minor == 16) {
+        buildSupported(b);
+    } else {
+        @compileError("Opal requires Zig 0.16.x; found " ++ @import("builtin").zig_version_string ++
+            ". Use `mise install && mise exec -- zig build run` or select a Zig 0.16 compiler in PATH.");
+    }
+}
+
+fn buildSupported(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -57,7 +67,7 @@ pub fn build(b: *std.Build) void {
         // console subsystem (it's a CLI that logs to stdout). Child processes
         // are spawned with CREATE_NO_WINDOW (io_global) so they don't flash
         // their own consoles now that we have none to inherit.
-        if (!headless) exe.subsystem = .Windows;
+        if (!headless) exe.subsystem = .windows;
     }
 
     // System SDL2 integration. On Wayland compositors (COSMIC DE, etc.) the bundled SDL2
@@ -376,7 +386,11 @@ pub fn build(b: *std.Build) void {
     } else if (b.graph.environ_map.get("OPAL_WEBP_PREFIX")) |p| {
         b.addSearchPrefix(p);
     } else if (b.graph.environ_map.get("HOME")) |home| {
-        b.addSearchPrefix(b.fmt("{s}/.local/opal-webp", .{home}));
+        const prefix = b.fmt("{s}/.local/opal-webp", .{home});
+        if (std.Io.Dir.cwd().openDir(b.graph.io, prefix, .{})) |dir| {
+            dir.close(b.graph.io);
+            b.addSearchPrefix(prefix);
+        } else |_| {}
     }
     exe.root_module.linkSystemLibrary("webp", .{ .preferred_link_mode = .static, .search_strategy = .no_fallback });
 
