@@ -1316,7 +1316,7 @@ fn renderSourcePlugins() void {
         });
         status_row.deinit();
         _ = dvui.label(@src(), "{s}", .{if (operation.fetch_remote)
-            "Procedure: HTTPS GET GitHub contents API for the source definition (optional bearer header redacted) → write JSON into Opal's sources folder."
+            "Procedure: HTTPS GET GitHub contents API for the source definition (optional bearer header redacted) › write JSON into Opal's sources folder."
         else
             "Procedure: write bundled source JSON into Opal's sources folder. No network request."}, .{ .color_text = theme.colors.text_tertiary, .expand = .horizontal });
         _ = dvui.label(@src(), "No shell command runs for source installs. Private token, endpoint contents and media URLs are never printed in Logs.", .{}, .{ .color_text = theme.colors.text_tertiary });
@@ -1503,7 +1503,7 @@ fn renderSuwayomi() void {
     const srv = @import("suwayomi_server.zig");
     var card = cardBegin(@src(), 4);
     defer card.deinit();
-    cardTitle(@src(), "Suwayomi server (Mihon extensions)", "Opal can run the server for you — Start it, then browse & install extensions in Comics → Extensions.");
+    cardTitle(@src(), "Suwayomi server (Mihon extensions)", "Opal can run the server for you — Start it, then browse & install extensions in Comics › Extensions.");
 
     // ── Embedded server control ──
     const st = srv.statusEnum();
@@ -1846,7 +1846,7 @@ fn renderContentPlugins() void {
 
     // Loading
     if (loading_now) {
-        _ = dvui.label(@src(), "Loading...", .{}, .{
+        _ = dvui.label(@src(), "Loading…", .{}, .{
             .color_text = theme.colors.accent,
             .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 },
         });
@@ -1958,6 +1958,8 @@ fn renderPluginCard(item: *PluginResult, idx: usize) void {
                 .expand = .horizontal,
                 .color_text = if (item.expanded) theme.colors.accent else theme.colors.text_primary,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill_hover = theme.colors.bg_hover,
+                .color_fill_press = theme.colors.bg_elevated,
                 .padding = dvui.Rect.all(0),
             })) {
                 // If stream_url is already set, play directly

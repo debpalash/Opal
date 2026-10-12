@@ -1554,6 +1554,8 @@ fn renderToolbar() void {
     if (channel_mode.load(.acquire)) {
         if (dvui.buttonIcon(@src(), "chan-back", icons.tvg.lucide.@"arrow-left", .{}, .{}, .{
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .color_text = theme.colors.text_secondary,
             .border = dvui.Rect.all(0),
             .min_size_content = theme.iconSize(.sm),
@@ -1605,6 +1607,8 @@ fn renderToolbar() void {
     if (dvui.buttonIcon(@src(), "smaller", icons.tvg.lucide.minus, .{}, .{}, .{
         .data_out = &smaller_wd,
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill_hover = theme.colors.bg_hover,
+        .color_fill_press = theme.colors.bg_elevated,
         .color_text = dim,
         .border = dvui.Rect.all(0),
         .min_size_content = theme.iconSize(.sm),
@@ -1618,6 +1622,8 @@ fn renderToolbar() void {
     if (dvui.buttonIcon(@src(), "bigger", icons.tvg.lucide.plus, .{}, .{}, .{
         .data_out = &bigger_wd,
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill_hover = theme.colors.bg_hover,
+        .color_fill_press = theme.colors.bg_elevated,
         .color_text = dim,
         .border = dvui.Rect.all(0),
         .min_size_content = theme.iconSize(.sm),

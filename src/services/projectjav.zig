@@ -501,8 +501,8 @@ pub fn renderModal() void {
 
     // Loading state
     if (is_fetching.load(.acquire)) {
-        _ = dvui.label(@src(), "⟳ Fetching torrents...", .{}, .{
-            .color_text = theme.colors.accent,
+        _ = dvui.label(@src(), "Fetching torrents…", .{}, .{
+            .color_text = theme.colors.text_secondary,
             .gravity_x = 0.5,
             .padding = .{ .x = 0, .y = 24, .w = 0, .h = 24 },
         });
@@ -547,7 +547,7 @@ pub fn renderModal() void {
             }
         }
         if (probing_started and !all_done) {
-            _ = dvui.label(@src(), "loading sizes...", .{}, .{
+            _ = dvui.label(@src(), "loading sizes…", .{}, .{
                 .color_text = theme.colors.text_tertiary,
             });
         }
@@ -613,21 +613,28 @@ pub fn renderModal() void {
             defer meta.deinit();
 
             // Health dot
-            const h_color = if (t.seeds >= 50)
-                dvui.Color{ .r = 40, .g = 200, .b = 100, .a = 255 }
-            else if (t.seeds >= 10)
-                dvui.Color{ .r = 120, .g = 200, .b = 80, .a = 255 }
+            const h_color = if (t.seeds >= 10)
+                theme.colors.success
             else if (t.seeds >= 2)
-                dvui.Color{ .r = 220, .g = 180, .b = 50, .a = 255 }
+                theme.colors.warning
             else
-                dvui.Color{ .r = 220, .g = 60, .b = 60, .a = 255 };
+                theme.colors.danger;
 
-            _ = dvui.label(@src(), "●", .{}, .{
-                .id_extra = idx + 5300,
-                .color_text = h_color,
-                .gravity_y = 0.5,
-                .padding = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
-            });
+            // A filled pill box, not a "●" label: that glyph is missing from
+            // the UI font and rendered as tofu.
+            {
+                var dot = dvui.box(@src(), .{}, .{
+                    .id_extra = idx + 5300,
+                    .background = true,
+                    .color_fill = h_color,
+                    .corner_radius = dvui.Rect.all(4),
+                    .min_size_content = .{ .w = 8, .h = 8 },
+                    .max_size_content = .{ .w = 8, .h = 8 },
+                    .gravity_y = 0.5,
+                    .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
+                });
+                dot.deinit();
+            }
 
             // Seeds
             var seeds_buf: [16]u8 = undefined;
@@ -724,10 +731,12 @@ pub fn renderModal() void {
             }
 
             // Play button — accent style
-            if (dvui.button(@src(), "▶ Play", .{}, .{
+            if (dvui.button(@src(), "Play", .{}, .{
                 .id_extra = idx + 6000,
                 .color_fill = theme.colors.accent,
-                .color_text = theme.colors.bg_app,
+                .color_fill_hover = theme.colors.accent.lighten(8),
+                .color_fill_press = theme.colors.accent.lighten(-8),
+                .color_text = theme.colors.text_on_accent,
                 .corner_radius = theme.dims.rad_sm,
                 .padding = .{ .x = 14, .y = 5, .w = 14, .h = 5 },
             })) {
@@ -735,7 +744,7 @@ pub fn renderModal() void {
                 cleanupProbes();
                 search.loadTorrentToPlayer(t.magnet[0..t.magnet_len]);
                 modal_open = false;
-                state.showToast("Loading torrent...");
+                state.showToast("Loading torrent…");
             }
         }
     }

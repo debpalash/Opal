@@ -1110,6 +1110,8 @@ fn renderSlashMenu() void {
         if (dvui.button(@src(), cmd.key, .{}, .{
             .id_extra = i,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .color_text = theme.colors.accent,
             .border = dvui.Rect.all(0),
             .padding = .{ .x = 4, .y = 0, .w = 4, .h = 0 },

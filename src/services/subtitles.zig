@@ -90,7 +90,7 @@ pub fn searchByQuery(query: []const u8, lang: []const u8) void {
 
 fn doSearch(query: []const u8, lang: []const u8) void {
     if (state.app.opensub_api_key_len == 0) {
-        setError("Set OpenSubtitles API key in Settings → Subtitles");
+        setError("Set OpenSubtitles API key in Settings › Subtitles");
         return;
     }
 
@@ -515,7 +515,7 @@ pub fn subdlSearch(query: []const u8, lang: []const u8) void {
 
 fn doSubdlSearch(query: []const u8, lang: []const u8) void {
     if (state.app.subdl_api_key_len == 0) {
-        setSubdlError("Set Subdl API key in Settings → Subtitles");
+        setSubdlError("Set Subdl API key in Settings › Subtitles");
         return;
     }
 

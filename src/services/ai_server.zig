@@ -523,7 +523,7 @@ pub fn startServer() void {
 
         model_status = .checking;
         logs.pushLog("info", "ai", "Apple Intelligence server started", true);
-        state.showToast("Apple Intelligence starting...");
+        state.showToast("Apple Intelligence starting…");
         if (@import("builtin").mode == .Debug) std.debug.print("[AI] apfel server spawned\n", .{});
     } else {
         // ── Linux/Windows: Bonsai + llama-server ──
@@ -609,7 +609,7 @@ pub fn startServer() void {
         model_status = .checking;
 
         logs.pushLog("info", "ai", "AI servers started", true);
-        state.showToast("AI servers starting...");
+        state.showToast("AI servers starting…");
         if (@import("builtin").mode == .Debug) std.debug.print("[AI] Server processes spawned\n", .{});
     }
 }
@@ -701,7 +701,7 @@ fn downloadModelThread() void {
     };
 
     var prog_buf: [64]u8 = undefined;
-    const prog = std.fmt.bufPrint(&prog_buf, "Downloading {s}...", .{activeModelSizeLabel()}) catch "Downloading...";
+    const prog = std.fmt.bufPrint(&prog_buf, "Downloading {s}…", .{activeModelSizeLabel()}) catch "Downloading…";
     @memcpy(download_progress_buf[0..prog.len], prog);
     download_progress_len = prog.len;
 
@@ -737,7 +737,7 @@ pub fn installLlamaServer() void {
         return;
     };
     @import("../core/workers.zig").release(t);
-    state.showToast("Downloading llama-server...");
+    state.showToast("Downloading llama-server…");
 }
 
 fn installThread() void {

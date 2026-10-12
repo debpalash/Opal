@@ -9,7 +9,7 @@ const m3u = @import("m3u.zig");
 const io_global = @import("../core/io_global.zig");
 const logs = @import("../core/logs.zig");
 
-const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
+const transparent = theme.transparent;
 
 var filter_buf: [128]u8 = std.mem.zeroes([128]u8);
 
@@ -287,6 +287,8 @@ fn renderPlaylistTab() void {
         if (dvui.buttonIcon(@src(), "pl-shuffle", icons.tvg.lucide.shuffle, .{}, .{}, .{
             .color_text = if (state.app.playlist_shuffle) theme.colors.accent else theme.colors.text_secondary,
             .color_fill = transparent,
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
         })) {
             setShuffle(!state.app.playlist_shuffle);
         }
@@ -296,6 +298,8 @@ fn renderPlaylistTab() void {
         if (dvui.buttonIcon(@src(), "pl-repeat", rep_icon, .{}, .{}, .{
             .color_text = if (rep == .off) theme.colors.text_secondary else theme.colors.accent,
             .color_fill = transparent,
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
         })) {
             setRepeat(rep.cycled());
         }
@@ -304,6 +308,8 @@ fn renderPlaylistTab() void {
         if (dvui.buttonIcon(@src(), "pl-prev", icons.tvg.lucide.@"skip-back", .{}, .{}, .{
             .color_text = theme.colors.text_secondary,
             .color_fill = transparent,
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
         })) {
             if (state.app.active_player_idx < state.app.players.items.len)
                 _ = advance(state.app.players.items[state.app.active_player_idx], -1);
@@ -311,6 +317,8 @@ fn renderPlaylistTab() void {
         if (dvui.buttonIcon(@src(), "pl-next", icons.tvg.lucide.@"skip-forward", .{}, .{}, .{
             .color_text = theme.colors.text_secondary,
             .color_fill = transparent,
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
         })) {
             if (state.app.active_player_idx < state.app.players.items.len)
                 _ = advance(state.app.players.items[state.app.active_player_idx], 1);
@@ -324,6 +332,8 @@ fn renderPlaylistTab() void {
         if (dvui.buttonIcon(@src(), "pl-save", icons.tvg.lucide.save, .{}, .{}, .{
             .color_text = theme.colors.text_secondary,
             .color_fill = transparent,
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
         })) {
             savePlaylist();
         }
@@ -435,6 +445,8 @@ fn renderPlaylistTab() void {
             .id_extra = i,
             .color_text = if (i > 0) theme.colors.text_secondary else theme.colors.border_subtle,
             .color_fill = transparent,
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .gravity_y = 0.5,
         })) {
             moveEntry(i, -1);
@@ -443,6 +455,8 @@ fn renderPlaylistTab() void {
             .id_extra = i,
             .color_text = if (i + 1 < pl.entries.items.len) theme.colors.text_secondary else theme.colors.border_subtle,
             .color_fill = transparent,
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .gravity_y = 0.5,
         })) {
             moveEntry(i, 1);

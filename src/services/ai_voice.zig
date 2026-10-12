@@ -978,7 +978,7 @@ fn micRecordWorker() void {
         }
         transcribeAndSend(mic_path, transcript_path);
     } else {
-        setError("No audio recorded — check mic permission in System Settings → Privacy & Security → Microphone");
+        setError("No audio recorded — check mic permission in System Settings › Privacy & Security › Microphone");
     }
 }
 

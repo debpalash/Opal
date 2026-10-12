@@ -393,7 +393,7 @@ fn searchTorrents(idx: usize) void {
     const q = std.fmt.bufPrint(&qbuf, "{s}", .{title}) catch return;
     state.navigateToTab(.Search);
     search.submitQuery(q);
-    state.showToast("Searching all sources...");
+    state.showToast("Searching all sources…");
 }
 
 // ══════════════════════════════════════════════════════════
@@ -467,7 +467,7 @@ pub fn renderContent() void {
             renderDetailRecord(&record, DETAIL_COVER_INDEX);
         } else {
             if (components.actionButton(@src(), "Back", .secondary, 62001)) closeDetail();
-            _ = dvui.label(@src(), "{s}", .{if (identity_loading.load(.acquire)) "Loading visual novel details..." else if (failed) "Details unavailable, not found, or excluded by the cover filter." else "No details available."}, .{ .color_text = theme.colors.text_secondary });
+            _ = dvui.label(@src(), "{s}", .{if (identity_loading.load(.acquire)) "Loading visual novel details…" else if (failed) "Details unavailable, not found, or excluded by the cover filter." else "No details available."}, .{ .color_text = theme.colors.text_secondary });
             if (failed and components.actionButton(@src(), "Retry", .secondary, 62002)) {
                 const id = identity_id;
                 openCatalogIdentity(id[0..identity_id_len]);
@@ -649,6 +649,8 @@ fn renderCard(i: usize, card_w: f32) void {
         .expand = .horizontal,
         .color_text = theme.colors.text_primary,
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill_hover = theme.colors.bg_hover,
+        .color_fill_press = theme.colors.bg_elevated,
         .padding = .{ .x = 2, .y = 4, .w = 2, .h = 0 },
     })) {
         openDetail(i);
@@ -870,7 +872,7 @@ fn renderDetailRecord(v: *const pure.Vn, idx: usize) void {
         })) {
             state.navigateToTab(.Search);
             search.submitQuery(v.title[0..v.title_len]);
-            state.showToast("Searching all sources...");
+            state.showToast("Searching all sources…");
         }
     }
 }

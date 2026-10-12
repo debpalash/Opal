@@ -250,6 +250,8 @@ pub fn render(src: std.builtin.SourceLocation, id_extra: usize, it: *state.TmdbI
                 .data_out = &wd,
                 .id_extra = id_extra,
                 .color_fill = theme.transparent,
+                .color_fill_hover = theme.colors.bg_hover,
+                .color_fill_press = theme.colors.bg_elevated,
                 .color_text = theme.colors.text_tertiary,
                 .border = dvui.Rect.all(0),
                 .corner_radius = dvui.Rect.all(theme.radius.sm),

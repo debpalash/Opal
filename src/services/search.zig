@@ -1169,6 +1169,8 @@ pub fn renderSearchContent() void {
         te.deinit();
         const clicked = dvui.buttonIcon(@src(), "Search", icons.tvg.lucide.search, .{}, .{}, .{
             .color_fill = theme.transparent,
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .color_text = theme.colors.accent,
             .border = dvui.Rect.all(0),
             .gravity_y = 0.5,
@@ -1697,7 +1699,7 @@ fn renderUniversalResults() void {
             const typed = view_cache.query[0..view_cache.query_len];
             @import("operator_search_help.zig").onEmptyResults(typed);
             renderDidYouMean(typed);
-            components.emptyState(icons.tvg.lucide.@"search-x", "No matches", "Try a broader query or open Filters → Sources to check provider status.");
+            components.emptyState(icons.tvg.lucide.@"search-x", "No matches", "Try a broader query or open Filters › Sources to check provider status.");
         } else renderUniversalCapabilities();
         return;
     }

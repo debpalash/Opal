@@ -238,6 +238,8 @@ pub fn renderWorkspaceModals() void {
 
             if (dvui.button(@src(), "Cancel", .{}, .{
                 .color_fill = theme.transparent,
+                .color_fill_hover = theme.colors.bg_hover,
+                .color_fill_press = theme.colors.bg_elevated,
                 .color_text = theme.colors.text_secondary,
                 .corner_radius = theme.dims.rad_md,
                 .border = dvui.Rect.all(1),

@@ -375,7 +375,7 @@ pub fn renderPanel() void {
 
     // Inert without a server.
     if (suwayomiBase() == null) {
-        _ = dvui.label(@src(), "Configure a Suwayomi server first (Settings → Plugins → Suwayomi). Extensions install onto that server, then their sources appear in the Comics grid.", .{}, .{
+        _ = dvui.label(@src(), "Configure a Suwayomi server first (Settings › Plugins › Suwayomi). Extensions install onto that server, then their sources appear in the Comics grid.", .{}, .{
             .color_text = theme.colors.text_secondary,
             .expand = .horizontal,
             .margin = dvui.Rect.all(12),

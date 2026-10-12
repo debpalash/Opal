@@ -1715,7 +1715,7 @@ pub const MediaPlayer = struct {
         self.server_recovery_attempted = true;
         self.is_loading = true;
         self.load_error_len = 0;
-        const label = "Negotiating compatible stream...";
+        const label = "Negotiating compatible stream…";
         @memcpy(self.loading_label[0..label.len], label);
         self.loading_label_len = label.len;
         return true;
@@ -2255,7 +2255,7 @@ pub const MediaPlayer = struct {
         };
         ectx.out_len = out_path.len;
 
-        state.showToast("Exporting clip...");
+        state.showToast("Exporting clip…");
 
         if (@import("../core/workers.zig").spawnLegacy(struct {
             fn worker(ec: *ExportCtx) void {
@@ -2994,7 +2994,7 @@ pub fn updateTorrentBackgroundTasks() void {
                         }
                         p.resume_seeked = false;
                         p.is_loading = true;
-                        const label = "Trying compatible stream...";
+                        const label = "Trying compatible stream…";
                         @memcpy(p.loading_label[0..label.len], label);
                         p.loading_label_len = label.len;
                         logs.pushLog("info", "player", "Primary stream failed; trying compatible fallback", false);

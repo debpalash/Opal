@@ -562,7 +562,7 @@ fn mlxWhisperTranscribe(wav_path: []const u8, out_buf: []u8) ?[]const u8 {
     // Use the managed venv path (or system-wide fallback)
     var bin_buf: [512]u8 = undefined;
     const mlx_bin = deps.mlxWhisperBinPath(&bin_buf) orelse {
-        logs.pushLog("warn", "voice_backend", "mlx_whisper not found — use Settings → Download Model", false);
+        logs.pushLog("warn", "voice_backend", "mlx_whisper not found — use Settings › Download Model", false);
         return whisperCppTranscribe(wav_path, out_buf);
     };
 

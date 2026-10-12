@@ -789,7 +789,7 @@ fn renderAIContentBody() void {
         parakeetModelRow("Parakeet TDT 0.6B v2 · English (480MB)", ds.parakeet_v2_model, deps.parakeet_v2_downloading.load(.acquire), false, 5006);
         parakeetModelRow("Parakeet TDT 0.6B v3 · 25 languages (490MB)", ds.parakeet_v3_model, deps.parakeet_v3_downloading.load(.acquire), true, 5007);
     }
-    _ = dvui.label(@src(), "Model operation: HTTPS curl → verify staged download → extract (archive models). MLX Whisper also installs uv, a Python venv, and mlx-whisper.", .{}, .{ .color_text = theme.colors.text_tertiary });
+    _ = dvui.label(@src(), "Model operation: HTTPS curl › verify staged download › extract (archive models). MLX Whisper also installs uv, a Python venv, and mlx-whisper.", .{}, .{ .color_text = theme.colors.text_tertiary });
 }
 
 /// One NVIDIA Parakeet model row: name + Installed pill / live download
@@ -1587,7 +1587,7 @@ fn renderAboutTab() void {
             _ = dvui.label(@src(), "  {s}", .{update.lastError()}, .{ .id_extra = 2540, .color_text = theme.colors.warning, .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 } });
         }
         if (@import("builtin").os.tag == .macos and update.has_update) {
-            _ = dvui.label(@src(), "Update operation: curl -L --fail to a temporary DMG → SHA-256 verification → open in Finder.", .{}, .{ .color_text = theme.colors.text_tertiary });
+            _ = dvui.label(@src(), "Update operation: curl -L --fail to a temporary DMG › SHA-256 verification › open in Finder.", .{}, .{ .color_text = theme.colors.text_tertiary });
         }
     }
 }
@@ -1863,7 +1863,7 @@ fn renderPlaybackTab() void {
             .padding = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
         });
     }
-    _ = dvui.label(@src(), "Install operation: HTTPS curl to staged file → SHA-256 verification → --version probe → publish.", .{}, .{ .color_text = theme.colors.text_tertiary });
+    _ = dvui.label(@src(), "Install operation: HTTPS curl to staged file › SHA-256 verification › --version probe › publish.", .{}, .{ .color_text = theme.colors.text_tertiary });
 
     // ── Keyboard Shortcuts ── (quiet text, no card chrome)
     sectionHeader("Keyboard Shortcuts", "", 21, @src());
@@ -2068,7 +2068,7 @@ fn renderPlaybackTab() void {
                 break :blk ap.loop_a >= 0 and ap.loop_b >= 0;
             } else false;
 
-            const clip_label = if (has_loop) "Export Clip" else "Clip (L → set loop)";
+            const clip_label = if (has_loop) "Export Clip" else "Clip (L › set loop)";
             if (dvui.button(@src(), clip_label, .{}, .{
                 .id_extra = 3202,
                 .color_fill = if (has_loop) btn_active else btn_inactive,
@@ -2134,7 +2134,7 @@ fn renderNetworkTab() void {
     _ = dvui.label(@src(), "8 public trackers auto-added to every torrent", .{}, .{
         .color_text = theme.colors.text_secondary,
     });
-    _ = dvui.label(@src(), "opentrackr, stealth, torrent.eu, dler, exodus, demonii...", .{}, .{
+    _ = dvui.label(@src(), "opentrackr, stealth, torrent.eu, dler, exodus, demonii…", .{}, .{
         .color_text = theme.colors.text_tertiary,
     });
 
@@ -2594,7 +2594,7 @@ fn renderSubtitlesTab() void {
     _ = dvui.label(@src(), "{s}", .{if (has_key)
         "Key set — opensubtitles.com results join the keyless providers."
     else
-        "Add an OpenSubtitles.com key for more results (opensubtitles.com → Profile → API Consumers)."}, .{
+        "Add an OpenSubtitles.com key for more results (opensubtitles.com › Profile › API Consumers)."}, .{
         .id_extra = 4200,
         .color_text = theme.colors.text_tertiary,
         .margin = .{ .x = 0, .y = 2, .w = 0, .h = 8 },
@@ -2627,7 +2627,7 @@ fn renderSubtitlesTab() void {
     _ = dvui.label(@src(), "{s}", .{if (has_subdl)
         "Key set — Subdl results appear below when you search."
     else
-        "Add a free Subdl key for a large legal DB (subdl.com → panel → API)."}, .{
+        "Add a free Subdl key for a large legal DB (subdl.com › panel › API)."}, .{
         .id_extra = 4210,
         .color_text = theme.colors.text_tertiary,
         .margin = .{ .x = 0, .y = 2, .w = 0, .h = 8 },
@@ -2668,7 +2668,7 @@ fn renderSubtitlesTab() void {
         });
         defer row.deinit();
 
-        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.sub_search_buf }, .placeholder = "Movie/show name..." }, .{
+        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.sub_search_buf }, .placeholder = "Movie/show name…" }, .{
             .expand = .horizontal,
             .min_size_content = .{ .w = 200, .h = 20 },
             .color_fill = theme.colors.bg_elevated,
@@ -4736,7 +4736,7 @@ pub fn renderDepsModal() void {
         }}, .{ .color_text = if (terminal_state == .failed) theme.colors.danger else theme.colors.text_secondary });
         if (terminal_state == .launching) components.pollRefresh(100_000);
     }
-    _ = dvui.label(@src(), "Model downloads: HTTPS curl → verify → extract staged archive (no shell for source plugins).", .{}, .{ .color_text = theme.colors.text_tertiary });
+    _ = dvui.label(@src(), "Model downloads: HTTPS curl › verify › extract staged archive (no shell for source plugins).", .{}, .{ .color_text = theme.colors.text_tertiary });
     if (dvui.button(@src(), "View installation logs", .{}, .{ .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.accent })) {
         state.app.deps_modal_open = false;
         state.navigateToTab(.Logs);
@@ -4759,6 +4759,8 @@ pub fn renderDepsModal() void {
     }
     if (dvui.button(@src(), "Skip for now", .{}, .{
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill_hover = theme.colors.bg_hover,
+        .color_fill_press = theme.colors.bg_elevated,
         .color_text = theme.colors.text_secondary,
         .border = dvui.Rect.all(0),
         .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
