@@ -511,3 +511,36 @@ def test_no_hardcoded_ui_colors():
     if offenders:
         return "warn", f"{len(offenders)} raw Color literal(s) in ui/ — prefer theme.colors.*: " + ", ".join(offenders[:6])
     return "pass", "no raw Color literals in ui/ — colors come from theme.colors.*"
+
+
+@test("Text on accent fills meets WCAG AA in every preset", "Theming")
+def test_on_accent_contrast():
+    # text_on_accent labels every accent-filled button/chip and dvui's
+    # highlighted menu rows. Solarized's dark ink landed at 2.97:1 on its
+    # muted-orange accent; every preset must clear 4.5:1.
+    src = _src("src/ui/theme.zig")
+
+    def lum(c):
+        def ch(v):
+            v /= 255
+            return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+        return 0.2126 * ch(c[0]) + 0.7152 * ch(c[1]) + 0.0722 * ch(c[2])
+
+    low, seen = [], 0
+    for m in re.finditer(r"const (\w+)_colors = ThemeColors\{(.*?)\n\};", src, re.S):
+        def color(key):
+            hit = re.search(r"\." + key + r" = \.\{ \.r = (\d+), \.g = (\d+), \.b = (\d+)", m.group(2))
+            return tuple(map(int, hit.groups())) if hit else None
+        fg, bg = color("text_on_accent"), color("accent")
+        if not fg or not bg:
+            continue
+        seen += 1
+        a, b = sorted((lum(fg), lum(bg)), reverse=True)
+        ratio = (a + 0.05) / (b + 0.05)
+        if ratio < 4.5:
+            low.append(f"{m.group(1)} {ratio:.2f}:1")
+    if seen == 0:
+        return "fail", "no presets parsed from theme.zig"
+    if low:
+        return "fail", "text_on_accent below 4.5:1 on accent: " + ", ".join(low)
+    return "pass", f"{seen} presets clear 4.5:1 on accent fills"

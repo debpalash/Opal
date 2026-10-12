@@ -165,7 +165,7 @@ const solarized_colors = ThemeColors{
     .text_primary = .{ .r = 238, .g = 232, .b = 213, .a = 255 },
     .text_secondary = .{ .r = 165, .g = 175, .b = 175, .a = 255 },
     .text_tertiary = .{ .r = 161, .g = 171, .b = 174, .a = 255 },
-    .text_on_accent = .{ .r = 0, .g = 36, .b = 46, .a = 255 },
+    .text_on_accent = .{ .r = 253, .g = 246, .b = 227, .a = 255 }, // base3: dark ink is 2.97:1 on this accent
     .danger = .{ .r = 170, .g = 65, .b = 60, .a = 255 },
     .success = .{ .r = 110, .g = 130, .b = 50, .a = 255 },
     .warning = .{ .r = 150, .g = 120, .b = 40, .a = 255 },
