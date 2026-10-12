@@ -29,6 +29,8 @@ class Provider(BaseHTTPRequestHandler):
         params = parse_qs(parsed.query)
         q = next((params[k][0] for k in ('text', 'query', 'combinedquery', 'title', 'keyword') if k in params), '')
         path = parsed.path
+        with self.server.events_lock:
+            self.server.events.append((round(time.monotonic() - self.server.created_at, 3), 'start', path, q))
         slow = path.startswith(('/comicfury/', '/royalroad/'))
         if q == 'fail' and slow:
             self.send_error(503)
@@ -65,6 +67,8 @@ class Provider(BaseHTTPRequestHandler):
                 self.wfile.write(data[1:])
             else:
                 self.wfile.write(data)
+            with self.server.events_lock:
+                self.server.events.append((round(time.monotonic() - self.server.created_at, 3), 'sent', path, q))
         except (BrokenPipeError, ConnectionResetError, OSError):
             self.server.closed.set()
 
@@ -75,6 +79,9 @@ class ParallelBrowse(unittest.TestCase):
         self.fixture.started = threading.Event()
         self.fixture.release = threading.Event()
         self.fixture.closed = threading.Event()
+        self.fixture.created_at = time.monotonic()
+        self.fixture.events_lock = threading.Lock()
+        self.fixture.events = []
         self.base = f'http://127.0.0.1:{self.fixture.server_port}'
         threading.Thread(target=self.fixture.serve_forever, daemon=True).start()
         self.addCleanup(self.fixture.server_close)
@@ -108,7 +115,9 @@ class ParallelBrowse(unittest.TestCase):
             data = self.snapshot(category)
             if predicate(data): return data
             time.sleep(.03)
-        self.fail(f'{category} did not publish/settle: {data}')
+        with self.fixture.events_lock:
+            events = list(self.fixture.events)
+        self.fail(f'{category} did not publish/settle: {data}; provider events: {events}')
     def search(self, category, query):
         self.api(category+'/search?'+urlencode({'q': query}))
     @staticmethod

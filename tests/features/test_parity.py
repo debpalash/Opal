@@ -91,7 +91,9 @@ COVERED = {
 # either list before — the two lists were hand-maintained and nothing checked
 # them against router.zig / state.zig, so a desktop tab could exist with no web
 # equivalent and no entry here, and parity still read 98%. It was really 83%.
-GAPS = {}
+GAPS = {
+    "agents dashboard": "The desktop Agents overview, tasks, and activity panels have no corresponding web page or remote workflow yet.",
+}
 
 # Desktop capabilities a browser cannot have, by nature — counted separately so
 # the parity percentage measures *closable* distance rather than being pinned
@@ -113,7 +115,7 @@ DESKTOP_SURFACES = {
         "watching": "watching library", "downloads": "downloads", "queue": "queue",
         "history": "history", "player": "now playing", "assistant": "assistant (AI)",
         "settings": "playback settings", "plugins": "plugins manager",
-        "system": "logs (system)",
+        "system": "logs (system)", "agents": "agents dashboard",
     },
     # src/core/state.zig :: SettingsTab
     "SettingsTab": {
@@ -256,7 +258,8 @@ def test_plugin_credentials():
     ui = _web_app()
     checks = {
         "handleApi receives the request":
-            "fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8, request: []const u8, principal: access_pure.Principal)" in rm,
+            "fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8, request: []const u8, principal: access_pure.Principal, presented: []const u8)" in rm
+            and "handleApi(stream, path[4..], query, request, principal, presented)" in rm,
         "body extracted for credential routes": "const body = requestBody(request);" in rm,
         "apiPlugins reads the body first": 'credParam(body, query, "key"' in rm,
         "debrid writes persist": "repo.saveDebrid()" in rm,

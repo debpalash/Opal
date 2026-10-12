@@ -104,6 +104,13 @@ fn buildSupported(b: *std.Build) void {
     const msys_path_prefix = b.fmt("{s}/bin;{s}/usr/bin", .{ mingw_prefix, msys_root });
 
     const is_windows = target.result.os.tag == .windows;
+    const native_test_lib_path: ?[]const u8 = if (target.result.os.tag == .linux) blk: {
+        const private_lib_path = b.pathFromRoot(".");
+        break :blk if (b.graph.environ_map.get("LD_LIBRARY_PATH")) |inherited|
+            b.fmt("{s}:{s}", .{ private_lib_path, inherited })
+        else
+            private_lib_path;
+    } else null;
 
     if (target.result.os.tag == .macos) {
         // Cancellable native DNS is shared by desktop and headless clients.
@@ -228,6 +235,14 @@ fn buildSupported(b: *std.Build) void {
     if (is_windows) run_browse_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{
         msys_path_prefix, b.graph.environ_map.get("PATH") orelse "",
     }));
+    // Production links the private torrent wrapper beside the installed app.
+    // Native test executables instead run from .zig-cache, so their $ORIGIN
+    // cannot find the wrapper unless the test runner names the build root.
+    if (native_test_lib_path) |test_lib_path| {
+        for ([_]*std.Build.Step.Run{ run_tv_detail_tests, run_anime_tests, run_browse_tests }) |run_step| {
+            run_step.setEnvironmentVariable("LD_LIBRARY_PATH", test_lib_path);
+        }
+    }
     b.step("test-browse", "Test production catalog parsing and asynchronous publication").dependOn(&run_browse_tests.step);
     const gallery_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native Search gallery offline SDL pixel capture"} });
     const run_gallery_tests = b.addRunArtifact(gallery_tests);
@@ -270,7 +285,7 @@ fn buildSupported(b: *std.Build) void {
     overview_ui_tests.use_llvm = true;
     const run_overview_ui_tests = b.addRunArtifact(overview_ui_tests);
     b.step("test-native-overview", "Capture the Agents page Overview with isolated offline fixtures").dependOn(&run_overview_ui_tests.step);
-    const browser_hub_ui_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native browser hub offline"} });
+    const browser_hub_ui_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native browser hub"} });
     browser_hub_ui_tests.use_llvm = true;
     const run_browser_hub_ui_tests = b.addRunArtifact(browser_hub_ui_tests);
     b.step("test-native-browser-hub", "Capture the Browse > Web browser hub with isolated offline fixtures").dependOn(&run_browser_hub_ui_tests.step);
@@ -279,7 +294,7 @@ fn buildSupported(b: *std.Build) void {
     if (is_windows) run_episode_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     b.step("test-native-episodes", "Verify native episode cards and responsive playback controls").dependOn(&run_episode_tests.step);
     const native_suite = b.addTest(.{ .root_module = exe.root_module, .filters = &.{
-        "Native Search", "Native WebP", "Native media offline", "Native shell offline", "Native global modals", "Native activity offline", "Native agent tasks offline", "Native operator activity offline", "Native agents overview offline", "Native browser hub offline", "Native Browse", "Browse fanout", "Native torrent handoff", "Native TV episodes",
+        "Native Search", "Native WebP", "Native media offline", "Native shell offline", "Native global modals", "Native activity offline", "Native agent tasks offline", "Native operator activity offline", "Native agents overview offline", "Native browser hub", "Native Browse", "Browse fanout", "Native torrent handoff", "Native TV episodes",
     } });
     const run_native_suite = b.addRunArtifact(native_suite);
     if (is_windows) run_native_suite.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
@@ -333,12 +348,14 @@ fn buildSupported(b: *std.Build) void {
         .{ .run = run_activity_tests, .name = "activity" },
         .{ .run = run_agent_tasks_ui_tests, .name = "agent-tasks" },
         .{ .run = run_operator_ui_tests, .name = "operator" },
+        .{ .run = run_overview_ui_tests, .name = "overview" },
         .{ .run = run_browser_hub_ui_tests, .name = "browser-hub" },
         .{ .run = run_image_tests, .name = "images" },
         .{ .run = run_native_suite, .name = "suite" },
         .{ .run = run_torrent_handoff_tests, .name = "torrent-handoff" },
     };
     for (native_capture_runs) |fixture| {
+        if (native_test_lib_path) |path| fixture.run.setEnvironmentVariable("LD_LIBRARY_PATH", path);
         const profile = std.fs.path.resolve(b.allocator, &.{ b.build_root.path orelse ".", native_profile_root, fixture.name }) catch @panic("native fixture profile path");
         fixture.run.setEnvironmentVariable("HOME", profile);
         fixture.run.setEnvironmentVariable("USERPROFILE", profile);
@@ -454,6 +471,7 @@ fn buildSupported(b: *std.Build) void {
     // target (native builds). Cross-compiling (e.g. windows from macOS for a
     // semantic-analysis check) would otherwise emit a host-ABI object under the
     // target's expected name and confuse the link.
+    var native_wrapper_compile: ?*std.Build.Step = null;
     if (b.graph.host.result.os.tag == target.result.os.tag) {
         // Windows: sh, g++ and pkg-config all live inside MSYS2, which a plain
         // PowerShell/cmd session does NOT have on its PATH — a bare "sh" then
@@ -467,6 +485,7 @@ fn buildSupported(b: *std.Build) void {
         else
             "sh";
         const compile_wrapper = b.addSystemCommand(&.{ shell, "-c", compile_cmd });
+        native_wrapper_compile = &compile_wrapper.step;
         if (is_windows) {
             compile_wrapper.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{
                 msys_path_prefix,
@@ -474,6 +493,16 @@ fn buildSupported(b: *std.Build) void {
             }));
         }
         exe.step.dependOn(&compile_wrapper.step);
+    }
+
+    // A plain `zig build` should produce a runnable prefix, not just a binary
+    // that needs LD_LIBRARY_PATH (or a manual DLL copy) to find our wrapper.
+    // Release bundles may still move the DSO into their own platform layout.
+    if (native_wrapper_compile) |compile_step| {
+        const wrapper_name = if (is_windows) "torrent_wrapper.dll" else "libtorrent_wrapper.so";
+        const install_wrapper = b.addInstallBinFile(b.path(wrapper_name), wrapper_name);
+        install_wrapper.step.dependOn(compile_step);
+        b.getInstallStep().dependOn(&install_wrapper.step);
     }
 
     if (target.result.os.tag == .linux) {
@@ -504,6 +533,7 @@ fn buildSupported(b: *std.Build) void {
     // For .app bundles: let the binary find libtorrent_wrapper.so in
     // Contents/Frameworks/ when launched via Finder/NSWorkspace (CWD=/).
     if (target.result.os.tag == .macos) {
+        exe.root_module.addRPathSpecial("@executable_path");
         exe.root_module.addRPathSpecial("@executable_path/../Frameworks");
         // Reserve enough header space so install_name_tool can rewrite LC_LOAD_DYLIB
         // entries after the bundle is laid out (scripts/build-app.sh).
@@ -2917,7 +2947,12 @@ fn addGhosttyVt(b: *std.Build, module: *std.Build.Module, target: std.Build.Reso
         .@"emit-lib-vt" = true,
         .simd = false,
     });
-    module.linkLibrary(dep.artifact("ghostty-vt-static"));
+    const vt = dep.artifact("ghostty-vt-static");
+    // The terminal's Wuffs import otherwise emits weak calloc/free stubs for
+    // no-libc builds. In a libc-linked Opal executable those stubs can satisfy
+    // libwebp's allocation calls and make every WebP cover decode fail.
+    vt.root_module.link_libc = true;
+    module.linkLibrary(vt);
     module.addIncludePath(dep.path("include"));
 }
 

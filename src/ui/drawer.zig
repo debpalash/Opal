@@ -419,7 +419,7 @@ pub fn renderDrawer() void {
 pub fn renderTabContent(tab: state.DrawerTab) void {
     switch (tab) {
         .Search => search.renderSearchContent(),
-        .Downloads => transfers.renderTransfersContent(),
+        .Downloads => transfers.renderTransfersContent(@import("wanted_ui.zig").render),
         .TMDB => tmdb.renderTmdbContent(),
         .YouTube => youtube.renderContent(),
         .Queue => queue.renderContent(),

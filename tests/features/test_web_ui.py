@@ -597,10 +597,30 @@ def test_web_performance_probe():
     return "pass", "painted shell, Event Timing p95 and bounded long-task metrics enforce a visible budget"
 
 
+@test("TMDB setup keeps the API key out of URLs", "Web UI")
+def test_tmdb_setup_body_only():
+    remote = _src("src/services/remote.zig")
+    web = _src("web/js/integrations.js")
+    route = remote[remote.index('if (std.mem.eql(u8, api_path, "/setup/tmdb"))'):]
+    route = route[:route.index('if (std.mem.eql(u8, api_path, "/transcode/available"))')]
+    checks = {
+        "POST only": 'requireMethod(stream, method, "POST")' in route,
+        "body only": 'credParam(body, "", "key"' in route and 'getQueryParam(query, "key")' not in route,
+        "validated and persisted": "key.len > state.app.tmdb.api_key.len" in route
+            and "state.setTmdbKey(key)" in route and "state.markConfigDirty()" in route,
+        "web sends form body": "apiFormMutation('/setup/tmdb', {key:k})" in web
+            and "/setup/tmdb?key=" not in web,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "TMDB key route incomplete: " + ", ".join(missing)
+    return "pass", "TMDB key uses a bounded, body-only POST from web to remote"
+
+
 @test("Movies and shows share one details panel with real metadata", "Web UI")
 def test_unified_details_model():
     ui = _web_app()
-    lib = _src("src/services/remote_library_api.zig")
+    lib = _src("src/services/remote_library_api.zig") + _src("src/services/remote_details_api.zig")
     rm = _src("src/services/remote.zig")
     resolver = _src("src/services/resolver.zig")
     tmdb_api = _src("src/services/tmdb_api.zig")
@@ -617,7 +637,8 @@ def test_unified_details_model():
         "shared resolver owns catalog search": "fn resolveCatalog(" in resolver
             and "searchCatalogInto(" in resolver and "pub fn searchCatalogInto(" in tmdb_api,
         "catalog independent from torrent filter": ".tmdb => null" in _src("src/services/search.zig"),
-        "keyless movie metadata": 'sendCinemetaMeta(stream, "movie", imdb)' in lib
+        "keyless movie metadata": "sendKeyless(stream, query, .movie, id, null)" in lib
+            and "api.cinemetaMetaOwned(kind, imdb)" in lib
             and "meta.overview || meta.description" in ui,
         # Web: one entry point and one shared panel reset for both kinds, so
         # movie and TV details cannot drift apart.
@@ -894,7 +915,7 @@ def test_web_ui_security_boundaries():
 @test("Self-hosted credentials never enter request URLs", "Security")
 def test_self_hosted_credentials_use_post_bodies():
     core = _src("web/js/core.js")
-    media = _src("web/js/media.js") + _src("web/js/source-details.js")
+    media = _src("web/js/media.js") + _src("web/js/drama-vndb.js") + _src("web/js/source-details.js")
     discovery = _src("web/js/discovery.js")
     remote = _remote_api()
     checks = {
@@ -923,7 +944,7 @@ def test_self_hosted_credentials_use_post_bodies():
 def test_server_item_details_dialog():
     html = _src("web/index.html")
     css = _src("web/styles/app.css")
-    media = _src("web/js/media.js") + _src("web/js/source-details.js")
+    media = _src("web/js/media.js") + _src("web/js/drama-vndb.js") + _src("web/js/source-details.js")
     discovery = _src("web/js/discovery.js")
     plex = _src("src/services/plex.zig")
     plex_api = _src("src/services/remote_plex_api.zig")
@@ -1045,7 +1066,7 @@ def test_suwayomi_server_lifecycle():
 @test("Audiobookshelf and OPDS connections have durable web lifecycle controls", "Web UI")
 def test_reading_server_connection_lifecycle():
     remote = _remote_api()
-    media = _src("web/js/media.js") + _src("web/js/source-details.js")
+    media = _src("web/js/media.js") + _src("web/js/drama-vndb.js") + _src("web/js/source-details.js")
     html = _src("web/index.html")
     config = _src("src/core/config.zig")
     checks = {
@@ -1077,7 +1098,7 @@ def test_reading_server_connection_lifecycle():
 @test("Direct-url cards share play-here and queue behavior", "Web UI")
 def test_direct_url_play_and_queue_actions():
     discovery = _src("web/js/discovery.js")
-    media = _src("web/js/media.js") + _src("web/js/source-details.js")
+    media = _src("web/js/media.js") + _src("web/js/drama-vndb.js") + _src("web/js/source-details.js")
     remote = _remote_api()
     checks = {
         "AI play dispatch": "dispatchPlay(u, b.dataset.title" in discovery,

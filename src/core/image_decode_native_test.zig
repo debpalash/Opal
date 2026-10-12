@@ -6,10 +6,23 @@ const decode = @import("image_decode.zig");
 const io = @import("io_global.zig");
 const alloc = @import("alloc.zig").allocator;
 extern fn opal_webp_info(data: [*]const u8, size: usize, width: *c_int, height: *c_int) c_int;
+extern fn opal_webp_decode_rgba(data: [*]const u8, size: usize, width: c_int, height: c_int, rgba_bytes: usize) [*c]u8;
 const fixture = @embedFile("testdata/lossless-cover.webp");
 var textures: [2]?dvui.Texture = .{ null, null };
 
 fn checkDecoder() !void {
+    try std.testing.expect(@import("image_limits_pure.zig").isWebP(fixture));
+    var header_width: c_int = 0;
+    var header_height: c_int = 0;
+    try std.testing.expectEqual(@as(c_int, 1), opal_webp_info(fixture.ptr, fixture.len, &header_width, &header_height));
+    try std.testing.expectEqual(@as(c_int, 32), header_width);
+    try std.testing.expectEqual(@as(c_int, 32), header_height);
+    const header_bytes = @import("image_limits_pure.zig").coverRgbaBytes(header_width, header_height) orelse return error.WebPBudgetFailed;
+    // Exercise the C allocation path directly: a transitive no-libc stub once
+    // made header probes pass while every real WebP decode returned null.
+    const probe_pixels = opal_webp_decode_rgba(fixture.ptr, fixture.len, header_width, header_height, header_bytes);
+    if (probe_pixels == null) return error.WebPRawDecodeFailed;
+    dvui.c.stbi_image_free(probe_pixels);
     const cover = decode.cover(fixture) orelse return error.WebPDecodeFailed;
     defer cover.deinit();
     try std.testing.expectEqual(@as(c_int, 32), cover.width);

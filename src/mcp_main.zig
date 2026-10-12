@@ -18,6 +18,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const ops = @import("services/ops_pure.zig");
+const config_path = @import("core/config_path_pure.zig");
 
 const version = "2.0.0-dev";
 const max_deny_prefixes: usize = 31;
@@ -73,13 +74,14 @@ fn tierFromName(name: []const u8) ?ops.Tier {
 }
 
 fn configDir(a: std.mem.Allocator, env: *std.process.Environ.Map) ![]u8 {
-    if (builtin.os.tag == .windows) {
-        const base = env.get("APPDATA") orelse return error.NoConfigDir;
-        return std.fmt.allocPrint(a, "{s}/opal", .{base});
-    }
-    if (env.get("XDG_CONFIG_HOME")) |xdg| return std.fmt.allocPrint(a, "{s}/opal", .{xdg});
-    const home = env.get("HOME") orelse return error.NoConfigDir;
-    return std.fmt.allocPrint(a, "{s}/.config/opal", .{home});
+    const parts = config_path.resolve(
+        builtin.os.tag == .windows,
+        env.get("APPDATA"),
+        env.get("USERPROFILE"),
+        env.get("XDG_CONFIG_HOME"),
+        env.get("HOME"),
+    ) orelse return error.NoConfigDir;
+    return std.fmt.allocPrint(a, "{s}/{s}", .{ parts.base, parts.suffix });
 }
 
 fn fail(comptime fmt: []const u8, args: anytype) noreturn {

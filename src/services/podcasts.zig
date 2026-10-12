@@ -40,6 +40,14 @@ const alloc = @import("../core/alloc.zig").allocator;
 
 const agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0";
 
+/// Opt-in fixture diagnostics for a provider that replied but did not paint.
+/// Keep URLs (which can contain private feed tokens) out of diagnostic output.
+fn trace(comptime format: []const u8, args: anytype) void {
+    if (io.getenv("OPAL_PODCAST_TRACE")) |value| {
+        if (std.mem.eql(u8, value, "1")) std.debug.print("[podcast-trace] " ++ format ++ "\n", args);
+    }
+}
+
 // ── Thread-safety ──
 // Detached workers publish into state.app.podcasts.* under `parse_mutex`, and a
 // monotonic `search_request` drops stale results so fast re-searches never show
@@ -355,8 +363,12 @@ fn finishDirectoryPart(group: *DirectoryGroup) void {
 fn publishDirectoryPart(group: *DirectoryGroup, rows: []const pure.Podcast, succeeded: bool) void {
     parse_mutex.lock();
     defer parse_mutex.unlock();
-    if (!search_request.isCurrent(group.job.generation)) return;
+    if (!search_request.isCurrent(group.job.generation)) {
+        trace("discard stale publication generation={d} rows={d}", .{ group.job.generation, rows.len });
+        return;
+    }
     _ = group.progress.accept(rows.len, succeeded);
+    trace("accept publication generation={d} rows={d} success={} prior={d}", .{ group.job.generation, rows.len, succeeded, group.count });
     if (rows.len == 0) return;
     group.count = pure.appendUnique(&group.rows, group.count, rows);
     @memcpy(state.app.podcasts.results[0..group.count], group.rows[0..group.count]);
@@ -404,13 +416,23 @@ fn feedLaneWorker(group: *DirectoryGroup) void {
         const feed = group.feeds[index];
         const url = feed.value[0..feed.value_len];
         if (!pure.isFeedUrl(url)) continue;
-        const body = fetchSearchBody(url, 3 * 1024 * 1024, group.job.generation) orelse continue;
+        trace("feed {d} fetch start generation={d}", .{ index, group.job.generation });
+        const body = fetchSearchBody(url, 3 * 1024 * 1024, group.job.generation) orelse {
+            trace("feed {d} fetch failed generation={d}", .{ index, group.job.generation });
+            continue;
+        };
         defer alloc.free(body);
-        const show = pure.parseFeedShow(body, url) orelse continue;
+        trace("feed {d} fetch complete bytes={d}", .{ index, body.len });
+        const show = pure.parseFeedShow(body, url) orelse {
+            trace("feed {d} parse failed", .{index});
+            continue;
+        };
         if (!pure.titleMatches(show.name[0..show.name_len], group.job.query[0..group.job.query_len])) {
+            trace("feed {d} title excluded", .{index});
             publishDirectoryPart(group, &.{}, true);
             continue;
         }
+        trace("feed {d} parsed and publishing", .{index});
         publishDirectoryPart(group, &.{show}, true);
     }
 }
@@ -861,15 +883,20 @@ fn percentEncode(src: []const u8, dst: []u8) []const u8 {
 /// the worker while its child process is blocked on a full stdout pipe.
 fn fetchSearchBody(url: []const u8, cap: usize, generation: u32) ?[]u8 {
     const buffer = alloc.alloc(u8, cap) catch return null;
-    const body = reliable_fetch.fetch(url, buffer, .{
+    var headers: [16 * 1024]u8 = undefined;
+    const response = reliable_fetch.request(url, buffer, &headers, .{
         .user_agent = agent,
         .timeout_secs = 10,
         .cancel_epoch = .{ .epoch32 = .{ .value = &search_request.generation, .expected = generation } },
-    }) orelse {
+    });
+    if (!response.ok()) {
+        trace("fetch failed generation={d} status={d} failure={s} latency_ms={d}", .{ generation, response.status, @tagName(response.failure), response.latency_ms });
         alloc.free(buffer);
         return null;
-    };
-    return alloc.realloc(buffer, body.len) catch {
+    }
+    trace("fetch replied generation={d} bytes={d} status={d} latency_ms={d}", .{ generation, response.body.len, response.status, response.latency_ms });
+    return alloc.realloc(buffer, response.body.len) catch {
+        trace("fetch resize failed generation={d} bytes={d}", .{ generation, response.body.len });
         alloc.free(buffer);
         return null;
     };

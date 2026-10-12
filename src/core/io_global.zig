@@ -557,6 +557,8 @@ pub fn readToEndAlloc(file: anytype, gpa: std.mem.Allocator, max_bytes: usize) !
     return buf[0..n];
 }
 
+var spawn_mutex: @import("sync.zig").Mutex = .{};
+
 /// Drop-in shim for removed std.process.Child.init API. Mirrors the
 /// pre-0.16 Child struct fields/methods the codebase uses so call sites
 /// keep working. Lazy-spawns via std.process.spawn(io, ...).
@@ -614,6 +616,14 @@ pub const Child = struct {
             if (job_handle) |job| _ = win.CloseHandle(job);
         };
 
+        // Windows: std creates the child's pipe ends inheritable and calls
+        // CreateProcessW with bInheritHandles=TRUE, so a concurrent spawn on
+        // another thread inherits this child's stdout write end and its reader
+        // never sees EOF until that unrelated child exits (parallel Browse
+        // providers stalled behind the slowest one). Serialize the window from
+        // pipe creation to the parent closing its client ends.
+        if (is_windows) spawn_mutex.lock();
+        defer if (is_windows) spawn_mutex.unlock();
         var real = try std.process.spawn(i, .{
             .argv = self.argv,
             .stdin = mapBehavior(self.stdin_behavior),

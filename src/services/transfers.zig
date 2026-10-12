@@ -132,7 +132,7 @@ pub fn setRenderFixtureForTest(items: ?[]const tp.Row, http: []const httpdl.engi
     row_heights = @splat(0);
 }
 
-pub fn renderTransfersContent() void {
+pub fn renderTransfersContent(render_wanted: *const fn () void) void {
     // Always runs (even while drilled into a subfolder) — torrent_poll is
     // side-effecting: it drives the streaming deadline window, so it must keep
     // ticking regardless of which sub-view is on screen.
@@ -157,7 +157,7 @@ pub fn renderTransfersContent() void {
         return;
     }
 
-    renderUnifiedList();
+    renderUnifiedList(render_wanted);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -492,11 +492,11 @@ fn renderControlBar() void {
 // THE UNIFIED LIST
 // ══════════════════════════════════════════════════════════
 
-fn renderUnifiedList() void {
+fn renderUnifiedList(render_wanted: *const fn () void) void {
     // The automated Wanted list sits above everything; its height shifts the
     // measured-row window below exactly like the HTTP block does.
     var wanted_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = 99009, .expand = .horizontal });
-    @import("wanted_ui.zig").render();
+    render_wanted();
     const wanted_height = wanted_box.data().rect.h;
     wanted_box.deinit();
 

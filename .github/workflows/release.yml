@@ -208,7 +208,8 @@ jobs:
 
           # Add Opal after dependency deployment so linuxdeploy cannot rewrite
           # its runpath or recursively bundle the host's media stack.
-          cp zig-out/bin/opal zig-out/bin/opal-mcp AppDir/usr/lib/opal/
+          cp zig-out/bin/opal AppDir/usr/lib/opal/
+          cp zig-out/bin/opal-mcp AppDir/usr/lib/opal/
 
           # Test the bundle itself. A launch on this runner is not enough
           # because apt installed the same library into the host filesystem.

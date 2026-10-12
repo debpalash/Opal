@@ -69,7 +69,7 @@ fn setup() !void {
                 row.picked_len = picked.len;
             }
         }
-        @import("../services/wanted_ui.zig").setRenderFixtureForTest(&wanted_fixture);
+        @import("wanted_ui.zig").setRenderFixtureForTest(&wanted_fixture);
         _ = wanted;
     }
 }
@@ -79,7 +79,7 @@ fn draw() !void {
 fn cleanup() void {
     queue.setRenderFixtureForTest(null);
     transfers.setRenderFixtureForTest(null, &.{});
-    @import("../services/wanted_ui.zig").setRenderFixtureForTest(null);
+    @import("wanted_ui.zig").setRenderFixtureForTest(null);
 }
 test "Native activity offline SDL pixel capture" {
     const logs = @import("../core/logs.zig");
