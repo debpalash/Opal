@@ -478,7 +478,18 @@ def test_web_search_row_tap_targets():
     w = re.search(r"min-width:(\d+)px", body)
     if not h or int(h.group(1)) < 40 or not w or int(w.group(1)) < 40:
         return "fail", ".search-row>button must set min-width/min-height >= 40px"
-    return "pass", ".search-row buttons have >= 40px tap targets"
+    blk = re.search(r"@media \(pointer:coarse\),\(max-width:599px\)\{(.*?)\n\}", css, re.S)
+    if not blk:
+        return "fail", "no phone/touch tap-target @media block"
+    need = [".card .jf-card-actions button", ".result .m button", ".search-sort select",
+            ".browse-filters select", ".chips button", ".sect.fold", ".open-media summary",
+            ".source-manager summary"]
+    rules = re.findall(r"([^{}]+)\{([^}]*)\}", blk.group(1))
+    missing = [sel for sel in need if not any(sel in [x.strip() for x in sels.split(",")]
+               and re.search(r"min-height:(4\d|[5-9]\d)px", body) for sels, body in rules)]
+    if missing:
+        return "fail", "phone tap targets < 40px: " + ", ".join(missing)
+    return "pass", ".search-row + card/select/chip/fold/summary tap targets >= 40px on touch"
 
 
 @test("Web CSS only references defined custom properties", "Theming")

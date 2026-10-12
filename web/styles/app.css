@@ -776,3 +776,9 @@ button:disabled{cursor:not-allowed}
   border-radius:var(--rad-sm);background:var(--bg-elevated);color:var(--text-1)}
 .search-row>button:hover{background:var(--bg-hover)}
 .text-btn{min-height:40px}
+/* Phone/touch tap targets: >=40px on card actions, selects, chips, fold headers, summary rows */
+@media (pointer:coarse),(max-width:599px){
+  .card .jf-card-actions button,.result .m button,.result .actions button,.result .play,.result .queue-btn{min-height:40px;min-width:40px}
+  .search-sort select,.browse-filters select,.browse-filters summary,.chips button,.chips .chip,.season-chips button{min-height:40px}
+  .sect.fold,.open-media summary,.source-manager summary,.search-source-details summary{min-height:40px;display:flex;align-items:center}
+}
