@@ -1336,14 +1336,16 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
         return;
     }
     if (std.mem.eql(u8, api_path, "/setup/tmdb")) {
-        if (getQueryParam(query, "key")) |raw| {
-            var dec: [400]u8 = undefined;
-            const key = urlDecode(raw, &dec) orelse raw;
-            if (key.len > 0) {
-                state.setTmdbKey(key);
-                state.markConfigDirty();
-            }
-        }
+        if (!requireMethod(stream, method, "POST")) return;
+        // API keys must never arrive in a URL, where they can enter access
+        // logs, browser history, and reverse-proxy diagnostics.
+        var dec: [400]u8 = undefined;
+        const key = credParam(body, "", "key", &dec) orelse
+            return sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"missing TMDB key\"}");
+        if (key.len == 0 or key.len > state.app.tmdb.api_key.len)
+            return sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"invalid TMDB key length\"}");
+        state.setTmdbKey(key);
+        state.markConfigDirty();
         sendJson(stream, "{\"ok\":true}");
         return;
     }

@@ -389,7 +389,13 @@ pub fn build(b: *std.Build) void {
     } else if (b.graph.environ_map.get("OPAL_WEBP_PREFIX")) |p| {
         b.addSearchPrefix(p);
     } else if (b.graph.environ_map.get("HOME")) |home| {
-        b.addSearchPrefix(b.fmt("{s}/.local/opal-webp", .{home}));
+        const local_prefix = b.fmt("{s}/.local/opal-webp", .{home});
+        // A clean CI machine has no private prefix. Zig 0.16 validates every
+        // registered prefix even for opal-mcp, which does not link WebP.
+        if (std.Io.Dir.cwd().openDir(b.graph.io, local_prefix, .{})) |dir| {
+            dir.close(b.graph.io);
+            b.addSearchPrefix(local_prefix);
+        } else |_| {}
     }
     exe.root_module.linkSystemLibrary("webp", .{ .preferred_link_mode = .static, .search_strategy = .no_fallback });
 

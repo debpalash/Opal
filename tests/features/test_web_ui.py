@@ -597,6 +597,26 @@ def test_web_performance_probe():
     return "pass", "painted shell, Event Timing p95 and bounded long-task metrics enforce a visible budget"
 
 
+@test("TMDB setup keeps the API key out of URLs", "Web UI")
+def test_tmdb_setup_body_only():
+    remote = _src("src/services/remote.zig")
+    web = _src("web/js/integrations.js")
+    route = remote[remote.index('if (std.mem.eql(u8, api_path, "/setup/tmdb"))'):]
+    route = route[:route.index('if (std.mem.eql(u8, api_path, "/transcode/available"))')]
+    checks = {
+        "POST only": 'requireMethod(stream, method, "POST")' in route,
+        "body only": 'credParam(body, "", "key"' in route and 'getQueryParam(query, "key")' not in route,
+        "validated and persisted": "key.len > state.app.tmdb.api_key.len" in route
+            and "state.setTmdbKey(key)" in route and "state.markConfigDirty()" in route,
+        "web sends form body": "apiFormMutation('/setup/tmdb', {key:k})" in web
+            and "/setup/tmdb?key=" not in web,
+    }
+    missing = [name for name, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "TMDB key route incomplete: " + ", ".join(missing)
+    return "pass", "TMDB key uses a bounded, body-only POST from web to remote"
+
+
 @test("Movies and shows share one details panel with real metadata", "Web UI")
 def test_unified_details_model():
     ui = _web_app()
@@ -617,7 +637,8 @@ def test_unified_details_model():
         "shared resolver owns catalog search": "fn resolveCatalog(" in resolver
             and "searchCatalogInto(" in resolver and "pub fn searchCatalogInto(" in tmdb_api,
         "catalog independent from torrent filter": ".tmdb => null" in _src("src/services/search.zig"),
-        "keyless movie metadata": 'sendCinemetaMeta(stream, "movie", imdb)' in lib
+        "keyless movie metadata": "sendKeyless(stream, query, .movie, id, null)" in lib
+            and "api.cinemetaMetaOwned(kind, imdb)" in lib
             and "meta.overview || meta.description" in ui,
         # Web: one entry point and one shared panel reset for both kinds, so
         # movie and TV details cannot drift apart.

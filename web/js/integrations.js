@@ -832,6 +832,6 @@ const apiPost = (path, body) => fetch(BASE + '/api/access' + path, {
 
 $('setup-tmdb-save').onclick = async () => {
   const k = $('setup-tmdb-key').value.trim(); if (!k) return;
-  try { await api('/setup/tmdb?key=' + encodeURIComponent(k)); $('setup-tmdb').textContent = 'TMDB key set ✓'; $('setup-tmdb-key').value=''; browseLoaded = false; }
+  try { await apiFormMutation('/setup/tmdb', {key:k}); $('setup-tmdb').textContent = 'TMDB key set ✓'; $('setup-tmdb-key').value=''; browseLoaded = false; }
   catch { $('setup-tmdb').textContent = 'Failed to save'; }
 };

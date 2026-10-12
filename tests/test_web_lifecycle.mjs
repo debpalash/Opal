@@ -750,6 +750,15 @@ function watchingFixture(){
   f.run("localLibrarySelection = 'already-loaded'; localLibraryLoaded = true;");
   return f;
 }
+test('TMDB setup sends the key in a form body, never a URL', async () => {
+  const f = fixture('integrations.js');
+  f.run("globalThis.formPosts=[]; globalThis.apiFormMutation=(path, values)=>{ formPosts.push({path, values}); return Promise.resolve({ok:true}); }; globalThis.browseLoaded=true;");
+  f.$('setup-tmdb-key').value = 'private-test-key';
+  await f.$('setup-tmdb-save').onclick();
+  assert.equal(f.run('JSON.stringify(formPosts)'), '[{"path":"/setup/tmdb","values":{"key":"private-test-key"}}]');
+  assert.equal(f.requests.length, 0, 'the key must not be sent through the GET helper');
+  assert.equal(f.$('setup-tmdb-key').value, '');
+});
 function takeWatching(f){
   const request = f.requests.find(r => !r.taken && r.path.startsWith('/library?'));
   assert.ok(request, 'Missing Watching library request');
