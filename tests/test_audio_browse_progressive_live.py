@@ -6,10 +6,12 @@ owned fixture identities. No enclosure is downloaded or played.
 import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import threading
 import time
 import unittest
+from unittest import mock
 from urllib.parse import quote, urlsplit
 import test_setup_token_live as live
 
@@ -68,7 +70,8 @@ class ProgressiveAudioBrowse(unittest.TestCase):
         with live.database(profile/'opal.db') as db:
             db.execute("CREATE TABLE config(key TEXT PRIMARY KEY,value TEXT NOT NULL DEFAULT '')")
             db.executemany('INSERT INTO config VALUES(?,?)', [('web_port', str(live.PORT)), ('web_bind', 'loopback'), ('content_cache_enabled', '0'), ('search_sources', '0')])
-        token = self.opal.start()
+        with mock.patch.dict(os.environ, {'OPAL_PODCAST_TRACE': '1'}):
+            token = self.opal.start()
         account = live.register('audio-browse-fixture', host=self.opal.loopback_authority, setup_token=token)
         self.assertEqual(account.status, 200)
         self.headers = (('Cookie', account.session_cookie()),)
@@ -88,7 +91,7 @@ class ProgressiveAudioBrowse(unittest.TestCase):
             time.sleep(.03)
         with self.server.events_lock:
             events = list(self.server.events)
-        self.fail(f'Owned podcast fixture state did not appear before deadline: {data}; provider events: {events}')
+        self.fail(f'Owned podcast fixture state did not appear before deadline: {data}; provider events: {events}; app log: {self.opal.safe_log()}')
 
     def start_overlapping(self):
         started = time.monotonic()

@@ -126,6 +126,13 @@ fn findSources() void {
     state.showToast("Searching all sources...");
 }
 
+fn dismissPage() void {
+    shared.dismiss();
+    page = .{};
+    seen_page_id = 0;
+    message_len = 0;
+}
+
 fn playCandidate(c: *const shared.UiCand, queue_only: bool) void {
     _ = shared.playFromUi(page.page_id, c.id, queue_only) catch |e| {
         state.showToastTyped(switch (e) {
@@ -148,6 +155,20 @@ fn smallFont() dvui.Font {
     var f = dvui.themeGet().font_body;
     f.size = theme.font_size.small;
     return f;
+}
+
+fn availableWidth() f32 {
+    const parent_width = dvui.parentGet().data().contentRect().w;
+    if (parent_width > 0) return parent_width;
+    return @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().w, state.app.ui_scale) - 60;
+}
+
+fn compactLayout() bool {
+    return availableWidth() < 420;
+}
+
+fn narrowLayout() bool {
+    return availableWidth() < 300;
 }
 
 fn cardBox(src: std.builtin.SourceLocation, id_extra: usize) *dvui.BoxWidget {
@@ -206,26 +227,36 @@ fn renderBrowsers() void {
     }
 
     const now = nowSeconds();
+    const compact = compactLayout();
     for (links[0..link_count], 0..) |*row, i| {
-        var line = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        var line = dvui.box(@src(), .{ .dir = if (compact) .vertical else .horizontal }, .{
             .id_extra = i,
             .expand = .horizontal,
-            .min_size_content = .{ .w = 0, .h = ROW_H },
-            .max_size_content = .{ .w = 100000, .h = ROW_H },
+            .min_size_content = .{ .w = 0, .h = if (compact) ROW_H * 1.5 else ROW_H },
+            .max_size_content = .{ .w = 100000, .h = if (compact) 100000 else ROW_H },
         });
         defer line.deinit();
         var seen_buf: [48]u8 = undefined;
         const seen = view_pure.seenText(&seen_buf, now, row.last_seen);
         const live = std.mem.eql(u8, seen, "connected");
         var name_buf: [96]u8 = undefined;
-        const name = view_pure.clip(&name_buf, row.labelSlice(), 40);
-        _ = dvui.label(@src(), "{s}", .{name}, .{ .id_extra = i, .color_text = theme.colors.text_primary, .gravity_y = 0.5 });
-        _ = dvui.label(@src(), "{s}, {s}", .{ row.browserSlice(), seen }, .{
-            .id_extra = i,
-            .color_text = if (live) theme.colors.success else theme.colors.text_secondary,
-            .gravity_y = 0.5,
-            .margin = .{ .x = 10, .y = 0, .w = 0, .h = 0 },
-        });
+        const name = view_pure.clip(&name_buf, row.labelSlice(), if (compact) 24 else 40);
+        _ = dvui.label(@src(), "{s}", .{name}, .{ .id_extra = i, .color_text = theme.colors.text_primary, .gravity_y = if (compact) 0 else 0.5 });
+        var browser_buf: [48]u8 = undefined;
+        const browser = if (compact) view_pure.clip(&browser_buf, row.browserSlice(), 14) else row.browserSlice();
+        if (compact) {
+            _ = dvui.label(@src(), "{s} · {s}", .{ seen, browser }, .{
+                .id_extra = i,
+                .color_text = if (live) theme.colors.success else theme.colors.text_secondary,
+            });
+        } else {
+            _ = dvui.label(@src(), "{s}, {s}", .{ browser, seen }, .{
+                .id_extra = i,
+                .color_text = if (live) theme.colors.success else theme.colors.text_secondary,
+                .gravity_y = 0.5,
+                .margin = .{ .x = 10, .y = 0, .w = 0, .h = 0 },
+            });
+        }
     }
 
     if (link_count == 0) {
@@ -261,6 +292,8 @@ fn renderBrowsers() void {
 fn renderSharedPage() void {
     var card = cardBox(@src(), 1);
     defer card.deinit();
+    const compact = compactLayout();
+    const narrow = narrowLayout();
     cardTitle(@src(), "Shared page");
 
     if (!page.present) {
@@ -325,18 +358,17 @@ fn renderSharedPage() void {
             te.deinit();
         }
     }
-    {
+    if (!narrow) {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
         defer row.deinit();
         if (components.actionButton(@src(), "Add to Wanted", .primary, 31010)) addToWanted();
         if (components.actionButton(@src(), "Find sources", .secondary, 31011)) findSources();
-        if (components.actionButton(@src(), "Dismiss", .secondary, 31012)) {
-            shared.dismiss();
-            page = .{};
-            seen_page_id = 0;
-            message_len = 0;
-        }
+        if (!compact and components.actionButton(@src(), "Dismiss", .secondary, 31012)) dismissPage();
+    } else {
+        if (components.actionButton(@src(), "Add to Wanted", .primary, 31010)) addToWanted();
+        if (components.actionButton(@src(), "Find sources", .secondary, 31011)) findSources();
     }
+    if (compact and components.actionButton(@src(), "Dismiss", .secondary, 31012)) dismissPage();
     if (message_len > 0) note(@src(), message_buf[0..message_len], theme.colors.text_secondary);
 }
 
@@ -353,27 +385,30 @@ fn renderStreams() void {
             "Streams the extension found on the page you share show up here, with Play and Queue.", theme.colors.text_secondary);
         return;
     }
+    const compact = compactLayout();
     for (page.cands[0..page.cand_count], 0..) |*c, i| {
-        var line = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        var line = dvui.box(@src(), .{ .dir = if (compact) .vertical else .horizontal }, .{
             .id_extra = i,
             .expand = .horizontal,
-            .min_size_content = .{ .w = 0, .h = ROW_H },
-            .max_size_content = .{ .w = 100000, .h = ROW_H },
+            .min_size_content = .{ .w = 0, .h = if (compact) ROW_H * 2 else ROW_H },
+            .max_size_content = .{ .w = 100000, .h = if (compact) 100000 else ROW_H },
         });
         defer line.deinit();
+        var info = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
         _ = dvui.label(@src(), "{s}", .{@tagName(c.kind)}, .{
             .id_extra = i,
             .color_text = theme.colors.accent,
-            .gravity_y = 0.5,
+            .gravity_y = if (compact) 0 else 0.5,
             .min_size_content = .{ .w = 44, .h = 0 },
         });
         var label_buf: [200]u8 = undefined;
-        _ = dvui.label(@src(), "{s}", .{view_pure.clip(&label_buf, c.labelSlice(), 34)}, .{
+        _ = dvui.label(@src(), "{s}", .{view_pure.clip(&label_buf, c.labelSlice(), if (compact) 23 else 34)}, .{
             .id_extra = i,
             .color_text = theme.colors.text_primary,
-            .gravity_y = 0.5,
+            .gravity_y = if (compact) 0 else 0.5,
         });
-        var acts = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i, .gravity_x = 1.0, .gravity_y = 0.5 });
+        info.deinit();
+        var acts = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i, .gravity_x = 1.0, .gravity_y = if (compact) 0 else 0.5 });
         defer acts.deinit();
         if (components.actionButton(@src(), "Play", .primary, 31100 + i)) playCandidate(c, false);
         if (components.actionButton(@src(), "Queue", .secondary, 31200 + i)) playCandidate(c, true);
