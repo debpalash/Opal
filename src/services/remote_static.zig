@@ -37,6 +37,7 @@ const assets = [_]Asset{
     .{ .route = "/js/source-management.js", .bundled = "js/source-management.js", .dev = "web/js/source-management.js", .content_type = "application/javascript", .cache = .revalidate },
     .{ .route = "/js/browse-loading.js", .bundled = "js/browse-loading.js", .dev = "web/js/browse-loading.js", .content_type = "application/javascript", .cache = .revalidate },
     .{ .route = "/js/media.js", .bundled = "js/media.js", .dev = "web/js/media.js", .content_type = "application/javascript", .cache = .revalidate },
+    .{ .route = "/js/drama-vndb.js", .bundled = "js/drama-vndb.js", .dev = "web/js/drama-vndb.js", .content_type = "application/javascript", .cache = .revalidate },
     .{ .route = "/js/source-details.js", .bundled = "js/source-details.js", .dev = "web/js/source-details.js", .content_type = "application/javascript", .cache = .revalidate },
     .{ .route = "/js/discovery.js", .bundled = "js/discovery.js", .dev = "web/js/discovery.js", .content_type = "application/javascript", .cache = .revalidate },
     .{ .route = "/js/boot.js", .bundled = "js/boot.js", .dev = "web/js/boot.js", .content_type = "application/javascript", .cache = .revalidate },

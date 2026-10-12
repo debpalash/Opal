@@ -16,7 +16,7 @@ def test_web_remote_module_boundaries():
     remote = _src("src/services/remote.zig")
     web_modules = (
         "core.js", "now-playing.js", "search.js", "catalog.js", "playback.js",
-        "integrations.js", "access.js", "source-management.js", "browse-loading.js", "media.js", "source-details.js", "discovery.js", "boot.js",
+        "integrations.js", "access.js", "source-management.js", "browse-loading.js", "media.js", "drama-vndb.js", "source-details.js", "discovery.js", "boot.js",
     )
     backend_modules = (
         "remote_http.zig", "remote_static.zig", "remote_status.zig",
@@ -27,6 +27,8 @@ def test_web_remote_module_boundaries():
         "remote_suwayomi_api.zig",
         "remote_youtube_api.zig",
         "remote_custom_sources_api.zig",
+        "remote_books_api.zig",
+        "remote_details_api.zig",
     )
     checks = {
         "top router stays below 5k lines": len(remote.splitlines()) < 5000,

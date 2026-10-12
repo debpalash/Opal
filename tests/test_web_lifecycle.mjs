@@ -201,6 +201,13 @@ function fixture(...files){
       vm.runInContext(source('search.js'), context, {filename:'search.js'});
     }
     vm.runInContext(source(file), context, {filename:file});
+    // Drama/VNDB was extracted from media.js; the page loads it right after.
+    if (file === 'media.js' && !files.includes('drama-vndb.js')) {
+      let extracted = null;
+      try { extracted = source('drama-vndb.js'); }
+      catch (error) { if (!process.env.OPAL_WEB_REVISION) throw error; }
+      if (extracted) vm.runInContext(extracted, context, {filename:'drama-vndb.js'});
+    }
   }
   const run = code => vm.runInContext(code, context);
   const take = path => {

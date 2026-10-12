@@ -620,7 +620,7 @@ def test_tmdb_setup_body_only():
 @test("Movies and shows share one details panel with real metadata", "Web UI")
 def test_unified_details_model():
     ui = _web_app()
-    lib = _src("src/services/remote_library_api.zig")
+    lib = _src("src/services/remote_library_api.zig") + _src("src/services/remote_details_api.zig")
     rm = _src("src/services/remote.zig")
     resolver = _src("src/services/resolver.zig")
     tmdb_api = _src("src/services/tmdb_api.zig")
@@ -915,7 +915,7 @@ def test_web_ui_security_boundaries():
 @test("Self-hosted credentials never enter request URLs", "Security")
 def test_self_hosted_credentials_use_post_bodies():
     core = _src("web/js/core.js")
-    media = _src("web/js/media.js") + _src("web/js/source-details.js")
+    media = _src("web/js/media.js") + _src("web/js/drama-vndb.js") + _src("web/js/source-details.js")
     discovery = _src("web/js/discovery.js")
     remote = _remote_api()
     checks = {
@@ -944,7 +944,7 @@ def test_self_hosted_credentials_use_post_bodies():
 def test_server_item_details_dialog():
     html = _src("web/index.html")
     css = _src("web/styles/app.css")
-    media = _src("web/js/media.js") + _src("web/js/source-details.js")
+    media = _src("web/js/media.js") + _src("web/js/drama-vndb.js") + _src("web/js/source-details.js")
     discovery = _src("web/js/discovery.js")
     plex = _src("src/services/plex.zig")
     plex_api = _src("src/services/remote_plex_api.zig")
@@ -1066,7 +1066,7 @@ def test_suwayomi_server_lifecycle():
 @test("Audiobookshelf and OPDS connections have durable web lifecycle controls", "Web UI")
 def test_reading_server_connection_lifecycle():
     remote = _remote_api()
-    media = _src("web/js/media.js") + _src("web/js/source-details.js")
+    media = _src("web/js/media.js") + _src("web/js/drama-vndb.js") + _src("web/js/source-details.js")
     html = _src("web/index.html")
     config = _src("src/core/config.zig")
     checks = {
@@ -1098,7 +1098,7 @@ def test_reading_server_connection_lifecycle():
 @test("Direct-url cards share play-here and queue behavior", "Web UI")
 def test_direct_url_play_and_queue_actions():
     discovery = _src("web/js/discovery.js")
-    media = _src("web/js/media.js") + _src("web/js/source-details.js")
+    media = _src("web/js/media.js") + _src("web/js/drama-vndb.js") + _src("web/js/source-details.js")
     remote = _remote_api()
     checks = {
         "AI play dispatch": "dispatchPlay(u, b.dataset.title" in discovery,
