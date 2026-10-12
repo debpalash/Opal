@@ -123,7 +123,7 @@ jobs:
       - run: npm test
 
   # Real hidden SDL render-target fixtures, not source/pixel-name assertions.
-  # Linux uses Xvfb + software SDL so a physical GPU/display is unnecessary.
+  # Linux uses SDL's offscreen backend so a physical GPU/display is unnecessary.
   native-linux:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -147,7 +147,9 @@ jobs:
         run: zig build test-native-downloads --summary all
       - name: Build isolated headless provider fixture binary
         timeout-minutes: 15
-        run: zig build -Dheadless=true --prefix "$RUNNER_TEMP/opal-provider-fixtures"
+        run: |
+          zig build -Dheadless=true --prefix "$RUNNER_TEMP/opal-provider-fixtures"
+          test -f "$RUNNER_TEMP/opal-provider-fixtures/bin/libtorrent_wrapper.so"
       - name: Hermetic media server and webcomic workflows
         timeout-minutes: 10
         env:
@@ -166,14 +168,13 @@ jobs:
       - name: Native offline UI fixture suite
         timeout-minutes: 20
         env:
-          SDL_VIDEODRIVER: x11
-          SDL_RENDER_DRIVER: software
+          SDL_VIDEODRIVER: offscreen
           LIBGL_ALWAYS_SOFTWARE: '1'
           OPAL_NATIVE_CAPTURE_DIR: ${{ runner.temp }}/opal-native-captures
           OPAL_GALLERY_CAPTURE_DIR: ${{ runner.temp }}/opal-native-captures
         run: |
           mkdir -p "$OPAL_NATIVE_CAPTURE_DIR"
-          xvfb-run -a -s '-screen 0 1600x1200x24' zig build test-native-ui -Doptimize=ReleaseSafe --summary all
+          zig build test-native-ui -Doptimize=ReleaseSafe --summary all
           test -n "$(find "$OPAL_NATIVE_CAPTURE_DIR" -name '*.png' -print -quit)"
       - name: Save native fixture captures
         if: always()
@@ -224,7 +225,9 @@ jobs:
       - name: Build (ReleaseSafe)
         run: zig build -Doptimize=ReleaseSafe
       - name: Binary exists
-        run: test -x zig-out/bin/opal
+        run: |
+          test -x zig-out/bin/opal
+          test -f zig-out/bin/libtorrent_wrapper.so
 
       - name: Native offline UI fixture suite
         timeout-minutes: 20
@@ -377,7 +380,9 @@ jobs:
       - name: Build MINGW64 libmpv
         run: ./scripts/install-mingw64-mpv.sh
       - name: Build headless (ReleaseSafe)
-        run: zig build -Dheadless=true -Doptimize=ReleaseSafe
+        run: |
+          zig build -Dheadless=true -Doptimize=ReleaseSafe
+          test -f zig-out/bin/torrent_wrapper.dll
       - name: Hermetic media server and webcomic workflows
         timeout-minutes: 10
         env:
@@ -387,7 +392,6 @@ jobs:
           # Preserve the MINGW64 DLL search PATH from the native build.
           command -v python
           command -v ffmpeg
-          cp torrent_wrapper.dll zig-out/bin/
           python tests/test_setup_token_live.py PortCollisionGuardTest FixtureDatabaseTest FixtureEnvironmentTest
           python tests/test_media_servers_live.py --binary zig-out/bin/opal.exe --port 41811
           python tests/test_webcomic_sources_live.py --binary zig-out/bin/opal.exe --port 41807
@@ -404,13 +408,9 @@ jobs:
           # nothing (the issue #21 packaging bug).
           cp -r engines web zig-out/bin/
           cp data/plugins-manifest.json zig-out/bin/
-          # The C++ torrent wrapper is built by a sh step in build.zig and lands
-          # in the REPO ROOT, not in zig-out/bin. The exe links it by name, so
-          # launching from zig-out/bin without it dies instantly with
-          # "torrent_wrapper.dll: cannot open shared object file" — which is
-          # exactly what this job had been failing on since it was added, with
-          # no output to say so. The release job stages it the same way.
-          cp torrent_wrapper.dll zig-out/bin/
+          # Build installation must already have staged torrent_wrapper.dll
+          # beside the executable; no test-only copy should hide that contract.
+          test -f zig-out/bin/torrent_wrapper.dll
           cd zig-out/bin
           # Capture the app's own output. Without this the job could only ever
           # report "exited before serving" with no reason attached — a red gate

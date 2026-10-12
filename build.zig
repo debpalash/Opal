@@ -452,6 +452,7 @@ pub fn build(b: *std.Build) void {
     // target (native builds). Cross-compiling (e.g. windows from macOS for a
     // semantic-analysis check) would otherwise emit a host-ABI object under the
     // target's expected name and confuse the link.
+    var native_wrapper_compile: ?*std.Build.Step = null;
     if (b.graph.host.result.os.tag == target.result.os.tag) {
         // Windows: sh, g++ and pkg-config all live inside MSYS2, which a plain
         // PowerShell/cmd session does NOT have on its PATH — a bare "sh" then
@@ -465,6 +466,7 @@ pub fn build(b: *std.Build) void {
         else
             "sh";
         const compile_wrapper = b.addSystemCommand(&.{ shell, "-c", compile_cmd });
+        native_wrapper_compile = &compile_wrapper.step;
         if (is_windows) {
             compile_wrapper.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{
                 msys_path_prefix,
@@ -472,6 +474,16 @@ pub fn build(b: *std.Build) void {
             }));
         }
         exe.step.dependOn(&compile_wrapper.step);
+    }
+
+    // A plain `zig build` should produce a runnable prefix, not just a binary
+    // that needs LD_LIBRARY_PATH (or a manual DLL copy) to find our wrapper.
+    // Release bundles may still move the DSO into their own platform layout.
+    if (native_wrapper_compile) |compile_step| {
+        const wrapper_name = if (is_windows) "torrent_wrapper.dll" else "libtorrent_wrapper.so";
+        const install_wrapper = b.addInstallBinFile(b.path(wrapper_name), wrapper_name);
+        install_wrapper.step.dependOn(compile_step);
+        b.getInstallStep().dependOn(&install_wrapper.step);
     }
 
     if (target.result.os.tag == .linux) {
@@ -502,6 +514,7 @@ pub fn build(b: *std.Build) void {
     // For .app bundles: let the binary find libtorrent_wrapper.so in
     // Contents/Frameworks/ when launched via Finder/NSWorkspace (CWD=/).
     if (target.result.os.tag == .macos) {
+        exe.root_module.addRPathSpecial("@executable_path");
         exe.root_module.addRPathSpecial("@executable_path/../Frameworks");
         // Reserve enough header space so install_name_tool can rewrite LC_LOAD_DYLIB
         // entries after the bundle is laid out (scripts/build-app.sh).
