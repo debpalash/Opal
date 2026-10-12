@@ -20,6 +20,8 @@ class Feed(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlsplit(self.path).path
+        with self.server.events_lock:
+            self.server.events.append((round(time.monotonic() - self.server.created_at, 3), 'start', path))
         if path == '/slow':
             self.server.slow_started.set()
             self.server.release.wait(20)
@@ -34,6 +36,8 @@ class Feed(BaseHTTPRequestHandler):
         self.end_headers()
         try:
             self.wfile.write(body)
+            with self.server.events_lock:
+                self.server.events.append((round(time.monotonic() - self.server.created_at, 3), 'sent', path))
         except (BrokenPipeError, ConnectionResetError):
             pass
 
@@ -45,6 +49,9 @@ class ProgressiveAudioBrowse(unittest.TestCase):
         self.server = ThreadingHTTPServer(('127.0.0.1', 0), Feed)
         self.server.release = threading.Event()
         self.server.slow_started = threading.Event()
+        self.server.created_at = time.monotonic()
+        self.server.events_lock = threading.Lock()
+        self.server.events = []
         self.base = f'http://127.0.0.1:{self.server.server_port}'
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.addCleanup(self.server.server_close)
@@ -73,12 +80,15 @@ class ProgressiveAudioBrowse(unittest.TestCase):
 
     def until(self, predicate, timeout=6):
         end = time.monotonic()+timeout
+        data = None
         while time.monotonic() < end:
             data = self.api('podcasts')
             if predicate(data):
                 return data
             time.sleep(.03)
-        self.fail('Owned podcast fixture state did not appear before deadline')
+        with self.server.events_lock:
+            events = list(self.server.events)
+        self.fail(f'Owned podcast fixture state did not appear before deadline: {data}; provider events: {events}')
 
     def start_overlapping(self):
         started = time.monotonic()

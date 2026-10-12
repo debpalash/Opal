@@ -35,7 +35,10 @@ pub fn run(comptime Job: type, jobs: []const Job, context: anytype, comptime per
     const lanes = @min(jobs.len, std.math.clamp(@as(usize, options.limit), 1, 4));
     for (children[0 .. lanes - 1]) |*child| {
         if (@import("builtin").is_test and deny_child_admission_for_test) continue;
-        child.* = workers.spawnLegacy(Wave.lane, .{&wave}) catch null;
+        child.* = workers.spawnLegacy(Wave.lane, .{&wave}) catch |err| blk: {
+            std.debug.print("[browse] provider lane admission failed ({s}); continuing with fewer lanes\n", .{@errorName(err)});
+            break :blk null;
+        };
     }
     Wave.lane(&wave);
     for (children) |child| if (child) |thread| thread.join();
