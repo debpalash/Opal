@@ -793,4 +793,8 @@ button:disabled{cursor:not-allowed}
   #watch-page-size{min-width:64px}
   .watch-view-controls{flex-wrap:wrap}.watch-view-controls label{white-space:nowrap}
   .plugin-toggle{min-height:40px}
+  .search-card-title{min-height:40px}
+  .search-release-shelf>summary{min-height:40px;align-items:center}
+  /* ^ Live search cards (stubbed /api at 375/390): one-line titles 19px, two-line 38px,
+     "Available releases" summary 36px; their own min-height beats the :where() floor. */
 }
