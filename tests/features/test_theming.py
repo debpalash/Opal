@@ -574,3 +574,17 @@ def test_on_accent_contrast():
     if low:
         return "fail", "text_on_accent below 4.5:1 on accent: " + ", ".join(low)
     return "pass", f"{seen} presets clear 4.5:1 on accent fills"
+
+
+@test("Web phone tap targets hold in a real browser", "Theming")
+def test_web_tap_targets_live_wired():
+    """The CSS check above proves the rules exist; tests/test_web_tap_targets_live.py
+    proves they win in a rendered page. It needs Chromium, so CI runs it in the
+    browser-dom job — this keeps that step from being dropped."""
+    ci = _src(".github/workflows/ci.yml")
+    if "python3 tests/test_web_tap_targets_live.py --chromium" not in ci:
+        return "fail", "browser-dom CI job no longer runs the live tap-target test"
+    if not os.path.exists(os.path.join(PROJECT_DIR, "tests", "test_web_tap_targets_live.py")):
+        return "fail", "tests/test_web_tap_targets_live.py is missing"
+    return "pass", "browser-dom CI renders search, Jellyfin, Plex and show surfaces at 375/390px"
+
