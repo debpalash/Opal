@@ -67,7 +67,7 @@ var extract_thread: ?std.Thread = null;
 
 pub fn extractPlaylist(url: []const u8) void {
     if (extract_thread != null) {
-        state.showToast("Playlist extraction already running...");
+        state.showToast("Playlist extraction already running…");
         return;
     }
     const len = @min(url.len, 2047);

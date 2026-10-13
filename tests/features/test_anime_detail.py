@@ -60,7 +60,7 @@ def test_anime_detail_parity():
         "episode title plays": "playEpisode(ep_str)" in anime,
         # Empty + loading states kept.
         "keeps no-episodes state": '"No episodes available"' in anime,
-        "keeps loading indicator": '"Loading episode details..."' in anime,
+        "keeps loading indicator": '"Loading episode details…"' in anime,
     }
     missing = [k for k, ok in checks.items() if not ok]
     if not missing:

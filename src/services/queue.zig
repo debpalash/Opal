@@ -606,9 +606,11 @@ pub fn renderContent() void {
             sp.deinit();
         }
 
-        if (dvui.button(@src(), if (thumb_backfill_active.load(.acquire)) "Stop Fetch" else "Fetch Thumbs", .{}, .{
-            .color_fill = if (thumb_backfill_active.load(.acquire)) dvui.Color{ .r = 80, .g = 30, .b = 30, .a = 200 } else theme.colors.accent,
-            .color_text = if (thumb_backfill_active.load(.acquire)) theme.colors.danger else theme.colors.text_on_accent,
+        const fetching = thumb_backfill_active.load(.acquire);
+        if (dvui.button(@src(), if (fetching) "Stop Fetch" else "Fetch Thumbs", .{}, .{
+            .color_fill = if (fetching) theme.colors.bg_elevated else theme.colors.accent,
+            .color_fill_hover = if (fetching) theme.colors.bg_elevated.lighten(6) else theme.colors.accent.lighten(8),
+            .color_text = if (fetching) theme.colors.danger else theme.colors.text_on_accent,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
             .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
@@ -621,7 +623,8 @@ pub fn renderContent() void {
         }
 
         if (dvui.button(@src(), "Clear All", .{}, .{
-            .color_fill = dvui.Color{ .r = 80, .g = 30, .b = 30, .a = 200 },
+            .color_fill = theme.colors.bg_elevated,
+            .color_fill_hover = theme.colors.bg_elevated.lighten(6),
             .color_text = theme.colors.danger,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
@@ -632,9 +635,13 @@ pub fn renderContent() void {
 
         if (dvui.button(@src(), "Clear Played", .{}, .{
             .color_fill = theme.colors.bg_elevated,
+            .color_fill_hover = theme.colors.bg_elevated.lighten(6),
             .color_text = theme.colors.text_secondary,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
+            // Same zero vertical margin as its siblings: the ButtonWidget
+            // default margin sat this one 4px lower than Fetch/Clear All.
+            .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
         })) {
             clearPlayed();
         }
@@ -654,6 +661,8 @@ pub fn renderContent() void {
 
         if (dvui.button(@src(), if (state.app.playlist_shuffle) "Shuffle: on" else "Shuffle: off", .{}, .{
             .color_fill = transparent,
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .color_text = if (state.app.playlist_shuffle) theme.colors.accent else theme.colors.text_secondary,
         })) _ = apply(.@"toggle-shuffle", null);
 
@@ -664,12 +673,14 @@ pub fn renderContent() void {
         };
         if (dvui.button(@src(), repeat_label, .{}, .{
             .color_fill = transparent,
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .color_text = if (state.app.playlist_repeat == .off) theme.colors.text_secondary else theme.colors.accent,
         })) _ = apply(.@"cycle-repeat", null);
 
-        if (dvui.button(@src(), "Previous", .{}, .{ .color_fill = transparent, .color_text = theme.colors.text_secondary }))
+        if (dvui.button(@src(), "Previous", .{}, .{ .color_fill = transparent, .color_fill_hover = theme.colors.bg_hover, .color_fill_press = theme.colors.bg_elevated, .color_text = theme.colors.text_secondary }))
             _ = apply(.previous, null);
-        if (dvui.button(@src(), "Next", .{}, .{ .color_fill = transparent, .color_text = theme.colors.text_secondary }))
+        if (dvui.button(@src(), "Next", .{}, .{ .color_fill = transparent, .color_fill_hover = theme.colors.bg_hover, .color_fill_press = theme.colors.bg_elevated, .color_text = theme.colors.text_secondary }))
             _ = apply(.next, null);
     }
 
@@ -818,7 +829,7 @@ fn renderNowPlaying() void {
     var np = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = dvui.Color{ .r = 0, .g = 200, .b = 200, .a = 15 },
+        .color_fill = theme.colors.accent_dim.opacity(0.3),
         .corner_radius = theme.dims.rad_sm,
         .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
     });
@@ -871,7 +882,7 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
         .id_extra = idx,
         .expand = .horizontal,
         .background = true,
-        .color_fill = if (item.played) dvui.Color{ .r = 20, .g = 22, .b = 28, .a = 120 } else theme.colors.bg_surface,
+        .color_fill = if (item.played) theme.colors.bg_app else theme.colors.bg_surface,
         .color_border = theme.colors.border_subtle,
         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
         .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
@@ -997,6 +1008,8 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
             .id_extra = idx + 805,
             .color_text = theme.colors.text_secondary,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
         })) {
             if (idx > 0) swapQueueItems(idx - 1, idx);
         }
@@ -1006,6 +1019,8 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
             .id_extra = idx + 808,
             .color_text = theme.colors.text_secondary,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
         })) {
             if (idx + 1 < queue_count) swapQueueItems(idx, idx + 1);
         }
@@ -1015,6 +1030,8 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
             .id_extra = idx + 810,
             .color_text = theme.colors.accent,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
         })) {
             playQueueItem(item);
         }
@@ -1024,6 +1041,8 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
             .id_extra = idx + 820,
             .color_text = theme.colors.danger,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
         })) {
             removeFromQueue(item.id);
         }
@@ -1480,7 +1499,7 @@ fn startThumbBackfill() void {
     if (thumb_backfill_active.load(.acquire)) return;
     thumb_backfill_active.store(true, .release);
     thumb_backfill_cancel.store(false, .release);
-    state.showToast("Fetching thumbnails...");
+    state.showToast("Fetching thumbnails…");
 
     if (@import("../core/workers.zig").spawnLegacy(struct {
         fn worker() void {

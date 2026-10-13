@@ -330,7 +330,7 @@ fn recordWorker() void {
     is_recording = true;
     recording_mutex.unlock();
 
-    state.showToast("Recording started...");
+    state.showToast("Recording started…");
     std.log.info("[streamlink] Recording to: {s}", .{fname});
 
     // recordWorker is the SOLE caller of child.wait(). stopRecording only

@@ -772,6 +772,8 @@ pub fn renderSubtitleBar() void {
             const speak_color = if (speaking_word_idx == -2) theme.colors.accent else theme.colors.text_secondary;
             if (dvui.button(@src(), "Speak", .{}, .{
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill_hover = theme.playerGlass(64),
+                .color_fill_press = theme.playerGlass(96),
                 .color_text = speak_color,
                 .padding = theme.dims.pad_xs,
             })) {
@@ -783,6 +785,8 @@ pub fn renderSubtitleBar() void {
                 const trans_color = if (state.app.translate_enabled) dvui.Color{ .r = 130, .g = 180, .b = 255, .a = 255 } else theme.colors.text_secondary;
                 if (dvui.button(@src(), if (state.app.translate_enabled) "TR ON" else "TR", .{}, .{
                     .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                    .color_fill_hover = theme.playerGlass(64),
+                    .color_fill_press = theme.playerGlass(96),
                     .color_text = trans_color,
                     .padding = theme.dims.pad_xs,
                 })) {
@@ -799,6 +803,8 @@ pub fn renderSubtitleBar() void {
                 const dub_color = if (state.app.dubbing_enabled) dvui.Color{ .r = 255, .g = 180, .b = 80, .a = 255 } else theme.colors.text_secondary;
                 if (dvui.button(@src(), if (state.app.dubbing_enabled) "DUB ON" else "DUB", .{}, .{
                     .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                    .color_fill_hover = theme.playerGlass(64),
+                    .color_fill_press = theme.playerGlass(96),
                     .color_text = dub_color,
                     .padding = theme.dims.pad_xs,
                 })) {
@@ -812,6 +818,8 @@ pub fn renderSubtitleBar() void {
                 const asr_color = if (state.app.asr_enabled) dvui.Color{ .r = 180, .g = 255, .b = 180, .a = 255 } else theme.colors.text_secondary;
                 if (dvui.button(@src(), if (state.app.asr_enabled) "ASR ON" else "ASR", .{}, .{
                     .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                    .color_fill_hover = theme.playerGlass(64),
+                    .color_fill_press = theme.playerGlass(96),
                     .color_text = asr_color,
                     .padding = theme.dims.pad_xs,
                 })) {
@@ -847,7 +855,7 @@ pub fn renderSubtitleBar() void {
                 .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
             });
             if (state.app.asr_busy) {
-                _ = dvui.label(@src(), "ASR processing...", .{}, .{
+                _ = dvui.label(@src(), "ASR processing…", .{}, .{
                     .color_text = dvui.Color{ .r = 100, .g = 105, .b = 120, .a = 150 },
                 });
             }
@@ -869,16 +877,16 @@ pub fn renderSubtitleBar() void {
 
             if (state.app.asr_enabled) {
                 if (state.app.asr_busy) {
-                    _ = dvui.label(@src(), "ASR: processing...", .{}, .{
+                    _ = dvui.label(@src(), "ASR: processing…", .{}, .{
                         .color_text = dvui.Color{ .r = 180, .g = 255, .b = 180, .a = 200 },
                     });
                 } else {
-                    _ = dvui.label(@src(), "ASR: waiting...", .{}, .{
+                    _ = dvui.label(@src(), "ASR: waiting…", .{}, .{
                         .color_text = dvui.Color{ .r = 180, .g = 255, .b = 180, .a = 200 },
                     });
                 }
             } else {
-                _ = dvui.label(@src(), "Waiting for subtitles...", .{}, .{
+                _ = dvui.label(@src(), "Waiting for subtitles…", .{}, .{
                     .color_text = dvui.Color{ .r = 100, .g = 105, .b = 120, .a = 200 },
                 });
             }

@@ -661,6 +661,8 @@ pub fn renderUrlInput(is_large: bool) void {
             .gravity_y = 0.5,
             .color_text = if (mem_on) theme.colors.accent else theme.colors.text_tertiary,
             .color_fill = transparent,
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .border = dvui.Rect.all(0),
             .padding = dvui.Rect.all(theme.spacing.xs),
             .min_size_content = .{ .w = 18, .h = 18 },
@@ -677,6 +679,8 @@ pub fn renderUrlInput(is_large: bool) void {
         .gravity_y = 0.5,
         .color_text = theme.colors.accent,
         .color_fill = transparent,
+        .color_fill_hover = theme.colors.bg_hover,
+        .color_fill_press = theme.colors.bg_elevated,
         .border = dvui.Rect.all(0),
         .padding = dvui.Rect.all(theme.spacing.xs),
     });
@@ -689,6 +693,8 @@ pub fn renderUrlInput(is_large: bool) void {
         .gravity_y = 0.5,
         .color_text = theme.colors.text_tertiary,
         .color_fill = transparent,
+        .color_fill_hover = theme.colors.bg_hover,
+        .color_fill_press = theme.colors.bg_elevated,
         .border = dvui.Rect.all(0),
         .padding = dvui.Rect.all(theme.spacing.xs),
     })) {
@@ -710,6 +716,8 @@ pub fn renderUrlInput(is_large: bool) void {
             .gravity_y = 0.5,
             .color_text = mic_color,
             .color_fill = transparent,
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .border = dvui.Rect.all(0),
             .padding = dvui.Rect.all(theme.spacing.xs),
             .min_size_content = .{ .w = 18, .h = 18 },
@@ -728,6 +736,8 @@ pub fn renderUrlInput(is_large: bool) void {
                 .gravity_y = 0.5,
                 .color_text = theme.colors.danger,
                 .color_fill = transparent,
+                .color_fill_hover = theme.colors.bg_hover,
+                .color_fill_press = theme.colors.bg_elevated,
                 .border = dvui.Rect.all(0),
                 .padding = dvui.Rect.all(theme.spacing.xs),
             })) {
@@ -811,7 +821,7 @@ pub fn submitInput() void {
             if (@import("../services/projectjav.zig").isProjectJavUrl(null_term_uri[0..trimmed.len])) {
                 @import("../services/projectjav.zig").fetchTorrents(null_term_uri[0..trimmed.len]);
                 @memset(&state.app.magnet_buf, 0);
-                state.showToast("Fetching torrents...");
+                state.showToast("Fetching torrents…");
                 return;
             }
 
@@ -893,6 +903,8 @@ pub fn renderTabBar() void {
         if (dvui.button(@src(), tab_label, .{}, .{
             .id_extra = i,
             .color_fill = transparent,
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .color_text = if (is_active) theme.colors.accent else theme.colors.text_tertiary,
             .color_border = transparent,
             .border = dvui.Rect.all(0),

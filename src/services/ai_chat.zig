@@ -457,6 +457,8 @@ pub fn renderChatBody() void {
         // Voice toggle — plain accent toggle.
         if (dvui.button(@src(), "Voice", .{}, .{
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .color_text = if (voice.voice_mode) theme.colors.accent else theme.colors.text_secondary,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
@@ -468,6 +470,8 @@ pub fn renderChatBody() void {
         // Incognito toggle — plain accent toggle.
         if (dvui.button(@src(), "Incognito", .{}, .{
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .color_text = if (incognito_mode) theme.colors.accent else theme.colors.text_secondary,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
@@ -526,12 +530,12 @@ pub fn renderChatBody() void {
                         .expand = .horizontal,
                     });
                 } else {
-                    _ = dvui.label(@src(), "Listening...", .{}, .{
+                    _ = dvui.label(@src(), "Listening…", .{}, .{
                         .color_text = theme.colors.text_secondary,
                     });
                 }
             } else if (voice.conv_phase == .transcribing) {
-                _ = dvui.label(@src(), "Transcribing...", .{}, .{
+                _ = dvui.label(@src(), "Transcribing…", .{}, .{
                     .color_text = theme.colors.text_secondary,
                 });
             } else if (voice.conv_phase == .thinking) {
@@ -539,7 +543,7 @@ pub fn renderChatBody() void {
                     .color_text = theme.colors.text_secondary,
                 });
             } else if (voice.conv_phase == .speaking) {
-                _ = dvui.label(@src(), "Speaking...", .{}, .{
+                _ = dvui.label(@src(), "Speaking…", .{}, .{
                     .color_text = theme.colors.text_secondary,
                 });
             } else {
@@ -552,7 +556,7 @@ pub fn renderChatBody() void {
                 .color_text = theme.colors.text_secondary,
             });
         } else if (voice.is_speaking.load(.acquire)) {
-            _ = dvui.label(@src(), "Speaking...", .{}, .{
+            _ = dvui.label(@src(), "Speaking…", .{}, .{
                 .color_text = theme.colors.text_secondary,
             });
         }
@@ -615,6 +619,8 @@ pub fn renderChatBody() void {
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.mic, .{}, .{}, .{
                 .id_extra = 9007,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill_hover = theme.colors.bg_hover,
+                .color_fill_press = theme.colors.bg_elevated,
                 .color_text = if (voice.is_recording.load(.acquire)) theme.colors.danger else if (voice.is_transcribing.load(.acquire)) theme.colors.accent else theme.colors.text_secondary,
                 .corner_radius = theme.dims.rad_md,
                 .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
@@ -628,6 +634,8 @@ pub fn renderChatBody() void {
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.headphones, .{}, .{}, .{
                 .id_extra = 9008,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill_hover = theme.colors.bg_hover,
+                .color_fill_press = theme.colors.bg_elevated,
                 .color_text = if (voice.conversation_active.load(.acquire)) theme.colors.accent else theme.colors.text_secondary,
                 .corner_radius = theme.dims.rad_md,
                 .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
@@ -642,6 +650,8 @@ pub fn renderChatBody() void {
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.square, .{}, .{}, .{
                 .id_extra = 9009,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill_hover = theme.colors.bg_hover,
+                .color_fill_press = theme.colors.bg_elevated,
                 .color_text = if (is_active) theme.colors.danger else theme.colors.text_tertiary,
                 .corner_radius = theme.dims.rad_md,
                 .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
@@ -908,6 +918,8 @@ fn renderEmptyState() void {
                 .id_extra = idx + 8000,
                 .expand = .horizontal,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill_hover = theme.colors.bg_hover,
+                .color_fill_press = theme.colors.bg_elevated,
                 .corner_radius = theme.dims.rad_sm,
                 .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
                 .margin = .{ .x = theme.spacing.sm, .y = 0, .w = theme.spacing.sm, .h = theme.spacing.xs },
@@ -1189,6 +1201,8 @@ pub fn renderInlineResults() void {
         if (resolver.isRemoteQueueable(item) and dvui.buttonIcon(@src(), "", icons.tvg.lucide.plus, .{}, .{}, .{
             .id_extra = ci + 10400,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .color_text = theme.colors.text_secondary,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = theme.spacing.xs, .y = theme.spacing.xs, .w = theme.spacing.xs, .h = theme.spacing.xs },
@@ -1209,6 +1223,8 @@ pub fn renderInlineResults() void {
         if (dvui.buttonIcon(@src(), "", action_icon, .{}, .{}, .{
             .id_extra = ci + 10100,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .color_text = theme.colors.accent,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = theme.spacing.xs, .y = theme.spacing.xs, .w = theme.spacing.xs, .h = theme.spacing.xs },

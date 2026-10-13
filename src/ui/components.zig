@@ -1030,14 +1030,12 @@ pub fn actionButton(
     kind: enum { primary, secondary, danger },
     id_extra: usize,
 ) bool {
+    const fills = actionFills(kind == .primary);
     return dvui.button(src, label, .{}, .{
         .id_extra = id_extra,
-        .color_fill = switch (kind) {
-            .primary => tk.accent_primary(),
-            .secondary, .danger => tk.bg_elevated(),
-        },
-        .color_fill_hover = tk.bg_hover(),
-        .color_fill_press = tk.bg_surface(),
+        .color_fill = fills[0],
+        .color_fill_hover = fills[1],
+        .color_fill_press = fills[2],
         .color_text = switch (kind) {
             .primary => tk.text_on_accent(),
             .secondary => tk.text_primary(),
@@ -1054,6 +1052,66 @@ pub fn actionButton(
         // "Apply Port" landed on the Confirm-password field that way. Callers
         // that want vertical centering should put the button in a row box.
     });
+}
+
+/// Rest / hover / press fills for actionButton-family buttons. Primary stays
+/// on the accent hue: hovering it to bg_hover put text_on_accent (near-black)
+/// on a near-black fill, so the label vanished under the pointer.
+fn actionFills(primary: bool) [3]dvui.Color {
+    if (primary) {
+        const a = tk.accent_primary();
+        return .{ a, a.lighten(8), a.lighten(-8) };
+    }
+    // bg_hover == bg_elevated in every preset, so hovering an elevated
+    // button to bg_hover gave no feedback at all. Step lightness instead.
+    const e = tk.bg_elevated();
+    return .{ e, e.lighten(6), tk.bg_surface() };
+}
+
+/// actionButton with a leading lucide icon. Use this instead of putting a
+/// glyph like "▶" / "←" in the label — those are absent from the UI font and
+/// render as tofu. Same fills, radius and padding as actionButton.
+pub fn iconActionButton(
+    src: std.builtin.SourceLocation,
+    icon: []const u8,
+    label: []const u8,
+    kind: enum { primary, secondary, danger },
+    id_extra: usize,
+) bool {
+    const fg = switch (kind) {
+        .primary => tk.text_on_accent(),
+        .secondary => tk.text_primary(),
+        .danger => tk.semantic_error(),
+    };
+    const fills = actionFills(kind == .primary);
+    var bw: dvui.ButtonWidget = undefined;
+    bw.init(src, .{}, .{
+        .id_extra = id_extra,
+        .color_fill = fills[0],
+        .color_fill_hover = fills[1],
+        .color_fill_press = fills[2],
+        .border = dvui.Rect.all(0),
+        .corner_radius = tk.rad_sm,
+        .padding = .{ .x = tk.sp_md, .y = tk.sp_xs, .w = tk.sp_md, .h = tk.sp_xs },
+        .margin = .{ .x = 0, .y = 0, .w = tk.sp_sm, .h = 0 },
+    });
+    bw.processEvents();
+    bw.drawBackground();
+    {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_x = 0.5 });
+        defer row.deinit();
+        dvui.icon(@src(), "", icon, .{}, .{
+            .color_text = fg,
+            .min_size_content = theme.iconSize(.sm),
+            .gravity_y = 0.5,
+            .margin = .{ .x = 0, .y = 0, .w = tk.sp_xs, .h = 0 },
+        });
+        _ = dvui.labelNoFmt(@src(), label, .{}, .{ .color_text = fg, .gravity_y = 0.5 });
+    }
+    bw.drawFocus();
+    const clicked = bw.clicked();
+    bw.deinit();
+    return clicked;
 }
 
 pub fn confirmDangerButton(src: std.builtin.SourceLocation, label: []const u8, id_extra: usize) bool {

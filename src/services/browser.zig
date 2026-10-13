@@ -2309,6 +2309,8 @@ fn renderReaderOverlay() void {
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.x, .{}, .{}, .{
             .id_extra = 140,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .color_text = theme.colors.text_secondary,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 3, .y = 2, .w = 3, .h = 2 },

@@ -1221,7 +1221,7 @@ pub fn renderContent() void {
         const awaiting = conn_state.load(.acquire) == .awaiting;
         if (dvui.button(@src(), if (awaiting) "Waiting…" else "Connect with Plex", .{}, .{
             .color_fill = theme.colors.accent,
-            .color_text = dvui.Color.white,
+            .color_text = theme.colors.text_on_accent,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
         })) {

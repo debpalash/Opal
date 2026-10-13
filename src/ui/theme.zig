@@ -165,7 +165,7 @@ const solarized_colors = ThemeColors{
     .text_primary = .{ .r = 238, .g = 232, .b = 213, .a = 255 },
     .text_secondary = .{ .r = 165, .g = 175, .b = 175, .a = 255 },
     .text_tertiary = .{ .r = 161, .g = 171, .b = 174, .a = 255 },
-    .text_on_accent = .{ .r = 0, .g = 36, .b = 46, .a = 255 },
+    .text_on_accent = .{ .r = 253, .g = 246, .b = 227, .a = 255 }, // base3: dark ink is 2.97:1 on this accent
     .danger = .{ .r = 170, .g = 65, .b = 60, .a = 255 },
     .success = .{ .r = 110, .g = 130, .b = 50, .a = 255 },
     .warning = .{ .r = 150, .g = 120, .b = 40, .a = 255 },
@@ -518,6 +518,38 @@ fn applyToDvui() void {
     // built-ins. Without this it stays dvui's default BLUE — which is why the
     // scrubber and volume slider rendered blue instead of the theme accent.
     t.focus = colors.accent;
+    // dvui's per-style palettes (.control buttons, .window boxes, .highlight
+    // menu items / checkboxes, .err) were left at the Adwaita defaults, so any
+    // widget whose options omitted a color — a menu item's hover, a checkbox
+    // tick, a button with only color_fill set — painted Adwaita grey/blue
+    // instead of the active preset. Map every style onto the preset.
+    t.control = .{
+        .fill = colors.bg_elevated,
+        .fill_hover = colors.bg_elevated.lighten(6),
+        .fill_press = colors.bg_surface,
+        .text = colors.text_primary,
+        .text_press = colors.accent,
+        .border = colors.border_subtle,
+    };
+    t.window = .{
+        .fill = colors.bg_surface,
+        .text = colors.text_primary,
+        .border = colors.border_subtle,
+    };
+    t.highlight = .{
+        .fill = colors.accent,
+        .fill_hover = colors.accent.lighten(8),
+        .fill_press = colors.accent.lighten(-8),
+        .text = colors.text_on_accent,
+        .border = colors.accent,
+    };
+    t.err = .{
+        .fill = colors.danger,
+        .fill_hover = colors.danger.lighten(8),
+        .fill_press = colors.danger.lighten(-8),
+        .text = colors.text_on_accent,
+        .border = colors.danger,
+    };
     // Route dvui's own type ramp through Opal's embedded font + size tokens.
     // Surfaces that
     // use themeGet().font_heading / font_title (home, discovery, settings big

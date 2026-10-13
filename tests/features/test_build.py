@@ -65,6 +65,47 @@ def test_zig_build():
         return "fail", "Build timed out (>300s)"
 
 
+@test("WebP prefix auto-detects Homebrew without OPAL_WEBP_PREFIX", "Build")
+def test_webp_prefix_homebrew_fallback():
+    # A stock macOS dev box (`brew install webp`, no ~/.local/opal-webp, no
+    # env var) must build. build.zig used to addSearchPrefix the absent
+    # ~/.local/opal-webp unconditionally -> "unable to open prefix directory".
+    import tempfile
+    if sys.platform != "darwin":
+        return "skip", "Homebrew webp fallback is macOS-only"
+    zig = shutil.which("zig")
+    if not zig:
+        return "skip", "zig not on PATH"
+    brew = [p for p in (os.environ.get("HOMEBREW_PREFIX"), "/opt/homebrew", "/usr/local")
+            if p and os.path.exists(os.path.join(p, "lib", "libwebp.a"))]
+    if not brew:
+        return "skip", "no Homebrew libwebp.a (brew install webp)"
+    try:
+        info = subprocess.run([zig, "env"], capture_output=True, text=True, timeout=30).stdout
+        m = re.search(r'global_cache_dir\s*=\s*"([^"]+)"', info) or re.search(r'"global_cache_dir"\s*:\s*"([^"]+)"', info)
+        with tempfile.TemporaryDirectory() as home:
+            env = {k: v for k, v in os.environ.items() if k != "OPAL_WEBP_PREFIX"}
+            # Fresh HOME guarantees ~/.local/opal-webp is absent; keep the
+            # real zig package cache so the build stays offline and warm.
+            env["HOME"] = home
+            if m:
+                env["ZIG_GLOBAL_CACHE_DIR"] = m.group(1)
+            # Control: a missing prefix really is fatal, so the pass below
+            # proves the absent ~/.local/opal-webp was skipped, not tolerated.
+            bad = dict(env, OPAL_WEBP_PREFIX=os.path.join(home, "missing-webp"))
+            neg = subprocess.run([zig, "build"], cwd=PROJECT_DIR, env=bad,
+                                 capture_output=True, text=True, timeout=300)
+            if neg.returncode == 0 or "prefix directory" not in neg.stderr:
+                return "fail", "control: a missing OPAL_WEBP_PREFIX should fail with 'unable to open prefix directory'"
+            pos = subprocess.run([zig, "build"], cwd=PROJECT_DIR, env=env,
+                                 capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        return "fail", "build timed out (>300s)"
+    if pos.returncode != 0:
+        return "fail", pos.stderr[-600:]
+    return "pass", f"built with no env var and no ~/.local/opal-webp via {brew[0]}"
+
+
 @test("Build graph excludes unused SDL3 dependencies", "Build")
 def test_dvui_backend_isolation():
     result = subprocess.run(
@@ -1439,3 +1480,27 @@ def test_macos_media_header_padding():
     if result.returncode:
         return "fail", (result.stderr or result.stdout)[-1200:]
     return "pass", "production FFmpeg flags permit longer bundled dependency install names"
+
+
+@test("Shutdown: web listener cannot share its port; id caches freed; leak dump not cut off", "Stability")
+def test_shutdown_port_and_leaks():
+    # std's reuse_address also sets SO_REUSEPORT: a second Opal bound :41595
+    # silently, stop()'s wake-up connect landed on the other process, accept()
+    # never returned and the 5s deadline force-exited mid leak report. The
+    # report itself showed tmdb_store's per-list id-set HashMaps never freed.
+    remote = _src("src/services/remote.zig")
+    loop = remote.split("fn serverLoop() void {", 1)[1]
+    main = _src("src/main.zig")
+    deinit = main.split("workers.armShutdownDeadline(", 1)[1]
+    store = _src("src/services/tmdb_store.zig")
+    checks = {
+        "probe before listen": "portAlreadyServed()" in loop
+            and loop.index("portAlreadyServed()") < loop.index(".listen("),
+        "probe hits loopback": '"127.0.0.1", port' in remote.split("fn portAlreadyServed(", 1)[1].split("\n}", 1)[0],
+        "id sets freed": "set.map.deinit(alloc)" in store and "tmdb_store.zig\").deinitIdSets()" in deinit,
+        "deadline disarmed before leak dump": deinit.index("workers.finishShutdown()") < deinit.index("alloc.zig\").deinit()"),
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "shutdown regression: " + ", ".join(missing)
+    return "pass", "second instance skips the busy port; id caches freed; leak report runs after the deadline is disarmed"

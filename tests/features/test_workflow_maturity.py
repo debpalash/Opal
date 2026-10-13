@@ -216,3 +216,57 @@ def test_torrent_gpu_owner_handoff():
     for token in ("textureCreate", "std.Thread.spawn", "fixture.load_serial += 1", "fixture.lifetime_id += 1", "https://fixture.invalid/poster.jpg"):
         assert token in fixture, token
     return "pass", "Real GPU worker regression; queued immutable metadata with lifetime/serial validation and owner drain"
+
+
+@test("Coming-up sync fans out per show and commits cards in library order", "Performance")
+def test_tv_sync_fanout():
+    # The /3/tv/{id} pass ran one show at a time: 36 tracked shows took ~35s
+    # before Home's Coming-up rail published. Shows now sync on bounded lanes,
+    # but cards still commit in tvGetShows order so the 12 rail slots go to the
+    # same shows a sequential pass picked.
+    lib = _src("src/services/tv_library.zig")
+    cal = _src("src/services/tv_calendar.zig")
+    worker = lib.split("fn syncWorker() void {", 1)[1].split("fn syncShow(", 1)[0]
+    run = 'browse_fanout.zig").run(SyncJob'
+    checks = {
+        "bounded fan-out": run in worker and "SYNC_LANES" in worker,
+        "ordered commit after join": run in worker and "cal.commitOrdered(cards" in worker
+            and worker.index(run) < worker.index("cal.commitOrdered(cards"),
+        "heap rows, not thread stack": "alloc.alloc(db.TvShowRow, MAX_SHOWS)" in worker,
+        "atomic tallies": "updated.fetchAdd" in lib and "learned_imdb.store(true, .release)" in lib,
+        # stage/stageFacts build a card; only commitOrdered touches the projection,
+        # through the unit-tested CalendarProjection.stageOrdered (order, slots,
+        # EZTV selection are covered in tv_calendar_pure.zig).
+        "cards built off the projection": "pub fn stage(" in cal and "pub fn stageFacts(" in cal
+            and "projection.add(" not in cal
+            and "projection.stageOrdered(" in cal.split("pub fn commitOrdered(", 1)[1],
+        "eztv only for slotted cards": "pub fn stageOrdered(" in _src("src/services/tv_calendar_pure.zig"),
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "tv sync fan-out incomplete: " + ", ".join(missing)
+    return "pass", "shows sync on 4 lanes; cards commit in library order; EZTV only for rail slots"
+
+
+@test("Poster cache reads use parallel read-only connections", "Performance")
+def test_poster_cache_readers():
+    # Cold-start profile: poster workers spent ~4x longer waiting on cache_lock
+    # (and the FULLMUTEX shared connection the UI thread also uses) than reading
+    # the blob. WAL lets read-only side connections run in parallel.
+    dbz = _src("src/core/db.zig")
+    poster = _src("src/core/poster.zig")
+    load = poster.split("fn cacheLoad(key: i64) ?[]u8 {", 1)[1].split("const CACHE_SELECT", 1)[0]
+    deinit = dbz.split("pub fn deinit() void {", 1)[1].split("\n}\n", 1)[0]
+    checks = {
+        "read-only nomutex slots": "SQLITE_OPEN_READONLY | c.SQLITE_OPEN_NOMUTEX" in dbz,
+        "atomic slot claim": "reader_claimed[i].swap(true, .acq_rel)" in dbz,
+        "gated on schema ready": "readers_ready.store(true, .release)" in dbz,
+        "closed on shutdown": "sqlite3_close_v2(h)" in deinit and "readers_ready.store(false" in deinit,
+        "poster reads via reader": load.index("db.acquireReader()") < load.index("cache_lock.lock()"),
+        "reader released": "db.releaseReader(reader)" in load,
+        "shared fallback kept": "db.prepare(CACHE_SELECT)" in load,
+    }
+    missing = [k for k, v in checks.items() if not v]
+    if missing:
+        return "fail", "poster cache reader pool incomplete: " + ", ".join(missing)
+    return "pass", "cache hits read on up to 8 read-only WAL connections; shared connection is the fallback"

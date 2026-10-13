@@ -13,6 +13,8 @@ const debug_mode = builtin.mode == .Debug;
 var gpa_instance = if (debug_mode) std.heap.DebugAllocator(.{
     .safety = true, // use-after-free / double-free detection
     .thread_safe = true, // resolver/search/AI threads allocate concurrently
+    // Six frames stop inside std.HashMap internals; leak reports need the owner.
+    .stack_trace_frames = 16,
 }){} else {};
 
 pub const allocator: std.mem.Allocator = if (debug_mode)

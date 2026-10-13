@@ -278,12 +278,23 @@ that repaints on change. [Architecture](docs/architecture.md) ·
 Use **Zig 0.16.x**; 0.17 requires a migration. On macOS:
 
 ```sh
-brew install mpv sqlite sdl2 libtorrent-rasterbar
-# Install Zig 0.16.x separately if your package manager offers a newer version.
+brew install mpv sqlite sdl2 libtorrent-rasterbar webp
 git clone https://github.com/debpalash/Opal.git
 cd Opal
+brew install mise
+mise install
+mise exec -- zig build run
+```
+
+`mise.toml` pins Zig 0.16.0. If you already have Zig 0.16.x on `PATH`, run:
+
+```sh
 zig build run
 ```
+
+**WebP:** the build links a static `libwebp.a`, found automatically under
+`~/.local/opal-webp` or Homebrew (`$HOMEBREW_PREFIX`, `/opt/homebrew`, `/usr/local`).
+Point elsewhere with `-Dwebp-prefix=<dir>` or `OPAL_WEBP_PREFIX=<dir>`.
 
 **Linux / Wayland:** run `./scripts/install-deps.sh`, then `make run` for system SDL2.
 Minimums: libmpv **0.34** (0.38+ recommended), libtorrent-rasterbar **2.0**, and

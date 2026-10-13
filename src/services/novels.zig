@@ -2439,7 +2439,7 @@ fn renderChaptersView() void {
             .id_extra = 90001,
             .expand = .horizontal,
             .color_fill = theme.colors.accent,
-            .color_text = dvui.Color.white,
+            .color_text = theme.colors.text_on_accent,
             .corner_radius = theme.dims.rad_sm,
             .margin = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
             .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },

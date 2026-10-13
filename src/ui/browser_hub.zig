@@ -123,7 +123,7 @@ fn findSources() void {
     }
     state.navigateToTab(.Search);
     @import("../services/search.zig").submitQuery(text);
-    state.showToast("Searching all sources...");
+    state.showToast("Searching all sources…");
 }
 
 fn dismissPage() void {

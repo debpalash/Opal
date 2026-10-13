@@ -119,7 +119,7 @@ pub fn castTo(device_idx: usize, url: []const u8) void {
                 return;
             };
 
-            state.showToast("Casting...");
+            state.showToast("Casting…");
             _ = child.wait() catch {};
         }
     }.worker, .{ url_copy, name_copy })) |t| @import("../core/workers.zig").release(t) else |_| {}

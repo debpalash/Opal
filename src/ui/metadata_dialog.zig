@@ -57,7 +57,7 @@ pub fn renderMetadataDialog() void {
 
     if (!state.app.pending_has_metadata) {
         var waiting = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
-        _ = dvui.label(@src(), "Fetching Torrent Metadata...", .{}, .{ .expand = .horizontal, .color_text = theme.colors.text_primary, .margin = dvui.Rect.all(theme.spacing.md) });
+        _ = dvui.label(@src(), "Fetching Torrent Metadata…", .{}, .{ .expand = .horizontal, .color_text = theme.colors.text_primary, .margin = dvui.Rect.all(theme.spacing.md) });
 
         if (@import("builtin").is_test) test_waiting_rect = waiting.data().rect;
         waiting.deinit();

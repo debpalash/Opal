@@ -518,7 +518,7 @@ pub fn renderRail() void {
             .font = dvui.themeGet().font_heading,
             .gravity_y = 0.5,
         });
-        _ = dvui.label(@src(), "{s}", .{if (working) "Looking for artists like yours..." else "New albums from artists like the ones you play"}, .{
+        _ = dvui.label(@src(), "{s}", .{if (working) "Looking for artists like yours…" else "New albums from artists like the ones you play"}, .{
             .color_text = theme.colors.text_tertiary,
             .gravity_y = 0.5,
             .expand = .horizontal,

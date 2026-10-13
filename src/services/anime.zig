@@ -3076,7 +3076,7 @@ pub fn renderContent() void {
             if (state.app.anime.episode_count > 0) {
                 renderEpisodeGrid(sel_idx);
             } else if (state.app.anime.episodes_loading.load(.acquire)) {
-                _ = dvui.label(@src(), "Loading episode details...", .{}, .{ .color_text = theme.colors.accent });
+                _ = dvui.label(@src(), "Loading episode details…", .{}, .{ .color_text = theme.colors.accent });
             } else if (episode_failed.load(.acquire)) {
                 _ = dvui.label(@src(), "Episode catalog unavailable", .{}, .{ .color_text = theme.colors.text_secondary });
                 if (components.actionButton(@src(), "Retry", .secondary, 706)) loadEpisodes(sel_idx);
@@ -3334,6 +3334,8 @@ fn renderScheduleView() void {
                 .expand = .horizontal,
                 .color_text = theme.colors.text_primary,
                 .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill_hover = theme.colors.bg_hover,
+                .color_fill_press = theme.colors.bg_elevated,
                 .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
                 .gravity_y = 0.5,
             })) {
@@ -3479,7 +3481,7 @@ fn renderModeToolbar(count: usize) void {
             .id_extra = 20099,
             .background = true,
             .color_fill = if (airing) theme.colors.accent else theme.colors.bg_surface,
-            .color_text = if (airing) dvui.Color.white else theme.colors.text_secondary,
+            .color_text = if (airing) theme.colors.text_on_accent else theme.colors.text_secondary,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
             .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
@@ -3539,9 +3541,11 @@ fn renderModeToolbar(count: usize) void {
         .color_text = theme.colors.text_secondary,
         .gravity_y = 0.5,
     });
-    const dim = dvui.Color{ .r = 120, .g = 120, .b = 148, .a = 200 };
+    const dim = theme.colors.text_tertiary;
     if (dvui.buttonIcon(@src(), "smaller", icons.tvg.lucide.minus, .{}, .{}, .{
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill_hover = theme.colors.bg_hover,
+        .color_fill_press = theme.colors.bg_elevated,
         .color_text = dim,
         .border = dvui.Rect.all(0),
         .min_size_content = theme.iconSize(.sm),
@@ -3552,6 +3556,8 @@ fn renderModeToolbar(count: usize) void {
     }
     if (dvui.buttonIcon(@src(), "bigger", icons.tvg.lucide.plus, .{}, .{}, .{
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill_hover = theme.colors.bg_hover,
+        .color_fill_press = theme.colors.bg_elevated,
         .color_text = dim,
         .border = dvui.Rect.all(0),
         .min_size_content = theme.iconSize(.sm),
@@ -3568,7 +3574,7 @@ fn renderModeTab(idx: usize, m: state.AnimeMode, label: []const u8) void {
         .id_extra = idx + 20000,
         .background = true,
         .color_fill = if (active) theme.colors.accent else theme.colors.bg_surface,
-        .color_text = if (active) dvui.Color.white else theme.colors.text_secondary,
+        .color_text = if (active) theme.colors.text_on_accent else theme.colors.text_secondary,
         .corner_radius = theme.dims.rad_sm,
         .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
         .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
@@ -3593,7 +3599,7 @@ fn renderSeasonChip(idx: usize, sel: state.AnimeSeasonSel, label: []const u8) vo
         .id_extra = idx + 21000,
         .background = true,
         .color_fill = if (active) theme.colors.accent else theme.colors.bg_surface,
-        .color_text = if (active) dvui.Color.white else theme.colors.text_secondary,
+        .color_text = if (active) theme.colors.text_on_accent else theme.colors.text_secondary,
         .corner_radius = theme.dims.rad_sm,
         .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
         .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
@@ -3656,7 +3662,7 @@ fn renderCalDayChip(idx: usize, day: u8, label: []const u8) void {
         .id_extra = idx + 22000,
         .background = true,
         .color_fill = if (active) theme.colors.accent else theme.colors.bg_surface,
-        .color_text = if (active) dvui.Color.white else theme.colors.text_secondary,
+        .color_text = if (active) theme.colors.text_on_accent else theme.colors.text_secondary,
         .corner_radius = theme.dims.rad_sm,
         .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
         .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
@@ -3807,7 +3813,7 @@ fn renderContinueCard(item: *state.ContinueItem, idx: usize, card_w: f32) void {
                         .gravity_x = 0.02,
                         .gravity_y = 0.98,
                         .background = true,
-                        .color_fill = dvui.Color{ .r = 8, .g = 10, .b = 16, .a = 220 },
+                        .color_fill = theme.playerGlass(220),
                         .corner_radius = dvui.Rect.all(4),
                         .padding = .{ .x = 5, .y = 2, .w = 5, .h = 2 },
                     });
@@ -3837,6 +3843,8 @@ fn renderContinueCard(item: *state.ContinueItem, idx: usize, card_w: f32) void {
             .expand = .horizontal,
             .color_text = theme.colors.text_primary,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .padding = dvui.Rect.all(0),
         })) {
             jumpToAnime(item.mal_id[0..item.mal_id_len]);
@@ -3948,7 +3956,7 @@ fn renderSearchBar() void {
 
     const clicked = dvui.button(@src(), "Search", .{}, .{
         .color_fill = theme.colors.accent,
-        .color_text = dvui.Color.white,
+        .color_text = theme.colors.text_on_accent,
         .corner_radius = theme.dims.rad_sm,
         .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
         .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
@@ -4033,9 +4041,11 @@ fn renderToolbar(count: usize) void {
 
     // Card-size −/+ controls.
     toolbarDivider(950);
-    const dim = dvui.Color{ .r = 120, .g = 120, .b = 148, .a = 200 };
+    const dim = theme.colors.text_tertiary;
     if (dvui.buttonIcon(@src(), "smaller", icons.tvg.lucide.minus, .{}, .{}, .{
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill_hover = theme.colors.bg_hover,
+        .color_fill_press = theme.colors.bg_elevated,
         .color_text = dim,
         .border = dvui.Rect.all(0),
         .min_size_content = theme.iconSize(.sm),
@@ -4046,6 +4056,8 @@ fn renderToolbar(count: usize) void {
     }
     if (dvui.buttonIcon(@src(), "bigger", icons.tvg.lucide.plus, .{}, .{}, .{
         .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill_hover = theme.colors.bg_hover,
+        .color_fill_press = theme.colors.bg_elevated,
         .color_text = dim,
         .border = dvui.Rect.all(0),
         .min_size_content = theme.iconSize(.sm),
@@ -4187,7 +4199,7 @@ fn renderHoverMeta(item: *state.AnimeResult, idx: usize) void {
         .id_extra = idx + 1600,
         .expand = .both,
         .background = true,
-        .color_fill = dvui.Color{ .r = 8, .g = 10, .b = 16, .a = 232 },
+        .color_fill = theme.playerGlass(232),
         .corner_radius = dvui.Rect.all(6),
         .padding = dvui.Rect.all(8),
     });
@@ -4351,6 +4363,8 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
             .expand = .horizontal,
             .color_text = theme.colors.text_primary,
             .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill_hover = theme.colors.bg_hover,
+            .color_fill_press = theme.colors.bg_elevated,
             .padding = dvui.Rect.all(0),
         })) {
             loadEpisodes(idx);
@@ -4394,7 +4408,7 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
             var bb = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .id_extra = idx + 640,
                 .background = true,
-                .color_fill = dvui.Color{ .r = 30, .g = 36, .b = 52, .a = 255 },
+                .color_fill = theme.colors.bg_elevated,
                 .corner_radius = dvui.Rect.all(4),
                 .margin = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
                 .padding = .{ .x = 5, .y = 1, .w = 5, .h = 1 },
@@ -4426,6 +4440,8 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
                     .color_text = theme.colors.text_secondary,
                     .expand = .horizontal,
                     .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                    .color_fill_hover = theme.colors.bg_hover,
+                    .color_fill_press = theme.colors.bg_elevated,
                     .padding = dvui.Rect.all(0),
                 })) {
                     item.expanded = !item.expanded;

@@ -375,7 +375,7 @@ pub fn renderPanel() void {
 
     // Inert without a server.
     if (suwayomiBase() == null) {
-        _ = dvui.label(@src(), "Configure a Suwayomi server first (Settings → Plugins → Suwayomi). Extensions install onto that server, then their sources appear in the Comics grid.", .{}, .{
+        _ = dvui.label(@src(), "Configure a Suwayomi server first (Settings › Plugins › Suwayomi). Extensions install onto that server, then their sources appear in the Comics grid.", .{}, .{
             .color_text = theme.colors.text_secondary,
             .expand = .horizontal,
             .margin = dvui.Rect.all(12),
@@ -424,7 +424,7 @@ pub fn renderPanel() void {
         te.deinit();
         if (dvui.button(@src(), "Load", .{}, .{
             .color_fill = theme.colors.accent,
-            .color_text = dvui.Color.white,
+            .color_text = theme.colors.text_on_accent,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
             .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
@@ -582,7 +582,7 @@ fn renderRow(r: *const ExtRow, idx: usize) void {
         if (dvui.button(@src(), if (installed) "Remove" else "Install", .{}, .{
             .id_extra = idx + 1400,
             .color_fill = if (installed) theme.colors.bg_elevated else theme.colors.accent,
-            .color_text = if (installed) theme.colors.danger else dvui.Color.white,
+            .color_text = if (installed) theme.colors.danger else theme.colors.text_on_accent,
             .color_border = if (installed) theme.colors.danger else theme.colors.accent,
             .border = dvui.Rect.all(1),
             .corner_radius = theme.dims.rad_sm,

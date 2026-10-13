@@ -748,7 +748,7 @@ fn renderHistoryContent() void {
             const browser = @import("../services/browser.zig");
             if (entry.link_len > 0) {
                 browser.resumePlayback(entry.link[0..entry.link_len]);
-                state.showToast("Resuming playback...");
+                state.showToast("Resuming playback…");
             } else {
                 state.showToast("Can't resume — no saved link for this item");
             }

@@ -368,7 +368,7 @@ fn renderEpisodes(view: *const Snapshot) void {
         if (dvui.buttonIcon(@src(), "Play", icons.tvg.lucide.play, .{}, .{}, .{
             .id_extra = i + 6000,
             .color_fill = theme.colors.accent,
-            .color_text = dvui.Color.white,
+            .color_text = theme.colors.text_on_accent,
             .corner_radius = theme.dims.rad_sm,
             .gravity_y = 0.5,
         })) {

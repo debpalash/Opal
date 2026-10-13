@@ -1,6 +1,16 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
+    const version = @import("builtin").zig_version;
+    if (comptime version.major == 0 and version.minor == 16) {
+        buildSupported(b);
+    } else {
+        @compileError("Opal requires Zig 0.16.x; found " ++ @import("builtin").zig_version_string ++
+            ". Use `mise install && mise exec -- zig build run` or select a Zig 0.16 compiler in PATH.");
+    }
+}
+
+fn buildSupported(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -57,7 +67,7 @@ pub fn build(b: *std.Build) void {
         // console subsystem (it's a CLI that logs to stdout). Child processes
         // are spawned with CREATE_NO_WINDOW (io_global) so they don't flash
         // their own consoles now that we have none to inherit.
-        if (!headless) exe.subsystem = .Windows;
+        if (!headless) exe.subsystem = .windows;
     }
 
     // System SDL2 integration. On Wayland compositors (COSMIC DE, etc.) the bundled SDL2
@@ -386,20 +396,29 @@ pub fn build(b: *std.Build) void {
     addAgentAssets(b, exe.root_module);
     if (!headless) addGhosttyVt(b, exe.root_module, target);
     exe.root_module.addCSourceFile(.{ .file = b.path("src/core/webp_decode.c"), .flags = &.{"-O2"} });
-    // Distros often ship no libwebp.a. Look in -Dwebp-prefix, $OPAL_WEBP_PREFIX,
-    // then ~/.local/opal-webp (a harmless no-op when the directory is absent).
+    // Distros often ship no libwebp.a. An explicit -Dwebp-prefix or
+    // $OPAL_WEBP_PREFIX wins. Otherwise auto-detect the first prefix that
+    // really holds lib/libwebp.a: ~/.local/opal-webp, then Homebrew
+    // ($HOMEBREW_PREFIX, /opt/homebrew, /usr/local). Never add a missing
+    // prefix: addSearchPrefix on an absent dir fails the build with
+    // "unable to open prefix directory".
     if (b.option([]const u8, "webp-prefix", "Prefix holding lib/libwebp.a and include/webp")) |p| {
         b.addSearchPrefix(p);
     } else if (b.graph.environ_map.get("OPAL_WEBP_PREFIX")) |p| {
         b.addSearchPrefix(p);
-    } else if (b.graph.environ_map.get("HOME")) |home| {
-        const local_prefix = b.fmt("{s}/.local/opal-webp", .{home});
-        // A clean CI machine has no private prefix. Zig 0.16 validates every
-        // registered prefix even for opal-mcp, which does not link WebP.
-        if (std.Io.Dir.cwd().openDir(b.graph.io, local_prefix, .{})) |dir| {
-            dir.close(b.graph.io);
-            b.addSearchPrefix(local_prefix);
-        } else |_| {}
+    } else {
+        const local_webp: ?[]const u8 = if (b.graph.environ_map.get("HOME")) |home|
+            b.fmt("{s}/.local/opal-webp", .{home})
+        else
+            null;
+        const webp_candidates = [_]?[]const u8{ local_webp, brew_prefix, "/opt/homebrew", "/usr/local" };
+        for (webp_candidates) |maybe_prefix| {
+            const prefix = maybe_prefix orelse continue;
+            const lib_a = b.fmt("{s}/lib/libwebp.a", .{prefix});
+            std.Io.Dir.cwd().access(b.graph.io, lib_a, .{}) catch continue;
+            b.addSearchPrefix(prefix);
+            break;
+        }
     }
     exe.root_module.linkSystemLibrary("webp", .{ .preferred_link_mode = .static, .search_strategy = .no_fallback });
 
@@ -2233,6 +2252,12 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     }) });
     test_step.dependOn(&b.addRunArtifact(test_shell_layout).step);
+    const test_shell_tabs = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/ui/shell_tabs_pure.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    test_step.dependOn(&b.addRunArtifact(test_shell_tabs).step);
     const test_episode_art = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/episode_art_pure.zig"),
