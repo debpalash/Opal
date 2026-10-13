@@ -95,6 +95,8 @@ const PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE: usize = 0x00020016;
 const EXTENDED_STARTUPINFO_PRESENT: u32 = 0x00080000;
 const CREATE_UNICODE_ENVIRONMENT: u32 = 0x00000400;
 const CREATE_SUSPENDED: u32 = 0x00000004;
+const STARTF_USESTDHANDLES: u32 = 0x00000100;
+const INVALID_HANDLE_VALUE: Handle = @ptrFromInt(std.math.maxInt(usize));
 const WAIT_TIMEOUT: u32 = 0x102;
 const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION: c_int = 9;
 const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x2000;
@@ -424,9 +426,7 @@ pub fn spawn(
     const job = createKillOnCloseJob();
     errdefer closeHandle(job);
 
-    var startup = std.mem.zeroes(StartupInfoExW);
-    startup.startup_info.cb = @sizeOf(StartupInfoExW);
-    startup.attribute_list = list;
+    var startup = consoleStartupInfo(list);
     var info = std.mem.zeroes(ProcessInformation);
     var flags: u32 = EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT;
     // Start suspended when a job exists, so the child cannot spawn processes
@@ -449,6 +449,23 @@ pub fn spawn(
     }
 
     return .{ .process = process, .job = job, .hpc = hpc, .input = in_write, .output = out_read };
+}
+
+/// STARTUPINFOEX for a child on a pseudo console. The std handles are set
+/// explicitly to INVALID_HANDLE_VALUE: without STARTF_USESTDHANDLES Windows
+/// copies the parent's std handles into the child when they are redirected,
+/// so the child reads our stdin and writes our stdout instead of the console.
+/// Under `zig build test` those are the build runner's protocol pipes: cmd.exe
+/// swallowed and corrupted the test protocol and the unit-test job hung for 6 h.
+fn consoleStartupInfo(attribute_list: *anyopaque) StartupInfoExW {
+    var startup = std.mem.zeroes(StartupInfoExW);
+    startup.startup_info.cb = @sizeOf(StartupInfoExW);
+    startup.startup_info.flags = STARTF_USESTDHANDLES;
+    startup.startup_info.std_input = INVALID_HANDLE_VALUE;
+    startup.startup_info.std_output = INVALID_HANDLE_VALUE;
+    startup.startup_info.std_error = INVALID_HANDLE_VALUE;
+    startup.attribute_list = attribute_list;
+    return startup;
 }
 
 fn createKillOnCloseJob() ?Handle {
@@ -564,6 +581,19 @@ test "a drive entry is not mistaken for a variable named empty" {
     // `=C` is not `C:`; nothing is replaced.
     const block = try buildEnvBlock(arena_state.allocator(), inherited, &.{"C:=1"});
     try std.testing.expectEqualSlices(u16, comptime utf16Lit("=C:=C:\\x\x00C:=1\x00\x00"), block);
+}
+
+test "a pseudo console child never inherits the parent's std handles" {
+    // Regression: the windows-2022 unit-tests job hung for 6 h because cmd.exe
+    // on the pseudo console used test.exe's redirected stdin/stdout.
+    var list: usize = 0;
+    const startup = consoleStartupInfo(&list);
+    try std.testing.expect(startup.startup_info.flags & STARTF_USESTDHANDLES != 0);
+    try std.testing.expectEqual(INVALID_HANDLE_VALUE, startup.startup_info.std_input.?);
+    try std.testing.expectEqual(INVALID_HANDLE_VALUE, startup.startup_info.std_output.?);
+    try std.testing.expectEqual(INVALID_HANDLE_VALUE, startup.startup_info.std_error.?);
+    try std.testing.expectEqual(@as(u32, @sizeOf(StartupInfoExW)), startup.startup_info.cb);
+    try std.testing.expect(startup.attribute_list == @as(*anyopaque, &list));
 }
 
 fn drain(pty: *Pty, needle: []const u8) !void {

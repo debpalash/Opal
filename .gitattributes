@@ -1,0 +1,3 @@
+# Byte-compared by openapi_pure.zig against generated output; a CRLF
+# checkout (Windows autocrlf) would fail the drift test.
+docs/openapi.json text eol=lf

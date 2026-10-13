@@ -328,7 +328,8 @@ test "claude argv carries the prompt as one element with a budget cap" {
 
 test "codex argv is read-only with the server override" {
     var a: Argv = .{};
-    const argv = buildArgv(&a, .codex, "Check the queue", "/opt/Opal App/opal-mcp", "/home/u/.config/opal/api.token", "/s.json", 50, .haiku).?;
+    // POSIX form explicitly: on a Windows host buildArgv emits TOML literal strings.
+    const argv = buildArgvFor(&a, false, .codex, "Check the queue", "/opt/Opal App/opal-mcp", "/home/u/.config/opal/api.token", "/s.json", 50, .haiku).?;
     try std.testing.expectEqualStrings("codex", argv[0]);
     try std.testing.expectEqualStrings("exec", argv[1]);
     try std.testing.expectEqualStrings("read-only", argv[5]);
@@ -360,9 +361,9 @@ test "bad input yields no argv" {
     var a: Argv = .{};
     try std.testing.expect(buildArgv(&a, .claude, "", "/x", "/t", "/s.json", 50, .haiku) == null);
     try std.testing.expect(buildArgv(&a, .claude, "x", "/x", "/t", "/s.json", 4, .haiku) == null);
-    try std.testing.expect(buildArgv(&a, .codex, "x", "/x\"y", "/t", "/s.json", 50, .haiku) == null);
-    try std.testing.expect(buildArgv(&a, .codex, "x", "/x\\y", "/t", "/s.json", 50, .haiku) == null);
-    try std.testing.expect(buildArgv(&a, .codex, "x", "/x", "/t\"y", "/s.json", 50, .haiku) == null);
+    try std.testing.expect(buildArgvFor(&a, false, .codex, "x", "/x\"y", "/t", "/s.json", 50, .haiku) == null);
+    try std.testing.expect(buildArgvFor(&a, false, .codex, "x", "/x\\y", "/t", "/s.json", 50, .haiku) == null);
+    try std.testing.expect(buildArgvFor(&a, false, .codex, "x", "/x", "/t\"y", "/s.json", 50, .haiku) == null);
 }
 
 test "tail keeps the closing line" {
