@@ -31,6 +31,9 @@ def test_windows_unit_sqlite_dependency():
     )
     if not all(checks):
         return "fail", "Windows unit CI must install matching SQLite before the real writer tests"
+    # Blocking, not advisory: an allowed-to-fail Windows job hid the 6 h hang.
+    if "windows-2022]" not in units or "continue-on-error" in units:
+        return "fail", "Windows unit tests must be a blocking matrix entry (no continue-on-error)"
     return "pass", "Windows installs MINGW64 SQLite before running real database regression tests"
 
 
@@ -981,6 +984,39 @@ def test_workflow_shell_syntax():
     if checked == 0:
         return "fail", "no shell steps found to check — the walker is broken"
     return "pass", f"{checked} workflow shell step(s) parse under bash -n"
+
+
+@test("Every CI job has a timeout", "Build")
+def test_ci_job_timeouts():
+    """Without timeout-minutes a hung job sits for GitHub's 6 h default — the
+    Windows unit job did exactly that. Every job (or its reusable workflow)
+    must bound itself."""
+    import glob, os, re
+    missing, checked = [], 0
+    for wf in sorted(glob.glob(os.path.join(PROJECT_DIR, ".github", "workflows", "*.yml"))):
+        # Indentation scan (no pyyaml needed): job keys sit at 2 spaces under
+        # `jobs:`, job-level keys at 4.
+        jobs, name, in_jobs = {}, None, False
+        for line in open(wf):
+            if re.match(r"^\S", line):
+                in_jobs = line.startswith("jobs:")
+                name = None
+            elif in_jobs and (m := re.match(r"^  ([\w-]+):\s*$", line)):
+                name = m.group(1)
+                jobs[name] = set()
+            elif name and (m := re.match(r"^    ([\w-]+):", line)):
+                jobs[name].add(m.group(1))
+        for name, keys in jobs.items():
+            if "uses" in keys:
+                continue  # reusable workflow: its own jobs are checked in its file
+            checked += 1
+            if "timeout-minutes" not in keys:
+                missing.append(f"{os.path.basename(wf)}/{name}")
+    if missing:
+        return "fail", "jobs without timeout-minutes: " + ", ".join(missing[:8])
+    if checked == 0:
+        return "fail", "no workflow jobs found — the walker is broken"
+    return "pass", f"{checked} CI job(s) bounded by timeout-minutes"
 
 
 @test("No AI attribution in commit trailers", "Build")

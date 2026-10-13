@@ -36,6 +36,7 @@ env:
 jobs:
   validate-release:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Validate release tag and app version
@@ -44,6 +45,7 @@ jobs:
   macos-arm64:
     needs: validate-release
     runs-on: macos-14
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
@@ -83,6 +85,7 @@ jobs:
   linux-x86_64:
     needs: validate-release
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     # ONNX Runtime has no apt package on 24.04; vendor the upstream release.
     # This job must pass before publish: the AppImage fixes issue #54.
     steps:
@@ -315,6 +318,7 @@ jobs:
   windows-x86_64:
     needs: validate-release
     runs-on: windows-2022
+    timeout-minutes: 60
     permissions:
       contents: read
       id-token: write # OIDC token for azure/login, used by the signing steps
@@ -731,6 +735,7 @@ jobs:
   extension:
     needs: validate-release
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -764,6 +769,7 @@ jobs:
     # extension must exist before a tag can become a public GitHub release.
     needs: [macos-arm64, linux-x86_64, linux-compat, windows-x86_64, extension]
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       # fetch-depth: 0 — the notes generator walks from the previous tag to
       # this one. A shallow clone has neither the tags nor the history, and
@@ -819,6 +825,7 @@ jobs:
   aur:
     needs: publish
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     # The GitHub release is already public by this point. Keep a missing AUR
     # deploy key or first-time namespace bootstrap visible without turning an
     # otherwise successful release red.

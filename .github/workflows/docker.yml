@@ -48,6 +48,7 @@ jobs:
             runner: ubuntu-24.04-arm
             arch: arm64
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     steps:
       - name: Validate manual release tag
         if: github.event_name == 'workflow_dispatch' && inputs.version != ''
@@ -126,6 +127,7 @@ jobs:
   merge:
     needs: build
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/download-artifact@v4
         with:
