@@ -46,6 +46,9 @@ jobs:
             experimental: true
     runs-on: ${{ matrix.os }}
     continue-on-error: ${{ matrix.experimental }}
+    # Linux/macOS finish in 4-8 min. Windows once hung for the full 6 h
+    # GitHub default (a unit test blocked forever); never again.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
@@ -62,25 +65,31 @@ jobs:
           install: mingw-w64-x86_64-sqlite3
       - name: zig build test
         if: runner.os != 'Windows'
+        timeout-minutes: 25
         run: zig build test
       # Already part of `zig build test`; rerun by name (cached, so cheap) so a
       # failure in the agent-native suites is reported on its own step.
       - name: zig build test-agentic
         if: runner.os != 'Windows'
+        timeout-minutes: 15
         run: zig build test-agentic --summary all
+      # --test-timeout kills a single hung test and names it, instead of the
+      # step sitting silent until the step timeout.
       - name: zig build test (Windows)
         if: runner.os == 'Windows'
+        timeout-minutes: 25
         shell: msys2 {0}
         run: |
           export MINGW_PREFIX="$(cygpath -m /mingw64)"
           test -f "$MINGW_PREFIX/lib/libsqlite3.dll.a"
-          zig build test
+          zig build test --test-timeout 2m --summary all
       - name: zig build test-agentic (Windows)
         if: runner.os == 'Windows'
+        timeout-minutes: 15
         shell: msys2 {0}
         run: |
           export MINGW_PREFIX="$(cygpath -m /mingw64)"
-          zig build test-agentic --summary all
+          zig build test-agentic --test-timeout 2m --summary all
 
   # The opal-mcp bridge is std-only, so this needs no native libraries. It
   # builds the real binary, checks the --version/--openapi entry points and
