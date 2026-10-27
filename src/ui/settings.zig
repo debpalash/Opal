@@ -1634,14 +1634,27 @@ fn renderPlaybackTab() void {
         if (state.app.auto_advance != before) state.markConfigDirty();
     }
 
-    // ── Anime Skip ── (SponsorBlock-for-anime; crowdsourced markers)
-    sectionHeader("Anime Skip", "Crowdsourced timestamps from anime-skip.com", 24, @src());
+    // ── Skip intros & credits ── (any media). Sources, by priority:
+    // anime-skip.com crowdsourced markers (anime) > chapter titles > intros /
+    // credits matched across a season's local episodes by audio fingerprint.
+    // Replaces the old anime-only "Auto-Skip (Anime)" toggle; its config key
+    // anime_skip_enabled is kept in sync (= mode != Off) for older builds.
+    sectionHeader("Skip Intros & Credits", "anime-skip.com, chapter titles, or matched across a season's episodes", 24, @src());
+    settingRow("Skip intros & credits", 251, @src());
     {
-        const before = state.app.anime_skip_enabled;
-        components.toggleRow(@src(), "Auto-Skip (Anime)", "Skip intros, recaps & credits automatically", &state.app.anime_skip_enabled);
-        if (state.app.anime_skip_enabled != before) state.markConfigDirty();
+        const skip_policy = @import("../services/skip_policy_pure.zig");
+        const opts = [_][]const u8{ skip_policy.modeLabel(.off), skip_policy.modeLabel(.button), skip_policy.modeLabel(.auto) };
+        if (components.segment(@src(), &opts, @min(state.app.skip_mode, 2))) |picked| {
+            const m = skip_policy.modeFromInt(@intCast(picked));
+            if (@intFromEnum(m) != state.app.skip_mode) {
+                state.app.skip_mode = @intFromEnum(m);
+                state.app.skip_mode_loaded = true;
+                state.app.anime_skip_enabled = skip_policy.legacyEnabled(m);
+                state.markConfigDirty();
+            }
+        }
     }
-    if (state.app.anime_skip_enabled) {
+    if (state.app.skip_mode == 2) {
         {
             const before = state.app.anime_skip_intro;
             components.toggleRow(@src(), "Skip Intro", "Opening / OP", &state.app.anime_skip_intro);
@@ -1654,7 +1667,7 @@ fn renderPlaybackTab() void {
         }
         {
             const before = state.app.anime_skip_credits;
-            components.toggleRow(@src(), "Skip Credits", "Ending / ED", &state.app.anime_skip_credits);
+            components.toggleRow(@src(), "Skip Credits", "Ending / ED (otherwise a Next episode button)", &state.app.anime_skip_credits);
             if (state.app.anime_skip_credits != before) state.markConfigDirty();
         }
         {

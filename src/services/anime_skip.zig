@@ -4,7 +4,6 @@ const logs = @import("../core/logs.zig");
 const http = @import("../core/http.zig");
 const sync = @import("../core/sync.zig");
 const alloc = @import("../core/alloc.zig");
-const c = @import("../core/c.zig");
 const pure = @import("anime_skip_pure.zig");
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -13,10 +12,10 @@ const pure = @import("anime_skip_pure.zig");
 // On an anime episode load, a detached worker POSTs `findEpisodeByName` to
 // anime-skip's GraphQL API, parses the crowdsourced markers (via the pure
 // module), converts point markers → [start,end) ranges, and publishes them
-// under a mutex. `tick()` runs from the frame loop, reads the active player's
+// under a mutex. skip_segments.tick() runs from the frame loop, reads the active player's
 // mirrored time-pos, and — when playback enters a segment the user opted to
-// skip — seeks past it (reusing the player's `seek … absolute` mpv path) and
-// shows a "Skipped X" toast.
+// skip — seeks past it. Seeking, the "Skipped X" toast and the Skip button
+// are shared with chapter/fingerprint markers in skip_segments.zig.
 //
 // Read-only: we consume timestamps, never submit them. No login/account.
 //
@@ -39,9 +38,6 @@ var seg_count: usize = 0;
 var loaded = std.atomic.Value(bool).init(false);
 var pending_arm = std.atomic.Value(bool).init(false);
 
-// Once-per-segment latch (UI thread only — read/written in tick()).
-var last_skipped_seg: i32 = -1;
-
 /// Consume the one-shot arm set by `onEpisodeLoad`. Returns true exactly once
 /// per arm — the anime episode's `load_file` claims it, later loads don't.
 pub fn consumePendingArm() bool {
@@ -54,7 +50,9 @@ pub fn consumePendingArm() bool {
 pub fn onFileLoad(p: anytype) void {
     const armed = consumePendingArm();
     p.anime_skip_active = armed;
-    last_skipped_seg = -1;
+    // Chapter/fingerprint markers of the previous file must not show while
+    // this one opens; markers.zig republishes them on FILE_LOADED.
+    _ = @import("skip_segments.zig").reset(@intFromPtr(p));
     if (!armed) clear();
 }
 
@@ -64,7 +62,6 @@ pub fn clear() void {
     seg_count = 0;
     mutex.unlock();
     loaded.store(false, .release);
-    last_skipped_seg = -1;
 }
 
 /// Kick off a background fetch for an anime episode. `episode_name` is the
@@ -152,87 +149,18 @@ const Fetch = struct {
     }
 };
 
-// ── Per-frame skip check ──────────────────────────────────────────────────
-/// Called each frame from the app loop. Cheap no-op unless anime-skip is
-/// enabled, the active player is anime-sourced, and markers are loaded.
-pub fn tick() void {
-    if (!state.app.anime_skip_enabled) return;
-    if (!loaded.load(.acquire)) return;
-    if (state.app.active_player_idx >= state.app.players.items.len) return;
-
-    const p = state.app.players.items[state.app.active_player_idx];
-    if (!p.anime_skip_active) return;
-    if (p.cached_paused) return; // don't seek a paused player
-
-    const pos = p.last_seen_pos;
-    if (pos <= 0) return;
-
-    const prefs = pure.Prefs{
-        .intro = state.app.anime_skip_intro,
-        .recap = state.app.anime_skip_recap,
-        .credits = state.app.anime_skip_credits,
-        .preview = state.app.anime_skip_preview,
-    };
-
-    // Snapshot segments under the mutex, then act without holding it.
-    mutex.lock();
-    var snap: [pure.MAX_SEGMENTS]pure.Segment = undefined;
-    const n = seg_count;
-    @memcpy(snap[0..n], segs[0..n]);
-    mutex.unlock();
-    if (n == 0) return;
-
-    const decision = pure.shouldSkip(pos, snap[0..n], prefs, last_skipped_seg) orelse return;
-
-    // Reuse the exact seek path player.zig uses for resume.
-    var seek_buf: [64]u8 = undefined;
-    const cmd = std.fmt.bufPrintZ(&seek_buf, "seek {d:.1} absolute", .{decision.target}) catch return;
-    _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
-    p.last_seen_pos = decision.target;
-    last_skipped_seg = @intCast(decision.seg_index);
-
-    var toast_buf: [48]u8 = undefined;
-    const toast = std.fmt.bufPrint(&toast_buf, "\xe2\x8f\xad Skipped {s}", .{pure.label(decision.category)}) catch "Skipped";
-    state.showToast(toast);
-}
-
-/// Is the active player currently inside a KNOWN skippable segment (regardless
-/// of whether auto-skip for that type is on)? Returns the seek target + label
-/// so the player controls can offer a manual "Skip" affordance. null = not in
-/// a segment / nothing loaded.
-pub fn currentSkippable() ?struct { target: f64, category: pure.Category } {
-    if (!state.app.anime_skip_enabled) return null;
-    if (!loaded.load(.acquire)) return null;
-    if (state.app.active_player_idx >= state.app.players.items.len) return null;
-    const p = state.app.players.items[state.app.active_player_idx];
-    if (!p.anime_skip_active) return null;
-    const pos = p.last_seen_pos;
-
+// ── Segment snapshot ──────────────────────────────────────────────────────
+/// Copy the published Anime-Skip segments (empty when disabled / not loaded).
+/// skip_segments.zig merges these with chapter and fingerprint markers
+/// (Anime-Skip wins per category) and owns the per-frame skip decision —
+/// `shouldSkip`'s [start,end) + once-per-segment semantics live on in
+/// skip_policy_pure.decide.
+pub fn snapshot(out: []pure.Segment) usize {
+    if (!state.app.anime_skip_enabled) return 0;
+    if (!loaded.load(.acquire)) return 0;
     mutex.lock();
     defer mutex.unlock();
-    for (segs[0..seg_count]) |s| {
-        if (pos >= s.start and pos < s.end) {
-            // Only offer skips for the four toggle-able categories.
-            switch (s.category) {
-                .intro, .recap, .credits, .preview => return .{ .target = s.end, .category = s.category },
-                else => return null,
-            }
-        }
-    }
-    return null;
-}
-
-/// Manually skip the current segment (from the player-controls affordance).
-pub fn skipNow() void {
-    const cur = currentSkippable() orelse return;
-    if (state.app.active_player_idx >= state.app.players.items.len) return;
-    const p = state.app.players.items[state.app.active_player_idx];
-    var seek_buf: [64]u8 = undefined;
-    const cmd = std.fmt.bufPrintZ(&seek_buf, "seek {d:.1} absolute", .{cur.target}) catch return;
-    _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
-    p.last_seen_pos = cur.target;
-
-    var toast_buf: [48]u8 = undefined;
-    const toast = std.fmt.bufPrint(&toast_buf, "\xe2\x8f\xad Skipped {s}", .{pure.label(cur.category)}) catch "Skipped";
-    state.showToast(toast);
+    const n = @min(seg_count, out.len);
+    @memcpy(out[0..n], segs[0..n]);
+    return n;
 }

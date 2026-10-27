@@ -2547,6 +2547,26 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_anime_skip_pure).step);
 
+    // Perception (skip intros/credits for any series): audio fingerprints,
+    // cross-episode alignment + chapter-title classifier, episode/sibling
+    // parsing + cache blobs, and the merged skip policy. markers.zig and
+    // skip_segments.zig route through these.
+    for ([_][]const u8{
+        "src/services/fingerprint_pure.zig",
+        "src/services/marker_match_pure.zig",
+        "src/services/markers_pure.zig",
+        "src/services/skip_policy_pure.zig",
+    }) |perception_src| {
+        const t = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(perception_src),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        test_step.dependOn(&b.addRunArtifact(t).step);
+    }
+
     // gallery-dl backend pure logic: URL→backend classification (gallery/art/
     // booru hosts vs video hosts), the argv builder (discrete args, `--` guard,
     // no shell injection), and stdout parsing (downloaded/skipped/ignore).

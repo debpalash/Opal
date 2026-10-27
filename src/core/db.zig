@@ -707,6 +707,34 @@ fn createTables() void {
         \\  added_at INTEGER DEFAULT (strftime('%s','now'))
         \\)
     );
+    // Skip markers (intro/credits/…) per file version — media_key is
+    // "file:<size>:<mtime>:<path>" (markers_pure.mediaKey); method is
+    // 'fingerprint' today. Fingerprint cache keyed by path, validated by
+    // size+mtime. See services/markers.zig.
+    exec(
+        \\CREATE TABLE IF NOT EXISTS media_markers (
+        \\  media_key TEXT NOT NULL,
+        \\  kind TEXT NOT NULL,
+        \\  start REAL NOT NULL,
+        \\  "end" REAL NOT NULL,
+        \\  confidence REAL NOT NULL DEFAULT 1,
+        \\  method TEXT NOT NULL DEFAULT '',
+        \\  updated_at INTEGER DEFAULT (strftime('%s','now')),
+        \\  PRIMARY KEY(media_key, kind, method)
+        \\)
+    );
+    exec(
+        \\CREATE TABLE IF NOT EXISTS media_fingerprints (
+        \\  path TEXT PRIMARY KEY,
+        \\  size INTEGER NOT NULL,
+        \\  mtime INTEGER NOT NULL,
+        \\  duration REAL NOT NULL,
+        \\  tail_offset REAL NOT NULL,
+        \\  head BLOB NOT NULL,
+        \\  tail BLOB NOT NULL,
+        \\  updated_at INTEGER DEFAULT (strftime('%s','now'))
+        \\)
+    );
 
     // Recall (ROADMAP 7.1) — semantic index over the library and inside media.
     // A derived, rebuildable cache: services/recall_index.zig fills it in the
