@@ -120,8 +120,46 @@ pub fn videosSavePath(buf: []u8) []const u8 {
     return std.fmt.bufPrint(buf, "{s}/Videos/opal", .{home}) catch "/tmp/opal_videos";
 }
 
-/// ~/.config/opal/opal.db (unified SQLite database)
+// ── Household profiles (services/profiles.zig) ──
+// A non-default profile keeps its own opal.db + sync identity under
+// <config>/profiles/<id>/. Set ONCE in coreInit before any thread or the DB
+// exists, read-only afterwards — no locking needed.
+var profile_dir_buf: [512]u8 = undefined;
+var profile_dir_len: usize = 0;
+
+pub fn setProfileDataDir(dir: []const u8) void {
+    const n = @min(dir.len, profile_dir_buf.len);
+    @memcpy(profile_dir_buf[0..n], dir[0..n]);
+    profile_dir_len = n;
+}
+
+/// True when a non-default profile's data dir is active.
+pub fn profileActive() bool {
+    return profile_dir_len > 0;
+}
+
+/// Where the running profile's per-person data lives (opal.db, sync_device):
+/// the config dir itself for the default profile.
+pub fn profileDataDir(buf: []u8) []const u8 {
+    if (profile_dir_len > 0) {
+        if (profile_dir_len > buf.len) return configDir(buf);
+        @memcpy(buf[0..profile_dir_len], profile_dir_buf[0..profile_dir_len]);
+        return buf[0..profile_dir_len];
+    }
+    return configDir(buf);
+}
+
+/// The running profile's SQLite database.
 pub fn zigzagDbFile(buf: []u8) []const u8 {
+    if (profile_dir_len > 0) {
+        return std.fmt.bufPrint(buf, "{s}/opal.db", .{profile_dir_buf[0..profile_dir_len]}) catch householdDbFile(buf);
+    }
+    return householdDbFile(buf);
+}
+
+/// ~/.config/opal/opal.db — the default profile's database, which also holds
+/// household-wide tables (web accounts, paired browsers; core/household_db.zig).
+pub fn householdDbFile(buf: []u8) []const u8 {
     if (is_windows) {
         var base_buf: [512]u8 = undefined;
         return std.fmt.bufPrint(buf, "{s}/opal/opal.db", .{winConfigBase(&base_buf)}) catch "C:/Temp/opal.db";
@@ -287,6 +325,17 @@ test "videosSavePath contains Videos" {
     const path = videosSavePath(&buf);
     try std.testing.expect(std.mem.indexOf(u8, path, "Videos") != null or
         std.mem.indexOf(u8, path, "opal") != null);
+}
+
+test "profile data dir overrides the db path only when set" {
+    var a: [512]u8 = undefined;
+    var b: [512]u8 = undefined;
+    try std.testing.expectEqualStrings(householdDbFile(&a), zigzagDbFile(&b));
+    setProfileDataDir("/tmp/opal-test/profiles/00000000000000aa");
+    defer profile_dir_len = 0;
+    try std.testing.expectEqualStrings("/tmp/opal-test/profiles/00000000000000aa/opal.db", zigzagDbFile(&b));
+    try std.testing.expectEqualStrings("/tmp/opal-test/profiles/00000000000000aa", profileDataDir(&b));
+    try std.testing.expect(std.mem.endsWith(u8, householdDbFile(&a), "/opal.db"));
 }
 
 test "small buffer falls back safely" {

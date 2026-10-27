@@ -7,7 +7,8 @@
 //! — there is no pairing code any more.
 
 const std = @import("std");
-const db = @import("../core/db.zig");
+// Household-wide (not per profile): accounts/paired browsers survive a profile switch.
+const db = @import("../core/household_db.zig");
 const auth = @import("auth_pure.zig");
 const io = @import("../core/io_global.zig");
 

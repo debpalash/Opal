@@ -1921,6 +1921,8 @@ fn closeTvDetail() void {
 /// shows, otherwise run a universal search. Used by BOTH the poster and the
 /// title so clicking either part of a TV card shows its episodes.
 pub fn openOrSearch(item: *state.TmdbItem) void {
+    // Kid profiles: certification vs. the profile's age cap (profiles_maturity).
+    if (!@import("profiles_maturity.zig").allowTmdb(item)) return;
     const mt = item.media_type[0..@min(item.media_type_len, item.media_type.len)];
     if (std.mem.eql(u8, mt, "tv"))
         openTvDetail(item)

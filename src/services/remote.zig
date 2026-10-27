@@ -1255,6 +1255,7 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
     if (@import("remote_collections_api.zig").handle(stream, method, api_path, query)) return;
     if (@import("remote_local_library_api.zig").handle(stream, method, api_path, query, body)) return;
     if (@import("remote_library_sync_api.zig").handle(stream, method, api_path, query, body)) return;
+    if (@import("remote_profiles_api.zig").handle(stream, method, api_path, query, body)) return;
     if (@import("remote_plex_api.zig").handle(stream, method, api_path, query)) return;
     if (@import("remote_wanted_api.zig").handle(stream, method, api_path, query)) return;
     if (@import("remote_agent_tasks_api.zig").handle(stream, method, api_path, query, body)) return;

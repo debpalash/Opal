@@ -2723,6 +2723,14 @@ fn buildSupported(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_library_sync_pure).step);
+    const test_profiles_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/profiles_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_profiles_pure).step);
     const test_reliable_fetch_pure = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/reliable_fetch_pure.zig"),
