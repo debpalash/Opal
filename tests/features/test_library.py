@@ -456,7 +456,7 @@ def test_library_sync_sql_executed():
     import re, sqlite3
     db_src = _src("src/core/db.zig")
     st_src = _src("src/services/library_store.zig")
-    stmts = _zig_sql_execs(db_src, "CREATE TABLE IF NOT EXISTS library_items", "bindSyncIdentity();")
+    stmts = _zig_sql_execs(db_src, "Unified cross-vertical read-model", "bindSyncIdentity();")
     if not any("library_items_seq_upd" in s for s in stmts):
         return "fail", "could not extract the seq triggers from db.zig"
     m = re.search(r'FROM library_items WHERE seq > \?1 AND seq <= \?2 " \+\+\s*"([^"]+)"', st_src)
@@ -482,7 +482,7 @@ def test_library_sync_sql_executed():
     checks["home layout write does not bump seq"] = seq("a") == a1
     con.execute("UPDATE library_items SET origin='peerA' WHERE item_id='a'")  # applySyncRows tag
     checks["origin tag does not re-bump seq"] = seq("a") == a1
-    rows = lambda dev: {r[1] for r in con.execute(echo_sql + " ORDER BY seq ASC LIMIT ?4", (0, 10**9, dev, 100))}
+    rows = lambda dev: {r[1] for r in con.execute(echo_sql, (0, 10**9, dev, 100))}
     checks["echo rule hides peer's own rows"] = rows("peerA") == {"b"}
     checks["other peers still get them"] = rows("peerB") == {"a", "b"} and rows("") == {"a", "b"}
     con.execute("UPDATE library_items SET percent=60 WHERE item_id='a'")
