@@ -259,6 +259,7 @@ function renderPlayerTools(d){
   const onlineSubs = subtitleDiscovery.results || [];
   const subtitleBusy = ['searching','downloading'].includes(subtitleDiscovery.state);
   const generation = subtitleDiscovery.generation || {};
+  const babel = subtitleDiscovery.babel || {};
   const devices = d.audio_devices || [];
   const speedNow = playerNum(s.speed, 1);
   const speeds = [...new Set([.25,.5,.75,1,1.25,1.5,2,3,4,speedNow])].sort((a,b) => a-b);
@@ -303,9 +304,12 @@ function renderPlayerTools(d){
       <div class="subtitle-discovery-actions">
         <button type="button" data-player-action="subtitle-search"${subtitleBusy ? ' disabled' : ''}>${subtitleDiscovery.state === 'searching' ? 'Searching…' : 'Search online'}</button>
         <button type="button" data-player-action="subtitle-generate"${generation.running ? ' disabled' : ''}>${generation.running ? 'Generating…' : 'Generate locally'}</button>
+        <button type="button" data-player-action="live-captions" data-value="${babel.live_captions ? 'false' : 'true'}" aria-pressed="${!!babel.live_captions}">${babel.live_captions ? 'Live captions: on' : 'Live captions'}</button>
+        <button type="button" data-player-action="subtitle-translate"${babel.translating || !babel.translate_lang ? ' disabled' : ''} title="${babel.translate_lang ? '' : 'Pick a target language in desktop Settings › Subtitles'}">${babel.translating ? 'Translating…' : babel.translate_lang ? `Translate to ${esc(babel.translate_lang.toUpperCase())}` : 'Translate'}</button>
       </div>
     </div>
     ${generation.status ? `<div class="subtitle-generation-status" role="status">${esc(generation.status)}</div>` : ''}
+    ${babel.live_status || babel.translate_status ? `<div class="subtitle-generation-status" role="status">${esc(babel.translating ? babel.translate_status : (babel.live_status || babel.translate_status))}</div>` : ''}
     <div class="subtitle-results">${onlineSubs.map(result => `<div class="subtitle-result">
       <span><strong>${esc(result.title || 'Subtitle')}</strong><small>${esc([result.lang, result.source].filter(Boolean).join(' · '))}</small></span>
       <button type="button" data-player-action="subtitle-download" data-value="${+result.index}"${subtitleBusy || result.loaded ? ' disabled' : ''}>${result.loaded ? 'Loaded' : subtitleDiscovery.state === 'downloading' && +subtitleDiscovery.selected === +result.index ? 'Downloading…' : 'Download & use'}</button>

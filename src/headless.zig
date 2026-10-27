@@ -119,6 +119,7 @@ pub fn headlessMain() !void {
         @import("services/handoff.zig").tick();
         @import("services/queue.zig").drainUi();
         @import("services/resolver.zig").drainRemoteAction();
+        @import("services/babel.zig").tick(); // live captions / translation attach
         @import("services/browser.zig").drainDeferredPlayback();
         @import("services/torrent_intents.zig").restoreIfReady();
         @import("services/downloads.zig").tick();

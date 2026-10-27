@@ -1210,6 +1210,7 @@ fn appFrame() !dvui.App.Result {
     @import("services/search.zig").updateGalleryRoute();
     @import("services/search.zig").drainMemorySearch();
     @import("services/auto_subs.zig").pollAttach();
+    @import("services/babel.zig").tick(); // live captions / translation / recaps
     @import("player/watch_history.zig").drainUi();
     @import("services/history.zig").drainDownloadHistoryUi();
 
@@ -1836,6 +1837,7 @@ fn appFrame() !dvui.App.Result {
     settings.renderMediaInfo();
     settings.renderDepsModal();
     @import("ui/footer.zig").renderSubPicker();
+    @import("ui/babel_ui.zig").renderRecapCard();
 
     // The optional-deps "Setup" modal is NO LONGER auto-opened at first run:
     // its checklist is macOS/brew-centric (apfel/ffmpeg/whisper) and just nagged

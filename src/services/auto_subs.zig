@@ -65,45 +65,15 @@ pub fn statusSnapshot() StatusSnapshot {
     return out;
 }
 
-fn resolveWhisperBin() ?[]const u8 {
-    const io = @import("../core/io_global.zig");
-    const cands = [_][]const u8{
-        "bin/whisper.cpp/build/bin/whisper-cli",
-        "/opt/homebrew/bin/whisper-cli",
-        "/opt/homebrew/bin/whisper-cpp",
-        "/usr/local/bin/whisper-cli",
-        "/usr/local/bin/whisper-cpp",
-    };
-    for (cands) |p| {
-        if (io.cwdAccess(p, .{})) |_| return p else |_| {}
-    }
-    return null;
+/// whisper.cpp discovery is shared with live captions (live_captions_engine).
+pub fn resolveWhisperBin() ?[]const u8 {
+    return @import("live_captions_engine.zig").resolveWhisperBin();
 }
 
-fn resolveWhisperModel(buf: *[512]u8) ?[]const u8 {
-    const io = @import("../core/io_global.zig");
-    var __cfg_buf_0: [512]u8 = undefined;
-    const home = @import("../core/paths.zig").configDir(&__cfg_buf_0);
-    const lang = whisper_lang[0..whisper_lang_len];
-    const size = whisper_model_size[0..whisper_model_size_len];
-    const is_en = std.mem.eql(u8, lang, "en");
-
-    // Try language-specific model first (e.g. ggml-tiny.en.bin for English)
-    if (is_en) {
-        const p = std.fmt.bufPrintZ(buf, "{s}/models/ggml-{s}.en.bin", .{ home, size }) catch return null;
-        if (io.cwdAccess(p, .{})) |_| return p else |_| {}
-    }
-    // Try multilingual model (e.g. ggml-tiny.bin)
-    {
-        const p = std.fmt.bufPrintZ(buf, "{s}/models/ggml-{s}.bin", .{ home, size }) catch return null;
-        if (io.cwdAccess(p, .{})) |_| return p else |_| {}
-    }
-    // Fallback: any tiny model
-    {
-        const p = std.fmt.bufPrintZ(buf, "{s}/models/ggml-tiny.en.bin", .{home}) catch return null;
-        if (io.cwdAccess(p, .{})) |_| return p else |_| {}
-    }
-    return null;
+pub fn resolveWhisperModel(buf: *[512]u8) ?[]const u8 {
+    var cfg_buf: [512]u8 = undefined;
+    const home = @import("../core/paths.zig").configDir(&cfg_buf);
+    return @import("live_captions_engine.zig").resolveWhisperModel(home, whisper_lang[0..whisper_lang_len], whisper_model_size[0..whisper_model_size_len], buf);
 }
 
 /// Kick off transcription of the currently playing media. Safe to call from

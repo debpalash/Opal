@@ -2584,6 +2584,9 @@ fn renderSubtitlesTab() void {
         if (state.app.auto_download_subs != before) state.markConfigDirty();
     }
 
+    // ── Babel: live captions, translation, recaps ──
+    @import("babel_ui.zig").settingsSection();
+
     // ── OpenSubtitles API Key ── (optional — keyless search works without it)
     settingRow("OpenSubtitles.com API Key", 42, @src());
     {
