@@ -115,6 +115,7 @@ fn scanWorker() void {
     }
     if (@import("../core/workers.zig").isQuitting()) return;
     indexed_once.store(true, .release);
+    @import("recall_index.zig").requestRefresh();
     state.wakeUi();
     // At most one background-operator request per completed scan; free when it is off.
     @import("operator_local_names.zig").afterScan();
