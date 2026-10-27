@@ -136,6 +136,79 @@ pub fn needRestart(since: i64, expected_device: []const u8, got_device: []const 
     return next < since;
 }
 
+// ── Device identity (clone detection) ────────────────────────────────────────
+//
+// The device id lives in the db (`library_sync_meta.device_id`), so a copied
+// opal.db (new machine, restored backup on a second box) would make two live
+// stores share one id — peers then mistake one for the other: rows from the
+// copy are tagged with the original's id and never relayed to the original
+// (echo rule), and cursors earned against one are applied to the other.
+//
+// Defence: the id is ALSO recorded outside the db, in `<config dir>/sync_device`,
+// and the db carries `bound=1` once that file was written for it. On open:
+//
+//   file == db id, bound      keep
+//   file == db id, not bound  adopt (mark bound)
+//   file missing, not bound   adopt (fresh store, or first run of this version)
+//   file missing, bound       reroll (the db was bound on another install)
+//   file != db id             reroll (this install's db was replaced by a copy)
+//   db id invalid             reroll
+//
+// Reroll = fresh random id (never the file's old id: the db now holds another
+// store's seq space, so peers' cursors for the old id would skip rows), file
+// rewritten, and every local peer cursor reset (one idempotent full resync).
+//
+// Why a reroll does not echo-storm: the copy holds the original's rows with
+// origin '' (its local writes) or a third peer's id — never the original's own
+// id (the echo rule never stores a row back on its sender). After the reroll
+// the copy serves those rows to the original as its own; they are identical
+// (same updated_at + content), so shouldApply's tie rule rejects them, nothing
+// is written, no seq moves, nothing relays. Each direction costs one full
+// transfer, then cursors are quiet. Rows that diverged after the copy merge
+// once by LWW like any other change.
+//
+// Limits: a copy taken by a pre-binding build (db never bound) and a copy of
+// the WHOLE config dir (db + sync_device together) are indistinguishable from
+// the original and keep the shared id. Rows a third peer already tagged with
+// the shared id stay tagged until their next write.
+
+pub const IdentityAction = enum { keep, adopt, reroll };
+
+pub fn identityAction(db_id: []const u8, db_bound: bool, file_id: []const u8) IdentityAction {
+    if (!validDeviceId(db_id)) return .reroll;
+    if (!validDeviceId(file_id)) return if (db_bound) .reroll else .adopt;
+    if (!std.mem.eql(u8, file_id, db_id)) return .reroll;
+    return if (db_bound) .keep else .adopt;
+}
+
+/// After a reroll this store is a new device to everyone: forget cursors so
+/// the next run re-exchanges everything (idempotent under LWW). The learned
+/// peer ids stay — the peers themselves did not change.
+pub fn resetCursorsAfterReroll(peers: []Peer) void {
+    for (peers) |*p| {
+        p.pull_seq = 0;
+        p.push_seq = 0;
+    }
+}
+
+// ── Parallel runs ────────────────────────────────────────────────────────────
+//
+// One worker per peer (at most MAX_PEERS at once), so a slow or dead peer only
+// delays itself. `slot_urls[i]` is the peer address worker slot i is serving,
+// '' when the slot is free (idle AND its last outcome consumed).
+
+/// Slot for a run against `url`: null when that peer already has a run in
+/// flight (never two runs on one peer's cursors) or every slot is taken.
+pub fn pickSlot(slot_urls: []const []const u8, url: []const u8) ?usize {
+    var free: ?usize = null;
+    for (slot_urls, 0..) |s, i| {
+        if (s.len == 0) {
+            if (free == null) free = i;
+        } else if (std.mem.eql(u8, s, url)) return null;
+    }
+    return free;
+}
+
 // ── Peers (state.app.lsync) ──────────────────────────────────────────────────
 
 pub const MAX_PEERS: usize = 4;
@@ -708,6 +781,72 @@ test "pull restarts from 0 when the peer's store changed" {
     try std.testing.expect(needRestart(50, "aaaa1111", "aaaa1111", 20)); // seq went backwards
     try std.testing.expect(!needRestart(50, "aaaa1111", "aaaa1111", 50));
     try std.testing.expect(!needRestart(50, "", "aaaa1111", 60)); // first contact learns the id
+}
+
+test "device identity: keep, adopt, and reroll a cloned db" {
+    const a = "aaaaaaaa11111111aaaaaaaa11111111";
+    const d = "dddddddd22222222dddddddd22222222";
+    try std.testing.expectEqual(IdentityAction.keep, identityAction(a, true, a));
+    // Fresh store / upgrade from a pre-binding build: adopt the db id.
+    try std.testing.expectEqual(IdentityAction.adopt, identityAction(a, false, ""));
+    try std.testing.expectEqual(IdentityAction.adopt, identityAction(a, false, a));
+    // Regression: A's opal.db copied onto a fresh install D (bound, no file).
+    try std.testing.expectEqual(IdentityAction.reroll, identityAction(a, true, ""));
+    // A's opal.db copied over D's existing store (D's file holds D's id).
+    try std.testing.expectEqual(IdentityAction.reroll, identityAction(a, true, d));
+    try std.testing.expectEqual(IdentityAction.reroll, identityAction(a, false, d));
+    // Garbage on either side never yields a shared id.
+    try std.testing.expectEqual(IdentityAction.reroll, identityAction("", false, ""));
+    try std.testing.expectEqual(IdentityAction.reroll, identityAction("../x", true, "../x"));
+    try std.testing.expectEqual(IdentityAction.reroll, identityAction(a, true, "bad id!"));
+    try std.testing.expectEqual(IdentityAction.adopt, identityAction(a, false, "bad id!"));
+}
+
+test "reroll resets cursors but keeps learned peer ids" {
+    var peers: [2]Peer = .{ .{ .pull_seq = 40, .push_seq = 12 }, .{ .pull_seq = 7, .push_seq = 3 } };
+    peers[0].setDevice("bbbb2222");
+    resetCursorsAfterReroll(&peers);
+    for (peers) |p| {
+        try std.testing.expectEqual(@as(i64, 0), p.pull_seq);
+        try std.testing.expectEqual(@as(i64, 0), p.push_seq);
+    }
+    try std.testing.expectEqualStrings("bbbb2222", peers[0].deviceId());
+}
+
+test "parallel slots: one run per peer, first free slot, none when full" {
+    try std.testing.expectEqual(@as(?usize, 0), pickSlot(&.{ "", "", "", "" }, "http://a:1"));
+    try std.testing.expectEqual(@as(?usize, 1), pickSlot(&.{ "http://b:1", "", "" }, "http://a:1"));
+    // A dead peer's slot does not block the others; a second run on it is refused.
+    try std.testing.expectEqual(@as(?usize, 0), pickSlot(&.{ "", "http://dead:9", "" }, "http://a:1"));
+    try std.testing.expectEqual(@as(?usize, null), pickSlot(&.{ "", "http://dead:9", "" }, "http://dead:9"));
+    try std.testing.expectEqual(@as(?usize, null), pickSlot(&.{ "http://a:1", "http://b:1" }, "http://c:1"));
+}
+
+test "3 devices: cloned store after a reroll converges without echo" {
+    var a: SimDev = .{ .id = "aaaa1111" };
+    var b: SimDev = .{ .id = "bbbb2222" };
+    a.write(mk("movie", "x", 10, false, 1), "");
+    a.write(mk("movie", "y", 11, true, 1), "");
+    var ab: SimLink = .{};
+    _ = simSync(&b, &a, &ab);
+    // D = byte copy of A, rerolled to a fresh id; D's links start at 0.
+    var d = a;
+    d.id = "dddd4444";
+    var da: SimLink = .{};
+    var db_: SimLink = .{};
+    const a_seq = a.seq;
+    // First contact re-sends everything, but nothing applies: no seq moves.
+    _ = simSync(&d, &a, &da);
+    _ = simSync(&d, &b, &db_);
+    try std.testing.expectEqual(a_seq, a.seq);
+    // Then quiet in both directions.
+    try std.testing.expectEqual(@as(usize, 0), simSync(&d, &a, &da));
+    try std.testing.expectEqual(@as(usize, 0), simSync(&d, &b, &db_));
+    // D's own edit reaches A via B (tagged with D's id, so it relays to A).
+    d.write(mk("movie", "z", 20, false, 1), "");
+    _ = simSync(&d, &b, &db_);
+    _ = simSync(&b, &a, &ab);
+    try std.testing.expect(a.find("z") != null);
 }
 
 fn setUrl(p: *Peer, url: []const u8) void {

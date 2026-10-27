@@ -367,6 +367,9 @@ pub fn restoreWatchHistory() void {
 /// skipping rows that came from `peer_device` (echo rule). Mirrors
 /// `sync_pure.eligible`; `seq` is unique, so it alone is the keyset.
 pub fn loadChangedSince(after: i64, snapshot_max: i64, peer_device: []const u8, out: []sync_pure.SyncRow) usize {
+    // Never observe an applied row between its write and its origin tag.
+    apply_mutex.lock();
+    defer apply_mutex.unlock();
     const stmt = db.prepare("SELECT " ++ SYNC_COLS ++ " FROM library_items WHERE seq > ?1 AND seq <= ?2 " ++
         "AND (?3 = '' OR IFNULL(origin,'') <> ?3) ORDER BY seq ASC LIMIT ?4") orelse return 0;
     defer db.finalize(stmt);
@@ -389,6 +392,13 @@ fn loadSyncRow(kind: []const u8, item_id: []const u8, out: *sync_pure.SyncRow) b
     return true;
 }
 
+/// Serializes sync applies (one worker per peer + the API pull/push routes run
+/// concurrently). Each row is read-decide-write-tag; without this, two peers'
+/// pulls could both decide against the same stale local row and the older
+/// write could land last, or a push could read a row before its origin tag.
+/// The shared FULLMUTEX connection serializes single calls, not this sequence.
+var apply_mutex: sync.Mutex = .{};
+
 /// Apply peer rows under the last-writer-wins rule. Writes the PEER's
 /// `updated_at` verbatim (never now) so a row does not bounce back as "newer".
 /// The write takes a fresh local `seq` (trigger), so it relays onward to other
@@ -403,6 +413,8 @@ pub fn applySyncRows(rows: []const sync_pure.SyncRow, origin: []const u8) usize 
         const kind = it.kind[0..it.kind_len];
         const id = it.item_id[0..it.item_id_len];
         var local: sync_pure.SyncRow = undefined;
+        apply_mutex.lock();
+        defer apply_mutex.unlock();
         const have = loadSyncRow(kind, id, &local);
         if (!sync_pure.shouldApply(if (have) &local else null, row)) continue;
         const stmt = db.prepare(

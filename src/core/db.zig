@@ -657,6 +657,7 @@ fn createTables() void {
     // This store's sync identity: peers record it as the origin of rows we send.
     exec("CREATE TABLE IF NOT EXISTS library_sync_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
     exec("INSERT OR IGNORE INTO library_sync_meta(key,value) VALUES('device_id', lower(hex(randomblob(16))))");
+    bindSyncIdentity();
 
     // Named, reusable queue snapshots. Queue playback remains authoritative in
     // queue.db; these tables are the user's durable playlist/collection layer.
@@ -859,6 +860,63 @@ pub fn tvMergeDuplicates() void {
     const report = @import("../services/tv_merge.zig").run(handle, io_global.milliTimestamp());
     if (report.merged > 0) logs.pushLog("info", "tv", "Merged duplicate tracked shows (backup kept in tv_*_bak)", false);
     if (report.failed > 0) logs.pushLog("warn", "tv", "Duplicate show merge failed and was rolled back", true);
+}
+
+// ══════════════════════════════════════════════════════════
+// Device-sync identity (clone detection)
+// ══════════════════════════════════════════════════════════
+
+/// Set when `bindSyncIdentity` re-rolled the device id this run; the sync tick
+/// (UI thread) consumes it and resets peer cursors once config is loaded.
+pub var sync_identity_rerolled = std.atomic.Value(bool).init(false);
+
+fn metaText(key: []const u8, buf: []u8) []const u8 {
+    const stmt = prepare("SELECT value FROM library_sync_meta WHERE key=?1") orelse return buf[0..0];
+    defer finalize(stmt);
+    bindText(stmt, 1, key);
+    if (step(stmt) != c.SQLITE_ROW) return buf[0..0];
+    const v = columnText(stmt, 0) orelse return buf[0..0];
+    if (v.len > buf.len) return buf[0..0];
+    @memcpy(buf[0..v.len], v);
+    return buf[0..v.len];
+}
+
+/// Detect a copied opal.db sharing another store's device id and give this
+/// store a fresh one. Rules + echo analysis: library_sync_pure.identityAction.
+fn bindSyncIdentity() void {
+    const lsp = @import("../services/library_sync_pure.zig");
+    var dir_buf: [512]u8 = undefined;
+    var path_buf: [600]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buf, "{s}/sync_device", .{paths.configDir(&dir_buf)}) catch return;
+
+    var file_buf: [64]u8 = undefined;
+    var file_id: []const u8 = "";
+    if (io_global.cwdOpenFile(path, .{})) |f| {
+        defer io_global.closeFile(f);
+        const n = io_global.readAll(f, &file_buf) catch 0;
+        file_id = std.mem.trim(u8, file_buf[0..n], " \t\r\n");
+    } else |_| {}
+
+    var id_buf: [64]u8 = undefined;
+    var bound_buf: [8]u8 = undefined;
+    const db_id = metaText("device_id", &id_buf);
+    const bound = std.mem.eql(u8, metaText("bound", &bound_buf), "1");
+    const action = lsp.identityAction(db_id, bound, file_id);
+    if (action == .keep) return;
+    if (action == .reroll) {
+        exec("INSERT OR REPLACE INTO library_sync_meta(key,value) VALUES('device_id', lower(hex(randomblob(16))))");
+        sync_identity_rerolled.store(true, .release);
+        logs.pushLog("info", "sync", "This library is a copy of another device's - gave it a new sync identity", false);
+    }
+    const id = metaText("device_id", &id_buf);
+    if (!lsp.validDeviceId(id)) return;
+    // File first, marker second: a crash in between leaves the db unbound with
+    // a matching file, which adopts cleanly next start.
+    var tmp_buf: [610]u8 = undefined;
+    const tmp = std.fmt.bufPrint(&tmp_buf, "{s}.tmp", .{path}) catch return;
+    io_global.cwdWriteFile(.{ .sub_path = tmp, .data = id }) catch return;
+    io_global.renameAbsolute(tmp, path) catch return;
+    exec("INSERT OR REPLACE INTO library_sync_meta(key,value) VALUES('bound','1')");
 }
 
 // ══════════════════════════════════════════════════════════

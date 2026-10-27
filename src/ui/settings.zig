@@ -5614,7 +5614,8 @@ fn renderDeviceSyncSection() void {
                 .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = theme.spacing.xs },
             });
             defer row.deinit();
-            if (components.actionButton(@src(), if (busy) "Syncing..." else "Sync Now", .primary, base + 3) and !busy) {
+            const peer_busy = lsync.peerBusy(p);
+            if (components.actionButton(@src(), if (peer_busy) "Syncing..." else "Sync Now", .primary, base + 3) and !peer_busy) {
                 _ = lsync.syncNow(i);
             }
             if (components.confirmDangerButton(@src(), "Remove", base + 4)) remove_idx = i;
@@ -5657,7 +5658,8 @@ fn renderDeviceSyncSection() void {
         _ = lsync_pure.addPeer(&ls.peers, &ls.peer_count);
         state.markConfigDirty();
     }
-    if (ls.peer_count > 1 and components.actionButton(@src(), if (busy) "Syncing..." else "Sync All", .secondary, 9461) and !busy) {
+    // Peers already running are skipped by syncNow; the rest start in parallel.
+    if (ls.peer_count > 1 and components.actionButton(@src(), if (busy) "Syncing..." else "Sync All", .secondary, 9461)) {
         _ = lsync.syncNow(null);
     }
 }

@@ -401,7 +401,15 @@ def test_library_device_sync():
             and push_fn.count(".impersonate = false") == 1,
         "push batches via pure encoder": "sync_pure.encodeBatch(" in push_fn and "MAX_POST_ROWS" in push_fn and ".secret_post_body = batch.body" in push_fn
             and ".secret_headers" in push_fn and ".secret_headers" in get_fn,
-        "worker has busy atomic guard": "std.atomic.Value(bool)" in client and "busy.swap(true" in client and "workers.spawn(worker" in client,
+        "one worker per peer, each with a busy guard": "std.atomic.Value(bool)" in _between(client, "const Slot = struct", "\n};\n")
+            and "slot.busy.swap(true" in client and "workers.spawn(worker, .{ si, jp })" in client
+            and "sync_pure.pickSlot(" in client and "[MAX_PEERS]Slot" in client,
+        "parallel applies serialized in the store": "apply_mutex.lock()" in _between(store, "pub fn applySyncRows", "\n}\n")
+            and "apply_mutex.lock()" in _between(store, "pub fn loadChangedSince", "\n}\n"),
+        "cloned db re-rolls its device id": "bindSyncIdentity();" in dbz and "lsp.identityAction(" in dbz
+            and "sync_device" in dbz and "pub fn identityAction(" in pure,
+        "reroll resets peer cursors after config load": "sync_identity_rerolled.swap(false" in client
+            and "sync_pure.resetCursorsAfterReroll(" in client,
         "cursor resets on peer change": "sync_pure.bindCursors(p, peer)" in client and "p.pull_seq = 0" in pure and "p.push_seq = 0" in pure,
         "outcomes routed by address": "sync_pure.findPeer(" in client and "sync_pure.applyRun(" in client,
         "seq trigger on every synced write": "library_items_seq_ins" in dbz and "library_items_seq_upd" in dbz
@@ -418,9 +426,10 @@ def test_library_device_sync():
         "history removal tombstones": 'removeItem("watch"' in wh and 'removeKind("watch")' in wh,
         "settings uses themed helpers": "components.actionButton(" in ui and "components.toggleRow(" in ui
             and "absField(" in ui and "dvui.button(" not in ui and "components.confirmDangerButton(" in ui,
-        "settings: per-peer sync, add, remove": "lsync.syncNow(i)" in ui and "addPeer(" in ui and "removePeer(" in ui,
+        "settings: per-peer sync, add, remove": "lsync.syncNow(i)" in ui and "addPeer(" in ui and "removePeer(" in ui
+            and "lsync.peerBusy(p)" in ui,
     }
     missing = [k for k, ok in checks.items() if not ok]
     if missing:
         return "fail", "device sync incomplete: " + ", ".join(missing)
-    return "pass", "device sync: N peers with own seq cursors, origin echo skip, tombstones, themed settings"
+    return "pass", "device sync: N peers in parallel with own seq cursors, clone re-roll, origin echo skip, tombstones, themed settings"

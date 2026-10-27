@@ -8,10 +8,11 @@
 //! (config.zig).
 //!
 //! Threading: `syncNow` / `tick` run on the UI thread and are the only writers
-//! of `state.app.lsync`. The worker gets a by-value `Job`, and publishes one
-//! `Outcome` under `outcome_mutex`; `tick` folds it into state, matching each
-//! result to its peer by address (never by index — a peer can be removed or
-//! re-pointed mid-run).
+//! of `state.app.lsync`. Each peer runs on its own worker (one slot per peer,
+//! at most MAX_PEERS), which gets a by-value `JobPeer` and publishes one
+//! `PeerOutcome` under `outcome_mutex`; `tick` folds it into state, matching
+//! the result to its peer by address (never by index — a peer can be removed
+//! or re-pointed mid-run).
 
 const std = @import("std");
 const state = @import("../core/state.zig");
@@ -23,6 +24,7 @@ const alloc = @import("../core/alloc.zig").allocator;
 const reliable_fetch = @import("reliable_fetch.zig");
 const store = @import("library_store.zig");
 const sync_pure = @import("library_sync_pure.zig");
+const db = @import("../core/db.zig");
 
 const RESPONSE_BYTES: usize = 256 * 1024;
 const MAX_PAGES: usize = 64;
@@ -226,6 +228,12 @@ pub fn push(peer_raw: []const u8, token: []const u8, since: i64, peer_device_in:
 }
 
 // ── Worker + UI-thread glue ──────────────────────────────────────────────────
+//
+// One worker per peer, up to MAX_PEERS at once (sync_pure.pickSlot), so a slow
+// or unreachable peer delays only itself. Concurrent applies are serialized in
+// library_store (apply_mutex). A slot is free when its worker finished AND its
+// outcome was folded into state by `tick`; `slot_url` (UI thread only) is the
+// peer address the slot serves, so one peer never runs twice at once.
 
 const JobPeer = struct {
     url: [256]u8 = undefined,
@@ -238,42 +246,60 @@ const JobPeer = struct {
     push_seq: i64 = 0,
 };
 
-const Job = struct {
-    peers: [MAX_PEERS]JobPeer = undefined,
-    count: usize = 0,
-};
-
 const PeerOutcome = struct {
     url: [256]u8 = undefined,
     url_len: usize = 0,
     run: sync_pure.RunResult = .{},
     pulled: ?PullResult = null,
     pushed: ?PushResult = null,
-};
-
-const Outcome = struct {
-    peers: [MAX_PEERS]PeerOutcome = undefined,
-    count: usize = 0,
     finished_at: i64 = 0,
 };
 
-var busy = std.atomic.Value(bool).init(false);
+const Slot = struct {
+    busy: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// Under outcome_mutex.
+    outcome: PeerOutcome = .{},
+    has_outcome: bool = false,
+    /// UI thread only.
+    url: [256]u8 = undefined,
+    url_len: usize = 0,
+};
+
+var slots: [MAX_PEERS]Slot = [_]Slot{.{}} ** MAX_PEERS;
 var outcome_mutex: sync.Mutex = .{};
-var outcome: Outcome = .{};
-var has_outcome = false;
 var last_auto_ms: i64 = 0;
 
+/// Any peer run in flight.
 pub fn isBusy() bool {
-    return busy.load(.acquire);
+    for (&slots) |*s| if (s.busy.load(.acquire)) return true;
+    return false;
+}
+
+/// UI thread: a run against this peer's address is in flight.
+pub fn peerBusy(p: *const sync_pure.Peer) bool {
+    const url = sync_pure.normalizePeer(p.urlText()) orelse return false;
+    for (&slots) |*s| {
+        if (s.busy.load(.acquire) and std.mem.eql(u8, s.url[0..s.url_len], url)) return true;
+    }
+    return false;
+}
+
+/// UI thread: the address each slot serves, '' when free.
+fn slotView(out: *[MAX_PEERS][]const u8) void {
+    outcome_mutex.lock();
+    defer outcome_mutex.unlock();
+    for (&slots, 0..) |*s, i| {
+        const taken = s.busy.load(.acquire) or s.has_outcome;
+        out[i] = if (taken) s.url[0..s.url_len] else "";
+    }
 }
 
 /// UI thread: start a pull-then-push run against peer `only` (or every
-/// configured peer when null). Returns false (with a status line on the peer
-/// saying why) when nothing was started.
+/// configured peer when null), one worker each. Peers already running are
+/// skipped. Returns false when nothing was started (the peer's status says why).
 pub fn syncNow(only: ?usize) bool {
     const ls = &state.app.lsync;
-    if (busy.load(.acquire)) return false;
-    var job: Job = .{};
+    var started = false;
     for (ls.peers[0..ls.peer_count], 0..) |*p, i| {
         if (only) |o| if (o != i) continue;
         const peer = sync_pure.normalizePeer(p.urlText()) orelse {
@@ -285,97 +311,103 @@ pub fn syncNow(only: ?usize) bool {
             p.setStatus("Paste the other device's API token (Settings > Web UI > API Token)");
             continue;
         }
+        var view: [MAX_PEERS][]const u8 = undefined;
+        slotView(&view);
+        const si = sync_pure.pickSlot(&view, peer) orelse continue; // already running (or no slot yet)
         // Cursors belong to one address; a different one starts from scratch.
         if (sync_pure.bindCursors(p, peer)) state.markConfigDirty();
-        const jp = &job.peers[job.count];
-        jp.* = .{ .pull_seq = p.pull_seq, .push_seq = p.push_seq, .url_len = peer.len, .token_len = token.len, .device_len = p.device_len };
+        var jp: JobPeer = .{ .pull_seq = p.pull_seq, .push_seq = p.push_seq, .url_len = peer.len, .token_len = token.len, .device_len = p.device_len };
         @memcpy(jp.url[0..peer.len], peer);
         @memcpy(jp.token[0..token.len], token);
         @memcpy(jp.device[0..p.device_len], p.deviceId());
-        job.count += 1;
+        const slot = &slots[si];
+        if (slot.busy.swap(true, .acq_rel)) continue;
+        @memcpy(slot.url[0..peer.len], peer);
+        slot.url_len = peer.len;
+        workers.spawn(worker, .{ si, jp }) catch {
+            slot.busy.store(false, .release);
+            p.setStatus("Could not start sync");
+            continue;
+        };
         p.setStatus("Syncing...");
+        started = true;
     }
-    if (job.count == 0) return false;
-    if (busy.swap(true, .acq_rel)) return false;
-    workers.spawn(worker, .{job}) catch {
-        busy.store(false, .release);
-        for (ls.peers[0..ls.peer_count]) |*p| {
-            if (std.mem.eql(u8, p.status[0..p.status_len], "Syncing...")) p.setStatus("Could not start sync");
-        }
-        return false;
-    };
-    return true;
+    return started;
 }
 
-fn worker(job: Job) void {
-    var o: Outcome = .{ .count = job.count };
-    for (job.peers[0..job.count], 0..) |*jp, i| {
-        const peer = jp.url[0..jp.url_len];
-        const token = jp.token[0..jp.token_len];
-        const po = &o.peers[i];
-        po.* = .{ .url_len = jp.url_len };
-        @memcpy(po.url[0..jp.url_len], peer);
-        po.pulled = pull(peer, token, jp.pull_seq, jp.device[0..jp.device_len]);
-        // Push only after a successful pull: a peer we cannot read is a peer we
-        // should not write to (wrong address/token), and pulling first means our
-        // pushed rows already reflect the merge and we know the peer's id.
-        if (po.pulled) |p| {
-            po.run.pulled_to = p.cursor;
-            @memcpy(po.run.device[0..p.device_len], p.deviceId());
-            po.run.device_len = p.device_len;
-            // A reset peer store lost what we pushed before: resend all.
-            const push_from: i64 = if (p.restarted) 0 else jp.push_seq;
-            const dev = if (p.device_len > 0) p.deviceId() else jp.device[0..jp.device_len];
-            po.pushed = push(peer, token, push_from, dev);
-            if (po.pushed) |q| po.run.pushed_to = q.cursor;
-        }
+fn worker(si: usize, jp: JobPeer) void {
+    const peer = jp.url[0..jp.url_len];
+    const token = jp.token[0..jp.token_len];
+    var po: PeerOutcome = .{ .url_len = jp.url_len };
+    @memcpy(po.url[0..jp.url_len], peer);
+    po.pulled = pull(peer, token, jp.pull_seq, jp.device[0..jp.device_len]);
+    // Push only after a successful pull: a peer we cannot read is a peer we
+    // should not write to (wrong address/token), and pulling first means our
+    // pushed rows already reflect the merge and we know the peer's id.
+    if (po.pulled) |p| {
+        po.run.pulled_to = p.cursor;
+        @memcpy(po.run.device[0..p.device_len], p.deviceId());
+        po.run.device_len = p.device_len;
+        // A reset peer store lost what we pushed before: resend all.
+        const push_from: i64 = if (p.restarted) 0 else jp.push_seq;
+        const dev = if (p.device_len > 0) p.deviceId() else jp.device[0..jp.device_len];
+        po.pushed = push(peer, token, push_from, dev);
+        if (po.pushed) |q| po.run.pushed_to = q.cursor;
     }
-    o.finished_at = io_global.timestamp();
+    po.finished_at = io_global.timestamp();
     outcome_mutex.lock();
-    outcome = o;
-    has_outcome = true;
+    slots[si].outcome = po;
+    slots[si].has_outcome = true;
     outcome_mutex.unlock();
-    busy.store(false, .release);
+    slots[si].busy.store(false, .release);
     state.wakeUi();
 }
 
-/// UI thread, once per frame: publish a finished run into state and start the
+/// UI thread, once per frame: publish finished runs into state and start the
 /// periodic sync when it is due.
 pub fn tick() void {
-    outcome_mutex.lock();
-    const got = has_outcome;
-    const o = outcome;
-    has_outcome = false;
-    outcome_mutex.unlock();
-    if (got) applyOutcome(&o);
-
     const ls = &state.app.lsync;
-    if (!ls.auto or state.app.incognito_mode or !state.app.config_loaded.load(.acquire)) return;
-    if (ls.peer_count == 0 or busy.load(.acquire)) return;
+    const loaded = state.app.config_loaded.load(.acquire);
+    // A copied opal.db got a fresh sync id (db.bindSyncIdentity): this store is
+    // a new device to every peer. After config load, so the load cannot
+    // overwrite the reset.
+    if (loaded and db.sync_identity_rerolled.swap(false, .acq_rel)) {
+        sync_pure.resetCursorsAfterReroll(ls.peers[0..ls.peer_count]);
+        state.markConfigDirty();
+    }
+    for (&slots) |*s| {
+        outcome_mutex.lock();
+        const got = s.has_outcome;
+        const o = s.outcome;
+        s.has_outcome = false;
+        outcome_mutex.unlock();
+        if (got) applyOutcome(&o);
+    }
+
+    if (!ls.auto or state.app.incognito_mode or !loaded) return;
+    if (ls.peer_count == 0) return;
     const now = io_global.milliTimestamp();
     if (last_auto_ms != 0 and now - last_auto_ms < AUTO_INTERVAL_MS) return;
     last_auto_ms = now;
     _ = syncNow(null);
 }
 
-fn applyOutcome(o: *const Outcome) void {
+fn applyOutcome(po: *const PeerOutcome) void {
     const ls = &state.app.lsync;
-    for (o.peers[0..o.count]) |*po| {
-        const url = po.url[0..po.url_len];
-        // Removed or re-pointed mid-run: these cursors belong to no one now.
-        const idx = sync_pure.findPeer(ls.peers[0..ls.peer_count], url) orelse continue;
-        const p = &ls.peers[idx];
-        _ = sync_pure.applyRun(p, url, &po.run, o.finished_at);
-        var buf: [160]u8 = undefined;
-        if (po.pulled) |pl| {
-            if (po.pushed) |q| {
-                p.setStatus(std.fmt.bufPrint(&buf, "Pulled {d} ({d} changed), pushed {d} ({d} changed)", .{ pl.received, pl.applied, q.sent, q.applied }) catch "Synced");
-            } else {
-                p.setStatus(std.fmt.bufPrint(&buf, "Pulled {d} ({d} changed); push failed - see Logs", .{ pl.received, pl.applied }) catch "Push failed");
-            }
+    const url = po.url[0..po.url_len];
+    // Removed or re-pointed mid-run: these cursors belong to no one now.
+    const idx = sync_pure.findPeer(ls.peers[0..ls.peer_count], url) orelse return;
+    const p = &ls.peers[idx];
+    _ = sync_pure.applyRun(p, url, &po.run, po.finished_at);
+    var buf: [160]u8 = undefined;
+    if (po.pulled) |pl| {
+        if (po.pushed) |q| {
+            p.setStatus(std.fmt.bufPrint(&buf, "Pulled {d} ({d} changed), pushed {d} ({d} changed)", .{ pl.received, pl.applied, q.sent, q.applied }) catch "Synced");
         } else {
-            p.setStatus("Could not reach the other device - check the address and token");
+            p.setStatus(std.fmt.bufPrint(&buf, "Pulled {d} ({d} changed); push failed - see Logs", .{ pl.received, pl.applied }) catch "Push failed");
         }
+    } else {
+        p.setStatus("Could not reach the other device - check the address and token");
     }
     state.markConfigDirty();
 }
