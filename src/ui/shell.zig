@@ -826,6 +826,7 @@ fn renderPage(r: Route) !void {
             // show_cell_overlay (mouse-activity auto-hide) + provider == .mpv.
             @import("footer.zig").renderLiquidGlassOverlay();
             @import("footer.zig").renderStatsOverlay();
+            @import("skip_overlay.zig").render();
         },
         .settings => drawer.renderTabContent(.Settings),
         .assistant => drawer.renderTabContent(.AI),

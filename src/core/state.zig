@@ -920,6 +920,12 @@ pub const AppState = struct {
     anime_skip_recap: bool = true,
     anime_skip_credits: bool = false,
     anime_skip_preview: bool = false,
+    // "Skip intros & credits" for ANY media (skip_policy_pure.Mode: 0 Off,
+    // 1 Show button, 2 Auto-skip). Sources: Anime-Skip API > chapter titles >
+    // local audio fingerprints (services/skip_segments.zig). When the config
+    // has no `skip_mode` yet it is derived from anime_skip_enabled.
+    skip_mode: u8 = 2,
+    skip_mode_loaded: bool = false,
     deband_enabled: bool = true,
     video_scaler: u8 = 0, // 0=ewa_lanczossharp, 1=bilinear, 2=spline36
     // Web Remote JSON API (:41595). OFF by default — nothing should listen on

@@ -67,6 +67,7 @@ pub const Action = union(enum) {
     frame_previous,
     frame_next,
     screenshot,
+    skip_segment,
     loop_a,
     loop_b,
     loop_clear,
@@ -158,6 +159,7 @@ pub fn parse(name: []const u8, value: ?[]const u8) ParseError!Action {
     if (std.mem.eql(u8, name, "frame-previous")) return .frame_previous;
     if (std.mem.eql(u8, name, "frame-next")) return .frame_next;
     if (std.mem.eql(u8, name, "screenshot")) return .screenshot;
+    if (std.mem.eql(u8, name, "skip-segment")) return .skip_segment;
     if (std.mem.eql(u8, name, "loop-a")) return .loop_a;
     if (std.mem.eql(u8, name, "loop-b")) return .loop_b;
     if (std.mem.eql(u8, name, "loop-clear")) return .loop_clear;
@@ -198,6 +200,7 @@ test "only explicit tracks, aspects, presets and devices cross the seam" {
 test "fixed actions need no caller-controlled command text" {
     try std.testing.expectEqual(Action.playlist_next, try parse("playlist-next", null));
     try std.testing.expectEqual(Action.screenshot, try parse("screenshot", null));
+    try std.testing.expectEqual(Action.skip_segment, try parse("skip-segment", null));
     try std.testing.expectEqual(Action.loop_clear, try parse("loop-clear", null));
     try std.testing.expectEqual(Action.retry_current, try parse("retry", null));
     try std.testing.expectEqual(Action.cancel_current, try parse("cancel", null));

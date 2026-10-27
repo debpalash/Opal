@@ -1783,6 +1783,7 @@ fn appFrame() !dvui.App.Result {
                     try ui.renderGrid();
                     ui.renderLiquidGlassOverlay();
                     ui.renderStatsOverlay();
+                    @import("ui/skip_overlay.zig").render();
                     grid_inner.deinit();
                 }
 

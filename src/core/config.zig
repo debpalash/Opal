@@ -4,6 +4,7 @@ const paths = @import("paths.zig");
 const db = @import("db.zig");
 const theme = @import("../ui/theme.zig");
 const watch_history_pure = @import("../player/watch_history_pure.zig");
+const skip_policy = @import("../services/skip_policy_pure.zig");
 const secret_store = @import("secret_store.zig");
 const key_writer = @import("sqlite_key_writer.zig");
 threadlocal var key_batch: ?key_writer.Writer = null;
@@ -146,6 +147,7 @@ fn saveChecked() !void {
     setKey("anime_skip_recap", if (state.app.anime_skip_recap) "1" else "0");
     setKey("anime_skip_credits", if (state.app.anime_skip_credits) "1" else "0");
     setKey("anime_skip_preview", if (state.app.anime_skip_preview) "1" else "0");
+    setKey("skip_mode", fmtInt(&fb, @as(usize, state.app.skip_mode)));
     setKey("deband_enabled", if (state.app.deband_enabled) "1" else "0");
     setKey("video_scaler", fmtInt(&fb, @as(usize, state.app.video_scaler)));
     // Video color filters (signed −100..100) — replayed at player init.
@@ -784,6 +786,14 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         state.app.sponsorblock_enabled = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "anime_skip_enabled")) {
         state.app.anime_skip_enabled = std.mem.eql(u8, val, "1");
+        // Migration: configs older than `skip_mode` only had this toggle.
+        if (!state.app.skip_mode_loaded)
+            state.app.skip_mode = @intFromEnum(skip_policy.legacyMode(state.app.anime_skip_enabled));
+    } else if (std.mem.eql(u8, key, "skip_mode")) {
+        const m = skip_policy.modeFromInt(std.fmt.parseInt(u8, val, 10) catch 2);
+        state.app.skip_mode = @intFromEnum(m);
+        state.app.skip_mode_loaded = true;
+        state.app.anime_skip_enabled = skip_policy.legacyEnabled(m);
     } else if (std.mem.eql(u8, key, "anime_skip_intro")) {
         state.app.anime_skip_intro = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "anime_skip_recap")) {

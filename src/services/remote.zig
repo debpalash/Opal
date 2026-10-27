@@ -4638,7 +4638,10 @@ fn apiPlayerSnapshot(stream: std.Io.net.Stream, ap: *player.MediaPlayer, players
     escJsonWrite(&w, txt.safeUtf8(active_device));
     w.writeAll("\",\"error\":\"") catch return;
     escJsonWrite(&w, load_error);
-    w.print("\",\"retryable\":{s}}},\"chapters\":[", .{if (retryable) "true" else "false"}) catch return;
+    w.print("\",\"retryable\":{s}}},\"skip\":", .{if (retryable) "true" else "false"}) catch return;
+    // Current intro/credits segment (null outside one) — see skip_segments.
+    @import("skip_segments.zig").writeJson(&w);
+    w.writeAll(",\"chapters\":[") catch return;
     writePlayerChapters(&w, ap, chapter_count, chapter);
     w.writeAll("],\"tracks\":{\"audio\":[") catch return;
     writePlayerTracks(&w, ap, "audio");
@@ -4819,6 +4822,8 @@ fn apiPlayerAction(stream: std.Io.net.Stream, ap: *player.MediaPlayer, query: []
         .frame_previous => _ = c.mpv.mpv_command_string(ap.mpv_ctx, "frame-back-step"),
         .frame_next => _ = c.mpv.mpv_command_string(ap.mpv_ctx, "frame-step"),
         .screenshot => _ = c.mpv.mpv_command_string(ap.mpv_ctx, "screenshot"),
+        // Executed on the owner thread by skip_segments.tick().
+        .skip_segment => @import("skip_segments.zig").requestSkip(),
         .loop_a => ap.setLoopA(),
         .loop_b => ap.setLoopB(),
         .loop_clear => ap.clearLoop(),

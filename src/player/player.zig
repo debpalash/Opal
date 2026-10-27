@@ -2900,6 +2900,9 @@ pub fn updateTorrentBackgroundTasks() void {
                 // picture preset can decide anything — before this, video-params
                 // is empty and every file would look SDR.
                 applyPicturePreset(p);
+                // Skip markers: chapter titles now; local episodes queue the
+                // fingerprint worker (services/markers.zig).
+                @import("../services/markers.zig").onFileLoaded(p);
 
                 // Tracks are parsed now. If the media brought no subtitle track
                 // (no embedded stream, no sidecar picked up by sub-auto=fuzzy),
