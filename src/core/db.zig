@@ -558,6 +558,18 @@ fn createTables() void {
         \\  PRIMARY KEY (tmdb_id, season)
         \\)
     );
+    // Babel: one "Previously on…" recap per (show, season, episode) — see recap.zig.
+    exec(
+        \\CREATE TABLE IF NOT EXISTS recap_cache (
+        \\  tmdb_id INTEGER NOT NULL,
+        \\  season INTEGER NOT NULL,
+        \\  episode INTEGER NOT NULL,
+        \\  text TEXT NOT NULL,
+        \\  sources INTEGER DEFAULT 0,
+        \\  created_at INTEGER,
+        \\  PRIMARY KEY (tmdb_id, season, episode)
+        \\)
+    );
 
     // User-set library status, for EVERY kind of trackable content (tv / anime /
     // movie) rather than a column on tv_shows — anime keys off a MAL id and a

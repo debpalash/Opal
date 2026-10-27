@@ -4553,7 +4553,9 @@ fn writeSubtitleDiscovery(w: *std.Io.Writer) void {
         if (auto_subs.in_progress.load(.acquire)) "true" else "false",
     }) catch return;
     escJsonWrite(w, txt.safeUtf8(generated.text[0..generated.len]));
-    w.writeAll("\"}}") catch return;
+    w.writeAll("\"},") catch return;
+    @import("babel.zig").writeStatusJson(w); // live captions + translation
+    w.writeAll("}") catch return;
 }
 
 /// A single rich player snapshot. This is the deep interface for every browser
@@ -4769,6 +4771,19 @@ fn apiPlayerAction(stream: std.Io.net.Stream, ap: *player.MediaPlayer, query: []
                 return;
             }
             auto_subs.transcribeCurrent();
+        },
+        .live_captions => |on| @import("live_captions.zig").setEnabled(on),
+        .subtitle_translate => {
+            const translate = @import("translate.zig");
+            if (translate.in_progress.load(.acquire)) {
+                if (players_locked.*) {
+                    players_locked.* = false;
+                    state.players_mutex.unlock();
+                }
+                sendJsonStatus(stream, "409 Conflict", "{\"error\":\"subtitle translation already running\"}");
+                return;
+            }
+            translate.translateActiveTrack();
         },
         .aspect => |v| _ = c.mpv.mpv_set_property_string(ap.mpv_ctx, "video-aspect-override", v.mpvValue().ptr),
         .subtitle_delay => |v| setPlayerDouble(ap, "sub-delay", v),

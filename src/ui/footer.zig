@@ -575,6 +575,9 @@ pub fn renderSubPicker() void {
         components.tip(@src(), gen_wd, "Transcribe the audio locally (whisper)");
     }
 
+    // ── Babel: live captions + translate the active track ──
+    @import("babel_ui.zig").pickerRow();
+
     // ── Context line: active query + search language ──
     {
         var meta = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -1978,6 +1981,8 @@ pub fn renderLiquidGlassOverlay() void {
             // Greyed out rather than hidden when there's nothing next: a button
             // that vanishes mid-show is more confusing than one that's dim.
             components.tip(@src(), wd, if (has_next) "Next episode" else "No next episode yet");
+            // Babel: spoiler-safe "Previously on…" recap (first minutes only).
+            _ = @import("babel_ui.zig").recapButton();
         }
 
         // ── Manual Anime-Skip affordance ──

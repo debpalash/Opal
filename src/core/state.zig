@@ -740,6 +740,14 @@ pub const AppState = struct {
     ytdl_format_idx: usize = 1,
     sub_lang_buf: [8]u8 = [_]u8{ 'e', 'n', 'g', 0, 0, 0, 0, 0 },
     sub_lang_len: usize = 3,
+    /// Babel (services/babel.zig): live-caption source language ("auto" or a
+    /// whisper code), "Translate subtitles to" target ("" = off), recaps.
+    babel_caption_lang: [8]u8 = [_]u8{ 'a', 'u', 't', 'o', 0, 0, 0, 0 },
+    babel_caption_lang_len: usize = 4,
+    babel_translate_lang: [8]u8 = std.mem.zeroes([8]u8),
+    babel_translate_lang_len: usize = 0,
+    babel_recap_enabled: bool = true,
+    babel_recap_tts: bool = false,
     /// Last explicit subtitle visibility choice; reapplied to new media.
     subtitles_enabled: bool = true,
     /// Last explicitly selected embedded audio language. Track IDs are local to

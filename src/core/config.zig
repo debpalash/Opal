@@ -105,6 +105,10 @@ fn saveChecked() !void {
     setKey("operator_picks", if (state.app.operator_picks_enabled) "1" else "0");
     setKey("save_path", state.app.save_path_buf[0..state.app.save_path_len]);
     setKey("sub_lang", state.app.sub_lang_buf[0..state.app.sub_lang_len]);
+    setKey("babel_caption_lang", state.app.babel_caption_lang[0..state.app.babel_caption_lang_len]);
+    setKey("babel_translate_lang", state.app.babel_translate_lang[0..state.app.babel_translate_lang_len]);
+    setKey("babel_recap_enabled", if (state.app.babel_recap_enabled) "1" else "0");
+    setKey("babel_recap_tts", if (state.app.babel_recap_tts) "1" else "0");
     setKey("subtitles_enabled", if (state.app.subtitles_enabled) "1" else "0");
     setKey("audio_lang", state.app.audio_lang_buf[0..state.app.audio_lang_len]);
     setKey("audio_device", state.app.audio_device_buf[0..state.app.audio_device_len]);
@@ -658,6 +662,22 @@ fn applyConfig(key: []const u8, val: []const u8) void {
             @memcpy(state.app.sub_lang_buf[0..val.len], val);
             state.app.sub_lang_len = val.len;
         }
+    } else if (std.mem.eql(u8, key, "babel_caption_lang")) {
+        if (val.len > 0 and val.len <= 8) {
+            @memset(&state.app.babel_caption_lang, 0);
+            @memcpy(state.app.babel_caption_lang[0..val.len], val);
+            state.app.babel_caption_lang_len = val.len;
+        }
+    } else if (std.mem.eql(u8, key, "babel_translate_lang")) {
+        if (val.len <= 8) {
+            @memset(&state.app.babel_translate_lang, 0);
+            @memcpy(state.app.babel_translate_lang[0..val.len], val);
+            state.app.babel_translate_lang_len = val.len;
+        }
+    } else if (std.mem.eql(u8, key, "babel_recap_enabled")) {
+        state.app.babel_recap_enabled = std.mem.eql(u8, val, "1");
+    } else if (std.mem.eql(u8, key, "babel_recap_tts")) {
+        state.app.babel_recap_tts = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "subtitles_enabled")) {
         state.app.subtitles_enabled = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "audio_lang")) {
