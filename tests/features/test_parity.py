@@ -93,6 +93,7 @@ COVERED = {
 # equivalent and no entry here, and parity still read 98%. It was really 83%.
 GAPS = {
     "agents dashboard": "The desktop Agents overview, tasks, and activity panels have no corresponding web page or remote workflow yet.",
+    "profile management": "Settings › Profiles (create, PIN, kids mode) has /api/profiles routes but no web page yet.",
 }
 
 # Desktop capabilities a browser cannot have, by nature — counted separately so
@@ -125,6 +126,7 @@ DESKTOP_SURFACES = {
         "Scripts": "scripts settings", "AI": "ai & voice settings",
         "LangLearn": "language learning", "FileAssoc": "file associations",
         "LiveTv": "live tv settings", "About": "about",
+        "Profiles": "profile management",
     },
     # src/core/router.zig :: PluginTab
     "PluginTab": {

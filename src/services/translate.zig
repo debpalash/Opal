@@ -54,9 +54,10 @@ pub fn translatePending(cues: []lc.Cue, lang_code: []const u8, cancel: ?bounded.
 
         var slots: [pure.max_batch_items]?[]const u8 = undefined;
         const slot_view = slots[0..batch.len];
-        if (reply) |r| _ = pure.parseReply(r, slot_view) else for (slot_view) |*s| {
-            s.* = null;
-        };
+        for (slot_view) |*s| s.* = null;
+        if (reply) |r| {
+            _ = pure.parseReply(r, slot_view);
+        }
         for (batch, 0..) |orig, k| {
             var line_buf: [1024]u8 = undefined;
             const line = pure.resolveLine(orig, slot_view[k], &line_buf);
