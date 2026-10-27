@@ -5619,6 +5619,11 @@ fn renderDeviceSyncSection() void {
                 _ = lsync.syncNow(i);
             }
             if (components.confirmDangerButton(@src(), "Remove", base + 4)) remove_idx = i;
+            // Continuum: take over whatever that device is playing, at its position.
+            const handoff = @import("../services/handoff.zig");
+            if (components.actionButton(@src(), if (handoff.busy()) "Handing off..." else "Bring Playback Here", .secondary, base + 7) and !handoff.busy()) {
+                _ = handoff.startPeerJob(i, true);
+            }
         }
 
         var line_buf: [96]u8 = undefined;

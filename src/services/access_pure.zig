@@ -278,6 +278,8 @@ pub fn routeCapability(path: []const u8, method: []const u8, action: []const u8)
         // and `pull`/`push` make this host fetch a peer URL.
         "/library/sync",         "/library/sync/pull",
         "/library/sync/push",
+        // Continuum handoff: send/bring make this host call a peer URL.
+        "/handoff/send",         "/handoff/bring",
     };
     for (host_routes) |route| if (std.mem.eql(u8, path, route)) return .administer_host;
     return null;

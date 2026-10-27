@@ -116,6 +116,7 @@ pub fn headlessMain() !void {
         // drain those owned commands; the headless owner must do the same or
         // Play/Queue can return success while no reader/player action occurs.
         @import("services/forwarded_open.zig").drain();
+        @import("services/handoff.zig").tick();
         @import("services/queue.zig").drainUi();
         @import("services/resolver.zig").drainRemoteAction();
         @import("services/browser.zig").drainDeferredPlayback();

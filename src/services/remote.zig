@@ -966,6 +966,11 @@ fn handleRequest(stream: std.Io.net.Stream, client_key: u64) !void {
         return;
     }
 
+    // Continuum stream fetches carrying a signed per-session token in the path
+    // (a TV / peer Opal without the account token). Untokenized stream paths
+    // fall through to normal API auth below.
+    if (@import("stream_session.zig").handlePublic(stream, method, path, request)) return;
+
     // Browser pairing is the other unauthenticated data route: it is how an
     // extension obtains its token. Code-gated, loopback-only, and rate limited
     // inside the handler (see remote_browser_api.handlePair).
@@ -1255,6 +1260,8 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
     if (@import("remote_collections_api.zig").handle(stream, method, api_path, query)) return;
     if (@import("remote_local_library_api.zig").handle(stream, method, api_path, query, body)) return;
     if (@import("remote_library_sync_api.zig").handle(stream, method, api_path, query, body)) return;
+    if (@import("stream_session.zig").handleApi(stream, method, api_path, query, body, request)) return;
+    if (@import("handoff.zig").handleApi(stream, method, api_path, query, body, request)) return;
     if (@import("remote_plex_api.zig").handle(stream, method, api_path, query)) return;
     if (@import("remote_wanted_api.zig").handle(stream, method, api_path, query)) return;
     if (@import("remote_agent_tasks_api.zig").handle(stream, method, api_path, query, body)) return;

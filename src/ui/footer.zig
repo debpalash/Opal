@@ -2276,6 +2276,20 @@ pub fn renderLiquidGlassOverlay() void {
         }
         if (pickerMenuChip(@src(), 715, icons.tvg.lucide.rewind, "Back 10 seconds", false, "Seek back", .none)) _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "seek -10");
         if (pickerMenuChip(@src(), 716, icons.tvg.lucide.@"fast-forward", "Forward 10 seconds", false, "Seek forward", .none)) _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "seek 10");
+        // Continuum: "Continue on…" each paired device (Settings > Device sync).
+        {
+            const handoff = @import("../services/handoff.zig");
+            const ls = &state.app.lsync;
+            for (ls.peers[0..ls.peer_count], 0..) |*peer, pi| {
+                if (peer.urlText().len == 0) continue;
+                var lbl_buf: [96]u8 = undefined;
+                const host = @import("../services/stream_pure.zig").urlHost(peer.urlText()) orelse "device";
+                const lbl = std.fmt.bufPrint(&lbl_buf, "Continue on {s}", .{host}) catch "Continue on device";
+                if (pickerMenuChip(@src(), 722 + pi, icons.tvg.lucide.cast, lbl, handoff.busy(), "Hand playback to this device at the current second", .none)) {
+                    if (handoff.startPeerJob(pi, false)) closePickers();
+                }
+            }
+        }
 
         // Both URL probes are case-insensitive substring searches over the loaded
         // URL, and both results are only consumed by the quality chip below. Test

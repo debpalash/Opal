@@ -1439,6 +1439,8 @@ fn appFrame() !dvui.App.Result {
     }
 
     @import("services/forwarded_open.zig").drain();
+    // Continuum: play a received handoff, reap idle stream sessions.
+    @import("services/handoff.zig").tick();
 
     // Drain a deferred comic-load requested by the remote API thread (loadComic
     // frees textures via dvui, which is UI-thread-only).
