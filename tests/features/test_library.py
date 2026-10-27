@@ -433,3 +433,61 @@ def test_library_device_sync():
     if missing:
         return "fail", "device sync incomplete: " + ", ".join(missing)
     return "pass", "device sync: N peers in parallel with own seq cursors, clone re-roll, origin echo skip, tombstones, themed settings"
+
+
+def _zig_sql_execs(src, start_marker, end_marker):
+    """Statements passed to exec(...) between two markers in a Zig file —
+    both single-line string literals and `\\\\` multiline literals."""
+    import re
+    region = src[src.index(start_marker):src.index(end_marker)]
+    out = []
+    for m in re.finditer(r'exec\((?:"((?:[^"\\]|\\.)*)"|\s*\n((?:\s*\\\\[^\n]*\n)+)\s*)\)', region):
+        if m.group(1) is not None:
+            out.append(m.group(1).encode().decode("unicode_escape"))
+        else:
+            out.append("\n".join(l.strip()[2:] for l in m.group(2).strip().splitlines()))
+    return out
+
+
+@test("Library sync triggers + echo rule behave (executed in sqlite)", "Library")
+def test_library_sync_sql_executed():
+    # Grep checks can't catch a broken trigger. Run the SHIPPED schema/trigger
+    # SQL from db.zig and the SHIPPED echo predicate from library_store.zig.
+    import re, sqlite3
+    db_src = _src("src/core/db.zig")
+    st_src = _src("src/services/library_store.zig")
+    stmts = _zig_sql_execs(db_src, "CREATE TABLE IF NOT EXISTS library_items", "bindSyncIdentity();")
+    if not any("library_items_seq_upd" in s for s in stmts):
+        return "fail", "could not extract the seq triggers from db.zig"
+    m = re.search(r'FROM library_items WHERE seq > \?1 AND seq <= \?2 " \+\+\s*"([^"]+)"', st_src)
+    if not m:
+        return "fail", "could not extract loadChangedSince's echo predicate"
+    echo_sql = "SELECT kind,item_id FROM library_items WHERE seq > ?1 AND seq <= ?2 " + m.group(1)
+    con = sqlite3.connect(":memory:")
+    for s in stmts:
+        try:
+            con.execute(s)
+        except sqlite3.OperationalError as e:
+            if "duplicate column" not in str(e):
+                return "fail", f"schema SQL failed: {e}"
+    seq = lambda k: con.execute("SELECT seq FROM library_items WHERE item_id=?", (k,)).fetchone()[0]
+    con.execute("INSERT INTO library_items(kind,item_id,percent) VALUES('movie','a',10)")
+    con.execute("INSERT INTO library_items(kind,item_id,percent) VALUES('movie','b',20)")
+    a0, b0 = seq("a"), seq("b")
+    checks = {"inserts get increasing seq": 0 < a0 < b0}
+    con.execute("UPDATE library_items SET percent=50 WHERE item_id='a'")
+    a1 = seq("a")
+    checks["synced-field write bumps seq"] = a1 > b0
+    con.execute("UPDATE library_items SET home_pinned=1 WHERE item_id='a'")
+    checks["home layout write does not bump seq"] = seq("a") == a1
+    con.execute("UPDATE library_items SET origin='peerA' WHERE item_id='a'")  # applySyncRows tag
+    checks["origin tag does not re-bump seq"] = seq("a") == a1
+    rows = lambda dev: {r[1] for r in con.execute(echo_sql + " ORDER BY seq ASC LIMIT ?4", (0, 10**9, dev, 100))}
+    checks["echo rule hides peer's own rows"] = rows("peerA") == {"b"}
+    checks["other peers still get them"] = rows("peerB") == {"a", "b"} and rows("") == {"a", "b"}
+    con.execute("UPDATE library_items SET percent=60 WHERE item_id='a'")
+    checks["local write clears origin"] = con.execute("SELECT origin FROM library_items WHERE item_id='a'").fetchone()[0] == ""
+    bad = [k for k, ok in checks.items() if not ok]
+    if bad:
+        return "fail", "sync SQL broken: " + ", ".join(bad)
+    return "pass", f"{len(checks)} executed checks on shipped trigger + echo SQL"

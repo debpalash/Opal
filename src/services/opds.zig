@@ -334,6 +334,7 @@ fn opdsGetCancelled(url: []const u8, user: []const u8, pass: []const u8, cap: us
         secret_n = 1;
     }
     const body = @import("reliable_fetch.zig").fetch(url, buffer, .{
+        .keep_head_on_overflow = true, // pre-seam behaviour: parse the head of an oversized body
         .headers = &.{.{ .name = "Accept", .value = "application/atom+xml,application/xml" }},
         .secret_headers = secret[0..secret_n],
         .timeout_secs = seconds,

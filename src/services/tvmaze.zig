@@ -41,7 +41,7 @@ var busy: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 /// Fetch `url` into `buf` via reliable-fetch, returning bytes read (0 on failure). TVmaze is a
 /// plain keyless HTTPS JSON API — no auth, no SNI-block dance needed.
 pub fn curlInto(url: []const u8, buf: []u8) usize {
-    const body = @import("reliable_fetch.zig").fetch(url, buf, .{ .timeout_secs = 8, .impersonate = false }) orelse return 0;
+    const body = @import("reliable_fetch.zig").fetch(url, buf, .{ .keep_head_on_overflow = true, .timeout_secs = 8, .impersonate = false }) orelse return 0;
     return body.len;
 }
 

@@ -456,6 +456,20 @@ def test_reliable_fetch_secret_seam():
     return "pass", f"{len(checks)} secret/body/download routings on the seam"
 
 
+@test("Migrated text fetchers keep the head of oversized bodies", "Network")
+def test_reliable_fetch_keep_head():
+    # Regression: pre-seam callers read the first N bytes of an oversized body
+    # (e.g. a >512 KB RSS feed still parsed). fetch() fails on overflow unless
+    # keep_head_on_overflow is set, which silently emptied those features.
+    files = ["rss", "eztv_calendar", "anime_schedule", "stremio", "mihon", "tvmaze",
+             "omdb", "drama", "projectjav", "opds", "comics", "anime", "search",
+             "co_watch", "ai_memory", "lang_learn"]
+    bad = [f for f in files if "keep_head_on_overflow = true" not in _src(f"src/services/{f}.zig")]
+    if bad:
+        return "fail", "head of oversized body dropped in: " + ", ".join(bad)
+    return "pass", f"{len(files)} text fetchers keep the head; images stay strict"
+
+
 @test("Content fetchers bound connect time", "Network")
 def test_curl_connect_timeout():
     # PERF/hang guard — a black-holed source used to stall a whole route for

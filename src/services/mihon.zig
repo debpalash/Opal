@@ -106,7 +106,7 @@ pub fn close() void {
 /// GET `url` into `dst`, returning bytes read (0 on failure). std.http is avoided
 /// project-wide (SEGVs on some ISP TLS resets); curl matches comics.zig.
 fn curl(url: []const u8, dst: []u8) usize {
-    const body = @import("reliable_fetch.zig").fetch(url, dst, .{ .timeout_secs = 25, .impersonate = false, .use_dpi_proxy = false }) orelse return 0;
+    const body = @import("reliable_fetch.zig").fetch(url, dst, .{ .keep_head_on_overflow = true, .timeout_secs = 25, .impersonate = false, .use_dpi_proxy = false }) orelse return 0;
     return body.len;
 }
 
@@ -114,6 +114,7 @@ fn curl(url: []const u8, dst: []u8) usize {
 /// Suwayomi GraphQL calls that register a repo on the server.
 fn curlPost(url: []const u8, body: []const u8, dst: []u8) usize {
     const resp = @import("reliable_fetch.zig").fetch(url, dst, .{
+        .keep_head_on_overflow = true, // pre-seam behaviour: parse the head of an oversized body
         .timeout_secs = 25,
         .impersonate = false,
         .use_dpi_proxy = false,

@@ -85,6 +85,7 @@ pub fn fetchTorrents(url: []const u8) void {
             const html_buf = std.heap.c_allocator.alloc(u8, 2 * 1024 * 1024) catch return;
             defer std.heap.c_allocator.free(html_buf);
             const html_len = if (@import("reliable_fetch.zig").fetch(fetch_url, html_buf, .{
+                .keep_head_on_overflow = true, // pre-seam behaviour: parse the head of an oversized body
                 .user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 .timeout_secs = 15,
             })) |body| body.len else 0;

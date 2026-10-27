@@ -138,7 +138,9 @@ pub fn build(arena: std.mem.Allocator, spec: Spec, proxy_args: []const []const u
         try out.append(arena, "-");
     }
     if (spec.method_post_body) |body| {
-        try out.append(arena, "--data-binary");
+        // data-raw: an inline body starting with '@' must never be read as a
+        // local file path (only post_body_file opts into that).
+        try out.append(arena, "--data-raw");
         try out.append(arena, body);
     } else if (spec.post_body_file) |path| {
         try out.append(arena, "--data-binary");
@@ -712,4 +714,16 @@ test "streaming argv disables buffering" {
     try std.testing.expect(has(argv, "-N"));
     const plain = try buildAlloc(ar.allocator(), .{ .bin = "curl", .url = "https://x.test" }, &.{});
     try std.testing.expect(!has(plain, "-N"));
+}
+
+test "inline post body is sent with --data-raw so '@' never reads a file" {
+    var ar = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer ar.deinit();
+    const argv = try buildAlloc(ar.allocator(), .{ .bin = "curl", .url = "https://x/y", .method_post_body = "@/etc/passwd" }, &.{});
+    var raw_at: ?usize = null;
+    for (argv, 0..) |a, i| {
+        try std.testing.expect(!std.mem.eql(u8, a, "--data-binary"));
+        if (std.mem.eql(u8, a, "--data-raw")) raw_at = i;
+    }
+    try std.testing.expectEqualStrings("@/etc/passwd", argv[(raw_at orelse return error.NoBody) + 1]);
 }

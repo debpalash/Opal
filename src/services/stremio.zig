@@ -58,7 +58,7 @@ pub fn fetchCatalog() void {
             const url = "https://stremio-addons.com/catalog.json";
             const buf = alloc.alloc(u8, 256 * 1024) catch return;
             defer alloc.free(buf);
-            const n = if (@import("reliable_fetch.zig").fetch(url, buf, .{ .timeout_secs = 15, .impersonate = false })) |b| b.len else 0;
+            const n = if (@import("reliable_fetch.zig").fetch(url, buf, .{ .keep_head_on_overflow = true, .timeout_secs = 15, .impersonate = false })) |b| b.len else 0;
             if (n == 0) logs.pushLog("error", "stremio", "Failed to fetch catalog", true);
 
             if (n < 10) {
@@ -345,7 +345,7 @@ pub fn queryStreams(imdb_id: []const u8, media_type: []const u8) void {
                 }) catch continue;
 
                 var resp_buf: [64 * 1024]u8 = undefined;
-                const rn = if (@import("reliable_fetch.zig").fetch(url, &resp_buf, .{ .timeout_secs = 10, .impersonate = false })) |b| b.len else 0;
+                const rn = if (@import("reliable_fetch.zig").fetch(url, &resp_buf, .{ .keep_head_on_overflow = true, .timeout_secs = 10, .impersonate = false })) |b| b.len else 0;
 
                 if (rn < 10) continue;
 

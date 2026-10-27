@@ -182,7 +182,7 @@ fn localTzOffset() i64 {
 fn curlInto(url: []const u8, buf: []u8) usize {
     // reliable-fetch routes through the DPI-bypass proxy when the user has it
     // on, so eztv resets (curl 35) get the same bypass as every other source.
-    const body = @import("reliable_fetch.zig").fetch(url, buf, .{ .timeout_secs = 12, .impersonate = false }) orelse return 0;
+    const body = @import("reliable_fetch.zig").fetch(url, buf, .{ .keep_head_on_overflow = true, .timeout_secs = 12, .impersonate = false }) orelse return 0;
     return body.len;
 }
 

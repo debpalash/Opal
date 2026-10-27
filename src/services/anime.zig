@@ -26,7 +26,10 @@ const reliable_fetch = @import("reliable_fetch.zig");
 /// output ceiling, DPI proxy, optional browser TLS). Null on transport failure
 /// or a non-2xx/3xx status.
 fn boundedCurl(url: []const u8, output: []u8, opts: reliable_fetch.Opts) ?[]const u8 {
-    return reliable_fetch.fetch(url, output, opts);
+    // Pre-seam readAll kept the head of an oversized page; scrapers parse it.
+    var o = opts;
+    o.keep_head_on_overflow = true;
+    return reliable_fetch.fetch(url, output, o);
 }
 
 /// Jikan/plain-JSON GET cancelled when a newer search supersedes `generation`.

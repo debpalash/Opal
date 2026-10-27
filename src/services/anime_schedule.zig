@@ -76,6 +76,7 @@ fn worker() void {
     defer alloc.free(buf);
 
     const fetched = @import("reliable_fetch.zig").fetch(ANILIST_API, buf, .{
+        .keep_head_on_overflow = true, // pre-seam behaviour: parse the head of an oversized body
         .timeout_secs = 15,
         .impersonate = false,
         .post_body = gql,

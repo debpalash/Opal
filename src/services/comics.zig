@@ -644,6 +644,7 @@ fn browseEpoch() ?@import("../core/bounded_process.zig").CancelEpoch {
 }
 fn fetchUrl(url: []const u8, dst: []u8) usize {
     const body = @import("reliable_fetch.zig").fetch(url, dst, .{
+        .keep_head_on_overflow = true, // pre-seam behaviour: parse the head of an oversized body
         .user_agent = pure.userAgentFor(url, @import("../core/app_meta.zig").user_agent_with_url),
         .timeout_secs = 15,
         .cancel_epoch = browseEpoch(),
@@ -1096,6 +1097,7 @@ fn loadThemesiaPages(detail_url: []const u8) bool {
 /// which WordPress only answers to an `X-Requested-With: XMLHttpRequest` POST.
 fn fetchPost(url: []const u8, body: []const u8, dst: []u8) usize {
     const resp = @import("reliable_fetch.zig").fetch(url, dst, .{
+        .keep_head_on_overflow = true, // pre-seam behaviour: parse the head of an oversized body
         .user_agent = pure.userAgentFor(url, @import("../core/app_meta.zig").user_agent_with_url),
         .headers = &.{.{ .name = "X-Requested-With", .value = "XMLHttpRequest" }},
         .post_body = body,

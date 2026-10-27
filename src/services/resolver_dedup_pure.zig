@@ -157,12 +157,48 @@ pub fn promoteSource(primary: []const u8, fallback_1: []const u8, fallback_2: []
 pub fn sourceLabel(url: []const u8) []const u8 {
     if (std.mem.startsWith(u8, url, "magnet:?")) return "Torrent";
     if (std.mem.startsWith(u8, url, "/") or std.mem.startsWith(u8, url, "file://")) return "Local file";
-    const at = std.mem.indexOf(u8, url, "://") orelse return url;
+    // Windows drive (C:\ / C:/) and UNC (\\server) paths are local files too.
+    if (url.len >= 3 and std.ascii.isAlphabetic(url[0]) and url[1] == ':' and (url[2] == '\\' or url[2] == '/')) return "Local file";
+    if (std.mem.startsWith(u8, url, "\\\\")) return "Local file";
+    // Labels reach web clients: never echo anything but a validated hostname.
+    const at = std.mem.indexOf(u8, url, "://") orelse return "Link";
     var host = url[at + 3 ..];
     if (std.mem.indexOfAny(u8, host, "/?#")) |end| host = host[0..end];
     if (std.mem.lastIndexOfScalar(u8, host, '@')) |cred| host = host[cred + 1 ..];
     if (std.mem.startsWith(u8, host, "www.")) host = host[4..];
-    return if (host.len > 0) host else url;
+    if (!plausibleHost(host)) return "Link";
+    return host;
+}
+
+/// Hostname[:port] only. Rejects userinfo remnants (a `/` inside a password
+/// leaves `user:pass` here) and anything that isn't a DNS/IP character.
+fn plausibleHost(host: []const u8) bool {
+    if (host.len == 0) return false;
+    var port_at: ?usize = null;
+    for (host, 0..) |ch, i| {
+        if (ch == ':') {
+            if (port_at != null) return false;
+            port_at = i;
+        } else if (!(std.ascii.isAlphanumeric(ch) or ch == '.' or ch == '-')) return false;
+    }
+    if (port_at) |p| {
+        if (p == 0 or p + 1 == host.len) return false;
+        for (host[p + 1 ..]) |ch| if (!std.ascii.isDigit(ch)) return false;
+    }
+    return true;
+}
+
+test "sourceLabel never leaks paths or credentials to web clients" {
+    // Regression: a folded .local Windows path was sent whole as the label.
+    try std.testing.expectEqualStrings("Local file", sourceLabel("C:\\Users\\me\\Movies\\x.mkv"));
+    try std.testing.expectEqualStrings("Local file", sourceLabel("D:/media/x.mkv"));
+    try std.testing.expectEqualStrings("Local file", sourceLabel("\\\\nas\\share\\x.mkv"));
+    try std.testing.expectEqualStrings("Link", sourceLabel("relative/secret-token.mkv"));
+    // Regression: a `/` in the password left `u:p` as the "host".
+    try std.testing.expectEqualStrings("Link", sourceLabel("http://u:p/w@host/x"));
+    try std.testing.expectEqualStrings("cdn.example", sourceLabel("https://user:pass@cdn.example/v.m3u8?sig=abc"));
+    try std.testing.expectEqualStrings("cdn.example:8443", sourceLabel("https://cdn.example:8443/v"));
+    try std.testing.expectEqualStrings("Torrent", sourceLabel("magnet:?xt=urn:btih:abc"));
 }
 
 test "sourceCount counts the primary plus non-empty fallbacks" {
