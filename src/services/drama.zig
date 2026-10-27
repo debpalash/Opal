@@ -753,7 +753,7 @@ fn renderSearchRow() void {
     if (isSearchResults()) {
         if (dvui.button(@src(), "Clear", .{}, .{
             .color_text = theme.colors.text_secondary,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
             .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
@@ -942,7 +942,7 @@ fn renderCard(item: *state.DramaResult, idx: usize) void {
         .id_extra = idx + 500,
         .expand = .horizontal,
         .color_text = theme.colors.text_primary,
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill = theme.transparent,
         .color_fill_hover = theme.colors.bg_hover,
         .color_fill_press = theme.colors.bg_elevated,
         .padding = .{ .x = 4, .y = 2, .w = 4, .h = 0 },

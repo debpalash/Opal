@@ -562,7 +562,7 @@ fn renderToolbar(count: usize) void {
     var smaller_wd: dvui.WidgetData = undefined;
     if (dvui.buttonIcon(@src(), "smaller", icons.tvg.lucide.minus, .{}, .{}, .{
         .data_out = &smaller_wd,
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill = theme.transparent,
         .color_fill_hover = theme.colors.bg_hover,
         .color_fill_press = theme.colors.bg_elevated,
         .color_text = dim,
@@ -577,7 +577,7 @@ fn renderToolbar(count: usize) void {
     var bigger_wd: dvui.WidgetData = undefined;
     if (dvui.buttonIcon(@src(), "bigger", icons.tvg.lucide.plus, .{}, .{}, .{
         .data_out = &bigger_wd,
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill = theme.transparent,
         .color_fill_hover = theme.colors.bg_hover,
         .color_fill_press = theme.colors.bg_elevated,
         .color_text = dim,
@@ -665,7 +665,7 @@ fn renderSortChip(idx: usize, tag: u8, label: []const u8) void {
     const fg = if (state.app.tmdb.discover_sort == tag) theme.colors.accent else theme.colors.text_secondary;
     if (dvui.button(@src(), label, .{}, .{
         .id_extra = idx + 5000,
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill = theme.transparent,
         .color_fill_hover = theme.colors.bg_hover,
         .color_fill_press = theme.colors.bg_elevated,
         .color_text = fg,
@@ -884,7 +884,7 @@ fn renderTimeChip(idx: usize, tw: state.TmdbTimeWindow, label: []const u8) void 
     const fg = if (state.app.tmdb.time_window == tw) theme.colors.accent else theme.colors.text_secondary;
     if (dvui.button(@src(), label, .{}, .{
         .id_extra = idx + 4000,
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill = theme.transparent,
         .color_fill_hover = theme.colors.bg_hover,
         .color_fill_press = theme.colors.bg_elevated,
         .color_text = fg,
@@ -1371,7 +1371,7 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
         .min_size_content = .{ .w = card_w - 4, .h = 28 },
         .max_size_content = .{ .w = card_w - 4, .h = 36 },
         .color_text = theme.colors.text_primary,
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill = theme.transparent,
         .color_fill_hover = theme.colors.bg_hover,
         .color_fill_press = theme.colors.bg_elevated,
         .padding = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
@@ -1399,7 +1399,7 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
             .padding = .{ .x = 2, .y = 2, .w = 2, .h = 0 },
         });
         defer acts.deinit();
-        const trans = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
+        const trans = theme.transparent;
         const dim = theme.colors.text_secondary;
 
         // Favorite
@@ -1595,7 +1595,7 @@ fn renderCard(item: *state.TmdbItem, idx: usize) void {
             .id_extra = idx + 500,
             .expand = .horizontal,
             .color_text = theme.colors.text_primary,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
             .padding = dvui.Rect.all(0),
@@ -1646,7 +1646,7 @@ fn renderCard(item: *state.TmdbItem, idx: usize) void {
                 .id_extra = idx + 650,
                 .color_text = theme.colors.text_secondary,
                 .expand = .horizontal,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill = theme.transparent,
                 .color_fill_hover = theme.colors.bg_hover,
                 .color_fill_press = theme.colors.bg_elevated,
                 .padding = dvui.Rect.all(0),
@@ -1670,7 +1670,7 @@ fn renderCard(item: *state.TmdbItem, idx: usize) void {
         {
             var acts = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = idx + 400, .padding = .{ .x = 0, .y = 3, .w = 0, .h = 0 } });
             defer acts.deinit();
-            const trans = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
+            const trans = theme.transparent;
             const dim = theme.colors.text_tertiary;
 
             // Fav
@@ -3901,7 +3901,7 @@ fn renderTvDetail() void {
 
                     if (dvui.buttonIcon(@src(), if (is_watched) "Mark unwatched" else "Mark watched", if (is_watched) icons.tvg.lucide.@"circle-check-big" else icons.tvg.lucide.circle, .{}, .{}, .{
                         .id_extra = ei + 43140,
-                        .color_fill = if (is_watched) theme.colors.success else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                        .color_fill = if (is_watched) theme.colors.success else theme.transparent,
                         .color_text = if (is_watched) dvui.Color.white else theme.colors.text_secondary,
                         .corner_radius = dvui.Rect.all(theme.radius.pill),
                         .padding = dvui.Rect.all(4),

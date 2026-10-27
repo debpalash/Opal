@@ -650,7 +650,7 @@ fn renderCard(i: usize, card_w: f32) void {
         .id_extra = i + 3000,
         .expand = .horizontal,
         .color_text = theme.colors.text_primary,
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill = theme.transparent,
         .color_fill_hover = theme.colors.bg_hover,
         .color_fill_press = theme.colors.bg_elevated,
         .padding = .{ .x = 2, .y = 4, .w = 2, .h = 0 },

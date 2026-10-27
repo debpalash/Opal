@@ -3314,7 +3314,7 @@ fn renderScheduleView() void {
                 .id_extra = i + 93000,
                 .expand = .horizontal,
                 .color_text = theme.colors.text_primary,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill = theme.transparent,
                 .color_fill_hover = theme.colors.bg_hover,
                 .color_fill_press = theme.colors.bg_elevated,
                 .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
@@ -3524,7 +3524,7 @@ fn renderModeToolbar(count: usize) void {
     });
     const dim = theme.colors.text_tertiary;
     if (dvui.buttonIcon(@src(), "smaller", icons.tvg.lucide.minus, .{}, .{}, .{
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill = theme.transparent,
         .color_fill_hover = theme.colors.bg_hover,
         .color_fill_press = theme.colors.bg_elevated,
         .color_text = dim,
@@ -3536,7 +3536,7 @@ fn renderModeToolbar(count: usize) void {
         card_w_pref = @max(110, card_w_pref - 40);
     }
     if (dvui.buttonIcon(@src(), "bigger", icons.tvg.lucide.plus, .{}, .{}, .{
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill = theme.transparent,
         .color_fill_hover = theme.colors.bg_hover,
         .color_fill_press = theme.colors.bg_elevated,
         .color_text = dim,
@@ -3823,7 +3823,7 @@ fn renderContinueCard(item: *state.ContinueItem, idx: usize, card_w: f32) void {
             .id_extra = idx + 30500,
             .expand = .horizontal,
             .color_text = theme.colors.text_primary,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
             .padding = dvui.Rect.all(0),
@@ -4024,7 +4024,7 @@ fn renderToolbar(count: usize) void {
     toolbarDivider(950);
     const dim = theme.colors.text_tertiary;
     if (dvui.buttonIcon(@src(), "smaller", icons.tvg.lucide.minus, .{}, .{}, .{
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill = theme.transparent,
         .color_fill_hover = theme.colors.bg_hover,
         .color_fill_press = theme.colors.bg_elevated,
         .color_text = dim,
@@ -4036,7 +4036,7 @@ fn renderToolbar(count: usize) void {
         card_w_pref = @max(110, card_w_pref - 40);
     }
     if (dvui.buttonIcon(@src(), "bigger", icons.tvg.lucide.plus, .{}, .{}, .{
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill = theme.transparent,
         .color_fill_hover = theme.colors.bg_hover,
         .color_fill_press = theme.colors.bg_elevated,
         .color_text = dim,
@@ -4343,7 +4343,7 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
             .id_extra = idx + 500,
             .expand = .horizontal,
             .color_text = theme.colors.text_primary,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
             .padding = dvui.Rect.all(0),
@@ -4420,7 +4420,7 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
                     .id_extra = idx + 650,
                     .color_text = theme.colors.text_secondary,
                     .expand = .horizontal,
-                    .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                    .color_fill = theme.transparent,
                     .color_fill_hover = theme.colors.bg_hover,
                     .color_fill_press = theme.colors.bg_elevated,
                     .padding = dvui.Rect.all(0),

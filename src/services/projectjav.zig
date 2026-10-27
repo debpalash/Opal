@@ -475,7 +475,7 @@ pub fn renderModal() void {
         .color_border = theme.colors.border_subtle,
         .corner_radius = theme.dims.rad_lg,
         .border = dvui.Rect.all(1),
-        .box_shadow = .{ .color = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 160 }, .offset = .{ .x = 0, .y = 4 }, .fade = 20.0 },
+        .box_shadow = theme.elevation.md(),
     });
     defer win.deinit();
 

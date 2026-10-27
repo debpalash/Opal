@@ -1,11 +1,45 @@
-/* Opal Anywhere — theme tokens ported from src/ui/theme.zig (midnight) */
+/* Opal Anywhere — design tokens mirrored from src/ui/theme.zig.
+   Colors: one block per native preset (generated from the same values; the
+   page picks the desktop's preset via /api/settings → <html data-theme>).
+   Midnight is the :root default. Shape/space/type tokens are shared. */
 :root{
-  --bg-app:#0c0c11; --bg-surface:#14141c; --bg-elevated:#1c1c26; --bg-hover:#232330;
-  --border:#2a2a38; --text-1:#e8e8f0; --text-2:#a0a0b4; --text-3:#8f8fa0;
-  --accent:#8ab4ff; --accent-dim:#3a4a6a; --on-accent:#0c0c11; --success:#7dd87d; --danger:#ff7a7a;
-  --rad:10px; --rad-sm:6px; --nav-w:248px;
+  --rad-xs:3px; --rad-sm:6px; --rad:10px; --rad-lg:14px; --rad-xl:18px; --rad-pill:999px;
+  --sp-2xs:2px; --sp-xs:4px; --sp-sm:8px; --sp-md:12px; --sp-lg:16px; --sp-xl:24px; --sp-2xl:32px; --sp-3xl:48px;
+  --fs-micro:11px; --fs-small:12px; --fs-body:15px; --fs-subtitle:17px; --fs-title:19px; --fs-headline:22px; --fs-display:26px;
+  --lh-tight:1.15; --lh-normal:1.45; --lh-relaxed:1.6;
+  --ease-out:cubic-bezier(.22,.8,.36,1); --dur-fast:.12s; --dur-base:.18s;
+  --nav-w:248px;
 }
-*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:rgba(138,180,255,.15)}
+:root{
+  --bg-deep:#090a0e; --bg-app:#0d0e14; --bg-surface:#14151d; --bg-elevated:#1d1f29; --bg-hover:#262835; --bg-pressed:#181a22; --bg-selected:#273b4b; --border:#2c2c34; --border-strong:#3e3f46; --text-1:#f6f7fa; --text-2:#acafbd; --text-3:#9fa2b1; --accent:#5dd0ff; --accent-hover:#70d6ff; --accent-press:#52b7e0; --accent-dim:#2f5165; --accent-soft:rgba(93,208,255,0.16); --on-accent:#090a0e; --focus-ring:#81daff; --success:#60e29c; --danger:#ff708c; --warning:#ffcc66; --success-bg:#192c27; --danger-bg:#2f1c25; --warning-bg:#2f291f; --nav-bg:rgba(20,21,29,0.96); --scrim:rgba(0,0,0,0.58); --shadow-rgb:0,0,0;
+}
+:root[data-theme="abyss"]{
+  --bg-deep:#000000; --bg-app:#000000; --bg-surface:#0b0b0c; --bg-elevated:#161618; --bg-hover:#202023; --bg-pressed:#101011; --bg-selected:#1d332b; --border:#232324; --border-strong:#373738; --text-1:#e4e4e6; --text-2:#a0a0a5; --text-3:#96969b; --accent:#40ce8e; --accent-hover:#57d49c; --accent-press:#38b57d; --accent-dim:#224a39; --accent-soft:rgba(64,206,142,0.16); --on-accent:#000000; --focus-ring:#6ad9a7; --success:#54cc84; --danger:#ec6464; --warning:#e4ba48; --success-bg:#0c1d12; --danger-bg:#210e0e; --warning-bg:#201a0a; --nav-bg:rgba(11,11,12,0.96); --scrim:rgba(0,0,0,0.58); --shadow-rgb:0,0,0;
+}
+:root[data-theme="phantom"]{
+  --bg-deep:#0b0813; --bg-app:#110d1b; --bg-surface:#1a1428; --bg-elevated:#261e3a; --bg-hover:#32284a; --bg-pressed:#1f1830; --bg-selected:#3a3158; --border:#312c3e; --border-strong:#433e4f; --text-1:#eeeafa; --text-2:#b4aacc; --text-3:#a59cbd; --accent:#a692f6; --accent-hover:#b19ff7; --accent-press:#9280d8; --accent-dim:#4a3e6f; --accent-soft:rgba(166,146,246,0.16); --on-accent:#0b0813; --focus-ring:#baaaf8; --success:#60d496; --danger:#f0788c; --warning:#ecbe6e; --success-bg:#1c292c; --danger-bg:#301c2b; --warning-bg:#302627; --nav-bg:rgba(26,20,40,0.96); --scrim:rgba(8,4,16,0.58); --shadow-rgb:4,2,10;
+}
+:root[data-theme="nord"]{
+  --bg-deep:#242933; --bg-app:#2e3440; --bg-surface:#3b4252; --bg-elevated:#434c5e; --bg-hover:#4c566a; --bg-pressed:#3f4657; --bg-selected:#4e5f70; --border:#4f5563; --border-strong:#5e6471; --text-1:#f2f5fa; --text-2:#d8dee9; --text-3:#d1d8e5; --accent:#88c0d0; --accent-hover:#96c8d6; --accent-press:#78a9b7; --accent-dim:#566c7e; --accent-soft:rgba(136,192,208,0.16); --on-accent:#242933; --focus-ring:#a2ceda; --success:#b4d698; --danger:#fea6ae; --warning:#ebcb8b; --success-bg:#414b4c; --danger-bg:#49414d; --warning-bg:#48494a; --nav-bg:rgba(59,66,82,0.96); --scrim:rgba(30,34,44,0.58); --shadow-rgb:18,21,28;
+}
+:root[data-theme="solarized"]{
+  --bg-deep:#00222b; --bg-app:#002b36; --bg-surface:#073642; --bg-elevated:#104250; --bg-hover:#1a4e5d; --bg-pressed:#0b3b48; --bg-selected:#334a4c; --border:#204a55; --border-strong:#345a64; --text-1:#eee8d5; --text-2:#bac4c4; --text-3:#acbabc; --accent:#e87438; --accent-hover:#eb8550; --accent-press:#cc6631; --accent-dim:#4c5049; --accent-soft:rgba(232,116,56,0.16); --on-accent:#001e26; --focus-ring:#ed9364; --success:#b0c43c; --danger:#ff847e; --warning:#e2b430; --success-bg:#194037; --danger-bg:#22343d; --warning-bg:#203e35; --nav-bg:rgba(7,54,66,0.96); --scrim:rgba(0,20,28,0.58); --shadow-rgb:0,14,20;
+}
+:root[data-theme="rose"]{
+  --bg-deep:#0d070c; --bg-app:#130b11; --bg-surface:#1e121b; --bg-elevated:#2c1b28; --bg-hover:#392434; --bg-pressed:#241621; --bg-selected:#4a2c3e; --border:#342a32; --border-strong:#463d44; --text-1:#f6ecf3; --text-2:#c4a6b8; --text-3:#b197a7; --accent:#ea86b4; --accent-hover:#ed95bd; --accent-press:#ce769e; --accent-dim:#61394f; --accent-soft:rgba(234,134,180,0.16); --on-accent:#0d070c; --focus-ring:#efa1c4; --success:#64cea6; --danger:#f66e78; --warning:#eaba6e; --success-bg:#1e2626; --danger-bg:#33191f; --warning-bg:#31241e; --nav-bg:rgba(30,18,27,0.96); --scrim:rgba(12,4,10,0.58); --shadow-rgb:6,2,6;
+}
+:root[data-theme="ember"]{
+  --bg-deep:#0e0a07; --bg-app:#150f0b; --bg-surface:#211811; --bg-elevated:#2f231a; --bg-hover:#3d2e23; --bg-pressed:#271d15; --bg-selected:#4d3621; --border:#372f29; --border-strong:#49423c; --text-1:#f6ead8; --text-2:#c6ae90; --text-3:#b5a38b; --accent:#ec9a48; --accent-hover:#eea65e; --accent-press:#d0883f; --accent-dim:#644427; --accent-soft:rgba(236,154,72,0.16); --on-accent:#0e0a07; --focus-ring:#f0b070; --success:#6ecc8c; --danger:#f0766c; --warning:#e8c452; --success-bg:#21291d; --danger-bg:#341d19; --warning-bg:#332815; --nav-bg:rgba(33,24,17,0.96); --scrim:rgba(10,6,4,0.58); --shadow-rgb:6,4,2;
+}
+
+
+:root{
+  --shadow-sm:0 1px 2px rgba(var(--shadow-rgb),.35),0 1px 1px rgba(var(--shadow-rgb),.2);
+  --shadow-md:0 6px 18px rgba(var(--shadow-rgb),.42),0 2px 4px rgba(var(--shadow-rgb),.25);
+  --shadow-lg:0 18px 48px rgba(var(--shadow-rgb),.5),0 4px 10px rgba(var(--shadow-rgb),.3);
+  --ring:0 0 0 2px var(--bg-app),0 0 0 4px var(--focus-ring);
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:var(--accent-soft)}
 html{height:100%;color-scheme:dark;scroll-behavior:smooth}
 body{min-height:100%;overflow-x:hidden}
 body{background:var(--bg-app);color:var(--text-1);font:15px/1.45 -apple-system,system-ui,Segoe UI,Roboto,sans-serif;
@@ -13,7 +47,7 @@ body{background:var(--bg-app);color:var(--text-1);font:15px/1.45 -apple-system,s
 button,a,input,select,textarea{touch-action:manipulation}
 button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
 button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,
-[tabindex]:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+[tabindex]:focus-visible{outline:2px solid var(--focus-ring);outline-offset:3px}
 .sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;
   overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
 .skip-link{position:fixed;left:12px;top:8px;z-index:100;transform:translateY(-150%);
@@ -26,7 +60,8 @@ button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,te
    Access page. Range/checkbox/radio opt out below. */
 input,select,textarea{font:inherit;color:var(--text-1);background:var(--bg-elevated);
   border:1px solid var(--border);border-radius:var(--rad);padding:8px 10px;min-width:0;max-width:100%}
-input:focus,select:focus,textarea:focus{border-color:var(--accent)}
+input:focus,select:focus,textarea:focus{border-color:var(--focus-ring);box-shadow:0 0 0 3px var(--accent-soft);outline:none}
+input:hover:not(:focus),select:hover:not(:focus),textarea:hover:not(:focus){border-color:var(--border-strong)}
 input[type=range],input[type=checkbox],input[type=radio]{background:transparent;border:0;padding:0}
 option{background:var(--bg-elevated);color:var(--text-1)}
 
@@ -38,7 +73,10 @@ option{background:var(--bg-elevated);color:var(--text-1)}
 .auth-input{width:260px;max-width:80vw;font-size:16px;padding:12px 14px;
   background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--rad);outline:none;color:var(--text-1)}
 .auth-input:focus{border-color:var(--accent)}
-#pair-btn{background:var(--accent);color:var(--on-accent);font-weight:600;padding:12px 32px;border-radius:var(--rad)}
+#pair-btn{background:var(--accent);color:var(--on-accent);font-weight:600;padding:12px 32px;border-radius:var(--rad);
+  box-shadow:var(--shadow-sm);transition:background var(--dur-fast) var(--ease-out)}
+#pair-btn:hover{background:var(--accent-hover)}
+#pair-btn:active{background:var(--accent-press)}
 #pair-btn:disabled{opacity:.55}
 #pair-err{color:var(--danger);min-height:20px;font-size:13px}
 #auth-toggle{color:var(--accent);cursor:pointer;font-size:13px}
@@ -48,7 +86,10 @@ option{background:var(--bg-elevated);color:var(--text-1)}
 .msg.ai{background:var(--bg-surface);border:1px solid var(--border);margin-right:14%}
 #ai-log{max-height:54vh;overflow-y:auto}
 .btn-more{display:block;margin:14px auto 32px;padding:9px 22px;background:var(--bg-elevated);
-  border:1px solid var(--border);border-radius:var(--rad);color:var(--text-2);font-size:13px}
+  border:1px solid var(--border);border-radius:var(--rad);color:var(--text-2);font-size:13px;
+  transition:background var(--dur-fast) var(--ease-out),color var(--dur-fast)}
+.btn-more:hover{background:var(--bg-hover);color:var(--text-1)}
+.btn-more:active{background:var(--bg-pressed)}
 
 /* ── Header ── */
 header{display:flex;align-items:center;gap:10px;padding:14px 16px 8px}
@@ -69,7 +110,7 @@ header .dot.on{background:var(--success)}
    media-center sidebar. Every capability remains one data-page button, so the
    route and parity contracts stay identical across both layouts. */
 #app-nav{position:fixed;left:0;right:0;bottom:0;z-index:40;display:grid;
-  grid-template-columns:repeat(5,minmax(0,1fr));background:rgba(20,20,28,.96);
+  grid-template-columns:repeat(5,minmax(0,1fr));background:var(--nav-bg);
   border-top:1px solid var(--border);padding-bottom:0;padding-bottom:env(safe-area-inset-bottom)}
 .nav-brand,.nav-label,.nav-sheet-head{display:none}
 .nav-primary{display:contents}
@@ -86,7 +127,7 @@ header .dot.on{background:var(--success)}
   visibility:hidden;pointer-events:none}
 .nav-panel-surface{width:100%;max-height:min(72vh,620px);overflow-y:auto;overscroll-behavior:contain;
   padding:8px 12px 18px;background:var(--bg-surface);border:1px solid var(--border);border-radius:18px;
-  box-shadow:0 -18px 60px rgba(0,0,0,.45);isolation:isolate;position:relative;pointer-events:none;
+  box-shadow:var(--shadow-lg);isolation:isolate;position:relative;pointer-events:none;
   transform:translateY(calc(100% + 80px));transition:transform .2s ease}
 .nav-panel-surface::before{content:"";position:absolute;inset:0;z-index:0;border-radius:inherit;
   background:var(--bg-surface)}
@@ -103,7 +144,7 @@ body.nav-open .nav-panel-surface{pointer-events:auto;transform:translateY(0)}
 #nav-more-panel .nav-section button[data-page]{min-height:70px;background:var(--bg-elevated);
   border:1px solid transparent;border-radius:var(--rad)}
 #nav-more-panel .nav-section button[data-page].on{border-color:var(--accent);background:var(--accent-dim)}
-#nav-scrim{position:fixed;inset:0;z-index:41;display:none;background:rgba(0,0,0,.58);cursor:default}
+#nav-scrim{position:fixed;inset:0;z-index:41;display:none;background:var(--scrim);cursor:default}
 body.nav-open #nav-scrim{display:block}
 body.nav-open{overflow:hidden}
 body.nav-open #main-content{visibility:hidden}
@@ -510,7 +551,10 @@ button:disabled{cursor:not-allowed}
 .recommend-grid>*{content-visibility:auto;contain-intrinsic-size:auto 150px}
 #watch-list>.watch-row{content-visibility:auto;contain-intrinsic-size:auto 150px}
 .card{background:var(--bg-surface);border:1px solid var(--border);border-radius:var(--rad);overflow:hidden;
-  cursor:pointer;position:relative;min-width:0}
+  cursor:pointer;position:relative;min-width:0;box-shadow:var(--shadow-sm);
+  transition:transform var(--dur-base) var(--ease-out),box-shadow var(--dur-base) var(--ease-out),border-color var(--dur-fast)}
+@media (hover:hover){.card:hover{border-color:var(--border-strong);box-shadow:var(--shadow-md);transform:translateY(-2px)}}
+.card:active{transform:none;box-shadow:var(--shadow-sm)}
 .card img{width:100%;aspect-ratio:2/3;object-fit:cover;display:block;background:var(--bg-elevated)}
 .card.poster-missing::before{content:"No poster";display:grid;place-items:center;width:100%;aspect-ratio:2/3;
   color:var(--text-3);font-size:11px;background:linear-gradient(145deg,var(--bg-elevated),var(--bg-surface))}
@@ -520,7 +564,7 @@ button:disabled{cursor:not-allowed}
   transition:opacity .14s ease,transform .14s ease}
 .card:hover .jf-card-actions,.card:focus-within .jf-card-actions{opacity:1;transform:none}
 .jf-card-actions button{width:30px;height:30px;padding:0;border:1px solid rgba(255,255,255,.2);border-radius:999px;
-  color:#fff;background:rgba(10,11,17,.7);backdrop-filter:blur(10px);box-shadow:0 2px 10px rgba(0,0,0,.35)}
+  color:#fff;background:rgba(10,11,17,.7);backdrop-filter:blur(10px);box-shadow:var(--shadow-md)}
 .jf-card-actions button:hover{background:rgba(10,11,17,.9);border-color:var(--accent)}
 .jf-card-actions button:disabled{opacity:.55}
 .jf-card-actions svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;
@@ -586,9 +630,13 @@ button:disabled{cursor:not-allowed}
   color:var(--text-2);padding:9px 0;font-size:13px;text-align:center;font-variant-numeric:tabular-nums}
 .ep-btn:active{background:var(--bg-hover)}
 .chips{display:flex;gap:8px;overflow-x:auto;margin:6px 0 4px;padding-bottom:4px}
-.chips button{background:var(--bg-elevated);border:1px solid var(--border);border-radius:999px;
-  padding:6px 14px;color:var(--text-2);white-space:nowrap}
+.chips button{background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--rad-pill);
+  padding:6px 14px;color:var(--text-2);white-space:nowrap;
+  transition:background var(--dur-fast) var(--ease-out),color var(--dur-fast),border-color var(--dur-fast)}
+.chips button:hover{background:var(--bg-hover);color:var(--text-1)}
+.chips button:active{background:var(--bg-pressed)}
 .chips button.on{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
+.chips button.on:hover{background:var(--accent-hover)}
 .form-field{display:flex;flex-direction:column;gap:6px;margin-bottom:10px}
 .form-field label{color:var(--text-3);font-size:12px}
 .form-field input{background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--rad);
@@ -805,3 +853,6 @@ button:disabled{cursor:not-allowed}
   /* ^ Live search cards (stubbed /api at 375/390): one-line titles 19px, two-line 38px,
      "Available releases" summary 36px; their own min-height beats the :where() floor. */
 }
+
+/* ── Motion preference ── */
+@media (prefers-reduced-motion:reduce){.card,.chips button,.btn-more,#pair-btn{transition:none}.card:hover{transform:none}}

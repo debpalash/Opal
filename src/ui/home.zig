@@ -296,7 +296,7 @@ pub fn renderComingUpRail(card_w: f32) bool {
                 .id_extra = i + 47100,
                 .background = true,
                 .color_fill = theme.colors.bg_surface,
-                .corner_radius = dvui.Rect.all(8),
+                .corner_radius = dvui.Rect.all(theme.radius.lg),
                 .min_size_content = .{ .w = card_w, .h = poster_h },
                 .max_size_content = .{ .w = card_w, .h = poster_h },
                 .padding = dvui.Rect.all(0),
@@ -311,7 +311,7 @@ pub fn renderComingUpRail(card_w: f32) bool {
                 _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
                     .id_extra = i + 47200,
                     .expand = .both,
-                    .corner_radius = dvui.Rect.all(8),
+                    .corner_radius = dvui.Rect.all(theme.radius.lg),
                 });
             } else {
                 // Failure-latch (mirrors the TMDB grid): the old code gated on

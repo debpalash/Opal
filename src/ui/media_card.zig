@@ -116,7 +116,7 @@ pub fn render(src: std.builtin.SourceLocation, id_extra: usize, it: *state.TmdbI
             .id_extra = id_extra,
             .background = true,
             .color_fill = theme.colors.bg_elevated,
-            .corner_radius = dvui.Rect.all(8),
+            .corner_radius = dvui.Rect.all(theme.radius.lg),
             .min_size_content = .{ .w = width, .h = art_h },
             .max_size_content = .{ .w = width, .h = art_h },
             .padding = dvui.Rect.all(0),
@@ -130,7 +130,7 @@ pub fn render(src: std.builtin.SourceLocation, id_extra: usize, it: *state.TmdbI
             _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
                 .id_extra = id_extra,
                 .expand = .both,
-                .corner_radius = dvui.Rect.all(8),
+                .corner_radius = dvui.Rect.all(theme.radius.lg),
             });
         } else {
             // Full attempted -> failed transition. Gating on !failed without ever

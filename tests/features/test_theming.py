@@ -27,12 +27,12 @@ def test_theme_caption_contrast():
         colors = {key: tuple(map(int, values)) for key, *values in re.findall(
             r"\.(\w+) = \.\{ \.r = (\d+), \.g = (\d+), \.b = (\d+)", body)}
         for text in ("text_primary", "text_secondary", "text_tertiary"):
-            for background in ("bg_app", "bg_surface", "bg_hover", "bg_elevated"):
+            for background in ("bg_app", "bg_surface", "bg_pressed", "bg_hover", "bg_elevated", "bg_selected"):
                 foreground_lum, background_lum = luminance(colors[text]), luminance(colors[background])
                 ratio = (max(foreground_lum, background_lum) + 0.05) / (min(foreground_lum, background_lum) + 0.05)
                 if ratio < 4.5:
                     failures.append(f"{name}.{text}/{background}: {ratio:.2f}:1")
-    return ("fail", "; ".join(failures)) if failures else ("pass", "84 shipped text/surface pairs meet 4.5:1")
+    return ("fail", "; ".join(failures)) if failures else ("pass", "126 shipped text/surface pairs meet 4.5:1")
 
 @test("Theme Presets Defined", "Theming")
 def test_theme_presets():
@@ -590,3 +590,97 @@ def test_web_tap_targets_live_wired():
         return "fail", "tests/test_web_tap_targets_live.py is missing"
     return "pass", "browser-dom CI renders search, Jellyfin, Plex and show surfaces at 375/390px"
 
+
+
+def _palettes():
+    """{preset: {token: (r,g,b,a)}} parsed from the shipped theme.zig."""
+    src = _src("src/ui/theme.zig")
+    out = {}
+    for name, body in re.findall(r"const (\w+)_colors = ThemeColors\{(.*?)\n\};", src, re.S):
+        out[name] = {k: tuple(map(int, v)) for k, *v in re.findall(
+            r"\.(\w+) = \.\{ \.r = (\d+), \.g = (\d+), \.b = (\d+), \.a = (\d+)", body)}
+    return out
+
+
+def _ratio(a, b):
+    def lum(c):
+        def ch(v):
+            v /= 255
+            return v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4
+        return 0.2126 * ch(c[0]) + 0.7152 * ch(c[1]) + 0.0722 * ch(c[2])
+    x, y = sorted((lum(a), lum(b)), reverse=True)
+    return (x + 0.05) / (y + 0.05)
+
+
+@test("Theme surfaces give distinct rest/hover/pressed/selected states", "Theming")
+def test_theme_state_ladder():
+    """Regression: bg_hover == bg_elevated in every preset, so hovering a raised
+    control gave no feedback and components hand-rolled lighten(6) offsets."""
+    pals = _palettes()
+    if len(pals) != 7:
+        return "fail", f"expected 7 palettes, parsed {len(pals)}"
+    bad = []
+    for name, c in pals.items():
+        ladder = [c[k][:3] for k in ("bg_app", "bg_surface", "bg_pressed", "bg_elevated", "bg_hover")]
+        lums = [_ratio(x, (0, 0, 0)) for x in ladder]
+        if any(b <= a for a, b in zip(lums, lums[1:])):
+            bad.append(f"{name}: app<surface<pressed<elevated<hover not strictly increasing")
+        if c["bg_selected"][:3] in ladder:
+            bad.append(f"{name}: bg_selected duplicates a neutral step")
+        if c["accent_hover"] == c["accent"] or c["accent_pressed"] == c["accent"]:
+            bad.append(f"{name}: accent hover/pressed not distinct")
+    return ("fail", "; ".join(bad)) if bad else ("pass", "7 presets: 5-step ladder + selected + accent states distinct")
+
+
+@test("Accent, focus ring and semantic tokens meet WCAG in every preset", "Theming")
+def test_theme_semantic_contrast():
+    """text_on_accent must survive hover/pressed fills (4.5:1); accent glyphs and
+    the focus ring are non-text UI (3:1 on bg_surface); status pills put the
+    semantic fg on its *_bg (4.5:1)."""
+    low = []
+    for name, c in _palettes().items():
+        g = lambda k: c[k][:3]
+        for fill in ("accent", "accent_hover", "accent_pressed"):
+            if _ratio(g("text_on_accent"), g(fill)) < 4.5:
+                low.append(f"{name}.text_on_accent/{fill}")
+        for k in ("accent", "focus_ring"):
+            if _ratio(g(k), g("bg_surface")) < 3.0:
+                low.append(f"{name}.{k}/bg_surface")
+        for sem in ("danger", "success", "warning"):
+            if _ratio(g(sem), g(sem + "_bg")) < 4.5:
+                low.append(f"{name}.{sem}/{sem}_bg")
+    return ("fail", ", ".join(low)) if low else ("pass", "on-accent x3, accent+focus 3:1, semantic/_bg 4.5:1 in 7 presets")
+
+
+@test("Web theme mirrors every native preset", "Theming")
+def test_web_theme_presets():
+    """The web UI paints with the desktop's preset: app.css has one token block
+    per theme.zig preset (midnight = :root) with the native accent/surfaces, and
+    core.js applies the preset from /api/settings."""
+    css = _src("web/styles/app.css")
+    core = _src("web/js/core.js")
+    pals = _palettes()
+    hx = lambda c: "#%02x%02x%02x" % c[:3]
+    bad = []
+    blocks = {}
+    for sel, body in re.findall(r"(:root(?:\[data-theme=\"\w+\"\])?)\{([^}]*)\}", css):
+        m = re.search(r'"(\w+)"', sel)
+        name = m.group(1) if m else "midnight"
+        if "--accent:" in body:
+            blocks[name] = dict(re.findall(r"(--[\w-]+):([^;]+);", body))
+    for name, c in pals.items():
+        b = blocks.get(name)
+        if not b:
+            bad.append(f"no CSS block for {name}")
+            continue
+        for var, tok in (("--accent", "accent"), ("--bg-app", "bg_app"), ("--bg-surface", "bg_surface"),
+                         ("--bg-hover", "bg_hover"), ("--text-1", "text_primary"), ("--on-accent", "text_on_accent"),
+                         ("--danger-bg", "danger_bg"), ("--focus-ring", "focus_ring")):
+            if b.get(var, "").strip().lower() != hx(c[tok]):
+                bad.append(f"{name} {var}={b.get(var)} != {hx(c[tok])}")
+    keysets = {frozenset(b) for b in blocks.values()}
+    if len(keysets) > 1:
+        bad.append("preset blocks define different variable sets")
+    if "function applyTheme" not in core or "syncThemeFromDesktop()" not in core:
+        bad.append("core.js does not apply the desktop preset")
+    return ("fail", "; ".join(bad[:6])) if bad else ("pass", f"{len(blocks)} CSS preset blocks match theme.zig")

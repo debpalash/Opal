@@ -1558,12 +1558,12 @@ pub fn renderContent() void {
             .expand = .horizontal,
             .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
             .background = true,
-            .color_fill = dvui.Color{ .r = 18, .g = 18, .b = 22, .a = 245 },
+            .color_fill = theme.colors.bg_surface,
         });
         defer url_row.deinit();
 
         const icon_btn_style = dvui.Options{
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_text = theme.colors.text_secondary,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 3, .y = 2, .w = 3, .h = 2 },
@@ -1611,8 +1611,8 @@ pub fn renderContent() void {
         te.init(@src(), .{ .text = .{ .buffer = &b.url_buf } }, .{
             .expand = .horizontal,
             .min_size_content = .{ .w = 200, .h = 18 },
-            .color_fill = dvui.Color{ .r = 28, .g = 28, .b = 34, .a = 255 },
-            .color_border = dvui.Color{ .r = 50, .g = 50, .b = 60, .a = 200 },
+            .color_fill = theme.colors.bg_elevated,
+            .color_border = theme.colors.border_strong,
             .color_text = theme.colors.text_primary,
             .border = dvui.Rect.all(1),
             .corner_radius = theme.dims.rad_xl,
@@ -1779,7 +1779,7 @@ pub fn renderContent() void {
             .expand = .horizontal,
             .padding = .{ .x = 6, .y = 3, .w = 6, .h = 3 },
             .background = true,
-            .color_fill = dvui.Color{ .r = 22, .g = 22, .b = 28, .a = 255 },
+            .color_fill = theme.colors.bg_surface,
         });
         defer frow.deinit();
 
@@ -1792,10 +1792,10 @@ pub fn renderContent() void {
 
         var fte = dvui.textEntry(@src(), .{ .text = .{ .buffer = &find_buf }, .placeholder = "Find in page…" }, .{
             .min_size_content = .{ .w = 260, .h = 16 },
-            .color_fill = dvui.Color{ .r = 28, .g = 28, .b = 34, .a = 255 },
+            .color_fill = theme.colors.bg_elevated,
             .color_text = theme.colors.text_primary,
             .border = dvui.Rect.all(1),
-            .color_border = dvui.Color{ .r = 50, .g = 50, .b = 60, .a = 200 },
+            .color_border = theme.colors.border_strong,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
             .gravity_y = 0.5,
@@ -1807,7 +1807,7 @@ pub fn renderContent() void {
         fte.deinit();
 
         const nav_btn_style = dvui.Options{
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_text = theme.colors.text_secondary,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 3, .y = 2, .w = 3, .h = 2 },
@@ -1858,7 +1858,7 @@ pub fn renderContent() void {
             .color_text = theme.colors.text_primary,
             .padding = .{ .x = 8, .y = 2, .w = 8, .h = 2 },
             .background = true,
-            .color_fill = dvui.Color{ .r = 22, .g = 22, .b = 28, .a = 255 },
+            .color_fill = theme.colors.bg_surface,
             .expand = .horizontal,
         });
     }
@@ -1885,7 +1885,7 @@ pub fn renderContent() void {
         var img_box = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .both,
             .background = true,
-            .color_fill = dvui.Color{ .r = 12, .g = 12, .b = 16, .a = 255 },
+            .color_fill = theme.colors.bg_deep,
         });
         defer img_box.deinit();
 
@@ -2016,7 +2016,7 @@ pub fn renderContent() void {
         var empty = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .both,
             .background = true,
-            .color_fill = dvui.Color{ .r = 12, .g = 12, .b = 16, .a = 255 },
+            .color_fill = theme.colors.bg_deep,
             .padding = .{ .x = 0, .y = 12, .w = 0, .h = 0 },
         });
         defer empty.deinit();
@@ -2062,7 +2062,7 @@ pub fn renderContent() void {
         });
         _ = dvui.label(@src(), "Videos auto-route to MPV · Comics to viewer · Web to browser", .{}, .{
             .id_extra = 7,
-            .color_text = dvui.Color{ .r = 60, .g = 70, .b = 90, .a = 255 },
+            .color_text = theme.colors.text_tertiary,
             .gravity_x = 0.5,
         });
 
@@ -2183,7 +2183,7 @@ fn renderBookmarksSection() void {
         if (dvui.button(@src(), safe_disp, .{}, .{
             .id_extra = bi + 31,
             .gravity_x = 0.5,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_text = theme.colors.warning,
             .border = dvui.Rect.all(0),
@@ -2237,7 +2237,7 @@ fn renderQuickLaunch(b: *@TypeOf(state.app.browser)) void {
         if (dvui.button(@src(), safe_disp, .{}, .{
             .id_extra = shown + 41,
             .gravity_x = 0.5,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_text = theme.colors.text_secondary,
             .border = dvui.Rect.all(0),
@@ -2279,7 +2279,7 @@ fn renderReaderOverlay() void {
     var box = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
         .background = true,
-        .color_fill = dvui.Color{ .r = 14, .g = 14, .b = 18, .a = 255 },
+        .color_fill = theme.colors.bg_app,
     });
     defer box.deinit();
 
@@ -2297,7 +2297,7 @@ fn renderReaderOverlay() void {
         spacer.deinit();
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.x, .{}, .{}, .{
             .id_extra = 140,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
             .color_text = theme.colors.text_secondary,

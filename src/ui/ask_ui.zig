@@ -297,7 +297,7 @@ fn drawCards(base: usize, t: *ask.Turn, card_query: *?[pure.TEXT_MAX + 8]u8, car
             .id_extra = id + 1,
             .background = true,
             .color_fill = theme.colors.bg_elevated,
-            .corner_radius = dvui.Rect.all(8),
+            .corner_radius = dvui.Rect.all(theme.radius.lg),
             .min_size_content = .{ .w = CARD_W, .h = POSTER_H },
             .max_size_content = .{ .w = CARD_W, .h = POSTER_H },
             .padding = dvui.Rect.all(0),
@@ -320,7 +320,7 @@ fn drawCards(base: usize, t: *ask.Turn, card_query: *?[pure.TEXT_MAX + 8]u8, car
             _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
                 .id_extra = id + 2,
                 .expand = .both,
-                .corner_radius = dvui.Rect.all(8),
+                .corner_radius = dvui.Rect.all(theme.radius.lg),
             });
         } else {
             if (slot.fetching) {

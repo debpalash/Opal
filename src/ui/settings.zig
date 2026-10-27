@@ -2694,7 +2694,7 @@ fn renderSubtitlesTab() void {
         // Auto-detect from player — secondary (text-only).
         if (dvui.button(@src(), "Auto", .{}, .{
             .id_extra = 4302,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_text = theme.colors.text_secondary,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
@@ -4758,7 +4758,7 @@ pub fn renderDepsModal() void {
         sp.deinit();
     }
     if (dvui.button(@src(), "Skip for now", .{}, .{
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill = theme.transparent,
         .color_fill_hover = theme.colors.bg_hover,
         .color_fill_press = theme.colors.bg_elevated,
         .color_text = theme.colors.text_secondary,

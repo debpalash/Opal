@@ -50,7 +50,10 @@ def test_polish_tokens():
         return "fail", "theme.shadow_soft token missing"
     if "theme.iconSize(.sm)" not in sh:
         return "fail", "nav icons not on iconSize token"
-    if "theme.shadow_soft" not in ft or "0, .g = 0, .b = 0, .a = 160" in ft:
+    # Per-preset shadow tint (theme.colors.shadow / theme.elevation.*) replaced
+    # the single black shadow_soft constant; raw literals stay banned.
+    if not any(t in ft for t in ("theme.shadow_soft", "theme.colors.shadow", "theme.elevation.")) \
+            or "0, .g = 0, .b = 0, .a = 160" in ft:
         return "fail", "footer still uses raw shadow literals"
     return "pass", "nav iconSize + shadow token adopted"
 
@@ -110,7 +113,8 @@ def test_interaction_states():
     stg = _src("src/ui/settings.zig")
     if "color_fill_hover" not in cp or "confirmDangerButton" not in cp:
         return "fail", "components missing hover fills / confirm button"
-    if "options.color_fill = tk.bg_hover()" not in cp:
+    # stateFill() resolves rest/hover/pressed after clicked() reports hover.
+    if "options.color_fill = tk.bg_hover()" not in cp and "options.color_fill = stateFill(" not in cp:
         return "fail", "post-clicked hover repaint missing in components"
     if "navRowInteract" not in sh:
         return "fail", "shell nav rows missing hover/focus/keyboard interaction"

@@ -1761,7 +1761,7 @@ fn renderContentPlugins() void {
 
                 if (dvui.button(@src(), @import("../core/text.zig").safeUtf8(name), .{}, .{
                     .id_extra = pi + 8000,
-                    .color_fill = if (is_active) theme.colors.accent else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                    .color_fill = if (is_active) theme.colors.accent else theme.transparent,
                     .color_text = if (is_active) theme.colors.text_on_accent else theme.colors.text_secondary,
                     .corner_radius = dvui.Rect.all(theme.radius.pill),
                     .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
@@ -1933,7 +1933,7 @@ fn renderPluginCard(item: *PluginResult, idx: usize) void {
                 .id_extra = idx + 500,
                 .expand = .horizontal,
                 .color_text = if (item.expanded) theme.colors.accent else theme.colors.text_primary,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill = theme.transparent,
                 .color_fill_hover = theme.colors.bg_hover,
                 .color_fill_press = theme.colors.bg_elevated,
                 .padding = dvui.Rect.all(0),

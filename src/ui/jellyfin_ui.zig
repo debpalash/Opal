@@ -321,7 +321,7 @@ fn renderLibraries() void {
             .id_extra = i,
             .expand = .horizontal,
             .gravity_y = 0.5,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
             .color_text = theme.colors.text_primary,
@@ -603,7 +603,7 @@ fn renderPosterCard(item: *const jf.PresentationItem, slot_idx: usize, idx: usiz
         .id_extra = idx,
         .background = true,
         .color_fill = theme.colors.bg_surface,
-        .corner_radius = dvui.Rect.all(6),
+        .corner_radius = dvui.Rect.all(theme.radius.md),
         .min_size_content = .{ .w = card_w, .h = poster_h + CARD_FOOTER_H },
         .max_size_content = .{ .w = card_w, .h = poster_h + CARD_FOOTER_H },
         .margin = .{ .x = 3, .y = 3, .w = 3, .h = 3 },
@@ -627,7 +627,7 @@ fn renderPosterCard(item: *const jf.PresentationItem, slot_idx: usize, idx: usiz
             if (dvui.button(@src(), "", .{}, .{
                 .id_extra = idx + 60,
                 .expand = .both,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill = theme.transparent,
             })) {
                 activateItem(item);
             }
@@ -642,7 +642,7 @@ fn renderPosterCard(item: *const jf.PresentationItem, slot_idx: usize, idx: usiz
                 .id_extra = idx + 60,
                 .gravity_x = 0.5,
                 .gravity_y = 0.5,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill = theme.transparent,
                 .color_fill_hover = theme.colors.bg_hover,
                 .color_fill_press = theme.colors.bg_elevated,
                 .color_text = theme.colors.accent,
@@ -696,7 +696,7 @@ fn renderPosterCard(item: *const jf.PresentationItem, slot_idx: usize, idx: usiz
     if (!item.is_folder) {
         if (dvui.buttonIcon(@src(), "favorite", icons.tvg.lucide.star, .{}, .{}, .{
             .id_extra = idx + 92,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
             .color_text = if (item.is_favorite) theme.colors.warning else theme.colors.text_secondary,
@@ -706,7 +706,7 @@ fn renderPosterCard(item: *const jf.PresentationItem, slot_idx: usize, idx: usiz
         })) _ = jf.setUserData(item.id[0..item.id_len], .favorite, !item.is_favorite);
         if (dvui.buttonIcon(@src(), "watched", if (item.is_played) icons.tvg.lucide.@"circle-check-big" else icons.tvg.lucide.circle, .{}, .{}, .{
             .id_extra = idx + 93,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
             .color_text = if (item.is_played) theme.colors.success else theme.colors.text_secondary,
