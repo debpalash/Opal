@@ -1085,25 +1085,14 @@ fn enqueueBrowserDownload(url: []const u8, filename: []const u8) void {
         fn worker() void {
             const Z = @This();
             defer Z.busy.store(false, .release);
-            var child = io_g.Child.init(&.{
-                "curl",       "-L",  "--fail", "--silent",                "--show-error",
-                "--max-time", "600", "-o",     Z.path_buf[0..Z.path_len], Z.url_buf[0..Z.url_len],
-            }, alloc);
-            child.stdin_behavior = .Ignore;
-            child.stdout_behavior = .Ignore;
-            child.stderr_behavior = .Ignore;
-            _ = child.spawn() catch {
+            // Reliable-fetch seam: status-checked, atomic temp+rename, so a
+            // failed/partial transfer never leaves a corrupt file behind.
+            const res = @import("reliable_fetch.zig").download(Z.url_buf[0..Z.url_len], Z.path_buf[0..Z.path_len], .{ .timeout_secs = 600 });
+            if (res.failure == .spawn) {
                 logs.pushLog("error", "browser", "Download failed to start (curl missing?)", false);
                 return;
-            };
-            const term = child.wait() catch {
-                logs.pushLog("error", "browser", "Download failed", false);
-                return;
-            };
-            const ok = switch (term) {
-                .exited => |code| code == 0,
-                else => false,
-            };
+            }
+            const ok = res.ok();
             var mb: [320]u8 = undefined;
             const msg = std.fmt.bufPrint(&mb, "{s}: {s}", .{
                 if (ok) "Download finished" else "Download failed",

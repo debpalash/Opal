@@ -489,7 +489,9 @@ def test_web_search_row_tap_targets():
             ".watch-view-controls button", ".queue-actions button", ".transfer-actions button",
             "input[type=range]",
             # live search cards: titles 19/38px, release-shelf summary 36px at 375/390
-            ".search-card-title", ".search-release-shelf>summary"]
+            ".search-card-title", ".search-release-shelf>summary",
+            # folded-source expander on search cards (summary is not a button)
+            ".search-row-sources>summary"]
     rules = re.findall(r"([^{}]+)\{([^}]*)\}", blk.group(1))
     missing = [sel for sel in need if not any(sel in [x.strip() for x in sels.split(",")]
                and re.search(r"(min-height|height):(4\d|[5-9]\d)px", body) for sels, body in rules)]

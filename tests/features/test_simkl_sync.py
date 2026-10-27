@@ -12,7 +12,7 @@ def test_simkl_sync_lifecycle():
         "official pin flow": 'apiUrl("/oauth/pin"' in service
             and '"/oauth/pin/{s}"' in service and "https://simkl.com/pin" in ui,
         "required request identity": "client_id={s}&app-name=opal&app-version={s}" in service
-            and '"-A", USER_AGENT' in service,
+            and ".user_agent = USER_AGENT" in service,
         "provider interval honored": 'extractJsonInt(response[0..n], "interval")' in service
             and "waited < interval" in service,
         "encrypted credential": "secret_store.seal" in service
@@ -22,10 +22,11 @@ def test_simkl_sync_lifecycle():
             and 'outbox.nextDue("simkl"' in service and "outbox.deferFailure" in service,
         "tv completion hook": 'simkl.zig").markWatchedEpisode' in _src("src/services/tv_library.zig")
             and "setEpisodeWatched" in _src("src/services/tmdb.zig"),
-        "http semantics": '"%{http_code}"' in service and "status == 401" in service
+        # Status comes from the reliable-fetch seam's typed result.
+        "http semantics": "const status = res.status;" in service and "status == 401" in service
             and "needs_reauth" in api,
         "owned bounded work": "workers.spawn(pinAuthWorker" in service
-            and "workers.spawn(drainOutbox" in service and '"--max-time"' in service,
+            and "workers.spawn(drainOutbox" in service and ".timeout_secs = 15" in service,
         "web lifecycle": 'id="simkl-connect"' in ui and 'id="simkl-retry"' in ui
             and "scheduleSyncAccountPoll" in ui and "provider:'simkl'" in ui,
     }

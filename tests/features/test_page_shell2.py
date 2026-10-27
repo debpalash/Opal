@@ -270,7 +270,9 @@ def test_trakt_durable_outbox():
         "deduplicated enqueue": "ON CONFLICT(provider,operation,event_key)" in queue,
         "ordered due delivery": "next_attempt_at<=?2 ORDER BY id LIMIT 1" in queue,
         "bounded retry policy": "retryDelaySeconds" in pure and "900" in pure,
-        "http failures detected": '"-fsS"' in trakt and '"--max-time"' in trakt
+        # Reliable-fetch seam: status-checked (fetch() rejects non-2xx/3xx),
+        # bounded (.timeout_secs), retry on failure.
+        "http failures detected": 'reliable_fetch.zig").fetch(' in trakt and ".timeout_secs = 15" in trakt
             and "queued for retry" in trakt,
         "single owned drain": "outbox_busy.cmpxchgStrong" in trakt
             and "workers.spawn(drainOutbox" in trakt,
@@ -307,16 +309,20 @@ def test_keyless_subtitle_fetch_e2e():
     # Three real bugs fixed so auto-download actually lands an SRT:
     #  1. uppercase queries 302 to a broken host → urlEncode must lowercase
     #  2. OpenSubtitles JSON escapes slashes (\/) → unescapeJsonSlashes on the URL
-    #  3. the redirect + gzip broke std.http → httpGet uses curl (-L --compressed)
+    #  3. the redirect + gzip broke std.http → httpGet routes through the
+    #     reliable-fetch seam (curl underneath: -L --compressed by default)
     eng = open(os.path.join(PROJECT_DIR, "src/player/subtitles.zig")).read()
     pure = open(os.path.join(PROJECT_DIR, "src/services/subtitles_pure.zig")).read()
     if "ch + 32" not in eng:
         return "fail", "urlEncode no longer lowercases (uppercase → broken 302 redirect)"
     if "unescapeJsonSlashes" not in eng or "unescapeJsonSlashes" not in pure:
         return "fail", "download URL no longer unescapes JSON \\/ (Uri.parse rejects it)"
-    if '"curl"' not in eng or "--compressed" not in eng:
-        return "fail", "httpGet no longer uses curl (std.http chokes on the OS redirect)"
-    return "pass", "lowercase query + URL unescape + curl fetch — auto-download lands an SRT"
+    rf_pure = open(os.path.join(PROJECT_DIR, "src/services/reliable_fetch_pure.zig")).read()
+    http_get = eng[eng.find("fn httpGet("):eng.find("fn searchThread(")]
+    if ("reliable_fetch.zig\").fetch(" not in http_get or '"curl"' in eng
+            or '"--compressed"' not in rf_pure or '"-L"' not in rf_pure):
+        return "fail", "httpGet no longer uses the curl-backed reliable-fetch seam (std.http chokes on the OS redirect)"
+    return "pass", "lowercase query + URL unescape + reliable-fetch (curl -L --compressed) — auto-download lands an SRT"
 
 
 @test("Keyless Subtitle Providers Wired", "Page Shell")

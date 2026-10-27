@@ -221,28 +221,13 @@ fn fetchWorker(idx: usize) void {
 
     const url = feeds[idx].url[0..feeds[idx].url_len];
 
-    // Use curl to fetch RSS
     const alloc = @import("../core/alloc.zig").allocator;
-    const argv = [_][]const u8{ "curl", "-sL", "--max-time", "15", url };
-    var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    child.spawn() catch {
-        fetch_error = true;
-        return;
-    };
-
-    const stdout = child.stdout orelse {
-        fetch_error = true;
-        return;
-    };
     const body_buf = alloc.alloc(u8, 512 * 1024) catch {
         fetch_error = true;
         return;
     };
     defer alloc.free(body_buf);
-    const body_len = @import("../core/io_global.zig").readAll(stdout, body_buf) catch 0;
-    _ = child.wait() catch {};
+    const body_len = if (@import("reliable_fetch.zig").fetch(url, body_buf, .{ .timeout_secs = 15, .impersonate = false })) |b| b.len else 0;
 
     if (body_len == 0) {
         fetch_error = true;

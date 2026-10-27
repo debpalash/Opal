@@ -81,27 +81,13 @@ pub fn fetchTorrents(url: []const u8) void {
 
             const fetch_url = S.url_buf[0..S.url_len];
 
-            // Fetch HTML via curl
-            const argv = [_][]const u8{
-                "curl",       "-sL",
-                "-H",         "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "--max-time", "15",
-                fetch_url,
-            };
-
-            var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
-            child.stdout_behavior = .Pipe;
-            child.stderr_behavior = .Ignore;
-            _ = child.spawn() catch {
-                logs.pushLog("error", "pjav", "Failed to fetch page", false);
-                return;
-            };
-
-            // Read up to 2MB
+            // Fetch HTML via reliable-fetch (browser TLS + DPI proxy when available).
             const html_buf = std.heap.c_allocator.alloc(u8, 2 * 1024 * 1024) catch return;
             defer std.heap.c_allocator.free(html_buf);
-            const html_len = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, html_buf) catch 0 else 0;
-            _ = child.wait() catch {};
+            const html_len = if (@import("reliable_fetch.zig").fetch(fetch_url, html_buf, .{
+                .user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                .timeout_secs = 15,
+            })) |body| body.len else 0;
 
             if (html_len < 100) {
                 logs.pushLog("error", "pjav", "Empty response from page", false);

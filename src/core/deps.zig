@@ -146,19 +146,31 @@ fn downloadedFileMatches(path: []const u8, expected_size: u64, expected_sha256: 
 /// are pinned to their release-API byte length; newer assets also pin SHA-256.
 fn downloadVerified(url: []const u8, stage_path: []const u8, expected_size: u64, expected_sha256: ?[]const u8) bool {
     var cmd_buf: [512]u8 = undefined;
-    logs.pushLog("info", "deps", std.fmt.bufPrint(&cmd_buf, "Command: curl -L --fail --proto =https --proto-redir =https -o <staged model> {s}", .{url}) catch "Downloading verified model via HTTPS", false);
+    logs.pushLog("info", "deps", std.fmt.bufPrint(&cmd_buf, "Downloading (https-only, atomic) {s}", .{url}) catch "Downloading verified model via HTTPS", false);
     io_global.deleteFileAbsolute(stage_path) catch {};
-    var curl = io_global.Child.init(&.{
-        "curl",         "-L",                "--fail", "--silent",
-        "--show-error", "--proto",           "=https", "--proto-redir",
-        "=https",       "--connect-timeout", "15",     "--retry",
-        "2",            "--retry-delay",     "1",      "-o",
-        stage_path,     url,
-    }, @import("alloc.zig").allocator);
-    curl.stdout_behavior = .Ignore;
-    curl.stderr_behavior = .Ignore;
-    const term = curl.spawnAndWait() catch return false;
-    return processSucceeded(term) and downloadedFileMatches(stage_path, expected_size, expected_sha256);
+    // reliable_fetch.download: https on every hop, written to `<stage>.part`
+    // and renamed only on a 2xx — a 404 page never reaches the hash check.
+    var attempt: usize = 0;
+    while (attempt < 3) : (attempt += 1) {
+        const res = fetchDownload(url, stage_path);
+        if (res.ok()) return downloadedFileMatches(stage_path, expected_size, expected_sha256);
+        if (res.failure == .cancelled or res.failure == .invalid_input) return false;
+        if (res.status >= 400 and res.status < 500) return false; // retrying a 404 can't help
+        io_global.sleep(1 * std.time.ns_per_s);
+    }
+    return false;
+}
+
+/// One model/config download through the shared curl seam. Big ASR/MLX assets:
+/// the whole transfer is bounded at 2 h (curl's old default was unbounded),
+/// connect at 15 s; no browser impersonation (plain GitHub/HF CDNs).
+fn fetchDownload(url: []const u8, dest: []const u8) @import("../services/reliable_fetch.zig").DownloadResult {
+    return @import("../services/reliable_fetch.zig").download(url, dest, .{
+        .https_only = true,
+        .impersonate = false,
+        .timeout_secs = 2 * 60 * 60,
+        .connect_timeout_secs = 15,
+    });
 }
 
 fn renameStagedFile(dir_path: []const u8, preferred: []const u8, fallback: ?[]const u8, canonical: []const u8) bool {
@@ -731,8 +743,8 @@ pub fn fetchMlxWhisperModelAsync() void {
                 }
             } else |_| {}
 
-            logs.pushLog("info", "deps", "Fallback: curl -L --fail config.json and weights.safetensors from Hugging Face", false);
-            // Fallback: direct curl download
+            logs.pushLog("info", "deps", "Fallback: direct HTTPS download of config.json and weights.safetensors from Hugging Face", false);
+            // Fallback: direct download through the reliable-fetch seam
             var model_dir_buf: [512]u8 = undefined;
             const model_dir = std.fmt.bufPrintZ(&model_dir_buf, "{s}/.cache/huggingface/hub/{s}/snapshots/main", .{ home, MLX_WHISPER_CACHE_DIR }) catch return;
             var mkp = io_global.Child.init(&.{ "mkdir", "-p", model_dir }, alloc);
@@ -743,35 +755,15 @@ pub fn fetchMlxWhisperModelAsync() void {
             // config.json
             var cfg_buf: [768]u8 = undefined;
             const cfg_path = std.fmt.bufPrintZ(&cfg_buf, "{s}/config.json", .{model_dir}) catch return;
-            var cfg_dl = io_global.Child.init(&.{
-                "curl",                                                                                 "-L", "--fail", "--silent", "--show-error", "-o", cfg_path,
-                "https://huggingface.co/mlx-community/whisper-large-v3-turbo/resolve/main/config.json",
-            }, alloc);
-            cfg_dl.stdout_behavior = .Ignore;
-            cfg_dl.stderr_behavior = .Ignore;
-            const cfg_result = cfg_dl.spawnAndWait() catch {
+            if (!fetchDownload("https://huggingface.co/mlx-community/whisper-large-v3-turbo/resolve/main/config.json", cfg_path).ok()) {
                 logs.pushLog("error", "deps", "Failed to download MLX Whisper config", true);
-                return;
-            };
-            if (!processSucceeded(cfg_result)) {
-                logs.pushLog("error", "deps", "MLX Whisper config download exited unsuccessfully", true);
                 return;
             }
 
             // weights.safetensors (~1.6GB)
             var wt_buf: [768]u8 = undefined;
             const wt_path = std.fmt.bufPrintZ(&wt_buf, "{s}/weights.safetensors", .{model_dir}) catch return;
-            var wt_dl = io_global.Child.init(&.{
-                "curl",                                                                                         "-L", "--fail", "--show-error", "-o", wt_path,
-                "https://huggingface.co/mlx-community/whisper-large-v3-turbo/resolve/main/weights.safetensors",
-            }, alloc);
-            wt_dl.stdout_behavior = .Ignore;
-            wt_dl.stderr_behavior = .Ignore;
-            const weights_result = wt_dl.spawnAndWait() catch {
-                logs.pushLog("error", "deps", "Failed to download MLX Whisper weights", true);
-                return;
-            };
-            if (!processSucceeded(weights_result) or !mlxWhisperModelCached(home)) {
+            if (!fetchDownload("https://huggingface.co/mlx-community/whisper-large-v3-turbo/resolve/main/weights.safetensors", wt_path).ok() or !mlxWhisperModelCached(home)) {
                 logs.pushLog("error", "deps", "MLX Whisper weights download failed validation", true);
                 return;
             }

@@ -627,7 +627,36 @@ fn createTables() void {
     exec("ALTER TABLE library_items ADD COLUMN user_rating REAL DEFAULT -1");
     exec("ALTER TABLE library_items ADD COLUMN home_hidden INTEGER DEFAULT 0");
     exec("ALTER TABLE library_items ADD COLUMN home_pinned INTEGER DEFAULT 0");
+    // Sync tombstone (ROADMAP 6.3): a removed item keeps its row so the delete
+    // replicates; readers filter `deleted=0`.
+    exec("ALTER TABLE library_items ADD COLUMN deleted INTEGER DEFAULT 0");
     exec("CREATE INDEX IF NOT EXISTS idx_library_updated ON library_items(updated_at DESC)");
+    // Sync change sequence + echo origin (library_sync_pure). `seq` is a local,
+    // strictly increasing stamp taken by EVERY synced-field write — local edits
+    // and applied peer rows alike — so cursors page on it, not on updated_at
+    // (a relayed row keeps its writer's old updated_at). `origin` is the device
+    // id an applied row came from ('' = written here); the triggers reset it on
+    // any write and library_store.applySyncRows sets it afterwards. Home layout
+    // columns are device-local and deliberately not in the trigger list.
+    exec("ALTER TABLE library_items ADD COLUMN seq INTEGER DEFAULT 0");
+    exec("ALTER TABLE library_items ADD COLUMN origin TEXT DEFAULT ''");
+    exec("UPDATE library_items SET seq = rowid + (SELECT IFNULL(MAX(seq),0) FROM library_items) WHERE seq IS NULL OR seq=0");
+    exec("CREATE INDEX IF NOT EXISTS idx_library_seq ON library_items(seq)");
+    exec(
+        \\CREATE TRIGGER IF NOT EXISTS library_items_seq_ins AFTER INSERT ON library_items BEGIN
+        \\  UPDATE library_items SET seq=(SELECT IFNULL(MAX(seq),0)+1 FROM library_items), origin='' WHERE rowid=NEW.rowid;
+        \\END
+    );
+    exec(
+        \\CREATE TRIGGER IF NOT EXISTS library_items_seq_upd AFTER UPDATE OF
+        \\  title,poster,resume_secs,duration_secs,percent,is_favorite,user_rating,next_label,deep_link,updated_at,deleted
+        \\  ON library_items BEGIN
+        \\  UPDATE library_items SET seq=(SELECT IFNULL(MAX(seq),0)+1 FROM library_items), origin='' WHERE rowid=NEW.rowid;
+        \\END
+    );
+    // This store's sync identity: peers record it as the origin of rows we send.
+    exec("CREATE TABLE IF NOT EXISTS library_sync_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+    exec("INSERT OR IGNORE INTO library_sync_meta(key,value) VALUES('device_id', lower(hex(randomblob(16))))");
 
     // Named, reusable queue snapshots. Queue playback remains authoritative in
     // queue.db; these tables are the user's durable playlist/collection layer.
@@ -1543,6 +1572,8 @@ pub fn animeRemoveContinue(mal_id: []const u8) void {
     defer finalize(stmt);
     bindText(stmt, 1, mal_id);
     _ = step(stmt);
+    // Mirror the removal into the unified library so it leaves Home and syncs.
+    @import("../services/library_store.zig").removeItem("anime", mal_id);
 }
 
 pub fn animeGetContinue(out: []@import("state.zig").ContinueItem) usize {

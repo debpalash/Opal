@@ -324,53 +324,25 @@ fn opdsGetCancelled(url: []const u8, user: []const u8, pass: []const u8, cap: us
         return exact;
     }
     if (@import("../core/workers.zig").isQuitting() or @import("browse_fanout.zig").cancelled(cancellation)) return null;
-    const bounded = @import("../core/bounded_process.zig");
-    const io = @import("../core/io_global.zig");
-    var process = bounded.StreamProcess.init(&.{
-        "curl",       "-fsSL", "-H",                "Accept: application/atom+xml,application/xml",
-        "--config",   "-",     "--connect-timeout", "3",
-        "--max-time", timeout, "--",                url,
-    }, .{ .timeout_ms = @as(i64, seconds) * 1000, .max_output_bytes = cap, .cancel_epoch = cancellation, .stdin_behavior = .Pipe });
-    process.start() catch return null;
-    defer _ = process.finish();
+    // Fallback for TLS stacks std.http can't negotiate: the reliable-fetch
+    // seam. Basic auth rides curl's stdin config (secret_headers), never argv.
+    var secret: [1]@import("reliable_fetch.zig").Header = undefined;
+    var secret_n: usize = 0;
     if (auth) |line| {
-        var escaped: [2048]u8 = undefined;
-        const config_line = @import("../core/curl_secret.zig").configLine(line, &escaped) catch {
-            process.requestStop();
-            return null;
-        };
-        const stdin = if (process.child.stdin) |*pipe| pipe else {
-            process.requestStop();
-            return null;
-        };
-        io.writeAll(stdin, config_line) catch {
-            process.requestStop();
-            return null;
-        };
+        const colon = std.mem.indexOfScalar(u8, line, ':') orelse return null;
+        secret[0] = .{ .name = line[0..colon], .value = std.mem.trim(u8, line[colon + 1 ..], " ") };
+        secret_n = 1;
     }
-    process.child.closeStdin();
-    const stdout = process.stdout() orelse return null;
-    var length: usize = 0;
-    while (length < buffer.len) {
-        const count = io.read(stdout, buffer[length..]) catch {
-            process.requestStop();
-            return null;
-        };
-        if (count == 0) break;
-        if (!process.noteOutput(count)) return null;
-        length += count;
-    }
-    if (length == buffer.len) {
-        var extra: [1]u8 = undefined;
-        const count = io.read(stdout, &extra) catch 1;
-        if (count != 0) {
-            _ = process.noteOutput(count);
-            process.requestStop();
-            return null;
-        }
-    }
-    if (!process.finish().ok() or length == 0) return null;
-    const exact = alloc.realloc(buffer, length) catch return null;
+    const body = @import("reliable_fetch.zig").fetch(url, buffer, .{
+        .headers = &.{.{ .name = "Accept", .value = "application/atom+xml,application/xml" }},
+        .secret_headers = secret[0..secret_n],
+        .timeout_secs = seconds,
+        .connect_timeout_secs = 3,
+        .impersonate = false,
+        .cancel_epoch = cancellation,
+    }) orelse return null;
+    if (body.len == 0) return null;
+    const exact = alloc.realloc(buffer, body.len) catch return null;
     owned = true;
     return exact;
 }

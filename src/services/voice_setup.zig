@@ -131,6 +131,12 @@ fn runStep(argv: []const []const u8) bool {
     };
 }
 
+/// Status-checked, atomic (temp + rename) download via the reliable-fetch
+/// seam — a failed transfer never leaves a truncated archive/model behind.
+fn downloadStep(url: []const u8, dest: []const u8) bool {
+    return @import("reliable_fetch.zig").download(url, dest, .{ .timeout_secs = 1800, .impersonate = false }).ok();
+}
+
 pub fn installAsync() void {
     if (builtin.os.tag == .macos and builtin.cpu.arch != .aarch64) {
         setMsg("Self-install is Apple-Silicon-only for now — brew install sherpa-onnx instead");
@@ -170,7 +176,7 @@ fn installWorker() void {
         setMsg("Downloading voice engine (26 MB)…");
         var tar_buf: [512]u8 = undefined;
         const tar_path = std.fmt.bufPrint(&tar_buf, "{s}/sherpa-onnx.tar.bz2", .{opal_dir}) catch return fail("path too long");
-        if (!runStep(&.{ "curl", "-L", "--fail", "--silent", "--show-error", "-o", tar_path, SHERPA_URL }))
+        if (!downloadStep(SHERPA_URL, tar_path))
             return fail("Voice engine download failed — check network and retry");
         setMsg("Unpacking voice engine…");
         if (!runStep(&.{ "tar", "-xjf", tar_path, "-C", opal_dir }))
@@ -195,7 +201,7 @@ fn installWorker() void {
         setMsg("Downloading VAD model (2 MB)…");
         var out_buf: [512]u8 = undefined;
         const out = std.fmt.bufPrint(&out_buf, "{s}/silero_vad.onnx", .{models_dir}) catch return fail("path too long");
-        if (!runStep(&.{ "curl", "-L", "--fail", "--silent", "--show-error", "-o", out, SILERO_URL }))
+        if (!downloadStep(SILERO_URL, out))
             return fail("VAD model download failed — check network and retry");
     }
 

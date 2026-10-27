@@ -1095,23 +1095,13 @@ fn loadThemesiaPages(detail_url: []const u8) bool {
 /// fallbacks (admin-ajax.php + the newer `{mangaUrl}ajax/chapters`), both of
 /// which WordPress only answers to an `X-Requested-With: XMLHttpRequest` POST.
 fn fetchPost(url: []const u8, body: []const u8, dst: []u8) usize {
-    var ua_buf: [200]u8 = undefined;
-    const ua = std.fmt.bufPrint(&ua_buf, "User-Agent: {s}", .{pure.userAgentFor(url, @import("../core/app_meta.zig").user_agent_with_url)}) catch return 0;
-    const argv = [_][]const u8{
-        "curl",       "-sL",
-        "-H",         ua,
-        "-H",         "X-Requested-With: XMLHttpRequest",
-        "--data",     body,
-        "--max-time", "15",
-        url,
-    };
-    var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    _ = child.spawn() catch return 0;
-    const n = if (child.stdout) |*so| @import("../core/io_global.zig").readAll(so, dst) catch 0 else 0;
-    _ = child.wait() catch {};
-    return n;
+    const resp = @import("reliable_fetch.zig").fetch(url, dst, .{
+        .user_agent = pure.userAgentFor(url, @import("../core/app_meta.zig").user_agent_with_url),
+        .headers = &.{.{ .name = "X-Requested-With", .value = "XMLHttpRequest" }},
+        .post_body = body,
+        .timeout_secs = 15,
+    }) orelse return 0;
+    return resp.len;
 }
 
 /// Resolve a Madara `madara:<mangaUrl>` route into a readable page list, staging
@@ -1499,8 +1489,7 @@ fn downloadSinglePage(i: usize, gen: u32) void {
     // Per-host UA (pure.userAgentFor). The MangaDex page CDN accepts either UA,
     // but routing through the one selector keeps every comics fetch consistent
     // and means a future MangaDex host can't silently regress to a 400.
-    var ua_buf: [200]u8 = undefined;
-    const ua = std.fmt.bufPrint(&ua_buf, "User-Agent: {s}", .{pure.userAgentFor(url, @import("../core/app_meta.zig").user_agent_with_url)}) catch return;
+    const ua = pure.userAgentFor(url, @import("../core/app_meta.zig").user_agent_with_url);
 
     // OPDS-PSE page streams (Komga/Kavita) require HTTP Basic auth on EVERY page
     // fetch. loadPseBook stashes the full "Authorization: Basic …" line here; it
@@ -1513,78 +1502,31 @@ fn downloadSinglePage(i: usize, gen: u32) void {
     // in `referer`; it is empty for scraper / MangaDex / OPDS sources (which need
     // no Referer), so this whole block is inert for them.
     const referer = state.app.comic.referer[0..state.app.comic.referer_len];
-    var ref_buf: [560]u8 = undefined;
-    const referer_hdr: []const u8 = if (referer.len > 0)
-        (std.fmt.bufPrint(&ref_buf, "Referer: {s}", .{referer}) catch "")
-    else
-        "";
 
-    // Build argv dynamically so optional headers are appended only when
-    // present. Authentication travels over config-on-stdin, never argv.
-    // Worst case: curl -sL -H ua [--config -] [-H referer -H accept]
-    // --max-time 15 url → 14 slots. The Referer (chapter URL) is stashed by the
-    // Madara/MangaThemesia loaders; empty for scraper/MangaDex/OPDS sources, so
-    // the block below is inert for them.
-    var argv_buf: [14][]const u8 = undefined;
-    var ac: usize = 0;
-    argv_buf[ac] = "curl";
-    ac += 1;
-    argv_buf[ac] = "-sL";
-    ac += 1;
-    argv_buf[ac] = "-H";
-    ac += 1;
-    argv_buf[ac] = ua;
-    ac += 1;
+    // Reliable-fetch seam: the Basic auth line travels over curl's stdin
+    // config (secret_headers), never argv. A comic switch bumps dl_gen, which
+    // the cancel epoch turns into an immediate curl stop.
+    var secret: [1]@import("reliable_fetch.zig").Header = undefined;
+    var secret_n: usize = 0;
     if (auth.len > 0) {
-        argv_buf[ac] = "--config";
-        ac += 1;
-        argv_buf[ac] = "-";
-        ac += 1;
+        const colon = std.mem.indexOfScalar(u8, auth, ':') orelse return;
+        secret[0] = .{ .name = auth[0..colon], .value = std.mem.trim(u8, auth[colon + 1 ..], " ") };
+        secret_n = 1;
     }
-    if (referer_hdr.len > 0) {
-        argv_buf[ac] = "-H";
-        ac += 1;
-        argv_buf[ac] = referer_hdr;
-        ac += 1;
-        argv_buf[ac] = "-H";
-        ac += 1;
-        argv_buf[ac] = "Accept: image/avif,image/webp,image/png,image/jpeg,*/*";
-        ac += 1;
-    }
-    argv_buf[ac] = "--max-time";
-    ac += 1;
-    argv_buf[ac] = "15";
-    ac += 1;
-    argv_buf[ac] = url;
-    ac += 1;
-    const argv = argv_buf[0..ac];
-
-    var child = @import("../core/io_global.zig").Child.init(argv, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    if (auth.len > 0) {
-        @import("../core/curl_secret.zig").spawnWithHeaders(&child, &.{auth}) catch return;
-    } else {
-        child.spawn() catch return;
-    }
+    const accept_hdr = [_]@import("reliable_fetch.zig").Header{.{ .name = "Accept", .value = "image/avif,image/webp,image/png,image/jpeg,*/*" }};
 
     const max_img = 5 * 1024 * 1024;
     const tmp_buf = alloc.alloc(u8, max_img) catch return;
     defer alloc.free(tmp_buf);
-    var total: usize = 0;
-
-    if (child.stdout) |*stdout| {
-        while (total < max_img) {
-            if (workers.isQuitting()) return; // bail mid-download; defer frees tmp_buf
-            // Comic switched under us → stop reading and bail fast (this is what
-            // keeps freeComicPages's drain wait short for an active download).
-            if (state.app.comic.dl_gen.load(.acquire) != gen) return;
-            const n = @import("../core/io_global.zig").read(stdout, tmp_buf[total..]) catch break;
-            if (n == 0) break;
-            total += n;
-        }
-    }
-    _ = child.wait() catch {};
+    const body = @import("reliable_fetch.zig").fetch(url, tmp_buf, .{
+        .user_agent = ua,
+        .referer = if (referer.len > 0) referer else null,
+        .headers = if (referer.len > 0) &accept_hdr else &.{},
+        .secret_headers = secret[0..secret_n],
+        .timeout_secs = 15,
+        .cancel_epoch = .{ .epoch32 = .{ .value = &state.app.comic.dl_gen, .expected = gen } },
+    }) orelse return;
+    const total = body.len;
 
     // Quitting → freeComicPages may already have run; don't publish a buffer
     // nothing will free.

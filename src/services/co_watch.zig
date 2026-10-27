@@ -222,35 +222,20 @@ const S = struct {
         var url_buf: [192]u8 = undefined;
         const url = std.fmt.bufPrintZ(&url_buf, "{s}/v1/chat/completions", .{srv_url}) catch return;
 
-        // curl's --data-binary wants "@<path>". req_path is runtime now (it was
-        // a comptime literal), so build the argument at runtime too.
-        var at_buf: [secure_temp.max_path_len + 1]u8 = undefined;
-        const at_req = std.fmt.bufPrint(&at_buf, "@{s}", .{req_path}) catch return;
-
-        // ── ONE completion via curl ──────────────────────────────────────────
-        var child = io.Child.init(
-            &.{ "curl", "-s", "--max-time", "6", "-X", "POST", "-H", "Content-Type: application/json", "--data-binary", at_req, url },
-            alloc,
-        );
-        child.stdout_behavior = .Pipe;
-        child.stderr_behavior = .Ignore;
-        child.spawn() catch return;
-
-        // Drain stdout into a heap buffer.
-        const resp = alloc.alloc(u8, 4096) catch {
-            _ = child.wait() catch {};
-            return;
-        };
+        // ── ONE completion via the reliable-fetch seam ───────────────────────
+        // Body is uploaded from the private file (post_body_file), never argv.
+        // Local server: no DPI proxy, no TLS impersonation.
+        const resp = alloc.alloc(u8, 4096) catch return;
         defer alloc.free(resp);
-        var rlen: usize = 0;
-        if (child.stdout) |sout| {
-            while (rlen < resp.len) {
-                const n = io.read(sout, resp[rlen..]) catch break;
-                if (n == 0) break;
-                rlen += n;
-            }
-        }
-        _ = child.wait() catch {};
+        const got = @import("reliable_fetch.zig").fetch(url, resp, .{
+            .headers = &.{.{ .name = "Content-Type", .value = "application/json" }},
+            .post_body_file = req_path,
+            .timeout_secs = 6,
+            .impersonate = false,
+            .use_dpi_proxy = false,
+            .keep_head_on_overflow = true,
+        }) orelse return;
+        const rlen = got.len;
 
         const raw = extractContent(resp[0..rlen]) orelse return;
 

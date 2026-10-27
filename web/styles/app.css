@@ -666,6 +666,12 @@ button:disabled{cursor:not-allowed}
 .search-card-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
 .search-card-actions button{color:var(--text-2);font-size:11px;border:1px solid var(--border);padding:5px 8px;border-radius:5px}
 .search-card-actions button:hover{color:var(--accent);border-color:var(--accent-dim)}
+.search-row-sources{margin-top:6px;font-size:11px;color:var(--text-3)}
+.search-row-sources>summary{cursor:pointer;display:inline-flex;align-items:center;padding:4px 0}
+.search-row-sources>summary:hover{color:var(--accent)}
+.search-row-source-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.search-row-source-list button{color:var(--accent);font-size:11px;border:1px solid var(--border);padding:5px 8px;border-radius:5px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.search-row-source-list button:hover{border-color:var(--accent-dim)}
 .search-release-shelf{margin-top:18px;border-top:1px solid var(--border);padding-top:16px}
 .search-release-shelf>summary{display:flex;justify-content:space-between;gap:12px;cursor:pointer;color:var(--text-2);font-size:14px;padding:8px 0}
 .search-release-shelf>summary span:last-child{font-size:12px;color:var(--text-3)}
@@ -795,6 +801,7 @@ button:disabled{cursor:not-allowed}
   .plugin-toggle{min-height:40px}
   .search-card-title{min-height:40px}
   .search-release-shelf>summary{min-height:40px;align-items:center}
+  .search-row-sources>summary{min-height:40px}
   /* ^ Live search cards (stubbed /api at 375/390): one-line titles 19px, two-line 38px,
      "Available releases" summary 36px; their own min-height beats the :where() floor. */
 }

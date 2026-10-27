@@ -49,6 +49,9 @@ pub const StreamOptions = struct {
     stderr_behavior: io.Child.StdIo = .Ignore,
     cancel_epoch: ?CancelEpoch = null,
     cancel_flag: ?*const std.atomic.Value(bool) = null,
+    /// Second, independent cancel flag (e.g. a caller's "stop generating"
+    /// switch) watched alongside `cancel_flag` (typically the quit signal).
+    abort_flag: ?*const std.atomic.Value(bool) = null,
 };
 
 pub const StreamStartError = error{
@@ -210,13 +213,15 @@ const StreamWatchdog = struct {
     grace_ms: i64,
     cancel_epoch: ?CancelEpoch,
     cancel_flag: ?*const std.atomic.Value(bool),
+    abort_flag: ?*const std.atomic.Value(bool) = null,
 
     fn run(self: StreamWatchdog) void {
         const deadline = io.monotonicMilliTimestamp() +| @max(self.timeout_ms, 1);
         while (!self.done.load(.acquire)) {
             var should_stop = self.stop_requested.load(.acquire);
-            if (!should_stop) {
-                if (self.cancel_flag) |flag| {
+            for ([_]?*const std.atomic.Value(bool){ self.cancel_flag, self.abort_flag }) |maybe| {
+                if (should_stop) break;
+                if (maybe) |flag| {
                     if (flag.load(.acquire)) {
                         self.cancelled.store(true, .release);
                         should_stop = true;
@@ -470,6 +475,7 @@ pub const StreamProcess = struct {
             .grace_ms = self.options.terminate_grace_ms,
             .cancel_epoch = self.options.cancel_epoch,
             .cancel_flag = self.options.cancel_flag,
+            .abort_flag = self.options.abort_flag,
         }) catch {
             abortAndReap(&self.child, &self.control, &self.done);
             self.lifecycle.store(.finished, .release);
@@ -713,6 +719,22 @@ test "stream generation cancellation interrupts a blocked reader and tree" {
     const elapsed = io.monotonicMilliTimestamp() - before;
     try std.testing.expect(result.cancelled);
     try std.testing.expect(elapsed < 1_500);
+}
+
+test "stream abort flag interrupts a blocked reader independently of cancel flag" {
+    try requirePosix();
+    var quit = std.atomic.Value(bool).init(false);
+    var abort = std.atomic.Value(bool).init(false);
+    var process = StreamProcess.init(
+        &.{ "/bin/sh", "-c", "trap '' TERM; (trap '' TERM; sleep 10) & wait" },
+        .{ .timeout_ms = 5_000, .terminate_grace_ms = 20, .cancel_flag = &quit, .abort_flag = &abort },
+    );
+    try process.start();
+    abort.store(true, .release);
+    const before = io.monotonicMilliTimestamp();
+    const result = process.finish();
+    try std.testing.expect(result.cancelled);
+    try std.testing.expect(io.monotonicMilliTimestamp() - before < 1_500);
 }
 
 test "cross-thread stop remains valid after finish starts draining" {

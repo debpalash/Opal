@@ -1045,10 +1045,14 @@ def test_torrent_detail_resolution_contract():
     worker = _between(src, "fn resolveDetailWorker", "pub fn drainResolvedTorrentDetail")
     direct = _between(src, "pub fn loadTorrentToPlayer", "fn hexVal")
     checks = {
-        "bounded process and output": "bounded_process.StreamProcess" in worker
-            and "256 * 1024" in worker and "timeout_ms = 11_000" in worker,
+        # Reliable-fetch seam: supervised StreamProcess + quit signal live in
+        # the seam; the worker bounds output/time and keeps an oversized head.
+        "bounded process and output": 'reliable_fetch.zig").fetch(' in worker
+            and "256 * 1024" in worker and ".timeout_secs = 10" in worker
+            and "keep_head_on_overflow = true" in worker
+            and "bounded.StreamProcess.init" in _src("src/services/reliable_fetch.zig"),
         "cancelled on supersession/shutdown": "cancel_epoch" in worker
-            and "quittingSignal()" in worker,
+            and "quittingSignal()" in _src("src/services/reliable_fetch.zig"),
         "no raw child wait": "Child.init" not in direct and "spawnLegacy" not in direct,
         "owned worker": "spawn(resolveDetailWorker" in direct,
         "new intent supersedes": "detail_resolve_generation.fetchAdd" in direct,

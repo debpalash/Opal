@@ -234,26 +234,27 @@ fn tokenizeWords(text: []const u8) void {
     }
 }
 
-/// Perform HTTP GET using curl (reliable, handles encoding/redirects).
+/// HTTP GET against the local lang server via reliable-fetch (no proxy, no
+/// impersonation, no redirects — like the old plain `curl -s`). The body is
+/// returned whatever the status, truncated to fit `response_buf`.
 fn httpGetRaw(url_str: []const u8, response_buf: []u8) !usize {
-    const secure_temp = @import("../core/secure_temp.zig");
-    var scratch = secure_temp.Workspace.create("language-http") catch return error.HttpFailed;
-    defer scratch.cleanup();
-    var tmp_path_buf: [secure_temp.max_path_len]u8 = undefined;
-    const tmp_path = scratch.reserveFile("response", &tmp_path_buf) catch return error.HttpFailed;
-
-    var child = @import("../core/io_global.zig").Child.init(
-        &.{ "curl", "-s", "-o", tmp_path, "--max-time", "10", url_str },
-        @import("../core/alloc.zig").allocator,
-    );
-    child.spawn() catch return error.HttpFailed;
-    _ = child.wait() catch return error.HttpFailed;
-
-    // Read the response file
-    const file = @import("../core/io_global.zig").openFileAbsolute(tmp_path, .{}) catch return error.HttpFailed;
-    defer file.close(@import("../core/io_global.zig").io());
-    const bytes_read = @import("../core/io_global.zig").readAll(file, response_buf) catch return error.HttpFailed;
-    return bytes_read;
+    const alloc = @import("../core/alloc.zig").allocator;
+    const scratch = alloc.alloc(u8, @max(response_buf.len, 256 * 1024)) catch return error.HttpFailed;
+    defer alloc.free(scratch);
+    var hdr: [4096]u8 = undefined;
+    const r = @import("reliable_fetch.zig").request(url_str, scratch, &hdr, .{
+        .timeout_secs = 10,
+        .impersonate = false,
+        .use_dpi_proxy = false,
+        .follow_redirects = false,
+    });
+    switch (r.failure) {
+        .none, .empty => {},
+        else => return error.HttpFailed,
+    }
+    const n = @min(r.body.len, response_buf.len);
+    @memcpy(response_buf[0..n], r.body[0..n]);
+    return n;
 }
 
 /// URL-encode a string (only encodes space, &, =, ?, #, and non-ASCII)
@@ -522,22 +523,18 @@ fn asrWorker() void {
     var url_buf: [256]u8 = undefined;
     const url = std.fmt.bufPrintZ(&url_buf, "http://127.0.0.1:{d}/transcribe?lang={s}", .{ LANG_SERVER_PORT, asr_lang }) catch return;
 
-    var resp_path_buf: [secure_temp.max_path_len]u8 = undefined;
-    const resp_path = scratch.reserveFile("response.json", &resp_path_buf) catch return;
-    // Build "@path" argument for curl --data-binary at runtime
-    var data_arg_buf: [secure_temp.max_path_len + 1]u8 = undefined;
-    const data_arg = std.fmt.bufPrint(&data_arg_buf, "@{s}", .{wav_path}) catch return;
-    var curl_child = @import("../core/io_global.zig").Child.init(
-        &.{ "curl", "-s", "-X", "POST", "-H", "Content-Type: audio/wav", "--data-binary", data_arg, "-o", resp_path, "--max-time", "30", url },
-        @import("../core/alloc.zig").allocator,
-    );
-    _ = curl_child.spawnAndWait() catch return;
-
-    // Read response JSON
-    const resp_file = @import("../core/io_global.zig").openFileAbsolute(resp_path, .{}) catch return;
-    defer resp_file.close(@import("../core/io_global.zig").io());
+    // WAV uploads from the private workspace file (post_body_file) through
+    // the reliable-fetch seam; local server → no DPI proxy / impersonation.
     var resp_buf: [4096]u8 = undefined;
-    const resp_len = @import("../core/io_global.zig").readAll(resp_file, &resp_buf) catch return;
+    const resp = @import("reliable_fetch.zig").fetch(url, &resp_buf, .{
+        .headers = &.{.{ .name = "Content-Type", .value = "audio/wav" }},
+        .post_body_file = wav_path,
+        .timeout_secs = 30,
+        .impersonate = false,
+        .use_dpi_proxy = false,
+        .keep_head_on_overflow = true,
+    }) orelse return;
+    const resp_len = resp.len;
     if (resp_len == 0) return;
 
     // Parse {"text": "..."}

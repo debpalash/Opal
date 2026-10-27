@@ -274,6 +274,10 @@ pub fn routeCapability(path: []const u8, method: []const u8, action: []const u8)
         // Fetching a page through the user's browser spends their cookies' reach;
         // the extension's per-origin allow list is the second gate.
         "/browser/fetch",
+        // Cross-device library sync: reads/overwrites the whole progress table,
+        // and `pull`/`push` make this host fetch a peer URL.
+        "/library/sync",         "/library/sync/pull",
+        "/library/sync/push",
     };
     for (host_routes) |route| if (std.mem.eql(u8, path, route)) return .administer_host;
     return null;
@@ -348,6 +352,9 @@ test "route privilege matrix protects host administration and executable trust" 
         for ([_][]const u8{"/operator"}) |route| {
             try std.testing.expectEqual(principal != .session, allowsRoute(principal, route, "POST", ""));
         }
+        for ([_][]const u8{ "GET", "POST" }) |m| try std.testing.expectEqual(principal != .session, allowsRoute(principal, "/library/sync", m, ""));
+        try std.testing.expectEqual(principal != .session, allowsRoute(principal, "/library/sync/pull", "POST", ""));
+        try std.testing.expectEqual(principal != .session, allowsRoute(principal, "/library/sync/push", "POST", ""));
         try std.testing.expect(allowsRoute(principal, "/plugins", "GET", ""));
         try std.testing.expect(allowsRoute(principal, "/status", "GET", ""));
         try std.testing.expect(allowsRoute(principal, "/jellyfin/play", "POST", ""));

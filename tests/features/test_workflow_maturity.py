@@ -146,8 +146,9 @@ def test_gutenberg_discover_feed():
     assert "openDiscoveryCategory" in opds and "discoverySnapshot" in opds
     assert "pure.gutenbergWorkId(href)" in opds and 'novels.zig").openCatalogResult' in opds
     assert "components.coverSkeletonGrid" in opds
-    assert "opdsGetCancelled" in opds and "StreamProcess.init" in opds
-    assert 'curl_secret.zig").configLine' in opds and "process.child.closeStdin()" in opds
+    # curl fallback = reliable-fetch seam; Basic auth over stdin config.
+    assert "opdsGetCancelled" in opds and 'reliable_fetch.zig").fetch(' in opds
+    assert ".secret_headers = secret[0..secret_n]" in opds and ".cancel_epoch = cancellation" in opds
     assert "verifyGutenbergProgressiveForTest" in opds
     assert "isGutenbergCatalogRoot" in pure and "www.gutenberg.org.evil.test" in pure
     assert "mergeGutenbergWorks" in pure and "gutenbergWorkId" in pure

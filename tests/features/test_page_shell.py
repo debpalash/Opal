@@ -389,7 +389,7 @@ def test_comics_mangadex_source():
         # ── Networking: curl only. std.http SEGVs on some ISP TLS resets, so the
         #    client type must never be constructed (a *mention* in a comment
         #    explaining why we avoid it is fine — match on real usage).
-        "curl not std.http": "std.http.Client" not in svc and '"curl"' in svc,
+        "curl not std.http": "std.http.Client" not in svc and ('"curl"' in svc or "reliable_fetch.zig" in svc),
         # Detached threads only — a discarded handle leaks the pthread.
         "threads detached": "_ = std.Thread.spawn(" not in svc,
         # ── Pure module registered in the `zig build test` step ──

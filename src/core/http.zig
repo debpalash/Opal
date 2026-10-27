@@ -188,52 +188,20 @@ pub fn fetchAlloc(url: []const u8, opts: HttpOptions) ?[]u8 {
 /// Fetch image data via curl (raw bytes for stbi). std.http (used by fetch())
 /// silently returns NULL for some image CDNs — notably `cdn.myanimelist.net`
 /// (every anime poster), which curl fetches fine (verified: 200, image/jpeg).
-/// The rest of the codebase already prefers curl over the fragile 0.16 std.http
-/// for exactly this reason, so poster/image fetching does too. Reads the raw
-/// bytes straight into `buf` (binary-safe), bounded by --connect-timeout /
-/// --max-time so a dead CDN host can't stall a poster-daemon slot.
+/// Routed through the shared reliable_fetch seam: bounded process tree,
+/// shutdown cancellation, DPI-bypass proxy when running, binary-safe body, and
+/// an HTTP status check (a CDN 404/403 page is never handed to stbi).
+/// --connect-timeout 3 / --max-time 15 so a dead CDN host can't stall a
+/// poster-daemon slot.
 pub fn fetchImage(url: []const u8, buf: []u8) ?[]const u8 {
     if (url.len == 0 or url.len > 2048) return null;
-    // Route through the DPI-bypass proxy (--socks5-hostname 127.0.0.1:<port>)
-    // when enabled+running, so image/poster CDNs blocked by SNI still load.
-    const base = [_][]const u8{
-        "curl",                                                                                                  "-s",
-        "-L",                                                                                                    "--connect-timeout",
-        "3",                                                                                                     "--max-time",
-        "15",                                                                                                    "-A",
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    };
-    var argv: [16][]const u8 = undefined;
-    var argc: usize = 0;
-    inline for (base) |a| {
-        argv[argc] = a;
-        argc += 1;
-    }
-    if (@import("../services/dpi_bypass.zig").proxyArgs()) |pa| {
-        for (pa) |a| {
-            argv[argc] = a;
-            argc += 1;
-        }
-    }
-    argv[argc] = url;
-    argc += 1;
-    // Keep curl because image CDNs are less consistent with std.http, but own
-    // its complete process tree and cancellation. The old direct child.wait()
-    // ignored app shutdown and made closing wait for curl's full 15s timeout.
-    const bounded = @import("bounded_process.zig");
-    var process = bounded.StreamProcess.init(argv[0..argc], .{
-        .timeout_ms = 15_000,
-        .terminate_grace_ms = 150,
-        .max_output_bytes = buf.len,
-        .stderr_behavior = .Ignore,
-        .cancel_flag = workers.quittingSignal(),
-    });
-    process.start() catch return null;
-    const n = if (process.stdout()) |so| io_global.readAll(so, buf) catch 0 else 0;
-    _ = process.noteOutput(n);
-    const result = process.finish();
-    if (!result.ok() or n < 2) return null;
-    return buf[0..n];
+    const body = @import("../services/reliable_fetch.zig").fetch(url, buf, .{
+        .timeout_secs = 15,
+        .connect_timeout_secs = 3,
+        .impersonate = false,
+    }) orelse return null;
+    if (body.len < 2) return null;
+    return body;
 }
 
 /// Simple JSON field extraction (replaces copy-pasted patterns).

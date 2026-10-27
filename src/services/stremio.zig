@@ -56,21 +56,10 @@ pub fn fetchCatalog() void {
 
             // Fetch the community addon list from Stremio's public API
             const url = "https://stremio-addons.com/catalog.json";
-            const argv = [_][]const u8{
-                "curl", "-sL", "--max-time", "15", url,
-            };
-            var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
-            child.stdout_behavior = .Pipe;
-            child.stderr_behavior = .Ignore;
-            _ = child.spawn() catch {
-                logs.pushLog("error", "stremio", "Failed to fetch catalog", true);
-                return;
-            };
-
             const buf = alloc.alloc(u8, 256 * 1024) catch return;
             defer alloc.free(buf);
-            const n = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, buf) catch 0 else 0;
-            _ = child.wait() catch {};
+            const n = if (@import("reliable_fetch.zig").fetch(url, buf, .{ .timeout_secs = 15, .impersonate = false })) |b| b.len else 0;
+            if (n == 0) logs.pushLog("error", "stremio", "Failed to fetch catalog", true);
 
             if (n < 10) {
                 // Fallback: add well-known community addons
@@ -355,17 +344,8 @@ pub fn queryStreams(imdb_id: []const u8, media_type: []const u8) void {
                     base_url[0..blen], mtype, imdb,
                 }) catch continue;
 
-                const argv = [_][]const u8{
-                    "curl", "-sL", "--max-time", "10", url,
-                };
-                var child = @import("../core/io_global.zig").Child.init(&argv, alloc);
-                child.stdout_behavior = .Pipe;
-                child.stderr_behavior = .Ignore;
-                _ = child.spawn() catch continue;
-
                 var resp_buf: [64 * 1024]u8 = undefined;
-                const rn = if (child.stdout) |*stdout| @import("../core/io_global.zig").readAll(stdout, &resp_buf) catch 0 else 0;
-                _ = child.wait() catch {};
+                const rn = if (@import("reliable_fetch.zig").fetch(url, &resp_buf, .{ .timeout_secs = 10, .impersonate = false })) |b| b.len else 0;
 
                 if (rn < 10) continue;
 

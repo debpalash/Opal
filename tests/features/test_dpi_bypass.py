@@ -40,8 +40,11 @@ def test_dpi_bypass_wiring():
         # 6. Settings toggle + status.
         "settings toggle": "Bypass ISP blocking (DPI)" in settings,
         "settings calls start/stop": "dpi.start()" in settings and "dpi.stop()" in settings,
-        # 7. http.zig routes through the proxy (curl proxyArgs + std.http proxy).
-        "http.zig uses proxyArgs": "proxyArgs()" in http,
+        # 7. http.zig routes through the proxy: fetchImage via the reliable-fetch
+        # seam (which chains proxyArgs unless use_dpi_proxy=false) + std.http proxy.
+        "http.zig uses proxyArgs": "proxyArgs()" in http
+        or ("reliable_fetch.zig" in http and "use_dpi_proxy = false" not in http
+            and "proxyArgs()" in _src("src/services/reliable_fetch.zig")),
         "http.zig std.http proxy": "https_proxy" in http and "supports_connect" in http,
         # 8. build.zig builds the dep artifact; build-app.sh bundles it.
         "build.zig installs artifact": 'artifact("zig-bypassdpi")' in bld,

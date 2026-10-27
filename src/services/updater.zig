@@ -9,7 +9,6 @@ const std = @import("std");
 const io_global = @import("../core/io_global.zig");
 const logs = @import("../core/logs.zig");
 const workers = @import("../core/workers.zig");
-const bounded = @import("../core/bounded_process.zig");
 var mutex: @import("../core/sync.zig").Mutex = .{};
 const alloc = @import("../core/alloc.zig").allocator;
 
@@ -94,7 +93,7 @@ fn checkWorker() void {
     }
     clearError();
 
-    // Fetch release JSON via curl (consistent with rest of codebase).
+    // Fetch release JSON through the shared reliable-fetch seam.
     var body_buf: [256 * 1024]u8 = undefined;
     const n = fetchJson(&body_buf) catch |err| {
         switch (err) {
@@ -168,49 +167,30 @@ const Release = struct {
     assets: []const struct { name: []const u8, browser_download_url: []const u8 },
 };
 
-fn runHelper(argv: []const []const u8, output: []u8, timeout_ms: i64) !usize {
-    var process = bounded.StreamProcess.init(argv, .{
-        .timeout_ms = timeout_ms,
-        .terminate_grace_ms = 250,
-        .max_output_bytes = output.len,
-        .cancel_flag = workers.quittingSignal(),
-    });
-    process.start() catch return error.CurlSpawn;
-    var total: usize = 0;
-    if (process.stdout()) |stdout| {
-        while (total < output.len) {
-            const n = io_global.read(stdout, output[total..]) catch {
-                process.requestStop();
-                _ = process.finish();
-                return error.ReadFailed;
-            };
-            if (n == 0) break;
-            total += n;
-            if (!process.noteOutput(n)) break;
-        }
-        if (total == output.len) {
-            var extra: [1]u8 = undefined;
-            const n = io_global.read(stdout, &extra) catch {
-                process.requestStop();
-                _ = process.finish();
-                return error.ReadFailed;
-            };
-            if (n > 0) {
-                process.requestStop();
-                _ = process.finish();
-                return error.ReadFailed;
-            }
-        }
-    }
-    if (!process.finish().ok()) return error.CurlFailed;
-    return total;
-}
+const reliable_fetch = @import("reliable_fetch.zig");
+
+/// Release metadata / checksum fetches: https on every hop, status-checked,
+/// cancelled on shutdown, no browser impersonation (GitHub API).
+const release_opts: reliable_fetch.Opts = .{
+    .https_only = true,
+    .impersonate = false,
+    .timeout_secs = 20,
+};
 
 fn fetchJson(buf: []u8) error{ CurlSpawn, CurlFailed, ReadFailed }!usize {
-    return runHelper(&.{
-        "curl", "-L",                                  "--silent", "--show-error",             "--fail",    "--max-time", "20",
-        "-H",   "Accept: application/vnd.github+json", "-H",       "User-Agent: Opal-Updater", RELEASE_API,
-    }, buf, 21_000);
+    var hdrs: [16 * 1024]u8 = undefined;
+    var opts = release_opts;
+    opts.headers = &.{
+        .{ .name = "Accept", .value = "application/vnd.github+json" },
+        .{ .name = "User-Agent", .value = "Opal-Updater" },
+    };
+    const res = reliable_fetch.request(RELEASE_API, buf, &hdrs, opts);
+    if (res.ok()) return res.body.len;
+    return switch (res.failure) {
+        .spawn => error.CurlSpawn,
+        .truncated => error.ReadFailed,
+        else => error.CurlFailed,
+    };
 }
 
 fn stripLeadingV(tag: []const u8) []const u8 {
@@ -310,14 +290,14 @@ fn downloadWorker(release: Snapshot) void {
 
     logs.pushLog("info", "updater", "Downloading update…", true);
 
-    var output: [1024]u8 = undefined;
-    _ = runHelper(&.{
-        "curl",       "-L",  "--fail", "--silent", "--show-error",
-        "--max-time", "600", "-o",     dmg_path,   url,
-    }, &output, 601_000) catch {
+    // Atomic: curl writes `<dmg>.part`, renamed only after a 2xx — a failed or
+    // cancelled transfer never leaves a half .dmg for the checksum step.
+    var dl_opts = release_opts;
+    dl_opts.timeout_secs = 600;
+    if (!reliable_fetch.download(url, dmg_path, dl_opts).ok()) {
         setError("update download failed or was cancelled");
         return;
-    };
+    }
 
     if (!verifyReleaseChecksum(dmg_path, release)) {
         setError("download checksum verification failed");
@@ -353,10 +333,10 @@ fn downloadWorker(release: Snapshot) void {
 fn verifyReleaseChecksum(dmg_path: []const u8, release: Snapshot) bool {
     if (release.sums_url_len == 0) return false;
     var sums: [16 * 1024]u8 = undefined;
-    const n = runHelper(&.{
-        "curl",                                        "-L", "--fail", "--silent", "--show-error", "--max-time", "30",
-        release.sums_url_buf[0..release.sums_url_len],
-    }, &sums, 31_000) catch return false;
+    var sums_opts = release_opts;
+    sums_opts.timeout_secs = 30;
+    const sums_body = reliable_fetch.fetch(release.sums_url_buf[0..release.sums_url_len], &sums, sums_opts) orelse return false;
+    const n = sums_body.len;
     const url = release.dl_url_buf[0..release.dl_url_len];
     const asset_name = url[(std.mem.lastIndexOfScalar(u8, url, '/') orelse return false) + 1 ..];
 

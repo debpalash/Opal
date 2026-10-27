@@ -116,3 +116,82 @@ test "semantic identity ignores release tags but preserves editions" {
     try std.testing.expect(!sameSemantic("Reacher S03E04 1080p", "Reacher S03E05 1080p"));
     try std.testing.expect(!sameSemantic("Up 1080p", "Us 1080p"));
 }
+
+// ── Logical result groups (ROADMAP 6.3) ─────────────────────────────────
+// pushInto folds same-work renditions into one row: `url` plus up to two
+// fallbacks. These helpers turn that row back into a pickable source list.
+
+/// Number of distinct playable sources a folded row carries (0..3).
+pub fn sourceCount(primary: []const u8, fallback_1: []const u8, fallback_2: []const u8) usize {
+    var n: usize = 0;
+    for ([_][]const u8{ primary, fallback_1, fallback_2 }) |u| {
+        if (u.len > 0) n += 1;
+    }
+    return n;
+}
+
+/// Reorders the row's sources so the `pick`-th non-empty one plays first and
+/// the remaining ones keep their order as fallbacks. Out-of-range `pick`
+/// returns the original order (compacted).
+pub fn promoteSource(primary: []const u8, fallback_1: []const u8, fallback_2: []const u8, pick: usize) [3][]const u8 {
+    var list: [3][]const u8 = .{ "", "", "" };
+    var n: usize = 0;
+    for ([_][]const u8{ primary, fallback_1, fallback_2 }) |u| {
+        if (u.len == 0) continue;
+        list[n] = u;
+        n += 1;
+    }
+    if (pick == 0 or pick >= n) return list;
+    var out: [3][]const u8 = .{ list[pick], "", "" };
+    var w: usize = 1;
+    for (list[0..n], 0..) |u, i| {
+        if (i == pick) continue;
+        out[w] = u;
+        w += 1;
+    }
+    return out;
+}
+
+/// Short human label for a source URL: its host, "Torrent" for a magnet, or
+/// "Local file" for an absolute path. Returns a slice into `url` or a literal.
+pub fn sourceLabel(url: []const u8) []const u8 {
+    if (std.mem.startsWith(u8, url, "magnet:?")) return "Torrent";
+    if (std.mem.startsWith(u8, url, "/") or std.mem.startsWith(u8, url, "file://")) return "Local file";
+    const at = std.mem.indexOf(u8, url, "://") orelse return url;
+    var host = url[at + 3 ..];
+    if (std.mem.indexOfAny(u8, host, "/?#")) |end| host = host[0..end];
+    if (std.mem.lastIndexOfScalar(u8, host, '@')) |cred| host = host[cred + 1 ..];
+    if (std.mem.startsWith(u8, host, "www.")) host = host[4..];
+    return if (host.len > 0) host else url;
+}
+
+test "sourceCount counts the primary plus non-empty fallbacks" {
+    try std.testing.expectEqual(@as(usize, 0), sourceCount("", "", ""));
+    try std.testing.expectEqual(@as(usize, 1), sourceCount("a", "", ""));
+    try std.testing.expectEqual(@as(usize, 2), sourceCount("a", "", "c"));
+    try std.testing.expectEqual(@as(usize, 3), sourceCount("a", "b", "c"));
+}
+
+test "promoteSource plays the picked source first, rest stay as fallbacks" {
+    const p0 = promoteSource("a", "b", "c", 0);
+    try std.testing.expectEqualStrings("a", p0[0]);
+    try std.testing.expectEqualStrings("b", p0[1]);
+    const p2 = promoteSource("a", "b", "c", 2);
+    try std.testing.expectEqualStrings("c", p2[0]);
+    try std.testing.expectEqualStrings("a", p2[1]);
+    try std.testing.expectEqualStrings("b", p2[2]);
+    const p1 = promoteSource("a", "", "c", 1);
+    try std.testing.expectEqualStrings("c", p1[0]);
+    try std.testing.expectEqualStrings("a", p1[1]);
+    try std.testing.expectEqualStrings("", p1[2]);
+    const oob = promoteSource("a", "b", "", 5);
+    try std.testing.expectEqualStrings("a", oob[0]);
+    try std.testing.expectEqualStrings("b", oob[1]);
+}
+
+test "sourceLabel names the host, torrent, or local file" {
+    try std.testing.expectEqualStrings("cdn.example.com", sourceLabel("https://www.cdn.example.com/v/a.mp4?t=1"));
+    try std.testing.expectEqualStrings("host:8080", sourceLabel("http://u:p@host:8080/x"));
+    try std.testing.expectEqualStrings("Torrent", sourceLabel("magnet:?xt=urn:btih:AAAA"));
+    try std.testing.expectEqualStrings("Local file", sourceLabel("/Users/x/movie.mkv"));
+}

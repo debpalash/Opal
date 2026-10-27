@@ -464,6 +464,19 @@ pub fn remove(idx: usize) void {
     const name = entries[idx].name[0..entries[idx].name_len];
     const catalog_tmdb_id = entries[idx].catalog_tmdb_id;
 
+    // Tombstone the unified-library mirror (keyed by file_key) so the removal
+    // leaves Home and replicates to synced devices.
+    if (db.prepare("SELECT file_key FROM watch_history WHERE name = ?1 AND file_key <> ''")) |key_stmt| {
+        defer db.finalize(key_stmt);
+        db.bindText(key_stmt, 1, name);
+        if (db.step(key_stmt) == db.c.SQLITE_ROW) {
+            var key_buf: [MAX_LINK_LEN]u8 = undefined;
+            var key_len: usize = 0;
+            db.copyColumn(key_stmt, 0, key_buf[0..], &key_len);
+            @import("../services/library_store.zig").removeItem("watch", key_buf[0..key_len]);
+        }
+    }
+
     // Delete from DB
     const sql = "DELETE FROM watch_history WHERE name = ?1";
     const stmt = db.prepare(sql) orelse return;
@@ -598,6 +611,7 @@ pub fn clearAll() void {
     db.exec("DROP TABLE IF EXISTS watch_history_backup");
     db.exec("CREATE TABLE watch_history_backup AS SELECT * FROM watch_history");
     db.exec("DELETE FROM watch_history");
+    @import("../services/library_store.zig").removeKind("watch");
     backup_available = true;
     init();
 }
@@ -607,6 +621,7 @@ pub fn restoreBackup() void {
     if (!backup_available) return;
     db.exec("INSERT INTO watch_history SELECT * FROM watch_history_backup");
     db.exec("DROP TABLE watch_history_backup");
+    @import("../services/library_store.zig").restoreWatchHistory();
     backup_available = false;
     load();
 }

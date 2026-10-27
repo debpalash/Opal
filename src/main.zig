@@ -1269,6 +1269,7 @@ fn appFrame() !dvui.App.Result {
     @import("services/torrent_intents.zig").restoreIfReady();
     @import("services/downloads.zig").tick();
     @import("services/wanted.zig").tick();
+    @import("services/library_sync.zig").tick();
     @import("services/agent_tasks.zig").tick();
     @import("services/operator.zig").tick();
 

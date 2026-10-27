@@ -191,14 +191,13 @@ fn pinAuthWorker(generation: u32) void {
 }
 
 fn curlGet(url: [:0]const u8, out: []u8) usize {
-    const alloc = @import("../core/alloc.zig").allocator;
-    var child = io_global.Child.init(&.{ "curl", "-fsS", "--connect-timeout", "5", "--max-time", "15", "-A", USER_AGENT, url }, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    child.spawn() catch return 0;
-    const n = if (child.stdout) |*stdout| io_global.readAll(stdout, out) catch 0 else 0;
-    const result = child.wait() catch return 0;
-    return if (result == .exited and result.exited == 0) n else 0;
+    const body = @import("reliable_fetch.zig").fetch(url, out, .{
+        .user_agent = USER_AGENT,
+        .timeout_secs = 15,
+        .connect_timeout_secs = 5,
+        .impersonate = false,
+    }) orelse return 0;
+    return body.len;
 }
 
 fn extractJsonString(json: []const u8, key: []const u8) ?[]const u8 {
@@ -332,17 +331,22 @@ fn postSync(operation: []const u8, payload: []const u8) Delivery {
         "/sync/history";
     const url = apiUrl(path, client[0..client_len], &url_buf) orelse return .retry;
     var auth_buf: [2200]u8 = undefined;
-    const auth = std.fmt.bufPrintZ(&auth_buf, "Authorization: Bearer {s}", .{token[0..token_len]}) catch return .retry;
-    const alloc = @import("../core/alloc.zig").allocator;
-    var child = io_global.Child.init(&.{ "curl", "-sS", "--connect-timeout", "5", "--max-time", "15", "-A", USER_AGENT, "-X", "POST", url, "-H", "Content-Type: application/json", "--config", "-", "-d", payload, "-o", io_global.devNull(), "-w", "%{http_code}" }, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    @import("../core/curl_secret.zig").spawnWithHeaders(&child, &.{auth}) catch return .retry;
-    var status_buf: [16]u8 = undefined;
-    const status_len = if (child.stdout) |*stdout| io_global.readAll(stdout, &status_buf) catch 0 else 0;
-    const result = child.wait() catch return .retry;
-    if (result != .exited or result.exited != 0) return .retry;
-    const status = std.fmt.parseInt(u16, std.mem.trim(u8, status_buf[0..status_len], " \r\n\t"), 10) catch return .retry;
+    defer @memset(&auth_buf, 0);
+    const bearer = std.fmt.bufPrint(&auth_buf, "Bearer {s}", .{token[0..token_len]}) catch return .retry;
+    // Token rides curl's stdin config via the seam — never argv.
+    var resp: [4096]u8 = undefined;
+    var hdrs: [4096]u8 = undefined;
+    const res = @import("reliable_fetch.zig").request(url, &resp, &hdrs, .{
+        .user_agent = USER_AGENT,
+        .headers = &.{.{ .name = "Content-Type", .value = "application/json" }},
+        .secret_headers = &.{.{ .name = "Authorization", .value = bearer }},
+        .post_body = payload,
+        .timeout_secs = 15,
+        .connect_timeout_secs = 5,
+        .impersonate = false,
+    });
+    if (res.status == 0) return .retry;
+    const status = res.status;
     if (status >= 200 and status < 300) return .success;
     if (status == 401) return .revoked;
     logs.pushLog("warn", "simkl", "SIMKL sync queued for retry", false);

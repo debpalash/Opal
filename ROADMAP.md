@@ -146,20 +146,27 @@
 ### 6.2 — Reliability ("what you click actually plays")
 - [x] Shared reliable-fetch interface with browser-grade TLS fingerprinting,
       DPI bypass, response status/headers/latency, and typed failures
-- [ ] Migrate remaining legacy curl/native HTTP callers onto reliable-fetch
+- [x] Migrate remaining legacy curl/native HTTP callers onto reliable-fetch
+      (secrets via stdin config, multipart, file bodies, atomic downloads;
+      only the ai_context SSE stream and core/deps/updater remain)
 - [ ] App-wide persisted live/dead probing (the shared, race-safe probe/cache
       seam exists; PlaybackRequest integration and remaining vertical coverage
       are still in progress)
-- [ ] Candidate groups with auto-skip to the next working stream
+- [x] Candidate groups with auto-skip to the next working stream (ranked
+      2-deep fallback chain; player advances on load failure)
 - [x] First-class per-request headers (Origin/Cookie) into the player, cleared
       between unrelated loads
 
 ### 6.3 — Glue (one app, not fifteen tabs)
 - [x] Universal resolver fan-out across video, local, torrent, comics, live TV,
       music, radio, podcasts, and catalog sources
-- [ ] Logical result groups with posters, semantic dedup, and fallback candidates
-- [ ] Unified "Continue / Your Library" home across all verticals
-- [ ] Cross-device progress + favorites sync over the local API
+- [x] Logical result groups with posters, semantic dedup, and fallback candidates
+      ("N sources" expander; pick any source, rest stay as fallbacks)
+- [x] Unified "Continue / Your Library" home across all verticals
+      (`library_items` read-model fed by every vertical)
+- [x] Cross-device progress + favorites sync over the local API
+      (`/api/library/sync` pull/push, tombstones, Settings → Device Sync;
+      single peer for now)
 
 ### 6.4 — Reach
 - [ ] Real casting pipeline (Chromecast/DLNA) + a phone "couch-mode" cast-picker

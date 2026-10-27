@@ -70,7 +70,7 @@ pub fn upsertProgress(
             "VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,strftime('%s','now')) " ++
             "ON CONFLICT(kind,item_id) DO UPDATE SET title=excluded.title, poster=excluded.poster, " ++
             "resume_secs=excluded.resume_secs, duration_secs=excluded.duration_secs, percent=excluded.percent, " ++
-            "next_label=excluded.next_label, deep_link=excluded.deep_link, updated_at=excluded.updated_at",
+            "next_label=excluded.next_label, deep_link=excluded.deep_link, updated_at=excluded.updated_at, deleted=0",
     ) orelse return;
     defer db.finalize(stmt);
     db.bindText(stmt, 1, kind);
@@ -97,7 +97,7 @@ pub fn setFavorite(kind: []const u8, item_id: []const u8, fav: bool, title: []co
             "title=CASE WHEN excluded.title!='' THEN excluded.title ELSE title END, " ++
             "poster=CASE WHEN excluded.poster!='' THEN excluded.poster ELSE poster END, " ++
             "deep_link=CASE WHEN excluded.deep_link!='' THEN excluded.deep_link ELSE deep_link END, " ++
-            "updated_at=excluded.updated_at",
+            "updated_at=excluded.updated_at, deleted=0",
     ) orelse return;
     defer db.finalize(stmt);
     db.bindText(stmt, 1, kind);
@@ -116,7 +116,7 @@ pub fn setFavorite(kind: []const u8, item_id: []const u8, fav: bool, title: []co
 /// equivalent mutation (Plex is the important case).
 pub fn isFavorite(kind: []const u8, item_id: []const u8) bool {
     if (kind.len == 0 or item_id.len == 0) return false;
-    const stmt = db.prepare("SELECT is_favorite FROM library_items WHERE kind=?1 AND item_id=?2 LIMIT 1") orelse return false;
+    const stmt = db.prepare("SELECT is_favorite FROM library_items WHERE kind=?1 AND item_id=?2 AND deleted=0 LIMIT 1") orelse return false;
     defer db.finalize(stmt);
     db.bindText(stmt, 1, kind);
     db.bindText(stmt, 2, item_id);
@@ -133,7 +133,7 @@ pub const ItemState = struct {
 /// Read the durable user-owned state for one stable, source-namespaced item.
 pub fn getState(kind: []const u8, item_id: []const u8) ItemState {
     if (kind.len == 0 or item_id.len == 0) return .{};
-    const stmt = db.prepare("SELECT is_favorite,user_rating,resume_secs,duration_secs FROM library_items WHERE kind=?1 AND item_id=?2 LIMIT 1") orelse return .{};
+    const stmt = db.prepare("SELECT is_favorite,user_rating,resume_secs,duration_secs FROM library_items WHERE kind=?1 AND item_id=?2 AND deleted=0 LIMIT 1") orelse return .{};
     defer db.finalize(stmt);
     db.bindText(stmt, 1, kind);
     db.bindText(stmt, 2, item_id);
@@ -157,7 +157,7 @@ pub fn setRating(kind: []const u8, item_id: []const u8, rating: ?f64, title: []c
             "ON CONFLICT(kind,item_id) DO UPDATE SET user_rating=excluded.user_rating, " ++
             "title=CASE WHEN excluded.title!='' THEN excluded.title ELSE title END, " ++
             "poster=CASE WHEN excluded.poster!='' THEN excluded.poster ELSE poster END, " ++
-            "updated_at=excluded.updated_at",
+            "updated_at=excluded.updated_at, deleted=0",
     ) orelse return;
     defer db.finalize(stmt);
     db.bindText(stmt, 1, kind);
@@ -211,7 +211,7 @@ fn loadContinueUncached(out: []pure.LibraryItem) ?usize {
     // The band is comptime-formatted from the pure constants rather than
     // hardcoded, so the SQL filter and `pure.isContinue` can never drift apart.
     const BAND = std.fmt.comptimePrint(
-        " FROM library_items WHERE percent > {d} AND percent < {d} AND home_hidden=0 ORDER BY home_pinned DESC,updated_at DESC LIMIT ?1",
+        " FROM library_items WHERE percent > {d} AND percent < {d} AND home_hidden=0 AND deleted=0 ORDER BY home_pinned DESC,updated_at DESC LIMIT ?1",
         .{ pure.CONTINUE_MIN_PCT, pure.CONTINUE_MAX_PCT },
     );
     const stmt = db.prepare("SELECT " ++ COLS ++ BAND) orelse return null;
@@ -257,7 +257,7 @@ pub fn hiddenContinueCount() usize {
 
 /// The uncached query behind `hiddenContinueCount`.
 fn loadHiddenContinueCountUncached() ?usize {
-    const stmt = db.prepare("SELECT count(*) FROM library_items WHERE home_hidden=1 AND percent > ?1 AND percent < ?2") orelse return null;
+    const stmt = db.prepare("SELECT count(*) FROM library_items WHERE home_hidden=1 AND deleted=0 AND percent > ?1 AND percent < ?2") orelse return null;
     defer db.finalize(stmt);
     db.bindDouble(stmt, 1, pure.CONTINUE_MIN_PCT);
     db.bindDouble(stmt, 2, pure.CONTINUE_MAX_PCT);
@@ -285,7 +285,7 @@ pub fn loadFavorites(out: []pure.LibraryItem) usize {
 
 /// The uncached query behind `loadFavorites`.
 fn loadFavoritesUncached(out: []pure.LibraryItem) ?usize {
-    const stmt = db.prepare("SELECT " ++ COLS ++ " FROM library_items WHERE is_favorite=1 ORDER BY updated_at DESC LIMIT ?1") orelse return null;
+    const stmt = db.prepare("SELECT " ++ COLS ++ " FROM library_items WHERE is_favorite=1 AND deleted=0 ORDER BY updated_at DESC LIMIT ?1") orelse return null;
     defer db.finalize(stmt);
     db.bindInt64(stmt, 1, @intCast(out.len));
     var n: usize = 0;
@@ -296,4 +296,152 @@ fn loadFavoritesUncached(out: []pure.LibraryItem) ?usize {
         readRow(stmt, &out[n]);
     }
     return n;
+}
+
+// ── Cross-device sync (ROADMAP 6.3) ──────────────────────────────────────────
+
+const sync_pure = @import("library_sync_pure.zig");
+
+const SYNC_COLS = "kind,item_id,title,poster,resume_secs,duration_secs,percent,is_favorite,user_rating,next_label,deep_link,home_hidden,home_pinned,updated_at,deleted,seq";
+
+fn readSyncRow(stmt: ?*db.Stmt, out: *sync_pure.SyncRow) void {
+    readRow(stmt, &out.item);
+    out.updated_at = db.columnInt64(stmt, 13);
+    out.deleted = db.columnInt64(stmt, 14) != 0;
+    out.seq = db.columnInt64(stmt, 15);
+}
+
+/// This store's sync device id (db.zig seeds it once). Empty when unavailable.
+pub fn deviceId(buf: *[sync_pure.DEVICE_ID_MAX]u8) []const u8 {
+    const stmt = db.prepare("SELECT value FROM library_sync_meta WHERE key='device_id'") orelse return buf[0..0];
+    defer db.finalize(stmt);
+    if (db.step(stmt) != db.c.SQLITE_ROW) return buf[0..0];
+    // copyColumn keeps a NUL byte, so read into one spare byte.
+    var tmp: [sync_pure.DEVICE_ID_MAX + 1]u8 = undefined;
+    var n: usize = 0;
+    db.copyColumn(stmt, 0, &tmp, &n);
+    if (!sync_pure.validDeviceId(tmp[0..n])) return buf[0..0];
+    @memcpy(buf[0..n], tmp[0..n]);
+    return buf[0..n];
+}
+
+/// Highest change sequence written so far (0 for an empty store). A run
+/// snapshots it first so rows written mid-run wait for the next run.
+pub fn maxSeq() i64 {
+    const stmt = db.prepare("SELECT IFNULL(MAX(seq),0) FROM library_items") orelse return 0;
+    defer db.finalize(stmt);
+    if (db.step(stmt) != db.c.SQLITE_ROW) return 0;
+    return db.columnInt64(stmt, 0);
+}
+
+/// Delete one item as a tombstone: the row stays (so the delete can sync and
+/// an undo can restore it) but every reader hides it. A later local write or a
+/// newer peer upsert clears the flag.
+pub fn removeItem(kind: []const u8, item_id: []const u8) void {
+    if (kind.len == 0 or item_id.len == 0) return;
+    const stmt = db.prepare("UPDATE library_items SET deleted=1, updated_at=strftime('%s','now') WHERE kind=?1 AND item_id=?2 AND deleted=0") orelse return;
+    defer db.finalize(stmt);
+    db.bindText(stmt, 1, kind);
+    db.bindText(stmt, 2, item_id);
+    if (db.step(stmt) == db.c.SQLITE_DONE) markDirty();
+}
+
+/// Tombstone every live row of one kind (a "clear history" for that vertical).
+pub fn removeKind(kind: []const u8) void {
+    if (kind.len == 0) return;
+    const stmt = db.prepare("UPDATE library_items SET deleted=1, updated_at=strftime('%s','now') WHERE kind=?1 AND deleted=0") orelse return;
+    defer db.finalize(stmt);
+    db.bindText(stmt, 1, kind);
+    if (db.step(stmt) == db.c.SQLITE_DONE) markDirty();
+}
+
+/// Undo `removeKind("watch")` for rows whose source history came back
+/// (watch_history.restoreBackup). Re-stamped so the restore syncs too.
+pub fn restoreWatchHistory() void {
+    db.exec("UPDATE library_items SET deleted=0, updated_at=strftime('%s','now') WHERE kind='watch' AND deleted=1 " ++
+        "AND item_id IN (SELECT file_key FROM watch_history WHERE file_key<>'')");
+    markDirty();
+}
+
+/// Rows with `after < seq <= snapshot_max`, oldest first, tombstones included,
+/// skipping rows that came from `peer_device` (echo rule). Mirrors
+/// `sync_pure.eligible`; `seq` is unique, so it alone is the keyset.
+pub fn loadChangedSince(after: i64, snapshot_max: i64, peer_device: []const u8, out: []sync_pure.SyncRow) usize {
+    const stmt = db.prepare("SELECT " ++ SYNC_COLS ++ " FROM library_items WHERE seq > ?1 AND seq <= ?2 " ++
+        "AND (?3 = '' OR IFNULL(origin,'') <> ?3) ORDER BY seq ASC LIMIT ?4") orelse return 0;
+    defer db.finalize(stmt);
+    db.bindInt64(stmt, 1, after);
+    db.bindInt64(stmt, 2, snapshot_max);
+    db.bindText(stmt, 3, peer_device);
+    db.bindInt64(stmt, 4, @intCast(out.len));
+    var n: usize = 0;
+    while (n < out.len and db.step(stmt) == db.c.SQLITE_ROW) : (n += 1) readSyncRow(stmt, &out[n]);
+    return n;
+}
+
+fn loadSyncRow(kind: []const u8, item_id: []const u8, out: *sync_pure.SyncRow) bool {
+    const stmt = db.prepare("SELECT " ++ SYNC_COLS ++ " FROM library_items WHERE kind=?1 AND item_id=?2 LIMIT 1") orelse return false;
+    defer db.finalize(stmt);
+    db.bindText(stmt, 1, kind);
+    db.bindText(stmt, 2, item_id);
+    if (db.step(stmt) != db.c.SQLITE_ROW) return false;
+    readSyncRow(stmt, out);
+    return true;
+}
+
+/// Apply peer rows under the last-writer-wins rule. Writes the PEER's
+/// `updated_at` verbatim (never now) so a row does not bounce back as "newer".
+/// The write takes a fresh local `seq` (trigger), so it relays onward to other
+/// peers; `origin` (the sender's device id, '' if unknown) keeps it from being
+/// sent back to the sender. Home layout (`home_hidden`/`home_pinned`) is
+/// device-local and preserved. Returns how many rows changed; bumps the store
+/// version once if any did.
+pub fn applySyncRows(rows: []const sync_pure.SyncRow, origin: []const u8) usize {
+    var applied: usize = 0;
+    for (rows) |*row| {
+        const it = &row.item;
+        const kind = it.kind[0..it.kind_len];
+        const id = it.item_id[0..it.item_id_len];
+        var local: sync_pure.SyncRow = undefined;
+        const have = loadSyncRow(kind, id, &local);
+        if (!sync_pure.shouldApply(if (have) &local else null, row)) continue;
+        const stmt = db.prepare(
+            "INSERT INTO library_items(kind,item_id,title,poster,resume_secs,duration_secs,percent,is_favorite,user_rating,next_label,deep_link,updated_at,deleted) " ++
+                "VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13) " ++
+                "ON CONFLICT(kind,item_id) DO UPDATE SET title=excluded.title, poster=excluded.poster, " ++
+                "resume_secs=excluded.resume_secs, duration_secs=excluded.duration_secs, percent=excluded.percent, " ++
+                "is_favorite=excluded.is_favorite, user_rating=excluded.user_rating, next_label=excluded.next_label, " ++
+                "deep_link=excluded.deep_link, updated_at=excluded.updated_at, deleted=excluded.deleted",
+        ) orelse continue;
+        defer db.finalize(stmt);
+        db.bindText(stmt, 1, kind);
+        db.bindText(stmt, 2, id);
+        db.bindText(stmt, 3, it.title[0..it.title_len]);
+        db.bindText(stmt, 4, it.poster[0..it.poster_len]);
+        db.bindDouble(stmt, 5, it.resume_secs);
+        db.bindDouble(stmt, 6, it.duration_secs);
+        db.bindDouble(stmt, 7, pure.percentOf(it.resume_secs, it.duration_secs));
+        db.bindInt(stmt, 8, if (it.is_favorite) 1 else 0);
+        db.bindDouble(stmt, 9, it.user_rating);
+        db.bindText(stmt, 10, it.next_label[0..it.next_label_len]);
+        db.bindText(stmt, 11, it.deep_link[0..it.deep_link_len]);
+        db.bindInt64(stmt, 12, row.updated_at);
+        db.bindInt(stmt, 13, if (row.deleted) 1 else 0);
+        if (db.step(stmt) != db.c.SQLITE_DONE) continue;
+        applied += 1;
+        if (origin.len > 0) setOrigin(kind, id, origin);
+    }
+    if (applied > 0) markDirty();
+    return applied;
+}
+
+/// Tag an applied row with its sender. `origin` is outside the seq triggers'
+/// column list, so this does not take another seq.
+fn setOrigin(kind: []const u8, item_id: []const u8, origin: []const u8) void {
+    const stmt = db.prepare("UPDATE library_items SET origin=?3 WHERE kind=?1 AND item_id=?2") orelse return;
+    defer db.finalize(stmt);
+    db.bindText(stmt, 1, kind);
+    db.bindText(stmt, 2, item_id);
+    db.bindText(stmt, 3, origin);
+    _ = db.step(stmt);
 }
