@@ -708,6 +708,50 @@ fn createTables() void {
         \\)
     );
 
+    // Recall (ROADMAP 7.1) — semantic index over the library and inside media.
+    // A derived, rebuildable cache: services/recall_index.zig fills it in the
+    // background from library_items / local_media / tv_shows and subtitle
+    // sidecars. FTS5 may be missing (mingw libsqlite3) — the CREATE then fails
+    // quietly and recall falls back to LIKE. The vec0 tables need the embedding
+    // model's dimension, so recall_index creates them once it knows it.
+    exec(
+        \\CREATE TABLE IF NOT EXISTS recall_docs (
+        \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
+        \\  source TEXT NOT NULL,
+        \\  source_key TEXT NOT NULL,
+        \\  kind TEXT NOT NULL DEFAULT 'other',
+        \\  title TEXT NOT NULL DEFAULT '',
+        \\  body TEXT NOT NULL DEFAULT '',
+        \\  year INTEGER NOT NULL DEFAULT 0,
+        \\  runtime_secs INTEGER NOT NULL DEFAULT 0,
+        \\  lang TEXT NOT NULL DEFAULT '',
+        \\  lib_kind TEXT NOT NULL DEFAULT '',
+        \\  lib_id TEXT NOT NULL DEFAULT '',
+        \\  link TEXT NOT NULL DEFAULT '',
+        \\  poster TEXT NOT NULL DEFAULT '',
+        \\  sig INTEGER NOT NULL DEFAULT 0,
+        \\  subs_sig INTEGER NOT NULL DEFAULT 0,
+        \\  embedded INTEGER NOT NULL DEFAULT 0,
+        \\  seen INTEGER NOT NULL DEFAULT 0,
+        \\  UNIQUE(source, source_key)
+        \\)
+    );
+    exec(
+        \\CREATE TABLE IF NOT EXISTS recall_moments (
+        \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
+        \\  doc_id INTEGER NOT NULL REFERENCES recall_docs(id) ON DELETE CASCADE,
+        \\  start_ms INTEGER NOT NULL,
+        \\  end_ms INTEGER NOT NULL,
+        \\  text TEXT NOT NULL,
+        \\  embedded INTEGER NOT NULL DEFAULT 0
+        \\)
+    );
+    exec("CREATE INDEX IF NOT EXISTS idx_recall_moments_doc ON recall_moments(doc_id)");
+    exec("CREATE INDEX IF NOT EXISTS idx_recall_docs_embedded ON recall_docs(embedded)");
+    exec("CREATE TABLE IF NOT EXISTS recall_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+    exec("CREATE VIRTUAL TABLE IF NOT EXISTS recall_fts USING fts5(title, body, tokenize='unicode61 remove_diacritics 2')");
+    exec("CREATE VIRTUAL TABLE IF NOT EXISTS recall_moments_fts USING fts5(text, tokenize='unicode61 remove_diacritics 2')");
+
     // Live TV stream-health cache (probe results). Keyed by url_hash; `status` is
     // the pure Health enum int (0 unknown/1 live/2 slow/3 dead), `checked_at`
     // drives the TTL so a "Working only" filter is instant on revisit. See

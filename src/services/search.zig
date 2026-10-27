@@ -850,6 +850,9 @@ pub fn submitQuery(query_text: []const u8) void {
     @import("search_preview.zig").stop();
     @import("activity.zig").record(.search, owned[0..n], .{});
     setUniversalQuery(owned[0..n]);
+    // Natural-language / constrained queries also search the user's own library
+    // and subtitles (ROADMAP 7.1); bare titles clear those sections.
+    @import("recall.zig").submit(owned[0..n]);
     @import("resolver.zig").resolve(owned[0..n], "auto");
 }
 
@@ -878,6 +881,7 @@ pub fn cancelPendingMemorySearch() void {
 pub fn clearShellSearch() void {
     @import("search_preview.zig").stop();
     cancelPendingMemorySearch();
+    @import("recall.zig").clear();
     search_abort.store(true, .release);
     _ = search_generation.fetchAdd(1, .acq_rel);
     if (search_thread) |thread| @import("../core/workers.zig").release(thread);
@@ -1661,6 +1665,8 @@ fn renderUniversalResults() void {
         const count = std.fmt.bufPrint(&count_buf, "{d} titles · {d} other releases{s}", .{ titles, releases, if (view_cache.loading) " · searching…" else "" }) catch "Results";
         _ = dvui.label(@src(), "{s}", .{count}, .{ .color_text = theme.colors.text_secondary, .padding = dvui.Rect.all(theme.spacing.sm) });
     }
+    // Recall: "From your library" + "Moments" above the source results.
+    @import("../ui/recall_results.zig").render(view_cache.query[0..view_cache.query_len]);
     if (view_cache.rows == null) {
         components.emptyState(icons.tvg.lucide.@"search-x", "Search could not allocate its result view", "Try again after closing unused players.");
         return;

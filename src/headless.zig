@@ -123,6 +123,7 @@ pub fn headlessMain() !void {
         @import("services/downloads.zig").tick();
         @import("services/wanted.zig").tick();
         @import("services/library_sync.zig").tick();
+        @import("services/recall_index.zig").tick();
         @import("services/agent_tasks.zig").tick();
         @import("services/operator.zig").tick();
         @import("services/search.zig").flushPendingTorrentOpen();
