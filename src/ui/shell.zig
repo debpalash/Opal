@@ -350,6 +350,8 @@ fn renderTopNav(compact: bool, narrow: bool) void {
     if (!compact and anyHasMedia()) {
         if (chromeIconButton(@src(), icons.tvg.lucide.play, "Now playing", false, true)) state.app.router.navigate(.player);
     }
+    // Household profile avatar + switch menu (hidden with a single profile).
+    @import("profiles_ui.zig").avatarMenu();
 
     var m = dvui.menu(@src(), .horizontal, .{ .gravity_y = 0.5 });
     defer m.deinit();
@@ -840,10 +842,11 @@ fn renderPage(r: Route) !void {
         .queue => drawer.renderTabContent(.Queue),
         .history => drawer.renderTabContent(.History),
         .plugins => {
+            if (@import("profiles_ui.zig").blocksKid()) return;
             pluginSubTabs();
             @import("../services/plugins.zig").renderSection(state.app.plugin_tab);
         },
-        .agents => @import("agent_terminal.zig").render(),
+        .agents => if (!@import("profiles_ui.zig").blocksKid()) @import("agent_terminal.zig").render(),
         .system => {
             // Logs only — Plugins moved to its own nav-bar menu/route. A
             // one-entry tab strip would be pure chrome, so it's dropped.

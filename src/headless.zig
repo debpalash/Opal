@@ -124,6 +124,7 @@ pub fn headlessMain() !void {
         @import("services/wanted.zig").tick();
         @import("services/library_sync.zig").tick();
         @import("services/recall_index.zig").tick();
+        @import("services/profiles.zig").enforce();
         @import("services/agent_tasks.zig").tick();
         @import("services/operator.zig").tick();
         @import("services/search.zig").flushPendingTorrentOpen();
@@ -143,6 +144,8 @@ pub fn headlessMain() !void {
             last_tick_ms = now_ms;
             @import("core/config.zig").saveIfDirty();
         }
+        // Profile switch (admin API): shut down; appDeinit re-executes.
+        if (@import("services/profiles.zig").restartRequested()) break;
     }
 
     // ── 4. Shutdown ──

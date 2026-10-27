@@ -195,6 +195,7 @@ fn renderLeftNav(compact: bool) void {
         icon: []const u8,
     }{
         .{ .tab = .General, .label = "General", .icon = icons.tvg.lucide.@"sliders-horizontal" },
+        .{ .tab = .Profiles, .label = "Profiles", .icon = icons.tvg.lucide.@"users-round" },
         .{ .tab = .Playback, .label = "Playback", .icon = icons.tvg.lucide.play },
         .{ .tab = .Subtitles, .label = "Subtitles", .icon = icons.tvg.lucide.captions },
         .{ .tab = .Network, .label = "Network", .icon = icons.tvg.lucide.wifi },
@@ -259,6 +260,7 @@ fn sectionMatchesSearch(tab: state.SettingsTab) bool {
         .LangLearn => &.{ "Translate", "ASR", "Dubbing", "TTS", "Voice", "Speed", "Flashcard", "Transcribe" },
         .FileAssoc => &.{ "File Associations", "Default Handler", "Register", "Video", "Audio", "Torrent", "Playlist", "Comics" },
         .LiveTv => &.{ "Live TV", "IPTV", "Channels", "Playlist" },
+        .Profiles => &.{ "Profiles", "Household", "Kid", "PIN", "Switch" },
     };
     for (sections) |s| if (matchesSearch(s)) return true;
     return false;
@@ -400,6 +402,7 @@ fn renderRightPane(compact: bool) void {
         .LangLearn => "Language Learning",
         .FileAssoc => "File Associations",
         .LiveTv => "Live TV",
+        .Profiles => "Household Profiles",
         .About => "About Opal",
     });
 
@@ -422,6 +425,7 @@ fn renderRightPane(compact: bool) void {
         .LangLearn => renderLangLearnTab(),
         .FileAssoc => renderFileAssocTab(),
         .LiveTv => renderLiveTvTab(),
+        .Profiles => @import("profiles_ui.zig").renderSettingsTab(),
         .About => renderAboutTab(),
     }
 

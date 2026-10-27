@@ -213,6 +213,9 @@ pub fn coreInit() !void {
     // One-time legacy rename: ~/.config/zigzag → ~/.config/opal (+ cache + the
     // db file). MUST run before any path is read. Idempotent.
     @import("core/paths.zig").migrateLegacyDir();
+    // Household profile: point paths at the running profile's data dir. MUST
+    // precede db.init (the background worker below) and every other path read.
+    @import("services/profiles.zig").initActive();
 
     // Runtime initialization (env vars can't be read at comptime)
     state.initPaths();
@@ -991,6 +994,8 @@ pub fn appDeinit() void {
     // Teardown is done; disarm the deadline before the leak dump, whose stack
     // symbolization can take seconds and was being cut off mid-report.
     workers.finishShutdown();
+    // Profile switch: everything above is closed; re-execute into the new profile.
+    @import("services/profiles.zig").restartAfterShutdown();
     // Trigger GeneralPurposeAllocator leak dump on exit
     @import("core/alloc.zig").deinit();
 }
@@ -1176,6 +1181,8 @@ fn appFrame() !dvui.App.Result {
     // The Windows client-side close button is rendered late in a frame and
     // leaves this latch for the next one.
     if (@import("ui/titlebar.zig").close_requested) return .close;
+    // Profile switch: quit normally; appDeinit re-executes into the new profile.
+    if (@import("services/profiles.zig").restartRequested()) return .close;
 
     // A true startup_frame_submitted means the preceding callback returned,
     // Window.end completed, and SDL_RenderPresent populated the hidden native
@@ -1733,6 +1740,8 @@ fn appFrame() !dvui.App.Result {
     // First-run wizard — modal over whatever shell renders below; no-op once
     // onboarded (persisted) or before config load resolves the flag.
     @import("ui/onboarding.zig").render();
+    // Household profile picker (launch / switch) + kid-mode enforcement.
+    @import("ui/profiles_ui.zig").renderPicker();
 
     if (state.app.page_shell_enabled) {
         // New website-like page shell (redesign). Behind a flag until parity.

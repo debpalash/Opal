@@ -28,6 +28,9 @@ pub fn init() void {
     var dir_buf: [512]u8 = undefined;
     const dir = paths.configDir(&dir_buf);
     @import("io_global.zig").cwdMakePath(dir) catch {};
+    // A non-default household profile keeps its db under <config>/profiles/<id>.
+    var pdir_buf: [512]u8 = undefined;
+    @import("io_global.zig").cwdMakePath(paths.profileDataDir(&pdir_buf)) catch {};
 
     // Register sqlite-vec extension automatically for every new DB connection
     _ = c.sqlite3_auto_extension(@ptrCast(&c.sqlite3_vec_init));
@@ -153,6 +156,7 @@ pub fn prepareOn(r: Reader, sql: []const u8) ?*Stmt {
 }
 
 pub fn deinit() void {
+    @import("household_db.zig").deinit();
     readers_ready.store(false, .release);
     for (&readers) |*r| {
         if (r.*) |h| _ = c.sqlite3_close_v2(h);
@@ -959,7 +963,8 @@ fn bindSyncIdentity() void {
     const lsp = @import("../services/library_sync_pure.zig");
     var dir_buf: [512]u8 = undefined;
     var path_buf: [600]u8 = undefined;
-    const path = std.fmt.bufPrint(&path_buf, "{s}/sync_device", .{paths.configDir(&dir_buf)}) catch return;
+    // Per profile: each household profile has its own db, so its own mirror file.
+    const path = std.fmt.bufPrint(&path_buf, "{s}/sync_device", .{paths.profileDataDir(&dir_buf)}) catch return;
 
     var file_buf: [64]u8 = undefined;
     var file_id: []const u8 = "";
