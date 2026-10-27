@@ -282,6 +282,8 @@ pub fn routeCapability(path: []const u8, method: []const u8, action: []const u8)
         // person's data; create/delete manage the household. Listing is open.
         "/profiles/switch",      "/profiles/create",
         "/profiles/delete",
+        // Continuum handoff: send/bring make this host call a peer URL.
+        "/handoff/send",         "/handoff/bring",
     };
     for (host_routes) |route| if (std.mem.eql(u8, path, route)) return .administer_host;
     return null;

@@ -1978,6 +1978,19 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&run_test_remote_stream_pure.step);
     keyless_test_step.dependOn(&run_test_remote_stream_pure.step);
 
+    // Continuum (7.4): stream decision matrix, ffmpeg argv, segment names,
+    // signed stream tokens, handoff payload.
+    const test_stream_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/stream_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_test_stream_pure = b.addRunArtifact(test_stream_pure);
+    test_step.dependOn(&run_test_stream_pure.step);
+    keyless_test_step.dependOn(&run_test_stream_pure.step);
+
     // Download-root confinement: component-by-component no-follow opens and
     // regular-file enforcement for stream/subtitle/transcode endpoints.
     const test_remote_stream_path = b.addTest(.{
