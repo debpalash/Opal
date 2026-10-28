@@ -800,3 +800,13 @@ test "whisper language mapping" {
     try testing.expectEqualStrings("fr", whisperLang("fr"));
     try testing.expectEqualStrings("auto", whisperLang("xx1"));
 }
+
+pub fn needsNewTrack(sid: i64, attached_path: []const u8, published_path: []const u8) bool {
+    return sid < 0 or !std.mem.eql(u8, attached_path, published_path);
+}
+
+test "translation fallback attaches original captions instead of reloading translated file" {
+    try std.testing.expect(!needsNewTrack(2, "translated.srt", "translated.srt"));
+    try std.testing.expect(needsNewTrack(2, "translated.srt", "original.srt"));
+    try std.testing.expect(needsNewTrack(-1, "original.srt", "original.srt"));
+}

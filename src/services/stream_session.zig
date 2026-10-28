@@ -51,7 +51,7 @@ const CHUNK = 256 * 1024;
 
 const Slot = struct {
     // Guarded by `mutex`; immutable between create() and free while `used`.
-    used: bool = false,
+    lifetime: pure.SlotLifetime = .{}, // guarded by mutex
     id: [pure.SID_LEN]u8 = undefined,
     path: [2048]u8 = undefined,
     path_len: usize = 0,
@@ -197,12 +197,12 @@ fn hlsRoot(buf: []u8) []const u8 {
 /// Stop + delete expired sessions whose worker is gone. Caller holds `mutex`.
 fn reapLocked(now_ms: i64) void {
     for (&slots) |*s| {
-        if (!s.used) continue;
+        if (!s.lifetime.used) continue;
         const idle = pure.idleExpired(s.last_ms.load(.acquire), now_ms, IDLE_MS);
         if (idle) s.stop.store(true, .release);
-        if ((idle or s.stop.load(.acquire)) and !s.running.load(.acquire) and !s.progress_dirty) {
+        if ((idle or s.stop.load(.acquire)) and !s.running.load(.acquire) and !s.progress_dirty and s.lifetime.retire()) {
             if (s.dir_len > 0) io_g.cwdDeleteTree(s.dirPath()) catch {};
-            s.used = false;
+            s.lifetime.used = false;
         }
     }
 }
@@ -239,9 +239,10 @@ pub fn create(opts: CreateOptions, out: *Created) CreateError!void {
         }
         reapLocked(io_g.milliTimestamp());
         for (&slots) |*s| {
-            if (s.used) continue;
+            if (s.lifetime.used) continue;
             s.* = .{};
-            s.used = true;
+            const reserved = s.lifetime.reserve();
+            std.debug.assert(reserved);
             _ = pure.sessionIdFromBytes(id_bytes, &s.id);
             @memcpy(s.path[0..opts.abs_path.len], opts.abs_path);
             s.path_len = opts.abs_path.len;
@@ -254,7 +255,7 @@ pub fn create(opts: CreateOptions, out: *Created) CreateError!void {
             s.touch();
             if (plan.mode != .direct) {
                 const d = std.fmt.bufPrint(&s.dir, "{s}/{s}", .{ root, s.sid() }) catch {
-                    s.used = false;
+                    s.lifetime.used = false;
                     return error.Io;
                 };
                 s.dir_len = d.len;
@@ -265,6 +266,7 @@ pub fn create(opts: CreateOptions, out: *Created) CreateError!void {
         return error.Busy;
     };
 
+    defer unpin(slot);
     if (plan.mode != .direct) {
         io_g.cwdMakePath(slot.dirPath()) catch {
             release(slot);
@@ -302,7 +304,7 @@ fn release(slot: *Slot) void {
     mutex.lock();
     defer mutex.unlock();
     if (slot.dir_len > 0) io_g.cwdDeleteTree(slot.dirPath()) catch {};
-    slot.used = false;
+    slot.stop.store(true, .release);
 }
 
 fn encodeWorker(slot: *Slot, enc: pure.Encoder) void {
@@ -335,14 +337,24 @@ fn find(sid: []const u8) ?*Slot {
     mutex.lock();
     defer mutex.unlock();
     for (&slots) |*s| {
-        if (s.used and std.mem.eql(u8, s.sid(), sid)) return s;
+        if (s.lifetime.used and !s.stop.load(.acquire) and std.mem.eql(u8, s.sid(), sid)) {
+            s.lifetime.acquire();
+            return s;
+        }
     }
     return null;
+}
+
+fn unpin(s: *Slot) void {
+    mutex.lock();
+    defer mutex.unlock();
+    s.lifetime.release();
 }
 
 /// Stop a session now (its directory goes on the next tick).
 pub fn stop(sid: []const u8) bool {
     const s = find(sid) orelse return false;
+    defer unpin(s);
     s.stop.store(true, .release);
     return true;
 }
@@ -355,7 +367,7 @@ pub fn tick() void {
     var n: usize = 0;
     mutex.lock();
     for (&slots) |*s| {
-        if (!s.used or !s.progress_dirty) continue;
+        if (!s.lifetime.used or !s.progress_dirty) continue;
         s.progress_dirty = false;
         const p = &pending[n];
         p.* = .{ .pos = s.progress_pos, .dur = s.progress_dur };
@@ -379,7 +391,7 @@ pub fn activeCount() usize {
     defer mutex.unlock();
     var n: usize = 0;
     for (&slots) |*s| {
-        if (s.used) n += 1;
+        if (s.lifetime.used) n += 1;
     }
     return n;
 }
@@ -547,6 +559,7 @@ fn serveNamed(stream: std.Io.net.Stream, method: []const u8, sid: []const u8, na
         wire.sendJsonStatus(stream, "404 Not Found", "{\"error\":\"stream session ended\"}");
         return;
     };
+    defer unpin(s);
     s.touch();
     if (std.mem.eql(u8, name, "stop")) {
         if (!wire.requireMethod(stream, method, "POST")) return;

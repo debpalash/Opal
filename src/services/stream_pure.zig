@@ -432,11 +432,11 @@ pub fn buildFfmpegArgs(out: *ArgBuf, ffmpeg: []const u8, input_abs: []const u8, 
     try out.add("-hls_time");
     try out.addFmt("{d}", .{SEGMENT_SECONDS});
     for ([_][]const u8{
-        "-hls_playlist_type",     "event",
-        "-hls_segment_type",      "fmp4",
+        "-hls_playlist_type",      "event",
+        "-hls_segment_type",       "fmp4",
         "-hls_fmp4_init_filename", INIT,
-        "-hls_segment_filename",  "seg_%05d.m4s",
-        "-hls_flags",             "independent_segments+temp_file",
+        "-hls_segment_filename",   "seg_%05d.m4s",
+        "-hls_flags",              "independent_segments+temp_file",
         PLAYLIST,
     }) |a| try out.add(a);
     return out.slice();
@@ -975,4 +975,45 @@ test "stream helpers: ffprobe sibling, percent, idle" {
     try t.expectApproxEqAbs(@as(f64, 50), percentOf(10, 20), 0.001);
     try t.expectEqual(@as(f64, 0), percentOf(std.math.nan(f64), 20));
     try t.expect(idleExpired(0, 1001, 1000) and !idleExpired(0, 1000, 1000));
+}
+
+/// Mutex-protected lifetime shared by creation, requests and the reaper.
+pub const SlotLifetime = struct {
+    used: bool = false,
+    pins: usize = 0,
+
+    pub fn reserve(self: *SlotLifetime) bool {
+        if (self.used) return false;
+        self.* = .{ .used = true, .pins = 1 };
+        return true;
+    }
+    pub fn acquire(self: *SlotLifetime) void {
+        std.debug.assert(self.used);
+        self.pins += 1;
+    }
+    pub fn release(self: *SlotLifetime) void {
+        std.debug.assert(self.pins > 0);
+        self.pins -= 1;
+    }
+    pub fn retire(self: *SlotLifetime) bool {
+        if (self.pins != 0) return false;
+        self.used = false;
+        return true;
+    }
+};
+
+test "stopped streaming slot cannot be reused until creation and requests release it" {
+    var life: SlotLifetime = .{};
+    try std.testing.expect(life.reserve());
+    life.acquire(); // request A
+    life.release(); // creator returns
+    try std.testing.expect(!life.retire()); // stop/reaper races request A
+    try std.testing.expect(!life.reserve()); // B must not overwrite A
+    life.acquire(); // another already-admitted request
+    life.release();
+    try std.testing.expect(!life.retire());
+    life.release();
+    try std.testing.expect(life.retire());
+    try std.testing.expect(life.reserve()); // B may now own the slot
+    try std.testing.expectEqual(@as(usize, 1), life.pins);
 }

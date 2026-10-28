@@ -41,24 +41,7 @@ fn list(stream: std.Io.net.Stream) void {
     const running = profiles.runningProfile();
     var buf: [4096]u8 = undefined;
     var w = std.Io.Writer.fixed(&buf);
-    w.writeAll("{\"active\":") catch return;
-    wire.writeJsonString(&w, running.idText());
-    w.writeAll(",\"profiles\":[") catch return;
-    for (items[0..n], 0..) |*p, i| {
-        if (i > 0) w.writeAll(",") catch return;
-        w.writeAll("{\"id\":") catch return;
-        wire.writeJsonString(&w, p.idText());
-        w.writeAll(",\"name\":") catch return;
-        wire.writeJsonString(&w, p.nameText());
-        w.print(",\"color\":\"{s}\",\"kid\":{},\"has_pin\":{},\"default\":{},\"active\":{}}}", .{
-            pure.colorName(p.color),
-            p.kid,
-            p.hasPin(),
-            p.isDefault(),
-            std.mem.eql(u8, p.idText(), running.idText()),
-        }) catch return;
-    }
-    w.writeAll("]}") catch return;
+    pure.writePublicProfiles(&w, running.idText(), items[0..n]) catch return;
     wire.sendJson(stream, w.buffered());
 }
 

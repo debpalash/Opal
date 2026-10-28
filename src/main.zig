@@ -206,6 +206,8 @@ pub const std_options: std.Options = .{ .logFn = dvui.App.logFn, .log_level = .w
 /// remote JSON API, and the background DB/library load thread. Nothing here
 /// reads dvui_win / state.app.dvui_win, so the window may be assigned after.
 pub fn coreInit() !void {
+    // Profile startup can log before any database/config workers run.
+    logs.logs_allocator = @import("core/alloc.zig").allocator;
     // The supervisor must accept work before any service/bootstrap helper can
     // spawn, and is drained before shared state in appDeinit.
     @import("core/workers.zig").init();
@@ -220,7 +222,6 @@ pub fn coreInit() !void {
     // Runtime initialization (env vars can't be read at comptime)
     state.initPaths();
     state.loadTmdbTokenFromEnv();
-    logs.logs_allocator = @import("core/alloc.zig").allocator;
     detectResourceRoot();
 
     // mpv snapshots the yt-dlp executable while the player is initialized.

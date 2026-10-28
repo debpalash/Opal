@@ -319,34 +319,37 @@ const AgeEntry = struct { cert: []const u8, age: u8 };
 /// the stricter reading (e.g. "R" -> 17).
 const AGE_TABLE = [_]AgeEntry{
     // US film
-    .{ .cert = "G", .age = 0 },         .{ .cert = "PG", .age = 8 },       .{ .cert = "PG-13", .age = 13 },
-    .{ .cert = "R", .age = 17 },        .{ .cert = "NC-17", .age = 18 },   .{ .cert = "X", .age = 18 },
+    .{ .cert = "G", .age = 0 },       .{ .cert = "PG", .age = 8 },      .{ .cert = "PG-13", .age = 13 },
+    .{ .cert = "R", .age = 17 },      .{ .cert = "NC-17", .age = 18 },  .{ .cert = "X", .age = 18 },
     // US TV
-    .{ .cert = "TV-Y", .age = 0 },      .{ .cert = "TV-Y7", .age = 7 },    .{ .cert = "TV-Y7-FV", .age = 7 },
-    .{ .cert = "TV-G", .age = 0 },      .{ .cert = "TV-PG", .age = 8 },    .{ .cert = "TV-14", .age = 14 },
+    .{ .cert = "TV-Y", .age = 0 },    .{ .cert = "TV-Y7", .age = 7 },   .{ .cert = "TV-Y7-FV", .age = 7 },
+    .{ .cert = "TV-G", .age = 0 },    .{ .cert = "TV-PG", .age = 8 },   .{ .cert = "TV-14", .age = 14 },
     .{ .cert = "TV-MA", .age = 17 },
     // UK
-    .{ .cert = "U", .age = 0 },         .{ .cert = "Uc", .age = 0 },       .{ .cert = "12A", .age = 12 },
-    .{ .cert = "12", .age = 12 },       .{ .cert = "15", .age = 15 },      .{ .cert = "18", .age = 18 },
-    .{ .cert = "R18", .age = 18 },
+     .{ .cert = "U", .age = 0 },       .{ .cert = "Uc", .age = 0 },
+    .{ .cert = "12A", .age = 12 },    .{ .cert = "12", .age = 12 },     .{ .cert = "15", .age = 15 },
+    .{ .cert = "18", .age = 18 },     .{ .cert = "R18", .age = 18 },
     // DE (FSK)
-    .{ .cert = "0", .age = 0 },         .{ .cert = "6", .age = 6 },        .{ .cert = "16", .age = 16 },
-    .{ .cert = "FSK 0", .age = 0 },     .{ .cert = "FSK 6", .age = 6 },    .{ .cert = "FSK 12", .age = 12 },
-    .{ .cert = "FSK 16", .age = 16 },   .{ .cert = "FSK 18", .age = 18 },
+       .{ .cert = "0", .age = 0 },
+    .{ .cert = "6", .age = 6 },       .{ .cert = "16", .age = 16 },     .{ .cert = "FSK 0", .age = 0 },
+    .{ .cert = "FSK 6", .age = 6 },   .{ .cert = "FSK 12", .age = 12 }, .{ .cert = "FSK 16", .age = 16 },
+    .{ .cert = "FSK 18", .age = 18 },
     // FR
-    .{ .cert = "TP", .age = 0 },        .{ .cert = "10", .age = 10 },      .{ .cert = "-10", .age = 10 },
-    .{ .cert = "-12", .age = 12 },      .{ .cert = "-16", .age = 16 },     .{ .cert = "-18", .age = 18 },
+    .{ .cert = "TP", .age = 0 },      .{ .cert = "10", .age = 10 },
+    .{ .cert = "-10", .age = 10 },    .{ .cert = "-12", .age = 12 },    .{ .cert = "-16", .age = 16 },
+    .{ .cert = "-18", .age = 18 },
     // IN (CBFC)
-    .{ .cert = "UA", .age = 12 },       .{ .cert = "U/A", .age = 12 },     .{ .cert = "UA 7+", .age = 7 },
-    .{ .cert = "UA 13+", .age = 13 },   .{ .cert = "UA 16+", .age = 16 },  .{ .cert = "A", .age = 18 },
-    .{ .cert = "S", .age = 18 },
+       .{ .cert = "UA", .age = 12 },     .{ .cert = "U/A", .age = 12 },
+    .{ .cert = "UA 7+", .age = 7 },   .{ .cert = "UA 13+", .age = 13 }, .{ .cert = "UA 16+", .age = 16 },
+    .{ .cert = "A", .age = 18 },      .{ .cert = "S", .age = 18 },
     // JP (Eirin)
-    .{ .cert = "PG12", .age = 12 },     .{ .cert = "R15+", .age = 15 },    .{ .cert = "R18+", .age = 18 },
+         .{ .cert = "PG12", .age = 12 },
+    .{ .cert = "R15+", .age = 15 },   .{ .cert = "R18+", .age = 18 },
     // Generic numeric ages seen across TMDB regions
-    .{ .cert = "7", .age = 7 },         .{ .cert = "13", .age = 13 },      .{ .cert = "14", .age = 14 },
-    .{ .cert = "17", .age = 17 },
+      .{ .cert = "7", .age = 7 },
+    .{ .cert = "13", .age = 13 },     .{ .cert = "14", .age = 14 },     .{ .cert = "17", .age = 17 },
     // MyAnimeList / Jikan (full strings are matched by prefix below)
-    .{ .cert = "R+", .age = 17 },       .{ .cert = "Rx", .age = 18 },
+    .{ .cert = "R+", .age = 17 },     .{ .cert = "Rx", .age = 18 },
 };
 
 /// Minimum age for a certification string, or null when unknown/unrated
@@ -492,9 +495,9 @@ pub fn serialize(reg: *const Registry, out: []u8) ?[]const u8 {
     w.print(HEADER ++ "\nactive\t{s}\n", .{reg.activeId()}) catch return null;
     for (reg.profiles[0..reg.count]) |*p| {
         w.print("p\t{s}\t{s}\t{s}\t{d}\t{d}\t{d}\t{s}\t{d}\n", .{
-            p.idText(),        p.nameText(),                      colorName(p.color),
-            @intFromBool(p.kid), p.max_age,                       @intFromBool(p.allow_unrated),
-            p.pinHash(),       p.created,
+            p.idText(),          p.nameText(), colorName(p.color),
+            @intFromBool(p.kid), p.max_age,    @intFromBool(p.allow_unrated),
+            p.pinHash(),         p.created,
         }) catch return null;
     }
     return w.buffered();
@@ -730,4 +733,43 @@ test "remove: never the default; removing the next-launch profile falls back" {
     try T.expectEqual(@as(usize, 1), reg.count);
     try T.expectEqualStrings(DEFAULT_ID, reg.activeId());
     try T.expect(!reg.needsPicker());
+}
+
+/// Public API projection: emit only display fields, never credential material.
+pub fn writePublicProfiles(w: *std.Io.Writer, active: []const u8, items: []const Profile) !void {
+    try w.writeAll("{\"active\":");
+    try std.json.Stringify.value(active, .{}, w);
+    try w.writeAll(",\"profiles\":[");
+    for (items, 0..) |*p, i| {
+        if (i > 0) try w.writeByte(',');
+        try std.json.Stringify.value(.{
+            .id = p.idText(),
+            .name = p.nameText(),
+            .color = colorName(p.color),
+            .kid = p.kid,
+            .has_pin = p.hasPin(),
+            .default = p.isDefault(),
+            .active = std.mem.eql(u8, p.idText(), active),
+        }, .{}, w);
+    }
+    try w.writeAll("]}");
+}
+
+test "profile API quotes identifiers and escapes names without exposing PIN hashes" {
+    var p: Profile = .{};
+    p.setId("default");
+    p.setName("A \"quote\"\n");
+    p.setPinHash("secret-hash");
+    var buf: [4096]u8 = undefined;
+    var w = std.Io.Writer.fixed(&buf);
+    try writePublicProfiles(&w, "default", &.{p});
+    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, w.buffered(), .{});
+    defer parsed.deinit();
+    try std.testing.expectEqualStrings("default", parsed.value.object.get("active").?.string);
+    const row = parsed.value.object.get("profiles").?.array.items[0].object;
+    try std.testing.expectEqualStrings(p.nameText(), row.get("name").?.string);
+    try std.testing.expect(row.get("has_pin").?.bool);
+    try std.testing.expect(row.get("active").?.bool);
+    try std.testing.expectEqual(@as(usize, 7), row.count());
+    try std.testing.expect(std.mem.indexOf(u8, w.buffered(), "secret-hash") == null);
 }

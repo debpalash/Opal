@@ -21,6 +21,7 @@ pub const Phase = enum { idle, working, ready, nothing, failed };
 var mutex: sync.Mutex = .{};
 var result: struct {
     phase: Phase = .idle,
+    generation: u64 = 0,
     tmdb_id: i32 = 0,
     ep: pure.Ep = .{ .season = 0, .episode = 0 },
     text: [1024]u8 = undefined,
@@ -93,7 +94,7 @@ pub fn request(force: bool) void {
         mutex.lock();
         defer mutex.unlock();
         const same = result.tmdb_id == cur.tmdb_id and result.ep.season == cur.ep.season and result.ep.episode == cur.ep.episode;
-        if (same and !force and (result.phase == .ready or result.phase == .working or result.phase == .nothing)) return;
+        if (pure.reusableResult(same, force, result.generation, generation.load(.acquire), result.phase)) return;
     }
     if (busy.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) return;
     llm.prepare();
@@ -102,6 +103,7 @@ pub fn request(force: bool) void {
     _ = &args;
     mutex.lock();
     result.phase = .working;
+    result.generation = args.gen;
     result.tmdb_id = cur.tmdb_id;
     result.ep = cur.ep;
     result.text_len = 0;
@@ -231,6 +233,8 @@ fn worker(a: Args) void {
     var sources: [pure.max_sources]pure.Source = undefined;
     var transcripts: [pure.max_sources]?[]u8 = .{null} ** pure.max_sources;
     defer for (transcripts) |t| if (t) |b| alloc.free(b);
+    var summaries: [pure.max_sources]?pure.OwnedSummary = .{null} ** pure.max_sources;
+    defer for (summaries) |summary| if (summary) |v| v.deinit(alloc);
     var seasons: SeasonCache = .{};
     defer seasons.deinit();
     for (picked, 0..) |e, i| {
@@ -246,8 +250,10 @@ fn worker(a: Args) void {
         if (pure.sourceKind(sources[i]) != .transcript) {
             seasons.load(&a, e.season);
             if (seasons.episode(e.episode)) |info| {
-                sources[i].title = info.name;
-                sources[i].overview = info.overview;
+                const summary = pure.OwnedSummary.init(alloc, info.name, info.overview) catch continue;
+                summaries[i] = summary;
+                sources[i].title = summary.title;
+                sources[i].overview = summary.overview;
             }
         }
     }

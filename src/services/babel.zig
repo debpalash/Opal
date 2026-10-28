@@ -137,3 +137,10 @@ pub fn writeStatusJson(w: *std.Io.Writer) void {
     writeJsonString(w, tr.text[0..tr.len]);
     w.writeAll("}") catch return;
 }
+
+pub fn subRemove(ctx: ?*c.mpv.mpv_handle, sid: i64) void {
+    var buf: [24]u8 = undefined;
+    const id = std.fmt.bufPrintZ(&buf, "{d}", .{sid}) catch return;
+    var argv = [_][*c]const u8{ "sub-remove", id.ptr, null };
+    _ = c.mpv.mpv_command(ctx, @ptrCast(&argv));
+}

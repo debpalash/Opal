@@ -274,3 +274,37 @@ test "season JSON parse tolerates nulls and unknown fields" {
     try testing.expectEqualStrings("A.", p.value.episodes[0].overview.?);
     try testing.expect(p.value.episodes[1].overview == null);
 }
+
+/// Copy borrowed season metadata before its cache can be replaced.
+pub const OwnedSummary = struct {
+    title: []u8,
+    overview: []u8,
+    pub fn init(a: std.mem.Allocator, title: []const u8, overview: []const u8) !OwnedSummary {
+        const t = try a.dupe(u8, title);
+        errdefer a.free(t);
+        return .{ .title = t, .overview = try a.dupe(u8, overview) };
+    }
+    pub fn deinit(self: OwnedSummary, a: std.mem.Allocator) void {
+        a.free(self.title);
+        a.free(self.overview);
+    }
+};
+
+pub fn reusableResult(same: bool, force: bool, result_generation: u64, generation: u64, phase: anytype) bool {
+    return same and !force and result_generation == generation and (phase == .ready or phase == .working or phase == .nothing);
+}
+
+test "recap season metadata survives cache replacement" {
+    var cache = [_]u8{ 'a', 'b', 'c' };
+    const summary = try OwnedSummary.init(std.testing.allocator, &cache, &cache);
+    defer summary.deinit(std.testing.allocator);
+    @memset(&cache, 'x');
+    try std.testing.expectEqualStrings("abc", summary.title);
+    try std.testing.expectEqualStrings("abc", summary.overview);
+}
+
+test "returning to an episode does not reuse cancelled recap work" {
+    const Phase = enum { ready, working, nothing };
+    try std.testing.expect(reusableResult(true, false, 1, 1, Phase.working));
+    try std.testing.expect(!reusableResult(true, false, 1, 2, Phase.working));
+}

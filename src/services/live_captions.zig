@@ -38,6 +38,8 @@ var bound: struct {
     load_serial: u64 = 0,
     epoch: u64 = 0,
     sid: i64 = -1,
+    path: [1024]u8 = undefined,
+    path_len: usize = 0,
 } = .{};
 
 /// UI ↔ worker exchange.
@@ -127,13 +129,18 @@ pub fn tick() void {
     if (path_len == 0) return;
 
     const path = path_buf[0..path_len];
-    if (bound.sid < 0) {
+    if (pure.needsNewTrack(bound.sid, bound.path[0..bound.path_len], path)) {
+        if (bound.sid >= 0) babel.subRemove(p.mpv_ctx, bound.sid);
         const tl = babel.translateLang();
         bound.sid = babel.subAdd(p.mpv_ctx, path, if (tl.len > 0) "Live captions (translated)" else "Live captions", if (tl.len > 0) tl else "") orelse -1;
         if (bound.sid >= 0) logs.pushLog("info", "babel", "Live captions track added", false);
     } else if (!babel.subReload(p.mpv_ctx, bound.sid)) {
         // The track vanished (user removed it / track list rebuilt): re-add.
         bound.sid = babel.subAdd(p.mpv_ctx, path, "Live captions", "") orelse -1;
+    }
+    if (bound.sid >= 0) {
+        @memcpy(bound.path[0..path.len], path);
+        bound.path_len = path.len;
     }
 }
 
