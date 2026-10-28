@@ -9,6 +9,7 @@ import time
 import unittest
 from pathlib import Path
 from urllib.request import urlopen
+from urllib.parse import quote
 import test_setup_token_live as h
 
 
@@ -54,19 +55,32 @@ def run(binary, model, port, model_port, embeddings=False):
             assert r.status==200,(r.status,r.body)
             return r.json()
         if embeddings:
+            cases = [
+                ('A detective investigates a murder in a quiet village', 'a sleuth solves a homicide in a small town'),
+                ('Astronauts explore a distant planet aboard a spaceship', 'space travelers discover an alien world'),
+                ('A chef prepares delicious meals in a French restaurant', 'cooking fine food in a Paris kitchen'),
+                ('Two musicians fall in love while playing jazz', 'a romantic story about performers making music'),
+                ('A family rescues an injured dog from the forest', 'parents and children save a wounded puppy in the woods'),
+            ]
             with h.database(profile/'opal.db') as db:
-                db.execute('INSERT INTO local_media(path,root,title) VALUES(?,?,?)',(str(media),str(app.root),'Beautiful blue sky'))
+                for i,(title,_) in enumerate(cases):
+                    file=app.root/f'quality-{i}.mkv';file.symlink_to(media)
+                    db.execute('INSERT INTO local_media(path,root,title) VALUES(?,?,?)',(str(file),str(app.root),title))
             deadline=time.monotonic()+90
             while time.monotonic()<deadline:
                 with h.database(profile/'opal.db') as db:
                     row=db.execute("SELECT value FROM recall_meta WHERE key='embed_dim'").fetchone()
                     count=db.execute('SELECT COUNT(*) FROM recall_docs WHERE embedded=1').fetchone()[0]
-                if row and int(row[0])>0 and count: break
+                if row and int(row[0])>0 and count>=len(cases): break
                 time.sleep(.5)
             else: raise AssertionError('index never persisted real embeddings')
-            found=req('GET','/api/recall?q=beautiful')
-            assert found['vectors'] and found['docs'],found
-            print('PASS: real local model embeddings persist in the vector index and are used by Recall search (integration, not ranking-quality evaluation)')
+            hits=0
+            for title,query in cases:
+                found=req('GET','/api/recall?q='+quote(query))
+                assert found['vectors'],found
+                first=found['docs'][0]['title'] if found['docs'] else '(no results)';hits+=first==title
+                print(f'Ranking: {query!r} -> {first!r}; constraints={found["constraints"]["summary"]!r}')
+            print(f'PASS: real embeddings persist and search executes; synthetic paraphrase top-1 score {hits}/{len(cases)} (model-specific smoke benchmark, not broad relevance validation)')
             return
         req('POST','/api/load',{'url':str(media)})
         deadline=time.monotonic()+20

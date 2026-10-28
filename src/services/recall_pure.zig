@@ -462,10 +462,12 @@ pub fn parse(query: []const u8) Parsed {
         out.natural = true;
     }
 
-    // Kind words (first wins; all are consumed).
+    // Kind words before "about" describe the requested medium. After it,
+    // they describe subject matter ("a story about making music").
     var saw_kind = false;
     i = 0;
     while (i < t.len) : (i += 1) {
+        if (t.is(i, "about")) break;
         if (t.used[i]) continue;
         if (kindFromWord(t.low(i))) |k| {
             if (c.kind == .any) c.kind = k;
@@ -572,6 +574,15 @@ pub fn parse(query: []const u8) Parsed {
     // Filler-only residuals ("something") carry nothing searchable.
     out.residual_len = if (meaningful == 0 and strip) 0 else n;
     return out;
+}
+
+test "subject matter does not become a media kind constraint" {
+    const story = parse("a romantic story about performers making music");
+    try std.testing.expectEqual(Kind.any, story.constraints.kind);
+    try std.testing.expect(std.mem.indexOf(u8, story.text(), "music") != null);
+    try std.testing.expectEqual(Kind.movie, parse("movies about music").constraints.kind);
+    try std.testing.expectEqual(Kind.podcast, parse("podcasts about movies").constraints.kind);
+    try std.testing.expectEqual(Kind.music, parse("nineties music").constraints.kind);
 }
 
 fn setLang(c: *Constraints, code: []const u8) void {

@@ -1,3 +1,7 @@
+test "Horizon device validation module" {
+    _ = @import("services/horizon_device_test.zig");
+}
+
 test "Anime playback module" {
     _ = @import("services/anime.zig");
 }
