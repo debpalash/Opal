@@ -48,14 +48,17 @@ def test_live_fixture_port_collision_guard():
     return "pass", "real wildcard listener rejected; unused isolated port accepted"
 
 
+BUILD_TIMEOUT = 900 if os.environ.get("CI") else 300
+
+
 @test("Zig Build", "Build")
 def test_zig_build():
     try:
         result = subprocess.run(
             ["zig", "build"], cwd=PROJECT_DIR,
-            # Cold CI builds link the C++ torrent wrapper + the whole app; 120s
-            # was right at the edge and flaked. 300s leaves headroom.
-            capture_output=True, text=True, timeout=300
+            # Cold CI builds include the full native dependency graph and
+            # exceeded five minutes on macOS runners; keep a bounded CI budget.
+            capture_output=True, text=True, timeout=BUILD_TIMEOUT
         )
         if result.returncode == 0:
             binary = _built_binary()
@@ -65,7 +68,7 @@ def test_zig_build():
             return "pass", "Build succeeded"
         return "fail", result.stderr[:200]
     except subprocess.TimeoutExpired:
-        return "fail", "Build timed out (>300s)"
+        return "fail", f"Build timed out (>{BUILD_TIMEOUT}s)"
 
 
 @test("WebP prefix auto-detects Homebrew without OPAL_WEBP_PREFIX", "Build")
@@ -97,13 +100,13 @@ def test_webp_prefix_homebrew_fallback():
             # proves the absent ~/.local/opal-webp was skipped, not tolerated.
             bad = dict(env, OPAL_WEBP_PREFIX=os.path.join(home, "missing-webp"))
             neg = subprocess.run([zig, "build"], cwd=PROJECT_DIR, env=bad,
-                                 capture_output=True, text=True, timeout=300)
+                                 capture_output=True, text=True, timeout=BUILD_TIMEOUT)
             if neg.returncode == 0 or "prefix directory" not in neg.stderr:
                 return "fail", "control: a missing OPAL_WEBP_PREFIX should fail with 'unable to open prefix directory'"
             pos = subprocess.run([zig, "build"], cwd=PROJECT_DIR, env=env,
-                                 capture_output=True, text=True, timeout=300)
+                                 capture_output=True, text=True, timeout=BUILD_TIMEOUT)
     except subprocess.TimeoutExpired:
-        return "fail", "build timed out (>300s)"
+        return "fail", f"build timed out (>{BUILD_TIMEOUT}s)"
     if pos.returncode != 0:
         return "fail", pos.stderr[-600:]
     return "pass", f"built with no env var and no ~/.local/opal-webp via {brew[0]}"
