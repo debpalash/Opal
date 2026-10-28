@@ -601,6 +601,19 @@ fn buildSupported(b: *std.Build) void {
     b.getInstallStep().dependOn(&install_mcp.step);
     b.step("opal-mcp", "Build only the opal-mcp bridge (no GUI dependencies)").dependOn(&install_mcp.step);
 
+    // Dev probe for the live-caption chunk pipeline (not installed).
+    const babel_live = b.addExecutable(.{
+        .name = "babel-live",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/babel_live_main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_babel_live = b.addRunArtifact(babel_live);
+    if (b.args) |args| run_babel_live.addArgs(args);
+    b.step("babel-live", "Run the live-caption pipeline on a media file (dev probe)").dependOn(&run_babel_live.step);
+
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
     // opal.exe imports libmpv-2.dll / libsqlite3-0.dll, and torrent_wrapper.dll
@@ -900,6 +913,23 @@ fn buildSupported(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_auto_subs_pure).step);
+
+    // Babel (v10 7.5): live captions, subtitle translation, episode recaps.
+    for ([_][]const u8{
+        "src/services/live_captions_pure.zig",
+        "src/services/translate_pure.zig",
+        "src/services/recap_pure.zig",
+        "src/services/llm_oneshot_pure.zig",
+    }) |babel_pure| {
+        const test_babel_pure = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(babel_pure),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        test_step.dependOn(&b.addRunArtifact(test_babel_pure).step);
+    }
 
     const test_position_save_pure = b.addTest(.{
         .root_module = b.createModule(.{
@@ -1777,6 +1807,16 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_rank).step);
 
+    // Recall (7.1): NL constraint parser, subtitle chunker, rank fusion, snippets.
+    const test_recall_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/recall_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_recall_pure).step);
+
     // Storage page accounting: byte formatting at every unit boundary, the
     // percent-of-total clamp, and the guard that user data is never one-click
     // removable (losing opal.db is unrecoverable).
@@ -1967,6 +2007,19 @@ fn buildSupported(b: *std.Build) void {
     const run_test_remote_stream_pure = b.addRunArtifact(test_remote_stream_pure);
     test_step.dependOn(&run_test_remote_stream_pure.step);
     keyless_test_step.dependOn(&run_test_remote_stream_pure.step);
+
+    // Continuum (7.4): stream decision matrix, ffmpeg argv, segment names,
+    // signed stream tokens, handoff payload.
+    const test_stream_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/stream_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_test_stream_pure = b.addRunArtifact(test_stream_pure);
+    test_step.dependOn(&run_test_stream_pure.step);
+    keyless_test_step.dependOn(&run_test_stream_pure.step);
 
     // Download-root confinement: component-by-component no-follow opens and
     // regular-file enforcement for stream/subtitle/transcode endpoints.
@@ -2537,6 +2590,26 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_anime_skip_pure).step);
 
+    // Perception (skip intros/credits for any series): audio fingerprints,
+    // cross-episode alignment + chapter-title classifier, episode/sibling
+    // parsing + cache blobs, and the merged skip policy. markers.zig and
+    // skip_segments.zig route through these.
+    for ([_][]const u8{
+        "src/services/fingerprint_pure.zig",
+        "src/services/marker_match_pure.zig",
+        "src/services/markers_pure.zig",
+        "src/services/skip_policy_pure.zig",
+    }) |perception_src| {
+        const t = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(perception_src),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        test_step.dependOn(&b.addRunArtifact(t).step);
+    }
+
     // gallery-dl backend pure logic: URL→backend classification (gallery/art/
     // booru hosts vs video hosts), the argv builder (discrete args, `--` guard,
     // no shell injection), and stdout parsing (downloaded/skipped/ignore).
@@ -2723,6 +2796,14 @@ fn buildSupported(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_library_sync_pure).step);
+    const test_profiles_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/profiles_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_profiles_pure).step);
     const test_reliable_fetch_pure = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/reliable_fetch_pure.zig"),

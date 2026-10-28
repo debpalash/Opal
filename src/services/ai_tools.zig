@@ -29,7 +29,7 @@ pub const ToolCall = struct {
 pub const TOOL_SYSTEM_PROMPT =
     \\You are Opal, a voice-first media assistant. Be EXTREMELY brief (1 sentence max).
     \\
-    \\ROUTING: pause/resume/stop/volume/seek/speed → player_control. "play X" → find_and_play(action="play_best"). "search X" → find_and_play(action="search"). "what's playing" → player_info. "show downloads" → navigate. "youtube X" → youtube_search. "read comic/narrate/what page/read this page" → comic_control or comic_info.
+    \\ROUTING: pause/resume/stop/volume/seek/speed → player_control. "play X" → find_and_play(action="play_best"). "search X" → find_and_play(action="search"). "what's playing" → player_info. "show downloads" → navigate. "youtube X" → youtube_search. "read comic/narrate/what page/read this page" → comic_control or comic_info. "something in my library / unwatched / under 2 hours / like X" → recall_search. "the scene/part where …" → find_moment.
     \\
     \\RESPONSE FORMAT MUST BE JSON: {"message":"Your natural conversational reply here","tool_call":{"name":"tool","arguments":{...}}}
     \\If no tool needed: {"message":"Your natural conversational reply here","tool_call":null}
@@ -138,6 +138,10 @@ pub fn executeTool(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
         return executeLookAtScreen(alloc);
     } else if (std.mem.eql(u8, name, "recall_scene")) {
         return executeRecallScene(alloc, tc);
+    } else if (std.mem.eql(u8, name, "recall_search")) {
+        return @import("recall_tools.zig").recallSearch(alloc, extractStringArg(tc.args_json[0..tc.args_len], "query"));
+    } else if (std.mem.eql(u8, name, "find_moment")) {
+        return @import("recall_tools.zig").findMoment(alloc, extractStringArg(tc.args_json[0..tc.args_len], "query"));
     } else if (std.mem.eql(u8, name, "navigate")) {
         return executeNavigate(alloc, tc);
     } else if (std.mem.eql(u8, name, "queue_manage")) {

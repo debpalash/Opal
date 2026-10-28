@@ -103,6 +103,7 @@
     "src/services/rss.zig -> icons",
     "src/services/search.zig -> ../ui/components.zig",
     "src/services/search.zig -> ../ui/footer_pure.zig",
+    "src/services/search.zig -> ../ui/recall_results.zig",
     "src/services/search.zig -> ../ui/search_gallery_pure.zig",
     "src/services/search.zig -> ../ui/settings.zig",
     "src/services/search.zig -> ../ui/theme.zig",

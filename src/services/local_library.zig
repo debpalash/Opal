@@ -115,6 +115,7 @@ fn scanWorker() void {
     }
     if (@import("../core/workers.zig").isQuitting()) return;
     indexed_once.store(true, .release);
+    @import("recall_index.zig").requestRefresh();
     state.wakeUi();
     // At most one background-operator request per completed scan; free when it is off.
     @import("operator_local_names.zig").afterScan();
@@ -326,6 +327,23 @@ pub fn searchPage(query_raw: []const u8, duplicates_only: bool, offset: usize, o
     db.bindText(total_stmt, 1, pattern);
     if (db.step(total_stmt) != db.c.SQLITE_ROW) return .{ .count = count, .failed = true };
     return .{ .count = count, .total = @intCast(@max(db.columnInt64(total_stmt, 0), 0)) };
+}
+
+/// Indexed path + display title for one library id. Server-side only: the
+/// streaming routes (stream_session.zig) resolve ids here so the web never
+/// receives or supplies a filesystem path.
+pub fn pathById(id: i64, path_out: []u8, title_out: []u8) ?struct { path: []const u8, title: []const u8 } {
+    if (id <= 0) return null;
+    const stmt = db.prepare("SELECT path,COALESCE(NULLIF(display_title,''),title) FROM local_media WHERE rowid=?1 LIMIT 1") orelse return null;
+    defer db.finalize(stmt);
+    db.bindInt64(stmt, 1, id);
+    if (db.step(stmt) != db.c.SQLITE_ROW) return null;
+    var path_len: usize = 0;
+    var title_len: usize = 0;
+    db.copyColumn(stmt, 0, path_out, &path_len);
+    db.copyColumn(stmt, 1, title_out, &title_len);
+    if (path_len == 0 or path_len + 1 >= path_out.len) return null; // truncated
+    return .{ .path = path_out[0..path_len], .title = title_out[0..title_len] };
 }
 
 pub fn correct(id: i64, title: []const u8, kind: []const u8) bool {

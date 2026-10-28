@@ -23,7 +23,7 @@ pub const GridMode = enum { auto, cols_1, cols_2, cols_3, cols_4 };
 pub const ContentProvider = enum { mpv, comic_viewer };
 pub const VideoFillMode = enum { fit, balanced, cover };
 pub const DrawerTab = enum { Search, Downloads, TMDB, YouTube, Queue, Comics, Anime, Podcasts, Radio, History, RSS, Jellyfin, Plex, Plugins, Logs, Settings, AI, Web, Audiobooks, Opds, Novels, Vndb, Drama, Iptv, Music };
-pub const SettingsTab = enum { General, Playback, Network, Subtitles, Storage, WebUi, Scripts, AI, LangLearn, FileAssoc, LiveTv, About };
+pub const SettingsTab = enum { General, Playback, Network, Subtitles, Storage, WebUi, Scripts, AI, LangLearn, FileAssoc, LiveTv, Profiles, About };
 pub const TmdbView = enum { Trending, Search, Favorites, Watchlist, Watching };
 pub const TmdbCategory = enum { trending, now_playing, top_rated, upcoming, popular };
 pub const TmdbMediaFilter = enum { all, movie, tv };
@@ -740,6 +740,14 @@ pub const AppState = struct {
     ytdl_format_idx: usize = 1,
     sub_lang_buf: [8]u8 = [_]u8{ 'e', 'n', 'g', 0, 0, 0, 0, 0 },
     sub_lang_len: usize = 3,
+    /// Babel (services/babel.zig): live-caption source language ("auto" or a
+    /// whisper code), "Translate subtitles to" target ("" = off), recaps.
+    babel_caption_lang: [8]u8 = [_]u8{ 'a', 'u', 't', 'o', 0, 0, 0, 0 },
+    babel_caption_lang_len: usize = 4,
+    babel_translate_lang: [8]u8 = std.mem.zeroes([8]u8),
+    babel_translate_lang_len: usize = 0,
+    babel_recap_enabled: bool = true,
+    babel_recap_tts: bool = false,
     /// Last explicit subtitle visibility choice; reapplied to new media.
     subtitles_enabled: bool = true,
     /// Last explicitly selected embedded audio language. Track IDs are local to
@@ -920,6 +928,12 @@ pub const AppState = struct {
     anime_skip_recap: bool = true,
     anime_skip_credits: bool = false,
     anime_skip_preview: bool = false,
+    // "Skip intros & credits" for ANY media (skip_policy_pure.Mode: 0 Off,
+    // 1 Show button, 2 Auto-skip). Sources: Anime-Skip API > chapter titles >
+    // local audio fingerprints (services/skip_segments.zig). When the config
+    // has no `skip_mode` yet it is derived from anime_skip_enabled.
+    skip_mode: u8 = 2,
+    skip_mode_loaded: bool = false,
     deband_enabled: bool = true,
     video_scaler: u8 = 0, // 0=ewa_lanczossharp, 1=bilinear, 2=spline36
     // Web Remote JSON API (:41595). OFF by default — nothing should listen on

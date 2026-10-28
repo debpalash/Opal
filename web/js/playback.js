@@ -6,6 +6,7 @@
 // keep downloading in the background and a later seek can restart an old
 // transcode over the newly selected item.
 function resetPlayerSource(){
+  if (typeof stopContinuum === 'function') void stopContinuum();
   const v = $('video');
   v._tcRel = ''; v._tcTitle = ''; v._tcBase = 0;
   v.onerror = null;
@@ -35,6 +36,7 @@ $('player-close').onclick = () => {
 
 // ── Setup (first-run from the browser — essential for hosted mode) ──
 async function loadSetup(){
+  if (typeof loadProfiles === 'function') void loadProfiles();
   try {
     const d = await api('/setup');
     $('setup-sources').textContent = d.has_sources ? 'Sources installed ✓' : 'No sources — search returns nothing until you install some.';

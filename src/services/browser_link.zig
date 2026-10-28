@@ -8,7 +8,8 @@
 //! and stored only as a SHA-256 hash.
 
 const std = @import("std");
-const db = @import("../core/db.zig");
+// Household-wide (not per profile): accounts/paired browsers survive a profile switch.
+const db = @import("../core/household_db.zig");
 const io = @import("../core/io_global.zig");
 const sync = @import("../core/sync.zig");
 const pure = @import("browser_link_pure.zig");

@@ -966,6 +966,11 @@ fn handleRequest(stream: std.Io.net.Stream, client_key: u64) !void {
         return;
     }
 
+    // Continuum stream fetches carrying a signed per-session token in the path
+    // (a TV / peer Opal without the account token). Untokenized stream paths
+    // fall through to normal API auth below.
+    if (@import("stream_session.zig").handlePublic(stream, method, path, request)) return;
+
     // Browser pairing is the other unauthenticated data route: it is how an
     // extension obtains its token. Code-gated, loopback-only, and rate limited
     // inside the handler (see remote_browser_api.handlePair).
@@ -1254,7 +1259,11 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
     if (@import("remote_library_api.zig").handle(stream, method, api_path, query)) return;
     if (@import("remote_collections_api.zig").handle(stream, method, api_path, query)) return;
     if (@import("remote_local_library_api.zig").handle(stream, method, api_path, query, body)) return;
+    if (@import("remote_recall_api.zig").handle(stream, method, api_path, query, body)) return;
     if (@import("remote_library_sync_api.zig").handle(stream, method, api_path, query, body)) return;
+    if (@import("remote_profiles_api.zig").handle(stream, method, api_path, query, body)) return;
+    if (@import("stream_session.zig").handleApi(stream, method, api_path, query, body, request)) return;
+    if (@import("handoff.zig").handleApi(stream, method, api_path, query, body, request)) return;
     if (@import("remote_plex_api.zig").handle(stream, method, api_path, query)) return;
     if (@import("remote_wanted_api.zig").handle(stream, method, api_path, query)) return;
     if (@import("remote_agent_tasks_api.zig").handle(stream, method, api_path, query, body)) return;
@@ -4553,7 +4562,9 @@ fn writeSubtitleDiscovery(w: *std.Io.Writer) void {
         if (auto_subs.in_progress.load(.acquire)) "true" else "false",
     }) catch return;
     escJsonWrite(w, txt.safeUtf8(generated.text[0..generated.len]));
-    w.writeAll("\"}}") catch return;
+    w.writeAll("\"},") catch return;
+    @import("babel.zig").writeStatusJson(w); // live captions + translation
+    w.writeAll("}") catch return;
 }
 
 /// A single rich player snapshot. This is the deep interface for every browser
@@ -4638,7 +4649,10 @@ fn apiPlayerSnapshot(stream: std.Io.net.Stream, ap: *player.MediaPlayer, players
     escJsonWrite(&w, txt.safeUtf8(active_device));
     w.writeAll("\",\"error\":\"") catch return;
     escJsonWrite(&w, load_error);
-    w.print("\",\"retryable\":{s}}},\"chapters\":[", .{if (retryable) "true" else "false"}) catch return;
+    w.print("\",\"retryable\":{s}}},\"skip\":", .{if (retryable) "true" else "false"}) catch return;
+    // Current intro/credits segment (null outside one) — see skip_segments.
+    @import("skip_segments.zig").writeJson(&w);
+    w.writeAll(",\"chapters\":[") catch return;
     writePlayerChapters(&w, ap, chapter_count, chapter);
     w.writeAll("],\"tracks\":{\"audio\":[") catch return;
     writePlayerTracks(&w, ap, "audio");
@@ -4770,6 +4784,19 @@ fn apiPlayerAction(stream: std.Io.net.Stream, ap: *player.MediaPlayer, query: []
             }
             auto_subs.transcribeCurrent();
         },
+        .live_captions => |on| @import("live_captions.zig").setEnabled(on),
+        .subtitle_translate => {
+            const translate = @import("translate.zig");
+            if (translate.in_progress.load(.acquire)) {
+                if (players_locked.*) {
+                    players_locked.* = false;
+                    state.players_mutex.unlock();
+                }
+                sendJsonStatus(stream, "409 Conflict", "{\"error\":\"subtitle translation already running\"}");
+                return;
+            }
+            translate.translateActiveTrack();
+        },
         .aspect => |v| _ = c.mpv.mpv_set_property_string(ap.mpv_ctx, "video-aspect-override", v.mpvValue().ptr),
         .subtitle_delay => |v| setPlayerDouble(ap, "sub-delay", v),
         .zoom => |v| setPlayerDouble(ap, "video-zoom", v),
@@ -4819,6 +4846,8 @@ fn apiPlayerAction(stream: std.Io.net.Stream, ap: *player.MediaPlayer, query: []
         .frame_previous => _ = c.mpv.mpv_command_string(ap.mpv_ctx, "frame-back-step"),
         .frame_next => _ = c.mpv.mpv_command_string(ap.mpv_ctx, "frame-step"),
         .screenshot => _ = c.mpv.mpv_command_string(ap.mpv_ctx, "screenshot"),
+        // Executed on the owner thread by skip_segments.tick().
+        .skip_segment => @import("skip_segments.zig").requestSkip(),
         .loop_a => ap.setLoopA(),
         .loop_b => ap.setLoopB(),
         .loop_clear => ap.clearLoop(),

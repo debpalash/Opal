@@ -278,6 +278,12 @@ pub fn routeCapability(path: []const u8, method: []const u8, action: []const u8)
         // and `pull`/`push` make this host fetch a peer URL.
         "/library/sync",         "/library/sync/pull",
         "/library/sync/push",
+        // Household profiles: switching restarts the host into another
+        // person's data; create/delete manage the household. Listing is open.
+        "/profiles/switch",      "/profiles/create",
+        "/profiles/delete",
+        // Continuum handoff: send/bring make this host call a peer URL.
+        "/handoff/send",         "/handoff/bring",
     };
     for (host_routes) |route| if (std.mem.eql(u8, path, route)) return .administer_host;
     return null;
@@ -336,6 +342,17 @@ pub fn allowsRoute(principal: Principal, path: []const u8, method: []const u8, a
     if (browserOnlyRoute(path)) return false;
     const capability = routeCapability(path, method, action) orelse return true;
     return allows(principal, capability);
+}
+
+test "household profile management is admin-only, listing is open to sessions" {
+    for ([_]Principal{ .machine, .admin_session, .session }) |principal| {
+        for ([_][]const u8{ "/profiles/switch", "/profiles/create", "/profiles/delete" }) |route| {
+            try std.testing.expectEqual(principal != .session, allowsRoute(principal, route, "POST", ""));
+        }
+        try std.testing.expect(allowsRoute(principal, "/profiles", "GET", ""));
+    }
+    try std.testing.expect(!allowsRoute(.browser, "/profiles", "GET", ""));
+    try std.testing.expect(!allowsRoute(.browser, "/profiles/switch", "POST", ""));
 }
 
 test "route privilege matrix protects host administration and executable trust" {

@@ -438,6 +438,14 @@
 
   <!-- Setup -->
     <section class="page on" id="page-home">
+      <div class="sect">Find a title or a moment</div>
+      <form id="recall-form" class="search-row"><input id="recall-query" type="search" maxlength="500" aria-label="Search your library and captions" placeholder="A cozy mystery, or the scene with the heist…"><button type="submit">Search library</button></form>
+      <div id="recall-status" class="hint" role="status" aria-live="polite"></div><div id="recall-results"></div>
+      <details class="acc-group"><summary>Continue on another screen</summary>
+        <div class="search-row"><label for="continuum-quality">Quality</label><select id="continuum-quality"><option value="original">Original</option><option value="720p">720p</option><option value="1080p">1080p</option></select><button id="continuum-play" type="button">Watch current item here</button></div>
+        <div class="search-row"><input id="continuum-peer" type="url" aria-label="Other Opal address" placeholder="Other Opal address"><input id="continuum-token" type="password" aria-label="Other Opal access token" placeholder="Access token" autocomplete="off"></div>
+        <div class="quick"><button id="continuum-send" type="button">Send to other Opal</button><button id="continuum-bring" type="button">Bring to this Opal</button></div><div id="continuum-status" class="hint" role="status" aria-live="polite"></div>
+      </details>
       <div class="sect">At a glance</div>
       <div id="home-metrics" class="metrics"></div>
       <div class="sect-bar"><div class="sect">For You</div><button id="home-recs-refresh" class="text-btn">Refresh</button></div>
@@ -487,6 +495,8 @@
       <div id="local-results"></div>
   </section>
   <section class="page" id="page-setup">
+    <div class="sect">Profiles</div>
+    <form id="profile-form" class="search-row"><select id="profile-choice" aria-label="Profile"></select><input id="profile-pin" type="password" inputmode="numeric" autocomplete="off" aria-label="Profile PIN" placeholder="PIN if required"><button id="profile-switch" type="submit">Switch profile</button><button id="profile-refresh" type="button">Refresh profiles</button></form><div id="profile-status" class="hint" role="status" aria-live="polite"></div>
     <div class="sect">Sources</div>
     <div id="setup-sources" class="hint">Checking…</div>
     <button id="setup-install" class="quick-btn">Install starter sources</button>
@@ -790,6 +800,9 @@
 <script src="/js/drama-vndb.js"></script>
 <script src="/js/source-details.js"></script>
 <script src="/js/discovery.js"></script>
+<script src="/js/recall.js"></script>
+<script src="/js/continuum.js"></script>
+<script src="/js/profiles.js"></script>
 <script src="/js/boot.js"></script>
 </body>
 </html>

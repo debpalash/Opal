@@ -1039,7 +1039,7 @@ pub fn generateResponse() void {
 
     // ── Dynamic System Prompt — conditionally include tools ──
     const has_player = state.app.active_player_idx < state.app.players.items.len;
-    var dyn_buf: [3072]u8 = undefined;
+    var dyn_buf: [4096]u8 = undefined;
     var dyn_fbs = std.Io.Writer.fixed(&dyn_buf);
     const dw = &dyn_fbs;
 
@@ -1056,7 +1056,9 @@ pub fn generateResponse() void {
     // or rare enough to not pay its prompt weight on every single turn.
     dw.writeAll(
         \\
-        \\  {"name":"find_and_play","description":"Search/play media.","parameters":{"type":"object","properties":{"query":{"type":"string"},"content_type":{"type":"string","enum":["auto","movie","show","anime","youtube","comic"]},"action":{"type":"string","enum":["search","play_best"]}},"required":["query"]}}
+        \\  {"name":"find_and_play","description":"Search/play media.","parameters":{"type":"object","properties":{"query":{"type":"string"},"content_type":{"type":"string","enum":["auto","movie","show","anime","youtube","comic"]},"action":{"type":"string","enum":["search","play_best"]}},"required":["query"]}},
+        \\  {"name":"recall_search","description":"Search the user's own library in plain language.","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}},
+        \\  {"name":"find_moment","description":"Find and play a moment in the user's media by what is said.","parameters":{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}}
     ) catch {};
     if (!voice_lean) {
         dw.writeAll(

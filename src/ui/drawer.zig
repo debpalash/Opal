@@ -417,6 +417,8 @@ pub fn renderDrawer() void {
 /// Render just the body for a given tab (no rail/chrome). Shared by the drawer
 /// and the page-shell so pages reuse the exact same content renderers.
 pub fn renderTabContent(tab: state.DrawerTab) void {
+    // Kid profiles: Settings / sources / AI setup / logs are locked.
+    if (@import("profiles_ui.zig").blocksTab(tab)) return;
     switch (tab) {
         .Search => search.renderSearchContent(),
         .Downloads => transfers.renderTransfersContent(@import("wanted_ui.zig").render),

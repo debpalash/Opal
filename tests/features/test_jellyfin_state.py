@@ -57,7 +57,12 @@ def test_personal_server_workflow_guards():
     snapshot = remote.split("fn apiPlayerSnapshot(", 1)[1].split("fn setPlayerDouble", 1)[0]
     assert "ap.np_title" in snapshot and "ap.loading_title" in snapshot
     discovery = remote.split("fn writeSubtitleDiscovery(", 1)[1].split("\n}", 1)[0]
-    assert 'w.writeAll("\\\"}}")' in discovery and 'w.writeAll("\\\"}}}")' not in discovery
+    # Closes the generation object then the discovery object exactly once —
+    # directly, or after Babel's status block (babel.writeStatusJson).
+    closes = ('w.writeAll("\\\"}}")' in discovery
+              or ('w.writeAll("\\\"},")' in discovery and "writeStatusJson(w)" in discovery
+                  and discovery.rstrip().endswith('w.writeAll("}") catch return;')))
+    assert closes and 'w.writeAll("\\\"}}}")' not in discovery
     for case in ("test_jellyfin_disconnect_cancels_inflight_login_publication",
                  "test_jellyfin_login_library_play_resume_tracks_expiry_reconnect",
                  "test_plex_restore_library_play_resume_tracks_expiry",
