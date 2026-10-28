@@ -856,3 +856,6 @@ button:disabled{cursor:not-allowed}
 
 /* ── Motion preference ── */
 @media (prefers-reduced-motion:reduce){.card,.chips button,.btn-more,#pair-btn{transition:none}.card:hover{transform:none}}
+
+/* Shared disclosures retain usable tap targets on every screen. */
+.acc-group>summary{min-height:40px;padding:9px 0;cursor:pointer;color:var(--text-2);font-weight:650}
