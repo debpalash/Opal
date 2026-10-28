@@ -70,8 +70,8 @@ services do not import the UI to identify media kinds or resolve poster URLs.
 
 ## Horizon wave 2 implementation boundaries
 
-Wave 1 is reviewed on `v10-horizon`; `v11-resilience-commons-craft` adds the
-following implementation.
+Wave 1 and `v11-resilience-commons-craft` are merged into main. The following
+describes their implementation boundaries.
 
 ### Resilience (7.6)
 
@@ -132,9 +132,34 @@ The add-on fixture requires OpenSSL Ed25519 support and ffmpeg. Model tests own
 one loopback llama-server, isolate configuration and use a local provider
 adapter so Opal cannot stop another model process. Translation was checked with
 Qwen3-1.7B Q4_K_M. Its mean-pooled embeddings verify vector-index integration,
-not retrieval quality; use a dedicated embedding model for quality evaluation.
+with a five-query synthetic paraphrase benchmark: 4/5 top-1 matches after
+fixing subject words after "about" being mistaken for media-kind filters.
+The detective/homicide paraphrase still ranked the wrong title first. This is
+not broad retrieval quality validation. Use a dedicated embedding model for quality evaluation.
 The fingerprint fixture generates two videos sharing an intro, verifies stored
 audio fingerprints and executes the skip without chapter metadata.
+
+### Same-device validation
+
+```sh
+python3 tests/test_horizon_device_live.py --binary /tmp/opal-wave2-live/bin/opal
+zig build build-horizon-device-tests -Dheadless=true -Doptimize=ReleaseFast --prefix /tmp/opal-device-tests
+python3 tests/test_recap_model_live.py --binary /tmp/opal-device-tests/bin/horizon-device-tests --model /absolute/path/to/model.gguf
+OPAL_NATIVE_CAPTURE_DIR=/tmp/opal-native-captures zig build test-native-shell -Doptimize=ReleaseFast
+```
+
+The device fixture uses two isolated processes and generated media. It consumes
+signed direct/remux/HLS streams with ffprobe and decodes frames with ffmpeg,
+checks 480p output, sends and brings
+playback around 20 seconds, plays an indexed moment at 32 seconds, and switches
+to a child profile to exercise both NSFW setting routes and the clip-feed gate.
+On Apple Silicon the encoder reported `h264_videotoolbox`. This does not establish
+physical phone/TV compatibility. The recap fixture executes the production worker
+against SQLite and a real loopback model, records the submitted prompt to check
+spoiler exclusion, and verifies cache reuse without a second model request.
+Run model tests separately from normal app lifecycle tests, whose shutdown may
+stop llama-server. Native capture passed with an Apple CoreAnalytics warning;
+the captures are visual evidence, not a full native interaction test.
 
 ### Verified wave 1 test entry points
 

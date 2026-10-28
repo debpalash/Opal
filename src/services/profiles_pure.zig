@@ -773,3 +773,14 @@ test "profile API quotes identifiers and escapes names without exposing PIN hash
     try std.testing.expectEqual(@as(usize, 7), row.count());
     try std.testing.expect(std.mem.indexOf(u8, w.buffered(), "secret-hash") == null);
 }
+
+/// Child policy applies at each mutation boundary, before readers can observe it.
+pub fn effectiveNsfwFilter(kid: bool, requested: bool) bool {
+    return kid or requested;
+}
+test "child NSFW filter cannot be disabled even before the next owner tick" {
+    try std.testing.expect(effectiveNsfwFilter(true, false));
+    try std.testing.expect(effectiveNsfwFilter(true, true));
+    try std.testing.expect(!effectiveNsfwFilter(false, false));
+    try std.testing.expect(effectiveNsfwFilter(false, true));
+}

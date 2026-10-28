@@ -182,16 +182,26 @@
 > privately, on your own hardware. Capability-level only; still no shipped
 > source URLs.
 
-**Wave 1 (review branch):** 7.1–7.5 · **Wave 2 (started):** 7.6–7.8
+**Wave 1 and Wave 2 merged:** 7.1–7.8; remaining capability gaps below.
 
 Wave 1 verification (2026-10-28): isolated headless checks cover Recall results,
 signed streaming/progress/stop, profile PIN/restart/account continuity/data
 isolation, chapter skipping, local signed handoff, and real Whisper captions
 across overlapping chunks. Browser behavior tests cover Recall, streaming
-request ordering and profile PIN errors. Visual browser, physical casting,
-embedding-model search, fingerprint duplicates, translation-model output and
-recap-model output still need end-to-end verification; unchecked capabilities
-below are not claims of complete verification.
+request ordering and profile PIN errors. On this Apple Silicon Mac, live tests
+also decode direct/remux/VideoToolbox streams, exercise send/bring between two
+isolated instances, play an indexed moment at its timestamp, and check child
+NSFW write restrictions. Real local-model tests cover subtitle translation,
+vector indexing, and watched-only recap input/output/cache. Cross-episode audio
+intro detection and skip execute on generated videos. Native captures cover
+desktop/narrow layouts, including populated profile controls; browser DOM and
+phone-width tap-target regressions pass. A synthetic paraphrase benchmark is
+recorded separately from general search-quality claims.
+
+Physical phone/cast playback and microphone-to-assistant moment jumps remain
+unverified. Perceptual duplicate detection and automatic chapter generation
+remain unimplemented (sampled content hashes are not perceptual hashes).
+Unchecked capabilities below are not claims of complete verification.
 
 ### 7.1 — Recall (semantic memory)
 - [ ] Natural-language search across library + catalog ("cozy 90s mystery

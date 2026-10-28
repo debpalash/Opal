@@ -293,6 +293,15 @@ fn buildSupported(b: *std.Build) void {
     const run_episode_tests = b.addRunArtifact(episode_tests);
     if (is_windows) run_episode_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     b.step("test-native-episodes", "Verify native episode cards and responsive playback controls").dependOn(&run_episode_tests.step);
+    // Opt-in live model/SQLite integration. The Python launcher supplies an
+    // isolated HOME, loopback model endpoint and synthetic episode transcripts.
+    const horizon_device_tests = b.addTest(.{
+        .name = "horizon-device-tests",
+        .root_module = exe.root_module,
+        .filters = &.{"Horizon device validation"},
+    });
+    const install_horizon_device_tests = b.addInstallArtifact(horizon_device_tests, .{ .dest_dir = .{ .override = .bin } });
+    b.step("build-horizon-device-tests", "Build opt-in real model and library integration fixture").dependOn(&install_horizon_device_tests.step);
     const native_suite = b.addTest(.{ .root_module = exe.root_module, .filters = &.{
         "Native Search", "Native WebP", "Native media offline", "Native shell offline", "Native global modals", "Native activity offline", "Native agent tasks offline", "Native operator activity offline", "Native agents overview offline", "Native browser hub", "Native Browse", "Browse fanout", "Native torrent handoff", "Native TV episodes",
     } });

@@ -6,7 +6,18 @@ a global owner-only file; switching is a controlled restart. Pure rules (PIN
 hashing/backoff, maturity, validation) are unit-tested in profiles_pure.zig.
 
 See tests/features/harness.py for the shared @test decorator."""
+import subprocess
 from .harness import *  # noqa: F401,F403
+
+
+@test("Profiles: child NSFW writes stay enabled before owner tick", "Profiles")
+def test_profiles_nsfw_write_policy():
+    result = subprocess.run(
+        ["zig", "test", "src/services/profiles_pure.zig", "--test-filter", "child NSFW"],
+        cwd=PROJECT_DIR, capture_output=True, text=True, timeout=120)
+    if result.returncode:
+        return "fail", result.stderr[-1500:]
+    return "pass", "executed child/adult NSFW write-policy regression; live routes covered by test_horizon_device_live.py"
 
 
 def _fail(checks, what):

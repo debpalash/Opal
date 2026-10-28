@@ -3485,7 +3485,7 @@ fn settingApply(k: sap.Key, raw: []const u8) bool {
             } else if (std.mem.eql(u8, k.name, "auto_download_subs")) {
                 state.app.auto_download_subs = v;
             } else if (std.mem.eql(u8, k.name, "nsfw_filter")) {
-                state.app.nsfw_filter_enabled = v;
+                state.app.nsfw_filter_enabled = @import("profiles_pure.zig").effectiveNsfwFilter(@import("profiles.zig").runningIsKid(), v);
             } else if (std.mem.eql(u8, k.name, "incognito")) {
                 state.app.incognito_mode = v;
             } else if (std.mem.eql(u8, k.name, "lang_learn")) {
@@ -3635,7 +3635,7 @@ fn apiSettingsToggle(query: []const u8) void {
         } else if (std.mem.eql(u8, key, "sponsorblock")) {
             state.app.sponsorblock_enabled = !state.app.sponsorblock_enabled;
         } else if (std.mem.eql(u8, key, "nsfw_filter")) {
-            state.app.nsfw_filter_enabled = !state.app.nsfw_filter_enabled;
+            state.app.nsfw_filter_enabled = @import("profiles_pure.zig").effectiveNsfwFilter(@import("profiles.zig").runningIsKid(), !state.app.nsfw_filter_enabled);
         }
     }
 }

@@ -253,6 +253,7 @@ test "Native shell offline route pixel capture" {
     @import("../core/logs.zig").logs_allocator = alloc;
     defer @import("../core/logs.zig").deinit();
     workers.init();
+    @import("../services/profiles.zig").initActive();
     // Render-time initial loads may be requested but are not admitted. This
     // harness performs no provider requests, background bootstrap or playback.
     workers.beginShutdownAndDrain(0);
