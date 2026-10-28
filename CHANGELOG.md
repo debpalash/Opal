@@ -10,7 +10,7 @@ Add a section BEFORE tagging; a missing one ships a release that says so.
 Headings are `## vX.Y.Z — YYYY-MM-DD`, newest first. The version token must
 match the tag exactly.
 
-## v0.9.1 — 2026-10-29
+## v0.8.9 — 2026-10-29
 
 - **Search within the page you are browsing.** Movies & TV, YouTube, Music and other media pages set a visible search scope. Remove its chip to search all content with the same words; clearing the words preserves the scope.
 - **More relevant search results.** Exact titles lead phrase and partial matches, provider relevance breaks ties, and the strongest matching content shelf appears first. Movies & TV navigation now preserves its search scope.
@@ -21,7 +21,7 @@ match the tag exactly.
 - **A consistent Opal identity.** The app name and About navigation stay consistent, with clearer audio-output connection controls.
 - **Agents and browser integration.** Includes the agent overview, opt-in Ask Opal, paired-browser media detection and shared-page tools developed since v0.8.8.
 
-## v0.9.0 — 2026-10-11
+### Also included since v0.8.8
 
 - **The Opal brand stays beside the sidebar toggle.** The logo and name now sit in the top bar next to the sidebar button, so they remain visible when the rail is collapsed.
 - **Agents is now the front door.** Agents moved to the top of the sidebar, above Home, and opens on a new Overview: your automations as cards with their switches and a live one-line status (Wanted list, Follow tracked shows, Scheduled agent tasks, Background operator, Auto subtitles, Source repair), your Continue and Coming up rails, and a feed of what your agents did lately. The example tasks only fill in the Add form; nothing is created or run until you say so. Home is unchanged.
