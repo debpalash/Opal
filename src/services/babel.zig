@@ -18,8 +18,9 @@ pub const recap = @import("recap.zig");
 var last_player: usize = 0;
 var last_serial: u64 = 0;
 
-/// Per-frame (UI thread, before rendering).
-pub fn tick() void {
+/// Synchronize media identity before starting work or attaching results.
+/// Playback owner thread only.
+pub fn syncMediaIdentity() void {
     var addr: usize = 0;
     var serial: u64 = 0;
     if (state.app.active_player_idx < state.app.players.items.len) {
@@ -33,6 +34,12 @@ pub fn tick() void {
         translate.cancelForMediaChange();
         recap.onMediaChange();
     }
+}
+
+/// Per-frame (UI thread, before rendering).
+pub fn tick() void {
+    syncMediaIdentity();
+    translate.pollRequest();
     live_captions.tick();
     translate.pollAttach();
 }

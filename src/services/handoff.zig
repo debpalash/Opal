@@ -123,7 +123,7 @@ pub fn buildOffer(source: []const u8, title: []const u8, position: f64, duration
     out.duration = duration;
 }
 
-fn hostForPeer(peer_url: []const u8, buf: []u8) ?[]const u8 {
+pub fn hostForPeer(peer_url: []const u8, buf: []u8) ?[]const u8 {
     const remote = @import("remote.zig");
     const host = pure.advertiseHost(peer_url, remote.lanIp()) orelse return null;
     return std.fmt.bufPrint(buf, "{s}:{d}", .{ host, remote.port }) catch null;

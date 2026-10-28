@@ -12,14 +12,14 @@ async function stopContinuum() {
   const session = continuumSession; continuumSession = null;
   if (session) await networkFetch(BASE + continuumEndpoint(session, 'stop'), {method:'POST', credentials:'same-origin'}).catch(()=>{});
 }
-async function playContinuum() {
+async function startBrowserSession(createSession) {
   const stopping = stopContinuum();
   const generation = continuumGeneration;
   await stopping;
   if (generation !== continuumGeneration) return;
   $('continuum-status').textContent = 'Preparing playback…';
   try {
-    const session = await apiFormMutation('/stream', {current:1, quality:$('continuum-quality').value, caps:'h264,aac,mp4,hls'});
+    const session = await createSession();
     continuumEndpoint(session, 'stop');
     if (generation !== continuumGeneration) { await networkFetch(BASE + continuumEndpoint(session, 'stop'), {method:'POST', credentials:'same-origin'}); return; }
     if (session.mode === 'direct') openStreamUrl(BASE + session.url, session.title);
@@ -31,6 +31,9 @@ async function playContinuum() {
     }, {once:true});
     $('continuum-status').textContent = 'Playing here. Close the player to end the stream.';
   } catch (error) { $('continuum-status').textContent = error.message; }
+}
+function playContinuum() {
+  return startBrowserSession(() => apiFormMutation('/stream', {current:1, quality:$('continuum-quality').value, caps:'h264,aac,mp4,hls'}));
 }
 $('continuum-play').onclick = playContinuum;
 $('video').addEventListener('timeupdate', () => {

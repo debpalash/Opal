@@ -336,3 +336,20 @@ test "matches: installed-only gate + name/kind query" {
     try std.testing.expect(matches("EZTV", "torrent", "torr", false, false)); // matches on kind
     try std.testing.expect(!matches("EZTV", "torrent", "anime", false, false)); // no match hides
 }
+
+/// Shared permission interpretation for signed catalogs and installed plugins.
+pub fn manifestUnsafe(a: std.mem.Allocator, json: []const u8) !bool {
+    const parsed = try std.json.parseFromSlice(std.json.Value, a, json, .{});
+    defer parsed.deinit();
+    if (parsed.value != .object) return error.InvalidManifest;
+    const value = parsed.value.object.get("allow_unsafe") orelse return false;
+    if (value != .bool) return error.InvalidPermission;
+    return value.bool;
+}
+test "manifest permission uses only a typed top-level field" {
+    try std.testing.expect(!try manifestUnsafe(std.testing.allocator,
+        \\{"nested":{"allow_unsafe":true},"allow_unsafe":false}
+    ));
+    try std.testing.expect(try manifestUnsafe(std.testing.allocator, "{\"allow_unsafe\":true}"));
+    try std.testing.expectError(error.InvalidPermission, manifestUnsafe(std.testing.allocator, "{\"allow_unsafe\":\"true\"}"));
+}

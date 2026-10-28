@@ -15,6 +15,7 @@ pub fn tick() void {
     @import("../services/anime.zig").applyPendingEpisodes();
     @import("../services/anime.zig").applyPendingPlayback();
     @import("../services/skip_segments.zig").tick();
+    @import("../services/next_episode.zig").tick();
     @import("../services/audiobookshelf.zig").tick();
     @import("../services/podcasts.zig").tickNowPlaying();
 }

@@ -137,3 +137,70 @@ test "playback health covers remote streams without probing pages or loopback" {
     try std.testing.expectEqualStrings("", playbackKind("", "https://www.youtube.com/watch?v=x"));
     try std.testing.expectEqualStrings("", playbackKind("", "https://youtu.be/x"));
 }
+
+pub const TTL_S: i64 = 30 * 60;
+
+pub const Entry = struct {
+    status: Status,
+    checked_at: i64,
+
+    pub fn fresh(self: Entry, now: i64) bool {
+        // Reject future records after a clock correction as well as expired rows.
+        return self.checked_at <= now and now -| self.checked_at < TTL_S;
+    }
+    pub fn statusAt(self: Entry, now: i64) Status {
+        return if (self.fresh(now)) self.status else .unknown;
+    }
+};
+
+/// Preserve source/relevance order among equal-health candidates. Unknown is
+/// usable: a cached failure must not permanently exclude a recovered stream.
+pub fn preference(status: Status) u8 {
+    return switch (status) {
+        .live => 0,
+        .unknown => 1,
+        .slow => 2,
+        .dead => 3,
+    };
+}
+
+pub fn orderedCandidates(statuses: [3]Status, present: [3]bool) [3]usize {
+    var order = [_]usize{ 0, 1, 2 };
+    for (1..order.len) |i| {
+        var j = i;
+        while (j > 0) : (j -= 1) {
+            const left = order[j - 1];
+            const right = order[j];
+            const lp: u16 = if (present[left]) preference(statuses[left]) else 256;
+            const rp: u16 = if (present[right]) preference(statuses[right]) else 256;
+            if (lp <= rp) break;
+            std.mem.swap(usize, &order[j - 1], &order[j]);
+        }
+    }
+    return order;
+}
+
+pub fn scorePenalty(status: Status) u32 {
+    return switch (status) {
+        .live, .unknown => 0,
+        .slow => 20,
+        .dead => 1000,
+    };
+}
+
+test "persisted health expires at TTL while process remains alive" {
+    const e: Entry = .{ .status = .dead, .checked_at = 100 };
+    try std.testing.expectEqual(Status.dead, e.statusAt(100 + TTL_S - 1));
+    try std.testing.expectEqual(Status.unknown, e.statusAt(100 + TTL_S));
+    try std.testing.expectEqual(Status.unknown, e.statusAt(99));
+    const refreshed: Entry = .{ .status = .live, .checked_at = 100 + TTL_S };
+    try std.testing.expectEqual(Status.live, refreshed.statusAt(101 + TTL_S));
+}
+
+test "playback promotes live fallback and preserves unknown candidates" {
+    try std.testing.expectEqual([3]usize{ 2, 1, 0 }, orderedCandidates(.{ .dead, .unknown, .live }, .{ true, true, true }));
+    try std.testing.expectEqual([3]usize{ 0, 2, 1 }, orderedCandidates(.{ .unknown, .live, .unknown }, .{ true, false, true }));
+    try std.testing.expectEqual([3]usize{ 0, 1, 2 }, orderedCandidates(.{ .dead, .dead, .dead }, .{ true, true, true }));
+    try std.testing.expect(scorePenalty(.dead) > scorePenalty(.slow));
+    try std.testing.expectEqual(@as(u32, 0), scorePenalty(.unknown));
+}

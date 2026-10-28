@@ -130,9 +130,34 @@ const Job = struct {
     }
 };
 
+// Remote callers only queue an owned media identity. Starting work and
+// synchronizing Babel/recap state belongs to the playback owner loop.
+var requested: ?target_policy.Target = null;
+pub fn requestActiveTrack() void {
+    if (state.app.active_player_idx >= state.app.players.items.len) return;
+    const p = state.app.players.items[state.app.active_player_idx];
+    mutex.lock();
+    defer mutex.unlock();
+    requested = .{ .player_addr = @intFromPtr(p), .load_serial = p.load_serial, .epoch = 0 };
+}
+
+pub fn pollRequest() void {
+    mutex.lock();
+    const target = requested;
+    requested = null;
+    mutex.unlock();
+    const wanted = target orelse return;
+    if (state.app.active_player_idx >= state.app.players.items.len) return;
+    const p = state.app.players.items[state.app.active_player_idx];
+    if (@intFromPtr(p) != wanted.player_addr or p.load_serial != wanted.load_serial) return;
+    translateActiveTrack();
+}
+
 /// UI thread: translate the selected subtitle track into the configured
 /// "Translate subtitles to" language.
 pub fn translateActiveTrack() void {
+    // Establish the owner-thread media generation before starting the worker.
+    babel.syncMediaIdentity();
     const lang = babel.translateLang();
     if (lang.len == 0) {
         state.showToast("Pick a language in Settings › Subtitles › Translate subtitles to");

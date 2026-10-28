@@ -8,7 +8,7 @@ def test_horizon_browser():
     if not shutil.which('node'):
         return 'skip', 'node unavailable'
     result = subprocess.run(['node', '--test', 'tests/test_horizon_web.mjs'], cwd=PROJECT_DIR, capture_output=True, text=True, timeout=30)
-    return ('pass', '6 browser behavior regressions') if result.returncode == 0 else ('fail', result.stdout[-2500:] + result.stderr[-1000:])
+    return ('pass', 'browser behavior regressions') if result.returncode == 0 else ('fail', result.stdout[-2500:] + result.stderr[-1000:])
 
 
 def _pure_modules(modules):
@@ -33,3 +33,11 @@ def test_babel_rules():
 @test('Continuum: browser capabilities, signed tokens and slot lifecycle execute', 'Continuum')
 def test_continuum_rules():
     return _pure_modules(['stream_pure'])
+
+@test('Resilience: health TTL, ordering and episode prefetch rules execute', 'Resilience')
+def test_resilience_rules():
+    return _pure_modules(['link_health_pure', 'next_episode_pure'])
+
+@test('Commons: signed repositories, permissions and bounded clips execute', 'Commons')
+def test_commons_rules():
+    return _pure_modules(['addon_repo_pure', 'moments_pure'])

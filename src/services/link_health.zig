@@ -29,7 +29,7 @@ const PROBE_MAX: u32 = 6;
 
 /// Health results older than this are re-probed (streams die/revive; the cache
 /// stays useful across sessions without going permanently stale).
-pub const TTL_S: i64 = 30 * 60;
+pub const TTL_S = pure.TTL_S;
 
 /// Stable url→hash — the `link_health` primary key.
 pub fn urlHash(url: []const u8) i64 {
@@ -39,10 +39,8 @@ pub fn urlHash(url: []const u8) i64 {
 // ══════════════════════════════════════════════════════════
 // Per-kind in-memory state
 // ══════════════════════════════════════════════════════════
-// Session-lived module caches allocated from the c_allocator — NOT the tracked
-// global — so these never-freed maps don't trip the DebugAllocator's shutdown
-// leak gate (the pattern iptv.zig/poster.zig already use).
-const map_alloc = std.heap.c_allocator;
+// Owned caches are released after the worker shutdown barrier.
+const map_alloc = @import("../core/alloc.zig").allocator;
 
 const MAX_KINDS = 16;
 const KIND_NAME_MAX = 16;
@@ -51,7 +49,7 @@ const KindState = struct {
     name: [KIND_NAME_MAX]u8 = undefined,
     name_len: usize = 0,
     /// url_hash → Status int, loaded from the DB (non-stale rows only).
-    health_map: std.AutoHashMapUnmanaged(i64, u8) = .{},
+    health_map: std.AutoHashMapUnmanaged(i64, pure.Entry) = .{},
     /// url-hashes kicked this session (don't re-probe every frame).
     probe_attempted: std.AutoHashMapUnmanaged(i64, void) = .{},
     dirty: bool = true,
@@ -84,7 +82,7 @@ fn slotLocked(kind: []const u8) ?*KindState {
 /// Reload `kind`'s map from the DB when a probe has landed since the last read.
 /// Caller MUST hold `mtx`.
 fn refreshLocked(k: *KindState) void {
-    if (!k.dirty) return;
+    if (!k.dirty or db.get() == null) return;
     k.dirty = false;
     loadMap(k.name[0..k.name_len], &k.health_map);
 }
@@ -101,11 +99,10 @@ pub fn statusOf(kind: []const u8, url: []const u8) Status {
     const k = slotLocked(kind) orelse return .unknown;
     refreshLocked(k);
     const v = k.health_map.get(urlHash(url)) orelse return .unknown;
-    if (v > @intFromEnum(Status.dead)) return .unknown; // defensive: bad row
-    return @enumFromInt(v);
+    return v.statusAt(@import("../core/io_global.zig").timestamp());
 }
 
-/// Kick a probe for `url` unless it's already been attempted this session, is
+/// Kick a probe for `url` unless a probe is already in flight, the result is
 /// fresh in cache, or the global worker cap is reached (then it retries on a
 /// later frame). Called per visible card.
 pub fn probe(kind: []const u8, url: []const u8) void {
@@ -118,7 +115,8 @@ pub fn probe(kind: []const u8, url: []const u8) void {
         return;
     };
     refreshLocked(k);
-    if (k.probe_attempted.contains(h) or k.health_map.contains(h)) {
+    const cached = k.health_map.get(h);
+    if (k.probe_attempted.contains(h) or (cached != null and cached.?.fresh(@import("../core/io_global.zig").timestamp()))) {
         mtx.unlock();
         return;
     }
@@ -207,7 +205,10 @@ fn probeWorker(a: anytype) void {
 
     put(kind, url, @intFromEnum(status), latency_ms);
     mtx.lock();
-    if (slotLocked(kind)) |k| k.dirty = true;
+    if (slotLocked(kind)) |k| {
+        _ = k.probe_attempted.remove(urlHash(url));
+        k.dirty = true;
+    }
     mtx.unlock();
     if (state.app.dvui_win) |win| dvui.refresh(win, @src(), null);
 }
@@ -226,20 +227,26 @@ pub fn put(kind: []const u8, url: []const u8, status: u8, latency_ms: u32) void 
     db.bindText(stmt, 2, kind);
     db.bindInt(stmt, 3, @intCast(status));
     db.bindInt(stmt, 4, @intCast(@min(latency_ms, std.math.maxInt(i32))));
-    _ = db.step(stmt);
+    if (db.step(stmt) == db.c.SQLITE_DONE) {
+        mtx.lock();
+        if (slotLocked(kind)) |k| k.dirty = true;
+        mtx.unlock();
+    }
 }
 
 /// Load all NON-STALE rows for `kind` into `map` (url_hash → status int).
-pub fn loadMap(kind: []const u8, map: *std.AutoHashMapUnmanaged(i64, u8)) void {
+pub fn loadMap(kind: []const u8, map: *std.AutoHashMapUnmanaged(i64, pure.Entry)) void {
     map.clearRetainingCapacity();
     const stmt = db.prepare(
-        "SELECT url_hash,status FROM link_health WHERE kind=?1 AND checked_at > strftime('%s','now') - ?2",
+        "SELECT url_hash,status,checked_at FROM link_health WHERE kind=?1 AND checked_at > strftime('%s','now') - ?2 AND checked_at <= strftime('%s','now')",
     ) orelse return;
     defer db.finalize(stmt);
     db.bindText(stmt, 1, kind);
     db.bindInt64(stmt, 2, TTL_S);
     while (db.step(stmt) == db.c.SQLITE_ROW) {
-        map.put(map_alloc, db.columnInt64(stmt, 0), @intCast(db.columnInt64(stmt, 1))) catch {};
+        const value = db.columnInt64(stmt, 1);
+        if (value < 0 or value > @intFromEnum(Status.dead)) continue;
+        map.put(map_alloc, db.columnInt64(stmt, 0), .{ .status = @enumFromInt(value), .checked_at = db.columnInt64(stmt, 2) }) catch {};
     }
 }
 
@@ -255,7 +262,7 @@ pub fn clearKind(kind: []const u8) void {
 /// True when `url` has a fresh cached probe under `kind` (within TTL).
 pub fn isFresh(kind: []const u8, url: []const u8) bool {
     const stmt = db.prepare(
-        "SELECT 1 FROM link_health WHERE url_hash=?1 AND kind=?2 AND checked_at > strftime('%s','now') - ?3",
+        "SELECT 1 FROM link_health WHERE url_hash=?1 AND kind=?2 AND checked_at > strftime('%s','now') - ?3 AND checked_at <= strftime('%s','now')",
     ) orelse return false;
     defer db.finalize(stmt);
     db.bindInt64(stmt, 1, urlHash(url));
@@ -273,4 +280,16 @@ pub fn statusColor(s: Status) dvui.Color {
         .dead => theme.colors.danger,
         .unknown => theme.colors.text_tertiary,
     };
+}
+
+/// Call only after all workers have joined.
+pub fn deinit() void {
+    mtx.lock();
+    defer mtx.unlock();
+    for (kinds[0..kind_count]) |*k| {
+        k.health_map.deinit(map_alloc);
+        k.probe_attempted.deinit(map_alloc);
+        k.* = .{};
+    }
+    kind_count = 0;
 }

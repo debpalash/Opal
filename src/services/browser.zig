@@ -2691,13 +2691,25 @@ pub fn playDirect(request: PlaybackRequest) void {
     }
 
     const link_health = @import("link_health.zig");
-    const health_kind = link_health.pure.playbackKind(request.health_kind, request.url);
-    if (health_kind.len > 0) link_health.probe(health_kind, request.url);
+    const candidates = [_][]const u8{ request.url, request.fallback_url, request.fallback_url_2 };
+    var statuses = [_]link_health.Status{.unknown} ** 3;
+    var present = [_]bool{false} ** 3;
+    // Header-dependent streams cannot use an anonymous probe's verdict.
+    const anonymous = request.headers.len == 0 and request.prepared_header_fields.len == 0 and request.user_agent.len == 0;
+    for (candidates, 0..) |url, i| {
+        present[i] = url.len > 0;
+        if (!present[i] or !anonymous) continue;
+        const kind = link_health.pure.playbackKind(request.health_kind, url);
+        if (kind.len == 0) continue;
+        statuses[i] = link_health.statusOf(kind, url);
+        link_health.probe(kind, url);
+    }
+    const order = link_health.pure.orderedCandidates(statuses, present);
 
     p.load(.{
-        .url = request.url,
-        .fallback_url = request.fallback_url,
-        .fallback_url_2 = request.fallback_url_2,
+        .url = candidates[order[0]],
+        .fallback_url = candidates[order[1]],
+        .fallback_url_2 = candidates[order[2]],
         .mode = request.mode,
         .origin = request.origin,
         .queue_item_id = request.queue_item_id,

@@ -153,6 +153,8 @@ const step = async (name, proof, fn) => {
   await step('jellyfin', '#jf-items .card', async () => { openPage('jf'); await sleep(1500); });
   await step('plex', '#page-plex .result', async () => { openPage('plex'); await sleep(2500); });
   await step('show', '#season-chips button', async () => { openPage('home'); await openDetails('tv', 1399, 'The Long Night Signal', ''); await sleep(1500); });
+  await step('horizon-home', '#moment-title', async () => { openPage('home'); document.querySelectorAll('#page-home details').forEach(d => d.open = true); await sleep(200); });
+  await step('horizon-setup', '#addon-key', async () => { openPage('setup'); document.querySelectorAll('#page-setup details').forEach(d => d.open = true); await sleep(200); });
   const out = document.createElement('pre'); out.id = 'tap-result'; out.hidden = true;
   out.textContent = JSON.stringify({ width: innerWidth, report, errors });
   document.body.appendChild(out);
@@ -236,7 +238,7 @@ class WebTapTargetsLiveTest(unittest.TestCase):
                 result = render(width)
                 self.assertEqual(result["width"], width, "viewport did not take the phone width")
                 self.assertEqual(result["errors"], [], "page script errors while driving the UI")
-                self.assertEqual(set(result["report"]), {"search", "search-detail", "jellyfin", "plex", "show"})
+                self.assertEqual(set(result["report"]), {"search", "search-detail", "jellyfin", "plex", "show", "horizon-home", "horizon-setup"})
                 problems = []
                 for surface, m in result["report"].items():
                     if not m["rendered"]:

@@ -182,7 +182,7 @@
 > privately, on your own hardware. Capability-level only; still no shipped
 > source URLs.
 
-**Wave 1 (review branch):** 7.1–7.5 · **Wave 2:** 7.6–7.8
+**Wave 1 (review branch):** 7.1–7.5 · **Wave 2 (started):** 7.6–7.8
 
 Wave 1 verification (2026-10-28): isolated headless checks cover Recall results,
 signed streaming/progress/stop, profile PIN/restart/account continuity/data
@@ -220,24 +220,30 @@ below are not claims of complete verification.
 - [ ] On-device subtitle translation (any track → your language)
 - [ ] Spoiler-safe "Previously on…" recaps built only from what you watched
 
+Wave 2 implementation boundaries and reproducible build/live-test commands are
+recorded in [Architecture](docs/architecture.md#horizon-wave-2-implementation-boundaries).
+Wave 2 now implements cached health ordering, next-episode resolver warming,
+signed repositories, declarative panels and shared clips. Validation limits are
+recorded in the architecture document.
+
 ### 7.6 — Resilience
-- [ ] Persisted app-wide live/dead probing feeding ranking and fallback order
-- [ ] Predictive pre-resolve of the next episode (zero-wait "next")
+- [x] Persisted app-wide live/dead probing feeding ranking and fallback order
+- [x] Predictive next-episode resolver warming (EZTV/Torznab; no zero-wait guarantee)
 
 ### 7.7 — Commons
-- [ ] Addon repositories (user-added URLs only) with signed manifests and
-      permission prompts; plugin UI panels
-- [ ] Shareable moments (timestamped clips) to paired devices + household feed
+- [x] Addon repositories (user-added URLs only) with signed manifests and
+      permission prompts; declarative text panels
+- [x] Shareable moments (timestamped clips) to paired Opal instances + household feed
 
 ### 7.8 — Craft
-- [ ] Theming v2: refined tokens, interaction states, elevation (in progress)
-- [ ] Architecture + build docs; `linker_options` lint; dvui deinit warnings
+- [x] Theming v2: shared contrast-checked tokens, interaction states and elevation
+- [x] Architecture + build docs; duplicate linkage cleanup; native deinit verification
 
 ---
 
 ## 📝 Technical Debt & Cleanup
-- [ ] Fix `linker_options` lint in build.zig
-- [ ] Clean up dvui deinit warnings
+- [x] Verify current linker configuration and remove duplicate wrapper linkage
+- [x] Verify native shutdown: no DVUI deinit warnings reproduced
 - [x] Run-scoped resolver lifecycle with typed terminal source outcomes
 - [x] Add test suite for resolver/search lifecycle and ranking logic
 - [ ] Documentation (README, build guide, architecture)

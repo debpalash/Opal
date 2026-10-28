@@ -204,8 +204,7 @@ fn loadPluginAt(plugin_dir: []const u8, id: []const u8) ?Plugin {
     extractJsonString(json, "version", &plugin.version, &plugin.version_len);
     extractJsonString(json, "description", &plugin.description, &plugin.description_len);
     extractJsonString(json, "author", &plugin.author, &plugin.author_len);
-    if (extractField(json, "allow_unsafe")) |value|
-        plugin.allow_unsafe = std.mem.eql(u8, value, "true");
+    plugin.allow_unsafe = @import("plugins_pure.zig").manifestUnsafe(c_alloc, json) catch return null;
     if (plugin.name_len == 0) {
         plugin.name_len = @min(id.len, plugin.name.len);
         @memcpy(plugin.name[0..plugin.name_len], id[0..plugin.name_len]);
@@ -1213,6 +1212,7 @@ fn cardTitle(src: std.builtin.SourceLocation, text: []const u8, sub: []const u8)
 }
 
 fn renderSourcePlugins() void {
+    renderSignedRepositories();
     const pr = source_repo;
 
     // Auto-load on first view: show the bundled manifest instantly (offline, no
@@ -2123,4 +2123,115 @@ pub fn verifySuwaNonblockingForTest() !void {
     suwa_test_mutex.lock();
     defer suwa_test_mutex.unlock();
     try std.testing.expectEqualStrings("Disconnected", suwa_test_msg[0..suwa_test_len]);
+}
+
+// Signed repositories share executable approval with installed plugins.
+const SignedUi = struct {
+    var id: [33]u8 = .{0} ** 33;
+    var url: [1025]u8 = .{0} ** 1025;
+    var key: [65]u8 = .{0} ** 65;
+    var snapshot: ?std.json.Parsed(std.json.Value) = null;
+    var busy = std.atomic.Value(bool).init(false);
+    var changed = std.atomic.Value(bool).init(true);
+    const Job = struct { id: [32]u8, len: usize };
+    fn refresh(job: Job) void {
+        defer busy.store(false, .release);
+        @import("addon_repositories.zig").refresh(job.id[0..job.len]) catch |err| {
+            logs.pushLog("warn", "addons", @errorName(err), true);
+        };
+        changed.store(true, .release);
+        state.wakeUi();
+    }
+};
+
+pub fn deinitSignedUi() void {
+    if (SignedUi.snapshot) |s| s.deinit();
+    SignedUi.snapshot = null;
+}
+
+fn signedField(buf: []u8, placeholder: []const u8, id: usize) void {
+    var field = dvui.textEntry(@src(), .{ .text = .{ .buffer = buf }, .placeholder = placeholder }, .{
+        .id_extra = id,
+        .expand = .horizontal,
+        .color_fill = theme.colors.bg_elevated,
+        .color_border = theme.colors.border_subtle,
+        .color_text = theme.colors.text_primary,
+        .border = dvui.Rect.all(1),
+        .corner_radius = dvui.Rect.all(theme.radius.sm),
+    });
+    field.deinit();
+}
+
+fn signedString(value: std.json.Value, key: []const u8) []const u8 {
+    if (value != .object) return "";
+    const v = value.object.get(key) orelse return "";
+    return if (v == .string) v.string else "";
+}
+
+fn renderSignedRepositories() void {
+    const repo = @import("addon_repositories.zig");
+    const a = @import("../core/alloc.zig").allocator;
+    if (SignedUi.changed.swap(false, .acq_rel)) {
+        var out: std.Io.Writer.Allocating = .init(a);
+        defer out.deinit();
+        repo.writeSnapshot(&out.writer) catch return;
+        const parsed = std.json.parseFromSlice(std.json.Value, a, out.written(), .{ .allocate = .alloc_always }) catch return;
+        deinitSignedUi();
+        SignedUi.snapshot = parsed;
+        scanPlugins();
+    }
+    var card = cardBegin(@src(), 9100);
+    defer card.deinit();
+    cardTitle(@src(), "Signed add-on repositories", "Add a repository URL and its publisher key. Installation does not approve executable access.");
+    signedField(&SignedUi.id, "Repository name", 9101);
+    signedField(&SignedUi.url, "HTTPS repository URL", 9102);
+    signedField(&SignedUi.key, "Publisher public key (64 hex characters)", 9103);
+    if (components.actionButton(@src(), "Add repository", .secondary, 9104)) {
+        repo.add(std.mem.sliceTo(&SignedUi.id, 0), std.mem.sliceTo(&SignedUi.url, 0), std.mem.sliceTo(&SignedUi.key, 0)) catch |err| {
+            state.showToast(@errorName(err));
+            return;
+        };
+        SignedUi.changed.store(true, .release);
+    }
+    if (components.actionButton(@src(), "Reload repositories", .secondary, 9105)) SignedUi.changed.store(true, .release);
+    const snapshot = SignedUi.snapshot orelse return;
+    const repos = snapshot.value.object.get("repositories") orelse return;
+    for (repos.array.items, 0..) |entry, ri| {
+        const id = signedString(entry, "id");
+        _ = dvui.label(@src(), "{s}", .{id}, .{ .color_text = theme.colors.text_primary, .id_extra = 9200 + ri });
+        if (!SignedUi.busy.load(.acquire) and components.actionButton(@src(), "Fetch signed catalog", .secondary, 9300 + ri)) {
+            var job: SignedUi.Job = .{ .id = undefined, .len = id.len };
+            @memcpy(job.id[0..id.len], id);
+            SignedUi.busy.store(true, .release);
+            if (@import("../core/workers.zig").spawnLegacy(SignedUi.refresh, .{job})) |t| @import("../core/workers.zig").release(t) else |_| SignedUi.busy.store(false, .release);
+        }
+        if (components.confirmDangerButton(@src(), "Remove repository", 9400 + ri)) {
+            repo.remove(id) catch |err| state.showToast(@errorName(err));
+            SignedUi.changed.store(true, .release);
+        }
+        const addons = entry.object.get("addons") orelse continue;
+        for (addons.array.items, 0..) |addon, ai| {
+            const uid = 10000 + ri * 100 + ai;
+            const name = signedString(addon, "name");
+            _ = dvui.label(@src(), "{s} · {s}", .{ name, signedString(addon, "version") }, .{ .color_text = theme.colors.text_primary, .id_extra = uid });
+            const permissions = addon.object.get("permissions").?;
+            for (permissions.array.items, 0..) |permission, pi| {
+                _ = dvui.label(@src(), "Requests: {s}", .{permission.string}, .{ .color_text = theme.colors.warning, .id_extra = uid * 10 + pi });
+            }
+            if (components.confirmDangerButton(@src(), "Install files (approval still required)", uid + 1000)) {
+                repo.install(id, signedString(addon, "id"), signedString(entry, "confirmation")) catch |err| {
+                    state.showToast(@errorName(err));
+                    continue;
+                };
+                state.showToast("Installed. Review executable access in the Content section.");
+                SignedUi.changed.store(true, .release);
+            }
+            if (addon.object.get("panel")) |panel| if (panel == .object) {
+                _ = dvui.label(@src(), "{s}", .{signedString(panel, "title")}, .{ .color_text = theme.colors.text_primary, .id_extra = uid + 2000 });
+                var text = dvui.textLayout(@src(), .{}, .{ .expand = .horizontal, .color_text = theme.colors.text_secondary, .id_extra = uid + 3000 });
+                text.addText(signedString(panel, "body"), .{});
+                text.deinit();
+            };
+        }
+    }
 }

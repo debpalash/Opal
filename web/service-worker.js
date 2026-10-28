@@ -1,4 +1,4 @@
-const CACHE = 'opal-shell-v14';
+const CACHE = 'opal-shell-v15';
 const SHELL = [
   '/',
   '/index.html',
@@ -21,6 +21,7 @@ const SHELL = [
   '/js/recall.js',
   '/js/continuum.js',
   '/js/profiles.js',
+  '/js/commons.js',
   '/js/boot.js',
   '/vendor/hls.min.js?v=442f599c34f1',
 ];

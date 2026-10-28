@@ -1796,7 +1796,9 @@ def self_hosted_playback_version_fallback():
     plex_play = _between(plex, "pub fn playPart(", "pub fn resumePlayback(")
     checks = {
         "typed fallback request": "fallback_url: []const u8" in load,
-        "play seam forwards fallback": ".fallback_url = request.fallback_url" in browser,
+        "play seam forwards health-ordered fallback": "request.url, request.fallback_url, request.fallback_url_2" in browser
+            and ".fallback_url = candidates[order[1]]" in browser
+            and ".fallback_url_2 = candidates[order[2]]" in browser,
         "fallback lifecycle is pure and tested": "pub const State = struct" in fallback
             and "takeOnFailure" in fallback and "playbackStarted" in fallback,
         "fallback is one-shot before visible error": "takeOnFailure()" in player
