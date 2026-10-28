@@ -182,7 +182,7 @@
 > privately, on your own hardware. Capability-level only; still no shipped
 > source URLs.
 
-**Wave 1 (review branch):** 7.1–7.5 · **Wave 2:** 7.6–7.8
+**Wave 1 (review branch):** 7.1–7.5 · **Wave 2 (started):** 7.6–7.8
 
 Wave 1 verification (2026-10-28): isolated headless checks cover Recall results,
 signed streaming/progress/stop, profile PIN/restart/account continuity/data
@@ -219,6 +219,11 @@ below are not claims of complete verification.
 - [ ] Live captions: ahead-of-playhead whisper transcription of anything playing
 - [ ] On-device subtitle translation (any track → your language)
 - [ ] Spoiler-safe "Previously on…" recaps built only from what you watched
+
+Wave 2 implementation boundaries and reproducible build/live-test commands are
+recorded in [Architecture](docs/architecture.md#horizon-wave-2-implementation-boundaries).
+The initial Craft documentation is in place; Resilience and Commons implementation
+remain open.
 
 ### 7.6 — Resilience
 - [ ] Persisted app-wide live/dead probing feeding ranking and fallback order
