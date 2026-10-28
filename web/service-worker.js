@@ -1,4 +1,4 @@
-const CACHE = 'opal-shell-v11';
+const CACHE = 'opal-shell-v14';
 const SHELL = [
   '/',
   '/index.html',
