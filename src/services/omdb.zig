@@ -36,16 +36,12 @@ var gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 /// Concurrent-spawn guard (a second open before the first worker returns).
 var busy: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
-/// curl `url` into `buf`, returning bytes read (0 on failure). OMDb is a plain
-/// keyed HTTPS JSON API — the key rides as a query param, no auth header.
+/// Fetch `url` into `buf` via reliable-fetch, returning bytes read (0 on failure). OMDb is a plain
+/// keyed HTTPS JSON API — the key rides as a query param, so the URL goes via
+/// curl's stdin config (secret_url), never argv.
 fn curlInto(url: []const u8, buf: []u8) usize {
-    var child = io.Child.init(&.{ "curl", "-s", "--max-time", "12", url }, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    child.spawn() catch return 0;
-    const n = if (child.stdout) |*so| io.readAll(so, buf) catch 0 else 0;
-    _ = child.wait() catch {};
-    return n;
+    const body = @import("reliable_fetch.zig").fetch(url, buf, .{ .keep_head_on_overflow = true, .timeout_secs = 12, .impersonate = false, .secret_url = true }) orelse return 0;
+    return body.len;
 }
 
 /// Trigger a background OMDb fetch for a freshly-opened movie/TV detail. INERT

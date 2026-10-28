@@ -34,32 +34,27 @@ pub fn getEmbedding(text: []const u8, floats_out: *[EMBED_DIM]f32) bool {
     }
     writer.print("\"}}", .{}) catch return false;
 
-    // Both files live in one cryptographically random 0700 workspace. The
-    // response is pre-created 0600 so curl truncates a file we own.
+    // The request body lives in a cryptographically random 0700 workspace and
+    // is uploaded from there (post_body_file) — never argv. Response comes
+    // back through the reliable-fetch seam's pipe (status-checked).
     const secure_temp = @import("../core/secure_temp.zig");
     var scratch = secure_temp.Workspace.create("embedding") catch return false;
     defer scratch.cleanup();
     var req_path_buf: [secure_temp.max_path_len]u8 = undefined;
     const req_path = scratch.writeFile("request.json", fbs.buffered(), &req_path_buf) catch return false;
-    var resp_path_buf: [secure_temp.max_path_len]u8 = undefined;
-    const resp_path = scratch.reserveFile("response.json", &resp_path_buf) catch return false;
 
-    // Call embedding server
-    var data_arg_buf: [secure_temp.max_path_len + 1]u8 = undefined;
-    const data_arg = std.fmt.bufPrint(&data_arg_buf, "@{s}", .{req_path}) catch return false;
-
-    var curl_child = @import("../core/io_global.zig").Child.init(
-        &.{ "curl", "-s", "-X", "POST", "-H", "Content-Type: application/json", "--data-binary", data_arg, "-o", resp_path, "--max-time", "10", "http://127.0.0.1:41593/v1/embeddings" },
-        @import("../core/alloc.zig").allocator,
-    );
-    _ = curl_child.spawnAndWait() catch return false;
-
-    // Read response
-    const resp_file = @import("../core/io_global.zig").openFileAbsolute(resp_path, .{}) catch return false;
-    defer resp_file.close(@import("../core/io_global.zig").io());
-
-    var resp_buf: [32768]u8 = undefined;
-    const resp_len = @import("../core/io_global.zig").readAll(resp_file, &resp_buf) catch return false;
+    const a = @import("../core/alloc.zig").allocator;
+    const resp_buf = a.alloc(u8, 32768) catch return false;
+    defer a.free(resp_buf);
+    const resp = @import("reliable_fetch.zig").fetch("http://127.0.0.1:41593/v1/embeddings", resp_buf, .{
+        .headers = &.{.{ .name = "Content-Type", .value = "application/json" }},
+        .post_body_file = req_path,
+        .timeout_secs = 10,
+        .impersonate = false,
+        .use_dpi_proxy = false,
+        .keep_head_on_overflow = true,
+    }) orelse return false;
+    const resp_len = resp.len;
     if (resp_len == 0) return false;
 
     // Parse the embedding array from JSON

@@ -180,36 +180,10 @@ fn localTzOffset() i64 {
 /// tmdb_api.zig:275). Writes into a CALLER-OWNED buffer and returns the byte
 /// count — it never allocates, so it cannot hand back a mis-sized heap slice.
 fn curlInto(url: []const u8, buf: []u8) usize {
-    // Route through the DPI-bypass sidecar when the user has it on. This fetch
-    // is the single reason the release section goes blank: eztv is exactly the
-    // kind of host ISP DPI resets (observed here as curl exit 35 / http_code
-    // 000, ~40% of attempts), and the bypass exists to defeat precisely that.
-    // It was building its argv by hand and never consulting proxyArgs(), so
-    // turning the setting on changed nothing for this rail — see link_health.zig
-    // for the same pattern done right.
-    var argv: [10][]const u8 = undefined;
-    var argc: usize = 0;
-    for ([_][]const u8{ "curl", "-s", "--max-time", "12" }) |x| {
-        argv[argc] = x;
-        argc += 1;
-    }
-    if (@import("dpi_bypass.zig").proxyArgs()) |pa| {
-        for (pa) |x| {
-            if (argc >= argv.len - 1) break;
-            argv[argc] = x;
-            argc += 1;
-        }
-    }
-    argv[argc] = url;
-    argc += 1;
-
-    var child = io.Child.init(argv[0..argc], alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    child.spawn() catch return 0;
-    const n = if (child.stdout) |*so| io.readAll(so, buf) catch 0 else 0;
-    _ = child.wait() catch {};
-    return n;
+    // reliable-fetch routes through the DPI-bypass proxy when the user has it
+    // on, so eztv resets (curl 35) get the same bypass as every other source.
+    const body = @import("reliable_fetch.zig").fetch(url, buf, .{ .keep_head_on_overflow = true, .timeout_secs = 12, .impersonate = false }) orelse return 0;
+    return body.len;
 }
 
 /// Carrier for the detached worker: the endpoint and the day window are copied

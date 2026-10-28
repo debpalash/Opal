@@ -28,6 +28,9 @@ pub fn init() void {
     var dir_buf: [512]u8 = undefined;
     const dir = paths.configDir(&dir_buf);
     @import("io_global.zig").cwdMakePath(dir) catch {};
+    // A non-default household profile keeps its db under <config>/profiles/<id>.
+    var pdir_buf: [512]u8 = undefined;
+    @import("io_global.zig").cwdMakePath(paths.profileDataDir(&pdir_buf)) catch {};
 
     // Register sqlite-vec extension automatically for every new DB connection
     _ = c.sqlite3_auto_extension(@ptrCast(&c.sqlite3_vec_init));
@@ -153,6 +156,7 @@ pub fn prepareOn(r: Reader, sql: []const u8) ?*Stmt {
 }
 
 pub fn deinit() void {
+    @import("household_db.zig").deinit();
     readers_ready.store(false, .release);
     for (&readers) |*r| {
         if (r.*) |h| _ = c.sqlite3_close_v2(h);
@@ -558,6 +562,18 @@ fn createTables() void {
         \\  PRIMARY KEY (tmdb_id, season)
         \\)
     );
+    // Babel: one "Previously on…" recap per (show, season, episode) — see recap.zig.
+    exec(
+        \\CREATE TABLE IF NOT EXISTS recap_cache (
+        \\  tmdb_id INTEGER NOT NULL,
+        \\  season INTEGER NOT NULL,
+        \\  episode INTEGER NOT NULL,
+        \\  text TEXT NOT NULL,
+        \\  sources INTEGER DEFAULT 0,
+        \\  created_at INTEGER,
+        \\  PRIMARY KEY (tmdb_id, season, episode)
+        \\)
+    );
 
     // User-set library status, for EVERY kind of trackable content (tv / anime /
     // movie) rather than a column on tv_shows — anime keys off a MAL id and a
@@ -627,7 +643,37 @@ fn createTables() void {
     exec("ALTER TABLE library_items ADD COLUMN user_rating REAL DEFAULT -1");
     exec("ALTER TABLE library_items ADD COLUMN home_hidden INTEGER DEFAULT 0");
     exec("ALTER TABLE library_items ADD COLUMN home_pinned INTEGER DEFAULT 0");
+    // Sync tombstone (ROADMAP 6.3): a removed item keeps its row so the delete
+    // replicates; readers filter `deleted=0`.
+    exec("ALTER TABLE library_items ADD COLUMN deleted INTEGER DEFAULT 0");
     exec("CREATE INDEX IF NOT EXISTS idx_library_updated ON library_items(updated_at DESC)");
+    // Sync change sequence + echo origin (library_sync_pure). `seq` is a local,
+    // strictly increasing stamp taken by EVERY synced-field write — local edits
+    // and applied peer rows alike — so cursors page on it, not on updated_at
+    // (a relayed row keeps its writer's old updated_at). `origin` is the device
+    // id an applied row came from ('' = written here); the triggers reset it on
+    // any write and library_store.applySyncRows sets it afterwards. Home layout
+    // columns are device-local and deliberately not in the trigger list.
+    exec("ALTER TABLE library_items ADD COLUMN seq INTEGER DEFAULT 0");
+    exec("ALTER TABLE library_items ADD COLUMN origin TEXT DEFAULT ''");
+    exec("UPDATE library_items SET seq = rowid + (SELECT IFNULL(MAX(seq),0) FROM library_items) WHERE seq IS NULL OR seq=0");
+    exec("CREATE INDEX IF NOT EXISTS idx_library_seq ON library_items(seq)");
+    exec(
+        \\CREATE TRIGGER IF NOT EXISTS library_items_seq_ins AFTER INSERT ON library_items BEGIN
+        \\  UPDATE library_items SET seq=(SELECT IFNULL(MAX(seq),0)+1 FROM library_items), origin='' WHERE rowid=NEW.rowid;
+        \\END
+    );
+    exec(
+        \\CREATE TRIGGER IF NOT EXISTS library_items_seq_upd AFTER UPDATE OF
+        \\  title,poster,resume_secs,duration_secs,percent,is_favorite,user_rating,next_label,deep_link,updated_at,deleted
+        \\  ON library_items BEGIN
+        \\  UPDATE library_items SET seq=(SELECT IFNULL(MAX(seq),0)+1 FROM library_items), origin='' WHERE rowid=NEW.rowid;
+        \\END
+    );
+    // This store's sync identity: peers record it as the origin of rows we send.
+    exec("CREATE TABLE IF NOT EXISTS library_sync_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+    exec("INSERT OR IGNORE INTO library_sync_meta(key,value) VALUES('device_id', lower(hex(randomblob(16))))");
+    bindSyncIdentity();
 
     // Named, reusable queue snapshots. Queue playback remains authoritative in
     // queue.db; these tables are the user's durable playlist/collection layer.
@@ -677,6 +723,78 @@ fn createTables() void {
         \\  added_at INTEGER DEFAULT (strftime('%s','now'))
         \\)
     );
+    // Skip markers (intro/credits/…) per file version — media_key is
+    // "file:<size>:<mtime>:<path>" (markers_pure.mediaKey); method is
+    // 'fingerprint' today. Fingerprint cache keyed by path, validated by
+    // size+mtime. See services/markers.zig.
+    exec(
+        \\CREATE TABLE IF NOT EXISTS media_markers (
+        \\  media_key TEXT NOT NULL,
+        \\  kind TEXT NOT NULL,
+        \\  start REAL NOT NULL,
+        \\  "end" REAL NOT NULL,
+        \\  confidence REAL NOT NULL DEFAULT 1,
+        \\  method TEXT NOT NULL DEFAULT '',
+        \\  updated_at INTEGER DEFAULT (strftime('%s','now')),
+        \\  PRIMARY KEY(media_key, kind, method)
+        \\)
+    );
+    exec(
+        \\CREATE TABLE IF NOT EXISTS media_fingerprints (
+        \\  path TEXT PRIMARY KEY,
+        \\  size INTEGER NOT NULL,
+        \\  mtime INTEGER NOT NULL,
+        \\  duration REAL NOT NULL,
+        \\  tail_offset REAL NOT NULL,
+        \\  head BLOB NOT NULL,
+        \\  tail BLOB NOT NULL,
+        \\  updated_at INTEGER DEFAULT (strftime('%s','now'))
+        \\)
+    );
+
+    // Recall (ROADMAP 7.1) — semantic index over the library and inside media.
+    // A derived, rebuildable cache: services/recall_index.zig fills it in the
+    // background from library_items / local_media / tv_shows and subtitle
+    // sidecars. FTS5 may be missing (mingw libsqlite3) — the CREATE then fails
+    // quietly and recall falls back to LIKE. The vec0 tables need the embedding
+    // model's dimension, so recall_index creates them once it knows it.
+    exec(
+        \\CREATE TABLE IF NOT EXISTS recall_docs (
+        \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
+        \\  source TEXT NOT NULL,
+        \\  source_key TEXT NOT NULL,
+        \\  kind TEXT NOT NULL DEFAULT 'other',
+        \\  title TEXT NOT NULL DEFAULT '',
+        \\  body TEXT NOT NULL DEFAULT '',
+        \\  year INTEGER NOT NULL DEFAULT 0,
+        \\  runtime_secs INTEGER NOT NULL DEFAULT 0,
+        \\  lang TEXT NOT NULL DEFAULT '',
+        \\  lib_kind TEXT NOT NULL DEFAULT '',
+        \\  lib_id TEXT NOT NULL DEFAULT '',
+        \\  link TEXT NOT NULL DEFAULT '',
+        \\  poster TEXT NOT NULL DEFAULT '',
+        \\  sig INTEGER NOT NULL DEFAULT 0,
+        \\  subs_sig INTEGER NOT NULL DEFAULT 0,
+        \\  embedded INTEGER NOT NULL DEFAULT 0,
+        \\  seen INTEGER NOT NULL DEFAULT 0,
+        \\  UNIQUE(source, source_key)
+        \\)
+    );
+    exec(
+        \\CREATE TABLE IF NOT EXISTS recall_moments (
+        \\  id INTEGER PRIMARY KEY AUTOINCREMENT,
+        \\  doc_id INTEGER NOT NULL REFERENCES recall_docs(id) ON DELETE CASCADE,
+        \\  start_ms INTEGER NOT NULL,
+        \\  end_ms INTEGER NOT NULL,
+        \\  text TEXT NOT NULL,
+        \\  embedded INTEGER NOT NULL DEFAULT 0
+        \\)
+    );
+    exec("CREATE INDEX IF NOT EXISTS idx_recall_moments_doc ON recall_moments(doc_id)");
+    exec("CREATE INDEX IF NOT EXISTS idx_recall_docs_embedded ON recall_docs(embedded)");
+    exec("CREATE TABLE IF NOT EXISTS recall_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
+    exec("CREATE VIRTUAL TABLE IF NOT EXISTS recall_fts USING fts5(title, body, tokenize='unicode61 remove_diacritics 2')");
+    exec("CREATE VIRTUAL TABLE IF NOT EXISTS recall_moments_fts USING fts5(text, tokenize='unicode61 remove_diacritics 2')");
 
     // Live TV stream-health cache (probe results). Keyed by url_hash; `status` is
     // the pure Health enum int (0 unknown/1 live/2 slow/3 dead), `checked_at`
@@ -830,6 +948,64 @@ pub fn tvMergeDuplicates() void {
     const report = @import("../services/tv_merge.zig").run(handle, io_global.milliTimestamp());
     if (report.merged > 0) logs.pushLog("info", "tv", "Merged duplicate tracked shows (backup kept in tv_*_bak)", false);
     if (report.failed > 0) logs.pushLog("warn", "tv", "Duplicate show merge failed and was rolled back", true);
+}
+
+// ══════════════════════════════════════════════════════════
+// Device-sync identity (clone detection)
+// ══════════════════════════════════════════════════════════
+
+/// Set when `bindSyncIdentity` re-rolled the device id this run; the sync tick
+/// (UI thread) consumes it and resets peer cursors once config is loaded.
+pub var sync_identity_rerolled = std.atomic.Value(bool).init(false);
+
+fn metaText(key: []const u8, buf: []u8) []const u8 {
+    const stmt = prepare("SELECT value FROM library_sync_meta WHERE key=?1") orelse return buf[0..0];
+    defer finalize(stmt);
+    bindText(stmt, 1, key);
+    if (step(stmt) != c.SQLITE_ROW) return buf[0..0];
+    const v = columnText(stmt, 0) orelse return buf[0..0];
+    if (v.len > buf.len) return buf[0..0];
+    @memcpy(buf[0..v.len], v);
+    return buf[0..v.len];
+}
+
+/// Detect a copied opal.db sharing another store's device id and give this
+/// store a fresh one. Rules + echo analysis: library_sync_pure.identityAction.
+fn bindSyncIdentity() void {
+    const lsp = @import("../services/library_sync_pure.zig");
+    var dir_buf: [512]u8 = undefined;
+    var path_buf: [600]u8 = undefined;
+    // Per profile: each household profile has its own db, so its own mirror file.
+    const path = std.fmt.bufPrint(&path_buf, "{s}/sync_device", .{paths.profileDataDir(&dir_buf)}) catch return;
+
+    var file_buf: [64]u8 = undefined;
+    var file_id: []const u8 = "";
+    if (io_global.cwdOpenFile(path, .{})) |f| {
+        defer io_global.closeFile(f);
+        const n = io_global.readAll(f, &file_buf) catch 0;
+        file_id = std.mem.trim(u8, file_buf[0..n], " \t\r\n");
+    } else |_| {}
+
+    var id_buf: [64]u8 = undefined;
+    var bound_buf: [8]u8 = undefined;
+    const db_id = metaText("device_id", &id_buf);
+    const bound = std.mem.eql(u8, metaText("bound", &bound_buf), "1");
+    const action = lsp.identityAction(db_id, bound, file_id);
+    if (action == .keep) return;
+    if (action == .reroll) {
+        exec("INSERT OR REPLACE INTO library_sync_meta(key,value) VALUES('device_id', lower(hex(randomblob(16))))");
+        sync_identity_rerolled.store(true, .release);
+        logs.pushLog("info", "sync", "This library is a copy of another device's - gave it a new sync identity", false);
+    }
+    const id = metaText("device_id", &id_buf);
+    if (!lsp.validDeviceId(id)) return;
+    // File first, marker second: a crash in between leaves the db unbound with
+    // a matching file, which adopts cleanly next start.
+    var tmp_buf: [610]u8 = undefined;
+    const tmp = std.fmt.bufPrint(&tmp_buf, "{s}.tmp", .{path}) catch return;
+    io_global.cwdWriteFile(.{ .sub_path = tmp, .data = id }) catch return;
+    io_global.renameAbsolute(tmp, path) catch return;
+    exec("INSERT OR REPLACE INTO library_sync_meta(key,value) VALUES('bound','1')");
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1543,6 +1719,8 @@ pub fn animeRemoveContinue(mal_id: []const u8) void {
     defer finalize(stmt);
     bindText(stmt, 1, mal_id);
     _ = step(stmt);
+    // Mirror the removal into the unified library so it leaves Home and syncs.
+    @import("../services/library_store.zig").removeItem("anime", mal_id);
 }
 
 pub fn animeGetContinue(out: []@import("state.zig").ContinueItem) usize {

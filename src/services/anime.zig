@@ -20,26 +20,26 @@ const workers = @import("../core/workers.zig");
 const route_resilience = @import("../core/route_resilience_pure.zig");
 
 const alloc = @import("../core/alloc.zig").allocator;
+const reliable_fetch = @import("reliable_fetch.zig");
 
-/// Run a one-shot anime helper with an independent outer deadline and a hard
-/// output ceiling. curl's own --max-time remains useful transport policy, but
-/// it cannot guarantee that a wedged helper (or a descendant retaining stdout)
-/// is reaped. bounded_process owns that complete lifecycle on every platform.
-fn boundedCurl(argv: []const []const u8, output: []u8, timeout_ms: i64) ?[]const u8 {
-    const result = bounded_process.run(argv, output, .{
-        .timeout_ms = timeout_ms,
-        .terminate_grace_ms = 250,
-    });
-    return if (result.ok()) result.output else null;
+/// One-shot GET/POST through the shared reliable-fetch seam (bounded process,
+/// output ceiling, DPI proxy, optional browser TLS). Null on transport failure
+/// or a non-2xx/3xx status.
+fn boundedCurl(url: []const u8, output: []u8, opts: reliable_fetch.Opts) ?[]const u8 {
+    // Pre-seam readAll kept the head of an oversized page; scrapers parse it.
+    var o = opts;
+    o.keep_head_on_overflow = true;
+    return reliable_fetch.fetch(url, output, o);
 }
 
-fn boundedSearchCurl(argv: []const []const u8, output: []u8, timeout_ms: i64, generation: u32) ?[]const u8 {
-    const result = bounded_process.run(argv, output, .{
-        .timeout_ms = timeout_ms,
-        .terminate_grace_ms = 100,
-        .cancel_epoch = .{ .epoch32 = .{ .value = &search_request.generation, .expected = generation } },
+/// Jikan/plain-JSON GET cancelled when a newer search supersedes `generation`.
+fn boundedSearchCurl(url: []const u8, output: []u8, timeout_secs: u32, generation: u32) ?[]const u8 {
+    return reliable_fetch.fetch(url, output, .{
+        .user_agent = agent,
+        .timeout_secs = timeout_secs,
+        .impersonate = false,
+        .cancel_epoch = searchEpoch(generation),
     });
-    return if (result.ok()) result.output else null;
 }
 fn searchEpoch(generation: u32) bounded_process.CancelEpoch {
     return .{ .epoch32 = .{ .value = &search_request.generation, .expected = generation } };
@@ -286,13 +286,11 @@ fn loadMoreGridWorker(job: GridJob) void {
     const next_page = job.page;
     const url = job.url[0..job.url_len];
 
-    const argv = [_][]const u8{ "curl", "-s", "--connect-timeout", "3", "-A", agent, "--max-time", "6", url };
-
     const buf = alloc.alloc(u8, 256 * 1024) catch return;
     defer alloc.free(buf);
     var attempt: u8 = 0;
     while (attempt < 3) : (attempt += 1) {
-        const body = boundedSearchCurl(&argv, buf, 8_000, my_gen) orelse {
+        const body = boundedSearchCurl(url, buf, 6, my_gen) orelse {
             if (attempt < 2) @import("../core/io_global.zig").sleep((250 + @as(u64, attempt) * 350) * std.time.ns_per_ms);
             continue;
         };
@@ -673,8 +671,7 @@ fn listsThread(my_gen: u32) void {
         return;
     };
     defer alloc.free(buf);
-    const argv = [_][]const u8{ "curl", "-sL", "-A", agent, "--max-time", "20", url };
-    const body = boundedSearchCurl(&argv, buf, 22_000, my_gen) orelse {
+    const body = boundedSearchCurl(url, buf, 20, my_gen) orelse {
         if (!have_cached) logs.pushLog("error", "anime", "Lists: bounded fetch failed", true);
         return;
     };
@@ -773,10 +770,7 @@ fn publishListsJson(json: []const u8, my_gen: u32) usize {
 /// and terminates/reaps the whole tree if curl or an inheriting descendant
 /// wedges. This replaces the former predictable on-disk staging file.
 fn jikanGet(url: []const u8, buf: []u8, my_gen: u32) usize {
-    const argv = [_][]const u8{
-        "curl", "-s", "--connect-timeout", "3", "--max-time", "10", "-A", agent, url,
-    };
-    const body = boundedSearchCurl(&argv, buf, 12_000, my_gen) orelse return 0;
+    const body = boundedSearchCurl(url, buf, 10, my_gen) orelse return 0;
     return body.len;
 }
 
@@ -913,10 +907,7 @@ fn searchThread(job: SearchJob) void {
 
     const buf = alloc.alloc(u8, 256 * 1024) catch return;
     defer alloc.free(buf);
-    const argv = [_][]const u8{
-        "curl", "-s", "--connect-timeout", "3", "--max-time", "10", "-A", agent, url,
-    };
-    if (boundedSearchCurl(&argv, buf, 12_000, my_gen)) |body| {
+    if (boundedSearchCurl(url, buf, 10, my_gen)) |body| {
         if (body.len > 0) {
             const added = parseJikanData(body, my_gen);
             if (added > 0) {
@@ -1043,11 +1034,9 @@ fn seasonalThread(job: GridJob) void {
     defer search_request.finish(my_gen, &state.app.anime.is_loading);
 
     const url = job.url[0..job.url_len];
-    const argv = [_][]const u8{ "curl", "-s", "--connect-timeout", "3", "-A", agent, "--max-time", "10", url };
-
     const buf = alloc.alloc(u8, 256 * 1024) catch return;
     defer alloc.free(buf);
-    const body = boundedSearchCurl(&argv, buf, 12_000, my_gen) orelse return;
+    const body = boundedSearchCurl(url, buf, 10, my_gen) orelse return;
     if (body.len == 0) return;
     _ = parseJikanData(body, my_gen);
     if (search_request.current() == my_gen) more_available.store(parsePagination(body), .release);
@@ -1083,11 +1072,9 @@ fn calendarThread(job: GridJob) void {
     defer search_request.finish(my_gen, &state.app.anime.is_loading);
 
     const url = job.url[0..job.url_len];
-    const argv = [_][]const u8{ "curl", "-s", "--connect-timeout", "3", "-A", agent, "--max-time", "10", url };
-
     const buf = alloc.alloc(u8, 256 * 1024) catch return;
     defer alloc.free(buf);
-    const body = boundedSearchCurl(&argv, buf, 12_000, my_gen) orelse return;
+    const body = boundedSearchCurl(url, buf, 10, my_gen) orelse return;
     if (body.len == 0) return;
     // parseJikanData handles the cards; pass with_broadcast so it also extracts
     // each item's broadcast.string into anime.broadcast[] (aligned to index).
@@ -1776,17 +1763,17 @@ fn relationsWorker(job: RelationsJob) void {
     }
     var url_buf: [128]u8 = undefined;
     const url = std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/anime/{s}/relations", .{job.mal[0..job.mal_len]}) catch return;
-    const argv = [_][]const u8{ "curl", "-s", "--connect-timeout", "3", "-A", agent, "--max-time", "10", url };
     const buf = alloc.alloc(u8, 128 * 1024) catch return;
     defer alloc.free(buf);
-    const fetched = bounded_process.run(&argv, buf, .{
-        .timeout_ms = 12_000,
-        .terminate_grace_ms = 100,
+    const fetched = reliable_fetch.fetch(url, buf, .{
+        .user_agent = agent,
+        .timeout_secs = 10,
+        .impersonate = false,
         .cancel_epoch = .{ .epoch32 = .{ .value = &relations_request.generation, .expected = job.generation } },
-    });
-    if (!fetched.ok() or !relations_request.isCurrent(job.generation)) return;
+    }) orelse return;
+    if (!relations_request.isCurrent(job.generation)) return;
     var records: [16]state.AnimeRelation = @splat(.{});
-    const count = parseRelations(fetched.output, &records);
+    const count = parseRelations(fetched, &records);
     relations_pending_mutex.lock();
     defer relations_pending_mutex.unlock();
     if (!relations_request.isCurrent(job.generation)) return;
@@ -1931,12 +1918,11 @@ pub fn jumpToAnime(mal_id: []const u8) void {
             var url_buf: [96]u8 = undefined;
             const url = std.fmt.bufPrint(&url_buf, "https://api.jikan.moe/v4/anime/{s}", .{id}) catch return;
 
-            const argv = [_][]const u8{ "curl", "-s", "-A", agent, "--max-time", "12", url };
             const buf = @import("../core/alloc.zig").allocator.alloc(u8, 128 * 1024) catch {
                 return;
             };
             defer @import("../core/alloc.zig").allocator.free(buf);
-            const body = boundedCurl(&argv, buf, 14_000) orelse return;
+            const body = boundedCurl(url, buf, .{ .user_agent = agent, .timeout_secs = 12, .impersonate = false }) orelse return;
             if (body.len < 10) return;
 
             // The single-anime endpoint wraps one object in {"data":{...}} — the
@@ -2399,15 +2385,13 @@ fn scraperGet(url: []const u8, buf: []u8) usize {
 /// POST `body` to the DooPlay admin-ajax endpoint with the Referer + AJAX marker
 /// the WordPress handler requires. Returns bytes read into `dst` (0 on failure).
 fn scraperPost(url: []const u8, referer: []const u8, body: []const u8, dst: []u8) usize {
-    var ref_buf: [320]u8 = undefined;
-    const ref_hdr = std.fmt.bufPrint(&ref_buf, "Referer: {s}", .{referer}) catch return 0;
-    const argv = [_][]const u8{
-        "curl",   "-sL",                              "-A",         agent,
-        "-H",     "X-Requested-With: XMLHttpRequest", "-H",         ref_hdr,
-        "--data", body,                               "--max-time", "15",
-        url,
-    };
-    const response = boundedCurl(&argv, dst, 17_000) orelse return 0;
+    const response = boundedCurl(url, dst, .{
+        .user_agent = agent,
+        .referer = referer,
+        .headers = &.{.{ .name = "X-Requested-With", .value = "XMLHttpRequest" }},
+        .post_body = body,
+        .timeout_secs = 15,
+    }) orelse return 0;
     return response.len;
 }
 
@@ -3333,7 +3317,7 @@ fn renderScheduleView() void {
                 .id_extra = i + 93000,
                 .expand = .horizontal,
                 .color_text = theme.colors.text_primary,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill = theme.transparent,
                 .color_fill_hover = theme.colors.bg_hover,
                 .color_fill_press = theme.colors.bg_elevated,
                 .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
@@ -3543,7 +3527,7 @@ fn renderModeToolbar(count: usize) void {
     });
     const dim = theme.colors.text_tertiary;
     if (dvui.buttonIcon(@src(), "smaller", icons.tvg.lucide.minus, .{}, .{}, .{
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill = theme.transparent,
         .color_fill_hover = theme.colors.bg_hover,
         .color_fill_press = theme.colors.bg_elevated,
         .color_text = dim,
@@ -3555,7 +3539,7 @@ fn renderModeToolbar(count: usize) void {
         card_w_pref = @max(110, card_w_pref - 40);
     }
     if (dvui.buttonIcon(@src(), "bigger", icons.tvg.lucide.plus, .{}, .{}, .{
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill = theme.transparent,
         .color_fill_hover = theme.colors.bg_hover,
         .color_fill_press = theme.colors.bg_elevated,
         .color_text = dim,
@@ -3842,7 +3826,7 @@ fn renderContinueCard(item: *state.ContinueItem, idx: usize, card_w: f32) void {
             .id_extra = idx + 30500,
             .expand = .horizontal,
             .color_text = theme.colors.text_primary,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
             .padding = dvui.Rect.all(0),
@@ -4043,7 +4027,7 @@ fn renderToolbar(count: usize) void {
     toolbarDivider(950);
     const dim = theme.colors.text_tertiary;
     if (dvui.buttonIcon(@src(), "smaller", icons.tvg.lucide.minus, .{}, .{}, .{
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill = theme.transparent,
         .color_fill_hover = theme.colors.bg_hover,
         .color_fill_press = theme.colors.bg_elevated,
         .color_text = dim,
@@ -4055,7 +4039,7 @@ fn renderToolbar(count: usize) void {
         card_w_pref = @max(110, card_w_pref - 40);
     }
     if (dvui.buttonIcon(@src(), "bigger", icons.tvg.lucide.plus, .{}, .{}, .{
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill = theme.transparent,
         .color_fill_hover = theme.colors.bg_hover,
         .color_fill_press = theme.colors.bg_elevated,
         .color_text = dim,
@@ -4362,7 +4346,7 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
             .id_extra = idx + 500,
             .expand = .horizontal,
             .color_text = theme.colors.text_primary,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
             .padding = dvui.Rect.all(0),
@@ -4439,7 +4423,7 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
                     .id_extra = idx + 650,
                     .color_text = theme.colors.text_secondary,
                     .expand = .horizontal,
-                    .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                    .color_fill = theme.transparent,
                     .color_fill_hover = theme.colors.bg_hover,
                     .color_fill_press = theme.colors.bg_elevated,
                     .padding = dvui.Rect.all(0),
@@ -4529,13 +4513,12 @@ pub fn fetchPoster(item: *state.AnimeResult) void {
         fn worker(url_buf: [512]u8, url_len: usize, result_idx: usize) void {
             const u = url_buf[0..url_len];
 
-            const argv = [_][]const u8{ "curl", "-sL", "--max-time", "10", u };
             const img_buf = @import("../core/alloc.zig").allocator.alloc(u8, 512 * 1024) catch {
                 markDone(result_idx, u);
                 return;
             };
             defer @import("../core/alloc.zig").allocator.free(img_buf);
-            const body = boundedCurl(&argv, img_buf, 12_000) orelse {
+            const body = boundedCurl(u, img_buf, .{ .timeout_secs = 10 }) orelse {
                 markDone(result_idx, u);
                 return;
             };
@@ -4615,13 +4598,12 @@ pub fn fetchContinuePoster(item: *state.ContinueItem) void {
             const idx = cont_idx;
             const url = url_buf[0..url_len];
 
-            const argv = [_][]const u8{ "curl", "-sL", "--max-time", "10", url };
             const img_buf = @import("../core/alloc.zig").allocator.alloc(u8, 512 * 1024) catch {
                 markDone(idx, url);
                 return;
             };
             defer @import("../core/alloc.zig").allocator.free(img_buf);
-            const body = boundedCurl(&argv, img_buf, 12_000) orelse {
+            const body = boundedCurl(url, img_buf, .{ .timeout_secs = 10 }) orelse {
                 markDone(idx, url);
                 return;
             };

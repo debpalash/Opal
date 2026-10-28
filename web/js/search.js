@@ -364,8 +364,14 @@ function searchReleaseMetadata(row){
   const item = unifiedSearchItem(row);
   return [({1:'480p', 2:'720p', 3:'1080p', 4:'4K'})[item.quality], item.size ? fmtSize(item.size) : '', item.torrent ? `${item.seeds} seeds · ${item.leech} peers` : ''].filter(Boolean).join(' · ');
 }
+function searchRowSources(row, generation, index){
+  // Folded renditions of this one row (server "sources"); index picks which plays first.
+  const sources = Array.isArray(row.sources) ? row.sources.filter(source => Number.isSafeInteger(source?.index)) : [];
+  if (!row.key || Number(row.source_count) < 2 || sources.length < 2) return '';
+  return `<details class="search-row-sources"><summary>${sources.length} sources</summary><div class="search-row-source-list">${sources.map(source => `<button class="play-source" data-i="${index}" data-gen="${generation}" data-source="${source.index}">${esc(source.label || 'Source ' + (source.index + 1))}</button>`).join('')}</div></details>`;
+}
 function searchRowActions(row, generation, index){
-  return `<div class="search-card-actions">${row.queueable ? `<button class="queue-btn" data-i="${index}" data-gen="${generation}">Queue</button>` : ''}<button class="play" data-i="${index}" data-gen="${generation}"${row.key ? '' : ' disabled'}>${unifiedActionLabel(row.source)}</button></div>`;
+  return `<div class="search-card-actions">${row.queueable ? `<button class="queue-btn" data-i="${index}" data-gen="${generation}">Queue</button>` : ''}<button class="play" data-i="${index}" data-gen="${generation}"${row.key ? '' : ' disabled'}>${unifiedActionLabel(row.source)}</button></div>${searchRowSources(row, generation, index)}`;
 }
 function confidentSearchFeature(groups){
   const query = $('q').value.trim().toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
@@ -470,22 +476,24 @@ function renderUnifiedResults(payload){
   });
   $('results').querySelectorAll('.play').forEach(button => button.onclick = () => runUnifiedAction(shown[Number(button.dataset.i)], Number(button.dataset.gen), 'play', button));
   $('results').querySelectorAll('.queue-btn').forEach(button => button.onclick = () => runUnifiedAction(shown[Number(button.dataset.i)], Number(button.dataset.gen), 'queue', button));
+  $('results').querySelectorAll('.play-source').forEach(button => button.onclick = () => runUnifiedAction(shown[Number(button.dataset.i)], Number(button.dataset.gen), 'play', button, Number(button.dataset.source)));
 }
-async function runUnifiedAction(r, generation, action, button){
+async function runUnifiedAction(r, generation, action, button, source = 0){
   if (!r || !r.key) return;
   if (action === 'play' && r.source === 'tmdb' && r.media && r.id) {
     openDetails(r.media === 'tv' ? 'tv' : 'movie', +r.id, r.title || '', r.imdb || '');
     return;
   }
+  const restoreLabel = button.textContent;
   button.disabled = true;
   button.textContent = action === 'queue' ? 'Adding...' : 'Opening...';
   try {
-    await apiMutation('/unified_search/' + action + '?generation=' + generation + '&key=' + encodeURIComponent(r.key));
+    await apiMutation('/unified_search/' + action + '?generation=' + generation + '&key=' + encodeURIComponent(r.key) + (source > 0 ? '&source=' + source : ''));
     button.textContent = action === 'queue' ? 'Queued' : 'Sent';
     toast(action === 'queue' ? 'Added to queue' : 'Opening in Opal');
   } catch (error) {
     button.disabled = false;
-    button.textContent = action === 'queue' ? 'Retry queue' : unifiedActionLabel(r.source);
+    button.textContent = action === 'queue' ? 'Retry queue' : source > 0 ? restoreLabel : unifiedActionLabel(r.source);
     toast(error?.message || 'Result changed; search again');
   }
 }

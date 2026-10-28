@@ -429,8 +429,8 @@ def test_eztv_calendar():
         # proxyArgs(), so turning the bypass setting on changed nothing here.
         # Measured on a DPI-throttled link: 9/15 direct vs 15/15 through the
         # sidecar.
-        "honours the dpi bypass":      ('@import("dpi_bypass.zig").proxyArgs()' in svc
-                                        and "argv[argc] = url;" in svc),
+        "honours the dpi bypass":      ("reliable_fetch.zig" in svc
+                                        and "use_dpi_proxy = false" not in svc),
         "failure backs off":           ("fn armNext(ok: bool)" in svc
                                         and "pure.nextDelayMs(streak, RETRY_BASE_MS, REFRESH_INTERVAL_MS)" in svc
                                         and "defer armNext(ok);" in svc),
@@ -459,8 +459,7 @@ def test_eztv_calendar():
         "parser fills caller buffer":  "pub fn parseFeed(body: []const u8, out: []Release) usize" in pur,
         # std.http SEGVs on some ISP TLS resets (tmdb_api.zig:275) — the fetch
         # must shell out to curl through the io_global child wrapper.
-        "curl, never std.http":        ('"curl"' in svc and "io.Child.init" in svc
-                                        and "std.http.Client" not in svc),
+        "curl via reliable-fetch":     ("reliable_fetch.zig" in svc and "std.http.Client" not in svc),
 
         # ── Pure logic is tested and production routes through it ──
         # sizeLabel was dropped with the row layout -- a poster card has no place

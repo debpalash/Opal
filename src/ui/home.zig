@@ -296,7 +296,7 @@ pub fn renderComingUpRail(card_w: f32) bool {
                 .id_extra = i + 47100,
                 .background = true,
                 .color_fill = theme.colors.bg_surface,
-                .corner_radius = dvui.Rect.all(8),
+                .corner_radius = dvui.Rect.all(theme.radius.lg),
                 .min_size_content = .{ .w = card_w, .h = poster_h },
                 .max_size_content = .{ .w = card_w, .h = poster_h },
                 .padding = dvui.Rect.all(0),
@@ -311,7 +311,7 @@ pub fn renderComingUpRail(card_w: f32) bool {
                 _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
                     .id_extra = i + 47200,
                     .expand = .both,
-                    .corner_radius = dvui.Rect.all(8),
+                    .corner_radius = dvui.Rect.all(theme.radius.lg),
                 });
             } else {
                 // Failure-latch (mirrors the TMDB grid): the old code gated on
@@ -1035,7 +1035,7 @@ var continue_slots: [24]LibSlot = [_]LibSlot{.{}} ** 24;
 ///   comics           → `comic|<url>|<title>`; reopen AND jump to the read page
 ///   podcast          → `podcast|<url>|<art>|<show>|<title>`; replay + mpv seeks
 ///   everything else  → browser.resumePlayback (files, magnets, http)
-fn openLibItem(item: *const library_pure.LibraryItem) void {
+pub fn openLibItem(item: *const library_pure.LibraryItem) void {
     const link = item.deep_link[0..@min(item.deep_link_len, item.deep_link.len)];
     if (link.len == 0) return;
     const kind = item.kind[0..@min(item.kind_len, item.kind.len)];

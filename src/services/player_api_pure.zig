@@ -47,6 +47,9 @@ pub const Action = union(enum) {
     subtitle_search,
     subtitle_download: usize,
     subtitle_generate,
+    /// Babel: live captions on/off, translate the active subtitle track.
+    live_captions: bool,
+    subtitle_translate,
     aspect: Aspect,
     subtitle_delay: f64,
     zoom: f64,
@@ -67,6 +70,7 @@ pub const Action = union(enum) {
     frame_previous,
     frame_next,
     screenshot,
+    skip_segment,
     loop_a,
     loop_b,
     loop_clear,
@@ -131,6 +135,8 @@ pub fn parse(name: []const u8, value: ?[]const u8) ParseError!Action {
     if (std.mem.eql(u8, name, "subtitle-search")) return .subtitle_search;
     if (std.mem.eql(u8, name, "subtitle-download")) return .{ .subtitle_download = try boundedInt(usize, value, 0, 14) };
     if (std.mem.eql(u8, name, "subtitle-generate")) return .subtitle_generate;
+    if (std.mem.eql(u8, name, "live-captions")) return .{ .live_captions = try boolean(value) };
+    if (std.mem.eql(u8, name, "subtitle-translate")) return .subtitle_translate;
     if (std.mem.eql(u8, name, "aspect")) {
         const raw = try required(value);
         const a: Aspect = if (std.mem.eql(u8, raw, "auto")) .auto else if (std.mem.eql(u8, raw, "16:9")) .wide else if (std.mem.eql(u8, raw, "4:3")) .classic else if (std.mem.eql(u8, raw, "21:9")) .cinema else return error.InvalidValue;
@@ -158,6 +164,7 @@ pub fn parse(name: []const u8, value: ?[]const u8) ParseError!Action {
     if (std.mem.eql(u8, name, "frame-previous")) return .frame_previous;
     if (std.mem.eql(u8, name, "frame-next")) return .frame_next;
     if (std.mem.eql(u8, name, "screenshot")) return .screenshot;
+    if (std.mem.eql(u8, name, "skip-segment")) return .skip_segment;
     if (std.mem.eql(u8, name, "loop-a")) return .loop_a;
     if (std.mem.eql(u8, name, "loop-b")) return .loop_b;
     if (std.mem.eql(u8, name, "loop-clear")) return .loop_clear;
@@ -198,6 +205,7 @@ test "only explicit tracks, aspects, presets and devices cross the seam" {
 test "fixed actions need no caller-controlled command text" {
     try std.testing.expectEqual(Action.playlist_next, try parse("playlist-next", null));
     try std.testing.expectEqual(Action.screenshot, try parse("screenshot", null));
+    try std.testing.expectEqual(Action.skip_segment, try parse("skip-segment", null));
     try std.testing.expectEqual(Action.loop_clear, try parse("loop-clear", null));
     try std.testing.expectEqual(Action.retry_current, try parse("retry", null));
     try std.testing.expectEqual(Action.cancel_current, try parse("cancel", null));
@@ -207,4 +215,9 @@ test "fixed actions need no caller-controlled command text" {
     try std.testing.expectEqual(@as(usize, 14), (try parse("subtitle-download", "14")).subtitle_download);
     try std.testing.expectError(error.OutOfRange, parse("subtitle-download", "15"));
     try std.testing.expectEqual(Action.subtitle_generate, try parse("subtitle-generate", null));
+    try std.testing.expectEqual(true, (try parse("live-captions", "true")).live_captions);
+    try std.testing.expectEqual(false, (try parse("live-captions", "0")).live_captions);
+    try std.testing.expectError(error.MissingValue, parse("live-captions", null));
+    try std.testing.expectError(error.InvalidValue, parse("live-captions", "maybe"));
+    try std.testing.expectEqual(Action.subtitle_translate, try parse("subtitle-translate", null));
 }

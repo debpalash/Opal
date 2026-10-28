@@ -11,18 +11,21 @@ from .harness import *  # noqa: F401,F403
 def test_anime_process_containment():
     anime = _src("src/services/anime.zig")
     search = _between(anime, "fn searchThread", "// ═════════════════════════")
-    curl_sites = anime.count('"curl"')
-    bounded_sites = (anime.count("boundedCurl(") - 1
-                     + anime.count("boundedSearchCurl(") - 1
-                     + anime.count("bounded_process.run(&argv, buf,"))  # dedicated relation epoch
+    fetch_sites = anime.count("boundedCurl(") - 1 + anime.count("boundedSearchCurl(") - 1 \
+        + anime.count("reliable_fetch.fetch(url, buf,")  # dedicated relation epoch
+    seam = _src("src/services/reliable_fetch.zig")
     checks = {
-        "typed bounded seam imported": '@import("../core/bounded_process.zig")' in anime,
-        "bounded seam owns lifecycle": "bounded_process.run(argv, output" in anime,
+        # Every anime HTTP fetch now goes through reliable-fetch, whose request()
+        # owns the bounded StreamProcess lifecycle (deadline + output cap + cancel).
+        "reliable-fetch seam owns lifecycle": "bounded.StreamProcess.init(argv" in seam
+            and ".cancel_epoch = opts.cancel_epoch" in seam,
+        "no raw curl argv remains": '"curl"' not in anime,
         "no raw Child lifecycle remains": "Child.init" not in anime,
-        "every curl site is bounded": curl_sites > 0 and bounded_sites == curl_sites,
-        "Jikan search has both deadlines": '"--connect-timeout"' in search
-            and '"--max-time"' in search and "boundedSearchCurl(" in search
+        "fetch sites routed through seam": fetch_sites > 0
+            and "return reliable_fetch.fetch(url, output" in anime,
+        "Jikan search is deadline + generation bounded": "boundedSearchCurl(" in search
             and "my_gen" in search
+            and ".cancel_epoch = searchEpoch(generation)" in anime
             and "search_request.generation" in anime,
         "predictable Jikan temp file removed": "jikan_{d}.json" not in anime
             and "tmp_seq" not in anime and '"-o", path' not in anime,
@@ -30,7 +33,7 @@ def test_anime_process_containment():
     bad = [name for name, ok in checks.items() if not ok]
     if bad:
         return "fail", "anime containment regression: " + ", ".join(bad)
-    return "pass", f"{curl_sites} anime curl sites use bounded process-tree execution"
+    return "pass", f"{fetch_sites} anime fetch sites use the bounded reliable-fetch seam"
 
 
 @test("Anime site frameworks (DooPlay + AnimeStream)", "Player")

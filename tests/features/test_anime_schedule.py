@@ -51,7 +51,7 @@ def test_anime_schedule():
         "atomic loading flag": "sched_loading.store(true, .release)" in svc,
         "publishes under mutex": "parse_mutex.lock()" in svc,
         "heap fetch buffer": "alloc.alloc(u8," in svc,
-        "curl to anilist": '"curl"' in svc and "graphql.anilist.co" in svc,
+        "curl to anilist": '.post_body = gql' in svc and "reliable_fetch.zig" in svc and "graphql.anilist.co" in svc,
         "unix window from io_global": "io.timestamp()" in svc,
         # Click a scheduled show → universal search (navigate + submitQuery).
         "click routes to submitQuery": "clickSlot" in svc and 'submitQuery(' in svc and "navigateToTab(.Search)" in svc,

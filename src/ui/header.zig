@@ -595,7 +595,7 @@ pub fn shouldUrlInputBeInGrid() bool {
 }
 
 pub fn renderUrlInput(is_large: bool) void {
-    const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
+    const transparent = theme.transparent;
 
     // Resting = hairline; focus = accent ring. Lags one frame (matches the
     // foundation's components.searchInput convention).
@@ -899,7 +899,7 @@ pub fn renderTabBar() void {
         }
 
         // Tab button — active = accent TEXT only (no fill, no underline box).
-        const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
+        const transparent = theme.transparent;
         if (dvui.button(@src(), tab_label, .{}, .{
             .id_extra = i,
             .color_fill = transparent,

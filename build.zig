@@ -443,9 +443,9 @@ fn buildSupported(b: *std.Build) void {
     // and hard-errors unless TORRENT_USE_OPENSSL/GNUTLS is also defined to match
     // how libtorrent was built. pkg-config --cflags emits the right -D flags
     // (and --libs the matching -lssl/-lcrypto); we keep -I{prefix}/include for
-    // boost and a trailing -ltorrent-rasterbar as an empty-pkg-config fallback.
+    // boost. Use the library fallback only if pkg-config fails, avoiding duplicate linkage.
     const compile_cmd = if (target.result.os.tag == .macos)
-        b.fmt("if [ ! -f libtorrent_wrapper.so ] || [ build.zig -nt libtorrent_wrapper.so ] || [ src/torrent_wrapper.cpp -nt libtorrent_wrapper.so ] || [ src/torrent_memory.hpp -nt libtorrent_wrapper.so ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -fPIC -Wl,-headerpad_max_install_names -I{s}/include $(pkg-config --cflags libtorrent-rasterbar 2>/dev/null) -L{s}/lib src/torrent_wrapper.cpp -o libtorrent_wrapper.so $(pkg-config --libs libtorrent-rasterbar 2>/dev/null) -ltorrent-rasterbar; fi", .{ brew_prefix, brew_prefix })
+        b.fmt("if [ ! -f libtorrent_wrapper.so ] || [ build.zig -nt libtorrent_wrapper.so ] || [ src/torrent_wrapper.cpp -nt libtorrent_wrapper.so ] || [ src/torrent_memory.hpp -nt libtorrent_wrapper.so ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -fPIC -Wl,-headerpad_max_install_names -I{s}/include $(pkg-config --cflags libtorrent-rasterbar 2>/dev/null) -L{s}/lib src/torrent_wrapper.cpp -o libtorrent_wrapper.so $(pkg-config --libs libtorrent-rasterbar 2>/dev/null || echo -ltorrent-rasterbar); fi", .{ brew_prefix, brew_prefix })
     else if (is_windows)
         // pkg-config --cflags is REQUIRED here, same as the POSIX branches:
         // MSYS2's libtorrent-rasterbar (≥2.0.13) enables TORRENT_USE_RTC in
@@ -454,7 +454,7 @@ fn buildSupported(b: *std.Build) void {
         // -lssl/-lcrypto/-lbcrypt/-lmswsock in --libs); the trailing
         // -ltorrent-rasterbar -lws2_32 -liphlpapi -lcrypt32 stay as a fallback
         // for an empty pkg-config.
-        b.fmt("if [ ! -f torrent_wrapper.dll ] || [ src/torrent_wrapper.cpp -nt torrent_wrapper.dll ] || [ src/torrent_memory.hpp -nt torrent_wrapper.dll ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -I{s}/include $(pkg-config --cflags libtorrent-rasterbar 2>/dev/null) -L{s}/lib src/torrent_wrapper.cpp -o torrent_wrapper.dll $(pkg-config --libs libtorrent-rasterbar 2>/dev/null) -ltorrent-rasterbar -lws2_32 -liphlpapi -lcrypt32; fi", .{ mingw_prefix, mingw_prefix })
+        b.fmt("if [ ! -f torrent_wrapper.dll ] || [ src/torrent_wrapper.cpp -nt torrent_wrapper.dll ] || [ src/torrent_memory.hpp -nt torrent_wrapper.dll ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -I{s}/include $(pkg-config --cflags libtorrent-rasterbar 2>/dev/null) -L{s}/lib src/torrent_wrapper.cpp -o torrent_wrapper.dll $(pkg-config --libs libtorrent-rasterbar 2>/dev/null || echo -ltorrent-rasterbar) -lws2_32 -liphlpapi -lcrypt32; fi", .{ mingw_prefix, mingw_prefix })
     else
         // -Wl,-soname is REQUIRED: without it the .so has no SONAME, so the
         // linker records the ABSOLUTE build path (/src/libtorrent_wrapper.so)
@@ -465,7 +465,7 @@ fn buildSupported(b: *std.Build) void {
         // wrapper's own $ORIGIN runpath also lets a rootless/private bundle put
         // libtorrent beside it; an executable RUNPATH is not transitive through
         // dependent DSOs.
-        "if [ ! -f libtorrent_wrapper.so ] || [ src/torrent_wrapper.cpp -nt libtorrent_wrapper.so ] || [ src/torrent_memory.hpp -nt libtorrent_wrapper.so ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -fPIC -Wl,-soname,libtorrent_wrapper.so -Wl,-rpath,'$ORIGIN' $(pkg-config --cflags libtorrent-rasterbar 2>/dev/null) src/torrent_wrapper.cpp -o libtorrent_wrapper.so $(pkg-config --libs libtorrent-rasterbar 2>/dev/null) -ltorrent-rasterbar; fi";
+        "if [ ! -f libtorrent_wrapper.so ] || [ src/torrent_wrapper.cpp -nt libtorrent_wrapper.so ] || [ src/torrent_memory.hpp -nt libtorrent_wrapper.so ]; then echo 'Compiling C++ torrent wrapper...'; g++ -std=c++17 -O3 -shared -fPIC -Wl,-soname,libtorrent_wrapper.so -Wl,-rpath,'$ORIGIN' $(pkg-config --cflags libtorrent-rasterbar 2>/dev/null) src/torrent_wrapper.cpp -o libtorrent_wrapper.so $(pkg-config --libs libtorrent-rasterbar 2>/dev/null || echo -ltorrent-rasterbar); fi";
 
     // Only invoke the host g++ when it can actually produce a wrapper for the
     // target (native builds). Cross-compiling (e.g. windows from macOS for a
@@ -600,6 +600,19 @@ fn buildSupported(b: *std.Build) void {
     const install_mcp = b.addInstallArtifact(mcp_exe, .{});
     b.getInstallStep().dependOn(&install_mcp.step);
     b.step("opal-mcp", "Build only the opal-mcp bridge (no GUI dependencies)").dependOn(&install_mcp.step);
+
+    // Dev probe for the live-caption chunk pipeline (not installed).
+    const babel_live = b.addExecutable(.{
+        .name = "babel-live",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/babel_live_main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_babel_live = b.addRunArtifact(babel_live);
+    if (b.args) |args| run_babel_live.addArgs(args);
+    b.step("babel-live", "Run the live-caption pipeline on a media file (dev probe)").dependOn(&run_babel_live.step);
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
@@ -901,6 +914,26 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_auto_subs_pure).step);
 
+    // Babel (v10 7.5): live captions, subtitle translation, episode recaps.
+    for ([_][]const u8{
+        "src/services/live_captions_pure.zig",
+        "src/services/translate_pure.zig",
+        "src/services/recap_pure.zig",
+        "src/services/next_episode_pure.zig",
+        "src/services/addon_repo_pure.zig",
+        "src/services/moments_pure.zig",
+        "src/services/llm_oneshot_pure.zig",
+    }) |babel_pure| {
+        const test_babel_pure = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(babel_pure),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        test_step.dependOn(&b.addRunArtifact(test_babel_pure).step);
+    }
+
     const test_position_save_pure = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/player/position_save_pure.zig"),
@@ -1200,19 +1233,6 @@ fn buildSupported(b: *std.Build) void {
     });
     test_secure_temp.use_llvm = true;
     test_step.dependOn(&b.addRunArtifact(test_secure_temp).step);
-
-    // Authenticated curl calls feed config headers over a closed stdin pipe so
-    // bearer/API keys never become process-list-visible argv entries.
-    const test_curl_secret = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/core/curl_secret.zig"),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
-        }),
-    });
-    test_curl_secret.use_llvm = true;
-    test_step.dependOn(&b.addRunArtifact(test_curl_secret).step);
 
     const test_deps = b.addTest(.{
         .root_module = b.createModule(.{
@@ -1790,6 +1810,16 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_rank).step);
 
+    // Recall (7.1): NL constraint parser, subtitle chunker, rank fusion, snippets.
+    const test_recall_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/recall_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_recall_pure).step);
+
     // Storage page accounting: byte formatting at every unit boundary, the
     // percent-of-total clamp, and the guard that user data is never one-click
     // removable (losing opal.db is unrecoverable).
@@ -1980,6 +2010,19 @@ fn buildSupported(b: *std.Build) void {
     const run_test_remote_stream_pure = b.addRunArtifact(test_remote_stream_pure);
     test_step.dependOn(&run_test_remote_stream_pure.step);
     keyless_test_step.dependOn(&run_test_remote_stream_pure.step);
+
+    // Continuum (7.4): stream decision matrix, ffmpeg argv, segment names,
+    // signed stream tokens, handoff payload.
+    const test_stream_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/stream_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_test_stream_pure = b.addRunArtifact(test_stream_pure);
+    test_step.dependOn(&run_test_stream_pure.step);
+    keyless_test_step.dependOn(&run_test_stream_pure.step);
 
     // Download-root confinement: component-by-component no-follow opens and
     // regular-file enforcement for stream/subtitle/transcode endpoints.
@@ -2550,6 +2593,26 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_anime_skip_pure).step);
 
+    // Perception (skip intros/credits for any series): audio fingerprints,
+    // cross-episode alignment + chapter-title classifier, episode/sibling
+    // parsing + cache blobs, and the merged skip policy. markers.zig and
+    // skip_segments.zig route through these.
+    for ([_][]const u8{
+        "src/services/fingerprint_pure.zig",
+        "src/services/marker_match_pure.zig",
+        "src/services/markers_pure.zig",
+        "src/services/skip_policy_pure.zig",
+    }) |perception_src| {
+        const t = b.addTest(.{
+            .root_module = b.createModule(.{
+                .root_source_file = b.path(perception_src),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        test_step.dependOn(&b.addRunArtifact(t).step);
+    }
+
     // gallery-dl backend pure logic: URL→backend classification (gallery/art/
     // booru hosts vs video hosts), the argv builder (discrete args, `--` guard,
     // no shell injection), and stdout parsing (downloaded/skipped/ignore).
@@ -2728,6 +2791,22 @@ fn buildSupported(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_library_pure).step);
+    const test_library_sync_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/library_sync_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_library_sync_pure).step);
+    const test_profiles_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/profiles_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_profiles_pure).step);
     const test_reliable_fetch_pure = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/reliable_fetch_pure.zig"),

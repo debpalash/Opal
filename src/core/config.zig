@@ -4,6 +4,7 @@ const paths = @import("paths.zig");
 const db = @import("db.zig");
 const theme = @import("../ui/theme.zig");
 const watch_history_pure = @import("../player/watch_history_pure.zig");
+const skip_policy = @import("../services/skip_policy_pure.zig");
 const secret_store = @import("secret_store.zig");
 const key_writer = @import("sqlite_key_writer.zig");
 threadlocal var key_batch: ?key_writer.Writer = null;
@@ -17,6 +18,8 @@ fn secretBit(key: []const u8) u16 {
         "proxy_url",    "tmdb_api_key",  "opensub_api_key",
         "omdb_api_key", "subdl_api_key", "jf_token",
         "abs_token",    "opds_user",     "opds_pass",
+        "lsync_token",  "lsync_p0_token", "lsync_p1_token",
+        "lsync_p2_token", "lsync_p3_token",
     };
     for (names, 0..) |name, index| {
         if (std.mem.eql(u8, key, name)) return @as(u16, 1) << @intCast(index);
@@ -103,6 +106,10 @@ fn saveChecked() !void {
     setKey("operator_picks", if (state.app.operator_picks_enabled) "1" else "0");
     setKey("save_path", state.app.save_path_buf[0..state.app.save_path_len]);
     setKey("sub_lang", state.app.sub_lang_buf[0..state.app.sub_lang_len]);
+    setKey("babel_caption_lang", state.app.babel_caption_lang[0..state.app.babel_caption_lang_len]);
+    setKey("babel_translate_lang", state.app.babel_translate_lang[0..state.app.babel_translate_lang_len]);
+    setKey("babel_recap_enabled", if (state.app.babel_recap_enabled) "1" else "0");
+    setKey("babel_recap_tts", if (state.app.babel_recap_tts) "1" else "0");
     setKey("subtitles_enabled", if (state.app.subtitles_enabled) "1" else "0");
     setKey("audio_lang", state.app.audio_lang_buf[0..state.app.audio_lang_len]);
     setKey("audio_device", state.app.audio_device_buf[0..state.app.audio_device_len]);
@@ -144,6 +151,7 @@ fn saveChecked() !void {
     setKey("anime_skip_recap", if (state.app.anime_skip_recap) "1" else "0");
     setKey("anime_skip_credits", if (state.app.anime_skip_credits) "1" else "0");
     setKey("anime_skip_preview", if (state.app.anime_skip_preview) "1" else "0");
+    setKey("skip_mode", fmtInt(&fb, @as(usize, state.app.skip_mode)));
     setKey("deband_enabled", if (state.app.deband_enabled) "1" else "0");
     setKey("video_scaler", fmtInt(&fb, @as(usize, state.app.video_scaler)));
     // Video color filters (signed −100..100) — replayed at player init.
@@ -159,6 +167,28 @@ fn saveChecked() !void {
         setKey("jf_connected", "1");
     } else {
         setKey("jf_connected", "0");
+    }
+
+    // Device sync peers — per peer: URL, bearer token (protected like other
+    // credentials), the address its cursors belong to, its device id and the
+    // pull/push seq cursors. Every slot is written so a removed peer's keys
+    // are cleared. The v1 single-peer keys are blanked once migrated.
+    {
+        const ls = &state.app.lsync;
+        setKey("lsync_peers", fmtI64(&fb, @intCast(ls.peer_count)));
+        for (&ls.peers, 0..) |*p, i| {
+            const live = i < ls.peer_count;
+            var kb: [32]u8 = undefined;
+            setKey(lsyncKey(&kb, i, "url"), if (live) p.urlText() else "");
+            setSecretKey(lsync_token_keys[i], if (live) p.tokenText() else "");
+            setKey(lsyncKey(&kb, i, "cursor"), if (live) p.cursorUrl() else "");
+            setKey(lsyncKey(&kb, i, "device"), if (live) p.deviceId() else "");
+            setKey(lsyncKey(&kb, i, "pull"), fmtI64(&fb, if (live) p.pull_seq else 0));
+            setKey(lsyncKey(&kb, i, "push"), fmtI64(&fb, if (live) p.push_seq else 0));
+            setKey(lsyncKey(&kb, i, "last"), fmtI64(&fb, if (live) p.last_sync else 0));
+        }
+        setKey("lsync_auto", if (ls.auto) "1" else "0");
+        for ([_][]const u8{ "lsync_peer", "lsync_token", "lsync_cursor_peer", "lsync_pull_since", "lsync_push_since", "lsync_last" }) |legacy| setKey(legacy, "");
     }
 
     // Audiobookshelf — persist server + token (the Bearer token is enough to
@@ -528,6 +558,11 @@ fn migrateLoadedSecrets() void {
     if (mask & secretBit("subdl_api_key") != 0) setSecretKey("subdl_api_key", state.app.subdl_api_key[0..state.app.subdl_api_key_len]);
     if (mask & secretBit("jf_token") != 0) setSecretKey("jf_token", state.app.jf.token[0..state.app.jf.token_len]);
     if (mask & secretBit("abs_token") != 0) setSecretKey("abs_token", state.app.abs.token[0..state.app.abs.token_len]);
+    for (lsync_token_keys, 0..) |key, i| {
+        if (mask & secretBit(key) != 0 and i < state.app.lsync.peer_count) setSecretKey(key, state.app.lsync.peers[i].tokenText());
+    }
+    // A sealed v1 token was loaded into peer 0; re-seal it under its new key.
+    if (mask & secretBit("lsync_token") != 0 and state.app.lsync.peer_count > 0) setSecretKey(lsync_token_keys[0], state.app.lsync.peers[0].tokenText());
     const user_len = std.mem.indexOfScalar(u8, &state.app.opds.user_buf, 0) orelse state.app.opds.user_buf.len;
     const pass_len = std.mem.indexOfScalar(u8, &state.app.opds.pass_buf, 0) orelse state.app.opds.pass_buf.len;
     if (mask & secretBit("opds_user") != 0) setSecretKey("opds_user", state.app.opds.user_buf[0..user_len]);
@@ -629,6 +664,22 @@ fn applyConfig(key: []const u8, val: []const u8) void {
             @memcpy(state.app.sub_lang_buf[0..val.len], val);
             state.app.sub_lang_len = val.len;
         }
+    } else if (std.mem.eql(u8, key, "babel_caption_lang")) {
+        if (val.len > 0 and val.len <= 8) {
+            @memset(&state.app.babel_caption_lang, 0);
+            @memcpy(state.app.babel_caption_lang[0..val.len], val);
+            state.app.babel_caption_lang_len = val.len;
+        }
+    } else if (std.mem.eql(u8, key, "babel_translate_lang")) {
+        if (val.len <= 8) {
+            @memset(&state.app.babel_translate_lang, 0);
+            @memcpy(state.app.babel_translate_lang[0..val.len], val);
+            state.app.babel_translate_lang_len = val.len;
+        }
+    } else if (std.mem.eql(u8, key, "babel_recap_enabled")) {
+        state.app.babel_recap_enabled = std.mem.eql(u8, val, "1");
+    } else if (std.mem.eql(u8, key, "babel_recap_tts")) {
+        state.app.babel_recap_tts = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "subtitles_enabled")) {
         state.app.subtitles_enabled = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "audio_lang")) {
@@ -755,6 +806,14 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         state.app.sponsorblock_enabled = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "anime_skip_enabled")) {
         state.app.anime_skip_enabled = std.mem.eql(u8, val, "1");
+        // Migration: configs older than `skip_mode` only had this toggle.
+        if (!state.app.skip_mode_loaded)
+            state.app.skip_mode = @intFromEnum(skip_policy.legacyMode(state.app.anime_skip_enabled));
+    } else if (std.mem.eql(u8, key, "skip_mode")) {
+        const m = skip_policy.modeFromInt(std.fmt.parseInt(u8, val, 10) catch 2);
+        state.app.skip_mode = @intFromEnum(m);
+        state.app.skip_mode_loaded = true;
+        state.app.anime_skip_enabled = skip_policy.legacyEnabled(m);
     } else if (std.mem.eql(u8, key, "anime_skip_intro")) {
         state.app.anime_skip_intro = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "anime_skip_recap")) {
@@ -797,6 +856,8 @@ fn applyConfig(key: []const u8, val: []const u8) void {
     } else if (std.mem.eql(u8, key, "jf_connected")) {
         // Only mark as connected if we also have a token
         state.app.jf.connected = std.mem.eql(u8, val, "1") and state.app.jf.token_len > 0;
+    } else if (std.mem.startsWith(u8, key, "lsync_")) {
+        applyLsyncKey(key, val);
     } else if (std.mem.eql(u8, key, "abs_server_url")) {
         if (val.len > 0 and val.len < state.app.abs.server_url.len) {
             @memcpy(state.app.abs.server_url[0..val.len], val);
@@ -981,5 +1042,82 @@ fn fmtInt(buf: *[64]u8, v: usize) []const u8 {
 }
 
 fn fmtI32(buf: *[64]u8, v: i32) []const u8 {
+    return std.fmt.bufPrint(buf, "{d}", .{v}) catch "0";
+}
+
+// ── Device sync peers (state.app.lsync) ──────────────────────────────────────
+
+const lsync_pure = @import("../services/library_sync_pure.zig");
+const lsync_token_keys = [lsync_pure.MAX_PEERS][]const u8{ "lsync_p0_token", "lsync_p1_token", "lsync_p2_token", "lsync_p3_token" };
+
+fn lsyncKey(buf: *[32]u8, i: usize, field: []const u8) []const u8 {
+    return std.fmt.bufPrint(buf, "lsync_p{d}_{s}", .{ i, field }) catch "lsync_invalid";
+}
+
+fn copyZ(dst: []u8, val: []const u8) void {
+    @memset(dst, 0);
+    if (val.len < dst.len) @memcpy(dst[0..val.len], val);
+}
+
+fn parseCursor(val: []const u8) i64 {
+    return @max(0, std.fmt.parseInt(i64, val, 10) catch 0);
+}
+
+/// `lsync_auto`, `lsync_peers`, per-peer `lsync_p<i>_<field>`, and the v1
+/// single-peer keys (`lsync_peer`/`lsync_token` migrate into peer 0; v1
+/// cursors were `updated_at` stamps, not seqs, so they are dropped and the
+/// first v2 run re-sends everything once — merging is idempotent).
+fn applyLsyncKey(key: []const u8, val: []const u8) void {
+    const ls = &state.app.lsync;
+    if (std.mem.eql(u8, key, "lsync_auto")) {
+        ls.auto = std.mem.eql(u8, val, "1");
+    } else if (std.mem.eql(u8, key, "lsync_peers")) {
+        const n: usize = @intCast(std.math.clamp(std.fmt.parseInt(i64, val, 10) catch 0, 0, lsync_pure.MAX_PEERS));
+        ls.peer_count = @max(ls.peer_count, n);
+    } else if (std.mem.eql(u8, key, "lsync_peer")) {
+        if (val.len == 0 or ls.peers[0].urlText().len > 0) return;
+        copyZ(&ls.peers[0].url, val);
+        ls.peer_count = @max(ls.peer_count, 1);
+    } else if (std.mem.eql(u8, key, "lsync_token")) {
+        if (val.len == 0 or ls.peers[0].tokenText().len > 0) return;
+        loadPeerToken(key, val, &ls.peers[0]);
+    } else if (key.len > "lsync_p0_".len and std.mem.startsWith(u8, key, "lsync_p") and key[8] == '_' and
+        key[7] >= '0' and key[7] < '0' + lsync_pure.MAX_PEERS)
+    {
+        const i: usize = key[7] - '0';
+        const p = &ls.peers[i];
+        const field = key[9..];
+        if (std.mem.eql(u8, field, "url")) {
+            if (val.len == 0) return;
+            copyZ(&p.url, val);
+            ls.peer_count = @max(ls.peer_count, i + 1);
+        } else if (std.mem.eql(u8, field, "token")) {
+            if (val.len > 0) loadPeerToken(key, val, p);
+        } else if (std.mem.eql(u8, field, "cursor")) {
+            if (val.len <= p.cursor_url.len) {
+                @memcpy(p.cursor_url[0..val.len], val);
+                p.cursor_url_len = val.len;
+            }
+        } else if (std.mem.eql(u8, field, "device")) {
+            p.setDevice(val);
+        } else if (std.mem.eql(u8, field, "pull")) {
+            p.pull_seq = parseCursor(val);
+        } else if (std.mem.eql(u8, field, "push")) {
+            p.push_seq = parseCursor(val);
+        } else if (std.mem.eql(u8, field, "last")) {
+            p.last_sync = parseCursor(val);
+        }
+    }
+}
+
+fn loadPeerToken(key: []const u8, val: []const u8, p: *lsync_pure.Peer) void {
+    var restored_len: usize = 0;
+    const dst = &p.token;
+    if (loadSecretValue(key, val, dst[0 .. dst.len - 1], &restored_len)) {
+        @memset(dst[restored_len..], 0);
+    } else @memset(dst, 0);
+}
+
+fn fmtI64(buf: *[64]u8, v: i64) []const u8 {
     return std.fmt.bufPrint(buf, "{d}", .{v}) catch "0";
 }

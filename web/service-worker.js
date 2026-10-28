@@ -1,4 +1,4 @@
-const CACHE = 'opal-shell-v9';
+const CACHE = 'opal-shell-v15';
 const SHELL = [
   '/',
   '/index.html',
@@ -18,6 +18,10 @@ const SHELL = [
   '/js/drama-vndb.js',
   '/js/source-details.js',
   '/js/discovery.js',
+  '/js/recall.js',
+  '/js/continuum.js',
+  '/js/profiles.js',
+  '/js/commons.js',
   '/js/boot.js',
   '/vendor/hls.min.js?v=442f599c34f1',
 ];

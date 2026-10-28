@@ -734,30 +734,27 @@ fn curlOwnedPolicy(url: []const u8, auth_header: []const u8, max_bytes: usize, h
     var path_buf: [secure_temp.max_path_len]u8 = undefined;
     const path = scratch.reserveFile("response.json", &path_buf) catch return null;
 
-    // -L is required by the public Cinemeta endpoint, which currently answers
-    // with a 307 to its catalog shard. Without it we read the redirect text,
-    // reject it as non-JSON, and leave the keyless gallery empty.
-    var args: std.ArrayListUnmanaged([]const u8) = .empty;
-    defer args.deinit(alloc);
-    args.appendSlice(alloc, &.{ "curl", "-L", "-s", "--connect-timeout", "3", "--max-time", "8", "-o", path }) catch return null;
-    if (auth_header.len > 0) args.appendSlice(alloc, &.{ "--config", "-" }) catch return null;
-    var size_buf: [24]u8 = undefined;
-    if (https_only) {
-        args.appendSlice(alloc, &@import("search_preview_pure.zig").https_arguments) catch return null;
-        const size_text = std.fmt.bufPrint(&size_buf, "{d}", .{max_bytes}) catch return null;
-        args.appendSlice(alloc, &.{ "--max-filesize", size_text }) catch return null;
-    }
-    args.append(alloc, url) catch return null;
-    var child = io_g.Child.init(args.items, alloc);
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
+    // -L (seam default follow_redirects) is required by the public Cinemeta
+    // endpoint, which answers with a 307 to its catalog shard.
+    // Reliable-fetch seam: a Bearer header rides curl's stdin config; a v3
+    // `api_key=` URL goes over stdin too (secret_url) so neither hits argv.
+    var secret: [1]@import("reliable_fetch.zig").Header = undefined;
+    var secret_n: usize = 0;
     if (auth_header.len > 0) {
-        @import("../core/curl_secret.zig").spawnWithHeaders(&child, &.{auth_header}) catch return null;
-    } else {
-        child.stdin_behavior = .Ignore;
-        child.spawn() catch return null;
+        const colon = std.mem.indexOfScalar(u8, auth_header, ':') orelse return null;
+        secret[0] = .{ .name = auth_header[0..colon], .value = std.mem.trim(u8, auth_header[colon + 1 ..], " ") };
+        secret_n = 1;
     }
-    _ = child.wait() catch {};
+    const got = @import("reliable_fetch.zig").download(url, path, .{
+        .secret_headers = secret[0..secret_n],
+        .secret_url = std.mem.indexOf(u8, url, "api_key=") != null,
+        .timeout_secs = 8,
+        .connect_timeout_secs = 3,
+        .impersonate = false,
+        .https_only = https_only,
+        .max_filesize = if (https_only) max_bytes else null,
+    });
+    if (!got.ok()) return null;
 
     const stat = io_g.cwdStatFile(path) catch return null;
     const size = if (max_bytes == @import("tmdb_pure.zig").DETAIL_BODY_LIMIT)

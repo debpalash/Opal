@@ -99,7 +99,7 @@ fn thumbActionIcon(id: usize, label: []const u8, icon: []const u8, accent: bool)
     return dvui.buttonIcon(@src(), label, icon, .{}, .{}, .{
         .id_extra = id,
         .color_text = if (accent) theme.colors.text_on_accent else dvui.Color.white,
-        .color_fill = if (accent) theme.colors.accent else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 175 },
+        .color_fill = if (accent) theme.colors.accent else theme.colors.overlay,
         .color_fill_hover = theme.colors.accent,
         .corner_radius = dvui.Rect.all(16),
         .min_size_content = theme.iconSize(.sm),
@@ -1553,7 +1553,7 @@ fn renderToolbar() void {
     // Channel banner — back arrow + the channel whose uploads fill the grid.
     if (channel_mode.load(.acquire)) {
         if (dvui.buttonIcon(@src(), "chan-back", icons.tvg.lucide.@"arrow-left", .{}, .{}, .{
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
             .color_text = theme.colors.text_secondary,
@@ -1606,7 +1606,7 @@ fn renderToolbar() void {
     var smaller_wd: dvui.WidgetData = undefined;
     if (dvui.buttonIcon(@src(), "smaller", icons.tvg.lucide.minus, .{}, .{}, .{
         .data_out = &smaller_wd,
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill = theme.transparent,
         .color_fill_hover = theme.colors.bg_hover,
         .color_fill_press = theme.colors.bg_elevated,
         .color_text = dim,
@@ -1621,7 +1621,7 @@ fn renderToolbar() void {
     var bigger_wd: dvui.WidgetData = undefined;
     if (dvui.buttonIcon(@src(), "bigger", icons.tvg.lucide.plus, .{}, .{}, .{
         .data_out = &bigger_wd,
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill = theme.transparent,
         .color_fill_hover = theme.colors.bg_hover,
         .color_fill_press = theme.colors.bg_elevated,
         .color_text = dim,
@@ -1930,7 +1930,7 @@ fn renderCard(item: *state.YtItem, idx: usize, the_card_w: f32) ?CardAction {
                     .gravity_x = 1.0,
                     .gravity_y = 1.0,
                     .background = true,
-                    .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 180 },
+                    .color_fill = theme.colors.overlay,
                     .corner_radius = dvui.Rect.all(4),
                     .padding = .{ .x = 5, .y = 2, .w = 5, .h = 2 },
                     .margin = .{ .x = 0, .y = 0, .w = 6, .h = 6 },

@@ -38,16 +38,11 @@ var gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0);
 /// Concurrent-spawn guard (a second open before the first worker returns).
 var busy: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
-/// curl `url` into `buf`, returning bytes read (0 on failure). TVmaze is a
+/// Fetch `url` into `buf` via reliable-fetch, returning bytes read (0 on failure). TVmaze is a
 /// plain keyless HTTPS JSON API — no auth, no SNI-block dance needed.
 pub fn curlInto(url: []const u8, buf: []u8) usize {
-    var child = io.Child.init(&.{ "curl", "-fsL", "--connect-timeout", "3", "--max-time", "8", "--", url }, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    child.spawn() catch return 0;
-    const n = if (child.stdout) |*so| io.readAll(so, buf) catch 0 else 0;
-    _ = child.wait() catch {};
-    return n;
+    const body = @import("reliable_fetch.zig").fetch(url, buf, .{ .keep_head_on_overflow = true, .timeout_secs = 8, .impersonate = false }) orelse return 0;
+    return body.len;
 }
 
 /// Trigger a background TVmaze fetch for a freshly-opened TV show. No-op when

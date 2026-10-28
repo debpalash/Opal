@@ -468,30 +468,26 @@ fn speachesBaseUrl() []const u8 {
 
 fn speachesTranscribe(wav_path: []const u8, out_buf: []u8) ?[]const u8 {
     // POST multipart/form-data to /v1/audio/transcriptions
-    const alloc = @import("../core/alloc.zig").allocator;
     const base = speachesBaseUrl();
     var url_buf: [256]u8 = undefined;
     const url = std.fmt.bufPrintZ(&url_buf, "{s}/v1/audio/transcriptions", .{base}) catch return null;
 
-    var child = io_global.Child.init(&.{
-        "curl", "-s",              "-X", "POST",                 url,
-        "-F",   "model=whisper-1", "-F", "response_format=text", "-F",
-        blk: {
-            var file_arg_buf: [2200]u8 = undefined;
-            break :blk std.fmt.bufPrintZ(&file_arg_buf, "file=@{s}", .{wav_path}) catch return null;
+    // Reliable-fetch seam (multipart). Local server → no DPI proxy.
+    var read_buf: [4096]u8 = undefined;
+    const got = @import("reliable_fetch.zig").fetch(url, &read_buf, .{
+        .form = &.{
+            .{ .name = "model", .value = "whisper-1" },
+            .{ .name = "response_format", .value = "text" },
+            .{ .name = "file", .value = wav_path, .file = true },
         },
-    }, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    child.spawn() catch {
-        logs.pushLog("warn", "voice_backend", "speaches: curl failed — is server running?", false);
+        .timeout_secs = 120,
+        .impersonate = false,
+        .use_dpi_proxy = false,
+    }) orelse {
+        logs.pushLog("warn", "voice_backend", "speaches: request failed — is server running?", false);
         return null;
     };
-    defer _ = child.wait() catch {};
-
-    const stdout = child.stdout orelse return null;
-    var read_buf: [4096]u8 = undefined;
-    const n = io_global.readAll(stdout, &read_buf) catch 0;
+    const n = got.len;
     if (n == 0) return null;
 
     const trimmed = std.mem.trim(u8, read_buf[0..n], " \t\r\n");
@@ -503,7 +499,6 @@ fn speachesTranscribe(wav_path: []const u8, out_buf: []u8) ?[]const u8 {
 fn speachesSpeak(text: []const u8) void {
     if (text.len == 0) return;
     // POST to /v1/audio/speech, save WAV, play with afplay
-    const alloc = @import("../core/alloc.zig").allocator;
     const base = speachesBaseUrl();
     var url_buf: [256]u8 = undefined;
     const url = std.fmt.bufPrintZ(&url_buf, "{s}/v1/audio/speech", .{base}) catch return;
@@ -535,19 +530,18 @@ fn speachesSpeak(text: []const u8) void {
     }
     const json = std.fmt.bufPrintZ(&json_buf, "{{\"model\":\"tts-1\",\"input\":\"{s}\",\"voice\":\"alloy\",\"response_format\":\"wav\"}}", .{escaped[0..ei]}) catch return;
 
-    var child = io_global.Child.init(&.{
-        "curl",   "-s",                             "-X", "POST", url,
-        "-H",     "Content-Type: application/json", "-d", json,   "-o",
-        out_path,
-    }, alloc);
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
-    child.spawn() catch {
+    const res = @import("reliable_fetch.zig").download(url, out_path, .{
+        .headers = &.{.{ .name = "Content-Type", .value = "application/json" }},
+        .post_body = json,
+        .timeout_secs = 60,
+        .impersonate = false,
+        .use_dpi_proxy = false,
+    });
+    if (res.failure == .spawn) {
         logs.pushLog("warn", "voice_backend", "speaches TTS: curl failed", false);
         sayTtsSpeak(text); // fallback
         return;
-    };
-    _ = child.wait() catch {};
+    }
 
     // Play the WAV
     playWav(out_path);

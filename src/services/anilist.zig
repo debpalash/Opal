@@ -182,7 +182,6 @@ fn drainOutbox() void {
 const Delivery = enum { success, retry, revoked };
 
 fn postMutation(payload: []const u8) Delivery {
-    const alloc = @import("../core/alloc.zig").allocator;
     var token: [2048]u8 = undefined;
     defer @memset(&token, 0);
     credential_mutex.lock();
@@ -191,21 +190,21 @@ fn postMutation(payload: []const u8) Delivery {
     credential_mutex.unlock();
     if (token_len == 0) return .retry;
     var auth_buf: [2200]u8 = undefined;
-    const auth = std.fmt.bufPrintZ(&auth_buf, "Authorization: Bearer {s}", .{token[0..token_len]}) catch return .retry;
-    var child = io_global.Child.init(&.{
-        "curl",                     "-sS",      "--connect-timeout", "5",  "--max-time",                     "15",
-        "-X",                       "POST",     ANILIST_API,         "-H", "Content-Type: application/json", "-H",
-        "Accept: application/json", "--config", "-",                 "-d", payload,                          "-o",
-        io_global.devNull(),        "-w",       "%{http_code}",
-    }, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    @import("../core/curl_secret.zig").spawnWithHeaders(&child, &.{auth}) catch return .retry;
-    var status_buf: [16]u8 = undefined;
-    const status_len = if (child.stdout) |*stdout| io_global.readAll(stdout, &status_buf) catch 0 else 0;
-    const result = child.wait() catch return .retry;
-    if (result != .exited or result.exited != 0) return .retry;
-    const status = std.fmt.parseInt(u16, std.mem.trim(u8, status_buf[0..status_len], " \r\n\t"), 10) catch return .retry;
+    defer @memset(&auth_buf, 0);
+    const bearer = std.fmt.bufPrint(&auth_buf, "Bearer {s}", .{token[0..token_len]}) catch return .retry;
+    // Token rides curl's stdin config via the seam — never argv.
+    var body: [4096]u8 = undefined;
+    var hdrs: [4096]u8 = undefined;
+    const res = @import("reliable_fetch.zig").request(ANILIST_API, &body, &hdrs, .{
+        .headers = &.{ .{ .name = "Content-Type", .value = "application/json" }, .{ .name = "Accept", .value = "application/json" } },
+        .secret_headers = &.{.{ .name = "Authorization", .value = bearer }},
+        .post_body = payload,
+        .timeout_secs = 15,
+        .connect_timeout_secs = 5,
+        .impersonate = false,
+    });
+    if (res.status == 0) return .retry;
+    const status = res.status;
     if (status >= 200 and status < 300) {
         logs.pushLog("info", "anilist", "AniList progress updated", false);
         return .success;

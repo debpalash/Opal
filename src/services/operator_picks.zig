@@ -78,7 +78,7 @@ fn addColumn(taste: *pure.Taste, source: pure.Source, sql: [:0]const u8, want: u
 /// cleaner and are dropped when they still look like release names.
 fn gatherTaste(taste: *pure.Taste) void {
     addColumn(taste, .watched, "SELECT name FROM watch_history ORDER BY updated_at DESC LIMIT 80", 20);
-    addColumn(taste, .favourite, "SELECT title FROM library_items WHERE is_favorite=1 AND COALESCE(title,'')<>'' AND kind NOT IN ('iptv','radio','podcast','audiobook') ORDER BY updated_at DESC LIMIT 40", 10);
+    addColumn(taste, .favourite, "SELECT title FROM library_items WHERE is_favorite=1 AND deleted=0 AND COALESCE(title,'')<>'' AND kind NOT IN ('iptv','radio','podcast','audiobook') ORDER BY updated_at DESC LIMIT 40", 10);
     addColumn(taste, .favourite, "SELECT i.title FROM tmdb_lists l JOIN tmdb_items i ON i.id=l.item_id WHERE l.list_name='fav' ORDER BY l.added_at DESC LIMIT 40", 10);
     addColumn(taste, .following, "SELECT name FROM tv_shows WHERE tracked=1 AND COALESCE(name,'')<>'' ORDER BY updated_at DESC LIMIT 30", 10);
 }

@@ -146,20 +146,27 @@
 ### 6.2 — Reliability ("what you click actually plays")
 - [x] Shared reliable-fetch interface with browser-grade TLS fingerprinting,
       DPI bypass, response status/headers/latency, and typed failures
-- [ ] Migrate remaining legacy curl/native HTTP callers onto reliable-fetch
+- [x] Migrate remaining legacy curl/native HTTP callers onto reliable-fetch
+      (secrets via stdin config, multipart, file bodies, atomic downloads;
+      only the ai_context SSE stream and core/deps/updater remain)
 - [ ] App-wide persisted live/dead probing (the shared, race-safe probe/cache
       seam exists; PlaybackRequest integration and remaining vertical coverage
       are still in progress)
-- [ ] Candidate groups with auto-skip to the next working stream
+- [x] Candidate groups with auto-skip to the next working stream (ranked
+      2-deep fallback chain; player advances on load failure)
 - [x] First-class per-request headers (Origin/Cookie) into the player, cleared
       between unrelated loads
 
 ### 6.3 — Glue (one app, not fifteen tabs)
 - [x] Universal resolver fan-out across video, local, torrent, comics, live TV,
       music, radio, podcasts, and catalog sources
-- [ ] Logical result groups with posters, semantic dedup, and fallback candidates
-- [ ] Unified "Continue / Your Library" home across all verticals
-- [ ] Cross-device progress + favorites sync over the local API
+- [x] Logical result groups with posters, semantic dedup, and fallback candidates
+      ("N sources" expander; pick any source, rest stay as fallbacks)
+- [x] Unified "Continue / Your Library" home across all verticals
+      (`library_items` read-model fed by every vertical)
+- [x] Cross-device progress + favorites sync over the local API
+      (`/api/library/sync` pull/push, tombstones, Settings → Device Sync;
+      single peer for now)
 
 ### 6.4 — Reach
 - [ ] Real casting pipeline (Chromecast/DLNA) + a phone "couch-mode" cast-picker
@@ -167,9 +174,76 @@
 
 ---
 
+## 🌌 Milestone 7 — Horizon (v10)
+
+> The media runtime as it should feel in 2076: you never search, wait, buffer,
+> or lose your place. Opal understands every file, knows who is watching and
+> what language they speak, and follows you between screens — locally,
+> privately, on your own hardware. Capability-level only; still no shipped
+> source URLs.
+
+**Wave 1 (review branch):** 7.1–7.5 · **Wave 2 (started):** 7.6–7.8
+
+Wave 1 verification (2026-10-28): isolated headless checks cover Recall results,
+signed streaming/progress/stop, profile PIN/restart/account continuity/data
+isolation, chapter skipping, local signed handoff, and real Whisper captions
+across overlapping chunks. Browser behavior tests cover Recall, streaming
+request ordering and profile PIN errors. Visual browser, physical casting,
+embedding-model search, fingerprint duplicates, translation-model output and
+recap-model output still need end-to-end verification; unchecked capabilities
+below are not claims of complete verification.
+
+### 7.1 — Recall (semantic memory)
+- [ ] Natural-language search across library + catalog ("cozy 90s mystery
+      under 2h", "something like Invincible"): FTS5 + sqlite-vec fusion with a
+      tested constraint parser
+- [ ] Moment search inside media ("the scene where they plan the heist") over
+      subtitle/transcript cues → play at that second
+- [ ] Assistant + voice tools for semantic search and moment jumps
+
+### 7.2 — Perception (media understanding)
+- [ ] Intro / credits detection for any series (cross-episode audio
+      fingerprinting + chapter names) → Skip button or auto-skip
+- [ ] Duplicate detection (perceptual hashing) and auto chapters
+
+### 7.3 — Household
+- [ ] Profiles with PIN and kids mode (maturity cap, NSFW forced off)
+- [ ] Per-profile history, library, recommendations, and sync identity
+
+### 7.4 — Continuum (play anywhere)
+- [ ] On-demand direct-play / remux / HW transcode to browsers and phones
+- [ ] One-tap handoff to a paired device at the exact second; "bring it here"
+- [ ] Phone couch-mode cast picker over the real casting pipeline
+
+### 7.5 — Babel (every language, every file)
+- [ ] Live captions: ahead-of-playhead whisper transcription of anything playing
+- [ ] On-device subtitle translation (any track → your language)
+- [ ] Spoiler-safe "Previously on…" recaps built only from what you watched
+
+Wave 2 implementation boundaries and reproducible build/live-test commands are
+recorded in [Architecture](docs/architecture.md#horizon-wave-2-implementation-boundaries).
+Wave 2 now implements cached health ordering, next-episode resolver warming,
+signed repositories, declarative panels and shared clips. Validation limits are
+recorded in the architecture document.
+
+### 7.6 — Resilience
+- [x] Persisted app-wide live/dead probing feeding ranking and fallback order
+- [x] Predictive next-episode resolver warming (EZTV/Torznab; no zero-wait guarantee)
+
+### 7.7 — Commons
+- [x] Addon repositories (user-added URLs only) with signed manifests and
+      permission prompts; declarative text panels
+- [x] Shareable moments (timestamped clips) to paired Opal instances + household feed
+
+### 7.8 — Craft
+- [x] Theming v2: shared contrast-checked tokens, interaction states and elevation
+- [x] Architecture + build docs; duplicate linkage cleanup; native deinit verification
+
+---
+
 ## 📝 Technical Debt & Cleanup
-- [ ] Fix `linker_options` lint in build.zig
-- [ ] Clean up dvui deinit warnings
+- [x] Verify current linker configuration and remove duplicate wrapper linkage
+- [x] Verify native shutdown: no DVUI deinit warnings reproduced
 - [x] Run-scoped resolver lifecycle with typed terminal source outcomes
 - [x] Add test suite for resolver/search lifecycle and ranking logic
 - [ ] Documentation (README, build guide, architecture)

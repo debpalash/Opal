@@ -222,20 +222,16 @@ fn installScriptWorker(idx: usize) void {
         return;
     };
     var msg: [384]u8 = undefined;
-    logs.pushLog("info", "scripts", std.fmt.bufPrint(&msg, "curl -fLsS --max-time 15 -o <Opal scripts>/{s} {s}", .{ rec.filename, rec.url }) catch "Downloading curated script", false);
-    var child = io.Child.init(&.{ "curl", "-fLsS", "--max-time", "15", "-o", dest, rec.url }, @import("../core/alloc.zig").allocator);
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
-    const term = child.spawnAndWait() catch {
+    logs.pushLog("info", "scripts", std.fmt.bufPrint(&msg, "Downloading <Opal scripts>/{s} from {s}", .{ rec.filename, rec.url }) catch "Downloading curated script", false);
+    // Reliable-fetch seam: status-checked + atomic (temp + rename), so a failed
+    // download never leaves a half-written script in the scripts folder.
+    const res = @import("reliable_fetch.zig").download(rec.url, dest, .{ .timeout_secs = 15, .impersonate = false });
+    if (res.failure == .spawn) {
         finishInstall(idx, false);
         logs.pushLog("error", "scripts", "Script download failed to start", true);
         return;
-    };
-    const ok = switch (term) {
-        .exited => |code| code == 0,
-        else => false,
-    };
-    if (!ok) io.cwdDeleteFile(dest) catch {};
+    }
+    const ok = res.ok();
     finishInstall(idx, ok);
     logs.pushLog(if (ok) "info" else "error", "scripts", std.fmt.bufPrint(&msg, "{s}: {s}", .{ rec.name, if (ok) "installed" else "download failed" }) catch "Script download finished", !ok);
 }

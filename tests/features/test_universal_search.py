@@ -322,3 +322,57 @@ def test_public_audio_supervised_transport():
     missing = [name for name, passed in checks.items() if not passed]
     return ("fail", ", ".join(missing)) if missing else (
         "pass", "Public defaults supervise DNS/connect/body and epochs; private credentials stay on native HTTP")
+
+
+@test("Logical result groups expose and pick folded sources", "Search")
+def test_logical_result_group_sources():
+    resolver = _src("src/services/resolver.zig")
+    search = _src("src/services/search.zig")
+    pure = _src("src/services/resolver_dedup_pure.zig")
+    build = _src("build.zig")
+    row = search[search.index("fn renderCompactRow("):search.index("fn renderCompactRowMain(")]
+    checks = {
+        "pure helpers": all(f"pub fn {f}(" in pure for f in ("sourceCount", "promoteSource", "sourceLabel")),
+        "pure tests": 'test "promoteSource' in pure and 'test "sourceCount' in pure,
+        "pure module in unit tests": "src/services/resolver_dedup_pure.zig" in build,
+        "resolver routes through pure": "resolver_dedup_pure.zig\").promoteSource(" in resolver
+            and "resolver_dedup_pure.zig\").sourceCount(" in resolver,
+        "plex fallback not counted": ".youtube, .stremio, .local, .music, .radio => {}," in resolver,
+        "row shows themed N sources pill": '"{d} sources"' in search and "components.statusPill(" in search,
+        "expander via components": "components.iconButton(@src(), if (open) icons.tvg.lucide.@\"chevron-up\"" in search,
+        "alternates listed via components.listItem": "components.listItem(" in row and ".source = shown" in row,
+        "pick plays promoted source": "resolver.withSource(item, action.source)" in search,
+        "group total counts folded sources": "groupSourceTotal(group)" in search,
+    }
+    missing = [name for name, passed in checks.items() if not passed]
+    return ("fail", ", ".join(missing)) if missing else (
+        "pass", "Rows show N sources; expander plays a chosen source with the rest as fallbacks")
+
+
+@test("Web search exposes and picks folded sources", "Search")
+def test_web_folded_sources():
+    remote = _src("src/services/remote.zig")
+    resolver = _src("src/services/resolver.zig")
+    js = _src("web/js/search.js")
+    css = _src("web/styles/app.css")
+    api = remote[remote.index("fn apiUnifiedResolverSearch("):remote.index("fn apiUnifiedSearchPreview(")]
+    act = remote[remote.index("fn apiUnifiedSearchAction("):]
+    act = act[:act.index("\n}\n")]
+    req = resolver[resolver.index("pub fn requestRemoteAction("):resolver.index("pub fn drainRemoteAction(")]
+    checks = {
+        "json source_count via resolver.sourceCount": "resolver.sourceCount(item)" in api and '\\"source_count\\":' in api,
+        "json labels via pure sourceLabel, escaped": 'resolver_dedup_pure.zig").sourceLabel(resolver.sourceUrl(item, si))' in api
+            and "escJsonWrite(&w, txt.safeUtf8(label[" in api,
+        "json never serializes source URLs": '\\"url\\"' not in api,
+        "sourceUrl routes through promoteSource": "pub fn sourceUrl(" in resolver,
+        "play endpoint takes ?source=": 'getQueryParam(query, "source")' in act and "requestRemoteAction(generation, key, kind, pick)" in act,
+        "action promotes via withSource": "withSource(&item, pick)" in req and "pick >= sourceCount(&item)" in req,
+        "web card renders N sources expander": "search-row-sources" in js and "sources</summary>" in js and "Number(row.source_count) < 2" in js,
+        "web pick sends &source=": "'&source=' + source" in js and "Number(button.dataset.source)" in js,
+        "web labels escaped": "esc(source.label" in js,
+        "themed styles + phone tap target": ".search-row-source-list button{color:var(--accent)" in css
+            and ".search-row-sources>summary{min-height:40px}" in css,
+    }
+    missing = [name for name, passed in checks.items() if not passed]
+    return ("fail", ", ".join(missing)) if missing else (
+        "pass", "/unified_search rows carry source_count+labels; web expander plays a picked source with the rest as fallbacks")

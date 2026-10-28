@@ -136,48 +136,20 @@ fn resolveDetailWorker(request: DetailResolveRequest) void {
     };
     defer allocator.free(html_buf);
     const url = request.url[0..request.url_len];
-    const argv = [_][]const u8{
-        "curl",       "-sL",
-        "-H",         "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
-        "--max-time", "10",
-        url,
-    };
-    var process = bounded_process.StreamProcess.init(&argv, .{
-        .timeout_ms = 11_000,
-        .terminate_grace_ms = 150,
-        .max_output_bytes = html_buf.len,
+    // Reliable-fetch seam. A page larger than the cap is deliberately cut,
+    // but its bounded head (keep_head_on_overflow) is still useful when it
+    // already contains the magnet link. A newer resolve bumps the generation,
+    // which the cancel epoch turns into an immediate curl stop.
+    const got = @import("reliable_fetch.zig").fetch(url, html_buf, .{
+        .user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+        .timeout_secs = 10,
+        .keep_head_on_overflow = true,
         .cancel_epoch = .{ .epoch64 = .{ .value = &detail_resolve_generation, .expected = request.generation } },
-        .cancel_flag = @import("../core/workers.zig").quittingSignal(),
     });
-    process.start() catch {
-        publishDetailResolve(request, .fetch_failed, "");
-        return;
-    };
-    var total: usize = 0;
-    var read_failed = false;
-    if (process.stdout()) |stdout| {
-        while (total < html_buf.len) {
-            const n = @import("../core/io_global.zig").read(stdout, html_buf[total..]) catch {
-                read_failed = true;
-                process.requestStop();
-                break;
-            };
-            if (n == 0) break;
-            total += n;
-            if (!process.noteOutput(n)) break;
-        }
-        if (!read_failed and total == html_buf.len) {
-            var extra: [1]u8 = undefined;
-            const n = @import("../core/io_global.zig").read(stdout, &extra) catch 0;
-            if (n > 0) _ = process.noteOutput(n);
-        }
-    }
-    const outcome = process.finish();
-    if (outcome.cancelled or request.generation != detail_resolve_generation.load(.acquire) or
+    if (request.generation != detail_resolve_generation.load(.acquire) or
         @import("../core/workers.zig").isQuitting()) return;
-    // A page larger than the cap is deliberately terminated, but its bounded
-    // prefix is still useful when it already contains the magnet link.
-    if ((read_failed or (!outcome.ok() and !outcome.output_limited)) or total < 50) {
+    const total = if (got) |g| g.len else 0;
+    if (total < 50) {
         publishDetailResolve(request, .fetch_failed, "");
         return;
     }
@@ -878,6 +850,9 @@ pub fn submitQuery(query_text: []const u8) void {
     @import("search_preview.zig").stop();
     @import("activity.zig").record(.search, owned[0..n], .{});
     setUniversalQuery(owned[0..n]);
+    // Natural-language / constrained queries also search the user's own library
+    // and subtitles (ROADMAP 7.1); bare titles clear those sections.
+    @import("recall.zig").submit(owned[0..n]);
     @import("resolver.zig").resolve(owned[0..n], "auto");
 }
 
@@ -906,6 +881,7 @@ pub fn cancelPendingMemorySearch() void {
 pub fn clearShellSearch() void {
     @import("search_preview.zig").stop();
     cancelPendingMemorySearch();
+    @import("recall.zig").clear();
     search_abort.store(true, .release);
     _ = search_generation.fetchAdd(1, .acq_rel);
     if (search_thread) |thread| @import("../core/workers.zig").release(thread);
@@ -1545,6 +1521,8 @@ fn combinedStreamStatus() @import("resolver.zig").SourceStatus {
 const ResultAction = struct {
     idx: usize,
     queue: bool = false,
+    /// Folded source to play first (0 = the row's primary URL).
+    source: usize = 0,
 };
 
 const ViewCache = struct {
@@ -1687,6 +1665,8 @@ fn renderUniversalResults() void {
         const count = std.fmt.bufPrint(&count_buf, "{d} titles · {d} other releases{s}", .{ titles, releases, if (view_cache.loading) " · searching…" else "" }) catch "Results";
         _ = dvui.label(@src(), "{s}", .{count}, .{ .color_text = theme.colors.text_secondary, .padding = dvui.Rect.all(theme.spacing.sm) });
     }
+    // Recall: "From your library" + "Moments" above the source results.
+    @import("../ui/recall_results.zig").render(view_cache.query[0..view_cache.query_len]);
     if (view_cache.rows == null) {
         components.emptyState(icons.tvg.lucide.@"search-x", "Search could not allocate its result view", "Try again after closing unused players.");
         return;
@@ -1725,6 +1705,9 @@ fn renderUniversalResults() void {
                 @import("queue.zig").addToQueue(item.url[0..item.url_len], item.name[0..item.name_len], "torrent");
                 state.showToast("Added to queue");
             }
+        } else if (action.source > 0) {
+            const picked = resolver.withSource(item, action.source);
+            resolver.playResolvedItem(&picked);
         } else resolver.playResolvedItem(item);
     }
 }
@@ -2030,7 +2013,8 @@ fn renderGalleryCard(group: *const search_content.Group, size: gallery_layout.Si
     art.deinit();
     const body = theme.mediaTitleFont(item.name[0..item.name_len], dvui.themeGet().font_body);
     var metadata: [128]u8 = undefined;
-    const line = if (group.offer_count > 0) std.fmt.bufPrint(&metadata, "{d} source{s}", .{ group.offer_count, if (group.offer_count == 1) "" else "s" }) catch "" else if (item.author_len > 0) item.author[0..item.author_len] else item.detail[0..item.detail_len];
+    const total_sources = groupSourceTotal(group);
+    const line = if (total_sources > 0) std.fmt.bufPrint(&metadata, "{d} source{s}", .{ total_sources, if (total_sources == 1) "" else "s" }) catch "" else if (item.author_len > 0) item.author[0..item.author_len] else item.detail[0..item.detail_len];
     if (card.data().visible()) {
         if (@import("builtin").is_test) gallery_text_rows_for_test += 1;
         var title: [520]u8 = undefined;
@@ -2095,7 +2079,7 @@ fn renderGalleryHero(group: *const search_content.Group, width: f32, pending: *?
     }
     if (group.offer_count > 0) {
         var source_text: [48]u8 = undefined;
-        const text = std.fmt.bufPrint(&source_text, "Sources ({d})", .{group.offer_count}) catch "Sources";
+        const text = std.fmt.bufPrint(&source_text, "Sources ({d})", .{groupSourceTotal(group)}) catch "Sources";
         if (components.actionButton(@src(), text, .secondary, 95007)) gallery_show_sources = !gallery_show_sources;
     }
     const store = @import("library_store.zig");
@@ -2353,9 +2337,47 @@ fn searchRowLine(id: usize, text: []const u8, font: dvui.Font, width: f32, color
     _ = dvui.label(@src(), "{s}", .{clipped}, .{ .id_extra = id, .font = font, .color_text = color, .max_size_content = .{ .w = @max(0, width), .h = font.textHeight() } });
 }
 
+/// A group's offer rows plus every same-work rendition pushInto folded into
+/// them as fallbacks — the "N sources" a logical result actually has.
+fn groupSourceTotal(group: *const search_content.Group) usize {
+    if (group.offer_count == 0) return 0;
+    const rows = view_cache.rows.?;
+    var extra: usize = 0;
+    for (group.indexes[0..group.count]) |index| {
+        const n = @import("resolver.zig").sourceCount(&rows[index]);
+        if (n > 1) extra += n - 1;
+    }
+    return group.offer_count + extra;
+}
+
+/// Row key whose folded-source picker is open (0 = none).
+var expanded_sources_row: usize = 0;
+
 fn renderCompactRow(idx: usize, item: *const @import("resolver.zig").ResolvedItem, pending: *?ResultAction) void {
     const resolver = @import("resolver.zig");
     const row_key: usize = @truncate(resolver.actionKey(item));
+    const sources = resolver.sourceCount(item);
+    renderCompactRowMain(idx, item, pending, row_key, sources);
+    if (sources < 2 or expanded_sources_row != row_key) return;
+    const dedup = @import("resolver_dedup_pure.zig");
+    var list = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = row_key +% 7, .expand = .horizontal, .padding = .{ .x = theme.spacing.lg, .y = 2, .w = theme.spacing.sm, .h = 6 }, .background = true, .color_fill = theme.colors.bg_surface });
+    defer list.deinit();
+    const urls = [_][]const u8{ item.url[0..item.url_len], item.fallback_url[0..item.fallback_url_len], item.fallback_url_2[0..item.fallback_url_2_len] };
+    var shown: usize = 0;
+    for (urls) |url| {
+        if (url.len == 0) continue;
+        var label_buf: [24]u8 = undefined;
+        const label = std.fmt.bufPrint(&label_buf, "Source {d}", .{shown + 1}) catch "Source";
+        if (components.listItem(@src(), row_key +% (8 + shown), icons.tvg.lucide.play, label, safeUtf8(dedup.sourceLabel(url)))) {
+            pending.* = .{ .idx = idx, .source = shown };
+            expanded_sources_row = 0;
+        }
+        shown += 1;
+    }
+}
+
+fn renderCompactRowMain(idx: usize, item: *const @import("resolver.zig").ResolvedItem, pending: *?ResultAction, row_key: usize, sources: usize) void {
+    const resolver = @import("resolver.zig");
     const risk = if (item.source == .torrent) @import("torrent_risk_pure.zig").assess(item.name[0..item.name_len], @floatFromInt(item.size_bytes)) else @import("torrent_risk_pure.zig").Assessment{};
     const chip_text = switch (item.source) {
         .jellyfin => "Jellyfin",
@@ -2395,7 +2417,7 @@ fn renderCompactRow(idx: usize, item: *const @import("resolver.zig").ResolvedIte
     if (row.data().borderRectScale().r.contains(dvui.currentWindow().mouse_pt)) row.data().options.color_fill = theme.colors.bg_hover;
     row.drawBackground();
     const queueable = item.source == .torrent and resolver.isRemoteQueueable(item);
-    const actions_width: f32 = if (queueable) 72 else 36;
+    const actions_width: f32 = (if (queueable) @as(f32, 72) else 36) + (if (sources > 1) @as(f32, 120) else 0);
     const text_width = @max(0, row.data().contentRect().w - actions_width - theme.spacing.sm);
     var content = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .max_size_content = .{ .w = 0, .h = row_height - 13 } });
     var title_buffer: [520]u8 = undefined;
@@ -2415,6 +2437,13 @@ fn renderCompactRow(idx: usize, item: *const @import("resolver.zig").ResolvedIte
     content.deinit();
     var actions = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0.5 });
     defer actions.deinit();
+    if (sources > 1) {
+        var count_buf: [24]u8 = undefined;
+        components.statusPill(std.fmt.bufPrint(&count_buf, "{d} sources", .{sources}) catch "sources", .info);
+        const open = expanded_sources_row == row_key;
+        if (components.iconButton(@src(), if (open) icons.tvg.lucide.@"chevron-up" else icons.tvg.lucide.@"chevron-down", "Choose a source", open))
+            expanded_sources_row = if (open) 0 else row_key;
+    }
     const action_icon = if (item.source == .anime or item.source == .podcast) icons.tvg.lucide.@"arrow-up-right" else if (item.source == .novels or item.source == .comics or item.source == .opds) icons.tvg.lucide.book else if (item.source == .vndb or item.source == .tmdb or item.source == .audiobooks) icons.tvg.lucide.info else icons.tvg.lucide.play;
     const action_name = if (item.source == .anime or item.source == .podcast) "Open" else if (item.source == .novels or item.source == .comics or item.source == .opds) "read" else if (item.source == .audiobooks) "open audio" else if (item.source == .vndb or item.source == .tmdb) "details" else "play";
     var button_data: dvui.WidgetData = undefined;

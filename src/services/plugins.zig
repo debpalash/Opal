@@ -204,8 +204,7 @@ fn loadPluginAt(plugin_dir: []const u8, id: []const u8) ?Plugin {
     extractJsonString(json, "version", &plugin.version, &plugin.version_len);
     extractJsonString(json, "description", &plugin.description, &plugin.description_len);
     extractJsonString(json, "author", &plugin.author, &plugin.author_len);
-    if (extractField(json, "allow_unsafe")) |value|
-        plugin.allow_unsafe = std.mem.eql(u8, value, "true");
+    plugin.allow_unsafe = @import("plugins_pure.zig").manifestUnsafe(c_alloc, json) catch return null;
     if (plugin.name_len == 0) {
         plugin.name_len = @min(id.len, plugin.name.len);
         @memcpy(plugin.name[0..plugin.name_len], id[0..plugin.name_len]);
@@ -427,14 +426,6 @@ fn logUntrustedNative(p: *const Plugin) void {
         .{ p.name[0..p.name_len], marker },
     ) catch "Blocked unapproved executable plugin";
     logs.pushLog("error", "plugins", msg, true);
-}
-
-/// Surface a plugin/child-process spawn failure (e.g. missing `lua` or
-/// `curl`, or a non-executable plugin script) instead of swallowing it.
-fn logSpawnFail(argv0: []const u8) void {
-    var buf: [256]u8 = undefined;
-    const msg = std.fmt.bufPrintZ(&buf, "spawn failed: {s} not found or not executable", .{argv0}) catch "plugin spawn failed";
-    logs.pushLog("error", "plugin", msg, true);
 }
 
 fn logPluginProcessFailure(name: []const u8, result: bounded_process.Result) void {
@@ -929,32 +920,16 @@ fn runPluginResolveWith(plugin: Plugin, id: []const u8, episode: []const u8) voi
                                             const plugin_ref = state.app.comic.referer[0..state.app.comic.referer_len];
                                             var ref_buf: [600]u8 = undefined;
                                             const ref_hdr = @import("plugins_pure.zig").refererHeader(plugin_ref, u, &ref_buf) orelse "Referer:";
-                                            const argv2 = [_][]const u8{
-                                                "curl",       "-sL",
-                                                "-H",         "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
-                                                "-H",         ref_hdr,
-                                                "--max-time", "15",
-                                                u,
-                                            };
-                                            var child2 = @import("../core/io_global.zig").Child.init(&argv2, a);
-                                            child2.stdout_behavior = .Pipe;
-                                            child2.stderr_behavior = .Ignore;
-                                            _ = child2.spawn() catch {
-                                                logSpawnFail(argv2[0]);
-                                                return;
-                                            };
+                                            const referer: ?[]const u8 = if (std.mem.startsWith(u8, ref_hdr, "Referer: ")) ref_hdr["Referer: ".len..] else null;
                                             const max_img = 5 * 1024 * 1024;
                                             const tmp = a.alloc(u8, max_img) catch return;
                                             defer a.free(tmp);
-                                            var total: usize = 0;
-                                            if (child2.stdout) |*so| {
-                                                while (total < max_img) {
-                                                    const n = @import("../core/io_global.zig").read(so, tmp[total..]) catch break;
-                                                    if (n == 0) break;
-                                                    total += n;
-                                                }
-                                            }
-                                            _ = child2.wait() catch {};
+                                            const body = @import("reliable_fetch.zig").fetch(u, tmp, .{
+                                                .user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+                                                .referer = referer,
+                                                .timeout_secs = 15,
+                                            }) orelse "";
+                                            const total = body.len;
                                             if (total > 100) {
                                                 const px = a.dupe(u8, tmp[0..total]) catch return;
                                                 state.app.comic.page_pixels[idx] = px;
@@ -1237,6 +1212,7 @@ fn cardTitle(src: std.builtin.SourceLocation, text: []const u8, sub: []const u8)
 }
 
 fn renderSourcePlugins() void {
+    renderSignedRepositories();
     const pr = source_repo;
 
     // Auto-load on first view: show the bundled manifest instantly (offline, no
@@ -1785,7 +1761,7 @@ fn renderContentPlugins() void {
 
                 if (dvui.button(@src(), @import("../core/text.zig").safeUtf8(name), .{}, .{
                     .id_extra = pi + 8000,
-                    .color_fill = if (is_active) theme.colors.accent else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                    .color_fill = if (is_active) theme.colors.accent else theme.transparent,
                     .color_text = if (is_active) theme.colors.text_on_accent else theme.colors.text_secondary,
                     .corner_radius = dvui.Rect.all(theme.radius.pill),
                     .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
@@ -1957,7 +1933,7 @@ fn renderPluginCard(item: *PluginResult, idx: usize) void {
                 .id_extra = idx + 500,
                 .expand = .horizontal,
                 .color_text = if (item.expanded) theme.colors.accent else theme.colors.text_primary,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill = theme.transparent,
                 .color_fill_hover = theme.colors.bg_hover,
                 .color_fill_press = theme.colors.bg_elevated,
                 .padding = dvui.Rect.all(0),
@@ -2147,4 +2123,115 @@ pub fn verifySuwaNonblockingForTest() !void {
     suwa_test_mutex.lock();
     defer suwa_test_mutex.unlock();
     try std.testing.expectEqualStrings("Disconnected", suwa_test_msg[0..suwa_test_len]);
+}
+
+// Signed repositories share executable approval with installed plugins.
+const SignedUi = struct {
+    var id: [33]u8 = .{0} ** 33;
+    var url: [1025]u8 = .{0} ** 1025;
+    var key: [65]u8 = .{0} ** 65;
+    var snapshot: ?std.json.Parsed(std.json.Value) = null;
+    var busy = std.atomic.Value(bool).init(false);
+    var changed = std.atomic.Value(bool).init(true);
+    const Job = struct { id: [32]u8, len: usize };
+    fn refresh(job: Job) void {
+        defer busy.store(false, .release);
+        @import("addon_repositories.zig").refresh(job.id[0..job.len]) catch |err| {
+            logs.pushLog("warn", "addons", @errorName(err), true);
+        };
+        changed.store(true, .release);
+        state.wakeUi();
+    }
+};
+
+pub fn deinitSignedUi() void {
+    if (SignedUi.snapshot) |s| s.deinit();
+    SignedUi.snapshot = null;
+}
+
+fn signedField(buf: []u8, placeholder: []const u8, id: usize) void {
+    var field = dvui.textEntry(@src(), .{ .text = .{ .buffer = buf }, .placeholder = placeholder }, .{
+        .id_extra = id,
+        .expand = .horizontal,
+        .color_fill = theme.colors.bg_elevated,
+        .color_border = theme.colors.border_subtle,
+        .color_text = theme.colors.text_primary,
+        .border = dvui.Rect.all(1),
+        .corner_radius = dvui.Rect.all(theme.radius.sm),
+    });
+    field.deinit();
+}
+
+fn signedString(value: std.json.Value, key: []const u8) []const u8 {
+    if (value != .object) return "";
+    const v = value.object.get(key) orelse return "";
+    return if (v == .string) v.string else "";
+}
+
+fn renderSignedRepositories() void {
+    const repo = @import("addon_repositories.zig");
+    const a = @import("../core/alloc.zig").allocator;
+    if (SignedUi.changed.swap(false, .acq_rel)) {
+        var out: std.Io.Writer.Allocating = .init(a);
+        defer out.deinit();
+        repo.writeSnapshot(&out.writer) catch return;
+        const parsed = std.json.parseFromSlice(std.json.Value, a, out.written(), .{ .allocate = .alloc_always }) catch return;
+        deinitSignedUi();
+        SignedUi.snapshot = parsed;
+        scanPlugins();
+    }
+    var card = cardBegin(@src(), 9100);
+    defer card.deinit();
+    cardTitle(@src(), "Signed add-on repositories", "Add a repository URL and its publisher key. Installation does not approve executable access.");
+    signedField(&SignedUi.id, "Repository name", 9101);
+    signedField(&SignedUi.url, "HTTPS repository URL", 9102);
+    signedField(&SignedUi.key, "Publisher public key (64 hex characters)", 9103);
+    if (components.actionButton(@src(), "Add repository", .secondary, 9104)) {
+        repo.add(std.mem.sliceTo(&SignedUi.id, 0), std.mem.sliceTo(&SignedUi.url, 0), std.mem.sliceTo(&SignedUi.key, 0)) catch |err| {
+            state.showToast(@errorName(err));
+            return;
+        };
+        SignedUi.changed.store(true, .release);
+    }
+    if (components.actionButton(@src(), "Reload repositories", .secondary, 9105)) SignedUi.changed.store(true, .release);
+    const snapshot = SignedUi.snapshot orelse return;
+    const repos = snapshot.value.object.get("repositories") orelse return;
+    for (repos.array.items, 0..) |entry, ri| {
+        const id = signedString(entry, "id");
+        _ = dvui.label(@src(), "{s}", .{id}, .{ .color_text = theme.colors.text_primary, .id_extra = 9200 + ri });
+        if (!SignedUi.busy.load(.acquire) and components.actionButton(@src(), "Fetch signed catalog", .secondary, 9300 + ri)) {
+            var job: SignedUi.Job = .{ .id = undefined, .len = id.len };
+            @memcpy(job.id[0..id.len], id);
+            SignedUi.busy.store(true, .release);
+            if (@import("../core/workers.zig").spawnLegacy(SignedUi.refresh, .{job})) |t| @import("../core/workers.zig").release(t) else |_| SignedUi.busy.store(false, .release);
+        }
+        if (components.confirmDangerButton(@src(), "Remove repository", 9400 + ri)) {
+            repo.remove(id) catch |err| state.showToast(@errorName(err));
+            SignedUi.changed.store(true, .release);
+        }
+        const addons = entry.object.get("addons") orelse continue;
+        for (addons.array.items, 0..) |addon, ai| {
+            const uid = 10000 + ri * 100 + ai;
+            const name = signedString(addon, "name");
+            _ = dvui.label(@src(), "{s} · {s}", .{ name, signedString(addon, "version") }, .{ .color_text = theme.colors.text_primary, .id_extra = uid });
+            const permissions = addon.object.get("permissions").?;
+            for (permissions.array.items, 0..) |permission, pi| {
+                _ = dvui.label(@src(), "Requests: {s}", .{permission.string}, .{ .color_text = theme.colors.warning, .id_extra = uid * 10 + pi });
+            }
+            if (components.confirmDangerButton(@src(), "Install files (approval still required)", uid + 1000)) {
+                repo.install(id, signedString(addon, "id"), signedString(entry, "confirmation")) catch |err| {
+                    state.showToast(@errorName(err));
+                    continue;
+                };
+                state.showToast("Installed. Review executable access in the Content section.");
+                SignedUi.changed.store(true, .release);
+            }
+            if (addon.object.get("panel")) |panel| if (panel == .object) {
+                _ = dvui.label(@src(), "{s}", .{signedString(panel, "title")}, .{ .color_text = theme.colors.text_primary, .id_extra = uid + 2000 });
+                var text = dvui.textLayout(@src(), .{}, .{ .expand = .horizontal, .color_text = theme.colors.text_secondary, .id_extra = uid + 3000 });
+                text.addText(signedString(panel, "body"), .{});
+                text.deinit();
+            };
+        }
+    }
 }

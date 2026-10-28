@@ -21,6 +21,12 @@ const tk = struct {
     pub inline fn bg_hover() dvui.Color {
         return theme.colors.bg_hover;
     }
+    pub inline fn bg_pressed() dvui.Color {
+        return theme.colors.bg_pressed;
+    }
+    pub inline fn bg_selected() dvui.Color {
+        return theme.colors.bg_selected;
+    }
     pub inline fn bg_muted() dvui.Color {
         return theme.colors.bg_app;
     }
@@ -41,6 +47,12 @@ const tk = struct {
     }
     pub inline fn accent_dim() dvui.Color {
         return theme.colors.accent_dim;
+    }
+    pub inline fn accent_hover() dvui.Color {
+        return theme.colors.accent_hover;
+    }
+    pub inline fn accent_pressed() dvui.Color {
+        return theme.colors.accent_pressed;
     }
     pub inline fn semantic_success() dvui.Color {
         return theme.colors.success;
@@ -67,6 +79,7 @@ const tk = struct {
     pub const sp_xxl: f32 = theme.spacing.xxl;
 
     // ── radii (dvui.Rect-typed for corner_radius slots) ──
+    pub const rad_xs = dvui.Rect.all(theme.radius.xs);
     pub const rad_sm = dvui.Rect.all(theme.radius.sm);
     pub const rad_md = dvui.Rect.all(theme.radius.md);
     pub const rad_lg = dvui.Rect.all(theme.radius.lg);
@@ -76,6 +89,7 @@ const tk = struct {
     pub const fs_micro: f32 = theme.font_size.micro;
     pub const fs_small: f32 = theme.font_size.small;
     pub const fs_body: f32 = theme.font_size.body;
+    pub const fs_subtitle: f32 = theme.font_size.subtitle;
     pub const fs_title: f32 = theme.font_size.title;
     pub const fs_display: f32 = theme.font_size.display;
 };
@@ -321,14 +335,19 @@ pub fn coverSkeletonGrid(src: std.builtin.SourceLocation, id_base: usize, cols: 
     }
 }
 
-fn mixColor(a: dvui.Color, b: dvui.Color, t_raw: f32) dvui.Color {
-    const t = std.math.clamp(t_raw, 0, 1);
-    return .{
-        .r = @intFromFloat(@as(f32, @floatFromInt(a.r)) + (@as(f32, @floatFromInt(b.r)) - @as(f32, @floatFromInt(a.r))) * t),
-        .g = @intFromFloat(@as(f32, @floatFromInt(a.g)) + (@as(f32, @floatFromInt(b.g)) - @as(f32, @floatFromInt(a.g))) * t),
-        .b = @intFromFloat(@as(f32, @floatFromInt(a.b)) + (@as(f32, @floatFromInt(b.b)) - @as(f32, @floatFromInt(a.b))) * t),
-        .a = @intFromFloat(@as(f32, @floatFromInt(a.a)) + (@as(f32, @floatFromInt(b.a)) - @as(f32, @floatFromInt(a.a))) * t),
-    };
+fn mixColor(a: dvui.Color, b: dvui.Color, t: f32) dvui.Color {
+    const mix = @import("theme_pure.zig").mixChannel;
+    return .{ .r = mix(a.r, b.r, t), .g = mix(a.g, b.g, t), .b = mix(a.b, b.b, t), .a = mix(a.a, b.a, t) };
+}
+
+/// Resting / hovered / held fill for a hand-built interactive box. dvui's
+/// `color_fill_hover` / `color_fill_press` are read by ButtonWidget only, so
+/// plain boxes (rows, segments, chips) resolve their state here after
+/// `dvui.clicked` has reported hover, then repaint with drawBackground().
+fn stateFill(rest: dvui.Color, hovered: bool, pressed: bool) dvui.Color {
+    if (pressed) return tk.bg_pressed();
+    if (hovered) return tk.bg_hover();
+    return rest;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -365,6 +384,7 @@ pub fn tipId(src: std.builtin.SourceLocation, wd: dvui.WidgetData, text: []const
         .border = dvui.Rect.all(1),
         .corner_radius = tk.rad_md,
         .padding = .{ .x = 8, .y = 5, .w = 8, .h = 5 },
+        .box_shadow = theme.elevation.md(),
     });
 }
 
@@ -388,7 +408,7 @@ pub fn ProgressBar(src: std.builtin.SourceLocation, fraction: f32, label: []cons
         .expand = .horizontal,
         .min_size_content = .{ .w = 10, .h = 8 },
         .color_fill = theme.colors.bg_elevated,
-        .corner_radius = tk.rad_sm,
+        .corner_radius = tk.rad_pill,
     });
 }
 
@@ -431,7 +451,7 @@ pub fn sectionHeader(label: []const u8) void {
     _ = dvui.label(@src(), "{s}", .{upper}, .{
         .id_extra = sectionheader_seq,
         .color_text = tk.text_tertiary(),
-        .font = fontAt(tk.fs_small),
+        .font = fontAt(tk.fs_small).withWeight(.bold),
     });
 }
 
@@ -514,7 +534,7 @@ pub fn toggleRow(
     // known (Options.color_fill_hover is button-only — plain boxes never read
     // it), so the old `if (hovered)` ternary at init could never render. Mutate
     // the stored options now that hover IS known and repaint over the base fill.
-    if (hovered) row.data().options.color_fill = tk.bg_hover();
+    row.data().options.color_fill = stateFill(tk.bg_surface(), hovered, dvui.captured(rid));
     row.drawBackground();
     if (row_focused) row.data().focusBorder();
 
@@ -601,6 +621,7 @@ pub fn toggleRow(
             .background = true,
             .color_fill = if (frac > 0.5) tk.text_on_accent() else tk.text_primary(),
             .corner_radius = tk.rad_pill,
+            .box_shadow = theme.elevation.sm(),
             .min_size_content = .{ .w = knob, .h = knob },
             .max_size_content = .{ .w = knob, .h = knob },
             .gravity_x = frac,
@@ -669,7 +690,8 @@ pub fn segment(
         }
         // Inactive segments get a hover fill so they read as clickable — the
         // background drawn at init couldn't know hover yet (see toggleRow).
-        if (hovered and !is_active) seg.data().options.color_fill = tk.bg_hover();
+        if (!is_active) seg.data().options.color_fill = stateFill(theme.transparent, hovered, dvui.captured(sid));
+        if (is_active) seg.data().options.box_shadow = theme.elevation.sm();
         seg.drawBackground();
         if (seg_focused) seg.data().focusBorder();
 
@@ -700,7 +722,7 @@ pub fn filterChip(
     var chip = dvui.box(src, .{ .dir = .horizontal }, .{
         .id_extra = id_extra,
         .background = true,
-        .color_fill = if (active) tk.bg_elevated() else theme.transparent,
+        .color_fill = if (active) tk.bg_selected() else theme.transparent,
         .corner_radius = tk.rad_pill,
         .padding = .{ .x = tk.sp_sm, .y = tk.sp_xs, .w = tk.sp_sm, .h = tk.sp_xs },
         .margin = .{ .x = 1, .y = 1, .w = 1, .h = 1 },
@@ -717,7 +739,7 @@ pub fn filterChip(
         }
         chip.data().focusBorder();
     }
-    if (hovered and !active) chip.data().options.color_fill = tk.bg_hover();
+    if (!active) chip.data().options.color_fill = stateFill(theme.transparent, hovered, dvui.captured(id));
     chip.drawBackground();
     dvui.icon(@src(), label, icon, .{}, .{
         .id_extra = id_extra,
@@ -760,7 +782,7 @@ pub fn iconButtonEx(
     active: bool,
     enabled: bool,
 ) bool {
-    return iconButtonExColors(src, icon, tooltip, active, enabled, tk.bg_elevated(), tk.bg_hover(), tk.bg_elevated());
+    return iconButtonExColors(src, icon, tooltip, active, enabled, tk.bg_elevated(), tk.bg_hover(), tk.bg_pressed());
 }
 
 /// Player chrome variant: active state is expressed by the accent glyph alone.
@@ -821,10 +843,8 @@ fn iconButtonExColors(
     return clicked;
 }
 
-/// Small status label — info / success / warn / err.
-/// Calm: colored TEXT only (no box, no border, no fill). `.info` reads as a
-/// neutral secondary label; the semantic kinds use their muted colors so the
-/// status reads without shouting. Horizontal padding preserved.
+/// Small status pill — info / success / warn / err. Semantic text on its
+/// matching low-chroma `*_bg` capsule; `.info` is a neutral elevated capsule.
 // Like divider()/sectionHeader(): every statusPill() shares this @src(), so
 // two pills under the same parent (e.g. one per search result) collide on the
 // same widget id (dvui draws red boxes + spams "duplicate widget id"). A
@@ -838,10 +858,21 @@ pub fn statusPill(label: []const u8, kind: enum { info, success, warn, err }) vo
         .warn => tk.semantic_warn(),
         .err => tk.semantic_error(),
     };
+    // Quiet tinted capsule: each *_bg is tuned per preset so its fg clears
+    // 4.5:1 (comptime-gated in theme.zig).
+    const bg = switch (kind) {
+        .info => tk.bg_elevated(),
+        .success => theme.colors.success_bg,
+        .warn => theme.colors.warning_bg,
+        .err => theme.colors.danger_bg,
+    };
 
     var pill = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .id_extra = statuspill_seq,
-        .padding = .{ .x = tk.sp_sm, .y = tk.sp_xs, .w = tk.sp_sm, .h = tk.sp_xs },
+        .background = true,
+        .color_fill = bg,
+        .corner_radius = tk.rad_pill,
+        .padding = .{ .x = tk.sp_sm, .y = theme.spacing.xxs, .w = tk.sp_sm, .h = theme.spacing.xxs },
         .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
     });
     defer pill.deinit();
@@ -869,12 +900,15 @@ pub fn listItem(
         .id_extra = id_extra,
         .expand = .horizontal,
         .background = true,
-        .color_fill = if (hovered) tk.bg_hover() else theme.transparent,
+        .color_fill = theme.transparent,
         .corner_radius = tk.rad_sm,
         .padding = .{ .x = tk.sp_md, .y = tk.sp_sm, .w = tk.sp_md, .h = tk.sp_sm },
         .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
     });
     const clicked = dvui.clicked(row.data(), .{ .hovered = &hovered });
+    // Hover is only known after clicked(); the init-time fill could never
+    // show it, so resolve the state now and repaint.
+    row.data().options.color_fill = stateFill(theme.transparent, hovered, dvui.captured(row.data().id));
     row.drawBackground();
 
     if (leading_icon) |ic| {
@@ -948,7 +982,10 @@ pub fn emptyStateCta(icon: []const u8, title: []const u8, hint: []const u8, cta:
             .gravity_x = 0.5,
             .margin = .{ .x = 0, .y = tk.sp_md, .w = 0, .h = 0 },
             .color_fill = tk.accent_primary(),
+            .color_fill_hover = tk.accent_hover(),
+            .color_fill_press = tk.accent_pressed(),
             .color_text = tk.text_on_accent(),
+            .border = dvui.Rect.all(0),
             .corner_radius = tk.rad_sm,
             .padding = .{ .x = tk.sp_lg, .y = tk.sp_sm, .w = tk.sp_lg, .h = tk.sp_sm },
         });
@@ -1024,13 +1061,15 @@ pub fn loadingState(label: []const u8) void {
 ///   .secondary — elevated fill, everything else
 ///   .danger    — error-tinted text, destructive but not confirm-gated
 ///     (for confirm-gated destruction use confirmDangerButton)
+pub const ActionKind = enum { primary, secondary, danger };
+
 pub fn actionButton(
     src: std.builtin.SourceLocation,
     label: []const u8,
-    kind: enum { primary, secondary, danger },
+    kind: ActionKind,
     id_extra: usize,
 ) bool {
-    const fills = actionFills(kind == .primary);
+    const fills = actionFills(kind);
     return dvui.button(src, label, .{}, .{
         .id_extra = id_extra,
         .color_fill = fills[0],
@@ -1057,15 +1096,13 @@ pub fn actionButton(
 /// Rest / hover / press fills for actionButton-family buttons. Primary stays
 /// on the accent hue: hovering it to bg_hover put text_on_accent (near-black)
 /// on a near-black fill, so the label vanished under the pointer.
-fn actionFills(primary: bool) [3]dvui.Color {
-    if (primary) {
-        const a = tk.accent_primary();
-        return .{ a, a.lighten(8), a.lighten(-8) };
-    }
-    // bg_hover == bg_elevated in every preset, so hovering an elevated
-    // button to bg_hover gave no feedback at all. Step lightness instead.
-    const e = tk.bg_elevated();
-    return .{ e, e.lighten(6), tk.bg_surface() };
+fn actionFills(kind: ActionKind) [3]dvui.Color {
+    if (kind == .primary) return .{ tk.accent_primary(), tk.accent_hover(), tk.accent_pressed() };
+    // Raised neutral: rest on bg_elevated, lift to bg_hover, sink to
+    // bg_pressed — three distinct tokens in every preset. Danger warms its
+    // hover into the danger_bg tint so the destructive intent reads early.
+    const hover = if (kind == .danger) theme.colors.danger_bg else tk.bg_hover();
+    return .{ tk.bg_elevated(), hover, tk.bg_pressed() };
 }
 
 /// actionButton with a leading lucide icon. Use this instead of putting a
@@ -1075,7 +1112,7 @@ pub fn iconActionButton(
     src: std.builtin.SourceLocation,
     icon: []const u8,
     label: []const u8,
-    kind: enum { primary, secondary, danger },
+    kind: ActionKind,
     id_extra: usize,
 ) bool {
     const fg = switch (kind) {
@@ -1083,7 +1120,7 @@ pub fn iconActionButton(
         .secondary => tk.text_primary(),
         .danger => tk.semantic_error(),
     };
-    const fills = actionFills(kind == .primary);
+    const fills = actionFills(kind);
     var bw: dvui.ButtonWidget = undefined;
     bw.init(src, .{}, .{
         .id_extra = id_extra,
@@ -1119,8 +1156,8 @@ pub fn confirmDangerButton(src: std.builtin.SourceLocation, label: []const u8, i
     bw.init(src, .{}, .{
         .id_extra = id_extra,
         .color_fill = theme.transparent,
-        .color_fill_hover = tk.bg_hover(),
-        .color_fill_press = tk.bg_elevated(),
+        .color_fill_hover = theme.colors.danger_dim,
+        .color_fill_press = tk.bg_pressed(),
         .border = dvui.Rect.all(0),
         .corner_radius = tk.rad_sm,
         .padding = .{ .x = tk.sp_sm, .y = tk.sp_xs, .w = tk.sp_sm, .h = tk.sp_xs },
@@ -1131,6 +1168,9 @@ pub fn confirmDangerButton(src: std.builtin.SourceLocation, label: []const u8, i
     const id = bw.data().id;
     var armed = dvui.dataGet(null, id, "_armed", bool) orelse false;
     if (armed and dvui.timerDone(id)) armed = false; // auto-disarm after 3s
+    // Armed: hold an opaque danger_bg capsule so the confirm prompt is
+    // unmistakable (danger fg on danger_bg is comptime-gated at 4.5:1).
+    if (armed) bw.data().options.color_fill = theme.colors.danger_bg;
 
     bw.drawBackground();
     _ = dvui.labelNoFmt(@src(), if (armed) "Click again to confirm" else label, .{ .align_x = 0.5, .align_y = 0.5 }, .{
@@ -1185,8 +1225,8 @@ pub fn searchInput(
     // and repaint the shell with the accent border (one frame of lag is fine).
     const sid = shell.data().id;
     if (dvui.dataGet(null, sid, "_focus", bool) orelse false) {
-        shell.data().options.color_fill = tk.bg_hover();
-        shell.data().options.color_border = tk.accent_primary();
+        shell.data().options.color_border = theme.colors.focus_ring;
+        shell.data().options.box_shadow = .{ .color = theme.colors.accent_glow, .offset = .{ .x = 0, .y = 0 }, .fade = 4, .alpha = 1 };
         shell.drawBackground();
     }
 
@@ -1205,9 +1245,9 @@ pub fn searchInput(
     }, .{
         .expand = .horizontal,
         .gravity_y = 0.5,
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill = theme.transparent,
         .color_text = tk.text_primary(),
-        .color_border = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_border = theme.transparent,
         .border = dvui.Rect.all(0),
         .background = false,
         .min_size_content = .{ .w = 0, .h = 24 },
@@ -1261,7 +1301,10 @@ pub fn toolbarSearch(src: std.builtin.SourceLocation, buf: []u8, placeholder: []
 pub fn toolbarGo(src: std.builtin.SourceLocation, label: []const u8) bool {
     return dvui.button(src, label, .{}, .{
         .color_fill = theme.colors.accent,
+        .color_fill_hover = theme.colors.accent_hover,
+        .color_fill_press = theme.colors.accent_pressed,
         .color_text = theme.colors.text_on_accent,
+        .border = dvui.Rect.all(0),
         .corner_radius = theme.dims.rad_sm,
         .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
         .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },

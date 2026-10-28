@@ -47,7 +47,7 @@ pub fn renderDrawer() void {
         .max_size_content = .{ .w = w, .h = std.math.floatMax(f32) },
         .border = dvui.Rect{ .x = 1, .y = 0, .w = 0, .h = 0 },
         .color_border = theme.colors.border_subtle,
-        .box_shadow = .{ .color = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 160 }, .offset = .{ .x = -2, .y = 0 }, .fade = 16.0 },
+        .box_shadow = .{ .color = theme.colors.shadow, .offset = .{ .x = -2, .y = 0 }, .fade = 16.0 },
     });
     defer drawer_box.deinit();
 
@@ -65,7 +65,7 @@ pub fn renderDrawer() void {
 
         // Queue tab
         if (dvui.button(@src(), "Queue", .{}, .{
-            .color_fill = if (active_tab == .queue) theme.colors.accent else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = if (active_tab == .queue) theme.colors.accent else theme.transparent,
             .color_text = if (active_tab == .queue) theme.colors.bg_app else theme.colors.text_secondary,
             .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
             .corner_radius = theme.dims.rad_sm,
@@ -76,7 +76,7 @@ pub fn renderDrawer() void {
 
         // Playlist tab
         if (dvui.button(@src(), "Playlist", .{}, .{
-            .color_fill = if (active_tab == .playlist) theme.colors.accent else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = if (active_tab == .playlist) theme.colors.accent else theme.transparent,
             .color_text = if (active_tab == .playlist) theme.colors.bg_app else theme.colors.text_secondary,
             .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
             .corner_radius = theme.dims.rad_sm,

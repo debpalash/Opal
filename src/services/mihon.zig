@@ -106,27 +106,22 @@ pub fn close() void {
 /// GET `url` into `dst`, returning bytes read (0 on failure). std.http is avoided
 /// project-wide (SEGVs on some ISP TLS resets); curl matches comics.zig.
 fn curl(url: []const u8, dst: []u8) usize {
-    const argv = [_][]const u8{ "curl", "-sL", "--max-time", "25", url };
-    var child = io.Child.init(&argv, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    _ = child.spawn() catch return 0;
-    const n = if (child.stdout) |*so| io.readAll(so, dst) catch 0 else 0;
-    _ = child.wait() catch {};
-    return n;
+    const body = @import("reliable_fetch.zig").fetch(url, dst, .{ .keep_head_on_overflow = true, .timeout_secs = 25, .impersonate = false, .use_dpi_proxy = false }) orelse return 0;
+    return body.len;
 }
 
 /// POST `body` (JSON) to `url`, returning bytes read into `dst`. Used for the
 /// Suwayomi GraphQL calls that register a repo on the server.
 fn curlPost(url: []const u8, body: []const u8, dst: []u8) usize {
-    const argv = [_][]const u8{ "curl", "-sL", "-X", "POST", "-H", "Content-Type: application/json", "--data-binary", body, "--max-time", "25", url };
-    var child = io.Child.init(&argv, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    _ = child.spawn() catch return 0;
-    const n = if (child.stdout) |*so| io.readAll(so, dst) catch 0 else 0;
-    _ = child.wait() catch {};
-    return n;
+    const resp = @import("reliable_fetch.zig").fetch(url, dst, .{
+        .keep_head_on_overflow = true, // pre-seam behaviour: parse the head of an oversized body
+        .timeout_secs = 25,
+        .impersonate = false,
+        .use_dpi_proxy = false,
+        .post_body = body,
+        .headers = &.{.{ .name = "Content-Type", .value = "application/json" }},
+    }) orelse return 0;
+    return resp.len;
 }
 
 /// Register `repo_url` in the server's `extensionRepos` (merging with what's
@@ -162,15 +157,11 @@ fn registerRepoOnServer(repo_url: []const u8) void {
 /// GET `url` and return the HTTP status code (0 on transport failure). Used for
 /// install/uninstall, where Suwayomi returns 200 with no useful body.
 fn curlCode(url: []const u8) u32 {
-    const argv = [_][]const u8{ "curl", "-sL", "-o", @import("../core/io_global.zig").devNull(), "-w", "%{http_code}", "--max-time", "25", url };
-    var child = io.Child.init(&argv, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    _ = child.spawn() catch return 0;
-    var code_buf: [16]u8 = undefined;
-    const n = if (child.stdout) |*so| io.readAll(so, &code_buf) catch 0 else 0;
-    _ = child.wait() catch {};
-    return std.fmt.parseInt(u32, std.mem.trim(u8, code_buf[0..n], " \r\n"), 10) catch 0;
+    const body = alloc.alloc(u8, 64 * 1024) catch return 0;
+    defer alloc.free(body);
+    var headers: [8 * 1024]u8 = undefined;
+    const result = @import("reliable_fetch.zig").request(url, body, &headers, .{ .timeout_secs = 25, .impersonate = false, .use_dpi_proxy = false });
+    return result.status;
 }
 
 // ── Load a repo catalog ──

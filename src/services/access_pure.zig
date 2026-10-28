@@ -252,28 +252,41 @@ pub fn routeCapability(path: []const u8, method: []const u8, action: []const u8)
         if (std.mem.eql(u8, action, "approve-exec") or std.mem.eql(u8, action, "revoke-exec")) return .approve_executable;
         return .administer_host;
     }
+    if (std.mem.eql(u8, path, "/addons/install")) return .approve_executable;
     const host_routes = [_][]const u8{
-        "/setup/sources",        "/setup/tmdb",     "/settings",            "/settings/toggle",
-        "/source/add",           "/source/config",  "/livetv/sources",      "/rss/manage",
-        "/local-library/action", "/jellyfin/login", "/jellyfin/disconnect", "/abs/login",
-        "/abs/logout",           "/opds/connect",   "/opds/disconnect",     "/plex/connect",
-        "/plex/disconnect",      "/suwayomi",       "/sync-accounts",       "/trakt",
+        "/moments/create",       "/moments/send",       "/moments/delete",
+        "/addons",               "/addons/add",         "/addons/refresh",
+        "/addons/remove",        "/setup/sources",      "/setup/tmdb",
+        "/settings",             "/settings/toggle",    "/source/add",
+        "/source/config",        "/livetv/sources",     "/rss/manage",
+        "/local-library/action", "/jellyfin/login",     "/jellyfin/disconnect",
+        "/abs/login",            "/abs/logout",         "/opds/connect",
+        "/opds/disconnect",      "/plex/connect",       "/plex/disconnect",
+        "/suwayomi",             "/sync-accounts",      "/trakt",
         "/webui",                "/logs/clear",
         // Scheduled agent runs spend the host's agent credit and act on its behalf.
-        "/agent/tasks",          "/agent/tasks/add", "/agent/tasks/remove",
-        "/agent/tasks/run",
+                "/agent/tasks",
+        "/agent/tasks/add",      "/agent/tasks/remove", "/agent/tasks/run",
         // The operator's jobs and the decisions on its proposals belong to the host user.
         "/operator",
         // Who is paired, and removing one. A browser token may only unpair itself
         // (see `browser_routes`); listing and revoking others is the host's.
-        "/browser/links",        "/browser/revoke",
+                    "/browser/links",      "/browser/revoke",
         // What agents may read of the shared page, and playing one of its streams by id.
         // Host administration (machine token, admin session); a paired browser holds
         // neither, and a plain web session is not the host.
         "/browser/context",      "/browser/play",
         // Fetching a page through the user's browser spends their cookies' reach;
         // the extension's per-origin allow list is the second gate.
-        "/browser/fetch",
+              "/browser/fetch",
+        // Cross-device library sync: reads/overwrites the whole progress table,
+        // and `pull`/`push` make this host fetch a peer URL.
+        "/library/sync",         "/library/sync/pull",  "/library/sync/push",
+        // Household profiles: switching restarts the host into another
+        // person's data; create/delete manage the household. Listing is open.
+        "/profiles/switch",      "/profiles/create",    "/profiles/delete",
+        // Continuum handoff: send/bring make this host call a peer URL.
+        "/handoff/send",         "/handoff/bring",
     };
     for (host_routes) |route| if (std.mem.eql(u8, path, route)) return .administer_host;
     return null;
@@ -334,6 +347,17 @@ pub fn allowsRoute(principal: Principal, path: []const u8, method: []const u8, a
     return allows(principal, capability);
 }
 
+test "household profile management is admin-only, listing is open to sessions" {
+    for ([_]Principal{ .machine, .admin_session, .session }) |principal| {
+        for ([_][]const u8{ "/profiles/switch", "/profiles/create", "/profiles/delete" }) |route| {
+            try std.testing.expectEqual(principal != .session, allowsRoute(principal, route, "POST", ""));
+        }
+        try std.testing.expect(allowsRoute(principal, "/profiles", "GET", ""));
+    }
+    try std.testing.expect(!allowsRoute(.browser, "/profiles", "GET", ""));
+    try std.testing.expect(!allowsRoute(.browser, "/profiles/switch", "POST", ""));
+}
+
 test "route privilege matrix protects host administration and executable trust" {
     for ([_]Principal{ .machine, .admin_session, .session }) |principal| {
         try std.testing.expectEqual(principal == .machine, allowsRoute(principal, "/plugins", "POST", "approve-exec"));
@@ -348,6 +372,9 @@ test "route privilege matrix protects host administration and executable trust" 
         for ([_][]const u8{"/operator"}) |route| {
             try std.testing.expectEqual(principal != .session, allowsRoute(principal, route, "POST", ""));
         }
+        for ([_][]const u8{ "GET", "POST" }) |m| try std.testing.expectEqual(principal != .session, allowsRoute(principal, "/library/sync", m, ""));
+        try std.testing.expectEqual(principal != .session, allowsRoute(principal, "/library/sync/pull", "POST", ""));
+        try std.testing.expectEqual(principal != .session, allowsRoute(principal, "/library/sync/push", "POST", ""));
         try std.testing.expect(allowsRoute(principal, "/plugins", "GET", ""));
         try std.testing.expect(allowsRoute(principal, "/status", "GET", ""));
         try std.testing.expect(allowsRoute(principal, "/jellyfin/play", "POST", ""));
@@ -437,24 +464,23 @@ test "every other route is denied to a paired browser, by name" {
     // The sensitive families, plus the playback and library routes that look
     // harmless: none is on the allowlist.
     const denied = [_][]const u8{
-        "/settings",            "/settings/toggle",      "/setup",                "/setup/sources",      "/setup/tmdb",
-        "/plugins",             "/plugins/install",      "/downloads",            "/downloads/action",   "/downloads/play",
-        "/download/url",        "/wanted",               "/wanted/add",           "/wanted/check",       "/agent/tasks",
-        "/agent/tasks/add",     "/agent/tasks/enable",   "/agent/tasks/remove",   "/agent/tasks/run",    "/operator",
-        "/operator/approve",    "/operator/reject",      "/open",                 "/ingest",             "/load",
-        "/player",              "/player/action",        "/queue",                "/queue/action",       "/unified_search",
-        "/unified_search/play", "/unified_search/queue", "/search",               "/library",            "/library/action",
-        "/collections",         "/torrents",             "/torrent/files",        "/cast/start",         "/cast/scan",
-        "/party",               "/source/add",           "/source/config",        "/rss",                "/rss/manage",
-        "/livetv",              "/livetv/sources",       "/local-library/action", "/jellyfin/login",     "/plex/connect",
-        "/sync-accounts",       "/trakt",                "/webui",                "/logs",               "/logs/clear",
-        "/access/status",       "/access/users",         "/access/token/rotate",  "/auth/login",         "/scrape",
-        "/host",                "/history",              "/ai",                   "/music",              "/home",
-        "/browser/pair",        "/browser/links",        "/browser",              "/browser/",           "/browser/media/",
-        "/browser/mediax",      "/browser/ws",           "/browser/pagex",        "/browser/context",    "/browser/fetch",
-        "/browser/play",        "/browser/page/",        "/browser/context/",
-        "/health",              "/events",               "/stream",               "/status/",            "",
-        "/",
+        "/settings",            "/settings/toggle",      "/setup",                "/setup/sources",    "/setup/tmdb",
+        "/plugins",             "/plugins/install",      "/downloads",            "/downloads/action", "/downloads/play",
+        "/download/url",        "/wanted",               "/wanted/add",           "/wanted/check",     "/agent/tasks",
+        "/agent/tasks/add",     "/agent/tasks/enable",   "/agent/tasks/remove",   "/agent/tasks/run",  "/operator",
+        "/operator/approve",    "/operator/reject",      "/open",                 "/ingest",           "/load",
+        "/player",              "/player/action",        "/queue",                "/queue/action",     "/unified_search",
+        "/unified_search/play", "/unified_search/queue", "/search",               "/library",          "/library/action",
+        "/collections",         "/torrents",             "/torrent/files",        "/cast/start",       "/cast/scan",
+        "/party",               "/source/add",           "/source/config",        "/rss",              "/rss/manage",
+        "/livetv",              "/livetv/sources",       "/local-library/action", "/jellyfin/login",   "/plex/connect",
+        "/sync-accounts",       "/trakt",                "/webui",                "/logs",             "/logs/clear",
+        "/access/status",       "/access/users",         "/access/token/rotate",  "/auth/login",       "/scrape",
+        "/host",                "/history",              "/ai",                   "/music",            "/home",
+        "/browser/pair",        "/browser/links",        "/browser",              "/browser/",         "/browser/media/",
+        "/browser/mediax",      "/browser/ws",           "/browser/pagex",        "/browser/context",  "/browser/fetch",
+        "/browser/play",        "/browser/page/",        "/browser/context/",     "/health",           "/events",
+        "/stream",              "/status/",              "",                      "/",
     };
     for (denied) |path| {
         for ([_][]const u8{ "GET", "POST", "PUT", "DELETE", "" }) |method| {
@@ -484,4 +510,10 @@ test "every documented agent route is denied to a paired browser except GET /sta
     }
     // Guards against the test silently iterating nothing.
     try std.testing.expect(checked > 50);
+}
+
+test "signed addon installation remains machine-only and repository setup requires host authority" {
+    try std.testing.expect(!allowsRoute(.session, "/addons/add", "POST", ""));
+    try std.testing.expect(!allowsRoute(.admin_session, "/addons/install", "POST", ""));
+    try std.testing.expect(allowsRoute(.machine, "/addons/install", "POST", ""));
 }

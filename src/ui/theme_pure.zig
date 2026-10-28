@@ -43,6 +43,79 @@ test "Skeleton reduced motion stays stable without requesting animation frames" 
     }
 }
 
+// ── Color math (WCAG 2.x) — shared by theme.zig's comptime palette gate and
+// components.zig's state-color mixing so the tested logic is the shipped one.
+
+pub const Rgb = struct { r: u8, g: u8, b: u8 };
+
+/// WCAG minimums: body/caption text, and non-text UI (icons, focus rings).
+pub const min_text: f64 = 4.5;
+pub const min_ui: f64 = 3.0;
+
+fn linearChannel(v: u8) f64 {
+    const c = @as(f64, @floatFromInt(v)) / 255.0;
+    return if (c <= 0.04045) c / 12.92 else std.math.pow(f64, (c + 0.055) / 1.055, 2.4);
+}
+
+pub fn relativeLuminance(c: Rgb) f64 {
+    return 0.2126 * linearChannel(c.r) + 0.7152 * linearChannel(c.g) + 0.0722 * linearChannel(c.b);
+}
+
+pub fn contrastRatio(a: Rgb, b: Rgb) f64 {
+    const la = relativeLuminance(a);
+    const lb = relativeLuminance(b);
+    return (@max(la, lb) + 0.05) / (@min(la, lb) + 0.05);
+}
+
+/// Linear blend of one 8-bit channel, t clamped to [0,1].
+pub fn mixChannel(a: u8, b: u8, t_raw: f32) u8 {
+    const t = std.math.clamp(t_raw, 0, 1);
+    const fa: f32 = @floatFromInt(a);
+    const fb: f32 = @floatFromInt(b);
+    return @intFromFloat(@round(fa + (fb - fa) * t));
+}
+
+/// Comptime gate used by theme.zig: fail the build on an unreadable pair.
+pub fn assertContrast(fg: Rgb, bg: Rgb, min: f64) void {
+    if (contrastRatio(fg, bg) < min) @compileError(std.fmt.comptimePrint(
+        "theme contrast {d:.2}:1 < {d:.1}:1 for fg {any} on bg {any}",
+        .{ contrastRatio(fg, bg), min, fg, bg },
+    ));
+}
+
+/// Surface ladder must strictly brighten at every step.
+pub fn assertLadder(steps: []const Rgb) void {
+    var i: usize = 1;
+    while (i < steps.len) : (i += 1) {
+        if (!(relativeLuminance(steps[i]) > relativeLuminance(steps[i - 1])))
+            @compileError(std.fmt.comptimePrint("theme surface ladder not increasing at step {d}", .{i}));
+    }
+}
+
+test "contrastRatio matches WCAG reference values" {
+    const black = Rgb{ .r = 0, .g = 0, .b = 0 };
+    const white = Rgb{ .r = 255, .g = 255, .b = 255 };
+    try std.testing.expectApproxEqAbs(@as(f64, 21.0), contrastRatio(black, white), 1e-6);
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), contrastRatio(white, white), 1e-9);
+    // Symmetric.
+    const grey = Rgb{ .r = 118, .g = 118, .b = 118 }; // ~4.54:1 on white
+    try std.testing.expectApproxEqAbs(contrastRatio(grey, white), contrastRatio(white, grey), 1e-12);
+    try std.testing.expect(contrastRatio(grey, white) > 4.5 and contrastRatio(grey, white) < 4.6);
+}
+
+test "regression: old solarized dark ink on muted orange was below AA" {
+    // 160,85,50 accent with base03 ink measures 2.75:1 — the gate must catch it.
+    try std.testing.expect(contrastRatio(.{ .r = 0, .g = 43, .b = 54 }, .{ .r = 160, .g = 85, .b = 50 }) < min_text);
+}
+
+test "mixChannel endpoints, midpoint and clamp" {
+    try std.testing.expectEqual(@as(u8, 10), mixChannel(10, 200, 0));
+    try std.testing.expectEqual(@as(u8, 200), mixChannel(10, 200, 1));
+    try std.testing.expectEqual(@as(u8, 105), mixChannel(10, 200, 0.5));
+    try std.testing.expectEqual(@as(u8, 200), mixChannel(10, 200, 7));
+    try std.testing.expectEqual(@as(u8, 10), mixChannel(10, 200, -1));
+}
+
 /// Line-height in pixels for a font size + ratio (e.g. 1.4).
 pub fn lineHeightPx(size_px: f32, ratio: f32) f32 {
     return size_px * ratio;

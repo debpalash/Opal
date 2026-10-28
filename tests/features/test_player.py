@@ -1038,6 +1038,12 @@ def test_anime_skip():
     pl = _src("src/player/player.zig")
     an = _src("src/services/anime.zig")
     ft = _src("src/ui/footer.zig")
+    # Perception (7.2) moved seeking/toast/decision into one shared skip
+    # machinery (anime-skip API > chapters > fingerprints); anime_skip now only
+    # fetches + publishes segments into it.
+    sk = _src("src/services/skip_segments.zig")
+    sp = _src("src/services/skip_policy_pure.zig")
+    ov = _src("src/ui/skip_overlay.zig")
     checks = {
         # Pure module registered + routed (tested logic IS shipped logic).
         "pure module in build.zig": "anime_skip_pure.zig" in bz,
@@ -1047,14 +1053,15 @@ def test_anime_skip():
                                            and "pub fn shouldSkip" in pure),
         "point->range conversion routed": "buildSkipSegments(" in svc,
         "parse routed": "parseResponse(" in svc,
-        "shouldSkip routed": "shouldSkip(" in svc,
+        "skip decision routed through pure policy": "policy." in sk and "pub fn decide" in sp,
+        "anime segments feed shared machinery": "anime_skip.snapshot(" in sk and "pub fn snapshot" in svc,
         # Service hits the exact API contract.
         "graphql endpoint": "api.anime-skip.com/graphql" in svc,
         "X-Client-ID header": "X-Client-ID" in svc,
         "findEpisodeByName query": "findEpisodeByName" in pure,
         # Seek reuses the player's absolute-seek path + shows a toast.
-        "seek absolute path": "absolute" in svc and "mpv_command_string" in svc,
-        "skip toast": "Skipped" in svc,
+        "seek absolute path": "absolute" in sk and "mpv_command_string" in sk,
+        "skip toast": "Skipped" in sk,
         # Config keys persisted (save + load) — mirrors sponsorblock.
         "state master + per-type bools": ("anime_skip_enabled" in st
                                           and "anime_skip_intro" in st
@@ -1069,11 +1076,11 @@ def test_anime_skip():
         "defaults credits+preview off": ("anime_skip_credits: bool = false" in st
                                         and "anime_skip_preview: bool = false" in st),
         # Settings UI section with master + per-type toggles.
-        "settings section": "Anime Skip" in setg and "anime-skip.com" in setg,
-        "settings toggles": ("&state.app.anime_skip_enabled" in setg
-                            and "&state.app.anime_skip_intro" in setg),
+        "settings section": "Skip Intros & Credits" in setg and "anime-skip.com" in setg,
+        "settings mode + per-type toggles": ("state.app.skip_mode" in setg
+                                            and "&state.app.anime_skip_intro" in setg),
         # tick() wired into the frame loop.
-        "tick wired in main loop": "anime_skip.zig\").tick()" in _src("src/application/playback_update.zig") and 'application/playback_update.zig").tick();' in mn,
+        "tick wired in main loop": "skip_segments.zig\").tick()" in _src("src/application/playback_update.zig") and 'application/playback_update.zig").tick();' in mn,
         # Anime-only gating: per-player arm consumed on file load, set by anime.
         "per-player gating flag": "anime_skip_active" in pl,
         "arm consumed on load": "onFileLoad(self)" in pl,
@@ -1081,10 +1088,10 @@ def test_anime_skip():
         # Manual "Skip" affordance in the control bar — appears only inside a
         # known segment (currentSkippable) and seeks past it (skipNow), routed
         # through the pure type->label mapping.
-        "pure exports skip button label": "pub fn skipButtonLabel" in pure,
-        "footer offers manual skip": ("anime_skip.currentSkippable()" in ft
-                                      and "anime_skip.skipNow()" in ft),
-        "footer label routed through pure": "skipButtonLabel(" in ft,
+        "pure exports skip button label": "pub fn buttonLabel" in sp,
+        "overlay + footer offer manual skip": ("skip_segments.current()" in ov and "skip_segments.requestSkip()" in ov
+                                               and "skip_segments.requestSkip()" in ft),
+        "footer label routed through pure": "skip_policy.buttonLabel(" in ft,
     }
     bad = [k for k, v in checks.items() if not v]
     if bad:
@@ -1789,7 +1796,9 @@ def self_hosted_playback_version_fallback():
     plex_play = _between(plex, "pub fn playPart(", "pub fn resumePlayback(")
     checks = {
         "typed fallback request": "fallback_url: []const u8" in load,
-        "play seam forwards fallback": ".fallback_url = request.fallback_url" in browser,
+        "play seam forwards health-ordered fallback": "request.url, request.fallback_url, request.fallback_url_2" in browser
+            and ".fallback_url = candidates[order[1]]" in browser
+            and ".fallback_url_2 = candidates[order[2]]" in browser,
         "fallback lifecycle is pure and tested": "pub const State = struct" in fallback
             and "takeOnFailure" in fallback and "playbackStarted" in fallback,
         "fallback is one-shot before visible error": "takeOnFailure()" in player

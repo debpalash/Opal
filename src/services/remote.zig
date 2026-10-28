@@ -809,6 +809,12 @@ fn browserBodyGate(head: []const u8) usize {
         const principal = principalForBearer(bearer) orelse return 0;
         return if (principal == .browser) remote_body_pure.GROW_MAX_RESULT else 0;
     }
+    // A peer pushing library sync rows (ROADMAP 6.3): host principals only.
+    const sync_route = "POST /api/library/sync";
+    if (std.mem.startsWith(u8, head, sync_route) and head.len > sync_route.len and (head[sync_route.len] == ' ' or head[sync_route.len] == '?')) {
+        const principal = principalForBearer(bearer) orelse return 0;
+        return if (principal == .machine or principal == .admin_session) remote_body_pure.GROW_MAX_BODY else 0;
+    }
     const route = for ([_][]const u8{ "POST /api/browser/media", "POST /api/browser/page", "POST /api/browser/tabs" }) |r| {
         if (std.mem.startsWith(u8, head, r)) break r;
     } else return 0;
@@ -959,6 +965,11 @@ fn handleRequest(stream: std.Io.net.Stream, client_key: u64) !void {
         }
         return;
     }
+
+    // Continuum stream fetches carrying a signed per-session token in the path
+    // (a TV / peer Opal without the account token). Untokenized stream paths
+    // fall through to normal API auth below.
+    if (@import("stream_session.zig").handlePublic(stream, method, path, request)) return;
 
     // Browser pairing is the other unauthenticated data route: it is how an
     // extension obtains its token. Code-gated, loopback-only, and rate limited
@@ -1248,6 +1259,13 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
     if (@import("remote_library_api.zig").handle(stream, method, api_path, query)) return;
     if (@import("remote_collections_api.zig").handle(stream, method, api_path, query)) return;
     if (@import("remote_local_library_api.zig").handle(stream, method, api_path, query, body)) return;
+    if (@import("moments.zig").handle(stream, method, api_path, query, body)) return;
+    if (@import("addon_repositories.zig").handle(stream, method, api_path, query, body)) return;
+    if (@import("remote_recall_api.zig").handle(stream, method, api_path, query, body)) return;
+    if (@import("remote_library_sync_api.zig").handle(stream, method, api_path, query, body)) return;
+    if (@import("remote_profiles_api.zig").handle(stream, method, api_path, query, body)) return;
+    if (@import("stream_session.zig").handleApi(stream, method, api_path, query, body, request)) return;
+    if (@import("handoff.zig").handleApi(stream, method, api_path, query, body, request)) return;
     if (@import("remote_plex_api.zig").handle(stream, method, api_path, query)) return;
     if (@import("remote_wanted_api.zig").handle(stream, method, api_path, query)) return;
     if (@import("remote_agent_tasks_api.zig").handle(stream, method, api_path, query, body)) return;
@@ -4160,8 +4178,9 @@ fn apiUnifiedResolverSearch(stream: std.Io.net.Stream, query: []const u8) void {
     }
 
     // Each bounded row fits even if every string byte becomes a six-byte JSON
-    // escape. Encoding stays off the connection stack and never drops rows.
-    const json_buf = allocator.alloc(u8, @as(usize, count) * 16000 + 8192) catch {
+    // escape (+2048 for up to three 96-byte source labels). Encoding stays off
+    // the connection stack and never drops rows.
+    const json_buf = allocator.alloc(u8, @as(usize, count) * 18048 + 8192) catch {
         sendJsonStatus(stream, "503 Service Unavailable", "{\"error\":\"search response unavailable\"}");
         return;
     };
@@ -4212,7 +4231,18 @@ fn apiUnifiedResolverSearch(stream: std.Io.net.Stream, query: []const u8) void {
             escJsonWrite(&w, item.catalog_imdb[0..@min(item.catalog_imdb_len, item.catalog_imdb.len)]);
             w.writeAll("\"") catch return;
         }
-        w.print(",\"key\":\"{x}\",\"queueable\":{s}}}", .{
+        // Folded renditions (pushInto) as pickable sources. Labels only — the
+        // URLs are private transport; /unified_search/play?source=<index> picks.
+        const n_sources = resolver.sourceCount(item);
+        w.print(",\"source_count\":{d},\"sources\":[", .{n_sources}) catch return;
+        if (n_sources > 1) for (0..n_sources) |si| {
+            if (si > 0) w.writeAll(",") catch return;
+            w.writeAll("{\"label\":\"") catch return;
+            const label = @import("resolver_dedup_pure.zig").sourceLabel(resolver.sourceUrl(item, si));
+            escJsonWrite(&w, txt.safeUtf8(label[0..@min(label.len, 96)]));
+            w.print("\",\"index\":{d}}}", .{si}) catch return;
+        };
+        w.print("],\"key\":\"{x}\",\"queueable\":{s}}}", .{
             resolver.actionKey(item), if (resolver.isRemoteQueueable(item)) "true" else "false",
         }) catch return;
     }
@@ -4300,7 +4330,12 @@ fn apiUnifiedSearchAction(
         sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"invalid result key\"}");
         return;
     };
-    switch (resolver.requestRemoteAction(generation, key, kind)) {
+    // Optional folded-source pick (see "sources" in /unified_search); 0 = primary.
+    const pick = std.fmt.parseInt(usize, getQueryParam(query, "source") orelse "0", 10) catch {
+        sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"invalid source\"}");
+        return;
+    };
+    switch (resolver.requestRemoteAction(generation, key, kind, pick)) {
         .accepted => sendJson(stream, "{\"ok\":true}"),
         .stale => sendJsonStatus(stream, "409 Conflict", "{\"error\":\"search results changed; refresh and retry\"}"),
         .not_found => sendJsonStatus(stream, "404 Not Found", "{\"error\":\"result is unavailable\"}"),
@@ -4529,7 +4564,9 @@ fn writeSubtitleDiscovery(w: *std.Io.Writer) void {
         if (auto_subs.in_progress.load(.acquire)) "true" else "false",
     }) catch return;
     escJsonWrite(w, txt.safeUtf8(generated.text[0..generated.len]));
-    w.writeAll("\"}}") catch return;
+    w.writeAll("\"},") catch return;
+    @import("babel.zig").writeStatusJson(w); // live captions + translation
+    w.writeAll("}") catch return;
 }
 
 /// A single rich player snapshot. This is the deep interface for every browser
@@ -4614,7 +4651,10 @@ fn apiPlayerSnapshot(stream: std.Io.net.Stream, ap: *player.MediaPlayer, players
     escJsonWrite(&w, txt.safeUtf8(active_device));
     w.writeAll("\",\"error\":\"") catch return;
     escJsonWrite(&w, load_error);
-    w.print("\",\"retryable\":{s}}},\"chapters\":[", .{if (retryable) "true" else "false"}) catch return;
+    w.print("\",\"retryable\":{s}}},\"skip\":", .{if (retryable) "true" else "false"}) catch return;
+    // Current intro/credits segment (null outside one) — see skip_segments.
+    @import("skip_segments.zig").writeJson(&w);
+    w.writeAll(",\"chapters\":[") catch return;
     writePlayerChapters(&w, ap, chapter_count, chapter);
     w.writeAll("],\"tracks\":{\"audio\":[") catch return;
     writePlayerTracks(&w, ap, "audio");
@@ -4746,6 +4786,19 @@ fn apiPlayerAction(stream: std.Io.net.Stream, ap: *player.MediaPlayer, query: []
             }
             auto_subs.transcribeCurrent();
         },
+        .live_captions => |on| @import("live_captions.zig").setEnabled(on),
+        .subtitle_translate => {
+            const translate = @import("translate.zig");
+            if (translate.in_progress.load(.acquire)) {
+                if (players_locked.*) {
+                    players_locked.* = false;
+                    state.players_mutex.unlock();
+                }
+                sendJsonStatus(stream, "409 Conflict", "{\"error\":\"subtitle translation already running\"}");
+                return;
+            }
+            translate.requestActiveTrack();
+        },
         .aspect => |v| _ = c.mpv.mpv_set_property_string(ap.mpv_ctx, "video-aspect-override", v.mpvValue().ptr),
         .subtitle_delay => |v| setPlayerDouble(ap, "sub-delay", v),
         .zoom => |v| setPlayerDouble(ap, "video-zoom", v),
@@ -4795,6 +4848,8 @@ fn apiPlayerAction(stream: std.Io.net.Stream, ap: *player.MediaPlayer, query: []
         .frame_previous => _ = c.mpv.mpv_command_string(ap.mpv_ctx, "frame-back-step"),
         .frame_next => _ = c.mpv.mpv_command_string(ap.mpv_ctx, "frame-step"),
         .screenshot => _ = c.mpv.mpv_command_string(ap.mpv_ctx, "screenshot"),
+        // Executed on the owner thread by skip_segments.tick().
+        .skip_segment => @import("skip_segments.zig").requestSkip(),
         .loop_a => ap.setLoopA(),
         .loop_b => ap.setLoopB(),
         .loop_clear => ap.clearLoop(),

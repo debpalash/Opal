@@ -1085,25 +1085,14 @@ fn enqueueBrowserDownload(url: []const u8, filename: []const u8) void {
         fn worker() void {
             const Z = @This();
             defer Z.busy.store(false, .release);
-            var child = io_g.Child.init(&.{
-                "curl",       "-L",  "--fail", "--silent",                "--show-error",
-                "--max-time", "600", "-o",     Z.path_buf[0..Z.path_len], Z.url_buf[0..Z.url_len],
-            }, alloc);
-            child.stdin_behavior = .Ignore;
-            child.stdout_behavior = .Ignore;
-            child.stderr_behavior = .Ignore;
-            _ = child.spawn() catch {
+            // Reliable-fetch seam: status-checked, atomic temp+rename, so a
+            // failed/partial transfer never leaves a corrupt file behind.
+            const res = @import("reliable_fetch.zig").download(Z.url_buf[0..Z.url_len], Z.path_buf[0..Z.path_len], .{ .timeout_secs = 600 });
+            if (res.failure == .spawn) {
                 logs.pushLog("error", "browser", "Download failed to start (curl missing?)", false);
                 return;
-            };
-            const term = child.wait() catch {
-                logs.pushLog("error", "browser", "Download failed", false);
-                return;
-            };
-            const ok = switch (term) {
-                .exited => |code| code == 0,
-                else => false,
-            };
+            }
+            const ok = res.ok();
             var mb: [320]u8 = undefined;
             const msg = std.fmt.bufPrint(&mb, "{s}: {s}", .{
                 if (ok) "Download finished" else "Download failed",
@@ -1569,12 +1558,12 @@ pub fn renderContent() void {
             .expand = .horizontal,
             .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
             .background = true,
-            .color_fill = dvui.Color{ .r = 18, .g = 18, .b = 22, .a = 245 },
+            .color_fill = theme.colors.bg_surface,
         });
         defer url_row.deinit();
 
         const icon_btn_style = dvui.Options{
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_text = theme.colors.text_secondary,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 3, .y = 2, .w = 3, .h = 2 },
@@ -1622,8 +1611,8 @@ pub fn renderContent() void {
         te.init(@src(), .{ .text = .{ .buffer = &b.url_buf } }, .{
             .expand = .horizontal,
             .min_size_content = .{ .w = 200, .h = 18 },
-            .color_fill = dvui.Color{ .r = 28, .g = 28, .b = 34, .a = 255 },
-            .color_border = dvui.Color{ .r = 50, .g = 50, .b = 60, .a = 200 },
+            .color_fill = theme.colors.bg_elevated,
+            .color_border = theme.colors.border_strong,
             .color_text = theme.colors.text_primary,
             .border = dvui.Rect.all(1),
             .corner_radius = theme.dims.rad_xl,
@@ -1790,7 +1779,7 @@ pub fn renderContent() void {
             .expand = .horizontal,
             .padding = .{ .x = 6, .y = 3, .w = 6, .h = 3 },
             .background = true,
-            .color_fill = dvui.Color{ .r = 22, .g = 22, .b = 28, .a = 255 },
+            .color_fill = theme.colors.bg_surface,
         });
         defer frow.deinit();
 
@@ -1803,10 +1792,10 @@ pub fn renderContent() void {
 
         var fte = dvui.textEntry(@src(), .{ .text = .{ .buffer = &find_buf }, .placeholder = "Find in page…" }, .{
             .min_size_content = .{ .w = 260, .h = 16 },
-            .color_fill = dvui.Color{ .r = 28, .g = 28, .b = 34, .a = 255 },
+            .color_fill = theme.colors.bg_elevated,
             .color_text = theme.colors.text_primary,
             .border = dvui.Rect.all(1),
-            .color_border = dvui.Color{ .r = 50, .g = 50, .b = 60, .a = 200 },
+            .color_border = theme.colors.border_strong,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
             .gravity_y = 0.5,
@@ -1818,7 +1807,7 @@ pub fn renderContent() void {
         fte.deinit();
 
         const nav_btn_style = dvui.Options{
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_text = theme.colors.text_secondary,
             .corner_radius = theme.dims.rad_sm,
             .padding = .{ .x = 3, .y = 2, .w = 3, .h = 2 },
@@ -1869,7 +1858,7 @@ pub fn renderContent() void {
             .color_text = theme.colors.text_primary,
             .padding = .{ .x = 8, .y = 2, .w = 8, .h = 2 },
             .background = true,
-            .color_fill = dvui.Color{ .r = 22, .g = 22, .b = 28, .a = 255 },
+            .color_fill = theme.colors.bg_surface,
             .expand = .horizontal,
         });
     }
@@ -1896,7 +1885,7 @@ pub fn renderContent() void {
         var img_box = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .both,
             .background = true,
-            .color_fill = dvui.Color{ .r = 12, .g = 12, .b = 16, .a = 255 },
+            .color_fill = theme.colors.bg_deep,
         });
         defer img_box.deinit();
 
@@ -2027,7 +2016,7 @@ pub fn renderContent() void {
         var empty = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .both,
             .background = true,
-            .color_fill = dvui.Color{ .r = 12, .g = 12, .b = 16, .a = 255 },
+            .color_fill = theme.colors.bg_deep,
             .padding = .{ .x = 0, .y = 12, .w = 0, .h = 0 },
         });
         defer empty.deinit();
@@ -2073,7 +2062,7 @@ pub fn renderContent() void {
         });
         _ = dvui.label(@src(), "Videos auto-route to MPV · Comics to viewer · Web to browser", .{}, .{
             .id_extra = 7,
-            .color_text = dvui.Color{ .r = 60, .g = 70, .b = 90, .a = 255 },
+            .color_text = theme.colors.text_tertiary,
             .gravity_x = 0.5,
         });
 
@@ -2194,7 +2183,7 @@ fn renderBookmarksSection() void {
         if (dvui.button(@src(), safe_disp, .{}, .{
             .id_extra = bi + 31,
             .gravity_x = 0.5,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_text = theme.colors.warning,
             .border = dvui.Rect.all(0),
@@ -2248,7 +2237,7 @@ fn renderQuickLaunch(b: *@TypeOf(state.app.browser)) void {
         if (dvui.button(@src(), safe_disp, .{}, .{
             .id_extra = shown + 41,
             .gravity_x = 0.5,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_text = theme.colors.text_secondary,
             .border = dvui.Rect.all(0),
@@ -2290,7 +2279,7 @@ fn renderReaderOverlay() void {
     var box = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
         .background = true,
-        .color_fill = dvui.Color{ .r = 14, .g = 14, .b = 18, .a = 255 },
+        .color_fill = theme.colors.bg_app,
     });
     defer box.deinit();
 
@@ -2308,7 +2297,7 @@ fn renderReaderOverlay() void {
         spacer.deinit();
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.x, .{}, .{}, .{
             .id_extra = 140,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
             .color_text = theme.colors.text_secondary,
@@ -2702,13 +2691,25 @@ pub fn playDirect(request: PlaybackRequest) void {
     }
 
     const link_health = @import("link_health.zig");
-    const health_kind = link_health.pure.playbackKind(request.health_kind, request.url);
-    if (health_kind.len > 0) link_health.probe(health_kind, request.url);
+    const candidates = [_][]const u8{ request.url, request.fallback_url, request.fallback_url_2 };
+    var statuses = [_]link_health.Status{.unknown} ** 3;
+    var present = [_]bool{false} ** 3;
+    // Header-dependent streams cannot use an anonymous probe's verdict.
+    const anonymous = request.headers.len == 0 and request.prepared_header_fields.len == 0 and request.user_agent.len == 0;
+    for (candidates, 0..) |url, i| {
+        present[i] = url.len > 0;
+        if (!present[i] or !anonymous) continue;
+        const kind = link_health.pure.playbackKind(request.health_kind, url);
+        if (kind.len == 0) continue;
+        statuses[i] = link_health.statusOf(kind, url);
+        link_health.probe(kind, url);
+    }
+    const order = link_health.pure.orderedCandidates(statuses, present);
 
     p.load(.{
-        .url = request.url,
-        .fallback_url = request.fallback_url,
-        .fallback_url_2 = request.fallback_url_2,
+        .url = candidates[order[0]],
+        .fallback_url = candidates[order[1]],
+        .fallback_url_2 = candidates[order[2]],
         .mode = request.mode,
         .origin = request.origin,
         .queue_item_id = request.queue_item_id,

@@ -154,7 +154,7 @@ pub fn pickerOption(
     label: []const u8,
     selected: bool,
 ) bool {
-    const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
+    const transparent = theme.transparent;
     var hovered = false;
     var row = dvui.box(src, .{ .dir = .horizontal }, .{
         .id_extra = id_extra,
@@ -504,7 +504,7 @@ pub fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []con
         if (dvui.button(@src(), "Find subtitles online…", .{}, .{
             .id_extra = 990,
             .expand = .horizontal,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_text = theme.colors.accent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,

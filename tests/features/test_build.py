@@ -48,14 +48,17 @@ def test_live_fixture_port_collision_guard():
     return "pass", "real wildcard listener rejected; unused isolated port accepted"
 
 
+BUILD_TIMEOUT = 900 if os.environ.get("CI") else 300
+
+
 @test("Zig Build", "Build")
 def test_zig_build():
     try:
         result = subprocess.run(
             ["zig", "build"], cwd=PROJECT_DIR,
-            # Cold CI builds link the C++ torrent wrapper + the whole app; 120s
-            # was right at the edge and flaked. 300s leaves headroom.
-            capture_output=True, text=True, timeout=300
+            # Cold CI builds include the full native dependency graph and
+            # exceeded five minutes on macOS runners; keep a bounded CI budget.
+            capture_output=True, text=True, timeout=BUILD_TIMEOUT
         )
         if result.returncode == 0:
             binary = _built_binary()
@@ -65,7 +68,7 @@ def test_zig_build():
             return "pass", "Build succeeded"
         return "fail", result.stderr[:200]
     except subprocess.TimeoutExpired:
-        return "fail", "Build timed out (>300s)"
+        return "fail", f"Build timed out (>{BUILD_TIMEOUT}s)"
 
 
 @test("WebP prefix auto-detects Homebrew without OPAL_WEBP_PREFIX", "Build")
@@ -97,13 +100,13 @@ def test_webp_prefix_homebrew_fallback():
             # proves the absent ~/.local/opal-webp was skipped, not tolerated.
             bad = dict(env, OPAL_WEBP_PREFIX=os.path.join(home, "missing-webp"))
             neg = subprocess.run([zig, "build"], cwd=PROJECT_DIR, env=bad,
-                                 capture_output=True, text=True, timeout=300)
+                                 capture_output=True, text=True, timeout=BUILD_TIMEOUT)
             if neg.returncode == 0 or "prefix directory" not in neg.stderr:
                 return "fail", "control: a missing OPAL_WEBP_PREFIX should fail with 'unable to open prefix directory'"
             pos = subprocess.run([zig, "build"], cwd=PROJECT_DIR, env=env,
-                                 capture_output=True, text=True, timeout=300)
+                                 capture_output=True, text=True, timeout=BUILD_TIMEOUT)
     except subprocess.TimeoutExpired:
-        return "fail", "build timed out (>300s)"
+        return "fail", f"build timed out (>{BUILD_TIMEOUT}s)"
     if pos.returncode != 0:
         return "fail", pos.stderr[-600:]
     return "pass", f"built with no env var and no ~/.local/opal-webp via {brew[0]}"
@@ -291,15 +294,13 @@ def test_zig_unit():
 def test_fetchimage_curl():
     # REGRESSION — std.http (fetch()) silently returns NULL for some image CDNs,
     # notably cdn.myanimelist.net (every anime poster), so anime covers never
-    # loaded. fetchImage must shell out to curl (which fetches them fine).
+    # loaded. fetchImage must go through curl — now via the shared
+    # reliable-fetch seam (bounded tree, shutdown cancel, status check).
     h = _src("src/core/http.zig")
     fn = _between(h, "pub fn fetchImage", "\n}")
-    # The process may be owned directly or through bounded_process; both still
-    # execute curl. The bounded seam additionally cancels it during shutdown.
-    owns_curl = "io_global.Child" in fn or "bounded.StreamProcess" in fn
-    if '"curl"' in fn and owns_curl:
-        return "pass", "fetchImage fetches images via bounded curl (MAL CDN + TMDB both work)"
-    return "fail", "fetchImage still routes images through std.http (anime posters return NULL)"
+    if "reliable_fetch.zig" in fn and ".connect_timeout_secs = 3" in fn and "std.http" not in fn:
+        return "pass", "fetchImage fetches images via the reliable-fetch curl seam (MAL CDN + TMDB both work)"
+    return "fail", "fetchImage no longer routes images through the curl seam (anime posters return NULL)"
 
 
 @test("YouTube playback uses a libmpv-compatible client", "Network")
@@ -371,7 +372,8 @@ def test_anime_jikan_resilience():
             and "added == 0 and job.fallback_len > 0" in an
             and "search_request.current() == my_gen" in an
             and "jikanGet(fb, buf, my_gen)" in an,
-        "anime curls bound connect time": an.count('"--connect-timeout"') >= 1,
+        "anime curls bound connect time": "reliable_fetch.fetch(" in an
+            and '"--connect-timeout"' in _src("src/services/reliable_fetch_pure.zig"),
     }
     bad = [k for k, v in checks.items() if not v]
     if bad:
@@ -393,15 +395,95 @@ def test_startup_prefetch():
     return "fail", "startup route warm-up not wired in coreInit"
 
 
+@test("Migrated fetchers use reliable-fetch, not raw curl", "Network")
+def test_reliable_fetch_migration():
+    # v2 reliability: callers moved onto the shared seam must not regress to
+    # a hand-rolled curl argv (loses DPI proxy, typed failures, status check).
+    migrated = ["tvmaze", "omdb", "tv_calendar", "eztv_calendar", "anime_schedule", "vndb", "rss", "stremio", "mihon",
+                "ai_tools", "anime", "projectjav", "plugins", "drama", "../player/subtitles",
+                # seam v3: secrets over stdin config, body-from-file, multipart,
+                # atomic download(), keep-head-on-overflow.
+                "anilist", "trakt", "simkl", "subtitles", "opds", "comics", "tmdb_api",
+                "co_watch", "ai_memory", "lang_learn", "voice_backend", "browser", "scripts",
+                "ytdlp", "voice_setup", "ai_server", "ai_voice", "suwayomi_server", "search",
+                # seam v4: streaming (SSE chat), updater, core deps/http.
+                "ai_context", "updater", "../core/deps", "../core/http"]
+    bad = [m for m in migrated
+           if '"curl"' in _src(f"src/services/{m}.zig")
+           or "reliable_fetch.zig" not in _src(f"src/services/{m}.zig")]
+    if bad:
+        return "fail", "not on reliable-fetch: " + ", ".join(bad)
+    return "pass", "migrated: " + ", ".join(migrated)
+
+
+@test("Reliable-fetch keeps secrets and bodies off argv", "Network")
+def test_reliable_fetch_secret_seam():
+    # Credentials ride curl's stdin config (`--config -`), large/binary bodies
+    # upload from a file, downloads are atomic + status-checked. Pure builders
+    # are unit-tested in reliable_fetch_pure.zig; this guards the wiring.
+    seam = _src("src/services/reliable_fetch.zig")
+    pure = _src("src/services/reliable_fetch_pure.zig")
+    checks = {
+        "config stdin argv": '"--config"' in pure and "config_stdin" in pure,
+        "config escaper": "pub fn buildConfig" in pure and '"data-raw"' in pure,
+        "stdin fed + closed": "fn feedConfig" in seam and "closeStdin()" in seam,
+        "atomic download": "pub fn download(" in seam and "Dir.rename(" in seam and "downloadTempPath" in seam,
+        "keep head": "keep_head_on_overflow" in seam and "pure.parseHead(" in seam,
+        "anilist token": "secret_headers" in _src("src/services/anilist.zig"),
+        "trakt secrets": "secret_post_body" in _src("src/services/trakt.zig") and "secret_headers" in _src("src/services/trakt.zig"),
+        "simkl token": "secret_headers" in _src("src/services/simkl.zig"),
+        "opensubtitles key": "secret_headers" in _src("src/services/subtitles.zig"),
+        "subdl key url": "secret_url = true" in _src("src/services/subtitles.zig"),
+        "opds auth": "secret_headers" in _src("src/services/opds.zig"),
+        "comics auth": "secret_headers" in _src("src/services/comics.zig"),
+        "tmdb key": "secret_headers" in _src("src/services/tmdb_api.zig") and "secret_url" in _src("src/services/tmdb_api.zig"),
+        "wav from file": "post_body_file = wav_path" in _src("src/services/lang_learn.zig"),
+        "search keeps head": "keep_head_on_overflow = true" in _src("src/services/search.zig"),
+        "stream api": "pub fn stream(" in seam and "spec.no_buffer = true" in seam
+        and "abort_flag" in seam and "pure.LineDecoder" in seam,
+        "no-buffer argv": '"-N"' in pure and "pub fn sseData" in pure,
+        "ai chat secrets on stdin": "secret_post_body = json_str" in _src("src/services/ai_context.zig")
+        and "secret_headers" in _src("src/services/ai_context.zig")
+        and "abort_flag = &chat.gen_abort" in _src("src/services/ai_context.zig"),
+        "curl_secret retired": not os.path.exists(os.path.join(PROJECT_DIR, "src/core/curl_secret.zig")),
+        "updater atomic+https": "reliable_fetch.download(" in _src("src/services/updater.zig")
+        and "https_only = true" in _src("src/services/updater.zig")
+        and "verifyReleaseChecksum(dmg_path" in _src("src/services/updater.zig"),
+        "model downloads atomic+https": "reliable_fetch.zig\").download(" in _src("src/core/deps.zig")
+        and "https_only = true" in _src("src/core/deps.zig")
+        and "downloadedFileMatches(stage_path" in _src("src/core/deps.zig"),
+    }
+    bad = [k for k, v in checks.items() if not v]
+    if bad:
+        return "fail", "seam gaps: " + ", ".join(bad)
+    return "pass", f"{len(checks)} secret/body/download routings on the seam"
+
+
+@test("Migrated text fetchers keep the head of oversized bodies", "Network")
+def test_reliable_fetch_keep_head():
+    # Regression: pre-seam callers read the first N bytes of an oversized body
+    # (e.g. a >512 KB RSS feed still parsed). fetch() fails on overflow unless
+    # keep_head_on_overflow is set, which silently emptied those features.
+    files = ["rss", "eztv_calendar", "anime_schedule", "stremio", "mihon", "tvmaze",
+             "omdb", "drama", "projectjav", "opds", "comics", "anime", "search",
+             "co_watch", "ai_memory", "lang_learn"]
+    bad = [f for f in files if "keep_head_on_overflow = true" not in _src(f"src/services/{f}.zig")]
+    if bad:
+        return "fail", "head of oversized body dropped in: " + ", ".join(bad)
+    return "pass", f"{len(files)} text fetchers keep the head; images stay strict"
+
+
 @test("Content fetchers bound connect time", "Network")
 def test_curl_connect_timeout():
     # PERF/hang guard — a black-holed source used to stall a whole route for
     # the full --max-time (× retries × http/https fallback ≈ 70s). Every curl
     # content fetcher must pass --connect-timeout so a dead host fails fast.
     checks = {
-        "tmdb": '"--connect-timeout"' in _src("src/services/tmdb_api.zig"),
-        "calendar": '"--connect-timeout"' in _src("src/services/tv_calendar.zig"),
-        "tvmaze": '"--connect-timeout"' in _src("src/services/tvmaze.zig"),
+        "tmdb": ".connect_timeout_secs = 3" in _src("src/services/tmdb_api.zig")
+        and '"--connect-timeout"' in _src("src/services/reliable_fetch_pure.zig"),
+        "calendar": "reliable_fetch.zig" in _src("src/services/tv_calendar.zig"),
+        "tvmaze": "reliable_fetch.zig" in _src("src/services/tvmaze.zig")
+        and '"--connect-timeout"' in _src("src/services/reliable_fetch_pure.zig"),
         # Plex uses the native shared client rather than curl.
         "plex": '.timeout_secs = 15' in _src("src/services/plex.zig"),
         "podcasts": (

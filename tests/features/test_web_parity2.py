@@ -151,15 +151,16 @@ def test_opds_curl_fetch():
         "native transport first": '@import("../core/http.zig").fetch(url, buffer' in op,
         "native basic auth": ".auth_header = auth" in op,
         "native response cap": ".max_response = cap" in op,
-        "supervised fallback": "StreamProcess.init" in op,
-        "follows redirects": '"-fsSL"' in op,
-        "bounded timeout and output": '"--max-time"' in op and ".max_output_bytes = cap" in op,
+        # Fallback = reliable-fetch seam (supervised StreamProcess, -L, bounded).
+        "supervised fallback": 'reliable_fetch.zig").fetch(url, buffer' in op,
+        "follows redirects": "follow_redirects = false" not in op,
+        "bounded timeout and output": ".timeout_secs = seconds" in op and "alloc.alloc(u8, cap)" in op,
         "cancellable request": ".cancel_epoch = cancellation" in op,
         "basic auth preserved privately": "pure.basicAuthHeader(user, pass, &auth_buf)" in op
-            and '"--config"' in op and '"-"' in op
-            and 'curl_secret.zig").configLine' in op
-            and ".stdin_behavior = .Pipe" in op and "process.child.closeStdin()" in op,
-        "atom accept header": "Accept: application/atom+xml" in op,
+            and ".secret_headers = secret[0..secret_n]" in op
+            and '"--config"' in _src("src/services/reliable_fetch_pure.zig")
+            and "fn feedConfig" in _src("src/services/reliable_fetch.zig"),
+        "atom accept header": '"application/atom+xml,application/xml"' in op,
     }
     missing = [k for k, ok in checks.items() if not ok]
     if missing:
@@ -218,10 +219,10 @@ def test_calendar_proxy_routing():
     # for these rails. Measured after the fix on a throttled link: 9/15 requests
     # succeeded direct, 15/15 through the sidecar.
     checks = {
-        "eztv calendar proxies": '@import("dpi_bypass.zig").proxyArgs()' in ez,
-        "tv calendar proxies": '@import("dpi_bypass.zig").proxyArgs()' in tv,
-        # URL must stay LAST in the argv, after any injected proxy flags.
-        "url appended last": ez.count("argv[argc] = url;") == 1 and tv.count("argv[argc] = url;") == 1,
+        # reliable-fetch chains dpi_bypass.proxyArgs() itself (opts.use_dpi_proxy
+        # defaults on) and keeps the URL last in the argv (reliable_fetch_pure).
+        "eztv calendar proxies": "reliable_fetch.zig" in ez and "use_dpi_proxy = false" not in ez,
+        "tv calendar proxies": "reliable_fetch.zig" in tv and "use_dpi_proxy = false" not in tv,
         # Same shape as the module that already did this correctly.
         "matches link_health pattern": 'reliable_fetch.request(' in lh,
     }

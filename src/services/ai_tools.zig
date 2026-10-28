@@ -29,7 +29,7 @@ pub const ToolCall = struct {
 pub const TOOL_SYSTEM_PROMPT =
     \\You are Opal, a voice-first media assistant. Be EXTREMELY brief (1 sentence max).
     \\
-    \\ROUTING: pause/resume/stop/volume/seek/speed → player_control. "play X" → find_and_play(action="play_best"). "search X" → find_and_play(action="search"). "what's playing" → player_info. "show downloads" → navigate. "youtube X" → youtube_search. "read comic/narrate/what page/read this page" → comic_control or comic_info.
+    \\ROUTING: pause/resume/stop/volume/seek/speed → player_control. "play X" → find_and_play(action="play_best"). "search X" → find_and_play(action="search"). "what's playing" → player_info. "show downloads" → navigate. "youtube X" → youtube_search. "read comic/narrate/what page/read this page" → comic_control or comic_info. "something in my library / unwatched / under 2 hours / like X" → recall_search. "the scene/part where …" → find_moment.
     \\
     \\RESPONSE FORMAT MUST BE JSON: {"message":"Your natural conversational reply here","tool_call":{"name":"tool","arguments":{...}}}
     \\If no tool needed: {"message":"Your natural conversational reply here","tool_call":null}
@@ -138,6 +138,10 @@ pub fn executeTool(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
         return executeLookAtScreen(alloc);
     } else if (std.mem.eql(u8, name, "recall_scene")) {
         return executeRecallScene(alloc, tc);
+    } else if (std.mem.eql(u8, name, "recall_search")) {
+        return @import("recall_tools.zig").recallSearch(alloc, extractStringArg(tc.args_json[0..tc.args_len], "query"));
+    } else if (std.mem.eql(u8, name, "find_moment")) {
+        return @import("recall_tools.zig").findMoment(alloc, extractStringArg(tc.args_json[0..tc.args_len], "query"));
     } else if (std.mem.eql(u8, name, "navigate")) {
         return executeNavigate(alloc, tc);
     } else if (std.mem.eql(u8, name, "queue_manage")) {
@@ -496,29 +500,18 @@ fn executeReadWebpage(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
     const jina_url = std.fmt.bufPrintZ(&jina_url_buf, "https://r.jina.ai/{s}", .{url}) catch
         return std.fmt.allocPrint(alloc, "URL too long", .{}) catch null;
 
-    // Execute curl in background
-    var child = @import("../core/io_global.zig").Child.init(
-        &.{ "curl", "-s", "--max-time", "10", "-H", "Accept: text/plain", jina_url },
-        alloc,
-    );
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    child.spawn() catch
-        return std.fmt.allocPrint(alloc, "Failed to fetch URL", .{}) catch null;
-
-    // Read up to MAX_TOOL_RESULT bytes of output
-    var result = alloc.alloc(u8, MAX_TOOL_RESULT) catch {
-        _ = child.wait() catch {};
-        return null;
-    };
-    const stdout = child.stdout.?;
-    var total: usize = 0;
-    while (total < MAX_TOOL_RESULT) {
-        const n = @import("../core/io_global.zig").read(stdout, result[total..]) catch break;
-        if (n == 0) break;
-        total += n;
-    }
-    _ = child.wait() catch {};
+    // Fetch via reliable-fetch into a heap scratch buffer (pages can be large),
+    // then keep the first MAX_TOOL_RESULT bytes like the old truncating read.
+    const scratch = alloc.alloc(u8, 2 * 1024 * 1024) catch return null;
+    defer alloc.free(scratch);
+    const body = @import("reliable_fetch.zig").fetch(jina_url, scratch, .{
+        .timeout_secs = 10,
+        .impersonate = false,
+        .headers = &.{.{ .name = "Accept", .value = "text/plain" }},
+    }) orelse "";
+    var result = alloc.alloc(u8, MAX_TOOL_RESULT) catch return null;
+    const total = @min(body.len, MAX_TOOL_RESULT);
+    @memcpy(result[0..total], body[0..total]);
 
     if (total == 0) {
         alloc.free(result);

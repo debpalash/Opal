@@ -206,6 +206,8 @@ pub const std_options: std.Options = .{ .logFn = dvui.App.logFn, .log_level = .w
 /// remote JSON API, and the background DB/library load thread. Nothing here
 /// reads dvui_win / state.app.dvui_win, so the window may be assigned after.
 pub fn coreInit() !void {
+    // Profile startup can log before any database/config workers run.
+    logs.logs_allocator = @import("core/alloc.zig").allocator;
     // The supervisor must accept work before any service/bootstrap helper can
     // spawn, and is drained before shared state in appDeinit.
     @import("core/workers.zig").init();
@@ -213,11 +215,13 @@ pub fn coreInit() !void {
     // One-time legacy rename: ~/.config/zigzag → ~/.config/opal (+ cache + the
     // db file). MUST run before any path is read. Idempotent.
     @import("core/paths.zig").migrateLegacyDir();
+    // Household profile: point paths at the running profile's data dir. MUST
+    // precede db.init (the background worker below) and every other path read.
+    @import("services/profiles.zig").initActive();
 
     // Runtime initialization (env vars can't be read at comptime)
     state.initPaths();
     state.loadTmdbTokenFromEnv();
-    logs.logs_allocator = @import("core/alloc.zig").allocator;
     detectResourceRoot();
 
     // mpv snapshots the yt-dlp executable while the player is initialized.
@@ -979,6 +983,8 @@ pub fn appDeinit() void {
     // All database users and the final config transaction are finished. Close
     // SQLite explicitly so WAL/checkpoint state and file handles are settled
     // before the allocator and process disappear.
+    @import("services/plugins.zig").deinitSignedUi();
+    @import("services/link_health.zig").deinit();
     @import("core/db.zig").deinit();
 
     // Release the process-global keep-alive HTTP client (pooled connections)
@@ -991,6 +997,8 @@ pub fn appDeinit() void {
     // Teardown is done; disarm the deadline before the leak dump, whose stack
     // symbolization can take seconds and was being cut off mid-report.
     workers.finishShutdown();
+    // Profile switch: everything above is closed; re-execute into the new profile.
+    @import("services/profiles.zig").restartAfterShutdown();
     // Trigger GeneralPurposeAllocator leak dump on exit
     @import("core/alloc.zig").deinit();
 }
@@ -1078,7 +1086,7 @@ fn renderSlashMenu() void {
         .stay_above_parent_window = false,
     }, .{
         .background = true,
-        .color_fill = dvui.Color{ .r = 14, .g = 14, .b = 20, .a = 248 },
+        .color_fill = theme.colors.bg_surface,
         .color_border = theme.colors.accent,
         .border = dvui.Rect.all(1),
         .corner_radius = dvui.Rect.all(10),
@@ -1112,7 +1120,7 @@ fn renderSlashMenu() void {
 
         if (dvui.button(@src(), cmd.key, .{}, .{
             .id_extra = i,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
             .color_text = theme.colors.accent,
@@ -1176,6 +1184,8 @@ fn appFrame() !dvui.App.Result {
     // The Windows client-side close button is rendered late in a frame and
     // leaves this latch for the next one.
     if (@import("ui/titlebar.zig").close_requested) return .close;
+    // Profile switch: quit normally; appDeinit re-executes into the new profile.
+    if (@import("services/profiles.zig").restartRequested()) return .close;
 
     // A true startup_frame_submitted means the preceding callback returned,
     // Window.end completed, and SDL_RenderPresent populated the hidden native
@@ -1203,6 +1213,7 @@ fn appFrame() !dvui.App.Result {
     @import("services/search.zig").updateGalleryRoute();
     @import("services/search.zig").drainMemorySearch();
     @import("services/auto_subs.zig").pollAttach();
+    @import("services/babel.zig").tick(); // live captions / translation / recaps
     @import("player/watch_history.zig").drainUi();
     @import("services/history.zig").drainDownloadHistoryUi();
 
@@ -1269,6 +1280,8 @@ fn appFrame() !dvui.App.Result {
     @import("services/torrent_intents.zig").restoreIfReady();
     @import("services/downloads.zig").tick();
     @import("services/wanted.zig").tick();
+    @import("services/library_sync.zig").tick();
+    @import("services/recall_index.zig").tick();
     @import("services/agent_tasks.zig").tick();
     @import("services/operator.zig").tick();
 
@@ -1438,6 +1451,8 @@ fn appFrame() !dvui.App.Result {
     }
 
     @import("services/forwarded_open.zig").drain();
+    // Continuum: play a received handoff, reap idle stream sessions.
+    @import("services/handoff.zig").tick();
 
     // Drain a deferred comic-load requested by the remote API thread (loadComic
     // frees textures via dvui, which is UI-thread-only).
@@ -1731,6 +1746,8 @@ fn appFrame() !dvui.App.Result {
     // First-run wizard — modal over whatever shell renders below; no-op once
     // onboarded (persisted) or before config load resolves the flag.
     @import("ui/onboarding.zig").render();
+    // Household profile picker (launch / switch) + kid-mode enforcement.
+    @import("ui/profiles_ui.zig").renderPicker();
 
     if (state.app.page_shell_enabled) {
         // New website-like page shell (redesign). Behind a flag until parity.
@@ -1782,6 +1799,7 @@ fn appFrame() !dvui.App.Result {
                     try ui.renderGrid();
                     ui.renderLiquidGlassOverlay();
                     ui.renderStatsOverlay();
+                    @import("ui/skip_overlay.zig").render();
                     grid_inner.deinit();
                 }
 
@@ -1822,6 +1840,7 @@ fn appFrame() !dvui.App.Result {
     settings.renderMediaInfo();
     settings.renderDepsModal();
     @import("ui/footer.zig").renderSubPicker();
+    @import("ui/babel_ui.zig").renderRecapCard();
 
     // The optional-deps "Setup" modal is NO LONGER auto-opened at first run:
     // its checklist is macOS/brew-centric (apfel/ffmpeg/whisper) and just nagged

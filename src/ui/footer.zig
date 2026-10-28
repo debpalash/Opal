@@ -12,8 +12,8 @@ const stream_gate = @import("../player/stream_gate.zig");
 const logs = @import("../core/logs.zig");
 const search = @import("../services/search.zig");
 const transfers = @import("../services/transfers.zig");
-const anime_skip = @import("../services/anime_skip.zig");
-const anime_skip_pure = @import("../services/anime_skip_pure.zig");
+const skip_segments = @import("../services/skip_segments.zig");
+const skip_policy = @import("../services/skip_policy_pure.zig");
 const theme = @import("theme.zig");
 const metadata_dialog = @import("metadata_dialog.zig");
 const components = @import("components.zig");
@@ -225,7 +225,7 @@ pub fn aspectDropdownMenu(ctx: *c.mpv.mpv_handle, id_extra: usize) void {
     var btn_lbl: [32]u8 = undefined;
     const label = std.fmt.bufPrintZ(&btn_lbl, "{s}", .{current_ar}) catch "AR";
 
-    if (dvui.menuItemLabel(@src(), label, .{ .submenu = true }, .{ .id_extra = id_extra, .gravity_y = 0.5, .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 }, .color_text = theme.colors.text_secondary })) |r| {
+    if (dvui.menuItemLabel(@src(), label, .{ .submenu = true }, .{ .id_extra = id_extra, .gravity_y = 0.5, .color_fill = theme.transparent, .color_text = theme.colors.text_secondary })) |r| {
         var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
         defer fw.deinit();
         var menu = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = theme.colors.bg_surface, .border = dvui.Rect.all(1), .color_border = theme.colors.border_subtle });
@@ -292,7 +292,7 @@ pub fn trackDropdownMenu(ctx: *c.mpv.mpv_handle, track_type: []const u8) void {
     const kind_id: usize = if (is_aud) 1 else 2;
 
     // mpv track lang/title is untrusted metadata — validate before dvui.
-    if (dvui.menuItemLabel(@src(), @import("../core/text.zig").safeUtf8(label), .{ .submenu = true }, .{ .id_extra = kind_id, .gravity_y = 0.5, .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 }, .color_text = theme.colors.text_secondary })) |r| {
+    if (dvui.menuItemLabel(@src(), @import("../core/text.zig").safeUtf8(label), .{ .submenu = true }, .{ .id_extra = kind_id, .gravity_y = 0.5, .color_fill = theme.transparent, .color_text = theme.colors.text_secondary })) |r| {
         var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
         defer fw.deinit();
         var menu = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = theme.colors.bg_surface, .border = dvui.Rect.all(1), .color_border = theme.colors.border_subtle });
@@ -351,7 +351,7 @@ pub fn playlistDropdownMenu(p: *player.MediaPlayer) void {
     const file_count = c.mpv.torrent_get_file_count(state.torrentSession(), p.current_torrent_id);
     if (file_count <= 1) return;
 
-    if (dvui.menuItemLabel(@src(), "Files", .{ .submenu = true }, .{ .id_extra = 99, .gravity_y = 0.5, .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 }, .color_text = theme.colors.text_secondary })) |r| {
+    if (dvui.menuItemLabel(@src(), "Files", .{ .submenu = true }, .{ .id_extra = 99, .gravity_y = 0.5, .color_fill = theme.transparent, .color_text = theme.colors.text_secondary })) |r| {
         var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
         defer fw.deinit();
         var menu = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = theme.colors.bg_surface, .border = dvui.Rect.all(1), .color_border = theme.colors.border_subtle });
@@ -403,7 +403,7 @@ pub fn subLanguageDropdown() void {
     var btn_lbl: [16]u8 = undefined;
     const label = std.fmt.bufPrintZ(&btn_lbl, "{s}", .{current_lang}) catch "lang";
 
-    if (dvui.menuItemLabel(@src(), label, .{ .submenu = true }, .{ .id_extra = 300, .gravity_y = 0.5, .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 }, .color_text = theme.colors.text_secondary })) |r| {
+    if (dvui.menuItemLabel(@src(), label, .{ .submenu = true }, .{ .id_extra = 300, .gravity_y = 0.5, .color_fill = theme.transparent, .color_text = theme.colors.text_secondary })) |r| {
         var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
         defer fw.deinit();
         var menu = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = theme.colors.bg_surface, .border = dvui.Rect.all(1), .color_border = theme.colors.border_subtle });
@@ -574,6 +574,9 @@ pub fn renderSubPicker() void {
         }
         components.tip(@src(), gen_wd, "Transcribe the audio locally (whisper)");
     }
+
+    // ── Babel: live captions + translate the active track ──
+    @import("babel_ui.zig").pickerRow();
 
     // ── Context line: active query + search language ──
     {
@@ -1104,7 +1107,7 @@ fn renderScrubber(
     // above, so the buffered fill, the accent played fill and the chapter pips
     // were painted every frame and then completely hidden. Transparent here
     // keeps the slider input-only, which is what the comment always claimed.
-    const invisible = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
+    const invisible = theme.transparent;
     var slider_pct: f32 = @floatCast(percent_pos / 100.0);
     if (std.math.isNan(slider_pct)) slider_pct = 0.0;
     if (dvui.slider(@src(), .{ .fraction = &slider_pct, .color_bar = invisible }, .{
@@ -1978,30 +1981,13 @@ pub fn renderLiquidGlassOverlay() void {
             // Greyed out rather than hidden when there's nothing next: a button
             // that vanishes mid-show is more confusing than one that's dim.
             components.tip(@src(), wd, if (has_next) "Next episode" else "No next episode yet");
+            // Babel: spoiler-safe "Previously on…" recap (first minutes only).
+            _ = @import("babel_ui.zig").recapButton();
         }
 
-        // ── Manual Anime-Skip affordance ──
-        // Appears ONLY while the play head sits inside a known skippable
-        // segment (intro/recap/credits/preview) — driven each frame by
-        // currentSkippable(), so it enters/leaves as the segment does. Lets the
-        // user skip a type they've DISABLED auto-skip for, or skip early. Purely
-        // additive: auto-skip logic and defaults are untouched. The overlay
-        // already early-returns when there's no media / no active player, and
-        // currentSkippable() re-guards active_player_idx < players.items.len.
-        if (bar_pt >= 1400) if (anime_skip.currentSkippable()) |skp| {
-            if (dvui.button(@src(), anime_skip_pure.skipButtonLabel(skp.category), .{}, .{
-                .data_out = &wd,
-                .color_fill = theme.colors.accent,
-                .color_text = theme.colors.text_on_accent,
-                .corner_radius = dvui.Rect.all(theme.radius.pill),
-                .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
-                .gravity_y = 0.5,
-                .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
-            })) {
-                anime_skip.skipNow();
-            }
-            components.tip(@src(), wd, "Skip this segment");
-        };
+        // The manual "Skip intro / Skip credits / Next episode" button lives
+        // over the video (ui/skip_overlay.zig) so it stays visible while this
+        // bar auto-hides; the overflow menu below keeps a chip for it.
 
         // ── Status badges — times moved to the scrub row (IINA layout:
         // elapsed left of the seek line, total/remaining right of it). ──
@@ -2111,7 +2097,7 @@ pub fn renderLiquidGlassOverlay() void {
                 .max_size_content = .{ .w = 120, .h = 4 },
                 .color_fill = theme.playerGlass(210),
                 .color_text = player_text_muted,
-                .corner_radius = dvui.Rect.all(2),
+                .corner_radius = dvui.Rect.all(theme.radius.xs),
                 .gravity_y = 0.5,
                 .background = true,
             })) {
@@ -2257,8 +2243,8 @@ pub fn renderLiquidGlassOverlay() void {
             if (pickerMenuChip(@src(), 719, icons.tvg.lucide.@"skip-back", "Previous track", playback.playlist_pos > 0, "Previous track", .none)) _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "playlist-prev");
             if (pickerMenuChip(@src(), 720, icons.tvg.lucide.@"skip-forward", "Next track", playback.playlist_pos + 1 < playback.playlist_count, "Next track", .none)) _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "playlist-next");
         }
-        if (anime_skip.currentSkippable()) |skp| {
-            if (pickerMenuChip(@src(), 721, icons.tvg.lucide.@"skip-forward", anime_skip_pure.skipButtonLabel(skp.category), true, "Skip this segment", .none)) anime_skip.skipNow();
+        if (skip_segments.current()) |cur| {
+            if (pickerMenuChip(@src(), 721, icons.tvg.lucide.@"skip-forward", skip_policy.buttonLabel(cur.decision), true, "Skip this segment", .none)) skip_segments.requestSkip();
         }
 
         if (pickerMenuChip(@src(), 713, icons.tvg.lucide.@"maximize-2", "Fullscreen", false, "Toggle fullscreen", .none)) {
@@ -2276,6 +2262,20 @@ pub fn renderLiquidGlassOverlay() void {
         }
         if (pickerMenuChip(@src(), 715, icons.tvg.lucide.rewind, "Back 10 seconds", false, "Seek back", .none)) _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "seek -10");
         if (pickerMenuChip(@src(), 716, icons.tvg.lucide.@"fast-forward", "Forward 10 seconds", false, "Seek forward", .none)) _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "seek 10");
+        // Continuum: "Continue on…" each paired device (Settings > Device sync).
+        {
+            const handoff = @import("../services/handoff.zig");
+            const ls = &state.app.lsync;
+            for (ls.peers[0..ls.peer_count], 0..) |*peer, pi| {
+                if (peer.urlText().len == 0) continue;
+                var lbl_buf: [96]u8 = undefined;
+                const host = @import("../services/stream_pure.zig").urlHost(peer.urlText()) orelse "device";
+                const lbl = std.fmt.bufPrint(&lbl_buf, "Continue on {s}", .{host}) catch "Continue on device";
+                if (pickerMenuChip(@src(), 722 + pi, icons.tvg.lucide.cast, lbl, handoff.busy(), "Hand playback to this device at the current second", .none)) {
+                    if (handoff.startPeerJob(pi, false)) closePickers();
+                }
+            }
+        }
 
         // Both URL probes are case-insensitive substring searches over the loaded
         // URL, and both results are only consumed by the quality chip below. Test
@@ -2501,7 +2501,7 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
     const show_media_title = footer_pure.showMediaTitleInControls(@import("builtin").os.tag == .macos);
     const text = @import("../core/text.zig");
     const queue = @import("../services/queue.zig");
-    const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
+    const transparent = theme.transparent;
     const now_ms = @import("../core/io_global.zig").milliTimestamp();
 
     // ── Transport state (cheap, every frame) ──
@@ -2754,7 +2754,7 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
             .max_size_content = .{ .w = 90, .h = 4 },
             .color_fill = theme.colors.bg_elevated,
             .color_text = theme.colors.text_secondary,
-            .corner_radius = dvui.Rect.all(2),
+            .corner_radius = dvui.Rect.all(theme.radius.xs),
             .gravity_y = 0.5,
             .background = true,
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
@@ -2981,7 +2981,7 @@ pub fn renderResumePrompt() void {
         .corner_radius = dvui.Rect.all(theme.radius.lg),
         .padding = .{ .x = theme.spacing.lg, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
         .box_shadow = .{
-            .color = theme.shadow_soft,
+            .color = theme.colors.shadow,
             .offset = .{ .x = 0, .y = 4 },
             .fade = 20,
         },
@@ -3136,7 +3136,7 @@ fn renderToastBody() void {
         .corner_radius = dvui.Rect.all(theme.radius.lg),
         .padding = .{ .x = theme.spacing.lg, .y = theme.spacing.md, .w = theme.spacing.lg, .h = theme.spacing.md },
         .box_shadow = .{
-            .color = theme.shadow_soft,
+            .color = theme.colors.shadow,
             .offset = .{ .x = 0, .y = 4 },
             .fade = 20,
         },
@@ -3182,7 +3182,7 @@ pub fn renderStatsOverlay() void {
         .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
         .min_size_content = .{ .w = 220, .h = 0 },
         .box_shadow = .{
-            .color = theme.shadow_soft,
+            .color = theme.colors.shadow,
             .offset = .{ .x = 0, .y = 4 },
             .fade = 20,
         },
