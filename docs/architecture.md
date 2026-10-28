@@ -70,38 +70,71 @@ services do not import the UI to identify media kinds or resolve poster URLs.
 
 ## Horizon wave 2 implementation boundaries
 
-Wave 1 is reviewed on `v10-horizon`. Wave 2 begins with these ordered slices;
-they are planned work, not claims of shipped behavior.
+Wave 1 is reviewed on `v10-horizon`; `v11-resilience-commons-craft` adds the
+following implementation.
 
 ### Resilience (7.6)
 
-`services/link_health.zig` already persists probe results and bounds concurrent
-work. Its in-memory maps and attempted markers currently outlive the database
-TTL. First make expiry observable without restarting, then feed the same
-snapshot into resolver candidate ordering and playback fallback selection.
-Preserve caller headers and exclude loopback proxies from remote-health probes.
-Tests must advance an injected clock, expire a persisted result, and demonstrate
-that ranking and fallback use the refreshed result. Next-episode pre-resolution
-must own its input and cancel when the active series or profile changes.
+`services/link_health.zig` persists timestamped results and expires them both
+when loading SQLite rows and during in-memory reads. In-flight reservations
+prevent duplicate probes and are released on completion. Resolver scores and
+playback fallback order consume this cache. Header-dependent requests preserve
+their original order because anonymous probes cannot assess their credentials.
+The cache and worker cap bound background work; no synchronous network probe
+runs on the playback thread.
+
+`next_episode.zig` starts one owned pre-resolution job after 60% of a playing
+episode. It selects the next aired episode across seasons and warms the existing
+EZTV/Torznab resolver cache. A media generation suppresses obsolete publication;
+in-flight network calls retain their existing timeouts. This reduces repeated
+search work; it does not guarantee zero-wait playback or warm every provider.
 
 ### Commons (7.7)
 
-Keep repository URLs user-configured. Verify the exact downloaded manifest
-bytes before interpreting permissions or installing executable code. Trust and
-permission grants belong to the host administrator; browser callers cannot
-silently approve them. Implement signature verification and rejection fixtures
-before adding repository UI. Shared moments must identify a media item and
-bounded timestamp; local paths and peer credentials cannot enter the household
-feed. Reuse existing paired-device authentication and profile isolation.
+Repositories are user-added URLs with pinned Ed25519 publisher keys. The exact
+manifest bytes are verified before parsing. An install confirmation contains
+the displayed revision's SHA-256 digest. Installation requires the machine API
+token or an explicit native host action; it never grants executable trust.
+The runtime and catalog verifier share a typed permission parser. Lua entrypoints
+remain subject to existing content approval and sandbox policy. Declarative
+panels display bounded text only. No remote HTML or JavaScript is evaluated.
+
+Moments export at most 120 seconds of the current local media. Private files
+live in owner-only directories on POSIX; the household feed exposes opaque IDs, titles,
+creator profile and timestamps. Playback uses the signed stream lifecycle,
+including stop-on-close. Sending reuses authenticated Opal handoff. Child
+profiles cannot use the feed; physical casting remains a separate integration.
 
 ### Craft (7.8)
 
-Continue the existing architecture boundary checks instead of adding a second
-lint system. Document and verify both desktop and headless build commands with
-separate output prefixes; a broad test may rebuild the default output and must
-not replace the binary a live fixture is executing. Track remaining DVUI
-shutdown warnings from actual logs before changing teardown order. Theme
-changes must continue through the shared tokens and components.
+The shared theme already defines contrast-checked palettes, interaction states,
+focus and elevation tokens. New native controls use these components. Build
+commands keep desktop and headless outputs separate so a broad test cannot
+replace a running live fixture's binary. Torrent-wrapper linkage uses a
+pkg-config fallback only on failure, avoiding duplicate library arguments.
+Native startup, idle SIGTERM and clean teardown were exercised with an isolated
+profile; captured logs contained no DVUI deinit warnings. No speculative
+teardown change was needed. Architecture import checks remain the common gate.
+
+### Wave 2 live tests
+
+```sh
+zig build -Dheadless=true -Doptimize=ReleaseFast --prefix /tmp/opal-wave2-live
+python3 tests/test_wave2_live.py --binary /tmp/opal-wave2-live/bin/opal
+python3 tests/test_fingerprint_live.py --binary /tmp/opal-wave2-live/bin/opal
+python3 tests/test_babel_model_live.py --binary /tmp/opal-wave2-live/bin/opal --model /absolute/path/to/model.gguf
+python3 tests/test_babel_model_live.py --binary /tmp/opal-wave2-live/bin/opal --model /absolute/path/to/model.gguf --embeddings
+zig build -Doptimize=ReleaseFast --prefix /tmp/opal-wave2-desktop
+python3 tests/test_native_shutdown_live.py --binary /tmp/opal-wave2-desktop/bin/opal --port 42989
+```
+
+The add-on fixture requires OpenSSL Ed25519 support and ffmpeg. Model tests own
+one loopback llama-server, isolate configuration and use a local provider
+adapter so Opal cannot stop another model process. Translation was checked with
+Qwen3-1.7B Q4_K_M. Its mean-pooled embeddings verify vector-index integration,
+not retrieval quality; use a dedicated embedding model for quality evaluation.
+The fingerprint fixture generates two videos sharing an intro, verifies stored
+audio fingerprints and executes the skip without chapter metadata.
 
 ### Verified wave 1 test entry points
 
@@ -123,5 +156,5 @@ The media smoke requires macOS `say`, ffmpeg and whisper-cli. It synthesizes its
 own media and symlinks a supplied model into an isolated profile. Both live
 scripts own their server process and temporary profile, reject occupied ports,
 and clean up afterward. The media test uses the same host for handoff; it does
-not validate physical casting or another device. Visual layout, embedding and
-translation/recap model output remain separate validation work.
+not validate physical casting or another device. Visual layout, physical casting and recap model output remain separate
+validation work. Translation and vector integration have the tests above.

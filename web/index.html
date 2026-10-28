@@ -446,6 +446,11 @@
         <div class="search-row"><input id="continuum-peer" type="url" aria-label="Other Opal address" placeholder="Other Opal address"><input id="continuum-token" type="password" aria-label="Other Opal access token" placeholder="Access token" autocomplete="off"></div>
         <div class="quick"><button id="continuum-send" type="button">Send to other Opal</button><button id="continuum-bring" type="button">Bring to this Opal</button></div><div id="continuum-status" class="hint" role="status" aria-live="polite"></div>
       </details>
+      <details><summary>Household clips</summary>
+        <p class="hint">Share up to two minutes from a local file playing on Opal. Clips are visible to the household outside kid mode.</p>
+        <form id="moment-form" class="search-row"><input id="moment-title" required maxlength="160" aria-label="Clip title" placeholder="Clip title"><input id="moment-start" type="number" min="0" step="0.1" required aria-label="Start time in seconds" placeholder="Start seconds"><input id="moment-end" type="number" min="0" step="0.1" required aria-label="End time in seconds" placeholder="End seconds"><button id="moment-create">Share clip</button></form>
+        <button id="moment-refresh" type="button">Refresh clips</button><div id="moment-status" class="hint" role="status" aria-live="polite"></div><div id="moment-list"></div>
+      </details>
       <div class="sect">At a glance</div>
       <div id="home-metrics" class="metrics"></div>
       <div class="sect-bar"><div class="sect">For You</div><button id="home-recs-refresh" class="text-btn">Refresh</button></div>
@@ -495,6 +500,10 @@
       <div id="local-results"></div>
   </section>
   <section class="page" id="page-setup">
+    <details><summary>Signed add-on repositories</summary>
+      <form id="addon-form" class="search-row"><input id="addon-id" required maxlength="32" aria-label="Repository name" placeholder="Repository name"><input id="addon-url" required type="url" aria-label="Repository URL" placeholder="HTTPS repository URL"><input id="addon-key" required minlength="64" maxlength="64" aria-label="Publisher public key" placeholder="Publisher public key"><button id="addon-add">Add repository</button></form>
+      <button id="addon-refresh" type="button">Reload repositories</button><div id="addon-status" class="hint" role="status" aria-live="polite"></div><div id="addon-list"></div>
+    </details>
     <div class="sect">Profiles</div>
     <form id="profile-form" class="search-row"><select id="profile-choice" aria-label="Profile"></select><input id="profile-pin" type="password" inputmode="numeric" autocomplete="off" aria-label="Profile PIN" placeholder="PIN if required"><button id="profile-switch" type="submit">Switch profile</button><button id="profile-refresh" type="button">Refresh profiles</button></form><div id="profile-status" class="hint" role="status" aria-live="polite"></div>
     <div class="sect">Sources</div>
@@ -803,6 +812,7 @@
 <script src="/js/recall.js"></script>
 <script src="/js/continuum.js"></script>
 <script src="/js/profiles.js"></script>
+<script src="/js/commons.js"></script>
 <script src="/js/boot.js"></script>
 </body>
 </html>

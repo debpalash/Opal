@@ -1259,6 +1259,8 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
     if (@import("remote_library_api.zig").handle(stream, method, api_path, query)) return;
     if (@import("remote_collections_api.zig").handle(stream, method, api_path, query)) return;
     if (@import("remote_local_library_api.zig").handle(stream, method, api_path, query, body)) return;
+    if (@import("moments.zig").handle(stream, method, api_path, query, body)) return;
+    if (@import("addon_repositories.zig").handle(stream, method, api_path, query, body)) return;
     if (@import("remote_recall_api.zig").handle(stream, method, api_path, query, body)) return;
     if (@import("remote_library_sync_api.zig").handle(stream, method, api_path, query, body)) return;
     if (@import("remote_profiles_api.zig").handle(stream, method, api_path, query, body)) return;
@@ -4795,7 +4797,7 @@ fn apiPlayerAction(stream: std.Io.net.Stream, ap: *player.MediaPlayer, query: []
                 sendJsonStatus(stream, "409 Conflict", "{\"error\":\"subtitle translation already running\"}");
                 return;
             }
-            translate.translateActiveTrack();
+            translate.requestActiveTrack();
         },
         .aspect => |v| _ = c.mpv.mpv_set_property_string(ap.mpv_ctx, "video-aspect-override", v.mpvValue().ptr),
         .subtitle_delay => |v| setPlayerDouble(ap, "sub-delay", v),

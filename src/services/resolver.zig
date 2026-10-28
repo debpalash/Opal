@@ -889,6 +889,11 @@ threadlocal var thread_sink: ?*Sink = null;
 ///
 /// Runs on the CALLER's thread; call it from a worker, never the UI thread.
 pub fn warmQuery(query: []const u8) void {
+    warmQueryForEpoch(query, null, 0);
+}
+
+pub fn warmQueryForEpoch(query: []const u8, epoch: ?*const std.atomic.Value(u64), expected: u64) void {
+    if (epoch) |e| if (e.load(.acquire) != expected) return;
     if (!state.app.content_cache_enabled) return;
     if (query.len == 0 or query.len > 255) return;
     const cache_scope = currentCacheScope();
@@ -919,6 +924,8 @@ pub fn warmQuery(query: []const u8) void {
     worker_reported = .done;
     worker_produced = false;
     resolveEztv(qbuf, query.len);
+    if (epoch) |e| if (e.load(.acquire) != expected) return;
+    if (@import("../core/workers.zig").isQuitting()) return;
     resolveTorznab(qbuf, query.len);
 
     if (sink.count == 0) return;
@@ -929,6 +936,8 @@ pub fn warmQuery(query: []const u8) void {
     var key_buf: [288]u8 = undefined;
     const current_scope = currentCacheScope();
     if (current_scope.mask != cache_scope.mask or current_scope.fingerprint != cache_scope.fingerprint) return;
+    if (epoch) |e| if (e.load(.acquire) != expected) return;
+    if (@import("../core/workers.zig").isQuitting()) return;
     content_cache.put(cacheKey(&key_buf, query, cache_scope), blob, SEARCH_TTL_S);
 
     var lb: [96]u8 = undefined;
@@ -1030,7 +1039,11 @@ fn pushInto(
     if (match_info.match_pct == 0) return false;
 
     scored_item.match_pct = match_info.match_pct;
-    const score = match_info.score;
+    const health = @import("link_health.zig");
+    const candidate_url = item.url[0..item.url_len];
+    const health_kind = health.pure.playbackKind("", candidate_url);
+    const health_status = if (health_kind.len > 0) health.statusOf(health_kind, candidate_url) else .unknown;
+    const score = match_info.score +| health.pure.scorePenalty(health_status);
     scored_item.score = score; // cache so re-inserts don't recompute (S45)
     scored_item.is_nsfw = @import("search.zig").isNsfwName(name); // S16
 

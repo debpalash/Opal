@@ -43,6 +43,7 @@ const assets = [_]Asset{
     .{ .route = "/js/recall.js", .bundled = "js/recall.js", .dev = "web/js/recall.js", .content_type = "application/javascript", .cache = .revalidate },
     .{ .route = "/js/continuum.js", .bundled = "js/continuum.js", .dev = "web/js/continuum.js", .content_type = "application/javascript", .cache = .revalidate },
     .{ .route = "/js/profiles.js", .bundled = "js/profiles.js", .dev = "web/js/profiles.js", .content_type = "application/javascript", .cache = .revalidate },
+    .{ .route = "/js/commons.js", .bundled = "js/commons.js", .dev = "web/js/commons.js", .content_type = "application/javascript", .cache = .revalidate },
     .{ .route = "/js/boot.js", .bundled = "js/boot.js", .dev = "web/js/boot.js", .content_type = "application/javascript", .cache = .revalidate },
     .{ .route = "/icon.svg", .bundled = "icon.svg", .dev = "assets/logo.svg", .content_type = "image/svg+xml", .cache = .revalidate },
     .{ .route = "/favicon.ico", .bundled = "icon.svg", .dev = "assets/logo.svg", .content_type = "image/svg+xml", .cache = .revalidate },

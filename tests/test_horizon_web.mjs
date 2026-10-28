@@ -67,3 +67,20 @@ test('Continuum same-tick starts create only the latest stream',async()=>{
   await Promise.all([first,second]);
   assert.deepEqual(opened,['/api/stream/bbb/123.def/direct']);
 });
+
+test('Commons repeatedly playing and closing clips releases every stream',async()=>{
+  const f=fixture('continuum.js');
+  vm.runInContext(readFileSync(new URL('../web/js/commons.js',import.meta.url),'utf8'),f.context);
+  f.context.api=async()=>({moments:[{id:'clip',title:'Example',start:0,end:2,profile:'owner'}]});
+  let slots=0, serial=0;
+  f.context.apiFormMutation=async path=>{assert.equal(path,'/moments/play'); assert.ok(slots<2); slots++; return {url:`/api/stream/${++serial}/123.def/direct`,title:'Example'};};
+  f.context.networkFetch=async path=>{assert.ok(path.endsWith('/stop')); slots--; return {ok:true};};
+  f.context.openStreamUrl=()=>{void f.run('stopContinuum()');};
+  await f.run('loadMoments()');
+  for(let i=0;i<5;i++) {
+    await f.$('moment-list').children[0].children[1].onclick();
+    assert.equal(slots,1);
+    await f.run('stopContinuum()');
+    assert.equal(slots,0);
+  }
+});

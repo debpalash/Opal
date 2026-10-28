@@ -54,7 +54,7 @@ class NativeShutdownLive(unittest.TestCase):
         except subprocess.TimeoutExpired:
             self.fail("idle desktop did not process SIGTERM within 15 seconds\n" + opal.safe_log())
         self.assertEqual(result, 0, opal.safe_log())
-        for failure in ("file_hash FileNotFound", "forcing process exit", "memory address"):
+        for failure in ("file_hash FileNotFound", "forcing process exit", "memory address", "widget is not closed within its parent"):
             self.assertNotIn(failure, opal.safe_log())
 
 
