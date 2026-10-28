@@ -8,6 +8,7 @@
 //! three sources into staging rows, hands them to `tp.buildRows`, and draws the
 //! result with the UNION of the actions each row's handles allow.
 
+const page_controls = @import("../ui/browse_filters.zig");
 const std = @import("std");
 const dvui = @import("dvui");
 const icons = @import("icons");
@@ -366,43 +367,20 @@ fn toggleExpanded(r: *const tp.Row) void {
 // ══════════════════════════════════════════════════════════
 
 fn renderControlBar() void {
-    var row = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
-        .expand = .horizontal,
-        .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
-        .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-        .color_border = theme.colors.border_subtle,
-    });
+    var row = page_controls.begin(@src());
     defer row.deinit();
 
     // ── Left: filter chips (hidden while drilled into a subfolder — the
     // browse view has its own path bar and shows only that folder). ──
     if (browse_subdir_len == 0) {
-        var counts: [5]usize = .{ 0, 0, 0, 0, 0 };
-        tp.countsFor(rows[0..row_count], &counts);
-
-        const chips = [_]tp.Filter{ .all, .downloading, .seeding, .on_disk, .history };
-        const names = [_][]const u8{ "All", "Downloading", "Seeding", "On disk", "History" };
-
-        for (chips, 0..) |f, k| {
-            var lbuf: [32]u8 = undefined;
-            const lbl = std.fmt.bufPrintZ(&lbuf, "{s} ({d})", .{ names[k], counts[k] }) catch names[k];
-            const sel = filter == f;
-            if (dvui.button(@src(), lbl, .{}, .{
-                .id_extra = k + 90000,
-                .color_fill = if (sel) theme.colors.accent else theme.colors.bg_elevated,
-                .color_text = if (sel) theme.colors.text_on_accent else theme.colors.text_secondary,
-                .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
-                .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
-                .corner_radius = dvui.Rect.all(theme.radius.pill),
-                .border = dvui.Rect.all(if (sel) @as(f32, 1) else @as(f32, 0)),
-                .color_border = theme.colors.accent,
-                .gravity_y = 0.5,
-            })) {
-                filter = f;
-            }
-        }
+        const chips = [_]page_controls.Item{
+            .{ .id = @intFromEnum(tp.Filter.all), .label = "All downloads", .icon = icons.tvg.lucide.@"layout-grid" },
+            .{ .id = @intFromEnum(tp.Filter.downloading), .label = "Downloading", .icon = icons.tvg.lucide.download },
+            .{ .id = @intFromEnum(tp.Filter.seeding), .label = "Seeding", .icon = icons.tvg.lucide.upload },
+            .{ .id = @intFromEnum(tp.Filter.on_disk), .label = "On disk", .icon = icons.tvg.lucide.folder },
+            .{ .id = @intFromEnum(tp.Filter.history), .label = "History", .icon = icons.tvg.lucide.history },
+        };
+        if (row.menu(@src(), .{ .items = &chips, .selected = @intFromEnum(filter) })) |id| filter = @enumFromInt(id);
     }
 
     // ── Paste-a-URL download: the HTTP downloader otherwise only has the

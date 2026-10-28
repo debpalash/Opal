@@ -7,7 +7,9 @@
 //! every run, so the panel says plainly when it is off and offers to turn it on.
 //! Wording and limits live in `agent_tasks_view_pure.zig`.
 
+const page_controls = @import("browse_filters.zig");
 const std = @import("std");
+const icons = @import("icons");
 const dvui = @import("dvui");
 const theme = @import("theme.zig");
 const components = @import("components.zig");
@@ -205,10 +207,12 @@ pub fn compactSegment(src: std.builtin.SourceLocation, options: []const []const 
 /// `activity_label` carries the count of proposals waiting ("Activity 1").
 /// Returns the index clicked.
 pub fn tabSwitch(selected: usize, activity_label: []const u8) ?usize {
-    // The toolbar is a horizontal box, where centring vertically is safe.
-    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_y = 0.5 });
-    defer row.deinit();
-    return compactSegment(@src(), &.{ "Overview", "Terminal", "Tasks", activity_label }, selected);
+    return page_controls.renderMenu(@src(), .{ .selected = selected, .items = &.{
+        .{ .id = 0, .label = "Overview", .icon = icons.tvg.lucide.@"layout-grid" },
+        .{ .id = 1, .label = "Terminal", .icon = icons.tvg.lucide.terminal },
+        .{ .id = 2, .label = "Tasks", .icon = icons.tvg.lucide.calendar },
+        .{ .id = 3, .label = activity_label, .icon = icons.tvg.lucide.activity },
+    } }, true);
 }
 
 /// Open the Add form (blank), for links elsewhere that lead to "add a task".
@@ -273,9 +277,6 @@ fn renderHeader() void {
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
     });
     defer head.deinit();
-    var title: [48]u8 = undefined;
-    const text = std.fmt.bufPrint(&title, "Scheduled tasks ({d})", .{row_count}) catch "Scheduled tasks";
-    _ = dvui.label(@src(), "{s}", .{text}, .{ .color_text = theme.colors.text_primary, .gravity_y = 0.5, .font = dvui.Font.theme(.title) });
     var right = dvui.box(@src(), .{ .dir = .horizontal }, .{ .gravity_x = 1.0, .gravity_y = 0.5 });
     defer right.deinit();
     if (components.actionButton(@src(), if (form_open) "Close form" else "New task", if (form_open) .secondary else .primary, 9701)) {
@@ -536,7 +537,7 @@ pub fn render() void {
     defer scroll.deinit();
     var col = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
-        .padding = .{ .x = 16, .y = 12, .w = 16, .h = 16 },
+        .padding = .{ .x = 12, .y = 4, .w = 12, .h = 12 },
     });
     defer col.deinit();
 

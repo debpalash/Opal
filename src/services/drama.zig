@@ -18,6 +18,7 @@
 //! Dedicated drama stream scrapers (Kisskh / Asiaflix / GoPlay / Cineby) are NOT
 //! compiled in (source neutrality); a scraper can be slotted behind the same seam.
 
+const browse_filters = @import("../ui/browse_filters.zig");
 const std = @import("std");
 const dvui = @import("dvui");
 const state = @import("../core/state.zig");
@@ -718,10 +719,8 @@ pub fn setLoadingFixtureForTest(enabled: bool) void {
 /// Returns true when it started a search or went back to the landing grid.
 var ui_search_buf: [96]u8 = std.mem.zeroes([96]u8);
 fn renderSearchRow() void {
-    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .expand = .horizontal,
-        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
-    });
+    if (!@import("../ui/browse_layout_pure.zig").showLocalSearch(state.app.page_shell_enabled)) return;
+    var row = browse_filters.begin(@src());
     defer row.deinit();
 
     var te = dvui.textEntry(@src(), .{

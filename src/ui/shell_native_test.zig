@@ -8,7 +8,7 @@ const alloc = @import("../core/alloc.zig").allocator;
 const search = @import("../services/search.zig");
 const resolver = @import("../services/resolver.zig");
 const capture = @import("native_capture.zig");
-const Case = struct { name: []const u8, route: router.Route, tab: state.DrawerTab = .TMDB, settings: state.SettingsTab = .General, plugin: router.PluginTab = .sources, sidebar: ?bool = null, navigate_anime: bool = false };
+const Case = struct { name: []const u8, route: router.Route, tab: state.DrawerTab = .TMDB, settings: state.SettingsTab = .General, plugin: router.PluginTab = .sources, sidebar: ?bool = null, navigate_anime: bool = false, hover_sidebar: bool = false, scope: ?search.scope_model.Scope = null, remove_scope: bool = false, clear_query: bool = false, submit_query: bool = false, navigate_movies: bool = false, nav_api: bool = false, ranking_fixture: bool = false };
 var current: Case = undefined;
 var first_frame = true;
 var preset: theme.ThemePreset = .midnight;
@@ -42,7 +42,10 @@ fn setup() !void {
     state.app.page_shell_enabled = true;
     state.app.ui_scale = 1;
     state.app.router.current = current.route;
+    search.enterSearchContext(.global, "");
+    search.setSearchScope(current.scope orelse .all);
     state.app.browse_source = current.tab;
+    if (current.nav_api) state.navigateToTabNow(current.tab);
     state.app.settings_tab = current.settings;
     state.app.plugin_tab = current.plugin;
     state.app.config_loaded.store(current.route == .settings, .release);
@@ -87,14 +90,30 @@ fn setup() !void {
             row.match_pct = 100;
             row.year = 2022;
         }
+        if (current.ranking_fixture) {
+            const ranked_names = [_][]const u8{ "Arsene Lupin", "Lupin III: The First", "Lupin", "Lupin's Tales", "Lupin", "LUPIN ZERO", "Belfort & Lupin", "Lupine" };
+            const ranks = [_]u16{ 1, 2, 1, 2, 6, 3, 4, 5 };
+            for (rows, 0..) |*row, i| {
+                row.source = .tmdb;
+                row.catalog_id = @intCast(i + 1);
+                row.catalog_rank = ranks[i];
+                field(&row.name, &row.name_len, ranked_names[i]);
+                field(&row.catalog_kind, &row.catalog_kind_len, if (i == 0 or i == 1 or i == 4) "movie" else "tv");
+                row.year = if (i == 2) 2021 else 2020;
+                row.score = resolver.rankForTest(row.*, "lupin");
+            }
+        }
+        const fixture_query = if (current.ranking_fixture) "lupin" else "Offline layout fixtures";
         resolver.clearResults();
         resolver.results_mutex.lock();
         @memcpy(resolver.results[0..rows.len], rows);
         resolver.result_count = rows.len;
-        field(&resolver.resolver_query, &resolver.resolver_query_len, "Offline layout fixtures");
+        field(&resolver.resolver_query, &resolver.resolver_query_len, fixture_query);
         resolver.results_mutex.unlock();
-        search.setUniversalQuery("Offline layout fixtures");
+        search.setUniversalQuery(fixture_query);
+        search.setSearchScope(current.scope orelse .all);
     } else @memset(&state.app.magnet_buf, 0);
+    if (current.submit_query) @memcpy(state.app.magnet_buf[0..4], "test");
 }
 fn texture(index: usize) !dvui.Texture {
     var rgba: [64 * 96 * 4]u8 = undefined;
@@ -108,6 +127,40 @@ fn texture(index: usize) !dvui.Texture {
 }
 fn draw() !void {
     @import("components.zig").clearToggleBoundsForTest();
+    if (current.hover_sidebar and (frames == 2 or frames == 5)) {
+        const bounds = @import("shell.zig").sidebarBoundsForTest();
+        const point = if (frames == 2)
+            dvui.Point.Physical{ .x = bounds.sidebar.x + 20, .y = bounds.sidebar.y + 20 }
+        else
+            dvui.Point.Physical{ .x = bounds.content.x + bounds.content.w - 20, .y = bounds.content.y + 20 };
+        _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = point });
+    }
+    if (current.navigate_movies and frames == 2) {
+        const bounds = @import("shell.zig").sidebarMoviesBoundsForTest();
+        try std.testing.expect(bounds.w > 0);
+        const window = dvui.currentWindow();
+        _ = try window.addEventMouseMotion(.{ .pt = bounds.center() });
+        _ = try window.addEventMouseButton(.left, .press);
+        _ = try window.addEventMouseButton(.left, .release);
+    }
+    if (current.submit_query and frames == 4) {
+        const bounds = @import("shell.zig").queryBoundsForTest();
+        try std.testing.expect(bounds.w > 0);
+        const window = dvui.currentWindow();
+        _ = try window.addEventMouseMotion(.{ .pt = bounds.center() });
+        _ = try window.addEventMouseButton(.left, .press);
+        _ = try window.addEventMouseButton(.left, .release);
+        _ = try window.addEventKey(.{ .code = .enter, .action = .down, .mod = .none });
+    }
+    if (current.remove_scope and frames == 4) {
+        const bounds = @import("shell.zig").scopeRemoveBoundsForTest();
+        try std.testing.expect(bounds.w > 0 and bounds.h > 0);
+        const window = dvui.currentWindow();
+        _ = try window.addEventMouseMotion(.{ .pt = bounds.center() });
+        _ = try window.addEventMouseButton(.left, .press);
+        _ = try window.addEventMouseButton(.left, .release);
+    }
+    if (current.clear_query and frames == 4) search.clearShellSearch();
     if (current.navigate_anime and frames == 4) {
         const bounds = @import("shell.zig").sidebarAnimeBoundsForTest();
         try std.testing.expect(bounds.w > 0 and bounds.h > 0);
@@ -151,9 +204,19 @@ fn draw() !void {
         state.app.yt.last_fetch_s = 9_999_999_999;
         for (0..8) |i| {
             var item: state.YtItem = .{ .duration = 3661, .views = 1234567, .thumb_attempted = true };
-            field(&item.title, &item.title_len, "A long video title — Exploring the world through cinema and music");
+            field(&item.title, &item.title_len, if (i == 1) "世界の音楽と映画 — A journey through cinema and music" else "A long video title — Exploring the world through cinema and music");
             field(&item.uploader, &item.uploader_len, "Offline fixture channel");
-            item.thumb_tex = try texture(i);
+            // A completed decode burst exercises the per-frame GPU upload cap.
+            const pixels = try alloc.alloc(u8, 160 * 90 * 4);
+            for (0..160 * 90) |pixel| {
+                pixels[pixel * 4] = @intCast(35 + i * 15);
+                pixels[pixel * 4 + 1] = @intCast(40 + pixel / 160);
+                pixels[pixel * 4 + 2] = @intCast(100 + i * 12);
+                pixels[pixel * 4 + 3] = 255;
+            }
+            item.thumb_pixels = pixels;
+            item.thumb_w = 160;
+            item.thumb_h = 90;
             try state.app.yt.results.append(alloc, item);
         }
     }
@@ -168,7 +231,40 @@ fn draw() !void {
         }
     }
     first_frame = false;
+    var thumbnails_before: usize = 0;
+    for (state.app.yt.results.items) |item| {
+        if (item.thumb_tex != null) thumbnails_before += 1;
+    }
+    const provider_mask = resolver.source_mask.load(.acquire);
     try @import("shell.zig").render();
+    try std.testing.expectEqual(provider_mask, resolver.source_mask.load(.acquire));
+    if (current.submit_query and frames >= 5) {
+        const expected = search.scope_model.forTab(@tagName(current.tab));
+        try std.testing.expectEqual(router.Route.search, state.app.router.current);
+        try std.testing.expectEqual(expected, search.currentScope());
+        try std.testing.expectEqual(expected, resolver.requestScopeForTest());
+        try std.testing.expect(@import("shell.zig").browseSourceActive(current.tab));
+        try std.testing.expect(!@import("shell.zig").allContentActive());
+    }
+    if (current.ranking_fixture and frames >= 5) try std.testing.expectEqual(@as(i32, 3), search.firstRankedCatalogForTest());
+    if (current.scope) |scope| {
+        if (frames >= 5) {
+            try std.testing.expectEqual(if (current.remove_scope) search.scope_model.Scope.all else scope, search.currentScope());
+            if (current.remove_scope) try std.testing.expect(@import("shell.zig").allContentActive());
+            if (current.remove_scope) try std.testing.expectEqualStrings("Offline layout fixtures", std.mem.sliceTo(&state.app.magnet_buf, 0));
+            if (current.clear_query) try std.testing.expectEqual(@as(usize, 0), std.mem.sliceTo(&state.app.magnet_buf, 0).len);
+            if (!current.remove_scope and !current.clear_query and !current.ranking_fixture) try std.testing.expectEqual(@as(usize, 1), search.visibleScopedRowsForTest());
+        }
+    }
+    if (current.route == .browse and current.tab == .YouTube) {
+        var thumbnails_after: usize = 0;
+        for (state.app.yt.results.items) |item| {
+            if (item.thumb_tex != null) thumbnails_after += 1;
+        }
+        try std.testing.expect(thumbnails_after >= thumbnails_before);
+        try std.testing.expect(thumbnails_after - thumbnails_before <= 2);
+        if (frames >= 4) try std.testing.expect(thumbnails_after > 0);
+    }
     frames += 1;
     if (current.navigate_anime and frames >= 5) {
         try std.testing.expectEqual(router.Route.browse, state.app.router.current);
@@ -183,8 +279,11 @@ fn draw() !void {
         try std.testing.expect(bounds.sidebar.x + bounds.sidebar.w <= bounds.content.x + 1);
         try std.testing.expect(bounds.content.x + bounds.content.w <= viewport.x + viewport.w + 1);
         if (current.sidebar) |expanded| {
-            const expected: f32 = if (expanded) 208 else 48;
-            try std.testing.expect(@abs(bounds.sidebar.w - expected * dvui.windowNaturalScale()) <= 1);
+            // Clicking a rail item leaves the pointer over it, so hover expansion
+            // remains active during the navigation fixture.
+            const expected: f32 = if (expanded or (current.navigate_anime and frames >= 5) or (current.hover_sidebar and frames <= 5)) 208 else 48;
+            if (!current.hover_sidebar or frames == 5 or frames == 8)
+                try std.testing.expect(@abs(bounds.sidebar.w - expected * dvui.windowNaturalScale()) <= 1);
         }
     }
     if (current.route == .settings and frames >= 4) {
@@ -248,6 +347,8 @@ fn cleanup() void {
     @import("../services/novels.zig").setNativeFixtureForTest(&.{});
 }
 test "Native shell offline route pixel capture" {
+    try resolver.verifyConnectedFeedForTest();
+    try @import("browse_filters_native_test.zig").run();
     captured = 0;
     const workers = @import("../core/workers.zig");
     @import("../core/logs.zig").logs_allocator = alloc;
@@ -259,11 +360,25 @@ test "Native shell offline route pixel capture" {
     workers.beginShutdownAndDrain(0);
     defer workers.finishShutdown();
     const cases = [_]Case{
-        .{ .name = "home", .route = .home },           .{ .name = "search", .route = .search },
-        .{ .name = "watching", .route = .watching },   .{ .name = "downloads", .route = .downloads },
-        .{ .name = "queue", .route = .queue },         .{ .name = "history", .route = .history },
-        .{ .name = "assistant", .route = .assistant }, .{ .name = "system", .route = .system },
+        .{ .name = "ranking-lupin", .route = .search, .scope = .movies_tv, .ranking_fixture = true },
+        .{ .name = "submit-movies-direct", .route = .browse, .tab = .TMDB, .submit_query = true },
+        .{ .name = "submit-movies-sidebar", .route = .home, .tab = .TMDB, .submit_query = true, .navigate_movies = true },
+        .{ .name = "submit-movies-navigation", .route = .browse, .tab = .TMDB, .submit_query = true, .nav_api = true },
+        .{ .name = "submit-enter-youtube", .route = .browse, .tab = .YouTube, .submit_query = true },
+        .{ .name = "submit-enter-music", .route = .browse, .tab = .Music, .submit_query = true },
+        .{ .name = "scope-music", .route = .search, .scope = .music },
+        .{ .name = "scope-remove", .route = .search, .scope = .music, .remove_scope = true },
+        .{ .name = "scope-clear", .route = .search, .scope = .music, .clear_query = true },
+        .{ .name = "home", .route = .home },
+        .{ .name = "search", .route = .search },
+        .{ .name = "watching", .route = .watching },
+        .{ .name = "downloads", .route = .downloads },
+        .{ .name = "queue", .route = .queue },
+        .{ .name = "history", .route = .history },
+        .{ .name = "assistant", .route = .assistant },
+        .{ .name = "system", .route = .system },
         .{ .name = "player-empty", .route = .player },
+        .{ .name = "connect", .route = .connect },
     };
     const browse = [_]state.DrawerTab{ .TMDB, .YouTube, .Iptv, .Anime, .Podcasts, .Radio, .Music, .Comics, .Web, .RSS, .Jellyfin, .Plex, .Audiobooks, .Opds, .Novels, .Vndb, .Drama };
     for ([_][2]u32{ .{ 1360, 1000 }, .{ 640, 800 } }) |size| {
@@ -278,6 +393,8 @@ test "Native shell offline route pixel capture" {
             current = .{ .name = if (expanded) "sidebar-navigate-expanded" else "sidebar-navigate-rail", .route = .search, .sidebar = expanded, .navigate_anime = true };
             try captureCase(size);
         }
+        current = .{ .name = "sidebar-hover", .route = .search, .sidebar = false, .hover_sidebar = true };
+        try captureCase(size);
         for (browse) |tab| {
             var name: [64]u8 = undefined;
             current = .{ .name = try std.fmt.bufPrint(&name, "browse-{s}", .{@tagName(tab)}), .route = .browse, .tab = tab };

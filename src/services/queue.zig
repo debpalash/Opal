@@ -1,3 +1,4 @@
+const page_controls = @import("../ui/browse_filters.zig");
 const std = @import("std");
 const dvui = @import("dvui");
 const icons = @import("icons");
@@ -556,6 +557,8 @@ pub fn setRenderFixtureForTest(items: ?[]const QueueItem) void {
     queue_row_heights = @splat(0);
 }
 
+var show_collections = false;
+
 pub fn renderContent() void {
     if (!isReady() and !(@import("builtin").is_test and fixture_for_test)) {
         _ = dvui.label(@src(), "Loading queue…", .{}, .{
@@ -578,43 +581,28 @@ pub fn renderContent() void {
         }
     }
 
-    var content = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .padding = dvui.Rect.all(8) });
+    var content = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .padding = .{ .x = 4, .y = 0, .w = 4, .h = 4 } });
     defer content.deinit();
 
     // ── Header row ──
     {
-        var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = 0, .w = 0, .h = 10 } });
+        var hdr = page_controls.begin(@src());
         defer hdr.deinit();
 
-        dvui.icon(@src(), "", icons.tvg.lucide.@"list-music", .{}, .{
-            .color_text = theme.colors.accent,
-            .gravity_y = 0.5,
-            .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
-        });
-        // Capped for the same reason as the row titles: this label sits before
-        // three text buttons in a horizontal box, and dvui starves later
-        // siblings rather than shrinking earlier ones.
-        _ = dvui.label(@src(), "Play Queue", .{}, .{
-            .color_text = theme.colors.text_primary,
-            .gravity_y = 0.5,
-            .font = dvui.themeGet().font_heading,
-            .max_size_content = .{ .w = 140, .h = std.math.floatMax(f32) },
-        });
-
-        {
-            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
-            sp.deinit();
-        }
+        if (page_controls.item(@src(), .{ .id = 92000, .label = "Saved collections", .icon = icons.tvg.lucide.folder, .active = show_collections })) show_collections = !show_collections;
+        if (page_controls.item(@src(), .{ .id = 92001, .label = "Shuffle", .icon = icons.tvg.lucide.shuffle, .active = state.app.playlist_shuffle })) _ = apply(.@"toggle-shuffle", null);
+        const repeat_label: []const u8 = switch (state.app.playlist_repeat) {
+            .off => "Repeat: off",
+            .all => "Repeat: all",
+            .one => "Repeat: one",
+        };
+        if (page_controls.item(@src(), .{ .id = 92002, .label = repeat_label, .icon = icons.tvg.lucide.repeat, .active = state.app.playlist_repeat != .off })) _ = apply(.@"cycle-repeat", null);
+        if (page_controls.item(@src(), .{ .id = 92003, .label = "Previous", .icon = icons.tvg.lucide.@"skip-back" })) _ = apply(.previous, null);
+        if (page_controls.item(@src(), .{ .id = 92004, .label = "Next", .icon = icons.tvg.lucide.@"skip-forward" })) _ = apply(.next, null);
+        page_controls.divider(@src(), 92005);
 
         const fetching = thumb_backfill_active.load(.acquire);
-        if (dvui.button(@src(), if (fetching) "Stop Fetch" else "Fetch Thumbs", .{}, .{
-            .color_fill = if (fetching) theme.colors.bg_elevated else theme.colors.accent,
-            .color_fill_hover = if (fetching) theme.colors.bg_elevated.lighten(6) else theme.colors.accent.lighten(8),
-            .color_text = if (fetching) theme.colors.danger else theme.colors.text_on_accent,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
-            .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
-        })) {
+        if (page_controls.item(@src(), .{ .id = 92006, .label = if (fetching) "Stop fetching thumbnails" else "Fetch thumbnails", .icon = icons.tvg.lucide.image, .active = fetching })) {
             if (thumb_backfill_active.load(.acquire)) {
                 thumb_backfill_cancel.store(true, .release);
             } else {
@@ -647,58 +635,10 @@ pub fn renderContent() void {
         }
     }
 
-    renderCollections();
-
-    // One shared play-order policy for Queue and imported playlists. Compact
-    // text controls stay understandable without icon/tooltip discovery.
-    {
-        const transparent = theme.transparent;
-        var playback_bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
-        });
-        defer playback_bar.deinit();
-
-        if (dvui.button(@src(), if (state.app.playlist_shuffle) "Shuffle: on" else "Shuffle: off", .{}, .{
-            .color_fill = transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
-            .color_text = if (state.app.playlist_shuffle) theme.colors.accent else theme.colors.text_secondary,
-        })) _ = apply(.@"toggle-shuffle", null);
-
-        const repeat_label: []const u8 = switch (state.app.playlist_repeat) {
-            .off => "Repeat: off",
-            .all => "Repeat: all",
-            .one => "Repeat: one",
-        };
-        if (dvui.button(@src(), repeat_label, .{}, .{
-            .color_fill = transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
-            .color_text = if (state.app.playlist_repeat == .off) theme.colors.text_secondary else theme.colors.accent,
-        })) _ = apply(.@"cycle-repeat", null);
-
-        if (dvui.button(@src(), "Previous", .{}, .{ .color_fill = transparent, .color_fill_hover = theme.colors.bg_hover, .color_fill_press = theme.colors.bg_elevated, .color_text = theme.colors.text_secondary }))
-            _ = apply(.previous, null);
-        if (dvui.button(@src(), "Next", .{}, .{ .color_fill = transparent, .color_fill_hover = theme.colors.bg_hover, .color_fill_press = theme.colors.bg_elevated, .color_text = theme.colors.text_secondary }))
-            _ = apply(.next, null);
-    }
+    if (show_collections) renderCollections();
 
     // ── Now Playing from mpv ──
     renderNowPlaying();
-
-    // ── Separator ──
-    {
-        var sep = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .background = true,
-            .color_fill = theme.colors.border_subtle,
-            .min_size_content = .{ .w = 0, .h = 1 },
-            .max_size_content = .{ .w = 0, .h = 1 },
-            .margin = .{ .x = 0, .y = 8, .w = 0, .h = 8 },
-        });
-        sep.deinit();
-    }
 
     // ── Persisted Queue Items ──
     if (queue_count == 0) {

@@ -7,6 +7,7 @@
 #include <libtorrent/torrent_handle.hpp>
 #include <libtorrent/peer_info.hpp>
 #include <libtorrent/torrent_info.hpp>
+#include <libtorrent/version.hpp>
 #include <libtorrent/create_torrent.hpp>
 #include <libtorrent/bencode.hpp>
 #include <libtorrent/entry.hpp>
@@ -33,6 +34,35 @@
 #endif
 #include <windows.h>
 #endif
+
+// libtorrent 2.1 separates immutable layout from renamed on-disk paths.
+// Keep the 2.0 API available for packaged builds on older distributions.
+static const lt::file_storage& file_layout(const lt::torrent_info& info) {
+#if LIBTORRENT_VERSION_NUM >= 20100
+    return info.layout();
+#else
+    return info.files();
+#endif
+}
+
+static std::string torrent_file_path(const lt::torrent_handle& handle,
+                                     const lt::torrent_info& info, lt::file_index_t index) {
+#if LIBTORRENT_VERSION_NUM >= 20100
+    const auto renames = handle.get_renamed_files();
+    return lt::filenames(info.layout(), renames).file_path(index);
+#else
+    (void)handle;
+    return info.files().file_path(index);
+#endif
+}
+
+static lt::tcp::endpoint remote_peer_endpoint(const lt::peer_info& peer) {
+#if LIBTORRENT_VERSION_NUM >= 20100
+    return peer.remote_endpoint();
+#else
+    return peer.ip;
+#endif
+}
 
 struct TorrentNode {
     lt::torrent_handle handle;
@@ -253,7 +283,7 @@ static bool get_file_piece_range(const lt::torrent_handle& h, int file_idx,
                                   int& out_first, int& out_last, int& out_total) {
     auto ti = h.torrent_file();
     if (!ti) return false;
-    const lt::file_storage& files = ti->files();
+    const lt::file_storage& files = file_layout(*ti);
     if (file_idx < 0 || file_idx >= files.num_files()) return false;
 
     std::int64_t file_size = files.file_size(lt::file_index_t(file_idx));
@@ -320,7 +350,7 @@ static void recover_memory_range(const std::shared_ptr<TorrentNode>& node, int f
     node->last_memory_recheck = now;
     std::vector<lt::peer_info> peers;
     node->handle.get_peer_info(peers);
-    for (auto const& peer : peers) node->memory_reconnect.push_back(peer.ip);
+    for (auto const& peer : peers) node->memory_reconnect.push_back(remote_peer_endpoint(peer));
     node->handle.force_recheck();
 }
 
@@ -819,7 +849,7 @@ extern "C" int torrent_poll(TorrentSession session, int torrent_id, int target_f
             } catch(...) {}
         }
         
-        lt::file_storage const& files = ti->files();
+        lt::file_storage const& files = file_layout(*ti);
         int active_idx = target_file_idx;
         
         if (active_idx < 0) {
@@ -837,7 +867,7 @@ extern "C" int torrent_poll(TorrentSession session, int torrent_id, int target_f
             if (!get_file_piece_range(node->handle, active_idx, first_piece, last_piece, total_pieces))
                 return 0;
 
-            std::string full_path = st.save_path + "/" + files.file_path(lt::file_index_t(active_idx));
+            std::string full_path = st.save_path + "/" + torrent_file_path(node->handle, *ti, lt::file_index_t(active_idx));
 
             // ── Initial streaming window: deadline-based (NOT sequential) ──
             // Also re-apply if the file changed (ready_flag was reset by file_priority set)
@@ -874,7 +904,7 @@ extern "C" int torrent_get_file_count(TorrentSession session, int torrent_id) {
         if (!node->alive || !node->handle.is_valid()) return 0;
         std::shared_ptr<const lt::torrent_info> ti = node->handle.torrent_file();
         if (!ti) return 0;
-        return ti->files().num_files();
+        return file_layout(*ti).num_files();
     } catch(...) { return 0; }
 }
 
@@ -887,7 +917,7 @@ extern "C" void torrent_get_file_path(TorrentSession session, int torrent_id, in
     try {
         auto ti = node->handle.torrent_file();
         if (!ti || file_idx < 0 || file_idx >= ti->num_files()) return;
-        const std::string path = ti->files().file_path(lt::file_index_t(file_idx));
+        const std::string path = torrent_file_path(node->handle, *ti, lt::file_index_t(file_idx));
         if (path.size() >= static_cast<std::size_t>(max_len)) return;
         std::memcpy(out, path.c_str(), path.size() + 1);
     } catch (...) {}
@@ -902,8 +932,8 @@ extern "C" void torrent_get_file_name(TorrentSession session, int torrent_id, in
     try {
         if (!node->alive || !node->handle.is_valid()) return;
         std::shared_ptr<const lt::torrent_info> ti = node->handle.torrent_file();
-        if (!ti || file_idx < 0 || file_idx >= ti->files().num_files()) return;
-        std::string path = ti->files().file_path(lt::file_index_t(file_idx));
+        if (!ti || file_idx < 0 || file_idx >= file_layout(*ti).num_files()) return;
+        std::string path = torrent_file_path(node->handle, *ti, lt::file_index_t(file_idx));
         size_t last_slash = path.find_last_of("/\\");
         std::string name = (last_slash == std::string::npos) ? path : path.substr(last_slash + 1);
         std::strncpy(out_name, name.c_str(), max_len);
@@ -922,8 +952,8 @@ extern "C" long long torrent_get_file_size(TorrentSession session, int torrent_i
     try {
         if (!node->alive || !node->handle.is_valid()) return 0;
         std::shared_ptr<const lt::torrent_info> ti = node->handle.torrent_file();
-        if (!ti || file_idx < 0 || file_idx >= ti->files().num_files()) return 0;
-        return ti->files().file_size(lt::file_index_t(file_idx));
+        if (!ti || file_idx < 0 || file_idx >= file_layout(*ti).num_files()) return 0;
+        return file_layout(*ti).file_size(lt::file_index_t(file_idx));
     } catch(...) { return 0; }
 }
 
@@ -1034,7 +1064,7 @@ extern "C" float torrent_get_file_progress(TorrentSession session, int torrent_i
             if (file_idx >= 0 && (size_t)file_idx < progress.size()) {
                 std::shared_ptr<const lt::torrent_info> ti = node->handle.torrent_file();
                 if (ti) {
-                    std::int64_t total = ti->files().file_size(lt::file_index_t(file_idx));
+                    std::int64_t total = file_layout(*ti).file_size(lt::file_index_t(file_idx));
                     if (total > 0) {
                         return (float)progress[file_idx] / (float)total;
                     }
@@ -1247,11 +1277,11 @@ extern "C" void torrent_set_seek_hint(TorrentSession session, int torrent_id, in
 
         auto ti = node->handle.torrent_file();
         if (!ti) return;
-        const auto size = ti->files().file_size(lt::file_index_t(file_idx));
+        const auto size = file_layout(*ti).file_size(lt::file_index_t(file_idx));
         if (size <= 0) return;
 
         const auto clamped = std::min<std::int64_t>(byte_offset, size - 1);
-        const auto mapped = ti->files().map_file(lt::file_index_t(file_idx), clamped, 0);
+        const auto mapped = file_layout(*ti).map_file(lt::file_index_t(file_idx), clamped, 0);
         const int target_piece = std::max(first_piece, std::min(static_cast<int>(mapped.piece), last_piece));
 
         // A reconnect at the current play head needs no deadline churn. A real
@@ -1419,8 +1449,8 @@ extern "C" long long torrent_get_file_offset(TorrentSession session, int torrent
     try {
         if (!node->alive || !node->handle.is_valid()) return -1;
         auto ti = node->handle.torrent_file();
-        if (!ti || file_idx >= ti->files().num_files()) return -1;
-        return ti->files().file_offset(lt::file_index_t(file_idx));
+        if (!ti || file_idx >= file_layout(*ti).num_files()) return -1;
+        return file_layout(*ti).file_offset(lt::file_index_t(file_idx));
     } catch (...) {}
     return -1;
 }
@@ -1455,7 +1485,7 @@ extern "C" int torrent_read_bytes(TorrentSession session, int torrent_id, int fi
         auto ti = node->handle.torrent_file();
         if (!ti) return -1;
 
-        const lt::file_storage& files = ti->files();
+        const lt::file_storage& files = file_layout(*ti);
         if (file_idx >= files.num_files()) return -1;
 
         std::int64_t file_size = files.file_size(lt::file_index_t(file_idx));
@@ -1562,7 +1592,7 @@ extern "C" int torrent_read_bytes(TorrentSession session, int torrent_id, int fi
             if (!node->read_stream.is_open() || node->read_stream_file_idx != file_idx) {
                 if (node->read_stream.is_open()) node->read_stream.close();
                 lt::torrent_status st = node->handle.status();
-                std::string full_path = st.save_path + "/" + files.file_path(lt::file_index_t(file_idx));
+                std::string full_path = st.save_path + "/" + torrent_file_path(node->handle, *ti, lt::file_index_t(file_idx));
                 node->read_stream.clear();
                 node->read_stream.open(full_path, std::ios::binary);
                 if (!node->read_stream.is_open()) return -1;
@@ -1598,7 +1628,7 @@ static bool map_range_to_pieces(const std::shared_ptr<TorrentNode>& node, int fi
     auto ti = node->handle.torrent_file();
     if (!ti) return false;
 
-    const lt::file_storage& files = ti->files();
+    const lt::file_storage& files = file_layout(*ti);
     if (file_idx >= files.num_files()) return false;
 
     std::int64_t file_size = files.file_size(lt::file_index_t(file_idx));

@@ -34,6 +34,7 @@ pub const browser_user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " ++
 
 pub const Request = struct {
     url: []const u8,
+    audio_only: bool = false,
     /// Optional second URL for the same logical item. The player tries this
     /// exactly once only when the primary fails before FILE_LOADED. It shares
     /// the request's identity, headers and resume point.
@@ -182,6 +183,7 @@ test "loadfile index argument only on mpv 0.38+ (client API 2.3+)" {
 /// always explicit, including the defaults, so an appended entry cannot later
 /// inherit whatever happens to be configured on the player context.
 pub const FileOptions = struct {
+    audio_only: bool = false,
     user_agent: []const u8,
     header_fields: []const u8,
     cache_pause_initial: [:0]const u8,
@@ -256,6 +258,7 @@ pub fn dispatch(sink: anytype, request: Request) bool {
     const fields = resolvedHeaderFields(request, &joined);
 
     sink.loadFile(request.url, request.mode, .{
+        .audio_only = request.audio_only,
         .user_agent = effectiveUserAgent(request),
         .header_fields = fields,
         .cache_pause_initial = cachePauseInitial(request.url, request.loopback_stream),
@@ -269,6 +272,7 @@ pub fn dispatch(sink: anytype, request: Request) bool {
 const EventKind = enum { set_option, load_file };
 
 const FakeEvent = struct {
+    audio_only: bool = false,
     kind: EventKind,
     name: [32]u8 = undefined,
     name_len: usize = 0,
@@ -318,7 +322,7 @@ const FakeSink = struct {
     }
 
     fn loadFile(self: *FakeSink, url: []const u8, mode: Mode, options: FileOptions) void {
-        var event: FakeEvent = .{ .kind = .load_file, .mode = mode };
+        var event: FakeEvent = .{ .kind = .load_file, .mode = mode, .audio_only = options.audio_only };
         event.value_len = @min(url.len, event.value.len);
         @memcpy(event.value[0..event.value_len], url[0..event.value_len]);
         event.user_agent_len = @min(options.user_agent.len, event.user_agent.len);
@@ -506,4 +510,14 @@ test "provider start survives consumed resume and resets for restored sessions" 
     intent.arm(12);
     intent.arm(null); // a subsequent restored-session load must stay paused
     try std.testing.expect(!intent.consume());
+}
+
+test "music audio selection stays per entry and does not leak into the next video" {
+    var sink: FakeSink = .{};
+    try std.testing.expect(dispatch(&sink, .{ .url = "https://example.test/song", .audio_only = true }));
+    try std.testing.expect(sink.events[sink.len - 1].audio_only);
+    try std.testing.expect(dispatch(&sink, .{ .url = "https://example.test/queued-song", .audio_only = true, .mode = .append }));
+    try std.testing.expect(sink.events[sink.len - 1].audio_only);
+    try std.testing.expect(dispatch(&sink, .{ .url = "https://example.test/video" }));
+    try std.testing.expect(!sink.events[sink.len - 1].audio_only);
 }

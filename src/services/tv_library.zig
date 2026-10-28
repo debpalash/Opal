@@ -25,6 +25,7 @@
 //! the Downloads list uses would be ~800 queries/sec for data that only changes
 //! when you actually watch something.
 
+const page_controls = @import("../ui/browse_filters.zig");
 const std = @import("std");
 const dvui = @import("dvui");
 const state = @import("../core/state.zig");
@@ -962,97 +963,37 @@ pub fn renderContent() void {
 }
 
 fn renderControlBar() void {
-    var bar = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .expand = .horizontal,
-        .background = true,
-        .color_fill = theme.colors.bg_app,
-        .padding = .{ .x = theme.spacing.lg, .y = theme.spacing.md, .w = theme.spacing.lg, .h = theme.spacing.sm },
-    });
+    var bar = page_controls.begin(@src());
     defer bar.deinit();
-
-    var counts: [6]usize = .{ 0, 0, 0, 0, 0, 0 };
-    tp.countsFor(rows[0..row_count], kind_filter, &counts);
-
-    // Page identity + one useful summary. Counts no longer repeat inside every
-    // chip, which made the old toolbar read like a diagnostic panel.
-    {
-        var mast = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
-        defer mast.deinit();
-        {
-            var copy = dvui.box(@src(), .{ .dir = .vertical }, .{});
-            defer copy.deinit();
-            _ = dvui.label(@src(), "Watching", .{}, .{
-                .color_text = theme.colors.text_primary,
-                .font = dvui.themeGet().font_heading,
-            });
-            var summary_buf: [96]u8 = undefined;
-            const summary = std.fmt.bufPrint(&summary_buf, "{d} titles · {d} ready to continue", .{
-                counts[@intFromEnum(tp.Filter.all)],
-                counts[@intFromEnum(tp.Filter.watching)],
-            }) catch "Your saved progress";
-            _ = dvui.label(@src(), "{s}", .{summary}, .{
-                .color_text = theme.colors.text_tertiary,
-                .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
-            });
-        }
-        {
-            var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
-            spacer.deinit();
-        }
-        if (isSyncing()) {
-            _ = dvui.label(@src(), "Refreshing metadata…", .{}, .{
-                .color_text = theme.colors.text_tertiary,
-                .gravity_y = 0.5,
-            });
-        } else if (dvui.button(@src(), "Refresh", .{}, .{
-            .background = true,
-            .color_fill = theme.colors.bg_elevated,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_text = theme.colors.text_secondary,
-            .border = dvui.Rect.all(0),
-            .corner_radius = dvui.Rect.all(theme.radius.sm),
-            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.xs, .w = theme.spacing.md, .h = theme.spacing.xs },
-            .gravity_y = 0.5,
-        })) {
-            resync();
-        }
+    const kinds = [_]page_controls.Item{
+        .{ .id = 0, .label = "All types", .icon = icons.tvg.lucide.@"layout-grid" },
+        .{ .id = 1, .label = "TV", .icon = icons.tvg.lucide.tv },
+        .{ .id = 2, .label = "Anime", .icon = icons.tvg.lucide.sparkles },
+        .{ .id = 3, .label = "Movies", .icon = icons.tvg.lucide.film },
+    };
+    if (bar.menu(@src(), .{ .items = &kinds, .selected = @intFromEnum(kind_filter) })) |id| {
+        kind_filter = @enumFromInt(id);
+        state.app.watching_kind_filter = @intCast(id);
+        state.markConfigDirty();
     }
-
-    // One calm toolbar. Each control is a segmented group rather than ten
-    // unrelated pills, and the pair wraps as units on narrow windows.
-    var filters = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
-        .expand = .horizontal,
-        .padding = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 },
-    });
-    defer filters.deinit();
-    {
-        var group = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .max_size_content = .{ .w = 340, .h = std.math.floatMax(f32) },
-            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.md, .h = theme.spacing.xs },
-        });
-        defer group.deinit();
-        _ = dvui.label(@src(), "TYPE", .{}, .{ .color_text = theme.colors.text_tertiary });
-        const labels = [_][]const u8{ "All", "TV", "Anime", "Movies" };
-        if (components.segment(@src(), &labels, @intFromEnum(kind_filter))) |picked| {
-            kind_filter = @enumFromInt(picked);
-            state.app.watching_kind_filter = @intCast(picked);
-            state.markConfigDirty();
-        }
+    page_controls.divider(@src(), 50);
+    const progress = [_]page_controls.Item{
+        .{ .id = 0, .label = "All progress", .icon = icons.tvg.lucide.list },
+        .{ .id = 1, .label = "In progress", .icon = icons.tvg.lucide.play },
+        .{ .id = 2, .label = "Caught up", .icon = icons.tvg.lucide.check },
+        .{ .id = 3, .label = "Planned", .icon = icons.tvg.lucide.bookmark },
+        .{ .id = 4, .label = "Done", .icon = icons.tvg.lucide.@"circle-check" },
+        .{ .id = 5, .label = "Dropped", .icon = icons.tvg.lucide.x },
+    };
+    if (bar.menu(@src(), .{ .items = &progress, .selected = @intFromEnum(filter) })) |id| {
+        filter = @enumFromInt(id);
+        state.app.watching_filter = @intCast(id);
+        state.markConfigDirty();
     }
-    {
-        var group = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .max_size_content = .{ .w = 620, .h = std.math.floatMax(f32) },
-            .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.xs },
-        });
-        defer group.deinit();
-        _ = dvui.label(@src(), "PROGRESS", .{}, .{ .color_text = theme.colors.text_tertiary });
-        const labels = [_][]const u8{ "All", "In progress", "Caught up", "Planned", "Done", "Dropped" };
-        if (components.segment(@src(), &labels, @intFromEnum(filter))) |picked| {
-            filter = @enumFromInt(picked);
-            state.app.watching_filter = @intCast(picked);
-            state.markConfigDirty();
-        }
-    }
+    page_controls.divider(@src(), 51);
+    if (isSyncing()) {
+        dvui.spinner(@src(), .{ .min_size_content = theme.iconSize(.sm), .color_text = theme.colors.accent, .gravity_y = 0.5 });
+    } else if (page_controls.item(@src(), .{ .id = 52, .label = "Refresh library", .icon = icons.tvg.lucide.@"refresh-cw" })) resync();
 }
 
 fn renderEmpty() void {

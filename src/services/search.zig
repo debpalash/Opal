@@ -839,7 +839,32 @@ fn queryEztvApi(query: []const u8, allocator: std.mem.Allocator, my_gen: u64) vo
 /// Programmatic unified search — the shell omnibox's default action. Copies the
 /// query into search_buf, switches to universal (all-source) mode, and kicks off
 /// the resolver fan-out. Mirrors the in-page universal submit at renderSearchContent.
+pub const scope_model = @import("search_scope_pure.zig");
+var scope_context: scope_model.Context = .{};
+pub fn currentScope() scope_model.Scope {
+    return scope_context.scope;
+}
+pub fn enterSearchContext(page: scope_model.Context.Page, tab: []const u8) void {
+    if (scope_context.enter(page, tab)) view_dirty = true;
+}
+pub fn setSearchScope(scope: scope_model.Scope) void {
+    scope_context.scope = scope;
+    view_dirty = true;
+}
+pub fn changeSearchScope(scope: scope_model.Scope) void {
+    setSearchScope(scope);
+    const len = std.mem.indexOfScalar(u8, &state.app.magnet_buf, 0) orelse state.app.magnet_buf.len;
+    const text = std.mem.trim(u8, state.app.magnet_buf[0..len], " \t\r\n");
+    if (text.len > 0 and @import("browser_pure.zig").classifyOmnibox(text) == .search) {
+        submitScopedQuery(text);
+        state.app.router.navigate(.search);
+    }
+}
 pub fn submitQuery(query_text: []const u8) void {
+    setSearchScope(.all);
+    submitScopedQuery(query_text);
+}
+pub fn submitScopedQuery(query_text: []const u8) void {
     var owned: [1024]u8 = undefined;
     const n = @min(query_text.len, owned.len - 1);
     if (n == 0) return;
@@ -849,15 +874,19 @@ pub fn submitQuery(query_text: []const u8) void {
     cancelPendingMemorySearch();
     @import("search_preview.zig").stop();
     @import("activity.zig").record(.search, owned[0..n], .{});
-    setUniversalQuery(owned[0..n]);
+    setQueryText(owned[0..n]);
     // Natural-language / constrained queries also search the user's own library
     // and subtitles (ROADMAP 7.1); bare titles clear those sections.
-    @import("recall.zig").submit(owned[0..n]);
-    @import("resolver.zig").resolve(owned[0..n], "auto");
+    if (currentScope() == .all) @import("recall.zig").submit(owned[0..n]) else @import("recall.zig").clear();
+    _ = @import("resolver.zig").resolveScoped(owned[0..n], "auto", currentScope());
 }
 
 /// Display an already-resolved query through the same editable shell field.
 pub fn setUniversalQuery(query_text: []const u8) void {
+    setSearchScope(.all);
+    setQueryText(query_text);
+}
+fn setQueryText(query_text: []const u8) void {
     var owned: [1024]u8 = undefined;
     const n = @min(query_text.len, owned.len - 1);
     @memcpy(owned[0..n], query_text[0..n]);
@@ -879,6 +908,7 @@ pub fn cancelPendingMemorySearch() void {
 
 /// Unified Clear supersedes both searches and pending memory publication.
 pub fn clearShellSearch() void {
+    connected_feed_started = false;
     @import("search_preview.zig").stop();
     cancelPendingMemorySearch();
     @import("recall.zig").clear();
@@ -1109,6 +1139,11 @@ fn submitSearchInput(raw: []const u8) void {
     }
 }
 
+var connected_feed_started = false;
+pub fn invalidateConnectedFeed() void {
+    connected_feed_started = false;
+}
+
 pub fn renderSearchContent() void {
     state.app.universal_search = true; // compatibility with saved sessions/API
     if (!state.app.page_shell_enabled) {
@@ -1160,6 +1195,11 @@ pub fn renderSearchContent() void {
         renderShellSearchControls(false);
     }
     refreshSearchView();
+    if (view_cache.query_len == 0 and currentScope() == .all and !connected_feed_started) {
+        connected_feed_started = true;
+        _ = @import("resolver.zig").resolveTracked("", "connected");
+        refreshSearchView();
+    } else if (view_cache.query_len > 0) connected_feed_started = false;
     if (filters_open) renderSearchFilters();
     renderActiveSearchFilters();
     renderUniversalResults();
@@ -1188,7 +1228,7 @@ pub fn renderShellSearchControls(dense: bool) void {
         }
     } else if (view_cache.query_len > 0 and view_cache.loaded == 0) {
         const retry_clicked = if (dense) searchIconButton(91304, icons.tvg.lucide.@"rotate-ccw", "Retry search", false) else searchButton(91304, "Retry", false);
-        if (retry_clicked) submitQuery(view_cache.query[0..view_cache.query_len]);
+        if (retry_clicked) submitScopedQuery(view_cache.query[0..view_cache.query_len]);
     }
 }
 
@@ -1560,7 +1600,7 @@ fn refreshSearchView() void {
     for (view_cache.rows.?[0..snap.count], 0..) |*item, i| {
         view_cache.projected[i] = resolver.searchView(item);
         if (item.name_len == 0 or (view_cache.nsfw and item.is_nsfw)) continue;
-        if (!search_view.matches(view_cache.projected[i], view_filters)) continue;
+        if (!currentScope().matches(view_cache.projected[i]) or !search_view.matches(view_cache.projected[i], view_filters)) continue;
         view_cache.order[view_cache.count] = i;
         view_cache.count += 1;
     }
@@ -1644,7 +1684,7 @@ fn renderDidYouMean(typed: []const u8) void {
     }
     if (picked_len > 0) {
         help.noteChipClick(picked[0..picked_len]);
-        submitQuery(picked[0..picked_len]);
+        submitScopedQuery(picked[0..picked_len]);
     }
 }
 
@@ -1666,25 +1706,33 @@ fn renderUniversalResults() void {
         _ = dvui.label(@src(), "{s}", .{count}, .{ .color_text = theme.colors.text_secondary, .padding = dvui.Rect.all(theme.spacing.sm) });
     }
     // Recall: "From your library" + "Moments" above the source results.
-    @import("../ui/recall_results.zig").render(view_cache.query[0..view_cache.query_len]);
+    if (currentScope() == .all) @import("../ui/recall_results.zig").render(view_cache.query[0..view_cache.query_len]);
     if (view_cache.rows == null) {
         components.emptyState(icons.tvg.lucide.@"search-x", "Search could not allocate its result view", "Try again after closing unused players.");
         return;
     }
     if (view_cache.loaded == 0) {
         if (view_cache.loading) {
-            components.loadingState("Searching your enabled sources…");
+            components.loadingState(if (view_cache.query_len == 0) "Loading your libraries…" else "Searching your enabled sources…");
         } else if (view_cache.query_len > 0) {
             // The background operator may know another way to word it. Free when it is off.
             const typed = view_cache.query[0..view_cache.query_len];
             @import("operator_search_help.zig").onEmptyResults(typed);
             renderDidYouMean(typed);
-            components.emptyState(icons.tvg.lucide.@"search-x", "No matches", "Try a broader query or open Filters › Sources to check provider status.");
-        } else renderUniversalCapabilities();
+            components.emptyState(icons.tvg.lucide.@"search-x", "No matches", if (currentScope() == .all) "Try a broader query or check your filters." else "Try another title or search all content.");
+            if (currentScope() != .all and dvui.button(@src(), "Search all content", .{}, .{})) changeSearchScope(.all);
+        } else if (currentScope() != .all) {
+            components.emptyState(icons.tvg.lucide.search, "Search this collection", "Enter a title above.");
+        } else {
+            components.emptyState(icons.tvg.lucide.library, "No connected content yet", "Search above or connect a library.");
+            if (dvui.button(@src(), "Connect", .{}, .{})) state.app.router.navigate(.connect);
+            if (dvui.button(@src(), "Refresh", .{}, .{})) invalidateConnectedFeed();
+        }
         return;
     }
     if (view_cache.count == 0) {
         components.emptyState(icons.tvg.lucide.@"search-x", "No matches for these filters", "Remove a filter to see more of the loaded results.");
+        if (currentScope() != .all and dvui.button(@src(), "Search all content", .{}, .{})) changeSearchScope(.all);
         return;
     }
     var pending: ?ResultAction = null;
@@ -1869,6 +1917,7 @@ fn ensureContentProjection() void {
     var count: usize = 0;
     for (rows, 0..) |item, index| {
         if (item.name_len == 0 or (view_cache.nsfw and item.is_nsfw)) continue;
+        if (!currentScope().matches(view_cache.projected[index])) continue;
         indexes[count] = index;
         count += 1;
     }
@@ -1877,12 +1926,14 @@ fn ensureContentProjection() void {
         var revision: u64 = std.math.maxInt(u64);
         var generation: u32 = 0;
         var nsfw = false;
+        var scope: scope_model.Scope = .all;
     };
-    if (ProjectionCache.revision != view_cache.revision or ProjectionCache.generation != view_cache.generation or ProjectionCache.nsfw != view_cache.nsfw) {
+    if (ProjectionCache.revision != view_cache.revision or ProjectionCache.generation != view_cache.generation or ProjectionCache.nsfw != view_cache.nsfw or ProjectionCache.scope != currentScope()) {
         search_content.projectInto(rows, indexes[0..count], &content_projection);
         ProjectionCache.revision = view_cache.revision;
         ProjectionCache.generation = view_cache.generation;
         ProjectionCache.nsfw = view_cache.nsfw;
+        ProjectionCache.scope = currentScope();
     }
 }
 
@@ -1908,11 +1959,16 @@ fn renderContentGallery(pending: *?ResultAction) void {
     }
     std.sort.insertion(usize, visible[0..visible_count], {}, struct {
         fn less(_: void, a: usize, b: usize) bool {
+            if (view_sort == .relevance) {
+                const lhs = content_projection.groups[a];
+                const rhs = content_projection.groups[b];
+                return lhs.score < rhs.score or (lhs.score == rhs.score and lhs.identity < rhs.identity);
+            }
             return search_view.lessThan(view_sort, view_cache.projected[content_projection.groups[a].representative], view_cache.projected[content_projection.groups[b].representative]);
         }
     }.less);
     for (visible[0..visible_count], 0..) |index, position| identities[position] = content_projection.groups[index].identity;
-    const selected_position = gallery_layout.retainSelection(identities[0..visible_count], gallery_selection) orelse {
+    const selected_position = gallery_layout.retainSelection(identities[0..visible_count], if (gallery_selected_manually) gallery_selection else 0) orelse {
         @import("search_preview.zig").stop();
         return;
     };
@@ -1941,7 +1997,9 @@ fn renderContentGallery(pending: *?ResultAction) void {
             renderCompactRow(index, &rows[index], pending);
         }
     }
-    inline for (std.meta.tags(search_content.Category)) |category| {
+    var categories: [@typeInfo(search_content.Category).@"enum".fields.len]search_content.Category = undefined;
+    const category_count_visible = search_content.categoryOrder(&content_projection, visible[0..visible_count], &categories);
+    for (categories[0..category_count_visible]) |category| {
         var category_count: usize = 0;
         for (visible[0..visible_count]) |index| if (content_projection.groups[index].category == category) {
             category_count += 1;
@@ -2846,4 +2904,14 @@ pub fn renderNsfwModal() void {
         loadTorrentToPlayer(link);
         state.app.nsfw_confirm_pending = false;
     }
+}
+
+pub fn visibleScopedRowsForTest() usize {
+    if (!@import("builtin").is_test) @compileError("test-only");
+    return view_cache.count;
+}
+
+pub fn firstRankedCatalogForTest() i32 {
+    if (content_projection.count == 0) return 0;
+    return view_cache.rows.?[content_projection.groups[0].representative].catalog_id;
 }

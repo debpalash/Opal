@@ -9,6 +9,9 @@ extern fn opal_webp_info(data: [*]const u8, size: usize, width: *c_int, height: 
 extern fn opal_webp_decode_rgba(data: [*]const u8, size: usize, width: c_int, height: c_int, rgba_bytes: usize) [*c]u8;
 const fixture = @embedFile("testdata/lossless-cover.webp");
 var textures: [2]?dvui.Texture = .{ null, null };
+var burst_pixels: [10]?[]u8 = @splat(null);
+var burst_textures: [10]?dvui.Texture = @splat(null);
+var burst_frame: usize = 0;
 
 fn checkDecoder() !void {
     try std.testing.expect(@import("image_limits_pure.zig").isWebP(fixture));
@@ -92,6 +95,11 @@ fn checkGpuAlpha(texture: dvui.Texture) !void {
 }
 
 fn draw() !void {
+    if (burst_frame == 0) {
+        for (&burst_pixels) |*pixels| {
+            pixels.* = try std.heap.c_allocator.dupe(u8, &.{ 255, 0, 0, 255 });
+        }
+    }
     if (textures[0] == null) {
         textures[0] = try upload(fixture);
         try checkGpuAlpha(textures[0].?);
@@ -107,6 +115,19 @@ fn draw() !void {
             textures[1] = try upload(bytes);
         }
     }
+    var uploaded: usize = 0;
+    var ready: usize = 0;
+    for (&burst_pixels, &burst_textures) |*pixels, *texture| {
+        const was_ready = texture.* != null;
+        if (@import("poster.zig").uploadIfReady(pixels, 1, 1, texture)) {
+            ready += 1;
+            if (!was_ready) uploaded += 1;
+            try std.testing.expect(pixels.* == null);
+        } else try std.testing.expect(pixels.* != null);
+    }
+    try std.testing.expect(uploaded <= 4);
+    if (burst_frame >= 4) try std.testing.expectEqual(@as(usize, 10), ready);
+    burst_frame += 1;
     var page = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .padding = dvui.Rect.all(20), .color_fill = .{ .r = 24, .g = 24, .b = 24 }, .background = true });
     defer page.deinit();
     _ = dvui.label(@src(), "Shared WebP decoder / actual GPU upload", .{}, .{ .color_text = .{ .r = 245, .g = 245, .b = 245 } });
@@ -121,6 +142,10 @@ fn draw() !void {
     }
 }
 fn cleanup() void {
+    for (&burst_pixels, &burst_textures) |*pixels, *texture| {
+        @import("poster.zig").deinitPoster(pixels, texture);
+    }
+    burst_frame = 0;
     for (&textures) |*texture| {
         if (texture.*) |t| dvui.textureDestroyLater(t);
         texture.* = null;

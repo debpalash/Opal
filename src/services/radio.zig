@@ -15,6 +15,7 @@
 //!   playStation(i)  → browser.loadContentDirect(url_resolved | url) → mpv,
 //!                     then a best-effort click-count ping to /json/url/{uuid}.
 
+const browse_filters = @import("../ui/browse_filters.zig");
 const std = @import("std");
 const dvui = @import("dvui");
 const icons = @import("icons");
@@ -771,12 +772,7 @@ pub fn renderContent() void {
 
 fn renderSearchBar() void {
     if (!@import("../ui/browse_layout_pure.zig").showLocalSearch(state.app.page_shell_enabled)) return;
-    var row = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
-        .expand = .horizontal,
-        .padding = .{ .x = 10, .y = 7, .w = 10, .h = 7 },
-        .background = true,
-        .color_fill = theme.colors.bg_surface,
-    });
+    var row = browse_filters.begin(@src());
     defer row.deinit();
 
     _ = dvui.icon(@src(), "", icons.tvg.lucide.radio, .{}, .{
@@ -972,7 +968,6 @@ fn renderCard(i: usize, card_w: f32, s: *const pure.Station) void {
 fn renderResults() void {
     parse_mutex.lock();
     const count = @min(state.app.radio.result_count, state.app.radio.results.len);
-    const showing_popular = state.app.radio.showing_popular;
     parse_mutex.unlock();
     if (count == 0 and more_available and !state.app.radio.is_loading.load(.acquire)) loadMore();
     if (count == 0 and !state.app.radio.is_loading.load(.acquire) and !loading_more.load(.acquire)) {
@@ -986,13 +981,6 @@ fn renderResults() void {
         .color_fill = theme.colors.bg_surface,
     });
     defer scroll.deinit();
-
-    _ = dvui.label(@src(), "{s} · {d}", .{
-        if (showing_popular) "Most popular stations" else "Results", count,
-    }, .{
-        .color_text = theme.colors.text_secondary,
-        .padding = .{ .x = 8, .y = 8, .w = 8, .h = 2 },
-    });
 
     // Responsive columns from the LIVE page width (one-frame lag; first paint
     // falls back to a sane default) — same shape as the TMDB gallery.

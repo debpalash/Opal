@@ -1,3 +1,4 @@
+const browse_filters = @import("../ui/browse_filters.zig");
 const std = @import("std");
 const components = @import("../ui/components.zig");
 const reader_components = @import("../ui/components.zig");
@@ -3245,15 +3246,9 @@ pub fn renderContent() void {
     var page = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
     defer page.deinit();
 
-    // ── ONE unified toolbar row (matches Movies & TV): compact search ·
-    //    Search button · Source chips · result count · quick-links · −/+
-    //    (wraps if the window is narrow). ReadAllComics is the only natively-
-    //    readable source today; plugins surface as read-only badge chips. ──
+    // Source selection and card controls share one compact browse row.
     {
-        var bar = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
-            .expand = .horizontal,
-            .padding = .{ .x = 8, .y = 4, .w = 8, .h = 6 },
-        });
+        var bar = browse_filters.begin(@src());
         defer bar.deinit();
 
         if (@import("../ui/browse_layout_pure.zig").showLocalSearch(state.app.page_shell_enabled)) {
@@ -3306,88 +3301,38 @@ pub fn renderContent() void {
             });
         }
 
-        _ = dvui.label(@src(), "Source:", .{}, .{
-            .color_text = theme.colors.text_secondary,
-            .gravity_y = 0.5,
-            .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
-        });
-        renderSourceChip("All", 1, .all);
-        renderSourceChip("ReadAllComics", 2, .readallcomics);
-        renderSourceChip("MangaDex", 3, .mangadex);
-        if (@import("../core/source_config.zig").has("weebcentral")) renderSourceChip("Weeb Central", 8, .weebcentral);
-        if (@import("../core/source_config.zig").has("comicbookplus")) renderSourceChip("ComicBookPlus", 9, .comicbookplus);
-        if (@import("../core/source_config.zig").has("comicfury")) renderSourceChip("ComicFury", 10, .comicfury);
-        if (@import("../core/source_config.zig").has("xkcd")) renderSourceChip("xkcd archive", 11, .xkcd);
-        if (@import("../core/source_config.zig").has("smbc")) renderSourceChip("SMBC recent", 12, .smbc);
-        renderSourceChip("MangaThemesia", 4, .mangathemesia);
-        // Madara engine (~332 WordPress sites) — inert until a "madara" source is
-        // installed, exactly like ReadAllComics.
-        renderSourceChip("Madara", 5, .madara);
-        // Suwayomi (Mihon extensions) — only when a server + source are set, so
-        // the chip appears once the user has installed + picked an extension.
-        if (suwayomiBase() != null and suwayomiSourceId() != null) {
-            renderSourceChip("Suwayomi", 6, .suwayomi);
+        const sources = [_]browse_filters.Item{
+            .{ .id = @intFromEnum(Source.all), .label = "All", .presentation = .label },
+            .{ .id = @intFromEnum(Source.readallcomics), .label = "ReadAllComics", .presentation = .label },
+            .{ .id = @intFromEnum(Source.mangadex), .label = "MangaDex", .presentation = .label },
+            .{ .id = @intFromEnum(Source.weebcentral), .label = "Weeb Central", .presentation = .label, .visible = @import("../core/source_config.zig").has("weebcentral") },
+            .{ .id = @intFromEnum(Source.comicbookplus), .label = "ComicBookPlus", .presentation = .label, .visible = @import("../core/source_config.zig").has("comicbookplus") },
+            .{ .id = @intFromEnum(Source.comicfury), .label = "ComicFury", .presentation = .label, .visible = @import("../core/source_config.zig").has("comicfury") },
+            .{ .id = @intFromEnum(Source.xkcd), .label = "xkcd archive", .presentation = .label, .visible = @import("../core/source_config.zig").has("xkcd") },
+            .{ .id = @intFromEnum(Source.smbc), .label = "SMBC recent", .presentation = .label, .visible = @import("../core/source_config.zig").has("smbc") },
+            .{ .id = @intFromEnum(Source.mangathemesia), .label = "MangaThemesia", .presentation = .label },
+            .{ .id = @intFromEnum(Source.madara), .label = "Madara", .presentation = .label },
+            .{ .id = @intFromEnum(Source.suwayomi), .label = "Suwayomi", .presentation = .label, .visible = suwayomiBase() != null and suwayomiSourceId() != null },
+        };
+        if (bar.menu(@src(), .{ .items = &sources, .selected = @intFromEnum(active_source.load(.acquire)) })) |id| {
+            const source: Source = @enumFromInt(id);
+            if (source != active_source.load(.acquire)) {
+                var query: [256]u8 = undefined;
+                @memcpy(query[0..sr_query_len], sr_query_buf[0..sr_query_len]);
+                queueComicSearch(query[0..sr_query_len], source);
+            }
         }
-        renderPluginSourceBadges();
 
         // Extensions — opens the Mihon extension browser (fetch a repo's
         // index.min.json, install/remove onto the Suwayomi server).
-        if (dvui.button(@src(), "Extensions", .{}, .{
-            .id_extra = 73500,
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.accent,
-            .color_border = theme.colors.accent,
-            .border = dvui.Rect.all(1),
-            .corner_radius = theme.dims.rad_md,
-            .padding = .{ .x = 10, .y = 3, .w = 10, .h = 3 },
-            .margin = .{ .x = 6, .y = 0, .w = 2, .h = 0 },
-            .gravity_y = 0.5,
-        })) mihon.open();
+        if (browse_filters.item(@src(), .{ .id = 73500, .label = "Extensions", .icon = icons.tvg.lucide.puzzle })) mihon.open();
 
-        // Divider between the source group and the result/quick-link group.
-        _ = dvui.label(@src(), "  •  ", .{}, .{
-            .color_text = theme.colors.border_subtle,
-            .gravity_y = 0.5,
-        });
+        browse_filters.divider(@src(), 9000);
 
-        // Result count (or live status).
-        {
-            var cb: [48]u8 = undefined;
-            const cs = if (sr_searching_v.load(.acquire) and visible_count == 0)
-                @as([]const u8, "Searching…")
-            else
-                std.fmt.bufPrint(&cb, "{d} results", .{visible_count}) catch "";
-            _ = dvui.label(@src(), "{s}", .{cs}, .{
-                .color_text = if (sr_searching_v.load(.acquire) and visible_count == 0) theme.colors.accent else theme.colors.text_secondary,
-                .gravity_y = 0.5,
-                .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
-            });
-        }
-
-        renderChip("Invincible", 1, "/invincible-001/");
-        renderChip("The Boys", 2, "/the-boys-001-2006/");
-        renderChip("Saga", 3, "/saga-001-2012/");
-
-        if (dvui.buttonIcon(@src(), "comic-card-smaller", icons.tvg.lucide.@"zoom-out", .{}, .{}, .{
-            .id_extra = 9001,
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_primary,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 5, .y = 4, .w = 5, .h = 4 },
-            .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
-            .gravity_y = 0.5,
-        })) {
+        if (browse_filters.item(@src(), .{ .id = 9001, .label = "Smaller cards", .icon = icons.tvg.lucide.minus })) {
             card_w = std.math.clamp(card_w - 20, 110, 300);
         }
-        if (dvui.buttonIcon(@src(), "comic-card-bigger", icons.tvg.lucide.@"zoom-in", .{}, .{}, .{
-            .id_extra = 9002,
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_primary,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 5, .y = 4, .w = 5, .h = 4 },
-            .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
-            .gravity_y = 0.5,
-        })) {
+        if (browse_filters.item(@src(), .{ .id = 9002, .label = "Larger cards", .icon = icons.tvg.lucide.plus })) {
             card_w = std.math.clamp(card_w + 20, 110, 300);
         }
     }
@@ -3503,31 +3448,6 @@ pub fn renderContent() void {
     }
 }
 
-/// A source-selector chip. Active source is highlighted; clicking it re-runs the
-/// current query against that source. Today only readallcomics returns rows, so
-/// "All" and "ReadAllComics" behave identically — but the seam is ready for more.
-fn renderSourceChip(label: []const u8, id: usize, src: Source) void {
-    const active = active_source.load(.acquire) == src;
-    if (dvui.button(@src(), label, .{}, .{
-        .id_extra = id + 72000,
-        .color_fill = if (active) theme.colors.accent else theme.colors.bg_elevated,
-        .color_text = if (active) theme.colors.text_on_accent else theme.colors.text_primary,
-        .corner_radius = theme.dims.rad_md,
-        .padding = .{ .x = 10, .y = 3, .w = 10, .h = 3 },
-        .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
-        .gravity_y = 0.5,
-    })) {
-        if (active_source.load(.acquire) != src) {
-            // Re-run the live listing under the new source filter.
-            {
-                var q: [256]u8 = undefined;
-                @memcpy(q[0..sr_query_len], sr_query_buf[0..sr_query_len]);
-                queueComicSearch(q[0..sr_query_len], src);
-            }
-        }
-    }
-}
-
 /// Surface comic plugins (bundled + user) as non-interactive badge chips so the
 /// user can SEE which extra sources are installed. Plugins resolve issue URLs at
 /// load time (tryPlugins), so they extend every source transparently — there's
@@ -3576,15 +3496,7 @@ fn showPluginBadgesInDir(dir_path: []const u8, shown: *usize) void {
 // the installed "readallcomics" plugin. No plugin → no popular chips.
 fn renderChip(label: []const u8, id: usize, path: []const u8) void {
     const base = @import("../core/source_config.zig").get("readallcomics", "base") orelse return;
-    if (dvui.button(@src(), label, .{}, .{
-        .id_extra = id + 70000,
-        .color_fill = theme.colors.bg_elevated,
-        .color_text = theme.colors.accent,
-        .corner_radius = theme.dims.rad_md,
-        .padding = .{ .x = 10, .y = 3, .w = 10, .h = 3 },
-        .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
-        .gravity_y = 0.5,
-    })) {
+    if (browse_filters.item(@src(), .{ .id = id + 70000, .label = label, .presentation = .label })) {
         var url_buf: [320]u8 = undefined;
         const url = std.fmt.bufPrint(&url_buf, "{s}{s}", .{ base, path }) catch return;
         loadComic(url);

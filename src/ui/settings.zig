@@ -392,22 +392,7 @@ fn renderRightPane(compact: bool) void {
     });
     defer content.deinit();
 
-    // Big title at top of each tab.
-    bigTitle(switch (state.app.settings_tab) {
-        .General => "General Settings",
-        .Playback => "Player Settings",
-        .Subtitles => "Subtitle Settings",
-        .Network => "Network Settings",
-        .Storage => "Storage Settings",
-        .WebUi => "Web UI & Remote Access",
-        .Scripts => "AI, Remote & Scripts",
-        .AI => "AI & Voice",
-        .LangLearn => "Language Learning",
-        .FileAssoc => "File Associations",
-        .LiveTv => "Live TV",
-        .Profiles => "Household Profiles",
-        .About => "About Opal",
-    });
+    if (state.app.settings_tab == .About) bigTitle("About Opal");
 
     if (state.app.settings_tab == .General or
         state.app.settings_tab == .Playback or
@@ -470,29 +455,6 @@ fn bigTitle(title: []const u8) void {
 /// Drawer-hosted AI tab (legacy .assistant route) — wraps the shared body in
 /// its own header + scroll + centred column.
 pub fn renderAIContent() void {
-    // Header
-    {
-        var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
-            .background = true,
-            .color_fill = theme.colors.bg_app,
-            .color_border = theme.colors.border_subtle,
-            .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-        });
-        defer hdr.deinit();
-
-        dvui.icon(@src(), "", icons.tvg.lucide.brain, .{}, .{
-            .color_text = theme.colors.accent,
-            .gravity_y = 0.5,
-            .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
-        });
-        _ = dvui.label(@src(), "AI & Voice", .{}, .{
-            .color_text = theme.colors.text_primary,
-            .gravity_y = 0.5,
-        });
-    }
-
     // Scrollable content
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
@@ -962,7 +924,7 @@ fn sectionHeader(comptime title: []const u8, comptime subtitle: []const u8, id_e
     var wrap = dvui.box(@src(), .{ .dir = .vertical }, .{
         .id_extra = sectionheader_seq,
         .expand = .horizontal,
-        .margin = .{ .x = 0, .y = theme.spacing.xl, .w = 0, .h = 0 },
+        .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 },
     });
     defer wrap.deinit();
 
@@ -2382,68 +2344,7 @@ fn renderNetworkTab() void {
         }
     }
 
-    // ── Music server (Subsonic / OpenSubsonic) — Navidrome / Airsonic / … ──
-    settingRow("Music server (Subsonic)", 35, @src());
-    _ = dvui.label(@src(), "Navidrome · Airsonic · Gonic · Funkwhale · Ampache — your music library", .{}, .{
-        .id_extra = 3500,
-        .color_text = theme.colors.text_tertiary,
-    });
-    {
-        const music = @import("../services/music_subsonic.zig");
-        music.prefillConfig();
-        // Server URL
-        _ = dvui.label(@src(), "Server URL", .{}, .{ .id_extra = 3501, .color_text = theme.colors.text_secondary });
-        {
-            var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.music.cfg_base }, .placeholder = "http://localhost:4533" }, .{
-                .id_extra = 3502,
-                .expand = .horizontal,
-                .min_size_content = .{ .w = 250, .h = 20 },
-                .color_fill = theme.colors.bg_elevated,
-                .color_border = theme.colors.border_subtle,
-                .color_text = theme.colors.text_primary,
-                .border = dvui.Rect.all(1),
-                .corner_radius = theme.dims.rad_sm,
-            });
-            te.deinit();
-        }
-        // Username / Password
-        {
-            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 3503, .expand = .horizontal, .min_size_content = .{ .w = 0, .h = 26 } });
-            defer row.deinit();
-            var ute = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.music.cfg_user }, .placeholder = "username" }, .{
-                .id_extra = 3504,
-                .expand = .horizontal,
-                .min_size_content = .{ .w = 120, .h = 20 },
-                .color_fill = theme.colors.bg_elevated,
-                .color_border = theme.colors.border_subtle,
-                .color_text = theme.colors.text_primary,
-                .border = dvui.Rect.all(1),
-                .corner_radius = theme.dims.rad_sm,
-            });
-            ute.deinit();
-            var pte = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.music.cfg_pass }, .placeholder = "password", .password_char = "•" }, .{
-                .id_extra = 3505,
-                .expand = .horizontal,
-                .min_size_content = .{ .w = 120, .h = 20 },
-                .color_fill = theme.colors.bg_elevated,
-                .color_border = theme.colors.border_subtle,
-                .color_text = theme.colors.text_primary,
-                .border = dvui.Rect.all(1),
-                .corner_radius = theme.dims.rad_sm,
-                .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
-            });
-            pte.deinit();
-        }
-        if (dvui.button(@src(), "Save", .{}, .{
-            .id_extra = 3506,
-            .color_fill = theme.colors.accent,
-            .color_text = theme.colors.text_on_accent,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
-        })) {
-            music.saveConfig();
-        }
-    }
+    renderMusicConnection();
 
     // ── Music discovery (ListenBrainz + MusicBrainz) ──
     // OFF by default. Every other music source only plays what you already
@@ -5664,5 +5565,70 @@ fn renderDeviceSyncSection() void {
     // Peers already running are skipped by syncNow; the rest start in parallel.
     if (ls.peer_count > 1 and components.actionButton(@src(), if (busy) "Syncing..." else "Sync All", .secondary, 9461)) {
         _ = lsync.syncNow(null);
+    }
+}
+
+pub fn renderMusicConnection() void {
+    // ── Music server (Subsonic / OpenSubsonic) — Navidrome / Airsonic / … ──
+    settingRow("Music server (Subsonic)", 35, @src());
+    _ = dvui.label(@src(), "Navidrome · Airsonic · Gonic · Funkwhale · Ampache — your music library", .{}, .{
+        .id_extra = 3500,
+        .color_text = theme.colors.text_tertiary,
+    });
+    {
+        const music = @import("../services/music_subsonic.zig");
+        music.prefillConfig();
+        // Server URL
+        _ = dvui.label(@src(), "Server URL", .{}, .{ .id_extra = 3501, .color_text = theme.colors.text_secondary });
+        {
+            var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.music.cfg_base }, .placeholder = "http://localhost:4533" }, .{
+                .id_extra = 3502,
+                .expand = .horizontal,
+                .min_size_content = .{ .w = 250, .h = 20 },
+                .color_fill = theme.colors.bg_elevated,
+                .color_border = theme.colors.border_subtle,
+                .color_text = theme.colors.text_primary,
+                .border = dvui.Rect.all(1),
+                .corner_radius = theme.dims.rad_sm,
+            });
+            te.deinit();
+        }
+        // Username / Password
+        {
+            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 3503, .expand = .horizontal, .min_size_content = .{ .w = 0, .h = 26 } });
+            defer row.deinit();
+            var ute = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.music.cfg_user }, .placeholder = "username" }, .{
+                .id_extra = 3504,
+                .expand = .horizontal,
+                .min_size_content = .{ .w = 120, .h = 20 },
+                .color_fill = theme.colors.bg_elevated,
+                .color_border = theme.colors.border_subtle,
+                .color_text = theme.colors.text_primary,
+                .border = dvui.Rect.all(1),
+                .corner_radius = theme.dims.rad_sm,
+            });
+            ute.deinit();
+            var pte = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.app.music.cfg_pass }, .placeholder = "password", .password_char = "•" }, .{
+                .id_extra = 3505,
+                .expand = .horizontal,
+                .min_size_content = .{ .w = 120, .h = 20 },
+                .color_fill = theme.colors.bg_elevated,
+                .color_border = theme.colors.border_subtle,
+                .color_text = theme.colors.text_primary,
+                .border = dvui.Rect.all(1),
+                .corner_radius = theme.dims.rad_sm,
+                .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
+            });
+            pte.deinit();
+        }
+        if (dvui.button(@src(), "Save", .{}, .{
+            .id_extra = 3506,
+            .color_fill = theme.colors.accent,
+            .color_text = theme.colors.text_on_accent,
+            .corner_radius = theme.dims.rad_sm,
+            .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
+        })) {
+            music.saveConfig();
+        }
     }
 }

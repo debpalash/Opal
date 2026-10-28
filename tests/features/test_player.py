@@ -4,6 +4,14 @@ shared @test decorator, helpers, and run_all()."""
 from .harness import *  # noqa: F401,F403
 import os, sys, subprocess, sqlite3, socket, time, json  # noqa: F401
 
+@test("Audio output connection detection ignores startup and repeated lists", "Player")
+def test_audio_connection_policy():
+    result = subprocess.run(["zig", "test", "src/player/av_device_pure.zig"],
+                            cwd=PROJECT_DIR, capture_output=True, text=True, timeout=120)
+    if result.returncode:
+        return "fail", result.stderr[-1500:]
+    return "pass", "executed arrival/reorder/removal/reconnect and device parser regressions"
+
 @test("Playback stays in Opal without external player handoffs", "Player")
 def test_no_external_player_handoff():
     obsolete = os.path.join(PROJECT_DIR, "src/services/external_player.zig")

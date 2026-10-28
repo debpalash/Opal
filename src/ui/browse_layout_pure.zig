@@ -5,11 +5,11 @@ pub fn showLocalSearch(page_shell_enabled: bool) bool {
     return !page_shell_enabled;
 }
 pub fn toolbarHeight(body_font_size: f32) f32 {
-    return @max(48, body_font_size * 2 + 20);
+    return @max(40, body_font_size * 1.5 + 16);
 }
 test "browse toolbar height retains room for large-font controls" {
-    try std.testing.expectEqual(@as(f32, 48), toolbarHeight(14));
-    try std.testing.expect(toolbarHeight(24) >= 24 * 2 + 20);
+    try std.testing.expectEqual(@as(f32, 40), toolbarHeight(14));
+    try std.testing.expect(toolbarHeight(24) >= 24 * 1.5 + 16);
 }
 pub const ReadingGrid = struct { columns: usize, card_width: f32 };
 pub fn readingGrid(viewport_width: f32) ReadingGrid {

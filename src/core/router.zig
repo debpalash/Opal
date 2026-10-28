@@ -31,6 +31,7 @@ pub const Route = enum {
     /// Agents — coding agents (and a shell) in an embedded terminal, already
     /// connected to Opal's tools.
     agents,
+    connect,
 };
 
 /// Sub-navigation inside the Plugins route. Each variant is one card section

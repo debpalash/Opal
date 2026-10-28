@@ -249,3 +249,47 @@ test "overflow clamps: more devices than capacity, overlong values truncate" {
     try std.testing.expectEqual(@as(usize, name_cap), devs[0].name_len);
     try std.testing.expectEqualStrings("tail", devs[1].nameSlice());
 }
+
+/// Owner-thread snapshot diff. Startup, ordering and removals are not arrivals.
+pub const Connections = struct {
+    previous: [max_devices]AudioDevice = undefined,
+    count: usize = 0,
+    initialized: bool = false,
+
+    pub fn contains(devices: []const AudioDevice, name: []const u8) bool {
+        for (devices) |*device| if (std.mem.eql(u8, device.nameSlice(), name)) return true;
+        return false;
+    }
+
+    pub fn update(self: *Connections, devices: []const AudioDevice) ?AudioDevice {
+        var added: ?AudioDevice = null;
+        if (self.initialized) {
+            for (devices) |device| {
+                const name = device.nameSlice();
+                if (name.len == 0 or std.mem.eql(u8, name, "auto")) continue;
+                if (!contains(self.previous[0..self.count], name)) {
+                    added = device;
+                    break;
+                }
+            }
+        }
+        self.count = @min(devices.len, max_devices);
+        @memcpy(self.previous[0..self.count], devices[0..self.count]);
+        self.initialized = true;
+        return added;
+    }
+};
+
+test "connected audio output prompts once, not at startup or on reorder/removal" {
+    var devices: [4]AudioDevice = undefined;
+    const n = parseAudioDevices("[{\"name\":\"auto\"},{\"name\":\"coreaudio/builtin\"},{\"name\":\"coreaudio/usb\",\"description\":\"USB headphones\"}]", &devices);
+    try std.testing.expectEqual(@as(usize, 3), n);
+    var connections = Connections{};
+    try std.testing.expect(connections.update(devices[0..2]) == null);
+    try std.testing.expectEqualStrings("coreaudio/usb", connections.update(devices[0..3]).?.nameSlice());
+    try std.testing.expect(connections.update(devices[0..3]) == null);
+    const reordered = [_]AudioDevice{ devices[2], devices[0], devices[1] };
+    try std.testing.expect(connections.update(&reordered) == null);
+    try std.testing.expect(connections.update(devices[0..2]) == null);
+    try std.testing.expect(connections.update(devices[0..3]) != null);
+}

@@ -1999,7 +1999,10 @@ pub fn navigateToTabNow(tab: DrawerTab) void {
     app.drawer_open = true;
     switch (tab) {
         .Search => app.router.navigate(.search),
-        .TMDB => app.router.navigate(.home),
+        .TMDB => {
+            app.browse_source = .TMDB;
+            app.router.navigate(.browse);
+        },
         .YouTube => {
             app.browse_source = .YouTube;
             app.router.navigate(.browse);

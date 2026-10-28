@@ -1,3 +1,4 @@
+const browse_filters = @import("browse_filters.zig");
 const std = @import("std");
 const dvui = @import("dvui");
 const icons = @import("icons");
@@ -192,12 +193,7 @@ fn renderLoginForm() void {
 fn renderLibraries() void {
     // Header bar
     {
-        var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
-            .background = true,
-            .color_fill = theme.colors.bg_surface,
-        });
+        var hdr = browse_filters.begin(@src());
         defer hdr.deinit();
 
         if (dvui.buttonIcon(@src(), "search", icons.tvg.lucide.search, .{}, .{}, .{
@@ -213,11 +209,6 @@ fn renderLibraries() void {
             var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
             sp.deinit();
         }
-
-        _ = dvui.label(@src(), "Jellyfin / Emby", .{}, .{
-            .color_text = theme.colors.accent,
-            .gravity_y = 0.5,
-        });
 
         {
             var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
@@ -341,12 +332,7 @@ fn renderLibraries() void {
 fn renderItems() void {
     // Header with back + breadcrumb
     {
-        var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
-            .background = true,
-            .color_fill = theme.colors.bg_surface,
-        });
+        var hdr = browse_filters.begin(@src());
         defer hdr.deinit();
 
         if (dvui.buttonIcon(@src(), "back", icons.tvg.lucide.@"arrow-left", .{}, .{}, .{
@@ -717,12 +703,7 @@ fn renderPosterCard(item: *const jf.PresentationItem, slot_idx: usize, idx: usiz
 
 fn renderSearch() void {
     {
-        var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
-            .background = true,
-            .color_fill = theme.colors.bg_surface,
-        });
+        var hdr = browse_filters.begin(@src());
         defer hdr.deinit();
 
         if (dvui.buttonIcon(@src(), "back", icons.tvg.lucide.@"arrow-left", .{}, .{}, .{
@@ -776,4 +757,9 @@ fn iconForCollectionType(ct: []const u8) []const u8 {
     if (std.mem.eql(u8, ct, "books")) return icons.tvg.lucide.book;
     if (std.mem.eql(u8, ct, "photos")) return icons.tvg.lucide.image;
     return icons.tvg.lucide.folder;
+}
+
+pub fn renderConnectionEditor() void {
+    frame_view = jf.desktopSnapshot();
+    renderLoginForm();
 }

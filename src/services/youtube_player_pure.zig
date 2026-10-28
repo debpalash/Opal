@@ -286,3 +286,62 @@ test "visitor data is decoded from watch HTML" {
     var out: [64]u8 = undefined;
     try std.testing.expectEqualStrings("abc+123=", visitorData("x\"visitorData\":\"abc+123=\"y", &out).?);
 }
+
+/// Short-lived, process-local signed streams. Never persists credentials/URLs.
+/// The caller serializes access; failed playback invalidates the entry.
+pub const StreamCache = struct {
+    const Entry = struct {
+        occupied: bool = false,
+        id: [11]u8 = undefined,
+        stored_ms: i64 = 0,
+        streams: Streams = .{},
+    };
+    entries: [8]Entry = @splat(.{}),
+    next: usize = 0,
+    pub const ttl_ms = 60_000;
+
+    pub fn get(self: *StreamCache, id: [11]u8, now_ms: i64) ?Streams {
+        for (&self.entries) |*entry| {
+            if (!entry.occupied or !std.mem.eql(u8, &entry.id, &id)) continue;
+            const age = now_ms - entry.stored_ms;
+            if (age < 0 or age >= ttl_ms) {
+                entry.occupied = false;
+                return null;
+            }
+            return entry.streams;
+        }
+        return null;
+    }
+    pub fn put(self: *StreamCache, id: [11]u8, streams: Streams, now_ms: i64) void {
+        self.invalidate(id);
+        self.entries[self.next] = .{ .occupied = true, .id = id, .streams = streams, .stored_ms = now_ms };
+        self.next = (self.next + 1) % self.entries.len;
+    }
+    pub fn invalidate(self: *StreamCache, id: [11]u8) void {
+        for (&self.entries) |*entry| {
+            if (entry.occupied and std.mem.eql(u8, &entry.id, &id)) entry.occupied = false;
+        }
+    }
+};
+
+test "signed stream cache reuses recent tracks and rejects expired failed or evicted entries" {
+    var cache: StreamCache = .{};
+    const id = "abcdefghijk".*;
+    var streams: Streams = .{};
+    copyStream(&streams.audio, "https://audio.test/track", 0, 100, 128000, 2);
+    cache.put(id, streams, 100);
+    try std.testing.expectEqualStrings("https://audio.test/track", cache.get(id, 101).?.audio.slice());
+    try std.testing.expect(cache.get(id, 100 + StreamCache.ttl_ms) == null);
+    cache.put(id, streams, 100);
+    cache.invalidate(id);
+    try std.testing.expect(cache.get(id, 101) == null);
+    cache.put(id, streams, 100);
+    try std.testing.expect(cache.get(id, 99) == null);
+    cache.put(id, streams, 100);
+    for (0..8) |index| {
+        var other = id;
+        other[0] = @intCast('0' + index);
+        cache.put(other, streams, 101);
+    }
+    try std.testing.expect(cache.get(id, 102) == null);
+}

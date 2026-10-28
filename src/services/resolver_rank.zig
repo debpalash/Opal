@@ -134,7 +134,66 @@ pub fn matchCounts(name: []const u8, query: []const u8) Counts {
         }
     }
 
+    if (match_words == 0 and titlePenalty(name, query) == 0) return .{ .match_words = 1, .total_words = 1 };
     return .{ .match_words = match_words, .total_words = total_words };
+}
+
+/// Preserve Unicode bytes while normalizing ASCII case, spacing and punctuation.
+fn normalizedTitle(text: []const u8, out: []u8) []const u8 {
+    var n: usize = 0;
+    var space = false;
+    for (text) |byte| {
+        if (byte < 128 and !std.ascii.isAlphanumeric(byte)) {
+            space = n > 0;
+            continue;
+        }
+        if (space and n < out.len) {
+            out[n] = ' ';
+            n += 1;
+        }
+        space = false;
+        if (n == out.len) break;
+        out[n] = std.ascii.toLower(byte);
+        n += 1;
+    }
+    return out[0..n];
+}
+/// Exact title > whole phrase at the start > whole phrase elsewhere > token
+/// matches > substrings. Quality and source preferences cannot erase a tier.
+pub fn titlePenalty(name: []const u8, query: []const u8) u32 {
+    var nb: [512]u8 = undefined;
+    var qb: [512]u8 = undefined;
+    const n = normalizedTitle(name, &nb);
+    const q = normalizedTitle(query, &qb);
+    if (q.len == 0) return 256;
+    if (std.mem.eql(u8, n, q)) return 0;
+    var offset: usize = 0;
+    while (std.mem.indexOfPos(u8, n, offset, q)) |at| {
+        const end = at + q.len;
+        if ((at == 0 or n[at - 1] == ' ') and (end == n.len or n[end] == ' ')) return if (at == 0) 64 else 128;
+        offset = at + 1;
+    }
+    var words = std.mem.tokenizeScalar(u8, q, ' ');
+    while (words.next()) |word| {
+        var found = false;
+        var from: usize = 0;
+        while (std.mem.indexOfPos(u8, n, from, word)) |at| {
+            const end = at + word.len;
+            if ((at == 0 or n[at - 1] == ' ') and (end == n.len or n[end] == ' ')) {
+                found = true;
+                break;
+            }
+            from = at + 1;
+        }
+        if (!found) return 256;
+    }
+    return 192;
+}
+/// A provider's ordered catalog results break otherwise-equal relevance ties.
+/// Rank is one-based and only compared after title and source/quality signals.
+pub fn relevanceScore(name: []const u8, query: []const u8, pct: u8, secondary: u32, provider_rank: u16) u32 {
+    const tie: u32 = if (provider_rank == 0) 63 else @min(provider_rank - 1, 62);
+    return ((100 - @as(u32, pct)) + titlePenalty(name, query) + secondary) * 64 + tie;
 }
 
 /// Compute match % + composite sort score. Lower score = better.
@@ -160,7 +219,6 @@ pub fn computeMatch(item: Item, query: []const u8, intent: []const u8) MatchInfo
         .total_words = total_words,
     };
 
-    const relevance: u32 = 100 - @as(u32, pct);
     const is_movie_or_show = std.mem.eql(u8, intent, "movie") or std.mem.eql(u8, intent, "show");
 
     var source_w: u32 = switch (item.source) {
@@ -188,8 +246,8 @@ pub fn computeMatch(item: Item, query: []const u8, intent: []const u8) MatchInfo
     const seed_bonus: u32 = if (item.seeds > 100) 7 else if (item.seeds > 50) 6 else if (item.seeds > 20) 5 else if (item.seeds > 10) 4 else if (item.seeds > 5) 3 else if (item.seeds > 0) 1 else 0;
 
     const junk = junkTitlePenalty(lower_name[0..nlen], lower_query[0..ql]);
-    const raw = relevance + source_w + quality_bonus + junk;
-    const score = if (raw > seed_bonus) raw - seed_bonus else 0;
+    const raw = source_w + quality_bonus + junk;
+    const score = relevanceScore(item.name, query, pct, raw -| seed_bonus, 0);
 
     return .{
         .match_pct = pct,
@@ -574,4 +632,27 @@ test "episode auto play must not select a different episode after search finishe
         .seeds = 100,
     }};
     try std.testing.expectEqual(@as(?usize, null), pickForStartup(&candidates, false));
+}
+
+test "exact Lupin title precedes franchise and partial matches" {
+    const exact = computeMatch(.{ .name = "Lupin", .source = .jellyfin }, "lupin", "auto");
+    const prefix = computeMatch(.{ .name = "Lupin III: The First", .source = .jellyfin }, "lupin", "auto");
+    const phrase = computeMatch(.{ .name = "Arsene Lupin", .source = .jellyfin }, "lupin", "auto");
+    const substring = computeMatch(.{ .name = "Lupine", .source = .jellyfin }, "lupin", "auto");
+    try std.testing.expect(exact.score < prefix.score);
+    try std.testing.expect(prefix.score < phrase.score);
+    try std.testing.expect(phrase.score < substring.score);
+}
+
+test "provider ranking breaks title ties without overriding title relevance" {
+    try std.testing.expect(relevanceScore("Lupin", "lupin", 100, 45, 1) < relevanceScore("Lupin", "lupin", 100, 45, 6));
+    try std.testing.expect(relevanceScore("Lupin", "lupin", 100, 45, 24) < relevanceScore("Lupin III", "lupin", 100, 45, 1));
+    try std.testing.expectEqual(@as(u32, 0), titlePenalty("Spider-Man", "spider man"));
+    try std.testing.expectEqual(@as(u32, 0), titlePenalty("  LUPIN  ", "lupin"));
+    try std.testing.expect(titlePenalty("Lupine", "lupin") > titlePenalty("Arsene Lupin", "lupin"));
+}
+
+test "normalized exact titles survive the token gate" {
+    try std.testing.expectEqual(@as(u8, 100), computeMatch(.{ .name = "Spider Man", .source = .jellyfin }, "Spider-Man", "auto").match_pct);
+    try std.testing.expectEqual(@as(u8, 100), computeMatch(.{ .name = "It", .source = .jellyfin }, "it", "auto").match_pct);
 }

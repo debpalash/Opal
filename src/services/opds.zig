@@ -28,6 +28,7 @@
 //! real Komga/Kavita server needs manual verification (the PSE parse + page-URL
 //! build are covered by opds_pure unit tests against a sample entry).
 
+const browse_filters = @import("../ui/browse_filters.zig");
 const std = @import("std");
 const dvui = @import("dvui");
 const icons = @import("icons");
@@ -752,11 +753,16 @@ pub const SearchResult = struct {
 pub fn searchInto(query: []const u8, out: []pure.OpdsEntry) SearchResult {
     const snap = connectionSnapshot();
     if (!snap.connected or snap.server_len == 0) return .{ .status = .unavailable };
-    if (query.len == 0 or out.len == 0) return .{};
+    if (out.len == 0) return .{};
     const root = snap.server[0..snap.server_len];
     const body = opdsGetBounded(root, snap.user[0..snap.user_len], snap.pass[0..snap.pass_len], 1024 * 1024, "8") orelse return .{ .status = .transport_failed };
     defer alloc.free(body);
     if (!pure.isCompleteFeed(body)) return .{ .status = .parse_failed };
+    if (query.len == 0) {
+        if (connectionSnapshot().identity != snap.identity) return .{ .status = .unavailable };
+        const count = pure.parseFeed(body, root, out);
+        return .{ .count = count, .status = if (count > 0) .done else .no_results, .connection_identity = snap.identity };
+    }
     const link = pure.feedSearchLink(body, root) orelse {
         logs.pushLog("info", "opds", "This catalog does not advertise a supported OPDS search facility", false);
         return .{ .status = .unavailable };
@@ -944,7 +950,7 @@ pub fn renderContent() void {
     renderFeed();
 }
 
-fn renderLoginForm() void {
+pub fn renderLoginForm() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
@@ -1042,10 +1048,7 @@ fn textEntryOpts() dvui.Options {
 fn renderFeed() void {
     // Header row: Back (if drilled in) + Disconnect + feed title.
     {
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .padding = .{ .x = 12, .y = 10, .w = 12, .h = 8 },
-        });
+        var row = browse_filters.begin(@src());
         defer row.deinit();
 
         if (components.iconButtonEx(@src(), icons.tvg.lucide.@"arrow-left", "Back", false, state.app.opds.nav_depth > 0)) goBack();
@@ -1064,15 +1067,12 @@ fn renderFeed() void {
         }
 
         if (components.iconButton(@src(), icons.tvg.lucide.@"log-out", "Disconnect reading server", false)) disconnect();
-    }
-
-    const categories = discoverySnapshot();
-    if (categories.active) {
-        var row = dvui.flexbox(@src(), .{ .justify_content = .start }, .{ .expand = .horizontal, .padding = dvui.Rect.all(8) });
-        defer row.deinit();
-        _ = dvui.label(@src(), "Discover", .{}, .{ .color_text = theme.colors.accent, .gravity_y = 0.5 });
-        for (categories.categories[0..categories.count], 0..) |category, index| {
-            if (dvui.button(@src(), category.titleSlice(), .{}, .{ .id_extra = index, .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.text_secondary })) _ = openDiscoveryCategory(index);
+        const categories = discoverySnapshot();
+        if (categories.active) {
+            browse_filters.divider(@src(), 50000);
+            for (categories.categories[0..categories.count], 0..) |category, index| {
+                if (browse_filters.item(@src(), .{ .id = index, .label = category.titleSlice(), .presentation = .label })) _ = openDiscoveryCategory(index);
+            }
         }
     }
 

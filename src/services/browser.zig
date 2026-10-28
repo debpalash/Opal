@@ -2483,6 +2483,7 @@ pub const routeContent = pure.routeContent;
 /// network option set-or-clear, provider selection, and navigation so callers
 /// cannot accidentally implement only part of a playback transition.
 pub const PlaybackRequest = struct {
+    audio_only: bool = false,
     url: []const u8,
     fallback_url: []const u8 = "",
     fallback_url_2: []const u8 = "",
@@ -2527,6 +2528,7 @@ fn FixedPlaybackField(comptime capacity: usize) type {
 /// is still being prepared. Slices from provider workers and UI stack frames
 /// must never outlive the call that supplied them, hence the fixed copies.
 const DeferredPlayback = struct {
+    audio_only: bool = false,
     url: FixedPlaybackField(8192) = .{},
     fallback_url: FixedPlaybackField(8192) = .{},
     fallback_url_2: FixedPlaybackField(8192) = .{},
@@ -2563,6 +2565,7 @@ const DeferredPlayback = struct {
         else
             @import("../player/http_headers_pure.zig").buildHeaderFields(request.headers, &fields_buf);
         if (!out.header_fields.set(fields)) return null;
+        out.audio_only = request.audio_only;
         out.mode = request.mode;
         out.origin = request.origin;
         out.queue_item_id = request.queue_item_id;
@@ -2573,6 +2576,7 @@ const DeferredPlayback = struct {
     fn playbackRequest(self: *const DeferredPlayback) PlaybackRequest {
         return .{
             .url = self.url.slice(),
+            .audio_only = self.audio_only,
             .fallback_url = self.fallback_url.slice(),
             .fallback_url_2 = self.fallback_url_2.slice(),
             .mode = self.mode,
@@ -2707,6 +2711,7 @@ pub fn playDirect(request: PlaybackRequest) void {
     const order = link_health.pure.orderedCandidates(statuses, present);
 
     p.load(.{
+        .audio_only = request.audio_only,
         .url = candidates[order[0]],
         .fallback_url = candidates[order[1]],
         .fallback_url_2 = candidates[order[2]],

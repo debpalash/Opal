@@ -56,6 +56,7 @@ pub const ResolvedItem = struct {
     backdrop_url: [512]u8 = std.mem.zeroes([512]u8),
     backdrop_url_len: usize = 0,
     rating: f32 = 0, // Provider rating out of ten; zero means unknown.
+    catalog_rank: u16 = 0, // Provider relevance order within movie/show results; zero unknown.
     author: [160]u8 = std.mem.zeroes([160]u8),
     author_len: usize = 0,
     url: [2048]u8 = std.mem.zeroes([2048]u8), // magnet/http/jf item id
@@ -397,7 +398,12 @@ pub fn resolve(query: []const u8, intent: []const u8) void {
 /// result stream. Playback auto-pickers must retain this token so a later user
 /// search can supersede them without letting them consume unrelated rows.
 pub fn resolveTracked(query: []const u8, intent: []const u8) u32 {
-    if (query.len == 0) return run_gen.load(.acquire);
+    return resolveScoped(query, intent, .all);
+}
+const SearchScope = @import("search_scope_pure.zig").Scope;
+var active_scope: SearchScope = .all; // guarded by lifecycle_mutex
+pub fn resolveScoped(query: []const u8, intent: []const u8, scope: SearchScope) u32 {
+    if (query.len == 0 and !std.mem.eql(u8, intent, "connected")) return run_gen.load(.acquire);
     // A run transition and every live worker publication share this lock. A
     // generation check without the lock has a TOCTOU window: an old worker can
     // validate, the next run can clear/reset, and then the old worker can write
@@ -411,6 +417,7 @@ pub fn resolveTracked(query: []const u8, intent: []const u8) u32 {
     // (worker_gen mismatch) while this wave's workers own the fresh statuses.
     const this_run = run_gen.fetchAdd(1, .acq_rel) +% 1;
     resolver_cache_scope = currentCacheScope();
+    active_scope = scope;
 
     // Save query — normalize "season X episode Y" → "SXXEYY"
     var norm_buf: [256]u8 = undefined;
@@ -439,7 +446,7 @@ pub fn resolveTracked(query: []const u8, intent: []const u8) u32 {
     // SWR: seed from the encrypted on-disk cache so the view paints INSTANTLY
     // (never blank) while the workers below revalidate. The first live result
     // replaces this placeholder (see pushResult).
-    populateFromCache(normalized);
+    if (qlen > 0 and scope == .all) populateFromCache(normalized);
 
     is_resolving.store(true, .release);
     // IMPORTANT: Set ALL to their final pre-spawn state BEFORE spawning any
@@ -449,7 +456,8 @@ pub fn resolveTracked(query: []const u8, intent: []const u8) u32 {
     // spawned; checkAllDone treats .idle as complete.
     const Pre = struct {
         fn set(st: *std.atomic.Value(SourceStatus), bit: SourceBit) void {
-            st.store(if (sourceOn(bit)) .searching else .idle, .release);
+            const connected_source = bit == .jellyfin or bit == .audiobooks or bit == .opds or bit == .music;
+            st.store(if (sourceOn(bit) and active_scope.allowsBackend(@tagName(bit)) and (resolver_query_len > 0 or connected_source)) .searching else .idle, .release);
         }
     };
     Pre.set(&status_jf, .jellyfin);
@@ -478,9 +486,9 @@ pub fn resolveTracked(query: []const u8, intent: []const u8) u32 {
     Pre.set(&status_vndb, .vndb);
     Pre.set(&status_audiobooks, .audiobooks);
     Pre.set(&status_opds, .opds);
-    status_catalog.store(.searching, .release);
-    status_plex.store(.searching, .release);
-    status_plugins.store(.searching, .release);
+    status_catalog.store(if (qlen > 0 and scope.allowsBackend("tmdb")) .searching else .idle, .release);
+    status_plex.store(if (scope.allowsBackend("plex")) .searching else .idle, .release);
+    status_plugins.store(if (qlen > 0 and scope.allowsBackend("plugin")) .searching else .idle, .release);
 
     // Fire every backend in parallel through the process-owned supervisor.
     // Superseded waves may overlap briefly, so the global admission cap also
@@ -490,6 +498,7 @@ pub fn resolveTracked(query: []const u8, intent: []const u8) u32 {
         // running the backend, so pushResult can drop pushes from a superseded
         // wave. Query still travels BY VALUE through the spawn tuple.
         fn go(comptime f: anytype, st: *std.atomic.Value(SourceStatus)) void {
+            if (st.load(.acquire) != .searching) return;
             const run_id = run_gen.load(.acquire);
             const Wrap = struct {
                 fn run(wq: [256]u8, wqlen: usize, wg: u32) void {
@@ -1002,6 +1011,7 @@ fn pushResult(item: ResolvedItem) bool {
     lifecycle_mutex.lock();
     defer lifecycle_mutex.unlock();
     if (thread_sink == null and worker_gen != run_gen.load(.acquire)) return false;
+    if (!active_scope.matches(searchView(&item))) return false;
     results_mutex.lock();
     defer results_mutex.unlock();
     const accepted = pushInto(&results, &result_count, &results_from_cache, item, "");
@@ -1043,7 +1053,7 @@ fn pushInto(
     const candidate_url = item.url[0..item.url_len];
     const health_kind = health.pure.playbackKind("", candidate_url);
     const health_status = if (health_kind.len > 0) health.statusOf(health_kind, candidate_url) else .unknown;
-    const score = match_info.score +| health.pure.scorePenalty(health_status);
+    const score = match_info.score +| (health.pure.scorePenalty(health_status) *| 64);
     scored_item.score = score; // cache so re-inserts don't recompute (S45)
     scored_item.is_nsfw = @import("search.zig").isNsfwName(name); // S16
 
@@ -1200,6 +1210,8 @@ fn resolveCatalog(query_buf: [256]u8, qlen: usize) void {
         return;
     }
 
+    var movie_rank: u16 = 0;
+    var show_rank: u16 = 0;
     for (catalog[0..count]) |entry| {
         var item = ResolvedItem{ .source = .tmdb, .catalog_id = entry.id };
         const title_len = @min(entry.title_len, item.name.len);
@@ -1207,6 +1219,9 @@ fn resolveCatalog(query_buf: [256]u8, qlen: usize) void {
         item.name_len = title_len;
 
         const kind = entry.media_type[0..@min(entry.media_type_len, entry.media_type.len)];
+        const rank = if (std.mem.eql(u8, kind, "tv")) &show_rank else &movie_rank;
+        rank.* += 1;
+        item.catalog_rank = rank.*;
         const kind_len = @min(kind.len, item.catalog_kind.len);
         @memcpy(item.catalog_kind[0..kind_len], kind[0..kind_len]);
         item.catalog_kind_len = kind_len;
@@ -1437,7 +1452,8 @@ fn attrValue(html: []const u8, name: []const u8, limit: usize) ?[]const u8 {
 // ══════════════════════════════════════════════════════════
 
 fn cacheKey(buf: []u8, query: []const u8, scope: CacheScope) []const u8 {
-    return content.cacheIdentity(buf, query, scope.mask, scope.fingerprint) orelse "";
+    // Ranking v2: old cached scores must not restore the former arbitrary order.
+    return content.cacheIdentity(buf, query, scope.mask, scope.fingerprint ^ 0x72616e6b76320001) orelse "";
 }
 
 /// Serialize the current `results` (under caller's lock) into `out`.
@@ -1608,7 +1624,7 @@ fn populateFromCache(query: []const u8) void {
 /// repeat query) is instant. Only stores real live results — never re-stores a
 /// cache-seeded placeholder (that would reset the TTL without a network fetch).
 fn storeToCache() void {
-    if (!state.app.content_cache_enabled) return;
+    if (!state.app.content_cache_enabled or resolver_query_len == 0 or active_scope != .all) return;
     const current_scope = currentCacheScope();
     if (current_scope.mask != resolver_cache_scope.mask or current_scope.fingerprint != resolver_cache_scope.fingerprint) return;
     results_mutex.lock();
@@ -1711,6 +1727,9 @@ const MatchInfo = struct { match_pct: u8, score: u32 };
 fn computeMatchAgainst(item: ResolvedItem, query_override: []const u8) MatchInfo {
     const query = if (query_override.len > 0) query_override else resolver_query[0..resolver_query_len];
     const name = item.name[0..item.name_len];
+    // Browsing connected libraries has no terms to match. Keep valid items.
+    if (query.len == 0 and std.mem.eql(u8, resolver_intent[0..resolver_intent_len], "connected"))
+        return .{ .match_pct = 100, .score = 0 };
 
     var lower_name: [256]u8 = undefined;
     const nlen = @min(name.len, 255);
@@ -1729,9 +1748,6 @@ fn computeMatchAgainst(item: ResolvedItem, query_override: []const u8) MatchInfo
     const pct: u8 = counts.pct();
 
     if (match_words == 0) return .{ .match_pct = 0, .score = 9999 };
-
-    // Relevance: 100 (few match) to 0 (all match)
-    const relevance: u32 = 100 - @as(u32, pct);
 
     const intent = resolver_intent[0..resolver_intent_len];
     const is_movie_or_show = std.mem.eql(u8, intent, "movie") or std.mem.eql(u8, intent, "show");
@@ -1789,8 +1805,8 @@ fn computeMatchAgainst(item: ResolvedItem, query_override: []const u8) MatchInfo
     // resolver_rank; only fires when the query didn't ask for that class.
     const junk = @import("resolver_rank.zig").junkTitlePenalty(lower_name[0..nlen], lower_query[0..ql]);
 
-    const raw = relevance + source_w + quality_bonus + junk;
-    const score = if (raw > seed_bonus) raw - seed_bonus else 0;
+    const raw = source_w + quality_bonus + junk;
+    const score = @import("resolver_rank.zig").relevanceScore(name, query, pct, raw -| seed_bonus, item.catalog_rank);
 
     return .{ .match_pct = pct, .score = score };
 }
@@ -1893,8 +1909,8 @@ fn resolveAudiobooks(query_buf: [256]u8, qlen: usize) void {
             var encoded_buf: [768]u8 = undefined;
             const encoded = @import("../core/http.zig").urlEncode(query[0..query_len], &encoded_buf);
             var url_buf: [1300]u8 = undefined;
-            const url = std.fmt.bufPrint(&url_buf, "{s}/api/libraries/{s}/search?q={s}&limit=6", .{
-                std.mem.trimEnd(u8, snapshot.server[0..snapshot.server_len], "/"), library.id[0..library.id_len], encoded,
+            const url = std.fmt.bufPrint(&url_buf, "{s}/api/libraries/{s}/{s}{s}&limit=6", .{
+                std.mem.trimEnd(u8, snapshot.server[0..snapshot.server_len], "/"), library.id[0..library.id_len], if (query_len == 0) "items?sort=addedAt&desc=1" else "search?q=", encoded,
             }) catch {
                 page.status = .failed;
                 return;
@@ -1925,7 +1941,7 @@ fn resolveAudiobooks(query_buf: [256]u8, qlen: usize) void {
                 return;
             }
             const key = if (std.mem.eql(u8, library.media_type[0..library.media_type_len], "podcast")) "podcast" else "book";
-            const records = parsed.value.object.get(key) orelse {
+            const records = parsed.value.object.get(if (query_len == 0) "results" else key) orelse {
                 page.status = .parse_failed;
                 return;
             };
@@ -1936,7 +1952,7 @@ fn resolveAudiobooks(query_buf: [256]u8, qlen: usize) void {
             for (records.array.items) |match| {
                 if (page.count >= page.rows.len) break;
                 if (match != .object) continue;
-                const record = match.object.get("libraryItem") orelse continue;
+                const record = if (query_len == 0) match else match.object.get("libraryItem") orelse continue;
                 if (record != .object) continue;
                 const id = catalogString(record, "id");
                 if (!pure.validItemId(id)) continue;
@@ -3643,8 +3659,8 @@ fn resolveLiveTv(query_buf: [256]u8, qlen: usize) void {
 fn resolveMusic(query_buf: [256]u8, qlen: usize) void {
     defer finishWorker(&status_music, .done);
     const query = query_buf[0..qlen];
-    if (query.len < 2) return;
-    defer if (generationIsCurrent(worker_gen)) {
+    if (query.len == 1) return;
+    defer if (query.len > 0 and generationIsCurrent(worker_gen)) {
         resolveInstalledAudio(.openverse, query);
         resolveInstalledAudio(.netlabels, query);
     };
@@ -3653,7 +3669,7 @@ fn resolveMusic(query_buf: [256]u8, qlen: usize) void {
     var enabled: [5]bool = @splat(false);
     var providers: usize = 0;
     for (&enabled, 0..) |*on, index| {
-        on.* = music.universalConfigured(@intCast(index));
+        on.* = (query.len > 0 or index == music.SRC_SUBSONIC) and music.universalConfigured(@intCast(index));
         if (on.*) providers += 1;
     }
     if (providers == 0) {
@@ -4497,7 +4513,7 @@ pub fn playResolvedItem(item: *const ResolvedItem) void {
             if (std.mem.startsWith(u8, url, "opal://music/")) {
                 if (!@import("music_subsonic.zig").playUniversalRoute(url, item.name[0..item.name_len], item.author[0..item.author_len]))
                     state.showToast("Music connection changed or track is unavailable; search again");
-            } else @import("browser.zig").playDirect(.{ .url = url, .title = item.name[0..item.name_len], .subtitle = item.author[0..item.author_len], .art_url = item.poster_url[0..item.poster_url_len] });
+            } else @import("browser.zig").playDirect(.{ .url = url, .audio_only = true, .title = item.name[0..item.name_len], .subtitle = item.author[0..item.author_len], .art_url = item.poster_url[0..item.poster_url_len] });
         },
         .youtube, .stremio, .local, .radio => {
             @import("browser.zig").playDirect(.{
@@ -4894,4 +4910,35 @@ fn resolveAniListCatalog(query: []const u8) void {
             count += 1;
         }
     }
+}
+
+/// Regression: connected browsing must retain rows despite having no search terms.
+pub fn verifyConnectedFeedForTest() !void {
+    const saved_query_len = resolver_query_len;
+    const saved_intent = resolver_intent;
+    const saved_intent_len = resolver_intent_len;
+    defer {
+        resolver_query_len = saved_query_len;
+        resolver_intent = saved_intent;
+        resolver_intent_len = saved_intent_len;
+    }
+    resolver_query_len = 0;
+    @memcpy(resolver_intent[0..9], "connected");
+    resolver_intent_len = 9;
+    var item: ResolvedItem = .{ .source = .jellyfin };
+    copyField(&item.name, &item.name_len, "My library movie");
+    try std.testing.expectEqual(@as(u8, 100), computeMatchAgainst(item, "").match_pct);
+    try std.testing.expectEqual(@as(u8, 0), computeMatchAgainst(item, "unrelated").match_pct);
+    resolver_intent_len = 0;
+    try std.testing.expectEqual(@as(u8, 0), computeMatchAgainst(item, "").match_pct);
+}
+
+pub fn requestScopeForTest() SearchScope {
+    lifecycle_mutex.lock();
+    defer lifecycle_mutex.unlock();
+    return active_scope;
+}
+
+pub fn rankForTest(item: ResolvedItem, query: []const u8) u32 {
+    return computeMatchAgainst(item, query).score;
 }

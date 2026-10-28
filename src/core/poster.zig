@@ -308,6 +308,12 @@ pub fn fetchAsyncPublished(url: []const u8, pixels_out: *?[]u8, w_out: *u32, h_o
     return true;
 }
 
+// Shared UI-frame budget for every catalog using this upload seam. Network
+// workers can finish together; keep their GPU transfers spread across frames.
+var upload_frame_ns: i128 = -1;
+var frame_uploads: usize = 0;
+const MAX_FRAME_UPLOADS = 4;
+
 /// Upload pending pixel data to GPU texture. Call from render thread.
 /// Returns true if texture is ready.
 pub fn uploadIfReady(pixels: *?[]u8, w: u32, h: u32, tex: *?dvui.Texture) bool {
@@ -322,6 +328,17 @@ pub fn uploadIfReady(pixels: *?[]u8, w: u32, h: u32, tex: *?dvui.Texture) bool {
     // buffer length doesn't exactly match w*h*4 the dims aren't consistent yet —
     // skip this frame (prevents an out-of-bounds read / mis-sized texture).
     if (pixels.*.?.len != num_px * 4) return false;
+
+    const frame_ns = dvui.frameTimeNS();
+    if (frame_ns != upload_frame_ns) {
+        upload_frame_ns = frame_ns;
+        frame_uploads = 0;
+    }
+    if (frame_uploads >= MAX_FRAME_UPLOADS) {
+        dvui.refresh(null, @src(), null);
+        return false; // Retain decoded bytes until the next frame.
+    }
+    frame_uploads += 1;
 
     // Decoder output is straight RGBA. DVUI converts to premultiplied alpha
     // in a temporary copy; failed uploads leave the original retryable bytes

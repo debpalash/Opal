@@ -1,3 +1,7 @@
+test "Native shell offline audio connection module" {
+    _ = @import("ui/audio_connection.zig");
+}
+
 test "Horizon device validation module" {
     _ = @import("services/horizon_device_test.zig");
 }
@@ -1832,6 +1836,7 @@ fn appFrame() !dvui.App.Result {
     } // end else — legacy header+grid+drawer layout
 
     // ── Layer 2: Floating Overlays & Modals ──
+    @import("ui/audio_connection.zig").render();
     metadata_dialog.renderMetadataDialog();
     search.renderNsfwModal();
     @import("services/projectjav.zig").renderModal();

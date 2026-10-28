@@ -1,5 +1,6 @@
 //! Desktop presentation for the Podcasts feature.
 
+const browse_filters = @import("browse_filters.zig");
 const std = @import("std");
 const dvui = @import("dvui");
 const icons = @import("icons");
@@ -48,25 +49,21 @@ pub fn renderContent() void {
     }
 }
 
+var show_feed_entry = false;
+
 fn renderSearchBar() void {
-    var row = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
-        .expand = .horizontal,
-        .padding = .{ .x = 10, .y = 7, .w = 10, .h = 7 },
-        .background = true,
-        .color_fill = theme.colors.bg_surface,
-    });
+    var row = browse_filters.begin(@src());
     defer row.deinit();
 
-    _ = dvui.icon(@src(), "", icons.tvg.lucide.podcast, .{}, .{
-        .color_text = theme.colors.accent,
-        .min_size_content = theme.iconSize(.md),
-        .gravity_y = 0.5,
-        .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
-    });
+    const local_search = @import("browse_layout_pure.zig").showLocalSearch(state.app.page_shell_enabled);
+    if (!local_search) {
+        if (browse_filters.item(@src(), .{ .id = 91001, .label = "Add podcast feed", .icon = icons.tvg.lucide.plus, .active = show_feed_entry })) show_feed_entry = !show_feed_entry;
+        if (!show_feed_entry) return;
+    }
 
     const layout_w = @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().w, state.app.ui_scale);
     const search_w = @max(150, @min(280, layout_w - 280));
-    const local_search = @import("browse_layout_pure.zig").showLocalSearch(state.app.page_shell_enabled);
+
     const entered = components.toolbarSearch(@src(), &state.app.podcasts.search_buf, if (local_search) "Search podcasts or paste an RSS feed URL…" else "RSS feed URL…", search_w);
     const go = components.toolbarGo(@src(), if (local_search) "Search" else "Add feed");
 
@@ -174,13 +171,6 @@ fn renderResults(view: *const Snapshot) void {
         .color_fill = theme.colors.bg_surface,
     });
     defer scroll.deinit();
-
-    _ = dvui.label(@src(), "{s} · {d}", .{
-        if (view.showing_popular) "Popular now" else "Results", count,
-    }, .{
-        .color_text = theme.colors.text_secondary,
-        .padding = .{ .x = 8, .y = 8, .w = 8, .h = 2 },
-    });
 
     // Responsive columns from the LIVE page width (one-frame lag; first paint
     // falls back to a sane default) — same shape as the TMDB gallery.

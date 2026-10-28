@@ -51,9 +51,39 @@ pub fn parseRow(value: std.json.Value) ?music.MusicSong {
     }
     const url = std.fmt.bufPrint(&row.play_url, "https://www.youtube.com/watch?v={s}", .{id}) catch return null;
     row.play_url_len = url.len;
-    const cover = yt.thumbUrl(id, &row.cover) orelse return null;
-    row.cover_len = cover.len;
+    const artwork = albumArtwork(value, row.cover.len);
+    if (artwork.len > 0) {
+        music.copyValueText(&row.cover, &row.cover_len, artwork);
+    } else {
+        const cover = yt.thumbUrl(id, &row.cover) orelse return null;
+        row.cover_len = cover.len;
+    }
     return row;
+}
+
+// Music thumbnails contain the square album art; a generated video thumbnail
+// can include letterboxing and a different image. Prefer square, then size.
+fn albumArtwork(value: std.json.Value, capacity: usize) []const u8 {
+    const thumbnails = find(field(value, "thumbnail"), "thumbnails", 0);
+    if (thumbnails != .array) return "";
+    var best: []const u8 = "";
+    var best_score: u64 = 0;
+    for (thumbnails.array.items) |thumbnail| {
+        const url = str(field(thumbnail, "url"));
+        if (!std.mem.startsWith(u8, url, "https://") or url.len > capacity) continue;
+        const width = dimension(field(thumbnail, "width"));
+        const height = dimension(field(thumbnail, "height"));
+        const score = @as(u64, width) * height +
+            @as(u64, if (width > 0 and width == height) 1 << 32 else 0);
+        if (best.len == 0 or score > best_score) {
+            best = url;
+            best_score = score;
+        }
+    }
+    return best;
+}
+fn dimension(value: std.json.Value) u32 {
+    return if (value == .integer) @intCast(std.math.clamp(value.integer, 0, 8192)) else 0;
 }
 
 pub fn collect(value: std.json.Value, out: []music.MusicSong) usize {
@@ -100,4 +130,15 @@ test "YouTube Music shelves yield songs, skip albums, and preserve continuation"
     const req = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, body, .{});
     defer req.deinit();
     try std.testing.expectEqualStrings("a\"b", str(field(req.value, "query")));
+}
+
+test "YouTube Music uses largest square album art instead of video thumbnail" {
+    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator,
+        \\{"playlistItemData":{"videoId":"abcdefghijk"},"flexColumns":[{"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"Song"}]}}}],"thumbnail":{"musicThumbnailRenderer":{"thumbnail":{"thumbnails":[{"url":"https://cover.test/small.jpg","width":60,"height":60},{"url":"https://cover.test/album.jpg","width":544,"height":544},{"url":"https://cover.test/video.jpg","width":1280,"height":720},{"url":"http://cover.test/insecure.jpg","width":1024,"height":1024}]}}}}
+    , .{});
+    defer parsed.deinit();
+    const row = parseRow(parsed.value).?;
+    try std.testing.expectEqualStrings("https://cover.test/album.jpg", row.cover[0..row.cover_len]);
+    try std.testing.expectEqualStrings("", albumArtwork(parsed.value, 8));
+    try std.testing.expect(!row.download_allowed);
 }

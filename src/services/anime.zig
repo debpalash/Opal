@@ -1,3 +1,4 @@
+const browse_filters = @import("../ui/browse_filters.zig");
 const std = @import("std");
 const dvui = @import("dvui");
 const state = @import("../core/state.zig");
@@ -2822,7 +2823,7 @@ pub fn renderContent() void {
     if (state.app.anime.selected_idx == null) {
         // Single unified toolbar row: mode tabs + the Airing toggle + per-mode
         // chips + count + zoom.
-        renderModeToolbar(state.app.anime.result_count);
+        renderModeToolbar();
         // Search mode keeps the live search-as-you-type box (its own row).
         if (!state.app.anime.sched_view and state.app.anime.mode == .search) renderSearchBar();
     }
@@ -3431,45 +3432,25 @@ pub fn nativeToolbarRectForTest() dvui.Rect.Physical {
     if (!@import("builtin").is_test) @compileError("Native fixture is test-only");
     return native_toolbar_rect;
 }
-fn renderModeToolbar(count: usize) void {
-    // Keep controls in one scrollable row; narrow windows retain the gallery.
-    const height = @import("../ui/browse_layout_pure.zig").toolbarHeight(dvui.themeGet().font_body.size);
-    var scroll = dvui.scrollArea(@src(), .{ .horizontal = .auto, .horizontal_bar = .auto_overlay, .vertical = .none }, .{
-        .expand = .horizontal,
-        .min_size_content = .{ .w = 0, .h = height },
-        .max_size_content = dvui.Options.MaxSize.height(height),
-        .background = false,
-    });
-    defer scroll.deinit();
-    if (@import("builtin").is_test) native_toolbar_rect = scroll.data().borderRectScale().r;
-    var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .expand = .horizontal,
-        .padding = .{ .x = 8, .y = 8, .w = 8, .h = 6 },
-        .background = true,
-        .color_fill = theme.colors.bg_app,
-    });
+
+fn renderModeToolbar() void {
+    var bar = browse_filters.begin(@src());
     defer bar.deinit();
+    if (@import("builtin").is_test) native_toolbar_rect = bar.rect();
 
-    renderModeTab(0, .trending, "Trending");
-    renderModeTab(1, .seasonal, "Seasonal");
-    renderModeTab(2, .calendar, "Calendar");
-    if (@import("../ui/browse_layout_pure.zig").showLocalSearch(state.app.page_shell_enabled)) renderModeTab(3, .search, "Search");
-    renderModeTab(4, .mylist, "My List");
-
+    const modes = [_]browse_filters.Item{
+        .{ .id = @intFromEnum(state.AnimeMode.trending), .label = "Trending", .icon = icons.tvg.lucide.compass, .presentation = .icon },
+        .{ .id = @intFromEnum(state.AnimeMode.seasonal), .label = "Seasonal", .icon = icons.tvg.lucide.leaf, .presentation = .icon },
+        .{ .id = @intFromEnum(state.AnimeMode.calendar), .label = "Calendar", .icon = icons.tvg.lucide.calendar, .presentation = .icon },
+        .{ .id = @intFromEnum(state.AnimeMode.search), .label = "Search", .icon = icons.tvg.lucide.search, .presentation = .icon, .visible = @import("../ui/browse_layout_pure.zig").showLocalSearch(state.app.page_shell_enabled) },
+        .{ .id = @intFromEnum(state.AnimeMode.mylist), .label = "My List", .icon = icons.tvg.lucide.bookmark, .presentation = .icon },
+    };
+    if (bar.menu(@src(), .{ .items = &modes, .selected = if (state.app.anime.sched_view) null else @intFromEnum(state.app.anime.mode) })) |id| setMode(@enumFromInt(id));
     // ── "Airing this week" view toggle (AniList schedule) — a VIEW, not a mode,
     //    so it's a separate toggle rather than another mode tab. ──
-    toolbarDivider(888);
     {
         const airing = state.app.anime.sched_view;
-        if (dvui.button(@src(), "Airing this week", .{}, .{
-            .id_extra = 20099,
-            .background = true,
-            .color_fill = if (airing) theme.colors.accent else theme.colors.bg_surface,
-            .color_text = if (airing) theme.colors.text_on_accent else theme.colors.text_secondary,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
-            .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
-        })) {
+        if (toolbarAction(20099, "Airing this week", icons.tvg.lucide.@"calendar-clock", airing)) {
             state.app.anime.sched_view = !airing;
         }
     }
@@ -3478,21 +3459,10 @@ fn renderModeToolbar(count: usize) void {
         // Airing view: show a refresh + a live episode count instead of the
         // browse chips / results counter.
         toolbarDivider(951);
-        if (dvui.button(@src(), "Refresh", .{}, .{
-            .id_extra = 20098,
-            .background = true,
-            .color_fill = theme.colors.bg_surface,
-            .color_text = theme.colors.text_primary,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
-        })) {
+        if (toolbarAction(20098, "Refresh schedule", icons.tvg.lucide.@"refresh-cw", false)) {
             anime_schedule.refresh();
         }
-        _ = dvui.label(@src(), "{d} episodes", .{state.app.anime.sched_count}, .{
-            .color_text = theme.colors.text_secondary,
-            .gravity_y = 0.5,
-            .padding = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
-        });
+
         return;
     }
 
@@ -3500,13 +3470,21 @@ fn renderModeToolbar(count: usize) void {
     switch (state.app.anime.mode) {
         .trending => {
             toolbarDivider(889);
-            renderTrendChip(0, .airing, "Airing");
-            renderTrendChip(1, .top, "Top");
-            renderTrendChip(2, .bypopularity, "Popular");
-            renderTrendChip(3, .upcoming, "Upcoming");
-            // Only offered when the `lists` source plugin is installed — with no
-            // endpoint the source is inert, so we don't advertise a dead chip.
-            if (listsBase() != null) renderTrendChip(4, .lists, "Lists");
+            const filters = [_]browse_filters.Item{
+                .{ .id = @intFromEnum(TrendFilter.airing), .label = "Airing", .icon = icons.tvg.lucide.radio },
+                .{ .id = @intFromEnum(TrendFilter.top), .label = "Top", .icon = icons.tvg.lucide.trophy },
+                .{ .id = @intFromEnum(TrendFilter.bypopularity), .label = "Popular", .icon = icons.tvg.lucide.flame },
+                .{ .id = @intFromEnum(TrendFilter.upcoming), .label = "Upcoming", .icon = icons.tvg.lucide.calendar },
+                .{ .id = @intFromEnum(TrendFilter.lists), .label = "Lists", .icon = icons.tvg.lucide.list, .visible = listsBase() != null },
+            };
+            if (bar.menu(@src(), .{ .items = &filters, .selected = @intFromEnum(trend_filter) })) |id| {
+                const filter: TrendFilter = @enumFromInt(id);
+                if (filter != trend_filter) {
+                    trend_filter = filter;
+                    state.app.anime.last_fetch_s = 0;
+                    loadTrendingAnime();
+                }
+            }
         },
         .seasonal => {
             toolbarDivider(889);
@@ -3521,73 +3499,13 @@ fn renderModeToolbar(count: usize) void {
 
     // Result count + card-size −/+ (always, same row).
     toolbarDivider(950);
-    _ = dvui.label(@src(), "{d} results", .{count}, .{
-        .color_text = theme.colors.text_secondary,
-        .gravity_y = 0.5,
-    });
-    const dim = theme.colors.text_tertiary;
-    if (dvui.buttonIcon(@src(), "smaller", icons.tvg.lucide.minus, .{}, .{}, .{
-        .color_fill = theme.transparent,
-        .color_fill_hover = theme.colors.bg_hover,
-        .color_fill_press = theme.colors.bg_elevated,
-        .color_text = dim,
-        .border = dvui.Rect.all(0),
-        .min_size_content = theme.iconSize(.sm),
-        .padding = dvui.Rect.all(3),
-        .gravity_y = 0.5,
-    })) {
-        card_w_pref = @max(110, card_w_pref - 40);
-    }
-    if (dvui.buttonIcon(@src(), "bigger", icons.tvg.lucide.plus, .{}, .{}, .{
-        .color_fill = theme.transparent,
-        .color_fill_hover = theme.colors.bg_hover,
-        .color_fill_press = theme.colors.bg_elevated,
-        .color_text = dim,
-        .border = dvui.Rect.all(0),
-        .min_size_content = theme.iconSize(.sm),
-        .padding = dvui.Rect.all(3),
-        .gravity_y = 0.5,
-    })) {
-        card_w_pref = @min(320, card_w_pref + 40);
-    }
+    card_w_pref = browse_filters.zoom(@src(), card_w_pref, 110, 320);
 }
 
-fn renderModeTab(idx: usize, m: state.AnimeMode, label: []const u8) void {
-    const active = state.app.anime.mode == m;
-    if (dvui.button(@src(), label, .{}, .{
-        .id_extra = idx + 20000,
-        .background = true,
-        .color_fill = if (active) theme.colors.accent else theme.colors.bg_surface,
-        .color_text = if (active) theme.colors.text_on_accent else theme.colors.text_secondary,
-        .corner_radius = theme.dims.rad_sm,
-        .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
-        .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
-    })) {
-        setMode(m);
-    }
-}
-
-/// Per-mode sub-toolbar (season selector / calendar days). Trending's category
-/// chips live in renderToolbar; Search/My List have no sub-toolbar.
-fn renderSubToolbar() void {
-    switch (state.app.anime.mode) {
-        .seasonal => renderSeasonalSubToolbar(),
-        .calendar => renderCalendarSubToolbar(),
-        else => {},
-    }
-}
-
+/// Contextual season and calendar controls inside the shared toolbar.
 fn renderSeasonChip(idx: usize, sel: state.AnimeSeasonSel, label: []const u8) void {
     const active = state.app.anime.season_sel == sel;
-    if (dvui.button(@src(), label, .{}, .{
-        .id_extra = idx + 21000,
-        .background = true,
-        .color_fill = if (active) theme.colors.accent else theme.colors.bg_surface,
-        .color_text = if (active) theme.colors.text_on_accent else theme.colors.text_secondary,
-        .corner_radius = theme.dims.rad_sm,
-        .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
-        .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
-    })) {
+    if (browse_filters.item(@src(), .{ .id = idx + 21000, .label = label, .active = active, .presentation = .label })) {
         state.app.anime.season_sel = sel;
     }
 }
@@ -3642,15 +3560,7 @@ fn renderSeasonalSubToolbar() void {
 
 fn renderCalDayChip(idx: usize, day: u8, label: []const u8) void {
     const active = state.app.anime.cal_day == day;
-    if (dvui.button(@src(), label, .{}, .{
-        .id_extra = idx + 22000,
-        .background = true,
-        .color_fill = if (active) theme.colors.accent else theme.colors.bg_surface,
-        .color_text = if (active) theme.colors.text_on_accent else theme.colors.text_secondary,
-        .corner_radius = theme.dims.rad_sm,
-        .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
-        .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
-    })) {
+    if (browse_filters.item(@src(), .{ .id = idx + 22000, .label = label, .active = active, .presentation = .label })) {
         state.app.anime.cal_day = day;
     }
 }
@@ -3997,91 +3907,14 @@ fn recordFired(buf: []const u8) void {
     last_fired_len = n;
 }
 
-/// Compact toolbar: trending category chips (only on the trending view),
-/// a result count, and card-size +/- controls. Wraps on narrow widths.
-fn renderToolbar(count: usize) void {
-    const on_trending = state.app.anime.mode == .trending;
-
-    var bar = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
-        .expand = .horizontal,
-        .margin = .{ .x = 8, .y = 0, .w = 8, .h = 6 },
-    });
-    defer bar.deinit();
-
-    // Trending category chips (Jikan top/anime filters) — only in Trending mode.
-    if (on_trending) {
-        renderTrendChip(0, .airing, "Airing");
-        renderTrendChip(1, .top, "Top");
-        renderTrendChip(2, .bypopularity, "Popular");
-        renderTrendChip(3, .upcoming, "Upcoming");
-        toolbarDivider(900);
-    }
-
-    // Result count.
-    _ = dvui.label(@src(), "{d} results", .{count}, .{
-        .color_text = theme.colors.text_secondary,
-        .gravity_y = 0.5,
-    });
-
-    // Card-size −/+ controls.
-    toolbarDivider(950);
-    const dim = theme.colors.text_tertiary;
-    if (dvui.buttonIcon(@src(), "smaller", icons.tvg.lucide.minus, .{}, .{}, .{
-        .color_fill = theme.transparent,
-        .color_fill_hover = theme.colors.bg_hover,
-        .color_fill_press = theme.colors.bg_elevated,
-        .color_text = dim,
-        .border = dvui.Rect.all(0),
-        .min_size_content = theme.iconSize(.sm),
-        .padding = dvui.Rect.all(3),
-        .gravity_y = 0.5,
-    })) {
-        card_w_pref = @max(110, card_w_pref - 40);
-    }
-    if (dvui.buttonIcon(@src(), "bigger", icons.tvg.lucide.plus, .{}, .{}, .{
-        .color_fill = theme.transparent,
-        .color_fill_hover = theme.colors.bg_hover,
-        .color_fill_press = theme.colors.bg_elevated,
-        .color_text = dim,
-        .border = dvui.Rect.all(0),
-        .min_size_content = theme.iconSize(.sm),
-        .padding = dvui.Rect.all(3),
-        .gravity_y = 0.5,
-    })) {
-        card_w_pref = @min(320, card_w_pref + 40);
-    }
-}
-
 /// A faint vertical separator between toolbar groups.
 fn toolbarDivider(id: usize) void {
-    var d = dvui.box(@src(), .{}, .{
-        .id_extra = id,
-        .min_size_content = .{ .w = 1, .h = 18 },
-        .background = true,
-        .color_fill = theme.colors.border_subtle,
-        .margin = .{ .x = 8, .y = 0, .w = 8, .h = 0 },
-        .gravity_y = 0.5,
-    });
-    d.deinit();
+    browse_filters.divider(@src(), id);
 }
 
-fn renderTrendChip(idx: usize, filter: TrendFilter, label: []const u8) void {
-    const active = trend_filter == filter;
-    const icon = switch (filter) {
-        .airing => icons.tvg.lucide.radio,
-        .top => icons.tvg.lucide.trophy,
-        .bypopularity => icons.tvg.lucide.flame,
-        .upcoming => icons.tvg.lucide.calendar,
-        .lists => icons.tvg.lucide.list,
-    };
-    if (components.filterChip(@src(), label, icon, active, idx + 8000)) {
-        if (trend_filter != filter) {
-            trend_filter = filter;
-            // Force a refresh even if SWR thinks the cache is fresh.
-            state.app.anime.last_fetch_s = 0;
-            loadTrendingAnime();
-        }
-    }
+// Shared compact controls match Movies & TV, including accessible names and tips.
+fn toolbarAction(id: usize, label: []const u8, icon: []const u8, active: bool) bool {
+    return browse_filters.item(@src(), .{ .id = id, .label = label, .icon = icon, .active = active });
 }
 
 // ══════════════════════════════════════════════════════════
@@ -4161,7 +3994,7 @@ fn renderGallery() void {
                 .margin = .{ .x = 3, .y = 8, .w = 3, .h = 12 },
             });
             state.wakeUi();
-        } else if (components.filterChip(@src(), "More", icons.tvg.lucide.@"chevrons-down", false, 80002)) {
+        } else if (browse_filters.item(@src(), .{ .id = 80002, .label = "More", .icon = icons.tvg.lucide.@"chevrons-down", .presentation = .label })) {
             loadMoreGrid(); // tap fallback
         }
 

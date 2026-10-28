@@ -23,6 +23,7 @@
 //!   renderResults()    → sliding-window virtualization over total_matches.
 //!   playChannel(i)     → browser.loadContentDirectMetaHeaders(url) → mpv.
 
+const browse_filters = @import("../ui/browse_filters.zig");
 const std = @import("std");
 const dvui = @import("dvui");
 const icons = @import("icons");
@@ -942,26 +943,16 @@ fn codeIndex(codes: []const []const u8, current: []const u8) usize {
 // [tv][search (fills)][Go] [All|Fav|Recent] [cat][country][Any/SD/HD/FHD][sort]
 // [Working][Test]. The search entry expands to eat the slack, so it stays roomy
 // while the controls pack to the right — one line instead of three.
+var show_extra_filters = false;
+
 fn renderToolbar() void {
     const local_search = @import("../ui/browse_layout_pure.zig").showLocalSearch(state.app.page_shell_enabled);
     if (!local_search and iptvBase() == null) return;
-    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .expand = .horizontal,
-        .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
-        .background = true,
-        .color_fill = theme.colors.bg_surface,
-    });
+    var row = browse_filters.begin(@src());
     defer row.deinit();
 
     const setFixedBuf = @import("../core/text.zig").setFixedBuf;
     const inert = iptvBase() == null;
-
-    _ = dvui.icon(@src(), "", icons.tvg.lucide.@"monitor-play", .{}, .{
-        .color_text = theme.colors.accent,
-        .min_size_content = theme.iconSize(.md),
-        .gravity_y = 0.5,
-        .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
-    });
 
     if (local_search) {
         var te = dvui.textEntry(@src(), .{
@@ -1012,18 +1003,23 @@ fn renderToolbar() void {
     }
 
     // Quick-filter chips.
-    const chips = [_]struct { label: []const u8, icon: []const u8 }{
-        .{ .label = "All", .icon = icons.tvg.lucide.tv },
-        .{ .label = "Favorites", .icon = icons.tvg.lucide.star },
-        .{ .label = "Recent", .icon = icons.tvg.lucide.history },
+    const chips = [_]browse_filters.Item{
+        .{ .id = 0, .label = "All", .icon = icons.tvg.lucide.tv },
+        .{ .id = 1, .label = "Favorites", .icon = icons.tvg.lucide.star },
+        .{ .id = 2, .label = "Recent", .icon = icons.tvg.lucide.history },
     };
-    for (chips, 0..) |chip, clicked| {
-        if (components.filterChip(@src(), chip.label, chip.icon, clicked == state.app.iptv.quick_filter, clicked + 28000) and clicked != state.app.iptv.quick_filter)
-            selectQuickFilter(@intCast(clicked));
+    if (row.menu(@src(), .{ .items = &chips, .selected = state.app.iptv.quick_filter })) |id| {
+        if (id != state.app.iptv.quick_filter) selectQuickFilter(@intCast(id));
     }
 
     // Category/country/quality/sort — All view only (Favorites/Recent don't filter).
-    if (state.app.iptv.quick_filter == 0) {
+    if (state.app.iptv.quick_filter == 0 and browse_filters.item(@src(), .{
+        .id = 28010,
+        .label = "Channel filters",
+        .icon = icons.tvg.lucide.@"sliders-horizontal",
+        .active = show_extra_filters or state.app.iptv.filter_category_len > 0 or state.app.iptv.filter_country_len > 0 or state.app.iptv.filter_quality != 0 or state.app.iptv.sort_mode != 0,
+    })) show_extra_filters = !show_extra_filters;
+    if (state.app.iptv.quick_filter == 0 and show_extra_filters) {
         const cat_idx = codeIndex(&CAT_CODES, state.app.iptv.filter_category[0..state.app.iptv.filter_category_len]);
         if (themedSelect(1, &CAT_LABELS, cat_idx, 128)) |sel| {
             setFixedBuf(state.app.iptv.filter_category[0..], &state.app.iptv.filter_category_len, CAT_CODES[sel]);
@@ -1048,28 +1044,12 @@ fn renderToolbar() void {
     }
 
     // Working-only toggle (hides dead-probed channels) — active = green fill.
-    if (dvui.button(@src(), "Working", .{}, .{
-        .color_fill = if (working_only) theme.colors.success else theme.transparent,
-        .color_fill_hover = theme.colors.bg_hover,
-        .color_text = if (working_only) dvui.Color.white else theme.colors.text_secondary,
-        .corner_radius = theme.dims.rad_sm,
-        .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
-        .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
-        .gravity_y = 0.5,
-    })) {
+    if (browse_filters.item(@src(), .{ .id = 28011, .label = "Working channels only", .icon = icons.tvg.lucide.@"circle-check", .active = working_only })) {
         working_only = !working_only;
     }
 
     // Test: re-probe the visible window now (clears the session guard).
-    if (dvui.button(@src(), "Test", .{}, .{
-        .color_fill = theme.colors.bg_elevated,
-        .color_fill_hover = theme.colors.bg_hover,
-        .color_text = theme.colors.text_secondary,
-        .corner_radius = theme.dims.rad_sm,
-        .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
-        .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
-        .gravity_y = 0.5,
-    })) {
+    if (browse_filters.item(@src(), .{ .id = 28012, .label = "Check channel availability", .icon = icons.tvg.lucide.activity, .active = false })) {
         // Wipe the session guard AND the cached rows so the reload can't
         // re-block probing; the (now empty) map reload makes cards re-probe.
         link_health.clear(IPTV_KIND);

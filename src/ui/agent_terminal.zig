@@ -7,6 +7,7 @@
 //! bytes for the program. While the terminal has focus it owns the keyboard, so
 //! Opal's single-key shortcuts stay quiet; click outside it to get them back.
 
+const page_controls = @import("browse_filters.zig");
 const std = @import("std");
 const dvui = @import("dvui");
 const state = @import("../core/state.zig");
@@ -279,21 +280,8 @@ pub fn render() void {
 }
 
 fn renderToolbar() void {
-    var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
-        .expand = .horizontal,
-        .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 },
-        .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-        .color_border = theme.colors.border_subtle,
-    });
+    var bar = page_controls.begin(@src());
     defer bar.deinit();
-
-    _ = dvui.label(@src(), "Agents", .{}, .{
-        .color_text = theme.colors.text_primary,
-        .gravity_y = 0.5,
-        .margin = .{ .x = 0, .y = 0, .w = 12, .h = 0 },
-    });
 
     var tab_label: [24]u8 = undefined;
     const activity_label = operator_view.tabLabel(&tab_label, operator_ui.pendingCount());

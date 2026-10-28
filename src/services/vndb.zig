@@ -20,6 +20,7 @@
 //!   openDetail(i)     → selected_idx = i (detail overlay).
 //!   searchTorrents(i) → hand the title to universal search (browse-only handoff).
 
+const browse_filters = @import("../ui/browse_filters.zig");
 const std = @import("std");
 const dvui = @import("dvui");
 const icons = @import("icons");
@@ -503,12 +504,7 @@ pub fn renderContent() void {
 
 fn renderSearchBar() void {
     if (!@import("../ui/browse_layout_pure.zig").showLocalSearch(state.app.page_shell_enabled)) return;
-    var row = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
-        .expand = .horizontal,
-        .padding = .{ .x = 10, .y = 7, .w = 10, .h = 7 },
-        .background = true,
-        .color_fill = theme.colors.bg_surface,
-    });
+    var row = browse_filters.begin(@src());
     defer row.deinit();
 
     _ = dvui.icon(@src(), "", icons.tvg.lucide.@"gamepad-2", .{}, .{
@@ -695,13 +691,6 @@ fn renderResults() void {
         .color_fill = theme.colors.bg_surface,
     });
     defer scroll.deinit();
-
-    _ = dvui.label(@src(), "{s} · {d}", .{
-        if (state.app.vndb.showing_popular) "Most popular visual novels (SFW)" else "Results", count,
-    }, .{
-        .color_text = theme.colors.text_secondary,
-        .padding = .{ .x = 8, .y = 8, .w = 8, .h = 2 },
-    });
 
     // Responsive columns from the LIVE page width (one-frame lag; first paint
     // falls back to a sane default) — same shape as the TMDB/radio grid.

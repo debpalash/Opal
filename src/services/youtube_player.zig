@@ -24,6 +24,18 @@ var visitor_cache: [2048]u8 = undefined;
 var visitor_cache_len: usize = 0;
 var visitor_mutex = sync.Mutex{};
 
+var stream_cache: pure.StreamCache = .{};
+var stream_cache_mutex = sync.Mutex{};
+
+pub fn invalidateCached(url: []const u8) void {
+    const value = pure.videoId(url) orelse return;
+    var id: [11]u8 = undefined;
+    @memcpy(&id, value);
+    stream_cache_mutex.lock();
+    defer stream_cache_mutex.unlock();
+    stream_cache.invalidate(id);
+}
+
 pub fn resolveAsync(url: []const u8, target: *@import("../player/player.zig").MediaPlayer, load_serial: u64) bool {
     const id = pure.videoId(url) orelse return false;
     var job: Job = .{ .id = undefined, .target_address = @intFromPtr(target), .load_serial = load_serial };
@@ -33,6 +45,15 @@ pub fn resolveAsync(url: []const u8, target: *@import("../player/player.zig").Me
 }
 
 fn publish(job: Job, streams: ?pure.Streams) void {
+    if (streams) |resolved| {
+        stream_cache_mutex.lock();
+        stream_cache.put(job.id, resolved, @import("../core/io_global.zig").monotonicMilliTimestamp());
+        stream_cache_mutex.unlock();
+    }
+    publishResult(job, streams);
+}
+
+fn publishResult(job: Job, streams: ?pure.Streams) void {
     publication_mutex.lock();
     defer publication_mutex.unlock();
     if (publication_count == publications.len) {
@@ -48,6 +69,13 @@ fn publish(job: Job, streams: ?pure.Streams) void {
 }
 
 fn resolveWorker(job: Job) void {
+    stream_cache_mutex.lock();
+    const cached = stream_cache.get(job.id, @import("../core/io_global.zig").monotonicMilliTimestamp());
+    stream_cache_mutex.unlock();
+    if (cached) |streams| {
+        publishResult(job, streams); // Cache hits do not extend signed URL lifetime.
+        return;
+    }
     // The bundled extractor follows YouTube's current client/signature rules.
     // Its signed URLs support seeks past the initial CDN window; the VR API
     // below remains a fallback when the executable is unavailable.

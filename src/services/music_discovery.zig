@@ -490,6 +490,12 @@ fn syncSnapshot() void {
     ui_gen = g;
 }
 
+/// Keep discovery refresh available without a separate status/header block.
+pub fn renderRefresh() void {
+    if (!enabled()) return;
+    if (@import("../ui/components.zig").iconButtonEx(@src(), icons.tvg.lucide.@"refresh-cw", "Refresh recommendations", false, !busy.load(.acquire))) refresh();
+}
+
 /// Discovery rail. Renders NOTHING at all when the user has not opted in — the
 /// Music tab looks exactly as it did before.
 pub fn renderRail() void {
@@ -497,59 +503,13 @@ pub fn renderRail() void {
     autoRefreshOnce();
     syncSnapshot();
 
-    const working = busy.load(.acquire);
-
-    // ── Header: title + status + refresh ──
-    {
-        var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.xs },
-        });
-        defer hdr.deinit();
-
-        dvui.icon(@src(), "disco", icons.tvg.lucide.compass, .{}, .{
-            .color_text = theme.colors.accent,
-            .min_size_content = theme.iconSize(.sm),
-            .gravity_y = 0.5,
-            .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
-        });
-        _ = dvui.label(@src(), "Discover", .{}, .{
-            .color_text = theme.colors.text_primary,
-            .font = dvui.themeGet().font_heading,
-            .gravity_y = 0.5,
-        });
-        _ = dvui.label(@src(), "{s}", .{if (working) "Looking for artists like yours…" else "New albums from artists like the ones you play"}, .{
-            .color_text = theme.colors.text_tertiary,
-            .gravity_y = 0.5,
-            .expand = .horizontal,
-            .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
-        });
-        if (dvui.buttonIcon(@src(), "disco-refresh", icons.tvg.lucide.@"refresh-cw", .{}, .{}, .{
-            .color_text = theme.colors.text_secondary,
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .border = dvui.Rect.all(0),
-            .min_size_content = theme.iconSize(.sm),
-            .padding = dvui.Rect.all(4),
-            .gravity_y = 0.5,
-        })) {
-            refresh();
-        }
-    }
-
-    if (ui_count == 0) {
-        const msg: []const u8 = if (working)
-            "Building recommendations from ListenBrainz and MusicBrainz..."
-        else if (fetch_error.load(.acquire))
-            "Couldn't reach ListenBrainz or MusicBrainz - try Refresh later"
-        else
-            "Play something from your library first, then hit Refresh";
-        _ = dvui.label(@src(), "{s}", .{msg}, .{
-            .color_text = theme.colors.text_secondary,
-            .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = 0, .h = theme.spacing.sm },
-        });
-        return;
-    }
+    // Empty/background discovery should not push the music grid down.
+    if (ui_count == 0) return;
+    _ = dvui.label(@src(), "For you", .{}, .{
+        .color_text = theme.colors.text_secondary,
+        .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
+        .padding = .{ .x = 8, .y = 4, .w = 0, .h = 2 },
+    });
 
     var scroll = dvui.scrollArea(@src(), .{ .horizontal = .auto, .vertical = .none }, .{
         .expand = .horizontal,

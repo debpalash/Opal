@@ -9,6 +9,7 @@
 //! md5(pass+salt) with a per-session random salt; the password is never logged
 //! and never placed in a cache key.
 
+const browse_filters = @import("../ui/browse_filters.zig");
 const std = @import("std");
 const dvui = @import("dvui");
 const icons = @import("icons");
@@ -215,7 +216,7 @@ pub fn searchInto(source: u8, query: []const u8, out: []pure.MusicSong) Universa
 }
 
 pub fn searchIntoWithCancellation(source: u8, query: []const u8, out: []pure.MusicSong, cancel: ?@import("../core/bounded_process.zig").CancelEpoch) UniversalReply {
-    if (query.len == 0 or out.len == 0) return .{ .status = .no_results };
+    if ((query.len == 0 and source != SRC_SUBSONIC) or out.len == 0) return .{ .status = .no_results };
     var connection = universalConnection(source) orelse return .{};
     defer @memset(&connection.auth, 0);
     const limit = @min(out.len, 16);
@@ -293,7 +294,7 @@ pub fn playUniversalRoute(route_url: []const u8, title: []const u8, artist: []co
         SRC_PLEX => px_pure.buildStreamUrl(&url_buf, base, auth, route.part[0..route.part_len]),
         else => null,
     } orelse return false;
-    @import("browser.zig").playDirect(.{ .url = stream, .history_identity = route_url, .restore_target = route_url, .title = title, .subtitle = artist });
+    @import("browser.zig").playDirect(.{ .url = stream, .audio_only = true, .history_identity = route_url, .restore_target = route_url, .title = title, .subtitle = artist });
     return true;
 }
 
@@ -1005,7 +1006,7 @@ fn playCopiedSong(song: pure.MusicSong, source: u8) void {
         );
     }
 
-    @import("browser.zig").loadContentDirectMeta(url, "", name_buf[0..nlen], artist_buf[0..alen]);
+    @import("browser.zig").playDirect(.{ .url = url, .audio_only = true, .title = name_buf[0..nlen], .subtitle = artist_buf[0..alen] });
     logs.pushLog("info", "music", "Streaming track", false);
 
     // Seed music discovery with what was actually played. Local-only and
@@ -1185,42 +1186,34 @@ pub fn renderContent() void {
     defer pageroot.deinit();
 
     ensureLoaded();
-    components.pageHeading(@src(), "Music", "Choose a source to browse or search its catalog.");
     renderSearchBar();
 
     // Source selector: public streaming vs. your self-hosted library.
     {
-        var source_scroll = dvui.scrollArea(@src(), .{ .horizontal = .auto, .vertical = .none }, .{
-            .expand = .horizontal,
-            .max_size_content = .{ .w = std.math.floatMax(f32), .h = 52 },
-        });
-        defer source_scroll.deinit();
-        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .padding = .{ .x = 8, .y = 0, .w = 8, .h = 6 },
-            .background = true,
-            .color_fill = theme.colors.bg_surface,
-        });
-        defer row.deinit();
+        var bar = browse_filters.begin(@src());
+        defer bar.deinit();
         // Every source is always offered (Subsonic's long-standing behaviour):
         // picking an unconfigured one is inert and the empty grid says how to
         // configure it, which is friendlier than a tab that silently vanishes.
-        const sources = [_]struct { label: []const u8, icon: []const u8 }{
-            .{ .label = "JioSaavn", .icon = icons.tvg.lucide.music },
-            .{ .label = "Subsonic", .icon = icons.tvg.lucide.server },
-            .{ .label = "Jellyfin", .icon = icons.tvg.lucide.library },
-            .{ .label = "Plex", .icon = icons.tvg.lucide.play },
-            .{ .label = "Audius", .icon = icons.tvg.lucide.radio },
-            .{ .label = "Openverse", .icon = icons.tvg.lucide.music },
-            .{ .label = "Netlabels", .icon = icons.tvg.lucide.music },
-            .{ .label = "YouTube Music", .icon = icons.tvg.lucide.music },
+        const sources = [_]struct { id: u8, label: []const u8, icon: []const u8 }{
+            .{ .id = SRC_YOUTUBE, .label = "YouTube Music", .icon = icons.tvg.lucide.music },
+            .{ .id = SRC_JIOSAAVN, .label = "JioSaavn", .icon = icons.tvg.lucide.music },
+            .{ .id = SRC_SUBSONIC, .label = "Subsonic", .icon = icons.tvg.lucide.server },
+            .{ .id = SRC_JELLYFIN, .label = "Jellyfin", .icon = icons.tvg.lucide.library },
+            .{ .id = SRC_PLEX, .label = "Plex", .icon = icons.tvg.lucide.play },
+            .{ .id = SRC_AUDIUS, .label = "Audius", .icon = icons.tvg.lucide.radio },
+            .{ .id = SRC_OPENVERSE, .label = "Openverse", .icon = icons.tvg.lucide.music },
+            .{ .id = SRC_NETLABELS, .label = "Netlabels", .icon = icons.tvg.lucide.music },
         };
-        for (sources, 0..) |source, clicked| {
-            if (components.filterChip(@src(), source.label, source.icon, clicked == state.app.music.source, clicked + 91000) and clicked != state.app.music.source) {
-                _ = selectSource(@intCast(clicked));
+        var items: [sources.len]browse_filters.Item = undefined;
+        for (sources, &items) |source, *entry| entry.* = .{ .id = source.id, .label = source.label, .icon = source.icon, .presentation = .label };
+        if (bar.menu(@src(), .{ .items = &items, .selected = state.app.music.source })) |id| {
+            if (id != state.app.music.source) {
+                _ = selectSource(@intCast(id));
                 searchMusic(std.mem.sliceTo(&state.app.music.search_buf, 0));
             }
         }
+        @import("music_discovery.zig").renderRefresh();
     }
 
     // Discovery rail — the one music surface that suggests something you do NOT
@@ -1322,19 +1315,13 @@ pub fn renderLyricsPanel(placement: LyricsPanelPlacement) void {
     var i: usize = 0;
     while (i < n) : (i += 1) {
         const is_active = (active != null and active.? == i);
-        var tbuf: [pure_lyric_text_cap]u8 = undefined;
-        const txt = safeUtf8Buf(snap[i].slice(), &tbuf);
-        _ = dvui.label(@src(), "{s}", .{txt}, .{
-            .id_extra = i + 70000,
-            .expand = .horizontal,
-            .color_text = if (is_active) theme.colors.text_primary else theme.colors.text_secondary,
-            .font = if (is_active) dvui.themeGet().font_heading else dvui.themeGet().font_body,
-            .padding = .{ .x = 2, .y = 3, .w = 2, .h = 3 },
-        });
+        @import("../ui/lyrics_text.zig").line(
+            snap[i].slice(),
+            i + 70000,
+            if (is_active) theme.colors.text_primary else theme.colors.text_secondary,
+        );
     }
 }
-
-const pure_lyric_text_cap = 256;
 
 fn renderSearchBar() void {
     if (!@import("../ui/browse_layout_pure.zig").showLocalSearch(state.app.page_shell_enabled)) return;
@@ -1558,11 +1545,6 @@ fn renderResults() void {
         .color_fill = theme.colors.bg_surface,
     });
     defer scroll.deinit();
-
-    _ = dvui.label(@src(), "Results · {d}", .{total}, .{
-        .color_text = theme.colors.text_secondary,
-        .padding = .{ .x = 8, .y = 8, .w = 8, .h = 2 },
-    });
 
     const rect_w = scroll.data().rect.w;
     const avail_w: f32 = @max(240, (if (rect_w > 1) rect_w else 900) - 8);

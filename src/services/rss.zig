@@ -1,3 +1,4 @@
+const browse_filters = @import("../ui/browse_filters.zig");
 const std = @import("std");
 const dvui = @import("dvui");
 const icons = @import("icons");
@@ -336,72 +337,17 @@ pub fn renderContent() void {
         fetchFeed(active_feed_idx);
     }
 
-    // Header
     {
-        var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
-            .background = true,
-            .color_fill = theme.colors.bg_surface,
-        });
-        defer hdr.deinit();
-
-        _ = dvui.icon(@src(), "RSS", icons.tvg.lucide.rss, .{}, .{
-            .color_text = theme.colors.accent,
-            .min_size_content = theme.iconSize(.md),
-            .gravity_y = 0.5,
-            .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
-        });
-        _ = dvui.label(@src(), "RSS Feeds", .{}, .{
-            .color_text = theme.colors.text_primary,
-            .gravity_y = 0.5,
-        });
-
-        {
-            var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
-            spacer.deinit();
-        }
-
+        var bar = browse_filters.begin(@src());
+        defer bar.deinit();
+        var menu_items: [MAX_FEEDS]browse_filters.Item = undefined;
+        for (0..feed_count) |i| menu_items[i] = .{ .id = i, .label = feeds[i].name[0..feeds[i].name_len], .icon = icons.tvg.lucide.rss, .presentation = .label, .enabled = !is_fetching };
+        if (bar.menu(@src(), .{ .items = menu_items[0..feed_count], .selected = active_feed_idx })) |id| fetchFeed(id);
+        browse_filters.divider(@src(), 39998);
+        if (browse_filters.item(@src(), .{ .id = 39999, .label = "Add feed", .icon = icons.tvg.lucide.plus, .active = state.app.rss_show_add, .visible = feed_count < MAX_FEEDS })) state.app.rss_show_add = !state.app.rss_show_add;
         if (is_fetching) {
-            dvui.spinner(@src(), .{
-                .color_text = theme.colors.accent,
-                .min_size_content = theme.iconSize(.md),
-                .gravity_y = 0.5,
-            });
-        } else {
-            if (dvui.buttonIcon(@src(), "Refresh feed", icons.tvg.lucide.@"refresh-cw", .{}, .{}, .{
-                .color_fill = theme.colors.bg_elevated,
-                .color_text = theme.colors.accent,
-            })) {
-                if (feed_count > 0) fetchFeed(active_feed_idx);
-            }
-        }
-    }
-
-    // Feed selector tabs
-    if (feed_count > 0) {
-        var tab_row = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
-            .expand = .horizontal,
-            .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
-            .background = true,
-            .color_fill = theme.colors.bg_app,
-        });
-        defer tab_row.deinit();
-
-        for (0..feed_count) |fi| {
-            const f = &feeds[fi];
-            const active = (fi == active_feed_idx);
-            if (components.filterChip(@src(), f.name[0..f.name_len], icons.tvg.lucide.rss, active, fi + 30000)) {
-                if (!is_fetching) fetchFeed(fi);
-            }
-        }
-
-        // "+" add feed button
-        if (feed_count < MAX_FEEDS) {
-            if (components.filterChip(@src(), "Add", icons.tvg.lucide.plus, false, 39999)) {
-                state.app.rss_show_add = !state.app.rss_show_add;
-            }
-        }
+            dvui.spinner(@src(), .{ .color_text = theme.colors.accent, .min_size_content = theme.iconSize(.sm), .gravity_y = 0.5 });
+        } else if (browse_filters.item(@src(), .{ .id = 40000, .label = "Refresh feed", .icon = icons.tvg.lucide.@"refresh-cw", .enabled = feed_count > 0 })) fetchFeed(active_feed_idx);
     }
 
     // Add feed form

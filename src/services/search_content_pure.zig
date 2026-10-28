@@ -210,6 +210,7 @@ pub fn projectInto(rows: anytype, indices: []const usize, out: *Projection) void
             break;
         };
         if (found) |g| {
+            out.groups[g].score = @min(out.groups[g].score, rows[index].score);
             append(&out.groups[g], index, isOffer(rows[index]) and !hasSameOffer(rows, &out.groups[g], rows[index]));
             if (std.mem.eql(u8, @tagName(rows[index].source), "tmdb")) {
                 out.groups[g].representative = index;
@@ -218,7 +219,7 @@ pub fn projectInto(rows: anytype, indices: []const usize, out: *Projection) void
             continue;
         }
         if (out.count == MAX_ROWS) break;
-        out.groups[out.count] = .{ .representative = index, .category = category(rows[index]), .identity = identity(rows[index]), .score = 100 - @as(u32, rows[index].match_pct) };
+        out.groups[out.count] = .{ .representative = index, .category = category(rows[index]), .identity = identity(rows[index]), .score = rows[index].score };
         append(&out.groups[out.count], index, isOffer(rows[index]));
         out.count += 1;
     }
@@ -254,7 +255,7 @@ pub fn projectInto(rows: anytype, indices: []const usize, out: *Projection) void
             continue;
         }
         if (out.count == MAX_ROWS) break;
-        out.groups[out.count] = .{ .representative = index, .category = .releases, .identity = identity(rows[index]), .score = 200 + 100 - @as(u32, rows[index].match_pct) };
+        out.groups[out.count] = .{ .representative = index, .category = .releases, .identity = identity(rows[index]), .score = 1_000_000_000 +| rows[index].score };
         append(&out.groups[out.count], index, true);
         out.count += 1;
     }
@@ -264,6 +265,29 @@ pub fn projectInto(rows: anytype, indices: []const usize, out: *Projection) void
         }
     }.less);
 }
+/// Shelves follow their best visible match, rather than always showing movies
+/// before shows. Callers pass their current relevance/filter ordering.
+pub fn categoryOrder(projection: *const Projection, visible: []const usize, out: []Category) usize {
+    var seen: [@typeInfo(Category).@"enum".fields.len]bool = @splat(false);
+    var count: usize = 0;
+    for (visible) |index| {
+        if (index >= projection.count) continue;
+        const cat = projection.groups[index].category;
+        if (cat == .releases or seen[@intFromEnum(cat)] or count == out.len) continue;
+        seen[@intFromEnum(cat)] = true;
+        out[count] = cat;
+        count += 1;
+    }
+    for (visible) |index| {
+        if (index < projection.count and projection.groups[index].category == .releases and count < out.len) {
+            out[count] = .releases;
+            count += 1;
+            break;
+        }
+    }
+    return count;
+}
+
 /// Fair bounded admission reserves eight rows per represented category. A late
 /// category can reclaim an overrepresented category's worst row regardless of
 /// swarm score. Within a category relevance still selects its strongest rows.
@@ -457,4 +481,28 @@ test "verified IMDb identity groups cross provider but keeps movie and TV separa
     b.catalog_kind_len = 2;
     projectInto(&[_]Fixture{ a, b }, &.{ 0, 1 }, out);
     try std.testing.expectEqual(@as(usize, 2), out.count);
+}
+
+test "gallery retains relevance scores instead of tying every full token match" {
+    var rows = [_]Fixture{ fixture(.tmdb, "Arsene Lupin", 1932, 1), fixture(.tmdb, "Lupin", 2021, 2) };
+    rows[0].score = 500;
+    rows[1].score = 10;
+    const out = try std.testing.allocator.create(Projection);
+    defer std.testing.allocator.destroy(out);
+    projectInto(&rows, &.{ 0, 1 }, out);
+    try std.testing.expectEqual(@as(u32, 10), out.groups[0].score);
+    try std.testing.expectEqual(@as(usize, 1), out.groups[0].representative);
+}
+
+test "strongest show match leads shelves and releases stay last" {
+    const projection = try std.testing.allocator.create(Projection);
+    defer std.testing.allocator.destroy(projection);
+    projection.* = .{};
+    projection.count = 3;
+    projection.groups[0] = .{ .category = .releases };
+    projection.groups[1] = .{ .category = .shows };
+    projection.groups[2] = .{ .category = .movies };
+    var order: [3]Category = undefined;
+    try std.testing.expectEqual(@as(usize, 3), categoryOrder(projection, &.{ 0, 1, 2 }, &order));
+    try std.testing.expectEqualSlices(Category, &.{ .shows, .movies, .releases }, &order);
 }

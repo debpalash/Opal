@@ -438,9 +438,6 @@ fn renderHub() void {
         if (dvui.timerDoneOrNone(id)) dvui.timer(id, 2_000_000);
     }
 
-    _ = dvui.label(@src(), "Browser", .{}, .{ .color_text = theme.colors.text_primary, .font = dvui.Font.theme(.title) });
-    note(@src(), "Use your own browser, with your logins and extensions. Opal Connect finds the real stream behind a page and plays it here; share a page to add it to Wanted or find sources for it.", theme.colors.text_secondary);
-
     renderBrowsers();
     renderSharedPage();
     renderStreams();

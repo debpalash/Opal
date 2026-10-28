@@ -7,6 +7,7 @@
 //!
 //! Rules: SVG (lucide TVG) icons only — never emojis.
 
+const page_controls = @import("browse_filters.zig");
 const std = @import("std");
 const dvui = @import("dvui");
 const icons = @import("icons");
@@ -26,6 +27,7 @@ const browser_pure = @import("../services/browser_pure.zig");
 const sidebar_layout = @import("shell_layout_pure.zig");
 const shell_tabs = @import("shell_tabs_pure.zig");
 var sidebar_collapsed = false;
+var sidebar_hover_expanded = false;
 var sidebar_user_expanded: ?bool = null;
 var sidebar_fixture: ?bool = null;
 var sidebar_rect: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
@@ -37,6 +39,8 @@ var content_rect: dvui.Rect.Physical = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
 pub fn setSidebarFixtureForTest(expanded: ?bool) void {
     if (!@import("builtin").is_test) return;
     sidebar_fixture = expanded;
+    sidebar_hover_expanded = false;
+    sidebar_rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
 }
 pub fn sidebarBoundsForTest() struct { sidebar: dvui.Rect.Physical, content: dvui.Rect.Physical } {
     return .{ .sidebar = sidebar_rect, .content = content_rect };
@@ -221,7 +225,17 @@ pub fn render() !void {
         // The Player route owns its full bleed (video grid); every other page
         // gets a consistent gutter so content never sits flush to the window edge.
         const r = state.app.router.current;
-        const nav_layout = sidebar_layout.layout(live_width, sidebar_collapsed, sidebar_fixture orelse sidebar_user_expanded);
+        const base_layout = sidebar_layout.layout(live_width, sidebar_collapsed, sidebar_fixture orelse sidebar_user_expanded);
+        const peek = !base_layout.expanded and live_width >= 400 and
+            sidebar_rect.w > 0 and sidebar_rect.contains(dvui.currentWindow().mouse_pt);
+        if (peek != sidebar_hover_expanded) {
+            sidebar_hover_expanded = peek;
+            dvui.refresh(null, @src(), null);
+        }
+        const nav_layout = if (sidebar_hover_expanded)
+            sidebar_layout.layout(live_width, false, true)
+        else
+            base_layout;
         var body = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .both,
             .min_size_content = .{ .w = live_width, .h = 0 },
@@ -336,6 +350,7 @@ fn renderTopNav(compact: bool, narrow: bool) void {
         sidebar_fixture orelse sidebar_user_expanded,
     ).expanded;
     if (chromeIconButton(@src(), icons.tvg.lucide.@"panel-left", if (sidebar_expanded) "Collapse sidebar" else "Expand sidebar", false, true)) {
+        sidebar_hover_expanded = false;
         sidebar_collapsed = sidebar_expanded;
         sidebar_user_expanded = !sidebar_expanded;
         sidebar_fixture = null;
@@ -638,7 +653,17 @@ fn closeOverflowMenu() void {
 /// One query entry, with identical routing for Enter and the Search button.
 /// Every ordinary query uses the shared all-content resolver.
 fn omnibox(narrow: bool) void {
-    const placeholder: []const u8 = if (narrow)
+    search_mod.enterSearchContext(switch (state.app.router.current) {
+        .browse => .browse,
+        .search => .results,
+        .home, .connect => .global,
+        else => .other,
+    }, @tagName(state.app.browse_source));
+    const scope = search_mod.currentScope();
+    var placeholder_buf: [96]u8 = undefined;
+    const placeholder: []const u8 = if (scope != .all)
+        std.fmt.bufPrint(&placeholder_buf, "Search {s}…", .{scope.label()}) catch "Search…"
+    else if (narrow)
         "Search all content…"
     else
         "Search all content or paste a link…";
@@ -654,6 +679,7 @@ fn omnibox(narrow: bool) void {
         .gravity_y = 0.5,
     });
     defer field.deinit();
+    scopeChip();
     var te = dvui.textEntry(@src(), .{
         .text = .{ .buffer = &state.app.magnet_buf },
         .placeholder = placeholder,
@@ -670,6 +696,7 @@ fn omnibox(narrow: bool) void {
         .gravity_y = 0.5,
     });
     const entered = te.enter_pressed;
+    query_bounds = te.data().borderRectScale().r;
     te.deinit();
 
     const len = std.mem.indexOfScalar(u8, &state.app.magnet_buf, 0) orelse state.app.magnet_buf.len;
@@ -720,10 +747,73 @@ fn omnibox(narrow: bool) void {
         },
         .open => openOmniboxTarget(text),
         .search => {
-            search_mod.submitQuery(text);
+            search_mod.submitScopedQuery(text);
             state.app.router.navigate(.search);
         },
     }
+}
+
+var scope_remove_bounds: dvui.Rect.Physical = .{};
+pub fn scopeRemoveBoundsForTest() dvui.Rect.Physical {
+    return scope_remove_bounds;
+}
+fn scopeChip() void {
+    scope_remove_bounds = .{};
+    const scope = search_mod.currentScope();
+    if (scope == .all) return;
+    var chip = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .background = true,
+        .color_fill = theme.colors.bg_surface,
+        .corner_radius = theme.dims.rad_sm,
+        .gravity_y = 0.5,
+        .margin = dvui.Rect.all(3),
+        .padding = .{ .x = 5, .y = 0, .w = 0, .h = 0 },
+    });
+    defer chip.deinit();
+    const glyph = switch (scope) {
+        .youtube => icons.tvg.lucide.youtube,
+        .music => icons.tvg.lucide.music,
+        .jellyfin, .plex, .reading => icons.tvg.lucide.server,
+        .books, .comics, .audiobooks, .visual_novels => icons.tvg.lucide.book,
+        .podcasts => icons.tvg.lucide.podcast,
+        .radio => icons.tvg.lucide.radio,
+        .rss => icons.tvg.lucide.rss,
+        else => icons.tvg.lucide.tv,
+    };
+    dvui.icon(@src(), scope.label(), glyph, .{}, .{ .color_text = theme.colors.accent, .min_size_content = .{ .w = 14, .h = 14 }, .gravity_y = 0.5 });
+    var menu = dvui.menu(@src(), .horizontal, .{ .color_fill = transparent, .gravity_y = 0.5 });
+    const trigger = dvui.menuItemLabel(@src(), scope.label(), .{ .submenu = true }, .{
+        .color_text = theme.colors.accent,
+        .color_fill = transparent,
+        .padding = .{ .x = 5, .y = 3, .w = 5, .h = 3 },
+    });
+    if (trigger) |rect| {
+        var popup = dvui.floatingMenu(@src(), .{ .from = rect }, .{ .color_fill = theme.colors.bg_surface });
+        var choices = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = theme.colors.bg_surface });
+        inline for (@typeInfo(search_mod.scope_model.Scope).@"enum".fields) |entry| {
+            const choice: search_mod.scope_model.Scope = @enumFromInt(entry.value);
+            if (dvui.menuItemLabel(@src(), choice.label(), .{}, .{ .id_extra = entry.value, .expand = .horizontal, .color_text = if (choice == scope) theme.colors.accent else theme.colors.text_primary })) |_| {
+                popup.close();
+                search_mod.changeSearchScope(choice);
+            }
+        }
+        choices.deinit();
+        popup.deinit();
+    }
+    menu.deinit();
+    var data: dvui.WidgetData = undefined;
+    const remove = dvui.buttonIcon(@src(), "Search all content", icons.tvg.lucide.x, .{}, .{}, .{
+        .data_out = &data,
+        .color_fill = transparent,
+        .color_fill_hover = theme.colors.bg_hover,
+        .color_text = theme.colors.text_secondary,
+        .gravity_y = 0.5,
+        .min_size_content = .{ .w = 12, .h = 12 },
+        .padding = dvui.Rect.all(4),
+    });
+    scope_remove_bounds = data.borderRectScale().r;
+    components.tip(@src(), data, "Remove scope — search all content");
+    if (remove) search_mod.changeSearchScope(.all);
 }
 
 /// Ctrl/Cmd+Enter was pressed this frame (the text entry already took the Enter).
@@ -833,6 +923,7 @@ fn renderPage(r: Route) !void {
             @import("footer.zig").renderStatsOverlay();
             @import("skip_overlay.zig").render();
         },
+        .connect => @import("connections.zig").render(),
         .settings => drawer.renderTabContent(.Settings),
         .assistant => drawer.renderTabContent(.AI),
         .search => drawer.renderTabContent(.Search),
@@ -861,9 +952,9 @@ fn renderPage(r: Route) !void {
 
 const BROWSE_SOURCES = [_]state.DrawerTab{ .TMDB, .YouTube, .Iptv, .Anime, .Podcasts, .Radio, .Music, .Comics, .Web, .RSS, .Jellyfin, .Plex, .Audiobooks, .Opds, .Novels, .Vndb, .Drama };
 const WATCH_SOURCES = [_]state.DrawerTab{ .TMDB, .YouTube, .Anime, .Drama, .Iptv };
-const LISTEN_SOURCES = [_]state.DrawerTab{ .Podcasts, .Radio, .Music, .Audiobooks };
-const READ_SOURCES = [_]state.DrawerTab{ .Comics, .Novels, .Vndb, .Opds, .RSS };
-const CONNECTED_SOURCES = [_]state.DrawerTab{ .Web, .Jellyfin, .Plex };
+const LISTEN_SOURCES = [_]state.DrawerTab{ .Podcasts, .Radio, .Music };
+const READ_SOURCES = [_]state.DrawerTab{ .Comics, .Novels, .Vndb, .RSS };
+const CONNECTED_SOURCES = [_]state.DrawerTab{.Web};
 
 /// Persistent grouped navigation. Ordinary buttons retain keyboard focus and
 /// activation semantics; the icon rail exposes the same labels through tips.
@@ -895,7 +986,8 @@ fn renderSidebar(layout: sidebar_layout.Layout) void {
     const labels = [_][]const u8{ "Home", "All content", "Watching" };
     const glyphs = [_][]const u8{ icons.tvg.lucide.house, icons.tvg.lucide.search, icons.tvg.lucide.tv };
     for (routes, labels, glyphs, 0..) |route, label, glyph, i| {
-        if (sidebarButton(label, glyph, state.app.router.current == route, layout.expanded, 8610 + i)) {
+        if (sidebarButton(label, glyph, if (route == .search) allContentActive() else state.app.router.current == route, layout.expanded, 8610 + i)) {
+            if (route == .search) search_mod.changeSearchScope(.all);
             if (route == .home) @import("home.zig").showOverview();
             state.app.router.navigate(route);
         }
@@ -903,7 +995,8 @@ fn renderSidebar(layout: sidebar_layout.Layout) void {
     sidebarSection("Watch", &WATCH_SOURCES, layout.expanded, 8700);
     sidebarSection("Listen", &LISTEN_SOURCES, layout.expanded, 8800);
     sidebarSection("Read", &READ_SOURCES, layout.expanded, 8900);
-    sidebarSection("Web & libraries", &CONNECTED_SOURCES, layout.expanded, 9000);
+    sidebarSection("Web", &CONNECTED_SOURCES, layout.expanded, 9000);
+    if (sidebarButton("Connect", icons.tvg.lucide.plug, state.app.router.current == .connect, layout.expanded, 9090)) state.app.router.navigate(.connect);
     sidebarHeading("Manage", layout.expanded, 9100);
     const manage_routes = [_]Route{ .downloads, .queue, .history, .assistant, .plugins };
     const manage_tabs = [_]state.DrawerTab{ .Downloads, .Queue, .History, .AI, .Plugins };
@@ -924,7 +1017,8 @@ fn renderSidebar(layout: sidebar_layout.Layout) void {
     if (sidebarButton("System", iconForTab(.Logs), state.app.router.current == .system, layout.expanded, 9107)) state.app.router.navigate(.system);
 }
 fn sidebarHeading(label: []const u8, expanded: bool, id: usize) void {
-    if (expanded) {
+    // Hover reveals labels without moving the destination under the pointer.
+    if (expanded and !sidebar_hover_expanded) {
         dvui.labelNoFmt(@src(), label, .{}, .{
             .id_extra = id,
             .color_text = theme.colors.text_tertiary,
@@ -944,7 +1038,7 @@ fn sidebarHeading(label: []const u8, expanded: bool, id: usize) void {
 fn sidebarSection(label: []const u8, sources: []const state.DrawerTab, expanded: bool, id: usize) void {
     sidebarHeading(label, expanded, id);
     for (sources, 0..) |source, i| {
-        if (sidebarButton(tabLabel(source), iconForTab(source), state.app.router.current == .browse and state.app.browse_source == source, expanded, id + i + 1)) {
+        if (sidebarButton(tabLabel(source), iconForTab(source), browseSourceActive(source), expanded, id + i + 1)) {
             state.app.browse_source = source;
             state.app.drawer_tab = source;
             state.app.router.navigate(.browse);
@@ -970,6 +1064,7 @@ fn sidebarButton(label: []const u8, glyph: []const u8, active: bool, expanded: b
     });
     button.processEvents();
     if (id == 8703) anime_sidebar_rect = button.data().borderRectScale().r;
+    if (id == 8701) movies_sidebar_rect = button.data().borderRectScale().r;
     button.drawBackground();
     var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .both,
@@ -1047,6 +1142,7 @@ fn browseSourceSelect(dense: bool) ?state.DrawerTab {
                 .padding = dvui.Rect.all(theme.spacing.sm),
             }) != null) {
                 popup.close();
+                if (route == .search) search_mod.changeSearchScope(.all);
                 if (route == .home) @import("home.zig").showOverview();
                 state.app.router.navigate(route);
             }
@@ -1068,7 +1164,7 @@ fn navigationMenuItem(selected: state.DrawerTab, dense: bool) ?dvui.Rect.Natural
     const route = state.app.router.current;
     const label = if (route == .browse) tabLabel(selected) else switch (route) {
         .home => "Home",
-        .search => "All content",
+        .search => search_mod.currentScope().label(),
         .watching => "Watching",
         .downloads => "Downloads",
         .queue => "Queue",
@@ -1079,6 +1175,7 @@ fn navigationMenuItem(selected: state.DrawerTab, dense: bool) ?dvui.Rect.Natural
         .plugins => "Plugins",
         .system => "Logs",
         .agents => "Agents",
+        .connect => "Connect",
         .browse => unreachable,
     };
     const icon = if (route == .browse) iconForTab(selected) else switch (route) {
@@ -1341,7 +1438,11 @@ fn subTabsOf(
 /// In-page tab strip for the Plugins route. Mirrors the nav-bar Plugins menu
 /// (same order, same labels — both read `router.PLUGIN_TABS`).
 fn pluginSubTabs() void {
-    subTabsOf(router.PluginTab, &router.PLUGIN_TABS, &state.app.plugin_tab, 320, router.pluginTabLabel, pluginTabIcon);
+    var bar = page_controls.begin(@src());
+    defer bar.deinit();
+    var items: [router.PLUGIN_TABS.len]page_controls.Item = undefined;
+    for (router.PLUGIN_TABS, &items) |tab, *item| item.* = .{ .id = @intFromEnum(tab), .label = router.pluginTabLabel(tab), .icon = pluginTabIcon(tab) };
+    if (bar.menu(@src(), .{ .items = &items, .selected = @intFromEnum(state.app.plugin_tab) })) |id| state.app.plugin_tab = @enumFromInt(id);
 }
 
 fn pluginTabIcon(t: router.PluginTab) []const u8 {
@@ -1352,4 +1453,25 @@ fn pluginTabIcon(t: router.PluginTab) []const u8 {
         .trakt => icons.tvg.lucide.@"refresh-cw",
         .content => icons.tvg.lucide.puzzle,
     };
+}
+
+var query_bounds: dvui.Rect.Physical = .{};
+pub fn queryBoundsForTest() dvui.Rect.Physical {
+    return query_bounds;
+}
+
+var movies_sidebar_rect: dvui.Rect.Physical = .{};
+pub fn sidebarMoviesBoundsForTest() dvui.Rect.Physical {
+    return movies_sidebar_rect;
+}
+
+/// Scoped results belong to their content destination; only unscoped results
+/// activate All content. Keep navigation consistent with the visible chip.
+pub fn allContentActive() bool {
+    return state.app.router.current == .search and search_mod.currentScope() == .all;
+}
+pub fn browseSourceActive(source: state.DrawerTab) bool {
+    if (state.app.router.current == .browse) return state.app.browse_source == source;
+    const scope = search_mod.currentScope();
+    return state.app.router.current == .search and scope != .all and scope == search_mod.scope_model.forTab(@tagName(source));
 }

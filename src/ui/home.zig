@@ -95,7 +95,7 @@ pub fn render() void {
 
     const live_w = @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().w, state.app.ui_scale);
     const live_h = @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().h, state.app.ui_scale);
-    const page_pad: f32 = if (live_w < 600) 10 else if (live_w < 1100) 20 else 34;
+    const page_pad: f32 = if (live_w < 600) 8 else 12;
     var col = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
         .padding = .{ .x = page_pad, .y = 0, .w = page_pad, .h = theme.spacing.xl },
@@ -134,8 +134,6 @@ pub fn render() void {
     const watching = &state.app.tmdb.watching;
     const watchlist = &state.app.tmdb.watchlist;
     const favorites = &state.app.tmdb.favorites;
-
-    renderHero();
 
     // Cinema-shelf sizing: broad screens show larger artwork and more cards;
     // compact screens keep three useful cards in view. The page scroll owns

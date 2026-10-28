@@ -103,17 +103,28 @@ pub fn fetch(client: *std.http.Client, url: []const u8, buf: []u8, opts: Options
     if (opts.status_out) |out| out.* = null;
     if (workers.isQuitting() or epochCancelled(opts.cancel_epoch)) return null;
     var wd: Watchdog = .{ .deadline_ms = io.monotonicMilliTimestamp() +| @as(i64, effectiveTimeoutSecs(opts.timeout_secs)) * 1000 };
-    var done: std.atomic.Value(bool) = .init(false);
+    var done: std.Io.Event = .unset;
     // An Io task supplies cancellation context before DNS/connect/TLS begins.
     // Always join it before releasing borrowed client, buffer, headers or payload.
     var task = client.io.concurrent(fetchSignalled, .{ client, url, buf, opts, &wd, &done }) catch return null;
-    while (!done.load(.acquire)) {
+    while (!done.isSet()) {
         if (workers.isQuitting() or epochCancelled(opts.cancel_epoch) or io.monotonicMilliTimestamp() >= wd.deadline_ms) {
             wd.expire();
             _ = task.cancel(client.io);
             return null;
         }
-        io.sleep(5 * std.time.ns_per_ms);
+        // Completion wakes immediately; timeout only polls external cancellation.
+        done.waitTimeout(client.io, .{ .duration = .{
+            .raw = .fromMilliseconds(5),
+            .clock = .awake,
+        } }) catch |err| switch (err) {
+            error.Timeout => {},
+            error.Canceled => {
+                wd.expire();
+                _ = task.cancel(client.io);
+                return null;
+            },
+        };
     }
     const result = task.await(client.io);
     if (workers.isQuitting() or epochCancelled(opts.cancel_epoch) or io.monotonicMilliTimestamp() >= wd.deadline_ms) return null;
@@ -128,8 +139,8 @@ fn epochCancelled(epoch: ?@import("bounded_process.zig").CancelEpoch) bool {
     };
 }
 
-fn fetchSignalled(client: *std.http.Client, url: []const u8, buf: []u8, opts: Options, wd: *Watchdog, done: *std.atomic.Value(bool)) ?[]const u8 {
-    defer done.store(true, .release);
+fn fetchSignalled(client: *std.http.Client, url: []const u8, buf: []u8, opts: Options, wd: *Watchdog, done: *std.Io.Event) ?[]const u8 {
+    defer done.set(client.io);
     return fetchOwned(client, url, buf, opts, wd);
 }
 

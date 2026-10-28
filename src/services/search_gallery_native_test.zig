@@ -75,7 +75,12 @@ fn decodedFixtureTexture(bytes: []const u8) !dvui.Texture {
     return texture.?;
 }
 
+var capture_time_base: i128 = 0;
+
 fn renderSize(width: u32, height: u32, rows: []const resolver.ResolvedItem, movies_only: bool) !void {
+    // Separate windows must not reuse a simulated frame timestamp: poster
+    // uploads share a per-frame budget across the application.
+    capture_time_base += 1_000_000_000;
     var backend = try dvui.backend.initWindow(.{ .io = io.io(), .allocator = alloc, .size = .{ .w = @floatFromInt(width), .h = @floatFromInt(height) }, .vsync = false, .title = "Opal offline gallery pixel regression", .hidden = true });
     defer backend.deinit();
     var window = try dvui.Window.init(@src(), alloc, backend.backend(), .{});
@@ -90,7 +95,7 @@ fn renderSize(width: u32, height: u32, rows: []const resolver.ResolvedItem, movi
     const indices = [_]usize{ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 };
     content.projectInto(rows, &indices, projection);
     for (0..if (movies_only) @as(usize, 6) else 4) |frame| {
-        try window.begin(@as(i128, @intCast(frame + 1)) * 16_666_667);
+        try window.begin(capture_time_base + @as(i128, @intCast(frame + 1)) * 16_666_667);
         errdefer {
             workers.beginShutdownAndDrain(800);
             search.shutdown();

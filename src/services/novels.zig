@@ -15,6 +15,7 @@
 //!                       pure.htmlToText → state.app.novels.text_buf
 //!   next/prev/resume  → openChapter(current ± 1) / the persisted chapter.
 
+const browse_filters = @import("../ui/browse_filters.zig");
 const std = @import("std");
 const safeUtf8 = @import("../core/text.zig").safeUtf8;
 const dvui = @import("dvui");
@@ -2162,11 +2163,6 @@ fn renderSearchView() void {
     });
     defer scroll.deinit();
 
-    _ = dvui.label(@src(), "{d} results", .{count}, .{
-        .color_text = theme.colors.text_secondary,
-        .padding = .{ .x = 12, .y = 8, .w = 8, .h = 4 },
-    });
-
     const layout_w = @import("../core/scale_pure.zig").layoutUnits(dvui.windowRect().w, state.app.ui_scale);
     const viewport_width = if (scroll.data().rect.w > 1) scroll.data().rect.w else layout_w;
     const grid = @import("../ui/browse_layout_pure.zig").readingGrid(viewport_width);
@@ -2235,12 +2231,7 @@ fn renderSearchView() void {
 
 fn renderSearchBar() void {
     if (!@import("../ui/browse_layout_pure.zig").showLocalSearch(state.app.page_shell_enabled)) return;
-    var row = dvui.flexbox(@src(), .{ .justify_content = .start }, .{
-        .expand = .horizontal,
-        .padding = .{ .x = 10, .y = 7, .w = 10, .h = 7 },
-        .background = true,
-        .color_fill = theme.colors.bg_surface,
-    });
+    var row = browse_filters.begin(@src());
     defer row.deinit();
 
     _ = dvui.icon(@src(), "", icons.tvg.lucide.@"book-marked", .{}, .{

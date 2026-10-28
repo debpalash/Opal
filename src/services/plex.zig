@@ -3,6 +3,7 @@
 //! + server discovery via plex.tv/api/v2/resources. JSON is requested with an
 //! Accept header. Auth tokens are persisted in a protected local envelope.
 
+const browse_filters = @import("../ui/browse_filters.zig");
 const std = @import("std");
 const dvui = @import("dvui");
 const icons = @import("icons");
@@ -828,13 +829,13 @@ pub fn searchInto(query: []const u8, out: []SearchItem) usize {
 
 pub fn searchIntoResult(query: []const u8, out: []SearchItem) SearchResult {
     const connection = connectionSnapshot();
-    if (query.len == 0 or out.len == 0) return .{};
+    if (out.len == 0) return .{};
     if (connection.server_len == 0 or connection.accessToken().len == 0) return .{ .status = .unavailable };
     var enc_buf: [768]u8 = undefined;
     const encoded = @import("../core/http.zig").urlEncode(query, &enc_buf);
     var url_buf: [1200]u8 = undefined;
-    const url = std.fmt.bufPrint(&url_buf, "{s}/search?query={s}&limit={d}", .{
-        connection.server[0..connection.server_len], encoded, @min(out.len, 24),
+    const url = std.fmt.bufPrint(&url_buf, "{s}/{s}{s}&X-Plex-Container-Size={d}", .{
+        connection.server[0..connection.server_len], if (query.len == 0) "library/recentlyAdded?" else "search?query=", encoded, @min(out.len, 24),
     }) catch return .{ .status = .failed };
     const body = alloc.alloc(u8, 512 * 1024) catch return .{ .status = .failed };
     defer alloc.free(body);
@@ -1247,10 +1248,10 @@ pub fn renderContent() void {
 
     // Header: server + section tabs + disconnect.
     {
-        var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .padding = .{ .x = 8, .y = 8, .w = 8, .h = 6 }, .background = true, .color_fill = theme.colors.bg_app });
+        var hdr = browse_filters.begin(@src());
         defer hdr.deinit();
         if (components.iconButtonEx(@src(), icons.tvg.lucide.@"arrow-left", "Back", false, nav_depth > 0)) _ = browseBack();
-        _ = dvui.label(@src(), "Plex · {s}", .{server_name[0..server_name_len]}, .{ .color_text = theme.colors.text_primary, .font = dvui.themeGet().font_heading, .gravity_y = 0.5 });
+
         if (nav_depth > 0) _ = dvui.label(@src(), "  /  {s}", .{nav_titles[nav_depth - 1][0..nav_title_lens[nav_depth - 1]]}, .{
             .color_text = theme.colors.text_secondary,
             .gravity_y = 0.5,
@@ -1263,17 +1264,13 @@ pub fn renderContent() void {
             disconnect();
             return;
         }
-    }
-    {
-        var tabs = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 } });
-        defer tabs.deinit();
         var owned_sections: [32]Section = undefined;
         const count = copySections(&owned_sections);
-        for (owned_sections[0..count], 0..) |*sec, i| {
-            const active = i == active_section;
-            if (components.filterChip(@src(), sec.title[0..sec.title_len], icons.tvg.lucide.library, active, i + 90000)) {
-                _ = fetchItemsByKey(sec.key[0..sec.key_len]);
-            }
+        var menu_items: [32]browse_filters.Item = undefined;
+        for (owned_sections[0..count], 0..) |*sec, i| menu_items[i] = .{ .id = i, .label = sec.title[0..sec.title_len], .icon = icons.tvg.lucide.library, .presentation = .label };
+        if (hdr.menu(@src(), .{ .items = menu_items[0..count], .selected = active_section })) |id| {
+            const sec = &owned_sections[id];
+            _ = fetchItemsByKey(sec.key[0..sec.key_len]);
         }
     }
 

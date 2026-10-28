@@ -145,6 +145,7 @@ fn buildSupported(b: *std.Build) void {
                 .file = b.path("src/macos/open_panel.m"),
                 .flags = &[_][]const u8{ "-fobjc-arc", "-O2" },
             });
+            exe.root_module.addCSourceFile(.{ .file = b.path("src/macos/lyrics_text.m"), .flags = &.{ "-fobjc-arc", "-O2" } });
             exe.root_module.linkFramework("AppKit", .{});
             exe.root_module.linkFramework("MediaPlayer", .{});
         }
@@ -273,6 +274,10 @@ fn buildSupported(b: *std.Build) void {
     const run_shell_tests = b.addRunArtifact(shell_tests);
     if (is_windows) run_shell_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     b.step("test-native-shell", "Capture native shell routes with isolated offline fixtures").dependOn(&run_shell_tests.step);
+    const audio_output_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native shell offline audio connection"} });
+    const run_audio_output_tests = b.addRunArtifact(audio_output_tests);
+    if (is_windows) run_audio_output_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
+    b.step("test-native-audio-output", "Capture the audio connection prompt").dependOn(&run_audio_output_tests.step);
     const modal_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native global modals offline SDL pixel capture"} });
     const run_modal_tests = b.addRunArtifact(modal_tests);
     if (is_windows) run_modal_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
@@ -362,6 +367,7 @@ fn buildSupported(b: *std.Build) void {
         .{ .run = run_performance_tests, .name = "performance" },
         .{ .run = run_media_tests, .name = "media" },
         .{ .run = run_shell_tests, .name = "shell" },
+        .{ .run = run_audio_output_tests, .name = "audio-output" },
         .{ .run = run_modal_tests, .name = "modals" },
         .{ .run = run_activity_tests, .name = "activity" },
         .{ .run = run_agent_tasks_ui_tests, .name = "agent-tasks" },
@@ -1368,6 +1374,14 @@ fn buildSupported(b: *std.Build) void {
         .optimize = optimize,
     }) });
     test_step.dependOn(&b.addRunArtifact(test_search_view_pure).step);
+    const test_search_scope = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/services/search_scope_pure.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    const run_search_scope = b.addRunArtifact(test_search_scope);
+    test_step.dependOn(&run_search_scope.step);
+    b.step("test-search-scope", "Check contextual search scope and global removal").dependOn(&run_search_scope.step);
 
     const test_footer_pure = b.addTest(.{
         .root_module = b.createModule(.{

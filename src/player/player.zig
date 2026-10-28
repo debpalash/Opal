@@ -61,14 +61,14 @@ const MpvPlaybackSink = struct {
         // through mpv_command_node. This avoids comma/string escaping and,
         // crucially, stores HTTP identity on the playlist entry instead of
         // changing the options of media that is already playing.
-        var option_values: [6]c.mpv.mpv_node = undefined;
+        var option_values: [8]c.mpv.mpv_node = undefined;
         option_values[0..4].* = .{
             stringNode(user_agent_z.ptr),
             stringNode(header_fields_z.ptr),
             stringNode(options.cache_pause_initial.ptr),
             stringNode(options.network_timeout.ptr),
         };
-        var option_keys: [6][*c]u8 = undefined;
+        var option_keys: [8][*c]u8 = undefined;
         option_keys[0..4].* = .{
             @constCast("user-agent"),
             @constCast("http-header-fields"),
@@ -84,6 +84,14 @@ const MpvPlaybackSink = struct {
         if (options.media_title.len > 0) {
             option_values[option_count] = stringNode(media_title_z.ptr);
             option_keys[option_count] = @constCast("force-media-title");
+            option_count += 1;
+        }
+        if (options.audio_only) {
+            option_values[option_count] = stringNode("no");
+            option_keys[option_count] = @constCast("vid");
+            option_count += 1;
+            option_values[option_count] = stringNode("bestaudio/best");
+            option_keys[option_count] = @constCast("ytdl-format");
             option_count += 1;
         }
         var option_list: c.mpv.mpv_node_list = .{
@@ -492,6 +500,7 @@ pub const MediaPlayer = struct {
     loading_art: [256]u8 = std.mem.zeroes([256]u8),
     loading_art_len: usize = 0,
     loading_kind: u8 = 0,
+    audio_only_intent: bool = false,
     loading_year: [8]u8 = std.mem.zeroes([8]u8),
     loading_year_len: usize = 0,
     loading_rating: f32 = 0,
@@ -1471,6 +1480,7 @@ pub const MediaPlayer = struct {
             @memcpy(self.fallback_url_2[0..request.fallback_url_2.len], request.fallback_url_2);
             self.fallback_url_2_len = request.fallback_url_2.len;
         }
+        self.audio_only_intent = request.audio_only;
         self.youtube_default_retry_pending = std.ascii.indexOfIgnoreCase(path_span, "youtube.com/") != null or
             std.ascii.indexOfIgnoreCase(path_span, "youtu.be/") != null;
         self.youtube_fast_active = false;
@@ -1571,7 +1581,9 @@ pub const MediaPlayer = struct {
             _ = c.mpv.mpv_set_option_string(self.mpv_ctx, "cache-on-disk", "no");
         }
         var sink: MpvPlaybackSink = .{ .ctx = self.mpv_ctx };
-        _ = playback_load.dispatch(&sink, request);
+        var prepared = request;
+        if (request.mode == .replace) prepared.audio_only = self.audio_only_intent;
+        _ = playback_load.dispatch(&sink, prepared);
     }
 
     pub fn commitYoutubeFast(self: *MediaPlayer, url: []const u8) void {
@@ -1619,7 +1631,7 @@ pub const MediaPlayer = struct {
         };
         self.youtube_default_retry_pending = false;
         self.youtube_quality_fallback_pending = false;
-        self.playYoutubeQuality(state.app.ytdl_format_idx, false);
+        self.playYoutubeQuality(if (self.audio_only_intent) 3 else state.app.ytdl_format_idx, false);
     }
 
     fn playYoutubeQuality(self: *MediaPlayer, requested_idx: usize, preserve_position: bool) void {
@@ -1658,6 +1670,7 @@ pub const MediaPlayer = struct {
 
     pub fn commitYoutubeFallback(self: *MediaPlayer) void {
         if (self.current_url_len == 0) return;
+        @import("../services/youtube_player.zig").invalidateCached(self.current_url[0..self.current_url_len]);
         self.youtube_fast_active = false;
         self.youtube_default_retry_pending = true;
         self.applyYtdlRawOptions(true, true);

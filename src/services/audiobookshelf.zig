@@ -13,6 +13,7 @@
 //! All JSON parsing + URL/header building lives in audiobookshelf_pure.zig
 //! (tested); this module owns the async workers, thread-safety, and dvui render.
 
+const browse_filters = @import("../ui/browse_filters.zig");
 const std = @import("std");
 const dvui = @import("dvui");
 const icons = @import("icons");
@@ -1104,7 +1105,7 @@ pub fn renderContent() void {
     }
 }
 
-fn renderLoginForm() void {
+pub fn renderLoginForm() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
@@ -1198,14 +1199,9 @@ fn labeledEntry(label: []const u8, buf: []u8, password: bool, id: usize) bool {
 
 fn renderLibraries() void {
     {
-        var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
-            .background = true,
-            .color_fill = theme.colors.bg_surface,
-        });
+        var hdr = browse_filters.begin(@src());
         defer hdr.deinit();
-        _ = dvui.label(@src(), "Audiobookshelf", .{}, .{ .color_text = theme.colors.text_primary, .font = dvui.themeGet().font_heading, .gravity_y = 0.5 });
+
         {
             var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
             sp.deinit();
@@ -1246,12 +1242,7 @@ fn renderLibraries() void {
 
 fn renderBooks() void {
     {
-        var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
-            .background = true,
-            .color_fill = theme.colors.bg_surface,
-        });
+        var hdr = browse_filters.begin(@src());
         defer hdr.deinit();
         if (components.iconButton(@src(), icons.tvg.lucide.@"arrow-left", "Back to libraries", false)) {
             goToLibraries();

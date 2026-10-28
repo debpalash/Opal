@@ -15,8 +15,8 @@ const json_pure = @import("json_pure.zig");
 
 pub const API_BASE = "https://lrclib.net/api";
 
-/// Max lyric line text we keep — LRC lines are short; longer is truncated.
-pub const LINE_TEXT_CAP = 192;
+/// Max lyric line text we keep — allow room for multi-byte scripts; truncate only at UTF-8 boundaries.
+pub const LINE_TEXT_CAP = 1024;
 
 pub const LyricLine = struct {
     ms: u32 = 0,
@@ -219,7 +219,8 @@ pub fn parseLrc(lrc: []const u8, out: []LyricLine) usize {
         var s: usize = 0;
         while (s < stamp_n and count < out.len) : (s += 1) {
             var e = LyricLine{ .ms = stamps[s] };
-            const n = @min(text.len, e.text.len);
+            var n = @min(text.len, e.text.len);
+            while (n > 0 and n < text.len and (text[n] & 0xc0) == 0x80) : (n -= 1) {}
             @memcpy(e.text[0..n], text[0..n]);
             e.text_len = n;
             out[count] = e;
@@ -467,4 +468,20 @@ pub fn mayPublish(expected: u32, current: u32) bool {
 test "cleared lyric selection rejects stale worker publication" {
     try std.testing.expect(!mayPublish(7, 8));
     try std.testing.expect(mayPublish(8, 8));
+}
+
+test "Indian lyrics retain long UTF-8 lines without splitting a character" {
+    const text = "संगीत की पंक्ति " ** 20;
+    var rows: [1]LyricLine = undefined;
+    try std.testing.expectEqual(@as(usize, 1), parseLrc("[00:01]" ++ text, &rows));
+    try std.testing.expect(std.unicode.utf8ValidateSlice(rows[0].slice()));
+    try std.testing.expectEqualStrings(std.mem.trimEnd(u8, text, " "), rows[0].slice());
+}
+
+test "oversized multibyte lyrics truncate at a UTF-8 boundary" {
+    const text = "अ" ** 400;
+    var rows: [1]LyricLine = undefined;
+    try std.testing.expectEqual(@as(usize, 1), parseLrc("[00:01]" ++ text, &rows));
+    try std.testing.expect(std.unicode.utf8ValidateSlice(rows[0].slice()));
+    try std.testing.expectEqual(@as(usize, 1023), rows[0].text_len);
 }

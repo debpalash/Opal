@@ -1244,34 +1244,6 @@ fn renderSourcePlugins() void {
     var card = cardBegin(@src(), 0);
     defer card.deinit();
 
-    // Installed count for the summary line (also used by the installed-only filter).
-    var installed_total: usize = 0;
-    for (source_catalog[0..source_count]) |*plugin| {
-        if (pr.isInstalled(plugin.idSlice())) installed_total += 1;
-    }
-
-    // Header row: title + count summary + a small Refresh.
-    {
-        var hrow = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
-        defer hrow.deinit();
-        _ = dvui.label(@src(), "Available sources", .{}, .{ .color_text = theme.colors.text_primary, .font = dvui.themeGet().font_heading, .expand = .horizontal, .gravity_y = 0.5 });
-        {
-            var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
-            sp.deinit();
-        }
-        if (dvui.button(@src(), "Refresh", .{}, .{ .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.text_secondary, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 }, .gravity_y = 0.5 })) {
-            // Do NOT zero plugin_count here: refresh() fetches on a background
-            // thread and parseManifest swaps the list in atomically on success.
-            // Wiping it up front made a slow/failed/rate-limited refresh (GitHub
-            // allows only 60 unauthenticated req/hr) leave the page permanently
-            // empty — the "all plugins vanish after Refresh" bug. Leaving the
-            // current list in place degrades gracefully: it stays until a
-            // successful fetch replaces it. The spinner state below still shows
-            // "Loading sources…" only when the list is genuinely empty.
-            _ = pr.apply(.refresh, "");
-        }
-    }
-    _ = dvui.label(@src(), "{d} sources · {d} installed", .{ source_count, installed_total }, .{ .color_text = theme.colors.text_secondary });
     const catalog_state = pr.status.load(.acquire);
     if (catalog_state == .fetching) {
         dvui.spinner(@src(), .{ .min_size_content = .{ .w = 16, .h = 16 }, .max_size_content = .{ .w = 16, .h = 16 } });
@@ -1310,6 +1282,7 @@ fn renderSourcePlugins() void {
     }
 
     if (source_count == 0) {
+        if (components.iconButton(@src(), icons.tvg.lucide.@"refresh-cw", "Refresh sources", false)) _ = pr.apply(.refresh, "");
         const fetching = pr.status.load(.acquire) == .fetching;
         _ = dvui.label(@src(), "{s}", .{if (fetching) "Loading sources…" else "No sources available."}, .{ .color_text = theme.colors.text_tertiary, .margin = .{ .x = 0, .y = 6, .w = 0, .h = 0 } });
         return;
@@ -1320,6 +1293,7 @@ fn renderSourcePlugins() void {
     {
         var frow = dvui.flexbox(@src(), .{ .justify_content = .start }, .{ .expand = .horizontal, .padding = .{ .x = 0, .y = 2, .w = 0, .h = theme.spacing.sm } });
         defer frow.deinit();
+        if (components.iconButton(@src(), icons.tvg.lucide.@"refresh-cw", "Refresh sources", false)) _ = pr.apply(.refresh, "");
         var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &src_filter_buf }, .placeholder = "Filter sources…" }, .{
             .expand = .horizontal,
             .min_size_content = .{ .w = 160, .h = 18 },

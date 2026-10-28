@@ -1,3 +1,4 @@
+const page_controls = @import("browse_filters.zig");
 const std = @import("std");
 const dvui = @import("dvui");
 const icons = @import("icons");
@@ -621,14 +622,9 @@ fn tabBadgeColor(tab: state.DrawerTab) dvui.Color {
 fn renderHistoryContent() void {
     // Masthead — sectionHeader title on the left, count + text-only Clear on
     // the right. No header fill: separated by whitespace and fill-tier.
-    {
-        var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .padding = .{ .x = theme.spacing.md, .y = 0, .w = theme.spacing.md, .h = 0 },
-        });
+    if (watch_history.count > 0) {
+        var hdr = page_controls.begin(@src());
         defer hdr.deinit();
-
-        components.sectionHeader("Watch History");
 
         {
             var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
@@ -636,14 +632,6 @@ fn renderHistoryContent() void {
         }
 
         if (watch_history.count > 0) {
-            var count_buf: [16]u8 = undefined;
-            const count_str = std.fmt.bufPrintZ(&count_buf, "{d}", .{watch_history.count}) catch "";
-            _ = dvui.label(@src(), "{s}", .{count_str}, .{
-                .color_text = theme.colors.text_tertiary,
-                .gravity_y = 0.5,
-                .margin = .{ .x = 0, .y = 0, .w = theme.spacing.md, .h = 0 },
-            });
-
             // Destructive: two-step arm — one stray click used to wipe the
             // entire watch history irreversibly.
             if (components.confirmDangerButton(@src(), "Clear All", 0)) {
@@ -765,13 +753,8 @@ fn renderHistoryContent() void {
 fn renderLogsContent() void {
     // Controls masthead — sectionHeader title, no header fill/border.
     {
-        var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .expand = .horizontal,
-            .padding = .{ .x = theme.spacing.md, .y = 0, .w = theme.spacing.md, .h = 0 },
-        });
+        var hdr = page_controls.begin(@src());
         defer hdr.deinit();
-
-        components.sectionHeader("Developer Console");
 
         {
             var s = dvui.box(@src(), .{}, .{ .expand = .horizontal });

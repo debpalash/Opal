@@ -357,3 +357,49 @@ test "Native HTTP compressed deflate metadata returns decoded exact bytes" {
 test "Native HTTP compressed expansion respects decoded cap and closes unsafe pool socket" {
     try compressedFixture("gzip", compression_expansion, 64, true);
 }
+
+// Local metadata response latency, independent of provider/network variability.
+// Optional budget supports paired performance runs without a timing gate in CI.
+test "Native HTTP completed responses wake immediately benchmark" {
+    workers.init();
+    defer workers.finishShutdown();
+    const count = 32;
+    const address = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
+    var server = try address.listen(io.io(), .{ .reuse_address = true });
+    defer server.deinit(io.io());
+    const Fixture = struct {
+        fn run(listener: *std.Io.net.Server) void {
+            for (0..count) |_| {
+                const stream = listener.accept(io.io()) catch return;
+                defer stream.close(io.io());
+                var read_buf: [4096]u8 = undefined;
+                var reader = stream.reader(io.io(), &read_buf);
+                while (true) {
+                    const line = reader.interface.takeDelimiterInclusive('\n') catch return;
+                    if (std.mem.eql(u8, line, "\r\n")) break;
+                }
+                var write_buf: [256]u8 = undefined;
+                var writer = stream.writer(io.io(), &write_buf);
+                writer.interface.writeAll("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}") catch return;
+                writer.interface.flush() catch return;
+            }
+        }
+    };
+    var fixture = try io.io().concurrent(Fixture.run, .{&server});
+    defer _ = fixture.cancel(io.io());
+    var client: std.http.Client = .{ .allocator = std.testing.allocator, .io = transport.nativeIo(io.io()) };
+    defer client.deinit();
+    var url_buf: [128]u8 = undefined;
+    const url = try std.fmt.bufPrint(&url_buf, "http://127.0.0.1:{d}/", .{server.socket.address.getPort()});
+    var body: [64]u8 = undefined;
+    const started = io.monotonicMilliTimestamp();
+    for (0..count) |_| {
+        const result = transport.fetch(&client, url, &body, .{}) orelse return error.FetchFailed;
+        try std.testing.expectEqualStrings("{}", result);
+    }
+    const elapsed = io.monotonicMilliTimestamp() - started;
+    std.debug.print("HTTP completion benchmark: {d} responses in {d}ms\n", .{ count, elapsed });
+    if (io.getenv("OPAL_HTTP_BENCH_LIMIT_MS")) |budget| {
+        try std.testing.expect(elapsed <= try std.fmt.parseInt(i64, budget, 10));
+    }
+}
