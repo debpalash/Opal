@@ -162,6 +162,7 @@ pub fn parseSongValue(obj: std.json.Value) ?music.MusicSong {
     const url = music.valueString(music.valueField(obj, "perma_url"));
     if (title.len == 0 or !isPlayableUrl(url) or url.len > 256) return null;
     var row: music.MusicSong = .{};
+    music.copyValueText(&row.id, &row.id_len, music.valueString(music.valueField(obj, "id")));
     decodeText(title, &row.title, &row.title_len);
     decodeText(music.valueString(music.valueField(obj, "primary_artists")), &row.artist, &row.artist_len);
     music.copyValueText(&row.play_url, &row.play_url_len, url);
@@ -243,4 +244,11 @@ test "parseSong extracts title/artist/perma_url + decodes entities + unescapes /
     try std.testing.expectEqualStrings("https://c.saavncdn.com/871/x-150x150.jpg", s0.image);
     // Second row is an album (not a song perma_url) → rejected.
     try std.testing.expect(parseSong(it.next().?, &tb, &ab, &ub, &ib) == null);
+}
+
+test "catalog songs retain provider identity for remote playback" {
+    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, "{\"id\":\"YiVML4Zo\",\"song\":\"Gehra Hua\",\"perma_url\":\"https://www.jiosaavn.com/song/gehra-hua/KQE9fDgEbVw\"}", .{});
+    defer parsed.deinit();
+    const row = parseSongValue(parsed.value).?;
+    try std.testing.expectEqualStrings("YiVML4Zo", row.id[0..row.id_len]);
 }

@@ -1311,3 +1311,57 @@ pub fn toolbarGo(src: std.builtin.SourceLocation, label: []const u8) bool {
         .gravity_y = 0.5,
     });
 }
+
+/// Wrapping copy for descriptions, setup guidance and recoverable errors.
+pub fn bodyText(src: std.builtin.SourceLocation, text: []const u8, color: dvui.Color) void {
+    var layout = dvui.textLayout(src, .{ .break_lines = true }, .{
+        .expand = .horizontal,
+        .background = false,
+        .color_fill = theme.transparent,
+        .color_text = color,
+        .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 },
+    });
+    layout.addText(text, .{});
+    layout.deinit();
+}
+
+pub fn pageHeading(src: std.builtin.SourceLocation, title: []const u8, subtitle: []const u8) void {
+    var heading = dvui.box(src, .{ .dir = .vertical }, .{
+        .expand = .horizontal,
+        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.md, .w = theme.spacing.md, .h = theme.spacing.sm },
+    });
+    defer heading.deinit();
+    _ = dvui.label(@src(), "{s}", .{title}, .{ .font = dvui.themeGet().font_heading, .color_text = theme.colors.text_primary });
+    if (subtitle.len > 0) bodyText(@src(), subtitle, theme.colors.text_secondary);
+}
+
+pub fn twoLineTitle(text: []const u8, font: dvui.Font, width: f32, out: []u8) []const u8 {
+    var normalized: [1024]u8 = undefined;
+    var rest = std.mem.trim(u8, @import("../services/search_view_pure.zig").singleLine(&normalized, text), " \t\r\n");
+    var written: usize = 0;
+    for (0..2) |line| {
+        if (rest.len == 0) break;
+        var end: usize = 0;
+        const reserve = if (line == 1) font.textSizeEx("…", .{}).w else 0;
+        _ = font.textSizeEx(rest, .{ .max_width = @max(1, width - reserve), .end_idx = &end });
+        if (end == 0) break;
+        if (end < rest.len) if (std.mem.lastIndexOfScalar(u8, rest[0..end], ' ')) |space| {
+            if (space > 0) end = space;
+        };
+        const piece = std.mem.trim(u8, rest[0..end], " \t\r\n");
+        if (written + piece.len + 4 > out.len) break;
+        @memcpy(out[written..][0..piece.len], piece);
+        written += piece.len;
+        rest = std.mem.trimStart(u8, rest[end..], " \t\r\n");
+        if (rest.len > 0) {
+            if (line == 1) {
+                @memcpy(out[written..][0..3], "…");
+                written += 3;
+            } else {
+                out[written] = '\n';
+                written += 1;
+            }
+        }
+    }
+    return out[0..written];
+}

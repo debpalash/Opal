@@ -7,11 +7,19 @@ const state = @import("../core/state.zig");
 
 const enabled = builtin.os.tag == .macos and !@import("build_options").headless;
 
-extern fn opal_app_menu_init() void;
+extern fn opal_app_identity_init() void;
+extern fn opal_app_menu_init(logo: [*]const u8, logo_len: usize) void;
 extern fn opal_app_menu_poll() c_int;
 
+pub fn initIdentity() void {
+    if (enabled) opal_app_identity_init();
+}
+
 pub fn init() void {
-    if (enabled) opal_app_menu_init();
+    if (enabled) {
+        const logo = @embedFile("../ui/opal_logo_64.png");
+        opal_app_menu_init(logo.ptr, logo.len);
+    }
 }
 
 pub fn frameTick() void {
@@ -35,6 +43,10 @@ pub fn frameTick() void {
                     else
                         null;
                 }
+            },
+            10 => {
+                state.app.settings_tab = .About;
+                state.app.router.navigate(.settings);
             },
             else => {},
         }

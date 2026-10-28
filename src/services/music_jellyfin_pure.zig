@@ -47,10 +47,10 @@ pub fn buildSearchUrl(out: []u8, base: []const u8, api_key: []const u8, query: [
 }
 
 pub fn buildSearchPageUrl(out: []u8, base: []const u8, api_key: []const u8, query: []const u8, limit: u32, start: u32) ?[]const u8 {
-    if (!isValidBase(base) or query.len == 0 or api_key.len == 0) return null;
+    if (!isValidBase(base) or api_key.len == 0) return null;
     var enc: [512]u8 = undefined;
     const qn = percentEncode(query, &enc);
-    if (qn == 0) return null;
+    if (query.len > 0 and qn == 0) return null;
     var ken: [256]u8 = undefined;
     const kn = percentEncode(api_key, &ken);
     return std.fmt.bufPrint(
@@ -226,7 +226,7 @@ test "URL builders reject a bad base, an empty key, and a path-escaping id" {
     var b: [700]u8 = undefined;
     try std.testing.expect(buildSearchUrl(&b, "ftp://x", "k", "q", 5) == null);
     try std.testing.expect(buildSearchUrl(&b, "http://nas:8096", "", "q", 5) == null);
-    try std.testing.expect(buildSearchUrl(&b, "http://nas:8096", "k", "", 5) == null);
+    try std.testing.expect(std.mem.indexOf(u8, buildSearchPageUrl(&b, "http://nas:8096", "k", "", 5, 10).?, "SearchTerm=&Limit=5&StartIndex=10") != null);
     // An id carrying `?`/`/` would splice extra path or query segments in.
     try std.testing.expect(buildStreamUrl(&b, "http://nas:8096", "k", "a/../x", "dev") == null);
     try std.testing.expect(buildStreamUrl(&b, "http://nas:8096", "k", "a?b=c", "dev") == null);

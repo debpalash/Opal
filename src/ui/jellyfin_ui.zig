@@ -75,22 +75,16 @@ fn renderLoginForm() void {
     });
     defer scroll.deinit();
 
-    // Header
-    {
-        var hdr = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .expand = .horizontal,
-            .padding = .{ .x = 16, .y = 20, .w = 16, .h = 16 },
-        });
-        defer hdr.deinit();
-
-        _ = dvui.label(@src(), "Jellyfin / Emby", .{}, .{
-            .color_text = theme.colors.accent,
-        });
-        _ = dvui.label(@src(), "Connect to your Jellyfin or Emby server (for Emby, append /emby to the URL if needed)", .{}, .{
-            .color_text = theme.colors.text_secondary,
-            .padding = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
-        });
-    }
+    var setup = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .horizontal,
+        .max_size_content = .{ .w = 480, .h = std.math.floatMax(f32) },
+        .gravity_x = 0.5,
+        .margin = dvui.Rect.all(20),
+        .padding = dvui.Rect.all(4),
+    });
+    defer setup.deinit();
+    components.pageHeading(@src(), "Connect Jellyfin / Emby", "Bring your server's movies, shows, and music into Opal. Enter your server address and sign in below.");
+    components.bodyText(@src(), "For Emby, include /emby in the server address if your server requires it.", theme.colors.text_secondary);
 
     // Form
     {

@@ -1214,10 +1214,10 @@ pub fn renderContent() void {
     defer page.deinit();
 
     if (!isConnected()) {
-        var panel = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .padding = dvui.Rect.all(16) });
+        var panel = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .max_size_content = .{ .w = 480, .h = std.math.floatMax(f32) }, .gravity_x = 0.5, .margin = dvui.Rect.all(20), .padding = dvui.Rect.all(20), .background = true, .color_fill = theme.colors.bg_surface, .corner_radius = theme.dims.rad_md });
         defer panel.deinit();
-        _ = dvui.label(@src(), "Plex", .{}, .{ .color_text = theme.colors.accent });
-        _ = dvui.label(@src(), "Sign in with your Plex account.", .{}, .{ .color_text = theme.colors.text_secondary, .padding = .{ .x = 0, .y = 4, .w = 0, .h = 8 } });
+        _ = dvui.label(@src(), "Connect Plex", .{}, .{ .font = dvui.themeGet().font_heading, .color_text = theme.colors.text_primary });
+        components.bodyText(@src(), "Browse your movies, shows, and music in Opal. Sign in through Plex in your browser to connect your library.", theme.colors.text_secondary);
         const awaiting = conn_state.load(.acquire) == .awaiting;
         if (dvui.button(@src(), if (awaiting) "Waiting…" else "Connect with Plex", .{}, .{
             .color_fill = theme.colors.accent,

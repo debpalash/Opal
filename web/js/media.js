@@ -163,12 +163,12 @@ $('mu-source').onchange = async () => {
   catch { $('mu-hint').textContent = 'Could not switch music source.'; return; }
   if (gen !== musicGeneration || currentPage !== 'music') return;
   $('mu-results').innerHTML = ''; lastHtml.music = '';
-  if ($('mu-q').value.trim() || $('mu-source').value === '4') runMusic();
+  runMusic();
 };
 $('mu-go').onclick = () => runMusic();
 $('mu-q').addEventListener('keydown', e => { if (e.key === 'Enter') { runMusic(); $('mu-q').blur(); } });
 async function runMusic(){
-  const q = $('mu-q').value.trim(); if (!q && $('mu-source').value !== '4') return;
+  const q = $('mu-q').value.trim();
   const gen = ++musicGeneration;
   $('mu-hint').innerHTML = '<span class="spin"></span> Searching music…';
   renderMusic([], true);

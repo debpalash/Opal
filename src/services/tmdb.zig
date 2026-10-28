@@ -495,6 +495,7 @@ fn renderToolbar(count: usize) void {
     defer bar.deinit();
     if (dvui.minSizeGet(bar.data().id)) |size| toolbar_content_h = size.h;
 
+    _ = dvui.label(@src(), "Movies & TV", .{}, .{ .font = dvui.themeGet().font_heading, .color_text = theme.colors.text_primary, .gravity_y = 0.5, .margin = .{ .x = 8, .y = 0, .w = 12, .h = 0 } });
     // Destinations stay visible even on narrow windows. Tooltips give each
     // icon its full name; the highlighted pill identifies the current view.
     renderSubTab(0, .Trending, "Browse", icons.tvg.lucide.compass);
@@ -1365,11 +1366,15 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
 
     // Keep the clickable title within its footer budget. Hover metadata and
     // Details still expose the complete title if it needs more lines.
-    if (dvui.button(@src(), title, .{}, .{
+    var title_lines: [520]u8 = undefined;
+    const title_font = theme.mediaTitleFont(title, dvui.themeGet().font_body);
+    const wrapped_title = shared_components.twoLineTitle(title, title_font, card_w - 4, &title_lines);
+    if (dvui.button(@src(), wrapped_title, .{}, .{
+        .font = title_font,
         .id_extra = idx + 500,
         .expand = .horizontal,
-        .min_size_content = .{ .w = card_w - 4, .h = 28 },
-        .max_size_content = .{ .w = card_w - 4, .h = 36 },
+        .min_size_content = .{ .w = card_w - 4, .h = title_font.textHeight() * 2 + 6 },
+        .max_size_content = .{ .w = card_w - 4, .h = title_font.textHeight() * 2 + 6 },
         .color_text = theme.colors.text_primary,
         .color_fill = theme.transparent,
         .color_fill_hover = theme.colors.bg_hover,
@@ -1388,82 +1393,35 @@ pub fn renderPosterCard(item: *state.TmdbItem, idx: usize, card_w: f32, poster_h
         });
     }
 
-    // Persistent compact controls are intentional: hiding inactive toggles
-    // behind hover would strand touch users and keyboard focus. Their named
-    // icon buttons remain available at all times; selected lists are marked
-    // with both a strong icon color and a subtle chip.
+    // One explicit primary action and a named, keyboard-accessible action menu.
     {
-        var acts = dvui.box(@src(), .{ .dir = .horizontal }, .{
-            .id_extra = idx + 400,
-            .expand = .horizontal,
-            .padding = .{ .x = 2, .y = 2, .w = 2, .h = 0 },
-        });
+        var acts = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = idx + 400, .expand = .horizontal, .padding = dvui.Rect.all(2) });
         defer acts.deinit();
-        const trans = theme.transparent;
-        const dim = theme.colors.text_secondary;
-
-        // Favorite
-        {
-            const selected = store.isInList(&state.app.tmdb.favorites, item.id);
-            const fc = if (selected) theme.colors.warning else dim;
-            if (dvui.buttonIcon(@src(), if (selected) "Remove favorite" else "Add favorite", icons.tvg.lucide.star, .{}, .{}, .{
-                .id_extra = idx + 7000,
-                .color_fill = if (selected) theme.colors.bg_elevated else trans,
-                .color_text = fc,
-                .corner_radius = dvui.Rect.all(theme.radius.sm),
-                .padding = dvui.Rect.all(3),
-                .min_size_content = theme.iconSize(.md),
-            })) {
-                store.toggleList(&state.app.tmdb.favorites, item);
-                store.saveLists();
-            }
-        }
-        // Watchlist
-        {
-            const selected = store.isInList(&state.app.tmdb.watchlist, item.id);
-            const wc = if (selected) theme.colors.accent else dim;
-            if (dvui.buttonIcon(@src(), if (selected) "Remove from watchlist" else "Add to watchlist", icons.tvg.lucide.bookmark, .{}, .{}, .{
-                .id_extra = idx + 8000,
-                .color_fill = if (selected) theme.colors.bg_elevated else trans,
-                .color_text = wc,
-                .corner_radius = dvui.Rect.all(theme.radius.sm),
-                .padding = dvui.Rect.all(3),
-                .min_size_content = theme.iconSize(.md),
-            })) {
-                store.toggleList(&state.app.tmdb.watchlist, item);
-                store.saveLists();
-            }
-        }
-        // Watching
-        {
-            const selected = store.isInList(&state.app.tmdb.watching, item.id);
-            const wac = if (selected) theme.colors.success else dim;
-            if (dvui.buttonIcon(@src(), if (selected) "Stop watching" else "Mark watching", icons.tvg.lucide.eye, .{}, .{}, .{
-                .id_extra = idx + 9000,
-                .color_fill = if (selected) theme.colors.bg_elevated else trans,
-                .color_text = wac,
-                .corner_radius = dvui.Rect.all(theme.radius.sm),
-                .padding = dvui.Rect.all(3),
-                .min_size_content = theme.iconSize(.md),
-            })) {
-                store.toggleList(&state.app.tmdb.watching, item);
-                store.saveLists();
-            }
-        }
-        // Poster/title already find streams or episodes; show the full-synopsis
-        // action by name rather than as another tiny, ambiguous icon.
-        var gap = dvui.box(@src(), .{}, .{ .expand = .horizontal });
-        gap.deinit();
-        if (dvui.button(@src(), "Details", .{}, .{
-            .id_extra = idx + 11000,
-            .color_fill = theme.colors.bg_surface,
-            .color_text = theme.colors.accent,
-            .corner_radius = dvui.Rect.all(theme.radius.sm),
-            .padding = dvui.Rect.all(3),
-        })) {
+        if (shared_components.actionButton(@src(), "Details", .secondary, idx + 11000)) {
             poster_details_id = item.id;
             poster_details_tv = std.mem.eql(u8, item.media_type[0..@min(item.media_type_len, item.media_type.len)], "tv");
             poster_details_open = true;
+        }
+        var gap = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+        gap.deinit();
+        var menu = dvui.menu(@src(), .horizontal, .{ .id_extra = idx + 7000 });
+        defer menu.deinit();
+        if (dvui.menuItemIcon(@src(), "More actions", icons.tvg.lucide.@"ellipsis-vertical", .{ .submenu = true }, .{ .color_text = theme.colors.text_secondary, .padding = dvui.Rect.all(4) })) |rect| {
+            var floating = dvui.floatingMenu(@src(), .{ .from = rect }, .{ .color_fill = theme.colors.bg_surface });
+            defer floating.deinit();
+            var choices = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = theme.colors.bg_surface, .padding = dvui.Rect.all(4) });
+            defer choices.deinit();
+            const lists = .{ &state.app.tmdb.favorites, &state.app.tmdb.watchlist, &state.app.tmdb.watching };
+            const add_labels = [_][]const u8{ "Add favorite", "Add to watchlist", "Mark watching" };
+            const remove_labels = [_][]const u8{ "Remove favorite", "Remove from watchlist", "Stop watching" };
+            inline for (lists, 0..) |list, i| {
+                const selected = store.isInList(list, item.id);
+                if (dvui.menuItemLabel(@src(), if (selected) remove_labels[i] else add_labels[i], .{}, .{ .id_extra = idx * 3 + i, .color_text = if (selected) theme.colors.accent else theme.colors.text_primary }) != null) {
+                    store.toggleList(list, item);
+                    store.saveLists();
+                    if (dvui.FloatingMenuWidget.currentGet()) |popup| popup.close();
+                }
+            }
         }
     }
 }

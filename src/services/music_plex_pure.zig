@@ -60,12 +60,13 @@ pub fn buildSearchUrl(out: []u8, base: []const u8, token: []const u8, query: []c
 }
 
 pub fn buildSearchPageUrl(out: []u8, base: []const u8, token: []const u8, query: []const u8, limit: u32, start: u32) ?[]const u8 {
-    if (!isValidBase(base) or query.len == 0 or token.len == 0) return null;
+    if (!isValidBase(base) or token.len == 0) return null;
     var enc: [512]u8 = undefined;
     const qn = percentEncode(query, &enc);
-    if (qn == 0) return null;
+    if (query.len > 0 and qn == 0) return null;
     var ten: [256]u8 = undefined;
     const tn = percentEncode(token, &ten);
+    if (query.len == 0) return std.fmt.bufPrint(out, "{s}/library/all?type={d}&X-Plex-Container-Start={d}&X-Plex-Container-Size={d}&X-Plex-Token={s}", .{ trimBase(base), TYPE_TRACK, start, limit, ten[0..tn] }) catch null;
     return std.fmt.bufPrint(
         out,
         "{s}/search?query={s}&type={d}&limit={d}&X-Plex-Container-Start={d}&X-Plex-Container-Size={d}&X-Plex-Token={s}",
@@ -265,7 +266,7 @@ test "URL builders reject a bad base, an empty token, and a hostile path" {
     var b: [700]u8 = undefined;
     try std.testing.expect(buildSearchUrl(&b, "ftp://x", "t", "q", 5) == null);
     try std.testing.expect(buildSearchUrl(&b, "http://plex:32400", "", "q", 5) == null);
-    try std.testing.expect(buildSearchUrl(&b, "http://plex:32400", "t", "", 5) == null);
+    try std.testing.expect(std.mem.indexOf(u8, buildSearchPageUrl(&b, "http://plex:32400", "t", "", 5, 10).?, "/library/all?type=10&X-Plex-Container-Start=10") != null);
     // Anything that could leave the server or pre-empt the token param.
     try std.testing.expect(!isValidPath("library/parts/1")); // relative
     try std.testing.expect(!isValidPath("/../../etc/passwd"));

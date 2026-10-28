@@ -19,6 +19,7 @@ const pure = @import("music_subsonic_pure.zig");
 const js_pure = @import("music_jiosaavn_pure.zig");
 const jf_pure = @import("music_jellyfin_pure.zig");
 const px_pure = @import("music_plex_pure.zig");
+const yt_music = @import("music_youtube_pure.zig");
 const au_pure = @import("music_audius_pure.zig");
 const paths = @import("../core/paths.zig");
 const components = @import("../ui/components.zig");
@@ -115,6 +116,7 @@ fn installedPublicAudio(id: []const u8) bool {
 }
 pub const SRC_OPENVERSE: u8 = 5;
 pub const SRC_NETLABELS: u8 = 6;
+pub const SRC_YOUTUBE: u8 = 7;
 
 pub const UniversalStatus = @import("resolver_lifecycle_pure.zig").SourceStatus;
 pub const UniversalReply = struct { count: usize = 0, status: UniversalStatus = .unavailable, connection: u64 = 0 };
@@ -129,6 +131,7 @@ const UniversalConnection = struct {
 pub fn universalProviderName(source: u8) []const u8 {
     return switch (source) {
         SRC_JIOSAAVN => "JioSaavn",
+        SRC_YOUTUBE => "YouTube Music",
         SRC_SUBSONIC => "Subsonic",
         SRC_JELLYFIN => "Jellyfin music",
         SRC_PLEX => "Plex music",
@@ -295,11 +298,12 @@ pub fn playUniversalRoute(route_url: []const u8, title: []const u8, artist: []co
 }
 
 pub fn selectSource(src: u8) bool {
-    if (src > SRC_NETLABELS) return false;
+    if (src > SRC_YOUTUBE) return false;
     search_request.cancel(&state.app.music.is_loading);
     parse_mutex.lock();
     defer parse_mutex.unlock();
     active_search = null;
+    initial_load_attempted = false;
     next_offset = 0;
     state.app.music.source = src;
     state.app.music.result_count = 0;
@@ -388,7 +392,7 @@ fn sourceConfigured(src: u8) bool {
     var b: [256]u8 = undefined;
     var t: [320]u8 = undefined;
     return switch (src) {
-        SRC_JIOSAAVN => true, // public, keyless
+        SRC_JIOSAAVN, SRC_YOUTUBE => true, // public, keyless
         SRC_SUBSONIC => configured(),
         SRC_JELLYFIN => jfCreds(&b, &t) != null,
         SRC_PLEX => plexCreds(&b, &t) != null,
@@ -463,6 +467,8 @@ var search_request: LatestRequest = .{};
 // and credentials in one value means rapid searches never race on module
 // statics while an older worker is starting.
 const SearchJob = struct {
+    continuation: [4096]u8 = undefined,
+    continuation_len: usize = 0,
     generation: u32,
     source: u8 = SRC_JIOSAAVN,
     offset: u32 = 0,
@@ -482,10 +488,16 @@ var active_search: ?SearchJob = null;
 var next_offset: u32 = 0;
 var loading_more: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 
+var initial_load_attempted = false;
+pub fn ensureLoaded() void {
+    if (!initial_load_attempted and sourceConfigured(state.app.music.source))
+        searchMusic(std.mem.sliceTo(&state.app.music.search_buf, 0));
+}
+
 pub fn searchMusic(query: []const u8) void {
     if (@import("builtin").is_test and loading_fixture_for_test) return;
-    if (query.len == 0 and state.app.music.source != SRC_AUDIUS) return;
 
+    initial_load_attempted = true;
     state.app.music.fetch_error = false;
 
     const my_gen = search_request.begin(&state.app.music.is_loading);
@@ -504,9 +516,15 @@ pub fn searchMusic(query: []const u8) void {
 
 fn makeSearchJob(query: []const u8, generation: u32, append: bool, offset: u32) ?SearchJob {
     var job: SearchJob = .{ .generation = generation, .source = state.app.music.source, .append = append, .offset = offset };
-    job.query_len = @min(query.len, job.query.len);
-    @memcpy(job.query[0..job.query_len], query[0..job.query_len]);
-    if (job.source == SRC_JIOSAAVN) return job;
+    const actual_query = if (query.len == 0) switch (job.source) {
+        SRC_JIOSAAVN => "top hits",
+        SRC_YOUTUBE => "trending music",
+        SRC_OPENVERSE, SRC_NETLABELS => "music",
+        else => query,
+    } else query;
+    job.query_len = @min(actual_query.len, job.query.len);
+    @memcpy(job.query[0..job.query_len], actual_query[0..job.query_len]);
+    if (job.source == SRC_JIOSAAVN or job.source == SRC_YOUTUBE) return job;
 
     // Copy credentials into the immutable job so detached workers never read
     // reloadable config while another frame changes it.
@@ -553,6 +571,7 @@ fn spawnWorker(comptime f: fn (SearchJob) void, job: SearchJob) bool {
 fn spawnSearchJob(job: SearchJob) bool {
     return switch (job.source) {
         SRC_JIOSAAVN => spawnWorker(jiosaavnWorker, job),
+        SRC_YOUTUBE => spawnWorker(youtubeMusicWorker, job),
         SRC_SUBSONIC => spawnWorker(subsonicWorker, job),
         SRC_JELLYFIN => spawnWorker(jellyfinMusicWorker, job),
         SRC_PLEX => spawnWorker(plexMusicWorker, job),
@@ -663,6 +682,46 @@ fn publicAudioWorker(job: SearchJob) void {
         count += 1;
     }
     publishPage(job, count, 0, 0);
+    published = true;
+}
+
+fn youtubeMusicWorker(job: SearchJob) void {
+    var published = false;
+    defer finishJob(job, published);
+    var request_buf: [10000]u8 = undefined;
+    const request = yt_music.request(&request_buf, job.query[0..job.query_len], job.continuation[0..job.continuation_len]) orelse return;
+    const buffer = alloc.alloc(u8, 3 * 1024 * 1024) catch return;
+    defer alloc.free(buffer);
+    const body = reliable_fetch.fetch(yt_music.endpoint, buffer, .{
+        .post_body = request,
+        .headers = &.{ .{ .name = "Content-Type", .value = "application/json" }, .{ .name = "X-YouTube-Client-Name", .value = "67" }, .{ .name = "X-YouTube-Client-Version", .value = yt_music.client_version } },
+        .impersonate = false,
+        .timeout_secs = 20,
+        .cancel_epoch = .{ .epoch32 = .{ .value = &search_request.generation, .expected = job.generation } },
+    }) orelse return;
+    var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch return;
+    defer parsed.deinit();
+    if (pure.valueField(parsed.value, "error") != .null) return;
+    const rows = alloc.alloc(pure.MusicSong, PAGE_SIZE) catch return;
+    defer alloc.free(rows);
+    const count = yt_music.collect(parsed.value, rows);
+    const token = yt_music.continuation(parsed.value);
+    parse_mutex.lock();
+    defer parse_mutex.unlock();
+    if (!search_request.isCurrent(job.generation)) return;
+    const base = if (job.append) state.app.music.result_count else 0;
+    var added: usize = 0;
+    for (rows[0..count]) |row| {
+        if (base + added == RESULTS_CAP) break;
+        state.app.music.results[base + added] = row;
+        if (!duplicateRow(base + added)) added += 1;
+    }
+    publishPage(job, added, base, count);
+    more_available = token.len > 0 and token.len <= job.continuation.len and base + added < RESULTS_CAP;
+    if (active_search) |*active| {
+        active.continuation_len = if (more_available) token.len else 0;
+        @memcpy(active.continuation[0..active.continuation_len], token[0..active.continuation_len]);
+    }
     published = true;
 }
 
@@ -896,7 +955,7 @@ fn playCopiedSong(song: pure.MusicSong, source: u8) void {
     var tokb: [320]u8 = undefined;
 
     switch (source) {
-        SRC_JIOSAAVN, SRC_AUDIUS, SRC_OPENVERSE, SRC_NETLABELS => {
+        SRC_JIOSAAVN, SRC_YOUTUBE, SRC_AUDIUS, SRC_OPENVERSE, SRC_NETLABELS => {
             // Hand the perma_url to mpv; its bundled yt-dlp resolves the signed
             // CDN audio stream (no DES, no third-party instance).
             if (purl.len == 0) return;
@@ -1125,10 +1184,17 @@ pub fn renderContent() void {
     var pageroot = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both });
     defer pageroot.deinit();
 
+    ensureLoaded();
+    components.pageHeading(@src(), "Music", "Choose a source to browse or search its catalog.");
     renderSearchBar();
 
     // Source selector: public streaming vs. your self-hosted library.
     {
+        var source_scroll = dvui.scrollArea(@src(), .{ .horizontal = .auto, .vertical = .none }, .{
+            .expand = .horizontal,
+            .max_size_content = .{ .w = std.math.floatMax(f32), .h = 52 },
+        });
+        defer source_scroll.deinit();
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
             .padding = .{ .x = 8, .y = 0, .w = 8, .h = 6 },
@@ -1147,11 +1213,12 @@ pub fn renderContent() void {
             .{ .label = "Audius", .icon = icons.tvg.lucide.radio },
             .{ .label = "Openverse", .icon = icons.tvg.lucide.music },
             .{ .label = "Netlabels", .icon = icons.tvg.lucide.music },
+            .{ .label = "YouTube Music", .icon = icons.tvg.lucide.music },
         };
         for (sources, 0..) |source, clicked| {
             if (components.filterChip(@src(), source.label, source.icon, clicked == state.app.music.source, clicked + 91000) and clicked != state.app.music.source) {
                 _ = selectSource(@intCast(clicked));
-                if (clicked == SRC_AUDIUS) searchMusic(std.mem.sliceTo(&state.app.music.search_buf, 0));
+                searchMusic(std.mem.sliceTo(&state.app.music.search_buf, 0));
             }
         }
     }
@@ -1164,6 +1231,8 @@ pub fn renderContent() void {
     if (state.app.music.fetch_error) {
         const emsg: []const u8 = switch (state.app.music.source) {
             SRC_JIOSAAVN => "Couldn't reach JioSaavn — check your connection",
+            SRC_YOUTUBE => "Couldn't reach YouTube Music — try again",
+            SRC_OPENVERSE, SRC_NETLABELS => "Couldn't reach this music source — try again",
             SRC_AUDIUS => "Couldn't reach Audius — check your connection",
             SRC_JELLYFIN => "Couldn't reach the Jellyfin server — check the sign-in in the Jellyfin tab",
             SRC_PLEX => "Couldn't reach the Plex server — check the sign-in in the Plex tab",
@@ -1321,7 +1390,7 @@ fn coverUrlForSource(song: *const pure.MusicSong, source: u8, url_buf: []u8) []c
     var b: [256]u8 = undefined;
     var tokb: [320]u8 = undefined;
     switch (source) {
-        SRC_JIOSAAVN, SRC_AUDIUS, SRC_OPENVERSE, SRC_NETLABELS => {
+        SRC_JIOSAAVN, SRC_YOUTUBE, SRC_AUDIUS, SRC_OPENVERSE, SRC_NETLABELS => {
             if (cover_field.len > url_buf.len) return url_buf[0..0];
             @memcpy(url_buf[0..cover_field.len], cover_field);
             return url_buf[0..cover_field.len];

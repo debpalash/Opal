@@ -162,8 +162,8 @@ pub fn renderSettingsContent() void {
 fn renderLeftNav(compact: bool) void {
     // Sidebar column — icon rail when compact, icon+label list otherwise.
     var nav = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .min_size_content = .{ .w = if (compact) 48 else 150, .h = 0 },
-        .max_size_content = .{ .w = if (compact) 56 else 168, .h = std.math.floatMax(f32) },
+        .min_size_content = .{ .w = if (compact) 48 else 136, .h = 0 },
+        .max_size_content = .{ .w = if (compact) 56 else 152, .h = std.math.floatMax(f32) },
         .expand = .vertical,
         .background = true,
         .color_fill = theme.colors.bg_surface,
@@ -185,9 +185,12 @@ fn renderLeftNav(compact: bool) void {
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm },
         });
         defer sb_wrap.deinit();
-        _ = components.searchInput(@src(), &search_buf, &search_len, "Search…");
+        _ = components.searchInput(@src(), &search_buf, &search_len, "Find…");
     }
 
+    // Keep every category reachable without scrolling the settings themselves.
+    var categories = dvui.scrollArea(@src(), .{ .horizontal = .none, .vertical = .auto, .vertical_bar = .auto_overlay }, .{ .expand = .both, .background = false });
+    defer categories.deinit();
     // ── Tab list ──
     const nav_tabs = [_]struct {
         tab: state.SettingsTab,
@@ -1120,47 +1123,22 @@ fn ttsSpeedSegment(id_base: usize) void {
 /// Installation logs are redacted at the ring seam. Show recent outcomes here
 /// so completion/failure remains visible even after a short-lived toast fades.
 fn renderInstallActivity(compact: bool) void {
+    _ = compact;
+    const source_repo = @import("../services/plugin_repo.zig");
+    if (source_repo.status.load(.acquire) != .err) return;
     var activity = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
         .background = true,
         .color_fill = theme.colors.bg_surface,
         .corner_radius = theme.dims.rad_sm,
-        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
+        .padding = dvui.Rect.all(theme.spacing.sm),
     });
     defer activity.deinit();
-    if (dvui.button(@src(), if (compact) "Open install logs" else "Installation activity · Open Logs", .{}, .{
-        .color_fill = theme.colors.bg_elevated,
-        .color_text = theme.colors.accent,
-        .corner_radius = theme.dims.rad_sm,
-        .padding = .{ .x = theme.spacing.sm, .y = 4, .w = theme.spacing.sm, .h = 4 },
-    })) state.navigateToTab(.Logs);
-    if (compact) return;
-
-    logs.lockRead();
-    defer logs.unlockRead();
-    var shown: usize = 0;
-    var index = logs.logCount();
-    const oldest = index -| 64;
-    while (index > oldest and shown < 2) {
-        index -= 1;
-        const entry = logs.getLog(index);
-        const source = entry.prefix;
-        if (!std.mem.eql(u8, source, "deps") and
-            !std.mem.eql(u8, source, "scripts") and
-            !std.mem.eql(u8, source, "sources") and
-            !std.mem.eql(u8, source, "ytdlp") and
-            !std.mem.eql(u8, source, "updater") and
-            !std.mem.eql(u8, source, "browser") and
-            !std.mem.eql(u8, source, "ai") and
-            !std.mem.eql(u8, source, "iptv")) continue;
-        const preview = entry.text[0..@min(entry.text.len, 44)];
-        _ = dvui.label(@src(), "{s}: {s}{s}", .{
-            @import("../core/text.zig").safeUtf8(source),
-            @import("../core/text.zig").safeUtf8(preview),
-            if (entry.text.len > preview.len) "…" else "",
-        }, .{ .id_extra = shown, .color_text = if (entry.is_error) theme.colors.danger else theme.colors.text_tertiary });
-        shown += 1;
-    }
+    components.bodyText(@src(), "Couldn't refresh sources. Previously available sources can still be used.", theme.colors.warning);
+    var actions = dvui.flexbox(@src(), .{ .justify_content = .start }, .{ .expand = .horizontal });
+    defer actions.deinit();
+    if (components.actionButton(@src(), "Retry", .secondary, 11201)) _ = source_repo.refresh();
+    if (components.actionButton(@src(), "View details", .secondary, 11202)) state.navigateToTab(.Logs);
 }
 
 fn renderGeneralTab() void {

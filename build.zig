@@ -113,6 +113,15 @@ fn buildSupported(b: *std.Build) void {
     } else null;
 
     if (target.result.os.tag == .macos) {
+        // Exercise the native About menu without any app bundle metadata.
+        const about_compile = b.addSystemCommand(&.{ "clang", "-fobjc-arc", "-framework", "AppKit" });
+        about_compile.addFileArg(b.path("tests/native_about.m"));
+        about_compile.addArg("-o");
+        const about_binary = about_compile.addOutputFileArg("opal-about-test");
+        const about_run = b.addSystemCommand(&.{"env"});
+        about_run.addFileArg(about_binary);
+        about_run.setCwd(b.path("."));
+        b.step("test-native-about", "Verify native About routing and capitalized app identity (macOS GUI)").dependOn(&about_run.step);
         // Cancellable native DNS is shared by desktop and headless clients.
         exe.root_module.linkFramework("CoreFoundation", .{});
         exe.root_module.linkFramework("CFNetwork", .{});
@@ -2749,6 +2758,13 @@ fn buildSupported(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_music_subsonic_pure).step);
+
+    const test_music_youtube = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/services/music_youtube_pure.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    test_step.dependOn(&b.addRunArtifact(test_music_youtube).step);
 
     // JioSaavn music source — public search URL + song JSON parse + cover upgrade
     // (playback delegated to mpv/yt-dlp via the perma_url).

@@ -15,6 +15,7 @@ enum {
     OPAL_MENU_SEEK_BACK = 7,
     OPAL_MENU_SEEK_FORWARD = 8,
     OPAL_MENU_FULLSCREEN = 9,
+    OPAL_MENU_ABOUT = 10,
 };
 
 #define OPAL_MENU_QUEUE_CAP 16
@@ -46,10 +47,19 @@ int opal_app_menu_poll(void) {
     return action;
 }
 
+// SDL/AppKit read this before creating the application menu for bare binaries.
+void opal_app_identity_init(void) {
+    [NSProcessInfo processInfo].processName = @"Opal";
+}
+
 @interface OpalMenuTarget : NSObject
 @end
 
 @implementation OpalMenuTarget
+- (void)showAbout:(id)sender {
+    (void)sender;
+    opal_menu_push(OPAL_MENU_ABOUT);
+}
 - (void)openFile:(id)sender { (void)sender; opal_menu_push(OPAL_MENU_OPEN); }
 - (void)openSettings:(id)sender { (void)sender; opal_menu_push(OPAL_MENU_SETTINGS); }
 - (void)showHome:(id)sender { (void)sender; opal_menu_push(OPAL_MENU_HOME); }
@@ -77,18 +87,20 @@ static void opal_add_menu(NSMenu *bar, NSString *title, NSMenu *submenu) {
     [bar addItem:root];
 }
 
-void opal_app_menu_init(void) {
+void opal_app_menu_init(const unsigned char *logo, size_t logo_len) {
     static BOOL initialized = NO;
     if (initialized) return;
     initialized = YES;
 
     @autoreleasepool {
+        NSImage *icon = [[NSImage alloc] initWithData:[NSData dataWithBytes:logo length:logo_len]];
+        if (icon) NSApp.applicationIconImage = icon;
         static OpalMenuTarget *target;
         target = [OpalMenuTarget new];
         NSMenu *bar = [NSMenu new];
 
         NSMenu *app = [[NSMenu alloc] initWithTitle:@"Opal"];
-        [app addItem:opal_item(@"About Opal", @selector(orderFrontStandardAboutPanel:), @"", nil)];
+        [app addItem:opal_item(@"About Opal", @selector(showAbout:), @"", target)];
         [app addItem:[NSMenuItem separatorItem]];
         [app addItem:opal_item(@"Settings…", @selector(openSettings:), @",", target)];
         [app addItem:[NSMenuItem separatorItem]];

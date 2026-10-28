@@ -163,10 +163,10 @@ pub fn buildSearchUrl(out: []u8, base: []const u8, authq: []const u8, query: []c
 }
 
 pub fn buildSearchPageUrl(out: []u8, base: []const u8, authq: []const u8, query: []const u8, song_count: u32, song_offset: u32) ?[]const u8 {
-    if (!isValidBase(base) or query.len == 0) return null;
+    if (!isValidBase(base)) return null;
     var enc: [512]u8 = undefined;
     const qn = percentEncode(query, &enc);
-    if (qn == 0) return null;
+    if (query.len > 0 and qn == 0) return null;
     return std.fmt.bufPrint(out, "{s}/rest/search3?query={s}&songCount={d}&songOffset={d}&artistCount=0&albumCount=0&{s}", .{ trimBase(base), enc[0..qn], song_count, song_offset, authq }) catch null;
 }
 

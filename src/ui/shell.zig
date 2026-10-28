@@ -639,9 +639,9 @@ fn closeOverflowMenu() void {
 /// Every ordinary query uses the shared all-content resolver.
 fn omnibox(narrow: bool) void {
     const placeholder: []const u8 = if (narrow)
-        "Search, ask, paste…"
+        "Search all content…"
     else
-        "Search everything, ask, or paste a link…";
+        "Search all content or paste a link…";
     var field = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
         .min_size_content = .{ .w = 80, .h = 30 },
@@ -679,7 +679,10 @@ fn omnibox(narrow: bool) void {
     }
     const submitted = chromeIconButton(@src(), icons.tvg.lucide.search, "Search", false, len > 0);
     // Ask Opal: hand what is typed to the user's coding agent (Ctrl+Enter does the same).
-    const ask_clicked = len > 0 and chromeIconButton(@src(), icons.tvg.lucide.sparkles, "Ask Opal (Ctrl+Enter)", state.app.ask_enabled, true);
+    const ask_clicked = len > 0 and (if (narrow)
+        chromeIconButton(@src(), icons.tvg.lucide.sparkles, "Ask Opal (Ctrl+Enter)", state.app.ask_enabled, true)
+    else
+        dvui.button(@src(), "Ask Opal", .{}, .{ .color_fill = transparent, .color_fill_hover = theme.colors.bg_hover, .color_text = theme.colors.accent, .padding = dvui.Rect.all(5), .gravity_y = 0.5 }));
     if (len > 0 and (ask_clicked or (entered and askChordHeld()))) {
         var ask_buf: [state.app.magnet_buf.len]u8 = undefined;
         @memcpy(ask_buf[0..len], state.app.magnet_buf[0..len]);
@@ -883,10 +886,9 @@ fn renderSidebar(layout: sidebar_layout.Layout) void {
         .color_border = theme.colors.border_subtle,
         .border = dvui.Rect.all(0),
         .min_size_content = .{ .w = 0, .h = 0 },
-        .max_size_content = .{ .w = layout.sidebar - 9, .h = std.math.floatMax(f32) },
+        .max_size_content = .{ .w = layout.sidebar - 9, .h = if (host.data().rect.h > 1) @max(0, host.data().rect.h - 93) else std.math.floatMax(f32) },
         .padding = dvui.Rect.all(4),
     });
-    defer scroll.deinit();
     // Agents is the front door: automations and personalised content first.
     if (sidebarButton("Agents", icons.tvg.lucide.bot, state.app.router.current == .agents, layout.expanded, 8600)) state.app.router.navigate(.agents);
     const routes = [_]Route{ .home, .search, .watching };
@@ -903,11 +905,23 @@ fn renderSidebar(layout: sidebar_layout.Layout) void {
     sidebarSection("Read", &READ_SOURCES, layout.expanded, 8900);
     sidebarSection("Web & libraries", &CONNECTED_SOURCES, layout.expanded, 9000);
     sidebarHeading("Manage", layout.expanded, 9100);
-    const manage_routes = [_]Route{ .downloads, .queue, .history, .assistant, .plugins, .settings, .system };
-    const manage_tabs = [_]state.DrawerTab{ .Downloads, .Queue, .History, .AI, .Plugins, .Settings, .Logs };
+    const manage_routes = [_]Route{ .downloads, .queue, .history, .assistant, .plugins };
+    const manage_tabs = [_]state.DrawerTab{ .Downloads, .Queue, .History, .AI, .Plugins };
     for (manage_routes, manage_tabs, 0..) |route, tab, i| {
         if (sidebarButton(tabLabel(tab), iconForTab(tab), state.app.router.current == route, layout.expanded, 9101 + i)) state.app.router.navigate(route);
     }
+    scroll.deinit();
+    var utility = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .horizontal,
+        .min_size_content = .{ .w = 0, .h = 84 },
+        .max_size_content = .{ .w = std.math.floatMax(f32), .h = 84 },
+        .padding = dvui.Rect.all(4),
+        .border = .{ .x = 0, .y = 1, .w = 0, .h = 0 },
+        .color_border = theme.colors.border_subtle,
+    });
+    defer utility.deinit();
+    if (sidebarButton("Settings", iconForTab(.Settings), state.app.router.current == .settings, layout.expanded, 9106)) state.app.router.navigate(.settings);
+    if (sidebarButton("System", iconForTab(.Logs), state.app.router.current == .system, layout.expanded, 9107)) state.app.router.navigate(.system);
 }
 fn sidebarHeading(label: []const u8, expanded: bool, id: usize) void {
     if (expanded) {

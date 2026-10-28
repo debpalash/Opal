@@ -36,7 +36,7 @@ pub fn handle(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8
         var id_buf: [128]u8 = undefined;
         const raw_id = wire.queryParam(query, "id") orelse "";
         const id = wire.urlDecode(raw_id, &id_buf) orelse "";
-        if (source > music.SRC_NETLABELS or id.len == 0 or !@import("music_subsonic_pure.zig").identityQueryFits(raw_id, id_buf.len)) {
+        if (source > music.SRC_YOUTUBE or id.len == 0 or !@import("music_subsonic_pure.zig").identityQueryFits(raw_id, id_buf.len)) {
             wire.sendJsonStatus(stream, "400 Bad Request", "{\"error\":\"valid track identity required\"}");
             return;
         }
@@ -48,6 +48,7 @@ pub fn handle(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8
         return;
     }
 
+    music.ensureLoaded();
     const songs = alloc.alloc(@import("music_subsonic_pure.zig").MusicSong, 80) catch {
         wire.sendJsonStatus(stream, "500 Internal Server Error", "{\"error\":\"out of memory\"}");
         return;

@@ -159,6 +159,7 @@ const app_start_options: dvui.App.StartOptions = .{
 /// app id aligned with opal.desktop and StartupWMClass so launchers/compositors
 /// group every Opal window under the installed desktop entry.
 fn platformStartOptions() dvui.App.StartOptions {
+    @import("macos/app_menu.zig").initIdentity();
     if (comptime builtin.os.tag == .windows) {
         // Explorer/file-association launches may inherit the media directory as
         // CWD. Never let an untrusted download folder satisfy later LoadLibrary

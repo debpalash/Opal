@@ -1205,14 +1205,23 @@ fn cardBegin(src: std.builtin.SourceLocation, id: usize) *dvui.BoxWidget {
 }
 
 fn cardTitle(src: std.builtin.SourceLocation, text: []const u8, sub: []const u8) void {
-    _ = dvui.label(src, "{s}", .{text}, .{ .color_text = theme.colors.text_primary, .font = dvui.themeGet().font_title });
+    _ = dvui.label(src, "{s}", .{text}, .{ .color_text = theme.colors.text_primary, .font = dvui.themeGet().font_heading });
     if (sub.len > 0) {
-        _ = dvui.label(@src(), "{s}", .{sub}, .{ .color_text = theme.colors.text_tertiary, .expand = .horizontal, .margin = .{ .x = 0, .y = 2, .w = 0, .h = 6 } });
+        components.bodyText(@src(), sub, theme.colors.text_secondary);
     }
 }
 
 fn renderSourcePlugins() void {
-    renderSignedRepositories();
+    const Advanced = struct {
+        var open = false;
+    };
+    {
+        var tools = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .padding = dvui.Rect.all(theme.spacing.md) });
+        defer tools.deinit();
+        _ = dvui.label(@src(), "Sources", .{}, .{ .expand = .horizontal, .font = dvui.themeGet().font_heading, .color_text = theme.colors.text_primary });
+        if (components.actionButton(@src(), if (Advanced.open) "Hide advanced" else "Advanced…", .secondary, 9099)) Advanced.open = !Advanced.open;
+    }
+    if (Advanced.open) renderSignedRepositories();
     const pr = source_repo;
 
     // Auto-load on first view: show the bundled manifest instantly (offline, no
@@ -1245,8 +1254,7 @@ fn renderSourcePlugins() void {
     {
         var hrow = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
         defer hrow.deinit();
-        _ = dvui.label(@src(), "Available plugins", .{}, .{ .color_text = theme.colors.text_primary, .font = dvui.themeGet().font_title, .gravity_y = 0.5 });
-        _ = dvui.label(@src(), "  {d} sources · {d} installed", .{ source_count, installed_total }, .{ .color_text = theme.colors.text_tertiary, .gravity_y = 0.5 });
+        _ = dvui.label(@src(), "Available sources", .{}, .{ .color_text = theme.colors.text_primary, .font = dvui.themeGet().font_heading, .expand = .horizontal, .gravity_y = 0.5 });
         {
             var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
             sp.deinit();
@@ -1263,14 +1271,19 @@ fn renderSourcePlugins() void {
             _ = pr.apply(.refresh, "");
         }
     }
+    _ = dvui.label(@src(), "{d} sources · {d} installed", .{ source_count, installed_total }, .{ .color_text = theme.colors.text_secondary });
     const catalog_state = pr.status.load(.acquire);
     if (catalog_state == .fetching) {
         dvui.spinner(@src(), .{ .min_size_content = .{ .w = 16, .h = 16 }, .max_size_content = .{ .w = 16, .h = 16 } });
         _ = dvui.label(@src(), "Refreshing source catalog…", .{}, .{ .color_text = theme.colors.text_secondary });
     } else if (catalog_state == .err) {
-        _ = dvui.label(@src(), "Catalog refresh failed; bundled sources remain available. See Logs.", .{}, .{ .color_text = theme.colors.danger });
+        components.bodyText(@src(), "Couldn't refresh sources. You can still install the sources listed below.", theme.colors.warning);
+        var recovery = dvui.flexbox(@src(), .{ .justify_content = .start }, .{ .expand = .horizontal });
+        if (components.actionButton(@src(), "Retry", .secondary, 9050)) _ = pr.refresh();
+        if (components.actionButton(@src(), "View details", .secondary, 9051)) state.navigateToTab(.Logs);
+        recovery.deinit();
     }
-    _ = dvui.label(@src(), "Click Install to enable a source. Only install sources you trust.", .{}, .{ .color_text = theme.colors.text_tertiary, .expand = .horizontal, .margin = .{ .x = 0, .y = 2, .w = 0, .h = 4 } });
+    components.bodyText(@src(), "Install a source to make its content available in Opal.", theme.colors.text_secondary);
     const operation = pr.installStatus();
     if (operation.stage != .idle) {
         const working = operation.stage == .fetching or operation.stage == .writing;
@@ -1278,11 +1291,11 @@ fn renderSourcePlugins() void {
         if (working) dvui.spinner(@src(), .{ .min_size_content = .{ .w = 18, .h = 18 }, .max_size_content = .{ .w = 18, .h = 18 } });
         if (working) dvui.refresh(null, @src(), null);
         const stage_text: []const u8 = switch (operation.stage) {
-            .fetching => "Fetching source definition",
-            .writing => "Writing source configuration",
+            .fetching => "Downloading source",
+            .writing => "Setting up source",
             .installed => "Installed",
             .removed => "Removed",
-            .failed => operation.reason,
+            .failed => "Installation failed. Try again or view details",
             .idle => unreachable,
         };
         _ = dvui.label(@src(), "{s}: {s}", .{ operation.idSlice(), stage_text }, .{
@@ -1291,11 +1304,6 @@ fn renderSourcePlugins() void {
             .gravity_y = 0.5,
         });
         status_row.deinit();
-        _ = dvui.label(@src(), "{s}", .{if (operation.fetch_remote)
-            "Procedure: HTTPS GET GitHub contents API for the source definition (optional bearer header redacted) › write JSON into Opal's sources folder."
-        else
-            "Procedure: write bundled source JSON into Opal's sources folder. No network request."}, .{ .color_text = theme.colors.text_tertiary, .expand = .horizontal });
-        _ = dvui.label(@src(), "No shell command runs for source installs. Private token, endpoint contents and media URLs are never printed in Logs.", .{}, .{ .color_text = theme.colors.text_tertiary });
         if (dvui.button(@src(), "View logs", .{}, .{ .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.text_primary, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 } })) {
             state.navigateToTab(.Logs);
         }
@@ -1310,7 +1318,7 @@ fn renderSourcePlugins() void {
     // Filter row: name/kind search + an installed-only toggle. With 45+ sources
     // a flat list is unusable, so we group + filter (see plugins_pure).
     {
-        var frow = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .padding = .{ .x = 0, .y = 2, .w = 0, .h = theme.spacing.sm } });
+        var frow = dvui.flexbox(@src(), .{ .justify_content = .start }, .{ .expand = .horizontal, .padding = .{ .x = 0, .y = 2, .w = 0, .h = theme.spacing.sm } });
         defer frow.deinit();
         var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &src_filter_buf }, .placeholder = "Filter sources…" }, .{
             .expand = .horizontal,

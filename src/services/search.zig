@@ -1954,7 +1954,7 @@ fn renderContentGallery(pending: *?ResultAction) void {
             _ = dvui.label(@src(), "{s}", .{tally_text}, .{ .color_text = theme.colors.text_tertiary, .gravity_y = 0.5, .margin = dvui.Rect.all(6) });
             var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
             spacer.deinit();
-            if (category != .releases and view_filters.content == .all and components.actionButton(@src(), "See all", .secondary, 94650 + @as(usize, @intFromEnum(category)))) {
+            if (category_count > 2 and category != .releases and view_filters.content == .all and components.actionButton(@src(), "See all", .secondary, 94650 + @as(usize, @intFromEnum(category)))) {
                 view_filters.content = galleryCategoryFilter(category);
                 view_dirty = true;
                 result_scroll.viewport.y = 0;
@@ -1969,6 +1969,11 @@ fn renderContentGallery(pending: *?ResultAction) void {
                     shown += 1;
                 }
                 if (shown < category_count and components.actionButton(@src(), "Show more releases", .secondary, 94700)) gallery_release_limit += 24;
+            } else if (category_count <= 2 and view_filters.content == .all) {
+                for (visible[0..visible_count]) |index| {
+                    const group = &content_projection.groups[index];
+                    if (group.category == category) renderGallerySummary(group, width);
+                }
             } else {
                 const art = gallery_layout.cardSize(galleryShape(category), width);
                 if (view_filters.content != .all) {
@@ -1992,6 +1997,43 @@ fn renderContentGallery(pending: *?ResultAction) void {
             }
         }
     }
+}
+
+// Sparse categories retain artwork and a clear action without a full-height shelf.
+fn renderGallerySummary(group: *const search_content.Group, width: f32) void {
+    const item = &view_cache.rows.?[group.representative];
+    const key: usize = @truncate(group.identity);
+    const size = if (galleryShape(group.category) == .portrait) gallery_layout.Size{ .w = 52, .h = 78 } else gallery_layout.Size{ .w = 64, .h = 64 };
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .id_extra = key,
+        .expand = .horizontal,
+        .padding = dvui.Rect.all(8),
+        .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
+        .background = true,
+        .color_fill = theme.colors.bg_surface,
+        .corner_radius = theme.dims.rad_md,
+    });
+    defer row.deinit();
+    if (galleryCover(group.identity)) |slot| components.galleryCoverArt(@src(), key +% 1, slot, item.poster_url[0..item.poster_url_len], galleryIcon(group.category), theme.radius.sm, size.w, size.h);
+    var copy = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .gravity_y = 0.5, .padding = .{ .x = 12, .y = 0, .w = 8, .h = 0 } });
+    const font = theme.mediaTitleFont(item.name[0..item.name_len], dvui.themeGet().font_body);
+    var title: [520]u8 = undefined;
+    const text_width = @max(40, width - size.w - 140);
+    _ = dvui.label(@src(), "{s}", .{searchRowTitle(item.name[0..item.name_len], font, text_width, &title)}, .{
+        .font = font,
+        .color_text = theme.colors.text_primary,
+        .expand = .horizontal,
+    });
+    if (item.author_len > 0) searchRowLine(key +% 2, safeUtf8(item.author[0..item.author_len]), font.withSize(theme.font_size.small), text_width, theme.colors.text_secondary);
+    copy.deinit();
+    if (components.actionButton(@src(), "Details", .secondary, key +% 3)) {
+        gallery_selection = group.identity;
+        gallery_selected_manually = true;
+        gallery_show_sources = false;
+        result_scroll.viewport.y = 0;
+    }
+    if (@import("builtin").is_test) gallery_text_rows_for_test += 1;
+    components.tipId(@src(), row.data().*, safeUtf8(item.name[0..item.name_len]), key);
 }
 
 fn renderGalleryCard(group: *const search_content.Group, size: gallery_layout.Size) void {
@@ -2297,34 +2339,7 @@ fn renderSourceSummary(source_has: std.EnumSet(@import("resolver.zig").SourceBit
 /// Two title lines, one precise metadata line and one real synopsis preview.
 /// Every row has the same font-derived height for viewport virtualization.
 fn searchRowTitle(text: []const u8, font: dvui.Font, width: f32, out: []u8) []const u8 {
-    var normalized: [1024]u8 = undefined;
-    var rest = std.mem.trim(u8, search_view.singleLine(&normalized, text), " \t\r\n");
-    var written: usize = 0;
-    for (0..2) |line| {
-        if (rest.len == 0) break;
-        var end: usize = 0;
-        const reserve = if (line == 1) font.textSizeEx("…", .{}).w else 0;
-        _ = font.textSizeEx(rest, .{ .max_width = @max(1, width - reserve), .end_idx = &end });
-        if (end == 0) break;
-        if (end < rest.len) if (std.mem.lastIndexOfScalar(u8, rest[0..end], ' ')) |space| {
-            if (space > 0) end = space;
-        };
-        const piece = std.mem.trim(u8, rest[0..end], " \t\r\n");
-        if (written + piece.len + 4 > out.len) break;
-        @memcpy(out[written..][0..piece.len], piece);
-        written += piece.len;
-        rest = std.mem.trimStart(u8, rest[end..], " \t\r\n");
-        if (rest.len > 0) {
-            if (line == 1) {
-                @memcpy(out[written..][0..3], "…");
-                written += 3;
-            } else {
-                out[written] = '\n';
-                written += 1;
-            }
-        }
-    }
-    return out[0..written];
+    return components.twoLineTitle(text, font, width, out);
 }
 
 fn searchRowLine(id: usize, text: []const u8, font: dvui.Font, width: f32, color: dvui.Color) void {
