@@ -76,9 +76,11 @@ def test_manga_themesia_engine():
         problems.append("loadThemesiaPages does not stage into the shared page_urls array")
     if "state.app.comic.referer_len = rl" not in comics and "referer_len = rl" not in comics:
         problems.append("loadThemesiaPages does not set the chapter Referer")
-    if "Referer: {s}" not in comics:
+    # Page fetch is on the reliable-fetch seam: `.referer` → `-H "Referer: …"`.
+    if "Referer: {s}" not in comics and not (".referer = if (referer.len > 0) referer" in comics
+            and "Referer: {s}" in _src("src/services/reliable_fetch_pure.zig")):
         problems.append("page fetch does not emit a Referer header")
-    if "Accept: image/avif" not in comics:
+    if "Accept: image/avif" not in comics and '"Accept", .value = "image/avif' not in comics:
         problems.append("page fetch does not emit the browser-style Accept header")
 
     if problems:

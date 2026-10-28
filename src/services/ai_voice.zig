@@ -1280,11 +1280,8 @@ fn ttsWorker() void {
             LANG_SERVER_PORT, encoded[0..enc_len],
         }) catch return;
 
-        var curl_child = @import("../core/io_global.zig").Child.init(
-            &.{ "curl", "-s", "-o", output_path, "--max-time", "30", url },
-            @import("../core/alloc.zig").allocator,
-        );
-        _ = curl_child.spawnAndWait() catch return;
+        // Local TTS server → no DPI proxy / impersonation; atomic + status-checked.
+        if (!@import("reliable_fetch.zig").download(url, output_path, .{ .timeout_secs = 30, .impersonate = false, .use_dpi_proxy = false }).ok()) return;
     }
 
     const output_stat = @import("../core/io_global.zig").cwdStatFile(output_path) catch return;

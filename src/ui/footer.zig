@@ -225,7 +225,7 @@ pub fn aspectDropdownMenu(ctx: *c.mpv.mpv_handle, id_extra: usize) void {
     var btn_lbl: [32]u8 = undefined;
     const label = std.fmt.bufPrintZ(&btn_lbl, "{s}", .{current_ar}) catch "AR";
 
-    if (dvui.menuItemLabel(@src(), label, .{ .submenu = true }, .{ .id_extra = id_extra, .gravity_y = 0.5, .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 }, .color_text = theme.colors.text_secondary })) |r| {
+    if (dvui.menuItemLabel(@src(), label, .{ .submenu = true }, .{ .id_extra = id_extra, .gravity_y = 0.5, .color_fill = theme.transparent, .color_text = theme.colors.text_secondary })) |r| {
         var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
         defer fw.deinit();
         var menu = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = theme.colors.bg_surface, .border = dvui.Rect.all(1), .color_border = theme.colors.border_subtle });
@@ -292,7 +292,7 @@ pub fn trackDropdownMenu(ctx: *c.mpv.mpv_handle, track_type: []const u8) void {
     const kind_id: usize = if (is_aud) 1 else 2;
 
     // mpv track lang/title is untrusted metadata — validate before dvui.
-    if (dvui.menuItemLabel(@src(), @import("../core/text.zig").safeUtf8(label), .{ .submenu = true }, .{ .id_extra = kind_id, .gravity_y = 0.5, .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 }, .color_text = theme.colors.text_secondary })) |r| {
+    if (dvui.menuItemLabel(@src(), @import("../core/text.zig").safeUtf8(label), .{ .submenu = true }, .{ .id_extra = kind_id, .gravity_y = 0.5, .color_fill = theme.transparent, .color_text = theme.colors.text_secondary })) |r| {
         var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
         defer fw.deinit();
         var menu = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = theme.colors.bg_surface, .border = dvui.Rect.all(1), .color_border = theme.colors.border_subtle });
@@ -351,7 +351,7 @@ pub fn playlistDropdownMenu(p: *player.MediaPlayer) void {
     const file_count = c.mpv.torrent_get_file_count(state.torrentSession(), p.current_torrent_id);
     if (file_count <= 1) return;
 
-    if (dvui.menuItemLabel(@src(), "Files", .{ .submenu = true }, .{ .id_extra = 99, .gravity_y = 0.5, .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 }, .color_text = theme.colors.text_secondary })) |r| {
+    if (dvui.menuItemLabel(@src(), "Files", .{ .submenu = true }, .{ .id_extra = 99, .gravity_y = 0.5, .color_fill = theme.transparent, .color_text = theme.colors.text_secondary })) |r| {
         var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
         defer fw.deinit();
         var menu = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = theme.colors.bg_surface, .border = dvui.Rect.all(1), .color_border = theme.colors.border_subtle });
@@ -403,7 +403,7 @@ pub fn subLanguageDropdown() void {
     var btn_lbl: [16]u8 = undefined;
     const label = std.fmt.bufPrintZ(&btn_lbl, "{s}", .{current_lang}) catch "lang";
 
-    if (dvui.menuItemLabel(@src(), label, .{ .submenu = true }, .{ .id_extra = 300, .gravity_y = 0.5, .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 }, .color_text = theme.colors.text_secondary })) |r| {
+    if (dvui.menuItemLabel(@src(), label, .{ .submenu = true }, .{ .id_extra = 300, .gravity_y = 0.5, .color_fill = theme.transparent, .color_text = theme.colors.text_secondary })) |r| {
         var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
         defer fw.deinit();
         var menu = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = theme.colors.bg_surface, .border = dvui.Rect.all(1), .color_border = theme.colors.border_subtle });
@@ -1104,7 +1104,7 @@ fn renderScrubber(
     // above, so the buffered fill, the accent played fill and the chapter pips
     // were painted every frame and then completely hidden. Transparent here
     // keeps the slider input-only, which is what the comment always claimed.
-    const invisible = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
+    const invisible = theme.transparent;
     var slider_pct: f32 = @floatCast(percent_pos / 100.0);
     if (std.math.isNan(slider_pct)) slider_pct = 0.0;
     if (dvui.slider(@src(), .{ .fraction = &slider_pct, .color_bar = invisible }, .{
@@ -2111,7 +2111,7 @@ pub fn renderLiquidGlassOverlay() void {
                 .max_size_content = .{ .w = 120, .h = 4 },
                 .color_fill = theme.playerGlass(210),
                 .color_text = player_text_muted,
-                .corner_radius = dvui.Rect.all(2),
+                .corner_radius = dvui.Rect.all(theme.radius.xs),
                 .gravity_y = 0.5,
                 .background = true,
             })) {
@@ -2501,7 +2501,7 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
     const show_media_title = footer_pure.showMediaTitleInControls(@import("builtin").os.tag == .macos);
     const text = @import("../core/text.zig");
     const queue = @import("../services/queue.zig");
-    const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
+    const transparent = theme.transparent;
     const now_ms = @import("../core/io_global.zig").milliTimestamp();
 
     // ── Transport state (cheap, every frame) ──
@@ -2754,7 +2754,7 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
             .max_size_content = .{ .w = 90, .h = 4 },
             .color_fill = theme.colors.bg_elevated,
             .color_text = theme.colors.text_secondary,
-            .corner_radius = dvui.Rect.all(2),
+            .corner_radius = dvui.Rect.all(theme.radius.xs),
             .gravity_y = 0.5,
             .background = true,
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
@@ -2981,7 +2981,7 @@ pub fn renderResumePrompt() void {
         .corner_radius = dvui.Rect.all(theme.radius.lg),
         .padding = .{ .x = theme.spacing.lg, .y = theme.spacing.sm, .w = theme.spacing.sm, .h = theme.spacing.sm },
         .box_shadow = .{
-            .color = theme.shadow_soft,
+            .color = theme.colors.shadow,
             .offset = .{ .x = 0, .y = 4 },
             .fade = 20,
         },
@@ -3136,7 +3136,7 @@ fn renderToastBody() void {
         .corner_radius = dvui.Rect.all(theme.radius.lg),
         .padding = .{ .x = theme.spacing.lg, .y = theme.spacing.md, .w = theme.spacing.lg, .h = theme.spacing.md },
         .box_shadow = .{
-            .color = theme.shadow_soft,
+            .color = theme.colors.shadow,
             .offset = .{ .x = 0, .y = 4 },
             .fade = 20,
         },
@@ -3182,7 +3182,7 @@ pub fn renderStatsOverlay() void {
         .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
         .min_size_content = .{ .w = 220, .h = 0 },
         .box_shadow = .{
-            .color = theme.shadow_soft,
+            .color = theme.colors.shadow,
             .offset = .{ .x = 0, .y = 4 },
             .fade = 20,
         },

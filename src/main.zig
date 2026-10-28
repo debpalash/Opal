@@ -1078,7 +1078,7 @@ fn renderSlashMenu() void {
         .stay_above_parent_window = false,
     }, .{
         .background = true,
-        .color_fill = dvui.Color{ .r = 14, .g = 14, .b = 20, .a = 248 },
+        .color_fill = theme.colors.bg_surface,
         .color_border = theme.colors.accent,
         .border = dvui.Rect.all(1),
         .corner_radius = dvui.Rect.all(10),
@@ -1112,7 +1112,7 @@ fn renderSlashMenu() void {
 
         if (dvui.button(@src(), cmd.key, .{}, .{
             .id_extra = i,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
             .color_text = theme.colors.accent,
@@ -1269,6 +1269,7 @@ fn appFrame() !dvui.App.Result {
     @import("services/torrent_intents.zig").restoreIfReady();
     @import("services/downloads.zig").tick();
     @import("services/wanted.zig").tick();
+    @import("services/library_sync.zig").tick();
     @import("services/agent_tasks.zig").tick();
     @import("services/operator.zig").tick();
 

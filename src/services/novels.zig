@@ -2617,7 +2617,7 @@ fn renderReaderView() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
-        .color_fill = dvui.Color{ .r = 18, .g = 18, .b = 22, .a = 255 },
+        .color_fill = theme.colors.bg_surface,
     });
     defer scroll.deinit();
 

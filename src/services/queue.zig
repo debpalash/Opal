@@ -652,7 +652,7 @@ pub fn renderContent() void {
     // One shared play-order policy for Queue and imported playlists. Compact
     // text controls stay understandable without icon/tooltip discovery.
     {
-        const transparent = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 };
+        const transparent = theme.transparent;
         var playback_bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
@@ -1007,7 +1007,7 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"chevron-up", .{}, .{}, .{
             .id_extra = idx + 805,
             .color_text = theme.colors.text_secondary,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
         })) {
@@ -1018,7 +1018,7 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"chevron-down", .{}, .{}, .{
             .id_extra = idx + 808,
             .color_text = theme.colors.text_secondary,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
         })) {
@@ -1029,7 +1029,7 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
             .id_extra = idx + 810,
             .color_text = theme.colors.accent,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
         })) {
@@ -1040,7 +1040,7 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"trash-2", .{}, .{}, .{
             .id_extra = idx + 820,
             .color_text = theme.colors.danger,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
         })) {

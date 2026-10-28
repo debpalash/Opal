@@ -12,6 +12,7 @@ const iptv_pure = @import("../services/iptv_pure.zig");
 const music_pure = @import("../services/music_subsonic_pure.zig");
 const audiobookshelf_pure = @import("../services/audiobookshelf_pure.zig");
 const opds_pure = @import("../services/opds_pure.zig");
+const lsync_pure = @import("../services/library_sync_pure.zig");
 const anime_schedule_pure = @import("../services/anime_schedule_pure.zig");
 
 // ══════════════════════════════════════════════════════════
@@ -1341,6 +1342,18 @@ pub const AppState = struct {
         resume_loaded: std.atomic.Value(bool) = .init(false),
         nav_stack: [8]JfNavEntry = std.mem.zeroes([8]JfNavEntry),
         nav_depth: usize = 0,
+    } = .{},
+
+    // ── Device sync (library_items over /api/library/sync, ROADMAP 6.3) ──
+    // UI-thread owned. Up to MAX_PEERS paired devices, each with its own
+    // URL/token text-entry buffers, cursors (bound to the address they were
+    // earned against), learned device id and status line. The worker in
+    // services/library_sync.zig publishes results that its UI-thread tick()
+    // folds in here.
+    lsync: struct {
+        peers: [lsync_pure.MAX_PEERS]lsync_pure.Peer = [_]lsync_pure.Peer{.{}} ** lsync_pure.MAX_PEERS,
+        peer_count: usize = 0,
+        auto: bool = false,
     } = .{},
 
     // ── Audiobookshelf (self-hosted audiobooks/podcasts) ──

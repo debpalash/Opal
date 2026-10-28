@@ -2694,7 +2694,7 @@ fn renderSubtitlesTab() void {
         // Auto-detect from player — secondary (text-only).
         if (dvui.button(@src(), "Auto", .{}, .{
             .id_extra = 4302,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_text = theme.colors.text_secondary,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
@@ -4758,7 +4758,7 @@ pub fn renderDepsModal() void {
         sp.deinit();
     }
     if (dvui.button(@src(), "Skip for now", .{}, .{
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill = theme.transparent,
         .color_fill_hover = theme.colors.bg_hover,
         .color_fill_press = theme.colors.bg_elevated,
         .color_text = theme.colors.text_secondary,
@@ -5555,5 +5555,111 @@ fn renderWebUiTab() void {
                 } else state.showToast("Port must be 1024-65535");
             }
         }
+    }
+    renderDeviceSyncSection();
+}
+
+/// Settings > Web UI > Device sync: pair with up to MAX_PEERS other Opals over
+/// their JSON API (services/library_sync.zig) to exchange progress, favorites,
+/// ratings and removals. Pull-then-push; cursors persist per peer, and rows
+/// relay between peers (A -> this -> B) without echoing back to their sender.
+fn renderDeviceSyncSection() void {
+    const lsync = @import("../services/library_sync.zig");
+    const lsync_pure = @import("../services/library_sync_pure.zig");
+    const ls = &state.app.lsync;
+
+    settingRow("Device Sync", 96, @src());
+    _ = dvui.label(@src(), "Keep progress, favorites and ratings in step with your other Opals. Use each one's Web UI address and API token.", .{}, .{
+        .id_extra = 9400,
+        .color_text = theme.colors.text_tertiary,
+    });
+
+    {
+        const auto_before = ls.auto;
+        components.toggleRow(@src(), "Sync automatically", "Every 10 minutes while Opal is open", &ls.auto);
+        if (ls.auto != auto_before) state.markConfigDirty();
+    }
+
+    const busy = lsync.isBusy();
+    var remove_idx: ?usize = null;
+    for (ls.peers[0..ls.peer_count], 0..) |*p, i| {
+        const base: usize = 9410 + i * 10;
+        var card = dvui.box(@src(), .{ .dir = .vertical }, .{
+            .id_extra = i,
+            .expand = .horizontal,
+            .background = true,
+            .color_fill = theme.colors.bg_elevated,
+            .color_border = theme.colors.border_subtle,
+            .border = dvui.Rect.all(1),
+            .corner_radius = theme.dims.rad_sm,
+            .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 },
+            .padding = dvui.Rect.all(theme.spacing.sm),
+        });
+        defer card.deinit();
+
+        var title_buf: [48]u8 = undefined;
+        _ = dvui.label(@src(), "{s}", .{std.fmt.bufPrint(&title_buf, "Device {d}", .{i + 1}) catch "Device"}, .{
+            .id_extra = base,
+            .color_text = theme.colors.text_primary,
+        });
+        const before = std.hash.Wyhash.hash(0, &p.url) ^ std.hash.Wyhash.hash(1, &p.token);
+        absField("Address", &p.url, false, base + 1);
+        absField("API token", &p.token, true, base + 2);
+        if (std.hash.Wyhash.hash(0, &p.url) ^ std.hash.Wyhash.hash(1, &p.token) != before) state.markConfigDirty();
+
+        {
+            var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .id_extra = base,
+                .expand = .horizontal,
+                .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = theme.spacing.xs },
+            });
+            defer row.deinit();
+            const peer_busy = lsync.peerBusy(p);
+            if (components.actionButton(@src(), if (peer_busy) "Syncing..." else "Sync Now", .primary, base + 3) and !peer_busy) {
+                _ = lsync.syncNow(i);
+            }
+            if (components.confirmDangerButton(@src(), "Remove", base + 4)) remove_idx = i;
+        }
+
+        var line_buf: [96]u8 = undefined;
+        const last_line: []const u8 = if (p.last_sync <= 0) "Never synced" else blk: {
+            const ago = @max(0, @import("../core/io_global.zig").timestamp() - p.last_sync);
+            break :blk if (ago < 60)
+                "Last sync: just now"
+            else if (ago < 3600)
+                std.fmt.bufPrint(&line_buf, "Last sync: {d} min ago", .{@divTrunc(ago, 60)}) catch "Last sync: earlier"
+            else if (ago < 86400)
+                std.fmt.bufPrint(&line_buf, "Last sync: {d} h ago", .{@divTrunc(ago, 3600)}) catch "Last sync: earlier"
+            else
+                std.fmt.bufPrint(&line_buf, "Last sync: {d} d ago", .{@divTrunc(ago, 86400)}) catch "Last sync: earlier";
+        };
+        _ = dvui.label(@src(), "{s}", .{last_line}, .{
+            .id_extra = base + 5,
+            .color_text = theme.colors.text_secondary,
+        });
+        if (p.status_len > 0) {
+            _ = dvui.label(@src(), "{s}", .{p.status[0..p.status_len]}, .{
+                .id_extra = base + 6,
+                .color_text = theme.colors.text_tertiary,
+            });
+        }
+    }
+    if (remove_idx) |i| {
+        lsync_pure.removePeer(&ls.peers, &ls.peer_count, i);
+        state.markConfigDirty();
+    }
+
+    var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
+        .expand = .horizontal,
+        .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = theme.spacing.xs },
+    });
+    defer row.deinit();
+    if (ls.peer_count < lsync_pure.MAX_PEERS and components.actionButton(@src(), "Add Device", .secondary, 9460)) {
+        _ = lsync_pure.addPeer(&ls.peers, &ls.peer_count);
+        state.markConfigDirty();
+    }
+    // Peers already running are skipped by syncNow; the rest start in parallel.
+    if (ls.peer_count > 1 and components.actionButton(@src(), if (busy) "Syncing..." else "Sync All", .secondary, 9461)) {
+        _ = lsync.syncNow(null);
     }
 }

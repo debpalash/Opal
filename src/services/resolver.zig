@@ -709,7 +709,9 @@ pub fn isRemoteQueueable(item: *const ResolvedItem) bool {
     };
 }
 
-pub fn requestRemoteAction(generation: u32, key: u64, kind: RemoteActionKind) RemoteActionResult {
+/// `pick` selects a folded source (see sourceCount/withSource); the others stay
+/// as fallbacks. 0 is the row's own primary and always valid.
+pub fn requestRemoteAction(generation: u32, key: u64, kind: RemoteActionKind, pick: usize) RemoteActionResult {
     var found: ?ResolvedItem = null;
     lifecycle_mutex.lock();
     if (generation != run_gen.load(.acquire)) {
@@ -719,12 +721,12 @@ pub fn requestRemoteAction(generation: u32, key: u64, kind: RemoteActionKind) Re
     results_mutex.lock();
     for (results[0..result_count]) |item| {
         if (actionKey(&item) != key) continue;
-        if (kind == .queue and !isRemoteQueueable(&item)) {
+        if ((kind == .queue and !isRemoteQueueable(&item)) or (pick > 0 and pick >= sourceCount(&item))) {
             results_mutex.unlock();
             lifecycle_mutex.unlock();
             return .not_found;
         }
-        found = item;
+        found = if (pick > 0) withSource(&item, pick) else item;
         break;
     }
     results_mutex.unlock();
@@ -4289,6 +4291,50 @@ pub fn playItem(idx: usize) void {
     const item = results[idx];
     results_mutex.unlock();
     playResolvedItem(&item);
+}
+
+/// Copy of `item` with its `pick`-th folded source (see pushInto) promoted to
+/// primary and the others kept as fallbacks, in order. Pure reorder lives in
+/// resolver_dedup_pure.promoteSource.
+pub fn withSource(item: *const ResolvedItem, pick: usize) ResolvedItem {
+    var out = item.*;
+    const order = @import("resolver_dedup_pure.zig").promoteSource(
+        item.url[0..item.url_len],
+        item.fallback_url[0..item.fallback_url_len],
+        item.fallback_url_2[0..item.fallback_url_2_len],
+        pick,
+    );
+    copyField(&out.url, &out.url_len, order[0]);
+    copyField(&out.fallback_url, &out.fallback_url_len, order[1]);
+    copyField(&out.fallback_url_2, &out.fallback_url_2_len, order[2]);
+    return out;
+}
+
+/// URL of the row's `i`-th folded source (i < sourceCount), in the same order
+/// withSource/promoteSource index them. Slice into `item`.
+pub fn sourceUrl(item: *const ResolvedItem, i: usize) []const u8 {
+    const order = @import("resolver_dedup_pure.zig").promoteSource(
+        item.url[0..item.url_len],
+        item.fallback_url[0..item.fallback_url_len],
+        item.fallback_url_2[0..item.fallback_url_2_len],
+        0,
+    );
+    return if (i < order.len) order[i] else "";
+}
+
+/// Folded source count for a result row (primary + fallbacks). Only sources
+/// pushInto folds (fallbackCompatible) count; Plex's fallback_url is its own
+/// direct-part transport for the same row, not an alternate source.
+pub fn sourceCount(item: *const ResolvedItem) usize {
+    switch (item.source) {
+        .youtube, .stremio, .local, .music, .radio => {},
+        else => return @intFromBool(item.url_len > 0),
+    }
+    return @import("resolver_dedup_pure.zig").sourceCount(
+        item.url[0..item.url_len],
+        item.fallback_url[0..item.fallback_url_len],
+        item.fallback_url_2[0..item.fallback_url_2_len],
+    );
 }
 
 pub fn playResolvedItem(item: *const ResolvedItem) void {

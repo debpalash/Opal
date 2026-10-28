@@ -809,6 +809,7 @@ function wireSettings(){
     // loadSettings() overwrite the refusal with its idle text, leaving the user
     // with a reverted field and no explanation.
     if (!r.ok) await loadSettings();
+    else if (key === 'theme') applyTheme(val);
     $('cfg-hint').textContent = r.ok ? 'Saved ✓' : (d.error || 'Could not save ' + key);
   };
   $('cfg-list').querySelectorAll('input[type=checkbox]').forEach(el => el.onchange = () => save(el));

@@ -68,45 +68,9 @@ pub fn refreshOnce() void {
 }
 
 fn curlInto(url: []const u8, buf: []u8) usize {
-    // Same DPI-bypass routing as eztv_calendar.curlInto — this one also hits the
-    // eztv get-torrents API (for "is the latest aired episode available?"), and
-    // was likewise ignoring the user's bypass setting.
-    var argv: [12][]const u8 = undefined;
-    var argc: usize = 0;
-    for ([_][]const u8{ "curl", "-fsSL", "--connect-timeout", "3", "--max-time", "8" }) |x| {
-        argv[argc] = x;
-        argc += 1;
-    }
-    if (@import("dpi_bypass.zig").proxyArgs()) |pa| {
-        for (pa) |x| {
-            if (argc >= argv.len - 2) break;
-            argv[argc] = x;
-            argc += 1;
-        }
-    }
-    argv[argc] = "--";
-    argc += 1;
-    argv[argc] = url;
-    argc += 1;
-
-    var child = io.Child.init(argv[0..argc], alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    child.spawn() catch return 0;
-    const n = if (child.stdout) |*so| io.readAll(so, buf) catch 0 else 0;
-    if (n == buf.len) {
-        var extra: [1]u8 = undefined;
-        const extra_n = if (child.stdout) |*so| io.readAll(so, &extra) catch 1 else 1;
-        if (extra_n > 0) {
-            _ = child.kill() catch {};
-            return 0;
-        }
-    }
-    const term = child.wait() catch return 0;
-    return if (switch (term) {
-        .exited => |code| code == 0,
-        else => false,
-    }) n else 0;
+    // reliable-fetch chains the DPI-bypass proxy and enforces HTTP status.
+    const body = @import("reliable_fetch.zig").fetch(url, buf, .{ .timeout_secs = 8, .impersonate = false }) orelse return 0;
+    return body.len;
 }
 
 // ══════════════════════════════════════════════════════════

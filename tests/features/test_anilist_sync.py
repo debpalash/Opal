@@ -32,7 +32,8 @@ def test_anilist_sync_lifecycle():
         "credential copy is race-free": "credential_mutex" in service
             and "@memcpy(token[0..token_len], access_token[0..token_len])" in service,
         "owned bounded delivery": "workers.spawn(drainOutbox" in service
-            and '"--connect-timeout"' in service and '"--max-time"' in service,
+            and ".connect_timeout_secs = 5" in service and ".timeout_secs = 15" in service
+            and 'reliable_fetch.zig").request(' in service,
         "web lifecycle": 'id="anilist-authorize"' in ui
             and "loadSyncAccounts" in ui and "anilist-disconnect" in ui
             and "anilist-retry" in ui,

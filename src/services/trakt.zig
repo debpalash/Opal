@@ -373,18 +373,11 @@ fn refreshAccessToken(expected_revision: u32) bool {
         "{{\"refresh_token\":\"{s}\",\"client_id\":\"{s}\",\"client_secret\":\"{s}\",\"redirect_uri\":\"urn:ietf:wg:oauth:2.0:oob\",\"grant_type\":\"refresh_token\"}}",
         .{ refresh[0..refresh_len], cid[0..cid_len], secret[0..secret_len] },
     ) catch return false;
-    const alloc = @import("../core/alloc.zig").allocator;
-    var child = io_global.Child.init(&.{
-        "curl",                              "-fsS", "--connect-timeout",              "5",  "--max-time", "15", "-X", "POST",
-        "https://auth.trakt.tv/oauth/token", "-H",   "Content-Type: application/json", "-d", body,
-    }, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    child.spawn() catch return false;
+    defer @memset(&body_buf, 0);
+    // client_secret + refresh_token travel on curl's stdin, never argv.
     var response: [4096]u8 = undefined;
-    const n = if (child.stdout) |*stdout| io_global.readAll(stdout, &response) catch 0 else 0;
-    const result = child.wait() catch return false;
-    if (result != .exited or result.exited != 0) return false;
+    const got = postJson("https://auth.trakt.tv/oauth/token", &response, null, body, &.{}) orelse return false;
+    const n = got.len;
     const next_access = extractJsonStr(response[0..n], "\"access_token\":\"") orelse return false;
     const next_refresh = extractJsonStr(response[0..n], "\"refresh_token\":\"") orelse return false;
     if (next_access.len == 0 or next_access.len > access_token.len or next_refresh.len == 0 or next_refresh.len > refresh_token.len) return false;
@@ -406,6 +399,21 @@ fn refreshAccessToken(expected_revision: u32) bool {
     return true;
 }
 
+/// JSON POST through the reliable-fetch seam. `secret_body` (credentials) is
+/// sent over curl's stdin config; `public_body` may sit in argv. Returns the
+/// body only on a 2xx/3xx response (old `curl -f` semantics).
+fn postJson(url: []const u8, out: []u8, public_body: ?[]const u8, secret_body: ?[]const u8, secret_headers: []const @import("reliable_fetch.zig").Header) ?[]const u8 {
+    return @import("reliable_fetch.zig").fetch(url, out, .{
+        .headers = &.{.{ .name = "Content-Type", .value = "application/json" }},
+        .secret_headers = secret_headers,
+        .post_body = public_body,
+        .secret_post_body = secret_body,
+        .timeout_secs = 15,
+        .connect_timeout_secs = 5,
+        .impersonate = false,
+    });
+}
+
 fn revokeAuthorization(expected_revision: u32) void {
     credential_mutex.lock();
     if (credential_revision.load(.acquire) != expected_revision) {
@@ -423,7 +431,6 @@ fn revokeAuthorization(expected_revision: u32) void {
 }
 
 fn postScrobble(endpoint: []const u8, json_body: []const u8) DeliveryResult {
-    const alloc = @import("../core/alloc.zig").allocator;
     var url_buf: [256]u8 = undefined;
     const url = std.fmt.bufPrintZ(&url_buf, "{s}{s}", .{ TRAKT_API_URL, endpoint }) catch return .{ .status = .retry, .revision = 0 };
 
@@ -442,29 +449,25 @@ fn postScrobble(endpoint: []const u8, json_body: []const u8) DeliveryResult {
     if (token_len == 0 or cid_len == 0) return .{ .status = .retry, .revision = revision };
 
     var auth_buf: [300]u8 = undefined;
-    const auth = std.fmt.bufPrintZ(&auth_buf, "Authorization: Bearer {s}", .{token[0..token_len]}) catch return .{ .status = .retry, .revision = revision };
+    defer @memset(&auth_buf, 0);
+    const bearer = std.fmt.bufPrint(&auth_buf, "Bearer {s}", .{token[0..token_len]}) catch return .{ .status = .retry, .revision = revision };
 
-    var cid_buf: [200]u8 = undefined;
-    const cid_hdr = std.fmt.bufPrintZ(&cid_buf, "trakt-api-key: {s}", .{cid[0..cid_len]}) catch return .{ .status = .retry, .revision = revision };
-
-    var child = io_global.Child.init(&.{
-        "curl",                           "-fsS",    "--connect-timeout",    "5",                 "--max-time",
-        "15",                             "-X",      "POST",                 url,                 "-H",
-        "Content-Type: application/json", "-H",      "trakt-api-version: 2", "--config",          "-",
-        "-d",                             json_body, "-o",                   io_global.devNull(), "-w",
-        "%{http_code}",
-    }, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    @import("../core/curl_secret.zig").spawnWithHeaders(&child, &.{ cid_hdr, auth }) catch {
+    var resp: [4096]u8 = undefined;
+    var hdrs: [4096]u8 = undefined;
+    const res = @import("reliable_fetch.zig").request(url, &resp, &hdrs, .{
+        .headers = &.{ .{ .name = "Content-Type", .value = "application/json" }, .{ .name = "trakt-api-version", .value = "2" } },
+        .secret_headers = &.{ .{ .name = "trakt-api-key", .value = cid[0..cid_len] }, .{ .name = "Authorization", .value = bearer } },
+        .post_body = json_body,
+        .timeout_secs = 15,
+        .connect_timeout_secs = 5,
+        .impersonate = false,
+    });
+    if (res.failure == .spawn or res.failure == .invalid_input) {
         logs.pushLog("warn", "trakt", "Failed to send scrobble", false);
         return .{ .status = .retry, .revision = revision };
-    };
-    var status_buf: [8]u8 = undefined;
-    const n = if (child.stdout) |*stdout| io_global.readAll(stdout, &status_buf) catch 0 else 0;
-    const result = child.wait() catch return .{ .status = .retry, .revision = revision };
-    const status = std.fmt.parseInt(u16, std.mem.trim(u8, status_buf[0..n], " \r\n\t"), 10) catch 0;
-    if (result == .exited and result.exited == 0 and status >= 200 and status < 300) {
+    }
+    const status = res.status;
+    if (status >= 200 and status < 300) {
         logs.pushLog("info", "trakt", "Scrobble sent", false);
         return .{ .status = .success, .revision = revision };
     }
@@ -497,7 +500,6 @@ pub fn startDeviceAuth() bool {
 
 fn deviceAuthWorker(generation: u32) void {
     defer if (auth_generation.load(.acquire) == generation) auth_pending.store(false, .release);
-    const alloc = @import("../core/alloc.zig").allocator;
 
     var cid: [128]u8 = undefined;
     var cid_len: usize = 0;
@@ -515,17 +517,8 @@ fn deviceAuthWorker(generation: u32) void {
     var json_buf: [256]u8 = undefined;
     const body = std.fmt.bufPrintZ(&json_buf, "{{\"client_id\":\"{s}\"}}", .{cid[0..cid_len]}) catch return;
 
-    var child = io_global.Child.init(&.{
-        "curl",                                "-fsS", "--connect-timeout",              "5",  "--max-time", "15", "-X", "POST",
-        TRAKT_API_URL ++ "/oauth/device/code", "-H",   "Content-Type: application/json", "-d", body,
-    }, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    child.spawn() catch return;
-
     var out: [4096]u8 = undefined;
-    const n = if (child.stdout) |*s| io_global.readAll(s, &out) catch 0 else 0;
-    _ = child.wait() catch {};
+    const n = (postJson(TRAKT_API_URL ++ "/oauth/device/code", &out, body, null, &.{}) orelse @as([]const u8, "")).len;
 
     if (n < 10) return;
     const resp = out[0..n];
@@ -562,17 +555,11 @@ fn deviceAuthWorker(generation: u32) void {
             code[0..code_len], cid[0..cid_len], secret[0..secret_len],
         }) catch return;
 
-        var poll = io_global.Child.init(&.{
-            "curl",                                 "-fsS", "--connect-timeout",              "5",  "--max-time", "15", "-X", "POST",
-            TRAKT_API_URL ++ "/oauth/device/token", "-H",   "Content-Type: application/json", "-d", pb,
-        }, alloc);
-        poll.stdout_behavior = .Pipe;
-        poll.stderr_behavior = .Ignore;
-        poll.spawn() catch continue;
-
+        defer @memset(&poll_body, 0);
+        // client_secret rides stdin. A pending (400) poll yields null → pn 0,
+        // matching the old `curl -f` behaviour.
         var poll_out: [4096]u8 = undefined;
-        const pn = if (poll.stdout) |*s| io_global.readAll(s, &poll_out) catch 0 else 0;
-        _ = poll.wait() catch {};
+        const pn = (postJson(TRAKT_API_URL ++ "/oauth/device/token", &poll_out, null, pb, &.{}) orelse @as([]const u8, "")).len;
 
         if (pn > 10) {
             if (extractJsonStr(poll_out[0..pn], "\"access_token\":\"")) |at| {

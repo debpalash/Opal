@@ -820,7 +820,7 @@ pub fn renderGrid() !void {
                             _ = dvui.label(@src(), "Dead torrent", .{}, .{ .color_text = theme.colors.danger, .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 } });
                             _ = dvui.label(@src(), "No peers found after 15 seconds.", .{}, .{ .color_text = theme.colors.text_secondary, .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 } });
                             if (dvui.button(@src(), "Close Stream", .{}, .{
-                                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                                .color_fill = theme.transparent,
                                 .color_fill_hover = theme.colors.bg_hover,
                                 .color_fill_press = theme.colors.bg_elevated,
                                 .color_text = theme.colors.danger,
@@ -1517,7 +1517,7 @@ pub fn renderGrid() !void {
                 if (dvui.button(@src(), "", .{}, .{
                     .id_extra = i + 5000,
                     .expand = .both,
-                    .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                    .color_fill = theme.transparent,
                 })) {
                     state.app.active_player_idx = i;
                 }
@@ -1694,7 +1694,7 @@ fn renderContinueWatching() void {
             // signal resumability; the action stays neutral.
             const resume_clicked = dvui.button(@src(), "Resume", .{}, .{
                 .id_extra = si + 43400,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill = theme.transparent,
                 .color_fill_hover = theme.colors.bg_hover,
                 .color_fill_press = theme.colors.bg_elevated,
                 .color_text = theme.colors.text_secondary,

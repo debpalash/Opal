@@ -127,7 +127,7 @@ fn renderCard(i: usize, card_w: f32, p: *const pure.Podcast) void {
             .id_extra = i + 2000,
             .background = true,
             .color_fill = theme.colors.bg_elevated,
-            .corner_radius = dvui.Rect.all(8),
+            .corner_radius = dvui.Rect.all(theme.radius.lg),
             .min_size_content = .{ .w = card_w, .h = card_w },
             .max_size_content = .{ .w = card_w, .h = card_w },
             .padding = dvui.Rect.all(0),

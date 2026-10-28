@@ -46,7 +46,7 @@ def test_vndb_catalog():
 
         # ── Service: async POST worker, thread-safety, browse-only handoff ──
         "api.vndb.org endpoint": "https://api.vndb.org/kana/vn" in svc,
-        "http POST method": '"--data"' in svc and "curlPost" in svc and "bounded_process.zig" in svc,
+        "http POST method": '.post_body = body' in svc and "curlPost" in svc and "reliable_fetch.zig" in svc,
         "search worker": "pub fn searchVndb" in svc and "fn fetchWorker" in svc,
         "popular one-shot": "pub fn loadPopularOnce" in svc,
         "detail view": "fn renderDetail" in svc and "pub fn openDetail" in svc,
@@ -57,7 +57,7 @@ def test_vndb_catalog():
         "generation guard": "LatestRequest" in svc and "search_request.isCurrent" in svc,
         "threads detached": "_ = std.Thread.spawn(" not in svc,
         # curl only — std.http SEGVs on some ISP TLS resets (see comics.zig).
-        "curl not std.http": "std.http.Client" not in svc and '"curl"' in svc,
+        "curl not std.http": "std.http.Client" not in svc and "reliable_fetch.zig" in svc,
 
         # ── Enum → nav → render dispatch → shell subtab ──
         # Assert MEMBERSHIP, not position (concurrent tab additions).

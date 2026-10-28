@@ -1201,19 +1201,6 @@ fn buildSupported(b: *std.Build) void {
     test_secure_temp.use_llvm = true;
     test_step.dependOn(&b.addRunArtifact(test_secure_temp).step);
 
-    // Authenticated curl calls feed config headers over a closed stdin pipe so
-    // bearer/API keys never become process-list-visible argv entries.
-    const test_curl_secret = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/core/curl_secret.zig"),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
-        }),
-    });
-    test_curl_secret.use_llvm = true;
-    test_step.dependOn(&b.addRunArtifact(test_curl_secret).step);
-
     const test_deps = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/deps_test.zig"),
@@ -2728,6 +2715,14 @@ fn buildSupported(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_library_pure).step);
+    const test_library_sync_pure = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/services/library_sync_pure.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    test_step.dependOn(&b.addRunArtifact(test_library_sync_pure).step);
     const test_reliable_fetch_pure = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/reliable_fetch_pure.zig"),

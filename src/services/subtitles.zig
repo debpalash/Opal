@@ -5,6 +5,7 @@ const c = @import("../core/c.zig");
 const alloc = @import("../core/alloc.zig").allocator;
 const io_g = @import("../core/io_global.zig");
 const sp = @import("subtitles_pure.zig");
+const rf = @import("reliable_fetch.zig");
 
 // ══════════════════════════════════════════════════════════
 // OpenSubtitles.com REST API v1 — Subtitle Search & Download
@@ -129,35 +130,24 @@ fn doSearch(query: []const u8, lang: []const u8) void {
     }
     url_buf[url_len] = 0;
 
-    // Build Api-Key header
-    var hdr_buf: [160]u8 = undefined;
+    // Api-Key rides curl's stdin config via the seam — never argv.
     const api_key = state.app.opensub_api_key[0..state.app.opensub_api_key_len];
-    const hdr_prefix = "Api-Key: ";
-    @memcpy(hdr_buf[0..hdr_prefix.len], hdr_prefix);
-    @memcpy(hdr_buf[hdr_prefix.len..][0..api_key.len], api_key);
-    hdr_buf[hdr_prefix.len + api_key.len] = 0;
-
-    const hdr_len = hdr_prefix.len + api_key.len;
-    const hdr_slice: []const u8 = hdr_buf[0..hdr_len];
     const url_slice: []const u8 = url_buf[0..url_len];
-
-    var child = @import("../core/io_global.zig").Child.init(
-        &.{ "curl", "-s", "--max-time", "10", "-H", "Content-Type: application/json", "--config", "-", "-H", "User-Agent: " ++ USER_AGENT, url_slice },
-        @import("../core/alloc.zig").allocator,
-    );
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    @import("../core/curl_secret.zig").spawnWithHeaders(&child, &.{hdr_slice}) catch {
+    var response_buf: [32768]u8 = undefined;
+    var hdrs: [8192]u8 = undefined;
+    // Error documents still parse (they yield zero results), as before.
+    const res = rf.request(url_slice, &response_buf, &hdrs, .{
+        .user_agent = USER_AGENT,
+        .headers = &.{.{ .name = "Content-Type", .value = "application/json" }},
+        .secret_headers = &.{.{ .name = "Api-Key", .value = api_key }},
+        .timeout_secs = 10,
+        .impersonate = false,
+    });
+    if (res.failure == .spawn or res.failure == .invalid_input) {
         setError("Failed to spawn curl");
         return;
-    };
-
-    var response_buf: [32768]u8 = undefined;
-    var n: usize = 0;
-    if (child.stdout) |*stdout| {
-        n = @import("../core/io_global.zig").readAll(stdout, &response_buf) catch 0;
     }
-    _ = child.wait() catch {};
+    const n = res.body.len;
 
     if (n == 0) {
         setError("No response from OpenSubtitles");
@@ -346,34 +336,22 @@ fn doDownload(file_id: i64) void {
     var body_buf: [64]u8 = undefined;
     const body = std.fmt.bufPrintZ(&body_buf, "{{\"file_id\":{d}}}", .{file_id}) catch return;
 
-    // Api-Key header
-    var hdr_buf: [160]u8 = undefined;
-    const hdr_prefix = "Api-Key: ";
-    @memcpy(hdr_buf[0..hdr_prefix.len], hdr_prefix);
-    @memcpy(hdr_buf[hdr_prefix.len..][0..api_key.len], api_key);
-    hdr_buf[hdr_prefix.len + api_key.len] = 0;
-
-    const hdr_len = hdr_prefix.len + api_key.len;
-    const hdr_slice: []const u8 = hdr_buf[0..hdr_len];
-    const body_slice: []const u8 = body;
-
-    var child = @import("../core/io_global.zig").Child.init(
-        &.{ "curl", "-s", "--max-time", "15", "-X", "POST", "-H", "Content-Type: application/json", "--config", "-", "-H", "User-Agent: " ++ USER_AGENT, "-d", body_slice, API_BASE ++ "/download" },
-        @import("../core/alloc.zig").allocator,
-    );
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    @import("../core/curl_secret.zig").spawnWithHeaders(&child, &.{hdr_slice}) catch {
+    var resp_buf: [4096]u8 = undefined;
+    var hdrs: [8192]u8 = undefined;
+    // Error bodies carry a "message" we surface below, so read any status.
+    const res = rf.request(API_BASE ++ "/download", &resp_buf, &hdrs, .{
+        .user_agent = USER_AGENT,
+        .headers = &.{.{ .name = "Content-Type", .value = "application/json" }},
+        .secret_headers = &.{.{ .name = "Api-Key", .value = api_key }},
+        .post_body = body,
+        .timeout_secs = 15,
+        .impersonate = false,
+    });
+    if (res.failure == .spawn or res.failure == .invalid_input) {
         state.showToast("Download failed (curl)");
         return;
-    };
-
-    var resp_buf: [4096]u8 = undefined;
-    var n: usize = 0;
-    if (child.stdout) |*stdout| {
-        n = @import("../core/io_global.zig").readAll(stdout, &resp_buf) catch 0;
     }
-    _ = child.wait() catch {};
+    const n = res.body.len;
 
     if (n == 0) {
         state.showToast("No download response");
@@ -399,25 +377,11 @@ fn doDownload(file_id: i64) void {
     var path_buf: [640]u8 = undefined;
     const sub_path = std.fmt.bufPrintZ(&path_buf, "{s}/opal_sub_{d}.srt", .{ subs_dir, file_id }) catch return;
 
-    // Need null-terminated link for curl
-    var link_z: [512]u8 = undefined;
-    const link_len = @min(link.len, link_z.len - 1);
-    @memcpy(link_z[0..link_len], link[0..link_len]);
-    link_z[link_len] = 0;
-
-    const link_slice: []const u8 = link_z[0..link_len];
-
-    var dl_child = @import("../core/io_global.zig").Child.init(
-        &.{ "curl", "-s", "--max-time", "15", "-L", "-o", sub_path, link_slice },
-        @import("../core/alloc.zig").allocator,
-    );
-    dl_child.stdout_behavior = .Ignore;
-    dl_child.stderr_behavior = .Ignore;
-    dl_child.spawn() catch {
+    const link_slice: []const u8 = link[0..@min(link.len, 511)];
+    if (!rf.download(link_slice, sub_path, .{ .user_agent = USER_AGENT, .timeout_secs = 15, .impersonate = false }).ok()) {
         state.showToast("Download failed");
         return;
-    };
-    _ = dl_child.wait() catch {};
+    }
 
     // Load into mpv
     if (state.app.active_player_idx < state.app.players.items.len) {
@@ -534,23 +498,24 @@ fn doSubdlSearch(query: []const u8, lang: []const u8) void {
         return;
     };
 
-    var child = io_g.Child.init(
-        &.{ "curl", "-s", "--max-time", "15", "-A", USER_AGENT, url },
-        alloc,
-    );
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    child.spawn() catch {
-        setSubdlError("Failed to spawn curl");
+    // The key-bearing URL goes over curl's stdin config, not argv.
+    const response_buf = alloc.alloc(u8, 64 * 1024) catch {
+        setSubdlError("Out of memory");
         return;
     };
-
-    var response_buf: [64 * 1024]u8 = undefined;
-    var n: usize = 0;
-    if (child.stdout) |*stdout| {
-        n = io_g.readAll(stdout, &response_buf) catch 0;
+    defer alloc.free(response_buf);
+    var hdrs: [8192]u8 = undefined;
+    const res = rf.request(url, response_buf, &hdrs, .{
+        .user_agent = USER_AGENT,
+        .timeout_secs = 15,
+        .impersonate = false,
+        .secret_url = true,
+    });
+    if (res.failure == .spawn or res.failure == .invalid_input) {
+        setSubdlError("Failed to spawn curl");
+        return;
     }
-    _ = child.wait() catch {};
+    const n = res.body.len;
 
     if (n == 0) {
         setSubdlError("No response from Subdl");
@@ -657,17 +622,10 @@ fn doSubdlDownload(url_path: []const u8) void {
         state.showToast("Path error");
         return;
     };
-    var dl = io_g.Child.init(
-        &.{ "curl", "-s", "-L", "--max-time", "25", "-A", USER_AGENT, "-o", zip_path, url },
-        alloc,
-    );
-    dl.stdout_behavior = .Ignore;
-    dl.stderr_behavior = .Ignore;
-    dl.spawn() catch {
-        state.showToast("Download failed (curl)");
+    if (!rf.download(url, zip_path, .{ .user_agent = USER_AGENT, .timeout_secs = 25, .impersonate = false }).ok()) {
+        state.showToast("Subtitle download failed");
         return;
-    };
-    _ = dl.wait() catch {};
+    }
 
     const st = io_g.cwdStatFile(zip_path) catch {
         state.showToast("Subtitle download failed");

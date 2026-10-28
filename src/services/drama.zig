@@ -280,37 +280,26 @@ fn fetchPage(job: CatalogJob, append: bool) void {
 
 const MAX_PARALLEL = 8;
 
-/// GET each url concurrently (separate curl children) into its own buffer.
-/// `lens[i]` is the body length, 0 on failure. Plain keyless HTTPS JSON; the
-/// responses are gzip on the wire, so `--compressed`.
+/// GET each url concurrently (one reliable-fetch worker each) into its own
+/// buffer. `lens[i]` is the body length, 0 on failure (transport, non-2xx, or a
+/// body that would overflow its buffer). Plain keyless HTTPS JSON.
 fn getMany(urls: []const []const u8, bufs: []const []u8, lens: []usize) void {
     std.debug.assert(urls.len <= MAX_PARALLEL);
-    var argvs: [MAX_PARALLEL][11][]const u8 = undefined;
-    var children: [MAX_PARALLEL]io_g.Child = undefined;
-    var spawned: [MAX_PARALLEL]bool = .{false} ** MAX_PARALLEL;
+    const G = struct {
+        fn one(url: []const u8, buf: []u8, len: *usize) void {
+            const body = @import("reliable_fetch.zig").fetch(url, buf, .{ .keep_head_on_overflow = true, .user_agent = "Opal", .timeout_secs = 12, .impersonate = false }) orelse return;
+            len.* = body.len;
+        }
+    };
+    var threads: [MAX_PARALLEL]?std.Thread = .{null} ** MAX_PARALLEL;
     for (urls, 0..) |url, i| {
         lens[i] = 0;
-        argvs[i] = .{ "curl", "-s", "-L", "--compressed", "--connect-timeout", "4", "--max-time", "12", "-A", "Opal", url };
-        children[i] = io_g.Child.init(&argvs[i], alloc);
-        children[i].stdin_behavior = .Ignore;
-        children[i].stdout_behavior = .Pipe;
-        children[i].stderr_behavior = .Ignore;
-        children[i].spawn() catch continue;
-        spawned[i] = true;
+        threads[i] = @import("../core/workers.zig").spawnLegacy(G.one, .{ url, bufs[i], &lens[i] }) catch blk: {
+            G.one(url, bufs[i], &lens[i]);
+            break :blk null;
+        };
     }
-    for (urls, 0..) |_, i| {
-        if (!spawned[i]) continue;
-        const n = if (children[i].stdout) |*so| io_g.readAll(so, bufs[i]) catch 0 else 0;
-        lens[i] = n;
-        // A body that filled the buffer was truncated and the child may be
-        // blocked writing to the pipe: stop it instead of waiting forever.
-        if (n >= bufs[i].len) {
-            _ = children[i].kill() catch {};
-            lens[i] = 0;
-        } else {
-            _ = children[i].wait() catch {};
-        }
-    }
+    for (threads[0..urls.len]) |t| if (t) |th| th.join();
 }
 
 const COUNTRY_BUF: usize = 384 * 1024;
@@ -764,7 +753,7 @@ fn renderSearchRow() void {
     if (isSearchResults()) {
         if (dvui.button(@src(), "Clear", .{}, .{
             .color_text = theme.colors.text_secondary,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
             .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
@@ -953,7 +942,7 @@ fn renderCard(item: *state.DramaResult, idx: usize) void {
         .id_extra = idx + 500,
         .expand = .horizontal,
         .color_text = theme.colors.text_primary,
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill = theme.transparent,
         .color_fill_hover = theme.colors.bg_hover,
         .color_fill_press = theme.colors.bg_elevated,
         .padding = .{ .x = 4, .y = 2, .w = 4, .h = 0 },

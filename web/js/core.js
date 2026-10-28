@@ -26,6 +26,29 @@ if (location.hash.startsWith('#setup=')) {
 
 const $ = id => document.getElementById(id);
 
+// ── Theme: follow the desktop's active preset ──
+// app.css carries one token block per native preset (theme.zig), keyed by
+// <html data-theme>. The preset name comes from /api/settings ("Rosé" → rose);
+// the last one seen is cached so the next load paints in the right palette
+// before the API answers. Unknown names fall back to the :root (Midnight) set.
+const THEME_PRESETS = ['midnight','abyss','phantom','nord','solarized','rose','ember'];
+function applyTheme(name){
+  const key = String(name || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  if (!THEME_PRESETS.includes(key)) return;
+  if (key === 'midnight') delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = key;
+  const meta = document.querySelector('meta[name=theme-color]');
+  if (meta) meta.content = getComputedStyle(document.documentElement).getPropertyValue('--bg-app').trim() || meta.content;
+  try { localStorage.setItem('opal_theme', key); } catch {}
+}
+try { applyTheme(localStorage.getItem('opal_theme')); } catch {}
+function syncThemeFromDesktop(){
+  api('/settings').then(d => {
+    const t = (Array.isArray(d.settings) ? d.settings : []).find(k => k.name === 'theme');
+    if (t) applyTheme(t.value);
+  }).catch(() => {});
+}
+
 function wireKeyboardClick(element, label){
   if (!element) return element;
   element.setAttribute('role', 'button');
@@ -288,6 +311,7 @@ function paired(){
   if (HOSTED) $('dest-row').style.display = 'none';
   loadCalendar();
   startStatus();
+  syncThemeFromDesktop();
   loadPage(currentPage);
 }
 

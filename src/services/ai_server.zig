@@ -658,7 +658,7 @@ pub fn startModelDownload() void {
     const dl_str = "Downloading...";
     @memcpy(download_progress_buf[0..dl_str.len], dl_str);
     download_progress_len = dl_str.len;
-    logs.pushLog("info", "ai", "Downloading GGUF model via curl -L --progress-bar into local models folder", false);
+    logs.pushLog("info", "ai", "Downloading GGUF model (atomic, status-checked) into local models folder", false);
 
     const t = @import("../core/workers.zig").spawnLegacy(downloadModelThread, .{}) catch {
         model_downloading = false;
@@ -687,30 +687,21 @@ fn downloadModelThread() void {
         return;
     };
 
-    const argv = [_][]const u8{
-        "curl", "-L",     "--progress-bar",
-        "-o",   out_path, activeModelUrl(),
-    };
-
-    var child = @import("../core/io_global.zig").Child.init(&argv, @import("../core/alloc.zig").allocator);
-    child.stdout_behavior = .Inherit;
-    child.stderr_behavior = .Inherit;
-    child.spawn() catch {
-        setError("Failed to start download. Is curl installed?");
-        return;
-    };
-
     var prog_buf: [64]u8 = undefined;
     const prog = std.fmt.bufPrint(&prog_buf, "Downloading {s}…", .{activeModelSizeLabel()}) catch "Downloading…";
     @memcpy(download_progress_buf[0..prog.len], prog);
     download_progress_len = prog.len;
 
-    const result = child.wait() catch {
-        setError("Download failed");
+    // Reliable-fetch seam: status-checked + atomic (`<model>.part` then
+    // rename), so an interrupted multi-GB pull or an HTML error page can never
+    // be mistaken for a model by model_exists. Generous bound: 6 h.
+    const result = @import("reliable_fetch.zig").download(activeModelUrl(), out_path, .{ .timeout_secs = 6 * 3600, .impersonate = false });
+    if (result.failure == .spawn) {
+        setError("Failed to start download. Is curl installed?");
         return;
-    };
+    }
 
-    if (result == .exited and result.exited == 0) {
+    if (result.ok()) {
         model_exists = true;
         const done = "Download complete!";
         @memcpy(download_progress_buf[0..done.len], done);
@@ -722,7 +713,7 @@ fn downloadModelThread() void {
         // Self-install completion → bring the server up without another click.
         startServer();
     } else {
-        setError("Download failed (curl exit error)");
+        setError("Download failed (HTTP/transfer error)");
     }
 }
 
@@ -862,22 +853,12 @@ fn downloadLlamaServer(comptime bin_dir: []const u8, bin_path: []const u8) void 
     _ = bin_dir;
     const release_url = "https://github.com/Michael-A-Kuykendall/shimmy/releases/latest/download/shimmy-linux-x86_64";
 
-    const dl_argv = [_][]const u8{
-        "curl", "-L",     "--progress-bar",
-        "-o",   bin_path, release_url,
-    };
-    var dl = @import("../core/io_global.zig").Child.init(&dl_argv, @import("../core/alloc.zig").allocator);
-    dl.stdout_behavior = .Inherit;
-    dl.stderr_behavior = .Inherit;
-    dl.spawn() catch {
+    const dl = @import("reliable_fetch.zig").download(release_url, bin_path, .{ .timeout_secs = 3600, .impersonate = false });
+    if (dl.failure == .spawn) {
         setError("curl failed — install curl first");
         return;
-    };
-    const dl_result = dl.wait() catch {
-        setError("Download failed");
-        return;
-    };
-    if (dl_result != .exited or dl_result.exited != 0) {
+    }
+    if (!dl.ok()) {
         setError("Download failed (curl error)");
         return;
     }
@@ -919,38 +900,24 @@ fn healthThread() void {
     const srv = getServerUrl(&srv_buf);
     const url = std.fmt.bufPrintZ(&url_buf, "{s}/health", .{srv}) catch return;
 
-    const argv = [_][]const u8{ "curl", "-s", "--max-time", "2", url };
-    var child = @import("../core/io_global.zig").Child.init(&argv, @import("../core/alloc.zig").allocator);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    child.spawn() catch {
-        model_status = .offline;
-        return;
-    };
-    const stdout = @import("../core/io_global.zig").readToEndAlloc(child.stdout.?, @import("../core/alloc.zig").allocator, 4096) catch {
-        model_status = .offline;
-        return;
-    };
-    defer @import("../core/alloc.zig").allocator.free(stdout);
-    const result = child.wait() catch {
-        model_status = .offline;
-        return;
-    };
+    // Local llama-server: plain curl, no DPI proxy. Any non-empty reply counts
+    // as up (a 503 "loading model" body included), matching the old curl -s probe.
+    var health_buf: [4096]u8 = undefined;
+    var health_hdr: [2048]u8 = undefined;
+    const health = @import("reliable_fetch.zig").request(url, &health_buf, &health_hdr, .{ .timeout_secs = 2, .impersonate = false, .use_dpi_proxy = false });
+    const stdout = health.body;
 
-    if (result == .exited and result.exited == 0 and stdout.len > 0) {
+    if (health.failure == .none and stdout.len > 0) {
         model_status = .online;
 
         if (cached_model_name_len == 0) {
             var m_url_buf: [128]u8 = undefined;
             const m_url = std.fmt.bufPrintZ(&m_url_buf, "{s}/v1/models", .{srv}) catch return;
-            const m_argv = [_][]const u8{ "curl", "-s", "--max-time", "2", m_url };
-            var m_child = @import("../core/io_global.zig").Child.init(&m_argv, @import("../core/alloc.zig").allocator);
-            m_child.stdout_behavior = .Pipe;
-            m_child.stderr_behavior = .Pipe;
-            m_child.spawn() catch return;
-            const m_out = @import("../core/io_global.zig").readToEndAlloc(m_child.stdout.?, @import("../core/alloc.zig").allocator, 4096) catch return;
-            defer @import("../core/alloc.zig").allocator.free(m_out);
-            _ = m_child.wait() catch {};
+            var m_buf: [4096]u8 = undefined;
+            var m_hdr: [2048]u8 = undefined;
+            const m_res = @import("reliable_fetch.zig").request(m_url, &m_buf, &m_hdr, .{ .timeout_secs = 2, .impersonate = false, .use_dpi_proxy = false });
+            if (m_res.failure != .none) return;
+            const m_out = m_res.body;
 
             if (std.mem.indexOf(u8, m_out, "\"id\":\"")) |pos| {
                 const start = pos + 6;

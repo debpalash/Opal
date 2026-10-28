@@ -177,31 +177,31 @@ fn urlEncode(input: []const u8, out: *[512]u8) []const u8 {
     return out[0..oi];
 }
 
-/// HTTP GET via curl (already a hard dependency, used across the app). We used
+/// HTTP GET via the shared reliable-fetch seam (curl underneath). We used
 /// std.http.Client here originally, but rest.opensubtitles.org issues a
 /// redirect whose Location Zig's client rejects (error.HttpRedirectLocation-
-/// Invalid) — curl follows it transparently. curl also handles gzip
-/// (--compressed) and HTTP/2, so this is both simpler and more robust.
-/// `extra_headers` carries a User-Agent (passed via -A). Returns the body
-/// slice inside `response_buf`.
+/// Invalid) — curl follows it transparently and handles gzip + HTTP/2.
+/// `extra_headers` carries a User-Agent. Returns the body slice inside
+/// `response_buf` (truncated to fit); fails on transport error or non-2xx/3xx.
 fn httpGet(url_str: []const u8, extra_headers: []const std.http.Header, response_buf: []u8) ![]const u8 {
-    const alloc = @import("../core/alloc.zig").allocator;
-    const io = @import("../core/io_global.zig");
     var ua: []const u8 = @import("../core/app_meta.zig").user_agent;
     for (extra_headers) |h| {
         if (std.ascii.eqlIgnoreCase(h.name, "User-Agent")) ua = h.value;
     }
-    var child = io.Child.init(&.{
-        "curl", "-s", "-L",    "--compressed", "--max-time", "20",
-        "-A",   ua,   url_str,
-    }, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    child.spawn() catch return error.HttpFailed;
-    var n: usize = 0;
-    if (child.stdout) |*so| n = io.readAll(so, response_buf) catch 0;
-    _ = child.wait() catch {};
+    // Fetch into a roomier heap scratch, then keep the prefix that fits the
+    // caller's buffer — the old pipe read truncated rather than failed, and the
+    // small gestdown buffers rely on a usable prefix of a long result list.
+    const alloc = @import("../core/alloc.zig").allocator;
+    const scratch = try alloc.alloc(u8, @max(response_buf.len, 1024 * 1024));
+    defer alloc.free(scratch);
+    const body = @import("../services/reliable_fetch.zig").fetch(url_str, scratch, .{
+        .user_agent = ua,
+        .timeout_secs = 20,
+        .impersonate = false,
+    }) orelse return error.HttpFailed;
+    const n = @min(body.len, response_buf.len);
     if (n == 0) return error.HttpFailed;
+    @memcpy(response_buf[0..n], body[0..n]);
     return response_buf[0..n];
 }
 

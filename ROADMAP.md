@@ -146,24 +146,83 @@
 ### 6.2 — Reliability ("what you click actually plays")
 - [x] Shared reliable-fetch interface with browser-grade TLS fingerprinting,
       DPI bypass, response status/headers/latency, and typed failures
-- [ ] Migrate remaining legacy curl/native HTTP callers onto reliable-fetch
+- [x] Migrate remaining legacy curl/native HTTP callers onto reliable-fetch
+      (secrets via stdin config, multipart, file bodies, atomic downloads;
+      only the ai_context SSE stream and core/deps/updater remain)
 - [ ] App-wide persisted live/dead probing (the shared, race-safe probe/cache
       seam exists; PlaybackRequest integration and remaining vertical coverage
       are still in progress)
-- [ ] Candidate groups with auto-skip to the next working stream
+- [x] Candidate groups with auto-skip to the next working stream (ranked
+      2-deep fallback chain; player advances on load failure)
 - [x] First-class per-request headers (Origin/Cookie) into the player, cleared
       between unrelated loads
 
 ### 6.3 — Glue (one app, not fifteen tabs)
 - [x] Universal resolver fan-out across video, local, torrent, comics, live TV,
       music, radio, podcasts, and catalog sources
-- [ ] Logical result groups with posters, semantic dedup, and fallback candidates
-- [ ] Unified "Continue / Your Library" home across all verticals
-- [ ] Cross-device progress + favorites sync over the local API
+- [x] Logical result groups with posters, semantic dedup, and fallback candidates
+      ("N sources" expander; pick any source, rest stay as fallbacks)
+- [x] Unified "Continue / Your Library" home across all verticals
+      (`library_items` read-model fed by every vertical)
+- [x] Cross-device progress + favorites sync over the local API
+      (`/api/library/sync` pull/push, tombstones, Settings → Device Sync;
+      single peer for now)
 
 ### 6.4 — Reach
 - [ ] Real casting pipeline (Chromecast/DLNA) + a phone "couch-mode" cast-picker
       on the existing remote API
+
+---
+
+## 🌌 Milestone 7 — Horizon (v10)
+
+> The media runtime as it should feel in 2076: you never search, wait, buffer,
+> or lose your place. Opal understands every file, knows who is watching and
+> what language they speak, and follows you between screens — locally,
+> privately, on your own hardware. Capability-level only; still no shipped
+> source URLs.
+
+**Wave 1 (building now):** 7.1–7.5 · **Wave 2:** 7.6–7.8
+
+### 7.1 — Recall (semantic memory)
+- [ ] Natural-language search across library + catalog ("cozy 90s mystery
+      under 2h", "something like Invincible"): FTS5 + sqlite-vec fusion with a
+      tested constraint parser
+- [ ] Moment search inside media ("the scene where they plan the heist") over
+      subtitle/transcript cues → play at that second
+- [ ] Assistant + voice tools for semantic search and moment jumps
+
+### 7.2 — Perception (media understanding)
+- [ ] Intro / credits detection for any series (cross-episode audio
+      fingerprinting + chapter names) → Skip button or auto-skip
+- [ ] Duplicate detection (perceptual hashing) and auto chapters
+
+### 7.3 — Household
+- [ ] Profiles with PIN and kids mode (maturity cap, NSFW forced off)
+- [ ] Per-profile history, library, recommendations, and sync identity
+
+### 7.4 — Continuum (play anywhere)
+- [ ] On-demand direct-play / remux / HW transcode to browsers and phones
+- [ ] One-tap handoff to a paired device at the exact second; "bring it here"
+- [ ] Phone couch-mode cast picker over the real casting pipeline
+
+### 7.5 — Babel (every language, every file)
+- [ ] Live captions: ahead-of-playhead whisper transcription of anything playing
+- [ ] On-device subtitle translation (any track → your language)
+- [ ] Spoiler-safe "Previously on…" recaps built only from what you watched
+
+### 7.6 — Resilience
+- [ ] Persisted app-wide live/dead probing feeding ranking and fallback order
+- [ ] Predictive pre-resolve of the next episode (zero-wait "next")
+
+### 7.7 — Commons
+- [ ] Addon repositories (user-added URLs only) with signed manifests and
+      permission prompts; plugin UI panels
+- [ ] Shareable moments (timestamped clips) to paired devices + household feed
+
+### 7.8 — Craft
+- [ ] Theming v2: refined tokens, interaction states, elevation (in progress)
+- [ ] Architecture + build docs; `linker_options` lint; dvui deinit warnings
 
 ---
 

@@ -429,14 +429,6 @@ fn logUntrustedNative(p: *const Plugin) void {
     logs.pushLog("error", "plugins", msg, true);
 }
 
-/// Surface a plugin/child-process spawn failure (e.g. missing `lua` or
-/// `curl`, or a non-executable plugin script) instead of swallowing it.
-fn logSpawnFail(argv0: []const u8) void {
-    var buf: [256]u8 = undefined;
-    const msg = std.fmt.bufPrintZ(&buf, "spawn failed: {s} not found or not executable", .{argv0}) catch "plugin spawn failed";
-    logs.pushLog("error", "plugin", msg, true);
-}
-
 fn logPluginProcessFailure(name: []const u8, result: bounded_process.Result) void {
     var buf: [256]u8 = undefined;
     const detail = if (result.truncated) "output limit exceeded" else @tagName(result.failure);
@@ -929,32 +921,16 @@ fn runPluginResolveWith(plugin: Plugin, id: []const u8, episode: []const u8) voi
                                             const plugin_ref = state.app.comic.referer[0..state.app.comic.referer_len];
                                             var ref_buf: [600]u8 = undefined;
                                             const ref_hdr = @import("plugins_pure.zig").refererHeader(plugin_ref, u, &ref_buf) orelse "Referer:";
-                                            const argv2 = [_][]const u8{
-                                                "curl",       "-sL",
-                                                "-H",         "User-Agent: Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
-                                                "-H",         ref_hdr,
-                                                "--max-time", "15",
-                                                u,
-                                            };
-                                            var child2 = @import("../core/io_global.zig").Child.init(&argv2, a);
-                                            child2.stdout_behavior = .Pipe;
-                                            child2.stderr_behavior = .Ignore;
-                                            _ = child2.spawn() catch {
-                                                logSpawnFail(argv2[0]);
-                                                return;
-                                            };
+                                            const referer: ?[]const u8 = if (std.mem.startsWith(u8, ref_hdr, "Referer: ")) ref_hdr["Referer: ".len..] else null;
                                             const max_img = 5 * 1024 * 1024;
                                             const tmp = a.alloc(u8, max_img) catch return;
                                             defer a.free(tmp);
-                                            var total: usize = 0;
-                                            if (child2.stdout) |*so| {
-                                                while (total < max_img) {
-                                                    const n = @import("../core/io_global.zig").read(so, tmp[total..]) catch break;
-                                                    if (n == 0) break;
-                                                    total += n;
-                                                }
-                                            }
-                                            _ = child2.wait() catch {};
+                                            const body = @import("reliable_fetch.zig").fetch(u, tmp, .{
+                                                .user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+                                                .referer = referer,
+                                                .timeout_secs = 15,
+                                            }) orelse "";
+                                            const total = body.len;
                                             if (total > 100) {
                                                 const px = a.dupe(u8, tmp[0..total]) catch return;
                                                 state.app.comic.page_pixels[idx] = px;
@@ -1785,7 +1761,7 @@ fn renderContentPlugins() void {
 
                 if (dvui.button(@src(), @import("../core/text.zig").safeUtf8(name), .{}, .{
                     .id_extra = pi + 8000,
-                    .color_fill = if (is_active) theme.colors.accent else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                    .color_fill = if (is_active) theme.colors.accent else theme.transparent,
                     .color_text = if (is_active) theme.colors.text_on_accent else theme.colors.text_secondary,
                     .corner_radius = dvui.Rect.all(theme.radius.pill),
                     .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
@@ -1957,7 +1933,7 @@ fn renderPluginCard(item: *PluginResult, idx: usize) void {
                 .id_extra = idx + 500,
                 .expand = .horizontal,
                 .color_text = if (item.expanded) theme.colors.accent else theme.colors.text_primary,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill = theme.transparent,
                 .color_fill_hover = theme.colors.bg_hover,
                 .color_fill_press = theme.colors.bg_elevated,
                 .padding = dvui.Rect.all(0),

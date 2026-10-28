@@ -78,7 +78,8 @@ def test_manga_madara_engine():
 
     # 7) Image requests carry a Referer (many Madara CDNs 403 without it): the
     #    reader stashes the chapter URL and the page-fetch worker sends it.
-    if "state.app.comic.referer_len" not in comics or "Referer: " not in comics:
+    # Page fetch is on the reliable-fetch seam: `.referer` → `-H "Referer: …"`.
+    if "state.app.comic.referer_len" not in comics or ("Referer: " not in comics and ".referer = if (referer.len > 0) referer" not in comics):
         problems.append("Madara page fetch does not send a Referer header")
 
     # 8) The AJAX chapter fallback (admin-ajax.php with the XMLHttpRequest marker).

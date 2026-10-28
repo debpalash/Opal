@@ -400,28 +400,30 @@ fn searchTorrents(idx: usize) void {
 // HTTP (curl POST)
 // ══════════════════════════════════════════════════════════
 
-/// POST `body` (JSON) to `url` with curl, into a fresh heap buffer of `cap`
+/// POST `body` (JSON) to `url` via reliable-fetch, into a fresh heap buffer of `cap`
 /// bytes. Returns the filled slice (caller frees) or null on failure/empty. Large
-/// buffers stay off the worker stack (macOS 512KB limit). curl-only — std.http
+/// buffers stay off the worker stack (macOS 512KB limit). reliable-fetch spawns curl — std.http
 /// SEGVs on some ISP TLS resets (see comics.zig).
 fn curlPost(url: []const u8, body: []const u8, cap: usize, cancel_epoch: ?@import("../core/bounded_process.zig").CancelEpoch) ?[]u8 {
-    const argv = [_][]const u8{
-        "curl", "-fsSL",                          "--connect-timeout", "3",   "--max-time", "10",
-        "-H",   "Content-Type: application/json", "-A",                agent, "--data",     body,
-        "--",   url,
-    };
     const buf = alloc.alloc(u8, cap) catch return null;
     defer alloc.free(buf);
-    const result = @import("../core/bounded_process.zig").run(&argv, buf, .{ .timeout_ms = 11_000, .cancel_epoch = cancel_epoch });
-    if (!result.ok() or result.output.len == 0) return null;
+    const output = @import("reliable_fetch.zig").fetch(url, buf, .{
+        .timeout_secs = 10,
+        .impersonate = false,
+        .user_agent = agent,
+        .post_body = body,
+        .headers = &.{.{ .name = "Content-Type", .value = "application/json" }},
+        .cancel_epoch = cancel_epoch,
+    }) orelse return null;
+    if (output.len == 0) return null;
     // Reject HTTP/error documents and malformed schemas before latching an
     // empty successful catalog. Valid empty result arrays remain successful.
-    var parsed = std.json.parseFromSlice(std.json.Value, alloc, result.output, .{}) catch return null;
+    var parsed = std.json.parseFromSlice(std.json.Value, alloc, output, .{}) catch return null;
     defer parsed.deinit();
     if (parsed.value != .object) return null;
     const records = parsed.value.object.get("results") orelse return null;
     if (records != .array) return null;
-    return alloc.dupe(u8, result.output) catch null;
+    return alloc.dupe(u8, output) catch null;
 }
 
 // ══════════════════════════════════════════════════════════
@@ -648,7 +650,7 @@ fn renderCard(i: usize, card_w: f32) void {
         .id_extra = i + 3000,
         .expand = .horizontal,
         .color_text = theme.colors.text_primary,
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+        .color_fill = theme.transparent,
         .color_fill_hover = theme.colors.bg_hover,
         .color_fill_press = theme.colors.bg_elevated,
         .padding = .{ .x = 2, .y = 4, .w = 2, .h = 0 },

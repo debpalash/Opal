@@ -413,7 +413,7 @@ fn renderTabStrip() void {
                     .max_size_content = .{ .w = 7, .h = 7 },
                     .background = true,
                     .color_fill = if (t.marker == .bell) theme.colors.accent else theme.colors.text_tertiary,
-                    .corner_radius = dvui.Rect.all(4),
+                    .corner_radius = dvui.Rect.all(theme.radius.sm),
                     .gravity_y = 0.5,
                     .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
                 });

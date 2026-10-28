@@ -75,20 +75,20 @@ fn worker() void {
     const buf = alloc.alloc(u8, 512 * 1024) catch return;
     defer alloc.free(buf);
 
-    var child = io.Child.init(&.{
-        "curl",                           "-s",   "--max-time",               "15",
-        "-X",                             "POST", ANILIST_API,                "-H",
-        "Content-Type: application/json", "-H",   "Accept: application/json", "-d",
-        gql,
-    }, alloc);
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Ignore;
-    child.spawn() catch {
-        logs.pushLog("error", "anime", "Airing schedule: curl failed", true);
+    const fetched = @import("reliable_fetch.zig").fetch(ANILIST_API, buf, .{
+        .keep_head_on_overflow = true, // pre-seam behaviour: parse the head of an oversized body
+        .timeout_secs = 15,
+        .impersonate = false,
+        .post_body = gql,
+        .headers = &.{
+            .{ .name = "Content-Type", .value = "application/json" },
+            .{ .name = "Accept", .value = "application/json" },
+        },
+    }) orelse {
+        logs.pushLog("error", "anime", "Airing schedule: fetch failed", true);
         return;
     };
-    const bytes = if (child.stdout) |*s| io.readAll(s, buf) catch 0 else 0;
-    _ = child.wait() catch {};
+    const bytes = fetched.len;
     if (bytes < 16) {
         logs.pushLog("error", "anime", "Airing schedule: empty response", true);
         return;

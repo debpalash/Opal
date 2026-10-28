@@ -456,7 +456,7 @@ pub fn renderChatBody() void {
 
         // Voice toggle — plain accent toggle.
         if (dvui.button(@src(), "Voice", .{}, .{
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
             .color_text = if (voice.voice_mode) theme.colors.accent else theme.colors.text_secondary,
@@ -469,7 +469,7 @@ pub fn renderChatBody() void {
 
         // Incognito toggle — plain accent toggle.
         if (dvui.button(@src(), "Incognito", .{}, .{
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
             .color_text = if (incognito_mode) theme.colors.accent else theme.colors.text_secondary,
@@ -618,7 +618,7 @@ pub fn renderChatBody() void {
         {
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.mic, .{}, .{}, .{
                 .id_extra = 9007,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill = theme.transparent,
                 .color_fill_hover = theme.colors.bg_hover,
                 .color_fill_press = theme.colors.bg_elevated,
                 .color_text = if (voice.is_recording.load(.acquire)) theme.colors.danger else if (voice.is_transcribing.load(.acquire)) theme.colors.accent else theme.colors.text_secondary,
@@ -633,7 +633,7 @@ pub fn renderChatBody() void {
             // Conversation mode toggle (live hands-free voice loop)
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.headphones, .{}, .{}, .{
                 .id_extra = 9008,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill = theme.transparent,
                 .color_fill_hover = theme.colors.bg_hover,
                 .color_fill_press = theme.colors.bg_elevated,
                 .color_text = if (voice.conversation_active.load(.acquire)) theme.colors.accent else theme.colors.text_secondary,
@@ -649,7 +649,7 @@ pub fn renderChatBody() void {
             const is_active = is_generating.load(.acquire) or voice.is_speaking.load(.acquire) or voice.is_recording.load(.acquire) or voice.is_transcribing.load(.acquire);
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.square, .{}, .{}, .{
                 .id_extra = 9009,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill = theme.transparent,
                 .color_fill_hover = theme.colors.bg_hover,
                 .color_fill_press = theme.colors.bg_elevated,
                 .color_text = if (is_active) theme.colors.danger else theme.colors.text_tertiary,
@@ -917,7 +917,7 @@ fn renderEmptyState() void {
             if (dvui.button(@src(), sug, .{}, .{
                 .id_extra = idx + 8000,
                 .expand = .horizontal,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill = theme.transparent,
                 .color_fill_hover = theme.colors.bg_hover,
                 .color_fill_press = theme.colors.bg_elevated,
                 .corner_radius = theme.dims.rad_sm,
@@ -1136,7 +1136,7 @@ pub fn renderInlineResults() void {
             .expand = .horizontal,
             // Recommended row carries the only quiet accent edge (left).
             .background = is_recommended,
-            .color_fill = if (is_recommended) theme.colors.bg_elevated else dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = if (is_recommended) theme.colors.bg_elevated else theme.transparent,
             .color_border = theme.colors.accent,
             .border = if (is_recommended) .{ .x = 2, .y = 0, .w = 0, .h = 0 } else dvui.Rect.all(0),
             .corner_radius = theme.dims.rad_sm,
@@ -1200,7 +1200,7 @@ pub fn renderInlineResults() void {
         // Queue — borderless quiet action.
         if (resolver.isRemoteQueueable(item) and dvui.buttonIcon(@src(), "", icons.tvg.lucide.plus, .{}, .{}, .{
             .id_extra = ci + 10400,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
             .color_text = theme.colors.text_secondary,
@@ -1222,7 +1222,7 @@ pub fn renderInlineResults() void {
         };
         if (dvui.buttonIcon(@src(), "", action_icon, .{}, .{}, .{
             .id_extra = ci + 10100,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
             .color_text = theme.colors.accent,

@@ -289,13 +289,16 @@ fn downloadWorker() void {
     // Download beside the live executable. --fail rejects GitHub error pages;
     // HTTPS-only redirect policy prevents a compromised redirect from
     // downgrading transport. The process supervisor owns timeout/tree cleanup.
+    // Through the reliable-fetch seam: status-checked (rejects GitHub error
+    // pages), atomic temp+rename into stage_path, HTTPS-only incl. redirects.
     var helper_output: [1024]u8 = undefined;
-    const download = bounded_process.run(&.{
-        "curl",    "-L",         "--fail",        "--silent", "--show-error",
-        "--proto", "=https",     "--proto-redir", "=https",   "--connect-timeout",
-        "15",      "--max-time", "120",           "-o",       stage_path,
-        dl_url,
-    }, &helper_output, .{ .timeout_ms = 121_000 });
+    const rf = @import("reliable_fetch.zig");
+    const download = rf.download(dl_url, stage_path, .{
+        .timeout_secs = 120,
+        .connect_timeout_secs = 15,
+        .https_only = true,
+        .impersonate = false,
+    });
     if (workers.isQuitting() or download.failure == .cancelled) return;
     if (!download.ok()) {
         logs.pushLog("error", "ytdlp", "yt-dlp staged download failed; keeping the working version", true);
@@ -303,17 +306,18 @@ fn downloadWorker() void {
     }
 
     var sums_buf: [16 * 1024]u8 = undefined;
-    const sums_result = bounded_process.run(&.{
-        "curl",    "-L",         "--fail",        "--silent",     "--show-error",
-        "--proto", "=https",     "--proto-redir", "=https",       "--connect-timeout",
-        "15",      "--max-time", "30",            YTDLP_SUMS_URL,
-    }, &sums_buf, .{ .timeout_ms = 31_000 });
-    if (workers.isQuitting() or sums_result.failure == .cancelled) return;
-    if (!sums_result.ok()) {
+    const sums_output = rf.fetch(YTDLP_SUMS_URL, &sums_buf, .{
+        .timeout_secs = 30,
+        .connect_timeout_secs = 15,
+        .https_only = true,
+        .impersonate = false,
+    });
+    if (workers.isQuitting()) return;
+    const sums = sums_output orelse {
         logs.pushLog("error", "ytdlp", "yt-dlp checksum download failed; keeping the working version", true);
         return;
-    }
-    const expected = update_pure.expectedChecksum(sums_result.output, asset_name) orelse {
+    };
+    const expected = update_pure.expectedChecksum(sums, asset_name) orelse {
         logs.pushLog("error", "ytdlp", "yt-dlp release checksum is missing; refusing update", true);
         return;
     };

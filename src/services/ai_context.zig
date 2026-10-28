@@ -8,6 +8,8 @@ const voice = @import("ai_voice.zig");
 const intent = @import("ai_intent.zig");
 const logs = @import("../core/logs.zig");
 const state = @import("../core/state.zig");
+const fetch = @import("reliable_fetch.zig");
+const fetch_pure = @import("reliable_fetch_pure.zig");
 
 pub const FastPathAction = enum { play_best, search };
 
@@ -1412,25 +1414,6 @@ pub fn generateResponse() void {
         return;
     };
 
-    // Stage the conversation in a random owner-only workspace. This contains
-    // the system prompt and recent history, so it must never use a predictable
-    // shared-/tmp name and must be removed for normal as well as incognito use.
-    var request_temp = @import("../core/secure_temp.zig").Workspace.create("ai-request") catch {
-        chat.setAssistantError(assistant_idx, "Couldn't create private AI request storage.");
-        return;
-    };
-    defer request_temp.cleanup();
-    var req_path_buf: [@import("../core/secure_temp.zig").max_path_len]u8 = undefined;
-    const req_path = request_temp.writeFile("request.json", json_str, &req_path_buf) catch {
-        chat.setAssistantError(assistant_idx, "Couldn't stage the AI request.");
-        return;
-    };
-    var data_arg_buf: [@import("../core/secure_temp.zig").max_path_len + 1]u8 = undefined;
-    const data_arg = std.fmt.bufPrint(&data_arg_buf, "@{s}", .{req_path}) catch {
-        chat.setAssistantError(assistant_idx, "Couldn't stage the AI request.");
-        return;
-    };
-
     var url_buf: [256]u8 = undefined;
     const url = server.chatCompletionsUrl(&url_buf);
     if (url.len == 0) {
@@ -1448,18 +1431,12 @@ pub fn generateResponse() void {
         if (health_url) |hurl| {
             var attempts: usize = 0;
             while (attempts < 30) : (attempts += 1) { // up to 15 seconds
-                var hc = @import("../core/io_global.zig").Child.init(
-                    &.{ "curl", "-s", "--max-time", "2", hurl },
-                    @import("../core/alloc.zig").allocator,
-                );
-                hc.stdout_behavior = .Pipe;
-                hc.stderr_behavior = .Ignore;
-                hc.spawn() catch break;
-                const hstdout = hc.stdout.?;
-                var hbuf: [256]u8 = undefined;
-                const hn = @import("../core/io_global.zig").read(hstdout, &hbuf) catch 0;
-                _ = hc.wait() catch {};
-                if (hn > 0 and std.mem.indexOf(u8, hbuf[0..hn], "ok") != null) break;
+                // Local server probe: no DPI proxy; read the body whatever the status.
+                var hbuf: [1024]u8 = undefined;
+                var hhdr: [2048]u8 = undefined;
+                const hres = @import("reliable_fetch.zig").request(hurl, &hbuf, &hhdr, .{ .timeout_secs = 2, .impersonate = false, .use_dpi_proxy = false });
+                if (hres.failure == .spawn) break;
+                if (hres.body.len > 0 and std.mem.indexOf(u8, hres.body, "ok") != null) break;
                 @import("../core/io_global.zig").sleep(500 * std.time.ns_per_ms);
             }
         }
@@ -1467,177 +1444,36 @@ pub fn generateResponse() void {
 
     server.model_status = .checking;
 
-    // Cloud providers authenticate via a Bearer key (from .env). Feed that
-    // header through curl's config-on-stdin support so the key is absent from
-    // process listings and crash reports that capture argv.
+    // Cloud providers authenticate via a Bearer key (from .env). Both the key
+    // and the conversation (system prompt + history) travel to curl over a
+    // private stdin config (`--config -`) — never argv, never a temp file.
     var auth_buf: [640]u8 = undefined;
-    const auth = server.authHeader(&auth_buf);
-    var child = if (auth != null)
-        @import("../core/io_global.zig").Child.init(
-            &.{ "curl", "-s", "-N", "--max-time", "60", "-X", "POST", "-H", "Content-Type: application/json", "--config", "-", "--data-binary", data_arg, url },
-            @import("../core/alloc.zig").allocator,
-        )
-    else
-        @import("../core/io_global.zig").Child.init(
-            &.{ "curl", "-s", "-N", "--max-time", "60", "-X", "POST", "-H", "Content-Type: application/json", "--data-binary", data_arg, url },
-            @import("../core/alloc.zig").allocator,
-        );
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    if (auth) |ah| {
-        @import("../core/curl_secret.zig").spawnWithHeaders(&child, &.{ah}) catch {
-            chat.setAssistantError(assistant_idx, "Can't reach the AI server. Start it (or set an API key) in Settings > AI.");
-            return;
-        };
-    } else {
-        child.spawn() catch {
-            chat.setAssistantError(assistant_idx, "Can't reach the AI server. Start it (or set an API key) in Settings > AI.");
-            return;
-        };
+    const auth_prefix = "Authorization: ";
+    var auth_hdr: [1]fetch.Header = undefined;
+    var secret_headers: []const fetch.Header = &.{};
+    if (server.authHeader(&auth_buf)) |ah| {
+        auth_hdr[0] = .{ .name = "Authorization", .value = ah[auth_prefix.len..] };
+        secret_headers = &auth_hdr;
     }
 
-    // Buffer to hold the incoming JSON response (for tool_call parsing)
-    var resp_buf: [8192]u8 = undefined;
-    var resp_len: usize = 0;
-
-    // Sentence-streaming TTS buffer (speak each sentence as it completes)
-    var tts_sentence_buf: [512]u8 = undefined;
-    var tts_sentence_len: usize = 0;
-    var tts_sentences_spoken: usize = 0;
-
-    // State machine for live-streaming the "message" value to the UI
-    // 0 = haven't found "message" key yet
-    // 1 = found key, looking for opening quote of value
-    // 2 = inside message value string (streaming to UI)
-    // 3 = message value complete
-    var msg_state: u8 = 0;
-
-    // Stream SSE response line-by-line
-    var line_buf: [4096]u8 = undefined;
-    var line_pos: usize = 0;
-    const stdout_file = child.stdout.?;
-
-    while (true) {
-        // Barge-in / Stop — abort the stream and kill curl so we don't block on
-        // its --max-time and don't overwrite the chat with a superseded reply.
-        if (chat.gen_abort.load(.acquire)) {
-            _ = child.kill() catch {};
-            break;
-        }
-        var byte: [1]u8 = undefined;
-        const n = @import("../core/io_global.zig").read(stdout_file, &byte) catch break;
-        if (n == 0) break; // EOF
-
-        if (byte[0] == '\n') {
-            const line = line_buf[0..line_pos];
-            line_pos = 0;
-
-            if (line.len == 0 or !std.mem.startsWith(u8, line, "data: ")) continue;
-            const data = line[6..];
-            if (std.mem.eql(u8, data, "[DONE]")) break;
-
-            const token = extractContent(data) orelse continue;
-            var ti: usize = 0;
-            while (ti < token.len) {
-                if (resp_len >= resp_buf.len) break;
-
-                // Decode escape sequences
-                var decoded_char: u8 = token[ti];
-                var advance: usize = 1;
-                if (token[ti] == '\\' and ti + 1 < token.len) {
-                    switch (token[ti + 1]) {
-                        'n' => {
-                            decoded_char = '\n';
-                            advance = 2;
-                        },
-                        't' => {
-                            decoded_char = '\t';
-                            advance = 2;
-                        },
-                        '"' => {
-                            decoded_char = '"';
-                            advance = 2;
-                        },
-                        '\\' => {
-                            decoded_char = '\\';
-                            advance = 2;
-                        },
-                        else => {},
-                    }
-                }
-
-                // Always buffer the full response
-                resp_buf[resp_len] = decoded_char;
-                resp_len += 1;
-
-                // State machine: track if we're inside the "message" value
-                if (msg_state == 0) {
-                    // Check if we've accumulated enough to see "message":
-                    if (resp_len >= 10) {
-                        // Look for "message" in what we've accumulated so far
-                        if (std.mem.indexOf(u8, resp_buf[0..resp_len], "\"message\"")) |_| {
-                            msg_state = 1; // found key, looking for value start
-                        }
-                    }
-                } else if (msg_state == 1) {
-                    // Looking for the opening quote of the value
-                    if (decoded_char == '"') {
-                        // Check this isn't the closing quote of "message" key
-                        // We need to skip past the colon: "message": "
-                        // The quote we want is after a colon+space
-                        if (resp_len >= 2 and (resp_buf[resp_len - 2] == ':' or resp_buf[resp_len - 2] == ' ')) {
-                            msg_state = 2; // now inside the message value
-                        }
-                    }
-                } else if (msg_state == 2) {
-                    // Inside the message value — stream to UI!
-                    if (decoded_char == '"' and resp_len >= 2 and resp_buf[resp_len - 2] != '\\') {
-                        // Closing quote — message value ends
-                        msg_state = 3;
-                    } else {
-                        // Live-stream this character to the chat UI
-                        if (chat.messages[assistant_idx].text_len < chat.MAX_MSG_LEN) {
-                            chat.messages[assistant_idx].text[chat.messages[assistant_idx].text_len] = decoded_char;
-                            chat.messages[assistant_idx].text_len += 1;
-                        }
-
-                        // Sentence-streaming TTS: buffer chars, speak on sentence boundary
-                        if (voice.voice_mode and tts_sentence_len < tts_sentence_buf.len - 1) {
-                            tts_sentence_buf[tts_sentence_len] = decoded_char;
-                            tts_sentence_len += 1;
-
-                            // Sentence boundary detected — speak this chunk immediately
-                            if ((decoded_char == '.' or decoded_char == '!' or decoded_char == '?') and tts_sentence_len > 8) {
-                                // Wait for previous TTS to finish before speaking next sentence
-                                while (voice.is_speaking.load(.acquire)) {
-                                    @import("../core/io_global.zig").sleep(30 * std.time.ns_per_ms);
-                                }
-                                voice.speakResponse(tts_sentence_buf[0..tts_sentence_len]);
-                                tts_sentences_spoken += 1;
-                                tts_sentence_len = 0;
-                            }
-                        }
-                    }
-                }
-
-                ti += advance;
-            }
-            // Wake the UI once per streamed token chunk (not per char) so the chat
-            // shows live text instead of only updating on incidental repaints — the
-            // chat view has no timer/animation of its own. Thread-safe *Window form;
-            // cheap at token cadence. Only while we're emitting the visible message.
-            if (msg_state == 2 or msg_state == 3) {
-                if (state.app.dvui_win) |win| @import("dvui").refresh(win, @src(), null);
-            }
-        } else {
-            if (line_pos < line_buf.len) {
-                line_buf[line_pos] = byte[0];
-                line_pos += 1;
-            }
-        }
+    var sc = StreamCtx{ .assistant_idx = assistant_idx };
+    const sres = fetch.stream(url, .{
+        .timeout_secs = 60,
+        .impersonate = false,
+        .use_dpi_proxy = false, // local servers + cloud APIs: direct, as before
+        .headers = &.{.{ .name = "Content-Type", .value = "application/json" }},
+        .secret_headers = secret_headers,
+        .secret_post_body = json_str,
+        .abort_flag = &chat.gen_abort,
+        .max_line_bytes = 16 * 1024,
+    }, &sc, StreamCtx.onLine);
+    if (sres.failure == .spawn or sres.failure == .invalid_input) {
+        chat.setAssistantError(assistant_idx, "Can't reach the AI server. Start it (or set an API key) in Settings > AI.");
+        return;
     }
+    const resp_buf = &sc.resp_buf;
+    const resp_len = sc.resp_len;
 
-    _ = child.wait() catch {};
     server.model_status = .online;
 
     // Aborted by barge-in / Stop — leave whatever partial text was streamed and
@@ -1732,13 +1568,13 @@ pub fn generateResponse() void {
 
     if (voice.voice_mode) {
         // If we already streamed sentences during generation, only speak the trailing remainder
-        if (tts_sentences_spoken > 0) {
-            if (tts_sentence_len > 3) {
+        if (sc.tts_sentences_spoken > 0) {
+            if (sc.tts_sentence_len > 3) {
                 // Wait for last sentence to finish
                 while (voice.is_speaking.load(.acquire)) {
                     @import("../core/io_global.zig").sleep(30 * std.time.ns_per_ms);
                 }
-                voice.speakResponse(tts_sentence_buf[0..tts_sentence_len]);
+                voice.speakResponse(sc.tts_sentence_buf[0..sc.tts_sentence_len]);
             }
         } else {
             // No streaming happened (short response or tool call) — speak full response
@@ -1746,6 +1582,105 @@ pub fn generateResponse() void {
         }
     }
 }
+
+/// Per-request state for the streamed chat reply: buffers the full decoded
+/// response (for tool-call parsing), live-streams the "message" value into the
+/// chat, and speaks completed sentences in voice mode. Driven line-by-line by
+/// reliable_fetch.stream.
+const StreamCtx = struct {
+    assistant_idx: usize,
+    resp_buf: [8192]u8 = undefined,
+    resp_len: usize = 0,
+    tts_sentence_buf: [512]u8 = undefined,
+    tts_sentence_len: usize = 0,
+    tts_sentences_spoken: usize = 0,
+    // 0 = haven't found "message" key yet, 1 = found key, looking for the
+    // value's opening quote, 2 = inside the value (streaming to UI), 3 = done.
+    msg_state: u8 = 0,
+
+    fn onLine(self: *StreamCtx, line: []const u8) bool {
+        if (chat.gen_abort.load(.acquire)) return false;
+        const data = fetch_pure.sseData(line) orelse return true;
+        if (fetch_pure.sseDone(data)) return false;
+        const token = extractContent(data) orelse return true;
+        const assistant_idx = self.assistant_idx;
+        var ti: usize = 0;
+        while (ti < token.len) {
+            if (self.resp_len >= self.resp_buf.len) break;
+
+            // Decode escape sequences
+            var decoded_char: u8 = token[ti];
+            var advance: usize = 1;
+            if (token[ti] == '\\' and ti + 1 < token.len) {
+                switch (token[ti + 1]) {
+                    'n' => {
+                        decoded_char = '\n';
+                        advance = 2;
+                    },
+                    't' => {
+                        decoded_char = '\t';
+                        advance = 2;
+                    },
+                    '"' => {
+                        decoded_char = '"';
+                        advance = 2;
+                    },
+                    '\\' => {
+                        decoded_char = '\\';
+                        advance = 2;
+                    },
+                    else => {},
+                }
+            }
+
+            // Always buffer the full response
+            self.resp_buf[self.resp_len] = decoded_char;
+            self.resp_len += 1;
+            const resp_len = self.resp_len;
+
+            if (self.msg_state == 0) {
+                if (resp_len >= 10 and std.mem.indexOf(u8, self.resp_buf[0..resp_len], "\"message\"") != null)
+                    self.msg_state = 1;
+            } else if (self.msg_state == 1) {
+                // Opening quote of the value comes after `:` / space, not the key's own closing quote.
+                if (decoded_char == '"' and resp_len >= 2 and (self.resp_buf[resp_len - 2] == ':' or self.resp_buf[resp_len - 2] == ' '))
+                    self.msg_state = 2;
+            } else if (self.msg_state == 2) {
+                if (decoded_char == '"' and resp_len >= 2 and self.resp_buf[resp_len - 2] != '\\') {
+                    self.msg_state = 3; // closing quote — message value ends
+                } else {
+                    // Live-stream this character to the chat UI
+                    if (chat.messages[assistant_idx].text_len < chat.MAX_MSG_LEN) {
+                        chat.messages[assistant_idx].text[chat.messages[assistant_idx].text_len] = decoded_char;
+                        chat.messages[assistant_idx].text_len += 1;
+                    }
+                    // Sentence-streaming TTS: buffer chars, speak on sentence boundary
+                    if (voice.voice_mode and self.tts_sentence_len < self.tts_sentence_buf.len - 1) {
+                        self.tts_sentence_buf[self.tts_sentence_len] = decoded_char;
+                        self.tts_sentence_len += 1;
+                        if ((decoded_char == '.' or decoded_char == '!' or decoded_char == '?') and self.tts_sentence_len > 8) {
+                            // Wait for previous TTS to finish before speaking next sentence
+                            while (voice.is_speaking.load(.acquire)) {
+                                @import("../core/io_global.zig").sleep(30 * std.time.ns_per_ms);
+                            }
+                            voice.speakResponse(self.tts_sentence_buf[0..self.tts_sentence_len]);
+                            self.tts_sentences_spoken += 1;
+                            self.tts_sentence_len = 0;
+                        }
+                    }
+                }
+            }
+            ti += advance;
+        }
+        // Wake the UI once per streamed token chunk (not per char) so the chat
+        // shows live text — the chat view has no timer of its own. Thread-safe
+        // *Window form; only while we're emitting the visible message.
+        if (self.msg_state == 2 or self.msg_state == 3) {
+            if (state.app.dvui_win) |win| @import("dvui").refresh(win, @src(), null);
+        }
+        return true;
+    }
+};
 
 fn extractContent(json: []const u8) ?[]const u8 {
     const needle = "\"content\":\"";

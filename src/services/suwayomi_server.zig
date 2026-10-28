@@ -156,14 +156,17 @@ fn fileExists(path: []const u8) bool {
 
 /// True if the server answers on the port.
 fn pingPort() bool {
-    var c = io.Child.init(&.{ "curl", "-sL", "-o", io.devNull(), "-w", "%{http_code}", "--max-time", "4", BASE_URL ++ "/api/v1/extension/list" }, alloc);
-    c.stdout_behavior = .Pipe;
-    c.stderr_behavior = .Ignore;
-    c.spawn() catch return false;
-    var b: [16]u8 = undefined;
-    const n = if (c.stdout) |*so| io.readAll(so, &b) catch 0 else 0;
-    _ = c.wait() catch {};
-    return std.mem.startsWith(u8, std.mem.trim(u8, b[0..n], " \r\n"), "200");
+    // Local server: no DPI proxy / impersonation. Only the status matters, but
+    // the extension list can be large, so give the body a heap buffer.
+    const body = alloc.alloc(u8, 4 * 1024 * 1024) catch return false;
+    defer alloc.free(body);
+    var hdr: [4096]u8 = undefined;
+    const r = @import("reliable_fetch.zig").request(BASE_URL ++ "/api/v1/extension/list", body, &hdr, .{
+        .timeout_secs = 4,
+        .impersonate = false,
+        .use_dpi_proxy = false,
+    });
+    return r.status == 200;
 }
 
 /// Point Opal's Suwayomi source at the embedded server (keep any picked source id).
@@ -224,22 +227,14 @@ fn worker() void {
             return;
         };
         io.cwdMakePath(dir) catch {};
-        var dl = io.Child.init(&.{ "curl", "-sL", "--fail", "--max-time", "1200", "-o", jar, DL_URL }, alloc);
-        dl.stdout_behavior = .Ignore;
-        dl.stderr_behavior = .Ignore;
-        dl.spawn() catch {
+        // Atomic (temp + rename) + status-checked: an interrupted download can
+        // no longer leave a truncated jar that fileExists() then trusts.
+        const dl = @import("reliable_fetch.zig").download(DL_URL, jar, .{ .timeout_secs = 1200, .impersonate = false });
+        if (dl.failure == .spawn) {
             setStatus(.err, "Download failed to start");
             return;
-        };
-        const term = dl.wait() catch {
-            setStatus(.err, "Download failed");
-            return;
-        };
-        const ok = switch (term) {
-            .exited => |code| code == 0,
-            else => false,
-        };
-        if (!ok or !fileExists(jar)) {
+        }
+        if (!dl.ok() or !fileExists(jar)) {
             setStatus(.err, "Download failed");
             return;
         }

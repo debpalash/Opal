@@ -684,7 +684,7 @@ fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
             .gravity_x = 0.0,
             .max_size_content = dvui.Options.MaxSize.width(title_cap),
             .font = theme.mediaTitleFont(shown_name, dvui.themeGet().font_body),
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
             .color_text = if (st == .archived or st == .paused) theme.colors.text_secondary else theme.colors.text_primary,
@@ -731,7 +731,7 @@ fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
     if (r.hasTorrent() and r.has_metadata) {
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
             .id_extra = rid,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
             .color_text = theme.colors.success,
@@ -754,7 +754,7 @@ fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
         // Play the file straight off disk.
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
             .id_extra = rid,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
             .color_text = theme.colors.success,
@@ -801,7 +801,7 @@ fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
         const pcol = if (r.paused) theme.colors.accent else theme.colors.text_secondary;
         if (dvui.buttonIcon(@src(), "", pic, .{}, .{}, .{
             .id_extra = rid,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
             .color_text = pcol,
@@ -823,7 +823,7 @@ fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
     if (r.hasTorrent() and st == .errored) {
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"rotate-cw", .{}, .{}, .{
             .id_extra = rid,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
             .color_text = theme.colors.accent,
@@ -838,7 +838,7 @@ fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
         if (hidx < state.app.dl_history_count and state.app.dl_history_link_lens[hidx] > 0) {
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.download, .{}, .{}, .{
                 .id_extra = rid,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill = theme.transparent,
                 .color_fill_hover = theme.colors.bg_hover,
                 .color_fill_press = theme.colors.bg_elevated,
                 .color_text = theme.colors.accent,
@@ -855,7 +855,7 @@ fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
     if (r.hasFile()) {
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"folder-open", .{}, .{}, .{
             .id_extra = rid,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
             .color_text = theme.colors.text_tertiary,
@@ -1030,7 +1030,7 @@ fn renderExpanded(r: *const tp.Row) bool {
             const hashing = VtHash.busy.load(.acquire);
             if (dvui.button(@src(), if (hashing) "Hashing…" else "Verify on VirusTotal", .{}, .{
                 .id_extra = rowId(r),
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill = theme.transparent,
                 .color_fill_hover = theme.colors.bg_hover,
                 .color_fill_press = theme.colors.bg_elevated,
                 .color_text = if (hashing) theme.colors.text_tertiary else theme.colors.text_secondary,
@@ -1313,7 +1313,7 @@ fn renderHttpRow(s: *const httpdl.engine.Snap, i: usize) void {
     if (active or st == .queued) {
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.pause, .{}, .{}, .{
             .id_extra = rid,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
             .color_text = theme.colors.text_secondary,
@@ -1325,7 +1325,7 @@ fn renderHttpRow(s: *const httpdl.engine.Snap, i: usize) void {
     } else if (st == .paused or st == .failed) {
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
             .id_extra = rid,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
             .color_text = theme.colors.accent,
@@ -1396,7 +1396,7 @@ fn renderExpandedFiles(torrent_id: i32) void {
         // Play file
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
             .id_extra = cid + 100,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
             .color_text = theme.colors.success,
@@ -1521,7 +1521,7 @@ fn renderFolderBrowse() void {
         var lsafe: [256]u8 = undefined;
         if (dvui.button(@src(), safeUtf8Buf(lbl, &lsafe), .{}, .{
             .expand = .horizontal,
-            .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+            .color_fill = theme.transparent,
             .color_fill_hover = theme.colors.bg_hover,
             .color_fill_press = theme.colors.bg_elevated,
             .color_text = theme.colors.text_secondary,
@@ -1647,7 +1647,7 @@ fn renderFolderBrowse() void {
         } else {
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
                 .id_extra = fi + 20500,
-                .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 0 },
+                .color_fill = theme.transparent,
                 .color_fill_hover = theme.colors.bg_hover,
                 .color_fill_press = theme.colors.bg_elevated,
                 .color_text = theme.colors.success,

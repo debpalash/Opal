@@ -337,3 +337,157 @@ def card_action_row_fits():
     if missing:
         return "fail", "card can still clip its action row: " + ", ".join(missing)
     return "pass", "card sizes to its contents; action/remove row cannot be clipped"
+
+
+@test("Library cross-device sync wiring", "Storage")
+def test_library_sync():
+    """ROADMAP 6.3: GET/POST /api/library/sync + peer pull, LWW merge in a pure module."""
+    pure = _src("src/services/library_sync_pure.zig")
+    store = _src("src/services/library_store.zig")
+    api = _src("src/services/remote_library_sync_api.zig")
+    remote = _src("src/services/remote.zig")
+    access = _src("src/services/access_pure.zig")
+    dbz = _src("src/core/db.zig")
+    build = _src("build.zig")
+    apply_fn = _between(store, "pub fn applySyncRows", "\n}\n")
+    checks = {
+        "schema has updated_at": "updated_at INTEGER DEFAULT" in _between(dbz, "CREATE TABLE IF NOT EXISTS library_items", ")\n    );"),
+        "pure merge rule": "pub fn shouldApply" in pure and "pub fn decodePayload" in pure and "pub fn encodePayload" in pure,
+        "pure test registered": 'b.path("src/services/library_sync_pure.zig")' in build,
+        "store routes through pure merge": "sync_pure.shouldApply(" in apply_fn,
+        # Applying must keep the peer's stamp, or rows ping-pong as "newer".
+        "store keeps peer updated_at": "strftime" not in apply_fn and "row.updated_at" in apply_fn,
+        "store bumps version": "markDirty()" in apply_fn,
+        "store seq changed-since query": "pub fn loadChangedSince" in store and "ORDER BY seq ASC" in store,
+        "store tags applied rows with origin": "fn applySyncRows(rows: []const sync_pure.SyncRow, origin: []const u8)" in store
+            and "setOrigin(kind, id, origin)" in apply_fn,
+        "routes": '"/library/sync"' in api and '"/library/sync/pull"' in api,
+        "dispatched from remote": 'remote_library_sync_api.zig").handle(' in remote,
+        "auth-gated as host admin": '"/library/sync"' in access and '"/library/sync/pull"' in access,
+        "pull delegates to client": 'library_sync.zig").pull(' in api,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "library sync incomplete: " + ", ".join(missing)
+    return "pass", "library sync: pure LWW merge + GET/POST /api/library/sync + pull, host-admin gated"
+
+
+@test("Library device sync: saved peer, incremental pull/push, tombstones, settings", "Storage")
+def test_library_device_sync():
+    """ROADMAP 6.3 client: peer config persisted, cursors per peer, push batches,
+    deletes replicate as tombstones, Settings > Device sync is themed."""
+    client = _src("src/services/library_sync.zig")
+    pure = _src("src/services/library_sync_pure.zig")
+    store = _src("src/services/library_store.zig")
+    state_z = _src("src/core/state.zig")
+    config = _src("src/core/config.zig")
+    dbz = _src("src/core/db.zig")
+    wh = _src("src/player/watch_history.zig")
+    settings = _src("src/ui/settings.zig")
+    main = _src("src/main.zig")
+    push_fn = _between(client, "pub fn push(", "\n}\n")
+    pull_fn = _between(client, "pub fn pull(", "\n}\n")
+    get_fn = _between(client, "fn getPage(", "\n}\n")
+    ui = _between(settings, "fn renderDeviceSyncSection", "\n}\n")
+    checks = {
+        "state holds N peers with own cursors": "lsync: struct" in state_z and "[lsync_pure.MAX_PEERS]lsync_pure.Peer" in state_z
+            and "pull_seq: i64" in pure and "push_seq: i64" in pure and "pub const MAX_PEERS" in pure,
+        "per-peer tokens are protected secrets": "setSecretKey(lsync_token_keys[i]" in config
+            and all(f'"lsync_p{i}_token"' in _between(config, "fn secretBit", "\n}\n") for i in range(4)),
+        "per-peer cursors persisted": all(f'"{f}"' in config for f in ("url", "cursor", "device", "pull", "push")) and "lsync_p{d}_{s}" in config,
+        "v1 single peer migrates into peer 0": '"lsync_peer"' in _between(config, "fn applyLsyncKey", "\n}\n")
+            and '"lsync_token"' in _between(config, "fn applyLsyncKey", "\n}\n"),
+        "pull/push bypass dpi + impersonation": "getPage(" in pull_fn and get_fn.count(".use_dpi_proxy = false") == 1 and push_fn.count(".use_dpi_proxy = false") == 1
+            and push_fn.count(".impersonate = false") == 1,
+        "push batches via pure encoder": "sync_pure.encodeBatch(" in push_fn and "MAX_POST_ROWS" in push_fn and ".secret_post_body = batch.body" in push_fn
+            and ".secret_headers" in push_fn and ".secret_headers" in get_fn,
+        "one worker per peer, each with a busy guard": "std.atomic.Value(bool)" in _between(client, "const Slot = struct", "\n};\n")
+            and "slot.busy.swap(true" in client and "workers.spawn(worker, .{ si, jp })" in client
+            and "sync_pure.pickSlot(" in client and "[MAX_PEERS]Slot" in client,
+        "parallel applies serialized in the store": "apply_mutex.lock()" in _between(store, "pub fn applySyncRows", "\n}\n")
+            and "apply_mutex.lock()" in _between(store, "pub fn loadChangedSince", "\n}\n"),
+        "cloned db re-rolls its device id": "bindSyncIdentity();" in dbz and "lsp.identityAction(" in dbz
+            and "sync_device" in dbz and "pub fn identityAction(" in pure,
+        "reroll resets peer cursors after config load": "sync_identity_rerolled.swap(false" in client
+            and "sync_pure.resetCursorsAfterReroll(" in client,
+        "cursor resets on peer change": "sync_pure.bindCursors(p, peer)" in client and "p.pull_seq = 0" in pure and "p.push_seq = 0" in pure,
+        "outcomes routed by address": "sync_pure.findPeer(" in client and "sync_pure.applyRun(" in client,
+        "seq trigger on every synced write": "library_items_seq_ins" in dbz and "library_items_seq_upd" in dbz
+            and "home_hidden" not in _between(dbz, "library_items_seq_upd AFTER UPDATE OF", "ON library_items"),
+        "device identity seeded": "library_sync_meta" in dbz and "randomblob(16)" in dbz,
+        "pull skips own echoes + tags origin": "&from=" in client and "store.applySyncRows(rows[0..d.count], d.deviceId())" in pull_fn,
+        "push skips rows from that peer": "store.loadChangedSince(at, snapshot, peer_device, rows)" in push_fn,
+        "UI tick wired": 'library_sync.zig").tick()' in main,
+        "tombstone column": "ADD COLUMN deleted INTEGER DEFAULT 0" in dbz,
+        "tombstone on the wire + merge": "deleted: bool" in pure and "remote.deleted" in pure and '\\"deleted\\"' in pure,
+        "rails hide tombstones": _between(store, "fn loadContinueUncached", "\n}\n").count("deleted=0") == 1
+            and "deleted=0" in _between(store, "fn loadFavoritesUncached", "\n}\n"),
+        "local writes resurrect": _between(store, "pub fn upsertProgress", "\n}\n").count("deleted=0") == 1,
+        "history removal tombstones": 'removeItem("watch"' in wh and 'removeKind("watch")' in wh,
+        "settings uses themed helpers": "components.actionButton(" in ui and "components.toggleRow(" in ui
+            and "absField(" in ui and "dvui.button(" not in ui and "components.confirmDangerButton(" in ui,
+        "settings: per-peer sync, add, remove": "lsync.syncNow(i)" in ui and "addPeer(" in ui and "removePeer(" in ui
+            and "lsync.peerBusy(p)" in ui,
+    }
+    missing = [k for k, ok in checks.items() if not ok]
+    if missing:
+        return "fail", "device sync incomplete: " + ", ".join(missing)
+    return "pass", "device sync: N peers in parallel with own seq cursors, clone re-roll, origin echo skip, tombstones, themed settings"
+
+
+def _zig_sql_execs(src, start_marker, end_marker):
+    """Statements passed to exec(...) between two markers in a Zig file —
+    both single-line string literals and `\\\\` multiline literals."""
+    import re
+    region = src[src.index(start_marker):src.index(end_marker)]
+    out = []
+    for m in re.finditer(r'exec\((?:"((?:[^"\\]|\\.)*)"|\s*\n((?:\s*\\\\[^\n]*\n)+)\s*)\)', region):
+        if m.group(1) is not None:
+            out.append(m.group(1).encode().decode("unicode_escape"))
+        else:
+            out.append("\n".join(l.strip()[2:] for l in m.group(2).strip().splitlines()))
+    return out
+
+
+@test("Library sync triggers + echo rule behave (executed in sqlite)", "Library")
+def test_library_sync_sql_executed():
+    # Grep checks can't catch a broken trigger. Run the SHIPPED schema/trigger
+    # SQL from db.zig and the SHIPPED echo predicate from library_store.zig.
+    import re, sqlite3
+    db_src = _src("src/core/db.zig")
+    st_src = _src("src/services/library_store.zig")
+    stmts = _zig_sql_execs(db_src, "Unified cross-vertical read-model", "bindSyncIdentity();")
+    if not any("library_items_seq_upd" in s for s in stmts):
+        return "fail", "could not extract the seq triggers from db.zig"
+    m = re.search(r'FROM library_items WHERE seq > \?1 AND seq <= \?2 " \+\+\s*"([^"]+)"', st_src)
+    if not m:
+        return "fail", "could not extract loadChangedSince's echo predicate"
+    echo_sql = "SELECT kind,item_id FROM library_items WHERE seq > ?1 AND seq <= ?2 " + m.group(1)
+    con = sqlite3.connect(":memory:")
+    for s in stmts:
+        try:
+            con.execute(s)
+        except sqlite3.OperationalError as e:
+            if "duplicate column" not in str(e):
+                return "fail", f"schema SQL failed: {e}"
+    seq = lambda k: con.execute("SELECT seq FROM library_items WHERE item_id=?", (k,)).fetchone()[0]
+    con.execute("INSERT INTO library_items(kind,item_id,percent) VALUES('movie','a',10)")
+    con.execute("INSERT INTO library_items(kind,item_id,percent) VALUES('movie','b',20)")
+    a0, b0 = seq("a"), seq("b")
+    checks = {"inserts get increasing seq": 0 < a0 < b0}
+    con.execute("UPDATE library_items SET percent=50 WHERE item_id='a'")
+    a1 = seq("a")
+    checks["synced-field write bumps seq"] = a1 > b0
+    con.execute("UPDATE library_items SET home_pinned=1 WHERE item_id='a'")
+    checks["home layout write does not bump seq"] = seq("a") == a1
+    con.execute("UPDATE library_items SET origin='peerA' WHERE item_id='a'")  # applySyncRows tag
+    checks["origin tag does not re-bump seq"] = seq("a") == a1
+    rows = lambda dev: {r[1] for r in con.execute(echo_sql, (0, 10**9, dev, 100))}
+    checks["echo rule hides peer's own rows"] = rows("peerA") == {"b"}
+    checks["other peers still get them"] = rows("peerB") == {"a", "b"} and rows("") == {"a", "b"}
+    con.execute("UPDATE library_items SET percent=60 WHERE item_id='a'")
+    checks["local write clears origin"] = con.execute("SELECT origin FROM library_items WHERE item_id='a'").fetchone()[0] == ""
+    bad = [k for k, ok in checks.items() if not ok]
+    if bad:
+        return "fail", "sync SQL broken: " + ", ".join(bad)
+    return "pass", f"{len(checks)} executed checks on shipped trigger + echo SQL"

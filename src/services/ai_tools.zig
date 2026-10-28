@@ -496,29 +496,18 @@ fn executeReadWebpage(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
     const jina_url = std.fmt.bufPrintZ(&jina_url_buf, "https://r.jina.ai/{s}", .{url}) catch
         return std.fmt.allocPrint(alloc, "URL too long", .{}) catch null;
 
-    // Execute curl in background
-    var child = @import("../core/io_global.zig").Child.init(
-        &.{ "curl", "-s", "--max-time", "10", "-H", "Accept: text/plain", jina_url },
-        alloc,
-    );
-    child.stdout_behavior = .Pipe;
-    child.stderr_behavior = .Pipe;
-    child.spawn() catch
-        return std.fmt.allocPrint(alloc, "Failed to fetch URL", .{}) catch null;
-
-    // Read up to MAX_TOOL_RESULT bytes of output
-    var result = alloc.alloc(u8, MAX_TOOL_RESULT) catch {
-        _ = child.wait() catch {};
-        return null;
-    };
-    const stdout = child.stdout.?;
-    var total: usize = 0;
-    while (total < MAX_TOOL_RESULT) {
-        const n = @import("../core/io_global.zig").read(stdout, result[total..]) catch break;
-        if (n == 0) break;
-        total += n;
-    }
-    _ = child.wait() catch {};
+    // Fetch via reliable-fetch into a heap scratch buffer (pages can be large),
+    // then keep the first MAX_TOOL_RESULT bytes like the old truncating read.
+    const scratch = alloc.alloc(u8, 2 * 1024 * 1024) catch return null;
+    defer alloc.free(scratch);
+    const body = @import("reliable_fetch.zig").fetch(jina_url, scratch, .{
+        .timeout_secs = 10,
+        .impersonate = false,
+        .headers = &.{.{ .name = "Accept", .value = "text/plain" }},
+    }) orelse "";
+    var result = alloc.alloc(u8, MAX_TOOL_RESULT) catch return null;
+    const total = @min(body.len, MAX_TOOL_RESULT);
+    @memcpy(result[0..total], body[0..total]);
 
     if (total == 0) {
         alloc.free(result);
