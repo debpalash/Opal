@@ -12,7 +12,7 @@ def test_owned_browse_catalog_jobs():
     youtube = _src("src/services/youtube.zig")
     drama = _src("src/services/drama.zig")
     vndb = _src("src/services/vndb.zig")
-    for name in ("trendingThread", "seasonalThread", "calendarThread"):
+    for name in ("trendingWithFetch", "seasonalThread", "calendarThread"):
         worker = section(anime, "fn " + name + "(", "\n}\n")
         assert "job: GridJob" in worker and "job.url[0..job.url_len]" in worker
         for mutable in ("state.app.anime.cal_day", "state.app.anime.season_sel", "state.app.anime.season_year"):

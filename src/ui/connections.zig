@@ -42,8 +42,8 @@ pub fn render() void {
             .jellyfin => @import("jellyfin_ui.zig").renderConnectionEditor(),
             .plex => {
                 if (plex.isConnected()) {
-                    if (dvui.button(@src(), "Reconnect with Plex", .{}, .{})) plex.connect();
-                    if (dvui.button(@src(), "Disconnect Plex", .{}, .{})) plex.disconnect();
+                    if (components.actionButton(@src(), "Reconnect with Plex", .secondary, 0)) plex.connect();
+                    if (components.actionButton(@src(), "Disconnect Plex", .secondary, 0)) plex.disconnect();
                 } else plex.renderContent();
             },
             .audiobooks => abs.renderLoginForm(),

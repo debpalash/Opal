@@ -115,7 +115,7 @@ def test_mihon():
         # panel writes suwayomi/source + selects the Suwayomi source in Comics.
         "browse bridge in comics": "pub fn browseSuwayomiSource(" in comics
             and 'sc.install("suwayomi"' in comics,
-        "suwayomi source chip": 'renderSourceChip("Suwayomi", 6, .suwayomi)' in comics,
+        "suwayomi source chip": '.{ .id = @intFromEnum(Source.suwayomi), .label = "Suwayomi"' in comics,
         "panel has a Browse button": "browseSuwayomiSource(r.source_id" in svc
             and "source_id" in svc,
     })

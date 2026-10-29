@@ -429,7 +429,7 @@ fn renderGallery(toolbar: anytype) void {
         var apply_bar = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .padding = dvui.Rect.all(8) });
         if (components.iconButton(@src(), icons.tvg.lucide.@"maximize-2", "Fill desktop", fill_desktop)) fill_desktop = true;
         if (components.iconButton(@src(), icons.tvg.lucide.@"minimize-2", "Fit desktop", !fill_desktop)) fill_desktop = false;
-        if (dvui.button(@src(), if (row.media == .image) "Apply wallpaper" else "Apply live wallpaper", .{}, .{})) desktop.request(row, fill_desktop);
+        if (components.actionButton(@src(), if (row.media == .image) "Apply wallpaper" else "Apply live wallpaper", .secondary, 0)) desktop.request(row, fill_desktop);
         if (desktop.snapshot() == .active or desktop.snapshot() == .downloading or desktop.snapshot() == .applying) {
             if (components.iconButton(@src(), icons.tvg.lucide.square, "Stop wallpaper / cancel", false)) desktop.stop();
         }
@@ -451,7 +451,7 @@ fn renderGallery(toolbar: anytype) void {
             const w = @min(available.w, available.h * 16 / 9);
             if (!motion.draw(w, w * 9 / 16)) {
                 if (motion.failed) {
-                    if (dvui.button(@src(), "Retry motion preview", .{}, .{})) _ = motion.start(row.original.text(), row.page.text());
+                    if (components.actionButton(@src(), "Retry motion preview", .secondary, 0)) _ = motion.start(row.original.text(), row.page.text());
                 } else dvui.spinner(@src(), .{ .gravity_x = 0.5, .gravity_y = 0.5 });
             }
         } else if (tex) |texture| {

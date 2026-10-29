@@ -112,7 +112,7 @@ def test_search_v2_native_view():
         "visible artwork only": "art.data().visible()" in renderer and "components.galleryCoverArt(" in renderer,
         "keyboard details action retained": 'actionButton(@src(), "Details"' in renderer,
         "shared content grouping": "search_content.projectInto(" in renderer and "galleryGroupVisible(" in renderer,
-        "global search regardless browse route": "browser.searchCurrentBrowse(text)" not in omnibox and "search_mod.submitQuery(text)" in omnibox,
+        "search preserves the selected browse scope": "browser.searchCurrentBrowse(text)" not in omnibox and "search_mod.submitScopedQuery(text)" in omnibox,
         "snapshot-owned action": "view_cache.rows.?[action.idx]" in renderer and "resolver.playResolvedItem(item)" in renderer,
         "safe torrent queue": "torrent_risk_pure.zig" in renderer and "risk.risk == .block" in renderer and "addToQueue(" in renderer,
         "stable result widget identities": "resolver.actionKey(item)" in row and ".id_extra = row_key" in row,
@@ -166,7 +166,7 @@ def test_search_shell_dense_and_query_ownership():
             and "dvui.menuItemLabel(@src(), label" in select
             and "components.tip(@src(), data, current_label)" in select,
         "query owned before cancellation and mirrored writes": submit.index("@memcpy(owned") < submit.index("cancelPendingMemorySearch()")
-            and "setUniversalQuery(owned[0..n])" in submit
+            and "setQueryText(owned[0..n])" in submit
             and mirror.index("@memcpy(owned") < mirror.index("@memset(&search_buf"),
         "both query fields mirrored": "@memcpy(search_buf[0..n], owned[0..n])" in mirror
             and "@memcpy(state.app.magnet_buf[0..n], owned[0..n])" in mirror,

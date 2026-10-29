@@ -52,7 +52,7 @@ def test_omnibox_search():
     search = open(os.path.join(PROJECT_DIR, "src/services/search.zig")).read()
     main = open(os.path.join(PROJECT_DIR, "src/main.zig")).read()
     memory_entry = _between(search, "pub fn memorySearch(", "fn memorySearchWorker(")
-    if ("submitQuery" in shell and "pub fn submitQuery" in search and "navigate(.search)" in shell
+    if ("submitScopedQuery" in shell and "pub fn submitQuery" in search and "navigate(.search)" in shell
             and "switch (browser_pure.classifyOmnibox(trimmed))" in header
             and "search.submitQuery(trimmed)" in header
             and "spawn(memorySearchWorker" in memory_entry
@@ -202,7 +202,7 @@ def test_podcasts_wired():
             and "overflow = true" in _src("src/services/reliable_fetch.zig")
         ),
         # episodes[] holds 200, but a 1 MB cap only ever reached the newest 61.
-        "episode cap fills the array": "4 * 1024 * 1024" in svc,
+        "episode cap fills the array": "PODCAST_FEED_CAP: usize = 8 * 1024 * 1024" in svc,
         "enum variant": "Podcasts," in st and "podcasts: struct" in st,
         "drawer route": '.Podcasts => @import("podcasts_ui.zig").renderContent()' in drawer,
         "shell label+icon": '.Podcasts => "Podcasts"' in shell and "lucide.podcast" in shell,
@@ -271,7 +271,7 @@ def test_podcasts_radio_default_content():
         ),
         "podcast routes through pure": all(
             f"pure.{fn}(" in pod
-            for fn in ("buildTopChartUrl", "parseTopChartIds", "buildLookupUrl")
+            for fn in ("buildCountryChartUrl", "parseTopChartIds", "buildLookupUrl")
         ),
         # The chart supplies ids only; /lookup returns search's result objects,
         # so the EXISTING parser must be what fills results[] (no 2nd parser).
@@ -284,7 +284,7 @@ def test_podcasts_radio_default_content():
         # same ranking, same station objects, but pageable.
         "radio pure builder": "pub fn buildPopularUrl" in rad_pure,
         "radio votes-ordered endpoint": "order=votes&reverse=true" in rad_pure,
-        "radio routes through pure": "pure.buildPopularUrl(" in rad,
+        "radio routes through pure": "pure.buildCountryUrl(" in rad,
         "radio reuses parseStations": "pure.parsePage(" in rad,
         "radio one-shot latch": "popular_fetched" in rad and "pub fn loadPopularOnce" in rad,
         "radio fetch is backgrounded": "spawnLegacy(popularWorker" in rad,
@@ -338,7 +338,7 @@ def test_comics_mangadex_source():
         # appended after it — assert membership, not the exact closing brace).
         "source enum variant": (bool(_re.search(r"const\s+Source\s*=\s*enum(?:\s*\([^)]*\))?\s*\{", svc))
                                 and "all, readallcomics, mangadex" in svc),
-        "source chip": 'renderSourceChip("MangaDex", 3, .mangadex)' in svc,
+        "source chip": '.{ .id = @intFromEnum(Source.mangadex), .label = "MangaDex"' in svc,
         # ── Keyless: the endpoint is a constant, NOT a source_config lookup ──
         "keyless api const": 'pub const MD_API = "https://api.mangadex.org"' in pure,
         "no source_config gate": 'source_config.zig").get("mangadex"' not in svc,

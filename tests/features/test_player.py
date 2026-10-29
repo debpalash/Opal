@@ -739,39 +739,26 @@ def test_youtube_browse():
     return "pass", "suggestions dropdown + clickable channels + play→player wired"
 
 
-@test("YouTube card: sticky icon actions, compact footer", "Browse")
+@test("YouTube card: clickable artwork and bounded action footer", "Browse")
 def test_youtube_card_footer():
-    """Regression + redesign: the Play/Queue buttons were clipped to a sliver on
-    any card whose title wrapped to two lines, because they lived in the fixed-
-    height footer below the title. Fix: they're now ICON-only buttons stuck to
-    the THUMBNAIL (thumbActionIcon), independent of the footer, so a tall title
-    can never clip them. The footer carries only the (compact) title + meta."""
     yt = _src("src/services/youtube.zig")
+    card = _between(yt, "fn renderCard(", "pub fn ")
+    footer = _between(yt, "fn cardFooterH()", "fn metaFont()")
     checks = {
-        # Sticky thumbnail-anchored icon buttons (no text), Play + Queue.
-        "sticky icon action helper": "fn thumbActionIcon(" in yt,
-        "play + queue icons wired": 'thumbActionIcon(idx + 171, "Play video", icons.tvg.lucide.play, true)' in yt
-            and 'thumbActionIcon(idx + 172, "Add to queue", icons.tvg.lucide.plus, false)' in yt,
-        "actions anchored bottom-left of thumb": ".gravity_x = 0.0," in yt and ".gravity_y = 1.0," in yt,
-        # Thumbnail is a plain box now (a wrapping button would eat the icon
-        # clicks — parent processes events before children).
-        "thumbnail not a button": "var thumb = dvui.box(@src()" in yt,
-        # No text-button actions row in the footer any more.
-        "footer actions row removed": 'dvui.button(@src(), "Play"' not in yt
-            and 'dvui.button(@src(), "Queue"' not in yt,
-        # Compact fonts: title at body size, meta smaller.
-        "compact title font": "fn titleFont()" in yt
-            and "font_heading.withSize(theme.font_size.body)" in yt,
-        "compact meta font": "fn metaFont()" in yt and ".font = metaFont()," in yt,
-        # Footer height reserved from the SAME title font, title clamped to 2 lines.
-        "footer reserves title font": "const title = titleFont();" in yt
-            and "2.0 * title.lineHeight()" in yt,
-        "title clamped to two lines": ".h = 2.0 * titleFont().lineHeight()" in yt,
+        "artwork is a keyboard-focusable play target": "var thumb: dvui.ButtonWidget" in card
+            and "if (thumb.clicked()) action = .play" in card and "thumb.drawFocus()" in card,
+        "16:9 artwork": "the_card_w * 9.0 / 16.0" in card,
+        "bounded two-line title": "components.twoLineTitle(" in card
+            and "title_font.textHeight() * 2 + 6" in card and ".h = title_h" in card,
+        "footer includes title metadata and action height": "titleFont().textHeight() * 2" in footer
+            and "metaFont().lineHeight() * 2" in footer and "font_body.lineHeight() + 60" in footer,
+        "grid and cards share footer measurement": yt.count("cardFooterH()") >= 3,
+        "themed play and queue remain available": 'actionButton(@src(), "Play", .secondary' in card
+            and 'menuItemLabel(@src(), "Add to queue"' in card and "action = .queue" in card,
+        "source channel remains actionable": "action = .channel" in card,
     }
-    bad = [k for k, v in checks.items() if not v]
-    if bad:
-        return "fail", "card redesign: " + ", ".join(bad)
-    return "pass", "Play/Queue are sticky thumbnail icon buttons; compact footer can't clip them"
+    bad = [name for name, ok in checks.items() if not ok]
+    return ("fail", ", ".join(bad)) if bad else ("pass", "Clickable 16:9 artwork, bounded title, reserved footer and Play/Queue actions")
 
 
 @test("macOS Now Playing media keys", "Player")
@@ -1183,7 +1170,7 @@ def test_queue_row_layout():
         "hardcoded 78px reservation gone": ".w = 78," not in q,
 
         # Header row has the same [label][...][buttons] shape and the same risk.
-        "header label capped": ".w = 140," in q,
+        "compact shared header": "page_controls.begin(@src())" in q and "page_controls.item(" in q,
     }
 
     bad = [k for k, v in checks.items() if not v]

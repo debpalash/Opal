@@ -368,10 +368,10 @@ def test_anime_jikan_resilience():
     an = _src("src/services/anime.zig")
     checks = {
         "no sfw param sent": 'return "";' in ap and "504s on the `sfw`" in ap,
-        "trending falls back to unfiltered": "filtered top unavailable" in an
+        "trending falls back to unfiltered": "trendingWithFetch(job, trendingGet, anilist.fetchBrowseWithCancellation)" in an
             and "added == 0 and job.fallback_len > 0" in an
             and "search_request.current() == my_gen" in an
-            and "jikanGet(fb, buf, my_gen)" in an,
+            and "get(job.fallback[0..job.fallback_len], buf, my_gen)" in an,
         "anime curls bound connect time": "reliable_fetch.fetch(" in an
             and '"--connect-timeout"' in _src("src/services/reliable_fetch_pure.zig"),
     }

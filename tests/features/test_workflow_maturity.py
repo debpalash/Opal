@@ -64,12 +64,16 @@ def test_remaining_metadata_transport():
     for name, body, seconds, size in (("EZTV", search, 5, "512 * 1024"),
                                      ("Queue artwork", queue, 8, "2 * 1024 * 1024"),
                                      ("Piped", piped, 5, "512 * 1024"),
-                                     ("YouTube artwork", thumb, 8, "5 * 1024 * 1024"),
                                      ("Suggestions", suggestions, 3, "64 * 1024")):
         assert 'http.zig").fetch(' in body, name
         assert ".request(" not in body and "allocRemaining(" not in body, name
         assert f".timeout_secs = {seconds}" in body, name
         assert ".max_response = buffer.len" in body and size in body, name
+    transport = youtube.split("fn fetchThumbnailBody(", 1)[1].split("pub fn fetchThumb(", 1)[0]
+    assert 'http.zig").fetchDirect(' in transport and '.timeout_secs = 3' in transport
+    assert 'reliable_fetch.zig").fetch(' in transport and '.timeout_secs = 5' in transport
+    assert '.connect_timeout_secs = 2' in transport and transport.count('.cancel_epoch = cancel') == 2
+    assert 'fetchThumbnailBody(turl, buffer,' in thumb and 'alloc.alloc(u8, 1024 * 1024)' in thumb
     assert "copyValue(\"eztv\"" in search and "&search_generation" in search
     assert "&search_request.generation" in piped and "&sugg_gen" in suggestions
     assert "fn worker(request: ThumbRequest)" in thumb and ".{job}" in thumb
@@ -121,7 +125,7 @@ def test_audio_browse_progressive():
     assert "search_request.isCurrent(group.job.generation)" in podcasts
     assert "group.progress.clearOnFinish()" in podcasts and "group.progress.accept" in podcasts
     radio = _src("src/services/radio.zig")
-    assert 'browse_fanout.zig").run' in radio and ".limit = 2" in radio
+    assert 'browse_fanout.zig").run' in radio and ".limit = 3" in radio
     assert "pure.appendUnique(&state.app.radio.results" in radio
     assert "defer appendSoma" not in radio
     assert "fetchBodyForGeneration" in radio and ".cancel_epoch" in radio
@@ -165,7 +169,7 @@ def test_audio_browse_cache_lock_scope():
         popular = service.split("pub fn loadPopularOnce", 1)[1].split("fn popularWorker", 1)[0]
         assert "seedPopularFromCache();" not in popular, kind
         assert popular.index("parse_mutex.lock()") < popular.index("search_request.begin"), kind
-        assert "seedPopularFromCache(my_gen)" in service, kind
+        assert "seedPopularFromCache(job.generation)" in service, kind
         search = service.split("pub fn search" + ("Podcasts" if kind == "podcasts" else "Radio"), 1)[1]
         search = search.split("fn searchWorker", 1)[0]
         assert search.index("parse_mutex.lock()") < search.index("search_request.begin"), kind

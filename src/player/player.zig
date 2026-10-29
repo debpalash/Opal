@@ -776,6 +776,7 @@ pub const MediaPlayer = struct {
 
     fn initPrepared(allocator: std.mem.Allocator, start_renderer: bool) !*MediaPlayer {
         const self = try allocator.create(MediaPlayer);
+        self.audio_only_intent = false;
         self.lifetime_id = next_player_lifetime_id.fetchAdd(1, .monotonic);
         self.texture = null;
         self.current_torrent_id = -1;

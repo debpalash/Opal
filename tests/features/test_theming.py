@@ -219,7 +219,7 @@ def test_browser_cloak_engine():
                                          and "pub fn engineFromString" in bp
                                          and "pure.Engine" in br),
         "config key round-trips": cfg.count('"browser_engine"') >= 2,
-        "settings picker + per-engine status": ('"Browser Engine"' in st
+        "settings picker + per-engine status": ('"Browser engine"' in st
                                                 and "CloakBrowser" in st
                                                 and "engineReady" in st
                                                 and "killBridge" in st),

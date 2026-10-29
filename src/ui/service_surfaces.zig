@@ -36,7 +36,7 @@ pub fn section(src: std.builtin.SourceLocation, title: []const u8, detail: []con
     dvui.labelNoFmt(@src(), title, .{}, .{ .expand = .horizontal, .font = dvui.themeGet().font_body.withSize(13), .color_text = theme.colors.text_primary, .padding = dvui.Rect.all(0), .gravity_y = 0.5 });
     if (detail.len > 0) {
         var help: dvui.WidgetData = undefined;
-        const clicked = dvui.buttonIcon(@src(), "Section help", @import("icons").tvg.lucide.info, .{}, .{}, .{ .data_out = &help, .color_fill = theme.transparent, .color_text = theme.colors.text_tertiary, .min_size_content = theme.iconSize(.sm), .padding = dvui.Rect.all(2), .gravity_y = 0.5 });
+        const clicked = dvui.buttonIcon(@src(), "Section help", @import("icons").tvg.lucide.info, .{}, .{}, .{ .data_out = &help, .color_fill = theme.transparent, .color_fill_hover = theme.colors.bg_hover, .color_fill_press = theme.colors.bg_elevated, .color_text = theme.colors.text_tertiary, .min_size_content = theme.iconSize(.sm), .padding = dvui.Rect.all(2), .gravity_y = 0.5 });
         @import("components.zig").tip(@src(), help, detail);
         if (clicked) {
             show_help = !show_help;

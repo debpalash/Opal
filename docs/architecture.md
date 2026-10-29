@@ -53,6 +53,13 @@ must be removed. The feature gate exercises this checker. The backlog is not a
 claim that every existing service is already UI-free. Extract rendering feature
 by feature, following Podcasts, rather than adding new dependencies to the list.
 
+The v0.9.0 CI repair records a separately identified `reviewed_v0_9_0_debt`
+list for UI imports introduced by the already-shipped browse and wallpaper
+work. This is a one-time inventory correction, not a completed extraction or
+permission to add further edges. Its extraction plan and exact imports remain
+visible in the exception file; the boundary checker still rejects unlisted
+imports and stale exceptions.
+
 Desktop and headless execution share `application/playback_update.zig`. Worker
 completion and playback recovery belong there, never solely in a widget or
 desktop frame. Both hosts retain their own presentation and input handling.

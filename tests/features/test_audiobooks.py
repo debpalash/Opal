@@ -57,7 +57,7 @@ def test_audiobookshelf():
         "renderContent exists": "pub fn renderContent() void" in svc,
 
         # ── Shell: label + icon + browse sub-tab ──
-        "shell label + icon": '.Audiobooks => "Audiobooks"' in shell and ".Audiobooks => icons" in shell,
+        "shell label + icon": '.Audiobooks => "Audiobooks"' in shell and ".Audiobooks => brands.icon(.audiobookshelf)" in shell,
         "browse sub-tab": ".Audiobooks," in shell or ".Audiobooks }" in shell,
 
         # ── Playback: stream URL → load_file → gotoPlayer (Now Playing card) ──

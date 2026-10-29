@@ -28,7 +28,7 @@ def test_plugins_grouped_filter():
         "render uses matches": "pp.matches(" in pl,
         # UI affordances: filter buffer, installed-only toggle, count summary.
         "filter state": "src_filter_buf" in pl and "src_installed_only" in pl,
-        "count summary": "sources ·" in pl and "installed" in pl,
+        "count summary": "Installed ({d})" in pl and "installed" in pl,
         "empty-filter message": "No sources match the filter." in pl,
     }
     missing = [k for k, v in checks.items() if not v]
@@ -98,7 +98,7 @@ def test_plugins_navbar_menu():
         # Page renders one section at a time, sharing the generic tab strip.
         "plugins page case": ".plugins => {" in sh,
         "generic subtab strip": "fn subTabsOf(" in sh,
-        "plugin subtabs reuse it": "fn pluginSubTabs()" in sh and "subTabsOf(router.PluginTab" in sh,
+        "plugin subtabs reuse it": "fn pluginSubTabs()" in sh and "pluginTabControls();" in sh and "router.PLUGIN_TABS" in sh and "page_controls.renderMenu(" in sh,
         # Sections split out of the single scroll, reusing the same renderers.
         "renderSection": "pub fn renderSection(" in pl,
         "content section extracted": "fn renderContentPlugins()" in pl,

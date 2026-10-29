@@ -92,6 +92,7 @@ COVERED = {
 # them against router.zig / state.zig, so a desktop tab could exist with no web
 # equivalent and no entry here, and parity still read 98%. It was really 83%.
 GAPS = {
+    "connections hub": "Web exposes individual connection workflows but not the combined desktop Connect hub.",
     "agents dashboard": "The desktop Agents overview, tasks, and activity panels have no corresponding web page or remote workflow yet.",
     "profile management": "Settings › Profiles (create, PIN, kids mode) has /api/profiles routes but no web page yet.",
 }
@@ -112,7 +113,7 @@ NOT_APPLICABLE = {
 DESKTOP_SURFACES = {
     # src/core/router.zig :: Route
     "Route": {
-        "home": "home hub", "search": "search", "browse": "browse (TMDB)",
+        "connect": "connections hub", "home": "home hub", "search": "search", "browse": "browse (TMDB)",
         "watching": "watching library", "downloads": "downloads", "queue": "queue",
         "history": "history", "player": "now playing", "assistant": "assistant (AI)",
         "settings": "playback settings", "plugins": "plugins manager",

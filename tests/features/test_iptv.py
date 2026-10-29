@@ -92,7 +92,7 @@ def test_iptv_tab():
         "iptv routes through link_health": 'link_health.statusOf("iptv"' in svc.replace("IPTV_KIND", '"iptv"') or "link_health.statusOf(IPTV_KIND" in svc,
         "radio wired to link_health": "link_health.probe(RADIO_KIND" in _src("src/services/radio.zig"),
         "working-only filter": "working_only" in svc,
-        "test-channels button": '"Test"' in svc,
+        "test-channels button": '"Check channel availability"' in svc,
 
         # ── Service: gate + async worker + thread-safety + play path ──
         # Production routes through the pure fns (tested logic == shipped logic).

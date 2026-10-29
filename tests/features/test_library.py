@@ -152,9 +152,9 @@ def watch_items_are_removable():
         "hidden cards excluded": "home_hidden=0" in store,
         "pinned cards sort first": "ORDER BY home_pinned DESC" in store,
         "pin control wired": "setHomePinned(" in home and "Pin to front" in home,
-        "hide control wired": "setHomeHidden(" in home and "Remove from Home" in home,
+        "hide control wired": "setHomeHidden(" in home and "Remove from Continue" in home,
         "private until hover": "renderPrivateTitle(" in home and "const revealed = !manage_continue or hovered" in home,
-        "hidden cards restorable": "restoreHiddenContinue()" in home and "Restore hidden" in home,
+        "hidden cards restorable": "restoreHiddenContinue()" in home and "Restore removed Continue" in home,
         "no progress deletion": "DELETE FROM library_items" not in store,
     }
     missing = [k for k, v in checks.items() if not v]

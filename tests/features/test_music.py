@@ -46,7 +46,7 @@ def test_music():
         "inert when unconfigured": "fn configured()" in svc and "orelse return" in svc,
         "per-session salt": "fn ensureSalt()" in svc,
         "search entry": "pub fn searchMusic" in svc,
-        "play hands url to mpv": "pub fn playSong" in svc and "loadContentDirectMeta(" in svc,
+        "play hands url to mpv": "pub fn playSong" in svc and "playDirect(.{ .url = url, .audio_only = true" in svc,
         "covers via poster daemon": "poster.fetchAsync(" in svc,
         "render entry": "pub fn renderContent" in svc,
         "thread discipline": "LatestRequest" in svc and "parse_mutex" in svc
@@ -58,7 +58,7 @@ def test_music():
         ),
 
         # ── Enum → state → nav → render → rail/shell ──
-        "enum variant": "Music }" in st and "pub const DrawerTab" in st,
+        "enum variant": "Music," in st and "pub const DrawerTab" in st,
         "state struct": "music: struct {" in st and "]music_pure.MusicSong" in st,
         "nav host page": ".Music => {" in st and "app.browse_source = .Music;" in st,
         "render dispatch": '.Music => @import("../services/music_subsonic.zig").renderContent()' in drawer,

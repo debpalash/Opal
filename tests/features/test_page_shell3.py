@@ -119,7 +119,7 @@ def test_tv_tracking():
         # The Watching library is not TV-only.
         "all kinds aggregated": ("fn addTvRows(" in lib and "fn addAnimeRows(" in lib
                                  and "fn addMovieRows(" in lib),
-        "kind filters": "components.segment(" in lib and "kind_filter" in lib,
+        "kind filters": "bar.menu(@src()" in lib and "kind_filter" in lib,
         # A TV episode also lands in watch_history under its release name; listing
         # it as a "movie" would duplicate the show under a worse identity.
         "episodes excluded from movies": "subs.parse(name, &qbuf, &showbuf).is_tv" in lib,
@@ -139,7 +139,7 @@ def test_tv_tracking():
         # The page.
         "watching route": "watching," in rt and ".watching =>" in sh,
         # Both chip rows and the visibility rule come from the tested pure module.
-        "filter chips from pure": "tp.countsFor(" in lib and "tp.visible(" in lib,
+        "filter chips from pure": ".selected = @intFromEnum(filter)" in lib and "tp.visible(" in lib,
         # Each row costs 2 queries; polling 200 shows at 2Hz would be ~800 q/s.
         "snapshot is dirty-driven, not polled": ("library_dirty" in lib
                                                  and "last_build_ms" not in lib),
@@ -164,7 +164,7 @@ def test_watching_progress_first_layout():
         "saved library section": ('renderSectionHeading("Your library"' in lib
                                   and "renderGrid(.saved)" in lib),
         "top-aligned content": ".gravity_y = 0" in _between(lib, "pub fn renderContent", "fn renderControlBar"),
-        "quiet segmented filters": "components.segment(" in lib,
+        "quiet segmented filters": "bar.menu(@src()" in lib,
         "filters persist": "watching_filter" in _src("src/core/state.zig")
             and 'setKey("watching_filter"' in _src("src/core/config.zig")
             and "state.markConfigDirty()" in lib,

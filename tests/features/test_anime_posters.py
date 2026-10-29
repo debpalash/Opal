@@ -41,7 +41,11 @@ def test_anime_poster_lifecycle():
     # Every render site routes through the pure fn rather than re-deriving the
     # branch inline (it was duplicated three times, which is how the bug hid).
     routed = anime.count("anime_pure.posterAction(")
-    pure_checks["all 3 render sites routed"] = routed == 3
+    pure_checks["legacy row and shared artwork lifecycle"] = (
+        routed == 1 and anime.count("anime_images.get(url)") >= 2
+        and "anime_images.failed(url)" in anime and "anime_images.prefetch(" in anime
+        and "pub fn deinit()" in _src("src/ui/anime_images.zig")
+    )
     pure_checks["no inline latch left"] = (
         "item.poster_attempted and item.poster_pixels == null" not in anime
     )
@@ -57,5 +61,5 @@ def test_anime_poster_lifecycle():
 
     missing = [k for k, ok in pure_checks.items() if not ok]
     if not missing:
-        return "pass", "anime poster lifecycle: pure posterAction routed at all 3 render sites; parsers reset the latch when retiring a texture"
+        return "pass", "anime poster lifecycle: legacy posterAction and shared artwork cache routed; parsers reset the latch when retiring a texture"
     return "fail", "anime poster lifecycle incomplete: " + ", ".join(missing)

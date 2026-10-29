@@ -1724,19 +1724,19 @@ fn renderUniversalResults() void {
             @import("operator_search_help.zig").onEmptyResults(typed);
             renderDidYouMean(typed);
             components.emptyState(icons.tvg.lucide.@"search-x", "No matches", if (currentScope() == .all) "Try a broader query or check your filters." else "Try another title or search all content.");
-            if (currentScope() != .all and dvui.button(@src(), "Search all content", .{}, .{})) changeSearchScope(.all);
+            if (currentScope() != .all and components.actionButton(@src(), "Search all content", .secondary, 0)) changeSearchScope(.all);
         } else if (currentScope() != .all) {
             components.emptyState(icons.tvg.lucide.search, "Search this collection", "Enter a title above.");
         } else {
             components.emptyState(icons.tvg.lucide.library, "No connected content yet", "Search above or connect a library.");
-            if (dvui.button(@src(), "Connect", .{}, .{})) state.app.router.navigate(.connect);
-            if (dvui.button(@src(), "Refresh", .{}, .{})) invalidateConnectedFeed();
+            if (components.actionButton(@src(), "Connect", .secondary, 0)) state.app.router.navigate(.connect);
+            if (components.actionButton(@src(), "Refresh", .secondary, 0)) invalidateConnectedFeed();
         }
         return;
     }
     if (view_cache.count == 0) {
         components.emptyState(icons.tvg.lucide.@"search-x", "No matches for these filters", "Remove a filter to see more of the loaded results.");
-        if (currentScope() != .all and dvui.button(@src(), "Search all content", .{}, .{})) changeSearchScope(.all);
+        if (currentScope() != .all and components.actionButton(@src(), "Search all content", .secondary, 0)) changeSearchScope(.all);
         return;
     }
     var pending: ?ResultAction = null;
