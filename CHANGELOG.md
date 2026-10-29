@@ -10,7 +10,7 @@ Add a section BEFORE tagging; a missing one ships a release that says so.
 Headings are `## vX.Y.Z — YYYY-MM-DD`, newest first. The version token must
 match the tag exactly.
 
-## v0.8.10 — 2026-10-29
+## v0.9.0 — 2026-10-29
 
 - **Wallpapers in Opal.** Browse Wallhaven and configured gallery-dl sources with infinite scrolling, open full-resolution images in a gallery, navigate with the keyboard, and hide the thumbnail strip for more viewing space.
 - **Wallpaper previews and desktop controls.** Preview looping videos and GIFs, download originals, and apply wallpapers with Fill/Fit controls. Live desktop playback uses mpv or mpvpaper and runs while Opal is open. Windows/Linux desktop application still needs on-device verification; GNOME/KDE Wayland animation is not supported.
