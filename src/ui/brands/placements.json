@@ -1,0 +1,88 @@
+{
+  "counting_rule": "Named brand placements, not the number of repeated cards or rendered pixels. Shared sidebar and search menus count once per brand.",
+  "implemented": [
+    {
+      "surface": "Connection cards",
+      "brands": [
+        "Jellyfin",
+        "Emby",
+        "Plex",
+        "Audiobookshelf"
+      ]
+    },
+    {
+      "surface": "Music source selector",
+      "brands": [
+        "YouTube Music",
+        "Jellyfin",
+        "Plex",
+        "Openverse"
+      ]
+    },
+    {
+      "surface": "Sidebar and shared destination icons",
+      "brands": [
+        "YouTube",
+        "Jellyfin",
+        "Plex",
+        "Audiobookshelf"
+      ]
+    },
+    {
+      "surface": "Search scope chips",
+      "brands": [
+        "YouTube",
+        "Jellyfin",
+        "Plex",
+        "Audiobookshelf"
+      ]
+    },
+    {
+      "surface": "Plugins tab and account heading",
+      "brands": [
+        "Trakt",
+        "Trakt"
+      ]
+    },
+    {
+      "surface": "About links",
+      "brands": [
+        "GitHub"
+      ]
+    },
+    {
+      "surface": "Paired browser identities",
+      "brands": [
+        "Firefox",
+        "Google Chrome",
+        "Brave",
+        "Safari"
+      ]
+    },
+    {
+      "surface": "YouTube empty state",
+      "brands": [
+        "YouTube"
+      ]
+    }
+  ],
+  "additional_dynamic_surface": "Source plugin cards use exact brand-name matches from the registry; unknown providers retain the generic puzzle icon.",
+  "deferred_without_verified_asset": [
+    "JioSaavn",
+    "Audius",
+    "Subsonic",
+    "Suwayomi"
+  ],
+  "keep_generic": [
+    "Movies & TV",
+    "Music",
+    "Anime",
+    "RSS",
+    "Reading server / OPDS",
+    "Netlabels",
+    "Connect",
+    "Debrid (multiple providers)",
+    "Play, search, refresh, settings, and other actions"
+  ],
+  "implemented_placements": 24
+}

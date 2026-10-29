@@ -46,6 +46,10 @@ pub fn processGlobalInputs() void {
         if (e.evt == .key and e.evt.key.action == .down) {
             const key = e.evt.key.code;
             const mod = e.evt.key.mod;
+            if (!e.handled and dvui.focusedWidgetId() == null and !mod.control() and !mod.command() and !mod.alt() and @import("../services/wallpapers.zig").galleryKey(key)) {
+                e.handled = true;
+                continue;
+            }
 
             // ── Always-active shortcuts (work even when text is focused) ──
 

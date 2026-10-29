@@ -1,0 +1,132 @@
+[
+  {
+    "id": "youtube",
+    "name": "YouTube",
+    "asset": "https://raw.githubusercontent.com/simple-icons/simple-icons/90646e4bf7f3b89df6c37e65baf3e7bc759a517c/icons/youtube.svg",
+    "official_source": "https://www.youtube.com/howyoutubeworks/resources/brand-resources/#logos-icons-and-colors",
+    "license": null,
+    "sha": "90646e4bf7f3b89df6c37e65baf3e7bc759a517c",
+    "note": "Monochrome brand mark distributed by Simple Icons (CC0); brand trademarks remain with their owners.",
+    "normalization": "Removed SVG title metadata (accessible labels supplied by UI); expanded packed arc flags for the SVG parser. Path geometry unchanged."
+  },
+  {
+    "id": "youtubemusic",
+    "name": "YouTube Music",
+    "asset": "https://raw.githubusercontent.com/simple-icons/simple-icons/90646e4bf7f3b89df6c37e65baf3e7bc759a517c/icons/youtubemusic.svg",
+    "official_source": "https://partnermarketinghub.withgoogle.com/#/brands",
+    "license": null,
+    "sha": "90646e4bf7f3b89df6c37e65baf3e7bc759a517c",
+    "note": "Monochrome brand mark distributed by Simple Icons (CC0); brand trademarks remain with their owners.",
+    "normalization": "Removed SVG title metadata (accessible labels supplied by UI); expanded packed arc flags for the SVG parser. Path geometry unchanged."
+  },
+  {
+    "id": "plex",
+    "name": "Plex",
+    "asset": "https://raw.githubusercontent.com/simple-icons/simple-icons/90646e4bf7f3b89df6c37e65baf3e7bc759a517c/icons/plex.svg",
+    "official_source": "https://brand.plex.tv",
+    "license": null,
+    "sha": "90646e4bf7f3b89df6c37e65baf3e7bc759a517c",
+    "note": "Monochrome brand mark distributed by Simple Icons (CC0); brand trademarks remain with their owners.",
+    "normalization": "Removed SVG title metadata (accessible labels supplied by UI); expanded packed arc flags for the SVG parser. Path geometry unchanged."
+  },
+  {
+    "id": "jellyfin",
+    "name": "Jellyfin",
+    "asset": "https://raw.githubusercontent.com/simple-icons/simple-icons/90646e4bf7f3b89df6c37e65baf3e7bc759a517c/icons/jellyfin.svg",
+    "official_source": "https://jellyfin.org/docs/general/contributing/branding.html",
+    "license": null,
+    "sha": "90646e4bf7f3b89df6c37e65baf3e7bc759a517c",
+    "note": "Monochrome brand mark distributed by Simple Icons (CC0); brand trademarks remain with their owners.",
+    "normalization": "Removed SVG title metadata (accessible labels supplied by UI); expanded packed arc flags for the SVG parser. Path geometry unchanged."
+  },
+  {
+    "id": "emby",
+    "name": "Emby",
+    "asset": "https://raw.githubusercontent.com/simple-icons/simple-icons/90646e4bf7f3b89df6c37e65baf3e7bc759a517c/icons/emby.svg",
+    "official_source": "https://emby.media",
+    "license": null,
+    "sha": "90646e4bf7f3b89df6c37e65baf3e7bc759a517c",
+    "note": "Monochrome brand mark distributed by Simple Icons (CC0); brand trademarks remain with their owners.",
+    "normalization": "Removed SVG title metadata (accessible labels supplied by UI); expanded packed arc flags for the SVG parser. Path geometry unchanged."
+  },
+  {
+    "id": "audiobookshelf",
+    "name": "Audiobookshelf",
+    "asset": "https://raw.githubusercontent.com/simple-icons/simple-icons/90646e4bf7f3b89df6c37e65baf3e7bc759a517c/icons/audiobookshelf.svg",
+    "official_source": "https://github.com/advplyr/audiobookshelf/blob/0d9d2fa4be9b642f0948e52ddff71ff370fd524d/images/banner.svg",
+    "license": null,
+    "sha": "90646e4bf7f3b89df6c37e65baf3e7bc759a517c",
+    "note": "Monochrome brand mark distributed by Simple Icons (CC0); brand trademarks remain with their owners.",
+    "normalization": "Removed SVG title metadata (accessible labels supplied by UI); expanded packed arc flags for the SVG parser. Path geometry unchanged."
+  },
+  {
+    "id": "openverse",
+    "name": "Openverse",
+    "asset": "https://raw.githubusercontent.com/simple-icons/simple-icons/90646e4bf7f3b89df6c37e65baf3e7bc759a517c/icons/openverse.svg",
+    "official_source": "https://github.com/WordPress/openverse/blob/5db2545d6b73ec4aa5e908822683ee9d18af301d/brand/icon.svg",
+    "license": null,
+    "sha": "90646e4bf7f3b89df6c37e65baf3e7bc759a517c",
+    "note": "Monochrome brand mark distributed by Simple Icons (CC0); brand trademarks remain with their owners.",
+    "normalization": "Removed SVG title metadata (accessible labels supplied by UI); expanded packed arc flags for the SVG parser. Path geometry unchanged."
+  },
+  {
+    "id": "trakt",
+    "name": "Trakt",
+    "asset": "https://raw.githubusercontent.com/simple-icons/simple-icons/90646e4bf7f3b89df6c37e65baf3e7bc759a517c/icons/trakt.svg",
+    "official_source": "https://trakt.tv/branding",
+    "license": null,
+    "sha": "90646e4bf7f3b89df6c37e65baf3e7bc759a517c",
+    "note": "Monochrome brand mark distributed by Simple Icons (CC0); brand trademarks remain with their owners.",
+    "normalization": "Removed SVG title metadata (accessible labels supplied by UI); expanded packed arc flags for the SVG parser. Path geometry unchanged."
+  },
+  {
+    "id": "github",
+    "name": "GitHub",
+    "asset": "https://raw.githubusercontent.com/simple-icons/simple-icons/90646e4bf7f3b89df6c37e65baf3e7bc759a517c/icons/github.svg",
+    "official_source": "https://github.com/logos",
+    "license": null,
+    "sha": "90646e4bf7f3b89df6c37e65baf3e7bc759a517c",
+    "note": "Monochrome brand mark distributed by Simple Icons (CC0); brand trademarks remain with their owners.",
+    "normalization": "Removed SVG title metadata (accessible labels supplied by UI); expanded packed arc flags for the SVG parser. Path geometry unchanged."
+  },
+  {
+    "id": "firefoxbrowser",
+    "name": "Firefox Browser",
+    "asset": "https://raw.githubusercontent.com/simple-icons/simple-icons/90646e4bf7f3b89df6c37e65baf3e7bc759a517c/icons/firefoxbrowser.svg",
+    "official_source": "https://mozilla.design/firefox/logos-usage/",
+    "license": null,
+    "sha": "90646e4bf7f3b89df6c37e65baf3e7bc759a517c",
+    "note": "Monochrome brand mark distributed by Simple Icons (CC0); brand trademarks remain with their owners.",
+    "normalization": "Removed SVG title metadata (accessible labels supplied by UI); expanded packed arc flags for the SVG parser. Path geometry unchanged."
+  },
+  {
+    "id": "googlechrome",
+    "name": "Google Chrome",
+    "asset": "https://raw.githubusercontent.com/simple-icons/simple-icons/90646e4bf7f3b89df6c37e65baf3e7bc759a517c/icons/googlechrome.svg",
+    "official_source": "https://www.google.com/chrome",
+    "license": null,
+    "sha": "90646e4bf7f3b89df6c37e65baf3e7bc759a517c",
+    "note": "Monochrome brand mark distributed by Simple Icons (CC0); brand trademarks remain with their owners.",
+    "normalization": "Removed SVG title metadata (accessible labels supplied by UI); expanded packed arc flags for the SVG parser. Path geometry unchanged."
+  },
+  {
+    "id": "brave",
+    "name": "Brave",
+    "asset": "https://raw.githubusercontent.com/simple-icons/simple-icons/90646e4bf7f3b89df6c37e65baf3e7bc759a517c/icons/brave.svg",
+    "official_source": "https://brave.com/brave-branding-assets",
+    "license": null,
+    "sha": "90646e4bf7f3b89df6c37e65baf3e7bc759a517c",
+    "note": "Monochrome brand mark distributed by Simple Icons (CC0); brand trademarks remain with their owners.",
+    "normalization": "Removed SVG title metadata (accessible labels supplied by UI); expanded packed arc flags for the SVG parser. Path geometry unchanged."
+  },
+  {
+    "id": "safari",
+    "name": "Safari",
+    "asset": "https://raw.githubusercontent.com/simple-icons/simple-icons/90646e4bf7f3b89df6c37e65baf3e7bc759a517c/icons/safari.svg",
+    "official_source": "https://apps.apple.com/us/app/safari/id1146562112",
+    "license": null,
+    "sha": "90646e4bf7f3b89df6c37e65baf3e7bc759a517c",
+    "note": "Monochrome brand mark distributed by Simple Icons (CC0); brand trademarks remain with their owners.",
+    "normalization": "Removed SVG title metadata (accessible labels supplied by UI); expanded packed arc flags for the SVG parser. Path geometry unchanged."
+  }
+]

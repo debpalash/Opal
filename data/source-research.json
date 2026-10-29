@@ -196,5 +196,46 @@
       "id": "lrclib",
       "reason": "originallinkAPI200; already implemented exact/fuzzylyrics enrichment, not a new playbacksource"
     }
-  ]
+  ],
+  "additional_anime": {
+    "checked_at": "2026-10-29",
+    "origin_repo": "sdaqo/anipy-cli",
+    "commit": "a293cf1f20c7532d1f06fd18cfe656c3b8e61ebb",
+    "implementation": "Independent Zig adapters; protocol research only, no external scripts executed. Installed-only, exact title and episode matching, bounded cancellable requests.",
+    "sources": [
+      {
+        "id": "anidbapp",
+        "path": "api/src/anipy_api/provider/providers/anidbapp_provider.py",
+        "live": "Search returned HTTP 403 in this environment; playback unverified. Optional experimental source."
+      },
+      {
+        "id": "animehub",
+        "path": "api/src/anipy_api/provider/providers/animehub_provider.py",
+        "live": "Search connection reset in this environment; playback unverified. Optional experimental source."
+      }
+    ]
+  },
+  "browse_expansion": {
+    "checked_at": "2026-10-29",
+    "country_catalog": "https://iptv-org.github.io/api/countries.json: 250 rows, HTTP 200",
+    "regional_live": "India RadioBrowser search HTTP 200 (3 stations); Apple India top 10 podcast chart HTTP 200",
+    "podcast_live": "Lex Fridman 2091849 bytes, Huberman 4502949 bytes, Mahabharata 361166 bytes, Daily Brief India 1591496 bytes, Desi Crime 1331680 bytes: RSS HTTP 200 with valid channel titles",
+    "youtube_feeds": "Atom endpoints returned HTTP 404; channel browse fallback HTTP 200 for both Lex Fridman and Andrew Huberman. Production adapter normalized 30 playable Lex episode IDs. Exact channel identity validated; RSS remains fallback.",
+    "anime_metadata": "AniZip keyed regular episode map; exact MAL mapping validation, concurrent with AniList/Jikan. HTTP 403 here, live enrichment unverified. Contract reference: az4if/Anilink src/mapping/ani-zip-client.ts",
+    "anime_bridge": "Independent adapter for aryaniiil/anime-api /anime/extract/{anilistId}?e={episode}&type=sub. Empty endpoint until user configures own service. Exact response identity required; skips encrypted or credential-header media unsupported by native handoff. Contract fixtures only.",
+    "radio_streams": "Radio Paradise Main, Mellow and Rock official MP3 URLs each returned HTTP 200 audio/mpeg with audio bytes."
+  },
+  "wallpapers": {
+    "checked_at": "2026-10-29",
+    "reuse": "gallery-dl 1.32.18 installed as a separate GPL-licensed tool in the private Opal tools venv; 286 extractor modules. No scraper source copied into Opal.",
+    "references": [
+      "https://github.com/mikf/gallery-dl",
+      "https://raw.githubusercontent.com/mikf/gallery-dl/master/gallery_dl/extractor/flickr.py",
+      "https://raw.githubusercontent.com/mikf/gallery-dl/master/gallery_dl/extractor/artstation.py",
+      "https://raw.githubusercontent.com/mikf/gallery-dl/master/gallery_dl/extractor/deviantart.py",
+      "https://github.com/varietywalls/variety"
+    ],
+    "live": "Wallhaven API returned 24 rows through local proxy. gallery-dl resolved 2 Wallhaven images in 1.53s, 2 Flickr images in 4.83s. Wallhaven and Flickr thumbnails HTTP 200. ArtStation/DeviantArt keyword templates match official extractors but live results unverified.",
+    "limitations": "Pexels and Unsplash are external search shortcuts because their standard API guidelines exclude wallpaper applications. Arbitrary gallery-dl supported links are admitted; keyword fanout uses up to 16 configured search URLs, not a universal search across all sites. Auth/browser cookies opt-in; credential values stored in an owner-only gallery config, never CLI arguments."
+  }
 }

@@ -265,6 +265,16 @@ fn loadHiddenContinueCountUncached() ?usize {
     return @intCast(@max(0, db.columnInt64(stmt, 0)));
 }
 
+/// Hide the entire Continue list, including entries beyond the visible rail.
+/// Playback progress and favorites remain available; Restore reverses this.
+pub fn hideAllContinue() void {
+    const stmt = db.prepare("UPDATE library_items SET home_hidden=1 WHERE deleted=0 AND home_hidden=0 AND percent > ?1 AND percent < ?2") orelse return;
+    defer db.finalize(stmt);
+    db.bindDouble(stmt, 1, pure.CONTINUE_MIN_PCT);
+    db.bindDouble(stmt, 2, pure.CONTINUE_MAX_PCT);
+    if (db.step(stmt) == db.c.SQLITE_DONE) markDirty();
+}
+
 pub fn restoreHiddenContinue() void {
     const stmt = db.prepare("UPDATE library_items SET home_hidden=0 WHERE home_hidden=1 AND percent > ?1 AND percent < ?2") orelse return;
     defer db.finalize(stmt);

@@ -394,3 +394,286 @@ fn validHiMetadata(body: []const u8) bool {
     const status = pure.field(doc.value, "status");
     return status == .bool and status.bool and pure.field(doc.value, "html") == .string;
 }
+
+/// Optional independent sources researched from anipy-cli. No external CLI is
+/// executed. Endpoints remain install-gated and every HTTP hop is cancellable.
+pub const ExtraSource = enum { anidbapp, animehub };
+pub fn resolveExtra(source: ExtraSource, name: []const u8, alias: []const u8, ep: usize, gate: *const Gate, generation: u32) ?extractors.Resolved {
+    var base_buf: [256]u8 = undefined;
+    const base = @import("../core/source_config.zig").copyValue(@tagName(source), "base", &base_buf) orelse return null;
+    return resolveExtraAt(source, std.mem.trimEnd(u8, base, "/"), name, alias, ep, gate, generation, .{});
+}
+
+const ExtraRequest = struct {
+    transport: Transport,
+    gate: *const Gate,
+    generation: u32,
+    base: []const u8,
+    scratch: []u8,
+    fn get(self: @This(), url: []const u8) ?[]const u8 {
+        if (!self.gate.isCurrent(self.generation) or !std.mem.startsWith(u8, url, "https://") or std.mem.indexOfAny(u8, url, "\r\n ") != null) return null;
+        const body = self.transport.fetch(url, self.scratch, .{ .referer = self.base, .timeout_secs = 4, .cancel_epoch = .{ .epoch32 = .{ .value = &self.gate.generation, .expected = self.generation } } }) orelse return null;
+        return if (self.gate.isCurrent(self.generation)) body else null;
+    }
+    fn json(self: @This(), url: []const u8) ?std.json.Parsed(std.json.Value) {
+        // Own strings: the next HTTP response reuses scratch.
+        return std.json.parseFromSlice(std.json.Value, alloc, self.get(url) orelse return null, .{ .allocate = .alloc_always }) catch null;
+    }
+};
+
+fn safeSourceId(id: []const u8) bool {
+    if (id.len == 0 or id.len > 160) return false;
+    for (id) |ch| if (!std.ascii.isAlphanumeric(ch) and ch != '-' and ch != '_') return false;
+    return true;
+}
+
+fn resolveExtraAt(source: ExtraSource, base: []const u8, name: []const u8, alias: []const u8, ep: usize, gate: *const Gate, generation: u32, transport: Transport) ?extractors.Resolved {
+    if (ep == 0 or !gate.isCurrent(generation)) return null;
+    const scratch = alloc.alloc(u8, 1024 * 1024) catch return null;
+    defer alloc.free(scratch);
+    const req = ExtraRequest{ .transport = transport, .gate = gate, .generation = generation, .base = base, .scratch = scratch };
+    const html = @import("content_html_pure.zig");
+    var ub: [2048]u8 = undefined;
+    var id_buf: [160]u8 = undefined;
+    var id_len: usize = 0;
+    for ([_][]const u8{ name, alias }) |term| {
+        if (term.len == 0 or term.len > 256) continue;
+        var enc: [1024]u8 = undefined;
+        const path = if (source == .anidbapp) "/browse?q=" else "/search?keyword=";
+        const url = std.fmt.bufPrint(&ub, "{s}{s}{s}", .{ base, path, @import("../core/http.zig").urlEncode(term, &enc) }) catch continue;
+        const body = req.get(url) orelse return null;
+        var it = html.AnchorIter{ .html = body, .path = "/" };
+        while (it.next()) |anchor| {
+            var title = anchor.title;
+            // AniDBApp cards place the actual title in a paragraph.
+            if (std.mem.indexOf(u8, title, "<p")) |p| {
+                const start = std.mem.indexOfScalarPos(u8, title, p, '>') orelse continue;
+                const end = std.mem.indexOfPos(u8, title, start, "</p>") orelse continue;
+                title = title[start + 1 .. end];
+            }
+            title = std.mem.trim(u8, title, " \t\r\n");
+            if (!pure.titleMatches(title, name) and (alias.len == 0 or !pure.titleMatches(title, alias))) continue;
+            var same: [2048]u8 = undefined;
+            const link = html.sourceUrl(&same, base, anchor.url) orelse continue;
+            if (source == .anidbapp and !std.mem.startsWith(u8, link[base.len..], "/anime/")) continue;
+            const split = std.mem.lastIndexOfScalar(u8, link, if (source == .anidbapp) '-' else '/') orelse continue;
+            const id = link[split + 1 ..];
+            if (!safeSourceId(id) or std.mem.endsWith(u8, id, "-dub")) continue;
+            @memcpy(id_buf[0..id.len], id);
+            id_len = id.len;
+            break;
+        }
+        if (id_len > 0) break;
+    }
+    if (id_len == 0) return null;
+    const id = id_buf[0..id_len];
+    var stream_buf: [1024]u8 = undefined;
+    if (source == .anidbapp) {
+        const url = std.fmt.bufPrint(&ub, "{s}/api/frontend/anime/{s}/episodes", .{ base, id }) catch return null;
+        const doc = req.json(url) orelse return null;
+        defer doc.deinit();
+        const episodes = pure.field(doc.value, "episodes");
+        if (episodes != .array) return null;
+        for (episodes.array.items) |episode_row| {
+            if (pure.number(pure.field(episode_row, "number")) != ep) continue;
+            const raw_id = pure.field(episode_row, "id");
+            var number_buf: [32]u8 = undefined;
+            const episode_id = if (raw_id == .string) raw_id.string else if (pure.number(raw_id) > 0) std.fmt.bufPrint(&number_buf, "{d}", .{pure.number(raw_id)}) catch return null else return null;
+            if (!safeSourceId(episode_id)) return null;
+            const langs_url = std.fmt.bufPrint(&ub, "{s}/api/frontend/episode/{s}/languages", .{ base, episode_id }) catch return null;
+            const langs = req.json(langs_url) orelse return null;
+            defer langs.deinit();
+            const rows = pure.field(langs.value, "languages");
+            if (rows != .array) return null;
+            for (rows.array.items) |row| {
+                if (!std.mem.eql(u8, pure.string(pure.field(row, "code")), "jpn")) continue;
+                const embed = pure.string(pure.field(row, "embed_url"));
+                const body = req.get(embed) orelse continue;
+                const stream = @import("anime_extractors_pure.zig").extractUrlContaining(body, ".m3u8", &stream_buf) orelse continue;
+                return directStream(stream, base);
+            }
+            return null;
+        }
+        return null;
+    }
+    const url = std.fmt.bufPrint(&ub, "{s}/ajax/episode/info?epr={s}/{d}/0", .{ base, id, ep }) catch return null;
+    const doc = req.json(url) orelse return null;
+    defer doc.deinit();
+    const target = pure.string(pure.field(doc.value, "target"));
+    const target_base = @import("anime_extractors_pure.zig").schemeHostOf(target) orelse return null;
+    const body = req.get(target) orelse return null;
+    const marker = std.mem.indexOf(u8, body, "zrpart2") orelse return null;
+    const eq = std.mem.indexOfScalarPos(u8, body, marker, '=') orelse return null;
+    const value = std.mem.trimStart(u8, body[eq + 1 ..], " \t\r\n");
+    if (value.len < 2 or (value[0] != '"' and value[0] != '\'')) return null;
+    const end = std.mem.indexOfScalarPos(u8, value, 1, value[0]) orelse return null;
+    if (end > 512) return null;
+    var encoded: [1536]u8 = undefined;
+    const player_url = std.fmt.bufPrint(&ub, "{s}/hs/{s}?pl_usn=1", .{ target_base, @import("../core/http.zig").urlEncode(value[1..end], &encoded) }) catch return null;
+    const player = req.get(player_url) orelse return null;
+    var pos: usize = 0;
+    while (std.mem.indexOfPos(u8, player, pos, "<div")) |start| {
+        const close = std.mem.indexOfScalarPos(u8, player, start, '>') orelse return null;
+        pos = close + 1;
+        if (!std.mem.eql(u8, html.attr(player[start .. close + 1], "id") orelse "", "sources")) continue;
+        const finish = std.mem.indexOfPos(u8, player, pos, "</div>") orelse return null;
+        const sources = std.json.parseFromSlice(std.json.Value, alloc, player[pos..finish], .{}) catch return null;
+        defer sources.deinit();
+        return directStream(pure.string(pure.field(sources.value, "sources")), target_base);
+    }
+    return null;
+}
+
+test "Anime provider additional sources resolve exact episodes and stop stale requests" {
+    const Fixture = struct {
+        var calls: usize = 0;
+        var cancel: ?*Gate = null;
+        fn fetch(url: []const u8, _: []u8, opts: rf.Opts) ?[]const u8 {
+            calls += 1;
+            if (opts.cancel_epoch == null or opts.timeout_secs > 4) return null;
+            if (cancel) |gate| _ = gate.generation.fetchAdd(1, .acq_rel);
+            if (std.mem.indexOf(u8, url, "/browse?") != null) return "<a href='/anime/sequel-99'><p>Example 2</p></a><a href='/anime/example-42'><p class='name'>Example</p></a>";
+            if (std.mem.endsWith(u8, url, "/anime/42/episodes")) return
+            \\{"episodes":[{"number":1,"id":11},{"number":2,"id":"ep-22"}]}
+            ;
+            if (std.mem.endsWith(u8, url, "/episode/ep-22/languages")) return
+            \\{"languages":[{"code":"eng","embed_url":"https://host.test/wrong"},{"code":"jpn","embed_url":"https://host.test/sub"}]}
+            ;
+            if (std.mem.eql(u8, url, "https://host.test/sub")) return "file: 'https://cdn.test/episode2.m3u8'";
+            if (std.mem.indexOf(u8, url, "/search?") != null) return "<a href='/anime/wrong'>Example 2</a><a href='/anime/example'>Example</a>";
+            if (std.mem.endsWith(u8, url, "/info?epr=example/2/0")) return
+            \\{"target":"https://host.test/embed/2"}
+            ;
+            if (std.mem.eql(u8, url, "https://host.test/embed/2")) return "var zrpart2 = 'token';";
+            if (std.mem.eql(u8, url, "https://host.test/hs/token?pl_usn=1")) return "<div id='sources'>{\"sources\":\"https://cdn.test/episode2.m3u8\"}</div>";
+            return null;
+        }
+    };
+    for ([_]ExtraSource{ .anidbapp, .animehub }) |source| {
+        var gate: Gate = .{};
+        var loading = std.atomic.Value(bool).init(false);
+        const gen = gate.begin(&loading);
+        Fixture.calls = 0;
+        Fixture.cancel = null;
+        const stream = resolveExtraAt(source, "https://provider.test", "Example", "", 2, &gate, gen, .{ .fetch = Fixture.fetch }) orelse return error.MissingStream;
+        try std.testing.expectEqualStrings("https://cdn.test/episode2.m3u8", stream.streamUrl());
+        try std.testing.expectEqual(@as(usize, 4), Fixture.calls);
+        try std.testing.expect(resolveExtraAt(source, "https://provider.test", "Unrelated", "", 2, &gate, gen, .{ .fetch = Fixture.fetch }) == null);
+        try std.testing.expect(resolveExtraAt(source, "https://provider.test", "Example", "", 3, &gate, gen, .{ .fetch = Fixture.fetch }) == null);
+        Fixture.calls = 0;
+        Fixture.cancel = &gate;
+        try std.testing.expect(resolveExtraAt(source, "https://provider.test", "Example", "", 2, &gate, gen, .{ .fetch = Fixture.fetch }) == null);
+        try std.testing.expectEqual(@as(usize, 1), Fixture.calls);
+        try std.testing.expect(resolveExtraAt(source, "https://provider.test", "Example", "", 2, &gate, gen, .{ .fetch = Fixture.fetch }) == null);
+        try std.testing.expectEqual(@as(usize, 1), Fixture.calls);
+        Fixture.cancel = null;
+    }
+}
+
+const RankedSource = enum { hianime, animepahe, allanime, anidbapp, animehub, @"anime-api" };
+const source_rank = @import("anime_source_rank_pure.zig");
+var source_observations: [6]source_rank.Observation = @splat(.{});
+var rank_mutex: @import("../core/sync.zig").Mutex = .{};
+
+/// Direct streams before torrents; recent successful sources before untested or
+/// recently failed sources. Measurements are resolution latency, not bandwidth.
+pub fn resolveRanked(name: []const u8, alias: []const u8, ep: usize, anilist_id: i64, gate: *const Gate, generation: u32) ?extractors.Resolved {
+    var order = [_]RankedSource{ .hianime, .animepahe, .allanime, .anidbapp, .animehub, .@"anime-api" };
+    rank_mutex.lock();
+    const observations = source_observations;
+    rank_mutex.unlock();
+    const Context = struct {
+        stats: [6]source_rank.Observation,
+        now: i64,
+        fn less(ctx: @This(), a: RankedSource, b: RankedSource) bool {
+            return source_rank.score(ctx.stats[@intFromEnum(a)], @intFromEnum(a), ctx.now) < source_rank.score(ctx.stats[@intFromEnum(b)], @intFromEnum(b), ctx.now);
+        }
+    };
+    const clock = @import("../core/io_global.zig");
+    std.mem.sort(RankedSource, &order, Context{ .stats = observations, .now = clock.monotonicMilliTimestamp() }, Context.less);
+    for (order) |source| {
+        if (!gate.isCurrent(generation)) return null;
+        var base_buf: [256]u8 = undefined;
+        const base = @import("../core/source_config.zig").copyValue(@tagName(source), "base", &base_buf) orelse continue;
+        if (base.len == 0 or (source == .@"anime-api" and anilist_id <= 0)) continue;
+        const started = clock.monotonicMilliTimestamp();
+        const stream = switch (source) {
+            .hianime => resolveHiAnime(name, alias, ep, gate, generation),
+            .animepahe => resolvePahe(name, alias, ep, gate, generation),
+            .allanime => resolveAllAnime(name, alias, ep, gate, generation),
+            .anidbapp => resolveExtra(.anidbapp, name, alias, ep, gate, generation),
+            .animehub => resolveExtra(.animehub, name, alias, ep, gate, generation),
+            .@"anime-api" => resolveBridge(base, @intCast(anilist_id), ep, gate, generation, .{}),
+        };
+        if (!gate.isCurrent(generation)) return null;
+        const now = clock.monotonicMilliTimestamp();
+        const elapsed: u32 = @intCast(std.math.clamp(now - started, 0, std.math.maxInt(u32)));
+        rank_mutex.lock();
+        source_observations[@intFromEnum(source)] = source_rank.record(source_observations[@intFromEnum(source)], elapsed, stream != null, now);
+        rank_mutex.unlock();
+        if (stream) |ready| return ready;
+    }
+    return null;
+}
+
+/// Optional user-hosted aryaniiil/anime-api bridge. Resolve by exact AniList ID,
+/// never fuzzy title. Only media supported by the native player is admitted.
+fn resolveBridge(base: []const u8, id: usize, ep: usize, gate: *const Gate, generation: u32, transport: Transport) ?extractors.Resolved {
+    if (!gate.isCurrent(generation) or id == 0 or ep == 0) return null;
+    var ub: [1024]u8 = undefined;
+    const url = std.fmt.bufPrint(&ub, "{s}/anime/extract/{d}?e={d}&type=sub", .{ std.mem.trimEnd(u8, base, "/"), id, ep }) catch return null;
+    const scratch = alloc.alloc(u8, 1024 * 1024) catch return null;
+    defer alloc.free(scratch);
+    const body = transport.fetch(url, scratch, .{ .timeout_secs = 8, .cancel_epoch = .{ .epoch32 = .{ .value = &gate.generation, .expected = generation } } }) orelse return null;
+    if (!gate.isCurrent(generation)) return null;
+    const doc = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch return null;
+    defer doc.deinit();
+    return bridgeStream(doc.value, id, ep);
+}
+fn bridgeStream(root: std.json.Value, id: usize, ep: usize) ?extractors.Resolved {
+    if (pure.number(pure.field(root, "anilistId")) != id or pure.number(pure.field(root, "episode")) != ep or !std.mem.eql(u8, pure.string(pure.field(root, "type")), "sub")) return null;
+    const streams = pure.field(root, "streams");
+    if (streams != .array) return null;
+    candidates: for (streams.array.items) |stream| {
+        if (pure.field(stream, "playlist_key") != .null or pure.field(stream, "key") != .null) continue;
+        const kind = pure.string(pure.field(stream, "type"));
+        if (!std.mem.eql(u8, kind, "hls") and !std.mem.eql(u8, kind, "mp4") and !std.mem.eql(u8, kind, "dash")) continue;
+        var referer = pure.string(pure.field(stream, "referer"));
+        const headers = pure.field(stream, "headers");
+        if (headers == .object) {
+            var it = headers.object.iterator();
+            while (it.next()) |header| {
+                if (std.ascii.eqlIgnoreCase(header.key_ptr.*, "Referer")) {
+                    referer = pure.string(header.value_ptr.*);
+                } else continue :candidates; // Native handoff does not carry arbitrary credentials.
+            }
+        }
+        var result = directStream(pure.string(pure.field(stream, "url")), referer) orelse continue;
+        const subs = pure.field(root, "subtitles");
+        if (subs == .array) for (subs.array.items) |sub| {
+            if (result.sub_count == result.subs.len) break;
+            const sub_url = pure.string(pure.field(sub, "url"));
+            if (!std.mem.startsWith(u8, sub_url, "https://") or sub_url.len > 512 or pure.field(sub, "headers") != .null) continue;
+            const label = pure.string(pure.field(sub, "label"));
+            if (label.len > 64) continue;
+            const target = &result.subs[result.sub_count];
+            @memcpy(target.url[0..sub_url.len], sub_url);
+            target.url_len = sub_url.len;
+            @memcpy(target.label[0..label.len], label);
+            target.label_len = label.len;
+            result.sub_count += 1;
+        };
+        return result;
+    }
+    return null;
+}
+test "Anime provider bridge verifies identity and skips unsupported encrypted streams" {
+    const doc = try std.json.parseFromSlice(std.json.Value, std.testing.allocator,
+        \\{"anilistId":1,"episode":2,"type":"sub","streams":[{"type":"hls","url":"https://bad.test/encrypted.m3u8","playlist_key":"secret"},{"type":"hls","url":"https://cdn.test/2.m3u8","referer":"https://host.test/"}]}
+    , .{});
+    defer doc.deinit();
+    const stream = bridgeStream(doc.value, 1, 2).?;
+    try std.testing.expectEqualStrings("https://cdn.test/2.m3u8", stream.streamUrl());
+    try std.testing.expect(bridgeStream(doc.value, 1, 3) == null);
+    try std.testing.expect(bridgeStream(doc.value, 2, 2) == null);
+}

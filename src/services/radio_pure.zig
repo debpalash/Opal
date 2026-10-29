@@ -569,3 +569,20 @@ test "radio progressive merge preserves fast source when slow directory arrives"
     try std.testing.expectEqualStrings("soma:1", out[0].stationuuid[0..out[0].stationuuid_len]);
     try std.testing.expectEqual(@as(usize, 2), appendUnique(&out, merged, &.{directory}));
 }
+
+pub fn buildCountryUrl(encoded_query: []const u8, country: []const u8, limit: usize, offset: usize, out: []u8) []const u8 {
+    if (country.len != 0 and (country.len != 2 or !std.ascii.isAlphabetic(country[0]) or !std.ascii.isAlphabetic(country[1]))) return "";
+    var base_buf: [1024]u8 = undefined;
+    const base = if (encoded_query.len == 0) buildPopularUrl(limit, offset, &base_buf) else buildSearchUrl(encoded_query, limit, offset, &base_buf);
+    if (base.len == 0) return "";
+    return if (country.len == 0) std.fmt.bufPrint(out, "{s}", .{base}) catch "" else std.fmt.bufPrint(out, "{s}&countrycode={s}", .{ base, country }) catch "";
+}
+test "country radio requests retain region and offset" {
+    var buf: [512]u8 = undefined;
+    const url = buildCountryUrl("jazz", "IN", 30, 60, &buf);
+    try std.testing.expect(std.mem.indexOf(u8, url, "countrycode=IN") != null);
+    try std.testing.expect(std.mem.indexOf(u8, url, "offset=60") != null);
+    var mirror_buf: [512]u8 = undefined;
+    try std.testing.expect(mirrorUrl(url, 1, &mirror_buf) != null);
+    try std.testing.expectEqualStrings("", buildCountryUrl("", "IN&x=1", 30, 0, &buf));
+}

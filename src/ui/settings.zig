@@ -1,3 +1,4 @@
+const brands = @import("brands.zig");
 const std = @import("std");
 const dvui = @import("dvui");
 const icons = @import("icons");
@@ -151,7 +152,7 @@ pub fn renderSettingsContent() void {
     // region is narrow (small window / drawer / device). rect.w is 0 on the
     // very first paint → default to the expanded layout (no collapse flash).
     const region_w = outer.data().rect.w;
-    const compact = region_w > 1 and region_w < 440;
+    const compact = region_w > 1 and region_w < 640;
 
     renderLeftNav(compact);
     renderRightPane(compact);
@@ -379,7 +380,7 @@ fn renderRightPane(compact: bool) void {
 
     var content = dvui.box(@src(), .{ .dir = .vertical }, .{
         .min_size_content = .{ .w = 0, .h = 0 },
-        .max_size_content = .{ .w = 720, .h = std.math.floatMax(f32) },
+        .max_size_content = .{ .w = 840, .h = std.math.floatMax(f32) },
         .expand = .horizontal,
         // Compact: lg horizontal / md vertical instead of xl all-round, so the
         // pane breathes less and controls (segments) get more usable width.
@@ -486,40 +487,35 @@ fn renderAIContentBody() void {
     aiSectionWithIcon(icons.tvg.lucide.mic, "Voice Backend", "STT + TTS engine for mic / conversation mode", 24, @src());
     {
         const vb = @import("../services/voice_backend.zig");
-        // Calm: spacing-only list, no card chrome. Each backend is a clickable
-        // row; the active one carries a quiet bg_elevated fill + accent text
-        // (the single accent affordance), inactive rows are transparent.
-        var list = dvui.box(@src(), .{ .dir = .vertical }, .{
-            .expand = .horizontal,
-            .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm },
-        });
-        defer list.deinit();
-
-        for (vb.allKinds(), 0..) |kind, i| {
-            const active = kind == vb.active_kind;
-
-            // backendFor is a pure lookup. The old code mutated active_kind
-            // transiently EVERY frame to fetch each name — a data race with
-            // the detached TTS worker, which reads active_kind concurrently
-            // and could pick up the wrong STT/TTS engine mid-speech.
-            const b = vb.backendFor(kind);
-
-            if (dvui.button(@src(), b.name, .{}, .{
-                .id_extra = 4000 + i,
-                .color_fill = if (active) theme.colors.bg_elevated else theme.transparent,
-                .color_fill_hover = theme.colors.bg_hover,
-                .color_text = if (active) theme.colors.accent else theme.colors.text_secondary,
-                .border = dvui.Rect.all(0),
-                .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
-                .corner_radius = theme.dims.rad_sm,
-                .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
-                .expand = .horizontal,
-                .gravity_x = 0.0,
-            })) {
-                vb.active_kind = kind;
-                vb.voice_backend_explicit = true;
-                state.markConfigDirty();
-                state.showToast("Voice backend changed");
+        {
+            var choices = dvui.flexbox(@src(), .{}, .{ .expand = .horizontal });
+            defer choices.deinit();
+            for (vb.allKinds(), 0..) |kind, i| {
+                const name = switch (kind) {
+                    .whisper_cpp_plus_say => "Whisper",
+                    .sherpa_onnx => "Sherpa ONNX",
+                    .apple_native => "Apple voice",
+                    .speaches => "Speaches",
+                    .mlx_whisper => "MLX Whisper",
+                    .parakeet_tdt_v2 => "Parakeet v2 · EN",
+                    .parakeet_tdt_v3 => "Parakeet v3",
+                };
+                var wd: dvui.WidgetData = undefined;
+                if (dvui.button(@src(), name, .{}, .{
+                    .id_extra = 4000 + i,
+                    .data_out = &wd,
+                    .color_fill = if (kind == vb.active_kind) theme.colors.bg_elevated else theme.transparent,
+                    .color_text = if (kind == vb.active_kind) theme.colors.accent else theme.colors.text_secondary,
+                    .padding = dvui.Rect.all(8),
+                    .margin = dvui.Rect.all(2),
+                    .corner_radius = theme.dims.rad_sm,
+                })) {
+                    vb.active_kind = kind;
+                    vb.voice_backend_explicit = true;
+                    state.markConfigDirty();
+                    state.showToast("Voice backend changed");
+                }
+                components.tipId(@src(), wd, vb.backendFor(kind).name, i);
             }
         }
 
@@ -640,7 +636,7 @@ fn renderAIContentBody() void {
     // safe remark about what is on screen when you pause or rewind in voice
     // mode. Quiet by default; this control just assigns the module var.
     aiSectionWithIcon(icons.tvg.lucide.@"message-square-text", "Co-Watcher", "The AI comments while you watch (voice mode)", 60, @src());
-    settingRow("Co-Watcher", 65, @src());
+
     _ = dvui.label(@src(), "AI comments on what you missed when you pause or rewind (voice mode)", .{}, .{
         .id_extra = 651,
         .color_text = theme.colors.text_tertiary,
@@ -918,24 +914,16 @@ fn aboutLink(id: usize, icon: []const u8, label: []const u8, url: []const u8, ic
     if (clicked) openExternal(url);
 }
 fn sectionHeader(comptime title: []const u8, comptime subtitle: []const u8, id_extra: usize, src: std.builtin.SourceLocation) void {
-    _ = id_extra;
-    _ = src;
     sectionheader_seq +%= 1;
-    var wrap = dvui.box(@src(), .{ .dir = .vertical }, .{
-        .id_extra = sectionheader_seq,
-        .expand = .horizontal,
-        .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 },
-    });
+    var wrap = dvui.box(src, .{ .dir = .vertical }, .{ .id_extra = id_extra, .expand = .horizontal });
     defer wrap.deinit();
-
-    components.sectionHeader(title);
-    if (subtitle.len > 0) {
-        _ = dvui.label(@src(), subtitle, .{}, .{
-            .id_extra = sectionheader_seq,
-            .color_text = theme.colors.text_tertiary,
-            .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm },
-        });
+    if (state.app.settings_tab == .About) {
+        components.sectionHeader(title);
+        if (subtitle.len > 0) dvui.labelNoFmt(@src(), subtitle, .{}, .{ .color_text = theme.colors.text_tertiary, .margin = .{ .h = theme.spacing.sm } });
+        return;
     }
+    const glyph = if (std.mem.indexOf(u8, title, "Audio") != null) icons.tvg.lucide.volume else if (std.mem.indexOf(u8, title, "Video") != null) icons.tvg.lucide.film else if (std.mem.indexOf(u8, title, "Plugins") != null) icons.tvg.lucide.puzzle else if (std.mem.indexOf(u8, title, "Interface") != null) icons.tvg.lucide.palette else if (std.mem.indexOf(u8, title, "Streaming") != null) icons.tvg.lucide.wifi else if (std.mem.indexOf(u8, title, "Shortcuts") != null) icons.tvg.lucide.keyboard else if (std.mem.indexOf(u8, title, "Capture") != null) icons.tvg.lucide.camera else icons.tvg.lucide.@"sliders-horizontal";
+    @import("service_surfaces.zig").section(@src(), title, subtitle, glyph);
 }
 
 /// Inline single-line label used above a control row.  Color is
@@ -950,24 +938,9 @@ fn settingRow(comptime label_text_str: []const u8, id_extra: usize, src: std.bui
 }
 
 fn aiSectionWithIcon(icon_data: anytype, comptime title: []const u8, comptime subtitle: []const u8, id_extra: usize, src: std.builtin.SourceLocation) void {
-    // Calm: drop the left-bar accent banner + icon box. A section is just an
-    // uppercase header + a quiet subtitle, separated by whitespace.
-    _ = icon_data;
-    var wrap = dvui.box(src, .{ .dir = .vertical }, .{
-        .id_extra = id_extra + 900,
-        .expand = .horizontal,
-        .margin = .{ .x = 0, .y = theme.spacing.xl, .w = 0, .h = 0 },
-    });
+    var wrap = dvui.box(src, .{ .dir = .vertical }, .{ .id_extra = id_extra + 900, .expand = .horizontal });
     defer wrap.deinit();
-
-    components.sectionHeader(title);
-    if (subtitle.len > 0) {
-        _ = dvui.label(src, subtitle, .{}, .{
-            .id_extra = id_extra + 1,
-            .color_text = theme.colors.text_tertiary,
-            .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm },
-        });
-    }
+    @import("service_surfaces.zig").section(@src(), title, subtitle, icon_data);
 }
 
 fn modelRow(comptime name: []const u8, icon_data: anytype, installed: bool, downloading: bool, id_extra: usize, src: std.builtin.SourceLocation) bool {
@@ -976,7 +949,13 @@ fn modelRow(comptime name: []const u8, icon_data: anytype, installed: bool, down
     var row = dvui.box(src, .{ .dir = .horizontal }, .{
         .id_extra = id_extra,
         .expand = .horizontal,
-        .padding = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = theme.spacing.sm },
+        .padding = dvui.Rect.all(10),
+        .margin = .{ .y = 3, .h = 3 },
+        .background = true,
+        .color_fill = theme.colors.bg_surface,
+        .border = dvui.Rect.all(1),
+        .color_border = theme.colors.border_subtle,
+        .corner_radius = dvui.Rect.all(8),
     });
     defer row.deinit();
 
@@ -1104,28 +1083,6 @@ fn renderInstallActivity(compact: bool) void {
 }
 
 fn renderGeneralTab() void {
-    // Plugin installs live on the Plugins route rather than behind the
-    // Settings scroll pane. Offer both destinations at the top of General.
-    sectionHeader("Plugins", "Install sources or manage executable content plugins", 9, @src());
-    if (dvui.button(@src(), "Install source plugins", .{}, .{
-        .color_fill = theme.colors.accent,
-        .color_text = theme.colors.text_on_accent,
-        .corner_radius = theme.dims.rad_sm,
-        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
-    })) {
-        state.app.plugin_tab = .sources;
-        state.navigateToTab(.Plugins);
-    }
-    if (dvui.button(@src(), "Content plugins", .{}, .{
-        .color_fill = theme.colors.bg_elevated,
-        .color_text = theme.colors.text_primary,
-        .corner_radius = theme.dims.rad_sm,
-        .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
-    })) {
-        state.app.plugin_tab = .content;
-        state.navigateToTab(.Plugins);
-    }
-
     // ── Interface ── (whitespace-separated, no card chrome)
     sectionHeader("Interface", "Customize how Opal looks and feels", 10, @src());
 
@@ -1340,6 +1297,20 @@ fn renderGeneralTab() void {
             .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
         });
     }
+    sectionHeader("Plugins", "Manage sources and content plugins", 9, @src());
+    {
+        var links = dvui.flexbox(@src(), .{}, .{ .expand = .horizontal });
+        defer links.deinit();
+        const controls = @import("browse_filters.zig");
+        if (controls.item(@src(), .{ .id = 9001, .label = "Sources", .icon = icons.tvg.lucide.plug, .presentation = .icon_label })) {
+            state.app.plugin_tab = .sources;
+            state.navigateToTab(.Plugins);
+        }
+        if (controls.item(@src(), .{ .id = 9002, .label = "Content plugins", .icon = icons.tvg.lucide.puzzle, .presentation = .icon_label })) {
+            state.app.plugin_tab = .content;
+            state.navigateToTab(.Plugins);
+        }
+    }
 }
 
 fn renderAboutTab() void {
@@ -1467,7 +1438,7 @@ fn renderAboutTab() void {
                 .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
             });
             defer links.deinit();
-            aboutLink(2540, icons.tvg.lucide.github, "GitHub", "https://github.com/debpalash/Opal", theme.colors.text_secondary);
+            aboutLink(2540, brands.icon(.github), "GitHub", "https://github.com/debpalash/Opal", theme.colors.text_secondary);
             aboutLink(2541, icons.tvg.lucide.scale, "License (GPL-3.0)", "https://www.gnu.org/licenses/gpl-3.0.html", theme.colors.text_secondary);
             aboutLink(2542, icons.tvg.lucide.heart, "Donate · PayPal", "https://paypal.me/palashCoder", theme.colors.danger);
             aboutLink(2543, icons.tvg.lucide.coffee, "Buy me a Ko-fi", "https://ko-fi.com/debpalash", theme.colors.warning);
@@ -2043,9 +2014,10 @@ fn renderPlaybackTab() void {
 }
 
 fn renderNetworkTab() void {
+    sectionHeader("Transfers", "Torrent storage and download limits", 3000, @src());
     {
         const before = state.app.torrent_memory_only;
-        components.toggleRow(@src(), "Stream torrents in memory", "Keep torrent data in RAM. No media files or torrent caches saved. Applies to new torrents; closing a stream releases its buffer.", &state.app.torrent_memory_only);
+        components.toggleRow(@src(), "Stream torrents in memory", "Use RAM for new torrents; closing a stream releases its buffer.", &state.app.torrent_memory_only);
         if (before != state.app.torrent_memory_only) {
             state.applyTorrentStorageIfReady();
             state.markConfigDirty();
@@ -2086,17 +2058,7 @@ fn renderNetworkTab() void {
         }
     }
 
-    // Tracker info
-    settingRow("Custom Trackers", 31, @src());
-    _ = dvui.label(@src(), "8 public trackers auto-added to every torrent", .{}, .{
-        .color_text = theme.colors.text_secondary,
-    });
-    _ = dvui.label(@src(), "opentrackr, stealth, torrent.eu, dler, exodus, demonii…", .{}, .{
-        .color_text = theme.colors.text_tertiary,
-    });
-
-    // In-app browser engine (Browse › Web)
-    settingRow("Browser Engine", 33, @src());
+    sectionHeader("Browser engine", "Used for web pages. Installation downloads about 200 MB; the selected engine starts on the next browser open.", 33, @src());
     {
         const browser = @import("../services/browser.zig");
         const engines = [_]browser.Engine{ .camoufox, .cloakbrowser };
@@ -2117,30 +2079,18 @@ fn renderNetworkTab() void {
                 browser.killBridge();
             }
         }
-        _ = dvui.label(@src(), "{s}", .{switch (browser.active_engine) {
-            .camoufox => "Camoufox — Firefox-based anti-detect browser (fetches ~200 MB at install).",
-            .cloakbrowser => "CloakBrowser — Chromium-based anti-detect browser (free tier; first launch downloads ~200 MB, cached).",
-        }}, .{
-            .id_extra = 3300,
-            .color_text = theme.colors.text_tertiary,
-            .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
-        });
         // Per-engine install status + install action for the selected engine.
         {
             var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 3301, .expand = .horizontal });
             defer row.deinit();
-            var sbuf: [128]u8 = undefined;
-            const status = std.fmt.bufPrint(&sbuf, "Camoufox: {s} · CloakBrowser: {s}", .{
-                if (browser.engineReady(.camoufox)) "installed" else "not installed",
-                if (browser.engineReady(.cloakbrowser)) "installed" else "not installed",
-            }) catch "";
-            _ = dvui.label(@src(), "{s}", .{status}, .{
+            dvui.labelNoFmt(@src(), if (browser.engineReady(browser.active_engine)) "Installed" else "Not installed", .{}, .{
                 .id_extra = 3302,
-                .color_text = theme.colors.text_secondary,
+                .expand = .horizontal,
+                .color_text = if (browser.engineReady(browser.active_engine)) theme.colors.accent else theme.colors.text_secondary,
                 .gravity_y = 0.5,
             });
             if (!browser.engineReady(browser.active_engine)) {
-                if (dvui.button(@src(), "Install selected engine", .{}, .{
+                if (dvui.button(@src(), "Install", .{}, .{
                     .id_extra = 3303,
                     .margin = .{ .x = 10, .y = 0, .w = 0, .h = 0 },
                     .color_fill = theme.colors.accent,
@@ -2162,14 +2112,10 @@ fn renderNetworkTab() void {
             }}, .{ .color_text = if (install_state == .failed) theme.colors.danger else theme.colors.text_secondary });
             if (install_state == .running) components.pollRefresh(100_000);
         }
-        _ = dvui.label(@src(), "Commands: python3 -m venv; venv Python -m pip install --upgrade {s}", .{switch (browser.active_engine) {
-            .camoufox => "camoufox; python -m camoufox fetch",
-            .cloakbrowser => "cloakbrowser (binary fetched at first launch)",
-        }}, .{ .color_text = theme.colors.text_tertiary });
     }
 
     // Proxy URL
-    settingRow("Proxy (yt-dlp)", 32, @src());
+    sectionHeader("Proxy", "Used for yt-dlp and playlist extraction. For example: socks5://127.0.0.1:1080", 32, @src());
     {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
@@ -2195,14 +2141,10 @@ fn renderNetworkTab() void {
         state.applyTorrentProxyIfReady();
         if (proxy_changed) state.markConfigDirty();
     }
-    _ = dvui.label(@src(), "e.g. socks5://127.0.0.1:1080 — used for yt-dlp and playlist extraction", .{}, .{
-        .color_text = theme.colors.text_tertiary,
-    });
-
     // ── Bypass ISP blocking (DPI) ──────────────────────────────────────────
     // Toggles a loopback proxy sidecar (zig-bypassdpi) that fragments the TLS
     // ClientHello so an ISP can't block a source by its SNI hostname.
-    settingRow("Bypass ISP blocking (DPI)", 34, @src());
+    sectionHeader("Connectivity", "Proxy tools and connection status", 34, @src());
     {
         const dpi = @import("../services/dpi_bypass.zig");
 
@@ -2938,6 +2880,7 @@ fn renderSubtitlesTab() void {
 }
 
 fn renderStorageTab() void {
+    sectionHeader("Storage", "Downloads, library history and cached data", 50, @src());
     // Download Path
     settingRow("Download Path", 50, @src());
     {

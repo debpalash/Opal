@@ -284,6 +284,10 @@ pub fn loadLocalManifest() void {
     const loaded = plugin_count > 0;
     catalog_mutex.unlock();
     if (loaded) return;
+    readLocalManifest(false);
+}
+
+fn readLocalManifest(append_only: bool) void {
     var path_buf: [700]u8 = undefined;
     const path: []const u8 = if (state.resourceRoot()) |r|
         (std.fmt.bufPrint(&path_buf, "{s}/plugins-manifest.json", .{r}) catch return)
@@ -291,7 +295,7 @@ pub fn loadLocalManifest() void {
         "data/plugins-manifest.json";
     const body = io.cwdReadFileAlloc(path, alloc, 262144) catch return;
     defer alloc.free(body);
-    parseManifest(body);
+    parseManifest(body, append_only);
 }
 
 pub fn refresh() ApplyResult {
@@ -355,7 +359,10 @@ fn refreshWorker() void {
         fail("empty (check repo/token)");
         return;
     };
-    parseManifest(body);
+    parseManifest(body, false);
+    // A stale remote catalog must not hide adapters shipped with this build.
+    // Remote definitions win for IDs present in both catalogs.
+    if (status.load(.acquire) == .ok) readLocalManifest(true);
 }
 
 fn copyField(dst: []u8, dst_len: *usize, v: ?std.json.Value) void {
@@ -377,7 +384,7 @@ fn copyId(dst: []u8, dst_len: *usize, v: ?std.json.Value) bool {
     return true;
 }
 
-fn parseManifest(body: []const u8) void {
+fn parseManifest(body: []const u8, append_only: bool) void {
     var parsed = std.json.parseFromSlice(std.json.Value, alloc, body, .{}) catch {
         fail("not JSON (check repo/token)");
         return;
@@ -398,7 +405,7 @@ fn parseManifest(body: []const u8) void {
 
     catalog_mutex.lock();
     defer catalog_mutex.unlock();
-    plugin_count = 0;
+    if (!append_only) plugin_count = 0;
     for (arr_v.array.items) |p| {
         if (plugin_count >= MAX or p != .object) continue;
         var pl = Plugin{};
@@ -577,6 +584,7 @@ fn writeSourceVersioned(id: []const u8, data: []const u8, version: []const u8) b
     }
 
     const ok = source_config.install(id, payload);
+    if (ok and (std.mem.startsWith(u8, id, "radio-") or std.mem.eql(u8, id, "somafm"))) @import("radio.zig").invalidateSources();
     if (ok and std.mem.startsWith(u8, id, "podcast-")) @import("podcasts.zig").invalidateSourceFeeds();
     return ok;
 }
@@ -691,6 +699,7 @@ pub fn uninstall(idx: usize) void {
     const fp = sourceFilePath(&fp_buf, plugins[idx].idSlice());
     io.cwdDeleteFile(fp) catch {};
     source_config.reload();
+    if (std.mem.startsWith(u8, plugins[idx].idSlice(), "radio-") or std.mem.eql(u8, plugins[idx].idSlice(), "somafm")) @import("radio.zig").invalidateSources();
     if (std.mem.startsWith(u8, plugins[idx].idSlice(), "podcast-")) @import("podcasts.zig").invalidateSourceFeeds();
     state.showToastTyped("Uninstalled", .info);
 }
@@ -783,4 +792,19 @@ pub fn readMangaCatalog() ?[]u8 {
     else
         "data/manga-sources-sfw.json";
     return io.cwdReadFileAlloc(path, alloc, 512 * 1024) catch return null;
+}
+
+test "Anime provider bundled sources survive an older remote catalog" {
+    const saved = plugins;
+    const saved_count = plugin_count;
+    defer {
+        plugins = saved;
+        plugin_count = saved_count;
+    }
+    parseManifest("{\"plugins\":[{\"id\":\"hianime\",\"name\":\"Remote\",\"endpoints\":{\"base\":\"https://remote.test\"}}]}", false);
+    parseManifest("{\"plugins\":[{\"id\":\"hianime\",\"name\":\"Bundled\"},{\"id\":\"animehub\",\"endpoints\":{\"base\":\"https://hub.test\"}},{\"id\":\"anidbapp\",\"endpoints\":{\"base\":\"https://db.test\"}}]}", true);
+    try std.testing.expectEqual(@as(usize, 3), plugin_count);
+    try std.testing.expectEqualStrings("Remote", plugins[findPluginLocked("hianime").?].nameSlice());
+    try std.testing.expect(plugins[findPluginLocked("animehub").?].endpoints_len > 0);
+    try std.testing.expect(plugins[findPluginLocked("anidbapp").?].endpoints_len > 0);
 }

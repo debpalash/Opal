@@ -259,22 +259,7 @@ fn httpGetRaw(url_str: []const u8, response_buf: []u8) !usize {
 
 /// URL-encode a string (only encodes space, &, =, ?, #, and non-ASCII)
 fn urlEncode(input: []const u8, out: []u8) usize {
-    var j: usize = 0;
-    for (input) |ch| {
-        if (j + 3 >= out.len) break;
-        if ((ch >= 'A' and ch <= 'Z') or (ch >= 'a' and ch <= 'z') or
-            (ch >= '0' and ch <= '9') or ch == '-' or ch == '_' or ch == '.' or ch == '~')
-        {
-            out[j] = ch;
-            j += 1;
-        } else {
-            out[j] = '%';
-            out[j + 1] = "0123456789ABCDEF"[ch >> 4];
-            out[j + 2] = "0123456789ABCDEF"[ch & 0x0F];
-            j += 3;
-        }
-    }
-    return j;
+    return @import("url_encode_pure.zig").encode(input, out, .component).bytes.len;
 }
 
 /// Speak a word via the TTS server (background thread).

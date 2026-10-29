@@ -75,7 +75,7 @@ fn groupOf(tab: state.DrawerTab) ?RailGroup {
         .Anime, .Comics => .anime,
         .Novels, .Vndb, .Opds => .reading,
         .Podcasts, .Radio, .Audiobooks, .Music => .audio,
-        .Web, .RSS => .web,
+        .Web, .RSS, .Wallpapers => .web,
         else => null,
     };
 }
@@ -180,6 +180,7 @@ fn renderGroup(g: RailGroup, gi: usize) void {
         .web => {
             renderRailTab(.Web, shell.iconForTab(.Web), "Web", 10);
             renderRailTab(.RSS, shell.iconForTab(.RSS), "RSS", 11);
+            renderRailTab(.Wallpapers, shell.iconForTab(.Wallpapers), "Wallpapers", 25);
         },
     }
 }
@@ -436,6 +437,7 @@ pub fn renderTabContent(tab: state.DrawerTab) void {
         .Radio => @import("../services/radio.zig").renderContent(),
         .Iptv => @import("../services/iptv.zig").renderContent(),
         .Music => @import("../services/music_subsonic.zig").renderContent(),
+        .Wallpapers => @import("../services/wallpapers.zig").renderContent(),
         .History => renderHistoryContent(),
         .RSS => rss.renderContent(),
         .Jellyfin => jellyfin_ui.renderContent(),
@@ -626,10 +628,7 @@ fn renderHistoryContent() void {
         var hdr = page_controls.begin(@src());
         defer hdr.deinit();
 
-        {
-            var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
-            spacer.deinit();
-        }
+        dvui.label(@src(), "{d} watched", .{watch_history.count}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
 
         if (watch_history.count > 0) {
             // Destructive: two-step arm — one stray click used to wipe the
@@ -678,8 +677,11 @@ fn renderHistoryContent() void {
             .id_extra = i,
             .expand = .horizontal,
             .background = true,
-            .color_fill = TRANSPARENT,
-            .corner_radius = RADIUS_SM,
+            .color_fill = theme.colors.bg_surface,
+            .border = dvui.Rect.all(1),
+            .color_border = theme.colors.border_subtle,
+            .corner_radius = dvui.Rect.all(8),
+            .margin = .{ .x = 6, .y = 3, .w = 6, .h = 3 },
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
         });
         defer row.deinit();
@@ -703,12 +705,11 @@ fn renderHistoryContent() void {
         if (std.mem.lastIndexOfScalar(u8, name, '/')) |slash| {
             if (slash + 1 < name.len) display_name = name[slash + 1 ..];
         }
-        const show_len = @min(display_name.len, 50);
-        var dn_buf: [64]u8 = undefined;
-        _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(display_name[0..show_len], &dn_buf)}, .{
+        dvui.labelNoFmt(@src(), @import("../core/text.zig").safeUtf8(display_name), .{}, .{
             .id_extra = i + 6000,
             .color_text = theme.colors.text_primary,
             .expand = .horizontal,
+            .max_size_content = dvui.Options.MaxSize.width(@max(80, scroll.data().contentRect().w - 140)),
             .gravity_y = 0.5,
         });
 
@@ -756,29 +757,8 @@ fn renderLogsContent() void {
         var hdr = page_controls.begin(@src());
         defer hdr.deinit();
 
-        {
-            var s = dvui.box(@src(), .{}, .{ .expand = .horizontal });
-            s.deinit();
-        }
-
-        // Filter toggle — calm active state: accent glyph on a subtle
-        // bg_elevated fill (no saturated pill). Reserve accent for this single
-        // active affordance. buttonIcon's name string is accessibility-only
-        // (never rendered), so the state cue lives in the TOOLTIP.
-        var filter_wd: dvui.WidgetData = undefined;
-        if (dvui.buttonIcon(@src(), if (logs.show_only_errors) "Errors" else "All", icons.tvg.lucide.eye, .{}, .{}, .{
-            .data_out = &filter_wd,
-            .color_fill = if (logs.show_only_errors) theme.colors.bg_elevated else TRANSPARENT,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_text = if (logs.show_only_errors) theme.colors.accent else theme.colors.text_secondary,
-            .corner_radius = RADIUS_SM,
-            .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
-            .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
-            .gravity_y = 0.5,
-        })) {
-            logs.show_only_errors = !logs.show_only_errors;
-        }
-        components.tip(@src(), filter_wd, if (logs.show_only_errors) "Showing errors only — click for all logs" else "Showing all logs — click for errors only");
+        if (page_controls.item(@src(), .{ .id = 93001, .label = "All activity", .icon = icons.tvg.lucide.@"scroll-text", .presentation = .icon_label, .active = !logs.show_only_errors })) logs.show_only_errors = false;
+        if (page_controls.item(@src(), .{ .id = 93002, .label = "Errors", .icon = icons.tvg.lucide.@"circle-alert", .presentation = .icon_label, .active = logs.show_only_errors })) logs.show_only_errors = true;
 
         var copy_wd: dvui.WidgetData = undefined;
         if (dvui.buttonIcon(@src(), "Copy diagnostics", icons.tvg.lucide.copy, .{}, .{}, .{

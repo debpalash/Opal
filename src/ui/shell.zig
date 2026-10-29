@@ -7,6 +7,7 @@
 //!
 //! Rules: SVG (lucide TVG) icons only — never emojis.
 
+const brands = @import("brands.zig");
 const page_controls = @import("browse_filters.zig");
 const std = @import("std");
 const dvui = @import("dvui");
@@ -730,6 +731,12 @@ fn omnibox(narrow: bool) void {
     // A newer assistant/link/source query also supersedes a pending memory
     // lookup; its late publication must not replace this field or search.
     search_mod.cancelPendingMemorySearch();
+    if (search_mod.currentScope() == .wallpapers) {
+        search_mod.submitScopedQuery(text);
+        state.app.browse_source = .Wallpapers;
+        state.app.router.navigate(.browse);
+        return;
+    }
     switch (browser_pure.classifyOmnibox(text)) {
         .empty => {},
         .memory => {
@@ -771,10 +778,14 @@ fn scopeChip() void {
     });
     defer chip.deinit();
     const glyph = switch (scope) {
-        .youtube => icons.tvg.lucide.youtube,
+        .youtube => brands.icon(.youtube),
         .music => icons.tvg.lucide.music,
-        .jellyfin, .plex, .reading => icons.tvg.lucide.server,
-        .books, .comics, .audiobooks, .visual_novels => icons.tvg.lucide.book,
+        .wallpapers => icons.tvg.lucide.image,
+        .jellyfin => brands.icon(.jellyfin),
+        .plex => brands.icon(.plex),
+        .audiobooks => brands.icon(.audiobookshelf),
+        .reading => icons.tvg.lucide.server,
+        .books, .comics, .visual_novels => icons.tvg.lucide.book,
         .podcasts => icons.tvg.lucide.podcast,
         .radio => icons.tvg.lucide.radio,
         .rss => icons.tvg.lucide.rss,
@@ -926,7 +937,7 @@ fn renderPage(r: Route) !void {
         .connect => @import("connections.zig").render(),
         .settings => drawer.renderTabContent(.Settings),
         .assistant => drawer.renderTabContent(.AI),
-        .search => drawer.renderTabContent(.Search),
+        .search => if (search_mod.currentScope() == .wallpapers) @import("../services/wallpapers.zig").renderContent() else drawer.renderTabContent(.Search),
         .home => @import("home.zig").render(), // personal hub: metrics + lists
         .browse => {
             drawer.renderTabContent(state.app.browse_source);
@@ -937,7 +948,7 @@ fn renderPage(r: Route) !void {
         .history => drawer.renderTabContent(.History),
         .plugins => {
             if (@import("profiles_ui.zig").blocksKid()) return;
-            pluginSubTabs();
+            if (state.app.plugin_tab != .sources) pluginSubTabs();
             @import("../services/plugins.zig").renderSection(state.app.plugin_tab);
         },
         .agents => if (!@import("profiles_ui.zig").blocksKid()) @import("agent_terminal.zig").render(),
@@ -950,11 +961,11 @@ fn renderPage(r: Route) !void {
     }
 }
 
-const BROWSE_SOURCES = [_]state.DrawerTab{ .TMDB, .YouTube, .Iptv, .Anime, .Podcasts, .Radio, .Music, .Comics, .Web, .RSS, .Jellyfin, .Plex, .Audiobooks, .Opds, .Novels, .Vndb, .Drama };
+const BROWSE_SOURCES = [_]state.DrawerTab{ .TMDB, .YouTube, .Iptv, .Anime, .Podcasts, .Radio, .Music, .Comics, .Web, .RSS, .Jellyfin, .Plex, .Audiobooks, .Opds, .Novels, .Vndb, .Drama, .Wallpapers };
 const WATCH_SOURCES = [_]state.DrawerTab{ .TMDB, .YouTube, .Anime, .Drama, .Iptv };
 const LISTEN_SOURCES = [_]state.DrawerTab{ .Podcasts, .Radio, .Music };
 const READ_SOURCES = [_]state.DrawerTab{ .Comics, .Novels, .Vndb, .RSS };
-const CONNECTED_SOURCES = [_]state.DrawerTab{.Web};
+const CONNECTED_SOURCES = [_]state.DrawerTab{ .Web, .Wallpapers };
 
 /// Persistent grouped navigation. Ordinary buttons retain keyboard focus and
 /// activation semantics; the icon rail exposes the same labels through tips.
@@ -977,7 +988,7 @@ fn renderSidebar(layout: sidebar_layout.Layout) void {
         .color_border = theme.colors.border_subtle,
         .border = dvui.Rect.all(0),
         .min_size_content = .{ .w = 0, .h = 0 },
-        .max_size_content = .{ .w = layout.sidebar - 9, .h = if (host.data().rect.h > 1) @max(0, host.data().rect.h - 93) else std.math.floatMax(f32) },
+        .max_size_content = .{ .w = layout.sidebar - 9, .h = if (host.data().rect.h > 1) @max(0, host.data().rect.h - (if (layout.expanded) @as(f32, 53) else 93)) else std.math.floatMax(f32) },
         .padding = dvui.Rect.all(4),
     });
     // Agents is the front door: automations and personalised content first.
@@ -1004,17 +1015,21 @@ fn renderSidebar(layout: sidebar_layout.Layout) void {
         if (sidebarButton(tabLabel(tab), iconForTab(tab), state.app.router.current == route, layout.expanded, 9101 + i)) state.app.router.navigate(route);
     }
     scroll.deinit();
-    var utility = dvui.box(@src(), .{ .dir = .vertical }, .{
+    var utility = dvui.box(@src(), .{ .dir = if (layout.expanded) .horizontal else .vertical }, .{
         .expand = .horizontal,
-        .min_size_content = .{ .w = 0, .h = 84 },
-        .max_size_content = .{ .w = std.math.floatMax(f32), .h = 84 },
+        .min_size_content = .{ .w = 0, .h = if (layout.expanded) 44 else 84 },
+        .max_size_content = .{ .w = std.math.floatMax(f32), .h = if (layout.expanded) 44 else 84 },
         .padding = dvui.Rect.all(4),
         .border = .{ .x = 0, .y = 1, .w = 0, .h = 0 },
         .color_border = theme.colors.border_subtle,
     });
     defer utility.deinit();
-    if (sidebarButton("Settings", iconForTab(.Settings), state.app.router.current == .settings, layout.expanded, 9106)) state.app.router.navigate(.settings);
-    if (sidebarButton("System", iconForTab(.Logs), state.app.router.current == .system, layout.expanded, 9107)) state.app.router.navigate(.system);
+    if (components.iconButton(@src(), iconForTab(.Settings), "Settings", state.app.router.current == .settings)) state.app.router.navigate(.settings);
+    if (layout.expanded) {
+        var space = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+        space.deinit();
+    }
+    if (components.iconButton(@src(), iconForTab(.Logs), "System and logs", state.app.router.current == .system)) state.app.router.navigate(.system);
 }
 fn sidebarHeading(label: []const u8, expanded: bool, id: usize) void {
     // Hover reveals labels without moving the destination under the pointer.
@@ -1289,6 +1304,7 @@ fn tabLabel(t: state.DrawerTab) []const u8 {
         .Radio => "Radio",
         .Iptv => "Live TV",
         .Music => "Music",
+        .Wallpapers => "Wallpapers",
         .History => "History",
         .RSS => "RSS",
         .Jellyfin => "Jellyfin",
@@ -1309,7 +1325,7 @@ pub fn iconForTab(t: state.DrawerTab) []const u8 {
         .Search => icons.tvg.lucide.search,
         .Downloads => icons.tvg.lucide.download,
         .TMDB => icons.tvg.lucide.film,
-        .YouTube => icons.tvg.lucide.youtube,
+        .YouTube => brands.icon(.youtube),
         .Queue => icons.tvg.lucide.@"list-video",
         .Comics => icons.tvg.lucide.@"book-open",
         .Novels => icons.tvg.lucide.@"book-marked",
@@ -1321,11 +1337,12 @@ pub fn iconForTab(t: state.DrawerTab) []const u8 {
         .Radio => icons.tvg.lucide.radio,
         .Iptv => icons.tvg.lucide.@"monitor-play",
         .Music => icons.tvg.lucide.music,
+        .Wallpapers => icons.tvg.lucide.image,
         .History => icons.tvg.lucide.history,
         .RSS => icons.tvg.lucide.rss,
-        .Jellyfin => icons.tvg.lucide.server,
-        .Plex => icons.tvg.lucide.server,
-        .Audiobooks => icons.tvg.lucide.@"book-audio",
+        .Jellyfin => brands.icon(.jellyfin),
+        .Plex => brands.icon(.plex),
+        .Audiobooks => brands.icon(.audiobookshelf),
         .Opds => icons.tvg.lucide.@"library-big",
         .Plugins => icons.tvg.lucide.puzzle,
         .Logs => icons.tvg.lucide.@"scroll-text",
@@ -1440,9 +1457,12 @@ fn subTabsOf(
 fn pluginSubTabs() void {
     var bar = page_controls.begin(@src());
     defer bar.deinit();
+    pluginTabControls();
+}
+pub fn pluginTabControls() void {
     var items: [router.PLUGIN_TABS.len]page_controls.Item = undefined;
     for (router.PLUGIN_TABS, &items) |tab, *item| item.* = .{ .id = @intFromEnum(tab), .label = router.pluginTabLabel(tab), .icon = pluginTabIcon(tab) };
-    if (bar.menu(@src(), .{ .items = &items, .selected = @intFromEnum(state.app.plugin_tab) })) |id| state.app.plugin_tab = @enumFromInt(id);
+    if (page_controls.renderMenu(@src(), .{ .items = &items, .selected = @intFromEnum(state.app.plugin_tab) }, true)) |id| state.app.plugin_tab = @enumFromInt(id);
 }
 
 fn pluginTabIcon(t: router.PluginTab) []const u8 {
@@ -1450,7 +1470,7 @@ fn pluginTabIcon(t: router.PluginTab) []const u8 {
         .sources => icons.tvg.lucide.@"plug-zap",
         .suwayomi => icons.tvg.lucide.@"book-open",
         .debrid => icons.tvg.lucide.cloud,
-        .trakt => icons.tvg.lucide.@"refresh-cw",
+        .trakt => brands.icon(.trakt),
         .content => icons.tvg.lucide.puzzle,
     };
 }

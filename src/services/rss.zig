@@ -20,18 +20,10 @@ const rss_alloc = @import("../core/alloc.zig").allocator;
 
 const MAX_FEEDS = 8;
 const MAX_ITEMS = 300;
-const MAX_TITLE = 200;
-const MAX_MAGNET = 1024;
 
-pub const RssItem = struct {
-    title: [MAX_TITLE]u8 = undefined,
-    title_len: usize = 0,
-    magnet: [MAX_MAGNET]u8 = undefined,
-    magnet_len: usize = 0,
-    size_bytes: u64 = 0,
-    seeds: u16 = 0,
-    peers: u16 = 0,
-};
+const feed_parser = @import("rss_feed_pure.zig");
+const surfaces = @import("../ui/service_surfaces.zig");
+pub const RssItem = feed_parser.Item;
 
 pub const RssFeed = struct {
     url: [512]u8 = undefined,
@@ -48,10 +40,22 @@ pub var items: [MAX_ITEMS]RssItem = undefined;
 pub var item_count: usize = 0;
 pub var is_fetching: bool = false;
 pub var fetch_error: bool = false;
-var fetch_thread: ?std.Thread = null;
 var active_feed_idx: usize = 0;
 var auto_fetched: bool = false;
 var items_mutex: @import("../core/sync.zig").Mutex = .{};
+
+pub fn setNativeFixtureForTest(enabled: bool) void {
+    if (!@import("builtin").is_test) @compileError("test-only");
+    auto_fetched = enabled;
+    is_fetching = false;
+    fetch_error = false;
+    item_count = 0;
+    feed_count = 0;
+    if (enabled) {
+        appendFeed("Reading & culture", "https://example.invalid/feed");
+        appendFeed("Releases", "https://example.invalid/releases");
+    }
+}
 
 // ── Add URL input state ──
 var add_url_buf: [512]u8 = [_]u8{0} ** 512;
@@ -212,12 +216,18 @@ pub fn fetchFeed(idx: usize) void {
     active_feed_idx = idx;
     is_fetching = true;
     fetch_error = false;
-    fetch_thread = @import("../core/workers.zig").spawnLegacy(fetchWorker, .{idx}) catch null;
+    if (@import("../core/workers.zig").spawnLegacy(fetchWorker, .{idx})) |worker| {
+        @import("../core/workers.zig").release(worker);
+    } else |_| {
+        is_fetching = false;
+        fetch_error = true;
+    }
 }
 
 fn fetchWorker(idx: usize) void {
     defer {
         is_fetching = false;
+        state.wakeUi();
     }
 
     const url = feeds[idx].url[0..feeds[idx].url_len];
@@ -243,68 +253,15 @@ fn fetchWorker(idx: usize) void {
         return;
     };
     defer rss_alloc.free(parsed_items);
-    var parsed_count: usize = 0;
-    var pos: usize = 0;
-    while (pos < body.len and parsed_count < MAX_ITEMS) {
-        const item_start = std.mem.indexOfPos(u8, body, pos, "<item>") orelse break;
-        const item_end = std.mem.indexOfPos(u8, body, item_start, "</item>") orelse break;
-        const block = body[item_start..item_end];
-
-        var item = &parsed_items[parsed_count];
-        item.* = .{};
-
-        // Title
-        if (extractTag(block, "<title>", "</title>")) |t| {
-            const tlen = @min(t.len, MAX_TITLE);
-            @memcpy(item.title[0..tlen], t[0..tlen]);
-            item.title_len = tlen;
-        }
-
-        // Magnet URI (inside CDATA)
-        if (extractTag(block, "<torrent:magnetURI>", "</torrent:magnetURI>")) |raw| {
-            // Strip CDATA wrapper if present
-            const magnet = if (std.mem.indexOf(u8, raw, "magnet:")) |mi|
-                raw[mi..]
-            else
-                raw;
-            // Trim trailing ]]> if present
-            const clean = if (std.mem.indexOf(u8, magnet, "]]>")) |ei|
-                magnet[0..ei]
-            else
-                magnet;
-            const mlen = @min(clean.len, MAX_MAGNET);
-            @memcpy(item.magnet[0..mlen], clean[0..mlen]);
-            item.magnet_len = mlen;
-        }
-
-        // Size
-        if (extractTag(block, "<torrent:contentLength>", "</torrent:contentLength>")) |s| {
-            item.size_bytes = std.fmt.parseInt(u64, s, 10) catch 0;
-        }
-
-        // Seeds
-        if (extractTag(block, "<torrent:seeds>", "</torrent:seeds>")) |s| {
-            item.seeds = std.fmt.parseInt(u16, s, 10) catch 0;
-        }
-
-        // Peers
-        if (extractTag(block, "<torrent:peers>", "</torrent:peers>")) |s| {
-            item.peers = std.fmt.parseInt(u16, s, 10) catch 0;
-        }
-
-        if (item.title_len > 0) parsed_count += 1;
-        pos = item_end + 7; // skip </item>
+    const parsed_count = feed_parser.parse(body, parsed_items);
+    if (parsed_count == 0 and std.mem.indexOf(u8, body, "<rss") == null) {
+        fetch_error = true;
+        return;
     }
     items_mutex.lock();
     @memcpy(items[0..parsed_count], parsed_items[0..parsed_count]);
     item_count = parsed_count;
     items_mutex.unlock();
-}
-
-fn extractTag(block: []const u8, open: []const u8, close: []const u8) ?[]const u8 {
-    const start = (std.mem.indexOf(u8, block, open) orelse return null) + open.len;
-    const end = std.mem.indexOfPos(u8, block, start, close) orelse return null;
-    return block[start..end];
 }
 
 fn formatSize(bytes: u64) [12]u8 {
@@ -338,13 +295,19 @@ pub fn renderContent() void {
     }
 
     {
+        var header = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .padding = .{ .x = 12, .y = 12, .w = 12, .h = 6 } });
+        surfaces.iconTile(@src(), icons.tvg.lucide.rss, theme.colors.warning, 24);
+        dvui.labelNoFmt(@src(), "Your feeds", .{}, .{ .font = dvui.themeGet().font_heading, .color_text = theme.colors.text_primary, .expand = .horizontal, .gravity_y = 0.5, .margin = .{ .x = 8 } });
+        if (feed_count < MAX_FEEDS and components.actionButton(@src(), "Add feed", .secondary, 39997)) state.app.rss_show_add = !state.app.rss_show_add;
+        header.deinit();
+    }
+    {
         var bar = browse_filters.begin(@src());
         defer bar.deinit();
         var menu_items: [MAX_FEEDS]browse_filters.Item = undefined;
-        for (0..feed_count) |i| menu_items[i] = .{ .id = i, .label = feeds[i].name[0..feeds[i].name_len], .icon = icons.tvg.lucide.rss, .presentation = .label, .enabled = !is_fetching };
+        for (0..feed_count) |i| menu_items[i] = .{ .id = i, .label = feeds[i].name[0..feeds[i].name_len], .icon = icons.tvg.lucide.rss, .presentation = .icon_label, .enabled = !is_fetching };
         if (bar.menu(@src(), .{ .items = menu_items[0..feed_count], .selected = active_feed_idx })) |id| fetchFeed(id);
         browse_filters.divider(@src(), 39998);
-        if (browse_filters.item(@src(), .{ .id = 39999, .label = "Add feed", .icon = icons.tvg.lucide.plus, .active = state.app.rss_show_add, .visible = feed_count < MAX_FEEDS })) state.app.rss_show_add = !state.app.rss_show_add;
         if (is_fetching) {
             dvui.spinner(@src(), .{ .color_text = theme.colors.accent, .min_size_content = theme.iconSize(.sm), .gravity_y = 0.5 });
         } else if (browse_filters.item(@src(), .{ .id = 40000, .label = "Refresh feed", .icon = icons.tvg.lucide.@"refresh-cw", .enabled = feed_count > 0 })) fetchFeed(active_feed_idx);
@@ -365,7 +328,7 @@ pub fn renderContent() void {
         });
 
         // Name input
-        var te_name = dvui.textEntry(@src(), .{ .text = .{ .buffer = &add_name_buf } }, .{
+        var te_name = dvui.textEntry(@src(), .{ .text = .{ .buffer = &add_name_buf }, .placeholder = "Feed name" }, .{
             .expand = .horizontal,
             .padding = .{ .x = 6, .y = 4, .w = 6, .h = 4 },
             .color_fill = theme.colors.bg_elevated,
@@ -375,7 +338,7 @@ pub fn renderContent() void {
         te_name.deinit();
 
         // URL input
-        var te_url = dvui.textEntry(@src(), .{ .text = .{ .buffer = &add_url_buf } }, .{
+        var te_url = dvui.textEntry(@src(), .{ .text = .{ .buffer = &add_url_buf }, .placeholder = "https://example.com/feed" }, .{
             .expand = .horizontal,
             .padding = .{ .x = 6, .y = 4, .w = 6, .h = 4 },
             .color_fill = theme.colors.bg_elevated,
@@ -438,7 +401,12 @@ pub fn renderContent() void {
 
     // Items list
     if (item_count == 0 and !is_fetching and !fetch_error) {
-        components.emptyState(icons.tvg.lucide.rss, "No feed items", "Choose a feed or refresh it to load entries.");
+        var welcome = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .padding = dvui.Rect.all(24), .margin = dvui.Rect.all(12), .background = true, .color_fill = theme.colors.bg_surface, .corner_radius = theme.dims.rad_md });
+        surfaces.iconTile(@src(), icons.tvg.lucide.rss, theme.colors.warning, 32);
+        dvui.labelNoFmt(@src(), if (feed_count == 0) "Follow what interests you" else "This feed has no entries yet", .{}, .{ .font = dvui.themeGet().font_heading, .color_text = theme.colors.text_primary, .margin = .{ .y = 12 } });
+        components.bodyText(@src(), "Add an RSS feed for news or releases. Open articles or play available torrents.", theme.colors.text_secondary);
+        if (feed_count < MAX_FEEDS and components.actionButton(@src(), "Add a feed", .primary, 40001)) state.app.rss_show_add = true;
+        welcome.deinit();
         return;
     }
 
@@ -449,7 +417,7 @@ pub fn renderContent() void {
     });
     defer scroll.deinit();
 
-    const row_h: f32 = 68;
+    const row_h: f32 = 84;
     const win = tmdb_pure.visibleRows(item_count, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 4);
     if (win.first > 0) {
         var spacer = dvui.box(@src(), .{}, .{ .min_size_content = .{ .w = 1, .h = row_h * @as(f32, @floatFromInt(win.first)) } });
@@ -467,17 +435,24 @@ pub fn renderContent() void {
             .background = true,
             .color_fill = theme.colors.bg_surface,
             .color_border = theme.colors.border_subtle,
-            .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-            .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
-            .min_size_content = .{ .w = 0, .h = row_h },
-            .max_size_content = .{ .w = std.math.floatMax(f32), .h = row_h },
+            .border = dvui.Rect.all(1),
+            .corner_radius = theme.dims.rad_md,
+            .margin = .{ .x = 6, .y = 3, .w = 6, .h = 3 },
+            .padding = dvui.Rect.all(10),
+            .min_size_content = .{ .w = 0, .h = row_h - 28 },
+            .max_size_content = .{ .w = std.math.floatMax(f32), .h = row_h - 28 },
         });
         defer row.deinit();
+
+        var emblem = dvui.box(@src(), .{}, .{ .margin = .{ .w = 12 }, .gravity_y = 0.5 });
+        surfaces.iconTile(@src(), if (item.magnet_len > 0) icons.tvg.lucide.film else icons.tvg.lucide.@"file-text", if (item.magnet_len > 0) theme.colors.accent else theme.colors.warning, 20);
+        emblem.deinit();
 
         // Title + meta row
         {
             var col = dvui.box(@src(), .{ .dir = .vertical }, .{
                 .id_extra = i + 3000,
+                .padding = dvui.Rect.all(0),
                 .expand = .horizontal,
             });
             defer col.deinit();
@@ -485,12 +460,16 @@ pub fn renderContent() void {
             // Title
             _ = dvui.label(@src(), "{s}", .{title}, .{
                 .id_extra = i + 4000,
+                .padding = dvui.Rect.all(0),
                 .color_text = theme.colors.text_primary,
                 .expand = .horizontal,
             });
 
-            // Meta line: seeds icon + count · size
-            {
+            if (item.magnet_len == 0) {
+                dvui.labelNoFmt(@src(), if (item.date_len > 0) item.date[0..item.date_len] else "Article", .{}, .{ .padding = .{ .y = 4 }, .color_text = theme.colors.text_secondary, .font = dvui.themeGet().font_body.withSize(12) });
+            }
+            // Torrent availability only applies to playable releases.
+            if (item.magnet_len > 0) {
                 var meta = dvui.box(@src(), .{ .dir = .horizontal }, .{
                     .id_extra = i + 7000,
                     .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
@@ -511,12 +490,14 @@ pub fn renderContent() void {
                     .id_extra = i + 2000,
                     .color_text = seed_color,
                     .gravity_y = 0.5,
+                    .padding = dvui.Rect.all(0),
                 });
 
                 _ = dvui.label(@src(), " · ", .{}, .{
                     .id_extra = i + 8500,
                     .color_text = theme.colors.text_secondary,
                     .gravity_y = 0.5,
+                    .padding = dvui.Rect.all(0),
                 });
 
                 // Peers icon
@@ -532,12 +513,14 @@ pub fn renderContent() void {
                     .id_extra = i + 9500,
                     .color_text = theme.colors.text_secondary,
                     .gravity_y = 0.5,
+                    .padding = dvui.Rect.all(0),
                 });
 
                 _ = dvui.label(@src(), " · ", .{}, .{
                     .id_extra = i + 9600,
                     .color_text = theme.colors.text_secondary,
                     .gravity_y = 0.5,
+                    .padding = dvui.Rect.all(0),
                 });
 
                 // Size
@@ -545,6 +528,7 @@ pub fn renderContent() void {
                     .id_extra = i + 5000,
                     .color_text = theme.colors.text_secondary,
                     .gravity_y = 0.5,
+                    .padding = dvui.Rect.all(0),
                 });
             }
         }
@@ -562,6 +546,8 @@ pub fn renderContent() void {
                 search.loadTorrentToPlayer(item.magnet[0..item.magnet_len]);
             }
         }
+
+        if (item.url_len > 0 and components.iconButton(@src(), icons.tvg.lucide.@"external-link", "Open article in browser", false)) @import("../ui/settings.zig").openExternal(item.url[0..item.url_len]);
 
         // ── Right-click context menu ──
         {

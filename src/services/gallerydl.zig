@@ -47,6 +47,20 @@ fn resolve() void {
             return;
         } else |_| {}
     }
+    var config_buf: [512]u8 = undefined;
+    var private_buf: [1024]u8 = undefined;
+    const config = @import("../core/paths.zig").configDir(&config_buf);
+    for ([_][]const u8{ "tools/gallery-dl/bin/gallery-dl", "tools/gallery-dl/Scripts/gallery-dl.exe", "venv/bin/gallery-dl" }) |relative| {
+        const candidate = std.fmt.bufPrint(&private_buf, "{s}/{s}", .{ config, relative }) catch continue;
+        if (candidate.len >= resolved_buf.len) continue;
+        if (io_g.cwdAccess(candidate, .{})) {
+            @memcpy(resolved_buf[0..candidate.len], candidate);
+            resolved_len = candidate.len;
+            resolved_found = true;
+            resolved_done = true;
+            return;
+        } else |_| {}
+    }
     // Not at a known absolute path — fall back to a bare PATH lookup, but mark
     // it "not found" so available() reports the feature inert (the GUI process
     // PATH usually lacks /opt/homebrew/bin, same caveat as yt-dlp).

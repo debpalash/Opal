@@ -1298,21 +1298,5 @@ fn ttsWorker() void {
 // ── Helpers ──
 
 fn urlEncode(input: []const u8, out: []u8) usize {
-    const hex = "0123456789ABCDEF";
-    var j: usize = 0;
-    for (input) |ch| {
-        if (j + 3 >= out.len) break;
-        if ((ch >= 'A' and ch <= 'Z') or (ch >= 'a' and ch <= 'z') or
-            (ch >= '0' and ch <= '9') or ch == '-' or ch == '_' or ch == '.' or ch == '~')
-        {
-            out[j] = ch;
-            j += 1;
-        } else {
-            out[j] = '%';
-            out[j + 1] = hex[ch >> 4];
-            out[j + 2] = hex[ch & 0x0F];
-            j += 3;
-        }
-    }
-    return j;
+    return @import("url_encode_pure.zig").encode(input, out, .component).bytes.len;
 }

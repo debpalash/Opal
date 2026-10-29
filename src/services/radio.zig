@@ -91,7 +91,11 @@ var search_request: LatestRequest = .{};
 var query_buf: [256]u8 = undefined;
 var query_len: usize = 0;
 
+const countries = @import("countries_pure.zig");
+var country_index: std.atomic.Value(usize) = .init(0);
+
 const SearchJob = struct {
+    country: usize = 0,
     generation: u32,
     query: [256]u8 = undefined,
     query_len: usize = 0,
@@ -188,6 +192,7 @@ fn deserializeStation(r: *ccp.Reader) ?pure.Station {
 /// SWR write — persist the fresh most-voted list. Called from popularWorker
 /// Takes a short owned snapshot; writes disk after releasing parse_mutex.
 fn putPopularCache(generation: u32) void {
+    if (country_index.load(.acquire) != 0) return;
     if (!state.app.content_cache_enabled) return;
     const buffer = alloc.alloc(u8, RADIO_BLOB_CAP) catch return;
     defer alloc.free(buffer);
@@ -208,6 +213,7 @@ fn putPopularCache(generation: u32) void {
 /// start. Popular worker only (from popularWorker), ONLY when results[] is empty.
 /// results[] is a fixed array, so no capacity reservation is needed.
 fn seedPopularFromCache(generation: u32) void {
+    if (country_index.load(.acquire) != 0) return;
     if (!state.app.content_cache_enabled) return;
     const buf = alloc.alloc(u8, RADIO_BLOB_CAP) catch return;
     defer alloc.free(buf);
@@ -269,12 +275,13 @@ var popular_fetched: std.atomic.Value(bool) = std.atomic.Value(bool).init(false)
 
 pub fn loadPopularOnce() void {
     if (@import("builtin").is_test and loading_fixture_for_test) return;
-    if (popular_fetched.load(.acquire)) return;
+    const refresh = sources_changed.load(.acquire) and state.app.radio.showing_popular;
+    if (!refresh and popular_fetched.load(.acquire)) return;
     // Same first-start gate as the other one-shot loaders: don't latch until
     // config has published (the poster daemon's disk cache needs the db open).
     if (!state.app.config_loaded.load(.acquire)) return;
     // A search already landed (remote API) — leave it be.
-    if (state.app.radio.result_count > 0) {
+    if (!refresh and state.app.radio.result_count > 0) {
         popular_fetched.store(true, .release);
         return;
     }
@@ -283,10 +290,11 @@ pub fn loadPopularOnce() void {
     // The worker seeds cached rows before its independent directory requests.
 
     parse_mutex.lock();
-    if (state.app.radio.is_loading.load(.acquire) or popular_fetched.load(.acquire)) {
+    if (state.app.radio.is_loading.load(.acquire) or (!refresh and popular_fetched.load(.acquire))) {
         parse_mutex.unlock();
         return;
     }
+    sources_changed.store(false, .release);
     popular_fetched.store(true, .release);
     state.app.radio.showing_popular = true;
     state.app.radio.fetch_error = false;
@@ -301,16 +309,16 @@ pub fn loadPopularOnce() void {
     const my_gen = search_request.begin(&state.app.radio.is_loading);
     parse_mutex.unlock();
 
-    if (@import("../core/workers.zig").spawnLegacy(popularWorker, .{my_gen})) |t| {
+    if (@import("../core/workers.zig").spawnLegacy(popularWorker, .{SearchJob{ .generation = my_gen, .country = country_index.load(.acquire) }})) |t| {
         @import("../core/workers.zig").release(t); // never joined — detach to avoid leaking the handle
     } else |_| {
         search_request.finish(my_gen, &state.app.radio.is_loading);
     }
 }
 
-fn popularWorker(my_gen: u32) void {
-    seedPopularFromCache(my_gen);
-    runRadioGroup(.{ .generation = my_gen, .query_len = 0 }, true);
+fn popularWorker(job: SearchJob) void {
+    if (job.country == 0) seedPopularFromCache(job.generation);
+    runRadioGroup(job, true);
 }
 
 const RadioGroup = struct {
@@ -322,9 +330,9 @@ const RadioGroup = struct {
 };
 fn runRadioGroup(job: SearchJob, popular: bool) void {
     var group: RadioGroup = .{ .job = job, .popular = popular };
-    const jobs = [_]bool{ false, true };
-    @import("browse_fanout.zig").run(bool, &jobs, &group, radioPartWorker, .{
-        .limit = 2,
+    const jobs = [_]u8{ 0, 1, 2 };
+    @import("browse_fanout.zig").run(u8, &jobs, &group, radioPartWorker, .{
+        .limit = 3,
         .cancel_epoch = .{ .epoch32 = .{ .value = &search_request.generation, .expected = job.generation } },
     });
     var cache = false;
@@ -340,15 +348,16 @@ fn runRadioGroup(job: SearchJob, popular: bool) void {
     if (cache) putPopularCache(job.generation);
     state.wakeUi();
 }
-fn radioPartWorker(group: *RadioGroup, soma: bool) void {
-    if (soma) {
+fn radioPartWorker(group: *RadioGroup, provider: u8) void {
+    if (provider == 2) return appendInstalledStreams(group);
+    if (provider == 1) {
         appendSoma(group);
         return;
     }
     const generation = group.job.generation;
     var enc: [768]u8 = undefined;
     var url_buf: [1024]u8 = undefined;
-    const url = if (group.popular) pure.buildPopularUrl(RADIO_PAGE_SIZE, 0, &url_buf) else pure.buildSearchUrl(percentEncode(group.job.query[0..group.job.query_len], &enc), RADIO_PAGE_SIZE, 0, &url_buf);
+    const url = pure.buildCountryUrl(percentEncode(group.job.query[0..group.job.query_len], &enc), countries.at(group.job.country).code, RADIO_PAGE_SIZE, 0, &url_buf);
     if (url.len == 0) return;
     rate_limit.acquire("radiobrowser", 1.0);
     const body = fetchBodyForGeneration(url, 512 * 1024, generation) orelse return;
@@ -378,11 +387,10 @@ fn radioPartWorker(group: *RadioGroup, soma: bool) void {
 
 pub fn searchRadio(query: []const u8) void {
     if (@import("builtin").is_test and loading_fixture_for_test) return;
-    if (query.len == 0) return;
 
     parse_mutex.lock();
     state.app.radio.fetch_error = false;
-    state.app.radio.showing_popular = false;
+    state.app.radio.showing_popular = query.len == 0;
     // A search satisfies the "page opens with content" job — never let the
     // one-shot popular fetch land on top of the user's results afterwards.
     popular_fetched.store(true, .release);
@@ -397,7 +405,7 @@ pub fn searchRadio(query: []const u8) void {
     @memcpy(query_buf[0..n], query[0..n]);
     query_len = n;
     parse_mutex.unlock();
-    var job: SearchJob = .{ .generation = my_gen, .query_len = n };
+    var job: SearchJob = .{ .generation = my_gen, .query_len = n, .country = country_index.load(.acquire) };
     @memcpy(job.query[0..n], query[0..n]);
 
     if (@import("../core/workers.zig").spawnLegacy(searchWorker, .{job})) |t| {
@@ -410,6 +418,7 @@ pub fn searchRadio(query: []const u8) void {
 /// Installed SomaFM contributes bounded real station playlists independently
 /// of RadioBrowser availability; its identities never trigger RadioBrowser pings.
 fn appendSoma(group: *RadioGroup) void {
+    if (group.job.country != 0 and !std.mem.eql(u8, countries.at(group.job.country).code, "US")) return;
     const generation = group.job.generation;
     const query = group.job.query[0..group.job.query_len];
     if (!search_request.isCurrent(generation)) return;
@@ -443,8 +452,47 @@ fn appendSoma(group: *RadioGroup) void {
     state.wakeUi();
 }
 
+fn appendInstalledStreams(group: *RadioGroup) void {
+    const config = @import("../core/source_config.zig");
+    const entries = alloc.alloc(config.FieldSnapshot, 64) catch return;
+    defer alloc.free(entries);
+    const count = config.copyFields("stream", entries);
+    for (entries[0..count]) |entry| {
+        if (!search_request.isCurrent(group.job.generation)) return;
+        const id = entry.id[0..entry.id_len];
+        if (!std.mem.startsWith(u8, id, "radio-")) continue;
+        const url = entry.value[0..entry.value_len];
+        if (!@import("source_request_pure.zig").publicUrl(url)) continue;
+        var name_buf: [160]u8 = undefined;
+        const name = config.copyValue(id, "name", &name_buf) orelse id;
+        const query = group.job.query[0..group.job.query_len];
+        if (query.len > 0 and std.ascii.indexOfIgnoreCase(name, query) == null) continue;
+        var country_buf: [8]u8 = undefined;
+        const country = config.copyValue(id, "country", &country_buf) orelse "";
+        if (group.job.country != 0 and !std.ascii.eqlIgnoreCase(country, countries.at(group.job.country).code)) continue;
+        var row: pure.Station = .{};
+        const identity = std.fmt.bufPrint(&row.stationuuid, "stream:{s}", .{id}) catch continue;
+        row.stationuuid_len = identity.len;
+        copyField(&row.name, &row.name_len, name);
+        copyField(&row.url, &row.url_len, url);
+        copyField(&row.country, &row.country_len, if (country.len > 0) countries.at(countries.index(country)).name else "");
+        var art: [300]u8 = undefined;
+        if (config.copyValue(id, "logo", &art)) |logo| copyField(&row.favicon, &row.favicon_len, logo);
+        parse_mutex.lock();
+        if (search_request.isCurrent(group.job.generation)) {
+            if (!group.published) state.app.radio.result_count = 0;
+            group.published = true;
+            group.succeeded = true;
+            state.app.radio.result_count = pure.appendUnique(&state.app.radio.results, state.app.radio.result_count, &.{row});
+            state.app.radio.fetch_error = false;
+        }
+        parse_mutex.unlock();
+        state.wakeUi();
+    }
+}
+
 fn searchWorker(job: SearchJob) void {
-    runRadioGroup(job, false);
+    runRadioGroup(job, job.query_len == 0);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -471,7 +519,7 @@ pub fn loadMore() void {
     const my_gen = search_request.current(); // stay within the current generation
     const offset = current_offset;
     const popular = state.app.radio.showing_popular;
-    var job: SearchJob = .{ .generation = my_gen };
+    var job: SearchJob = .{ .generation = my_gen, .country = country_index.load(.acquire) };
     parse_mutex.lock();
     job.query_len = @min(query_len, job.query.len);
     @memcpy(job.query[0..job.query_len], query_buf[0..job.query_len]);
@@ -492,13 +540,9 @@ fn loadMoreWorker(job: SearchJob, offset: usize, popular: bool) void {
     defer loading_more.store(false, .release);
 
     var url_buf: [1024]u8 = undefined;
-    const url = if (popular)
-        pure.buildPopularUrl(RADIO_PAGE_SIZE, offset, &url_buf)
-    else blk: {
-        var enc: [768]u8 = undefined;
-        const encoded = percentEncode(job.query[0..job.query_len], &enc);
-        break :blk pure.buildSearchUrl(encoded, RADIO_PAGE_SIZE, offset, &url_buf);
-    };
+    _ = popular;
+    var enc: [768]u8 = undefined;
+    const url = pure.buildCountryUrl(percentEncode(job.query[0..job.query_len], &enc), countries.at(job.country).code, RADIO_PAGE_SIZE, offset, &url_buf);
     if (url.len == 0) return;
 
     // Shared public directory — be a polite citizen (≤ 1 req/sec), same bucket
@@ -658,7 +702,7 @@ fn playCopiedStation(s: pure.Station) void {
 /// is copied into an owned heap buffer the worker frees, so no shared/mutable
 /// state is handed across the thread boundary.
 fn pingClick(uuid: []const u8) void {
-    if (uuid.len == 0 or std.mem.startsWith(u8, uuid, "somafm:")) return;
+    if (uuid.len == 0 or std.mem.indexOfScalar(u8, uuid, ':') != null) return;
     const owned = alloc.dupe(u8, uuid) catch return;
     if (@import("../core/workers.zig").spawnLegacy(clickWorker, .{owned})) |t| {
         @import("../core/workers.zig").release(t);
@@ -759,6 +803,17 @@ pub fn renderContent() void {
     loadPopularOnce();
 
     renderSearchBar();
+    {
+        var bar = browse_filters.begin(@src());
+        defer bar.deinit();
+        if (@import("../ui/country_filter.zig").render(@src(), country_index.load(.acquire))) |country| {
+            country_index.store(country, .release);
+            parse_mutex.lock();
+            state.app.radio.result_count = 0;
+            parse_mutex.unlock();
+            searchRadio(std.mem.sliceTo(&state.app.radio.search_buf, 0));
+        }
+    }
 
     if (state.app.radio.fetch_error) {
         _ = dvui.label(@src(), "Failed to fetch — check your connection", .{}, .{
@@ -1089,4 +1144,9 @@ test "Radio action keeps selected identity across search publication" {
     try std.testing.expectEqualStrings("a", copied_rows[0].stationuuid[0..copied_rows[0].stationuuid_len]);
     try std.testing.expectEqualStrings("b", copied_rows[1].stationuuid[0..copied_rows[1].stationuuid_len]);
     try std.testing.expectEqualStrings("A", rendered.url[0..rendered.url_len]);
+}
+
+var sources_changed: std.atomic.Value(bool) = .init(false);
+pub fn invalidateSources() void {
+    sources_changed.store(true, .release);
 }

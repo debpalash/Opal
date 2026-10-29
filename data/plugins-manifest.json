@@ -4,6 +4,121 @@
   "description": "Source endpoints for Opal. The app holds the connector code; these supply the URLs and enable the source. Install writes ~/.config/opal/plugins/sources/<id>.json. Torrent ids match the nova2 engine that runs them; stremio entries add a Stremio add-on (one URL, many sources). Two optional endpoint fields apply to any source: \"mirrors\" (a list, or a comma-separated string, of alternate origins tried in order when \"base\" is unreachable/blocked) and, for torznab, \"path\" (the endpoint template, \"{indexer}\" substituted).",
   "plugins": [
     {
+      "id": "radio-paradise-main",
+      "name": "Radio Paradise Main",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "Radio Paradise Main Mix",
+        "stream": "https://stream.radioparadise.com/mp3-192",
+        "country": "US",
+        "logo": "https://img.radioparadise.com/channels/0/0/cover_512x512/0.jpg"
+      }
+    },
+    {
+      "id": "radio-paradise-mellow",
+      "name": "Radio Paradise Mellow",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "Radio Paradise Mellow Mix",
+        "stream": "https://stream.radioparadise.com/mellow-192",
+        "country": "US",
+        "logo": "https://img.radioparadise.com/channels/0/0/cover_512x512/0.jpg"
+      }
+    },
+    {
+      "id": "radio-paradise-rock",
+      "name": "Radio Paradise Rock",
+      "type": "radio",
+      "version": "1.0.0",
+      "endpoints": {
+        "name": "Radio Paradise Rock Mix",
+        "stream": "https://stream.radioparadise.com/rock-192",
+        "country": "US",
+        "logo": "https://img.radioparadise.com/channels/0/0/cover_512x512/0.jpg"
+      }
+    },
+    {
+      "id": "anime-api",
+      "name": "Anime API (self-hosted)",
+      "type": "anime",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": ""
+      }
+    },
+    {
+      "id": "podcast-lex",
+      "name": "Lex Fridman Podcast",
+      "type": "podcast",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://lexfridman.com/feed/podcast/",
+        "country": "US"
+      }
+    },
+    {
+      "id": "podcast-huberman",
+      "name": "Huberman Lab",
+      "type": "podcast",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://feeds.megaphone.fm/hubermanlab",
+        "country": "US"
+      }
+    },
+    {
+      "id": "podcast-mahabharata",
+      "name": "The Stories of Mahabharata",
+      "type": "podcast",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://feeds.acast.com/public/shows/61a5495fd20fb600197c82fd",
+        "country": "IN"
+      }
+    },
+    {
+      "id": "podcast-daily-brief",
+      "name": "The Daily Brief (India)",
+      "type": "podcast",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://feeds.simplecast.com/1H1JSMd0",
+        "country": "IN"
+      }
+    },
+    {
+      "id": "podcast-desi-crime",
+      "name": "The Desi Crime Podcast",
+      "type": "podcast",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://feeds.acast.com/public/shows/6a55242c7987e974eaf4ba29",
+        "country": "IN"
+      }
+    },
+    {
+      "id": "podcast-youtube-lex",
+      "name": "Lex Fridman YouTube",
+      "type": "podcast",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://www.youtube.com/feeds/videos.xml?channel_id=UCSHZKyawb77ixDdsGog4iWA",
+        "country": "US"
+      }
+    },
+    {
+      "id": "podcast-youtube-huberman",
+      "name": "Huberman YouTube",
+      "type": "podcast",
+      "version": "1.0.0",
+      "endpoints": {
+        "feed": "https://www.youtube.com/feeds/videos.xml?channel_id=UC2D2CMWXMOVWx7giW1n3LIg",
+        "country": "US"
+      }
+    },
+    {
       "id": "apibay",
       "name": "The Pirate Bay",
       "type": "torrent",
@@ -529,6 +644,20 @@
       "endpoints": {
         "base": "https://api.knaben.org/v1"
       }
+    },
+    {
+      "id": "anidbapp",
+      "name": "AniDBApp (experimental)",
+      "type": "anime",
+      "version": "1.0.0",
+      "endpoints": { "base": "https://anidb.app" }
+    },
+    {
+      "id": "animehub",
+      "name": "AnimeHub (experimental)",
+      "type": "anime",
+      "version": "1.0.0",
+      "endpoints": { "base": "https://123animehub.cc" }
     },
     {
       "id": "allanime",

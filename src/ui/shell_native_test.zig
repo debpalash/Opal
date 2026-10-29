@@ -8,7 +8,7 @@ const alloc = @import("../core/alloc.zig").allocator;
 const search = @import("../services/search.zig");
 const resolver = @import("../services/resolver.zig");
 const capture = @import("native_capture.zig");
-const Case = struct { name: []const u8, route: router.Route, tab: state.DrawerTab = .TMDB, settings: state.SettingsTab = .General, plugin: router.PluginTab = .sources, sidebar: ?bool = null, navigate_anime: bool = false, hover_sidebar: bool = false, scope: ?search.scope_model.Scope = null, remove_scope: bool = false, clear_query: bool = false, submit_query: bool = false, navigate_movies: bool = false, nav_api: bool = false, ranking_fixture: bool = false };
+const Case = struct { name: []const u8, route: router.Route, tab: state.DrawerTab = .TMDB, settings: state.SettingsTab = .General, plugin: router.PluginTab = .sources, sidebar: ?bool = null, navigate_anime: bool = false, hover_sidebar: bool = false, scope: ?search.scope_model.Scope = null, remove_scope: bool = false, clear_query: bool = false, submit_query: bool = false, navigate_movies: bool = false, nav_api: bool = false, ranking_fixture: bool = false, comic_reader: bool = false, novels_empty: bool = false, anime_episodes: bool = false };
 var current: Case = undefined;
 var first_frame = true;
 var preset: theme.ThemePreset = .midnight;
@@ -37,6 +37,8 @@ fn field(buffer: []u8, len: *usize, value: []const u8) void {
     @memcpy(buffer[0..len.*], value[0..len.*]);
 }
 fn setup() !void {
+    @import("connections.zig").resetEditorForTest();
+    if (std.mem.eql(u8, current.name, "wallpaper-accounts")) @import("connections.zig").editWallpapers();
     @import("shell.zig").setSidebarFixtureForTest(current.sidebar);
     theme.active_preset = preset;
     state.app.page_shell_enabled = true;
@@ -48,10 +50,39 @@ fn setup() !void {
     if (current.nav_api) state.navigateToTabNow(current.tab);
     state.app.settings_tab = current.settings;
     state.app.plugin_tab = current.plugin;
+    @import("../services/plugins.zig").setSourceFixtureForTest(current.route == .plugins and current.plugin == .sources);
     state.app.config_loaded.store(current.route == .settings, .release);
+    if (current.route == .history) {
+        const history = @import("../player/watch_history.zig");
+        const names = [_][]const u8{ "Cowboy Bebop — Session 01: Asteroid Blues", "A very long movie title with director commentary and multilingual audio", "夜明けの物語 — Chapter one" };
+        history.count = names.len;
+        for (names, 0..) |name, i| {
+            history.entries[i] = .{ .percent = @as(f64, @floatFromInt(i + 1)) * 24 };
+            field(&history.entries[i].name, &history.entries[i].name_len, name);
+        }
+    }
     state.app.content_cache_enabled = false;
     state.app.taste_enabled = false;
 
+    if (current.comic_reader) {
+        field(&state.app.comic.title, &state.app.comic.title_len, "Beck - Mongolian Chop Squad — A very long chapter title");
+        state.app.comic.page_count = 87;
+        state.app.comic.current_page = 0;
+        state.app.comic.dl_progress.store(87, .release);
+    }
+    if (current.tab == .RSS) {
+        const rss = @import("../services/rss.zig");
+        rss.setNativeFixtureForTest(true);
+        rss.item_count = 8;
+        for (rss.items[0..8], 0..) |*item, i| {
+            item.* = .{ .seeds = 42, .peers = 7, .size_bytes = 1024 * 1024 * 900 };
+            field(&item.title, &item.title_len, if (i % 2 == 0) "New stories and ideas from independent publishers" else "A film collection — Exploring the world through cinema");
+            if (i % 2 == 0) {
+                field(&item.url, &item.url_len, "https://example.invalid/article");
+                field(&item.date, &item.date_len, "Thu, 29 Oct 2026");
+            } else field(&item.magnet, &item.magnet_len, "magnet:?xt=urn:btih:0000000000000000000000000000000000000000");
+        }
+    }
     first_frame = true;
     frames = 0;
     if (current.navigate_anime) @import("../services/anime.zig").setLoadingFixtureForTest(true);
@@ -126,6 +157,14 @@ fn texture(index: usize) !dvui.Texture {
     return dvui.Texture.fromImageSource(.{ .pixels = .{ .rgba = &rgba, .width = 64, .height = 96, .interpolation = .linear } });
 }
 fn draw() !void {
+    @import("components.zig").beginFrame();
+    @import("settings.zig").beginFrame();
+    try @import("brands.zig").verifyForTest();
+    if (std.mem.eql(u8, current.name, "wallpaper-gallery-motion") and @import("../core/io_global.zig").getenv("OPAL_TEST_WALLPAPER_VIDEO") != null) {
+        @import("../core/io_global.zig").sleep(100 * std.time.ns_per_ms);
+        if (frames >= 6) try std.testing.expect(@import("../services/wallpapers.zig").motionReadyForTest());
+    }
+
     @import("components.zig").clearToggleBoundsForTest();
     if (current.hover_sidebar and (frames == 2 or frames == 5)) {
         const bounds = @import("shell.zig").sidebarBoundsForTest();
@@ -180,11 +219,13 @@ fn draw() !void {
             item.poster_tex = try texture(i);
         }
         @import("../services/anime.zig").setNativeFixtureForTest(&items);
+        if (current.anime_episodes) try @import("../services/anime.zig").setEpisodeNativeFixtureForTest();
     }
     if (first_frame and current.route == .browse and (current.tab == .Comics or current.tab == .Novels)) {
         var textures: [8]dvui.Texture = undefined;
         for (&textures, 0..) |*art, i| art.* = try texture(i);
-        if (current.tab == .Comics) @import("../services/comics.zig").setNativeFixtureForTest(&textures) else @import("../services/novels.zig").setNativeFixtureForTest(&textures);
+        if (current.tab == .Comics) @import("../services/comics.zig").setNativeFixtureForTest(&textures) else @import("../services/novels.zig").setNativeFixtureForTest(if (current.novels_empty) &.{} else &textures);
+        if (current.novels_empty) for (textures) |art| dvui.textureDestroyLater(art);
     }
     if (first_frame and (current.route == .home or (current.route == .browse and current.tab == .TMDB))) {
         state.app.tmdb.loaded_once = true;
@@ -197,6 +238,29 @@ fn draw() !void {
             field(&item.overview, &item.overview_len, "Offline visual fixture for title clipping, poster proportions and card actions.");
             item.poster_tex = try texture(i);
             if (current.route == .home) try state.app.tmdb.watchlist.append(alloc, item) else try state.app.tmdb.results.append(alloc, item);
+        }
+    }
+    if (first_frame and current.route == .browse and current.tab == .Wallpapers) {
+        @import("../services/wallpapers.zig").setNativeFixtureForTest();
+        if (std.mem.startsWith(u8, current.name, "wallpaper-gallery")) {
+            const wallpaper = @import("../services/wallpapers.zig");
+            wallpaper.openGalleryForTest(2);
+            if (std.mem.eql(u8, current.name, "wallpaper-gallery-apply")) wallpaper.setApplyFixtureForTest();
+            try std.testing.expect(wallpaper.galleryKey(.right));
+            try std.testing.expect(wallpaper.galleryKey(.left));
+            if (std.mem.eql(u8, current.name, "wallpaper-gallery-zoom")) wallpaper.actualSizeForTest();
+            if (@import("../core/io_global.zig").getenv("OPAL_TEST_WALLPAPER_ORIGINAL")) |path| {
+                const bytes = try @import("../core/io_global.zig").cwdReadFileAlloc(path, alloc, 32 * 1024 * 1024);
+                defer alloc.free(bytes);
+                try @import("wallpaper_image.zig").seedForTest("https://fixture.test/wallpaper-2.jpg", bytes);
+            }
+        }
+        if (std.mem.eql(u8, current.name, "wallpaper-gallery-motion")) {
+            if (@import("../core/io_global.zig").getenv("OPAL_TEST_WALLPAPER_VIDEO")) |path| @import("../services/wallpapers.zig").setMotionFixtureForTest(path);
+        }
+        for (0..6) |i| {
+            var url: [128]u8 = undefined;
+            @import("anime_images.zig").seedForTest(try std.fmt.bufPrint(&url, "https://fixture.test/wallpaper-{d}.jpg", .{i}), try texture(i));
         }
     }
     if (first_frame and current.route == .browse and current.tab == .YouTube) {
@@ -214,7 +278,11 @@ fn draw() !void {
                 pixels[pixel * 4 + 2] = @intCast(100 + i * 12);
                 pixels[pixel * 4 + 3] = 255;
             }
-            item.thumb_pixels = pixels;
+            if (i == 2) {
+                alloc.free(pixels);
+                item.thumb_failed = true;
+                item.thumb_attempts = 3;
+            } else item.thumb_pixels = pixels;
             item.thumb_w = 160;
             item.thumb_h = 90;
             try state.app.yt.results.append(alloc, item);
@@ -236,13 +304,19 @@ fn draw() !void {
         if (item.thumb_tex != null) thumbnails_before += 1;
     }
     const provider_mask = resolver.source_mask.load(.acquire);
+    const render_start = @import("../core/io_global.zig").monotonicMilliTimestamp();
     try @import("shell.zig").render();
+    if (current.route == .browse and current.tab == .YouTube and frames >= 4) {
+        const elapsed = @import("../core/io_global.zig").monotonicMilliTimestamp() - render_start;
+        std.debug.print("YouTube warmed layout frame: {d}ms\n", .{elapsed});
+    }
+    if (current.novels_empty) try std.testing.expect(@import("../services/novels.zig").landingRequestedForTest());
     try std.testing.expectEqual(provider_mask, resolver.source_mask.load(.acquire));
     if (current.submit_query and frames >= 5) {
         const expected = search.scope_model.forTab(@tagName(current.tab));
-        try std.testing.expectEqual(router.Route.search, state.app.router.current);
+        try std.testing.expectEqual(if (current.tab == .Wallpapers) router.Route.browse else router.Route.search, state.app.router.current);
         try std.testing.expectEqual(expected, search.currentScope());
-        try std.testing.expectEqual(expected, resolver.requestScopeForTest());
+        if (current.tab != .Wallpapers) try std.testing.expectEqual(expected, resolver.requestScopeForTest());
         try std.testing.expect(@import("shell.zig").browseSourceActive(current.tab));
         try std.testing.expect(!@import("shell.zig").allContentActive());
     }
@@ -265,6 +339,7 @@ fn draw() !void {
         try std.testing.expect(thumbnails_after - thumbnails_before <= 2);
         if (frames >= 4) try std.testing.expect(thumbnails_after > 0);
     }
+    if (current.route == .plugins and current.plugin == .sources and frames >= 4) try @import("../services/plugins.zig").verifySourceLayoutForTest();
     frames += 1;
     if (current.navigate_anime and frames >= 5) {
         try std.testing.expectEqual(router.Route.browse, state.app.router.current);
@@ -295,7 +370,7 @@ fn draw() !void {
             try std.testing.expect(bounds.pill.x >= bounds.row.x and bounds.pill.x + bounds.pill.w <= bounds.row.x + bounds.row.w + 1);
         }
     }
-    if (current.route == .browse and current.tab == .Anime and frames >= 4) {
+    if (current.route == .browse and current.tab == .Anime and !current.anime_episodes and frames >= 4) {
         const toolbar = @import("../services/anime.zig").nativeToolbarRectForTest();
         const height = @import("browse_layout_pure.zig").toolbarHeight(dvui.themeGet().font_body.size);
         try std.testing.expect(toolbar.h > 0 and toolbar.h <= height * dvui.windowNaturalScale() + 1);
@@ -317,6 +392,14 @@ fn draw() !void {
     }
 }
 fn cleanup() void {
+    @import("../services/wallpapers.zig").deinit();
+    @import("wallpaper_image.zig").deinit();
+    @import("anime_images.zig").deinit();
+    if (current.route == .history) @import("../player/watch_history.zig").count = 0;
+    @import("../services/plugins.zig").setSourceFixtureForTest(false);
+    state.app.comic.page_count = 0;
+    state.app.comic.title_len = 0;
+    @import("../services/rss.zig").setNativeFixtureForTest(false);
     @import("shell.zig").setSidebarFixtureForTest(null);
     if (current.navigate_anime) @import("../services/anime.zig").setLoadingFixtureForTest(false);
     search.shutdown();
@@ -360,11 +443,13 @@ test "Native shell offline route pixel capture" {
     workers.beginShutdownAndDrain(0);
     defer workers.finishShutdown();
     const cases = [_]Case{
+        .{ .name = "anime-episodes", .route = .browse, .tab = .Anime, .anime_episodes = true },
         .{ .name = "ranking-lupin", .route = .search, .scope = .movies_tv, .ranking_fixture = true },
         .{ .name = "submit-movies-direct", .route = .browse, .tab = .TMDB, .submit_query = true },
         .{ .name = "submit-movies-sidebar", .route = .home, .tab = .TMDB, .submit_query = true, .navigate_movies = true },
         .{ .name = "submit-movies-navigation", .route = .browse, .tab = .TMDB, .submit_query = true, .nav_api = true },
         .{ .name = "submit-enter-youtube", .route = .browse, .tab = .YouTube, .submit_query = true },
+        .{ .name = "submit-enter-wallpapers", .route = .browse, .tab = .Wallpapers, .submit_query = true },
         .{ .name = "submit-enter-music", .route = .browse, .tab = .Music, .submit_query = true },
         .{ .name = "scope-music", .route = .search, .scope = .music },
         .{ .name = "scope-remove", .route = .search, .scope = .music, .remove_scope = true },
@@ -379,8 +464,15 @@ test "Native shell offline route pixel capture" {
         .{ .name = "system", .route = .system },
         .{ .name = "player-empty", .route = .player },
         .{ .name = "connect", .route = .connect },
+        .{ .name = "wallpaper-accounts", .route = .connect },
+        .{ .name = "wallpaper-gallery", .route = .browse, .tab = .Wallpapers },
+        .{ .name = "wallpaper-gallery-zoom", .route = .browse, .tab = .Wallpapers },
+        .{ .name = "wallpaper-gallery-apply", .route = .browse, .tab = .Wallpapers },
+        .{ .name = "wallpaper-gallery-motion", .route = .browse, .tab = .Wallpapers },
+        .{ .name = "novels-empty", .route = .browse, .tab = .Novels, .novels_empty = true },
+        .{ .name = "comic-reader", .route = .browse, .tab = .Comics, .comic_reader = true },
     };
-    const browse = [_]state.DrawerTab{ .TMDB, .YouTube, .Iptv, .Anime, .Podcasts, .Radio, .Music, .Comics, .Web, .RSS, .Jellyfin, .Plex, .Audiobooks, .Opds, .Novels, .Vndb, .Drama };
+    const browse = [_]state.DrawerTab{ .TMDB, .YouTube, .Iptv, .Anime, .Podcasts, .Radio, .Music, .Comics, .Web, .RSS, .Jellyfin, .Plex, .Audiobooks, .Opds, .Novels, .Vndb, .Drama, .Wallpapers };
     for ([_][2]u32{ .{ 1360, 1000 }, .{ 640, 800 } }) |size| {
         preset = .midnight;
         for (cases) |item| {

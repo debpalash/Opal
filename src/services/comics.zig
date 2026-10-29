@@ -3695,6 +3695,12 @@ pub fn renderPaneContent(pane_idx: usize) void {
         }
     }
 
+    if (state.app.comic.title_len > 0) {
+        var title_row = dvui.scrollArea(@src(), .{ .horizontal = .auto, .horizontal_bar = .auto_overlay, .vertical = .none }, .{ .expand = .horizontal, .min_size_content = .{ .h = 30 }, .max_size_content = dvui.Options.MaxSize.height(30) });
+        _ = dvui.label(@src(), "{s}", .{safeUtf8(state.app.comic.title[0..state.app.comic.title_len])}, .{ .color_text = theme.colors.text_primary, .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 } });
+        title_row.deinit();
+    }
+
     // Title bar + navigation + controls
     {
         var nav_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
@@ -3717,15 +3723,6 @@ pub fn renderPaneContent(pane_idx: usize) void {
             }
         }
 
-        // Title
-        if (state.app.comic.title_len > 0) {
-            _ = dvui.label(@src(), "{s}", .{safeUtf8(state.app.comic.title[0..state.app.comic.title_len])}, .{
-                .color_text = theme.colors.text_primary,
-                .expand = .horizontal,
-                .gravity_x = 0.5,
-            });
-        }
-
         // Page info + progress
         {
             var info_buf: [64]u8 = undefined;
@@ -3735,7 +3732,8 @@ pub fn renderPaneContent(pane_idx: usize) void {
                 std.fmt.bufPrintZ(&info_buf, "{d}/{d} loaded", .{ state.app.comic.dl_progress.load(.acquire), state.app.comic.page_count }) catch "?";
             _ = dvui.label(@src(), "{s}", .{info}, .{
                 .color_text = theme.colors.text_secondary,
-                .padding = .{ .x = 4, .y = 0, .w = 2, .h = 0 },
+                .padding = .{ .x = 4, .y = 0, .w = 8, .h = 0 },
+                .gravity_y = 0.5,
             });
         }
 

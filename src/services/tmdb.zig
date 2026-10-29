@@ -3070,6 +3070,26 @@ fn renderTvDetail() void {
         var go_back = false;
 
         go_back = shared_components.iconButton(@src(), icons.tvg.lucide.@"chevron-left", "Back to shows", false);
+        {
+            const path = t.tv_poster_path[0..@min(t.tv_poster_path_len, t.tv_poster_path.len)];
+            var url_buf: [768]u8 = undefined;
+            const url = if (std.mem.startsWith(u8, path, "https://") or std.mem.startsWith(u8, path, "http://")) path else if (path.len > 0) std.fmt.bufPrint(&url_buf, "https://image.tmdb.org/t/p/w154{s}", .{path}) catch "" else "";
+            var cover = dvui.box(@src(), .{}, .{
+                .min_size_content = .{ .w = 40, .h = 60 },
+                .max_size_content = .{ .w = 40, .h = 60 },
+                .background = true,
+                .color_fill = theme.colors.bg_elevated,
+                .corner_radius = dvui.Rect.all(5),
+                .gravity_y = 0.5,
+            });
+            defer cover.deinit();
+            if (@import("builtin").is_test) @import("tmdb_native_test.zig").headerArtwork(cover.data().borderRect());
+            if (@import("../ui/anime_images.zig").get(url)) |texture| {
+                _ = dvui.image(@src(), .{ .source = .{ .texture = texture } }, .{ .expand = .ratio, .gravity_x = 0.5, .gravity_y = 0.5, .corner_radius = dvui.Rect.all(5) });
+            } else {
+                _ = dvui.icon(@src(), "show", icons.tvg.lucide.tv, .{}, .{ .min_size_content = .{ .w = 22, .h = 22 }, .gravity_x = 0.5, .gravity_y = 0.5, .color_text = theme.colors.text_tertiary });
+            }
+        }
         var identity = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .horizontal,
             .padding = .{ .x = 12, .y = 0, .w = 12, .h = 0 },

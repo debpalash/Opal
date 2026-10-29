@@ -22,7 +22,7 @@ const anime_schedule_pure = @import("../services/anime_schedule_pure.zig");
 pub const GridMode = enum { auto, cols_1, cols_2, cols_3, cols_4 };
 pub const ContentProvider = enum { mpv, comic_viewer };
 pub const VideoFillMode = enum { fit, balanced, cover };
-pub const DrawerTab = enum { Search, Downloads, TMDB, YouTube, Queue, Comics, Anime, Podcasts, Radio, History, RSS, Jellyfin, Plex, Plugins, Logs, Settings, AI, Web, Audiobooks, Opds, Novels, Vndb, Drama, Iptv, Music };
+pub const DrawerTab = enum { Search, Downloads, TMDB, YouTube, Queue, Comics, Anime, Podcasts, Radio, History, RSS, Jellyfin, Plex, Plugins, Logs, Settings, AI, Web, Audiobooks, Opds, Novels, Vndb, Drama, Iptv, Music, Wallpapers };
 pub const SettingsTab = enum { General, Playback, Network, Subtitles, Storage, WebUi, Scripts, AI, LangLearn, FileAssoc, LiveTv, Profiles, About };
 pub const TmdbView = enum { Trending, Search, Favorites, Watchlist, Watching };
 pub const TmdbCategory = enum { trending, now_playing, top_rated, upcoming, popular };
@@ -332,6 +332,8 @@ pub const YtItem = struct {
     // undecodable) marks thumb_failed so the grid stops re-spawning a full
     // HTTP+DB worker every frame. thumb_attempted = "tried" vs "never tried".
     thumb_attempted: bool = false,
+    thumb_attempts: u8 = 0,
+    thumb_ready_ms: i64 = 0,
     thumb_failed: bool = false,
     thumb_pixels: ?[]u8 = null,
     thumb_w: u32 = 0,
@@ -1207,9 +1209,9 @@ pub const AppState = struct {
     // worker publishes here. Opt-in via source_config ("subsonic"/base,user,pass).
     music: struct {
         search_buf: [256]u8 = std.mem.zeroes([256]u8),
-        // Active source: 0 = JioSaavn (public, keyless — default), 1 = Subsonic
-        // (self-hosted). Drives search/play/cover dispatch in music_subsonic.zig.
-        source: u8 = 0,
+        // 8 = combined public music; 9 = all configured sources.
+        // Individual provider IDs remain 0..7.
+        source: u8 = 8,
         is_loading: std.atomic.Value(bool) = .init(false),
         fetch_error: bool = false,
         results: [200]music_pure.MusicSong = std.mem.zeroes([200]music_pure.MusicSong),
@@ -2021,6 +2023,10 @@ pub fn navigateToTabNow(tab: DrawerTab) void {
         },
         .Iptv => {
             app.browse_source = .Iptv;
+            app.router.navigate(.browse);
+        },
+        .Wallpapers => {
+            app.browse_source = .Wallpapers;
             app.router.navigate(.browse);
         },
         .Music => {

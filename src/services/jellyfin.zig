@@ -1440,23 +1440,7 @@ fn findObjEnd(json: []const u8, start: usize) usize {
 }
 
 fn urlEncode(input: []const u8, buf: *[256]u8) []const u8 {
-    var out: usize = 0;
-    for (input) |ch| {
-        if (out + 3 >= buf.len) break;
-        if ((ch >= 'A' and ch <= 'Z') or (ch >= 'a' and ch <= 'z') or (ch >= '0' and ch <= '9') or ch == '-' or ch == '_' or ch == '.') {
-            buf[out] = ch;
-            out += 1;
-        } else if (ch == ' ') {
-            buf[out] = '+';
-            out += 1;
-        } else {
-            buf[out] = '%';
-            buf[out + 1] = "0123456789ABCDEF"[ch >> 4];
-            buf[out + 2] = "0123456789ABCDEF"[ch & 0xF];
-            out += 3;
-        }
-    }
-    return buf[0..out];
+    return @import("url_encode_pure.zig").encode(input, buf, .form).bytes;
 }
 
 // ══════════════════════════════════════════════════════════

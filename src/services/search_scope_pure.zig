@@ -19,6 +19,7 @@ pub const Scope = enum {
     plex,
     audiobooks,
     reading,
+    wallpapers,
 
     pub fn label(self: Scope) []const u8 {
         return switch (self) {
@@ -39,11 +40,13 @@ pub const Scope = enum {
             .plex => "Plex",
             .audiobooks => "Audiobooks",
             .reading => "Reading server",
+            .wallpapers => "Wallpapers",
         };
     }
     pub fn matches(self: Scope, item: view.Item) bool {
         return switch (self) {
             .all => true,
+            .wallpapers => false,
             .movies_tv => item.kind == .movies or item.kind == .shows,
             .youtube => item.source == .youtube,
             .anime => item.kind == .anime,
@@ -96,8 +99,8 @@ fn oneOf(value: []const u8, names: []const []const u8) bool {
     return false;
 }
 pub fn forTab(tab: []const u8) Scope {
-    const tabs = .{ "TMDB", "YouTube", "Anime", "Drama", "Iptv", "Podcasts", "Radio", "Music", "Comics", "Novels", "Vndb", "RSS", "Jellyfin", "Plex", "Audiobooks", "Opds" };
-    const scopes = [_]Scope{ .movies_tv, .youtube, .anime, .shows, .live_tv, .podcasts, .radio, .music, .comics, .books, .visual_novels, .rss, .jellyfin, .plex, .audiobooks, .reading };
+    const tabs = .{ "TMDB", "YouTube", "Anime", "Drama", "Iptv", "Podcasts", "Radio", "Music", "Comics", "Novels", "Vndb", "RSS", "Jellyfin", "Plex", "Audiobooks", "Opds", "Wallpapers" };
+    const scopes = [_]Scope{ .movies_tv, .youtube, .anime, .shows, .live_tv, .podcasts, .radio, .music, .comics, .books, .visual_novels, .rss, .jellyfin, .plex, .audiobooks, .reading, .wallpapers };
     inline for (tabs, scopes) |name, scope| if (std.mem.eql(u8, tab, name)) return scope;
     return .all;
 }

@@ -261,8 +261,10 @@ fn buildWhere(base: []const u8, q: Query, out: []u8) ?[]const u8 {
     }
     if (q.country.len > 0) {
         appendClause(out, &w, &first) orelse return null;
-        appendStr(out, &w, "country = ?") orelse return null;
+        const uk = std.ascii.eqlIgnoreCase(q.country, "GB");
+        appendStr(out, &w, if (uk) "country IN (?" else "country = ?") orelse return null;
         appendNum(out, &w, idx) orelse return null;
+        if (uk) appendStr(out, &w, ", 'UK')") orelse return null;
         idx += 1;
     }
     if (q.category.len > 0) {

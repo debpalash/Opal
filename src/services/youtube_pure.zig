@@ -9,24 +9,7 @@ const std = @import("std");
 /// (form style — both Google suggest and Piped accept it). Returns the encoded
 /// length; stops early if `out` runs out of room.
 pub fn urlEncode(input: []const u8, out: []u8) usize {
-    const hex = "0123456789ABCDEF";
-    var olen: usize = 0;
-    for (input) |ch| {
-        if (olen + 3 >= out.len) break;
-        if (std.ascii.isAlphanumeric(ch) or ch == '-' or ch == '_' or ch == '.' or ch == '~') {
-            out[olen] = ch;
-            olen += 1;
-        } else if (ch == ' ') {
-            out[olen] = '+';
-            olen += 1;
-        } else {
-            out[olen] = '%';
-            out[olen + 1] = hex[ch >> 4];
-            out[olen + 2] = hex[ch & 0xf];
-            olen += 3;
-        }
-    }
-    return olen;
+    return @import("url_encode_pure.zig").encode(input, out, .query).bytes.len;
 }
 
 /// Build the Google autocomplete URL for a YouTube query (`ds=yt`), or null if

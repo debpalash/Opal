@@ -51,6 +51,8 @@ fn buildSupported(b: *std.Build) void {
         }),
     });
     exe.use_llvm = true;
+    // Keep local debugging intact; shipping builds omit debug symbols.
+    exe.root_module.strip = b.option(bool, "strip", "Strip executable debug symbols (default: release builds)") orelse (optimize != .Debug);
 
     // Windows: embed an application manifest declaring Per-Monitor-V2 DPI
     // awareness. Windows reads this at process creation (before SDL_Init), so

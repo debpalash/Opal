@@ -13,9 +13,12 @@
 //! Rows are fixed-size and drawn from a snapshot, so a page title or a stream
 //! URL cannot change a row's height; wording is in browser_hub_view_pure.zig.
 
+const brands = @import("brands.zig");
 const std = @import("std");
 const dvui = @import("dvui");
+const icons = @import("icons");
 const theme = @import("theme.zig");
+const surfaces = @import("service_surfaces.zig");
 const components = @import("components.zig");
 const state = @import("../core/state.zig");
 const io_global = @import("../core/io_global.zig");
@@ -177,13 +180,18 @@ fn cardBox(src: std.builtin.SourceLocation, id_extra: usize) *dvui.BoxWidget {
         .expand = .horizontal,
         .background = true,
         .color_fill = theme.colors.bg_surface,
-        .corner_radius = theme.dims.rad_sm,
+        .corner_radius = theme.dims.rad_md,
+        .border = dvui.Rect.all(1),
+        .color_border = theme.colors.border_subtle,
         .padding = .{ .x = 14, .y = 10, .w = 14, .h = 10 },
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = 10 },
     });
 }
 
-fn cardTitle(src: std.builtin.SourceLocation, text: []const u8) void {
+fn cardTitle(src: std.builtin.SourceLocation, text: []const u8, icon: []const u8) void {
+    var row = dvui.box(src, .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .h = 8 } });
+    defer row.deinit();
+    _ = dvui.icon(@src(), "", icon, .{}, .{ .min_size_content = theme.iconSize(.sm), .color_text = theme.colors.accent, .gravity_y = 0.5, .margin = .{ .w = 8 } });
     _ = dvui.label(src, "{s}", .{text}, .{
         .color_text = theme.colors.text_primary,
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
@@ -220,10 +228,13 @@ fn pairingNow() link.PairingView {
 fn renderBrowsers() void {
     var card = cardBox(@src(), 0);
     defer card.deinit();
-    cardTitle(@src(), "Your browsers");
+    var identity = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .h = 12 } });
+    surfaces.iconTile(@src(), icons.tvg.lucide.monitor, theme.colors.accent, 30);
+    dvui.labelNoFmt(@src(), "Your browsers", .{}, .{ .font = dvui.themeGet().font_heading, .color_text = theme.colors.text_primary, .gravity_y = 0.5, .margin = .{ .x = 10 } });
+    identity.deinit();
 
     if (!state.app.web_remote_enabled) {
-        note(@src(), "Opal Connect reaches Opal through its local API: turn on \"Allow coding agents\" in Settings > Agent Access first.", theme.colors.warning);
+        note(@src(), "Browser access is off.", theme.colors.warning);
     }
 
     const now = nowSeconds();
@@ -236,12 +247,15 @@ fn renderBrowsers() void {
             .max_size_content = .{ .w = 100000, .h = if (compact) 100000 else ROW_H },
         });
         defer line.deinit();
+        var name_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
+        if (brands.forName(row.browserSlice())) |brand| dvui.icon(@src(), row.browserSlice(), brands.icon(brand), .{}, .{ .min_size_content = theme.iconSize(.sm), .color_text = theme.colors.text_primary, .gravity_y = if (compact) 0 else 0.5, .margin = .{ .w = 8 } });
         var seen_buf: [48]u8 = undefined;
         const seen = view_pure.seenText(&seen_buf, now, row.last_seen);
         const live = std.mem.eql(u8, seen, "connected");
         var name_buf: [96]u8 = undefined;
         const name = view_pure.clip(&name_buf, row.labelSlice(), if (compact) 24 else 40);
         _ = dvui.label(@src(), "{s}", .{name}, .{ .id_extra = i, .color_text = theme.colors.text_primary, .gravity_y = if (compact) 0 else 0.5 });
+        name_row.deinit();
         var browser_buf: [48]u8 = undefined;
         const browser = if (compact) view_pure.clip(&browser_buf, row.browserSlice(), 14) else row.browserSlice();
         if (compact) {
@@ -264,7 +278,7 @@ fn renderBrowsers() void {
         note(@src(), if (view.active)
             "No browser paired yet. Install Opal Connect (extension/README.md), then enter this code on its setup page."
         else
-            "No browser paired yet. Install Opal Connect (extension/README.md), then press Pair a browser.", theme.colors.text_secondary);
+            "Connect your browser to send pages and streams to Opal.", theme.colors.text_secondary);
     }
     if (view.active) {
         if (!@import("builtin").is_test) {
@@ -284,12 +298,21 @@ fn renderBrowsers() void {
     {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = 4, .w = 0, .h = 0 } });
         defer row.deinit();
-        if (components.actionButton(@src(), if (view.active) "New code" else "Pair a browser", .primary, 31000)) {
+        if (!state.app.web_remote_enabled) {
+            if (components.actionButton(@src(), "Open access settings", .primary, 31000)) {
+                state.app.settings_tab = .WebUi;
+                state.app.router.navigate(.settings);
+            }
+        } else if (components.actionButton(@src(), if (view.active) "New code" else "Pair a browser", .primary, 31000)) {
             if (!link.startPairing()) state.showToast("No entropy source: could not make a code");
         }
         if (view.active and components.actionButton(@src(), "Cancel", .secondary, 31001)) link.cancelPairing();
     }
-    if (link_count == 0) {
+    const Help = struct {
+        var open = false;
+    };
+    if (link_count == 0 and components.actionButton(@src(), if (Help.open) "Hide setup steps" else "Setup steps", .secondary, 31002)) Help.open = !Help.open;
+    if (link_count == 0 and Help.open) {
         note(@src(), "Install steps: In Chrome or Edge, open chrome://extensions, enable Developer mode, then Load unpacked. In Firefox, open about:debugging and Load Temporary Add-on. Pair on the extension's setup page.", theme.colors.text_secondary);
     }
 }
@@ -299,10 +322,11 @@ fn renderSharedPage() void {
     defer card.deinit();
     const compact = compactLayout();
     const narrow = narrowLayout();
-    cardTitle(@src(), "Shared page");
+    cardTitle(@src(), "Shared page", icons.tvg.lucide.@"file-text");
 
     if (!page.present) {
-        note(@src(), "Nothing shared. In your browser, open the Opal panel and press \"Share this page with Opal\". Only the page you share is sent, and only when you press it.", theme.colors.text_secondary);
+        surfaces.iconTile(@src(), icons.tvg.lucide.send, theme.colors.text_secondary, 32);
+        note(@src(), "Nothing shared. Use “Share this page with Opal” in your browser. Only pages you explicitly share are sent.", theme.colors.text_secondary);
         return;
     }
 
@@ -381,13 +405,13 @@ fn renderStreams() void {
     var card = cardBox(@src(), 2);
     defer card.deinit();
     var head: [48]u8 = undefined;
-    cardTitle(@src(), std.fmt.bufPrint(&head, "Detected streams ({d})", .{if (page.present) page.cand_count else 0}) catch "Detected streams");
+    cardTitle(@src(), std.fmt.bufPrint(&head, "Detected streams ({d})", .{if (page.present) page.cand_count else 0}) catch "Detected streams", icons.tvg.lucide.play);
 
     if (!page.present or page.cand_count == 0) {
         note(@src(), if (page.present)
             "No streams came with this page. In the extension turn on Detect media, press play on the page, then share it again."
         else
-            "Streams the extension found on the page you share show up here, with Play and Queue.", theme.colors.text_secondary);
+            "Share a page to find streams you can play or queue.", theme.colors.text_secondary);
         return;
     }
     const compact = compactLayout();
@@ -438,17 +462,27 @@ fn renderHub() void {
         if (dvui.timerDoneOrNone(id)) dvui.timer(id, 2_000_000);
     }
 
+    var status_buf: [48]u8 = undefined;
+    surfaces.heading(@src(), "Browser workspace", std.fmt.bufPrint(&status_buf, "{d} paired", .{link_count}) catch "Browsers");
+    const width = availableWidth();
+    const wide = width > 760;
+    const browser_width = width * 0.36;
+    var columns = dvui.box(@src(), .{ .dir = if (wide) .horizontal else .vertical }, .{ .expand = .horizontal });
+    defer columns.deinit();
+    var left = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = if (wide) .none else .horizontal, .min_size_content = .{ .w = if (wide) browser_width else 0 }, .max_size_content = .{ .w = if (wide) browser_width else std.math.floatMax(f32), .h = std.math.floatMax(f32) }, .margin = .{ .w = if (wide) 12 else 0 } });
     renderBrowsers();
-    renderSharedPage();
-    renderStreams();
-
     {
         var card = cardBox(@src(), 3);
         defer card.deinit();
-        cardTitle(@src(), "Advanced: built-in browser");
-        note(@src(), "A browser Opal runs itself and shows as pictures. It has none of your logins and is slower; it exists for sources that block ordinary requests. Needs its own download the first time.", theme.colors.text_secondary);
+        cardTitle(@src(), "Built-in browser", icons.tvg.lucide.globe);
+        note(@src(), "For sources that need a browser. Separate from your logins; downloads on first use.", theme.colors.text_secondary);
         if (components.actionButton(@src(), "Open built-in browser", .secondary, 31300)) show_bridge = true;
     }
+    left.deinit();
+    var right = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal });
+    renderSharedPage();
+    renderStreams();
+    right.deinit();
 }
 
 fn renderBridge() void {

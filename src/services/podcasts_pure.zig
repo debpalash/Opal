@@ -375,6 +375,7 @@ pub const EpisodePage = struct { count: usize, total: usize };
 /// A bounded window over all playable enclosures in the feed. The cursor counts
 /// usable episodes, so missing enclosures do not create gaps or repeated pages.
 pub fn parseRssEpisodePage(xml: []const u8, out: []Episode, offset: usize) EpisodePage {
+    if (std.mem.indexOf(u8, xml, "<feed") != null and std.mem.indexOf(u8, xml, "<yt:videoId>") != null) return parseYouTubeEpisodePage(xml, out, offset);
     var count: usize = 0;
     var total: usize = 0;
     var pos: usize = 0;
@@ -733,6 +734,21 @@ pub fn isFeedUrl(url: []const u8) bool {
 }
 
 pub fn parseFeedShow(xml: []const u8, url: []const u8) ?Podcast {
+    if (isYouTubeFeed(url) and std.mem.indexOf(u8, xml, "<feed") != null) {
+        const header = xml[0 .. std.mem.indexOf(u8, xml, "<entry>") orelse xml.len];
+        const title = xmlTag(header, "<title>", "</title>") orelse return null;
+        var show: Podcast = .{};
+        show.name_len = xmlText(&show.name, title);
+        show.feed_url_len = copyInto(&show.feed_url, url);
+        show.artist_len = xmlText(&show.artist, xmlTag(header, "<name>", "</name>") orelse "YouTube");
+        if (xmlTag(xml, "<yt:videoId>", "</yt:videoId>")) |id| {
+            if (validVideoId(id)) {
+                const art = std.fmt.bufPrint(&show.artwork, "https://i.ytimg.com/vi/{s}/hqdefault.jpg", .{id}) catch "";
+                show.artwork_len = art.len;
+            }
+        }
+        return if (show.name_len > 0) show else null;
+    }
     if (!isFeedUrl(url) or url.len > 300 or std.mem.indexOf(u8, xml, "<channel") == null) return null;
     const channel = xml[0 .. std.mem.indexOf(u8, xml, "<item") orelse xml.len];
     const title = xmlTag(channel, "<title>", "</title>") orelse return null;
@@ -849,4 +865,57 @@ test "progressive podcast publication paints fast sibling before slow completion
     try std.testing.expect(!ProgressivePublication.clearOnFinish(.{}));
     try std.testing.expect(titleMatches("Independent science", "SCIENCE"));
     try std.testing.expect(!titleMatches("Science", "Drama"));
+}
+
+pub fn buildCountryChartUrl(limit: usize, country: []const u8, out: []u8) []const u8 {
+    if (country.len != 2 or !std.ascii.isAlphabetic(country[0]) or !std.ascii.isAlphabetic(country[1])) return "";
+    return std.fmt.bufPrint(out, "https://rss.marketingtools.apple.com/api/v2/{c}{c}/podcasts/top/{d}/podcasts.json", .{ std.ascii.toLower(country[0]), std.ascii.toLower(country[1]), std.math.clamp(limit, 1, 100) }) catch "";
+}
+test "podcast charts use the selected country" {
+    var buf: [200]u8 = undefined;
+    try std.testing.expect(std.mem.indexOf(u8, buildCountryChartUrl(30, "IN", &buf), "/in/podcasts/") != null);
+    try std.testing.expectEqualStrings("", buildCountryChartUrl(30, "bad", &buf));
+}
+
+pub fn isYouTubeFeed(url: []const u8) bool {
+    return (std.mem.startsWith(u8, url, "https://www.youtube.com/feeds/videos.xml?") or std.mem.startsWith(u8, url, "https://youtube.com/feeds/videos.xml?")) and url.len <= 300;
+}
+fn validVideoId(id: []const u8) bool {
+    if (id.len != 11) return false;
+    for (id) |c| if (!std.ascii.isAlphanumeric(c) and c != '_' and c != '-') return false;
+    return true;
+}
+fn parseYouTubeEpisodePage(xml: []const u8, out: []Episode, offset: usize) EpisodePage {
+    var count: usize = 0;
+    var total: usize = 0;
+    var pos: usize = 0;
+    while (std.mem.indexOfPos(u8, xml, pos, "<entry>")) |start| {
+        const end = std.mem.indexOfPos(u8, xml, start, "</entry>") orelse break;
+        pos = end + 8;
+        const entry = xml[start..end];
+        const id = xmlTag(entry, "<yt:videoId>", "</yt:videoId>") orelse continue;
+        if (!validVideoId(id)) continue;
+        const title = xmlTag(entry, "<title>", "</title>") orelse continue;
+        total += 1;
+        if (total <= offset or count == out.len) continue;
+        var episode: Episode = .{};
+        episode.title_len = xmlText(&episode.title, title);
+        const url = std.fmt.bufPrint(&episode.audio_url, "https://www.youtube.com/watch?v={s}", .{id}) catch continue;
+        episode.audio_url_len = url.len;
+        if (xmlTag(entry, "<published>", "</published>")) |date| episode.date_len = xmlText(&episode.date, date);
+        if (xmlTag(entry, "<media:description>", "</media:description>")) |description| episode.summary_len = xmlText(&episode.summary, description);
+        out[count] = episode;
+        count += 1;
+    }
+    return .{ .count = count, .total = total };
+}
+test "YouTube podcast Atom feed exposes real video identities and pages" {
+    const xml = "<feed><title>Podcast</title><author><name>Creator</name></author><entry><yt:videoId>abcdefghijk</yt:videoId><title>Interview &amp; more</title><published>2026-10-29</published></entry><entry><yt:videoId>bad</yt:videoId><title>Invalid</title></entry></feed>";
+    const show = parseFeedShow(xml, "https://www.youtube.com/feeds/videos.xml?channel_id=UCtest").?;
+    try std.testing.expectEqualStrings("Podcast", show.name[0..show.name_len]);
+    var rows: [2]Episode = undefined;
+    const page = parseRssEpisodePage(xml, &rows, 0);
+    try std.testing.expectEqual(@as(usize, 1), page.total);
+    try std.testing.expectEqualStrings("https://www.youtube.com/watch?v=abcdefghijk", rows[0].audio_url[0..rows[0].audio_url_len]);
+    try std.testing.expectEqual(@as(usize, 0), parseRssEpisodePage(xml, &rows, 1).count);
 }

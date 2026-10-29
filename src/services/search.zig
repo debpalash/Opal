@@ -875,6 +875,10 @@ pub fn submitScopedQuery(query_text: []const u8) void {
     @import("search_preview.zig").stop();
     @import("activity.zig").record(.search, owned[0..n], .{});
     setQueryText(owned[0..n]);
+    if (currentScope() == .wallpapers) {
+        @import("wallpapers.zig").search(owned[0..n]);
+        return;
+    }
     // Natural-language / constrained queries also search the user's own library
     // and subtitles (ROADMAP 7.1); bare titles clear those sections.
     if (currentScope() == .all) @import("recall.zig").submit(owned[0..n]) else @import("recall.zig").clear();

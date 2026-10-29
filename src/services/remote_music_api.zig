@@ -72,7 +72,7 @@ pub fn handle(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8
     while (i < n) : (i += 1) {
         const s = songs[i];
         if (i > 0) w.writeAll(",") catch return;
-        w.print("{{\"source\":{d},\"id\":\"", .{snapshot.source}) catch return;
+        w.print("{{\"source\":{d},\"id\":\"", .{music.rowSource(&s, snapshot.source)}) catch return;
         wire.writeJsonString(&w, s.id[0..@min(s.id_len, s.id.len)]);
         w.writeAll("\",\"title\":\"") catch return;
         wire.writeJsonString(&w, txt.safeUtf8(s.title[0..@min(s.title_len, s.title.len)]));

@@ -32,6 +32,11 @@ pub fn renderContent() void {
     loadPopularOnce();
 
     renderSearchBar();
+    if (state.app.podcasts.selected_idx == null) {
+        var bar = browse_filters.begin(@src());
+        defer bar.deinit();
+        if (@import("country_filter.zig").render(@src(), podcasts.country_index.load(.acquire))) |country| podcasts.selectCountry(country);
+    }
     if (podcasts.retryEpisodesIfDue()) components.pollRefresh(500_000);
     const view = podcasts.snapshot();
 

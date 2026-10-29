@@ -1,3 +1,4 @@
+const brands = @import("../ui/brands.zig");
 const browse_filters = @import("../ui/browse_filters.zig");
 const std = @import("std");
 const dvui = @import("dvui");
@@ -1123,6 +1124,7 @@ fn daysFromCivil(y_in: i64, m: i64, d: i64) i64 {
 
 var thumb_request_serial: std.atomic.Value(u64) = .init(0);
 const ThumbRequest = struct {
+    attempt: u8,
     request_id: u64,
     generation: u32,
     video_id: [32]u8,
@@ -1131,6 +1133,27 @@ const ThumbRequest = struct {
     url_len: usize,
 };
 
+// Native std.http fails through the DPI proxy even for reachable image CDNs.
+// Use the existing curl transport for that route; retain pooled direct HTTP
+// when no proxy is enabled, with a bounded curl fallback for CDN TLS failures.
+fn fetchThumbnailBody(url: []const u8, buffer: []u8, cancel: ?bounded_process.CancelEpoch) ?[]const u8 {
+    const dpi = @import("dpi_bypass.zig");
+    if (!(dpi.enabled() and dpi.isRunning())) {
+        if (@import("../core/http.zig").fetchDirect(url, buffer, .{
+            .timeout_secs = 3,
+            .max_response = buffer.len,
+            .accept = "image/jpeg, image/webp",
+            .cancel_epoch = cancel,
+        })) |body| return body;
+    }
+    return @import("reliable_fetch.zig").fetch(url, buffer, .{
+        .timeout_secs = 5,
+        .connect_timeout_secs = 2,
+        .impersonate = false,
+        .cancel_epoch = cancel,
+    });
+}
+
 /// Caller holds yt_mutex; the worker receives only an immutable copied job.
 pub fn fetchThumb(item: *state.YtItem) void {
     if (item.thumbnail_url_len == 0 or item.thumb_fetching) return;
@@ -1138,8 +1161,10 @@ pub fn fetchThumb(item: *state.YtItem) void {
     // false so the card retries next frame (no fetch storm on a full grid).
     if (!@import("../core/poster.zig").tryClaimSlot()) return;
     item.thumb_fetching = true;
+    item.thumb_attempts +|= 1;
     item.thumb_request_id = thumb_request_serial.fetchAdd(1, .acq_rel) +% 1;
     const job: ThumbRequest = .{
+        .attempt = item.thumb_attempts,
         .request_id = item.thumb_request_id,
         .generation = search_request.current(),
         .video_id = item.video_id,
@@ -1150,6 +1175,7 @@ pub fn fetchThumb(item: *state.YtItem) void {
 
     workers.spawn(struct {
         fn worker(request: ThumbRequest) void {
+            defer state.wakeUi(); // wake only after flags and slot ownership are settled
             defer {
                 yt_mutex.lock();
                 defer yt_mutex.unlock();
@@ -1158,23 +1184,35 @@ pub fn fetchThumb(item: *state.YtItem) void {
                         row.thumb_fetching = false;
                         if (!isCurrent(request.generation)) {
                             row.thumb_attempted = false;
+                            row.thumb_attempts = 0;
                             row.thumb_failed = false;
                         }
                         break;
                     }
                 }
             }
-            defer state.wakeUi();
             defer @import("../core/poster.zig").releaseSlot();
 
             const poster = @import("../core/poster.zig");
-            const turl = request.url[0..request.url_len];
+            var fallback_buf: [128]u8 = undefined;
+            const id = request.video_id[0..request.video_id_len];
+            const original_url = request.url[0..request.url_len];
+            // A second image size and CDN hostname recover transient CDN errors.
+            // Ownership still matches the original URL in the immutable job.
+            const turl = if (request.attempt > 1 and it_pure.validVideoId(id))
+                std.fmt.bufPrint(&fallback_buf, "https://{s}/vi/{s}/{s}.jpg", .{
+                    if (request.attempt == 2) "i.ytimg.com" else "img.youtube.com",
+                    id,
+                    if (request.attempt == 2) "hqdefault" else "mqdefault",
+                }) catch original_url
+            else
+                original_url;
             if (!isCurrent(request.generation)) return;
 
             // Shared poster disk cache: a hit skips the network; a cached blob
             // that fails to decode is deleted and refetched (same policy as
             // fetchAsync in core/poster.zig).
-            const cached = poster.cacheLoadForUrl(turl);
+            const cached = poster.cacheLoadForUrl(original_url);
             defer if (cached) |cb| poster.cacheFreeEncoded(cb);
 
             var net_body: ?[]u8 = null;
@@ -1187,14 +1225,9 @@ pub fn fetchThumb(item: *state.YtItem) void {
             while (attempt < 2) : (attempt += 1) {
                 const used_cache = attempt == 0 and cached != null;
                 const body: []const u8 = if (used_cache) cached.? else blk: {
-                    const buffer = alloc.alloc(u8, 5 * 1024 * 1024) catch return;
+                    const buffer = alloc.alloc(u8, 1024 * 1024) catch return;
                     net_body = buffer;
-                    const body = @import("../core/http.zig").fetch(turl, buffer, .{
-                        .timeout_secs = 8,
-                        .max_response = buffer.len,
-                        .accept = "image/jpeg, image/webp",
-                        .cancel_epoch = .{ .epoch32 = .{ .value = &search_request.generation, .expected = request.generation } },
-                    }) orelse return;
+                    const body = fetchThumbnailBody(turl, buffer, .{ .epoch32 = .{ .value = &search_request.generation, .expected = request.generation } }) orelse return;
                     break :blk body;
                 };
 
@@ -1204,10 +1237,10 @@ pub fn fetchThumb(item: *state.YtItem) void {
                     pixels = cover.pixels;
                     w = cover.width;
                     h = cover.height;
-                    if (!used_cache) poster.cacheStoreForUrl(turl, body, @intCast(w), @intCast(h));
+                    if (!used_cache) poster.cacheStoreForUrl(original_url, body, @intCast(w), @intCast(h));
                     break;
                 }
-                if (used_cache) poster.cacheDeleteForUrl(turl) else return;
+                if (used_cache) poster.cacheDeleteForUrl(original_url) else return;
             }
             if (pixels == null) return;
             defer dvui.c.stbi_image_free(pixels);
@@ -1236,6 +1269,8 @@ pub fn fetchThumb(item: *state.YtItem) void {
             alloc.free(p_slice);
         }
     }.worker, .{job}) catch {
+        item.thumb_attempts -|= 1;
+        item.thumb_attempted = false;
         item.thumb_fetching = false; // spawn failed — reset so the card isn't stuck on placeholder
         @import("../core/poster.zig").releaseSlot();
     };
@@ -1328,7 +1363,7 @@ pub fn renderContent() void {
     if (total == 0) {
         if (state.app.yt.is_loading.load(.acquire))
             components.coverSkeletonGrid(@src(), 48000, cols, real_card_w, real_card_w * 9.0 / 16.0, cardFooterH(), 3)
-        else if (components.emptyStateCta(icons.tvg.lucide.youtube, "No videos found", "Try a different search or refresh this feed.", "Retry"))
+        else if (components.emptyStateCta(brands.icon(.youtube), "No videos found", "Try a different search or refresh this feed.", "Retry"))
             refreshCurrentFeed();
         return;
     }
@@ -1780,18 +1815,27 @@ fn prepareThumbnail(item: *state.YtItem, uploads: *usize) void {
         if (item.thumb_tex != null) {
             alloc.free(item.thumb_pixels.?);
             item.thumb_pixels = null;
+            item.thumb_ready_ms = @intCast(@divFloor(dvui.frameTimeNS(), std.time.ns_per_ms));
         }
     }
 
-    if (item.thumb_tex != null) return;
+    if (item.thumb_tex != null) {
+        if (!state.app.reduce_motion) {
+            const elapsed = @as(i64, @intCast(@divFloor(dvui.frameTimeNS(), std.time.ns_per_ms))) - item.thumb_ready_ms;
+            if (elapsed >= 0 and elapsed < 140) components.animatedRefresh(16_667);
+        }
+        return;
+    }
 
-    // Failure-latch (mirrors TmdbItem/JfItem): stop re-spawning a
-    // thumb worker every frame for a dead/undecodable URL.
+    // Retry transient failures with alternate CDN URLs, but cap attempts so
+    // unavailable artwork cannot spawn workers indefinitely.
     if (item.thumb_fetching) {
         item.thumb_attempted = true;
     } else if (item.thumb_attempted and item.thumb_pixels == null and item.thumb_tex == null) {
-        item.thumb_failed = true;
-    } else if (!item.thumb_failed and item.thumb_pixels == null and item.thumbnail_url_len > 0) {
+        item.thumb_failed = item.thumb_attempts >= 3;
+        item.thumb_attempted = item.thumb_failed;
+    }
+    if (!item.thumb_fetching and !item.thumb_failed and item.thumb_pixels == null and item.thumbnail_url_len > 0) {
         fetchThumb(item);
         if (item.thumb_fetching) item.thumb_attempted = true;
     }
@@ -1847,23 +1891,41 @@ fn renderCard(item: *const state.YtItem, idx: usize, the_card_w: f32, ymd: []con
             var stack = dvui.overlay(@src(), .{ .id_extra = idx + 140, .expand = .both });
             defer stack.deinit();
 
-            if (item.thumb_tex) |*tex| {
-                _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
+            if (item.thumb_tex) |tex| {
+                const crop = @import("../ui/search_gallery_pure.zig").coverCrop(.{ .w = @floatFromInt(item.thumb_w), .h = @floatFromInt(item.thumb_h) }, .{ .w = the_card_w, .h = thumb_h });
+                _ = dvui.image(@src(), .{ .source = .{ .texture = tex }, .uv = .{ .x = crop.x, .y = crop.y, .w = crop.w, .h = crop.h } }, .{
                     .id_extra = idx + 150,
-                    .expand = .both,
+                    .min_size_content = .{ .w = the_card_w, .h = thumb_h },
+                    .max_size_content = .{ .w = the_card_w, .h = thumb_h },
                     .corner_radius = dvui.Rect.all(theme.radius.lg),
                 });
+                const elapsed = @as(i64, @intCast(@divFloor(dvui.frameTimeNS(), std.time.ns_per_ms))) - item.thumb_ready_ms;
+                if (!state.app.reduce_motion and elapsed >= 0 and elapsed < 140) {
+                    const t = @as(f32, @floatFromInt(elapsed)) / 140;
+                    var fade = dvui.box(@src(), .{}, .{ .id_extra = idx + 151, .expand = .both, .background = true, .color_fill = theme.colors.bg_elevated.opacity((1 - t) * (1 - t)), .corner_radius = dvui.Rect.all(theme.radius.lg) });
+                    fade.deinit();
+                    components.animatedRefresh(16_667);
+                }
             } else {
-                if (!item.thumb_failed and item.thumbnail_url_len > 0)
-                    components.coverSkeleton(@src(), idx + 150, theme.radius.lg)
-                else
-                    dvui.icon(@src(), "ph", icons.tvg.lucide.image, .{}, .{
-                        .id_extra = idx + 150,
-                        .gravity_x = 0.5,
-                        .gravity_y = 0.5,
-                        .color_text = theme.colors.bg_elevated,
-                        .expand = .both,
-                    });
+                // Quiet video canvas, never a stretched generic image glyph or
+                // a low-frame-rate shimmer competing with scroll animation.
+                var canvas = dvui.box(@src(), .{}, .{ .id_extra = idx + 150, .expand = .both, .background = true, .color_fill = theme.colors.bg_elevated, .corner_radius = dvui.Rect.all(theme.radius.lg) });
+                canvas.deinit();
+                dvui.icon(@src(), "Video artwork", icons.tvg.lucide.play, .{}, .{
+                    .id_extra = idx + 152,
+                    .gravity_x = 0.5,
+                    .gravity_y = 0.5,
+                    .min_size_content = .{ .w = 22, .h = 22 },
+                    .max_size_content = .{ .w = 22, .h = 22 },
+                    .padding = dvui.Rect.all(12),
+                    .background = true,
+                    .color_fill = theme.colors.bg_hover,
+                    .corner_radius = dvui.Rect.all(23),
+                    .color_text = theme.colors.text_tertiary,
+                });
+                // Retry when a global fetch slot becomes free even if another
+                // provider's completion does not request a frame for this view.
+                if (!item.thumb_failed and item.thumbnail_url_len > 0) components.animatedRefresh(100_000);
             }
 
             // Duration badge (bottom-right) — a tight pill over a soft scrim so
@@ -2131,4 +2193,46 @@ test "Browse regression YouTube stale response cannot replace continuation ident
     try std.testing.expect(!cont_is_browse);
     rememberContinuation("{}", true, stale);
     try std.testing.expectEqualStrings("new-cursor", cont_token[0..cont_token_len]);
+}
+
+test "Browse regression transient thumbnail failure does not permanently blank card" {
+    var item: state.YtItem = .{ .thumb_attempted = true };
+    var uploads: usize = 0;
+    prepareThumbnail(&item, &uploads);
+    try std.testing.expect(!item.thumb_failed);
+}
+
+test "Browse regression thumbnail retries stop after three failures" {
+    var item: state.YtItem = .{ .thumb_attempted = true, .thumb_attempts = 3 };
+    var uploads: usize = 0;
+    prepareThumbnail(&item, &uploads);
+    try std.testing.expect(item.thumb_failed);
+}
+
+test "Browse regression live YouTube thumbnail transport and decoder" {
+    if (io.getenv("OPAL_TEST_YOUTUBE_IMAGES") == null) return error.SkipZigTest;
+    workers.init();
+    defer workers.init();
+    defer @import("../core/http.zig").deinit();
+    const dpi = @import("dpi_bypass.zig");
+    const prior = state.app.dpi_bypass_enabled;
+    const proxied = io.getenv("OPAL_TEST_YOUTUBE_PROXY") != null;
+    state.app.dpi_bypass_enabled = proxied;
+    dpi.useRunningProxyForTest(proxied);
+    defer {
+        dpi.useRunningProxyForTest(false);
+        state.app.dpi_bypass_enabled = prior;
+    }
+    const buffer = try alloc.alloc(u8, 1024 * 1024);
+    defer alloc.free(buffer);
+    for ([_][]const u8{ "dQw4w9WgXcQ", "jNQXAC9IVRw", "lTRiuFIWV54" }) |id| {
+        var url_buf: [128]u8 = undefined;
+        const url = it_pure.thumbUrl(id, &url_buf).?;
+        const start = io.milliTimestamp();
+        const body = fetchThumbnailBody(url, buffer, null) orelse return error.ThumbnailTransportFailed;
+        const decoded = @import("../core/poster.zig").decodeCover(body) orelse return error.ThumbnailDecodeFailed;
+        defer decoded.deinit();
+        std.debug.print("YouTube image {s}: {d}x{d}, {d}ms\n", .{ id, decoded.width, decoded.height, io.milliTimestamp() - start });
+        try std.testing.expect(decoded.width >= 320 and decoded.height >= 180);
+    }
 }

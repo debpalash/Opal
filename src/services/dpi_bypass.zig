@@ -120,7 +120,7 @@ pub fn start() void {
     if (pure.shouldReapOrphans(child != null)) reapOrphans();
 
     var c = io.Child.init(&.{
-        bin,     "--port",      port_str,
+        bin,        "--port",    port_str,
         "--listen", "127.0.0.1", "--mode",
         mode,
     }, alloc);
@@ -157,4 +157,11 @@ pub fn stop() void {
 pub fn proxyArgs() ?[]const []const u8 {
     if (!pure.shouldProxy(enabled(), isRunning())) return null;
     return argv_store[0..];
+}
+
+/// Exercise the production proxy route against an already-running local test proxy.
+pub fn useRunningProxyForTest(value: bool) void {
+    if (!@import("builtin").is_test) @compileError("test fixture only");
+    running.store(value, .release);
+    argv_store[1] = "127.0.0.1:8881";
 }

@@ -47,22 +47,8 @@ pub fn safeUrl(url: []const u8) bool {
     return true;
 }
 pub fn encode(out: []u8, input: []const u8) ?[]const u8 {
-    const hex = "0123456789ABCDEF";
-    var n: usize = 0;
-    for (input) |c| {
-        const plain = std.ascii.isAlphanumeric(c) or c == '-' or c == '_' or c == '.' or c == '~';
-        const need: usize = if (plain) 1 else 3;
-        if (n + need > out.len) return null;
-        if (plain) {
-            out[n] = c;
-        } else {
-            out[n] = '%';
-            out[n + 1] = hex[c >> 4];
-            out[n + 2] = hex[c & 15];
-        }
-        n += need;
-    }
-    return out[0..n];
+    const result = @import("url_encode_pure.zig").encode(input, out, .component);
+    return if (result.complete) result.bytes else null;
 }
 fn putUrl(out: []u8, len: *usize, url: []const u8) bool {
     if (!safeUrl(url) or url.len > out.len) return false;

@@ -11,6 +11,10 @@ var frame: usize = 0;
 var images: [6]?dvui.Rect = @splat(null);
 var actions: [2]?dvui.Rect = @splat(null);
 var details: [6]?dvui.Rect = @splat(null);
+var header_art: ?dvui.Rect = null;
+pub fn headerArtwork(rect: dvui.Rect) void {
+    if (enabled) header_art = rect;
+}
 
 pub fn artwork(index: usize, rect: dvui.Rect) void {
     if (enabled and index < images.len) images[index] = rect;
@@ -27,6 +31,7 @@ fn field(buffer: []u8, length: *usize, text: []const u8) void {
 }
 fn setup() !void {
     frame = 0;
+    header_art = null;
     const t = &state.app.tmdb;
     // No DB initialization, requests, player, or real profile in this fixture.
     t.tv_id = 0;
@@ -36,6 +41,7 @@ fn setup() !void {
     t.tv_seasons_loading = false;
     t.tv_episodes_loading = false;
     t.tv_sel_season = 0;
+    field(&t.tv_poster_path, &t.tv_poster_path_len, "https://fixture.test/show.jpg");
     field(&t.tv_name, &t.tv_name_len, "Yoroi Shinden Samurai Troopers");
     t.tv_seasons = try alloc.alloc(state.TvSeason, 1);
     t.tv_seasons[0] = .{ .season_number = 1, .episode_count = 6 };
@@ -55,6 +61,15 @@ fn setup() !void {
 }
 fn draw() !void {
     if (frame == 0) {
+        var header_pixels: [40 * 60 * 4]u8 = undefined;
+        for (0..40 * 60) |p| {
+            header_pixels[p * 4] = @intCast(50 + p % 40 * 3);
+            header_pixels[p * 4 + 1] = @intCast(75 + p / 40 * 2);
+            header_pixels[p * 4 + 2] = 130;
+            header_pixels[p * 4 + 3] = 255;
+        }
+        const header_texture = try dvui.Texture.fromImageSource(.{ .pixels = .{ .rgba = &header_pixels, .width = 40, .height = 60, .interpolation = .linear } });
+        @import("../ui/anime_images.zig").seedForTest("https://fixture.test/show.jpg", header_texture);
         for (state.app.tmdb.tv_episodes, 0..) |*ep, i| {
             if (i == 2 or i == 5) continue; // Missing art and undated episode.
             var pixels: [160 * 90 * 4]u8 = undefined;
@@ -72,6 +87,9 @@ fn draw() !void {
     actions = @splat(null);
     render();
     if (frame >= 4) {
+        const header = header_art orelse return error.MissingShowHeaderArtwork;
+        try std.testing.expect(header.w >= 39 and header.h >= 59);
+        try std.testing.expect(header.x >= 0 and header.x + header.w <= dvui.windowRect().w);
         for (actions) |action_rect| {
             const rect = action_rect orelse return error.MissingPlaybackAction;
             try std.testing.expect(rect.x >= 0 and rect.x + rect.w <= dvui.windowRect().w + 0.5);
@@ -95,6 +113,7 @@ fn draw() !void {
     frame += 1;
 }
 fn cleanup() void {
+    @import("../ui/anime_images.zig").deinit();
     for (state.app.tmdb.tv_episodes) |*ep| {
         if (ep.still_tex) |texture| dvui.textureDestroyLater(texture);
         ep.still_tex = null;

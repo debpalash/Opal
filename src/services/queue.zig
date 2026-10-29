@@ -1,3 +1,4 @@
+const components = @import("../ui/components.zig");
 const page_controls = @import("../ui/browse_filters.zig");
 const std = @import("std");
 const dvui = @import("dvui");
@@ -610,29 +611,10 @@ pub fn renderContent() void {
             }
         }
 
-        if (dvui.button(@src(), "Clear All", .{}, .{
-            .color_fill = theme.colors.bg_elevated,
-            .color_fill_hover = theme.colors.bg_elevated.lighten(6),
-            .color_text = theme.colors.danger,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
-            .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
-        })) {
-            clearAll();
-        }
-
-        if (dvui.button(@src(), "Clear Played", .{}, .{
-            .color_fill = theme.colors.bg_elevated,
-            .color_fill_hover = theme.colors.bg_elevated.lighten(6),
-            .color_text = theme.colors.text_secondary,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 10, .y = 4, .w = 10, .h = 4 },
-            // Same zero vertical margin as its siblings: the ButtonWidget
-            // default margin sat this one 4px lower than Fetch/Clear All.
-            .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
-        })) {
-            clearPlayed();
-        }
+        if (page_controls.item(@src(), .{ .id = 92007, .label = "Clear played", .icon = icons.tvg.lucide.@"list-checks" })) clearPlayed();
+        if (components.confirmDangerButton(@src(), "Clear queue", 92008)) clearAll();
+        var count_buf: [32]u8 = undefined;
+        dvui.labelNoFmt(@src(), std.fmt.bufPrint(&count_buf, "{d} queued", .{queue_count}) catch "", .{}, .{ .color_text = theme.colors.text_tertiary, .gravity_y = 0.5 });
     }
 
     if (show_collections) renderCollections();
@@ -642,11 +624,7 @@ pub fn renderContent() void {
 
     // ── Persisted Queue Items ──
     if (queue_count == 0) {
-        _ = dvui.label(@src(), "Queue is empty. Add tracks from Tunes or paste a link.", .{}, .{
-            .color_text = theme.colors.text_secondary,
-            .gravity_x = 0.5,
-            .margin = dvui.Rect.all(24),
-        });
+        if (components.emptyStateCta(icons.tvg.lucide.@"list-music", "Your queue is empty", "Queue music or videos to play next.", "Browse music")) state.navigateToTab(.Music);
         return;
     }
 
@@ -824,7 +802,8 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
         .background = true,
         .color_fill = if (item.played) theme.colors.bg_app else theme.colors.bg_surface,
         .color_border = theme.colors.border_subtle,
-        .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
+        .border = dvui.Rect.all(1),
+        .corner_radius = dvui.Rect.all(8),
         .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
     });
     defer {

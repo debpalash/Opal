@@ -917,9 +917,6 @@ fn themedSelect(id: usize, labels: []const []const u8, cur: usize, width: f32) ?
 const CAT_LABELS = [_][]const u8{ "All categories", "News", "Sports", "Movies", "Music", "Entertainment", "General", "Kids", "Documentary", "Education", "Lifestyle", "Comedy", "Business", "Culture", "Series", "Science", "Religious", "Weather" };
 const CAT_CODES = [_][]const u8{ "", "news", "sports", "movies", "music", "entertainment", "general", "kids", "documentary", "education", "lifestyle", "comedy", "business", "culture", "series", "science", "religious", "weather" };
 
-const COUNTRY_LABELS = [_][]const u8{ "All countries", "United States", "United Kingdom", "India", "Canada", "Brazil", "Germany", "France", "Spain", "Italy", "Russia", "Turkey", "Mexico", "Argentina", "Indonesia", "Poland", "Netherlands", "South Korea", "Japan", "Portugal", "Romania", "Greece", "Australia", "Philippines", "Vietnam", "Thailand", "Saudi Arabia", "Pakistan", "Egypt", "Nigeria" };
-const COUNTRY_CODES = [_][]const u8{ "", "US", "GB", "IN", "CA", "BR", "DE", "FR", "ES", "IT", "RU", "TR", "MX", "AR", "ID", "PL", "NL", "KR", "JP", "PT", "RO", "GR", "AU", "PH", "VN", "TH", "SA", "PK", "EG", "NG" };
-
 const QUALITY_LABELS = [_][]const u8{ "Any", "SD", "HD", "FHD" };
 const SORT_LABELS = [_][]const u8{ "Relevance", "Name", "Country" };
 
@@ -1012,6 +1009,15 @@ fn renderToolbar() void {
         if (id != state.app.iptv.quick_filter) selectQuickFilter(@intCast(id));
     }
 
+    if (state.app.iptv.quick_filter == 0) {
+        const countries = @import("countries_pure.zig");
+        const selected = countries.index(state.app.iptv.filter_country[0..state.app.iptv.filter_country_len]);
+        if (@import("../ui/country_filter.zig").render(@src(), selected)) |country| {
+            setFixedBuf(&state.app.iptv.filter_country, &state.app.iptv.filter_country_len, countries.at(country).code);
+            applyFilters();
+        }
+    }
+
     // Category/country/quality/sort — All view only (Favorites/Recent don't filter).
     if (state.app.iptv.quick_filter == 0 and browse_filters.item(@src(), .{
         .id = 28010,
@@ -1023,12 +1029,6 @@ fn renderToolbar() void {
         const cat_idx = codeIndex(&CAT_CODES, state.app.iptv.filter_category[0..state.app.iptv.filter_category_len]);
         if (themedSelect(1, &CAT_LABELS, cat_idx, 128)) |sel| {
             setFixedBuf(state.app.iptv.filter_category[0..], &state.app.iptv.filter_category_len, CAT_CODES[sel]);
-            applyFilters();
-        }
-
-        const cty_idx = codeIndex(&COUNTRY_CODES, state.app.iptv.filter_country[0..state.app.iptv.filter_country_len]);
-        if (themedSelect(2, &COUNTRY_LABELS, cty_idx, 138)) |sel| {
-            setFixedBuf(state.app.iptv.filter_country[0..], &state.app.iptv.filter_country_len, COUNTRY_CODES[sel]);
             applyFilters();
         }
 

@@ -199,6 +199,7 @@ pub fn fetchImage(url: []const u8, buf: []u8) ?[]const u8 {
         .timeout_secs = 15,
         .connect_timeout_secs = 3,
         .impersonate = false,
+        .secret_url = true, // Signed CDN tokens travel via stdin, not process arguments.
     }) orelse return null;
     if (body.len < 2) return null;
     return body;
@@ -248,21 +249,5 @@ pub fn jsonStrInto(json: []const u8, key: []const u8, out: []u8, out_len: *usize
 
 /// URL-encode a string.
 pub fn urlEncode(input: []const u8, buf: []u8) []const u8 {
-    var len: usize = 0;
-    for (input) |ch| {
-        if (len + 3 >= buf.len) break;
-        if ((ch >= 'A' and ch <= 'Z') or (ch >= 'a' and ch <= 'z') or (ch >= '0' and ch <= '9') or ch == '-' or ch == '_' or ch == '.') {
-            buf[len] = ch;
-            len += 1;
-        } else if (ch == ' ') {
-            buf[len] = '+';
-            len += 1;
-        } else {
-            buf[len] = '%';
-            buf[len + 1] = "0123456789ABCDEF"[ch >> 4];
-            buf[len + 2] = "0123456789ABCDEF"[ch & 0xF];
-            len += 3;
-        }
-    }
-    return buf[0..len];
+    return @import("../services/url_encode_pure.zig").encode(input, buf, .form).bytes;
 }

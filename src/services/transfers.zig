@@ -586,7 +586,8 @@ fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
         .background = true,
         .color_fill = row_bg,
         .padding = .{ .x = 10, .y = 7, .w = 10, .h = 7 },
-        .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
+        .border = dvui.Rect.all(1),
+        .corner_radius = dvui.Rect.all(8),
         .color_border = theme.colors.border_subtle,
     });
     defer {
@@ -1144,7 +1145,8 @@ fn renderHttpRow(s: *const httpdl.engine.Snap, i: usize) void {
         .background = true,
         .color_fill = row_bg,
         .padding = .{ .x = 10, .y = 7, .w = 10, .h = 7 },
-        .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
+        .border = dvui.Rect.all(1),
+        .corner_radius = dvui.Rect.all(8),
         .color_border = theme.colors.border_subtle,
     });
     defer {

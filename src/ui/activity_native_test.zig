@@ -74,6 +74,8 @@ fn setup() !void {
     }
 }
 fn draw() !void {
+    @import("components.zig").beginFrame();
+    @import("settings.zig").beginFrame();
     try @import("shell.zig").render();
 }
 fn cleanup() void {

@@ -1,3 +1,4 @@
+const anime_images = @import("../ui/anime_images.zig");
 const browse_filters = @import("../ui/browse_filters.zig");
 const std = @import("std");
 const dvui = @import("dvui");
@@ -85,6 +86,7 @@ const agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/2010010
 
 // Loading flags are atomic; request generations reject late completions.
 pub var has_loaded_trending: bool = false;
+var catalog_failed = std.atomic.Value(bool).init(false);
 
 // ── UI-control state (module-level, NOT in state.zig). ──
 
@@ -289,6 +291,25 @@ fn loadMoreGridWorker(job: GridJob) void {
 
     const buf = alloc.alloc(u8, 256 * 1024) catch return;
     defer alloc.free(buf);
+    if (mode == .trending and search_request.current() == my_gen) {
+        const kind: anilist_pure.BrowseKind = switch (job.trend) {
+            .airing => .airing,
+            .top => .top,
+            .bypopularity => .popular,
+            .upcoming => .upcoming,
+            .lists => return,
+        };
+        const bytes = anilist.fetchBrowseWithCancellation(next_page, kind, job.sfw, buf, searchEpoch(my_gen));
+        if (bytes > 0) {
+            const added = appendAniListPage(buf[0..bytes], my_gen, state.app.anime.result_count);
+            if (added > 0) {
+                grid_page = next_page;
+                more_available.store(anilist_pure.hasNextPage(buf[0..bytes]), .release);
+                logs.pushLog("info", "anime", "Next page loaded (AniList)", false);
+                return;
+            }
+        }
+    }
     var attempt: u8 = 0;
     while (attempt < 3) : (attempt += 1) {
         const body = boundedSearchCurl(url, buf, 6, my_gen) orelse {
@@ -304,25 +325,6 @@ fn loadMoreGridWorker(job: GridJob) void {
             return;
         }
         if (attempt < 2) @import("../core/io_global.zig").sleep((250 + @as(u64, attempt) * 350) * std.time.ns_per_ms);
-    }
-    if (mode == .trending and search_request.current() == my_gen) {
-        const kind: anilist_pure.BrowseKind = switch (job.trend) {
-            .airing => .airing,
-            .top => .top,
-            .bypopularity => .popular,
-            .upcoming => .upcoming,
-            .lists => return,
-        };
-        const bytes = anilist.fetchBrowseWithCancellation(next_page, kind, job.sfw, buf, searchEpoch(my_gen));
-        if (bytes > 0) {
-            const added = appendAniListPage(buf[0..bytes], my_gen, state.app.anime.result_count);
-            if (added > 0) {
-                grid_page = next_page;
-                more_available.store(anilist_pure.hasNextPage(buf[0..bytes]), .release);
-                logs.pushLog("info", "anime", "Next page loaded (AniList fallback)", false);
-                return;
-            }
-        }
     }
     // A transient Jikan 5xx must not permanently mark the catalog complete.
     // Keep the page retryable through the button / next viewport intersection.
@@ -507,6 +509,7 @@ fn beginCatalogRequest() u32 {
     anime_parse_mutex.lock();
     defer anime_parse_mutex.unlock();
     const generation = search_request.begin(&state.app.anime.is_loading);
+    catalog_failed.store(false, .release);
     grid_loading_more.store(false, .release);
     relations_request.cancel(&relations_busy);
     return generation;
@@ -775,41 +778,51 @@ fn jikanGet(url: []const u8, buf: []u8, my_gen: u32) usize {
     return body.len;
 }
 
+fn trendingGet(url: []const u8, buf: []u8, generation: u32) usize {
+    // Reach the independent provider promptly when Jikan is unreachable.
+    return if (boundedSearchCurl(url, buf, 4, generation)) |body| body.len else 0;
+}
+
 fn trendingThread(job: GridJob) void {
+    trendingWithFetch(job, trendingGet, anilist.fetchBrowseWithCancellation);
+}
+
+fn trendingWithFetch(job: GridJob, comptime get: anytype, comptime browse: anytype) void {
     const my_gen = job.generation;
     defer search_request.finish(my_gen, &state.app.anime.is_loading);
-
-    const arg1 = job.url[0..job.url_len];
     const buf = alloc.alloc(u8, 256 * 1024) catch return;
     defer alloc.free(buf);
 
-    var bytes = jikanGet(arg1, buf, my_gen);
-    var added = if (bytes > 0) parseJikanData(buf[0..bytes], my_gen) else 0;
-
-    // Jikan's /top/anime?filter=… frequently 504s ("failed to connect to
-    // MyAnimeList") while the UNFILTERED /top/anime and /seasons stay up — which
-    // left the DEFAULT (airing) trending view permanently blank. When a filtered
-    // fetch yields nothing, fall back to the unfiltered top list so the grid is
-    // never empty. Only fires when a filter was actually used and we're still current.
+    const kind: anilist_pure.BrowseKind = switch (job.trend) {
+        .airing => .airing,
+        .top => .top,
+        .bypopularity => .popular,
+        .upcoming => .upcoming,
+        .lists => return,
+    };
+    var bytes = browse(job.page, kind, job.sfw, buf, searchEpoch(my_gen));
+    var added = if (bytes > 0) appendAniListPage(buf[0..bytes], my_gen, 0) else 0;
+    const from_anilist = added > 0;
+    if (search_request.current() != my_gen) return;
+    if (added == 0) {
+        bytes = get(job.url[0..job.url_len], buf, my_gen);
+        if (bytes > 0) added = parseJikanData(buf[0..bytes], my_gen);
+    }
+    // Only relax the requested filter after both providers have failed it.
     if (added == 0 and job.fallback_len > 0 and search_request.current() == my_gen) {
-        const fb = job.fallback[0..job.fallback_len];
-        const fb_bytes = jikanGet(fb, buf, my_gen);
-        if (fb_bytes > 0) {
-            added = parseJikanData(buf[0..fb_bytes], my_gen);
-            bytes = fb_bytes;
-            logs.pushLog("warn", "anime", "Jikan filtered top unavailable — showing overall top", false);
-        }
+        bytes = get(job.fallback[0..job.fallback_len], buf, my_gen);
+        if (bytes > 0) added = parseJikanData(buf[0..bytes], my_gen);
+        if (added > 0) logs.pushLog("warn", "anime", "Filtered catalogs unavailable — showing overall top", false);
     }
-
-    if (bytes == 0) return;
-    if (search_request.current() == my_gen) {
-        more_available.store(parsePagination(buf[0..bytes]), .release);
-        // SWR write: persist the fresh page-1 Trending grid so the next cold
-        // start seeds instantly. Only the latest generation (still current)
-        // persists — a superseded worker never poisons the cache.
-        if (job.page == 1 and added > 0) putTrendingCache();
+    if (search_request.current() != my_gen) return;
+    if (added == 0) {
+        catalog_failed.store(true, .release);
+        logs.pushLog("warn", "anime", "Anime catalog providers unavailable — retry remains available", false);
+        return;
     }
-    logs.pushLog("info", "anime", "Trending loaded (Jikan API)", false);
+    more_available.store(if (from_anilist) anilist_pure.hasNextPage(buf[0..bytes]) else parsePagination(buf[0..bytes]), .release);
+    if (job.page == 1) putTrendingCache();
+    logs.pushLog("info", "anime", if (from_anilist) "Trending loaded (AniList)" else "Trending loaded (Jikan API)", false);
 }
 
 pub fn searchAnime(query: []const u8) void {
@@ -1549,6 +1562,8 @@ fn anilistEnrichThread(my_gen: u32) void {
 const catalog = @import("anime_catalog_pure.zig");
 var episode_request: LatestRequest = .{};
 var episode_scroll_info: dvui.ScrollInfo = .{};
+var episode_thumbnails: [catalog.capacity][1024]u8 = undefined;
+var episode_thumbnail_lens: [catalog.capacity]usize = @splat(0);
 var episode_failed = std.atomic.Value(bool).init(false);
 const EpisodeJob = struct { idx: usize, generation: u32, mal: [16]u8, mal_len: usize };
 const EpisodeDocument = struct { job: EpisodeJob, bytes: []u8 };
@@ -1575,6 +1590,7 @@ pub fn loadEpisodes(idx: usize) void {
     episode_request.cancel(&state.app.anime.episodes_loading);
     cancelPlayback();
     episode_failed.store(false, .release);
+    @memset(&episode_thumbnail_lens, 0);
     if (results_are_scraper) {
         loadEpisodesScraper(idx);
         return;
@@ -1587,6 +1603,8 @@ pub fn loadEpisodes(idx: usize) void {
     loadRelations(idx);
     var job = EpisodeJob{ .idx = idx, .generation = episode_request.begin(&state.app.anime.episodes_loading), .mal = undefined, .mal_len = @min(row.id_len, 16) };
     @memcpy(job.mal[0..job.mal_len], row.id[0..job.mal_len]);
+    workers.spawn(fetchEpisodeArtwork, .{job}) catch {};
+    workers.spawn(fetchIndexedEpisodeData, .{job}) catch {};
     workers.spawn(fetchEpisodeDataThread, .{job}) catch {
         episode_failed.store(true, .release);
         episode_request.finish(job.generation, &state.app.anime.episodes_loading);
@@ -1607,6 +1625,40 @@ pub fn applyPendingEpisodes() void {
         const parsed = std.json.parseFromSlice(std.json.Value, alloc, doc.bytes, .{}) catch continue;
         defer parsed.deinit();
         if (catalog.anilistEpisodeCount(parsed.value)) |total| fillEpisodeSlots(total);
+        for (catalog.streamingEpisodes(parsed.value)) |entry| {
+            const ep = catalog.streamingEpisode(entry) orelse continue;
+            fillEpisodeSlots(ep.number);
+            const i = ep.number - 1;
+            if (episode_thumbnail_lens[i] == 0) {
+                @memcpy(episode_thumbnails[i][0..ep.thumbnail.len], ep.thumbnail);
+                episode_thumbnail_lens[i] = ep.thumbnail.len;
+            }
+            if (state.app.anime.episode_title_lens[i] == 0 and ep.title.len > 0) {
+                const n = @min(ep.title.len, state.app.anime.episode_titles[i].len);
+                @memcpy(state.app.anime.episode_titles[i][0..n], ep.title[0..n]);
+                state.app.anime.episode_title_lens[i] = n;
+            }
+        }
+        const index_rows = catalog.field(parsed.value, "episodes");
+        if (index_rows == .object and catalog.number(catalog.field(catalog.field(parsed.value, "mappings"), "mal_id")) == (std.fmt.parseInt(usize, doc.job.mal[0..doc.job.mal_len], 10) catch 0)) {
+            var it = index_rows.object.iterator();
+            while (it.next()) |entry| {
+                const ep = catalog.indexedEpisode(entry.key_ptr.*, entry.value_ptr.*) orelse continue;
+                fillEpisodeSlots(ep.number);
+                const i = ep.number - 1;
+                const a = &state.app.anime;
+                if (episode_thumbnail_lens[i] == 0 and ep.image.len > 0) {
+                    @memcpy(episode_thumbnails[i][0..ep.image.len], ep.image);
+                    episode_thumbnail_lens[i] = ep.image.len;
+                }
+                if (a.episode_title_lens[i] == 0 and ep.title.len > 0) @import("../core/text.zig").setFixedUtf8(&a.episode_titles[i], &a.episode_title_lens[i], ep.title);
+                if (a.episode_aired_lens[i] == 0) {
+                    @memcpy(a.episode_aired[i][0..ep.aired.len], ep.aired);
+                    a.episode_aired_lens[i] = ep.aired.len;
+                }
+                if (a.episode_scores[i] == 0) a.episode_scores[i] = ep.score;
+            }
+        }
         const entries = catalog.data(parsed.value) orelse &.{};
         for (entries) |entry| {
             const ep = catalog.episode(entry) orelse continue;
@@ -1657,9 +1709,9 @@ fn fetchEpisodeDataThread(job: EpisodeJob) void {
             if (hit.staleness != .fresh) body = null;
         }
         var attempt: usize = 0;
-        while (body == null and attempt < 3 and episode_request.isCurrent(job.generation)) : (attempt += 1) {
+        while (body == null and attempt < 1 and episode_request.isCurrent(job.generation)) : (attempt += 1) {
             @import("../core/rate_limit.zig").acquire("jikan", 2.0);
-            if (@import("../core/http.zig").fetch(url, buf, .{ .timeout_secs = 8 })) |bytes| {
+            if (@import("reliable_fetch.zig").fetch(url, buf, .{ .timeout_secs = 4, .cancel_epoch = .{ .epoch32 = .{ .value = &episode_request.generation, .expected = job.generation } } })) |bytes| {
                 if (std.json.parseFromSlice(std.json.Value, alloc, bytes, .{})) |parsed| {
                     if (catalog.data(parsed.value) != null) {
                         body = bytes;
@@ -1668,13 +1720,12 @@ fn fetchEpisodeDataThread(job: EpisodeJob) void {
                     } else parsed.deinit();
                 } else |_| {}
             }
-            if (body == null and attempt < 2) @import("../core/io_global.zig").sleep((500 + attempt * 500) * std.time.ns_per_ms);
         }
         if (body == null) if (content_cache.get(url, buf)) |hit| {
             body = hit.bytes;
         };
         const bytes = body orelse {
-            fetchEpisodeCountFallback(job, buf);
+            // Independent AniList artwork/count request is already running.
             if (episode_request.isCurrent(job.generation)) episode_failed.store(true, .release);
             return;
         };
@@ -1694,24 +1745,28 @@ fn fetchEpisodeDataThread(job: EpisodeJob) void {
     }
 }
 
-fn fetchEpisodeCountFallback(job: EpisodeJob, buf: []u8) void {
+fn fetchEpisodeArtwork(job: EpisodeJob) void {
+    const buf = alloc.alloc(u8, 1024 * 1024) catch return;
+    defer alloc.free(buf);
     if (!episode_request.isCurrent(job.generation)) return;
     const id = std.fmt.parseInt(u32, job.mal[0..job.mal_len], 10) catch return;
     var kb: [80]u8 = undefined;
-    const key = std.fmt.bufPrint(&kb, "anime:episode-count:anilist:{d}", .{id}) catch return;
+    const key = std.fmt.bufPrint(&kb, "anime:episode-art:v1:anilist:{d}", .{id}) catch return;
     var body: ?[]const u8 = null;
     if (content_cache.get(key, buf)) |hit| {
-        if (hit.staleness == .fresh) body = hit.bytes;
+        queueEpisodeDocument(job, hit.bytes);
+        if (hit.staleness == .fresh) return;
     }
     if (body == null) {
         var qb: [384]u8 = undefined;
         const query = std.fmt.bufPrint(&qb,
-            \\{{"query":"query {{ Media(idMal: {d}, type: ANIME) {{ episodes nextAiringEpisode {{ episode }} }} }}"}}
+            \\{{"query":"query {{ Media(idMal: {d}, type: ANIME) {{ episodes nextAiringEpisode {{ episode }} streamingEpisodes {{ title thumbnail }} }} }}"}}
         , .{id}) catch return;
         body = @import("reliable_fetch.zig").fetch("https://graphql.anilist.co", buf, .{
             .post_body = query,
             .headers = &.{.{ .name = "Content-Type", .value = "application/json" }},
             .timeout_secs = 8,
+            .cancel_epoch = .{ .epoch32 = .{ .value = &episode_request.generation, .expected = job.generation } },
         });
         if (body) |bytes| {
             const doc = std.json.parseFromSlice(std.json.Value, alloc, bytes, .{}) catch return;
@@ -1723,6 +1778,10 @@ fn fetchEpisodeCountFallback(job: EpisodeJob, buf: []u8) void {
         }
     }
     const bytes = body orelse return;
+    queueEpisodeDocument(job, bytes);
+}
+
+fn queueEpisodeDocument(job: EpisodeJob, bytes: []const u8) void {
     const copy = alloc.dupe(u8, bytes) catch return;
     episode_document_mutex.lock();
     defer episode_document_mutex.unlock();
@@ -1730,6 +1789,25 @@ fn fetchEpisodeCountFallback(job: EpisodeJob, buf: []u8) void {
         episode_documents.append(alloc, .{ .job = job, .bytes = copy }) catch alloc.free(copy);
         state.wakeUi();
     } else alloc.free(copy);
+}
+
+fn fetchIndexedEpisodeData(job: EpisodeJob) void {
+    const id = std.fmt.parseInt(usize, job.mal[0..job.mal_len], 10) catch return;
+    const buf = alloc.alloc(u8, 2 * 1024 * 1024) catch return;
+    defer alloc.free(buf);
+    var ub: [160]u8 = undefined;
+    const url = std.fmt.bufPrint(&ub, "https://api.ani.zip/mappings?mal_id={d}", .{id}) catch return;
+    if (content_cache.get(url, buf)) |hit| {
+        queueEpisodeDocument(job, hit.bytes);
+        if (hit.staleness == .fresh) return;
+    }
+    const bytes = @import("reliable_fetch.zig").fetch(url, buf, .{ .timeout_secs = 4, .cancel_epoch = .{ .epoch32 = .{ .value = &episode_request.generation, .expected = job.generation } } }) orelse return;
+    if (!episode_request.isCurrent(job.generation)) return;
+    const doc = std.json.parseFromSlice(std.json.Value, alloc, bytes, .{}) catch return;
+    defer doc.deinit();
+    if (catalog.number(catalog.field(catalog.field(doc.value, "mappings"), "mal_id")) != id or catalog.field(doc.value, "episodes") != .object) return;
+    content_cache.put(url, bytes, ANIME_DETAIL_CACHE_TTL_S);
+    queueEpisodeDocument(job, bytes);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -2190,30 +2268,18 @@ fn fetchStreamThread(job: PlaybackJob) void {
     if (job.scraper != .none) {
         resolved = scraperPlayThread(job);
         if (resolved) return;
-    } else {
+    }
+    {
+        if (@import("anime_provider.zig").resolveRanked(job.row.name[0..job.row.name_len], job.row.name_english[0..job.row.name_english_len], job.episode, job.row.anilist_id, &playback_request, job.generation)) |stream| {
+            publishPlayback(.{ .job = job, .stream = stream });
+            resolved = true;
+            return;
+        }
+        if (!playback_request.isCurrent(job.generation)) return;
         var release: PlaybackReady = .{ .job = job };
         if (@import("anime_provider.zig").resolveSubsPlease(job.row.name[0..job.row.name_len], job.row.name_english[0..job.row.name_english_len], job.episode, &playback_request, job.generation, &release.torrent)) |magnet| {
             release.torrent_len = magnet.len;
             publishPlayback(release);
-            resolved = true;
-            return;
-        }
-        if (!playback_request.isCurrent(job.generation)) return;
-        if (@import("anime_provider.zig").resolveAllAnime(job.row.name[0..job.row.name_len], job.row.name_english[0..job.row.name_english_len], job.episode, &playback_request, job.generation)) |stream| {
-            publishPlayback(.{ .job = job, .stream = stream });
-            resolved = true;
-            return;
-        }
-        if (!playback_request.isCurrent(job.generation)) return;
-        // An installed direct source can start without waiting on torrent search.
-        if (@import("anime_provider.zig").resolvePahe(job.row.name[0..job.row.name_len], job.row.name_english[0..job.row.name_english_len], job.episode, &playback_request, job.generation)) |stream| {
-            publishPlayback(.{ .job = job, .stream = stream });
-            resolved = true;
-            return;
-        }
-        if (!playback_request.isCurrent(job.generation)) return;
-        if (@import("anime_provider.zig").resolveHiAnime(job.row.name[0..job.row.name_len], job.row.name_english[0..job.row.name_english_len], job.episode, &playback_request, job.generation)) |stream| {
-            publishPlayback(.{ .job = job, .stream = stream });
             resolved = true;
             return;
         }
@@ -2892,34 +2958,15 @@ pub fn renderContent() void {
                     defer pbox.deinit();
 
                     _ = poster.uploadIfReady(&item.poster_pixels, item.poster_w, item.poster_h, &item.poster_tex);
-                    if (item.poster_tex) |*tex| {
-                        _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
+                    const url = item.poster_url[0..item.poster_url_len];
+                    if (item.poster_tex orelse anime_images.get(url)) |tex| {
+                        _ = dvui.image(@src(), .{ .source = .{ .texture = tex } }, .{
                             .id_extra = 72,
                             .expand = .both,
                             .corner_radius = dvui.Rect.all(6),
                         });
                     } else {
-                        // Same failure-latch/fetch dance as the grid so we never
-                        // re-spawn a worker every frame for a dead URL.
-                        // Routed through anime_pure.posterAction so the shipped decision is the
-                        // tested one (see its regression test: a retired texture must not latch).
-                        switch (anime_pure.posterAction(.{
-                            .fetching = item.poster_fetching,
-                            .attempted = item.poster_attempted,
-                            .failed = item.poster_failed,
-                            .has_pixels = item.poster_pixels != null,
-                            .has_tex = item.poster_tex != null,
-                            .has_url = item.poster_url_len > 0,
-                        })) {
-                            .mark_attempted => item.poster_attempted = true,
-                            .latch_failed => item.poster_failed = true,
-                            .fetch => {
-                                poster.fetchAsync(item.poster_url[0..item.poster_url_len], &item.poster_pixels, &item.poster_w, &item.poster_h, &item.poster_fetching);
-                                if (item.poster_fetching) item.poster_attempted = true;
-                            },
-                            .none => {},
-                        }
-                        if (!item.poster_failed and item.poster_url_len > 0)
+                        if (!anime_images.failed(url) and url.len > 0)
                             components.coverSkeleton(@src(), 73, 6)
                         else
                             dvui.icon(@src(), "det-poster-ph", icons.tvg.lucide.film, .{}, .{
@@ -3106,8 +3153,6 @@ pub fn renderContent() void {
 fn renderEpisodeGrid(sel_idx: usize) void {
     const a = &state.app.anime;
     const font = dvui.themeGet().font_body;
-    const height = font.lineHeight() * 2 + 30;
-    const pitch = height + 8;
     var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &episode_scroll_info, .horizontal = .none, .vertical_bar = .auto_overlay }, .{
         .expand = .both,
         .padding = .{ .x = 12, .y = 0, .w = 12, .h = 8 },
@@ -3116,6 +3161,9 @@ fn renderEpisodeGrid(sel_idx: usize) void {
     });
     defer scroll.deinit();
     const layout = catalog.episodeGrid(@max(1, scroll.data().contentRect().w - 8), a.episode_count);
+    const thumb_height = @max(1, layout.width - 20) * 9 / 16;
+    const height = thumb_height + font.lineHeight() * 3 + 42;
+    const pitch = height + 8;
     const visible = @import("tmdb_pure.zig").visibleRows(layout.rows, pitch, episode_scroll_info.viewport.y, episode_scroll_info.viewport.h, 2);
     const next = nextUnwatchedEp();
     if (visible.first > 0) {
@@ -3151,6 +3199,26 @@ fn renderEpisodeGrid(sel_idx: usize) void {
                 .max_size_content = .{ .w = @max(1, layout.width - 20), .h = height - 20 },
             });
             defer card.deinit();
+            {
+                var preview = dvui.box(@src(), .{}, .{
+                    .min_size_content = .{ .w = @max(1, layout.width - 20), .h = thumb_height },
+                    .max_size_content = .{ .w = @max(1, layout.width - 20), .h = thumb_height },
+                    .background = true,
+                    .color_fill = theme.colors.bg_deep,
+                    .corner_radius = dvui.Rect.all(6),
+                    .padding = dvui.Rect.all(0),
+                    .margin = .{ .h = 6 },
+                });
+                defer preview.deinit();
+                const url = episode_thumbnails[ep_i][0..episode_thumbnail_lens[ep_i]];
+                const tex = if (preview.data().visible()) @import("../ui/anime_images.zig").get(url) else null;
+                if (tex) |image| {
+                    _ = dvui.image(@src(), .{ .source = .{ .texture = image } }, .{ .expand = .ratio, .gravity_x = 0.5, .gravity_y = 0.5, .corner_radius = dvui.Rect.all(6) });
+                } else {
+                    dvui.icon(@src(), "Episode preview", icons.tvg.lucide.film, .{}, .{ .min_size_content = .{ .w = 28, .h = 28 }, .gravity_x = 0.5, .gravity_y = 0.5, .color_text = theme.colors.text_tertiary });
+                }
+                if (dvui.clicked(preview.data(), .{})) playEpisode(ep_str);
+            }
             {
                 var controls = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .padding = dvui.Rect.all(0) });
                 defer controls.deinit();
@@ -3193,7 +3261,7 @@ fn renderEpisodeGrid(sel_idx: usize) void {
                 .padding = dvui.Rect.all(0),
                 .min_size_content = .{ .w = 0, .h = font.lineHeight() },
             });
-            defer status_row.deinit();
+
             if (busy) dvui.spinner(@src(), .{
                 .color_text = theme.colors.accent,
                 .min_size_content = .{ .w = 12, .h = 12 },
@@ -3201,17 +3269,27 @@ fn renderEpisodeGrid(sel_idx: usize) void {
                 .gravity_y = 0.5,
                 .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
             });
-            var caption = dvui.textLayout(@src(), .{ .break_lines = false }, .{
-                .background = false,
+            var caption_buf: [288]u8 = undefined;
+            const caption = std.fmt.bufPrint(&caption_buf, "{s}{s}", .{ if (!busy and !failed and a.episode_filler[ep_i]) "Filler · " else "", title }) catch title;
+            var caption_wd: dvui.WidgetData = undefined;
+            dvui.labelNoFmt(@src(), caption, .{}, .{
+                .data_out = &caption_wd,
                 .expand = .horizontal,
                 .padding = dvui.Rect.all(0),
                 .color_text = if (busy) theme.colors.accent else if (failed) theme.colors.warning else theme.colors.text_secondary,
                 .min_size_content = .{ .w = 0, .h = font.lineHeight() },
                 .max_size_content = .{ .w = @max(1, layout.width - 20), .h = font.lineHeight() },
             });
-            if (!busy and !failed and a.episode_filler[ep_i]) caption.addText("Filler · ", .{ .color_text = theme.colors.accent });
-            caption.addText(title, .{});
-            caption.deinit();
+            components.tip(@src(), caption_wd, caption);
+            status_row.deinit();
+            var meta_buf: [96]u8 = undefined;
+            const status = if (watched) "Watched" else if (is_next) "Up next" else "";
+            const date = a.episode_aired[ep_i][0..a.episode_aired_lens[ep_i]];
+            const meta = if (a.episode_scores[ep_i] > 0)
+                std.fmt.bufPrint(&meta_buf, "Rated {d:.1}  {s}{s}{s}", .{ a.episode_scores[ep_i], status, if (status.len > 0 and date.len > 0) " · " else "", date }) catch status
+            else
+                std.fmt.bufPrint(&meta_buf, "{s}{s}{s}", .{ status, if (status.len > 0 and date.len > 0) " · " else "", date }) catch status;
+            dvui.labelNoFmt(@src(), meta, .{}, .{ .expand = .horizontal, .padding = dvui.Rect.all(0), .font = font.withSize(11), .color_text = if (is_next) theme.colors.accent else theme.colors.text_tertiary });
         }
     }
     if (visible.last < layout.rows) {
@@ -3353,8 +3431,8 @@ fn dispatchModeFetch() void {
     switch (m) {
         .trending => {
             // Initial load + SWR background refresh (trending only).
-            const stale = state.app.anime.result_count == 0 or
-                @import("browse_cache.zig").isStale(state.app.anime.last_fetch_s);
+            // An empty failed response must not restart on every rendered frame.
+            const stale = @import("browse_cache.zig").isStale(state.app.anime.last_fetch_s);
             if (fetched_mode != .trending or (stale and !busy)) {
                 fetched_mode = .trending;
                 loadTrendingAnime();
@@ -3923,7 +4001,12 @@ fn toolbarAction(id: usize, label: []const u8, icon: []const u8, active: bool) b
 
 fn renderGallery() void {
     if (state.app.anime.result_count == 0 and !state.app.anime.is_loading.load(.acquire)) {
-        components.emptyState(icons.tvg.lucide.sparkles, "No anime found", "Try another search or trending filter.");
+        const failed = catalog_failed.load(.acquire);
+        components.emptyState(icons.tvg.lucide.sparkles, if (failed) "Anime catalog unavailable" else "No anime found", if (failed) "Try again in a moment." else "Try another search or trending filter.");
+        if (components.actionButton(@src(), "Retry", .secondary, 89201)) {
+            fetched_mode = null;
+            state.app.anime.last_fetch_s = 0;
+        }
         return;
     }
 
@@ -3970,6 +4053,13 @@ fn renderGallery() void {
         }
     }
 
+    const viewport_rows = @import("tmdb_pure.zig").visibleRows(total_rows, row_h, scroll.si.viewport.y, scroll.si.viewport.h, 0);
+    const next_start = @min(total, viewport_rows.last * cols);
+    for (next_start..@min(total, next_start + cols)) |i| {
+        const item = &state.app.anime.results[i];
+        if (item.poster_tex == null) anime_images.prefetch(item.poster_url[0..item.poster_url_len]);
+    }
+
     if (win.last < total_rows) {
         var sp = dvui.box(@src(), .{}, .{
             .id_extra = 69999,
@@ -3993,7 +4083,6 @@ fn renderGallery() void {
                 .gravity_x = 0.5,
                 .margin = .{ .x = 3, .y = 8, .w = 3, .h = 12 },
             });
-            state.wakeUi();
         } else if (browse_filters.item(@src(), .{ .id = 80002, .label = "More", .icon = icons.tvg.lucide.@"chevrons-down", .presentation = .label })) {
             loadMoreGrid(); // tap fallback
         }
@@ -4107,43 +4196,23 @@ fn renderCard(item: *state.AnimeResult, idx: usize, card_w: f32) void {
         bw.drawBackground();
 
         // Upload pixels to GPU texture once ready
-        _ = poster.uploadIfReady(&item.poster_pixels, item.poster_w, item.poster_h, &item.poster_tex);
+        if (bw.data().visible()) _ = poster.uploadIfReady(&item.poster_pixels, item.poster_w, item.poster_h, &item.poster_tex);
 
         // Stack the poster + (on hover) a meta overlay, both filling the button.
         {
             var stack = dvui.overlay(@src(), .{ .id_extra = idx + 140, .expand = .both });
             defer stack.deinit();
 
-            if (item.poster_tex) |*tex| {
-                _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
+            const url = item.poster_url[0..item.poster_url_len];
+            const artwork = item.poster_tex orelse (if (bw.data().visible()) anime_images.get(url) else null);
+            if (artwork) |tex| {
+                _ = dvui.image(@src(), .{ .source = .{ .texture = tex } }, .{
                     .id_extra = idx + 150,
                     .expand = .both,
                     .corner_radius = dvui.Rect.all(6),
                 });
             } else {
-                // Kick off async poster download via the shared poster daemon
-                // (http.fetchImage — the proven path TMDB/Jellyfin use; the old
-                // bespoke curl fetch left anime cards on placeholders). Latch
-                // permanent failure so we stop re-spawning a worker every frame.
-                // Routed through anime_pure.posterAction so the shipped decision is the
-                // tested one (see its regression test: a retired texture must not latch).
-                switch (anime_pure.posterAction(.{
-                    .fetching = item.poster_fetching,
-                    .attempted = item.poster_attempted,
-                    .failed = item.poster_failed,
-                    .has_pixels = item.poster_pixels != null,
-                    .has_tex = item.poster_tex != null,
-                    .has_url = item.poster_url_len > 0,
-                })) {
-                    .mark_attempted => item.poster_attempted = true,
-                    .latch_failed => item.poster_failed = true,
-                    .fetch => {
-                        poster.fetchAsync(item.poster_url[0..item.poster_url_len], &item.poster_pixels, &item.poster_w, &item.poster_h, &item.poster_fetching);
-                        if (item.poster_fetching) item.poster_attempted = true;
-                    },
-                    .none => {},
-                }
-                if (!item.poster_failed and item.poster_url_len > 0)
+                if (bw.data().visible() and url.len > 0 and !anime_images.failed(url))
                     components.coverSkeleton(@src(), idx + 150, 6)
                 else
                     dvui.icon(@src(), "", icons.tvg.lucide.film, .{}, .{
@@ -4660,4 +4729,124 @@ test "Browse regression anime superseding request is admitted while busy" {
     try std.testing.expect(state.app.anime.is_loading.load(.acquire));
     search_request.finish(next, &state.app.anime.is_loading);
     try std.testing.expect(!state.app.anime.is_loading.load(.acquire));
+}
+
+test "Anime provider trending does not wait for Jikan when AniList has cards" {
+    logs.logs_allocator = alloc;
+    defer logs.deinit();
+    const Fixture = struct {
+        var jikan_calls: usize = 0;
+        fn get(_: []const u8, _: []u8, _: u32) usize {
+            jikan_calls += 1;
+            return 0;
+        }
+        fn browse(_: u32, _: anilist_pure.BrowseKind, _: bool, out: []u8, _: ?bounded_process.CancelEpoch) usize {
+            const json = "{\"data\":{\"Page\":{\"pageInfo\":{\"hasNextPage\":true},\"media\":[{\"id\":1,\"idMal\":1,\"title\":{\"romaji\":\"Cowboy Bebop\"}}]}}}";
+            @memcpy(out[0..json.len], json);
+            return json.len;
+        }
+    };
+    Fixture.jikan_calls = 0;
+    const saved_count = state.app.anime.result_count;
+    const saved_first = state.app.anime.results[0];
+    const saved_cache = state.app.content_cache_enabled;
+    defer {
+        state.app.anime.result_count = saved_count;
+        state.app.anime.results[0] = saved_first;
+        state.app.content_cache_enabled = saved_cache;
+    }
+    state.app.anime.result_count = 0;
+    state.app.content_cache_enabled = false;
+    const gen = beginCatalogRequest();
+    var job = GridJob{ .generation = gen, .page = 1, .mode = .trending, .sfw = true, .trend = .airing };
+    job.url_len = 0;
+    trendingWithFetch(job, Fixture.get, Fixture.browse);
+    try std.testing.expectEqual(@as(usize, 0), Fixture.jikan_calls);
+    try std.testing.expectEqual(@as(usize, 1), state.app.anime.result_count);
+    try std.testing.expectEqualStrings("Cowboy Bebop", state.app.anime.results[0].name[0..state.app.anime.results[0].name_len]);
+    try std.testing.expect(more_available.load(.acquire));
+    try std.testing.expect(!state.app.anime.is_loading.load(.acquire));
+}
+
+test "Anime provider failed empty trending does not retry each frame" {
+    const a = &state.app.anime;
+    const saved_mode = a.mode;
+    const saved_fetched = fetched_mode;
+    const saved_count = a.result_count;
+    const saved_time = a.last_fetch_s;
+    defer {
+        a.mode = saved_mode;
+        fetched_mode = saved_fetched;
+        a.result_count = saved_count;
+        a.last_fetch_s = saved_time;
+    }
+    a.mode = .trending;
+    fetched_mode = .trending;
+    a.result_count = 0;
+    a.last_fetch_s = @import("browse_cache.zig").now();
+    a.is_loading.store(false, .release);
+    const generation = search_request.current();
+    dispatchModeFetch();
+    try std.testing.expectEqual(generation, search_request.current());
+    try std.testing.expect(!a.is_loading.load(.acquire));
+}
+
+pub fn setEpisodeNativeFixtureForTest() !void {
+    if (!@import("builtin").is_test) @compileError("test only");
+    const a = &state.app.anime;
+    a.selected_idx = 0;
+    a.episode_count = 0;
+    fillEpisodeSlots(24);
+    a.relation_count = 0;
+    a.relations_loading = false;
+    a.episodes_loading.store(false, .release);
+    @memset(&episode_thumbnail_lens, 0);
+    for (0..24) |i| {
+        const title = "A journey beyond the horizon — an unusually long episode title";
+        @memcpy(a.episode_titles[i][0..title.len], title);
+        a.episode_title_lens[i] = title.len;
+        @memcpy(a.episode_aired[i][0..10], "2026-10-01");
+        a.episode_aired_lens[i] = 10;
+        a.episode_scores[i] = 4.5;
+        a.episode_watched[i] = i < 2;
+        a.episode_filler[i] = i == 4;
+        if (i >= 6) continue;
+        const url = try std.fmt.bufPrint(&episode_thumbnails[i], "https://example.invalid/episode/{d}.jpg", .{i});
+        episode_thumbnail_lens[i] = url.len;
+        var rgba: [160 * 90 * 4]u8 = undefined;
+        for (0..160 * 90) |pixel| {
+            rgba[pixel * 4] = @intCast(35 + i * 25);
+            rgba[pixel * 4 + 1] = @intCast(50 + (pixel % 160));
+            rgba[pixel * 4 + 2] = @intCast(90 + (pixel / 160));
+            rgba[pixel * 4 + 3] = 255;
+        }
+        const tex = try dvui.Texture.fromImageSource(.{ .pixels = .{ .rgba = &rgba, .width = 160, .height = 90, .interpolation = .linear } });
+        @import("../ui/anime_images.zig").seedForTest(url, tex);
+    }
+}
+
+test "Anime provider artwork publishes by episode number and rejects stale shows" {
+    defer deinitEpisodeRequests();
+    const a = &state.app.anime;
+    const saved_selected = a.selected_idx;
+    const saved_count = a.episode_count;
+    defer {
+        a.selected_idx = saved_selected;
+        a.episode_count = saved_count;
+        @memset(&episode_thumbnail_lens, 0);
+    }
+    a.selected_idx = 0;
+    a.episode_count = 0;
+    const gen = episode_request.begin(&a.episodes_loading);
+    const job = EpisodeJob{ .idx = 0, .generation = gen, .mal = @splat(0), .mal_len = 0 };
+    const body = "{\"data\":{\"Media\":{\"episodes\":12,\"streamingEpisodes\":[{\"title\":\"Episode 8 - Eight\",\"thumbnail\":\"https://example.com/eight.jpg\"}]}}}";
+    try episode_documents.append(alloc, .{ .job = job, .bytes = try alloc.dupe(u8, body) });
+    applyPendingEpisodes();
+    try std.testing.expectEqualStrings("https://example.com/eight.jpg", episode_thumbnails[7][0..episode_thumbnail_lens[7]]);
+    try std.testing.expectEqualStrings("Eight", a.episode_titles[7][0..a.episode_title_lens[7]]);
+    @memset(&episode_thumbnail_lens, 0);
+    _ = episode_request.begin(&a.episodes_loading);
+    try episode_documents.append(alloc, .{ .job = job, .bytes = try alloc.dupe(u8, body) });
+    applyPendingEpisodes();
+    try std.testing.expectEqual(@as(usize, 0), episode_thumbnail_lens[7]);
 }

@@ -1,3 +1,4 @@
+const brands = @import("../ui/brands.zig");
 const std = @import("std");
 const dvui = @import("dvui");
 const icons = @import("icons");
@@ -114,6 +115,26 @@ pub var search_buf: [256]u8 = std.mem.zeroes([256]u8);
 // category with a name/kind search + installed-only toggle — see plugins_pure.
 var src_filter_buf: [64]u8 = std.mem.zeroes([64]u8);
 var src_installed_only: bool = false;
+var src_category: ?@import("plugins_pure.zig").Category = null;
+var source_fixture = false;
+var source_name_rects: [source_repo.MAX]dvui.Rect.Physical = undefined;
+var source_meta_rects: [source_repo.MAX]dvui.Rect.Physical = undefined;
+var source_rect_count: usize = 0;
+pub fn setSourceFixtureForTest(enabled: bool) void {
+    if (!@import("builtin").is_test) @compileError("test only");
+    source_fixture = enabled;
+    src_category = null;
+    src_installed_only = false;
+    @memset(&src_filter_buf, 0);
+}
+pub fn verifySourceLayoutForTest() !void {
+    if (!@import("builtin").is_test) @compileError("test only");
+    try std.testing.expect(source_rect_count > 0);
+    for (source_name_rects[0..source_rect_count], source_meta_rects[0..source_rect_count]) |name, meta| {
+        try std.testing.expect(name.h > 0 and meta.h > 0);
+        try std.testing.expect(name.y + name.h <= meta.y + 1);
+    }
+}
 var source_catalog: [source_repo.MAX]source_repo.Plugin = undefined;
 
 /// Atomically claim the loading slot. Returns true if the caller now owns
@@ -1198,6 +1219,8 @@ fn cardBegin(src: std.builtin.SourceLocation, id: usize) *dvui.BoxWidget {
         .background = true,
         .color_fill = theme.colors.bg_surface,
         .corner_radius = dvui.Rect.all(theme.radius.lg),
+        .border = dvui.Rect.all(1),
+        .color_border = theme.colors.border_subtle,
         .padding = dvui.Rect.all(theme.spacing.md),
         .margin = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
     });
@@ -1205,7 +1228,10 @@ fn cardBegin(src: std.builtin.SourceLocation, id: usize) *dvui.BoxWidget {
 }
 
 fn cardTitle(src: std.builtin.SourceLocation, text: []const u8, sub: []const u8) void {
-    _ = dvui.label(src, "{s}", .{text}, .{ .color_text = theme.colors.text_primary, .font = dvui.themeGet().font_heading });
+    var heading = dvui.box(src, .{ .dir = .horizontal }, .{ .expand = .horizontal });
+    if (brands.forName(text)) |brand| dvui.icon(@src(), text, brands.icon(brand), .{}, .{ .min_size_content = theme.iconSize(.lg), .color_text = theme.colors.text_primary, .gravity_y = 0.5, .margin = .{ .w = 8 } });
+    _ = dvui.label(@src(), "{s}", .{text}, .{ .color_text = theme.colors.text_primary, .font = dvui.themeGet().font_heading });
+    heading.deinit();
     if (sub.len > 0) {
         components.bodyText(@src(), sub, theme.colors.text_secondary);
     }
@@ -1215,18 +1241,11 @@ fn renderSourcePlugins() void {
     const Advanced = struct {
         var open = false;
     };
-    {
-        var tools = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .padding = dvui.Rect.all(theme.spacing.md) });
-        defer tools.deinit();
-        _ = dvui.label(@src(), "Sources", .{}, .{ .expand = .horizontal, .font = dvui.themeGet().font_heading, .color_text = theme.colors.text_primary });
-        if (components.actionButton(@src(), if (Advanced.open) "Hide advanced" else "Advanced…", .secondary, 9099)) Advanced.open = !Advanced.open;
-    }
-    if (Advanced.open) renderSignedRepositories();
     const pr = source_repo;
 
     // Auto-load on first view: show the bundled manifest instantly (offline, no
     // network) so the list is never empty, then kick a network refresh that
-    // overwrites it with the live repo list when reachable. On a failed refresh
+    // merges newer remote definitions when reachable. On a failed refresh
     // the bundled list stays (refreshWorker leaves plugin_count untouched on
     // error), so the page degrades gracefully with no connectivity.
     const Auto = struct {
@@ -1241,81 +1260,69 @@ fn renderSourcePlugins() void {
     const pp = @import("plugins_pure.zig");
     const source_count = pr.snapshotCopy(&source_catalog);
 
-    var card = cardBegin(@src(), 0);
+    var card = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .padding = dvui.Rect.all(10) });
     defer card.deinit();
-
-    const catalog_state = pr.status.load(.acquire);
-    if (catalog_state == .fetching) {
-        dvui.spinner(@src(), .{ .min_size_content = .{ .w = 16, .h = 16 }, .max_size_content = .{ .w = 16, .h = 16 } });
-        _ = dvui.label(@src(), "Refreshing source catalog…", .{}, .{ .color_text = theme.colors.text_secondary });
-    } else if (catalog_state == .err) {
-        components.bodyText(@src(), "Couldn't refresh sources. You can still install the sources listed below.", theme.colors.warning);
-        var recovery = dvui.flexbox(@src(), .{ .justify_content = .start }, .{ .expand = .horizontal });
-        if (components.actionButton(@src(), "Retry", .secondary, 9050)) _ = pr.refresh();
-        if (components.actionButton(@src(), "View details", .secondary, 9051)) state.navigateToTab(.Logs);
-        recovery.deinit();
+    var installed_flags: [pr.MAX]bool = @splat(false);
+    var installed_count: usize = 0;
+    for (source_catalog[0..source_count], 0..) |*plugin, i| {
+        installed_flags[i] = if (@import("builtin").is_test and source_fixture) i % 3 != 1 else pr.isInstalled(plugin.idSlice());
+        if (installed_flags[i]) installed_count += 1;
     }
-    components.bodyText(@src(), "Install a source to make its content available in Opal.", theme.colors.text_secondary);
+    if (@import("builtin").is_test) source_rect_count = 0;
+
     const operation = pr.installStatus();
-    if (operation.stage != .idle) {
-        const working = operation.stage == .fetching or operation.stage == .writing;
-        var status_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .padding = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = theme.spacing.sm } });
-        if (working) dvui.spinner(@src(), .{ .min_size_content = .{ .w = 18, .h = 18 }, .max_size_content = .{ .w = 18, .h = 18 } });
-        if (working) dvui.refresh(null, @src(), null);
-        const stage_text: []const u8 = switch (operation.stage) {
-            .fetching => "Downloading source",
-            .writing => "Setting up source",
-            .installed => "Installed",
-            .removed => "Removed",
-            .failed => "Installation failed. Try again or view details",
-            .idle => unreachable,
-        };
-        _ = dvui.label(@src(), "{s}: {s}", .{ operation.idSlice(), stage_text }, .{
-            .color_text = if (operation.stage == .failed) theme.colors.danger else if (working) theme.colors.text_secondary else theme.colors.accent,
-            .expand = .horizontal,
-            .gravity_y = 0.5,
-        });
-        status_row.deinit();
-        if (dvui.button(@src(), "View logs", .{}, .{ .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.text_primary, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 } })) {
-            state.navigateToTab(.Logs);
-        }
-    }
-
-    if (source_count == 0) {
-        if (components.iconButton(@src(), icons.tvg.lucide.@"refresh-cw", "Refresh sources", false)) _ = pr.apply(.refresh, "");
-        const fetching = pr.status.load(.acquire) == .fetching;
-        _ = dvui.label(@src(), "{s}", .{if (fetching) "Loading sources…" else "No sources available."}, .{ .color_text = theme.colors.text_tertiary, .margin = .{ .x = 0, .y = 6, .w = 0, .h = 0 } });
-        return;
-    }
-
-    // Filter row: name/kind search + an installed-only toggle. With 45+ sources
-    // a flat list is unusable, so we group + filter (see plugins_pure).
     {
-        var frow = dvui.flexbox(@src(), .{ .justify_content = .start }, .{ .expand = .horizontal, .padding = .{ .x = 0, .y = 2, .w = 0, .h = theme.spacing.sm } });
-        defer frow.deinit();
-        if (components.iconButton(@src(), icons.tvg.lucide.@"refresh-cw", "Refresh sources", false)) _ = pr.apply(.refresh, "");
-        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &src_filter_buf }, .placeholder = "Filter sources…" }, .{
-            .expand = .horizontal,
-            .min_size_content = .{ .w = 160, .h = 18 },
+        const filters = @import("../ui/browse_filters.zig");
+        var toolbar = filters.begin(@src());
+        defer toolbar.deinit();
+        @import("../ui/shell.zig").pluginTabControls();
+        var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &src_filter_buf }, .placeholder = "Find a source…" }, .{
+            .min_size_content = .{ .w = 155, .h = 18 },
+            .max_size_content = .{ .w = 155, .h = std.math.floatMax(f32) },
+            .padding = dvui.Rect.all(4),
+            .font = dvui.themeGet().font_body.withSize(13),
             .color_fill = theme.colors.bg_elevated,
-            .color_border = theme.colors.border_subtle,
             .color_text = theme.colors.text_primary,
-            .border = dvui.Rect.all(1),
             .corner_radius = theme.dims.rad_sm,
             .gravity_y = 0.5,
         });
         te.deinit();
-        if (dvui.button(@src(), "Installed only", .{}, .{
-            .color_fill = if (src_installed_only) theme.colors.accent else theme.colors.bg_elevated,
-            .color_text = if (src_installed_only) theme.colors.text_on_accent else theme.colors.text_secondary,
-            .corner_radius = theme.dims.rad_sm,
-            .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
-            .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
-            .gravity_y = 0.5,
-        })) {
-            src_installed_only = !src_installed_only;
+        var installed_buf: [48]u8 = undefined;
+        if (filters.item(@src(), .{ .id = 9055, .label = std.fmt.bufPrint(&installed_buf, "Installed ({d})", .{installed_count}) catch "Installed", .icon = icons.tvg.lucide.@"circle-check", .presentation = .icon, .active = src_installed_only })) src_installed_only = !src_installed_only;
+        if (filters.item(@src(), .{ .id = 83000, .label = "All", .presentation = .label, .active = src_category == null })) src_category = null;
+        for (pp.ordered_categories) |category| {
+            var present = false;
+            for (source_catalog[0..source_count]) |*plugin| if (pp.categoryOf(plugin.kindSlice()) == category) {
+                present = true;
+                break;
+            };
+            const glyph = switch (category) {
+                .torrent => icons.tvg.lucide.magnet,
+                .stremio => icons.tvg.lucide.play,
+                .anime => icons.tvg.lucide.tv,
+                .comics => icons.tvg.lucide.@"book-open",
+                .metadata => icons.tvg.lucide.database,
+                .other => icons.tvg.lucide.puzzle,
+            };
+            if (present and filters.item(@src(), .{ .id = 83001 + @as(usize, @intFromEnum(category)), .label = category.label(), .icon = glyph, .active = src_category == category })) src_category = category;
         }
+        const catalog_state = pr.status.load(.acquire);
+        if (catalog_state == .fetching) dvui.spinner(@src(), .{ .min_size_content = theme.iconSize(.sm), .gravity_y = 0.5 });
+        if (components.iconButton(@src(), icons.tvg.lucide.@"refresh-cw", if (catalog_state == .err) "Refresh failed · saved catalog shown · retry" else "Refresh catalog", false)) _ = pr.refresh();
+        if (catalog_state == .err and components.iconButton(@src(), icons.tvg.lucide.@"circle-alert", "Refresh failed · view logs", false)) state.navigateToTab(.Logs);
+        if (operation.stage != .idle) {
+            var status_buf: [180]u8 = undefined;
+            const message = std.fmt.bufPrint(&status_buf, "{s}: {s} · view logs", .{ operation.idSlice(), @tagName(operation.stage) }) catch "Source operation · view logs";
+            if (components.iconButton(@src(), if (operation.stage == .failed) icons.tvg.lucide.@"circle-alert" else icons.tvg.lucide.@"circle-check", message, operation.stage == .installed)) state.navigateToTab(.Logs);
+        }
+        if (components.iconButton(@src(), icons.tvg.lucide.settings, "Advanced repositories", Advanced.open)) Advanced.open = !Advanced.open;
     }
+    if (source_count == 0) {
+        dvui.labelNoFmt(@src(), "No sources available", .{}, .{ .color_text = theme.colors.text_tertiary });
+        return;
+    }
+
+    if (Advanced.open) renderSignedRepositories();
 
     const query = std.mem.sliceTo(&src_filter_buf, 0);
 
@@ -1326,11 +1333,12 @@ fn renderSourcePlugins() void {
     defer list.deinit();
     var shown_total: usize = 0;
     for (pp.ordered_categories) |cat| {
+        if (src_category != null and src_category.? != cat) continue;
         // First pass: count matches in this category so we can skip empty groups.
         var cat_matches: usize = 0;
-        for (source_catalog[0..source_count]) |*p| {
+        for (source_catalog[0..source_count], 0..) |*p, i| {
             if (pp.categoryOf(p.kindSlice()) != cat) continue;
-            if (pp.matches(p.nameSlice(), p.kindSlice(), query, src_installed_only, pr.isInstalled(p.idSlice()))) cat_matches += 1;
+            if (pp.matches(p.nameSlice(), p.kindSlice(), query, src_installed_only, installed_flags[i])) cat_matches += 1;
         }
         if (cat_matches == 0) continue;
 
@@ -1338,37 +1346,68 @@ fn renderSourcePlugins() void {
         _ = dvui.label(@src(), "{s}  ({d})", .{ cat.label(), cat_matches }, .{
             .id_extra = @as(usize, @intFromEnum(cat)) + 82000,
             .color_text = theme.colors.text_secondary,
-            .font = dvui.themeGet().font_heading,
-            .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 2 },
+            .font = dvui.themeGet().font_body.withSize(12),
+            .margin = .{ .x = 4, .y = 8, .w = 0, .h = 4 },
         });
 
+        var grid = dvui.flexbox(@src(), .{ .justify_content = .start }, .{ .id_extra = @intFromEnum(cat), .expand = .horizontal });
+        defer grid.deinit();
+        const width = @max(240, grid.data().contentRect().w);
+        const columns = @max(1, @min(3, @floor(width / 300)));
+        const card_width = @max(210, width / columns - 30);
         for (source_catalog[0..source_count], 0..) |*p, i| {
             if (pp.categoryOf(p.kindSlice()) != cat) continue;
-            const installed = pr.isInstalled(p.idSlice());
+            const installed = installed_flags[i];
             if (!pp.matches(p.nameSlice(), p.kindSlice(), query, src_installed_only, installed)) continue;
-
-            var rowb = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i + 81000, .expand = .horizontal, .padding = .{ .x = theme.spacing.sm, .y = 4, .w = 0, .h = 4 } });
+            var rowb = dvui.box(@src(), .{ .dir = .horizontal }, .{
+                .id_extra = i + 81000,
+                .min_size_content = .{ .w = card_width, .h = 48 },
+                .max_size_content = .{ .w = card_width, .h = std.math.floatMax(f32) },
+                .padding = dvui.Rect.all(10),
+                .margin = dvui.Rect.all(4),
+                .background = true,
+                .color_fill = theme.colors.bg_surface,
+                .border = dvui.Rect.all(1),
+                .color_border = if (installed) theme.colors.accent.opacity(0.25) else theme.colors.border_subtle,
+                .corner_radius = theme.dims.rad_md,
+            });
             defer rowb.deinit();
-            _ = dvui.label(@src(), "{s}", .{p.nameSlice()}, .{ .id_extra = i + 81100, .color_text = theme.colors.text_primary, .gravity_y = 0.5 });
-            if (installed) {
-                const health = @import("source_request.zig").snapshot(p.idSlice());
-                const label = switch (health.state) {
-                    .unchecked => "Not checked yet",
-                    .fetching => "Checking",
-                    .unavailable => "Unavailable",
-                    .cancelled => "Search cancelled",
-                    .available => if (health.cached) "Ready (cached)" else if (health.fallback) "Ready (backup)" else "Ready",
-                };
-                _ = dvui.labelNoFmt(@src(), label, .{}, .{ .id_extra = i + 81200, .color_text = if (health.state == .unavailable) theme.colors.text_secondary else theme.colors.text_tertiary, .gravity_y = 0.5, .font = dvui.themeGet().font_body.withSize(11), .margin = .{ .x = theme.spacing.sm } });
+            const glyph = switch (cat) {
+                .torrent => icons.tvg.lucide.magnet,
+                .stremio => icons.tvg.lucide.play,
+                .anime => icons.tvg.lucide.tv,
+                .comics => icons.tvg.lucide.@"book-open",
+                .metadata => icons.tvg.lucide.database,
+                .other => icons.tvg.lucide.puzzle,
+            };
+            dvui.icon(@src(), "", if (brands.forName(p.nameSlice())) |brand| brands.icon(brand) else glyph, .{}, .{ .min_size_content = theme.iconSize(.sm), .color_text = if (installed) theme.colors.accent else theme.colors.text_secondary, .gravity_y = 0.5, .margin = .{ .w = 10 } });
+            var identity = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .gravity_y = 0.5, .max_size_content = .{ .w = card_width - 100, .h = std.math.floatMax(f32) } });
+            var name_wd: dvui.WidgetData = undefined;
+            dvui.labelNoFmt(@src(), p.nameSlice(), .{}, .{ .data_out = &name_wd, .color_text = theme.colors.text_primary, .padding = dvui.Rect.all(0), .expand = .horizontal });
+            const health = @import("source_request.zig").snapshot(p.idSlice());
+            const status_label = if (!installed) "Available" else switch (health.state) {
+                .unchecked => "Installed",
+                .fetching => "Checking…",
+                .unavailable => "Unavailable",
+                .cancelled => "Search cancelled",
+                .available => if (health.cached) "Ready · cached" else if (health.fallback) "Ready · backup" else "Ready",
+            };
+            var meta_buf: [96]u8 = undefined;
+            const meta = if (p.version_len > 0) std.fmt.bufPrint(&meta_buf, "{s} · v{s}", .{ status_label, p.version[0..p.version_len] }) catch status_label else status_label;
+            var meta_wd: dvui.WidgetData = undefined;
+            dvui.labelNoFmt(@src(), meta, .{}, .{ .data_out = &meta_wd, .color_text = if (installed and health.state == .unavailable) theme.colors.warning else theme.colors.text_tertiary, .padding = .{ .y = 5 }, .font = dvui.themeGet().font_body.withSize(11), .expand = .horizontal });
+            if (@import("builtin").is_test and source_rect_count < source_name_rects.len) {
+                source_name_rects[source_rect_count] = name_wd.borderRectScale().r;
+                source_meta_rects[source_rect_count] = meta_wd.borderRectScale().r;
+                source_rect_count += 1;
             }
-            {
-                var sp = dvui.box(@src(), .{}, .{ .id_extra = i + 81300, .expand = .horizontal });
-                sp.deinit();
-            }
+            identity.deinit();
             if (!(operation.stage == .fetching or operation.stage == .writing)) {
-                if (dvui.button(@src(), if (installed) "Uninstall" else "Install", .{}, .{ .id_extra = i + 81400, .color_fill = if (installed) theme.colors.bg_elevated else theme.colors.accent, .color_text = if (installed) theme.colors.text_secondary else theme.colors.text_on_accent, .corner_radius = theme.dims.rad_sm, .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 }, .gravity_y = 0.5 })) {
-                    _ = pr.apply(if (installed) .uninstall else .install, p.idSlice());
-                }
+                const clicked = if (installed)
+                    components.iconButton(@src(), icons.tvg.lucide.@"trash-2", "Uninstall source", false)
+                else
+                    components.actionButton(@src(), "Install", .secondary, i + 81400);
+                if (clicked) _ = pr.apply(if (installed) .uninstall else .install, p.idSlice());
             }
             shown_total += 1;
         }

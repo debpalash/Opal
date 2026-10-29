@@ -178,3 +178,67 @@ test "SubsPlease release selection matches exact series and episode" {
     try std.testing.expectEqualStrings("magnet:?xt=urn:btih:right", subsPleaseRelease(doc.value, "Example", "", 2).?);
     try std.testing.expect(subsPleaseRelease(doc.value, "Example", "", 1) == null);
 }
+
+pub const StreamingEpisode = struct { number: usize, title: []const u8, thumbnail: []const u8 };
+pub fn streamingEpisodes(root: std.json.Value) []const std.json.Value {
+    const rows = field(field(field(root, "data"), "Media"), "streamingEpisodes");
+    return if (rows == .array) rows.array.items else &.{};
+}
+/// Use explicit episode numbering; array order varies between providers.
+pub fn streamingEpisode(value: std.json.Value) ?StreamingEpisode {
+    const title = string(field(value, "title"));
+    const prefix = "Episode ";
+    if (!std.mem.startsWith(u8, title, prefix)) return null;
+    var end = prefix.len;
+    while (end < title.len and std.ascii.isDigit(title[end])) : (end += 1) {}
+    if (end == prefix.len or (end < title.len and title[end] != ' ' and title[end] != '-')) return null;
+    const n = std.fmt.parseInt(usize, title[prefix.len..end], 10) catch return null;
+    if (n == 0 or n > capacity) return null;
+    const url = string(field(value, "thumbnail"));
+    if (!std.mem.startsWith(u8, url, "https://") or url.len > 1024 or std.mem.indexOfAny(u8, url, " \r\n\t") != null) return null;
+    return .{ .number = n, .title = std.mem.trim(u8, title[end..], " -"), .thumbnail = url };
+}
+test "streaming artwork uses explicit episode numbers and rejects ambiguous previews" {
+    const parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator,
+        \\{"data":{"Media":{"streamingEpisodes":[{"title":"Episode 12 - A new beginning","thumbnail":"https://example.com/12.jpg"},{"title":"Trailer 1","thumbnail":"https://example.com/trailer.jpg"},{"title":"Episode 1.5 - Special","thumbnail":"https://example.com/special.jpg"},{"title":"Episode 3 - Three","thumbnail":"javascript:bad"}]}}}
+    , .{});
+    defer parsed.deinit();
+    const rows = streamingEpisodes(parsed.value);
+    const ep = streamingEpisode(rows[0]).?;
+    try std.testing.expectEqual(@as(usize, 12), ep.number);
+    try std.testing.expectEqualStrings("A new beginning", ep.title);
+    for (rows[1..]) |row| try std.testing.expect(streamingEpisode(row) == null);
+}
+
+pub const IndexedEpisode = struct { number: usize, title: []const u8, image: []const u8, aired: []const u8, score: f32 };
+pub fn indexedEpisode(key: []const u8, value: std.json.Value) ?IndexedEpisode {
+    const n = std.fmt.parseInt(usize, key, 10) catch return null;
+    if (n == 0 or n > capacity) return null;
+    const titles = field(value, "title");
+    var title = string(field(titles, "en"));
+    if (title.len == 0) title = string(field(titles, "x-jat"));
+    if (title.len == 0) title = string(field(titles, "ja"));
+    const image = string(field(value, "image"));
+    const safe_image = if (std.mem.startsWith(u8, image, "https://") and image.len <= 1024 and std.mem.indexOfAny(u8, image, "\r\n \t") == null) image else "";
+    const date = string(field(value, "airDate"));
+    const rating = field(value, "rating");
+    const score: f32 = switch (rating) {
+        .float => @floatCast(rating.float),
+        .integer => @floatFromInt(rating.integer),
+        .string => std.fmt.parseFloat(f32, rating.string) catch 0,
+        else => 0,
+    };
+    return .{ .number = n, .title = title, .image = safe_image, .aired = date[0..@min(date.len, 10)], .score = if (std.math.isFinite(score)) std.math.clamp(score, 0, 10) else 0 };
+}
+test "Anime provider index keeps regular episode identity and validates artwork" {
+    const doc = try std.json.parseFromSlice(std.json.Value, std.testing.allocator,
+        \\{"title":{"en":"Asteroid Blues"},"image":"https://art.test/1.jpg","airDate":"1998-04-03","rating":"8.4"}
+    , .{});
+    defer doc.deinit();
+    const ep = indexedEpisode("1", doc.value).?;
+    try std.testing.expectEqualStrings("Asteroid Blues", ep.title);
+    try std.testing.expectEqual(@as(usize, 1), ep.number);
+    try std.testing.expect(indexedEpisode("S1", doc.value) == null);
+    try std.testing.expect(indexedEpisode("1.5", doc.value) == null);
+    try std.testing.expect(indexedEpisode("5000", doc.value) == null);
+}

@@ -344,6 +344,7 @@ pub const Song = struct {
 /// `cover` (a full image URL). The active source (state.app.music.source) picks
 /// how each field is used.
 pub const MusicSong = struct {
+    provider: u8 = 255,
     attribution: [768]u8 = @splat(0),
     attribution_len: usize = 0,
     download_allowed: bool = true,
@@ -546,4 +547,25 @@ test "public audio Browse retains attribution and never truncates a stream" {
     try std.testing.expectEqualStrings("CC BY artist", song.attribution[0..song.attribution_len]);
     row.play_url_len = 300;
     try std.testing.expect(publicAudioSong(row) == null);
+}
+
+/// Conservative cross-provider dedupe: keep remix/live/version labels intact.
+pub fn sameRecording(a: *const MusicSong, b: *const MusicSong) bool {
+    if (a.title_len == 0 or b.title_len == 0 or a.artist_len == 0 or b.artist_len == 0) return false;
+    return std.ascii.eqlIgnoreCase(std.mem.trim(u8, a.title[0..a.title_len], " "), std.mem.trim(u8, b.title[0..b.title_len], " ")) and
+        std.ascii.eqlIgnoreCase(std.mem.trim(u8, a.artist[0..a.artist_len], " "), std.mem.trim(u8, b.artist[0..b.artist_len], " "));
+}
+
+test "merged music dedupes recordings without conflating artists or live versions" {
+    var a: MusicSong = .{};
+    copyValueText(&a.title, &a.title_len, "Song");
+    copyValueText(&a.artist, &a.artist_len, "Artist");
+    var b = a;
+    copyValueText(&b.title, &b.title_len, " song ");
+    try std.testing.expect(sameRecording(&a, &b));
+    copyValueText(&b.title, &b.title_len, "Song (Live)");
+    try std.testing.expect(!sameRecording(&a, &b));
+    b = a;
+    copyValueText(&b.artist, &b.artist_len, "Other Artist");
+    try std.testing.expect(!sameRecording(&a, &b));
 }

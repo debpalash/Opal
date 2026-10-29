@@ -149,7 +149,11 @@ pub fn closeEpisodes() void {
     publication_gen +%= 1;
 }
 
+const countries = @import("countries_pure.zig");
+pub var country_index: std.atomic.Value(usize) = .init(0);
+
 const SearchJob = struct {
+    country: usize = 0,
     generation: u32,
     query: [256]u8,
     query_len: usize,
@@ -199,6 +203,7 @@ fn deserializePodcast(r: *ccp.Reader) ?pure.Podcast {
 /// SWR write — persist the fresh Popular chart. Called from popularWorker while
 /// Serializes a short owned snapshot under parse_mutex; writes disk after unlock.
 fn putPopularCache(generation: u32) void {
+    if (country_index.load(.acquire) != 0) return;
     if (!state.app.content_cache_enabled) return;
     const buffer = alloc.alloc(u8, PODCASTS_BLOB_CAP) catch return;
     defer alloc.free(buffer);
@@ -219,6 +224,7 @@ fn putPopularCache(generation: u32) void {
 /// start. Popular worker only (from popularWorker), and ONLY when results[] is
 /// empty. results[] is a fixed array, so no capacity reservation is needed.
 fn seedPopularFromCache(generation: u32) void {
+    if (country_index.load(.acquire) != 0) return;
     if (!state.app.content_cache_enabled) return;
     const buf = alloc.alloc(u8, PODCASTS_BLOB_CAP) catch return;
     defer alloc.free(buf);
@@ -292,7 +298,7 @@ pub fn loadPopularOnce() void {
     const my_gen = search_request.begin(&state.app.podcasts.is_loading);
     parse_mutex.unlock();
 
-    workers.spawn(popularWorker, .{my_gen}) catch {
+    workers.spawn(popularWorker, .{SearchJob{ .generation = my_gen, .query = undefined, .query_len = 0, .country = country_index.load(.acquire) }}) catch {
         search_request.finish(my_gen, &state.app.podcasts.is_loading);
     };
 }
@@ -311,9 +317,9 @@ fn publishShows(generation: u32, rows: []const pure.Podcast, failed: bool) void 
     state.wakeUi();
 }
 
-fn popularWorker(my_gen: u32) void {
-    seedPopularFromCache(my_gen);
-    startDirectoryGroup(.{ .generation = my_gen, .query = undefined, .query_len = 0 });
+fn popularWorker(job: SearchJob) void {
+    if (job.country == 0) seedPopularFromCache(job.generation);
+    startDirectoryGroup(job);
 }
 
 const DirectoryGroup = struct {
@@ -387,8 +393,11 @@ fn directoryPartWorker(group: *DirectoryGroup, directory: usize) void {
     const rows = alloc.alloc(pure.Podcast, 50) catch return;
     defer alloc.free(rows);
     const query = group.job.query[0..group.job.query_len];
+    if (directory == 0 and group.job.country != 0) return;
+    const region = countries.at(group.job.country).code;
+    const market = if (region.len == 0) "US" else region;
     if (directory == 1 and query.len == 0) {
-        const count = fetchApplePopular(rows, group.job.generation);
+        const count = fetchApplePopular(rows, group.job.generation, market);
         publishDirectoryPart(group, rows[0..count], count > 0);
         return;
     }
@@ -398,7 +407,7 @@ fn directoryPartWorker(group: *DirectoryGroup, directory: usize) void {
     const url = if (directory == 0)
         (if (query.len == 0) "https://gpodder.net/toplist/30.json" else std.fmt.bufPrint(&url_buf, "https://gpodder.net/search.json?q={s}", .{encoded}) catch return)
     else
-        std.fmt.bufPrint(&url_buf, "https://itunes.apple.com/search?media=podcast&limit=40&term={s}", .{encoded}) catch return;
+        std.fmt.bufPrint(&url_buf, "https://itunes.apple.com/search?media=podcast&limit=40&term={s}&country={s}", .{ encoded, market }) catch return;
     const body = fetchSearchBody(url, 512 * 1024, group.job.generation) orelse return;
     defer alloc.free(body);
     if (directory == 0) {
@@ -414,10 +423,15 @@ fn feedLaneWorker(group: *DirectoryGroup) void {
         const index = group.next_feed.fetchAdd(1, .acq_rel);
         if (index >= group.feed_count) return;
         const feed = group.feeds[index];
+        if (group.job.country != 0) {
+            var country_buf: [8]u8 = undefined;
+            const country = @import("../core/source_config.zig").copyValue(feed.id[0..feed.id_len], "country", &country_buf) orelse continue;
+            if (!std.ascii.eqlIgnoreCase(country, countries.at(group.job.country).code)) continue;
+        }
         const url = feed.value[0..feed.value_len];
         if (!pure.isFeedUrl(url)) continue;
         trace("feed {d} fetch start generation={d}", .{ index, group.job.generation });
-        const body = fetchSearchBody(url, 3 * 1024 * 1024, group.job.generation) orelse {
+        const body = fetchPodcastFeed(url, group.job.generation, &search_request) orelse {
             trace("feed {d} fetch failed generation={d}", .{ index, group.job.generation });
             continue;
         };
@@ -437,9 +451,9 @@ fn feedLaneWorker(group: *DirectoryGroup) void {
     }
 }
 
-fn fetchApplePopular(rows: []pure.Podcast, generation: u32) usize {
+fn fetchApplePopular(rows: []pure.Podcast, generation: u32, country: []const u8) usize {
     var chart_url_buf: [128]u8 = undefined;
-    const chart = fetchSearchBody(pure.buildTopChartUrl(POPULAR_LIMIT, &chart_url_buf), 128 * 1024, generation) orelse return 0;
+    const chart = fetchSearchBody(pure.buildCountryChartUrl(POPULAR_LIMIT, country, &chart_url_buf), 128 * 1024, generation) orelse return 0;
     defer alloc.free(chart);
     var ids_buf: [512]u8 = undefined;
     const ids = pure.parseTopChartIds(chart, &ids_buf);
@@ -456,19 +470,18 @@ fn fetchApplePopular(rows: []pure.Podcast, generation: u32) usize {
 
 pub fn searchPodcasts(query: []const u8) void {
     if (@import("builtin").is_test and loading_fixture_for_test) return;
-    if (query.len == 0) return;
 
     closeEpisodes();
     parse_mutex.lock();
     state.app.podcasts.fetch_error = false;
-    state.app.podcasts.showing_popular = false;
+    state.app.podcasts.showing_popular = query.len == 0;
     // A search satisfies the "page opens with content" job — never let the
     // one-shot chart fetch land on top of the user's results afterwards.
     popular_fetched.store(true, .release);
 
     const my_gen = search_request.begin(&state.app.podcasts.is_loading);
     parse_mutex.unlock();
-    var job: SearchJob = .{ .generation = my_gen, .query = undefined, .query_len = @min(query.len, 256) };
+    var job: SearchJob = .{ .generation = my_gen, .query = undefined, .query_len = @min(query.len, 256), .country = country_index.load(.acquire) };
     @memcpy(job.query[0..job.query_len], query[0..job.query_len]);
 
     workers.spawn(searchWorker, .{job}) catch {
@@ -481,7 +494,7 @@ fn searchWorker(job: SearchJob) void {
     const query = job.query[0..job.query_len];
     if (pure.isFeedUrl(query)) {
         defer search_request.finish(job.generation, &state.app.podcasts.is_loading);
-        const body = fetchSearchBody(query, PODCAST_FEED_CAP, job.generation) orelse {
+        const body = fetchPodcastFeed(query, job.generation, &search_request) orelse {
             publishShows(job.generation, &.{}, true);
             return;
         };
@@ -507,7 +520,7 @@ fn parseItunesBody(body: []const u8, out: []pure.Podcast) ?usize {
 }
 
 const PODCAST_EPISODE_CACHE_TTL_S: i64 = 6 * 60 * 60;
-const PODCAST_FEED_CAP: usize = 4 * 1024 * 1024;
+const PODCAST_FEED_CAP: usize = 8 * 1024 * 1024;
 
 const EpisodeJob = struct {
     generation: u32,
@@ -635,7 +648,7 @@ fn episodeWorker(job: EpisodeJob) void {
 
     var attempt: u8 = 0;
     while (attempt < 3) : (attempt += 1) {
-        const body = fetchBody(url, PODCAST_FEED_CAP) orelse {
+        const body = fetchPodcastFeed(url, job.generation, &episode_request) orelse {
             if (attempt < 2) io.sleep((250 + @as(u64, attempt) * 500) * std.time.ns_per_ms);
             continue;
         };
@@ -902,6 +915,47 @@ fn fetchSearchBody(url: []const u8, cap: usize, generation: u32) ?[]u8 {
     };
 }
 
+fn fetchPodcastFeed(url: []const u8, generation: u32, gate: *const LatestRequest) ?[]u8 {
+    if (!gate.isCurrent(generation)) return null;
+    const yp = @import("podcasts_youtube_pure.zig");
+    if (yp.channelId(url)) |id| {
+        const yt = @import("youtube_innertube_pure.zig");
+        var request_buf: [1024]u8 = undefined;
+        const request = yt.buildChannelBrowseBody(id, &request_buf) orelse return null;
+        const response = alloc.alloc(u8, 3 * 1024 * 1024) catch return null;
+        defer alloc.free(response);
+        if (reliable_fetch.fetch(yt.BROWSE_URL, response, .{
+            .post_body = request,
+            .headers = &.{.{ .name = "Content-Type", .value = "application/json" }},
+            .impersonate = false,
+            .timeout_secs = 8,
+            .cancel_epoch = .{ .epoch32 = .{ .value = &gate.generation, .expected = generation } },
+        })) |json| {
+            const output = alloc.alloc(u8, 128 * 1024) catch return null;
+            if (yp.channelFeed(alloc, json, id, output)) |xml| {
+                if (!gate.isCurrent(generation)) {
+                    alloc.free(output);
+                    return null;
+                }
+                return alloc.realloc(output, xml.len) catch {
+                    alloc.free(output);
+                    return null;
+                };
+            }
+            alloc.free(output);
+        }
+    }
+    const buffer = alloc.alloc(u8, PODCAST_FEED_CAP) catch return null;
+    const body = reliable_fetch.fetch(url, buffer, .{ .user_agent = agent, .timeout_secs = 8, .cancel_epoch = .{ .epoch32 = .{ .value = &gate.generation, .expected = generation } } }) orelse {
+        alloc.free(buffer);
+        return null;
+    };
+    return alloc.realloc(buffer, body.len) catch {
+        alloc.free(buffer);
+        return null;
+    };
+}
+
 fn fetchBody(url: []const u8, cap: usize) ?[]u8 {
     const buf = alloc.alloc(u8, cap) catch return null;
     const body = reliable_fetch.fetch(url, buf, .{
@@ -919,3 +973,11 @@ fn fetchBody(url: []const u8, cap: usize) ?[]u8 {
 }
 
 // Desktop presentation lives in ui/podcasts_ui.zig.
+
+pub fn selectCountry(index: usize) void {
+    country_index.store(if (index < countries.all.len) index else 0, .release);
+    parse_mutex.lock();
+    state.app.podcasts.result_count = 0;
+    parse_mutex.unlock();
+    searchPodcasts(std.mem.sliceTo(&state.app.podcasts.search_buf, 0));
+}

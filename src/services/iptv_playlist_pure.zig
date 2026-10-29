@@ -48,6 +48,8 @@ pub fn parseM3u(text: []const u8, out: []p.IptvChannel, nsfw_allowed: bool, quer
     var pending_logo_len: usize = 0;
     var pending_cat: [48]u8 = undefined;
     var pending_cat_len: usize = 0;
+    var pending_country: [64]u8 = undefined;
+    var pending_country_len: usize = 0;
     var have_inf = false;
 
     var lines = std.mem.splitScalar(u8, text, '\n');
@@ -62,6 +64,7 @@ pub fn parseM3u(text: []const u8, out: []p.IptvChannel, nsfw_allowed: bool, quer
             @memcpy(pending_name[0..pending_name_len], nm[0..pending_name_len]);
             pending_logo_len = attr(line, "tvg-logo", &pending_logo);
             pending_cat_len = attr(line, "group-title", &pending_cat);
+            pending_country_len = attr(line, "tvg-country", &pending_country);
             have_inf = true;
             continue;
         }
@@ -81,6 +84,10 @@ pub fn parseM3u(text: []const u8, out: []p.IptvChannel, nsfw_allowed: bool, quer
         @memcpy(c.logo[0..c.logo_len], pending_logo[0..c.logo_len]);
         c.category_len = @min(pending_cat_len, c.category.len);
         @memcpy(c.category[0..c.category_len], pending_cat[0..c.category_len]);
+
+        const country = playlistCountry(pending_country[0..pending_country_len], pending_cat[0..pending_cat_len]);
+        @memcpy(c.country[0..country.len], country);
+        c.country_len = country.len;
 
         const filters = p.Filters{
             .query = query,
@@ -136,4 +143,24 @@ test "parseM3u regression: garbage never panics" {
     try std.testing.expectEqual(@as(usize, 0), parseM3u("", &out, false, "", ""));
     try std.testing.expectEqual(@as(usize, 0), parseM3u("#EXTINF:-1,Name\n", &out, false, "", "")); // no url
     _ = parseM3u("#EXTINF\nhttp://a\n#EXTINF:-1,", &out, false, "", "");
+}
+
+fn playlistCountry(explicit: []const u8, group: []const u8) []const u8 {
+    const countries = @import("countries_pure.zig");
+    for ([_][]const u8{ explicit, group }) |raw| {
+        const text = std.mem.trim(u8, raw, " ");
+        if (std.ascii.eqlIgnoreCase(text, "UK")) return "GB";
+        for (countries.all[1..]) |country| {
+            if (std.ascii.eqlIgnoreCase(text, country.code) or std.ascii.eqlIgnoreCase(text, country.name)) return country.code;
+        }
+    }
+    return "";
+}
+test "playlist catalog preserves explicit countries and geographic group names" {
+    var rows: [3]p.IptvChannel = undefined;
+    const n = parseM3u("#EXTM3U\n#EXTINF:-1 tvg-country=\"IN\" group-title=\"News\",India news\nhttps://tv.test/in.m3u8\n#EXTINF:-1 group-title=\"United Kingdom\",British news\nhttps://tv.test/uk.m3u8\n", &rows, false, "", "");
+    try std.testing.expectEqual(@as(usize, 2), n);
+    try std.testing.expectEqualStrings("IN", rows[0].country[0..rows[0].country_len]);
+    try std.testing.expectEqualStrings("GB", rows[1].country[0..rows[1].country_len]);
+    try std.testing.expectEqualStrings("", playlistCountry("", "News"));
 }

@@ -15,7 +15,7 @@ pub const Item = struct {
     visible: bool = true,
     enabled: bool = true,
     /// Sources sharing a glyph should use labels; distinct categories use icons.
-    presentation: enum { icon, label, adaptive } = .icon,
+    presentation: enum { icon, label, icon_label, adaptive } = .icon,
 };
 pub const Menu = struct {
     items: []const Item,
@@ -97,12 +97,32 @@ pub fn item(src: std.builtin.SourceLocation, config: Item) bool {
         components.tipId(src, wd, config.label, config.id);
         return false;
     }
-    const clicked = if (config.icon != null and config.presentation != .label)
+    const clicked = if (config.icon != null and config.presentation == .icon_label)
+        iconLabelButton(src, config.label, config.icon.?, opts)
+    else if (config.icon != null and config.presentation != .label)
         dvui.buttonIcon(src, config.label, config.icon.?, .{}, .{}, opts)
     else
         dvui.button(src, config.label, .{}, opts);
     recordNative(config, wd);
     components.tipId(src, wd, config.label, config.id);
+    return clicked;
+}
+
+fn iconLabelButton(src: std.builtin.SourceLocation, label: []const u8, glyph: []const u8, opts: dvui.Options) bool {
+    var button: dvui.ButtonWidget = undefined;
+    button.init(src, .{}, opts.override(.{ .label = .{ .text = label } }));
+    button.processEvents();
+    button.drawBackground();
+    {
+        var row = dvui.box(@src(), .{ .dir = .horizontal }, .{});
+        defer row.deinit();
+        const style = opts.strip().override(button.style());
+        dvui.icon(@src(), label, glyph, .{}, style.override(.{ .min_size_content = theme.iconSize(.sm), .margin = .{ .w = 6 }, .gravity_y = 0.5, .color_text = opts.color_text, .role = .none }));
+        dvui.labelNoFmt(@src(), label, .{}, style.override(.{ .padding = dvui.Rect.all(0), .gravity_y = 0.5, .color_text = opts.color_text, .role = .none }));
+    }
+    const clicked = button.clicked();
+    button.drawFocus();
+    button.deinit();
     return clicked;
 }
 

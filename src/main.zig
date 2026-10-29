@@ -10,6 +10,8 @@ test "Anime playback module" {
     _ = @import("services/anime.zig");
 }
 test "Browse regression modules" {
+    _ = @import("services/wallpapers.zig");
+    _ = @import("services/youtube.zig");
     _ = @import("services/comics.zig");
     _ = @import("core/latest_request.zig");
     _ = @import("services/tmdb_api.zig");
@@ -945,6 +947,9 @@ pub fn appDeinit() void {
     @import("services/tmdb_store.zig").deinitIdSets();
     @import("services/anime.zig").deinitEpisodeRequests();
     @import("services/episode_art.zig").deinit();
+    @import("services/wallpapers.zig").deinit();
+    @import("ui/wallpaper_image.zig").deinit();
+    @import("ui/anime_images.zig").deinit();
     @import("services/tv_library.zig").deinitPosters();
     state.app.tmdb.results.deinit(@import("core/alloc.zig").allocator);
     state.app.tmdb.pending_results.deinit(@import("core/alloc.zig").allocator);
@@ -1678,6 +1683,7 @@ fn appFrame() !dvui.App.Result {
         }
     }
 
+    @import("services/wallpapers.zig").tick();
     input.processGlobalInputs();
 
     // Track mouse motion — feeds the shared chrome idle clock.

@@ -391,6 +391,11 @@ const TEXT_CAP: usize = 131072;
 // Search
 // ══════════════════════════════════════════════════════════
 
+pub fn landingRequestedForTest() bool {
+    if (!@import("builtin").is_test) @compileError("test-only");
+    return query_snap_len > 0;
+}
+
 pub fn searchNovels(query: []const u8) void {
     if (query.len == 0 or query.len >= query_snap.len) return;
 
@@ -420,6 +425,7 @@ pub fn searchNovels(query: []const u8) void {
     if (@import("../core/workers.zig").spawnLegacy(searchWorker, .{job})) |t| {
         @import("../core/workers.zig").release(t);
     } else |_| {
+        state.app.novels.fetch_error = true;
         search_request.finish(my_gen, &state.app.novels.is_loading);
     }
 }
@@ -2130,13 +2136,21 @@ pub fn renderContent() void {
 }
 
 fn renderSearchView() void {
+    // The shell hides the local search bar. Entering Browse must still start a
+    // real catalog request; never replace an explicit query or an open reader.
+    if (query_snap_len == 0 and resultCount() == 0 and !state.app.novels.is_loading.load(.acquire)) searchNovels("fiction");
     renderSearchBar();
 
     if (state.app.novels.fetch_error) {
-        _ = dvui.label(@src(), "Failed to fetch — check your connection", .{}, .{
-            .color_text = theme.colors.danger,
-            .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 },
-        });
+        var error_row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .padding = dvui.Rect.all(8) });
+        components.bodyText(@src(), "Some libraries couldn't be reached.", theme.colors.warning);
+        if (components.actionButton(@src(), "Retry", .secondary, 98001)) {
+            var retry_query: [256]u8 = undefined;
+            const len = @min(query_snap_len, retry_query.len);
+            @memcpy(retry_query[0..len], query_snap[0..len]);
+            searchNovels(if (len > 0) retry_query[0..len] else "fiction");
+        }
+        error_row.deinit();
     }
 
     const count = resultCount();

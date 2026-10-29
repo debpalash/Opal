@@ -10,6 +10,15 @@ Add a section BEFORE tagging; a missing one ships a release that says so.
 Headings are `## vX.Y.Z — YYYY-MM-DD`, newest first. The version token must
 match the tag exactly.
 
+## v0.8.10 — 2026-10-29
+
+- **Wallpapers in Opal.** Browse Wallhaven and configured gallery-dl sources with infinite scrolling, open full-resolution images in a gallery, navigate with the keyboard, and hide the thumbnail strip for more viewing space.
+- **Wallpaper previews and desktop controls.** Preview looping videos and GIFs, download originals, and apply wallpapers with Fill/Fit controls. Live desktop playback uses mpv or mpvpaper and runs while Opal is open. Windows/Linux desktop application still needs on-device verification; GNOME/KDE Wayland animation is not supported.
+- **More useful media browsing.** Expanded anime sources and source ranking, improved episode artwork, country filters for live TV, radio and podcasts, YouTube podcast discovery, and a combined music view with duplicate handling.
+- **Better artwork and library controls.** Improved YouTube thumbnail handling and card presentation, episode header artwork, and removal controls for Continue items.
+- **Cleaner pages and shared components.** Refined Connect, Web, RSS, Sources and Settings, compact source controls, service logos, shared card surfaces and country selectors.
+- **Loading and reliability fixes.** Updated provider parsing, source catalog handling, HTTP processing and asynchronous publication, with regression coverage for browsing and native layouts.
+
 ## v0.8.9 — 2026-10-29
 
 - **Search within the page you are browsing.** Movies & TV, YouTube, Music and other media pages set a visible search scope. Remove its chip to search all content with the same words; clearing the words preserves the scope.

@@ -1111,6 +1111,7 @@ pub fn confirmDangerButton(src: std.builtin.SourceLocation, label: []const u8, i
         .corner_radius = tk.rad_sm,
         .padding = .{ .x = tk.sp_sm, .y = tk.sp_xs, .w = tk.sp_sm, .h = tk.sp_xs },
         .gravity_y = 0.5,
+        .margin = dvui.Rect.all(0),
     });
     bw.processEvents();
 
@@ -1125,6 +1126,7 @@ pub fn confirmDangerButton(src: std.builtin.SourceLocation, label: []const u8, i
     _ = dvui.labelNoFmt(@src(), if (armed) "Click again to confirm" else label, .{ .align_x = 0.5, .align_y = 0.5 }, .{
         .color_text = if (armed) tk.semantic_error() else tk.text_secondary(),
         .font = fontAt(tk.fs_small),
+        .padding = dvui.Rect.all(0),
         .gravity_x = 0.5,
         .gravity_y = 0.5,
     });

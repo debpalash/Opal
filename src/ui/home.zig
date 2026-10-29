@@ -1098,24 +1098,17 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
             .font = dvui.themeGet().font_heading.withSize(17),
             .gravity_y = 0.5,
         });
-        if (hidden_count > 0) {
+        if (manage_continue) {
             var spacer = dvui.box(@src(), .{}, .{ .id_extra = base_id + 3, .expand = .horizontal });
             spacer.deinit();
-            var restore_buf: [40]u8 = undefined;
-            const restore_label = std.fmt.bufPrint(&restore_buf, "Restore hidden · {d}", .{hidden_count}) catch "Restore hidden";
-            if (dvui.button(@src(), restore_label, .{}, .{
-                .id_extra = base_id + 4,
-                .background = true,
-                .color_fill = transparent,
-                .color_fill_hover = theme.colors.bg_hover,
-                .color_text = theme.colors.text_secondary,
-                .border = dvui.Rect.all(0),
-                .corner_radius = dvui.Rect.all(theme.radius.sm),
-                .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
-                .gravity_y = 0.5,
-            })) {
+            if (hidden_count > 0 and components.iconButton(@src(), icons.tvg.lucide.@"rotate-ccw", "Restore removed Continue items", false)) {
                 library_store.restoreHiddenContinue();
                 dvui.refresh(null, @src(), null);
+            }
+            if (n > 0 and components.iconButton(@src(), icons.tvg.lucide.@"trash-2", "Remove all Continue items · keeps progress", false)) {
+                library_store.hideAllContinue();
+                dvui.refresh(null, @src(), null);
+                return true;
             }
         }
     }
@@ -1203,7 +1196,7 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
             }
             // Always available, including while the private card is masked.
             // This hides only the Home column and preserves resume progress.
-            if (components.iconButton(@src(), icons.tvg.lucide.@"trash-2", "Remove from Home · keeps progress", false)) {
+            if (components.iconButton(@src(), icons.tvg.lucide.x, "Remove from Continue · keeps progress", false)) {
                 library_store.setHomeHidden(item.kind[0..item.kind_len], item.item_id[0..item.item_id_len], true);
                 dvui.refresh(null, @src(), null);
                 continue;
