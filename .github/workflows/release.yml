@@ -44,7 +44,9 @@ jobs:
 
   macos-arm64:
     needs: validate-release
-    runs-on: macos-14
+    # Match CI: Sonoma no longer has current Homebrew bottles, and its
+    # compiler cannot build Python 3.15's tail-call interpreter dependency.
+    runs-on: macos-15
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
