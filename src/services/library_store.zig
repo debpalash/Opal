@@ -238,13 +238,14 @@ pub fn setHomePinned(kind: []const u8, item_id: []const u8, pinned: bool) void {
     if (db.step(stmt) == db.c.SQLITE_DONE) markDirty();
 }
 
-/// Dismiss one Home card without deleting playback progress or its source row.
+/// Persistently dismiss a Continue card while preserving playback progress.
+/// Removals persist until the user explicitly chooses Restore.
 pub fn setHomeHidden(kind: []const u8, item_id: []const u8, hidden: bool) void {
     const stmt = db.prepare("UPDATE library_items SET home_hidden=?3 WHERE kind=?1 AND item_id=?2") orelse return;
     defer db.finalize(stmt);
     db.bindText(stmt, 1, kind);
     db.bindText(stmt, 2, item_id);
-    db.bindInt(stmt, 3, if (hidden) 1 else 0);
+    db.bindInt(stmt, 3, if (hidden) 2 else 0);
     if (db.step(stmt) == db.c.SQLITE_DONE) markDirty();
 }
 
@@ -257,7 +258,7 @@ pub fn hiddenContinueCount() usize {
 
 /// The uncached query behind `hiddenContinueCount`.
 fn loadHiddenContinueCountUncached() ?usize {
-    const stmt = db.prepare("SELECT count(*) FROM library_items WHERE home_hidden=1 AND deleted=0 AND percent > ?1 AND percent < ?2") orelse return null;
+    const stmt = db.prepare("SELECT count(*) FROM library_items WHERE home_hidden!=0 AND deleted=0 AND percent > ?1 AND percent < ?2") orelse return null;
     defer db.finalize(stmt);
     db.bindDouble(stmt, 1, pure.CONTINUE_MIN_PCT);
     db.bindDouble(stmt, 2, pure.CONTINUE_MAX_PCT);
@@ -266,9 +267,9 @@ fn loadHiddenContinueCountUncached() ?usize {
 }
 
 /// Hide the entire Continue list, including entries beyond the visible rail.
-/// Playback progress and favorites remain available; Restore reverses this.
+/// Playback progress and favorites remain available; Only an explicit Restore reverses this.
 pub fn hideAllContinue() void {
-    const stmt = db.prepare("UPDATE library_items SET home_hidden=1 WHERE deleted=0 AND home_hidden=0 AND percent > ?1 AND percent < ?2") orelse return;
+    const stmt = db.prepare("UPDATE library_items SET home_hidden=2 WHERE deleted=0 AND home_hidden=0 AND percent > ?1 AND percent < ?2") orelse return;
     defer db.finalize(stmt);
     db.bindDouble(stmt, 1, pure.CONTINUE_MIN_PCT);
     db.bindDouble(stmt, 2, pure.CONTINUE_MAX_PCT);
@@ -276,7 +277,7 @@ pub fn hideAllContinue() void {
 }
 
 pub fn restoreHiddenContinue() void {
-    const stmt = db.prepare("UPDATE library_items SET home_hidden=0 WHERE home_hidden=1 AND percent > ?1 AND percent < ?2") orelse return;
+    const stmt = db.prepare("UPDATE library_items SET home_hidden=0 WHERE home_hidden!=0 AND percent > ?1 AND percent < ?2") orelse return;
     defer db.finalize(stmt);
     db.bindDouble(stmt, 1, pure.CONTINUE_MIN_PCT);
     db.bindDouble(stmt, 2, pure.CONTINUE_MAX_PCT);

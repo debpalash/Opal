@@ -74,27 +74,27 @@ pub const Preset = enum {
 };
 
 const ask_tools = [_][]const u8{
-    "status",          "search",          "search_results",  "queue_list",     "downloads_list",  "history_list",
-    "library_list",    "library_watched", "calendar_list",   "collections_list", "settings_list", "wanted_list",
-    "recommendations", "home_summary",    "player_info",     "tmdb_browse",    "tmdb_search",     "tmdb_results",
-    "anime_search",    "anime_results",   "youtube_search",  "youtube_results", "podcast_search",  "podcast_results",
-    "music_search",    "music_results",   "livetv_list",     "rss_list",       "player_toggle",   "player_seek",
-    "player_volume",   "player_next",     "player_previous", "search_play",    "search_queue",    "queue_action",
+    "status",          "search",                "search_results",  "queue_list",       "downloads_list", "history_list",
+    "library_list",    "library_watched",       "calendar_list",   "collections_list", "settings_list",  "wanted_list",
+    "recommendations", "home_summary",          "player_info",     "tmdb_browse",      "tmdb_search",    "tmdb_results",
+    "anime_search",    "anime_results",         "youtube_search",  "youtube_results",  "podcast_search", "podcast_results",
+    "music_search",    "music_results",         "livetv_list",     "rss_list",         "player_toggle",  "player_seek",
+    "player_volume",   "player_next",           "player_previous", "search_play",      "search_queue",   "queue_action",
     "torrents_list",   "download_history_list",
 };
 
 const tasks_tools = [_][]const u8{
-    "status",          "queue_list",      "downloads_list",  "history_list",   "library_list",    "library_watched",
-    "calendar_list",   "collections_list", "settings_list",  "wanted_list",    "wanted_add",      "wanted_check",
-    "wanted_pause",    "wanted_resume",   "recommendations", "home_summary",   "torrents_list",   "download_history_list",
-    "rss_list",        "search",          "search_results",  "tmdb_browse",    "tmdb_search",     "tmdb_results",
-    "operator_jobs_list", "library_set_status", "library_mark_watched", "library_favorite", "library_rate", "collection_save_queue",
-    "downloads_pause", "downloads_resume", "torrent_pause",  "torrent_resume",
+    "status",             "queue_list",         "downloads_list",       "history_list",     "library_list",  "library_watched",
+    "calendar_list",      "collections_list",   "settings_list",        "wanted_list",      "wanted_add",    "wanted_check",
+    "wanted_pause",       "wanted_resume",      "recommendations",      "home_summary",     "torrents_list", "download_history_list",
+    "rss_list",           "search",             "search_results",       "tmdb_browse",      "tmdb_search",   "tmdb_results",
+    "operator_jobs_list", "library_set_status", "library_mark_watched", "library_favorite", "library_rate",  "collection_save_queue",
+    "downloads_pause",    "downloads_resume",   "torrent_pause",        "torrent_resume",
 };
 
 const digest_tools = [_][]const u8{
-    "status",         "queue_list",   "downloads_list", "history_list", "library_list",        "calendar_list",
-    "wanted_list",    "home_summary", "torrents_list",  "recommendations", "download_history_list", "operator_jobs_list",
+    "status",           "queue_list",   "downloads_list", "history_list",    "library_list",          "calendar_list",
+    "wanted_list",      "home_summary", "torrents_list",  "recommendations", "download_history_list", "operator_jobs_list",
     "agent_tasks_list",
 };
 

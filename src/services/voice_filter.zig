@@ -26,14 +26,12 @@ pub fn isHallucination(text: []const u8) bool {
     for (shorts) |s| if (std.mem.eql(u8, trimmed, s)) return true;
 
     const phrases = [_][]const u8{
-        "machine whirring", "silence", "blank audio", "music",
-        "applause",         "laughter",  "coughing",    "breathing",
-        "thank you for watching",  "thanks for watching",
-        "thank you for listening", "subscribe",
-        "please subscribe", "like and subscribe",
-        "see you next time", "bye bye",  "goodbye",
-        "feature of opal", "opal media", "nando",
-        "...",               "um,",      "uh,",
+        "machine whirring",       "silence",             "blank audio",             "music",
+        "applause",               "laughter",            "coughing",                "breathing",
+        "thank you for watching", "thanks for watching", "thank you for listening", "subscribe",
+        "please subscribe",       "like and subscribe",  "see you next time",       "bye bye",
+        "goodbye",                "feature of opal",     "opal media",              "nando",
+        "...",                    "um,",                 "uh,",
     };
     for (phrases) |p| {
         if (std.mem.indexOf(u8, lc, p) != null) return true;

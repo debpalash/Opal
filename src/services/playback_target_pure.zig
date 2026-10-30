@@ -42,16 +42,17 @@ pub const Playability = enum {
 
 /// Extensions every current browser plays.
 const DIRECT_EXT = [_][]const u8{
-    "mp4", "m4v", "webm", "ogv",
-    "mp3", "m4a", "aac", "oga", "ogg", "opus", "wav", "flac",
+    "mp4", "m4v",  "webm", "ogv",
+    "mp3", "m4a",  "aac",  "oga",
+    "ogg", "opus", "wav",  "flac",
 };
 
 /// Containers browsers do not demux but ffmpeg does. MKV is the big one: it is
 /// what most scraped releases ship in, and Chrome shows a black screen rather
 /// than an error.
 const TRANSCODE_EXT = [_][]const u8{
-    "mkv", "avi", "wmv", "flv", "vob", "rmvb", "asf", "mpg", "mpeg",
-    "m2ts", "mts", "ts", "divx", "3gp",
+    "mkv",  "avi", "wmv", "flv",  "vob", "rmvb", "asf", "mpg", "mpeg",
+    "m2ts", "mts", "ts",  "divx", "3gp",
 };
 
 /// Not a media stream at all. A disc image needs mounting before anything can
@@ -61,8 +62,8 @@ const UNSUPPORTED_EXT = [_][]const u8{"iso"};
 /// Codec markers that appear in release names. An .mp4 carrying H.265 still
 /// will not play in Chrome or Firefox, so the extension alone is not enough.
 const BAD_CODEC_MARKERS = [_][]const u8{
-    "x265", "h265", "hevc", "x266", "av1", "vc1", "mpeg2",
-    "dts", "truehd", "eac3", "ac3", "flac2", "atmos",
+    "x265", "h265",   "hevc", "x266", "av1",   "vc1",   "mpeg2",
+    "dts",  "truehd", "eac3", "ac3",  "flac2", "atmos",
 };
 
 fn extOf(name: []const u8) []const u8 {

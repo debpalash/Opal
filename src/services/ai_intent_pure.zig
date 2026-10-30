@@ -16,21 +16,21 @@ pub const Intent = enum {
 // ── Number word lookup ──
 const NumberWord = struct { word: []const u8, val: u8 };
 const number_words = [_]NumberWord{
-    .{ .word = "one", .val = 1 },     .{ .word = "two", .val = 2 },
-    .{ .word = "three", .val = 3 },   .{ .word = "four", .val = 4 },
-    .{ .word = "five", .val = 5 },    .{ .word = "six", .val = 6 },
-    .{ .word = "seven", .val = 7 },   .{ .word = "eight", .val = 8 },
-    .{ .word = "nine", .val = 9 },    .{ .word = "ten", .val = 10 },
-    .{ .word = "eleven", .val = 11 }, .{ .word = "twelve", .val = 12 },
-    .{ .word = "thirteen", .val = 13 }, .{ .word = "fourteen", .val = 14 },
-    .{ .word = "fifteen", .val = 15 }, .{ .word = "sixteen", .val = 16 },
+    .{ .word = "one", .val = 1 },        .{ .word = "two", .val = 2 },
+    .{ .word = "three", .val = 3 },      .{ .word = "four", .val = 4 },
+    .{ .word = "five", .val = 5 },       .{ .word = "six", .val = 6 },
+    .{ .word = "seven", .val = 7 },      .{ .word = "eight", .val = 8 },
+    .{ .word = "nine", .val = 9 },       .{ .word = "ten", .val = 10 },
+    .{ .word = "eleven", .val = 11 },    .{ .word = "twelve", .val = 12 },
+    .{ .word = "thirteen", .val = 13 },  .{ .word = "fourteen", .val = 14 },
+    .{ .word = "fifteen", .val = 15 },   .{ .word = "sixteen", .val = 16 },
     .{ .word = "seventeen", .val = 17 }, .{ .word = "eighteen", .val = 18 },
-    .{ .word = "nineteen", .val = 19 }, .{ .word = "twenty", .val = 20 },
-    .{ .word = "first", .val = 1 },   .{ .word = "second", .val = 2 },
-    .{ .word = "third", .val = 3 },   .{ .word = "fourth", .val = 4 },
-    .{ .word = "fifth", .val = 5 },   .{ .word = "sixth", .val = 6 },
-    .{ .word = "seventh", .val = 7 }, .{ .word = "eighth", .val = 8 },
-    .{ .word = "ninth", .val = 9 },   .{ .word = "tenth", .val = 10 },
+    .{ .word = "nineteen", .val = 19 },  .{ .word = "twenty", .val = 20 },
+    .{ .word = "first", .val = 1 },      .{ .word = "second", .val = 2 },
+    .{ .word = "third", .val = 3 },      .{ .word = "fourth", .val = 4 },
+    .{ .word = "fifth", .val = 5 },      .{ .word = "sixth", .val = 6 },
+    .{ .word = "seventh", .val = 7 },    .{ .word = "eighth", .val = 8 },
+    .{ .word = "ninth", .val = 9 },      .{ .word = "tenth", .val = 10 },
 };
 
 pub fn wordToNumber(word: []const u8) ?u8 {
@@ -45,14 +45,14 @@ pub fn wordToNumber(word: []const u8) ?u8 {
 }
 
 const rec_phrases = [_][]const u8{
-    "some movies", "some shows", "some anime", "some series",
-    "recommend", "suggest", "something to watch", "what should i watch",
-    "what to watch", "anything good", "random movie", "random show",
-    "movies to watch", "shows to watch", "popular movies", "trending",
-    "top movies", "best movies", "best shows", "best anime",
-    "new movies", "new shows", "latest movies", "whats popular",
-    "what's popular", "what is trending", "whats trending",
-    "play something", "put something on", "surprise me",
+    "some movies",      "some shows",       "some anime",         "some series",
+    "recommend",        "suggest",          "something to watch", "what should i watch",
+    "what to watch",    "anything good",    "random movie",       "random show",
+    "movies to watch",  "shows to watch",   "popular movies",     "trending",
+    "top movies",       "best movies",      "best shows",         "best anime",
+    "new movies",       "new shows",        "latest movies",      "whats popular",
+    "what's popular",   "what is trending", "whats trending",     "play something",
+    "put something on", "surprise me",
 };
 
 const GenreEntry = struct { keyword: []const u8, genre: []const u8 };
@@ -76,25 +76,27 @@ const genre_keywords = [_]GenreEntry{
 };
 
 const filler_prefixes = [_][]const u8{
-    "can you play ", "could you play ", "i want to watch ",
-    "i wanna watch ", "put on ", "let me watch ",
-    "can you find ", "can you search ", "please play ",
-    "please find ", "yo play ", "hey play ",
-    "play me ", "show me ",
+    "can you play ",  "could you play ", "i want to watch ",
+    "i wanna watch ", "put on ",         "let me watch ",
+    "can you find ",  "can you search ", "please play ",
+    "please find ",   "yo play ",        "hey play ",
+    "play me ",       "show me ",
     // Bare verbs — order matters: longer prefixes first so "please play " wins over "play "
-    "play ", "watch ", "find ", "search ", "stream ",
+           "play ",
+    "watch ",         "find ",           "search ",
+    "stream ",
 };
 
 /// Contextual navigation refers to results already on screen:
 /// "play the first one", "play that third item", "next", "previous".
 /// Detected before title search so we don't try to resolve "first item" as a movie.
 const nav_phrases = [_][]const u8{
-    "the first ",  "the second ", "the third ",  "the fourth ",
-    "the fifth ",  "the sixth ",  "the seventh ","the eighth ",
-    "the ninth ",  "the tenth ",  "that first ", "that second ",
-    "that third ", " first one",  " second one", " third one",
-    " next one",   " previous one","next item",  "previous item",
-    "first item",  "second item", "third item",
+    "the first ",  "the second ",   "the third ",   "the fourth ",
+    "the fifth ",  "the sixth ",    "the seventh ", "the eighth ",
+    "the ninth ",  "the tenth ",    "that first ",  "that second ",
+    "that third ", " first one",    " second one",  " third one",
+    " next one",   " previous one", "next item",    "previous item",
+    "first item",  "second item",   "third item",
 };
 
 pub fn classifyIntent(input_lower: []const u8) Intent {
@@ -160,11 +162,17 @@ pub fn normalizeQuery(raw: []const u8, buf: *[256]u8) []const u8 {
         var out: usize = 0;
 
         for (prefix) |ch| {
-            if (out < 255) { buf[out] = ch; out += 1; }
+            if (out < 255) {
+                buf[out] = ch;
+                out += 1;
+            }
         }
-        if (out > 0 and buf[out - 1] != ' ') { buf[out] = ' '; out += 1; }
+        if (out > 0 and buf[out - 1] != ' ') {
+            buf[out] = ' ';
+            out += 1;
+        }
 
-        const after_season = src[season_pos + 7..];
+        const after_season = src[season_pos + 7 ..];
         var season_num: ?u8 = null;
         var consumed: usize = 0;
 
@@ -186,8 +194,12 @@ pub fn normalizeQuery(raw: []const u8, buf: *[256]u8) []const u8 {
         }
 
         if (season_num) |sn| {
-            buf[out] = 'S'; out += 1;
-            if (sn < 10) { buf[out] = '0'; out += 1; }
+            buf[out] = 'S';
+            out += 1;
+            if (sn < 10) {
+                buf[out] = '0';
+                out += 1;
+            }
             const sn_str = std.fmt.bufPrint(buf[out..], "{d}", .{sn}) catch "";
             out += sn_str.len;
 
@@ -214,8 +226,12 @@ pub fn normalizeQuery(raw: []const u8, buf: *[256]u8) []const u8 {
                     }
 
                     if (ep_num) |en| {
-                        buf[out] = 'E'; out += 1;
-                        if (en < 10) { buf[out] = '0'; out += 1; }
+                        buf[out] = 'E';
+                        out += 1;
+                        if (en < 10) {
+                            buf[out] = '0';
+                            out += 1;
+                        }
                         const en_str = std.fmt.bufPrint(buf[out..], "{d}", .{en}) catch "";
                         out += en_str.len;
                     }
@@ -262,7 +278,10 @@ pub fn parseNavIndex(input_lower: []const u8, current: usize) ?usize {
         // Try digit literal ("1", "3") but skip if embedded in S01E01-style tokens
         if (tok.len <= 2) {
             var is_num = true;
-            for (tok) |ch| if (!std.ascii.isDigit(ch)) { is_num = false; break; };
+            for (tok) |ch| if (!std.ascii.isDigit(ch)) {
+                is_num = false;
+                break;
+            };
             if (is_num) {
                 const v = std.fmt.parseInt(u8, tok, 10) catch continue;
                 if (v >= 1) return v - 1;
@@ -274,10 +293,9 @@ pub fn parseNavIndex(input_lower: []const u8, current: usize) ?usize {
 
 pub fn isErrorResult(name: []const u8) bool {
     const error_markers = [_][]const u8{
-        "api key error", "Jackett:", "jackett:", "API key",
-        "error!", "Error!", "ERROR", "configuration",
-        "Right-click this", "right-click this",
-        "indexer error", "Indexer Error",
+        "api key error",    "Jackett:",         "jackett:",      "API key",
+        "error!",           "Error!",           "ERROR",         "configuration",
+        "Right-click this", "right-click this", "indexer error", "Indexer Error",
     };
     for (error_markers) |marker| {
         if (std.mem.indexOf(u8, name, marker) != null) return true;

@@ -1,5 +1,4 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
 
 const dist = new URL("../dist/", import.meta.url);
 const expected = [

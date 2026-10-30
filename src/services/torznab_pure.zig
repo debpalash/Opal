@@ -81,7 +81,7 @@ pub fn pickLink(item_block: []const u8) ?[]const u8 {
     // 2. <enclosure url="..."/> — commonly the magnet or the .torrent
     if (std.mem.indexOf(u8, item_block, "<enclosure")) |es| {
         const ee = std.mem.indexOfScalarPos(u8, item_block, es, '>') orelse item_block.len;
-        if (attrByKey(item_block[es .. @min(ee + 1, item_block.len)], "url")) |u| {
+        if (attrByKey(item_block[es..@min(ee + 1, item_block.len)], "url")) |u| {
             if (u.len >= 8) return u;
         }
     }
@@ -215,7 +215,7 @@ pub fn sizeBytes(item_block: []const u8) u64 {
     }
     if (std.mem.indexOf(u8, item_block, "<enclosure")) |es| {
         const ee = std.mem.indexOfScalarPos(u8, item_block, es, '>') orelse item_block.len;
-        if (attrByKey(item_block[es .. @min(ee + 1, item_block.len)], "length")) |l| {
+        if (attrByKey(item_block[es..@min(ee + 1, item_block.len)], "length")) |l| {
             if (std.fmt.parseInt(u64, std.mem.trim(u8, l, " \t\r\n"), 10)) |v| return v else |_| {}
         }
     }

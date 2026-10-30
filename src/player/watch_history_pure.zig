@@ -133,8 +133,8 @@ pub fn hasCredentialMaterial(input: []const u8) bool {
         const end = std.mem.indexOfAny(u8, param, "=#") orelse param.len;
         const key = param[0..end];
         const sensitive = [_][]const u8{
-            "token", "api_key", "apikey", "access_token", "auth", "authorization",
-            "password", "passwd", "signature", "sig", "policy", "key-pair-id",
+            "token",        "api_key", "apikey",    "access_token", "auth",   "authorization",
+            "password",     "passwd",  "signature", "sig",          "policy", "key-pair-id",
             "x-plex-token",
         };
         for (sensitive) |candidate| if (std.ascii.eqlIgnoreCase(key, candidate)) return true;

@@ -1100,11 +1100,11 @@ test "ask policy: write ceiling, spend and destructive refused, families hidden"
     }
     // The tools a normal request needs stay available.
     for ([_][]const u8{
-        "status",        "search",        "search_results", "search_play",      "search_queue",
-        "queue_list",    "queue_action",  "player_toggle",  "player_seek",      "player_volume",
-        "library_list",  "library_set_status", "library_mark_watched", "home_summary", "wanted_list",
-        "subtitles_search", "subtitles_download", "tmdb_search", "tmdb_results", "anime_search",
-        "downloads_list", "downloads_pause", "collection_save_queue",
+        "status",           "search",             "search_results",        "search_play",  "search_queue",
+        "queue_list",       "queue_action",       "player_toggle",         "player_seek",  "player_volume",
+        "library_list",     "library_set_status", "library_mark_watched",  "home_summary", "wanted_list",
+        "subtitles_search", "subtitles_download", "tmdb_search",           "tmdb_results", "anime_search",
+        "downloads_list",   "downloads_pause",    "collection_save_queue",
     }) |name| {
         const op = ops.findOp(name).?;
         try testing.expectEqual(ops.Verdict.allow, ops.check(p, op, false));

@@ -15,10 +15,10 @@ var legacy_secrets_mask: u16 = 0;
 
 fn secretBit(key: []const u8) u16 {
     const names = [_][]const u8{
-        "proxy_url",    "tmdb_api_key",  "opensub_api_key",
-        "omdb_api_key", "subdl_api_key", "jf_token",
-        "abs_token",    "opds_user",     "opds_pass",
-        "lsync_token",  "lsync_p0_token", "lsync_p1_token",
+        "proxy_url",      "tmdb_api_key",   "opensub_api_key",
+        "omdb_api_key",   "subdl_api_key",  "jf_token",
+        "abs_token",      "opds_user",      "opds_pass",
+        "lsync_token",    "lsync_p0_token", "lsync_p1_token",
         "lsync_p2_token", "lsync_p3_token",
     };
     for (names, 0..) |name, index| {
@@ -84,6 +84,7 @@ fn saveChecked() !void {
     setKey("playlist_repeat", @tagName(state.app.playlist_repeat));
     setKey("playlist_shuffle", if (state.app.playlist_shuffle) "1" else "0");
     setKey("playlist_shuffle_seed", fmtInt(&fb, @intCast(state.app.playlist_shuffle_seed)));
+    setKey("continue_hide_nsfw", if (state.app.continue_hide_nsfw) "1" else "0");
     setKey("nsfw_filter", if (state.app.nsfw_filter_enabled) "1" else "0");
     setKey("gallerydl_enabled", if (state.app.gallerydl_enabled) "1" else "0");
     setKey("scrape_use_browser", if (state.app.scrape_use_browser) "1" else "0");
@@ -612,6 +613,8 @@ fn applyConfig(key: []const u8, val: []const u8) void {
         state.app.playlist_shuffle = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "playlist_shuffle_seed")) {
         state.app.playlist_shuffle_seed = std.fmt.parseInt(u64, val, 10) catch 0;
+    } else if (std.mem.eql(u8, key, "continue_hide_nsfw")) {
+        state.app.continue_hide_nsfw = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "nsfw_filter")) {
         state.app.nsfw_filter_enabled = std.mem.eql(u8, val, "1");
     } else if (std.mem.eql(u8, key, "gallerydl_enabled")) {

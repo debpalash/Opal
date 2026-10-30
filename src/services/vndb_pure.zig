@@ -135,12 +135,36 @@ pub fn jsonUnescape(src: []const u8, dst: []u8) usize {
             continue;
         }
         switch (src[i + 1]) {
-            '"' => { dst[out] = '"'; out += 1; i += 2; },
-            '\\' => { dst[out] = '\\'; out += 1; i += 2; },
-            '/' => { dst[out] = '/'; out += 1; i += 2; },
-            'n' => { dst[out] = '\n'; out += 1; i += 2; },
-            'r' => { dst[out] = '\r'; out += 1; i += 2; },
-            't' => { dst[out] = '\t'; out += 1; i += 2; },
+            '"' => {
+                dst[out] = '"';
+                out += 1;
+                i += 2;
+            },
+            '\\' => {
+                dst[out] = '\\';
+                out += 1;
+                i += 2;
+            },
+            '/' => {
+                dst[out] = '/';
+                out += 1;
+                i += 2;
+            },
+            'n' => {
+                dst[out] = '\n';
+                out += 1;
+                i += 2;
+            },
+            'r' => {
+                dst[out] = '\r';
+                out += 1;
+                i += 2;
+            },
+            't' => {
+                dst[out] = '\t';
+                out += 1;
+                i += 2;
+            },
             'u' => {
                 if (i + 6 <= src.len) {
                     if (std.fmt.parseInt(u21, src[i + 2 .. i + 6], 16)) |cp| {
@@ -162,7 +186,11 @@ pub fn jsonUnescape(src: []const u8, dst: []u8) usize {
                     i += 1;
                 }
             },
-            else => { dst[out] = '\\'; out += 1; i += 1; },
+            else => {
+                dst[out] = '\\';
+                out += 1;
+                i += 1;
+            },
         }
     }
     return out;

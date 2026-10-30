@@ -50,9 +50,9 @@ pub fn effectiveCategory(cat: Category, genre_active: bool, discover_sort: u8) C
 /// "Music" is the one app genre with no Cinemeta equivalent.
 pub fn genreSupported(name: []const u8) bool {
     const names = [_][]const u8{
-        "Action",  "Adventure", "Animation", "Comedy", "Crime",   "Documentary", "Drama",
-        "Family",  "Fantasy",   "History",   "Horror", "Mystery", "Romance",     "Sci-Fi",
-        "Thriller", "War",      "Western",
+        "Action",   "Adventure", "Animation", "Comedy", "Crime",   "Documentary", "Drama",
+        "Family",   "Fantasy",   "History",   "Horror", "Mystery", "Romance",     "Sci-Fi",
+        "Thriller", "War",       "Western",
     };
     for (names) |n| if (std.mem.eql(u8, n, name)) return true;
     return false;

@@ -123,8 +123,8 @@ fn tokenize(query: []const u8, out: *Tokens) void {
 
 fn wordNumber(w: []const u8) ?f32 {
     const words = [_]struct { []const u8, f32 }{
-        .{ "a", 1 },     .{ "an", 1 },    .{ "one", 1 },   .{ "two", 2 },   .{ "three", 3 }, .{ "four", 4 },
-        .{ "five", 5 },  .{ "six", 6 },   .{ "ten", 10 },  .{ "fifteen", 15 }, .{ "twenty", 20 }, .{ "thirty", 30 },
+        .{ "a", 1 },      .{ "an", 1 },     .{ "one", 1 },    .{ "two", 2 },      .{ "three", 3 },   .{ "four", 4 },
+        .{ "five", 5 },   .{ "six", 6 },    .{ "ten", 10 },   .{ "fifteen", 15 }, .{ "twenty", 20 }, .{ "thirty", 30 },
         .{ "forty", 40 }, .{ "fifty", 50 }, .{ "sixty", 60 }, .{ "ninety", 90 },
     };
     for (words) |pair| if (std.mem.eql(u8, w, pair[0])) return pair[1];
@@ -204,13 +204,13 @@ fn durationAt(t: *const Tokens, i: usize) ?Span {
 
 pub fn kindFromWord(w: []const u8) ?Kind {
     const table = [_]struct { []const u8, Kind }{
-        .{ "movie", .movie },     .{ "movies", .movie },    .{ "film", .movie },      .{ "films", .movie },
-        .{ "show", .show },       .{ "shows", .show },      .{ "series", .show },     .{ "tv", .show },
-        .{ "episodes", .show },   .{ "anime", .anime },     .{ "music", .music },     .{ "song", .music },
-        .{ "songs", .music },     .{ "album", .music },     .{ "albums", .music },    .{ "tracks", .music },
-        .{ "podcast", .podcast }, .{ "podcasts", .podcast }, .{ "book", .book },      .{ "books", .book },
-        .{ "audiobook", .book },  .{ "audiobooks", .book }, .{ "novel", .book },      .{ "novels", .book },
-        .{ "comic", .comic },     .{ "comics", .comic },    .{ "manga", .comic },
+        .{ "movie", .movie },     .{ "movies", .movie },     .{ "film", .movie },   .{ "films", .movie },
+        .{ "show", .show },       .{ "shows", .show },       .{ "series", .show },  .{ "tv", .show },
+        .{ "episodes", .show },   .{ "anime", .anime },      .{ "music", .music },  .{ "song", .music },
+        .{ "songs", .music },     .{ "album", .music },      .{ "albums", .music }, .{ "tracks", .music },
+        .{ "podcast", .podcast }, .{ "podcasts", .podcast }, .{ "book", .book },    .{ "books", .book },
+        .{ "audiobook", .book },  .{ "audiobooks", .book },  .{ "novel", .book },   .{ "novels", .book },
+        .{ "comic", .comic },     .{ "comics", .comic },     .{ "manga", .comic },
     };
     for (table) |pair| if (std.mem.eql(u8, w, pair[0])) return pair[1];
     return null;
@@ -218,11 +218,11 @@ pub fn kindFromWord(w: []const u8) ?Kind {
 
 pub fn langFromWord(w: []const u8) ?[]const u8 {
     const table = [_]struct { []const u8, []const u8 }{
-        .{ "english", "en" },  .{ "japanese", "ja" },  .{ "korean", "ko" },  .{ "french", "fr" },
-        .{ "spanish", "es" },  .{ "german", "de" },    .{ "italian", "it" }, .{ "chinese", "zh" },
-        .{ "mandarin", "zh" }, .{ "cantonese", "zh" }, .{ "hindi", "hi" },   .{ "russian", "ru" },
-        .{ "portuguese", "pt" }, .{ "swedish", "sv" }, .{ "danish", "da" },  .{ "norwegian", "no" },
-        .{ "turkish", "tr" },  .{ "arabic", "ar" },    .{ "thai", "th" },    .{ "polish", "pl" },
+        .{ "english", "en" },    .{ "japanese", "ja" },  .{ "korean", "ko" },  .{ "french", "fr" },
+        .{ "spanish", "es" },    .{ "german", "de" },    .{ "italian", "it" }, .{ "chinese", "zh" },
+        .{ "mandarin", "zh" },   .{ "cantonese", "zh" }, .{ "hindi", "hi" },   .{ "russian", "ru" },
+        .{ "portuguese", "pt" }, .{ "swedish", "sv" },   .{ "danish", "da" },  .{ "norwegian", "no" },
+        .{ "turkish", "tr" },    .{ "arabic", "ar" },    .{ "thai", "th" },    .{ "polish", "pl" },
         .{ "dutch", "nl" },
     };
     for (table) |pair| if (std.mem.eql(u8, w, pair[0])) return pair[1];
@@ -232,12 +232,12 @@ pub fn langFromWord(w: []const u8) ?[]const u8 {
 /// Conversational words that carry no search meaning once constraints are out.
 fn isFiller(w: []const u8) bool {
     const words = [_][]const u8{
-        "find",    "me",      "i",      "i'm",     "im",   "i'd",  "want",  "wanna",  "to",      "watch",
-        "watching", "something", "anything", "some", "please", "that", "looking", "give", "play", "any",
-        "my",      "can",     "you",    "could",   "would", "a",    "an",    "with",   "about",   "for",
-        "where",   "when",    "scene",  "scenes",  "part", "bit",  "moment", "moments", "one",   "which",
-        "what",    "is",      "was",    "are",     "there", "get",  "let's", "lets",   "need",    "recommend",
-        "of",      "and",
+        "find",     "me",        "i",        "i'm",    "im",     "i'd",  "want",    "wanna",   "to",    "watch",
+        "watching", "something", "anything", "some",   "please", "that", "looking", "give",    "play",  "any",
+        "my",       "can",       "you",      "could",  "would",  "a",    "an",      "with",    "about", "for",
+        "where",    "when",      "scene",    "scenes", "part",   "bit",  "moment",  "moments", "one",   "which",
+        "what",     "is",        "was",      "are",    "there",  "get",  "let's",   "lets",    "need",  "recommend",
+        "of",       "and",
     };
     for (words) |f| if (std.mem.eql(u8, w, f)) return true;
     return false;
@@ -246,8 +246,8 @@ fn isFiller(w: []const u8) bool {
 /// Words that only appear when someone is asking rather than naming a title.
 fn isConversational(w: []const u8) bool {
     const words = [_][]const u8{
-        "find", "me", "i", "i'm", "im", "i'd", "want", "wanna", "watch", "watching", "something", "anything",
-        "please", "looking", "give", "recommend", "need", "can", "could", "would", "let's", "lets", "my",
+        "find",   "me",      "i",    "i'm",       "im",   "i'd", "want",  "wanna", "watch", "watching", "something", "anything",
+        "please", "looking", "give", "recommend", "need", "can", "could", "would", "let's", "lets",     "my",
     };
     for (words) |f| if (std.mem.eql(u8, w, f)) return true;
     return false;
@@ -1010,9 +1010,9 @@ pub fn kindFromFilename(name: []const u8) Kind {
 /// `library_items.kind` → recall kind.
 pub fn kindFromLibrary(kind: []const u8, name: []const u8) Kind {
     const table = [_]struct { []const u8, Kind }{
-        .{ "movie", .movie },   .{ "tv", .show },          .{ "anime", .anime }, .{ "music", .music },
-        .{ "radio", .music },   .{ "podcast", .podcast },  .{ "audiobook", .book }, .{ "novels", .book },
-        .{ "comics", .comic },  .{ "iptv", .other },
+        .{ "movie", .movie },  .{ "tv", .show },         .{ "anime", .anime },    .{ "music", .music },
+        .{ "radio", .music },  .{ "podcast", .podcast }, .{ "audiobook", .book }, .{ "novels", .book },
+        .{ "comics", .comic }, .{ "iptv", .other },
     };
     for (table) |pair| if (std.mem.eql(u8, kind, pair[0])) return pair[1];
     if (std.mem.eql(u8, kind, "watch")) return kindFromFilename(name);

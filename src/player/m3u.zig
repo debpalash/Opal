@@ -96,7 +96,7 @@ pub const M3UPlaylist = struct {
             if (std.mem.startsWith(u8, line, "#EXTINF:")) {
                 // Parse attributes
                 // #EXTINF:-1 tvg-id="123" tvg-logo="http:..." group-title="News",CNN
-                
+
                 // Extract title
                 const comma_idx = std.mem.lastIndexOfScalar(u8, line, ',');
                 if (comma_idx) |idx| {
@@ -274,8 +274,7 @@ test "writer: header, -1 duration, attrs, and round-trip through the parser" {
     const text = try pl.serialize(alloc);
     defer alloc.free(text);
     try std.testing.expect(std.mem.startsWith(u8, text, "#EXTM3U\n"));
-    try std.testing.expect(std.mem.indexOf(u8, text,
-        "#EXTINF:-1 tvg-logo=\"http://logo.png\" group-title=\"News\",CNN\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "#EXTINF:-1 tvg-logo=\"http://logo.png\" group-title=\"News\",CNN\n") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "#EXTINF:-1,BBC World\n") != null);
 
     // Round-trip: reparse the emitted text, get identical entries back.
@@ -313,8 +312,7 @@ test "writer: newlines in fields and quotes in attrs are sanitized" {
     var out: std.ArrayListUnmanaged(u8) = .empty;
     defer out.deinit(alloc);
     try appendEntryLines(&out, alloc, "Two\nLines", "http://a/3.mp4", null, "Say \"News\"");
-    try std.testing.expect(std.mem.indexOf(u8, out.items,
-        "#EXTINF:-1 group-title=\"Say 'News'\",Two Lines\nhttp://a/3.mp4\n") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "#EXTINF:-1 group-title=\"Say 'News'\",Two Lines\nhttp://a/3.mp4\n") != null);
 }
 
 test "parse EXTINF without comma uses fallback title" {

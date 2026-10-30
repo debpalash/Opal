@@ -168,6 +168,8 @@ Get playable recommendations from an optional on-device model. No API key needed
 
 [Watch the recording →](assets/media/ask-the-ai.mp4)
 
+![Opal asking its local AI copilot what to watch, and getting back a rail of playable recommendations.](assets/screenshots/chat.jpg)
+
 </details>
 
 <details>

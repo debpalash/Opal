@@ -315,6 +315,34 @@ section.alt {
   );
 }
 
+/* ── Features band ──
+   The "one app instead of a stack" grid gets a photographic backdrop: the
+   browse wall, dimmed and scrimmed, in the house stone tones so the light
+   scheme still holds. Same treatment as the hero band — dark tokens that
+   survive a light-mode page, and top/bottom stops that reach var(--bg) so the
+   band has no edges. */
+section#features {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  background: linear-gradient(180deg, rgba(5, 5, 10, 0.86), rgba(5, 5, 10, 0.76)), url("/assets/home.jpg") center / cover no-repeat;
+  --fg: #f4f2ec;
+  color: var(--fg);
+  --muted: #b3b3c2;
+  --border: #2a2a36;
+  --surface: #16161f;
+  --bg-2: #121219;
+}
+section#features::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: linear-gradient(180deg, var(--bg), rgba(5, 5, 10, 0.72) 25%, rgba(5, 5, 10, 0.9) 75%, var(--bg));
+}
+section#features .wrap { position: relative; z-index: 2; }
+
 /* ── Download band ──
    The page opens on a tray of opals and closes on a single one, lit. Same
    treatment as the hero: a dark band that keeps its dark values on a light-mode
@@ -378,6 +406,7 @@ h2 + .grid, h2 + .tablewrap { margin-top: 38px; }
 }
 
 .shot {
+  position: relative;
   border-radius: var(--radius);
   overflow: hidden;
   background: var(--surface);
@@ -387,6 +416,28 @@ h2 + .grid, h2 + .tablewrap { margin-top: 38px; }
    short screens; the top is what matters, so any overflow is cropped there. */
 .hero .shot { margin-top: 22px; max-height: 46vh; }
 .hero .shot img { object-fit: cover; object-position: top center; }
+
+/* ── Crafted backdrop behind screenshots ──
+   A screenshot is a photograph of a UI, so it deserves a photographic or
+   luminous environment rather than the flat surface colour: the backdrop is a
+   layer behind the frame (the frame's own background steps aside while the
+   ::before layer paints), and the image stacks above it. Only shots opted into
+   `data-bg` get this; the hero keeps its full-bleed backdrop instead. */
+.shot[data-bg] { background: transparent; }
+.shot[data-bg]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+.shot[data-bg="glow"]::before {
+  background:
+    radial-gradient(90% 85% at 50% 6%, color-mix(in srgb, var(--accent) 32%, transparent), transparent 62%),
+    radial-gradient(70% 70% at 88% 98%, color-mix(in srgb, var(--accent-3) 15%, transparent), transparent 62%),
+    var(--surface);
+}
+.shot[data-bg="glow"] img { position: relative; z-index: 1; }
 
 /* ── Feature grid ── */
 .grid { display: grid; gap: 22px; grid-template-columns: repeat(3, 1fr); }

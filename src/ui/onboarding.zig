@@ -93,8 +93,7 @@ pub fn render() void {
         })) {
             const n = plugin_repo.installStarterPack();
             var buf: [64]u8 = undefined;
-            state.showToast(if (n == 0) "No new sources installed — check Logs" else
-                std.fmt.bufPrint(&buf, "{d} sources installed", .{n}) catch "Sources installed");
+            state.showToast(if (n == 0) "No new sources installed — check Logs" else std.fmt.bufPrint(&buf, "{d} sources installed", .{n}) catch "Sources installed");
         }
     }
     content.deinit();

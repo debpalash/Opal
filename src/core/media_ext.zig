@@ -40,11 +40,12 @@ pub fn isVideo(name: []const u8) bool {
 
 const RISKY = [_][]const u8{
     // Executables / installers / scripts.
-    "exe",  "msi", "bat", "cmd", "com", "scr", "ps1", "vbs",  "js",
-    "jar",  "apk", "app", "dmg", "pkg", "deb", "rpm", "run",  "bin",
-    "sh",   "lnk",
+    "exe", "msi", "bat", "cmd", "com", "scr", "ps1", "vbs", "js",
+    "jar", "apk", "app", "dmg", "pkg", "deb", "rpm", "run", "bin",
+    "sh",  "lnk",
     // Archives (non-playable, and the usual malware carriers).
-    "rar",  "zip", "7z",  "tar", "gz",  "bz2", "xz",  "iso",  "cab",
+    "rar", "zip", "7z",  "tar", "gz",  "bz2", "xz",
+    "iso", "cab",
 };
 
 /// True for executables, installers, scripts, and archives — files that must

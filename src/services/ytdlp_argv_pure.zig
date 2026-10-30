@@ -33,9 +33,9 @@ pub fn build(binary: []const u8, target: []const u8, operation: Operation, proxy
             if (range) |value| append(out, &count, &.{ "-I", value });
         },
         .audio_download => |audio| append(out, &count, &.{
-            "-x", "--audio-format", "mp3", "--audio-quality", "0",
-            "--embed-metadata", "--embed-thumbnail", "--no-playlist",
-            "--paths", audio.directory, "-o", audio.output_template,
+            "-x",               "--audio-format",      "mp3",           "--audio-quality", "0",
+            "--embed-metadata", "--embed-thumbnail",   "--no-playlist", "--paths",         audio.directory,
+            "-o",               audio.output_template,
         }),
     }
     if (proxy.len > 0) append(out, &count, &.{ "--proxy", proxy });
@@ -45,7 +45,7 @@ pub fn build(binary: []const u8, target: []const u8, operation: Operation, proxy
 
 test "every invocation isolates config, preserves TLS, and treats target as data" {
     const operations = [_]Operation{
-        .playlist_json, .search_json, .thumbnail,
+        .playlist_json,               .search_json,                   .thumbnail,
         .{ .youtube_listing = null }, .{ .youtube_listing = "1:20" },
         // Fixture paths deliberately avoid /tmp: the portability suite greps
         // every source for '"/tmp/' (an unconditional write there is dead on

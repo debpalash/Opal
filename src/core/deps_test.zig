@@ -21,18 +21,36 @@ const Status = struct {
 fn installCmd(buf: []u8, s: Status) []const u8 {
     var parts: [8][]const u8 = undefined;
     var n: usize = 0;
-    if (!s.apfel) { if (n < parts.len) { parts[n] = "apfel"; n += 1; } }
-    if (!s.ffmpeg) { if (n < parts.len) { parts[n] = "ffmpeg"; n += 1; } }
-    if (!s.whisper) { if (n < parts.len) { parts[n] = "whisper-cpp"; n += 1; } }
+    if (!s.apfel) {
+        if (n < parts.len) {
+            parts[n] = "apfel";
+            n += 1;
+        }
+    }
+    if (!s.ffmpeg) {
+        if (n < parts.len) {
+            parts[n] = "ffmpeg";
+            n += 1;
+        }
+    }
+    if (!s.whisper) {
+        if (n < parts.len) {
+            parts[n] = "whisper-cpp";
+            n += 1;
+        }
+    }
     if (n == 0) return "";
 
     var off: usize = 0;
     const prefix = "brew install ";
-    @memcpy(buf[off..off + prefix.len], prefix);
+    @memcpy(buf[off .. off + prefix.len], prefix);
     off += prefix.len;
     for (parts[0..n], 0..) |p, i| {
-        if (i > 0) { buf[off] = ' '; off += 1; }
-        @memcpy(buf[off..off + p.len], p);
+        if (i > 0) {
+            buf[off] = ' ';
+            off += 1;
+        }
+        @memcpy(buf[off .. off + p.len], p);
         off += p.len;
     }
     return buf[0..off];
@@ -71,9 +89,13 @@ test "two missing deps — apfel + ffmpeg" {
 test "sherpa flags don't affect command (sherpa is opt-in)" {
     var buf: [256]u8 = undefined;
     const cmd = installCmd(&buf, .{
-        .apfel = true, .ffmpeg = true, .whisper = true,
-        .sherpa_onnx = false, .sherpa_model = false,
-        .sherpa_tts_model = false, .sherpa_kokoro_model = false,
+        .apfel = true,
+        .ffmpeg = true,
+        .whisper = true,
+        .sherpa_onnx = false,
+        .sherpa_model = false,
+        .sherpa_tts_model = false,
+        .sherpa_kokoro_model = false,
     });
     try std.testing.expectEqualStrings("", cmd);
 }

@@ -48,7 +48,7 @@ pub fn startGeneration(thumb: *ThumbnailState, file_path: []const u8, duration_s
     for (file_path) |ch| {
         hash = hash *% 31 +% ch;
     }
-    
+
     // Cache dir, not "/tmp": Windows has no /tmp, so makeDirAbsolute failed and
     // every thumbnail write landed nowhere — scrub previews were silently dead
     // there (reported as "some tabs don't load thumbnails", issue #21).
@@ -124,7 +124,7 @@ pub fn pollGeneration(thumb: *ThumbnailState) void {
             thumb.pid = null;
             return;
         };
-        
+
         if (result == .exited and result.exited == 0) {
             thumb.ready = true;
             logs.pushLog("info", "thumbs", "Thumbnails ready!", false);

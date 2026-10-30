@@ -421,11 +421,9 @@ fn renderPlayerTopNav() void {
                 .margin = .{ .x = theme.spacing.sm, .y = 0, .w = theme.spacing.sm, .h = 0 },
             });
         } else if (p.current_url_len > 0) {
-            const raw = p.current_url[0..p.current_url_len];
-            var safe_buf: [2048]u8 = undefined;
-            const full = @import("../player/watch_history_pure.zig").persistedTarget(raw, &safe_buf).identity;
-            const base = std.fs.path.basename(full);
-            const clipped = if (base.len > 72) base[0..72] else base;
+            var title_buf: [2048]u8 = undefined;
+            const title_len = p.getMediaTitle(&title_buf);
+            const clipped = title_buf[0..title_len];
             _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8(clipped)}, .{
                 .expand = .horizontal,
                 .color_text = theme.colors.text_primary,

@@ -28,17 +28,17 @@ pub const EventKind = enum { play, finish, abandon, search, queue_add };
 /// Tokens that carry release/quality/transport noise, not taste. Compared
 /// case-insensitively against each alphanumeric token.
 const STOP_TOKENS = [_][]const u8{
-    "1080p", "720p",   "2160p", "480p",  "4k",    "8k",     "x264",
-    "x265",  "h264",   "h265",  "hevc",  "avc",   "av1",    "bluray",
-    "brrip", "bdrip",  "webrip", "webdl", "web",  "dl",     "hdtv",
-    "dvdrip", "camrip", "hdcam", "aac",   "ac3",   "dts",    "atmos",
-    "yify",  "yts",    "rarbg", "xvid",  "divx",  "10bit",  "8bit",
-    "hdr",   "hdr10",  "dv",    "remux", "proper", "repack", "extended",
-    "uncut", "remastered", "multi", "dual", "audio", "subs", "sub",
-    "mkv",   "mp4",    "avi",   "webm",  "m4v",   "mov",    "flac",
-    "mp3",   "opus",   "wav",   "the",   "a",     "an",     "and",
-    "of",    "in",     "com",   "net",   "org",   "www",    "watch",
-    "video", "movie",  "full",  "hd",    "part",  "vol",
+    "1080p",  "720p",       "2160p",  "480p",  "4k",     "8k",     "x264",
+    "x265",   "h264",       "h265",   "hevc",  "avc",    "av1",    "bluray",
+    "brrip",  "bdrip",      "webrip", "webdl", "web",    "dl",     "hdtv",
+    "dvdrip", "camrip",     "hdcam",  "aac",   "ac3",    "dts",    "atmos",
+    "yify",   "yts",        "rarbg",  "xvid",  "divx",   "10bit",  "8bit",
+    "hdr",    "hdr10",      "dv",     "remux", "proper", "repack", "extended",
+    "uncut",  "remastered", "multi",  "dual",  "audio",  "subs",   "sub",
+    "mkv",    "mp4",        "avi",    "webm",  "m4v",    "mov",    "flac",
+    "mp3",    "opus",       "wav",    "the",   "a",      "an",     "and",
+    "of",     "in",         "com",    "net",   "org",    "www",    "watch",
+    "video",  "movie",      "full",   "hd",    "part",   "vol",
 };
 
 fn isStopToken(tok: []const u8) bool {

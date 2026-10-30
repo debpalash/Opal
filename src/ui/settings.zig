@@ -1206,6 +1206,12 @@ fn renderGeneralTab() void {
         if (state.app.nsfw_filter_enabled != before) state.markConfigDirty();
     }
 
+    {
+        const before = state.app.continue_hide_nsfw;
+        components.toggleRow(@src(), "Hide NSFW from Continue", "Filter adult titles and source links from Continue", &state.app.continue_hide_nsfw);
+        if (before != state.app.continue_hide_nsfw) state.markConfigDirty();
+    }
+
     // Personalized suggestions (local-only) — gates the taste engine
     // (services/activity.zig): activity recording AND the Home "For You" row.
     // Everything stays on-device; "Clear taste data" drops the logged rows.

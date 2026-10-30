@@ -1072,10 +1072,29 @@ fn renderLibraryRail(card_w: f32) bool {
     return renderLibraryItemsRail(items[0..n], "Your Library", icons.tvg.lucide.@"library-big", 7700, card_w, lib_slots[0..], 0);
 }
 
+fn continueAction(src: std.builtin.SourceLocation, icon: []const u8, label: []const u8, active: bool) bool {
+    var wd: dvui.WidgetData = undefined;
+    const clicked = dvui.buttonIcon(src, label, icon, .{}, .{}, .{
+        .data_out = &wd,
+        .min_size_content = .{ .w = 14, .h = 14 },
+        .max_size_content = .{ .w = 14, .h = 14 },
+        .padding = dvui.Rect.all(4),
+        .margin = dvui.Rect.all(0),
+        .border = dvui.Rect.all(0),
+        .corner_radius = dvui.Rect.all(4),
+        .color_text = if (active) theme.colors.accent else theme.colors.text_secondary,
+        .color_fill = theme.transparent,
+        .color_fill_hover = theme.colors.bg_hover,
+        .color_fill_press = theme.colors.bg_elevated,
+    });
+    components.tip(src, wd, label);
+    return clicked;
+}
+
 fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []const u8, heading_icon: []const u8, base_id: usize, card_w: f32, slots: []LibSlot, hidden_count: usize) bool {
     const n = @min(items.len, slots.len);
     const manage_continue = base_id == 7600;
-    if (n == 0 and hidden_count == 0) return false;
+    if (!manage_continue and n == 0 and hidden_count == 0) return false;
 
     // Header (icon + label; no TMDB "See all").
     {
@@ -1143,7 +1162,10 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
     var i: usize = 0;
     while (i < n) : (i += 1) {
         const item = &items[i];
-        const card_chrome: f32 = if (manage_continue) 66 else 38;
+        if (manage_continue and (state.app.continue_hide_nsfw or state.app.nsfw_filter_enabled) and
+            (@import("../services/iptv_pure.zig").isNsfw(item.title[0..item.title_len], item.deep_link[0..item.deep_link_len]) or
+                @import("../services/anime_pure.zig").titleLooksAdult(item.title[0..item.title_len]))) continue;
+        const card_chrome: f32 = if (manage_continue) 84 else 38;
         var card = dvui.box(@src(), .{ .dir = .vertical }, .{
             .id_extra = i + base_id + 10,
             .min_size_content = .{ .w = card_w, .h = poster_h + card_chrome },
@@ -1164,9 +1186,9 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
         if (manage_continue) {
             var tools = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .id_extra = i + base_id + 20,
-                .min_size_content = .{ .w = card_w, .h = 28 },
-                .max_size_content = .{ .w = card_w, .h = 28 },
-                .gravity_y = 0.5,
+                .min_size_content = .{ .w = card_w - 10, .h = 40 },
+                .max_size_content = .{ .w = card_w - 10, .h = 40 },
+                .gravity_y = 0.0,
             });
             defer tools.deinit();
             const kind = library_pure.parseKind(item.kind[0..@min(item.kind_len, item.kind.len)]);
@@ -1187,16 +1209,17 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
                 .color_text = if (item.home_pinned) theme.colors.accent else theme.colors.text_tertiary,
                 .font = dvui.themeGet().font_heading.withSize(theme.font_size.small),
                 .gravity_y = 0.5,
+                .max_size_content = .{ .w = @max(0, card_w - 62), .h = 24 },
             });
             var spacer = dvui.box(@src(), .{}, .{ .id_extra = i + base_id + 22, .expand = .horizontal });
             spacer.deinit();
-            if (components.iconButton(@src(), if (item.home_pinned) icons.tvg.lucide.@"pin-off" else icons.tvg.lucide.pin, if (item.home_pinned) "Unpin from front" else "Pin to front", item.home_pinned)) {
+            if (continueAction(@src(), if (item.home_pinned) icons.tvg.lucide.@"pin-off" else icons.tvg.lucide.pin, if (item.home_pinned) "Unpin from front" else "Pin to front", item.home_pinned)) {
                 library_store.setHomePinned(item.kind[0..item.kind_len], item.item_id[0..item.item_id_len], !item.home_pinned);
                 dvui.refresh(null, @src(), null);
             }
             // Always available, including while the private card is masked.
             // This hides only the Home column and preserves resume progress.
-            if (components.iconButton(@src(), icons.tvg.lucide.x, "Remove from Continue · keeps progress", false)) {
+            if (continueAction(@src(), icons.tvg.lucide.x, "Remove from Continue · keeps progress", false)) {
                 library_store.setHomeHidden(item.kind[0..item.kind_len], item.item_id[0..item.item_id_len], true);
                 dvui.refresh(null, @src(), null);
                 continue;

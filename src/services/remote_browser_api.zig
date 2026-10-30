@@ -363,8 +363,7 @@ fn playCandidate(stream: std.Io.net.Stream, query: []const u8, body: []const u8)
     const id = std.fmt.parseInt(u32, wire.formParam(body, query, "id", &ib) orelse "", 10) catch
         return err(stream, "400 Bad Request", "id required: a candidate id from browser_media_candidates");
     const action = wire.formParam(body, query, "action", &ab) orelse "play";
-    const queue_only = if (std.mem.eql(u8, action, "queue")) true else if (std.mem.eql(u8, action, "play")) false else
-        return err(stream, "400 Bad Request", "action must be play or queue");
+    const queue_only = if (std.mem.eql(u8, action, "queue")) true else if (std.mem.eql(u8, action, "play")) false else return err(stream, "400 Bad Request", "action must be play or queue");
     const played = shared_page.playForAgent(page_id, id, queue_only) catch |e| switch (e) {
         error.not_shared => return err(stream, "403 Forbidden", "no page is shared with agents (the user decides in the Opal Connect panel and Settings > Agent Access)"),
         error.stale => return err(stream, "409 Conflict", "the shared page changed: read browser_media_candidates again"),

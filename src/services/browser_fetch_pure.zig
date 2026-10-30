@@ -488,11 +488,11 @@ test "targets: only plain http(s), no credentials, bounded, no control character
 
 test "private targets: loopback, LAN, link-local, local names and IP literals are not public" {
     for ([_][]const u8{
-        "http://127.0.0.1/",        "http://127.0.0.1:41595/api/status", "http://localhost/",         "http://[::1]/",
-        "http://192.168.1.1/",      "http://10.0.0.5/",                  "http://172.16.0.9/",        "http://169.254.169.254/latest/meta-data/",
-        "http://nas.local/",        "http://printer/",                   "http://foo.internal/",      "http://0x7f.0.0.1/",
-        "http://2130706433/",       "http://app.localhost/",             "http://[fe80::1]/",         "http://router.lan:8080/",
-        "http://127.1/",            "http://0/",
+        "http://127.0.0.1/",   "http://127.0.0.1:41595/api/status", "http://localhost/",    "http://[::1]/",
+        "http://192.168.1.1/", "http://10.0.0.5/",                  "http://172.16.0.9/",   "http://169.254.169.254/latest/meta-data/",
+        "http://nas.local/",   "http://printer/",                   "http://foo.internal/", "http://0x7f.0.0.1/",
+        "http://2130706433/",  "http://app.localhost/",             "http://[fe80::1]/",    "http://router.lan:8080/",
+        "http://127.1/",       "http://0/",
     }) |u| {
         try testing.expect(isPrivateTarget(u));
     }

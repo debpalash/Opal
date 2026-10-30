@@ -215,9 +215,10 @@ pub fn cleanAltTitle(raw: []const u8) ?[]const u8 {
 
 /// Release-name words that mean a low-quality capture or a preview.
 const junk = [_][]const u8{
-    "cam",     "hdcam",    "camrip", "ts",     "hdts",    "telesync", "tc",
-    "telecine", "scr",     "screener", "dvdscr", "r5",    "workprint", "sample",
-    "hdtc",    "pdvd",     "predvd",   "reconstructed", "fanedit", "fanedition", "trailer", "teaser",
+    "cam",      "hdcam", "camrip",   "ts",            "hdts",    "telesync",   "tc",
+    "telecine", "scr",   "screener", "dvdscr",        "r5",      "workprint",  "sample",
+    "hdtc",     "pdvd",  "predvd",   "reconstructed", "fanedit", "fanedition", "trailer",
+    "teaser",
 };
 
 fn isJunk(tok: []const u8) bool {

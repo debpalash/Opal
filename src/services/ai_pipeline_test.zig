@@ -25,28 +25,28 @@ const Item = rank.Item;
 // ══════════════════════════════════════════════════════════
 const library = [_]Item{
     // Jellyfin (local library)
-    .{ .name = "The Boys S01E01 The Name of the Game",  .source = .jellyfin, .quality = 3 },
-    .{ .name = "The Boys S01E02 Cherry",                .source = .jellyfin, .quality = 3 },
-    .{ .name = "Inception (2010)",                      .source = .jellyfin, .quality = 3 },
-    .{ .name = "Iron Man (2008)",                       .source = .jellyfin, .quality = 3 },
-    .{ .name = "Iron Man 2 (2010)",                     .source = .jellyfin, .quality = 3 },
-    .{ .name = "Iron Man 3 (2013)",                     .source = .jellyfin, .quality = 3 },
-    .{ .name = "Breaking Bad S05E14 Ozymandias",        .source = .jellyfin, .quality = 3 },
+    .{ .name = "The Boys S01E01 The Name of the Game", .source = .jellyfin, .quality = 3 },
+    .{ .name = "The Boys S01E02 Cherry", .source = .jellyfin, .quality = 3 },
+    .{ .name = "Inception (2010)", .source = .jellyfin, .quality = 3 },
+    .{ .name = "Iron Man (2008)", .source = .jellyfin, .quality = 3 },
+    .{ .name = "Iron Man 2 (2010)", .source = .jellyfin, .quality = 3 },
+    .{ .name = "Iron Man 3 (2013)", .source = .jellyfin, .quality = 3 },
+    .{ .name = "Breaking Bad S05E14 Ozymandias", .source = .jellyfin, .quality = 3 },
 
     // Torrent (1337x, YTS, nova)
-    .{ .name = "The.Boys.S01E01.1080p.WEB.H264",        .source = .torrent, .quality = 3, .seeds = 320 },
-    .{ .name = "Inception 2010 BluRay 1080p x265",      .source = .torrent, .quality = 3, .seeds = 540 },
-    .{ .name = "Iron Man 3 2013 1080p BluRay",          .source = .torrent, .quality = 3, .seeds = 210 },
-    .{ .name = "Random Jazz Music Collection 320kbps",  .source = .torrent, .quality = 0, .seeds = 15 },
+    .{ .name = "The.Boys.S01E01.1080p.WEB.H264", .source = .torrent, .quality = 3, .seeds = 320 },
+    .{ .name = "Inception 2010 BluRay 1080p x265", .source = .torrent, .quality = 3, .seeds = 540 },
+    .{ .name = "Iron Man 3 2013 1080p BluRay", .source = .torrent, .quality = 3, .seeds = 210 },
+    .{ .name = "Random Jazz Music Collection 320kbps", .source = .torrent, .quality = 0, .seeds = 15 },
 
     // YouTube (trailers, clips, playlists — noisy)
-    .{ .name = "The Boys Season 1 Official Trailer",    .source = .youtube, .quality = 2, .seeds = 0 },
-    .{ .name = "Inception Official Trailer HD",         .source = .youtube, .quality = 2, .seeds = 0 },
-    .{ .name = "Smooth Jazz Study Music 3 Hour Mix",    .source = .youtube, .quality = 3, .seeds = 0 },
-    .{ .name = "Best Jazz Classics Playlist",           .source = .youtube, .quality = 3, .seeds = 0 },
+    .{ .name = "The Boys Season 1 Official Trailer", .source = .youtube, .quality = 2, .seeds = 0 },
+    .{ .name = "Inception Official Trailer HD", .source = .youtube, .quality = 2, .seeds = 0 },
+    .{ .name = "Smooth Jazz Study Music 3 Hour Mix", .source = .youtube, .quality = 3, .seeds = 0 },
+    .{ .name = "Best Jazz Classics Playlist", .source = .youtube, .quality = 3, .seeds = 0 },
 
     // Anime
-    .{ .name = "Attack on Titan S04E01 1080p",          .source = .anime, .quality = 3 },
+    .{ .name = "Attack on Titan S04E01 1080p", .source = .anime, .quality = 3 },
 };
 
 // Intent keyword → expected search routing for tests below
@@ -63,66 +63,66 @@ const Case = struct {
 
 const cases = [_]Case{
     .{
-        .user_input       = "play the boys s01e01",
-        .expected_intent  = .specific_title,
-        .expected_norm    = "the boys s01e01",
+        .user_input = "play the boys s01e01",
+        .expected_intent = .specific_title,
+        .expected_norm = "the boys s01e01",
         .expected_top_name = "The Boys S01E01 The Name of the Game",
         .search_intent_tag = "show",
         .note = "Fixed: 'play ' filler stripped + seed_bonus cap keeps jellyfin on top.",
     },
     .{
-        .user_input       = "can you play iron man 3",
-        .expected_intent  = .specific_title,
-        .expected_norm    = "iron man 3",
+        .user_input = "can you play iron man 3",
+        .expected_intent = .specific_title,
+        .expected_norm = "iron man 3",
         .expected_top_name = "Iron Man 3 (2013)",
         .search_intent_tag = "movie",
         .note = "Numeric sequel must not get confused with Iron Man 2008 / 2010.",
     },
     .{
-        .user_input       = "i wanna watch inception",
-        .expected_intent  = .specific_title,
-        .expected_norm    = "inception",
+        .user_input = "i wanna watch inception",
+        .expected_intent = .specific_title,
+        .expected_norm = "inception",
         .expected_top_name = "Inception (2010)",
         .search_intent_tag = "movie",
         .note = "Filler prefix stripped. Jellyfin hit beats yt trailer (movie intent penalizes yt).",
     },
     .{
-        .user_input       = "breaking bad season five episode fourteen",
-        .expected_intent  = .specific_title,
-        .expected_norm    = "breaking bad S05E14",
+        .user_input = "breaking bad season five episode fourteen",
+        .expected_intent = .specific_title,
+        .expected_norm = "breaking bad S05E14",
         .expected_top_name = "Breaking Bad S05E14 Ozymandias",
         .search_intent_tag = "show",
         .note = "Word-number season/episode → SxxExx.",
     },
     .{
-        .user_input       = "play some jazz",
-        .expected_intent  = .recommendation,
-        .expected_norm    = "some jazz", // "play " stripped as filler
-        .expected_top_name = null,        // should route to recommendation engine, NOT resolver
+        .user_input = "play some jazz",
+        .expected_intent = .recommendation,
+        .expected_norm = "some jazz", // "play " stripped as filler
+        .expected_top_name = null, // should route to recommendation engine, NOT resolver
         .search_intent_tag = "auto",
         .note = "Fixed: 'play some X' → recommendation even when X isn't a media word.",
     },
     .{
-        .user_input       = "surprise me",
-        .expected_intent  = .recommendation,
-        .expected_norm    = "surprise me",
+        .user_input = "surprise me",
+        .expected_intent = .recommendation,
+        .expected_norm = "surprise me",
         .expected_top_name = null,
         .search_intent_tag = "auto",
         .note = "Should go to TMDB trending, not resolver.",
     },
     .{
-        .user_input       = "find sci-fi movies",
-        .expected_intent  = .browse_genre,
-        .expected_norm    = "sci-fi movies", // "find " stripped as filler
+        .user_input = "find sci-fi movies",
+        .expected_intent = .browse_genre,
+        .expected_norm = "sci-fi movies", // "find " stripped as filler
         .expected_top_name = null,
         .search_intent_tag = "auto",
         .note = "Genre + media word → should open genre browser, NOT keyword-search.",
     },
     .{
-        .user_input       = "play the first item",
-        .expected_intent  = .contextual_nav,
-        .expected_norm    = "the first item", // filler 'play ' stripped
-        .expected_top_name = null,             // nav intent → don't search resolver
+        .user_input = "play the first item",
+        .expected_intent = .contextual_nav,
+        .expected_norm = "the first item", // filler 'play ' stripped
+        .expected_top_name = null, // nav intent → don't search resolver
         .search_intent_tag = "auto",
         .note = "Fixed: ordinal nav detected before title search. Downstream must act on chat_results, not resolver.",
     },

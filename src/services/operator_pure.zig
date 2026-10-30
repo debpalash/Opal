@@ -626,11 +626,13 @@ test "match help keeps only plain, distinct, bounded queries" {
 
 test "hosts that point inward or are not plain names are refused" {
     for ([_][]const u8{
-        "localhost",       "localhost.",     "127.0.0.1",   "127.0.0.1.",  "127.1",         "10.1",         "192.168.1",
-        "0x7f.0.0.1",      "0177.0.0.1",     "2130706433",  "10.0.0.5",    "192.168.1.1",   "172.20.0.9",   "169.254.169.254",
-        "0.0.0.0",         "100.64.1.1",     "224.0.0.1",   "93.184.216.34", "printer.local", "nas.lan",      "svc.internal",
-        "x.internal.",     "[::1]",          "foo",         "a..b.org",    "-bad.example.org", "bad-.org", "host%2e.org",
-        "host:80.org",     "exa mple.org",   "名前.jp",      "x.arpa",
+        "localhost",   "localhost.",   "127.0.0.1",  "127.0.0.1.",    "127.1",            "10.1",       "192.168.1",
+        "0x7f.0.0.1",  "0177.0.0.1",   "2130706433", "10.0.0.5",      "192.168.1.1",      "172.20.0.9", "169.254.169.254",
+        "0.0.0.0",     "100.64.1.1",   "224.0.0.1",  "93.184.216.34", "printer.local",    "nas.lan",    "svc.internal",
+        "x.internal.", "[::1]",        "foo",        "a..b.org",      "-bad.example.org", "bad-.org",   "host%2e.org",
+        "host:80.org", "exa mple.org",
+        "名前.jp",
+        "x.arpa",
     }) |h| {
         try std.testing.expect(!publicHost(h));
     }

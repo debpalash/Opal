@@ -29,9 +29,9 @@ const archive_exts = [_][]const u8{ "rar", "zip", "7z", "ace", "arj", "cab" };
 
 /// Markers that the name claims to be a video release (quality/codec/source).
 const video_markers = [_][]const u8{
-    "2160p", "1080p",  "720p", "480p", "4k",     "uhd",  "bluray",
-    "blu-ray", "webrip", "web-dl", "webdl", "hdtv", "dvdrip", "brrip",
-    "x264",  "x265",  "h264", "h265", "hevc",   "cam",  "hdcam",
+    "2160p",    "1080p",  "720p",   "480p",  "4k",   "uhd",    "bluray",
+    "blu-ray",  "webrip", "web-dl", "webdl", "hdtv", "dvdrip", "brrip",
+    "x264",     "x265",   "h264",   "h265",  "hevc", "cam",    "hdcam",
     "telesync", "hdrip",
 };
 

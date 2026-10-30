@@ -533,20 +533,24 @@ test "detect: 3 synthetic audio episodes, jingle at sub-hop offsets, end to end"
 test "classifyChapter: english, tags, localized, and story chapters" {
     const C = Category;
     const cases = [_]struct { []const u8, ?C }{
-        .{ "Opening", C.intro },         .{ "Intro", C.intro },
-        .{ "OP", C.intro },              .{ "OP2", C.intro },
-        .{ "Opening Credits", C.intro }, .{ "Ending", C.credits },
-        .{ "ED", C.credits },            .{ "End Credits", C.credits },
-        .{ "Credits", C.credits },       .{ "Preview", C.preview },
-        .{ "Next Episode", C.preview },  .{ "Recap", C.recap },
-        .{ "Previously on", C.recap },   .{ "Vorspann", C.intro },
-        .{ "Abspann", C.credits },       .{ "Générique de fin", C.credits },
-        .{ "Créditos", C.credits },      .{ "オープニング", C.intro },
-        .{ "エンディング", C.credits },  .{ "予告", C.preview },
-        .{ "Титры", C.credits },         .{ "Chapter 1", null },
-        .{ "Part A", null },             .{ "Pending Doom", null },
-        .{ "Ed's Long Story Of The Day", null }, .{ "", null },
-        .{ "Introduction", null },       .{ "Op. 27 in the Night", null },
+        .{ "Opening", C.intro },          .{ "Intro", C.intro },
+        .{ "OP", C.intro },               .{ "OP2", C.intro },
+        .{ "Opening Credits", C.intro },  .{ "Ending", C.credits },
+        .{ "ED", C.credits },             .{ "End Credits", C.credits },
+        .{ "Credits", C.credits },        .{ "Preview", C.preview },
+        .{ "Next Episode", C.preview },   .{ "Recap", C.recap },
+        .{ "Previously on", C.recap },    .{ "Vorspann", C.intro },
+        .{ "Abspann", C.credits },
+        .{ "Générique de fin", C.credits },
+        .{ "Créditos", C.credits },
+        .{ "オープニング", C.intro },
+        .{ "エンディング", C.credits },
+        .{ "予告", C.preview },
+        .{ "Титры", C.credits },
+        .{ "Chapter 1", null },           .{ "Part A", null },
+        .{ "Pending Doom", null },        .{ "Ed's Long Story Of The Day", null },
+        .{ "", null },                    .{ "Introduction", null },
+        .{ "Op. 27 in the Night", null },
     };
     for (cases) |cse| {
         const got = classifyChapter(cse[0]);

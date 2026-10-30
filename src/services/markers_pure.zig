@@ -296,7 +296,7 @@ test "parseEpisode handles common naming schemes" {
 
 test "selectSiblings: same show+season, nearest first, videos only, bounded" {
     const names = [_][]const u8{
-        "Show.S01E01.mkv", "Show.S01E02.mkv", "Show.S01E03.mkv", "Show.S01E04.mkv",
+        "Show.S01E01.mkv", "Show.S01E02.mkv", "Show.S01E03.mkv",  "Show.S01E04.mkv",
         "Show.S01E05.mkv", "Show.S02E03.mkv", "Other.S01E02.mkv", "Show.S01E02.srt",
         "notes.txt",
     };

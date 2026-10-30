@@ -67,9 +67,9 @@ pub fn buildLikePattern(query: []const u8, out: []u8) ?[]const u8 {
 /// on "Adult Swim") — mirrors iptv_pure.isNsfw's conservative token choice.
 pub fn isAdultGroup(group: []const u8) bool {
     const tokens = [_][]const u8{
-        "xxx",   "porn",     "adult 18", "18+",       "adults only",
-        "erotic", "sex",     "playboy",  "brazzers",  "hustler",
-        "penthouse", "hentai", "camsoda", "chaturbate",
+        "xxx",       "porn",   "adult 18", "18+",        "adults only",
+        "erotic",    "sex",    "playboy",  "brazzers",   "hustler",
+        "penthouse", "hentai", "camsoda",  "chaturbate",
     };
     for (tokens) |t| {
         if (containsCI(group, t)) return true;

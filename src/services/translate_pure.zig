@@ -9,14 +9,14 @@ pub const Lang = struct { code: []const u8, name: []const u8 };
 /// Target languages offered in Settings (ISO 639-1 → English name the model
 /// is prompted with).
 pub const languages = [_]Lang{
-    .{ .code = "en", .name = "English" },   .{ .code = "es", .name = "Spanish" },
-    .{ .code = "fr", .name = "French" },    .{ .code = "de", .name = "German" },
+    .{ .code = "en", .name = "English" },    .{ .code = "es", .name = "Spanish" },
+    .{ .code = "fr", .name = "French" },     .{ .code = "de", .name = "German" },
     .{ .code = "pt", .name = "Portuguese" }, .{ .code = "it", .name = "Italian" },
-    .{ .code = "ru", .name = "Russian" },   .{ .code = "zh", .name = "Chinese (Simplified)" },
-    .{ .code = "ja", .name = "Japanese" },  .{ .code = "ko", .name = "Korean" },
-    .{ .code = "hi", .name = "Hindi" },     .{ .code = "ar", .name = "Arabic" },
-    .{ .code = "tr", .name = "Turkish" },   .{ .code = "nl", .name = "Dutch" },
-    .{ .code = "pl", .name = "Polish" },    .{ .code = "id", .name = "Indonesian" },
+    .{ .code = "ru", .name = "Russian" },    .{ .code = "zh", .name = "Chinese (Simplified)" },
+    .{ .code = "ja", .name = "Japanese" },   .{ .code = "ko", .name = "Korean" },
+    .{ .code = "hi", .name = "Hindi" },      .{ .code = "ar", .name = "Arabic" },
+    .{ .code = "tr", .name = "Turkish" },    .{ .code = "nl", .name = "Dutch" },
+    .{ .code = "pl", .name = "Polish" },     .{ .code = "id", .name = "Indonesian" },
 };
 
 pub fn langName(code: []const u8) ?[]const u8 {

@@ -221,9 +221,9 @@ pub const isM3u8 = lh.isM3u8;
 /// "Adult Animation" — plain "adult" is NOT a trigger; only explicit tokens are.
 pub fn isNsfw(title: []const u8, url: []const u8) bool {
     const tokens = [_][]const u8{
-        "xxx",     "porn",  "brazzers", "playboy", "hustler",
-        "penthouse", "hentai", "camsoda", "chaturbate", "redtube",
-        "18+",     "adults only",
+        "xxx",       "porn",        "brazzers", "playboy",    "hustler",
+        "penthouse", "hentai",      "camsoda",  "chaturbate", "redtube",
+        "18+",       "adults only",
     };
     for (tokens) |t| {
         if (containsCI(title, t)) return true;

@@ -101,8 +101,8 @@ pub fn transcribeChunk(alloc: std.mem.Allocator, ws: *const secure_temp.Workspac
     _ = io.cwdStatFile(wav) catch return error.Extract;
 
     const wh = [_][]const u8{
-        job.whisper_bin, "-m",    job.model, "-f",  wav,
-        "-osrt",         "-of",   base,      "-l",  job.lang,
+        job.whisper_bin, "-m",        job.model,     "-f", wav,
+        "-osrt",         "-of",       base,          "-l", job.lang,
         "-t",            job.threads, "--no-prints",
     };
     const wh_res = bounded.run(&wh, out, .{ .timeout_ms = 180_000, .cancel_epoch = job.cancel });

@@ -453,6 +453,7 @@ pub const AppState = struct {
     last_clicked_search_idx: usize = 99999,
     last_clicked_time: i64 = 0,
     nsfw_filter_enabled: bool = true,
+    continue_hide_nsfw: bool = true,
     // Route image-gallery / art / booru URLs to gallery-dl instead of the HTTP
     // downloader. Effective only when a gallery-dl binary is installed (see
     // services/gallerydl.zig enabled()); default ON.

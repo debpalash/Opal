@@ -55,11 +55,10 @@ test "detectQuality: highest quality wins" {
 // ═══════════════════════════════════════════════════════════
 
 const nsfw_keywords = [_][]const u8{
-    "xxx", "porn", "hentai", "erotic", "nude", "naked", "adult",
-    "brazzers", "bangbros", "naughty", "playboy", "hustler",
-    "18+", "milf", "anal", "orgasm", "fetish", "bondage",
-    "hardcore", "softcore", "nsfw", "onlyfans", "sexxx",
-    "lesbian", "threesome", "foursome", "stripshow", "cam girl",
+    "xxx",      "porn",     "hentai",  "erotic",    "nude",     "naked",     "adult",
+    "brazzers", "bangbros", "naughty", "playboy",   "hustler",  "18+",       "milf",
+    "anal",     "orgasm",   "fetish",  "bondage",   "hardcore", "softcore",  "nsfw",
+    "onlyfans", "sexxx",    "lesbian", "threesome", "foursome", "stripshow", "cam girl",
 };
 
 fn isNsfwName(name: []const u8) bool {
@@ -99,12 +98,15 @@ test "isNsfwName: normal content passes through" {
 
 fn extractEngineName(engine_url: []const u8, buf: *[32]u8) []const u8 {
     var s = engine_url;
-    if (std.mem.indexOf(u8, s, "://")) |i| s = s[i + 3..];
+    if (std.mem.indexOf(u8, s, "://")) |i| s = s[i + 3 ..];
     if (std.mem.startsWith(u8, s, "www.")) s = s[4..];
     if (std.mem.startsWith(u8, s, "the")) s = s[3..];
     var end: usize = s.len;
     for (s, 0..) |ch, j| {
-        if (ch == '.' or ch == '/') { end = j; break; }
+        if (ch == '.' or ch == '/') {
+            end = j;
+            break;
+        }
     }
     if (end == 0) return "?";
     const name = s[0..@min(end, 31)];
@@ -176,12 +178,12 @@ test "hexVal: invalid chars return null" {
 // ═══════════════════════════════════════════════════════════
 
 const streamlink_domains = [_][]const u8{
-    "chaturbate.com", "twitch.tv",     "kick.com",
-    "stripchat.com",  "bongacams.com", "cam4.com",
-    "camsoda.com",    "myfreecams.com","flirt4free.com",
-    "livejasmin.com", "dailymotion.com","crunchyroll.com",
-    "bilibili.com",   "afreecatv.com", "pluto.tv",
-    "picarto.tv",     "dlive.tv",      "rumble.com",
+    "chaturbate.com", "twitch.tv",       "kick.com",
+    "stripchat.com",  "bongacams.com",   "cam4.com",
+    "camsoda.com",    "myfreecams.com",  "flirt4free.com",
+    "livejasmin.com", "dailymotion.com", "crunchyroll.com",
+    "bilibili.com",   "afreecatv.com",   "pluto.tv",
+    "picarto.tv",     "dlive.tv",        "rumble.com",
     "odysee.com",
 };
 

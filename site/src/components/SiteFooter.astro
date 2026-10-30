@@ -1,6 +1,8 @@
 ---
 import { AUTHOR_URL, REPO } from "../lib/site";
 
+const asciiLogo = "  ___              _ \n / _ \\ _ __   __ _| |\n| | | | '_ \\ / _` | |\n| |_| | |_) | (_| | |\n \\___/| .__/ \\__,_|_|\n      |_|            ";
+
 const columns: [string, [string, string][]][] = [
   [
     "Product",
@@ -37,7 +39,7 @@ const columns: [string, [string, string][]][] = [
   <div class="wrap">
     <div class="cols">
       <div class="about">
-        <a class="brand" href="/"><img src="/favicon.svg" alt="" width="26" height="26" />Opal</a>
+        <a class="ascii-brand" href="/" aria-label="Opal home"><pre aria-hidden="true">{asciiLogo}</pre></a>
         <p>A free, open-source, local-first media player. One app for movies, TV, anime, live TV, torrents, manga — and your Jellyfin &amp; Plex.</p>
         <p class="follow"><a href="https://ko-fi.com/debpalash">Support on Ko-fi</a> · <a href={AUTHOR_URL} rel="me">Follow the build</a></p>
       </div>
@@ -58,3 +60,24 @@ const columns: [string, [string, string][]][] = [
     </p>
   </div>
 </footer>
+
+<style>
+  .ascii-brand {
+    display: inline-block;
+    max-width: 100%;
+    color: var(--fg);
+    text-decoration: none;
+    border-radius: 4px;
+  }
+  .ascii-brand pre {
+    margin: 0;
+    padding: 0;
+    background: none;
+    color: inherit;
+    font: 500 clamp(14px, 1.4vw, 18px) / 1.1 ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    letter-spacing: -0.035em;
+    white-space: pre;
+  }
+  .ascii-brand:hover { color: var(--accent, var(--fg)); }
+  .ascii-brand:focus-visible { outline: 2px solid currentColor; outline-offset: 8px; }
+</style>
