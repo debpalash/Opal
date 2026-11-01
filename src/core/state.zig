@@ -760,10 +760,6 @@ pub const AppState = struct {
     /// Last output device and aspect choice, replayed before each media load.
     audio_device_buf: [256]u8 = std.mem.zeroes([256]u8),
     audio_device_len: usize = 0,
-    /// The viewer asked for no audio track (remote `audio-track=off`). The
-    /// output-recovery path must not turn a deliberately muted track back on.
-    /// Runtime-only — never persisted, and cleared as soon as a track is picked.
-    audio_off_intent: bool = false,
     video_aspect_buf: [16]u8 = [_]u8{ '-', '1', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },
     video_aspect_len: usize = 2,
 

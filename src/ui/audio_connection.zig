@@ -55,7 +55,7 @@ fn audioSilent(p: *player.MediaPlayer) bool {
 /// The audio driver refused to open the forced device. mpv reports that only by
 /// dropping the track, so the failure is "silent with a specific device forced".
 fn audioDroppedBy(p: *player.MediaPlayer) bool {
-    if (state.app.audio_off_intent) return false; // the viewer asked for silence
+    if (p.audio_off_intent) return false; // the viewer asked for silence
 
     const dev = c.mpv.mpv_get_property_string(p.mpv_ctx, "audio-device");
     if (dev == null) return false;
@@ -69,6 +69,8 @@ fn audioDroppedBy(p: *player.MediaPlayer) bool {
 /// track back: mpv has already given up on it for this file. Re-selecting the
 /// track is what re-runs output setup — at the current position, no reload.
 fn reinitAudio(p: *player.MediaPlayer) void {
+    // Both disconnected-device and refused-device recovery come through here.
+    if (p.audio_off_intent) return;
     _ = c.mpv.mpv_set_property_string(p.mpv_ctx, "aid", "no");
     _ = c.mpv.mpv_set_property_string(p.mpv_ctx, "aid", "auto");
 }
@@ -77,37 +79,23 @@ fn reinitAudio(p: *player.MediaPlayer) void {
 /// driver that works) and re-open the track. Persist the fallback, otherwise the
 /// next launch forces the same dead device and every video is silent again.
 fn recoverDroppedAudio() void {
-    var failed: [pure.name_cap]u8 = undefined;
-    var failed_len: usize = 0;
-
+    var recovered = false;
     for (state.app.players.items) |p| {
-        const silent = audioSilent(p);
-        if (silent and failed_len == 0) {
-            const dev = c.mpv.mpv_get_property_string(p.mpv_ctx, "audio-device");
-            if (dev != null) {
-                defer c.mpv.mpv_free(@ptrCast(dev));
-                const selected = std.mem.span(dev);
-                if (selected.len > 0 and selected.len <= failed.len) {
-                    @memcpy(failed[0..selected.len], selected);
-                    failed_len = selected.len;
-                }
-            }
+        if (!audioDroppedBy(p)) continue;
+        const dev = c.mpv.mpv_get_property_string(p.mpv_ctx, "audio-device") orelse continue;
+        defer c.mpv.mpv_free(@ptrCast(dev));
+        if (c.mpv.mpv_set_property_string(p.mpv_ctx, "audio-device", "auto") < 0) continue;
+        reinitAudio(p);
+        recovered = true;
+        if (std.mem.eql(u8, state.app.audio_device_buf[0..state.app.audio_device_len], std.mem.span(dev))) {
+            @memset(&state.app.audio_device_buf, 0);
+            state.app.audio_device_len = 0;
+            state.markConfigDirty();
         }
-        _ = c.mpv.mpv_set_property_string(p.mpv_ctx, "audio-device", "auto");
-        if (silent) reinitAudio(p);
-    }
-
-    if (failed_len > 0 and
-        state.app.audio_device_len == failed_len and
-        std.mem.eql(u8, state.app.audio_device_buf[0..state.app.audio_device_len], failed[0..failed_len]))
-    {
-        @memset(&state.app.audio_device_buf, 0);
-        state.app.audio_device_len = 0;
-        state.markConfigDirty();
     }
 
     dropped_audio = .{};
-    state.showToast("Audio output could not be opened. Switched to automatic output.");
+    if (recovered) state.showToast("Audio output could not be opened. Switched to automatic output.");
 }
 
 pub fn render() void {
@@ -298,4 +286,47 @@ test "Native shell offline audio connection prompt" {
     saw_entrance_for_test = false;
     try @import("native_capture.zig").capture(390, 480, "audio-connection-entering", null, drawPromptFixture, null);
     try std.testing.expect(saw_entrance_for_test);
+}
+
+test "Native shell offline audio connection recovery preserves audio off" {
+    const ctx = c.mpv.mpv_create() orelse return error.MpvCreateFailed;
+    defer c.mpv.mpv_terminate_destroy(ctx);
+    _ = c.mpv.mpv_set_option_string(ctx, "config", "no");
+    if (c.mpv.mpv_initialize(ctx) < 0) return error.MpvInitFailed;
+    var p: player.MediaPlayer = undefined;
+    p.mpv_ctx = ctx;
+    p.audio_off_intent = true;
+    try std.testing.expect(c.mpv.mpv_set_property_string(ctx, "aid", "no") >= 0);
+    reinitAudio(&p);
+    const aid = c.mpv.mpv_get_property_string(ctx, "aid") orelse return error.MissingAid;
+    defer c.mpv.mpv_free(@ptrCast(aid));
+    try std.testing.expectEqualStrings("no", std.mem.span(aid));
+    p.audio_off_intent = false;
+    reinitAudio(&p);
+    const enabled = c.mpv.mpv_get_property_string(ctx, "aid") orelse return error.MissingAid;
+    defer c.mpv.mpv_free(@ptrCast(enabled));
+    try std.testing.expectEqualStrings("auto", std.mem.span(enabled));
+
+    // A separate player's explicit off choice must not suppress this player.
+    const other_ctx = c.mpv.mpv_create() orelse return error.MpvCreateFailed;
+    defer c.mpv.mpv_terminate_destroy(other_ctx);
+    _ = c.mpv.mpv_set_option_string(other_ctx, "config", "no");
+    if (c.mpv.mpv_initialize(other_ctx) < 0) return error.MpvInitFailed;
+    var other: player.MediaPlayer = undefined;
+    other.mpv_ctx = other_ctx;
+    other.audio_off_intent = true;
+    _ = c.mpv.mpv_set_property_string(other_ctx, "aid", "no");
+    _ = c.mpv.mpv_set_property_string(ctx, "audio-device", "null");
+    var players = [_]*player.MediaPlayer{ &p, &other };
+    const previous_players = state.app.players;
+    defer state.app.players = previous_players;
+    state.app.players = .{ .items = &players, .capacity = players.len };
+    recoverDroppedAudio();
+    const device = c.mpv.mpv_get_property_string(ctx, "audio-device") orelse return error.MissingDevice;
+    defer c.mpv.mpv_free(@ptrCast(device));
+    try std.testing.expectEqualStrings("null", std.mem.span(device));
+    reinitAudio(&p);
+    const other_aid = c.mpv.mpv_get_property_string(other_ctx, "aid") orelse return error.MissingAid;
+    defer c.mpv.mpv_free(@ptrCast(other_aid));
+    try std.testing.expectEqualStrings("no", std.mem.span(other_aid));
 }

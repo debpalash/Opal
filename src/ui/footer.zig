@@ -339,7 +339,11 @@ pub fn trackDropdownMenu(ctx: *c.mpv.mpv_handle, track_type: []const u8) void {
                             _ = c.mpv.mpv_command_string(ctx, cmd.ptr);
                         } else |_| {}
                         // Picking a track cancels a deliberate "no audio" intent.
-                        if (is_aud) state.app.audio_off_intent = false;
+                        if (is_aud) {
+                            for (state.app.players.items) |p| {
+                                if (p.mpv_ctx == ctx) p.audio_off_intent = false;
+                            }
+                        }
                     }
                 }
             }

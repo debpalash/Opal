@@ -44,7 +44,7 @@ PATTERNS+=(
     "lang_server.py"
     # Anchored on the flag so a stray editor open on the sibling zig-bypassdpi
     # checkout is not matched by the bare project name.
-    "zig-bypassdpi --listen"
+    "zig-bypassdpi .*--listen( |$)"
     "opal-voice-server"
     "opal-tts-server"
     "opal-stt-server"

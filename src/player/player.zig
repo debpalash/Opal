@@ -450,6 +450,8 @@ pub const MediaPlayer = struct {
     cached_volume: f64 = 100,
     cached_speed: f64 = 1,
     cached_muted: bool = false,
+    /// Explicit track-off intent belongs to this player, not other windows.
+    audio_off_intent: bool = false,
     cached_paused_for_cache: bool = false,
     cached_playlist_count: i64 = 0,
     cached_playlist_pos: i64 = 0,
@@ -855,6 +857,7 @@ pub const MediaPlayer = struct {
         self.cached_volume = state.app.playback_volume;
         self.cached_speed = state.app.playback_speed;
         self.cached_muted = state.app.playback_muted;
+        self.audio_off_intent = false;
         self.cached_paused_for_cache = false;
         self.cached_playlist_count = 0;
         self.cached_playlist_pos = 0;

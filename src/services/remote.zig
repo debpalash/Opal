@@ -4682,7 +4682,7 @@ fn setTrack(ap: *player.MediaPlayer, name: [*:0]const u8, selection: player_api.
     // Remember a deliberate "no audio" so the output-recovery path (a failed
     // audio device) does not turn the track back on behind the viewer's back.
     if (std.mem.eql(u8, std.mem.sliceTo(name, 0), "aid"))
-        state.app.audio_off_intent = std.meta.activeTag(selection) == .off;
+        ap.audio_off_intent = std.meta.activeTag(selection) == .off;
     switch (selection) {
         .off => _ = c.mpv.mpv_set_property_string(ap.mpv_ctx, name, "no"),
         .id => |id| {

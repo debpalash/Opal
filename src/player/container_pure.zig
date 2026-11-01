@@ -572,10 +572,11 @@ fn mp4DurationSecs(probe: []const u8) ?f64 {
         if (size < hdr) return null;
 
         if (std.mem.eql(u8, typ, "moov")) {
-            const end = @min(at + size, probe.len);
+            const box_end = std.math.add(u64, at, size) catch return null;
+            const end = @min(box_end, probe.len);
             return mp4MvhdDuration(probe[i + hdr .. @intCast(end)]);
         }
-        at += size;
+        at = std.math.add(u64, at, size) catch return null;
         if (at >= probe.len) return null;
     }
     return null;
@@ -595,7 +596,8 @@ fn mp4MvhdDuration(moov: []const u8) ?f64 {
         } else if (size == 0) {
             size = moov.len - at;
         }
-        if (size < hdr or at + size > moov.len) return null;
+        const end = std.math.add(u64, at, size) catch return null;
+        if (size < hdr or end > moov.len) return null;
         if (std.mem.eql(u8, typ, "mvhd")) {
             const body = moov[at + hdr .. at + @as(usize, @intCast(size))];
             if (body.len < 4) return null;
@@ -636,7 +638,7 @@ fn aviDurationSecs(probe: []const u8) ?f64 {
         const size: u64 = std.mem.readInt(u32, probe[i + 4 ..][0..4], .little);
 
         if (std.mem.eql(u8, ck, "LIST")) {
-            if (i + 12 > probe.len) return null;
+            if (size < 4 or i + 12 > probe.len) return null;
             const list_type = probe[i + 8 .. i + 12];
             if (std.mem.eql(u8, list_type, "hdrl")) {
                 const end = @min(at + 8 + size, probe.len);
@@ -1043,4 +1045,23 @@ test "requiredBytes: head + tail, and a linear format asks for the head only" {
 
     const ts = initialPlan(.ts, size);
     try t.expectEqual(HEAD_BYTES, ts.requiredBytes());
+}
+
+test "AVI duration rejects LIST chunks shorter than their type" {
+    var probe = "RIFF\x10\x00\x00\x00AVI LIST\x00\x00\x00\x00hdrl".*;
+    for (0..4) |size| {
+        std.mem.writeInt(u32, probe[16..20], @intCast(size), .little);
+        try t.expectEqual(@as(?f64, null), aviDurationSecs(&probe));
+        const plan = initialPlan(.avi, 10_000_000);
+        try t.expectEqual(plan.start_bytes, refine(plan, &probe).start_bytes);
+    }
+}
+
+test "MP4 duration rejects overflowing extended box sizes" {
+    const probe = "\x00\x00\x00\x08ftyp\x00\x00\x00\x01moov\xff\xff\xff\xff\xff\xff\xff\xff";
+    const plan = initialPlan(.mp4, 10_000_000);
+    try t.expectEqual(@as(?f64, null), mp4DurationSecs(probe));
+    try t.expectEqual(plan.start_bytes, refine(plan, probe).start_bytes);
+    const nested = "\x00\x00\x00\x08free\x00\x00\x00\x01mvhd\xff\xff\xff\xff\xff\xff\xff\xff";
+    try t.expectEqual(@as(?f64, null), mp4MvhdDuration(nested));
 }
