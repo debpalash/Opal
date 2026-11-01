@@ -328,3 +328,71 @@ test "missing selected output triggers recovery after consecutive valid snapshot
     try std.testing.expect(!recovery.update("auto", devices[0..n]));
     try std.testing.expect(!recovery.update("coreaudio/builtin", devices[0..n]));
 }
+
+/// The other way an output goes silent — and the one MissingOutput cannot see.
+///
+/// A device can still be LISTED and still refuse to open. mpv then logs
+/// "Could not open/initialize audio device -> no sound", drops the audio track
+/// and plays video only, with no error anywhere in the property surface except
+/// this one: the file HAS an audio track, `aid` reads "no", and a specific
+/// (non-auto) device was forced. mpv only ever sets aid="no" itself on that
+/// failure path, so the combination is unambiguous.
+///
+/// Example seen in the wild: a stale `coreaudio/<uid>` name left over from a
+/// Bluetooth headset that re-paired with a new UID. It stays in
+/// `audio-device-list`, so nothing "disconnected" — every video just played
+/// silently while `auto` would have worked.
+pub fn audioDropped(forced_device: []const u8, has_audio_track: bool, aid_is_no: bool) bool {
+    if (!has_audio_track or !aid_is_no) return false;
+    return isForcedDevice(forced_device);
+}
+
+/// Is a specific output forced (i.e. not "auto")? With `auto` mpv picks a
+/// driver that works and never drops the track by itself.
+pub fn isForcedDevice(device: []const u8) bool {
+    const name = std.mem.trim(u8, device, " \t\r\n");
+    return name.len > 0 and !std.mem.eql(u8, name, "auto");
+}
+
+/// Consecutive-poll debounce for `audioDropped`: a file that is still opening
+/// (tracks not yet enumerated, aid not yet resolved) must never be "recovered".
+pub const DroppedAudio = struct {
+    polls: u8 = 0,
+
+    pub fn update(self: *DroppedAudio, dropped: bool) bool {
+        if (!dropped) {
+            self.polls = 0;
+            return false;
+        }
+        self.polls +|= 1;
+        return self.polls >= 3;
+    }
+};
+
+test "a listed-but-dead output is detected as dropped audio, not as silence by choice" {
+    try std.testing.expect(audioDropped("coreaudio/dead-device", true, true));
+    // auto (or nothing forced) means mpv chose the output itself; it never
+    // drops the track in that case, so this is somebody else's doing.
+    try std.testing.expect(!audioDropped("auto", true, true));
+    try std.testing.expect(!audioDropped("", true, true));
+    try std.testing.expect(!audioDropped("  auto\n", true, true));
+    try std.testing.expect(isForcedDevice("coreaudio/dead-device"));
+    try std.testing.expect(!isForcedDevice(" auto "));
+    try std.testing.expect(!isForcedDevice(""));
+    // No audio track in the file, or audio is playing: nothing to recover.
+    try std.testing.expect(!audioDropped("coreaudio/dead-device", false, true));
+    try std.testing.expect(!audioDropped("coreaudio/dead-device", true, false));
+}
+
+test "dropped audio recovers only after consecutive polls, and resets on a working file" {
+    var dropped = DroppedAudio{};
+    try std.testing.expect(!dropped.update(true));
+    try std.testing.expect(!dropped.update(true));
+    try std.testing.expect(dropped.update(true));
+    // A file that plays fine must clear the streak — otherwise a single bad
+    // open would leave the next episode stuck in "recovering" forever.
+    try std.testing.expect(!dropped.update(false));
+    try std.testing.expect(!dropped.update(true));
+    try std.testing.expect(!dropped.update(true));
+    try std.testing.expect(dropped.update(true));
+}

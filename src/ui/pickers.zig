@@ -458,6 +458,8 @@ pub fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []con
             if (std.fmt.bufPrintZ(&cmd, "set {s} {d}", .{ prop, t_id })) |cstr| {
                 _ = c.mpv.mpv_command_string(active_p.mpv_ctx, cstr.ptr);
             } else |_| {}
+            // Picking a track cancels a deliberate "no audio" intent.
+            if (kind == .audio) state.app.audio_off_intent = false;
             if (kind == .sub) {
                 _ = c.mpv.mpv_command_string(active_p.mpv_ctx, "set sub-visibility yes");
                 state.app.subtitles_enabled = true;

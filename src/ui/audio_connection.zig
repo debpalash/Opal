@@ -5,6 +5,7 @@ const c = @import("../core/c.zig");
 const state = @import("../core/state.zig");
 const io = @import("../core/io_global.zig");
 const pure = @import("../player/av_device_pure.zig");
+const player = @import("../player/player.zig");
 const theme = @import("theme.zig");
 const components = @import("components.zig");
 const icons = @import("icons");
@@ -14,6 +15,7 @@ var connections: pure.Connections = .{};
 var pending: ?pure.AudioDevice = null;
 var last_poll: i64 = 0;
 var missing_output: pure.MissingOutput = .{};
+var dropped_audio: pure.DroppedAudio = .{};
 
 fn pauseAll() void {
     for (state.app.players.items) |p| {
@@ -22,11 +24,98 @@ fn pauseAll() void {
     }
 }
 
+/// Does the loaded file have an audio track at all? `track-list` is populated
+/// once the demuxer has opened, so this is also the "file is far enough along
+/// to judge" check the recovery relies on.
+fn hasAudioTrack(p: *player.MediaPlayer) bool {
+    var count: i64 = 0;
+    if (c.mpv.mpv_get_property(p.mpv_ctx, "track-list/count", c.mpv.MPV_FORMAT_INT64, &count) < 0) return false;
+
+    var i: i64 = 0;
+    while (i < count and i < 64) : (i += 1) {
+        var q: [64]u8 = undefined;
+        const query = std.fmt.bufPrintZ(&q, "track-list/{d}/type", .{i}) catch break;
+        const typ = c.mpv.mpv_get_property_string(p.mpv_ctx, query.ptr);
+        if (typ == null) continue;
+        defer c.mpv.mpv_free(@ptrCast(typ));
+        if (std.mem.eql(u8, std.mem.span(typ), "audio")) return true;
+    }
+    return false;
+}
+
+/// The file has audio but mpv is not playing it (`aid` == "no").
+fn audioSilent(p: *player.MediaPlayer) bool {
+    const aid = c.mpv.mpv_get_property_string(p.mpv_ctx, "aid");
+    if (aid == null) return false;
+    defer c.mpv.mpv_free(@ptrCast(aid));
+    if (!std.mem.eql(u8, std.mem.span(aid), "no")) return false;
+    return hasAudioTrack(p);
+}
+
+/// The audio driver refused to open the forced device. mpv reports that only by
+/// dropping the track, so the failure is "silent with a specific device forced".
+fn audioDroppedBy(p: *player.MediaPlayer) bool {
+    if (state.app.audio_off_intent) return false; // the viewer asked for silence
+
+    const dev = c.mpv.mpv_get_property_string(p.mpv_ctx, "audio-device");
+    if (dev == null) return false;
+    defer c.mpv.mpv_free(@ptrCast(dev));
+    if (!pure.isForcedDevice(std.mem.span(dev))) return false;
+
+    return audioSilent(p);
+}
+
+/// Re-open the audio chain. Changing `audio-device` alone does NOT bring the
+/// track back: mpv has already given up on it for this file. Re-selecting the
+/// track is what re-runs output setup — at the current position, no reload.
+fn reinitAudio(p: *player.MediaPlayer) void {
+    _ = c.mpv.mpv_set_property_string(p.mpv_ctx, "aid", "no");
+    _ = c.mpv.mpv_set_property_string(p.mpv_ctx, "aid", "auto");
+}
+
+/// The forced output could not be opened: drop to `auto` (which lets mpv pick a
+/// driver that works) and re-open the track. Persist the fallback, otherwise the
+/// next launch forces the same dead device and every video is silent again.
+fn recoverDroppedAudio() void {
+    var failed: [pure.name_cap]u8 = undefined;
+    var failed_len: usize = 0;
+
+    for (state.app.players.items) |p| {
+        const silent = audioSilent(p);
+        if (silent and failed_len == 0) {
+            const dev = c.mpv.mpv_get_property_string(p.mpv_ctx, "audio-device");
+            if (dev != null) {
+                defer c.mpv.mpv_free(@ptrCast(dev));
+                const selected = std.mem.span(dev);
+                if (selected.len > 0 and selected.len <= failed.len) {
+                    @memcpy(failed[0..selected.len], selected);
+                    failed_len = selected.len;
+                }
+            }
+        }
+        _ = c.mpv.mpv_set_property_string(p.mpv_ctx, "audio-device", "auto");
+        if (silent) reinitAudio(p);
+    }
+
+    if (failed_len > 0 and
+        state.app.audio_device_len == failed_len and
+        std.mem.eql(u8, state.app.audio_device_buf[0..state.app.audio_device_len], failed[0..failed_len]))
+    {
+        @memset(&state.app.audio_device_buf, 0);
+        state.app.audio_device_len = 0;
+        state.markConfigDirty();
+    }
+
+    dropped_audio = .{};
+    state.showToast("Audio output could not be opened. Switched to automatic output.");
+}
+
 pub fn render() void {
     if (state.app.players.items.len == 0) {
         connections = .{};
         pending = null;
         missing_output = .{};
+        dropped_audio = .{};
         return;
     }
     const timer_id = dvui.Id.extendId(null, @src(), 0);
@@ -52,15 +141,23 @@ pub fn render() void {
                         defer c.mpv.mpv_free(@ptrCast(current));
                         const selected = std.mem.span(current);
                         if (missing_output.update(selected, devices[0..count]) and c.mpv.mpv_set_property_string(p.mpv_ctx, "audio-device", "auto") >= 0) {
-                            for (state.app.players.items) |player| {
-                                if (player == p) continue;
-                                const other = c.mpv.mpv_get_property_string(player.mpv_ctx, "audio-device");
+                            // Switching the device is not enough if the open
+                            // already failed: the track stays dropped until it
+                            // is re-selected.
+                            if (audioSilent(p)) reinitAudio(p);
+                            for (state.app.players.items) |sibling| {
+                                if (sibling == p) continue;
+                                const other = c.mpv.mpv_get_property_string(sibling.mpv_ctx, "audio-device");
                                 if (other != null) {
                                     defer c.mpv.mpv_free(@ptrCast(other));
-                                    if (std.mem.eql(u8, std.mem.span(other), selected))
-                                        _ = c.mpv.mpv_set_property_string(player.mpv_ctx, "audio-device", "auto");
+                                    if (std.mem.eql(u8, std.mem.span(other), selected)) {
+                                        const sibling_silent = audioSilent(sibling);
+                                        _ = c.mpv.mpv_set_property_string(sibling.mpv_ctx, "audio-device", "auto");
+                                        if (sibling_silent) reinitAudio(sibling);
+                                    }
                                 }
                             }
+                            dropped_audio = .{};
                             if (std.mem.eql(u8, state.app.audio_device_buf[0..state.app.audio_device_len], selected)) {
                                 @memset(&state.app.audio_device_buf, 0);
                                 state.app.audio_device_len = 0;
@@ -80,6 +177,18 @@ pub fn render() void {
                 }
             } else missing_output = .{};
         } else missing_output = .{};
+
+        // A device that is still listed but refuses to open leaves mpv playing
+        // video with no audio (it drops the track). Detect that separately: the
+        // "disconnected" path above can never see it.
+        var any_dropped = false;
+        for (state.app.players.items) |pl| {
+            if (audioDroppedBy(pl)) {
+                any_dropped = true;
+                break;
+            }
+        }
+        if (dropped_audio.update(any_dropped)) recoverDroppedAudio();
     }
     renderPrompt();
 }

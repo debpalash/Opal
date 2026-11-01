@@ -338,6 +338,8 @@ pub fn trackDropdownMenu(ctx: *c.mpv.mpv_handle, track_type: []const u8) void {
                         if (std.fmt.bufPrintZ(&set_cmd_buf, "set {s} {d}", .{ prop, t_id })) |cmd| {
                             _ = c.mpv.mpv_command_string(ctx, cmd.ptr);
                         } else |_| {}
+                        // Picking a track cancels a deliberate "no audio" intent.
+                        if (is_aud) state.app.audio_off_intent = false;
                     }
                 }
             }

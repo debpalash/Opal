@@ -10,7 +10,29 @@ def test_audio_connection_policy():
                             cwd=PROJECT_DIR, capture_output=True, text=True, timeout=120)
     if result.returncode:
         return "fail", result.stderr[-1500:]
-    return "pass", "executed arrival/reorder/removal/reconnect and device parser regressions"
+
+    # A device can be listed and still refuse to open. mpv then drops the audio
+    # track and plays video silently — the "disconnected" path never sees it, so
+    # the gate must notice aid=="no" with a forced device and re-open the track.
+    ac = _src("src/ui/audio_connection.zig")
+    remote = _src("src/services/remote.zig")
+    checks = {
+        "dead-but-listed output detected": ("audioDroppedBy" in ac
+                                            and "isForcedDevice" in ac
+                                            and "hasAudioTrack" in ac),
+        "recovery re-opens the track, not just the device": ("reinitAudio" in ac
+                                                            and '"aid", "no"' in ac
+                                                            and '"aid", "auto"' in ac),
+        "recovery persists the fallback": ("Audio output could not be opened" in ac
+                                           and "state.app.audio_device_len = 0" in ac),
+        "deliberate audio-off is respected": ("audio_off_intent" in ac
+                                              and "audio_off_intent" in remote),
+    }
+    failed = [name for name, ok in checks.items() if not ok]
+    if failed:
+        return "fail", "missing: " + ", ".join(failed)
+    return "pass", ("arrival/reorder/removal/reconnect, device parser, "
+                    "and silent-video recovery regressions")
 
 @test("Playback stays in Opal without external player handoffs", "Player")
 def test_no_external_player_handoff():
