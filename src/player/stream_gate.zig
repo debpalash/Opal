@@ -153,12 +153,15 @@ pub fn isReady(torrent_id: i32, file_idx: i32, file_name: []const u8, file_size:
         logs.pushLog("info", "stream", msg, false);
     }
 
-    // ── Phase 2: refine the tail from the container's own index ──
+    // ── Phase 2: refine the start threshold and tail from the container ──
     //
     // Only once the probe is actually present — torrent_read_bytes BLOCKS until
     // its pieces arrive, and this runs on the UI thread, so calling it early would
-    // freeze the whole app.
-    if (!g.refined and g.plan.needsTail()) {
+    // freeze the whole app. This runs for every format: indexed containers get
+    // their duration from the probe, which is what turns the flat start guess
+    // into a bitrate-derived one. Linear formats have no duration and simply
+    // keep the size-scaled fallback.
+    if (!g.refined) {
         const probe_len = @min(cp.PROBE_BYTES, file_size);
         if (rangeReady(torrent_id, file_idx, 0, probe_len)) {
             var probe: [cp.PROBE_BYTES]u8 = undefined;
@@ -214,7 +217,10 @@ pub fn isReady(torrent_id: i32, file_idx: i32, file_name: []const u8, file_size:
     // Waiting for the full 16 MB head + tail was correct but needlessly slow: it
     // was the reason a torrent pulling 8 MB/s still showed "Buffering 87%".
     const head_len = @min(g.plan.head_end, file_size);
-    const start_len = @min(cp.START_BYTES, file_size);
+    // Duration-derived: enough bytes for ~2 seconds of THIS file, clamped.
+    // A low-bitrate 700 MB film waits for ~1 MB instead of a flat 4 MB; a
+    // high-bitrate 4K file gets up to 8 MB so it doesn't immediately re-buffer.
+    const start_len = @min(g.plan.start_bytes, file_size);
 
     const start_pct = rangeProgress(torrent_id, file_idx, 0, start_len);
     g.progress = @intCast(@min(100, start_pct));

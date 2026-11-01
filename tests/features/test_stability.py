@@ -517,12 +517,14 @@ def test_stream_readiness_gate():
         "gate exists": "pub fn isReady(" in gate and "container_pure.zig" in gate,
         # It must wait on as LITTLE as possible. Waiting for the whole head + the
         # index was correct but needlessly slow: an 8 MB/s torrent still showed
-        # "Buffering 87%". Playback now waits only for START_BYTES; the rest of the
+        # "Buffering 87%". Playback now waits only for a duration-derived start
+        # window (file size ÷ duration × two seconds, clamped); the rest of the
         # head and the index at EOF keep racing at top priority behind it, which is
         # safe only because the tail is now prioritized and the proxy no longer
         # truncates (the two things that caused the original black screen).
-        "starts on a small head, not the whole thing": ("START_BYTES" in cp
-                                                        and "cp.START_BYTES" in gate),
+        "starts on a small, duration-derived head": ("START_BYTES" in cp
+                                                     and "startBytesFor" in cp
+                                                     and "plan.start_bytes" in gate),
         "index keeps racing after start": "index still racing" in gate,
         "player waits on the gate": "stream_gate.zig" in pl and "gate.isReady(" in pl,
         "no more instant start": "START PLAYBACK IMMEDIATELY" not in pl,
