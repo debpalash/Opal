@@ -1,5 +1,5 @@
 {
-  "status": "incomplete: second time-boxed pass; native bindings and bulk syntax/DVUI API migration implemented; full build pending",
+  "status": "experimental macOS build compiles and launches; isolated native shutdown, local playback and session restore checks passed; broader migration validation remains",
   "base_commit": "e3167cd",
   "branch": "next/zig-0.17-dvui-0.6",
   "compiler_tested": "0.17.0",
@@ -15,17 +15,22 @@
     "event_loop_tests": 1,
     "sidecar_build": true,
     "sidecar_unit_tests": true,
-    "sidecar_http_connect_loopback": true
+    "sidecar_http_connect_loopback": true,
+    "native_build": true,
+    "native_launch": true,
+    "native_shutdown_tests": 2,
+    "local_playback_and_session_restore": true
   },
   "last_full_build": {
-    "result": "failed",
-    "application_compiler_errors": 85,
-    "note": "Sidecar errors in that run were subsequently fixed; sidecar standalone build/tests/loopback passed."
+    "result": "passed",
+    "command": "/opt/homebrew/opt/zig/bin/zig build -Doptimize=fast -j4",
+    "compiler": "0.17.0",
+    "target": "native Apple silicon macOS"
   },
   "remaining_work": [
-    "Complete native macOS compilation and launch validation.",
-    "Replace macOS-specific binding paths with target-aware configuration and wire bindings into standalone test modules.",
-    "Run full UI/media regressions and migrate CI/release packaging."
+    "Complete target-aware C bindings for Windows/Linux and headless/standalone test module wiring.",
+    "Validate UI appearance and interaction, torrent/video decoding, audio switching and embedded terminal behavior on the upgraded build.",
+    "Migrate CI/release scripts/toolchain documentation and run full cross-platform feature suites."
   ],
   "reproduce": "ZIG=/path/to/zig-0.17 scripts/check-zig17-upgrade.sh --full",
   "deployment": "Not installed; production main and the installed macOS app remain on Zig 0.16.",
@@ -33,11 +38,21 @@
     "native_bindings": "generated via translate-c 2.0; shared across native modules",
     "syntax": "array/string repetition migrated; formatting and reflection compatibility helpers added",
     "dvui": "lifecycle, corner, color/gradient, texture and input APIs adapted",
-    "verification": "31-test checkpoint script passes; last full native build still compiling at checkpoint",
+    "verification": "31-test checkpoint script passes; native build and 3 isolated live tests pass",
     "limitations": [
       "native C bindings currently use macOS/Homebrew SDK paths",
       "Windows C bindings and headless/test module wiring need completion",
       "CI, packaging and full runtime feature validation are not migrated"
     ]
+  },
+  "launch_verification": {
+    "commands": [
+      "python3 tests/test_native_shutdown_live.py --binary zig-out/bin/opal --port 41749",
+      "python3 tests/test_session_close_live.py --binary zig-out/bin/opal"
+    ],
+    "result": "3 live tests passed with isolated profiles",
+    "stalled_media_shutdown_seconds": 0.234,
+    "loaded_media_shutdown_seconds": 0.182,
+    "scope": "native startup, API readiness, stalled media open, local WAV playback, session saving and paused restore"
   }
 }
