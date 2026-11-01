@@ -196,15 +196,20 @@ pub fn render() void {
 fn renderPrompt() void {
     const device = pending orelse return;
     var open = true;
-    const size = theme.fitWindowSize(.{ .w = 440, .h = 300 }, .{ .w = 280, .h = 260 });
+    const size = theme.fitWindowSize(.{ .w = 360, .h = 220 }, .{ .w = 280, .h = 220 });
     var win = dvui.floatingWindow(@src(), .{ .modal = true, .open_flag = &open, .resize = .none }, .{
         .min_size_content = size,
-        .color_fill = theme.colors.bg_surface,
-        .corner_radius = dvui.Rect.all(theme.radius.lg),
+        .color_fill = theme.colors.bg_elevated,
+        .corner_radius = theme.dims.rad_lg,
     });
     defer win.deinit();
     win.autoPosition();
     win.autoSize();
+    win.dragAreaSet(dvui.windowHeader("Audio output", "", &open));
+    if (!open) {
+        pending = null;
+        return;
+    }
     var entrance = dvui.animate(@src(), .{
         .kind = .alpha,
         .duration = theme.motionDuration(theme.motion.base),
@@ -216,50 +221,28 @@ fn renderPrompt() void {
             if (value > 0 and value < 1) saw_entrance_for_test = true;
         }
     }
+    var body_font = dvui.themeGet().font_body;
+    body_font.size = theme.font_size.body;
     var body = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .font = body_font,
         .expand = .both,
-        .padding = dvui.Rect.all(if (size.w < 360) theme.spacing.md else theme.spacing.xl),
+        .padding = theme.dims.pad_md,
     });
     defer body.deinit();
-    {
-        var header = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .h = theme.spacing.lg } });
-        defer header.deinit();
-        dvui.icon(@src(), "Playback paused", icons.tvg.lucide.pause, .{}, .{
-            .min_size_content = theme.iconSize(.sm),
-            .color_text = theme.colors.accent,
-            .gravity_y = 0.5,
-            .margin = .{ .w = theme.spacing.sm },
-        });
-        _ = dvui.labelNoFmt(@src(), "PLAYBACK PAUSED", .{}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
-        var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
-        spacer.deinit();
-        if (components.iconButton(@src(), icons.tvg.lucide.x, "Dismiss", false)) pending = null;
-    }
-    var title_font = dvui.themeGet().font_heading;
-    title_font.size = if (size.w < 360) theme.font_size.headline else theme.font_size.display;
-    var heading = dvui.textLayout(@src(), .{ .break_lines = true }, .{
-        .expand = .horizontal,
-        .background = false,
-        .font = title_font,
-        .color_text = theme.colors.text_primary,
-        .margin = .{ .h = theme.spacing.sm },
-    });
-    heading.addText(if (size.w < 360) "Switch audio\noutput?" else "Switch audio output?", .{});
-    heading.deinit();
-    components.bodyText(@src(), "A new device is ready to use.", theme.colors.text_secondary);
+    components.bodyText(@src(), "Switch to this connected device?", theme.colors.text_secondary);
     {
         var device_card = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
             .background = true,
-            .color_fill = theme.colors.bg_elevated,
+            .color_fill = theme.colors.bg_surface,
             .corner_radius = dvui.Rect.all(theme.radius.md),
-            .padding = dvui.Rect.all(theme.spacing.md),
-            .margin = .{ .y = theme.spacing.md, .h = theme.spacing.lg },
+            .padding = theme.dims.pad_sm,
+            .margin = .{ .y = theme.spacing.sm, .h = theme.spacing.sm },
         });
         defer device_card.deinit();
         dvui.icon(@src(), "Audio output", icons.tvg.lucide.speaker, .{}, .{
-            .min_size_content = theme.iconSize(.lg),
-            .color_text = theme.colors.accent,
+            .min_size_content = theme.iconSize(.sm),
+            .color_text = theme.colors.text_secondary,
             .gravity_y = 0.5,
             .margin = .{ .w = theme.spacing.md },
         });
@@ -267,13 +250,16 @@ fn renderPrompt() void {
         defer details.deinit();
         components.bodyText(@src(), @import("../core/text.zig").safeUtf8(device.label()), theme.colors.text_primary);
     }
-    var actions = dvui.flexbox(@src(), .{ .justify_content = .start }, .{ .expand = .horizontal, .margin = .{ .h = theme.spacing.md } });
+    components.bodyText(@src(), "Press play to resume after switching.", theme.colors.text_tertiary);
+    var actions = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .y = theme.spacing.sm } });
+    var action_spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
+    action_spacer.deinit();
     {
         var dismiss = dvui.box(@src(), .{}, .{ .margin = .{ .w = theme.spacing.sm, .h = theme.spacing.sm } });
         defer dismiss.deinit();
         if (components.actionButton(@src(), "Not now", .secondary, 1)) pending = null;
     }
-    if (components.iconActionButton(@src(), icons.tvg.lucide.@"arrow-right", "Switch output", .primary, 0)) {
+    if (components.actionButton(@src(), "Switch output", .primary, 0)) {
         var name: [pure.name_cap + 1]u8 = @splat(0);
         @memcpy(name[0..device.name_len], device.nameSlice());
         var success = true;
@@ -290,7 +276,6 @@ fn renderPrompt() void {
         } else state.showToast("Could not switch audio output. Check the device and retry.");
     }
     actions.deinit();
-    components.bodyText(@src(), "Press play when you’re ready to resume.", theme.colors.text_tertiary);
 }
 
 fn drawPromptFixture() !void {
