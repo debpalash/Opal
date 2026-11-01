@@ -369,6 +369,7 @@ fn fetchTmdb(mode: FetchMode, query: []const u8, append: bool) void {
             var total_pages: u32 = 100;
             var attempt: u8 = 0;
             while (true) : (attempt += 1) {
+                if (@import("../core/workers.zig").isQuitting()) return;
                 staged.clearRetainingCapacity();
                 total_pages = 100;
                 if (key.len > 0) {
@@ -392,6 +393,7 @@ fn fetchTmdb(mode: FetchMode, query: []const u8, append: bool) void {
                     total_pages = if (staged.items.len == 0) S.page else S.page + 1;
                 }
 
+                if (@import("../core/workers.zig").isQuitting()) return;
                 const retry = @import("tmdb_pure.zig").shouldRetryEmptyCatalog(
                     S.fetch_mode == .browse,
                     S.do_append,
@@ -402,7 +404,7 @@ fn fetchTmdb(mode: FetchMode, query: []const u8, append: bool) void {
                 // Short worker-only backoff: enough for DNS/TLS recovery while
                 // keeping the skeleton responsive. The lower HTTP seam already
                 // bounds each transport attempt.
-                @import("../core/io_global.zig").sleep((250 + @as(u64, attempt) * 250) * std.time.ns_per_ms);
+                if (!waitForRetry(250 + @as(u64, attempt) * 250)) return;
             }
 
             // A failed refresh must not erase a cache-backed or previously
@@ -718,6 +720,7 @@ fn curlOwnedOnce(url: []const u8, auth_header: []const u8, max_bytes: usize) ?[]
 }
 
 fn curlOwnedPolicy(url: []const u8, auth_header: []const u8, max_bytes: usize, https_only: bool) ?[]u8 {
+    if (@import("../core/workers.zig").isQuitting()) return null;
     const io_g = @import("../core/io_global.zig");
     // --connect-timeout bounds a dead/slow host to 3s on connect instead of
     // burning the full --max-time; --max-time trimmed to 8s for interactive
@@ -901,7 +904,7 @@ pub fn tmdbApiInto(path_query: []const u8, key: []const u8, buf: []u8) usize {
     while (attempt < 2) : (attempt += 1) {
         const n = curlFallbackInto(url, auth, buf);
         if (n > 0) return n;
-        if (attempt < 1) @import("../core/io_global.zig").sleep(250 * std.time.ns_per_ms);
+        if (attempt < 1 and !waitForRetry(250)) return 0;
     }
     return 0;
 }
@@ -933,7 +936,7 @@ pub fn tmdbApiOwned(path_query: []const u8, key: []const u8, max_bytes: usize) ?
     var attempt: u8 = 0;
     while (attempt < 2) : (attempt += 1) {
         if (curlFallbackOwned(url, auth, max_bytes)) |body| return body;
-        if (attempt < 1) @import("../core/io_global.zig").sleep(250 * std.time.ns_per_ms);
+        if (attempt < 1 and !waitForRetry(250)) return null;
     }
     return null;
 }
@@ -948,7 +951,7 @@ pub fn cinemetaApiInto(path: []const u8, buf: []u8) usize {
     while (attempt < 2) : (attempt += 1) {
         const n = curlFallbackInto(url, "", buf);
         if (n > 0) return n;
-        if (attempt < 1) @import("../core/io_global.zig").sleep(250 * std.time.ns_per_ms);
+        if (attempt < 1 and !waitForRetry(250)) return 0;
     }
     return 0;
 }
@@ -960,9 +963,23 @@ pub fn cinemetaApiOwned(path: []const u8, max_bytes: usize) ?[]u8 {
     var attempt: u8 = 0;
     while (attempt < 2) : (attempt += 1) {
         if (curlFallbackOwned(url, "", max_bytes)) |body| return body;
-        if (attempt < 1) @import("../core/io_global.zig").sleep(250 * std.time.ns_per_ms);
+        if (attempt < 1 and !waitForRetry(250)) return null;
     }
     return null;
+}
+
+/// Cancellation must interrupt retry backoff as well as the HTTP request.
+fn waitForRetry(ms: u64) bool {
+    const io_g = @import("../core/io_global.zig");
+    const workers = @import("../core/workers.zig");
+    var remaining = ms;
+    while (remaining > 0) {
+        if (workers.isQuitting()) return false;
+        const step: u64 = @min(remaining, 10);
+        io_g.sleep(step * std.time.ns_per_ms);
+        remaining -= step;
+    }
+    return !workers.isQuitting();
 }
 
 fn httpGet(url: []const u8, bearer_token: []const u8) ?[]u8 {
@@ -985,7 +1002,7 @@ fn httpGet(url: []const u8, bearer_token: []const u8) ?[]u8 {
     while (attempt < 2) : (attempt += 1) {
         const n = curlFallbackInto(url, auth, buf);
         if (n > 0) return alloc.dupe(u8, buf[0..n]) catch null;
-        if (attempt < 1) @import("../core/io_global.zig").sleep(250 * std.time.ns_per_ms);
+        if (attempt < 1 and !waitForRetry(250)) return null;
     }
     return null;
 }
@@ -1094,4 +1111,15 @@ test "keyless catalog URLs: real equivalents, honest genre handling, kind-signed
     var out: [16]u8 = undefined;
     try std.testing.expectEqualStrings("tt0000001", knownImdb(.movie, 4242, &out));
     try std.testing.expectEqualStrings("tt0000002", knownImdb(.series, 4242, &out));
+}
+
+test "Browse regression shutdown skips catalog HTTP retries" {
+    const workers = @import("../core/workers.zig");
+    workers.init();
+    defer workers.init();
+    workers.markQuitting();
+    const started = @import("../core/io_global.zig").monotonicMilliTimestamp();
+    try std.testing.expect(httpGet("http://127.0.0.1:1/retry", "") == null);
+    try std.testing.expect(!waitForRetry(1000));
+    try std.testing.expect(@import("../core/io_global.zig").monotonicMilliTimestamp() - started < 100);
 }

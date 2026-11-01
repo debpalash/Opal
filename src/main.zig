@@ -842,8 +842,19 @@ pub fn appDeinit() void {
             instance_mutex_handle = null;
         }
     }
+    // Remove the native surface immediately. Teardown can include third-party
+    // media/network destructors; keeping the surface mapped while they finish
+    // makes the compositor report a closing application as unresponsive.
+    if (comptime !@import("build_options").headless) {
+        if (dvui_win) |win| {
+            const sdl_win: ?*c.sdl.SDL_Window = @ptrCast(win.backend.impl.window);
+            if (sdl_win != null) c.sdl.SDL_HideWindow(sdl_win);
+        }
+    }
+
     @import("core/config.zig").captureCloseSession();
     const workers = @import("core/workers.zig");
+    workers.armShutdownDeadline(5_000);
     // A prepared player is not in state.app.players yet; dispose it explicitly
     // before draining workers so its libmpv core cannot outlive shared state.
     player.shutdownWarmPlayer(@import("core/alloc.zig").allocator);
@@ -863,16 +874,6 @@ pub fn appDeinit() void {
     // worker, and its child process (an agent) must not outlive the window.
     if (comptime !@import("build_options").headless) @import("ui/agent_terminal.zig").shutdown();
 
-    // Remove the native surface immediately. Teardown can include third-party
-    // media/network destructors; keeping the surface mapped while they finish
-    // makes the compositor report a closing application as unresponsive.
-    if (comptime !@import("build_options").headless) {
-        if (dvui_win) |win| {
-            const sdl_win: ?*c.sdl.SDL_Window = @ptrCast(win.backend.impl.window);
-            if (sdl_win != null) c.sdl.SDL_HideWindow(sdl_win);
-        }
-    }
-
     // Let ordered resume workers enqueue their final authenticated update
     // before the server queue is flushed. Slow local storage still finishes
     // under the owned-worker drain after the window is hidden.
@@ -885,7 +886,6 @@ pub fn appDeinit() void {
     // No teardown bug may leave an unresponsive window around indefinitely.
     // Normal shutdown finishes in well under a second; this only fires when a
     // worker, child process, or third-party destructor is irrecoverably stuck.
-    workers.armShutdownDeadline(5_000);
 
     // Publish shutdown before stopping services so the detached startup worker
     // cannot bring one back after its stop call has already run.

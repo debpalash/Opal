@@ -662,8 +662,12 @@ def test_keyboard_close_uses_normal_teardown_and_unmaps_first():
         < mn.index("SDL_HideWindow"),
         "playback stopped asynchronously": "pub fn stopForShutdown" in player
         and "mpv_command_async" in player,
-        "playback stopped before unmap": "p.stopForShutdown()" in mn
-        and mn.index("p.stopForShutdown()") < mn.index("SDL_HideWindow"),
+        # Snapshotting mpv and joining render threads can block. The surface
+        # must disappear before those operations; playback still stops through
+        # the asynchronous command on the normal teardown path.
+        "surface hidden before synchronous snapshots": "p.stopForShutdown()" in mn
+        and mn.index("SDL_HideWindow") < mn.index("captureCloseSession()")
+        and mn.index("SDL_HideWindow") < mn.index("p.stopRenderWorker()"),
         "raw SDL close is latched": "SDL_WINDOWEVENT_CLOSE" in mn
         and "sdl_close_requested.store(true" in mn
         and "sdl_close_requested.load(.acquire)" in mn,

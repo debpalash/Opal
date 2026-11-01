@@ -8,6 +8,7 @@ import sqlite3
 import time
 import unittest
 import wave
+import urllib.parse
 import test_setup_token_live as live
 
 
@@ -21,18 +22,36 @@ class SessionCloseTest(unittest.TestCase):
             audio.setsampwidth(2)
             audio.setframerate(8000)
             audio.writeframes(b"\0\0" * 8000 * 60)
+        profile = opal.config_root / "opal"
+        profile.mkdir(parents=True)
+        with sqlite3.connect(profile / "opal.db") as db:
+            db.execute("CREATE TABLE config(key TEXT PRIMARY KEY, value TEXT)")
+            db.executemany("INSERT INTO config VALUES (?,?)", [
+                ("web_remote", "1"), ("web_port", str(live.PORT)),
+                ("web_bind", "loopback"), ("dpi_bypass_enabled", "0"),
+            ])
         token = opal.start()
         account = live.register("session-test", host=opal.loopback_authority, setup_token=token)
         self.assertEqual(account.status, 200, account.body)
         headers = (("Cookie", account.session_cookie()),)
-        loaded = live.request("POST", "/api/load", host=opal.loopback_authority,
-                              extra_headers=headers, form={"url": str(media)})
+        loaded = live.request("POST", "/api/open?path=" + urllib.parse.quote(str(media), safe=""),
+                              host=opal.loopback_authority, extra_headers=headers)
         self.assertEqual(loaded.status, 200, loaded.body)
         self.assertTrue(loaded.json()["ok"], loaded.body)
-        time.sleep(3)
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            status = live.request("GET", "/api/status", host=opal.loopback_authority, extra_headers=headers).json()
+            if status["active"] and status["pos"] > 1:
+                break
+            time.sleep(0.1)
+        else:
+            self.fail("fixture did not start playing")
         assert opal.process is not None
+        close_started = time.monotonic()
         os.kill(opal.process.pid, signal.SIGTERM)
         self.assertEqual(opal.process.wait(timeout=8), 0, opal.safe_log())
+        print(f"loaded-media shutdown: {time.monotonic() - close_started:.3f}s", flush=True)
+        self.assertLess(time.monotonic() - close_started, 3, "loaded media shutdown was slow")
         self.assertNotIn("forcing process exit", opal.safe_log())
         database = opal.config_root / "opal" / "opal.db"
         with sqlite3.connect(database) as db:
