@@ -817,7 +817,7 @@ test "MKV: the tail comes from the SeekHead, and it's the EARLIEST trailing elem
 }
 
 test "MKV: unparseable probe keeps the safe guess rather than inventing an offset" {
-    const junk = [_]u8{0xAA} ** 64;
+    const junk: [64]u8 = @splat(0xAA);
     const size: u64 = 4 * 1024 * 1024 * 1024;
     const p0 = initialPlan(.mkv, size);
     const p1 = refine(p0, &junk);

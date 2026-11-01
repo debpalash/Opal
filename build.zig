@@ -2,11 +2,11 @@ const std = @import("std");
 
 pub fn build(b: *std.Build) void {
     const version = @import("builtin").zig_version;
-    if (comptime version.major == 0 and version.minor == 16) {
+    if (comptime version.major == 0 and version.minor == 17) {
         buildSupported(b);
     } else {
-        @compileError("Opal requires Zig 0.16.x; found " ++ @import("builtin").zig_version_string ++
-            ". Use `mise install && mise exec -- zig build run` or select a Zig 0.16 compiler in PATH.");
+        @compileError("Opal requires Zig 0.17.x; found " ++ @import("builtin").zig_version_string ++
+            ". Use `mise install && mise exec -- zig build run` or select a Zig 0.17 compiler in PATH.");
     }
 }
 
@@ -52,7 +52,7 @@ fn buildSupported(b: *std.Build) void {
     });
     exe.use_llvm = true;
     // Keep local debugging intact; shipping builds omit debug symbols.
-    exe.root_module.strip = b.option(bool, "strip", "Strip executable debug symbols (default: release builds)") orelse (optimize != .Debug);
+    exe.root_module.strip = b.option(bool, "strip", "Strip executable debug symbols (default: release builds)") orelse (optimize != .debug);
 
     // Windows: embed an application manifest declaring Per-Monitor-V2 DPI
     // awareness. Windows reads this at process creation (before SDL_Init), so
@@ -107,7 +107,7 @@ fn buildSupported(b: *std.Build) void {
 
     const is_windows = target.result.os.tag == .windows;
     const native_test_lib_path: ?[]const u8 = if (target.result.os.tag == .linux) blk: {
-        const private_lib_path = b.pathFromRoot(".");
+        const private_lib_path = (b.root.root_dir.path orelse ".");
         break :blk if (b.graph.environ_map.get("LD_LIBRARY_PATH")) |inherited|
             b.fmt("{s}:{s}", .{ private_lib_path, inherited })
         else
@@ -362,7 +362,7 @@ fn buildSupported(b: *std.Build) void {
     b.step("test-browse-fanout", "Verify bounded parallel Browse provider work and stale publication").dependOn(&run_browse_fanout_tests.step);
     // Fixture rendering may synchronously inspect plugin/profile directories.
     // Isolate the child process even when callers run these targets directly.
-    const native_profile_root = b.cache_root.join(b.allocator, &.{"native-fixture-profiles"}) catch @panic("native fixture profile path");
+    const native_profile_root = b.fmt(".zig-cache/native-fixture-profiles", .{});
     const native_capture_runs = [_]struct { run: *std.Build.Step.Run, name: []const u8 }{
         .{ .run = run_episode_tests, .name = "episodes" },
         .{ .run = run_gallery_tests, .name = "gallery" },
@@ -382,7 +382,7 @@ fn buildSupported(b: *std.Build) void {
     };
     for (native_capture_runs) |fixture| {
         if (native_test_lib_path) |path| fixture.run.setEnvironmentVariable("LD_LIBRARY_PATH", path);
-        const profile = std.fs.path.resolve(b.allocator, &.{ b.build_root.path orelse ".", native_profile_root, fixture.name }) catch @panic("native fixture profile path");
+        const profile = std.fs.path.resolve(b.allocator, &.{ b.root.root_dir.path orelse ".", native_profile_root, fixture.name }) catch @panic("native fixture profile path");
         fixture.run.setEnvironmentVariable("HOME", profile);
         fixture.run.setEnvironmentVariable("USERPROFILE", profile);
         fixture.run.setEnvironmentVariable("XDG_CONFIG_HOME", b.fmt("{s}/config", .{profile}));
@@ -506,7 +506,7 @@ fn buildSupported(b: *std.Build) void {
         // carrying both MSYS2 bin dirs, so the toolchain resolves inside the
         // script too (g++/pkg-config are in mingw64/bin, sh in usr/bin).
         const shell: []const u8 = if (is_windows)
-            b.findProgram(&.{"sh"}, &.{b.fmt("{s}/usr/bin", .{msys_root})}) catch
+            b.findProgram(.{ .names = &.{ b.fmt("{s}/usr/bin/sh", .{msys_root}), "sh" } }) orelse
                 std.debug.panic("MSYS2 shell not found: no `sh` on PATH and none at {s}/usr/bin. Install MSYS2 (see docs) or set MINGW_PREFIX to your mingw64 prefix.", .{msys_root})
         else
             "sh";
@@ -546,7 +546,7 @@ fn buildSupported(b: *std.Build) void {
     // machine it shadows the installed wrapper, and on every other machine it
     // is a dead/non-reproducible path. macOS's bundle rewrite still needs the
     // build-tree lookup before install_name_tool lays out Frameworks.
-    if (!is_windows and (target.result.os.tag == .macos or optimize == .Debug)) {
+    if (!is_windows and (target.result.os.tag == .macos or optimize == .debug)) {
         exe.root_module.addRPath(b.path("."));
     }
     // Packaged-install layouts (deb/rpm/.run/tarball): let the installed
@@ -637,7 +637,7 @@ fn buildSupported(b: *std.Build) void {
         }),
     });
     const run_babel_live = b.addRunArtifact(babel_live);
-    if (b.args) |args| run_babel_live.addArgs(args);
+    run_babel_live.addPassthruArgs();
     b.step("babel-live", "Run the live-caption pipeline on a media file (dev probe)").dependOn(&run_babel_live.step);
 
     const run_cmd = b.addRunArtifact(exe);
@@ -654,9 +654,7 @@ fn buildSupported(b: *std.Build) void {
         }));
     }
 
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-    }
+    run_cmd.addPassthruArgs();
 
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
@@ -3031,7 +3029,7 @@ fn embeddedKey(b: *std.Build, names: []const []const u8) []const u8 {
         }
     }
     // .env is optional; a missing file / read error just means "no default".
-    const body = b.build_root.handle.readFileAlloc(b.graph.io, ".env", b.allocator, .limited(64 * 1024)) catch return "";
+    const body = b.root.root_dir.handle.readFileAlloc(b.graph.io, ".env", b.allocator, .limited(64 * 1024)) catch return "";
     for (names) |name| {
         if (envFileValue(body, name)) |v| {
             if (v.len > 0) return b.dupe(v);
@@ -3069,7 +3067,7 @@ fn envFileValue(body: []const u8, name: []const u8) ?[]const u8 {
 fn addGhosttyVt(b: *std.Build, module: *std.Build.Module, target: std.Build.ResolvedTarget) void {
     const dep = b.dependency("ghostty", .{
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = .fast,
         .@"emit-lib-vt" = true,
         .simd = false,
     });

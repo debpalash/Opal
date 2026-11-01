@@ -17,9 +17,9 @@ pub const name_cap = 128;
 pub const desc_cap = 160;
 
 pub const AudioDevice = struct {
-    name: [name_cap]u8 = [_]u8{0} ** name_cap,
+    name: [name_cap]u8 = @splat(0),
     name_len: usize = 0,
-    desc: [desc_cap]u8 = [_]u8{0} ** desc_cap,
+    desc: [desc_cap]u8 = @splat(0),
     desc_len: usize = 0,
 
     pub fn nameSlice(self: *const AudioDevice) []const u8 {

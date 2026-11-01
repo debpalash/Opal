@@ -1,0 +1,34 @@
+{
+  "status": "incomplete: build configuration and selected modules migrated; GUI does not compile",
+  "base_commit": "e3167cd",
+  "branch": "next/zig-0.17-dvui-0.6",
+  "compiler_tested": "0.17.0",
+  "dependency_pins": {
+    "dvui": "4ed19f847fd0ec6ec97f9600316d86c0e0cd255c",
+    "ghostty": "a7e8e4d15bd0f12ad2a1123bf157b338e526c23e",
+    "bypassdpi_vendor_base": "4fad7f6b340c89ffdcee4845850e39d04766b628"
+  },
+  "verified": {
+    "build_configuration": true,
+    "container_tests": 20,
+    "audio_device_tests": 10,
+    "event_loop_tests": 1,
+    "sidecar_build": true,
+    "sidecar_unit_tests": true,
+    "sidecar_http_connect_loopback": true
+  },
+  "last_full_build": {
+    "result": "failed",
+    "application_compiler_errors": 85,
+    "note": "Sidecar errors in that run were subsequently fixed; sidecar standalone build/tests/loopback passed."
+  },
+  "remaining_work": [
+    "Replace 15 @cImport sites with generated translate-c modules and wire their imports in build.zig.",
+    "Migrate remaining array repetition syntax and compiler/stdlib API errors, then address semantic diagnostics.",
+    "Validate Ghostty terminal C API and DVUI UI behavior in a successful full build.",
+    "Migrate CI, release scripts, native fixtures, README/toolchain notes; run the full feature and cross-platform suites.",
+    "Replace the temporary vendored sidecar adapter with an upstream Zig 0.17-compatible pin when available."
+  ],
+  "reproduce": "ZIG=/path/to/zig-0.17 scripts/check-zig17-upgrade.sh --full",
+  "deployment": "Not installed; production main and the installed macOS app remain on Zig 0.16."
+}

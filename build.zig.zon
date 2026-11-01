@@ -3,27 +3,22 @@
     .version = "0.9.0",
     .dependencies = .{
         .dvui = .{
-            .url = "https://github.com/david-vanderson/dvui/archive/c2424c15cbfacfe24d66fda4963055eb4c9ee200.tar.gz",
-            .hash = "dvui-0.5.0-dev-AQFJmeZx2wB8fanD8o3p723w_DUDV851JFja-XOrE8DY",
+            .url = "https://github.com/david-vanderson/dvui/archive/4ed19f847fd0ec6ec97f9600316d86c0e0cd255c.tar.gz",
+            .hash = "dvui-0.6.0-dev-AQFJmaGoBAG4gedKz36Pkv4RuRs86V5BjXavPsYijdkp",
         },
         .icons = .{
             .url = "git+https://github.com/nat3github/zig-lib-icons#b7299b19fa11caa5be93ef49743d8fc31a4bf9a0",
             .hash = "icons-0.1.0-iJxA-VrGMwAVIStBxqDPFeC3wdnANtYyDrNfYXNz95OW",
         },
-        .bypassdpi = .{
-            .url = "git+https://github.com/debpalash/zig-bypassdpi#4fad7f6b340c89ffdcee4845850e39d04766b628",
-            .hash = "zig_bypassdpi-0.1.0-B1zpWLK3AAB8dEz0DqoVx8yGkR2IwlRsk2WD-wyrqcbF",
-        },
+        // Temporary local adapter until zig-bypassdpi publishes a 0.17 pin.
+        .bypassdpi = .{ .path = "vendor/zig-bypassdpi" },
         .ghostty = .{
-            .url = "https://github.com/ghostty-org/ghostty/archive/5dc28bb8eebaf57a6c793a406bfea8c632d4fa94.tar.gz",
-            .hash = "ghostty-1.3.2-dev-5UdBC1TZeAVqaxNT2HwRRz7Zvl2JywwJ-XYOAa5yKQ7j",
+            .url = "git+https://github.com/ghostty-org/ghostty#a7e8e4d15bd0f12ad2a1123bf157b338e526c23e",
+            .hash = "ghostty-1.4.1-dev-5UdBC5FOiQUmdewBv6XpbYGK2Kovj6WXnGfV7KoTtUta",
         },
     },
-    // build.zig and the pinned DVUI revision use the Zig 0.16 Build API
-    // (including Build.Graph.environ_map). Keeping this at 0.15.2 let an
-    // unsupported compiler enter the build and fail with misleading field
-    // errors deep inside DVUI.
-    .minimum_zig_version = "0.16.0",
+    // Upgrade branch: compiler and DVUI are migrated together.
+    .minimum_zig_version = "0.17.0",
     .paths = .{""},
     .fingerprint = 0x2e12278c22c5aa8b,
 }
