@@ -3,13 +3,17 @@
 #
 #   ./scripts/clean.sh             local build outputs (fast rebuild, deps kept)
 #   ./scripts/clean.sh --bundle    + the packaged .app bundles in dist/
-#   ./scripts/clean.sh --all       + zig-pkg and the global Zig object cache
+#   ./scripts/clean.sh --all       + zig-pkg and the whole global Zig cache
 #
-# --all is the heavy one: ~/.cache/zig/o holds every compiled dependency, so a
+# --all is the heavy one: ~/.cache/zig holds every compiled dependency, so a
 # normal rebuild never needs it. Reach for it after a Zig upgrade, or when a
-# build dies on a corrupt entry from concurrent invocations:
+# build dies on a corrupt cache entry:
 #   error: failed to open ~/.cache/zig/o/<hash>/libcompiler_rt.a: FileNotFound
-# zig-pkg is regenerated from build.zig.zon on the next build.
+#   error: failed to parse archive: FileNotFound
+# The whole root goes, not just o/ and p/: h/ holds the manifests that record
+# which artifacts exist, so leaving it behind reproduces the exact failure the
+# clean was meant to fix (the manifests point at deleted objects). zig-pkg is
+# regenerated from build.zig.zon on the next build.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -53,8 +57,7 @@ fi
 
 if (( ALL )); then
     drop zig-pkg
-    drop "${XDG_CACHE_HOME:-$HOME/.cache}/zig/o"
-    drop "${XDG_CACHE_HOME:-$HOME/.cache}/zig/p"
+    drop "${XDG_CACHE_HOME:-$HOME/.cache}/zig"
 fi
 
 if (( removed == 0 )); then
