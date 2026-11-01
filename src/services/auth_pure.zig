@@ -74,7 +74,7 @@ test "username validation" {
     try std.testing.expect(!validUsername("ab")); // too short
     try std.testing.expect(!validUsername("has space"));
     try std.testing.expect(!validUsername("bad/slash"));
-    try std.testing.expect(!validUsername(@import("../core/repeat_pure.zig").bytes("x", 33))); // too long
+    try std.testing.expect(!validUsername(@import("opal-repeat").bytes("x", 33))); // too long
 }
 
 test "password validation" {

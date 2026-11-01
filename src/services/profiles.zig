@@ -303,7 +303,7 @@ fn seedProfileDb(dir: []const u8, kid: bool) void {
     const db = @import("../core/db.zig");
     const c = db.c;
     var path_buf: [700]u8 = undefined;
-    const path = @import("../core/fmt_compat.zig").bufPrintZ(&path_buf, "{s}/opal.db", .{dir}) catch return;
+    const path = @import("opal-fmt").bufPrintZ(&path_buf, "{s}/opal.db", .{dir}) catch return;
     var h: ?*db.Sqlite3 = null;
     if (c.sqlite3_open_v2(path.ptr, &h, c.SQLITE_OPEN_READWRITE | c.SQLITE_OPEN_CREATE, null) != c.SQLITE_OK) {
         if (h) |bad| _ = c.sqlite3_close_v2(bad);

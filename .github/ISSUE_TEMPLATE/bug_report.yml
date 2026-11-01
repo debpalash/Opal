@@ -13,7 +13,7 @@ body:
     id: versions
     attributes:
       label: Versions
-      placeholder: "opal v0.1.0 · zig 0.16.0 · mpv 0.40"
+      placeholder: "opal v0.1.0 · zig 0.17.0 · mpv 0.40"
     validations:
       required: true
   - type: textarea

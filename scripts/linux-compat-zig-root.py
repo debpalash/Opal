@@ -7,8 +7,8 @@ import subprocess
 
 def sdk_root(executable):
     zig = Path(executable).resolve()
-    if subprocess.check_output([str(zig), 'version'], text=True).strip() != '0.16.0':
-        raise ValueError('compatibility build requires Zig 0.16.0')
+    if subprocess.check_output([str(zig), 'version'], text=True).strip() != '0.17.0':
+        raise ValueError('compatibility build requires Zig 0.17.0')
     root = zig.parent
     if not (root / 'lib/std/std.zig').is_file():
         raise ValueError('Zig SDK standard library missing')

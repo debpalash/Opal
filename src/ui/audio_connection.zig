@@ -34,7 +34,7 @@ fn hasAudioTrack(p: *player.MediaPlayer) bool {
     var i: i64 = 0;
     while (i < count and i < 64) : (i += 1) {
         var q: [64]u8 = undefined;
-        const query = @import("../core/fmt_compat.zig").bufPrintZ(&q, "track-list/{d}/type", .{i}) catch break;
+        const query = @import("opal-fmt").bufPrintZ(&q, "track-list/{d}/type", .{i}) catch break;
         const typ = c.mpv.mpv_get_property_string(p.mpv_ctx, query.ptr);
         if (typ == null) continue;
         defer c.mpv.mpv_free(@ptrCast(typ));
@@ -320,7 +320,9 @@ test "Native shell offline audio connection recovery preserves audio off" {
     var players = [_]*player.MediaPlayer{ &p, &other };
     const previous_players = state.app.players;
     defer state.app.players = previous_players;
-    state.app.players = .{ .items = &players, .capacity = players.len };
+    state.app.players = .empty;
+    state.app.players.items = &players;
+    state.app.players.capacity = players.len;
     recoverDroppedAudio();
     const device = c.mpv.mpv_get_property_string(ctx, "audio-device") orelse return error.MissingDevice;
     defer c.mpv.mpv_free(@ptrCast(device));

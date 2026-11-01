@@ -334,7 +334,7 @@ fn doDownload(file_id: i64) void {
 
     // POST body: {"file_id": 12345}
     var body_buf: [64]u8 = undefined;
-    const body = @import("../core/fmt_compat.zig").bufPrintZ(&body_buf, "{{\"file_id\":{d}}}", .{file_id}) catch return;
+    const body = @import("opal-fmt").bufPrintZ(&body_buf, "{{\"file_id\":{d}}}", .{file_id}) catch return;
 
     var resp_buf: [4096]u8 = undefined;
     var hdrs: [8192]u8 = undefined;
@@ -375,7 +375,7 @@ fn doDownload(file_id: i64) void {
     const subs_dir = @import("../core/paths.zig").cacheFile(&subs_root, "subs");
     @import("../core/io_global.zig").cwdMakePath(subs_dir) catch {};
     var path_buf: [640]u8 = undefined;
-    const sub_path = @import("../core/fmt_compat.zig").bufPrintZ(&path_buf, "{s}/opal_sub_{d}.srt", .{ subs_dir, file_id }) catch return;
+    const sub_path = @import("opal-fmt").bufPrintZ(&path_buf, "{s}/opal_sub_{d}.srt", .{ subs_dir, file_id }) catch return;
 
     const link_slice: []const u8 = link[0..@min(link.len, 511)];
     if (!rf.download(link_slice, sub_path, .{ .user_agent = USER_AGENT, .timeout_secs = 15, .impersonate = false }).ok()) {
@@ -493,7 +493,7 @@ fn doSubdlSearch(query: []const u8, lang: []const u8) void {
     // NB: Subdl takes the key in the query string (its API has no header form).
     // Never log this URL — it carries the key.
     var url_buf: [896]u8 = undefined;
-    const url = @import("../core/fmt_compat.zig").bufPrintZ(&url_buf, "https://api.subdl.com/api/v1/subtitles?api_key={s}&film_name={s}&languages={s}&subs_per_page=30", .{ api_key, encoded, subdl_lang }) catch {
+    const url = @import("opal-fmt").bufPrintZ(&url_buf, "https://api.subdl.com/api/v1/subtitles?api_key={s}&film_name={s}&languages={s}&subs_per_page=30", .{ api_key, encoded, subdl_lang }) catch {
         setSubdlError("Query too long");
         return;
     };
@@ -612,13 +612,13 @@ fn doSubdlDownload(url_path: []const u8) void {
     io_g.cwdMakePath(subs_dir) catch {};
 
     var url_buf: [640]u8 = undefined;
-    const url = @import("../core/fmt_compat.zig").bufPrintZ(&url_buf, "https://dl.subdl.com{s}", .{url_path}) catch {
+    const url = @import("opal-fmt").bufPrintZ(&url_buf, "https://dl.subdl.com{s}", .{url_path}) catch {
         state.showToast("Bad subtitle link");
         return;
     };
 
     var zip_buf: [640]u8 = undefined;
-    const zip_path = @import("../core/fmt_compat.zig").bufPrintZ(&zip_buf, "{s}/subdl.zip", .{subs_dir}) catch {
+    const zip_path = @import("opal-fmt").bufPrintZ(&zip_buf, "{s}/subdl.zip", .{subs_dir}) catch {
         state.showToast("Path error");
         return;
     };

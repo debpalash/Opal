@@ -83,7 +83,7 @@ test "Native browser hub offline SDL pixel capture" {
     workers.beginShutdownAndDrain(0);
     defer workers.finishShutdown();
     const names = [_][]const u8{ "browser-hub-populated", "browser-hub-first-run", "browser-hub-no-streams" };
-    inline for (comptime @import("../core/enum_compat.zig").fields(Case), 0..) |f, i| {
+    inline for (comptime @import("opal-reflect").fields(Case), 0..) |f, i| {
         current = @field(Case, f.name);
         for ([_][2]u32{ .{ 1000, 780 }, .{ 640, 780 }, .{ 375, 780 }, .{ 320, 780 } }) |size| {
             try capture.capture(size[0], size[1], names[i], setup, draw, cleanup);

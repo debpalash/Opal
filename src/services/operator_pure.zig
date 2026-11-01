@@ -621,7 +621,7 @@ test "match help keeps only plain, distinct, bounded queries" {
     try std.testing.expect(parseMatchHelp(a, "{\"queries\":\"nope\"}") == null);
     try std.testing.expect(parseMatchHelp(a, "{\"queries\":[1,2]}") == null);
     try std.testing.expect(validQuery("千と千尋の神隠し"));
-    try std.testing.expect(!validQuery(@import("../core/repeat_pure.zig").bytes("x", 81)));
+    try std.testing.expect(!validQuery(@import("opal-repeat").bytes("x", 81)));
 }
 
 test "hosts that point inward or are not plain names are refused" {

@@ -140,7 +140,7 @@ pub fn parseCaps(text: []const u8) Caps {
     var any = false;
     var it = std.mem.tokenizeAny(u8, text, ", ");
     while (it.next()) |word| {
-        inline for (comptime @import("../core/enum_compat.zig").fields(Caps)) |f| {
+        inline for (comptime @import("opal-reflect").fields(Caps)) |f| {
             if (std.mem.eql(u8, word, f.name)) {
                 @field(c, f.name) = true;
                 any = true;

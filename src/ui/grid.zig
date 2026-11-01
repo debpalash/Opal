@@ -277,7 +277,7 @@ pub fn muteBackgroundPlayers() void {
         if (i == state.app.active_player_idx) {
             // Restore active cell volume
             var vol_cmd: [64]u8 = undefined;
-            if (@import("../core/fmt_compat.zig").bufPrintZ(&vol_cmd, "set volume {d}", .{@as(i32, @intFromFloat(p.cell_volume))})) |cmd| {
+            if (@import("opal-fmt").bufPrintZ(&vol_cmd, "set volume {d}", .{@as(i32, @intFromFloat(p.cell_volume))})) |cmd| {
                 _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
             } else |_| {}
         } else {
@@ -832,7 +832,7 @@ pub fn renderGrid() !void {
                         } else {
                             const dr_mb = @as(f32, @floatFromInt(dl_rate)) / (1024.0 * 1024.0);
                             var status_lb: [128]u8 = undefined;
-                            if (@import("../core/fmt_compat.zig").bufPrintZ(&status_lb, "Downloading: {d:.1} MB/s | {d} Peers", .{ dr_mb, peers })) |msg| {
+                            if (@import("opal-fmt").bufPrintZ(&status_lb, "Downloading: {d:.1} MB/s | {d} Peers", .{ dr_mb, peers })) |msg| {
                                 _ = dvui.label(@src(), "{s}", .{msg}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary), .margin = .{ .y = theme.spacing.sm } });
                             } else |_| {}
 
@@ -855,7 +855,7 @@ pub fn renderGrid() !void {
 
                             var prog_lb: [64]u8 = undefined;
                             const label: []const u8 = if (gated) "Buffering" else "Buffer";
-                            if (@import("../core/fmt_compat.zig").bufPrintZ(&prog_lb, "{s}: {d}%", .{ label, @as(i32, @intFromFloat(shown * 100.0)) })) |msg| {
+                            if (@import("opal-fmt").bufPrintZ(&prog_lb, "{s}: {d}%", .{ label, @as(i32, @intFromFloat(shown * 100.0)) })) |msg| {
                                 components.ProgressBar(@src(), shown, msg, i);
                             } else |_| {}
                         }

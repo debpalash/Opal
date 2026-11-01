@@ -185,8 +185,8 @@ test "validId rejects anything unsafe as a filename" {
     try expect(!validId("my.source"));
     // Empty, over-long, NUL and control bytes.
     try expect(!validId(""));
-    try expect(!validId(@import("repeat_pure.zig").bytes("x", (MAX_ID_LEN + 1))));
-    try expect(validId(@import("repeat_pure.zig").bytes("x", MAX_ID_LEN)));
+    try expect(!validId(@import("opal-repeat").bytes("x", (MAX_ID_LEN + 1))));
+    try expect(validId(@import("opal-repeat").bytes("x", MAX_ID_LEN)));
     try expect(!validId("a\x00b"));
     try expect(!validId("a\nb"));
 }
@@ -208,10 +208,10 @@ test "validField mirrors the fixed buffers it feeds" {
     try expect(validField("base", "https://example.org"));
     try expect(!validField("", "x"));
     try expect(!validField("base", ""));
-    try expect(!validField(@import("repeat_pure.zig").bytes("f", (MAX_FIELD_LEN + 1)), "x"));
-    try expect(validField(@import("repeat_pure.zig").bytes("f", MAX_FIELD_LEN), "x"));
-    try expect(!validField("base", @import("repeat_pure.zig").bytes("v", (MAX_VAL_LEN + 1))));
-    try expect(validField("base", @import("repeat_pure.zig").bytes("v", MAX_VAL_LEN)));
+    try expect(!validField(@import("opal-repeat").bytes("f", (MAX_FIELD_LEN + 1)), "x"));
+    try expect(validField(@import("opal-repeat").bytes("f", MAX_FIELD_LEN), "x"));
+    try expect(!validField("base", @import("opal-repeat").bytes("v", (MAX_VAL_LEN + 1))));
+    try expect(validField("base", @import("opal-repeat").bytes("v", MAX_VAL_LEN)));
 }
 
 test "credential fields are classified without hiding ordinary endpoints" {

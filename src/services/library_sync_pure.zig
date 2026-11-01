@@ -609,7 +609,7 @@ test "encode then decode round-trips a row, escapes included" {
 }
 
 test "decode rejects oversize ids and bad rows but keeps the good ones" {
-    const long_id = @import("../core/repeat_pure.zig").bytes("x", 200);
+    const long_id = @import("opal-repeat").bytes("x", 200);
     const json = "{\"rows\":[{\"kind\":\"movie\",\"item_id\":\"" ++ long_id ++ "\",\"updated_at\":5}," ++
         "{\"kind\":\"movie\",\"item_id\":\"ok\",\"updated_at\":5,\"extra\":1}," ++
         "{\"kind\":\"movie\",\"item_id\":\"nots\"}]}";
@@ -737,7 +737,7 @@ test "push batch stops at the byte budget but always sends one row" {
     var rows: [8]SyncRow = undefined;
     for (&rows) |*r| {
         r.* = mk("movie", "tt1", 5, false, 1);
-        _ = put(&r.item.deep_link, &r.item.deep_link_len, @import("../core/repeat_pure.zig").bytes("x", 500));
+        _ = put(&r.item.deep_link, &r.item.deep_link_len, @import("opal-repeat").bytes("x", 500));
     }
     var small: [1400]u8 = undefined;
     const b = try encodeBatch(&small, &rows, "");

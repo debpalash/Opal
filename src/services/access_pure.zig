@@ -384,7 +384,7 @@ test "route privilege matrix protects host administration and executable trust" 
 // ── Paired browser principal ───────────────────────────────────────────────
 
 test "a paired browser holds no capability" {
-    inline for (comptime @import("../core/enum_compat.zig").fields(Capability)) |f| {
+    inline for (comptime @import("opal-reflect").fields(Capability)) |f| {
         try std.testing.expect(!allows(.browser, @field(Capability, f.name)));
     }
     try std.testing.expect(!isSession(.browser));

@@ -1623,7 +1623,7 @@ fn renderPlaybackTab() void {
             state.app.eq_preset = clicked;
             // Same spec that player.zig replays at init (shared av_pure mapping).
             var eq_buf: [96]u8 = undefined;
-            const eq_cmd = @import("../core/fmt_compat.zig").bufPrintZ(&eq_buf, "af set \"{s}\"", .{av_pure.eqFilterSpec(clicked)}) catch "af set \"\"";
+            const eq_cmd = @import("opal-fmt").bufPrintZ(&eq_buf, "af set \"{s}\"", .{av_pure.eqFilterSpec(clicked)}) catch "af set \"\"";
             for (state.app.players.items) |p| {
                 _ = c.mpv.mpv_command_string(p.mpv_ctx, eq_cmd.ptr);
             }
@@ -1872,7 +1872,7 @@ fn renderPlaybackTab() void {
                 const fld = VF.field(f.idx);
                 fld.* = av_pure.clampVideoFilter(fld.* - 5);
                 var cmd_buf: [64]u8 = undefined;
-                if (@import("../core/fmt_compat.zig").bufPrintZ(&cmd_buf, "set {s} {d}", .{ f.prop, fld.* })) |cmd| {
+                if (@import("opal-fmt").bufPrintZ(&cmd_buf, "set {s} {d}", .{ f.prop, fld.* })) |cmd| {
                     if (state.app.active_player_idx < state.app.players.items.len) {
                         _ = c.mpv.mpv_command_string(state.app.players.items[state.app.active_player_idx].mpv_ctx, cmd.ptr);
                     }
@@ -1901,7 +1901,7 @@ fn renderPlaybackTab() void {
                 }
                 const val = FilterCache.vals[f.idx];
                 var val_buf: [12]u8 = undefined;
-                const val_str = @import("../core/fmt_compat.zig").bufPrintZ(&val_buf, "{d}", .{val}) catch "0";
+                const val_str = @import("opal-fmt").bufPrintZ(&val_buf, "{d}", .{val}) catch "0";
                 _ = dvui.label(@src(), "{s}", .{val_str}, .{
                     .id_extra = f.idx + 3030,
                     .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
@@ -1924,7 +1924,7 @@ fn renderPlaybackTab() void {
                 const fld = VF.field(f.idx);
                 fld.* = av_pure.clampVideoFilter(fld.* + 5);
                 var cmd_buf: [64]u8 = undefined;
-                if (@import("../core/fmt_compat.zig").bufPrintZ(&cmd_buf, "set {s} {d}", .{ f.prop, fld.* })) |cmd| {
+                if (@import("opal-fmt").bufPrintZ(&cmd_buf, "set {s} {d}", .{ f.prop, fld.* })) |cmd| {
                     if (state.app.active_player_idx < state.app.players.items.len) {
                         _ = c.mpv.mpv_command_string(state.app.players.items[state.app.active_player_idx].mpv_ctx, cmd.ptr);
                     }
@@ -2608,7 +2608,7 @@ fn renderSubtitlesTab() void {
         // Keyless rows — source-tagged; no key required.
         if (engine.result_count > 0) {
             var count_buf: [48]u8 = undefined;
-            const count_str = @import("../core/fmt_compat.zig").bufPrintZ(&count_buf, "{d} results \xC2\xB7 open providers", .{engine.result_count}) catch "results";
+            const count_str = @import("opal-fmt").bufPrintZ(&count_buf, "{d} results \xC2\xB7 open providers", .{engine.result_count}) catch "results";
             _ = dvui.label(@src(), "{s}", .{count_str}, .{
                 .id_extra = 4402,
                 .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
@@ -2757,7 +2757,7 @@ fn renderSubtitlesTab() void {
                 // Download count — quiet metadata, no glyph.
                 if (r.download_count > 0) {
                     var dc_buf: [16]u8 = undefined;
-                    const dc_str = @import("../core/fmt_compat.zig").bufPrintZ(&dc_buf, "{d}", .{r.download_count}) catch "";
+                    const dc_str = @import("opal-fmt").bufPrintZ(&dc_buf, "{d}", .{r.download_count}) catch "";
                     _ = dvui.label(@src(), "{s}", .{dc_str}, .{
                         .id_extra = ri + 5800,
                         .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
@@ -2939,7 +2939,7 @@ fn renderStorageTab() void {
     {
         const watch = @import("../player/watch_history.zig");
         var count_buf: [48]u8 = undefined;
-        const count_str = @import("../core/fmt_compat.zig").bufPrintZ(&count_buf, "{d} entries saved", .{watch.getCount()}) catch "?";
+        const count_str = @import("opal-fmt").bufPrintZ(&count_buf, "{d} entries saved", .{watch.getCount()}) catch "?";
         _ = dvui.label(@src(), "{s}", .{count_str}, .{
             .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         });
@@ -3475,7 +3475,7 @@ fn renderLangLearnTab() void {
                     _ = c.mpv.mpv_command_string(p.mpv_ctx, "set sid no");
                     state.app.subtitles_enabled = false;
                 } else {
-                    if (@import("../core/fmt_compat.zig").bufPrintZ(&cmd_buf, "set sid {d}", .{clicked})) |cmd| {
+                    if (@import("opal-fmt").bufPrintZ(&cmd_buf, "set sid {d}", .{clicked})) |cmd| {
                         _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
                     } else |_| {}
                     _ = c.mpv.mpv_command_string(p.mpv_ctx, "set sub-visibility yes");
@@ -5360,7 +5360,7 @@ fn renderWebUiTab() void {
     {
         if (!webui_port_seeded) {
             webui_port_seeded = true;
-            _ = @import("../core/fmt_compat.zig").bufPrintZ(&webui_port_buf, "{d}", .{remote.port}) catch {};
+            _ = @import("opal-fmt").bufPrintZ(&webui_port_buf, "{d}", .{remote.port}) catch {};
         }
 
         const lan = remote.bind_mode == .lan;

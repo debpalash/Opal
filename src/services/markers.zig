@@ -81,10 +81,10 @@ fn publishChapters(p: anytype, gen: u64, duration: f64) void {
     for (0..n) |i| {
         var q: [48]u8 = undefined;
         var t: f64 = 0;
-        const tq = @import("../core/fmt_compat.zig").bufPrintZ(&q, "chapter-list/{d}/time", .{i}) catch return;
+        const tq = @import("opal-fmt").bufPrintZ(&q, "chapter-list/{d}/time", .{i}) catch return;
         _ = c.mpv.mpv_get_property(p.mpv_ctx, tq.ptr, c.mpv.MPV_FORMAT_DOUBLE, &t);
         var tl: usize = 0;
-        const nq = @import("../core/fmt_compat.zig").bufPrintZ(&q, "chapter-list/{d}/title", .{i}) catch return;
+        const nq = @import("opal-fmt").bufPrintZ(&q, "chapter-list/{d}/title", .{i}) catch return;
         const title_c = c.mpv.mpv_get_property_string(p.mpv_ctx, nq.ptr);
         if (title_c != null) {
             const s = std.mem.span(title_c);

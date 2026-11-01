@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
         with:
-          version: 0.16.0
+          version: 0.17.0
       - name: Exercise nova2 through Zig child runtime
         run: >-
           zig test -lc --dep io_global
@@ -48,7 +48,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
         with:
-          version: 0.16.0
+          version: 0.17.0
       - name: Install SQLite for Windows integration tests
         if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
@@ -96,9 +96,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
         with:
-          version: 0.16.0
+          version: 0.17.0
       - name: Build opal-mcp
-        run: zig build opal-mcp -Doptimize=ReleaseSafe --prefix "$RUNNER_TEMP/opal-mcp"
+        run: zig build opal-mcp -Doptimize=safe --prefix "$RUNNER_TEMP/opal-mcp"
       - name: opal-mcp runs
         run: |
           test -x "$RUNNER_TEMP/opal-mcp/bin/opal-mcp"
@@ -137,7 +137,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
         with:
-          version: 0.16.0
+          version: 0.17.0
       - name: Install native fixture dependencies
         timeout-minutes: 20
         run: |
@@ -180,7 +180,7 @@ jobs:
           OPAL_GALLERY_CAPTURE_DIR: ${{ runner.temp }}/opal-native-captures
         run: |
           mkdir -p "$OPAL_NATIVE_CAPTURE_DIR"
-          zig build test-native-ui -Doptimize=ReleaseSafe --summary all
+          zig build test-native-ui -Doptimize=safe --summary all
           test -n "$(find "$OPAL_NATIVE_CAPTURE_DIR" -name '*.png' -print -quit)"
       - name: Save native fixture captures
         if: always()
@@ -199,7 +199,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
         with:
-          version: 0.16.0
+          version: 0.17.0
       - name: Native HTTP deadlines and cancellation
         timeout-minutes: 10
         run: zig build test-native-http --summary all
@@ -230,7 +230,7 @@ jobs:
           python3 tests/test_headless_playback_live.py --binary "$RUNNER_TEMP/opal-provider-fixtures/bin/opal" --port 41825
           python3 tests/test_lua_execution_policy.py
       - name: Build (ReleaseSafe)
-        run: zig build -Doptimize=ReleaseSafe
+        run: zig build -Doptimize=safe
       - name: Binary exists
         run: |
           test -x zig-out/bin/opal
@@ -243,7 +243,7 @@ jobs:
           OPAL_GALLERY_CAPTURE_DIR: ${{ runner.temp }}/opal-native-captures
         run: |
           mkdir -p "$OPAL_NATIVE_CAPTURE_DIR"
-          zig build test-native-ui -Doptimize=ReleaseSafe --summary all
+          zig build test-native-ui -Doptimize=safe --summary all
           test -n "$(find "$OPAL_NATIVE_CAPTURE_DIR" -name '*.png' -print -quit)"
       - name: Save native fixture captures
         if: always()
@@ -260,6 +260,11 @@ jobs:
         run: |
           ./scripts/build-app.sh
           test -x dist/Opal.app/Contents/MacOS/Opal
+      - name: Bundled player shutdown, session restore and video seeking
+        timeout-minutes: 5
+        run: |
+          python3 tests/test_native_shutdown_live.py --binary dist/Opal.app/Contents/MacOS/Opal --port 41782
+          python3 tests/test_session_close_live.py --binary dist/Opal.app/Contents/MacOS/Opal --port 41784
 
   # Feature suite — source-level checks (DB schema, config, thread-safety
   # sweeps, script compilation) plus a full zig build, so it needs the same
@@ -271,7 +276,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
         with:
-          version: 0.16.0
+          version: 0.17.0
       - name: Install native dependencies
         run: |
           ./scripts/install-macos-deps.sh
@@ -377,7 +382,7 @@ jobs:
             mingw-w64-x86_64-pkgconf
       - uses: mlugg/setup-zig@v2
         with:
-          version: 0.16.0
+          version: 0.17.0
       - name: Native HTTP deadlines and cancellation
         timeout-minutes: 10
         run: |
@@ -392,7 +397,7 @@ jobs:
         run: ./scripts/install-mingw64-mpv.sh
       - name: Build headless (ReleaseSafe)
         run: |
-          zig build -Dheadless=true -Doptimize=ReleaseSafe
+          zig build -Dheadless=true -Doptimize=safe
           test -f zig-out/bin/torrent_wrapper.dll
       - name: Hermetic media server and webcomic workflows
         timeout-minutes: 10
@@ -492,7 +497,7 @@ jobs:
       # tag is created. Do this after the server has been shut down because
       # both builds write zig-out/bin/opal.exe.
       - name: Build Windows desktop (ReleaseSafe)
-        run: zig build -Doptimize=ReleaseSafe
+        run: zig build -Doptimize=safe
 
       - name: Native offline UI fixture suite
         timeout-minutes: 20
@@ -508,7 +513,7 @@ jobs:
           export OPAL_NATIVE_CAPTURE_DIR="$(cygpath -m "$RUNNER_TEMP")/opal-native-captures"
           export OPAL_GALLERY_CAPTURE_DIR="$OPAL_NATIVE_CAPTURE_DIR"
           mkdir -p "$OPAL_NATIVE_CAPTURE_DIR"
-          zig build test-native-ui -Doptimize=ReleaseSafe --summary all
+          zig build test-native-ui -Doptimize=safe --summary all
           test -n "$(find "$OPAL_NATIVE_CAPTURE_DIR" -name '*.png' -print -quit)"
       - name: Save native fixture captures
         if: always()

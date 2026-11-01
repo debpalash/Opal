@@ -692,7 +692,7 @@ fn renderHistoryContent() void {
 
         // Progress — quiet metadata, not a resting status hue.
         var pct_buf: [8]u8 = undefined;
-        const pct_str = @import("../core/fmt_compat.zig").bufPrintZ(&pct_buf, "{d}%", .{pct}) catch "?";
+        const pct_str = @import("opal-fmt").bufPrintZ(&pct_buf, "{d}%", .{pct}) catch "?";
         _ = dvui.label(@src(), "{s}", .{pct_str}, .{
             .id_extra = i + 5000,
             .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),

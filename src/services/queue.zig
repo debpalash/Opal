@@ -104,11 +104,11 @@ pub fn initDb() void {
     var __cfg_buf_0: [512]u8 = undefined;
     const home = @import("../core/paths.zig").configDir(&__cfg_buf_0);
     var path_buf: [640]u8 = undefined;
-    const db_path = @import("../core/fmt_compat.zig").bufPrintZ(&path_buf, "{s}/queue.db", .{home}) catch return;
+    const db_path = @import("opal-fmt").bufPrintZ(&path_buf, "{s}/queue.db", .{home}) catch return;
 
     // Ensure directory exists
     var dir_buf: [640]u8 = undefined;
-    const dir_path = @import("../core/fmt_compat.zig").bufPrintZ(&dir_buf, "{s}", .{home}) catch return;
+    const dir_path = @import("opal-fmt").bufPrintZ(&dir_buf, "{s}", .{home}) catch return;
     _ = @import("../core/io_global.zig").makeDirAbsolute(dir_path) catch {};
 
     const flags = c.sqlite.SQLITE_OPEN_READWRITE | c.sqlite.SQLITE_OPEN_CREATE | c.sqlite.SQLITE_OPEN_FULLMUTEX;
@@ -563,7 +563,7 @@ var show_collections = false;
 pub fn renderContent() void {
     if (!isReady() and !(@import("builtin").is_test and fixture_for_test)) {
         _ = dvui.label(@src(), "Loading queue…", .{}, .{
-            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
+            .color_text = .{ .color = theme.colors.text_secondary },
             .gravity_x = 0.5,
             .gravity_y = 0.5,
         });
@@ -614,7 +614,7 @@ pub fn renderContent() void {
         if (page_controls.item(@src(), .{ .id = 92007, .label = "Clear played", .icon = icons.tvg.lucide.@"list-checks" })) clearPlayed();
         if (components.confirmDangerButton(@src(), "Clear queue", 92008)) clearAll();
         var count_buf: [32]u8 = undefined;
-        dvui.labelNoFmt(@src(), std.fmt.bufPrint(&count_buf, "{d} queued", .{queue_count}) catch "", .{}, .{ .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_tertiary), .gravity_y = 0.5 });
+        dvui.labelNoFmt(@src(), std.fmt.bufPrint(&count_buf, "{d} queued", .{queue_count}) catch "", .{}, .{ .color_text = .{ .color = theme.colors.text_tertiary }, .gravity_y = 0.5 });
     }
 
     if (show_collections) renderCollections();
@@ -628,7 +628,7 @@ pub fn renderContent() void {
         return;
     }
 
-    var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &queue_scroll }, .{ .expand = .both, .background = true, .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface) });
+    var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &queue_scroll }, .{ .expand = .both, .background = true, .color_fill = .{ .color = theme.colors.bg_surface } });
     defer scroll.deinit();
 
     var tab_pressed = false;
@@ -665,7 +665,7 @@ fn renderCollections() void {
     var panel = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface),
+        .color_fill = .{ .color = theme.colors.bg_surface },
         .corners = theme.dims.rad_sm,
         .padding = dvui.Rect.all(8),
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
@@ -679,8 +679,8 @@ fn renderCollections() void {
         .placeholder = "Collection name",
     }, .{
         .expand = .horizontal,
-        .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
-        .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary),
+        .color_fill = .{ .color = theme.colors.bg_elevated },
+        .color_text = .{ .color = theme.colors.text_primary },
         .corners = theme.dims.rad_sm,
         .padding = .{ .x = 8, .y = 5, .w = 8, .h = 5 },
         .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
@@ -688,8 +688,8 @@ fn renderCollections() void {
     const save_enter = input.enter_pressed;
     input.deinit();
     if (dvui.button(@src(), "Save queue", .{}, .{
-        .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
-        .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_on_accent),
+        .color_fill = .{ .color = theme.colors.accent },
+        .color_text = .{ .color = theme.colors.text_on_accent },
         .corners = theme.dims.rad_sm,
     }) or save_enter) {
         const name = std.mem.sliceTo(&collection_name_buf, 0);
@@ -709,22 +709,22 @@ fn renderCollections() void {
         _ = dvui.labelNoFmt(@src(), row.name[0..row.name_len], .{}, .{
             .id_extra = index,
             .expand = .horizontal,
-            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary),
+            .color_text = .{ .color = theme.colors.text_primary },
         });
         var count_buf: [32]u8 = undefined;
         const count_label = std.fmt.bufPrint(&count_buf, "{d} items", .{row.item_count}) catch "";
-        _ = dvui.labelNoFmt(@src(), count_label, .{}, .{ .id_extra = index, .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_tertiary) });
-        if (dvui.button(@src(), "Append", .{}, .{ .id_extra = index, .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated) })) {
+        _ = dvui.labelNoFmt(@src(), count_label, .{}, .{ .id_extra = index, .color_text = .{ .color = theme.colors.text_tertiary } });
+        if (dvui.button(@src(), "Append", .{}, .{ .id_extra = index, .color_fill = .{ .color = theme.colors.bg_elevated } })) {
             if (collections.enqueueNative(row.id, false)) state.showToast("Collection appended");
         }
-        if (dvui.button(@src(), "Replace", .{}, .{ .id_extra = index, .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated) })) {
+        if (dvui.button(@src(), "Replace", .{}, .{ .id_extra = index, .color_fill = .{ .color = theme.colors.bg_elevated } })) {
             if (collections.enqueueNative(row.id, true)) state.showToast("Queue replaced");
         }
         if (!row.smart) {
             if (dvui.button(@src(), "Delete", .{}, .{
                 .id_extra = index,
-                .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
-                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.danger),
+                .color_fill = .{ .color = theme.colors.bg_elevated },
+                .color_text = .{ .color = theme.colors.danger },
             })) {
                 if (collections.remove(row.id)) state.showToast("Collection deleted");
                 break;
@@ -747,14 +747,14 @@ fn renderNowPlaying() void {
     var np = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.accent_dim.opacity(0.3)),
+        .color_fill = .{ .color = theme.colors.accent_dim.opacity(0.3) },
         .corners = theme.dims.rad_sm,
         .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
     });
     defer np.deinit();
 
     dvui.icon(@src(), "", icons.tvg.lucide.@"disc-3", .{}, .{
-        .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
+        .color_text = .{ .color = theme.colors.accent },
         .gravity_y = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = 10, .h = 0 },
     });
@@ -764,10 +764,10 @@ fn renderNowPlaying() void {
         defer info.deinit();
 
         _ = dvui.label(@src(), "NOW PLAYING", .{}, .{
-            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
+            .color_text = .{ .color = theme.colors.accent },
         });
         _ = dvui.labelNoFmt(@src(), title, .{}, .{
-            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary),
+            .color_text = .{ .color = theme.colors.text_primary },
             .expand = .horizontal,
         });
     }
@@ -800,8 +800,8 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
         .id_extra = idx,
         .expand = .horizontal,
         .background = true,
-        .color_fill = @import("../ui/color_compat.zig").wrap(if (item.played) theme.colors.bg_app else theme.colors.bg_surface),
-        .color_border = @import("../ui/color_compat.zig").wrap(theme.colors.border_subtle),
+        .color_fill = .{ .color = if (item.played) theme.colors.bg_app else theme.colors.bg_surface },
+        .color_border = .{ .color = theme.colors.border_subtle },
         .border = dvui.Rect.all(1),
         .corners = dvui.CornerRect.all(8),
         .padding = .{ .x = 6, .y = 6, .w = 6, .h = 6 },
@@ -818,7 +818,7 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
         var poster = dvui.box(@src(), .{}, .{
             .id_extra = idx + 500,
             .background = true,
-            .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_app),
+            .color_fill = .{ .color = theme.colors.bg_app },
             .corners = dvui.CornerRect.all(4),
             .min_size_content = .{ .w = 80, .h = 45 },
             .max_size_content = .{ .w = 80, .h = 45 },
@@ -852,7 +852,7 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
                 .id_extra = idx + 510,
                 .gravity_x = 0.5,
                 .gravity_y = 0.5,
-                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+                .color_text = .{ .color = theme.colors.bg_elevated },
             });
         }
     } else {
@@ -866,7 +866,7 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
 
         dvui.icon(@src(), "", src_icon, .{}, .{
             .id_extra = idx + 600,
-            .color_text = @import("../ui/color_compat.zig").wrap(if (item.played) theme.colors.text_secondary else theme.colors.accent),
+            .color_text = .{ .color = if (item.played) theme.colors.text_secondary else theme.colors.accent },
             .gravity_y = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = 10, .h = 0 },
         });
@@ -898,13 +898,13 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
 
         _ = dvui.labelNoFmt(@src(), title, .{}, .{
             .id_extra = idx + 710,
-            .color_text = @import("../ui/color_compat.zig").wrap(if (item.played) theme.colors.text_secondary else theme.colors.text_primary),
+            .color_text = .{ .color = if (item.played) theme.colors.text_secondary else theme.colors.text_primary },
             .max_size_content = .{ .w = title_w, .h = std.math.floatMax(f32) },
         });
 
         _ = dvui.label(@src(), "{s}", .{source}, .{
             .id_extra = idx + 720,
-            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_tertiary),
+            .color_text = .{ .color = theme.colors.text_tertiary },
             .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
             .max_size_content = .{ .w = title_w, .h = std.math.floatMax(f32) },
         });
@@ -925,10 +925,10 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
         // Move up
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"chevron-up", .{}, .{}, .{
             .id_extra = idx + 805,
-            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
-            .color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent),
-            .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.bg_hover),
-            .color_fill_press = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = .{ .color = theme.colors.text_secondary },
+            .color_fill = .{ .color = theme.transparent },
+            .color_fill_hover = .{ .color = theme.colors.bg_hover },
+            .color_fill_press = .{ .color = theme.colors.bg_elevated },
         })) {
             if (idx > 0) swapQueueItems(idx - 1, idx);
         }
@@ -936,10 +936,10 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
         // Move down
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"chevron-down", .{}, .{}, .{
             .id_extra = idx + 808,
-            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
-            .color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent),
-            .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.bg_hover),
-            .color_fill_press = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = .{ .color = theme.colors.text_secondary },
+            .color_fill = .{ .color = theme.transparent },
+            .color_fill_hover = .{ .color = theme.colors.bg_hover },
+            .color_fill_press = .{ .color = theme.colors.bg_elevated },
         })) {
             if (idx + 1 < queue_count) swapQueueItems(idx, idx + 1);
         }
@@ -947,10 +947,10 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
         // Play button
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
             .id_extra = idx + 810,
-            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
-            .color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent),
-            .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.bg_hover),
-            .color_fill_press = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = .{ .color = theme.colors.accent },
+            .color_fill = .{ .color = theme.transparent },
+            .color_fill_hover = .{ .color = theme.colors.bg_hover },
+            .color_fill_press = .{ .color = theme.colors.bg_elevated },
         })) {
             playQueueItem(item);
         }
@@ -958,10 +958,10 @@ fn renderQueueCard(item: *QueueItem, idx: usize) void {
         // Remove button
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"trash-2", .{}, .{}, .{
             .id_extra = idx + 820,
-            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.danger),
-            .color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent),
-            .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.bg_hover),
-            .color_fill_press = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = .{ .color = theme.colors.danger },
+            .color_fill = .{ .color = theme.transparent },
+            .color_fill_hover = .{ .color = theme.colors.bg_hover },
+            .color_fill_press = .{ .color = theme.colors.bg_elevated },
         })) {
             removeFromQueue(item.id);
         }
@@ -1252,7 +1252,7 @@ fn thumbCacheDir(buf: []u8) []const u8 {
 
 fn thumbCachePath(item_id: i64, out: *[384]u8) ?[]const u8 {
     var dir_buf: [512]u8 = undefined;
-    return @import("../core/fmt_compat.zig").bufPrintZ(out, "{s}/{d}.jpg", .{ thumbCacheDir(&dir_buf), item_id }) catch null;
+    return @import("opal-fmt").bufPrintZ(out, "{s}/{d}.jpg", .{ thumbCacheDir(&dir_buf), item_id }) catch null;
 }
 
 // Cap concurrent thumbnail-fetch threads so a full queue can't spawn 200

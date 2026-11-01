@@ -210,7 +210,7 @@ test "validItemId accepts GUIDs, rejects injection" {
     try std.testing.expect(!validItemId("id?x=1"));
     try std.testing.expect(!validItemId("a b"));
     // Over-long is rejected (bound).
-    try std.testing.expect(!validItemId(@import("../core/repeat_pure.zig").bytes("a", 65)));
+    try std.testing.expect(!validItemId(@import("opal-repeat").bytes("a", 65)));
 }
 
 test "auth rejection is distinct from transport and server failures" {

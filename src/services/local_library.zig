@@ -79,7 +79,7 @@ fn scanWorker() void {
     var dbpath: [512]u8 = undefined;
     var cpath: [512]u8 = undefined;
     const path = @import("../core/paths.zig").zigzagDbFile(&dbpath);
-    const zpath = @import("../core/fmt_compat.zig").bufPrintZ(&cpath, "{s}", .{path}) catch return;
+    const zpath = @import("opal-fmt").bufPrintZ(&cpath, "{s}", .{path}) catch return;
     var connection: ?*db.Sqlite3 = null;
     if (db.c.sqlite3_open_v2(zpath.ptr, &connection, db.c.SQLITE_OPEN_READWRITE | db.c.SQLITE_OPEN_FULLMUTEX, null) != db.c.SQLITE_OK) {
         if (connection) |handle| _ = db.c.sqlite3_close_v2(handle);

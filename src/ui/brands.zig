@@ -8,7 +8,7 @@ pub const Brand = enum { youtube, youtubemusic, plex, jellyfin, emby, audiobooks
 const count = @typeInfo(Brand).@"enum".field_names.len;
 const artwork = blk: {
     var entries: [count][]const u8 = undefined;
-    for (@import("../core/enum_compat.zig").fields(Brand), 0..) |field, i| entries[i] = @embedFile("brands/" ++ field.name ++ ".tvg");
+    for (@import("opal-reflect").fields(Brand), 0..) |field, i| entries[i] = @embedFile("brands/" ++ field.name ++ ".tvg");
     break :blk entries;
 };
 

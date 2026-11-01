@@ -179,7 +179,7 @@ test "only typed words are worth a question" {
     try std.testing.expect(!worthAsking("/home/me/movie.mkv"));
     try std.testing.expect(!worthAsking("0123456789abcdef0123456789abcdef01234567"));
     try std.testing.expect(!worthAsking("12 34"));
-    try std.testing.expect(!worthAsking(@import("../core/repeat_pure.zig").bytes("x", 81)));
+    try std.testing.expect(!worthAsking(@import("opal-repeat").bytes("x", 81)));
     try std.testing.expect(!worthAsking("bad\x01query"));
 }
 

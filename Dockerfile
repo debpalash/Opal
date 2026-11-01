@@ -13,7 +13,7 @@
 # ---------------------------------------------------------------------------
 FROM debian:12-slim AS builder
 
-# Pin a 0.16.x Zig (project requires 0.16.x). Adjust ZIG_VERSION as 0.16.x
+# Pin a 0.17.x Zig (project requires 0.17.x). Adjust ZIG_VERSION as 0.17.x
 # point releases land.
 #
 # The tarball arch is DERIVED, never hardcoded. It used to be pinned to
@@ -21,7 +21,7 @@ FROM debian:12-slim AS builder
 # amd64 binary is not runnable at all ("zig: Exec format error", CI run
 # 29963780063) and under an emulating local daemon it gets far enough to SEGV
 # the build runner instead. The arm64 image has therefore never built.
-ARG ZIG_VERSION=0.16.0
+ARG ZIG_VERSION=0.17.0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
@@ -38,7 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Zig 0.16.x onto PATH, matching the image's own architecture.
+# Install Zig 0.17.x onto PATH, matching the image's own architecture.
 RUN set -eux; \
     case "$(dpkg --print-architecture)" in \
         amd64) zarch=x86_64 ;; \
@@ -70,7 +70,7 @@ RUN set -eux; \
         arm64) cpu=baseline ;; \
         *) echo "unsupported architecture: $(dpkg --print-architecture)" >&2; exit 1 ;; \
     esac; \
-    zig build -Dheadless=true -Doptimize=ReleaseSafe -Dcpu="$cpu"
+    zig build -Dheadless=true -Doptimize=safe -Dcpu="$cpu"
 
 # Artifacts to copy out of the builder into the runtime stage:
 #   - the opal binary              (zig-out/bin/opal)

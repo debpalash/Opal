@@ -20,11 +20,11 @@ Thanks for your interest in contributing to **Opal** — the blazing-fast, decen
 
 ## Development setup
 
-Opal is a native desktop app written in **Zig 0.16.x** with an immediate-mode [dvui](https://github.com/david-vanderson/dvui) GUI. It links several heavy native dependencies.
+Opal is a native desktop app written in **Zig 0.17.x** with an immediate-mode [dvui](https://github.com/david-vanderson/dvui) GUI. It links several heavy native dependencies.
 
 ### Prerequisites
 
-- **Zig 0.16.x** (required — earlier/later majors will not build).
+- **Zig 0.17.x** (required — earlier/later majors will not build).
   - macOS toolchain: `/opt/homebrew/bin/zig`.
 - A C/C++ toolchain (`g++`, used to build `src/torrent_wrapper.cpp`).
 
@@ -73,7 +73,7 @@ Linked at build time — failures here usually mean a missing system package:
 | `zig build run` | Debug build + launch (slow first build, fast incremental). |
 | `./dev.sh` | **HMR loop.** Watches `src/ tools/ build.zig*`, rebuilds on change, keeps the old binary running on build failure. Session state survives restart. Flags: `-r` ReleaseFast, `-v` verbose, `-- <args>` passthrough. |
 | `just hot` | Native Zig 0.16 `--watch -fincremental` (millisecond rebuilds, but bails on C / `build.zig` changes). |
-| `just release` / `zig build -Doptimize=ReleaseFast` | ReleaseFast build. |
+| `just release` / `zig build -Doptimize=fast` | ReleaseFast build. |
 | `zig build test` (or `just test`) | **Pure-Zig unit tests only** — fast, no app build. |
 | `just test-all` (== `python3 tests/test_features.py`) | **Comprehensive gate.** DB schema, config/memory, theming, instant commands, AI, voice helpers, ASR smoke — and folds in the Zig unit tests. Writes `tests/results.json` (viewable in `tests/dashboard.html`). |
 | `just fmt` | Format. |

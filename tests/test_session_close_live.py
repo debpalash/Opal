@@ -3,6 +3,8 @@
 import argparse
 from pathlib import Path
 import signal
+import shutil
+import subprocess
 import os
 import sqlite3
 import time
@@ -13,6 +15,58 @@ import test_setup_token_live as live
 
 
 class SessionCloseTest(unittest.TestCase):
+    def test_video_audio_and_bidirectional_seek_after_pause(self):
+        ffmpeg = shutil.which("ffmpeg")
+        if not ffmpeg:
+            self.skipTest("ffmpeg required for generated video fixture")
+        opal = live.IsolatedOpal(self)
+        self.addCleanup(opal.stop)
+        media = opal.root / "seek.mp4"
+        subprocess.run([
+            ffmpeg, "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24",
+            "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000", "-t", "30",
+            "-c:v", "libx264", "-preset", "ultrafast", "-g", "24", "-c:a", "aac", str(media),
+        ], check=True, capture_output=True, timeout=30)
+        profile = opal.config_root / "opal"
+        profile.mkdir(parents=True)
+        with sqlite3.connect(profile / "opal.db") as db:
+            db.execute("CREATE TABLE config(key TEXT PRIMARY KEY, value TEXT)")
+            db.executemany("INSERT INTO config VALUES (?,?)", [
+                ("web_remote", "1"), ("web_port", str(live.PORT)),
+                ("web_bind", "loopback"), ("dpi_bypass_enabled", "0"),
+                ("auto_download_subs", "0"), ("search_sources", "0"),
+            ])
+        opal.start()
+        headers = (("Authorization", "Bearer " + (profile / "api.token").read_text().strip()),)
+
+        def request(method, path):
+            response = live.request(method, path, host=opal.loopback_authority, extra_headers=headers)
+            self.assertEqual(response.status, 200, response.body)
+            return response.json()
+
+        def wait_for(predicate):
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                status = request("GET", "/api/status")
+                if predicate(status):
+                    return status
+                time.sleep(0.1)
+            self.fail("video failed to reach expected state: " + repr(status))
+
+        request("POST", "/api/open?path=" + urllib.parse.quote(str(media), safe=""))
+        status = wait_for(lambda s: s["active"] and s["pos"] > 0.5 and s["dur"] > 29)
+        self.assertEqual(len(request("GET", "/api/player")["tracks"]["audio"]), 1)
+        request("POST", "/api/playpause")
+        paused = wait_for(lambda s: s["paused"])
+        time.sleep(1)
+        self.assertAlmostEqual(paused["pos"], request("GET", "/api/status")["pos"], delta=0.3)
+        request("POST", "/api/seek_pct?v=70")
+        wait_for(lambda s: s["paused"] and 20 <= s["pos"] <= 22)
+        request("POST", "/api/seek_pct?v=20")
+        wait_for(lambda s: s["paused"] and 5 <= s["pos"] <= 7)
+        request("POST", "/api/playpause")
+        wait_for(lambda s: not s["paused"] and s["pos"] > 7)
+
     def test_close_saves_media_and_restart_does_not_autoplay(self):
         opal = live.IsolatedOpal(self)
         self.addCleanup(opal.stop)
@@ -77,6 +131,10 @@ class SessionCloseTest(unittest.TestCase):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", type=Path, required=True)
+    parser.add_argument("--port", type=int, default=live.DEFAULT_PORT)
     args = parser.parse_args()
+    if not 1 <= args.port <= 65535:
+        parser.error("port must be between 1 and 65535")
+    live.PORT = args.port
     live.BINARY = args.binary.resolve()
     unittest.main(argv=[__file__], verbosity=2)

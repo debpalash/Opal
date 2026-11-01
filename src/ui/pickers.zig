@@ -288,10 +288,10 @@ pub fn renderChapterPickerPopover(active_p: *player.MediaPlayer) void {
     var i: usize = 0;
     while (i < @as(usize, @intCast(@max(@as(i64, 0), ch_count)))) : (i += 1) {
         var qtitle_buf: [64]u8 = undefined;
-        const title_q = @import("../core/fmt_compat.zig").bufPrintZ(&qtitle_buf, "chapter-list/{d}/title", .{i}) catch continue;
+        const title_q = @import("opal-fmt").bufPrintZ(&qtitle_buf, "chapter-list/{d}/title", .{i}) catch continue;
         const title_c = c.mpv.mpv_get_property_string(active_p.mpv_ctx, title_q.ptr);
         var qtime_buf: [64]u8 = undefined;
-        const time_q = @import("../core/fmt_compat.zig").bufPrintZ(&qtime_buf, "chapter-list/{d}/time", .{i}) catch continue;
+        const time_q = @import("opal-fmt").bufPrintZ(&qtime_buf, "chapter-list/{d}/time", .{i}) catch continue;
         var ch_time: f64 = 0;
         _ = c.mpv.mpv_get_property(active_p.mpv_ctx, time_q.ptr, c.mpv.MPV_FORMAT_DOUBLE, &ch_time);
         const safe = @max(0.0, if (std.math.isNan(ch_time)) 0.0 else ch_time);
@@ -300,19 +300,19 @@ pub fn renderChapterPickerPopover(active_p: *player.MediaPlayer) void {
         var label_buf: [128]u8 = undefined;
         const label = if (title_c != null) blk: {
             const title_span = std.mem.span(title_c);
-            const s = @import("../core/fmt_compat.zig").bufPrintZ(&label_buf, "{d:0>2}:{d:0>2}:{d:0>2}  {s}", .{
+            const s = @import("opal-fmt").bufPrintZ(&label_buf, "{d:0>2}:{d:0>2}:{d:0>2}  {s}", .{
                 t_sec / 3600, (t_sec % 3600) / 60, t_sec % 60, title_span,
             }) catch "";
             c.mpv.mpv_free(@ptrCast(title_c));
             break :blk s;
-        } else (@import("../core/fmt_compat.zig").bufPrintZ(&label_buf, "{d:0>2}:{d:0>2}:{d:0>2}  Chapter {d}", .{
+        } else (@import("opal-fmt").bufPrintZ(&label_buf, "{d:0>2}:{d:0>2}:{d:0>2}  Chapter {d}", .{
             t_sec / 3600, (t_sec % 3600) / 60, t_sec % 60, i + 1,
         }) catch "");
 
         const is_current = i == @as(usize, @intCast(@max(0, current_ch)));
         if (pickerOption(@src(), i, icons.tvg.lucide.bookmark, label, is_current)) {
             var cmd_buf: [32]u8 = undefined;
-            if (@import("../core/fmt_compat.zig").bufPrintZ(&cmd_buf, "set chapter {d}", .{i})) |cmd| {
+            if (@import("opal-fmt").bufPrintZ(&cmd_buf, "set chapter {d}", .{i})) |cmd| {
                 _ = c.mpv.mpv_command_string(active_p.mpv_ctx, cmd.ptr);
             } else |_| {}
             footer.open_picker = .none;
@@ -345,7 +345,7 @@ pub fn renderAspectPickerPopover(active_p: *player.MediaPlayer) void {
             std.mem.eql(u8, state.app.video_aspect_buf[0..state.app.video_aspect_len], m);
         if (pickerOption(@src(), k, icons.tvg.lucide.ratio, labels[k], is_cur)) {
             var cmd: [64]u8 = undefined;
-            if (@import("../core/fmt_compat.zig").bufPrintZ(&cmd, "set video-aspect-override \"{s}\"", .{m})) |cstr| {
+            if (@import("opal-fmt").bufPrintZ(&cmd, "set video-aspect-override \"{s}\"", .{m})) |cstr| {
                 _ = c.mpv.mpv_command_string(active_p.mpv_ctx, cstr.ptr);
             } else |_| {}
             @memset(state.app.video_aspect_buf[0..], 0);
@@ -402,7 +402,7 @@ pub fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []con
     var i: i64 = 0;
     while (i < count) : (i += 1) {
         var tq_buf: [64]u8 = undefined;
-        const tq = @import("../core/fmt_compat.zig").bufPrintZ(&tq_buf, "track-list/{d}/type", .{i}) catch continue;
+        const tq = @import("opal-fmt").bufPrintZ(&tq_buf, "track-list/{d}/type", .{i}) catch continue;
         const tc = c.mpv.mpv_get_property_string(active_p.mpv_ctx, tq.ptr);
         if (tc == null) continue;
         const matches = std.mem.eql(u8, std.mem.span(tc), track_type);
@@ -410,12 +410,12 @@ pub fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []con
         if (!matches) continue;
 
         var id_buf: [64]u8 = undefined;
-        const idq = @import("../core/fmt_compat.zig").bufPrintZ(&id_buf, "track-list/{d}/id", .{i}) catch continue;
+        const idq = @import("opal-fmt").bufPrintZ(&id_buf, "track-list/{d}/id", .{i}) catch continue;
         var t_id: i64 = 0;
         _ = c.mpv.mpv_get_property(active_p.mpv_ctx, idq.ptr, c.mpv.MPV_FORMAT_INT64, &t_id);
 
         var sel_buf: [64]u8 = undefined;
-        const sq = @import("../core/fmt_compat.zig").bufPrintZ(&sel_buf, "track-list/{d}/selected", .{i}) catch continue;
+        const sq = @import("opal-fmt").bufPrintZ(&sel_buf, "track-list/{d}/selected", .{i}) catch continue;
         const sc = c.mpv.mpv_get_property_string(active_p.mpv_ctx, sq.ptr);
         const is_selected = sc != null and std.mem.eql(u8, std.mem.span(sc), "yes");
         if (sc != null) c.mpv.mpv_free(@ptrCast(sc));
@@ -425,7 +425,7 @@ pub fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []con
         var track_lang_buf: [16]u8 = std.mem.zeroes([16]u8);
         var track_lang_len: usize = 0;
         var qlang_buf: [64]u8 = undefined;
-        const lq = @import("../core/fmt_compat.zig").bufPrintZ(&qlang_buf, "track-list/{d}/lang", .{i}) catch continue;
+        const lq = @import("opal-fmt").bufPrintZ(&qlang_buf, "track-list/{d}/lang", .{i}) catch continue;
         const lc = c.mpv.mpv_get_property_string(active_p.mpv_ctx, lq.ptr);
         if (lc != null) {
             const lang = std.mem.span(lc);
@@ -435,7 +435,7 @@ pub fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []con
             c.mpv.mpv_free(@ptrCast(lc));
         } else {
             var qtitle_buf: [64]u8 = undefined;
-            const tlq = @import("../core/fmt_compat.zig").bufPrintZ(&qtitle_buf, "track-list/{d}/title", .{i}) catch continue;
+            const tlq = @import("opal-fmt").bufPrintZ(&qtitle_buf, "track-list/{d}/title", .{i}) catch continue;
             const tlc = c.mpv.mpv_get_property_string(active_p.mpv_ctx, tlq.ptr);
             if (tlc != null) {
                 row_name = std.fmt.bufPrint(&name_buf, "{s}", .{std.mem.span(tlc)}) catch "Err";
@@ -455,7 +455,7 @@ pub fn renderTrackPickerPopover(active_p: *player.MediaPlayer, track_type: []con
         )) {
             var cmd: [64]u8 = undefined;
             const prop = if (kind == .audio) "aid" else "sid";
-            if (@import("../core/fmt_compat.zig").bufPrintZ(&cmd, "set {s} {d}", .{ prop, t_id })) |cstr| {
+            if (@import("opal-fmt").bufPrintZ(&cmd, "set {s} {d}", .{ prop, t_id })) |cstr| {
                 _ = c.mpv.mpv_command_string(active_p.mpv_ctx, cstr.ptr);
             } else |_| {}
             // Picking a track cancels a deliberate "no audio" intent.
@@ -757,7 +757,7 @@ pub fn renderPlaylistPickerPopover(active_p: *player.MediaPlayer) void {
         const size = c.mpv.torrent_get_file_size(state.torrentSession(), active_p.current_torrent_id, @intCast(i));
         const size_mb = @as(f64, @floatFromInt(size)) / 1024.0 / 1024.0;
         var lbl_buf: [320]u8 = undefined;
-        const label = @import("../core/fmt_compat.zig").bufPrintZ(&lbl_buf, "{s}  ({d:.1} MB)", .{ std.mem.sliceTo(&name_buf, 0), size_mb }) catch "File";
+        const label = @import("opal-fmt").bufPrintZ(&lbl_buf, "{s}  ({d:.1} MB)", .{ std.mem.sliceTo(&name_buf, 0), size_mb }) catch "File";
         const is_sel = active_p.selected_file_idx == @as(i32, @intCast(i));
         if (pickerOption(@src(), i, icons.tvg.lucide.list, label, is_sel)) {
             if (active_p.selected_file_idx != @as(i32, @intCast(i))) {

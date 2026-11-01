@@ -220,7 +220,7 @@ test "batches cap item count and size" {
     for (&texts) |*t| t.* = "short line";
     try testing.expectEqual(@as(usize, 24), nextBatchEnd(&texts, 0));
     try testing.expectEqual(@as(usize, 60), nextBatchEnd(&texts, 48));
-    const big = @import("../core/repeat_pure.zig").bytes("x", 2000);
+    const big = @import("opal-repeat").bytes("x", 2000);
     const mixed = [_][]const u8{ big, big, "a" };
     try testing.expectEqual(@as(usize, 1), nextBatchEnd(&mixed, 0));
 }

@@ -187,14 +187,14 @@ test "a label is the name, then the title, or exited" {
 
 test "a long or hostile title is clipped on a character boundary and cleaned" {
     var b: [56]u8 = undefined;
-    const long = @import("../core/repeat_pure.zig").bytes("x", 100);
+    const long = @import("opal-repeat").bytes("x", 100);
     const got = label(&b, "Shell", long, false, 40);
     try std.testing.expect(got.len <= 40 + 3);
     try std.testing.expect(std.mem.endsWith(u8, got, "\xe2\x80\xa6"));
     // Six tabs get less room than two.
     try std.testing.expect(label(&b, "Shell", long, false, labelMax(6)).len < got.len);
     // A title of two-byte characters never gets cut in the middle of one.
-    const e = @import("../core/repeat_pure.zig").bytes("\xc3\xa9", 50);
+    const e = @import("opal-repeat").bytes("\xc3\xa9", 50);
     for ([_]usize{ 20, 21, 28, 40 }) |m| {
         try std.testing.expect(std.unicode.utf8ValidateSlice(label(&b, "Shell", e, false, m)));
     }

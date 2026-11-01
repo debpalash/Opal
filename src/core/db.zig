@@ -37,7 +37,7 @@ pub fn init() void {
     const db_path = paths.zigzagDbFile(&path_buf);
 
     var cpath_buf: [512]u8 = undefined;
-    const cpath = @import("fmt_compat.zig").bufPrintZ(&cpath_buf, "{s}", .{db_path}) catch return;
+    const cpath = @import("opal-fmt").bufPrintZ(&cpath_buf, "{s}", .{db_path}) catch return;
 
     // SQLITE_OPEN_FULLMUTEX = serialized threading mode: SQLite takes its own
     // mutex on every API call, making this ONE shared connection safe to use
@@ -128,7 +128,7 @@ fn openReader() ?*Sqlite3 {
     var path_buf: [512]u8 = undefined;
     const db_path = paths.zigzagDbFile(&path_buf);
     var cpath_buf: [512]u8 = undefined;
-    const cpath = @import("fmt_compat.zig").bufPrintZ(&cpath_buf, "{s}", .{db_path}) catch return null;
+    const cpath = @import("opal-fmt").bufPrintZ(&cpath_buf, "{s}", .{db_path}) catch return null;
     var handle: ?*Sqlite3 = null;
     // NOMUTEX: a slot is only ever used by the thread that claimed it.
     const flags = c.SQLITE_OPEN_READONLY | c.SQLITE_OPEN_NOMUTEX;

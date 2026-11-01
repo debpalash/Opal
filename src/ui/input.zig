@@ -417,7 +417,7 @@ pub fn processGlobalInputs() void {
                 // Shift+Arrow (pan) ALSO changed the volume.
                 if ((key == .left or key == .right) and !mod.control() and !mod.shift() and !mod.alt() and !mod.command()) {
                     var seek_cmd: [64]u8 = undefined;
-                    if (@import("../core/fmt_compat.zig").bufPrintZ(&seek_cmd, "seek {d}", .{if (key == .left) @as(i32, -10) else @as(i32, 10)})) |cmd| {
+                    if (@import("opal-fmt").bufPrintZ(&seek_cmd, "seek {d}", .{if (key == .left) @as(i32, -10) else @as(i32, 10)})) |cmd| {
                         _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
                         // Broadcast to watch party
                         const party = @import("../services/watch_party.zig");
@@ -429,7 +429,7 @@ pub fn processGlobalInputs() void {
 
                 if ((key == .up or key == .down) and !mod.control() and !mod.shift() and !mod.alt() and !mod.command()) {
                     var vol_cmd: [64]u8 = undefined;
-                    if (@import("../core/fmt_compat.zig").bufPrintZ(&vol_cmd, "add volume {d}", .{if (key == .down) @as(i32, -5) else @as(i32, 5)})) |cmd| {
+                    if (@import("opal-fmt").bufPrintZ(&vol_cmd, "add volume {d}", .{if (key == .down) @as(i32, -5) else @as(i32, 5)})) |cmd| {
                         _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
                     } else |_| {}
                 }
@@ -498,7 +498,7 @@ pub fn processGlobalInputs() void {
                             _ = c.mpv.mpv_get_property(p.mpv_ctx, "speed", c.mpv.MPV_FORMAT_DOUBLE, &spd);
                             const next = input_pure.speedAfterStep(spd, .slower);
                             var cmd_buf: [48]u8 = undefined;
-                            if (@import("../core/fmt_compat.zig").bufPrintZ(&cmd_buf, "set speed {d:.6}", .{next})) |cmd| {
+                            if (@import("opal-fmt").bufPrintZ(&cmd_buf, "set speed {d:.6}", .{next})) |cmd| {
                                 _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
                             } else |_| {}
                             var spd_buf: [32]u8 = undefined;
@@ -510,7 +510,7 @@ pub fn processGlobalInputs() void {
                             _ = c.mpv.mpv_get_property(p.mpv_ctx, "speed", c.mpv.MPV_FORMAT_DOUBLE, &spd);
                             const next = input_pure.speedAfterStep(spd, .faster);
                             var cmd_buf: [48]u8 = undefined;
-                            if (@import("../core/fmt_compat.zig").bufPrintZ(&cmd_buf, "set speed {d:.6}", .{next})) |cmd| {
+                            if (@import("opal-fmt").bufPrintZ(&cmd_buf, "set speed {d:.6}", .{next})) |cmd| {
                                 _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
                             } else |_| {}
                             var spd_buf: [32]u8 = undefined;

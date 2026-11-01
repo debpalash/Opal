@@ -954,7 +954,7 @@ pub fn renderLoginForm() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
-        .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface),
+        .color_fill = .{ .color = theme.colors.bg_surface },
     });
     defer scroll.deinit();
 
@@ -964,9 +964,9 @@ pub fn renderLoginForm() void {
             .padding = .{ .x = 16, .y = 20, .w = 16, .h = 16 },
         });
         defer hdr.deinit();
-        _ = dvui.label(@src(), "Reading server (OPDS)", .{}, .{ .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent) });
+        _ = dvui.label(@src(), "Reading server (OPDS)", .{}, .{ .color_text = .{ .color = theme.colors.accent } });
         _ = dvui.label(@src(), "Connect to Komga, Kavita, Calibre-Web or LANraragi (manga, comics & ebooks)", .{}, .{
-            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
+            .color_text = .{ .color = theme.colors.text_secondary },
             .padding = .{ .x = 0, .y = 4, .w = 0, .h = 0 },
         });
     }
@@ -979,7 +979,7 @@ pub fn renderLoginForm() void {
         defer form.deinit();
 
         _ = dvui.label(@src(), "Catalog URL", .{}, .{
-            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
+            .color_text = .{ .color = theme.colors.text_secondary },
             .padding = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
         });
         if (state.app.opds.server_url_len == 0) {
@@ -994,7 +994,7 @@ pub fn renderLoginForm() void {
         }
 
         _ = dvui.label(@src(), "Username (optional)", .{}, .{
-            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
+            .color_text = .{ .color = theme.colors.text_secondary },
             .padding = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
         });
         {
@@ -1003,7 +1003,7 @@ pub fn renderLoginForm() void {
         }
 
         _ = dvui.label(@src(), "Password (optional)", .{}, .{
-            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
+            .color_text = .{ .color = theme.colors.text_secondary },
             .padding = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
         });
         {
@@ -1013,15 +1013,15 @@ pub fn renderLoginForm() void {
 
         if (state.app.opds.fetch_error and state.app.opds.error_msg_len > 0) {
             _ = dvui.label(@src(), "{s}", .{state.app.opds.error_msg[0..state.app.opds.error_msg_len]}, .{
-                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.danger),
+                .color_text = .{ .color = theme.colors.danger },
                 .padding = .{ .x = 0, .y = 4, .w = 0, .h = 8 },
             });
         }
 
         const busy = state.app.opds.is_loading.load(.acquire);
         if (dvui.button(@src(), if (busy) "Connecting…" else "Connect", .{}, .{
-            .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
-            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_on_accent),
+            .color_fill = .{ .color = theme.colors.accent },
+            .color_text = .{ .color = theme.colors.text_on_accent },
             .corners = theme.dims.rad_sm,
             .padding = .{ .x = 14, .y = 8, .w = 14, .h = 8 },
             .margin = .{ .x = 0, .y = 6, .w = 0, .h = 0 },
@@ -1036,8 +1036,8 @@ fn textEntryOpts() dvui.Options {
     return .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface),
-        .color_border = @import("../ui/color_compat.zig").wrap(theme.colors.border_subtle),
+        .color_fill = .{ .color = theme.colors.bg_surface },
+        .color_border = .{ .color = theme.colors.border_subtle },
         .border = dvui.Rect.all(1),
         .corners = theme.dims.rad_sm,
         .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
@@ -1055,7 +1055,7 @@ fn renderFeed() void {
 
         const title = state.app.opds.feed_title[0..state.app.opds.feed_title_len];
         _ = dvui.label(@src(), "{s}", .{if (title.len > 0) safeUtf8(title) else "Library"}, .{
-            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary),
+            .color_text = .{ .color = theme.colors.text_primary },
             .font = dvui.themeGet().font_heading,
             .gravity_y = 0.5,
             .margin = .{ .x = 10, .y = 0, .w = 0, .h = 0 },
@@ -1078,7 +1078,7 @@ fn renderFeed() void {
 
     if (state.app.opds.is_loading.load(.acquire)) {
         dvui.spinner(@src(), .{
-            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
+            .color_text = .{ .color = theme.colors.accent },
             .min_size_content = theme.iconSize(.md),
             .gravity_x = 0.5,
             .margin = dvui.Rect.all(8),
@@ -1088,12 +1088,12 @@ fn renderFeed() void {
     if (state.app.opds.fetch_error and !state.app.opds.is_loading.load(.acquire)) {
         const msg = state.app.opds.error_msg[0..@min(state.app.opds.error_msg_len, state.app.opds.error_msg.len)];
         _ = dvui.label(@src(), "{s}", .{if (msg.len > 0) safeUtf8(msg) else "Could not load this catalog."}, .{
-            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.danger),
+            .color_text = .{ .color = theme.colors.danger },
             .padding = .{ .x = 16, .y = 8, .w = 16, .h = 6 },
         });
         if (dvui.button(@src(), "Retry", .{}, .{
-            .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
-            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_on_accent),
+            .color_fill = .{ .color = theme.colors.accent },
+            .color_text = .{ .color = theme.colors.text_on_accent },
             .corners = theme.dims.rad_sm,
             .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
             .margin = .{ .x = 16, .y = 0, .w = 0, .h = 8 },
@@ -1104,7 +1104,7 @@ fn renderFeed() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
-        .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface),
+        .color_fill = .{ .color = theme.colors.bg_surface },
     });
     defer scroll.deinit();
 
@@ -1172,7 +1172,7 @@ fn renderFeed() void {
         }
         if (loading or underfilled) {
             dvui.spinner(@src(), .{
-                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
+                .color_text = .{ .color = theme.colors.accent },
                 .min_size_content = theme.iconSize(.lg),
                 .gravity_x = 0.5,
                 .margin = dvui.Rect.all(12),
@@ -1193,8 +1193,8 @@ fn renderEntryCard(idx: usize, card_w: f32, poster_h: f32) void {
         .max_size_content = .{ .w = card_w, .h = poster_h + OPDS_CARD_FOOTER_H },
         .margin = dvui.Rect.all(OPDS_CARD_GAP),
         .background = true,
-        .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface),
-        .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.bg_hover),
+        .color_fill = .{ .color = theme.colors.bg_surface },
+        .color_fill_hover = .{ .color = theme.colors.bg_hover },
         .corners = dvui.CornerRect.all(theme.radius.md),
     });
     defer card.deinit();
@@ -1203,7 +1203,7 @@ fn renderEntryCard(idx: usize, card_w: f32, poster_h: f32) void {
     bw.init(@src(), .{}, .{
         .id_extra = idx + 90100,
         .background = true,
-        .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+        .color_fill = .{ .color = theme.colors.bg_elevated },
         .corners = dvui.CornerRect.all(theme.radius.md),
         .min_size_content = .{ .w = card_w, .h = poster_h },
         .max_size_content = .{ .w = card_w, .h = poster_h },
@@ -1225,7 +1225,7 @@ fn renderEntryCard(idx: usize, card_w: f32, poster_h: f32) void {
 
     _ = dvui.label(@src(), "{s}", .{safeUtf8(e.titleSlice())}, .{
         .id_extra = idx + 90300,
-        .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary),
+        .color_text = .{ .color = theme.colors.text_primary },
         .font = dvui.themeGet().font_heading.withSize(theme.font_size.small),
         .min_size_content = .{ .w = card_w, .h = 22 },
         .max_size_content = .{ .w = card_w, .h = 22 },
@@ -1242,7 +1242,7 @@ fn renderEntryCard(idx: usize, card_w: f32, poster_h: f32) void {
     };
     var meta = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = idx + 90400, .expand = .horizontal, .padding = .{ .x = 5, .y = 0, .w = 3, .h = 3 } });
     defer meta.deinit();
-    _ = dvui.label(@src(), "{s}", .{subtitle}, .{ .id_extra = idx + 90500, .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_tertiary), .expand = .horizontal, .gravity_y = 0.5 });
+    _ = dvui.label(@src(), "{s}", .{subtitle}, .{ .id_extra = idx + 90500, .color_text = .{ .color = theme.colors.text_tertiary }, .expand = .horizontal, .gravity_y = 0.5 });
     if (components.iconButton(@src(), if (e.is_navigation and !gutenberg) icons.tvg.lucide.@"folder-open" else icons.tvg.lucide.@"book-open", if (e.is_navigation and !gutenberg) "Open" else "Read", true))
         openCatalogEntry(action.row, action.connection_identity);
 }

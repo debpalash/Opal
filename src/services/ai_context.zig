@@ -306,7 +306,7 @@ fn tryInstantCommand(raw_input: []const u8, fl_raw: []const u8) bool {
             const num_start = if (std.mem.startsWith(u8, fl, "volume ")) @as(usize, 7) else @as(usize, 4);
             const vol_str = std.mem.trim(u8, fl[num_start..], " ");
             var cmd_buf: [64]u8 = undefined;
-            const cmd = @import("../core/fmt_compat.zig").bufPrintZ(&cmd_buf, "set volume {s}", .{vol_str}) catch return false;
+            const cmd = @import("opal-fmt").bufPrintZ(&cmd_buf, "set volume {s}", .{vol_str}) catch return false;
             _ = c.mpv.mpv_command_string(state.app.players.items[p_idx].mpv_ctx, cmd.ptr);
             var resp_buf: [64]u8 = undefined;
             const resp = std.fmt.bufPrint(&resp_buf, "Volume set to {s}%", .{vol_str}) catch return false;
@@ -322,7 +322,7 @@ fn tryInstantCommand(raw_input: []const u8, fl_raw: []const u8) bool {
             const rest = std.mem.trim(u8, fl[prefix_len..], " s");
             const secs = if (rest.len > 0) rest else "10";
             var cmd_buf: [64]u8 = undefined;
-            const cmd = @import("../core/fmt_compat.zig").bufPrintZ(&cmd_buf, "seek {s}", .{secs}) catch return false;
+            const cmd = @import("opal-fmt").bufPrintZ(&cmd_buf, "seek {s}", .{secs}) catch return false;
             _ = c.mpv.mpv_command_string(state.app.players.items[p_idx].mpv_ctx, cmd.ptr);
             var resp_buf: [64]u8 = undefined;
             const resp = std.fmt.bufPrint(&resp_buf, "Skipped {s}s forward.", .{secs}) catch return false;
@@ -338,7 +338,7 @@ fn tryInstantCommand(raw_input: []const u8, fl_raw: []const u8) bool {
             const rest = std.mem.trim(u8, fl[prefix_len..], " s");
             const secs = if (rest.len > 0) rest else "10";
             var cmd_buf: [64]u8 = undefined;
-            const cmd = @import("../core/fmt_compat.zig").bufPrintZ(&cmd_buf, "seek -{s}", .{secs}) catch return false;
+            const cmd = @import("opal-fmt").bufPrintZ(&cmd_buf, "seek -{s}", .{secs}) catch return false;
             _ = c.mpv.mpv_command_string(state.app.players.items[p_idx].mpv_ctx, cmd.ptr);
             var resp_buf: [64]u8 = undefined;
             const resp = std.fmt.bufPrint(&resp_buf, "Rewound {s}s.", .{secs}) catch return false;
@@ -352,7 +352,7 @@ fn tryInstantCommand(raw_input: []const u8, fl_raw: []const u8) bool {
         if (has_player) {
             const spd = std.mem.trim(u8, fl[6..], " x");
             var cmd_buf: [64]u8 = undefined;
-            const cmd = @import("../core/fmt_compat.zig").bufPrintZ(&cmd_buf, "set speed {s}", .{spd}) catch return false;
+            const cmd = @import("opal-fmt").bufPrintZ(&cmd_buf, "set speed {s}", .{spd}) catch return false;
             _ = c.mpv.mpv_command_string(state.app.players.items[p_idx].mpv_ctx, cmd.ptr);
             var resp_buf: [64]u8 = undefined;
             const resp = std.fmt.bufPrint(&resp_buf, "Speed {s}x.", .{spd}) catch return false;
@@ -1411,7 +1411,7 @@ pub fn generateResponse() void {
         active_model = server.cached_model_name[0..server.cached_model_name_len];
     }
 
-    const json_str = @import("../core/fmt_compat.zig").bufPrintZ(&json_buf, "{{\"model\":\"{s}\",\"messages\":[{s}],\"max_tokens\":256,\"temperature\":0.3,\"top_p\":0.9,\"stream\":true,\"response_format\":{{\"type\":\"json_object\"}}}}", .{ active_model, msg_part[0..msg_off] }) catch {
+    const json_str = @import("opal-fmt").bufPrintZ(&json_buf, "{{\"model\":\"{s}\",\"messages\":[{s}],\"max_tokens\":256,\"temperature\":0.3,\"top_p\":0.9,\"stream\":true,\"response_format\":{{\"type\":\"json_object\"}}}}", .{ active_model, msg_part[0..msg_off] }) catch {
         chat.setAssistantError(assistant_idx, "Couldn't build the AI request.");
         return;
     };
@@ -1429,7 +1429,7 @@ pub fn generateResponse() void {
         var srv_buf: [128]u8 = undefined;
         const srv_url = server.getServerUrl(&srv_buf);
         var health_url_buf: [192]u8 = undefined;
-        const health_url = @import("../core/fmt_compat.zig").bufPrintZ(&health_url_buf, "{s}/health", .{srv_url}) catch null;
+        const health_url = @import("opal-fmt").bufPrintZ(&health_url_buf, "{s}/health", .{srv_url}) catch null;
         if (health_url) |hurl| {
             var attempts: usize = 0;
             while (attempts < 30) : (attempts += 1) { // up to 15 seconds

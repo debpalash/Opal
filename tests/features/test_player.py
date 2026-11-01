@@ -6,7 +6,7 @@ import os, sys, subprocess, sqlite3, socket, time, json  # noqa: F401
 
 @test("Audio output connection detection ignores startup and repeated lists", "Player")
 def test_audio_connection_policy():
-    result = subprocess.run(["zig", "test", "src/player/av_device_pure.zig"],
+    result = subprocess.run([sys.executable, os.path.join(PROJECT_DIR, "scripts", "zig-test.py"), "src/player/av_device_pure.zig"],
                             cwd=PROJECT_DIR, capture_output=True, text=True, timeout=120)
     if result.returncode:
         return "fail", result.stderr[-1500:]
@@ -1234,12 +1234,12 @@ def test_scrubber_paint_layers():
         # Production paints through the pure geometry.
         "paints via fillBar": "footer_pure.fillBar(" in scrub,
         "paints via markerAt": "footer_pure.markerAt(" in scrub,
-        "uses Rect.fill": "r.fill(dvui.Rect.Physical.all(" in scrub,
+        "uses Rect.fill": "r.fill(dvui.CornerRect.Physical.all(" in scrub,
         # (a) No layer may reintroduce a track-width min size — that is the bug.
         "no track-width min": "min_size_content = .{ .w = track_rect.w" not in scrub,
         # (b) The seek slider must stay invisible, color_bar included.
         "slider color_bar transparent": ".color_bar = invisible" in scrub,
-        "slider stays input-only": ".color_fill = invisible" in scrub and ".background = false" in scrub,
+        "slider stays input-only": '.wrap(invisible)' in scrub and ".background = false" in scrub,
         # The trailing duration still routes through the tested formatter.
         "duration formatted purely": "footer_pure.formatTrailing(" in scrub,
         # REGRESSION: the row pinned max_size_content.h = 26, which clipped its
@@ -1902,7 +1902,7 @@ def test_compact_native_playback_strip():
         "subtitle panels track the shared trigger": "if (kind == .sub)" in _between(ft, "fn recordAnchor", "// Persist the close-button") and "@intFromEnum(PickerKind.subs)" in _between(ft, "fn recordAnchor", "// Persist the close-button") and "@intFromEnum(PickerKind.lang)" in _between(ft, "fn recordAnchor", "// Persist the close-button"),
         "secondary panels track More without moving CC panels": "[_]PickerKind{ .aspect, .chapter, .quality, .audio_device, .playlist }" in _between(ft, "if (kind == .more)", "// Persist the close-button") and "@intFromEnum(secondary)" in _between(ft, "if (kind == .more)", "// Persist the close-button"),
         "wheel seek belongs to scrubber": "scrubber_wheel_rect = band_rect" in ft and "const r = scrubber_wheel_rect" in ft,
-        "keyboard focus retained": "dvui.tabIndexSet(btn_id, null)" in ft and 'matchBind("activate")' in ft,
+        "keyboard focus retained": "dvui.tabIndexSet(btn_id, null, null)" in ft and 'matchBind("activate")' in ft,
         "boundary regressions": "compact title respects measured width and UTF8 boundaries" in fp,
     }
     bad = [key for key, good in checks.items() if not good]

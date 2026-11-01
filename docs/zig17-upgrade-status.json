@@ -1,5 +1,5 @@
 {
-  "status": "experimental macOS build compiles and launches; isolated native shutdown, local playback and session restore checks passed; broader migration validation remains",
+  "status": "macOS validated; cross-platform CI pending",
   "base_commit": "e3167cd",
   "branch": "next/zig-0.17-dvui-0.6",
   "compiler_tested": "0.17.0",
@@ -19,7 +19,26 @@
     "native_build": true,
     "native_launch": true,
     "native_shutdown_tests": 2,
-    "local_playback_and_session_restore": true
+    "local_playback_and_session_restore": true,
+    "headless_build": true,
+    "headless_setup_security_tests": 10,
+    "native_ui_suite": true,
+    "native_ui_capture_count": 255,
+    "terminal_tests_passed": 44,
+    "terminal_tests_platform_skipped": 3,
+    "feature_suite": {
+      "passed": 562,
+      "failed": 0,
+      "warnings": 1,
+      "skipped": 14
+    },
+    "torrent_memory_stream_seek_cancel_tests": true,
+    "release_bundle": true,
+    "bundled_video_audio_pause_and_bidirectional_seek": true,
+    "bundled_shutdown_tests": 2,
+    "bundled_session_restore_test": true,
+    "installed_app_launch": true,
+    "installed_binary_sha256": "0e2ed5601a136063900bd69c194d4362d8b2b015131ae8ed54712a02c4e1da12"
   },
   "last_full_build": {
     "result": "passed",
@@ -28,21 +47,19 @@
     "target": "native Apple silicon macOS"
   },
   "remaining_work": [
-    "Complete target-aware C bindings for Windows/Linux and headless/standalone test module wiring.",
-    "Validate UI appearance and interaction, torrent/video decoding, audio switching and embedded terminal behavior on the upgraded build.",
-    "Migrate CI/release scripts/toolchain documentation and run full cross-platform feature suites."
+    "Run Linux/Windows CI and validate native runtime on those platforms.",
+    "Physical Bluetooth reconnect/channel routing and overnight idle soak."
   ],
   "reproduce": "ZIG=/path/to/zig-0.17 scripts/check-zig17-upgrade.sh --full",
-  "deployment": "Not installed; production main and the installed macOS app remain on Zig 0.16.",
+  "deployment": "Installed and launched /Applications/Opal.app (0.9.0); executable SHA-256 matches the validated release bundle.",
   "second_pass": {
-    "native_bindings": "generated via translate-c 2.0; shared across native modules",
+    "native_bindings": "Target-aware translate-c bindings; standalone SQLite, terminal and Windows DNS modules avoid desktop headers.",
     "syntax": "array/string repetition migrated; formatting and reflection compatibility helpers added",
     "dvui": "lifecycle, corner, color/gradient, texture and input APIs adapted",
-    "verification": "31-test checkpoint script passes; native build and 3 isolated live tests pass",
+    "verification": "Full feature suite passes, native UI captures pass, terminal and bundled player live tests pass.",
     "limitations": [
-      "native C bindings currently use macOS/Homebrew SDK paths",
-      "Windows C bindings and headless/test module wiring need completion",
-      "CI, packaging and full runtime feature validation are not migrated"
+      "Run Linux/Windows CI and validate native runtime on those platforms.",
+      "Physical Bluetooth reconnect/channel routing and overnight idle soak."
     ]
   },
   "launch_verification": {
@@ -50,9 +67,9 @@
       "python3 tests/test_native_shutdown_live.py --binary zig-out/bin/opal --port 41749",
       "python3 tests/test_session_close_live.py --binary zig-out/bin/opal"
     ],
-    "result": "3 live tests passed with isolated profiles",
-    "stalled_media_shutdown_seconds": 0.234,
-    "loaded_media_shutdown_seconds": 0.182,
-    "scope": "native startup, API readiness, stalled media open, local WAV playback, session saving and paused restore"
+    "result": "4 bundled player live tests passed with isolated profiles",
+    "stalled_media_shutdown_seconds": 0.13,
+    "loaded_media_shutdown_seconds": 0.177,
+    "scope": "native startup, stalled media shutdown, WAV playback, session persistence, generated H.264/AAC playback, pause and bidirectional seek"
   }
 }

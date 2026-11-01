@@ -133,7 +133,7 @@ pub const Code = enum {
     unsupported,
 
     pub fn fromName(name: []const u8) Code {
-        inline for (comptime @import("../core/enum_compat.zig").fields(Code)) |f| {
+        inline for (comptime @import("opal-reflect").fields(Code)) |f| {
             if (std.mem.eql(u8, name, f.name)) return @field(Code, f.name);
         }
         return .network;

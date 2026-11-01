@@ -251,7 +251,7 @@ fn presetName(preset: ThemePreset) []const u8 {
 }
 
 test "presetName: all variants return non-empty strings" {
-    inline for (comptime @import("../core/enum_compat.zig").fields(ThemePreset)) |field| {
+    inline for (comptime @import("opal-reflect").fields(ThemePreset)) |field| {
         const name = presetName(@enumFromInt(field.value));
         try std.testing.expect(name.len > 0);
     }

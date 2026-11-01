@@ -309,7 +309,7 @@ fn unregisterGroupBlocking(mimes: []const []const u8) void {
     const allocator = @import("../core/alloc.zig").allocator;
     const home = @import("../core/paths.zig").homeDir();
     var pb: [512]u8 = undefined;
-    const mp = @import("../core/fmt_compat.zig").bufPrintZ(&pb, "{s}/.config/mimeapps.list", .{home}) catch return;
+    const mp = @import("opal-fmt").bufPrintZ(&pb, "{s}/.config/mimeapps.list", .{home}) catch return;
     const data = @import("../core/io_global.zig").cwdReadFileAlloc(mp, allocator, 256 * 1024) catch return;
     defer allocator.free(data);
     var out = std.ArrayListUnmanaged(u8).empty;
@@ -336,10 +336,10 @@ fn ensureDesktopFileBlocking() void {
     var exb: [512]u8 = undefined;
     const exe = @import("../core/io_global.zig").selfExePath(&exb) catch return;
     var db: [512]u8 = undefined;
-    const dp = @import("../core/fmt_compat.zig").bufPrintZ(&db, "{s}/.local/share/applications", .{home}) catch return;
+    const dp = @import("opal-fmt").bufPrintZ(&db, "{s}/.local/share/applications", .{home}) catch return;
     @import("../core/io_global.zig").cwdMakePath(dp) catch {};
     var fb: [512]u8 = undefined;
-    const fp = @import("../core/fmt_compat.zig").bufPrintZ(&fb, "{s}/opal.desktop", .{dp}) catch return;
+    const fp = @import("opal-fmt").bufPrintZ(&fb, "{s}/opal.desktop", .{dp}) catch return;
     const ml = "video/mp4;video/x-matroska;video/x-msvideo;video/webm;video/quicktime;video/mpeg;video/mp2t;video/ogg;video/x-flv;video/x-ms-wmv;video/x-ms-asf;video/3gpp;video/3gpp2;" ++
         "audio/mpeg;audio/flac;audio/ogg;audio/wav;audio/x-wav;audio/aac;audio/mp4;audio/x-m4a;audio/opus;audio/webm;audio/x-ms-wma;audio/x-aiff;" ++
         "application/x-bittorrent;x-scheme-handler/magnet;" ++

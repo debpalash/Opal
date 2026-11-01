@@ -285,7 +285,7 @@ test "outcomes map to a label and a tone, and unknown text never crashes" {
     try std.testing.expectEqual(OutcomeKind.Tone.active, OutcomeKind.running.tone());
     try std.testing.expectEqual(OutcomeKind.Tone.muted, OutcomeKind.never.tone());
     // Every outcome the scheduler can write is understood.
-    inline for (comptime @import("../core/enum_compat.zig").fields(pure.Outcome)) |f| {
+    inline for (comptime @import("opal-reflect").fields(pure.Outcome)) |f| {
         try std.testing.expect(OutcomeKind.parse(f.name) != .unknown);
     }
 }
@@ -308,7 +308,7 @@ test "summary keeps the closing line, flattens it and truncates on a character b
 
     // A limit larger than the buffer is clamped to it.
     var small: [8]u8 = undefined;
-    try std.testing.expect(summaryLine(&small, @import("../core/repeat_pure.zig").bytes("x", 100), 1000).len <= 8);
+    try std.testing.expect(summaryLine(&small, @import("opal-repeat").bytes("x", 100), 1000).len <= 8);
     // Tiny limits do not underflow.
     try std.testing.expectEqualStrings("..", summaryLine(&b, "abcdef", 2));
     try std.testing.expectEqualStrings("", summaryLine(&b, "abcdef", 0));

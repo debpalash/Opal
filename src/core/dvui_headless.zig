@@ -17,7 +17,7 @@
 //! be behind `if (!build_options.headless)` instead — widening this file means
 //! the desktop and server builds have started to diverge.
 //!
-//! Signatures are pinned to dvui 0.5.0-dev; a dvui bump that changes one shows
+//! Signatures are pinned to dvui 0.6.0-dev; a dvui bump that changes one shows
 //! up as a desktop-build error, not a silent headless drift.
 
 const std = @import("std");

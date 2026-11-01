@@ -620,7 +620,7 @@ fn renderPlaybackOptions() void {
         const hw_val: []const u8 = if (state.app.hwdec_enabled) "auto" else "no";
         for (state.app.players.items) |p| {
             var hw_cmd: [64]u8 = undefined;
-            if (@import("../core/fmt_compat.zig").bufPrintZ(&hw_cmd, "set hwdec {s}", .{hw_val})) |cmd| {
+            if (@import("opal-fmt").bufPrintZ(&hw_cmd, "set hwdec {s}", .{hw_val})) |cmd| {
                 _ = @import("../core/c.zig").mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
             } else |_| {}
         }
@@ -799,7 +799,7 @@ fn scopeChip() void {
     if (trigger) |rect| {
         var popup = dvui.floatingMenu(@src(), .{ .from = rect }, .{ .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface) });
         var choices = dvui.menu(@src(), .vertical, .{ .background = true, .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface) });
-        inline for (comptime @import("../core/enum_compat.zig").fields(search_mod.scope_model.Scope)) |entry| {
+        inline for (comptime @import("opal-reflect").fields(search_mod.scope_model.Scope)) |entry| {
             const choice: search_mod.scope_model.Scope = @enumFromInt(entry.value);
             if (dvui.menuItemLabel(@src(), choice.label(), .{}, .{ .id_extra = entry.value, .expand = .horizontal, .color_text = @import("color_compat.zig").wrap(if (choice == scope) theme.colors.accent else theme.colors.text_primary) })) |_| {
                 popup.close();

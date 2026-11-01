@@ -2023,9 +2023,9 @@ fn buildSearchUrl(out: []u8, query: []const u8, paged: u32) ?[:0]const u8 {
     const enc_len = percentEncode(query, &encoded_query);
     const eq = encoded_query[0..enc_len];
     if (paged <= 1) {
-        return @import("../core/fmt_compat.zig").bufPrintZ(out, "{s}/?story={s}&s=&type=comic", .{ base, eq }) catch null;
+        return @import("opal-fmt").bufPrintZ(out, "{s}/?story={s}&s=&type=comic", .{ base, eq }) catch null;
     }
-    return @import("../core/fmt_compat.zig").bufPrintZ(out, "{s}/?story={s}&s=&type=comic&paged={d}", .{ base, eq, paged }) catch null;
+    return @import("opal-fmt").bufPrintZ(out, "{s}/?story={s}&s=&type=comic&paged={d}", .{ base, eq, paged }) catch null;
 }
 
 /// curl a search-results page into `dst`; returns bytes read (0 on failure).
@@ -3263,8 +3263,8 @@ pub fn renderContent() void {
             if (input.len > 0) {
                 if (dvui.buttonIcon(@src(), "comic-search-clear", icons.tvg.lucide.x, .{}, .{}, .{
                     .id_extra = 9100,
-                    .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
-                    .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
+                    .color_fill = .{ .color = theme.colors.bg_elevated },
+                    .color_text = .{ .color = theme.colors.text_secondary },
                     .corners = theme.dims.rad_sm,
                     .padding = .{ .x = 5, .y = 3, .w = 5, .h = 3 },
                     .margin = .{ .x = 3, .y = 0, .w = 0, .h = 0 },
@@ -3296,7 +3296,7 @@ pub fn renderContent() void {
             }
 
             _ = dvui.label(@src(), "  •  ", .{}, .{
-                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.border_subtle),
+                .color_text = .{ .color = theme.colors.border_subtle },
                 .gravity_y = 0.5,
             });
         }
@@ -3339,7 +3339,7 @@ pub fn renderContent() void {
 
     if (active_source.load(.acquire) == .xkcd or active_source.load(.acquire) == .smbc) {
         _ = dvui.label(@src(), "{s}", .{if (active_source.load(.acquire) == .xkcd) "Title archive or exact number; up to 6 matches. Refine the query for more." else "Recent publisher RSS; up to 6 matching main panels."}, .{
-            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
+            .color_text = .{ .color = theme.colors.text_secondary },
             .font = dvui.themeGet().font_body.withSize(11),
             .margin = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
         });
@@ -3354,7 +3354,7 @@ pub fn renderContent() void {
     }
     if (visible_count == 0) {
         _ = dvui.label(@src(), "No comics found. Try another title.", .{}, .{
-            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
+            .color_text = .{ .color = theme.colors.text_secondary },
             .gravity_x = 0.5,
             .margin = dvui.Rect.all(24),
         });
@@ -3365,7 +3365,7 @@ pub fn renderContent() void {
     // before drawing the current grid — keeps the render thread the sole owner.
     reclaimStaleCovers();
 
-    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface) });
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = .{ .color = theme.colors.bg_surface } });
     defer scroll.deinit();
 
     // Responsive columns from the live page width (one-frame lag on first paint).
@@ -3420,8 +3420,8 @@ pub fn renderContent() void {
         if (dvui.button(@src(), lbl, .{}, .{
             .id_extra = 60001,
             .expand = .horizontal,
-            .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
-            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
+            .color_fill = .{ .color = theme.colors.bg_elevated },
+            .color_text = .{ .color = theme.colors.accent },
             .corners = theme.dims.rad_sm,
             .padding = .{ .x = 8, .y = 12, .w = 8, .h = 12 },
             .margin = .{ .x = 3, .y = 8, .w = 3, .h = 12 },
@@ -3441,7 +3441,7 @@ pub fn renderContent() void {
         _ = dvui.label(@src(), "— end of results —", .{}, .{
             .id_extra = 60002,
             .expand = .horizontal,
-            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
+            .color_text = .{ .color = theme.colors.text_secondary },
             .gravity_x = 0.5,
             .margin = .{ .x = 0, .y = 8, .w = 0, .h = 12 },
         });
@@ -3479,8 +3479,8 @@ fn showPluginBadgesInDir(dir_path: []const u8, shown: *usize) void {
         const lbl = std.fmt.bufPrint(&lbl_buf, "{s}", .{safeUtf8(stem)}) catch continue;
         _ = dvui.label(@src(), "{s}", .{lbl}, .{
             .id_extra = shown.* + 73000,
-            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
-            .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = .{ .color = theme.colors.text_secondary },
+            .color_fill = .{ .color = theme.colors.bg_elevated },
             .background = true,
             .corners = theme.dims.rad_md,
             .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
@@ -3539,7 +3539,7 @@ fn renderCoverCard(idx: usize, cw: f32, cover_h: f32) void {
         bw.init(@src(), .{}, .{
             .id_extra = idx + 100,
             .background = true,
-            .color_fill = @import("../ui/color_compat.zig").wrap(dvui.Color{ .r = 18 + h1 / 8, .g = 22 + h2 / 10, .b = 32 + h1 / 6, .a = 255 }),
+            .color_fill = .{ .color = dvui.Color{ .r = 18 + h1 / 8, .g = 22 + h2 / 10, .b = 32 + h1 / 6, .a = 255 } },
             .corners = dvui.CornerRect.all(8),
             .min_size_content = .{ .w = cw, .h = cover_h },
             .max_size_content = .{ .w = cw, .h = cover_h },
@@ -3588,7 +3588,7 @@ fn renderCoverCard(idx: usize, cw: f32, cover_h: f32) void {
                         .id_extra = idx + 150,
                         .gravity_x = 0.5,
                         .gravity_y = 0.5,
-                        .color_text = @import("../ui/color_compat.zig").wrap(dvui.Color{ .r = h1, .g = h2, .b = 200, .a = 70 }),
+                        .color_text = .{ .color = dvui.Color{ .r = h1, .g = h2, .b = 200, .a = 70 } },
                         .expand = .both,
                     });
                 // Placeholder cards still show the title inside the cover area.
@@ -3597,7 +3597,7 @@ fn renderCoverCard(idx: usize, cw: f32, cover_h: f32) void {
                         .id_extra = idx + 151,
                         .expand = .horizontal,
                         .gravity_y = 0.85,
-                        .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
+                        .color_text = .{ .color = theme.colors.text_secondary },
                         .padding = dvui.Rect.all(6),
                     });
                 }
@@ -3609,7 +3609,7 @@ fn renderCoverCard(idx: usize, cw: f32, cover_h: f32) void {
                     .id_extra = idx + 160,
                     .expand = .both,
                     .background = true,
-                    .color_fill = @import("../ui/color_compat.zig").wrap(theme.playerGlass(224)),
+                    .color_fill = .{ .color = theme.playerGlass(224) },
                     .corners = dvui.CornerRect.all(8),
                     .padding = dvui.Rect.all(8),
                 });
@@ -3618,7 +3618,7 @@ fn renderCoverCard(idx: usize, cw: f32, cover_h: f32) void {
                     .id_extra = idx + 161,
                     .expand = .horizontal,
                     .gravity_y = 0.5,
-                    .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary),
+                    .color_text = .{ .color = theme.colors.text_primary },
                     .font = dvui.themeGet().font_heading,
                 });
             }
@@ -3645,7 +3645,7 @@ fn renderCoverCard(idx: usize, cw: f32, cover_h: f32) void {
     _ = dvui.label(@src(), "{s}", .{title}, .{
         .id_extra = idx + 200,
         .expand = .horizontal,
-        .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary),
+        .color_text = .{ .color = theme.colors.text_primary },
         .max_size_content = .{ .w = cw, .h = 40 },
         .padding = .{ .x = 2, .y = 3, .w = 2, .h = 0 },
     });
@@ -3663,11 +3663,11 @@ pub fn renderPaneContent(pane_idx: usize) void {
     if (state.app.comic.is_loading.load(.acquire)) {
         // Show download progress
         var prog_buf: [64]u8 = undefined;
-        const prog_str = @import("../core/fmt_compat.zig").bufPrintZ(&prog_buf, "Loading comic... {d}/{d} pages", .{
+        const prog_str = @import("opal-fmt").bufPrintZ(&prog_buf, "Loading comic... {d}/{d} pages", .{
             state.app.comic.dl_progress.load(.acquire), state.app.comic.page_count,
         }) catch "Loading...";
         _ = dvui.label(@src(), "{s}", .{prog_str}, .{
-            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
+            .color_text = .{ .color = theme.colors.accent },
             .gravity_x = 0.5,
             .gravity_y = 0.5,
             .expand = .both,
@@ -3685,7 +3685,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
             var i: usize = 0;
             while (mangaDexChapterRow(i)) |row| : (i += 1) {
                 var label_buf: [161]u8 = undefined;
-                const label = @import("../core/fmt_compat.zig").bufPrintZ(&label_buf, "{s}", .{safeUtf8(row.title())}) catch continue;
+                const label = @import("opal-fmt").bufPrintZ(&label_buf, "{s}", .{safeUtf8(row.title())}) catch continue;
                 if (reader_components.actionButton(@src(), label, if (row.selected) .primary else .secondary, 72100 + i)) {
                     md_chapter_picker = false;
                     loadComic(row.route());
@@ -3697,7 +3697,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
 
     if (state.app.comic.title_len > 0) {
         var title_row = dvui.scrollArea(@src(), .{ .horizontal = .auto, .horizontal_bar = .auto_overlay, .vertical = .none }, .{ .expand = .horizontal, .min_size_content = .{ .h = 30 }, .max_size_content = dvui.Options.MaxSize.height(30) });
-        _ = dvui.label(@src(), "{s}", .{safeUtf8(state.app.comic.title[0..state.app.comic.title_len])}, .{ .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary), .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 } });
+        _ = dvui.label(@src(), "{s}", .{safeUtf8(state.app.comic.title[0..state.app.comic.title_len])}, .{ .color_text = .{ .color = theme.colors.text_primary }, .padding = .{ .x = 8, .y = 4, .w = 8, .h = 4 } });
         title_row.deinit();
     }
 
@@ -3707,15 +3707,15 @@ pub fn renderPaneContent(pane_idx: usize) void {
             .expand = .horizontal,
             .padding = .{ .x = 6, .y = 3, .w = 6, .h = 3 },
             .background = true,
-            .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface),
+            .color_fill = .{ .color = theme.colors.bg_surface },
         });
         defer nav_row.deinit();
 
         // Prev issue
         if (state.app.comic.prev_url_len > 0) {
             if (dvui.button(@src(), "«", .{}, .{
-                .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
-                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_on_accent),
+                .color_fill = .{ .color = theme.colors.accent },
+                .color_text = .{ .color = theme.colors.text_on_accent },
                 .corners = theme.dims.rad_sm,
                 .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
             })) {
@@ -3727,11 +3727,11 @@ pub fn renderPaneContent(pane_idx: usize) void {
         {
             var info_buf: [64]u8 = undefined;
             const info = if (state.app.comic.view_mode == .single_page)
-                @import("../core/fmt_compat.zig").bufPrintZ(&info_buf, "{d}/{d}", .{ state.app.comic.current_page + 1, state.app.comic.page_count }) catch "?"
+                @import("opal-fmt").bufPrintZ(&info_buf, "{d}/{d}", .{ state.app.comic.current_page + 1, state.app.comic.page_count }) catch "?"
             else
-                @import("../core/fmt_compat.zig").bufPrintZ(&info_buf, "{d}/{d} loaded", .{ state.app.comic.dl_progress.load(.acquire), state.app.comic.page_count }) catch "?";
+                @import("opal-fmt").bufPrintZ(&info_buf, "{d}/{d} loaded", .{ state.app.comic.dl_progress.load(.acquire), state.app.comic.page_count }) catch "?";
             _ = dvui.label(@src(), "{s}", .{info}, .{
-                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
+                .color_text = .{ .color = theme.colors.text_secondary },
                 .padding = .{ .x = 4, .y = 0, .w = 8, .h = 0 },
                 .gravity_y = 0.5,
             });
@@ -3742,8 +3742,8 @@ pub fn renderPaneContent(pane_idx: usize) void {
             const mode_icon = if (state.app.comic.view_mode == .scroll) icons.tvg.lucide.@"scroll-text" else icons.tvg.lucide.@"book-open";
             if (dvui.buttonIcon(@src(), "comic-view-mode", mode_icon, .{}, .{}, .{
                 .id_extra = 10,
-                .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
-                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary),
+                .color_fill = .{ .color = theme.colors.bg_elevated },
+                .color_text = .{ .color = theme.colors.text_primary },
                 .corners = theme.dims.rad_sm,
                 .padding = .{ .x = 4, .y = 2, .w = 4, .h = 2 },
                 .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
@@ -3756,8 +3756,8 @@ pub fn renderPaneContent(pane_idx: usize) void {
         if (state.app.comic.current_page > 0) {
             if (dvui.button(@src(), "‹", .{}, .{
                 .id_extra = 11,
-                .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
-                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary),
+                .color_fill = .{ .color = theme.colors.bg_elevated },
+                .color_text = .{ .color = theme.colors.text_primary },
                 .corners = theme.dims.rad_sm,
                 .padding = .{ .x = 5, .y = 2, .w = 5, .h = 2 },
                 .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
@@ -3769,8 +3769,8 @@ pub fn renderPaneContent(pane_idx: usize) void {
         if (state.app.comic.current_page + 1 < state.app.comic.page_count) {
             if (dvui.button(@src(), "›", .{}, .{
                 .id_extra = 12,
-                .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
-                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary),
+                .color_fill = .{ .color = theme.colors.bg_elevated },
+                .color_text = .{ .color = theme.colors.text_primary },
                 .corners = theme.dims.rad_sm,
                 .padding = .{ .x = 5, .y = 2, .w = 5, .h = 2 },
                 .margin = .{ .x = 1, .y = 0, .w = 0, .h = 0 },
@@ -3784,8 +3784,8 @@ pub fn renderPaneContent(pane_idx: usize) void {
         if (state.app.comic.next_url_len > 0) {
             if (dvui.button(@src(), "»", .{}, .{
                 .id_extra = 1,
-                .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
-                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_on_accent),
+                .color_fill = .{ .color = theme.colors.accent },
+                .color_text = .{ .color = theme.colors.text_on_accent },
                 .corners = theme.dims.rad_sm,
                 .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
                 .margin = .{ .x = 2, .y = 0, .w = 0, .h = 0 },
@@ -3803,8 +3803,8 @@ pub fn renderPaneContent(pane_idx: usize) void {
         // OCR text toggle
         if (dvui.buttonIcon(@src(), "comic-ocr", icons.tvg.lucide.@"scan-text", .{}, .{}, .{
             .id_extra = 20,
-            .color_fill = @import("../ui/color_compat.zig").wrap(if (state.app.comic.show_ocr_overlay) theme.colors.accent else theme.colors.bg_elevated),
-            .color_text = @import("../ui/color_compat.zig").wrap(if (state.app.comic.show_ocr_overlay) theme.colors.text_on_accent else theme.colors.text_primary),
+            .color_fill = .{ .color = if (state.app.comic.show_ocr_overlay) theme.colors.accent else theme.colors.bg_elevated },
+            .color_text = .{ .color = if (state.app.comic.show_ocr_overlay) theme.colors.text_on_accent else theme.colors.text_primary },
             .corners = theme.dims.rad_sm,
             .padding = .{ .x = 5, .y = 2, .w = 5, .h = 2 },
             .margin = .{ .x = 1, .y = 0, .w = 0, .h = 0 },
@@ -3815,8 +3815,8 @@ pub fn renderPaneContent(pane_idx: usize) void {
         // Narrate toggle
         if (dvui.buttonIcon(@src(), "comic-narrate", if (state.app.comic.narrating) icons.tvg.lucide.@"circle-stop" else icons.tvg.lucide.@"volume-2", .{}, .{}, .{
             .id_extra = 21,
-            .color_fill = @import("../ui/color_compat.zig").wrap(if (state.app.comic.narrating) theme.colors.accent else theme.colors.bg_elevated),
-            .color_text = @import("../ui/color_compat.zig").wrap(if (state.app.comic.narrating) theme.colors.text_on_accent else theme.colors.text_primary),
+            .color_fill = .{ .color = if (state.app.comic.narrating) theme.colors.accent else theme.colors.bg_elevated },
+            .color_text = .{ .color = if (state.app.comic.narrating) theme.colors.text_on_accent else theme.colors.text_primary },
             .corners = theme.dims.rad_sm,
             .padding = .{ .x = 5, .y = 2, .w = 5, .h = 2 },
             .margin = .{ .x = 1, .y = 0, .w = 0, .h = 0 },
@@ -3827,9 +3827,9 @@ pub fn renderPaneContent(pane_idx: usize) void {
         // Close the reader → back to the comics browse/search view.
         if (dvui.buttonIcon(@src(), "comic-close", icons.tvg.lucide.x, .{}, .{}, .{
             .id_extra = 2,
-            .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.danger.opacity(0.15)),
-            .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.danger.opacity(0.28)),
-            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.danger),
+            .color_fill = .{ .color = theme.colors.danger.opacity(0.15) },
+            .color_fill_hover = .{ .color = theme.colors.danger.opacity(0.28) },
+            .color_text = .{ .color = theme.colors.danger },
             .corners = theme.dims.rad_sm,
             .padding = .{ .x = 5, .y = 2, .w = 5, .h = 2 },
             .margin = .{ .x = 3, .y = 0, .w = 0, .h = 0 },
@@ -3875,7 +3875,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
         var sp_scroll = dvui.scrollArea(@src(), .{}, .{
             .expand = .both,
             .background = true,
-            .color_fill = @import("../ui/color_compat.zig").wrap(dvui.Color{ .r = 8, .g = 8, .b = 10, .a = 255 }),
+            .color_fill = .{ .color = dvui.Color{ .r = 8, .g = 8, .b = 10, .a = 255 } },
         });
         defer sp_scroll.deinit();
 
@@ -3907,7 +3907,7 @@ pub fn renderPaneContent(pane_idx: usize) void {
         var scroll = dvui.scrollArea(@src(), .{}, .{
             .expand = .both,
             .background = true,
-            .color_fill = @import("../ui/color_compat.zig").wrap(dvui.Color{ .r = 8, .g = 8, .b = 10, .a = 255 }),
+            .color_fill = .{ .color = dvui.Color{ .r = 8, .g = 8, .b = 10, .a = 255 } },
         });
         defer scroll.deinit();
 
@@ -3930,10 +3930,10 @@ pub fn renderPaneContent(pane_idx: usize) void {
             if (pg < render_start or pg >= render_end) {
                 // Placeholder for off-screen pages — keep layout space
                 var h_buf: [48]u8 = undefined;
-                const h_lbl = @import("../core/fmt_compat.zig").bufPrintZ(&h_buf, "Page {d}", .{pg + 1}) catch "...";
+                const h_lbl = @import("opal-fmt").bufPrintZ(&h_buf, "Page {d}", .{pg + 1}) catch "...";
                 _ = dvui.label(@src(), "{s}", .{h_lbl}, .{
                     .id_extra = pg + 12000,
-                    .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
+                    .color_text = .{ .color = theme.colors.text_secondary },
                     .gravity_x = 0.5,
                     .min_size_content = .{ .w = 100, .h = 200 },
                 });
@@ -3970,8 +3970,8 @@ pub fn renderPaneContent(pane_idx: usize) void {
             var ocr_panel = dvui.box(@src(), .{ .dir = .vertical }, .{
                 .expand = .horizontal,
                 .background = true,
-                .color_fill = @import("../ui/color_compat.zig").wrap(theme.playerGlass(230)),
-                .color_border = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
+                .color_fill = .{ .color = theme.playerGlass(230) },
+                .color_border = .{ .color = theme.colors.accent },
                 .border = .{ .x = 0, .y = 1, .w = 0, .h = 0 },
                 .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 },
                 .max_size_content = .{ .w = 0, .h = 120 },
@@ -3996,18 +3996,18 @@ pub fn renderPaneContent(pane_idx: usize) void {
                 const ocr_safe = @import("../core/text.zig").safeUtf8Buf(state.app.comic.ocr_texts[pg][0..text_len], &ocr_safe_buf);
                 _ = dvui.label(@src(), "{s}", .{ocr_safe}, .{
                     .id_extra = 30000,
-                    .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary),
+                    .color_text = .{ .color = theme.colors.text_primary },
                 });
             } else {
                 _ = dvui.label(@src(), "No text detected on this page", .{}, .{
                     .id_extra = 30001,
-                    .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
+                    .color_text = .{ .color = theme.colors.text_secondary },
                 });
             }
         } else if (pg < 128 and !state.app.comic.ocr_done[pg]) {
             _ = dvui.label(@src(), "Running OCR…", .{}, .{
                 .id_extra = 30002,
-                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
+                .color_text = .{ .color = theme.colors.accent },
                 .padding = .{ .x = 10, .y = 4, .w = 0, .h = 4 },
             });
         }
@@ -4017,10 +4017,10 @@ pub fn renderPaneContent(pane_idx: usize) void {
     if (state.app.comic.narrating) {
         _ = dvui.label(@src(), "Narrating…", .{}, .{
             .id_extra = 30010,
-            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
+            .color_text = .{ .color = theme.colors.accent },
             .padding = .{ .x = 10, .y = 3, .w = 0, .h = 3 },
             .background = true,
-            .color_fill = @import("../ui/color_compat.zig").wrap(theme.playerGlass(200)),
+            .color_fill = .{ .color = theme.playerGlass(200) },
         });
     }
 }
@@ -4130,18 +4130,18 @@ fn renderPagePlaceholder(pg: usize, available_width: f32) void {
     page_decode_mutex.unlock();
     const status = if (failed) "could not be decoded" else if (pageReady(pg)) "preparing..." else "downloading...";
     var label_buf: [80]u8 = undefined;
-    const label = @import("../core/fmt_compat.zig").bufPrintZ(&label_buf, "Page {d} {s}", .{ pg + 1, status }) catch "Preparing page…";
+    const label = @import("opal-fmt").bufPrintZ(&label_buf, "Page {d} {s}", .{ pg + 1, status }) catch "Preparing page…";
     const width = @max(available_width - 4, 10);
     var placeholder = dvui.box(@src(), .{ .dir = .vertical }, .{
         .id_extra = pg + 12000,
         .min_size_content = .{ .w = width, .h = width * 1.5 },
         .background = true,
-        .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface),
+        .color_fill = .{ .color = theme.colors.bg_surface },
     });
     defer placeholder.deinit();
     _ = dvui.label(@src(), "{s}", .{label}, .{
         .id_extra = pg + 11000,
-        .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
+        .color_text = .{ .color = theme.colors.text_secondary },
         .gravity_x = 0.5,
         .gravity_y = 0.5,
     });

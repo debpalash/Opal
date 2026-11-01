@@ -18,7 +18,7 @@ depends=(
     'ffmpeg'
 )
 makedepends=(
-    'zig>=0.16.0'
+    'zig>=0.17.0'
     'gcc'
     'pkgconf'
     'libwebp'
@@ -44,7 +44,7 @@ build() {
     # 2. The app. -fsys=sdl2 links the system SDL2 (Wayland support);
     #    the binary carries $ORIGIN/../lib/opal in its rpath, matching the
     #    install layout below. Pin x86_64_v2 so AUR builds stay portable.
-    zig build -Doptimize=ReleaseSafe -fsys=sdl2 -Dcpu=x86_64_v2
+    zig build -Doptimize=safe -fsys=sdl2 -Dcpu=x86_64_v2
 }
 
 package() {

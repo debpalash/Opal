@@ -30,7 +30,7 @@ pub const Player = struct {
         };
         for (opts) |opt| _ = c.mpv_set_option_string(handle, opt[0], opt[1]);
         var ref: [2049]u8 = undefined;
-        if (referer.len > 0) if (@import("../core/fmt_compat.zig").bufPrintZ(&ref, "{s}", .{referer})) |z| {
+        if (referer.len > 0) if (@import("opal-fmt").bufPrintZ(&ref, "{s}", .{referer})) |z| {
             _ = c.mpv_set_option_string(handle, "referrer", z);
         } else |_| {};
         if (c.mpv_initialize(handle) < 0) {

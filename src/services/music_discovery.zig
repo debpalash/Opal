@@ -506,7 +506,7 @@ pub fn renderRail() void {
     // Empty/background discovery should not push the music grid down.
     if (ui_count == 0) return;
     _ = dvui.label(@src(), "For you", .{}, .{
-        .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
+        .color_text = .{ .color = theme.colors.text_secondary },
         .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
         .padding = .{ .x = 8, .y = 4, .w = 0, .h = 2 },
     });
@@ -514,7 +514,7 @@ pub fn renderRail() void {
     var scroll = dvui.scrollArea(@src(), .{ .horizontal = .auto, .vertical = .none }, .{
         .expand = .horizontal,
         .background = false,
-        .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_app),
+        .color_fill = .{ .color = theme.colors.bg_app },
         .min_size_content = .{ .w = 10, .h = CARD_H + 24 },
         .max_size_content = .{ .w = std.math.floatMax(f32), .h = CARD_H + 24 },
         .padding = .{ .x = theme.spacing.xs, .y = 0, .w = theme.spacing.xs, .h = theme.spacing.xs },
@@ -544,8 +544,8 @@ fn renderCard(i: usize) void {
         .min_size_content = .{ .w = CARD_W, .h = CARD_H },
         .max_size_content = .{ .w = CARD_W, .h = CARD_H },
         .background = true,
-        .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface),
-        .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.bg_hover),
+        .color_fill = .{ .color = theme.colors.bg_surface },
+        .color_fill_hover = .{ .color = theme.colors.bg_hover },
         .corners = dvui.CornerRect.all(theme.radius.md),
         .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
         .margin = dvui.Rect.all(theme.spacing.xs),
@@ -567,7 +567,7 @@ fn renderCard(i: usize) void {
     _ = dvui.label(@src(), "{s}", .{title}, .{
         .id_extra = i,
         .expand = .horizontal,
-        .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary),
+        .color_text = .{ .color = theme.colors.text_primary },
         .font = dvui.themeGet().font_heading,
     });
 
@@ -577,13 +577,13 @@ fn renderCard(i: usize) void {
         _ = dvui.label(@src(), "{s}", .{artist}, .{
             .id_extra = i,
             .expand = .horizontal,
-            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
+            .color_text = .{ .color = theme.colors.text_secondary },
             .gravity_y = 0.5,
         });
         if (a.year_len > 0) {
             _ = dvui.label(@src(), "{s}", .{a.yearSlice()}, .{
                 .id_extra = i,
-                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_tertiary),
+                .color_text = .{ .color = theme.colors.text_tertiary },
                 .gravity_y = 0.5,
                 .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
             });
@@ -600,7 +600,7 @@ fn renderCard(i: usize) void {
             .id_extra = i,
             .expand = .horizontal,
             .gravity_y = 1.0,
-            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_tertiary),
+            .color_text = .{ .color = theme.colors.text_tertiary },
         });
     }
 }

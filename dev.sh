@@ -19,7 +19,7 @@ VERBOSE=0
 PASSTHROUGH=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -r|--release) OPTIMIZE="-Doptimize=ReleaseFast"; shift ;;
+        -r|--release) OPTIMIZE="-Doptimize=fast"; shift ;;
         -v|--verbose) VERBOSE=1; shift ;;
         --) shift; PASSTHROUGH=("$@"); break ;;
         *) PASSTHROUGH+=("$1"); shift ;;

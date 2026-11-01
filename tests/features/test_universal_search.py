@@ -33,7 +33,7 @@ def test_universal_search_fanout():
         "provider settings bits declared": all(s in res.split("pub const SourceBit", 1)[1].split(";", 1)[0] for s in ("stremio", "rss", "livetv", "music", "radio", "podcast", "novels", "vndb", "audiobooks", "opds")),
         # The mask must be derived from the enum, not a hand-written literal —
         # a hardcoded 0xFF silently left every new pill off.
-        "mask derived from enum": "ALL_SOURCE_BITS" in res and '@typeInfo(SourceBit).@"enum".fields.len' in res,
+        "mask derived from enum": "ALL_SOURCE_BITS" in res and '@typeInfo(SourceBit).@"enum".field_names.len' in res,
         "no hardcoded 0xFF mask": "init(0xFF)" not in res and "m & 0xFF == 0" not in res,
 
         # ── Workers ──

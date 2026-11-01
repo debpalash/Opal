@@ -1020,7 +1020,7 @@ pub fn kindFromLibrary(kind: []const u8, name: []const u8) Kind {
 }
 
 pub fn kindFromName(name: []const u8) Kind {
-    inline for (comptime @import("../core/enum_compat.zig").fields(Kind)) |f| if (std.mem.eql(u8, name, f.name)) return @enumFromInt(f.value);
+    inline for (comptime @import("opal-reflect").fields(Kind)) |f| if (std.mem.eql(u8, name, f.name)) return @enumFromInt(f.value);
     return .other;
 }
 

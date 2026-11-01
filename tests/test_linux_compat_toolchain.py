@@ -21,15 +21,15 @@ class CompatToolchainTests(unittest.TestCase):
             (sdk / 'lib/std').mkdir(parents=True)
             (sdk / 'lib/std/std.zig').write_text('// fixture')
             compiler = sdk / 'zig'
-            compiler.write_text('#!/bin/sh\necho 0.16.0\n')
+            compiler.write_text('#!/bin/sh\necho 0.17.0\n')
             compiler.chmod(0o755)
             link = root / 'zig'
             link.symlink_to(compiler)
             self.assertEqual(locator.sdk_root(link), sdk.resolve())
             compiler.write_text('#!/bin/sh\necho 0.15.2\n')
-            with self.assertRaisesRegex(ValueError, '0.16.0'):
+            with self.assertRaisesRegex(ValueError, '0.17.0'):
                 locator.sdk_root(link)
-            compiler.write_text('#!/bin/sh\necho 0.16.0\n')
+            compiler.write_text('#!/bin/sh\necho 0.17.0\n')
             (sdk / 'lib/std/std.zig').unlink()
             with self.assertRaisesRegex(ValueError, 'standard library missing'):
                 locator.sdk_root(link)

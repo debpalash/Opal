@@ -1,5 +1,8 @@
 const Translator = @import("translate_c").Translator;
 const std = @import("std");
+var windows_c_module: ?*std.Build.Module = null;
+var compatibility_modules: [3]?*std.Build.Module = @splat(null);
+const compatibility_names = [_][]const u8{ "opal-repeat", "opal-fmt", "opal-reflect" };
 
 pub fn build(b: *std.Build) void {
     const version = @import("builtin").zig_version;
@@ -12,8 +15,15 @@ pub fn build(b: *std.Build) void {
 }
 
 fn buildSupported(b: *std.Build) void {
+    // Configuration reads environment, .env and installed native libraries,
+    // and may rebuild the C++ wrapper. Zig 0.17 must not reuse that snapshot
+    // after a prefix/toolchain/key changes. Artifact compilation stays cached.
+    b.graph.poisonCache();
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    for ([_][]const u8{ "src/core/repeat_pure.zig", "src/core/fmt_compat.zig", "src/core/enum_compat.zig" }, 0..) |path, i| {
+        compatibility_modules[i] = b.createModule(.{ .root_source_file = b.path(path), .target = target, .optimize = optimize });
+    }
 
     const headless = b.option(bool, "headless", "Build headless server (no SDL/X11 link)") orelse false;
 
@@ -42,7 +52,7 @@ fn buildSupported(b: *std.Build) void {
     build_options.addOption([]const u8, "omdb_default_key", embeddedKey(b, &.{ "OPAL_OMDB_KEY", "OMDB_API_KEY" }));
     const build_options_module = build_options.createModule();
 
-    const exe = b.addExecutable(.{
+    const exe = addBoundExecutable(b, .{
         .name = "opal",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
@@ -57,15 +67,47 @@ fn buildSupported(b: *std.Build) void {
         .c_source_file = b.path("src/core/native_bindings.h"),
         .target = target,
         .optimize = optimize,
+        .extra_args = if (headless) &.{"-DOPAL_HEADLESS=1"} else &.{},
     });
     native_bindings.addIncludePath(b.path("src"));
     native_bindings.addIncludePath(b.path("ort"));
-    native_bindings.addIncludePath(.{ .cwd_relative = "/opt/homebrew/include" });
-    native_bindings.addIncludePath(.{ .cwd_relative = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include" });
-    native_bindings.addSystemFrameworkPath(.{ .cwd_relative = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks" });
+    const bindings_prefix = if (target.result.os.tag == .windows)
+        (b.graph.environ_map.get("MINGW_PREFIX") orelse "C:/msys64/mingw64")
+    else
+        (b.graph.environ_map.get("HOMEBREW_PREFIX") orelse "/opt/homebrew");
+    if (target.result.os.tag == .macos or target.result.os.tag == .windows)
+        native_bindings.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{bindings_prefix}) });
+    if (target.result.os.tag == .macos) {
+        const sdk = b.graph.environ_map.get("SDKROOT") orelse std.mem.trim(u8, b.run(&.{ "xcrun", "--show-sdk-path" }), "\r\n ");
+        native_bindings.addSystemIncludePath(.{ .cwd_relative = b.fmt("{s}/usr/include", .{sdk}) });
+        native_bindings.addSystemFrameworkPath(.{ .cwd_relative = b.fmt("{s}/System/Library/Frameworks", .{sdk}) });
+    }
     native_bindings.addIncludePath(b.dependency("ghostty", .{ .target = target, .optimize = .fast, .@"emit-lib-vt" = true, .simd = false }).path("include"));
     native_bindings.addIncludePath(b.dependency("dvui", .{ .target = target, .optimize = optimize, .backend = .sdl2 }).path("vendor/stb"));
+    // Standalone tests need only SQLite. Keep GUI/media headers out of the
+    // unit gate, including on runners that provision only libsqlite3-dev.
+    const sqlite_bindings: Translator = .init(b.dependency("translate_c", .{}), .{
+        .c_source_file = b.path("src/core/sqlite_bindings.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    if (target.result.os.tag == .macos or target.result.os.tag == .windows)
+        sqlite_bindings.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{bindings_prefix}) });
+    if (target.result.os.tag == .macos) {
+        const sdk = b.graph.environ_map.get("SDKROOT") orelse std.mem.trim(u8, b.run(&.{ "xcrun", "--show-sdk-path" }), "\r\n ");
+        sqlite_bindings.addSystemIncludePath(.{ .cwd_relative = b.fmt("{s}/usr/include", .{sdk}) });
+    }
+    if (target.result.os.tag == .windows) {
+        const windows_bindings: Translator = .init(b.dependency("translate_c", .{}), .{
+            .c_source_file = b.path("src/core/windows_bindings.h"),
+            .target = target,
+            .optimize = optimize,
+        });
+        windows_bindings.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{bindings_prefix}) });
+        windows_c_module = windows_bindings.mod;
+    }
     exe.root_module.addImport("opal-native-c", native_bindings.mod);
+    if (target.result.os.tag == .windows) exe.root_module.addImport("opal-windows-c", native_bindings.mod);
     // Keep local debugging intact; shipping builds omit debug symbols.
     exe.root_module.strip = b.option(bool, "strip", "Strip executable debug symbols (default: release builds)") orelse (optimize != .debug);
 
@@ -215,6 +257,7 @@ fn buildSupported(b: *std.Build) void {
         // The stub's one real dependency: poster.zig decodes cover art through
         // dvui.c.stbi_*, and /poster serves it over HTTP. Compile dvui's OWN
         // vendored stb_image so the decoder is byte-for-byte the desktop one.
+        stub.addImport("opal-native-c", native_bindings.mod);
         stub.addIncludePath(dvui_dep.path("vendor/stb"));
         stub.addCSourceFile(.{
             .file = dvui_dep.path("vendor/stb/stb_image_impl.c"),
@@ -236,7 +279,7 @@ fn buildSupported(b: *std.Build) void {
     });
     exe.root_module.addImport("icons", icons_dep.module("icons"));
 
-    const tv_detail_tests = b.addTest(.{
+    const tv_detail_tests = addBoundTest(b, .{
         .root_module = exe.root_module,
         .filters = &.{"TV detail"},
     });
@@ -249,12 +292,12 @@ fn buildSupported(b: *std.Build) void {
     }
     b.step("test-tv-detail", "Test production TV metadata and restore helpers").dependOn(&run_tv_detail_tests.step);
 
-    const anime_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{ "Anime playback", "Anime provider" } });
+    const anime_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{ "Anime playback", "Anime provider" } });
     const run_anime_tests = b.addRunArtifact(anime_tests);
     if (is_windows) run_anime_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     b.step("test-anime", "Test anime episode publication and playback lifecycle").dependOn(&run_anime_tests.step);
 
-    const browse_tests = b.addTest(.{
+    const browse_tests = addBoundTest(b, .{
         .root_module = exe.root_module,
         .filters = &.{ "Browse regression", "Radio action", "Comic catalog action", "Music action" },
     });
@@ -271,79 +314,79 @@ fn buildSupported(b: *std.Build) void {
         }
     }
     b.step("test-browse", "Test production catalog parsing and asynchronous publication").dependOn(&run_browse_tests.step);
-    const gallery_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native Search gallery offline SDL pixel capture"} });
+    const gallery_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{"Native Search gallery offline SDL pixel capture"} });
     const run_gallery_tests = b.addRunArtifact(gallery_tests);
     if (is_windows) run_gallery_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     b.step("test-search-gallery", "Render the native search gallery in an isolated hidden SDL window").dependOn(&run_gallery_tests.step);
-    const performance_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native Search performance"} });
+    const performance_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{"Native Search performance"} });
     const run_performance_tests = b.addRunArtifact(performance_tests);
     if (is_windows) run_performance_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     b.step("test-search-performance", "Measure warmed native gallery scroll frames with owned maximum results").dependOn(&run_performance_tests.step);
-    const image_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native WebP shared decoder and GPU upload"} });
+    const image_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{"Native WebP shared decoder and GPU upload"} });
     const run_image_tests = b.addRunArtifact(image_tests);
     if (is_windows) run_image_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     b.step("test-native-images", "Verify shared WebP decoding and native GPU pixels").dependOn(&run_image_tests.step);
-    const media_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native media offline SDL fixture"} });
+    const media_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{"Native media offline SDL fixture"} });
     const run_media_tests = b.addRunArtifact(media_tests);
     if (is_windows) run_media_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     b.step("test-native-media", "Render native playback controls in an isolated hidden SDL window").dependOn(&run_media_tests.step);
-    const shell_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native shell offline route pixel capture"} });
+    const shell_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{"Native shell offline route pixel capture"} });
     const run_shell_tests = b.addRunArtifact(shell_tests);
     if (is_windows) run_shell_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     b.step("test-native-shell", "Capture native shell routes with isolated offline fixtures").dependOn(&run_shell_tests.step);
-    const audio_output_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native shell offline audio connection"} });
+    const audio_output_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{"Native shell offline audio connection"} });
     const run_audio_output_tests = b.addRunArtifact(audio_output_tests);
     if (is_windows) run_audio_output_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     b.step("test-native-audio-output", "Capture the audio connection prompt").dependOn(&run_audio_output_tests.step);
-    const modal_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native global modals offline SDL pixel capture"} });
+    const modal_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{"Native global modals offline SDL pixel capture"} });
     const run_modal_tests = b.addRunArtifact(modal_tests);
     if (is_windows) run_modal_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     b.step("test-native-modals", "Capture native onboarding and dialogs in an isolated hidden SDL window").dependOn(&run_modal_tests.step);
-    const activity_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native activity offline SDL pixel capture"} });
+    const activity_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{"Native activity offline SDL pixel capture"} });
     activity_tests.use_llvm = true;
     const run_activity_tests = b.addRunArtifact(activity_tests);
     if (is_windows) run_activity_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     b.step("test-native-activity", "Capture native queue and transfers with isolated offline fixtures").dependOn(&run_activity_tests.step);
-    const agent_tasks_ui_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native agent tasks offline"} });
+    const agent_tasks_ui_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{"Native agent tasks offline"} });
     agent_tasks_ui_tests.use_llvm = true;
     const run_agent_tasks_ui_tests = b.addRunArtifact(agent_tasks_ui_tests);
     b.step("test-native-agent-tasks", "Capture the Agents page Tasks panel with isolated offline fixtures").dependOn(&run_agent_tasks_ui_tests.step);
-    const operator_ui_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native operator activity offline"} });
+    const operator_ui_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{"Native operator activity offline"} });
     operator_ui_tests.use_llvm = true;
     const run_operator_ui_tests = b.addRunArtifact(operator_ui_tests);
     b.step("test-native-operator", "Capture the Agents page Activity tab with isolated offline fixtures").dependOn(&run_operator_ui_tests.step);
-    const overview_ui_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native agents overview offline"} });
+    const overview_ui_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{"Native agents overview offline"} });
     overview_ui_tests.use_llvm = true;
     const run_overview_ui_tests = b.addRunArtifact(overview_ui_tests);
     b.step("test-native-overview", "Capture the Agents page Overview with isolated offline fixtures").dependOn(&run_overview_ui_tests.step);
-    const browser_hub_ui_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native browser hub"} });
+    const browser_hub_ui_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{"Native browser hub"} });
     browser_hub_ui_tests.use_llvm = true;
     const run_browser_hub_ui_tests = b.addRunArtifact(browser_hub_ui_tests);
     b.step("test-native-browser-hub", "Capture the Browse > Web browser hub with isolated offline fixtures").dependOn(&run_browser_hub_ui_tests.step);
-    const episode_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native TV episodes"} });
+    const episode_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{"Native TV episodes"} });
     const run_episode_tests = b.addRunArtifact(episode_tests);
     if (is_windows) run_episode_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     b.step("test-native-episodes", "Verify native episode cards and responsive playback controls").dependOn(&run_episode_tests.step);
     // Opt-in live model/SQLite integration. The Python launcher supplies an
     // isolated HOME, loopback model endpoint and synthetic episode transcripts.
-    const horizon_device_tests = b.addTest(.{
+    const horizon_device_tests = addBoundTest(b, .{
         .name = "horizon-device-tests",
         .root_module = exe.root_module,
         .filters = &.{"Horizon device validation"},
     });
     const install_horizon_device_tests = b.addInstallArtifact(horizon_device_tests, .{ .dest_dir = .{ .override = .bin } });
     b.step("build-horizon-device-tests", "Build opt-in real model and library integration fixture").dependOn(&install_horizon_device_tests.step);
-    const native_suite = b.addTest(.{ .root_module = exe.root_module, .filters = &.{
+    const native_suite = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{
         "Native Search", "Native WebP", "Native media offline", "Native shell offline", "Native global modals", "Native activity offline", "Native agent tasks offline", "Native operator activity offline", "Native agents overview offline", "Native browser hub", "Native Browse", "Browse fanout", "Native torrent handoff", "Native TV episodes",
     } });
     const run_native_suite = b.addRunArtifact(native_suite);
     if (is_windows) run_native_suite.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     b.step("test-native-ui", "Verify all native desktop fixtures with one compilation").dependOn(&run_native_suite.step);
-    const torrent_handoff_tests = b.addTest(.{ .root_module = exe.root_module, .filters = &.{"Native torrent handoff"} });
+    const torrent_handoff_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{"Native torrent handoff"} });
     const run_torrent_handoff_tests = b.addRunArtifact(torrent_handoff_tests);
     if (is_windows) run_torrent_handoff_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     b.step("test-native-torrent-handoff", "Verify worker playback metadata does not destroy UI-owned textures").dependOn(&run_torrent_handoff_tests.step);
-    const native_http_tests = b.addTest(.{ .filters = &.{"Native HTTP"}, .root_module = b.createModule(.{
+    const native_http_tests = addBoundTest(b, .{ .filters = &.{"Native HTTP"}, .root_module = b.createModule(.{
         .root_source_file = b.path("src/core/http_connection_native_test.zig"),
         .target = target,
         .optimize = optimize,
@@ -355,7 +398,7 @@ fn buildSupported(b: *std.Build) void {
     } else if (is_windows) native_http_tests.root_module.linkSystemLibrary("ws2_32", .{});
     const run_native_http_tests = b.addRunArtifact(native_http_tests);
     b.step("test-native-http", "Verify native TLS, DNS, body deadlines and cancellation").dependOn(&run_native_http_tests.step);
-    const download_native_tests = b.addTest(.{ .filters = &.{"Native download"}, .root_module = b.createModule(.{
+    const download_native_tests = addBoundTest(b, .{ .filters = &.{"Native download"}, .root_module = b.createModule(.{
         .root_source_file = b.path("src/download_engine_native_test.zig"),
         .target = target,
         .optimize = optimize,
@@ -367,7 +410,7 @@ fn buildSupported(b: *std.Build) void {
     } else if (is_windows) download_native_tests.root_module.linkSystemLibrary("ws2_32", .{});
     const run_download_native_tests = b.addRunArtifact(download_native_tests);
     b.step("test-native-downloads", "Verify streaming download cancellation and ownership on loopback").dependOn(&run_download_native_tests.step);
-    const browse_fanout_tests = b.addTest(.{ .filters = &.{"Browse fanout"}, .root_module = b.createModule(.{
+    const browse_fanout_tests = addBoundTest(b, .{ .filters = &.{"Browse fanout"}, .root_module = b.createModule(.{
         .root_source_file = b.path("src/browse_fanout_native_test.zig"),
         .target = target,
         .optimize = optimize,
@@ -630,7 +673,7 @@ fn buildSupported(b: *std.Build) void {
     // opal-mcp: the Model Context Protocol server agents launch over stdio. It
     // is std-only on purpose (no GUI, no libmpv/libtorrent), so it starts
     // instantly and cannot become a second player. See docs/agent-native.md.
-    const mcp_exe = b.addExecutable(.{
+    const mcp_exe = addBoundExecutable(b, .{
         .name = "opal-mcp",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/mcp_main.zig"),
@@ -643,7 +686,7 @@ fn buildSupported(b: *std.Build) void {
     b.step("opal-mcp", "Build only the opal-mcp bridge (no GUI dependencies)").dependOn(&install_mcp.step);
 
     // Dev probe for the live-caption chunk pipeline (not installed).
-    const babel_live = b.addExecutable(.{
+    const babel_live = addBoundExecutable(b, .{
         .name = "babel-live",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/babel_live_main.zig"),
@@ -680,12 +723,13 @@ fn buildSupported(b: *std.Build) void {
 
     // ── Unit Tests (pure Zig modules only) ──
     const test_step = b.step("test", "Run unit tests");
-    const test_key_writer = b.addTest(.{ .root_module = b.createModule(.{
+    const test_key_writer = addBoundTest(b, .{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/core/sqlite_key_writer.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
     }) });
+    test_key_writer.root_module.addImport("opal-native-c", sqlite_bindings.mod);
     if (is_windows) {
         test_key_writer.root_module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{mingw_prefix}) });
         test_key_writer.root_module.addObjectFile(.{ .cwd_relative = b.fmt("{s}/lib/libsqlite3.dll.a", .{mingw_prefix}) });
@@ -700,21 +744,21 @@ fn buildSupported(b: *std.Build) void {
     const run_key_writer = b.addRunArtifact(test_key_writer);
     if (is_windows) run_key_writer.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
     test_step.dependOn(&run_key_writer.step);
-    const test_library_projection = b.addTest(.{ .root_module = b.createModule(.{
+    const test_library_projection = addBoundTest(b, .{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/services/remote_library_pure.zig"),
         .target = target,
         .optimize = optimize,
     }) });
     test_step.dependOn(&b.addRunArtifact(test_library_projection).step);
 
-    const test_catalog_projection = b.addTest(.{ .root_module = b.createModule(.{
+    const test_catalog_projection = addBoundTest(b, .{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/services/remote_catalog_pure.zig"),
         .target = target,
         .optimize = optimize,
     }) });
     test_step.dependOn(&b.addRunArtifact(test_catalog_projection).step);
 
-    const test_youtube_projection = b.addTest(.{ .root_module = b.createModule(.{
+    const test_youtube_projection = addBoundTest(b, .{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/test_remote_youtube_projection.zig"),
         .target = target,
         .optimize = optimize,
@@ -724,7 +768,7 @@ fn buildSupported(b: *std.Build) void {
     // Executable torrent-search seam: nova2 must survive being launched by
     // Zig's std.Io.Threaded child runtime. This is intentionally offline; the
     // Python selftest exercises only the app-mode pool dispatcher.
-    const test_nova2_spawn = b.addTest(.{
+    const test_nova2_spawn = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("tests/nova2_spawn_test.zig"),
             .target = target,
@@ -740,7 +784,7 @@ fn buildSupported(b: *std.Build) void {
     }));
     test_step.dependOn(&b.addRunArtifact(test_nova2_spawn).step);
 
-    const test_m3u = b.addTest(.{
+    const test_m3u = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/player/m3u.zig"),
             .target = target,
@@ -749,7 +793,7 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_m3u).step);
 
-    const test_playback_snapshot_pure = b.addTest(.{
+    const test_playback_snapshot_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/player/playback_snapshot_pure.zig"),
             .target = target,
@@ -758,7 +802,7 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_playback_snapshot_pure).step);
 
-    const test_agent_launch_pure = b.addTest(.{
+    const test_agent_launch_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/agent_launch_pure.zig"),
             .target = target,
@@ -770,7 +814,7 @@ fn buildSupported(b: *std.Build) void {
     const run_test_agent_launch = b.addRunArtifact(test_agent_launch_pure);
     test_step.dependOn(&run_test_agent_launch.step);
     // Embedded terminal: libghostty-vt snapshotting and the pty.
-    const test_terminal = b.addTest(.{
+    const test_terminal = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/terminal_test.zig"),
             .target = target,
@@ -778,13 +822,20 @@ fn buildSupported(b: *std.Build) void {
             .link_libc = true,
         }),
     });
+    const terminal_bindings: Translator = .init(b.dependency("translate_c", .{}), .{
+        .c_source_file = b.path("src/core/terminal_bindings.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    terminal_bindings.addIncludePath(b.dependency("ghostty", .{ .target = target, .optimize = .fast, .@"emit-lib-vt" = true, .simd = false }).path("include"));
+    test_terminal.root_module.addImport("opal-native-c", terminal_bindings.mod);
     addGhosttyVt(b, test_terminal.root_module, target);
     test_terminal.use_llvm = true;
     const run_test_terminal = b.addRunArtifact(test_terminal);
     test_step.dependOn(&run_test_terminal.step);
     b.step("test-terminal", "Test the embedded terminal (libghostty-vt and pty)").dependOn(&run_test_terminal.step);
 
-    const test_operator_pure = b.addTest(.{
+    const test_operator_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/operator_pure.zig"),
             .target = target,
@@ -794,7 +845,7 @@ fn buildSupported(b: *std.Build) void {
     test_operator_pure.use_llvm = true; // the self-hosted backend hits a linker error here
     const run_test_operator = b.addRunArtifact(test_operator_pure);
     test_step.dependOn(&run_test_operator.step);
-    const test_operator_endpoint_pure = b.addTest(.{
+    const test_operator_endpoint_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/operator_endpoint_pure.zig"),
             .target = target,
@@ -804,7 +855,7 @@ fn buildSupported(b: *std.Build) void {
     test_operator_endpoint_pure.use_llvm = true;
     const run_test_operator_endpoint_pure = b.addRunArtifact(test_operator_endpoint_pure);
     test_step.dependOn(&run_test_operator_endpoint_pure.step);
-    const test_operator_names = b.addTest(.{
+    const test_operator_names = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/operator_names_pure.zig"),
             .target = target,
@@ -814,7 +865,7 @@ fn buildSupported(b: *std.Build) void {
     test_operator_names.use_llvm = true;
     const run_test_operator_names = b.addRunArtifact(test_operator_names);
     test_step.dependOn(&run_test_operator_names.step);
-    const test_operator_view = b.addTest(.{
+    const test_operator_view = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/operator_view_pure.zig"),
             .target = target,
@@ -824,7 +875,7 @@ fn buildSupported(b: *std.Build) void {
     test_operator_view.use_llvm = true;
     const run_test_operator_view = b.addRunArtifact(test_operator_view);
     test_step.dependOn(&run_test_operator_view.step);
-    const test_operator_search_help = b.addTest(.{
+    const test_operator_search_help = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/operator_search_help_pure.zig"),
             .target = target,
@@ -834,7 +885,7 @@ fn buildSupported(b: *std.Build) void {
     test_operator_search_help.use_llvm = true;
     const run_test_operator_search_help = b.addRunArtifact(test_operator_search_help);
     test_step.dependOn(&run_test_operator_search_help.step);
-    const test_operator_picks = b.addTest(.{
+    const test_operator_picks = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/operator_picks_pure.zig"),
             .target = target,
@@ -852,7 +903,7 @@ fn buildSupported(b: *std.Build) void {
     test_operator_step.dependOn(&run_test_operator_search_help.step);
     test_operator_step.dependOn(&run_test_operator_picks.step);
 
-    const test_overview_pure = b.addTest(.{
+    const test_overview_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/agents_overview_pure.zig"),
             .target = target,
@@ -863,7 +914,7 @@ fn buildSupported(b: *std.Build) void {
     const run_test_overview = b.addRunArtifact(test_overview_pure);
     test_step.dependOn(&run_test_overview.step);
     b.step("test-overview", "Test the Agents Overview wording and activity-feed merge").dependOn(&run_test_overview.step);
-    const test_ask_pure = b.addTest(.{
+    const test_ask_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/ask_pure.zig"),
             .target = target,
@@ -875,7 +926,7 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&run_test_ask.step);
     b.step("test-ask", "Test Ask Opal (policy, argv, prompt, answer and action validation)").dependOn(&run_test_ask.step);
 
-    const test_agent_tasks_pure = b.addTest(.{
+    const test_agent_tasks_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/agent_tasks_pure.zig"),
             .target = target,
@@ -885,7 +936,7 @@ fn buildSupported(b: *std.Build) void {
     test_agent_tasks_pure.use_llvm = true; // the self-hosted backend hits a linker error here
     const run_test_agent_tasks = b.addRunArtifact(test_agent_tasks_pure);
     test_step.dependOn(&run_test_agent_tasks.step);
-    const test_agent_tasks_view = b.addTest(.{
+    const test_agent_tasks_view = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/agent_tasks_view_pure.zig"),
             .target = target,
@@ -899,7 +950,7 @@ fn buildSupported(b: *std.Build) void {
     test_agent_step.dependOn(&run_test_agent_launch.step);
     test_agent_step.dependOn(&run_test_agent_tasks.step);
     test_agent_step.dependOn(&run_test_agent_tasks_view.step);
-    const test_agent_setup_pure = b.addTest(.{
+    const test_agent_setup_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/agent_setup_pure.zig"),
             .target = target,
@@ -908,7 +959,7 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_agent_setup_pure).step);
 
-    const test_wanted_pure = b.addTest(.{
+    const test_wanted_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/wanted_pure.zig"),
             .target = target,
@@ -920,7 +971,7 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&run_test_wanted.step);
     b.step("test-wanted", "Test the wanted list's matching, scoring and retry policy").dependOn(&run_test_wanted.step);
 
-    const test_ops_pure = b.addTest(.{
+    const test_ops_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/ops_pure.zig"),
             .target = target,
@@ -929,7 +980,7 @@ fn buildSupported(b: *std.Build) void {
     });
     const run_test_ops_pure = b.addRunArtifact(test_ops_pure);
     test_step.dependOn(&run_test_ops_pure.step);
-    const test_openapi_pure = b.addTest(.{
+    const test_openapi_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/openapi_pure.zig"),
             .target = target,
@@ -944,7 +995,7 @@ fn buildSupported(b: *std.Build) void {
     test_ops_step.dependOn(&run_test_ops_pure.step);
     test_ops_step.dependOn(&run_test_openapi_pure.step);
 
-    const test_auto_subs_pure = b.addTest(.{
+    const test_auto_subs_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/auto_subs_pure.zig"),
             .target = target,
@@ -963,7 +1014,7 @@ fn buildSupported(b: *std.Build) void {
         "src/services/moments_pure.zig",
         "src/services/llm_oneshot_pure.zig",
     }) |babel_pure| {
-        const test_babel_pure = b.addTest(.{
+        const test_babel_pure = addBoundTest(b, .{
             .root_module = b.createModule(.{
                 .root_source_file = b.path(babel_pure),
                 .target = target,
@@ -973,7 +1024,7 @@ fn buildSupported(b: *std.Build) void {
         test_step.dependOn(&b.addRunArtifact(test_babel_pure).step);
     }
 
-    const test_position_save_pure = b.addTest(.{
+    const test_position_save_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/player/position_save_pure.zig"),
             .target = target,
@@ -982,7 +1033,7 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_position_save_pure).step);
 
-    const test_paths = b.addTest(.{
+    const test_paths = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/paths.zig"),
             .target = target,
@@ -994,7 +1045,7 @@ fn buildSupported(b: *std.Build) void {
     test_paths.use_llvm = true;
     test_step.dependOn(&b.addRunArtifact(test_paths).step);
 
-    const test_text = b.addTest(.{
+    const test_text = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/text.zig"),
             .target = target,
@@ -1005,7 +1056,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Untrusted artwork must be dimension/byte bounded before stb allocates
     // decompressed RGBA memory.
-    const test_image_limits_pure = b.addTest(.{
+    const test_image_limits_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/image_limits_pure.zig"),
             .target = target,
@@ -1014,7 +1065,7 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_image_limits_pure).step);
 
-    const test_voice = b.addTest(.{
+    const test_voice = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/voice_filter.zig"),
             .target = target,
@@ -1023,7 +1074,7 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_voice).step);
 
-    const test_plugins_pure = b.addTest(.{
+    const test_plugins_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/plugins_pure.zig"),
             .target = target,
@@ -1034,7 +1085,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Untrusted plugin process lifecycle: process-tree containment, output
     // cap, deadline, exit status, and watchdog failure cleanup.
-    const test_bounded_process = b.addTest(.{
+    const test_bounded_process = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/bounded_process.zig"),
             .target = target,
@@ -1047,7 +1098,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Native/unsafe plugin approval hashes the deterministic complete tree and
     // rejects symlinks or other special files.
-    const test_plugins_trust = b.addTest(.{
+    const test_plugins_trust = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/plugins_trust.zig"),
             .target = target,
@@ -1056,7 +1107,7 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_plugins_trust).step);
 
-    const test_sync_outbox = b.addTest(.{
+    const test_sync_outbox = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/sync_outbox_pure.zig"),
             .target = target,
@@ -1066,7 +1117,7 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(test_sync_outbox).step);
 
     // Headless account auth: bcrypt hash/verify + credential validation.
-    const test_auth_pure = b.addTest(.{
+    const test_auth_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/auth_pure.zig"),
             .target = target,
@@ -1076,7 +1127,7 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(test_auth_pure).step);
 
     // Web UI toggle: loopback URL construction + header tooltip states.
-    const test_remote_url_pure = b.addTest(.{
+    const test_remote_url_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/remote_url_pure.zig"),
             .target = target,
@@ -1087,7 +1138,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Web UI access page: bind mode, port validation, token masking, password
     // change rules.
-    const test_access_pure = b.addTest(.{
+    const test_access_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/access_pure.zig"),
             .target = target,
@@ -1101,7 +1152,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Direct browser link: pairing code state machine, token rules, candidate
     // validation and body sizing, plus the paired-browser route allowlist.
-    const test_browser_link_pure = b.addTest(.{
+    const test_browser_link_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/browser_link_pure.zig"),
             .target = target,
@@ -1110,7 +1161,7 @@ fn buildSupported(b: *std.Build) void {
     });
     const run_test_browser_link = b.addRunArtifact(test_browser_link_pure);
     test_step.dependOn(&run_test_browser_link.step);
-    const test_remote_body_pure = b.addTest(.{
+    const test_remote_body_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/remote_body_pure.zig"),
             .target = target,
@@ -1119,7 +1170,7 @@ fn buildSupported(b: *std.Build) void {
     });
     const run_test_remote_body = b.addRunArtifact(test_remote_body_pure);
     test_step.dependOn(&run_test_remote_body.step);
-    const test_browser_page_pure = b.addTest(.{
+    const test_browser_page_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/browser_page_pure.zig"),
             .target = target,
@@ -1128,7 +1179,7 @@ fn buildSupported(b: *std.Build) void {
     });
     const run_test_browser_page = b.addRunArtifact(test_browser_page_pure);
     test_step.dependOn(&run_test_browser_page.step);
-    const test_browser_fetch_pure = b.addTest(.{
+    const test_browser_fetch_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/browser_fetch_pure.zig"),
             .target = target,
@@ -1137,7 +1188,7 @@ fn buildSupported(b: *std.Build) void {
     });
     const run_test_browser_fetch = b.addRunArtifact(test_browser_fetch_pure);
     test_step.dependOn(&run_test_browser_fetch.step);
-    const test_browser_tabs_pure = b.addTest(.{
+    const test_browser_tabs_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/browser_tabs_pure.zig"),
             .target = target,
@@ -1146,7 +1197,7 @@ fn buildSupported(b: *std.Build) void {
     });
     const run_test_browser_tabs = b.addRunArtifact(test_browser_tabs_pure);
     test_step.dependOn(&run_test_browser_tabs.step);
-    const test_browser_hub_view = b.addTest(.{
+    const test_browser_hub_view = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/browser_hub_view_pure.zig"),
             .target = target,
@@ -1165,7 +1216,7 @@ fn buildSupported(b: *std.Build) void {
     test_browser_step.dependOn(&run_test_access.step);
 
     // Web settings API: key registry + value validation.
-    const test_settings_api_pure = b.addTest(.{
+    const test_settings_api_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/settings_api_pure.zig"),
             .target = target,
@@ -1176,7 +1227,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Rich web player interface: action allowlist and bounded values. Keeping
     // this pure means the security contract is tested without linking mpv.
-    const test_player_api_pure = b.addTest(.{
+    const test_player_api_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/player_api_pure.zig"),
             .target = target,
@@ -1186,7 +1237,7 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(test_player_api_pure).step);
 
     // Browser playability rules for the web UI's "Play here" destination.
-    const test_playback_target_pure = b.addTest(.{
+    const test_playback_target_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/playback_target_pure.zig"),
             .target = target,
@@ -1196,7 +1247,7 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(test_playback_target_pure).step);
 
     // Failed-login throttling for the web auth routes.
-    const test_login_rate_pure = b.addTest(.{
+    const test_login_rate_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/login_rate_pure.zig"),
             .target = target,
@@ -1207,7 +1258,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Fixed-memory per-client/global request budgets. The table deliberately
     // fails closed under identity spray and excludes normal media polling.
-    const test_remote_limits_pure = b.addTest(.{
+    const test_remote_limits_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/remote_limits_pure.zig"),
             .target = target,
@@ -1218,7 +1269,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Conditional-GET header parsing for the static asset cache, isolated from
     // the socket and filesystem implementation in remote_static.zig.
-    const test_remote_static_pure = b.addTest(.{
+    const test_remote_static_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/remote_static_pure.zig"),
             .target = target,
@@ -1229,7 +1280,7 @@ fn buildSupported(b: *std.Build) void {
 
     // First-admin bootstrap: IP/localhost Host allowlist and same-authority
     // Origin policy, isolated from the socket/database implementation.
-    const test_setup_policy_pure = b.addTest(.{
+    const test_setup_policy_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/setup_policy_pure.zig"),
             .target = target,
@@ -1239,7 +1290,7 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(test_setup_policy_pure).step);
 
     // Logs view: level-tag normalization + consecutive-duplicate collapsing.
-    const test_logs_pure = b.addTest(.{
+    const test_logs_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/logs_pure.zig"),
             .target = target,
@@ -1251,7 +1302,7 @@ fn buildSupported(b: *std.Build) void {
     // Log ingestion is the single seam for mpv/curl/plugin diagnostics. Keep
     // signed URLs, userinfo, bearer headers and tracker passkeys out of both
     // the in-app ring and the authenticated /api/logs response.
-    const test_log_redact_pure = b.addTest(.{
+    const test_log_redact_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/log_redact_pure.zig"),
             .target = target,
@@ -1262,7 +1313,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Sensitive scratch data: random private workspaces, exclusive owner-only
     // files, traversal rejection, and recursive cleanup.
-    const test_secure_temp = b.addTest(.{
+    const test_secure_temp = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/secure_temp.zig"),
             .target = target,
@@ -1273,7 +1324,7 @@ fn buildSupported(b: *std.Build) void {
     test_secure_temp.use_llvm = true;
     test_step.dependOn(&b.addRunArtifact(test_secure_temp).step);
 
-    const test_deps = b.addTest(.{
+    const test_deps = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/deps_test.zig"),
             .target = target,
@@ -1282,7 +1333,7 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_deps).step);
 
-    const test_env = b.addTest(.{
+    const test_env = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/env.zig"),
             .target = target,
@@ -1291,7 +1342,7 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_env).step);
 
-    const test_workers = b.addTest(.{
+    const test_workers = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/workers.zig"),
             .target = target,
@@ -1303,7 +1354,7 @@ fn buildSupported(b: *std.Build) void {
     test_workers.use_llvm = true;
     test_step.dependOn(&b.addRunArtifact(test_workers).step);
 
-    const test_chrome = b.addTest(.{
+    const test_chrome = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/ui/chrome_autohide.zig"),
             .target = target,
@@ -1312,7 +1363,7 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_chrome).step);
 
-    const test_resume = b.addTest(.{
+    const test_resume = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/player/resume_pure.zig"),
             .target = target,
@@ -1324,7 +1375,7 @@ fn buildSupported(b: *std.Build) void {
     // Control-bar drop-ups: anchored-above / right-aligned / clamp-to-window
     // placement math + the click-outside hit test (ui/pickers.zig routes every
     // popover through it).
-    const test_dropup_pure = b.addTest(.{
+    const test_dropup_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/ui/dropup_pure.zig"),
             .target = target,
@@ -1335,7 +1386,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Input gestures: the double-tap window shared by F F (ui/input.zig) and
     // double-click-to-fullscreen (ui/grid.zig).
-    const test_input_pure = b.addTest(.{
+    const test_input_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/ui/input_pure.zig"),
             .target = target,
@@ -1358,38 +1409,38 @@ fn buildSupported(b: *std.Build) void {
     // throttle, the volume ramp, the transport state machine, and the
     // width-based collapse order. All of it is wired into footer.zig — a test
     // there asserts no export goes unreachable.
-    const test_search_reading_pure = b.addTest(.{ .root_module = b.createModule(.{
+    const test_search_reading_pure = addBoundTest(b, .{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/services/search_reading_pure.zig"),
         .target = target,
         .optimize = optimize,
     }) });
     test_step.dependOn(&b.addRunArtifact(test_search_reading_pure).step);
-    const test_search_content_pure = b.addTest(.{ .root_module = b.createModule(.{
+    const test_search_content_pure = addBoundTest(b, .{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/services/search_content_pure.zig"),
         .target = target,
         .optimize = optimize,
     }) });
     test_step.dependOn(&b.addRunArtifact(test_search_content_pure).step);
-    const test_search_preview_pure = b.addTest(.{ .root_module = b.createModule(.{
+    const test_search_preview_pure = addBoundTest(b, .{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/services/search_preview_pure.zig"),
         .target = target,
         .optimize = optimize,
     }) });
     test_step.dependOn(&b.addRunArtifact(test_search_preview_pure).step);
-    const test_search_gallery_pure = b.addTest(.{ .root_module = b.createModule(.{
+    const test_search_gallery_pure = addBoundTest(b, .{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/ui/search_gallery_pure.zig"),
         .target = target,
         .optimize = optimize,
     }) });
     test_step.dependOn(&b.addRunArtifact(test_search_gallery_pure).step);
 
-    const test_search_view_pure = b.addTest(.{ .root_module = b.createModule(.{
+    const test_search_view_pure = addBoundTest(b, .{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/services/search_view_pure.zig"),
         .target = target,
         .optimize = optimize,
     }) });
     test_step.dependOn(&b.addRunArtifact(test_search_view_pure).step);
-    const test_search_scope = b.addTest(.{ .root_module = b.createModule(.{
+    const test_search_scope = addBoundTest(b, .{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/services/search_scope_pure.zig"),
         .target = target,
         .optimize = optimize,
@@ -1398,7 +1449,7 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&run_search_scope.step);
     b.step("test-search-scope", "Check contextual search scope and global removal").dependOn(&run_search_scope.step);
 
-    const test_footer_pure = b.addTest(.{
+    const test_footer_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/ui/footer_pure.zig"),
             .target = target,
@@ -1410,7 +1461,7 @@ fn buildSupported(b: *std.Build) void {
     // Playback loading screen: art-URL resolution for every source (TMDB
     // fragment vs. an absolute music-server cover), splitting a summary into
     // rotating fact cards, which card is showing, and the meta line.
-    const test_loading_pure = b.addTest(.{
+    const test_loading_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/loading_pure.zig"),
             .target = target,
@@ -1422,7 +1473,7 @@ fn buildSupported(b: *std.Build) void {
     // Installed-source table: capacity (sized in FIELDS, not sources), the
     // filename-safety rule shared by install/uninstall, and the overflow
     // report that must never be silent again.
-    const test_source_config_pure = b.addTest(.{
+    const test_source_config_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/source_config_pure.zig"),
             .target = target,
@@ -1434,7 +1485,7 @@ fn buildSupported(b: *std.Build) void {
     // Per-source mirror failover: candidate ordering (base first, then the
     // `mirrors` list), last-good rotation, and 200-OK challenge-page detection.
     // mirrors.zig routes every selection decision through these.
-    const test_mirrors_pure = b.addTest(.{
+    const test_mirrors_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/mirrors_pure.zig"),
             .target = target,
@@ -1445,7 +1496,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Audio EQ preset → af spec, video-filter clamp, download-limit sanitize —
     // the persist-and-replay mapping shared by settings.zig + player.zig init.
-    const test_av_pure = b.addTest(.{
+    const test_av_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/player/av_pure.zig"),
             .target = target,
@@ -1456,7 +1507,7 @@ fn buildSupported(b: *std.Build) void {
 
     // YouTube browse: suggestion-JSON parse, channel-URL validation, duration/
     // view-count formatting — youtube.zig routes through these.
-    const test_youtube_pure = b.addTest(.{
+    const test_youtube_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/youtube_pure.zig"),
             .target = target,
@@ -1469,7 +1520,7 @@ fn buildSupported(b: *std.Build) void {
     // because a theme colour is spliced into an ffmpeg graph — it must be
     // validated, not interpolated — and because every style has to keep
     // `asplit [ao]` or the visualiser silently costs you the audio.
-    const test_visualizer_pure = b.addTest(.{
+    const test_visualizer_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/player/visualizer_pure.zig"),
             .target = target,
@@ -1479,7 +1530,7 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(test_visualizer_pure).step);
 
     // Keyless subtitle providers: media-name → query/show/season/episode parse.
-    const test_subs_pure = b.addTest(.{
+    const test_subs_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/subtitles_pure.zig"),
             .target = target,
@@ -1489,7 +1540,7 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(test_subs_pure).step);
 
     // Plex: restored-session section load trigger + stale-worker publish guard.
-    const test_plex_pure = b.addTest(.{
+    const test_plex_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/plex_pure.zig"),
             .target = target,
@@ -1499,13 +1550,13 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(test_plex_pure).step);
 
     // Anime NSFW filter: Jikan rating classification + sfw query param.
-    const test_anime_catalog = b.addTest(.{ .root_module = b.createModule(.{
+    const test_anime_catalog = addBoundTest(b, .{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/services/anime_catalog_pure.zig"),
         .target = target,
         .optimize = optimize,
     }) });
     test_step.dependOn(&b.addRunArtifact(test_anime_catalog).step);
-    const test_anime_pure = b.addTest(.{
+    const test_anime_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/anime_pure.zig"),
             .target = target,
@@ -1515,7 +1566,7 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(test_anime_pure).step);
 
     // `lists` anime source plugin: anime-airing.json → anime index rows.
-    const test_anime_lists_pure = b.addTest(.{
+    const test_anime_lists_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/anime_lists_pure.zig"),
             .target = target,
@@ -1525,7 +1576,7 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(test_anime_lists_pure).step);
 
     // AniList metadata parsing (Page.media[] iterator + malformed-JSON regression).
-    const test_anilist_pure = b.addTest(.{
+    const test_anilist_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/anilist_pure.zig"),
             .target = target,
@@ -1535,7 +1586,7 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(test_anilist_pure).step);
 
     // Podcasts: iTunes JSON + podcast RSS episode parsing (malformed regressions).
-    const test_podcasts_pure = b.addTest(.{
+    const test_podcasts_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/podcasts_pure.zig"),
             .target = target,
@@ -1546,7 +1597,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Internet Radio: RadioBrowser station-search JSON parsing (numeric fields +
     // url_resolved/url fallback + malformed-JSON regressions).
-    const test_radio_pure = b.addTest(.{
+    const test_radio_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/radio_pure.zig"),
             .target = target,
@@ -1557,7 +1608,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Live TV / IPTV: iptv-org streams.json parsing, m3u8 recognition, the
     // NSFW/accept gate, the query filter, and the <base>/streams.json builder.
-    const test_iptv_pure = b.addTest(.{
+    const test_iptv_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/iptv_pure.zig"),
             .target = target,
@@ -1569,7 +1620,7 @@ fn buildSupported(b: *std.Build) void {
     // App-wide stream health: the probe classifier shared by Live TV and Radio
     // (iptv_pure.zig re-exports these names; services/link_health.zig routes
     // every probe worker through classify()).
-    const test_link_health_pure = b.addTest(.{
+    const test_link_health_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/link_health_pure.zig"),
             .target = target,
@@ -1582,7 +1633,7 @@ fn buildSupported(b: *std.Build) void {
     // iterator, duration/view-count/published text parsing, the YYYYMMDD
     // conversion, the thumbnail-URL builder, and the channel-row rejection
     // shared with the yt-dlp line parser.
-    const test_youtube_innertube_pure = b.addTest(.{
+    const test_youtube_innertube_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/youtube_innertube_pure.zig"),
             .target = target,
@@ -1591,7 +1642,7 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_youtube_innertube_pure).step);
 
-    const test_youtube_player_pure = b.addTest(.{
+    const test_youtube_player_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/youtube_player_pure.zig"),
             .target = target,
@@ -1602,7 +1653,7 @@ fn buildSupported(b: *std.Build) void {
 
     // mpv ytdl-raw-options: the exact option string handed to mpv, incl. the
     // regression guard that no YouTube player client is ever pinned again.
-    const test_ytdl_opts_pure = b.addTest(.{
+    const test_ytdl_opts_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/player/ytdl_opts_pure.zig"),
             .target = target,
@@ -1613,7 +1664,7 @@ fn buildSupported(b: *std.Build) void {
 
     // yt-dlp helper updater: exact release-asset checksum matching and strict
     // staged version-probe output validation before atomic publication.
-    const test_ytdlp_update_pure = b.addTest(.{
+    const test_ytdlp_update_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/ytdlp_update_pure.zig"),
             .target = target,
@@ -1622,7 +1673,7 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_ytdlp_update_pure).step);
 
-    const test_install_identity_pure = b.addTest(.{
+    const test_install_identity_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/install_identity_pure.zig"),
             .target = target,
@@ -1633,7 +1684,7 @@ fn buildSupported(b: *std.Build) void {
 
     // mpv per-request HTTP headers: comma-safe joining for `http-header-fields`
     // and the Origin-from-Referer derivation. player.zig routes through these.
-    const test_http_headers_pure = b.addTest(.{
+    const test_http_headers_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/player/http_headers_pure.zig"),
             .target = target,
@@ -1644,7 +1695,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Typed mpv load seam: replace clears persistent HTTP state; every queue
     // entry receives its own UA/headers without append mutating current media.
-    const test_playback_load_pure = b.addTest(.{
+    const test_playback_load_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/player/playback_load_pure.zig"),
             .target = target,
@@ -1655,7 +1706,7 @@ fn buildSupported(b: *std.Build) void {
 
     // A media-version fallback stays armed through demux/decoder setup, is
     // consumed once on a pre-playback failure, and cannot switch mid-stream.
-    const test_playback_fallback_pure = b.addTest(.{
+    const test_playback_fallback_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/player/playback_fallback_pure.zig"),
             .target = target,
@@ -1666,7 +1717,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Hardware-decoder feedback waits until mpv has a real video decoder and
     // distinguishes software fallback from unavailable/early property states.
-    const test_hwdec_feedback_pure = b.addTest(.{
+    const test_hwdec_feedback_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/player/hwdec_feedback_pure.zig"),
             .target = target,
@@ -1677,7 +1728,7 @@ fn buildSupported(b: *std.Build) void {
 
     // DPI-bypass sidecar: mode validation, the "127.0.0.1:<port>" builder, and
     // the enabled&&running proxy gate. dpi_bypass.zig routes through these.
-    const test_proxy_url_pure = b.addTest(.{
+    const test_proxy_url_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/proxy_url_pure.zig"),
             .target = target,
@@ -1686,7 +1737,7 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_proxy_url_pure).step);
 
-    const test_dpi_bypass_pure = b.addTest(.{
+    const test_dpi_bypass_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/dpi_bypass_pure.zig"),
             .target = target,
@@ -1697,7 +1748,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Jellyfin image-proxy URL building + item-id validation (SSRF/injection
     // gate for the web /api/jellyfin/poster proxy).
-    const test_jellyfin_pure = b.addTest(.{
+    const test_jellyfin_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/jellyfin_pure.zig"),
             .target = target,
@@ -1710,7 +1761,7 @@ fn buildSupported(b: *std.Build) void {
     // exists in all three sources at once (seeding + on disk + in history), so the
     // list must fold it into ONE row — while NEVER collapsing two different
     // releases that share a title (a wrong merge mis-attributes pause/delete).
-    const test_transfers_pure = b.addTest(.{
+    const test_transfers_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/transfers_pure.zig"),
             .target = target,
@@ -1721,7 +1772,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Cold-start torrent opens are never discarded while the DHT/session worker
     // initializes: preserve FIFO order, bounded capacity and source integrity.
-    const test_torrent_open_queue = b.addTest(.{
+    const test_torrent_open_queue = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/torrent_open_queue.zig"),
             .target = target,
@@ -1732,7 +1783,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Durable torrent restart stores only canonical v1/v2 swarm identities;
     // private trackers, passkeys, peers and descriptive fields are stripped.
-    const test_torrent_intent_pure = b.addTest(.{
+    const test_torrent_intent_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/torrent_intent_pure.zig"),
             .target = target,
@@ -1746,7 +1797,7 @@ fn buildSupported(b: *std.Build) void {
     // the parsers must also survive a truncated body and must never confuse
     // `"data"` with `"dataSaver"` (wrong image set) or an author relationship
     // with `cover_art` (wrong cover).
-    const test_comics_pure = b.addTest(.{
+    const test_comics_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/comics_pure.zig"),
             .target = target,
@@ -1756,7 +1807,7 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(test_comics_pure).step);
 
     inline for (.{ "expanded_reading_pure", "reading_provider_pure", "music_audius_pure", "audio_sources_pure", "source_request_pure", "anime_hianime_pure", "comicfury_pure", "webcomic_sources_pure" }) |module| {
-        const source_test = b.addTest(.{ .root_module = b.createModule(.{
+        const source_test = addBoundTest(b, .{ .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/" ++ module ++ ".zig"),
             .target = target,
             .optimize = optimize,
@@ -1769,7 +1820,7 @@ fn buildSupported(b: *std.Build) void {
     // frontier, and clamp to what has actually aired (TMDB's episode_count
     // counts announced episodes, so an unclamped search invents a phantom
     // episode that Resume would then hunt for on an indexer).
-    const test_tv_pure = b.addTest(.{
+    const test_tv_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/tv_pure.zig"),
             .target = target,
@@ -1782,7 +1833,7 @@ fn buildSupported(b: *std.Build) void {
     // width draws a garbage rect; a divide-by-zero on a machine reporting 0 total
     // RAM must not become an infinite bar; and a media player DECODING VIDEO must
     // not light the meter red, or people learn to ignore it.
-    const test_sysmon_pure = b.addTest(.{
+    const test_sysmon_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/sysmon_pure.zig"),
             .target = target,
@@ -1796,7 +1847,7 @@ fn buildSupported(b: *std.Build) void {
     // downloaded file never starts unless the tail is fetched too — head progress
     // is irrelevant. MP4 needs its moov (which +faststart puts at the front, so no
     // tail at all); AVI needs idx1; MPEG-TS needs nothing.
-    const test_container_pure = b.addTest(.{
+    const test_container_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/player/container_pure.zig"),
             .target = target,
@@ -1810,7 +1861,7 @@ fn buildSupported(b: *std.Build) void {
     // not split the object and mis-pair fields across torrents — same class of
     // bug as the FROM/HotD id corruption), plus the live relative-time label
     // that the render site recomputes from the stored epoch every frame.
-    const test_eztv_calendar_pure = b.addTest(.{
+    const test_eztv_calendar_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/eztv_calendar_pure.zig"),
             .target = target,
@@ -1820,7 +1871,7 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(test_eztv_calendar_pure).step);
 
     // Workspace name sanitization (path-traversal / separator neutralization).
-    const test_workspace_pure = b.addTest(.{
+    const test_workspace_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/ui/workspace_pure.zig"),
             .target = target,
@@ -1830,7 +1881,7 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(test_workspace_pure).step);
 
     // Deferred-navigation slot encode/decode (u4 saturating-add regression).
-    const test_nav_pure = b.addTest(.{
+    const test_nav_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/nav_pure.zig"),
             .target = target,
@@ -1839,7 +1890,7 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_nav_pure).step);
 
-    const test_intent = b.addTest(.{
+    const test_intent = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/ai_intent_pure.zig"),
             .target = target,
@@ -1848,7 +1899,7 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_intent).step);
 
-    const test_rank = b.addTest(.{
+    const test_rank = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/resolver_rank.zig"),
             .target = target,
@@ -1858,7 +1909,7 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(test_rank).step);
 
     // Recall (7.1): NL constraint parser, subtitle chunker, rank fusion, snippets.
-    const test_recall_pure = b.addTest(.{
+    const test_recall_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/recall_pure.zig"),
             .target = target,
@@ -1870,7 +1921,7 @@ fn buildSupported(b: *std.Build) void {
     // Storage page accounting: byte formatting at every unit boundary, the
     // percent-of-total clamp, and the guard that user data is never one-click
     // removable (losing opal.db is unrecoverable).
-    const test_storage_pure = b.addTest(.{
+    const test_storage_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/storage_usage_pure.zig"),
             .target = target,
@@ -1879,7 +1930,7 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_storage_pure).step);
 
-    const test_route_resilience_pure = b.addTest(.{
+    const test_route_resilience_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/route_resilience_pure.zig"),
             .target = target,
@@ -1890,7 +1941,7 @@ fn buildSupported(b: *std.Build) void {
 
     // TMDB pure string helpers: string-aware results splitter (FROM/HotD id-corruption
     // regression) + HTTPS→HTTP fallback rewrite.
-    const test_tmdb_pure = b.addTest(.{
+    const test_tmdb_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/tmdb_pure.zig"),
             .target = target,
@@ -1900,7 +1951,7 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(test_tmdb_pure).step);
 
     // Zero-key Cinemeta catalog response splitting and stable fallback ids.
-    const test_cinemeta_pure = b.addTest(.{
+    const test_cinemeta_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/cinemeta_pure.zig"),
             .target = target,
@@ -1911,7 +1962,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Keyless Movies & TV: Cinemeta meta -> TMDB-shaped detail documents,
     // category/genre mapping, id -> IMDb identity table.
-    const test_cinemeta_meta_pure = b.addTest(.{
+    const test_cinemeta_meta_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/cinemeta_meta_pure.zig"),
             .target = target,
@@ -1932,7 +1983,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Keyless Asian Drama page: TVmaze schedule/search/episodes parsing and
     // mapping onto the drama grid rows (fixtures are trimmed live captures).
-    const test_drama_tvmaze_pure = b.addTest(.{
+    const test_drama_tvmaze_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/drama_tvmaze_pure.zig"),
             .target = target,
@@ -1947,7 +1998,7 @@ fn buildSupported(b: *std.Build) void {
     // Internet Archive JSON parsing: advancedsearch docs[] iteration
     // (order-independent id/title/year) + metadata files[] best-video pick +
     // a malformed-JSON regression case.
-    const test_archive_pure = b.addTest(.{
+    const test_archive_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/archive_pure.zig"),
             .target = target,
@@ -1959,7 +2010,7 @@ fn buildSupported(b: *std.Build) void {
     // NASA images-api JSON parsing: search items[] iteration (asset href/title/
     // year, pagination-link exclusion) + collection.json best-mp4 pick +
     // malformed-JSON regression. Reuses archive_pure's field extractors.
-    const test_nasa_pure = b.addTest(.{
+    const test_nasa_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/nasa_pure.zig"),
             .target = target,
@@ -1971,7 +2022,7 @@ fn buildSupported(b: *std.Build) void {
     // Wikimedia Commons JSON parsing: query.pages{} iteration (title/url/mime/
     // size/duration, File: prefix strip, descriptionurl disambiguation) +
     // malformed-JSON regression. Reuses archive_pure's field extractors.
-    const test_commons_pure = b.addTest(.{
+    const test_commons_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/commons_pure.zig"),
             .target = target,
@@ -1982,7 +2033,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Wikipedia trivia lookup: disambiguated-title building + JSON extract
     // parsing (rejects disambiguation pages / too-short extracts).
-    const test_wikipedia_pure = b.addTest(.{
+    const test_wikipedia_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/wikipedia_pure.zig"),
             .target = target,
@@ -1993,7 +2044,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Device-aware Auto scale: neutral 1.0× floor, upward panel adjustment,
     // persisted legacy normalization, and manual clamp bounds.
-    const test_scale_pure = b.addTest(.{
+    const test_scale_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/scale_pure.zig"),
             .target = target,
@@ -2002,7 +2053,7 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_scale_pure).step);
 
-    const test_event_loop_pure = b.addTest(.{
+    const test_event_loop_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/event_loop_pure.zig"),
             .target = target,
@@ -2013,7 +2064,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Windows title-bar control hitboxes must follow the scaled player
     // overlay without pushing buttons outside a laptop-sized viewport.
-    const test_titlebar_geometry = b.addTest(.{
+    const test_titlebar_geometry = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/ui/titlebar_geometry.zig"),
             .target = target,
@@ -2024,7 +2075,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Runtime display probe: Linux EDID/sysfs fallback plus the shared Auto
     // scale seam used by startup and Settings.
-    const test_display_info = b.addTest(.{
+    const test_display_info = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/display_info.zig"),
             .target = target,
@@ -2037,7 +2088,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Media file classification: playable vs executable/archive (torrent
     // file auto-selection safety).
-    const test_media_ext = b.addTest(.{
+    const test_media_ext = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/media_ext.zig"),
             .target = target,
@@ -2047,7 +2098,7 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(test_media_ext).step);
 
     // Browser media streaming: HTTP Range parsing, content types, SRT→VTT.
-    const test_remote_stream_pure = b.addTest(.{
+    const test_remote_stream_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/remote_stream_pure.zig"),
             .target = target,
@@ -2060,7 +2111,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Continuum (7.4): stream decision matrix, ffmpeg argv, segment names,
     // signed stream tokens, handoff payload.
-    const test_stream_pure = b.addTest(.{
+    const test_stream_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/stream_pure.zig"),
             .target = target,
@@ -2073,7 +2124,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Download-root confinement: component-by-component no-follow opens and
     // regular-file enforcement for stream/subtitle/transcode endpoints.
-    const test_remote_stream_path = b.addTest(.{
+    const test_remote_stream_path = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/remote_stream_path.zig"),
             .target = target,
@@ -2083,7 +2134,7 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(test_remote_stream_path).step);
 
     // Canonical application version and release-derived user-agent strings.
-    const test_app_meta = b.addTest(.{
+    const test_app_meta = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/app_meta.zig"),
             .target = target,
@@ -2093,7 +2144,7 @@ fn buildSupported(b: *std.Build) void {
     test_app_meta.root_module.addImport("build_options", build_options_module);
     test_step.dependOn(&b.addRunArtifact(test_app_meta).step);
 
-    const test_display_name = b.addTest(.{
+    const test_display_name = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/display_name_pure.zig"),
             .target = target,
@@ -2103,7 +2154,7 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(test_display_name).step);
 
     // /api/host must expose the same version injected from build.zig.zon.
-    const test_remote_host = b.addTest(.{
+    const test_remote_host = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/remote_host_pure.zig"),
             .target = target,
@@ -2113,7 +2164,7 @@ fn buildSupported(b: *std.Build) void {
     test_remote_host.root_module.addImport("build_options", build_options_module);
     test_step.dependOn(&b.addRunArtifact(test_remote_host).step);
 
-    const test_remote_auth = b.addTest(.{
+    const test_remote_auth = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/remote_auth_pure.zig"),
             .target = target,
@@ -2124,7 +2175,7 @@ fn buildSupported(b: *std.Build) void {
 
     // TV calendar: air-date math, countdown labels, TMDB next-episode parse,
     // EZTV availability extraction.
-    const test_tv_calendar_pure = b.addTest(.{
+    const test_tv_calendar_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/tv_calendar_pure.zig"),
             .target = target,
@@ -2136,7 +2187,7 @@ fn buildSupported(b: *std.Build) void {
     // TVmaze keyless enrichment: show-id extraction, next-episode + episode
     // air-date parsing (nested _links objects), airs-label formatting,
     // malformed-JSON regression.
-    const test_tvmaze_pure = b.addTest(.{
+    const test_tvmaze_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/tvmaze_pure.zig"),
             .target = target,
@@ -2148,7 +2199,7 @@ fn buildSupported(b: *std.Build) void {
     // Keyless TV tracking: Cinemeta series facts (season map, aired frontier,
     // next episode), TVmaze overlay, synthetic-identity rules, IMDb-by-title
     // picking, poster URLs and scrobble external ids.
-    const test_keyless_tv_pure = b.addTest(.{
+    const test_keyless_tv_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/keyless_tv_pure.zig"),
             .target = target,
@@ -2162,7 +2213,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Duplicate-show merge (a show tracked keyless, later re-tracked with a TMDB
     // key): the pure planner, and the executor against an in-memory SQLite.
-    const test_tv_merge_pure = b.addTest(.{
+    const test_tv_merge_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/tv_merge_pure.zig"),
             .target = target,
@@ -2173,7 +2224,7 @@ fn buildSupported(b: *std.Build) void {
     const run_test_tv_merge_pure = b.addRunArtifact(test_tv_merge_pure);
     test_step.dependOn(&run_test_tv_merge_pure.step);
     keyless_test_step.dependOn(&run_test_tv_merge_pure.step);
-    const test_tv_merge = b.addTest(.{
+    const test_tv_merge = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/tv_merge.zig"),
             .target = target,
@@ -2181,6 +2232,7 @@ fn buildSupported(b: *std.Build) void {
             .link_libc = true,
         }),
     });
+    test_tv_merge.root_module.addImport("opal-native-c", sqlite_bindings.mod);
     test_tv_merge.use_llvm = true;
     if (is_windows) {
         test_tv_merge.root_module.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{mingw_prefix}) });
@@ -2201,7 +2253,7 @@ fn buildSupported(b: *std.Build) void {
     // body (Ratings[] source matching, Metacritic "88/100" → "88", N/A → absent),
     // IMDb-id extraction + normalization, scores/details formatting, and a
     // malformed-JSON + missing-fields regression.
-    const test_omdb_pure = b.addTest(.{
+    const test_omdb_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/omdb_pure.zig"),
             .target = target,
@@ -2213,7 +2265,7 @@ fn buildSupported(b: *std.Build) void {
     // Browser pure helpers: smart address bar (host vs search heuristic),
     // query percent-encoding, keypress-vs-text forwarding (double-type
     // regression), content routing.
-    const test_browser_pure = b.addTest(.{
+    const test_browser_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/browser_pure.zig"),
             .target = target,
@@ -2223,7 +2275,7 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(test_browser_pure).step);
 
     // JSON string unescaping (yt-dlp titles rendered "You’ve" raw).
-    const test_json_pure = b.addTest(.{
+    const test_json_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/json_pure.zig"),
             .target = target,
@@ -2236,7 +2288,7 @@ fn buildSupported(b: *std.Build) void {
     // percent-encoding, syncedLyrics/plainLyrics JSON extraction, the LRC
     // timeline parse (metadata tags, multi-timestamp lines, sorting) and the
     // active-line lookup that drives the music tab's highlight.
-    const test_lyrics_pure = b.addTest(.{
+    const test_lyrics_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/lyrics_pure.zig"),
             .target = target,
@@ -2249,7 +2301,7 @@ fn buildSupported(b: *std.Build) void {
     // instead of shrinking earlier ones, so an uncapped title label used to eat
     // the row and leave the move/play/remove buttons at zero width. These tests
     // pin the arithmetic that keeps the action strip reserved at every UI scale.
-    const test_queue_layout_pure = b.addTest(.{
+    const test_queue_layout_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/queue_layout_pure.zig"),
             .target = target,
@@ -2260,7 +2312,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Live TV SQLite catalog: LIKE-pattern escaping/lowercasing and the adult
     // group denylist that keeps porn out of the 100k-channel directory.
-    const test_iptv_catalog_pure = b.addTest(.{
+    const test_iptv_catalog_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/iptv_catalog_pure.zig"),
             .target = target,
@@ -2271,7 +2323,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Curated Live TV source registry: id safety, per-kind install body, URL
     // classification for the custom-playlist box.
-    const test_iptv_sources = b.addTest(.{
+    const test_iptv_sources = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/iptv_sources.zig"),
             .target = target,
@@ -2283,7 +2335,7 @@ fn buildSupported(b: *std.Build) void {
     // yt-dlp format selection: the -f string must deprioritize AV1 (av01) so
     // GPUs without an AV1 decoder (Apple Silicon pre-M3) get a decodable stream
     // instead of a black frame, while keeping an any-codec last resort.
-    const test_ytdl_format_pure = b.addTest(.{
+    const test_ytdl_format_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/player/ytdl_format_pure.zig"),
             .target = target,
@@ -2294,7 +2346,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Playback milestone ordering: stale render notifications from the old
     // file must not be reported as the replacement load's first frame.
-    const test_playback_timing_pure = b.addTest(.{
+    const test_playback_timing_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/player/playback_timing_pure.zig"),
             .target = target,
@@ -2304,7 +2356,7 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(test_playback_timing_pure).step);
 
     // Home console display helpers (hex-hash watch-history names).
-    const test_home_pure = b.addTest(.{
+    const test_home_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/ui/home_pure.zig"),
             .target = target,
@@ -2312,7 +2364,7 @@ fn buildSupported(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_home_pure).step);
-    const test_tv_layout = b.addTest(.{
+    const test_tv_layout = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/ui/tv_layout_pure.zig"),
             .target = target,
@@ -2320,7 +2372,7 @@ fn buildSupported(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_tv_layout).step);
-    const test_local_library_layout = b.addTest(.{
+    const test_local_library_layout = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/ui/local_library_layout_pure.zig"),
             .target = target,
@@ -2328,7 +2380,7 @@ fn buildSupported(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_local_library_layout).step);
-    const test_browse_layout = b.addTest(.{
+    const test_browse_layout = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/ui/browse_layout_pure.zig"),
             .target = target,
@@ -2336,19 +2388,19 @@ fn buildSupported(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_browse_layout).step);
-    const test_shell_layout = b.addTest(.{ .root_module = b.createModule(.{
+    const test_shell_layout = addBoundTest(b, .{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/ui/shell_layout_pure.zig"),
         .target = target,
         .optimize = optimize,
     }) });
     test_step.dependOn(&b.addRunArtifact(test_shell_layout).step);
-    const test_shell_tabs = b.addTest(.{ .root_module = b.createModule(.{
+    const test_shell_tabs = addBoundTest(b, .{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/ui/shell_tabs_pure.zig"),
         .target = target,
         .optimize = optimize,
     }) });
     test_step.dependOn(&b.addRunArtifact(test_shell_tabs).step);
-    const test_episode_art = b.addTest(.{
+    const test_episode_art = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/episode_art_pure.zig"),
             .target = target,
@@ -2358,7 +2410,7 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(test_episode_art).step);
 
     // Pipeline test imports ai_intent_pure + resolver_rank siblings.
-    const test_pipeline = b.addTest(.{
+    const test_pipeline = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/ai_pipeline_test.zig"),
             .target = target,
@@ -2367,7 +2419,7 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_pipeline).step);
 
-    const test_search = b.addTest(.{
+    const test_search = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/search_test.zig"),
             .target = target,
@@ -2377,7 +2429,7 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(test_search).step);
 
     // Pure page-router (Route + back/forward history rings).
-    const test_router = b.addTest(.{
+    const test_router = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/router.zig"),
             .target = target,
@@ -2387,7 +2439,7 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(test_router).step);
 
     // Pure headless-mode detection (env precedence + OS gating).
-    const test_headless = b.addTest(.{
+    const test_headless = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/headless_detect.zig"),
             .target = target,
@@ -2398,7 +2450,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Torznab/Prowlarr/Jackett XML item parsing: order-independent torznab:attr
     // extraction, magnet/enclosure/link selection, malformed-XML regression.
-    const test_torznab_pure = b.addTest(.{
+    const test_torznab_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/torznab_pure.zig"),
             .target = target,
@@ -2408,7 +2460,7 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(test_torznab_pure).step);
 
     // Search-result meta line: size/seed/leech formatting and field omission.
-    const test_search_meta_pure = b.addTest(.{
+    const test_search_meta_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/search_meta_pure.zig"),
             .target = target,
@@ -2418,7 +2470,7 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(test_search_meta_pure).step);
 
     // UI motion + type-scale math (easing, pulse, line-height).
-    const test_theme_pure = b.addTest(.{
+    const test_theme_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/ui/theme_pure.zig"),
             .target = target,
@@ -2428,7 +2480,7 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(test_theme_pure).step);
 
     // Type-as-you-go search: debounce, min-length and duplicate suppression.
-    const test_live_search_pure = b.addTest(.{
+    const test_live_search_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/live_search_pure.zig"),
             .target = target,
@@ -2438,7 +2490,7 @@ fn buildSupported(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(test_live_search_pure).step);
 
     // EZTV JSON feed: field extraction, tt-prefix, URL building.
-    const test_eztv_api_pure = b.addTest(.{
+    const test_eztv_api_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/eztv_api_pure.zig"),
             .target = target,
@@ -2450,7 +2502,7 @@ fn buildSupported(b: *std.Build) void {
     // macOS media-key bridge: remote-command decode + Control Center seek
     // clamp + Now Playing playback rate (media_remote.zig routes the polled
     // commands through these).
-    const test_media_remote_pure = b.addTest(.{
+    const test_media_remote_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/player/media_remote_pure.zig"),
             .target = target,
@@ -2462,7 +2514,7 @@ fn buildSupported(b: *std.Build) void {
     // mpv audio-device-list JSON parsing (audio output picker): escaped
     // quotes, truncated input, capacity clamps. ui/pickers.zig and the
     // Settings Playback device list both route through this parser.
-    const test_av_device_pure = b.addTest(.{
+    const test_av_device_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/player/av_device_pure.zig"),
             .target = target,
@@ -2474,7 +2526,7 @@ fn buildSupported(b: *std.Build) void {
     // Single-instance forwarding: /api/open request-URL building + argument
     // percent-encoding (magnet '&'/'=' must not split the query) + arg
     // classification.
-    const test_single_instance_pure = b.addTest(.{
+    const test_single_instance_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/single_instance_pure.zig"),
             .target = target,
@@ -2486,7 +2538,7 @@ fn buildSupported(b: *std.Build) void {
     // Seconds-accurate, path-keyed resume: eligibility thresholds (30s floor /
     // 95% finished ceiling), local-path-vs-URL key selection, legacy name-key
     // fallback, display-name basename.
-    const test_watch_history_pure = b.addTest(.{
+    const test_watch_history_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/player/watch_history_pure.zig"),
             .target = target,
@@ -2495,7 +2547,7 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_watch_history_pure).step);
 
-    const test_secret_store = b.addTest(.{
+    const test_secret_store = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/secret_store.zig"),
             .target = target,
@@ -2514,7 +2566,7 @@ fn buildSupported(b: *std.Build) void {
     // (off/all/one) plus the seeded deterministic shuffle permutation.
     // player.zig's auto-advance and the drawer's prev/next buttons route
     // through these via playlist.zig.
-    const test_playlist_pure = b.addTest(.{
+    const test_playlist_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/player/playlist_pure.zig"),
             .target = target,
@@ -2525,7 +2577,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Durable queue playback reuses the playlist repeat/shuffle engine while
     // resolving the current row by stable SQLite identity.
-    const test_queue_playback_pure = b.addTest(.{
+    const test_queue_playback_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/player/queue_playback_pure.zig"),
             .target = target,
@@ -2537,7 +2589,7 @@ fn buildSupported(b: *std.Build) void {
     // Scam/malware torrent heuristics (exe/scr/archive "movies", password
     // bait, implausible sizes). search.zig rows and resolver.playItem route
     // through assess() to badge and block risky results.
-    const test_torrent_risk_pure = b.addTest(.{
+    const test_torrent_risk_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/torrent_risk_pure.zig"),
             .target = target,
@@ -2549,7 +2601,7 @@ fn buildSupported(b: *std.Build) void {
     // VirusTotal deep links: magnet info-hash extraction (hex + base32 btih)
     // and gui/search + gui/file URL building. Pure — the app never contacts
     // the VT API; lookups are user-triggered browser deep links only.
-    const test_virustotal_pure = b.addTest(.{
+    const test_virustotal_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/virustotal_pure.zig"),
             .target = target,
@@ -2560,7 +2612,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Local taste engine pure logic: deterministic token-hash featurizer,
     // recency decay, negative abandon weighting, cosine scoring.
-    const test_taste_pure = b.addTest(.{
+    const test_taste_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/taste_pure.zig"),
             .target = target,
@@ -2572,7 +2624,7 @@ fn buildSupported(b: *std.Build) void {
     // Segmented HTTP downloader math: planSegments exact-coverage property,
     // resume-range merge, token-bucket refill, backoff schedule, rolling speed
     // window, sidecar JSON round-trip (download_engine.zig routes through it).
-    const test_download_pure = b.addTest(.{
+    const test_download_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/download_pure.zig"),
             .target = target,
@@ -2584,7 +2636,7 @@ fn buildSupported(b: *std.Build) void {
     // Audiobookshelf client: login-token extraction, libraries/items JSON parse,
     // stream/cover URL building (item-id injection gate), Bearer header, and
     // saved-progress parse — all against captured ABS sample payloads.
-    const test_audiobookshelf_pure = b.addTest(.{
+    const test_audiobookshelf_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/audiobookshelf_pure.zig"),
             .target = target,
@@ -2595,7 +2647,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Stable provider-route parsing, progress validity/deduplication, and the
     // exact bounded JSON payload used by non-blocking server progress sync.
-    const test_server_progress_pure = b.addTest(.{
+    const test_server_progress_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/server_progress_pure.zig"),
             .target = target,
@@ -2609,7 +2661,7 @@ fn buildSupported(b: *std.Build) void {
     // href resolution, Basic-auth header base64, content-type → reader-route
     // (EPUB-before-zip ordering so an ebook never mis-routes to the comics
     // reader), and truncated/garbage-XML must-not-crash cases.
-    const test_opds_pure = b.addTest(.{
+    const test_opds_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/opds_pure.zig"),
             .target = target,
@@ -2618,7 +2670,7 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_opds_pure).step);
 
-    const test_novels_pure = b.addTest(.{
+    const test_novels_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/novels_pure.zig"),
             .target = target,
@@ -2631,7 +2683,7 @@ fn buildSupported(b: *std.Build) void {
     // (best-episode pick + ascending sort), point-marker → [start,end) range
     // conversion, and the shouldSkip boundary/latch decision. anime_skip.zig
     // routes through these.
-    const test_anime_skip_pure = b.addTest(.{
+    const test_anime_skip_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/anime_skip_pure.zig"),
             .target = target,
@@ -2650,7 +2702,7 @@ fn buildSupported(b: *std.Build) void {
         "src/services/markers_pure.zig",
         "src/services/skip_policy_pure.zig",
     }) |perception_src| {
-        const t = b.addTest(.{
+        const t = addBoundTest(b, .{
             .root_module = b.createModule(.{
                 .root_source_file = b.path(perception_src),
                 .target = target,
@@ -2664,7 +2716,7 @@ fn buildSupported(b: *std.Build) void {
     // booru hosts vs video hosts), the argv builder (discrete args, `--` guard,
     // no shell injection), and stdout parsing (downloaded/skipped/ignore).
     // services/gallerydl.zig routes production through these.
-    const test_gallerydl_pure = b.addTest(.{
+    const test_gallerydl_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/gallerydl_pure.zig"),
             .target = target,
@@ -2677,7 +2729,7 @@ fn buildSupported(b: *std.Build) void {
     // response parse into fixed buffers, and the SFW filter (isSfw) that drops
     // sexual/violence-flagged covers at parse time. services/vndb.zig routes
     // through parseVns, so the tested filter IS the shipped filter.
-    const test_vndb_pure = b.addTest(.{
+    const test_vndb_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/vndb_pure.zig"),
             .target = target,
@@ -2690,7 +2742,7 @@ fn buildSupported(b: *std.Build) void {
     // extraction + drama-vs-toku split), origin-country classification, discover
     // path building, resolver-query sanitization, and malformed-JSON no-crash.
     // services/drama.zig routes production parsing/classification through these.
-    const test_drama_pure = b.addTest(.{
+    const test_drama_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/drama_pure.zig"),
             .target = target,
@@ -2703,7 +2755,7 @@ fn buildSupported(b: *std.Build) void {
     // week-window math, response parse into fixed Slot buffers, weekday
     // bucketing (day boundaries), and airingAt→local HH:MM formatting (the Zig
     // 0.16 signed-zero-pad workaround). anime_schedule.zig routes through these.
-    const test_anime_schedule_pure = b.addTest(.{
+    const test_anime_schedule_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/anime_schedule_pure.zig"),
             .target = target,
@@ -2717,7 +2769,7 @@ fn buildSupported(b: *std.Build) void {
     // chapter + page parsing (both new chapter_data.images and old data[] page
     // shapes), paywall (price>0) skip, and the heancms:<slug> reader route —
     // all against embedded HeanCms JSON samples. comics.zig routes through these.
-    const test_manga_heancms_pure = b.addTest(.{
+    const test_manga_heancms_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/manga_heancms_pure.zig"),
             .target = target,
@@ -2732,7 +2784,7 @@ fn buildSupported(b: *std.Build) void {
     // (data-src → data-lazy-src → srcset → src, relative→absolute), search-grid /
     // details / chapter parse, and page images from BOTH `div#readerarea img` and
     // the JS-embedded `"images":[…]` fallback. comics.zig routes through these.
-    const test_manga_themesia_pure = b.addTest(.{
+    const test_manga_themesia_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/manga_themesia_pure.zig"),
             .target = target,
@@ -2746,7 +2798,7 @@ fn buildSupported(b: *std.Build) void {
     // image-attr rule (data-src → … → srcset-highest → src) + relative→absolute
     // resolve, and the search-grid / chapter-list / page-image scanners. comics.zig
     // routes all Madara parsing through here, against embedded real-ish HTML.
-    const test_manga_madara_pure = b.addTest(.{
+    const test_manga_madara_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/manga_madara_pure.zig"),
             .target = target,
@@ -2757,7 +2809,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Suwayomi-Server (Tachidesk) source engine — REST URL building + search/
     // chapter/page JSON extraction (routes the whole Mihon extension ecosystem).
-    const test_manga_suwayomi_pure = b.addTest(.{
+    const test_manga_suwayomi_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/manga_suwayomi_pure.zig"),
             .target = target,
@@ -2768,7 +2820,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Mihon/Tachiyomi extension-repo support — curated repos, index.min.json
     // parsing (extension/source ingest) + Suwayomi /api/v1/extension/* builders.
-    const test_mihon_repo_pure = b.addTest(.{
+    const test_mihon_repo_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/mihon_repo_pure.zig"),
             .target = target,
@@ -2779,7 +2831,7 @@ fn buildSupported(b: *std.Build) void {
 
     // Subsonic/OpenSubsonic music engine — MD5 token auth + search/stream/cover
     // URL building + song JSON extraction (one engine covers Navidrome/Airsonic/…).
-    const test_music_subsonic_pure = b.addTest(.{
+    const test_music_subsonic_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/music_subsonic_pure.zig"),
             .target = target,
@@ -2788,7 +2840,7 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_music_subsonic_pure).step);
 
-    const test_music_youtube = b.addTest(.{ .root_module = b.createModule(.{
+    const test_music_youtube = addBoundTest(b, .{ .root_module = b.createModule(.{
         .root_source_file = b.path("src/services/music_youtube_pure.zig"),
         .target = target,
         .optimize = optimize,
@@ -2797,7 +2849,7 @@ fn buildSupported(b: *std.Build) void {
 
     // JioSaavn music source — public search URL + song JSON parse + cover upgrade
     // (playback delegated to mpv/yt-dlp via the perma_url).
-    const test_music_jiosaavn_pure = b.addTest(.{
+    const test_music_jiosaavn_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/music_jiosaavn_pure.zig"),
             .target = target,
@@ -2806,7 +2858,7 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_music_jiosaavn_pure).step);
 
-    const test_music_download_pure = b.addTest(.{
+    const test_music_download_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/music_download_pure.zig"),
             .target = target,
@@ -2818,7 +2870,7 @@ fn buildSupported(b: *std.Build) void {
     // Music discovery (ListenBrainz + MusicBrainz) — seed collection, name
     // normalisation/dedupe, similar-artist ranking, studio-album release-type
     // filtering, cache keys + TTL expiry, backoff, and the URL builders.
-    const test_music_discovery_pure = b.addTest(.{
+    const test_music_discovery_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/music_discovery_pure.zig"),
             .target = target,
@@ -2828,7 +2880,7 @@ fn buildSupported(b: *std.Build) void {
     test_music_discovery_pure.root_module.addImport("build_options", build_options_module);
     test_step.dependOn(&b.addRunArtifact(test_music_discovery_pure).step);
 
-    const test_iptv_playlist_pure = b.addTest(.{
+    const test_iptv_playlist_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/iptv_playlist_pure.zig"),
             .target = target,
@@ -2837,7 +2889,7 @@ fn buildSupported(b: *std.Build) void {
     });
     test_step.dependOn(&b.addRunArtifact(test_iptv_playlist_pure).step);
 
-    const test_library_pure = b.addTest(.{
+    const test_library_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/library_pure.zig"),
             .target = target,
@@ -2845,7 +2897,7 @@ fn buildSupported(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_library_pure).step);
-    const test_library_sync_pure = b.addTest(.{
+    const test_library_sync_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/library_sync_pure.zig"),
             .target = target,
@@ -2853,7 +2905,7 @@ fn buildSupported(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_library_sync_pure).step);
-    const test_profiles_pure = b.addTest(.{
+    const test_profiles_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/profiles_pure.zig"),
             .target = target,
@@ -2861,7 +2913,7 @@ fn buildSupported(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_profiles_pure).step);
-    const test_reliable_fetch_pure = b.addTest(.{
+    const test_reliable_fetch_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/reliable_fetch_pure.zig"),
             .target = target,
@@ -2869,11 +2921,11 @@ fn buildSupported(b: *std.Build) void {
         }),
     });
     test_step.dependOn(&b.addRunArtifact(test_reliable_fetch_pure).step);
-    const test_resolver_dedup_pure = b.addTest(.{
+    const test_resolver_dedup_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/services/resolver_dedup_pure.zig"), .target = target, .optimize = optimize }),
     });
     test_step.dependOn(&b.addRunArtifact(test_resolver_dedup_pure).step);
-    const test_resolver_lifecycle_pure = b.addTest(.{
+    const test_resolver_lifecycle_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/resolver_lifecycle_pure.zig"),
             .target = target,
@@ -2887,7 +2939,7 @@ fn buildSupported(b: *std.Build) void {
     // normal page with a "Cloudflare" footer badge is NOT flagged; a 503+cf-ray
     // or a "Just a moment…" body IS. scrape_fetch.zig routes needsBrowser() /
     // parseStatus() through this so the tested logic is the shipped logic.
-    const test_scrape_fetch_pure = b.addTest(.{
+    const test_scrape_fetch_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/scrape_fetch_pure.zig"),
             .target = target,
@@ -2901,7 +2953,7 @@ fn buildSupported(b: *std.Build) void {
     // readwn standalone list/detail/chapter parse + browse/search URL builders,
     // and the REUSE of manga_madara_pure / manga_themesia_pure for the shared
     // Madara-novel / lightnovelwp frameworks. novels.zig routes through this.
-    const test_novel_sources_pure = b.addTest(.{
+    const test_novel_sources_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/novel_sources_pure.zig"),
             .target = target,
@@ -2917,7 +2969,7 @@ fn buildSupported(b: *std.Build) void {
     // HiAnime getSources chain (sourceId + `_k` nonce scrape + URL build + JSON
     // parse). anime_extractors.zig routes every string/JSON decision through here
     // so the tested logic is the shipped logic.
-    const test_anime_extractors_pure = b.addTest(.{
+    const test_anime_extractors_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/anime_extractors_pure.zig"),
             .target = target,
@@ -2936,7 +2988,7 @@ fn buildSupported(b: *std.Build) void {
     // list, and the doo_player_ajax EMBED chain (#playeroptionsul data-post/nume/
     // type → admin-ajax POST body → {"embed_url"} JSON parse). anime.zig routes all
     // DooPlay parsing through here so the tested logic is the shipped logic.
-    const test_anime_dooplay_pure = b.addTest(.{
+    const test_anime_dooplay_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/anime_dooplay_pure.zig"),
             .target = target,
@@ -2950,7 +3002,7 @@ fn buildSupported(b: *std.Build) void {
     // Themesia DOM) + adds the .eplister episode list and the server-option EMBED
     // extraction (base64 <iframe> decode, first-iframe fallback). anime.zig routes
     // all AnimeStream parsing through here so the tested logic is the shipped logic.
-    const test_anime_animestream_pure = b.addTest(.{
+    const test_anime_animestream_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/anime_animestream_pure.zig"),
             .target = target,
@@ -2963,7 +3015,7 @@ fn buildSupported(b: *std.Build) void {
     // codec, key→filename hashing, staleness classification (fresh/stale/expired
     // boundaries + hard-max purge), and the size-cap eviction planner.
     // content_cache.zig routes every byte-level decision through this module.
-    const test_content_cache_pure = b.addTest(.{
+    const test_content_cache_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/core/content_cache_pure.zig"),
             .target = target,
@@ -2976,7 +3028,7 @@ fn buildSupported(b: *std.Build) void {
     // search URL, the static `universal` stream URL, api_key-in-query auth, and
     // the brace-matched "Items" parse (Jellyfin emits Name before Id, so a
     // marker split shifted every title by one row).
-    const test_music_jellyfin_pure = b.addTest(.{
+    const test_music_jellyfin_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/music_jellyfin_pure.zig"),
             .target = target,
@@ -2988,7 +3040,7 @@ fn buildSupported(b: *std.Build) void {
     // Music tab, source 3 — Plex AUDIO: /search?type=10, the Part.key stream URL
     // (never the Metadata `key`), thumb covers, X-Plex-Token placement, the
     // server-relative path guard, and plex.json credential reuse.
-    const test_music_plex_pure = b.addTest(.{
+    const test_music_plex_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/music_plex_pure.zig"),
             .target = target,
@@ -3002,7 +3054,7 @@ fn buildSupported(b: *std.Build) void {
     // MAX_TRACKERS cap, the 0.0.0.0 DNS-sinkhole reject, the baked-in offline
     // fallback and the daily-TTL refresh rule. Fixtures are the real upstream
     // files verbatim.
-    const test_trackers_pure = b.addTest(.{
+    const test_trackers_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/trackers_pure.zig"),
             .target = target,
@@ -3015,7 +3067,7 @@ fn buildSupported(b: *std.Build) void {
     // coarse float progress), the healthy-swarm no-op, min interval +
     // exponential backoff + attempt cap, give-up reported exactly once, and the
     // clock-went-backwards guard.
-    const test_torrent_stall_pure = b.addTest(.{
+    const test_torrent_stall_pure = addBoundTest(b, .{
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/services/torrent_stall_pure.zig"),
             .target = target,
@@ -3098,4 +3150,25 @@ fn addGhosttyVt(b: *std.Build, module: *std.Build.Module, target: std.Build.Reso
 fn addAgentAssets(b: *std.Build, module: *std.Build.Module) void {
     module.addAnonymousImport("skill_md", .{ .root_source_file = b.path("skills/opal-media/SKILL.md") });
     module.addAnonymousImport("agent_workspace_md", .{ .root_source_file = b.path("skills/opal-media/AGENT_WORKSPACE.md") });
+}
+
+/// Standalone suites share the compatibility helpers used by production.
+fn addBoundTest(b: *std.Build, options: std.Build.TestOptions) *std.Build.Step.Compile {
+    const test_compile = b.addTest(options);
+    attachCompatibility(test_compile.root_module);
+    if (!test_compile.root_module.import_table.contains("opal-windows-c")) {
+        if (windows_c_module) |module| test_compile.root_module.addImport("opal-windows-c", module);
+    }
+    return test_compile;
+}
+
+fn attachCompatibility(module: *std.Build.Module) void {
+    for (compatibility_names, compatibility_modules) |name, dependency| {
+        if (dependency) |dep| module.addImport(name, dep);
+    }
+}
+fn addBoundExecutable(b: *std.Build, options: std.Build.ExecutableOptions) *std.Build.Step.Compile {
+    const compile = b.addExecutable(options);
+    attachCompatibility(compile.root_module);
+    return compile;
 }

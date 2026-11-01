@@ -266,7 +266,7 @@ pub fn renderHeader() void {
             const hw_val = if (state.app.hwdec_enabled) "auto" else "no";
             for (state.app.players.items) |p| {
                 var hw_cmd: [64]u8 = undefined;
-                if (@import("../core/fmt_compat.zig").bufPrintZ(&hw_cmd, "set hwdec {s}", .{hw_val})) |cmd| {
+                if (@import("opal-fmt").bufPrintZ(&hw_cmd, "set hwdec {s}", .{hw_val})) |cmd| {
                     _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
                 } else |_| {}
             }

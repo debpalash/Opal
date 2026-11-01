@@ -6,7 +6,7 @@ const alloc = @import("../core/alloc.zig").allocator;
 pub const Draw = *const fn () anyerror!void;
 pub fn capture(width: u32, height: u32, name: []const u8, setup: ?Draw, draw: Draw, cleanup: ?*const fn () void) !void {
     if (!@import("builtin").is_test) @compileError("Native capture is test-only");
-    var backend = try dvui.backend.initWindow(.{ .io = io.io(), .allocator = alloc, .size = .{ .w = @floatFromInt(width), .h = @floatFromInt(height) }, .vsync = false, .title = "Opal isolated native layout fixture", .hidden = true });
+    var backend = try dvui.backend.initWindow(.{ .io = io.io(), .org = "debpalash", .app = "Opal-fixture", .persist_window_geometry = false, .size = .{ .w = @floatFromInt(width), .h = @floatFromInt(height) }, .vsync = false, .title = "Opal isolated native layout fixture", .hidden = true });
     defer backend.deinit();
     var window = try dvui.Window.init(@src(), alloc, backend.backend(), .{});
     defer window.deinit();
@@ -30,8 +30,23 @@ pub fn capture(width: u32, height: u32, name: []const u8, setup: ?Draw, draw: Dr
         // invalidated widgets on a later frame, leaving a fresh final-frame
         // texture with holes even though the actual window is complete.
         var picture = if (previous_picture) |prior| blk: {
-            const target = dvui.renderTarget(.{ .texture = prior.texture, .offset = rect.topLeft() });
-            break :blk dvui.Picture{ .r = prior.r, .texture = prior.texture, .target = target };
+            const current = dvui.currentWindow();
+            const commands = try current.arena().create(std.ArrayList(dvui.RenderCommand));
+            const after = try current.arena().create(std.ArrayList(dvui.RenderCommand));
+            commands.* = .empty;
+            after.* = .empty;
+            const result: dvui.Picture = .{
+                .r = prior.r,
+                .texture = prior.texture,
+                .prev_target = dvui.renderTarget(.{ .texture = prior.texture, .offset = rect.topLeft() }),
+                .prev_dr_cmds = current.defer_render_cmds,
+                .prev_dr_cmds_after = current.defer_render_cmds_after,
+                .render_cmds = commands,
+                .render_cmds_after = after,
+            };
+            current.defer_render_cmds = commands;
+            current.defer_render_cmds_after = after;
+            break :blk result;
         } else dvui.Picture.start(rect) orelse return error.CaptureUnavailable;
         var recording = true;
         var picture_alive = true;

@@ -1795,7 +1795,7 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
             const vol = std.fmt.parseFloat(f64, v_str) catch return;
             if (vol < 0 or vol > 150) return;
             var cmd_buf: [64]u8 = undefined;
-            const cmd = @import("../core/fmt_compat.zig").bufPrintZ(&cmd_buf, "set volume {d:.1}", .{vol}) catch return;
+            const cmd = @import("opal-fmt").bufPrintZ(&cmd_buf, "set volume {d:.1}", .{vol}) catch return;
             _ = c.mpv.mpv_command_string(ap.mpv_ctx, cmd.ptr);
         }
         sendJsonUnlockPlayers(stream, "{\"ok\":true,\"action\":\"volume\"}", &players_locked);
@@ -1809,7 +1809,7 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
             if (dur > 0) {
                 const target = dur * @as(f64, @floatFromInt(pct)) / 100.0;
                 var cmd_buf: [64]u8 = undefined;
-                const cmd = @import("../core/fmt_compat.zig").bufPrintZ(&cmd_buf, "seek {d:.1} absolute", .{target}) catch return;
+                const cmd = @import("opal-fmt").bufPrintZ(&cmd_buf, "seek {d:.1} absolute", .{target}) catch return;
                 _ = c.mpv.mpv_command_string(ap.mpv_ctx, cmd.ptr);
             }
         }
@@ -1839,7 +1839,7 @@ fn handleApi(stream: std.Io.net.Stream, api_path: []const u8, query: []const u8,
                 @import("search.zig").loadTorrentToPlayer(decoded);
             } else {
                 var url_buf: [2049]u8 = undefined;
-                const url_z = @import("../core/fmt_compat.zig").bufPrintZ(&url_buf, "{s}", .{decoded}) catch return;
+                const url_z = @import("opal-fmt").bufPrintZ(&url_buf, "{s}", .{decoded}) catch return;
                 ap.load_file(url_z.ptr);
             }
             // This ran on the connection thread; the UI loop blocks when idle, so
@@ -2741,7 +2741,7 @@ fn apiDownloads(stream: std.Io.net.Stream, query: []const u8) void {
     if (std.mem.indexOf(u8, subdir, "..") != null) return;
     var full_path_buf: [1024]u8 = undefined;
     const browse_path = if (subdir.len > 0)
-        @import("../core/fmt_compat.zig").bufPrintZ(&full_path_buf, "{s}/{s}", .{ dl_path, subdir }) catch dl_path
+        @import("opal-fmt").bufPrintZ(&full_path_buf, "{s}/{s}", .{ dl_path, subdir }) catch dl_path
     else
         dl_path;
 
@@ -2875,7 +2875,7 @@ fn apiDownloadsPlay(stream: std.Io.net.Stream, query: []const u8) void {
             return;
         }
         var full_buf: [1024]u8 = undefined;
-        if (@import("../core/fmt_compat.zig").bufPrintZ(&full_buf, "{s}/{s}", .{ dl_path, file_name })) |full_path| {
+        if (@import("opal-fmt").bufPrintZ(&full_buf, "{s}/{s}", .{ dl_path, file_name })) |full_path| {
             // Hold players_mutex across the lookup + load_file: the UI thread
             // frees players at frame top (main.zig), so without this the
             // captured `plyr` could dangle mid-mpv-call → use-after-free.
@@ -3472,7 +3472,7 @@ fn settingApply(k: sap.Key, raw: []const u8) bool {
                 const hw: []const u8 = if (v) "auto" else "no";
                 for (state.app.players.items) |p| {
                     var cmd: [64]u8 = undefined;
-                    if (@import("../core/fmt_compat.zig").bufPrintZ(&cmd, "set hwdec {s}", .{hw})) |z| {
+                    if (@import("opal-fmt").bufPrintZ(&cmd, "set hwdec {s}", .{hw})) |z| {
                         _ = c.mpv.mpv_command_string(p.mpv_ctx, z.ptr);
                     } else |_| {}
                 }
@@ -3527,7 +3527,7 @@ fn settingApply(k: sap.Key, raw: []const u8) bool {
                 // shows, so "Rosé" round-trips and an unknown name is rejected
                 // rather than silently leaving the theme unchanged.
                 const th = @import("../ui/theme.zig");
-                inline for (comptime @import("../core/enum_compat.zig").fields(th.ThemePreset)) |f| {
+                inline for (comptime @import("opal-reflect").fields(th.ThemePreset)) |f| {
                     const preset: th.ThemePreset = @enumFromInt(f.value);
                     if (std.mem.eql(u8, th.presetName(preset), t)) {
                         th.setPreset(preset);
@@ -4451,24 +4451,24 @@ fn writePlayerTracks(w: *std.Io.Writer, ap: *player.MediaPlayer, wanted: []const
     var emitted: usize = 0;
     for (0..limit) |i| {
         var qbuf: [64]u8 = undefined;
-        const type_q = @import("../core/fmt_compat.zig").bufPrintZ(&qbuf, "track-list/{d}/type", .{i}) catch continue;
+        const type_q = @import("opal-fmt").bufPrintZ(&qbuf, "track-list/{d}/type", .{i}) catch continue;
         const type_c = c.mpv.mpv_get_property_string(ap.mpv_ctx, type_q.ptr);
         if (type_c == null) continue;
         const matches = std.mem.eql(u8, std.mem.span(type_c), wanted);
         c.mpv.mpv_free(@ptrCast(type_c));
         if (!matches) continue;
 
-        const id_q = @import("../core/fmt_compat.zig").bufPrintZ(&qbuf, "track-list/{d}/id", .{i}) catch continue;
+        const id_q = @import("opal-fmt").bufPrintZ(&qbuf, "track-list/{d}/id", .{i}) catch continue;
         var id: i64 = 0;
         _ = c.mpv.mpv_get_property(ap.mpv_ctx, id_q.ptr, c.mpv.MPV_FORMAT_INT64, &id);
-        const selected_q = @import("../core/fmt_compat.zig").bufPrintZ(&qbuf, "track-list/{d}/selected", .{i}) catch continue;
+        const selected_q = @import("opal-fmt").bufPrintZ(&qbuf, "track-list/{d}/selected", .{i}) catch continue;
         var selected: c_int = 0;
         _ = c.mpv.mpv_get_property(ap.mpv_ctx, selected_q.ptr, c.mpv.MPV_FORMAT_FLAG, &selected);
 
-        const title_q = @import("../core/fmt_compat.zig").bufPrintZ(&qbuf, "track-list/{d}/title", .{i}) catch continue;
+        const title_q = @import("opal-fmt").bufPrintZ(&qbuf, "track-list/{d}/title", .{i}) catch continue;
         const title_c = c.mpv.mpv_get_property_string(ap.mpv_ctx, title_q.ptr);
         const title = if (title_c != null) std.mem.span(title_c) else "";
-        const lang_q = @import("../core/fmt_compat.zig").bufPrintZ(&qbuf, "track-list/{d}/lang", .{i}) catch {
+        const lang_q = @import("opal-fmt").bufPrintZ(&qbuf, "track-list/{d}/lang", .{i}) catch {
             if (title_c != null) c.mpv.mpv_free(@ptrCast(title_c));
             continue;
         };
@@ -4498,10 +4498,10 @@ fn writePlayerChapters(w: *std.Io.Writer, ap: *player.MediaPlayer, count: i64, c
     for (0..limit) |i| {
         if (i > 0) w.writeAll(",") catch break;
         var qbuf: [64]u8 = undefined;
-        const time_q = @import("../core/fmt_compat.zig").bufPrintZ(&qbuf, "chapter-list/{d}/time", .{i}) catch continue;
+        const time_q = @import("opal-fmt").bufPrintZ(&qbuf, "chapter-list/{d}/time", .{i}) catch continue;
         var at: f64 = 0;
         _ = c.mpv.mpv_get_property(ap.mpv_ctx, time_q.ptr, c.mpv.MPV_FORMAT_DOUBLE, &at);
-        const title_q = @import("../core/fmt_compat.zig").bufPrintZ(&qbuf, "chapter-list/{d}/title", .{i}) catch continue;
+        const title_q = @import("opal-fmt").bufPrintZ(&qbuf, "chapter-list/{d}/title", .{i}) catch continue;
         const title_c = c.mpv.mpv_get_property_string(ap.mpv_ctx, title_q.ptr);
         w.print("{{\"id\":{d},\"time\":{d:.3},\"current\":{s},\"title\":\"", .{
             i,
@@ -4687,7 +4687,7 @@ fn setTrack(ap: *player.MediaPlayer, name: [*:0]const u8, selection: player_api.
         .off => _ = c.mpv.mpv_set_property_string(ap.mpv_ctx, name, "no"),
         .id => |id| {
             var buf: [32]u8 = undefined;
-            const value = @import("../core/fmt_compat.zig").bufPrintZ(&buf, "{d}", .{id}) catch return;
+            const value = @import("opal-fmt").bufPrintZ(&buf, "{d}", .{id}) catch return;
             _ = c.mpv.mpv_set_property_string(ap.mpv_ctx, name, value.ptr);
         },
     }
@@ -4838,7 +4838,7 @@ fn apiPlayerAction(stream: std.Io.net.Stream, ap: *player.MediaPlayer, query: []
         },
         .audio_device => |v| {
             var zbuf: [129]u8 = undefined;
-            const z = @import("../core/fmt_compat.zig").bufPrintZ(&zbuf, "{s}", .{v}) catch return;
+            const z = @import("opal-fmt").bufPrintZ(&zbuf, "{s}", .{v}) catch return;
             for (state.app.players.items) |p| _ = c.mpv.mpv_set_property_string(p.mpv_ctx, "audio-device", z.ptr);
             @memset(&state.app.audio_device_buf, 0);
             @memcpy(state.app.audio_device_buf[0..v.len], v);

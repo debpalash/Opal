@@ -217,7 +217,7 @@ def test_player_dropups():
             ".min_size_content = .{ .w = 20, .h = 20 }"
         ) >= 7,
         "transport hover feedback": _between(ft, "var ctrl_row", "// Secondary controls and transfer actions").count(
-            ".color_fill_hover = playerControlHover()"
+            '.color_fill_hover = @import("color_compat.zig").wrap(playerControlHover())'
         ) >= 7,
         "bright-video contrast": (
             "playerControlFill(false)" in ft

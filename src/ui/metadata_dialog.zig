@@ -120,7 +120,7 @@ pub fn renderMetadataDialog() void {
         _ = dvui.checkbox(@src(), selected, "", .{ .color_fill = @import("color_compat.zig").wrap(if (selected.*) theme.colors.accent else theme.colors.bg_surface), .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle), .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent) });
 
         var f_buf: [300]u8 = undefined;
-        if (@import("../core/fmt_compat.zig").bufPrintZ(&f_buf, "{s} ({d:.1} MB)", .{ safe_name, sz_mb })) |n| {
+        if (@import("opal-fmt").bufPrintZ(&f_buf, "{s} ({d:.1} MB)", .{ safe_name, sz_mb })) |n| {
             var text = dvui.textLayout(@src(), .{}, .{ .expand = .horizontal, .background = false });
             text.addText(n, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary), .font = theme.mediaTitleFont(safe_name, dvui.themeGet().font_body) });
             text.deinit();

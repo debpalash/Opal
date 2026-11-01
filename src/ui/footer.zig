@@ -223,7 +223,7 @@ pub fn aspectDropdownMenu(ctx: *c.mpv.mpv_handle, id_extra: usize) void {
     if (std.mem.eql(u8, aspect_val, "21:9") or std.mem.startsWith(u8, aspect_val, "2.33")) current_ar = "21:9";
 
     var btn_lbl: [32]u8 = undefined;
-    const label = @import("../core/fmt_compat.zig").bufPrintZ(&btn_lbl, "{s}", .{current_ar}) catch "AR";
+    const label = @import("opal-fmt").bufPrintZ(&btn_lbl, "{s}", .{current_ar}) catch "AR";
 
     if (dvui.menuItemLabel(@src(), label, .{ .submenu = true }, .{ .id_extra = id_extra, .gravity_y = 0.5, .color_fill = @import("color_compat.zig").wrap(theme.transparent), .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary) })) |r| {
         var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
@@ -237,7 +237,7 @@ pub fn aspectDropdownMenu(ctx: *c.mpv.mpv_handle, id_extra: usize) void {
         for (modes, 0..) |mode, k| {
             if (dvui.menuItemLabel(@src(), mode_labels[k], .{}, .{ .id_extra = k, .expand = .horizontal, .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary) })) |_| {
                 var set_cmd_buf: [64]u8 = undefined;
-                if (@import("../core/fmt_compat.zig").bufPrintZ(&set_cmd_buf, "set video-aspect-override \"{s}\"", .{mode})) |cmd| {
+                if (@import("opal-fmt").bufPrintZ(&set_cmd_buf, "set video-aspect-override \"{s}\"", .{mode})) |cmd| {
                     _ = c.mpv.mpv_command_string(ctx, cmd.ptr);
                 } else |_| {}
             }
@@ -254,26 +254,26 @@ pub fn trackDropdownMenu(ctx: *c.mpv.mpv_handle, track_type: []const u8) void {
 
     for (0..@as(usize, @intCast(@max(@as(i64, 0), count)))) |i| {
         var qtype_buf: [64]u8 = undefined;
-        const type_query = @import("../core/fmt_compat.zig").bufPrintZ(&qtype_buf, "track-list/{d}/type", .{i}) catch continue;
+        const type_query = @import("opal-fmt").bufPrintZ(&qtype_buf, "track-list/{d}/type", .{i}) catch continue;
         const t_type_c = c.mpv.mpv_get_property_string(ctx, type_query.ptr);
         if (t_type_c != null) {
             defer c.mpv.mpv_free(@ptrCast(t_type_c));
             if (std.mem.eql(u8, std.mem.span(t_type_c), track_type)) {
                 var qsel_buf: [64]u8 = undefined;
-                const sel_query = @import("../core/fmt_compat.zig").bufPrintZ(&qsel_buf, "track-list/{d}/selected", .{i}) catch continue;
+                const sel_query = @import("opal-fmt").bufPrintZ(&qsel_buf, "track-list/{d}/selected", .{i}) catch continue;
                 const sel_c = c.mpv.mpv_get_property_string(ctx, sel_query.ptr);
                 if (sel_c != null) {
                     defer c.mpv.mpv_free(@ptrCast(sel_c));
                     if (std.mem.eql(u8, std.mem.span(sel_c), "yes")) {
                         var qlang_buf: [64]u8 = undefined;
-                        const lang_q = @import("../core/fmt_compat.zig").bufPrintZ(&qlang_buf, "track-list/{d}/lang", .{i}) catch continue;
+                        const lang_q = @import("opal-fmt").bufPrintZ(&qlang_buf, "track-list/{d}/lang", .{i}) catch continue;
                         const lang_c = c.mpv.mpv_get_property_string(ctx, lang_q.ptr);
                         if (lang_c != null) {
                             defer c.mpv.mpv_free(@ptrCast(lang_c));
                             active_title = std.fmt.bufPrint(&active_buf, "{s}", .{std.mem.span(lang_c)}) catch "Err";
                         } else {
                             var qtitle_buf: [64]u8 = undefined;
-                            const title_q = @import("../core/fmt_compat.zig").bufPrintZ(&qtitle_buf, "track-list/{d}/title", .{i}) catch continue;
+                            const title_q = @import("opal-fmt").bufPrintZ(&qtitle_buf, "track-list/{d}/title", .{i}) catch continue;
                             const title_c = c.mpv.mpv_get_property_string(ctx, title_q.ptr);
                             if (title_c != null) {
                                 defer c.mpv.mpv_free(@ptrCast(title_c));
@@ -288,7 +288,7 @@ pub fn trackDropdownMenu(ctx: *c.mpv.mpv_handle, track_type: []const u8) void {
 
     var btn_lbl: [80]u8 = undefined;
     const is_aud = std.mem.eql(u8, track_type, "audio");
-    const label = @import("../core/fmt_compat.zig").bufPrintZ(&btn_lbl, "{s}", .{active_title}) catch "Trax";
+    const label = @import("opal-fmt").bufPrintZ(&btn_lbl, "{s}", .{active_title}) catch "Trax";
     const kind_id: usize = if (is_aud) 1 else 2;
 
     // mpv track lang/title is untrusted metadata — validate before dvui.
@@ -300,21 +300,21 @@ pub fn trackDropdownMenu(ctx: *c.mpv.mpv_handle, track_type: []const u8) void {
 
         for (0..@as(usize, @intCast(@max(@as(i64, 0), count)))) |i| {
             var qtype_buf: [64]u8 = undefined;
-            const type_query = @import("../core/fmt_compat.zig").bufPrintZ(&qtype_buf, "track-list/{d}/type", .{i}) catch continue;
+            const type_query = @import("opal-fmt").bufPrintZ(&qtype_buf, "track-list/{d}/type", .{i}) catch continue;
             const t_type_c = c.mpv.mpv_get_property_string(ctx, type_query.ptr);
             if (t_type_c != null) {
                 defer c.mpv.mpv_free(@ptrCast(t_type_c));
                 if (std.mem.eql(u8, std.mem.span(t_type_c), track_type)) {
                     var t_id: i64 = 0;
                     var qid_buf: [64]u8 = undefined;
-                    const id_query = @import("../core/fmt_compat.zig").bufPrintZ(&qid_buf, "track-list/{d}/id", .{i}) catch continue;
+                    const id_query = @import("opal-fmt").bufPrintZ(&qid_buf, "track-list/{d}/id", .{i}) catch continue;
                     _ = c.mpv.mpv_get_property(ctx, id_query.ptr, c.mpv.MPV_FORMAT_INT64, &t_id);
 
                     var row_name: []const u8 = "Unknown Track";
                     var name_buf: [64]u8 = undefined;
 
                     var qlang_buf: [64]u8 = undefined;
-                    const lang_q = @import("../core/fmt_compat.zig").bufPrintZ(&qlang_buf, "track-list/{d}/lang", .{i}) catch continue;
+                    const lang_q = @import("opal-fmt").bufPrintZ(&qlang_buf, "track-list/{d}/lang", .{i}) catch continue;
                     const lang_c = c.mpv.mpv_get_property_string(ctx, lang_q.ptr);
 
                     if (lang_c != null) {
@@ -322,7 +322,7 @@ pub fn trackDropdownMenu(ctx: *c.mpv.mpv_handle, track_type: []const u8) void {
                         row_name = std.fmt.bufPrint(&name_buf, "{s}", .{std.mem.span(lang_c)}) catch "Err";
                     } else {
                         var qtitle_buf: [64]u8 = undefined;
-                        const title_q = @import("../core/fmt_compat.zig").bufPrintZ(&qtitle_buf, "track-list/{d}/title", .{i}) catch continue;
+                        const title_q = @import("opal-fmt").bufPrintZ(&qtitle_buf, "track-list/{d}/title", .{i}) catch continue;
                         const title_c = c.mpv.mpv_get_property_string(ctx, title_q.ptr);
                         if (title_c != null) {
                             defer c.mpv.mpv_free(@ptrCast(title_c));
@@ -335,7 +335,7 @@ pub fn trackDropdownMenu(ctx: *c.mpv.mpv_handle, track_type: []const u8) void {
                     if (dvui.menuItemLabel(@src(), @import("../core/text.zig").safeUtf8(row_name), .{}, .{ .id_extra = i, .expand = .horizontal, .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary) })) |_| {
                         var set_cmd_buf: [64]u8 = undefined;
                         const prop = if (is_aud) "aid" else "sid";
-                        if (@import("../core/fmt_compat.zig").bufPrintZ(&set_cmd_buf, "set {s} {d}", .{ prop, t_id })) |cmd| {
+                        if (@import("opal-fmt").bufPrintZ(&set_cmd_buf, "set {s} {d}", .{ prop, t_id })) |cmd| {
                             _ = c.mpv.mpv_command_string(ctx, cmd.ptr);
                         } else |_| {}
                         // Picking a track cancels a deliberate "no audio" intent.
@@ -371,7 +371,7 @@ pub fn playlistDropdownMenu(p: *player.MediaPlayer) void {
             const size_mb = @as(f64, @floatFromInt(size)) / 1024.0 / 1024.0;
 
             var lbl_buf: [300]u8 = undefined;
-            const label = @import("../core/fmt_compat.zig").bufPrintZ(&lbl_buf, "{s} ({d:.1} MB)", .{ std.mem.sliceTo(&name_buf, 0), size_mb }) catch "File";
+            const label = @import("opal-fmt").bufPrintZ(&lbl_buf, "{s} ({d:.1} MB)", .{ std.mem.sliceTo(&name_buf, 0), size_mb }) catch "File";
 
             if (dvui.menuItemLabel(@src(), label, .{}, .{
                 .id_extra = i,
@@ -407,7 +407,7 @@ pub fn playlistDropdownMenu(p: *player.MediaPlayer) void {
 pub fn subLanguageDropdown() void {
     const current_lang = state.app.sub_lang_buf[0..state.app.sub_lang_len];
     var btn_lbl: [16]u8 = undefined;
-    const label = @import("../core/fmt_compat.zig").bufPrintZ(&btn_lbl, "{s}", .{current_lang}) catch "lang";
+    const label = @import("opal-fmt").bufPrintZ(&btn_lbl, "{s}", .{current_lang}) catch "lang";
 
     if (dvui.menuItemLabel(@src(), label, .{ .submenu = true }, .{ .id_extra = 300, .gravity_y = 0.5, .color_fill = @import("color_compat.zig").wrap(theme.transparent), .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary) })) |r| {
         var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
@@ -1078,7 +1078,7 @@ fn renderScrubber(
                 var ci: i64 = 0;
                 while (ci < max_pips) : (ci += 1) {
                     var q_buf: [64]u8 = undefined;
-                    const q = @import("../core/fmt_compat.zig").bufPrintZ(&q_buf, "chapter-list/{d}/time", .{ci}) catch continue;
+                    const q = @import("opal-fmt").bufPrintZ(&q_buf, "chapter-list/{d}/time", .{ci}) catch continue;
                     var t: f64 = 0;
                     _ = c.mpv.mpv_get_property(active_p.mpv_ctx, q.ptr, c.mpv.MPV_FORMAT_DOUBLE, &t);
                     if (std.math.isNan(t) or t <= 0 or t >= duration) continue;
@@ -1135,7 +1135,7 @@ fn renderScrubber(
         // the playhead) is never swallowed by the rate limit.
         if (footer_pure.shouldSeek(now_ms, S.last_seek_ms, seek_pct, S.last_seek_pct)) {
             var buf: [64]u8 = undefined;
-            if (@import("../core/fmt_compat.zig").bufPrintZ(&buf, "seek {d:.2} absolute-percent+keyframes", .{seek_pct})) |seek_cmd| {
+            if (@import("opal-fmt").bufPrintZ(&buf, "seek {d:.2} absolute-percent+keyframes", .{seek_pct})) |seek_cmd| {
                 _ = c.mpv.mpv_command_string(active_p.mpv_ctx, seek_cmd.ptr);
             } else |_| {}
 
@@ -1215,20 +1215,20 @@ pub fn applyUniversalLanguage(ctx: ?*c.mpv.mpv_handle, lang: []const u8) void {
     var i: i64 = 0;
     while (i < count) : (i += 1) {
         var tq: [64]u8 = undefined;
-        const tqz = @import("../core/fmt_compat.zig").bufPrintZ(&tq, "track-list/{d}/type", .{i}) catch continue;
+        const tqz = @import("opal-fmt").bufPrintZ(&tq, "track-list/{d}/type", .{i}) catch continue;
         const tc = c.mpv.mpv_get_property_string(ctx, tqz.ptr) orelse continue;
         const is_audio = std.mem.eql(u8, std.mem.span(tc), "audio");
         const is_sub = std.mem.eql(u8, std.mem.span(tc), "sub");
         c.mpv.mpv_free(@ptrCast(tc));
         if (!is_audio and !is_sub) continue;
         var lq: [64]u8 = undefined;
-        const lqz = @import("../core/fmt_compat.zig").bufPrintZ(&lq, "track-list/{d}/lang", .{i}) catch continue;
+        const lqz = @import("opal-fmt").bufPrintZ(&lq, "track-list/{d}/lang", .{i}) catch continue;
         const lc = c.mpv.mpv_get_property_string(ctx, lqz.ptr) orelse continue;
         const match = langMatches(std.mem.span(lc), lang);
         c.mpv.mpv_free(@ptrCast(lc));
         if (!match) continue;
         var idq: [64]u8 = undefined;
-        const idqz = @import("../core/fmt_compat.zig").bufPrintZ(&idq, "track-list/{d}/id", .{i}) catch continue;
+        const idqz = @import("opal-fmt").bufPrintZ(&idq, "track-list/{d}/id", .{i}) catch continue;
         var t_id: i64 = 0;
         _ = c.mpv.mpv_get_property(ctx, idqz.ptr, c.mpv.MPV_FORMAT_INT64, &t_id);
         if (is_audio and best_aid < 0) best_aid = t_id;
@@ -1236,12 +1236,12 @@ pub fn applyUniversalLanguage(ctx: ?*c.mpv.mpv_handle, lang: []const u8) void {
     }
     var cmd: [64]u8 = undefined;
     if (best_aid >= 0) {
-        if (@import("../core/fmt_compat.zig").bufPrintZ(&cmd, "set aid {d}", .{best_aid})) |s| {
+        if (@import("opal-fmt").bufPrintZ(&cmd, "set aid {d}", .{best_aid})) |s| {
             _ = c.mpv.mpv_command_string(ctx, s.ptr);
         } else |_| {}
     }
     if (best_sid >= 0) {
-        if (@import("../core/fmt_compat.zig").bufPrintZ(&cmd, "set sid {d}", .{best_sid})) |s| {
+        if (@import("opal-fmt").bufPrintZ(&cmd, "set sid {d}", .{best_sid})) |s| {
             _ = c.mpv.mpv_command_string(ctx, s.ptr);
         } else |_| {}
         _ = c.mpv.mpv_command_string(ctx, "set sub-visibility yes");
@@ -1394,7 +1394,7 @@ fn currentTrackChipText(
         var i: i64 = 0;
         scan: while (i < count) : (i += 1) {
             var q_buf: [64]u8 = undefined;
-            const tq = @import("../core/fmt_compat.zig").bufPrintZ(&q_buf, "track-list/{d}/type", .{i}) catch continue;
+            const tq = @import("opal-fmt").bufPrintZ(&q_buf, "track-list/{d}/type", .{i}) catch continue;
             const tc = c.mpv.mpv_get_property_string(ctx, tq.ptr);
             if (tc == null) continue;
             const matches = std.mem.eql(u8, std.mem.span(tc), track_type);
@@ -1402,7 +1402,7 @@ fn currentTrackChipText(
             if (!matches) continue;
 
             var sq_buf: [64]u8 = undefined;
-            const sq = @import("../core/fmt_compat.zig").bufPrintZ(&sq_buf, "track-list/{d}/selected", .{i}) catch continue;
+            const sq = @import("opal-fmt").bufPrintZ(&sq_buf, "track-list/{d}/selected", .{i}) catch continue;
             const sc = c.mpv.mpv_get_property_string(ctx, sq.ptr);
             if (sc == null) continue;
             const selected_yes = std.mem.eql(u8, std.mem.span(sc), "yes");
@@ -1410,7 +1410,7 @@ fn currentTrackChipText(
             if (!selected_yes) continue;
 
             var lq_buf: [64]u8 = undefined;
-            const lq = @import("../core/fmt_compat.zig").bufPrintZ(&lq_buf, "track-list/{d}/lang", .{i}) catch continue;
+            const lq = @import("opal-fmt").bufPrintZ(&lq_buf, "track-list/{d}/lang", .{i}) catch continue;
             const lc = c.mpv.mpv_get_property_string(ctx, lq.ptr);
             if (lc != null) {
                 const lang_span = std.mem.span(lc);
@@ -2008,7 +2008,7 @@ pub fn renderLiquidGlassOverlay() void {
             // Playlist position / Speed / Loop badges.
             if (has_playlist) {
                 var pl_buf: [16]u8 = undefined;
-                if (@import("../core/fmt_compat.zig").bufPrintZ(&pl_buf, " \xC2\xB7 {d}/{d}", .{ playback.playlist_pos + 1, playback.playlist_count })) |pl_str| {
+                if (@import("opal-fmt").bufPrintZ(&pl_buf, " \xC2\xB7 {d}/{d}", .{ playback.playlist_pos + 1, playback.playlist_count })) |pl_str| {
                     _ = dvui.label(@src(), "{s}", .{pl_str}, .{
                         .color_text = @import("color_compat.zig").wrap(player_text_muted),
                         .gravity_y = 0.5,
@@ -2017,7 +2017,7 @@ pub fn renderLiquidGlassOverlay() void {
             }
             if (@abs(playback.speed - 1.0) > 0.01) {
                 var spd_buf: [16]u8 = undefined;
-                if (@import("../core/fmt_compat.zig").bufPrintZ(&spd_buf, " \xC2\xB7 {d:.1}\xC3\x97", .{playback.speed})) |sp| {
+                if (@import("opal-fmt").bufPrintZ(&spd_buf, " \xC2\xB7 {d:.1}\xC3\x97", .{playback.speed})) |sp| {
                     _ = dvui.label(@src(), "{s}", .{sp}, .{
                         .color_text = @import("color_compat.zig").wrap(player_text_muted),
                         .gravity_y = 0.5,
@@ -2108,7 +2108,7 @@ pub fn renderLiquidGlassOverlay() void {
                 .background = true,
             })) {
                 var set_vol_cmd: [64]u8 = undefined;
-                if (@import("../core/fmt_compat.zig").bufPrintZ(&set_vol_cmd, "set volume {d}", .{footer_pure.volumePercent(@as(f64, vol_val) * 100.0)})) |cmd| {
+                if (@import("opal-fmt").bufPrintZ(&set_vol_cmd, "set volume {d}", .{footer_pure.volumePercent(@as(f64, vol_val) * 100.0)})) |cmd| {
                     _ = c.mpv.mpv_command_string(active_p.mpv_ctx, cmd.ptr);
                 } else |_| {}
             }
@@ -2381,7 +2381,7 @@ pub fn renderLiquidGlassOverlay() void {
             if (@import("builtin").is_test) media_layout_for_test.torrent[0] = info_wd.borderRectScale().r;
 
             var stat_buf: [80]u8 = undefined;
-            if (@import("../core/fmt_compat.zig").bufPrintZ(&stat_buf, "{d:.1}% \xC2\xB7 {d:.1} MB/s \xC2\xB7 {d} seeds", .{ pct * 100.0, rate_mb, seeds })) |st| {
+            if (@import("opal-fmt").bufPrintZ(&stat_buf, "{d:.1}% \xC2\xB7 {d:.1} MB/s \xC2\xB7 {d} seeds", .{ pct * 100.0, rate_mb, seeds })) |st| {
                 _ = dvui.label(@src(), "{s}", .{st}, .{
                     .data_out = &info_wd,
                     .color_text = @import("color_compat.zig").wrap(player_text_muted),
@@ -2399,7 +2399,7 @@ pub fn renderLiquidGlassOverlay() void {
                 const lim_label = if (limit == 0)
                     "Download limit: Unlimited"
                 else blk: {
-                    break :blk @import("../core/fmt_compat.zig").bufPrintZ(&lim_buf, "Download limit: {d} MB/s", .{@divTrunc(limit, 1024 * 1024)}) catch "Download limit";
+                    break :blk @import("opal-fmt").bufPrintZ(&lim_buf, "Download limit: {d} MB/s", .{@divTrunc(limit, 1024 * 1024)}) catch "Download limit";
                 };
                 if (dvui.button(@src(), lim_label, .{}, .{
                     .id_extra = 200,
@@ -2766,7 +2766,7 @@ fn renderNowPlayingBar(p: *player.MediaPlayer) void {
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         })) {
             var vc: [64]u8 = undefined;
-            if (@import("../core/fmt_compat.zig").bufPrintZ(&vc, "set volume {d}", .{@as(i32, @intFromFloat(vol_val * 100.0))})) |cmd| {
+            if (@import("opal-fmt").bufPrintZ(&vc, "set volume {d}", .{@as(i32, @intFromFloat(vol_val * 100.0))})) |cmd| {
                 _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
             } else |_| {}
         }
@@ -2921,7 +2921,7 @@ fn renderTorrentActivityStrip() void {
         .padding = dvui.Rect.all(2),
     });
     var mb_str: [32]u8 = undefined;
-    if (@import("../core/fmt_compat.zig").bufPrintZ(&mb_str, "{d:.2} MB/s", .{mb_s})) |msg| {
+    if (@import("opal-fmt").bufPrintZ(&mb_str, "{d:.2} MB/s", .{mb_s})) |msg| {
         _ = dvui.label(@src(), "{s}", .{msg}, .{
             .color_text = @import("color_compat.zig").wrap(rate_color),
             .gravity_y = 0.5,

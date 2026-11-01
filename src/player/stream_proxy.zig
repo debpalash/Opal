@@ -209,7 +209,7 @@ pub fn startProxy(torrent_id: i32, file_idx: i32) ?Handle {
     streams_mutex.unlock();
 
     var msg_buf: [96]u8 = undefined;
-    const msg = @import("../core/fmt_compat.zig").bufPrintZ(&msg_buf, "Stream proxy #{d} on :{d}", .{ handle.id, handle.port }) catch "Stream proxy started";
+    const msg = @import("opal-fmt").bufPrintZ(&msg_buf, "Stream proxy #{d} on :{d}", .{ handle.id, handle.port }) catch "Stream proxy started";
     logs.pushLog("info", "proxy", msg, false);
     return handle;
 }

@@ -71,6 +71,19 @@ def test_zig_build():
         return "fail", f"Build timed out (>{BUILD_TIMEOUT}s)"
 
 
+@test("Native build configuration refreshes environment and filesystem probes", "Build")
+def test_zig17_configure_cache():
+    build = _src("build.zig")
+    configure = _between(build, "fn buildSupported(", "const target =")
+    if "b.graph.poisonCache();" not in configure:
+        return "fail", "Zig 0.17 configuration must refresh prefixes, .env and native library probes"
+    sqlite = _src("src/core/sqlite_bindings.h")
+    terminal = _src("src/core/terminal_bindings.h")
+    if "sqlite3.h" not in sqlite or "ghostty/vt.h" not in terminal:
+        return "fail", "standalone SQLite and terminal suites need their own generated headers"
+    return "pass", "configuration refreshed; unit bindings avoid desktop dependencies"
+
+
 @test("WebP prefix auto-detects Homebrew without OPAL_WEBP_PREFIX", "Build")
 def test_webp_prefix_homebrew_fallback():
     # A stock macOS dev box (`brew install webp`, no ~/.local/opal-webp, no
@@ -108,7 +121,7 @@ def test_webp_prefix_homebrew_fallback():
     except subprocess.TimeoutExpired:
         return "fail", f"build timed out (>{BUILD_TIMEOUT}s)"
     if pos.returncode != 0:
-        return "fail", pos.stderr[-600:]
+        return "fail", "\n".join(line for line in pos.stderr.splitlines() if "error:" in line)[:1200]
     return "pass", f"built with no env var and no ~/.local/opal-webp via {brew[0]}"
 
 
@@ -286,7 +299,7 @@ def test_zig_unit():
     # Surface the first real error line.
     for line in (r.stderr + r.stdout).splitlines():
         if "error:" in line:
-            return "fail", line.strip()[:80]
+            return "fail", line.strip()[:500]
     return "fail", f"exit {r.returncode}"
 
 
@@ -1423,7 +1436,7 @@ def test_site_compare_and_seo():
 def test_native_catalog_tv():
     try:
         result = subprocess.run(
-            ["zig", "build", "test-browse", "test-tv-detail", "test-anime", "-Doptimize=ReleaseFast"],
+            ["zig", "build", "test-browse", "test-tv-detail", "test-anime", "-Doptimize=fast"],
             cwd=PROJECT_DIR, capture_output=True, text=True, timeout=300,
         )
         if result.returncode:
@@ -1551,7 +1564,7 @@ def test_linux_compat_manifest_tree():
 def test_linux_compat_cached_sdk():
     workflow = _src(".github/workflows/linux-compat.yml")
     docker = _src("packaging/linux-compat/Dockerfile")
-    if workflow.count("build-contexts: cached_zig=${{ steps.sdk.outputs.path }}") != 2 or "FROM ${OPAL_ZIG_SOURCE} AS zig-toolchain" not in docker or 'zig version)" = 0.16.0' not in docker or "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00" not in docker:
+    if workflow.count("build-contexts: cached_zig=${{ steps.sdk.outputs.path }}") != 2 or "FROM ${OPAL_ZIG_SOURCE} AS zig-toolchain" not in docker or 'zig version)" = 0.17.0' not in docker or "1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026" not in docker:
         return "fail", "cached SDK selection, pinned version or standalone checksum missing"
     result = subprocess.run([sys.executable, "tests/test_linux_compat_toolchain.py"], cwd=PROJECT_DIR,
                             capture_output=True, text=True, timeout=100)

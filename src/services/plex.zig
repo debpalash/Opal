@@ -1215,21 +1215,21 @@ pub fn renderContent() void {
     defer page.deinit();
 
     if (!isConnected()) {
-        var panel = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .max_size_content = .{ .w = 480, .h = std.math.floatMax(f32) }, .gravity_x = 0.5, .margin = dvui.Rect.all(20), .padding = dvui.Rect.all(20), .background = true, .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface), .corners = theme.dims.rad_md });
+        var panel = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .max_size_content = .{ .w = 480, .h = std.math.floatMax(f32) }, .gravity_x = 0.5, .margin = dvui.Rect.all(20), .padding = dvui.Rect.all(20), .background = true, .color_fill = .{ .color = theme.colors.bg_surface }, .corners = theme.dims.rad_md });
         defer panel.deinit();
-        _ = dvui.label(@src(), "Connect Plex", .{}, .{ .font = dvui.themeGet().font_heading, .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary) });
+        _ = dvui.label(@src(), "Connect Plex", .{}, .{ .font = dvui.themeGet().font_heading, .color_text = .{ .color = theme.colors.text_primary } });
         components.bodyText(@src(), "Browse your movies, shows, and music in Opal. Sign in through Plex in your browser to connect your library.", theme.colors.text_secondary);
         const awaiting = conn_state.load(.acquire) == .awaiting;
         if (dvui.button(@src(), if (awaiting) "Waiting…" else "Connect with Plex", .{}, .{
-            .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
-            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_on_accent),
+            .color_fill = .{ .color = theme.colors.accent },
+            .color_text = .{ .color = theme.colors.text_on_accent },
             .corners = theme.dims.rad_sm,
             .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
         })) {
             connect();
         }
         if (status_msg_len > 0) {
-            _ = dvui.label(@src(), "{s}", .{status_msg[0..status_msg_len]}, .{ .color_text = @import("../ui/color_compat.zig").wrap(if (conn_state.load(.acquire) == .err) theme.colors.danger else theme.colors.accent), .padding = .{ .x = 0, .y = 10, .w = 0, .h = 0 } });
+            _ = dvui.label(@src(), "{s}", .{status_msg[0..status_msg_len]}, .{ .color_text = .{ .color = if (conn_state.load(.acquire) == .err) theme.colors.danger else theme.colors.accent }, .padding = .{ .x = 0, .y = 10, .w = 0, .h = 0 } });
         }
         return;
     }
@@ -1253,7 +1253,7 @@ pub fn renderContent() void {
         if (components.iconButtonEx(@src(), icons.tvg.lucide.@"arrow-left", "Back", false, nav_depth > 0)) _ = browseBack();
 
         if (nav_depth > 0) _ = dvui.label(@src(), "  /  {s}", .{nav_titles[nav_depth - 1][0..nav_title_lens[nav_depth - 1]]}, .{
-            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
+            .color_text = .{ .color = theme.colors.text_secondary },
             .gravity_y = 0.5,
         });
         {
@@ -1326,7 +1326,7 @@ pub fn renderContent() void {
         }
         if (loading or underfilled) {
             dvui.spinner(@src(), .{
-                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
+                .color_text = .{ .color = theme.colors.accent },
                 .min_size_content = theme.iconSize(.lg),
                 .gravity_x = 0.5,
                 .margin = dvui.Rect.all(12),
@@ -1363,8 +1363,8 @@ fn renderItemCard(i: usize, card_w: f32, poster_h: f32) void {
         .max_size_content = .{ .w = card_w, .h = poster_h + PLEX_CARD_FOOTER_H },
         .margin = dvui.Rect.all(PLEX_CARD_GAP),
         .background = true,
-        .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface),
-        .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.bg_hover),
+        .color_fill = .{ .color = theme.colors.bg_surface },
+        .color_fill_hover = .{ .color = theme.colors.bg_hover },
         .corners = dvui.CornerRect.all(theme.radius.md),
     });
     defer card.deinit();
@@ -1373,7 +1373,7 @@ fn renderItemCard(i: usize, card_w: f32, poster_h: f32) void {
     bw.init(@src(), .{}, .{
         .id_extra = i + 92100,
         .background = true,
-        .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+        .color_fill = .{ .color = theme.colors.bg_elevated },
         .corners = dvui.CornerRect.all(theme.radius.md),
         .min_size_content = .{ .w = card_w, .h = poster_h },
         .max_size_content = .{ .w = card_w, .h = poster_h },
@@ -1390,7 +1390,7 @@ fn renderItemCard(i: usize, card_w: f32, poster_h: f32) void {
 
     _ = dvui.label(@src(), "{s}", .{title}, .{
         .id_extra = i + 92300,
-        .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary),
+        .color_text = .{ .color = theme.colors.text_primary },
         .font = dvui.themeGet().font_heading.withSize(theme.font_size.small),
         .min_size_content = .{ .w = card_w, .h = 22 },
         .max_size_content = .{ .w = card_w, .h = 22 },
@@ -1407,8 +1407,8 @@ fn renderItemCard(i: usize, card_w: f32, poster_h: f32) void {
         var rating_choice: usize = @intFromFloat(@round(std.math.clamp(it.user_rating, 0, 10) * 2));
         if (dvui.dropdown(@src(), &RATING_LABELS, .{ .choice = &rating_choice }, .{}, .{
             .id_extra = i + 92500,
-            .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
-            .color_text = @import("../ui/color_compat.zig").wrap(if (it.user_rating > 0) theme.colors.warning else theme.colors.text_secondary),
+            .color_fill = .{ .color = theme.colors.bg_elevated },
+            .color_text = .{ .color = if (it.user_rating > 0) theme.colors.warning else theme.colors.text_secondary },
             .corners = theme.dims.rad_sm,
             .padding = .{ .x = 5, .y = 3, .w = 5, .h = 3 },
             .gravity_y = 0.5,

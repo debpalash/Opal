@@ -17,12 +17,13 @@ cd "$ROOT"
 "$ZIG" test src/player/container_pure.zig
 "$ZIG" test src/player/av_device_pure.zig
 "$ZIG" test src/core/event_loop_pure.zig
+"$ZIG" test src/core/repeat_pure.zig
 (
     cd vendor/zig-bypassdpi
     "$ZIG" build -Doptimize=fast
     "$ZIG" build test -Doptimize=fast
 )
 if [[ "${1:-}" == --full ]]; then
-    # Expected to fail until the application syntax/C import migration is done.
+    # Full native application build; platform/fixture validation is separate.
     "$ZIG" build -Doptimize=fast
 fi

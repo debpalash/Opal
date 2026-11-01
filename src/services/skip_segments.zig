@@ -183,7 +183,7 @@ pub fn requestSkip() void {
 
 fn seekTo(p: anytype, target: f64) void {
     var seek_buf: [64]u8 = undefined;
-    const cmd = @import("../core/fmt_compat.zig").bufPrintZ(&seek_buf, "seek {d:.1} absolute", .{target}) catch return;
+    const cmd = @import("opal-fmt").bufPrintZ(&seek_buf, "seek {d:.1} absolute", .{target}) catch return;
     _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
     p.last_seen_pos = target;
 }

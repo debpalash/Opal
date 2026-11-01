@@ -227,7 +227,7 @@ pub fn selectModelById(id: []const u8) void {
 pub fn modelDownloaded(i: usize) bool {
     if (i >= MODEL_CATALOG.len) return false;
     var buf: [512]u8 = undefined;
-    const p = @import("../core/fmt_compat.zig").bufPrintZ(&buf, "{s}/{s}", .{ DEFAULT_MODELS_DIR, MODEL_CATALOG[i].filename }) catch return false;
+    const p = @import("opal-fmt").bufPrintZ(&buf, "{s}/{s}", .{ DEFAULT_MODELS_DIR, MODEL_CATALOG[i].filename }) catch return false;
     @import("../core/io_global.zig").cwdAccess(p, .{}) catch return false;
     return true;
 }
@@ -319,7 +319,7 @@ fn setError(err: []const u8) void {
 }
 
 pub fn getServerUrl(buf: *[128]u8) []const u8 {
-    return @import("../core/fmt_compat.zig").bufPrintZ(buf, "http://127.0.0.1:{d}", .{server_port}) catch "http://127.0.0.1:41592";
+    return @import("opal-fmt").bufPrintZ(buf, "http://127.0.0.1:{d}", .{server_port}) catch "http://127.0.0.1:41592";
 }
 
 /// Chat-completions endpoint for the ACTIVE backend. Cloud bases already
@@ -327,9 +327,9 @@ pub fn getServerUrl(buf: *[128]u8) []const u8 {
 /// server gets "/v1" inserted.
 pub fn chatCompletionsUrl(buf: []u8) []const u8 {
     if (backend_kind == .cloud) {
-        return @import("../core/fmt_compat.zig").bufPrintZ(buf, "{s}/chat/completions", .{cloudBase()}) catch "";
+        return @import("opal-fmt").bufPrintZ(buf, "{s}/chat/completions", .{cloudBase()}) catch "";
     }
-    return @import("../core/fmt_compat.zig").bufPrintZ(buf, "http://127.0.0.1:{d}/v1/chat/completions", .{server_port}) catch "";
+    return @import("opal-fmt").bufPrintZ(buf, "http://127.0.0.1:{d}/v1/chat/completions", .{server_port}) catch "";
 }
 
 /// "Authorization: Bearer …" header for cloud requests; null for local
@@ -337,7 +337,7 @@ pub fn chatCompletionsUrl(buf: []u8) []const u8 {
 pub fn authHeader(buf: []u8) ?[]const u8 {
     if (backend_kind != .cloud) return null;
     const key = cloudKey() orelse return null;
-    return @import("../core/fmt_compat.zig").bufPrintZ(buf, "Authorization: Bearer {s}", .{key}) catch null;
+    return @import("opal-fmt").bufPrintZ(buf, "Authorization: Bearer {s}", .{key}) catch null;
 }
 
 pub fn checkPaths() void {
@@ -403,7 +403,7 @@ fn detectApfel() void {
 fn detectGemmaLlama() void {
     // Gemma via llama-server: works on macOS, Linux, Windows. Same detection
     // path on all three — the only per-OS bit is the brew prefix.
-    const model_path = @import("../core/fmt_compat.zig").bufPrintZ(&model_path_buf, "{s}/{s}", .{ DEFAULT_MODELS_DIR, activeModelFilename() }) catch return;
+    const model_path = @import("opal-fmt").bufPrintZ(&model_path_buf, "{s}/{s}", .{ DEFAULT_MODELS_DIR, activeModelFilename() }) catch return;
     model_path_len = model_path.len;
 
     if (@import("../core/io_global.zig").cwdAccess(model_path, .{})) |_| {
@@ -493,7 +493,7 @@ pub fn startServer() void {
 
     const sv_path = llama_server_path_buf[0..llama_server_path_len];
     var port_buf: [8]u8 = undefined;
-    const port_str = @import("../core/fmt_compat.zig").bufPrintZ(&port_buf, "{d}", .{server_port}) catch "41592";
+    const port_str = @import("opal-fmt").bufPrintZ(&port_buf, "{d}", .{server_port}) catch "41592";
 
     if (backend_kind == .apfel) {
         // ── macOS: Apple Intelligence via apfel ──
@@ -546,13 +546,13 @@ pub fn startServer() void {
 
         if (is_shimmy) {
             var bind_buf: [32]u8 = undefined;
-            const bind_str = @import("../core/fmt_compat.zig").bufPrintZ(&bind_buf, "127.0.0.1:{s}", .{port_str}) catch "127.0.0.1:41592";
+            const bind_str = @import("opal-fmt").bufPrintZ(&bind_buf, "127.0.0.1:{s}", .{port_str}) catch "127.0.0.1:41592";
             const argv = [_][]const u8{ sv_path, "serve", "--bind", bind_str };
             child = @import("../core/io_global.zig").Child.init(&argv, @import("../core/alloc.zig").allocator);
             if (@import("builtin").mode == .debug) std.debug.print("[AI] Mode: Shimmy\n", .{});
         } else {
             var ngl_buf: [8]u8 = undefined;
-            const ngl_str = @import("../core/fmt_compat.zig").bufPrintZ(&ngl_buf, "{d}", .{gpu_layers}) catch "99";
+            const ngl_str = @import("opal-fmt").bufPrintZ(&ngl_buf, "{d}", .{gpu_layers}) catch "99";
             const argv = [_][]const u8{
                 sv_path,
                 "-m",
@@ -682,7 +682,7 @@ fn downloadModelThread() void {
     @import("../core/io_global.zig").cwdMakePath(DEFAULT_MODELS_DIR) catch {};
 
     var out_path_buf: [512]u8 = undefined;
-    const out_path = @import("../core/fmt_compat.zig").bufPrintZ(&out_path_buf, "{s}/{s}", .{ DEFAULT_MODELS_DIR, activeModelFilename() }) catch {
+    const out_path = @import("opal-fmt").bufPrintZ(&out_path_buf, "{s}/{s}", .{ DEFAULT_MODELS_DIR, activeModelFilename() }) catch {
         setError("Path too long");
         return;
     };
@@ -898,7 +898,7 @@ fn healthThread() void {
     var url_buf: [128]u8 = undefined;
     var srv_buf: [128]u8 = undefined;
     const srv = getServerUrl(&srv_buf);
-    const url = @import("../core/fmt_compat.zig").bufPrintZ(&url_buf, "{s}/health", .{srv}) catch return;
+    const url = @import("opal-fmt").bufPrintZ(&url_buf, "{s}/health", .{srv}) catch return;
 
     // Local llama-server: plain curl, no DPI proxy. Any non-empty reply counts
     // as up (a 503 "loading model" body included), matching the old curl -s probe.
@@ -912,7 +912,7 @@ fn healthThread() void {
 
         if (cached_model_name_len == 0) {
             var m_url_buf: [128]u8 = undefined;
-            const m_url = @import("../core/fmt_compat.zig").bufPrintZ(&m_url_buf, "{s}/v1/models", .{srv}) catch return;
+            const m_url = @import("opal-fmt").bufPrintZ(&m_url_buf, "{s}/v1/models", .{srv}) catch return;
             var m_buf: [4096]u8 = undefined;
             var m_hdr: [2048]u8 = undefined;
             const m_res = @import("reliable_fetch.zig").request(m_url, &m_buf, &m_hdr, .{ .timeout_secs = 2, .impersonate = false, .use_dpi_proxy = false });

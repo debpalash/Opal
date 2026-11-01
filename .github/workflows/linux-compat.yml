@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
         with:
-          version: 0.16.0
+          version: 0.17.0
       - name: Locate cached Linux SDK
         id: sdk
         run: |

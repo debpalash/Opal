@@ -326,7 +326,7 @@ fn applyCommand(cmd: []const u8) void {
         }
         if (!valid) return;
         var seek_buf: [64]u8 = undefined;
-        const seek_cmd = @import("../core/fmt_compat.zig").bufPrintZ(&seek_buf, "seek {s} absolute", .{seek_val}) catch return;
+        const seek_cmd = @import("opal-fmt").bufPrintZ(&seek_buf, "seek {s} absolute", .{seek_val}) catch return;
         _ = c.mpv.mpv_command_string(ap.mpv_ctx, seek_cmd.ptr);
     } else if (std.mem.startsWith(u8, cmd, "LOAD ")) {
         const url = cmd[5..];

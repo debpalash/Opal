@@ -120,7 +120,7 @@ test "relative time" {
 }
 
 test "every state has a label and a tone" {
-    inline for (comptime @import("../core/enum_compat.zig").fields(pure.State)) |f| {
+    inline for (comptime @import("opal-reflect").fields(pure.State)) |f| {
         const st: pure.State = @enumFromInt(f.value);
         try std.testing.expect(stateLabel(st).len > 0);
         _ = stateTone(st);

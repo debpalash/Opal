@@ -86,7 +86,7 @@ test "Native operator activity offline SDL pixel capture" {
     workers.beginShutdownAndDrain(0);
     defer workers.finishShutdown();
     const names = [_][]const u8{ "operator-populated", "operator-empty-off", "operator-empty-on" };
-    inline for (comptime @import("../core/enum_compat.zig").fields(Case), 0..) |f, i| {
+    inline for (comptime @import("opal-reflect").fields(Case), 0..) |f, i| {
         current = @field(Case, f.name);
         for ([_][2]u32{ .{ 1100, 1000 }, .{ 640, 800 } }) |size| {
             try capture.capture(size[0], size[1], names[i], setup, draw, cleanup);

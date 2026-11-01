@@ -270,14 +270,14 @@ connected.
 
 ## Built in the open
 
-**Zig 0.16.x · dvui · mpv.** One native binary, shared application state, and a UI
+**Zig 0.17.x · dvui · mpv.** One native binary, shared application state, and a UI
 that repaints on change. [Architecture](docs/architecture.md) ·
 [Contributing](.github/CONTRIBUTING.md) · [CI](../../actions/workflows/ci.yml).
 
 <details>
 <summary><b>Build from source</b></summary>
 
-Use **Zig 0.16.x**; 0.17 requires a migration. On macOS:
+Use **Zig 0.17.x**; DVUI 0.6.0-dev is pinned alongside the compiler. On macOS:
 
 ```sh
 brew install mpv sqlite sdl2 libtorrent-rasterbar webp
@@ -288,7 +288,7 @@ mise install
 mise exec -- zig build run
 ```
 
-`mise.toml` pins Zig 0.16.0. If you already have Zig 0.16.x on `PATH`, run:
+`mise.toml` pins Zig 0.17.0. If you already have Zig 0.17.x on `PATH`, run:
 
 ```sh
 zig build run

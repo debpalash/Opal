@@ -281,7 +281,7 @@ fn downloadWorker(release: Snapshot) void {
     }
     var path_buf: [512]u8 = undefined;
     var tmp_buf: [256]u8 = undefined;
-    const dmg_path = @import("../core/fmt_compat.zig").bufPrintZ(&path_buf, "{s}/Opal-{s}-{s}.dmg", .{ io_global.tmpDir(&tmp_buf), tag, nonce_hex }) catch {
+    const dmg_path = @import("opal-fmt").bufPrintZ(&path_buf, "{s}/Opal-{s}-{s}.dmg", .{ io_global.tmpDir(&tmp_buf), tag, nonce_hex }) catch {
         setError("path too long");
         return;
     };

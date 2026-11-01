@@ -215,7 +215,7 @@ fn searchThread(engine: *SubtitleEngine) void {
     const encoded = urlEncode(query, &encoded_buf);
 
     const lang = state.app.sub_lang_buf[0..state.app.sub_lang_len];
-    const url = @import("../core/fmt_compat.zig").bufPrintZ(&url_buf, "https://rest.opensubtitles.org/search/query-{s}/sublanguageid-{s}", .{ encoded, lang }) catch {
+    const url = @import("opal-fmt").bufPrintZ(&url_buf, "https://rest.opensubtitles.org/search/query-{s}/sublanguageid-{s}", .{ encoded, lang }) catch {
         engine.state = .failed;
         return;
     };
@@ -276,7 +276,7 @@ fn searchThread(engine: *SubtitleEngine) void {
 
     if (count > 0) {
         var log_buf: [128]u8 = undefined;
-        const msg = @import("../core/fmt_compat.zig").bufPrintZ(&log_buf, "Found {d} subtitles", .{count}) catch "Found subtitles";
+        const msg = @import("opal-fmt").bufPrintZ(&log_buf, "Found {d} subtitles", .{count}) catch "Found subtitles";
         logs.pushLog("info", "subs", msg, false);
         engine.state = .found;
 
@@ -308,7 +308,7 @@ fn gestdownAppend(engine: *SubtitleEngine, base: usize) usize {
 
     // 1) show search → first show id (a UUID)
     var url1: [768]u8 = undefined;
-    const su = @import("../core/fmt_compat.zig").bufPrintZ(&url1, "https://api.gestdown.info/shows/search/{s}", .{urlEncode(p.show, &enc)}) catch return base;
+    const su = @import("opal-fmt").bufPrintZ(&url1, "https://api.gestdown.info/shows/search/{s}", .{urlEncode(p.show, &enc)}) catch return base;
     var buf1: [16 * 1024]u8 = undefined;
     const j1 = httpGet(su, &headers, &buf1) catch return base;
     const show_id = sp.gestdownFirstShowId(j1) orelse return base;
@@ -317,7 +317,7 @@ fn gestdownAppend(engine: *SubtitleEngine, base: usize) usize {
     const lang_code = state.app.sub_lang_buf[0..state.app.sub_lang_len];
     const lang_name = sp.langFullName(lang_code);
     var url2: [768]u8 = undefined;
-    const gu = @import("../core/fmt_compat.zig").bufPrintZ(&url2, "https://api.gestdown.info/subtitles/get/{s}/{d}/{d}/{s}", .{ show_id, p.season, p.episode, lang_name }) catch return base;
+    const gu = @import("opal-fmt").bufPrintZ(&url2, "https://api.gestdown.info/subtitles/get/{s}/{d}/{d}/{s}", .{ show_id, p.season, p.episode, lang_name }) catch return base;
     var buf2: [32 * 1024]u8 = undefined;
     const j2 = httpGet(gu, &headers, &buf2) catch return base;
 
@@ -530,7 +530,7 @@ fn downloadThread(engine: *SubtitleEngine) void {
     var subs_dir_buf: [512]u8 = undefined;
     const subs_dir = @import("../core/paths.zig").cacheFile(&subs_dir_buf, "subs");
     @import("../core/io_global.zig").cwdMakePath(subs_dir) catch {};
-    const srt_path = @import("../core/fmt_compat.zig").bufPrintZ(&engine.srt_path, "{s}/current.srt", .{subs_dir}) catch {
+    const srt_path = @import("opal-fmt").bufPrintZ(&engine.srt_path, "{s}/current.srt", .{subs_dir}) catch {
         engine.state = .failed;
         return;
     };

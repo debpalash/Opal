@@ -48,7 +48,7 @@ class NativeShutdownLive(unittest.TestCase):
         owned = []
         for line in subprocess.check_output(["ps", "-axo", "pid=,pgid=,comm="], text=True).splitlines():
             fields = line.strip().split(None, 2)
-            if len(fields) == 3 and int(fields[1]) == opal.process.pid and fields[2].endswith("/opal"):
+            if len(fields) == 3 and int(fields[1]) == opal.process.pid and Path(fields[2]).name.casefold() == "opal":
                 owned.append(int(fields[0]))
         self.assertEqual(len(owned), 1, "exact native PID missing from owned process group")
         os.kill(owned[0], signal.SIGTERM)

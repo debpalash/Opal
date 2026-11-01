@@ -1106,8 +1106,8 @@ fn renderSlashMenu() void {
         .stay_above_parent_window = false,
     }, .{
         .background = true,
-        .color_fill = @import("ui/color_compat.zig").wrap(theme.colors.bg_surface),
-        .color_border = @import("ui/color_compat.zig").wrap(theme.colors.accent),
+        .color_fill = .{ .color = theme.colors.bg_surface },
+        .color_border = .{ .color = theme.colors.accent },
         .border = dvui.Rect.all(1),
         .corners = dvui.CornerRect.all(10),
     });
@@ -1120,7 +1120,7 @@ fn renderSlashMenu() void {
     defer pad.deinit();
 
     _ = dvui.label(@src(), "Commands", .{}, .{
-        .color_text = @import("ui/color_compat.zig").wrap(theme.colors.accent),
+        .color_text = .{ .color = theme.colors.accent },
         .margin = .{ .h = 6 },
     });
 
@@ -1140,10 +1140,10 @@ fn renderSlashMenu() void {
 
         if (dvui.button(@src(), cmd.key, .{}, .{
             .id_extra = i,
-            .color_fill = @import("ui/color_compat.zig").wrap(theme.transparent),
-            .color_fill_hover = @import("ui/color_compat.zig").wrap(theme.colors.bg_hover),
-            .color_fill_press = @import("ui/color_compat.zig").wrap(theme.colors.bg_elevated),
-            .color_text = @import("ui/color_compat.zig").wrap(theme.colors.accent),
+            .color_fill = .{ .color = theme.transparent },
+            .color_fill_hover = .{ .color = theme.colors.bg_hover },
+            .color_fill_press = .{ .color = theme.colors.bg_elevated },
+            .color_text = .{ .color = theme.colors.accent },
             .border = dvui.Rect.all(0),
             .padding = .{ .x = 4, .y = 0, .w = 4, .h = 0 },
             .min_size_content = .{ .w = 140, .h = 0 },
@@ -1166,14 +1166,14 @@ fn renderSlashMenu() void {
         }
         _ = dvui.label(@src(), "{s}", .{cmd.desc}, .{
             .id_extra = i + 100,
-            .color_text = @import("ui/color_compat.zig").wrap(theme.colors.text_secondary),
+            .color_text = .{ .color = theme.colors.text_secondary },
             .gravity_y = 0.5,
         });
     }
 
     if (!any_shown) {
         _ = dvui.label(@src(), "No commands match.", .{}, .{
-            .color_text = @import("ui/color_compat.zig").wrap(theme.colors.text_secondary),
+            .color_text = .{ .color = theme.colors.text_secondary },
             .gravity_x = 0.5,
             .margin = .{ .y = 12 },
         });
@@ -1583,9 +1583,9 @@ fn appFrame() !dvui.App.Result {
                     const safe_name = @import("core/text.zig").safeUtf8(name_buf[0..name_len]);
                     var win_title: [300]u8 = undefined;
                     const wt: ?[:0]u8 = if (safe_name.len > 0)
-                        (@import("core/fmt_compat.zig").bufPrintZ(&win_title, "{s} - Opal", .{safe_name}) catch null)
+                        (@import("opal-fmt").bufPrintZ(&win_title, "{s} - Opal", .{safe_name}) catch null)
                     else
-                        (@import("core/fmt_compat.zig").bufPrintZ(&win_title, "Opal", .{}) catch null);
+                        (@import("opal-fmt").bufPrintZ(&win_title, "Opal", .{}) catch null);
                     if (wt) |t| {
                         if (!std.mem.eql(u8, t, TitleState.last_title[0..TitleState.last_len])) {
                             c.sdl.SDL_SetWindowTitle(sw, t.ptr);
@@ -1747,7 +1747,7 @@ fn appFrame() !dvui.App.Result {
                 const drift = @abs(master_pos - their_pos);
                 if (drift > 0.5) {
                     var cmd: [64]u8 = undefined;
-                    if (@import("core/fmt_compat.zig").bufPrintZ(&cmd, "seek {d:.2} absolute", .{master_pos})) |cv| {
+                    if (@import("opal-fmt").bufPrintZ(&cmd, "seek {d:.2} absolute", .{master_pos})) |cv| {
                         _ = c.mpv.mpv_command_string(p.mpv_ctx, cv.ptr);
                     } else |_| {}
                 }
@@ -1755,7 +1755,7 @@ fn appFrame() !dvui.App.Result {
         }
     }
     const player_chrome_overlay = state.app.page_shell_enabled and state.app.router.current == .player;
-    var app_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .color_fill = @import("ui/color_compat.zig").wrap(theme.colors.bg_app) });
+    var app_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .color_fill = .{ .color = theme.colors.bg_app } });
     defer app_box.deinit();
 
     // Custom (borderless) window title bar — drawn at the very top, at native
@@ -1986,12 +1986,12 @@ fn renderHudOverlay() void {
         .padding = .{ .x = 6, .y = 3, .w = 6, .h = 3 },
         .corners = dvui.CornerRect.all(4),
         .background = true,
-        .color_fill = @import("ui/color_compat.zig").wrap(dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 160 }),
+        .color_fill = .{ .color = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 160 } },
     });
     defer box.deinit();
     // Inherit font from dvui's current theme (an empty Font{} has no name and
     // triggers the "Font not in dvui database, using fallback" warning).
     _ = dvui.label(@src(), "{s}", .{txt}, .{
-        .color_text = @import("ui/color_compat.zig").wrap(dvui.Color{ .r = 0, .g = 255, .b = 100, .a = 255 }),
+        .color_text = .{ .color = dvui.Color{ .r = 0, .g = 255, .b = 100, .a = 255 } },
     });
 }

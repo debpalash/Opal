@@ -670,7 +670,7 @@ pub fn exportJson() void {
     @import("../core/io_global.zig").cwdMakePath(dl_dir) catch {};
 
     var out_buf: [512]u8 = undefined;
-    const out_path = @import("../core/fmt_compat.zig").bufPrintZ(&out_buf, "{s}/watch_history.json", .{dl_dir}) catch return;
+    const out_path = @import("opal-fmt").bufPrintZ(&out_buf, "{s}/watch_history.json", .{dl_dir}) catch return;
 
     // Build JSON manually (no JSON library needed for simple format)
     const alloc = @import("../core/alloc.zig").allocator;

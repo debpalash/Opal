@@ -19,7 +19,7 @@ test "Native torrent handoff worker consumes real GPU poster" {
     @import("../core/workers.zig").init();
     defer @import("../core/workers.zig").markQuitting();
     const io = @import("../core/io_global.zig");
-    var backend = try dvui.backend.initWindow(.{ .io = io.io(), .allocator = alloc, .size = .{ .w = 320, .h = 240 }, .vsync = false, .title = "Offline torrent handoff regression", .hidden = true });
+    var backend = try dvui.backend.initWindow(.{ .io = io.io(), .org = "debpalash", .app = "Opal-fixture", .persist_window_geometry = false, .size = .{ .w = 320, .h = 240 }, .vsync = false, .title = "Offline torrent handoff regression", .hidden = true });
     defer backend.deinit();
     var window = try dvui.Window.init(@src(), alloc, backend.backend(), .{});
     defer window.deinit();
