@@ -38,7 +38,11 @@
     "bundled_shutdown_tests": 2,
     "bundled_session_restore_test": true,
     "installed_app_launch": true,
-    "installed_binary_sha256": "0e2ed5601a136063900bd69c194d4362d8b2b015131ae8ed54712a02c4e1da12"
+    "installed_binary_sha256": "fb82d638788d259959c3b87082121a4cf23d89c8c27ab45ef74f8831419897bb",
+    "toast_overlay_scales": [
+      1,
+      1.5
+    ]
   },
   "last_full_build": {
     "result": "passed",

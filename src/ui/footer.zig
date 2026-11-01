@@ -3076,6 +3076,7 @@ pub fn renderResumePrompt() void {
     }
 }
 
+pub var toast_rect_for_test: dvui.Rect = .{};
 pub fn renderToast() void {
     if (state.app.toast_len == 0) return;
     const now = @import("../core/io_global.zig").milliTimestamp();
@@ -3084,8 +3085,20 @@ pub fn renderToast() void {
         return;
     }
 
-    var toast_anchor = dvui.overlay(@src(), .{ .expand = .both });
+    // A toast is a layer above the page, not another layout child after its
+    // vertically expanded content. Use the parent's visible content bounds,
+    // converted to child coordinates so UI scaling and titlebars stay correct.
+    const parent = dvui.parentGet();
+    const visible = parent.data().contentRectScale().r;
+    const origin = parent.screenRectScale(.{});
+    var toast_anchor = dvui.overlay(@src(), .{ .rect = .{
+        .x = (visible.x - origin.r.x) / origin.s,
+        .y = (visible.y - origin.r.y) / origin.s,
+        .w = visible.w / origin.s,
+        .h = visible.h / origin.s,
+    } });
     defer toast_anchor.deinit();
+    if (@import("builtin").is_test) toast_rect_for_test = toast_anchor.data().rect;
 
     // Fade each toast in. id_extra keyed on the monotonic toast_seq so every new
     // toast gets a fresh widget id → firstFrame true → the fade re-triggers

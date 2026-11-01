@@ -376,8 +376,12 @@ fn buildSupported(b: *std.Build) void {
     });
     const install_horizon_device_tests = b.addInstallArtifact(horizon_device_tests, .{ .dest_dir = .{ .override = .bin } });
     b.step("build-horizon-device-tests", "Build opt-in real model and library integration fixture").dependOn(&install_horizon_device_tests.step);
+    const toast_tests = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{"Native toast"} });
+    const run_toast_tests = b.addRunArtifact(toast_tests);
+    if (is_windows) run_toast_tests.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));
+    b.step("test-native-toast", "Verify toasts overlay expanded content without diagnostic borders").dependOn(&run_toast_tests.step);
     const native_suite = addBoundTest(b, .{ .root_module = exe.root_module, .filters = &.{
-        "Native Search", "Native WebP", "Native media offline", "Native shell offline", "Native global modals", "Native activity offline", "Native agent tasks offline", "Native operator activity offline", "Native agents overview offline", "Native browser hub", "Native Browse", "Browse fanout", "Native torrent handoff", "Native TV episodes",
+        "Native toast", "Native Search", "Native WebP", "Native media offline", "Native shell offline", "Native global modals", "Native activity offline", "Native agent tasks offline", "Native operator activity offline", "Native agents overview offline", "Native browser hub", "Native Browse", "Browse fanout", "Native torrent handoff", "Native TV episodes",
     } });
     const run_native_suite = b.addRunArtifact(native_suite);
     if (is_windows) run_native_suite.setEnvironmentVariable("PATH", b.fmt("{s};{s}", .{ msys_path_prefix, b.graph.environ_map.get("PATH") orelse "" }));

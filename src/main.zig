@@ -37,6 +37,9 @@ test "Native Search performance" {
 test "Native WebP shared decoder and GPU upload" {
     _ = @import("core/image_decode_native_test.zig");
 }
+test "Native toast module" {
+    if (!@import("build_options").headless) _ = @import("ui/toast_native_test.zig");
+}
 test "Native media offline SDL fixture" {
     if (!@import("build_options").headless) _ = @import("ui/media_native_test.zig");
 }
