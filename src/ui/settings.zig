@@ -1713,6 +1713,10 @@ fn renderPlaybackTab() void {
                     for (state.app.players.items) |p| {
                         _ = c.mpv.mpv_set_property_string(p.mpv_ctx, "audio-device", @ptrCast(&name_z));
                     }
+                    @memset(&state.app.audio_device_buf, 0);
+                    @memcpy(state.app.audio_device_buf[0..d.name_len], d.name[0..d.name_len]);
+                    state.app.audio_device_len = d.name_len;
+                    state.markConfigDirty();
                     @memcpy(Cache.cur_buf[0..d.name_len], d.name[0..d.name_len]);
                     Cache.cur_len = d.name_len;
                     var toast_buf: [192]u8 = undefined;

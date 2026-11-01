@@ -572,7 +572,7 @@ pub fn renderAudioDevicePickerPopover(active_p: *player.MediaPlayer) void {
             var name_z: [av_device.name_cap + 1]u8 = undefined;
             @memcpy(name_z[0..d.name_len], d.name[0..d.name_len]);
             name_z[d.name_len] = 0;
-            _ = c.mpv.mpv_set_property_string(active_p.mpv_ctx, "audio-device", @ptrCast(&name_z));
+            for (state.app.players.items) |p| _ = c.mpv.mpv_set_property_string(p.mpv_ctx, "audio-device", @ptrCast(&name_z));
             @memset(state.app.audio_device_buf[0..], 0);
             const remembered_len = @min(d.name_len, state.app.audio_device_buf.len - 1);
             @memcpy(state.app.audio_device_buf[0..remembered_len], d.name[0..remembered_len]);

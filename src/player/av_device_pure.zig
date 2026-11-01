@@ -293,3 +293,38 @@ test "connected audio output prompts once, not at startup or on reorder/removal"
     try std.testing.expect(connections.update(devices[0..2]) == null);
     try std.testing.expect(connections.update(devices[0..3]) != null);
 }
+
+/// Wait for a stable device list before abandoning a disconnected output.
+pub const MissingOutput = struct {
+    name: [name_cap]u8 = undefined,
+    len: usize = 0,
+    polls: u8 = 0,
+
+    pub fn update(self: *MissingOutput, selected: []const u8, devices: []const AudioDevice) bool {
+        if (selected.len == 0 or selected.len > name_cap or std.mem.eql(u8, selected, "auto") or
+            Connections.contains(devices, selected))
+        {
+            self.len = 0;
+            self.polls = 0;
+            return false;
+        }
+        if (!std.mem.eql(u8, self.name[0..self.len], selected)) {
+            @memcpy(self.name[0..selected.len], selected);
+            self.len = selected.len;
+            self.polls = 0;
+        }
+        self.polls +|= 1;
+        return self.polls >= 3;
+    }
+};
+
+test "missing selected output triggers recovery after consecutive valid snapshots" {
+    var devices: [4]AudioDevice = undefined;
+    const n = parseAudioDevices("[{\"name\":\"auto\"},{\"name\":\"coreaudio/builtin\"}]", &devices);
+    var recovery = MissingOutput{};
+    try std.testing.expect(!recovery.update("avfoundation/disconnected", devices[0..n]));
+    try std.testing.expect(!recovery.update("avfoundation/disconnected", devices[0..n]));
+    try std.testing.expect(recovery.update("avfoundation/disconnected", devices[0..n]));
+    try std.testing.expect(!recovery.update("auto", devices[0..n]));
+    try std.testing.expect(!recovery.update("coreaudio/builtin", devices[0..n]));
+}

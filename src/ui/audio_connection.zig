@@ -13,6 +13,7 @@ var saw_entrance_for_test = false;
 var connections: pure.Connections = .{};
 var pending: ?pure.AudioDevice = null;
 var last_poll: i64 = 0;
+var missing_output: pure.MissingOutput = .{};
 
 fn pauseAll() void {
     for (state.app.players.items) |p| {
@@ -25,6 +26,7 @@ pub fn render() void {
     if (state.app.players.items.len == 0) {
         connections = .{};
         pending = null;
+        missing_output = .{};
         return;
     }
     const timer_id = dvui.Id.extendId(null, @src(), 0);
@@ -40,7 +42,35 @@ pub fn render() void {
             const count = pure.parseAudioDevices(std.mem.span(json), &devices);
             // A transient backend failure must not turn the next good list
             // into a batch of fake connections.
+            // A partial or saturated list cannot prove that an output vanished.
+            const raw = std.mem.trim(u8, std.mem.span(json), " \t\r\n");
+            const complete = raw.len >= 2 and raw[0] == '[' and raw[raw.len - 1] == ']' and count < devices.len and pure.Connections.contains(devices[0..count], "auto");
             if (count > 0) {
+                if (complete) {
+                    const current = c.mpv.mpv_get_property_string(p.mpv_ctx, "audio-device");
+                    if (current != null) {
+                        defer c.mpv.mpv_free(@ptrCast(current));
+                        const selected = std.mem.span(current);
+                        if (missing_output.update(selected, devices[0..count]) and c.mpv.mpv_set_property_string(p.mpv_ctx, "audio-device", "auto") >= 0) {
+                            for (state.app.players.items) |player| {
+                                if (player == p) continue;
+                                const other = c.mpv.mpv_get_property_string(player.mpv_ctx, "audio-device");
+                                if (other != null) {
+                                    defer c.mpv.mpv_free(@ptrCast(other));
+                                    if (std.mem.eql(u8, std.mem.span(other), selected))
+                                        _ = c.mpv.mpv_set_property_string(player.mpv_ctx, "audio-device", "auto");
+                                }
+                            }
+                            if (std.mem.eql(u8, state.app.audio_device_buf[0..state.app.audio_device_len], selected)) {
+                                @memset(&state.app.audio_device_buf, 0);
+                                state.app.audio_device_len = 0;
+                                state.markConfigDirty();
+                            }
+                            missing_output = .{};
+                            state.showToast("Audio output disconnected. Switched to automatic output.");
+                        }
+                    }
+                } else missing_output = .{};
                 if (pending) |device| {
                     if (!pure.Connections.contains(devices[0..count], device.nameSlice())) pending = null;
                 }
@@ -48,8 +78,8 @@ pub fn render() void {
                     pauseAll();
                     pending = device;
                 }
-            }
-        }
+            } else missing_output = .{};
+        } else missing_output = .{};
     }
     renderPrompt();
 }

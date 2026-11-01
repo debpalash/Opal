@@ -4835,7 +4835,11 @@ fn apiPlayerAction(stream: std.Io.net.Stream, ap: *player.MediaPlayer, query: []
         .audio_device => |v| {
             var zbuf: [129]u8 = undefined;
             const z = std.fmt.bufPrintZ(&zbuf, "{s}", .{v}) catch return;
-            _ = c.mpv.mpv_set_property_string(ap.mpv_ctx, "audio-device", z.ptr);
+            for (state.app.players.items) |p| _ = c.mpv.mpv_set_property_string(p.mpv_ctx, "audio-device", z.ptr);
+            @memset(&state.app.audio_device_buf, 0);
+            @memcpy(state.app.audio_device_buf[0..v.len], v);
+            state.app.audio_device_len = v.len;
+            state.markConfigDirty();
         },
         .shuffle => |v| @import("../player/playlist.zig").setShuffle(v),
         .repeat => |v| @import("../player/playlist.zig").setRepeat(switch (v) {
