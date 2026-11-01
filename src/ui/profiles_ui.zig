@@ -60,8 +60,8 @@ fn avatar(p: *const pure.Profile, size: f32, id_extra: usize) void {
     var circle = dvui.box(@src(), .{ .dir = .vertical }, .{
         .id_extra = id_extra,
         .background = true,
-        .color_fill = colorOf(p.color),
-        .corner_radius = dvui.Rect.all(theme.radius.pill),
+        .color_fill = @import("color_compat.zig").wrap(colorOf(p.color)),
+        .corners = dvui.CornerRect.all(theme.radius.pill),
         .min_size_content = .{ .w = size, .h = size },
         .max_size_content = .{ .w = size, .h = size },
         .gravity_x = 0.5,
@@ -74,7 +74,7 @@ fn avatar(p: *const pure.Profile, size: f32, id_extra: usize) void {
     f.size = if (size >= 40) theme.font_size.display else theme.font_size.body;
     _ = dvui.labelNoFmt(@src(), name[0..@min(initial_len, name.len)], .{ .align_x = 0.5, .align_y = 0.5 }, .{
         .id_extra = id_extra,
-        .color_text = theme.colors.text_on_accent,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_on_accent),
         .font = f,
         .gravity_x = 0.5,
         .gravity_y = 0.5,
@@ -141,8 +141,8 @@ pub fn renderPicker() void {
     const size = theme.fitWindowSize(.{ .w = 560, .h = 360 }, .{ .w = 300, .h = 260 });
     var win = dvui.floatingWindow(@src(), .{ .modal = true, .open_flag = &open_flag }, .{
         .min_size_content = size,
-        .color_fill = theme.colors.bg_surface,
-        .corner_radius = dvui.Rect.all(theme.radius.lg),
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+        .corners = dvui.CornerRect.all(theme.radius.lg),
     });
     defer win.deinit();
     if (!at_launch) win.dragAreaSet(dvui.windowHeader("Switch profile", "", &open_flag));
@@ -158,7 +158,7 @@ pub fn renderPicker() void {
     _ = dvui.labelNoFmt(@src(), "Who's watching?", .{ .align_x = 0.5 }, .{
         .gravity_x = 0.5,
         .font = title_font,
-        .color_text = theme.colors.text_primary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.lg },
     });
 
@@ -173,10 +173,10 @@ pub fn renderPicker() void {
             var bw: dvui.ButtonWidget = undefined;
             bw.init(@src(), .{}, .{
                 .id_extra = i,
-                .color_fill = if (selected) theme.colors.bg_elevated else theme.transparent,
-                .color_fill_hover = theme.colors.bg_hover,
-                .color_fill_press = theme.colors.bg_elevated,
-                .corner_radius = dvui.Rect.all(theme.radius.md),
+                .color_fill = @import("color_compat.zig").wrap(if (selected) theme.colors.bg_elevated else theme.transparent),
+                .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+                .color_fill_press = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                .corners = dvui.CornerRect.all(theme.radius.md),
                 .padding = dvui.Rect.all(theme.spacing.sm),
                 .margin = dvui.Rect.all(theme.spacing.xs),
                 .min_size_content = .{ .w = 96, .h = 0 },
@@ -190,14 +190,14 @@ pub fn renderPicker() void {
                 _ = dvui.labelNoFmt(@src(), p.nameText(), .{ .align_x = 0.5 }, .{
                     .id_extra = i,
                     .gravity_x = 0.5,
-                    .color_text = if (std.mem.eql(u8, p.idText(), running.idText())) theme.colors.accent else theme.colors.text_primary,
+                    .color_text = @import("color_compat.zig").wrap(if (std.mem.eql(u8, p.idText(), running.idText())) theme.colors.accent else theme.colors.text_primary),
                     .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 0 },
                 });
                 if (p.kid or p.hasPin()) {
                     var badges = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i, .gravity_x = 0.5 });
                     defer badges.deinit();
-                    if (p.kid) dvui.icon(@src(), "Kid profile", icons.tvg.lucide.baby, .{}, .{ .id_extra = i, .color_text = theme.colors.text_secondary, .min_size_content = theme.iconSize(.xs) });
-                    if (p.hasPin()) dvui.icon(@src(), "PIN", icons.tvg.lucide.lock, .{}, .{ .id_extra = i + 100, .color_text = theme.colors.text_secondary, .min_size_content = theme.iconSize(.xs) });
+                    if (p.kid) dvui.icon(@src(), "Kid profile", icons.tvg.lucide.baby, .{}, .{ .id_extra = i, .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary), .min_size_content = theme.iconSize(.xs) });
+                    if (p.hasPin()) dvui.icon(@src(), "PIN", icons.tvg.lucide.lock, .{}, .{ .id_extra = i + 100, .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary), .min_size_content = theme.iconSize(.xs) });
                 }
             }
             bw.drawFocus();
@@ -212,7 +212,7 @@ pub fn renderPicker() void {
         const src = profiles.pinSourceFor(target[0..target_len]) orelse .none;
         if (src != .none) {
             _ = dvui.labelNoFmt(@src(), if (src == .owner) "Main profile PIN" else "PIN", .{}, .{
-                .color_text = theme.colors.text_secondary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
                 .gravity_x = 0.5,
                 .margin = .{ .x = 0, .y = theme.spacing.md, .w = 0, .h = theme.spacing.xs },
             });
@@ -224,11 +224,11 @@ pub fn renderPicker() void {
                 .placeholder = "4-8 digits",
             }, .{
                 .min_size_content = .{ .w = 140, .h = 20 },
-                .color_fill = theme.colors.bg_elevated,
-                .color_border = theme.colors.border_subtle,
-                .color_text = theme.colors.text_primary,
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
                 .border = dvui.Rect.all(1),
-                .corner_radius = theme.dims.rad_sm,
+                .corners = theme.dims.rad_sm,
                 .gravity_y = 0.5,
             });
             const enter = te.enter_pressed;
@@ -240,7 +240,7 @@ pub fn renderPicker() void {
     if (message_len > 0 or profiles.restartRequested()) {
         _ = dvui.labelNoFmt(@src(), if (profiles.restartRequested()) "Switching profile..." else message[0..message_len], .{ .align_x = 0.5 }, .{
             .gravity_x = 0.5,
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 },
         });
     }
@@ -262,24 +262,24 @@ pub fn avatarMenu() void {
     var m = dvui.menu(@src(), .horizontal, .{ .gravity_y = 0.5 });
     defer m.deinit();
     if (dvui.menuItemIcon(@src(), running.nameText(), icons.tvg.lucide.@"circle-user", .{ .submenu = true }, .{
-        .color_text = colorOf(running.color),
-        .color_fill = theme.transparent,
-        .color_fill_hover = theme.colors.bg_hover,
-        .corner_radius = theme.dims.rad_sm,
+        .color_text = @import("color_compat.zig").wrap(colorOf(running.color)),
+        .color_fill = @import("color_compat.zig").wrap(theme.transparent),
+        .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+        .corners = theme.dims.rad_sm,
         .min_size_content = theme.iconSize(.sm),
         .padding = dvui.Rect.all(6),
     })) |r| {
         var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{
-            .color_fill = theme.colors.bg_surface,
-            .color_border = theme.colors.border_subtle,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+            .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
         });
         defer fw.deinit();
         var col = dvui.menu(@src(), .vertical, .{
             .background = true,
-            .color_fill = theme.colors.bg_surface,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
             .border = dvui.Rect.all(1),
-            .color_border = theme.colors.border_subtle,
-            .corner_radius = theme.dims.rad_md,
+            .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
+            .corners = theme.dims.rad_md,
         });
         defer col.deinit();
         var list: [pure.MAX_PROFILES]pure.Profile = undefined;
@@ -289,7 +289,7 @@ pub fn avatarMenu() void {
             if (dvui.menuItemLabel(@src(), p.nameText(), .{}, .{
                 .id_extra = 7400 + i,
                 .expand = .horizontal,
-                .color_text = if (is_running) theme.colors.accent else theme.colors.text_primary,
+                .color_text = @import("color_compat.zig").wrap(if (is_running) theme.colors.accent else theme.colors.text_primary),
             }) != null) {
                 fw.close();
                 if (!is_running) openSwitcher(p.idText());
@@ -297,7 +297,7 @@ pub fn avatarMenu() void {
         }
         if (!running.kid and dvui.menuItemLabel(@src(), "Manage profiles", .{}, .{
             .expand = .horizontal,
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         }) != null) {
             fw.close();
             state.app.settings_tab = .Profiles;
@@ -353,7 +353,7 @@ fn editError(e: profiles.EditError) []const u8 {
 fn sectionLabel(text: []const u8, id_extra: usize) void {
     _ = dvui.labelNoFmt(@src(), text, .{}, .{
         .id_extra = id_extra,
-        .color_text = theme.colors.text_secondary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .margin = .{ .x = 0, .y = theme.spacing.md, .w = 0, .h = theme.spacing.xs },
     });
 }
@@ -367,11 +367,11 @@ fn field(buf: []u8, placeholder: []const u8, password: bool, id_extra: usize) vo
         .id_extra = id_extra,
         .expand = .horizontal,
         .min_size_content = .{ .w = 160, .h = 20 },
-        .color_fill = theme.colors.bg_elevated,
-        .color_border = theme.colors.border_subtle,
-        .color_text = theme.colors.text_primary,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+        .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
         .border = dvui.Rect.all(1),
-        .corner_radius = theme.dims.rad_sm,
+        .corners = theme.dims.rad_sm,
     });
     te.deinit();
 }
@@ -385,7 +385,7 @@ pub fn renderSettingsTab() void {
     const running = profiles.runningProfile();
     const owner = running.isDefault() and !running.kid;
     _ = dvui.labelNoFmt(@src(), "Each profile has its own history, library, favorites, recommendations and device sync. Switching restarts Opal into that profile.", .{}, .{
-        .color_text = theme.colors.text_tertiary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
         .expand = .horizontal,
     });
 
@@ -399,10 +399,10 @@ pub fn renderSettingsTab() void {
             .id_extra = i,
             .expand = .horizontal,
             .background = true,
-            .color_fill = theme.colors.bg_elevated,
-            .color_border = theme.colors.border_subtle,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
             .border = dvui.Rect.all(1),
-            .corner_radius = theme.dims.rad_sm,
+            .corners = theme.dims.rad_sm,
             .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 },
             .padding = dvui.Rect.all(theme.spacing.sm),
         });
@@ -422,10 +422,10 @@ pub fn renderSettingsTab() void {
                 .id_extra = i,
                 .expand = .horizontal,
                 .gravity_y = 0.5,
-                .color_text = theme.colors.text_primary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
                 .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
             });
-            if (p.hasPin()) dvui.icon(@src(), "PIN set", icons.tvg.lucide.lock, .{}, .{ .id_extra = i, .color_text = theme.colors.text_secondary, .gravity_y = 0.5, .min_size_content = theme.iconSize(.sm) });
+            if (p.hasPin()) dvui.icon(@src(), "PIN set", icons.tvg.lucide.lock, .{}, .{ .id_extra = i, .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary), .gravity_y = 0.5, .min_size_content = theme.iconSize(.sm) });
             if (!is_running and components.actionButton(@src(), "Switch", .secondary, 7500 + i)) {
                 openSwitcher(pid);
             }
@@ -516,7 +516,7 @@ pub fn renderSettingsTab() void {
     }
     if (!running.hasPin() and n > 1) {
         _ = dvui.labelNoFmt(@src(), "Tip: set a PIN on the main profile so kid profiles cannot switch out.", .{}, .{
-            .color_text = theme.colors.warning,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.warning),
             .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 },
         });
     }

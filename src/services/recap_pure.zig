@@ -241,7 +241,7 @@ test "nothing to recap on a pilot or with nothing watched" {
 }
 
 test "transcripts beat overviews; thin transcripts don't" {
-    const long = "word " ** 60;
+    const long = @import("../core/repeat_pure.zig").bytes("word ", 60);
     try testing.expectEqual(Kind.transcript, sourceKind(.{ .ep = .{ .season = 1, .episode = 1 }, .transcript = long, .overview = "o" }));
     try testing.expectEqual(Kind.overview, sourceKind(.{ .ep = .{ .season = 1, .episode = 1 }, .transcript = "short", .overview = "o" }));
     try testing.expectEqual(Kind.none, sourceKind(.{ .ep = .{ .season = 1, .episode = 1 } }));

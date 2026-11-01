@@ -164,7 +164,7 @@ const LibraryTarget = struct {
 pub fn handle(key: []const u8, result_json: []const u8) op.Handled {
     if (!ensureTable()) return op.Handled.make(.failed, "The library is not available", .{});
     var target = LibraryTarget{};
-    var rowids = [_]i64{0} ** pure.MAX_ITEMS;
+    var rowids = @as([pure.MAX_ITEMS]i64, @splat(0));
     var count: usize = 0;
     {
         const stmt = db.prepare("SELECT idx, row_id, title_hash FROM operator_names_batch WHERE batch=?1") orelse

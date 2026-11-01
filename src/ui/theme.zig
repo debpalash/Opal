@@ -547,10 +547,10 @@ pub fn mediaTitleFont(text: []const u8, base: dvui.Font) dvui.Font {
 // ── Dimensions (legacy dvui.Rect helpers) ──
 
 pub const dims = struct {
-    pub const rad_sm = dvui.Rect.all(radius.sm);
-    pub const rad_md = dvui.Rect.all(radius.md);
-    pub const rad_lg = dvui.Rect.all(radius.lg);
-    pub const rad_xl = dvui.Rect.all(radius.xl);
+    pub const rad_sm = dvui.CornerRect.all(radius.sm);
+    pub const rad_md = dvui.CornerRect.all(radius.md);
+    pub const rad_lg = dvui.CornerRect.all(radius.lg);
+    pub const rad_xl = dvui.CornerRect.all(radius.xl);
 
     pub const pad_xs = dvui.Rect.all(spacing.xs);
     pub const pad_sm = dvui.Rect.all(spacing.sm);
@@ -736,7 +736,7 @@ fn applyToDvui() void {
     dvui.ScrollBarWidget.defaults.min_size_content = .{ .w = 7, .h = 7 };
     dvui.ScrollBarWidget.defaults.background = false;
     dvui.ScrollBarWidget.defaults.border = dvui.Rect.all(0);
-    dvui.ScrollBarWidget.defaults.corner_radius = dvui.Rect.all(radius.pill);
+    dvui.ScrollBarWidget.defaults.corners = dvui.CornerRect.all(radius.pill);
 }
 
 pub fn setTheme() void {
@@ -751,24 +751,24 @@ pub fn setTheme() void {
 pub fn optInput() dvui.Options {
     return .{
         .expand = .horizontal,
-        .color_fill = colors.bg_elevated,
-        .color_border = colors.border_subtle,
-        .color_text = colors.text_primary,
+        .color_fill = @import("color_compat.zig").wrap(colors.bg_elevated),
+        .color_border = @import("color_compat.zig").wrap(colors.border_subtle),
+        .color_text = @import("color_compat.zig").wrap(colors.text_primary),
         .border = dvui.Rect.all(1),
-        .corner_radius = dims.rad_sm,
+        .corners = dims.rad_sm,
     };
 }
 
 /// Danger icon button (red)
 pub fn optIconBtnDanger() dvui.Options {
     return .{
-        .color_text = colors.danger,
-        .color_fill = transparent,
+        .color_text = @import("color_compat.zig").wrap(colors.danger),
+        .color_fill = @import("color_compat.zig").wrap(transparent),
         // Transparent fills defeat dvui's derived hover/press states (lighten
         // preserves alpha 0), so destructive icon buttons gave zero pointer
         // feedback — spell the states out with a faint danger tint.
-        .color_fill_hover = colors.danger_dim,
-        .color_fill_press = colors.danger.opacity(0.28),
+        .color_fill_hover = @import("color_compat.zig").wrap(colors.danger_dim),
+        .color_fill_press = @import("color_compat.zig").wrap(colors.danger.opacity(0.28)),
         .border = dvui.Rect.all(0),
     };
 }
@@ -778,7 +778,7 @@ pub fn optDivider() dvui.Options {
     return .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = colors.border_subtle,
+        .color_fill = @import("color_compat.zig").wrap(colors.border_subtle),
         .min_size_content = .{ .w = 10, .h = 1 },
         .margin = .{ .x = 0, .y = 6, .w = 0, .h = 6 },
     };

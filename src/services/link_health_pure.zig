@@ -59,10 +59,10 @@ pub fn playbackKind(explicit: []const u8, url: []const u8) []const u8 {
     if (!std.mem.startsWith(u8, url, "http://") and !std.mem.startsWith(u8, url, "https://")) return "";
     const lower_host_end = std.mem.indexOfScalarPos(u8, url, if (std.mem.startsWith(u8, url, "https://")) 8 else 7, '/') orelse url.len;
     const host = url[0..lower_host_end];
-    if (std.ascii.indexOfIgnoreCase(host, "127.0.0.1") != null or
-        std.ascii.indexOfIgnoreCase(host, "localhost") != null or
-        std.ascii.indexOfIgnoreCase(host, "youtube.com") != null or
-        std.ascii.indexOfIgnoreCase(host, "youtu.be") != null)
+    if (std.ascii.findIgnoreCase(host, "127.0.0.1") != null or
+        std.ascii.findIgnoreCase(host, "localhost") != null or
+        std.ascii.findIgnoreCase(host, "youtube.com") != null or
+        std.ascii.findIgnoreCase(host, "youtu.be") != null)
         return "";
     return "playback";
 }

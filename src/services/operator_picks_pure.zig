@@ -436,7 +436,7 @@ test "at most twelve recommendations and reasons are clipped on a character boun
     try json.appendSlice(a, "{\"items\":[");
     for (0..15) |i| {
         if (i > 0) try json.append(a, ',');
-        try json.print(a, "{{\"title\":\"Title Number {d}\",\"year\":2001,\"kind\":\"movie\",\"reason\":\"{s}\"}}", .{ i, "é" ** 70 });
+        try json.print(a, "{{\"title\":\"Title Number {d}\",\"year\":2001,\"kind\":\"movie\",\"reason\":\"{s}\"}}", .{ i, @import("../core/repeat_pure.zig").bytes("é", 70) });
     }
     try json.appendSlice(a, "]}");
     const p = parsePicks(a, json.items).?;

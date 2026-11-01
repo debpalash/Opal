@@ -26,7 +26,7 @@ const Slot = struct {
     id_len: usize = 0,
     idx: usize = 0,
 };
-var slots: [32]Slot = [_]Slot{.{}} ** 32;
+var slots: [32]Slot = @as([32]Slot, @splat(.{}));
 var slot_count: usize = 0;
 var mutex: @import("sync.zig").Mutex = .{};
 

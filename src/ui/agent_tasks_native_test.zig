@@ -75,7 +75,7 @@ fn setup() !void {
 }
 
 fn draw() !void {
-    var page = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_app });
+    var page = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = true, .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_app) });
     defer page.deinit();
     {
         // The real toolbar is a horizontal box.
@@ -98,7 +98,7 @@ test "Native agent tasks offline SDL pixel capture" {
     workers.beginShutdownAndDrain(0);
     defer workers.finishShutdown();
     const names = [_][]const u8{ "agent-tasks-populated", "agent-tasks-switch-off", "agent-tasks-empty", "agent-tasks-form" };
-    inline for (std.meta.fields(Case), 0..) |f, i| {
+    inline for (comptime @import("../core/enum_compat.zig").fields(Case), 0..) |f, i| {
         current = @field(Case, f.name);
         for ([_][2]u32{ .{ 1100, 900 }, .{ 640, 800 } }) |size| {
             try capture.capture(size[0], size[1], names[i], setup, draw, cleanup);

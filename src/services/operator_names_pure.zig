@@ -234,7 +234,7 @@ pub fn parseLocalNames(allocator: std.mem.Allocator, json: []const u8, batch_cou
     const list = parsed.value.object.get("items") orelse return null;
     if (list != .array) return null;
     var out = Names{};
-    var seen = [_]bool{false} ** MAX_ITEMS;
+    var seen = @as([MAX_ITEMS]bool, @splat(false));
     for (list.array.items) |entry| {
         if (entry != .object) continue;
         const obj = entry.object;
@@ -432,18 +432,18 @@ test "context holds at most 20 files and 3000 bytes" {
 
     // Long names: the byte cap stops the batch before 20 files.
     var big = Batch{};
-    const long = "/d/" ++ "L" ** 300 ++ ".mkv";
+    const long = "/d/" ++ @import("../core/repeat_pure.zig").bytes("L", 300) ++ ".mkv";
     var n: usize = 0;
     while (big.add(@intCast(n + 1), long, "x") == .added) n += 1;
     try std.testing.expect(n < MAX_ITEMS);
     try std.testing.expect(big.len <= CONTEXT_MAX);
     // Each name was cut to BASENAME_MAX.
-    try std.testing.expect(std.mem.indexOf(u8, big.text(), "L" ** (BASENAME_MAX + 1)) == null);
+    try std.testing.expect(std.mem.indexOf(u8, big.text(), @import("../core/repeat_pure.zig").bytes("L", (BASENAME_MAX + 1))) == null);
 }
 
 test "long multibyte names are cut on a character boundary" {
     var b = Batch{};
-    const name = "/d/" ++ "é" ** 100 ++ ".mkv"; // 200 bytes
+    const name = "/d/" ++ @import("../core/repeat_pure.zig").bytes("é", 100) ++ ".mkv"; // 200 bytes
     try std.testing.expectEqual(Add.added, b.add(1, name, "x"));
     try std.testing.expect(std.unicode.utf8ValidateSlice(b.text()));
 }
@@ -488,9 +488,9 @@ test "validator rejects control characters, long titles and unusable shapes" {
     const a = std.testing.allocator;
     try std.testing.expect(parseLocalNames(a, "{\"items\":[{\"index\":0,\"title\":\"a\\u0000b\",\"kind\":\"tv\"}]}", 3) == null);
     try std.testing.expect(parseLocalNames(a, "{\"items\":[{\"index\":0,\"title\":\"a\\u007fb\",\"kind\":\"tv\"}]}", 3) == null);
-    const long = "{\"items\":[{\"index\":0,\"title\":\"" ++ "x" ** 121 ++ "\",\"kind\":\"tv\"}]}";
+    const long = "{\"items\":[{\"index\":0,\"title\":\"" ++ @import("../core/repeat_pure.zig").bytes("x", 121) ++ "\",\"kind\":\"tv\"}]}";
     try std.testing.expect(parseLocalNames(a, long, 3) == null);
-    const edge = "{\"items\":[{\"index\":0,\"title\":\"" ++ "x" ** 120 ++ "\",\"kind\":\"tv\"}]}";
+    const edge = "{\"items\":[{\"index\":0,\"title\":\"" ++ @import("../core/repeat_pure.zig").bytes("x", 120) ++ "\",\"kind\":\"tv\"}]}";
     try std.testing.expect(parseLocalNames(a, edge, 3) != null);
     try std.testing.expect(parseLocalNames(a, "{\"items\":[]}", 3) == null);
     try std.testing.expect(parseLocalNames(a, "{\"items\":\"x\"}", 3) == null);

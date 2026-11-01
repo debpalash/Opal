@@ -133,7 +133,7 @@ pub const Code = enum {
     unsupported,
 
     pub fn fromName(name: []const u8) Code {
-        inline for (@typeInfo(Code).@"enum".fields) |f| {
+        inline for (comptime @import("../core/enum_compat.zig").fields(Code)) |f| {
             if (std.mem.eql(u8, name, f.name)) return @field(Code, f.name);
         }
         return .network;
@@ -366,7 +366,7 @@ pub const Job = struct {
 };
 
 pub const Queue = struct {
-    jobs: [MAX_QUEUE]Job = [_]Job{.{}} ** MAX_QUEUE,
+    jobs: [MAX_QUEUE]Job = @as([MAX_QUEUE]Job, @splat(.{})),
     next_id: u32 = 1,
     last_poll: i64 = 0,
 };

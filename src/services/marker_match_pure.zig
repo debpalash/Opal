@@ -224,9 +224,9 @@ pub fn detect(eps: []const Episode, out: []Result) void {
     const params = Params{ .min_frames = min_frames };
 
     var intro_c: [MAX_EPISODES][MAX_EPISODES]Cand = undefined;
-    var intro_n = [_]usize{0} ** MAX_EPISODES;
+    var intro_n = @as([MAX_EPISODES]usize, @splat(0));
     var cred_c: [MAX_EPISODES][MAX_EPISODES]Cand = undefined;
-    var cred_n = [_]usize{0} ** MAX_EPISODES;
+    var cred_n = @as([MAX_EPISODES]usize, @splat(0));
 
     for (0..n) |i| {
         for (i + 1..n) |j| {
@@ -415,7 +415,7 @@ test "findCommonRun: unrelated prints and silence never match" {
     randomPrints(10, &a);
     randomPrints(20, &b);
     try testing.expect(findCommonRun(&a, &b, .{ .min_frames = 100 }) == null);
-    const z = [_]u32{fp.SILENT} ** 500;
+    const z = @as([500]u32, @splat(fp.SILENT));
     try testing.expect(findCommonRun(&z, &z, .{ .min_frames = 50 }) == null);
 }
 

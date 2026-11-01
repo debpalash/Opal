@@ -111,7 +111,7 @@ fn setup() !void {
 }
 
 fn draw() !void {
-    var page = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_app });
+    var page = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .background = true, .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_app) });
     defer page.deinit();
     {
         var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 } });
@@ -135,7 +135,7 @@ test "Native agents overview offline SDL pixel capture" {
     defer workers.finishShutdown();
     const names = [_][]const u8{ "agents-overview-populated", "agents-overview-empty" };
     const ends = [_][]const u8{ "-top", "-end" };
-    inline for (std.meta.fields(Case), 0..) |f, i| {
+    inline for (comptime @import("../core/enum_compat.zig").fields(Case), 0..) |f, i| {
         current = @field(Case, f.name);
         for ([_][2]u32{ .{ 1100, 1000 }, .{ 640, 1000 } }) |size| {
             for ([_]bool{ false, true }, 0..) |end, e| {

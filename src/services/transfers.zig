@@ -94,7 +94,7 @@ pub fn applyDiskAction(rel: []const u8, action: DiskAction) DiskActionError!void
     }
     const kind = found_kind orelse return error.NotFound;
     var full_buf: [1024]u8 = undefined;
-    const full = std.fmt.bufPrintZ(&full_buf, "{s}/{s}", .{ root, rel }) catch return error.InvalidPath;
+    const full = @import("../core/fmt_compat.zig").bufPrintZ(&full_buf, "{s}/{s}", .{ root, rel }) catch return error.InvalidPath;
     switch (action) {
         .remove => unreachable,
         .reveal => openInFileManager(full),
@@ -146,7 +146,7 @@ pub fn renderTransfersContent(render_wanted: *const fn () void) void {
     var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &transfers_scroll }, .{
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface),
     });
     defer scroll.deinit();
 
@@ -343,7 +343,7 @@ fn rowDiskPath(r: *const tp.Row, out: *[1024]u8) ?[:0]const u8 {
     if (!r.hasFile() or !tp.safeDiskRelative(relative)) return null;
     const save_path = state.app.save_path_buf[0..state.app.save_path_len];
     if (save_path.len == 0) return null;
-    return std.fmt.bufPrintZ(out, "{s}/{s}", .{ save_path, relative }) catch null;
+    return @import("../core/fmt_compat.zig").bufPrintZ(out, "{s}/{s}", .{ save_path, relative }) catch null;
 }
 
 fn isExpanded(r: *const tp.Row) bool {
@@ -420,12 +420,12 @@ fn renderControlBar() void {
         if (agg.active + agg.queued > 0) {
             var tb: [64]u8 = undefined;
             var rb: [24]u8 = undefined;
-            const txt = std.fmt.bufPrintZ(&tb, "Down {s} · {d} active · {d} queued", .{
+            const txt = @import("../core/fmt_compat.zig").bufPrintZ(&tb, "Down {s} · {d} active · {d} queued", .{
                 httpdl.dp.fmtSpeed(agg.rate, &rb), agg.active, agg.queued,
             }) catch "";
             _ = dvui.label(@src(), "{s}", .{txt}, .{
                 .gravity_y = 0.5,
-                .color_text = theme.colors.accent,
+                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
                 .margin = .{ .x = 0, .y = 0, .w = 12, .h = 0 },
             });
         }
@@ -439,7 +439,7 @@ fn renderControlBar() void {
     // ── Right: download speed limit. ──
     _ = dvui.label(@src(), "Limit:", .{}, .{
         .gravity_y = 0.5,
-        .color_text = theme.colors.text_secondary,
+        .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
         .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
     });
 
@@ -451,11 +451,11 @@ fn renderControlBar() void {
         const active = state.app.download_rate_limit == lim;
         if (dvui.button(@src(), labels[k], .{}, .{
             .id_extra = k,
-            .color_fill = if (active) theme.colors.accent else theme.colors.bg_elevated,
-            .color_text = if (active) theme.colors.text_on_accent else theme.colors.text_secondary,
-            .color_border = if (active) theme.colors.accent else theme.colors.border_subtle,
+            .color_fill = @import("../ui/color_compat.zig").wrap(if (active) theme.colors.accent else theme.colors.bg_elevated),
+            .color_text = @import("../ui/color_compat.zig").wrap(if (active) theme.colors.text_on_accent else theme.colors.text_secondary),
+            .color_border = @import("../ui/color_compat.zig").wrap(if (active) theme.colors.accent else theme.colors.border_subtle),
             .border = dvui.Rect.all(1),
-            .corner_radius = dvui.Rect.all(theme.radius.pill),
+            .corners = dvui.CornerRect.all(theme.radius.pill),
             .padding = .{ .x = 12, .y = 4, .w = 12, .h = 4 },
             .margin = .{ .x = 0, .y = 0, .w = 5, .h = 0 },
             .gravity_y = 0.5,
@@ -544,7 +544,7 @@ fn renderUnifiedList(render_wanted: *const fn () void) void {
             .history => "No download history yet.",
         };
         _ = dvui.label(@src(), "{s}", .{msg}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
             .padding = .{ .x = 14, .y = 20, .w = 0, .h = 0 },
         });
     }
@@ -584,11 +584,11 @@ fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
         .id_extra = rid,
         .expand = .horizontal,
         .background = true,
-        .color_fill = row_bg,
+        .color_fill = @import("../ui/color_compat.zig").wrap(row_bg),
         .padding = .{ .x = 10, .y = 7, .w = 10, .h = 7 },
         .border = dvui.Rect.all(1),
-        .corner_radius = dvui.Rect.all(8),
-        .color_border = theme.colors.border_subtle,
+        .corners = dvui.CornerRect.all(8),
+        .color_border = @import("../ui/color_compat.zig").wrap(theme.colors.border_subtle),
     });
     defer {
         if (row_index < row_heights.len and row.data().rect.h > 0) row_heights[row_index] = row.data().rect.h;
@@ -602,8 +602,8 @@ fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
             .min_size_content = .{ .w = 3, .h = 0 },
             .expand = .vertical,
             .background = true,
-            .color_fill = statusColor(st),
-            .corner_radius = dvui.Rect.all(2),
+            .color_fill = @import("../ui/color_compat.zig").wrap(statusColor(st)),
+            .corners = dvui.CornerRect.all(2),
             .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
             .gravity_y = 0.5,
         });
@@ -630,7 +630,7 @@ fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
             theme.colors.text_tertiary;
         _ = dvui.icon(@src(), "", ico, .{}, .{
             .id_extra = rid,
-            .color_text = icol,
+            .color_text = @import("../ui/color_compat.zig").wrap(icol),
             .min_size_content = .{ .w = 14, .h = 14 },
             .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
             .gravity_y = 0.5,
@@ -663,10 +663,10 @@ fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
             .gravity_x = 0.0,
             .max_size_content = dvui.Options.MaxSize.width(title_cap),
             .font = theme.mediaTitleFont(shown_name, dvui.themeGet().font_body),
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
-            .color_text = if (st == .archived or st == .paused) theme.colors.text_secondary else theme.colors.text_primary,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent),
+            .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.bg_hover),
+            .color_fill_press = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("../ui/color_compat.zig").wrap(if (st == .archived or st == .paused) theme.colors.text_secondary else theme.colors.text_primary),
             .padding = dvui.Rect.all(0),
         })) {
             toggleExpanded(r);
@@ -678,9 +678,9 @@ fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
                 .id_extra = rid,
                 .expand = .horizontal,
                 .min_size_content = .{ .w = 10, .h = 4 },
-                .color_fill = theme.colors.bg_elevated,
-                .color_text = statusColor(st),
-                .corner_radius = dvui.Rect.all(2),
+                .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+                .color_text = @import("../ui/color_compat.zig").wrap(statusColor(st)),
+                .corners = dvui.CornerRect.all(2),
                 .margin = .{ .x = 0, .y = 3, .w = 0, .h = 0 },
             });
         }
@@ -690,7 +690,7 @@ fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
         _ = dvui.label(@src(), "{s}", .{meta}, .{
             .id_extra = rid,
             .expand = .horizontal,
-            .color_text = if (st == .errored) theme.colors.danger else theme.colors.text_tertiary,
+            .color_text = @import("../ui/color_compat.zig").wrap(if (st == .errored) theme.colors.danger else theme.colors.text_tertiary),
             .margin = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
         });
     }
@@ -710,10 +710,10 @@ fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
     if (r.hasTorrent() and r.has_metadata) {
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
             .id_extra = rid,
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
-            .color_text = theme.colors.success,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent),
+            .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.bg_hover),
+            .color_fill_press = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.success),
             .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
             .gravity_y = 0.5,
         })) {
@@ -733,10 +733,10 @@ fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
         // Play the file straight off disk.
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
             .id_extra = rid,
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
-            .color_text = theme.colors.success,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent),
+            .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.bg_hover),
+            .color_fill_press = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.success),
             .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
             .gravity_y = 0.5,
         })) {
@@ -758,9 +758,9 @@ fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
     if (r.hasFile() and r.is_dir) {
         if (dvui.button(@src(), "Open", .{}, .{
             .id_extra = rid,
-            .color_fill = theme.colors.accent,
-            .color_text = theme.colors.text_on_accent,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_on_accent),
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
             .margin = .{ .x = 0, .y = 0, .w = 2, .h = 0 },
             .gravity_y = 0.5,
@@ -780,10 +780,10 @@ fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
         const pcol = if (r.paused) theme.colors.accent else theme.colors.text_secondary;
         if (dvui.buttonIcon(@src(), "", pic, .{}, .{}, .{
             .id_extra = rid,
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
-            .color_text = pcol,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent),
+            .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.bg_hover),
+            .color_fill_press = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("../ui/color_compat.zig").wrap(pcol),
             .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
             .gravity_y = 0.5,
         })) {
@@ -802,10 +802,10 @@ fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
     if (r.hasTorrent() and st == .errored) {
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"rotate-cw", .{}, .{}, .{
             .id_extra = rid,
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
-            .color_text = theme.colors.accent,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent),
+            .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.bg_hover),
+            .color_fill_press = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
             .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
             .gravity_y = 0.5,
         })) _ = recheckTorrent(r.torrent_id);
@@ -817,10 +817,10 @@ fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
         if (hidx < state.app.dl_history_count and state.app.dl_history_link_lens[hidx] > 0) {
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.download, .{}, .{}, .{
                 .id_extra = rid,
-                .color_fill = theme.transparent,
-                .color_fill_hover = theme.colors.bg_hover,
-                .color_fill_press = theme.colors.bg_elevated,
-                .color_text = theme.colors.accent,
+                .color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent),
+                .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.bg_hover),
+                .color_fill_press = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
                 .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
                 .gravity_y = 0.5,
             })) {
@@ -834,10 +834,10 @@ fn renderRow(r: *const tp.Row, i: usize, row_index: usize) bool {
     if (r.hasFile()) {
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"folder-open", .{}, .{}, .{
             .id_extra = rid,
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_tertiary,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent),
+            .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.bg_hover),
+            .color_fill_press = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_tertiary),
             .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
             .gravity_y = 0.5,
         })) {
@@ -989,17 +989,17 @@ fn renderExpanded(r: *const tp.Row) bool {
             .id_extra = rowId(r),
             .expand = .horizontal,
             .background = true,
-            .color_fill = theme.colors.bg_surface,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface),
             .padding = .{ .x = 18, .y = 6, .w = 10, .h = 6 },
             .border = .{ .x = 3, .y = 0, .w = 0, .h = 1 },
-            .color_border = theme.colors.accent,
+            .color_border = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
         });
         defer frow.deinit();
 
         _ = dvui.label(@src(), "On disk", .{}, .{
             .id_extra = rowId(r),
             .expand = .horizontal,
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_tertiary),
             .gravity_y = 0.5,
         });
 
@@ -1009,11 +1009,11 @@ fn renderExpanded(r: *const tp.Row) bool {
             const hashing = VtHash.busy.load(.acquire);
             if (dvui.button(@src(), if (hashing) "Hashing…" else "Verify on VirusTotal", .{}, .{
                 .id_extra = rowId(r),
-                .color_fill = theme.transparent,
-                .color_fill_hover = theme.colors.bg_hover,
-                .color_fill_press = theme.colors.bg_elevated,
-                .color_text = if (hashing) theme.colors.text_tertiary else theme.colors.text_secondary,
-                .corner_radius = theme.dims.rad_sm,
+                .color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent),
+                .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.bg_hover),
+                .color_fill_press = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+                .color_text = @import("../ui/color_compat.zig").wrap(if (hashing) theme.colors.text_tertiary else theme.colors.text_secondary),
+                .corners = theme.dims.rad_sm,
                 .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
                 .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
                 .gravity_y = 0.5,
@@ -1143,11 +1143,11 @@ fn renderHttpRow(s: *const httpdl.engine.Snap, i: usize) void {
         .id_extra = rid,
         .expand = .horizontal,
         .background = true,
-        .color_fill = row_bg,
+        .color_fill = @import("../ui/color_compat.zig").wrap(row_bg),
         .padding = .{ .x = 10, .y = 7, .w = 10, .h = 7 },
         .border = dvui.Rect.all(1),
-        .corner_radius = dvui.Rect.all(8),
-        .color_border = theme.colors.border_subtle,
+        .corners = dvui.CornerRect.all(8),
+        .color_border = @import("../ui/color_compat.zig").wrap(theme.colors.border_subtle),
     });
     defer {
         if (@import("builtin").is_test and fixture_for_test and i < test_http_rects.len) test_http_rects[i] = row.data().rect;
@@ -1161,8 +1161,8 @@ fn renderHttpRow(s: *const httpdl.engine.Snap, i: usize) void {
             .min_size_content = .{ .w = 3, .h = 0 },
             .expand = .vertical,
             .background = true,
-            .color_fill = httpStatusColor(st),
-            .corner_radius = dvui.Rect.all(2),
+            .color_fill = @import("../ui/color_compat.zig").wrap(httpStatusColor(st)),
+            .corners = dvui.CornerRect.all(2),
             .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
             .gravity_y = 0.5,
         });
@@ -1171,7 +1171,7 @@ fn renderHttpRow(s: *const httpdl.engine.Snap, i: usize) void {
 
     _ = dvui.icon(@src(), "", icons.tvg.lucide.download, .{}, .{
         .id_extra = rid,
-        .color_text = httpStatusColor(st),
+        .color_text = @import("../ui/color_compat.zig").wrap(httpStatusColor(st)),
         .min_size_content = .{ .w = 14, .h = 14 },
         .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
         .gravity_y = 0.5,
@@ -1194,7 +1194,7 @@ fn renderHttpRow(s: *const httpdl.engine.Snap, i: usize) void {
             .gravity_x = 0.0,
             .max_size_content = dvui.Options.MaxSize.width(title_cap),
             .font = theme.mediaTitleFont(shown_name, dvui.themeGet().font_body),
-            .color_text = if (st == .paused or st == .queued) theme.colors.text_secondary else theme.colors.text_primary,
+            .color_text = @import("../ui/color_compat.zig").wrap(if (st == .paused or st == .queued) theme.colors.text_secondary else theme.colors.text_primary),
         });
 
         const frac_total: f32 = if (s.total > 0)
@@ -1208,9 +1208,9 @@ fn renderHttpRow(s: *const httpdl.engine.Snap, i: usize) void {
                 .id_extra = rid,
                 .expand = .horizontal,
                 .min_size_content = .{ .w = 10, .h = 4 },
-                .color_fill = theme.colors.bg_elevated,
-                .color_text = httpStatusColor(st),
-                .corner_radius = dvui.Rect.all(2),
+                .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+                .color_text = @import("../ui/color_compat.zig").wrap(httpStatusColor(st)),
+                .corners = dvui.CornerRect.all(2),
                 .margin = .{ .x = 0, .y = 3, .w = 0, .h = 0 },
             });
 
@@ -1226,8 +1226,8 @@ fn renderHttpRow(s: *const httpdl.engine.Snap, i: usize) void {
                         .id_extra = rid + 2 + k,
                         .min_size_content = .{ .w = 26, .h = 3 },
                         .background = true,
-                        .color_fill = theme.colors.bg_elevated,
-                        .corner_radius = dvui.Rect.all(1),
+                        .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+                        .corners = dvui.CornerRect.all(1),
                         .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
                     });
                     const w: f32 = 26.0 * @min(s.seg_frac[k], 1.0);
@@ -1236,8 +1236,8 @@ fn renderHttpRow(s: *const httpdl.engine.Snap, i: usize) void {
                             .id_extra = rid + 2 + k,
                             .min_size_content = .{ .w = w, .h = 3 },
                             .background = true,
-                            .color_fill = httpStatusColor(st),
-                            .corner_radius = dvui.Rect.all(1),
+                            .color_fill = @import("../ui/color_compat.zig").wrap(httpStatusColor(st)),
+                            .corners = dvui.CornerRect.all(1),
                         });
                         fill.deinit();
                     }
@@ -1273,7 +1273,7 @@ fn renderHttpRow(s: *const httpdl.engine.Snap, i: usize) void {
             .id_extra = rid,
             .expand = .horizontal,
             .max_size_content = dvui.Options.MaxSize.width(title_cap),
-            .color_text = if (st == .failed) theme.colors.danger else theme.colors.text_tertiary,
+            .color_text = @import("../ui/color_compat.zig").wrap(if (st == .failed) theme.colors.danger else theme.colors.text_tertiary),
             .margin = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
         });
     }
@@ -1293,10 +1293,10 @@ fn renderHttpRow(s: *const httpdl.engine.Snap, i: usize) void {
     if (active or st == .queued) {
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.pause, .{}, .{}, .{
             .id_extra = rid,
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_secondary,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent),
+            .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.bg_hover),
+            .color_fill_press = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
             .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
             .gravity_y = 0.5,
         })) {
@@ -1305,10 +1305,10 @@ fn renderHttpRow(s: *const httpdl.engine.Snap, i: usize) void {
     } else if (st == .paused or st == .failed) {
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
             .id_extra = rid,
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
-            .color_text = theme.colors.accent,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent),
+            .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.bg_hover),
+            .color_fill_press = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
             .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
             .gravity_y = 0.5,
         })) {
@@ -1338,16 +1338,16 @@ fn renderExpandedFiles(torrent_id: i32) void {
         var xhdr = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
             .background = true,
-            .color_fill = theme.colors.bg_surface,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface),
             .padding = .{ .x = 18, .y = 4, .w = 10, .h = 4 },
             .border = .{ .x = 3, .y = 0, .w = 0, .h = 1 },
-            .color_border = theme.colors.accent,
+            .color_border = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
         });
         defer xhdr.deinit();
-        _ = dvui.label(@src(), "Files", .{}, .{ .color_text = theme.colors.text_tertiary, .expand = .horizontal });
-        _ = dvui.label(@src(), "Size", .{}, .{ .color_text = theme.colors.text_tertiary, .min_size_content = .{ .w = 56, .h = 0 } });
-        _ = dvui.label(@src(), "Progress", .{}, .{ .color_text = theme.colors.text_tertiary, .min_size_content = .{ .w = 80, .h = 0 } });
-        _ = dvui.label(@src(), "Priority", .{}, .{ .color_text = theme.colors.text_tertiary });
+        _ = dvui.label(@src(), "Files", .{}, .{ .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_tertiary), .expand = .horizontal });
+        _ = dvui.label(@src(), "Size", .{}, .{ .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_tertiary), .min_size_content = .{ .w = 56, .h = 0 } });
+        _ = dvui.label(@src(), "Progress", .{}, .{ .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_tertiary), .min_size_content = .{ .w = 80, .h = 0 } });
+        _ = dvui.label(@src(), "Priority", .{}, .{ .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_tertiary) });
     }
 
     var f_idx: i32 = 0;
@@ -1365,10 +1365,10 @@ fn renderExpandedFiles(torrent_id: i32) void {
             .id_extra = cid,
             .expand = .horizontal,
             .background = true,
-            .color_fill = theme.colors.bg_surface,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface),
             .padding = .{ .x = 18, .y = 6, .w = 10, .h = 6 },
             .border = .{ .x = 3, .y = 0, .w = 0, .h = 1 },
-            .color_border = theme.colors.accent,
+            .color_border = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
             .gravity_y = 0.5,
         });
         defer frow.deinit();
@@ -1376,10 +1376,10 @@ fn renderExpandedFiles(torrent_id: i32) void {
         // Play file
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
             .id_extra = cid + 100,
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
-            .color_text = theme.colors.success,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent),
+            .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.bg_hover),
+            .color_fill_press = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.success),
             .padding = .{ .x = 3, .y = 3, .w = 6, .h = 3 },
             .gravity_y = 0.5,
         })) {
@@ -1401,7 +1401,7 @@ fn renderExpandedFiles(torrent_id: i32) void {
         _ = dvui.label(@src(), "{s}", .{safeUtf8(f_name[0..f_len])}, .{
             .id_extra = cid + 200,
             .expand = .horizontal,
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary),
             .gravity_y = 0.5,
         });
 
@@ -1410,12 +1410,12 @@ fn renderExpandedFiles(torrent_id: i32) void {
             var sbuf: [16]u8 = undefined;
             const mb = @as(f64, @floatFromInt(f_size)) / 1048576.0;
             const s = if (mb > 1024)
-                std.fmt.bufPrintZ(&sbuf, "{d:.1}G", .{mb / 1024.0}) catch "?"
+                @import("../core/fmt_compat.zig").bufPrintZ(&sbuf, "{d:.1}G", .{mb / 1024.0}) catch "?"
             else
-                std.fmt.bufPrintZ(&sbuf, "{d:.0}M", .{mb}) catch "?";
+                @import("../core/fmt_compat.zig").bufPrintZ(&sbuf, "{d:.0}M", .{mb}) catch "?";
             _ = dvui.label(@src(), "{s}", .{s}, .{
                 .id_extra = cid + 300,
-                .color_text = theme.colors.text_tertiary,
+                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_tertiary),
                 .min_size_content = .{ .w = 56, .h = 0 },
                 .gravity_y = 0.5,
             });
@@ -1427,9 +1427,9 @@ fn renderExpandedFiles(torrent_id: i32) void {
             _ = dvui.slider(@src(), .{ .fraction = &pct }, .{
                 .id_extra = cid + 400,
                 .min_size_content = .{ .w = 80, .h = 5 },
-                .color_fill = theme.colors.bg_elevated,
-                .color_text = theme.colors.accent,
-                .corner_radius = dvui.Rect.all(2),
+                .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
+                .corners = dvui.CornerRect.all(2),
                 .gravity_y = 0.5,
             });
         }
@@ -1437,9 +1437,9 @@ fn renderExpandedFiles(torrent_id: i32) void {
         // Priority
         if (dvui.button(@src(), "Skip", .{}, .{
             .id_extra = cid + 500,
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.danger,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.danger),
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
             .margin = .{ .x = 4, .y = 0, .w = 2, .h = 0 },
             .gravity_y = 0.5,
@@ -1449,9 +1449,9 @@ fn renderExpandedFiles(torrent_id: i32) void {
 
         if (dvui.button(@src(), "High", .{}, .{
             .id_extra = cid + 600,
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.success,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.success),
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
             .margin = .{ .x = 0, .y = 0, .w = 2, .h = 0 },
             .gravity_y = 0.5,
@@ -1468,7 +1468,7 @@ fn renderExpandedFiles(torrent_id: i32) void {
 fn renderFolderBrowse() void {
     const save_path = state.app.save_path_buf[0..state.app.save_path_len];
     var effective_buf: [1024]u8 = undefined;
-    const effective_path = std.fmt.bufPrintZ(&effective_buf, "{s}/{s}", .{ save_path, browse_subdir_buf[0..browse_subdir_len] }) catch save_path;
+    const effective_path = @import("../core/fmt_compat.zig").bufPrintZ(&effective_buf, "{s}/{s}", .{ save_path, browse_subdir_buf[0..browse_subdir_len] }) catch save_path;
 
     // Rescan immediately on a path change, otherwise at most every 5s.
     const now = io_global.timestamp();
@@ -1490,21 +1490,21 @@ fn renderFolderBrowse() void {
         var prow = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
             .background = true,
-            .color_fill = theme.colors.bg_surface,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface),
             .padding = .{ .x = 6, .y = 4, .w = 10, .h = 4 },
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = 2 },
         });
         defer prow.deinit();
 
         var lbuf: [256]u8 = undefined;
-        const lbl = std.fmt.bufPrintZ(&lbuf, "  {s}  ({d} items)", .{ effective_path, snap_count }) catch effective_path;
+        const lbl = @import("../core/fmt_compat.zig").bufPrintZ(&lbuf, "  {s}  ({d} items)", .{ effective_path, snap_count }) catch effective_path;
         var lsafe: [256]u8 = undefined;
         if (dvui.button(@src(), safeUtf8Buf(lbl, &lsafe), .{}, .{
             .expand = .horizontal,
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_secondary,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent),
+            .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.bg_hover),
+            .color_fill_press = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
             .border = dvui.Rect.all(0),
             .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
             .gravity_y = 0.5,
@@ -1525,12 +1525,12 @@ fn renderFolderBrowse() void {
     if (snap_count == 0) {
         if (snap_error) {
             _ = dvui.label(@src(), "Cannot open folder", .{}, .{
-                .color_text = theme.colors.danger,
+                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.danger),
                 .padding = .{ .x = 14, .y = 14, .w = 0, .h = 0 },
             });
         } else {
             _ = dvui.label(@src(), "Folder is empty.", .{}, .{
-                .color_text = theme.colors.text_secondary,
+                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
                 .padding = .{ .x = 14, .y = 14, .w = 0, .h = 0 },
             });
         }
@@ -1555,10 +1555,10 @@ fn renderFolderBrowse() void {
             .id_extra = fi + 20000,
             .expand = .horizontal,
             .background = true,
-            .color_fill = row_bg,
+            .color_fill = @import("../ui/color_compat.zig").wrap(row_bg),
             .padding = .{ .x = 10, .y = 7, .w = 10, .h = 7 },
             .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-            .color_border = theme.colors.border_subtle,
+            .color_border = @import("../ui/color_compat.zig").wrap(theme.colors.border_subtle),
         });
         defer row.deinit();
 
@@ -1567,7 +1567,7 @@ fn renderFolderBrowse() void {
         const icol = if (is_dir) theme.colors.accent else if (is_video) theme.colors.success else if (is_audio) theme.colors.warning else theme.colors.text_tertiary;
         _ = dvui.icon(@src(), "", ficon, .{}, .{
             .id_extra = fi + 20100,
-            .color_text = icol,
+            .color_text = @import("../ui/color_compat.zig").wrap(icol),
             .min_size_content = .{ .w = 14, .h = 14 },
             .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 },
             .gravity_y = 0.5,
@@ -1581,7 +1581,7 @@ fn renderFolderBrowse() void {
         _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(displayName(name), &nm_buf)}, .{
             .id_extra = fi + 20200,
             .expand = .horizontal,
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary),
             .gravity_y = 0.5,
         });
 
@@ -1589,9 +1589,9 @@ fn renderFolderBrowse() void {
         var acts = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = fi + 20700,
             .background = true,
-            .color_fill = row_bg,
+            .color_fill = @import("../ui/color_compat.zig").wrap(row_bg),
             .border = .{ .x = 1, .y = 0, .w = 0, .h = 0 },
-            .color_border = theme.colors.border_subtle,
+            .color_border = @import("../ui/color_compat.zig").wrap(theme.colors.border_subtle),
             .padding = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
             .margin = .{ .x = 4, .y = 0, .w = 0, .h = 0 },
             .gravity_y = 0.5,
@@ -1603,7 +1603,7 @@ fn renderFolderBrowse() void {
             var sbuf: [16]u8 = undefined;
             _ = dvui.label(@src(), "{s}", .{fmtSize(fsize, &sbuf)}, .{
                 .id_extra = fi + 20300,
-                .color_text = theme.colors.text_tertiary,
+                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_tertiary),
                 .min_size_content = .{ .w = 38, .h = 0 },
                 .gravity_y = 0.5,
                 .margin = .{ .x = 0, .y = 0, .w = 4, .h = 0 },
@@ -1613,9 +1613,9 @@ fn renderFolderBrowse() void {
         if (is_dir) {
             if (dvui.button(@src(), "Open", .{}, .{
                 .id_extra = fi + 20400,
-                .color_fill = theme.colors.accent,
-                .color_text = theme.colors.text_on_accent,
-                .corner_radius = theme.dims.rad_sm,
+                .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
+                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_on_accent),
+                .corners = theme.dims.rad_sm,
                 .padding = .{ .x = 8, .y = 3, .w = 8, .h = 3 },
                 .gravity_y = 0.5,
             })) {
@@ -1627,15 +1627,15 @@ fn renderFolderBrowse() void {
         } else {
             if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.play, .{}, .{}, .{
                 .id_extra = fi + 20500,
-                .color_fill = theme.transparent,
-                .color_fill_hover = theme.colors.bg_hover,
-                .color_fill_press = theme.colors.bg_elevated,
-                .color_text = theme.colors.success,
+                .color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent),
+                .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.bg_hover),
+                .color_fill_press = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.success),
                 .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
                 .gravity_y = 0.5,
             })) {
                 var fp: [1024]u8 = undefined;
-                if (std.fmt.bufPrintZ(&fp, "{s}/{s}", .{ effective_path, name })) |full| {
+                if (@import("../core/fmt_compat.zig").bufPrintZ(&fp, "{s}/{s}", .{ effective_path, name })) |full| {
                     if (state.app.active_player_idx < state.app.players.items.len) {
                         state.app.players.items[state.app.active_player_idx].load_file(full);
                         @import("../player/watch_history.zig").savePosition(name, 1.0, full);
@@ -1654,15 +1654,15 @@ fn renderFolderBrowse() void {
 
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"trash-2", .{}, .{}, .{
             .id_extra = fi + 20600,
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.danger.opacity(0.15),
-            .color_fill_press = theme.colors.danger.opacity(0.28),
-            .color_text = theme.colors.danger,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent),
+            .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.danger.opacity(0.15)),
+            .color_fill_press = @import("../ui/color_compat.zig").wrap(theme.colors.danger.opacity(0.28)),
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.danger),
             .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
             .gravity_y = 0.5,
         })) {
             var dp: [1024]u8 = undefined;
-            if (std.fmt.bufPrintZ(&dp, "{s}/{s}", .{ effective_path, name })) |del| {
+            if (@import("../core/fmt_compat.zig").bufPrintZ(&dp, "{s}/{s}", .{ effective_path, name })) |del| {
                 if (is_dir) io_global.cwdDeleteTree(del) catch {} else io_global.cwdDeleteFile(del) catch {};
                 browse_path_changed = true;
                 rows_dirty.store(true, .release);

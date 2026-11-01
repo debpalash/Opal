@@ -40,13 +40,13 @@ pub fn renderForYouRail() void {
         defer hdr.deinit();
 
         dvui.icon(@src(), "for-you", icons.tvg.lucide.sparkles, .{}, .{
-            .color_text = theme.colors.accent,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
             .min_size_content = theme.iconSize(.sm),
             .gravity_y = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
         _ = dvui.label(@src(), "For You", .{}, .{
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .font = dvui.themeGet().font_heading,
             .gravity_y = 0.5,
         });
@@ -58,7 +58,7 @@ pub fn renderForYouRail() void {
         // Transparent container — let the dark page show through (dvui's default
         // scroll fill is light; without this the rail rendered as a white box).
         .background = false,
-        .color_fill = theme.colors.bg_app,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_app),
         .min_size_content = .{ .w = 10, .h = CARD_H + 24 },
         .max_size_content = .{ .w = std.math.floatMax(f32), .h = CARD_H + 24 },
         .padding = .{ .x = theme.spacing.xs, .y = 0, .w = theme.spacing.xs, .h = theme.spacing.xs },
@@ -96,9 +96,9 @@ fn renderCard(rec: *const recommendations.Recommendation, id: usize) void {
         .min_size_content = .{ .w = CARD_W, .h = CARD_H },
         .max_size_content = .{ .w = CARD_W, .h = CARD_H },
         .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .color_fill_hover = theme.colors.bg_hover,
-        .corner_radius = dvui.Rect.all(theme.radius.md),
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+        .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+        .corners = dvui.CornerRect.all(theme.radius.md),
         .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
         .margin = dvui.Rect.all(theme.spacing.xs),
     });
@@ -121,7 +121,7 @@ fn renderCard(rec: *const recommendations.Recommendation, id: usize) void {
         _ = dvui.label(@src(), "{s}", .{title_safe}, .{
             .id_extra = id,
             .expand = .horizontal,
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .font = dvui.themeGet().font_heading,
             .gravity_y = 0.5,
         });
@@ -133,7 +133,7 @@ fn renderCard(rec: *const recommendations.Recommendation, id: usize) void {
         if (formatScore(&sb, rec.score)) |s| {
             _ = dvui.label(@src(), "{s}", .{s}, .{
                 .id_extra = id,
-                .color_text = theme.colors.accent,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
                 .gravity_y = 0.5,
                 .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
             });
@@ -157,7 +157,7 @@ fn renderCard(rec: *const recommendations.Recommendation, id: usize) void {
 
         dvui.icon(@src(), "because", icons.tvg.lucide.@"message-circle", .{}, .{
             .id_extra = id,
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .min_size_content = theme.iconSize(.xs),
             .gravity_y = 0.0,
             .margin = .{ .x = 0, .y = 2, .w = theme.spacing.xs, .h = 0 },
@@ -165,7 +165,7 @@ fn renderCard(rec: *const recommendations.Recommendation, id: usize) void {
         _ = dvui.label(@src(), "{s}", .{reason_safe}, .{
             .id_extra = id,
             .expand = .horizontal,
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         });
     }
 }

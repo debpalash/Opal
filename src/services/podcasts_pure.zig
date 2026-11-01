@@ -800,7 +800,7 @@ test "RSS enclosures decode XML entities and accept single quoted attributes" {
 test "RSS pages count usable items beyond 200 and have a truthful end" {
     const item = "<item><title>Episode</title><enclosure url='https://cdn.test/a.mp3'/></item>";
     const invalid = "<item><title>No enclosure</title></item>";
-    const xml = "<rss><channel>" ++ (item ++ invalid) ** 205 ++ "</channel></rss>";
+    const xml = "<rss><channel>" ++ @import("../core/repeat_pure.zig").bytes(item ++ invalid, 205) ++ "</channel></rss>";
     const rows = try std.testing.allocator.alloc(Episode, 200);
     defer std.testing.allocator.free(rows);
     const first = parseRssEpisodePage(xml, rows, 0);

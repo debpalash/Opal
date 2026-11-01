@@ -135,11 +135,7 @@ const Windows = struct {
     extern "ws2_32" fn GetAddrInfoExOverlappedResult(*anyopaque) callconv(.winapi) i32;
     const Address4 = extern struct { family: u16, port: u16, bytes: [4]u8, padding: [8]u8 };
     const Address6 = extern struct { family: u16, port: u16, flow: u32, bytes: [16]u8, scope: u32 };
-    const c = if (builtin.os.tag == .windows) @cImport({
-        @cDefine("_WIN32_WINNT", "0x0602");
-        @cInclude("winsock2.h");
-        @cInclude("ws2tcpip.h");
-    }) else struct {};
+    const c = if (builtin.os.tag == .windows) @import("opal-windows-c") else struct {};
     fn resolve(base: std.Io, host: Host, queue: *std.Io.Queue(Host.LookupResult), opts: Host.LookupOptions) Host.LookupError!void {
         try base.checkCancel();
         var wsa: c.WSADATA = undefined;

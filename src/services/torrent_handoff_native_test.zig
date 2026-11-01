@@ -28,7 +28,7 @@ test "Native torrent handoff worker consumes real GPU poster" {
     defer alloc.destroy(fixture);
     try window.begin(1);
     const pixel = [_]dvui.Color.PMA{.{ .r = 255, .g = 64, .b = 32, .a = 255 }};
-    fixture.loading_poster_tex = try dvui.textureCreate(&pixel, 1, 1, .linear, .rgba_32);
+    fixture.loading_poster_tex = try dvui.textureCreate(&pixel, .{ .width = 1, .height = 1, .format = .rgba_32, .interpolation = .linear, .wrap_u = .clamp, .wrap_v = .clamp });
     state.drainPendingPlay();
     try state.app.players.append(alloc, fixture);
     defer {

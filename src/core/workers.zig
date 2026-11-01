@@ -17,7 +17,7 @@ const Slot = struct {
     thread: ?std.Thread = null,
 };
 
-var slots: [MAX_OWNED_THREADS]Slot = [_]Slot{.{}} ** MAX_OWNED_THREADS;
+var slots: [MAX_OWNED_THREADS]Slot = @as([MAX_OWNED_THREADS]Slot, @splat(.{}));
 var slots_mutex: sync.Mutex = .{};
 
 // Slot indices whose worker finished but whose handle is not joined yet. A

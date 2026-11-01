@@ -351,7 +351,7 @@ test "Plex search projection keeps playable identity resume and alternate" {
         \\  {"ratingKey":7,"title":"Movie","type":"movie","Media":[{"Part":[{"key":"/library/parts/4/movie.mkv"}]}]}
         \\]}}
     ;
-    var rows: [4]SearchItem = [_]SearchItem{.{}} ** 4;
+    var rows: [4]SearchItem = @as([4]SearchItem, @splat(.{}));
     const count = parseSearchItems(std.testing.allocator, fixture, &rows).?;
     try std.testing.expectEqual(@as(usize, 2), count);
     try std.testing.expectEqualStrings("Lanterns · Pilot", rows[0].title[0..rows[0].title_len]);

@@ -324,7 +324,7 @@ pub const QUERY_MAX = 80;
 
 pub const MatchHelp = struct {
     queries: [MAX_QUERIES][QUERY_MAX]u8 = undefined,
-    lens: [MAX_QUERIES]u8 = [_]u8{0} ** MAX_QUERIES,
+    lens: [MAX_QUERIES]u8 = @as([MAX_QUERIES]u8, @splat(0)),
     count: usize = 0,
 
     pub fn get(self: *const MatchHelp, i: usize) []const u8 {
@@ -621,7 +621,7 @@ test "match help keeps only plain, distinct, bounded queries" {
     try std.testing.expect(parseMatchHelp(a, "{\"queries\":\"nope\"}") == null);
     try std.testing.expect(parseMatchHelp(a, "{\"queries\":[1,2]}") == null);
     try std.testing.expect(validQuery("千と千尋の神隠し"));
-    try std.testing.expect(!validQuery("x" ** 81));
+    try std.testing.expect(!validQuery(@import("../core/repeat_pure.zig").bytes("x", 81)));
 }
 
 test "hosts that point inward or are not plain names are refused" {

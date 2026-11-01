@@ -87,8 +87,8 @@ fn sameOrigin(a: std.Uri, b: std.Uri) bool {
     if ((a.port orelse default_port) != (b.port orelse default_port)) return false;
     var a_buf: [std.Io.net.HostName.max_len]u8 = undefined;
     var b_buf: [std.Io.net.HostName.max_len]u8 = undefined;
-    const a_host = a.getHost(&a_buf) catch return false;
-    const b_host = b.getHost(&b_buf) catch return false;
+    const a_host = std.Io.net.HostName.fromUri(a, &a_buf) catch return false;
+    const b_host = std.Io.net.HostName.fromUri(b, &b_buf) catch return false;
     return a_host.eql(b_host);
 }
 

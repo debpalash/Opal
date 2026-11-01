@@ -85,13 +85,13 @@ fn pollCommands() void {
                 _ = c.mpv.mpv_get_property(p.mpv_ctx, "duration", c.mpv.MPV_FORMAT_DOUBLE, &dur);
                 const target = pure.clampSeekTarget(arg, dur);
                 var buf: [64]u8 = undefined;
-                const seek_cmd = std.fmt.bufPrintZ(&buf, "seek {d:.2} absolute", .{target}) catch continue;
+                const seek_cmd = @import("../core/fmt_compat.zig").bufPrintZ(&buf, "seek {d:.2} absolute", .{target}) catch continue;
                 _ = c.mpv.mpv_command_string(p.mpv_ctx, seek_cmd.ptr);
             },
             .seek_relative => {
                 if (std.math.isNan(arg)) continue;
                 var buf: [64]u8 = undefined;
-                const seek_cmd = std.fmt.bufPrintZ(&buf, "seek {d:.1}", .{arg}) catch continue;
+                const seek_cmd = @import("../core/fmt_compat.zig").bufPrintZ(&buf, "seek {d:.1}", .{arg}) catch continue;
                 _ = c.mpv.mpv_command_string(p.mpv_ctx, seek_cmd.ptr);
             },
         }

@@ -1175,10 +1175,10 @@ test "question is cleaned, bounded and stripped of the > prefix" {
     try testing.expect(cleanQuestion(&b, ">") == null);
     try testing.expect(cleanQuestion(&b, "a\x00b") == null);
     try testing.expect(cleanQuestion(&b, "\xff\xfe") == null);
-    const long = "x" ** 900;
+    const long = @import("../core/repeat_pure.zig").bytes("x", 900);
     try testing.expectEqual(QUESTION_MAX, cleanQuestion(&b, long).?.len);
     // A cut inside a multi-byte character backs off.
-    const multi = "\xc3\xa9" ** 400;
+    const multi = @import("../core/repeat_pure.zig").bytes("\xc3\xa9", 400);
     const cut = cleanQuestion(&b, multi).?;
     try testing.expect(std.unicode.utf8ValidateSlice(cut));
     try testing.expect(cut.len <= QUESTION_MAX);

@@ -223,7 +223,7 @@ pub fn handleNowPlayingArt(stream: std.Io.net.Stream) void {
 // Requests for the same key share one fetch. Hash collisions only serialize
 // unrelated keys; they never share bytes or credentials.
 const ImageMutex = @import("../core/sync.zig").Mutex;
-var image_locks: [32]ImageMutex = [_]ImageMutex{.{}} ** 32;
+var image_locks: [32]ImageMutex = @as([32]ImageMutex, @splat(.{}));
 
 fn serveProxied(stream: std.Io.net.Stream, fetch_url: []const u8, cache_key: []const u8) void {
     const poster = @import("../core/poster.zig");

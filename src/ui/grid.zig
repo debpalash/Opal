@@ -66,8 +66,8 @@ pub fn renderChatMessages() void {
             var bubble = dvui.box(@src(), .{ .dir = .vertical }, .{
                 .id_extra = mi + 70002,
                 .background = true,
-                .color_fill = theme.colors.bg_elevated,
-                .corner_radius = dvui.Rect.all(theme.radius.xl),
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                .corners = dvui.CornerRect.all(theme.radius.xl),
                 .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
                 .margin = .{ .x = theme.spacing.xxl, .y = theme.spacing.xs, .w = 0, .h = theme.spacing.xs },
                 .max_size_content = dvui.Options.MaxSize.width(560),
@@ -78,7 +78,7 @@ pub fn renderChatMessages() void {
                 .background = false,
                 .padding = dvui.Rect.all(0),
             });
-            tl.addText(msg_text, .{ .color_text = theme.colors.text_primary });
+            tl.addText(msg_text, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary) });
             tl.deinit();
         } else {
             // ── Assistant: avatar + flowing text on the page (no bubble) ──
@@ -94,8 +94,8 @@ pub fn renderChatMessages() void {
                 var av = dvui.box(@src(), .{ .dir = .vertical }, .{
                     .id_extra = mi + 70003,
                     .background = true,
-                    .color_fill = theme.colors.bg_surface,
-                    .corner_radius = dvui.Rect.all(theme.radius.pill),
+                    .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+                    .corners = dvui.CornerRect.all(theme.radius.pill),
                     .min_size_content = .{ .w = 26, .h = 26 },
                     .max_size_content = dvui.Options.MaxSize.size(.{ .w = 26, .h = 26 }),
                     .margin = .{ .x = 0, .y = 2, .w = theme.spacing.sm, .h = 0 },
@@ -103,7 +103,7 @@ pub fn renderChatMessages() void {
                 defer av.deinit();
                 dvui.icon(@src(), "ai-avatar", icons.tvg.lucide.sparkles, .{}, .{
                     .id_extra = mi + 70004,
-                    .color_text = theme.colors.accent,
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
                     .min_size_content = .{ .w = 14, .h = 14 },
                     .gravity_x = 0.5,
                     .gravity_y = 0.5,
@@ -123,14 +123,14 @@ pub fn renderChatMessages() void {
                 defer trow.deinit();
                 dvui.spinner(@src(), .{
                     .id_extra = mi + 70007,
-                    .color_text = theme.colors.accent,
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
                     .min_size_content = .{ .w = 14, .h = 14 },
                     .gravity_y = 0.5,
                     .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
                 });
                 _ = dvui.label(@src(), "{s}", .{ai_chat.phaseLabel(ai_chat.phase)}, .{
                     .id_extra = mi + 72000,
-                    .color_text = theme.colors.text_tertiary,
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
                     .gravity_y = 0.5,
                 });
             } else {
@@ -139,7 +139,7 @@ pub fn renderChatMessages() void {
                     .background = false,
                     .padding = dvui.Rect.all(0),
                 });
-                tl.addText(msg_text, .{ .color_text = theme.colors.text_primary });
+                tl.addText(msg_text, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary) });
                 tl.deinit();
 
                 // Action row — copy / star / regenerate, quiet under the text.
@@ -153,11 +153,11 @@ pub fn renderChatMessages() void {
                 if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.copy, .{}, .{}, .{
                     .id_extra = mi + 71600,
                     .data_out = &copy_wd,
-                    .color_text = theme.colors.text_tertiary,
-                    .color_fill = theme.transparent,
-                    .color_fill_hover = theme.colors.bg_hover,
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
+                    .color_fill = @import("color_compat.zig").wrap(theme.transparent),
+                    .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
                     .border = dvui.Rect.all(0),
-                    .corner_radius = theme.dims.rad_sm,
+                    .corners = theme.dims.rad_sm,
                     .padding = .{ .x = theme.spacing.xs, .y = 2, .w = theme.spacing.xs, .h = 2 },
                     .min_size_content = theme.iconSize(.xs),
                 })) {
@@ -170,11 +170,11 @@ pub fn renderChatMessages() void {
                 if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.star, .{}, .{}, .{
                     .id_extra = mi + 71700,
                     .data_out = &star_wd,
-                    .color_text = if (m.starred) theme.colors.warning else theme.colors.text_tertiary,
-                    .color_fill = theme.transparent,
-                    .color_fill_hover = theme.colors.bg_hover,
+                    .color_text = @import("color_compat.zig").wrap(if (m.starred) theme.colors.warning else theme.colors.text_tertiary),
+                    .color_fill = @import("color_compat.zig").wrap(theme.transparent),
+                    .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
                     .border = dvui.Rect.all(0),
-                    .corner_radius = theme.dims.rad_sm,
+                    .corners = theme.dims.rad_sm,
                     .padding = .{ .x = theme.spacing.xs, .y = 2, .w = theme.spacing.xs, .h = 2 },
                     .min_size_content = theme.iconSize(.xs),
                 })) {
@@ -186,11 +186,11 @@ pub fn renderChatMessages() void {
                 if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"rotate-ccw", .{}, .{}, .{
                     .id_extra = mi + 71800,
                     .data_out = &regen_wd,
-                    .color_text = theme.colors.text_tertiary,
-                    .color_fill = theme.transparent,
-                    .color_fill_hover = theme.colors.bg_hover,
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
+                    .color_fill = @import("color_compat.zig").wrap(theme.transparent),
+                    .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
                     .border = dvui.Rect.all(0),
-                    .corner_radius = theme.dims.rad_sm,
+                    .corners = theme.dims.rad_sm,
                     .padding = .{ .x = theme.spacing.xs, .y = 2, .w = theme.spacing.xs, .h = 2 },
                     .min_size_content = theme.iconSize(.xs),
                 })) {
@@ -209,13 +209,13 @@ pub fn renderChatMessages() void {
             var prow = dvui.box(@src(), .{ .dir = .horizontal }, .{ .margin = .{ .x = 34, .y = theme.spacing.xs, .w = 0, .h = 0 } });
             defer prow.deinit();
             dvui.spinner(@src(), .{
-                .color_text = theme.colors.accent,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
                 .min_size_content = .{ .w = 12, .h = 12 },
                 .gravity_y = 0.5,
                 .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
             });
             _ = dvui.label(@src(), "{s}", .{label}, .{
-                .color_text = theme.colors.text_tertiary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
                 .gravity_y = 0.5,
             });
         }
@@ -277,7 +277,7 @@ pub fn muteBackgroundPlayers() void {
         if (i == state.app.active_player_idx) {
             // Restore active cell volume
             var vol_cmd: [64]u8 = undefined;
-            if (std.fmt.bufPrintZ(&vol_cmd, "set volume {d}", .{@as(i32, @intFromFloat(p.cell_volume))})) |cmd| {
+            if (@import("../core/fmt_compat.zig").bufPrintZ(&vol_cmd, "set volume {d}", .{@as(i32, @intFromFloat(p.cell_volume))})) |cmd| {
                 _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
             } else |_| {}
         } else {
@@ -402,7 +402,7 @@ fn createStreamingTexture(w: u32, h: u32, fmt: dvui.enums.TexturePixelFormat) !d
         c.sdl.SDL_BLENDOPERATION_ADD,
     );
     _ = c.sdl.SDL_SetTextureBlendMode(tex, pma_blend);
-    return dvui.Texture{ .ptr = tex, .width = w, .height = h, .format = fmt };
+    return dvui.Texture{ .ptr = tex, .width = w, .height = h, .format = fmt, .interpolation = .linear, .wrap_u = .clamp, .wrap_v = .clamp };
 }
 
 /// The audio now-playing pane — cover art + title/subtitle over a black fill,
@@ -425,10 +425,10 @@ fn renderAudioNowPlaying(i: usize, p: *player.MediaPlayer) void {
     if (dvui.button(@src(), "", .{}, .{
         .id_extra = i + 8801,
         .expand = .both,
-        .color_fill = theme.video_letterbox,
-        .color_text = theme.colors.text_primary,
+        .color_fill = @import("color_compat.zig").wrap(theme.video_letterbox),
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
         .border = dvui.Rect.all(0),
-        .corner_radius = theme.dims.rad_sm,
+        .corners = theme.dims.rad_sm,
     })) {
         state.app.active_player_idx = i;
         p.togglePause();
@@ -451,7 +451,7 @@ fn renderAudioNowPlaying(i: usize, p: *player.MediaPlayer) void {
             .id_extra = i + 8803,
             .min_size_content = .{ .w = COVER, .h = COVER },
             .max_size_content = .{ .w = COVER, .h = COVER },
-            .corner_radius = theme.dims.rad_md,
+            .corners = theme.dims.rad_md,
             .gravity_x = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = 20 },
         });
@@ -459,7 +459,7 @@ fn renderAudioNowPlaying(i: usize, p: *player.MediaPlayer) void {
         // No art yet (loading) or the item carries none → music-note glyph.
         _ = dvui.icon(@src(), "np-art-fallback", icons.tvg.lucide.music, .{}, .{
             .id_extra = i + 8803,
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
             .min_size_content = .{ .w = 96, .h = 96 },
             .max_size_content = .{ .w = 96, .h = 96 },
             .gravity_x = 0.5,
@@ -479,7 +479,7 @@ fn renderAudioNowPlaying(i: usize, p: *player.MediaPlayer) void {
         var tbuf: [256]u8 = undefined;
         _ = dvui.label(@src(), "{s}", .{text_mod.safeUtf8Buf(p.np_title[0..p.np_title_len], &tbuf)}, .{
             .id_extra = i + 8805,
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .font = dvui.themeGet().font_heading,
             .gravity_x = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
@@ -490,7 +490,7 @@ fn renderAudioNowPlaying(i: usize, p: *player.MediaPlayer) void {
         var sbuf: [192]u8 = undefined;
         _ = dvui.label(@src(), "{s}", .{text_mod.safeUtf8Buf(p.np_subtitle[0..p.np_subtitle_len], &sbuf)}, .{
             .id_extra = i + 8806,
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .gravity_x = 0.5,
         });
     }
@@ -503,12 +503,12 @@ pub fn renderGrid() !void {
             .padding = dvui.Rect.all(theme.spacing.md),
         });
         defer waiting.deinit();
-        dvui.spinner(@src(), .{ .color_text = theme.colors.accent });
+        dvui.spinner(@src(), .{ .color_text = @import("color_compat.zig").wrap(theme.colors.accent) });
         _ = dvui.label(@src(), "Finding stream…", .{}, .{
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
         });
         _ = dvui.label(@src(), "Playback starts when a matching stream is ready.", .{}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         });
         // Bounded, not per-frame: an unbounded refresh here pinned the whole app
         // at max frame rate for the entire duration of a stream lookup.
@@ -571,8 +571,8 @@ pub fn renderGrid() !void {
         const fs = state.app.fullscreen_player_idx != null;
         const full_bleed = fs or (state.app.page_shell_enabled and state.app.router.current == .player);
         const cell_margin = if (full_bleed) dvui.Rect.all(0) else dvui.Rect.all(2);
-        const cell_radius = if (full_bleed) dvui.Rect.all(0) else theme.dims.rad_sm;
-        var cell_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = i, .min_size_content = .{ .w = 10, .h = 10 }, .max_size_content = .{ .w = max_cell_w, .h = std.math.floatMax(f32) }, .expand = .both, .background = true, .color_fill = cell_fill, .color_border = cell_color, .border = border_rect, .margin = cell_margin, .corner_radius = cell_radius });
+        const cell_radius = if (full_bleed) dvui.CornerRect.all(0) else theme.dims.rad_sm;
+        var cell_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = i, .min_size_content = .{ .w = 10, .h = 10 }, .max_size_content = .{ .w = max_cell_w, .h = std.math.floatMax(f32) }, .expand = .both, .background = true, .color_fill = @import("color_compat.zig").wrap(cell_fill), .color_border = @import("color_compat.zig").wrap(cell_color), .border = border_rect, .margin = cell_margin, .corners = cell_radius });
 
         // Single wrapper overlay — ensures video content and control badges layer
         // rather than splitting the cell height vertically
@@ -645,19 +645,19 @@ pub fn renderGrid() !void {
 
                     dvui.icon(@src(), "Playback error", icons.tvg.lucide.x, .{}, .{
                         .id_extra = i + 5601,
-                        .color_text = theme.colors.danger,
+                        .color_text = @import("color_compat.zig").wrap(theme.colors.danger),
                         .min_size_content = theme.iconSize(.lg),
                         .gravity_x = 0.5,
                         .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.md },
                     });
                     _ = dvui.label(@src(), "Playback stopped", .{}, .{
                         .id_extra = i + 5602,
-                        .color_text = theme.colors.text_primary,
+                        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
                         .gravity_x = 0.5,
                     });
                     _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8(p.load_error[0..p.load_error_len])}, .{
                         .id_extra = i + 5603,
-                        .color_text = theme.colors.text_secondary,
+                        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
                         .gravity_x = 0.5,
                         .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = theme.spacing.lg },
                     });
@@ -730,17 +730,17 @@ pub fn renderGrid() !void {
 
                             if (SurfaceGesture.armed_cell == i) {
                                 if (me.action == .motion) {
-                                    if (dvui.dragging(me.p, SurfaceGesture.drag_name) != null) {
+                                    if (dvui.dragging(me, SurfaceGesture.drag_name) != null) {
                                         SurfaceGesture.armed_cell = null;
                                         dvui.captureMouse(null, e.num);
-                                        dvui.dragEnd();
+                                        dvui.dragEnd(.left);
                                         e.handle(@src(), &img_wd);
                                         _ = @import("titlebar.zig").beginNativeDrag();
                                     }
                                 } else if (me.action == .release and me.button == .left) {
                                     SurfaceGesture.armed_cell = null;
                                     dvui.captureMouse(null, e.num);
-                                    dvui.dragEnd();
+                                    dvui.dragEnd(.left);
                                     state.app.active_player_idx = i;
                                     // Double-click → fullscreen, single → pause.
                                     // Shares input_pure.DoubleTap with the F F
@@ -772,7 +772,7 @@ pub fn renderGrid() !void {
                                 if (me.action == .press and me.button == .left and state.app.dragging_magnet_len == 0) {
                                     SurfaceGesture.armed_cell = i;
                                     dvui.captureMouse(&img_wd, e.num);
-                                    dvui.dragPreStart(me.p, .{ .name = SurfaceGesture.drag_name });
+                                    dvui.dragPreStart(.left, me.p, .{ .name = SurfaceGesture.drag_name });
                                     e.handle(@src(), &img_wd);
                                 } else if (me.action == .release and me.button == .left) {
                                     if (state.app.dragging_magnet_len > 0) {
@@ -786,7 +786,7 @@ pub fn renderGrid() !void {
 
                     if (p.is_torrent and (!p.torrent_is_ready or p.is_buffering_paused)) {
                         // Background darkener overlay
-                        var dim_box = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i, .expand = .both, .background = true, .color_fill = theme.colors.overlay, .corner_radius = theme.dims.rad_sm });
+                        var dim_box = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i, .expand = .both, .background = true, .color_fill = @import("color_compat.zig").wrap(theme.colors.overlay), .corners = theme.dims.rad_sm });
                         dim_box.deinit();
 
                         var o_lay = dvui.overlay(@src(), .{ .id_extra = i, .expand = .both });
@@ -794,7 +794,7 @@ pub fn renderGrid() !void {
 
                         // Borderless elevated panel — separated from the dim backdrop by
                         // its fill tier and whitespace alone (no glass outline).
-                        var loading_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = i, .gravity_y = 0.5, .gravity_x = 0.5, .background = true, .color_fill = theme.colors.bg_elevated, .padding = theme.dims.pad_lg, .margin = dvui.Rect.all(theme.spacing.xl), .corner_radius = theme.dims.rad_lg, .min_size_content = .{ .w = 320, .h = 10 } });
+                        var loading_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = i, .gravity_y = 0.5, .gravity_x = 0.5, .background = true, .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated), .padding = theme.dims.pad_lg, .margin = dvui.Rect.all(theme.spacing.xl), .corners = theme.dims.rad_lg, .min_size_content = .{ .w = 320, .h = 10 } });
 
                         var t_name: [256]u8 = undefined;
                         c.mpv.torrent_get_name(state.torrentSession(), p.current_torrent_id, &t_name, 256);
@@ -802,7 +802,7 @@ pub fn renderGrid() !void {
 
                         // Torrent name is untrusted metadata (non-UTF-8 / truncated
                         // mid-codepoint at the 256-byte cap) — validate before dvui.
-                        _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8(t_name[0..name_len])}, .{ .color_text = theme.colors.text_primary, .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 0 } });
+                        _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8(t_name[0..name_len])}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary), .margin = .{ .x = 0, .y = theme.spacing.xs, .w = 0, .h = 0 } });
 
                         var buf_pct: f32 = 0;
                         var dl_rate: i32 = 0;
@@ -817,23 +817,23 @@ pub fn renderGrid() !void {
 
                         if (is_dead) {
                             // Transient failure — danger as text only, no resting fill.
-                            _ = dvui.label(@src(), "Dead torrent", .{}, .{ .color_text = theme.colors.danger, .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 } });
-                            _ = dvui.label(@src(), "No peers found after 15 seconds.", .{}, .{ .color_text = theme.colors.text_secondary, .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 } });
+                            _ = dvui.label(@src(), "Dead torrent", .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.danger), .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 } });
+                            _ = dvui.label(@src(), "No peers found after 15 seconds.", .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary), .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 } });
                             if (dvui.button(@src(), "Close Stream", .{}, .{
-                                .color_fill = theme.transparent,
-                                .color_fill_hover = theme.colors.bg_hover,
-                                .color_fill_press = theme.colors.bg_elevated,
-                                .color_text = theme.colors.danger,
+                                .color_fill = @import("color_compat.zig").wrap(theme.transparent),
+                                .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+                                .color_fill_press = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                                .color_text = @import("color_compat.zig").wrap(theme.colors.danger),
                                 .border = dvui.Rect.all(0),
-                                .corner_radius = theme.dims.rad_sm,
+                                .corners = theme.dims.rad_sm,
                             })) {
                                 _ = transfers.deleteTorrentById(p.current_torrent_id);
                             }
                         } else {
                             const dr_mb = @as(f32, @floatFromInt(dl_rate)) / (1024.0 * 1024.0);
                             var status_lb: [128]u8 = undefined;
-                            if (std.fmt.bufPrintZ(&status_lb, "Downloading: {d:.1} MB/s | {d} Peers", .{ dr_mb, peers })) |msg| {
-                                _ = dvui.label(@src(), "{s}", .{msg}, .{ .color_text = theme.colors.text_secondary, .margin = .{ .y = theme.spacing.sm } });
+                            if (@import("../core/fmt_compat.zig").bufPrintZ(&status_lb, "Downloading: {d:.1} MB/s | {d} Peers", .{ dr_mb, peers })) |msg| {
+                                _ = dvui.label(@src(), "{s}", .{msg}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary), .margin = .{ .y = theme.spacing.sm } });
                             } else |_| {}
 
                             // Show readiness, NOT whole-torrent progress.
@@ -855,15 +855,15 @@ pub fn renderGrid() !void {
 
                             var prog_lb: [64]u8 = undefined;
                             const label: []const u8 = if (gated) "Buffering" else "Buffer";
-                            if (std.fmt.bufPrintZ(&prog_lb, "{s}: {d}%", .{ label, @as(i32, @intFromFloat(shown * 100.0)) })) |msg| {
+                            if (@import("../core/fmt_compat.zig").bufPrintZ(&prog_lb, "{s}: {d}%", .{ label, @as(i32, @intFromFloat(shown * 100.0)) })) |msg| {
                                 components.ProgressBar(@src(), shown, msg, i);
                             } else |_| {}
                         }
 
                         loading_box.deinit();
                     } else if (p.is_buffering_paused) {
-                        var loading_box = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i, .gravity_y = 0.5, .gravity_x = 0.5, .background = true, .color_fill = theme.colors.bg_elevated, .padding = theme.dims.pad_md, .corner_radius = theme.dims.rad_md });
-                        _ = dvui.label(@src(), "Initializing network…", .{}, .{ .color_text = theme.colors.text_secondary });
+                        var loading_box = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i, .gravity_y = 0.5, .gravity_x = 0.5, .background = true, .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated), .padding = theme.dims.pad_md, .corners = theme.dims.rad_md });
+                        _ = dvui.label(@src(), "Initializing network…", .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary) });
                         loading_box.deinit();
                     }
 
@@ -874,9 +874,9 @@ pub fn renderGrid() !void {
                     if (state.app.show_cell_overlay and !dedicated_player) {
                         var tr_box = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i, .expand = .none, .gravity_x = 1.0, .gravity_y = 0.0, .padding = dvui.Rect.all(8) });
 
-                        var x_bg = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i, .background = true, .color_fill = theme.colors.overlay, .corner_radius = dvui.Rect.all(theme.radius.pill), .padding = theme.dims.pad_xs });
+                        var x_bg = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i, .background = true, .color_fill = @import("color_compat.zig").wrap(theme.colors.overlay), .corners = dvui.CornerRect.all(theme.radius.pill), .padding = theme.dims.pad_xs });
 
-                        if (dvui.buttonIcon(@src(), "CellClose", icons.tvg.lucide.x, .{}, .{}, .{ .id_extra = i, .color_text = theme.colors.text_secondary, .color_fill = .{ .r = 0, .g = 0, .b = 0, .a = 0 }, .border = dvui.Rect.all(0) })) {
+                        if (dvui.buttonIcon(@src(), "CellClose", icons.tvg.lucide.x, .{}, .{}, .{ .id_extra = i, .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary), .color_fill = @import("color_compat.zig").wrap(.{ .r = 0, .g = 0, .b = 0, .a = 0 }), .border = dvui.Rect.all(0) })) {
                             state.app.pending_remove_player_idx = @as(i32, @intCast(i));
                         }
 
@@ -896,22 +896,22 @@ pub fn renderGrid() !void {
                                 .gravity_x = 0.0,
                                 .gravity_y = 0.0,
                                 .background = true,
-                                .color_fill = theme.colors.overlay,
-                                .corner_radius = theme.dims.rad_md,
+                                .color_fill = @import("color_compat.zig").wrap(theme.colors.overlay),
+                                .corners = theme.dims.rad_md,
                                 .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
                                 .margin = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = 0, .h = 0 },
                             });
                             // Transient capture status — danger as text/icon only.
                             _ = dvui.icon(@src(), "", icons.tvg.lucide.circle, .{}, .{
                                 .id_extra = i + 7003,
-                                .color_text = theme.colors.danger,
+                                .color_text = @import("color_compat.zig").wrap(theme.colors.danger),
                                 .min_size_content = .{ .w = 10, .h = 10 },
                                 .margin = .{ .w = theme.spacing.xs },
                                 .gravity_y = 0.5,
                             });
                             _ = dvui.label(@src(), "REC", .{}, .{
                                 .id_extra = i + 7002,
-                                .color_text = theme.colors.danger,
+                                .color_text = @import("color_compat.zig").wrap(theme.colors.danger),
                                 .gravity_y = 0.5,
                             });
                             rec_box.deinit();
@@ -988,9 +988,9 @@ pub fn renderGrid() !void {
                             .id_extra = i + 3000,
                             .expand = .both,
                             .background = true,
-                            .color_fill = theme.colors.bg_deep,
+                            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_deep),
                             .border = dvui.Rect.all(0),
-                            .corner_radius = theme.dims.rad_sm,
+                            .corners = theme.dims.rad_sm,
                         });
                         loading_backdrop.deinit();
 
@@ -999,11 +999,11 @@ pub fn renderGrid() !void {
                             .id_extra = i + 3001,
                             .gravity_x = 1.0,
                             .gravity_y = 0.0,
-                            .color_fill = theme.colors.overlay,
-                            .color_fill_hover = theme.colors.bg_hover,
-                            .color_text = theme.colors.text_primary,
+                            .color_fill = @import("color_compat.zig").wrap(theme.colors.overlay),
+                            .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+                            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
                             .border = dvui.Rect.all(0),
-                            .corner_radius = dvui.Rect.all(theme.radius.pill),
+                            .corners = dvui.CornerRect.all(theme.radius.pill),
                             .padding = dvui.Rect.all(7),
                             .margin = dvui.Rect.all(theme.spacing.md),
                         })) {
@@ -1044,15 +1044,15 @@ pub fn renderGrid() !void {
                         // invalidates immediately (same idiom as footer.zig).
                         const Swarm = struct {
                             const SLOTS = 8;
-                            var tid: [SLOTS]i32 = [_]i32{-1} ** SLOTS;
-                            var at_ms: [SLOTS]i64 = [_]i64{0} ** SLOTS;
-                            var rate: [SLOTS]i32 = [_]i32{0} ** SLOTS;
-                            var seeds: [SLOTS]i32 = [_]i32{0} ** SLOTS;
-                            var peers: [SLOTS]i32 = [_]i32{0} ** SLOTS;
-                            var prog: [SLOTS]f32 = [_]f32{0} ** SLOTS;
+                            var tid: [SLOTS]i32 = @as([SLOTS]i32, @splat(-1));
+                            var at_ms: [SLOTS]i64 = @as([SLOTS]i64, @splat(0));
+                            var rate: [SLOTS]i32 = @as([SLOTS]i32, @splat(0));
+                            var seeds: [SLOTS]i32 = @as([SLOTS]i32, @splat(0));
+                            var peers: [SLOTS]i32 = @as([SLOTS]i32, @splat(0));
+                            var prog: [SLOTS]f32 = @as([SLOTS]f32, @splat(0));
                             var buckets: [SLOTS][lpure.PIECE_BUCKETS]f32 =
-                                [_][lpure.PIECE_BUCKETS]f32{[_]f32{0} ** lpure.PIECE_BUCKETS} ** SLOTS;
-                            var bucket_n: [SLOTS]usize = [_]usize{0} ** SLOTS;
+                                @as([SLOTS][lpure.PIECE_BUCKETS]f32, @splat(@as([lpure.PIECE_BUCKETS]f32, @splat(0))));
+                            var bucket_n: [SLOTS]usize = @as([SLOTS]usize, @splat(0));
                         };
                         const slot = i % Swarm.SLOTS;
                         const is_torrent_load = p.is_torrent and p.current_torrent_id >= 0;
@@ -1128,7 +1128,7 @@ pub fn renderGrid() !void {
                                         .id_extra = i + 3010,
                                         .min_size_content = .{ .w = fit.w, .h = fit.h },
                                         .max_size_content = .{ .w = fit.w, .h = fit.h },
-                                        .corner_radius = theme.dims.rad_md,
+                                        .corners = theme.dims.rad_md,
                                         .gravity_x = 0.5,
                                         .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.lg },
                                     });
@@ -1171,7 +1171,7 @@ pub fn renderGrid() !void {
                             defer title_wrap.deinit();
                             dvui.labelEx(@src(), "{s}", .{title}, .{ .align_x = 0.5 }, .{
                                 .id_extra = i + 3151,
-                                .color_text = theme.colors.text_primary,
+                                .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
                                 .font = dvui.themeGet().font_heading,
                                 .expand = .horizontal,
                             });
@@ -1194,7 +1194,7 @@ pub fn renderGrid() !void {
                             if (meta.len > 0) {
                                 _ = dvui.label(@src(), "{s}", .{meta}, .{
                                     .id_extra = i + 3152,
-                                    .color_text = theme.colors.text_tertiary,
+                                    .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
                                     .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
                                     .gravity_x = 0.5,
                                 });
@@ -1225,7 +1225,7 @@ pub fn renderGrid() !void {
                                 phase_base;
                             _ = dvui.label(@src(), "{s}", .{phase_txt}, .{
                                 .id_extra = i + 3190,
-                                .color_text = theme.colors.text_secondary,
+                                .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
                                 .gravity_x = 0.5,
                                 .margin = .{ .x = 0, .y = theme.spacing.lg, .w = 0, .h = theme.spacing.sm },
                             });
@@ -1243,7 +1243,7 @@ pub fn renderGrid() !void {
                             fn f(b: fpure.BarRect, color: dvui.Color, radius: f32) void {
                                 if (b.w <= 0 or b.h <= 0) return;
                                 const rr: dvui.Rect.Physical = .{ .x = b.x, .y = b.y, .w = b.w, .h = b.h };
-                                rr.fill(dvui.Rect.Physical.all(radius), .{ .color = color });
+                                rr.fill(dvui.CornerRect.Physical.all(radius), .{ .color = .{ .color = color } });
                             }
                         }.f;
 
@@ -1327,7 +1327,7 @@ pub fn renderGrid() !void {
                             if (stats.len > 0) {
                                 _ = dvui.label(@src(), "{s}", .{stats}, .{
                                     .id_extra = i + 3220,
-                                    .color_text = theme.colors.text_tertiary,
+                                    .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
                                     .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
                                     .gravity_x = 0.5,
                                     .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 },
@@ -1382,7 +1382,7 @@ pub fn renderGrid() !void {
                             );
                             dvui.labelEx(@src(), "{s}", .{card_txt}, .{ .align_x = 0.5 }, .{
                                 .id_extra = i + 3161,
-                                .color_text = theme.colors.text_secondary,
+                                .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
                                 .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
                                 .expand = .horizontal,
                             });
@@ -1400,10 +1400,10 @@ pub fn renderGrid() !void {
 
                                 if (dvui.buttonIcon(@src(), "fact-prev", icons.tvg.lucide.@"chevron-left", .{}, .{}, .{
                                     .id_extra = i + 3171,
-                                    .color_fill = theme.transparent,
-                                    .color_fill_hover = theme.colors.bg_hover,
-                                    .color_fill_press = theme.colors.bg_elevated,
-                                    .color_text = theme.colors.text_tertiary,
+                                    .color_fill = @import("color_compat.zig").wrap(theme.transparent),
+                                    .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+                                    .color_fill_press = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                                    .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
                                     .border = dvui.Rect.all(0),
                                     .min_size_content = .{ .w = 18, .h = 18 },
                                     .max_size_content = .{ .w = 18, .h = 18 },
@@ -1421,8 +1421,8 @@ pub fn renderGrid() !void {
                                     var dot = dvui.box(@src(), .{}, .{
                                         .id_extra = i + 3180 + d,
                                         .background = true,
-                                        .color_fill = if (on) theme.colors.text_primary else theme.colors.border_subtle,
-                                        .corner_radius = dvui.Rect.all(theme.radius.pill),
+                                        .color_fill = @import("color_compat.zig").wrap(if (on) theme.colors.text_primary else theme.colors.border_subtle),
+                                        .corners = dvui.CornerRect.all(theme.radius.pill),
                                         .min_size_content = .{ .w = 5, .h = 5 },
                                         .max_size_content = .{ .w = 5, .h = 5 },
                                         .margin = .{ .x = 3, .y = 0, .w = 3, .h = 0 },
@@ -1433,10 +1433,10 @@ pub fn renderGrid() !void {
 
                                 if (dvui.buttonIcon(@src(), "fact-next", icons.tvg.lucide.@"chevron-right", .{}, .{}, .{
                                     .id_extra = i + 3172,
-                                    .color_fill = theme.transparent,
-                                    .color_fill_hover = theme.colors.bg_hover,
-                                    .color_fill_press = theme.colors.bg_elevated,
-                                    .color_text = theme.colors.text_tertiary,
+                                    .color_fill = @import("color_compat.zig").wrap(theme.transparent),
+                                    .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+                                    .color_fill_press = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                                    .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
                                     .border = dvui.Rect.all(0),
                                     .min_size_content = .{ .w = 18, .h = 18 },
                                     .max_size_content = .{ .w = 18, .h = 18 },
@@ -1496,10 +1496,10 @@ pub fn renderGrid() !void {
                         if (dvui.button(@src(), "", .{}, .{
                             .id_extra = i + 5510,
                             .expand = .both,
-                            .color_fill = theme.colors.bg_deep,
-                            .color_text = theme.colors.text_primary,
+                            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_deep),
+                            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
                             .border = dvui.Rect.all(0),
-                            .corner_radius = theme.dims.rad_sm,
+                            .corners = theme.dims.rad_sm,
                         })) {
                             state.app.active_player_idx = i;
                         }
@@ -1517,7 +1517,7 @@ pub fn renderGrid() !void {
                 if (dvui.button(@src(), "", .{}, .{
                     .id_extra = i + 5000,
                     .expand = .both,
-                    .color_fill = theme.transparent,
+                    .color_fill = @import("color_compat.zig").wrap(theme.transparent),
                 })) {
                     state.app.active_player_idx = i;
                 }
@@ -1541,7 +1541,7 @@ fn renderEmptyPlayer(i: usize) void {
     var outer = dvui.box(@src(), .{ .dir = .vertical }, .{
         .id_extra = i,
         .expand = .both,
-        .color_fill = theme.transparent,
+        .color_fill = @import("color_compat.zig").wrap(theme.transparent),
     });
 
     var card = dvui.box(@src(), .{ .dir = .vertical }, .{
@@ -1556,7 +1556,7 @@ fn renderEmptyPlayer(i: usize) void {
     });
 
     _ = dvui.label(@src(), "Drop a file here to play", .{}, .{
-        .color_text = theme.colors.text_primary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
         .gravity_x = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm },
     });
@@ -1652,8 +1652,8 @@ fn renderContinueWatching() void {
             .padding = dvui.Rect.all(theme.spacing.md),
             .margin = .{ .x = 0, .y = theme.spacing.sm / 2, .w = 0, .h = theme.spacing.sm / 2 },
             .background = true,
-            .color_fill = theme.colors.bg_surface,
-            .corner_radius = dvui.Rect.all(theme.radius.md),
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+            .corners = dvui.CornerRect.all(theme.radius.md),
         });
         defer card.deinit();
 
@@ -1669,7 +1669,7 @@ fn renderContinueWatching() void {
             // accent in this row.
             _ = dvui.icon(@src(), "", icons.tvg.lucide.play, .{}, .{
                 .id_extra = si + 43100,
-                .color_text = theme.colors.text_secondary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
                 .min_size_content = .{ .w = 14, .h = 14 },
                 .margin = .{ .w = theme.spacing.sm },
                 .gravity_y = 0.5,
@@ -1679,7 +1679,7 @@ fn renderContinueWatching() void {
             const safe_disp = @import("../core/text.zig").safeUtf8Buf(disp, &disp_buf);
             _ = dvui.label(@src(), "{s}", .{safe_disp}, .{
                 .id_extra = si + 43200,
-                .color_text = theme.colors.text_primary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
                 .gravity_y = 0.5,
                 .expand = .horizontal,
             });
@@ -1694,12 +1694,12 @@ fn renderContinueWatching() void {
             // signal resumability; the action stays neutral.
             const resume_clicked = dvui.button(@src(), "Resume", .{}, .{
                 .id_extra = si + 43400,
-                .color_fill = theme.transparent,
-                .color_fill_hover = theme.colors.bg_hover,
-                .color_fill_press = theme.colors.bg_elevated,
-                .color_text = theme.colors.text_secondary,
+                .color_fill = @import("color_compat.zig").wrap(theme.transparent),
+                .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+                .color_fill_press = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
                 .border = dvui.Rect.all(0),
-                .corner_radius = theme.dims.rad_sm,
+                .corners = theme.dims.rad_sm,
                 .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
                 .min_size_content = .{ .w = 0, .h = 36 },
                 .max_size_content = .{ .w = std.math.floatMax(f32), .h = 36 },
@@ -1732,8 +1732,8 @@ fn renderContinueWatching() void {
                 .id_extra = si + 43500,
                 .expand = .horizontal,
                 .background = true,
-                .color_fill = theme.colors.bg_elevated,
-                .corner_radius = dvui.Rect.all(theme.radius.sm),
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+                .corners = dvui.CornerRect.all(theme.radius.sm),
                 .min_size_content = .{ .w = 0, .h = bar_h },
                 .max_size_content = .{ .w = std.math.floatMax(f32), .h = bar_h },
                 .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = 0 },
@@ -1748,8 +1748,8 @@ fn renderContinueWatching() void {
             var fill_box = dvui.box(@src(), .{}, .{
                 .id_extra = si + 43600,
                 .background = true,
-                .color_fill = theme.colors.accent,
-                .corner_radius = dvui.Rect.all(theme.radius.sm),
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
+                .corners = dvui.CornerRect.all(theme.radius.sm),
                 .min_size_content = .{ .w = fill_w, .h = bar_h },
                 .max_size_content = .{ .w = fill_w, .h = bar_h },
             });

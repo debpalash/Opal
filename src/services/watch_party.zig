@@ -14,7 +14,7 @@ pub var party_port: u16 = 41596;
 // Host state
 var host_thread: ?std.Thread = null;
 var host_running: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
-var client_streams: [8]?std.Io.net.Stream = .{null} ** 8;
+var client_streams: [8]?std.Io.net.Stream = @splat(null);
 var client_count: usize = 0;
 var clients_mutex: @import("../core/sync.zig").Mutex = .{};
 
@@ -25,7 +25,7 @@ var client_stream: ?std.Io.net.Stream = null;
 
 // Chat buffer (visible in UI)
 pub var chat_msgs: [32][128]u8 = std.mem.zeroes([32][128]u8);
-pub var chat_msg_lens: [32]u8 = .{0} ** 32;
+pub var chat_msg_lens: [32]u8 = @splat(0);
 pub var chat_count: usize = 0;
 pub var chat_input: [128]u8 = std.mem.zeroes([128]u8);
 
@@ -326,7 +326,7 @@ fn applyCommand(cmd: []const u8) void {
         }
         if (!valid) return;
         var seek_buf: [64]u8 = undefined;
-        const seek_cmd = std.fmt.bufPrintZ(&seek_buf, "seek {s} absolute", .{seek_val}) catch return;
+        const seek_cmd = @import("../core/fmt_compat.zig").bufPrintZ(&seek_buf, "seek {s} absolute", .{seek_val}) catch return;
         _ = c.mpv.mpv_command_string(ap.mpv_ctx, seek_cmd.ptr);
     } else if (std.mem.startsWith(u8, cmd, "LOAD ")) {
         const url = cmd[5..];

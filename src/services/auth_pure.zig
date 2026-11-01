@@ -57,8 +57,8 @@ test "hash + verify round-trips (shipped params)" {
 }
 
 test "different salts → different hashes, both verify" {
-    const s1: [SALT_LEN]u8 = [_]u8{1} ** SALT_LEN;
-    const s2: [SALT_LEN]u8 = [_]u8{2} ** SALT_LEN;
+    const s1: [SALT_LEN]u8 = @as([SALT_LEN]u8, @splat(1));
+    const s2: [SALT_LEN]u8 = @as([SALT_LEN]u8, @splat(2));
     var b1: [HASH_BUF]u8 = undefined;
     var b2: [HASH_BUF]u8 = undefined;
     const h1 = try hashWithSalt("hunter2!!", s1, &b1);
@@ -74,7 +74,7 @@ test "username validation" {
     try std.testing.expect(!validUsername("ab")); // too short
     try std.testing.expect(!validUsername("has space"));
     try std.testing.expect(!validUsername("bad/slash"));
-    try std.testing.expect(!validUsername("x" ** 33)); // too long
+    try std.testing.expect(!validUsername(@import("../core/repeat_pure.zig").bytes("x", 33))); // too long
 }
 
 test "password validation" {

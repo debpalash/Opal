@@ -97,7 +97,7 @@ pub const Profile = struct {
 };
 
 pub const Registry = struct {
-    profiles: [MAX_PROFILES]Profile = [_]Profile{.{}} ** MAX_PROFILES,
+    profiles: [MAX_PROFILES]Profile = @as([MAX_PROFILES]Profile, @splat(.{})),
     count: usize = 0,
     /// The profile the NEXT launch opens (the running one is fixed per process).
     active: [ID_MAX]u8 = std.mem.zeroes([ID_MAX]u8),
@@ -550,8 +550,8 @@ test "pin: digits only, 4-8 long" {
 test "pin hash round-trips, salts differ, wrong pin and tampering fail" {
     var a_buf: [HASH_MAX]u8 = undefined;
     var b_buf: [HASH_MAX]u8 = undefined;
-    const a = hashPin("2468", [_]u8{1} ** SALT_LEN, 1000, &a_buf).?;
-    const b = hashPin("2468", [_]u8{2} ** SALT_LEN, 1000, &b_buf).?;
+    const a = hashPin("2468", @as([SALT_LEN]u8, @splat(1)), 1000, &a_buf).?;
+    const b = hashPin("2468", @as([SALT_LEN]u8, @splat(2)), 1000, &b_buf).?;
     try T.expect(std.mem.startsWith(u8, a, "pbkdf2-sha256$1000$"));
     try T.expect(!std.mem.eql(u8, a, b)); // per-PIN random salt
     try T.expect(verifyPin("2468", a));
@@ -566,7 +566,7 @@ test "pin hash round-trips, salts differ, wrong pin and tampering fail" {
     try T.expect(!verifyPin("2468", "bcrypt$1000$aa$bb"));
     try T.expect(!verifyPin("2468", "pbkdf2-sha256$0$00$00"));
     try T.expect(!verifyPin("2468", ""));
-    try T.expect(hashPin("12", [_]u8{1} ** SALT_LEN, 1000, &a_buf) == null);
+    try T.expect(hashPin("12", @as([SALT_LEN]u8, @splat(1)), 1000, &a_buf) == null);
 }
 
 test "backoff: three free attempts then doubling lockout, capped" {

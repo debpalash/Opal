@@ -214,7 +214,7 @@ pub fn renderComingUpRail(card_w: f32) bool {
             "Some calendar updates are unavailable."
         else
             "Showing the last available calendar."}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .font = dvui.themeGet().font_body,
         });
         if (!calendar.loading and components.actionButton(@src(), "Retry calendar", .secondary, 52103))
@@ -233,13 +233,13 @@ pub fn renderComingUpRail(card_w: f32) bool {
         });
         defer hdr.deinit();
         dvui.icon(@src(), "comingup", icons.tvg.lucide.@"calendar-clock", .{}, .{
-            .color_text = theme.colors.accent,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
             .min_size_content = theme.iconSize(.md),
             .gravity_y = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
         _ = dvui.label(@src(), "Coming up", .{}, .{
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .font = dvui.themeGet().font_heading.withSize(17),
             .gravity_y = 0.5,
         });
@@ -277,11 +277,11 @@ pub fn renderComingUpRail(card_w: f32) bool {
             .min_size_content = .{ .w = card_w, .h = poster_h + STRIP_CHROME },
             .max_size_content = .{ .w = card_w, .h = poster_h + STRIP_CHROME },
             .background = true,
-            .color_fill = transparent,
-            .color_fill_hover = theme.colors.bg_surface,
-            .color_border = theme.colors.border_subtle,
+            .color_fill = @import("color_compat.zig").wrap(transparent),
+            .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+            .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
             .border = dvui.Rect.all(1),
-            .corner_radius = dvui.Rect.all(theme.radius.lg),
+            .corners = dvui.CornerRect.all(theme.radius.lg),
             .padding = dvui.Rect.all(5),
             .margin = dvui.Rect.all(6),
         });
@@ -293,8 +293,8 @@ pub fn renderComingUpRail(card_w: f32) bool {
             bw.init(@src(), .{}, .{
                 .id_extra = i + 47100,
                 .background = true,
-                .color_fill = theme.colors.bg_surface,
-                .corner_radius = dvui.Rect.all(theme.radius.lg),
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+                .corners = dvui.CornerRect.all(theme.radius.lg),
                 .min_size_content = .{ .w = card_w, .h = poster_h },
                 .max_size_content = .{ .w = card_w, .h = poster_h },
                 .padding = dvui.Rect.all(0),
@@ -309,7 +309,7 @@ pub fn renderComingUpRail(card_w: f32) bool {
                 _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
                     .id_extra = i + 47200,
                     .expand = .both,
-                    .corner_radius = dvui.Rect.all(theme.radius.lg),
+                    .corners = dvui.CornerRect.all(theme.radius.lg),
                 });
             } else {
                 // Failure-latch (mirrors the TMDB grid): the old code gated on
@@ -340,7 +340,7 @@ pub fn renderComingUpRail(card_w: f32) bool {
         var nm_buf: [96]u8 = undefined;
         _ = dvui.label(@src(), "{s}", .{text_mod.safeUtf8Buf(e.name[0..@min(e.name_len, 60)], &nm_buf)}, .{
             .id_extra = i + 47300,
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
         });
 
@@ -356,7 +356,7 @@ pub fn renderComingUpRail(card_w: f32) bool {
             (std.fmt.bufPrint(&line_buf, "S{d:0>2}E{d:0>2} unwatched", .{ @as(u32, @intCast(@max(0, e.last_season))), @as(u32, @intCast(@max(0, e.last_episode))) }) catch "unwatched");
         _ = dvui.label(@src(), "{s}", .{line}, .{
             .id_extra = i + 47400,
-            .color_text = if (e.available) theme.colors.success else theme.colors.text_tertiary,
+            .color_text = @import("color_compat.zig").wrap(if (e.available) theme.colors.success else theme.colors.text_tertiary),
             .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
         });
     }
@@ -382,13 +382,13 @@ fn renderPicksRail(card_w: f32) bool {
         });
         defer hdr.deinit();
         dvui.icon(@src(), "picks", icons.tvg.lucide.sparkles, .{}, .{
-            .color_text = theme.colors.accent,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
             .min_size_content = theme.iconSize(.sm),
             .gravity_y = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
         _ = dvui.label(@src(), "Picked for you", .{}, .{
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .font = dvui.themeGet().font_heading,
             .gravity_y = 0.5,
         });
@@ -436,7 +436,7 @@ fn renderPicksRail(card_w: f32) bool {
                 .max_size_content = .{ .w = card_w - 4, .h = reason_h },
                 .padding = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
             });
-            why.addText(reason, .{ .color_text = theme.colors.text_secondary, .font = dvui.themeGet().font_body.withSize(theme.font_size.small) });
+            why.addText(reason, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary), .font = dvui.themeGet().font_body.withSize(theme.font_size.small) });
             why.deinit();
         }
         {
@@ -448,8 +448,8 @@ fn renderPicksRail(card_w: f32) bool {
             defer acts.deinit();
             const small = dvui.themeGet().font_body.withSize(theme.font_size.small);
             const pad: dvui.Rect = .{ .x = 6, .y = 3, .w = 6, .h = 3 };
-            if (dvui.button(@src(), "Details", .{}, .{ .id_extra = 48300 + i, .font = small, .padding = pad, .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.text_primary })) tmdb.openOrSearch(&items[i]);
-            if (dvui.button(@src(), "Dismiss", .{}, .{ .id_extra = 48400 + i, .font = small, .padding = pad, .color_fill = theme.colors.bg_elevated, .color_text = theme.colors.text_secondary })) dismissed = i;
+            if (dvui.button(@src(), "Details", .{}, .{ .id_extra = 48300 + i, .font = small, .padding = pad, .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated), .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary) })) tmdb.openOrSearch(&items[i]);
+            if (dvui.button(@src(), "Dismiss", .{}, .{ .id_extra = 48400 + i, .font = small, .padding = pad, .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated), .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary) })) dismissed = i;
         }
         tmdb.renderPosterCard(&items[i], i, card_w, poster_h);
     }
@@ -490,7 +490,7 @@ fn renderHero() void {
     defer header_row.deinit();
 
     _ = dvui.label(@src(), "Home", .{}, .{
-        .color_text = theme.colors.text_primary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
         .font = dvui.themeGet().font_title.withSize(if (tall) 30 else if (compact) 23 else 27),
         .gravity_y = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
@@ -507,13 +507,13 @@ fn renderHero() void {
 
     const clock = localClock();
     _ = dvui.label(@src(), "{s}", .{clock.greeting}, .{
-        .color_text = theme.colors.text_secondary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .font = dvui.themeGet().font_body.withSize(if (compact) theme.font_size.small else theme.font_size.body),
         .gravity_y = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
     });
     _ = dvui.label(@src(), "{s}", .{clock.time}, .{
-        .color_text = theme.colors.accent,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
         .font = dvui.themeGet().font_heading.withSize(if (compact) theme.font_size.small else 12),
         .gravity_y = 0.5,
     });
@@ -529,12 +529,12 @@ fn heroAction(label: []const u8, id: usize) bool {
     return dvui.button(@src(), label, .{}, .{
         .id_extra = id,
         .background = true,
-        .color_fill = transparent,
-        .color_fill_hover = theme.colors.bg_hover,
-        .color_text = theme.colors.text_secondary,
+        .color_fill = @import("color_compat.zig").wrap(transparent),
+        .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .font = dvui.themeGet().font_heading.withSize(12),
         .border = dvui.Rect.all(0),
-        .corner_radius = dvui.Rect.all(theme.radius.sm),
+        .corners = dvui.CornerRect.all(theme.radius.sm),
         .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
         .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
         .gravity_y = 0.5,
@@ -589,8 +589,8 @@ fn renderChatSidebar() void {
         .min_size_content = .{ .w = 236, .h = 0 },
         .max_size_content = dvui.Options.MaxSize.width(236),
         .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .color_border = theme.colors.border_subtle,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+        .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
         .border = .{ .x = 0, .y = 0, .w = 1, .h = 0 },
         .padding = dvui.Rect.all(theme.spacing.sm),
     });
@@ -601,24 +601,24 @@ fn renderChatSidebar() void {
         var nc = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
             .background = true,
-            .color_fill = theme.colors.bg_elevated,
-            .corner_radius = dvui.Rect.all(theme.radius.md),
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .corners = dvui.CornerRect.all(theme.radius.md),
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
             .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm },
         });
         defer nc.deinit();
         var nc_hover = false;
         const nc_clicked = dvui.clicked(nc.data(), .{ .hovered = &nc_hover });
-        if (nc_hover) nc.data().options.color_fill = theme.colors.bg_hover;
+        if (nc_hover) nc.data().options.color_fill = @import("color_compat.zig").wrap(theme.colors.bg_hover);
         nc.drawBackground();
         dvui.icon(@src(), "new-chat", icons.tvg.lucide.@"square-pen", .{}, .{
-            .color_text = theme.colors.accent,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
             .min_size_content = .{ .w = 14, .h = 14 },
             .gravity_y = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
         _ = dvui.label(@src(), "New chat", .{}, .{
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .gravity_y = 0.5,
         });
         if (nc_clicked) {
@@ -629,7 +629,7 @@ fn renderChatSidebar() void {
     }
 
     _ = dvui.label(@src(), "Recents", .{}, .{
-        .color_text = theme.colors.text_tertiary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
         .margin = .{ .x = theme.spacing.xs, .y = theme.spacing.xs, .w = 0, .h = theme.spacing.xs },
     });
 
@@ -656,15 +656,15 @@ fn renderChatSidebar() void {
             .id_extra = si + 88000,
             .expand = .horizontal,
             .background = true,
-            .color_fill = if (is_current) theme.colors.bg_hover else transparent,
-            .corner_radius = dvui.Rect.all(theme.radius.sm),
+            .color_fill = @import("color_compat.zig").wrap(if (is_current) theme.colors.bg_hover else transparent),
+            .corners = dvui.CornerRect.all(theme.radius.sm),
             .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
             .margin = .{ .x = 0, .y = 1, .w = 0, .h = 1 },
         });
         defer row.deinit();
         var hov = false;
         if (dvui.clicked(row.data(), .{ .hovered = &hov })) clicked_session = si;
-        if (hov and !is_current) row.data().options.color_fill = theme.colors.bg_hover;
+        if (hov and !is_current) row.data().options.color_fill = @import("color_compat.zig").wrap(theme.colors.bg_hover);
         row.drawBackground();
 
         // Title = first user message, clipped on a UTF-8 boundary; validate
@@ -678,14 +678,14 @@ fn renderChatSidebar() void {
         _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(clipped, &safe_buf)}, .{
             .id_extra = si + 88000,
             .expand = .horizontal,
-            .color_text = if (is_current) theme.colors.text_primary else theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(if (is_current) theme.colors.text_primary else theme.colors.text_secondary),
             .gravity_y = 0.5,
         });
     }
 
     if (ai_chat.session_count == 0) {
         _ = dvui.label(@src(), "No past chats yet", .{}, .{
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
             .padding = dvui.Rect.all(theme.spacing.sm),
         });
     }
@@ -710,7 +710,7 @@ fn renderChatSidebar() void {
         defer foot.deinit();
         if (state.app.incognito_mode) {
             dvui.icon(@src(), "sb-incog", icons.tvg.lucide.@"eye-off", .{}, .{
-                .color_text = theme.colors.warning,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.warning),
                 .min_size_content = .{ .w = 12, .h = 12 },
                 .gravity_y = 0.5,
             });
@@ -722,11 +722,11 @@ fn renderChatSidebar() void {
         var hide_wd: dvui.WidgetData = undefined;
         if (dvui.buttonIcon(@src(), "hide-sidebar", icons.tvg.lucide.@"panel-left-close", .{}, .{}, .{
             .data_out = &hide_wd,
-            .color_text = theme.colors.text_tertiary,
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.bg_hover,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
+            .color_fill = @import("color_compat.zig").wrap(theme.transparent),
+            .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
             .border = dvui.Rect.all(0),
-            .corner_radius = theme.dims.rad_sm,
+            .corners = theme.dims.rad_sm,
             .padding = dvui.Rect.all(theme.spacing.xs),
             .min_size_content = theme.iconSize(.sm),
         })) {
@@ -817,8 +817,8 @@ fn renderChatMode() void {
         var bar = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .horizontal,
             .background = true,
-            .color_fill = theme.colors.bg_app,
-            .color_border = theme.colors.border_subtle,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_app),
+            .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
             .border = .{ .x = 0, .y = 1, .w = 0, .h = 0 },
             .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
         });
@@ -848,11 +848,11 @@ fn renderChatMode() void {
                 var sb_wd: dvui.WidgetData = undefined;
                 if (dvui.buttonIcon(@src(), "chat-sidebar", icons.tvg.lucide.@"panel-left", .{}, .{}, .{
                     .data_out = &sb_wd,
-                    .color_text = theme.colors.text_tertiary,
-                    .color_fill = theme.transparent,
-                    .color_fill_hover = theme.colors.bg_hover,
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
+                    .color_fill = @import("color_compat.zig").wrap(theme.transparent),
+                    .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
                     .border = dvui.Rect.all(0),
-                    .corner_radius = theme.dims.rad_sm,
+                    .corners = theme.dims.rad_sm,
                     .padding = .{ .x = theme.spacing.xs, .y = 2, .w = theme.spacing.xs, .h = 2 },
                     .min_size_content = theme.iconSize(.xs),
                     .gravity_y = 0.5,
@@ -869,11 +869,11 @@ fn renderChatMode() void {
             var inc_wd: dvui.WidgetData = undefined;
             if (dvui.buttonIcon(@src(), "incognito-chat", if (state.app.incognito_mode) icons.tvg.lucide.@"eye-off" else icons.tvg.lucide.eye, .{}, .{}, .{
                 .data_out = &inc_wd,
-                .color_text = if (state.app.incognito_mode) theme.colors.warning else theme.colors.text_tertiary,
-                .color_fill = theme.transparent,
-                .color_fill_hover = theme.colors.bg_hover,
+                .color_text = @import("color_compat.zig").wrap(if (state.app.incognito_mode) theme.colors.warning else theme.colors.text_tertiary),
+                .color_fill = @import("color_compat.zig").wrap(theme.transparent),
+                .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
                 .border = dvui.Rect.all(0),
-                .corner_radius = theme.dims.rad_sm,
+                .corners = theme.dims.rad_sm,
                 .padding = .{ .x = theme.spacing.xs, .y = 2, .w = theme.spacing.xs, .h = 2 },
                 .min_size_content = theme.iconSize(.xs),
                 .gravity_y = 0.5,
@@ -885,7 +885,7 @@ fn renderChatMode() void {
             @import("components.zig").tip(@src(), inc_wd, if (state.app.incognito_mode) "Incognito chat: ON — nothing is persisted" else "Incognito chat: off");
             if (state.app.incognito_mode) {
                 _ = dvui.label(@src(), "Incognito", .{}, .{
-                    .color_text = theme.colors.warning,
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.warning),
                     .gravity_y = 0.5,
                     .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
                 });
@@ -901,16 +901,16 @@ fn renderChatMode() void {
                 if (media_label.len > 0) {
                     var chip = dvui.box(@src(), .{ .dir = .horizontal }, .{
                         .background = true,
-                        .color_fill = theme.colors.bg_surface,
+                        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
                         .border = dvui.Rect.all(1),
-                        .color_border = theme.colors.border_subtle,
-                        .corner_radius = dvui.Rect.all(theme.radius.pill),
+                        .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
+                        .corners = dvui.CornerRect.all(theme.radius.pill),
                         .padding = .{ .x = theme.spacing.sm, .y = 1, .w = theme.spacing.sm, .h = 1 },
                         .gravity_y = 0.5,
                     });
                     defer chip.deinit();
                     dvui.icon(@src(), "seeing", icons.tvg.lucide.tv, .{}, .{
-                        .color_text = theme.colors.accent,
+                        .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
                         .min_size_content = .{ .w = 11, .h = 11 },
                         .gravity_y = 0.5,
                         .margin = .{ .x = 0, .y = 0, .w = theme.spacing.xs, .h = 0 },
@@ -918,7 +918,7 @@ fn renderChatMode() void {
                     var clip_buf2: [40]u8 = undefined;
                     const short = @import("home_pure.zig").clipLabel(&clip_buf2, media_label, 28);
                     _ = dvui.label(@src(), "{s}", .{short}, .{
-                        .color_text = theme.colors.text_secondary,
+                        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
                         .gravity_y = 0.5,
                         .padding = dvui.Rect.all(0),
                     });
@@ -935,7 +935,7 @@ fn renderChatMode() void {
             };
             if (phase_txt) |txt| {
                 _ = dvui.label(@src(), "  ·  {s}", .{txt}, .{
-                    .color_text = theme.colors.accent,
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
                     .gravity_y = 0.5,
                 });
             }
@@ -948,7 +948,7 @@ fn renderChatMode() void {
             {
                 const partial = voice.partial_text[0..@min(voice.partial_text_len, voice.partial_text.len)];
                 _ = dvui.label(@src(), "  \"{s}\"", .{partial}, .{
-                    .color_text = theme.colors.text_tertiary,
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
                     .gravity_y = 0.5,
                 });
             }
@@ -1022,8 +1022,8 @@ const LibSlot = struct {
     fetching: bool = false,
     url_hash: u64 = 0,
 };
-var lib_slots: [24]LibSlot = [_]LibSlot{.{}} ** 24;
-var continue_slots: [24]LibSlot = [_]LibSlot{.{}} ** 24;
+var lib_slots: [24]LibSlot = @as([24]LibSlot, @splat(.{}));
+var continue_slots: [24]LibSlot = @as([24]LibSlot, @splat(.{}));
 
 /// Route a library row by its `kind`. Every kind a producer writes must land
 /// here — a row that can't be reopened is worse than no row:
@@ -1081,11 +1081,11 @@ fn continueAction(src: std.builtin.SourceLocation, icon: []const u8, label: []co
         .padding = dvui.Rect.all(4),
         .margin = dvui.Rect.all(0),
         .border = dvui.Rect.all(0),
-        .corner_radius = dvui.Rect.all(4),
-        .color_text = if (active) theme.colors.accent else theme.colors.text_secondary,
-        .color_fill = theme.transparent,
-        .color_fill_hover = theme.colors.bg_hover,
-        .color_fill_press = theme.colors.bg_elevated,
+        .corners = dvui.CornerRect.all(4),
+        .color_text = @import("color_compat.zig").wrap(if (active) theme.colors.accent else theme.colors.text_secondary),
+        .color_fill = @import("color_compat.zig").wrap(theme.transparent),
+        .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+        .color_fill_press = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
     });
     components.tip(src, wd, label);
     return clicked;
@@ -1106,14 +1106,14 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
         defer hdr.deinit();
         dvui.icon(@src(), heading, heading_icon, .{}, .{
             .id_extra = base_id,
-            .color_text = theme.colors.accent,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
             .min_size_content = theme.iconSize(.md),
             .gravity_y = 0.5,
             .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
         });
         _ = dvui.label(@src(), "{s}", .{heading}, .{
             .id_extra = base_id,
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .font = dvui.themeGet().font_heading.withSize(17),
             .gravity_y = 0.5,
         });
@@ -1171,11 +1171,11 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
             .min_size_content = .{ .w = card_w, .h = poster_h + card_chrome },
             .max_size_content = .{ .w = card_w, .h = poster_h + card_chrome },
             .background = true,
-            .color_fill = transparent,
-            .color_fill_hover = theme.colors.bg_surface,
-            .color_border = theme.colors.border_subtle,
+            .color_fill = @import("color_compat.zig").wrap(transparent),
+            .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+            .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
             .border = dvui.Rect.all(1),
-            .corner_radius = dvui.Rect.all(theme.radius.lg),
+            .corners = dvui.CornerRect.all(theme.radius.lg),
             .padding = dvui.Rect.all(5),
             .margin = dvui.Rect.all(6),
         });
@@ -1206,7 +1206,7 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
             };
             _ = dvui.label(@src(), "{s}", .{if (revealed) kind_label else "Private"}, .{
                 .id_extra = i + base_id + 21,
-                .color_text = if (item.home_pinned) theme.colors.accent else theme.colors.text_tertiary,
+                .color_text = @import("color_compat.zig").wrap(if (item.home_pinned) theme.colors.accent else theme.colors.text_tertiary),
                 .font = dvui.themeGet().font_heading.withSize(theme.font_size.small),
                 .gravity_y = 0.5,
                 .max_size_content = .{ .w = @max(0, card_w - 62), .h = 24 },
@@ -1230,8 +1230,8 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
         bw.init(@src(), .{}, .{
             .id_extra = i + base_id + 30,
             .background = true,
-            .color_fill = theme.colors.bg_elevated,
-            .corner_radius = dvui.Rect.all(theme.radius.lg),
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .corners = dvui.CornerRect.all(theme.radius.lg),
             .min_size_content = .{ .w = card_w, .h = poster_h },
             .max_size_content = .{ .w = card_w, .h = poster_h },
         });
@@ -1257,9 +1257,9 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
         }
         if (revealed and slot.tex != null) {
             const tex = &slot.tex.?;
-            _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{ .id_extra = i + base_id + 40, .expand = .both, .corner_radius = dvui.Rect.all(theme.radius.lg) });
+            _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{ .id_extra = i + base_id + 40, .expand = .both, .corners = dvui.CornerRect.all(theme.radius.lg) });
         } else if (!revealed and slot.blur_tex != null) {
-            _ = dvui.image(@src(), .{ .source = .{ .texture = slot.blur_tex.? } }, .{ .id_extra = i + base_id + 40, .expand = .both, .corner_radius = dvui.Rect.all(theme.radius.lg) });
+            _ = dvui.image(@src(), .{ .source = .{ .texture = slot.blur_tex.? } }, .{ .id_extra = i + base_id + 40, .expand = .both, .corners = dvui.CornerRect.all(theme.radius.lg) });
         } else if (!revealed) {
             renderPrivateCoverPlaceholder(i + base_id + 40, heading_icon);
         } else {
@@ -1275,7 +1275,7 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
         if (revealed) {
             _ = dvui.label(@src(), "{s}", .{visible_title}, .{
                 .id_extra = i + base_id + 50,
-                .color_text = theme.colors.text_primary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
                 .font = dvui.themeGet().font_heading.withSize(theme.font_size.body),
                 .min_size_content = .{ .w = card_w, .h = 18 },
                 .max_size_content = .{ .w = card_w, .h = 18 },
@@ -1288,14 +1288,14 @@ fn renderLibraryItemsRail(items: []const library_pure.LibraryItem, heading: []co
             var progress = dvui.box(@src(), .{ .dir = .horizontal }, .{
                 .id_extra = i + base_id + 60,
                 .background = true,
-                .color_fill = theme.colors.bg_elevated,
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
                 .min_size_content = .{ .w = card_w, .h = 3 },
                 .max_size_content = .{ .w = card_w, .h = 3 },
             });
             var fill = dvui.box(@src(), .{}, .{
                 .id_extra = i + base_id + 70,
                 .background = true,
-                .color_fill = theme.colors.accent,
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.accent),
                 .min_size_content = .{ .w = card_w * @as(f32, @floatCast(std.math.clamp(item.percent / 100, 0, 1))), .h = 3 },
                 .max_size_content = .{ .w = card_w * @as(f32, @floatCast(std.math.clamp(item.percent / 100, 0, 1))), .h = 3 },
             });
@@ -1311,13 +1311,13 @@ fn renderPrivateCoverPlaceholder(id: usize, glyph: []const u8) void {
         .id_extra = id,
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .corner_radius = dvui.Rect.all(theme.radius.lg),
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+        .corners = dvui.CornerRect.all(theme.radius.lg),
     });
     defer backdrop.deinit();
     _ = dvui.icon(@src(), "private-cover", glyph, .{}, .{
         .id_extra = id,
-        .color_text = theme.colors.accent_dim,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.accent_dim),
         .min_size_content = theme.iconSize(.xl),
         .max_size_content = dvui.Options.MaxSize.size(theme.iconSize(.xl)),
         .gravity_x = 0.5,
@@ -1329,8 +1329,8 @@ fn renderPrivateTitle(id: usize, card_w: f32) void {
     var line = dvui.box(@src(), .{}, .{
         .id_extra = id,
         .background = true,
-        .color_fill = theme.colors.bg_hover,
-        .corner_radius = dvui.Rect.all(theme.radius.pill),
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+        .corners = dvui.CornerRect.all(theme.radius.pill),
         .min_size_content = .{ .w = card_w * 0.64, .h = 8 },
         .max_size_content = .{ .w = card_w * 0.64, .h = 8 },
         .margin = .{ .x = 1, .y = 8, .w = 0, .h = 2 },
@@ -1373,7 +1373,7 @@ fn uploadPrivacyBlur(slot: *LibSlot) void {
             };
         }
     }
-    slot.blur_tex = dvui.textureCreate(&blurred, blur_w, blur_h, .linear, .rgba_32) catch null;
+    slot.blur_tex = dvui.textureCreate(&blurred, .{ .width = blur_w, .height = blur_h, .format = .rgba_32, .interpolation = .linear, .wrap_u = .clamp, .wrap_v = .clamp }) catch null;
 }
 
 fn sectionHeader(title: []const u8, icon: []const u8, view: state.TmdbView, id: usize) void {
@@ -1386,14 +1386,14 @@ fn sectionHeader(title: []const u8, icon: []const u8, view: state.TmdbView, id: 
 
     dvui.icon(@src(), title, icon, .{}, .{
         .id_extra = id + 6000,
-        .color_text = theme.colors.accent,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
         .min_size_content = theme.iconSize(.sm),
         .gravity_y = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
     });
     _ = dvui.label(@src(), "{s}", .{title}, .{
         .id_extra = id + 6000,
-        .color_text = theme.colors.text_primary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
         .font = dvui.themeGet().font_heading,
         .gravity_y = 0.5,
     });
@@ -1405,9 +1405,9 @@ fn sectionHeader(title: []const u8, icon: []const u8, view: state.TmdbView, id: 
     var sa = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .id_extra = id + 6100,
         .background = true,
-        .color_fill = transparent,
-        .color_fill_hover = theme.colors.bg_hover,
-        .corner_radius = dvui.Rect.all(theme.radius.sm),
+        .color_fill = @import("color_compat.zig").wrap(transparent),
+        .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+        .corners = dvui.CornerRect.all(theme.radius.sm),
         .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
         .gravity_y = 0.5,
     });
@@ -1420,12 +1420,12 @@ fn sectionHeader(title: []const u8, icon: []const u8, view: state.TmdbView, id: 
     sa.drawBackground();
     _ = dvui.label(@src(), "See all", .{}, .{
         .id_extra = id + 6100,
-        .color_text = theme.colors.text_secondary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .gravity_y = 0.5,
     });
     dvui.icon(@src(), "see-all", icons.tvg.lucide.@"chevron-right", .{}, .{
         .id_extra = id + 6100,
-        .color_text = theme.colors.text_secondary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .min_size_content = .{ .w = 14, .h = 14 },
         .gravity_y = 0.5,
     });
@@ -1443,17 +1443,17 @@ fn renderEmptyState() void {
     defer box.deinit();
 
     dvui.icon(@src(), "empty", icons.tvg.lucide.clapperboard, .{}, .{
-        .color_text = theme.colors.accent_dim,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.accent_dim),
         .min_size_content = theme.iconSize(.hero),
         .gravity_x = 0.5,
     });
     _ = dvui.label(@src(), "Nothing here yet", .{}, .{
-        .color_text = theme.colors.text_primary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
         .font = dvui.themeGet().font_title,
         .gravity_x = 0.5,
     });
     _ = dvui.label(@src(), "Browse or search to start.", .{}, .{
-        .color_text = theme.colors.text_secondary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .gravity_x = 0.5,
     });
 }

@@ -37,21 +37,21 @@ fn heading(icon: []const u8, label: []const u8, detail: []const u8, id: usize) v
     defer row.deinit();
     dvui.icon(@src(), label, icon, .{}, .{
         .id_extra = id,
-        .color_text = theme.colors.accent,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
         .min_size_content = theme.iconSize(.md),
         .gravity_y = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
     });
     _ = dvui.label(@src(), "{s}", .{label}, .{
         .id_extra = id,
-        .color_text = theme.colors.text_primary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
         .font = dvui.themeGet().font_heading,
         .gravity_y = 0.5,
     });
     if (detail.len > 0) {
         _ = dvui.label(@src(), "{s}", .{detail}, .{
             .id_extra = id + 1,
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
             .gravity_y = 0.5,
             .margin = .{ .x = theme.spacing.sm, .y = 0, .w = 0, .h = 0 },
         });
@@ -82,15 +82,15 @@ fn resultRow(id: usize, icon: []const u8, title: []const u8, meta: []const u8, s
         .id_extra = id,
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .corner_radius = dvui.Rect.all(theme.radius.sm),
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+        .corners = dvui.CornerRect.all(theme.radius.sm),
         .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.xs, .h = theme.spacing.xs },
         .margin = .{ .x = theme.spacing.sm, .y = 2, .w = theme.spacing.sm, .h = 2 },
     });
     defer row.deinit();
     dvui.icon(@src(), "kind", icon, .{}, .{
         .id_extra = id,
-        .color_text = theme.colors.text_secondary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .min_size_content = theme.iconSize(.md),
         .gravity_y = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
@@ -99,8 +99,8 @@ fn resultRow(id: usize, icon: []const u8, title: []const u8, meta: []const u8, s
     {
         var col = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = id, .expand = .horizontal, .gravity_y = 0.5 });
         defer col.deinit();
-        _ = dvui.label(@src(), "{s}", .{title}, .{ .id_extra = id, .color_text = theme.colors.text_primary });
-        if (meta.len > 0) _ = dvui.label(@src(), "{s}", .{meta}, .{ .id_extra = id, .color_text = theme.colors.text_tertiary });
+        _ = dvui.label(@src(), "{s}", .{title}, .{ .id_extra = id, .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary) });
+        if (meta.len > 0) _ = dvui.label(@src(), "{s}", .{meta}, .{ .id_extra = id, .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary) });
         if (snippet.len > 0) {
             var tl = dvui.textLayout(@src(), .{ .break_lines = true }, .{
                 .id_extra = id,
@@ -108,7 +108,7 @@ fn resultRow(id: usize, icon: []const u8, title: []const u8, meta: []const u8, s
                 .background = false,
                 .padding = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
             });
-            tl.addText(snippet, .{ .color_text = theme.colors.text_secondary });
+            tl.addText(snippet, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary) });
             tl.deinit();
         }
     }

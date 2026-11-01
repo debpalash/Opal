@@ -934,7 +934,7 @@ pub fn playAudioItem(item_id: []const u8) void {
     if (server.len == 0 or token.len == 0) return;
 
     var url_buf: [1024]u8 = undefined;
-    const url = std.fmt.bufPrintZ(&url_buf, "{s}/Audio/{s}/universal?UserId={s}", .{
+    const url = @import("../core/fmt_compat.zig").bufPrintZ(&url_buf, "{s}/Audio/{s}/universal?UserId={s}", .{
         server,
         item_id,
         state.app.jf.user_id[0..state.app.jf.user_id_len],

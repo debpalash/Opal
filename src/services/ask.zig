@@ -48,7 +48,7 @@ pub const Turn = struct {
     /// Why it failed, or what the agent said (already cleaned).
     note: pure.Text(280) = .{},
     cost_cents: u32 = 0,
-    action_state: [pure.MAX_ACTIONS]ActionState = [_]ActionState{.ready} ** pure.MAX_ACTIONS,
+    action_state: [pure.MAX_ACTIONS]ActionState = @as([pure.MAX_ACTIONS]ActionState, @splat(.ready)),
 };
 
 var turn: Turn = .{};
@@ -239,7 +239,7 @@ fn start(agent: Agent, question: []const u8) void {
         t.answer = .{};
         t.note = .{};
         t.cost_cents = 0;
-        t.action_state = [_]ActionState{.ready} ** pure.MAX_ACTIONS;
+        t.action_state = @as([pure.MAX_ACTIONS]ActionState, @splat(.ready));
     }
     state.wakeUi();
 
@@ -554,6 +554,6 @@ pub fn setTurnForTest(status: Status, agent: Agent, answer: ?*const pure.Answer,
     t.answer = if (answer) |a| a.* else .{};
     t.note.set(note);
     t.cost_cents = cost_cents;
-    t.action_state = [_]ActionState{.ready} ** pure.MAX_ACTIONS;
+    t.action_state = @as([pure.MAX_ACTIONS]ActionState, @splat(.ready));
     if (answer) |a| setMessageText(idx, a.text.slice()) else setMessageText(idx, note);
 }

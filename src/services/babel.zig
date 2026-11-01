@@ -86,9 +86,9 @@ pub fn subAdd(ctx: ?*c.mpv.mpv_handle, path: []const u8, title: []const u8, lang
     var path_z: [1100]u8 = undefined;
     var title_z: [96]u8 = undefined;
     var lang_z: [16]u8 = undefined;
-    const p = std.fmt.bufPrintZ(&path_z, "{s}", .{path}) catch return null;
-    const t = std.fmt.bufPrintZ(&title_z, "{s}", .{title}) catch return null;
-    const l = std.fmt.bufPrintZ(&lang_z, "{s}", .{lang}) catch return null;
+    const p = @import("../core/fmt_compat.zig").bufPrintZ(&path_z, "{s}", .{path}) catch return null;
+    const t = @import("../core/fmt_compat.zig").bufPrintZ(&title_z, "{s}", .{title}) catch return null;
+    const l = @import("../core/fmt_compat.zig").bufPrintZ(&lang_z, "{s}", .{lang}) catch return null;
     var argv = [_][*c]const u8{ "sub-add", p.ptr, "select", t.ptr, l.ptr, null };
     if (c.mpv.mpv_command(ctx, @ptrCast(&argv)) < 0) return null;
     return mpvInt(ctx, "sid");
@@ -96,7 +96,7 @@ pub fn subAdd(ctx: ?*c.mpv.mpv_handle, path: []const u8, title: []const u8, lang
 
 pub fn subReload(ctx: ?*c.mpv.mpv_handle, sid: i64) bool {
     var id_buf: [24]u8 = undefined;
-    const id = std.fmt.bufPrintZ(&id_buf, "{d}", .{sid}) catch return false;
+    const id = @import("../core/fmt_compat.zig").bufPrintZ(&id_buf, "{d}", .{sid}) catch return false;
     var argv = [_][*c]const u8{ "sub-reload", id.ptr, null };
     return c.mpv.mpv_command(ctx, @ptrCast(&argv)) >= 0;
 }
@@ -147,7 +147,7 @@ pub fn writeStatusJson(w: *std.Io.Writer) void {
 
 pub fn subRemove(ctx: ?*c.mpv.mpv_handle, sid: i64) void {
     var buf: [24]u8 = undefined;
-    const id = std.fmt.bufPrintZ(&buf, "{d}", .{sid}) catch return;
+    const id = @import("../core/fmt_compat.zig").bufPrintZ(&buf, "{d}", .{sid}) catch return;
     var argv = [_][*c]const u8{ "sub-remove", id.ptr, null };
     _ = c.mpv.mpv_command(ctx, @ptrCast(&argv));
 }

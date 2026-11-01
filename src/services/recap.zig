@@ -231,9 +231,9 @@ fn worker(a: Args) void {
     }
 
     var sources: [pure.max_sources]pure.Source = undefined;
-    var transcripts: [pure.max_sources]?[]u8 = .{null} ** pure.max_sources;
+    var transcripts: [pure.max_sources]?[]u8 = @splat(null);
     defer for (transcripts) |t| if (t) |b| alloc.free(b);
-    var summaries: [pure.max_sources]?pure.OwnedSummary = .{null} ** pure.max_sources;
+    var summaries: [pure.max_sources]?pure.OwnedSummary = @splat(null);
     defer for (summaries) |summary| if (summary) |v| v.deinit(alloc);
     var seasons: SeasonCache = .{};
     defer seasons.deinit();

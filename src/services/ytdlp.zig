@@ -193,7 +193,7 @@ pub fn discoverExisting() bool {
     var cfg_buf: [512]u8 = undefined;
     const cfg = @import("../core/paths.zig").configDir(&cfg_buf);
     const exe_name = if (@import("builtin").os.tag == .windows) "yt-dlp.exe" else "yt-dlp";
-    const path = std.fmt.bufPrintZ(&bin_path_buf, "{s}/bin/{s}", .{ cfg, exe_name }) catch return false;
+    const path = @import("../core/fmt_compat.zig").bufPrintZ(&bin_path_buf, "{s}/bin/{s}", .{ cfg, exe_name }) catch return false;
     bin_path_len = path.len;
 
     // Check if binary already exists. Existing is NOT the same as working: a
@@ -272,7 +272,7 @@ fn downloadWorker() void {
     var dir_buf: [512]u8 = undefined;
     var cfg_buf2: [512]u8 = undefined;
     const cfg2 = @import("../core/paths.zig").configDir(&cfg_buf2);
-    const dir_path = std.fmt.bufPrintZ(&dir_buf, "{s}/bin", .{cfg2}) catch return;
+    const dir_path = @import("../core/fmt_compat.zig").bufPrintZ(&dir_buf, "{s}/bin", .{cfg2}) catch return;
     io.cwdMakePath(dir_path) catch {};
 
     const dl_url = switch (comptime builtin.os.tag) {

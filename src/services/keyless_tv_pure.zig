@@ -71,17 +71,17 @@ pub fn chooseSource(id: i32, imdb: []const u8, has_key: bool) Source {
 // ══════════════════════════════════════════════════════════
 
 pub const Facts = struct {
-    seasons: [tp.MAX_SEASONS]tp.Season = [_]tp.Season{.{}} ** tp.MAX_SEASONS,
+    seasons: [tp.MAX_SEASONS]tp.Season = @as([tp.MAX_SEASONS]tp.Season, @splat(.{})),
     season_count: usize = 0,
     last: tp.Ep = .{},
     next: tp.Ep = .{},
     next_air_epoch: i64 = 0,
-    next_name: [64]u8 = [_]u8{0} ** 64,
+    next_name: [64]u8 = @as([64]u8, @splat(0)),
     next_name_len: usize = 0,
     ended: bool = false,
     /// At least one regular (non-special) episode was listed.
     has_episodes: bool = false,
-    poster: [256]u8 = [_]u8{0} ** 256,
+    poster: [256]u8 = @as([256]u8, @splat(0)),
     poster_len: usize = 0,
 
     pub fn seasonSlice(self: *const Facts) []const tp.Season {

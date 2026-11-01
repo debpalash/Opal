@@ -33,7 +33,7 @@ const DedupEntry = struct {
 };
 
 const Ring = struct {
-    var entries: [RING_N]DedupEntry = [_]DedupEntry{.{}} ** RING_N;
+    var entries: [RING_N]DedupEntry = @as([RING_N]DedupEntry, @splat(.{}));
     var head: usize = 0;
     var mutex: @import("../core/sync.zig").Mutex = .{};
 

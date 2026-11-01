@@ -1159,7 +1159,7 @@ pub fn acceptsPageBody(bytes: []const u8) bool {
     return bytes.len >= 26 and std.mem.startsWith(u8, bytes, "BM");
 }
 test "comic download accepts a valid PNG smaller than100bytes and rejects HTML or short signatures" {
-    const image = "\x89PNG\r\n\x1a\n" ++ "\x00" ** 40;
+    const image = "\x89PNG\r\n\x1a\n" ++ @import("../core/repeat_pure.zig").bytes("\x00", 40);
     try std.testing.expect(image.len < 100);
     try std.testing.expect(acceptsPageBody(image));
     try std.testing.expect(!acceptsPageBody("<html>error</html>"));

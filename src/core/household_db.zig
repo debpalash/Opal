@@ -37,7 +37,7 @@ fn connection() ?*db.Sqlite3 {
     if (handle) |h| return h;
     var path_buf: [512]u8 = undefined;
     var cpath_buf: [520]u8 = undefined;
-    const cpath = std.fmt.bufPrintZ(&cpath_buf, "{s}", .{paths.householdDbFile(&path_buf)}) catch return null;
+    const cpath = @import("fmt_compat.zig").bufPrintZ(&cpath_buf, "{s}", .{paths.householdDbFile(&path_buf)}) catch return null;
     var h: ?*db.Sqlite3 = null;
     const flags = c.SQLITE_OPEN_READWRITE | c.SQLITE_OPEN_CREATE | c.SQLITE_OPEN_FULLMUTEX;
     if (c.sqlite3_open_v2(cpath.ptr, &h, flags, null) != c.SQLITE_OK) {

@@ -158,6 +158,8 @@ const win_instance = if (builtin.os.tag == .windows) struct {
 var instance_mutex_handle: ?*anyopaque = null;
 
 const app_start_options: dvui.App.StartOptions = .{
+    .org = "debpalash",
+    .app = "Opal",
     .size = .{ .w = 1400.0, .h = 820.0 },
     .title = "Opal",
     .vsync = true,
@@ -190,7 +192,7 @@ pub const dvui_app: dvui.App = .{
     .config = .{ .startFn = &platformStartOptions },
     .initFn = appInit,
     .frameFn = appFrame,
-    .deinitFn = appDeinit,
+    .deinitFn = struct { fn deinit(_: *dvui.Window) void { appDeinit(); } }.deinit,
 };
 
 // Entry point is selected at COMPILE time. dvui's App interface comptime-
@@ -1104,10 +1106,10 @@ fn renderSlashMenu() void {
         .stay_above_parent_window = false,
     }, .{
         .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .color_border = theme.colors.accent,
+        .color_fill = @import("ui/color_compat.zig").wrap(theme.colors.bg_surface),
+        .color_border = @import("ui/color_compat.zig").wrap(theme.colors.accent),
         .border = dvui.Rect.all(1),
-        .corner_radius = dvui.Rect.all(10),
+        .corners = dvui.CornerRect.all(10),
     });
     defer fw.deinit();
 
@@ -1118,7 +1120,7 @@ fn renderSlashMenu() void {
     defer pad.deinit();
 
     _ = dvui.label(@src(), "Commands", .{}, .{
-        .color_text = theme.colors.accent,
+        .color_text = @import("ui/color_compat.zig").wrap(theme.colors.accent),
         .margin = .{ .h = 6 },
     });
 
@@ -1138,10 +1140,10 @@ fn renderSlashMenu() void {
 
         if (dvui.button(@src(), cmd.key, .{}, .{
             .id_extra = i,
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
-            .color_text = theme.colors.accent,
+            .color_fill = @import("ui/color_compat.zig").wrap(theme.transparent),
+            .color_fill_hover = @import("ui/color_compat.zig").wrap(theme.colors.bg_hover),
+            .color_fill_press = @import("ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("ui/color_compat.zig").wrap(theme.colors.accent),
             .border = dvui.Rect.all(0),
             .padding = .{ .x = 4, .y = 0, .w = 4, .h = 0 },
             .min_size_content = .{ .w = 140, .h = 0 },
@@ -1164,14 +1166,14 @@ fn renderSlashMenu() void {
         }
         _ = dvui.label(@src(), "{s}", .{cmd.desc}, .{
             .id_extra = i + 100,
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("ui/color_compat.zig").wrap(theme.colors.text_secondary),
             .gravity_y = 0.5,
         });
     }
 
     if (!any_shown) {
         _ = dvui.label(@src(), "No commands match.", .{}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("ui/color_compat.zig").wrap(theme.colors.text_secondary),
             .gravity_x = 0.5,
             .margin = .{ .y = 12 },
         });
@@ -1192,7 +1194,7 @@ fn appFrame() !dvui.App.Result {
     // ids and rects, a per-widget options editor, frame times, and refresh /
     // event logging, which is the fastest way to find why a widget ignored a
     // click or rendered at the wrong size.
-    const debug_state = &dvui.currentWindow().debug;
+    const debug_state = &dvui.debug;
     if (!ui_debug_requested) {
         ui_debug_requested = true;
         if (@import("core/io_global.zig").getenv("OPAL_UI_DEBUG") != null) dvui.toggleDebugWindow();
@@ -1581,9 +1583,9 @@ fn appFrame() !dvui.App.Result {
                     const safe_name = @import("core/text.zig").safeUtf8(name_buf[0..name_len]);
                     var win_title: [300]u8 = undefined;
                     const wt: ?[:0]u8 = if (safe_name.len > 0)
-                        (std.fmt.bufPrintZ(&win_title, "{s} - Opal", .{safe_name}) catch null)
+                        (@import("core/fmt_compat.zig").bufPrintZ(&win_title, "{s} - Opal", .{safe_name}) catch null)
                     else
-                        (std.fmt.bufPrintZ(&win_title, "Opal", .{}) catch null);
+                        (@import("core/fmt_compat.zig").bufPrintZ(&win_title, "Opal", .{}) catch null);
                     if (wt) |t| {
                         if (!std.mem.eql(u8, t, TitleState.last_title[0..TitleState.last_len])) {
                             c.sdl.SDL_SetWindowTitle(sw, t.ptr);
@@ -1745,7 +1747,7 @@ fn appFrame() !dvui.App.Result {
                 const drift = @abs(master_pos - their_pos);
                 if (drift > 0.5) {
                     var cmd: [64]u8 = undefined;
-                    if (std.fmt.bufPrintZ(&cmd, "seek {d:.2} absolute", .{master_pos})) |cv| {
+                    if (@import("core/fmt_compat.zig").bufPrintZ(&cmd, "seek {d:.2} absolute", .{master_pos})) |cv| {
                         _ = c.mpv.mpv_command_string(p.mpv_ctx, cv.ptr);
                     } else |_| {}
                 }
@@ -1753,7 +1755,7 @@ fn appFrame() !dvui.App.Result {
         }
     }
     const player_chrome_overlay = state.app.page_shell_enabled and state.app.router.current == .player;
-    var app_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .color_fill = theme.colors.bg_app });
+    var app_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .color_fill = @import("ui/color_compat.zig").wrap(theme.colors.bg_app) });
     defer app_box.deinit();
 
     // Custom (borderless) window title bar — drawn at the very top, at native
@@ -1907,7 +1909,7 @@ fn appFrame() !dvui.App.Result {
     // an always-on HUD just parks a black box on the search bar. Nothing is lost
     // by defaulting it off: it never actually rendered until now (it was laid out
     // with zero height — see renderHudOverlay), so no workflow depends on it.
-    if (builtin.mode == .Debug and
+    if (builtin.mode == .debug and
         @import("core/io_global.zig").getenv("OPAL_HUD") != null) renderHudOverlay();
 
     if (comptime builtin.os.tag == .windows) {
@@ -1982,14 +1984,14 @@ fn renderHudOverlay() void {
     var box = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .rect = .{ .x = @max(0, wr.w - hud_w - 8), .y = 64, .w = hud_w, .h = hud_h },
         .padding = .{ .x = 6, .y = 3, .w = 6, .h = 3 },
-        .corner_radius = dvui.Rect.all(4),
+        .corners = dvui.CornerRect.all(4),
         .background = true,
-        .color_fill = dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 160 },
+        .color_fill = @import("ui/color_compat.zig").wrap(dvui.Color{ .r = 0, .g = 0, .b = 0, .a = 160 }),
     });
     defer box.deinit();
     // Inherit font from dvui's current theme (an empty Font{} has no name and
     // triggers the "Font not in dvui database, using fallback" warning).
     _ = dvui.label(@src(), "{s}", .{txt}, .{
-        .color_text = dvui.Color{ .r = 0, .g = 255, .b = 100, .a = 255 },
+        .color_text = @import("ui/color_compat.zig").wrap(dvui.Color{ .r = 0, .g = 255, .b = 100, .a = 255 }),
     });
 }

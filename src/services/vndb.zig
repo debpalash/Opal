@@ -74,7 +74,7 @@ const CoverSlot = struct {
 };
 // Extra slot belongs to independent universal-search detail, not the grid.
 const DETAIL_COVER_INDEX = 180;
-var cover_slots: [181]CoverSlot = [_]CoverSlot{.{}} ** 181;
+var cover_slots: [181]CoverSlot = @as([181]CoverSlot, @splat(.{}));
 
 // ── Thread-safety ──
 // The detached fetch worker publishes into state.app.vndb.* under `parse_mutex`,
@@ -470,7 +470,7 @@ pub fn renderContent() void {
             renderDetailRecord(&record, DETAIL_COVER_INDEX);
         } else {
             if (components.actionButton(@src(), "Back", .secondary, 62001)) closeDetail();
-            _ = dvui.label(@src(), "{s}", .{if (identity_loading.load(.acquire)) "Loading visual novel details…" else if (failed) "Details unavailable, not found, or excluded by the cover filter." else "No details available."}, .{ .color_text = theme.colors.text_secondary });
+            _ = dvui.label(@src(), "{s}", .{if (identity_loading.load(.acquire)) "Loading visual novel details…" else if (failed) "Details unavailable, not found, or excluded by the cover filter." else "No details available."}, .{ .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary) });
             if (failed and components.actionButton(@src(), "Retry", .secondary, 62002)) {
                 const id = identity_id;
                 openCatalogIdentity(id[0..identity_id_len]);
@@ -494,7 +494,7 @@ pub fn renderContent() void {
 
     if (state.app.vndb.fetch_error) {
         _ = dvui.label(@src(), "Failed to fetch — check your connection", .{}, .{
-            .color_text = theme.colors.danger,
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.danger),
             .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 },
         });
     }
@@ -508,7 +508,7 @@ fn renderSearchBar() void {
     defer row.deinit();
 
     _ = dvui.icon(@src(), "", icons.tvg.lucide.@"gamepad-2", .{}, .{
-        .color_text = theme.colors.accent,
+        .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
         .min_size_content = theme.iconSize(.md),
         .gravity_y = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
@@ -526,7 +526,7 @@ fn renderSearchBar() void {
 
     if (state.app.vndb.is_loading.load(.acquire)) {
         dvui.spinner(@src(), .{
-            .color_text = theme.colors.accent,
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
             .min_size_content = theme.iconSize(.md),
             .gravity_y = 0.5,
             .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
@@ -554,7 +554,7 @@ fn renderCover(i: usize, v: *const pure.Vn) void {
         // A delayed previous cover must never decorate a coverless record.
         _ = dvui.icon(@src(), "", icons.tvg.lucide.@"gamepad-2", .{}, .{
             .id_extra = i + 1000,
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_tertiary),
             .gravity_x = 0.5,
             .gravity_y = 0.5,
             .expand = .both,
@@ -588,14 +588,14 @@ fn renderCover(i: usize, v: *const pure.Vn) void {
         _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
             .id_extra = i + 1000,
             .expand = .both,
-            .corner_radius = dvui.Rect.all(8),
+            .corners = dvui.CornerRect.all(8),
         });
     } else if (url.len > 0 and !slot.failed) {
         components.coverSkeleton(@src(), i + 1000, 8);
     } else {
         _ = dvui.icon(@src(), "", icons.tvg.lucide.@"gamepad-2", .{}, .{
             .id_extra = i + 1000,
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_tertiary),
             .gravity_x = 0.5,
             .gravity_y = 0.5,
             .expand = .both,
@@ -624,8 +624,8 @@ fn renderCard(i: usize, card_w: f32) void {
         bw.init(@src(), .{}, .{
             .id_extra = i + 2000,
             .background = true,
-            .color_fill = theme.colors.bg_elevated,
-            .corner_radius = dvui.Rect.all(8),
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+            .corners = dvui.CornerRect.all(8),
             .min_size_content = .{ .w = card_w, .h = CARD_COVER_H },
             .max_size_content = .{ .w = card_w, .h = CARD_COVER_H },
             .padding = dvui.Rect.all(0),
@@ -645,10 +645,10 @@ fn renderCard(i: usize, card_w: f32) void {
     if (dvui.button(@src(), title, .{}, .{
         .id_extra = i + 3000,
         .expand = .horizontal,
-        .color_text = theme.colors.text_primary,
-        .color_fill = theme.transparent,
-        .color_fill_hover = theme.colors.bg_hover,
-        .color_fill_press = theme.colors.bg_elevated,
+        .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary),
+        .color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent),
+        .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.bg_hover),
+        .color_fill_press = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
         .padding = .{ .x = 2, .y = 4, .w = 2, .h = 0 },
     })) {
         openDetail(i);
@@ -671,7 +671,7 @@ fn renderCard(i: usize, card_w: f32) void {
     if (wrote) {
         _ = dvui.label(@src(), "{s}", .{meta_buf[0..mw.end]}, .{
             .id_extra = i + 4000,
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_tertiary),
             .expand = .horizontal,
             .padding = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
         });
@@ -688,7 +688,7 @@ fn renderResults() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface),
     });
     defer scroll.deinit();
 
@@ -751,7 +751,7 @@ fn renderResults() void {
         if ((near_bottom or underfilled) and !loading and !state.app.vndb.is_loading.load(.acquire)) loadMore();
         if (loading or underfilled) {
             dvui.spinner(@src(), .{
-                .color_text = theme.colors.accent,
+                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
                 .min_size_content = theme.iconSize(.lg),
                 .gravity_x = 0.5,
                 .margin = dvui.Rect.all(12),
@@ -770,15 +770,15 @@ fn renderDetailRecord(v: *const pure.Vn, idx: usize) void {
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface),
     });
     defer scroll.deinit();
 
     // Back button.
     if (dvui.button(@src(), "‹ Back", .{}, .{
-        .color_fill = theme.colors.bg_elevated,
-        .color_text = theme.colors.text_primary,
-        .corner_radius = theme.dims.rad_sm,
+        .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+        .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary),
+        .corners = theme.dims.rad_sm,
         .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
         .margin = .{ .x = 8, .y = 8, .w = 0, .h = 0 },
     })) {
@@ -812,7 +812,7 @@ fn renderDetailRecord(v: *const pure.Vn, idx: usize) void {
 
         var title_buf: [256]u8 = undefined;
         _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(v.title[0..@min(v.title_len, v.title.len)], &title_buf)}, .{
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary),
             .font = dvui.themeGet().font_heading,
             .expand = .horizontal,
         });
@@ -838,7 +838,7 @@ fn renderDetailRecord(v: *const pure.Vn, idx: usize) void {
         }
         if (wrote) {
             _ = dvui.label(@src(), "{s}", .{meta_buf[0..mw.end]}, .{
-                .color_text = theme.colors.text_secondary,
+                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
                 .expand = .horizontal,
                 .padding = .{ .x = 0, .y = 4, .w = 0, .h = 6 },
             });
@@ -848,16 +848,16 @@ fn renderDetailRecord(v: *const pure.Vn, idx: usize) void {
         if (v.description_len > 0) {
             var desc_buf: [1024]u8 = undefined;
             _ = dvui.label(@src(), "{s}", .{safeUtf8Buf(v.description[0..@min(v.description_len, desc_buf.len)], &desc_buf)}, .{
-                .color_text = theme.colors.text_secondary,
+                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
                 .expand = .horizontal,
             });
         }
 
         // Browse-only handoff: search all sources for this title.
         if (dvui.button(@src(), "Search all sources", .{}, .{
-            .color_fill = theme.colors.accent,
-            .color_text = theme.colors.text_on_accent,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_on_accent),
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
             .margin = .{ .x = 0, .y = 12, .w = 0, .h = 0 },
         })) {

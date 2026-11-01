@@ -350,16 +350,16 @@ pub fn renderPanel() void {
     {
         var hdr = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = 0, .w = 0, .h = 8 } });
         defer hdr.deinit();
-        dvui.icon(@src(), "", icons.tvg.lucide.puzzle, .{}, .{ .color_text = theme.colors.accent, .gravity_y = 0.5, .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 } });
-        _ = dvui.label(@src(), "Mihon Extensions", .{}, .{ .color_text = theme.colors.text_primary, .gravity_y = 0.5, .font = dvui.themeGet().font_heading });
+        dvui.icon(@src(), "", icons.tvg.lucide.puzzle, .{}, .{ .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent), .gravity_y = 0.5, .margin = .{ .x = 0, .y = 0, .w = 8, .h = 0 } });
+        _ = dvui.label(@src(), "Mihon Extensions", .{}, .{ .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary), .gravity_y = 0.5, .font = dvui.themeGet().font_heading });
         {
             var sp = dvui.box(@src(), .{}, .{ .expand = .horizontal });
             sp.deinit();
         }
         if (dvui.button(@src(), "Close", .{}, .{
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_secondary,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
         })) close();
     }
@@ -367,7 +367,7 @@ pub fn renderPanel() void {
     // Inert without a server.
     if (suwayomiBase() == null) {
         _ = dvui.label(@src(), "Configure a Suwayomi server first (Settings › Plugins › Suwayomi). Extensions install onto that server, then their sources appear in the Comics grid.", .{}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
             .expand = .horizontal,
             .margin = dvui.Rect.all(12),
         });
@@ -381,9 +381,9 @@ pub fn renderPanel() void {
         for (repo.REPOS, 0..) |rp, i| {
             if (dvui.button(@src(), rp.name, .{}, .{
                 .id_extra = 45000 + i,
-                .color_fill = theme.colors.bg_elevated,
-                .color_text = theme.colors.text_primary,
-                .corner_radius = theme.dims.rad_md,
+                .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary),
+                .corners = theme.dims.rad_md,
                 .padding = .{ .x = 10, .y = 3, .w = 10, .h = 3 },
                 .margin = .{ .x = 2, .y = 0, .w = 2, .h = 0 },
                 .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
@@ -407,16 +407,16 @@ pub fn renderPanel() void {
         defer row.deinit();
         var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &custom_buf }, .placeholder = "Custom repo URL (…/index.min.json)" }, .{
             .expand = .horizontal,
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_primary,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary),
+            .corners = theme.dims.rad_sm,
             .gravity_y = 0.5,
         });
         te.deinit();
         if (dvui.button(@src(), "Load", .{}, .{
-            .color_fill = theme.colors.accent,
-            .color_text = theme.colors.text_on_accent,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_on_accent),
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 12, .y = 6, .w = 12, .h = 6 },
             .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
             .gravity_y = 0.5,
@@ -435,7 +435,7 @@ pub fn renderPanel() void {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 } });
         defer row.deinit();
         _ = dvui.label(@src(), "{s}{s}", .{ if (fetching.load(.acquire)) "… " else "", status_buf[0..status_len] }, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
             .gravity_y = 0.5,
         });
         {
@@ -444,9 +444,9 @@ pub fn renderPanel() void {
         }
         var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &filter_buf }, .placeholder = "Filter…" }, .{
             .min_size_content = .{ .w = 160, .h = 0 },
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_primary,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary),
+            .corners = theme.dims.rad_sm,
             .gravity_y = 0.5,
         });
         te.deinit();
@@ -456,7 +456,7 @@ pub fn renderPanel() void {
 }
 
 fn renderList() void {
-    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_surface });
+    var scroll = dvui.scrollArea(@src(), .{}, .{ .expand = .both, .background = true, .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface) });
     defer scroll.deinit();
 
     const filter = std.mem.sliceTo(&filter_buf, 0);
@@ -480,18 +480,18 @@ fn renderList() void {
 
     if (row_count == 0 and !fetching.load(.acquire)) {
         _ = dvui.label(@src(), "Pick a repository above to browse its extensions.", .{}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
             .margin = dvui.Rect.all(16),
         });
     } else if (matched == 0 and row_count > 0) {
         _ = dvui.label(@src(), "No extensions match the filter.", .{}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
             .margin = dvui.Rect.all(16),
         });
     } else if (matched > drawn) {
         var hb: [96]u8 = undefined;
         _ = dvui.label(@src(), "{s}", .{std.fmt.bufPrint(&hb, "Showing {d} of {d} — type in Filter to narrow", .{ drawn, matched }) catch "…"}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
             .gravity_x = 0.5,
             .margin = dvui.Rect.all(12),
         });
@@ -503,8 +503,8 @@ fn renderRow(r: *const ExtRow, idx: usize) void {
         .id_extra = idx,
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .color_border = theme.colors.border_subtle,
+        .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface),
+        .color_border = @import("../ui/color_compat.zig").wrap(theme.colors.border_subtle),
         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
         .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
     });
@@ -520,16 +520,16 @@ fn renderRow(r: *const ExtRow, idx: usize) void {
             defer nrow.deinit();
             _ = dvui.labelNoFmt(@src(), r.name[0..r.name_len], .{}, .{
                 .id_extra = idx + 1200,
-                .color_text = theme.colors.text_primary,
+                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary),
                 .gravity_y = 0.5,
             });
             if (r.nsfw) {
                 _ = dvui.label(@src(), "18+", .{}, .{
                     .id_extra = idx + 1250,
-                    .color_text = dvui.Color.white,
-                    .color_fill = theme.colors.danger,
+                    .color_text = @import("../ui/color_compat.zig").wrap(dvui.Color.white),
+                    .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.danger),
                     .background = true,
-                    .corner_radius = theme.dims.rad_sm,
+                    .corners = theme.dims.rad_sm,
                     .padding = .{ .x = 5, .y = 1, .w = 5, .h = 1 },
                     .margin = .{ .x = 6, .y = 0, .w = 0, .h = 0 },
                     .gravity_y = 0.5,
@@ -547,7 +547,7 @@ fn renderRow(r: *const ExtRow, idx: usize) void {
         }) catch r.lang[0..r.lang_len];
         _ = dvui.labelNoFmt(@src(), meta, .{}, .{
             .id_extra = idx + 1300,
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_tertiary),
             .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
         });
     }
@@ -556,9 +556,9 @@ fn renderRow(r: *const ExtRow, idx: usize) void {
     if (r.installed and r.source_id_len > 0) {
         if (dvui.button(@src(), "Browse", .{}, .{
             .id_extra = idx + 1350,
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.accent,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
             .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
             .gravity_y = 0.5,
@@ -572,11 +572,11 @@ fn renderRow(r: *const ExtRow, idx: usize) void {
         const installed = r.installed;
         if (dvui.button(@src(), if (installed) "Remove" else "Install", .{}, .{
             .id_extra = idx + 1400,
-            .color_fill = if (installed) theme.colors.bg_elevated else theme.colors.accent,
-            .color_text = if (installed) theme.colors.danger else theme.colors.text_on_accent,
-            .color_border = if (installed) theme.colors.danger else theme.colors.accent,
+            .color_fill = @import("../ui/color_compat.zig").wrap(if (installed) theme.colors.bg_elevated else theme.colors.accent),
+            .color_text = @import("../ui/color_compat.zig").wrap(if (installed) theme.colors.danger else theme.colors.text_on_accent),
+            .color_border = @import("../ui/color_compat.zig").wrap(if (installed) theme.colors.danger else theme.colors.accent),
             .border = dvui.Rect.all(1),
-            .corner_radius = theme.dims.rad_sm,
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
             .gravity_y = 0.5,
             .min_size_content = .{ .w = 70, .h = 0 },

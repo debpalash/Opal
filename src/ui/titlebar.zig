@@ -141,11 +141,11 @@ pub fn beginNativeDrag() bool {
 fn ctlButton(id: u32, icon_data: []const u8, danger: bool) bool {
     return dvui.buttonIcon(@src(), "", icon_data, .{}, .{}, .{
         .id_extra = id,
-        .color_fill = if (playerOverlay()) theme.transparent else theme.colors.bg_surface,
-        .color_fill_hover = if (danger) theme.colors.danger else theme.colors.bg_hover,
-        .color_text = theme.colors.text_secondary,
+        .color_fill = @import("color_compat.zig").wrap(if (playerOverlay()) theme.transparent else theme.colors.bg_surface),
+        .color_fill_hover = @import("color_compat.zig").wrap(if (danger) theme.colors.danger else theme.colors.bg_hover),
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .border = dvui.Rect.all(0),
-        .corner_radius = dvui.Rect.all(0),
+        .corners = dvui.CornerRect.all(0),
         .margin = dvui.Rect.all(0),
         .padding = .{ .x = 16, .y = 8, .w = 16, .h = 8 },
         .min_size_content = .{ .w = 12, .h = 12 },
@@ -166,7 +166,7 @@ pub fn render() void {
     var bar = dvui.overlay(@src(), .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = if (playerOverlay()) theme.transparent else theme.colors.bg_surface,
+        .color_fill = @import("color_compat.zig").wrap(if (playerOverlay()) theme.transparent else theme.colors.bg_surface),
         .min_size_content = .{ .w = 0, .h = HEIGHT },
     });
 
@@ -187,7 +187,7 @@ pub fn render() void {
             .gravity_y = 0.5,
         });
         _ = dvui.label(@src(), "Opal", .{}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .gravity_y = 0.5,
             .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
         });

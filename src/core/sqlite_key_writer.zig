@@ -1,8 +1,6 @@
 //! One reusable statement per settings batch; ownership ends with the batch.
 const std = @import("std");
-pub const c = @cImport({
-    @cInclude("sqlite3.h");
-});
+pub const c = @import("opal-native-c");
 
 pub const Writer = struct {
     stmt: ?*c.sqlite3_stmt = null,

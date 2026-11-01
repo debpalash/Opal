@@ -492,7 +492,7 @@ test "Native shell offline route pixel capture" {
             current = .{ .name = try std.fmt.bufPrint(&name, "browse-{s}", .{@tagName(tab)}), .route = .browse, .tab = tab };
             try captureCase(size);
         }
-        inline for (std.meta.fields(state.SettingsTab)) |entry| {
+        inline for (comptime @import("../core/enum_compat.zig").fields(state.SettingsTab)) |entry| {
             var name: [64]u8 = undefined;
             current = .{ .name = try std.fmt.bufPrint(&name, "settings-{s}", .{entry.name}), .route = .settings, .settings = @enumFromInt(entry.value) };
             try captureCase(size);

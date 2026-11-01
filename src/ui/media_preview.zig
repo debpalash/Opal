@@ -30,7 +30,7 @@ pub const Player = struct {
         };
         for (opts) |opt| _ = c.mpv_set_option_string(handle, opt[0], opt[1]);
         var ref: [2049]u8 = undefined;
-        if (referer.len > 0) if (std.fmt.bufPrintZ(&ref, "{s}", .{referer})) |z| {
+        if (referer.len > 0) if (@import("../core/fmt_compat.zig").bufPrintZ(&ref, "{s}", .{referer})) |z| {
             _ = c.mpv_set_option_string(handle, "referrer", z);
         } else |_| {};
         if (c.mpv_initialize(handle) < 0) {
@@ -91,7 +91,7 @@ pub const Player = struct {
                     if (sdl.SDL_CreateTexture(renderer, sdl.SDL_PIXELFORMAT_RGBX32, sdl.SDL_TEXTUREACCESS_STREAMING, width, height)) |tex| {
                         _ = sdl.SDL_SetTextureBlendMode(tex, sdl.SDL_BLENDMODE_NONE);
                         _ = sdl.SDL_SetTextureScaleMode(tex, sdl.SDL_ScaleModeLinear);
-                        self.texture = .{ .ptr = tex, .width = width, .height = height, .format = .rgbx_32 };
+                        self.texture = .{ .ptr = tex, .width = width, .height = height, .format = .rgbx_32, .interpolation = .linear, .wrap_u = .clamp, .wrap_v = .clamp };
                     }
                 }
                 if (self.texture) |tex| self.ready = sdl.SDL_UpdateTexture(@ptrCast(@alignCast(tex.ptr)), null, pixels.ptr, width * 4) == 0;

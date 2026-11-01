@@ -254,11 +254,11 @@ test "inputs are bounded and refuse control bytes" {
     try std.testing.expect(validName("Weekly digest"));
     try std.testing.expect(!validName(""));
     try std.testing.expect(!validName("a\nb"));
-    try std.testing.expect(!validName("x" ** 61));
+    try std.testing.expect(!validName(@import("../core/repeat_pure.zig").bytes("x", 61)));
     try std.testing.expect(validPrompt("Check the wanted list.\nTell me what is stuck."));
     try std.testing.expect(!validPrompt(""));
     try std.testing.expect(!validPrompt("a\x00b"));
-    try std.testing.expect(!validPrompt("x" ** 2001));
+    try std.testing.expect(!validPrompt(@import("../core/repeat_pure.zig").bytes("x", 2001)));
     try std.testing.expect(validInterval(15) and !validInterval(14) and validInterval(10080) and !validInterval(10081));
     try std.testing.expect(validRunsPerDay(1) and !validRunsPerDay(0) and !validRunsPerDay(25));
     try std.testing.expect(validBudget(5) and !validBudget(4) and validBudget(1000) and !validBudget(1001));

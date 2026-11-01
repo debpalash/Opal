@@ -183,7 +183,7 @@ test "plugin search projection is bounded strict and playable" {
         \\ {"title":"not actionable"}
         \\]
     ;
-    var rows: [4]SearchRow = [_]SearchRow{.{}} ** 4;
+    var rows: [4]SearchRow = @as([4]SearchRow, @splat(.{}));
     const count = parseSearchRows(std.testing.allocator, fixture, &rows).?;
     try std.testing.expectEqual(@as(usize, 2), count);
     try std.testing.expectEqualStrings("A Show", rows[0].title[0..rows[0].title_len]);
@@ -311,7 +311,7 @@ test "categoryOf maps known kinds, folds manga into comics, keeps unknowns" {
 
 test "ordered_categories is the strictly-sorted, complete set" {
     var prev: i32 = -1;
-    var seen = [_]bool{false} ** ordered_categories.len;
+    var seen = @as([ordered_categories.len]bool, @splat(false));
     for (ordered_categories) |c| {
         const o = @as(i32, c.order());
         try std.testing.expect(o > prev); // strictly increasing

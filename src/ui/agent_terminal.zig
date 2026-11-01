@@ -240,7 +240,7 @@ pub fn render() void {
     var page = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_app,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_app),
     });
     defer page.deinit();
 
@@ -290,7 +290,7 @@ fn renderToolbar() void {
 
     if (note_len > 0) {
         _ = dvui.label(@src(), "{s}", .{note_buf[0..note_len]}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .gravity_y = 0.5,
             .margin = .{ .x = 12, .y = 0, .w = 0, .h = 0 },
         });
@@ -325,10 +325,10 @@ fn renderTabStrip() void {
     var strip = dvui.box(@src(), .{ .dir = .horizontal }, .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.colors.bg_deep,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_deep),
         .padding = .{ .x = 6, .y = 4, .w = 6, .h = 0 },
         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-        .color_border = theme.colors.border_subtle,
+        .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
     });
     defer strip.deinit();
 
@@ -342,18 +342,18 @@ fn renderTabStrip() void {
         var m = dvui.menu(@src(), .horizontal, .{ .gravity_y = 0.5 });
         defer m.deinit();
         if (dvui.menuItemLabel(@src(), "+", .{ .submenu = true }, .{
-            .color_text = theme.colors.text_secondary,
-            .color_fill = transparent,
-            .color_fill_hover = theme.colors.bg_hover,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
+            .color_fill = @import("color_compat.zig").wrap(transparent),
+            .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
             .padding = .{ .x = 10, .y = 5, .w = 10, .h = 5 },
         })) |r| {
             var fw = dvui.floatingMenu(@src(), .{ .from = r }, .{});
             defer fw.deinit();
             var menu = dvui.menu(@src(), .vertical, .{
                 .background = true,
-                .color_fill = theme.colors.bg_surface,
+                .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
                 .border = dvui.Rect.all(1),
-                .color_border = theme.colors.border_subtle,
+                .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
             });
             defer menu.deinit();
             for (tabs.kinds, 0..) |kind, k| {
@@ -363,7 +363,7 @@ fn renderTabStrip() void {
                 if (dvui.menuItemLabel(@src(), text, .{}, .{
                     .id_extra = k,
                     .expand = .horizontal,
-                    .color_text = if (missing) theme.colors.text_tertiary else theme.colors.text_primary,
+                    .color_text = @import("color_compat.zig").wrap(if (missing) theme.colors.text_tertiary else theme.colors.text_primary),
                 })) |_| {
                     start(kind);
                     // start() activated the new tab; the indices above are stale.
@@ -373,7 +373,7 @@ fn renderTabStrip() void {
         }
     } else {
         _ = dvui.label(@src(), "6 of 6", .{}, .{
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
             .gravity_y = 0.5,
             .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
         });
@@ -384,11 +384,11 @@ fn renderTabStrip() void {
         var cell = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = t.serial,
             .background = true,
-            .color_fill = if (is_active) theme.colors.bg_app else transparent,
-            .corner_radius = .{ .x = 6, .y = 6, .w = 0, .h = 0 },
+            .color_fill = @import("color_compat.zig").wrap(if (is_active) theme.colors.bg_app else transparent),
+            .corners = .{ .tl = .theme(6), .tr = .theme(6), .br = .theme(0), .bl = .theme(0) },
             .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
             .border = if (is_active) .{ .x = 0, .y = 2, .w = 0, .h = 0 } else dvui.Rect.all(0),
-            .color_border = theme.colors.accent,
+            .color_border = @import("color_compat.zig").wrap(theme.colors.accent),
         });
         defer cell.deinit();
 
@@ -400,8 +400,8 @@ fn renderTabStrip() void {
                     .min_size_content = .{ .w = 7, .h = 7 },
                     .max_size_content = .{ .w = 7, .h = 7 },
                     .background = true,
-                    .color_fill = if (t.marker == .bell) theme.colors.accent else theme.colors.text_tertiary,
-                    .corner_radius = dvui.Rect.all(theme.radius.sm),
+                    .color_fill = @import("color_compat.zig").wrap(if (t.marker == .bell) theme.colors.accent else theme.colors.text_tertiary),
+                    .corners = dvui.CornerRect.all(theme.radius.sm),
                     .gravity_y = 0.5,
                     .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
                 });
@@ -418,24 +418,24 @@ fn renderTabStrip() void {
         const text = tabs.label(&label_buf, tabs.baseName(&base_buf, t.kind, t.ordinal), title_buf[0..n], t.session.isExited(), budget);
         if (dvui.button(@src(), text, .{}, .{
             .id_extra = t.serial,
-            .color_fill = transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_surface,
-            .color_text = if (is_active) theme.colors.text_primary else theme.colors.text_secondary,
+            .color_fill = @import("color_compat.zig").wrap(transparent),
+            .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+            .color_fill_press = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+            .color_text = @import("color_compat.zig").wrap(if (is_active) theme.colors.text_primary else theme.colors.text_secondary),
             .border = dvui.Rect.all(0),
-            .corner_radius = dvui.Rect.all(0),
+            .corners = dvui.CornerRect.all(0),
             .padding = .{ .x = 10, .y = 5, .w = 4, .h = 5 },
             .margin = dvui.Rect.all(0),
             .gravity_y = 0.5,
         })) select = i;
         if (dvui.button(@src(), "x", .{}, .{
             .id_extra = t.serial,
-            .color_fill = transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_surface,
-            .color_text = theme.colors.text_secondary,
+            .color_fill = @import("color_compat.zig").wrap(transparent),
+            .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+            .color_fill_press = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .border = dvui.Rect.all(0),
-            .corner_radius = dvui.Rect.all(0),
+            .corners = dvui.CornerRect.all(0),
             .padding = .{ .x = 6, .y = 5, .w = 8, .h = 5 },
             .margin = dvui.Rect.all(0),
             .gravity_y = 0.5,
@@ -458,17 +458,17 @@ fn renderEmpty() void {
     });
     defer col.deinit();
     _ = dvui.label(@src(), "Run a coding agent right here", .{}, .{
-        .color_text = theme.colors.text_primary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
         .font = dvui.Font.theme(.title),
         .gravity_x = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
     });
     _ = dvui.label(@src(), "Opens in Opal's workspace with the opal tools already connected.", .{}, .{
-        .color_text = theme.colors.text_secondary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .gravity_x = 0.5,
     });
     _ = dvui.label(@src(), "While a terminal has focus it gets every key. Press Ctrl+Shift+Esc to give the keyboard back to Opal.", .{}, .{
-        .color_text = theme.colors.text_secondary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .gravity_x = 0.5,
         .margin = .{ .x = 0, .y = 6, .w = 0, .h = 16 },
     });
@@ -480,13 +480,13 @@ fn renderEmpty() void {
         }
     }
     _ = dvui.label(@src(), "Open up to six at once and switch between them with the tabs.", .{}, .{
-        .color_text = theme.colors.text_tertiary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
         .gravity_x = 0.5,
         .margin = .{ .x = 0, .y = 10, .w = 0, .h = 0 },
     });
     if (!session_mod.supported) {
         _ = dvui.label(@src(), "The embedded terminal is not available on this platform yet. Use Settings > Agent Access to open an agent in your own terminal.", .{}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .gravity_x = 0.5,
             .margin = .{ .x = 0, .y = 12, .w = 0, .h = 0 },
         });
@@ -523,7 +523,7 @@ fn renderTerminal(t: *Tab) void {
         .id_extra = t.serial,
         .expand = .both,
         .background = true,
-        .color_fill = toColor(snap.default_bg),
+        .color_fill = @import("color_compat.zig").wrap(toColor(snap.default_bg)),
         .padding = .{ .x = 6, .y = 4, .w = 6, .h = 4 },
     });
     defer area.deinit();
@@ -580,14 +580,14 @@ fn renderTerminal(t: *Tab) void {
 
 /// A 1px accent outline just inside the terminal's edge while it has focus.
 fn drawFocusRing(brs: dvui.RectScale) void {
-    const none = dvui.Rect.Physical.all(0);
+    const none = dvui.CornerRect.Physical.all(0);
     const t = @max(1, @round(brs.s));
     const r = brs.r;
     const color = theme.colors.accent;
-    (dvui.Rect.Physical{ .x = r.x, .y = r.y, .w = r.w, .h = t }).fill(none, .{ .color = color });
-    (dvui.Rect.Physical{ .x = r.x, .y = r.y + r.h - t, .w = r.w, .h = t }).fill(none, .{ .color = color });
-    (dvui.Rect.Physical{ .x = r.x, .y = r.y, .w = t, .h = r.h }).fill(none, .{ .color = color });
-    (dvui.Rect.Physical{ .x = r.x + r.w - t, .y = r.y, .w = t, .h = r.h }).fill(none, .{ .color = color });
+    (dvui.Rect.Physical{ .x = r.x, .y = r.y, .w = r.w, .h = t }).fill(none, .{ .color = .{ .color = color } });
+    (dvui.Rect.Physical{ .x = r.x, .y = r.y + r.h - t, .w = r.w, .h = t }).fill(none, .{ .color = .{ .color = color } });
+    (dvui.Rect.Physical{ .x = r.x, .y = r.y, .w = t, .h = r.h }).fill(none, .{ .color = .{ .color = color } });
+    (dvui.Rect.Physical{ .x = r.x + r.w - t, .y = r.y, .w = t, .h = r.h }).fill(none, .{ .color = .{ .color = color } });
 }
 
 fn rect(rs: dvui.RectScale, x: f32, y: f32, w: f32, h: f32) dvui.Rect.Physical {
@@ -597,7 +597,7 @@ fn rect(rs: dvui.RectScale, x: f32, y: f32, w: f32, h: f32) dvui.Rect.Physical {
 fn drawGrid(rs: dvui.RectScale, cw: f32, ch: f32, focused: bool) void {
     const cols = snap.cols;
     const rows = snap.rows;
-    const none = dvui.Rect.Physical.all(0);
+    const none = dvui.CornerRect.Physical.all(0);
     const selection_bg = theme.colors.accent;
 
     for (0..rows) |y| {
@@ -618,7 +618,7 @@ fn drawGrid(rs: dvui.RectScale, cw: f32, ch: f32, focused: bool) void {
                 if (!cell.selected and !std.meta.eql(next.bg, cell.bg)) break;
             }
             const color = if (cell.selected) selection_bg else toColor(cell.bg);
-            rect(rs, @as(f32, @floatFromInt(x)) * cw, fy, @as(f32, @floatFromInt(end - x)) * cw, ch).fill(none, .{ .color = color });
+            rect(rs, @as(f32, @floatFromInt(x)) * cw, fy, @as(f32, @floatFromInt(end - x)) * cw, ch).fill(none, .{ .color = .{ .color = color } });
             x = end;
         }
 
@@ -682,15 +682,15 @@ fn drawText(rs: dvui.RectScale, f: dvui.Font, text: []const u8, x: f32, y: f32, 
 }
 
 fn decorate(rs: dvui.RectScale, cell: *const session_mod.Cell, x: f32, y: f32, w: f32, h: f32, color: dvui.Color) void {
-    const none = dvui.Rect.Physical.all(0);
+    const none = dvui.CornerRect.Physical.all(0);
     const thick = @max(1, @round(rs.s));
-    if (cell.underline) rect(rs, x, y + h - thick * 1.5, w, thick).fill(none, .{ .color = color });
-    if (cell.strike) rect(rs, x, y + h * 0.5, w, thick).fill(none, .{ .color = color });
+    if (cell.underline) rect(rs, x, y + h - thick * 1.5, w, thick).fill(none, .{ .color = .{ .color = color } });
+    if (cell.strike) rect(rs, x, y + h * 0.5, w, thick).fill(none, .{ .color = .{ .color = color } });
 }
 
 fn drawCursor(rs: dvui.RectScale, cw: f32, ch: f32, focused: bool) void {
     if (!snap.cursor_visible or snap.cursor_x >= snap.cols or snap.cursor_y >= snap.rows) return;
-    const none = dvui.Rect.Physical.all(0);
+    const none = dvui.CornerRect.Physical.all(0);
     const x = @as(f32, @floatFromInt(snap.cursor_x)) * cw;
     const y = @as(f32, @floatFromInt(snap.cursor_y)) * ch;
     const color = toColor(snap.default_fg);
@@ -698,17 +698,17 @@ fn drawCursor(rs: dvui.RectScale, cw: f32, ch: f32, focused: bool) void {
     const style: session_mod.CursorStyle = if (focused) snap.cursor_style else .hollow;
     switch (style) {
         .block => {
-            rect(rs, x, y, cw, ch).fill(none, .{ .color = color });
+            rect(rs, x, y, cw, ch).fill(none, .{ .color = .{ .color = color } });
             const cell = snap.cell(snap.cursor_x, snap.cursor_y);
             if (cell.len > 0 and !cell.spacer) drawText(rs, font(cell.bold, cell.italic), cell.text(), x, y, if (cell.wide) cw * 2 else cw, ch, toColor(snap.default_bg));
         },
-        .bar => rect(rs, x, y, thick * 2, ch).fill(none, .{ .color = color }),
-        .underline => rect(rs, x, y + ch - thick * 2, cw, thick * 2).fill(none, .{ .color = color }),
+        .bar => rect(rs, x, y, thick * 2, ch).fill(none, .{ .color = .{ .color = color } }),
+        .underline => rect(rs, x, y + ch - thick * 2, cw, thick * 2).fill(none, .{ .color = .{ .color = color } }),
         .hollow => {
-            rect(rs, x, y, cw, thick).fill(none, .{ .color = color });
-            rect(rs, x, y + ch - thick, cw, thick).fill(none, .{ .color = color });
-            rect(rs, x, y, thick, ch).fill(none, .{ .color = color });
-            rect(rs, x + cw - thick, y, thick, ch).fill(none, .{ .color = color });
+            rect(rs, x, y, cw, thick).fill(none, .{ .color = .{ .color = color } });
+            rect(rs, x, y + ch - thick, cw, thick).fill(none, .{ .color = .{ .color = color } });
+            rect(rs, x, y, thick, ch).fill(none, .{ .color = .{ .color = color } });
+            rect(rs, x + cw - thick, y, thick, ch).fill(none, .{ .color = .{ .color = color } });
         },
     }
 }
@@ -739,7 +739,7 @@ fn drawScrollbar(content: dvui.Rect.Physical, scale: f32, active: bool) void {
     const c = toColor(snap.default_fg);
     const alpha: u8 = if (active) 170 else if (hover) 120 else 60;
     const r = dvui.Rect.Physical{ .x = content.x + content.w - w - 2 * scale, .y = content.y + th.y, .w = w, .h = th.h };
-    r.fill(dvui.Rect.Physical.all(w / 2), .{ .color = .{ .r = c.r, .g = c.g, .b = c.b, .a = alpha } });
+    r.fill(dvui.CornerRect.Physical.all(w / 2), .{ .color = .{ .color = .{ .r = c.r, .g = c.g, .b = c.b, .a = alpha } } });
 }
 
 fn mapButton(b: dvui.enums.Button) ?pointer.Button {
@@ -798,6 +798,7 @@ fn handleEvents(s: *Session, wd: *dvui.WidgetData, content: dvui.Rect.Physical, 
                 // Shift always means "select, whatever the program asked for".
                 const bypass = me.mod.shift();
                 switch (me.action) {
+                    .pinch_begin, .pinch_update, .pinch_end => {},
                     .focus => {
                         e.handle(@src(), wd);
                         dvui.focusWidget(wd.id, null, e.num);

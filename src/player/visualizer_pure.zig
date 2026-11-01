@@ -50,7 +50,7 @@ pub const Style = enum {
     }
 
     pub fn fromLabel(s: []const u8) Style {
-        inline for (@typeInfo(Style).@"enum".fields) |f| {
+        inline for (comptime @import("../core/enum_compat.zig").fields(Style)) |f| {
             const v: Style = @enumFromInt(f.value);
             if (std.mem.eql(u8, v.label(), s)) return v;
         }
@@ -225,7 +225,7 @@ test "style labels round-trip (settings persistence)" {
 }
 
 test "headless audio skips every visualization style" {
-    inline for (@typeInfo(Style).@"enum".fields) |field| {
+    inline for (comptime @import("../core/enum_compat.zig").fields(Style)) |field| {
         const style: Style = @enumFromInt(field.value);
         try std.testing.expect(!shouldApply(style, true, false));
         try std.testing.expect(!shouldApply(style, true, true));

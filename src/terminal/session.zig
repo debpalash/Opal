@@ -12,9 +12,7 @@ const workers = @import("../core/workers.zig");
 const pty_mod = @import("pty.zig");
 const pointer = @import("pointer.zig");
 
-pub const c = @cImport({
-    @cInclude("ghostty/vt.h");
-});
+pub const c = @import("opal-native-c");
 
 pub const supported = pty_mod.supported;
 

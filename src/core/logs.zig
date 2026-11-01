@@ -186,7 +186,7 @@ fn getLogAt(index: usize) *const LogEntry {
 pub fn renderDevLogWindow() void {
     if (!show_logs_ui) return;
 
-    var opts = dvui.Options{ .id_extra = 99999, .color_fill = dvui.Color{ .r = 10, .g = 10, .b = 15, .a = 240 }, .color_border = dvui.Color{ .r = 80, .g = 30, .b = 30, .a = 255 }, .border = dvui.Rect.all(2) };
+    var opts = dvui.Options{ .id_extra = 99999, .color_fill = @import("../ui/color_compat.zig").wrap(dvui.Color{ .r = 10, .g = 10, .b = 15, .a = 240 }), .color_border = @import("../ui/color_compat.zig").wrap(dvui.Color{ .r = 80, .g = 30, .b = 30, .a = 255 }), .border = dvui.Rect.all(2) };
     var overlay = dvui.overlay(@src(), .{});
     defer overlay.deinit();
 
@@ -236,6 +236,6 @@ pub fn renderDevLogWindow() void {
         const l = getLogAt(li);
         if (show_only_errors and !l.is_error) continue;
         const col = if (l.is_error) dvui.Color{ .r = 255, .g = 80, .b = 80, .a = 255 } else dvui.Color{ .r = 180, .g = 180, .b = 180, .a = 255 };
-        _ = dvui.labelNoFmt(@src(), @import("text.zig").safeUtf8(l.text), .{}, .{ .id_extra = li, .color_text = col });
+        _ = dvui.labelNoFmt(@src(), @import("text.zig").safeUtf8(l.text), .{}, .{ .id_extra = li, .color_text = @import("../ui/color_compat.zig").wrap(col) });
     }
 }

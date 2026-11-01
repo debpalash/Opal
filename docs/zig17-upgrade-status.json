@@ -1,5 +1,5 @@
 {
-  "status": "incomplete: build configuration and selected modules migrated; GUI does not compile",
+  "status": "incomplete: second time-boxed pass; native bindings and bulk syntax/DVUI API migration implemented; full build pending",
   "base_commit": "e3167cd",
   "branch": "next/zig-0.17-dvui-0.6",
   "compiler_tested": "0.17.0",
@@ -23,12 +23,21 @@
     "note": "Sidecar errors in that run were subsequently fixed; sidecar standalone build/tests/loopback passed."
   },
   "remaining_work": [
-    "Replace 15 @cImport sites with generated translate-c modules and wire their imports in build.zig.",
-    "Migrate remaining array repetition syntax and compiler/stdlib API errors, then address semantic diagnostics.",
-    "Validate Ghostty terminal C API and DVUI UI behavior in a successful full build.",
-    "Migrate CI, release scripts, native fixtures, README/toolchain notes; run the full feature and cross-platform suites.",
-    "Replace the temporary vendored sidecar adapter with an upstream Zig 0.17-compatible pin when available."
+    "Complete native macOS compilation and launch validation.",
+    "Replace macOS-specific binding paths with target-aware configuration and wire bindings into standalone test modules.",
+    "Run full UI/media regressions and migrate CI/release packaging."
   ],
   "reproduce": "ZIG=/path/to/zig-0.17 scripts/check-zig17-upgrade.sh --full",
-  "deployment": "Not installed; production main and the installed macOS app remain on Zig 0.16."
+  "deployment": "Not installed; production main and the installed macOS app remain on Zig 0.16.",
+  "second_pass": {
+    "native_bindings": "generated via translate-c 2.0; shared across native modules",
+    "syntax": "array/string repetition migrated; formatting and reflection compatibility helpers added",
+    "dvui": "lifecycle, corner, color/gradient, texture and input APIs adapted",
+    "verification": "31-test checkpoint script passes; last full native build still compiling at checkpoint",
+    "limitations": [
+      "native C bindings currently use macOS/Homebrew SDK paths",
+      "Windows C bindings and headless/test module wiring need completion",
+      "CI, packaging and full runtime feature validation are not migrated"
+    ]
+  }
 }

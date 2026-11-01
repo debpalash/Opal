@@ -24,9 +24,7 @@ const alloc = @import("../core/alloc.zig");
 // the @cImport never runs and onnxruntime isn't required.
 const ocr_build_options = @import("ocr_build_options");
 const has_ocr = ocr_build_options.has_ocr;
-const ocr_c = if (has_ocr) @cImport({
-    @cInclude("ocr_ort.h");
-}) else struct {};
+const ocr_c = if (has_ocr) @import("opal-native-c") else struct {};
 
 var ocr_initialized: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var ocr_init_failed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);

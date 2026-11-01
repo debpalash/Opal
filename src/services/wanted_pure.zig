@@ -624,8 +624,8 @@ test "also-searching line names at most two titles then a count" {
     try std.testing.expectEqualStrings("also searching: Sen to Chihiro", alsoSearchingText(&b, "Sen to Chihiro"));
     try std.testing.expectEqualStrings("also searching: A one, B two", alsoSearchingText(&b, "A one\nB two"));
     try std.testing.expectEqualStrings("also searching: A one, B two +2", alsoSearchingText(&b, "A one\nB two\nC\nD"));
-    try std.testing.expectEqualStrings("also searching: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...", alsoSearchingText(&b, "a" ** 50));
+    try std.testing.expectEqualStrings("also searching: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...", alsoSearchingText(&b, @import("../core/repeat_pure.zig").bytes("a", 50)));
     // A multibyte character is never cut in half.
-    const cut = alsoSearchingText(&b, "a" ** 35 ++ "\u{e9}\u{e9}");
+    const cut = alsoSearchingText(&b, @import("../core/repeat_pure.zig").bytes("a", 35) ++ "\u{e9}\u{e9}");
     try std.testing.expect(std.unicode.utf8ValidateSlice(cut));
 }

@@ -13,7 +13,7 @@ pub const Slot = struct {
     metadata: pure.Metadata = .{},
     image: state.TmdbItem = .{},
 };
-var slots: [64]Slot = [_]Slot{.{}} ** 64;
+var slots: [64]Slot = @as([64]Slot, @splat(.{}));
 var busy: std.atomic.Value(bool) = .init(false);
 
 /// UI-thread only. At most one metadata request runs at a time. No slot reuse:
@@ -28,7 +28,7 @@ pub fn get(id: i32, ep: tp.Ep, name: []const u8) ?*Slot {
         if (slot.id != 0) continue;
         slot.id = id;
         slot.ep = ep;
-        var title: [128]u8 = .{0} ** 128;
+        var title: [128]u8 = @splat(0);
         const len = @min(name.len, title.len);
         @memcpy(title[0..len], name[0..len]);
         workers.spawn(fetch, .{ slot, state.app.tmdb.api_key, state.app.tmdb.api_key_len, title, len }) catch {

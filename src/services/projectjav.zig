@@ -118,7 +118,7 @@ pub fn fetchTorrents(url: []const u8) void {
 
             if (torrent_count > 0) {
                 var log_buf: [64]u8 = undefined;
-                const lm = std.fmt.bufPrintZ(&log_buf, "Found {d} torrents", .{torrent_count}) catch "Found torrents";
+                const lm = @import("../core/fmt_compat.zig").bufPrintZ(&log_buf, "Found {d} torrents", .{torrent_count}) catch "Found torrents";
                 logs.pushLog("info", "pjav", lm, false);
             } else {
                 logs.pushLog("warn", "pjav", "No magnet links found on page", false);
@@ -429,13 +429,13 @@ fn hexVal(ch: u8) ?u8 {
 fn formatSize(bytes: i64, buf: []u8) []const u8 {
     const fb: f64 = @floatFromInt(bytes);
     if (fb >= 1073741824.0)
-        return std.fmt.bufPrintZ(buf, "{d:.1} GB", .{fb / 1073741824.0}) catch "?"
+        return @import("../core/fmt_compat.zig").bufPrintZ(buf, "{d:.1} GB", .{fb / 1073741824.0}) catch "?"
     else if (fb >= 1048576.0)
-        return std.fmt.bufPrintZ(buf, "{d:.0} MB", .{fb / 1048576.0}) catch "?"
+        return @import("../core/fmt_compat.zig").bufPrintZ(buf, "{d:.0} MB", .{fb / 1048576.0}) catch "?"
     else if (fb >= 1024.0)
-        return std.fmt.bufPrintZ(buf, "{d:.0} KB", .{fb / 1024.0}) catch "?"
+        return @import("../core/fmt_compat.zig").bufPrintZ(buf, "{d:.0} KB", .{fb / 1024.0}) catch "?"
     else
-        return std.fmt.bufPrintZ(buf, "{d} B", .{bytes}) catch "?";
+        return @import("../core/fmt_compat.zig").bufPrintZ(buf, "{d} B", .{bytes}) catch "?";
 }
 
 // ══════════════════════════════════════════════════════════
@@ -472,9 +472,9 @@ pub fn renderModal() void {
     }, .{
         .min_size_content = .{ .w = 520, .h = 200 },
         .max_size_content = .{ .w = 700, .h = 600 },
-        .color_fill = theme.colors.bg_elevated,
-        .color_border = theme.colors.border_subtle,
-        .corner_radius = theme.dims.rad_lg,
+        .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+        .color_border = @import("../ui/color_compat.zig").wrap(theme.colors.border_subtle),
+        .corners = theme.dims.rad_lg,
         .border = dvui.Rect.all(1),
         .box_shadow = theme.elevation.md(),
     });
@@ -489,7 +489,7 @@ pub fn renderModal() void {
     // Loading state
     if (is_fetching.load(.acquire)) {
         _ = dvui.label(@src(), "Fetching torrents…", .{}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
             .gravity_x = 0.5,
             .padding = .{ .x = 0, .y = 24, .w = 0, .h = 24 },
         });
@@ -499,7 +499,7 @@ pub fn renderModal() void {
     // No results
     if (torrent_count == 0) {
         _ = dvui.label(@src(), "No torrents found on this page.", .{}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
             .gravity_x = 0.5,
             .padding = .{ .x = 0, .y = 24, .w = 0, .h = 24 },
         });
@@ -515,9 +515,9 @@ pub fn renderModal() void {
         defer hdr.deinit();
 
         var count_buf: [48]u8 = undefined;
-        const count_str = std.fmt.bufPrintZ(&count_buf, "{d} torrent(s) available", .{torrent_count}) catch "Torrents";
+        const count_str = @import("../core/fmt_compat.zig").bufPrintZ(&count_buf, "{d} torrent(s) available", .{torrent_count}) catch "Torrents";
         _ = dvui.label(@src(), "{s}", .{count_str}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
         });
 
         {
@@ -535,7 +535,7 @@ pub fn renderModal() void {
         }
         if (probing_started and !all_done) {
             _ = dvui.label(@src(), "loading sizes…", .{}, .{
-                .color_text = theme.colors.text_tertiary,
+                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_tertiary),
             });
         }
     }
@@ -549,7 +549,7 @@ pub fn renderModal() void {
     // Torrent list
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface),
         .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
     });
     defer scroll.deinit();
@@ -563,10 +563,10 @@ pub fn renderModal() void {
             .id_extra = idx + 5000,
             .expand = .horizontal,
             .background = true,
-            .color_fill = theme.colors.bg_surface,
-            .color_border = theme.colors.border_subtle,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface),
+            .color_border = @import("../ui/color_compat.zig").wrap(theme.colors.border_subtle),
             .border = dvui.Rect.all(1),
-            .corner_radius = theme.dims.rad_md,
+            .corners = theme.dims.rad_md,
             .padding = .{ .x = 12, .y = 10, .w = 12, .h = 10 },
             .margin = .{ .x = 4, .y = 3, .w = 4, .h = 3 },
         });
@@ -585,7 +585,7 @@ pub fn renderModal() void {
             // the whole app. Validate before display.
             _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8(display_name)}, .{
                 .id_extra = idx + 5100,
-                .color_text = theme.colors.text_primary,
+                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary),
                 .expand = .horizontal,
                 .padding = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
             });
@@ -613,8 +613,8 @@ pub fn renderModal() void {
                 var dot = dvui.box(@src(), .{}, .{
                     .id_extra = idx + 5300,
                     .background = true,
-                    .color_fill = h_color,
-                    .corner_radius = dvui.Rect.all(4),
+                    .color_fill = @import("../ui/color_compat.zig").wrap(h_color),
+                    .corners = dvui.CornerRect.all(4),
                     .min_size_content = .{ .w = 8, .h = 8 },
                     .max_size_content = .{ .w = 8, .h = 8 },
                     .gravity_y = 0.5,
@@ -625,25 +625,25 @@ pub fn renderModal() void {
 
             // Seeds
             var seeds_buf: [16]u8 = undefined;
-            const seeds_str = std.fmt.bufPrintZ(&seeds_buf, "S:{d}", .{t.seeds}) catch "S:?";
+            const seeds_str = @import("../core/fmt_compat.zig").bufPrintZ(&seeds_buf, "S:{d}", .{t.seeds}) catch "S:?";
             _ = dvui.label(@src(), "{s}", .{seeds_str}, .{
                 .id_extra = idx + 5400,
-                .color_text = theme.colors.success,
+                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.success),
                 .gravity_y = 0.5,
             });
 
             _ = dvui.label(@src(), " · ", .{}, .{
                 .id_extra = idx + 5500,
-                .color_text = theme.colors.text_tertiary,
+                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_tertiary),
                 .gravity_y = 0.5,
             });
 
             // Leeches
             var leech_buf: [16]u8 = undefined;
-            const leech_str = std.fmt.bufPrintZ(&leech_buf, "L:{d}", .{t.leeches}) catch "L:?";
+            const leech_str = @import("../core/fmt_compat.zig").bufPrintZ(&leech_buf, "L:{d}", .{t.leeches}) catch "L:?";
             _ = dvui.label(@src(), "{s}", .{leech_str}, .{
                 .id_extra = idx + 5600,
-                .color_text = theme.colors.danger,
+                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.danger),
                 .gravity_y = 0.5,
             });
 
@@ -651,7 +651,7 @@ pub fn renderModal() void {
             if (t.total_size > 0) {
                 _ = dvui.label(@src(), " · ", .{}, .{
                     .id_extra = idx + 5650,
-                    .color_text = theme.colors.text_tertiary,
+                    .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_tertiary),
                     .gravity_y = 0.5,
                 });
 
@@ -659,18 +659,18 @@ pub fn renderModal() void {
                 const size_str = formatSize(t.total_size, &size_buf);
                 _ = dvui.label(@src(), "{s}", .{size_str}, .{
                     .id_extra = idx + 5660,
-                    .color_text = theme.colors.accent,
+                    .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
                     .gravity_y = 0.5,
                 });
             } else if (!t.probe_done and t.probe_tid >= 0) {
                 _ = dvui.label(@src(), " · ", .{}, .{
                     .id_extra = idx + 5650,
-                    .color_text = theme.colors.text_tertiary,
+                    .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_tertiary),
                     .gravity_y = 0.5,
                 });
                 _ = dvui.label(@src(), "...", .{}, .{
                     .id_extra = idx + 5660,
-                    .color_text = theme.colors.text_tertiary,
+                    .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_tertiary),
                     .gravity_y = 0.5,
                 });
             }
@@ -679,7 +679,7 @@ pub fn renderModal() void {
             if (t.badge_len > 0) {
                 _ = dvui.label(@src(), " · ", .{}, .{
                     .id_extra = idx + 5700,
-                    .color_text = theme.colors.text_tertiary,
+                    .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_tertiary),
                     .gravity_y = 0.5,
                 });
 
@@ -692,7 +692,7 @@ pub fn renderModal() void {
 
                 _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8(t.badge[0..t.badge_len])}, .{
                     .id_extra = idx + 5750,
-                    .color_text = badge_color,
+                    .color_text = @import("../ui/color_compat.zig").wrap(badge_color),
                     .gravity_y = 0.5,
                 });
             }
@@ -701,12 +701,12 @@ pub fn renderModal() void {
             if (t.date_len > 0) {
                 _ = dvui.label(@src(), " · ", .{}, .{
                     .id_extra = idx + 5800,
-                    .color_text = theme.colors.text_tertiary,
+                    .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_tertiary),
                     .gravity_y = 0.5,
                 });
                 _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8(t.date[0..t.date_len])}, .{
                     .id_extra = idx + 5850,
-                    .color_text = theme.colors.text_tertiary,
+                    .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_tertiary),
                     .gravity_y = 0.5,
                 });
             }
@@ -720,11 +720,11 @@ pub fn renderModal() void {
             // Play button — accent style
             if (dvui.button(@src(), "Play", .{}, .{
                 .id_extra = idx + 6000,
-                .color_fill = theme.colors.accent,
-                .color_fill_hover = theme.colors.accent.lighten(8),
-                .color_fill_press = theme.colors.accent.lighten(-8),
-                .color_text = theme.colors.text_on_accent,
-                .corner_radius = theme.dims.rad_sm,
+                .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
+                .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.accent.lighten(8)),
+                .color_fill_press = @import("../ui/color_compat.zig").wrap(theme.colors.accent.lighten(-8)),
+                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_on_accent),
+                .corners = theme.dims.rad_sm,
                 .padding = .{ .x = 14, .y = 5, .w = 14, .h = 5 },
             })) {
                 // Clean up remaining probes before playing

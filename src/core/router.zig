@@ -251,7 +251,7 @@ test "plugins is a first-class route, distinct from system" {
 test "every plugin tab is listed exactly once with a unique label and a hint" {
     // A missing variant here means the nav menu silently drops a page.
     try std.testing.expectEqual(
-        @typeInfo(PluginTab).@"enum".fields.len,
+        @typeInfo(PluginTab).@"enum".field_names.len,
         PLUGIN_TABS.len,
     );
     for (PLUGIN_TABS, 0..) |t, i| {

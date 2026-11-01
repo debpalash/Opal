@@ -51,7 +51,7 @@ test "checksum lookup requires the exact asset" {
 }
 
 test "checksum comparison accepts upper case sums" {
-    const actual = [_]u8{0xbb} ** 32;
+    const actual = @as([32]u8, @splat(0xbb));
     try std.testing.expect(checksumMatches("BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", actual));
     try std.testing.expect(!checksumMatches("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", actual));
 }

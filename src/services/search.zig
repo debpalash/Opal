@@ -1154,24 +1154,24 @@ pub fn renderSearchContent() void {
         var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
             .background = true,
-            .color_fill = theme.colors.bg_surface,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface),
             .padding = .{ .x = theme.spacing.sm, .y = 4, .w = theme.spacing.sm, .h = 4 },
         });
         defer bar.deinit();
         var input_row = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
             .background = true,
-            .color_fill = theme.colors.bg_elevated,
-            .color_border = theme.colors.border_subtle,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_border = @import("../ui/color_compat.zig").wrap(theme.colors.border_subtle),
             .border = dvui.Rect.all(1),
-            .corner_radius = theme.dims.rad_sm,
+            .corners = theme.dims.rad_sm,
             .max_size_content = .{ .w = 0, .h = 36 },
             .min_size_content = .{ .w = 0, .h = 36 },
             .gravity_y = 0.5,
         });
         var opts = theme.optInput();
-        opts.color_fill = theme.transparent;
-        opts.color_border = theme.transparent;
+        opts.color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent);
+        opts.color_border = @import("../ui/color_compat.zig").wrap(theme.transparent);
         opts.border = dvui.Rect.all(0);
         opts.expand = .horizontal;
         opts.max_size_content = .{ .w = 0, .h = 36 };
@@ -1183,10 +1183,10 @@ pub fn renderSearchContent() void {
         @memcpy(submitted[0..len], te.textGet()[0..len]);
         te.deinit();
         const clicked = dvui.buttonIcon(@src(), "Search", icons.tvg.lucide.search, .{}, .{}, .{
-            .color_fill = theme.transparent,
-            .color_fill_hover = theme.colors.bg_hover,
-            .color_fill_press = theme.colors.bg_elevated,
-            .color_text = theme.colors.accent,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent),
+            .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.bg_hover),
+            .color_fill_press = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
             .border = dvui.Rect.all(0),
             .gravity_y = 0.5,
             .padding = dvui.Rect.all(theme.spacing.xs),
@@ -1242,13 +1242,13 @@ fn searchIconButton(id: usize, icon: []const u8, tooltip: []const u8, active: bo
     const clicked = dvui.buttonIcon(@src(), tooltip, icon, .{}, .{}, .{
         .id_extra = id,
         .data_out = &data,
-        .color_fill = if (active) theme.colors.bg_elevated else theme.transparent,
-        .color_fill_hover = theme.colors.bg_hover,
-        .color_fill_press = theme.colors.bg_elevated,
-        .color_text = if (active) theme.colors.accent else theme.colors.text_secondary,
+        .color_fill = @import("../ui/color_compat.zig").wrap(if (active) theme.colors.bg_elevated else theme.transparent),
+        .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.bg_hover),
+        .color_fill_press = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+        .color_text = @import("../ui/color_compat.zig").wrap(if (active) theme.colors.accent else theme.colors.text_secondary),
         .border = dvui.Rect.all(0),
         .margin = dvui.Rect.all(0),
-        .corner_radius = theme.dims.rad_sm,
+        .corners = theme.dims.rad_sm,
         .min_size_content = .{ .w = 16, .h = 16 },
         .max_size_content = .{ .w = 16, .h = 16 },
         .padding = dvui.Rect.all(5),
@@ -1261,13 +1261,13 @@ fn searchIconButton(id: usize, icon: []const u8, tooltip: []const u8, active: bo
 fn searchButton(id: usize, label: []const u8, active: bool) bool {
     return dvui.button(@src(), label, .{}, .{
         .id_extra = id,
-        .color_fill = if (active) theme.colors.bg_elevated else theme.transparent,
-        .color_fill_hover = theme.colors.bg_hover,
-        .color_fill_press = theme.colors.bg_elevated,
-        .color_text = if (active) theme.colors.accent else theme.colors.text_secondary,
+        .color_fill = @import("../ui/color_compat.zig").wrap(if (active) theme.colors.bg_elevated else theme.transparent),
+        .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.bg_hover),
+        .color_fill_press = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+        .color_text = @import("../ui/color_compat.zig").wrap(if (active) theme.colors.accent else theme.colors.text_secondary),
         .border = dvui.Rect.all(0),
         .margin = dvui.Rect.all(0),
-        .corner_radius = theme.dims.rad_sm,
+        .corners = theme.dims.rad_sm,
         .padding = .{ .x = theme.spacing.sm, .y = 6, .w = theme.spacing.sm, .h = 6 },
         .gravity_y = 0.5,
     });
@@ -1279,39 +1279,39 @@ fn searchSelect(id: usize, labels: []const []const u8, selected: usize) ?usize {
 }
 
 fn searchSelectImpl(id: usize, labels: []const []const u8, selected: usize, icon_only: bool) ?usize {
-    var menu = dvui.menu(@src(), .horizontal, .{ .id_extra = id, .color_fill = theme.transparent, .gravity_y = 0.5 });
+    var menu = dvui.menu(@src(), .horizontal, .{ .id_extra = id, .color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent), .gravity_y = 0.5 });
     defer menu.deinit();
     const current_label = labels[@min(selected, labels.len - 1)];
     var data: dvui.WidgetData = undefined;
     const trigger = if (icon_only) dvui.menuItemIcon(@src(), current_label, icons.tvg.lucide.@"arrow-down-wide-narrow", .{ .submenu = true }, .{
         .id_extra = id,
         .data_out = &data,
-        .color_fill = theme.transparent,
-        .color_fill_hover = theme.colors.bg_hover,
-        .color_fill_press = theme.colors.bg_elevated,
-        .color_text = theme.colors.text_secondary,
-        .corner_radius = theme.dims.rad_sm,
+        .color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent),
+        .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.bg_hover),
+        .color_fill_press = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+        .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
+        .corners = theme.dims.rad_sm,
         .min_size_content = .{ .w = 16, .h = 16 },
         .max_size_content = .{ .w = 16, .h = 16 },
         .padding = dvui.Rect.all(5),
     }) else dvui.menuItemLabel(@src(), current_label, .{ .submenu = true }, .{
         .id_extra = id,
         .background = true,
-        .color_fill = theme.colors.bg_elevated,
-        .color_fill_hover = theme.colors.bg_hover,
-        .color_fill_press = theme.colors.bg_surface,
-        .color_text = theme.colors.text_primary,
-        .corner_radius = theme.dims.rad_sm,
+        .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+        .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.bg_hover),
+        .color_fill_press = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface),
+        .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary),
+        .corners = theme.dims.rad_sm,
         .padding = .{ .x = theme.spacing.sm, .y = 6, .w = theme.spacing.sm, .h = 6 },
     });
     if (icon_only) components.tip(@src(), data, current_label);
     if (trigger) |rect| {
-        var popup = dvui.floatingMenu(@src(), .{ .from = rect }, .{ .id_extra = id, .color_fill = theme.colors.bg_surface, .color_border = theme.colors.border_subtle });
+        var popup = dvui.floatingMenu(@src(), .{ .from = rect }, .{ .id_extra = id, .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface), .color_border = @import("../ui/color_compat.zig").wrap(theme.colors.border_subtle) });
         defer popup.deinit();
-        var choices = dvui.menu(@src(), .vertical, .{ .id_extra = id, .background = true, .color_fill = theme.colors.bg_surface, .color_border = theme.colors.border_subtle, .border = dvui.Rect.all(1) });
+        var choices = dvui.menu(@src(), .vertical, .{ .id_extra = id, .background = true, .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface), .color_border = @import("../ui/color_compat.zig").wrap(theme.colors.border_subtle), .border = dvui.Rect.all(1) });
         defer choices.deinit();
         for (labels, 0..) |label, i| {
-            if (dvui.menuItemLabel(@src(), label, .{}, .{ .id_extra = i, .expand = .horizontal, .color_text = if (i == selected) theme.colors.accent else theme.colors.text_primary, .color_fill_hover = theme.colors.bg_hover })) |_| {
+            if (dvui.menuItemLabel(@src(), label, .{}, .{ .id_extra = i, .expand = .horizontal, .color_text = @import("../ui/color_compat.zig").wrap(if (i == selected) theme.colors.accent else theme.colors.text_primary), .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.bg_hover) })) |_| {
                 popup.close();
                 return i;
             }
@@ -1330,7 +1330,7 @@ const SIZE_LABELS = [_][]const u8{ "Any size", "Under 1 GB", "1–5 GB", "5–20
 var size_choice: usize = 0;
 
 fn renderSearchFilters() void {
-    var panel = dvui.flexbox(@src(), .{}, .{ .expand = .horizontal, .background = true, .color_fill = theme.colors.bg_surface, .padding = dvui.Rect.all(theme.spacing.sm) });
+    var panel = dvui.flexbox(@src(), .{}, .{ .expand = .horizontal, .background = true, .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface), .padding = dvui.Rect.all(theme.spacing.sm) });
     if (searchSelect(91100, &CONTENT_LABELS, @intFromEnum(view_filters.content))) |v| {
         view_filters.content = @enumFromInt(v);
         view_dirty = true;
@@ -1436,13 +1436,13 @@ fn renderUniversalCapabilities() void {
     defer col.deinit();
 
     dvui.icon(@src(), "uni", icons.tvg.lucide.telescope, .{}, .{
-        .color_text = theme.colors.accent,
+        .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
         .min_size_content = .{ .w = 36, .h = 36 },
         .gravity_x = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = theme.spacing.sm },
     });
-    _ = dvui.label(@src(), "Search", .{}, .{ .color_text = theme.colors.text_primary, .font = dvui.themeGet().font_title, .gravity_x = 0.5 });
-    _ = dvui.label(@src(), "Search across your libraries and enabled sources.", .{}, .{ .color_text = theme.colors.text_secondary, .gravity_x = 0.5 });
+    _ = dvui.label(@src(), "Search", .{}, .{ .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary), .font = dvui.themeGet().font_title, .gravity_x = 0.5 });
+    _ = dvui.label(@src(), "Search across your libraries and enabled sources.", .{}, .{ .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary), .gravity_x = 0.5 });
 
     const Src = struct { icon: []const u8, name: []const u8 };
     const sources = [_]Src{
@@ -1466,14 +1466,14 @@ fn renderUniversalCapabilities() void {
         var chip = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .id_extra = i + 9700,
             .background = true,
-            .color_fill = theme.colors.bg_surface,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface),
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 10, .y = 6, .w = 10, .h = 6 },
             .margin = dvui.Rect.all(4),
         });
         defer chip.deinit();
-        dvui.icon(@src(), s.name, s.icon, .{}, .{ .id_extra = i + 9700, .color_text = theme.colors.accent, .min_size_content = .{ .w = 15, .h = 15 }, .gravity_y = 0.5, .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 } });
-        _ = dvui.label(@src(), "{s}", .{s.name}, .{ .id_extra = i + 9700, .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
+        dvui.icon(@src(), s.name, s.icon, .{}, .{ .id_extra = i + 9700, .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent), .min_size_content = .{ .w = 15, .h = 15 }, .gravity_y = 0.5, .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 } });
+        _ = dvui.label(@src(), "{s}", .{s.name}, .{ .id_extra = i + 9700, .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary), .gravity_y = 0.5 });
     }
 }
 
@@ -1487,7 +1487,7 @@ fn renderUniversalCapabilities() void {
 /// dimmed. A spinner + live count leads the cluster while resolving.
 fn renderSourceStatusCluster() void {
     const resolver = @import("resolver.zig");
-    _ = dvui.label(@src(), "Enabled sources run on your next search. Result filters only change this view.", .{}, .{ .color_text = theme.colors.text_secondary, .padding = dvui.Rect.all(theme.spacing.sm) });
+    _ = dvui.label(@src(), "Enabled sources run on your next search. Result filters only change this view.", .{}, .{ .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary), .padding = dvui.Rect.all(theme.spacing.sm) });
     const Row = struct { icon: []const u8, name: []const u8, bit: resolver.SourceBit, st: resolver.SourceStatus };
     const rows = [_]Row{
         .{ .icon = icons.tvg.lucide.@"hard-drive", .name = "On disk", .bit = .local, .st = resolver.status_local.load(.acquire) },
@@ -1657,7 +1657,7 @@ fn renderProviderFacet() void {
 fn renderSearchSources() void {
     const resolver = @import("resolver.zig");
     renderSourceStatusCluster();
-    var source_has = std.EnumSet(resolver.SourceBit).initEmpty();
+    var source_has: std.EnumSet(resolver.SourceBit) = .empty;
     if (view_cache.rows) |rows| for (rows[0..view_cache.loaded]) |*item| {
         if (sourceBitOf(item)) |bit| source_has.insert(bit);
     };
@@ -1676,7 +1676,7 @@ fn renderDidYouMean(typed: []const u8) void {
         .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = 0 },
     });
     defer row.deinit();
-    _ = dvui.label(@src(), "Did you mean", .{}, .{ .color_text = theme.colors.text_secondary, .gravity_y = 0.5 });
+    _ = dvui.label(@src(), "Did you mean", .{}, .{ .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary), .gravity_y = 0.5 });
     var picked: [128]u8 = undefined;
     var picked_len: usize = 0;
     for (0..suggestions.count) |i| {
@@ -1707,7 +1707,7 @@ fn renderUniversalResults() void {
         }
         var count_buf: [128]u8 = undefined;
         const count = std.fmt.bufPrint(&count_buf, "{d} titles · {d} other releases{s}", .{ titles, releases, if (view_cache.loading) " · searching…" else "" }) catch "Results";
-        _ = dvui.label(@src(), "{s}", .{count}, .{ .color_text = theme.colors.text_secondary, .padding = dvui.Rect.all(theme.spacing.sm) });
+        _ = dvui.label(@src(), "{s}", .{count}, .{ .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary), .padding = dvui.Rect.all(theme.spacing.sm) });
     }
     // Recall: "From your library" + "Moments" above the source results.
     if (currentScope() == .all) @import("../ui/recall_results.zig").render(view_cache.query[0..view_cache.query_len]);
@@ -1978,7 +1978,7 @@ fn renderContentGallery(pending: *?ResultAction) void {
     };
     const selected = &content_projection.groups[visible[selected_position]];
     gallery_selection = selected.identity;
-    var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &result_scroll }, .{ .expand = .both, .background = true, .color_fill = theme.colors.bg_app });
+    var scroll = dvui.scrollArea(@src(), .{ .scroll_info = &result_scroll }, .{ .expand = .both, .background = true, .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_app) });
     defer scroll.deinit();
     var content = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .padding = dvui.Rect.all(theme.spacing.md) });
     defer content.deinit();
@@ -2001,7 +2001,7 @@ fn renderContentGallery(pending: *?ResultAction) void {
             renderCompactRow(index, &rows[index], pending);
         }
     }
-    var categories: [@typeInfo(search_content.Category).@"enum".fields.len]search_content.Category = undefined;
+    var categories: [@typeInfo(search_content.Category).@"enum".field_names.len]search_content.Category = undefined;
     const category_count_visible = search_content.categoryOrder(&content_projection, visible[0..visible_count], &categories);
     for (categories[0..category_count_visible]) |category| {
         var category_count: usize = 0;
@@ -2010,10 +2010,10 @@ fn renderContentGallery(pending: *?ResultAction) void {
         };
         if (category_count > 0) {
             var heading = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 94600 + @as(usize, @intFromEnum(category)), .expand = .horizontal, .padding = .{ .x = 0, .y = 16, .w = 0, .h = 8 } });
-            _ = dvui.label(@src(), "{s}", .{galleryCategoryLabel(category)}, .{ .font = dvui.themeGet().font_heading, .color_text = theme.colors.text_primary, .gravity_y = 0.5 });
+            _ = dvui.label(@src(), "{s}", .{galleryCategoryLabel(category)}, .{ .font = dvui.themeGet().font_heading, .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary), .gravity_y = 0.5 });
             var tally: [32]u8 = undefined;
             const tally_text = std.fmt.bufPrint(&tally, "{d}", .{category_count}) catch "";
-            _ = dvui.label(@src(), "{s}", .{tally_text}, .{ .color_text = theme.colors.text_tertiary, .gravity_y = 0.5, .margin = dvui.Rect.all(6) });
+            _ = dvui.label(@src(), "{s}", .{tally_text}, .{ .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_tertiary), .gravity_y = 0.5, .margin = dvui.Rect.all(6) });
             var spacer = dvui.box(@src(), .{}, .{ .expand = .horizontal });
             spacer.deinit();
             if (category_count > 2 and category != .releases and view_filters.content == .all and components.actionButton(@src(), "See all", .secondary, 94650 + @as(usize, @intFromEnum(category)))) {
@@ -2047,7 +2047,7 @@ fn renderContentGallery(pending: *?ResultAction) void {
                     grid.deinit();
                 } else {
                     const rail_height = gallery_layout.shelfHeight(art.h, dvui.themeGet().font_body.textHeight());
-                    var rail = dvui.scrollArea(@src(), .{ .horizontal = .auto, .horizontal_bar = .auto_overlay, .vertical = .none }, .{ .id_extra = 94800 + @as(usize, @intFromEnum(category)), .expand = .horizontal, .min_size_content = .{ .w = 1, .h = rail_height }, .max_size_content = .{ .w = std.math.floatMax(f32), .h = rail_height }, .background = false, .color_fill = theme.transparent });
+                    var rail = dvui.scrollArea(@src(), .{ .horizontal = .auto, .horizontal_bar = .auto_overlay, .vertical = .none }, .{ .id_extra = 94800 + @as(usize, @intFromEnum(category)), .expand = .horizontal, .min_size_content = .{ .w = 1, .h = rail_height }, .max_size_content = .{ .w = std.math.floatMax(f32), .h = rail_height }, .background = false, .color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent) });
                     var strip = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = 94900 + @as(usize, @intFromEnum(category)) });
                     for (visible[0..visible_count]) |index| {
                         const group = &content_projection.groups[index];
@@ -2072,8 +2072,8 @@ fn renderGallerySummary(group: *const search_content.Group, width: f32) void {
         .padding = dvui.Rect.all(8),
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = 6 },
         .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .corner_radius = theme.dims.rad_md,
+        .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface),
+        .corners = theme.dims.rad_md,
     });
     defer row.deinit();
     if (galleryCover(group.identity)) |slot| components.galleryCoverArt(@src(), key +% 1, slot, item.poster_url[0..item.poster_url_len], galleryIcon(group.category), theme.radius.sm, size.w, size.h);
@@ -2083,7 +2083,7 @@ fn renderGallerySummary(group: *const search_content.Group, width: f32) void {
     const text_width = @max(40, width - size.w - 140);
     _ = dvui.label(@src(), "{s}", .{searchRowTitle(item.name[0..item.name_len], font, text_width, &title)}, .{
         .font = font,
-        .color_text = theme.colors.text_primary,
+        .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary),
         .expand = .horizontal,
     });
     if (item.author_len > 0) searchRowLine(key +% 2, safeUtf8(item.author[0..item.author_len]), font.withSize(theme.font_size.small), text_width, theme.colors.text_secondary);
@@ -2101,9 +2101,9 @@ fn renderGallerySummary(group: *const search_content.Group, width: f32) void {
 fn renderGalleryCard(group: *const search_content.Group, size: gallery_layout.Size) void {
     const item = &view_cache.rows.?[group.representative];
     const key: usize = @truncate(group.identity);
-    var card = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = key, .min_size_content = .{ .w = size.w, .h = 0 }, .max_size_content = .{ .w = size.w, .h = std.math.floatMax(f32) }, .margin = .{ .x = 0, .y = 0, .w = 12, .h = if (view_filters.content == .all) 0 else 16 }, .background = false, .color_fill = theme.transparent });
+    var card = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = key, .min_size_content = .{ .w = size.w, .h = 0 }, .max_size_content = .{ .w = size.w, .h = std.math.floatMax(f32) }, .margin = .{ .x = 0, .y = 0, .w = 12, .h = if (view_filters.content == .all) 0 else 16 }, .background = false, .color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent) });
     defer card.deinit();
-    var art = dvui.overlay(@src(), .{ .id_extra = key +% 1, .min_size_content = .{ .w = size.w, .h = size.h }, .max_size_content = .{ .w = size.w, .h = size.h }, .background = true, .color_fill = theme.colors.bg_surface, .corner_radius = dvui.Rect.all(theme.radius.md), .border = dvui.Rect.all(if (gallery_selection == group.identity) 2 else 0), .color_border = theme.colors.accent });
+    var art = dvui.overlay(@src(), .{ .id_extra = key +% 1, .min_size_content = .{ .w = size.w, .h = size.h }, .max_size_content = .{ .w = size.w, .h = size.h }, .background = true, .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface), .corners = dvui.CornerRect.all(theme.radius.md), .border = dvui.Rect.all(if (gallery_selection == group.identity) 2 else 0), .color_border = @import("../ui/color_compat.zig").wrap(theme.colors.accent) });
     if (art.data().visible()) {
         if (galleryCover(group.identity)) |slot| components.galleryCoverArt(@src(), key +% 2, slot, item.poster_url[0..item.poster_url_len], galleryIcon(group.category), theme.radius.md, size.w, size.h);
     }
@@ -2122,7 +2122,7 @@ fn renderGalleryCard(group: *const search_content.Group, size: gallery_layout.Si
     if (card.data().visible()) {
         if (@import("builtin").is_test) gallery_text_rows_for_test += 1;
         var title: [520]u8 = undefined;
-        _ = dvui.label(@src(), "{s}", .{searchRowTitle(item.name[0..item.name_len], body, size.w, &title)}, .{ .id_extra = key +% 3, .font = body, .color_text = theme.colors.text_primary, .min_size_content = .{ .w = size.w, .h = body.textHeight() * 2 }, .max_size_content = .{ .w = size.w, .h = body.textHeight() * 2 }, .margin = .{ .x = 0, .y = 7, .w = 0, .h = 0 } });
+        _ = dvui.label(@src(), "{s}", .{searchRowTitle(item.name[0..item.name_len], body, size.w, &title)}, .{ .id_extra = key +% 3, .font = body, .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary), .min_size_content = .{ .w = size.w, .h = body.textHeight() * 2 }, .max_size_content = .{ .w = size.w, .h = body.textHeight() * 2 }, .margin = .{ .x = 0, .y = 7, .w = 0, .h = 0 } });
         searchRowLine(key +% 4, safeUtf8(line), body.withSize(theme.font_size.small), size.w, theme.colors.text_secondary);
     } else {
         // Retain exact row geometry and every Details tab stop while avoiding
@@ -2143,7 +2143,7 @@ fn renderGalleryCard(group: *const search_content.Group, size: gallery_layout.Si
 fn renderGalleryHero(group: *const search_content.Group, width: f32, pending: *?ResultAction) void {
     const item = &view_cache.rows.?[group.representative];
     const key: usize = @truncate(group.identity);
-    var hero = dvui.box(@src(), .{ .dir = if (gallery_layout.stackedHero(width)) .vertical else .horizontal }, .{ .id_extra = 95000, .expand = .horizontal, .background = true, .color_fill = theme.colors.bg_surface, .corner_radius = dvui.Rect.all(theme.radius.lg), .padding = dvui.Rect.all(12), .margin = .{ .x = 0, .y = 0, .w = 0, .h = 12 } });
+    var hero = dvui.box(@src(), .{ .dir = if (gallery_layout.stackedHero(width)) .vertical else .horizontal }, .{ .id_extra = 95000, .expand = .horizontal, .background = true, .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface), .corners = dvui.CornerRect.all(theme.radius.lg), .padding = dvui.Rect.all(12), .margin = .{ .x = 0, .y = 0, .w = 0, .h = 12 } });
     defer hero.deinit();
     const preview = @import("search_preview.zig");
     if (item.source == .tmdb and item.catalog_id > 0) {
@@ -2155,7 +2155,7 @@ fn renderGalleryHero(group: *const search_content.Group, width: f32, pending: *?
     const has_backdrop = item.backdrop_url_len > 0 or has_preview_backdrop;
     const preview_active = preview_state.status == .playing or preview_state.status == .starting;
     const art_size = gallery_layout.heroArtSize(width, has_backdrop or preview_active);
-    var art = dvui.overlay(@src(), .{ .id_extra = key +% 8, .min_size_content = .{ .w = art_size.w, .h = art_size.h }, .max_size_content = .{ .w = art_size.w, .h = art_size.h }, .color_fill = theme.colors.bg_elevated, .background = true, .corner_radius = dvui.Rect.all(theme.radius.md), .margin = .{ .x = 0, .y = 0, .w = 20, .h = 0 } });
+    var art = dvui.overlay(@src(), .{ .id_extra = key +% 8, .min_size_content = .{ .w = art_size.w, .h = art_size.h }, .max_size_content = .{ .w = art_size.w, .h = art_size.h }, .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated), .background = true, .corners = dvui.CornerRect.all(theme.radius.md), .margin = .{ .x = 0, .y = 0, .w = 20, .h = 0 } });
     if (preview_active) {
         if (art.data().visible()) preview.render(@src(), key +% 9, art_size.w, art_size.h);
     } else if (has_backdrop) {
@@ -2165,15 +2165,15 @@ fn renderGalleryHero(group: *const search_content.Group, width: f32, pending: *?
     art.deinit();
     var copy = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = 95001, .expand = .horizontal, .gravity_y = gallery_layout.heroCopyGravity(width), .padding = dvui.Rect.all(4) });
     defer copy.deinit();
-    _ = dvui.label(@src(), "{s}", .{galleryCategoryLabel(group.category)}, .{ .color_text = theme.colors.accent, .font = dvui.themeGet().font_body.withSize(theme.font_size.small) });
+    _ = dvui.label(@src(), "{s}", .{galleryCategoryLabel(group.category)}, .{ .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent), .font = dvui.themeGet().font_body.withSize(theme.font_size.small) });
     const copy_width = @max(1, copy.data().contentRect().w);
     const heading = theme.mediaTitleFont(item.name[0..item.name_len], dvui.themeGet().font_title.withSize(if (width < 760) 26 else 34));
     var title: [520]u8 = undefined;
-    _ = dvui.label(@src(), "{s}", .{searchRowTitle(item.name[0..item.name_len], heading, copy_width, &title)}, .{ .id_extra = 95002, .color_text = theme.colors.text_primary, .font = heading, .max_size_content = .{ .w = copy_width, .h = heading.textHeight() * 2 }, .margin = .{ .x = 0, .y = 4, .w = 0, .h = 8 } });
+    _ = dvui.label(@src(), "{s}", .{searchRowTitle(item.name[0..item.name_len], heading, copy_width, &title)}, .{ .id_extra = 95002, .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary), .font = heading, .max_size_content = .{ .w = copy_width, .h = heading.textHeight() * 2 }, .margin = .{ .x = 0, .y = 4, .w = 0, .h = 8 } });
     searchRowLine(95003, safeUtf8(item.detail[0..item.detail_len]), dvui.themeGet().font_body.withSize(theme.font_size.small), copy_width, theme.colors.text_secondary);
     if (item.summary_len > 0) {
-        var summary = dvui.textLayout(@src(), .{ .break_lines = true }, .{ .id_extra = 95004, .expand = .horizontal, .background = false, .color_fill = theme.transparent, .max_size_content = .{ .w = copy_width, .h = dvui.themeGet().font_body.textHeight() * 4 }, .margin = .{ .x = 0, .y = 10, .w = 0, .h = 12 } });
-        summary.addText(safeUtf8(item.summary[0..item.summary_len]), .{ .color_text = theme.colors.text_secondary });
+        var summary = dvui.textLayout(@src(), .{ .break_lines = true }, .{ .id_extra = 95004, .expand = .horizontal, .background = false, .color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent), .max_size_content = .{ .w = copy_width, .h = dvui.themeGet().font_body.textHeight() * 4 }, .margin = .{ .x = 0, .y = 10, .w = 0, .h = 12 } });
+        summary.addText(safeUtf8(item.summary[0..item.summary_len]), .{ .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary) });
         summary.deinit();
     }
     var actions = dvui.flexbox(@src(), .{ .justify_content = .start }, .{ .id_extra = 95005, .expand = .horizontal });
@@ -2226,7 +2226,7 @@ fn renderResultGroupHeading(text: []const u8, id_extra: usize) void {
         .background = false,
         .padding = .{ .x = 20, .y = 12, .w = 12, .h = 6 },
     });
-    heading.addText(text, .{ .color_text = theme.colors.text_secondary, .font = dvui.themeGet().font_heading });
+    heading.addText(text, .{ .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary), .font = dvui.themeGet().font_heading });
     heading.deinit();
 }
 
@@ -2357,12 +2357,12 @@ fn renderSourceSummary(source_has: std.EnumSet(@import("resolver.zig").SourceBit
 
     _ = dvui.label(@src(), "{s}", .{line}, .{
         .id_extra = 12900,
-        .color_text = if (fw > 0)
+        .color_text = @import("../ui/color_compat.zig").wrap(if (fw > 0)
             theme.colors.danger
         else if (pw > 0 or uw > 0)
             theme.colors.warning
         else
-            theme.colors.text_tertiary,
+            theme.colors.text_tertiary),
         .padding = .{ .x = 14, .y = 8, .w = 12, .h = 6 },
     });
 
@@ -2378,14 +2378,14 @@ fn renderSourceSummary(source_has: std.EnumSet(@import("resolver.zig").SourceBit
         defer row.deinit();
         _ = dvui.label(@src(), "No source plugins installed — searches can't return torrents yet.", .{}, .{
             .id_extra = 12902,
-            .color_text = theme.colors.warning,
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.warning),
             .gravity_y = 0.5,
         });
         if (dvui.button(@src(), "Open Plugins", .{}, .{
             .id_extra = 12903,
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.accent,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 10, .y = 3, .w = 10, .h = 3 },
             .margin = .{ .x = 10, .y = 0, .w = 0, .h = 0 },
             .gravity_y = 0.5,
@@ -2411,7 +2411,7 @@ fn searchRowLine(id: usize, text: []const u8, font: dvui.Font, width: f32, color
     if (font.textSizeEx(clean, .{}).w > width) _ = font.textSizeEx(clean, .{ .max_width = @max(1, width - font.textSizeEx("…", .{}).w), .end_idx = &end });
     var line: [1024]u8 = undefined;
     const clipped = @import("../ui/footer_pure.zig").compactTitle(&line, clean, end);
-    _ = dvui.label(@src(), "{s}", .{clipped}, .{ .id_extra = id, .font = font, .color_text = color, .max_size_content = .{ .w = @max(0, width), .h = font.textHeight() } });
+    _ = dvui.label(@src(), "{s}", .{clipped}, .{ .id_extra = id, .font = font, .color_text = @import("../ui/color_compat.zig").wrap(color), .max_size_content = .{ .w = @max(0, width), .h = font.textHeight() } });
 }
 
 /// A group's offer rows plus every same-work rendition pushInto folded into
@@ -2437,7 +2437,7 @@ fn renderCompactRow(idx: usize, item: *const @import("resolver.zig").ResolvedIte
     renderCompactRowMain(idx, item, pending, row_key, sources);
     if (sources < 2 or expanded_sources_row != row_key) return;
     const dedup = @import("resolver_dedup_pure.zig");
-    var list = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = row_key +% 7, .expand = .horizontal, .padding = .{ .x = theme.spacing.lg, .y = 2, .w = theme.spacing.sm, .h = 6 }, .background = true, .color_fill = theme.colors.bg_surface });
+    var list = dvui.box(@src(), .{ .dir = .vertical }, .{ .id_extra = row_key +% 7, .expand = .horizontal, .padding = .{ .x = theme.spacing.lg, .y = 2, .w = theme.spacing.sm, .h = 6 }, .background = true, .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface) });
     defer list.deinit();
     const urls = [_][]const u8{ item.url[0..item.url_len], item.fallback_url[0..item.fallback_url_len], item.fallback_url_2[0..item.fallback_url_2_len] };
     var shown: usize = 0;
@@ -2483,15 +2483,15 @@ fn renderCompactRowMain(idx: usize, item: *const @import("resolver.zig").Resolve
         .id_extra = row_key,
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.transparent,
-        .color_border = theme.colors.border_subtle,
+        .color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent),
+        .color_border = @import("../ui/color_compat.zig").wrap(theme.colors.border_subtle),
         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
         .min_size_content = .{ .w = 0, .h = row_height - 13 },
         .max_size_content = .{ .w = 0, .h = row_height - 13 },
         .padding = .{ .x = theme.spacing.sm, .y = 6, .w = theme.spacing.sm, .h = 6 },
     });
     defer row.deinit();
-    if (row.data().borderRectScale().r.contains(dvui.currentWindow().mouse_pt)) row.data().options.color_fill = theme.colors.bg_hover;
+    if (row.data().borderRectScale().r.contains(dvui.currentWindow().mouse_pt)) row.data().options.color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_hover);
     row.drawBackground();
     const queueable = item.source == .torrent and resolver.isRemoteQueueable(item);
     const actions_width: f32 = (if (queueable) @as(f32, 72) else 36) + (if (sources > 1) @as(f32, 120) else 0);
@@ -2499,7 +2499,7 @@ fn renderCompactRowMain(idx: usize, item: *const @import("resolver.zig").Resolve
     var content = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .horizontal, .max_size_content = .{ .w = 0, .h = row_height - 13 } });
     var title_buffer: [520]u8 = undefined;
     const title = searchRowTitle(item.name[0..item.name_len], body, text_width, &title_buffer);
-    _ = dvui.label(@src(), "{s}", .{title}, .{ .id_extra = row_key +% 1, .font = body, .color_text = theme.colors.text_primary, .max_size_content = .{ .w = text_width, .h = body.textHeight() * 2 } });
+    _ = dvui.label(@src(), "{s}", .{title}, .{ .id_extra = row_key +% 1, .font = body, .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary), .max_size_content = .{ .w = text_width, .h = body.textHeight() * 2 } });
     const meta_pure = @import("search_meta_pure.zig");
     var meta_buffer: [64]u8 = undefined;
     const meta = meta_pure.metaLine(.{ .quality = item.quality, .size_bytes = item.size_bytes, .seeds = item.seeds, .leech = item.leech }, &meta_buffer);
@@ -2524,10 +2524,10 @@ fn renderCompactRowMain(idx: usize, item: *const @import("resolver.zig").Resolve
     const action_icon = if (item.source == .anime or item.source == .podcast) icons.tvg.lucide.@"arrow-up-right" else if (item.source == .novels or item.source == .comics or item.source == .opds) icons.tvg.lucide.book else if (item.source == .vndb or item.source == .tmdb or item.source == .audiobooks) icons.tvg.lucide.info else icons.tvg.lucide.play;
     const action_name = if (item.source == .anime or item.source == .podcast) "Open" else if (item.source == .novels or item.source == .comics or item.source == .opds) "read" else if (item.source == .audiobooks) "open audio" else if (item.source == .vndb or item.source == .tmdb) "details" else "play";
     var button_data: dvui.WidgetData = undefined;
-    if (dvui.buttonIcon(@src(), action_name, action_icon, .{}, .{}, .{ .id_extra = row_key +% 4, .data_out = &button_data, .color_fill = theme.transparent, .color_fill_hover = theme.colors.bg_hover, .color_text = if (risk.risk == .block) theme.colors.text_tertiary else theme.colors.accent, .border = dvui.Rect.all(0), .padding = dvui.Rect.all(8), .min_size_content = .{ .w = 16, .h = 16 } })) pending.* = .{ .idx = idx };
+    if (dvui.buttonIcon(@src(), action_name, action_icon, .{}, .{}, .{ .id_extra = row_key +% 4, .data_out = &button_data, .color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent), .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.bg_hover), .color_text = @import("../ui/color_compat.zig").wrap(if (risk.risk == .block) theme.colors.text_tertiary else theme.colors.accent), .border = dvui.Rect.all(0), .padding = dvui.Rect.all(8), .min_size_content = .{ .w = 16, .h = 16 } })) pending.* = .{ .idx = idx };
     components.tip(@src(), button_data, action_name);
     if (queueable) {
-        if (dvui.buttonIcon(@src(), "queue", icons.tvg.lucide.plus, .{}, .{}, .{ .id_extra = row_key +% 5, .data_out = &button_data, .color_fill = theme.transparent, .color_fill_hover = theme.colors.bg_hover, .color_text = theme.colors.text_secondary, .border = dvui.Rect.all(0), .padding = dvui.Rect.all(8), .min_size_content = .{ .w = 16, .h = 16 } })) pending.* = .{ .idx = idx, .queue = true };
+        if (dvui.buttonIcon(@src(), "queue", icons.tvg.lucide.plus, .{}, .{}, .{ .id_extra = row_key +% 5, .data_out = &button_data, .color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent), .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.bg_hover), .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary), .border = dvui.Rect.all(0), .padding = dvui.Rect.all(8), .min_size_content = .{ .w = 16, .h = 16 } })) pending.* = .{ .idx = idx, .queue = true };
         components.tip(@src(), button_data, "Add torrent to queue");
     }
     components.tipId(@src(), row.data().*, safeUtf8(item.name[0..item.name_len]), row_key);
@@ -2539,18 +2539,18 @@ fn renderSearchResultContext(id: usize, rect: dvui.Rect.Physical, item: *const @
     const context = dvui.context(@src(), .{ .rect = rect }, .{ .id_extra = id });
     defer context.deinit();
     if (context.activePoint()) |point| {
-        var menu = dvui.floatingMenu(@src(), .{ .from = dvui.Rect.Natural.fromPoint(point) }, .{ .id_extra = id, .color_fill = theme.colors.bg_surface, .color_border = theme.colors.border_subtle });
+        var menu = dvui.floatingMenu(@src(), .{ .from = dvui.Rect.Natural.fromPoint(point) }, .{ .id_extra = id, .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface), .color_border = @import("../ui/color_compat.zig").wrap(theme.colors.border_subtle) });
         defer menu.deinit();
-        if (dvui.menuItemLabel(@src(), "Copy title", .{}, .{ .color_text = theme.colors.text_primary })) |_| {
+        if (dvui.menuItemLabel(@src(), "Copy title", .{}, .{ .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary) })) |_| {
             dvui.clipboardTextSet(safeUtf8(item.name[0..item.name_len]));
             menu.close();
         }
-        if (dvui.menuItemLabel(@src(), "Copy link", .{}, .{ .color_text = theme.colors.text_primary })) |_| {
+        if (dvui.menuItemLabel(@src(), "Copy link", .{}, .{ .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary) })) |_| {
             dvui.clipboardTextSet(item.url[0..item.url_len]);
             menu.close();
         }
         if (item.source == .torrent) {
-            if (dvui.menuItemLabel(@src(), "Check VirusTotal", .{}, .{ .color_text = theme.colors.text_primary })) |_| {
+            if (dvui.menuItemLabel(@src(), "Check VirusTotal", .{}, .{ .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary) })) |_| {
                 var hash: [40]u8 = undefined;
                 if (@import("virustotal_pure.zig").infoHashFromMagnet(item.url[0..item.url_len], &hash)) |value| {
                     var target: [128]u8 = undefined;
@@ -2856,31 +2856,31 @@ pub fn renderNsfwModal() void {
         .open_flag = &state.app.nsfw_confirm_pending,
     }, .{
         .min_size_content = .{ .w = 400, .h = 10 },
-        .color_fill = theme.colors.bg_surface,
-        .color_border = theme.colors.danger,
+        .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface),
+        .color_border = @import("../ui/color_compat.zig").wrap(theme.colors.danger),
     });
     defer win.deinit();
 
     win.dragAreaSet(dvui.windowHeader("NSFW Warning", "", &state.app.nsfw_confirm_pending));
 
     _ = dvui.label(@src(), "NSFW Content Warning", .{}, .{
-        .color_text = theme.colors.danger,
+        .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.danger),
         .padding = .{ .x = 0, .y = 0, .w = 0, .h = 8 },
     });
 
     _ = dvui.label(@src(), "This content may contain adult material:", .{}, .{
-        .color_text = theme.colors.text_secondary,
+        .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
         .padding = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
     });
 
     const name = safeUtf8(state.app.nsfw_confirm_name_buf[0..state.app.nsfw_confirm_name_len]);
     _ = dvui.label(@src(), "{s}", .{name}, .{
-        .color_text = theme.colors.warning,
+        .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.warning),
         .padding = .{ .x = 0, .y = 4, .w = 0, .h = 12 },
     });
 
     _ = dvui.label(@src(), "Are you sure you want to load this?", .{}, .{
-        .color_text = theme.colors.text_primary,
+        .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary),
         .padding = .{ .x = 0, .y = 0, .w = 0, .h = 12 },
     });
 
@@ -2891,18 +2891,18 @@ pub fn renderNsfwModal() void {
     defer btn_row.deinit();
 
     if (dvui.button(@src(), "Cancel", .{}, .{
-        .color_fill = theme.colors.bg_elevated,
-        .color_text = theme.colors.text_primary,
-        .corner_radius = theme.dims.rad_sm,
+        .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+        .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary),
+        .corners = theme.dims.rad_sm,
         .margin = dvui.Rect{ .w = 8 },
     })) {
         state.app.nsfw_confirm_pending = false;
     }
 
     if (dvui.button(@src(), "Play Anyway", .{}, .{
-        .color_fill = theme.colors.danger,
-        .color_text = dvui.Color.white,
-        .corner_radius = theme.dims.rad_sm,
+        .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.danger),
+        .color_text = @import("../ui/color_compat.zig").wrap(dvui.Color.white),
+        .corners = theme.dims.rad_sm,
     })) {
         const link = state.app.nsfw_confirm_link_buf[0..state.app.nsfw_confirm_link_len];
         loadTorrentToPlayer(link);

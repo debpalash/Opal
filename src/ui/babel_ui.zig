@@ -42,7 +42,7 @@ pub fn pickerRow() void {
     if (msg.len > 0) {
         var safe: [160]u8 = undefined;
         _ = dvui.label(@src(), "{s}", .{text_mod.safeUtf8Buf(msg, &safe)}, .{
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
             .gravity_y = 0.5,
             .margin = .{ .x = theme.spacing.xs, .y = 0, .w = 0, .h = 0 },
         });
@@ -86,10 +86,10 @@ pub fn renderRecapCard() void {
     }, .{
         .min_size_content = size,
         .max_size_content = dvui.Options.MaxSize.size(size),
-        .color_fill = theme.colors.bg_elevated,
-        .color_border = theme.colors.border_subtle,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+        .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
         .border = dvui.Rect.all(1),
-        .corner_radius = theme.dims.rad_lg,
+        .corners = theme.dims.rad_lg,
     });
     defer win.deinit();
     win.autoPosition();
@@ -123,7 +123,7 @@ pub fn renderRecapCard() void {
             var tl = dvui.textLayout(@src(), .{ .break_lines = true }, .{
                 .expand = .horizontal,
                 .background = false,
-                .color_text = if (snap.phase == .ready) theme.colors.text_primary else theme.colors.text_secondary,
+                .color_text = @import("color_compat.zig").wrap(if (snap.phase == .ready) theme.colors.text_primary else theme.colors.text_secondary),
             });
             var safe: [1100]u8 = undefined;
             tl.addText(text_mod.safeUtf8Buf(snap.text[0..snap.text_len], &safe), .{});
@@ -163,7 +163,7 @@ pub fn settingsSection() void {
     components.sectionHeader("Live captions & translation");
 
     _ = dvui.label(@src(), "Spoken language (live captions)", .{}, .{
-        .color_text = theme.colors.text_secondary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = theme.spacing.xs },
     });
     {
@@ -181,7 +181,7 @@ pub fn settingsSection() void {
     }
 
     _ = dvui.label(@src(), "Translate subtitles to", .{}, .{
-        .color_text = theme.colors.text_secondary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .margin = .{ .x = 0, .y = theme.spacing.sm, .w = 0, .h = theme.spacing.xs },
     });
     {
@@ -198,7 +198,7 @@ pub fn settingsSection() void {
         }
     }
     _ = dvui.label(@src(), "Uses your local AI model (Settings › AI); a cloud provider only if you chose one there. Lines the model can't translate keep their original text.", .{}, .{
-        .color_text = theme.colors.text_tertiary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
         .margin = .{ .x = 0, .y = 2, .w = 0, .h = theme.spacing.sm },
     });
 

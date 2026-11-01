@@ -909,7 +909,7 @@ pub const AppState = struct {
     script_name_lens: [32]usize = std.mem.zeroes([32]usize),
     script_paths: [32][512]u8 = std.mem.zeroes([32][512]u8),
     script_path_lens: [32]usize = std.mem.zeroes([32]usize),
-    script_enabled: [32]bool = [_]bool{true} ** 32,
+    script_enabled: [32]bool = @as([32]bool, @splat(true)),
     script_count: usize = 0,
 
     // ── YouTube ──
@@ -972,10 +972,10 @@ pub const AppState = struct {
         page_urls: [128][512]u8 = std.mem.zeroes([128][512]u8),
         page_url_lens: [128]usize = std.mem.zeroes([128]usize),
         page_count: usize = 0,
-        page_pixels: [128]?[]u8 = [_]?[]u8{null} ** 128,
+        page_pixels: [128]?[]u8 = @as([128]?[]u8, @splat(null)),
         page_widths: [128]u32 = std.mem.zeroes([128]u32),
         page_heights: [128]u32 = std.mem.zeroes([128]u32),
-        page_textures: [128]?dvui.Texture = [_]?dvui.Texture{null} ** 128,
+        page_textures: [128]?dvui.Texture = @as([128]?dvui.Texture, @splat(null)),
         title: [256]u8 = std.mem.zeroes([256]u8),
         title_len: usize = 0,
         next_url: [512]u8 = std.mem.zeroes([512]u8),
@@ -1009,7 +1009,7 @@ pub const AppState = struct {
         // ── Comic Narration (OCR + TTS) ──
         ocr_texts: [128][4096]u8 = std.mem.zeroes([128][4096]u8),
         ocr_lens: [128]usize = std.mem.zeroes([128]usize),
-        ocr_done: [128]bool = [_]bool{false} ** 128,
+        ocr_done: [128]bool = @as([128]bool, @splat(false)),
         narrating: bool = false,
         narrate_page: usize = 0,
         show_ocr_overlay: bool = false, // show OCR text overlay on current page
@@ -1368,7 +1368,7 @@ pub const AppState = struct {
     // services/library_sync.zig publishes results that its UI-thread tick()
     // folds in here.
     lsync: struct {
-        peers: [lsync_pure.MAX_PEERS]lsync_pure.Peer = [_]lsync_pure.Peer{.{}} ** lsync_pure.MAX_PEERS,
+        peers: [lsync_pure.MAX_PEERS]lsync_pure.Peer = @as([lsync_pure.MAX_PEERS]lsync_pure.Peer, @splat(.{})),
         peer_count: usize = 0,
         auto: bool = false,
     } = .{},

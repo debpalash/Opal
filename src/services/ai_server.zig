@@ -227,7 +227,7 @@ pub fn selectModelById(id: []const u8) void {
 pub fn modelDownloaded(i: usize) bool {
     if (i >= MODEL_CATALOG.len) return false;
     var buf: [512]u8 = undefined;
-    const p = std.fmt.bufPrintZ(&buf, "{s}/{s}", .{ DEFAULT_MODELS_DIR, MODEL_CATALOG[i].filename }) catch return false;
+    const p = @import("../core/fmt_compat.zig").bufPrintZ(&buf, "{s}/{s}", .{ DEFAULT_MODELS_DIR, MODEL_CATALOG[i].filename }) catch return false;
     @import("../core/io_global.zig").cwdAccess(p, .{}) catch return false;
     return true;
 }
@@ -319,7 +319,7 @@ fn setError(err: []const u8) void {
 }
 
 pub fn getServerUrl(buf: *[128]u8) []const u8 {
-    return std.fmt.bufPrintZ(buf, "http://127.0.0.1:{d}", .{server_port}) catch "http://127.0.0.1:41592";
+    return @import("../core/fmt_compat.zig").bufPrintZ(buf, "http://127.0.0.1:{d}", .{server_port}) catch "http://127.0.0.1:41592";
 }
 
 /// Chat-completions endpoint for the ACTIVE backend. Cloud bases already
@@ -327,9 +327,9 @@ pub fn getServerUrl(buf: *[128]u8) []const u8 {
 /// server gets "/v1" inserted.
 pub fn chatCompletionsUrl(buf: []u8) []const u8 {
     if (backend_kind == .cloud) {
-        return std.fmt.bufPrintZ(buf, "{s}/chat/completions", .{cloudBase()}) catch "";
+        return @import("../core/fmt_compat.zig").bufPrintZ(buf, "{s}/chat/completions", .{cloudBase()}) catch "";
     }
-    return std.fmt.bufPrintZ(buf, "http://127.0.0.1:{d}/v1/chat/completions", .{server_port}) catch "";
+    return @import("../core/fmt_compat.zig").bufPrintZ(buf, "http://127.0.0.1:{d}/v1/chat/completions", .{server_port}) catch "";
 }
 
 /// "Authorization: Bearer …" header for cloud requests; null for local
@@ -337,7 +337,7 @@ pub fn chatCompletionsUrl(buf: []u8) []const u8 {
 pub fn authHeader(buf: []u8) ?[]const u8 {
     if (backend_kind != .cloud) return null;
     const key = cloudKey() orelse return null;
-    return std.fmt.bufPrintZ(buf, "Authorization: Bearer {s}", .{key}) catch null;
+    return @import("../core/fmt_compat.zig").bufPrintZ(buf, "Authorization: Bearer {s}", .{key}) catch null;
 }
 
 pub fn checkPaths() void {
@@ -376,7 +376,7 @@ fn detectApfel() void {
             @memcpy(llama_server_path_buf[0..slen], apfel_path);
             llama_server_path_len = slen;
             llama_server_exists = true;
-            if (@import("builtin").mode == .Debug) std.debug.print("[AI] apfel found: {s}\n", .{apfel_path});
+            if (@import("builtin").mode == .debug) std.debug.print("[AI] apfel found: {s}\n", .{apfel_path});
             return;
         } else |_| {}
     }
@@ -394,7 +394,7 @@ fn detectApfel() void {
             @memcpy(llama_server_path_buf[0..plen], trimmed[0..plen]);
             llama_server_path_len = plen;
             llama_server_exists = true;
-            if (@import("builtin").mode == .Debug) std.debug.print("[AI] apfel found in PATH: {s}\n", .{trimmed});
+            if (@import("builtin").mode == .debug) std.debug.print("[AI] apfel found in PATH: {s}\n", .{trimmed});
         }
     }
     _ = which_child.wait() catch {};
@@ -403,12 +403,12 @@ fn detectApfel() void {
 fn detectGemmaLlama() void {
     // Gemma via llama-server: works on macOS, Linux, Windows. Same detection
     // path on all three — the only per-OS bit is the brew prefix.
-    const model_path = std.fmt.bufPrintZ(&model_path_buf, "{s}/{s}", .{ DEFAULT_MODELS_DIR, activeModelFilename() }) catch return;
+    const model_path = @import("../core/fmt_compat.zig").bufPrintZ(&model_path_buf, "{s}/{s}", .{ DEFAULT_MODELS_DIR, activeModelFilename() }) catch return;
     model_path_len = model_path.len;
 
     if (@import("../core/io_global.zig").cwdAccess(model_path, .{})) |_| {
         model_exists = true;
-        if (@import("builtin").mode == .Debug) std.debug.print("[AI] Gemma model found: {s}\n", .{model_path});
+        if (@import("builtin").mode == .debug) std.debug.print("[AI] Gemma model found: {s}\n", .{model_path});
     } else |_| {
         model_exists = false;
     }
@@ -428,7 +428,7 @@ fn detectGemmaLlama() void {
             @memcpy(llama_server_path_buf[0..slen], cand);
             llama_server_path_len = slen;
             llama_server_exists = true;
-            if (@import("builtin").mode == .Debug) std.debug.print("[AI] llama-server found: {s}\n", .{cand});
+            if (@import("builtin").mode == .debug) std.debug.print("[AI] llama-server found: {s}\n", .{cand});
             return;
         } else |_| {}
     }
@@ -447,7 +447,7 @@ fn detectGemmaLlama() void {
             @memcpy(llama_server_path_buf[0..plen], trimmed[0..plen]);
             llama_server_path_len = plen;
             llama_server_exists = true;
-            if (@import("builtin").mode == .Debug) std.debug.print("[AI] llama-server found in PATH: {s}\n", .{trimmed});
+            if (@import("builtin").mode == .debug) std.debug.print("[AI] llama-server found in PATH: {s}\n", .{trimmed});
         }
     }
     _ = which_child.wait() catch {};
@@ -493,7 +493,7 @@ pub fn startServer() void {
 
     const sv_path = llama_server_path_buf[0..llama_server_path_len];
     var port_buf: [8]u8 = undefined;
-    const port_str = std.fmt.bufPrintZ(&port_buf, "{d}", .{server_port}) catch "41592";
+    const port_str = @import("../core/fmt_compat.zig").bufPrintZ(&port_buf, "{d}", .{server_port}) catch "41592";
 
     if (backend_kind == .apfel) {
         // ── macOS: Apple Intelligence via apfel ──
@@ -503,9 +503,9 @@ pub fn startServer() void {
 
         server_running = true;
 
-        if (@import("builtin").mode == .Debug) std.debug.print("[AI] Starting apfel server: {s}\n", .{sv_path});
-        if (@import("builtin").mode == .Debug) std.debug.print("[AI] Port: {s}\n", .{port_str});
-        if (@import("builtin").mode == .Debug) std.debug.print("[AI] Mode: Apple Intelligence (on-device)\n", .{});
+        if (@import("builtin").mode == .debug) std.debug.print("[AI] Starting apfel server: {s}\n", .{sv_path});
+        if (@import("builtin").mode == .debug) std.debug.print("[AI] Port: {s}\n", .{port_str});
+        if (@import("builtin").mode == .debug) std.debug.print("[AI] Mode: Apple Intelligence (on-device)\n", .{});
 
         const argv = [_][]const u8{ sv_path, "--serve", "--port", port_str };
         var child = @import("../core/io_global.zig").Child.init(&argv, @import("../core/alloc.zig").allocator);
@@ -513,7 +513,7 @@ pub fn startServer() void {
         child.stderr_behavior = .Inherit;
         child.spawn() catch {
             setError("Failed to start apfel server");
-            if (@import("builtin").mode == .Debug) std.debug.print("[AI] ERROR: apfel spawn failed\n", .{});
+            if (@import("builtin").mode == .debug) std.debug.print("[AI] ERROR: apfel spawn failed\n", .{});
             server_running = false;
             return;
         };
@@ -524,7 +524,7 @@ pub fn startServer() void {
         model_status = .checking;
         logs.pushLog("info", "ai", "Apple Intelligence server started", true);
         state.showToast("Apple Intelligence starting…");
-        if (@import("builtin").mode == .Debug) std.debug.print("[AI] apfel server spawned\n", .{});
+        if (@import("builtin").mode == .debug) std.debug.print("[AI] apfel server spawned\n", .{});
     } else {
         // ── Linux/Windows: Bonsai + llama-server ──
         // Kill any orphaned llama-server processes to free VRAM
@@ -536,9 +536,9 @@ pub fn startServer() void {
 
         const m_path = model_path_buf[0..model_path_len];
 
-        if (@import("builtin").mode == .Debug) std.debug.print("[AI] Starting server: {s}\n", .{sv_path});
-        if (@import("builtin").mode == .Debug) std.debug.print("[AI] Model: {s}\n", .{m_path});
-        if (@import("builtin").mode == .Debug) std.debug.print("[AI] Port: {s}\n", .{port_str});
+        if (@import("builtin").mode == .debug) std.debug.print("[AI] Starting server: {s}\n", .{sv_path});
+        if (@import("builtin").mode == .debug) std.debug.print("[AI] Model: {s}\n", .{m_path});
+        if (@import("builtin").mode == .debug) std.debug.print("[AI] Port: {s}\n", .{port_str});
 
         const is_shimmy = std.mem.indexOf(u8, sv_path, "shimmy") != null;
 
@@ -546,13 +546,13 @@ pub fn startServer() void {
 
         if (is_shimmy) {
             var bind_buf: [32]u8 = undefined;
-            const bind_str = std.fmt.bufPrintZ(&bind_buf, "127.0.0.1:{s}", .{port_str}) catch "127.0.0.1:41592";
+            const bind_str = @import("../core/fmt_compat.zig").bufPrintZ(&bind_buf, "127.0.0.1:{s}", .{port_str}) catch "127.0.0.1:41592";
             const argv = [_][]const u8{ sv_path, "serve", "--bind", bind_str };
             child = @import("../core/io_global.zig").Child.init(&argv, @import("../core/alloc.zig").allocator);
-            if (@import("builtin").mode == .Debug) std.debug.print("[AI] Mode: Shimmy\n", .{});
+            if (@import("builtin").mode == .debug) std.debug.print("[AI] Mode: Shimmy\n", .{});
         } else {
             var ngl_buf: [8]u8 = undefined;
-            const ngl_str = std.fmt.bufPrintZ(&ngl_buf, "{d}", .{gpu_layers}) catch "99";
+            const ngl_str = @import("../core/fmt_compat.zig").bufPrintZ(&ngl_buf, "{d}", .{gpu_layers}) catch "99";
             const argv = [_][]const u8{
                 sv_path,
                 "-m",
@@ -570,14 +570,14 @@ pub fn startServer() void {
                 "-np", "1", // Single slot — conversational assistant
             };
             child = @import("../core/io_global.zig").Child.init(&argv, @import("../core/alloc.zig").allocator);
-            if (@import("builtin").mode == .Debug) std.debug.print("[AI] Mode: llama-server (flash-attn)\n", .{});
+            if (@import("builtin").mode == .debug) std.debug.print("[AI] Mode: llama-server (flash-attn)\n", .{});
         }
 
         child.stdout_behavior = .Inherit;
         child.stderr_behavior = .Inherit;
         child.spawn() catch {
             setError("Failed to start AI server");
-            if (@import("builtin").mode == .Debug) std.debug.print("[AI] ERROR: server spawn failed\n", .{});
+            if (@import("builtin").mode == .debug) std.debug.print("[AI] ERROR: server spawn failed\n", .{});
             server_running = false;
             return;
         };
@@ -602,7 +602,7 @@ pub fn startServer() void {
         embed_child.stdout_behavior = .Ignore;
         embed_child.stderr_behavior = .Ignore;
         embed_child.spawn() catch {
-            if (@import("builtin").mode == .Debug) std.debug.print("[AI] Warning: could not start embedding server\n", .{});
+            if (@import("builtin").mode == .debug) std.debug.print("[AI] Warning: could not start embedding server\n", .{});
         };
         embed_server_process = embed_child;
 
@@ -610,7 +610,7 @@ pub fn startServer() void {
 
         logs.pushLog("info", "ai", "AI servers started", true);
         state.showToast("AI servers starting…");
-        if (@import("builtin").mode == .Debug) std.debug.print("[AI] Server processes spawned\n", .{});
+        if (@import("builtin").mode == .debug) std.debug.print("[AI] Server processes spawned\n", .{});
     }
 }
 
@@ -682,7 +682,7 @@ fn downloadModelThread() void {
     @import("../core/io_global.zig").cwdMakePath(DEFAULT_MODELS_DIR) catch {};
 
     var out_path_buf: [512]u8 = undefined;
-    const out_path = std.fmt.bufPrintZ(&out_path_buf, "{s}/{s}", .{ DEFAULT_MODELS_DIR, activeModelFilename() }) catch {
+    const out_path = @import("../core/fmt_compat.zig").bufPrintZ(&out_path_buf, "{s}/{s}", .{ DEFAULT_MODELS_DIR, activeModelFilename() }) catch {
         setError("Path too long");
         return;
     };
@@ -898,7 +898,7 @@ fn healthThread() void {
     var url_buf: [128]u8 = undefined;
     var srv_buf: [128]u8 = undefined;
     const srv = getServerUrl(&srv_buf);
-    const url = std.fmt.bufPrintZ(&url_buf, "{s}/health", .{srv}) catch return;
+    const url = @import("../core/fmt_compat.zig").bufPrintZ(&url_buf, "{s}/health", .{srv}) catch return;
 
     // Local llama-server: plain curl, no DPI proxy. Any non-empty reply counts
     // as up (a 503 "loading model" body included), matching the old curl -s probe.
@@ -912,7 +912,7 @@ fn healthThread() void {
 
         if (cached_model_name_len == 0) {
             var m_url_buf: [128]u8 = undefined;
-            const m_url = std.fmt.bufPrintZ(&m_url_buf, "{s}/v1/models", .{srv}) catch return;
+            const m_url = @import("../core/fmt_compat.zig").bufPrintZ(&m_url_buf, "{s}/v1/models", .{srv}) catch return;
             var m_buf: [4096]u8 = undefined;
             var m_hdr: [2048]u8 = undefined;
             const m_res = @import("reliable_fetch.zig").request(m_url, &m_buf, &m_hdr, .{ .timeout_secs = 2, .impersonate = false, .use_dpi_proxy = false });
@@ -926,7 +926,7 @@ fn healthThread() void {
                     const nlen = @min(name.len, 63);
                     @memcpy(cached_model_name[0..nlen], name[0..nlen]);
                     cached_model_name_len = nlen;
-                    if (@import("builtin").mode == .Debug) std.debug.print("[AI] Auto-discovered model: {s}\n", .{name[0..nlen]});
+                    if (@import("builtin").mode == .debug) std.debug.print("[AI] Auto-discovered model: {s}\n", .{name[0..nlen]});
                 }
             }
         }

@@ -34,7 +34,7 @@ fn hasAudioTrack(p: *player.MediaPlayer) bool {
     var i: i64 = 0;
     while (i < count and i < 64) : (i += 1) {
         var q: [64]u8 = undefined;
-        const query = std.fmt.bufPrintZ(&q, "track-list/{d}/type", .{i}) catch break;
+        const query = @import("../core/fmt_compat.zig").bufPrintZ(&q, "track-list/{d}/type", .{i}) catch break;
         const typ = c.mpv.mpv_get_property_string(p.mpv_ctx, query.ptr);
         if (typ == null) continue;
         defer c.mpv.mpv_free(@ptrCast(typ));
@@ -187,8 +187,8 @@ fn renderPrompt() void {
     const size = theme.fitWindowSize(.{ .w = 360, .h = 220 }, .{ .w = 280, .h = 220 });
     var win = dvui.floatingWindow(@src(), .{ .modal = true, .open_flag = &open, .resize = .none }, .{
         .min_size_content = size,
-        .color_fill = theme.colors.bg_elevated,
-        .corner_radius = theme.dims.rad_lg,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+        .corners = theme.dims.rad_lg,
     });
     defer win.deinit();
     win.autoPosition();
@@ -222,15 +222,15 @@ fn renderPrompt() void {
         var device_card = dvui.box(@src(), .{ .dir = .horizontal }, .{
             .expand = .horizontal,
             .background = true,
-            .color_fill = theme.colors.bg_surface,
-            .corner_radius = dvui.Rect.all(theme.radius.md),
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+            .corners = dvui.CornerRect.all(theme.radius.md),
             .padding = theme.dims.pad_sm,
             .margin = .{ .y = theme.spacing.sm, .h = theme.spacing.sm },
         });
         defer device_card.deinit();
         dvui.icon(@src(), "Audio output", icons.tvg.lucide.speaker, .{}, .{
             .min_size_content = theme.iconSize(.sm),
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
             .gravity_y = 0.5,
             .margin = .{ .w = theme.spacing.md },
         });

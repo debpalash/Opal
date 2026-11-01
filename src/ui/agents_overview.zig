@@ -228,7 +228,7 @@ fn wrapText(src: std.builtin.SourceLocation, id: usize, text: []const u8, color:
         .id_extra = id,
         .expand = .horizontal,
         .background = false,
-        .color_text = color,
+        .color_text = @import("color_compat.zig").wrap(color),
         .font = if (small) smallFont() else dvui.themeGet().font_body,
         .margin = .{ .x = 0, .y = top, .w = 0, .h = 0 },
         .padding = dvui.Rect.all(0),
@@ -246,21 +246,21 @@ fn sectionHeader(id: usize, glyph: []const u8, title: []const u8, sub: []const u
     defer hdr.deinit();
     dvui.icon(@src(), title, glyph, .{}, .{
         .id_extra = id,
-        .color_text = theme.colors.accent,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
         .min_size_content = theme.iconSize(.md),
         .gravity_y = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
     });
     _ = dvui.label(@src(), "{s}", .{title}, .{
         .id_extra = id,
-        .color_text = theme.colors.text_primary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
         .font = dvui.themeGet().font_heading.withSize(17),
         .gravity_y = 0.5,
     });
     if (sub.len > 0) {
         _ = dvui.label(@src(), "{s}", .{sub}, .{
             .id_extra = id,
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
             .font = smallFont(),
             .gravity_y = 0.5,
             .margin = .{ .x = 12, .y = 0, .w = 0, .h = 0 },
@@ -275,10 +275,10 @@ fn cardBox(src: std.builtin.SourceLocation, id: usize, w: f32) *dvui.BoxWidget {
         .min_size_content = .{ .w = w - CARD_PAD * 2 - 2, .h = card_min_h },
         .max_size_content = .{ .w = w - CARD_PAD * 2 - 2, .h = std.math.floatMax(f32) },
         .background = true,
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
         .border = dvui.Rect.all(1),
-        .color_border = theme.colors.border_subtle,
-        .corner_radius = theme.dims.rad_sm,
+        .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
+        .corners = theme.dims.rad_sm,
         .padding = dvui.Rect.all(CARD_PAD),
         .margin = dvui.Rect.all(CARD_MARGIN),
     });
@@ -287,7 +287,7 @@ fn cardBox(src: std.builtin.SourceLocation, id: usize, w: f32) *dvui.BoxWidget {
 /// Title and status of a card that has no switch.
 fn plainHeader(title: []const u8, status: []const u8) void {
     _ = dvui.label(@src(), "{s}", .{title}, .{
-        .color_text = theme.colors.text_primary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
     });
     wrapText(@src(), 0, status, theme.colors.text_secondary, false, 2);
 }
@@ -349,7 +349,7 @@ fn tasksCard(w: f32) void {
     // One-click starting points. They only fill in the Add form on the Tasks tab;
     // nothing is created until the user reviews the prompt and presses Add.
     _ = dvui.label(@src(), "Start from an example", .{}, .{
-        .color_text = theme.colors.text_secondary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .font = smallFont(),
         .margin = .{ .x = 0, .y = 8, .w = 0, .h = 2 },
     });
@@ -390,8 +390,8 @@ fn operatorCard(w: f32) void {
         .expand = .horizontal,
         .min_size_content = .{ .w = 10, .h = 5 },
         .max_size_content = .{ .w = 100000, .h = 5 },
-        .color_fill = theme.colors.bg_elevated,
-        .corner_radius = theme.dims.rad_sm,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+        .corners = theme.dims.rad_sm,
         .margin = .{ .x = 0, .y = 8, .w = 0, .h = 0 },
     });
     var foot = footerBegin();
@@ -489,12 +489,12 @@ fn renderForYou(avail_w: f32) void {
         var box = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .horizontal,
             .background = true,
-            .color_fill = theme.colors.bg_surface,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 14, .y = 12, .w = 14, .h = 12 },
         });
         defer box.deinit();
-        _ = dvui.label(@src(), "Nothing here yet", .{}, .{ .color_text = theme.colors.text_primary });
+        _ = dvui.label(@src(), "Nothing here yet", .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary) });
         wrapText(@src(), 0, "Start watching something and it shows up here to pick up where you left off. Track a show and its next episode appears under Coming up.", theme.colors.text_secondary, false, 2);
     }
 }
@@ -527,8 +527,8 @@ fn renderFeedRow(i: usize, now: i64, text_chars: usize) void {
         .id_extra = i,
         .expand = .horizontal,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
-        .corner_radius = theme.dims.rad_sm,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+        .corners = theme.dims.rad_sm,
         .padding = .{ .x = 12, .y = 5, .w = 12, .h = 5 },
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = 4 },
         .min_size_content = .{ .w = 0, .h = FEED_ROW_H },
@@ -537,13 +537,13 @@ fn renderFeedRow(i: usize, now: i64, text_chars: usize) void {
     defer row.deinit();
     if (dvui.clicked(row.data(), .{ .hovered = &hovered })) open(e.target);
     if (hovered) {
-        row.data().options.color_fill = theme.colors.bg_hover;
+        row.data().options.color_fill = @import("color_compat.zig").wrap(theme.colors.bg_hover);
         row.drawBackground();
         dvui.cursorSet(.hand);
     }
     dvui.icon(@src(), "feed", glyphFor(e.source), .{}, .{
         .id_extra = i,
-        .color_text = toneColor(e.tone),
+        .color_text = @import("color_compat.zig").wrap(toneColor(e.tone)),
         .min_size_content = .{ .w = 16, .h = 16 },
         .max_size_content = .{ .w = 16, .h = 16 },
         .gravity_y = 0.5,
@@ -552,7 +552,7 @@ fn renderFeedRow(i: usize, now: i64, text_chars: usize) void {
     var cut: [pure.TEXT_MAX + 4]u8 = undefined;
     _ = dvui.label(@src(), "{s}", .{tasks_view.summaryLine(&cut, e.line(), text_chars)}, .{
         .id_extra = i,
-        .color_text = theme.colors.text_primary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
         .gravity_y = 0.5,
     });
     var meta = dvui.box(@src(), .{ .dir = .horizontal }, .{ .id_extra = i, .gravity_x = 1.0, .gravity_y = 0.5 });
@@ -560,7 +560,7 @@ fn renderFeedRow(i: usize, now: i64, text_chars: usize) void {
     var tb: [24]u8 = undefined;
     _ = dvui.label(@src(), "{s}", .{op_view.relativeText(&tb, e.when_ms, now)}, .{
         .id_extra = i,
-        .color_text = theme.colors.text_secondary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .font = smallFont(),
         .gravity_y = 0.5,
     });
@@ -572,12 +572,12 @@ fn renderFeed(avail_w: f32) void {
         var box = dvui.box(@src(), .{ .dir = .vertical }, .{
             .expand = .horizontal,
             .background = true,
-            .color_fill = theme.colors.bg_surface,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+            .corners = theme.dims.rad_sm,
             .padding = .{ .x = 14, .y = 12, .w = 14, .h = 12 },
         });
         defer box.deinit();
-        _ = dvui.label(@src(), "Nothing yet", .{}, .{ .color_text = theme.colors.text_primary });
+        _ = dvui.label(@src(), "Nothing yet", .{}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary) });
         wrapText(@src(), 0, "When your agents act, it shows up here: titles the Wanted list found or is downloading, scheduled task runs and how they went, and fixes the background operator applied or proposes. Turn on an automation above to get started.", theme.colors.text_secondary, false, 2);
         if (components.actionButton(@src(), "Show the switches", .secondary, 30200)) scroll_info.scrollToOffset(.vertical, 0);
         return;

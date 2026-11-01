@@ -492,7 +492,7 @@ test "parseFeed: skips rows with no timestamp or no title, tolerates junk" {
 
 test "parseFeed: unescapes and never overflows the fixed title buffer" {
     // 200-char title into a 128-byte field: truncated, never overrun.
-    const long = "x" ** 200;
+    const long = @import("../core/repeat_pure.zig").bytes("x", 200);
     const body = "{\"torrents\":[{\"title\":\"" ++ long ++ "\",\"date_released_unix\":10}]}";
     var out: [2]Release = undefined;
     try std.testing.expectEqual(@as(usize, 1), parseFeed(body, &out));

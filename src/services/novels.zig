@@ -90,8 +90,8 @@ var nr_urls: [MAX_RESULTS][512]u8 = undefined;
 var nr_url_lens: [MAX_RESULTS]usize = std.mem.zeroes([MAX_RESULTS]usize);
 var nr_source: [MAX_RESULTS]NovelSource = undefined;
 var nr_count: usize = 0;
-var nr_metadata: [MAX_RESULTS]NovelMetadata = [_]NovelMetadata{.{}} ** MAX_RESULTS;
-var novel_covers: [MAX_RESULTS]components.CoverSlot = [_]components.CoverSlot{.{}} ** MAX_RESULTS;
+var nr_metadata: [MAX_RESULTS]NovelMetadata = @as([MAX_RESULTS]NovelMetadata, @splat(.{}));
+var novel_covers: [MAX_RESULTS]components.CoverSlot = @as([MAX_RESULTS]components.CoverSlot, @splat(.{}));
 var native_card_rects: [MAX_RESULTS]dvui.Rect.Physical = undefined;
 pub fn nativeCardRectsForTest() []const dvui.Rect.Physical {
     if (!@import("builtin").is_test) @compileError("Native fixture is test-only");
@@ -2173,7 +2173,7 @@ fn renderSearchView() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface),
     });
     defer scroll.deinit();
 
@@ -2233,7 +2233,7 @@ fn renderSearchView() void {
         }
         if (loading or underfilled) {
             dvui.spinner(@src(), .{
-                .color_text = theme.colors.accent,
+                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
                 .min_size_content = theme.iconSize(.lg),
                 .gravity_x = 0.5,
                 .margin = dvui.Rect.all(12),
@@ -2249,7 +2249,7 @@ fn renderSearchBar() void {
     defer row.deinit();
 
     _ = dvui.icon(@src(), "", icons.tvg.lucide.@"book-marked", .{}, .{
-        .color_text = theme.colors.accent,
+        .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
         .min_size_content = theme.iconSize(.md),
         .gravity_y = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = 6, .h = 0 },
@@ -2267,7 +2267,7 @@ fn renderSearchBar() void {
 
     if (state.app.novels.is_loading.load(.acquire)) {
         dvui.spinner(@src(), .{
-            .color_text = theme.colors.accent,
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
             .min_size_content = theme.iconSize(.md),
             .gravity_y = 0.5,
             .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
@@ -2308,9 +2308,9 @@ fn renderNovelCard(item: ListRow, index: usize, card_width: f32) void {
         .min_size_content = .{ .w = card_width, .h = 112 },
         .max_size_content = .{ .w = card_width, .h = 112 },
         .background = true,
-        .color_fill = theme.colors.bg_elevated,
-        .color_fill_hover = theme.colors.bg_hover,
-        .corner_radius = theme.dims.rad_md,
+        .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+        .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.bg_hover),
+        .corners = theme.dims.rad_md,
         .margin = .{ .x = 4, .y = 3, .w = 4, .h = 3 },
         .padding = .{ .x = 0, .y = 0, .w = 0, .h = 0 },
     });
@@ -2333,8 +2333,8 @@ fn renderNovelCard(item: ListRow, index: usize, card_width: f32) void {
                 .min_size_content = .{ .w = 76, .h = 112 },
                 .max_size_content = .{ .w = 76, .h = 112 },
                 .background = true,
-                .color_fill = theme.colors.accent.lerp(theme.colors.bg_surface, 0.35),
-                .corner_radius = .{ .x = theme.radius.md, .y = theme.radius.md, .w = 0, .h = 0 },
+                .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.accent.lerp(theme.colors.bg_surface, 0.35)),
+                .corners = .{ .tl = .theme(theme.radius.md), .tr = .theme(theme.radius.md), .br = .theme(0), .bl = .theme(0) },
             });
             defer spine.deinit();
             components.coverArt(@src(), 54500 + index, &novel_covers[index], item.metadata.cover(), novelSourceIcon(source), theme.radius.md);
@@ -2351,7 +2351,7 @@ fn renderNovelCard(item: ListRow, index: usize, card_width: f32) void {
             _ = dvui.label(@src(), "{s}", .{name}, .{
                 .id_extra = 56000 + index,
                 .expand = .horizontal,
-                .color_text = theme.colors.text_primary,
+                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary),
                 .font = theme.mediaTitleFont(name, dvui.themeGet().font_body),
             });
             if (item.metadata.author_len > 0 or item.metadata.overview_len > 0) {
@@ -2367,7 +2367,7 @@ fn renderNovelCard(item: ListRow, index: usize, card_width: f32) void {
                 _ = dvui.label(@src(), "{s}", .{subtitle_text}, .{
                     .id_extra = 56500 + index,
                     .expand = .horizontal,
-                    .color_text = theme.colors.text_secondary,
+                    .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
                 });
             }
             {
@@ -2376,7 +2376,7 @@ fn renderNovelCard(item: ListRow, index: usize, card_width: f32) void {
             }
             _ = dvui.label(@src(), "{s}", .{novelSourceLabel(source)}, .{
                 .id_extra = 58000 + index,
-                .color_text = theme.colors.accent,
+                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
             });
         }
     }
@@ -2394,13 +2394,13 @@ fn renderChaptersView() void {
             .expand = .horizontal,
             .padding = .{ .x = 8, .y = 8, .w = 8, .h = 8 },
             .background = true,
-            .color_fill = theme.colors.bg_surface,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface),
         });
         defer hrow.deinit();
 
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"arrow-left", .{}, .{}, .{
             .id_extra = 1,
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
             .gravity_y = 0.5,
             .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
         })) {
@@ -2410,7 +2410,7 @@ fn renderChaptersView() void {
         var title_buf: [256]u8 = undefined;
         const title = safeUtf8Buf(state.app.novels.work_title[0..state.app.novels.work_title_len], &title_buf);
         _ = dvui.label(@src(), "{s}", .{title}, .{
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary),
             .gravity_y = 0.5,
             .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
             .font = dvui.themeGet().font_heading,
@@ -2419,7 +2419,7 @@ fn renderChaptersView() void {
 
     if (state.app.novels.fetch_error) {
         _ = dvui.label(@src(), "Failed to load chapters", .{}, .{
-            .color_text = theme.colors.danger,
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.danger),
             .padding = .{ .x = 12, .y = 8, .w = 0, .h = 0 },
         });
     }
@@ -2429,7 +2429,7 @@ fn renderChaptersView() void {
     if (count == 0) {
         const msg = if (state.app.novels.chapters_loading.load(.acquire)) "Loading chapters…" else "No chapters found";
         _ = dvui.label(@src(), "{s}", .{msg}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
             .padding = .{ .x = 12, .y = 20, .w = 0, .h = 0 },
         });
         return;
@@ -2443,9 +2443,9 @@ fn renderChaptersView() void {
         if (dvui.button(@src(), resume_label, .{}, .{
             .id_extra = 90001,
             .expand = .horizontal,
-            .color_fill = theme.colors.accent,
-            .color_text = theme.colors.text_on_accent,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_on_accent),
+            .corners = theme.dims.rad_sm,
             .margin = .{ .x = 8, .y = 4, .w = 8, .h = 4 },
             .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
         })) {
@@ -2457,14 +2457,14 @@ fn renderChaptersView() void {
         var paging = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
         defer paging.deinit();
         if (ch_offset > 0 and components.actionButton(@src(), "Previous chapters", .secondary, 90002)) loadChapterWindow(ch_offset -| MAX_CHAPTERS);
-        _ = dvui.label(@src(), "Chapters {d}–{d} of {d}{s}", .{ ch_offset + 1, ch_offset + count, ch_total, if (ch_has_more) "+" else "" }, .{ .color_text = theme.colors.text_secondary });
+        _ = dvui.label(@src(), "Chapters {d}–{d} of {d}{s}", .{ ch_offset + 1, ch_offset + count, ch_total, if (ch_has_more) "+" else "" }, .{ .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary) });
         if (ch_has_more and components.actionButton(@src(), "Next chapters", .secondary, 90003)) loadChapterWindow(ch_offset + MAX_CHAPTERS);
     }
 
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface),
     });
     defer scroll.deinit();
 
@@ -2489,9 +2489,9 @@ fn renderChaptersView() void {
             .expand = .horizontal,
             .min_size_content = .{ .w = 0, .h = 20 },
             .max_size_content = .{ .w = std.math.floatMax(f32), .h = 20 },
-            .color_fill = theme.colors.bg_elevated,
-            .color_text = theme.colors.text_primary,
-            .corner_radius = theme.dims.rad_sm,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_elevated),
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary),
+            .corners = theme.dims.rad_sm,
             .margin = .{ .x = 8, .y = 2, .w = 8, .h = 2 },
             .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
             .gravity_x = 0,
@@ -2538,13 +2538,13 @@ fn renderReaderView() void {
             .expand = .horizontal,
             .padding = .{ .x = 8, .y = 6, .w = 8, .h = 6 },
             .background = true,
-            .color_fill = theme.colors.bg_surface,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface),
         });
         defer bar.deinit();
 
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.list, .{}, .{}, .{
             .id_extra = 1,
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
             .gravity_y = 0.5,
             .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
         })) {
@@ -2554,7 +2554,7 @@ fn renderReaderView() void {
         var lbl_buf: [160]u8 = undefined;
         const label = safeUtf8Buf(state.app.novels.chapter_label[0..state.app.novels.chapter_label_len], &lbl_buf);
         _ = dvui.label(@src(), "{s}", .{label}, .{
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary),
             .gravity_y = 0.5,
             .margin = .{ .x = 8, .y = 0, .w = 0, .h = 0 },
         });
@@ -2565,7 +2565,7 @@ fn renderReaderView() void {
         // Font size − / +
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.minus, .{}, .{}, .{
             .id_extra = 2,
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
             .gravity_y = 0.5,
             .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
         })) {
@@ -2573,7 +2573,7 @@ fn renderReaderView() void {
         }
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.plus, .{}, .{}, .{
             .id_extra = 3,
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
             .gravity_y = 0.5,
             .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
         })) {
@@ -2583,7 +2583,7 @@ fn renderReaderView() void {
         // Prev / Next chapter
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"chevron-left", .{}, .{}, .{
             .id_extra = 4,
-            .color_text = if (state.app.novels.current_chapter > 0) theme.colors.text_primary else theme.colors.text_tertiary,
+            .color_text = @import("../ui/color_compat.zig").wrap(if (state.app.novels.current_chapter > 0) theme.colors.text_primary else theme.colors.text_tertiary),
             .gravity_y = 0.5,
             .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
         })) {
@@ -2591,7 +2591,7 @@ fn renderReaderView() void {
         }
         if (dvui.buttonIcon(@src(), "", icons.tvg.lucide.@"chevron-right", .{}, .{}, .{
             .id_extra = 5,
-            .color_text = if (state.app.novels.current_chapter + 1 < ch_total or ch_has_more) theme.colors.text_primary else theme.colors.text_tertiary,
+            .color_text = @import("../ui/color_compat.zig").wrap(if (state.app.novels.current_chapter + 1 < ch_total or ch_has_more) theme.colors.text_primary else theme.colors.text_tertiary),
             .gravity_y = 0.5,
             .padding = .{ .x = 4, .y = 4, .w = 4, .h = 4 },
         })) {
@@ -2601,7 +2601,7 @@ fn renderReaderView() void {
 
     if (state.app.novels.text_loading.load(.acquire) and state.app.novels.text_len == 0) {
         _ = dvui.label(@src(), "Loading chapter…", .{}, .{
-            .color_text = theme.colors.text_secondary,
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_secondary),
             .gravity_x = 0.5,
             .padding = .{ .x = 0, .y = 24, .w = 0, .h = 0 },
         });
@@ -2611,7 +2611,7 @@ fn renderReaderView() void {
 
     if (state.app.novels.fetch_error and state.app.novels.text_len == 0) {
         _ = dvui.label(@src(), "Failed to load this chapter", .{}, .{
-            .color_text = theme.colors.danger,
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.danger),
             .gravity_x = 0.5,
             .padding = .{ .x = 0, .y = 24, .w = 0, .h = 0 },
         });
@@ -2622,7 +2622,7 @@ fn renderReaderView() void {
     var scroll = dvui.scrollArea(@src(), .{}, .{
         .expand = .both,
         .background = true,
-        .color_fill = theme.colors.bg_surface,
+        .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_surface),
     });
     defer scroll.deinit();
 
@@ -2648,12 +2648,12 @@ fn renderReaderView() void {
         end = pure.charBoundaryBack(text, end);
         if (end <= off) end = @min(off + 4096, text.len); // degenerate guard
         const safe = safeUtf8Buf(text[off..end], &chunk_buf);
-        tl.addText(safe, .{ .color_text = theme.colors.text_primary, .font = font });
+        tl.addText(safe, .{ .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary), .font = font });
         off = end;
     }
     if (state.app.novels.text_truncated) {
         tl.addText("\n\n[Chapter truncated — text exceeded the reader buffer.]", .{
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_tertiary),
             .font = font,
         });
     }

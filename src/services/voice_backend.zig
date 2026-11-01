@@ -77,7 +77,7 @@ fn whisperCppTranscribe(wav_path: []const u8, out_buf: []u8) ?[]const u8 {
         var __cfg_buf_0: [512]u8 = undefined;
         const home = @import("../core/paths.zig").configDir(&__cfg_buf_0);
         var mb: [512]u8 = undefined;
-        const mp = std.fmt.bufPrintZ(&mb, "{s}/models/ggml-tiny.en.bin", .{home}) catch return null;
+        const mp = @import("../core/fmt_compat.zig").bufPrintZ(&mb, "{s}/models/ggml-tiny.en.bin", .{home}) catch return null;
         if (io_global.cwdAccess(mp, .{})) |_| break :blk mp else |_| {}
         logs.pushLog("warn", "voice_backend", "No whisper model found", false);
         return null;
@@ -144,9 +144,9 @@ fn sherpaOnnxTranscribe(wav_path: []const u8, out_buf: []u8) ?[]const u8 {
     var dec_buf: [512]u8 = undefined;
     var tok_buf: [512]u8 = undefined;
     _ = &home_buf;
-    const enc = std.fmt.bufPrintZ(&enc_buf, "{s}/models/sherpa-whisper-tiny/tiny-encoder.onnx", .{home}) catch return null;
-    const dec = std.fmt.bufPrintZ(&dec_buf, "{s}/models/sherpa-whisper-tiny/tiny-decoder.onnx", .{home}) catch return null;
-    const tok = std.fmt.bufPrintZ(&tok_buf, "{s}/models/sherpa-whisper-tiny/tiny-tokens.txt", .{home}) catch return null;
+    const enc = @import("../core/fmt_compat.zig").bufPrintZ(&enc_buf, "{s}/models/sherpa-whisper-tiny/tiny-encoder.onnx", .{home}) catch return null;
+    const dec = @import("../core/fmt_compat.zig").bufPrintZ(&dec_buf, "{s}/models/sherpa-whisper-tiny/tiny-decoder.onnx", .{home}) catch return null;
+    const tok = @import("../core/fmt_compat.zig").bufPrintZ(&tok_buf, "{s}/models/sherpa-whisper-tiny/tiny-tokens.txt", .{home}) catch return null;
     io_global.cwdAccess(enc, .{}) catch {
         logs.pushLog("warn", "voice_backend", "sherpa whisper model missing — see docs for model install", false);
         return null;
@@ -307,7 +307,7 @@ fn sherpaOnnxSpeak(text: []const u8) void {
     var __cfg_buf_3: [512]u8 = undefined;
     const home = @import("../core/paths.zig").configDir(&__cfg_buf_3);
     var out_buf: [512]u8 = undefined;
-    const out_wav = std.fmt.bufPrintZ(&out_buf, "{s}/tts_out.wav", .{home}) catch {
+    const out_wav = @import("../core/fmt_compat.zig").bufPrintZ(&out_buf, "{s}/tts_out.wav", .{home}) catch {
         sayTtsSpeak(text);
         return;
     };
@@ -316,16 +316,16 @@ fn sherpaOnnxSpeak(text: []const u8) void {
 
     // Prefer Kokoro (higher quality, multi-voice) if installed.
     var km_buf: [512]u8 = undefined;
-    const kokoro_model = std.fmt.bufPrintZ(&km_buf, "{s}/models/sherpa-kokoro/model.onnx", .{home}) catch "";
+    const kokoro_model = @import("../core/fmt_compat.zig").bufPrintZ(&km_buf, "{s}/models/sherpa-kokoro/model.onnx", .{home}) catch "";
     const has_kokoro = kokoro_model.len > 0 and (io_global.cwdAccess(kokoro_model, .{}) catch null) != null;
 
     if (has_kokoro) {
         var voices_buf: [512]u8 = undefined;
         var tok_buf: [512]u8 = undefined;
         var dd_buf: [512]u8 = undefined;
-        const voices = std.fmt.bufPrintZ(&voices_buf, "{s}/models/sherpa-kokoro/voices.bin", .{home}) catch return;
-        const tokens_p = std.fmt.bufPrintZ(&tok_buf, "{s}/models/sherpa-kokoro/tokens.txt", .{home}) catch return;
-        const data_dir = std.fmt.bufPrintZ(&dd_buf, "{s}/models/sherpa-kokoro/espeak-ng-data", .{home}) catch return;
+        const voices = @import("../core/fmt_compat.zig").bufPrintZ(&voices_buf, "{s}/models/sherpa-kokoro/voices.bin", .{home}) catch return;
+        const tokens_p = @import("../core/fmt_compat.zig").bufPrintZ(&tok_buf, "{s}/models/sherpa-kokoro/tokens.txt", .{home}) catch return;
+        const data_dir = @import("../core/fmt_compat.zig").bufPrintZ(&dd_buf, "{s}/models/sherpa-kokoro/espeak-ng-data", .{home}) catch return;
         var km_arg: [640]u8 = undefined;
         var v_arg: [640]u8 = undefined;
         var tk_arg: [640]u8 = undefined;
@@ -363,7 +363,7 @@ fn playPiperOrSay(bin: []const u8, out_arg: []const u8, out_wav: []const u8, tex
     var lex_buf: [512]u8 = undefined;
     var tok_buf: [512]u8 = undefined;
     var dd_buf: [512]u8 = undefined;
-    const vits_model = std.fmt.bufPrintZ(&vm_buf, "{s}/models/sherpa-vits-piper/en_US-lessac-medium.onnx", .{home}) catch {
+    const vits_model = @import("../core/fmt_compat.zig").bufPrintZ(&vm_buf, "{s}/models/sherpa-vits-piper/en_US-lessac-medium.onnx", .{home}) catch {
         sayTtsSpeak(text);
         return;
     };
@@ -371,9 +371,9 @@ fn playPiperOrSay(bin: []const u8, out_arg: []const u8, out_wav: []const u8, tex
         sayTtsSpeak(text);
         return;
     };
-    const lexicon = std.fmt.bufPrintZ(&lex_buf, "{s}/models/sherpa-vits-piper/lexicon.txt", .{home}) catch return;
-    const tokens_p = std.fmt.bufPrintZ(&tok_buf, "{s}/models/sherpa-vits-piper/tokens.txt", .{home}) catch return;
-    const data_dir = std.fmt.bufPrintZ(&dd_buf, "{s}/models/sherpa-vits-piper/espeak-ng-data", .{home}) catch return;
+    const lexicon = @import("../core/fmt_compat.zig").bufPrintZ(&lex_buf, "{s}/models/sherpa-vits-piper/lexicon.txt", .{home}) catch return;
+    const tokens_p = @import("../core/fmt_compat.zig").bufPrintZ(&tok_buf, "{s}/models/sherpa-vits-piper/tokens.txt", .{home}) catch return;
+    const data_dir = @import("../core/fmt_compat.zig").bufPrintZ(&dd_buf, "{s}/models/sherpa-vits-piper/espeak-ng-data", .{home}) catch return;
     var vm_arg: [640]u8 = undefined;
     var lex_arg: [640]u8 = undefined;
     var tk_arg: [640]u8 = undefined;
@@ -470,7 +470,7 @@ fn speachesTranscribe(wav_path: []const u8, out_buf: []u8) ?[]const u8 {
     // POST multipart/form-data to /v1/audio/transcriptions
     const base = speachesBaseUrl();
     var url_buf: [256]u8 = undefined;
-    const url = std.fmt.bufPrintZ(&url_buf, "{s}/v1/audio/transcriptions", .{base}) catch return null;
+    const url = @import("../core/fmt_compat.zig").bufPrintZ(&url_buf, "{s}/v1/audio/transcriptions", .{base}) catch return null;
 
     // Reliable-fetch seam (multipart). Local server → no DPI proxy.
     var read_buf: [4096]u8 = undefined;
@@ -501,7 +501,7 @@ fn speachesSpeak(text: []const u8) void {
     // POST to /v1/audio/speech, save WAV, play with afplay
     const base = speachesBaseUrl();
     var url_buf: [256]u8 = undefined;
-    const url = std.fmt.bufPrintZ(&url_buf, "{s}/v1/audio/speech", .{base}) catch return;
+    const url = @import("../core/fmt_compat.zig").bufPrintZ(&url_buf, "{s}/v1/audio/speech", .{base}) catch return;
     const secure_temp = @import("../core/secure_temp.zig");
     var scratch = secure_temp.Workspace.create("speaches-tts") catch return;
     defer scratch.cleanup();
@@ -528,7 +528,7 @@ fn speachesSpeak(text: []const u8) void {
             ei += 1;
         }
     }
-    const json = std.fmt.bufPrintZ(&json_buf, "{{\"model\":\"tts-1\",\"input\":\"{s}\",\"voice\":\"alloy\",\"response_format\":\"wav\"}}", .{escaped[0..ei]}) catch return;
+    const json = @import("../core/fmt_compat.zig").bufPrintZ(&json_buf, "{{\"model\":\"tts-1\",\"input\":\"{s}\",\"voice\":\"alloy\",\"response_format\":\"wav\"}}", .{escaped[0..ei]}) catch return;
 
     const res = @import("reliable_fetch.zig").download(url, out_path, .{
         .headers = &.{.{ .name = "Content-Type", .value = "application/json" }},
@@ -608,7 +608,7 @@ fn mlxWhisperTranscribe(wav_path: []const u8, out_buf: []u8) ?[]const u8 {
         basename[0 .. basename.len - 4]
     else
         basename;
-    const txt_path = std.fmt.bufPrintZ(&txt_path_buf, "{s}/{s}.txt", .{ out_dir, stem }) catch return null;
+    const txt_path = @import("../core/fmt_compat.zig").bufPrintZ(&txt_path_buf, "{s}/{s}.txt", .{ out_dir, stem }) catch return null;
 
     // Read the output text file
     const file = io_global.openFileAbsolute(txt_path, .{}) catch return null;
@@ -824,10 +824,10 @@ pub fn spawnStreamingConvo() ?io_global.Child {
     var dec_buf: [512]u8 = undefined;
     var join_buf: [512]u8 = undefined;
     var tok_buf: [512]u8 = undefined;
-    const enc = std.fmt.bufPrintZ(&enc_buf, "{s}/models/sherpa-stream-zipformer/encoder.onnx", .{home}) catch return null;
-    const dec = std.fmt.bufPrintZ(&dec_buf, "{s}/models/sherpa-stream-zipformer/decoder.onnx", .{home}) catch return null;
-    const join = std.fmt.bufPrintZ(&join_buf, "{s}/models/sherpa-stream-zipformer/joiner.onnx", .{home}) catch return null;
-    const tok = std.fmt.bufPrintZ(&tok_buf, "{s}/models/sherpa-stream-zipformer/tokens.txt", .{home}) catch return null;
+    const enc = @import("../core/fmt_compat.zig").bufPrintZ(&enc_buf, "{s}/models/sherpa-stream-zipformer/encoder.onnx", .{home}) catch return null;
+    const dec = @import("../core/fmt_compat.zig").bufPrintZ(&dec_buf, "{s}/models/sherpa-stream-zipformer/decoder.onnx", .{home}) catch return null;
+    const join = @import("../core/fmt_compat.zig").bufPrintZ(&join_buf, "{s}/models/sherpa-stream-zipformer/joiner.onnx", .{home}) catch return null;
+    const tok = @import("../core/fmt_compat.zig").bufPrintZ(&tok_buf, "{s}/models/sherpa-stream-zipformer/tokens.txt", .{home}) catch return null;
 
     var enc_arg: [640]u8 = undefined;
     var dec_arg: [640]u8 = undefined;

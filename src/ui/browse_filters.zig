@@ -55,7 +55,7 @@ pub fn begin(src: std.builtin.SourceLocation) Toolbar {
         .expand = .horizontal,
         .padding = .{ .x = 6, .y = 2, .w = 6, .h = 2 },
         .background = true,
-        .color_fill = theme.colors.bg_app,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_app),
     });
     return .{ .scroll = scroll, .row = row, .compact = compact };
 }
@@ -77,10 +77,10 @@ pub fn item(src: std.builtin.SourceLocation, config: Item) bool {
     const opts: dvui.Options = .{
         .id_extra = config.id,
         .data_out = &wd,
-        .color_fill = if (config.active) theme.colors.bg_elevated else theme.transparent,
-        .color_fill_hover = if (config.enabled) theme.colors.bg_hover else theme.transparent,
-        .color_text = if (!config.enabled) theme.colors.text_tertiary else if (config.active) theme.colors.accent else theme.colors.text_secondary,
-        .corner_radius = theme.dims.rad_sm,
+        .color_fill = @import("color_compat.zig").wrap(if (config.active) theme.colors.bg_elevated else theme.transparent),
+        .color_fill_hover = @import("color_compat.zig").wrap(if (config.enabled) theme.colors.bg_hover else theme.transparent),
+        .color_text = @import("color_compat.zig").wrap(if (!config.enabled) theme.colors.text_tertiary else if (config.active) theme.colors.accent else theme.colors.text_secondary),
+        .corners = theme.dims.rad_sm,
         .padding = dvui.Rect.all(6),
         .margin = .{ .x = 1, .w = 1 },
         .gravity_y = 0.5,
@@ -117,8 +117,8 @@ fn iconLabelButton(src: std.builtin.SourceLocation, label: []const u8, glyph: []
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{});
         defer row.deinit();
         const style = opts.strip().override(button.style());
-        dvui.icon(@src(), label, glyph, .{}, style.override(.{ .min_size_content = theme.iconSize(.sm), .margin = .{ .w = 6 }, .gravity_y = 0.5, .color_text = opts.color_text, .role = .none }));
-        dvui.labelNoFmt(@src(), label, .{}, style.override(.{ .padding = dvui.Rect.all(0), .gravity_y = 0.5, .color_text = opts.color_text, .role = .none }));
+        dvui.icon(@src(), label, glyph, .{}, style.override(.{ .min_size_content = theme.iconSize(.sm), .margin = .{ .w = 6 }, .gravity_y = 0.5, .color_text = @import("color_compat.zig").wrap(opts.color_text), .role = .none }));
+        dvui.labelNoFmt(@src(), label, .{}, style.override(.{ .padding = dvui.Rect.all(0), .gravity_y = 0.5, .color_text = @import("color_compat.zig").wrap(opts.color_text), .role = .none }));
     }
     const clicked = button.clicked();
     button.drawFocus();
@@ -131,7 +131,7 @@ pub fn divider(src: std.builtin.SourceLocation, id: usize) void {
         .id_extra = id,
         .min_size_content = .{ .w = 1, .h = 18 },
         .background = true,
-        .color_fill = theme.colors.border_subtle,
+        .color_fill = @import("color_compat.zig").wrap(theme.colors.border_subtle),
         .margin = .{ .x = 6, .w = 6 },
         .gravity_y = 0.5,
     });

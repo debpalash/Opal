@@ -389,9 +389,9 @@ pub fn renderSection() void {
         _ = dvui.label(@src(), "{s}", .{header}, .{
             .id_extra = ID_BASE + 60 + day,
             .expand = .horizontal,
-            .color_text = theme.colors.accent,
+            .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
             .background = true,
-            .color_fill = theme.colors.bg_app,
+            .color_fill = @import("../ui/color_compat.zig").wrap(theme.colors.bg_app),
             .font = dvui.themeGet().font_body.withSize(theme.font_size.body),
             .margin = .{ .x = theme.spacing.lg, .y = theme.spacing.sm, .w = theme.spacing.lg, .h = 0 },
             .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
@@ -427,7 +427,7 @@ pub fn renderSection() void {
         if (!any) {
             _ = dvui.label(@src(), "No releases", .{}, .{
                 .id_extra = ID_BASE + 90 + day,
-                .color_text = theme.colors.text_tertiary,
+                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_tertiary),
                 .gravity_y = 0.5,
                 .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.sm, .w = 0, .h = 0 },
             });
@@ -445,7 +445,7 @@ fn renderHeader() void {
     defer hdr.deinit();
 
     _ = dvui.label(@src(), "Release calendar", .{}, .{
-        .color_text = theme.colors.text_primary,
+        .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.text_primary),
         .font = dvui.themeGet().font_body.withSize(theme.font_size.title),
         .gravity_y = 0.5,
     });
@@ -457,11 +457,11 @@ fn renderHeader() void {
             if (dvui.button(@src(), "Full calendar", .{}, .{
                 .gravity_x = 1.0,
                 .gravity_y = 0.5,
-                .color_fill = theme.transparent,
-                .color_fill_hover = theme.colors.bg_hover,
-                .color_text = theme.colors.accent,
+                .color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent),
+                .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.colors.bg_hover),
+                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
                 .border = dvui.Rect.all(0),
-                .corner_radius = dvui.Rect.all(theme.radius.sm),
+                .corners = dvui.CornerRect.all(theme.radius.sm),
                 .font = dvui.themeGet().font_body.withSize(theme.font_size.small),
                 .padding = .{ .x = theme.spacing.sm, .y = theme.spacing.xs, .w = theme.spacing.sm, .h = theme.spacing.xs },
             })) {

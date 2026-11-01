@@ -737,7 +737,7 @@ fn conversationLoopV2() void {
                     defer state.players_mutex.unlock();
                     if (state.app.active_player_idx < state.app.players.items.len) {
                         var vol_cmd_buf: [64]u8 = undefined;
-                        const vol_cmd = std.fmt.bufPrintZ(&vol_cmd_buf, "set volume {d:.0}", .{saved_volume}) catch "set volume 100";
+                        const vol_cmd = @import("../core/fmt_compat.zig").bufPrintZ(&vol_cmd_buf, "set volume {d:.0}", .{saved_volume}) catch "set volume 100";
                         _ = c_pkg.mpv.mpv_command_string(state.app.players.items[state.app.active_player_idx].mpv_ctx, vol_cmd.ptr);
                     }
                 }
@@ -870,7 +870,7 @@ fn conversationLoopV1() void {
                 defer state.players_mutex.unlock();
                 if (state.app.active_player_idx < state.app.players.items.len) {
                     var rv_buf: [64]u8 = undefined;
-                    const rv_cmd = std.fmt.bufPrintZ(&rv_buf, "set volume {d:.0}", .{saved_vol}) catch "set volume 100";
+                    const rv_cmd = @import("../core/fmt_compat.zig").bufPrintZ(&rv_buf, "set volume {d:.0}", .{saved_vol}) catch "set volume 100";
                     _ = c_pkg.mpv.mpv_command_string(state.app.players.items[state.app.active_player_idx].mpv_ctx, rv_cmd.ptr);
                 }
             }
@@ -884,7 +884,7 @@ fn conversationLoopV1() void {
                 defer state.players_mutex.unlock();
                 if (state.app.active_player_idx < state.app.players.items.len) {
                     var rv_buf: [64]u8 = undefined;
-                    const rv_cmd = std.fmt.bufPrintZ(&rv_buf, "set volume {d:.0}", .{saved_vol}) catch "set volume 100";
+                    const rv_cmd = @import("../core/fmt_compat.zig").bufPrintZ(&rv_buf, "set volume {d:.0}", .{saved_vol}) catch "set volume 100";
                     _ = c_pkg.mpv.mpv_command_string(state.app.players.items[state.app.active_player_idx].mpv_ctx, rv_cmd.ptr);
                 }
             }
@@ -897,7 +897,7 @@ fn conversationLoopV1() void {
             defer state.players_mutex.unlock();
             if (state.app.active_player_idx < state.app.players.items.len) {
                 var rv_buf: [64]u8 = undefined;
-                const rv_cmd = std.fmt.bufPrintZ(&rv_buf, "set volume {d:.0}", .{saved_vol}) catch "set volume 100";
+                const rv_cmd = @import("../core/fmt_compat.zig").bufPrintZ(&rv_buf, "set volume {d:.0}", .{saved_vol}) catch "set volume 100";
                 _ = c_pkg.mpv.mpv_command_string(state.app.players.items[state.app.active_player_idx].mpv_ctx, rv_cmd.ptr);
             }
         }
@@ -1276,7 +1276,7 @@ fn ttsWorker() void {
         if (enc_len == 0) return;
 
         var url_buf: [8192]u8 = undefined;
-        const url = std.fmt.bufPrintZ(&url_buf, "http://127.0.0.1:{d}/speak?text={s}&voice=Luna&speed=1.0", .{
+        const url = @import("../core/fmt_compat.zig").bufPrintZ(&url_buf, "http://127.0.0.1:{d}/speak?text={s}&voice=Luna&speed=1.0", .{
             LANG_SERVER_PORT, encoded[0..enc_len],
         }) catch return;
 

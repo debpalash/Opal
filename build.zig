@@ -1,3 +1,4 @@
+const Translator = @import("translate_c").Translator;
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
@@ -51,6 +52,20 @@ fn buildSupported(b: *std.Build) void {
         }),
     });
     exe.use_llvm = true;
+    const native_bindings: Translator = .init(b.dependency("translate_c", .{}), .{
+        .name = "opal-native-c",
+        .c_source_file = b.path("src/core/native_bindings.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    native_bindings.addIncludePath(b.path("src"));
+    native_bindings.addIncludePath(b.path("ort"));
+    native_bindings.addIncludePath(.{ .cwd_relative = "/opt/homebrew/include" });
+    native_bindings.addIncludePath(.{ .cwd_relative = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include" });
+    native_bindings.addSystemFrameworkPath(.{ .cwd_relative = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks" });
+    native_bindings.addIncludePath(b.dependency("ghostty", .{ .target = target, .optimize = .fast, .@"emit-lib-vt" = true, .simd = false }).path("include"));
+    native_bindings.addIncludePath(b.dependency("dvui", .{ .target = target, .optimize = optimize, .backend = .sdl2 }).path("vendor/stb"));
+    exe.root_module.addImport("opal-native-c", native_bindings.mod);
     // Keep local debugging intact; shipping builds omit debug symbols.
     exe.root_module.strip = b.option(bool, "strip", "Strip executable debug symbols (default: release builds)") orelse (optimize != .debug);
 

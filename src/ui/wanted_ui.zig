@@ -91,7 +91,7 @@ pub fn renderAddBox(width: f32) void {
         if (components.toolbarGo(@src(), "Add") or entered) submit();
     }
     if (message_len > 0) {
-        _ = dvui.label(@src(), "{s}", .{message_buf[0..message_len]}, .{ .color_text = theme.colors.text_secondary });
+        _ = dvui.label(@src(), "{s}", .{message_buf[0..message_len]}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary) });
     }
 }
 
@@ -112,13 +112,13 @@ pub fn render() void {
         .expand = .horizontal,
         .padding = .{ .x = 14, .y = 8, .w = 14, .h = 8 },
         .border = .{ .x = 0, .y = 0, .w = 0, .h = 1 },
-        .color_border = theme.colors.border_subtle,
+        .color_border = @import("color_compat.zig").wrap(theme.colors.border_subtle),
     });
     defer card.deinit();
 
     var head: [64]u8 = undefined;
     const title = std.fmt.bufPrint(&head, "Wanted ({d}){s}", .{ row_count, if (wanted.isSearching()) "  searching…" else "" }) catch "Wanted";
-    _ = dvui.label(@src(), "{s}", .{title}, .{ .color_text = theme.colors.text_primary });
+    _ = dvui.label(@src(), "{s}", .{title}, .{ .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary) });
 
     renderAddBox(360);
 
@@ -142,7 +142,7 @@ pub fn render() void {
                 else
                     title_shown,
             };
-            _ = dvui.label(@src(), "{s}", .{label}, .{ .id_extra = 91200 + i, .color_text = theme.colors.text_primary, .gravity_y = 0.5 });
+            _ = dvui.label(@src(), "{s}", .{label}, .{ .id_extra = 91200 + i, .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary), .gravity_y = 0.5 });
 
             var detail: [160]u8 = undefined;
             const text = switch (r.status) {
@@ -155,7 +155,7 @@ pub fn render() void {
                 .fulfilled => "  done",
                 .paused => "  paused",
             };
-            _ = dvui.label(@src(), "{s}", .{text}, .{ .id_extra = 91300 + i, .color_text = statusColor(r.status), .gravity_y = 0.5, .margin = .{ .x = 0, .y = 0, .w = 16, .h = 0 } });
+            _ = dvui.label(@src(), "{s}", .{text}, .{ .id_extra = 91300 + i, .color_text = @import("color_compat.zig").wrap(statusColor(r.status)), .gravity_y = 0.5, .margin = .{ .x = 0, .y = 0, .w = 16, .h = 0 } });
 
             if (r.status == .wanted and components.actionButton(@src(), "Find", .secondary, 91500 + i)) {
                 _ = wanted.checkNow(r.id);
@@ -181,7 +181,7 @@ pub fn render() void {
             small.size = theme.font_size.small;
             _ = dvui.label(@src(), "{s}", .{extra}, .{
                 .id_extra = 91900 + i,
-                .color_text = theme.colors.text_secondary,
+                .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
                 .font = small,
                 .margin = .{ .x = 0, .y = 0, .w = 0, .h = 3 },
             });

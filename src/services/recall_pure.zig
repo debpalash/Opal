@@ -662,7 +662,7 @@ pub fn ftsQuery(text: []const u8, out: []u8) []const u8 {
 pub fn termHits(text: []const u8, term_list: []const []const u8) usize {
     var n: usize = 0;
     for (term_list) |term| {
-        if (term.len > 0 and std.ascii.indexOfIgnoreCase(text, term) != null) n += 1;
+        if (term.len > 0 and std.ascii.findIgnoreCase(text, term) != null) n += 1;
     }
     return n;
 }
@@ -1020,7 +1020,7 @@ pub fn kindFromLibrary(kind: []const u8, name: []const u8) Kind {
 }
 
 pub fn kindFromName(name: []const u8) Kind {
-    inline for (std.meta.fields(Kind)) |f| if (std.mem.eql(u8, name, f.name)) return @enumFromInt(f.value);
+    inline for (comptime @import("../core/enum_compat.zig").fields(Kind)) |f| if (std.mem.eql(u8, name, f.name)) return @enumFromInt(f.value);
     return .other;
 }
 
@@ -1128,7 +1128,7 @@ fn charStart(text: []const u8, i_in: usize) usize {
 
 fn findTerm(hay: []const u8, from: usize, term: []const u8) ?usize {
     if (term.len == 0 or from >= hay.len) return null;
-    return if (std.ascii.indexOfIgnoreCase(hay[from..], term)) |p| from + p else null;
+    return if (std.ascii.findIgnoreCase(hay[from..], term)) |p| from + p else null;
 }
 
 /// Excerpt of at most `max_len` bytes of `text` around the earliest term hit,

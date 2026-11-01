@@ -283,7 +283,7 @@ const RemoveRequest = struct {
     len: usize = 0,
     ticket: u64 = 0,
 };
-var remove_queue: [REMOVE_QUEUE_CAP]RemoveRequest = [_]RemoveRequest{.{}} ** REMOVE_QUEUE_CAP;
+var remove_queue: [REMOVE_QUEUE_CAP]RemoveRequest = @as([REMOVE_QUEUE_CAP]RemoveRequest, @splat(.{}));
 var remove_head: usize = 0;
 var remove_count: usize = 0;
 var remove_mutex: @import("../core/sync.zig").Mutex = .{};
@@ -670,7 +670,7 @@ pub fn exportJson() void {
     @import("../core/io_global.zig").cwdMakePath(dl_dir) catch {};
 
     var out_buf: [512]u8 = undefined;
-    const out_path = std.fmt.bufPrintZ(&out_buf, "{s}/watch_history.json", .{dl_dir}) catch return;
+    const out_path = @import("../core/fmt_compat.zig").bufPrintZ(&out_buf, "{s}/watch_history.json", .{dl_dir}) catch return;
 
     // Build JSON manually (no JSON library needed for simple format)
     const alloc = @import("../core/alloc.zig").allocator;

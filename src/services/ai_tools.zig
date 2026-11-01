@@ -497,7 +497,7 @@ fn executeReadWebpage(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
 
     // Use Jina Reader (free, no API key) to extract web content
     var jina_url_buf: [512]u8 = undefined;
-    const jina_url = std.fmt.bufPrintZ(&jina_url_buf, "https://r.jina.ai/{s}", .{url}) catch
+    const jina_url = @import("../core/fmt_compat.zig").bufPrintZ(&jina_url_buf, "https://r.jina.ai/{s}", .{url}) catch
         return std.fmt.allocPrint(alloc, "URL too long", .{}) catch null;
 
     // Fetch via reliable-fetch into a heap scratch buffer (pages can be large),
@@ -605,31 +605,31 @@ fn executePlayerControl(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
     } else if (std.mem.eql(u8, action, "seek_forward")) {
         var cmd_buf: [64]u8 = undefined;
         const secs = sanitizeNumeric(value orelse "10", "10");
-        const cmd = std.fmt.bufPrintZ(&cmd_buf, "seek {s}", .{secs}) catch return null;
+        const cmd = @import("../core/fmt_compat.zig").bufPrintZ(&cmd_buf, "seek {s}", .{secs}) catch return null;
         _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
         return std.fmt.allocPrint(alloc, "Seeked forward {s}s", .{secs}) catch null;
     } else if (std.mem.eql(u8, action, "seek_backward")) {
         var cmd_buf: [64]u8 = undefined;
         const secs = sanitizeNumeric(value orelse "10", "10");
-        const cmd = std.fmt.bufPrintZ(&cmd_buf, "seek -{s}", .{secs}) catch return null;
+        const cmd = @import("../core/fmt_compat.zig").bufPrintZ(&cmd_buf, "seek -{s}", .{secs}) catch return null;
         _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
         return std.fmt.allocPrint(alloc, "Seeked backward {s}s", .{secs}) catch null;
     } else if (std.mem.eql(u8, action, "seek_to")) {
         var cmd_buf: [64]u8 = undefined;
         const pos = sanitizeNumeric(value orelse "0", "0");
-        const cmd = std.fmt.bufPrintZ(&cmd_buf, "seek {s} absolute", .{pos}) catch return null;
+        const cmd = @import("../core/fmt_compat.zig").bufPrintZ(&cmd_buf, "seek {s} absolute", .{pos}) catch return null;
         _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
         return std.fmt.allocPrint(alloc, "Seeked to {s}", .{pos}) catch null;
     } else if (std.mem.eql(u8, action, "set_volume")) {
         var cmd_buf: [64]u8 = undefined;
         const vol = sanitizeNumeric(value orelse "100", "100");
-        const cmd = std.fmt.bufPrintZ(&cmd_buf, "set volume {s}", .{vol}) catch return null;
+        const cmd = @import("../core/fmt_compat.zig").bufPrintZ(&cmd_buf, "set volume {s}", .{vol}) catch return null;
         _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
         return std.fmt.allocPrint(alloc, "Volume set to {s}%", .{vol}) catch null;
     } else if (std.mem.eql(u8, action, "set_speed")) {
         var cmd_buf: [64]u8 = undefined;
         const spd = sanitizeNumeric(value orelse "1.0", "1.0");
-        const cmd = std.fmt.bufPrintZ(&cmd_buf, "set speed {s}", .{spd}) catch return null;
+        const cmd = @import("../core/fmt_compat.zig").bufPrintZ(&cmd_buf, "set speed {s}", .{spd}) catch return null;
         _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
         return std.fmt.allocPrint(alloc, "Speed set to {s}x", .{spd}) catch null;
     } else if (std.mem.eql(u8, action, "fullscreen")) {
@@ -813,7 +813,7 @@ fn executeRecallScene(alloc: std.mem.Allocator, tc: *const ToolCall) ?[]u8 {
         if (state.app.active_player_idx < state.app.players.items.len) {
             const p = state.app.players.items[state.app.active_player_idx];
             var cmd_buf: [64]u8 = undefined;
-            const cmd = std.fmt.bufPrintZ(&cmd_buf, "seek {d:.1} absolute", .{hit.position_secs}) catch
+            const cmd = @import("../core/fmt_compat.zig").bufPrintZ(&cmd_buf, "seek {d:.1} absolute", .{hit.position_secs}) catch
                 return std.fmt.allocPrint(alloc, "Error: could not build seek command", .{}) catch null;
             _ = c.mpv.mpv_command_string(p.mpv_ctx, cmd.ptr);
         }

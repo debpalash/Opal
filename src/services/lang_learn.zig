@@ -492,7 +492,7 @@ fn asrWorker() void {
 
     // Extract 5 seconds of audio using ffmpeg
     var start_buf: [32]u8 = undefined;
-    const start_str = std.fmt.bufPrintZ(&start_buf, "{d:.1}", .{time_pos}) catch return;
+    const start_str = @import("../core/fmt_compat.zig").bufPrintZ(&start_buf, "{d:.1}", .{time_pos}) catch return;
 
     var extract_child = @import("../core/io_global.zig").Child.init(
         &.{ "ffmpeg", "-y", "-ss", start_str, "-i", media_path, "-t", "5", "-ar", "16000", "-ac", "1", "-f", "wav", wav_path },
@@ -506,7 +506,7 @@ fn asrWorker() void {
     // POST to /transcribe via curl
     const asr_lang = state.app.translate_lang_buf[0..state.app.translate_lang_len];
     var url_buf: [256]u8 = undefined;
-    const url = std.fmt.bufPrintZ(&url_buf, "http://127.0.0.1:{d}/transcribe?lang={s}", .{ LANG_SERVER_PORT, asr_lang }) catch return;
+    const url = @import("../core/fmt_compat.zig").bufPrintZ(&url_buf, "http://127.0.0.1:{d}/transcribe?lang={s}", .{ LANG_SERVER_PORT, asr_lang }) catch return;
 
     // WAV uploads from the private workspace file (post_body_file) through
     // the reliable-fetch seam; local server → no DPI proxy / impersonation.
@@ -664,7 +664,7 @@ pub fn renderSubtitleBar() void {
     var bar = dvui.box(@src(), .{ .dir = .vertical }, .{
         .expand = .horizontal,
         .background = true,
-        .color_fill = dvui.Color{ .r = 10, .g = 12, .b = 20, .a = 230 },
+        .color_fill = @import("../ui/color_compat.zig").wrap(dvui.Color{ .r = 10, .g = 12, .b = 20, .a = 230 }),
         .padding = .{ .x = 12, .y = 8, .w = 12, .h = 8 },
     });
     defer bar.deinit();
@@ -692,15 +692,15 @@ pub fn renderSubtitleBar() void {
                 var word_box = dvui.box(@src(), .{}, .{
                     .id_extra = wi,
                     .background = true,
-                    .color_fill = word_bg,
-                    .corner_radius = dvui.Rect.all(4),
+                    .color_fill = @import("../ui/color_compat.zig").wrap(word_bg),
+                    .corners = dvui.CornerRect.all(4),
                     .padding = .{ .x = 6, .y = 3, .w = 6, .h = 3 },
                     .margin = .{ .x = 0, .y = 0, .w = 3, .h = 0 },
                 });
 
                 _ = dvui.label(@src(), "{s}", .{word_text}, .{
                     .id_extra = wi,
-                    .color_text = word_fg,
+                    .color_text = @import("../ui/color_compat.zig").wrap(word_fg),
                 });
 
                 for (dvui.events()) |*ev| {
@@ -731,11 +731,11 @@ pub fn renderSubtitleBar() void {
 
                 var tt_buf: [1024]u8 = undefined;
                 _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(translated_text[0..translated_len], &tt_buf)}, .{
-                    .color_text = dvui.Color{ .r = 180, .g = 220, .b = 130, .a = 255 },
+                    .color_text = @import("../ui/color_compat.zig").wrap(dvui.Color{ .r = 180, .g = 220, .b = 130, .a = 255 }),
                 });
             } else if (translate_busy) {
                 _ = dvui.label(@src(), "...", .{}, .{
-                    .color_text = dvui.Color{ .r = 100, .g = 105, .b = 120, .a = 180 },
+                    .color_text = @import("../ui/color_compat.zig").wrap(dvui.Color{ .r = 100, .g = 105, .b = 120, .a = 180 }),
                     .margin = .{ .x = 0, .y = 2, .w = 0, .h = 0 },
                 });
             }
@@ -753,10 +753,10 @@ pub fn renderSubtitleBar() void {
             // Speak all
             const speak_color = if (speaking_word_idx == -2) theme.colors.accent else theme.colors.text_secondary;
             if (dvui.button(@src(), "Speak", .{}, .{
-                .color_fill = theme.transparent,
-                .color_fill_hover = theme.playerGlass(64),
-                .color_fill_press = theme.playerGlass(96),
-                .color_text = speak_color,
+                .color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent),
+                .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.playerGlass(64)),
+                .color_fill_press = @import("../ui/color_compat.zig").wrap(theme.playerGlass(96)),
+                .color_text = @import("../ui/color_compat.zig").wrap(speak_color),
                 .padding = theme.dims.pad_xs,
             })) {
                 speakFullLine();
@@ -766,10 +766,10 @@ pub fn renderSubtitleBar() void {
             {
                 const trans_color = if (state.app.translate_enabled) dvui.Color{ .r = 130, .g = 180, .b = 255, .a = 255 } else theme.colors.text_secondary;
                 if (dvui.button(@src(), if (state.app.translate_enabled) "TR ON" else "TR", .{}, .{
-                    .color_fill = theme.transparent,
-                    .color_fill_hover = theme.playerGlass(64),
-                    .color_fill_press = theme.playerGlass(96),
-                    .color_text = trans_color,
+                    .color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent),
+                    .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.playerGlass(64)),
+                    .color_fill_press = @import("../ui/color_compat.zig").wrap(theme.playerGlass(96)),
+                    .color_text = @import("../ui/color_compat.zig").wrap(trans_color),
                     .padding = theme.dims.pad_xs,
                 })) {
                     state.app.translate_enabled = !state.app.translate_enabled;
@@ -784,10 +784,10 @@ pub fn renderSubtitleBar() void {
             {
                 const dub_color = if (state.app.dubbing_enabled) dvui.Color{ .r = 255, .g = 180, .b = 80, .a = 255 } else theme.colors.text_secondary;
                 if (dvui.button(@src(), if (state.app.dubbing_enabled) "DUB ON" else "DUB", .{}, .{
-                    .color_fill = theme.transparent,
-                    .color_fill_hover = theme.playerGlass(64),
-                    .color_fill_press = theme.playerGlass(96),
-                    .color_text = dub_color,
+                    .color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent),
+                    .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.playerGlass(64)),
+                    .color_fill_press = @import("../ui/color_compat.zig").wrap(theme.playerGlass(96)),
+                    .color_text = @import("../ui/color_compat.zig").wrap(dub_color),
                     .padding = theme.dims.pad_xs,
                 })) {
                     state.app.dubbing_enabled = !state.app.dubbing_enabled;
@@ -799,10 +799,10 @@ pub fn renderSubtitleBar() void {
             {
                 const asr_color = if (state.app.asr_enabled) dvui.Color{ .r = 180, .g = 255, .b = 180, .a = 255 } else theme.colors.text_secondary;
                 if (dvui.button(@src(), if (state.app.asr_enabled) "ASR ON" else "ASR", .{}, .{
-                    .color_fill = theme.transparent,
-                    .color_fill_hover = theme.playerGlass(64),
-                    .color_fill_press = theme.playerGlass(96),
-                    .color_text = asr_color,
+                    .color_fill = @import("../ui/color_compat.zig").wrap(theme.transparent),
+                    .color_fill_hover = @import("../ui/color_compat.zig").wrap(theme.playerGlass(64)),
+                    .color_fill_press = @import("../ui/color_compat.zig").wrap(theme.playerGlass(96)),
+                    .color_text = @import("../ui/color_compat.zig").wrap(asr_color),
                     .padding = theme.dims.pad_xs,
                 })) {
                     state.app.asr_enabled = !state.app.asr_enabled;
@@ -821,8 +821,8 @@ pub fn renderSubtitleBar() void {
                 var dot = dvui.box(@src(), .{}, .{
                     .min_size_content = .{ .w = 6, .h = 6 },
                     .background = true,
-                    .color_fill = status_color,
-                    .corner_radius = dvui.Rect.all(3),
+                    .color_fill = @import("../ui/color_compat.zig").wrap(status_color),
+                    .corners = dvui.CornerRect.all(3),
                 });
                 dot.deinit();
             }
@@ -832,13 +832,13 @@ pub fn renderSubtitleBar() void {
         if (state.app.asr_text_len > 0) {
             var asr_buf: [1024]u8 = undefined;
             _ = dvui.label(@src(), "{s}", .{@import("../core/text.zig").safeUtf8Buf(state.app.asr_text_buf[0..state.app.asr_text_len], &asr_buf)}, .{
-                .color_text = dvui.Color{ .r = 200, .g = 210, .b = 240, .a = 230 },
+                .color_text = @import("../ui/color_compat.zig").wrap(dvui.Color{ .r = 200, .g = 210, .b = 240, .a = 230 }),
                 .expand = .horizontal,
                 .margin = .{ .x = 0, .y = 2, .w = 0, .h = 2 },
             });
             if (state.app.asr_busy) {
                 _ = dvui.label(@src(), "ASR processing…", .{}, .{
-                    .color_text = dvui.Color{ .r = 100, .g = 105, .b = 120, .a = 150 },
+                    .color_text = @import("../ui/color_compat.zig").wrap(dvui.Color{ .r = 100, .g = 105, .b = 120, .a = 150 }),
                 });
             }
         } else {
@@ -849,7 +849,7 @@ pub fn renderSubtitleBar() void {
             defer wait_row.deinit();
 
             _ = dvui.label(@src(), "Language Learning", .{}, .{
-                .color_text = theme.colors.accent,
+                .color_text = @import("../ui/color_compat.zig").wrap(theme.colors.accent),
             });
 
             {
@@ -860,16 +860,16 @@ pub fn renderSubtitleBar() void {
             if (state.app.asr_enabled) {
                 if (state.app.asr_busy) {
                     _ = dvui.label(@src(), "ASR: processing…", .{}, .{
-                        .color_text = dvui.Color{ .r = 180, .g = 255, .b = 180, .a = 200 },
+                        .color_text = @import("../ui/color_compat.zig").wrap(dvui.Color{ .r = 180, .g = 255, .b = 180, .a = 200 }),
                     });
                 } else {
                     _ = dvui.label(@src(), "ASR: waiting…", .{}, .{
-                        .color_text = dvui.Color{ .r = 180, .g = 255, .b = 180, .a = 200 },
+                        .color_text = @import("../ui/color_compat.zig").wrap(dvui.Color{ .r = 180, .g = 255, .b = 180, .a = 200 }),
                     });
                 }
             } else {
                 _ = dvui.label(@src(), "Waiting for subtitles…", .{}, .{
-                    .color_text = dvui.Color{ .r = 100, .g = 105, .b = 120, .a = 200 },
+                    .color_text = @import("../ui/color_compat.zig").wrap(dvui.Color{ .r = 100, .g = 105, .b = 120, .a = 200 }),
                 });
             }
         }
@@ -903,7 +903,7 @@ pub fn saveSubtitleFlashcard() void {
     // Prepare CSV Path
     var csv_path_buf: [4096]u8 = undefined;
     const save_dir = state.app.save_path_buf[0..state.app.save_path_len];
-    const csv_path = std.fmt.bufPrintZ(&csv_path_buf, "{s}/anki_export.csv", .{save_dir}) catch return;
+    const csv_path = @import("../core/fmt_compat.zig").bufPrintZ(&csv_path_buf, "{s}/anki_export.csv", .{save_dir}) catch return;
 
     @import("../core/io_global.zig").cwdMakePath(save_dir) catch {};
 

@@ -91,13 +91,13 @@ fn signedFixture(a: std.mem.Allocator, manifest: []const u8, key: Ed.KeyPair) ![
 
 test "repository verifies exact bytes and rejects tampering and wrong pinned keys" {
     const a = std.testing.allocator;
-    const key = try Ed.KeyPair.generateDeterministic(.{1} ** 32);
+    const key = try Ed.KeyPair.generateDeterministic(@splat(1));
     const bytes = try signedFixture(a, "{\"version\":1,\"addons\":[]}", key);
     defer a.free(bytes);
     const hex = std.fmt.bytesToHex(key.public_key.toBytes(), .lower);
     const verified = try verify(a, bytes, &hex);
     verified.deinit();
-    const wrong = try Ed.KeyPair.generateDeterministic(.{2} ** 32);
+    const wrong = try Ed.KeyPair.generateDeterministic(@splat(2));
     const wrong_hex = std.fmt.bytesToHex(wrong.public_key.toBytes(), .lower);
     try std.testing.expectError(error.InvalidSignature, verify(a, bytes, &wrong_hex));
     const at = std.mem.indexOf(u8, bytes, "version").?;
@@ -107,7 +107,7 @@ test "repository verifies exact bytes and rejects tampering and wrong pinned key
 
 test "signed repository cannot traverse paths or hide executable permissions" {
     const a = std.testing.allocator;
-    const key = try Ed.KeyPair.generateDeterministic(.{3} ** 32);
+    const key = try Ed.KeyPair.generateDeterministic(@splat(3));
     const hex = std.fmt.bytesToHex(key.public_key.toBytes(), .lower);
     const bad = try signedFixture(a,
         \\{"version":1,"addons":[{"id":"demo","name":"Demo","version":"1","files":[{"name":"../escape","content":"bad"}]}]}

@@ -149,7 +149,7 @@ test "shuffle order is a deterministic permutation covering every index once" {
     try std.testing.expectEqualSlices(u32, &a, &b); // same seed ⇒ same order
 
     // Permutation: every index 0..16 appears exactly once.
-    var seen = [_]bool{false} ** 16;
+    var seen = @as([16]bool, @splat(false));
     for (a) |v| {
         try std.testing.expect(v < 16);
         try std.testing.expect(!seen[v]);

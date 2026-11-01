@@ -34,7 +34,7 @@ const PosterSlot = struct {
     attempted: bool = false,
     failed: bool = false,
 };
-var slots: [pure.MAX_CARDS]PosterSlot = [_]PosterSlot{.{}} ** pure.MAX_CARDS;
+var slots: [pure.MAX_CARDS]PosterSlot = @as([pure.MAX_CARDS]PosterSlot, @splat(.{}));
 var slots_seq: u32 = 0;
 
 fn resetSlots() void {
@@ -55,7 +55,7 @@ fn note(id: usize, text: []const u8, color: dvui.Color, top: f32) void {
         .padding = dvui.Rect.all(0),
         .margin = .{ .x = 2, .y = top, .w = 0, .h = 0 },
     });
-    tl.addText(text, .{ .color_text = color });
+    tl.addText(text, .{ .color_text = @import("color_compat.zig").wrap(color) });
     tl.deinit();
 }
 
@@ -105,8 +105,8 @@ fn drawLocked(
         var av = dvui.box(@src(), .{ .dir = .vertical }, .{
             .id_extra = base + 1,
             .background = true,
-            .color_fill = theme.colors.bg_surface,
-            .corner_radius = dvui.Rect.all(theme.radius.pill),
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_surface),
+            .corners = dvui.CornerRect.all(theme.radius.pill),
             .min_size_content = .{ .w = 26, .h = 26 },
             .max_size_content = dvui.Options.MaxSize.size(.{ .w = 26, .h = 26 }),
             .margin = .{ .x = 0, .y = 2, .w = theme.spacing.sm, .h = 0 },
@@ -114,7 +114,7 @@ fn drawLocked(
         defer av.deinit();
         dvui.icon(@src(), "ask-avatar", icons.tvg.lucide.sparkles, .{}, .{
             .id_extra = base + 2,
-            .color_text = theme.colors.accent,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
             .min_size_content = .{ .w = 14, .h = 14 },
             .gravity_x = 0.5,
             .gravity_y = 0.5,
@@ -127,7 +127,7 @@ fn drawLocked(
     _ = dvui.label(@src(), "{s}", .{agent.label()}, .{
         .id_extra = base + 4,
         .expand = .horizontal,
-        .color_text = theme.colors.text_tertiary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
         .margin = .{ .x = 0, .y = 0, .w = 0, .h = 2 },
     });
 
@@ -148,7 +148,7 @@ fn drawLocked(
             .background = false,
             .padding = dvui.Rect.all(0),
         });
-        tl.addText(shown, .{ .color_text = if (failed) theme.colors.warning else theme.colors.text_primary });
+        tl.addText(shown, .{ .color_text = @import("color_compat.zig").wrap(if (failed) theme.colors.warning else theme.colors.text_primary) });
         tl.deinit();
     }
     if (!latest) return;
@@ -181,7 +181,7 @@ fn drawWorking(base: usize, t: *ask.Turn, agent: pure.Agent, do_cancel: *bool) v
     defer line.deinit();
     dvui.spinner(@src(), .{
         .id_extra = base + 11,
-        .color_text = theme.colors.accent,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.accent),
         .min_size_content = .{ .w = 14, .h = 14 },
         .gravity_y = 0.5,
         .margin = .{ .x = 0, .y = 0, .w = theme.spacing.sm, .h = 0 },
@@ -191,7 +191,7 @@ fn drawWorking(base: usize, t: *ask.Turn, agent: pure.Agent, do_cancel: *bool) v
     const text = std.fmt.bufPrint(&wb, "Working with {s}… {d}s", .{ if (agent == .codex) "Codex" else "Claude Code", secs }) catch "Working…";
     _ = dvui.label(@src(), "{s}", .{text}, .{
         .id_extra = base + 12,
-        .color_text = theme.colors.text_secondary,
+        .color_text = @import("color_compat.zig").wrap(theme.colors.text_secondary),
         .gravity_y = 0.5,
     });
     {
@@ -226,10 +226,10 @@ fn drawActions(base: usize, t: *ask.Turn, click_seq: *u32, click_idx: *?usize) v
             .ready => {
                 if (dvui.button(@src(), caption, .{}, .{
                     .id_extra = id + 1,
-                    .color_fill = if (act.kind.spends()) theme.colors.accent else theme.colors.bg_elevated,
-                    .color_fill_hover = theme.colors.bg_hover,
-                    .color_text = if (act.kind.spends()) theme.colors.text_on_accent else theme.colors.text_primary,
-                    .corner_radius = dvui.Rect.all(theme.radius.md),
+                    .color_fill = @import("color_compat.zig").wrap(if (act.kind.spends()) theme.colors.accent else theme.colors.bg_elevated),
+                    .color_fill_hover = @import("color_compat.zig").wrap(theme.colors.bg_hover),
+                    .color_text = @import("color_compat.zig").wrap(if (act.kind.spends()) theme.colors.text_on_accent else theme.colors.text_primary),
+                    .corners = dvui.CornerRect.all(theme.radius.md),
                     .padding = .{ .x = theme.spacing.md, .y = theme.spacing.sm, .w = theme.spacing.md, .h = theme.spacing.sm },
                 })) {
                     click_seq.* = t.seq;
@@ -247,7 +247,7 @@ fn drawActions(base: usize, t: *ask.Turn, click_seq: *u32, click_idx: *?usize) v
                 _ = dvui.label(@src(), "{s}", .{text}, .{
                     .id_extra = id + 1,
                     .expand = .horizontal,
-                    .color_text = if (st == .done) theme.colors.text_secondary else theme.colors.warning,
+                    .color_text = @import("color_compat.zig").wrap(if (st == .done) theme.colors.text_secondary else theme.colors.warning),
                 });
             },
         }
@@ -296,8 +296,8 @@ fn drawCards(base: usize, t: *ask.Turn, card_query: *?[pure.TEXT_MAX + 8]u8, car
         bw.init(@src(), .{}, .{
             .id_extra = id + 1,
             .background = true,
-            .color_fill = theme.colors.bg_elevated,
-            .corner_radius = dvui.Rect.all(theme.radius.lg),
+            .color_fill = @import("color_compat.zig").wrap(theme.colors.bg_elevated),
+            .corners = dvui.CornerRect.all(theme.radius.lg),
             .min_size_content = .{ .w = CARD_W, .h = POSTER_H },
             .max_size_content = .{ .w = CARD_W, .h = POSTER_H },
             .padding = dvui.Rect.all(0),
@@ -320,7 +320,7 @@ fn drawCards(base: usize, t: *ask.Turn, card_query: *?[pure.TEXT_MAX + 8]u8, car
             _ = dvui.image(@src(), .{ .source = .{ .texture = tex.* } }, .{
                 .id_extra = id + 2,
                 .expand = .both,
-                .corner_radius = dvui.Rect.all(theme.radius.lg),
+                .corners = dvui.CornerRect.all(theme.radius.lg),
             });
         } else {
             if (slot.fetching) {
@@ -336,7 +336,7 @@ fn drawCards(base: usize, t: *ask.Turn, card_query: *?[pure.TEXT_MAX + 8]u8, car
             } else {
                 dvui.icon(@src(), "ask-card", icons.tvg.lucide.film, .{}, .{
                     .id_extra = id + 3,
-                    .color_text = theme.colors.text_tertiary,
+                    .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
                     .min_size_content = .{ .w = 24, .h = 24 },
                     .gravity_x = 0.5,
                     .gravity_y = 0.5,
@@ -347,7 +347,7 @@ fn drawCards(base: usize, t: *ask.Turn, card_query: *?[pure.TEXT_MAX + 8]u8, car
 
         _ = dvui.label(@src(), "{s}", .{card.title.slice()}, .{
             .id_extra = id + 4 + 1000,
-            .color_text = theme.colors.text_primary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_primary),
             .expand = .horizontal,
             .padding = .{ .x = 2, .y = 4, .w = 2, .h = 0 },
         });
@@ -355,7 +355,7 @@ fn drawCards(base: usize, t: *ask.Turn, card_query: *?[pure.TEXT_MAX + 8]u8, car
         const sub_text = if (card.year != 0) (std.fmt.bufPrint(&sub, "{d} · {s}", .{ card.year, if (card.kind == .tv) "TV" else "Movie" }) catch "") else (if (card.kind == .tv) "TV" else "Movie");
         _ = dvui.label(@src(), "{s}", .{sub_text}, .{
             .id_extra = id + 4 + 2000,
-            .color_text = theme.colors.text_tertiary,
+            .color_text = @import("color_compat.zig").wrap(theme.colors.text_tertiary),
             .expand = .horizontal,
             .padding = .{ .x = 2, .y = 0, .w = 2, .h = 2 },
         });

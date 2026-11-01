@@ -78,7 +78,7 @@ pub fn buildContext(buf: []u8, query: []const u8) ?[]const u8 {
 
 pub const Suggestions = struct {
     items: [MAX_SUGGESTIONS][op.QUERY_MAX]u8 = undefined,
-    lens: [MAX_SUGGESTIONS]u8 = [_]u8{0} ** MAX_SUGGESTIONS,
+    lens: [MAX_SUGGESTIONS]u8 = @as([MAX_SUGGESTIONS]u8, @splat(0)),
     count: usize = 0,
 
     pub fn get(self: *const Suggestions, i: usize) []const u8 {
@@ -179,7 +179,7 @@ test "only typed words are worth a question" {
     try std.testing.expect(!worthAsking("/home/me/movie.mkv"));
     try std.testing.expect(!worthAsking("0123456789abcdef0123456789abcdef01234567"));
     try std.testing.expect(!worthAsking("12 34"));
-    try std.testing.expect(!worthAsking("x" ** 81));
+    try std.testing.expect(!worthAsking(@import("../core/repeat_pure.zig").bytes("x", 81)));
     try std.testing.expect(!worthAsking("bad\x01query"));
 }
 

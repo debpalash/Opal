@@ -39,23 +39,23 @@ const MpvPlaybackSink = struct {
 
     pub fn setOption(self: *MpvPlaybackSink, name: []const u8, value: []const u8) void {
         var name_buf: [64]u8 = undefined;
-        const name_z = std.fmt.bufPrintZ(&name_buf, "{s}", .{name}) catch return;
+        const name_z = @import("../core/fmt_compat.zig").bufPrintZ(&name_buf, "{s}", .{name}) catch return;
         var value_buf: [2049]u8 = undefined;
-        const value_z = std.fmt.bufPrintZ(&value_buf, "{s}", .{value}) catch return;
+        const value_z = @import("../core/fmt_compat.zig").bufPrintZ(&value_buf, "{s}", .{value}) catch return;
         _ = c.mpv.mpv_set_option_string(self.ctx, name_z.ptr, value_z.ptr);
     }
 
     pub fn loadFile(self: *MpvPlaybackSink, url: []const u8, mode: LoadMode, options: playback_load.FileOptions) void {
         var url_buf: [MAX_LOAD_URL + 1]u8 = undefined;
-        const url_z = std.fmt.bufPrintZ(&url_buf, "{s}", .{url}) catch return;
+        const url_z = @import("../core/fmt_compat.zig").bufPrintZ(&url_buf, "{s}", .{url}) catch return;
         var user_agent_buf: [2049]u8 = undefined;
-        const user_agent_z = std.fmt.bufPrintZ(&user_agent_buf, "{s}", .{options.user_agent}) catch return;
+        const user_agent_z = @import("../core/fmt_compat.zig").bufPrintZ(&user_agent_buf, "{s}", .{options.user_agent}) catch return;
         var header_fields_buf: [2049]u8 = undefined;
-        const header_fields_z = std.fmt.bufPrintZ(&header_fields_buf, "{s}", .{options.header_fields}) catch return;
+        const header_fields_z = @import("../core/fmt_compat.zig").bufPrintZ(&header_fields_buf, "{s}", .{options.header_fields}) catch return;
         var audio_file_buf: [MAX_LOAD_URL + 1]u8 = undefined;
-        const audio_file_z = std.fmt.bufPrintZ(&audio_file_buf, "{s}", .{options.audio_file}) catch return;
+        const audio_file_z = @import("../core/fmt_compat.zig").bufPrintZ(&audio_file_buf, "{s}", .{options.audio_file}) catch return;
         var media_title_buf: [257]u8 = undefined;
-        const media_title_z = std.fmt.bufPrintZ(&media_title_buf, "{s}", .{options.media_title}) catch return;
+        const media_title_z = @import("../core/fmt_compat.zig").bufPrintZ(&media_title_buf, "{s}", .{options.media_title}) catch return;
 
         // `loadfile`'s final argument is a native key/value map when invoked
         // through mpv_command_node. This avoids comma/string escaping and,
@@ -122,6 +122,7 @@ const MpvPlaybackSink = struct {
         var arg_list: c.mpv.mpv_node_list = .{
             .num = if (with_index) arg_values.len else arg_values.len - 1,
             .values = @ptrCast(&arg_values),
+            .keys = null,
         };
         var command_node: c.mpv.mpv_node = .{
             .u = .{ .list = &arg_list },
@@ -196,7 +197,7 @@ var position_save_queue_head: usize = 0;
 var position_save_queue_count: usize = 0;
 var position_save_worker_active: bool = false;
 var position_save_queue_mutex: @import("../core/sync.zig").Mutex = .{};
-var position_save_stamps: [16]position_save_pure.Stamp = [_]position_save_pure.Stamp{.{}} ** 16;
+var position_save_stamps: [16]position_save_pure.Stamp = @as([16]position_save_pure.Stamp, @splat(.{}));
 var position_save_stamp_cursor: usize = 0;
 var playback_load_sequence = std.atomic.Value(u64).init(0);
 
@@ -1115,7 +1116,7 @@ pub const MediaPlayer = struct {
             };
             var vf_buf: [16]u8 = undefined;
             for (vfs) |vf| {
-                if (std.fmt.bufPrintZ(&vf_buf, "{d}", .{av_pure.clampVideoFilter(vf.val)})) |s| {
+                if (@import("../core/fmt_compat.zig").bufPrintZ(&vf_buf, "{d}", .{av_pure.clampVideoFilter(vf.val)})) |s| {
                     _ = c.mpv.mpv_set_option_string(self.mpv_ctx, vf.prop, s.ptr);
                 } else |_| {}
             }
@@ -1165,7 +1166,7 @@ pub const MediaPlayer = struct {
             const path = state.app.script_paths[si][0..state.app.script_path_lens[si]];
             if (path.len == 0) continue;
             var path_z: [513]u8 = undefined;
-            const pz = std.fmt.bufPrintZ(&path_z, "{s}", .{path}) catch continue;
+            const pz = @import("../core/fmt_compat.zig").bufPrintZ(&path_z, "{s}", .{path}) catch continue;
             var args = [_][*c]const u8{ "load-script", pz.ptr, null };
             _ = c.mpv.mpv_command(self.mpv_ctx, @ptrCast(&args));
         }
@@ -1485,8 +1486,8 @@ pub const MediaPlayer = struct {
             self.fallback_url_2_len = request.fallback_url_2.len;
         }
         self.audio_only_intent = request.audio_only;
-        self.youtube_default_retry_pending = std.ascii.indexOfIgnoreCase(path_span, "youtube.com/") != null or
-            std.ascii.indexOfIgnoreCase(path_span, "youtu.be/") != null;
+        self.youtube_default_retry_pending = std.ascii.findIgnoreCase(path_span, "youtube.com/") != null or
+            std.ascii.findIgnoreCase(path_span, "youtu.be/") != null;
         self.youtube_fast_active = false;
         self.youtube_quality_fallback_pending = false;
         self.resume_seeked = false;
@@ -1611,8 +1612,8 @@ pub const MediaPlayer = struct {
     fn isYoutubeSource(self: *const MediaPlayer) bool {
         if (self.current_url_len == 0) return false;
         const url = self.current_url[0..self.current_url_len];
-        return std.ascii.indexOfIgnoreCase(url, "youtube.com/") != null or
-            std.ascii.indexOfIgnoreCase(url, "youtu.be/") != null;
+        return std.ascii.findIgnoreCase(url, "youtube.com/") != null or
+            std.ascii.findIgnoreCase(url, "youtu.be/") != null;
     }
 
     /// What the quality picker and the remote API may offer. Resolved streams
@@ -1893,7 +1894,7 @@ pub const MediaPlayer = struct {
         // nor inherits "restore last session paused" semantics.
         if (self.provider_resume_position) |position| {
             var command: [80]u8 = undefined;
-            const seek = std.fmt.bufPrintZ(&command, "seek {d:.3} absolute", .{position}) catch return;
+            const seek = @import("../core/fmt_compat.zig").bufPrintZ(&command, "seek {d:.3} absolute", .{position}) catch return;
             // FILE_LOADED can precede seek readiness. Preserve the provider
             // intent after rejection so the duration-ready tick can retry.
             if (c.mpv.mpv_command_string(self.mpv_ctx, seek.ptr) >= 0) {
@@ -1928,7 +1929,7 @@ pub const MediaPlayer = struct {
             _ = c.mpv.mpv_set_property(self.mpv_ctx, "pause", c.mpv.MPV_FORMAT_FLAG, &paused);
             _ = c.mpv.mpv_set_property(self.mpv_ctx, "speed", c.mpv.MPV_FORMAT_DOUBLE, &speed);
             var command: [80]u8 = undefined;
-            const seek = std.fmt.bufPrintZ(&command, "seek {d:.3} absolute", .{position}) catch return;
+            const seek = @import("../core/fmt_compat.zig").bufPrintZ(&command, "seek {d:.3} absolute", .{position}) catch return;
             _ = c.mpv.mpv_command_string(self.mpv_ctx, seek.ptr);
             return;
         }
@@ -1958,7 +1959,7 @@ pub const MediaPlayer = struct {
         _ = c.mpv.mpv_get_property(self.mpv_ctx, "duration", c.mpv.MPV_FORMAT_DOUBLE, &dur);
         if (@import("watch_history_pure.zig").resumeEligible(saved_pos, dur)) {
             var seek_buf: [64]u8 = undefined;
-            const seek_cmd = std.fmt.bufPrintZ(&seek_buf, "seek {d:.1} absolute", .{saved_pos}) catch return;
+            const seek_cmd = @import("../core/fmt_compat.zig").bufPrintZ(&seek_buf, "seek {d:.1} absolute", .{saved_pos}) catch return;
             _ = c.mpv.mpv_command_string(self.mpv_ctx, seek_cmd.ptr);
             var ts_buf: [16]u8 = undefined;
             const ts = @import("../services/youtube_pure.zig").formatDuration(@intFromFloat(saved_pos), &ts_buf);
@@ -2148,7 +2149,7 @@ pub const MediaPlayer = struct {
     pub fn cycleRotation(self: *MediaPlayer) void {
         self.rotation = @mod(self.rotation + 90, 360);
         var cmd_buf: [64]u8 = undefined;
-        if (std.fmt.bufPrintZ(&cmd_buf, "set video-rotate {d}", .{self.rotation})) |cmd| {
+        if (@import("../core/fmt_compat.zig").bufPrintZ(&cmd_buf, "set video-rotate {d}", .{self.rotation})) |cmd| {
             _ = c.mpv.mpv_command_string(self.mpv_ctx, cmd.ptr);
         } else |_| {}
     }
@@ -2253,18 +2254,18 @@ pub const MediaPlayer = struct {
         @memcpy(ectx.src[0..self.current_url_len], self.current_url[0..self.current_url_len]);
         ectx.src_len = self.current_url_len;
 
-        const ss = std.fmt.bufPrintZ(&ectx.ss_buf, "{d:.2}", .{self.loop_a}) catch {
+        const ss = @import("../core/fmt_compat.zig").bufPrintZ(&ectx.ss_buf, "{d:.2}", .{self.loop_a}) catch {
             ctx_alloc.destroy(ectx);
             return;
         };
         ectx.ss_len = ss.len;
-        const to = std.fmt.bufPrintZ(&ectx.to_buf, "{d:.2}", .{self.loop_b}) catch {
+        const to = @import("../core/fmt_compat.zig").bufPrintZ(&ectx.to_buf, "{d:.2}", .{self.loop_b}) catch {
             ctx_alloc.destroy(ectx);
             return;
         };
         ectx.to_len = to.len;
 
-        const out_path = std.fmt.bufPrintZ(&ectx.out, "{s}/clip_{d:0>2}m{d:0>2}s-{d:0>2}m{d:0>2}s.mp4", .{
+        const out_path = @import("../core/fmt_compat.zig").bufPrintZ(&ectx.out, "{s}/clip_{d:0>2}m{d:0>2}s-{d:0>2}m{d:0>2}s.mp4", .{
             dl_dir, a_sec / 60, a_sec % 60, b_sec / 60, b_sec % 60,
         }) catch {
             ctx_alloc.destroy(ectx);
@@ -2516,7 +2517,7 @@ pub fn applyPicturePreset(p: anytype) void {
     };
     var buf: [16]u8 = undefined;
     for (props) |pr| {
-        const s = std.fmt.bufPrintZ(&buf, "{d}", .{av_pure.clampVideoFilter(pr.val)}) catch continue;
+        const s = @import("../core/fmt_compat.zig").bufPrintZ(&buf, "{d}", .{av_pure.clampVideoFilter(pr.val)}) catch continue;
         _ = c.mpv.mpv_set_property_string(p.mpv_ctx, pr.prop, s.ptr);
     }
 }
@@ -2587,8 +2588,8 @@ fn applyEnvMpvOpts(ctx: *c.mpv.mpv_handle) void {
         const eq = std.mem.indexOfScalar(u8, kv, '=') orelse continue;
         var kbuf: [128]u8 = undefined;
         var vbuf: [1024]u8 = undefined;
-        const k = std.fmt.bufPrintZ(&kbuf, "{s}", .{kv[0..eq]}) catch continue;
-        const v = std.fmt.bufPrintZ(&vbuf, "{s}", .{kv[eq + 1 ..]}) catch continue;
+        const k = @import("../core/fmt_compat.zig").bufPrintZ(&kbuf, "{s}", .{kv[0..eq]}) catch continue;
+        const v = @import("../core/fmt_compat.zig").bufPrintZ(&vbuf, "{s}", .{kv[eq + 1 ..]}) catch continue;
         const rc = c.mpv.mpv_set_option_string(ctx, k.ptr, v.ptr);
         std.debug.print("[mpv-opts] {s}={s} -> {d}\n", .{ k, v, rc });
     }
@@ -2935,7 +2936,7 @@ pub fn updateTorrentBackgroundTasks() void {
                     var ti: i64 = 0;
                     while (ti < tc) : (ti += 1) {
                         var q: [48]u8 = undefined;
-                        const qz = std.fmt.bufPrintZ(&q, "track-list/{d}/type", .{ti}) catch continue;
+                        const qz = @import("../core/fmt_compat.zig").bufPrintZ(&q, "track-list/{d}/type", .{ti}) catch continue;
                         const ts = c.mpv.mpv_get_property_string(p.mpv_ctx, qz.ptr);
                         if (ts != null) {
                             const ttype = std.mem.span(ts);
@@ -3534,13 +3535,13 @@ pub fn updateTorrentBackgroundTasks() void {
                     if (p.resume_position_secs > 0.0) {
                         // mpv "start" takes plain seconds — exact-second resume.
                         var start_opt: [32]u8 = undefined;
-                        if (std.fmt.bufPrintZ(&start_opt, "{d:.2}", .{p.resume_position_secs})) |so| {
+                        if (@import("../core/fmt_compat.zig").bufPrintZ(&start_opt, "{d:.2}", .{p.resume_position_secs})) |so| {
                             _ = c.mpv.mpv_set_option_string(p.mpv_ctx, "start", so.ptr);
                         } else |_| {}
                         p.resume_position_secs = 0.0;
                     } else if (p.resume_percent > 0.0) {
                         var start_opt: [32]u8 = undefined;
-                        if (std.fmt.bufPrintZ(&start_opt, "{d:.2}%", .{p.resume_percent})) |so| {
+                        if (@import("../core/fmt_compat.zig").bufPrintZ(&start_opt, "{d:.2}%", .{p.resume_percent})) |so| {
                             _ = c.mpv.mpv_set_option_string(p.mpv_ctx, "start", so.ptr);
                         } else |_| {}
                         p.resume_percent = 0.0;
@@ -3714,7 +3715,7 @@ fn applyVisualizer(p: *MediaPlayer) void {
     if (graph.len == 0) return; // .off, or it did not fit — leave mpv alone
 
     var z: [1025]u8 = undefined;
-    const gz = std.fmt.bufPrintZ(&z, "{s}", .{graph}) catch return;
+    const gz = @import("../core/fmt_compat.zig").bufPrintZ(&z, "{s}", .{graph}) catch return;
 
     p.vis_applied = true;
     _ = c.mpv.mpv_set_property_string(p.mpv_ctx, "lavfi-complex", gz.ptr);

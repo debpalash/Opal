@@ -177,7 +177,7 @@ test "attemptIndex rotates to the last-good host and still covers every host" {
 
     // Mirror #2 answered last time → it goes first, and the other two still get
     // a turn (a rotation, not a swap — no host is skipped or repeated).
-    var seen = [_]bool{false} ** 3;
+    var seen = @as([3]bool, @splat(false));
     for (0..3) |a| seen[attemptIndex(3, 2, a)] = true;
     try expect(seen[0] and seen[1] and seen[2]);
     try expectEqual(@as(usize, 2), attemptIndex(3, 2, 0));

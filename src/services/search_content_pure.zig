@@ -268,7 +268,7 @@ pub fn projectInto(rows: anytype, indices: []const usize, out: *Projection) void
 /// Shelves follow their best visible match, rather than always showing movies
 /// before shows. Callers pass their current relevance/filter ordering.
 pub fn categoryOrder(projection: *const Projection, visible: []const usize, out: []Category) usize {
-    var seen: [@typeInfo(Category).@"enum".fields.len]bool = @splat(false);
+    var seen: [@typeInfo(Category).@"enum".field_names.len]bool = @splat(false);
     var count: usize = 0;
     for (visible) |index| {
         if (index >= projection.count) continue;
@@ -293,7 +293,7 @@ pub fn categoryOrder(projection: *const Projection, visible: []const usize, out:
 /// swarm score. Within a category relevance still selects its strongest rows.
 pub fn evictionIndex(rows: anytype, candidate: anytype) ?usize {
     if (rows.len == 0) return null;
-    var counts: [@typeInfo(Category).@"enum".fields.len]usize = @splat(0);
+    var counts: [@typeInfo(Category).@"enum".field_names.len]usize = @splat(0);
     for (rows) |row| counts[@intFromEnum(category(row))] += 1;
     const cat = category(candidate);
     const under = counts[@intFromEnum(cat)] < 8;
@@ -371,7 +371,7 @@ test "late catalogs reclaim torrent saturation without unbounding results" {
 test "cache identity separates masks configurations and long queries without plaintext" {
     var a: [80]u8 = undefined;
     var b: [80]u8 = undefined;
-    const long_query = [_]u8{'q'} ** 255;
+    const long_query = @as([255]u8, @splat('q'));
     const first = cacheIdentity(&a, &long_query, 65535, 1).?;
     try std.testing.expect(first.len < 80);
     try std.testing.expect(!std.mem.eql(u8, first, cacheIdentity(&b, &long_query, 1, 1).?));
