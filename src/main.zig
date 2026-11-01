@@ -97,6 +97,10 @@ var hud_samples: [HUD_WINDOW]f32 = std.mem.zeroes([HUD_WINDOW]f32);
 var hud_cursor: usize = 0;
 var hud_last_ms: i64 = 0;
 
+/// OPAL_UI_DEBUG is read once, on the first frame (Window.begin is required
+/// before dvui.toggleDebugWindow is legal).
+var ui_debug_requested = false;
+
 // Window reference for SDL position/size persistence
 var dvui_win: ?*dvui.Window = null;
 
@@ -1182,10 +1186,22 @@ fn appFrame() !dvui.App.Result {
         const signal_tick = dvui.Id.extendId(null, @src(), 0);
         if (dvui.timerDoneOrNone(signal_tick)) dvui.timer(signal_tick, interval);
     }
+    // dvui's widget inspector — the UI debugger. OPAL_UI_DEBUG=1 opens it on
+    // the first frame (scripts/ui-debug.sh sets it); Ctrl/Cmd+Shift+D toggles it
+    // at runtime in Debug builds (ui/input.zig). It shows the widget tree with
+    // ids and rects, a per-widget options editor, frame times, and refresh /
+    // event logging, which is the fastest way to find why a widget ignored a
+    // click or rendered at the wrong size.
+    const debug_state = &dvui.currentWindow().debug;
+    if (!ui_debug_requested) {
+        ui_debug_requested = true;
+        if (@import("core/io_global.zig").getenv("OPAL_UI_DEBUG") != null) dvui.toggleDebugWindow();
+    }
     // Suppress dvui's debug widget outline (red 1px rect) — shows when
     // debug.widget_id matches a rendered widget. Can get stuck if user
-    // accidentally toggles dvui debug panel.
-    dvui.currentWindow().debug.widget_id = .zero;
+    // accidentally toggles dvui debug panel. The inspector needs that selection
+    // though, so only suppress it while the inspector is closed.
+    if (!debug_state.open) debug_state.widget_id = .zero;
 
     // Closing outranks every service tick, database write, and media action.
     // This used to run near the end of the frame, so one busy subsystem could

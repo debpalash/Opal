@@ -12,6 +12,18 @@ default:
 run:
     ./dev.sh
 
+# Debug build only (incremental; no bundle, no launch)
+debug:
+    {{zig}} build
+
+# Debug build + launch with the UI debugger (dvui widget inspector) open
+ui-debug:
+    ./scripts/ui-debug.sh
+
+# Stop the app + every sidecar a dev run leaves behind (session still saves)
+stop:
+    ./scripts/stop-dev.sh
+
 # Native zig 0.16 HMR — millisecond rebuilds on .zig edits.
 # Bails on C/build.zig changes; use `just run` for those.
 hot:
@@ -25,6 +37,9 @@ release:
 test:
     {{zig}} build test
 
+# Build + unit tests in one shot (what the pre-commit hook gates on)
+check: debug test
+
 # Comprehensive feature suite (DB, config, voice, ASR, theming + unit tests).
 # The standard gate — run to confirm every feature still works. Writes a
 # report to tests/results.json (viewable in tests/dashboard.html).
@@ -35,9 +50,17 @@ test-all:
 fmt:
     {{zig}} fmt src/ build.zig
 
-# Nuke all caches — slow recovery, use after upstream zig update
+# Remove local build outputs (.zig-cache, zig-out) — deps stay cached
 clean:
-    rm -rf .zig-cache zig-out zig-pkg $HOME/.cache/zig/o
+    ./scripts/clean.sh
+
+# Also drop the packaged bundles in dist/
+clean-bundles:
+    ./scripts/clean.sh --bundle
+
+# Nuke zig-pkg + the global Zig object cache too (slow; after a zig upgrade)
+clean-all:
+    ./scripts/clean.sh --all
 
 # Build with verbose error traces (debug spurious compile errors)
 debug-build:
@@ -63,6 +86,10 @@ app:
 # Build .app + open it
 app-run: app
     open dist/Opal.app
+
+# Build the ReleaseFast bundle, install to /Applications, launch (flags: --skip-build --no-launch --dest DIR)
+install *ARGS:
+    ./scripts/install-app.sh {{ARGS}}
 
 # Build OpalMenubar.app standalone (Swift helper, LSUIElement).
 menubar:

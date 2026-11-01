@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const dvui = @import("dvui");
 const state = @import("../core/state.zig");
 const ui = @import("ui.zig");
@@ -106,6 +107,17 @@ pub fn processGlobalInputs() void {
                     state.app.media_info_open = !state.app.media_info_open;
                     dvui.refresh(null, @src(), null);
                     continue;
+                }
+                // Debug builds: Ctrl/Cmd+Shift+D toggles dvui's widget
+                // inspector — the UI debugger (widget tree, options editor,
+                // frame times, refresh/event logs). Never bound in release
+                // builds, so a viewer cannot trip over the debug outline.
+                if (comptime builtin.mode == .Debug) {
+                    if (key == .d and mod.shift()) {
+                        dvui.toggleDebugWindow();
+                        dvui.refresh(null, @src(), null);
+                        continue;
+                    }
                 }
             }
 
