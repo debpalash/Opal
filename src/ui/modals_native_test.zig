@@ -86,3 +86,13 @@ test "Native global modals offline SDL pixel capture" {
         }
     }
 }
+
+test "Native global modals offline SDL pixel capture: navigation keyboard interactions" {
+    const logs = @import("../core/logs.zig");
+    logs.logs_allocator = alloc;
+    defer logs.deinit();
+    workers.init();
+    workers.beginShutdownAndDrain(0);
+    defer workers.finishShutdown();
+    try @import("navigation_native_test.zig").run();
+}

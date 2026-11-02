@@ -657,7 +657,9 @@
       "name": "AnimeHub (experimental)",
       "type": "anime",
       "version": "1.0.0",
-      "endpoints": { "base": "https://123animehub.cc" }
+      "endpoints": {
+        "base": "https://123animehub.cc"
+      }
     },
     {
       "id": "allanime",
@@ -1100,6 +1102,73 @@
       },
       "file": "plugins/smbc.json",
       "note": "Publisher recent RSS title search; full main panel reader, including older saved work URLs. RSS does not cover the complete archive; bonus panels remain on the publisher site."
+    },
+    {
+      "id": "mikan",
+      "name": "Mikan (anime releases)",
+      "type": "torrent",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://mikanani.me"
+      },
+      "file": "plugins/mikan.json",
+      "note": "Public RSS search; actual torrent downloads and byte sizes. Chinese and multilingual anime releases."
+    },
+    {
+      "id": "poorlydrawnlines",
+      "name": "Poorly Drawn Lines",
+      "type": "comics",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://poorlydrawnlines.com"
+      },
+      "file": "plugins/poorlydrawnlines.json",
+      "note": "Official publisher search and full comic panels by Reza Farazmand."
+    },
+    {
+      "id": "readnovelfull",
+      "name": "ReadNovelFull",
+      "type": "novels",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://readnovelfull.com"
+      },
+      "file": "plugins/readnovelfull.json",
+      "note": "Novel search, numbered chapter directories and full chapter text in the native reader."
+    },
+    {
+      "id": "latestcomics",
+      "name": "LatestComics",
+      "type": "comics",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://www.latestcomics.com"
+      },
+      "file": "plugins/latestcomics.json",
+      "note": "Western comic search, paginated issue directories and complete page manifests."
+    },
+    {
+      "id": "ysk",
+      "name": "YSK Comics",
+      "type": "comics",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://www.ysk-comics.com",
+        "api": "https://api.ysk-comics.com/api/v1"
+      },
+      "file": "plugins/ysk.json",
+      "note": "Western comic catalog and issue reader. Available issues vary by series."
+    },
+    {
+      "id": "xoxo",
+      "name": "XOXO Comics (experimental)",
+      "type": "comics",
+      "version": "1.0.0",
+      "endpoints": {
+        "base": "https://xoxocomic.com"
+      },
+      "file": "plugins/xoxo.json",
+      "note": "Experimental: western catalog and complete issue manifests. Image URLs currently return HTML for tested issues; use LatestComics or YSK for reading."
     }
   ]
 }

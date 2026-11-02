@@ -10,6 +10,7 @@ test "Anime playback module" {
     _ = @import("services/anime.zig");
 }
 test "Browse regression modules" {
+    _ = @import("services/added_sources_native_test.zig");
     _ = @import("services/wallpapers.zig");
     _ = @import("services/youtube.zig");
     _ = @import("services/comics.zig");
@@ -195,7 +196,11 @@ pub const dvui_app: dvui.App = .{
     .config = .{ .startFn = &platformStartOptions },
     .initFn = appInit,
     .frameFn = appFrame,
-    .deinitFn = struct { fn deinit(_: *dvui.Window) void { appDeinit(); } }.deinit,
+    .deinitFn = struct {
+        fn deinit(_: *dvui.Window) void {
+            appDeinit();
+        }
+    }.deinit,
 };
 
 // Entry point is selected at COMPILE time. dvui's App interface comptime-

@@ -1,12 +1,23 @@
 //! Provider-independent wallpaper identity, bounded metadata and API adapters.
 const std = @import("std");
-pub const Source = enum { all, wallhaven, pexels, unsplash, gallery };
+pub const Source = enum { all, wallhaven, pexels, unsplash, gallery, mixkit, commons, saved };
+pub const MediaFilter = enum { all, images, videos };
+pub fn accepts(filter: MediaFilter, media: Media) bool {
+    return switch (filter) {
+        .all => true,
+        .images => media == .image,
+        .videos => media != .image,
+    };
+}
 pub fn Field(comptime size: usize) type {
     return struct {
         bytes: [size]u8 = @splat(0),
         len: usize = 0,
         pub fn set(self: *@This(), value: []const u8) void {
             self.len = @min(value.len, size);
+            if (self.len < value.len) while (self.len > 0 and value[self.len] & 0xc0 == 0x80) {
+                self.len -= 1;
+            };
             @memcpy(self.bytes[0..self.len], value[0..self.len]);
         }
         pub fn text(self: *const @This()) []const u8 {
@@ -37,6 +48,7 @@ pub const Row = struct {
     author: Field(128) = .{},
     preview: Field(1024) = .{},
     original: Field(2048) = .{},
+    motion_preview: Field(2048) = .{},
     page: Field(1024) = .{},
     download_event: Field(512) = .{},
     width: u32 = 0,
@@ -62,6 +74,9 @@ pub fn publicUrl(value: []const u8) bool {
     return @import("source_request_pure.zig").publicUrl(value);
 }
 pub fn parse(allocator: std.mem.Allocator, source: Source, json: []const u8, out: []Row) !usize {
+    if (source == .mixkit) return parseMixkit(allocator, json, out);
+    if (source == .commons) return parseCommons(allocator, json, out);
+    if (source == .saved) return parseSaved(allocator, json, out);
     const doc = try std.json.parseFromSlice(std.json.Value, allocator, json, .{ .allocate = .alloc_always });
     defer doc.deinit();
     const list = switch (source) {
@@ -69,7 +84,7 @@ pub fn parse(allocator: std.mem.Allocator, source: Source, json: []const u8, out
         .pexels => get(doc.value, "photos"),
         .unsplash => if (doc.value == .array) doc.value else get(doc.value, "results"),
         .gallery => doc.value,
-        .all => return error.InvalidProvider,
+        .all, .mixkit, .commons, .saved => return error.InvalidProvider,
     };
     if (list != .array) return error.InvalidResponse;
     var count: usize = 0;
@@ -178,6 +193,186 @@ pub fn expand(template: []const u8, query: []const u8, out: []u8) ?[]const u8 {
     const text = @import("audio_sources_pure.zig").encode(&encoded, query) orelse return null;
     const url = std.fmt.bufPrint(out, "{s}{s}{s}", .{ template[0..at], text, template[at + 7 ..] }) catch return null;
     return if (publicUrl(url)) url else null;
+}
+
+pub fn videoSearchUrl(source: Source, query: []const u8, page: u32, out: []u8) ?[]const u8 {
+    var encoded: [3072]u8 = undefined;
+    if (source == .mixkit) {
+        var slug: [1024]u8 = undefined;
+        const text = if (query.len == 0) "nature" else query;
+        if (text.len > slug.len) return null;
+        for (text, 0..) |ch, i| slug[i] = if (ch == ' ') '-' else std.ascii.toLower(ch);
+        const q = @import("audio_sources_pure.zig").encode(&encoded, slug[0..text.len]) orelse return null;
+        return std.fmt.bufPrint(out, "https://mixkit.co/free-stock-video/discover/{s}/?page={d}", .{ q, page }) catch null;
+    }
+    if (source == .commons) {
+        var search: [1200]u8 = undefined;
+        const text = std.fmt.bufPrint(&search, "filetype:video {s}", .{if (query.len == 0) "landscape" else query}) catch return null;
+        const q = @import("audio_sources_pure.zig").encode(&encoded, text) orelse return null;
+        return std.fmt.bufPrint(out, "https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch={s}&gsrnamespace=6&gsrlimit=24&gsroffset={d}&prop=imageinfo&iiprop=url%7Csize%7Cmime%7Cextmetadata&iiurlwidth=640&format=json", .{ q, (page -| 1) * 24 }) catch null;
+    }
+    return null;
+}
+fn mediaHost(url: []const u8, host: []const u8) bool {
+    if (!mediaUrl(url)) return false;
+    const uri = std.Uri.parse(url) catch return false;
+    return std.ascii.eqlIgnoreCase(uri.host.?.percent_encoded, host);
+}
+fn parseMixkit(allocator: std.mem.Allocator, body: []const u8, out: []Row) !usize {
+    const html = @import("content_html_pure.zig");
+    var pos: usize = 0;
+    var count: usize = 0;
+    while (std.mem.indexOfPos(u8, body, pos, "<script")) |at| {
+        const end = std.mem.indexOfScalarPos(u8, body, at, '>') orelse break;
+        const close = std.mem.indexOfPos(u8, body, end + 1, "</script>") orelse break;
+        pos = close + 9;
+        if (!std.mem.eql(u8, html.attr(body[at .. end + 1], "type") orelse "", "application/ld+json")) continue;
+        const doc = std.json.parseFromSlice(std.json.Value, allocator, body[end + 1 .. close], .{}) catch continue;
+        defer doc.deinit();
+        const graph = get(doc.value, "@graph");
+        if (graph != .array) continue;
+        for (graph.array.items) |entry| {
+            if (count == out.len) return count;
+            if (!std.mem.eql(u8, str(get(entry, "@type")), "VideoObject")) continue;
+            const free = get(entry, "isAccessibleForFree");
+            if (free != .bool or !free.bool) continue;
+            const original = str(get(entry, "contentUrl"));
+            const thumb = str(get(entry, "thumbnailUrl"));
+            const detail = str(get(entry, "@id"));
+            if (original.len > 2048 or thumb.len > 1024 or detail.len > 1024) continue;
+            if (!mediaHost(original, "assets.mixkit.co") or !mediaHost(thumb, "assets.mixkit.co") or !std.mem.startsWith(u8, detail, "https://mixkit.co/free-stock-video/")) continue;
+            const ext = urlExtension(original) orelse continue;
+            if (mediaKind(ext) != .video) continue;
+            var row: Row = .{ .source = .mixkit, .media = .video };
+            row.original.set(original);
+            row.preview.set(thumb);
+            const preview_url = str(get(entry, "embedUrl"));
+            if (mediaHost(preview_url, "assets.mixkit.co") and mediaKind(urlExtension(preview_url) orelse "") == .video) row.motion_preview.set(preview_url);
+            row.page.set(detail[0 .. std.mem.indexOfScalar(u8, detail, '#') orelse detail.len]);
+            row.title.set(str(get(entry, "name")));
+            row.author.set("Mixkit · Free video license");
+            row.extension.set(ext);
+            row.width = num(get(entry, "width"));
+            row.height = num(get(entry, "height"));
+            out[count] = row;
+            count += 1;
+        }
+    }
+    return count;
+}
+fn parseCommons(allocator: std.mem.Allocator, body: []const u8, out: []Row) !usize {
+    const doc = try std.json.parseFromSlice(std.json.Value, allocator, body, .{});
+    defer doc.deinit();
+    const pages = get(get(doc.value, "query"), "pages");
+    if (pages != .object) return if (get(doc.value, "query") == .null) error.InvalidResponse else 0;
+    var it = pages.object.iterator();
+    var count: usize = 0;
+    while (it.next()) |entry| {
+        if (count == out.len) break;
+        const page = entry.value_ptr.*;
+        const infos = get(page, "imageinfo");
+        if (infos != .array or infos.array.items.len == 0) continue;
+        const info = infos.array.items[0];
+        if (!std.mem.startsWith(u8, str(get(info, "mime")), "video/")) continue;
+        const original = str(get(info, "url"));
+        const thumb = str(get(info, "thumburl"));
+        if (original.len > 2048 or thumb.len > 1024) continue;
+        if (!mediaHost(original, "upload.wikimedia.org") or (!mediaHost(thumb, "upload.wikimedia.org") and !mediaHost(thumb, "thumb.wikimedia.org"))) continue;
+        const ext = urlExtension(original) orelse continue;
+        if (mediaKind(ext) != .video) continue;
+        var row: Row = .{ .source = .commons, .media = .video };
+        row.original.set(original);
+        row.preview.set(thumb);
+        row.page.set(str(get(info, "descriptionurl")));
+        if (!mediaHost(row.page.text(), "commons.wikimedia.org")) continue;
+        const title = str(get(page, "title"));
+        row.title.set(if (std.mem.startsWith(u8, title, "File:")) title[5..] else title);
+        const meta = get(info, "extmetadata");
+        var author: [128]u8 = undefined;
+        const name_len = @import("novels_pure.zig").htmlToText(str(get(get(meta, "Artist"), "value")), &author);
+        row.author.set(if (name_len > 0) author[0..name_len] else "Wikimedia Commons");
+        row.extension.set(ext);
+        row.width = num(get(info, "width"));
+        row.height = num(get(info, "height"));
+        out[count] = row;
+        count += 1;
+    }
+    return count;
+}
+
+pub const SavedRow = struct {
+    source: Source,
+    media: Media,
+    title: []const u8,
+    author: []const u8,
+    preview: []const u8,
+    original: []const u8,
+    motion_preview: []const u8,
+    page: []const u8,
+    extension: []const u8,
+    width: u32,
+    height: u32,
+    pub fn from(row: *const Row) SavedRow {
+        return .{ .source = row.source, .media = row.media, .title = row.title.text(), .author = row.author.text(), .preview = row.preview.text(), .original = row.original.text(), .motion_preview = row.motion_preview.text(), .page = row.page.text(), .extension = row.extension.text(), .width = row.width, .height = row.height };
+    }
+};
+fn parseSaved(allocator: std.mem.Allocator, body: []const u8, out: []Row) !usize {
+    const doc = try std.json.parseFromSlice([]SavedRow, allocator, body, .{ .ignore_unknown_fields = true });
+    defer doc.deinit();
+    var count: usize = 0;
+    for (doc.value) |saved| {
+        if (count == out.len) break;
+        if ((!mediaUrl(saved.original) and !std.fs.path.isAbsolute(saved.original)) or saved.original.len > 2048) continue;
+        const ext = mediaExtension(saved.extension) orelse continue;
+        if (mediaKind(ext) != saved.media) continue;
+        var row: Row = .{ .source = saved.source, .media = saved.media, .width = saved.width, .height = saved.height };
+        row.title.set(saved.title);
+        row.author.set(saved.author);
+        row.preview.set(saved.preview);
+        row.original.set(saved.original);
+        row.motion_preview.set(saved.motion_preview);
+        row.page.set(saved.page);
+        row.extension.set(ext);
+        out[count] = row;
+        count += 1;
+    }
+    return count;
+}
+
+test "video wallpaper providers preserve advertised originals and fast previews without running page scripts" {
+    const html = "<script type='application/ld+json'>{\"@graph\":[{\"@type\":\"VideoObject\",\"isAccessibleForFree\":true,\"contentUrl\":\"https://assets.mixkit.co/videos/1/1-1080.mp4\",\"embedUrl\":\"https://assets.mixkit.co/videos/1/1-360.mp4\",\"thumbnailUrl\":\"https://assets.mixkit.co/videos/1/1.jpg\",\"@id\":\"https://mixkit.co/free-stock-video/forest-1/#video\",\"name\":\"Forest\"}]}</script>";
+    var out: [2]Row = undefined;
+    try std.testing.expectEqual(@as(usize, 1), try parse(std.testing.allocator, .mixkit, html, &out));
+    try std.testing.expectEqual(Media.video, out[0].media);
+    try std.testing.expectEqualStrings("https://assets.mixkit.co/videos/1/1-1080.mp4", out[0].original.text());
+    try std.testing.expectEqualStrings("https://assets.mixkit.co/videos/1/1-360.mp4", out[0].motion_preview.text());
+    try std.testing.expectEqualStrings("https://mixkit.co/free-stock-video/forest-1/", out[0].page.text());
+    try std.testing.expect(!accepts(.images, out[0].media));
+    try std.testing.expect(accepts(.videos, out[0].media));
+    const saved = try std.json.Stringify.valueAlloc(std.testing.allocator, &[_]SavedRow{SavedRow.from(&out[0])}, .{});
+    defer std.testing.allocator.free(saved);
+    try std.testing.expectEqual(@as(usize, 1), try parse(std.testing.allocator, .saved, saved, out[1..]));
+    try std.testing.expectEqualStrings(out[0].original.text(), out[1].original.text());
+    try std.testing.expectEqualStrings(out[0].motion_preview.text(), out[1].motion_preview.text());
+}
+test "video provider query encoding and Commons full video metadata" {
+    var address: [4096]u8 = undefined;
+    try std.testing.expectEqualStrings("https://mixkit.co/free-stock-video/discover/rain-forest/?page=2", videoSearchUrl(.mixkit, "Rain Forest", 2, &address).?);
+    const url = videoSearchUrl(.commons, "sea & sky", 2, &address).?;
+    try std.testing.expect(std.mem.indexOf(u8, url, "sea%20%26%20sky") != null);
+    try std.testing.expect(std.mem.indexOf(u8, url, "gsroffset=24") != null);
+    const json = "{\"query\":{\"pages\":{\"1\":{\"title\":\"File:Ocean.webm\",\"imageinfo\":[{\"url\":\"https://upload.wikimedia.org/a/ocean.webm\",\"thumburl\":\"https://thumb.wikimedia.org/a/thumb.jpg\",\"descriptionurl\":\"https://commons.wikimedia.org/wiki/File:Ocean.webm\",\"mime\":\"video/webm\",\"width\":1920,\"height\":1080}]}}}}";
+    var out: [1]Row = undefined;
+    try std.testing.expectEqual(@as(usize, 1), try parse(std.testing.allocator, .commons, json, &out));
+    try std.testing.expectEqualStrings("Ocean.webm", out[0].title.text());
+    try std.testing.expectEqual(@as(u32, 1920), out[0].width);
+}
+test "wallpaper metadata truncation preserves UTF-8 characters" {
+    var field: Field(4) = .{};
+    field.set("abc日");
+    try std.testing.expectEqualStrings("abc", field.text());
+    field.set("日ab");
+    try std.testing.expectEqualStrings("日a", field.text());
 }
 test "wallpapers reject malformed metadata and preserve real source URLs" {
     var rows: [4]Row = undefined;

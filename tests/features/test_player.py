@@ -508,7 +508,7 @@ def test_loadfile_runtime_version_shape():
             and "loadfileHasIndexArg(runtime_api)" in pl,
         "index only when supported": "if (with_index) intNode(-1) else options_node" in pl
             and "if (with_index) arg_values.len else arg_values.len - 1" in pl,
-        "reject is not ignored": "const rc = c.mpv.mpv_command_node(self.ctx, &command_node, null);" in pl
+        "reject is not ignored": "c.mpv.mpv_command_node(self.ctx, &command_node, null)" in pl
             and "_ = c.mpv.mpv_command_node(self.ctx, &command_node, null);" not in pl,
         "reject reaches log + toast": "loadfile rejected by libmpv" in pl
             and 'logs.pushLog("error", "player", msg, true);' in pl

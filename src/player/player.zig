@@ -22,6 +22,7 @@ const MAX_LOAD_URL = 8192;
 const MpvPlaybackSink = struct {
     ctx: *c.mpv.mpv_handle,
     last_result: c_int = 0,
+    async_load: bool = false,
 
     fn stringNode(value: [*:0]const u8) c.mpv.mpv_node {
         return .{
@@ -128,7 +129,7 @@ const MpvPlaybackSink = struct {
             .u = .{ .list = &arg_list },
             .format = c.mpv.MPV_FORMAT_NODE_ARRAY,
         };
-        const rc = c.mpv.mpv_command_node(self.ctx, &command_node, null);
+        const rc = if (self.async_load) c.mpv.mpv_command_node_async(self.ctx, 0, &command_node) else c.mpv.mpv_command_node(self.ctx, &command_node, null);
         self.last_result = rc;
         if (rc < 0) {
             // A rejected load used to be silent: mpv wrote one line to stdout
@@ -161,7 +162,9 @@ const MpvPlaybackSink = struct {
 /// effects, and cannot target a context registered as a main player.
 pub fn loadDetached(ctx: *c.mpv.mpv_handle, request: LoadRequest) bool {
     for (state.app.players.items) |registered| if (registered.mpv_ctx == ctx) return false;
-    var sink: MpvPlaybackSink = .{ .ctx = ctx };
+    // Preview stop and replacement loads share mpv's asynchronous FIFO. A
+    // synchronous load could overtake a queued stop and immediately be stopped.
+    var sink: MpvPlaybackSink = .{ .ctx = ctx, .async_load = true };
     if (!playback_load.dispatch(&sink, request)) return false;
     return sink.last_result >= 0;
 }

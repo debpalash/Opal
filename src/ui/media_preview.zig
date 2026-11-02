@@ -4,6 +4,14 @@ const dvui = @import("dvui");
 const c = @import("../core/c.zig").mpv;
 const sdl = @import("../core/c.zig").sdl;
 const alloc = @import("../core/alloc.zig").allocator;
+const workers = @import("../core/workers.zig");
+fn destroyHandle(handle: *c.mpv_handle) void {
+    c.mpv_terminate_destroy(handle);
+}
+var initializations: usize = 0;
+pub fn initializationCountForTest() usize {
+    return initializations;
+}
 pub const Player = struct {
     handle: ?*c.mpv_handle = null,
     renderer: ?*c.mpv_render_context = null,
@@ -15,8 +23,15 @@ pub const Player = struct {
     const width: u32 = 1280;
     const height: u32 = 720;
     pub fn start(self: *Player, url: []const u8, referer: []const u8) bool {
-        self.deinit();
         if (comptime @import("build_options").headless) return false;
+        if (self.handle != null and self.renderer != null and self.pixels != null) {
+            self.stop();
+            var ref: [2049]u8 = undefined;
+            const value = @import("opal-fmt").bufPrintZ(&ref, "{s}", .{referer}) catch return false;
+            _ = c.mpv_set_property_string(self.handle.?, "options/referrer", value);
+            return @import("../player/player.zig").loadDetached(self.handle.?, .{ .url = url });
+        }
+        self.deinit();
         self.handle = c.mpv_create() orelse {
             self.failed = true;
             return false;
@@ -37,6 +52,7 @@ pub const Player = struct {
             self.failed = true;
             return false;
         }
+        if (@import("builtin").is_test) initializations += 1;
         var params = [_]c.mpv_render_param{
             .{ .type = c.MPV_RENDER_PARAM_API_TYPE, .data = @constCast(c.MPV_RENDER_API_TYPE_SW) },
             .{ .type = c.MPV_RENDER_PARAM_INVALID, .data = null },
@@ -55,6 +71,18 @@ pub const Player = struct {
         }
         return true;
     }
+    /// Reuse the decoder, render context and streaming texture while browsing.
+    pub fn stop(self: *Player) void {
+        if (self.handle) |handle| {
+            var args = [_][*c]const u8{ "stop", null };
+            _ = c.mpv_command_async(handle, 0, &args);
+            var unpaused: c_int = 0;
+            _ = c.mpv_set_property(handle, "pause", c.MPV_FORMAT_FLAG, &unpaused);
+        }
+        self.ready = false;
+        self.failed = false;
+        self.paused = false;
+    }
     pub fn togglePause(self: *Player) void {
         const handle = self.handle orelse return;
         var paused: c_int = if (self.paused) 0 else 1;
@@ -66,6 +94,10 @@ pub const Player = struct {
         for (0..16) |_| {
             const event = c.mpv_wait_event(handle, 0);
             if (event == null or event.*.event_id == c.MPV_EVENT_NONE) break;
+            if (event.*.event_id == c.MPV_EVENT_START_FILE) {
+                self.failed = false;
+                self.ready = false;
+            }
             if (event.*.event_id == c.MPV_EVENT_END_FILE) {
                 const end: *const c.mpv_event_end_file = @ptrCast(@alignCast(event.*.data));
                 if (end.reason == c.MPV_END_FILE_REASON_ERROR) self.failed = true;
@@ -97,7 +129,7 @@ pub const Player = struct {
                 if (self.texture) |tex| self.ready = sdl.SDL_UpdateTexture(@ptrCast(@alignCast(tex.ptr)), null, pixels.ptr, width * 4) == 0;
             }
         }
-        if (!self.paused and !self.failed) @import("components.zig").animatedRefresh(33_000);
+        if (!self.paused and !self.failed) @import("components.zig").animatedRefresh(16_667);
         if (self.ready) if (self.texture) |tex| {
             _ = dvui.image(@src(), .{ .source = .{ .texture = tex } }, .{ .gravity_x = 0.5, .gravity_y = 0.5, .min_size_content = .{ .w = w, .h = h }, .max_size_content = .{ .w = w, .h = h } });
             return true;
@@ -106,7 +138,9 @@ pub const Player = struct {
     }
     pub fn deinit(self: *Player) void {
         if (self.renderer) |ctx| c.mpv_render_context_free(ctx);
-        if (self.handle) |handle| c.mpv_terminate_destroy(handle);
+        // Network teardown can wait on provider I/O. The render context and
+        // texture stay on their owner thread; retire only the mpv core off it.
+        if (self.handle) |handle| workers.spawn(destroyHandle, .{handle}) catch destroyHandle(handle);
         if (self.pixels) |pixels| alloc.free(pixels);
         var none: ?[]u8 = null;
         @import("../core/poster.zig").deinitPoster(&none, &self.texture);

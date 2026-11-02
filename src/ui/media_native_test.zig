@@ -12,6 +12,40 @@ const clock = @import("../core/io_global.zig");
 var workspace: ?temp.Workspace = null;
 var audio_path: [1024]u8 = undefined;
 const theme = @import("theme.zig");
+var preview_test: @import("media_preview.zig").Player = .{};
+var preview_frame: usize = 0;
+var preview_initializations: usize = 0;
+fn previewSetup() !void {
+    preview_frame = 0;
+    preview_initializations = @import("media_preview.zig").initializationCountForTest();
+}
+fn previewDraw() !void {
+    if (preview_frame == 0 or preview_frame == 3) try std.testing.expect(preview_test.start("assets/media/browse.mp4", ""));
+    _ = preview_test.draw(480, 270);
+    if (preview_frame == 7) {
+        const deadline = clock.monotonicMilliTimestamp() + 2000;
+        while (!preview_test.ready and !preview_test.failed and clock.monotonicMilliTimestamp() < deadline) {
+            clock.sleep(10 * std.time.ns_per_ms);
+            _ = preview_test.draw(480, 270);
+        }
+        try std.testing.expectEqual(@as(usize, 1), @import("media_preview.zig").initializationCountForTest() - preview_initializations);
+        try std.testing.expect(preview_test.ready and !preview_test.failed);
+    }
+    clock.sleep(33 * std.time.ns_per_ms);
+    preview_frame += 1;
+}
+fn previewCleanup() void {
+    preview_test.deinit();
+}
+test "Native media offline SDL fixture: wallpaper preview reuses its decoder across clips" {
+    const workers = @import("../core/workers.zig");
+    workers.init();
+    defer {
+        workers.beginShutdownAndDrain(0);
+        workers.finishShutdown();
+    }
+    try capture.capture(640, 400, "wallpaper-preview-reuse", previewSetup, previewDraw, previewCleanup);
+}
 var fixture_player: ?*player.MediaPlayer = null;
 var draw_count: usize = 0;
 var mode: enum { dock, player, more, playlist, torrent } = .dock;
@@ -77,7 +111,12 @@ fn setup() !void {
     try std.testing.expect(position >= 0.4 and position <= 0.7);
     for (0..2) |_| try std.testing.expect(player.loadDetached(handle, .{ .url = path, .mode = .append, .media_title = "Offline queued audio" }));
     var count: i64 = 0;
-    try std.testing.expect(c.mpv_get_property(handle, "playlist-count", c.MPV_FORMAT_INT64, &count) >= 0);
+    const append_deadline = clock.milliTimestamp() + 1000;
+    while (clock.milliTimestamp() < append_deadline) {
+        try std.testing.expect(c.mpv_get_property(handle, "playlist-count", c.MPV_FORMAT_INT64, &count) >= 0);
+        if (count == 3) break;
+        _ = c.mpv_wait_event(handle, 0.01);
+    }
     try std.testing.expectEqual(@as(i64, 3), count);
     var playlist: c.mpv_node = undefined;
     try std.testing.expect(c.mpv_get_property(handle, "playlist", c.MPV_FORMAT_NODE, &playlist) >= 0);

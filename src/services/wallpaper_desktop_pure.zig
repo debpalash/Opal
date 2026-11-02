@@ -35,8 +35,19 @@ pub fn fileUri(path: []const u8, out: []u8) ?[]const u8 {
     }
     return out[0..n];
 }
-pub fn animatedArgs(backend: Backend, bin: []const u8, path: []const u8, fill: bool, out: *[32][]const u8) ?[]const []const u8 {
+pub fn animatedArgs(backend: Backend, bin: []const u8, host: ?[]const u8, path: []const u8, fill: bool, out: *[32][]const u8) ?[]const []const u8 {
     var n: usize = 0;
+    // A managed desktop window is needed on X11: its root window can be
+    // covered by GNOME/KDE/XFCE's desktop surface. xwinwrap owns a window
+    // with desktop type, no input/focus/taskbar, and substitutes literal WID.
+    if (backend == .x11) {
+        out[n] = host orelse return null;
+        n += 1;
+        for ([_][]const u8{ "-fs", "-fdt", "-ni", "-b", "-nf", "-un", "-s", "-st", "-sp", "--" }) |arg| {
+            out[n] = arg;
+            n += 1;
+        }
+    }
     out[n] = bin;
     n += 1;
     if (backend == .wayland) {
@@ -47,7 +58,7 @@ pub fn animatedArgs(backend: Backend, bin: []const u8, path: []const u8, fill: b
         return out[0 .. n + 4];
     }
     if (backend != .mac and backend != .windows and backend != .x11) return null;
-    for ([_][]const u8{ "--no-config", "--load-scripts=no", "--no-audio", "--loop-file=inf", "--no-border", "--no-osc", "--input-default-bindings=no", "--input-vo-keyboard=no", "--stop-screensaver=no", "--really-quiet", if (fill) "--panscan=1" else "--panscan=0" }) |arg| {
+    for ([_][]const u8{ "--no-config", "--load-scripts=no", "--no-audio", "--loop-file=inf", "--no-border", "--no-osc", "--input-default-bindings=no", "--input-vo-keyboard=no", "--input-cursor-passthrough=yes", "--stop-screensaver=no", "--really-quiet", if (fill) "--panscan=1" else "--panscan=0" }) |arg| {
         out[n] = arg;
         n += 1;
     }
@@ -56,9 +67,15 @@ pub fn animatedArgs(backend: Backend, bin: []const u8, path: []const u8, fill: b
             out[n] = arg;
             n += 1;
         }
-    } else {
+    } else if (backend == .windows) {
+        // mpv's documented Win32 zero handle targets the desktop WorkerW
+        // behind icons; it is not the X11 root-window implementation.
         out[n] = "--wid=0";
         n += 1;
+    } else {
+        out[n] = "--wid";
+        out[n + 1] = "WID";
+        n += 2;
     }
     out[n] = "--";
     out[n + 1] = path;
@@ -90,10 +107,37 @@ test "animated file paths remain single literal arguments on every backend" {
     const path = "C:/Pictures/a 'quote'; $(touch nope).mp4";
     var args: [32][]const u8 = undefined;
     for ([_]Backend{ .mac, .windows, .x11, .wayland }) |backend| {
-        const argv = animatedArgs(backend, "mpv", path, true, &args).?;
+        const argv = animatedArgs(backend, "mpv", "xwinwrap", path, true, &args).?;
         try std.testing.expectEqualStrings(path, argv[argv.len - 1]);
         try std.testing.expect(argv.len <= args.len);
+        if (backend != .wayland) {
+            var passthrough = false;
+            for (argv) |arg| if (std.mem.eql(u8, arg, "--input-cursor-passthrough=yes")) {
+                passthrough = true;
+            };
+            try std.testing.expect(passthrough);
+        }
     }
     var out: [200]u8 = undefined;
     try std.testing.expectEqualStrings("file:///a%20b/%23%E6%97%A5.png", fileUri("/a b/#日.png", &out).?);
+}
+
+test "live wallpaper targets desktop surfaces rather than normal player windows" {
+    var args: [32][]const u8 = undefined;
+    const win = animatedArgs(.windows, "mpv.exe", null, "movie.mp4", true, &args).?;
+    var desktop = false;
+    for (win) |arg| if (std.mem.eql(u8, arg, "--wid=0")) {
+        desktop = true;
+    };
+    try std.testing.expect(desktop);
+    try std.testing.expect(animatedArgs(.x11, "mpv", null, "/movie.mp4", true, &args) == null);
+    const x11 = animatedArgs(.x11, "mpv", "/usr/bin/xwinwrap", "/movie.mp4", false, &args).?;
+    try std.testing.expectEqualStrings("/usr/bin/xwinwrap", x11[0]);
+    var child_handle = false;
+    for (x11, 0..) |arg, i| if (std.mem.eql(u8, arg, "--wid")) {
+        try std.testing.expectEqualStrings("WID", x11[i + 1]);
+        child_handle = true;
+    };
+    try std.testing.expect(child_handle);
+    try std.testing.expect(animatedArgs(.gnome, "mpv", null, "/movie.mp4", true, &args) == null);
 }

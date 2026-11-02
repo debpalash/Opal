@@ -844,6 +844,17 @@ pub fn listItem(
     label: []const u8,
     trailing: []const u8,
 ) bool {
+    return selectableListItem(src, id_extra, leading_icon, label, trailing, .{});
+}
+
+pub fn selectableListItem(
+    src: std.builtin.SourceLocation,
+    id_extra: usize,
+    leading_icon: ?[]const u8,
+    label: []const u8,
+    trailing: []const u8,
+    selection: struct { selected: bool = false, reveal: bool = false },
+) bool {
     var hovered = false;
     var row = dvui.box(src, .{ .dir = .horizontal }, .{
         .id_extra = id_extra,
@@ -857,8 +868,9 @@ pub fn listItem(
     const clicked = dvui.clicked(row.data(), .{ .hovered = &hovered });
     // Hover is only known after clicked(); the init-time fill could never
     // show it, so resolve the state now and repaint.
-    row.data().options.color_fill = @import("color_compat.zig").wrap(stateFill(theme.transparent, hovered, dvui.captured(row.data().id)));
+    row.data().options.color_fill = @import("color_compat.zig").wrap(stateFill(if (selection.selected) theme.colors.bg_selected else theme.transparent, hovered, dvui.captured(row.data().id)));
     row.drawBackground();
+    if (selection.reveal) dvui.scrollTo(.{ .screen_rect = row.data().borderRectScale().r });
 
     if (leading_icon) |ic| {
         dvui.icon(@src(), "li", ic, .{}, .{

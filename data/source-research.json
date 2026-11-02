@@ -237,5 +237,41 @@
     ],
     "live": "Wallhaven API returned 24 rows through local proxy. gallery-dl resolved 2 Wallhaven images in 1.53s, 2 Flickr images in 4.83s. Wallhaven and Flickr thumbnails HTTP 200. ArtStation/DeviantArt keyword templates match official extractors but live results unverified.",
     "limitations": "Pexels and Unsplash are external search shortcuts because their standard API guidelines exclude wallpaper applications. Arbitrary gallery-dl supported links are admitted; keyword fanout uses up to 16 configured search URLs, not a universal search across all sites. Auth/browser cookies opt-in; credential values stored in an owner-only gallery config, never CLI arguments."
+  },
+  "ui_and_source_expansion_2026_11_03": {
+    "implementation": "Original adapters, bounded provider responses, installed-only torrent/comic/novel sources; no upstream code executed or copied.",
+    "mikan": {
+      "base": "https://mikanani.me",
+      "contract": "/RSS/Search?searchstr={query}",
+      "reference": "https://github.com/Prowlarr/Indexers/blob/9ecfe4f9833d3394b27fe911a9a6242b3a9da90d/definitions/v11/mikan.yml",
+      "live": "HTTP 200 application/xml, 98192 bytes; actual .torrent enclosures and publisher sizes; mirror redirects to canonical host."
+    },
+    "poorlydrawnlines": {
+      "base": "https://poorlydrawnlines.com",
+      "contract": "Official WordPress /wp-json/wp/v2/posts search and numeric post identity; complete image in content.rendered.",
+      "live": "Latest and duck search HTTP 200; publisher image URL and exact post identity checked by production-parser replay."
+    },
+    "readnovelfull": {
+      "base": "https://readnovelfull.com",
+      "reference": "https://github.com/lncrawl/lightnovel-crawler/blob/404d605ee2ba681cb9e8e1c7043ce32fc559ea29/lncrawl/templates/novelfull.py",
+      "live": "Catalog, work, /ajax/chapter-archive?novelId=276, and first full chapter HTTP 200. Production parser replay verifies edition normalization and chapter ownership."
+    },
+    "wallpaper_videos": {
+      "mixkit": "HTTP 200 public search, schema.org VideoObject metadata with advertised 1080p original and separate 360p preview; publisher page and free video license retained.",
+      "commons": "HTTP 200 MediaWiki generator=search filetype:video, imageinfo full originals, thumbnails, author and dimensions.",
+      "macos_apply": "Production argv verified against real mpv process; onscreen 1280x832 window at CG desktop layer -2147483623. Muted loop, no focus, mouse passthrough. Test process removed afterward."
+    },
+    "not_shipped": {
+      "anidex": "RSS search HTTP 403.",
+      "novelbin": "Search HTTP 503.",
+      "animepahe_stremio": "Manifest live but ap-prefixed identities do not match current IMDb-only stream resolver; not presented as a working source.",
+      "moewalls": "Public HTML is live; API HTTP 403. No unverified adapter shipped."
+    },
+    "western_comics": {
+      "latestcomics": "Live production pipeline: complete 170-issue directory, initial Issue #0 with 18 pages. Standalone Issue #1 exposes 27 pages; CDN responds with real JPEG bytes.",
+      "ysk": "Live production pipeline: case-sensitive series identity, both directory pages, 13 available issues and 23 page URLs for the initial issue; CDN responds with real JPEG bytes.",
+      "xoxo": "Experimental only: all four issue-list pages yield 170 issues and /all yields complete manifests. Tested image endpoints return HTML instead of image bytes. Excluded from automatic mixed/universal search; load probes image bytes and fails clearly.",
+      "desktop_video": "macOS desktop-layer process verified locally. Windows uses mpv documented --wid=0 desktop embedding. X11 uses xwinwrap desktop window, Wayland uses mpvpaper on supported layer-shell compositors. Windows/Linux runtime verification remains outstanding."
+    }
   }
 }

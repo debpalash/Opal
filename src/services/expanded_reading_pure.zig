@@ -4,7 +4,7 @@ const cp = @import("comics_pure.zig");
 const nsp = @import("novel_sources_pure.zig");
 
 pub fn novelListingHtml(body: []const u8, source: []const u8) ?[]const u8 {
-    const marker = if (std.mem.eql(u8, source, "royalroad")) "class=\"fiction-list\"" else if (std.mem.eql(u8, source, "novelfire")) "class=\"novel-list horizontal col2 chapters\"" else return null;
+    const marker = if (std.mem.eql(u8, source, "royalroad")) "class=\"fiction-list\"" else if (std.mem.eql(u8, source, "novelfire")) "class=\"novel-list horizontal col2 chapters\"" else if (std.mem.eql(u8, source, "readnovelfull")) "id=\"list-page\"" else return null;
     return nsp.containerInner(body, marker);
 }
 
@@ -16,8 +16,60 @@ pub fn chapterListingHtml(body: []const u8, source: []const u8) ?[]const u8 {
 pub fn novelSearchUrl(out: []u8, base: []const u8, source: []const u8, query: []const u8, page: u32) ?[]const u8 {
     var enc: [768]u8 = undefined;
     const n = cp.percentEncodeQuery(query, &enc);
-    const path = if (std.mem.eql(u8, source, "royalroad")) "/fictions/search?title=" else if (std.mem.eql(u8, source, "novelfire")) "/search?keyword=" else return null;
+    const path = if (std.mem.eql(u8, source, "royalroad")) "/fictions/search?title=" else if (std.mem.eql(u8, source, "novelfire")) "/search?keyword=" else if (std.mem.eql(u8, source, "readnovelfull")) "/novel-list/search?keyword=" else return null;
+    if (std.mem.eql(u8, source, "readnovelfull") and query.len == 0) return std.fmt.bufPrint(out, "{s}/novel-list/most-popular-novel?page={d}", .{ std.mem.trimEnd(u8, base, "/"), page }) catch null;
     return std.fmt.bufPrint(out, "{s}{s}{s}&page={d}", .{ std.mem.trimEnd(u8, base, "/"), path, enc[0..n], page }) catch null;
+}
+
+pub fn readNovelFullWork(url: []const u8, base: []const u8) bool {
+    const b = std.mem.trimEnd(u8, base, "/");
+    if (!std.mem.startsWith(u8, url, b) or url.len <= b.len + 6 or url[b.len] != '/' or !std.mem.endsWith(u8, url, ".html")) return false;
+    const slug = url[b.len + 1 .. url.len - 5];
+    for (slug) |ch| if (!std.ascii.isAlphanumeric(ch) and ch != '-' and ch != '_') return false;
+    return slug.len > 0;
+}
+
+pub fn readNovelFullChaptersUrl(out: []u8, base: []const u8, detail: []const u8) ?[]const u8 {
+    const marker = std.mem.indexOf(u8, detail, "data-novel-id") orelse return null;
+    const start = std.mem.lastIndexOfScalar(u8, detail[0..marker], '<') orelse return null;
+    const end = std.mem.indexOfScalarPos(u8, detail, marker, '>') orelse return null;
+    const raw = html.attr(detail[start .. end + 1], "data-novel-id") orelse return null;
+    const id = std.fmt.parseInt(u32, raw, 10) catch return null;
+    if (id == 0) return null;
+    return std.fmt.bufPrint(out, "{s}/ajax/chapter-archive?novelId={d}", .{ std.mem.trimEnd(u8, base, "/"), id }) catch null;
+}
+
+pub fn readNovelFullChapter(out: []u8, base: []const u8, work: []const u8, raw: []const u8) ?[]const u8 {
+    if (!readNovelFullWork(work, base)) return null;
+    var stem = work[std.mem.trimEnd(u8, base, "/").len + 1 .. work.len - 5];
+    // Work editions use -v1, -v2…; the chapter directory uses the original slug.
+    if (std.mem.lastIndexOf(u8, stem, "-v")) |at| {
+        const digits = stem[at + 2 ..];
+        if (digits.len > 0) {
+            var version = true;
+            for (digits) |ch| if (!std.ascii.isDigit(ch)) {
+                version = false;
+            };
+            if (version) stem = stem[0..at];
+        }
+    }
+    const url = html.sourceUrl(out, base, raw) orelse return null;
+    const path = url[std.mem.trimEnd(u8, base, "/").len + 1 ..];
+    if (path.len <= stem.len + 9 or !std.mem.startsWith(u8, path, stem) or !std.mem.startsWith(u8, path[stem.len..], "/chapter-") or !std.mem.endsWith(u8, path, ".html")) return null;
+    if (std.mem.indexOf(u8, path, "..") != null or std.mem.indexOfAny(u8, path, "?#") != null) return null;
+    return url;
+}
+
+test "ReadNovelFull search, stable work identity and numbered chapter archive contract" {
+    var out: [1024]u8 = undefined;
+    try std.testing.expectEqualStrings("https://rnf.test/novel-list/search?keyword=x%26y&page=2", novelSearchUrl(&out, "https://rnf.test/", "readnovelfull", "x&y", 2).?);
+    try std.testing.expect(readNovelFullWork("https://rnf.test/story-v1.html", "https://rnf.test"));
+    try std.testing.expect(!readNovelFullWork("https://rnf.test/story/chapter-1.html", "https://rnf.test"));
+    try std.testing.expectEqualStrings("https://rnf.test/ajax/chapter-archive?novelId=276", readNovelFullChaptersUrl(&out, "https://rnf.test/", "<div id='rating' data-novel-id='276'></div>").?);
+    try std.testing.expect(readNovelFullChaptersUrl(&out, "https://rnf.test", "<div data-novel-id='1&other=2'>") == null);
+    try std.testing.expectEqualStrings("https://rnf.test/story/chapter-001-start.html", readNovelFullChapter(&out, "https://rnf.test", "https://rnf.test/story-v1.html", "/story/chapter-001-start.html").?);
+    try std.testing.expect(readNovelFullChapter(&out, "https://rnf.test", "https://rnf.test/story-v1.html", "/other/chapter-1.html") == null);
+    try std.testing.expect(readNovelFullChapter(&out, "https://rnf.test", "https://rnf.test/story-v1.html", "https://evil.test/story/chapter-1.html") == null);
 }
 
 pub fn comicSearchUrl(out: []u8, base: []const u8, source: []const u8, query: []const u8, page: u32) ?[]const u8 {

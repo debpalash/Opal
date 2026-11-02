@@ -8,7 +8,7 @@ const alloc = @import("../core/alloc.zig").allocator;
 const search = @import("../services/search.zig");
 const resolver = @import("../services/resolver.zig");
 const capture = @import("native_capture.zig");
-const Case = struct { name: []const u8, route: router.Route, tab: state.DrawerTab = .TMDB, settings: state.SettingsTab = .General, plugin: router.PluginTab = .sources, sidebar: ?bool = null, navigate_anime: bool = false, hover_sidebar: bool = false, scope: ?search.scope_model.Scope = null, remove_scope: bool = false, clear_query: bool = false, submit_query: bool = false, navigate_movies: bool = false, nav_api: bool = false, ranking_fixture: bool = false, comic_reader: bool = false, novels_empty: bool = false, anime_episodes: bool = false };
+const Case = struct { name: []const u8, route: router.Route, tab: state.DrawerTab = .TMDB, settings: state.SettingsTab = .General, plugin: router.PluginTab = .sources, sidebar: ?bool = null, navigate_anime: bool = false, hover_sidebar: bool = false, scope: ?search.scope_model.Scope = null, remove_scope: bool = false, clear_query: bool = false, clear_query_click: bool = false, submit_query: bool = false, navigate_movies: bool = false, nav_api: bool = false, ranking_fixture: bool = false, comic_reader: bool = false, novels_empty: bool = false, anime_episodes: bool = false, wallpaper_performance: bool = false };
 var current: Case = undefined;
 var first_frame = true;
 var preset: theme.ThemePreset = .midnight;
@@ -200,6 +200,14 @@ fn draw() !void {
         _ = try window.addEventMouseButton(.left, .release);
     }
     if (current.clear_query and frames == 4) search.clearShellSearch();
+    if (current.clear_query_click and frames == 4) {
+        const bounds = @import("shell.zig").clearQueryBoundsForTest();
+        try std.testing.expect(bounds.w > 0);
+        _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = bounds.center() });
+        _ = try dvui.currentWindow().addEventMouseButton(.left, .press);
+        _ = try dvui.currentWindow().addEventMouseButton(.left, .release);
+    }
+    if (current.clear_query_click and frames == 5) _ = try dvui.currentWindow().addEventText(.{ .text = "moon" });
     if (current.navigate_anime and frames == 4) {
         const bounds = @import("shell.zig").sidebarAnimeBoundsForTest();
         try std.testing.expect(bounds.w > 0 and bounds.h > 0);
@@ -242,6 +250,7 @@ fn draw() !void {
     }
     if (first_frame and current.route == .browse and current.tab == .Wallpapers) {
         @import("../services/wallpapers.zig").setNativeFixtureForTest();
+        if (current.wallpaper_performance) @import("../services/wallpapers.zig").setLargeFixtureForTest();
         if (std.mem.startsWith(u8, current.name, "wallpaper-gallery")) {
             const wallpaper = @import("../services/wallpapers.zig");
             wallpaper.openGalleryForTest(2);
@@ -305,7 +314,18 @@ fn draw() !void {
     }
     const provider_mask = resolver.source_mask.load(.acquire);
     const render_start = @import("../core/io_global.zig").monotonicMilliTimestamp();
+    if (current.wallpaper_performance and frames >= 2) {
+        _ = try dvui.currentWindow().addEventMouseMotion(.{ .pt = .{ .x = dvui.windowRectPixels().w - 80, .y = 400 } });
+        _ = try dvui.currentWindow().addEventMouseWheel(-800, .vertical, null);
+    }
     try @import("shell.zig").render();
+    if (current.wallpaper_performance and frames >= 4) {
+        const stats = @import("../services/wallpapers.zig").nativeStatsForTest();
+        try std.testing.expectEqual(@as(usize, 2000), stats.total);
+        try std.testing.expect(stats.visible > 0 and stats.visible < 40);
+        try std.testing.expect(stats.intersecting > 0);
+        if (frames == 7) std.debug.print("Wallpaper gallery: {d} loaded, {d} drawn; warmed render {d}ms\n", .{ stats.total, stats.visible, stats.render_ms });
+    }
     if (current.route == .browse and current.tab == .YouTube and frames >= 4) {
         const elapsed = @import("../core/io_global.zig").monotonicMilliTimestamp() - render_start;
         std.debug.print("YouTube warmed layout frame: {d}ms\n", .{elapsed});
@@ -327,7 +347,11 @@ fn draw() !void {
             if (current.remove_scope) try std.testing.expect(@import("shell.zig").allContentActive());
             if (current.remove_scope) try std.testing.expectEqualStrings("Offline layout fixtures", std.mem.sliceTo(&state.app.magnet_buf, 0));
             if (current.clear_query) try std.testing.expectEqual(@as(usize, 0), std.mem.sliceTo(&state.app.magnet_buf, 0).len);
-            if (!current.remove_scope and !current.clear_query and !current.ranking_fixture) try std.testing.expectEqual(@as(usize, 1), search.visibleScopedRowsForTest());
+            if (current.clear_query_click and frames >= 4) {
+                try std.testing.expect(@import("shell.zig").queryFocusedForTest());
+                try std.testing.expectEqualStrings(if (frames == 4) "" else "moon", std.mem.sliceTo(&state.app.magnet_buf, 0));
+            }
+            if (!current.remove_scope and !current.clear_query and !current.clear_query_click and !current.ranking_fixture) try std.testing.expectEqual(@as(usize, 1), search.visibleScopedRowsForTest());
         }
     }
     if (current.route == .browse and current.tab == .YouTube) {
@@ -453,7 +477,9 @@ test "Native shell offline route pixel capture" {
         .{ .name = "submit-enter-music", .route = .browse, .tab = .Music, .submit_query = true },
         .{ .name = "scope-music", .route = .search, .scope = .music },
         .{ .name = "scope-remove", .route = .search, .scope = .music, .remove_scope = true },
+        .{ .name = "scope-clear-click", .route = .search, .scope = .music, .clear_query_click = true },
         .{ .name = "scope-clear", .route = .search, .scope = .music, .clear_query = true },
+        .{ .name = "wallpaper-large-grid", .route = .browse, .tab = .Wallpapers, .wallpaper_performance = true },
         .{ .name = "home", .route = .home },
         .{ .name = "search", .route = .search },
         .{ .name = "watching", .route = .watching },
@@ -494,7 +520,7 @@ test "Native shell offline route pixel capture" {
         }
         inline for (comptime @import("opal-reflect").fields(state.SettingsTab)) |entry| {
             var name: [64]u8 = undefined;
-            current = .{ .name = try std.fmt.bufPrint(&name, "settings-{s}", .{entry.name}), .route = .settings, .settings = @enumFromInt(entry.value) };
+            current = .{ .name = try std.fmt.bufPrint(&name, "settings-{s}", .{entry.name}), .route = .settings, .settings = @fromBackingInt(@intCast(entry.value)) };
             try captureCase(size);
         }
         for (router.PLUGIN_TABS) |tab| {
