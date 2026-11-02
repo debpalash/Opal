@@ -36,7 +36,7 @@ ARG OPAL_BUILD_CACHE_KEY=preview
 RUN --mount=type=secret,id=opal_tmdb --mount=type=secret,id=opal_omdb \
     OPAL_TMDB_TOKEN="$(cat /run/secrets/opal_tmdb 2>/dev/null || true)" \
     OPAL_OMDB_KEY="$(cat /run/secrets/opal_omdb 2>/dev/null || true)" \
-    zig build -Doptimize=safe -Dcpu=x86_64_v2 -fsys=sdl2
+    zig build -Doptimize=safe -Dcpu=x86_64_v2 -fsys=sdl2 -Dnative-prefix=/opt/opal-runtime
 RUN OPAL_REQUIRE_PATCHELF=1 python3 tests/test_linux_compat_elf.py
 RUN python3 packaging/linux-compat/stage.py
 FROM scratch AS artifacts

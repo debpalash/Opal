@@ -22,11 +22,12 @@ class SessionCloseTest(unittest.TestCase):
         opal = live.IsolatedOpal(self)
         self.addCleanup(opal.stop)
         media = opal.root / "seek.mp4"
-        subprocess.run([
+        generated = subprocess.run([
             ffmpeg, "-v", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24",
             "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000", "-t", "30",
-            "-c:v", "libx264", "-preset", "ultrafast", "-g", "24", "-c:a", "aac", str(media),
-        ], check=True, capture_output=True, timeout=30)
+            "-c:v", "mpeg4", "-q:v", "4", "-g", "24", "-c:a", "aac", str(media),
+        ], capture_output=True, text=True, timeout=30)
+        self.assertEqual(generated.returncode, 0, generated.stderr)
         profile = opal.config_root / "opal"
         profile.mkdir(parents=True)
         with sqlite3.connect(profile / "opal.db") as db:

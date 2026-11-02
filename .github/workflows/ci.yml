@@ -180,7 +180,7 @@ jobs:
           OPAL_GALLERY_CAPTURE_DIR: ${{ runner.temp }}/opal-native-captures
         run: |
           mkdir -p "$OPAL_NATIVE_CAPTURE_DIR"
-          zig build test-native-ui -Doptimize=safe --summary all
+          zig build test-native-ui -Doptimize=safe -fsys=sdl2 --summary all
           test -n "$(find "$OPAL_NATIVE_CAPTURE_DIR" -name '*.png' -print -quit)"
       - name: Save native fixture captures
         if: always()

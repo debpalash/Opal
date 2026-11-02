@@ -17,6 +17,9 @@ result on clean Ubuntu 20.04, Ubuntu 22.04 and Debian 12 images and checks actua
 account creation, protected API access, resource serving and video playback. Every staged ELF is checked for a
 glibc requirement no newer than 2.31; the loader and glibc are never bundled.
 
+The container passes `-Dnative-prefix=/opt/opal-runtime` so both native bindings
+and DVUI's SDL C translator use the private runtime headers as well as its libraries.
+
 The checksum-verified upstream archives, source URLs and build scripts are
 published with the release as `opal-<version>-linux-compat-sources.tar.gz`.
 Opal and mpv are distributed under GPL version 3; FFmpeg under LGPL version 3
