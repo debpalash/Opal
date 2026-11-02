@@ -43,8 +43,11 @@ def test_native_platform_matrix():
     assert workflow.count("zig build test-native-downloads") == 3
     assert workflow.count("python3 tests/test_media_servers_live.py") + workflow.count("python tests/test_media_servers_live.py") == 3
     assert workflow.count("python3 tests/test_webcomic_sources_live.py") + workflow.count("python tests/test_webcomic_sources_live.py") == 3
-    # Linux renders the native fixtures on SDL's offscreen driver (no X server).
-    assert "SDL_VIDEODRIVER: offscreen" in workflow and "LIBGL_ALWAYS_SOFTWARE" in workflow
+    # Virtual X11 supports both rendering and the system-cursor calls exercised
+    # by DVUI; the offscreen backend cannot create cursors.
+    assert "SDL_VIDEODRIVER: x11" in workflow and "LIBGL_ALWAYS_SOFTWARE" in workflow
+    assert 'xvfb-run -a -s "-screen 0 1920x1200x24" zig build test-native-ui' in workflow
+    assert "-fsys=sdl2" in workflow
     assert 'b.step("test-native-ui"' in build and "run_native_suite" in build
     assert "resolver.MAX_RESULTS" in gallery and "120 warmed frames" in gallery
     assert ".code = .tab" in gallery and "focused_widget_id != null" in gallery

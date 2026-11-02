@@ -129,7 +129,7 @@ jobs:
       - run: npm test
 
   # Real hidden SDL render-target fixtures, not source/pixel-name assertions.
-  # Linux uses SDL's offscreen backend so a physical GPU/display is unnecessary.
+  # Linux uses virtual X11 with software GL, including real system cursors.
   native-linux:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -174,13 +174,13 @@ jobs:
       - name: Native offline UI fixture suite
         timeout-minutes: 20
         env:
-          SDL_VIDEODRIVER: offscreen
+          SDL_VIDEODRIVER: x11
           LIBGL_ALWAYS_SOFTWARE: '1'
           OPAL_NATIVE_CAPTURE_DIR: ${{ runner.temp }}/opal-native-captures
           OPAL_GALLERY_CAPTURE_DIR: ${{ runner.temp }}/opal-native-captures
         run: |
           mkdir -p "$OPAL_NATIVE_CAPTURE_DIR"
-          zig build test-native-ui -Doptimize=safe -fsys=sdl2 --summary all
+          xvfb-run -a -s "-screen 0 1920x1200x24" zig build test-native-ui -Doptimize=safe -fsys=sdl2 --summary all
           test -n "$(find "$OPAL_NATIVE_CAPTURE_DIR" -name '*.png' -print -quit)"
       - name: Save native fixture captures
         if: always()
